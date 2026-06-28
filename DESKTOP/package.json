@@ -26,6 +26,7 @@
     "release:ui-external-workspace-smoke": "node scripts/release-ui-external-workspace-smoke.cjs",
     "release:ui-option-feedback-smoke": "node scripts/release-ui-option-feedback-smoke.cjs",
     "release:ui-model-settings-smoke": "node scripts/release-ui-model-settings-smoke.cjs",
+    "release:ui-icon-smoke": "node scripts/release-ui-icon-smoke.cjs",
     "release:ui-flow-subagent-smoke": "node scripts/release-ui-flow-subagent-smoke.cjs",
     "release:ui-media-md-smoke": "node scripts/release-ui-media-md-smoke.cjs",
     "release:ui-skills-smoke": "node scripts/release-ui-skills-smoke.cjs",

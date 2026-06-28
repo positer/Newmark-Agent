@@ -101,6 +101,7 @@ cd DESKTOP
 npm.cmd test
 npm.cmd run dist:portable
 npm.cmd run release:ui-smoke
+npm.cmd run release:ui-icon-smoke
 ```
 
 Opt-in real-provider validation is available through environment variables and is skipped when credentials are absent. These scripts are intended for maintainers who explicitly accept provider spend:
@@ -113,11 +114,13 @@ npm.cmd run release:real-provider-stress
 
 ## Brand Assets
 
-Application icons live in `DESKTOP/assets`: `app-icon-dark.png`, `app-icon-light.png`, and the Windows packaging icon `icon.ico`. The Electron runtime uses the themed PNGs for windows and tray rendering, while the Windows portable build uses `assets/icon.ico`.
+Application icons live in `DESKTOP/assets`: `app-icon-dark.png`, `app-icon-light.png`, and the Windows packaging icon `icon.ico`. The Electron runtime uses the themed PNGs for windows and tray rendering, the frameless desktop UI renders the icon in the custom titlebar, and the Windows portable build uses `assets/icon.ico`.
 
 ## Release v1.0.2
 
-The v1.0.2 release adds high-contrast themed application icons for dark and light environments, wires the Windows executable icon into packaging, and keeps the v1.0.1 release validation baseline. The public release artifact is the Windows portable executable.
+The v1.0.2 release adds high-contrast themed application icons for dark and light environments, wires the Windows executable icon into packaging, renders the icon in the custom frameless titlebar with a runtime-verified animated color border, and keeps the v1.0.1 release validation baseline. The public release artifact is the Windows portable executable.
+
+Maintenance log, 2026-06-28: `release:ui-icon-smoke` now validates the packaged renderer titlebar icon, decoded image dimensions, animated color border CSS, native runtime window icon capture, screenshot evidence, and release process cleanup. Evidence is stored under `archive/2026-06-28-v1.0.2-ui-icon-smoke.png` and `archive/2026-06-28-v1.0.2-runtime-window-icon.png`.
 
 Current release judgment: `release-usable-with-operational-risks`.
 

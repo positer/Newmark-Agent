@@ -116,6 +116,8 @@ npm.cmd run release:real-provider-stress
 
 Application icons live in `DESKTOP/assets`: `app-icon-dark.png`, `app-icon-light.png`, and the Windows packaging icon `icon.ico`. The Electron runtime uses the themed PNGs for windows and tray rendering, the frameless desktop UI renders the icon in the custom titlebar, and the Windows portable build uses `assets/icon.ico`.
 
+Repository branding uses `SCRIPTS/assets/newmark-agent-social-preview.png` as the GitHub Social preview image. GitHub currently exposes this as a repository Settings upload rather than a public REST field.
+
 ## Release v1.0.2
 
 The v1.0.2 release adds high-contrast themed application icons for dark and light environments, wires the Windows executable icon into packaging, renders the icon in the custom frameless titlebar with a runtime-verified animated color border, and keeps the v1.0.1 release validation baseline. The public release artifact is the Windows portable executable.

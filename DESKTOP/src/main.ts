@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, utilityProcess, Tray, Menu, nativeImage, webContents } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, utilityProcess, Tray, Menu, nativeImage, nativeTheme, webContents } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
@@ -21,6 +21,22 @@ let lastWakeSync: WakeSyncResult | null = null;
 let tray: Tray | null = null;
 let _forceQuit = false;
 let browserControlWindow: BrowserWindow | null = null;
+
+const FALLBACK_TRAY_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAhklEQVQ4T2NkYPj/n4EBBJgYKAQMDAwM//79Y2RkZGQYmpqMgYGBgYEhJSWFgYGBAaoRAkZGRoZ///4x/Pr1CyrKwAhVwMDw798/BgYGBqgCRqgCBgaoKEYGBgYGqAJGqAIGSJQzMDAw/P79m4GRkZGBkZGRgaSADg0NZWBgYGCYOnUq8QENUQADAC3oSsHtAAAAAElFTkSuQmCC';
+
+function appAssetPath(fileName: string): string {
+  return path.join(__dirname, '..', 'assets', fileName);
+}
+
+function themedAppIconPath(): string {
+  return appAssetPath(nativeTheme.shouldUseDarkColors ? 'app-icon-light.png' : 'app-icon-dark.png');
+}
+
+function createAppIconImage(size?: number) {
+  const image = nativeImage.createFromPath(themedAppIconPath());
+  const icon = image.isEmpty() ? nativeImage.createFromDataURL(FALLBACK_TRAY_ICON) : image;
+  return size ? icon.resize({ width: size, height: size }) : icon;
+}
 
 function userArgs(): string[] {
   return process.argv.slice(1);
@@ -154,6 +170,7 @@ async function ensureBrowserWebContents(): Promise<Electron.WebContents> {
       height: 900,
       show: false,
       title: 'Newmark Browser Control',
+      icon: themedAppIconPath(),
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
@@ -440,6 +457,7 @@ if (hasCliCommand) {
       show: false,
       frame: false,
       title: 'Newmark Agent',
+      icon: themedAppIconPath(),
       backgroundColor: '#0a0a1a',
       webPreferences: {
         preload: path.join(__dirname, 'preload.js'),
@@ -498,8 +516,7 @@ if (hasCliCommand) {
 
     function createTray() {
       if (tray) return;
-      const trayIcon = nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAhklEQVQ4T2NkYPj/n4EBBJgYKAQMDAwM//79Y2RkZGQYmpqMgYGBgYEhJSWFgYGBAaoRAkZGRoZ///4x/Pr1CyrKwAhVwMDw798/BgYGBqgCRqgCBgaoKEYGBgYGqAJGqAIGSJQzMDAw/P79m4GRkZGBkZGRgaSADg0NZWBgYGCYOnUq8QENUQADAC3oSsHtAAAAAElFTkSuQmCC');
-      tray = new Tray(trayIcon);
+      tray = new Tray(createAppIconImage(16));
       tray.setToolTip('Newmark Agent');
       const contextMenu = Menu.buildFromTemplate([
         { label: 'Show Window', click: () => { mainWindow?.show(); mainWindow?.focus(); tray?.destroy(); tray = null; } },

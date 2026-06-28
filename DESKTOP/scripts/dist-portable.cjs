@@ -5,7 +5,8 @@ const asar = require('@electron/asar');
 
 const root = path.resolve(__dirname, '..');
 const outputDir = path.resolve(root, '..', 'release');
-const exePath = path.join(outputDir, 'Newmark-Agent-1.0.1-portable-x64.exe');
+const appPackage = require(path.join(root, 'package.json'));
+const exePath = path.join(outputDir, `Newmark-Agent-${appPackage.version}-portable-x64.exe`);
 const unpackedExe = path.join(outputDir, 'win-unpacked', 'Newmark Agent.exe');
 const appAsar = path.join(outputDir, 'win-unpacked', 'resources', 'app.asar');
 

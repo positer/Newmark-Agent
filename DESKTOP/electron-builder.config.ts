@@ -17,7 +17,7 @@ const config: Configuration = {
     { from: 'node_modules', to: 'node_modules', filter: ['**/*'] },
   ],
   win: {
-    icon: null,
+    icon: 'assets/icon.ico',
     target: [
       { target: 'portable', arch: ['x64'] },
       { target: 'nsis', arch: ['x64'] },

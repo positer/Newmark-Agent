@@ -1,6 +1,6 @@
 # Newmark Agent
 
-![Release](https://img.shields.io/badge/release-v1.0.1-blue)
+![Release](https://img.shields.io/badge/release-v1.0.2-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![Status](https://img.shields.io/badge/status-release--usable-green)
 
@@ -12,7 +12,7 @@ The project is built for users who want an agent terminal that runs against thei
 
 | Package | Release |
 |---|---|
-| Windows portable | [`Newmark-Agent-1.0.1-portable-x64.exe`](https://github.com/positer/Newmark-Agent/releases/latest) |
+| Windows portable | [`Newmark-Agent-1.0.2-portable-x64.exe`](https://github.com/positer/Newmark-Agent/releases/latest) |
 
 Run the portable executable directly. No installer is required for the current release.
 
@@ -44,7 +44,7 @@ npm.cmd run dist:portable
 The packaged Windows executable is written to:
 
 ```text
-release/Newmark-Agent-1.0.1-portable-x64.exe
+release/Newmark-Agent-1.0.2-portable-x64.exe
 ```
 
 ## Configuration
@@ -111,9 +111,13 @@ npm.cmd run release:real-provider-smoke
 npm.cmd run release:real-provider-stress
 ```
 
-## Release v1.0.1
+## Brand Assets
 
-The v1.0.1 release was validated through source tests, packaged CLI smoke, packaged UI smoke, real packaged workspace/conversation/Goal/queue stress, and opt-in real-provider stress. The public release artifact is the Windows portable executable.
+Application icons live in `DESKTOP/assets`: `app-icon-dark.png`, `app-icon-light.png`, and the Windows packaging icon `icon.ico`. The Electron runtime uses the themed PNGs for windows and tray rendering, while the Windows portable build uses `assets/icon.ico`.
+
+## Release v1.0.2
+
+The v1.0.2 release adds high-contrast themed application icons for dark and light environments, wires the Windows executable icon into packaging, and keeps the v1.0.1 release validation baseline. The public release artifact is the Windows portable executable.
 
 Current release judgment: `release-usable-with-operational-risks`.
 

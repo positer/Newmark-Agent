@@ -238,7 +238,13 @@ async function main() {
   const releaseRealClaudeEnvPreviewSmoke = fs.existsSync(releaseRealClaudeEnvPreviewSmokePath) ? fs.readFileSync(releaseRealClaudeEnvPreviewSmokePath, 'utf-8') : '';
   const distPortableScript = fs.readFileSync(path.join(process.cwd(), 'scripts', 'dist-portable.cjs'), 'utf-8');
   const packageJson = fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8');
+  const electronBuilderConfigTs = fs.readFileSync(path.join(process.cwd(), 'electron-builder.config.ts'), 'utf-8');
+  const appIconIcoPath = path.join(process.cwd(), 'assets', 'icon.ico');
+  const appIconIco = fs.existsSync(appIconIcoPath) ? fs.readFileSync(appIconIcoPath) : Buffer.alloc(0);
   assert(launcherTs.includes('drainCliNetworkHandles') && mainTs.includes('drainCliNetworkHandles') && launcherTs.includes('getGlobalDispatcher') && mainTs.includes('getGlobalDispatcher'), 'cli entrypoints: drain async network handles before exit');
+  assert(fs.existsSync(path.join(process.cwd(), 'assets', 'app-icon-dark.png')) && fs.existsSync(path.join(process.cwd(), 'assets', 'app-icon-light.png')) && appIconIco.length > 6 && appIconIco.readUInt16LE(2) === 1 && appIconIco.readUInt16LE(4) >= 1, 'app icons: themed PNG assets and Windows ICO exist');
+  assert(packageJson.includes('"icon": "assets/icon.ico"') && electronBuilderConfigTs.includes("icon: 'assets/icon.ico'"), 'app icons: Windows package uses generated ICO');
+  assert(mainTs.includes('nativeTheme') && mainTs.includes("app-icon-light.png") && mainTs.includes("app-icon-dark.png") && mainTs.includes('createAppIconImage(16)') && mainTs.includes('icon: themedAppIconPath()'), 'app icons: runtime windows and tray use themed assets');
   assert(packageJson.includes('"release:cli-smoke"') && releaseCliSmoke.includes('Start-Process') && releaseCliSmoke.includes('-RedirectStandardOutput'), 'release cli smoke: uses stable redirected packaged exe invocation');
   assert(releaseCliSmoke.includes("['state', '--root', root]") && releaseCliSmoke.includes("['tool', 'write'") && releaseCliSmoke.includes("'--args-file'") && releaseCliSmoke.includes("['send', '--input-file'") && releaseCliSmoke.includes("['validate-models', '--selected', 'ReleaseCliMock/release-cli-mock'") && releaseCliSmoke.includes("['skills-market'"), 'release cli smoke: covers state, tool, send, validate-models, and skills-market');
   assert(releaseCliSmoke.includes('RELEASE_CLI_SEND_OK 做了什么 验证 文件') && releaseCliSmoke.includes('"stream":true'), 'release cli smoke: covers UTF-8 streaming send output');

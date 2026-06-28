@@ -1,0 +1,9 @@
+{
+    "folders": [
+        { "name": "CLI", "path": "." }
+    ],
+    "settings": {
+        "terminal.integrated.defaultLocation": "editor",
+        "dotnet.enablePackageRestore": true
+    }
+}

@@ -1,0 +1,56 @@
+{
+  "name": "add_list_sum",
+  "components": [
+    {
+      "type": "dialog",
+      "id": 0,
+      "mode": "Plan",
+      "prompt": "Read flow.py to understand current CLI structure. Identify: (a) where cmd_list renders output, (b) where to add describe_workflow(), (c) where to wire cmd_sum into the argument parser."
+    },
+    {
+      "type": "logic",
+      "id": 1,
+      "prompt": "Does cmd_list currently show natural language descriptions?",
+      "goto_true": 4,
+      "goto_false": 2
+    },
+    {
+      "type": "dialog",
+      "id": 2,
+      "mode": "Build",
+      "prompt": "Implement describe_workflow() that walks components in execution order and generates an arrow-connected sentence. Then enhance cmd_list to print the description alongside dialog/logic counts."
+    },
+    {
+      "type": "logic",
+      "id": 3,
+      "prompt": "Does cmd_list output look correct with descriptions for existing workflows?",
+      "goto_true": 4,
+      "goto_false": 2
+    },
+    {
+      "type": "dialog",
+      "id": 4,
+      "mode": "Build",
+      "prompt": "Implement cmd_sum: scan workspace (git log, README, directory tree, existing flows), auto-generate a .Flow.json workflow with Plan→Logic→Build→Logic→Goal components, handle --force overwrite, --print-context preview. Wire into arg parser."
+    },
+    {
+      "type": "logic",
+      "id": 5,
+      "prompt": "Does flow sum generate a valid, check-passing workflow from this workspace?",
+      "goto_true": 6,
+      "goto_false": 4
+    },
+    {
+      "type": "dialog",
+      "id": 6,
+      "mode": "Build",
+      "prompt": "Update SKILL.md in ~/.config/opencode/skills/flow/ with the new list (descriptions) and sum commands."
+    },
+    {
+      "type": "dialog",
+      "id": 7,
+      "mode": "Goal",
+      "prompt": "Goal: flow list shows natural language descriptions. flow sum generates a valid workspace-aware workflow. Both pass flow check. Documented in SKILL.md."
+    }
+  ]
+}

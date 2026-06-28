@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Test</title></head>
+<body style="background:#000;color:#0f0;font-family:monospace;padding:20px;">
+  <h2>Newmark Agent - 层级诊断</h2>
+  <p id="msg1">⚫ 第1层：HTML 已渲染</p>
+  <p id="msg2">⚫ 待定（JS 运行后修改）</p>
+  <pre id="log" style="margin-top:20px;font-size:12px;max-height:500px;overflow:auto;background:#111;padding:8px;border-radius:4px;"></pre>
+  <script>
+    function log(text) {
+      var p = document.createElement('div');
+      p.textContent = text;
+      document.getElementById('log').appendChild(p);
+    }
+
+    // Level 1: Basic JS execution
+    document.getElementById('msg2').textContent = '🟢 第2层：基本 JS 已执行';
+    log('[OK] Basic JS execution at ' + new Date().toISOString());
+
+    // Level 2: Check window.api
+    log('[INFO] window.api type = ' + typeof window.api);
+    if (window.api) {
+      document.getElementById('msg2').textContent += ' | api: ✅ 存在';
+      log('[OK] window.api 存在');
+      log('[INFO] api keys: ' + Object.keys(window.api).join(', '));
+    } else {
+      document.getElementById('msg2').textContent += ' | api: ❌ 不存在';
+      log('[FAIL] window.api 不存在');
+    }
+
+    // Level 3: Test getState with timeout safety
+    log('[INFO] Calling getState() with 5s timeout...');
+    var timedOut = false;
+    var timeoutId = setTimeout(function() {
+      timedOut = true;
+      log('[FAIL] getState() 超时 (5s)');
+      document.getElementById('msg1').textContent = '🔴 第3层：getState 超时';
+    }, 5000);
+
+    try {
+      var p = window.api ? window.api.getState() : Promise.resolve({mode:'fallback'});
+      p.then(function(s) {
+        clearTimeout(timeoutId);
+        if (!timedOut) {
+          log('[OK] getState() 成功');
+          log('[DATA] ' + JSON.stringify(s).slice(0,300));
+          document.getElementById('msg1').textContent = '🟢 第3层：getState 成功 | mode=' + (s.mode||'?');
+        }
+      }).catch(function(e) {
+        clearTimeout(timeoutId);
+        if (!timedOut) {
+          log('[FAIL] getState() 错误: ' + e.message);
+          document.getElementById('msg1').textContent = '🔴 第3层：getState 错误';
+        }
+      });
+    } catch(e) {
+      clearTimeout(timeoutId);
+      log('[FAIL] getState() 抛出异常: ' + e.message);
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,96 @@
+{
+  "name": "UI-Feature-Integration",
+  "description": "Complete all Design.txt UI features on top of working IPC+chat foundation",
+  "components": [
+    {
+      "id": 0,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "当前状态：Electron IPC、preload、agent初始化、基本聊天输入/发送均已正常工作。精简版UI已运行，下一步需要将完整UI功能逐步集成回来。请读取 DESKTOP/src/ui/index.html 和 Design.txt 了解现状和目标。第一步：恢复原始玻璃拟态设计系统。将原始 index.html 中的CSS设计系统（玻璃拟态三层深度、贝塞尔圆角、GPU加速、SF字体栈、动态彩条跑马灯动画）合并到当前精简版UI中，同时保持所有功能（IPC通信、事件绑定方式）正常工作。注意：所有 onclick 必须使用 window.xxx 绑定，const 不创建window属性。完成后运行 npm run build 并启动测试。"
+    },
+    {
+      "id": 1,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第二步：恢复可调节面板系统。实现左侧栏（#left）、右侧栏（#right）、底部栏（#bottom）的可伸缩面板，带拖拽手柄（mousedown/mousemove/mouseup），最小宽度/高度约束，折叠/展开切换按钮。左侧栏折叠时只显示图标，右下栏不显示时隐藏。阅读 Design.txt §12 了解右侧栏标签页（文件树、编辑器、MD阅读器、子代理、浏览器）和底部终端。同时保留当前所有功能正常。"
+    },
+    {
+      "id": 2,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第三步：恢复顶部自定义标题栏。实现无OS窗口边框的标题栏（#topbar），左侧显示Newmark标题（agent运行时字体动态彩色闪动），右侧最小化/最大化/关闭按钮。窗口拖拽通过 -webkit-app-region:drag 实现。阅读 Design.txt §10。注意：最大化/最小化/关闭按钮的 onclick 使用 api.minimize/maximize/close。完成后集成左侧栏的插件/自动化/工作流/设置图标按钮，点击打开独立子窗口（.sub-win），子窗口可拖动、可关闭，点击外部关闭弹出列表。阅读 Design.txt §11。"
+    },
+    {
+      "id": 3,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第四步：恢复完整聊天区功能。包括：(1) 消息气泡样式（用户蓝色右对齐、助手灰色左对齐），(2) 消息附带mode/model标签（hover显示），(3) 正在运行时的灰白/灰黑脉冲动画，(4) Shell输出块（默认折叠，点击展开），(5) 文件变更差异块（绿增红减，默认折叠，点击展开），(6) 选项反馈显示。阅读 Design.txt §13。同时实现 Guide/Next 输入模式切换（输入框左下角），Ctrl+Enter切换相反模式。"
+    },
+    {
+      "id": 4,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第五步：实现 Goal 模式UI。在输入框上方添加 Goal 条（仅Goal模式显示）：左顶格显示目标文本，右顶格编辑+暂停/继续按钮，上边两角贝塞尔圆角。参考 Design.txt §14。实现目标清单（Todo List）：可折叠/展开，最多8行滚动，完成项变淡+删除线，用户/agent可切换完成状态。实现回到底部向下按钮（当聊天未在最底部时显示）。全存在时顺序：回到底部、清单、Goal、输入框。"
+    },
+    {
+      "id": 5,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第六步：实现设置窗口。独立子窗口，居中显示，非可调大小可拖动。三标签页：(1) 通用 - 暗色模式（深色/浅色/跟随系统）、毛玻璃模糊程度、对话风格、反馈等级、默认输入模式、关闭行为等；(2) 模型与供应商 - 添加供应商（名称+API端点+API密钥）、添加模型（上下文大小、视觉/思考开关、描述）、三维评估（开销/性能/速度）、模型自动切换开关与倾向、模糊注入按钮；(3) 归档管理 - 列出归档、加载归档、删除归档、归档当前会话。所有设置绑定 config.json。阅读 Design.txt §16。"
+    },
+    {
+      "id": 6,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第七步：实现文件树管理器。右侧栏默认显示文件树，列出当前工作区文件。点击文件夹展开/折叠，点击文件：.md文件在MD阅读器打开，.txt/.json/.tex等在编辑器打开。文件树支持面包屑导航。阅读 Design.txt §12。实现 MD阅读器（渲染markdown为HTML）、编辑器（显示文件内容，简单文本编辑功能）、内置浏览器（输入URL导航，前进/后退历史）。均在右侧栏标签页切换。"
+    },
+    {
+      "id": 7,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第八步：实现终端面板。底部栏显示终端，可选择 PowerShell/Bash/CMD。输入命令执行，显示输出。通过 api.executeBash() IPC 调用。Shell 输出块默认折叠，点击展开。阅读 Design.txt §12。"
+    },
+    {
+      "id": 8,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第九步：实现动态跑马灯/彩条边框系统。搜索学习Apple AI风格的动态渐变边框效果。所有活动元素（工作中对话、提交按钮、设置中校验按钮、工作区缩略图）在活跃状态时显示动态彩色跑马灯边框。颜色在设置中通过调色盘可视化调节（设置颜色数量，再设置每个颜色）。阅读 Design.txt §15。参考CSS动画方案：用伪元素+conic-gradient+mask实现动态旋转边框。"
+    },
+    {
+      "id": 9,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第十步：实现二级左侧边栏。单击工作区缩略图时展开二级左侧边栏：顶部显示工作区设置按钮和新对话按钮，下部显示对话列表（每行显示对话大纲摘要，右侧归档按钮）。运行中的对话边框动态跑马灯。阅读 Design.txt §11。"
+    },
+    {
+      "id": 10,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第十一步：实现 Subagent 面板。右侧栏 subagent 标签页显示活跃子代理列表，点击查看对话历史（只读）。agent 可通过 task 工具创建 subagent，通过 get.subagent() 获取结果。阅读 Design.txt §26。"
+    },
+    {
+      "id": 11,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第十二步：实现自动化窗口。独立子窗口，固定大小居中。3-4行输入框，下方模型选择器和条件选择器（单次/循环间隔/起止时间）。agent 和用户都可创建自动化任务。阅读 Design.txt §24。"
+    },
+    {
+      "id": 12,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第十三步：实现工作流编辑器。左侧栏工作流按钮打开独立窗口。目录树显示 Flow/ 目录下的所有 .Flow.json 文件（去除后缀）。展示组件树：展开显示编码+类型（0 Build, 1 Logic等），再次展开可编辑（对话组件：mode+prompt；逻辑组件：prompt+goto1+goto2）。所有输入框贝塞尔圆角。新建工作流按钮始终在第一位。阅读 Design.txt §29。"
+    },
+    {
+      "id": 13,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第十四步：实现归档功能。学习现有实现（Hermes/Codex/OpenCode），实现对话归档到工作区存储，可恢复。实现上下文压缩：接近token限制时调用压缩模型总结对话保留关键信息。阅读 Design.txt §30。"
+    },
+    {
+      "id": 14,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "第十五步：最终整合与完整测试。确保所有onclick使用 window.xxx 绑定，所有功能在IPC和HTTP fallback模式下均可工作，暗色/亮色模式切换正常，各面板独立折叠/展开/缩放，所有设置读写 config.json，Goal 模式无限制循环，Flow 工作流正确执行，归档/恢复完整。运行 npm run build && npm run start:cli 测试CLI，再启动 Electron 测试UI。对照 Design.txt 逐一验证。"
+    }
+  ]
+}

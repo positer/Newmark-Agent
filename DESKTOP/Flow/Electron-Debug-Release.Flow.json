@@ -1,0 +1,43 @@
+{
+  "name": "Electron-Debug-Release",
+  "description": "TypeScript Electron project debug pipeline: typecheck → build → lint → IPC consistency → UI sanity → release",
+  "components": [
+    {
+      "id": 0,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "Debug Step 1: TypeScript Compilation Check\nRun `npx tsc --noEmit` in the DESKTOP/ directory.\n- If it fails, collect ALL errors, categorize by file, and fix each one.\n- Ensure strict mode passes (noImplicitAny, strictNullChecks, etc)."
+    },
+    {
+      "id": 1,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "Debug Step 2: Build + Lint\n1. Run `npm run build` and verify it succeeds.\n2. Run `npm run lint` and fix any warnings/errors.\n3. Ensure `dist/main.js`, `dist/preload.js`, `dist/ui/index.html` all exist in dist/"
+    },
+    {
+      "id": 2,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "Debug Step 3: IPC Handler Consistency Check\nRead `src/preload.ts` and `src/main.ts`. Verify that:\n- Every `ipcRenderer.invoke('agent:xxx', ...)` in preload.ts has a matching `ipcMain.handle('agent:xxx', ...)` in main.ts\n- The async function signatures match (number of parameters)\n- Every `ipcMain.handle` is used (no orphaned handlers)\n- Report any mismatches and fix them."
+    },
+    {
+      "id": 3,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "Debug Step 4: index.html Sanity Check\nRead `src/ui/index.html` and check:\n- All `onclick=\"window.xxx(...)\"` references have corresponding `window.xxx = function(...)` definitions\n- No duplicate function declarations\n- No syntax errors (orphaned braces, missing catch/finally)\n- All `api.xxx()` calls match preload.ts exposed methods\n- Report any issues and fix them."
+    },
+    {
+      "id": 4,
+      "type": "logic",
+      "prompt": "Are all Debug Steps 0-4 clean? No errors, no warnings, no mismatches.",
+      "goto_true": 5,
+      "goto_false": 0
+    },
+    {
+      "id": 5,
+      "type": "dialog",
+      "mode": "build",
+      "prompt": "Release Step: Build portable distribution\nRun `npx tsc --noEmit` to confirm clean, then `npm run build`. Then run:\n```\nnpx electron-builder --win --config electron-builder.config.ts --x64 2>&1\n```\nCollect the output artifact path. Verify the .exe file exists and its size is reasonable (>50MB)."
+    }
+  ]
+}

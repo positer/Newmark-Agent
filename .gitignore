@@ -1,0 +1,73 @@
+# === Dependencies ===
+node_modules/
+.pnp
+.pnp.js
+_vendor/
+_ref/
+
+# === Build outputs ===
+dist/
+dist-portable/
+DESKTOP/dist/
+CLI/**/bin/
+CLI/**/obj/
+_attic/**/dist/
+_attic/**/target/
+_attic/**/node_modules/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# === IDE ===
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# === Environment ===
+.env
+.env.local
+.env.*.local
+
+# === Logs ===
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# === NuGet ===
+packages/
+*.nupkg
+
+# === Rust ===
+_attic/**/Cargo.lock
+
+# === Project-specific ignores ===
+release/
+release-*verify*/
+.opencode/
+archive/
+DESKTOP/...
+OVERVIEW.md
+Design.md
+config.json
+agent.md
+PC_Hash.config
+Work/
+DESKTOP/config.json
+DESKTOP/agent.md
+DESKTOP/PC_Hash.config
+DESKTOP/Work/
+_attic/
+
+# === .NET ===
+*.user
+*.suo
+*.DotSettings

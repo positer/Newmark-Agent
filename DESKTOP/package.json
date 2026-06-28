@@ -1,0 +1,122 @@
+{
+  "name": "newmark-agent",
+  "version": "1.0.1",
+  "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
+  "main": "dist/main.js",
+  "scripts": {
+    "clean": "tsc --build --clean && if exist dist rmdir /s /q dist",
+    "build": "tsc && node scripts/build-ui-icons.cjs",
+    "build:clean": "npm run clean && npm run build",
+    "dev": "npm run build && node dist/launcher.js --server",
+    "dev:cli": "npm run build && node dist/launcher.js --cli",
+    "start": "electron .",
+    "start:dev": "npm run build && electron .",
+    "start:cli": "node dist/launcher.js --cli",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src",
+    "test": "npm run build && node dist/tests/verify.js",
+    "dist:win": "npm run build:clean && electron-builder --win",
+    "release": "npm run build:clean && node scripts/dist-portable.cjs",
+    "dist:portable": "npm run build:clean && node scripts/dist-portable.cjs",
+    "release:cli-smoke": "node scripts/release-cli-smoke.cjs",
+    "release:ui-smoke": "node scripts/release-ui-smoke.cjs",
+    "release:ui-agent-smoke": "node scripts/release-ui-agent-smoke.cjs",
+    "release:ui-acceptance-smoke": "node scripts/release-ui-acceptance-smoke.cjs",
+    "release:ui-integration-smoke": "node scripts/release-ui-integration-smoke.cjs",
+    "release:ui-external-workspace-smoke": "node scripts/release-ui-external-workspace-smoke.cjs",
+    "release:ui-option-feedback-smoke": "node scripts/release-ui-option-feedback-smoke.cjs",
+    "release:ui-model-settings-smoke": "node scripts/release-ui-model-settings-smoke.cjs",
+    "release:ui-flow-subagent-smoke": "node scripts/release-ui-flow-subagent-smoke.cjs",
+    "release:ui-media-md-smoke": "node scripts/release-ui-media-md-smoke.cjs",
+    "release:ui-skills-smoke": "node scripts/release-ui-skills-smoke.cjs",
+    "release:ui-conversation-queue-plan-smoke": "node scripts/release-ui-conversation-queue-plan-smoke.cjs",
+    "release:ui-startup-recovery-smoke": "node scripts/release-ui-startup-recovery-smoke.cjs",
+    "release:ui-goal-continuation-smoke": "node scripts/release-ui-goal-continuation-smoke.cjs",
+    "release:ui-workspace-lifecycle-smoke": "node scripts/release-ui-workspace-lifecycle-smoke.cjs",
+    "release:real-claude-env-preview-smoke": "node scripts/release-real-claude-env-preview-smoke.cjs",
+    "release:real-provider-smoke": "node scripts/release-real-provider-smoke.cjs",
+    "release:real-provider-stress": "node scripts/release-real-provider-stress.cjs",
+    "dist:win:installer": "npm run build:clean && node -e \"require('fs').rmSync('../release',{recursive:true,force:true})\" && electron-builder --win nsis",
+    "dist:linux": "npm run build:clean && electron-builder --linux",
+    "dist:mac": "npm run build:clean && electron-builder --mac"
+  },
+  "build": {
+    "appId": "ai.newmark.agent",
+    "productName": "Newmark Agent",
+    "copyright": "Copyright © 2025 Newmark AI",
+    "directories": {
+      "output": "../release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "dist/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraFiles": [
+      {
+        "from": "Flow",
+        "to": "Flow",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "icon": null,
+      "sign": false,
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Newmark-Agent-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true
+    },
+    "portable": {
+      "splashImage": null,
+      "artifactName": "Newmark-Agent-${version}-portable-${arch}.exe"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "artifactName": "Newmark-Agent-${version}-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools",
+      "artifactName": "Newmark-Agent-${version}-${arch}.${ext}"
+    }
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "cross-fetch": "^4.0.0",
+    "glob": "^7.2.3",
+    "https-proxy-agent": "^9.1.0",
+    "jsdom": "^29.1.1",
+    "lucide-static": "^1.21.0"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "^22.0.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "oxlint": "^0.9.0",
+    "typescript": "^5.6.0"
+  }
+}

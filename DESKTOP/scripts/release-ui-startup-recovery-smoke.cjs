@@ -1,0 +1,239 @@
+const fs = require('fs');
+const http = require('http');
+const os = require('os');
+const path = require('path');
+const { spawn, spawnSync } = require('child_process');
+
+const repoRoot = path.resolve(__dirname, '..', '..');
+const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
+const screenshotPath = path.join(repoRoot, 'archive', '2026-06-28-release-ui-startup-recovery-smoke.png');
+const keepRoot = process.env.NEWMARK_KEEP_UI_STARTUP_RECOVERY_SMOKE === '1';
+
+function log(message) { console.log(`[release-ui-startup-recovery-smoke] ${message}`); }
+function fail(message) { throw new Error(message); }
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+function getJson(url) {
+  return new Promise((resolve, reject) => {
+    http.get(url, res => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); } catch (error) { reject(error); }
+      });
+    }).on('error', reject);
+  });
+}
+
+async function waitForTarget(port) {
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    try {
+      const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
+      const target = targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview') && String(t.url || '').includes('index.html'))
+        || targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview') && String(t.title || '').includes('Newmark'))
+        || targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview'))
+        || targets.find(t => t.webSocketDebuggerUrl);
+      if (target) return target;
+    } catch {}
+    await sleep(500);
+  }
+  fail('Timed out waiting for Electron CDP target');
+}
+
+function connectCdp(target) {
+  let nextId = 1;
+  const pending = new Map();
+  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  function call(method, params = {}, timeoutMs = 15000) {
+    const id = nextId++;
+    ws.send(JSON.stringify({ id, method, params }));
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      setTimeout(() => {
+        if (!pending.has(id)) return;
+        pending.delete(id);
+        reject(new Error(`CDP timeout: ${method}`));
+      }, timeoutMs);
+    });
+  }
+  const ready = new Promise((resolve, reject) => {
+    ws.onopen = resolve;
+    ws.onerror = reject;
+    ws.onmessage = event => {
+      const message = JSON.parse(event.data);
+      if (!message.id || !pending.has(message.id)) return;
+      const callbacks = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error) callbacks.reject(new Error(message.error.message || JSON.stringify(message.error)));
+      else callbacks.resolve(message.result);
+    };
+  });
+  return { ws, ready, call };
+}
+
+async function evaluate(cdp, expression, timeoutMs = 15000) {
+  const result = await cdp.call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, timeoutMs);
+  if (result.exceptionDetails) {
+    const details = result.exceptionDetails;
+    const message = details.exception?.description || details.text || JSON.stringify(details);
+    throw new Error(`Runtime.evaluate exception: ${message}`);
+  }
+  return result.result ? result.result.value : undefined;
+}
+
+async function waitFor(cdp, expression, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  let lastValue;
+  while (Date.now() < deadline) {
+    lastValue = await evaluate(cdp, expression, 10000);
+    if (lastValue) return lastValue;
+    await sleep(500);
+  }
+  fail(`Timed out waiting for ${label}; last=${JSON.stringify(lastValue)}`);
+}
+
+async function captureScreenshot(cdp, filePath) {
+  await cdp.call('Page.bringToFront', {}, 10000);
+  await cdp.call('Emulation.setDeviceMetricsOverride', {
+    width: 1600,
+    height: 1000,
+    deviceScaleFactor: 1,
+    mobile: false,
+  }, 10000).catch(() => undefined);
+  await evaluate(cdp, `(() => { window.scrollTo(0, 0); return true; })()`);
+  await sleep(300);
+  const screenshot = await cdp.call('Page.captureScreenshot', { format: 'png', fromSurface: true }, 30000);
+  if (!screenshot?.data) fail('empty screenshot data');
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, Buffer.from(screenshot.data, 'base64'));
+  log(`screenshot ${filePath}`);
+}
+
+function ensureNoReleaseProcess() {
+  const running = spawnSync('powershell.exe', [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-Command',
+    "(@(Get-Process | Where-Object { $_.Path -like '*Newmark Agent*release*' })).Count",
+  ], { encoding: 'utf8', windowsHide: true });
+  const count = Number(String(running.stdout || '').trim());
+  if (count > 0) {
+    spawnSync('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      "Get-Process | Where-Object { $_.Path -like '*Newmark Agent*release*' } | Stop-Process -Force",
+    ], { windowsHide: true });
+    fail('startup recovery smoke left a packaged Newmark process running');
+  }
+}
+
+function parseJsonFile(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''));
+}
+
+function verifyRecoveredRoot(root) {
+  for (const dir of ['skills', 'Work', 'Flow', 'archive']) {
+    if (!fs.statSync(path.join(root, dir)).isDirectory()) fail(`missing recovered directory: ${dir}`);
+  }
+  for (const file of ['config.json', 'agent.md', 'PC_Hash.config', path.join('Flow', 'Flow.md'), path.join('Work', 'Local.json'), path.join('Work', 'External.json'), path.join('Work', 'State.json')]) {
+    if (!fs.statSync(path.join(root, file)).isFile()) fail(`missing recovered file: ${file}`);
+  }
+
+  const config = parseJsonFile(path.join(root, 'config.json'));
+  if ((config.workspace?.auto_create_timestamp_workspace?.value ?? config.workspace?.auto_create_timestamp_workspace) !== true) {
+    fail('config did not enable default timestamp workspace creation');
+  }
+  const flowGuide = fs.readFileSync(path.join(root, 'Flow', 'Flow.md'), 'utf8');
+  if (!flowGuide.includes('Newmark Flow Format Guide') || !flowGuide.includes('{#prompt#}')) fail('Flow/Flow.md guidance is incomplete');
+  const pcHash = fs.readFileSync(path.join(root, 'PC_Hash.config'), 'utf8').trim();
+  if (!pcHash || !pcHash.includes(process.platform)) fail(`PC_Hash.config invalid: ${pcHash}`);
+
+  const local = parseJsonFile(path.join(root, 'Work', 'Local.json'));
+  const external = parseJsonFile(path.join(root, 'Work', 'External.json'));
+  const state = parseJsonFile(path.join(root, 'Work', 'State.json'));
+  if (!Array.isArray(local) || local.length !== 1) fail(`Local.json did not contain one default internal workspace: ${JSON.stringify(local)}`);
+  if (!Array.isArray(external) || external.length !== 0) fail(`External.json should start empty: ${JSON.stringify(external)}`);
+  const ws = local[0];
+  if (!ws.isInternal || !ws.name || !/^\d{4}-\d{2}-\d{2}_\d{4}(\d{2})?$/.test(ws.name)) fail(`default workspace is not timestamp-like: ${JSON.stringify(ws)}`);
+  if (!fs.statSync(ws.path).isDirectory()) fail(`default workspace directory missing: ${ws.path}`);
+  if (!state.current || state.current.name !== ws.name || state.current.path !== ws.path || state.current.isInternal !== true) {
+    fail(`State.json did not select default internal workspace: ${JSON.stringify(state)}`);
+  }
+  return ws;
+}
+
+async function runUiCheck(root) {
+  const port = Number(process.env.NEWMARK_UI_STARTUP_RECOVERY_SMOKE_PORT || '49355');
+  let child;
+  let cdp;
+  try {
+    child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    const target = await waitForTarget(port);
+    log(`connected target: ${target.title || '(untitled)'} ${target.url || ''}`);
+    cdp = connectCdp(target);
+    await cdp.ready;
+    await cdp.call('Runtime.enable');
+    await cdp.call('Page.enable');
+    await cdp.call('Page.bringToFront');
+
+    await waitFor(cdp, `(() => document.readyState === 'complete' && !!window.api && !!document.querySelector('#prompt'))()`, 30000, 'renderer ready');
+    await waitFor(cdp, `window.api.getState().then(s => !!(s.workspaces && s.workspaces.current && s.workspaces.current.isInternal))`, 30000, 'default internal workspace selected');
+    const ws = verifyRecoveredRoot(root);
+    const state = await evaluate(cdp, `window.api.getState().then(s => ({
+      workspace: s.workspaces.current,
+      language: s.language,
+      promptPlaceholder: document.querySelector('#prompt')?.getAttribute('placeholder') || '',
+      workspaceNames: (s.workspaces.internal || []).map(w => w.name)
+    }))`, 30000);
+    if (!state.workspace || state.workspace.name !== ws.name || state.workspace.path !== ws.path) {
+      fail(`renderer state did not match recovered workspace: ${JSON.stringify(state)}`);
+    }
+    if (state.language !== 'auto') fail(`renderer language should start auto: ${JSON.stringify(state)}`);
+    if (!['Input instruction...', '输入指令...'].includes(state.promptPlaceholder)) fail(`prompt placeholder missing after recovery: ${JSON.stringify(state)}`);
+    if (!state.workspaceNames.includes(ws.name)) fail(`renderer internal workspace list missing default workspace: ${JSON.stringify(state)}`);
+    log('companion files and default internal workspace recovered ok');
+    await captureScreenshot(cdp, screenshotPath);
+  } finally {
+    try { if (cdp?.ws) cdp.ws.close(); } catch {}
+    try { if (child && !child.killed) child.kill(); } catch {}
+    await sleep(1000);
+    ensureNoReleaseProcess();
+  }
+}
+
+(async () => {
+  if (process.platform !== 'win32') {
+    log('skipped: packaged Windows UI smoke only runs on win32');
+    return;
+  }
+  if (!fs.existsSync(exePath)) fail(`missing release exe: ${exePath}`);
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'NewmarkReleaseStartupRecovery-'));
+  for (const item of ['skills', 'Work', 'Flow', 'archive', 'config.json', 'agent.md', 'PC_Hash.config']) {
+    const target = path.join(root, item);
+    fs.rmSync(target, { recursive: true, force: true });
+    if (fs.existsSync(target)) fail(`could not prepare missing companion item: ${item}`);
+  }
+  try {
+    await runUiCheck(root);
+    log('all startup recovery checks passed');
+  } finally {
+    if (!keepRoot) {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (error) { log(`warning: could not remove temp root ${root}: ${error.message}`); }
+    } else {
+      log(`kept temp root ${root}`);
+    }
+  }
+})().catch(error => {
+  console.error(error.stack || error.message);
+  try { ensureNoReleaseProcess(); } catch {}
+  process.exit(1);
+});

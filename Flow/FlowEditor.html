@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flow — Workflow Editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-deep: #141110;
+  --bg-surface: #1e1a18;
+  --bg-elevated: #282220;
+  --bg-hover: #322c28;
+  --bg-active: #3d342e;
+  --border-subtle: #2d2723;
+  --border-medium: #403833;
+  --text-primary: #e8dcc8;
+  --text-secondary: #9a8e7e;
+  --text-muted: #6a6056;
+  --accent-gold: #d4a853;
+  --accent-gold-dim: #a68440;
+  --accent-gold-glow: rgba(212, 168, 83, 0.15);
+  --accent-teal: #4a9e8e;
+  --accent-rust: #c4503e;
+  --accent-rust-bg: rgba(196, 80, 62, 0.12);
+  --badge-build: #5b8db0;
+  --badge-plan: #b08b4a;
+  --badge-goal: #4a9e7a;
+  --badge-logic: #8b5b7a;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --shadow-card: 0 4px 24px rgba(0,0,0,0.4);
+  --transition: 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --font-display: 'DM Serif Display', Georgia, serif;
+  --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { font-size: 15px; }
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Header ─── */
+header {
+  position: relative;
+  background: var(--bg-surface);
+  padding: 0 24px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+header::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 5%; right: 5%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent-gold-dim), transparent);
+  opacity: 0.3;
+}
+
+header h1 {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--accent-gold);
+  letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+header h1 .mark {
+  display: inline-block;
+  width: 8px; height: 8px;
+  background: var(--accent-gold);
+  border-radius: 50%;
+  opacity: 0.6;
+}
+
+#folderInfo {
+  font-size: 12px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  border-left: 1px solid var(--border-subtle);
+  padding-left: 16px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.toolbar button {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  padding: 6px 14px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition);
+  text-transform: uppercase;
+}
+
+.toolbar button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-medium);
+}
+
+.toolbar button.primary {
+  background: var(--accent-gold-dim);
+  color: var(--bg-deep);
+  border-color: var(--accent-gold);
+  font-weight: 600;
+}
+
+.toolbar button.primary:hover {
+  background: var(--accent-gold);
+  box-shadow: 0 0 20px var(--accent-gold-glow);
+}
+
+.toolbar button.danger {
+  border-color: var(--accent-rust);
+  color: var(--accent-rust);
+}
+
+.toolbar button.danger:hover {
+  background: var(--accent-rust-bg);
+  color: #e07060;
+}
+
+/* ─── Main Layout ─── */
+main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ─── Tree Panel ─── */
+#treePanel {
+  width: 380px;
+  min-width: 300px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-subtle);
+  padding: 12px 0 24px;
+  flex-shrink: 0;
+}
+
+#treePanel::-webkit-scrollbar { width: 4px; }
+#treePanel::-webkit-scrollbar-track { background: transparent; }
+#treePanel::-webkit-scrollbar-thumb { background: var(--border-medium); border-radius: 2px; }
+
+#emptyMsg {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 48px 24px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+#emptyMsg .icon-big {
+  font-size: 32px;
+  display: block;
+  margin-bottom: 12px;
+  opacity: 0.4;
+}
+
+#emptyMsg button {
+  margin-top: 16px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--accent-gold-dim);
+  color: var(--bg-deep);
+  border: none;
+  padding: 8px 20px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: all var(--transition);
+}
+
+#emptyMsg button:hover {
+  background: var(--accent-gold);
+  box-shadow: 0 0 24px var(--accent-gold-glow);
+}
+
+/* ─── Tree ─── */
+.tree { list-style: none; }
+
+.tree-node { position: relative; }
+
+.tree-node-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 16px;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--transition);
+  border-left: 2px solid transparent;
+  position: relative;
+}
+
+.tree-node-header:hover {
+  background: var(--bg-hover);
+}
+
+.tree-node.selected > .tree-node-header {
+  background: var(--bg-active);
+  border-left-color: var(--accent-gold);
+}
+
+.tree-node-header .toggle {
+  width: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 10px;
+  flex-shrink: 0;
+  transition: transform var(--transition);
+}
+
+.tree-node-header .toggle.open {
+  transform: rotate(90deg);
+}
+
+.tree-node-header .icon {
+  width: 18px;
+  text-align: center;
+  font-size: 13px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.tree-node-header .label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-node-header .label-sm {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.tree-node-header .badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.badge-Build { background: rgba(91, 141, 176, 0.2); color: var(--badge-build); }
+.badge-Plan { background: rgba(176, 139, 74, 0.2); color: var(--badge-plan); }
+.badge-Goal { background: rgba(74, 158, 122, 0.2); color: var(--badge-goal); }
+.badge-Logic { background: rgba(139, 91, 122, 0.2); color: var(--badge-logic); }
+.badge-dialog { background: rgba(74, 158, 142, 0.15); color: var(--accent-teal); }
+.badge-logic { background: rgba(139, 91, 122, 0.2); color: var(--badge-logic); }
+
+.tree-node-header .btn-ghost {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 12px;
+  border-radius: 3px;
+  opacity: 0;
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+
+.tree-node-header:hover .btn-ghost {
+  opacity: 0.6;
+}
+
+.tree-node-header .btn-ghost:hover {
+  opacity: 1;
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
+.tree-node-header .btn-ghost.danger { color: var(--accent-rust); }
+.tree-node-header .btn-ghost.danger:hover { background: var(--accent-rust-bg); color: #e07060; }
+
+.tree-children {
+  overflow: hidden;
+  transition: max-height 360ms cubic-bezier(0.4, 0, 0.2, 1);
+  max-height: 0;
+}
+
+.tree-children.open {
+  max-height: 2000px;
+}
+
+.tree-children .tree-node-header {
+  padding-left: 36px;
+}
+
+.tree-children .tree-children .tree-node-header {
+  padding-left: 56px;
+}
+
+/* Connector lines */
+.tree-children::before {
+  content: '';
+  position: absolute;
+  left: 24px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-subtle);
+  pointer-events: none;
+}
+
+/* New workflow placeholder */
+.new-item-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  margin: 4px 12px 8px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-gold-dim);
+  background: none;
+  border: 1px dashed var(--border-medium);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.new-item-btn:hover {
+  border-color: var(--accent-gold);
+  color: var(--accent-gold);
+  background: var(--accent-gold-glow);
+}
+
+.new-item-btn.add-top {
+  margin-top: 0;
+  margin-bottom: 8px;
+  border-color: transparent;
+  color: var(--text-muted);
+}
+
+.new-item-btn.add-top:hover {
+  border-color: var(--accent-gold);
+  color: var(--accent-gold);
+}
+
+/* ─── Editor Panel ─── */
+#editorPanel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px 40px;
+  background: var(--bg-deep);
+}
+
+#editorPanel::-webkit-scrollbar { width: 4px; }
+#editorPanel::-webkit-scrollbar-track { background: transparent; }
+#editorPanel::-webkit-scrollbar-thumb { background: var(--border-medium); border-radius: 2px; }
+
+.editor-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.editor-empty .icon-big {
+  font-size: 40px;
+  margin-bottom: 16px;
+  opacity: 0.3;
+}
+
+.editor-empty p {
+  font-size: 14px;
+  max-width: 280px;
+  line-height: 1.7;
+}
+
+/* Editor sections */
+.editor-section {
+  animation: fadeSlideUp 360ms ease-out;
+}
+
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.editor-section h2 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  letter-spacing: 0.01em;
+}
+
+.editor-section .subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 28px;
+}
+
+.editor-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 24px;
+  margin-bottom: 20px;
+}
+
+.editor-card.compact {
+  padding: 16px 20px;
+}
+
+.form-group {
+  margin-bottom: 18px;
+}
+
+.form-group:last-child {
+  margin-bottom: 0;
+}
+
+.form-group label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.form-group .hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.form-group .hint code {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  background: var(--bg-active);
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: var(--accent-gold);
+}
+
+.form-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.form-row .form-group {
+  flex: 1;
+}
+
+.form-row .form-group.shrink {
+  flex: 0 0 auto;
+}
+
+input[type="text"],
+input[type="number"],
+select,
+textarea {
+  width: 100%;
+  font-family: var(--font-body);
+  font-size: 13px;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition);
+  outline: none;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent-gold-dim);
+  box-shadow: 0 0 0 3px var(--accent-gold-glow);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.6;
+}
+
+select {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236a6056'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+}
+
+input[type="number"] {
+  width: 80px;
+}
+
+.goto-group {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+}
+
+.goto-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.goto-item label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin: 0;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.goto-item .arrow {
+  color: var(--accent-gold-dim);
+  font-size: 14px;
+}
+
+.goto-item input[type="number"] {
+  width: 64px;
+}
+
+/* Action buttons */
+.editor-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.editor-actions button {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  padding: 8px 18px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition);
+  text-transform: uppercase;
+}
+
+.btn-secondary {
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+
+.btn-secondary:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-medium);
+}
+
+.btn-danger {
+  background: transparent;
+  color: var(--accent-rust);
+  border: 1px solid rgba(196, 80, 62, 0.3);
+}
+
+.btn-danger:hover {
+  background: var(--accent-rust-bg);
+  border-color: var(--accent-rust);
+}
+
+.btn-primary {
+  background: var(--accent-gold-dim);
+  color: var(--bg-deep);
+  border: none;
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  background: var(--accent-gold);
+  box-shadow: 0 0 20px var(--accent-gold-glow);
+}
+
+/* Component summary in workflow view */
+.comp-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.comp-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.comp-chip:hover {
+  border-color: var(--border-medium);
+  background: var(--bg-active);
+}
+
+.comp-chip .chip-id {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+/* ─── Status Bar ─── */
+#statusBar {
+  height: 28px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+
+#statusBar .dot {
+  display: inline-block;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  margin-right: 8px;
+  background: var(--accent-gold-dim);
+}
+
+#statusBar .dot.active {
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 768px) {
+  #treePanel { width: 280px; min-width: 200px; }
+  #editorPanel { padding: 24px 20px; }
+  header { padding: 0 16px; }
+  header h1 { font-size: 17px; }
+  .toolbar button { padding: 5px 10px; font-size: 11px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="mark"></span> Flow</h1>
+  <span id="folderInfo">No folder opened</span>
+  <div class="toolbar">
+    <button id="openFolderBtn" onclick="openFolder()">Open</button>
+    <button id="saveAllBtn" onclick="saveAll()" disabled>Save</button>
+    <button class="primary" id="newWfBtn" onclick="newWorkflow()" disabled>New</button>
+  </div>
+</header>
+
+<main>
+  <div id="treePanel">
+    <div id="emptyMsg">
+      <span class="icon-big">⚡</span>
+      Open a Flow folder to start editing workflows.
+      <br>
+      <button onclick="openFolder()">Open Folder</button>
+    </div>
+    <ul id="tree" class="tree" style="display:none"></ul>
+  </div>
+  <div id="editorPanel">
+    <div class="editor-empty">
+      <span class="icon-big">◇</span>
+      <p>Select a workflow or component from the tree to begin editing.</p>
+    </div>
+  </div>
+</main>
+
+<div id="statusBar"><span class="dot"></span>Ready</div>
+
+<script>
+let flowDirHandle = null;
+let workflows = {};
+let workflowNames = [];
+let expandedWf = {};
+let expandedComp = {};
+let selectedPath = null;
+let dirtySet = new Set();
+
+function setStatus(msg, active) {
+  const bar = document.getElementById('statusBar');
+  bar.innerHTML = `<span class="dot${active ? ' active' : ''}"></span>${msg}`;
+}
+
+async function openFolder() {
+  if (typeof showDirectoryPicker !== 'undefined') {
+    try {
+      flowDirHandle = await showDirectoryPicker({ mode: 'readwrite' });
+      document.getElementById('folderInfo').textContent = '📂 ' + flowDirHandle.name;
+      document.getElementById('newWfBtn').disabled = false;
+      document.getElementById('emptyMsg').style.display = 'none';
+      document.getElementById('tree').style.display = 'block';
+      await loadAll();
+      setStatus(`Loaded ${Object.keys(workflows).length} workflow(s)`);
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+    }
+  }
+  loadViaFileInput();
+}
+
+async function loadAll() {
+  workflows = {}; workflowNames = [];
+  for await (const entry of flowDirHandle.values()) {
+    if (entry.kind === 'file' && entry.name.endsWith('.Flow.json')) {
+      const name = entry.name.replace('.Flow.json', '');
+      try {
+        const file = await entry.getFile();
+        const wf = JSON.parse(await file.text());
+        wf.__handle = entry;
+        wf.__dirty = false;
+        workflows[name] = wf;
+        workflowNames.push(name);
+      } catch {}
+    }
+  }
+  renderTree();
+}
+
+function loadViaFileInput() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.multiple = true;
+  input.accept = '.Flow.json';
+  input.onchange = async () => {
+    const files = input.files;
+    if (!files || !files.length) return;
+    workflows = {}; workflowNames = []; dirtySet.clear();
+    let loaded = 0;
+    for (const file of files) {
+      try {
+        const text = await file.text();
+        const wf = JSON.parse(text);
+        if (!wf.name || !wf.components) continue;
+        workflows[wf.name] = wf;
+        wf.__dirty = false;
+        workflowNames.push(wf.name);
+        loaded++;
+      } catch (e) {
+        console.warn(`Skipped ${file.name}: ${e.message}`);
+      }
+    }
+    if (!loaded) { alert('No valid .Flow.json files found.'); return; }
+    document.getElementById('folderInfo').textContent = `📁 ${loaded} workflow(s) loaded`;
+    document.getElementById('newWfBtn').disabled = false;
+    document.getElementById('emptyMsg').style.display = 'none';
+    document.getElementById('tree').style.display = 'block';
+    renderTree();
+    setStatus(`Loaded ${loaded} workflow(s) from ${files.length} file(s)`);
+  };
+  input.click();
+}
+
+function renderTree() {
+  const tree = document.getElementById('tree');
+  tree.innerHTML = '';
+
+  if (workflowNames.length === 0) {
+    tree.innerHTML = `<button class="new-item-btn add-top" onclick="newWorkflow()">+ New Workflow</button>`;
+    return;
+  }
+
+  const addTop = document.createElement('li');
+  addTop.innerHTML = `<button class="new-item-btn add-top" onclick="newWorkflow()">+ New Workflow</button>`;
+  tree.appendChild(addTop);
+
+  for (const name of [...workflowNames].sort()) {
+    const wf = workflows[name];
+    if (!wf) continue;
+    if (!wf.components) wf.components = [];
+
+    const li = document.createElement('li');
+    li.className = 'tree-node';
+    li.dataset.path = name;
+
+    const isOpen = expandedWf[name];
+    const header = document.createElement('div');
+    header.className = 'tree-node-header';
+    header.innerHTML = `
+      <span class="toggle${isOpen ? ' open' : ''}">▶</span>
+      <span class="icon">📋</span>
+      <span class="label">${esc(name)}</span>
+      <span class="badge badge-dialog">${wf.components.length}</span>
+      <button class="btn-ghost" title="Add component" onclick="event.stopPropagation();addComp('${esc(name)}')">+</button>
+      <button class="btn-ghost" title="Duplicate" onclick="event.stopPropagation();dupWf('${esc(name)}')">⊞</button>
+      <button class="btn-ghost danger" title="Delete" onclick="event.stopPropagation();delWf('${esc(name)}')">✕</button>
+    `;
+    header.onclick = () => {
+      expandedWf[name] = !expandedWf[name];
+      renderTree();
+      selectNode(name);
+    };
+    li.appendChild(header);
+
+    const children = document.createElement('ul');
+    children.className = 'tree-children' + (isOpen ? ' open' : '');
+
+    if (isOpen) {
+      const sorted = [...wf.components].sort((a, b) => a.id - b.id);
+      for (const comp of sorted) {
+        const isD = comp.type === 'dialog';
+        const typeLbl = isD ? comp.mode || 'Build' : 'Logic';
+        const icon = isD ? '💬' : '⚡';
+        const ck = `${name}:${comp.id}`;
+        const cOpen = expandedComp[ck];
+
+        const cli = document.createElement('li');
+        cli.className = 'tree-node';
+        cli.dataset.path = ck;
+
+        const ch = document.createElement('div');
+        ch.className = 'tree-node-header';
+        ch.innerHTML = `
+          <span class="toggle${cOpen ? ' open' : ''}">▶</span>
+          <span class="icon">${icon}</span>
+          <span class="label"><span class="label-sm">${comp.id}</span>&ensp;${typeLbl}</span>
+          <span class="badge badge-${typeLbl}">${comp.type}</span>
+          <button class="btn-ghost danger" title="Delete" onclick="event.stopPropagation();delComp('${esc(name)}',${comp.id})">✕</button>
+        `;
+        ch.onclick = () => {
+          expandedComp[ck] = !expandedComp[ck];
+          renderTree();
+          selectNode(ck);
+        };
+        cli.appendChild(ch);
+
+        if (cOpen) {
+          const detail = document.createElement('div');
+          detail.className = 'tree-children open';
+          detail.style.padding = '4px 8px 10px 36px';
+          detail.style.fontSize = '11px';
+          detail.style.color = 'var(--text-muted)';
+          detail.style.lineHeight = '1.6';
+          const pr = (comp.prompt || '').substring(0, 72);
+          detail.innerHTML = isD
+            ? `mode: ${comp.mode}<br>${esc(pr)}${comp.prompt?.length > 72 ? '…' : ''}`
+            : `→T:${comp.goto_true} →F:${comp.goto_false}<br>${esc(pr)}${comp.prompt?.length > 72 ? '…' : ''}`;
+          cli.appendChild(detail);
+        }
+
+        children.appendChild(cli);
+      }
+
+      const addBtn = document.createElement('li');
+      addBtn.style.listStyle = 'none';
+      addBtn.innerHTML = `<button class="new-item-btn" onclick="addComp('${esc(name)}')">+ New Component</button>`;
+      children.appendChild(addBtn);
+    }
+
+    li.appendChild(children);
+    tree.appendChild(li);
+  }
+
+  if (selectedPath) selectNode(selectedPath);
+}
+
+function selectNode(path) {
+  selectedPath = path;
+  document.querySelectorAll('.tree-node.selected').forEach(n => n.classList.remove('selected'));
+  const el = document.querySelector(`[data-path="${path}"]`);
+  if (el) el.classList.add('selected');
+  showEditor(path);
+}
+
+function showEditor(path) {
+  const panel = document.getElementById('editorPanel');
+  if (!path) { panel.innerHTML = `<div class="editor-empty"><span class="icon-big">◇</span><p>Select a workflow or component.</p></div>`; return; }
+
+  const [wfName, compIdStr] = path.split(':');
+  const wf = workflows[wfName];
+  if (!wf) { panel.innerHTML = `<div class="editor-empty"><span class="icon-big">◇</span><p>Workflow not found.</p></div>`; return; }
+
+  if (compIdStr === undefined) {
+    renderWfEditor(panel, wfName, wf);
+  } else {
+    const compId = parseInt(compIdStr);
+    const comp = (wf.components || []).find(c => c.id === compId);
+    if (!comp) { panel.innerHTML = `<div class="editor-empty"><span class="icon-big">◇</span><p>Component not found.</p></div>`; return; }
+    renderCompEditor(panel, wfName, comp, wf);
+  }
+}
+
+function renderWfEditor(panel, name, wf) {
+  const comps = wf.components || [];
+  const chips = comps.sort((a,b)=>a.id-b.id).map(c => {
+    const lbl = c.type === 'dialog' ? c.mode||'Build' : 'Logic';
+    return `<span class="comp-chip" onclick="selectNode('${esc(name)}:${c.id}')"><span class="chip-id">${c.id}</span> ${lbl}</span>`;
+  }).join('');
+
+  panel.innerHTML = `
+    <div class="editor-section">
+      <h2>${esc(name)}</h2>
+      <div class="subtitle">Workflow · ${comps.length} component${comps.length !== 1 ? 's' : ''}</div>
+      <div class="editor-card">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" value="${esc(name)}" onchange="renameWf('${esc(name)}', this.value)">
+        </div>
+      </div>
+      <div class="editor-card compact">
+        <div class="form-group" style="margin:0">
+          <label>Components</label>
+          <div class="comp-summary">${chips || '<span style="color:var(--text-muted);font-size:13px">No components yet.</span>'}</div>
+        </div>
+      </div>
+      <div class="editor-actions">
+        <button class="btn-primary" onclick="addComp('${esc(name)}')">+ Add Component</button>
+        <button class="btn-secondary" onclick="dupWf('${esc(name)}')">Duplicate</button>
+        <button class="btn-danger" onclick="delWf('${esc(name)}')">Delete Workflow</button>
+      </div>
+    </div>`;
+}
+
+function renderCompEditor(panel, wfName, comp, wf) {
+  const isD = comp.type === 'dialog';
+  const id = comp.id;
+
+  const r = (s) => typeof s === 'string' ? s.replace(/</g,'&lt;').replace(/>/g,'&gt;') : '';
+  const pVal = r(comp.prompt || '');
+
+  const hintNote = isD
+    ? `<div class="hint">Use <code>{#prompt#}</code> as placeholder for user input</div>`
+    : `<div class="hint">Condition evaluated by agent. Use <code>{#prompt#}</code> as placeholder.</div>`;
+
+  const typeSection = isD ? `
+    <div class="form-group" style="flex:0 0 auto">
+      <label>Mode</label>
+      <select onchange="upd('${esc(wfName)}',${id},'mode',this.value)">
+        <option value="Build" ${comp.mode==='Build'?'selected':''}>Build</option>
+        <option value="Plan" ${comp.mode==='Plan'?'selected':''}>Plan</option>
+        <option value="Goal" ${comp.mode==='Goal'?'selected':''}>Goal</option>
+      </select>
+    </div>` : '';
+
+  const idHtml = `
+    <div class="form-group" style="flex:0 0 auto">
+      <label>ID</label>
+      <input type="number" value="${id}" onchange="upd('${esc(wfName)}',${id},'id',parseInt(this.value)||0)">
+    </div>`;
+
+  const gotoHtml = isD ? '' : `
+    <div class="editor-card compact">
+      <div class="goto-group">
+        <div class="goto-item">
+          <label>TRUE →</label>
+          <span class="arrow">➤</span>
+          <input type="number" value="${comp.goto_true||0}" onchange="upd('${esc(wfName)}',${id},'goto_true',parseInt(this.value)||0)">
+        </div>
+        <div class="goto-item">
+          <label>FALSE →</label>
+          <span class="arrow">➤</span>
+          <input type="number" value="${comp.goto_false||0}" onchange="upd('${esc(wfName)}',${id},'goto_false',parseInt(this.value)||0)">
+        </div>
+      </div>
+    </div>`;
+
+  panel.innerHTML = `
+    <div class="editor-section">
+      <h2>${isD ? '💬' : '⚡'} Component #${id}</h2>
+      <div class="subtitle">${isD ? 'Dialog' : 'Logic'} · ${esc(wfName)}</div>
+      <div class="editor-card">
+        <div class="form-row">
+          ${idHtml}
+          ${typeSection}
+        </div>
+        <div class="form-group" style="margin-top:16px">
+          <label>${isD ? 'Base Prompt' : 'Condition'}</label>
+          <textarea onchange="upd('${esc(wfName)}',${id},'prompt',this.value)">${pVal}</textarea>
+          ${hintNote}
+        </div>
+      </div>
+      ${gotoHtml}
+      <div class="editor-actions">
+        <button class="btn-danger" onclick="delComp('${esc(wfName)}',${id})">Delete Component</button>
+        <button class="btn-secondary" onclick="addComp('${esc(wfName)}')">+ New Component</button>
+      </div>
+    </div>`;
+}
+
+function upd(wfName, compId, field, value) {
+  const wf = workflows[wfName];
+  if (!wf) return;
+  const comp = (wf.components || []).find(c => c.id === compId);
+  if (!comp) return;
+  if (field === 'id') {
+    if ((wf.components || []).some(c => c.id === value && c !== comp)) {
+      alert(`Component ID ${value} already exists.`);
+      return;
+    }
+    const oldPath = `${wfName}:${compId}`;
+    if (selectedPath === oldPath) selectedPath = `${wfName}:${value}`;
+  }
+  comp[field] = value;
+  markDirty(wfName);
+  renderTree();
+}
+
+function markDirty(name) {
+  dirtySet.add(name);
+  document.getElementById('saveAllBtn').disabled = false;
+  setStatus(`✎ Modified: ${name}`, true);
+}
+
+function renameWf(oldName, newName) {
+  if (!newName || oldName === newName) return;
+  if (workflows[newName]) { alert(`"${newName}" already exists.`); return; }
+  workflows[newName] = workflows[oldName];
+  workflows[newName].name = newName;
+  delete workflows[oldName];
+  const i = workflowNames.indexOf(oldName);
+  if (i >= 0) workflowNames[i] = newName;
+  if (selectedPath === oldName) selectedPath = newName;
+  else if (selectedPath && selectedPath.startsWith(oldName + ':'))
+    selectedPath = newName + selectedPath.slice(oldName.length);
+  renderTree();
+  setStatus(`Renamed → ${newName}`);
+}
+
+function newWorkflow() {
+  const name = prompt('Workflow name:', 'new_workflow');
+  if (!name || workflows[name]) return;
+  workflows[name] = { name, components: [], __dirty: true };
+  workflowNames.push(name);
+  dirtySet.add(name);
+  expandedWf[name] = true;
+  document.getElementById('saveAllBtn').disabled = false;
+  renderTree();
+  selectNode(name);
+  setStatus(`Created: ${name}`);
+}
+
+function dupWf(name) {
+  const wf = workflows[name];
+  if (!wf) return;
+  let nn = name + '_copy', i = 1;
+  while (workflows[nn]) nn = `${name}_copy${i++}`;
+  workflows[nn] = JSON.parse(JSON.stringify(wf));
+  workflows[nn].name = nn;
+  workflows[nn].__dirty = true;
+  workflowNames.push(nn);
+  dirtySet.add(nn);
+  document.getElementById('saveAllBtn').disabled = false;
+  renderTree();
+  setStatus(`Duplicated → ${nn}`);
+}
+
+function delWf(name) {
+  if (!confirm(`Delete workflow "${name}"?`)) return;
+  delete workflows[name];
+  const i = workflowNames.indexOf(name);
+  if (i >= 0) workflowNames.splice(i, 1);
+  dirtySet.delete(name);
+  if (selectedPath && (selectedPath === name || selectedPath.startsWith(name + ':'))) selectedPath = null;
+  renderTree();
+  showEditor(null);
+  setStatus(`Deleted: ${name}`);
+}
+
+function addComp(wfName) {
+  const wf = workflows[wfName];
+  if (!wf) return;
+  if (!wf.components) wf.components = [];
+  const maxId = wf.components.length ? Math.max(...wf.components.map(c => c.id)) : -1;
+
+  const type = prompt('Component type: dialog or logic', 'dialog');
+  if (!type || (type !== 'dialog' && type !== 'logic')) return;
+
+  const newId = maxId + 1;
+  if (type === 'dialog') {
+    wf.components.push({ type: 'dialog', id: newId, mode: 'Build', prompt: '' });
+  } else {
+    wf.components.push({ type: 'logic', id: newId, prompt: '', goto_true: 0, goto_false: 0 });
+  }
+  markDirty(wfName);
+  expandedWf[wfName] = true;
+  renderTree();
+  selectNode(`${wfName}:${newId}`);
+  setStatus(`Added component #${newId} (${type})`);
+}
+
+function delComp(wfName, compId) {
+  if (!confirm(`Delete component #${compId}?`)) return;
+  const wf = workflows[wfName];
+  if (!wf) return;
+  wf.components = (wf.components || []).filter(c => c.id !== compId);
+  markDirty(wfName);
+  const sel = `${wfName}:${compId}`;
+  if (selectedPath === sel) selectedPath = wfName;
+  renderTree();
+  showEditor(selectedPath);
+  setStatus(`Deleted component #${compId}`);
+}
+
+async function saveAll() {
+  if (flowDirHandle) await saveToHandle();
+  else saveFallback();
+}
+
+async function saveToHandle() {
+  for (const name of dirtySet) {
+    const wf = workflows[name];
+    if (!wf) continue;
+    try {
+      const json = JSON.stringify({ name: wf.name, components: wf.components }, null, 2);
+      let fh = wf.__handle;
+      if (!fh) {
+        fh = await flowDirHandle.getFileHandle(`${name}.Flow.json`, { create: true });
+        wf.__handle = fh;
+      }
+      const w = await fh.createWritable();
+      await w.write(json);
+      await w.close();
+      wf.__dirty = false;
+    } catch (e) { alert(`Save failed: ${name} — ${e.message}`); }
+  }
+  dirtySet.clear();
+  document.getElementById('saveAllBtn').disabled = true;
+  setStatus('✓ All saved');
+}
+
+function saveFallback() {
+  for (const name of dirtySet) {
+    const wf = workflows[name];
+    if (!wf) continue;
+    const json = JSON.stringify({ name: wf.name, components: wf.components }, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${name}.Flow.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    wf.__dirty = false;
+  }
+  dirtySet.clear();
+  document.getElementById('saveAllBtn').disabled = true;
+  setStatus('✓ Downloaded (save files to Flow/ folder)');
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveAll(); }
+});
+</script>
+</body>
+</html>

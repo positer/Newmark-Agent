@@ -1,0 +1,168 @@
+{
+  "name": "agent_implementation",
+  "description": "Complete Newmark Agent implementation workflow from Design.txt. Executes all 11 feature groups in order with conditional re-entry gates at each phase.",
+  "components": [
+    {
+      "type": "dialog",
+      "id": 0,
+      "mode": "Plan",
+      "prompt": "Read and analyze Design.txt at project root. Identify all 26 requirement sections: (1) architecture (Electron + Sidecar), (2) packaging strategy, (3) CLI as kernel, (4) Win10+ compatibility, (5) UTF-8, (6) crash fixes, (7) refactoring scope. Output a phased plan index to README.md. Do NOT modify any source files."
+    },
+    {
+      "type": "logic",
+      "id": 1,
+      "prompt": "Does README.md contain a complete phased implementation plan covering all 26 sections of Design.txt?",
+      "goto_true": 2,
+      "goto_false": 0
+    },
+    {
+      "type": "dialog",
+      "id": 2,
+      "mode": "Build",
+      "prompt": "Phase 1 — Foundation Engine. Verify and harden:\n1. src/core/config.ts: full config.json read/write with typed sections (general, models, proxy, ui, workspace, skills, agent). Add JSON schema comment generation.\n2. src/core/workspace.ts: ensure Local.json / External.json separate. Add PC_Hash.config read/validate. External workspace SSH-aware, hidden if PC mismatch.\n3. src/core/types.ts: add AgentMode (build/plan/goal/flow), InputMode (guide/next), IntentionTier, all interface types matching config.json sections.\n4. src/core/agent.ts: wire mode/model/intelligence switching per-turn. Agent.md read chain: root → workspace override → concatenation mode.\n5. Ensure all 5 root files exist on startup (config.json, agent.md, PC_Hash.config, Work/, Flow/, skills/).\n6. All features must also work from CLI entry point (cli.ts / cli-editor.ts) — verify by running `npm run build && node dist/launcher.js --cli`."
+    },
+    {
+      "type": "logic",
+      "id": 3,
+      "prompt": "Does the agent start in CLI mode (node dist/launcher.js --cli) without errors? Does config.json load and save? Does workspace init create Local.json/External.json?",
+      "goto_true": 4,
+      "goto_false": 2
+    },
+    {
+      "type": "dialog",
+      "id": 4,
+      "mode": "Build",
+      "prompt": "Phase 2 — Electron Desktop + Sidecar. Build and verify:\n1. src/main.ts: frameless BrowserWindow, GPU-accelerated, max on start. Topbar IPC (minimize/maximize/close/drag). All 30+ ipcMain.handle() endpoints working.\n2. src/preload.ts: contextBridge exposing window.api with ALL methods matching the HTML UI's expected API surface.\n3. src/sidecar.ts: utilityProcess fork, randomUUID password auth, port negotiation, REST API fallback.\n4. Frame:full false, show:false until ready. CSP in index.html: connect-src 'self' http://localhost:* ws://localhost:*.\n5. Verify `npm run build && npm run start:dev` launches Electron window successfully."
+    },
+    {
+      "type": "logic",
+      "id": 5,
+      "prompt": "Does `npm run build` complete without tsc errors? Does `npm run start` open an Electron window showing the Newmark UI?",
+      "goto_true": 6,
+      "goto_false": 4
+    },
+    {
+      "type": "dialog",
+      "id": 6,
+      "mode": "Build",
+      "prompt": "Phase 3 — Liquid Glass UI Framework. Implement all CSS/JS in src/ui/index.html:\n1. CSS variables for glass-alpha (0-1 continuous). Backdrop-filter blur levels (depth-1/2/3/input). GPU will-change on animated elements.\n2. Marquee border/glow system: conic-gradient animated borders on working states. Apple-style marquee keyframes. CSS mask-composite for border-only rendering. !border not background!\n3. Bézier rounded corners globally (border-radius: 5% 5% 6% 6% / 5% 5% 8% 8% pattern). No default selection highlights, no scrollbar chrome.\n4. Interactive state machine: lg-hover (translateY(-1px) + shadow lift), lg-press (scale(0.97)), lg-ripple (radial-gradient on click), lg-active, lg-drag.\n5. Smooth panel fold/unfold animations with will-change: width/height and backface-visibility.\n6. Reduced transparency / reduced motion media query support.\n7. Verify every .glass-*, .lg-*, .marquee-*, .bezier-* class renders correctly in Electron."
+    },
+    {
+      "type": "logic",
+      "id": 7,
+      "prompt": "Does the UI render with correct glass effects, marquee borders (NOT backgrounds), bezier corners, and smooth panel animations in Electron?",
+      "goto_true": 8,
+      "goto_false": 6
+    },
+    {
+      "type": "dialog",
+      "id": 8,
+      "mode": "Build",
+      "prompt": "Phase 4 — UI Layout (Topbar + Sidebars + Chat + Bottom). Build each section in index.html:\n1. Topbar #topbar: frameless drag region, height:34px. Left: Newmark logo with gradient animation on working state. Right: minimize/maximize/close buttons with hover/active states. NO system title bar.\n2. Left sidebar #left: width 210px / collapsed 44px. Items: Plugins, Automation, Workflow, Settings (icon+name). WS section with internal/external workspace list. Click WS thumbnail → toggle left + show #left-secondary with conv list. Collapsed state shows only icons + WS thumbs with marquee border when working.\n3. Secondary sidebar #left-secondary: width 220px, slides in from left. Top: WS settings + New conversation buttons. Body: conversation list, each with marquee border when working, archive button on right.\n4. Right sidebar #right: width 280px, tabs: Files, Editor, Subagents, MD Reader, Web (Web only opens from file tree click). Each tab closeable. collapsible to 0 width.\n5. Bottom panel #bottom: height 160px. Shell tabs (powershell/bash/cmd) with #terminal output and #term-input. collapsible to 0 height. cwd display.\n6. Chat area: messages with user/assistant styling, mode-tag visible on hover, working pulse animation. Diff blocks (green adds / red removes), expandable on click. Shell output blocks, expandable on click.\n7. Scroll-to-bottom button: circular, appears when not at bottom and no checklist/goal visible.\n8. All panels resizable via drag handles on edges.\n9. Verify all layout renders correctly with working toggle/show/hide behaviors."
+    },
+    {
+      "type": "logic",
+      "id": 9,
+      "prompt": "Do all 4 panels (topbar, left+secondary sidebar, right sidebar, bottom terminal) render, toggle, collapse, and animate correctly? Can sidebars be dragged to resize?",
+      "goto_true": 10,
+      "goto_false": 8
+    },
+    {
+      "type": "dialog",
+      "id": 10,
+      "mode": "Build",
+      "prompt": "Phase 5 — Input Area + Goal + Checklist. Build:\n1. Input area #input-area: fixed 4 rows at bottom of center panel. Darker glass background. Resizable textarea #prompt-input. Bottom toolbar with: mode select (Build/Plan/Goal/Flow), model select (grouped by provider), intelligence select (Quick/Balanced/Deep), input mode toggle (Guide/Next), circular submit button #submit-btn.\n2. Submit button: 36px circle, accent color, hover scale(1.08)+glow, working state → marquee gradient bg animation. Marquee BORDER on textarea when working.\n3. Goal bar #goal-bar: visible only in Goal mode. Above input area. Left: goal text. Right: Edit + Pause/Continue buttons. Bézier top corners only. Only re-displays when goal changes.\n4. Checklist #checklist: above goal bar. Two states: collapsed (single line, full-rounded) and expanded (max 8 rows, scrollable, bezier corners). Each item: done line-through+dim, clickable toggle. Header: expand/collapse button.\n5. Layout order (bottom to top): input area → goal bar → checklist → scroll-to-bottom button. All items correctly layered.\n6. Enter sends (in Guide mode), Shift+Enter newline. Ctrl+Enter uses opposite mode.\n7. Verify all in Electron render."
+    },
+    {
+      "type": "logic",
+      "id": 11,
+      "prompt": "Does the input area render correctly with all 4 selects? Does Goal bar appear in Goal mode? Does checklist toggle between collapsed/expanded? Does Enter trigger send event via IPC?",
+      "goto_true": 12,
+      "goto_false": 10
+    },
+    {
+      "type": "dialog",
+      "id": 12,
+      "mode": "Build",
+      "prompt": "Phase 6 — Settings Window. Build:\n1. Overlay system: #settings-overlay with blurred backdrop, centered sub-window (680px width, max 560px height), draggable, not resizable.\n2. Tabs: General, Models & Providers, Archive. Sub-win header with close button.\n3. General tab: dark mode (on/off/system), close behavior (minimize/close), option feedback (4 levels), auto model switch with priority, agent auto-adjust settings toggle, tone selection, workspace access permission (3 tiers + ask/deny), universal prompt (agent.md sync), UI settings (gradient colors with color pickers, glass alpha slider).\n4. Models tab: provider list (name, API URL), expand to show models (context size, vision toggle, thinking toggle, editable description). Add provider button → 3-field form. Validate models button (marquee border during validation). Fuzzy inject button → sub-window with API key + provider → auto-download + validate.\n5. Archive tab: list of archived sessions, each with read/delete buttons.\n6. All settings read/write to config.json via IPC. marquee-active on settings window during validation.\n7. Verify all settings save/load correctly."
+    },
+    {
+      "type": "logic",
+      "id": 13,
+      "prompt": "Does the Settings window open/close with correct overlay? Do all tabs render? Do changes persist to config.json and reload on reopen?",
+      "goto_true": 14,
+      "goto_false": 12
+    },
+    {
+      "type": "dialog",
+      "id": 14,
+      "mode": "Build",
+      "prompt": "Phase 7 — Subagent, Skills, Automation Windows. Build:\n1. Plugins window: list installed skills with enable/disable toggle. Download button. Uses skill market API.\n2. Automation window: fixed-size sub-window. 3-4 input rows (prompt, model select, condition type). Condition: single-run / interval (seconds) / cron. Start/stop time optional. List of active automations with status.\n3. Workflow (Flow) window: tree view of Flow/*.Flow.json files. Each expandable: shows components by ID. Each component editable inline. 'New Flow' button at top. 'New Component' button at each flow's end. Dialog component: mode select + prompt input. Logic component: prompt + goto_true + goto_false inputs.\n4. Subagent panel in right sidebar: list of active subagents (id, name, status). Click to view conversation history (read-only, no reply). Agent can spawn/kill subagents.\n5. Verify all windows interact correctly with agent state."
+    },
+    {
+      "type": "logic",
+      "id": 15,
+      "prompt": "Do all sub-windows (Plugins, Automation, Flow Editor, Subagent panel) render, open, close, and interact with agent state correctly?",
+      "goto_true": 16,
+      "goto_false": 14
+    },
+    {
+      "type": "dialog",
+      "id": 16,
+      "mode": "Build",
+      "prompt": "Phase 8 — Agent Modes (Build/Plan/Goal/Flow + Guide/Next). Implement:\n1. Build mode: execute prompt directly, produce work output. Normal operation.\n2. Plan mode: READ-ONLY mode. Can only modify README.md. Agent researches, plans, documents. All other files read-only.\n3. Goal mode: user sets objective. Agent works in Build mode each turn, then self-validates goal completion. If incomplete → loops. Goal displayed above input. NO max-depth limit. Adjustable/pausable in real-time via Goal bar.\n4. Flow mode: loads *.Flow.json. Executes Dialog components with specified mode+prompt. Logic components evaluated by agent for goto branching. FlowEditor renders current execution state.\n5. Guide input mode: prompt directly injected into current turn, overriding agent's initiative.\n6. Next input mode: prompt queued for NEXT build turn after current completes.\n7. Mode/model/intelligence switchable mid-conversation — takes effect immediately on next turn.\n8. Each response annotated with mode+model (visible on hover).\n9. Verify all 4 modes + 2 input modes work correctly in CLI first: `node dist/launcher.js --cli`."
+    },
+    {
+      "type": "logic",
+      "id": 17,
+      "prompt": "Do all 4 modes (Build/Plan/Goal/Flow) work correctly in CLI? Does Plan mode reject file writes? Does Goal mode loop correctly? Does Flow mode load and execute .Flow.json?",
+      "goto_true": 18,
+      "goto_false": 16
+    },
+    {
+      "type": "dialog",
+      "id": 18,
+      "mode": "Build",
+      "prompt": "Phase 9 — Optional Feedback + Auto Model Switch + Fuzzy Inject. Implement:\n1. Option feedback (config: agent.option_feedback): default/ask_more/ask_less/autonomous. Agent can present options to user for decisions. In autonomous mode, agent decides without asking.\n2. Auto model switch (config: models.auto_switch): when enabled, agent evaluates task complexity and switches model accordingly. Performance description generated per model (cost/speed/capability). Validate all models button triggers benchmark on each.\n3. Fuzzy inject: in Settings → Models → Fuzzy Inject button. Opens sub-window: input API key + provider name. Agent auto-downloads model list, validates, benchmarks, and integrates. New provider gets marquee border during setup. Results merged into existing provider or creates new.\n4. AI auto-adjust settings: agent can modify config.json settings when authorized (config: agent.auto_adjust_settings). Changes logged.\n5. Verify all 3 features work in CLI mode."
+    },
+    {
+      "type": "logic",
+      "id": 19,
+      "prompt": "Does option feedback work at all 4 levels? Does auto model switch correctly evaluate and switch models? Does fuzzy inject successfully add a new provider+model?",
+      "goto_true": 20,
+      "goto_false": 18
+    },
+    {
+      "type": "dialog",
+      "id": 20,
+      "mode": "Build",
+      "prompt": "Phase 10 — Archive + Context Compression + Edge Cases. Implement:\n1. Archive system: session archive to ARCHIVE/ folder. auto_archive_on_close config. List/read/delete archives. ZIP-based archive format.\n2. Context compression: when approaching model context limit, agent summarizes prior conversation turns, preserving key decisions and file states. Research arxiv papers + github implementations for context compression techniques.\n3. File tree manager: left sidebar file tree with folder navigation. Open file → open in editor or appropriate right tab (.md → MD reader, .html → browser, others → editor). Full file system read/write.\n4. Editor in right panel: file path display + textarea. Syntax highlighting via simple keyword coloring. Save via Ctrl+S.\n5. Browser in right panel: iframe-based. Address bar with nav buttons. Sandboxed. Only opens when user clicks file in tree.\n6. MD reader: renders markdown to styled HTML in right panel.\n7. Terminal: execute bash/pwsh/cmd commands. STDOUT/STDERR output in terminal area. Working directory display.\n8. Verify ALL features work in BOTH CLI and Desktop modes."
+    },
+    {
+      "type": "logic",
+      "id": 21,
+      "prompt": "Does archive save/load work? Does context compression trigger near limit? Does file tree navigate correctly? Does editor save files? Does terminal execute commands? Does MD reader render correctly?",
+      "goto_true": 22,
+      "goto_false": 20
+    },
+    {
+      "type": "dialog",
+      "id": 22,
+      "mode": "Goal",
+      "prompt": "Phase 11 — Full Integration Debug. Set Goal: ALL 26 Design.txt requirements implemented, verified, and passing. Run the following validation checklist in order:\n1. `npm run build` — zero tsc errors.\n2. CLI mode smoke: `node dist/launcher.js --cli` — agent responds, accepts prompt, produces output.\n3. Electron launch: `npm run start` — window opens, UI renders all panels.\n4. Mode switching: Build→Plan→Goal→Flow via IPC. Each mode correct behavior.\n5. Workspace: create internal/external, verify Local.json/External.json, verify PC_Hash enforcement.\n6. Settings: modify each setting, verify config.json updates, reload settings window — values persist.\n7. Fuzzy inject: add a test provider (name=test, url=http://localhost:9999, key=test), verify it appears in model list.\n8. File operations: create file in editor, save, verify on disk. Open in file tree, verify content.\n9. Terminal: run 'echo hello', verify output.\n10. Subagent: create subagent via agent, verify it appears in subagent panel.\n11. Archive: archive session, list archives, read archive content.\n12. Flow: load agent_implementation.Flow.json in Flow mode, verify first Plan component executes.\n13. Goal mode: set a goal, verify agent works toward it and displays goal in Goal bar.\n14. Auto model switch: enable in settings, verify agent selects model based on task.\n15. Re-check all marquee borders (NOT backgrounds), glass effects, beziers corners render correctly.\n16. Final: run `SETUP.ps1` from clean state — verify one-click setup works end-to-end."
+    },
+    {
+      "type": "logic",
+      "id": 23,
+      "prompt": "Does the agent report all 16 validation checks passing? Are there any remaining crashes, freezes, or missing features from Design.txt?",
+      "goto_true": 24,
+      "goto_false": 22
+    },
+    {
+      "type": "dialog",
+      "id": 24,
+      "mode": "Build",
+      "prompt": "Implementation complete. Write a FINAL_REPORT.md to the project root documenting:\n1. What was implemented (all 26 sections from Design.txt mapped to files)\n2. What was deferred (if anything, with reason)\n3. Build status for each module (CLI, Desktop, Web)\n4. Known issues or limitations\n5. Next steps for future development"
+    }
+  ]
+}

@@ -185,6 +185,7 @@ The public repository intentionally excludes local runtime state and internal pr
 - `PC_Hash.config`
 - `Work/`
 - `archive/`
+- `skills/`
 - `OVERVIEW.md`
 - `Design.md`
 - generated `release/` output

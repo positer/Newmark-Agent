@@ -54,6 +54,7 @@ release/
 release-*verify*/
 .opencode/
 archive/
+skills/
 DESKTOP/...
 OVERVIEW.md
 Design.md

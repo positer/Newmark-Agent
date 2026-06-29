@@ -134,6 +134,7 @@ cd DESKTOP
 npm.cmd test
 npm.cmd run dist:portable
 npm.cmd run release:ui-smoke
+npm.cmd run release:ui-gemma-removal-smoke
 npm.cmd run release:ui-icon-smoke
 ```
 
@@ -160,6 +161,8 @@ Maintenance log, 2026-06-29: README presentation was refreshed for GitHub render
 Maintenance log, 2026-06-29: fuzzy provider injection now has a no-guide-model fallback. `DESKTOP/src/core/fuzzy.ts` tokenizes raw endpoint/key text, infers provider names from endpoint core domains, normalizes terminal API paths, probes common OpenAI-compatible and Anthropic-compatible suffixes, and is shared by both desktop Agent fuzzy injection and CLI `fuzzy-inject`. A live local mock injection found and fixed local-address naming so `127.0.0.1` maps to `LocalProvider` instead of a numeric fragment. Verification passed `cd DESKTOP && npm.cmd test` with 598 assertions. Evidence is stored in `archive/2026-06-29-fuzzy-inject-tokenizer-suffix-probing.md`.
 
 Maintenance log, 2026-06-29: the built-in Gemma download entry was removed from the desktop UI and Electron IPC surface. Users can still install Gemma themselves through Ollama or another local runtime and add it as a normal OpenAI-compatible provider/model, including through fuzzy injection. Verification passed `cd DESKTOP && npm.cmd test` with 598 assertions. Evidence is stored in `archive/2026-06-29-remove-built-in-gemma-download.md`.
+
+Maintenance log, 2026-06-29: v1.0.2 was rebuilt as a Windows portable release and visually verified in the real packaged Electron runtime for the Gemma-download removal. The new `release:ui-gemma-removal-smoke` launches `release/win-unpacked/Newmark Agent.exe`, confirms the packaged preload no longer exposes `downloadGemma`, confirms Settings > Models has no Gemma/Ollama download wording, and verifies manual local OpenAI-compatible provider/model configuration still works for endpoints such as Ollama or LM Studio. Verification passed `cd DESKTOP && npm.cmd test` with 602 assertions, `cd DESKTOP && npm.cmd run dist:portable`, and `cd DESKTOP && npm.cmd run release:ui-gemma-removal-smoke`. The portable artifact SHA256 is `C687C8DE21AE66DA3982B0E8EA82F07E8CEFEA61132A64259C3A0EA7A42026F5`; visual evidence is stored in `archive/2026-06-29-release-gemma-removal-visual.png` and `archive/2026-06-29-release-gemma-removal-visual.md`.
 
 Maintenance log, 2026-06-29: project copyright and third-party license posture was audited and declared. Root `LICENSE` now states first-party Newmark Agent code/docs/design/assets are proprietary and all rights reserved unless a future written license says otherwise; `THIRD_PARTY_NOTICES.md` summarizes npm, NuGet, Lucide, branding-asset, internal-archive, and release notice boundaries. Electron packaging now includes both notice files. Verification passed dependency/license metadata scans and `cd DESKTOP && npm.cmd test` with 598 assertions. Evidence is stored in `archive/2026-06-29-copyright-license-audit.md`.
 

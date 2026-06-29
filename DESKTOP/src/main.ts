@@ -1093,33 +1093,6 @@ if (hasCliCommand) {
       }
     });
 
-    ipcMain.handle('agent:downloadGemma', async () => {
-      if (!agent) return { error: 'Agent not ready' };
-      try {
-        const ollamaPath = spawnSync('where', ['ollama'], { shell: true, timeout: 5000 });
-        if (ollamaPath.status !== 0) {
-          return { error: 'Ollama not found. Install it first: https://ollama.com/download' };
-        }
-        const existing = agent.config.providers().find((p: any) => p.name === 'Ollama');
-        if (!existing) {
-          agent.config.upsertProvider('Ollama', 'http://localhost:11434', '');
-          agent.config.save();
-        }
-        const pull = spawnSync('ollama', ['pull', 'gemma2:2b'], { shell: true, timeout: 300000, stdio: 'pipe' });
-        if (pull.status !== 0) {
-          return { error: 'Gemma download failed: ' + (pull.stderr?.toString() || pull.stdout?.toString() || '') };
-        }
-        if (!existing) {
-          agent.config.addModelToProvider('Ollama', 'gemma2:2b', 'Gemma 2 2B', 'Google Gemma 2 2B local model');
-          agent.config.addModelToProvider('Ollama', 'gemma2:9b', 'Gemma 2 9B', 'Google Gemma 2 9B local model');
-          agent.config.save();
-        }
-        return { ok: true, models: ['gemma2:2b', 'gemma2:9b'] };
-      } catch (e: any) {
-        return { error: 'Gemma download failed: ' + e.message };
-      }
-    });
-
     ipcMain.handle('sidecar:restart', async () => {
       if (sidecarProcess) {
         sidecarProcess.kill();

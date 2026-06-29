@@ -2924,7 +2924,6 @@ var state = {
   workspaces: [],
   currentWorkspace: '',
   closeBehavior: 'close',
-  gemmaInstalled: false,
   subagents: [],
   fileDiffs: [],
   pendingOptions: [],
@@ -3109,12 +3108,6 @@ var NEWMARK_I18N = {
     'model.fuzzyPlaceholder': 'Enter provider name, endpoint, and API key. If the provider already exists, the API key and endpoint can be omitted.',
     'model.fuzzyHelp': 'Newmark uses an available model to import and validate models. Existing providers reuse their saved endpoint and API key when omitted.',
     'model.importing': 'Importing and validating models...',
-    'model.gemma': 'Gemma local',
-    'model.downloadGemma': 'Download built-in Gemma',
-    'model.downloadingGemma': 'Downloading...',
-    'model.gemmaInstalled': 'Gemma installed. Available models:',
-    'model.gemmaDownloadFailed': 'Gemma download failed:',
-    'model.gemmaDesc': 'Uses Ollama for local offline model access after download.',
     'model.autoSwitch': 'Auto model switch',
     'model.fallback': 'Fallback unavailable model',
     'model.preference': 'Switch preference',
@@ -3467,12 +3460,6 @@ var NEWMARK_I18N = {
     'model.fuzzyPlaceholder': '输入供应商名称、接口和 API key。若供应商已存在，可以省略 API key 和接口。',
     'model.fuzzyHelp': 'Newmark 会使用可用模型导入并校验模型。已有供应商在省略时复用已保存的接口和 API key。',
     'model.importing': '正在导入并校验模型...',
-    'model.gemma': '本地 Gemma',
-    'model.downloadGemma': '下载内置 Gemma',
-    'model.downloadingGemma': '正在下载...',
-    'model.gemmaInstalled': 'Gemma 已安装。可用模型：',
-    'model.gemmaDownloadFailed': 'Gemma 下载失败：',
-    'model.gemmaDesc': '下载后通过 Ollama 提供本地离线模型访问。',
     'model.autoSwitch': '自动切换模型',
     'model.fallback': '模型不可用时回退',
     'model.preference': '切换倾向',
@@ -5403,12 +5390,6 @@ function renderModelSettings() {
     '<button class="fuzzy-inject-btn" onclick="window.fuzzyInject()">' + esc(t('model.fuzzy')) + '</button>' +
     '<div style="margin-top:6px;font-size:10px;color:var(--text-dim);">' + esc(t('model.fuzzyDesc')) + '</div>' +
     '</div>' +
-    (state.gemmaInstalled ? '' :
-    '<div class="setting-row" id="gemma-row" style="margin-top:8px;">' +
-    '<span class="setting-label">' + esc(t('model.gemma')) + '</span>' +
-    '<div class="setting-control"><button class="sec-btn primary" onclick="window.downloadGemma()" id="gemma-btn">' + esc(t('model.downloadGemma')) + '</button>' +
-    '<div style="margin-top:4px;font-size:10px;color:var(--text-dim);">' + esc(t('model.gemmaDesc')) + '</div></div>' +
-    '</div>') +
     '<div style="margin-top:12px;">' +
     '<div class="setting-row"><span class="setting-label">' + esc(t('model.autoSwitch')) + '</span><div class="setting-control"><select onchange="window.setAutoSwitch(this.value)">' +
     '<option value="off"' + (state.autoSwitch === 'off' ? ' selected' : '') + '>' + esc(t('common.off')) + '</option>' +
@@ -5522,37 +5503,6 @@ window.setGradientWidth = function(v) {
 window.setDialogStyle = function(v) {
   state.dialogStyle = v;
   api.saveConfig({ dialogStyle: v });
-};
-
-window.downloadGemma = function() {
-  var btn = document.getElementById('gemma-btn');
-  if (btn) { btn.disabled = true; btn.textContent = t('model.downloadingGemma'); }
-  api.downloadGemma().then(function(r) {
-    if (r.error) {
-      if (btn) { btn.disabled = false; btn.textContent = t('model.downloadGemma'); }
-      addMsg('assistant', '[System] ' + r.error, 'error', '');
-    } else {
-      state.gemmaInstalled = true;
-      var row = document.getElementById('gemma-row');
-      if (row) row.style.display = 'none';
-      addMsg('assistant', '[System] ' + t('model.gemmaInstalled') + ' ' + (r.models || ['gemma2:2b']).join(', '), 'success', '');
-      // Refresh the model dropdown
-      api.getState().then(function(s) {
-        if (s && s.models) state.models = s.models;
-        var sel = els['model-select'];
-        if (sel) {
-          var opts = '';
-          for (var mi = 0; mi < state.models.length; mi++) {
-            opts += '<option value="' + esc(state.models[mi]) + '">' + esc(state.models[mi]) + '</option>';
-          }
-          sel.innerHTML = opts;
-        }
-      }).catch(function(){});
-    }
-  }).catch(function(err) {
-    if (btn) { btn.disabled = false; btn.textContent = t('model.downloadGemma'); }
-    addMsg('assistant', '[' + t('common.error') + '] ' + t('model.gemmaDownloadFailed') + ' ' + err.message, 'error', '');
-  });
 };
 
 window.setCloseBehavior = function(v) {
@@ -7719,15 +7669,8 @@ function stopMarqueeJS() {
       if (s.fallbackOnUnavailable !== undefined) state.fallbackOnUnavailable = s.fallbackOnUnavailable ? 'on' : 'off';
       if (s.switchTendency) state.switchTendency = s.switchTendency;
       if (s.minimizeToTray) state.closeBehavior = 'minimize';
-      // Check if Gemma already installed via Ollama provider
       if (s.providers) {
         state.providers = s.providers;
-        for (var pi = 0; pi < s.providers.length; pi++) {
-          if (s.providers[pi].name === 'Ollama' && s.providers[pi].models && s.providers[pi].models.length > 0) {
-            state.gemmaInstalled = true;
-            break;
-          }
-        }
       }
       // Workspace state
       if (s.workspaces) {

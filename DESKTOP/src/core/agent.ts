@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { ConfigManager, ModelConfig, ModelEvaluation, ProviderProtocol, inferProviderProtocol } from './config';
 import { LLMProvider } from '../llm/provider';
+import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, tokenizeFuzzyProviderInput } from './fuzzy';
 import { ToolExecutor } from '../tools/index';
 import { WorkspaceInfo, WorkspaceManager } from './workspace';
 import { SubagentManager } from './subagent';
@@ -698,22 +699,42 @@ export class Agent {
 
   async fuzzyInject(name: string, url: string, key: string, protocol?: ProviderProtocol): Promise<{ ok: boolean; provider?: string; models?: string[]; warning?: string }> {
     const hasUsableModel = this.config.allModels().some(m => (m.evaluation?.status || 'available') === 'available');
-    if (!hasUsableModel) {
-      return { ok: false, warning: 'Fuzzy injection requires at least one available model to guide discovery.' };
-    }
-    const providerName = (name || this.inferProviderName(`${url} ${key}`)).trim();
+    const tokenizerInput = `${name} ${url} ${key}`;
+    const tokens = tokenizeFuzzyProviderInput(tokenizerInput, {
+      providerName: name,
+      baseUrl: url,
+      apiKey: key,
+      protocol,
+    });
+    const providerName = (tokens.providerName || this.inferProviderName(tokenizerInput)).trim();
     const existing = providerName ? this.config.providers().find(p => p.name === providerName) : undefined;
-    const baseUrl = (url || existing?.base_url || this.inferProviderUrl(providerName)).trim();
-    const apiKey = (key || existing?.api_key || '').trim();
-    if (!providerName || !baseUrl) return { ok: false, warning: 'Provider name and API URL are required.' };
-    if (!apiKey) return { ok: false, warning: 'API key is required for new providers or existing providers without a saved key.' };
+    let baseUrl = (tokens.baseUrl || existing?.base_url || this.inferProviderUrl(providerName)).trim();
+    const apiKey = (tokens.apiKey || existing?.api_key || '').trim();
 
-    const safeProtocol = protocol || existing?.protocol || inferProviderProtocol(providerName, baseUrl);
+    let safeProtocol = tokens.protocol || existing?.protocol || inferProviderProtocol(providerName, baseUrl);
+    let discovery: { models: string[]; source: 'models_endpoint' | 'suffix_probe' | 'heuristic'; warning?: string };
+    if (!hasUsableModel) {
+      const noGuide = await fuzzyDiscoverWithoutGuide(tokenizerInput, {
+        providerName,
+        baseUrl,
+        apiKey,
+        protocol: tokens.protocol || existing?.protocol,
+      });
+      if (noGuide.warning && (!noGuide.baseUrl || !noGuide.apiKey || !noGuide.models.length)) {
+        return { ok: false, provider: noGuide.providerName, models: noGuide.models, warning: noGuide.warning };
+      }
+      baseUrl = noGuide.baseUrl;
+      safeProtocol = noGuide.protocol;
+      discovery = { models: noGuide.models, source: noGuide.source, warning: noGuide.warning };
+    } else {
+      if (!providerName || !baseUrl) return { ok: false, warning: 'Provider name and API URL are required.' };
+      if (!apiKey) return { ok: false, warning: 'API key is required for new providers or existing providers without a saved key.' };
+      discovery = await this.discoverProviderModels(providerName, baseUrl, apiKey, safeProtocol);
+    }
     this.config.upsertProvider(providerName, baseUrl, apiKey, safeProtocol);
-    const discovery = await this.discoverProviderModels(providerName, baseUrl, apiKey, safeProtocol);
     const candidates = discovery.models.length ? discovery.models : this.inferCandidateModels(providerName, baseUrl);
     for (const model of candidates) {
-      this.config.addModelToProvider(providerName, model, model, `${discovery.source === 'models_endpoint' ? 'Listed by provider /models endpoint' : 'Discovered by fuzzy injection'} for ${providerName}`);
+      this.config.addModelToProvider(providerName, model, model, `${discovery.source === 'models_endpoint' ? 'Listed by provider /models endpoint' : discovery.source === 'suffix_probe' ? 'Discovered by fuzzy suffix probing' : 'Discovered by fuzzy injection'} for ${providerName}`);
     }
     this.config.save();
     const validation = await this.validateModels(candidates.map(m => `${providerName}/${m}`));
@@ -800,12 +821,7 @@ export class Agent {
   }
 
   private inferCandidateModels(providerName: string, baseUrl: string): string[] {
-    const lower = `${providerName} ${baseUrl}`.toLowerCase();
-    if (lower.includes('deepseek')) return ['deepseek-chat', 'deepseek-reasoner'];
-    if (lower.includes('moonshot') || lower.includes('kimi')) return ['kimi-k2-0711-preview', 'moonshot-v1-8k'];
-    if (lower.includes('dashscope') || lower.includes('qwen')) return ['qwen-plus', 'qwen-turbo'];
-    if (lower.includes('openai')) return ['gpt-4o-mini', 'gpt-4.1-mini'];
-    return ['model'];
+    return fuzzyCandidateModels(providerName, baseUrl);
   }
 
   async process(input: string): Promise<StreamToken[]> {

@@ -13,6 +13,10 @@ const config: Configuration = {
     'assets/**/*',
     'package.json',
   ],
+  extraFiles: [
+    { from: '../LICENSE', to: 'LICENSE' },
+    { from: '../THIRD_PARTY_NOTICES.md', to: 'THIRD_PARTY_NOTICES.md' },
+  ],
   extraResources: [
     { from: 'node_modules', to: 'node_modules', filter: ['**/*'] },
   ],

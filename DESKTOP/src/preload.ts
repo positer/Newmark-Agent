@@ -58,7 +58,6 @@ contextBridge.exposeInMainWorld('api', {
   terminalKill: (sessionId: string, timeoutMs?: number) => ipcRenderer.invoke('pty:kill', sessionId, timeoutMs),
   terminalGetBuffer: (sessionId: string) => ipcRenderer.invoke('pty:getBuffer', sessionId),
   wslDetect: () => ipcRenderer.invoke('wsl:detect'),
-  downloadGemma: () => ipcRenderer.invoke('agent:downloadGemma'),
   onTerminalData: (callback: (event: unknown, sessionId: string, data: string) => void) => {
     ipcRenderer.on('pty:data', callback);
   },

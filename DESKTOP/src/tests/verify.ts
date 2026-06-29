@@ -18,6 +18,7 @@ import { runFlow } from '../core/flow-runner';
 import { LLMProvider } from '../llm/provider';
 import { BrowserControl } from '../core/browserControl';
 import { runCliCommand } from '../cli-commands';
+import { providerNameFromUrl } from '../core/fuzzy';
 
 const TEST_DIR = path.join(process.cwd(), 'test-tmp');
 const PASS = '[PASS]';
@@ -720,6 +721,28 @@ async function main() {
     assert(cliAnthropicFuzzy.ok === true && cliAnthropicFuzzy.models.includes('claude-cli'), 'cli fuzzy-inject: explicit anthropic protocol imports listed model');
     assert(cliAnthropicProvider?.protocol === 'anthropic', 'cli fuzzy-inject: persists explicit anthropic protocol');
     assert(!cliAnthropicFuzzyOut.includes('test-key-cli-anthropic'), 'cli fuzzy-inject: anthropic path does not print API key');
+    const originalCliFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+      if (String(url) === 'https://api.cli-noguide.test/v1/models') {
+        return new Response(JSON.stringify({ data: [{ id: 'cli-noguide-fast' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('missing', { status: 404 });
+    }) as typeof fetch;
+    LLMProvider.prototype.validate = async function(modelName: string) {
+      return { ok: modelName === 'cli-noguide-fast', latency: 0.5 };
+    };
+    process.env.NEWMARK_TEST_CLI_NOGUIDE_ENDPOINT = 'https://api.cli-noguide.test/v1/chat/completions';
+    process.env.NEWMARK_TEST_CLI_NOGUIDE_KEY = 'sk-cli-noguide-redacted-12345678901234567890';
+    const cliNoGuideRoot = path.join(TEST_DIR, 'cli-fuzzy-empty-root');
+    const cliNoGuideOut = await captureStdout(() => runCliCommand(cliNoGuideRoot, ['fuzzy-inject', '--endpoint-env', 'NEWMARK_TEST_CLI_NOGUIDE_ENDPOINT', '--key-env', 'NEWMARK_TEST_CLI_NOGUIDE_KEY', '--root', cliNoGuideRoot]));
+    const cliNoGuide = JSON.parse(cliNoGuideOut);
+    const cliNoGuideProvider = new ConfigManager(cliNoGuideRoot).providers().find(p => p.name === 'CliNoguide');
+    assert(cliNoGuide.ok === true && cliNoGuide.provider === 'CliNoguide' && cliNoGuide.models.includes('cli-noguide-fast'), 'cli fuzzy-inject: no-guide tokenizer infers provider and imports /models result');
+    assert(cliNoGuideProvider?.base_url === 'https://api.cli-noguide.test/v1' && !cliNoGuideOut.includes('sk-cli-noguide-redacted'), 'cli fuzzy-inject: no-guide path normalizes endpoint and redacts key');
+    globalThis.fetch = originalCliFetch;
+    LLMProvider.prototype.validate = async function(modelName: string) {
+      return { ok: modelName === 'gpt-test' || modelName === 'cli-fast' || modelName === 'claude-cli' || modelName === 'env-claude', latency: modelName === 'cli-fast' ? 0.3 : 0.8 };
+    };
     const cliEnvFile = path.join(TEST_DIR, 'claude code env.ps1');
     fs.writeFileSync(cliEnvFile, [
       '$env:ANTHROPIC_BASE_URL="https://cli-env-anthropic.local/anthropic"',
@@ -768,6 +791,8 @@ async function main() {
     delete process.env.NEWMARK_TEST_FUZZY_KEY;
     delete process.env.NEWMARK_TEST_ANTHROPIC_ENDPOINT;
     delete process.env.NEWMARK_TEST_ANTHROPIC_KEY;
+    delete process.env.NEWMARK_TEST_CLI_NOGUIDE_ENDPOINT;
+    delete process.env.NEWMARK_TEST_CLI_NOGUIDE_KEY;
     delete process.env.NEWMARK_TEST_CLAUDE_ENV_FILE;
     delete process.env.NEWMARK_TEST_PREVIEW_CLAUDE_ENV_FILE;
     delete process.env.NEWMARK_TEST_BAD_CLAUDE_ENV_FILE;
@@ -1603,9 +1628,35 @@ async function main() {
 
   // ---- 12. Fuzzy Injection Tests ----
   console.log('\n💉 Fuzzy Injection');
+  assert(providerNameFromUrl('http://127.0.0.1:55128/v1/chat/completions') === 'LocalProvider' && providerNameFromUrl('http://localhost:55128/v1') === 'Localhost', 'fuzzy injection: tokenizer names local IP and localhost providers safely');
   const isolatedFuzzyAgent = new Agent(path.join(TEST_DIR, 'fuzzy-empty'));
-  const blockedFuzzy = await isolatedFuzzyAgent.fuzzyInject('OpenAI', 'https://api.openai.com/v1', 'test-key-blocked');
-  assert(blockedFuzzy.ok === false, 'fuzzy injection: requires an available guiding model');
+  const originalFetchForFuzzy = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const endpoint = String(url);
+    if (endpoint === 'https://api.noguide.test/v1/models') {
+      return new Response(JSON.stringify({ data: [{ id: 'noguide-fast' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (endpoint === 'https://probe-only.test/v1/models') {
+      return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (endpoint === 'https://probe-only.test/v1/chat/completions' && init?.method === 'POST') {
+      return new Response(JSON.stringify({ error: { message: 'model required' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response('missing', { status: 404 });
+  }) as typeof fetch;
+  LLMProvider.prototype.validate = async function(modelName: string) {
+    return { ok: modelName === 'noguide-fast' || modelName === 'model', latency: 0.7 };
+  };
+  const noGuideFuzzy = await isolatedFuzzyAgent.fuzzyInject('', 'https://api.noguide.test/v1/chat/completions', 'sk-noguide-token-12345678901234567890');
+  assert(noGuideFuzzy.ok === true && noGuideFuzzy.provider === 'Noguide' && noGuideFuzzy.models?.includes('noguide-fast'), 'fuzzy injection: no-guide tokenizer infers provider and imports /models result');
+  const noGuideProvider = isolatedFuzzyAgent.config.providers().find(p => p.name === 'Noguide');
+  assert(noGuideProvider?.base_url === 'https://api.noguide.test/v1' && noGuideProvider?.api_key === 'sk-noguide-token-12345678901234567890', 'fuzzy injection: no-guide tokenizer normalizes endpoint and preserves key');
+  const suffixProbeAgent = new Agent(path.join(TEST_DIR, 'fuzzy-suffix-empty'));
+  const suffixProbeFuzzy = await suffixProbeAgent.fuzzyInject('ProbeOnly', 'https://probe-only.test', 'sk-probe-token-12345678901234567890');
+  const suffixProbeProvider = suffixProbeAgent.config.providers().find(p => p.name === 'ProbeOnly');
+  assert(suffixProbeFuzzy.ok === true && suffixProbeProvider?.models.some(m => m.name === 'model' && m.description.includes('suffix probing')), 'fuzzy injection: no-guide path can confirm endpoint by suffix probing');
+  assert(suffixProbeProvider?.base_url === 'https://probe-only.test/v1', 'fuzzy injection: suffix probing saves inferred versioned base URL');
+  globalThis.fetch = originalFetchForFuzzy;
   const fuzzyResult = await agent.fuzzyInject('DeepSeek', 'https://api.deepseek.com/v1', 'test-key-fuzzy');
   assert(fuzzyResult.ok === true, 'fuzzy injection: validates imported candidate');
   assert(agent.config.providers().some(p => p.name === 'DeepSeek'), 'fuzzy injection: provider added or merged');

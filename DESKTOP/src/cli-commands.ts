@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { Agent, AgentMode } from './core/agent';
 import { ConfigManager, ModelEvaluation, ProviderProtocol, inferProviderProtocol } from './core/config';
+import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, providerNameFromUrl, tokenizeFuzzyProviderInput } from './core/fuzzy';
 import { LLMProvider } from './llm/provider';
 
 type JsonObject = Record<string, unknown>;
@@ -163,14 +164,16 @@ function inferEnvProviderName(baseUrl: string): string {
   const marker = baseUrl.toLowerCase();
   if (marker.includes('deepseek')) return 'DeepSeekAnthropic';
   if (marker.includes('anthropic') || marker.includes('claude')) return 'ClaudeAnthropic';
-  return 'EnvAnthropic';
+  return providerNameFromUrl(baseUrl);
 }
 
 function parseFuzzyEnvFile(filePath: string | undefined): FuzzyEnvDefaults {
   if (!filePath) return {};
+  const text = fs.readFileSync(path.resolve(filePath), 'utf-8').replace(/^\uFEFF/, '');
   const env = parseEnvAssignments(filePath);
   const url = env.ANTHROPIC_BASE_URL || env.CLAUDE_BASE_URL || env.NEWMARK_BASE_URL || env.NEWMARK_URL || env.BASE_URL || '';
   const key = env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY || env.CLAUDE_API_KEY || env.NEWMARK_API_KEY || env.API_KEY || '';
+  const tokens = tokenizeFuzzyProviderInput(text, { baseUrl: url, apiKey: key });
   const models = uniqueList([
     env.ANTHROPIC_MODEL,
     env.ANTHROPIC_DEFAULT_OPUS_MODEL,
@@ -179,12 +182,15 @@ function parseFuzzyEnvFile(filePath: string | undefined): FuzzyEnvDefaults {
     env.CLAUDE_CODE_SUBAGENT_MODEL,
     env.NEWMARK_MODEL,
   ]);
-  const name = env.NEWMARK_PROVIDER || env.PROVIDER_NAME || env.ANTHROPIC_PROVIDER || env.CLAUDE_PROVIDER || (url ? inferEnvProviderName(url) : '');
-  const protocol = (env.NEWMARK_PROTOCOL || env.PROVIDER_PROTOCOL || '').toLowerCase() === 'openai' ? 'openai' : 'anthropic';
+  const resolvedUrl = url || tokens.baseUrl;
+  const resolvedKey = key || tokens.apiKey;
+  const name = env.NEWMARK_PROVIDER || env.PROVIDER_NAME || env.ANTHROPIC_PROVIDER || env.CLAUDE_PROVIDER || (resolvedUrl ? inferEnvProviderName(resolvedUrl) : tokens.providerName);
+  const explicitProtocol = (env.NEWMARK_PROTOCOL || env.PROVIDER_PROTOCOL || '').toLowerCase();
+  const protocol = explicitProtocol === 'openai' ? 'openai' : explicitProtocol === 'anthropic' ? 'anthropic' : tokens.protocol;
   return {
     name,
-    url,
-    key,
+    url: resolvedUrl,
+    key: resolvedKey,
     protocol,
     models,
   };
@@ -267,12 +273,7 @@ function performanceRating(name: string, existing?: string): string {
 }
 
 function inferCandidateModels(providerName: string, baseUrl: string): string[] {
-  const marker = `${providerName} ${baseUrl}`.toLowerCase();
-  if (marker.includes('deepseek')) return ['deepseek-chat', 'deepseek-reasoner'];
-  if (marker.includes('openai')) return ['gpt-4o-mini', 'gpt-4o'];
-  if (marker.includes('moonshot') || marker.includes('kimi')) return ['moonshot-v1-8k', 'kimi-k2'];
-  if (marker.includes('dashscope') || marker.includes('qwen')) return ['qwen-plus', 'qwen-turbo'];
-  return ['default', 'chat', 'model'];
+  return fuzzyCandidateModels(providerName, baseUrl);
 }
 
 async function discoverCliProviderModels(
@@ -370,22 +371,42 @@ async function runCliFuzzyInject(
   const config = new ConfigManager(root);
   cliDebug('fuzzy: check guiding models');
   const hasUsableModel = config.allModels().some(m => (m.evaluation?.status || 'available') === 'available');
-  if (!hasUsableModel) {
-    cliDebug('fuzzy: no guiding model');
-    return { ok: false, warning: 'Fuzzy injection requires at least one available model to guide discovery.' };
-  }
-  const providerName = name.trim();
+  const tokenizerInput = `${name} ${url} ${key}`;
+  const tokens = tokenizeFuzzyProviderInput(tokenizerInput, {
+    providerName: name,
+    baseUrl: url,
+    apiKey: key,
+    protocol,
+  });
+  const providerName = tokens.providerName.trim();
   const existing = providerName ? config.providers().find(p => p.name === providerName) : undefined;
-  const baseUrl = (url || existing?.base_url || '').trim();
-  const apiKey = (key || existing?.api_key || '').trim();
-  if (!providerName || !baseUrl) return { ok: false, warning: 'Provider name and API URL are required.' };
-  if (!apiKey) return { ok: false, warning: 'API key is required for new providers or existing providers without a saved key.' };
+  let baseUrl = (tokens.baseUrl || existing?.base_url || '').trim();
+  const apiKey = (tokens.apiKey || existing?.api_key || '').trim();
 
-  const safeProtocol = protocol || existing?.protocol || inferProviderProtocol(providerName, baseUrl);
+  let safeProtocol = tokens.protocol || existing?.protocol || inferProviderProtocol(providerName, baseUrl);
+  let discovery: { models: string[]; source: 'models_endpoint' | 'suffix_probe' | 'heuristic'; warning?: string };
+  if (!hasUsableModel) {
+    cliDebug('fuzzy: no guiding model, use tokenizer suffix probing');
+    const noGuide = await fuzzyDiscoverWithoutGuide(tokenizerInput, {
+      providerName,
+      baseUrl,
+      apiKey,
+      protocol: tokens.protocol || existing?.protocol,
+    }, preferredModels);
+    if (noGuide.warning && (!noGuide.baseUrl || !noGuide.apiKey || !noGuide.models.length)) {
+      return { ok: false, provider: noGuide.providerName, models: noGuide.models, warning: noGuide.warning };
+    }
+    baseUrl = noGuide.baseUrl;
+    safeProtocol = noGuide.protocol;
+    discovery = { models: noGuide.models, source: noGuide.source, warning: noGuide.warning };
+  } else {
+    if (!providerName || !baseUrl) return { ok: false, warning: 'Provider name and API URL are required.' };
+    if (!apiKey) return { ok: false, warning: 'API key is required for new providers or existing providers without a saved key.' };
+    cliDebug('fuzzy: discover models');
+    discovery = await discoverCliProviderModels(providerName, baseUrl, apiKey, safeProtocol);
+  }
   cliDebug('fuzzy: upsert provider');
   config.upsertProvider(providerName, baseUrl, apiKey, safeProtocol);
-  cliDebug('fuzzy: discover models');
-  const discovery = await discoverCliProviderModels(providerName, baseUrl, apiKey, safeProtocol);
   cliDebug(`fuzzy: discovered ${discovery.models.length} models from ${discovery.source}`);
   const candidates = discovery.models.length ? discovery.models : (preferredModels && preferredModels.length ? preferredModels : inferCandidateModels(providerName, baseUrl));
   cliDebug(`fuzzy: import ${candidates.length} candidates`);
@@ -394,7 +415,7 @@ async function runCliFuzzyInject(
       providerName,
       model,
       model,
-      `${discovery.source === 'models_endpoint' ? 'Listed by provider /models endpoint' : 'Discovered by fuzzy injection'} for ${providerName}`
+      `${discovery.source === 'models_endpoint' ? 'Listed by provider /models endpoint' : discovery.source === 'suffix_probe' ? 'Discovered by fuzzy suffix probing' : 'Discovered by fuzzy injection'} for ${providerName}`
     );
   }
   cliDebug('fuzzy: save imported models');
@@ -485,26 +506,27 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     const key = argValueFromEnv(args, '--key', '--api-key') || positional[2] || envDefaults.key || '';
     const protocol = argValue(args, '--protocol');
     const preferredModels = splitList(argValue(args, '--candidate-models')).concat(envDefaults.models || []);
-    if (!name) {
-      process.stderr.write('Usage: Newmark.exe fuzzy-inject --name <provider> [--env-file <PowerShell-or-dotenv-file>|--env-file-env <ENV_WITH_FILE_PATH>] [--endpoint-env <ENV_WITH_BASE_URL>] [--key-env <ENV_WITH_API_KEY>] [--protocol openai|anthropic] [--root <dir>]\n');
+    const inferredName = name || (url ? providerNameFromUrl(url) : '');
+    if (!inferredName) {
+      process.stderr.write('Usage: Newmark.exe fuzzy-inject [--name <provider>] [--env-file <PowerShell-or-dotenv-file>|--env-file-env <ENV_WITH_FILE_PATH>] [--endpoint-env <ENV_WITH_BASE_URL>] [--key-env <ENV_WITH_API_KEY>] [--protocol openai|anthropic] [--root <dir>]\n');
       process.exitCode = 1;
       return true;
     }
     const safeProtocol = protocol === 'anthropic' ? 'anthropic' : protocol === 'openai' ? 'openai' : envDefaults.protocol;
     if (args.includes('--preview-only')) {
       printJson({
-        ok: !!(name && url && (key || agent.config.providers().some(p => p.name === name && p.api_key))),
+        ok: !!(inferredName && url && (key || agent.config.providers().some(p => p.name === inferredName && p.api_key))),
         preview: true,
-        provider: name,
+        provider: inferredName,
         base_url: redactUrlSecret(url),
-        protocol: safeProtocol || inferProviderProtocol(name, url),
+        protocol: safeProtocol || inferProviderProtocol(inferredName, url),
         models: preferredModels,
         has_api_key: !!key,
         source: envDefaults.url || envDefaults.key || (envDefaults.models || []).length ? 'env_file' : 'args',
       });
       return true;
     }
-    const result = await runCliFuzzyInject(root, name, url, key, safeProtocol, preferredModels);
+    const result = await runCliFuzzyInject(root, inferredName, url, key, safeProtocol, preferredModels);
     printJson(result);
     return true;
   }
@@ -532,7 +554,7 @@ export function cliCommandUsage(): string {
     '  Newmark.exe tool <tool-name> [json-args | key=value ... | --args-file path] [--root <dir>]',
     '  Newmark.exe send <prompt> [--input-env ENV|--input-file path] [--mode build|plan|goal|flow] [--model <model>] [--language auto|en|zh] [--conversation <id>] [--root <dir>]',
     '  Newmark.exe validate-models [--selected provider/model,model] [--root <dir>]',
-    '  Newmark.exe fuzzy-inject --name <provider> [--env-file <PowerShell-or-dotenv-file>|--env-file-env <ENV_WITH_FILE_PATH>] [--endpoint-env <ENV_WITH_BASE_URL>] [--key-env <ENV_WITH_API_KEY>] [--protocol openai|anthropic] [--preview-only] [--root <dir>]',
+    '  Newmark.exe fuzzy-inject [--name <provider>] [--env-file <PowerShell-or-dotenv-file>|--env-file-env <ENV_WITH_FILE_PATH>] [--endpoint-env <ENV_WITH_BASE_URL>] [--key-env <ENV_WITH_API_KEY>] [--protocol openai|anthropic] [--preview-only] [--root <dir>]',
     '  Newmark.exe skills-market [--query <text>] [--root <dir>]',
     `Working directory fallback: ${path.resolve('.')}`,
   ].join('\n');

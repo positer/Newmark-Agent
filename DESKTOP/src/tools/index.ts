@@ -6,6 +6,16 @@ const globSync: (pattern: string, opts?: { cwd?: string; ignore?: string | strin
   = require('glob').sync;
 import { ConfigManager } from '../core/config';
 import { BrowserControl, BrowserControlRequest, BrowserControlResult } from '../core/browserControl';
+import { MemoryLabManager } from '../core/memoryLab';
+import {
+  NewmarkToolDefinition,
+  NewmarkToolResult,
+  emitAnthropicTool,
+  emitOpenAIChatTool,
+  emitOpenAIResponsesTool,
+  legacyToolToNewmark,
+  normalizeToolResult,
+} from '../core/compat';
 
 export interface ToolExecutionContext {
   mode?: string;
@@ -52,7 +62,7 @@ export class ToolExecutor {
       t('browser_forward', 'Navigate the controlled browser forward.', {}, []),
       t('browser_reload', 'Reload the controlled browser.', {}, []),
       t('browser_cdp', 'Run a raw Chrome DevTools Protocol command against the controlled browser. Advanced use only.', { method: { type: 'string' }, params: { type: 'object' } }, ['method']),
-      t('task', 'Create and run a constrained subagent. Subagents cannot change settings or choose their own model.', { name: { type: 'string' }, prompt: { type: 'string' }, model: { type: 'string' }, mode: { type: 'string' }, input_mode: { type: 'string' }, flow: { type: 'string' } }, ['name', 'prompt']),
+      t('task', 'Create and run a constrained subagent. Optional preset/agent selects a normalized Codex, Claude Code, OpenCode, or Newmark agent preset. Subagents cannot change settings or choose their own model.', { name: { type: 'string' }, prompt: { type: 'string' }, preset: { type: 'string' }, agent: { type: 'string' }, model: { type: 'string' }, mode: { type: 'string' }, input_mode: { type: 'string' }, flow: { type: 'string' } }, ['prompt']),
       t('subagent_send', 'Continue an existing subagent by name or id with another prompt.', { name: { type: 'string' }, prompt: { type: 'string' } }, ['name', 'prompt']),
       t('subagent_result', 'Return get.subagent(name): the latest result and conversation content for a subagent.', { name: { type: 'string' } }, ['name']),
       t('subagent_close', 'Close an existing subagent by name or id and release it from the active agent list.', { name: { type: 'string' } }, ['name']),
@@ -61,6 +71,9 @@ export class ToolExecutor {
       t('flow_list', 'List available Newmark Flow workflows from the Flow folder so the agent can choose one.', {}, []),
       t('flow_save', 'Design or update a Newmark Flow workflow. Components must be an array of dialog/logic objects compatible with *.Flow.json.', { name: { type: 'string' }, components: { type: 'array' } }, ['name', 'components']),
       t('flow_run', 'Trigger an existing Newmark Flow workflow by name with optional input and start component.', { name: { type: 'string' }, input: { type: 'string' }, start: { type: 'number' } }, ['name']),
+      t('memory_lab_read', 'Read Memory Lab index.json, its path, and usage instructions. Optionally pass component/name/slug to read a memory component core markdown.', { component: { type: 'string' }, name: { type: 'string' }, slug: { type: 'string' } }, []),
+      t('memory_lab_update', 'Create or update a Memory Lab persistent memory component. Agent must pass name, description, hierarchical tags, concrete markdown content, and optional kind=file|folder. Routed through the Agent runtime so MemoryLabIndexAgent can organize it with the current working model.', { name: { type: 'string' }, description: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, content: { type: 'string' }, kind: { type: 'string', enum: ['file', 'folder'] } }, ['name', 'tags', 'content']),
+      t('memory_lab_reindex', 'Rebuild and organize Memory Lab index links. Routed through Agent runtime when invoked by the model.', {}, []),
       t('automation_list', 'List persisted Newmark automations so the agent can inspect scheduled work.', {}, []),
       t('automation_create', 'Create a persisted Newmark automation. Supports once, loop, and schedule conditions. The prompt is what the agent will run later.', {
         prompt: { type: 'string' },
@@ -99,9 +112,33 @@ export class ToolExecutor {
       return tools.filter((tool: any) =>
         ['pwd', 'read', 'glob', 'grep', 'web_search', 'web_fetch', 'browser_open', 'browser_snapshot', 'git_status'].includes(tool.function?.name)
         || tool.function?.name === 'automation_list'
+        || tool.function?.name === 'memory_lab_read'
       );
     }
     return tools;
+  }
+
+  canonicalDefinitions(mode?: string): NewmarkToolDefinition[] {
+    return this.definitions(mode)
+      .map(def => legacyToolToNewmark(def))
+      .filter((def): def is NewmarkToolDefinition => !!def);
+  }
+
+  openAIResponsesDefinitions(mode?: string): unknown[] {
+    return this.canonicalDefinitions(mode).map(emitOpenAIResponsesTool);
+  }
+
+  anthropicDefinitions(mode?: string): unknown[] {
+    return this.canonicalDefinitions(mode).map(emitAnthropicTool);
+  }
+
+  openAIChatDefinitions(mode?: string): unknown[] {
+    return this.canonicalDefinitions(mode).map(emitOpenAIChatTool);
+  }
+
+  async executeEnvelope(tool: string, argsStr: string, wsPath: string, context: ToolExecutionContext = {}): Promise<NewmarkToolResult> {
+    const output = await this.execute(tool, argsStr, wsPath, context);
+    return normalizeToolResult(output, { tool, workspacePath: wsPath, mode: context.mode || '' });
   }
 
   async execute(tool: string, argsStr: string, wsPath: string, context: ToolExecutionContext = {}): Promise<string> {
@@ -170,6 +207,9 @@ export class ToolExecutor {
         case 'flow_list': return this.flowList();
         case 'flow_save': return this.flowSave(g('name'), (args as Record<string, unknown>).components);
         case 'flow_run': return `[flow_run] Routed to Agent runtime: ${g('name')}`;
+        case 'memory_lab_read': return this.memoryLabRead(g('component') || g('name') || g('slug'));
+        case 'memory_lab_update': return '[memory_lab_update] Routed to Agent runtime for MemoryLabIndexAgent model organization.';
+        case 'memory_lab_reindex': return '[memory_lab_reindex] Routed to Agent runtime for MemoryLabIndexAgent model organization.';
         case 'automation_list': return '[automation_list] Routed to Agent runtime.';
         case 'automation_create': return '[automation_create] Routed to Agent runtime.';
         case 'automation_update': return `[automation_update] Routed to Agent runtime: ${g('id')}`;
@@ -569,6 +609,11 @@ export class ToolExecutor {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `${cleanName}.Flow.json`), JSON.stringify(workflow, null, 2), 'utf-8');
     return `[flow_save] OK: ${cleanName}.Flow.json`;
+  }
+
+  private memoryLabRead(selector: string): string {
+    const lab = new MemoryLabManager(this.root);
+    return lab.formatRead(lab.read(selector));
   }
 
   private gitExec(cmd: string, ws: string): string {

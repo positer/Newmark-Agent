@@ -2369,6 +2369,422 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .model-eval-bad { color: #ff7777; }
 .model-eval-pending { color: #ffd166; }
 
+/* Memory Lab tag graph */
+.memory-lab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.memory-lab-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.memory-lab-search {
+  position: relative;
+  width: min(240px, 38%);
+  min-width: 170px;
+}
+.memory-lab-search input {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border-1);
+  background: var(--glass-bg-1);
+  color: var(--text);
+  font: 11px var(--font-ui);
+  outline: none;
+}
+.memory-lab-search input:focus {
+  border-color: var(--accent);
+  background: var(--glass-bg-2);
+}
+.memory-lab-search-results {
+  position: absolute;
+  z-index: 5;
+  top: 34px;
+  left: 0;
+  right: 0;
+  max-height: 190px;
+  overflow: auto;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border-1);
+  background: var(--panel-2);
+  box-shadow: var(--shadow-lg);
+}
+.memory-lab-search-results[hidden] {
+  display: none;
+}
+.memory-lab-search-results .memory-lab-node {
+  min-height: 30px;
+  margin-bottom: 5px;
+}
+.memory-lab-view-menu,
+.memory-lab-overview-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border-1);
+  background: var(--glass-bg-1);
+}
+.memory-lab-view-menu button,
+.memory-lab-overview-actions button,
+.memory-lab-overview-actions select {
+  height: 26px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  font: 11px var(--font-ui);
+  cursor: pointer;
+}
+.memory-lab-view-menu button:hover,
+.memory-lab-overview-actions button:hover,
+.memory-lab-overview-actions select:hover {
+  background: var(--glass-bg-2);
+  color: var(--text);
+}
+.memory-lab-view-menu button.active,
+.memory-lab-overview-actions button.active {
+  border-color: var(--glass-border-2);
+  background: var(--glass-bg-3);
+  color: var(--text-bright);
+}
+.memory-lab-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.memory-lab-graph {
+  position: relative;
+  min-height: 280px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border-1);
+  background: var(--glass-bg-1);
+  overflow: hidden;
+}
+.memory-lab-graph.animate-from-left .memory-lab-column:first-child .memory-lab-node,
+.memory-lab-graph.animate-from-left .memory-lab-center .memory-lab-node,
+.memory-lab-graph.animate-from-right .memory-lab-column:nth-child(3) .memory-lab-node,
+.memory-lab-graph.animate-from-right .memory-lab-center .memory-lab-node,
+.memory-lab-graph.animate-fade .memory-lab-node {
+  animation: memory-lab-enter var(--duration-normal) var(--ease-out-expo) both;
+}
+.memory-lab-graph.animate-from-left .memory-lab-center .memory-lab-node { animation-name: memory-lab-enter-left; }
+.memory-lab-graph.animate-from-right .memory-lab-center .memory-lab-node { animation-name: memory-lab-enter-right; }
+.memory-lab-graph.animate-from-left .memory-lab-components,
+.memory-lab-graph.animate-from-right .memory-lab-components,
+.memory-lab-graph.animate-fade .memory-lab-components {
+  animation: memory-lab-enter-up var(--duration-normal) var(--ease-out-expo) both;
+}
+@keyframes memory-lab-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes memory-lab-enter-left {
+  from { opacity: 0; transform: translateX(-18px) scale(0.98); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes memory-lab-enter-right {
+  from { opacity: 0; transform: translateX(18px) scale(0.98); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes memory-lab-enter-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.memory-lab-graph-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(170px, 1.05fr) minmax(150px, 1fr);
+  grid-template-rows: minmax(128px, auto) minmax(112px, auto);
+  gap: 16px 18px;
+  min-height: 252px;
+}
+.memory-lab-column {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+}
+.memory-lab-center {
+  align-items: stretch;
+  justify-content: center;
+}
+.memory-lab-components {
+  grid-column: 1 / 4;
+  display: grid;
+  grid-template-columns: minmax(170px, 0.8fr) minmax(220px, 1.2fr);
+  gap: 12px;
+  align-items: stretch;
+  min-height: 112px;
+}
+.memory-lab-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border-2);
+  background: var(--glass-bg-2);
+  color: var(--text);
+  font-size: 11px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--duration-fast) var(--ease-out-expo), background var(--duration-fast) var(--ease-out-expo), transform var(--duration-fast) var(--ease-out-expo);
+}
+.memory-lab-node:hover {
+  border-color: var(--border-hover);
+  background: var(--glass-bg-3);
+}
+.memory-lab-node:active { transform: scale(0.98); }
+.memory-lab-node.selected {
+  min-height: 52px;
+  border-color: var(--accent);
+  background: rgba(91,120,255,0.16);
+  color: var(--text-bright);
+  box-shadow: 0 0 0 1px rgba(91,120,255,0.08);
+}
+.memory-lab-node-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.memory-lab-node-count {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.memory-lab-empty {
+  font-size: 12px;
+  color: var(--text-dim);
+  align-self: center;
+}
+.memory-lab-section-title {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+.memory-lab-preview {
+  min-width: 0;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border-1);
+  background: var(--glass-bg-1);
+  padding: 10px;
+}
+.memory-lab-preview-title {
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.memory-lab-preview-desc {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.memory-lab-preview pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 30vh;
+  overflow: auto;
+  background: var(--glass-bg-1);
+  border: 1px solid var(--glass-border-1);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  font-size: 11px;
+  color: var(--text);
+}
+.memory-lab-overview {
+  position: relative;
+  min-height: 430px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border-1);
+  background: var(--glass-bg-1);
+  overflow: hidden;
+}
+.memory-lab-overview-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  pointer-events: none;
+}
+.memory-lab-overview-title,
+.memory-lab-overview-status {
+  min-width: 0;
+  max-width: 48%;
+  padding: 7px 9px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border-1);
+  background: rgba(15, 18, 32, 0.58);
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.memory-lab-overview-actions { pointer-events: auto; }
+.memory-lab-overview-stage {
+  position: absolute;
+  inset: 0;
+  cursor: grab;
+}
+.memory-lab-overview-stage:active { cursor: grabbing; }
+.memory-lab-overview-grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.26;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+  background-size: 38px 38px;
+}
+.memory-lab-overview-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.memory-lab-overview-link {
+  fill: none;
+  stroke: rgba(150, 168, 210, 0.24);
+  stroke-width: 1.05;
+  stroke-linecap: round;
+}
+.memory-lab-overview-link.hot {
+  stroke: rgba(126, 220, 255, 0.78);
+  stroke-width: 1.45;
+}
+.memory-lab-overview-link.parent { stroke: rgba(246, 201, 107, 0.78); }
+.memory-lab-overview-link.child { stroke: rgba(116, 223, 176, 0.72); }
+.memory-lab-overview-link.dim { opacity: 0.08; }
+.memory-lab-overview-flow {
+  fill: none;
+  stroke: rgba(126, 220, 255, 0.82);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-dasharray: 16 760;
+  animation: memory-lab-flow 0.95s linear infinite;
+}
+.memory-lab-overview-flow.parent { stroke: rgba(246, 201, 107, 0.88); }
+.memory-lab-overview-flow.child { stroke: rgba(116, 223, 176, 0.82); }
+@keyframes memory-lab-flow { to { stroke-dashoffset: -210; } }
+.memory-lab-overview-nodes {
+  position: absolute;
+  inset: 0;
+}
+.memory-lab-overview-node {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 150px;
+  height: 28px;
+  padding: 0 9px 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border-2);
+  background: rgba(20, 24, 40, 0.72);
+  color: var(--text);
+  font: 11px var(--font-ui);
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  backdrop-filter: blur(14px);
+  transition: opacity var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo), background var(--duration-fast) var(--ease-out-expo), box-shadow var(--duration-fast) var(--ease-out-expo);
+}
+.memory-lab-overview-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #b7a0ff;
+  box-shadow: 0 0 12px rgba(183, 160, 255, 0.35);
+}
+.memory-lab-overview-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.memory-lab-overview-node.root .memory-lab-overview-dot,
+.memory-lab-overview-node.anchor .memory-lab-overview-dot {
+  background: #f6c96b;
+  box-shadow: 0 0 12px rgba(246, 201, 107, 0.42);
+}
+.memory-lab-overview-node.leaf .memory-lab-overview-dot {
+  background: #74dfb0;
+  box-shadow: 0 0 12px rgba(116, 223, 176, 0.34);
+}
+.memory-lab-overview-node.addon .memory-lab-overview-dot {
+  background: #e8eef8;
+  box-shadow: 0 0 10px rgba(232, 238, 248, 0.3);
+}
+.memory-lab-overview-node.anchor {
+  height: 32px;
+  border-color: rgba(246, 201, 107, 0.46);
+  color: var(--text-bright);
+}
+.memory-lab-overview-node.focus {
+  border-color: var(--accent);
+  background: rgba(91, 120, 255, 0.2);
+  box-shadow: 0 0 0 5px rgba(91, 120, 255, 0.11), 0 12px 28px rgba(0,0,0,0.24);
+}
+.memory-lab-overview-node.dim { opacity: 0.18; }
+.memory-lab-overview-tip {
+  position: absolute;
+  z-index: 8;
+  min-width: 130px;
+  max-width: 220px;
+  padding: 8px 9px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border-1);
+  background: rgba(10, 13, 24, 0.84);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(14px, -50%);
+}
+.memory-lab-overview-tip.show { opacity: 1; }
+.memory-lab-overview-tip-name {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.memory-lab-overview-tip-type {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
 .model-chip {
   display: inline-flex;
   align-items: center;
@@ -2666,6 +3082,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
       <div id="left-thumb">
         <div class="lt-item" onclick="window.showNewConversationPage()" title="New conversation"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#message-square"></use></svg><span class="icon-only-label">New conversation</span></div>
         <div class="lt-item" onclick="window.showPluginList()" title="Plugins"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#plug"></use></svg><span class="icon-only-label">Plugins</span></div>
+        <div class="lt-item" onclick="window.showMemoryLab()" title="Memory Lab"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#brain"></use></svg><span class="icon-only-label">Memory Lab</span></div>
         <div class="lt-item" onclick="window.showAutomationWindow()" title="Automation"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#calendar"></use></svg><span class="icon-only-label">Automation</span></div>
         <div class="lt-item" onclick="window.showFlowEditor()" title="Flow"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#workflow"></use></svg><span class="icon-only-label">Flow</span></div>
         <div class="lt-item" onclick="window.openSettings()" title="Settings"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#settings"></use></svg><span class="icon-only-label">Settings</span></div>
@@ -2678,6 +3095,9 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
         </div>
         <div class="left-nav-icon" onclick="window.showPluginList()">
           <span class="icon"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#plug"></use></svg></span><span>Plugins</span>
+        </div>
+        <div class="left-nav-icon" onclick="window.showMemoryLab()">
+          <span class="icon"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#brain"></use></svg></span><span>Memory Lab</span>
         </div>
         <div class="left-nav-icon" onclick="window.showAutomationWindow()">
           <span class="icon"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#calendar"></use></svg></span><span>Automation</span>
@@ -2931,6 +3351,10 @@ var state = {
   settingsActiveTab: 'general',
   pluginActiveTab: 'installed',
   skillMarketQuery: '',
+  memoryLab: null,
+  memoryLabSelectedTag: '',
+  memoryLabSelectedComponent: '',
+  memoryLabNavDirection: 'fade',
   flowExpanded: {},
   activeSubWindowView: null,
   _terminalTabs: [],
@@ -2978,6 +3402,7 @@ var NEWMARK_I18N = {
     'left.tools': 'Tools',
     'left.newChat': 'New chat',
     'left.plugins': 'Plugins',
+    'left.memoryLab': 'Memory Lab',
     'left.automation': 'Automation',
     'left.flow': 'Flow',
     'left.settings': 'Settings',
@@ -3202,7 +3627,17 @@ var NEWMARK_I18N = {
     'plugins.noInstalled': 'No installed skills.',
     'plugins.projectSkill': 'project skill',
     'plugins.discovering': 'Discovering local and portable skills...',
-    'plugins.marketHelp': 'Install portable skills into the project skills folder for offline use. Local Codex skills are copied, remote skills are downloaded.',
+    'plugins.marketHelp': 'Install portable skills into the project skills folder for offline use. Add trusted market sources as JSON catalogs, direct skill URLs, or local folders.',
+    'plugins.sources': 'Sources',
+    'plugins.sourceName': 'Source name',
+    'plugins.sourceLocation': 'URL or local path',
+    'plugins.sourceType': 'Type',
+    'plugins.addSource': 'Add source',
+    'plugins.builtinSource': 'built-in',
+    'plugins.noSources': 'No user sources.',
+    'plugins.sourceAdded': 'Source added: ',
+    'plugins.sourceRemoved': 'Source removed: ',
+    'plugins.sourceFailed': 'Source update failed: ',
     'plugins.search': 'Search skills...',
     'plugins.noDiscovered': 'No skills discovered.',
     'plugins.noMatch': 'No matching skills.',
@@ -3319,7 +3754,40 @@ var NEWMARK_I18N = {
     'terminal.notConnected': 'Terminal not connected',
     'common.error': 'Error',
     'plugins.managerTitle': 'Plugin manager',
-    'plugins.noPlugins': 'No plugins yet'
+    'plugins.noPlugins': 'No plugins yet',
+    'memoryLab.title': 'Memory Lab',
+    'memoryLab.loading': 'Loading Memory Lab...',
+    'memoryLab.empty': 'No memories yet.',
+    'memoryLab.tags': 'Tags',
+    'memoryLab.overview': 'Overview',
+    'memoryLab.detail': 'Detail',
+    'memoryLab.parents': 'Parent tags',
+    'memoryLab.children': 'Child tags',
+    'memoryLab.rootTags': 'Root tags',
+    'memoryLab.selectedTag': 'Selected tag',
+    'memoryLab.noParents': 'No parent tags.',
+    'memoryLab.noChildren': 'No child tags.',
+    'memoryLab.search': 'Search tags',
+    'memoryLab.noSearchResults': 'No matching tags.',
+    'memoryLab.modeBoth': 'Both',
+    'memoryLab.modeParents': 'Parents',
+    'memoryLab.modeChildren': 'Children',
+    'memoryLab.modeDirect': 'Direct',
+    'memoryLab.clear': 'Clear',
+    'memoryLab.reset': 'Reset',
+    'memoryLab.overviewTitle': 'Memory tag map',
+    'memoryLab.unselected': 'No tag selected',
+    'memoryLab.selected': 'Selected',
+    'memoryLab.anchor': 'Memory Lab',
+    'memoryLab.componentNode': 'Component',
+    'memoryLab.components': 'Components',
+    'memoryLab.preview': 'Core memory',
+    'memoryLab.noComponent': 'Select a memory component.',
+    'memoryLab.reindex': 'Reindex',
+    'memoryLab.updated': 'Memory Lab updated.',
+    'memoryLab.updateFailed': 'Memory Lab update failed',
+    'memoryLab.path': 'Index',
+    'memoryLab.instructions': 'Instructions'
   },
   zh: {
     'app.ready': '就绪',
@@ -3330,6 +3798,7 @@ var NEWMARK_I18N = {
     'left.tools': '工具',
     'left.newChat': '新对话',
     'left.plugins': '插件',
+    'left.memoryLab': 'Memory Lab',
     'left.automation': '自动化',
     'left.flow': '工作流',
     'left.settings': '设置',
@@ -3554,7 +4023,17 @@ var NEWMARK_I18N = {
     'plugins.noInstalled': '暂无已安装 skill。',
     'plugins.projectSkill': '项目 skill',
     'plugins.discovering': '正在发现本地和便携 skill...',
-    'plugins.marketHelp': '将便携 skill 安装到项目 skills 文件夹以便离线使用。本地 Codex skill 会复制，远程 skill 会下载。',
+    'plugins.marketHelp': '将便携 skill 安装到项目 skills 文件夹以便离线使用。可以添加可信 JSON catalog、直接 skill URL 或本地文件夹作为市场源。',
+    'plugins.sources': '源',
+    'plugins.sourceName': '源名称',
+    'plugins.sourceLocation': 'URL 或本地路径',
+    'plugins.sourceType': '类型',
+    'plugins.addSource': '添加源',
+    'plugins.builtinSource': '内置',
+    'plugins.noSources': '暂无用户源。',
+    'plugins.sourceAdded': '已添加源：',
+    'plugins.sourceRemoved': '已删除源：',
+    'plugins.sourceFailed': '源更新失败：',
     'plugins.search': '搜索 skills...',
     'plugins.noDiscovered': '未发现 skill。',
     'plugins.noMatch': '没有匹配的 skill。',
@@ -3671,7 +4150,40 @@ var NEWMARK_I18N = {
     'terminal.notConnected': '终端未连接',
     'common.error': '错误',
     'plugins.managerTitle': '插件管理',
-    'plugins.noPlugins': '暂无插件'
+    'plugins.noPlugins': '暂无插件',
+    'memoryLab.title': 'Memory Lab',
+    'memoryLab.loading': '正在载入 Memory Lab...',
+    'memoryLab.empty': '暂无记忆。',
+    'memoryLab.tags': '标签',
+    'memoryLab.overview': '总览',
+    'memoryLab.detail': '详细',
+    'memoryLab.parents': '父标签',
+    'memoryLab.children': '子标签',
+    'memoryLab.rootTags': '根父标签',
+    'memoryLab.selectedTag': '当前标签',
+    'memoryLab.noParents': '无父标签。',
+    'memoryLab.noChildren': '无子标签。',
+    'memoryLab.search': '搜索标签',
+    'memoryLab.noSearchResults': '无匹配标签。',
+    'memoryLab.modeBoth': '双向',
+    'memoryLab.modeParents': '父链',
+    'memoryLab.modeChildren': '子树',
+    'memoryLab.modeDirect': '直接',
+    'memoryLab.clear': '取消',
+    'memoryLab.reset': '重置',
+    'memoryLab.overviewTitle': '记忆 Tag 图谱',
+    'memoryLab.unselected': '未选中',
+    'memoryLab.selected': '选中',
+    'memoryLab.anchor': 'Memory Lab',
+    'memoryLab.componentNode': '组件',
+    'memoryLab.components': '记忆组件',
+    'memoryLab.preview': '核心记忆',
+    'memoryLab.noComponent': '请选择记忆组件。',
+    'memoryLab.reindex': '重建索引',
+    'memoryLab.updated': 'Memory Lab 已更新。',
+    'memoryLab.updateFailed': 'Memory Lab 更新失败',
+    'memoryLab.path': '索引',
+    'memoryLab.instructions': '说明'
   }
 };
 
@@ -3730,6 +4242,7 @@ function applyLanguageToUi() {
   setTitleAndLabel('button.close-btn[onclick="window.api.close()"]', t('top.close'));
   setTitleAndLabel('#left-thumb .lt-item[onclick="window.showNewConversationPage()"]', t('left.newChat'));
   setTitleAndLabel('#left-thumb .lt-item[onclick="window.showPluginList()"]', t('left.plugins'));
+  setTitleAndLabel('#left-thumb .lt-item[onclick="window.showMemoryLab()"]', t('left.memoryLab'));
   setTitleAndLabel('#left-thumb .lt-item[onclick="window.showAutomationWindow()"]', t('left.automation'));
   setTitleAndLabel('#left-thumb .lt-item[onclick="window.showFlowEditor()"]', t('left.flow'));
   setTitleAndLabel('#left-thumb .lt-item[onclick="window.openSettings()"]', t('left.settings'));
@@ -3745,7 +4258,7 @@ function applyLanguageToUi() {
   var toolsHead = document.querySelector('#left-content > div:first-child');
   if (toolsHead) toolsHead.textContent = t('left.tools');
   var navs = document.querySelectorAll('#left-content .left-nav-icon');
-  var navLabels = [t('left.newChat'), t('left.plugins'), t('left.automation'), t('left.flow'), t('left.settings')];
+  var navLabels = [t('left.newChat'), t('left.plugins'), t('left.memoryLab'), t('left.automation'), t('left.flow'), t('left.settings')];
   for (var i = 0; i < navs.length && i < navLabels.length; i++) {
     var span = navs[i].querySelector('span:last-child');
     if (span) span.textContent = navLabels[i];
@@ -4007,6 +4520,14 @@ var api = window.api || {
     catch(e) { return []; }
   },
   listSkills: async function() { return []; },
+  marketSkills: async function() { return []; },
+  marketSkillSources: async function() { return []; },
+  addSkillMarketSource: async function() { return {ok:false}; },
+  removeSkillMarketSource: async function() { return {ok:false}; },
+  setSkillMarketSourceEnabled: async function() { return {ok:false}; },
+  memoryLabRead: async function() { return {ok:false,index:{tags:{},components:{}}}; },
+  memoryLabUpdate: async function() { return {ok:false}; },
+  memoryLabReindex: async function() { return {ok:false}; },
   refreshSkills: async function() { return []; },
   minimize: function(){ console.log('minimize'); },
   maximize: function(){ console.log('maximize'); },
@@ -4025,6 +4546,14 @@ if (!window.api.automationWakeStatus) window.api.automationWakeStatus = api.auto
 if (!window.api.validateModels) window.api.validateModels = api.validateModels;
 if (!window.api.fuzzyInject) window.api.fuzzyInject = api.fuzzyInject;
 if (!window.api.listSkills) window.api.listSkills = api.listSkills;
+if (!window.api.marketSkills) window.api.marketSkills = api.marketSkills;
+if (!window.api.marketSkillSources) window.api.marketSkillSources = api.marketSkillSources;
+if (!window.api.addSkillMarketSource) window.api.addSkillMarketSource = api.addSkillMarketSource;
+if (!window.api.removeSkillMarketSource) window.api.removeSkillMarketSource = api.removeSkillMarketSource;
+if (!window.api.setSkillMarketSourceEnabled) window.api.setSkillMarketSourceEnabled = api.setSkillMarketSourceEnabled;
+if (!window.api.memoryLabRead) window.api.memoryLabRead = api.memoryLabRead;
+if (!window.api.memoryLabUpdate) window.api.memoryLabUpdate = api.memoryLabUpdate;
+if (!window.api.memoryLabReindex) window.api.memoryLabReindex = api.memoryLabReindex;
 if (!window.api.refreshSkills) window.api.refreshSkills = api.refreshSkills;
 // Ensure window.api is set (preload may already have set it)
 window.api = window.api || api;
@@ -5233,6 +5762,7 @@ function rerenderActiveSubWindowForLanguage() {
   if (view.name === 'settings') return window.openSettings(view.tab || state.settingsActiveTab || 'general');
   if (view.name === 'fuzzy') return window.fuzzyInject();
   if (view.name === 'plugins') return window.showPluginList(view.tab || state.pluginActiveTab || 'installed');
+  if (view.name === 'memoryLab') return window.showMemoryLab();
   if (view.name === 'flow') return window.showFlowEditor();
   if (view.name === 'newConversation') return window.showNewConversationPage();
   if (view.name === 'workspaceRequired') return window.showWorkspaceRequired();
@@ -6967,6 +7497,439 @@ window.archiveConv = function(idx) {
   }
 };
 
+// === Memory Lab ===
+window.showMemoryLab = function() {
+  state.activeSubWindowView = { name: 'memoryLab' };
+  if (state.memoryLabOverviewAnimation) {
+    cancelAnimationFrame(state.memoryLabOverviewAnimation);
+    state.memoryLabOverviewAnimation = null;
+  }
+  window.openSubWin(t('memoryLab.title'), '<div id="memory-lab-panel" class="provider-card marquee-border">' + esc(t('memoryLab.loading')) + '</div>');
+  window.loadMemoryLab();
+};
+
+window.loadMemoryLab = function(selector) {
+  var panel = document.getElementById('memory-lab-panel');
+  if (panel) panel.innerHTML = esc(t('memoryLab.loading'));
+  if (!api.memoryLabRead) return;
+  api.memoryLabRead(selector || '').then(function(result) {
+    state.memoryLab = result || null;
+    if (result && result.component) state.memoryLabSelectedComponent = result.component.slug;
+    window.renderMemoryLab();
+  }).catch(function(err) {
+    var target = document.getElementById('memory-lab-panel');
+    if (target) target.innerHTML = '<div style="color:#ff7777;font-size:12px;">' + esc(err.message || String(err)) + '</div>';
+  });
+};
+
+window.renderMemoryLab = function() {
+  var panel = document.getElementById('memory-lab-panel');
+  if (!panel) return;
+  var lab = state.memoryLab || {};
+  var index = lab.index || { tags: {}, components: {} };
+  if (!state.memoryLabView) state.memoryLabView = 'overview';
+  var html = window.memoryLabTopbar(lab);
+  html += state.memoryLabView === 'detail' ? window.renderMemoryLabDetail(lab, index) : window.renderMemoryLabOverview(lab, index);
+  html += '<details style="margin-top:10px;"><summary style="font-size:11px;color:var(--text-dim);cursor:pointer;">' + esc(t('memoryLab.instructions')) + '</summary>' +
+    '<pre style="white-space:pre-wrap;word-break:break-word;background:var(--glass-bg-1);border:1px solid var(--glass-border-1);border-radius:8px;padding:10px;font-size:10px;color:var(--text-dim);">' + esc(lab.instructions || '') + '</pre></details>';
+  html += '</div>';
+  panel.innerHTML = html;
+  if (state.memoryLabSearchQuery) window.updateMemoryLabSearch(state.memoryLabSearchQuery);
+  if (state.memoryLabView === 'overview') window.initMemoryLabOverview();
+  state.memoryLabNavDirection = 'fade';
+};
+
+window.memoryLabTopbar = function(lab) {
+  var view = state.memoryLabView || 'overview';
+  return '<div class="memory-lab-panel"><div class="memory-lab-topbar">' +
+    '<div class="memory-lab-path">' + esc(t('memoryLab.path')) + ': ' + esc(lab.indexPath || '') + '</div>' +
+    '<div class="memory-lab-view-menu" role="tablist">' +
+      '<button class="' + (view === 'overview' ? 'active' : '') + '" onclick="window.switchMemoryLabView(\'overview\')">' + esc(t('memoryLab.overview')) + '</button>' +
+      '<button class="' + (view === 'detail' ? 'active' : '') + '" onclick="window.switchMemoryLabView(\'detail\')">' + esc(t('memoryLab.detail')) + '</button>' +
+    '</div>' +
+    '<div class="memory-lab-search">' +
+      '<input id="memory-lab-search-input" value="' + escAttr(state.memoryLabSearchQuery || '') + '" placeholder="' + escAttr(t('memoryLab.search')) + '" oninput="window.updateMemoryLabSearch(this.value)" onfocus="window.updateMemoryLabSearch(this.value)" />' +
+      '<div id="memory-lab-search-results" class="memory-lab-search-results" hidden></div>' +
+    '</div>' +
+    '<button class="sec-btn" onclick="window.reindexMemoryLab()">' + esc(t('memoryLab.reindex')) + '</button>' +
+    '</div>';
+};
+
+window.renderMemoryLabDetail = function(lab, index) {
+  var tags = Object.keys(index.tags || {}).sort();
+  var components = index.components || {};
+  var firstTagWithComponents = tags.filter(function(tag) {
+    return ((index.tags[tag] || {}).components || []).length > 0;
+  })[0] || tags[0] || '';
+  var selectedTag = state.memoryLabSelectedTag || firstTagWithComponents;
+  if (selectedTag && !index.tags[selectedTag]) selectedTag = tags[0] || '';
+  state.memoryLabSelectedTag = selectedTag;
+  var selectedNode = selectedTag && index.tags[selectedTag] ? index.tags[selectedTag] : { parents: [], children: [], components: [] };
+  var parentTags = (selectedNode.parents || []).filter(function(tag) { return !!index.tags[tag]; }).sort();
+  var rootTags = tags.filter(function(tag) {
+    return !((index.tags[tag] || {}).parents || []).filter(function(parent) { return !!index.tags[parent]; }).length;
+  }).sort();
+  var parentColumnTags = parentTags.length ? parentTags : rootTags;
+  var childTags = (selectedNode.children || []).filter(function(tag) { return !!index.tags[tag]; }).sort();
+  var selectedComponents = selectedTag && index.tags[selectedTag] ? (selectedNode.components || []) : Object.keys(components);
+  var selectedComponent = state.memoryLabSelectedComponent || selectedComponents[0] || Object.keys(components)[0] || '';
+  if (selectedComponent && !components[selectedComponent]) selectedComponent = selectedComponents[0] || Object.keys(components)[0] || '';
+  state.memoryLabSelectedComponent = selectedComponent || '';
+  var component = lab.component && lab.component.slug === selectedComponent ? lab.component : null;
+  var html = '';
+  var navDirection = state.memoryLabNavDirection || 'fade';
+  var graphClass = navDirection === 'left' ? ' animate-from-left' : navDirection === 'right' ? ' animate-from-right' : ' animate-fade';
+  html += '<div class="memory-lab-graph' + graphClass + '"><div class="memory-lab-graph-grid">';
+  html += '<div class="memory-lab-column"><div class="memory-lab-section-title">' + esc(parentTags.length ? t('memoryLab.parents') : t('memoryLab.rootTags')) + '</div>';
+  if (!parentColumnTags.length) html += '<div class="memory-lab-empty">' + esc(t('memoryLab.noParents')) + '</div>';
+  for (var p = 0; p < parentColumnTags.length; p++) html += window.memoryLabTagButton(parentColumnTags[p], index.tags[parentColumnTags[p]], !parentTags.length && parentColumnTags[p] === selectedTag);
+  html += '</div>';
+  html += '<div class="memory-lab-column memory-lab-center"><div class="memory-lab-section-title">' + esc(t('memoryLab.selectedTag')) + '</div>';
+  if (selectedTag) html += window.memoryLabTagButton(selectedTag, selectedNode, true);
+  else html += '<div class="memory-lab-empty">' + esc(t('memoryLab.empty')) + '</div>';
+  html += '</div>';
+  html += '<div class="memory-lab-column"><div class="memory-lab-section-title">' + esc(t('memoryLab.children')) + '</div>';
+  if (!childTags.length) html += '<div class="memory-lab-empty">' + esc(t('memoryLab.noChildren')) + '</div>';
+  for (var c = 0; c < childTags.length; c++) html += window.memoryLabTagButton(childTags[c], index.tags[childTags[c]], false);
+  html += '</div>';
+  html += '<div class="memory-lab-components"><div><div class="memory-lab-section-title">' + esc(t('memoryLab.components')) + '</div>';
+  if (!selectedComponents.length) html += '<div class="memory-lab-empty">' + esc(t('memoryLab.empty')) + '</div>';
+  for (var j = 0; j < selectedComponents.length; j++) html += window.memoryLabComponentButton(selectedComponents[j], components[selectedComponents[j]], selectedComponents[j] === selectedComponent);
+  html += '</div><div class="memory-lab-preview">' +
+    '<div class="memory-lab-preview-title">' + esc(t('memoryLab.preview')) + '</div>';
+  if (component) {
+    html += '<div class="memory-lab-preview-desc">' + esc((component.meta && component.meta.description) || '') + '</div>' +
+      '<pre>' + esc(component.content || '') + '</pre>';
+  } else {
+    html += '<div class="memory-lab-empty">' + esc(t('memoryLab.noComponent')) + '</div>';
+  }
+  html += '</div></div></div></div>';
+  return html;
+};
+
+window.renderMemoryLabOverview = function(_lab, index) {
+  var graph = window.buildMemoryLabOverviewGraph(index);
+  state.memoryLabOverviewGraph = graph;
+  var mode = state.memoryLabOverviewMode || 'both';
+  var html = '<div class="memory-lab-overview">' +
+    '<div class="memory-lab-overview-toolbar">' +
+      '<div class="memory-lab-overview-title">' + esc(t('memoryLab.overviewTitle')) + ' · ' + graph.tags.length + ' ' + esc(t('memoryLab.tags')) + ' · ' + graph.componentCount + ' ' + esc(t('memoryLab.components')) + '</div>' +
+      '<div class="memory-lab-overview-actions">' +
+        '<select id="memory-lab-overview-mode" onchange="window.setMemoryLabOverviewMode(this.value)">' +
+          '<option value="both"' + (mode === 'both' ? ' selected' : '') + '>' + esc(t('memoryLab.modeBoth')) + '</option>' +
+          '<option value="parents"' + (mode === 'parents' ? ' selected' : '') + '>' + esc(t('memoryLab.modeParents')) + '</option>' +
+          '<option value="children"' + (mode === 'children' ? ' selected' : '') + '>' + esc(t('memoryLab.modeChildren')) + '</option>' +
+          '<option value="direct"' + (mode === 'direct' ? ' selected' : '') + '>' + esc(t('memoryLab.modeDirect')) + '</option>' +
+        '</select>' +
+        '<button onclick="window.clearMemoryLabOverviewFocus()">' + esc(t('memoryLab.clear')) + '</button>' +
+        '<button onclick="window.resetMemoryLabOverview()">' + esc(t('memoryLab.reset')) + '</button>' +
+      '</div>' +
+      '<div id="memory-lab-overview-status" class="memory-lab-overview-status">' + esc(t('memoryLab.unselected')) + '</div>' +
+    '</div>' +
+    '<div id="memory-lab-overview-stage" class="memory-lab-overview-stage">' +
+      '<div class="memory-lab-overview-grid"></div>' +
+      '<svg id="memory-lab-overview-svg" class="memory-lab-overview-svg"></svg>' +
+      '<div class="memory-lab-overview-nodes">';
+  for (var i = 0; i < graph.nodes.length; i++) {
+    var node = graph.nodes[i];
+    html += '<button class="memory-lab-overview-node ' + escAttr(node.cls) + '" data-id="' + escAttr(node.id) + '" onclick="window.selectMemoryLabOverviewNode(\'' + escAttr(node.id) + '\')" title="' + escAttr(node.name + ' · ' + node.type) + '">' +
+      '<span class="memory-lab-overview-dot"></span><span class="memory-lab-overview-label">' + esc(node.name) + '</span></button>';
+  }
+  html += '</div><div id="memory-lab-overview-tip" class="memory-lab-overview-tip"><div class="memory-lab-overview-tip-name"></div><div class="memory-lab-overview-tip-type"></div></div></div></div>';
+  return html;
+};
+
+window.memoryLabTagButton = function(tag, node, selected) {
+  return '<button class="memory-lab-node' + (selected ? ' selected' : '') + '" onclick="window.selectMemoryLabTag(\'' + escAttr(tag) + '\')" title="' + escAttr(tag) + '">' +
+    '<span class="memory-lab-node-label">' + esc(tag) + '</span>' +
+    '<span class="memory-lab-node-count">' + (((node || {}).components || []).length) + '</span></button>';
+};
+
+window.memoryLabComponentButton = function(slug, meta, selected) {
+  if (!meta) return '';
+  return '<button class="memory-lab-node' + (selected ? ' selected' : '') + '" onclick="window.selectMemoryLabComponent(\'' + escAttr(slug) + '\')" title="' + escAttr((meta.name || slug) + ' - ' + (meta.description || '')) + '">' +
+    '<span class="memory-lab-node-label">' + esc(meta.name || slug) + '</span></button>';
+};
+
+window.switchMemoryLabView = function(view) {
+  state.memoryLabView = view === 'detail' ? 'detail' : 'overview';
+  if (state.memoryLabOverviewAnimation) {
+    cancelAnimationFrame(state.memoryLabOverviewAnimation);
+    state.memoryLabOverviewAnimation = null;
+  }
+  window.renderMemoryLab();
+};
+
+window.selectMemoryLabTag = function(tag) {
+  var current = state.memoryLabSelectedTag;
+  var node = state.memoryLab && state.memoryLab.index && state.memoryLab.index.tags ? state.memoryLab.index.tags[current] : null;
+  if (node && (node.parents || []).indexOf(tag) >= 0) state.memoryLabNavDirection = 'left';
+  else if (node && (node.children || []).indexOf(tag) >= 0) state.memoryLabNavDirection = 'right';
+  else state.memoryLabNavDirection = 'fade';
+  state.memoryLabSelectedTag = tag;
+  state.memoryLabSelectedComponent = '';
+  state.memoryLabSearchQuery = '';
+  if ((state.memoryLabView || 'overview') === 'overview') {
+    state.memoryLabOverviewFocus = 'tag:' + tag;
+  }
+  window.renderMemoryLab();
+};
+
+window.updateMemoryLabSearch = function(query) {
+  state.memoryLabSearchQuery = query || '';
+  var results = document.getElementById('memory-lab-search-results');
+  if (!results) return;
+  var lab = state.memoryLab || {};
+  var tags = Object.keys(((lab.index || {}).tags) || {}).sort();
+  var needle = String(query || '').trim().toLowerCase();
+  if (!needle) {
+    results.hidden = true;
+    results.innerHTML = '';
+    return;
+  }
+  var matches = tags.filter(function(tag) { return tag.toLowerCase().indexOf(needle) >= 0; }).slice(0, 12);
+  if (!matches.length) {
+    results.hidden = false;
+    results.innerHTML = '<div class="memory-lab-empty">' + esc(t('memoryLab.noSearchResults')) + '</div>';
+    return;
+  }
+  results.hidden = false;
+  results.innerHTML = matches.map(function(tag) {
+    return window.memoryLabTagButton(tag, lab.index.tags[tag], tag === state.memoryLabSelectedTag);
+  }).join('');
+};
+
+window.buildMemoryLabOverviewGraph = function(index) {
+  var tagNames = Object.keys(index.tags || {}).sort();
+  var components = index.components || {};
+  var nodes = [{ id: 'anchor', name: t('memoryLab.anchor'), type: 'Anchor', cls: 'anchor', x: 0, y: 0, fixed: true }];
+  var edges = [];
+  var rootTags = tagNames.filter(function(tag) {
+    return !((index.tags[tag] || {}).parents || []).filter(function(parent) { return !!index.tags[parent]; }).length;
+  });
+  for (var r = 0; r < rootTags.length; r++) edges.push(['anchor', 'tag:' + rootTags[r], 'child']);
+  for (var i = 0; i < tagNames.length; i++) {
+    var tag = tagNames[i];
+    var node = index.tags[tag] || {};
+    var parents = (node.parents || []).filter(function(parent) { return !!index.tags[parent]; });
+    var children = (node.children || []).filter(function(child) { return !!index.tags[child]; });
+    var cls = parents.length ? (children.length ? 'tag' : 'leaf') : 'root';
+    var ring = parents.length ? 2 : 1;
+    var angle = (i / Math.max(1, tagNames.length)) * Math.PI * 2;
+    nodes.push({ id: 'tag:' + tag, tag: tag, name: tag, type: cls === 'root' ? t('memoryLab.rootTags') : t('memoryLab.tags'), cls: cls, x: Math.cos(angle) * (150 + ring * 90), y: Math.sin(angle) * (120 + ring * 64), vx: 0, vy: 0 });
+    for (var p = 0; p < parents.length; p++) edges.push(['tag:' + parents[p], 'tag:' + tag, 'child']);
+    var componentSlugs = (node.components || []).filter(function(slug) { return !!components[slug]; }).sort();
+    for (var c = 0; c < componentSlugs.length; c++) edges.push(['tag:' + tag, 'component:' + componentSlugs[c], 'component']);
+  }
+  var componentSlugsAll = Object.keys(components).sort();
+  for (var j = 0; j < componentSlugsAll.length; j++) {
+    var slug = componentSlugsAll[j];
+    var meta = components[slug] || {};
+    var a = ((j + 0.35) / Math.max(1, componentSlugsAll.length)) * Math.PI * 2;
+    nodes.push({ id: 'component:' + slug, slug: slug, name: meta.name || slug, type: t('memoryLab.componentNode'), cls: 'addon', x: Math.cos(a) * 390, y: Math.sin(a) * 280, vx: 0, vy: 0 });
+  }
+  return { nodes: nodes, edges: edges, tags: tagNames, componentCount: componentSlugsAll.length };
+};
+
+window.initMemoryLabOverview = function() {
+  var graph = state.memoryLabOverviewGraph;
+  var stage = document.getElementById('memory-lab-overview-stage');
+  if (!graph || !stage) return;
+  if (state.memoryLabOverviewAnimation) cancelAnimationFrame(state.memoryLabOverviewAnimation);
+  var rect = stage.getBoundingClientRect();
+  if (!state.memoryLabOverviewCamera) state.memoryLabOverviewCamera = { x: rect.width / 2, y: rect.height / 2, scale: 0.88 };
+  state.memoryLabOverviewNodeMap = {};
+  for (var i = 0; i < graph.nodes.length; i++) {
+    graph.nodes[i].vx = graph.nodes[i].vx || 0;
+    graph.nodes[i].vy = graph.nodes[i].vy || 0;
+    state.memoryLabOverviewNodeMap[graph.nodes[i].id] = graph.nodes[i];
+  }
+  var camera = state.memoryLabOverviewCamera;
+  var pan = null;
+  stage.onpointerdown = function(event) {
+    if (event.target.closest('.memory-lab-overview-node') || event.target.closest('.memory-lab-overview-actions')) return;
+    pan = { sx: event.clientX, sy: event.clientY, ox: camera.x, oy: camera.y };
+    stage.setPointerCapture(event.pointerId);
+  };
+  stage.onpointermove = function(event) {
+    if (!pan) return;
+    camera.x = pan.ox + event.clientX - pan.sx;
+    camera.y = pan.oy + event.clientY - pan.sy;
+  };
+  stage.onpointerup = function() { pan = null; };
+  stage.onwheel = function(event) {
+    event.preventDefault();
+    var old = camera.scale;
+    var next = Math.max(0.36, Math.min(1.65, old * (event.deltaY < 0 ? 1.08 : 0.92)));
+    camera.x = event.clientX - (event.clientX - camera.x) * (next / old);
+    camera.y = event.clientY - (event.clientY - camera.y) * (next / old);
+    camera.scale = next;
+  };
+  window.renderMemoryLabOverviewFrame();
+};
+
+window.memoryLabOverviewFocusData = function(focusId) {
+  var graph = state.memoryLabOverviewGraph || { edges: [] };
+  var mode = state.memoryLabOverviewMode || 'both';
+  var nodes = new Set([focusId]);
+  var edges = new Set();
+  var parents = new Set();
+  var children = new Set();
+  function up(id) {
+    for (var i = 0; i < graph.edges.length; i++) {
+      var edge = graph.edges[i];
+      if (edge[1] === id && !edges.has(i)) {
+        edges.add(i); parents.add(i); nodes.add(edge[0]); up(edge[0]);
+      }
+    }
+  }
+  function down(id) {
+    for (var i = 0; i < graph.edges.length; i++) {
+      var edge = graph.edges[i];
+      if (edge[0] === id && !edges.has(i)) {
+        edges.add(i); children.add(i); nodes.add(edge[1]); down(edge[1]);
+      }
+    }
+  }
+  function direct(id) {
+    for (var i = 0; i < graph.edges.length; i++) {
+      var edge = graph.edges[i];
+      if (edge[0] === id || edge[1] === id) {
+        edges.add(i); nodes.add(edge[0]); nodes.add(edge[1]);
+        if (edge[1] === id) parents.add(i); else children.add(i);
+      }
+    }
+  }
+  if (mode === 'parents') up(focusId);
+  else if (mode === 'children') down(focusId);
+  else if (mode === 'direct') direct(focusId);
+  else { up(focusId); down(focusId); }
+  return { nodes: nodes, edges: edges, parents: parents, children: children };
+};
+
+window.renderMemoryLabOverviewFrame = function() {
+  var graph = state.memoryLabOverviewGraph;
+  var map = state.memoryLabOverviewNodeMap || {};
+  var stage = document.getElementById('memory-lab-overview-stage');
+  var svg = document.getElementById('memory-lab-overview-svg');
+  if (!graph || !stage || !svg) return;
+  var camera = state.memoryLabOverviewCamera || { x: stage.clientWidth / 2, y: stage.clientHeight / 2, scale: 0.88 };
+  function screen(node) { return { x: camera.x + node.x * camera.scale, y: camera.y + node.y * camera.scale }; }
+  for (var i = 0; i < graph.nodes.length; i++) { graph.nodes[i].fx = 0; graph.nodes[i].fy = 0; }
+  for (var a = 0; a < graph.nodes.length; a++) {
+    for (var b = a + 1; b < graph.nodes.length; b++) {
+      var na = graph.nodes[a], nb = graph.nodes[b];
+      var dx = na.x - nb.x, dy = na.y - nb.y, d2 = dx * dx + dy * dy + 700, d = Math.sqrt(d2), force = 52000 / d2;
+      if (!na.fixed) { na.fx += dx / d * force; na.fy += dy / d * force; }
+      if (!nb.fixed) { nb.fx -= dx / d * force; nb.fy -= dy / d * force; }
+    }
+  }
+  for (var e = 0; e < graph.edges.length; e++) {
+    var edge = graph.edges[e], source = map[edge[0]], target = map[edge[1]];
+    if (!source || !target) continue;
+    var edx = target.x - source.x, edy = target.y - source.y, dist = Math.hypot(edx, edy) || 1;
+    var wanted = edge[0] === 'anchor' ? 220 : edge[2] === 'component' ? 135 : 165;
+    var maxLen = edge[0] === 'anchor' ? 310 : edge[2] === 'component' ? 220 : 250;
+    var spring = (Math.min(dist, maxLen) - wanted) * 0.018;
+    if (!source.fixed) { source.fx += edx / dist * spring; source.fy += edy / dist * spring; }
+    if (!target.fixed) { target.fx -= edx / dist * spring; target.fy -= edy / dist * spring; }
+  }
+  for (var n = 0; n < graph.nodes.length; n++) {
+    var node = graph.nodes[n];
+    if (node.fixed) continue;
+    node.fx += -node.x * 0.0007;
+    node.fy += -node.y * 0.0007;
+    node.vx = ((node.vx || 0) + node.fx) * 0.86;
+    node.vy = ((node.vy || 0) + node.fy) * 0.86;
+    node.x += node.vx;
+    node.y += node.vy;
+  }
+  var focusId = state.memoryLabOverviewFocus || (state.memoryLabSelectedTag ? 'tag:' + state.memoryLabSelectedTag : '');
+  var focusData = focusId ? window.memoryLabOverviewFocusData(focusId) : null;
+  var nodeEls = stage.querySelectorAll('.memory-lab-overview-node');
+  for (var k = 0; k < nodeEls.length; k++) {
+    var el = nodeEls[k];
+    var current = map[el.dataset.id];
+    if (!current) continue;
+    var p = screen(current);
+    el.style.left = p.x + 'px';
+    el.style.top = p.y + 'px';
+    el.classList.toggle('focus', el.dataset.id === focusId);
+    el.classList.toggle('dim', !!focusData && !focusData.nodes.has(el.dataset.id));
+  }
+  var paths = '';
+  for (var m = 0; m < graph.edges.length; m++) {
+    var ee = graph.edges[m], s = map[ee[0]], tnode = map[ee[1]];
+    if (!s || !tnode) continue;
+    var sp = screen(s), tp = screen(tnode);
+    var cls = 'memory-lab-overview-link';
+    if (focusData) {
+      if (focusData.edges.has(m)) cls += ' hot' + (focusData.parents.has(m) ? ' parent' : '') + (focusData.children.has(m) ? ' child' : '');
+      else cls += ' dim';
+    }
+    paths += '<path class="' + cls + '" d="M ' + sp.x.toFixed(1) + ' ' + sp.y.toFixed(1) + ' L ' + tp.x.toFixed(1) + ' ' + tp.y.toFixed(1) + '"></path>';
+    if (focusData && focusData.edges.has(m)) {
+      paths += '<path class="memory-lab-overview-flow' + (focusData.parents.has(m) ? ' parent' : '') + (focusData.children.has(m) ? ' child' : '') + '" d="M ' + sp.x.toFixed(1) + ' ' + sp.y.toFixed(1) + ' L ' + tp.x.toFixed(1) + ' ' + tp.y.toFixed(1) + '"></path>';
+    }
+  }
+  svg.innerHTML = paths;
+  if (focusId && map[focusId]) {
+    var f = map[focusId];
+    camera.x += (stage.clientWidth / 2 - f.x * camera.scale - camera.x) * 0.06;
+    camera.y += (stage.clientHeight / 2 - f.y * camera.scale - camera.y) * 0.06;
+  }
+  var status = document.getElementById('memory-lab-overview-status');
+  if (status) {
+    var selected = focusId && map[focusId] ? map[focusId].name : '';
+    status.textContent = selected ? t('memoryLab.selected') + ': ' + selected : t('memoryLab.unselected');
+  }
+  state.memoryLabOverviewAnimation = requestAnimationFrame(window.renderMemoryLabOverviewFrame);
+};
+
+window.selectMemoryLabOverviewNode = function(id) {
+  var map = state.memoryLabOverviewNodeMap || {};
+  var node = map[id];
+  if (!node) return;
+  state.memoryLabOverviewFocus = state.memoryLabOverviewFocus === id ? '' : id;
+  if (node.tag) {
+    state.memoryLabSelectedTag = node.tag;
+    state.memoryLabSelectedComponent = '';
+  }
+  if (node.slug) {
+    state.memoryLabSelectedComponent = node.slug;
+    window.loadMemoryLab(node.slug);
+  }
+};
+
+window.setMemoryLabOverviewMode = function(mode) {
+  state.memoryLabOverviewMode = ['both', 'parents', 'children', 'direct'].indexOf(mode) >= 0 ? mode : 'both';
+};
+
+window.clearMemoryLabOverviewFocus = function() {
+  state.memoryLabOverviewFocus = '';
+};
+
+window.resetMemoryLabOverview = function() {
+  state.memoryLabOverviewCamera = null;
+  state.memoryLabOverviewFocus = '';
+  window.renderMemoryLab();
+};
+
+window.selectMemoryLabComponent = function(slug) {
+  state.memoryLabSelectedComponent = slug;
+  if ((state.memoryLabView || 'overview') === 'overview') state.memoryLabOverviewFocus = 'component:' + slug;
+  window.loadMemoryLab(slug);
+};
+
+window.reindexMemoryLab = function() {
+  if (!api.memoryLabReindex) return;
+  api.memoryLabReindex().then(function(result) {
+    state.memoryLab = result || state.memoryLab;
+    addMsg('assistant', '[Memory Lab] ' + (result && result.ok ? t('memoryLab.updated') : t('memoryLab.updateFailed')), result && result.ok ? 'success' : 'error', '');
+    window.renderMemoryLab();
+  });
+};
+
 // === Plugin List Placeholder ===
 window.showPluginList = function() {
   window.openSubWin(t('plugins.managerTitle'), '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:20px;">' + esc(t('plugins.noPlugins')) + '<br><br><button class="sec-btn primary" onclick="window.closeSubWin()">' + esc(t('common.close')) + '</button></div>');
@@ -7034,13 +7997,23 @@ window.renderSkillsMarket = function() {
   var panel = document.getElementById('plugin-panel');
   if (!panel) return;
   panel.innerHTML = '<div class="provider-card marquee-border">' + esc(t('plugins.discovering')) + '</div>';
-  var render = function(market) {
-    market = market || [];
-    state._skillMarketAll = market;
-    window.renderSkillsMarketList();
+  state._skillMarketAll = [];
+  state._skillMarketSources = [];
+  var done = 0;
+  var finish = function() {
+    done++;
+    if (done >= 2) window.renderSkillsMarketList();
   };
-  if (api.marketSkills) api.marketSkills().then(render).catch(function(){ render([]); });
-  else render([]);
+  if (api.marketSkillSources) api.marketSkillSources().then(function(sources) {
+    state._skillMarketSources = sources || [];
+    finish();
+  }).catch(function(){ state._skillMarketSources = []; finish(); });
+  else finish();
+  if (api.marketSkills) api.marketSkills().then(function(market) {
+    state._skillMarketAll = market || [];
+    finish();
+  }).catch(function(){ state._skillMarketAll = []; finish(); });
+  else finish();
 };
 
 window.filteredSkillMarket = function() {
@@ -7052,6 +8025,7 @@ window.filteredSkillMarket = function() {
       item.name || '',
       item.description || item.desc || '',
       item.source || '',
+      item.marketSourceName || '',
       item.path || '',
       item.url || ''
     ].join(' ').toLowerCase();
@@ -7066,6 +8040,7 @@ window.renderSkillsMarketList = function() {
   var total = (state._skillMarketAll || []).length;
   var query = state.skillMarketQuery || '';
   var html = '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">' + esc(t('plugins.marketHelp')) + '</div>' +
+    window.renderSkillMarketSources() +
     '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">' +
     '<input id="skill-market-search" value="' + esc(query) + '" oninput="window.updateSkillMarketSearch(this.value)" placeholder="' + escAttr(t('plugins.search')) + '" style="flex:1;min-width:0;border:1px solid var(--glass-border-2);background:var(--glass-bg-1);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;outline:none;">' +
     '<button class="sec-btn" onclick="window.clearSkillMarketSearch()">' + esc(t('common.clear')) + '</button>' +
@@ -7080,7 +8055,7 @@ window.renderSkillsMarketList = function() {
         ? '<button class="sec-btn" disabled>' + esc(t('plugins.installed')) + '</button>'
         : '<button class="sec-btn primary" onclick="window.installMarketSkill(' + sourceIdx + ')">' + esc(t('plugins.install')) + '</button>';
       html += '<div class="provider-card" style="display:flex;align-items:center;gap:10px;">' +
-        '<div style="flex:1;min-width:0;"><div style="display:flex;gap:6px;align-items:center;"><span style="font-size:13px;color:var(--text);font-weight:600;">' + esc(item.name) + '</span><span style="font-size:10px;color:var(--text-dim);">' + esc(item.source || '') + '</span></div>' +
+        '<div style="flex:1;min-width:0;"><div style="display:flex;gap:6px;align-items:center;"><span style="font-size:13px;color:var(--text);font-weight:600;">' + esc(item.name) + '</span><span style="font-size:10px;color:var(--text-dim);">' + esc(item.source || '') + '</span><span style="font-size:10px;color:var(--text-dim);">' + esc(item.marketSourceName || '') + '</span></div>' +
         '<div style="font-size:11px;color:var(--text-dim);">' + esc(item.description || item.desc || t('plugins.noDescription')) + '</div>' +
         '<div style="font-size:10px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(item.path || item.url || '') + '</div></div>' +
         action +
@@ -7093,6 +8068,68 @@ window.renderSkillsMarketList = function() {
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
   }
+};
+
+window.renderSkillMarketSources = function() {
+  var sources = state._skillMarketSources || [];
+  var html = '<div class="provider-card" style="margin-bottom:10px;">' +
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><div style="font-size:12px;color:var(--text);font-weight:700;flex:1;">' + esc(t('plugins.sources')) + '</div></div>' +
+    '<div style="display:grid;grid-template-columns:1fr 120px 1.4fr auto;gap:8px;margin-bottom:8px;">' +
+    '<input id="skill-market-source-name" placeholder="' + escAttr(t('plugins.sourceName')) + '" style="min-width:0;border:1px solid var(--glass-border-2);background:var(--glass-bg-1);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;outline:none;">' +
+    '<select id="skill-market-source-type" style="min-width:0;border:1px solid var(--glass-border-2);background:var(--glass-bg-1);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;outline:none;"><option value="json">json</option><option value="skill-url">skill-url</option><option value="local-dir">local-dir</option></select>' +
+    '<input id="skill-market-source-location" placeholder="' + escAttr(t('plugins.sourceLocation')) + '" style="min-width:0;border:1px solid var(--glass-border-2);background:var(--glass-bg-1);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;outline:none;">' +
+    '<button class="sec-btn primary" onclick="window.addSkillMarketSourceFromUi()">' + esc(t('plugins.addSource')) + '</button>' +
+    '</div>';
+  if (!sources.length) html += '<div style="font-size:11px;color:var(--text-dim);">' + esc(t('plugins.noSources')) + '</div>';
+  for (var i = 0; i < sources.length; i++) {
+    var s = sources[i];
+    var loc = s.url || s.path || '';
+    html += '<div style="display:flex;align-items:center;gap:8px;border-top:1px solid var(--glass-border-1);padding-top:8px;margin-top:8px;">' +
+      '<div style="flex:1;min-width:0;"><div style="font-size:12px;color:var(--text);font-weight:600;">' + esc(s.name || s.id) + ' <span style="font-size:10px;color:var(--text-dim);">' + esc(s.type || '') + (s.builtin ? ' ' + esc(t('plugins.builtinSource')) : '') + '</span></div>' +
+      '<div style="font-size:10px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(loc) + '</div></div>';
+    if (s.builtin) {
+      html += '<button class="sec-btn" disabled>' + esc(t('plugins.builtinSource')) + '</button>';
+    } else {
+      html += '<button class="sec-btn" onclick="window.setSkillMarketSourceEnabledFromUi(\'' + esc(s.id) + '\',' + (!s.enabled) + ')">' + (s.enabled ? esc(t('common.disable')) : esc(t('common.enable'))) + '</button>' +
+        '<button class="sec-btn" onclick="window.removeSkillMarketSourceFromUi(\'' + esc(s.id) + '\')">' + esc(t('common.remove')) + '</button>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+};
+
+window.addSkillMarketSourceFromUi = function() {
+  if (!api.addSkillMarketSource) return;
+  var nameEl = document.getElementById('skill-market-source-name');
+  var typeEl = document.getElementById('skill-market-source-type');
+  var locEl = document.getElementById('skill-market-source-location');
+  var name = nameEl ? nameEl.value.trim() : '';
+  var type = typeEl ? typeEl.value : 'json';
+  var location = locEl ? locEl.value.trim() : '';
+  var input = { name: name, type: type };
+  if (type === 'local-dir' || (!/^https?:\/\//i.test(location) && type !== 'skill-url')) input.path = location;
+  else input.url = location;
+  api.addSkillMarketSource(input).then(function(r) {
+    addMsg('assistant', '[Skills] ' + (r.ok ? t('plugins.sourceAdded') + name : t('plugins.sourceFailed') + (r.error || name)), r.ok ? 'success' : 'error', '');
+    window.renderSkillsMarket();
+  });
+};
+
+window.removeSkillMarketSourceFromUi = function(id) {
+  if (!api.removeSkillMarketSource) return;
+  api.removeSkillMarketSource(id).then(function(r) {
+    addMsg('assistant', '[Skills] ' + (r.ok ? t('plugins.sourceRemoved') + id : t('plugins.sourceFailed') + id), r.ok ? 'success' : 'error', '');
+    window.renderSkillsMarket();
+  });
+};
+
+window.setSkillMarketSourceEnabledFromUi = function(id, enabled) {
+  if (!api.setSkillMarketSourceEnabled) return;
+  api.setSkillMarketSourceEnabled(id, enabled).then(function(r) {
+    addMsg('assistant', '[Skills] ' + (r.ok ? (enabled ? 'Enabled: ' : 'Disabled: ') : t('plugins.sourceFailed')) + id, r.ok ? 'success' : 'error', '');
+    window.renderSkillsMarket();
+  });
 };
 
 window.updateSkillMarketSearch = function(value) {
@@ -7108,7 +8145,7 @@ window.clearSkillMarketSearch = function() {
 window.installMarketSkill = function(idx) {
   var item = state._skillMarket && state._skillMarket[idx];
   if (!item) return;
-  if (item.source === 'codex' && api.installLocalSkill) {
+  if (item.path && api.installLocalSkill) {
     api.installLocalSkill(item.path, item.name).then(function(r) {
       addMsg('assistant', '[Skills] ' + (r.ok ? 'Installed: ' : 'Install failed: ') + item.name, r.ok ? 'success' : 'error', '');
       window.refreshSkillsRuntime(function(){ window.showPluginList('market'); });

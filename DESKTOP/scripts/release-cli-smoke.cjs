@@ -231,6 +231,50 @@ function startMockServer() {
     JSON.parse(market.stdout);
     log('skills-market ok');
 
+    const memoryContentFile = path.join(root, 'release-cli-memory.md');
+    fs.writeFileSync(memoryContentFile, [
+      '# Release CLI Memory',
+      '',
+      'ReleaseCliMemoryNeedle proves packaged memory-lab update/read.',
+    ].join('\n'), 'utf8');
+    const memoryUpdate = await runPowerShellCli([
+      'memory-lab',
+      '--update',
+      '--name', 'release-cli-memory',
+      '--description', 'Release CLI Memory Lab smoke component',
+      '--tags', '#Release-CLI,#Agent-Skill',
+      '--content-file', memoryContentFile,
+      '--root', root,
+    ], root);
+    const parsedMemoryUpdate = JSON.parse(memoryUpdate.stdout);
+    if (parsedMemoryUpdate.ok !== true) fail(`memory-lab update failed: ${memoryUpdate.stdout}`);
+    if (!parsedMemoryUpdate.index?.tags?.['#Release-CLI']?.components?.includes('release-cli-memory')) {
+      fail(`memory-lab update did not link component to deepest Release tag: ${memoryUpdate.stdout}`);
+    }
+    if (!parsedMemoryUpdate.index?.tags?.['#Release']?.children?.includes('#Release-CLI')) {
+      fail(`memory-lab update did not create Release parent tag: ${memoryUpdate.stdout}`);
+    }
+    if (!parsedMemoryUpdate.index?.tags?.['#Agent']?.children?.includes('#Agent-Skill')) {
+      fail(`memory-lab update did not create Agent parent tag: ${memoryUpdate.stdout}`);
+    }
+    const memoryRead = await runPowerShellCli(['memory-lab', '--component', 'release-cli-memory', '--root', root], root);
+    const parsedMemoryRead = JSON.parse(memoryRead.stdout);
+    if (parsedMemoryRead.ok !== true || !parsedMemoryRead.component?.content?.includes('ReleaseCliMemoryNeedle')) {
+      fail(`memory-lab read did not return component core markdown: ${memoryRead.stdout}`);
+    }
+    if (!String(parsedMemoryRead.indexPath || '').startsWith(path.join(root, 'Memory Lab'))) {
+      fail(`memory-lab read returned index outside requested root: ${memoryRead.stdout}`);
+    }
+    if (!String(parsedMemoryRead.instructions || '').includes('Memory Lab')) {
+      fail(`memory-lab read did not return usage instructions: ${memoryRead.stdout}`);
+    }
+    const memoryReindex = await runPowerShellCli(['memory-lab', '--reindex', '--root', root], root);
+    const parsedMemoryReindex = JSON.parse(memoryReindex.stdout);
+    if (parsedMemoryReindex.ok !== true || !parsedMemoryReindex.index?.tags?.['#Release-CLI']?.components?.includes('release-cli-memory')) {
+      fail(`memory-lab reindex did not preserve component links: ${memoryReindex.stdout}`);
+    }
+    log('memory-lab ok');
+
     const anthropicKey = 'test-key-release-cli';
     const fuzzy = await runPowerShellCli([
       'fuzzy-inject',

@@ -12,6 +12,7 @@ import { FlowEngine } from './core/flow';
 import { runFlow } from './core/flow-runner';
 import { CLI_COMMANDS, runCliCommand } from './cli-commands';
 import { mergeProviderSecrets, sanitizeProvidersForState } from './core/config';
+import { MemoryLabManager } from './core/memoryLab';
 
 let mainWindow: BrowserWindow | null = null;
 let agent: Agent | null = null;
@@ -62,9 +63,10 @@ function positionalAfter(args: string[], commandName: string): string[] {
 // First-run initialization
 function firstRunInit(root: string): void {
   fs.mkdirSync(root, { recursive: true });
-  for (const d of ['skills', 'Work', 'Flow', 'archive']) {
+  for (const d of ['skills', 'Work', 'Flow', 'archive', 'Memory Lab']) {
     fs.mkdirSync(path.join(root, d), { recursive: true });
   }
+  new MemoryLabManager(root).ensure();
 
   const cp = path.join(root, 'config.json');
   if (!fs.existsSync(cp)) {
@@ -1020,7 +1022,41 @@ if (hasCliCommand) {
 
     ipcMain.handle('skills:market', async () => {
       if (!agent) return [];
-      return agent.skills.discoverMarket();
+      return agent.skills.discoverMarketAsync();
+    });
+
+    ipcMain.handle('skills:marketSources', async () => {
+      if (!agent) return [];
+      return agent.skills.listMarketSources();
+    });
+
+    ipcMain.handle('skills:addMarketSource', async (_event, input: Record<string, unknown>) => {
+      if (!agent) return { ok: false, error: 'Agent not ready' };
+      try {
+        const source = agent.skills.addMarketSource({
+          id: typeof input?.id === 'string' ? input.id : undefined,
+          name: typeof input?.name === 'string' ? input.name : '',
+          type: typeof input?.type === 'string' ? input.type as any : undefined,
+          url: typeof input?.url === 'string' ? input.url : undefined,
+          path: typeof input?.path === 'string' ? input.path : undefined,
+          enabled: typeof input?.enabled === 'boolean' ? input.enabled : undefined,
+        });
+        return { ok: true, source, sources: agent.skills.listMarketSources() };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    });
+
+    ipcMain.handle('skills:removeMarketSource', async (_event, idOrName: string) => {
+      if (!agent) return { ok: false, error: 'Agent not ready' };
+      const ok = agent.skills.removeMarketSource(idOrName);
+      return { ok, sources: agent.skills.listMarketSources() };
+    });
+
+    ipcMain.handle('skills:setMarketSourceEnabled', async (_event, idOrName: string, enabled: boolean) => {
+      if (!agent) return { ok: false, error: 'Agent not ready' };
+      const ok = agent.skills.setMarketSourceEnabled(idOrName, enabled);
+      return { ok, sources: agent.skills.listMarketSources() };
     });
 
     ipcMain.handle('skills:download', async (_event, name: string, url: string) => {
@@ -1055,6 +1091,32 @@ if (hasCliCommand) {
       if (!agent) return [];
       agent.refreshSkills();
       return agent.skills.listDetailed();
+    });
+
+    ipcMain.handle('memoryLab:read', async (_event, selector?: string) => {
+      if (!agent) return { ok: false, error: 'Agent not ready' };
+      return agent.memoryLab.read(selector || '');
+    });
+
+    ipcMain.handle('memoryLab:update', async (_event, input: Record<string, unknown>) => {
+      if (!agent) return { ok: false, error: 'Agent not ready' };
+      try {
+        return await agent.updateMemoryLab({
+          name: String(input.name || ''),
+          description: String(input.description || ''),
+          tags: Array.isArray(input.tags) ? input.tags.map(String) : String(input.tags || '').split(/[,，\n]+/),
+          content: String(input.content || ''),
+          kind: input.kind === 'folder' ? 'folder' : 'file',
+        });
+      } catch (e) {
+        const read = agent.memoryLab.read();
+        return { ...read, ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    });
+
+    ipcMain.handle('memoryLab:reindex', async () => {
+      if (!agent) return { ok: false, error: 'Agent not ready' };
+      return agent.reindexMemoryLab();
     });
 
     ipcMain.handle('github:gh', async (_event, argv: string[] = []) => {

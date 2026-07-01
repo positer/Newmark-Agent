@@ -4,6 +4,8 @@ import { Agent, AgentMode } from './core/agent';
 import { ConfigManager, ModelEvaluation, ProviderProtocol, inferProviderProtocol } from './core/config';
 import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, providerNameFromUrl, tokenizeFuzzyProviderInput } from './core/fuzzy';
 import { LLMProvider } from './llm/provider';
+import { discoverAgentPresets, discoverOpenCodeTools, discoverPluginManifests, discoverPluginMarketplaces, runOpenCodeTool } from './core/compat';
+import { MemoryLabManager } from './core/memoryLab';
 
 type JsonObject = Record<string, unknown>;
 type FuzzyEnvDefaults = {
@@ -14,7 +16,7 @@ type FuzzyEnvDefaults = {
   models?: string[];
 };
 
-export const CLI_COMMANDS = ['state', 'tool', 'send', 'validate-models', 'fuzzy-inject', 'skills-market'] as const;
+export const CLI_COMMANDS = ['state', 'tool', 'send', 'validate-models', 'fuzzy-inject', 'skills-market', 'memory-lab', 'compat', 'compat-tool'] as const;
 
 function argValue(args: string[], key: string): string | undefined {
   const idx = args.indexOf(key);
@@ -70,6 +72,14 @@ function positionalAfter(args: string[], commandName: string): string[] {
       '--candidate-models',
       '--protocol',
       '--query',
+      '--type',
+      '--path',
+      '--source-id',
+      '--remove-source',
+      '--enable-source',
+      '--disable-source',
+      '--target',
+      '--list',
     ].includes(arg)) { i++; continue; }
     if (!arg.startsWith('--')) values.push(arg);
   }
@@ -105,6 +115,19 @@ function parseToolArgs(tokens: string[], rawInput: string | undefined): { ok: tr
     result[key] = value;
   }
   return { ok: true, value: result };
+}
+
+function argsAfterOption(args: string[], key: string): string[] {
+  const idx = args.indexOf(key);
+  if (idx < 0) return [];
+  const values: string[] = [];
+  for (let i = idx + 2; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--root') { i++; continue; }
+    if (arg.startsWith('--')) break;
+    values.push(arg);
+  }
+  return values;
 }
 
 function argValueFromFile(args: string[], key: string): string | undefined {
@@ -532,8 +555,48 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
   }
 
   if (command === 'skills-market') {
+    if (args.includes('--sources')) {
+      printJson({ ok: true, sources: agent.skills.listMarketSources() });
+      return true;
+    }
+    if (args.includes('--add-source')) {
+      const name = argValue(args, '--name') || positionalAfter(args, 'skills-market')[0] || '';
+      const type = argValue(args, '--type') as 'json' | 'skill-url' | 'local-dir' | undefined;
+      const url = argValue(args, '--url');
+      const sourcePath = argValue(args, '--path');
+      const id = argValue(args, '--source-id');
+      try {
+        const source = agent.skills.addMarketSource({ id, name, type, url, path: sourcePath });
+        printJson({ ok: true, source, sources: agent.skills.listMarketSources() });
+      } catch (e) {
+        printJson({ ok: false, error: e instanceof Error ? e.message : String(e) });
+        process.exitCode = 1;
+      }
+      return true;
+    }
+    const removeSource = argValue(args, '--remove-source');
+    if (removeSource) {
+      const ok = agent.skills.removeMarketSource(removeSource);
+      printJson({ ok, sources: agent.skills.listMarketSources() });
+      if (!ok) process.exitCode = 1;
+      return true;
+    }
+    const enableSource = argValue(args, '--enable-source');
+    if (enableSource) {
+      const ok = agent.skills.setMarketSourceEnabled(enableSource, true);
+      printJson({ ok, sources: agent.skills.listMarketSources() });
+      if (!ok) process.exitCode = 1;
+      return true;
+    }
+    const disableSource = argValue(args, '--disable-source');
+    if (disableSource) {
+      const ok = agent.skills.setMarketSourceEnabled(disableSource, false);
+      printJson({ ok, sources: agent.skills.listMarketSources() });
+      if (!ok) process.exitCode = 1;
+      return true;
+    }
     const query = argValue(args, '--query') || positionalAfter(args, 'skills-market').join(' ');
-    const all = agent.skills.discoverMarket();
+    const all = await agent.skills.discoverMarketAsync();
     const filtered = filterSkillMarket(all, query);
     printJson({
       query: (query || '').trim(),
@@ -541,6 +604,111 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
       count: filtered.length,
       items: filtered,
     });
+    return true;
+  }
+
+  if (command === 'memory-lab') {
+    const lab = new MemoryLabManager(root);
+    if (args.includes('--update')) {
+      const content = argValueFromFile(args, '--content-file') || argValue(args, '--content') || '';
+      try {
+        printJson(await agent.updateMemoryLab({
+          name: argValue(args, '--name') || '',
+          description: argValue(args, '--description') || '',
+          tags: splitList(argValue(args, '--tags')),
+          content,
+          kind: args.includes('--folder') ? 'folder' : 'file',
+        }));
+      } catch (e) {
+        printJson({ ...lab.read(), ok: false, error: e instanceof Error ? e.message : String(e) });
+        process.exitCode = 1;
+      }
+      return true;
+    }
+    if (args.includes('--reindex')) {
+      printJson(await agent.reindexMemoryLab());
+      return true;
+    }
+    const component = argValue(args, '--component') || positionalAfter(args, 'memory-lab')[0] || '';
+    if (args.includes('--read') || args.includes('--index') || component) {
+      printJson(lab.read(component));
+      return true;
+    }
+    printJson(lab.read());
+    return true;
+  }
+
+  if (command === 'compat') {
+    const target = (argValue(args, '--target') || positionalAfter(args, 'compat')[0] || 'all').toLowerCase();
+    const canonicalTools = agent.tools.canonicalDefinitions(agent.mode);
+    const plugins = discoverPluginManifests(root);
+    const payload: JsonObject = {
+      ok: true,
+      root,
+      target,
+      compatibility: {
+        tool_schemas: ['openai_chat_completions', 'openai_responses', 'anthropic_input_schema'],
+        plugin_ecosystems: ['codex', 'claude-code', 'opencode', 'newmark'],
+        marketplace_ecosystems: ['codex', 'claude-code', 'newmark'],
+        plugin_execution: 'metadata-only by default; OpenCode JavaScript tools require explicit compat-tool invocation.',
+        mcp_activation: 'discovered from plugin/config metadata but not auto-started.',
+        subagent_return_contract: 'structured NewmarkSubagentRecord embedded in NewmarkToolResult while preserving legacy text output.',
+      },
+    };
+    if (target === 'all' || target === 'tools') {
+      payload.tools = {
+        canonical: canonicalTools,
+        openai_chat: agent.tools.openAIChatDefinitions(agent.mode),
+        openai_responses: agent.tools.openAIResponsesDefinitions(agent.mode),
+        anthropic: agent.tools.anthropicDefinitions(agent.mode),
+      };
+    }
+    if (target === 'all' || target === 'plugins') {
+      payload.plugins = plugins;
+    }
+    if (target === 'all' || target === 'marketplaces') {
+      payload.marketplaces = discoverPluginMarketplaces(root);
+    }
+    if (target === 'all' || target === 'skills') {
+      payload.skills = agent.skills.discoverMarket();
+    }
+    if (target === 'all' || target === 'agents') {
+      payload.agents = discoverAgentPresets(root);
+    }
+    if (target === 'all' || target === 'subagents') {
+      payload.subagent_schema = {
+        status: ['idle', 'working', 'completed', 'closed', 'error'],
+        record_fields: ['id', 'name', 'status', 'active', 'model', 'mode', 'inputMode', 'prompt', 'result', 'messages', 'error', 'startedAt', 'completedAt', 'closedAt', 'metadata'],
+        tool_result_fields: ['ok', 'output', 'data', 'error', 'metadata'],
+      };
+      payload.subagents = agent.subagents.listAll().map(s => agent.subagents.toRecord(s.id));
+    }
+    printJson(payload);
+    return true;
+  }
+
+  if (command === 'compat-tool') {
+    if (args.includes('--list')) {
+      printJson({ ok: true, tools: discoverOpenCodeTools(root) });
+      return true;
+    }
+    const positional = positionalAfter(args, 'compat-tool');
+    const name = argValue(args, '--name') || positional[0] || '';
+    if (!name) {
+      process.stderr.write('Usage: Newmark.exe compat-tool --list | --name <opencode-tool> [json-args | --args-file path] [--root <dir>]\n');
+      process.exitCode = 1;
+      return true;
+    }
+    const parsedArgs = parseToolArgs(
+      argsAfterOption(args, '--name').length ? argsAfterOption(args, '--name') : positional.slice(1),
+      argValue(args, '--args') || argValueFromFile(args, '--args-file') || argValue(args, '--input')
+    );
+    if (!parsedArgs.ok) {
+      process.stderr.write(`CLI compat-tool argument error: ${parsedArgs.error}\n`);
+      process.exitCode = 1;
+      return true;
+    }
+    printJson(await runOpenCodeTool(root, name, parsedArgs.value));
     return true;
   }
 
@@ -555,7 +723,10 @@ export function cliCommandUsage(): string {
     '  Newmark.exe send <prompt> [--input-env ENV|--input-file path] [--mode build|plan|goal|flow] [--model <model>] [--language auto|en|zh] [--conversation <id>] [--root <dir>]',
     '  Newmark.exe validate-models [--selected provider/model,model] [--root <dir>]',
     '  Newmark.exe fuzzy-inject [--name <provider>] [--env-file <PowerShell-or-dotenv-file>|--env-file-env <ENV_WITH_FILE_PATH>] [--endpoint-env <ENV_WITH_BASE_URL>] [--key-env <ENV_WITH_API_KEY>] [--protocol openai|anthropic] [--preview-only] [--root <dir>]',
-    '  Newmark.exe skills-market [--query <text>] [--root <dir>]',
+    '  Newmark.exe skills-market [--query <text>|--sources|--add-source --name <name> (--url <url>|--path <path>) [--type json|skill-url|local-dir]|--remove-source <id>|--enable-source <id>|--disable-source <id>] [--root <dir>]',
+    '  Newmark.exe memory-lab [--read|--component <name>|--update --name <name> --description <text> --tags <csv> --content-file <path> [--folder]|--reindex] [--root <dir>]',
+    '  Newmark.exe compat [--target all|tools|plugins|marketplaces|skills|agents|subagents] [--root <dir>]',
+    '  Newmark.exe compat-tool --list | --name <opencode-tool> [json-args | --args-file path] [--root <dir>]',
     `Working directory fallback: ${path.resolve('.')}`,
   ].join('\n');
 }

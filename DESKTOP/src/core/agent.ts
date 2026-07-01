@@ -6,10 +6,12 @@ import { LLMProvider } from '../llm/provider';
 import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, tokenizeFuzzyProviderInput } from './fuzzy';
 import { ToolExecutor } from '../tools/index';
 import { WorkspaceInfo, WorkspaceManager } from './workspace';
-import { SubagentManager } from './subagent';
+import { NewmarkSubagentToolResult, SubagentManager } from './subagent';
+import { NewmarkAgentPreset, findAgentPreset } from './compat';
 import { SkillsManager } from './skills';
 import { FlowEngine, FlowWorkflow } from './flow';
 import { AutomationCondition, AutomationManager, AutomationSchedule } from './automation';
+import { MemoryLabManager, MemoryLabPreparedUpdate, MemoryLabUpdateInput, MemoryLabWriteResult } from './memoryLab';
 import {
   AgentMode, InputMode, AgentStatus, StreamToken,
   ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff,
@@ -76,6 +78,7 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - flow_list: List saved workflows
 - flow_save: Design or update a saved workflow
 - flow_run: Trigger a saved workflow
+- memory_lab_read / memory_lab_update / memory_lab_reindex: access and update Memory Lab persistent memory through the dedicated Memory Lab tool interface
 - automation_list / automation_create / automation_update / automation_toggle / automation_delete: inspect and manage persisted Newmark automations through the active scheduler
 - gh_auth_status / gh_repo_view / gh_issue_list / gh_pr_list: communicate with GitHub CLI
 - git_clone: Clone a git repository
@@ -123,6 +126,7 @@ export class Agent {
   public subagents: SubagentManager;
   public tools: ToolExecutor;
   public skills: SkillsManager;
+  public memoryLab: MemoryLabManager;
   public mode: AgentMode;
   public inputMode: InputMode;
   public status: AgentStatus = 'idle';
@@ -183,6 +187,7 @@ export class Agent {
     this.workspace = new WorkspaceManager(rootPath, this.config);
     this.tools = new ToolExecutor(rootPath, this.config);
     this.skills = new SkillsManager(rootPath);
+    this.memoryLab = new MemoryLabManager(rootPath);
     this.subagents = new SubagentManager();
 
     if (this.mode === 'goal' && !this.goal) {
@@ -970,19 +975,19 @@ export class Agent {
           allTokens.push({ type: 'text', text: result });
           msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
         } else if (tc.name === 'task') {
-          const result = await this.handleSubagent(tc.arguments);
+          const result = (await this.handleSubagentEnvelope(tc.arguments)).output;
           allTokens.push({ type: 'text', text: result });
           msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
         } else if (tc.name === 'subagent_send') {
-          const result = await this.handleSubagentContinue(tc.arguments);
+          const result = (await this.handleSubagentContinueEnvelope(tc.arguments)).output;
           allTokens.push({ type: 'text', text: result });
           msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
         } else if (tc.name === 'subagent_result') {
-          const result = this.handleSubagentResult(tc.arguments);
+          const result = this.handleSubagentResultEnvelope(tc.arguments).output;
           allTokens.push({ type: 'text', text: result });
           msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
         } else if (tc.name === 'subagent_close') {
-          const result = this.handleSubagentClose(tc.arguments);
+          const result = this.handleSubagentCloseEnvelope(tc.arguments).output;
           allTokens.push({ type: 'text', text: result });
           msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
         } else if (tc.name === 'question') {
@@ -1001,6 +1006,10 @@ export class Agent {
           msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
         } else if (tc.name === 'flow_run') {
           const result = await this.handleFlowRun(tc.arguments);
+          allTokens.push({ type: 'text', text: result });
+          msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
+        } else if (tc.name.startsWith('memory_lab_')) {
+          const result = await this.handleMemoryLabTool(tc.name, tc.arguments);
           allTokens.push({ type: 'text', text: result });
           msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
         } else if (tc.name.startsWith('automation_')) {
@@ -1039,57 +1048,113 @@ export class Agent {
   }
 
   private async handleSubagent(args: string): Promise<string> {
+    return (await this.handleSubagentEnvelope(args)).output;
+  }
+
+  private async handleSubagentEnvelope(args: string): Promise<NewmarkSubagentToolResult> {
     try {
       const params = JSON.parse(args);
-      const name = params.name || 'subagent';
-      const prompt = params.prompt || '';
-      if (!name || !prompt) return '[Subagent] Name and prompt required.';
+      const preset = this.resolveSubagentPreset(params);
+      const name = params.name || preset?.name || 'subagent';
+      const prompt = this.buildSubagentPrompt(String(params.prompt || ''), preset);
+      if (!name || !prompt) return { ok: false, output: '[Subagent] Name and prompt required.', error: 'Name and prompt required.' };
       const id = this.subagents.create(
         name,
         prompt,
-        params.model || this.model,
-        params.input_mode || 'guide',
-        params.mode || 'build'
+        params.model || preset?.model || this.model,
+        params.input_mode || params.inputMode || preset?.inputMode || 'guide',
+        params.mode || preset?.mode || 'build'
       );
+      const sa = this.subagents.get(id);
+      if (sa && preset) {
+        sa.metadata = {
+          ...(sa.metadata || {}),
+          preset: {
+            id: preset.id,
+            ecosystem: preset.ecosystem,
+            path: preset.path,
+            tools: preset.tools || [],
+            disallowedTools: preset.disallowedTools || [],
+            skills: preset.skills || [],
+            maxTurns: preset.maxTurns,
+            isolation: preset.isolation,
+          },
+        };
+      }
       const result = await this.runSubagentPrompt(id, prompt, params.flow || '');
-      return `[Subagent '${name}' (${id}) completed]\n${result}`;
-    } catch { return '[Subagent] Invalid arguments.'; }
+      return this.subagents.toToolResult(id, `[Subagent '${name}' (${id}) completed]\n${result}`, !result.startsWith('[Subagent Error]'));
+    } catch { return { ok: false, output: '[Subagent] Invalid arguments.', error: 'Invalid arguments.' }; }
+  }
+
+  private resolveSubagentPreset(params: Record<string, unknown>): NewmarkAgentPreset | null {
+    const selector = String(params.preset || params.agent || params.agent_preset || '').trim();
+    if (!selector) return null;
+    return findAgentPreset(this.rootPath, selector);
+  }
+
+  private buildSubagentPrompt(prompt: string, preset: NewmarkAgentPreset | null): string {
+    if (!preset) return prompt;
+    const parts = [
+      `[Agent preset: ${preset.ecosystem}:${preset.name}]`,
+      preset.instructions ? `[Preset Instructions]\n${preset.instructions}` : '',
+      preset.tools?.length ? `[Allowed Tools]\n${preset.tools.join(', ')}` : '',
+      preset.disallowedTools?.length ? `[Disallowed Tools]\n${preset.disallowedTools.join(', ')}` : '',
+      preset.skills?.length ? `[Preset Skills]\n${preset.skills.join(', ')}` : '',
+      prompt ? `[Delegated Task]\n${prompt}` : '',
+    ].filter(Boolean);
+    return parts.join('\n\n');
   }
 
   private async handleSubagentContinue(args: string): Promise<string> {
+    return (await this.handleSubagentContinueEnvelope(args)).output;
+  }
+
+  private async handleSubagentContinueEnvelope(args: string): Promise<NewmarkSubagentToolResult> {
     try {
       const params = JSON.parse(args);
       const name = params.name || params.id || '';
       const prompt = params.prompt || '';
       const sa = this.subagents.get(name);
-      if (!sa) return `[Subagent] Not found: ${name}`;
-      if (!prompt) return '[Subagent] Prompt required.';
-      if (!this.subagents.send(sa.id, prompt)) return `[Subagent] Cannot continue closed subagent: ${name}`;
+      if (!sa) return { ok: false, output: `[Subagent] Not found: ${name}`, error: `Not found: ${name}` };
+      if (!prompt) return this.subagents.toToolResult(sa.id, '[Subagent] Prompt required.', false);
+      if (!this.subagents.send(sa.id, prompt)) return this.subagents.toToolResult(sa.id, `[Subagent] Cannot continue closed subagent: ${name}`, false);
       const result = await this.runSubagentPrompt(sa.id, prompt, params.flow || '');
-      return `[Subagent '${sa.name}' continued]\n${result}`;
-    } catch { return '[Subagent] Invalid continue arguments.'; }
+      return this.subagents.toToolResult(sa.id, `[Subagent '${sa.name}' continued]\n${result}`, !result.startsWith('[Subagent Error]'));
+    } catch { return { ok: false, output: '[Subagent] Invalid continue arguments.', error: 'Invalid continue arguments.' }; }
   }
 
   private handleSubagentResult(args: string): string {
+    return this.handleSubagentResultEnvelope(args).output;
+  }
+
+  private handleSubagentResultEnvelope(args: string): NewmarkSubagentToolResult {
     try {
       const params = JSON.parse(args);
       const name = params.name || params.id || '';
       const sa = this.subagents.get(name);
-      if (!sa) return `[Subagent] Not found: ${name}`;
+      if (!sa) return { ok: false, output: `[Subagent] Not found: ${name}`, error: `Not found: ${name}` };
       const transcript = sa.messages.map(m => `[${m.role}] ${m.content}`).join('\n');
-      return `get.subagent("${sa.name}")\nStatus: ${sa.status}\nModel: ${sa.model}\nMode: ${sa.agentMode}\n\nResult:\n${sa.result || ''}\n\nConversation:\n${transcript}`;
-    } catch { return '[Subagent] Invalid result arguments.'; }
+      return this.subagents.toToolResult(
+        sa.id,
+        `get.subagent("${sa.name}")\nStatus: ${sa.status}\nModel: ${sa.model}\nMode: ${sa.agentMode}\n\nResult:\n${sa.result || ''}\n\nConversation:\n${transcript}`,
+        true
+      );
+    } catch { return { ok: false, output: '[Subagent] Invalid result arguments.', error: 'Invalid result arguments.' }; }
   }
 
   private handleSubagentClose(args: string): string {
+    return this.handleSubagentCloseEnvelope(args).output;
+  }
+
+  private handleSubagentCloseEnvelope(args: string): NewmarkSubagentToolResult {
     try {
       const params = JSON.parse(args);
       const name = params.name || params.id || '';
       const sa = this.subagents.get(name);
-      if (!sa) return `[Subagent] Not found: ${name}`;
+      if (!sa) return { ok: false, output: `[Subagent] Not found: ${name}`, error: `Not found: ${name}` };
       this.subagents.close(sa.id);
-      return `[Subagent '${sa.name}' closed]`;
-    } catch { return '[Subagent] Invalid close arguments.'; }
+      return this.subagents.toToolResult(sa.id, `[Subagent '${sa.name}' closed]`, true);
+    } catch { return { ok: false, output: '[Subagent] Invalid close arguments.', error: 'Invalid close arguments.' }; }
   }
 
   private async handleFlowRun(args: string): Promise<string> {
@@ -1170,6 +1235,122 @@ export class Agent {
     } catch (e) {
       return `[${tool}] ${e instanceof Error ? e.message : String(e)}`;
     }
+  }
+
+  private async handleMemoryLabTool(tool: string, args: string): Promise<string> {
+    if (this.mode === 'plan' && tool !== 'memory_lab_read') {
+      return `[permission] Plan mode is fully read-only. Blocked: ${tool}`;
+    }
+    try {
+      const params = JSON.parse(args || '{}') as Record<string, unknown>;
+      switch (tool) {
+        case 'memory_lab_read': {
+          const selector = String(params.component || params.name || params.slug || '');
+          return this.memoryLab.formatRead(this.memoryLab.read(selector));
+        }
+        case 'memory_lab_update': {
+          const result = await this.updateMemoryLab({
+            name: String(params.name || ''),
+            description: String(params.description || ''),
+            tags: Array.isArray(params.tags) ? params.tags.map(String) : String(params.tags || '').split(/[,，\n]+/),
+            content: String(params.content || ''),
+            kind: params.kind === 'folder' ? 'folder' : 'file',
+          });
+          return this.memoryLab.formatWrite('memory_lab_update', result);
+        }
+        case 'memory_lab_reindex': {
+          return this.memoryLab.formatWrite('memory_lab_reindex', await this.reindexMemoryLab());
+        }
+        default:
+          return `[${tool}] Unknown Memory Lab tool.`;
+      }
+    } catch (e) {
+      return `[${tool}] ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  async updateMemoryLab(input: MemoryLabUpdateInput): Promise<MemoryLabWriteResult> {
+    const update = await this.prepareMemoryLabUpdate(input);
+    return this.memoryLab.update(update);
+  }
+
+  async reindexMemoryLab(): Promise<MemoryLabWriteResult> {
+    await this.organizeMemoryLabIndex();
+    return this.memoryLab.reindex();
+  }
+
+  private async prepareMemoryLabUpdate(input: MemoryLabUpdateInput): Promise<MemoryLabPreparedUpdate> {
+    const deterministic = this.memoryLab.prepareUpdate(input);
+    const provider = this.engineModel();
+    if (!provider) return deterministic;
+    const system = [
+      'You are MemoryLabIndexAgent.',
+      'Clean and organize one persistent memory component for Newmark Memory Lab.',
+      'Return only JSON with keys: name, description, tags, content, kind.',
+      'Keep tags hierarchical and prefixed with #. Preserve technical facts. Do not invent facts.',
+      'The content must be Markdown for the core memory component.',
+    ].join('\n');
+    const prompt = JSON.stringify({
+      request: 'Organize this Memory Lab update.',
+      input: deterministic,
+      tagRules: [
+        'A tag like #物理-理论物理 has parent #物理.',
+        'Components are linked only to deepest supplied tags.',
+        'Use concise descriptions.',
+      ],
+    }, null, 2);
+    try {
+      const cfg = provider.intelligenceConfig(this.intelligence);
+      const response = await this.withTimeout(
+        provider.chat(this.model, [{ role: 'user', content: prompt }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 3000)),
+        120000
+      );
+      const parsed = this.extractMemoryLabJson(response);
+      if (!parsed) return deterministic;
+      return this.memoryLab.prepareUpdate({
+        name: String(parsed.name || deterministic.name),
+        description: String(parsed.description || deterministic.description),
+        tags: Array.isArray(parsed.tags) ? parsed.tags.map(String) : deterministic.tags,
+        content: String(parsed.content || deterministic.content),
+        kind: parsed.kind === 'folder' ? 'folder' : deterministic.kind,
+      });
+    } catch {
+      return deterministic;
+    }
+  }
+
+  private async organizeMemoryLabIndex(): Promise<void> {
+    const provider = this.engineModel();
+    if (!provider) return;
+    const read = this.memoryLab.read();
+    const system = [
+      'You are MemoryLabIndexAgent.',
+      'Inspect the Memory Lab index and return only JSON with optional notes.',
+      'Do not add memories or invent facts. The application will perform deterministic reindexing after this pass.',
+    ].join('\n');
+    try {
+      const cfg = provider.intelligenceConfig(this.intelligence);
+      await this.withTimeout(
+        provider.chat(this.model, [{ role: 'user', content: JSON.stringify({ index: read.index }, null, 2) }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 1200)),
+        120000
+      );
+    } catch { /* deterministic reindex still runs */ }
+  }
+
+  private extractMemoryLabJson(response: string): Record<string, unknown> | null {
+    const raw = String(response || '').trim();
+    const candidates = [
+      raw,
+      raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, ''),
+      raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+    ].filter(s => s && s.includes('{') && s.includes('}'));
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (parsed && typeof parsed === 'object') return parsed as Record<string, unknown>;
+      } catch { /* try next */ }
+    }
+    return null;
   }
 
   private automationPatch(params: Record<string, unknown>): Partial<AutomationSchedule> {
@@ -1531,6 +1712,7 @@ export class Agent {
       `- Model policy: current model=${this.model || '(unset)'}, intelligence=${this.intelligence}, auto-switch=${modelSwitch}.`,
       `- Agent terminal timeout: bash accepts per-call timeout_ms; timeout_ms=0 requests no limit; terminal.interrupt_timeout_ms=${this.config.getNum('terminal', 'interrupt_timeout_ms')} is a nonzero upper cap, and 0 means no cap.`,
       `- Automation: automation_create/list/update/toggle/delete manage persisted schedules through the active Newmark scheduler when available; Plan may only list automations, and subagents cannot manage automation.`,
+      '- Memory Lab exists and provides persistent memory.',
       `- Skills and subagents: skill_download installs offline SKILL.md folders; only enabled skills are disclosed in the system prompt; task creates constrained subagents tracked in agent state.`,
       `- Visible output contract: assistant replies are sanitized before display to remove hidden-reasoning markers. ${visibleOutputContract}`,
     ].join('\n');

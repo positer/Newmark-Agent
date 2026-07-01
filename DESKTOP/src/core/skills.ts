@@ -8,21 +8,50 @@ export interface SkillInfo {
   enabled: boolean;
   installed: boolean;
   description: string;
-  source: 'project' | 'codex' | 'remote';
+  source: 'project' | 'user' | 'codex' | 'claude' | 'opencode' | 'plugin' | 'remote';
   url?: string;
+  license?: string;
+  compatibility?: string;
+  metadata?: Record<string, string>;
+  allowedTools?: string[];
+  pluginId?: string;
+  marketSourceId?: string;
+  marketSourceName?: string;
+  warnings?: string[];
+}
+
+export type SkillMarketSourceType = 'json' | 'skill-url' | 'local-dir';
+
+export interface SkillMarketSource {
+  id: string;
+  name: string;
+  type: SkillMarketSourceType;
+  enabled: boolean;
+  url?: string;
+  path?: string;
+  builtin?: boolean;
+  addedAt?: string;
+  updatedAt?: string;
+  warnings?: string[];
 }
 
 interface SkillsMeta {
   disabled: string[];
 }
 
+interface MarketSourcesFile {
+  sources: SkillMarketSource[];
+}
+
 export class SkillsManager {
   private skillsDir: string;
   private metaPath: string;
+  private marketSourcesPath: string;
 
   constructor(root: string) {
     this.skillsDir = path.join(root, 'skills');
     this.metaPath = path.join(this.skillsDir, '.skills.json');
+    this.marketSourcesPath = path.join(this.skillsDir, '.market-sources.json');
     fs.mkdirSync(this.skillsDir, { recursive: true });
   }
 
@@ -100,13 +129,114 @@ export class SkillsManager {
     return true;
   }
 
+  listMarketSources(): SkillMarketSource[] {
+    return [
+      ...this.builtinMarketSources(),
+      ...this.loadMarketSources(),
+    ];
+  }
+
+  addMarketSource(input: {
+    id?: string;
+    name: string;
+    type?: SkillMarketSourceType;
+    url?: string;
+    path?: string;
+    enabled?: boolean;
+  }): SkillMarketSource {
+    const name = String(input.name || '').trim();
+    if (!name) throw new Error('Market source name is required.');
+    const url = String(input.url || '').trim();
+    const sourcePath = String(input.path || '').trim();
+    const type = input.type || (sourcePath ? 'local-dir' : 'json');
+    if (!['json', 'skill-url', 'local-dir'].includes(type)) throw new Error(`Unsupported market source type: ${type}`);
+    if ((type === 'json' || type === 'skill-url') && !url && !sourcePath) throw new Error(`${type} source requires --url or --path.`);
+    if (type === 'local-dir' && !sourcePath) throw new Error('local-dir source requires --path.');
+    if (url && !this.isSafeMarketUrl(url)) throw new Error('Market source URL must use http or https.');
+    const id = this.cleanSourceId(input.id || name);
+    if (!id) throw new Error('Market source id is invalid.');
+    if (this.builtinMarketSources().some(s => s.id === id)) throw new Error(`Market source id is reserved: ${id}`);
+    const sources = this.loadMarketSources().filter(s => s.id !== id && s.name.toLowerCase() !== name.toLowerCase());
+    const now = new Date().toISOString();
+    const existing = this.loadMarketSources().find(s => s.id === id || s.name.toLowerCase() === name.toLowerCase());
+    const source: SkillMarketSource = {
+      id,
+      name,
+      type,
+      enabled: input.enabled !== false,
+      url: url || undefined,
+      path: sourcePath ? path.resolve(sourcePath) : undefined,
+      addedAt: existing?.addedAt || now,
+      updatedAt: now,
+    };
+    sources.push(source);
+    this.saveMarketSources(sources);
+    return source;
+  }
+
+  removeMarketSource(idOrName: string): boolean {
+    const key = String(idOrName || '').trim().toLowerCase();
+    if (!key || this.builtinMarketSources().some(s => s.id.toLowerCase() === key || s.name.toLowerCase() === key)) return false;
+    const sources = this.loadMarketSources();
+    const next = sources.filter(s => s.id.toLowerCase() !== key && s.name.toLowerCase() !== key);
+    if (next.length === sources.length) return false;
+    this.saveMarketSources(next);
+    return true;
+  }
+
+  setMarketSourceEnabled(idOrName: string, enabled: boolean): boolean {
+    const key = String(idOrName || '').trim().toLowerCase();
+    if (!key || this.builtinMarketSources().some(s => s.id.toLowerCase() === key || s.name.toLowerCase() === key)) return false;
+    let changed = false;
+    const now = new Date().toISOString();
+    const sources = this.loadMarketSources().map(s => {
+      if (s.id.toLowerCase() === key || s.name.toLowerCase() === key) {
+        changed = true;
+        return { ...s, enabled, updatedAt: now };
+      }
+      return s;
+    });
+    if (!changed) return false;
+    this.saveMarketSources(sources);
+    return true;
+  }
+
   discoverMarket(): SkillInfo[] {
     const installed = new Set(this.list());
     const items: SkillInfo[] = [];
     for (const info of this.listDetailed()) items.push(info);
 
-    const codexRoot = path.join(os.homedir(), '.codex', 'skills');
-    for (const dir of this.findSkillDirs(codexRoot, 4, 240)) {
+    const roots: Array<{ root: string; source: SkillInfo['source'] }> = [
+      { root: path.join(this.skillsDir, '..', '.agents', 'skills'), source: 'codex' },
+      { root: path.join(this.skillsDir, '..', '.claude', 'skills'), source: 'claude' },
+      { root: path.join(os.homedir(), '.agents', 'skills'), source: 'user' },
+      { root: path.join(os.homedir(), '.codex', 'skills'), source: 'codex' },
+      { root: path.join(os.homedir(), '.claude', 'skills'), source: 'claude' },
+      { root: path.join(os.homedir(), '.config', 'opencode', 'skills'), source: 'opencode' },
+    ];
+
+    for (const entry of roots) {
+      for (const dir of this.findSkillDirs(entry.root, 4, 240)) {
+        const parsed = this.parseSkillInfo(dir);
+        const name = this.cleanName(parsed.name || path.basename(dir));
+        if (!name || items.some(i => i.name === name && i.source !== 'remote')) continue;
+        items.push({
+          name,
+          path: dir,
+          enabled: installed.has(name) ? this.isEnabled(name) : false,
+          installed: installed.has(name),
+          description: parsed.description,
+          source: entry.source,
+          license: parsed.license,
+          compatibility: parsed.compatibility,
+          metadata: parsed.metadata,
+          allowedTools: parsed.allowedTools,
+          warnings: parsed.warnings,
+        });
+      }
+    }
+
+    for (const dir of this.findPluginSkillDirs(path.join(this.skillsDir, '..'), 5, 240)) {
       const parsed = this.parseSkillInfo(dir);
       const name = this.cleanName(parsed.name || path.basename(dir));
       if (!name || items.some(i => i.name === name && i.source !== 'remote')) continue;
@@ -116,25 +246,35 @@ export class SkillsManager {
         enabled: installed.has(name) ? this.isEnabled(name) : false,
         installed: installed.has(name),
         description: parsed.description,
-        source: 'codex',
+        source: 'plugin',
+        license: parsed.license,
+        compatibility: parsed.compatibility,
+        metadata: parsed.metadata,
+        allowedTools: parsed.allowedTools,
+        pluginId: this.pluginIdForSkill(dir),
+        warnings: parsed.warnings,
       });
     }
 
-    const remotes: SkillInfo[] = [
-      {
-        name: 'design-taste-frontend',
-        description: 'Anti-slop frontend review and design taste rules.',
-        url: 'https://raw.githubusercontent.com/Jonathan-Adly/taste-skill/main/skills/design-taste-frontend/SKILL.md',
-        path: '',
-        enabled: installed.has('design-taste-frontend') ? this.isEnabled('design-taste-frontend') : false,
-        installed: installed.has('design-taste-frontend'),
-        source: 'remote',
-      },
-    ];
-    for (const r of remotes) {
-      if (!items.some(i => i.name === r.name)) items.push(r);
+    for (const source of this.listMarketSources()) {
+      if (!source.enabled) continue;
+      for (const item of this.discoverMarketSource(source, installed)) {
+        if (!items.some(i => i.name === item.name)) items.push(item);
+      }
     }
 
+    return items.sort((a, b) => Number(b.installed) - Number(a.installed) || a.name.localeCompare(b.name));
+  }
+
+  async discoverMarketAsync(): Promise<SkillInfo[]> {
+    const installed = new Set(this.list());
+    const items = this.discoverMarket();
+    for (const source of this.listMarketSources()) {
+      if (!source.enabled || source.type !== 'json' || !source.url?.startsWith('http')) continue;
+      for (const item of await this.discoverJsonMarketSourceAsync(source, installed)) {
+        if (!items.some(i => i.name === item.name)) items.push(item);
+      }
+    }
     return items.sort((a, b) => Number(b.installed) - Number(a.installed) || a.name.localeCompare(b.name));
   }
 
@@ -151,6 +291,11 @@ export class SkillsManager {
       installed,
       description: parsed.description,
       source,
+      license: parsed.license,
+      compatibility: parsed.compatibility,
+      metadata: parsed.metadata,
+      allowedTools: parsed.allowedTools,
+      warnings: parsed.warnings,
     };
   }
 
@@ -168,13 +313,227 @@ export class SkillsManager {
     fs.writeFileSync(this.metaPath, JSON.stringify({ disabled: meta.disabled }, null, 2), 'utf-8');
   }
 
-  private parseSkillInfo(dir: string): { name: string; description: string } {
+  private builtinMarketSources(): SkillMarketSource[] {
+    return [{
+      id: 'builtin-design-taste-frontend',
+      name: 'Built-in Design Taste Frontend',
+      type: 'skill-url',
+      enabled: true,
+      builtin: true,
+      url: 'https://raw.githubusercontent.com/Jonathan-Adly/taste-skill/main/skills/design-taste-frontend/SKILL.md',
+    }];
+  }
+
+  private loadMarketSources(): SkillMarketSource[] {
+    try {
+      if (!fs.existsSync(this.marketSourcesPath)) return [];
+      const raw = JSON.parse(fs.readFileSync(this.marketSourcesPath, 'utf-8')) as Partial<MarketSourcesFile>;
+      if (!Array.isArray(raw.sources)) return [];
+      return raw.sources
+        .map(source => this.normalizeMarketSource(source))
+        .filter((source): source is SkillMarketSource => !!source);
+    } catch {
+      return [];
+    }
+  }
+
+  private saveMarketSources(sources: SkillMarketSource[]): void {
+    const normalized = sources
+      .filter(s => !s.builtin)
+      .map(s => this.normalizeMarketSource(s))
+      .filter((source): source is SkillMarketSource => !!source);
+    fs.writeFileSync(this.marketSourcesPath, JSON.stringify({ sources: normalized }, null, 2), 'utf-8');
+  }
+
+  private normalizeMarketSource(raw: unknown): SkillMarketSource | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const source = raw as Partial<SkillMarketSource>;
+    const name = String(source.name || '').trim();
+    const type = String(source.type || '').trim() as SkillMarketSourceType;
+    const url = String(source.url || '').trim();
+    const sourcePath = String(source.path || '').trim();
+    if (!name || !['json', 'skill-url', 'local-dir'].includes(type)) return null;
+    if ((type === 'json' || type === 'skill-url') && !url && !sourcePath) return null;
+    if (type === 'local-dir' && !sourcePath) return null;
+    const id = this.cleanSourceId(source.id || name);
+    if (!id) return null;
+    return {
+      id,
+      name,
+      type,
+      enabled: source.enabled !== false,
+      url: url || undefined,
+      path: sourcePath ? path.resolve(sourcePath) : undefined,
+      builtin: source.builtin === true,
+      addedAt: source.addedAt ? String(source.addedAt) : undefined,
+      updatedAt: source.updatedAt ? String(source.updatedAt) : undefined,
+    };
+  }
+
+  private discoverMarketSource(source: SkillMarketSource, installed: Set<string>): SkillInfo[] {
+    try {
+      if (source.type === 'skill-url') {
+        const name = this.cleanName(source.name.replace(/^Built-in\s+/i, '').replace(/\s+/g, '-').toLowerCase());
+        const skillName = source.id === 'builtin-design-taste-frontend' ? 'design-taste-frontend' : name;
+        return [{
+          name: skillName,
+          description: source.id === 'builtin-design-taste-frontend' ? 'Anti-slop frontend review and design taste rules.' : `Remote skill from ${source.name}.`,
+          url: source.url,
+          path: source.path || '',
+          enabled: installed.has(skillName) ? this.isEnabled(skillName) : false,
+          installed: installed.has(skillName),
+          source: 'remote',
+          marketSourceId: source.id,
+          marketSourceName: source.name,
+        }];
+      }
+      if (source.type === 'local-dir') {
+        return this.findSkillDirs(source.path || '', 4, 240).map(dir => this.marketInfoFromLocalDir(dir, source, installed)).filter((item): item is SkillInfo => !!item);
+      }
+      return this.discoverJsonMarketSource(source, installed);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return [{
+        name: source.id,
+        path: source.path || '',
+        enabled: false,
+        installed: false,
+        description: `Market source could not be read: ${message}`,
+        source: 'remote',
+        url: source.url,
+        marketSourceId: source.id,
+        marketSourceName: source.name,
+        warnings: [message],
+      }];
+    }
+  }
+
+  private discoverJsonMarketSource(source: SkillMarketSource, installed: Set<string>): SkillInfo[] {
+    const text = this.readCatalogText(source);
+    if (!text) return [];
+    const parsed = JSON.parse(text);
+    const rawItems = this.catalogEntries(parsed);
+    return rawItems
+      .slice(0, 1000)
+      .map((entry: unknown) => this.marketInfoFromCatalogEntry(entry, source, installed))
+      .filter((item): item is SkillInfo => !!item);
+  }
+
+  private readCatalogText(source: SkillMarketSource): string {
+    const catalogPath = source.path ? path.resolve(source.path) : '';
+    if (catalogPath && fs.existsSync(catalogPath)) return fs.readFileSync(catalogPath, 'utf-8');
+    const url = source.url || '';
+    if (url.startsWith('file://')) return fs.readFileSync(new URL(url), 'utf-8');
+    if (url && !url.startsWith('http')) return fs.readFileSync(path.resolve(url), 'utf-8');
+    return '';
+  }
+
+  private async discoverJsonMarketSourceAsync(source: SkillMarketSource, installed: Set<string>): Promise<SkillInfo[]> {
+    try {
+      const resp = await fetch(source.url || '');
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const parsed = JSON.parse(await resp.text());
+      const rawItems = this.catalogEntries(parsed);
+      return rawItems
+        .slice(0, 1000)
+        .map((entry: unknown) => this.marketInfoFromCatalogEntry(entry, source, installed))
+        .filter((item): item is SkillInfo => !!item);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return [{
+        name: source.id,
+        path: '',
+        enabled: false,
+        installed: false,
+        description: `Market source could not be fetched: ${message}`,
+        source: 'remote',
+        url: source.url,
+        marketSourceId: source.id,
+        marketSourceName: source.name,
+        warnings: [message],
+      }];
+    }
+  }
+
+  private marketInfoFromCatalogEntry(entry: unknown, source: SkillMarketSource, installed: Set<string>): SkillInfo | null {
+    if (!entry || typeof entry !== 'object') return null;
+    const raw = entry as Record<string, unknown>;
+    const name = this.cleanName(String(raw.name || raw.id || '').trim());
+    if (!name) return null;
+    const itemPath = String(raw.path || '').trim();
+    const itemUrl = String(raw.url || raw.downloadUrl || raw.rawUrl || '').trim();
+    const description = String(raw.description || raw.desc || '').trim().slice(0, 1000);
+    if (itemUrl && !this.isSafeMarketUrl(itemUrl)) return null;
+    return {
+      name,
+      path: itemPath,
+      enabled: installed.has(name) ? this.isEnabled(name) : false,
+      installed: installed.has(name),
+      description,
+      source: 'remote',
+      url: itemUrl || undefined,
+      license: raw.license ? String(raw.license).slice(0, 200) : undefined,
+      compatibility: raw.compatibility ? String(raw.compatibility).slice(0, 200) : undefined,
+      marketSourceId: source.id,
+      marketSourceName: source.name,
+      warnings: this.catalogWarnings(raw),
+    };
+  }
+
+  private catalogEntries(parsed: unknown): unknown[] {
+    if (Array.isArray(parsed)) return parsed;
+    if (!parsed || typeof parsed !== 'object') return [];
+    const obj = parsed as { skills?: unknown; items?: unknown };
+    if (Array.isArray(obj.skills)) return obj.skills;
+    if (Array.isArray(obj.items)) return obj.items;
+    return [];
+  }
+
+  private marketInfoFromLocalDir(dir: string, source: SkillMarketSource, installed: Set<string>): SkillInfo | null {
+    const parsed = this.parseSkillInfo(dir);
+    const name = this.cleanName(parsed.name || path.basename(dir));
+    if (!name) return null;
+    return {
+      name,
+      path: dir,
+      enabled: installed.has(name) ? this.isEnabled(name) : false,
+      installed: installed.has(name),
+      description: parsed.description,
+      source: 'user',
+      license: parsed.license,
+      compatibility: parsed.compatibility,
+      metadata: parsed.metadata,
+      allowedTools: parsed.allowedTools,
+      marketSourceId: source.id,
+      marketSourceName: source.name,
+      warnings: parsed.warnings,
+    };
+  }
+
+  private catalogWarnings(raw: Record<string, unknown>): string[] | undefined {
+    const warnings: string[] = [];
+    if (!raw.url && !raw.path && !raw.downloadUrl && !raw.rawUrl) warnings.push('Catalog entry has no install source.');
+    return warnings.length ? warnings : undefined;
+  }
+
+  private parseSkillInfo(dir: string): {
+    name: string;
+    description: string;
+    license?: string;
+    compatibility?: string;
+    metadata?: Record<string, string>;
+    allowedTools?: string[];
+    warnings?: string[];
+  } {
     try {
       const content = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf-8');
       const front = content.match(/^---\s*([\s\S]*?)\s*---/);
       const block = front ? front[1] : content.slice(0, 1000);
       let name = (block.match(/^name:\s*(.+)$/m)?.[1] || '').trim().replace(/^["']|["']$/g, '');
       let description = (block.match(/^description:\s*(.+)$/m)?.[1] || '').trim().replace(/^["']|["']$/g, '');
+      const license = (block.match(/^license:\s*(.+)$/m)?.[1] || '').trim().replace(/^["']|["']$/g, '') || undefined;
+      const compatibility = (block.match(/^compatibility:\s*(.+)$/m)?.[1] || '').trim().replace(/^["']|["']$/g, '') || undefined;
+      const allowedTools = this.parseInlineList(block.match(/^(?:allowed-tools|allowed_tools):\s*(.+)$/m)?.[1] || '');
       const heading = (content.match(/^#\s+(.+)$/m)?.[1] || '').trim();
       if (!name && heading) name = heading;
       if (!description) {
@@ -187,9 +546,18 @@ export class SkillsManager {
           .join(' ');
         description = summary.slice(0, 500);
       }
-      return { name, description };
+      const warnings = this.validateSkillInfo(name, description, dir);
+      return {
+        name,
+        description,
+        license,
+        compatibility,
+        metadata: this.parseFlatMetadata(block),
+        allowedTools,
+        warnings,
+      };
     } catch {
-      return { name: '', description: '' };
+      return { name: '', description: '', warnings: ['SKILL.md could not be read.'] };
     }
   }
 
@@ -212,7 +580,90 @@ export class SkillsManager {
     return results;
   }
 
+  private findPluginSkillDirs(root: string, maxDepth: number, maxItems: number): string[] {
+    const results: string[] = [];
+    const walk = (dir: string, depth: number) => {
+      if (results.length >= maxItems || depth > maxDepth) return;
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      const hasPluginManifest = entries.some(e => e.isDirectory() && (e.name === '.codex-plugin' || e.name === '.claude-plugin'));
+      if (hasPluginManifest) {
+        for (const skillsDir of ['skills', 'Skills']) {
+          results.push(...this.findSkillDirs(path.join(dir, skillsDir), 3, maxItems - results.length));
+        }
+      }
+      for (const e of entries) {
+        if (!e.isDirectory() || e.name.startsWith('.git') || e.name === 'node_modules' || e.name === 'release' || e.name.startsWith('release.locked-')) continue;
+        walk(path.join(dir, e.name), depth + 1);
+      }
+    };
+    walk(root, 0);
+    return Array.from(new Set(results));
+  }
+
+  private parseInlineList(raw: string): string[] | undefined {
+    const trimmed = raw.trim();
+    if (!trimmed) return undefined;
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      return trimmed.slice(1, -1).split(',').map(v => v.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+    }
+    return trimmed.split(',').map(v => v.trim()).filter(Boolean);
+  }
+
+  private parseFlatMetadata(block: string): Record<string, string> | undefined {
+    const metadata: Record<string, string> = {};
+    for (const key of ['author', 'homepage', 'repository', 'version']) {
+      const value = (block.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'))?.[1] || '').trim().replace(/^["']|["']$/g, '');
+      if (value) metadata[key] = value;
+    }
+    return Object.keys(metadata).length ? metadata : undefined;
+  }
+
+  private validateSkillInfo(name: string, description: string, dir: string): string[] {
+    const warnings: string[] = [];
+    if (!name) warnings.push('Missing required frontmatter field: name.');
+    if (!description) warnings.push('Missing required frontmatter field: description.');
+    if (name && !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$/.test(name)) warnings.push('Skill name contains characters outside the portable Agent Skills subset.');
+    if (description && description.length > 1000) warnings.push('Description is longer than recommended for skill discovery.');
+    const folderName = path.basename(dir);
+    if (name && folderName && this.cleanName(name) !== this.cleanName(folderName)) warnings.push('Skill name does not match containing folder name.');
+    return warnings;
+  }
+
+  private pluginIdForSkill(dir: string): string | undefined {
+    let current = path.resolve(dir);
+    for (let i = 0; i < 6; i++) {
+      const codex = path.join(current, '.codex-plugin', 'plugin.json');
+      const claude = path.join(current, '.claude-plugin', 'plugin.json');
+      for (const filePath of [codex, claude]) {
+        try {
+          if (fs.existsSync(filePath)) {
+            const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+            if (raw?.name) return String(raw.name);
+          }
+        } catch { /* ignore */ }
+      }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    return undefined;
+  }
+
   private cleanName(name: string): string {
     return String(name || '').trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '-').slice(0, 120);
+  }
+
+  private cleanSourceId(name: string): string {
+    return String(name || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_.:-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 120);
+  }
+
+  private isSafeMarketUrl(url: string): boolean {
+    return /^https?:\/\//i.test(url);
   }
 }

@@ -5,7 +5,7 @@
 <h1 align="center">Newmark Agent</h1>
 
 <p align="center">
-  <a href="https://github.com/positer/Newmark-Agent/releases/latest"><img alt="Release" src="https://img.shields.io/badge/release-v1.0.2-blue"></a>
+  <a href="https://github.com/positer/Newmark-Agent/releases/latest"><img alt="Release" src="https://img.shields.io/badge/release-v1.1.0-blue"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-lightgrey">
   <img alt="Status" src="https://img.shields.io/badge/status-release--usable-green">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
@@ -34,7 +34,7 @@ It is built for users who want an agent terminal that runs against their own pro
 - [Configuration](#configuration)
 - [Development](#development)
 - [Brand Assets](#brand-assets)
-- [Release v1.0.2](#release-v102)
+- [Release v1.1.0](#release-v110)
 - [Repository Hygiene](#repository-hygiene)
 - [License](#license)
 
@@ -42,7 +42,7 @@ It is built for users who want an agent terminal that runs against their own pro
 
 | Package | Release |
 |---|---|
-| Windows portable | [`Newmark-Agent-1.0.2-portable-x64.exe`](https://github.com/positer/Newmark-Agent/releases/latest) |
+| Windows portable | [`Newmark-Agent-1.1.0-portable-x64.exe`](https://github.com/positer/Newmark-Agent/releases/latest) |
 
 Run the portable executable directly. No installer is required for the current release.
 The portable distribution includes `LICENSE` and `THIRD_PARTY_NOTICES.md`.
@@ -56,7 +56,7 @@ The portable distribution includes `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 | Autonomous Goal continuation until completion or pause | Available |
 | Multi-step Flow workflows | Available |
 | Subagents with retained history | Available |
-| Installable and refreshable skills | Available |
+| Installable, refreshable, and source-managed skills | Available |
 | OpenAI-compatible and Anthropic-compatible providers | Available |
 | Fuzzy provider injection with endpoint/key parsing | Available |
 | Model validation metadata, context size, vision/thinking flags, fallback behavior | Available |
@@ -77,7 +77,7 @@ npm.cmd run dist:portable
 The packaged Windows executable is written to:
 
 ```text
-release/Newmark-Agent-1.0.2-portable-x64.exe
+release/Newmark-Agent-1.1.0-portable-x64.exe
 ```
 
 ## Configuration
@@ -152,11 +152,19 @@ Application icons live in `DESKTOP/assets`: `app-icon-dark.png`, `app-icon-light
 
 Repository branding uses `SCRIPTS/assets/newmark-agent-social-preview.png` as the GitHub Social preview image. GitHub currently exposes this as a repository Settings upload rather than a public REST field.
 
-## Release v1.0.2
+## Release v1.1.0
 
-The v1.0.2 release adds high-contrast themed application icons for dark and light environments, wires the Windows executable icon into packaging, renders the icon in the custom frameless titlebar with a runtime-verified animated color border, and keeps the v1.0.1 release validation baseline. The public release artifact is the Windows portable executable.
+The v1.1.0 release adds Memory Lab persistent memory, Agent compatibility surfaces, Skills Market source management, and the v1.0.2 icon/runtime baseline. The public release artifact is the Windows portable executable.
 
 Maintenance log, 2026-06-29: README presentation was refreshed for GitHub rendering. The document now opens with the repository social preview image, centered title and badge block, an at-a-glance capability table, a contents list, and a status-oriented Highlights table while preserving setup, provider, release, hygiene, and license sections. Verification passed `cd DESKTOP && npm.cmd test` with 598 assertions. Evidence is stored in `archive/2026-06-29-readme-visual-refresh.md`.
+
+Maintenance log, 2026-07-01: Agent plugin/skill/tool/subagent interface compatibility was audited against current OpenAI/Codex, Claude Code, OpenCode, and Agent Skills conventions. Newmark already matches the OpenAI-style function-tool definition baseline and basic `SKILL.md` skill directories, but needs a canonical tool/result envelope, plugin manifest loaders, broader skill discovery, and structured subagent return contracts before it can host market plugins from those ecosystems. Verification passed `cd DESKTOP && npm.cmd test` with 602 assertions. Evidence is stored in `archive/2026-07-01-agent-plugin-interface-compatibility-audit.md`.
+
+Maintenance log, 2026-07-01: the Agent compatibility layer was implemented and hardened for core/CLI paths. `DESKTOP/src/core/compat.ts` now defines canonical tool/result/plugin/agent-preset interfaces, emits OpenAI Chat, OpenAI Responses, and Anthropic tool schemas, normalizes Codex, Claude Code, OpenCode, and Newmark-native plugin metadata, records discovered MCP/LSP/hooks/package-plugin components without auto-starting them, reads plugin marketplace/catalog metadata, and can explicitly execute local OpenCode JavaScript custom tools through `compat-tool` while refusing TypeScript tools without a transpilation step. Skills discovery now covers `.agents/skills`, `.claude/skills`, user-level skill folders, and plugin-packaged skills; normalized agent presets can now drive `task`/subagent creation through `preset` or `agent`, and subagents expose structured records/envelopes while preserving existing transcript output. The new `compat` CLI command debugs tools, plugins, marketplaces, skills, agent presets, and subagent schemas without opening the UI. Verification passed `cd DESKTOP && npm.cmd test` with 639 assertions plus CLI smoke checks for `compat --target all`, `compat --target marketplaces`, and `compat-tool --list`. Evidence is stored in `archive/2026-07-01-agent-compatibility-implementation.md`.
+
+Maintenance log, 2026-07-01: Skills Market sources are now user-manageable. `DESKTOP/src/core/skills.ts` persists user sources in local `skills/.market-sources.json`, keeps the built-in design-taste skill source read-only, supports JSON catalogs, direct remote `SKILL.md` URLs, and local directory sources, and annotates market entries with source metadata. `skills-market` now supports `--sources`, `--add-source`, `--remove-source`, `--enable-source`, and `--disable-source` while preserving existing query output; the desktop Plugins > Skills Market panel exposes the same source add/enable/disable/remove controls through Electron IPC/preload. Verification passed `cd DESKTOP && npm.cmd test` with 651 assertions plus `node dist\launcher.js skills-market --sources --root "C:\Users\12252\Desktop\Files\Code\Newmark Agent"`. Evidence is stored in `archive/2026-07-01-skills-market-source-management.md`.
+
+Maintenance log, 2026-07-01: Memory Lab was added as a local persistent memory surface. `DESKTOP/src/core/memoryLab.ts` manages root-level `Memory Lab/index.json` plus memory components, Agent prompts disclose only the one-line existence signal, and the `memory_lab_read/update/reindex` tools gate index access and model-assisted updates. CLI, Electron IPC, and Agent tool writes now route through the same MemoryLabIndexAgent organizer before deterministic index repair. The desktop left toolbar exposes a switchable Memory Lab viewer: Overview renders the full tag/component graph from the Memory Lab index with drag, zoom, focus modes, and list-style controls; Detail keeps the centered parent/child layout with attached components plus core markdown below, root-tag overview when a root tag is centered, no connector lines, and tag search for direct navigation. `memory-lab` CLI supports read/update/reindex flows, and packaged release CLI/UI smoke now covers Memory Lab. Evidence is stored in `archive/2026-07-01-memory-lab.md`.
 
 Maintenance log, 2026-06-29: fuzzy provider injection now has a no-guide-model fallback. `DESKTOP/src/core/fuzzy.ts` tokenizes raw endpoint/key text, infers provider names from endpoint core domains, normalizes terminal API paths, probes common OpenAI-compatible and Anthropic-compatible suffixes, and is shared by both desktop Agent fuzzy injection and CLI `fuzzy-inject`. A live local mock injection found and fixed local-address naming so `127.0.0.1` maps to `LocalProvider` instead of a numeric fragment. Verification passed `cd DESKTOP && npm.cmd test` with 598 assertions. Evidence is stored in `archive/2026-06-29-fuzzy-inject-tokenizer-suffix-probing.md`.
 
@@ -189,6 +197,7 @@ The public repository intentionally excludes local runtime state and internal pr
 - `Work/`
 - `archive/`
 - `skills/`
+- `Memory Lab/`
 - `OVERVIEW.md`
 - `Design.md`
 - generated `release/` output

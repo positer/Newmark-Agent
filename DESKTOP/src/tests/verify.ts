@@ -19,6 +19,8 @@ import { LLMProvider } from '../llm/provider';
 import { BrowserControl } from '../core/browserControl';
 import { runCliCommand } from '../cli-commands';
 import { providerNameFromUrl } from '../core/fuzzy';
+import { discoverAgentPresets, discoverOpenCodeTools, discoverPluginManifests, discoverPluginMarketplaces, runOpenCodeTool } from '../core/compat';
+import { MemoryLabManager } from '../core/memoryLab';
 
 const TEST_DIR = path.join(process.cwd(), 'test-tmp');
 const PASS = '[PASS]';
@@ -60,6 +62,7 @@ function setup() {
   fs.mkdirSync(path.join(TEST_DIR, 'skills'), { recursive: true });
   fs.mkdirSync(path.join(TEST_DIR, 'Flow'), { recursive: true });
   fs.mkdirSync(path.join(TEST_DIR, 'archive'), { recursive: true });
+  fs.mkdirSync(path.join(TEST_DIR, 'Memory Lab'), { recursive: true });
   fs.writeFileSync(path.join(TEST_DIR, 'PC_Hash.config'), 'test-pc|win32|x64');
   fs.writeFileSync(path.join(TEST_DIR, 'Work', 'Local.json'), '[]');
   fs.writeFileSync(path.join(TEST_DIR, 'Work', 'External.json'), '[]');
@@ -115,6 +118,12 @@ async function main() {
   assert(uiHtml.includes("title=\"' + escAttr(t('common.remove')) + '\"") && !uiHtml.includes("iconSvg('x', 'Remove model'"), 'ui html: model remove action uses localized title/icon label');
   assert(uiHtml.includes('function setTitleAndTrailingLabel(selector, label)') && uiHtml.includes('setTitleAndTrailingLabel(\'.secondary-top button[onclick="window.newConversation()"]\'') && uiHtml.includes('setTitleAndTrailingLabel(\'button.et-btn[onclick="window.closeEditor()"]\''), 'ui html: language switch updates secondary sidebar and editor labels');
   assert(uiHtml.includes('function rerenderActiveSubWindowForLanguage()') && uiHtml.includes("state.activeSubWindowView = { name: 'workspaceRequired' }") && uiHtml.includes("state.activeSubWindowView = { name: 'plugins'"), 'ui html: language switch rerenders active secondary windows');
+  assert(uiHtml.includes('window.showMemoryLab = function()') && uiHtml.includes("state.activeSubWindowView = { name: 'memoryLab'") && uiHtml.includes("t('memoryLab.title')"), 'ui html: Memory Lab left toolbar entry and panel renderer exist');
+  assert(uiHtml.includes('api.memoryLabRead') && uiHtml.includes('memoryLabReindex') && uiHtml.includes("lucide-sprite.svg#brain"), 'ui html: Memory Lab preload API and icon are wired');
+  assert(uiHtml.includes('.memory-lab-graph') && uiHtml.includes("t('memoryLab.parents')") && uiHtml.includes("t('memoryLab.children')") && uiHtml.includes("t('memoryLab.rootTags')") && !uiHtml.includes('memoryLabConnectionSvg') && !uiHtml.includes('memory-lab-links'), 'ui html: Memory Lab renders centered parent-child tag graph without connector lines and shows root tags at top-level');
+  assert(uiHtml.includes('memory-lab-search-input') && uiHtml.includes('window.updateMemoryLabSearch') && uiHtml.includes("t('memoryLab.search')"), 'ui html: Memory Lab exposes tag search and jump controls');
+  assert(uiHtml.includes('memory-lab-view-menu') && uiHtml.includes('window.switchMemoryLabView = function(view)') && uiHtml.includes("t('memoryLab.overview')") && uiHtml.includes("t('memoryLab.detail')") && uiHtml.includes('memory-lab-overview-stage') && uiHtml.includes('window.buildMemoryLabOverviewGraph'), 'ui html: Memory Lab has switchable overview/detail views with overview graph renderer');
+  assert(uiHtml.includes('animate-from-left') && uiHtml.includes('animate-from-right') && uiHtml.includes('@keyframes memory-lab-enter-left') && uiHtml.includes('memoryLabNavDirection'), 'ui html: Memory Lab tag navigation has smooth directional animation');
   assert(uiHtml.includes("window.openSubWin(t('model.addProvider')") && uiHtml.includes("window.openSubWin(t('model.addModel')") && uiHtml.includes("window.openSubWin(t('model.fuzzy')"), 'ui html: model secondary windows use i18n titles');
   assert(uiHtml.includes("window.openSubWin(t('automation.newTitle')") && uiHtml.includes("window.openSubWin(t('flow.title')") && uiHtml.includes("window.openSubWin(t('plugins.title')") && uiHtml.includes("window.openSubWin(t('workspace.new')"), 'ui html: automation flow plugins workspace secondary windows use i18n titles');
   assert(uiHtml.includes("t('plugins.marketHelp')") && uiHtml.includes("t('plugins.search')") && uiHtml.includes("t('archive.workspaceEmpty')") && uiHtml.includes("t('status.noPendingOptions')"), 'ui html: secondary panels use i18n body labels');
@@ -140,7 +149,8 @@ async function main() {
   assert(uiHtml.includes('Current conversation is locked while the agent is working') && uiHtml.includes('summary: item.title ||'), 'ui html: locks conversation switching while running and uses backend titles');
   assert(uiHtml.includes('function applyWorkspaceStateFromBackend(s)') && uiHtml.includes('window.openWorkspaceManager = async function()') && uiHtml.includes('await window.refreshWorkspaceState().catch(function(){})'), 'ui html: workspace manager refreshes backend workspace state before rendering');
   assert(uiHtml.includes('id="skill-market-search"') && uiHtml.includes('window.updateSkillMarketSearch') && uiHtml.includes('window.filteredSkillMarket') && uiHtml.includes('window.renderSkillsMarketList'), 'ui html: Skills Market has searchable filtered list');
-  assert(uiHtml.includes("item.description || item.desc || ''") && uiHtml.includes("item.path || ''") && uiHtml.includes("item.url || ''") && uiHtml.includes('No matching skills.'), 'ui html: Skills Market search covers skill metadata and empty results');
+  assert(uiHtml.includes('window.renderSkillMarketSources') && uiHtml.includes('id="skill-market-source-name"') && uiHtml.includes('window.addSkillMarketSourceFromUi') && uiHtml.includes('window.setSkillMarketSourceEnabledFromUi'), 'ui html: Skills Market lets users add and manage market sources');
+  assert(uiHtml.includes("item.description || item.desc || ''") && uiHtml.includes("item.marketSourceName || ''") && uiHtml.includes("item.path || ''") && uiHtml.includes("item.url || ''") && uiHtml.includes('No matching skills.'), 'ui html: Skills Market search covers skill metadata, source metadata, and empty results');
   assert(uiHtml.includes('--right-width: 380px;') && uiHtml.includes('var rightSize = Math.max(340, Math.min(680, newSize2));'), 'ui html: right sidebar has larger default and resize range');
   assert(uiHtml.includes('lucide-sprite.svg#square-pen') && uiHtml.includes("iconOnly('square-pen', t('right.editor'))") && !uiHtml.includes('lucide-sprite.svg#edit'), 'ui html: Editor tab uses available open-source icon sprite symbol');
   assert(uiHtml.includes('function renderMessageContent(text)') && uiHtml.includes('class="msg-image"') && uiHtml.includes('normalizeImageSrc(imageUrl)') && uiHtml.includes("if (/^data:image\\//i.test(url)) return true;"), 'ui html: conversation renders returned markdown images, including data URLs');
@@ -225,6 +235,8 @@ async function main() {
   const releaseUiMediaMdSmoke = fs.existsSync(releaseUiMediaMdSmokePath) ? fs.readFileSync(releaseUiMediaMdSmokePath, 'utf-8') : '';
   const releaseUiSkillsSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-skills-smoke.cjs');
   const releaseUiSkillsSmoke = fs.existsSync(releaseUiSkillsSmokePath) ? fs.readFileSync(releaseUiSkillsSmokePath, 'utf-8') : '';
+  const releaseUiMemoryLabSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-memory-lab-smoke.cjs');
+  const releaseUiMemoryLabSmoke = fs.existsSync(releaseUiMemoryLabSmokePath) ? fs.readFileSync(releaseUiMemoryLabSmokePath, 'utf-8') : '';
   const releaseUiConversationQueuePlanSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-conversation-queue-plan-smoke.cjs');
   const releaseUiConversationQueuePlanSmoke = fs.existsSync(releaseUiConversationQueuePlanSmokePath) ? fs.readFileSync(releaseUiConversationQueuePlanSmokePath, 'utf-8') : '';
   const releaseUiGoalContinuationSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-goal-continuation-smoke.cjs');
@@ -253,7 +265,7 @@ async function main() {
   assert(uiHtml.includes('id="title-app-logo"') && uiHtml.includes('id="title-app-icon"') && uiHtml.includes('../../assets/app-icon-dark.png') && uiHtml.includes('../../assets/app-icon-light.png'), 'app icons: custom titlebar renders themed icon assets');
   assert(uiHtml.includes('@keyframes app-icon-border-spin') && uiHtml.includes('animation: app-icon-border-spin 3s linear infinite') && uiHtml.includes('conic-gradient'), 'app icons: custom titlebar has animated color border');
   assert(packageJson.includes('"release:cli-smoke"') && releaseCliSmoke.includes('Start-Process') && releaseCliSmoke.includes('-RedirectStandardOutput'), 'release cli smoke: uses stable redirected packaged exe invocation');
-  assert(releaseCliSmoke.includes("['state', '--root', root]") && releaseCliSmoke.includes("['tool', 'write'") && releaseCliSmoke.includes("'--args-file'") && releaseCliSmoke.includes("['send', '--input-file'") && releaseCliSmoke.includes("['validate-models', '--selected', 'ReleaseCliMock/release-cli-mock'") && releaseCliSmoke.includes("['skills-market'"), 'release cli smoke: covers state, tool, send, validate-models, and skills-market');
+  assert(releaseCliSmoke.includes("['state', '--root', root]") && releaseCliSmoke.includes("['tool', 'write'") && releaseCliSmoke.includes("'--args-file'") && releaseCliSmoke.includes("['send', '--input-file'") && releaseCliSmoke.includes("['validate-models', '--selected', 'ReleaseCliMock/release-cli-mock'") && releaseCliSmoke.includes("['skills-market'") && releaseCliSmoke.includes("'memory-lab'") && releaseCliSmoke.includes('ReleaseCliMemoryNeedle') && releaseCliSmoke.includes("log('memory-lab ok')"), 'release cli smoke: covers state, tool, send, validate-models, skills-market, and memory-lab');
   assert(releaseCliSmoke.includes('RELEASE_CLI_SEND_OK 做了什么 验证 文件') && releaseCliSmoke.includes('"stream":true'), 'release cli smoke: covers UTF-8 streaming send output');
   assert(packageJson.includes('"release:ui-smoke"') && releaseUiSmoke.includes('--remote-debugging-port=') && releaseUiSmoke.includes('window.fuzzyInject()') && releaseUiSmoke.includes('window.showPluginList()') && releaseUiSmoke.includes('window.showFlowEditor()') && releaseUiSmoke.includes('window.showNewConversationPage()') && releaseUiSmoke.includes('window.showWorkspaceRequired()'), 'release ui smoke: validates real packaged secondary windows through CDP');
   assert(releaseUiSmoke.includes("'zh-CN'") && releaseUiSmoke.includes("'输入指令...'") && releaseUiSmoke.includes("'模糊注入模型'") && releaseUiSmoke.includes("'需要工作区'") && releaseUiSmoke.includes('language en/zh switch ok'), 'release ui smoke: validates Chinese language switching in packaged UI');
@@ -302,6 +314,8 @@ async function main() {
   assert(releaseUiSkillsSmoke.includes('installLocalSkill') && releaseUiSkillsSmoke.includes('release-ui-local-skill') && releaseUiSkillsSmoke.includes('window.refreshSkillsRuntime'), 'release ui skills smoke: installs local skill and refreshes runtime without restart');
   assert(releaseUiSkillsSmoke.includes("window.toggleSkillEnabled('release-ui-local-skill', false)") && releaseUiSkillsSmoke.includes("window.toggleSkillEnabled('release-ui-local-skill', true)") && releaseUiSkillsSmoke.includes("window.removeSkillFromUi('release-ui-local-skill')"), 'release ui skills smoke: covers skill disable, enable, and remove');
   assert(releaseUiSkillsSmoke.includes('No matching skills.') && releaseUiSkillsSmoke.includes('Page.captureScreenshot') && releaseUiSkillsSmoke.includes('2026-06-28-release-ui-skills-smoke.png'), 'release ui skills smoke: covers market search empty state and screenshot evidence');
+  assert(packageJson.includes('"release:ui-memory-lab-smoke"') && releaseUiMemoryLabSmoke.includes('--remote-debugging-port=') && releaseUiMemoryLabSmoke.includes('window.api.memoryLabUpdate') && releaseUiMemoryLabSmoke.includes('window.showMemoryLab()'), 'release ui Memory Lab smoke: drives real packaged Memory Lab UI through CDP');
+  assert(releaseUiMemoryLabSmoke.includes('ReleaseMemoryNeedle') && releaseUiMemoryLabSmoke.includes('Memory Lab') && releaseUiMemoryLabSmoke.includes('.memory-lab-graph') && releaseUiMemoryLabSmoke.includes('memory-lab-search-input') && releaseUiMemoryLabSmoke.includes('Root tags') && releaseUiMemoryLabSmoke.includes('!document.querySelector(\'.memory-lab-links\')') && releaseUiMemoryLabSmoke.includes('animate-from-right') && releaseUiMemoryLabSmoke.includes('Page.captureScreenshot') && releaseUiMemoryLabSmoke.includes('captureOsScreenshot'), 'release ui Memory Lab smoke: validates animated no-line tag graph, root tag overview, tag search, component markdown, and hardened screenshot evidence');
   assert(packageJson.includes('"release:ui-conversation-queue-plan-smoke"') && releaseUiConversationQueuePlanSmoke.includes('--remote-debugging-port=') && releaseUiConversationQueuePlanSmoke.includes('QUEUE_FIRST_LOCK_TEST') && releaseUiConversationQueuePlanSmoke.includes('QUEUE_SECOND_AUTO_BUILD'), 'release ui conversation queue/plan smoke: drives real packaged queued conversation path through CDP');
   assert(releaseUiConversationQueuePlanSmoke.includes("window.switchRightTab('plan')") && releaseUiConversationQueuePlanSmoke.includes('PLAN_ITEM_CONV1_20260628') && releaseUiConversationQueuePlanSmoke.includes('PLAN_ITEM_CONV2_20260628'), 'release ui conversation queue/plan smoke: covers right sidebar plan isolation');
   assert(releaseUiConversationQueuePlanSmoke.includes('Current conversation is locked while the agent is working') && releaseUiConversationQueuePlanSmoke.includes('#next-queue-count') && releaseUiConversationQueuePlanSmoke.includes('QUEUE_SECOND_DONE_20260628'), 'release ui conversation queue/plan smoke: covers active-turn conversation lock and queue drain');
@@ -333,7 +347,7 @@ async function main() {
   assert(releaseRealClaudeEnvPreviewSmoke.includes('DeepSeekAnthropic') && releaseRealClaudeEnvPreviewSmoke.includes('deepseek-v4-pro[1m]') && releaseRealClaudeEnvPreviewSmoke.includes('deepseek-v4-flash') && releaseRealClaudeEnvPreviewSmoke.includes('preview leaked Claude env API key/token'), 'release real Claude env preview smoke: validates DeepSeek env parsing without leaking secrets');
   assert(distPortableScript.includes('verifyReleaseCliSmoke()') && distPortableScript.includes('release-cli-smoke.cjs'), 'dist portable: runs release CLI smoke after packaging');
   assert(mainTs.includes('if (automationWakeMode)') && mainTs.includes('await automation.tick()') && mainTs.includes('app.quit();') && mainTs.indexOf('if (automationWakeMode)') < mainTs.indexOf('void startSidecar(root)'), 'main automation wake: runs due schedules headless and exits before sidecar/window setup');
-  assert(preloadTs.includes("refreshSkills: () => ipcRenderer.invoke('skills:refresh')") && preloadTs.includes('terminalKill: (sessionId: string, timeoutMs?: number)'), 'preload: exposes skills refresh and terminal kill timeout');
+  assert(preloadTs.includes("refreshSkills: () => ipcRenderer.invoke('skills:refresh')") && preloadTs.includes("marketSkillSources: () => ipcRenderer.invoke('skills:marketSources')") && preloadTs.includes("memoryLabRead: (selector?: string) => ipcRenderer.invoke('memoryLab:read'") && preloadTs.includes('terminalKill: (sessionId: string, timeoutMs?: number)'), 'preload: exposes skills refresh, market source management, Memory Lab, and terminal kill timeout');
   assert(preloadTs.includes('saveConfig: (cfg: string | Record<string, unknown>)'), 'preload: saveConfig accepts structured config patches');
   assert(preloadTs.includes("getConversationPlan: () => ipcRenderer.invoke('agent:getConversationPlan')") && preloadTs.includes("updateConversationPlan: (plan: Record<string, unknown>) => ipcRenderer.invoke('agent:updateConversationPlan', plan)"), 'preload: exposes conversation plan IPC');
   assert(mainTs.includes("language: agent.config.getStr('general', 'language')") && mainTs.includes("case 'language': agent.config.set('general', 'language', value); break;"), 'main ipc: exposes and persists language setting');
@@ -341,7 +355,7 @@ async function main() {
   assert(cliCommandsTs.includes("language: agent.config.getStr('general', 'language') || 'auto'") && cliCommandsTs.includes("const language = argValue(args, '--language')") && cliCommandsTs.includes("[--language auto|en|zh]"), 'cli commands: expose and accept language switching');
   assert(mainTs.includes('sanitizeProvidersForState(agent.config.providers())') && mainTs.includes('mergeProviderSecrets(value, agent.config.providers())'), 'main ipc: redacts provider keys and preserves secrets on provider save');
   assert(serverTs.includes('sanitizeProvidersForState(agent.config.providers())') && serverTs.includes('mergeProviderSecrets(value, agent.config.providers())'), 'server api: redacts provider keys and preserves secrets on provider save');
-  assert(mainTs.includes("ipcMain.handle('skills:refresh'") && mainTs.includes('agent.refreshSkills();') && mainTs.includes('terminalInterruptTimeoutMs'), 'main ipc: refreshes skills runtime and returns terminal timeout state');
+  assert(mainTs.includes("ipcMain.handle('skills:refresh'") && mainTs.includes('agent.refreshSkills();') && mainTs.includes("ipcMain.handle('skills:addMarketSource'") && mainTs.includes("ipcMain.handle('memoryLab:read'") && mainTs.includes('agent.updateMemoryLab') && mainTs.includes('agent.reindexMemoryLab') && mainTs.includes('terminalInterruptTimeoutMs'), 'main ipc: refreshes skills runtime, manages market sources and Memory Lab through Agent organizer, and returns terminal timeout state');
   assert(mainTs.includes("ipcMain.handle('agent:getConversationPlan'") && mainTs.includes("ipcMain.handle('agent:updateConversationPlan'") && mainTs.includes('conversationPlan: agent.getConversationPlan()'), 'main ipc: exposes and returns conversation plan state');
   assert(mainTs.includes("ipcMain.handle('flow:run'") && mainTs.includes('chatMessages: agent.chatMessages') && mainTs.includes('conversations: agent.listConversationStates()'), 'main ipc: Flow run returns rendered conversation state');
   assert(mainTs.includes("ipcMain.handle('pty:kill'") && mainTs.includes('waitMs === 0') && mainTs.includes("session.proc.kill('SIGINT')"), 'main ipc: terminal interrupt timeout supports unlimited mode');
@@ -349,6 +363,8 @@ async function main() {
   assert(toolsTs.includes('timeout_ms') && toolsTs.includes('resolveBashTimeout') && toolsTs.includes("this.config.getNum('terminal', 'interrupt_timeout_ms')"), 'tools: agent bash accepts per-call timeout and reads config cap');
   assert(agentTs.includes('Agent terminal timeout: bash accepts per-call timeout_ms') && agentTs.includes('is a nonzero upper cap'), 'agent prompt: discloses bash timeout_ms and settings cap semantics');
   assert(agentTs.includes('refreshSkills(): void') && agentTs.includes('this.skills = new SkillsManager(this.rootPath);'), 'agent core: skills manager can be refreshed without restart');
+  assert(agentTs.includes("'- Memory Lab exists and provides persistent memory.'") && !agentTs.includes('Memory Lab stores persistent local memory for Newmark Agent') && agentTs.includes('handleMemoryLabTool') && agentTs.includes('async updateMemoryLab') && agentTs.includes('async reindexMemoryLab'), 'agent core: Memory Lab prompt is only a one-line existence signal and tool gated through Agent organizer');
+  assert(cliCommandsTs.includes("command === 'memory-lab'") && cliCommandsTs.includes('await agent.updateMemoryLab') && cliCommandsTs.includes('await agent.reindexMemoryLab'), 'cli commands: memory-lab update and reindex route through Agent organizer');
   assert(workspaceTs.includes('removeInternalDirectory') && workspaceTs.includes('if (!this.removeInternalDirectory(removedWorkspace.path)) return false;') && workspaceTs.includes('clearReadOnlyRecursive'), 'workspace core: internal delete verifies directory removal before returning success');
   // ---- 1. Config Manager Tests ----
   console.log('\n📋 Config Manager');
@@ -576,6 +592,17 @@ async function main() {
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'browser_cdp'), 'definitions: exposes browser_cdp');
   assert(tools.definitions('plan').some((tool: any) => tool.function?.name === 'browser_snapshot'), 'definitions: plan exposes browser_snapshot');
   assert(!tools.definitions('plan').some((tool: any) => tool.function?.name === 'browser_click'), 'definitions: plan hides browser_click');
+  const canonicalTools = tools.canonicalDefinitions();
+  const writeCanonical = canonicalTools.find(t => t.name === 'write');
+  assert(!!writeCanonical && writeCanonical.inputSchema.type === 'object' && writeCanonical.sideEffects === 'write', 'compat tools: canonical definitions preserve schema and side effects');
+  const openAiResponsesTool = tools.openAIResponsesDefinitions().find((t: any) => t.name === 'write') as any;
+  assert(openAiResponsesTool?.type === 'function' && openAiResponsesTool.parameters?.type === 'object', 'compat tools: emits OpenAI Responses function shape');
+  const openAiChatTool = tools.openAIChatDefinitions().find((t: any) => t.function?.name === 'write') as any;
+  assert(openAiChatTool?.function?.parameters?.type === 'object', 'compat tools: emits OpenAI Chat Completions function shape');
+  const anthropicTool = tools.anthropicDefinitions().find((t: any) => t.name === 'write') as any;
+  assert(anthropicTool?.input_schema?.type === 'object', 'compat tools: emits Anthropic input_schema shape');
+  const envelope = await tools.executeEnvelope('write', JSON.stringify({ path: path.join(TEST_DIR, 'tool-envelope.txt'), content: 'enveloped' }), TEST_DIR);
+  assert(envelope.ok === true && envelope.output.includes('[write] OK') && envelope.metadata?.tool === 'write', 'compat tools: executeEnvelope returns structured result');
 
   BrowserControl.setBackend(null);
   const browserNoBackend = await tools.execute('browser_snapshot', '{}', TEST_DIR);
@@ -639,6 +666,9 @@ async function main() {
   assert(!cliStateOut.includes('test-key-123') && !cliStateOut.includes('test-key-456'), 'cli state: redacts provider API keys');
   const cliZhStateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['state', '--language', 'zh', '--root', TEST_DIR]));
   assert(JSON.parse(cliZhStateOut).language === 'zh', 'cli state: supports --language zh override');
+  const cliCompatToolsOut = await captureStdout(() => runCliCommand(TEST_DIR, ['compat', '--target', 'tools', '--root', TEST_DIR]));
+  const cliCompatTools = JSON.parse(cliCompatToolsOut);
+  assert(cliCompatTools.tools.canonical.some((t: any) => t.name === 'write') && cliCompatTools.tools.openai_responses.some((t: any) => t.name === 'write'), 'cli compat: exposes canonical and provider-specific tool definitions');
   const cliToolFile = path.join(TEST_DIR, 'cli-tool-write.txt');
   const cliToolOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'write', JSON.stringify({ path: cliToolFile, content: 'cli wrote file' }), '--root', TEST_DIR]));
   assert(cliToolOut.includes('[write] OK') && fs.existsSync(cliToolFile), 'cli tool: executes ToolExecutor command');
@@ -812,7 +842,72 @@ async function main() {
   const cliMarketOut = await captureStdout(() => runCliCommand(TEST_DIR, ['skills-market', '--query', 'CliMarketNeedle', '--root', TEST_DIR]));
   const cliMarket = JSON.parse(cliMarketOut);
   assert(cliMarket.query === 'CliMarketNeedle' && cliMarket.count >= 1 && cliMarket.items.some((s: any) => s.name === 'cli-market-skill'), 'cli skills-market: filters marketplace by query');
+  const cliCatalogPath = path.join(TEST_DIR, 'cli-skill-market.json');
+  fs.writeFileSync(cliCatalogPath, JSON.stringify({
+    skills: [{
+      name: 'cli-catalog-skill',
+      description: 'CliCatalogNeedle market source entry',
+      url: 'https://example.com/cli-catalog-skill/SKILL.md',
+      license: 'MIT',
+    }],
+  }), 'utf-8');
+  const cliAddSourceOut = await captureStdout(() => runCliCommand(TEST_DIR, ['skills-market', '--add-source', '--name', 'Cli Catalog', '--type', 'json', '--path', cliCatalogPath, '--root', TEST_DIR]));
+  const cliAddSource = JSON.parse(cliAddSourceOut);
+  assert(cliAddSource.ok === true && cliAddSource.sources.some((s: any) => s.id === 'cli-catalog'), 'cli skills-market sources: adds user JSON catalog source');
+  const cliCatalogMarketOut = await captureStdout(() => runCliCommand(TEST_DIR, ['skills-market', '--query', 'CliCatalogNeedle', '--root', TEST_DIR]));
+  const cliCatalogMarket = JSON.parse(cliCatalogMarketOut);
+  assert(cliCatalogMarket.count === 1 && cliCatalogMarket.items[0].name === 'cli-catalog-skill' && cliCatalogMarket.items[0].marketSourceId === 'cli-catalog', 'cli skills-market sources: discovers skills from user catalog source');
+  const cliDisableSourceOut = await captureStdout(() => runCliCommand(TEST_DIR, ['skills-market', '--disable-source', 'cli-catalog', '--root', TEST_DIR]));
+  const cliDisableSource = JSON.parse(cliDisableSourceOut);
+  assert(cliDisableSource.ok === true && cliDisableSource.sources.some((s: any) => s.id === 'cli-catalog' && s.enabled === false), 'cli skills-market sources: disables user source');
+  const cliDisabledMarketOut = await captureStdout(() => runCliCommand(TEST_DIR, ['skills-market', '--query', 'CliCatalogNeedle', '--root', TEST_DIR]));
+  const cliDisabledMarket = JSON.parse(cliDisabledMarketOut);
+  assert(cliDisabledMarket.count === 0, 'cli skills-market sources: disabled source is not searched');
+  const cliRemoveSourceOut = await captureStdout(() => runCliCommand(TEST_DIR, ['skills-market', '--remove-source', 'cli-catalog', '--root', TEST_DIR]));
+  const cliRemoveSource = JSON.parse(cliRemoveSourceOut);
+  assert(cliRemoveSource.ok === true && !cliRemoveSource.sources.some((s: any) => s.id === 'cli-catalog'), 'cli skills-market sources: removes user source');
   fs.rmSync(cliMarketDir, { recursive: true, force: true });
+
+  // ---- 2b. Memory Lab Tests ----
+  console.log('\nMemory Lab');
+  const memoryLab = new MemoryLabManager(TEST_DIR);
+  const memoryReadEmpty = memoryLab.read();
+  assert(memoryReadEmpty.ok === true && fs.existsSync(memoryReadEmpty.indexPath) && memoryReadEmpty.instructions.includes('Memory Lab stores persistent local memory'), 'memory lab: initializes index and returns instructions');
+  const memoryUpdate = memoryLab.update(memoryLab.prepareUpdate({
+    name: '用于分析理论物理与数学的Skill',
+    description: 'A theory and math analysis skill memory.',
+    tags: ['#数学', '#物理-理论物理', '#Agent-Skill'],
+    content: '# Theory Skill\n\nUse rigorous derivations.',
+    kind: 'folder',
+  }));
+  assert(memoryUpdate.ok === true && !!memoryUpdate.slug && fs.existsSync(memoryUpdate.component?.coreMd || ''), 'memory lab: writes folder memory component core markdown');
+  const memoryIndex = memoryUpdate.index;
+  assert(!!memoryIndex.tags['#物理'] && memoryIndex.tags['#物理'].children.includes('#物理-理论物理'), 'memory lab: creates hierarchical parent tag link');
+  assert(memoryIndex.tags['#物理-理论物理'].parents.includes('#物理') && memoryIndex.tags['#物理-理论物理'].components.includes(memoryUpdate.slug || ''), 'memory lab: links component only to deepest hierarchical tag');
+  assert(memoryIndex.tags['#数学'].components.includes(memoryUpdate.slug || '') && memoryIndex.tags['#Agent-Skill'].components.includes(memoryUpdate.slug || ''), 'memory lab: links independent deepest tags to component');
+  const readComponent = memoryLab.read(memoryUpdate.slug || '');
+  assert(readComponent.ok === true && readComponent.component?.content.includes('rigorous derivations'), 'memory lab: reads component core markdown by slug');
+  const duplicateTagUpdate = memoryLab.update(memoryLab.prepareUpdate({
+    name: '用于分析理论物理与数学的Skill',
+    description: 'Updated description.',
+    tags: ['物理-理论物理', '#物理-理论物理', '#数学'],
+    content: '# Theory Skill\n\nUpdated content.',
+    kind: 'file',
+  }));
+  assert(duplicateTagUpdate.index.tags['#物理-理论物理'].components.filter((slug: string) => slug === duplicateTagUpdate.slug).length === 1, 'memory lab: reuses tags and avoids duplicate component links');
+  const reindexedMemory = memoryLab.reindex();
+  assert(reindexedMemory.ok === true && reindexedMemory.index.tags['#物理'].children.includes('#物理-理论物理'), 'memory lab: reindex preserves repaired tag graph');
+  let traversalBlocked = false;
+  try { memoryLab.prepareUpdate({ name: '..', tags: ['#bad'], content: 'bad' }); } catch { traversalBlocked = true; }
+  assert(traversalBlocked, 'memory lab: rejects traversal-like invalid slug');
+  const memoryCliContentPath = path.join(TEST_DIR, 'memory-cli-content.md');
+  fs.writeFileSync(memoryCliContentPath, '# CLI Memory\n\nCliMemoryNeedle', 'utf-8');
+  const cliMemoryUpdateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['memory-lab', '--update', '--name', 'cli-memory', '--description', 'CLI memory', '--tags', '#CLI,#Agent-Skill', '--content-file', memoryCliContentPath, '--root', TEST_DIR]));
+  const cliMemoryUpdate = JSON.parse(cliMemoryUpdateOut);
+  assert(cliMemoryUpdate.ok === true && cliMemoryUpdate.index.tags['#CLI'].components.includes('cli-memory'), 'cli memory-lab: updates memory component from content file');
+  const cliMemoryReadOut = await captureStdout(() => runCliCommand(TEST_DIR, ['memory-lab', '--component', 'cli-memory', '--root', TEST_DIR]));
+  const cliMemoryRead = JSON.parse(cliMemoryReadOut);
+  assert(cliMemoryRead.ok === true && cliMemoryRead.component.content.includes('CliMemoryNeedle') && cliMemoryRead.instructions.includes('index'), 'cli memory-lab: reads index instructions and component content');
 
   // ---- 3. Workspace Tests ----
   console.log('\n📁 Workspace Manager');
@@ -877,6 +972,10 @@ async function main() {
   subMgr.complete(subId, 'Subagent completed result');
   assert(sub?.status === 'completed', 'complete: marks completed');
   assert(subMgr.getResult(subId).includes('completed result'), 'complete: stores result');
+  const subRecord = subMgr.toRecord(subId);
+  assert(subRecord?.active === true && subRecord.mode === 'build' && !!subRecord.startedAt && !!subRecord.completedAt, 'subagent compat: record exposes stable structured fields');
+  const subEnvelope = subMgr.toToolResult(subId, 'subagent envelope output');
+  assert(subEnvelope.ok === true && subEnvelope.data?.id === subId && subEnvelope.output.includes('envelope'), 'subagent compat: tool result envelope carries record data');
 
   const resent = subMgr.send(subId, 'Continue after result');
   assert(resent === true && sub?.status === 'working', 'send: can continue completed subagent');
@@ -914,6 +1013,8 @@ async function main() {
   const closeSub = (taskAgent as unknown as { handleSubagentClose: (args: string) => string })
     .handleSubagentClose(JSON.stringify({ name: 'worker' }));
   assert(closeSub.includes('closed') && taskAgent.subagents.get('worker')?.status === 'closed', 'Agent subagent_close: closes subagent');
+  const workerRecord = taskAgent.subagents.toRecord('worker');
+  assert(workerRecord?.active === false && !!workerRecord.closedAt && !!workerRecord.result?.includes('subagent continued result'), 'Agent subagent compat: retained closed record has result and closedAt');
 
   const subagentToolFile = path.join(taskAgent.workspace.current?.path || TEST_DIR, 'subagent-tool.txt');
   let toolCallRound = 0;
@@ -999,6 +1100,18 @@ async function main() {
   assert(blockedToolSub.includes('disabled for subagents') || blockedToolSub.includes('blocked tool was rejected'), 'Agent task sandbox: management tools are blocked for subagents');
   assert(!fs.existsSync(path.join(TEST_DIR, 'skills', 'blocked-sub-skill')), 'Agent task sandbox: blocked skill tool does not install files');
 
+  const presetAgentDir = path.join(TEST_DIR, '.codex', 'agents');
+  fs.mkdirSync(presetAgentDir, { recursive: true });
+  fs.writeFileSync(path.join(presetAgentDir, 'preset-worker.toml'), 'name = "preset-worker"\ndescription = "Preset-backed worker."\nmodel = "preset-model"\nmode = "plan"\ninput_mode = "next"\ntools = ["read", "grep"]\ndisallowed_tools = ["write"]\ndeveloper_instructions = """\nUse the preset instructions.\n"""\n', 'utf-8');
+  const presetProvider = new FakeProvider(['preset subagent result']);
+  (taskAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => presetProvider;
+  const presetSub = await (taskAgent as unknown as { handleSubagent: (args: string) => Promise<string> })
+    .handleSubagent(JSON.stringify({ preset: 'preset-worker', prompt: 'Run with preset' }));
+  const presetWorker = taskAgent.subagents.get('preset-worker');
+  assert(presetSub.includes('preset subagent result'), 'Agent task preset: runs normalized agent preset as subagent');
+  assert(presetWorker?.model === 'preset-model' && presetWorker?.agentMode === 'plan' && presetWorker?.inputMode === 'next', 'Agent task preset: maps preset model mode and input mode');
+  assert(JSON.stringify(presetWorker?.metadata || {}).includes('disallowedTools') && presetWorker?.prompt.includes('Use the preset instructions.'), 'Agent task preset: preserves preset metadata and instructions');
+
   // ---- 5. Skills Tests ----
   console.log('\n📦 Skills Manager');
   const skMgr = new SkillsManager(TEST_DIR);
@@ -1021,6 +1134,125 @@ async function main() {
   fs.writeFileSync(path.join(localSkillSource, 'SKILL.md'), '---\nname: local-copy-skill\ndescription: Local copy test\n---\n# Local');
   assert(skMgr2.installFromLocal(localSkillSource) === true, 'skills: install from local source');
   assert(skMgr2.has('local-copy-skill'), 'skills: local install exists');
+  const userMarketSkillRoot = path.join(TEST_DIR, 'user-market-source');
+  const userMarketSkillDir = path.join(userMarketSkillRoot, 'user-market-skill');
+  fs.mkdirSync(userMarketSkillDir, { recursive: true });
+  fs.writeFileSync(path.join(userMarketSkillDir, 'SKILL.md'), '---\nname: user-market-skill\ndescription: User managed market source skill.\n---\n# User Market Skill', 'utf-8');
+  const userSource = skMgr2.addMarketSource({ name: 'User Local Market', type: 'local-dir', path: userMarketSkillRoot });
+  assert(userSource.id === 'user-local-market' && skMgr2.listMarketSources().some(s => s.id === 'user-local-market'), 'skills market sources: adds and lists user local-dir source');
+  assert(skMgr2.discoverMarket().some(s => s.name === 'user-market-skill' && s.marketSourceId === 'user-local-market'), 'skills market sources: discovers skills from user local-dir source');
+  assert(skMgr2.setMarketSourceEnabled('user-local-market', false) === true, 'skills market sources: disables user source');
+  assert(!skMgr2.discoverMarket().some(s => s.name === 'user-market-skill'), 'skills market sources: disabled source is hidden');
+  assert(skMgr2.setMarketSourceEnabled('user-local-market', true) === true && skMgr2.removeMarketSource('user-local-market') === true, 'skills market sources: re-enables and removes user source');
+  assert(!skMgr2.listMarketSources().some(s => s.id === 'user-local-market'), 'skills market sources: removed user source is not listed');
+  const codexSkillDir = path.join(TEST_DIR, '.agents', 'skills', 'codex-style-skill');
+  fs.mkdirSync(codexSkillDir, { recursive: true });
+  fs.writeFileSync(path.join(codexSkillDir, 'SKILL.md'), '---\nname: codex-style-skill\ndescription: Codex compatible skill.\nlicense: MIT\nallowed-tools: [read, grep]\n---\n# Codex Skill', 'utf-8');
+  const claudeSkillDir = path.join(TEST_DIR, '.claude', 'skills', 'claude-style-skill');
+  fs.mkdirSync(claudeSkillDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeSkillDir, 'SKILL.md'), '---\nname: claude-style-skill\ndescription: Claude compatible skill.\n---\n# Claude Skill', 'utf-8');
+  const codexPluginRoot = path.join(TEST_DIR, 'fixture-codex-plugin');
+  fs.mkdirSync(path.join(codexPluginRoot, '.codex-plugin'), { recursive: true });
+  fs.mkdirSync(path.join(codexPluginRoot, 'skills', 'plugin-skill'), { recursive: true });
+  fs.writeFileSync(path.join(codexPluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({
+    name: 'fixture-codex-plugin',
+    version: '1.0.0',
+    description: 'Codex fixture',
+    skills: './skills',
+    hooks: './hooks',
+    mcpServers: { codexDocs: { command: 'node' } },
+  }), 'utf-8');
+  fs.writeFileSync(path.join(codexPluginRoot, 'skills', 'plugin-skill', 'SKILL.md'), '---\nname: plugin-skill\ndescription: Plugin packaged skill.\n---\n# Plugin Skill', 'utf-8');
+  fs.mkdirSync(path.join(TEST_DIR, '.agents', 'plugins'), { recursive: true });
+  fs.writeFileSync(path.join(TEST_DIR, '.agents', 'plugins', 'marketplace.json'), JSON.stringify({
+    name: 'fixture-marketplace',
+    plugins: [
+      {
+        name: 'fixture-codex-plugin',
+        displayName: 'Fixture Codex Plugin',
+        description: 'Marketplace fixture.',
+        category: 'testing',
+        source: { type: 'local', path: '../../fixture-codex-plugin' },
+        policy: { installation: 'manual-review' },
+      },
+    ],
+  }), 'utf-8');
+  const claudePluginRoot = path.join(TEST_DIR, 'fixture-claude-plugin');
+  fs.mkdirSync(path.join(claudePluginRoot, '.claude-plugin'), { recursive: true });
+  fs.mkdirSync(path.join(claudePluginRoot, 'agents'), { recursive: true });
+  fs.writeFileSync(path.join(claudePluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({
+    name: 'fixture-claude-plugin',
+    description: 'Claude fixture',
+    agents: './agents',
+    commands: './commands',
+    hooks: './hooks',
+    mcpServers: { docs: { command: 'node' } },
+    lspServers: { tsserver: { command: 'typescript-language-server' } },
+    themes: './themes',
+    outputStyles: './styles',
+    dependencies: ['@example/claude-plugin'],
+  }), 'utf-8');
+  fs.writeFileSync(path.join(claudePluginRoot, 'agents', 'reviewer.md'), '---\nname: reviewer\ndescription: Review code.\nmodel: sonnet\n---\nReview.', 'utf-8');
+  const newmarkPluginRoot = path.join(TEST_DIR, 'fixture-newmark-plugin');
+  fs.mkdirSync(path.join(newmarkPluginRoot, '.newmark-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(newmarkPluginRoot, '.newmark-plugin', 'plugin.json'), JSON.stringify({ name: 'fixture-newmark-plugin', version: '0.1.0', tools: './tools', trusted: false }), 'utf-8');
+  const codexAgentDir = path.join(TEST_DIR, '.codex', 'agents');
+  fs.mkdirSync(codexAgentDir, { recursive: true });
+  fs.writeFileSync(path.join(codexAgentDir, 'worker.toml'), 'name = "worker"\ndescription = "Implementation worker."\nmodel = "gpt-5-codex"\ndeveloper_instructions = """\nImplement carefully.\n"""\n', 'utf-8');
+  const claudeAgentDir = path.join(TEST_DIR, '.claude', 'agents');
+  fs.mkdirSync(claudeAgentDir, { recursive: true });
+  fs.writeFileSync(path.join(claudeAgentDir, 'debugger.md'), '---\nname: debugger\ndescription: Debug failures.\nmodel: sonnet\nmaxTurns: 5\ntools: [read, grep]\n---\nDebug with evidence.', 'utf-8');
+  fs.mkdirSync(path.join(TEST_DIR, '.opencode', 'tools'), { recursive: true });
+  fs.mkdirSync(path.join(TEST_DIR, '.opencode', 'plugins'), { recursive: true });
+  fs.writeFileSync(path.join(TEST_DIR, '.opencode', 'tools', 'hello.ts'), 'export default {};\n', 'utf-8');
+  fs.writeFileSync(path.join(TEST_DIR, '.opencode', 'tools', 'echo.cjs'), 'module.exports = { execute: async (args) => ({ echoed: args.text || "", count: Number(args.count || 0) }) };\n', 'utf-8');
+  fs.writeFileSync(path.join(TEST_DIR, '.opencode', 'plugins', 'hook.ts'), 'export default {};\n', 'utf-8');
+  fs.writeFileSync(path.join(TEST_DIR, 'opencode.json'), JSON.stringify({
+    plugin: ['@opencode/plugin-example'],
+    mcp: { context7: { type: 'local', command: ['npx', '-y', '@upstash/context7-mcp'] } },
+  }), 'utf-8');
+  const marketSkills = skMgr2.discoverMarket();
+  assert(marketSkills.some(s => s.name === 'codex-style-skill' && s.source === 'codex' && s.allowedTools?.includes('read')), 'skills compat: discovers repo .agents skills with metadata');
+  assert(marketSkills.some(s => s.name === 'claude-style-skill' && s.source === 'claude'), 'skills compat: discovers repo .claude skills');
+  assert(marketSkills.some(s => s.name === 'plugin-skill' && s.source === 'plugin' && s.pluginId === 'fixture-codex-plugin'), 'skills compat: discovers plugin-packaged skills');
+  const pluginManifests = discoverPluginManifests(TEST_DIR);
+  assert(pluginManifests.some(p => p.ecosystem === 'codex' && p.name === 'fixture-codex-plugin' && p.components.skills?.some(s => s.endsWith('skills')) && p.components.mcpServers?.includes('codexDocs')), 'plugins compat: normalizes Codex plugin manifest and MCP metadata');
+  assert(pluginManifests.some(p => p.ecosystem === 'claude-code' && p.name === 'fixture-claude-plugin' && p.components.agents?.some(a => a.endsWith('agents')) && p.components.lspServers?.includes('tsserver') && p.components.dependencies?.includes('@example/claude-plugin')), 'plugins compat: normalizes Claude Code plugin components');
+  assert(pluginManifests.some(p => p.ecosystem === 'newmark' && p.name === 'fixture-newmark-plugin' && p.trustLevel === 'metadata-only'), 'plugins compat: normalizes Newmark-native plugin manifest');
+  assert(pluginManifests.some(p => p.ecosystem === 'opencode' && p.components.tools?.some(t => t.endsWith('hello.ts')) && p.components.mcpServers?.includes('context7') && p.components.dependencies?.includes('@opencode/plugin-example')), 'plugins compat: discovers OpenCode tool, MCP, and package metadata');
+  assert(pluginManifests.some(p => p.warnings?.some(w => w.includes('not auto-started') || w.includes('metadata only'))), 'plugins compat: reports non-executed hooks/MCP as warnings');
+  const marketplaceEntries = discoverPluginMarketplaces(TEST_DIR);
+  assert(marketplaceEntries.some(entry => entry.name === 'fixture-codex-plugin' && entry.marketplace === 'fixture-marketplace' && entry.installed === true), 'plugins compat: discovers Codex-style plugin marketplace entries');
+  const openCodeTools = discoverOpenCodeTools(TEST_DIR);
+  assert(openCodeTools.some(t => t.name === 'echo' && t.executable === true && t.source === 'project') && openCodeTools.some(t => t.name === 'hello' && t.executable === false && t.exportStyle === 'metadata-only'), 'opencode compat: distinguishes executable JS tools from TS metadata');
+  const openCodeToolRun = await runOpenCodeTool(TEST_DIR, 'echo', { text: 'hi', count: 2 });
+  assert(openCodeToolRun.ok === true && (openCodeToolRun.data as any).echoed === 'hi' && openCodeToolRun.output.includes('"count": 2'), 'opencode compat: executes explicit local JS custom tool');
+  const openCodeToolTsRun = await runOpenCodeTool(TEST_DIR, 'hello', {});
+  assert(openCodeToolTsRun.ok === false && openCodeToolTsRun.error?.includes('TypeScript'), 'opencode compat: refuses TS tool execution without transpilation');
+  const agentPresets = discoverAgentPresets(TEST_DIR);
+  assert(agentPresets.some(a => a.ecosystem === 'codex' && a.name === 'worker' && a.instructions?.includes('Implement carefully')), 'agents compat: normalizes Codex TOML agent preset');
+  assert(agentPresets.some(a => a.ecosystem === 'claude-code' && a.name === 'debugger' && a.tools?.includes('read') && a.maxTurns === 5), 'agents compat: normalizes Claude markdown agent preset');
+  assert(agentPresets.some(a => a.ecosystem === 'claude-code' && a.name === 'reviewer' && a.path.endsWith('reviewer.md')), 'agents compat: normalizes plugin-packaged agent preset');
+  const cliCompatPluginsOut = await captureStdout(() => runCliCommand(TEST_DIR, ['compat', '--target', 'plugins', '--root', TEST_DIR]));
+  assert(JSON.parse(cliCompatPluginsOut).plugins.some((p: any) => p.name === 'fixture-codex-plugin'), 'cli compat: exposes normalized plugin manifests');
+  const cliCompatAllOut = await captureStdout(() => runCliCommand(TEST_DIR, ['compat', '--target', 'all', '--root', TEST_DIR]));
+  const cliCompatAll = JSON.parse(cliCompatAllOut);
+  assert(cliCompatAll.tools && cliCompatAll.plugins && cliCompatAll.skills && cliCompatAll.agents && cliCompatAll.subagent_schema, 'cli compat: target all exposes every compatibility surface');
+  assert(cliCompatAll.marketplaces.some((entry: any) => entry.name === 'fixture-codex-plugin'), 'cli compat: target all exposes plugin marketplace entries');
+  assert(cliCompatAll.plugins.some((p: any) => p.ecosystem === 'opencode' && p.components.mcpServers?.includes('context7')), 'cli compat: target all includes OpenCode MCP metadata');
+  const cliCompatMarketplacesOut = await captureStdout(() => runCliCommand(TEST_DIR, ['compat', '--target', 'marketplaces', '--root', TEST_DIR]));
+  assert(JSON.parse(cliCompatMarketplacesOut).marketplaces.some((entry: any) => entry.marketplace === 'fixture-marketplace'), 'cli compat: exposes plugin marketplace target');
+  const cliCompatToolListOut = await captureStdout(() => runCliCommand(TEST_DIR, ['compat-tool', '--list', '--root', TEST_DIR]));
+  assert(JSON.parse(cliCompatToolListOut).tools.some((t: any) => t.name === 'echo' && t.executable === true), 'cli compat-tool: lists OpenCode custom tools');
+  const cliCompatToolRunOut = await captureStdout(() => runCliCommand(TEST_DIR, ['compat-tool', '--name', 'echo', JSON.stringify({ text: 'cli', count: 3 }), '--root', TEST_DIR]));
+  const cliCompatToolRun = JSON.parse(cliCompatToolRunOut);
+  assert(cliCompatToolRun.ok === true && cliCompatToolRun.data.echoed === 'cli' && cliCompatToolRun.data.count === 3, 'cli compat-tool: executes explicit OpenCode JS custom tool');
+  const cliCompatAgentsOut = await captureStdout(() => runCliCommand(TEST_DIR, ['compat', '--target', 'agents', '--root', TEST_DIR]));
+  assert(JSON.parse(cliCompatAgentsOut).agents.some((a: any) => a.name === 'worker'), 'cli compat: exposes normalized agent presets');
+  const cliCompatSkillsOut = await captureStdout(() => runCliCommand(TEST_DIR, ['compat', '--target', 'skills', '--root', TEST_DIR]));
+  assert(JSON.parse(cliCompatSkillsOut).skills.some((s: any) => s.name === 'codex-style-skill'), 'cli compat: exposes compatible skill discovery');
+  const cliCompatSubagentsOut = await captureStdout(() => runCliCommand(TEST_DIR, ['compat', '--target', 'subagents', '--root', TEST_DIR]));
+  assert(JSON.parse(cliCompatSubagentsOut).subagent_schema.record_fields.includes('closedAt'), 'cli compat: exposes subagent return schema');
 
   skMgr2.remove('test-skill');
   skMgr2.remove('local-copy-skill');
@@ -1383,6 +1615,8 @@ async function main() {
   assert(sysPrompt.includes('Visible output contract') && sysPrompt.includes('sanitized before display'), 'buildSystemPrompt: discloses output sanitization implementation');
   assert(sysPrompt.includes('BUILD MODE'), 'buildSystemPrompt: includes mode instructions');
   assert(sysPrompt.includes('bash:'), 'buildSystemPrompt: lists tools');
+  assert(sysPrompt.includes('Memory Lab exists and provides persistent memory.'), 'buildSystemPrompt: includes only Memory Lab existence signal');
+  assert(!sysPrompt.includes('Memory Lab/index.json') && !sysPrompt.includes('Memory Lab stores persistent local memory') && !sysPrompt.includes('CliMemoryNeedle'), 'buildSystemPrompt: does not include Memory Lab paths, instructions, index, or component content');
   fs.mkdirSync(path.join(TEST_DIR, 'skills', 'prompt-skill'), { recursive: true });
   fs.writeFileSync(path.join(TEST_DIR, 'skills', 'prompt-skill', 'SKILL.md'), '---\nname: prompt-skill\ndescription: Prompt visible skill\n---\n# Prompt Skill');
   assert(agent.skills.setEnabled('prompt-skill', true), 'buildSystemPrompt: test skill enabled');
@@ -1419,6 +1653,12 @@ async function main() {
   assert(planPrompt.includes('PLAN MODE'), 'buildSystemPrompt: plan mode');
   assert(planPrompt.includes('READ-ONLY'), 'buildSystemPrompt: plan mentions read-only');
   assert(planPrompt.includes('Do NOT modify any files, including README.md'), 'buildSystemPrompt: plan forbids all file modifications');
+  const planMemoryBlocked = await (agent as unknown as { handleMemoryLabTool: (tool: string, args: string) => Promise<string> })
+    .handleMemoryLabTool('memory_lab_update', JSON.stringify({ name: 'blocked-plan-memory', tags: ['#Plan'], content: 'blocked' }));
+  assert(planMemoryBlocked.includes('Plan mode') && !fs.existsSync(path.join(TEST_DIR, 'Memory Lab', 'components', 'blocked-plan-memory.md')), 'memory_lab_update: blocked in Plan mode');
+  const planMemoryRead = await (agent as unknown as { handleMemoryLabTool: (tool: string, args: string) => Promise<string> })
+    .handleMemoryLabTool('memory_lab_read', JSON.stringify({ component: 'cli-memory' }));
+  assert(planMemoryRead.includes('indexPath') && planMemoryRead.includes('instructions') && planMemoryRead.includes('CliMemoryNeedle'), 'memory_lab_read: allowed in Plan mode and returns index instructions plus component content');
 
   // Goal mode prompt
   agent.setMode('goal');
@@ -1426,6 +1666,29 @@ async function main() {
   assert(goalPrompt.includes('GOAL MODE'), 'buildSystemPrompt: goal mode');
   assert(goalPrompt.includes('Goal Complete') && goalPrompt.includes('remaining concrete gap'), 'buildSystemPrompt: goal prompt defines completion and incomplete reporting');
   assert(agent.buildSystemPrompt().includes('Automation:'), 'buildSystemPrompt: discloses automation tools and restrictions');
+
+  agent.setMode('build');
+  const memoryModelAgent = new Agent(TEST_DIR);
+  let memoryModelCalled = false;
+  const memoryModelProvider = {
+    intelligenceConfig: () => ({ temperature: 0, maxTokens: 100 }),
+    async *chatStreamWithTools(): AsyncGenerator<StreamToken> { yield { type: 'text', text: 'unused' }; },
+    async chat(): Promise<string> {
+      memoryModelCalled = true;
+      return JSON.stringify({
+        name: 'model-organized-memory',
+        description: 'Organized by MemoryLabIndexAgent',
+        tags: ['#模型整理-测试'],
+        content: '# Organized Memory\n\nModel organized content.',
+        kind: 'file',
+      });
+    },
+  };
+  (memoryModelAgent as unknown as { engineModel: () => typeof memoryModelProvider }).engineModel = () => memoryModelProvider;
+  memoryModelAgent.setMode('build');
+  const memoryToolUpdate = await (memoryModelAgent as unknown as { handleMemoryLabTool: (tool: string, args: string) => Promise<string> })
+    .handleMemoryLabTool('memory_lab_update', JSON.stringify({ name: 'raw-memory', description: 'raw', tags: ['#Raw'], content: 'raw content' }));
+  assert(memoryModelCalled && memoryToolUpdate.includes('model-organized-memory') && fs.existsSync(path.join(TEST_DIR, 'Memory Lab', 'components', 'model-organized-memory.md')), 'memory_lab_update: uses current working model through MemoryLabIndexAgent');
 
   // Flow mode prompt
   agent.setMode('flow');

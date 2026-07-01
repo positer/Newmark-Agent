@@ -2,7 +2,9 @@ function generateId(): string {
   return Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
 }
 
-export type SubagentStatus = 'idle' | 'working' | 'completed' | 'closed';
+import { NewmarkToolResult } from './compat';
+
+export type SubagentStatus = 'idle' | 'working' | 'completed' | 'closed' | 'error';
 
 export interface SubagentInstance {
   id: string;
@@ -14,6 +16,33 @@ export interface SubagentInstance {
   status: SubagentStatus;
   messages: Array<{ role: string; content: string }>;
   result: string | null;
+  error?: string;
+  startedAt: string;
+  completedAt?: string;
+  closedAt?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface NewmarkSubagentRecord {
+  id: string;
+  name: string;
+  status: SubagentStatus;
+  active: boolean;
+  model: string;
+  mode: string;
+  inputMode: string;
+  prompt: string;
+  result: string | null;
+  messages: Array<{ role: string; content: string }>;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+  closedAt?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface NewmarkSubagentToolResult extends NewmarkToolResult {
+  data?: NewmarkSubagentRecord;
 }
 
 export class SubagentManager {
@@ -39,6 +68,7 @@ export class SubagentManager {
         { role: 'user', content: prompt },
       ],
       result: null,
+      startedAt: new Date().toISOString(),
     };
     this.subs.set(sa.id, sa);
     return sa.id;
@@ -52,6 +82,8 @@ export class SubagentManager {
     const sa = this.get(id);
     if (!sa || sa.status === 'closed') return false;
     sa.status = 'working';
+    sa.error = undefined;
+    sa.completedAt = undefined;
     sa.messages.push({ role: 'user', content: prompt });
     return true;
   }
@@ -66,21 +98,68 @@ export class SubagentManager {
     if (!sa || sa.status === 'closed') return;
     sa.result = result;
     sa.status = 'completed';
+    sa.error = undefined;
+    sa.completedAt = new Date().toISOString();
     sa.messages.push({ role: 'assistant', content: result });
   }
 
   fail(id: string, error: string): void {
-    this.complete(id, `[Subagent Error] ${error}`);
+    const sa = this.get(id);
+    if (!sa || sa.status === 'closed') return;
+    sa.result = `[Subagent Error] ${error}`;
+    sa.status = 'error';
+    sa.error = error;
+    sa.completedAt = new Date().toISOString();
+    sa.messages.push({ role: 'assistant', content: sa.result });
   }
 
   markWorking(id: string): void {
     const sa = this.get(id);
-    if (sa && sa.status !== 'closed') sa.status = 'working';
+    if (sa && sa.status !== 'closed') {
+      sa.status = 'working';
+      sa.error = undefined;
+    }
   }
 
   close(id: string): void {
     const sa = this.get(id);
-    if (sa) sa.status = 'closed';
+    if (sa) {
+      sa.status = 'closed';
+      sa.closedAt = new Date().toISOString();
+    }
+  }
+
+  toRecord(idOrName: string): NewmarkSubagentRecord | undefined {
+    const sa = this.get(idOrName);
+    if (!sa) return undefined;
+    return {
+      id: sa.id,
+      name: sa.name,
+      status: sa.status,
+      active: sa.status !== 'closed',
+      model: sa.model,
+      mode: sa.agentMode,
+      inputMode: sa.inputMode,
+      prompt: sa.prompt,
+      result: sa.result,
+      messages: sa.messages.slice(),
+      error: sa.error,
+      startedAt: sa.startedAt,
+      completedAt: sa.completedAt,
+      closedAt: sa.closedAt,
+      metadata: sa.metadata,
+    };
+  }
+
+  toToolResult(idOrName: string, output: string, ok = true): NewmarkSubagentToolResult {
+    const record = this.toRecord(idOrName);
+    return {
+      ok,
+      output,
+      data: record,
+      error: ok ? undefined : output,
+      metadata: { kind: 'subagent' },
+    };
   }
 
   getResult(name: string): string {

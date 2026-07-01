@@ -12,6 +12,7 @@ export interface IntelligenceConfig {
 }
 
 export type ProviderProtocol = 'openai' | 'anthropic';
+export type OpenAITransportMode = 'chat_stream' | 'chat' | 'responses';
 
 type AnthropicMessage = {
   role: 'user' | 'assistant';
@@ -26,7 +27,8 @@ export class LLMProvider {
     public name: string,
     public baseUrl: string,
     public apiKey: string,
-    public explicitProtocol?: ProviderProtocol
+    public explicitProtocol?: ProviderProtocol,
+    public openAIMode: OpenAITransportMode | boolean = 'chat_stream'
   ) {}
 
   intelligenceConfig(tier: string): IntelligenceConfig {
@@ -42,6 +44,13 @@ export class LLMProvider {
     const marker = `${this.name} ${this.baseUrl}`.toLowerCase();
     if (marker.includes('anthropic') || marker.includes('/anthropic') || marker.includes('claude')) return 'anthropic';
     return 'openai';
+  }
+
+  private openAITransportMode(): OpenAITransportMode {
+    if (this.openAIMode === false) return 'chat';
+    if (this.openAIMode === true) return 'chat_stream';
+    if (this.openAIMode === 'chat' || this.openAIMode === 'responses') return this.openAIMode;
+    return 'chat_stream';
   }
 
   private cleanBaseUrl(): string {
@@ -201,7 +210,13 @@ export class LLMProvider {
         'if ($method -eq "POST") { $params["Body"] = $bodyJson }',
         'if ($method -eq "POST") { $params["ContentType"] = "application/json; charset=utf-8" }',
         '$resp = Invoke-WebRequest @params',
-        '[System.IO.File]::WriteAllText($responsePath, [string]$resp.Content, $utf8NoBom)',
+        'if ($resp.RawContentStream -ne $null) {',
+        '  $resp.RawContentStream.Position = 0',
+        '  $out = [System.IO.File]::Open($responsePath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)',
+        '  try { $resp.RawContentStream.CopyTo($out) } finally { $out.Dispose() }',
+        '} else {',
+        '  [System.IO.File]::WriteAllText($responsePath, [string]$resp.Content, $utf8NoBom)',
+        '}',
         'Write-Output ([int]$resp.StatusCode)',
       ].join('; ');
       const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
@@ -517,6 +532,17 @@ export class LLMProvider {
       stream: true,
     };
 
+    const mode = this.openAITransportMode();
+    if (mode === 'responses') {
+      yield* this.openAIResponsesWithTools(model, messages, systemPrompt, temperature, maxTokens, tools);
+      return;
+    }
+
+    if (mode === 'chat') {
+      yield* this.openAIChatWithToolsNodeFallback(url, body);
+      return;
+    }
+
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(), 120000);
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -752,6 +778,10 @@ export class LLMProvider {
       temperature,
       max_tokens: maxTokens,
     };
+
+    if (this.openAITransportMode() === 'responses') {
+      return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens);
+    }
 
     const response = await this.postJsonWithFetchFallback(url, this.openAIHeaders(), body);
 

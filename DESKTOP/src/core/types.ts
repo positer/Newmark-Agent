@@ -10,11 +10,24 @@ export interface StreamToken {
 }
 
 export interface ChatMessage {
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'workflow';
   content: string;
   mode: string;
   model: string;
   timestamp: string;
+}
+
+export interface AgentWorkEvent {
+  id: string;
+  conversationId: string;
+  type: 'start' | 'text' | 'tool_call' | 'tool_result' | 'status' | 'done' | 'error' | 'queue_update';
+  content: string;
+  mode: string;
+  model: string;
+  timestamp: string;
+  toolName?: string;
+  toolArgs?: string;
+  queue?: { steering: string[]; followUp: string[] };
 }
 
 export interface GoalState {

@@ -12,14 +12,14 @@ import { SkillsManager } from './skills';
 import { FlowEngine, FlowWorkflow } from './flow';
 import { AutomationCondition, AutomationManager, AutomationSchedule } from './automation';
 import { MemoryLabManager, MemoryLabPreparedUpdate, MemoryLabUpdateInput, MemoryLabWriteResult } from './memoryLab';
+import { runAgentKernel } from './agentKernelRunner';
 import {
   AgentMode, InputMode, AgentStatus, StreamToken,
-  ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff,
+  ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent,
 } from './types';
 
-export { AgentMode, InputMode, AgentStatus, StreamToken, ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff };
+export { AgentMode, InputMode, AgentStatus, StreamToken, ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent };
 
-const MAX_TOOL_ROUNDS = 15;
 export interface ModelValidationResult extends ModelEvaluation {
   name: string;
   provider: string;
@@ -31,6 +31,7 @@ interface AgentRuntimeOptions {
   subagent?: boolean;
   subagentName?: string;
   subagentPrompt?: string;
+  agentOnly?: boolean;
 }
 interface StoredConversationState {
   activeConversationId?: string;
@@ -144,6 +145,7 @@ export class Agent {
   public flowPc = 0;
   public workspaceGoalItems: GoalItem[] = [];
   public subscribers: Array<(msg: string) => void> = [];
+  public workEventSubscribers: Array<(event: AgentWorkEvent) => void> = [];
   public activeConversationId = 'default';
   public lastCompression: {
     at: string;
@@ -155,21 +157,29 @@ export class Agent {
     fallback: boolean;
   } | null = null;
   private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; plan: ConversationPlanState; updatedAt?: string }>();
-  private isSubagentRuntime = false;
+  public isSubagentRuntime = false;
   private subagentName = '';
   private subagentPrompt = '';
   private forcedProvider: LLMProvider | null = null;
   private processingConversationId: string | null = null;
   private processDepth = 0;
   private automationManager: AutomationManager | null = null;
+  private activeAgentKernelRuntime: { steer(message: unknown): void; followUp(message: unknown): void } | null = null;
+  private awaitingAgentKernelRuntime = false;
+  private pendingAgentKernelQueue: Array<{ content: string; queueMode: 'steer' | 'followUp' }> = [];
+  private agentKernelUserMessageStartSubscribers: Array<(content: string) => void> = [];
+  public readonly agentOnly: boolean;
 
   constructor(public rootPath: string, options: AgentRuntimeOptions = {}) {
     this.isSubagentRuntime = !!options.subagent;
+    this.agentOnly = !!options.agentOnly;
     this.subagentName = options.subagentName || '';
     this.subagentPrompt = options.subagentPrompt || '';
     this.config = new ConfigManager(rootPath);
-    if (this.isSubagentRuntime) {
+    if (this.isSubagentRuntime || this.agentOnly) {
       this.config.set('workspace', 'auto_create_timestamp_workspace', false);
+    }
+    if (this.isSubagentRuntime) {
       this.config.set('models', 'auto_switch', false);
       this.config.set('skills', 'auto_download', 'disabled');
     }
@@ -199,7 +209,7 @@ export class Agent {
       const stored = this.readStoredConversationState(this.workspace.current);
       if (stored.activeConversationId) this.activeConversationId = stored.activeConversationId;
     }
-    if (!this.isSubagentRuntime) this.loadWorkspaceConversationState();
+    if (!this.isSubagentRuntime && !this.agentOnly) this.loadWorkspaceConversationState();
   }
 
   setMode(m: AgentMode): void {
@@ -216,7 +226,24 @@ export class Agent {
     return this.mode.charAt(0).toUpperCase() + this.mode.slice(1);
   }
 
-  setModel(model: string): void { this.model = model; }
+  setModel(model: string): void {
+    const requested = String(model || '').trim();
+    if (requested === 'auto') {
+      if (!this.config.autoSwitchEnabled()) {
+        const fallback = this.config.getStr('models', 'default_model') || this.config.allModels()[0]?.name || this.model;
+        this.model = fallback || '';
+        return;
+      }
+      const current = this.model && this.model !== 'auto' ? this.config.findModel(this.model) : null;
+      const anchor = current?.provider || this.config.autoSwitchAnchorProvider() || this.config.findModel(this.config.getStr('models', 'default_model'))?.provider || '';
+      if (anchor) this.config.set('models', 'auto_switch_anchor_provider', anchor);
+      this.model = 'auto';
+      return;
+    }
+    this.model = requested;
+    const current = requested ? this.config.findModel(requested) : null;
+    if (current?.provider) this.config.set('models', 'auto_switch_anchor_provider', current.provider);
+  }
   setIntelligence(tier: string): void { this.intelligence = tier; }
   setAutomationManager(manager: AutomationManager | null): void { this.automationManager = manager; }
 
@@ -247,6 +274,135 @@ export class Agent {
 
   private safeConversationId(id: string): string {
     return String(id || 'default').trim().replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 120) || 'default';
+  }
+
+  subscribeWorkEvents(fn: (event: AgentWorkEvent) => void): () => void {
+    this.workEventSubscribers.push(fn);
+    return () => {
+      this.workEventSubscribers = this.workEventSubscribers.filter(sub => sub !== fn);
+    };
+  }
+
+  nowLabel(): string {
+    return new Date().toLocaleTimeString();
+  }
+
+  private nowIso(): string {
+    return new Date().toISOString();
+  }
+
+  visibleToolArgs(args: string): string {
+    const raw = String(args || '');
+    try {
+      const parsed = JSON.parse(raw);
+      const compact: Record<string, unknown> = {};
+      for (const key of Object.keys(parsed).slice(0, 8)) {
+        const value = parsed[key];
+        compact[key] = typeof value === 'string' && value.length > 300 ? `${value.slice(0, 300)}...[truncated]` : value;
+      }
+      return this.sanitizeAssistantOutput(JSON.stringify(compact));
+    } catch {
+      return this.sanitizeAssistantOutput(raw.length > 600 ? `${raw.slice(0, 600)}...[truncated]` : raw);
+    }
+  }
+
+  emitWorkEvent(input: Omit<AgentWorkEvent, 'id' | 'conversationId' | 'mode' | 'model' | 'timestamp'> & Partial<Pick<AgentWorkEvent, 'conversationId' | 'mode' | 'model' | 'timestamp'>>): AgentWorkEvent {
+    const event: AgentWorkEvent = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      conversationId: input.conversationId || this.activeConversationId || 'default',
+      type: input.type,
+      content: this.sanitizeAssistantOutput(input.content || ''),
+      mode: input.mode || this.modeName(),
+      model: input.model || this.model,
+      timestamp: input.timestamp || this.nowLabel(),
+      toolName: input.toolName,
+      toolArgs: input.toolArgs,
+      queue: input.queue,
+    };
+    for (const sub of this.workEventSubscribers) {
+      try { sub(event); } catch { /* ignore subscriber errors */ }
+    }
+    return event;
+  }
+
+  appendWorkflowMessage(content: string, toolName?: string, toolArgs?: string): void {
+    const safe = this.sanitizeAssistantOutput(content);
+    const suffix = toolArgs ? `\n\n${toolArgs}` : '';
+    this.chatMessages.push({
+      role: 'workflow',
+      content: safe + suffix,
+      mode: toolName ? `tool:${toolName}` : this.modeName(),
+      model: this.model,
+      timestamp: this.nowLabel(),
+    });
+    this.saveWorkspaceConversationState();
+  }
+
+  recordToolResult(toolName: string, result: string): void {
+    const text = String(result || '');
+    const display = text.length > 3000 ? `${text.slice(0, 3000)}...[truncated]` : text;
+    this.emitWorkEvent({
+      type: 'tool_result',
+      content: `Tool ${toolName} result:\n${display}`,
+      toolName,
+    });
+    this.appendWorkflowMessage(`Tool ${toolName} result:\n${display}`, toolName);
+  }
+
+  recordWorkStatus(content: string): void {
+    const text = String(content || '').trim();
+    if (!text) return;
+    this.emitWorkEvent({ type: 'status', content: text });
+    this.appendWorkflowMessage(text, 'agent_status');
+  }
+
+  attachAgentKernelRuntime(runtime: { steer(message: unknown): void; followUp(message: unknown): void } | null): void {
+    this.activeAgentKernelRuntime = runtime;
+    this.awaitingAgentKernelRuntime = false;
+    if (!runtime) {
+      this.pendingAgentKernelQueue = [];
+      return;
+    }
+    const queued = this.pendingAgentKernelQueue.splice(0);
+    for (const item of queued) this.forwardAgentKernelQueueMessage(item.content, item.queueMode);
+  }
+
+  subscribeAgentKernelUserMessageStart(fn: (content: string) => void): () => void {
+    this.agentKernelUserMessageStartSubscribers.push(fn);
+    return () => {
+      this.agentKernelUserMessageStartSubscribers = this.agentKernelUserMessageStartSubscribers.filter(sub => sub !== fn);
+    };
+  }
+
+  notifyAgentKernelUserMessageStart(content: string): void {
+    const text = String(content || '');
+    if (!text) return;
+    for (const sub of this.agentKernelUserMessageStartSubscribers) {
+      try { sub(text); } catch { /* ignore subscriber errors */ }
+    }
+  }
+
+  queueActiveKernelMessage(content: string, queueMode: 'steer' | 'followUp'): boolean {
+    if (!this.activeAgentKernelRuntime) {
+      if (this.awaitingAgentKernelRuntime) {
+        this.pendingAgentKernelQueue.push({ content, queueMode });
+        return true;
+      }
+      return false;
+    }
+    this.forwardAgentKernelQueueMessage(content, queueMode);
+    return true;
+  }
+
+  private forwardAgentKernelQueueMessage(content: string, queueMode: 'steer' | 'followUp'): void {
+    if (!this.activeAgentKernelRuntime) return;
+    const message = {
+      role: 'user',
+      content,
+      timestamp: Date.now(),
+    };
+    if (queueMode === 'steer') this.activeAgentKernelRuntime.steer(message);
+    else this.activeAgentKernelRuntime.followUp(message);
   }
 
   private normalizeConversationPlan(plan: Partial<ConversationPlanState> | null | undefined): ConversationPlanState {
@@ -348,7 +504,7 @@ export class Agent {
     return out.replace(/\n{3,}/g, '\n\n').trim();
   }
 
-  private sanitizeVisibleTokens(tokens: StreamToken[]): StreamToken[] {
+  sanitizeVisibleTokens(tokens: StreamToken[]): StreamToken[] {
     const cleaned: StreamToken[] = [];
     let textBuffer = '';
     for (const token of tokens) {
@@ -370,7 +526,7 @@ export class Agent {
     return cleaned;
   }
 
-  private saveWorkspaceConversationState(): void {
+  saveWorkspaceConversationState(): void {
     const key = this.workspaceConversationKey();
     if (!key) return;
     const updatedAt = new Date().toISOString();
@@ -447,14 +603,35 @@ export class Agent {
 
   setConversation(id: string): string {
     const clean = this.safeConversationId(id || 'default');
-    if (this.processingConversationId && clean !== this.processingConversationId) {
-      throw new Error(`Conversation is locked while the agent is working: ${this.processingConversationId}`);
-    }
     this.saveWorkspaceConversationState();
     this.activeConversationId = clean;
     this.loadWorkspaceConversationState();
     this.saveWorkspaceConversationState();
     return this.activeConversationId;
+  }
+
+  mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'>): void {
+    const previous = this.activeConversationId || 'default';
+    const clean = this.safeConversationId(id || 'default');
+    this.saveWorkspaceConversationState();
+    this.activeConversationId = clean;
+    this.chatMessages = [...source.chatMessages];
+    this.history = [...source.history];
+    this.conversationPlan = this.normalizeConversationPlan(source.conversationPlan);
+    const key = this.workspaceConversationKey();
+    if (key) {
+      this.workspaceConversations.set(key, {
+        chatMessages: [...this.chatMessages],
+        history: [...this.history],
+        plan: this.normalizeConversationPlan(this.conversationPlan),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    this.saveWorkspaceConversationState();
+    if (previous !== clean) {
+      this.activeConversationId = previous;
+      this.loadWorkspaceConversationState();
+    }
   }
 
   getConversationPlan(): ConversationPlanState {
@@ -497,6 +674,29 @@ export class Agent {
   modelLabel(): string {
     const names = this.allModelNames();
     return names.find(n => n.includes(this.model)) || this.model;
+  }
+
+  estimateContextTokens(messages: Array<Record<string, unknown>> = this.history): number {
+    const chars = messages.reduce((sum, m) => {
+      const content = String(m.content || '');
+      const toolCalls = Array.isArray(m.tool_calls) ? JSON.stringify(m.tool_calls) : '';
+      return sum + content.length + toolCalls.length;
+    }, 0);
+    return Math.max(1, Math.ceil(chars / 4));
+  }
+
+  contextWindow(modelName = this.model): { estimatedTokens: number; maxTokens: number; ratio: number; warning: 'ok' | 'near_limit' | 'over_limit'; model: string } {
+    const estimatedTokens = this.estimateContextTokens();
+    const model = modelName === 'auto' ? this.config.findModel(this.config.getStr('models', 'default_model')) : this.config.findModel(modelName);
+    const maxTokens = Math.max(1, Number(model?.max_tokens || 0) || 128000);
+    const ratio = estimatedTokens / maxTokens;
+    return {
+      estimatedTokens,
+      maxTokens,
+      ratio,
+      warning: ratio >= 1 ? 'over_limit' : ratio >= 0.85 ? 'near_limit' : 'ok',
+      model: modelName,
+    };
   }
 
   updateGoal(newGoal: string): void {
@@ -572,12 +772,12 @@ export class Agent {
       const label = m.display || m.name;
       return `${m.provider} / ${label}`;
     });
-    return this.config.allModels().length > 0 ? ['auto', ...names] : names;
+    return this.config.autoSwitchEnabled() && this.config.allModels().length > 0 ? ['auto', ...names] : names;
   }
 
   async evaluateAndSwitch(task: string): Promise<boolean> {
-    if (!this.config.autoSwitchEnabled() && this.model !== 'auto') return false;
-    const all = this.config.allModels();
+    if (!this.config.autoSwitchEnabled() || this.model !== 'auto') return false;
+    const all = this.scopedSwitchModels(this.model);
     if (all.length < 1) return false;
 
     const pref = this.config.autoSwitchPreference();
@@ -585,12 +785,23 @@ export class Agent {
       task.includes('complex') || task.includes('rewrite') || task.length > 500;
     const isSimple = task.includes('check') || task.includes('list') ||
       task.includes('read') || task.length < 50;
+    const needsMultimodal = this.needsMultimodalModel(task);
 
-    const available = all.filter(m => (m.evaluation?.status || 'unknown') !== 'unavailable' && !(m.evaluation?.status || '').startsWith('error'));
-    const candidates = available.length ? available : all;
+    const requiredTokens = this.estimateContextTokens() + 2048;
+    const statusUsable = all.filter(m => {
+      const status = (m.evaluation?.status || 'unknown');
+      return status !== 'unavailable' && !status.startsWith('error');
+    });
+    const available = statusUsable.filter(m => {
+      const maxTokens = Number(m.max_tokens || 0) || 128000;
+      const supportsMultimodal = !!m.vision || !!m.image_output;
+      return maxTokens >= requiredTokens && (!needsMultimodal || supportsMultimodal);
+    });
+    if (!available.length) return false;
+    const candidates = available;
     const ranked = [...candidates].sort((a, b) => this.modelScore(b, pref, isComplex, isSimple) - this.modelScore(a, pref, isComplex, isSimple));
     const best = ranked.find(m => {
-      const cap = m.capability_rating || '';
+      const cap = this.performanceRating(m.name, m.capability_rating, m.description, m.display);
       const spd = m.speed_rating || '';
       switch (pref) {
         case 'performance': return cap === 'high';
@@ -600,23 +811,24 @@ export class Agent {
       }
     }) || ranked[0];
 
-    if (best && best.name !== this.model && best.name) {
+    if (best && best.name) {
       this.model = best.name;
+      if (best.provider) this.config.set('models', 'auto_switch_anchor_provider', best.provider);
       return true;
     }
     return false;
   }
 
-  private modelIsUnavailable(modelName: string): boolean {
+  modelIsUnavailable(modelName: string): boolean {
     const model = this.config.findModel(modelName);
     const status = String(model?.evaluation?.status || '').toLowerCase();
     return status === 'unavailable' || status.startsWith('error');
   }
 
-  private switchToFallbackModel(): string | null {
+  switchToFallbackModel(): string | null {
     if (!this.config.getBool('models', 'fallback_on_unavailable')) return null;
     const current = this.model;
-    const all = this.config.allModels().filter(m => m.name !== current);
+    const all = this.scopedSwitchModels(current).filter(m => m.name !== current);
     if (!all.length) return null;
     const usable = all.filter(m => {
       const status = String(m.evaluation?.status || 'unknown').toLowerCase();
@@ -628,11 +840,25 @@ export class Agent {
     const next = ranked[0];
     if (!next?.name) return null;
     this.model = next.name;
+    if (next.provider) this.config.set('models', 'auto_switch_anchor_provider', next.provider);
     return current;
   }
 
-  private isLlmErrorText(text: string): boolean {
+  isLlmErrorText(text: string): boolean {
     return /^\s*\[(?:LLM Error|Error)(?::|\])/i.test(text || '');
+  }
+
+  private scopedSwitchModels(currentModelName: string): ReturnType<ConfigManager['allModels']> {
+    const all = this.config.allModels();
+    if (this.config.autoSwitchScope() !== 'provider') return all;
+    const current = currentModelName === 'auto' ? undefined : this.config.findModel(currentModelName);
+    const provider = current?.provider ||
+      this.config.autoSwitchAnchorProvider() ||
+      this.config.findModel(this.config.getStr('models', 'default_model'))?.provider ||
+      all[0]?.provider ||
+      '';
+    if (!provider) return all;
+    return all.filter(m => m.provider === provider);
   }
 
   async validateModels(selectedNames?: string[]): Promise<ModelValidationResult[]> {
@@ -653,17 +879,17 @@ export class Agent {
         vision_input: !!m.vision,
         image_output: !!m.image_output,
         cost_rating: this.costRating(m.cost_per_1k_input, m.cost_per_1k_output),
-        performance_rating: this.performanceRating(m.name, m.capability_rating),
+        performance_rating: this.performanceRating(m.name, m.capability_rating, m.description, m.display),
         speed_rating: 'unknown',
         notes: '',
       };
       if (!m.provider_url || !m.api_key) {
         base.notes = 'Missing provider URL or API key';
         results.push(base);
-        this.config.updateModel(m.provider, m.name, { evaluation: base, speed_rating: base.speed_rating, capability_rating: base.performance_rating });
+        this.config.updateModel(m.provider, m.name, { evaluation: base, speed_rating: base.speed_rating, capability_rating: base.performance_rating, description: this.modelCapabilityDescription(m, base.performance_rating, base.speed_rating, base.cost_rating, false) });
         continue;
       }
-      const p = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol);
+      const p = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode());
       try {
         const { ok, latency } = await p.validate(m.name);
         const result: ModelValidationResult = {
@@ -676,7 +902,7 @@ export class Agent {
           notes: ok ? 'Text chat validation succeeded' : 'Provider returned no usable text output',
         };
         results.push(result);
-        this.config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating });
+        this.config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: this.modelCapabilityDescription(m, result.performance_rating, result.speed_rating, result.cost_rating, ok) });
       } catch (e) {
         const result: ModelValidationResult = {
           ...base,
@@ -684,14 +910,14 @@ export class Agent {
           notes: 'Validation request failed',
         };
         results.push(result);
-        this.config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating });
+        this.config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: this.modelCapabilityDescription(m, result.performance_rating, result.speed_rating, result.cost_rating, false) });
       }
     }
     this.config.save();
     return results;
   }
 
-  private engineModel(): LLMProvider | null {
+  engineModel(): LLMProvider | null {
     if (this.forcedProvider) return this.forcedProvider;
     if (this.model === 'auto') {
       const best = this.config.allModels().find(m => (m.evaluation?.status || 'available') === 'available') || this.config.allModels()[0];
@@ -699,7 +925,7 @@ export class Agent {
     }
     const m = this.config.findModel(this.model);
     if (!m) return null;
-    return new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol);
+    return new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode());
   }
 
   async fuzzyInject(name: string, url: string, key: string, protocol?: ProviderProtocol): Promise<{ ok: boolean; provider?: string; models?: string[]; warning?: string }> {
@@ -763,7 +989,7 @@ export class Agent {
 
   private async discoverProviderModels(providerName: string, baseUrl: string, key: string, protocol?: ProviderProtocol): Promise<{ models: string[]; source: 'models_endpoint' | 'heuristic'; warning?: string }> {
     try {
-      const listed = await new LLMProvider(providerName, baseUrl, key, protocol || inferProviderProtocol(providerName, baseUrl)).listModels();
+      const listed = await new LLMProvider(providerName, baseUrl, key, protocol || inferProviderProtocol(providerName, baseUrl), this.config.openAIApiMode()).listModels();
       if (listed.length) {
         return { models: listed.slice(0, 12), source: 'models_endpoint' };
       }
@@ -775,13 +1001,22 @@ export class Agent {
 
   private modelScore(m: Pick<ModelConfig, 'name'> & Partial<ModelConfig>, pref: string, isComplex: boolean, isSimple: boolean): number {
     const speed = m.speed_rating === 'fast' ? 3 : m.speed_rating === 'medium' ? 2 : m.speed_rating === 'slow' ? 1 : 0;
-    const perf = this.performanceRating(m.name, m.capability_rating) === 'high' ? 3 : this.performanceRating(m.name, m.capability_rating) === 'medium' ? 2 : 1;
+    const rating = this.performanceRating(m.name, m.capability_rating, m.description, (m as Partial<ModelConfig>).display);
+    const perf = rating === 'high' ? 3 : rating === 'medium' ? 2 : 1;
     const cost = this.costRating(m.cost_per_1k_input || 0, m.cost_per_1k_output || 0);
     const cheap = cost === 'free' ? 4 : cost === 'cheap' ? 3 : cost === 'standard' ? 2 : 1;
     if (pref === 'speed') return speed * 5 + perf + cheap;
     if (pref === 'performance') return perf * 5 + speed + cheap;
     if (pref === 'cheap_save') return cheap * 5 + speed + (isComplex ? perf : 0);
     return (isComplex ? perf * 4 : 0) + (isSimple ? speed * 4 : 0) + cheap + perf + speed;
+  }
+
+  private needsMultimodalModel(task: string): boolean {
+    const text = [
+      task,
+      ...this.history.slice(-6).map(m => String(m.content || '')),
+    ].join('\n').toLowerCase();
+    return /data:image\/|!\[[^\]]*\]\([^)]+\.(?:png|jpe?g|gif|webp|bmp|svg)(?:\?[^)]*)?\)|<img\b|image_url|视觉|图片|图像|截图|multimodal|vision|screenshot/.test(text);
   }
 
   private speedRating(latency: number, ok: boolean): string {
@@ -799,12 +1034,29 @@ export class Agent {
     return 'expensive';
   }
 
-  private performanceRating(name: string, existing?: string): string {
+  private performanceRating(name: string, existing?: string, description?: string, display?: string): string {
     if (existing && existing !== 'unknown') return existing;
+    const text = `${description || ''} ${display || ''}`.toLowerCase();
+    if (/(high capability|capability=high|performance|reasoning|complex|deep|advanced|frontier|large|pro|opus|gpt-4|o3|70b|120b)/.test(text)) return 'high';
+    if (/(low capability|capability=low|small|tiny|cheap|economical|basic|lightweight)/.test(text)) return 'low';
+    if (/(medium capability|capability=medium|balanced|standard|mini|flash|haiku|fast)/.test(text)) return 'medium';
     const n = name.toLowerCase();
     if (/(opus|gpt-4\.1|gpt-4o|o3|r1|deepseek-v3|70b|120b)/.test(n)) return 'high';
     if (/(mini|haiku|flash|8b|7b|3b)/.test(n)) return 'medium';
     return 'medium';
+  }
+
+  private modelCapabilityDescription(m: Pick<ModelConfig, 'name' | 'description' | 'display' | 'vision' | 'thinking' | 'image_output'>, capability: string, speed: string, cost: string, ok: boolean): string {
+    const prior = String(m.description || '').trim();
+    const multimodal = [
+      m.vision ? 'vision-input' : '',
+      m.image_output ? 'image-output' : '',
+      m.thinking ? 'thinking' : '',
+    ].filter(Boolean).join(',') || 'text-only';
+    const generated = `${ok ? 'Validated text model' : 'Unvalidated text model'}; capability=${capability || 'medium'}; speed=${speed || 'unknown'}; cost=${cost || 'unknown'}; multimodal=${multimodal}; source=model validation.`;
+    if (!prior || /^(Listed by provider \/models endpoint|Discovered by fuzzy suffix probing|Discovered by fuzzy injection)/i.test(prior)) return generated;
+    if (/capability=/.test(prior) && /speed=/.test(prior) && /cost=/.test(prior) && /multimodal=/.test(prior)) return prior;
+    return `${prior} ${generated}`;
   }
 
   private inferProviderName(text: string): string {
@@ -830,7 +1082,7 @@ export class Agent {
   }
 
   async process(input: string): Promise<StreamToken[]> {
-    if (!this.workspace.current) {
+    if (!this.workspace.current && !this.agentOnly) {
       this.status = 'idle';
       return [{ type: 'text', text: '[Workspace required] Select or create a workspace before starting a conversation.' }];
     }
@@ -842,12 +1094,14 @@ export class Agent {
     this.pendingOptions = [];
 
     try {
-      const now = new Date().toLocaleTimeString();
+      const now = this.nowLabel();
       this.chatMessages.push({ role: 'user', content: input, mode: this.modeName(), model: this.model, timestamp: now });
       this.history.push({ role: 'user', content: input });
       this.saveWorkspaceConversationState();
+      this.emitWorkEvent({ type: 'start', content: 'Agent started working.' });
+      this.appendWorkflowMessage('Agent started working.', 'agent_status');
 
-      if (this.config.autoSwitchEnabled() || this.model === 'auto') {
+      if (this.model === 'auto') {
         await this.evaluateAndSwitch(input);
       }
       if (this.modelIsUnavailable(this.model)) {
@@ -859,10 +1113,28 @@ export class Agent {
         const result = await this.processOpencode(input);
         this.status = 'idle';
         this.saveWorkspaceConversationState();
+        this.emitWorkEvent({ type: 'done', content: 'Agent finished.' });
+        this.appendWorkflowMessage('Agent finished.', 'agent_status');
         return this.sanitizeVisibleTokens(result);
       }
 
-      return this.sanitizeVisibleTokens(await this.processBuiltin(input));
+      this.awaitingAgentKernelRuntime = true;
+      let result: StreamToken[];
+      try {
+        result = this.sanitizeVisibleTokens(await runAgentKernel(this));
+      } finally {
+        this.awaitingAgentKernelRuntime = false;
+        if (!this.activeAgentKernelRuntime) this.pendingAgentKernelQueue = [];
+      }
+      this.emitWorkEvent({ type: 'done', content: 'Agent finished.' });
+      this.appendWorkflowMessage('Agent finished.', 'agent_status');
+      return result;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.status = 'error';
+      this.emitWorkEvent({ type: 'error', content: msg });
+      this.appendWorkflowMessage(`[Error] ${msg}`);
+      throw e;
     } finally {
       this.processDepth = Math.max(0, this.processDepth - 1);
       if (this.processDepth === 0) this.processingConversationId = null;
@@ -876,182 +1148,11 @@ export class Agent {
     ]);
   }
 
-  private async processBuiltin(_input: string, fallbackAttempted = false): Promise<StreamToken[]> {
-    const provider = this.engineModel();
-    if (!provider) {
-      this.status = 'error';
-      this.saveWorkspaceConversationState();
-      return [{ type: 'text', text: '[Error] No LLM configured. Add provider in Settings > Models.' }];
-    }
-
-    const sys = this.buildSystemPrompt();
-    const { temperature, maxTokens } = provider.intelligenceConfig(this.intelligence);
-    const toolDefs = this.subagentToolDefinitions(this.tools.definitions(this.mode));
-    const msgs: Array<Record<string, unknown>> = [...this.history];
-    const allTokens: StreamToken[] = [];
-
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      if (round > 0) await this.maybeCompress(msgs, provider);
-
-      let textAcc = '';
-      let reasoningAcc = '';
-      const tcList: Array<{ id: string; name: string; arguments: string }> = [];
-
-      try {
-        const stream = provider.chatStreamWithTools(
-          this.model, msgs, sys, temperature, maxTokens, toolDefs
-        );
-
-        for await (const tok of stream) {
-          if (tok.reasoningContent) {
-            reasoningAcc = tok.reasoningContent;
-          }
-          if (tok.type === 'text') {
-            textAcc += tok.text;
-            allTokens.push(tok);
-          } else if (tok.type === 'tool_call' && tok.toolCall) {
-            tcList.push(tok.toolCall);
-            allTokens.push(tok);
-          }
-        }
-      } catch (e) {
-        const previous = !fallbackAttempted ? this.switchToFallbackModel() : null;
-        if (previous) {
-          const notice = `[Model fallback] ${previous} unavailable; switched to ${this.model}.`;
-          allTokens.push({ type: 'text', text: notice });
-          const retry = await this.processBuiltin(_input, true);
-          return [...allTokens, ...retry];
-        }
-        throw e;
-      }
-
-      if (!fallbackAttempted && tcList.length === 0 && this.isLlmErrorText(textAcc)) {
-        const previous = this.switchToFallbackModel();
-        if (previous) {
-          const notice = `[Model fallback] ${previous} unavailable; switched to ${this.model}.`;
-          allTokens.length = 0;
-          allTokens.push({ type: 'text', text: notice });
-          const retry = await this.processBuiltin(_input, true);
-          return [...allTokens, ...retry];
-        }
-      }
-
-      if (tcList.length === 0) {
-        textAcc = this.sanitizeAssistantOutput(textAcc);
-        const now = new Date().toLocaleTimeString();
-        this.chatMessages.push({ role: 'assistant', content: textAcc, mode: this.modeName(), model: this.model, timestamp: now });
-        this.history.push({ role: 'assistant', content: textAcc });
-        this.saveWorkspaceConversationState();
-
-        if (this.mode === 'goal' && this.goal) {
-          if (this.goal.checkComplete(textAcc)) {
-            allTokens.push({ type: 'text', text: '\n[Goal Complete]' });
-          } else if (!this.goal.paused) {
-            const goalPrompt = `Continue working toward this goal:\n${this.goal.objective}\n\nProgress made. What remains?`;
-            const continueTokens = await this.process(goalPrompt);
-            allTokens.push(...continueTokens);
-          }
-        }
-
-        this.status = 'idle';
-        this.saveWorkspaceConversationState();
-        return allTokens;
-      }
-
-      // Handle tool calls
-      const tcJson = tcList.map(tc => ({
-        id: tc.id, type: 'function', function: { name: tc.name, arguments: tc.arguments },
-      }));
-      const assistantMsg: Record<string, unknown> = { role: 'assistant', tool_calls: tcJson };
-      if (textAcc) assistantMsg.content = textAcc;
-      if (reasoningAcc) assistantMsg.reasoning_content = reasoningAcc;
-      msgs.push(assistantMsg);
-
-      const wsDir = this.workspace.current?.path || this.rootPath;
-
-      for (const tc of tcList) {
-        if (this.isSubagentRuntime && this.isSubagentBlockedTool(tc.name)) {
-          const result = `[Subagent sandbox] Tool '${tc.name}' is disabled for subagents.`;
-          allTokens.push({ type: 'text', text: result });
-          msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
-        } else if (tc.name === 'task') {
-          const result = (await this.handleSubagentEnvelope(tc.arguments)).output;
-          allTokens.push({ type: 'text', text: result });
-          msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
-        } else if (tc.name === 'subagent_send') {
-          const result = (await this.handleSubagentContinueEnvelope(tc.arguments)).output;
-          allTokens.push({ type: 'text', text: result });
-          msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
-        } else if (tc.name === 'subagent_result') {
-          const result = this.handleSubagentResultEnvelope(tc.arguments).output;
-          allTokens.push({ type: 'text', text: result });
-          msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
-        } else if (tc.name === 'subagent_close') {
-          const result = this.handleSubagentCloseEnvelope(tc.arguments).output;
-          allTokens.push({ type: 'text', text: result });
-          msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
-        } else if (tc.name === 'question') {
-          if (this.config.getStr('agent', 'option_feedback') === 'fully_autonomous') {
-            const result = '[question] Disabled by fully_autonomous option feedback.';
-            allTokens.push({ type: 'text', text: result });
-            msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
-          } else {
-            this.handleQuestion(tc.arguments);
-            msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: '[Options sent]' });
-          }
-        } else if (tc.name === 'skill_download') {
-          const result = await this.tools.execute(tc.name, tc.arguments, wsDir, { mode: this.mode, workspacePath: wsDir });
-          await this.handleSkillDownload(tc.arguments);
-          allTokens.push({ type: 'text', text: result });
-          msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
-        } else if (tc.name === 'flow_run') {
-          const result = await this.handleFlowRun(tc.arguments);
-          allTokens.push({ type: 'text', text: result });
-          msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
-        } else if (tc.name.startsWith('memory_lab_')) {
-          const result = await this.handleMemoryLabTool(tc.name, tc.arguments);
-          allTokens.push({ type: 'text', text: result });
-          msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
-        } else if (tc.name.startsWith('automation_')) {
-          const result = this.handleAutomationTool(tc.name, tc.arguments);
-          allTokens.push({ type: 'text', text: result });
-          msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
-        } else {
-          const result = await this.tools.execute(tc.name, tc.arguments, wsDir, { mode: this.mode, workspacePath: wsDir });
-          const display = result.length > 3000 ? result.slice(0, 3000) + '...[truncated]' : result;
-          allTokens.push({ type: 'text', text: display });
-
-          // Track file edits
-          if (tc.name === 'edit' || tc.name === 'write') {
-            try {
-              const params = JSON.parse(tc.arguments);
-              const fp = params.path || '';
-              if (fp) {
-                if (tc.name === 'write') {
-                  this.fileDiffs.push({ path: fp, oldContent: '', newContent: params.content || '' });
-                } else {
-                  this.fileDiffs.push({ path: fp, oldContent: params.old_str || '', newContent: params.new_str || '' });
-                }
-              }
-            } catch { /* ignore */ }
-          }
-          msgs.push({ role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
-        }
-      }
-    }
-
-    const maxRoundText = this.sanitizeAssistantOutput('[Max tool rounds reached]');
-    this.chatMessages.push({ role: 'assistant', content: maxRoundText, mode: this.modeName(), model: this.model, timestamp: new Date().toLocaleTimeString() });
-    this.status = 'idle';
-    this.saveWorkspaceConversationState();
-    return this.sanitizeVisibleTokens(allTokens);
-  }
-
-  private async handleSubagent(args: string): Promise<string> {
+  async handleSubagent(args: string): Promise<string> {
     return (await this.handleSubagentEnvelope(args)).output;
   }
 
-  private async handleSubagentEnvelope(args: string): Promise<NewmarkSubagentToolResult> {
+  async handleSubagentEnvelope(args: string): Promise<NewmarkSubagentToolResult> {
     try {
       const params = JSON.parse(args);
       const preset = this.resolveSubagentPreset(params);
@@ -1105,11 +1206,11 @@ export class Agent {
     return parts.join('\n\n');
   }
 
-  private async handleSubagentContinue(args: string): Promise<string> {
+  async handleSubagentContinue(args: string): Promise<string> {
     return (await this.handleSubagentContinueEnvelope(args)).output;
   }
 
-  private async handleSubagentContinueEnvelope(args: string): Promise<NewmarkSubagentToolResult> {
+  async handleSubagentContinueEnvelope(args: string): Promise<NewmarkSubagentToolResult> {
     try {
       const params = JSON.parse(args);
       const name = params.name || params.id || '';
@@ -1123,11 +1224,11 @@ export class Agent {
     } catch { return { ok: false, output: '[Subagent] Invalid continue arguments.', error: 'Invalid continue arguments.' }; }
   }
 
-  private handleSubagentResult(args: string): string {
+  handleSubagentResult(args: string): string {
     return this.handleSubagentResultEnvelope(args).output;
   }
 
-  private handleSubagentResultEnvelope(args: string): NewmarkSubagentToolResult {
+  handleSubagentResultEnvelope(args: string): NewmarkSubagentToolResult {
     try {
       const params = JSON.parse(args);
       const name = params.name || params.id || '';
@@ -1142,11 +1243,11 @@ export class Agent {
     } catch { return { ok: false, output: '[Subagent] Invalid result arguments.', error: 'Invalid result arguments.' }; }
   }
 
-  private handleSubagentClose(args: string): string {
+  handleSubagentClose(args: string): string {
     return this.handleSubagentCloseEnvelope(args).output;
   }
 
-  private handleSubagentCloseEnvelope(args: string): NewmarkSubagentToolResult {
+  handleSubagentCloseEnvelope(args: string): NewmarkSubagentToolResult {
     try {
       const params = JSON.parse(args);
       const name = params.name || params.id || '';
@@ -1157,7 +1258,7 @@ export class Agent {
     } catch { return { ok: false, output: '[Subagent] Invalid close arguments.', error: 'Invalid close arguments.' }; }
   }
 
-  private async handleFlowRun(args: string): Promise<string> {
+  async handleFlowRun(args: string): Promise<string> {
     try {
       const params = JSON.parse(args);
       const name = String(params.name || '').trim();
@@ -1187,7 +1288,7 @@ export class Agent {
     }
   }
 
-  private handleAutomationTool(tool: string, args: string): string {
+  handleAutomationTool(tool: string, args: string): string {
     if (this.mode === 'plan' && tool !== 'automation_list') {
       return `[permission] Plan mode is fully read-only. Blocked: ${tool}`;
     }
@@ -1237,7 +1338,7 @@ export class Agent {
     }
   }
 
-  private async handleMemoryLabTool(tool: string, args: string): Promise<string> {
+  async handleMemoryLabTool(tool: string, args: string): Promise<string> {
     if (this.mode === 'plan' && tool !== 'memory_lab_read') {
       return `[permission] Plan mode is fully read-only. Blocked: ${tool}`;
     }
@@ -1461,17 +1562,17 @@ export class Agent {
     }
   }
 
-  private subagentToolDefinitions(defs: unknown[]): unknown[] {
+  subagentToolDefinitions(defs: unknown[]): unknown[] {
     if (!this.isSubagentRuntime) return defs;
     return defs.filter((tool: any) => !this.isSubagentBlockedTool(tool.function?.name || ''));
   }
 
-  private isSubagentBlockedTool(name: string): boolean {
+  isSubagentBlockedTool(name: string): boolean {
     return ['task', 'subagent_send', 'subagent_result', 'subagent_close', 'skill_download', 'question'].includes(name)
       || name.startsWith('automation_');
   }
 
-  private handleQuestion(args: string): void {
+  handleQuestion(args: string): void {
     try {
       const params = JSON.parse(args);
       const questions = params.questions;
@@ -1486,7 +1587,7 @@ export class Agent {
     } catch { /* ignore */ }
   }
 
-  private async handleSkillDownload(args: string): Promise<void> {
+  async handleSkillDownload(args: string): Promise<void> {
     try {
       const params = JSON.parse(args);
       const name = params.name || '';
@@ -1519,7 +1620,7 @@ export class Agent {
     }
   }
 
-  private async maybeCompress(msgs: Array<Record<string, unknown>>, provider?: LLMProvider | null): Promise<void> {
+  async maybeCompress(msgs: Array<Record<string, unknown>>, provider?: LLMProvider | null): Promise<void> {
     if (!this.config.getBool('context', 'auto_compress')) return;
     const total = msgs.reduce((sum, m) => sum + (String(m.content || '')).length, 0);
     const threshold = this.config.getNum('context', 'compress_threshold_chars') || 80000;
@@ -1802,3 +1903,6 @@ class GoalStateImpl implements GoalState {
       || lower.includes('goal accomplished');
   }
 }
+
+
+

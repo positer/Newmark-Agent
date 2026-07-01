@@ -2007,6 +2007,55 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .tool-select:hover { border-color: var(--border-hover); }
 .tool-select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
 
+.context-token-wrap {
+  position: relative;
+  width: 18px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+#context-token-ring {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: conic-gradient(#a8a8a8 0deg, rgba(168,168,168,0.22) 0deg);
+  cursor: default;
+  outline: none;
+  opacity: 0.84;
+  transition: opacity var(--duration-fast) var(--ease-out-expo), transform var(--duration-fast) var(--ease-out-expo);
+}
+
+#context-token-ring:hover,
+#context-token-ring:focus {
+  opacity: 1;
+  transform: scale(1.08);
+}
+
+#context-token-tooltip {
+  display: none;
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  min-width: 156px;
+  padding: 8px 10px;
+  border: 1px solid var(--glass-border-1);
+  border-radius: 8px;
+  background: var(--glass-bg-3);
+  backdrop-filter: blur(var(--glass-blur-2));
+  -webkit-backdrop-filter: blur(var(--glass-blur-2));
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.45;
+  transform: translateX(-50%);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
 /* Mode toggle (Guide/Next) */
 .mode-toggle {
   display: flex;
@@ -3181,6 +3230,10 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
             </select>
             <select class="tool-select" id="flow-select" style="display:none;"></select>
             <select class="tool-select" id="model-select"></select>
+            <div class="context-token-wrap">
+              <div id="context-token-ring" title="Context tokens" tabindex="0" onmouseenter="window.showContextWindowTooltip()" onmouseleave="window.hideContextWindowTooltip()" onfocus="window.showContextWindowTooltip()" onblur="window.hideContextWindowTooltip()"></div>
+              <div id="context-token-tooltip"></div>
+            </div>
             <select class="tool-select" id="intel-select">
               <option value="low">Quick</option>
               <option value="medium" selected>Balanced</option>
@@ -3302,6 +3355,9 @@ var state = {
   intelligence: 'medium',
   models: [],
   isWorking: false,
+  runningConversations: {},
+  agentWorkEventsByConversation: {},
+  agentWorkEventLimit: 240,
   conversations: [
     {id: 'conv-1', summary: 'New chat 1', archived: false, active: true}
   ],
@@ -3332,13 +3388,16 @@ var state = {
   archives: [],
   automationItems: [],
   contextCompression: null,
+  contextWindow: null,
   flowWorks: [],
   activeAgentRunning: false,
   editorPath: '',
   dialogStyle: 'formal',
   language: 'auto',
   feedbackLevel: 'default',
-  autoSwitch: 'on',
+  autoSwitch: 'off',
+  autoSwitchScope: 'all',
+  openAIApiMode: 'chat_stream',
   fallbackOnUnavailable: 'off',
   switchTendency: 'default',
   workspaces: [],
@@ -3369,7 +3428,7 @@ var els = {};
 function cacheEls() {
   var ids = [
     'chat-area','prompt','mode-select','model-select','intel-select','submit-btn',
-    'input-area','goal-bar','goal-text','goal-pause-btn','context-compression-pill','todo-wrap','todo-header',
+    'input-area','goal-bar','goal-text','goal-pause-btn','context-compression-pill','context-token-ring','context-token-tooltip','todo-wrap','todo-header',
     'todo-list','todo-header-label','scroll-bottom-btn','right','right-content','bottom','left',
     'left-secondary','conversation-list','terminal-shell-select','terminal-tabs','terminal-body','terminal-timeout-input',
     'file-tree-container',
@@ -3459,6 +3518,7 @@ var NEWMARK_I18N = {
     'settings.general': 'General',
     'settings.models': 'Models & Providers',
     'settings.archive': 'Archive',
+    'settings.updates': 'Updates',
     'settings.language': 'Language',
     'settings.languageDesc': 'Switches the main UI and tells the agent which reply language to prefer.',
     'language.auto': 'Auto',
@@ -3489,6 +3549,20 @@ var NEWMARK_I18N = {
     'settings.closeApp': 'Close app',
     'settings.minimizeTray': 'Minimize to tray',
     'settings.trayDesc': 'Tray mode keeps Newmark available in the system tray.',
+    'updates.current': 'Current version',
+    'updates.github': 'GitHub Release',
+    'updates.repo': 'Repository',
+    'updates.tag': 'Tag',
+    'updates.asset': 'Asset',
+    'updates.target': 'Target',
+    'updates.source': 'Local update source',
+    'updates.check': 'Check',
+    'updates.dryRun': 'Dry run',
+    'updates.apply': 'Apply update',
+    'updates.defaultAsset': 'auto-select zip pack',
+    'updates.defaultTarget': 'app root',
+    'updates.note': 'Updates preserve local config, Work, skills, Memory Lab, and archive by default.',
+    'updates.noResult': 'No update result yet.',
     'common.save': 'Save',
     'common.close': 'Close',
     'common.cancel': 'Cancel',
@@ -3534,10 +3608,17 @@ var NEWMARK_I18N = {
     'model.fuzzyHelp': 'Newmark uses an available model to import and validate models. Existing providers reuse their saved endpoint and API key when omitted.',
     'model.importing': 'Importing and validating models...',
     'model.autoSwitch': 'Auto model switch',
+    'model.autoSwitchOff': 'Off - Auto unavailable',
+    'model.autoSwitchAll': 'Full Auto - all providers',
+    'model.autoSwitchProvider': 'Provider Auto - current provider only',
+    'model.openAIApiMode': 'OpenAI-compatible API mode',
+    'model.openAIChatStream': 'Chat Completions streaming',
+    'model.openAIChat': 'Chat Completions',
+    'model.openAIResponses': 'Responses API',
     'model.fallback': 'Fallback unavailable model',
     'model.preference': 'Switch preference',
     'model.costSaving': 'Cost saving',
-    'model.performance': 'Performance',
+    'model.performance': 'Quality',
     'model.validationTitle': 'Model validation',
     'model.validating': 'Validating model latency and capabilities...',
     'model.validationFailed': 'Validation failed',
@@ -3731,6 +3812,9 @@ var NEWMARK_I18N = {
     'status.subagentRecords': 'active or retained agent record(s)',
     'status.contextCompressed': 'Context compressed',
     'status.contextCompression': 'Context compression',
+    'status.contextTokens': 'Context tokens',
+    'status.contextNearLimit': 'Context near limit',
+    'status.contextOverLimit': 'Context over limit',
     'status.contextModeFallback': 'fallback',
     'status.contextModeModel': 'model',
     'status.messages': 'messages',
@@ -3855,6 +3939,7 @@ var NEWMARK_I18N = {
     'settings.general': '通用',
     'settings.models': '模型与供应商',
     'settings.archive': '归档',
+    'settings.updates': '更新',
     'settings.language': '语言',
     'settings.languageDesc': '切换主要界面文案，并告知 Agent 优先使用的回复语言。',
     'language.auto': '自动',
@@ -3885,6 +3970,20 @@ var NEWMARK_I18N = {
     'settings.closeApp': '直接关闭',
     'settings.minimizeTray': '最小化到托盘',
     'settings.trayDesc': '托盘模式会让 Newmark 保持在系统托盘中。',
+    'updates.current': '当前版本',
+    'updates.github': 'GitHub Release',
+    'updates.repo': '仓库',
+    'updates.tag': 'Tag',
+    'updates.asset': 'Asset',
+    'updates.target': '目标目录',
+    'updates.source': '本地更新源',
+    'updates.check': '检查',
+    'updates.dryRun': '预演',
+    'updates.apply': '应用更新',
+    'updates.defaultAsset': '自动选择 zip pack',
+    'updates.defaultTarget': '应用根目录',
+    'updates.note': '更新默认保留本地 config、Work、skills、Memory Lab 与 archive。',
+    'updates.noResult': '暂无更新结果。',
     'common.save': '保存',
     'common.close': '关闭',
     'common.cancel': '取消',
@@ -3930,10 +4029,17 @@ var NEWMARK_I18N = {
     'model.fuzzyHelp': 'Newmark 会使用可用模型导入并校验模型。已有供应商在省略时复用已保存的接口和 API key。',
     'model.importing': '正在导入并校验模型...',
     'model.autoSwitch': '自动切换模型',
+    'model.autoSwitchOff': '关闭 - Auto 不可用',
+    'model.autoSwitchAll': '完全自主 - 全供应商',
+    'model.autoSwitchProvider': '供应商内自主 - 仅当前供应商',
+    'model.openAIApiMode': 'OpenAI 兼容 API 模式',
+    'model.openAIChatStream': 'Chat Completions 流式',
+    'model.openAIChat': 'Chat Completions',
+    'model.openAIResponses': 'Responses API',
     'model.fallback': '模型不可用时回退',
     'model.preference': '切换倾向',
     'model.costSaving': '节省优先',
-    'model.performance': '性能优先',
+    'model.performance': '质量优先',
     'model.validationTitle': '模型校验',
     'model.validating': '正在校验模型延迟和能力...',
     'model.validationFailed': '校验失败',
@@ -4127,6 +4233,9 @@ var NEWMARK_I18N = {
     'status.subagentRecords': '个活跃或保留的 agent 记录',
     'status.contextCompressed': '上下文已压缩',
     'status.contextCompression': '上下文压缩',
+    'status.contextTokens': '上下文 token',
+    'status.contextNearLimit': '上下文接近上限',
+    'status.contextOverLimit': '上下文已超限',
     'status.contextModeFallback': 'fallback',
     'status.contextModeModel': '模型',
     'status.messages': '条消息',
@@ -4329,6 +4438,7 @@ function applyLanguageToUi() {
   if (state.todoItems) renderTodo();
   if (state.rightTab === 'plan') window.renderConversationPlan();
   if (window.renderContextCompression) window.renderContextCompression();
+  if (window.renderContextWindow) window.renderContextWindow();
   if (window.renderNextQueue) window.renderNextQueue();
   if (window.refreshModelSelect) window.refreshModelSelect();
   if (window.loadFileTree) window.loadFileTree();
@@ -4602,6 +4712,8 @@ function updateMsg(div, text, role, mode, model) {
 function renderChatMessages(messages) {
   if (!els['chat-area']) return;
   els['chat-area'].innerHTML = '';
+  state._activeWorkflowMsg = null;
+  state._activeWorkflowText = '';
   if (!messages || !messages.length) {
     els['chat-area'].innerHTML = '<div class="welcome-msg"><div class="brand">Newmark Agent</div><div>' + esc(t('app.ready')) + '</div><div class="subtitle">' + esc(t('app.subtitle')) + '</div></div>';
     return;
@@ -4612,15 +4724,126 @@ function renderChatMessages(messages) {
   }
 }
 
+function activeConversationId() {
+  var convs = currentWorkspaceConversations();
+  var activeConv = convs[state.activeConversation] || convs[0] || null;
+  return activeConv && activeConv.id ? activeConv.id : (state.activeBackendConversationId || 'default');
+}
+
+function isActiveConversationId(id) {
+  return String(id || 'default') === String(activeConversationId() || 'default');
+}
+
+function cacheAgentWorkEvent(event) {
+  if (!event) return;
+  var id = String(event.conversationId || 'default');
+  if (!state.agentWorkEventsByConversation) state.agentWorkEventsByConversation = {};
+  if (!state.agentWorkEventsByConversation[id]) state.agentWorkEventsByConversation[id] = [];
+  state.agentWorkEventsByConversation[id].push(event);
+  var limit = Number(state.agentWorkEventLimit || 240);
+  if (state.agentWorkEventsByConversation[id].length > limit) {
+    state.agentWorkEventsByConversation[id] = state.agentWorkEventsByConversation[id].slice(-limit);
+  }
+}
+
+function clearAgentWorkEvents(conversationId) {
+  if (!state.agentWorkEventsByConversation) return;
+  delete state.agentWorkEventsByConversation[String(conversationId || 'default')];
+}
+
+function renderAgentWorkEvent(event) {
+  if (!event) return;
+  var type = event.type || 'status';
+  var content = event.content || '';
+  if (type === 'start') {
+    state._activeWorkflowMsg = addMsg('workflow running', content || 'Agent started working.', event.mode || state.mode, event.model || state.model);
+    state._activeWorkflowText = '';
+  } else if (type === 'text') {
+    state._activeWorkflowText = (state._activeWorkflowText || '') + content;
+    if (!state._activeWorkflowMsg) state._activeWorkflowMsg = addMsg('workflow running', '', event.mode || state.mode, event.model || state.model);
+    updateMsg(state._activeWorkflowMsg, state._activeWorkflowText || 'Agent is responding...', 'workflow running', event.mode || state.mode, event.model || state.model);
+  } else if (type === 'tool_call') {
+    var args = event.toolArgs ? '\n' + event.toolArgs : '';
+    addMsg('workflow running', (content || ('Calling tool ' + (event.toolName || 'tool'))) + args, 'tool:' + (event.toolName || ''), event.model || state.model);
+  } else if (type === 'tool_result') {
+    addMsg('workflow', content || 'Tool result received.', 'tool:' + (event.toolName || ''), event.model || state.model);
+  } else if (type === 'done') {
+    if (state._activeWorkflowMsg && state._activeWorkflowText) {
+      updateMsg(state._activeWorkflowMsg, state._activeWorkflowText, 'assistant', event.mode || state.mode, event.model || state.model);
+    }
+    state._activeWorkflowMsg = null;
+    state._activeWorkflowText = '';
+  } else if (type === 'error') {
+    addMsg('assistant', '[Error] ' + content, 'error', event.model || state.model);
+  } else if (type === 'queue_update') {
+    state.backendQueue = event.queue || { steering: [], followUp: [] };
+  } else {
+    addMsg('workflow', content, event.mode || state.mode, event.model || state.model);
+  }
+}
+
+function replayActiveAgentWorkEvents() {
+  var id = String(activeConversationId() || 'default');
+  var events = (state.agentWorkEventsByConversation && state.agentWorkEventsByConversation[id]) || [];
+  if (!events.length || !state.runningConversations || !state.runningConversations[id]) return;
+  state._activeWorkflowMsg = null;
+  state._activeWorkflowText = '';
+  for (var i = 0; i < events.length; i++) renderAgentWorkEvent(events[i]);
+}
+
+function appendAgentWorkEvent(event) {
+  if (!event) return;
+  cacheAgentWorkEvent(event);
+  var id = String(event.conversationId || 'default');
+  if (event.type === 'done' || event.type === 'error') {
+    if (isActiveConversationId(id)) renderAgentWorkEvent(event);
+  } else if (isActiveConversationId(id)) {
+    renderAgentWorkEvent(event);
+  }
+  if (typeof renderConversations === 'function') renderConversations();
+}
+
+window.getAgentWorkEvents = function(conversationId) {
+  var id = String(conversationId || activeConversationId() || 'default');
+  var events = (state.agentWorkEventsByConversation && state.agentWorkEventsByConversation[id]) || [];
+  return events.slice();
+};
+
+function setupAgentWorkEvents() {
+  if (!api.onAgentWorkEvent || state._agentWorkEventsReady) return;
+  state._agentWorkEventsReady = true;
+  api.onAgentWorkEvent(function(_event, payload) {
+    appendAgentWorkEvent(payload);
+  });
+}
+
 function loadActiveConversationMessages() {
   if (!api.getState) return Promise.resolve();
   return api.getState().then(function(s) {
     if (s && s.chatMessages) renderChatMessages(s.chatMessages);
     if (s && s.conversationId) state.activeBackendConversationId = s.conversationId;
+    if (s && s.queued) state.backendQueue = s.queued;
+    if (s && Array.isArray(s.workEvents)) {
+      var eventConversationId = String(s.conversationId || activeConversationId() || 'default');
+      if (!state.agentWorkEventsByConversation) state.agentWorkEventsByConversation = {};
+      var existingEvents = state.agentWorkEventsByConversation[eventConversationId] || [];
+      var mergedEvents = existingEvents.concat(s.workEvents || []);
+      var seenEvents = {};
+      var dedupedEvents = [];
+      for (var wi = 0; wi < mergedEvents.length; wi++) {
+        var ev = mergedEvents[wi] || {};
+        var key = ev.id || [ev.timestamp || '', ev.type || '', ev.content || '', ev.toolName || '', ev.toolArgs || ''].join('|');
+        if (seenEvents[key]) continue;
+        seenEvents[key] = true;
+        dedupedEvents.push(ev);
+      }
+      state.agentWorkEventsByConversation[eventConversationId] = dedupedEvents.slice(-Number(state.agentWorkEventLimit || 240));
+    }
     if (s && s.conversationPlan) {
       state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
       if (state.rightTab === 'plan') window.renderConversationPlan();
     }
+    replayActiveAgentWorkEvents();
   }).catch(function(){});
 }
 
@@ -4737,6 +4960,47 @@ window.renderContextCompression = function() {
     (when ? ' | ' + esc(when) : '');
 };
 
+window.renderContextWindow = function() {
+  var ring = els['context-token-ring'] || document.getElementById('context-token-ring');
+  if (!ring) return;
+  var c = state.contextWindow || {};
+  var used = Math.max(0, Number(c.estimatedTokens || 0));
+  var max = Math.max(1, Number(c.maxTokens || 1));
+  var ratio = Math.max(0, Math.min(1.25, Number(c.ratio || (used / max))));
+  var color = c.warning === 'over_limit' ? '#d06a6a' : (c.warning === 'near_limit' ? '#b8a56a' : '#a8a8a8');
+  var track = 'rgba(168,168,168,0.24)';
+  var deg = Math.round(Math.min(1, ratio) * 360);
+  ring.style.background = 'conic-gradient(' + color + ' ' + deg + 'deg, ' + track + ' ' + deg + 'deg)';
+  ring.style.webkitMask = 'radial-gradient(farthest-side, transparent 58%, #000 60%)';
+  ring.style.mask = 'radial-gradient(farthest-side, transparent 58%, #000 60%)';
+  var status = c.warning === 'over_limit' ? t('status.contextOverLimit') : (c.warning === 'near_limit' ? t('status.contextNearLimit') : t('status.contextTokens'));
+  ring.title = status + ': ' + used + ' / ' + max;
+};
+
+window.contextWindowTooltipHtml = function() {
+  var c = state.contextWindow || {};
+  var used = Math.max(0, Number(c.estimatedTokens || 0));
+  var max = Math.max(1, Number(c.maxTokens || 1));
+  var ratio = Math.max(0, Number(c.ratio || (used / max)));
+  var pct = Math.round(Math.min(999, ratio * 100));
+  var status = c.warning === 'over_limit' ? t('status.contextOverLimit') : (c.warning === 'near_limit' ? t('status.contextNearLimit') : t('status.contextTokens'));
+  return '<div style="font-weight:600;color:var(--text-bright);margin-bottom:3px;">' + esc(status) + '</div>' +
+    '<div>' + esc(used + ' / ' + max + ' tokens') + '</div>' +
+    '<div style="color:var(--text-dim);">' + esc(pct + '%') + '</div>';
+};
+
+window.showContextWindowTooltip = function() {
+  var tip = els['context-token-tooltip'] || document.getElementById('context-token-tooltip');
+  if (!tip) return;
+  tip.innerHTML = window.contextWindowTooltipHtml();
+  tip.style.display = 'block';
+};
+
+window.hideContextWindowTooltip = function() {
+  var tip = els['context-token-tooltip'] || document.getElementById('context-token-tooltip');
+  if (tip) tip.style.display = 'none';
+};
+
 window.refreshModelSelect = function() {
   var sel = els['model-select'] || document.getElementById('model-select');
   if (!sel) return;
@@ -4750,8 +5014,9 @@ window.refreshModelSelect = function() {
       }
     }
   }
+  var firstConcreteModel = '';
   if (hasProviderModels) {
-    modelOpts += '<option value="auto">' + esc(t('language.auto')) + '</option>';
+    if (state.autoSwitch === 'on') modelOpts += '<option value="auto">' + esc(t('language.auto')) + '</option>';
     for (var pidx = 0; pidx < state.providers.length; pidx++) {
       var p = state.providers[pidx];
       if (!p.models || !p.models.length) continue;
@@ -4760,6 +5025,7 @@ window.refreshModelSelect = function() {
         var modelEntry = p.models[midx];
         var modelName = typeof modelEntry === 'string' ? modelEntry : (modelEntry.name || '');
         var modelLabel = typeof modelEntry === 'string' ? modelEntry : (modelEntry.display || modelEntry.name || '');
+        if (!firstConcreteModel && modelName) firstConcreteModel = modelName;
         modelOpts += '<option value="' + esc(modelName) + '">' + esc(p.name + ' / ' + modelLabel) + '</option>';
       }
       modelOpts += '</optgroup>';
@@ -4770,6 +5036,10 @@ window.refreshModelSelect = function() {
     }
   }
   sel.innerHTML = modelOpts;
+  if (state.model === 'auto' && state.autoSwitch !== 'on') {
+    state.model = firstConcreteModel || (state.models && state.models[0]) || '';
+    if (state.model && api.setModel) api.setModel(state.model).catch(function(){});
+  }
   if (state.model) sel.value = state.model;
 };
 
@@ -4796,7 +5066,10 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   var text = typeof queuedText === 'string' ? queuedText.trim() : els.prompt.value.trim();
   if (!text) return;
 
-  if ((effectiveInputMode === 'next' || state._sendInFlight) && !opts.fromQueue) {
+  var lockedConversationId = activeConversationId();
+  var conversationRunning = !!(state.runningConversations && state.runningConversations[lockedConversationId]);
+
+  if ((effectiveInputMode === 'next' || conversationRunning) && !opts.fromQueue) {
     if (!state.nextQueue) state.nextQueue = [];
     state.nextQueue.push(text);
     els.prompt.value = '';
@@ -4808,8 +5081,9 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     return;
   }
 
-  if (state._sendInFlight) return;
-  state._sendInFlight = true;
+  if (conversationRunning) return;
+  state.runningConversations[lockedConversationId] = true;
+  state._sendInFlight = Object.keys(state.runningConversations).length > 0;
   setWorking(true);
   if (!opts.fromQueue) els.prompt.value = '';
   var previousMode = state.mode;
@@ -4821,35 +5095,40 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   if (api.setMode) await api.setMode(state.mode).catch(function(){});
   if (api.setModel && state.model) await api.setModel(state.model).catch(function(){});
   if (api.setInputMode) await api.setInputMode(effectiveInputMode).catch(function(){});
-  var activeConvs = currentWorkspaceConversations();
-  var activeConv = activeConvs[state.activeConversation] || activeConvs[0] || null;
-  var lockedConversationId = activeConv && activeConv.id ? activeConv.id : (state.activeBackendConversationId || 'default');
   addMsg('user', text, opts.fromQueue ? 'next-build' : state.mode, state.model);
   var workflowMsg = addMsg('workflow running', 'Agent is working...', state.mode, state.model);
   try {
     var r = await api.sendMessage(text, lockedConversationId);
-    if (r && r.error) {
-      updateMsg(workflowMsg, '[Error] ' + r.error, 'error', state.mode, state.model);
-    } else if (r && r.tokens) {
-      var fullText = r.tokens.map(function(t) { return t.text || ''; }).join('');
-      updateMsg(workflowMsg, fullText || '(empty response)', 'assistant', r.mode || state.mode, r.model || state.model);
-    } else if (r && r.response) {
-      updateMsg(workflowMsg, r.response, 'assistant', state.mode, state.model);
-    } else {
-      updateMsg(workflowMsg, '(empty response)', 'assistant', state.mode, state.model);
+    var stillActive = isActiveConversationId(lockedConversationId);
+    if (stillActive) {
+      if (r && r.error) {
+        updateMsg(workflowMsg, '[Error] ' + r.error, 'error', state.mode, state.model);
+      } else if (r && r.tokens) {
+        var fullText = r.tokens.map(function(t) { return t.text || ''; }).join('');
+        updateMsg(workflowMsg, fullText || '(empty response)', 'assistant', r.mode || state.mode, r.model || state.model);
+      } else if (r && r.response) {
+        updateMsg(workflowMsg, r.response, 'assistant', state.mode, state.model);
+      } else {
+        updateMsg(workflowMsg, '(empty response)', 'assistant', state.mode, state.model);
+      }
+    } else if (workflowMsg && workflowMsg.parentNode) {
+      workflowMsg.parentNode.removeChild(workflowMsg);
     }
     if (r && r.conversations) {
-      applyBackendConversations(r.conversations || [], r.conversationId || lockedConversationId);
+      applyBackendConversations(r.conversations || [], r.activeConversationId || r.conversationId || lockedConversationId);
       renderConversations();
     }
-    if (r && r.conversationPlan) {
+    if (stillActive && r && r.conversationPlan) {
       state.conversationPlan = normalizeConversationPlan(r.conversationPlan);
       if (state.rightTab === 'plan') window.renderConversationPlan();
     }
+    if (stillActive && r && r.queued) state.backendQueue = r.queued;
     if (r && r.options) {
-      state.pendingOptions = r.options || [];
-      renderPendingOptionsInChat(state.pendingOptions);
-      if (state.rightTab === 'status') window.renderRightStatusPanel();
+      if (stillActive) {
+        state.pendingOptions = r.options || [];
+        renderPendingOptionsInChat(state.pendingOptions);
+        if (state.rightTab === 'status') window.renderRightStatusPanel();
+      }
     }
   } catch(e) {
     updateMsg(workflowMsg, '[Error] ' + e.message, 'error', state.mode, state.model);
@@ -4860,6 +5139,10 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         state.contextCompression = s.contextCompression;
         window.renderContextCompression();
       }
+      if (s && s.contextWindow !== undefined) {
+        state.contextWindow = s.contextWindow;
+        window.renderContextWindow();
+      }
       if (s && s.subagents) state.subagents = s.subagents;
       if (s && s.fileDiffs) state.fileDiffs = s.fileDiffs;
       if (s && s.pendingOptions) {
@@ -4867,8 +5150,9 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         renderPendingOptionsInChat(state.pendingOptions);
       }
       if (s && s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
+      if (s && s.queued) state.backendQueue = s.queued;
       if (s && s.conversations) {
-        applyBackendConversations(s.conversations || [], s.conversationId || lockedConversationId);
+        applyBackendConversations(s.conversations || [], s.conversationId || activeConversationId() || lockedConversationId);
         renderConversations();
       }
       if (state.rightTab === 'status') window.renderRightStatusPanel();
@@ -4881,8 +5165,9 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     if (els['mode-select']) els['mode-select'].value = previousMode;
     if (api.setMode) await api.setMode(previousMode).catch(function(){});
   }
-  state._sendInFlight = false;
-  setWorking(false);
+  delete state.runningConversations[lockedConversationId];
+  state._sendInFlight = Object.keys(state.runningConversations).length > 0;
+  setWorking(state._sendInFlight);
   window.renderNextQueue();
   window.drainNextQueue();
 };
@@ -5369,6 +5654,10 @@ window.refreshRightStatus = function() {
       state.contextCompression = s.contextCompression;
       window.renderContextCompression();
     }
+    if (s && s.contextWindow !== undefined) {
+      state.contextWindow = s.contextWindow;
+      window.renderContextWindow();
+    }
     window.renderSubagentList();
     if (state.rightTab === 'plan') window.renderConversationPlan();
     window.renderRightStatusPanel();
@@ -5382,6 +5671,7 @@ window.renderRightStatusPanel = function() {
   var target = document.getElementById('right-status-content');
   if (!target) return;
   var compression = state.contextCompression;
+  var contextWindow = state.contextWindow || null;
   var diffs = state.fileDiffs || [];
   var options = state.pendingOptions || [];
   var agents = state.subagents || [];
@@ -5392,6 +5682,11 @@ window.renderRightStatusPanel = function() {
     '<div class="status-cell"><span class="status-label">' + esc(t('status.agent')) + '</span><span class="status-value">' + esc(state.agentStatus || (state.isWorking ? 'working' : 'idle')) + '</span></div>' +
     '</div>';
   html += '<div class="right-row"><div class="right-row-body"><span class="right-row-title">' + esc(t('right.subagents')) + '</span><span class="right-row-meta">' + agents.length + ' ' + esc(t('status.subagentRecords')) + '</span></div></div>';
+  if (contextWindow) {
+    html += '<div class="right-row"><div class="right-row-body"><span class="right-row-title">' + esc(t('status.contextTokens')) + '</span><span class="right-row-meta">' +
+      esc(String(contextWindow.estimatedTokens || 0) + ' / ' + String(contextWindow.maxTokens || 0) + ' | ' + String(contextWindow.warning || 'ok')) +
+      '</span></div></div>';
+  }
   if (compression) {
     html += '<div class="right-row"><div class="right-row-body"><span class="right-row-title">' + esc(t('status.contextCompressed')) + '</span><span class="right-row-meta">' +
       esc((compression.fallback ? 'fallback' : 'model') + ' | ' + (compression.originalMessages || 0) + ' -> ' + (compression.compressedMessages || 0) + ' messages' + (compression.model ? ' | ' + compression.model : '')) +
@@ -5788,10 +6083,12 @@ window.openSettings = function(tab) {
     '<button class="stab-btn" data-stab="general" onclick="window.settingsTab(\'general\')">' + esc(t('settings.general')) + '</button>' +
     '<button class="stab-btn" data-stab="models" onclick="window.settingsTab(\'models\')">' + esc(t('settings.models')) + '</button>' +
     '<button class="stab-btn" data-stab="archive" onclick="window.settingsTab(\'archive\')">' + esc(t('settings.archive')) + '</button>' +
+    '<button class="stab-btn" data-stab="updates" onclick="window.settingsTab(\'updates\')">' + esc(t('settings.updates')) + '</button>' +
     '</div>' +
     '<div class="stab-panel" id="stab-general">' + renderGeneralSettings() + '</div>' +
     '<div class="stab-panel" id="stab-models">' + renderModelSettings() + '</div>' +
-    '<div class="stab-panel" id="stab-archive">' + renderArchiveSettings() + '</div>';
+    '<div class="stab-panel" id="stab-archive">' + renderArchiveSettings() + '</div>' +
+    '<div class="stab-panel" id="stab-updates">' + renderUpdateSettings() + '</div>';
   state.activeSubWindowView = { name: 'settings', tab: activeTab };
   window.openSubWin(t('settings.title'), html);
   window.settingsTab(activeTab);
@@ -5921,9 +6218,14 @@ function renderModelSettings() {
     '<div style="margin-top:6px;font-size:10px;color:var(--text-dim);">' + esc(t('model.fuzzyDesc')) + '</div>' +
     '</div>' +
     '<div style="margin-top:12px;">' +
-    '<div class="setting-row"><span class="setting-label">' + esc(t('model.autoSwitch')) + '</span><div class="setting-control"><select onchange="window.setAutoSwitch(this.value)">' +
-    '<option value="off"' + (state.autoSwitch === 'off' ? ' selected' : '') + '>' + esc(t('common.off')) + '</option>' +
-    '<option value="on"' + (state.autoSwitch === 'on' ? ' selected' : '') + '>' + esc(t('common.on')) + '</option></select></div></div>' +
+    '<div class="setting-row"><span class="setting-label">' + esc(t('model.autoSwitch')) + '</span><div class="setting-control"><select onchange="window.setAutoSwitchMode(this.value)">' +
+    '<option value="off"' + (state.autoSwitch === 'off' ? ' selected' : '') + '>' + esc(t('model.autoSwitchOff')) + '</option>' +
+    '<option value="all"' + (state.autoSwitch === 'on' && state.autoSwitchScope !== 'provider' ? ' selected' : '') + '>' + esc(t('model.autoSwitchAll')) + '</option>' +
+    '<option value="provider"' + (state.autoSwitch === 'on' && state.autoSwitchScope === 'provider' ? ' selected' : '') + '>' + esc(t('model.autoSwitchProvider')) + '</option></select></div></div>' +
+    '<div class="setting-row"><span class="setting-label">' + esc(t('model.openAIApiMode')) + '</span><div class="setting-control"><select onchange="window.setOpenAIApiMode(this.value)">' +
+    '<option value="chat_stream"' + (state.openAIApiMode === 'chat_stream' ? ' selected' : '') + '>' + esc(t('model.openAIChatStream')) + '</option>' +
+    '<option value="chat"' + (state.openAIApiMode === 'chat' ? ' selected' : '') + '>' + esc(t('model.openAIChat')) + '</option>' +
+    '<option value="responses"' + (state.openAIApiMode === 'responses' ? ' selected' : '') + '>' + esc(t('model.openAIResponses')) + '</option></select></div></div>' +
     '<div class="setting-row"><span class="setting-label">' + esc(t('model.fallback')) + '</span><div class="setting-control"><select onchange="window.setFallbackOnUnavailable(this.value)">' +
     '<option value="off"' + (state.fallbackOnUnavailable === 'off' ? ' selected' : '') + '>' + esc(t('common.off')) + '</option>' +
     '<option value="on"' + (state.fallbackOnUnavailable === 'on' ? ' selected' : '') + '>' + esc(t('common.on')) + '</option></select></div></div>' +
@@ -5952,6 +6254,90 @@ function renderArchiveSettings() {
   }
   return html;
 }
+
+function renderUpdateSettings() {
+  var resultText = state.updateResult ? JSON.stringify(state.updateResult, null, 2) : t('updates.noResult');
+  return '<div style="display:flex;flex-direction:column;gap:10px;">' +
+    '<div class="provider-card">' +
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><div style="font-size:13px;font-weight:700;color:var(--text);flex:1;">' + esc(t('updates.current')) + '</div><button class="sec-btn" onclick="window.refreshUpdateVersion()">' + esc(t('common.refresh')) + '</button></div>' +
+    '<div style="font-size:12px;color:var(--text-dim);">' + esc((state.updateVersion && state.updateVersion.version) || '-') + '</div>' +
+    '</div>' +
+    '<div class="provider-card">' +
+    '<div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px;">' + esc(t('updates.github')) + '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 110px;gap:8px;margin-bottom:8px;">' +
+    '<input id="update-repo-input" value="positer/Newmark-Agent" placeholder="' + escAttr(t('updates.repo')) + '" style="min-width:0;border:1px solid var(--glass-border-2);background:var(--glass-bg-1);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;outline:none;">' +
+    '<input id="update-tag-input" value="" placeholder="' + escAttr(t('updates.tag')) + '" style="min-width:0;border:1px solid var(--glass-border-2);background:var(--glass-bg-1);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;outline:none;">' +
+    '<input id="update-asset-input" value="" placeholder="' + escAttr(t('updates.defaultAsset')) + '" style="min-width:0;border:1px solid var(--glass-border-2);background:var(--glass-bg-1);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;outline:none;">' +
+    '<input id="update-target-input" value="" placeholder="' + escAttr(t('updates.defaultTarget')) + '" style="min-width:0;border:1px solid var(--glass-border-2);background:var(--glass-bg-1);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;outline:none;">' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="sec-btn" onclick="window.checkGithubUpdate()">' + esc(t('updates.check')) + '</button><button class="sec-btn" onclick="window.applyGithubUpdate(true)">' + esc(t('updates.dryRun')) + '</button><button class="sec-btn primary" onclick="window.applyGithubUpdate(false)">' + esc(t('updates.apply')) + '</button></div>' +
+    '<div style="font-size:11px;color:var(--text-dim);margin-top:8px;">' + esc(t('updates.note')) + '</div>' +
+    '</div>' +
+    '<div class="provider-card">' +
+    '<div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px;">' + esc(t('updates.source')) + '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">' +
+    '<input id="update-local-source-input" value="" placeholder="' + escAttr(t('updates.source')) + '" style="min-width:0;border:1px solid var(--glass-border-2);background:var(--glass-bg-1);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;outline:none;">' +
+    '<input id="update-local-target-input" value="" placeholder="' + escAttr(t('updates.defaultTarget')) + '" style="min-width:0;border:1px solid var(--glass-border-2);background:var(--glass-bg-1);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px;outline:none;">' +
+    '</div><button class="sec-btn" onclick="window.installLocalUpdateDryRun()">' + esc(t('updates.dryRun')) + '</button>' +
+    '</div>' +
+    '<pre id="update-result" style="white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;background:var(--glass-bg-1);border:1px solid var(--glass-border-1);border-radius:8px;padding:10px;color:var(--text);font-size:11px;">' + esc(resultText) + '</pre>' +
+    '</div>';
+}
+
+function updateInputValue(id) {
+  var el = document.getElementById(id);
+  return el ? el.value.trim() : '';
+}
+
+window.refreshUpdateVersion = function() {
+  if (!api.updateVersion) return;
+  api.updateVersion().then(function(r) {
+    state.updateVersion = r;
+    state.updateResult = r;
+    window.openSettings('updates');
+  });
+};
+
+window.checkGithubUpdate = function() {
+  if (!api.updateCheckGithub) return;
+  var input = { repo: updateInputValue('update-repo-input'), tag: updateInputValue('update-tag-input'), asset: updateInputValue('update-asset-input') };
+  state.updateResult = { status: 'checking' };
+  window.openSettings('updates');
+  api.updateCheckGithub(input).then(function(r) {
+    state.updateResult = r;
+    window.openSettings('updates');
+  });
+};
+
+window.applyGithubUpdate = function(dryRun) {
+  if (!api.updateApplyGithub) return;
+  var input = {
+    repo: updateInputValue('update-repo-input'),
+    tag: updateInputValue('update-tag-input'),
+    asset: updateInputValue('update-asset-input'),
+    target: updateInputValue('update-target-input'),
+    expectedVersion: state.updateVersion && state.updateVersion.version ? state.updateVersion.version : '',
+    dryRun: !!dryRun
+  };
+  state.updateResult = { status: dryRun ? 'dry-run' : 'applying' };
+  window.openSettings('updates');
+  api.updateApplyGithub(input).then(function(r) {
+    state.updateResult = r;
+    window.openSettings('updates');
+  });
+};
+
+window.installLocalUpdateDryRun = function() {
+  if (!api.updateInstallLocal) return;
+  var input = { source: updateInputValue('update-local-source-input'), target: updateInputValue('update-local-target-input'), dryRun: true };
+  state.updateResult = { status: 'local-dry-run' };
+  window.openSettings('updates');
+  api.updateInstallLocal(input).then(function(r) {
+    state.updateResult = r;
+    window.openSettings('updates');
+  });
+};
+
 window.settingsTab = function(name) {
   state.settingsActiveTab = name || 'general';
   var btns = document.querySelectorAll('.stab-btn');
@@ -6045,9 +6431,20 @@ window.setFeedbackLevel = function(v) {
   api.saveConfig({ feedbackLevel: v });
 };
 
+window.setAutoSwitchMode = function(v) {
+  state.autoSwitch = v === 'off' ? 'off' : 'on';
+  state.autoSwitchScope = v === 'provider' ? 'provider' : 'all';
+  api.saveConfig({ autoSwitch: state.autoSwitch, autoSwitchScope: state.autoSwitchScope });
+  window.refreshModelSelect();
+};
+
 window.setAutoSwitch = function(v) {
-  state.autoSwitch = v;
-  api.saveConfig({ autoSwitch: v });
+  window.setAutoSwitchMode(v === 'on' ? 'all' : 'off');
+};
+
+window.setOpenAIApiMode = function(v) {
+  state.openAIApiMode = (v === 'chat' || v === 'responses') ? v : 'chat_stream';
+  api.saveConfig({ openAIApiMode: state.openAIApiMode });
 };
 
 window.setFallbackOnUnavailable = function(v) {
@@ -7353,7 +7750,7 @@ function renderConversations() {
     var conv = conversations[i];
     var div = document.createElement('div');
     div.className = 'conv-item' + (conv.active ? ' active' : '');
-    if (state.activeAgentRunning && conv.active) div.classList.add('marquee-border');
+    if (state.runningConversations && state.runningConversations[conv.id]) div.classList.add('marquee-border');
     div.innerHTML = '<span class="conv-summary">' + esc(conv.summary) + (conv.messageCount ? ' (' + esc(String(conv.messageCount)) + ')' : '') + '</span>' +
       '<button class="conv-archive-btn" onclick="event.stopPropagation();window.archiveConv(' + i + ')" title="' + escAttr(t('conversation.archive')) + '">' + esc(t('conversation.archive')) + '</button>';
     div.onclick = function(idx) { return function() { window.switchConversation(idx); }; }(i);
@@ -7398,10 +7795,6 @@ window.archiveConvOld = function(idx) {
 };
 
 window.newConversation = function(workspaceName) {
-  if (state._sendInFlight) {
-    addMsg('system', '[System] ' + t('conversation.locked'), 'system', '');
-    return;
-  }
   if (workspaceName && workspaceName !== state.currentWorkspace) {
     window.selectWorkspace(workspaceName);
   }
@@ -7459,10 +7852,6 @@ window.doNewConversationFromPage = function() {
 
 window.switchConversation = function(idx) {
   if (!window.requireWorkspace('switchConversation')) return;
-  if (state._sendInFlight) {
-    addMsg('system', '[System] ' + t('conversation.locked'), 'system', '');
-    return;
-  }
   setActiveWorkspaceConversation(idx);
   state.conversationPlan = { items: [] };
   renderConversations();
@@ -7475,11 +7864,12 @@ window.switchConversation = function(idx) {
 
 window.archiveConv = function(idx) {
   if (!window.requireWorkspace('archiveConversation')) return;
-  if (state._sendInFlight) {
+  var convs = currentWorkspaceConversations();
+  var target = convs[idx];
+  if (target && state.runningConversations && state.runningConversations[target.id]) {
     addMsg('system', '[System] ' + t('conversation.locked'), 'system', '');
     return;
   }
-  var convs = currentWorkspaceConversations();
   if (convs[idx]) {
     convs[idx].archived = true;
     var name = convs[idx].summary;
@@ -8675,6 +9065,7 @@ function stopMarqueeJS() {
 (async function init() {
   console.log('[UI] init started');
   cacheEls();
+  setupAgentWorkEvents();
   console.log('[UI] DOM cached');
 
   // Load state from backend
@@ -8694,6 +9085,7 @@ function stopMarqueeJS() {
       if (s.closeBehavior) state.closeBehavior = s.closeBehavior;
       if (s.automations) state.automationItems = s.automations;
       if (s.contextCompression !== undefined) state.contextCompression = s.contextCompression;
+      if (s.contextWindow !== undefined) state.contextWindow = s.contextWindow;
       if (s.subagents) state.subagents = s.subagents;
       if (s.fileDiffs) state.fileDiffs = s.fileDiffs;
       if (s.pendingOptions) state.pendingOptions = s.pendingOptions;
@@ -8703,6 +9095,8 @@ function stopMarqueeJS() {
       if (s.chatMessages) renderChatMessages(s.chatMessages);
       if (s.defaultFlow) state.defaultFlow = s.defaultFlow;
       if (s.autoSwitch !== undefined) state.autoSwitch = s.autoSwitch ? 'on' : 'off';
+      if (s.autoSwitchScope) state.autoSwitchScope = s.autoSwitchScope === 'provider' ? 'provider' : 'all';
+      if (s.openAIApiMode) state.openAIApiMode = (s.openAIApiMode === 'chat' || s.openAIApiMode === 'responses') ? s.openAIApiMode : 'chat_stream';
       if (s.fallbackOnUnavailable !== undefined) state.fallbackOnUnavailable = s.fallbackOnUnavailable ? 'on' : 'off';
       if (s.switchTendency) state.switchTendency = s.switchTendency;
       if (s.minimizeToTray) state.closeBehavior = 'minimize';
@@ -8727,6 +9121,7 @@ function stopMarqueeJS() {
     console.log('[UI] init warning:', e.message);
   }
   window.renderContextCompression();
+  window.renderContextWindow();
   if (api.onAutomationUpdated) {
     api.onAutomationUpdated(function() {
       window.refreshAutomations().catch(function(){});

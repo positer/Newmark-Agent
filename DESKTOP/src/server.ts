@@ -25,8 +25,10 @@ function applyConfigPatch(cfg: Record<string, unknown>): void {
     case 'feedbackLevel': agent.config.set('agent', 'option_feedback', value); break;
     case 'language': agent.config.set('general', 'language', value); break;
     case 'autoSwitch': agent.config.set('models', 'auto_switch', value === true || value === 'on'); break;
+    case 'autoSwitchScope': agent.config.set('models', 'auto_switch_scope', value === 'provider' ? 'provider' : 'all'); break;
     case 'fallbackOnUnavailable': agent.config.set('models', 'fallback_on_unavailable', value === true || value === 'on'); break;
     case 'switchTendency': agent.config.set('models', 'auto_switch_preference', value); break;
+    case 'openAIApiMode': agent.config.set('models', 'openai_api_mode', ['chat_stream', 'chat', 'responses'].includes(String(value)) ? value : 'chat_stream'); break;
     case 'providers': agent.config.set('models', 'providers', mergeProviderSecrets(value, agent.config.providers())); break;
     case 'defaultFlow': agent.config.set('flow', 'default_flow', value); break;
       case 'dialogStyle': agent.config.set('ui', 'dialog_style', value); break;
@@ -111,9 +113,12 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           promptMode: agent.config.getStr('workspace', 'prompt_mode'),
           skillPolicy: agent.config.getStr('skills', 'auto_download'),
           autoSwitch: agent.config.getBool('models', 'auto_switch'),
+          autoSwitchScope: agent.config.getStr('models', 'auto_switch_scope') || 'all',
           fallbackOnUnavailable: agent.config.getBool('models', 'fallback_on_unavailable'),
+          openAIApiMode: agent.config.openAIApiMode(),
           automations: automation?.list() || [],
           contextCompression: agent.lastCompression,
+          contextWindow: agent.contextWindow(),
           chatMessages: agent.chatMessages,
           workspaces: { internal: agent.workspace.internal, external: agent.workspace.external, current: agent.workspace.current },
           providers: sanitizeProvidersForState(agent.config.providers()),
@@ -151,6 +156,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           goal: agent.goal ? { objective: agent.goal.objective, paused: agent.goal.paused } : null,
           options: agent.pendingOptions,
           contextCompression: agent.lastCompression,
+          contextWindow: agent.contextWindow(),
           conversationId: agent.activeConversationId,
           conversations: agent.listConversationStates(),
           conversationPlan: agent.getConversationPlan(),

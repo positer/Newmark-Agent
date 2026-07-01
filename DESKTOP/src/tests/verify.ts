@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Newmark Agent �?Comprehensive Feature Verification Tests
  * Tests every function without requiring a real LLM API.
  * Run: npm run build && node dist/tests/verify.js
@@ -21,6 +21,8 @@ import { runCliCommand } from '../cli-commands';
 import { providerNameFromUrl } from '../core/fuzzy';
 import { discoverAgentPresets, discoverOpenCodeTools, discoverPluginManifests, discoverPluginMarketplaces, runOpenCodeTool } from '../core/compat';
 import { MemoryLabManager } from '../core/memoryLab';
+import { checkGitHubUpdate, currentAppVersion, installUpdate } from '../core/installUpdate';
+import { ConversationKernel } from '../core/conversationKernel';
 
 const TEST_DIR = path.join(process.cwd(), 'test-tmp');
 const PASS = '[PASS]';
@@ -125,6 +127,11 @@ async function main() {
   assert(uiHtml.includes('memory-lab-view-menu') && uiHtml.includes('window.switchMemoryLabView = function(view)') && uiHtml.includes("t('memoryLab.overview')") && uiHtml.includes("t('memoryLab.detail')") && uiHtml.includes('memory-lab-overview-stage') && uiHtml.includes('window.buildMemoryLabOverviewGraph'), 'ui html: Memory Lab has switchable overview/detail views with overview graph renderer');
   assert(uiHtml.includes('animate-from-left') && uiHtml.includes('animate-from-right') && uiHtml.includes('@keyframes memory-lab-enter-left') && uiHtml.includes('memoryLabNavDirection'), 'ui html: Memory Lab tag navigation has smooth directional animation');
   assert(uiHtml.includes("window.openSubWin(t('model.addProvider')") && uiHtml.includes("window.openSubWin(t('model.addModel')") && uiHtml.includes("window.openSubWin(t('model.fuzzy')"), 'ui html: model secondary windows use i18n titles');
+  assert(uiHtml.includes('window.setAutoSwitchMode') && uiHtml.includes("t('model.autoSwitchOff')") && uiHtml.includes("t('model.autoSwitchAll')") && uiHtml.includes("t('model.autoSwitchProvider')"), 'ui html: model settings expose off/full/provider Auto switch modes');
+  assert(uiHtml.includes('window.setOpenAIApiMode') && uiHtml.includes("t('model.openAIApiMode')") && uiHtml.includes('value="chat_stream"') && uiHtml.includes('value="responses"'), 'ui html: model settings expose OpenAI-compatible Chat streaming and Responses API modes');
+  assert(uiHtml.includes("if (state.autoSwitch === 'on') modelOpts += '<option value=\"auto\"") && uiHtml.includes("state.model === 'auto' && state.autoSwitch !== 'on'"), 'ui html: Auto model option is hidden and corrected when auto switching is off');
+  assert(uiHtml.includes('class="context-token-wrap"') && uiHtml.indexOf('id="model-select"') < uiHtml.indexOf('id="context-token-ring"') && uiHtml.includes('id="context-token-ring"') && uiHtml.includes('window.renderContextWindow') && uiHtml.includes('width: 16px') && uiHtml.includes('radial-gradient(farthest-side, transparent 58%, #000 60%)') && !uiHtml.includes('context-token-ring-label'), 'ui html: context token ring renders as a small unlabeled donut beside model select');
+  assert(uiHtml.includes("data-stab=\"updates\"") && uiHtml.includes('function renderUpdateSettings()') && uiHtml.includes('window.checkGithubUpdate') && uiHtml.includes('window.applyGithubUpdate') && uiHtml.includes("t('updates.note')"), 'ui html: settings expose GitHub release update check and apply controls');
   assert(uiHtml.includes("window.openSubWin(t('automation.newTitle')") && uiHtml.includes("window.openSubWin(t('flow.title')") && uiHtml.includes("window.openSubWin(t('plugins.title')") && uiHtml.includes("window.openSubWin(t('workspace.new')"), 'ui html: automation flow plugins workspace secondary windows use i18n titles');
   assert(uiHtml.includes("t('plugins.marketHelp')") && uiHtml.includes("t('plugins.search')") && uiHtml.includes("t('archive.workspaceEmpty')") && uiHtml.includes("t('status.noPendingOptions')"), 'ui html: secondary panels use i18n body labels');
   assert(uiHtml.includes("window.openSubWin(t('model.validationTitle')") && uiHtml.includes("window.openSubWin(t('archive.titlePrefix') + ': '") && uiHtml.includes("window.openSubWin(t('workspace.requiredTitle')") && uiHtml.includes("window.openSubWin(t('workspace.newConversation')"), 'ui html: legacy secondary windows use i18n titles');
@@ -143,10 +150,12 @@ async function main() {
   assert(uiHtml.includes('return api.setConversation(conv.id).then(function(id)') && uiHtml.includes('return loadActiveConversationMessages();') && uiHtml.includes('if (s.chatMessages) renderChatMessages(s.chatMessages);'), 'ui html: workspace conversation switching reloads isolated backend messages');
   assert(uiHtml.includes("{ id: 'default', summary: t('workspace.defaultConversation')") && !uiHtml.includes("'conv-' + key + '-default'") && !uiHtml.includes("'conv-default-' + currentWorkspaceKey()"), 'ui html: default conversation id matches backend default id');
   assert(uiHtml.includes('function applyBackendConversations(items, activeId)') && uiHtml.includes('applyBackendConversations(s.conversations || [], s.conversationId'), 'ui html: reloads persisted conversation list from backend state');
-  assert(uiHtml.includes('var lockedConversationId = activeConv && activeConv.id') && uiHtml.includes('api.sendMessage(text, lockedConversationId)') && uiHtml.includes('body.conversation = conversationId'), 'ui html: sends initiating conversation id with each agent turn');
+  assert(uiHtml.includes('function activeConversationId()') && uiHtml.includes('api.sendMessage(text, lockedConversationId)'), 'ui html: sends initiating conversation id with each agent turn');
   assert(uiHtml.includes('if (api.setMode) await api.setMode(state.mode)') && uiHtml.includes('if (api.setModel && state.model) await api.setModel(state.model)'), 'ui html: send synchronizes current mode and model before backend turn');
   assert(uiHtml.includes('renderConversations();') && uiHtml.includes('r.conversations') && uiHtml.includes('r.conversationId || lockedConversationId'), 'ui html: refreshes conversation titles from send response');
-  assert(uiHtml.includes('Current conversation is locked while the agent is working') && uiHtml.includes('summary: item.title ||'), 'ui html: locks conversation switching while running and uses backend titles');
+  assert(uiHtml.includes('runningConversations') && uiHtml.includes('setupAgentWorkEvents()') && uiHtml.includes('appendAgentWorkEvent(payload)') && uiHtml.includes('summary: item.title ||'), 'ui html: supports per-conversation running state, live work events, and backend titles');
+  assert(uiHtml.includes("type === 'queue_update'") && uiHtml.includes('state.backendQueue = event.queue') && uiHtml.includes('if (s && s.queued) state.backendQueue = s.queued'), 'ui html: caches backend queue_update events for foreground/background conversation debugging');
+  assert(uiHtml.includes('if (s && Array.isArray(s.workEvents))') && uiHtml.includes('var mergedEvents = existingEvents.concat(s.workEvents || [])') && uiHtml.includes('dedupedEvents.slice(-Number(state.agentWorkEventLimit || 240))'), 'ui html: merges backend work-event snapshots when foregrounding a conversation');
   assert(uiHtml.includes('function applyWorkspaceStateFromBackend(s)') && uiHtml.includes('window.openWorkspaceManager = async function()') && uiHtml.includes('await window.refreshWorkspaceState().catch(function(){})'), 'ui html: workspace manager refreshes backend workspace state before rendering');
   assert(uiHtml.includes('id="skill-market-search"') && uiHtml.includes('window.updateSkillMarketSearch') && uiHtml.includes('window.filteredSkillMarket') && uiHtml.includes('window.renderSkillsMarketList'), 'ui html: Skills Market has searchable filtered list');
   assert(uiHtml.includes('window.renderSkillMarketSources') && uiHtml.includes('id="skill-market-source-name"') && uiHtml.includes('window.addSkillMarketSourceFromUi') && uiHtml.includes('window.setSkillMarketSourceEnabledFromUi'), 'ui html: Skills Market lets users add and manage market sources');
@@ -160,8 +169,23 @@ async function main() {
   assert(uiHtml.includes('if (r && r.options)') && uiHtml.includes('renderPendingOptionsInChat(state.pendingOptions)') && uiHtml.includes("optionDescription(opt)"), 'ui html: send result and right status render structured option labels');
   assert(uiHtml.includes('window.runFlowWork = async function(workIdx)') && uiHtml.includes("await api.saveFile('Flow/' + normalized.name + '.Flow.json'") && uiHtml.includes('api.runFlow(normalized.name, flowInput, 0)') && uiHtml.includes('renderChatMessages(r.chatMessages)'), 'ui html: Flow Run uses backend core runner and renders returned messages');
   assert(uiHtml.includes('function stopFlowRunInternal()') && uiHtml.includes('window.stopFlowRun = function()') && uiHtml.includes('stopFlowRunInternal();') && !uiHtml.includes('window.stopFlowRun = function() {\n  stopFlowRun();'), 'ui html: Flow stop handler avoids global recursive self-call');
-  assert(uiHtml.includes("(effectiveInputMode === 'next' || state._sendInFlight) && !opts.fromQueue") && uiHtml.includes('[Queue] Current turn is locked; prompt will run after it completes.'), 'ui html: input during running agent turn is queued instead of dropped');
+  assert(uiHtml.includes("(effectiveInputMode === 'next' || conversationRunning) && !opts.fromQueue") && uiHtml.includes('[Queue] Current turn is locked; prompt will run after it completes.'), 'ui html: input during running same-conversation turn is queued instead of dropped while other conversations can run');
   assert(uiHtml.includes('id="terminal-timeout-input"') && uiHtml.includes('Max ms') && uiHtml.includes('Terminal timeout cap') && uiHtml.includes('window.setTerminalInterruptTimeout = function(value)') && uiHtml.includes("api.saveSetting('terminal', 'interrupt_timeout_ms', n)"), 'ui html: terminal timeout cap is editable and persisted');
+  const agentKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
+  const piKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
+  const conversationKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8');
+  const mainKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf-8');
+  const packageJsonForKernel = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
+  assert(!packageJsonForKernel.dependencies?.['@earendil-works/pi-agent-core'] && !packageJsonForKernel.dependencies?.['@earendil-works/pi-ai'], 'kernel: no external pi runtime dependencies remain');
+  assert(piKernelSource.includes("import('./agentKernel/index.js')") && piKernelSource.includes("import('./agentKernel/stream-types.js')"), 'kernel: adapter imports Newmark native agent kernel modules');
+  assert(fs.existsSync(path.join(process.cwd(), 'src', 'core', 'agentKernel', 'agent.ts')) && fs.existsSync(path.join(process.cwd(), 'src', 'core', 'agentKernel', 'agent-loop.ts')) && fs.existsSync(path.join(process.cwd(), 'src', 'core', 'agentKernel', 'types.ts')) && !fs.existsSync(path.join(process.cwd(), 'src', 'vendor')), 'kernel: agent loop source is native core code and src/vendor is absent');
+  assert(agentKernelSource.includes("import { runAgentKernel } from './agentKernelRunner'") && agentKernelSource.includes('await runAgentKernel(this)') && !agentKernelSource.includes('processLegacyForMigrationOnly'), 'kernel: Agent.process routes builtin turns through pi and has no legacy loop sentinel');
+  assert(conversationKernelSource.includes('runner.queueActiveKernelMessage(prompt, queueMode)') && conversationKernelSource.includes('runner.subscribeAgentKernelUserMessageStart') && !conversationKernelSource.includes("runtime.runner.history.push({ role: 'user', content: prompt })"), 'kernel: same-session queue is handed to native kernel and consumed on user message start without duplicating history');
+  assert(agentKernelSource.includes('queue: input.queue') && agentKernelSource.includes('notifyAgentKernelUserMessageStart') && piKernelSource.includes("case 'message_start'") && piKernelSource.includes('agent.notifyAgentKernelUserMessageStart'), 'kernel: backend queue snapshots survive work events and native message_start notifies conversation runtime');
+  assert(mainKernelSource.includes("ipcMain.handle('agent:send'") && mainKernelSource.includes('const kernel = ensureConversationKernel(root, _event.sender)') && mainKernelSource.includes('kernel.prompt(message, targetConversation'), 'kernel: desktop send path uses the native conversation kernel');
+  assert(mainKernelSource.includes('ensureConversationKernel(root') && mainKernelSource.includes("target?.send('agent:workEvent', event)") && mainKernelSource.includes('workEvents: conversationKernel?.events') && conversationKernelSource.includes('isAnyRunning()'), 'kernel: desktop IPC subscribes native conversation work events and exposes cached event snapshots');
+  assert(mainKernelSource.includes('if (conversationKernel?.isAnyRunning()) return;'), 'kernel: desktop settings changes do not discard running conversation kernels');
+  assert(mainKernelSource.includes('queued: result.queued') && mainKernelSource.includes("conversationKernel?.queued(agent.activeConversationId || 'default')"), 'kernel: desktop IPC exposes backend conversation queue snapshots');
   assert(uiHtml.includes('window.refreshSkillsRuntime = function(next)') && uiHtml.includes('api.refreshSkills().then(done)') && uiHtml.includes('window.refreshSkillsRuntime(function(){ window.showPluginList'), 'ui html: skills changes refresh runtime without restart');
   assert(uiHtml.includes('api.updateGoal(state.goalText)') && uiHtml.includes('api.toggleGoalPause().then'), 'ui html: Goal edits and pause are synchronized to Agent backend');
   assert(uiHtml.includes('window.setRightWidthPx = function(px)') && uiHtml.includes("document.documentElement.style.setProperty('--right-width', rightSize + 'px')") && uiHtml.includes('if (els.right) els.right.style.width = \'\';'), 'ui html: right resize stores width in CSS variable and clears inline width');
@@ -179,6 +203,74 @@ async function main() {
   assert(distUiHtml.includes('id="lucide-sprite-root"'), 'ui dist html: embeds lucide sprite');
   assert(!distUiHtml.includes('href="lucide-sprite.svg#'), 'ui dist html: no external lucide hrefs');
   assert(distUiHtml.includes('href="#message-square') && distUiHtml.includes('href="#send'), 'ui dist html: local icon hrefs present');
+  class QueueProbeAgent extends Agent {
+    public queued: Array<{ content: string; queueMode: 'steer' | 'followUp' }> = [];
+    public processCalls: string[] = [];
+    override queueActiveKernelMessage(content: string, queueMode: 'steer' | 'followUp'): boolean {
+      this.queued.push({ content, queueMode });
+      return true;
+    }
+    override recordWorkStatus(_content: string): void {}
+    override setConversation(id: string): string { this.activeConversationId = id; return id; }
+    override async process(input: string): Promise<StreamToken[]> {
+      this.processCalls.push(input);
+      await new Promise(resolve => setTimeout(resolve, 25));
+      return [{ type: 'text', text: `done:${input}` }];
+    }
+  }
+  const kernelHost = new Agent(path.join(TEST_DIR, 'pi-kernel-host'));
+  const kernel = new ConversationKernel(TEST_DIR, kernelHost, null);
+  const runtimeMap = (kernel as unknown as { runtimes: Map<string, { runner: Agent }> }).runtimes;
+  const probe = new QueueProbeAgent(TEST_DIR, { agentOnly: true });
+  runtimeMap.set('parallel-a', { id: 'parallel-a', runner: probe, activePromise: null, events: [], pendingNextTurn: [] } as any);
+  const firstPrompt = kernel.prompt('first', 'parallel-a', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' }, 'steer');
+  await new Promise(resolve => setTimeout(resolve, 1));
+  const samePromise = kernel.prompt('second', 'parallel-a', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' }, 'steer');
+  await Promise.all([firstPrompt, samePromise]);
+  assert(probe.processCalls.length === 1 && probe.processCalls[0] === 'first', 'kernel: same-conversation active prompt keeps one active process');
+  assert(probe.queued.length === 1 && probe.queued[0].content.includes('second') && probe.queued[0].queueMode === 'steer', 'kernel: same-conversation active prompt queues to active Agent kernel');
+  assert(kernel.queued('parallel-a').steering.length === 0 && kernel.queued('parallel-a').followUp.length === 0, 'kernel: queued snapshot clears after active steering message is consumed');
+  const eventProbe = new QueueProbeAgent(TEST_DIR, { agentOnly: true });
+  const eventRuntime: any = { id: 'parallel-events', runner: eventProbe, activePromise: null, events: [], pendingNextTurn: [], queued: { steering: [], followUp: [] } };
+  eventProbe.subscribeWorkEvents(event => {
+    eventRuntime.events.push(event);
+    for (const listener of ((kernel as any).listeners as Set<(event: any) => void>)) listener(event);
+  });
+  eventProbe.subscribeAgentKernelUserMessageStart(content => {
+    (kernel as any).consumeQueuedMessage(eventRuntime, content);
+  });
+  runtimeMap.set('parallel-events', eventRuntime);
+  const queueEvents: any[] = [];
+  kernel.subscribe(event => {
+    if (event.conversationId === 'parallel-events' && event.type === 'queue_update') queueEvents.push(event);
+  });
+  const eventRun = kernel.prompt('event-first', 'parallel-events', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' }, 'steer');
+  await new Promise(resolve => setTimeout(resolve, 1));
+  const eventQueuedRun = kernel.prompt('event-second', 'parallel-events', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' }, 'steer');
+  const eventRunner = (runtimeMap.get('parallel-events') as any).runner as Agent;
+  eventRunner.notifyAgentKernelUserMessageStart('[Guide queued while the Agent was working]\nevent-second');
+  await Promise.all([eventRun, eventQueuedRun]);
+  assert(queueEvents.some(event => event.queue?.steering?.some((item: string) => item.includes('event-second'))) && queueEvents.some(event => event.queue?.steering?.length === 0), 'kernel: queue_update work events include queued payloads and clear when the native user message starts');
+  const fallbackProbe = new QueueProbeAgent(TEST_DIR, { agentOnly: true });
+  fallbackProbe.queueActiveKernelMessage = () => false;
+  runtimeMap.set('parallel-fallback', { id: 'parallel-fallback', runner: fallbackProbe, activePromise: null, events: [], pendingNextTurn: [], queued: { steering: [], followUp: [] } } as any);
+  const fallbackPrompt = kernel.prompt('fallback-first', 'parallel-fallback', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin' }, 'followUp');
+  await new Promise(resolve => setTimeout(resolve, 1));
+  const fallbackSame = kernel.prompt('fallback-second', 'parallel-fallback', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin' }, 'followUp');
+  const duringFallbackQueue = kernel.queued('parallel-fallback');
+  assert(duringFallbackQueue.followUp.some(item => item.includes('fallback-second')), 'kernel: queued snapshot records pending next-turn follow-up messages');
+  await Promise.all([fallbackPrompt, fallbackSame]);
+  assert(kernel.queued('parallel-fallback').followUp.length === 0 && fallbackProbe.processCalls.length === 2, 'kernel: queued snapshot clears after fallback next-turn follow-up drains');
+  const parallelProbeA = new QueueProbeAgent(TEST_DIR, { agentOnly: true });
+  const parallelProbeB = new QueueProbeAgent(TEST_DIR, { agentOnly: true });
+  runtimeMap.set('parallel-b', { id: 'parallel-b', runner: parallelProbeA, activePromise: null, events: [], pendingNextTurn: [] } as any);
+  runtimeMap.set('parallel-c', { id: 'parallel-c', runner: parallelProbeB, activePromise: null, events: [], pendingNextTurn: [] } as any);
+  const t0 = Date.now();
+  await Promise.all([
+    kernel.prompt('one', 'parallel-b', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin' }, 'followUp'),
+    kernel.prompt('two', 'parallel-c', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin' }, 'followUp'),
+  ]);
+  assert(Date.now() - t0 < 90 && parallelProbeA.processCalls[0] === 'one' && parallelProbeB.processCalls[0] === 'two', 'kernel: different conversations run through independent parallel runtimes');
   assert(uiHtml.includes('window.setLeftCollapsed = function(collapsed)'), 'ui html: left collapse uses unified state function');
   assert(uiHtml.includes('function animateLeftWidth(startWidth, targetWidth, finalCollapsed, token)') && uiHtml.includes('requestAnimationFrame(step)') && uiHtml.includes('easeOutCubic') && uiHtml.includes('var duration = reduceMotion ? 320 : 620;'), 'ui html: left collapse uses visible frame-driven width animation');
   assert(uiHtml.includes('function clearLeftWidthAnimation()') && uiHtml.includes('cancelAnimationFrame(state.leftAnimationFrame)') && uiHtml.includes('cancelAnimationFrame(state.leftAnimationQueuedFrame)') && uiHtml.includes('leftAnimationToken'), 'ui html: left collapse cancels stale animation frames');
@@ -213,6 +305,8 @@ async function main() {
   const cliCommandsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'cli-commands.ts'), 'utf-8');
   const releaseCliSmokePath = path.join(process.cwd(), 'scripts', 'release-cli-smoke.cjs');
   const releaseCliSmoke = fs.existsSync(releaseCliSmokePath) ? fs.readFileSync(releaseCliSmokePath, 'utf-8') : '';
+  const releaseCliUiConversationSyncSmokePath = path.join(process.cwd(), 'scripts', 'release-cli-ui-conversation-sync-smoke.cjs');
+  const releaseCliUiConversationSyncSmoke = fs.existsSync(releaseCliUiConversationSyncSmokePath) ? fs.readFileSync(releaseCliUiConversationSyncSmokePath, 'utf-8') : '';
   const releaseUiSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-smoke.cjs');
   const releaseUiSmoke = fs.existsSync(releaseUiSmokePath) ? fs.readFileSync(releaseUiSmokePath, 'utf-8') : '';
   const releaseUiAgentSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-agent-smoke.cjs');
@@ -227,6 +321,8 @@ async function main() {
   const releaseUiOptionFeedbackSmoke = fs.existsSync(releaseUiOptionFeedbackSmokePath) ? fs.readFileSync(releaseUiOptionFeedbackSmokePath, 'utf-8') : '';
   const releaseUiModelSettingsSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-model-settings-smoke.cjs');
   const releaseUiModelSettingsSmoke = fs.existsSync(releaseUiModelSettingsSmokePath) ? fs.readFileSync(releaseUiModelSettingsSmokePath, 'utf-8') : '';
+  const releaseUiModelAutoContextSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-model-auto-context-smoke.cjs');
+  const releaseUiModelAutoContextSmoke = fs.existsSync(releaseUiModelAutoContextSmokePath) ? fs.readFileSync(releaseUiModelAutoContextSmokePath, 'utf-8') : '';
   const releaseUiGemmaRemovalSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-gemma-removal-smoke.cjs');
   const releaseUiGemmaRemovalSmoke = fs.existsSync(releaseUiGemmaRemovalSmokePath) ? fs.readFileSync(releaseUiGemmaRemovalSmokePath, 'utf-8') : '';
   const releaseUiFlowSubagentSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-flow-subagent-smoke.cjs');
@@ -267,8 +363,11 @@ async function main() {
   assert(uiHtml.includes('id="title-app-logo"') && uiHtml.includes('id="title-app-icon"') && uiHtml.includes('../../assets/app-icon-dark.png') && uiHtml.includes('../../assets/app-icon-light.png'), 'app icons: custom titlebar renders themed icon assets');
   assert(uiHtml.includes('@keyframes app-icon-border-spin') && uiHtml.includes('animation: app-icon-border-spin 3s linear infinite') && uiHtml.includes('conic-gradient'), 'app icons: custom titlebar has animated color border');
   assert(packageJson.includes('"release:cli-smoke"') && releaseCliSmoke.includes('Start-Process') && releaseCliSmoke.includes('-RedirectStandardOutput'), 'release cli smoke: uses stable redirected packaged exe invocation');
-  assert(releaseCliSmoke.includes("['state', '--root', root]") && releaseCliSmoke.includes("['tool', 'write'") && releaseCliSmoke.includes("'--args-file'") && releaseCliSmoke.includes("['send', '--input-file'") && releaseCliSmoke.includes("['validate-models', '--selected', 'ReleaseCliMock/release-cli-mock'") && releaseCliSmoke.includes("['skills-market'") && releaseCliSmoke.includes("'memory-lab'") && releaseCliSmoke.includes('ReleaseCliMemoryNeedle') && releaseCliSmoke.includes("log('memory-lab ok')"), 'release cli smoke: covers state, tool, send, validate-models, skills-market, and memory-lab');
+  assert(releaseCliSmoke.includes("['state', '--root', root]") && releaseCliSmoke.includes('parsedState.autoSwitch') && releaseCliSmoke.includes('parsedState.autoSwitchScope') && releaseCliSmoke.includes('parsedState.openAIApiMode') && releaseCliSmoke.includes('parsedState.contextWindow') && releaseCliSmoke.includes("['tool', 'write'") && releaseCliSmoke.includes("'--args-file'") && releaseCliSmoke.includes("['send', '--input-file'") && releaseCliSmoke.includes("['validate-models', '--selected', 'ReleaseCliMock/release-cli-mock'") && releaseCliSmoke.includes("['skills-market'") && releaseCliSmoke.includes("'memory-lab'") && releaseCliSmoke.includes('ReleaseCliMemoryNeedle') && releaseCliSmoke.includes("log('memory-lab ok')") && releaseCliSmoke.includes("'install-update'") && releaseCliSmoke.includes("log('install-update ok')"), 'release cli smoke: covers state, model auto/context fields, tool, send, validate-models, skills-market, memory-lab, and install-update');
   assert(releaseCliSmoke.includes('RELEASE_CLI_SEND_OK 做了什么 验证 文件') && releaseCliSmoke.includes('"stream":true'), 'release cli smoke: covers UTF-8 streaming send output');
+  assert(packageJson.includes('"release:cli-ui-conversation-sync-smoke"') && releaseCliUiConversationSyncSmoke.includes('--agent-only') && releaseCliUiConversationSyncSmoke.includes('--conversation') && releaseCliUiConversationSyncSmoke.includes('window.switchConversation') && releaseCliUiConversationSyncSmoke.includes('window.newConversation()'), 'release cli/ui conversation sync smoke: drives packaged pure Agent, CLI workspace conversation, and UI conversation paths');
+  assert(releaseCliUiConversationSyncSmoke.includes('CLI_UI_SYNC_FROM_CLI') && releaseCliUiConversationSyncSmoke.includes('CLI_UI_SYNC_REPLY_FROM_CLI') && releaseCliUiConversationSyncSmoke.includes('CLI_UI_SYNC_FROM_UI') && releaseCliUiConversationSyncSmoke.includes('CLI_UI_SYNC_REPLY_FROM_UI'), 'release cli/ui conversation sync smoke: verifies CLI-created and UI-created transcripts round-trip');
+  assert(releaseCliUiConversationSyncSmoke.includes('pure Agent CLI mode does not depend on workspace') && releaseCliUiConversationSyncSmoke.includes('2026-07-01-release-cli-ui-conversation-sync-smoke.png') && releaseCliUiConversationSyncSmoke.includes('messageCount >= 2') && releaseCliUiConversationSyncSmoke.includes('workspace: {') && releaseCliUiConversationSyncSmoke.includes('agentOnlyState.workspace !== null'), 'release cli/ui conversation sync smoke: captures evidence and validates pure Agent plus persisted workspace conversation state');
   assert(packageJson.includes('"release:ui-smoke"') && releaseUiSmoke.includes('--remote-debugging-port=') && releaseUiSmoke.includes('window.fuzzyInject()') && releaseUiSmoke.includes('window.showPluginList()') && releaseUiSmoke.includes('window.showFlowEditor()') && releaseUiSmoke.includes('window.showNewConversationPage()') && releaseUiSmoke.includes('window.showWorkspaceRequired()'), 'release ui smoke: validates real packaged secondary windows through CDP');
   assert(releaseUiSmoke.includes("'zh-CN'") && releaseUiSmoke.includes("'输入指令...'") && releaseUiSmoke.includes("'模糊注入模型'") && releaseUiSmoke.includes("'需要工作区'") && releaseUiSmoke.includes('language en/zh switch ok'), 'release ui smoke: validates Chinese language switching in packaged UI');
   assert(releaseUiSmoke.includes("leftNewChat: 'New chat'") && releaseUiSmoke.includes("leftNewChat: '新对话'") && releaseUiSmoke.includes("secondarySettingsTitle: '工作区设置'") && releaseUiSmoke.includes("english-after"), 'release ui smoke: validates bidirectional language switching in packaged UI');
@@ -299,6 +398,9 @@ async function main() {
   assert(releaseUiModelSettingsSmoke.includes('window.addProvider()') && releaseUiModelSettingsSmoke.includes('window.addModel()') && releaseUiModelSettingsSmoke.includes('window.editProvider(providerIdx)') && releaseUiModelSettingsSmoke.includes('window.editModel(providerIdx, 0)'), 'release ui model settings smoke: covers provider/model create and update');
   assert(releaseUiModelSettingsSmoke.includes('window.removeModel(providerIdx, 0)') && releaseUiModelSettingsSmoke.includes('window.removeProvider(providerIdx)') && releaseUiModelSettingsSmoke.includes('test-key-crud-secret'), 'release ui model settings smoke: covers provider/model delete and key preservation');
   assert(releaseUiModelSettingsSmoke.includes('max_tokens === 8192') && releaseUiModelSettingsSmoke.includes('vision === false') && releaseUiModelSettingsSmoke.includes('thinking === true') && releaseUiModelSettingsSmoke.includes('Edited CRUD model description'), 'release ui model settings smoke: verifies model context, vision, thinking, and description fields');
+  assert(packageJson.includes('"release:ui-model-auto-context-smoke"') && releaseUiModelAutoContextSmoke.includes('--remote-debugging-port=') && releaseUiModelAutoContextSmoke.includes("window.openSettings('models')"), 'release ui model auto/context smoke: drives real packaged Models settings UI through CDP');
+  assert(releaseUiModelAutoContextSmoke.includes("window.setAutoSwitchMode('all')") && releaseUiModelAutoContextSmoke.includes("window.setAutoSwitchMode('provider')") && releaseUiModelAutoContextSmoke.includes("window.setOpenAIApiMode('responses')"), 'release ui model auto/context smoke: validates full/provider Auto modes and Responses API mode');
+  assert(releaseUiModelAutoContextSmoke.includes('context-token-ring') && releaseUiModelAutoContextSmoke.includes('ringWidth !== 16') && releaseUiModelAutoContextSmoke.includes('tooltipText.includes') && releaseUiModelAutoContextSmoke.includes('2026-07-01-release-ui-model-auto-context-smoke.png'), 'release ui model auto/context smoke: validates small context token ring placement, hover tooltip, and screenshot evidence');
   assert(packageJson.includes('"release:ui-gemma-removal-smoke"') && releaseUiGemmaRemovalSmoke.includes('--remote-debugging-port=') && releaseUiGemmaRemovalSmoke.includes("window.openSettings('models')"), 'release ui Gemma removal smoke: drives real packaged Models settings UI through CDP');
   assert(releaseUiGemmaRemovalSmoke.includes('typeof window.api.downloadGemma') && releaseUiGemmaRemovalSmoke.includes('Gemma download UI absent') && releaseUiGemmaRemovalSmoke.includes('Fuzzy inject model'), 'release ui Gemma removal smoke: verifies removed download bridge/UI and retained fuzzy entry');
   assert(releaseUiGemmaRemovalSmoke.includes('LocalRuntimeCheck') && releaseUiGemmaRemovalSmoke.includes('http://127.0.0.1:11434/v1') && releaseUiGemmaRemovalSmoke.includes('local-runtime-manual-model'), 'release ui Gemma removal smoke: verifies manual local OpenAI-compatible provider/model path');
@@ -320,7 +422,7 @@ async function main() {
   assert(releaseUiMemoryLabSmoke.includes('ReleaseMemoryNeedle') && releaseUiMemoryLabSmoke.includes('Memory Lab') && releaseUiMemoryLabSmoke.includes('.memory-lab-graph') && releaseUiMemoryLabSmoke.includes('memory-lab-search-input') && releaseUiMemoryLabSmoke.includes('Root tags') && releaseUiMemoryLabSmoke.includes('!document.querySelector(\'.memory-lab-links\')') && releaseUiMemoryLabSmoke.includes('animate-from-right') && releaseUiMemoryLabSmoke.includes('Page.captureScreenshot') && releaseUiMemoryLabSmoke.includes('captureOsScreenshot'), 'release ui Memory Lab smoke: validates animated no-line tag graph, root tag overview, tag search, component markdown, and hardened screenshot evidence');
   assert(packageJson.includes('"release:ui-conversation-queue-plan-smoke"') && releaseUiConversationQueuePlanSmoke.includes('--remote-debugging-port=') && releaseUiConversationQueuePlanSmoke.includes('QUEUE_FIRST_LOCK_TEST') && releaseUiConversationQueuePlanSmoke.includes('QUEUE_SECOND_AUTO_BUILD'), 'release ui conversation queue/plan smoke: drives real packaged queued conversation path through CDP');
   assert(releaseUiConversationQueuePlanSmoke.includes("window.switchRightTab('plan')") && releaseUiConversationQueuePlanSmoke.includes('PLAN_ITEM_CONV1_20260628') && releaseUiConversationQueuePlanSmoke.includes('PLAN_ITEM_CONV2_20260628'), 'release ui conversation queue/plan smoke: covers right sidebar plan isolation');
-  assert(releaseUiConversationQueuePlanSmoke.includes('Current conversation is locked while the agent is working') && releaseUiConversationQueuePlanSmoke.includes('#next-queue-count') && releaseUiConversationQueuePlanSmoke.includes('QUEUE_SECOND_DONE_20260628'), 'release ui conversation queue/plan smoke: covers active-turn conversation lock and queue drain');
+  assert(releaseUiConversationQueuePlanSmoke.includes('PARALLEL_CONV_A_20260701') && releaseUiConversationQueuePlanSmoke.includes('PARALLEL_CONV_B_20260701') && releaseUiConversationQueuePlanSmoke.includes('#next-queue-count') && releaseUiConversationQueuePlanSmoke.includes('QUEUE_SECOND_DONE_20260628'), 'release ui conversation queue/plan smoke: covers parallel conversation execution and same-conversation queue drain');
   assert(releaseUiConversationQueuePlanSmoke.includes('Page.captureScreenshot') && releaseUiConversationQueuePlanSmoke.includes('2026-06-28-release-ui-conversation-queue-plan-smoke.png'), 'release ui conversation queue/plan smoke: captures visual evidence');
   assert(packageJson.includes('"release:ui-goal-continuation-smoke"') && releaseUiGoalContinuationSmoke.includes('RELEASE_UI_GOAL_CONTINUATION') && releaseUiGoalContinuationSmoke.includes('mock.getGoalCalls() < 3'), 'release ui goal continuation smoke: covers repeated autonomous Goal model calls');
   assert(releaseUiGoalContinuationSmoke.includes('max[- ]?depth') && releaseUiGoalContinuationSmoke.includes('2026-06-28-release-ui-goal-continuation-smoke.png'), 'release ui goal continuation smoke: rejects max-depth warnings and captures visual evidence');
@@ -337,7 +439,7 @@ async function main() {
   assert(releaseRealProviderSmoke.includes('NEWMARK_REAL_INCLUDE_CLAUDE_ENV') && releaseRealProviderSmoke.includes('NEWMARK_REAL_CLAUDE_ENV_FILE') && releaseRealProviderSmoke.includes('Claude env fuzzy-inject skipped'), 'release real provider smoke: Claude env injection is explicit opt-in');
   assert(releaseRealProviderSmoke.includes('sanitize(error.message)') && releaseRealProviderSmoke.includes('renderer state leaked API key') && releaseRealProviderSmoke.includes('validate-models leaked API key'), 'release real provider smoke: redacts and guards API keys');
   assert(packageJson.includes('"release:real-apinebula-memory-switch-smoke"') && releaseRealApiNebulaMemorySwitchSmoke.includes('NEWMARK_APINEBULA_KEY') && releaseRealApiNebulaMemorySwitchSmoke.includes('memory_lab_read') && releaseRealApiNebulaMemorySwitchSmoke.includes('memory_lab_update'), 'release real APInebula Memory Lab/model-switch smoke: npm entry and tool-use prompts exist');
-  assert(releaseRealApiNebulaMemorySwitchSmoke.includes('REAL_APINEBULA_MEMORY_CREATE_OK_20260701') && releaseRealApiNebulaMemorySwitchSmoke.includes('REAL_APINEBULA_MODEL_SWITCH_OK_20260701') && releaseRealApiNebulaMemorySwitchSmoke.includes('[Model fallback]'), 'release real APInebula Memory Lab/model-switch smoke: validates memory creation and fallback marker');
+  assert(releaseRealApiNebulaMemorySwitchSmoke.includes('REAL_APINEBULA_MEMORY_CREATE_OK_20260701') && releaseRealApiNebulaMemorySwitchSmoke.includes('REAL_APINEBULA_MODEL_SWITCH_OK_20260701') && releaseRealApiNebulaMemorySwitchSmoke.includes('findConversationAssistantModel'), 'release real APInebula Memory Lab/model-switch smoke: validates memory creation and persisted fallback model');
   assert(releaseRealApiNebulaMemorySwitchSmoke.includes('validate-models') && releaseRealApiNebulaMemorySwitchSmoke.includes('release smoke pre-marked unavailable') && releaseRealApiNebulaMemorySwitchSmoke.includes('fallback_on_unavailable: true'), 'release real APInebula Memory Lab/model-switch smoke: validates selected real model and unavailable-model switching');
   assert(releaseRealApiNebulaMemorySwitchSmoke.includes('sanitize(error.message)') && releaseRealApiNebulaMemorySwitchSmoke.includes('leaked API key') && releaseRealApiNebulaMemorySwitchSmoke.includes('set NEWMARK_APINEBULA_KEY or NEWMARK_REAL_API_KEY'), 'release real APInebula Memory Lab/model-switch smoke: redacts secrets and has explicit skip path');
   assert(packageJson.includes('"release:real-provider-stress"') && releaseRealProviderStress.includes('NEWMARK_REAL_STRESS_BASE_URL') && releaseRealProviderStress.includes('NEWMARK_REAL_STRESS_KEY') && releaseRealProviderStress.includes('ANTHROPIC_AUTH_TOKEN'), 'release real provider stress: npm entry and credential fallback exist');
@@ -352,8 +454,9 @@ async function main() {
   assert(packageJson.includes('"release:real-claude-env-preview-smoke"') && releaseRealClaudeEnvPreviewSmoke.includes('NEWMARK_REAL_CLAUDE_ENV_FILE') && releaseRealClaudeEnvPreviewSmoke.includes('--preview-only'), 'release real Claude env preview smoke: uses explicit env file in preview-only mode');
   assert(releaseRealClaudeEnvPreviewSmoke.includes('DeepSeekAnthropic') && releaseRealClaudeEnvPreviewSmoke.includes('deepseek-v4-pro[1m]') && releaseRealClaudeEnvPreviewSmoke.includes('deepseek-v4-flash') && releaseRealClaudeEnvPreviewSmoke.includes('preview leaked Claude env API key/token'), 'release real Claude env preview smoke: validates DeepSeek env parsing without leaking secrets');
   assert(distPortableScript.includes('verifyReleaseCliSmoke()') && distPortableScript.includes('release-cli-smoke.cjs'), 'dist portable: runs release CLI smoke after packaging');
+  assert(distPortableScript.includes('win-unpacked-x64.zip') && distPortableScript.includes('Compress-Archive') && distPortableScript.includes('verifyZipPack()'), 'dist portable: creates and verifies compiled win-unpacked zip pack');
   assert(mainTs.includes('if (automationWakeMode)') && mainTs.includes('await automation.tick()') && mainTs.includes('app.quit();') && mainTs.indexOf('if (automationWakeMode)') < mainTs.indexOf('void startSidecar(root)'), 'main automation wake: runs due schedules headless and exits before sidecar/window setup');
-  assert(preloadTs.includes("refreshSkills: () => ipcRenderer.invoke('skills:refresh')") && preloadTs.includes("marketSkillSources: () => ipcRenderer.invoke('skills:marketSources')") && preloadTs.includes("memoryLabRead: (selector?: string) => ipcRenderer.invoke('memoryLab:read'") && preloadTs.includes('terminalKill: (sessionId: string, timeoutMs?: number)'), 'preload: exposes skills refresh, market source management, Memory Lab, and terminal kill timeout');
+  assert(preloadTs.includes("refreshSkills: () => ipcRenderer.invoke('skills:refresh')") && preloadTs.includes("marketSkillSources: () => ipcRenderer.invoke('skills:marketSources')") && preloadTs.includes("memoryLabRead: (selector?: string) => ipcRenderer.invoke('memoryLab:read'") && preloadTs.includes('updateCheckGithub') && preloadTs.includes('updateApplyGithub') && preloadTs.includes('terminalKill: (sessionId: string, timeoutMs?: number)'), 'preload: exposes skills refresh, market source management, Memory Lab, updates, and terminal kill timeout');
   assert(preloadTs.includes('saveConfig: (cfg: string | Record<string, unknown>)'), 'preload: saveConfig accepts structured config patches');
   assert(preloadTs.includes("getConversationPlan: () => ipcRenderer.invoke('agent:getConversationPlan')") && preloadTs.includes("updateConversationPlan: (plan: Record<string, unknown>) => ipcRenderer.invoke('agent:updateConversationPlan', plan)"), 'preload: exposes conversation plan IPC');
   assert(mainTs.includes("language: agent.config.getStr('general', 'language')") && mainTs.includes("case 'language': agent.config.set('general', 'language', value); break;"), 'main ipc: exposes and persists language setting');
@@ -371,6 +474,9 @@ async function main() {
   assert(agentTs.includes('refreshSkills(): void') && agentTs.includes('this.skills = new SkillsManager(this.rootPath);'), 'agent core: skills manager can be refreshed without restart');
   assert(agentTs.includes("'- Memory Lab exists and provides persistent memory.'") && !agentTs.includes('Memory Lab stores persistent local memory for Newmark Agent') && agentTs.includes('handleMemoryLabTool') && agentTs.includes('async updateMemoryLab') && agentTs.includes('async reindexMemoryLab'), 'agent core: Memory Lab prompt is only a one-line existence signal and tool gated through Agent organizer');
   assert(cliCommandsTs.includes("command === 'memory-lab'") && cliCommandsTs.includes('await agent.updateMemoryLab') && cliCommandsTs.includes('await agent.reindexMemoryLab'), 'cli commands: memory-lab update and reindex route through Agent organizer');
+  assert(cliCommandsTs.includes("command === 'install-update'") && cliCommandsTs.includes('installUpdate({') && cliCommandsTs.includes('--expected-version') && cliCommandsTs.includes('--dry-run'), 'cli commands: install-update supports version-checked preserved-data updates');
+  assert(cliCommandsTs.includes('--check-github') && cliCommandsTs.includes('--from-github') && cliCommandsTs.includes('checkGitHubUpdate') && cliCommandsTs.includes('applyGitHubUpdate'), 'cli commands: install-update can check and apply GitHub release zip updates');
+  assert(mainTs.includes("ipcMain.handle('update:checkGithub'") && mainTs.includes("ipcMain.handle('update:applyGithub'") && mainTs.includes("ipcMain.handle('update:installLocal'"), 'main ipc: exposes GitHub and local update install APIs');
   assert(workspaceTs.includes('removeInternalDirectory') && workspaceTs.includes('if (!this.removeInternalDirectory(removedWorkspace.path)) return false;') && workspaceTs.includes('clearReadOnlyRecursive'), 'workspace core: internal delete verifies directory removal before returning success');
   // ---- 1. Config Manager Tests ----
   console.log('\n📋 Config Manager');
@@ -670,6 +776,22 @@ async function main() {
   assert(cliState.mode === 'build' && cliState.workspace, 'cli state: returns agent state');
   assert(cliState.language === 'auto', 'cli state: returns current language');
   assert(!cliStateOut.includes('test-key-123') && !cliStateOut.includes('test-key-456'), 'cli state: redacts provider API keys');
+  const agentOnlyRoot = path.join(TEST_DIR, 'cli-agent-only-root');
+  fs.mkdirSync(agentOnlyRoot, { recursive: true });
+  fs.writeFileSync(path.join(agentOnlyRoot, 'config.json'), JSON.stringify({
+    workspace: { auto_create_timestamp_workspace: false, prompt_mode: 'global_only' },
+    models: { providers: [], default_model: '' },
+  }, null, 2), 'utf-8');
+  const cliAgentOnlyStateOut = await captureStdout(() => runCliCommand(agentOnlyRoot, ['state', '--agent-only', '--root', agentOnlyRoot]));
+  const cliAgentOnlyState = JSON.parse(cliAgentOnlyStateOut);
+  assert(cliAgentOnlyState.agentOnly === true && cliAgentOnlyState.workspace === null && cliAgentOnlyState.conversations.length === 0, 'cli state: --agent-only does not depend on workspace conversation state');
+  const cliAgentOnlySendOut = await captureStdout(() => runCliCommand(agentOnlyRoot, ['send', 'pure agent cli prompt', '--agent-only', '--root', agentOnlyRoot]));
+  assert(cliAgentOnlySendOut.includes('[Error] No LLM configured') && !cliAgentOnlySendOut.includes('Workspace required'), 'cli send: --agent-only runs pure Agent path without workspace requirement');
+  assert(!fs.existsSync(path.join(agentOnlyRoot, 'Work')) || !fs.existsSync(path.join(agentOnlyRoot, 'Work', 'Local.json')) || JSON.parse(fs.readFileSync(path.join(agentOnlyRoot, 'Work', 'Local.json'), 'utf-8')).length === 0, 'cli send: --agent-only does not create an internal workspace');
+  const cliAgentOnlyValidateOut = await captureStdout(() => runCliCommand(agentOnlyRoot, ['validate-models', '--agent-only', '--root', agentOnlyRoot]));
+  assert(Array.isArray(JSON.parse(cliAgentOnlyValidateOut)), 'cli validate-models: --agent-only can run as pure Agent validation base');
+  const cliAgentOnlyPreviewOut = await captureStdout(() => runCliCommand(agentOnlyRoot, ['fuzzy-inject', '--agent-only', '--name', 'PreviewOnly', '--endpoint', 'https://preview-only.test/v1', '--key', 'sk-preview-only', '--preview-only', '--root', agentOnlyRoot]));
+  assert(JSON.parse(cliAgentOnlyPreviewOut).preview === true, 'cli fuzzy-inject: --agent-only can run as pure Agent fuzzy base');
   const cliZhStateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['state', '--language', 'zh', '--root', TEST_DIR]));
   assert(JSON.parse(cliZhStateOut).language === 'zh', 'cli state: supports --language zh override');
   const cliCompatToolsOut = await captureStdout(() => runCliCommand(TEST_DIR, ['compat', '--target', 'tools', '--root', TEST_DIR]));
@@ -914,6 +1036,44 @@ async function main() {
   const cliMemoryReadOut = await captureStdout(() => runCliCommand(TEST_DIR, ['memory-lab', '--component', 'cli-memory', '--root', TEST_DIR]));
   const cliMemoryRead = JSON.parse(cliMemoryReadOut);
   assert(cliMemoryRead.ok === true && cliMemoryRead.component.content.includes('CliMemoryNeedle') && cliMemoryRead.instructions.includes('index'), 'cli memory-lab: reads index instructions and component content');
+
+  const updateSource = path.join(TEST_DIR, 'update-source');
+  const updateTarget = path.join(TEST_DIR, 'update-target');
+  fs.mkdirSync(path.join(updateSource, 'resources'), { recursive: true });
+  fs.mkdirSync(path.join(updateTarget, 'Work'), { recursive: true });
+  fs.writeFileSync(path.join(updateSource, 'Newmark Agent.exe'), 'new binary', 'utf-8');
+  fs.writeFileSync(path.join(updateSource, 'resources', 'app.asar'), 'new asar', 'utf-8');
+  fs.writeFileSync(path.join(updateSource, 'config.json'), 'source config must not overwrite', 'utf-8');
+  fs.writeFileSync(path.join(updateTarget, 'config.json'), 'target local config', 'utf-8');
+  fs.writeFileSync(path.join(updateTarget, 'Work', 'local.txt'), 'target workspace state', 'utf-8');
+  const updateDryRun = installUpdate({ source: updateSource, target: updateTarget, expectedVersion: currentAppVersion(), dryRun: true });
+  assert(updateDryRun.ok === true && updateDryRun.dryRun === true && updateDryRun.copied.includes('Newmark Agent.exe') && updateDryRun.preserved.includes('config.json'), 'install update: dry-run reports copied app files and preserved local state');
+  const updateRun = installUpdate({ source: updateSource, target: updateTarget, expectedVersion: currentAppVersion() });
+  assert(updateRun.ok === true && fs.readFileSync(path.join(updateTarget, 'Newmark Agent.exe'), 'utf-8') === 'new binary' && fs.readFileSync(path.join(updateTarget, 'resources', 'app.asar'), 'utf-8') === 'new asar', 'install update: copies app files into target');
+  assert(fs.readFileSync(path.join(updateTarget, 'config.json'), 'utf-8') === 'target local config' && fs.readFileSync(path.join(updateTarget, 'Work', 'local.txt'), 'utf-8') === 'target workspace state', 'install update: preserves config and workspace data');
+  const updateVersionFail = installUpdate({ source: updateSource, target: updateTarget, expectedVersion: '0.0.0' });
+  assert(updateVersionFail.ok === false && String(updateVersionFail.error || '').includes('Version check failed'), 'install update: rejects unexpected version');
+  const cliInstallVersionOut = await captureStdout(() => runCliCommand(TEST_DIR, ['install-update', '--version', '--root', TEST_DIR]));
+  const cliInstallVersion = JSON.parse(cliInstallVersionOut);
+  assert(cliInstallVersion.ok === true && cliInstallVersion.version === currentAppVersion(), 'cli install-update: reports current version');
+  const cliInstallDryRunOut = await captureStdout(() => runCliCommand(TEST_DIR, ['install-update', '--source', updateSource, '--target', updateTarget, '--expected-version', currentAppVersion(), '--dry-run', '--root', TEST_DIR]));
+  const cliInstallDryRun = JSON.parse(cliInstallDryRunOut);
+  assert(cliInstallDryRun.ok === true && cliInstallDryRun.dryRun === true && cliInstallDryRun.preserved.includes('config.json'), 'cli install-update: dry-run preserves local state');
+  const originalUpdateFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    tag_name: `v${currentAppVersion()}`,
+    html_url: 'https://github.example/release',
+    assets: [
+      { name: `Newmark-Agent-${currentAppVersion()}-portable-x64.exe`, size: 10, browser_download_url: 'https://download.example/portable.exe', content_type: 'application/octet-stream' },
+      { name: `Newmark-Agent-${currentAppVersion()}-win-unpacked-x64.zip`, size: 20, browser_download_url: 'https://download.example/win-unpacked.zip', content_type: 'application/zip' },
+    ],
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+  const githubUpdate = await checkGitHubUpdate('owner/repo');
+  assert(githubUpdate.ok === true && githubUpdate.selectedAsset?.name.includes('win-unpacked') && githubUpdate.assets.length === 2, 'install update: GitHub release check selects compiled zip pack asset');
+  const cliGithubCheckOut = await captureStdout(() => runCliCommand(TEST_DIR, ['install-update', '--check-github', '--repo', 'owner/repo', '--root', TEST_DIR]));
+  const cliGithubCheck = JSON.parse(cliGithubCheckOut);
+  assert(cliGithubCheck.ok === true && cliGithubCheck.selectedAsset?.name.includes('win-unpacked'), 'cli install-update: checks GitHub release and selects zip pack');
+  globalThis.fetch = originalUpdateFetch;
 
   // ---- 3. Workspace Tests ----
   console.log('\n📁 Workspace Manager');
@@ -1570,11 +1730,16 @@ async function main() {
   (scopedAgentReloaded as unknown as { processingConversationId: string | null }).processingConversationId = 'conv-two';
   let lockThrown = false;
   try { scopedAgentReloaded.setConversation('conv-one'); } catch { lockThrown = true; }
-  assert(lockThrown, 'conversation chat: blocks switching conversation while agent is working');
+  assert(!lockThrown && scopedAgentReloaded.activeConversationId === 'conv-one', 'conversation chat: allows switching visible conversation while another conversation is working');
   (scopedAgentReloaded as unknown as { processingConversationId: string | null }).processingConversationId = null;
   scopedAgent.workspace.clear();
   const noWorkspaceTokens = await scopedAgent.process('should be blocked');
   assert(noWorkspaceTokens.map(t => t.text).join('').includes('Workspace required'), 'workspace chat: process requires selected workspace');
+  const pureAgent = new Agent(path.join(TEST_DIR, 'pure-agent-runtime'), { agentOnly: true });
+  const pureProvider = new FakeProvider(['PURE_AGENT_NO_WORKSPACE_OK']);
+  (pureAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => pureProvider;
+  const pureTokens = await pureAgent.process('run without workspace');
+  assert(pureTokens.map(t => t.text).join('').includes('PURE_AGENT_NO_WORKSPACE_OK') && pureAgent.workspace.current === null, 'pure Agent mode: process runs without workspace dependency');
 
   const formatAgent = new Agent(TEST_DIR);
   const formatProvider = new FakeProvider(['<think>hidden reasoning</think>\n做了什么\n- visible result\n</think>\nfinal']);
@@ -1827,36 +1992,136 @@ async function main() {
   assert(String(msgs[1]?.content || '').includes('Preserved State'), 'maybeCompress: preserves structured summary');
   assert(agent.lastCompression?.fallback === false, 'maybeCompress: records model compression metadata');
   assert(agent.history.some(m => String(m.content || '').includes('Context Compression Model Summary')), 'maybeCompress: persists compressed history');
+  agent.config.upsertProvider('context-prov', 'https://api.context.test/v1', 'test-key-context');
+  agent.config.addModelToProvider('context-prov', 'tiny-context', 'Tiny Context', 'Small context test model');
+  agent.config.updateModel('context-prov', 'tiny-context', { max_tokens: 1000 });
+  agent.setModel('tiny-context');
+  agent.history = [{ role: 'user', content: 'x'.repeat(3600) }];
+  const contextNearLimit = agent.contextWindow();
+  assert(contextNearLimit.warning === 'near_limit' && contextNearLimit.estimatedTokens >= 900, 'context window: warns when estimated tokens approach model limit');
+  agent.history = [{ role: 'user', content: 'x'.repeat(5000) }];
+  const contextOverLimit = agent.contextWindow();
+  assert(contextOverLimit.warning === 'over_limit', 'context window: warns when estimated tokens exceed model limit');
 
   // ---- 11. Model Validation Tests ----
   console.log('\n🔍 Model Validation');
-  agent.config.upsertProvider('model-prov', 'https://api.model.test/v1', 'test-key-model');
-  agent.config.addModelToProvider('model-prov', 'bad-model', 'Bad Model', 'Unavailable model');
-  agent.config.addModelToProvider('model-prov', 'fast-mini', 'Fast Mini', 'Fast economical model');
-  agent.config.addModelToProvider('model-prov', 'deep-opus', 'Deep Opus', 'High capability model');
+  const modelAgent = new Agent(path.join(TEST_DIR, 'model-validation-agent'));
+  modelAgent.config.upsertProvider('model-prov', 'https://api.model.test/v1', 'test-key-model');
+  modelAgent.config.addModelToProvider('model-prov', 'bad-model', 'Bad Model', 'Unavailable model');
+  modelAgent.config.addModelToProvider('model-prov', 'fast-mini', 'Fast Mini', 'Fast economical model');
+  modelAgent.config.addModelToProvider('model-prov', 'deep-opus', 'Deep Opus', 'High capability reasoning model for complex work');
   const originalValidate = LLMProvider.prototype.validate;
   LLMProvider.prototype.validate = async function(modelName: string) {
     return { ok: modelName !== 'bad-model', latency: modelName === 'fast-mini' ? 0.4 : 2.2 };
   };
-  const validation = await agent.validateModels();
+  const validation = await modelAgent.validateModels();
   assert(Array.isArray(validation), 'validateModels: returns array');
   assert(validation.some(v => v.name === 'model-prov/fast-mini' && v.status === 'available'), 'validateModels: records available model');
   assert(validation.some(v => v.speed_rating === 'fast'), 'validateModels: records response speed');
   assert(validation.every(v => !(v as unknown as Record<string, unknown>).api_key), 'validateModels: does not leak API keys');
-  const evaluatedFast = agent.config.findModel('fast-mini');
+  const evaluatedFast = modelAgent.config.findModel('fast-mini');
   assert(evaluatedFast?.evaluation?.status === 'available', 'validateModels: persists evaluation into config');
-  agent.config.set('models', 'auto_switch', true);
-  agent.config.set('models', 'auto_switch_preference', 'speed');
-  agent.setModel('deep-opus');
-  const switchedForSpeed = await agent.evaluateAndSwitch('list files');
-  assert(switchedForSpeed && agent.model === 'fast-mini', 'auto model: switches using speed preference');
-  agent.config.set('models', 'auto_switch_preference', 'performance');
-  const switchedForPerformance = await agent.evaluateAndSwitch('implement a complex refactor across modules');
-  assert(switchedForPerformance && agent.model === 'deep-opus', 'auto model: switches using performance preference');
-  agent.config.set('models', 'auto_switch', false);
-  agent.config.set('models', 'auto_switch_preference', 'speed');
-  agent.config.set('models', 'fallback_on_unavailable', true);
-  agent.config.updateModel('model-prov', 'bad-model', {
+  assert(String(evaluatedFast?.description || '').includes('capability=') && String(evaluatedFast?.description || '').includes('speed=') && String(evaluatedFast?.description || '').includes('cost=') && String(evaluatedFast?.description || '').includes('multimodal='), 'validateModels: generates model description with capability speed cost and multimodal metadata');
+  modelAgent.history = [{ role: 'user', content: 'x'.repeat(3600) }];
+  const nearWindow = modelAgent.contextWindow('fast-mini');
+  assert(nearWindow.estimatedTokens >= 900 && nearWindow.warning === 'ok', 'context window: estimates conversation tokens against model max context');
+  modelAgent.config.upsertProvider('other-prov', 'https://api.other-model.test/v1', 'test-key-other');
+  modelAgent.config.addModelToProvider('other-prov', 'other-flash', 'Other Flash', 'Fast cheap text-only model on another provider');
+  modelAgent.config.updateModel('other-prov', 'other-flash', {
+    speed_rating: 'fast',
+    capability_rating: 'medium',
+    cost_per_1k_input: 0,
+    cost_per_1k_output: 0,
+    evaluation: {
+      status: 'available',
+      latency: 0.2,
+      checked_at: new Date().toISOString(),
+      text_input: true,
+      text_output: true,
+      vision_input: false,
+      image_output: false,
+      cost_rating: 'free',
+      performance_rating: 'medium',
+      speed_rating: 'fast',
+      notes: 'available cross-provider Auto test model',
+    },
+  });
+  modelAgent.config.updateModel('other-prov', 'other-flash', { max_tokens: 512 });
+  modelAgent.config.set('models', 'auto_switch', true);
+  modelAgent.config.set('models', 'auto_switch_scope', 'all');
+  modelAgent.config.set('models', 'auto_switch_preference', 'speed');
+  modelAgent.setModel('auto');
+  const contextSafeSwitch = await modelAgent.evaluateAndSwitch('list files');
+  assert(contextSafeSwitch && modelAgent.model === 'fast-mini', 'auto model: skips faster candidate when its context window is too small');
+  modelAgent.history = [];
+  modelAgent.config.updateModel('other-prov', 'other-flash', { max_tokens: 128000 });
+  modelAgent.config.set('models', 'auto_switch', true);
+  modelAgent.config.set('models', 'auto_switch_scope', 'all');
+  modelAgent.config.set('models', 'auto_switch_preference', 'speed');
+  modelAgent.setModel('deep-opus');
+  const concreteDidNotSwitch = await modelAgent.evaluateAndSwitch('list files');
+  assert(!concreteDidNotSwitch && modelAgent.model === 'deep-opus', 'auto model: concrete models do not autonomously switch');
+  assert(modelAgent.allModelNames()[0] === 'auto', 'auto model: Auto is listed only while autonomous switching is enabled');
+  modelAgent.setModel('auto');
+  const switchedForSpeed = await modelAgent.evaluateAndSwitch('list files');
+  assert(switchedForSpeed && modelAgent.model === 'other-flash', 'auto model: full autonomous mode may switch across providers');
+  modelAgent.setModel('deep-opus');
+  modelAgent.config.set('models', 'auto_switch_scope', 'provider');
+  modelAgent.setModel('auto');
+  const providerScopedSwitch = await modelAgent.evaluateAndSwitch('list files');
+  assert(providerScopedSwitch && modelAgent.model === 'fast-mini', 'auto model: provider-scoped mode stays within the anchor provider');
+  modelAgent.config.set('models', 'auto_switch_preference', 'default');
+  modelAgent.config.set('models', 'auto_switch_scope', 'all');
+  modelAgent.setModel('auto');
+  const switchedForDefault = await modelAgent.evaluateAndSwitch('list files');
+  assert(switchedForDefault && modelAgent.model === 'other-flash', 'auto model: default preference chooses fast model for simple tasks');
+  modelAgent.config.set('models', 'auto_switch_preference', 'performance');
+  modelAgent.config.set('models', 'auto_switch_scope', 'all');
+  modelAgent.setModel('auto');
+  const switchedForPerformance = await modelAgent.evaluateAndSwitch('implement a complex refactor across modules');
+  assert(switchedForPerformance && modelAgent.model === 'deep-opus', 'auto model: switches using quality/performance preference');
+  modelAgent.config.set('models', 'auto_switch_preference', 'cheap_save');
+  modelAgent.setModel('auto');
+  const switchedForCost = await modelAgent.evaluateAndSwitch('list files');
+  assert(switchedForCost && modelAgent.model === 'other-flash', 'auto model: switches using cost-saving preference');
+  modelAgent.config.addModelToProvider('other-prov', 'vision-pro', 'Vision Pro', 'High capability multimodal vision model');
+  modelAgent.config.updateModel('other-prov', 'vision-pro', {
+    vision: true,
+    speed_rating: 'medium',
+    capability_rating: 'high',
+    cost_per_1k_input: 0.01,
+    cost_per_1k_output: 0.03,
+    evaluation: {
+      status: 'available',
+      latency: 1.2,
+      checked_at: new Date().toISOString(),
+      text_input: true,
+      text_output: true,
+      vision_input: true,
+      image_output: false,
+      cost_rating: 'standard',
+      performance_rating: 'high',
+      speed_rating: 'medium',
+      notes: 'available multimodal Auto test model',
+    },
+  });
+  modelAgent.config.set('models', 'auto_switch_preference', 'speed');
+  modelAgent.config.set('models', 'auto_switch_scope', 'all');
+  modelAgent.setModel('auto');
+  const switchedForVision = await modelAgent.evaluateAndSwitch('analyze this screenshot ![shot](C:/tmp/shot.png)');
+  assert(switchedForVision && modelAgent.model === 'vision-pro', 'auto model: multimodal input switches to a vision-capable model within allowed scope');
+  modelAgent.config.set('models', 'auto_switch', false);
+  assert(!modelAgent.allModelNames().includes('auto'), 'auto model: Auto is unavailable when autonomous switching is disabled');
+  modelAgent.setModel('auto');
+  assert(modelAgent.model !== 'auto', 'auto model: setModel refuses Auto while autonomous switching is disabled');
+  const offModel = modelAgent.model;
+  const offSwitch = await modelAgent.evaluateAndSwitch('list files');
+  assert(!offSwitch && modelAgent.model === offModel, 'auto model: disabled autonomous switching performs no Auto selection');
+  modelAgent.config.set('models', 'auto_switch_preference', 'speed');
+  modelAgent.config.set('models', 'auto_switch_scope', 'provider');
+  modelAgent.config.set('models', 'auto_switch_anchor_provider', 'model-prov');
+  modelAgent.config.set('models', 'fallback_on_unavailable', true);
+  modelAgent.config.updateModel('model-prov', 'bad-model', {
     evaluation: {
       status: 'unavailable',
       latency: -1,
@@ -1875,11 +2140,11 @@ async function main() {
   LLMProvider.prototype.chatStreamWithTools = async function* (modelName: string) {
     yield { type: 'text', text: modelName === 'fast-mini' ? 'FALLBACK_PRECHECK_OK' : '[LLM Error: 404] bad model' };
   };
-  agent.setModel('bad-model');
-  const precheckedFallback = await agent.process('check fallback preflight');
-  assert(agent.model === 'fast-mini', 'model fallback: pre-switches away from known unavailable model');
+  modelAgent.setModel('bad-model');
+  const precheckedFallback = await modelAgent.process('check fallback preflight');
+  assert(modelAgent.model === 'fast-mini', 'model fallback: pre-switches away from known unavailable model');
   assert(precheckedFallback.some(t => t.text?.includes('FALLBACK_PRECHECK_OK')), 'model fallback: completes after pre-switch');
-  agent.config.updateModel('model-prov', 'bad-model', {
+  modelAgent.config.updateModel('model-prov', 'bad-model', {
     evaluation: {
       status: 'available',
       latency: 1,
@@ -1894,9 +2159,9 @@ async function main() {
       notes: 'available before runtime failure test',
     },
   });
-  agent.setModel('bad-model');
-  const runtimeFallback = await agent.process('check runtime fallback');
-  assert(agent.model === 'fast-mini', 'model fallback: switches after runtime LLM error');
+  modelAgent.setModel('bad-model');
+  const runtimeFallback = await modelAgent.process('check runtime fallback');
+  assert(modelAgent.model === 'fast-mini', 'model fallback: switches after runtime LLM error');
   assert(runtimeFallback.some(t => t.text?.includes('[Model fallback] bad-model unavailable; switched to fast-mini.')), 'model fallback: emits visible switch notice');
   assert(runtimeFallback.some(t => t.text?.includes('FALLBACK_PRECHECK_OK')), 'model fallback: retries request on fallback model');
   LLMProvider.prototype.chatStreamWithTools = originalChatStream;
@@ -1929,7 +2194,7 @@ async function main() {
   const suffixProbeAgent = new Agent(path.join(TEST_DIR, 'fuzzy-suffix-empty'));
   const suffixProbeFuzzy = await suffixProbeAgent.fuzzyInject('ProbeOnly', 'https://probe-only.test', 'sk-probe-token-12345678901234567890');
   const suffixProbeProvider = suffixProbeAgent.config.providers().find(p => p.name === 'ProbeOnly');
-  assert(suffixProbeFuzzy.ok === true && suffixProbeProvider?.models.some(m => m.name === 'model' && m.description.includes('suffix probing')), 'fuzzy injection: no-guide path can confirm endpoint by suffix probing');
+  assert(suffixProbeFuzzy.ok === true && suffixProbeProvider?.models.some(m => m.name === 'model' && m.description.includes('source=model validation')), 'fuzzy injection: no-guide path confirms endpoint and records validation-generated model description');
   assert(suffixProbeProvider?.base_url === 'https://probe-only.test/v1', 'fuzzy injection: suffix probing saves inferred versioned base URL');
   globalThis.fetch = originalFetchForFuzzy;
   const fuzzyResult = await agent.fuzzyInject('DeepSeek', 'https://api.deepseek.com/v1', 'test-key-fuzzy');
@@ -1946,7 +2211,7 @@ async function main() {
   const nebulaFuzzy = await agent.fuzzyInject('APInebula', 'https://nebula.local/v1', 'test-key-nebula');
   assert(nebulaFuzzy.ok === true, 'fuzzy injection: custom provider validates listed model');
   assert(nebulaFuzzy.models?.includes('nebula-fast') && nebulaFuzzy.models?.includes('nebula-pro'), 'fuzzy injection: imports provider /models listing');
-  assert(agent.config.findModel('nebula-fast')?.description.includes('/models endpoint'), 'fuzzy injection: marks listed model source');
+  assert(agent.config.findModel('nebula-fast')?.description.includes('source=model validation'), 'fuzzy injection: listed models receive validation-generated description metadata');
   assert(!JSON.stringify(nebulaFuzzy).includes('test-key-nebula'), 'fuzzy injection: result does not leak API key');
   const nebulaExistingFuzzy = await agent.fuzzyInject('APInebula', '', '');
   assert(nebulaExistingFuzzy.ok === true && nebulaExistingFuzzy.models?.includes('nebula-fast'), 'fuzzy injection: existing provider reuses saved endpoint and key');
@@ -2092,9 +2357,36 @@ async function main() {
   assert(responsesBodies.some(b => b.instructions === 'system text' && b.max_output_tokens === 20), 'LLMProvider responses fallback: maps instructions and max_output_tokens');
   assert(responsesBodies.some(b => Array.isArray(b.tools) && b.tools[0]?.type === 'function' && b.tools[0]?.name === 'write'), 'LLMProvider responses fallback: converts chat tools to responses tools');
 
+  const directResponsesPaths: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    directResponsesPaths.push(new URL(String(url)).pathname);
+    return new Response(JSON.stringify({ output_text: 'direct responses ok' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const directResponsesProvider = new LLMProvider('direct-responses', 'https://responses.example/v1', 'test-key', 'openai', 'responses');
+  const directResponsesText = await directResponsesProvider.chat('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20);
+  const directResponsesTokens: StreamToken[] = [];
+  for await (const tok of directResponsesProvider.chatStreamWithTools('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20, [])) directResponsesTokens.push(tok);
+  globalThis.fetch = originalFetch;
+  assert(directResponsesText === 'direct responses ok' && directResponsesTokens.some(t => t.text === 'direct responses ok'), 'LLMProvider Responses mode: parses direct Responses API output');
+  assert(directResponsesPaths.length === 2 && directResponsesPaths.every(p => p.endsWith('/responses')), 'LLMProvider Responses mode: uses /responses directly without chat-completions probe');
+
+  const directChatPaths: string[] = [];
+  const directChatBodies: any[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    directChatPaths.push(new URL(String(url)).pathname);
+    directChatBodies.push(JSON.parse(String(init?.body || '{}')));
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'direct chat ok' } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const directChatProvider = new LLMProvider('direct-chat', 'https://chat.example/v1', 'test-key', 'openai', 'chat');
+  const directChatTokens: StreamToken[] = [];
+  for await (const tok of directChatProvider.chatStreamWithTools('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20, [])) directChatTokens.push(tok);
+  globalThis.fetch = originalFetch;
+  assert(directChatPaths.length === 1 && directChatPaths[0].endsWith('/chat/completions'), 'LLMProvider Chat mode: uses chat completions directly');
+  assert(directChatBodies[0]?.stream === false && directChatTokens.some(t => t.text === 'direct chat ok'), 'LLMProvider Chat mode: disables streaming and yields text');
+
   const providerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'llm', 'provider.ts'), 'utf-8');
   assert(providerSource.includes('[System.IO.File]::ReadAllText($bodyPath, $utf8NoBom)'), 'LLMProvider fallback: PowerShell reads request body as UTF-8 file');
-  assert(providerSource.includes('[System.IO.File]::WriteAllText($responsePath, [string]$resp.Content, $utf8NoBom)'), 'LLMProvider fallback: PowerShell writes response body as UTF-8 file');
+  assert(providerSource.includes('$resp.RawContentStream.CopyTo($out)') && providerSource.includes('[System.IO.File]::WriteAllText($responsePath, [string]$resp.Content, $utf8NoBom)'), 'LLMProvider fallback: PowerShell writes raw response bytes before UTF-8 fallback');
   assert(providerSource.includes("fs.readFileSync(responsePath, 'utf8')"), 'LLMProvider fallback: Node reads PowerShell response file as UTF-8');
   assert(!providerSource.includes('$bodyJson = [Console]::In.ReadToEnd()'), 'LLMProvider fallback: PowerShell does not stream JSON body through command stdin');
   assert(!providerSource.includes('Write-Output $resp.Content'), 'LLMProvider fallback: PowerShell does not stream response body through console stdout');

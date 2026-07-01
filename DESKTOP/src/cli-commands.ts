@@ -6,6 +6,7 @@ import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, providerNameFromUrl, t
 import { LLMProvider } from './llm/provider';
 import { discoverAgentPresets, discoverOpenCodeTools, discoverPluginManifests, discoverPluginMarketplaces, runOpenCodeTool } from './core/compat';
 import { MemoryLabManager } from './core/memoryLab';
+import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, installUpdate } from './core/installUpdate';
 
 type JsonObject = Record<string, unknown>;
 type FuzzyEnvDefaults = {
@@ -16,7 +17,7 @@ type FuzzyEnvDefaults = {
   models?: string[];
 };
 
-export const CLI_COMMANDS = ['state', 'tool', 'send', 'validate-models', 'fuzzy-inject', 'skills-market', 'memory-lab', 'compat', 'compat-tool'] as const;
+export const CLI_COMMANDS = ['state', 'tool', 'send', 'validate-models', 'fuzzy-inject', 'skills-market', 'memory-lab', 'install-update', 'compat', 'compat-tool'] as const;
 
 function argValue(args: string[], key: string): string | undefined {
   const idx = args.indexOf(key);
@@ -78,7 +79,14 @@ function positionalAfter(args: string[], commandName: string): string[] {
       '--remove-source',
       '--enable-source',
       '--disable-source',
+      '--source',
       '--target',
+      '--target-file',
+      '--expected-version',
+      '--preserve',
+      '--repo',
+      '--tag',
+      '--asset',
       '--list',
     ].includes(arg)) { i++; continue; }
     if (!arg.startsWith('--')) values.push(arg);
@@ -245,11 +253,17 @@ function safeState(agent: Agent, root: string): JsonObject {
   const toolDefs = agent.tools.definitions(agent.mode) as Array<{ function?: { name?: string } }>;
   return {
     root,
+    agentOnly: agent.agentOnly,
     mode: agent.mode,
     model: agent.model,
     modelLabel: agent.modelLabel(),
     intelligence: agent.intelligence,
     language: agent.config.getStr('general', 'language') || 'auto',
+    autoSwitch: agent.config.autoSwitchEnabled(),
+    autoSwitchScope: agent.config.autoSwitchScope(),
+    autoSwitchAnchorProvider: agent.config.autoSwitchAnchorProvider(),
+    openAIApiMode: agent.config.openAIApiMode(),
+    contextWindow: agent.contextWindow(),
     inputMode: agent.inputMode,
     conversationId: agent.activeConversationId,
     conversations: agent.listConversationStates(),
@@ -287,12 +301,29 @@ function costRating(input = 0, output = 0): string {
   return 'expensive';
 }
 
-function performanceRating(name: string, existing?: string): string {
+function performanceRating(name: string, existing?: string, description?: string, display?: string): string {
   if (existing && existing !== 'unknown') return existing;
+  const text = `${description || ''} ${display || ''}`.toLowerCase();
+  if (/(high capability|capability=high|performance|reasoning|complex|deep|advanced|frontier|large|pro|opus|gpt-4|o3|70b|120b)/.test(text)) return 'high';
+  if (/(low capability|capability=low|small|tiny|cheap|economical|basic|lightweight)/.test(text)) return 'low';
+  if (/(medium capability|capability=medium|balanced|standard|mini|flash|haiku|fast)/.test(text)) return 'medium';
   const n = name.toLowerCase();
   if (/(opus|gpt-4\.1|gpt-4o|o3|r1|deepseek-v3|70b|120b)/.test(n)) return 'high';
   if (/(mini|haiku|flash|8b|7b|3b)/.test(n)) return 'medium';
   return 'medium';
+}
+
+function modelCapabilityDescription(m: { name: string; description?: string; display?: string; vision?: boolean; thinking?: boolean; image_output?: boolean }, capability: string, speed: string, cost: string, ok: boolean): string {
+  const prior = String(m.description || '').trim();
+  const multimodal = [
+    m.vision ? 'vision-input' : '',
+    m.image_output ? 'image-output' : '',
+    m.thinking ? 'thinking' : '',
+  ].filter(Boolean).join(',') || 'text-only';
+  const generated = `${ok ? 'Validated text model' : 'Unvalidated text model'}; capability=${capability || 'medium'}; speed=${speed || 'unknown'}; cost=${cost || 'unknown'}; multimodal=${multimodal}; source=model validation.`;
+  if (!prior || /^(Listed by provider \/models endpoint|Discovered by fuzzy suffix probing|Discovered by fuzzy injection)/i.test(prior)) return generated;
+  if (/capability=/.test(prior) && /speed=/.test(prior) && /cost=/.test(prior) && /multimodal=/.test(prior)) return prior;
+  return `${prior} ${generated}`;
 }
 
 function inferCandidateModels(providerName: string, baseUrl: string): string[] {
@@ -332,14 +363,14 @@ async function validateCliModels(config: ConfigManager, selectedNames?: string[]
       vision_input: !!m.vision,
       image_output: !!m.image_output,
       cost_rating: costRating(m.cost_per_1k_input, m.cost_per_1k_output),
-      performance_rating: performanceRating(m.name, m.capability_rating),
+      performance_rating: performanceRating(m.name, m.capability_rating, m.description, m.display),
       speed_rating: 'unknown',
       notes: '',
     };
     if (!m.provider_url || !m.api_key) {
       const result = { ...base, notes: 'Missing provider URL or API key' };
       results.push(result);
-      config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating });
+      config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: modelCapabilityDescription(m, result.performance_rating, result.speed_rating, result.cost_rating, false) });
       continue;
     }
     const provider = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol);
@@ -355,7 +386,7 @@ async function validateCliModels(config: ConfigManager, selectedNames?: string[]
         notes: ok ? 'Text chat validation succeeded' : 'Provider returned no usable text output',
       };
       results.push(result);
-      config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating });
+      config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: modelCapabilityDescription(m, result.performance_rating, result.speed_rating, result.cost_rating, ok) });
     } catch (e) {
       const result = {
         ...base,
@@ -363,7 +394,7 @@ async function validateCliModels(config: ConfigManager, selectedNames?: string[]
         notes: 'Validation request failed',
       };
       results.push(result);
-      config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating });
+      config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: modelCapabilityDescription(m, result.performance_rating, result.speed_rating, result.cost_rating, false) });
     }
   }
   config.save();
@@ -459,7 +490,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
   const command = args.find(a => (CLI_COMMANDS as readonly string[]).includes(a));
   if (!command) return false;
 
-  const agent = new Agent(root);
+  const agent = new Agent(root, { agentOnly: args.includes('--agent-only') });
   const conversation = argValue(args, '--conversation');
   if (conversation) agent.setConversation(conversation);
   const language = argValue(args, '--language');
@@ -500,7 +531,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     const positional = positionalAfter(args, 'send');
     const prompt = argValueFromEnv(args, '--input') || argValueFromFile(args, '--input-file') || positional.join(' ').trim();
     if (!prompt) {
-      process.stderr.write('Usage: Newmark.exe send <prompt> [--input-env ENV|--input-file path] [--mode build|plan|goal|flow] [--model <model>] [--language auto|en|zh] [--conversation <id>] [--root <dir>]\n');
+      process.stderr.write('Usage: Newmark.exe send <prompt> [--input-env ENV|--input-file path] [--mode build|plan|goal|flow] [--model <model>] [--language auto|en|zh] [--conversation <id>] [--agent-only] [--root <dir>]\n');
       process.exitCode = 1;
       return true;
     }
@@ -638,6 +669,51 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     return true;
   }
 
+  if (command === 'install-update') {
+    const repo = argValue(args, '--repo');
+    const tag = argValue(args, '--tag');
+    const asset = argValue(args, '--asset');
+    if (args.includes('--version')) {
+      printJson({ ok: true, version: currentAppVersion() });
+      return true;
+    }
+    if (args.includes('--check-github')) {
+      printJson(await checkGitHubUpdate(repo, tag, asset));
+      return true;
+    }
+    if (args.includes('--from-github')) {
+      const result = await applyGitHubUpdate({
+        repo,
+        tag,
+        asset,
+        target: argValue(args, '--target') || root,
+        expectedVersion: argValue(args, '--expected-version'),
+        dryRun: args.includes('--dry-run'),
+      });
+      printJson(result);
+      if (!result.ok) process.exitCode = 1;
+      return true;
+    }
+    const source = argValue(args, '--source') || positionalAfter(args, 'install-update')[0] || '';
+    const target = argValue(args, '--target') || root;
+    if (!source) {
+      process.stderr.write('Usage: Newmark.exe install-update (--source <portable-exe-or-unpacked-dir>|--check-github|--from-github) [--repo owner/name] [--tag vX.Y.Z] [--asset name] [--target <dir>] [--target-file <path>] [--expected-version <version>] [--preserve csv] [--dry-run] [--root <dir>]\n');
+      process.exitCode = 1;
+      return true;
+    }
+    const result = installUpdate({
+      source,
+      target,
+      targetFile: argValue(args, '--target-file'),
+      expectedVersion: argValue(args, '--expected-version'),
+      preserve: splitList(argValue(args, '--preserve')),
+      dryRun: args.includes('--dry-run'),
+    });
+    printJson(result);
+    if (!result.ok) process.exitCode = 1;
+    return true;
+  }
+
   if (command === 'compat') {
     const target = (argValue(args, '--target') || positionalAfter(args, 'compat')[0] || 'all').toLowerCase();
     const canonicalTools = agent.tools.canonicalDefinitions(agent.mode);
@@ -720,11 +796,12 @@ export function cliCommandUsage(): string {
     'Newmark CLI non-interactive commands:',
     '  Newmark.exe state [--root <dir>]',
     '  Newmark.exe tool <tool-name> [json-args | key=value ... | --args-file path] [--root <dir>]',
-    '  Newmark.exe send <prompt> [--input-env ENV|--input-file path] [--mode build|plan|goal|flow] [--model <model>] [--language auto|en|zh] [--conversation <id>] [--root <dir>]',
+    '  Newmark.exe send <prompt> [--input-env ENV|--input-file path] [--mode build|plan|goal|flow] [--model <model>] [--language auto|en|zh] [--conversation <id>] [--agent-only] [--root <dir>]',
     '  Newmark.exe validate-models [--selected provider/model,model] [--root <dir>]',
     '  Newmark.exe fuzzy-inject [--name <provider>] [--env-file <PowerShell-or-dotenv-file>|--env-file-env <ENV_WITH_FILE_PATH>] [--endpoint-env <ENV_WITH_BASE_URL>] [--key-env <ENV_WITH_API_KEY>] [--protocol openai|anthropic] [--preview-only] [--root <dir>]',
     '  Newmark.exe skills-market [--query <text>|--sources|--add-source --name <name> (--url <url>|--path <path>) [--type json|skill-url|local-dir]|--remove-source <id>|--enable-source <id>|--disable-source <id>] [--root <dir>]',
     '  Newmark.exe memory-lab [--read|--component <name>|--update --name <name> --description <text> --tags <csv> --content-file <path> [--folder]|--reindex] [--root <dir>]',
+    '  Newmark.exe install-update (--source <portable-exe-or-unpacked-dir>|--check-github|--from-github) [--repo owner/name] [--tag vX.Y.Z] [--asset name] [--target <dir>] [--target-file <path>] [--expected-version <version>] [--preserve csv] [--dry-run] [--root <dir>]',
     '  Newmark.exe compat [--target all|tools|plugins|marketplaces|skills|agents|subagents] [--root <dir>]',
     '  Newmark.exe compat-tool --list | --name <opencode-tool> [json-args | --args-file path] [--root <dir>]',
     `Working directory fallback: ${path.resolve('.')}`,

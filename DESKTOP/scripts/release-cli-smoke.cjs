@@ -118,6 +118,7 @@ function writeConfig(root, port) {
 
 function startMockServer() {
   const requests = [];
+  const sockets = new Set();
   const responseText = 'RELEASE_CLI_SEND_OK 做了什么 验证 文件';
   const server = http.createServer((req, res) => {
     let body = '';
@@ -167,8 +168,12 @@ function startMockServer() {
       }
     });
   });
+  server.on('connection', socket => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
   return new Promise(resolve => {
-    server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port, requests, responseText }));
+    server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port, requests, responseText, sockets }));
   });
 }
 
@@ -189,6 +194,9 @@ function startMockServer() {
     if (parsedState.root !== root) fail('state did not use requested root');
     if (parsedState.model !== 'release-cli-mock') fail('state did not load mock model');
     if (parsedState.language !== 'auto') fail(`state did not expose default language: ${parsedState.language}`);
+    if (parsedState.autoSwitch !== false || parsedState.autoSwitchScope !== 'all') fail(`state did not expose default Auto switch fields: ${state.stdout}`);
+    if (parsedState.openAIApiMode !== 'chat_stream') fail(`state did not expose OpenAI API mode: ${state.stdout}`);
+    if (!parsedState.contextWindow || parsedState.contextWindow.model !== 'release-cli-mock' || parsedState.contextWindow.maxTokens < 1) fail(`state did not expose context window: ${state.stdout}`);
     const zhState = await runPowerShellCli(['state', '--language', 'zh', '--root', root], root);
     const parsedZhState = JSON.parse(zhState.stdout);
     if (parsedZhState.language !== 'zh') fail(`state --language zh did not override language: ${zhState.stdout}`);
@@ -274,6 +282,31 @@ function startMockServer() {
       fail(`memory-lab reindex did not preserve component links: ${memoryReindex.stdout}`);
     }
     log('memory-lab ok');
+
+    const updateSource = path.join(root, 'release-update-source');
+    const updateTarget = path.join(root, 'release-update-target');
+    fs.mkdirSync(path.join(updateSource, 'resources'), { recursive: true });
+    fs.mkdirSync(path.join(updateTarget, 'Work'), { recursive: true });
+    fs.writeFileSync(path.join(updateSource, 'Newmark Agent.exe'), 'release update binary', 'utf8');
+    fs.writeFileSync(path.join(updateSource, 'resources', 'update-marker.bin'), 'release update marker', 'utf8');
+    fs.writeFileSync(path.join(updateSource, 'config.json'), 'source config should be preserved away', 'utf8');
+    fs.writeFileSync(path.join(updateTarget, 'config.json'), 'target config must survive', 'utf8');
+    fs.writeFileSync(path.join(updateTarget, 'Work', 'state.txt'), 'target workspace state must survive', 'utf8');
+    const installVersion = await runPowerShellCli(['install-update', '--version', '--root', root], root);
+    const parsedInstallVersion = JSON.parse(installVersion.stdout);
+    if (parsedInstallVersion.ok !== true || parsedInstallVersion.version !== '1.1.0') fail(`install-update version failed: ${installVersion.stdout}`);
+    const installDryRun = await runPowerShellCli(['install-update', '--source', updateSource, '--target', updateTarget, '--expected-version', '1.1.0', '--dry-run', '--root', root], root);
+    const parsedInstallDryRun = JSON.parse(installDryRun.stdout);
+    if (parsedInstallDryRun.ok !== true || parsedInstallDryRun.dryRun !== true || !parsedInstallDryRun.preserved.includes('config.json')) {
+      fail(`install-update dry-run did not report preserved local data: ${installDryRun.stdout}`);
+    }
+    const installRun = await runPowerShellCli(['install-update', '--source', updateSource, '--target', updateTarget, '--expected-version', '1.1.0', '--root', root], root);
+    const parsedInstallRun = JSON.parse(installRun.stdout);
+    if (parsedInstallRun.ok !== true || !parsedInstallRun.copied.includes('Newmark Agent.exe')) fail(`install-update run failed: ${installRun.stdout}`);
+    if (fs.readFileSync(path.join(updateTarget, 'config.json'), 'utf8') !== 'target config must survive') fail('install-update overwrote config.json');
+    if (fs.readFileSync(path.join(updateTarget, 'Work', 'state.txt'), 'utf8') !== 'target workspace state must survive') fail('install-update overwrote Work state');
+    if (fs.readFileSync(path.join(updateTarget, 'resources', 'update-marker.bin'), 'utf8') !== 'release update marker') fail('install-update did not copy app resource marker');
+    log('install-update ok');
 
     const anthropicKey = 'test-key-release-cli';
     const fuzzy = await runPowerShellCli([
@@ -361,13 +394,20 @@ function startMockServer() {
 
     log('all release CLI smoke checks passed');
   } finally {
-    await new Promise(resolve => mock.server.close(resolve));
+    if (typeof mock.server.closeAllConnections === 'function') {
+      mock.server.closeAllConnections();
+    }
+    for (const socket of mock.sockets || []) {
+      try { socket.destroy(); } catch {}
+    }
+    await new Promise(resolve => mock.server.close(() => resolve()));
     if (keepRoot) {
       log(`kept root: ${root}`);
     } else {
       fs.rmSync(root, { recursive: true, force: true });
     }
   }
+  process.exit(0);
 })().catch(error => {
   console.error(`[release-cli-smoke] ${error.message}`);
   process.exit(1);

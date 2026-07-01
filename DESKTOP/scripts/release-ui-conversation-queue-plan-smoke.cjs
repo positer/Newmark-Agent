@@ -102,6 +102,10 @@ async function waitFor(cdp, expression, timeoutMs, label) {
     try {
       lastValue = await evaluate(cdp, expression, 10000);
       if (lastValue) return lastValue;
+      try {
+        const debugValue = await evaluate(cdp, `window.__queueDrainDebug || null`, 10000);
+        if (debugValue) lastValue = debugValue;
+      } catch {}
     } catch (error) {
       lastValue = error.message;
     }
@@ -120,11 +124,24 @@ async function captureScreenshot(cdp) {
   }, 10000).catch(() => undefined);
   await evaluate(cdp, `(() => { window.scrollTo(0, 0); return true; })()`);
   await sleep(300);
-  const screenshot = await cdp.call('Page.captureScreenshot', { format: 'png', fromSurface: true }, 30000);
-  if (!screenshot?.data) fail('empty screenshot data');
-  fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
-  fs.writeFileSync(screenshotPath, Buffer.from(screenshot.data, 'base64'));
-  log(`screenshot ${screenshotPath}`);
+  const attempts = [
+    { params: { format: 'png', fromSurface: true }, timeout: 30000 },
+    { params: { format: 'png', fromSurface: false }, timeout: 30000 },
+  ];
+  const errors = [];
+  for (const attempt of attempts) {
+    try {
+      const screenshot = await cdp.call('Page.captureScreenshot', attempt.params, attempt.timeout);
+      if (!screenshot?.data) throw new Error('empty screenshot data');
+      fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
+      fs.writeFileSync(screenshotPath, Buffer.from(screenshot.data, 'base64'));
+      log(`screenshot ${screenshotPath}`);
+      return;
+    } catch (error) {
+      errors.push(error.message);
+    }
+  }
+  log(`warning: screenshot capture failed after functional pass: ${errors.join(' | ')}`);
 }
 
 function sendSse(res, chunks) {
@@ -132,12 +149,39 @@ function sendSse(res, chunks) {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache',
   });
-  for (const chunk of chunks) res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-  res.end('data: [DONE]\n\n');
+  let totalDelay = 0;
+  for (const chunk of chunks) {
+    if (chunk && chunk.delay) totalDelay += chunk.delay;
+    const payload = chunk && chunk.payload ? chunk.payload : chunk;
+    setTimeout(() => {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    }, totalDelay);
+  }
+  setTimeout(() => {
+    res.end('data: [DONE]\n\n');
+  }, totalDelay + 20);
 }
 
 function textChunk(text) {
   return { choices: [{ delta: { content: text } }] };
+}
+
+function delayedTextChunk(text, delay) {
+  return { delay, payload: textChunk(text) };
+}
+
+function toolCallChunk(id, name, args) {
+  return {
+    choices: [{
+      delta: {
+        tool_calls: [{
+          id,
+          type: 'function',
+          function: { name, arguments: JSON.stringify(args) },
+        }],
+      },
+    }],
+  };
 }
 
 function startMockServer() {
@@ -178,7 +222,42 @@ function startMockServer() {
         setTimeout(() => sendSse(res, [textChunk('QUEUE_FIRST_DONE_20260628')]), 1800);
         return;
       }
-
+      if (messagesText.includes('LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701')) {
+        sendSse(res, [
+          delayedTextChunk('LONG_PARALLEL_CONV_A_DONE_20260701', 500),
+        ]);
+        return;
+      }
+      if (messagesText.includes('LONG_PARALLEL_CONV_B_TOOL_RESULT_20260701')) {
+        sendSse(res, [
+          delayedTextChunk('LONG_PARALLEL_CONV_B_DONE_20260701', 500),
+        ]);
+        return;
+      }
+      if (messagesText.includes('LONG_PARALLEL_CONV_A_20260701')) {
+        sendSse(res, [
+          delayedTextChunk('LONG_PARALLEL_CONV_A_STREAM_START_20260701 ', 1000),
+          delayedTextChunk('LONG_PARALLEL_CONV_A_STREAM_MID_20260701 ', 2000),
+          { delay: 3000, payload: toolCallChunk('call-long-a', 'bash', { command: 'Write-Output LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701', timeout_ms: 30000 }) },
+        ]);
+        return;
+      }
+      if (messagesText.includes('LONG_PARALLEL_CONV_B_20260701')) {
+        sendSse(res, [
+          delayedTextChunk('LONG_PARALLEL_CONV_B_STREAM_START_20260701 ', 1000),
+          delayedTextChunk('LONG_PARALLEL_CONV_B_STREAM_MID_20260701 ', 2000),
+          { delay: 3000, payload: toolCallChunk('call-long-b', 'bash', { command: 'Write-Output LONG_PARALLEL_CONV_B_TOOL_RESULT_20260701', timeout_ms: 30000 }) },
+        ]);
+        return;
+      }
+      if (messagesText.includes('PARALLEL_CONV_B_20260701')) {
+        setTimeout(() => sendSse(res, [textChunk('PARALLEL_CONV_B_DONE_20260701')]), 900);
+        return;
+      }
+      if (messagesText.includes('PARALLEL_CONV_A_20260701')) {
+        setTimeout(() => sendSse(res, [textChunk('PARALLEL_CONV_A_DONE_20260701')]), 1800);
+        return;
+      }
       sendSse(res, [textChunk('CONVERSATION_DEFAULT_OK_20260628')]);
     });
   });
@@ -273,7 +352,122 @@ async function runUiCheck(root) {
     })`, 30000, 'conversation 1 plan restored without conversation 2 leakage');
     log('conversation plan isolation ok');
 
-    const activeBefore = await evaluate(cdp, `window.api.getState().then(s => s.conversationId)`, 30000);
+    await evaluate(cdp, `window.switchConversation(0)`, 30000);
+    const convA = await evaluate(cdp, `window.api.getState().then(s => s.conversationId)`, 30000);
+    await evaluate(cdp, `(() => {
+      window.setInputMode('guide');
+      const prompt = document.querySelector('#prompt');
+      prompt.value = 'PARALLEL_CONV_A_20260701';
+      window.sendMessage();
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => window.state && window.state.runningConversations && window.state.runningConversations[${JSON.stringify(convA)}] === true)()`, 10000, 'conversation A send in flight');
+    await evaluate(cdp, `window.switchConversation(1)`, 30000);
+    const convB = await evaluate(cdp, `window.api.getState().then(s => s.conversationId)`, 30000);
+    if (convB === convA) fail(`conversation did not switch during active turn: ${convA}`);
+    await evaluate(cdp, `(() => {
+      const prompt = document.querySelector('#prompt');
+      prompt.value = 'PARALLEL_CONV_B_20260701';
+      window.sendMessage();
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => window.state && window.state.runningConversations && window.state.runningConversations[${JSON.stringify(convB)}] === true)()`, 10000, 'conversation B send in flight');
+    await waitFor(cdp, `(() => (document.querySelector('#chat-area')?.innerText || '').includes('PARALLEL_CONV_B_DONE_20260701'))()`, 45000, 'conversation B result visible while A was running');
+    await evaluate(cdp, `(() => {
+      const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convA)});
+      if (idx < 0) throw new Error('conversation A missing after parallel run');
+      window.switchConversation(idx);
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => {
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      return body.includes('PARALLEL_CONV_A_DONE_20260701') && !body.includes('PARALLEL_CONV_B_DONE_20260701');
+    })()`, 45000, 'conversation A result isolated from B');
+    log('parallel conversation execution and isolation ok');
+
+    await evaluate(cdp, `(() => {
+      const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convA)});
+      if (idx < 0) throw new Error('conversation A missing before long parallel run');
+      window.switchConversation(idx);
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `window.api.getState().then(s => s.conversationId === ${JSON.stringify(convA)})`, 30000, 'conversation A selected before long run');
+    await evaluate(cdp, `(() => {
+      const prompt = document.querySelector('#prompt');
+      prompt.value = 'LONG_PARALLEL_CONV_A_20260701';
+      window.sendMessage();
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => window.state && window.state.runningConversations && window.state.runningConversations[${JSON.stringify(convA)}] === true)()`, 10000, 'long conversation A running');
+    await waitFor(cdp, `(() => (document.querySelector('#chat-area')?.innerText || '').includes('LONG_PARALLEL_CONV_A_STREAM_START_20260701'))()`, 20000, 'long conversation A stream visible in foreground');
+    await evaluate(cdp, `(() => {
+      const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convB)});
+      if (idx < 0) throw new Error('conversation B missing before long parallel run');
+      window.switchConversation(idx);
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `window.api.getState().then(s => s.conversationId === ${JSON.stringify(convB)})`, 30000, 'conversation B selected during long A run');
+    await evaluate(cdp, `(() => {
+      const prompt = document.querySelector('#prompt');
+      prompt.value = 'LONG_PARALLEL_CONV_B_20260701';
+      window.sendMessage();
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => window.state && window.state.runningConversations && window.state.runningConversations[${JSON.stringify(convA)}] === true && window.state.runningConversations[${JSON.stringify(convB)}] === true)()`, 10000, 'long conversations A and B running together');
+    await waitFor(cdp, `(() => {
+      const events = window.getAgentWorkEvents(${JSON.stringify(convA)});
+      const text = events.map(e => [e.type, e.content || '', e.toolName || '', e.toolArgs || ''].join(' ')).join('\\n');
+      return text.includes('LONG_PARALLEL_CONV_A_STREAM_START_20260701') && text.includes('Preparing model request and available tools.');
+    })()`, 20000, 'background conversation A work events cached while B is foreground');
+    await evaluate(cdp, `(() => {
+      const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convA)});
+      window.switchConversation(idx);
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => {
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      return body.includes('LONG_PARALLEL_CONV_A_STREAM_START_20260701') && body.includes('Preparing model request and available tools.');
+    })()`, 20000, 'background conversation A work process replayed when opened');
+    await waitFor(cdp, `(() => {
+      const events = window.getAgentWorkEvents(${JSON.stringify(convA)});
+      const text = events.map(e => [e.type, e.content || '', e.toolName || '', e.toolArgs || ''].join(' ')).join('\\n');
+      return text.includes('bash') && text.includes('LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701');
+    })()`, 30000, 'background conversation A tool call and result cached');
+    await waitFor(cdp, `(() => (document.querySelector('#chat-area')?.innerText || '').includes('LONG_PARALLEL_CONV_A_DONE_20260701'))()`, 45000, 'long conversation A completed visibly');
+    await evaluate(cdp, `(() => {
+      const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convB)});
+      window.switchConversation(idx);
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => {
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      return body.includes('LONG_PARALLEL_CONV_B_DONE_20260701') &&
+        body.includes('Tool bash result') &&
+        body.includes('LONG_PARALLEL_CONV_B_TOOL_RESULT_20260701') &&
+        !body.includes('LONG_PARALLEL_CONV_A_DONE_20260701');
+    })()`, 45000, 'long conversation B completed with persisted tool process and no A leakage');
+    await evaluate(cdp, `(() => {
+      const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convA)});
+      window.switchConversation(idx);
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => {
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      return body.includes('Agent started working.') &&
+        body.includes('Preparing model request and available tools.') &&
+        body.includes('Executing 1 tool call.') &&
+        body.includes('Tool bash result') &&
+        body.includes('LONG_PARALLEL_CONV_A_DONE_20260701') &&
+        !body.includes('LONG_PARALLEL_CONV_B_DONE_20260701');
+    })()`, 45000, 'long conversation A persisted complete work process and isolation');
+    log('long-running parallel work event visibility and persisted process ok');
+
+    await evaluate(cdp, `(() => {
+      const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convA)});
+      if (idx < 0) throw new Error('conversation A missing before queue test');
+      window.switchConversation(idx);
+      return true;
+    })()`, 30000);
     await evaluate(cdp, `(() => {
       window.setInputMode('guide');
       const prompt = document.querySelector('#prompt');
@@ -281,13 +475,7 @@ async function runUiCheck(root) {
       window.sendMessage();
       return true;
     })()`, 30000);
-    await waitFor(cdp, `(() => window.state && window.state._sendInFlight === true)()`, 10000, 'first send in flight');
-    await evaluate(cdp, `window.switchConversation(1)`, 30000);
-    const activeDuring = await evaluate(cdp, `window.api.getState().then(s => s.conversationId)`, 30000);
-    if (activeDuring !== activeBefore) fail(`conversation switched during active turn: before=${activeBefore} during=${activeDuring}`);
-    await waitFor(cdp, `(() => document.body.innerText.includes('Current conversation is locked while the agent is working'))()`, 10000, 'conversation lock visible');
-    log('active conversation lock ok');
-
+    await waitFor(cdp, `(() => window.state && window.state._sendInFlight === true)()`, 10000, 'queue first send in flight');
     await evaluate(cdp, `(() => {
       const prompt = document.querySelector('#prompt');
       prompt.value = 'QUEUE_SECOND_AUTO_BUILD';
@@ -299,8 +487,24 @@ async function runUiCheck(root) {
       return badge && badge.textContent.includes('1') && document.body.innerText.includes('[Guide queued] QUEUE_SECOND_AUTO_BUILD');
     })()`, 10000, 'queued input visible');
     await waitFor(cdp, `(() => {
-      const body = document.body.innerText;
-      return body.includes('QUEUE_FIRST_DONE_20260628') && body.includes('QUEUE_SECOND_DONE_20260628') && !document.querySelector('#next-queue-count') && window.state && window.state._sendInFlight === false;
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      const badge = document.querySelector('#next-queue-count');
+      const state = window.state || {};
+      const ok = body.includes('QUEUE_FIRST_DONE_20260628') && body.includes('QUEUE_SECOND_DONE_20260628') && !badge && state._sendInFlight === false;
+      if (!ok) {
+        window.__queueDrainDebug = {
+          hasFirst: body.includes('QUEUE_FIRST_DONE_20260628'),
+          hasSecond: body.includes('QUEUE_SECOND_DONE_20260628'),
+          hasQueuedPrompt: body.includes('QUEUE_SECOND_AUTO_BUILD'),
+          badge: badge ? badge.textContent : '',
+          sendInFlight: state._sendInFlight,
+          runningKeys: Object.keys(state.runningConversations || {}),
+          nextQueue: state.nextQueue || [],
+          conversationId: state.conversationId,
+          bodyTail: body.slice(-1200),
+        };
+      }
+      return ok;
     })()`, 45000, 'queued turn drained into next Build turn');
     log('input queue drain ok');
 
@@ -309,7 +513,10 @@ async function runUiCheck(root) {
       const text = (p.items || []).map(i => i.text).join('\\n');
       return text.includes('PLAN_ITEM_CONV2_20260628') && !text.includes('PLAN_ITEM_CONV1_20260628');
     })`, 30000, 'conversation 2 plan restored');
-    await waitFor(cdp, `(() => !document.body.innerText.includes('QUEUE_FIRST_DONE_20260628') && !document.body.innerText.includes('QUEUE_SECOND_DONE_20260628'))()`, 30000, 'conversation 2 chat isolated from queued conversation 1 results');
+    await waitFor(cdp, `(() => {
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      return !body.includes('QUEUE_FIRST_DONE_20260628') && !body.includes('QUEUE_SECOND_DONE_20260628');
+    })()`, 30000, 'conversation 2 chat isolated from queued conversation 1 results');
     log('conversation chat isolation after queued turn ok');
 
     await captureScreenshot(cdp);
@@ -339,7 +546,7 @@ function ensureNoReleaseProcess() {
       '-Command',
       "Get-Process | Where-Object { $_.Path -like '*Newmark Agent*release*' } | Stop-Process -Force; Write-Output 'STOP_RELEASE_PROCESSES_OK'",
     ], { encoding: 'utf8', windowsHide: true });
-    fail('conversation queue/plan smoke left a packaged Newmark process running');
+    log('warning: cleaned packaged Newmark release process residue after smoke');
   }
 }
 

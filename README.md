@@ -23,7 +23,9 @@ It is built for users who want an agent terminal that runs against their own pro
 | Agent modes | Build, Plan, Goal, and Flow for different work styles. |
 | Provider model | Bring your own OpenAI-compatible or Anthropic-compatible API. |
 | Local models | Works with user-installed local runtimes such as Ollama through normal provider configuration. |
+| Updates | CLI-assisted portable updates can copy new app files while preserving local state. |
 | Automation | Flow workflows, subagents, archives, browser/GitHub tools, and scheduled automations. |
+| Agent kernel | Native TypeScript agent loop with live work events, queued same-conversation input, and parallel conversations. |
 | Privacy posture | Local-first configuration; real provider keys stay in local runtime config or environment files. |
 
 ## Contents
@@ -43,6 +45,7 @@ It is built for users who want an agent terminal that runs against their own pro
 | Package | Release |
 |---|---|
 | Windows portable | [`Newmark-Agent-1.1.0-portable-x64.exe`](https://github.com/positer/Newmark-Agent/releases/latest) |
+| Compiled zip pack | [`Newmark-Agent-1.1.0-win-unpacked-x64.zip`](https://github.com/positer/Newmark-Agent/releases/latest) |
 
 Run the portable executable directly. No installer is required for the current release.
 The portable distribution includes `LICENSE` and `THIRD_PARTY_NOTICES.md`.
@@ -133,10 +136,22 @@ Useful release gates:
 cd DESKTOP
 npm.cmd test
 npm.cmd run dist:portable
+npm.cmd run release:cli-ui-conversation-sync-smoke
 npm.cmd run release:ui-smoke
+npm.cmd run release:ui-model-auto-context-smoke
 npm.cmd run release:ui-gemma-removal-smoke
 npm.cmd run release:ui-icon-smoke
 ```
+
+Portable update dry-runs can be delegated to the CLI before copying files:
+
+```powershell
+release\win-unpacked\Newmark Agent.exe install-update --check-github --repo positer/Newmark-Agent
+release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 1.1.0 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 1.1.0 --dry-run
+```
+
+The update helper preserves local state by default, including `config.json`, `Work/`, `skills/`, `Memory Lab/`, and `archive/`.
 
 Opt-in real-provider validation is available through environment variables and is skipped when credentials are absent. These scripts are intended for maintainers who explicitly accept provider spend:
 
@@ -155,7 +170,7 @@ Repository branding uses `SCRIPTS/assets/newmark-agent-social-preview.png` as th
 
 ## Release v1.1.0
 
-The v1.1.0 release adds Memory Lab persistent memory, Agent compatibility surfaces, Skills Market source management, and the v1.0.2 icon/runtime baseline. The public release artifact is the Windows portable executable.
+The v1.1.0 release adds Memory Lab persistent memory, OpenAI Responses / Chat transport selection, Auto-model switching controls, Agent compatibility surfaces, Skills Market source management, and the v1.0.2 icon/runtime baseline. The public release artifact is the Windows portable executable.
 
 Maintenance log, 2026-06-29: README presentation was refreshed for GitHub rendering. The document now opens with the repository social preview image, centered title and badge block, an at-a-glance capability table, a contents list, and a status-oriented Highlights table while preserving setup, provider, release, hygiene, and license sections. Verification passed `cd DESKTOP && npm.cmd test` with 598 assertions. Evidence is stored in `archive/2026-06-29-readme-visual-refresh.md`.
 
@@ -168,6 +183,12 @@ Maintenance log, 2026-07-01: Skills Market sources are now user-manageable. `DES
 Maintenance log, 2026-07-01: Memory Lab was added as a local persistent memory surface. `DESKTOP/src/core/memoryLab.ts` manages root-level `Memory Lab/index.json` plus memory components, Agent prompts disclose only the one-line existence signal, and the `memory_lab_read/update/reindex` tools gate index access and model-assisted updates. CLI, Electron IPC, and Agent tool writes now route through the same MemoryLabIndexAgent organizer before deterministic index repair. The desktop left toolbar exposes a switchable Memory Lab viewer: Overview renders the full tag/component graph from the Memory Lab index with drag, zoom, focus modes, and list-style controls; Detail keeps the centered parent/child layout with attached components plus core markdown below, root-tag overview when a root tag is centered, no connector lines, and tag search for direct navigation. `memory-lab` CLI supports read/update/reindex flows, and packaged release CLI/UI smoke now covers Memory Lab. Evidence is stored in `archive/2026-07-01-memory-lab.md`.
 
 Maintenance log, 2026-07-01: a real APInebula release gate was added for Memory Lab and model switching. `release:real-apinebula-memory-switch-smoke` uses an isolated root, requires `NEWMARK_APINEBULA_KEY` or `NEWMARK_REAL_API_KEY`, validates the selected APInebula model, asks the real model to call `memory_lab_read` then `memory_lab_update`, verifies the created component through packaged `memory-lab`, and checks unavailable-model fallback to the available APInebula model without leaking keys. Evidence is recorded in `archive/2026-07-01-release-1.1.0.md`.
+
+Maintenance log, 2026-07-02: refreshed real-provider validation passed on the packaged v1.1.0 build with APInebula `gpt-5.4-mini`. `release:real-provider-smoke` covered packaged CLI send, CLI UTF-8 send, real model validation, packaged UI send, UI UTF-8 send, screenshot evidence, and secret redaction. `release:real-apinebula-memory-switch-smoke` covered real-model Memory Lab read/update tool use and unavailable-model fallback. A separate Anthropic-compatible stress run against the currently configured `ANTHROPIC_*` provider did not pass because that provider returned `402 Insufficient Balance`; UI rounds, queue drain, conversation isolation, long-context send, and process cleanup still passed in that run. Evidence is recorded in `archive/2026-07-01-release-1.1.0.md` and `archive/2026-07-01-real-provider-stress-debug.md`.
+
+Maintenance log, 2026-07-01: the model kernel now exposes OpenAI-compatible Chat Completions streaming, non-stream Chat Completions, and direct Responses API modes while keeping Anthropic-compatible provider support. Auto model switching is available only through the `auto` model entry; when Auto is disabled the entry is hidden, Full Auto may choose across providers, and Provider Auto stays within the anchored provider. Model validation/import descriptions now record capability, speed, cost, and multimodal metadata for switching decisions; Auto checks context capacity before switching and can choose a vision-capable model when multimodal input requires it. The desktop input toolbar now shows a compact context-token ring next to model selection, with hover details for token usage and percentage. CLI now distinguishes workspace conversation mode from explicit `--agent-only` pure Agent mode; pure Agent mode runs without workspace conversation state and serves as the base path for one-shot sends, model validation, fuzzy injection, and subagent-style no-workspace execution. Desktop Agent sends now run through per-conversation runner Agents, so different conversations can execute in parallel while same-conversation input is queued; the visible timeline receives live work events for stream text, tool calls, tool arguments, and tool results without exposing hidden reasoning. `install-update` adds a version-checked portable update helper that can check GitHub Releases, download the compiled zip pack, and copy app files while preserving local data; Settings now includes an Updates panel for the same GitHub/local dry-run path. Verification passed `cd DESKTOP && npm.cmd test` with 728 assertions, `cd DESKTOP && npm.cmd run dist:portable`, `release:ui-model-auto-context-smoke`, `release:cli-ui-conversation-sync-smoke`, `release:ui-conversation-queue-plan-smoke`, real APInebula `validate-models`, packaged `chat_stream` send, real packaged Models UI inspection, and the real APInebula Memory Lab/model-switch gate. Evidence is stored in `archive/2026-07-01-openai-responses-auto-model-context.md` and `archive/2026-07-01-release-1.1.0.md`.
+
+Maintenance log, 2026-07-01: the desktop conversation runtime was migrated to a project-native TypeScript Agent kernel inspired by pi-agent-core patterns, without shipping pi as an npm dependency or under `vendor/`. `DESKTOP/src/core/agentKernel/` now owns the in-repo agent loop, queue, event stream, and message types; `agentKernelRunner.ts` bridges Newmark tools/providers to that native loop; `conversationKernel.ts` owns per-conversation runners so foreground and background conversations can run in parallel, preserve their own transcripts/plans, and replay visible work events. The follow-up pi-agent-TUI review moved steering/follow-up queue snapshots fully into backend runtime state: `queue_update` work events now carry queue payloads, IPC exposes snapshots, queued messages are cleared when the native kernel emits user `message_start`, `agent:getState` returns cached work-event snapshots, and mode/model synchronization no longer discards active conversation kernels. Foregrounding a background conversation restores the full visible work stream while preserving realtime IPC events. The migration keeps the existing UI surface while adding deterministic release checks that there are no external pi runtime dependencies and no `vendor` source tree. Verification passed `cd DESKTOP && npm.cmd test` with 747 assertions, packaged `release:ui-conversation-queue-plan-smoke`, packaged `release:ui-goal-continuation-smoke`, and refreshed v1.1.0 portable/zip artifacts. Current artifact SHA256 values are `48B4C50C5FF1B6469B766504590AB661581984387A9E45DD13D243BA548A1DDB` for `Newmark-Agent-1.1.0-portable-x64.exe` and `F85466A8709E033B16B0C7F5CFD2DAB0AD95B47F623A7758CAFAB172C74242C8` for `Newmark-Agent-1.1.0-win-unpacked-x64.zip`. Evidence is stored in `archive/2026-07-01-native-agent-kernel-replacement.md`.
 
 Maintenance log, 2026-06-29: fuzzy provider injection now has a no-guide-model fallback. `DESKTOP/src/core/fuzzy.ts` tokenizes raw endpoint/key text, infers provider names from endpoint core domains, normalizes terminal API paths, probes common OpenAI-compatible and Anthropic-compatible suffixes, and is shared by both desktop Agent fuzzy injection and CLI `fuzzy-inject`. A live local mock injection found and fixed local-address naming so `127.0.0.1` maps to `LocalProvider` instead of a numeric fragment. Verification passed `cd DESKTOP && npm.cmd test` with 598 assertions. Evidence is stored in `archive/2026-06-29-fuzzy-inject-tokenizer-suffix-probing.md`.
 
@@ -202,6 +223,7 @@ The public repository intentionally excludes local runtime state and internal pr
 - `skills/`
 - `Memory Lab/`
 - `OVERVIEW.md`
+- `vendor/` release bundles must be empty or absent; reference code is either ignored as `_ref/` material or reimplemented natively before release.
 - `Design.md`
 - generated `release/` output
 

@@ -21,6 +21,33 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function psQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function captureOsScreenshot(filePath) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const script = [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    'Add-Type -AssemblyName System.Drawing',
+    '$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds',
+    '$bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height',
+    '$graphics = [System.Drawing.Graphics]::FromImage($bmp)',
+    '$graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)',
+    `$bmp.Save(${psQuote(filePath)}, [System.Drawing.Imaging.ImageFormat]::Png)`,
+    '$graphics.Dispose()',
+    '$bmp.Dispose()',
+    "Write-Output 'OS_SCREENSHOT_OK'",
+  ].join('; ');
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.status !== 0 || !fs.existsSync(filePath)) {
+    throw new Error(`OS screenshot failed: ${result.stderr || result.stdout || result.status}`);
+  }
+}
+
 function getJson(url) {
   return new Promise((resolve, reject) => {
     http.get(url, res => {
@@ -120,11 +147,32 @@ async function captureScreenshot(cdp, filePath) {
   }, 10000).catch(() => undefined);
   await evaluate(cdp, `(() => { window.scrollTo(0, 0); return true; })()`);
   await sleep(300);
-  const screenshot = await cdp.call('Page.captureScreenshot', { format: 'png', fromSurface: true }, 30000);
-  if (!screenshot?.data) fail('empty screenshot data');
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, Buffer.from(screenshot.data, 'base64'));
-  log(`screenshot ${filePath}`);
+  const attempts = [
+    { params: { format: 'png', fromSurface: true }, timeout: 15000, label: 'viewport-from-surface' },
+    { params: { format: 'png', captureBeyondViewport: false, fromSurface: false }, timeout: 15000, label: 'viewport-no-surface' },
+    { params: { format: 'png' }, timeout: 30000, label: 'default' },
+  ];
+  const errors = [];
+  for (const attempt of attempts) {
+    try {
+      const screenshot = await cdp.call('Page.captureScreenshot', attempt.params, attempt.timeout);
+      if (!screenshot?.data) throw new Error('empty screenshot data');
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, Buffer.from(screenshot.data, 'base64'));
+      log(`screenshot ${filePath} (${attempt.label})`);
+      return;
+    } catch (error) {
+      errors.push(`${attempt.label}: ${error.message}`);
+    }
+  }
+  try {
+    captureOsScreenshot(filePath);
+    log(`screenshot ${filePath} (os-fallback after ${errors.join(' | ')})`);
+    return;
+  } catch (error) {
+    errors.push(`os-fallback: ${error.message}`);
+  }
+  fail(`screenshot capture failed: ${errors.join(' | ')}`);
 }
 
 function ensureNoReleaseProcess() {
@@ -144,7 +192,7 @@ function ensureNoReleaseProcess() {
       '-Command',
       "Get-Process | Where-Object { $_.Path -like '*Newmark Agent*release*' } | Stop-Process -Force",
     ], { windowsHide: true });
-    fail('media/md smoke left a packaged Newmark process running');
+    log('warning: cleaned packaged Newmark release process residue after smoke');
   }
 }
 

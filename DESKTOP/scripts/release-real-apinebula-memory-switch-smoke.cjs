@@ -13,6 +13,8 @@ const baseUrl = process.env.NEWMARK_APINEBULA_BASE_URL || 'https://apinebula.com
 const modelName = process.env.NEWMARK_APINEBULA_MODEL || 'gpt-5.4-mini';
 const apiKey = process.env.NEWMARK_APINEBULA_KEY || process.env.NEWMARK_REAL_API_KEY || '';
 const unavailableModel = process.env.NEWMARK_APINEBULA_BAD_MODEL || 'newmark-unavailable-model-for-fallback';
+const memoryComponentName = 'Real APInebula Memory Lab Smoke';
+const memoryComponentSlug = 'real-apinebula-memory-lab-smoke';
 
 function log(message) {
   console.log(`[release-real-apinebula-memory-switch-smoke] ${message}`);
@@ -140,6 +142,35 @@ function parseJsonOutput(output, label) {
   }
 }
 
+function findConversationAssistantModel(root, conversationId, marker) {
+  const stack = [path.join(root, 'Work')];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current || !fs.existsSync(current)) continue;
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (entry.name !== 'state.json' || !full.includes(`${path.sep}conversations${path.sep}`)) continue;
+      try {
+        const parsed = JSON.parse(fs.readFileSync(full, 'utf8'));
+        const rawConversations = parsed.conversations || {};
+        const conversations = Array.isArray(rawConversations)
+          ? rawConversations
+          : Object.entries(rawConversations).map(([key, value]) => ({ key, ...(value || {}) }));
+        const conversation = conversations.find(item => item && (item.id === conversationId || item.key === conversationId || String(item.key || '').endsWith(`-${conversationId}`)));
+        const assistant = conversation?.messages?.find(msg => msg?.role === 'assistant' && String(msg.content || '').includes(marker));
+        const chatAssistant = conversation?.chatMessages?.find(msg => msg?.role === 'assistant' && String(msg.content || '').includes(marker));
+        if (assistant?.model) return String(assistant.model);
+        if (chatAssistant?.model) return String(chatAssistant.model);
+      } catch {}
+    }
+  }
+  return '';
+}
+
 async function verifyRealModel(root) {
   const validation = await runPowerShellCli(['validate-models', '--selected', `${providerName}/${modelName}`, '--root', root], root, 240000);
   if (validation.stdout.includes(apiKey)) fail('validate-models leaked API key');
@@ -157,7 +188,7 @@ async function verifyMemoryReadAndCreate(root) {
     'You must use Memory Lab tools, not plain prose, for this task.',
     'First call memory_lab_read to inspect the Memory Lab index and instructions.',
     'Then call memory_lab_update to create a durable memory component with:',
-    'name: Real APInebula Memory Lab Smoke',
+    `name: ${memoryComponentName}`,
     'description: Real APInebula model-created Memory Lab release smoke component',
     'tags: #Release-APInebula,#Agent-MemoryLab,#Agent-ModelSwitch',
     'content markdown containing the exact marker REAL_APINEBULA_MEMORY_CREATE_OK_20260701.',
@@ -178,7 +209,7 @@ async function verifyMemoryReadAndCreate(root) {
   if (!output.includes('[memory_lab_update]')) fail(`real model did not call memory_lab_update: ${sanitize(output).slice(0, 2000)}`);
   if (!output.includes('REAL_APINEBULA_MEMORY_CREATE_OK_20260701')) fail(`memory component marker missing from tool output: ${sanitize(output).slice(0, 2000)}`);
 
-  const read = await runPowerShellCli(['memory-lab', '--component', 'Real APInebula Memory Lab Smoke', '--root', root], root, 120000);
+  const read = await runPowerShellCli(['memory-lab', '--component', memoryComponentSlug, '--root', root], root, 120000);
   if (read.stdout.includes(apiKey)) fail('memory-lab read leaked API key');
   const parsedRead = parseJsonOutput(read.stdout, 'memory-lab read');
   if (parsedRead.ok !== true) fail(`memory-lab read failed after real agent update: ${sanitize(read.stdout)}`);
@@ -193,19 +224,23 @@ async function verifyMemoryReadAndCreate(root) {
 }
 
 async function verifyFallbackSwitch(root) {
+  const conversationId = 'real-apinebula-model-switch';
+  const marker = 'REAL_APINEBULA_MODEL_SWITCH_OK_20260701';
   const promptPath = path.join(root, 'fallback-prompt.txt');
-  fs.writeFileSync(promptPath, 'Reply exactly REAL_APINEBULA_MODEL_SWITCH_OK_20260701. Do not use tools.', 'utf8');
+  fs.writeFileSync(promptPath, `Reply exactly ${marker}. Do not use tools.`, 'utf8');
   const send = await runPowerShellCli([
     'send',
     '--input-file', promptPath,
     '--mode', 'build',
-    '--conversation', 'real-apinebula-model-switch',
+    '--conversation', conversationId,
     '--root', root,
   ], root, 240000);
   if (send.stdout.includes(apiKey)) fail('fallback send leaked API key');
-  if (!send.stdout.includes('[Model fallback]')) fail(`fallback notice missing: ${sanitize(send.stdout).slice(0, 2000)}`);
-  if (!send.stdout.includes(modelName)) fail(`fallback did not switch to expected APInebula model: ${sanitize(send.stdout).slice(0, 2000)}`);
-  if (!send.stdout.includes('REAL_APINEBULA_MODEL_SWITCH_OK_20260701')) fail(`fallback response missing marker: ${sanitize(send.stdout).slice(0, 2000)}`);
+  if (!send.stdout.includes(marker)) fail(`fallback response missing marker: ${sanitize(send.stdout).slice(0, 2000)}`);
+  const savedModel = findConversationAssistantModel(root, conversationId, marker);
+  if (savedModel !== modelName) {
+    fail(`fallback did not persist assistant response under expected APInebula model. expected=${modelName} actual=${savedModel || '(missing)'}`);
+  }
   log('real APInebula unavailable-model fallback ok');
 }
 

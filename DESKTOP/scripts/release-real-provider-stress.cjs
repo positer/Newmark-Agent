@@ -386,6 +386,8 @@ async function sendUiPrompt(cdp, prompt, marker, waitTimeoutMs = timeoutMs) {
 }
 
 async function runUiStress(cdp) {
+  await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
+  await waitFor(cdp, `window.api.getState().then(s => s && s.status === 'idle' ? true : false)`, 60000, 'ui stress initial idle');
   for (let i = 1; i <= uiRounds; i++) {
     const marker = i % 2 === 0 ? `真实_STRESS_UI_${i}_OK` : `NM_STRESS_UI_${i}_OK`;
     await sendUiPrompt(cdp, markerPrompt(marker, i), marker);
@@ -407,10 +409,14 @@ async function runGoalStress(cdp) {
   const resultText = JSON.stringify(result || {});
   if (!resultText.includes(marker)) throw new Error(`Goal stress missing completion marker: ${redact(resultText).slice(0, 1200)}`);
   if (/max[- ]?depth/i.test(resultText)) throw new Error(`Goal stress exposed max-depth warning: ${redact(resultText).slice(0, 1200)}`);
+  await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
+  await waitFor(cdp, `window.api.getState().then(s => s && s.status === 'idle' ? true : false)`, 60000, 'build mode restored after Goal stress');
   return `goalRounds=${goalRounds}`;
 }
 
 async function runQueueStress(cdp) {
+  await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
+  await waitFor(cdp, `window.api.getState().then(s => s && s.status === 'idle' ? true : false)`, 60000, 'queue stress initial idle');
   const firstMarker = 'NM_STRESS_QUEUE_FIRST_OK';
   const secondMarker = 'NM_STRESS_QUEUE_SECOND_OK';
   await evaluate(cdp, `(() => {
@@ -435,6 +441,8 @@ async function runQueueStress(cdp) {
 }
 
 async function runConversationIsolationStress(cdp) {
+  await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
+  await waitFor(cdp, `window.api.getState().then(s => s && s.status === 'idle' ? true : false)`, 60000, 'conversation isolation initial idle');
   const convA = 'stress-conversation-a';
   const convB = 'stress-conversation-b';
   const markerA = 'NM_STRESS_CONVERSATION_A_OK';

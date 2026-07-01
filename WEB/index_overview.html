@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Lightweight KB Tag Graph</title>
+<style>
+:root{
+  --bg:#0b1020;
+  --panel:rgba(15,21,38,.72);
+  --line:rgba(135,174,220,.34);
+  --parent:#f6c96b;
+  --child:#74dfb0;
+  --focus:#7bdff6;
+  --text:#eef4ff;
+  --muted:#9ca9bf;
+  --root:#f6c96b;
+  --tag:#b7a0ff;
+  --leaf:#74dfb0;
+  --addon:#e8eef8;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text);background:var(--bg)}
+.kb-graph{position:fixed;inset:0;overflow:hidden;background:linear-gradient(135deg,#080d19,#10192c)}
+.kb-topbar{
+  position:absolute;left:12px;right:12px;top:12px;height:44px;z-index:20;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:0 10px 0 14px;border:1px solid rgba(255,255,255,.09);border-radius:16px;
+  background:var(--panel);backdrop-filter:blur(18px)
+}
+.kb-title{font-size:14px;font-weight:700;white-space:nowrap}
+.kb-actions{display:flex;gap:8px;align-items:center}
+button,select{
+  height:30px;border:1px solid rgba(255,255,255,.12);border-radius:10px;
+  background:rgba(255,255,255,.06);color:var(--text);font-size:12px;padding:0 10px;
+}
+button{cursor:pointer}
+button:hover,select:hover{background:rgba(255,255,255,.11)}
+.stage{position:absolute;inset:0;overflow:hidden;cursor:grab}
+.stage:active{cursor:grabbing}
+.grid{
+  position:absolute;inset:0;opacity:.34;
+  background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);
+  background-size:40px 40px
+}
+svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+.link{
+  fill:none;
+  stroke:var(--line);
+  stroke-width:1.05;
+  stroke-linecap:round;
+  opacity:.5;
+}
+.link.hot{stroke:var(--focus);stroke-width:1.45;opacity:.92}
+.link.parent{stroke:var(--parent)}
+.link.child{stroke:var(--child)}
+.link.dim{opacity:.05}
+.flow{
+  fill:none;
+  stroke:var(--focus);
+  stroke-width:1.8;
+  stroke-linecap:round;
+  stroke-dasharray:18 900;
+  animation:flow .9s linear infinite;
+  opacity:.8
+}
+.flow.parent{stroke:var(--parent)}
+.flow.child{stroke:var(--child)}
+@keyframes flow{to{stroke-dashoffset:-220}}
+.node{
+  position:absolute;z-index:10;width:14px;height:14px;border-radius:50%;
+  transform:translate(-50%,-50%);border:1px solid rgba(255,255,255,.68);
+  background:var(--tag);box-shadow:0 0 12px rgba(183,160,255,.38);cursor:pointer;
+  transition:opacity .15s,width .15s,height .15s,box-shadow .15s
+}
+.node.root{background:var(--root);box-shadow:0 0 12px rgba(246,201,107,.34)}
+.node.leaf{background:var(--leaf);box-shadow:0 0 12px rgba(116,223,176,.32)}
+.node.addon{background:var(--addon);box-shadow:0 0 10px rgba(232,238,248,.28)}
+.node.anchor{width:20px;height:20px;background:#fff2b5;box-shadow:0 0 18px rgba(246,201,107,.55)}
+.node.focus{width:22px;height:22px;box-shadow:0 0 0 6px rgba(123,223,246,.13),0 0 24px rgba(123,223,246,.72)}
+.node.dim{opacity:.16}
+.tooltip{
+  position:absolute;z-index:30;pointer-events:none;opacity:0;transform:translate(14px,-50%);
+  min-width:112px;padding:7px 9px;border-radius:11px;border:1px solid rgba(255,255,255,.1);
+  background:rgba(9,13,25,.82);backdrop-filter:blur(14px);box-shadow:0 10px 28px rgba(0,0,0,.24)
+}
+.tooltip.show{opacity:1}
+.tooltip .name{font-size:12px;font-weight:700;white-space:nowrap}
+.tooltip .type{font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap}
+.status{
+  position:absolute;left:12px;bottom:12px;z-index:20;
+  padding:8px 10px;border:1px solid rgba(255,255,255,.08);border-radius:12px;
+  background:rgba(15,21,38,.58);backdrop-filter:blur(14px);
+  color:var(--muted);font-size:12px
+}
+</style>
+</head>
+<body>
+<div class="kb-graph">
+  <div class="kb-topbar">
+    <div class="kb-title">知识库 Tag 图谱 <span style="color:var(--muted);font-weight:500">· 边长限制</span></div>
+    <div class="kb-actions">
+      <select id="mode">
+        <option value="both">双向</option>
+        <option value="parents">父链</option>
+        <option value="children">子树</option>
+        <option value="direct">直接</option>
+      </select>
+      <button id="clear">取消</button>
+      <button id="reset">重置</button>
+    </div>
+  </div>
+  <div class="stage" id="stage">
+    <div class="grid"></div>
+    <svg id="svg"></svg>
+  </div>
+  <div class="tooltip" id="tip"><div class="name"></div><div class="type"></div></div>
+  <div class="status" id="status">未选中</div>
+</div>
+
+<script>
+const nodes0=[
+  {id:"anchor",name:"知识库",type:"Anchor",cls:"anchor",x:0,y:0,fixed:true},
+  {id:"root-ai",name:"AI",type:"根父类",cls:"root",x:-410,y:-210},
+  {id:"root-dev",name:"开发",type:"根父类",cls:"root",x:-430,y:0},
+  {id:"root-media",name:"内容",type:"根父类",cls:"root",x:-390,y:210},
+  {id:"root-qml",name:"QML",type:"根父类",cls:"root",x:-300,y:390},
+
+  {id:"agent",name:"Agent",type:"Tag",cls:"tag",x:-130,y:-160},
+  {id:"automation",name:"Automation",type:"Tag",cls:"tag",x:-110,y:20},
+  {id:"publisher",name:"发布系统",type:"Tag",cls:"tag",x:-90,y:190},
+  {id:"research",name:"Research",type:"Tag",cls:"tag",x:-60,y:350},
+
+  {id:"newmark",name:"Newmark",type:"项目",cls:"tag",x:180,y:-190},
+  {id:"tts",name:"TTS",type:"功能",cls:"leaf",x:190,y:-40},
+  {id:"cli",name:"CLI 发布",type:"功能",cls:"leaf",x:190,y:120},
+  {id:"paper",name:"论文工作流",type:"功能",cls:"leaf",x:205,y:285},
+  {id:"numerics",name:"数值实验",type:"功能",cls:"leaf",x:205,y:440},
+
+  {id:"ui",name:"UI",type:"子 Tag",cls:"leaf",x:480,y:-240},
+  {id:"workspace",name:"工作区",type:"子 Tag",cls:"leaf",x:490,y:-110},
+  {id:"schedule",name:"定时任务",type:"子 Tag",cls:"leaf",x:500,y:20},
+  {id:"platforms",name:"多平台",type:"子 Tag",cls:"leaf",x:500,y:150},
+  {id:"review",name:"审稿",type:"子 Tag",cls:"leaf",x:510,y:295},
+  {id:"rtx",name:"RTX4060",type:"子 Tag",cls:"leaf",x:505,y:430},
+
+  {id:"addon-db",name:"Tag DB",type:"组件",cls:"addon",x:220,y:-360},
+  {id:"addon-api",name:"API",type:"组件",cls:"addon",x:520,y:570},
+  {id:"addon-cache",name:"Cache",type:"组件",cls:"addon",x:700,y:420}
+];
+
+const edges=[
+  ["anchor","root-ai"],["anchor","root-dev"],["anchor","root-media"],["anchor","root-qml"],
+  ["root-ai","agent"],["root-dev","agent"],["root-dev","automation"],["root-media","automation"],
+  ["root-media","publisher"],["root-dev","publisher"],["root-qml","research"],["root-ai","research"],
+  ["agent","newmark"],["automation","newmark"],["automation","tts"],["publisher","tts"],
+  ["publisher","cli"],["automation","cli"],["research","paper"],["root-qml","paper"],
+  ["research","numerics"],["agent","numerics"],
+  ["newmark","ui"],["newmark","workspace"],["automation","schedule"],["tts","schedule"],
+  ["cli","platforms"],["publisher","platforms"],["paper","review"],["research","review"],
+  ["numerics","rtx"],["paper","rtx"],["newmark","schedule"],["agent","platforms"],
+  ["newmark","addon-db"],["agent","addon-db"],["cli","addon-api"],["platforms","addon-api"],["newmark","addon-cache"]
+];
+
+const stage=document.getElementById("stage"),svg=document.getElementById("svg"),tip=document.getElementById("tip"),statusEl=document.getElementById("status"),modeEl=document.getElementById("mode");
+let nodes,map,camera={x:innerWidth/2,y:innerHeight/2,scale:.9},focus=null,drag=null,pan=null,raf=null;
+
+function init(){
+  document.querySelectorAll(".node").forEach(e=>e.remove());
+  nodes=nodes0.map(n=>({...n,vx:0,vy:0,fx:0,fy:0}));
+  map=new Map(nodes.map(n=>[n.id,n]));
+  nodes.forEach(n=>{
+    const el=document.createElement("div");
+    el.className=`node ${n.cls}`;
+    el.dataset.id=n.id;
+    document.body.appendChild(el);
+    n.el=el;
+    bind(n);
+  });
+}
+function screen(n){return{x:camera.x+n.x*camera.scale,y:camera.y+n.y*camera.scale}}
+function focusData(id){
+  const ns=new Set([id]),es=new Set(),pe=new Set(),ce=new Set();
+  function up(v){edges.forEach(([a,b],i)=>{if(b===v&&!es.has(i)){es.add(i);pe.add(i);ns.add(a);up(a)}})}
+  function down(v){edges.forEach(([a,b],i)=>{if(a===v&&!es.has(i)){es.add(i);ce.add(i);ns.add(b);down(b)}})}
+  function direct(v){edges.forEach(([a,b],i)=>{if(a===v||b===v){es.add(i);ns.add(a);ns.add(b);(b===v?pe:ce).add(i)}})}
+  const m=modeEl.value;
+  if(m==="parents")up(id); else if(m==="children")down(id); else if(m==="direct")direct(id); else{up(id);down(id)}
+  return{ns,es,pe,ce}
+}
+function physics(){
+  nodes.forEach(n=>{n.fx=n.fy=0});
+  for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){
+    const a=nodes[i],b=nodes[j],dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy+500,d=Math.sqrt(d2),f=62000/d2;
+    if(!a.fixed){a.fx+=dx/d*f;a.fy+=dy/d*f}
+    if(!b.fixed){b.fx-=dx/d*f;b.fy-=dy/d*f}
+  }
+  edges.forEach(([aa,bb])=>{
+    const a=map.get(aa),b=map.get(bb),dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1;
+    const target=aa==="anchor"?230:170;
+    const maxLen=aa==="anchor"?310:235;
+    const k=aa==="anchor"?.026:.018;
+
+    // 弹簧只在最大长度内工作；超过 maxLen 后执行硬约束，禁止继续拉长。
+    const effectiveD=Math.min(d,maxLen);
+    const f=(effectiveD-target)*k;
+    if(!a.fixed){a.fx+=dx/d*f;a.fy+=dy/d*f}
+    if(!b.fixed){b.fx-=dx/d*f;b.fy-=dy/d*f}
+
+    if(d>maxLen){
+      const excess=d-maxLen;
+      const nx=dx/d,ny=dy/d;
+      const aMovable=!a.fixed,bMovable=!b.fixed;
+      if(aMovable&&bMovable){
+        a.x+=nx*excess*.5; a.y+=ny*excess*.5;
+        b.x-=nx*excess*.5; b.y-=ny*excess*.5;
+        a.vx*=.45; a.vy*=.45; b.vx*=.45; b.vy*=.45;
+      }else if(aMovable){
+        a.x+=nx*excess; a.y+=ny*excess;
+        a.vx*=.35; a.vy*=.35;
+      }else if(bMovable){
+        b.x-=nx*excess; b.y-=ny*excess;
+        b.vx*=.35; b.vy*=.35;
+      }
+    }
+  });
+  nodes.forEach(n=>{
+    if(n.fixed)return;
+    n.fx+=-n.x*.0007;n.fy+=-n.y*.0007;
+    n.vx=(n.vx+n.fx)*.88;n.vy=(n.vy+n.fy)*.88;
+    n.x+=n.vx;n.y+=n.vy;
+  });
+}
+function render(){
+  physics();
+  const fd=focus?focusData(focus):null;
+  nodes.forEach(n=>{
+    const p=screen(n);
+    n.el.style.left=p.x+"px";n.el.style.top=p.y+"px";
+    n.el.classList.toggle("focus",n.id===focus);
+    n.el.classList.toggle("dim",!!fd&&!fd.ns.has(n.id));
+  });
+  draw(fd);
+  if(focus&&!pan&&!drag){
+    const n=map.get(focus),tx=innerWidth/2-n.x*camera.scale,ty=innerHeight/2-n.y*camera.scale;
+    camera.x+=(tx-camera.x)*.075;camera.y+=(ty-camera.y)*.075;
+  }
+  if(tip.classList.contains("show")){
+    const n=map.get(tip.dataset.id); if(n){const p=screen(n);tip.style.left=p.x+"px";tip.style.top=p.y+"px"}
+  }
+  raf=requestAnimationFrame(render);
+}
+function line(a,b){
+  const p1=screen(a),p2=screen(b);
+  return {d:`M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`,x1:p1.x,y1:p1.y,x2:p2.x,y2:p2.y};
+}
+function draw(fd){
+  svg.innerHTML='<defs></defs>';
+  const defs=svg.firstChild;
+  edges.forEach(([aa,bb],i)=>{
+    const l=line(map.get(aa),map.get(bb));
+    const gid='g'+i;
+    const grad=document.createElementNS('http://www.w3.org/2000/svg','linearGradient');
+    grad.setAttribute('id',gid);
+    grad.setAttribute('gradientUnits','userSpaceOnUse');
+    grad.setAttribute('x1',l.x1); grad.setAttribute('y1',l.y1);
+    grad.setAttribute('x2',l.x2); grad.setAttribute('y2',l.y2);
+    grad.innerHTML='<stop offset="0%" stop-color="rgba(255,255,255,0.12)"/><stop offset="18%" stop-color="currentColor"/><stop offset="50%" stop-color="rgba(255,255,255,0.35)"/><stop offset="82%" stop-color="currentColor"/><stop offset="100%" stop-color="rgba(255,255,255,0.12)"/>';
+    defs.appendChild(grad);
+
+    const p=document.createElementNS("http://www.w3.org/2000/svg","path");
+    p.classList.add("link");
+    if(fd){
+      if(fd.es.has(i)){
+        p.classList.add("hot");
+        if(fd.pe.has(i)) p.classList.add("parent");
+        if(fd.ce.has(i)) p.classList.add("child");
+      }else p.classList.add("dim");
+    }
+    p.setAttribute("d",l.d);
+    svg.appendChild(p);
+
+    if(fd&&fd.es.has(i)){
+      const f=document.createElementNS("http://www.w3.org/2000/svg","path");
+      f.classList.add("flow");
+      if(fd.pe.has(i)) f.classList.add("parent");
+      if(fd.ce.has(i)) f.classList.add("child");
+      f.setAttribute("d",l.d);
+      svg.appendChild(f);
+    }
+  });
+}
+function showTip(n){tip.dataset.id=n.id;tip.querySelector(".name").textContent=n.name;tip.querySelector(".type").textContent=n.type;tip.classList.add("show")}
+function hideTip(){if(!focus)tip.classList.remove("show")}
+function bind(n){
+  n.el.onmouseenter=()=>showTip(n);
+  n.el.onmouseleave=hideTip;
+  n.el.onclick=e=>{e.stopPropagation();focus=focus===n.id?null:n.id;statusEl.textContent=focus?`选中：${n.name}`:"未选中";if(focus)showTip(n);else tip.classList.remove("show")};
+  n.el.onpointerdown=e=>{e.stopPropagation();drag={n,sx:e.clientX,sy:e.clientY,ox:n.x,oy:n.y};n.el.setPointerCapture(e.pointerId)};
+  n.el.onpointermove=e=>{if(!drag||drag.n!==n)return;n.x=drag.ox+(e.clientX-drag.sx)/camera.scale;n.y=drag.oy+(e.clientY-drag.sy)/camera.scale;n.vx=n.vy=0};
+  n.el.onpointerup=()=>drag=null;
+}
+stage.onpointerdown=e=>{if(e.target.closest(".node"))return;pan={sx:e.clientX,sy:e.clientY,ox:camera.x,oy:camera.y};stage.setPointerCapture(e.pointerId)};
+stage.onpointermove=e=>{if(!pan)return;camera.x=pan.ox+e.clientX-pan.sx;camera.y=pan.oy+e.clientY-pan.sy};
+stage.onpointerup=()=>pan=null;
+stage.onwheel=e=>{e.preventDefault();const old=camera.scale,next=Math.max(.35,Math.min(1.7,old*(e.deltaY<0?1.08:.92)));camera.x=e.clientX-(e.clientX-camera.x)*(next/old);camera.y=e.clientY-(e.clientY-camera.y)*(next/old);camera.scale=next},{passive:false};
+document.getElementById("clear").onclick=()=>{focus=null;tip.classList.remove("show");statusEl.textContent="未选中"};
+document.getElementById("reset").onclick=()=>{focus=null;camera={x:innerWidth/2,y:innerHeight/2,scale:.9};init()};
+modeEl.onchange=()=>{if(focus)statusEl.textContent=`选中：${map.get(focus).name}`};
+
+init();render();
+</script>
+</body>
+</html>

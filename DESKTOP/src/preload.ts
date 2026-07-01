@@ -48,6 +48,10 @@ contextBridge.exposeInMainWorld('api', {
   memoryLabRead: (selector?: string) => ipcRenderer.invoke('memoryLab:read', selector),
   memoryLabUpdate: (input: Record<string, unknown>) => ipcRenderer.invoke('memoryLab:update', input),
   memoryLabReindex: () => ipcRenderer.invoke('memoryLab:reindex'),
+  updateVersion: () => ipcRenderer.invoke('update:version'),
+  updateCheckGithub: (input: Record<string, unknown>) => ipcRenderer.invoke('update:checkGithub', input),
+  updateApplyGithub: (input: Record<string, unknown>) => ipcRenderer.invoke('update:applyGithub', input),
+  updateInstallLocal: (input: Record<string, unknown>) => ipcRenderer.invoke('update:installLocal', input),
   gh: (argv: string[]) => ipcRenderer.invoke('github:gh', argv),
   listAutomations: () => ipcRenderer.invoke('automation:list'),
   createAutomation: (item: Record<string, unknown>) => ipcRenderer.invoke('automation:create', item),
@@ -76,5 +80,11 @@ contextBridge.exposeInMainWorld('api', {
   },
   onAutomationUpdated: (callback: () => void) => {
     ipcRenderer.on('automation:updated', callback);
+  },
+  onAgentWorkEvent: (callback: (event: unknown, payload: unknown) => void) => {
+    ipcRenderer.on('agent:workEvent', callback);
+  },
+  removeAgentWorkEventListener: () => {
+    ipcRenderer.removeAllListeners('agent:workEvent');
   },
 });

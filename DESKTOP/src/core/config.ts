@@ -222,6 +222,13 @@ export class ConfigManager {
   engine(): string { return this.getStr('models', 'agent_engine'); }
   autoSwitchEnabled(): boolean { return this.getBool('models', 'auto_switch'); }
   autoSwitchPreference(): string { return this.getStr('models', 'auto_switch_preference'); }
+  autoSwitchScope(): string { return this.getStr('models', 'auto_switch_scope') || 'all'; }
+  autoSwitchAnchorProvider(): string { return this.getStr('models', 'auto_switch_anchor_provider'); }
+  openAIApiMode(): 'chat_stream' | 'chat' | 'responses' {
+    const mode = this.getStr('models', 'openai_api_mode');
+    if (mode === 'chat' || mode === 'responses' || mode === 'chat_stream') return mode;
+    return this.getBool('models', 'openai_streaming') === false ? 'chat' : 'chat_stream';
+  }
 
   private normalizeProviders(rawProviders: unknown[]): ProviderConfig[] {
     const providers: ProviderConfig[] = [];
@@ -358,7 +365,11 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
       agent_engine: { _description: "Agent engine", _type: "choice", _values: ["builtin","codex","opencode"], value: "builtin" },
       auto_switch: { _description: "Auto-switch models", _type: "boolean", value: false },
       auto_switch_preference: { _description: "Auto-switch bias", _type: "choice", _values: ["default","cheap_save","performance","speed"], value: "default" },
+      auto_switch_scope: { _description: "Auto-switch scope", _type: "choice", _values: ["all","provider"], value: "all" },
+      auto_switch_anchor_provider: { _description: "Provider anchor for provider-scoped Auto model switching", _type: "string", value: "" },
       fallback_on_unavailable: { _description: "Fallback when model unavailable", _type: "boolean", value: false },
+      openai_api_mode: { _description: "OpenAI-compatible API mode", _type: "choice", _values: ["chat_stream","chat","responses"], value: "chat_stream" },
+      openai_streaming: { _description: "Legacy streaming flag for OpenAI-compatible chat completions", _type: "boolean", value: true },
       fuzzy_injection: { _description: "Fuzzy model injection", _type: "boolean", value: false },
     },
     agent: {

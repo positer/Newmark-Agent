@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { spawn, spawnSync, ChildProcess } from 'child_process';
 import { Agent } from './core/agent';
 import { AgentMode } from './core/types';
+import { ConversationKernel } from './core/conversationKernel';
 import { AutomationManager } from './core/automation';
 import { AutomationWakeScheduler, WakeSyncResult } from './core/automationWake';
 import { BrowserControl, BrowserControlRequest, BrowserControlResult } from './core/browserControl';
@@ -13,15 +14,38 @@ import { runFlow } from './core/flow-runner';
 import { CLI_COMMANDS, runCliCommand } from './cli-commands';
 import { mergeProviderSecrets, sanitizeProvidersForState } from './core/config';
 import { MemoryLabManager } from './core/memoryLab';
+import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, installUpdate } from './core/installUpdate';
 
 let mainWindow: BrowserWindow | null = null;
 let agent: Agent | null = null;
+let conversationKernel: ConversationKernel | null = null;
 let automation: AutomationManager | null = null;
 let automationWake: AutomationWakeScheduler | null = null;
 let lastWakeSync: WakeSyncResult | null = null;
 let tray: Tray | null = null;
 let _forceQuit = false;
 let browserControlWindow: BrowserWindow | null = null;
+
+function resetConversationKernel(): void {
+  if (conversationKernel?.isAnyRunning()) return;
+  conversationKernel = null;
+}
+
+function ensureConversationKernel(root: string, eventSender?: Electron.WebContents): ConversationKernel | null {
+  if (!agent) return null;
+  if (!conversationKernel) {
+    conversationKernel = new ConversationKernel(root, agent, automation);
+    conversationKernel.subscribe(event => {
+      const target = eventSender && !eventSender.isDestroyed()
+        ? eventSender
+        : mainWindow && !mainWindow.isDestroyed()
+          ? mainWindow.webContents
+          : null;
+      target?.send('agent:workEvent', event);
+    });
+  }
+  return conversationKernel;
+}
 
 const FALLBACK_TRAY_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAhklEQVQ4T2NkYPj/n4EBBJgYKAQMDAwM//79Y2RkZGQYmpqMgYGBgYEhJSWFgYGBAaoRAkZGRoZ///4x/Pr1CyrKwAhVwMDw798/BgYGBqgCRqgCBgaoKEYGBgYGqAJGqAIGSJQzMDAw/P79m4GRkZGBkZGRgaSADg0NZWBgYGCYOnUq8QENUQADAC3oSsHtAAAAAElFTkSuQmCC';
 
@@ -432,6 +456,7 @@ if (hasCliCommand) {
       }
     });
     agent.setAutomationManager(automation);
+    ensureConversationKernel(root);
     automation.onChange(items => {
       if (automationWake) lastWakeSync = automationWake.sync(items);
     });
@@ -532,26 +557,39 @@ if (hasCliCommand) {
     ipcMain.handle('agent:send', async (_event, message: string, conversationId?: string) => {
       if (!agent) return { tokens: [], error: 'Agent not initialized' };
       try {
-        if (conversationId) agent.setConversation(String(conversationId));
-        const result = await Promise.race([
-          agent.process(message),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Process timeout (300s)')), 300000)),
-        ]);
-        return {
-          tokens: result.map(t => ({ type: t.type, text: t.text })),
-          diffs: agent.fileDiffs.map(d => ({ path: d.path, old: d.oldContent.length, new: d.newContent.length })),
+        const targetConversation = String(conversationId || agent.activeConversationId || 'default');
+        const kernel = ensureConversationKernel(root, _event.sender);
+        if (!kernel) return { tokens: [], error: 'Conversation kernel not initialized' };
+        const queueMode = agent.inputMode === 'guide' ? 'steer' : 'followUp';
+        const result = await kernel.prompt(message, targetConversation, {
           mode: agent.mode,
           model: agent.model,
-          status: agent.status,
-          goal: agent.goal ? { objective: agent.goal.objective, paused: agent.goal.paused } : null,
-          options: agent.pendingOptions,
-          contextCompression: agent.lastCompression,
-          conversationId: agent.activeConversationId,
+          intelligence: agent.intelligence,
+          inputMode: agent.inputMode,
+          engine: agent.engine,
+        }, queueMode);
+        const previousConversation = agent.activeConversationId || 'default';
+        if (previousConversation === targetConversation) {
+          agent.setConversation(targetConversation);
+        }
+        return {
+          tokens: result.tokens,
+          diffs: result.diffs,
+          mode: result.mode,
+          model: result.model,
+          status: result.status,
+          goal: result.goal,
+          options: result.options,
+          contextCompression: result.contextCompression,
+          contextWindow: result.contextWindow,
+          conversationId: targetConversation,
+          activeConversationId: agent.activeConversationId || previousConversation,
           conversations: agent.listConversationStates(),
-          conversationPlan: agent.getConversationPlan(),
-          chatMessages: agent.chatMessages,
-          historyMessages: agent.history.length,
-          conversationLocked: agent.isConversationLocked(),
+          conversationPlan: result.conversationPlan,
+          chatMessages: result.chatMessages,
+          historyMessages: result.historyMessages,
+          conversationLocked: false,
+          queued: result.queued,
         };
       } catch (e: unknown) {
         return { error: e instanceof Error ? e.message : String(e) };
@@ -600,17 +638,26 @@ if (hasCliCommand) {
       }
     });
     ipcMain.handle('agent:setMode', async (_event, mode: string) => {
-      if (agent) agent.setMode(mode as AgentMode);
+      if (agent) {
+        agent.setMode(mode as AgentMode);
+        resetConversationKernel();
+      }
       return agent?.mode;
     });
 
     ipcMain.handle('agent:setModel', async (_event, model: string) => {
-      if (agent) agent.setModel(model);
+      if (agent) {
+        agent.setModel(model);
+        resetConversationKernel();
+      }
       return agent?.model;
     });
 
     ipcMain.handle('agent:setIntelligence', async (_event, tier: string) => {
-      if (agent) agent.setIntelligence(tier);
+      if (agent) {
+        agent.setIntelligence(tier);
+        resetConversationKernel();
+      }
       return agent?.intelligence;
     });
 
@@ -640,6 +687,8 @@ if (hasCliCommand) {
         conversationId: agent.activeConversationId,
         conversations: agent.listConversationStates(),
         conversationPlan: agent.getConversationPlan(),
+        queued: conversationKernel?.queued(agent.activeConversationId || 'default') || { steering: [], followUp: [] },
+        workEvents: conversationKernel?.events(agent.activeConversationId || 'default') || [],
         historyMessages: agent.history.length,
         conversationLocked: agent.isConversationLocked(),
         status: agent.status,
@@ -682,7 +731,9 @@ if (hasCliCommand) {
         promptMode: agent.config.getStr('workspace', 'prompt_mode'),
         skillPolicy: agent.config.getStr('skills', 'auto_download'),
         autoSwitch: agent.config.getBool('models', 'auto_switch'),
+        autoSwitchScope: agent.config.getStr('models', 'auto_switch_scope') || 'all',
         fallbackOnUnavailable: agent.config.getBool('models', 'fallback_on_unavailable'),
+        openAIApiMode: agent.config.openAIApiMode(),
         autoAdjust: agent.config.getBool('agent', 'auto_adjust_settings'),
         inputMode: agent.inputMode,
         terminalInterruptTimeoutMs: agent.config.getNum('terminal', 'interrupt_timeout_ms'),
@@ -690,6 +741,7 @@ if (hasCliCommand) {
         automations: automation?.list() || [],
         closeBehavior: agent.config.getStr('general', 'close_behavior'),
         contextCompression: agent.lastCompression,
+        contextWindow: agent.contextWindow(),
       };
     });
 
@@ -753,8 +805,10 @@ if (hasCliCommand) {
               case 'feedbackLevel': agent.config.set('agent', 'option_feedback', value); break;
               case 'language': agent.config.set('general', 'language', value); break;
               case 'autoSwitch': agent.config.set('models', 'auto_switch', value === true || value === 'on'); break;
+              case 'autoSwitchScope': agent.config.set('models', 'auto_switch_scope', value === 'provider' ? 'provider' : 'all'); break;
               case 'fallbackOnUnavailable': agent.config.set('models', 'fallback_on_unavailable', value === true || value === 'on'); break;
               case 'switchTendency': agent.config.set('models', 'auto_switch_preference', value); break;
+              case 'openAIApiMode': agent.config.set('models', 'openai_api_mode', ['chat_stream', 'chat', 'responses'].includes(String(value)) ? value : 'chat_stream'); break;
               case 'providers': agent.config.set('models', 'providers', mergeProviderSecrets(value, agent.config.providers())); break;
               case 'defaultFlow': agent.config.set('flow', 'default_flow', value); break;
               case 'dialogStyle': agent.config.set('ui', 'dialog_style', value); break;
@@ -763,6 +817,7 @@ if (hasCliCommand) {
           }
           agent.config.save();
         }
+        resetConversationKernel();
         return true;
       }
       return false;
@@ -967,6 +1022,7 @@ if (hasCliCommand) {
     ipcMain.handle('agent:selectWorkspace', async (_event, id: string) => {
       if (agent) {
         agent.selectWorkspace(id);
+        resetConversationKernel();
         return agent.workspace.current;
       }
       return null;
@@ -974,21 +1030,27 @@ if (hasCliCommand) {
 
     ipcMain.handle('agent:createWorkspace', async (_event, name?: string) => {
       if (agent) {
-        return agent.createInternalWorkspace(name);
+        const created = agent.createInternalWorkspace(name);
+        resetConversationKernel();
+        return created;
       }
       return null;
     });
 
     ipcMain.handle('agent:createExternalWorkspace', async (_event, name: string, dirPath: string) => {
       if (agent) {
-        return agent.addExternalWorkspace(dirPath);
+        const created = agent.addExternalWorkspace(dirPath);
+        resetConversationKernel();
+        return created;
       }
       return null;
     });
 
     ipcMain.handle('agent:deleteWorkspace', async (_event, name: string) => {
       if (agent) {
-        return agent.removeWorkspace(name);
+        const removed = agent.removeWorkspace(name);
+        resetConversationKernel();
+        return removed;
       }
       return false;
     });
@@ -1117,6 +1179,36 @@ if (hasCliCommand) {
     ipcMain.handle('memoryLab:reindex', async () => {
       if (!agent) return { ok: false, error: 'Agent not ready' };
       return agent.reindexMemoryLab();
+    });
+
+    ipcMain.handle('update:version', async () => {
+      return { ok: true, version: currentAppVersion(), root };
+    });
+
+    ipcMain.handle('update:checkGithub', async (_event, input: Record<string, unknown> = {}) => {
+      return checkGitHubUpdate(String(input.repo || ''), String(input.tag || ''), String(input.asset || ''));
+    });
+
+    ipcMain.handle('update:applyGithub', async (_event, input: Record<string, unknown> = {}) => {
+      return applyGitHubUpdate({
+        repo: String(input.repo || ''),
+        tag: String(input.tag || ''),
+        asset: String(input.asset || ''),
+        target: String(input.target || root),
+        expectedVersion: String(input.expectedVersion || ''),
+        dryRun: input.dryRun !== false,
+      });
+    });
+
+    ipcMain.handle('update:installLocal', async (_event, input: Record<string, unknown> = {}) => {
+      return installUpdate({
+        source: String(input.source || ''),
+        target: String(input.target || root),
+        targetFile: typeof input.targetFile === 'string' ? input.targetFile : undefined,
+        expectedVersion: typeof input.expectedVersion === 'string' ? input.expectedVersion : undefined,
+        preserve: Array.isArray(input.preserve) ? input.preserve.map(String) : undefined,
+        dryRun: input.dryRun !== false,
+      });
     });
 
     ipcMain.handle('github:gh', async (_event, argv: string[] = []) => {

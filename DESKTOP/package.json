@@ -38,6 +38,7 @@
     "release:ui-workspace-lifecycle-smoke": "node scripts/release-ui-workspace-lifecycle-smoke.cjs",
     "release:real-claude-env-preview-smoke": "node scripts/release-real-claude-env-preview-smoke.cjs",
     "release:real-provider-smoke": "node scripts/release-real-provider-smoke.cjs",
+    "release:real-apinebula-memory-switch-smoke": "node scripts/release-real-apinebula-memory-switch-smoke.cjs",
     "release:real-provider-stress": "node scripts/release-real-provider-stress.cjs",
     "dist:win:installer": "npm run build:clean && node -e \"require('fs').rmSync('../release',{recursive:true,force:true})\" && electron-builder --win nsis",
     "dist:linux": "npm run build:clean && electron-builder --linux",

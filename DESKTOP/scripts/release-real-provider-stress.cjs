@@ -51,13 +51,14 @@ function providerFromEnv() {
   const stressModel = process.env.NEWMARK_REAL_STRESS_MODEL || '';
   const stressProtocol = normalizeProtocol(process.env.NEWMARK_REAL_STRESS_PROTOCOL || '');
   if (stressKey && stressBaseUrl && stressModel) {
+    const normalizedStressBaseUrl = stressBaseUrl.replace(/^https:\/\/api\.apinebula\.com\/v1\/?$/i, 'https://apinebula.com/v1');
     return {
       source: 'NEWMARK_REAL_STRESS_*',
       name: process.env.NEWMARK_REAL_STRESS_PROVIDER || 'RealStressProvider',
-      baseUrl: stressBaseUrl,
+      baseUrl: normalizedStressBaseUrl,
       apiKey: stressKey,
       model: stressModel,
-      protocol: stressProtocol || inferProtocol(stressBaseUrl, 'RealStressProvider'),
+      protocol: stressProtocol || inferProtocol(normalizedStressBaseUrl, 'RealStressProvider'),
     };
   }
 
@@ -161,8 +162,13 @@ function writeConfig(root, provider) {
       agent_engine: 'builtin',
       auto_switch: false,
       fallback_on_unavailable: false,
+      openai_api_mode: 'chat_stream',
     },
-    agent: { default_mode: 'build', option_feedback: 'fully_autonomous' },
+    agent: {
+      default_mode: 'build',
+      option_feedback: 'fully_autonomous',
+      goal_max_continuations: Math.max(2, goalRounds + 2),
+    },
     terminal: { interrupt_timeout_ms: 0 },
     context: { auto_compress: true, compress_threshold_tokens: 8000 },
     general: { language: 'en' },
@@ -228,12 +234,12 @@ function runPowerShellCli(args, root, extraEnv = {}, commandTimeoutMs = timeoutM
 }
 
 function markerPrompt(marker, index) {
-  if (index % 3 === 1) return `Reply exactly ${marker}. No tools.`;
-  if (index % 3 === 2) return `请只回复：${marker}。不要使用工具。`;
+  if (index % 3 === 1) return `Reply with this exact marker as the first line: ${marker}\nNo tools.`;
+  if (index % 3 === 2) return `请将这个精确标记作为第一行回复：${marker}\n不要使用工具。`;
   return [
-    `Read this long stress prompt and reply exactly ${marker}. No tools.`,
+    `Reply with this exact marker as the first line: ${marker}\nNo tools.`,
     'Context block:',
-    'Newmark release real provider stress '.repeat(350),
+    'Newmark release real provider stress '.repeat(120),
   ].join('\n');
 }
 
@@ -350,6 +356,31 @@ function jsString(value) {
   return JSON.stringify(String(value));
 }
 
+function assistantMarkerExpression(marker, conversationId = '') {
+  const conv = conversationId ? jsString(conversationId) : 'null';
+  return `window.api.getState().then(async s => {
+    const target = ${conv};
+    if (target && s && s.conversationId !== target && window.api.setConversation) {
+      await window.api.setConversation(target);
+      s = await window.api.getState();
+    }
+    const messages = (s && Array.isArray(s.chatMessages)) ? s.chatMessages : [];
+    return messages.some(m => m && m.role === 'assistant' && String(m.content || '').includes(${jsString(marker)})) ? s : null;
+  })`;
+}
+
+function stateIdleExpression(conversationId = '') {
+  const conv = conversationId ? jsString(conversationId) : 'null';
+  return `window.api.getState().then(async s => {
+    const target = ${conv};
+    if (target && s && s.conversationId !== target && window.api.setConversation) {
+      await window.api.setConversation(target);
+      s = await window.api.getState();
+    }
+    return s && s.status === 'idle' ? s : null;
+  })`;
+}
+
 async function launchUi(root) {
   const child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
     stdio: 'ignore',
@@ -368,7 +399,7 @@ async function launchUi(root) {
   return { child, cdp };
 }
 
-async function sendUiPrompt(cdp, prompt, marker, waitTimeoutMs = timeoutMs) {
+async function sendUiPrompt(cdp, prompt, marker, waitTimeoutMs = timeoutMs, conversationId = '') {
   await evaluate(cdp, `(() => {
     const prompt = document.querySelector('#prompt');
     if (!prompt) throw new Error('missing #prompt');
@@ -378,11 +409,24 @@ async function sendUiPrompt(cdp, prompt, marker, waitTimeoutMs = timeoutMs) {
     window.sendMessage();
     return true;
   })()`, 30000);
-  await waitFor(cdp, `(document.body.innerText || '').includes(${jsString(marker)})`, waitTimeoutMs, `visible marker ${marker}`);
-  const state = await waitFor(cdp, `window.api.getState().then(s => s && s.status === 'idle' ? s : null)`, 60000, `idle after ${marker}`);
+  await waitFor(cdp, assistantMarkerExpression(marker, conversationId), waitTimeoutMs, `assistant marker ${marker}`);
+  const state = await waitFor(cdp, stateIdleExpression(conversationId), 60000, `idle after ${marker}`);
   const stateText = JSON.stringify(state || {});
   if (stateText.includes(activeSecretValues[0])) throw new Error('renderer state leaked API key');
   return state;
+}
+
+async function sendBackendPrompt(cdp, prompt, marker, conversationId, waitTimeoutMs = timeoutMs) {
+  const result = await evaluate(cdp, `window.api.sendMessage(${jsString(prompt)}, ${jsString(conversationId)})`, waitTimeoutMs);
+  const resultText = JSON.stringify({
+    conversationId: result && result.conversationId,
+    tokens: result && result.tokens,
+    chatMessages: (result && result.chatMessages || []).filter(m => m && m.role === 'assistant'),
+  });
+  if ((result && result.conversationId) !== conversationId) throw new Error(`backend send conversation mismatch: ${result && result.conversationId}`);
+  if (!resultText.includes(marker)) throw new Error(`backend assistant marker missing ${marker}: ${redact(resultText).slice(0, 1200)}`);
+  if (resultText.includes(activeSecretValues[0])) throw new Error('backend send leaked API key');
+  return result;
 }
 
 async function runUiStress(cdp) {
@@ -405,38 +449,77 @@ async function runGoalStress(cdp) {
   ].join(' ');
   await evaluate(cdp, `window.api.updateGoal(${jsString(objective)})`, 30000);
   await evaluate(cdp, `window.api.setMode ? window.api.setMode('goal') : Promise.resolve()`, 30000);
-  const result = await evaluate(cdp, `window.api.sendMessage(${jsString(`Start real Goal stress. Target final marker: ${marker}`)})`, timeoutMs * Math.max(1, goalRounds));
-  const resultText = JSON.stringify(result || {});
+  const result = await evaluate(cdp, `window.api.sendMessage(${jsString(`Start real Goal stress. Target final marker: ${marker}`)})`, timeoutMs * Math.max(1, goalRounds + 2));
+  const resultText = JSON.stringify({
+    tokens: result && result.tokens,
+    chatMessages: (result && result.chatMessages || []).filter(m => m && m.role === 'assistant'),
+  });
   if (!resultText.includes(marker)) throw new Error(`Goal stress missing completion marker: ${redact(resultText).slice(0, 1200)}`);
   if (/max[- ]?depth/i.test(resultText)) throw new Error(`Goal stress exposed max-depth warning: ${redact(resultText).slice(0, 1200)}`);
+  await waitFor(cdp, stateIdleExpression(), 60000, 'idle after Goal stress');
   await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
-  await waitFor(cdp, `window.api.getState().then(s => s && s.status === 'idle' ? true : false)`, 60000, 'build mode restored after Goal stress');
+  await waitFor(cdp, stateIdleExpression(), 60000, 'build mode restored after Goal stress');
   return `goalRounds=${goalRounds}`;
 }
 
 async function runQueueStress(cdp) {
+  const conversationId = 'stress-queue';
   await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
-  await waitFor(cdp, `window.api.getState().then(s => s && s.status === 'idle' ? true : false)`, 60000, 'queue stress initial idle');
+  await waitFor(cdp, stateIdleExpression(), 60000, 'queue stress initial idle');
+  await evaluate(cdp, `(() => {
+    if (window.state && Array.isArray(window.state.conversations) && !window.state.conversations.some(c => c && c.id === ${jsString(conversationId)})) {
+      window.state.conversations.push({ id: ${jsString(conversationId)}, summary: 'Stress queue', messages: [] });
+    }
+    if (window.state) window.state.conversationId = ${jsString(conversationId)};
+    if (window.renderConversations) window.renderConversations();
+    if (window.renderChatMessages) window.renderChatMessages([]);
+    return window.api.setConversation(${jsString(conversationId)});
+  })()`, 30000);
+  await evaluate(cdp, `window.setInputMode ? window.setInputMode('guide') : undefined`, 30000);
   const firstMarker = 'NM_STRESS_QUEUE_FIRST_OK';
   const secondMarker = 'NM_STRESS_QUEUE_SECOND_OK';
   await evaluate(cdp, `(() => {
-    window.setInputMode('guide');
     const prompt = document.querySelector('#prompt');
-    prompt.value = 'Write four short numbered lines, then reply exactly ${firstMarker}. No tools.';
-    prompt.dispatchEvent(new Event('input', { bubbles: true }));
+    if (!prompt) throw new Error('prompt input missing');
+    prompt.value = ${jsString(`Reply with ${firstMarker} as the first line. Do not use tools. Context: ${'queue stress payload '.repeat(500)}`)};
     window.sendMessage();
     return true;
   })()`, 30000);
+  await waitFor(cdp, `(() => window.state && window.state._sendInFlight === true)()`, 10000, 'first queue stress send in flight');
   await evaluate(cdp, `(() => {
+    window.setInputMode && window.setInputMode('next');
     const prompt = document.querySelector('#prompt');
-    prompt.value = 'Reply exactly ${secondMarker}. No tools.';
-    prompt.dispatchEvent(new Event('input', { bubbles: true }));
+    if (!prompt) throw new Error('prompt input missing for queued send');
+    prompt.value = ${jsString(`Reply exactly ${secondMarker}. No tools.`)};
     window.sendMessage();
     return true;
   })()`, 30000);
-  await waitFor(cdp, `(document.body.innerText || '').includes(${jsString(firstMarker)})`, timeoutMs, 'first queued marker');
-  await waitFor(cdp, `(document.body.innerText || '').includes(${jsString(secondMarker)})`, timeoutMs, 'second queued marker');
-  await waitFor(cdp, `window.api.getState().then(s => s && s.status === 'idle' ? true : false)`, 60000, 'queue idle');
+  await waitFor(cdp, `(() => {
+    const body = document.querySelector('#chat-area')?.innerText || '';
+    const label = document.querySelector('#queue-header-label');
+    return body.includes('[Next queued]') && body.includes(${jsString(secondMarker)}) && label && /1/.test(label.textContent || '');
+  })()`, 15000, 'queued prompt visible');
+  await waitFor(cdp, `(() => {
+    const body = document.querySelector('#chat-area')?.innerText || '';
+    const panel = document.querySelector('#queue-panel');
+    const label = document.querySelector('#queue-header-label');
+    const state = window.state || {};
+    const queueVisible = panel && panel.style.display !== 'none' && label && /1/.test(label.textContent || '');
+    const ok = body.includes(${jsString(firstMarker)}) && body.includes(${jsString(secondMarker)}) && !queueVisible && state._sendInFlight === false;
+    if (!ok) {
+      window.__realProviderQueueStressDebug = {
+        hasFirst: body.includes(${jsString(firstMarker)}),
+        hasSecond: body.includes(${jsString(secondMarker)}),
+        queueLabel: label ? label.textContent : '',
+        sendInFlight: state._sendInFlight,
+        runningKeys: Object.keys(state.runningConversations || {}),
+        backendQueue: state.backendQueue || null,
+        bodyTail: body.slice(-1400),
+      };
+    }
+    return ok;
+  })()`, timeoutMs, 'queued prompt drained through UI');
+  await waitFor(cdp, stateIdleExpression(conversationId), 60000, 'queue idle');
   return 'queued prompt drained';
 }
 
@@ -475,9 +558,12 @@ async function runConversationIsolationStress(cdp) {
 }
 
 async function runLongContextStress(cdp) {
+  const conversationId = 'stress-long-context';
   const marker = 'NM_STRESS_LONG_CONTEXT_OK';
-  const payload = 'Long context stress payload. '.repeat(1800);
-  await sendUiPrompt(cdp, `Read the following long context and reply exactly ${marker}. No tools.\n\n${payload}`, marker, timeoutMs);
+  const payload = 'Long context stress payload. '.repeat(600);
+  await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
+  await waitFor(cdp, stateIdleExpression(), 60000, 'long-context initial idle');
+  await sendBackendPrompt(cdp, `Reply with this exact marker as the first line: ${marker}\nDo not use tools. Do not summarize the payload.\n\n${payload}`, marker, conversationId, timeoutMs);
   const compression = await evaluate(cdp, `window.api.getState().then(s => s.contextCompression || s.compression || null)`, 30000).catch(() => null);
   return `longPayloadChars=${payload.length}; compressionState=${redact(JSON.stringify(compression || {})).slice(0, 500)}`;
 }

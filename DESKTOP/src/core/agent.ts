@@ -164,7 +164,7 @@ export class Agent {
   private processingConversationId: string | null = null;
   private processDepth = 0;
   private automationManager: AutomationManager | null = null;
-  private activeAgentKernelRuntime: { steer(message: unknown): void; followUp(message: unknown): void } | null = null;
+  private activeAgentKernelRuntime: { steer(message: unknown): void; followUp(message: unknown): void; abort?(): void } | null = null;
   private awaitingAgentKernelRuntime = false;
   private pendingAgentKernelQueue: Array<{ content: string; queueMode: 'steer' | 'followUp' }> = [];
   private agentKernelUserMessageStartSubscribers: Array<(content: string) => void> = [];
@@ -315,6 +315,7 @@ export class Agent {
       mode: input.mode || this.modeName(),
       model: input.model || this.model,
       timestamp: input.timestamp || this.nowLabel(),
+      toolCallId: input.toolCallId,
       toolName: input.toolName,
       toolArgs: input.toolArgs,
       queue: input.queue,
@@ -328,6 +329,7 @@ export class Agent {
   appendWorkflowMessage(content: string, toolName?: string, toolArgs?: string): void {
     const safe = this.sanitizeAssistantOutput(content);
     const suffix = toolArgs ? `\n\n${toolArgs}` : '';
+    if (toolName === 'agent_status') return;
     this.chatMessages.push({
       role: 'workflow',
       content: safe + suffix,
@@ -353,10 +355,9 @@ export class Agent {
     const text = String(content || '').trim();
     if (!text) return;
     this.emitWorkEvent({ type: 'status', content: text });
-    this.appendWorkflowMessage(text, 'agent_status');
   }
 
-  attachAgentKernelRuntime(runtime: { steer(message: unknown): void; followUp(message: unknown): void } | null): void {
+  attachAgentKernelRuntime(runtime: { steer(message: unknown): void; followUp(message: unknown): void; abort?(): void } | null): void {
     this.activeAgentKernelRuntime = runtime;
     this.awaitingAgentKernelRuntime = false;
     if (!runtime) {
@@ -608,6 +609,13 @@ export class Agent {
     this.loadWorkspaceConversationState();
     this.saveWorkspaceConversationState();
     return this.activeConversationId;
+  }
+
+  abortActiveKernelRun(): boolean {
+    if (!this.activeAgentKernelRuntime?.abort) return false;
+    this.activeAgentKernelRuntime.abort();
+    this.pendingAgentKernelQueue = [];
+    return true;
   }
 
   mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'>): void {
@@ -1098,8 +1106,7 @@ export class Agent {
       this.chatMessages.push({ role: 'user', content: input, mode: this.modeName(), model: this.model, timestamp: now });
       this.history.push({ role: 'user', content: input });
       this.saveWorkspaceConversationState();
-      this.emitWorkEvent({ type: 'start', content: 'Agent started working.' });
-      this.appendWorkflowMessage('Agent started working.', 'agent_status');
+      this.emitWorkEvent({ type: 'start', content: 'Preparing request.' });
 
       if (this.model === 'auto') {
         await this.evaluateAndSwitch(input);
@@ -1113,8 +1120,7 @@ export class Agent {
         const result = await this.processOpencode(input);
         this.status = 'idle';
         this.saveWorkspaceConversationState();
-        this.emitWorkEvent({ type: 'done', content: 'Agent finished.' });
-        this.appendWorkflowMessage('Agent finished.', 'agent_status');
+        this.emitWorkEvent({ type: 'done', content: 'Response complete.' });
         return this.sanitizeVisibleTokens(result);
       }
 
@@ -1126,14 +1132,12 @@ export class Agent {
         this.awaitingAgentKernelRuntime = false;
         if (!this.activeAgentKernelRuntime) this.pendingAgentKernelQueue = [];
       }
-      this.emitWorkEvent({ type: 'done', content: 'Agent finished.' });
-      this.appendWorkflowMessage('Agent finished.', 'agent_status');
+      this.emitWorkEvent({ type: 'done', content: 'Response complete.' });
       return result;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       this.status = 'error';
       this.emitWorkEvent({ type: 'error', content: msg });
-      this.appendWorkflowMessage(`[Error] ${msg}`);
       throw e;
     } finally {
       this.processDepth = Math.max(0, this.processDepth - 1);

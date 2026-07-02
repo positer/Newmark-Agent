@@ -832,8 +832,21 @@ if (hasCliCommand) {
       return false;
     });
 
-    ipcMain.handle('agent:archive', async () => {
-      return agent?.archiveSession();
+    ipcMain.handle('agent:abortConversation', async (_event, conversationId?: string) => {
+      if (!agent) return false;
+      const target = String(conversationId || agent.activeConversationId || 'default');
+      return !!conversationKernel?.abort(target);
+    });
+
+    ipcMain.handle('agent:archive', async (_event, conversationId?: string) => {
+      if (!agent) return null;
+      const target = String(conversationId || agent.activeConversationId || 'default');
+      conversationKernel?.abort(target);
+      const previous = agent.activeConversationId || 'default';
+      if (target !== previous) agent.setConversation(target);
+      const archived = agent.archiveSession();
+      if (target !== previous) agent.setConversation(previous);
+      return archived;
     });
 
     ipcMain.handle('agent:listArchives', async () => {

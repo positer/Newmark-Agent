@@ -49,8 +49,9 @@ type WorkListener = (event: AgentWorkEvent) => void;
  *
  * Each conversation owns one Newmark Agent facade whose active process() call is
  * executed by the project-internal Agent kernel. Different conversations can run in parallel. While
- * a conversation is running, Guide/Next are accepted as queued same-session
- * messages; the active promise remains the settlement handle for UI compatibility.
+ * a conversation is running, Guide is delivered as steering and Next is kept as
+ * visible follow-up queue; the active promise remains the settlement handle for
+ * UI compatibility.
  */
 export class ConversationKernel {
   private runtimes = new Map<string, ConversationRuntime>();
@@ -90,6 +91,25 @@ export class ConversationKernel {
 
   events(conversationId: string): AgentWorkEvent[] {
     return this.runtimes.get(this.safeId(conversationId))?.events.slice() || [];
+  }
+
+  abort(conversationId: string): boolean {
+    const runtime = this.runtimes.get(this.safeId(conversationId));
+    if (!runtime) return false;
+    const aborted = runtime.runner.abortActiveKernelRun();
+    runtime.pendingNextTurn = [];
+    this.queueState(runtime);
+    runtime.queued.steering = [];
+    runtime.queued.followUp = [];
+    if (runtime.activePromise || aborted) {
+      runtime.runner.recordWorkStatus('Interrupted.');
+      this.emitQueueUpdate(runtime);
+      runtime.activePromise = null;
+      this.host.mirrorConversationStateFrom(runtime.id, runtime.runner);
+      this.refreshHostIfActive(runtime.id);
+      return true;
+    }
+    return false;
   }
 
   async prompt(
@@ -133,10 +153,26 @@ export class ConversationKernel {
 
   private async runSingle(runtime: ConversationRuntime, message: string): Promise<StreamToken[]> {
     this.consumeQueuedMessage(runtime, message);
-    return Promise.race([
-      runtime.runner.process(message),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Process timeout (300s)')), 300000)),
-    ]);
+    const timeoutMs = this.processTimeoutMs(runtime);
+    if (timeoutMs <= 0) return runtime.runner.process(message);
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        runtime.runner.process(message),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error(`Process timeout (${Math.round(timeoutMs / 1000)}s)`)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  private processTimeoutMs(runtime: ConversationRuntime): number {
+    const raw = runtime.runner.config.getNum('agent', 'process_timeout_ms') || this.host.config.getNum('agent', 'process_timeout_ms');
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+    return Math.max(1000, Math.floor(raw));
   }
 
   private runtime(id: string, options: ConversationKernelRunOptions): ConversationRuntime {
@@ -172,6 +208,10 @@ export class ConversationKernel {
 
   private applyOptions(agent: Agent, options: ConversationKernelRunOptions): void {
     agent.setMode(options.mode);
+    if (options.mode === 'goal' && this.host.goal) {
+      agent.updateGoal(this.host.goal.objective);
+      if (this.host.goal.paused && agent.goal) agent.goal.paused = true;
+    }
     agent.setModel(options.model);
     agent.setIntelligence(options.intelligence);
     agent.inputMode = options.inputMode;
@@ -202,12 +242,14 @@ export class ConversationKernel {
   }
 
   private enqueueSameSession(runtime: ConversationRuntime, message: string, queueMode: ConversationQueueMode): void {
-    const kind = queueMode === 'steer' ? 'Guide' : 'Next';
-    const prompt = `[${kind} queued while the Agent was working]\n${message}`;
-    this.trackQueuedMessage(runtime, prompt, queueMode);
+    const isSteer = queueMode === 'steer';
+    const prompt = isSteer ? message : `[Next queued while current turn is running]\n${message}`;
+    if (!isSteer) this.trackQueuedMessage(runtime, prompt, queueMode);
     const queued = runtime.runner.queueActiveKernelMessage(prompt, queueMode);
     if (!queued) runtime.pendingNextTurn.push({ message: prompt, queueMode });
-    runtime.runner.recordWorkStatus(`[Queue] ${kind} message ${queued ? 'queued in active Agent kernel' : 'recorded for the next turn'}.`);
+    runtime.runner.recordWorkStatus(isSteer
+      ? 'Guidance received.'
+      : (queued ? 'Next message queued.' : 'Next message recorded for the next turn.'));
     this.emitQueueUpdate(runtime);
   }
 

@@ -16,6 +16,7 @@ interface NativeAgentInstance {
   prompt(message: KernelMessage | KernelMessage[]): Promise<void>;
   steer(message: unknown): void;
   followUp(message: unknown): void;
+  abort(): void;
 }
 
 interface KernelModel {
@@ -179,7 +180,17 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
         lastAssistant = await runOnce([], false);
       }
     }
+    const maxGoalContinuations = Math.max(0, Math.floor(agent.config.getNum('agent', 'goal_max_continuations') || 0));
+    let goalContinuations = 0;
     while (agent.mode === 'goal' && agent.goal && !agent.goal.paused && !agent.goal.checkComplete(lastAssistant)) {
+      if (maxGoalContinuations > 0 && goalContinuations >= maxGoalContinuations) {
+        const warning = `[Goal paused] Reached automatic continuation limit (${maxGoalContinuations}) without completion.`;
+        agent.goal.paused = true;
+        tokens.push({ type: 'text', text: `\n${warning}` });
+        agent.recordWorkStatus(warning);
+        break;
+      }
+      goalContinuations += 1;
       const goalPrompt = `Continue working toward this goal:\n${agent.goal.objective}\n\nProgress made. What remains?`;
       lastAssistant = await runOnce([{ role: 'user', content: goalPrompt, timestamp: Date.now() }], true);
       if (agent.goal.checkComplete(lastAssistant)) {
@@ -208,7 +219,6 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
         try {
           const newmarkMessages = fromKernelMessages(context.messages);
           const tools = currentAgent.tools.definitions(currentAgent.mode);
-          currentAgent.recordWorkStatus('Preparing model request and available tools.');
           for await (const token of currentProvider.chatStreamWithTools(
             currentAgent.model,
             newmarkMessages,
@@ -303,7 +313,7 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
           agent.emitWorkEvent({ type: 'text', content: text });
         }
       } else if (event.assistantMessageEvent.type === 'thinking_delta') {
-        agent.recordWorkStatus('Model reasoning is in progress.');
+        // Hidden reasoning is intentionally not surfaced in the chat transcript.
       } else if (event.assistantMessageEvent.type === 'toolcall_end') {
         const tool = event.assistantMessageEvent.toolCall as KernelToolCall;
         tokens.push({ type: 'tool_call', text: '', toolCall: { id: tool.id, name: tool.name, arguments: JSON.stringify(tool.arguments || {}) } });
@@ -314,6 +324,7 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
       agent.emitWorkEvent({
         type: 'tool_call',
         content: `Calling tool ${event.toolName}`,
+        toolCallId: event.toolCallId,
         toolName: event.toolName,
         toolArgs: agent.visibleToolArgs(args),
       });
@@ -321,14 +332,19 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
       break;
     }
     case 'turn_end':
-      if (event.toolResults.length > 0) {
-        agent.recordWorkStatus(`Executing ${event.toolResults.length} tool call${event.toolResults.length === 1 ? '' : 's'}.`);
-      }
       break;
     case 'tool_execution_end': {
       const text = toolResultText(event.result);
-      tokens.push({ type: 'text', text });
-      agent.recordToolResult(event.toolName, text);
+      const display = text.length > 3000 ? `${text.slice(0, 3000)}...[truncated]` : text;
+      if (toolResultTerminates(event.result)) {
+        tokens.push({ type: 'text', text });
+      }
+      agent.emitWorkEvent({
+        type: 'tool_result',
+        content: display,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+      });
       break;
     }
     case 'message_end':
@@ -390,7 +406,8 @@ function toKernelTools(agent: Agent): KernelTool[] {
         const args = JSON.stringify(params || {});
         const text = await executeNewmarkTool(agent, name, args);
         const content: KernelTextContent[] = [{ type: 'text', text }];
-        return { content, details: { tool: name, ok: !text.startsWith('[Error]') } };
+        const terminate = shouldTerminateAfterToolResult(name);
+        return { content, details: { tool: name, ok: !text.startsWith('[Error]'), terminate }, terminate };
       },
     };
   }).filter((tool: KernelTool) => !!tool.name);
@@ -421,6 +438,17 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string): Pro
   const result = await agent.tools.execute(name, args, wsDir, { mode: agent.mode, workspacePath: wsDir });
   trackFileDiff(agent, name, args);
   return result;
+}
+
+function shouldTerminateAfterToolResult(name: string): boolean {
+  return name === 'flow_run'
+    || name.startsWith('automation_')
+    || name.startsWith('memory_lab_')
+    || name === 'task'
+    || name === 'subagent_send'
+    || name === 'subagent_result'
+    || name === 'subagent_close'
+    || name === 'question';
 }
 
 function toKernelMessages(agent: Agent): KernelMessage[] {
@@ -522,6 +550,13 @@ function toolResultText(result: unknown): string {
   const content = Array.isArray(record.content) ? record.content : [];
   return content.map(item => item && typeof item === 'object' ? String((item as Record<string, unknown>).text || '') : '').join('') ||
     JSON.stringify(result || '');
+}
+
+function toolResultTerminates(result: unknown): boolean {
+  const record = result && typeof result === 'object' ? result as Record<string, unknown> : {};
+  if (record.terminate === true) return true;
+  const details = record.details && typeof record.details === 'object' ? record.details as Record<string, unknown> : {};
+  return details.terminate === true;
 }
 
 function trackFileDiff(agent: Agent, name: string, args: string): void {

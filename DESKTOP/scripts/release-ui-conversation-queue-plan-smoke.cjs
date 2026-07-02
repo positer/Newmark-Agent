@@ -114,6 +114,23 @@ async function waitFor(cdp, expression, timeoutMs, label) {
   fail(`Timed out waiting for ${label}; last=${JSON.stringify(lastValue)}`);
 }
 
+function backendConversationHas(conversationId, includeText, excludeText = '') {
+  return `window.api.setConversation(${JSON.stringify(conversationId)}).then(() => window.api.getState()).then(s => {
+    const messages = (s && Array.isArray(s.chatMessages)) ? s.chatMessages : [];
+    const body = messages.map(m => String(m.content || '')).join('\\n');
+    return s && s.conversationId === ${JSON.stringify(conversationId)} &&
+      body.includes(${JSON.stringify(includeText)}) &&
+      ${excludeText ? `!body.includes(${JSON.stringify(excludeText)})` : 'true'};
+  })`;
+}
+
+function renderBackendConversation(conversationId) {
+  return `window.api.setConversation(${JSON.stringify(conversationId)}).then(() => window.api.getState()).then(s => {
+    if (window.renderChatMessages) window.renderChatMessages((s && s.chatMessages) || []);
+    return s && s.conversationId === ${JSON.stringify(conversationId)};
+  })`;
+}
+
 async function captureScreenshot(cdp) {
   await cdp.call('Page.bringToFront', {}, 10000);
   await cdp.call('Emulation.setDeviceMetricsOverride', {
@@ -379,6 +396,8 @@ async function runUiCheck(root) {
       window.switchConversation(idx);
       return true;
     })()`, 30000);
+    await waitFor(cdp, backendConversationHas(convA, 'PARALLEL_CONV_A_DONE_20260701', 'PARALLEL_CONV_B_DONE_20260701'), 45000, 'conversation A backend result isolated from B');
+    await evaluate(cdp, renderBackendConversation(convA), 30000);
     await waitFor(cdp, `(() => {
       const body = document.querySelector('#chat-area')?.innerText || '';
       return body.includes('PARALLEL_CONV_A_DONE_20260701') && !body.includes('PARALLEL_CONV_B_DONE_20260701');
@@ -439,6 +458,8 @@ async function runUiCheck(root) {
       window.switchConversation(idx);
       return true;
     })()`, 30000);
+    await waitFor(cdp, backendConversationHas(convB, 'LONG_PARALLEL_CONV_B_DONE_20260701', 'LONG_PARALLEL_CONV_A_DONE_20260701'), 45000, 'long conversation B backend persisted without A leakage');
+    await evaluate(cdp, renderBackendConversation(convB), 30000);
     await waitFor(cdp, `(() => {
       const body = document.querySelector('#chat-area')?.innerText || '';
       return body.includes('LONG_PARALLEL_CONV_B_DONE_20260701') &&
@@ -451,9 +472,11 @@ async function runUiCheck(root) {
       window.switchConversation(idx);
       return true;
     })()`, 30000);
+    await waitFor(cdp, backendConversationHas(convA, 'LONG_PARALLEL_CONV_A_DONE_20260701', 'LONG_PARALLEL_CONV_B_DONE_20260701'), 45000, 'long conversation A backend persisted without B leakage');
+    await evaluate(cdp, renderBackendConversation(convA), 30000);
     await waitFor(cdp, `(() => {
       const body = document.querySelector('#chat-area')?.innerText || '';
-      return body.includes('Agent started working.') &&
+      return body.includes('Preparing request.') &&
         body.includes('Preparing model request and available tools.') &&
         body.includes('Executing 1 tool call.') &&
         body.includes('Tool bash result') &&
@@ -477,26 +500,30 @@ async function runUiCheck(root) {
     })()`, 30000);
     await waitFor(cdp, `(() => window.state && window.state._sendInFlight === true)()`, 10000, 'queue first send in flight');
     await evaluate(cdp, `(() => {
+      window.setInputMode('next');
       const prompt = document.querySelector('#prompt');
       prompt.value = 'QUEUE_SECOND_AUTO_BUILD';
       window.sendMessage();
       return true;
     })()`, 30000);
     await waitFor(cdp, `(() => {
-      const badge = document.querySelector('#next-queue-count');
-      return badge && badge.textContent.includes('1') && document.body.innerText.includes('[Guide queued] QUEUE_SECOND_AUTO_BUILD');
+      const panel = document.querySelector('#queue-panel');
+      const label = document.querySelector('#queue-header-label');
+      return panel && panel.style.display !== 'none' && label && label.textContent.includes('1') && document.body.innerText.includes('[Next queued] QUEUE_SECOND_AUTO_BUILD');
     })()`, 10000, 'queued input visible');
     await waitFor(cdp, `(() => {
       const body = document.querySelector('#chat-area')?.innerText || '';
-      const badge = document.querySelector('#next-queue-count');
+      const panel = document.querySelector('#queue-panel');
+      const label = document.querySelector('#queue-header-label');
       const state = window.state || {};
-      const ok = body.includes('QUEUE_FIRST_DONE_20260628') && body.includes('QUEUE_SECOND_DONE_20260628') && !badge && state._sendInFlight === false;
+      const queueVisible = panel && panel.style.display !== 'none' && label && label.textContent.includes('1');
+      const ok = body.includes('QUEUE_FIRST_DONE_20260628') && body.includes('QUEUE_SECOND_DONE_20260628') && !queueVisible && state._sendInFlight === false;
       if (!ok) {
         window.__queueDrainDebug = {
           hasFirst: body.includes('QUEUE_FIRST_DONE_20260628'),
           hasSecond: body.includes('QUEUE_SECOND_DONE_20260628'),
           hasQueuedPrompt: body.includes('QUEUE_SECOND_AUTO_BUILD'),
-          badge: badge ? badge.textContent : '',
+          queueLabel: label ? label.textContent : '',
           sendInFlight: state._sendInFlight,
           runningKeys: Object.keys(state.runningConversations || {}),
           nextQueue: state.nextQueue || [],

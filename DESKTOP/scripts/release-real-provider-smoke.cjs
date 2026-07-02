@@ -43,6 +43,10 @@ function sanitize(text) {
   return out;
 }
 
+function countOccurrences(text, marker) {
+  return String(text || '').split(marker).length - 1;
+}
+
 function runPowerShellCli(args, root, extraEnv = {}, timeoutMs = 120000) {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-real-cli-run-'));
   const stdoutPath = path.join(workDir, 'stdout.txt');
@@ -191,6 +195,44 @@ async function waitFor(cdp, expression, timeoutMs, label) {
   fail(`Timed out waiting for ${label}; last value: ${sanitize(String(lastValue || '').slice(0, 500))}`);
 }
 
+function jsString(value) {
+  return JSON.stringify(String(value));
+}
+
+function assistantMarkerStatsExpression(marker) {
+  return `window.api.getState().then(state => {
+    const marker = ${jsString(marker)};
+    const assistantEls = Array.from(document.querySelectorAll('.chat-msg.assistant .msg-body'));
+    const matchingEls = assistantEls.filter(el => (el.innerText || '').includes(marker));
+    const messages = (state && Array.isArray(state.chatMessages)) ? state.chatMessages : [];
+    const assistantMessages = messages.filter(m => m && m.role === 'assistant');
+    const matchingMessages = assistantMessages.filter(m => String(m.content || '').includes(marker));
+    return {
+      count: matchingEls.length,
+      backendCount: matchingMessages.length,
+      status: state && state.status,
+      conversationId: state && state.conversationId,
+      activeText: (window.state && window.state._activeWorkflowText) || '',
+      lastCompletedText: (window.state && window.state._lastCompletedWorkflow && window.state._lastCompletedWorkflow.text) || '',
+      assistantTexts: assistantEls.map(el => (el.innerText || '').slice(0, 260)).slice(-4),
+      backendAssistantTexts: assistantMessages.map(m => String(m.content || '').slice(0, 260)).slice(-4),
+      bodyTail: (document.querySelector('#chat-area')?.innerText || document.body.innerText || '').slice(-1200)
+    };
+  })`;
+}
+
+async function waitForAssistantMarker(cdp, marker, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  let lastStats;
+  while (Date.now() < deadline) {
+    const stats = await evaluate(cdp, assistantMarkerStatsExpression(marker), 10000);
+    lastStats = stats;
+    if (stats && stats.count > 0) return stats;
+    await sleep(750);
+  }
+  fail(`Timed out waiting for ${label}; last stats: ${sanitize(JSON.stringify(lastStats || {}).slice(0, 1800))}`);
+}
+
 function ensureNoReleaseProcess() {
   const running = spawnSync('powershell.exe', [
     '-NoProfile',
@@ -259,6 +301,7 @@ async function runCliChecks(root) {
   const send = await runPowerShellCli(['send', '--input-file', promptFile, '--mode', 'build', '--model', modelName, '--conversation', 'real-provider-cli', '--root', root], root, {}, 180000);
   if (send.stdout.includes(apiKey)) fail('send leaked API key');
   if (!send.stdout.includes('REAL_PROVIDER_CLI_OK_20260627')) fail(`CLI real provider response missing marker: ${sanitize(send.stdout)}`);
+  if (countOccurrences(send.stdout, 'REAL_PROVIDER_CLI_OK_20260627') !== 1) fail(`CLI real provider response duplicated marker: ${sanitize(send.stdout)}`);
   log('real CLI send ok');
 
   if (runUtf8) {
@@ -267,6 +310,7 @@ async function runCliChecks(root) {
     const utf8Send = await runPowerShellCli(['send', '--input-file', utf8PromptFile, '--mode', 'build', '--model', modelName, '--language', 'zh', '--conversation', 'real-provider-cli-utf8', '--root', root], root, {}, 180000);
     if (utf8Send.stdout.includes(apiKey)) fail('UTF-8 send leaked API key');
     if (!utf8Send.stdout.includes('真实UTF8_CLI_通过')) fail(`CLI UTF-8 real provider response missing marker: ${sanitize(utf8Send.stdout)}`);
+    if (countOccurrences(utf8Send.stdout, '真实UTF8_CLI_通过') !== 1) fail(`CLI UTF-8 real provider response duplicated marker: ${sanitize(utf8Send.stdout)}`);
     log('real CLI UTF-8 send ok');
   } else {
     log('real UTF-8 CLI/UI checks skipped; set NEWMARK_REAL_UTF8=1 to enable');
@@ -333,7 +377,8 @@ async function runUiCheck(root) {
       return true;
     })()`);
 
-    await waitFor(cdp, `(document.body.innerText || '').includes('REAL_PROVIDER_UI_OK_20260627')`, 180000, 'visible real-provider UI marker');
+    const uiMarkerStats = await waitForAssistantMarker(cdp, 'REAL_PROVIDER_UI_OK_20260627', 180000, 'visible real-provider UI assistant marker');
+    if (uiMarkerStats.count !== 1) fail(`real-provider UI duplicated assistant marker count=${uiMarkerStats.count}; stats=${sanitize(JSON.stringify(uiMarkerStats).slice(0, 1800))}`);
     const state = await waitFor(cdp, `window.api.getState().then(state => {
       if (!state || state.status !== 'idle') return null;
       return state;
@@ -351,7 +396,8 @@ async function runUiCheck(root) {
         window.sendMessage();
         return true;
       })()`);
-      await waitFor(cdp, `(document.body.innerText || '').includes('真实UTF8_UI_通过')`, 180000, 'visible real-provider UTF-8 UI marker');
+      const uiUtf8MarkerStats = await waitForAssistantMarker(cdp, '真实UTF8_UI_通过', 180000, 'visible real-provider UTF-8 UI assistant marker');
+      if (uiUtf8MarkerStats.count !== 1) fail(`real-provider UTF-8 UI duplicated assistant marker count=${uiUtf8MarkerStats.count}; stats=${sanitize(JSON.stringify(uiUtf8MarkerStats).slice(0, 1800))}`);
       const utf8State = await waitFor(cdp, `window.api.getState().then(state => state && state.status === 'idle' ? state : null)`, 60000, 'real-provider UTF-8 UI idle after marker');
       if (JSON.stringify(utf8State).includes(apiKey)) fail('UTF-8 renderer state leaked API key');
       log('real UI UTF-8 send ok');

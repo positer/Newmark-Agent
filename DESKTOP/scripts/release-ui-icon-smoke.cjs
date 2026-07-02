@@ -4,10 +4,12 @@ const path = require('path');
 const http = require('http');
 const { spawn, spawnSync } = require('child_process');
 const asar = require('@electron/asar');
+const { verifyExeIcon } = require('./patch-win-exe-icon.cjs');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
 const appAsar = path.join(repoRoot, 'release', 'win-unpacked', 'resources', 'app.asar');
+const packageIcon = path.join(repoRoot, 'DESKTOP', 'assets', 'icon.ico');
 const screenshotPath = path.join(repoRoot, 'archive', '2026-06-28-v1.0.2-ui-icon-smoke.png');
 const windowIconPath = path.join(repoRoot, 'archive', '2026-06-28-v1.0.2-runtime-window-icon.png');
 
@@ -22,6 +24,7 @@ function ensureReleaseAssets() {
   for (const file of ['\\assets\\app-icon-dark.png', '\\assets\\app-icon-light.png', '\\assets\\icon.ico']) {
     if (!files.includes(file)) fail(`app.asar missing icon asset: ${file}`);
   }
+  verifyExeIcon(exePath, packageIcon);
 }
 
 function sleep(ms) {
@@ -265,7 +268,7 @@ async function main() {
     })}`);
     console.log(`[release-ui-icon-smoke] screenshot=${screenshotPath}`);
     console.log(`[release-ui-icon-smoke] runtimeWindowIcon=${windowIconPath}`);
-    console.log('[release-ui-icon-smoke] app.asar icon assets, runtime window icon, titlebar UI icon, animated color border, and packaged UI screenshot verified');
+    console.log('[release-ui-icon-smoke] win-unpacked exe associated icon, app.asar icon assets, runtime window icon, titlebar UI icon, animated color border, and packaged UI screenshot verified');
   } finally {
     if (cdp) cdp.close();
     if (child && !child.killed) child.kill();

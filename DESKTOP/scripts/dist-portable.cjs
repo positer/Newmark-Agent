@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const asar = require('@electron/asar');
+const { patchAndVerify, verifyExeIcon } = require('./patch-win-exe-icon.cjs');
 
 const root = path.resolve(__dirname, '..');
 const outputDir = path.resolve(root, '..', 'release');
@@ -9,6 +10,7 @@ const appPackage = require(path.join(root, 'package.json'));
 const exePath = path.join(outputDir, `Newmark-Agent-${appPackage.version}-portable-x64.exe`);
 const unpackedExe = path.join(outputDir, 'win-unpacked', 'Newmark Agent.exe');
 const appAsar = path.join(outputDir, 'win-unpacked', 'resources', 'app.asar');
+const packageIcon = path.join(root, 'assets', 'icon.ico');
 const zipPath = path.join(outputDir, `Newmark-Agent-${appPackage.version}-win-unpacked-x64.zip`);
 
 function log(message) {
@@ -51,6 +53,11 @@ function verifyPackagedOutput() {
   if (!html.includes('id="lucide-sprite-root"')) throw new Error('packaged UI missing embedded lucide sprite');
   if (html.includes('href="lucide-sprite.svg#')) throw new Error('packaged UI still uses external lucide sprite hrefs');
   if (!html.includes('href="#message-square') || !html.includes('href="#send')) throw new Error('packaged UI missing expected local icon hrefs');
+  verifyExeIcon(unpackedExe, packageIcon);
+}
+
+function patchPackagedOutput() {
+  patchAndVerify(unpackedExe, packageIcon);
 }
 
 function createZipPack() {
@@ -99,6 +106,7 @@ if (result.error) {
 }
 
 if (result.status === 0) {
+  patchPackagedOutput();
   verifyPackagedOutput();
   try {
     createZipPack();
@@ -113,6 +121,7 @@ if (result.status === 0) {
 }
 
 try {
+  patchPackagedOutput();
   verifyPackagedOutput();
   createZipPack();
   verifyZipPack();

@@ -217,7 +217,7 @@ async function readLanguageSnapshot(cdp) {
     subWinCloseTitle: document.querySelector('.sub-win-close')?.getAttribute('title') || '',
     terminalConnected: Array.from(document.querySelectorAll('.terminal-output span')).map(el => el.textContent || '').find(text => text.startsWith('Terminal connected') || text.startsWith('终端已连接')) || '',
     contextCompression: (document.querySelector('#context-compression-pill')?.textContent || '').split(' | ').slice(0, 3).join(' | '),
-    nextQueue: document.querySelector('#next-queue-count')?.textContent || '',
+    nextQueue: document.querySelector('#queue-header-label')?.textContent || '',
     modelAuto: document.querySelector('#model-select option[value="auto"]')?.textContent || ''
   })`);
 }

@@ -376,6 +376,8 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
       default_mode: { _description: "Default mode", _type: "choice", _values: ["build","plan","goal","flow"], value: "build" },
       option_feedback: { _description: "Option feedback level", _type: "choice", _values: ["default","ask_more","ask_less","fully_autonomous"], value: "default" },
       auto_adjust_settings: { _description: "Agent can adjust settings", _type: "boolean", value: false },
+      process_timeout_ms: { _description: "Optional outer timeout for one desktop conversation turn in milliseconds; 0 means no extra conversation-kernel timeout", _type: "integer", value: 0 },
+      goal_max_continuations: { _description: "Maximum automatic Goal continuations per user turn before pausing with a visible warning; 0 means unlimited", _type: "integer", value: 25 },
       custom_prompt: { _description: "Custom system prompt", _type: "string", value: "" },
     },
     workspace: {

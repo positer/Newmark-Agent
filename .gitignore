@@ -52,6 +52,7 @@ _attic/**/Cargo.lock
 # === Project-specific ignores ===
 release/
 release-*verify*/
+_local/
 .opencode/
 archive/
 skills/

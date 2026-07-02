@@ -1630,6 +1630,71 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   white-space: pre-wrap;
 }
 
+.tool-event-body {
+  margin-top: 4px;
+}
+
+.tool-event-details {
+  border: 1px solid var(--glass-border-1);
+  border-radius: var(--radius-sm);
+  background: var(--glass-bg-1);
+  overflow: hidden;
+}
+
+.tool-event-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+  user-select: none;
+}
+
+.tool-event-summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-event-summary::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 1px solid var(--text-dim);
+  border-bottom: 1px solid var(--text-dim);
+  transform: rotate(-45deg);
+  transition: transform 160ms ease;
+}
+
+.tool-event-details[open] .tool-event-summary::before {
+  transform: rotate(45deg);
+}
+
+.tool-event-meta {
+  color: var(--text-dim);
+}
+
+.tool-event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px;
+  border-top: 1px solid var(--glass-border-1);
+}
+
+.tool-event-list .tool-event-details {
+  background: rgba(255,255,255,0.025);
+}
+
+.tool-event-content {
+  border-top: 1px solid var(--glass-border-1);
+  padding: 9px 10px 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .chat-msg .msg-body a {
   color: var(--text-accent);
   text-decoration: none;
@@ -1800,152 +1865,255 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 /* ============================================================
-   GOAL BAR
+   INPUT STACK
    ============================================================ */
-#goal-bar {
-  display: none;
-  align-items: center;
-  padding: 8px 14px;
-  margin: 0 16px;
+#input-stack {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0 16px;
+  gap: 0;
+  pointer-events: none;
+}
+
+#input-stack > * {
+  pointer-events: auto;
+}
+
+.stack-card {
+  width: calc(100% - 24px);
+  margin: 0 12px;
   background: var(--glass-bg-3);
   backdrop-filter: blur(14px) saturate(140%);
   -webkit-backdrop-filter: blur(14px) saturate(140%);
   border: 1px solid var(--glass-border-2);
-  border-bottom: none;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  flex-shrink: 0;
-  gap: 10px;
-  transform: translateZ(0);
-  transition: border-color var(--duration-fast) var(--ease-out-expo);
-}
-
-#goal-bar.visible { display: flex; }
-
-#goal-bar .goal-text-wrap { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
-#goal-bar .goal-icon { display: inline-flex; align-items: center; justify-content: center; font-size: 0; flex-shrink: 0; }
-#goal-bar .goal-text {
-  font-size: 12px; font-weight: 500; color: var(--text-bright);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  cursor: pointer; padding: 2px 6px; border-radius: var(--radius-sm);
-  transition: background var(--duration-fast) var(--ease-out-expo);
-  line-height: 1.4;
-}
-
-#goal-bar .goal-text:hover { background: rgba(255,255,255,0.05); }
-#goal-bar .goal-text.editing {
-  background: var(--glass-bg-1); outline: 1px solid var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-glow); cursor: text;
-  white-space: pre-wrap; overflow: visible;
-}
-
-#goal-bar .goal-actions { display: flex; gap: 6px; flex-shrink: 0; }
-
-.goal-btn {
-  width: 28px; height: 28px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--glass-bg-1);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  color: var(--text-dim);
-  cursor: pointer;
-  font-size: 12px;
-  font-family: var(--font);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo);
-  transform: translateZ(0);
-}
-
-.goal-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-bright); border-color: var(--border-hover); }
-.goal-btn.paused { background: rgba(255,200,60,0.15); border-color: rgba(255,200,60,0.35); color: #ffcc44; }
-.goal-btn.paused:hover { background: rgba(255,200,60,0.25); border-color: rgba(255,200,60,0.5); }
-
-/* ============================================================
-   TODO LIST
-   ============================================================ */
-#todo-wrap {
-  display: none;
-  margin: 0 16px;
-  flex-shrink: 0;
-  background: var(--glass-bg-2);
-  backdrop-filter: blur(12px) saturate(130%);
-  -webkit-backdrop-filter: blur(12px) saturate(130%);
-  border: 1px solid var(--glass-border-2);
-  border-top: none;
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  box-shadow: 0 -8px 28px rgba(0,0,0,0.16);
   overflow: hidden;
-  transform: translateZ(0);
-  transition: all var(--duration-normal) var(--ease-out-expo);
+  transform: translateY(0) translateZ(0);
+  animation: fade-in-up 180ms var(--ease-out-expo);
 }
 
-#todo-wrap.visible { display: block; }
-
-#todo-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  cursor: pointer;
-  user-select: none;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-dim);
-  transition: color var(--duration-fast) var(--ease-out-expo);
-  border-bottom: 1px solid var(--glass-border-1);
-}
-
-#todo-header:hover { color: var(--text-bright); }
-#todo-header .todo-toggle-icon { display: inline-flex; align-items: center; justify-content: center; transition: transform var(--duration-normal) var(--ease-out-expo); font-size: 0; width: 14px; height: 14px; }
-#todo-header.collapsed .todo-toggle-icon { transform: rotate(-90deg); }
-
-#todo-list {
-  max-height: 288px;
-  overflow-y: auto;
-  padding: 4px 8px;
-  transition: max-height var(--duration-normal) var(--ease-out-expo);
-}
-
-#todo-header.collapsed + #todo-list { max-height: 0; padding-top: 0; padding-bottom: 0; }
-
-.todo-item {
-  display: flex;
+.stack-row {
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 0 8px 0 10px;
+}
+
+.stack-title,
+.stack-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 12px;
-  cursor: pointer;
+  line-height: 32px;
+}
+
+.stack-title {
+  color: var(--text-bright);
+  font-weight: 650;
+}
+
+.stack-text {
+  color: var(--text);
+}
+
+.stack-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stack-icon-btn {
+  width: 24px;
+  height: 24px;
   border-radius: var(--radius-sm);
-  transition: background var(--duration-fast) var(--ease-out-expo);
-  user-select: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0;
+  transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo), transform var(--duration-fast) var(--ease-out-expo);
+}
+
+.stack-icon-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--text-bright);
+  border-color: var(--glass-border-1);
+}
+
+.stack-icon-btn:active { transform: scale(0.94); }
+.stack-icon-btn.warn { color: #ffcc44; }
+.stack-icon-btn.danger { color: #ff7777; }
+
+#goal-bar {
+  border-bottom: none;
+  border-radius: 14px 14px 0 0 / 10px 10px 0 0;
+}
+
+#goal-bar .goal-text {
+  outline: none;
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+}
+
+#goal-bar .goal-text.editing {
+  background: var(--glass-bg-1);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+#todo-wrap {
+  border-radius: var(--radius-lg);
+}
+
+#todo-wrap.collapsed {
+  border-radius: 999px;
+}
+
+#todo-list {
+  max-height: 192px;
+  overflow-y: auto;
+  padding: 2px 6px 7px;
+}
+
+.todo-item {
+  height: 23px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  cursor: pointer;
+  color: var(--text);
+  transition: background var(--duration-fast) var(--ease-out-expo), opacity var(--duration-fast) var(--ease-out-expo);
 }
 
 .todo-item:hover { background: rgba(255,255,255,0.05); }
 
-.todo-item .todo-check {
-  width: 16px; height: 16px;
+.todo-check {
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
-  border: 1.5px solid var(--border-active);
-  flex-shrink: 0;
-  display: flex;
+  border: 1px solid var(--border-active);
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 9px;
-  transition: background var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo);
+  font-size: 0;
+  color: var(--text-bright);
 }
 
-.todo-item .todo-check.done { background: var(--accent2); border-color: var(--accent2); color: #fff; }
-
-.todo-item .todo-text {
-  flex: 1; min-width: 0;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  transition: color var(--duration-fast) var(--ease-out-expo), text-decoration var(--duration-fast) var(--ease-out-expo);
+.todo-item.done {
+  opacity: 0.48;
 }
 
-.todo-item.done .todo-text { color: var(--text-dim); opacity: 0.5; text-decoration: line-through; }
+.todo-item.done .todo-text {
+  text-decoration: line-through;
+}
+
+.todo-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+  font-size: 12px;
+  line-height: 23px;
+  mask-image: linear-gradient(90deg, #000 0%, #000 82%, transparent 100%);
+}
+
+#queue-panel {
+  border-radius: var(--radius-md);
+}
+
+#queue-panel.collapsed {
+  height: 32px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+}
+
+#queue-panel.collapsed #queue-header {
+  width: 100%;
+  height: 32px;
+  min-height: 32px;
+  align-items: center;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+#queue-panel.collapsed .stack-title {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  line-height: 32px;
+}
+
+#queue-panel.collapsed .stack-actions {
+  height: 32px;
+  align-items: center;
+}
+
+#queue-panel.collapsed .stack-icon-btn {
+  border-radius: 999px;
+}
+
+#queue-list {
+  max-height: 112px;
+  overflow-y: auto;
+  padding: 2px 6px 7px;
+}
+
+.queue-item {
+  height: 28px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-fast) var(--ease-out-expo), transform var(--duration-fast) var(--ease-out-expo);
+}
+
+.queue-item:hover { background: rgba(255,255,255,0.05); }
+.queue-item.dragging { opacity: 0.58; transform: scale(0.99); }
+
+.queue-drag {
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: grab;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0;
+}
+
+.queue-edit {
+  min-width: 0;
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-edit:focus {
+  color: var(--text-bright);
+}
 
 /* ============================================================
    INPUT AREA
@@ -2117,9 +2285,9 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
    ============================================================ */
 #scroll-bottom-btn {
   display: none;
-  position: absolute;
-  bottom: 160px;
-  right: 32px;
+  position: static;
+  align-self: center;
+  margin: 0 0 6px;
   width: 32px; height: 32px;
   border-radius: 50%;
   border: 1px solid var(--border);
@@ -2129,7 +2297,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   color: var(--text-dim);
   cursor: pointer;
   font-size: 14px;
-  z-index: 50;
+  z-index: 5;
   align-items: center;
   justify-content: center;
   transform: translateZ(0);
@@ -3191,32 +3359,45 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
           </div>
         </div>
 
-        <!-- Scroll to bottom -->
-        <button id="scroll-bottom-btn" onclick="window.scrollToBottom()" title="Scroll to bottom"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#arrow-down"></use></svg><span class="icon-only-label">Scroll to bottom</span></button>
+        <div id="input-stack">
+          <div id="context-compression-pill" style="display:none;margin:0 28px 8px;padding:7px 10px;border-radius:8px;border:1px solid var(--glass-border-1);background:var(--glass-bg-1);font-size:11px;color:var(--text-dim);"></div>
 
-      <!-- Todo list -->
-      <div id="todo-wrap">
-        <div id="todo-header" onclick="window.toggleTodoCollapse()">
-          <span class="todo-toggle-icon"><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#chevron-down"></use></svg><span class="icon-only-label">Toggle tasks</span></span>
-          <span id="todo-header-label">Tasks (0)</span>
-          <button class="goal-btn" style="margin-left:auto;width:22px;height:22px;font-size:0;" onclick="event.stopPropagation();window.addTodoPrompt()" title="Add task"><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#plus"></use></svg><span class="icon-only-label">Add task</span></button>
-        </div>
-        <div id="todo-list"></div>
-      </div>
+          <!-- Scroll to bottom -->
+          <button id="scroll-bottom-btn" onclick="window.scrollToBottom()" title="Scroll to bottom"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#arrow-down"></use></svg><span class="icon-only-label">Scroll to bottom</span></button>
 
-        <!-- Goal bar -->
-        <div id="goal-bar">
-          <div class="goal-text-wrap">
-            <span class="goal-icon"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#list-todo"></use></svg><span class="icon-only-label">Goal</span></span>
-            <span class="goal-text" id="goal-text" onclick="window.editGoal()" contenteditable="false">Set goal</span>
+          <!-- Goal checklist -->
+          <div id="todo-wrap" class="stack-card collapsed">
+            <div id="todo-header" class="stack-row" onclick="window.toggleTodoCollapse()">
+              <span id="todo-header-label" class="stack-title">Tasks</span>
+              <span class="stack-actions">
+                <button class="stack-icon-btn" onclick="event.stopPropagation();window.toggleTodoCollapse()" title="Expand tasks"><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#chevron-up"></use></svg><span class="icon-only-label">Expand tasks</span></button>
+              </span>
+            </div>
+            <div id="todo-list"></div>
           </div>
-          <div class="goal-actions">
-            <button class="goal-btn" onclick="window.editGoal()" title="Edit goal">Edit</button>
-            <button class="goal-btn" id="goal-pause-btn" onclick="window.toggleGoalPause()" title="Pause or resume">Pause</button>
+
+          <!-- Queued input -->
+          <div id="queue-panel" class="stack-card collapsed">
+            <div id="queue-header" class="stack-row" onclick="window.toggleQueuePanel()">
+              <span id="queue-header-label" class="stack-title">Next</span>
+              <span class="stack-actions">
+                <button class="stack-icon-btn" onclick="event.stopPropagation();window.toggleQueuePanel()" title="Expand queue"><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#chevron-up"></use></svg><span class="icon-only-label">Expand queue</span></button>
+              </span>
+            </div>
+            <div id="queue-list"></div>
+          </div>
+
+          <!-- Goal bar -->
+          <div id="goal-bar" class="stack-card">
+            <div class="stack-row">
+              <span class="goal-text stack-text" id="goal-text" onclick="window.editGoal()" contenteditable="false">Set goal</span>
+              <span class="stack-actions">
+                <button class="stack-icon-btn" onclick="window.editGoal()" title="Edit goal"><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#square-pen"></use></svg><span class="icon-only-label">Edit goal</span></button>
+                <button class="stack-icon-btn" id="goal-pause-btn" onclick="window.toggleGoalPause()" title="Pause or resume"><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#pause"></use></svg><span class="icon-only-label">Pause or resume</span></button>
+              </span>
+            </div>
           </div>
         </div>
-
-        <div id="context-compression-pill" style="display:none;margin:0 28px 8px;padding:7px 10px;border-radius:8px;border:1px solid var(--glass-border-1);background:var(--glass-bg-1);font-size:11px;color:var(--text-dim);"></div>
 
         <!-- Input area -->
         <div id="input-area">
@@ -3358,6 +3539,10 @@ var state = {
   runningConversations: {},
   agentWorkEventsByConversation: {},
   agentWorkEventLimit: 240,
+  foregroundConversationHoldId: '',
+  foregroundConversationHoldUntil: 0,
+  trackedConversationUntil: {},
+  conversationTrackMs: 300000,
   conversations: [
     {id: 'conv-1', summary: 'New chat 1', archived: false, active: true}
   ],
@@ -3379,7 +3564,10 @@ var state = {
   rightTab: 'file-tree',
   bottomCollapsed: false,
   secondaryCollapsed: true,
-  todoCollapsed: false,
+  todoCollapsed: true,
+  queueCollapsed: true,
+  queueDragIndex: -1,
+  queueHiddenItems: {},
   todoItems: [],
   goalVisible: false,
   goalText: '',
@@ -3491,8 +3679,13 @@ var NEWMARK_I18N = {
     'goal.edit': 'Edit',
     'goal.pause': 'Pause',
     'goal.resume': 'Resume',
+    'goal.list': 'List',
     'todo.tasks': 'Tasks',
     'todo.addPrompt': 'Add task:',
+    'queue.title': 'Queue',
+    'queue.guideNow': 'Guide now',
+    'queue.expand': 'Expand queue',
+    'queue.collapse': 'Collapse queue',
     'right.files': 'Files',
     'right.fileTree': 'Workspace file tree',
     'right.editor': 'Editor',
@@ -3912,8 +4105,13 @@ var NEWMARK_I18N = {
     'goal.edit': '编辑',
     'goal.pause': '暂停',
     'goal.resume': '继续',
+    'goal.list': '清单',
     'todo.tasks': '任务',
     'todo.addPrompt': '添加任务：',
+    'queue.title': '队列',
+    'queue.guideNow': '立即引导',
+    'queue.expand': '展开队列',
+    'queue.collapse': '折叠队列',
     'right.files': '文件',
     'right.fileTree': '工作区文件树',
     'right.editor': '编辑器',
@@ -4431,15 +4629,10 @@ function applyLanguageToUi() {
   }
   var goalText = document.getElementById('goal-text');
   if (goalText && (!state.goalText || goalText.textContent === 'Set goal' || goalText.textContent === '设置目标')) goalText.textContent = t('goal.set');
-  var goalEdit = document.querySelector('.goal-actions .goal-btn[onclick="window.editGoal()"]');
-  if (goalEdit) goalEdit.textContent = t('goal.edit');
-  var goalPause = document.getElementById('goal-pause-btn');
-  if (goalPause && !state.goalPaused) goalPause.textContent = t('goal.pause');
-  if (state.todoItems) renderTodo();
   if (state.rightTab === 'plan') window.renderConversationPlan();
   if (window.renderContextCompression) window.renderContextCompression();
   if (window.renderContextWindow) window.renderContextWindow();
-  if (window.renderNextQueue) window.renderNextQueue();
+  if (window.renderInputStack) window.renderInputStack();
   if (window.refreshModelSelect) window.refreshModelSelect();
   if (window.loadFileTree) window.loadFileTree();
   if (!els['chat-area'] || !els['chat-area'].querySelector('.chat-msg')) renderChatMessages([]);
@@ -4709,19 +4902,187 @@ function updateMsg(div, text, role, mode, model) {
   els['chat-area'].scrollTop = els['chat-area'].scrollHeight;
 }
 
+function promptInsertText(text) {
+  var target = els.prompt;
+  if (!target) return;
+  var insert = String(text || '');
+  if (!insert) return;
+  var start = typeof target.selectionStart === 'number' ? target.selectionStart : target.value.length;
+  var end = typeof target.selectionEnd === 'number' ? target.selectionEnd : start;
+  var before = target.value.slice(0, start);
+  var after = target.value.slice(end);
+  var prefix = before && !/(\s|\n)$/.test(before) ? '\n' : '';
+  var suffix = after && !/^(\s|\n)/.test(after) ? '\n' : '';
+  target.value = before + prefix + insert + suffix + after;
+  var caret = (before + prefix + insert).length;
+  target.selectionStart = caret;
+  target.selectionEnd = caret;
+  target.dispatchEvent(new Event('input', { bubbles: true }));
+  target.focus();
+}
+
+function clipboardFilePaths(dataTransfer) {
+  var files = dataTransfer && dataTransfer.files ? Array.from(dataTransfer.files) : [];
+  var paths = [];
+  for (var i = 0; i < files.length; i++) {
+    var file = files[i];
+    var p = '';
+    try {
+      if (api.filePathForFile) p = api.filePathForFile(file);
+    } catch(e) {}
+    if (!p && file && file.path) p = file.path;
+    if (p) paths.push(p);
+  }
+  return paths;
+}
+
+function isHiddenWorkflowMessage(message) {
+  var role = String(message && message.role || '');
+  var mode = String(message && message.mode || '');
+  var content = String(message && message.content || '').trim();
+  if (role !== 'workflow') return false;
+  if (mode === 'tool:agent_status') return true;
+  return /^(Preparing request\.?|Response complete\.?|Preparing model request and available tools\.?|Executing \d+ tool call[s]?\.?|Guidance received\.?|Next message queued\.?|Next message recorded for the next turn\.?|Conversation queue updated\.?)$/i.test(content);
+}
+
+function ensureActiveAssistantMsg(mode, model) {
+  if (state._activeWorkflowMsg && state._activeWorkflowMsg.parentNode) return state._activeWorkflowMsg;
+  state._activeWorkflowMsg = addMsg('assistant', '', mode || state.mode, model || state.model);
+  return state._activeWorkflowMsg;
+}
+
+function toolEventKey(event) {
+  return String((event && event.toolCallId) || '') || (String((event && event.toolName) || 'tool') + ':' + String((event && event.id) || Date.now()));
+}
+
+function isFileEditToolName(name) {
+  return /^(edit|write|apply_patch|multi_edit|save_file|write_file)$/i.test(String(name || ''));
+}
+
+function toolBatchSummary(batch) {
+  var tools = Object.keys((batch && batch.calls) || {}).length;
+  var edits = 0;
+  Object.keys((batch && batch.calls) || {}).forEach(function(key) {
+    if (isFileEditToolName(batch.calls[key] && batch.calls[key].name)) edits++;
+  });
+  var done = !!(batch && batch.done);
+  if (currentLang() === 'zh') {
+    return (done ? '已编辑 ' : '正在编辑 ') + edits + ' 个文件，' + (done ? '已使用 ' : '正在使用 ') + tools + ' 个工具';
+  }
+  return (done ? 'Edited ' : 'Editing ') + edits + ' files, ' + (done ? 'used ' : 'using ') + tools + ' tools';
+}
+
+function renderToolEventContent(call) {
+  var args = call.args ? String(call.args) : '';
+  var result = call.result ? String(call.result) : '';
+  var body = '';
+  if (args) body += 'Arguments:\n' + args;
+  if (result) body += (body ? '\n\n' : '') + 'Result:\n' + result;
+  if (!body) body = 'Running...';
+  return '<details class="tool-event-details"><summary class="tool-event-summary">' + iconSvg('wrench', 'Tool', 'tiny') +
+    '<span>' + esc(call.name || 'tool') + '</span><span class="tool-event-meta">' + esc(result ? 'done' : 'running') + '</span></summary>' +
+    '<div class="tool-event-content">' + renderMessageContent(body) + '</div></details>';
+}
+
+function renderToolBatch(batch) {
+  var html = '<details class="tool-event-details"><summary class="tool-event-summary">' + iconSvg('wrench', 'Tools', 'tiny') +
+    '<span>' + esc(toolBatchSummary(batch)) + '</span></summary><div class="tool-event-list">';
+  var keys = Object.keys(batch.calls || {});
+  for (var i = 0; i < keys.length; i++) {
+    html += renderToolEventContent(batch.calls[keys[i]]);
+  }
+  html += '</div></details>';
+  return html;
+}
+
+function ensureToolBatch(event) {
+  if (!state._toolEventBatch) {
+    state._toolEventBatch = { el: null, calls: {}, done: false };
+  }
+  var batch = state._toolEventBatch;
+  if (!batch.el || !batch.el.parentNode) {
+    batch.el = addMsg('assistant', '', 'tools', event && event.model || state.model);
+    batch.el.classList.add('tool-event');
+  }
+  return batch;
+}
+
+function renderToolBatchInto(batch) {
+  if (!batch || !batch.el) return;
+  var body = batch.el.querySelector('.msg-body');
+  if (body) body.innerHTML = '<div class="tool-event-body">' + renderToolBatch(batch) + '</div>';
+  els['chat-area'].scrollTop = els['chat-area'].scrollHeight;
+}
+
+function upsertToolEvent(event, resultText) {
+  if (!state._toolEventMsgs) state._toolEventMsgs = {};
+  var batch = ensureToolBatch(event);
+  batch.done = false;
+  var key = toolEventKey(event);
+  var call = state._toolEventMsgs[key] || { name: event.toolName || 'tool', args: event.toolArgs || '', result: '' };
+  call.name = event.toolName || call.name || 'tool';
+  if (event.toolArgs) call.args = event.toolArgs;
+  if (resultText) call.result = resultText;
+  state._toolEventMsgs[key] = call;
+  batch.calls[key] = call;
+  renderToolBatchInto(batch);
+}
+
+function finishToolBatch() {
+  var batch = state._toolEventBatch;
+  if (!batch || !batch.el || !Object.keys(batch.calls || {}).length) return;
+  batch.done = true;
+  renderToolBatchInto(batch);
+  state._toolEventBatch = null;
+  state._toolEventMsgs = {};
+}
+
+function renderPersistedToolMessage(message) {
+  var mode = String(message && message.mode || '');
+  var name = mode.replace(/^tool:/, '') || 'tool';
+  var content = String(message && message.content || '');
+  var args = '';
+  var result = '';
+  var resultPrefix = new RegExp('^Tool\\s+' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s+result:\\s*\\n?', 'i');
+  if (resultPrefix.test(content)) {
+    result = content.replace(resultPrefix, '');
+  } else if (/^Calling tool\s+/i.test(content)) {
+    var parts = content.split(/\n\n/);
+    args = parts.slice(1).join('\n\n');
+  } else {
+    result = content;
+  }
+  upsertToolEvent({
+    id: 'persisted-' + Date.now() + '-' + Math.random().toString(16).slice(2),
+    toolName: name,
+    toolArgs: args,
+    model: message && message.model || state.model
+  }, result);
+}
+
 function renderChatMessages(messages) {
   if (!els['chat-area']) return;
   els['chat-area'].innerHTML = '';
   state._activeWorkflowMsg = null;
   state._activeWorkflowText = '';
+  state._toolEventMsgs = {};
+  state._toolEventBatch = null;
+  state._lastCompletedWorkflow = null;
   if (!messages || !messages.length) {
     els['chat-area'].innerHTML = '<div class="welcome-msg"><div class="brand">Newmark Agent</div><div>' + esc(t('app.ready')) + '</div><div class="subtitle">' + esc(t('app.subtitle')) + '</div></div>';
     return;
   }
   for (var i = 0; i < messages.length; i++) {
     var m = messages[i] || {};
+    if (isHiddenWorkflowMessage(m)) continue;
+    if (String(m.role || '') === 'workflow' && /^tool:/.test(String(m.mode || ''))) {
+      renderPersistedToolMessage(m);
+      continue;
+    }
+    finishToolBatch();
     addMsg(m.role || 'assistant', m.content || '', m.mode || '', m.model || '');
   }
+  finishToolBatch();
 }
 
 function activeConversationId() {
@@ -4751,35 +5112,76 @@ function clearAgentWorkEvents(conversationId) {
   delete state.agentWorkEventsByConversation[String(conversationId || 'default')];
 }
 
+function markConversationTracked(id, ms) {
+  var key = String(id || 'default');
+  if (!state.trackedConversationUntil) state.trackedConversationUntil = {};
+  state.trackedConversationUntil[key] = Date.now() + (ms || state.conversationTrackMs || 300000);
+}
+
+function pruneConversationTracking() {
+  if (!state.trackedConversationUntil) return;
+  var now = Date.now();
+  Object.keys(state.trackedConversationUntil).forEach(function(id) {
+    if (Number(state.trackedConversationUntil[id] || 0) < now) delete state.trackedConversationUntil[id];
+  });
+}
+
+function isConversationTracked(id) {
+  pruneConversationTracking();
+  var key = String(id || 'default');
+  return !!(state.trackedConversationUntil && Number(state.trackedConversationUntil[key] || 0) >= Date.now());
+}
+
 function renderAgentWorkEvent(event) {
   if (!event) return;
   var type = event.type || 'status';
   var content = event.content || '';
   if (type === 'start') {
-    state._activeWorkflowMsg = addMsg('workflow running', content || 'Agent started working.', event.mode || state.mode, event.model || state.model);
     state._activeWorkflowText = '';
+    state._lastCompletedWorkflow = null;
   } else if (type === 'text') {
     state._activeWorkflowText = (state._activeWorkflowText || '') + content;
-    if (!state._activeWorkflowMsg) state._activeWorkflowMsg = addMsg('workflow running', '', event.mode || state.mode, event.model || state.model);
-    updateMsg(state._activeWorkflowMsg, state._activeWorkflowText || 'Agent is responding...', 'workflow running', event.mode || state.mode, event.model || state.model);
+    updateMsg(ensureActiveAssistantMsg(event.mode || state.mode, event.model || state.model), state._activeWorkflowText, 'assistant', event.mode || state.mode, event.model || state.model);
   } else if (type === 'tool_call') {
-    var args = event.toolArgs ? '\n' + event.toolArgs : '';
-    addMsg('workflow running', (content || ('Calling tool ' + (event.toolName || 'tool'))) + args, 'tool:' + (event.toolName || ''), event.model || state.model);
+    upsertToolEvent(event, '');
   } else if (type === 'tool_result') {
-    addMsg('workflow', content || 'Tool result received.', 'tool:' + (event.toolName || ''), event.model || state.model);
+    upsertToolEvent(event, content || 'Tool result received.');
   } else if (type === 'done') {
     if (state._activeWorkflowMsg && state._activeWorkflowText) {
       updateMsg(state._activeWorkflowMsg, state._activeWorkflowText, 'assistant', event.mode || state.mode, event.model || state.model);
+      state._lastCompletedWorkflow = {
+        conversationId: String(event.conversationId || activeConversationId() || 'default'),
+        text: state._activeWorkflowText,
+        msg: state._activeWorkflowMsg,
+        at: Date.now()
+      };
+    } else if (state._activeWorkflowMsg && !state._activeWorkflowText && state._activeWorkflowMsg.parentNode) {
+      state._activeWorkflowMsg.parentNode.removeChild(state._activeWorkflowMsg);
+      state._lastCompletedWorkflow = null;
     }
     state._activeWorkflowMsg = null;
     state._activeWorkflowText = '';
+    finishToolBatch();
   } else if (type === 'error') {
+    finishToolBatch();
     addMsg('assistant', '[Error] ' + content, 'error', event.model || state.model);
   } else if (type === 'queue_update') {
     state.backendQueue = event.queue || { steering: [], followUp: [] };
+    if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
+    if (window.renderInputStack) window.renderInputStack();
   } else {
-    addMsg('workflow', content, event.mode || state.mode, event.model || state.model);
+    return;
   }
+}
+
+function findCompletedWorkflowMsg(conversationId, text) {
+  var done = state._lastCompletedWorkflow;
+  if (!done || !done.msg || !done.msg.parentNode) return null;
+  if (String(done.conversationId || 'default') !== String(conversationId || activeConversationId() || 'default')) return null;
+  if (Date.now() - Number(done.at || 0) > 30000) return null;
+  var expected = String(done.text || '');
+  var actual = String(text || '');
+  return expected && actual && expected === actual ? done.msg : null;
 }
 
 function replayActiveAgentWorkEvents() {
@@ -4788,16 +5190,20 @@ function replayActiveAgentWorkEvents() {
   if (!events.length || !state.runningConversations || !state.runningConversations[id]) return;
   state._activeWorkflowMsg = null;
   state._activeWorkflowText = '';
+  state._toolEventMsgs = {};
+  state._toolEventBatch = null;
   for (var i = 0; i < events.length; i++) renderAgentWorkEvent(events[i]);
 }
 
 function appendAgentWorkEvent(event) {
   if (!event) return;
-  cacheAgentWorkEvent(event);
   var id = String(event.conversationId || 'default');
+  var active = isActiveConversationId(id);
+  if (active) markConversationTracked(id, state.conversationTrackMs || 300000);
+  if (active || isConversationTracked(id)) cacheAgentWorkEvent(event);
   if (event.type === 'done' || event.type === 'error') {
-    if (isActiveConversationId(id)) renderAgentWorkEvent(event);
-  } else if (isActiveConversationId(id)) {
+    if (active) renderAgentWorkEvent(event);
+  } else if (active) {
     renderAgentWorkEvent(event);
   }
   if (typeof renderConversations === 'function') renderConversations();
@@ -4822,7 +5228,11 @@ function loadActiveConversationMessages() {
   return api.getState().then(function(s) {
     if (s && s.chatMessages) renderChatMessages(s.chatMessages);
     if (s && s.conversationId) state.activeBackendConversationId = s.conversationId;
-    if (s && s.queued) state.backendQueue = s.queued;
+    markConversationTracked(s && s.conversationId ? s.conversationId : activeConversationId(), state.conversationTrackMs || 300000);
+    if (s && s.queued) {
+      state.backendQueue = s.queued;
+      if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
+    }
     if (s && Array.isArray(s.workEvents)) {
       var eventConversationId = String(s.conversationId || activeConversationId() || 'default');
       if (!state.agentWorkEventsByConversation) state.agentWorkEventsByConversation = {};
@@ -4842,6 +5252,7 @@ function loadActiveConversationMessages() {
     if (s && s.conversationPlan) {
       state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
       if (state.rightTab === 'plan') window.renderConversationPlan();
+      if (window.renderInputStack) window.renderInputStack();
     }
     replayActiveAgentWorkEvents();
   }).catch(function(){});
@@ -5044,18 +5455,138 @@ window.refreshModelSelect = function() {
 };
 
 // === Send Message ===
-window.renderNextQueue = function() {
-  var toggle = document.getElementById('mode-toggle');
-  if (!toggle) return;
-  var old = document.getElementById('next-queue-count');
-  if (old) old.remove();
+function normalizeQueueItemText(text) {
+  text = String(text || '').trim();
+  return text
+    .replace(/^\[(Guide|Next) queued while the Agent was working\]\s*/i, '')
+    .replace(/^\[Next queued while current turn is running\]\s*/i, '')
+    .trim();
+}
+
+window.syncNextQueueFromBackend = function(queue) {
+  queue = queue || state.backendQueue || {};
+  var merged = [];
+  var followUp = Array.isArray(queue.followUp) ? queue.followUp : [];
+  for (var j = 0; j < followUp.length; j++) merged.push(normalizeQueueItemText(followUp[j]));
+  if (!merged.length) return;
+  if (!state.nextQueue) state.nextQueue = [];
+  if (!state.queueHiddenItems) state.queueHiddenItems = {};
+  for (var k = 0; k < merged.length; k++) {
+    if (merged[k] && !state.queueHiddenItems[merged[k]] && state.nextQueue.indexOf(merged[k]) < 0) state.nextQueue.push(merged[k]);
+  }
+  state.nextPrompt = state.nextQueue[0] || '';
+};
+
+window.renderQueuePanel = function() {
+  var panel = document.getElementById('queue-panel');
+  var label = document.getElementById('queue-header-label');
+  var list = document.getElementById('queue-list');
+  if (!panel || !label || !list) return;
+  window.syncNextQueueFromBackend(state.backendQueue);
   var count = (state.nextQueue || []).length;
-  if (!count) return;
-  var badge = document.createElement('span');
-  badge.id = 'next-queue-count';
-  badge.style.cssText = 'font-size:10px;color:var(--accent2);padding:0 4px;align-self:center;white-space:nowrap;';
-  badge.textContent = t('queue.next') + ' ' + count;
-  toggle.appendChild(badge);
+  panel.style.display = count ? '' : 'none';
+  panel.classList.toggle('collapsed', !!state.queueCollapsed);
+  label.textContent = t('queue.title') + ' ' + count;
+  var toggle = panel.querySelector('#queue-header .stack-icon-btn');
+  if (toggle) {
+    toggle.title = state.queueCollapsed ? t('queue.expand') : t('queue.collapse');
+    toggle.innerHTML = iconSvg(state.queueCollapsed ? 'chevron-up' : 'chevron-down', toggle.title, 'tiny');
+  }
+  if (!count || state.queueCollapsed) {
+    list.innerHTML = '';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < count; i++) {
+    html += '<div class="queue-item" draggable="true" ondragstart="window.startQueueDrag(event,' + i + ')" ondragover="window.overQueueDrag(event,' + i + ')" ondrop="window.dropQueueDrag(event,' + i + ')" ondragend="window.endQueueDrag(event)">' +
+      '<button class="queue-drag" title="' + escAttr(t('queue.title')) + '">' + iconSvg('grip-vertical', t('queue.title'), 'tiny') + '</button>' +
+      '<input class="queue-edit" value="' + escAttr(state.nextQueue[i] || '') + '" oninput="window.editQueueItem(' + i + ',this.value)" onkeydown="if(event.key===&quot;Enter&quot;)this.blur()">' +
+      '<span class="stack-actions">' +
+        '<button class="stack-icon-btn" onclick="window.guideQueueItem(' + i + ')" title="' + escAttr(t('queue.guideNow')) + '">' + iconSvg('send', t('queue.guideNow'), 'tiny') + '</button>' +
+        '<button class="stack-icon-btn" onclick="window.focusQueueItem(' + i + ')" title="' + escAttr(t('common.edit')) + '">' + iconSvg('square-pen', t('common.edit'), 'tiny') + '</button>' +
+        '<button class="stack-icon-btn danger" onclick="window.deleteQueueItem(' + i + ')" title="' + escAttr(t('common.delete')) + '">' + iconSvg('trash', t('common.delete'), 'tiny') + '</button>' +
+      '</span>' +
+    '</div>';
+  }
+  list.innerHTML = html;
+};
+
+window.renderNextQueue = window.renderQueuePanel;
+
+window.toggleQueuePanel = function() {
+  state.queueCollapsed = !state.queueCollapsed;
+  window.renderInputStack();
+};
+
+window.editQueueItem = function(idx, value) {
+  if (!state.nextQueue || !state.nextQueue[idx]) return;
+  if (!state.queueHiddenItems) state.queueHiddenItems = {};
+  state.queueHiddenItems[state.nextQueue[idx]] = true;
+  state.nextQueue[idx] = String(value || '');
+  delete state.queueHiddenItems[state.nextQueue[idx]];
+  state.nextPrompt = state.nextQueue[0] || '';
+};
+
+window.focusQueueItem = function(idx) {
+  state.queueCollapsed = false;
+  window.renderInputStack();
+  setTimeout(function() {
+    var inputs = document.querySelectorAll('#queue-list .queue-edit');
+    if (inputs[idx]) { inputs[idx].focus(); inputs[idx].select(); }
+  }, 0);
+};
+
+window.deleteQueueItem = function(idx) {
+  if (!state.nextQueue) return;
+  if (!state.queueHiddenItems) state.queueHiddenItems = {};
+  if (state.nextQueue[idx]) state.queueHiddenItems[state.nextQueue[idx]] = true;
+  state.nextQueue.splice(idx, 1);
+  state.nextPrompt = state.nextQueue[0] || '';
+  window.renderInputStack();
+};
+
+window.guideQueueItem = function(idx) {
+  if (!state.nextQueue || !state.nextQueue[idx]) return;
+  var next = state.nextQueue.splice(idx, 1)[0];
+  if (!state.queueHiddenItems) state.queueHiddenItems = {};
+  if (next) state.queueHiddenItems[next] = true;
+  state.nextPrompt = state.nextQueue[0] || '';
+  window.renderInputStack();
+  if (next && !state._sendInFlight) {
+    window.sendMessage('guide', next, { fromQueue: true, forceBuild: true });
+  } else if (next) {
+    state.nextQueue.unshift(next);
+    state.nextPrompt = next;
+    window.renderInputStack();
+  }
+};
+
+window.startQueueDrag = function(event, idx) {
+  state.queueDragIndex = idx;
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  var row = event.currentTarget;
+  if (row) row.classList.add('dragging');
+};
+
+window.overQueueDrag = function(event) {
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+};
+
+window.dropQueueDrag = function(event, idx) {
+  event.preventDefault();
+  var from = state.queueDragIndex;
+  if (!state.nextQueue || from < 0 || from === idx || from >= state.nextQueue.length) return;
+  var item = state.nextQueue.splice(from, 1)[0];
+  state.nextQueue.splice(idx, 0, item);
+  state.queueDragIndex = -1;
+  state.nextPrompt = state.nextQueue[0] || '';
+  window.renderInputStack();
+};
+
+window.endQueueDrag = function(event) {
+  state.queueDragIndex = -1;
+  if (event.currentTarget) event.currentTarget.classList.remove('dragging');
 };
 
 window.sendMessage = async function(modeOverride, queuedText, opts) {
@@ -5068,14 +5599,34 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
 
   var lockedConversationId = activeConversationId();
   var conversationRunning = !!(state.runningConversations && state.runningConversations[lockedConversationId]);
+  markConversationTracked(lockedConversationId, state.conversationTrackMs || 300000);
 
-  if ((effectiveInputMode === 'next' || conversationRunning) && !opts.fromQueue) {
+  if (conversationRunning && effectiveInputMode === 'guide' && !opts.fromQueue) {
+    els.prompt.value = '';
+    if (api.setInputMode) await api.setInputMode('guide').catch(function(){});
+    addMsg('user', text, 'guide', state.model);
+    api.sendMessage(text, lockedConversationId).then(function(r) {
+      if (r && r.queued) {
+        state.backendQueue = r.queued;
+        if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
+      }
+      if (r && r.conversations) {
+        applyBackendConversations(r.conversations || [], r.activeConversationId || r.conversationId || lockedConversationId);
+        renderConversations();
+      }
+    }).catch(function(e) {
+      if (isActiveConversationId(lockedConversationId)) addMsg('assistant', '[Error] ' + (e.message || String(e)), 'error', state.model);
+    });
+    return;
+  }
+
+  if (effectiveInputMode === 'next' && !opts.fromQueue) {
     if (!state.nextQueue) state.nextQueue = [];
     state.nextQueue.push(text);
     els.prompt.value = '';
     state.nextPrompt = text;
-    window.renderNextQueue();
-    addMsg('user', '[' + (effectiveInputMode === 'next' ? 'Next' : 'Guide') + ' queued] ' + text, effectiveInputMode, state.model);
+    window.renderInputStack();
+    addMsg('user', '[Next queued] ' + text, effectiveInputMode, state.model);
     if (!state._sendInFlight) addMsg('assistant', '[Next] Queued for the next Build turn.', 'next', state.model);
     else addMsg('system', '[Queue] Current turn is locked; prompt will run after it completes.', 'system', state.model);
     return;
@@ -5096,23 +5647,27 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   if (api.setModel && state.model) await api.setModel(state.model).catch(function(){});
   if (api.setInputMode) await api.setInputMode(effectiveInputMode).catch(function(){});
   addMsg('user', text, opts.fromQueue ? 'next-build' : state.mode, state.model);
-  var workflowMsg = addMsg('workflow running', 'Agent is working...', state.mode, state.model);
+  var responseMsg = null;
   try {
     var r = await api.sendMessage(text, lockedConversationId);
     var stillActive = isActiveConversationId(lockedConversationId);
     if (stillActive) {
+      responseMsg = state._activeWorkflowMsg;
       if (r && r.error) {
-        updateMsg(workflowMsg, '[Error] ' + r.error, 'error', state.mode, state.model);
+        if (!responseMsg) responseMsg = addMsg('assistant', '', state.mode, state.model);
+        updateMsg(responseMsg, '[Error] ' + r.error, 'error', state.mode, state.model);
       } else if (r && r.tokens) {
         var fullText = r.tokens.map(function(t) { return t.text || ''; }).join('');
-        updateMsg(workflowMsg, fullText || '(empty response)', 'assistant', r.mode || state.mode, r.model || state.model);
+        if (!responseMsg) responseMsg = findCompletedWorkflowMsg(lockedConversationId, fullText);
+        if (fullText && !responseMsg) responseMsg = addMsg('assistant', '', r.mode || state.mode, r.model || state.model);
+        if (responseMsg) updateMsg(responseMsg, fullText || '(empty response)', 'assistant', r.mode || state.mode, r.model || state.model);
       } else if (r && r.response) {
-        updateMsg(workflowMsg, r.response, 'assistant', state.mode, state.model);
+        if (!responseMsg) responseMsg = addMsg('assistant', '', state.mode, state.model);
+        updateMsg(responseMsg, r.response, 'assistant', state.mode, state.model);
       } else {
-        updateMsg(workflowMsg, '(empty response)', 'assistant', state.mode, state.model);
+        if (!responseMsg) responseMsg = addMsg('assistant', '', state.mode, state.model);
+        updateMsg(responseMsg, '(empty response)', 'assistant', state.mode, state.model);
       }
-    } else if (workflowMsg && workflowMsg.parentNode) {
-      workflowMsg.parentNode.removeChild(workflowMsg);
     }
     if (r && r.conversations) {
       applyBackendConversations(r.conversations || [], r.activeConversationId || r.conversationId || lockedConversationId);
@@ -5131,7 +5686,8 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       }
     }
   } catch(e) {
-    updateMsg(workflowMsg, '[Error] ' + e.message, 'error', state.mode, state.model);
+    responseMsg = state._activeWorkflowMsg || addMsg('assistant', '', state.mode, state.model);
+    updateMsg(responseMsg, '[Error] ' + e.message, 'error', state.mode, state.model);
   }
   if (api.getState) {
     api.getState().then(function(s) {
@@ -5150,7 +5706,10 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         renderPendingOptionsInChat(state.pendingOptions);
       }
       if (s && s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
-      if (s && s.queued) state.backendQueue = s.queued;
+      if (s && s.queued) {
+        state.backendQueue = s.queued;
+        if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
+      }
       if (s && s.conversations) {
         applyBackendConversations(s.conversations || [], s.conversationId || activeConversationId() || lockedConversationId);
         renderConversations();
@@ -5158,6 +5717,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       if (state.rightTab === 'status') window.renderRightStatusPanel();
       if (state.rightTab === 'subagent') window.renderSubagentList();
       if (state.rightTab === 'plan') window.renderConversationPlan();
+      if (window.renderInputStack) window.renderInputStack();
     }).catch(function(){});
   }
   if (opts.forceBuild && previousMode !== state.mode) {
@@ -5168,7 +5728,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   delete state.runningConversations[lockedConversationId];
   state._sendInFlight = Object.keys(state.runningConversations).length > 0;
   setWorking(state._sendInFlight);
-  window.renderNextQueue();
+  window.renderInputStack();
   window.drainNextQueue();
 };
 
@@ -5177,7 +5737,7 @@ window.drainNextQueue = function() {
   if (!state.nextQueue || !state.nextQueue.length) return;
   var next = state.nextQueue.shift();
   state.nextPrompt = state.nextQueue[0] || '';
-  window.renderNextQueue();
+  window.renderInputStack();
   setTimeout(function() {
     window.sendMessage('guide', next, { fromQueue: true, forceBuild: true });
   }, 80);
@@ -5508,10 +6068,12 @@ window.refreshConversationPlan = function() {
 window.persistConversationPlan = function() {
   state.conversationPlan = normalizeConversationPlan(state.conversationPlan);
   window.renderConversationPlan();
+  if (window.renderInputStack) window.renderInputStack();
   if (!api.updateConversationPlan) return Promise.resolve(state.conversationPlan);
   return api.updateConversationPlan(state.conversationPlan).then(function(plan) {
     state.conversationPlan = normalizeConversationPlan(plan);
     window.renderConversationPlan();
+    if (window.renderInputStack) window.renderInputStack();
     return state.conversationPlan;
   }).catch(function(err) {
     addMsg('system', '[Plan] ' + t('workspace.saveFailed') + ': ' + (err.message || String(err)), 'system', state.model);
@@ -5550,6 +6112,7 @@ window.renderConversationPlan = function() {
     html += '<button class="sec-btn" style="width:100%;margin-top:2px;" onclick="window.clearCompletedConversationPlanItems()">' + esc(t('plan.clearDone')) + '</button>';
   }
   target.innerHTML = html;
+  if (window.renderInputStack) window.renderInputStack();
 };
 
 window.addConversationPlanItem = function() {
@@ -5966,10 +6529,12 @@ window.editGoal = function() {
     if (state.goalText && api.updateGoal) {
       api.updateGoal(state.goalText).then(function(goal) {
         if (goal && goal.objective) state.goalText = goal.objective;
+        window.renderInputStack();
       }).catch(function(err) {
         addMsg('assistant', '[Goal error] ' + (err && err.message ? err.message : String(err)), 'error', '');
       });
     }
+    window.renderInputStack();
   } else {
     textEl.setAttribute('contenteditable', 'true');
     textEl.classList.add('editing');
@@ -5984,8 +6549,8 @@ window.toggleGoalPause = function() {
   if (!api.toggleGoalPause) return;
   api.toggleGoalPause().then(function(paused) {
     state.goalPaused = !!paused;
-    btn.classList.toggle('paused', state.goalPaused);
-    btn.textContent = state.goalPaused ? t('goal.resume') : t('goal.pause');
+    if (btn) btn.classList.toggle('warn', state.goalPaused);
+    window.renderInputStack();
   }).catch(function(err) {
     addMsg('assistant', '[Goal error] ' + (err && err.message ? err.message : String(err)), 'error', '');
   });
@@ -5994,12 +6559,16 @@ window.toggleGoalPause = function() {
 // === Todo ===
 window.toggleTodoCollapse = function() {
   state.todoCollapsed = !state.todoCollapsed;
-  els['todo-header'].classList.toggle('collapsed', state.todoCollapsed);
+  window.renderInputStack();
 };
 
 window.checkTodo = function(idx) {
-  state.todoItems[idx].done = !state.todoItems[idx].done;
-  renderTodo();
+  state.conversationPlan = normalizeConversationPlan(state.conversationPlan);
+  var item = state.conversationPlan.items[idx];
+  if (!item) return;
+  item.status = item.status === 'done' ? 'pending' : 'done';
+  item.updatedAt = new Date().toISOString();
+  window.persistConversationPlan();
 };
 
 window.addTodoPrompt = function() {
@@ -6008,26 +6577,81 @@ window.addTodoPrompt = function() {
 };
 
 window.addTodo = function(text) {
-  state.todoItems.push({text: text, done: false});
-  renderTodo();
-  if (!state.todoCollapsed) {
-    els['todo-wrap'].classList.add('visible');
-  }
+  text = String(text || '').trim();
+  if (!text) return;
+  var now = new Date().toISOString();
+  state.conversationPlan = normalizeConversationPlan(state.conversationPlan);
+  state.conversationPlan.items.push({ id: 'plan-' + Date.now(), text: text, status: 'pending', createdAt: now, updatedAt: now });
+  state.todoCollapsed = false;
+  window.persistConversationPlan();
 };
 
 function renderTodo() {
-  var list = els['todo-list'];
-  list.innerHTML = '';
-  for (var i = 0; i < state.todoItems.length; i++) {
-    var item = state.todoItems[i];
-    var div = document.createElement('div');
-    div.className = 'todo-item' + (item.done ? ' done' : '');
-    div.innerHTML = '<span class="todo-check' + (item.done ? ' done' : '') + '" onclick="window.checkTodo(' + i + ')">' + (item.done ? 'x' : '') + '</span>' +
-      '<span class="todo-text">' + esc(item.text) + '</span>';
-    list.appendChild(div);
+  var wrap = document.getElementById('todo-wrap');
+  var list = document.getElementById('todo-list');
+  var label = document.getElementById('todo-header-label');
+  if (!wrap || !list || !label) return;
+  var plan = normalizeConversationPlan(state.conversationPlan);
+  var items = plan.items || [];
+  wrap.style.display = items.length ? '' : 'none';
+  wrap.classList.toggle('collapsed', !!state.todoCollapsed);
+  label.textContent = t('goal.list') + (items.length ? ' ' + items.length : '');
+  var toggle = wrap.querySelector('#todo-header .stack-icon-btn');
+  if (toggle) {
+    var title = state.todoCollapsed ? t('queue.expand') : t('queue.collapse');
+    toggle.title = title;
+    toggle.innerHTML = iconSvg(state.todoCollapsed ? 'chevron-up' : 'chevron-down', title, 'tiny');
   }
-  els['todo-header-label'].textContent = t('todo.tasks') + ' (' + state.todoItems.length + ')';
+  if (!items.length || state.todoCollapsed) {
+    list.innerHTML = '';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    var done = item.status === 'done';
+    html += '<div class="todo-item ' + (done ? 'done' : '') + '" onclick="window.checkTodo(' + i + ')" title="' + escAttr(item.text) + '">' +
+      '<span class="todo-check">' + (done ? iconSvg('check', 'done', 'tiny') : '') + '</span>' +
+      '<span class="todo-text">' + esc(item.text) + '</span>' +
+    '</div>';
+  }
+  list.innerHTML = html;
 }
+
+function renderGoalBar() {
+  var bar = document.getElementById('goal-bar');
+  var text = document.getElementById('goal-text');
+  var pause = document.getElementById('goal-pause-btn');
+  if (!bar || !text) return;
+  var visible = state.mode === 'goal' || !!state.goalText;
+  bar.style.display = visible ? '' : 'none';
+  if (text.getAttribute('contenteditable') !== 'true') {
+    text.textContent = (state.goalText || t('goal.set')).split(/\r?\n/)[0] || t('goal.set');
+  }
+  if (pause) {
+    pause.classList.toggle('warn', !!state.goalPaused);
+    pause.title = state.goalPaused ? t('goal.resume') : t('goal.pause');
+    pause.innerHTML = iconSvg(state.goalPaused ? 'play' : 'pause', pause.title, 'tiny');
+  }
+}
+
+function renderScrollBottomAffordance() {
+  var btn = document.getElementById('scroll-bottom-btn');
+  var area = els['chat-area'];
+  if (!btn || !area) return;
+  var atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 200;
+  var plan = normalizeConversationPlan(state.conversationPlan);
+  var listExpanded = plan.items.length && !state.todoCollapsed;
+  btn.classList.toggle('visible', !atBottom && !listExpanded);
+}
+window.renderScrollBottomAffordance = renderScrollBottomAffordance;
+
+window.renderInputStack = function() {
+  renderScrollBottomAffordance();
+  renderTodo();
+  window.renderQueuePanel();
+  renderGoalBar();
+};
 
 // === Mode Selectors ===
 window.setInputMode = function(mode) {
@@ -6780,7 +7404,13 @@ renderArchiveSettings = function() {
 
 window.archiveCurrent = function() {
   if (!api.archive) return;
-  api.archive().then(function(filePath) {
+  var currentId = activeConversationId();
+  if (currentId && state.runningConversations && state.runningConversations[currentId]) {
+    delete state.runningConversations[currentId];
+    state._sendInFlight = Object.keys(state.runningConversations).length > 0;
+    setWorking(state._sendInFlight);
+  }
+  api.archive(currentId).then(function(filePath) {
     addMsg('assistant', '[Archive] ' + t('archive.saved') + ': ' + filePath, 'archive', '');
     return api.listArchives ? api.listArchives() : [];
   }).then(function(items) {
@@ -7304,6 +7934,7 @@ window.runFlowWork = async function(workIdx) {
       if (r.conversationPlan) {
         state.conversationPlan = normalizeConversationPlan(r.conversationPlan);
         if (state.rightTab === 'plan') window.renderConversationPlan();
+        if (window.renderInputStack) window.renderInputStack();
       }
     }
     if (r && r.ok) {
@@ -7672,18 +8303,27 @@ function setActiveWorkspaceConversation(idx) {
   state.conversations = convs;
 }
 
+function holdForegroundConversation(id, ms) {
+  state.foregroundConversationHoldId = String(id || '');
+  state.foregroundConversationHoldUntil = Date.now() + (ms || 4500);
+}
+
 function applyBackendConversations(items, activeId) {
   if (!state.currentWorkspace || !items || !items.length) return;
   var key = currentWorkspaceKey();
   var convs = [];
+  var requestedActiveId = String(activeId || '');
+  var holdId = String(state.foregroundConversationHoldId || '');
+  var useHold = !!(holdId && Date.now() < Number(state.foregroundConversationHoldUntil || 0));
   for (var i = 0; i < items.length; i++) {
     var item = items[i] || {};
     var id = item.id || item.key || ('conv-' + i);
+    if (useHold && id === holdId) requestedActiveId = holdId;
     convs.push({
       id: id,
       summary: item.title || (id === 'default' ? t('workspace.defaultConversation') : id),
       archived: false,
-      active: id === activeId,
+      active: id === requestedActiveId,
       messageCount: item.messageCount || 0,
       updatedAt: item.updatedAt || ''
     });
@@ -7852,7 +8492,12 @@ window.doNewConversationFromPage = function() {
 
 window.switchConversation = function(idx) {
   if (!window.requireWorkspace('switchConversation')) return;
+  var previousId = activeConversationId();
+  if (previousId) markConversationTracked(previousId, state.conversationTrackMs || 300000);
   setActiveWorkspaceConversation(idx);
+  var activeId = activeConversationId();
+  holdForegroundConversation(activeId, 4500);
+  markConversationTracked(activeId, state.conversationTrackMs || 300000);
   state.conversationPlan = { items: [] };
   renderConversations();
   els['chat-area'].innerHTML = '';
@@ -7866,23 +8511,38 @@ window.archiveConv = function(idx) {
   if (!window.requireWorkspace('archiveConversation')) return;
   var convs = currentWorkspaceConversations();
   var target = convs[idx];
-  if (target && state.runningConversations && state.runningConversations[target.id]) {
-    addMsg('system', '[System] ' + t('conversation.locked'), 'system', '');
-    return;
-  }
-  if (convs[idx]) {
-    convs[idx].archived = true;
-    var name = convs[idx].summary;
+  if (target) {
+    var targetId = target.id || 'default';
+    target.archived = true;
+    var name = target.summary;
     state.archives.push({name: name, date: new Date().toLocaleDateString(uiLocale())});
     convs.splice(idx, 1);
     if (convs.length === 0) {
       convs.push({id: 'default', summary: t('workspace.defaultConversation'), archived: false, active: true});
     }
     setActiveWorkspaceConversation(Math.min(idx, convs.length - 1));
+    delete state.runningConversations[targetId];
+    state._sendInFlight = Object.keys(state.runningConversations).length > 0;
+    setWorking(state._sendInFlight);
     renderConversations();
     els['chat-area'].innerHTML = '';
-    syncBackendConversation().then(function() {
+    var archivePromise = api.archive ? api.archive(targetId) : Promise.resolve(null);
+    archivePromise.then(function(filePath) {
+      if (filePath) addMsg('assistant', '[Archive] ' + t('archive.saved') + ': ' + filePath, 'archive', '');
+      return syncBackendConversation();
+    }).then(function() {
       renderConversations();
+      if (api.listArchives) return api.listArchives();
+      return [];
+    }).then(function(items) {
+      if (items && items.length) {
+        state.archives = items.map(function(a) {
+          return { name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '' };
+        });
+        window.renderRightArchives();
+      }
+    }).catch(function(err) {
+      addMsg('assistant', '[Archive] ' + t('workspace.saveFailed') + ': ' + (err.message || String(err)), 'error', '');
     });
   }
 };
@@ -9165,20 +9825,32 @@ function stopMarqueeJS() {
         window.sendMessage();
       }
     });
+    els.prompt.addEventListener('paste', function(e) {
+      var paths = clipboardFilePaths(e.clipboardData);
+      if (!paths.length) return;
+      e.preventDefault();
+      promptInsertText(paths.join('\n'));
+    });
+    els.prompt.addEventListener('dragover', function(e) {
+      var types = e.dataTransfer && e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
+      if (types.indexOf('Files') >= 0) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    });
+    els.prompt.addEventListener('drop', function(e) {
+      var paths = clipboardFilePaths(e.dataTransfer);
+      if (!paths.length) return;
+      e.preventDefault();
+      promptInsertText(paths.join('\n'));
+    });
   }
 
   if (els['mode-select']) {
     els['mode-select'].addEventListener('change', async function() {
       state.mode = this.value;
-      // Goal mode: show goal bar
-      var goalBar = els['goal-bar'];
-      if (state.mode === 'goal') {
-        if (goalBar) goalBar.classList.add('visible');
-        state.goalVisible = true;
-      } else {
-        if (goalBar) goalBar.classList.remove('visible');
-        state.goalVisible = false;
-      }
+      state.goalVisible = state.mode === 'goal';
+      if (window.renderInputStack) window.renderInputStack();
       // Flow mode: show flow selector
       var flowSel = document.getElementById('flow-select');
       if (flowSel) {
@@ -9206,11 +9878,7 @@ function stopMarqueeJS() {
   // Chat area scroll detection
   if (els['chat-area']) {
     els['chat-area'].addEventListener('scroll', function() {
-      var sb = els['scroll-bottom-btn'];
-      if (!sb) return;
-      var threshold = 200;
-      var atBottom = this.scrollHeight - this.scrollTop - this.clientHeight < threshold;
-      sb.classList.toggle('visible', !atBottom);
+      if (window.renderScrollBottomAffordance) window.renderScrollBottomAffordance();
     });
   }
 

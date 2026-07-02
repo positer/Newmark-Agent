@@ -25,6 +25,7 @@ export interface AgentWorkEvent {
   mode: string;
   model: string;
   timestamp: string;
+  toolCallId?: string;
   toolName?: string;
   toolArgs?: string;
   queue?: { steering: string[]; followUp: string[] };

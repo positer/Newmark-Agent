@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   sendMessage: (message: string, conversationId?: string) => ipcRenderer.invoke('agent:send', message, conversationId),
@@ -16,12 +16,20 @@ contextBridge.exposeInMainWorld('api', {
   browserControl: (request: Record<string, unknown>) => ipcRenderer.invoke('browser:control', request),
   runFlow: (name: string, input?: string, start?: number) => ipcRenderer.invoke('flow:run', name, input, start),
   saveConfig: (cfg: string | Record<string, unknown>) => ipcRenderer.invoke('agent:saveConfig', cfg),
-  archive: () => ipcRenderer.invoke('agent:archive'),
+  abortConversation: (conversationId?: string) => ipcRenderer.invoke('agent:abortConversation', conversationId),
+  archive: (conversationId?: string) => ipcRenderer.invoke('agent:archive', conversationId),
   listArchives: () => ipcRenderer.invoke('agent:listArchives'),
   deleteArchive: (name: string) => ipcRenderer.invoke('agent:deleteArchive', name),
   readArchive: (name: string) => ipcRenderer.invoke('agent:readArchive', name),
   readFile: (path: string) => ipcRenderer.invoke('agent:readFile', path),
   saveFile: (path: string, content: string) => ipcRenderer.invoke('agent:saveFile', path, content),
+  filePathForFile: (file: File) => {
+    try {
+      return webUtils && file ? webUtils.getPathForFile(file) : '';
+    } catch {
+      return '';
+    }
+  },
   listFiles: (dir: string) => ipcRenderer.invoke('agent:listFiles', dir),
   getFileTree: (dir?: string) => ipcRenderer.invoke('agent:getFileTree', dir),
   selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),

@@ -7,6 +7,7 @@ const { spawn, spawnSync } = require('child_process');
 const repoRoot = path.resolve(__dirname, '..', '..');
 const appRoot = path.resolve(__dirname, '..');
 const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
+const appVersion = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8')).version;
 const keepRoot = process.env.NEWMARK_KEEP_SMOKE === '1';
 
 function log(message) {
@@ -103,7 +104,10 @@ function writeConfig(root, port) {
         api_key: 'mock-key',
         protocol: 'openai',
         enabled: true,
-        models: ['release-cli-mock'],
+        models: [
+          'release-cli-mock',
+          { name: 'gpt-5.5', display: 'GPT 5.5', description: 'Stale release validation metadata: text-only', vision: false },
+        ],
       }],
       default_model: 'release-cli-mock',
       default_intelligence: 'medium',
@@ -233,6 +237,18 @@ function startMockServer() {
     if (!mock.requests.some(r => r.url === '/v1/chat/completions' && r.body.includes('"model":"release-cli-mock"') && r.body.includes('"content":"Hi"'))) {
       fail('validate-models did not call chat completions for the selected release model');
     }
+    const visionValidation = await runPowerShellCli(['validate-models', '--selected', 'ReleaseCliMock/gpt-5.5', '--root', root], root);
+    const parsedVisionValidation = JSON.parse(visionValidation.stdout);
+    const releaseVisionValidation = parsedVisionValidation.find(r => r.name === 'ReleaseCliMock/gpt-5.5');
+    if (!releaseVisionValidation || releaseVisionValidation.status !== 'available' || releaseVisionValidation.vision_input !== true) {
+      fail(`validate-models did not infer GPT-5.5 vision input in packaged CLI: ${visionValidation.stdout}`);
+    }
+    const validatedConfig = JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
+    const validatedProviders = validatedConfig.models?.providers?.value || validatedConfig.models?.providers || [];
+    const validatedGpt55 = validatedProviders.find(p => p.name === 'ReleaseCliMock')?.models?.find(m => m.name === 'gpt-5.5');
+    if (!validatedGpt55 || validatedGpt55.vision !== true || validatedGpt55.evaluation?.vision_input !== true || !String(validatedGpt55.description || '').includes('vision-input')) {
+      fail(`validate-models did not persist inferred GPT-5.5 vision metadata: ${JSON.stringify(validatedGpt55)}`);
+    }
     log('validate-models ok');
 
     const market = await runPowerShellCli(['skills-market', '--query', 'frontend', '--root', root], root);
@@ -294,13 +310,13 @@ function startMockServer() {
     fs.writeFileSync(path.join(updateTarget, 'Work', 'state.txt'), 'target workspace state must survive', 'utf8');
     const installVersion = await runPowerShellCli(['install-update', '--version', '--root', root], root);
     const parsedInstallVersion = JSON.parse(installVersion.stdout);
-    if (parsedInstallVersion.ok !== true || parsedInstallVersion.version !== '1.1.0') fail(`install-update version failed: ${installVersion.stdout}`);
-    const installDryRun = await runPowerShellCli(['install-update', '--source', updateSource, '--target', updateTarget, '--expected-version', '1.1.0', '--dry-run', '--root', root], root);
+    if (parsedInstallVersion.ok !== true || parsedInstallVersion.version !== appVersion) fail(`install-update version failed: ${installVersion.stdout}`);
+    const installDryRun = await runPowerShellCli(['install-update', '--source', updateSource, '--target', updateTarget, '--expected-version', appVersion, '--dry-run', '--root', root], root);
     const parsedInstallDryRun = JSON.parse(installDryRun.stdout);
     if (parsedInstallDryRun.ok !== true || parsedInstallDryRun.dryRun !== true || !parsedInstallDryRun.preserved.includes('config.json')) {
       fail(`install-update dry-run did not report preserved local data: ${installDryRun.stdout}`);
     }
-    const installRun = await runPowerShellCli(['install-update', '--source', updateSource, '--target', updateTarget, '--expected-version', '1.1.0', '--root', root], root);
+    const installRun = await runPowerShellCli(['install-update', '--source', updateSource, '--target', updateTarget, '--expected-version', appVersion, '--root', root], root);
     const parsedInstallRun = JSON.parse(installRun.stdout);
     if (parsedInstallRun.ok !== true || !parsedInstallRun.copied.includes('Newmark Agent.exe')) fail(`install-update run failed: ${installRun.stdout}`);
     if (fs.readFileSync(path.join(updateTarget, 'config.json'), 'utf8') !== 'target config must survive') fail('install-update overwrote config.json');

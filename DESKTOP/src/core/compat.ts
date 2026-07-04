@@ -163,9 +163,9 @@ function nestedRecord(value: unknown): Record<string, unknown> {
 }
 
 function inferSideEffects(name: string): ToolSideEffect {
-  if (['pwd', 'read', 'glob', 'grep', 'web_search', 'web_fetch', 'browser_snapshot', 'git_status', 'automation_list', 'flow_list', 'subagent_result'].includes(name)) return 'read';
+  if (['pwd', 'read', 'glob', 'grep', 'web_search', 'web_fetch', 'browser_snapshot', 'git_status', 'file_audit', 'automation_list', 'flow_list', 'subagent_result'].includes(name)) return 'read';
   if (['write', 'edit', 'flow_save', 'automation_create', 'automation_update', 'automation_toggle', 'automation_delete', 'subagent_close'].includes(name)) return 'write';
-  if (['git_push', 'git_clone'].includes(name)) return 'destructive';
+  if (['git_push', 'git_clone', 'git_branch', 'gh_fork', 'gh_pr_create'].includes(name)) return 'destructive';
   if (name.startsWith('browser_') || name.startsWith('gh_')) return 'network';
   return 'none';
 }

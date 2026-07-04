@@ -2,6 +2,7 @@
 import { Agent } from './agent';
 import { ModelConfig, ProviderProtocol } from './config';
 import { StreamToken } from './types';
+import * as fs from 'fs';
 
 type NativeAgentConstructor = new (options?: Record<string, unknown>) => NativeAgentInstance;
 
@@ -37,6 +38,13 @@ interface KernelTextContent {
   text: string;
 }
 
+interface KernelImageContent {
+  type: 'image';
+  image?: string;
+  imagePath?: string;
+  mimeType?: string;
+}
+
 interface KernelToolCall {
   type: 'toolCall';
   id: string;
@@ -44,12 +52,12 @@ interface KernelToolCall {
   arguments: Record<string, unknown>;
 }
 
-type KernelContent = KernelTextContent | KernelToolCall | { type: string; [key: string]: unknown };
+type KernelContent = KernelTextContent | KernelImageContent | KernelToolCall | { type: string; [key: string]: unknown };
 
 type KernelMessage =
   | { role: 'user'; content: string | KernelTextContent[]; timestamp: number }
   | { role: 'assistant'; content: KernelContent[]; api: string; provider: string; model: string; usage: KernelUsage; stopReason: string; errorMessage?: string; timestamp: number }
-  | { role: 'toolResult'; toolCallId: string; toolName: string; content: KernelTextContent[]; details?: unknown; isError: boolean; timestamp: number };
+  | { role: 'toolResult'; toolCallId: string; toolName: string; content: Array<KernelTextContent | KernelImageContent>; details?: unknown; isError: boolean; timestamp: number };
 
 interface KernelUsage {
   input: number;
@@ -66,7 +74,7 @@ interface KernelTool {
   description: string;
   parameters: Record<string, unknown>;
   prepareArguments?: (args: unknown) => Record<string, unknown>;
-  execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ content: KernelTextContent[]; details: unknown; terminate?: boolean }>;
+  execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ content: Array<KernelTextContent | KernelImageContent>; details: unknown; terminate?: boolean }>;
   executionMode?: 'sequential' | 'parallel';
 }
 
@@ -276,8 +284,10 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
 }
 
 async function transformContext(agent: Agent, provider: LLMProvider, messages: KernelMessage[]): Promise<KernelMessage[]> {
-  const newmarkMessages = fromKernelMessages(messages);
+  const newmarkMessages = fromKernelMessages(messages, false);
+  const beforeCompression = JSON.stringify(newmarkMessages);
   await agent.maybeCompress(newmarkMessages, provider);
+  if (JSON.stringify(newmarkMessages) === beforeCompression) return messages;
   return toKernelMessagesFromHistory(newmarkMessages, agent);
 }
 
@@ -345,6 +355,7 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
         toolCallId: event.toolCallId,
         toolName: event.toolName,
       });
+      agent.appendWorkflowMessage(`Tool ${event.toolName} result:\n${display}`, event.toolName);
       break;
     }
     case 'message_end':
@@ -387,6 +398,7 @@ function toKernelModel(agent: Agent): KernelModel {
 
 function apiForProtocol(protocol: ProviderProtocol, openAIMode: string): string {
   if (protocol === 'anthropic') return 'anthropic-messages';
+  if (protocol === 'github_models') return 'github-models-inference';
   if (openAIMode === 'responses') return 'openai-responses';
   return 'openai-completions';
 }
@@ -404,13 +416,42 @@ function toKernelTools(agent: Agent): KernelTool[] {
       execute: async (_toolCallId: string, params: Record<string, unknown>) => {
         const name = String(fn.name || '');
         const args = JSON.stringify(params || {});
-        const text = await executeNewmarkTool(agent, name, args);
-        const content: KernelTextContent[] = [{ type: 'text', text }];
+        const rawText = await executeNewmarkTool(agent, name, args);
+        const visionImagePath = computerUseVisionImagePath(agent, name, rawText);
+        const text = sanitizeComputerUseToolText(name, rawText);
+        const content: Array<KernelTextContent | KernelImageContent> = [{ type: 'text', text }];
+        if (visionImagePath) content.push({ type: 'image', imagePath: visionImagePath, mimeType: 'image/png' });
         const terminate = shouldTerminateAfterToolResult(name);
-        return { content, details: { tool: name, ok: !text.startsWith('[Error]'), terminate }, terminate };
+        return { content, details: { tool: name, ok: !text.startsWith('[Error]'), terminate, visionImagePath: visionImagePath || undefined }, terminate };
       },
     };
   }).filter((tool: KernelTool) => !!tool.name);
+}
+
+function sanitizeComputerUseToolText(name: string, text: string): string {
+  if (name !== 'computer_use') return text;
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    delete parsed.vision_image_path;
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return text;
+  }
+}
+
+function computerUseVisionImagePath(agent: Agent, name: string, text: string): string {
+  if (name !== 'computer_use') return '';
+  const model = agent.config.findModel(agent.model);
+  if (!model?.vision) return '';
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    if (parsed.action !== 'observe') return '';
+    const screenshotPath = String(parsed.vision_image_path || '');
+    if (!screenshotPath) return '';
+    return screenshotPath;
+  } catch {
+    return '';
+  }
 }
 
 async function executeNewmarkTool(agent: Agent, name: string, args: string): Promise<string> {
@@ -428,14 +469,19 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string): Pro
     return '[Options sent]';
   }
   if (name === 'skill_download') {
-    const result = await agent.tools.execute(name, args, wsDir, { mode: agent.mode, workspacePath: wsDir });
+    const result = await agent.tools.execute(name, args, wsDir, { mode: agent.mode, workspacePath: wsDir, conversationId: agent.activeConversationId || 'default' });
     await agent.handleSkillDownload(args);
     return result;
   }
   if (name === 'flow_run') return agent.handleFlowRun(args);
   if (name.startsWith('memory_lab_')) return agent.handleMemoryLabTool(name, args);
   if (name.startsWith('automation_')) return agent.handleAutomationTool(name, args);
-  const result = await agent.tools.execute(name, args, wsDir, { mode: agent.mode, workspacePath: wsDir });
+  const result = await agent.tools.execute(name, args, wsDir, {
+    mode: agent.mode,
+    workspacePath: wsDir,
+    conversationId: agent.activeConversationId || 'default',
+    allowEphemeralVisionImage: name === 'computer_use' && !!agent.config.findModel(agent.model)?.vision,
+  });
   trackFileDiff(agent, name, args);
   return result;
 }
@@ -472,11 +518,19 @@ function toKernelMessagesFromHistory(history: Array<Record<string, unknown>>, ag
       return [assistantMessage(toKernelModel(agent), content, content.some(c => c.type === 'toolCall') ? 'toolUse' : 'stop') as KernelMessage];
     }
     if (role === 'tool') {
+      const existingParts = Array.isArray(msg.content) ? msg.content as Array<Record<string, unknown>> : [];
+      const existingText = existingParts
+        .filter(part => part?.type === 'text')
+        .map(part => String(part.text || ''))
+        .join('');
+      const content: Array<KernelTextContent | KernelImageContent> = [{ type: 'text', text: existingText || String(msg.content || '') }];
+      const imagePath = typeof msg.vision_image_path === 'string' ? String(msg.vision_image_path) : '';
+      if (imagePath) content.push({ type: 'image', imagePath, mimeType: 'image/png' });
       return [{
         role: 'toolResult',
         toolCallId: String(msg.tool_call_id || ''),
         toolName: String(msg.name || ''),
-        content: [{ type: 'text', text: String(msg.content || '') }],
+        content,
         isError: false,
         timestamp: Date.now(),
       } as KernelMessage];
@@ -485,11 +539,11 @@ function toKernelMessagesFromHistory(history: Array<Record<string, unknown>>, ag
   });
 }
 
-function fromKernelMessages(messages: KernelMessage[]): Array<Record<string, unknown>> {
-  return messages.flatMap(message => [toHistoryMessage(message)]);
+function fromKernelMessages(messages: KernelMessage[], includeEphemeralImages = true): Array<Record<string, unknown>> {
+  return messages.flatMap(message => [toHistoryMessage(message, includeEphemeralImages)]);
 }
 
-function toHistoryMessage(message: KernelMessage): Record<string, unknown> {
+function toHistoryMessage(message: KernelMessage, includeEphemeralImages = false): Record<string, unknown> {
   if (message.role === 'user') return { role: 'user', content: typeof message.content === 'string' ? message.content : KernelMessageText(message) };
   if (message.role === 'assistant') {
     const text = KernelMessageText(message);
@@ -502,12 +556,35 @@ function toHistoryMessage(message: KernelMessage): Record<string, unknown> {
       ? { role: 'assistant', content: text, tool_calls: toolCalls }
       : { role: 'assistant', content: text };
   }
+  const imagePath = message.content.find((c): c is KernelImageContent => c.type === 'image')?.imagePath || '';
+  const directImage = message.content.find((c): c is KernelImageContent => c.type === 'image')?.image || '';
+  const imagePart = includeEphemeralImages ? imagePathToOpenAIContentPart(imagePath || directImage) : null;
+  const text = KernelMessageText(message);
   return {
     role: 'tool',
     tool_call_id: message.toolCallId,
     name: message.toolName,
-    content: KernelMessageText(message),
+    content: imagePart ? [{ type: 'text', text }, imagePart] : directImage && directImage.startsWith('data:image/') ? [{ type: 'text', text }, { type: 'image_url', image_url: { url: directImage } }] : text,
   };
+}
+
+function imagePathToOpenAIContentPart(imagePath: string): Record<string, unknown> | null {
+  try {
+    const url = imagePathToDataUrl(imagePath);
+    return url ? { type: 'image_url', image_url: { url } } : null;
+  } catch {
+    return null;
+  }
+}
+
+function imagePathToDataUrl(imagePath: string): string {
+  if (!imagePath || !fs.existsSync(imagePath)) return '';
+  try {
+    const data = fs.readFileSync(imagePath).toString('base64');
+    return `data:image/png;base64,${data}`;
+  } finally {
+    try { fs.unlinkSync(imagePath); } catch {}
+  }
 }
 
 function assistantMessage(model: KernelModel, content: KernelContent[], stopReason: string): Extract<KernelMessage, { role: 'assistant' }> {
@@ -542,7 +619,7 @@ function KernelMessageText(message: KernelMessage): string {
   if (message.role === 'assistant') {
     return message.content.filter((c): c is KernelTextContent => c.type === 'text').map(c => c.text || '').join('');
   }
-  return message.content.map(c => c.text || '').join('');
+  return message.content.filter((c): c is KernelTextContent => c.type === 'text').map(c => c.text || '').join('');
 }
 
 function toolResultText(result: unknown): string {

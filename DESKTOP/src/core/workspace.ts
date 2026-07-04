@@ -8,6 +8,14 @@ export interface WorkspaceInfo {
   isInternal: boolean;
   hostBinding: string;
   icon: string;
+  pinned?: boolean;
+  pinnedAt?: string;
+  kind?: 'local' | 'ssh';
+  sshConnectionId?: string;
+  remotePath?: string;
+  remotePcHash?: string;
+  remoteUserHost?: string;
+  status?: string;
 }
 
 interface WorkspaceState {
@@ -55,9 +63,10 @@ export class WorkspaceManager {
   }
 
   private validate(): void {
-    this.external = this.external.filter(
-      w => !w.hostBinding || w.hostBinding === this.pcHash
-    );
+    this.external = this.external.filter(w => {
+      if (w.kind === 'ssh' || w.sshConnectionId) return !!w.remotePcHash;
+      return !w.hostBinding || w.hostBinding === this.pcHash;
+    });
     this.saveExternal();
   }
 
@@ -74,7 +83,7 @@ export class WorkspaceManager {
     } catch { /* empty */ }
     // Scan for directories not in Local.json
     for (const entry of fs.readdirSync(w, { withFileTypes: true })) {
-      if (entry.isDirectory() && !['Local.json', 'External.json'].includes(entry.name)) {
+      if (entry.isDirectory() && !['Local.json', 'External.json', '.ssh'].includes(entry.name)) {
         if (!this.internal.find(wi => wi.name === entry.name)) {
           this.internal.push({
             name: entry.name,
@@ -86,6 +95,22 @@ export class WorkspaceManager {
         }
       }
     }
+    this.sortWorkspaces();
+  }
+
+  private normalizeWorkspaceList(list: WorkspaceInfo[]): WorkspaceInfo[] {
+    return [...list].sort((a, b) => {
+      const ap = a.pinned ? 1 : 0;
+      const bp = b.pinned ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+      if (a.pinned && b.pinned) return String(b.pinnedAt || '').localeCompare(String(a.pinnedAt || ''));
+      return a.name.localeCompare(b.name);
+    });
+  }
+
+  private sortWorkspaces(): void {
+    this.internal = this.normalizeWorkspaceList(this.internal);
+    this.external = this.normalizeWorkspaceList(this.external);
   }
 
   private statePath(): string {
@@ -149,11 +174,13 @@ export class WorkspaceManager {
 
   private saveInternal(): void {
     const p = path.join(this.rootPath, 'Work', 'Local.json');
+    this.sortWorkspaces();
     fs.writeFileSync(p, JSON.stringify(this.internal, null, 2), 'utf-8');
   }
 
   private saveExternal(): void {
     const p = path.join(this.rootPath, 'Work', 'External.json');
+    this.sortWorkspaces();
     fs.writeFileSync(p, JSON.stringify(this.external, null, 2), 'utf-8');
   }
 
@@ -241,6 +268,62 @@ export class WorkspaceManager {
     return ws;
   }
 
+  addSshExternal(input: {
+    name?: string;
+    localPath?: string;
+    sshConnectionId: string;
+    remotePath: string;
+    remotePcHash: string;
+    remoteUserHost?: string;
+  }): WorkspaceInfo | null {
+    if (!input.sshConnectionId || !input.remotePath || !input.remotePcHash) return null;
+    const baseName = (input.name || path.basename(input.remotePath.replace(/[\\/]+$/, '')) || input.sshConnectionId || 'ssh-workspace').trim();
+    const safeName = baseName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '-').replace(/\s+/g, ' ').trim() || 'ssh-workspace';
+    const shadowRoot = input.localPath
+      ? path.resolve(input.localPath)
+      : path.join(this.rootPath, 'Work', '.ssh', `${input.sshConnectionId}-${Buffer.from(input.remotePath).toString('hex').slice(0, 16)}`);
+    fs.mkdirSync(shadowRoot, { recursive: true });
+    const existing = this.external.find(w =>
+      (w.kind === 'ssh' || w.sshConnectionId) &&
+      w.sshConnectionId === input.sshConnectionId &&
+      w.remotePath === input.remotePath
+    );
+    const ws: WorkspaceInfo = {
+      ...(existing || {}),
+      name: existing?.name || safeName,
+      path: shadowRoot,
+      isInternal: false,
+      hostBinding: this.pcHash,
+      icon: safeName.charAt(0).toUpperCase(),
+      kind: 'ssh',
+      sshConnectionId: input.sshConnectionId,
+      remotePath: input.remotePath,
+      remotePcHash: input.remotePcHash,
+      remoteUserHost: input.remoteUserHost || existing?.remoteUserHost || '',
+      status: 'linked',
+    };
+    if (existing) {
+      Object.assign(existing, ws);
+    } else {
+      this.external.push(ws);
+    }
+    this.saveExternal();
+    this.current = existing || ws;
+    this.saveState();
+    return this.current;
+  }
+
+  activateSshExternalByPcHash(sshConnectionId: string, remotePcHash: string): WorkspaceInfo[] {
+    const matched = this.external.filter(w =>
+      (w.kind === 'ssh' || w.sshConnectionId) &&
+      (!sshConnectionId || w.sshConnectionId === sshConnectionId) &&
+      w.remotePcHash === remotePcHash
+    );
+    for (const ws of matched) ws.status = 'linked';
+    if (matched.length) this.saveExternal();
+    return matched;
+  }
+
   remove(name: string): boolean {
     const idxInt = this.internal.findIndex(w => w.name === name);
     if (idxInt >= 0) {
@@ -270,6 +353,19 @@ export class WorkspaceManager {
     this.current = found || null;
     this.saveState();
     return this.current;
+  }
+
+  setPinned(id: string, pinned: boolean): WorkspaceInfo | null {
+    const found = [...this.internal, ...this.external].find(
+      w => w.name === id || w.path === id
+    );
+    if (!found) return null;
+    found.pinned = !!pinned;
+    found.pinnedAt = found.pinned ? new Date().toISOString() : '';
+    if (found.isInternal) this.saveInternal();
+    else this.saveExternal();
+    this.sortWorkspaces();
+    return found;
   }
 
   clear(): void {

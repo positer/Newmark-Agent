@@ -1,6 +1,6 @@
 {
   "name": "newmark-agent",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "main": "dist/main.js",
   "scripts": {
@@ -19,6 +19,10 @@
     "release": "npm run build:clean && node scripts/dist-portable.cjs",
     "dist:portable": "npm run build:clean && node scripts/dist-portable.cjs",
     "release:cli-smoke": "node scripts/release-cli-smoke.cjs",
+    "release:111-cli-smoke": "node scripts/release-111-cli-smoke.cjs",
+    "release:111-ui-smoke": "node scripts/release-111-ui-smoke.cjs",
+    "release:computer-use-vision-smoke": "node scripts/release-computer-use-vision-smoke.cjs",
+    "release:real-ui-copilot-computeruse-smoke": "node scripts/release-real-ui-copilot-computeruse-smoke.cjs",
     "release:cli-ui-conversation-sync-smoke": "node scripts/release-cli-ui-conversation-sync-smoke.cjs",
     "release:ui-smoke": "node scripts/release-ui-smoke.cjs",
     "release:ui-agent-smoke": "node scripts/release-ui-agent-smoke.cjs",
@@ -35,6 +39,7 @@
     "release:ui-skills-smoke": "node scripts/release-ui-skills-smoke.cjs",
     "release:ui-memory-lab-smoke": "node scripts/release-ui-memory-lab-smoke.cjs",
     "release:ui-conversation-queue-plan-smoke": "node scripts/release-ui-conversation-queue-plan-smoke.cjs",
+    "release:ui-fast-conversation-switch-smoke": "node scripts/release-ui-fast-conversation-switch-smoke.cjs",
     "release:ui-startup-recovery-smoke": "node scripts/release-ui-startup-recovery-smoke.cjs",
     "release:ui-goal-continuation-smoke": "node scripts/release-ui-goal-continuation-smoke.cjs",
     "release:ui-workspace-lifecycle-smoke": "node scripts/release-ui-workspace-lifecycle-smoke.cjs",
@@ -57,6 +62,7 @@
     "files": [
       "dist/**/*",
       "assets/**/*",
+      "config.example.json",
       "package.json"
     ],
     "extraFiles": [

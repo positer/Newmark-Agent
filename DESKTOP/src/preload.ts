@@ -13,12 +13,13 @@ contextBridge.exposeInMainWorld('api', {
   getState: () => ipcRenderer.invoke('agent:getState'),
   getConversationPlan: () => ipcRenderer.invoke('agent:getConversationPlan'),
   updateConversationPlan: (plan: Record<string, unknown>) => ipcRenderer.invoke('agent:updateConversationPlan', plan),
+  setConversationPinned: (id: string, pinned: boolean) => ipcRenderer.invoke('agent:setConversationPinned', id, pinned),
   browserControl: (request: Record<string, unknown>) => ipcRenderer.invoke('browser:control', request),
   runFlow: (name: string, input?: string, start?: number) => ipcRenderer.invoke('flow:run', name, input, start),
   saveConfig: (cfg: string | Record<string, unknown>) => ipcRenderer.invoke('agent:saveConfig', cfg),
   abortConversation: (conversationId?: string) => ipcRenderer.invoke('agent:abortConversation', conversationId),
   archive: (conversationId?: string) => ipcRenderer.invoke('agent:archive', conversationId),
-  listArchives: () => ipcRenderer.invoke('agent:listArchives'),
+  listArchives: (scope?: string) => ipcRenderer.invoke('agent:listArchives', scope),
   deleteArchive: (name: string) => ipcRenderer.invoke('agent:deleteArchive', name),
   readArchive: (name: string) => ipcRenderer.invoke('agent:readArchive', name),
   readFile: (path: string) => ipcRenderer.invoke('agent:readFile', path),
@@ -38,10 +39,17 @@ contextBridge.exposeInMainWorld('api', {
   selectWorkspace: (id: string) => ipcRenderer.invoke('agent:selectWorkspace', id),
   createWorkspace: (name?: string) => ipcRenderer.invoke('agent:createWorkspace', name),
   createExternalWorkspace: (name: string, dirPath: string) => ipcRenderer.invoke('agent:createExternalWorkspace', name, dirPath),
+  listSshConnections: () => ipcRenderer.invoke('ssh:listConnections'),
+  saveSshConnection: (input: Record<string, unknown>) => ipcRenderer.invoke('ssh:saveConnection', input),
+  deleteSshConnection: (id: string) => ipcRenderer.invoke('ssh:deleteConnection', id),
+  validateSshConnection: (id: string, remoteRoot?: string) => ipcRenderer.invoke('ssh:validateConnection', id, remoteRoot),
+  createSshWorkspace: (input: Record<string, unknown>) => ipcRenderer.invoke('ssh:createWorkspace', input),
   deleteWorkspace: (name: string) => ipcRenderer.invoke('agent:deleteWorkspace', name),
+  setWorkspacePinned: (id: string, pinned: boolean) => ipcRenderer.invoke('agent:setWorkspacePinned', id, pinned),
   saveSetting: (section: string, key: string, value: unknown) => ipcRenderer.invoke('agent:saveSetting', section, key, value),
   validateModels: (selected?: string[]) => ipcRenderer.invoke('agent:validateModels', selected),
   fuzzyInject: (name: string, url: string, key: string, protocol?: string) => ipcRenderer.invoke('agent:fuzzyInject', name, url, key, protocol),
+  githubCopilotLogin: () => ipcRenderer.invoke('github:copilotLogin'),
   listSkills: () => ipcRenderer.invoke('skills:list'),
   marketSkills: () => ipcRenderer.invoke('skills:market'),
   marketSkillSources: () => ipcRenderer.invoke('skills:marketSources'),
@@ -76,6 +84,8 @@ contextBridge.exposeInMainWorld('api', {
   terminalWrite: (sessionId: string, data: string) => ipcRenderer.invoke('pty:write', sessionId, data),
   terminalKill: (sessionId: string, timeoutMs?: number) => ipcRenderer.invoke('pty:kill', sessionId, timeoutMs),
   terminalGetBuffer: (sessionId: string) => ipcRenderer.invoke('pty:getBuffer', sessionId),
+  terminalTakeoverState: () => ipcRenderer.invoke('agentTerminal:takeoverState'),
+  terminalTakeoverWrite: (sessionId: string, data: string) => ipcRenderer.invoke('agentTerminal:takeoverWrite', sessionId, data),
   wslDetect: () => ipcRenderer.invoke('wsl:detect'),
   onTerminalData: (callback: (event: unknown, sessionId: string, data: string) => void) => {
     ipcRenderer.on('pty:data', callback);
@@ -83,8 +93,14 @@ contextBridge.exposeInMainWorld('api', {
   onTerminalExit: (callback: (event: unknown, sessionId: string, code: number) => void) => {
     ipcRenderer.on('pty:exit', callback);
   },
+  onTerminalTakeover: (callback: (event: unknown, payload: unknown) => void) => {
+    ipcRenderer.on('agentTerminal:takeover', callback);
+  },
   removeTerminalDataListener: () => {
     ipcRenderer.removeAllListeners('pty:data');
+  },
+  removeTerminalTakeoverListener: () => {
+    ipcRenderer.removeAllListeners('agentTerminal:takeover');
   },
   onAutomationUpdated: (callback: () => void) => {
     ipcRenderer.on('automation:updated', callback);

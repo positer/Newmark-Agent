@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { defaultNativeToolEnabled, normalizeNativeToolEnabled } from '../tools/nativeTools';
 
 export interface JsonValue {
   [key: string]: unknown;
@@ -14,7 +15,7 @@ export interface ConfigEntry {
   value: unknown;
 }
 
-export type ProviderProtocol = 'openai' | 'anthropic';
+export type ProviderProtocol = 'openai' | 'anthropic' | 'github_models';
 
 export interface ProviderConfig {
   name: string;
@@ -74,9 +75,16 @@ export class ConfigManager {
     const cp = path.join(this.rootPath, 'config.json');
     if (fs.existsSync(cp)) {
       try {
-        return normalizeConfigShape(JSON.parse(readJsonText(cp)), true);
+        const raw = JSON.parse(readJsonText(cp));
+        const normalized = normalizeConfigShape(raw, true);
+        if (isCorruptConfig(raw, normalized)) {
+          this.backupConfig(cp, 'invalid-shape');
+          return this.writeRecoveredConfig(cp);
+        }
+        return normalized;
       } catch {
-        return defaultConfig();
+        this.backupConfig(cp, 'invalid-json');
+        return this.writeRecoveredConfig(cp);
       }
     }
     return defaultConfig();
@@ -172,13 +180,14 @@ export class ConfigManager {
   upsertProvider(name: string, baseUrl: string, apiKey: string, protocol?: ProviderProtocol): void {
     const existing = this.providers().find(p => p.name === name);
     const ps = this.providers().filter(p => p.name !== name);
-    const resolvedBaseUrl = baseUrl || existing?.base_url || '';
+    const selectedProtocol = protocol || existing?.protocol || inferProviderProtocol(name, baseUrl || existing?.base_url || '');
+    const resolvedBaseUrl = baseUrl || existing?.base_url || defaultProviderBaseUrl(selectedProtocol) || '';
     const resolvedApiKey = apiKey || existing?.api_key || '';
     ps.push({
       name,
       base_url: resolvedBaseUrl,
       api_key: resolvedApiKey,
-      protocol: protocol || existing?.protocol || inferProviderProtocol(name, resolvedBaseUrl),
+      protocol: selectedProtocol,
       enabled: existing?.enabled !== false,
       models: existing?.models || [],
     });
@@ -230,6 +239,10 @@ export class ConfigManager {
     return this.getBool('models', 'openai_streaming') === false ? 'chat' : 'chat_stream';
   }
 
+  nativeToolEnabled(): Record<string, boolean> {
+    return normalizeNativeToolEnabled(this.get<Record<string, boolean>>('tools', 'enabled'));
+  }
+
   private normalizeProviders(rawProviders: unknown[]): ProviderConfig[] {
     const providers: ProviderConfig[] = [];
     for (const raw of rawProviders || []) {
@@ -259,6 +272,28 @@ export class ConfigManager {
     }
     return providers;
   }
+
+  private writeRecoveredConfig(configPath: string): Record<string, Record<string, ConfigEntry>> {
+    const config = loadExampleConfig();
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+    return config;
+  }
+
+  private backupConfig(configPath: string, reason: string): void {
+    try {
+      if (!fs.existsSync(configPath)) return;
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupPath = path.join(path.dirname(configPath), `config.broken-${reason}-${stamp}.json`);
+      fs.copyFileSync(configPath, backupPath);
+    } catch {
+      // Recovery should still proceed even if the backup cannot be written.
+    }
+  }
+}
+
+export function ensureRootConfig(rootPath: string): void {
+  new ConfigManager(rootPath).save();
 }
 
 function normalizeConfigShape(raw: unknown, withDefaults: boolean): Record<string, Record<string, ConfigEntry>> {
@@ -287,8 +322,60 @@ function isConfigEntry(value: unknown): value is ConfigEntry {
 function readJsonText(filePath: string): string {
   return fs.readFileSync(filePath, 'utf-8').replace(/^\uFEFF/, '');
 }
+
+function loadExampleConfig(): Record<string, Record<string, ConfigEntry>> {
+  const examplePath = findConfigExamplePath();
+  if (examplePath && fs.existsSync(examplePath)) {
+    try {
+      return normalizeConfigShape(JSON.parse(readJsonText(examplePath)), true);
+    } catch {
+      // Fall through to compiled defaults if the bundled template is damaged.
+    }
+  }
+  return defaultConfig();
+}
+
+function findConfigExamplePath(): string {
+  const candidates = [
+    path.join(process.cwd(), 'config.example.json'),
+    path.join(__dirname, '..', '..', 'config.example.json'),
+    path.join(__dirname, '..', '..', '..', 'config.example.json'),
+    path.join(path.dirname(process.execPath || ''), 'config.example.json'),
+    path.join(path.dirname(process.execPath || ''), 'resources', 'app.asar', 'config.example.json'),
+  ];
+  return candidates.find(p => p && fs.existsSync(p)) || candidates[0];
+}
+
+function isCorruptConfig(raw: unknown, normalized: Record<string, Record<string, ConfigEntry>>): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return true;
+  const incoming = raw as Record<string, unknown>;
+  const models = incoming.models as Record<string, unknown> | undefined;
+  if (!models || typeof models !== 'object' || Array.isArray(models)) return true;
+  const providerEntry = (models as Record<string, unknown>).providers;
+  if (providerEntry === undefined) return false;
+  const rawProviders = isConfigEntry(providerEntry) ? providerEntry.value : providerEntry;
+  if (!Array.isArray(rawProviders)) return true;
+  if (rawProviders.length > 0 && ((normalized.models?.providers?.value as unknown[]) || []).length === 0) return true;
+  for (const rawProvider of rawProviders) {
+    if (!rawProvider || typeof rawProvider !== 'object' || Array.isArray(rawProvider)) return true;
+    const provider = rawProvider as Record<string, unknown>;
+    const name = String(provider.name || '').trim();
+    if (!name) return true;
+    const modelsValue = provider.models;
+    if (modelsValue !== undefined && !Array.isArray(modelsValue)) return true;
+    if (Array.isArray(modelsValue)) {
+      for (const model of modelsValue) {
+        if (typeof model === 'string') continue;
+        if (!model || typeof model !== 'object' || Array.isArray(model)) return true;
+        if (!String((model as Record<string, unknown>).name || '').trim()) return true;
+      }
+    }
+  }
+  return false;
+}
 export function inferProviderProtocol(name: string, baseUrl: string): ProviderProtocol {
   const marker = (name + ' ' + baseUrl).toLowerCase();
+  if (marker.includes('github models') || marker.includes('github copilot') || marker.includes('models.github.ai') || marker.includes('api.githubcopilot.com')) return 'github_models';
   if (marker.includes('anthropic') || marker.includes('/anthropic') || marker.includes('claude')) return 'anthropic';
   return 'openai';
 }
@@ -296,8 +383,37 @@ export function inferProviderProtocol(name: string, baseUrl: string): ProviderPr
 export function normalizeProviderProtocol(value: unknown, name: string, baseUrl: string): ProviderProtocol {
   const raw = String(value || '').toLowerCase().trim();
   if (raw === 'anthropic' || raw === 'claude') return 'anthropic';
+  if (raw === 'github_models' || raw === 'github-models' || raw === 'github' || raw === 'copilot' || raw === 'github-copilot') return 'github_models';
   if (raw === 'openai' || raw === 'openai-compatible') return 'openai';
   return inferProviderProtocol(name, baseUrl);
+}
+
+export function defaultProviderBaseUrl(protocol: ProviderProtocol): string {
+  if (protocol === 'github_models') return 'https://models.github.ai';
+  return '';
+}
+
+export function inferModelVisionCapability(
+  modelName: string,
+  display = '',
+  description = '',
+  providerName = '',
+  protocol?: ProviderProtocol
+): boolean {
+  const name = String(modelName || '').toLowerCase().trim();
+  const compactName = name.replace(/[\s_-]+/g, '');
+  const text = `${name} ${display || ''} ${description || ''} ${providerName || ''} ${protocol || ''}`.toLowerCase();
+  const compactText = text.replace(/[\s_-]+/g, '');
+
+  // Known frontier chat model families are multimodal even when imported
+  // provider metadata lacks a vision flag or carries stale text-only notes.
+  if (/^gpt(?:-)?(?:4o|4\.1|4\.5|5(?:\.\d+)?)(?:$|[^a-z0-9])/.test(name) || /^gpt(?:4o|4\.1|4\.5|5(?:\.\d+)?)(?:$|[^a-z0-9])/.test(compactName)) return true;
+  if (/^o(?:3|4)(?:$|[-_a-z0-9.])/.test(name)) return true;
+  if (/(claude3|claude4|claude-3|claude-4|sonnet|opus|gemini|qwen-vl|qwenvl|glm-4v|glm4v)/.test(compactText)) return true;
+  if (/(vision|multimodal|multi-modal|image input|image-input|视觉|多模态|图像输入|图片输入)/.test(text)) return true;
+
+  if (/(embedding|embed|rerank|moderation|whisper|tts|speech|audio-only|audio only|transcrib|text-only|text only|纯文本)/.test(text)) return false;
+  return false;
 }
 
 export function sanitizeProvidersForState(providers: ProviderConfig[]): Array<Omit<ProviderConfig, 'api_key'> & { api_key: string; has_api_key: boolean }> {
@@ -336,7 +452,7 @@ export function defaultModelConfig(modelName: string, display = modelName, descr
     cost_per_1k_input: 0.001,
     cost_per_1k_output: 0.004,
     max_tokens: 128000,
-    vision: false,
+    vision: inferModelVisionCapability(modelName, display, description),
     thinking: false,
     image_output: false,
     speed_rating: 'unknown',
@@ -397,6 +513,8 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
       show_mode_label: { _description: "Show mode on hover", _type: "boolean", value: true },
       left_panel_collapsed: { _description: "Left panel collapsed", _type: "boolean", value: false },
       right_panel_collapsed: { _description: "Right panel collapsed", _type: "boolean", value: false },
+      bottom_panel_collapsed: { _description: "Bottom terminal panel collapsed", _type: "boolean", value: false },
+      secondary_panel_collapsed: { _description: "Workspace secondary sidebar collapsed", _type: "boolean", value: true },
       dark_mode: { _description: "Dark/light mode", _type: "choice", _values: ["dark","light","system"], value: "dark" },
       minimize_to_tray: { _description: "Minimize to tray", _type: "boolean", value: true },
     },
@@ -418,6 +536,9 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
     terminal: {
       default_shell: { _description: "Default shell", _type: "choice", _values: ["powershell","bash","cmd"], value: "powershell" },
       interrupt_timeout_ms: { _description: "Upper cap for Agent bash timeout_ms and terminal forced interruption in milliseconds; 0 means no cap/no forced timeout", _type: "integer", value: 0 },
+    },
+    tools: {
+      enabled: { _description: "Native built-in Agent tool switches", _type: "object", value: defaultNativeToolEnabled() },
     },
     context: {
       auto_compress: { _description: "Auto-compress history", _type: "boolean", value: true },

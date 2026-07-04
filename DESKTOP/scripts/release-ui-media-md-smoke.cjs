@@ -241,16 +241,22 @@ async function runUiCheck(root) {
 
     await evaluate(cdp, `(() => {
       const image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
-      addMsg('assistant', 'MEDIA_RENDER_MESSAGE_20260628\\n![tiny](' + image + ')\\n[Open target](media-link-target.txt)', 'build', 'media-md-smoke');
+      addMsg('assistant', '# MEDIA_RENDER_MESSAGE_20260628\\n\\n![tiny](' + image + ')\\n\\n[Open target](media-link-target.txt)\\n\\n| Metric | Value |\\n| --- | --- |\\n| Alpha | $a^2 + b^2$ |\\n\\n$$\\nE = mc^2\\n$$', 'build', 'media-md-smoke');
       return true;
     })()`, 30000);
 
     await waitFor(cdp, `(() => {
       const img = document.querySelector('.chat-msg .msg-image');
       const link = document.querySelector('.chat-msg .msg-file-link[data-path="media-link-target.txt"]');
-      return !!img && img.getAttribute('src').startsWith('data:image/gif') && !!link && link.textContent.includes('Open target');
+      const msg = document.querySelector('.chat-msg .msg-body');
+      return !!img && img.getAttribute('src').startsWith('data:image/gif') &&
+        !!link && link.textContent.includes('Open target') &&
+        !!msg && !!msg.querySelector('.md-rendered h1') &&
+        !!msg.querySelector('.md-table') &&
+        !!msg.querySelector('.md-math-inline') &&
+        !!msg.querySelector('.md-math-block');
     })()`, 30000, 'message image and file link');
-    log('message image and file link render ok');
+    log('message markdown image, file link, table, and math render ok');
 
     await evaluate(cdp, `document.querySelector('.chat-msg .msg-file-link[data-path="media-link-target.txt"]').click()`, 30000);
     await waitFor(cdp, `(() => {
@@ -265,7 +271,7 @@ async function runUiCheck(root) {
     await waitFor(cdp, `(() => {
       const panel = document.querySelector('#panel-md-viewer');
       const md = document.querySelector('#md-viewer-content');
-      return panel && panel.classList.contains('active') && md && md.innerText.includes('MD_VIEWER_OK_20260628') && !!md.querySelector('strong');
+      return panel && panel.classList.contains('active') && md && md.innerText.includes('MD_VIEWER_OK_20260628') && !!md.querySelector('strong') && !!md.querySelector('li');
     })()`, 30000, 'markdown viewer content');
     log('markdown viewer ok');
 

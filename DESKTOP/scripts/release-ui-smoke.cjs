@@ -329,7 +329,7 @@ function ensureNoReleaseProcess() {
       subWinCloseTitle: 'Close',
       terminalConnected: 'Terminal connected (powershell)',
       contextCompression: 'Context compressed | model | 8 -> 2 messages',
-      nextQueue: 'Next 1',
+      nextQueue: 'Queue 1',
       modelAuto: 'Auto',
     }, 'english-before');
     const englishModels = await readModelSettingsSnapshot(cdp);
@@ -387,7 +387,7 @@ function ensureNoReleaseProcess() {
       subWinCloseTitle: '关闭',
       terminalConnected: '终端已连接 (powershell)',
       contextCompression: '上下文已压缩 | 模型 | 8 -> 2 条消息',
-      nextQueue: '下一轮 1',
+      nextQueue: '队列 1',
       modelAuto: '自动',
     }, 'chinese');
     const chineseModels = await readModelSettingsSnapshot(cdp);
@@ -433,7 +433,7 @@ function ensureNoReleaseProcess() {
       subWinCloseTitle: 'Close',
       terminalConnected: 'Terminal connected (powershell)',
       contextCompression: 'Context compressed | model | 8 -> 2 messages',
-      nextQueue: 'Next 1',
+      nextQueue: 'Queue 1',
       modelAuto: 'Auto',
     }, 'english-after');
     if (activeSubWindowAfterSwitch.title !== 'Workspace required') {

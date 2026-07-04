@@ -1,11 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { ConfigManager, ModelConfig, ModelEvaluation, ProviderProtocol, inferProviderProtocol } from './config';
+import { ConfigManager, ModelConfig, ModelEvaluation, ProviderProtocol, inferModelVisionCapability, inferProviderProtocol } from './config';
 import { LLMProvider } from '../llm/provider';
 import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, tokenizeFuzzyProviderInput } from './fuzzy';
 import { ToolExecutor } from '../tools/index';
 import { WorkspaceInfo, WorkspaceManager } from './workspace';
+import { SshConnectionInfo, SshManager, SshValidateResult } from './ssh';
 import { NewmarkSubagentToolResult, SubagentManager } from './subagent';
 import { NewmarkAgentPreset, findAgentPreset } from './compat';
 import { SkillsManager } from './skills';
@@ -41,6 +42,8 @@ interface StoredConversationState {
     history?: Array<Record<string, unknown>>;
     plan?: ConversationPlanState;
     updatedAt?: string;
+    pinned?: boolean;
+    pinnedAt?: string;
   }>;
 }
 export type ConversationPlanItemStatus = 'pending' | 'in_progress' | 'done';
@@ -67,6 +70,7 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - web_search: Search the web via DuckDuckGo
 - web_fetch: Fetch and extract content from URLs
 - browser_open/browser_snapshot/browser_click/browser_type/browser_eval/browser_back/browser_forward/browser_reload/browser_cdp: Control Newmark's built-in Chromium browser through the Desktop CDP/WebContents backend. Use this for interactive sites, page state inspection, and browser workflows that web_fetch cannot cover.
+- computer_use: Native desktop Computer Use control for full desktop or app-scoped observe/move/click/scroll/type/key/wait against Windows desktop applications. Use takeover_start when actively taking over the desktop; it shows a full-virtual-desktop dynamic gradient edge indicator so the user can see the Agent is controlling the desktop, and use takeover_stop when done. Use app_list/app_observe/app_activate/app_click/app_scroll/app_type/app_key when the task can be scoped to a visible taskbar application by title, process name, PID, or window handle; this narrows screenshots and actions to that application. Use observe/app_observe first, reason over returned screenshot plus UI Automation objects. If the model supports vision, Newmark sends the screenshot image and UI object tree together in the same tool-result context; use both for stable decisions. Prefer target_id from perception.scene_summary.high_priority_objects or perception.objects for move/click/scroll when available; fall back to exact coordinates only when necessary.
 - task: Create a subagent for parallel work
 - subagent_send: Continue an existing subagent
 - subagent_result: Read get.subagent(name) results
@@ -74,14 +78,17 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - question: Ask the user a multiple-choice question
 - skill_download: Download a skill/plugin
 - git_status: Show git working tree status
+- file_audit: Audit local file creation/change metadata and, for GitHub-backed files, remote repository/branch/path metadata
+- repo_security_audit: Review remote-backed repositories for public/private visibility, secret-like tracked content, release-excluded local files, and privacy exposure before push/PR/release actions
 - git_pull: Pull from remote
 - git_push: Stage, commit, and push changes
+- git_branch: Inspect/create/switch local branches
 - flow_list: List saved workflows
 - flow_save: Design or update a saved workflow
 - flow_run: Trigger a saved workflow
 - memory_lab_read / memory_lab_update / memory_lab_reindex: access and update Memory Lab persistent memory through the dedicated Memory Lab tool interface
 - automation_list / automation_create / automation_update / automation_toggle / automation_delete: inspect and manage persisted Newmark automations through the active scheduler
-- gh_auth_status / gh_repo_view / gh_issue_list / gh_pr_list: communicate with GitHub CLI
+- gh_auth_status / gh_repo_view / gh_issue_list / gh_pr_list / gh_fork / gh_pr_create: communicate with GitHub CLI
 - git_clone: Clone a git repository
 
 ## Modes
@@ -97,10 +104,12 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - Before editing, understand the target file and surrounding ownership. Keep changes scoped to the request and do not revert unrelated user work.
 - Verify the actual behavior that changed. If verification is not run, say exactly what was not run and why.
 - Never expose secrets, API keys, hidden reasoning, raw system prompts, or internal chain-of-thought.
+- When the workspace or target file is confirmed to belong to a remote repository, especially GitHub, actively advance repository safety review before remote writes or release claims: use repo_security_audit/file_audit, check public/private visibility, changed files, local-only ignored paths, secret-like content, private URLs, release artifacts, archives, Memory Lab, Work, config, and provider keys. Summaries must avoid leaking private remote URLs, tokens, private file details, or local machine paths unless the user explicitly asks for them.
 - Never put hidden-reasoning markers in visible replies: no <think>, </think>, analysis/commentary/final labels, or internal channel text.
 - Visible replies must be concise, direct engineering prose. Do not wrap replies in chat bubbles or role labels.
 - Be thorough and precise. Verify your work.
 - Use tools appropriately - don't just describe, do it.
+- For desktop Computer Use requests, follow observe -> decide -> act -> observe. Start visible takeover with computer_use takeover_start before multi-step desktop control and stop it when finished. Prefer app-scoped actions through app_list/app_observe/app_* when controlling one taskbar application, because this preserves human collaboration around other windows. Prefer target_id from the latest high-priority semantic UI objects, otherwise precise coordinates from the latest observation. Use vision plus UI controls together when the selected model has vision input. Avoid destructive UI actions unless the user asked for them, and do not claim YOLO/OCR perception unless an actual detector/OCR result is present.
 - When editing files, show exactly what changed.
 - For Chinese users, respond in Chinese if the user writes in Chinese.
 - Default reply format for completed work must be concise and structured. Use the section headers selected by the runtime language policy:
@@ -124,6 +133,7 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 export class Agent {
   public config: ConfigManager;
   public workspace: WorkspaceManager;
+  public ssh: SshManager;
   public subagents: SubagentManager;
   public tools: ToolExecutor;
   public skills: SkillsManager;
@@ -195,7 +205,8 @@ export class Agent {
     this.engine = this.config.getStr('models', 'agent_engine') || 'builtin';
 
     this.workspace = new WorkspaceManager(rootPath, this.config);
-    this.tools = new ToolExecutor(rootPath, this.config);
+    this.ssh = new SshManager(rootPath);
+    this.tools = new ToolExecutor(rootPath, this.config, this.ssh, this.workspace);
     this.skills = new SkillsManager(rootPath);
     this.memoryLab = new MemoryLabManager(rootPath);
     this.subagents = new SubagentManager();
@@ -450,10 +461,10 @@ export class Agent {
     }, null, 2), 'utf-8');
   }
 
-  public listConversationStates(): Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string }> {
+  public listConversationStates(): Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string }> {
     const stored = this.readStoredConversationState();
     const prefix = this.workspaceConversationPrefix() || '';
-    const rows: Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string }> = [];
+    const rows: Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string }> = [];
     for (const [key, value] of Object.entries(stored.conversations || {})) {
       if (prefix && !key.startsWith(prefix)) continue;
       const id = key.slice(prefix.length + 1) || key;
@@ -464,10 +475,32 @@ export class Agent {
         messageCount: value.chatMessages?.length || 0,
         historyCount: value.history?.length || 0,
         updatedAt: value.updatedAt || '',
+        pinned: !!value.pinned,
+        pinnedAt: value.pinnedAt || '',
       });
     }
-    rows.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    rows.sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      if (a.pinned && b.pinned) return b.pinnedAt.localeCompare(a.pinnedAt);
+      return b.updatedAt.localeCompare(a.updatedAt);
+    });
     return rows;
+  }
+
+  public setConversationPinned(id: string, pinned: boolean): boolean {
+    const clean = this.safeConversationId(id || 'default');
+    this.saveWorkspaceConversationState();
+    const stateKey = this.workspaceConversationStateKey(clean);
+    if (!stateKey) return false;
+    const stored = this.readStoredConversationState();
+    stored.conversations = stored.conversations || {};
+    const existing = stored.conversations[stateKey];
+    if (!existing) return false;
+    existing.pinned = !!pinned;
+    existing.pinnedAt = existing.pinned ? new Date().toISOString() : '';
+    existing.updatedAt = existing.updatedAt || new Date().toISOString();
+    this.writeStoredConversationState(stored);
+    return true;
   }
 
   public flushConversationState(): void {
@@ -549,6 +582,7 @@ export class Agent {
       ? derivedTitle
       : (priorTitle || derivedTitle);
     stored.conversations[stateKey] = {
+      ...(stored.conversations[stateKey] || {}),
       title,
       chatMessages: [...this.chatMessages],
       history: [...this.history],
@@ -669,6 +703,56 @@ export class Agent {
     return this.applyWorkspaceContext(this.workspace.addExternal(dirPath));
   }
 
+  listSshConnections(): SshConnectionInfo[] {
+    return this.ssh.list(true);
+  }
+
+  saveSshConnection(input: Partial<SshConnectionInfo>): SshConnectionInfo {
+    return this.ssh.upsert(input);
+  }
+
+  deleteSshConnection(idOrName: string): boolean {
+    return this.ssh.remove(idOrName);
+  }
+
+  validateSshConnection(idOrName: string, remoteRoot?: string): SshValidateResult {
+    const result = this.ssh.validate(idOrName, remoteRoot);
+    if (result.ok && result.remotePcHash) {
+      this.workspace.activateSshExternalByPcHash(result.connection.id, result.remotePcHash);
+    }
+    return result;
+  }
+
+  createSshWorkspace(input: {
+    connection: Partial<SshConnectionInfo>;
+    connectionId?: string;
+    name?: string;
+    remotePath: string;
+  }): { ok: boolean; workspace?: WorkspaceInfo | null; validation: SshValidateResult; linkedExisting: number; error?: string } {
+    this.saveWorkspaceConversationState();
+    const cleanConnection = Object.fromEntries(Object.entries(input.connection || {}).filter(([, value]) => value !== undefined && value !== ''));
+    const saved = input.connectionId
+      ? this.ssh.upsert({ ...(this.ssh.get(input.connectionId) || {}), ...cleanConnection, id: input.connectionId })
+      : this.ssh.upsert(input.connection);
+    const validation = this.ssh.ensureRemoteWorkspace(saved.id, input.remotePath || saved.remoteRoot || '~/.newmark-agent/workspaces/default');
+    if (!validation.ok || !validation.remotePcHash) {
+      return { ok: false, validation, linkedExisting: 0, error: validation.error || 'SSH validation failed' };
+    }
+    const existing = this.workspace.activateSshExternalByPcHash(saved.id, validation.remotePcHash);
+    const workspace = this.workspace.addSshExternal({
+      name: input.name || saved.name,
+      sshConnectionId: saved.id,
+      remotePath: input.remotePath || saved.remoteRoot || '~/.newmark-agent/workspaces/default',
+      remotePcHash: validation.remotePcHash,
+      remoteUserHost: `${saved.user}@${saved.host}:${saved.port}`,
+    });
+    if (workspace) {
+      this.ssh.markLinkedWorkspace(saved.id, workspace.name);
+      this.applyWorkspaceContext(workspace);
+    }
+    return { ok: !!workspace, workspace, validation, linkedExisting: existing.length };
+  }
+
   removeWorkspace(name: string): boolean {
     const removingCurrent = this.workspace.current?.name === name;
     this.saveWorkspaceConversationState();
@@ -745,29 +829,67 @@ export class Agent {
     return filename;
   }
 
-  listArchives(): Array<{ name: string; firstLine: string }> {
-    const results: Array<{ name: string; firstLine: string }> = [];
-    const archiveDir = this.archiveDir();
-    try {
-      for (const entry of fs.readdirSync(archiveDir)) {
-        if (entry.endsWith('.md')) {
-          const content = fs.readFileSync(path.join(archiveDir, entry), 'utf-8');
-          const firstLine = content.split('\n')[0] || '';
-          results.push({ name: entry, firstLine });
-        }
-      }
-    } catch { /* skip */ }
+  listArchives(scope: 'workspace' | 'all' = 'workspace'): Array<{ id: string; name: string; firstLine: string; scope: string; workspace?: string; date?: string }> {
+    const results: Array<{ id: string; name: string; firstLine: string; scope: string; workspace?: string; date?: string }> = [];
+    const dirs = scope === 'all' ? this.archiveRoots() : [{ dir: this.archiveDir(), scope: 'workspace', workspace: this.workspace.current?.name || '' }];
+    for (const archiveRoot of dirs) {
+      this.collectArchives(archiveRoot.dir, archiveRoot.scope, archiveRoot.workspace, results);
+    }
     results.sort((a, b) => b.name.localeCompare(a.name));
     return results;
   }
 
+  private collectArchives(archiveDir: string, scope: string, workspace: string | undefined, results: Array<{ id: string; name: string; firstLine: string; scope: string; workspace?: string; date?: string }>): void {
+    try {
+      for (const entry of fs.readdirSync(archiveDir)) {
+        if (entry.endsWith('.md')) {
+          const archivePath = path.join(archiveDir, entry);
+          const content = fs.readFileSync(archivePath, 'utf-8');
+          const firstLine = content.split('\n')[0] || '';
+          const id = `archive|${Buffer.from(path.resolve(archiveDir), 'utf-8').toString('base64')}|${Buffer.from(entry, 'utf-8').toString('base64')}`;
+          const date = fs.statSync(archivePath).mtime.toISOString();
+          results.push({ id, name: entry, firstLine, scope, workspace, date });
+        }
+      }
+    } catch { /* skip */ }
+  }
+
+  private archiveRoots(): Array<{ dir: string; scope: string; workspace?: string }> {
+    const roots: Array<{ dir: string; scope: string; workspace?: string }> = [
+      { dir: path.join(this.rootPath, 'archive'), scope: 'global' },
+    ];
+    for (const ws of [...this.workspace.internal, ...this.workspace.external]) {
+      roots.push({ dir: path.join(ws.path, 'archive'), scope: 'workspace', workspace: ws.name });
+    }
+    return roots;
+  }
+
+  private resolveArchivePath(nameOrId: string): string {
+    const raw = String(nameOrId || '');
+    const parts = raw.split('|');
+    if (parts.length === 3 && parts[0] === 'archive') {
+      const archiveDir = path.resolve(Buffer.from(parts[1] || '', 'base64').toString('utf-8'));
+      const fileName = Buffer.from(parts[2] || '', 'base64').toString('utf-8');
+      const allowedRoots = this.archiveRoots().map(root => path.resolve(root.dir));
+      if (allowedRoots.includes(archiveDir)) return path.join(archiveDir, fileName);
+    }
+    if (parts.length === 3 && (parts[0] === 'workspace' || parts[0] === 'global')) {
+      const fileName = Buffer.from(parts[2] || '', 'base64').toString('utf-8');
+      if (parts[0] === 'global') return path.join(this.rootPath, 'archive', fileName);
+      const workspaceName = Buffer.from(parts[1] || '', 'base64').toString('utf-8');
+      const ws = [...this.workspace.internal, ...this.workspace.external].find(item => item.name === workspaceName);
+      if (ws) return path.join(ws.path, 'archive', fileName);
+    }
+    return path.join(this.archiveDir(), raw);
+  }
+
   deleteArchive(name: string): boolean {
-    try { fs.unlinkSync(path.join(this.archiveDir(), name)); return true; }
+    try { fs.unlinkSync(this.resolveArchivePath(name)); return true; }
     catch { return false; }
   }
 
   readArchive(name: string): string | null {
-    try { return fs.readFileSync(path.join(this.archiveDir(), name), 'utf-8'); }
+    try { return fs.readFileSync(this.resolveArchivePath(name), 'utf-8'); }
     catch { return null; }
   }
 
@@ -874,6 +996,8 @@ export class Agent {
     const results: ModelValidationResult[] = [];
     for (const m of this.config.allModels()) {
       if (selected.size && !selected.has(m.name) && !selected.has(`${m.provider}/${m.name}`)) continue;
+      const inferredVision = !!m.vision || inferModelVisionCapability(m.name, m.display, m.description, m.provider, m.provider_protocol);
+      const inferredImageOutput = !!m.image_output;
       const base: ModelValidationResult = {
         name: `${m.provider}/${m.name}`,
         provider: m.provider,
@@ -884,17 +1008,18 @@ export class Agent {
         checked_at: new Date().toISOString(),
         text_input: false,
         text_output: false,
-        vision_input: !!m.vision,
-        image_output: !!m.image_output,
+        vision_input: inferredVision,
+        image_output: inferredImageOutput,
         cost_rating: this.costRating(m.cost_per_1k_input, m.cost_per_1k_output),
         performance_rating: this.performanceRating(m.name, m.capability_rating, m.description, m.display),
         speed_rating: 'unknown',
         notes: '',
       };
+      const capabilityModel = { ...m, vision: inferredVision, image_output: inferredImageOutput };
       if (!m.provider_url || !m.api_key) {
         base.notes = 'Missing provider URL or API key';
         results.push(base);
-        this.config.updateModel(m.provider, m.name, { evaluation: base, speed_rating: base.speed_rating, capability_rating: base.performance_rating, description: this.modelCapabilityDescription(m, base.performance_rating, base.speed_rating, base.cost_rating, false) });
+        this.config.updateModel(m.provider, m.name, { evaluation: base, vision: base.vision_input, image_output: base.image_output, speed_rating: base.speed_rating, capability_rating: base.performance_rating, description: this.modelCapabilityDescription(capabilityModel, base.performance_rating, base.speed_rating, base.cost_rating, false) });
         continue;
       }
       const p = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode());
@@ -910,7 +1035,7 @@ export class Agent {
           notes: ok ? 'Text chat validation succeeded' : 'Provider returned no usable text output',
         };
         results.push(result);
-        this.config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: this.modelCapabilityDescription(m, result.performance_rating, result.speed_rating, result.cost_rating, ok) });
+        this.config.updateModel(m.provider, m.name, { evaluation: result, vision: result.vision_input, image_output: result.image_output, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: this.modelCapabilityDescription(capabilityModel, result.performance_rating, result.speed_rating, result.cost_rating, ok) });
       } catch (e) {
         const result: ModelValidationResult = {
           ...base,
@@ -918,7 +1043,7 @@ export class Agent {
           notes: 'Validation request failed',
         };
         results.push(result);
-        this.config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: this.modelCapabilityDescription(m, result.performance_rating, result.speed_rating, result.cost_rating, false) });
+        this.config.updateModel(m.provider, m.name, { evaluation: result, vision: result.vision_input, image_output: result.image_output, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: this.modelCapabilityDescription(capabilityModel, result.performance_rating, result.speed_rating, result.cost_rating, false) });
       }
     }
     this.config.save();
@@ -951,6 +1076,15 @@ export class Agent {
     const apiKey = (tokens.apiKey || existing?.api_key || '').trim();
 
     let safeProtocol = tokens.protocol || existing?.protocol || inferProviderProtocol(providerName, baseUrl);
+    const loginOnlyMarker = `${providerName} ${baseUrl}`.toLowerCase();
+    if (safeProtocol === 'github_models' || loginOnlyMarker.includes('github') || loginOnlyMarker.includes('copilot') || loginOnlyMarker.includes('models.github.ai') || loginOnlyMarker.includes('api.githubcopilot.com')) {
+      return {
+        ok: false,
+        provider: providerName || 'GitHub Copilot',
+        models: [],
+        warning: 'GitHub/Copilot providers require precise browser login from Models settings and are not supported by fuzzy injection.',
+      };
+    }
     let discovery: { models: string[]; source: 'models_endpoint' | 'suffix_probe' | 'heuristic'; warning?: string };
     if (!hasUsableModel) {
       const noGuide = await fuzzyDiscoverWithoutGuide(tokenizerInput, {
@@ -1063,12 +1197,15 @@ export class Agent {
     ].filter(Boolean).join(',') || 'text-only';
     const generated = `${ok ? 'Validated text model' : 'Unvalidated text model'}; capability=${capability || 'medium'}; speed=${speed || 'unknown'}; cost=${cost || 'unknown'}; multimodal=${multimodal}; source=model validation.`;
     if (!prior || /^(Listed by provider \/models endpoint|Discovered by fuzzy suffix probing|Discovered by fuzzy injection)/i.test(prior)) return generated;
-    if (/capability=/.test(prior) && /speed=/.test(prior) && /cost=/.test(prior) && /multimodal=/.test(prior)) return prior;
+    if (/capability=/.test(prior) && /speed=/.test(prior) && /cost=/.test(prior) && /multimodal=/.test(prior)) {
+      return prior.replace(/multimodal=[^;.]*/i, `multimodal=${multimodal}`);
+    }
     return `${prior} ${generated}`;
   }
 
   private inferProviderName(text: string): string {
     const lower = text.toLowerCase();
+    if (lower.includes('github') || lower.includes('copilot')) return 'GitHub Copilot';
     if (lower.includes('deepseek')) return 'DeepSeek';
     if (lower.includes('openai')) return 'OpenAI';
     if (lower.includes('moonshot') || lower.includes('kimi')) return 'Moonshot';
@@ -1078,6 +1215,7 @@ export class Agent {
 
   private inferProviderUrl(providerName: string): string {
     const p = providerName.toLowerCase();
+    if (p.includes('github') || p.includes('copilot')) return 'https://models.github.ai';
     if (p.includes('deepseek')) return 'https://api.deepseek.com/v1';
     if (p.includes('openai')) return 'https://api.openai.com/v1';
     if (p.includes('moonshot') || p.includes('kimi')) return 'https://api.moonshot.cn/v1';
@@ -1811,6 +1949,7 @@ export class Agent {
       `- Prompt layering: this intrinsic Newmark prompt is applied first, then this feature disclosure, then global/workspace prompts according to prompt_mode=${promptMode}, then the user prompt.`,
       `- Language policy: general.language=${language}; the UI can switch this at runtime and each turn must obey the current value. auto follows the user's dominant input language, en replies in English, zh replies in Simplified Chinese. Keep code, commands, file paths, JSON keys, model/provider names, tool names, quoted source text, and user-provided literals exactly as required by their source language.`,
       `- Workspace permissions: access_permission=${permission}; file tools are checked before execution and blocked when they exceed the configured workspace boundary.`,
+      `- Remote repository safety: when the active workspace or any target path is inside a GitHub/remote-backed repository, proactively use repo_security_audit and file_audit before git_push, gh_pr_create, release packaging, public reporting, or cloud-side audit. Treat public remotes as public disclosure surfaces and keep private URLs, secrets, local runtime state, archives, Memory Lab, Work, config, and release outputs out of commits and summaries.`,
       `- Mode engine: current mode=${this.modeName()}; Build works autonomously, Plan is fully read-only with no file modifications, Goal continues until completion unless paused, Flow follows saved workflow components.`,
       `- Input mode: ${input}; Guide injects immediately, Next queues user intent for the following build turn.`,
       `- Option feedback: ${optionFeedback}; fully_autonomous disables the question tool.`,
@@ -1847,7 +1986,7 @@ export class Agent {
           'You are in fully READ-ONLY exploration mode.',
           'Do NOT modify any files, including README.md, generated files, configs, archives, or workspace files.',
           'Explore the workspace, understand the codebase, research if needed, and produce a plan in the conversation only.',
-          'Use read-only tools only: web_search, web_fetch, read, glob, grep, browser_open, browser_snapshot, pwd, and git_status.',
+          'Use read-only tools only: web_search, web_fetch, read, glob, grep, browser_open, browser_snapshot, pwd, git_status, file_audit, and repo_security_audit.',
         ].join('\n');
       case 'goal': {
         const g = this.goal?.history() || '';

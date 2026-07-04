@@ -5,6 +5,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { spawnSync } from 'child_process';
 import { Agent, AgentMode, StreamToken } from '../core/agent';
 import { ConfigManager, defaultConfig, mergeProviderSecrets, sanitizeProvidersForState } from '../core/config';
 import { ToolExecutor } from '../tools/index';
@@ -23,6 +24,7 @@ import { discoverAgentPresets, discoverOpenCodeTools, discoverPluginManifests, d
 import { MemoryLabManager } from '../core/memoryLab';
 import { checkGitHubUpdate, currentAppVersion, installUpdate } from '../core/installUpdate';
 import { ConversationKernel } from '../core/conversationKernel';
+import { SshManager, SshRunner } from '../core/ssh';
 
 const TEST_DIR = path.join(process.cwd(), 'test-tmp');
 const PASS = '[PASS]';
@@ -72,7 +74,37 @@ function setup() {
 }
 
 function cleanup() {
-  fs.rmSync(TEST_DIR, { recursive: true, force: true });
+  if (!fs.existsSync(TEST_DIR)) return;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      fs.rmSync(TEST_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      return;
+    } catch {
+      try {
+        chmodTree(TEST_DIR);
+      } catch {}
+    }
+  }
+  const ps = spawnSync('powershell.exe', [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-Command',
+    `$p = ${JSON.stringify(TEST_DIR)}; if (Test-Path -LiteralPath $p) { Get-ChildItem -LiteralPath $p -Recurse -Force | ForEach-Object { try { $_.Attributes = 'Normal' } catch {} }; Remove-Item -LiteralPath $p -Recurse -Force; Write-Output 'TEST_TMP_CLEANUP_OK' } else { Write-Output 'TEST_TMP_ALREADY_GONE' }`,
+  ], { encoding: 'utf8', windowsHide: true });
+  if (ps.status !== 0 || fs.existsSync(TEST_DIR)) {
+    console.warn(`  [WARN] cleanup: could not remove ${TEST_DIR}: ${(ps.stderr || ps.stdout || '').trim()}`);
+  }
+}
+
+function chmodTree(target: string) {
+  if (!fs.existsSync(target)) return;
+  const stat = fs.lstatSync(target);
+  fs.chmodSync(target, 0o666);
+  if (!stat.isDirectory()) return;
+  for (const entry of fs.readdirSync(target)) {
+    chmodTree(path.join(target, entry));
+  }
 }
 
 // ===== Main test suite =====
@@ -146,7 +178,8 @@ async function main() {
   assert(uiHtml.includes("'model.fuzzy': 'Fuzzy inject model'") && uiHtml.includes("t('model.fuzzy')"), 'ui html: fuzzy injection label present through i18n');
   assert(uiHtml.includes('function redactSensitiveText(value)') && uiHtml.includes("replace(/sk-[A-Za-z0-9_\\-.]{8,}/g, 'sk-redacted')"), 'ui html: redacts API keys from visible messages');
   assert(uiHtml.includes("redactSensitiveText('[System] Fuzzy injection did not pass validation:") && uiHtml.includes("redactSensitiveText('[Error] Fuzzy injection failed:"), 'ui html: fuzzy injection messages are redacted');
-  assert(uiHtml.includes('WORKFLOW TIMELINE') && uiHtml.includes('function renderChatMessages(messages)') && uiHtml.includes('function ensureActiveAssistantMsg(mode, model)') && uiHtml.includes('function upsertToolEvent(event, resultText)') && uiHtml.includes('function toolBatchSummary(batch)') && uiHtml.includes('function renderToolBatch(batch)') && uiHtml.includes('function finishToolBatch()') && uiHtml.includes('function findCompletedWorkflowMsg(conversationId, text)') && uiHtml.includes('state._lastCompletedWorkflow') && uiHtml.includes('findCompletedWorkflowMsg(lockedConversationId, fullText)') && uiHtml.includes('正在编辑 ') && uiHtml.includes('已编辑 ') && uiHtml.includes('class="tool-event-details"') && !uiHtml.includes("addMsg('workflow running', 'Preparing request...'") && !uiHtml.includes('Agent is working'), 'ui html: conversation renders live assistant text and folded batched tool details without workflow placeholders or duplicate final echoes');
+  assert(uiHtml.includes('WORKFLOW TIMELINE') && uiHtml.includes('function renderChatMessages(messages)') && uiHtml.includes('function currentLang()') && uiHtml.includes('function conversationWorkUiState(conversationId)') && uiHtml.includes('agentWorkUiByConversation') && uiHtml.includes('function ensureActiveAssistantMsg(mode, model, conversationId)') && uiHtml.includes('function upsertToolEvent(event, resultText)') && uiHtml.includes('function toolBatchSummary(batch)') && uiHtml.includes('function renderToolBatch(batch)') && uiHtml.includes('function finishToolBatch(conversationId)') && uiHtml.includes('function findCompletedWorkflowMsg(conversationId, text)') && uiHtml.includes('conversationWorkUiState(conversationId).lastCompletedWorkflow') && uiHtml.includes('findCompletedWorkflowMsg(lockedConversationId, fullText)') && uiHtml.includes('正在编辑 ') && uiHtml.includes('已编辑 ') && uiHtml.includes('class="tool-event-details"') && !uiHtml.includes("addMsg('workflow running', 'Preparing request...'") && !uiHtml.includes('Agent is working'), 'ui html: conversation renders live assistant text and folded batched tool details without workflow placeholders or duplicate final echoes');
+  assert(!uiHtml.includes('state._activeWorkflowMsg') && !uiHtml.includes('state._activeWorkflowText') && !uiHtml.includes('state._toolEventMsgs') && !uiHtml.includes('state._toolEventBatch') && !uiHtml.includes('state._lastCompletedWorkflow'), 'ui html: live workflow feedback state is conversation-scoped, not a global singleton');
   assert(uiHtml.includes('function isHiddenWorkflowMessage(message)') && uiHtml.includes('Preparing model request and available tools') && uiHtml.includes('Executing \\d+ tool call') && uiHtml.includes('renderPersistedToolMessage(m)'), 'ui html: hides internal workflow status rows and folds persisted tool workflow messages');
   assert(uiHtml.includes('background: transparent;') && uiHtml.includes('border-radius: 0;') && uiHtml.includes('.chat-msg::before') && uiHtml.includes('.chat-msg::after'), 'ui html: chat messages are not bubble cards');
   assert(uiHtml.includes('return api.setConversation(conv.id).then(function(id)') && uiHtml.includes('return loadActiveConversationMessages();') && uiHtml.includes('if (s.chatMessages) renderChatMessages(s.chatMessages);'), 'ui html: workspace conversation switching reloads isolated backend messages');
@@ -155,7 +188,7 @@ async function main() {
   assert(uiHtml.includes('function activeConversationId()') && uiHtml.includes('api.sendMessage(text, lockedConversationId)'), 'ui html: sends initiating conversation id with each agent turn');
   assert(uiHtml.includes('if (api.setMode) await api.setMode(state.mode)') && uiHtml.includes('if (api.setModel && state.model) await api.setModel(state.model)'), 'ui html: send synchronizes current mode and model before backend turn');
   assert(uiHtml.includes('renderConversations();') && uiHtml.includes('r.conversations') && uiHtml.includes('r.conversationId || lockedConversationId'), 'ui html: refreshes conversation titles from send response');
-  assert(uiHtml.includes('runningConversations') && uiHtml.includes('setupAgentWorkEvents()') && uiHtml.includes('appendAgentWorkEvent(payload)') && uiHtml.includes('summary: item.title ||'), 'ui html: supports per-conversation running state, live work events, and backend titles');
+  assert(uiHtml.includes('runningConversations') && uiHtml.includes('setupAgentWorkEvents()') && uiHtml.includes('appendAgentWorkEvent(payload)') && uiHtml.includes('var id = String(event.conversationId ||') && uiHtml.includes('renderAgentWorkEvent(event)') && uiHtml.includes('summary: item.title ||'), 'ui html: supports per-conversation running state, conversation-bound live work events, and backend titles');
   assert(uiHtml.includes("type === 'queue_update'") && uiHtml.includes('state.backendQueue = event.queue') && uiHtml.includes('if (s && s.queued) {') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue)'), 'ui html: caches backend queue_update events for foreground/background conversation debugging');
   assert(uiHtml.includes('if (s && Array.isArray(s.workEvents))') && uiHtml.includes('var mergedEvents = existingEvents.concat(s.workEvents || [])') && uiHtml.includes('dedupedEvents.slice(-Number(state.agentWorkEventLimit || 240))'), 'ui html: merges backend work-event snapshots when foregrounding a conversation');
   assert(uiHtml.includes('function applyWorkspaceStateFromBackend(s)') && uiHtml.includes('window.openWorkspaceManager = async function()') && uiHtml.includes('await window.refreshWorkspaceState().catch(function(){})'), 'ui html: workspace manager refreshes backend workspace state before rendering');
@@ -164,7 +197,8 @@ async function main() {
   assert(uiHtml.includes("item.description || item.desc || ''") && uiHtml.includes("item.marketSourceName || ''") && uiHtml.includes("item.path || ''") && uiHtml.includes("item.url || ''") && uiHtml.includes('No matching skills.'), 'ui html: Skills Market search covers skill metadata, source metadata, and empty results');
   assert(uiHtml.includes('--right-width: 380px;') && uiHtml.includes('var rightSize = Math.max(340, Math.min(680, newSize2));'), 'ui html: right sidebar has larger default and resize range');
   assert(uiHtml.includes('lucide-sprite.svg#square-pen') && uiHtml.includes("iconOnly('square-pen', t('right.editor'))") && !uiHtml.includes('lucide-sprite.svg#edit'), 'ui html: Editor tab uses available open-source icon sprite symbol');
-  assert(uiHtml.includes('function renderMessageContent(text)') && uiHtml.includes('class="msg-image"') && uiHtml.includes('normalizeImageSrc(imageUrl)') && uiHtml.includes("if (/^data:image\\//i.test(url)) return true;"), 'ui html: conversation renders returned markdown images, including data URLs');
+  assert(uiHtml.includes('function renderMessageContent(text)') && uiHtml.includes('function renderMarkdownBlocks(text)') && uiHtml.includes('function renderMarkdownInline(text)') && uiHtml.includes('class="msg-image"') && uiHtml.includes('normalizeImageSrc(imageUrl)') && uiHtml.includes("if (/^data:image\\//i.test(url)) return true;"), 'ui html: conversation renders returned markdown images, including data URLs');
+  assert(uiHtml.includes('class="md-table"') && uiHtml.includes('function renderMarkdownTable(lines, start)') && uiHtml.includes('class="md-math-inline"') && uiHtml.includes('class="md-math-block"') && uiHtml.includes('white-space: normal;'), 'ui html: conversation message markdown supports tables and TeX-style formula blocks without pre-wrap text fallback');
   assert(uiHtml.includes('class="msg-file-link"') && uiHtml.includes('window.openLinkedFile = async function(path)') && uiHtml.includes("window.switchRightTab('editor');"), 'ui html: conversation file links open the right editor');
   assert(uiHtml.includes("els['md-viewer-content'] = nextMd;") && uiHtml.includes('window.getMarkdownContentNode = function()') && uiHtml.includes("var mc = window.getMarkdownContentNode();") && uiHtml.includes("window.switchRightTab('md-viewer');"), 'ui html: markdown viewer writes to the rebuilt live panel node');
   assert(uiHtml.includes('function optionLabel(option)') && uiHtml.includes('function renderPendingOptionsInChat(options)') && uiHtml.includes("state.renderedOptionKeys[key] = true"), 'ui html: pending option feedback renders into chat once');
@@ -186,7 +220,7 @@ async function main() {
   assert(agentKernelSource.includes('queue: input.queue') && agentKernelSource.includes('notifyAgentKernelUserMessageStart') && piKernelSource.includes("case 'message_start'") && piKernelSource.includes('agent.notifyAgentKernelUserMessageStart'), 'kernel: backend queue snapshots survive work events and native message_start notifies conversation runtime');
   assert(mainKernelSource.includes("ipcMain.handle('agent:send'") && mainKernelSource.includes('const kernel = ensureConversationKernel(root, _event.sender)') && mainKernelSource.includes('kernel.prompt(message, targetConversation'), 'kernel: desktop send path uses the native conversation kernel');
   assert(mainKernelSource.includes('ensureConversationKernel(root') && mainKernelSource.includes("target?.send('agent:workEvent', event)") && mainKernelSource.includes('workEvents: conversationKernel?.events') && conversationKernelSource.includes('isAnyRunning()'), 'kernel: desktop IPC subscribes native conversation work events and exposes cached event snapshots');
-  assert(!piKernelSource.includes("tokens.push({ type: 'text', text });\n      agent.recordToolResult") && piKernelSource.includes("type: 'tool_result'") && piKernelSource.includes('toolCallId: event.toolCallId'), 'kernel: tool results are streamed as folded work events, not appended to assistant text tokens');
+  assert(!piKernelSource.includes("tokens.push({ type: 'text', text });\n      agent.recordToolResult") && piKernelSource.includes("type: 'tool_result'") && piKernelSource.includes('toolCallId: event.toolCallId') && piKernelSource.includes("agent.appendWorkflowMessage(`Tool ${event.toolName} result:"), 'kernel: tool results are streamed and persisted as folded work events, not appended to assistant text tokens');
   assert(mainKernelSource.includes("ipcMain.handle('agent:abortConversation'") && mainKernelSource.includes('conversationKernel?.abort(target)') && uiHtml.includes('api.archive(targetId)') && uiHtml.includes('delete state.runningConversations[targetId]'), 'kernel/ui: archiving a running conversation interrupts and archives directly');
   assert(uiHtml.includes('foregroundConversationHoldId') && uiHtml.includes('holdForegroundConversation(activeId, 4500)') && uiHtml.includes('Date.now() < Number(state.foregroundConversationHoldUntil'), 'ui html: foregrounded background conversations stay active briefly during backend refresh');
   assert(uiHtml.includes('trackedConversationUntil') && uiHtml.includes('conversationTrackMs: 300000') && uiHtml.includes('markConversationTracked(previousId') && uiHtml.includes('markConversationTracked(activeId'), 'ui html: conversations keep a five-minute tracking window after foreground switches without aborting background work');
@@ -300,6 +334,7 @@ async function main() {
   assert(uiHtml.includes('id="new-provider-protocol"') && uiHtml.includes('id="fuzzy-protocol"') && uiHtml.includes("t('model.protocol')"), 'ui html: provider protocol is editable and visible');
   assert(uiHtml.includes('window.editProvider = function(idx)') && uiHtml.includes('window.saveProviderEdit = function(idx)') && uiHtml.includes('window.removeProvider = function(idx)') && uiHtml.includes('_previous_name: p.name || name'), 'ui html: provider settings support edit/delete and renamed-key preservation');
   assert(uiHtml.includes('window.editModel = function(provIdx, modelIdx)') && uiHtml.includes('window.saveModelEdit = function(oldProvIdx, modelIdx)') && uiHtml.includes("id=\"edit-model-ctx\""), 'ui html: model settings support editing context, vision, thinking, and description');
+  assert(uiHtml.includes('data-stab="tools"') && uiHtml.includes('function renderToolSettings()') && uiHtml.includes('window.setNativeToolEnabled') && uiHtml.includes("t('tools.title')"), 'ui html: Settings exposes native built-in tool switches');
   const preloadPath = path.join(process.cwd(), 'dist', 'preload.js');
   const preloadJs = fs.existsSync(preloadPath) ? fs.readFileSync(preloadPath, 'utf-8') : '';
   assert(preloadJs.includes('runFlow') && preloadJs.includes('flow:run'), 'preload: exposes core Flow runner IPC');
@@ -308,8 +343,16 @@ async function main() {
   const serverTs = fs.readFileSync(path.join(process.cwd(), 'src', 'server.ts'), 'utf-8');
   const preloadTs = fs.readFileSync(path.join(process.cwd(), 'src', 'preload.ts'), 'utf-8');
   const toolsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'index.ts'), 'utf-8');
+  const nativeToolsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'nativeTools.ts'), 'utf-8');
   const agentTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
+  const configTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'config.ts'), 'utf-8');
+  const fuzzyTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'fuzzy.ts'), 'utf-8');
+  const providerTs = fs.readFileSync(path.join(process.cwd(), 'src', 'llm', 'provider.ts'), 'utf-8');
+  const agentKernelRunnerTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
   const workspaceTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'workspace.ts'), 'utf-8');
+  assert(uiHtml.includes('function scheduleLayoutStateSave()') && uiHtml.includes('layoutState: {') && uiHtml.includes('leftCollapsed: !!state.leftCollapsed') && uiHtml.includes('rightCollapsed: !!state.rightCollapsed') && uiHtml.includes('bottomCollapsed: !!state.bottomCollapsed') && uiHtml.includes('secondaryCollapsed: !!state.secondaryCollapsed') && uiHtml.includes('function applySavedLayoutState(input)') && mainTs.includes('leftPanelCollapsed') && mainTs.includes("case 'layoutState'") && configTs.includes('bottom_panel_collapsed') && configTs.includes('secondary_panel_collapsed'), 'ui layout memory: persists only sidebar collapsed booleans and restores them from config');
+  assert(workspaceTs.includes('setPinned(id: string, pinned: boolean)') && agentTs.includes('setConversationPinned(id: string, pinned: boolean)') && preloadTs.includes('setWorkspacePinned') && preloadTs.includes('setConversationPinned') && mainTs.includes("agent:setWorkspacePinned") && mainTs.includes("agent:setConversationPinned") && uiHtml.includes('window.toggleWorkspacePinned') && uiHtml.includes('window.toggleConversationPinned') && uiHtml.includes('conv-pin-btn') && uiHtml.includes('ws-pin-btn'), 'pinning: workspace and conversation pin state is persisted and exposed in the UI');
+  assert(agentTs.includes("listArchives(scope: 'workspace' | 'all' = 'workspace')") && agentTs.includes('archiveRoots()') && agentTs.includes('resolveArchivePath') && preloadTs.includes('listArchives: (scope?: string)') && mainTs.includes("scope === 'all' ? 'all' : 'workspace'") && uiHtml.includes("api.listArchives('workspace')") && uiHtml.includes("api.listArchives('all')") && uiHtml.includes('state.workspaceArchives') && uiHtml.includes('state.allArchives'), 'archives: right sidebar lists current workspace archives while Settings archive can list all archives');
   const cliCommandsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'cli-commands.ts'), 'utf-8');
   const releaseCliSmokePath = path.join(process.cwd(), 'scripts', 'release-cli-smoke.cjs');
   const releaseCliSmoke = fs.existsSync(releaseCliSmokePath) ? fs.readFileSync(releaseCliSmokePath, 'utf-8') : '';
@@ -343,6 +386,8 @@ async function main() {
   const releaseUiMemoryLabSmoke = fs.existsSync(releaseUiMemoryLabSmokePath) ? fs.readFileSync(releaseUiMemoryLabSmokePath, 'utf-8') : '';
   const releaseUiConversationQueuePlanSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-conversation-queue-plan-smoke.cjs');
   const releaseUiConversationQueuePlanSmoke = fs.existsSync(releaseUiConversationQueuePlanSmokePath) ? fs.readFileSync(releaseUiConversationQueuePlanSmokePath, 'utf-8') : '';
+  const releaseUiFastConversationSwitchSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-fast-conversation-switch-smoke.cjs');
+  const releaseUiFastConversationSwitchSmoke = fs.existsSync(releaseUiFastConversationSwitchSmokePath) ? fs.readFileSync(releaseUiFastConversationSwitchSmokePath, 'utf-8') : '';
   const releaseUiGoalContinuationSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-goal-continuation-smoke.cjs');
   const releaseUiGoalContinuationSmoke = fs.existsSync(releaseUiGoalContinuationSmokePath) ? fs.readFileSync(releaseUiGoalContinuationSmokePath, 'utf-8') : '';
   const releaseUiWorkspaceLifecycleSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-workspace-lifecycle-smoke.cjs');
@@ -351,6 +396,14 @@ async function main() {
   const releaseUiStartupRecoverySmoke = fs.existsSync(releaseUiStartupRecoverySmokePath) ? fs.readFileSync(releaseUiStartupRecoverySmokePath, 'utf-8') : '';
   const releaseUiIconSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-icon-smoke.cjs');
   const releaseUiIconSmoke = fs.existsSync(releaseUiIconSmokePath) ? fs.readFileSync(releaseUiIconSmokePath, 'utf-8') : '';
+  const release111CliSmokePath = path.join(process.cwd(), 'scripts', 'release-111-cli-smoke.cjs');
+  const release111CliSmoke = fs.existsSync(release111CliSmokePath) ? fs.readFileSync(release111CliSmokePath, 'utf-8') : '';
+  const release111UiSmokePath = path.join(process.cwd(), 'scripts', 'release-111-ui-smoke.cjs');
+  const release111UiSmoke = fs.existsSync(release111UiSmokePath) ? fs.readFileSync(release111UiSmokePath, 'utf-8') : '';
+  const releaseComputerUseVisionSmokePath = path.join(process.cwd(), 'scripts', 'release-computer-use-vision-smoke.cjs');
+  const releaseComputerUseVisionSmoke = fs.existsSync(releaseComputerUseVisionSmokePath) ? fs.readFileSync(releaseComputerUseVisionSmokePath, 'utf-8') : '';
+  const releaseRealUiCopilotComputerUseSmokePath = path.join(process.cwd(), 'scripts', 'release-real-ui-copilot-computeruse-smoke.cjs');
+  const releaseRealUiCopilotComputerUseSmoke = fs.existsSync(releaseRealUiCopilotComputerUseSmokePath) ? fs.readFileSync(releaseRealUiCopilotComputerUseSmokePath, 'utf-8') : '';
   const releaseRealProviderSmokePath = path.join(process.cwd(), 'scripts', 'release-real-provider-smoke.cjs');
   const releaseRealProviderSmoke = fs.existsSync(releaseRealProviderSmokePath) ? fs.readFileSync(releaseRealProviderSmokePath, 'utf-8') : '';
   const releaseRealApiNebulaMemorySwitchSmokePath = path.join(process.cwd(), 'scripts', 'release-real-apinebula-memory-switch-smoke.cjs');
@@ -365,15 +418,23 @@ async function main() {
   const appIconIcoPath = path.join(process.cwd(), 'assets', 'icon.ico');
   const appIconIco = fs.existsSync(appIconIcoPath) ? fs.readFileSync(appIconIcoPath) : Buffer.alloc(0);
   assert(launcherTs.includes('drainCliNetworkHandles') && mainTs.includes('drainCliNetworkHandles') && launcherTs.includes('getGlobalDispatcher') && mainTs.includes('getGlobalDispatcher'), 'cli entrypoints: drain async network handles before exit');
+  assert(cliCommandsTs.includes("process.stdout.on('error'") && cliCommandsTs.includes("process.stderr.on('error'") && cliCommandsTs.includes('stdoutBrokenPipe = true') && cliCommandsTs.includes('stderrBrokenPipe = true'), 'cli entrypoints: suppress asynchronous EPIPE errors from closed stdout/stderr pipes');
+  assert(mainTs.includes('function pathArgValue') && mainTs.includes("const prefix = `${key}=`") && mainTs.includes("let best = fs.existsSync(parts[0]) ? parts[0] : ''") && mainTs.includes("if (fs.existsSync(candidate)) best = candidate") && mainTs.includes("return best || parts.join(' ') || undefined") && mainTs.includes("pathArgValue(args, '--root')"), 'main entrypoint: supports --root paths with spaces, --root=path form, and longest existing path matching');
   assert(fs.existsSync(path.join(process.cwd(), 'assets', 'app-icon-dark.png')) && fs.existsSync(path.join(process.cwd(), 'assets', 'app-icon-light.png')) && appIconIco.length > 6 && appIconIco.readUInt16LE(2) === 1 && appIconIco.readUInt16LE(4) >= 1, 'app icons: themed PNG assets and Windows ICO exist');
   assert(packageJson.includes('"icon": "assets/icon.ico"') && electronBuilderConfigTs.includes("icon: 'assets/icon.ico'"), 'app icons: Windows package uses generated ICO');
   assert(mainTs.includes('nativeTheme') && mainTs.includes("app-icon-light.png") && mainTs.includes("app-icon-dark.png") && mainTs.includes('createAppIconImage(16)') && mainTs.includes('icon: themedAppIconPath()'), 'app icons: runtime windows and tray use themed assets');
+  assert(nativeToolsTs.includes('NATIVE_TOOL_CATALOG') && nativeToolsTs.includes("name: 'computer_use'") && nativeToolsTs.includes("name: 'terminal_takeover'") && nativeToolsTs.includes('normalizeNativeToolEnabled') && configTs.includes('defaultNativeToolEnabled()') && configTs.includes("tools:") && toolsTs.includes('isNativeToolEnabled') && mainTs.includes('nativeToolCatalogForState') && mainTs.includes("case 'nativeTools'"), 'native tools settings: catalog, defaults, backend state, and ToolExecutor gating are wired');
+  assert(nativeToolsTs.includes("name: 'ssh_workspace'") && toolsTs.includes("t('ssh_workspace'") && toolsTs.includes('new SshManager') && preloadTs.includes('createSshWorkspace') && mainTs.includes("ssh:createWorkspace") && uiHtml.includes('ws-ssh-host') && uiHtml.includes('validateSshWorkspaceForm'), 'OpenSSH workspace: native tool, IPC, preload, and new-workspace UI are wired');
   assert(uiHtml.includes('id="title-app-logo"') && uiHtml.includes('id="title-app-icon"') && uiHtml.includes('../../assets/app-icon-dark.png') && uiHtml.includes('../../assets/app-icon-light.png'), 'app icons: custom titlebar renders themed icon assets');
-  assert(uiHtml.includes('@keyframes app-icon-border-spin') && uiHtml.includes('animation: app-icon-border-spin 3s linear infinite') && uiHtml.includes('conic-gradient'), 'app icons: custom titlebar has animated color border');
+  assert(uiHtml.includes('#topbar .logo::before') && uiHtml.includes('animation: marquee-rotate var(--marquee-speed) linear infinite') && uiHtml.includes('var(--g1), var(--g2), var(--g3), var(--g4), var(--g1)') && uiHtml.includes('calc(-2 * var(--marquee-width))'), 'app icons: custom titlebar border uses shared adjustable marquee settings');
   assert(fs.existsSync(path.join(process.cwd(), 'scripts', 'patch-win-exe-icon.cjs')) && distPortableScript.includes("require('./patch-win-exe-icon.cjs')") && distPortableScript.includes('patchAndVerify(unpackedExe, packageIcon)') && distPortableScript.includes('verifyExeIcon(unpackedExe, packageIcon)'), 'app icons: dist-portable patches and verifies win-unpacked exe associated icon before zipping');
   assert(packageJson.includes('"release:cli-smoke"') && releaseCliSmoke.includes('Start-Process') && releaseCliSmoke.includes('-RedirectStandardOutput'), 'release cli smoke: uses stable redirected packaged exe invocation');
   assert(releaseCliSmoke.includes("['state', '--root', root]") && releaseCliSmoke.includes('parsedState.autoSwitch') && releaseCliSmoke.includes('parsedState.autoSwitchScope') && releaseCliSmoke.includes('parsedState.openAIApiMode') && releaseCliSmoke.includes('parsedState.contextWindow') && releaseCliSmoke.includes("['tool', 'write'") && releaseCliSmoke.includes("'--args-file'") && releaseCliSmoke.includes("['send', '--input-file'") && releaseCliSmoke.includes("['validate-models', '--selected', 'ReleaseCliMock/release-cli-mock'") && releaseCliSmoke.includes("['skills-market'") && releaseCliSmoke.includes("'memory-lab'") && releaseCliSmoke.includes('ReleaseCliMemoryNeedle') && releaseCliSmoke.includes("log('memory-lab ok')") && releaseCliSmoke.includes("'install-update'") && releaseCliSmoke.includes("log('install-update ok')"), 'release cli smoke: covers state, model auto/context fields, tool, send, validate-models, skills-market, memory-lab, and install-update');
   assert(releaseCliSmoke.includes('RELEASE_CLI_SEND_OK 做了什么 验证 文件') && releaseCliSmoke.includes('"stream":true'), 'release cli smoke: covers UTF-8 streaming send output');
+  assert(packageJson.includes('"release:111-cli-smoke"') && release111CliSmoke.includes('file_audit') && release111CliSmoke.includes('git_branch') && release111CliSmoke.includes('gh_fork') && release111CliSmoke.includes('repo_security_audit') && release111CliSmoke.includes('computer_use') && release111CliSmoke.includes('terminal_takeover') && release111CliSmoke.includes('ssh_workspace'), 'release 1.1.1 cli smoke: covers packaged audit, GitHub, Computer Use, SSH workspace, and terminal takeover tools');
+  assert(release111CliSmoke.includes('positer/Newmark-Agent') && release111CliSmoke.includes('visibility') && release111CliSmoke.includes('Call computer_use observe first') && release111CliSmoke.includes('NEWMARK_RELEASE_SSH_HOST') && release111CliSmoke.includes('remotePcHash') && release111CliSmoke.includes('RELEASE_111_CLI_TERMINAL_TAKEOVER_DONE') && release111CliSmoke.includes('stateHasTakeoverChain') && release111CliSmoke.includes('TAKEOVER_WRITE_OK'), 'release 1.1.1 cli smoke: validates public remote review, target_id guard, optional VM SSH link, and same-session takeover output');
+  assert(packageJson.includes('"release:computer-use-vision-smoke"') && releaseComputerUseVisionSmoke.includes('mock-computer-vision') && releaseComputerUseVisionSmoke.includes('mock-computer-text') && releaseComputerUseVisionSmoke.includes('computer_use') && releaseComputerUseVisionSmoke.includes("action: 'observe'") && releaseComputerUseVisionSmoke.includes('data:image/png;base64,') && releaseComputerUseVisionSmoke.includes('text-only second request unexpectedly included screenshot image_url') && releaseComputerUseVisionSmoke.includes('tempScreenshotsDeleted') && releaseComputerUseVisionSmoke.includes('requestLeaksTempScreenshotPath'), 'release Computer Use vision smoke: packaged release verifies vision models receive image plus UI text, text-only models receive UI text only, and screenshots are deleted after one use');
+  assert(packageJson.includes('"release:real-ui-copilot-computeruse-smoke"') && releaseRealUiCopilotComputerUseSmoke.includes("_local', 'real-ui-user-test") && releaseRealUiCopilotComputerUseSmoke.includes('window.api.githubCopilotLogin()') && releaseRealUiCopilotComputerUseSmoke.includes('GitHub Copilot imported') && releaseRealUiCopilotComputerUseSmoke.includes('2026-07-03-real-ui-copilot-computeruse-followup.png') && releaseRealUiCopilotComputerUseSmoke.includes('gpt-5.4-mini') && releaseRealUiCopilotComputerUseSmoke.includes('GitHub token leaked'), 'release real UI Copilot/ComputerUse smoke: validates real root model, GitHub Copilot import, screenshot evidence, and secret guard');
   assert(packageJson.includes('"release:cli-ui-conversation-sync-smoke"') && releaseCliUiConversationSyncSmoke.includes('--agent-only') && releaseCliUiConversationSyncSmoke.includes('--conversation') && releaseCliUiConversationSyncSmoke.includes('window.switchConversation') && releaseCliUiConversationSyncSmoke.includes('window.newConversation()'), 'release cli/ui conversation sync smoke: drives packaged pure Agent, CLI workspace conversation, and UI conversation paths');
   assert(releaseCliUiConversationSyncSmoke.includes('CLI_UI_SYNC_FROM_CLI') && releaseCliUiConversationSyncSmoke.includes('CLI_UI_SYNC_REPLY_FROM_CLI') && releaseCliUiConversationSyncSmoke.includes('CLI_UI_SYNC_FROM_UI') && releaseCliUiConversationSyncSmoke.includes('CLI_UI_SYNC_REPLY_FROM_UI'), 'release cli/ui conversation sync smoke: verifies CLI-created and UI-created transcripts round-trip');
   assert(releaseCliUiConversationSyncSmoke.includes('pure Agent CLI mode does not depend on workspace') && releaseCliUiConversationSyncSmoke.includes('2026-07-01-release-cli-ui-conversation-sync-smoke.png') && releaseCliUiConversationSyncSmoke.includes('messageCount >= 2') && releaseCliUiConversationSyncSmoke.includes('workspace: {') && releaseCliUiConversationSyncSmoke.includes('agentOnlyState.workspace !== null'), 'release cli/ui conversation sync smoke: captures evidence and validates pure Agent plus persisted workspace conversation state');
@@ -381,12 +442,14 @@ async function main() {
   assert(releaseUiSmoke.includes("'zh-CN'") && releaseUiSmoke.includes("'输入指令...'") && releaseUiSmoke.includes("'模糊注入模型'") && releaseUiSmoke.includes("'需要工作区'") && releaseUiSmoke.includes('language en/zh switch ok'), 'release ui smoke: validates Chinese language switching in packaged UI');
   assert(releaseUiSmoke.includes("leftNewChat: 'New chat'") && releaseUiSmoke.includes("leftNewChat: '新对话'") && releaseUiSmoke.includes("secondarySettingsTitle: '工作区设置'") && releaseUiSmoke.includes("english-after"), 'release ui smoke: validates bidirectional language switching in packaged UI');
   assert(releaseUiSmoke.includes("await setLanguage(cdp, 'auto')") && releaseUiSmoke.includes('auto-before persisted language mismatch') && releaseUiSmoke.includes("['Input instruction...', '输入指令...']"), 'release ui smoke: validates auto language switching and persistence in packaged UI');
-  assert(releaseUiSmoke.includes('function seedDynamicI18nState') && releaseUiSmoke.includes("contextCompression: '上下文已压缩 | 模型 | 8 -> 2 条消息'") && releaseUiSmoke.includes("nextQueue: '下一轮 1'") && releaseUiSmoke.includes("modelAuto: '自动'"), 'release ui smoke: validates dynamic language switching in packaged UI');
+  assert(releaseUiSmoke.includes('function seedDynamicI18nState') && releaseUiSmoke.includes("contextCompression: '上下文已压缩 | 模型 | 8 -> 2 条消息'") && releaseUiSmoke.includes("nextQueue: '队列 1'") && releaseUiSmoke.includes("modelAuto: '自动'"), 'release ui smoke: validates dynamic language switching in packaged UI');
   assert(releaseUiSmoke.includes('function readModelSettingsSnapshot') && releaseUiSmoke.includes("englishModels.chips.some(chip => chip.text.includes('available'))") && releaseUiSmoke.includes("chineseModels.chips.some(chip => chip.text.includes('不可用'))"), 'release ui smoke: validates model settings bilingual status/action labels');
   assert(releaseUiSmoke.includes('activeSubWindowAfterSwitch') && releaseUiSmoke.includes('Workspace required') && releaseUiSmoke.includes('Conversations are bound to a workspace.'), 'release ui smoke: validates active secondary window rerenders after language switch');
   assert(releaseUiSmoke.includes('function captureScreenshot') && releaseUiSmoke.includes('Emulation.setDeviceMetricsOverride') && releaseUiSmoke.includes('viewport-from-surface') && releaseUiSmoke.includes('screenshot capture failed'), 'release ui smoke: requires hardened screenshot capture evidence');
   assert(releaseUiSmoke.includes('function captureOsScreenshot') && releaseUiSmoke.includes('System.Windows.Forms.Screen') && releaseUiSmoke.includes('os-fallback'), 'release ui smoke: falls back to OS screenshot when CDP screenshot stalls');
-  assert(packageJson.includes('"release:ui-icon-smoke"') && fs.existsSync(path.join(process.cwd(), 'scripts', 'release-ui-icon-smoke.cjs')) && releaseUiIconSmoke.includes('verifyExeIcon(exePath, packageIcon)') && releaseUiIconSmoke.includes('verifyTitlebarIcon') && releaseUiIconSmoke.includes('app-icon-border-spin') && releaseUiIconSmoke.includes('conic-gradient'), 'release ui icon smoke: npm entry validates win-unpacked exe icon, runtime titlebar icon, and animated border');
+  assert(packageJson.includes('"release:111-ui-smoke"') && release111UiSmoke.includes("window.openSettings('models')") && release111UiSmoke.includes('#new-provider-protocol') && release111UiSmoke.includes('github_models') && release111UiSmoke.includes('fuzzyGithubOption') && release111UiSmoke.includes('window.githubCopilotLogin'), 'release 1.1.1 ui smoke: validates packaged GitHub Models exact-login UI and fuzzy exclusion');
+  assert(release111UiSmoke.includes('window.applyTerminalTakeoverEvent') && release111UiSmoke.includes('terminal-tab.agent-takeover.marquee-border') && release111UiSmoke.includes('terminal-pane.agent-takeover.marquee-border') && release111UiSmoke.includes('2026-07-03-release-111-ui-smoke.png'), 'release 1.1.1 ui smoke: validates packaged bottom terminal takeover mirror with marquee border');
+  assert(packageJson.includes('"release:ui-icon-smoke"') && fs.existsSync(path.join(process.cwd(), 'scripts', 'release-ui-icon-smoke.cjs')) && releaseUiIconSmoke.includes('verifyExeIcon(exePath, packageIcon)') && releaseUiIconSmoke.includes('verifyTitlebarIcon') && releaseUiIconSmoke.includes('marquee-rotate') && releaseUiIconSmoke.includes('rootGradientColor') && releaseUiIconSmoke.includes('rootMarqueeSpeed') && releaseUiIconSmoke.includes('rootMarqueeWidth'), 'release ui icon smoke: npm entry validates win-unpacked exe icon, runtime titlebar icon, and shared adjustable animated border');
   assert(packageJson.includes('"release:ui-agent-smoke"') && releaseUiAgentSmoke.includes('window.sendMessage()') && releaseUiAgentSmoke.includes('release-ui-agent-mock') && releaseUiAgentSmoke.includes('ACTIVE_TOOLCHAIN_RESULT_OK_20260627_SCRIPT'), 'release ui agent smoke: drives real packaged renderer send path with mock model');
   assert(releaseUiAgentSmoke.includes("'write,bash,edit,read'") && releaseUiAgentSmoke.includes('"timeout_ms":10000') && releaseUiAgentSmoke.includes('terminal timeout cap ok') && releaseUiAgentSmoke.includes('[write] OK') && releaseUiAgentSmoke.includes('[edit] OK'), 'release ui agent smoke: validates write bash edit read tools and terminal timeout cap');
   assert(packageJson.includes('"release:ui-acceptance-smoke"') && releaseUiAcceptanceSmoke.includes("window.api.createWorkspace('acceptance-workspace')") && releaseUiAcceptanceSmoke.includes("window.api.sendMessage('ACCEPTANCE_BUILD_WRITE") && releaseUiAcceptanceSmoke.includes("window.api.sendMessage('ACCEPTANCE_PLAN_BLOCK"), 'release ui acceptance smoke: covers workspace creation, Build send, and Plan send in packaged UI');
@@ -419,7 +482,7 @@ async function main() {
   assert(releaseUiFlowSubagentSmoke.includes('task') && releaseUiFlowSubagentSmoke.includes('subagent_send') && releaseUiFlowSubagentSmoke.includes('subagent_result') && releaseUiFlowSubagentSmoke.includes('subagent_close'), 'release ui Flow/subagent smoke: covers subagent create, continue, result, and close');
   assert(releaseUiFlowSubagentSmoke.includes("window.switchRightTab('subagent')") && releaseUiFlowSubagentSmoke.includes("window.openSubagentHistory('release-child')") && releaseUiFlowSubagentSmoke.includes('Subagent history is read-only'), 'release ui Flow/subagent smoke: validates retained read-only subagent history UI');
   assert(packageJson.includes('"release:ui-media-md-smoke"') && releaseUiMediaMdSmoke.includes('--remote-debugging-port=') && releaseUiMediaMdSmoke.includes('window.api.createWorkspace') && releaseUiMediaMdSmoke.includes('addMsg('), 'release ui media/md smoke: drives real packaged renderer without model spend');
-  assert(releaseUiMediaMdSmoke.includes('data:image/gif;base64') && releaseUiMediaMdSmoke.includes('.msg-image') && releaseUiMediaMdSmoke.includes('.msg-file-link'), 'release ui media/md smoke: validates markdown image and file-link rendering');
+  assert(releaseUiMediaMdSmoke.includes('data:image/gif;base64') && releaseUiMediaMdSmoke.includes('.msg-image') && releaseUiMediaMdSmoke.includes('.msg-file-link') && releaseUiMediaMdSmoke.includes('.md-table') && releaseUiMediaMdSmoke.includes('.md-math-inline') && releaseUiMediaMdSmoke.includes('.md-math-block'), 'release ui media/md smoke: validates conversation markdown image, file-link, table, and math rendering');
   assert(releaseUiMediaMdSmoke.includes("window.openFile('media-doc.md')") && releaseUiMediaMdSmoke.includes('#panel-md-viewer') && releaseUiMediaMdSmoke.includes('MD_VIEWER_OK_20260628'), 'release ui media/md smoke: validates markdown viewer rendering');
   assert(releaseUiMediaMdSmoke.includes('#editor-textarea') && releaseUiMediaMdSmoke.includes('EDITOR_LINK_TARGET_OK_20260628') && releaseUiMediaMdSmoke.includes("window.switchRightTab('file-tree')"), 'release ui media/md smoke: validates linked file editor and file tree');
   assert(releaseUiMediaMdSmoke.includes('Page.captureScreenshot') && releaseUiMediaMdSmoke.includes('2026-06-28-release-ui-media-md-smoke.png'), 'release ui media/md smoke: captures visual evidence');
@@ -432,7 +495,12 @@ async function main() {
   assert(packageJson.includes('"release:ui-conversation-queue-plan-smoke"') && releaseUiConversationQueuePlanSmoke.includes('--remote-debugging-port=') && releaseUiConversationQueuePlanSmoke.includes('QUEUE_FIRST_LOCK_TEST') && releaseUiConversationQueuePlanSmoke.includes('QUEUE_SECOND_AUTO_BUILD'), 'release ui conversation queue/plan smoke: drives real packaged queued conversation path through CDP');
   assert(releaseUiConversationQueuePlanSmoke.includes("window.switchRightTab('plan')") && releaseUiConversationQueuePlanSmoke.includes('PLAN_ITEM_CONV1_20260628') && releaseUiConversationQueuePlanSmoke.includes('PLAN_ITEM_CONV2_20260628'), 'release ui conversation queue/plan smoke: covers right sidebar plan isolation');
   assert(releaseUiConversationQueuePlanSmoke.includes('PARALLEL_CONV_A_20260701') && releaseUiConversationQueuePlanSmoke.includes('PARALLEL_CONV_B_20260701') && releaseUiConversationQueuePlanSmoke.includes('#queue-panel') && releaseUiConversationQueuePlanSmoke.includes('#queue-header-label') && releaseUiConversationQueuePlanSmoke.includes('QUEUE_SECOND_DONE_20260628'), 'release ui conversation queue/plan smoke: covers parallel conversation execution and same-conversation queue drain');
+  assert(releaseUiConversationQueuePlanSmoke.includes('background conversation A live text events cached while B is foreground') && releaseUiConversationQueuePlanSmoke.includes('foreground conversation B shows its own live text without A leakage') && releaseUiConversationQueuePlanSmoke.includes('background conversation A live feedback replayed when opened') && releaseUiConversationQueuePlanSmoke.includes('LONG_PARALLEL_CONV_A_STREAM_MID_20260701') && releaseUiConversationQueuePlanSmoke.includes('LONG_PARALLEL_CONV_B_STREAM_MID_20260701'), 'release ui conversation queue/plan smoke: verifies live feedback is bound to the owning conversation while another conversation is foregrounded');
   assert(releaseUiConversationQueuePlanSmoke.includes('Page.captureScreenshot') && releaseUiConversationQueuePlanSmoke.includes('2026-06-28-release-ui-conversation-queue-plan-smoke.png'), 'release ui conversation queue/plan smoke: captures visual evidence');
+  assert(packageJson.includes('"release:ui-fast-conversation-switch-smoke"') && releaseUiFastConversationSwitchSmoke.includes('--remote-debugging-port=') && releaseUiFastConversationSwitchSmoke.includes('FAST_SWITCH_CONV_A_PROMPT_20260704') && releaseUiFastConversationSwitchSmoke.includes('FAST_SWITCH_CONV_B_REPLY_20260704'), 'release ui fast conversation switch smoke: drives real packaged A/B conversation markers through CDP');
+  assert(releaseUiFastConversationSwitchSmoke.includes("document.querySelector('#chat-area')") && releaseUiFastConversationSwitchSmoke.includes("!body.includes") && !releaseUiFastConversationSwitchSmoke.includes('document.body.innerText.includes'), 'release ui fast conversation switch smoke: leakage checks are scoped to the visible chat area, not sidebar/global body text');
+  assert(releaseUiFastConversationSwitchSmoke.includes('for (let i = 0; i < 20; i++)') && releaseUiFastConversationSwitchSmoke.includes('rapid switch-back visual isolation ok') && releaseUiFastConversationSwitchSmoke.includes('#conversation-list .conv-item.active'), 'release ui fast conversation switch smoke: repeatedly switches A/B/A/B and verifies single active conversation item');
+  assert(releaseUiFastConversationSwitchSmoke.includes('2026-07-04-release-ui-fast-conversation-switch-a.png') && releaseUiFastConversationSwitchSmoke.includes('2026-07-04-release-ui-fast-conversation-switch-b.png') && releaseUiFastConversationSwitchSmoke.includes('assertPngScreenshot'), 'release ui fast conversation switch smoke: captures nonblank visual evidence for both final conversations');
   assert(packageJson.includes('"release:ui-goal-continuation-smoke"') && releaseUiGoalContinuationSmoke.includes('RELEASE_UI_GOAL_CONTINUATION') && releaseUiGoalContinuationSmoke.includes('mock.getGoalCalls() < 3'), 'release ui goal continuation smoke: covers repeated autonomous Goal model calls');
   assert(releaseUiGoalContinuationSmoke.includes('max[- ]?depth') && releaseUiGoalContinuationSmoke.includes('2026-06-28-release-ui-goal-continuation-smoke.png'), 'release ui goal continuation smoke: rejects max-depth warnings and captures visual evidence');
   assert(packageJson.includes('"release:ui-workspace-lifecycle-smoke"') && releaseUiWorkspaceLifecycleSmoke.includes("window.api.createWorkspace('lifecycle-alpha')") && releaseUiWorkspaceLifecycleSmoke.includes("window.api.selectWorkspace('lifecycle-beta')"), 'release ui workspace lifecycle smoke: covers internal workspace create and switch');
@@ -442,6 +510,9 @@ async function main() {
   assert(releaseUiStartupRecoverySmoke.includes("['skills', 'Work', 'Flow', 'archive', 'config.json', 'agent.md', 'PC_Hash.config']") && releaseUiStartupRecoverySmoke.includes("path.join('Flow', 'Flow.md')") && releaseUiStartupRecoverySmoke.includes("path.join('Work', 'State.json')"), 'release ui startup recovery smoke: verifies required companion files');
   assert(releaseUiStartupRecoverySmoke.includes('auto_create_timestamp_workspace') && releaseUiStartupRecoverySmoke.includes('Local.json did not contain one default internal workspace') && releaseUiStartupRecoverySmoke.includes('default workspace is not timestamp-like'), 'release ui startup recovery smoke: verifies default timestamp internal workspace');
   assert(releaseUiStartupRecoverySmoke.includes('window.api.getState()') && releaseUiStartupRecoverySmoke.includes('Page.captureScreenshot') && releaseUiStartupRecoverySmoke.includes('2026-06-28-release-ui-startup-recovery-smoke.png'), 'release ui startup recovery smoke: verifies renderer state and captures visual evidence');
+  assert(fs.existsSync(path.join(process.cwd(), 'config.example.json')) && packageJson.includes('"config.example.json"') && distPortableScript.includes("app.asar missing config.example.json"), 'config recovery: config.example.json exists in source and is required in packaged app.asar');
+  const configExampleText = fs.readFileSync(path.join(process.cwd(), 'config.example.json'), 'utf-8');
+  assert(configExampleText.includes('ExampleOpenAICompatible') && configExampleText.includes('"api_key": ""') && !/sk-[A-Za-z0-9]{20,}/.test(configExampleText), 'config recovery: example config contains no real provider key');
   assert(packageJson.includes('"release:real-provider-smoke"') && releaseRealProviderSmoke.includes('NEWMARK_APINEBULA_KEY') && releaseRealProviderSmoke.includes('REAL_PROVIDER_CLI_OK_20260627') && releaseRealProviderSmoke.includes('REAL_PROVIDER_UI_OK_20260627'), 'release real provider smoke: opt-in APInebula CLI and UI path exists');
   assert(releaseRealProviderSmoke.includes('real-provider UI idle after marker') && releaseRealProviderSmoke.includes("state.status !== 'idle'"), 'release real provider smoke: waits for UI idle after visible marker');
   assert(releaseRealProviderSmoke.includes('function waitForAssistantMarker') && releaseRealProviderSmoke.includes('assistantMarkerStatsExpression') && releaseRealProviderSmoke.includes('backendAssistantTexts') && releaseRealProviderSmoke.includes('duplicated assistant marker count'), 'release real provider smoke: UI marker validation is assistant-scoped, duplicate-aware, and debuggable');
@@ -469,6 +540,8 @@ async function main() {
   assert(distPortableScript.includes('win-unpacked-x64.zip') && distPortableScript.includes('Compress-Archive') && distPortableScript.includes('verifyZipPack()'), 'dist portable: creates and verifies compiled win-unpacked zip pack');
   assert(mainTs.includes('if (automationWakeMode)') && mainTs.includes('await automation.tick()') && mainTs.includes('app.quit();') && mainTs.indexOf('if (automationWakeMode)') < mainTs.indexOf('void startSidecar(root)'), 'main automation wake: runs due schedules headless and exits before sidecar/window setup');
   assert(preloadTs.includes("refreshSkills: () => ipcRenderer.invoke('skills:refresh')") && preloadTs.includes("marketSkillSources: () => ipcRenderer.invoke('skills:marketSources')") && preloadTs.includes("memoryLabRead: (selector?: string) => ipcRenderer.invoke('memoryLab:read'") && preloadTs.includes('updateCheckGithub') && preloadTs.includes('updateApplyGithub') && preloadTs.includes('terminalKill: (sessionId: string, timeoutMs?: number)'), 'preload: exposes skills refresh, market source management, Memory Lab, updates, and terminal kill timeout');
+  assert(preloadTs.includes("terminalTakeoverState: () => ipcRenderer.invoke('agentTerminal:takeoverState')") && preloadTs.includes("terminalTakeoverWrite: (sessionId: string, data: string) => ipcRenderer.invoke('agentTerminal:takeoverWrite'") && preloadTs.includes('onTerminalTakeover'), 'preload: exposes independent Agent terminal takeover IPC');
+  assert(preloadTs.includes("githubCopilotLogin: () => ipcRenderer.invoke('github:copilotLogin')"), 'preload: exposes GitHub Copilot browser login bridge');
   assert(preloadTs.includes('webUtils') && preloadTs.includes('filePathForFile') && uiHtml.includes('function promptInsertText(text)') && uiHtml.includes('function clipboardFilePaths(dataTransfer)') && uiHtml.includes("els.prompt.addEventListener('paste'") && uiHtml.includes("els.prompt.addEventListener('drop'") && uiHtml.includes("paths.join('\\n')"), 'ui html/preload: pasted or dropped files insert filesystem paths into the prompt');
   assert(preloadTs.includes('saveConfig: (cfg: string | Record<string, unknown>)'), 'preload: saveConfig accepts structured config patches');
   assert(preloadTs.includes("getConversationPlan: () => ipcRenderer.invoke('agent:getConversationPlan')") && preloadTs.includes("updateConversationPlan: (plan: Record<string, unknown>) => ipcRenderer.invoke('agent:updateConversationPlan', plan)"), 'preload: exposes conversation plan IPC');
@@ -481,9 +554,21 @@ async function main() {
   assert(mainTs.includes("ipcMain.handle('agent:getConversationPlan'") && mainTs.includes("ipcMain.handle('agent:updateConversationPlan'") && mainTs.includes('conversationPlan: agent.getConversationPlan()'), 'main ipc: exposes and returns conversation plan state');
   assert(mainTs.includes("ipcMain.handle('flow:run'") && mainTs.includes('chatMessages: agent.chatMessages') && mainTs.includes('conversations: agent.listConversationStates()'), 'main ipc: Flow run returns rendered conversation state');
   assert(mainTs.includes("ipcMain.handle('pty:kill'") && mainTs.includes('waitMs === 0') && mainTs.includes("session.proc.kill('SIGINT')"), 'main ipc: terminal interrupt timeout supports unlimited mode');
+  assert(mainTs.includes("ipcMain.handle('agentTerminal:takeoverState'") && mainTs.includes("ipcMain.handle('agentTerminal:takeoverWrite'") && mainTs.includes("webContents.send('agentTerminal:takeover'"), 'main ipc: broadcasts Agent terminal takeover state to bottom terminal UI');
+  assert(mainTs.includes("ipcMain.handle('github:copilotLogin'") && mainTs.includes("'auth', 'status'") && mainTs.includes("const tokenFromGh = () =>") && mainTs.includes("const importToken = (token: string") && mainTs.includes("'auth', 'refresh', '--scopes', 'models:read'") && !mainTs.includes("'auth', 'refresh', '--web', '--scopes', 'models:read'") && mainTs.includes("'auth', 'login', '--web', '--scopes', 'models:read'") && mainTs.includes("shell.openExternal('https://github.com/login/device')") && mainTs.includes("currentAgent.config.upsertProvider('GitHub Copilot', 'https://models.github.ai'") && mainTs.includes("protocol === 'openai' ? 'openai' : undefined"), 'main ipc: GitHub Copilot login imports GitHub CLI token, uses refresh without unsupported --web, falls back to browser login, and fuzzy injection remains openai/anthropic only');
   assert(mainTs.includes('agent.subagents.listAll().map') && mainTs.includes("active: s.status !== 'closed'") && uiHtml.includes("t('subagent.empty')"), 'main ipc/ui: closed subagents remain visible as retained history');
   assert(toolsTs.includes('timeout_ms') && toolsTs.includes('resolveBashTimeout') && toolsTs.includes("this.config.getNum('terminal', 'interrupt_timeout_ms')"), 'tools: agent bash accepts per-call timeout and reads config cap');
+  assert(toolsTs.includes("t('terminal_takeover'") && toolsTs.includes('runTerminalTakeover') && toolsTs.includes("tool === 'terminal_takeover' && g('action') === 'write'"), 'tools: terminal_takeover is an independent persistent shell tool with bash-grade command permission checks');
+  assert(toolsTs.includes("t('computer_use'") && toolsTs.includes("'app_observe'") && toolsTs.includes("'takeover_start'") && toolsTs.includes('app_target') && toolsTs.includes('window_handle') && toolsTs.includes("'scroll'") && toolsTs.includes('scroll_x') && toolsTs.includes('runComputerUse') && toolsTs.includes('allowEphemeralVisionImage') && toolsTs.includes('conversationId?: string') && toolsTs.includes('COMPUTER_USE_LOCK_TTL_MS') && toolsTs.includes('computerUseOwner(context, wsPath)') && toolsTs.includes('ComputerUse is already active') && toolsTs.includes('releaseComputerUseLock(action, owner)') && agentKernelRunnerTs.includes("conversationId: agent.activeConversationId || 'default'") && !toolsTs.includes('archive/computer-use') && agentTs.includes('observe -> decide -> act -> observe') && agentTs.includes('takeover_start') && agentTs.includes('app_list/app_observe/app_*'), 'tools/agent prompt: exposes native Computer Use observe/action loop, takeover border, app scoping, single-conversation lock, and ephemeral-only screenshot handling');
+  const computerUseTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'computerUse.ts'), 'utf-8');
+  assert(computerUseTs.includes('System.Windows.Forms') && computerUseTs.includes('CopyFromScreen') && computerUseTs.includes('SetCursorPos') && computerUseTs.includes('UIAutomationClient') && computerUseTs.includes('BoundingRectangle') && computerUseTs.includes('vision_assist') && computerUseTs.includes('target_id') && computerUseTs.includes('stable_key') && computerUseTs.includes('high_priority_objects') && computerUseTs.includes('intersectionOverUnion') && computerUseTs.includes('normalized_bbox') && computerUseTs.includes('allowed_actions') && computerUseTs.includes('scrollAt') && computerUseTs.includes('startTakeoverOverlay') && computerUseTs.includes('lastTakeoverOverlayStyle') && computerUseTs.includes('colors: options.gradientColors || options.gradient_colors') && computerUseTs.includes('speed: options.gradientSpeed ?? options.gradient_speed') && computerUseTs.includes('width: options.gradientWidth ?? options.gradient_width') && computerUseTs.includes('desktop-edge-dynamic-gradient') && computerUseTs.includes('single-click-through-virtual-screen-overlay') && computerUseTs.includes('WS_EX_TRANSPARENT') && !computerUseTs.includes('WS_EX_LAYERED') && !computerUseTs.includes('TransparencyKey') && computerUseTs.includes('New-Object System.Drawing.Drawing2D.GraphicsPath') && computerUseTs.includes('$script:form.Region = New-Object System.Drawing.Region($regionPath)') && computerUseTs.includes('function Newmark-LerpColor') && computerUseTs.includes('[System.Drawing.Color]::FromArgb') && computerUseTs.includes('$perimeter = [Math]::Max') && computerUseTs.includes('$g.FillRectangle($brush') && computerUseTs.includes('SetWindowPos($script:form.Handle') && computerUseTs.includes("([wmiclass]'Win32_Process').Create") && !computerUseTs.includes('Start-Process -FilePath powershell.exe') && computerUseTs.includes('observeAppWindows') && computerUseTs.includes('app_observe') && computerUseTs.includes('app_click') && computerUseTs.includes('NativeWindow') && computerUseTs.includes('tempScreenshotDir') && computerUseTs.includes('screenshot_retention') && computerUseTs.includes('ephemeral-deleted-before-tool-return') && computerUseTs.includes('fs.unlinkSync(outPath)') && toolsTs.includes('gradient_colors) ?') && toolsTs.includes("this.config.get<string[]>('ui', 'gradient_colors')") && toolsTs.includes('gradient_width !== undefined') && toolsTs.includes("this.config.getNum('ui', 'gradient_width')") && !computerUseTs.includes("archive', 'computer-use") && !computerUseTs.includes('github.com/gtt116/enikk') && !computerUseTs.includes('RapidOCR') && !computerUseTs.includes('ultralytics'), 'computer_use: native Windows screenshot/action/UI Automation implementation uses ephemeral screenshots, region-cut click-through detached continuous-gradient takeover indicator, app scoping, CLI-compatible gradient settings, and no copied Enikk detector/OCR code');
+  assert(agentKernelRunnerTs.includes('computerUseVisionImagePath') && agentKernelRunnerTs.includes('sanitizeComputerUseToolText') && agentKernelRunnerTs.includes('imagePathToOpenAIContentPart') && agentKernelRunnerTs.includes('fs.unlinkSync(imagePath)') && agentKernelRunnerTs.includes('allowEphemeralVisionImage: name === \'computer_use\'') && providerTs.includes('normalizeOpenAIContent') && providerTs.includes('normalizeAnthropicContent') && providerTs.includes('input_image'), 'computer_use: vision-capable models receive screenshot image input synchronized with UI Automation text and delete the ephemeral image after preparation');
   assert(agentTs.includes('Agent terminal timeout: bash accepts per-call timeout_ms') && agentTs.includes('is a nonzero upper cap'), 'agent prompt: discloses bash timeout_ms and settings cap semantics');
+  assert(agentTs.includes('repo_security_audit') && agentTs.includes('Remote repository safety') && agentTs.includes('public/private visibility') && agentTs.includes('private URLs, secrets, local runtime state'), 'agent prompt: proactively drives remote repository security and privacy review');
+  assert(agentTs.includes('GitHub Copilot') && agentTs.includes('https://models.github.ai'), 'agent core: GitHub Copilot/Models provider is inferred to the official GitHub Models endpoint');
+  assert(providerTs.includes("ProviderProtocol = 'openai' | 'anthropic' | 'github_models'") && providerTs.includes("githubModelsUrl('/inference/chat/completions')") && providerTs.includes("githubModelsUrl('/catalog/models')") && providerTs.includes("'X-GitHub-Api-Version': '2022-11-28'"), 'llm provider: GitHub Copilot/Models uses official GitHub Models inference and catalog APIs');
+  assert(configTs.includes("github_models") && configTs.includes("models.github.ai") && configTs.includes('defaultProviderBaseUrl') && cliCommandsTs.includes('--protocol openai|anthropic') && !cliCommandsTs.includes('--protocol openai|anthropic|github_models') && agentTs.includes('GitHub/Copilot providers require precise browser login') && cliCommandsTs.includes('GitHub/Copilot providers require precise browser login') && fuzzyTs.includes("value === 'openai' || value === 'anthropic'"), 'config/cli/core: GitHub Models protocol is normalized/defaulted but excluded from fuzzy-inject');
+  assert(uiHtml.includes("t('model.githubModelsCompat')") && uiHtml.includes('value="github_models"') && uiHtml.includes('window.githubCopilotLogin') && uiHtml.includes('window.syncProviderProtocolDefaults') && uiHtml.includes('https://models.github.ai') && uiHtml.includes('id="fuzzy-protocol"><option value="auto">') && uiHtml.includes('<option value="anthropic">') && !uiHtml.includes('id="fuzzy-protocol"><option value="auto"><option value="github_models"') && !uiHtml.includes('id="fuzzy-protocol"><option value="auto">' + '<option value="github_models"') && uiHtml.includes("var protocol = protocolEl && protocolEl.value !== 'auto' ? protocolEl.value : undefined;") && uiHtml.includes('window.applyTerminalTakeoverEvent') && uiHtml.includes('data-takeover-session') && uiHtml.includes('terminal-pane active agent-takeover marquee-border'), 'ui html: exposes GitHub Models exact login while excluding GitHub from fuzzy injection');
   assert(agentTs.includes('refreshSkills(): void') && agentTs.includes('this.skills = new SkillsManager(this.rootPath);'), 'agent core: skills manager can be refreshed without restart');
   assert(agentTs.includes("'- Memory Lab exists and provides persistent memory.'") && !agentTs.includes('Memory Lab stores persistent local memory for Newmark Agent') && agentTs.includes('handleMemoryLabTool') && agentTs.includes('async updateMemoryLab') && agentTs.includes('async reindexMemoryLab'), 'agent core: Memory Lab prompt is only a one-line existence signal and tool gated through Agent organizer');
   assert(cliCommandsTs.includes("command === 'memory-lab'") && cliCommandsTs.includes('await agent.updateMemoryLab') && cliCommandsTs.includes('await agent.reindexMemoryLab'), 'cli commands: memory-lab update and reindex route through Agent organizer');
@@ -524,6 +609,8 @@ async function main() {
   assert(cfg.providers().find(p => p.name === 'test-prov')?.base_url === 'https://api.test.com/v1', 'provider upsert: empty url preserves saved endpoint');
   cfg.upsertProvider('anthropic-prov', 'https://api.example.com/v1', 'test-key-456', 'anthropic');
   assert(cfg.providers().find(p => p.name === 'anthropic-prov')?.protocol === 'anthropic', 'provider protocol can be explicit anthropic');
+  cfg.upsertProvider('GitHub Copilot', '', 'ghp-test-token', 'github_models');
+  assert(cfg.providers().find(p => p.name === 'GitHub Copilot')?.base_url === 'https://models.github.ai' && cfg.providers().find(p => p.name === 'GitHub Copilot')?.protocol === 'github_models', 'provider protocol can default GitHub Models endpoint');
   const publicProviders = sanitizeProvidersForState(cfg.providers());
   assert(publicProviders.every(p => p.api_key === '') && publicProviders.some(p => p.name === 'test-prov' && p.has_api_key), 'provider state: redacts API keys and exposes has_api_key');
   const mergedProviders = mergeProviderSecrets([{ name: 'test-prov', base_url: 'https://api.test.com/v1', api_key: '', protocol: 'openai', enabled: true, models: [] }], cfg.providers()) as Array<{ name: string; api_key?: string }>;
@@ -538,11 +625,13 @@ async function main() {
   assert(models[0].name === 'gpt-test', 'model name correct');
   assert(models[0].provider === 'test-prov', 'model provider bound');
   assert(models[0].provider_protocol === 'openai', 'model carries provider protocol');
+  cfg.addModelToProvider('test-prov', 'gpt-5.5', 'GPT 5.5', 'Provider-listed frontier GPT model');
+  assert(cfg.findModel('gpt-5.5')?.vision === true, 'model config: infers GPT-5.5 vision capability when model is added');
 
   // Test save
   cfg.save();
   const cfg2 = new ConfigManager(TEST_DIR);
-  assert(cfg2.providers().length === 2, 'config persisted');
+  assert(cfg2.providers().length === 3 && cfg2.providers().some(p => p.name === 'GitHub Copilot' && p.protocol === 'github_models'), 'config persisted');
 
   const bomDir = path.join(TEST_DIR, 'bom-config');
   fs.mkdirSync(bomDir, { recursive: true });
@@ -586,6 +675,22 @@ async function main() {
   assert(plainConfig.providers()[0]?.name === 'PlainProvider', 'config: accepts plain JSON providers');
   assert(plainConfig.getStr('models', 'default_model') === 'plain-model', 'config: accepts plain JSON scalar values');
   assert(plainConfig.getStr('workspace', 'prompt_mode') === 'workspace_only', 'config: accepts plain JSON workspace settings');
+  const brokenConfigRoot = path.join(TEST_DIR, 'broken-config-root');
+  fs.mkdirSync(brokenConfigRoot, { recursive: true });
+  fs.writeFileSync(path.join(brokenConfigRoot, 'config.json'), JSON.stringify({
+    models: {
+      providers: [{ name: '', base_url: 'https://broken.invalid/v1', api_key: 'sk-redacted-test-secret-value', models: [{ display: 'nameless' }] }],
+      default_model: 'broken-model',
+    },
+  }), 'utf-8');
+  const recoveredConfig = new ConfigManager(brokenConfigRoot);
+  assert(recoveredConfig.providers().some(p => p.name === 'ExampleOpenAICompatible') && recoveredConfig.providers()[0]?.api_key === '', 'config recovery: invalid provider shape is replaced with safe example config');
+  assert(fs.readdirSync(brokenConfigRoot).some(f => f.startsWith('config.broken-invalid-shape-') && f.endsWith('.json')), 'config recovery: invalid provider shape is backed up before replacement');
+  const invalidJsonRoot = path.join(TEST_DIR, 'invalid-json-config-root');
+  fs.mkdirSync(invalidJsonRoot, { recursive: true });
+  fs.writeFileSync(path.join(invalidJsonRoot, 'config.json'), '{ invalid json', 'utf-8');
+  const invalidJsonRecovered = new ConfigManager(invalidJsonRoot);
+  assert(invalidJsonRecovered.providers().some(p => p.name === 'ExampleOpenAICompatible') && fs.readdirSync(invalidJsonRoot).some(f => f.startsWith('config.broken-invalid-json-')), 'config recovery: invalid JSON is backed up and replaced with safe example config');
 
   // ---- 2. Tool Executor Tests ----
   console.log('\n🔧 Tool Executor');
@@ -608,6 +713,88 @@ async function main() {
   assert((timeoutTools as any).resolveBashTimeout(5000) === 5000, 'bash timeout: shorter requested timeout is preserved under cap');
   const bashRequestedTimeout = await timeoutTools.execute('bash', JSON.stringify({ command: 'echo timeout-ok', timeout_ms: 10000 }), TEST_DIR);
   assert(bashRequestedTimeout.includes('timeout-ok'), 'bash timeout: execute accepts timeout_ms argument');
+  const takeoverStart = await tools.execute('terminal_takeover', JSON.stringify({ action: 'start', name: 'verify', shell: 'powershell' }), TEST_DIR);
+  assert(takeoverStart.includes('"ok": true') && takeoverStart.includes('"name": "verify"'), 'terminal_takeover: starts independent named session');
+  const takeoverWrite = await tools.execute('terminal_takeover', JSON.stringify({ action: 'write', name: 'verify', command: 'Write-Output takeover-ok' }), TEST_DIR);
+  assert(takeoverWrite.includes('wrote to verify'), 'terminal_takeover: writes to persistent session without using bash');
+  let takeoverRead = '';
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 250));
+    takeoverRead = await tools.execute('terminal_takeover', JSON.stringify({ action: 'read', name: 'verify', max_chars: 5000 }), TEST_DIR);
+    if (takeoverRead.includes('takeover-ok')) break;
+  }
+  assert(takeoverRead.includes('takeover-ok'), 'terminal_takeover: reads output from the same persistent shell environment');
+  const takeoverStop = await tools.execute('terminal_takeover', JSON.stringify({ action: 'stop', name: 'verify' }), TEST_DIR);
+  assert(takeoverStop.includes('stopped verify'), 'terminal_takeover: stops named session');
+  const computerDryMove = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 10, y: 20, dry_run: true }), TEST_DIR);
+  assert(computerDryMove.includes('"action": "move"') && computerDryMove.includes('"dry_run": true'), 'computer_use: supports dry-run native desktop move action');
+  const computerTargetBeforeObserve = await tools.execute('computer_use', JSON.stringify({ action: 'click', target_id: 'ui-1', dry_run: true }), TEST_DIR);
+  assert(computerTargetBeforeObserve.includes('Call computer_use observe first') || computerTargetBeforeObserve.includes('target_id not found'), 'computer_use: target_id actions require latest semantic observation');
+  const computerDryType = await tools.execute('computer_use', JSON.stringify({ action: 'type', text: 'hello', dry_run: true }), TEST_DIR);
+  assert(computerDryType.includes('"action": "type"') && computerDryType.includes('"chars": 5'), 'computer_use: supports dry-run native desktop type action');
+  const computerDryScroll = await tools.execute('computer_use', JSON.stringify({ action: 'scroll', x: 10, y: 20, scroll_y: 240, dry_run: true }), TEST_DIR);
+  assert(computerDryScroll.includes('"action": "scroll"') && computerDryScroll.includes('"scroll_y": 240'), 'computer_use: supports dry-run native desktop scroll action');
+  const computerTakeoverStop = await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR);
+  assert(computerTakeoverStop.includes('"action": "takeover_stop"') && computerTakeoverStop.includes('"ok": true'), 'computer_use: takeover_stop is safe and clears desktop takeover indicator');
+  const computerLockA1 = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 1, y: 1, dry_run: true }), TEST_DIR, { conversationId: 'conv-a' });
+  assert(computerLockA1.includes('"action": "move"') && computerLockA1.includes('"dry_run": true'), 'computer_use lock: first conversation acquires control');
+  const computerLockBBlocked = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 2, y: 2, dry_run: true }), TEST_DIR, { conversationId: 'conv-b' });
+  assert(computerLockBBlocked.includes('"ok": false') && computerLockBBlocked.includes('ComputerUse is already active') && computerLockBBlocked.includes('conversation:conv-a') && computerLockBBlocked.includes('conversation:conv-b'), 'computer_use lock: second conversation is blocked while another conversation owns ComputerUse');
+  const computerLockA2 = await tools.execute('computer_use', JSON.stringify({ action: 'scroll', x: 1, y: 1, scroll_y: 120, dry_run: true }), TEST_DIR, { conversationId: 'conv-a' });
+  assert(computerLockA2.includes('"action": "scroll"') && computerLockA2.includes('"scroll_y": 120'), 'computer_use lock: owning conversation can continue sequential actions');
+  const computerLockBStopBlocked = await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR, { conversationId: 'conv-b' });
+  assert(computerLockBStopBlocked.includes('"ok": false') && computerLockBStopBlocked.includes('ComputerUse is already active') && computerLockBStopBlocked.includes('conversation:conv-a'), 'computer_use lock: non-owner conversation cannot clear the active takeover');
+  const computerLockAStop = await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR, { conversationId: 'conv-a' });
+  assert(computerLockAStop.includes('"action": "takeover_stop"') && computerLockAStop.includes('"ok": true'), 'computer_use lock: owner releases control with takeover_stop');
+  const computerLockBAllowed = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 3, y: 3, dry_run: true }), TEST_DIR, { conversationId: 'conv-b' });
+  assert(computerLockBAllowed.includes('"action": "move"') && computerLockBAllowed.includes('"dry_run": true'), 'computer_use lock: another conversation can acquire after release');
+  await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR, { conversationId: 'conv-b' });
+  const computerAppList = await tools.execute('computer_use', JSON.stringify({ action: 'app_list', max_chars: 12000 }), TEST_DIR);
+  assert(computerAppList.includes('"action": "app_list"') && computerAppList.includes('"applications"'), 'computer_use: lists visible taskbar/application windows for app-scoped control');
+  const computerAppMissing = await tools.execute('computer_use', JSON.stringify({ action: 'app_observe', app_target: 'newmark-nonexistent-app-for-test', dry_run: true }), TEST_DIR);
+  assert(computerAppMissing.includes('"action": "app_observe"') && computerAppMissing.includes('No visible application window matched'), 'computer_use: app_observe reports unmatched taskbar/application targets');
+  await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR);
+  const disabledToolCfg = new ConfigManager(path.join(TEST_DIR, 'disabled-native-tools'));
+  disabledToolCfg.set('tools', 'enabled', { ...disabledToolCfg.nativeToolEnabled(), computer_use: false });
+  const disabledTools = new ToolExecutor(TEST_DIR, disabledToolCfg);
+  assert(!disabledTools.definitions().some((tool: any) => tool.function?.name === 'computer_use'), 'native tool settings: disabled tools are hidden from definitions');
+  const disabledComputerUse = await disabledTools.execute('computer_use', JSON.stringify({ action: 'move', x: 10, y: 20, dry_run: true }), TEST_DIR);
+  assert(disabledComputerUse.includes('[tool disabled] computer_use'), 'native tool settings: disabled tools are blocked at execution');
+  const sshRoot = path.join(TEST_DIR, 'ssh-runtime');
+  fs.mkdirSync(path.join(sshRoot, 'Work'), { recursive: true });
+  fs.writeFileSync(path.join(sshRoot, 'PC_Hash.config'), 'local-pc|win32|x64', 'utf-8');
+  fs.writeFileSync(path.join(sshRoot, 'Work', 'Local.json'), '[]', 'utf-8');
+  fs.writeFileSync(path.join(sshRoot, 'Work', 'External.json'), '[]', 'utf-8');
+  const sshCalls: Array<{ command: string; args: string[] }> = [];
+  const mockSshRunner: SshRunner = (command, runArgs) => {
+    sshCalls.push({ command, args: runArgs });
+    const argsText = runArgs.join(' ');
+    return {
+      status: argsText.includes('bad-host') ? 255 : 0,
+      stdout: argsText.includes('bad-host') ? '' : 'remote-vm|Linux|x86_64\n',
+      stderr: argsText.includes('bad-host') ? 'connect failed' : '',
+      args: runArgs,
+    };
+  };
+  const sshManager = new SshManager(sshRoot, mockSshRunner);
+  const sshWorkspaceManager = new WorkspaceManager(sshRoot, new ConfigManager(sshRoot));
+  const sshTools = new ToolExecutor(sshRoot, new ConfigManager(sshRoot), sshManager, sshWorkspaceManager);
+  const sshUpsert = await sshTools.execute('ssh_workspace', JSON.stringify({ action: 'upsert', name: 'Local VM', host: '127.0.0.1', port: 2222, user: 'tester', identity_file: 'C:\\Users\\tester\\.ssh\\id_ed25519', remote_root: '~/.newmark-agent' }), sshRoot);
+  assert(sshUpsert.includes('"ok": true') && sshUpsert.includes('<identity-file-configured>') && !sshUpsert.includes('id_ed25519'), 'ssh_workspace: saves redacted OpenSSH connection metadata without exposing identity path');
+  const sshConnectionId = JSON.parse(sshUpsert).connection.id;
+  const sshValidate = await sshTools.execute('ssh_workspace', JSON.stringify({ action: 'validate', id: sshConnectionId, remote_root: '~/.newmark-agent' }), sshRoot);
+  assert(sshValidate.includes('"ok": true') && sshValidate.includes('remote-vm|Linux|x86_64'), 'ssh_workspace: validates native OpenSSH link and reads remote PC_Hash');
+  assert(sshCalls[0]?.command === 'ssh' && sshCalls[0].args.includes('BatchMode=yes') && sshCalls[0].args.includes('ConnectTimeout=8') && sshCalls[0].args.includes('tester@127.0.0.1'), 'ssh_workspace: invokes OpenSSH through argv array with noninteractive options');
+  const sshCreate = await sshTools.execute('ssh_workspace', JSON.stringify({ action: 'create_workspace', id: sshConnectionId, name: 'vm-project', remote_path: '~/.newmark-agent/workspaces/project' }), sshRoot);
+  const parsedSshCreate = JSON.parse(sshCreate);
+  assert(parsedSshCreate.ok === true && parsedSshCreate.workspace.kind === 'ssh' && parsedSshCreate.workspace.remotePcHash === 'remote-vm|Linux|x86_64' && fs.existsSync(parsedSshCreate.workspace.path), 'ssh_workspace: creates SSH external shadow workspace with remote PC_Hash metadata');
+  const sshReloaded = new WorkspaceManager(sshRoot, new ConfigManager(sshRoot));
+  assert(sshReloaded.external.some(w => w.kind === 'ssh' && w.remotePcHash === 'remote-vm|Linux|x86_64'), 'workspace: preserves SSH external workspaces by remote PC_Hash');
+  const localExternalDir = path.join(TEST_DIR, 'external-host-binding-check');
+  fs.mkdirSync(localExternalDir, { recursive: true });
+  fs.writeFileSync(path.join(sshRoot, 'Work', 'External.json'), JSON.stringify([{ name: 'old-local', path: localExternalDir, isInternal: false, hostBinding: 'different-pc|win32|x64', icon: 'O' }], null, 2), 'utf-8');
+  const hostFiltered = new WorkspaceManager(sshRoot, new ConfigManager(sshRoot));
+  assert(!hostFiltered.external.some(w => w.name === 'old-local'), 'workspace: still filters mismatched local external hostBinding');
 
   // read
   const readResult = await tools.execute('read', '{"path":"test.txt"}', TEST_DIR);
@@ -652,6 +839,35 @@ async function main() {
   // git_status (likely not in git repo, but shouldn't crash)
   const gsResult = await tools.execute('git_status', '{}', TEST_DIR);
   assert(gsResult.length > 0, 'git_status: returns result');
+  const auditSource = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'index.ts'), 'utf-8');
+  assert(auditSource.includes("case 'file_audit'") && auditSource.includes("repos/${repo}/commits?path=") && auditSource.includes("repos/${repo}/contents/") && auditSource.includes("repos/${repo}/branches/"), 'file_audit: native GitHub REST paths are wired through gh api for commits, contents, and branches');
+  assert(auditSource.includes("case 'repo_security_audit'") && auditSource.includes('scanRepositorySecrets') && auditSource.includes('releaseExcludedPathFindings') && auditSource.includes('withRemoteSecurityPreamble'), 'repo_security_audit: remote safety, privacy, and remote-write preflight paths are wired');
+  assert(auditSource.includes("spawnSync('git', args") && auditSource.includes("spawnTool('gh', args"), 'git/github tools: use native spawn argument arrays instead of shell string concatenation for new audit flows');
+  const auditRepo = path.join(TEST_DIR, 'audit-repo');
+  fs.mkdirSync(auditRepo, { recursive: true });
+  fs.writeFileSync(path.join(auditRepo, 'tracked.txt'), 'audit v1', 'utf-8');
+  spawnSync('git', ['init'], { cwd: auditRepo, encoding: 'utf-8', windowsHide: true });
+  spawnSync('git', ['config', 'user.email', 'newmark@example.test'], { cwd: auditRepo, encoding: 'utf-8', windowsHide: true });
+  spawnSync('git', ['config', 'user.name', 'Newmark Test'], { cwd: auditRepo, encoding: 'utf-8', windowsHide: true });
+  spawnSync('git', ['add', 'tracked.txt'], { cwd: auditRepo, encoding: 'utf-8', windowsHide: true });
+  spawnSync('git', ['commit', '-m', 'audit baseline'], { cwd: auditRepo, encoding: 'utf-8', windowsHide: true });
+  fs.writeFileSync(path.join(auditRepo, 'tracked.txt'), 'audit v2', 'utf-8');
+  const auditResult = await tools.execute('file_audit', JSON.stringify({ path: path.join(auditRepo, 'tracked.txt'), include_remote: false }), auditRepo);
+  const auditJson = JSON.parse(auditResult);
+  assert(auditJson.local.sha256 && auditJson.git.tracked === true && String(auditJson.git.status).includes('M tracked.txt') && auditJson.remote.provider === 'local-only', 'file_audit: reports local hash, git tracking/status, and local-only remote mode');
+  fs.mkdirSync(path.join(auditRepo, 'archive'), { recursive: true });
+  fs.writeFileSync(path.join(auditRepo, 'archive', 'private-note.md'), 'local only', 'utf-8');
+  fs.writeFileSync(path.join(auditRepo, 'config.json'), '{"api_key":"sk-testsecret12345678901234567890"}', 'utf-8');
+  spawnSync('git', ['add', 'config.json'], { cwd: auditRepo, encoding: 'utf-8', windowsHide: true });
+  spawnSync('git', ['remote', 'add', 'origin', 'https://github.com/example/public-audit.git'], { cwd: auditRepo, encoding: 'utf-8', windowsHide: true });
+  const securityAuditResult = await tools.execute('repo_security_audit', JSON.stringify({ path: auditRepo }), auditRepo);
+  const securityAudit = JSON.parse(securityAuditResult);
+  assert(securityAudit.remote_repository_detected === true && securityAudit.remote.repository === 'example/public-audit' && securityAudit.security_review.required === true, 'repo_security_audit: detects remote GitHub repository and requires safety review');
+  assert(securityAudit.security_review.secret_findings.some((f: any) => f.path === 'config.json') && securityAudit.security_review.release_excluded_local_files.some((p: string) => p === 'archive' || p.startsWith('archive/')), 'repo_security_audit: reports secret-like tracked material and release-excluded local files');
+  const pushSource = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'index.ts'), 'utf-8');
+  assert(pushSource.includes("case 'git_push': return this.withRemoteSecurityPreamble") && pushSource.includes("case 'gh_pr_create': return this.withRemoteSecurityPreamble"), 'repo_security_audit: git_push and gh_pr_create include remote safety preflight summary');
+  const branchResult = await tools.execute('git_branch', '{"action":"current"}', auditRepo);
+  assert(branchResult.trim().length > 0, 'git_branch: current branch returns local branch name');
 
   // task (subagent placeholder)
   const taskResult = await tools.execute('task', '{"name":"test-sub","prompt":"do work"}', TEST_DIR);
@@ -715,8 +931,12 @@ async function main() {
   const ghAuthTool = await tools.execute('gh_auth_status', '{}', TEST_DIR);
   assert(ghAuthTool.length > 0, 'gh_auth_status: returns output or graceful error');
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'gh_repo_view'), 'definitions: exposes GitHub CLI tools');
+  assert(tools.definitions().some((tool: any) => tool.function?.name === 'file_audit') && tools.definitions('plan').some((tool: any) => tool.function?.name === 'file_audit'), 'definitions: exposes file_audit including Plan read-only mode');
+  assert(tools.definitions().some((tool: any) => tool.function?.name === 'repo_security_audit') && tools.definitions('plan').some((tool: any) => tool.function?.name === 'repo_security_audit'), 'definitions: exposes repo_security_audit including Plan read-only mode');
+  assert(tools.definitions().some((tool: any) => tool.function?.name === 'git_branch') && tools.definitions().some((tool: any) => tool.function?.name === 'gh_fork') && tools.definitions().some((tool: any) => tool.function?.name === 'gh_pr_create'), 'definitions: exposes branch, fork, and PR GitHub workflows');
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'browser_open'), 'definitions: exposes browser_open');
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'browser_cdp'), 'definitions: exposes browser_cdp');
+  assert(tools.definitions().some((tool: any) => tool.function?.name === 'computer_use'), 'definitions: exposes native computer_use desktop tool');
   assert(tools.definitions('plan').some((tool: any) => tool.function?.name === 'browser_snapshot'), 'definitions: plan exposes browser_snapshot');
   assert(!tools.definitions('plan').some((tool: any) => tool.function?.name === 'browser_click'), 'definitions: plan hides browser_click');
   const canonicalTools = tools.canonicalDefinitions();
@@ -816,6 +1036,11 @@ async function main() {
   const cliToolOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'write', JSON.stringify({ path: cliToolFile, content: 'cli wrote file' }), '--root', TEST_DIR]));
   assert(cliToolOut.includes('[write] OK') && fs.existsSync(cliToolFile), 'cli tool: executes ToolExecutor command');
   assert(fs.readFileSync(cliToolFile, 'utf-8') === 'cli wrote file', 'cli tool: writes expected content');
+  const cliToolArgsFile = path.join(TEST_DIR, 'cli-tool-args-bom.json');
+  const cliToolBomFile = path.join(TEST_DIR, 'cli-tool-write-bom.txt');
+  fs.writeFileSync(cliToolArgsFile, `\uFEFF${JSON.stringify({ path: cliToolBomFile, content: 'cli wrote from bom args file' })}`, 'utf-8');
+  const cliToolBomOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'write', '--args-file', cliToolArgsFile, '--root', TEST_DIR]));
+  assert(cliToolBomOut.includes('[write] OK') && fs.readFileSync(cliToolBomFile, 'utf-8') === 'cli wrote from bom args file', 'cli tool: accepts UTF-8 BOM JSON args files from Windows PowerShell');
   const cliKvFile = path.join(TEST_DIR, 'cli-tool-kv.txt');
   const cliKvOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'write', `path=${cliKvFile}`, 'content=cli kv wrote file', '--root', TEST_DIR]));
   assert(cliKvOut.includes('[write] OK') && fs.readFileSync(cliKvFile, 'utf-8') === 'cli kv wrote file', 'cli tool: supports key=value args');
@@ -867,13 +1092,19 @@ async function main() {
   const originalCliListModels = LLMProvider.prototype.listModels;
   const originalAgentFuzzyInject = Agent.prototype.fuzzyInject;
   LLMProvider.prototype.validate = async function(modelName: string) {
-    return { ok: modelName === 'gpt-test' || modelName === 'cli-fast' || modelName === 'claude-cli' || modelName === 'env-claude', latency: modelName === 'cli-fast' ? 0.3 : 0.8 };
+    return { ok: modelName === 'gpt-test' || modelName === 'gpt-5.5' || modelName === 'cli-fast' || modelName === 'claude-cli' || modelName === 'env-claude', latency: modelName === 'cli-fast' ? 0.3 : 0.8 };
   };
   try {
     const cliValidateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['validate-models', '--selected', 'test-prov/gpt-test', '--root', TEST_DIR]));
     const cliValidate = JSON.parse(cliValidateOut);
     assert(Array.isArray(cliValidate) && cliValidate.some((r: any) => r.name === 'test-prov/gpt-test' && r.status === 'available'), 'cli validate-models: validates selected model');
     assert(!cliValidateOut.includes('test-key-123') && !cliValidateOut.includes('test-key-456'), 'cli validate-models: redacts provider API keys');
+    new ConfigManager(TEST_DIR).updateModel('test-prov', 'gpt-5.5', { vision: false, description: 'CLI stale text-only validation metadata' });
+    const cliVisionValidateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['validate-models', '--selected', 'test-prov/gpt-5.5', '--root', TEST_DIR]));
+    const cliVisionValidate = JSON.parse(cliVisionValidateOut);
+    const cliVisionModel = new ConfigManager(TEST_DIR).findModel('gpt-5.5');
+    assert(Array.isArray(cliVisionValidate) && cliVisionValidate.some((r: any) => r.name === 'test-prov/gpt-5.5' && r.vision_input === true), 'cli validate-models: infers GPT-5.5 vision input from model identity');
+    assert(cliVisionModel?.vision === true && cliVisionModel?.evaluation?.vision_input === true, 'cli validate-models: persists inferred GPT-5.5 vision capability');
     LLMProvider.prototype.listModels = async function() {
       if (this.baseUrl.includes('cli-nebula.local')) return ['cli-fast', 'cli-pro'];
       if (this.baseUrl.includes('cli-anthropic.local')) return ['claude-cli'];
@@ -920,7 +1151,7 @@ async function main() {
     assert(cliNoGuideProvider?.base_url === 'https://api.cli-noguide.test/v1' && !cliNoGuideOut.includes('sk-cli-noguide-redacted'), 'cli fuzzy-inject: no-guide path normalizes endpoint and redacts key');
     globalThis.fetch = originalCliFetch;
     LLMProvider.prototype.validate = async function(modelName: string) {
-      return { ok: modelName === 'gpt-test' || modelName === 'cli-fast' || modelName === 'claude-cli' || modelName === 'env-claude', latency: modelName === 'cli-fast' ? 0.3 : 0.8 };
+      return { ok: modelName === 'gpt-test' || modelName === 'gpt-5.5' || modelName === 'cli-fast' || modelName === 'claude-cli' || modelName === 'env-claude', latency: modelName === 'cli-fast' ? 0.3 : 0.8 };
     };
     const cliEnvFile = path.join(TEST_DIR, 'claude code env.ps1');
     fs.writeFileSync(cliEnvFile, [
@@ -1961,6 +2192,56 @@ async function main() {
   assert(String(planBlockedAutomation).includes('Plan mode'), 'agent automation_create: Plan mode blocks mutation');
   const planListedAutomation = (agent as any).handleAutomationTool('automation_list', '{}');
   assert(String(planListedAutomation).includes('agent scheduled prompt'), 'agent automation_list: Plan mode can inspect automations');
+  (agent as any).forcedProvider = null;
+  agent.setMode('build');
+
+  const visionAgent = new Agent(TEST_DIR);
+  visionAgent.config.upsertProvider('VisionMock', 'https://vision.mock/v1', 'sk-vision-test', 'openai');
+  visionAgent.config.addModelToProvider('VisionMock', 'vision-computer', 'Vision Computer', 'Vision-capable Computer Use mock');
+  visionAgent.config.updateModel('VisionMock', 'vision-computer', { vision: true, max_tokens: 8192 });
+  visionAgent.setModel('vision-computer');
+  const computerUseScreenshot = path.join(TEST_DIR, 'computer-use-vision.png');
+  fs.writeFileSync(computerUseScreenshot, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=', 'base64'));
+  fs.writeFileSync(computerUseScreenshot, Buffer.from('89504e470d0a1a0a', 'hex'));
+  const originalVisionExecute = visionAgent.tools.execute.bind(visionAgent.tools);
+  visionAgent.tools.execute = async (toolName: string) => {
+    if (toolName === 'computer_use') {
+      return JSON.stringify({
+        ok: true,
+        action: 'observe',
+        screenshot_path: '[ephemeral screenshot attached]',
+        vision_image_path: computerUseScreenshot,
+        perception: {
+          mode: 'native-screenshot-plus-windows-ui-automation',
+          elements: [{ name: 'Save', control_type: 'Button', bbox: { x: 8, y: 9, width: 40, height: 20 }, center: { x: 28, y: 19 } }],
+        },
+      });
+    }
+    return originalVisionExecute(toolName, '{}', TEST_DIR);
+  };
+  const visionMessagesSeen: Array<Array<Record<string, unknown>>> = [];
+  let visionRound = 0;
+  const visionComputerProvider = {
+    intelligenceConfig: () => ({ temperature: 0, maxTokens: 100 }),
+    async *chatStreamWithTools(_model: string, messages: Array<Record<string, unknown>>): AsyncGenerator<StreamToken> {
+      visionMessagesSeen.push(messages);
+      if (visionRound++ === 0) {
+        yield { type: 'tool_call', text: '', toolCall: { id: 'call-computer-observe', name: 'computer_use', arguments: JSON.stringify({ action: 'observe' }) } };
+      } else {
+        yield { type: 'text', text: 'COMPUTER_VISION_DONE' };
+      }
+    },
+    async chat(): Promise<string> { return 'unused'; },
+  };
+  (visionAgent as any).forcedProvider = visionComputerProvider;
+  const visionComputerTokens = await visionAgent.process('Use Computer Use with vision');
+  const postObserveMessages = visionMessagesSeen[1] || [];
+  const computerToolMessage = postObserveMessages.find(m => m.role === 'tool' && Array.isArray(m.content));
+  const computerToolContent = Array.isArray(computerToolMessage?.content) ? computerToolMessage.content as Array<Record<string, any>> : [];
+  assert(visionComputerTokens.map(t => t.text || '').join('').includes('COMPUTER_VISION_DONE'), 'computer_use vision: completes second model turn after observe');
+  assert(computerToolContent.some(p => p.type === 'text' && String(p.text || '').includes('"Save"')) && computerToolContent.some(p => p.type === 'image_url' && String(p.image_url?.url || '').startsWith('data:image/png;base64,')), 'computer_use vision: sends screenshot image and UI Automation controls together to vision model', JSON.stringify(computerToolContent).slice(0, 500));
+  assert(!fs.existsSync(computerUseScreenshot), 'computer_use vision: deletes ephemeral screenshot after preparing image input');
+  (visionAgent as any).forcedProvider = null;
 
   // ---- 8. Input Mode Tests ----
   console.log('\n⌨️  Input Modes');
@@ -2025,6 +2306,10 @@ async function main() {
   modelAgent.config.addModelToProvider('model-prov', 'bad-model', 'Bad Model', 'Unavailable model');
   modelAgent.config.addModelToProvider('model-prov', 'fast-mini', 'Fast Mini', 'Fast economical model');
   modelAgent.config.addModelToProvider('model-prov', 'deep-opus', 'Deep Opus', 'High capability reasoning model for complex work');
+  modelAgent.config.addModelToProvider('model-prov', 'gpt-5.5', 'GPT 5.5', 'Frontier GPT model imported from provider');
+  modelAgent.config.updateModel('model-prov', 'gpt-5.5', { vision: false, description: 'Previously validated text-only model' });
+  modelAgent.config.addModelToProvider('model-prov', 'gpt5.5', 'GPT5.5', 'Frontier GPT model imported from provider');
+  modelAgent.config.updateModel('model-prov', 'gpt5.5', { vision: false, description: 'Provider-listed model without multimodal metadata' });
   const originalValidate = LLMProvider.prototype.validate;
   LLMProvider.prototype.validate = async function(modelName: string) {
     return { ok: modelName !== 'bad-model', latency: modelName === 'fast-mini' ? 0.4 : 2.2 };
@@ -2037,6 +2322,12 @@ async function main() {
   const evaluatedFast = modelAgent.config.findModel('fast-mini');
   assert(evaluatedFast?.evaluation?.status === 'available', 'validateModels: persists evaluation into config');
   assert(String(evaluatedFast?.description || '').includes('capability=') && String(evaluatedFast?.description || '').includes('speed=') && String(evaluatedFast?.description || '').includes('cost=') && String(evaluatedFast?.description || '').includes('multimodal='), 'validateModels: generates model description with capability speed cost and multimodal metadata');
+  const evaluatedGpt55 = modelAgent.config.findModel('gpt-5.5');
+  const evaluatedGpt55Compact = modelAgent.config.findModel('gpt5.5');
+  assert(validation.some(v => v.name === 'model-prov/gpt-5.5' && v.vision_input === true), 'validateModels: infers GPT-5.5 vision input even when stale config says text-only');
+  assert(validation.some(v => v.name === 'model-prov/gpt5.5' && v.vision_input === true), 'validateModels: infers compact GPT5.5 vision input naming');
+  assert(evaluatedGpt55?.vision === true && evaluatedGpt55?.evaluation?.vision_input === true, 'validateModels: persists inferred GPT-5.5 vision capability into config');
+  assert(String(evaluatedGpt55?.description || '').includes('vision-input') && String(evaluatedGpt55Compact?.description || '').includes('vision-input'), 'validateModels: generated descriptions reflect inferred GPT-5.5 multimodal support');
   modelAgent.history = [{ role: 'user', content: 'x'.repeat(3600) }];
   const nearWindow = modelAgent.contextWindow('fast-mini');
   assert(nearWindow.estimatedTokens >= 900 && nearWindow.warning === 'ok', 'context window: estimates conversation tokens against model max context');
@@ -2124,7 +2415,7 @@ async function main() {
   modelAgent.config.set('models', 'auto_switch_scope', 'all');
   modelAgent.setModel('auto');
   const switchedForVision = await modelAgent.evaluateAndSwitch('analyze this screenshot ![shot](C:/tmp/shot.png)');
-  assert(switchedForVision && modelAgent.model === 'vision-pro', 'auto model: multimodal input switches to a vision-capable model within allowed scope');
+  assert(switchedForVision && modelAgent.config.findModel(modelAgent.model)?.vision === true, 'auto model: multimodal input switches to a vision-capable model within allowed scope');
   modelAgent.config.set('models', 'auto_switch', false);
   assert(!modelAgent.allModelNames().includes('auto'), 'auto model: Auto is unavailable when autonomous switching is disabled');
   modelAgent.setModel('auto');
@@ -2237,6 +2528,8 @@ async function main() {
   assert(failedFuzzy.ok === false && failedFuzzy.warning?.includes('none validated as available'), 'fuzzy injection: failed validation reports no available models');
   assert(failedFuzzy.warning?.includes('model: unavailable') && failedFuzzy.warning?.includes('Discovery:'), 'fuzzy injection: failed validation warning includes model status and discovery context');
   assert(!JSON.stringify(failedFuzzy).includes('test-key-broken'), 'fuzzy injection: failed validation result does not leak API key');
+  const githubFuzzy = await agent.fuzzyInject('GitHub Copilot', 'https://models.github.ai', 'ghp-test-token');
+  assert(githubFuzzy.ok === false && githubFuzzy.warning?.includes('precise browser login'), 'fuzzy injection: GitHub/Copilot requires exact browser login and is rejected');
   LLMProvider.prototype.listModels = originalListModels;
   LLMProvider.prototype.validate = originalValidate;
 
@@ -2398,6 +2691,35 @@ async function main() {
   globalThis.fetch = originalFetch;
   assert(directChatPaths.length === 1 && directChatPaths[0].endsWith('/chat/completions'), 'LLMProvider Chat mode: uses chat completions directly');
   assert(directChatBodies[0]?.stream === false && directChatTokens.some(t => t.text === 'direct chat ok'), 'LLMProvider Chat mode: disables streaming and yields text');
+
+  const githubModelsRequests: Array<{ path: string; auth: string; apiVersion: string; body: any }> = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const parsed = new URL(String(url));
+    const headerValue = (key: string) => {
+      const headers = init?.headers as Headers | Record<string, string> | undefined;
+      if (!headers) return '';
+      if (typeof (headers as Headers).get === 'function') return String((headers as Headers).get(key) || '');
+      return String((headers as Record<string, string>)[key] || '');
+    };
+    githubModelsRequests.push({
+      path: parsed.pathname,
+      auth: headerValue('Authorization'),
+      apiVersion: headerValue('X-GitHub-Api-Version'),
+      body: init?.body ? JSON.parse(String(init.body)) : {},
+    });
+    if (parsed.pathname.endsWith('/catalog/models')) {
+      return new Response(JSON.stringify({ models: [{ id: 'openai/gpt-4.1' }, { id: 'mistral-ai/mistral-large-2411' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'github models ok' } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const githubProvider = new LLMProvider('GitHub Copilot', 'https://models.github.ai', 'ghp-test-token', 'github_models', 'responses');
+  const githubModels = await githubProvider.listModels();
+  const githubChat = await githubProvider.chat('openai/gpt-4.1', [{ role: 'user', content: 'Hi' }], null, 0, 20);
+  globalThis.fetch = originalFetch;
+  assert(githubModels.includes('openai/gpt-4.1') && githubModels.includes('mistral-ai/mistral-large-2411'), 'LLMProvider GitHub Models: lists catalog model ids');
+  assert(githubChat === 'github models ok', 'LLMProvider GitHub Models: chats through inference endpoint');
+  assert(githubModelsRequests.some(r => r.path === '/catalog/models') && githubModelsRequests.some(r => r.path === '/inference/chat/completions'), 'LLMProvider GitHub Models: uses catalog and inference paths');
+  assert(githubModelsRequests.every(r => r.auth === 'Bearer ghp-test-token' && r.apiVersion === '2022-11-28'), 'LLMProvider GitHub Models: sends GitHub token and API version headers');
 
   const providerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'llm', 'provider.ts'), 'utf-8');
   assert(providerSource.includes('[System.IO.File]::ReadAllText($bodyPath, $utf8NoBom)'), 'LLMProvider fallback: PowerShell reads request body as UTF-8 file');

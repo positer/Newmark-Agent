@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { Agent, AgentMode } from './core/agent';
-import { ConfigManager, ModelEvaluation, ProviderProtocol, inferProviderProtocol } from './core/config';
+import { ConfigManager, ModelEvaluation, ProviderProtocol, inferModelVisionCapability, inferProviderProtocol } from './core/config';
 import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, providerNameFromUrl, tokenizeFuzzyProviderInput } from './core/fuzzy';
 import { LLMProvider } from './llm/provider';
 import { discoverAgentPresets, discoverOpenCodeTools, discoverPluginManifests, discoverPluginMarketplaces, runOpenCodeTool } from './core/compat';
@@ -141,16 +141,70 @@ function argsAfterOption(args: string[], key: string): string[] {
 function argValueFromFile(args: string[], key: string): string | undefined {
   const filePath = argValue(args, key);
   if (!filePath) return undefined;
-  return fs.readFileSync(filePath, 'utf-8');
+  return fs.readFileSync(filePath, 'utf-8').replace(/^\uFEFF/, '');
 }
 
 function printJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+  safeStdout(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+let cliPipeGuardInstalled = false;
+let stdoutBrokenPipe = false;
+let stderrBrokenPipe = false;
+
+function installCliPipeGuards(): void {
+  if (cliPipeGuardInstalled) return;
+  cliPipeGuardInstalled = true;
+  process.stdout.on('error', (error) => {
+    if (isBrokenPipe(error)) {
+      stdoutBrokenPipe = true;
+      return;
+    }
+    throw error;
+  });
+  process.stderr.on('error', (error) => {
+    if (isBrokenPipe(error)) {
+      stderrBrokenPipe = true;
+      return;
+    }
+    throw error;
+  });
+}
+
+function safeStdout(text: string): void {
+  if (stdoutBrokenPipe) return;
+  try {
+    process.stdout.write(text, (error) => {
+      if (error && isBrokenPipe(error)) stdoutBrokenPipe = true;
+      else if (error) throw error;
+    });
+  } catch (error) {
+    if (isBrokenPipe(error)) stdoutBrokenPipe = true;
+    else throw error;
+  }
+}
+
+function safeStderr(text: string): void {
+  if (stderrBrokenPipe) return;
+  try {
+    process.stderr.write(text, (error) => {
+      if (error && isBrokenPipe(error)) stderrBrokenPipe = true;
+      else if (error) throw error;
+    });
+  } catch (error) {
+    if (isBrokenPipe(error)) stderrBrokenPipe = true;
+    else throw error;
+  }
+}
+
+function isBrokenPipe(error: unknown): boolean {
+  const err = error as { code?: string; message?: string };
+  return err?.code === 'EPIPE' || String(err?.message || '').includes('EPIPE');
 }
 
 function cliDebug(message: string): void {
   if (process.env.NEWMARK_CLI_DEBUG === '1') {
-    process.stderr.write(`[newmark-cli] ${message}\n`);
+    safeStderr(`[newmark-cli] ${message}\n`);
   }
 }
 
@@ -322,7 +376,9 @@ function modelCapabilityDescription(m: { name: string; description?: string; dis
   ].filter(Boolean).join(',') || 'text-only';
   const generated = `${ok ? 'Validated text model' : 'Unvalidated text model'}; capability=${capability || 'medium'}; speed=${speed || 'unknown'}; cost=${cost || 'unknown'}; multimodal=${multimodal}; source=model validation.`;
   if (!prior || /^(Listed by provider \/models endpoint|Discovered by fuzzy suffix probing|Discovered by fuzzy injection)/i.test(prior)) return generated;
-  if (/capability=/.test(prior) && /speed=/.test(prior) && /cost=/.test(prior) && /multimodal=/.test(prior)) return prior;
+  if (/capability=/.test(prior) && /speed=/.test(prior) && /cost=/.test(prior) && /multimodal=/.test(prior)) {
+    return prior.replace(/multimodal=[^;.]*/i, `multimodal=${multimodal}`);
+  }
   return `${prior} ${generated}`;
 }
 
@@ -350,6 +406,8 @@ async function validateCliModels(config: ConfigManager, selectedNames?: string[]
   const results: Array<ModelEvaluation & { name: string; provider: string; model: string; display: string }> = [];
   for (const m of config.allModels()) {
     if (selected.size && !selected.has(m.name) && !selected.has(`${m.provider}/${m.name}`)) continue;
+    const inferredVision = !!m.vision || inferModelVisionCapability(m.name, m.display, m.description, m.provider, m.provider_protocol);
+    const inferredImageOutput = !!m.image_output;
     const base = {
       name: `${m.provider}/${m.name}`,
       provider: m.provider,
@@ -360,17 +418,18 @@ async function validateCliModels(config: ConfigManager, selectedNames?: string[]
       checked_at: new Date().toISOString(),
       text_input: false,
       text_output: false,
-      vision_input: !!m.vision,
-      image_output: !!m.image_output,
+      vision_input: inferredVision,
+      image_output: inferredImageOutput,
       cost_rating: costRating(m.cost_per_1k_input, m.cost_per_1k_output),
       performance_rating: performanceRating(m.name, m.capability_rating, m.description, m.display),
       speed_rating: 'unknown',
       notes: '',
     };
+    const capabilityModel = { ...m, vision: inferredVision, image_output: inferredImageOutput };
     if (!m.provider_url || !m.api_key) {
       const result = { ...base, notes: 'Missing provider URL or API key' };
       results.push(result);
-      config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: modelCapabilityDescription(m, result.performance_rating, result.speed_rating, result.cost_rating, false) });
+      config.updateModel(m.provider, m.name, { evaluation: result, vision: result.vision_input, image_output: result.image_output, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: modelCapabilityDescription(capabilityModel, result.performance_rating, result.speed_rating, result.cost_rating, false) });
       continue;
     }
     const provider = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol);
@@ -386,7 +445,7 @@ async function validateCliModels(config: ConfigManager, selectedNames?: string[]
         notes: ok ? 'Text chat validation succeeded' : 'Provider returned no usable text output',
       };
       results.push(result);
-      config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: modelCapabilityDescription(m, result.performance_rating, result.speed_rating, result.cost_rating, ok) });
+      config.updateModel(m.provider, m.name, { evaluation: result, vision: result.vision_input, image_output: result.image_output, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: modelCapabilityDescription(capabilityModel, result.performance_rating, result.speed_rating, result.cost_rating, ok) });
     } catch (e) {
       const result = {
         ...base,
@@ -394,7 +453,7 @@ async function validateCliModels(config: ConfigManager, selectedNames?: string[]
         notes: 'Validation request failed',
       };
       results.push(result);
-      config.updateModel(m.provider, m.name, { evaluation: result, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: modelCapabilityDescription(m, result.performance_rating, result.speed_rating, result.cost_rating, false) });
+      config.updateModel(m.provider, m.name, { evaluation: result, vision: result.vision_input, image_output: result.image_output, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: modelCapabilityDescription(capabilityModel, result.performance_rating, result.speed_rating, result.cost_rating, false) });
     }
   }
   config.save();
@@ -438,6 +497,15 @@ async function runCliFuzzyInject(
   const apiKey = (tokens.apiKey || existing?.api_key || '').trim();
 
   let safeProtocol = tokens.protocol || existing?.protocol || inferProviderProtocol(providerName, baseUrl);
+  const loginOnlyMarker = `${providerName} ${baseUrl}`.toLowerCase();
+  if (safeProtocol === 'github_models' || loginOnlyMarker.includes('github') || loginOnlyMarker.includes('copilot') || loginOnlyMarker.includes('models.github.ai') || loginOnlyMarker.includes('api.githubcopilot.com')) {
+    return {
+      ok: false,
+      provider: providerName || 'GitHub Copilot',
+      models: [],
+      warning: 'GitHub/Copilot providers require precise browser login from Models settings and are not supported by fuzzy injection.',
+    };
+  }
   let discovery: { models: string[]; source: 'models_endpoint' | 'suffix_probe' | 'heuristic'; warning?: string };
   if (!hasUsableModel) {
     cliDebug('fuzzy: no guiding model, use tokenizer suffix probing');
@@ -487,6 +555,7 @@ async function runCliFuzzyInject(
 }
 
 export async function runCliCommand(root: string, args: string[]): Promise<boolean> {
+  installCliPipeGuards();
   const command = args.find(a => (CLI_COMMANDS as readonly string[]).includes(a));
   if (!command) return false;
 
@@ -504,7 +573,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     const positional = positionalAfter(args, 'tool');
     const toolName = positional[0] || '';
     if (!toolName) {
-      process.stderr.write('Usage: Newmark.exe tool <tool-name> [json-args | key=value ... | --args-file path] [--root <dir>]\n');
+      safeStderr('Usage: Newmark.exe tool <tool-name> [json-args | key=value ... | --args-file path] [--root <dir>]\n');
       process.exitCode = 1;
       return true;
     }
@@ -513,7 +582,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
       argValue(args, '--args') || argValueFromFile(args, '--args-file') || argValue(args, '--input')
     );
     if (!parsedArgs.ok) {
-      process.stderr.write(`CLI tool argument error: ${parsedArgs.error}\n`);
+      safeStderr(`CLI tool argument error: ${parsedArgs.error}\n`);
       process.exitCode = 1;
       return true;
     }
@@ -523,7 +592,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
       mode: agent.mode,
       workspacePath: wsDir,
     });
-    process.stdout.write(`${result}\n`);
+    safeStdout(`${result}\n`);
     return true;
   }
 
@@ -531,7 +600,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     const positional = positionalAfter(args, 'send');
     const prompt = argValueFromEnv(args, '--input') || argValueFromFile(args, '--input-file') || positional.join(' ').trim();
     if (!prompt) {
-      process.stderr.write('Usage: Newmark.exe send <prompt> [--input-env ENV|--input-file path] [--mode build|plan|goal|flow] [--model <model>] [--language auto|en|zh] [--conversation <id>] [--agent-only] [--root <dir>]\n');
+      safeStderr('Usage: Newmark.exe send <prompt> [--input-env ENV|--input-file path] [--mode build|plan|goal|flow] [--model <model>] [--language auto|en|zh] [--conversation <id>] [--agent-only] [--root <dir>]\n');
       process.exitCode = 1;
       return true;
     }
@@ -540,8 +609,8 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     const model = argValue(args, '--model');
     if (model) agent.setModel(model);
     const tokens = await agent.process(prompt);
-    process.stdout.write(tokens.map(t => t.text || '').join(''));
-    process.stdout.write('\n');
+    safeStdout(tokens.map(t => t.text || '').join(''));
+    safeStdout('\n');
     return true;
   }
 
@@ -562,7 +631,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     const preferredModels = splitList(argValue(args, '--candidate-models')).concat(envDefaults.models || []);
     const inferredName = name || (url ? providerNameFromUrl(url) : '');
     if (!inferredName) {
-      process.stderr.write('Usage: Newmark.exe fuzzy-inject [--name <provider>] [--env-file <PowerShell-or-dotenv-file>|--env-file-env <ENV_WITH_FILE_PATH>] [--endpoint-env <ENV_WITH_BASE_URL>] [--key-env <ENV_WITH_API_KEY>] [--protocol openai|anthropic] [--root <dir>]\n');
+      safeStderr('Usage: Newmark.exe fuzzy-inject [--name <provider>] [--env-file <PowerShell-or-dotenv-file>|--env-file-env <ENV_WITH_FILE_PATH>] [--endpoint-env <ENV_WITH_BASE_URL>] [--key-env <ENV_WITH_API_KEY>] [--protocol openai|anthropic] [--root <dir>]\n');
       process.exitCode = 1;
       return true;
     }
@@ -697,7 +766,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     const source = argValue(args, '--source') || positionalAfter(args, 'install-update')[0] || '';
     const target = argValue(args, '--target') || root;
     if (!source) {
-      process.stderr.write('Usage: Newmark.exe install-update (--source <portable-exe-or-unpacked-dir>|--check-github|--from-github) [--repo owner/name] [--tag vX.Y.Z] [--asset name] [--target <dir>] [--target-file <path>] [--expected-version <version>] [--preserve csv] [--dry-run] [--root <dir>]\n');
+      safeStderr('Usage: Newmark.exe install-update (--source <portable-exe-or-unpacked-dir>|--check-github|--from-github) [--repo owner/name] [--tag vX.Y.Z] [--asset name] [--target <dir>] [--target-file <path>] [--expected-version <version>] [--preserve csv] [--dry-run] [--root <dir>]\n');
       process.exitCode = 1;
       return true;
     }
@@ -771,7 +840,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     const positional = positionalAfter(args, 'compat-tool');
     const name = argValue(args, '--name') || positional[0] || '';
     if (!name) {
-      process.stderr.write('Usage: Newmark.exe compat-tool --list | --name <opencode-tool> [json-args | --args-file path] [--root <dir>]\n');
+      safeStderr('Usage: Newmark.exe compat-tool --list | --name <opencode-tool> [json-args | --args-file path] [--root <dir>]\n');
       process.exitCode = 1;
       return true;
     }
@@ -780,7 +849,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
       argValue(args, '--args') || argValueFromFile(args, '--args-file') || argValue(args, '--input')
     );
     if (!parsedArgs.ok) {
-      process.stderr.write(`CLI compat-tool argument error: ${parsedArgs.error}\n`);
+      safeStderr(`CLI compat-tool argument error: ${parsedArgs.error}\n`);
       process.exitCode = 1;
       return true;
     }

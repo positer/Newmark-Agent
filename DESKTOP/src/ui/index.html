@@ -257,9 +257,9 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 #topbar .logo::before {
   content: "";
   position: absolute;
-  inset: -12px;
-  background: conic-gradient(from 0deg, #00ff88, #00ccff, #aa44ff, #ff4488, #ffd93d, #00ff88);
-  animation: app-icon-border-spin 3s linear infinite;
+  inset: calc(-2 * var(--marquee-width));
+  background: conic-gradient(from var(--marquee-angle, 0deg), var(--g1), var(--g2), var(--g3), var(--g4), var(--g1));
+  animation: marquee-rotate var(--marquee-speed) linear infinite;
 }
 
 #topbar .logo::after {
@@ -282,10 +282,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 [data-theme="light"] #title-app-icon {
   content: url("../../assets/app-icon-light.png");
-}
-
-@keyframes app-icon-border-spin {
-  to { transform: rotate(360deg); }
 }
 
 .top-btn {
@@ -454,7 +450,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 #left.collapsing .left-nav-icon span:not(.icon),
 #left.collapsing .left-ws-item .ws-label,
-#left.collapsing .left-ws-item .ws-check {
+#left.collapsing .left-ws-item .ws-check,
+#left.collapsing .left-ws-item .ws-pin-btn {
   max-width: 0;
   opacity: 0;
   transform: translateX(-6px);
@@ -528,7 +525,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 #left.collapsed .left-nav-icon span:not(.icon),
 #left.collapsed .left-ws-item .ws-label,
-#left.collapsed .left-ws-item .ws-check {
+#left.collapsed .left-ws-item .ws-check,
+#left.collapsed .left-ws-item .ws-pin-btn {
   max-width: 0;
   opacity: 0;
   transform: translateX(-6px);
@@ -643,6 +641,27 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   opacity: 1;
   transform: translateX(0);
   transition: max-width var(--duration-normal) var(--ease-out-expo), opacity var(--duration-fast) var(--ease-out-expo), transform var(--duration-normal) var(--ease-out-expo), visibility 0ms linear 0ms;
+}
+
+.ws-pin-btn {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ws-pin-btn:hover,
+.ws-pin-btn.active {
+  background: rgba(255,255,255,0.08);
+  color: var(--text-bright);
+  border-color: var(--accent);
 }
 
 #left-ws-add {
@@ -816,6 +835,28 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 .conv-archive-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-bright); }
+
+.conv-pin-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--duration-fast) var(--ease-out-expo);
+  flex-shrink: 0;
+}
+
+.conv-pin-btn:hover,
+.conv-pin-btn.active {
+  background: rgba(255,255,255,0.1);
+  color: var(--text-bright);
+  border-color: var(--accent);
+}
 
 /* ============================================================
    RESIZE HANDLES
@@ -1082,11 +1123,97 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   overflow-y: auto;
   flex: 1;
 }
-.md-rendered h1 { font-size: 16px; margin: 12px 0 6px; }
-.md-rendered h2 { font-size: 14px; margin: 10px 0 5px; }
-.md-rendered h3 { font-size: 13px; margin: 8px 0 4px; }
-.md-rendered code { background: var(--glass-bg-2); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
-.md-rendered li { margin: 2px 0 2px 14px; }
+.md-rendered > *:first-child { margin-top: 0; }
+.md-rendered > *:last-child { margin-bottom: 0; }
+.md-rendered h1 { font-size: 17px; line-height: 1.35; margin: 14px 0 7px; font-weight: 700; }
+.md-rendered h2 { font-size: 15px; line-height: 1.4; margin: 12px 0 6px; font-weight: 700; }
+.md-rendered h3 { font-size: 13px; line-height: 1.45; margin: 10px 0 5px; font-weight: 700; }
+.md-rendered h4 { font-size: 12px; line-height: 1.45; margin: 8px 0 4px; font-weight: 700; }
+.md-rendered p { margin: 6px 0; }
+.md-rendered code {
+  background: var(--glass-bg-2);
+  border: 1px solid var(--glass-border-1);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.md-rendered pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--glass-border-1);
+  border-radius: var(--radius-sm);
+  background: rgba(0,0,0,0.26);
+}
+.md-rendered pre code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  white-space: pre;
+}
+.md-rendered ul,
+.md-rendered ol { margin: 6px 0 6px 20px; padding: 0; }
+.md-rendered li { margin: 2px 0; padding-left: 2px; }
+.md-rendered blockquote {
+  margin: 8px 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent);
+  color: var(--text-dim);
+  background: rgba(255,255,255,0.025);
+}
+.md-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 8px 0;
+  border: 1px solid var(--glass-border-1);
+  border-radius: var(--radius-sm);
+}
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 360px;
+  font-size: 12px;
+}
+.md-table th,
+.md-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--glass-border-1);
+  border-right: 1px solid var(--glass-border-1);
+  vertical-align: top;
+  text-align: left;
+}
+.md-table th:last-child,
+.md-table td:last-child { border-right: 0; }
+.md-table tr:last-child td { border-bottom: 0; }
+.md-table th {
+  color: var(--text-bright);
+  background: rgba(255,255,255,0.04);
+  font-weight: 650;
+}
+.md-math-inline,
+.md-math-block {
+  font-family: var(--font-mono);
+  color: var(--text-bright);
+  background: rgba(255,255,255,0.035);
+  border: 1px solid var(--glass-border-1);
+}
+.md-math-inline {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 4px;
+  line-height: 1.5;
+}
+.md-math-block {
+  display: block;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  text-align: center;
+  white-space: pre-wrap;
+}
 
 /* Subagent panel */
 .subagent-item {
@@ -1375,10 +1502,36 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
 }
 
 .terminal-pane.active {
   display: flex;
+}
+
+.terminal-pane.agent-takeover {
+  margin: 4px;
+  background: rgba(0,0,0,0.14);
+}
+
+.terminal-pane.agent-takeover.marquee-border::before {
+  inset: calc(-1 * var(--marquee-width));
+  border-radius: calc(var(--radius-sm) + var(--marquee-width));
+}
+
+.terminal-tab.agent-takeover {
+  color: var(--text-bright);
+}
+
+.terminal-takeover-status {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--glass-border-1);
+  color: var(--accent2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.3;
+  flex-shrink: 0;
 }
 
 #terminal-shell-select {
@@ -1627,7 +1780,13 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 .chat-msg .msg-body {
   color: var(--text);
-  white-space: pre-wrap;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.chat-msg .msg-body .md-rendered {
+  padding: 0;
+  overflow: visible;
 }
 
 .tool-event-body {
@@ -2465,7 +2624,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 /* ============================================================
-   SETTINGS WINDOW (3 TABS)
+   SETTINGS WINDOW
    ============================================================ */
 .settings-tabs {
   display: flex;
@@ -2544,6 +2703,44 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 .setting-control select:focus,
 .setting-control input:focus { border-color: var(--accent); }
+
+.tool-settings-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-setting-row {
+  align-items: flex-start;
+}
+
+.tool-setting-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.tool-setting-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 650;
+}
+
+.tool-setting-name {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.tool-setting-desc {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-top: 3px;
+  line-height: 1.45;
+}
 
 .setting-control input[type="range"] {
   width: 100%;
@@ -3538,6 +3735,7 @@ var state = {
   isWorking: false,
   runningConversations: {},
   agentWorkEventsByConversation: {},
+  agentWorkUiByConversation: {},
   agentWorkEventLimit: 240,
   foregroundConversationHoldId: '',
   foregroundConversationHoldUntil: 0,
@@ -3574,6 +3772,8 @@ var state = {
   goalPaused: false,
   providers: [],
   archives: [],
+  workspaceArchives: [],
+  allArchives: [],
   automationItems: [],
   contextCompression: null,
   contextWindow: null,
@@ -3608,6 +3808,10 @@ var state = {
   _terminalTabId: 0,
   _terminalActiveSession: null,
   terminalInterruptTimeoutMs: 0,
+  nativeTools: [],
+  nativeToolEnabled: {},
+  sshConnections: [],
+  _layoutSaveTimer: null,
   _sendInFlight: false
 };
 
@@ -3710,6 +3914,7 @@ var NEWMARK_I18N = {
     'settings.title': 'Settings',
     'settings.general': 'General',
     'settings.models': 'Models & Providers',
+    'settings.tools': 'Tools',
     'settings.archive': 'Archive',
     'settings.updates': 'Updates',
     'settings.language': 'Language',
@@ -3742,6 +3947,9 @@ var NEWMARK_I18N = {
     'settings.closeApp': 'Close app',
     'settings.minimizeTray': 'Minimize to tray',
     'settings.trayDesc': 'Tray mode keeps Newmark available in the system tray.',
+    'tools.title': 'Native built-in tools',
+    'tools.desc': 'Turn Newmark Agent built-in tools on or off. Disabled tools are hidden from the model and blocked if called by an older turn.',
+    'tools.protected': 'Required',
     'updates.current': 'Current version',
     'updates.github': 'GitHub Release',
     'updates.repo': 'Repository',
@@ -3788,6 +3996,10 @@ var NEWMARK_I18N = {
     'model.apiKey': 'API key',
     'model.openaiCompat': 'OpenAI compatible',
     'model.anthropicCompat': 'Anthropic compatible',
+    'model.githubModelsCompat': 'GitHub Copilot / Models',
+    'model.githubLogin': 'Sign in with GitHub',
+    'model.githubLoginDesc': 'Opens your default browser through GitHub CLI and stores a GitHub Models token locally.',
+    'model.githubLoginOk': 'GitHub Copilot / Models connected.',
     'model.autoDetect': 'Auto detect',
     'model.modelName': 'Model name',
     'model.provider': 'Provider',
@@ -3929,6 +4141,7 @@ var NEWMARK_I18N = {
     'workspace.type': 'Type',
     'workspace.internal': 'Internal workspace',
     'workspace.external': 'External workspace',
+    'workspace.ssh': 'SSH workspace',
     'workspace.name': 'Name',
     'workspace.alias': 'Workspace alias (optional)',
     'workspace.enterName': 'Enter name...',
@@ -3940,6 +4153,8 @@ var NEWMARK_I18N = {
     'workspace.manager': 'Workspaces',
     'workspace.manage': 'Manage and switch workspaces',
     'workspace.current': 'Current',
+    'workspace.pin': 'Pin workspace',
+    'workspace.unpin': 'Unpin workspace',
     'workspace.noWorkspaces': 'No workspaces yet',
     'workspace.requiredTitle': 'Workspace required',
     'workspace.requiredDesc': 'Conversations are bound to a workspace. Select an existing workspace or create an internal workspace before chatting.',
@@ -3972,6 +4187,15 @@ var NEWMARK_I18N = {
     'workspace.chooseExternal': 'Choose an external workspace folder',
     'workspace.createFailed': 'Create workspace failed',
     'workspace.createExternalFailed': 'Create external workspace failed',
+    'workspace.sshHost': 'SSH host',
+    'workspace.sshUser': 'SSH user',
+    'workspace.sshPort': 'Port',
+    'workspace.sshIdentity': 'Identity file (optional)',
+    'workspace.sshRemotePath': 'Remote workspace path',
+    'workspace.sshValidate': 'Validate SSH',
+    'workspace.sshValidated': 'SSH validated',
+    'workspace.sshCreateFailed': 'Create SSH workspace failed',
+    'workspace.sshNeedsHostUser': 'Host, user, and remote path are required',
     'workspace.switchFailed': 'Switch workspace failed',
     'terminal.ready': 'Terminal ready',
     'terminal.enterCommand': 'Enter command...',
@@ -4025,6 +4249,8 @@ var NEWMARK_I18N = {
     'subagent.history': 'History',
     'subagent.noMessages': 'No messages recorded.',
     'conversation.archive': 'Archive',
+    'conversation.pin': 'Pin conversation',
+    'conversation.unpin': 'Unpin conversation',
     'conversation.loadingIsolated': 'Loading isolated conversation...',
     'conversation.locked': 'Current conversation is locked while the agent is working.',
     'queue.next': 'Next',
@@ -4136,6 +4362,7 @@ var NEWMARK_I18N = {
     'settings.title': '设置',
     'settings.general': '通用',
     'settings.models': '模型与供应商',
+    'settings.tools': '工具',
     'settings.archive': '归档',
     'settings.updates': '更新',
     'settings.language': '语言',
@@ -4168,6 +4395,9 @@ var NEWMARK_I18N = {
     'settings.closeApp': '直接关闭',
     'settings.minimizeTray': '最小化到托盘',
     'settings.trayDesc': '托盘模式会让 Newmark 保持在系统托盘中。',
+    'tools.title': '原生内置工具',
+    'tools.desc': '开关 Newmark Agent 内置工具。关闭后该工具不会暴露给模型，旧轮次直接调用也会被拦截。',
+    'tools.protected': '必需',
     'updates.current': '当前版本',
     'updates.github': 'GitHub Release',
     'updates.repo': '仓库',
@@ -4214,6 +4444,10 @@ var NEWMARK_I18N = {
     'model.apiKey': 'API key',
     'model.openaiCompat': 'OpenAI 兼容',
     'model.anthropicCompat': 'Anthropic 兼容',
+    'model.githubModelsCompat': 'GitHub Copilot / Models',
+    'model.githubLogin': '使用 GitHub 登录',
+    'model.githubLoginDesc': '通过 GitHub CLI 打开默认浏览器登录，并在本地保存 GitHub Models token。',
+    'model.githubLoginOk': 'GitHub Copilot / Models 已连接。',
     'model.autoDetect': '自动检测',
     'model.modelName': '模型名称',
     'model.provider': '供应商',
@@ -4355,6 +4589,7 @@ var NEWMARK_I18N = {
     'workspace.type': '类型',
     'workspace.internal': '内部工作区',
     'workspace.external': '外部工作区',
+    'workspace.ssh': 'SSH 工作区',
     'workspace.name': '名称',
     'workspace.alias': '工作区别名（可选）',
     'workspace.enterName': '输入名称...',
@@ -4366,6 +4601,8 @@ var NEWMARK_I18N = {
     'workspace.manager': '工作区',
     'workspace.manage': '管理和切换工作区',
     'workspace.current': '当前',
+    'workspace.pin': '置顶工作区',
+    'workspace.unpin': '取消置顶工作区',
     'workspace.noWorkspaces': '暂无工作区',
     'workspace.requiredTitle': '需要工作区',
     'workspace.requiredDesc': '对话必须绑定到工作区。请先选择已有工作区或创建内部工作区。',
@@ -4398,6 +4635,15 @@ var NEWMARK_I18N = {
     'workspace.chooseExternal': '请选择外部工作区文件夹',
     'workspace.createFailed': '创建工作区失败',
     'workspace.createExternalFailed': '创建外部工作区失败',
+    'workspace.sshHost': 'SSH 主机',
+    'workspace.sshUser': 'SSH 用户',
+    'workspace.sshPort': '端口',
+    'workspace.sshIdentity': '密钥文件（可选）',
+    'workspace.sshRemotePath': '远端工作区路径',
+    'workspace.sshValidate': '校验 SSH',
+    'workspace.sshValidated': 'SSH 已校验',
+    'workspace.sshCreateFailed': '创建 SSH 工作区失败',
+    'workspace.sshNeedsHostUser': '请填写主机、用户和远端路径',
     'workspace.switchFailed': '切换工作区失败',
     'terminal.ready': '终端就绪',
     'terminal.enterCommand': '输入命令...',
@@ -4451,6 +4697,8 @@ var NEWMARK_I18N = {
     'subagent.history': '历史',
     'subagent.noMessages': '没有记录消息。',
     'conversation.archive': '归档',
+    'conversation.pin': '置顶对话',
+    'conversation.unpin': '取消置顶对话',
     'conversation.loadingIsolated': '正在加载隔离对话...',
     'conversation.locked': 'Agent 工作中，当前对话已锁定。',
     'queue.next': '下一轮',
@@ -4513,6 +4761,10 @@ function t(key) {
 
 function uiLocale() {
   return effectiveLanguage() === 'zh' ? 'zh-CN' : 'en-US';
+}
+
+function currentLang() {
+  return effectiveLanguage();
 }
 
 function setSelectOptionText(id, values) {
@@ -4675,38 +4927,205 @@ function normalizeLinkedFilePath(url) {
   return url;
 }
 
-function renderMessageContent(text) {
-  var source = String(text || '');
-  var re = /!\[([^\]\n]{0,160})\]\(([^)\n]+)\)|\[([^\]\n]{1,180})\]\(([^)\n]+)\)/g;
-  var html = '';
-  var last = 0;
-  var m;
-  while ((m = re.exec(source)) !== null) {
-    html += esc(source.slice(last, m.index));
-    var alt = m[1] || '';
-    var imageUrl = (m[2] || '').trim();
-    var label = m[3] || '';
-    var linkUrl = (m[4] || '').trim();
-    if (imageUrl) {
-      if (isImageLinkTarget(imageUrl)) {
-        html += '<img class="msg-image" src="' + escAttr(normalizeImageSrc(imageUrl)) + '" alt="' + escAttr(alt || 'image') + '">';
-      } else {
-        html += esc(m[0]);
-      }
-    } else if (linkUrl) {
-      if (isFileLinkTarget(linkUrl)) {
-        var filePath = normalizeLinkedFilePath(linkUrl);
-        html += '<button class="msg-file-link" data-path="' + escAttr(filePath) + '" onclick="window.openLinkedFile(this.getAttribute(&quot;data-path&quot;))">' + iconSvg('file-pen', 'Open file', 'tiny') + '<span>' + esc(label) + '</span></button>';
-      } else if (/^(https?:\/\/|mailto:)/i.test(linkUrl)) {
-        html += '<a href="' + escAttr(linkUrl) + '" target="_blank" rel="noreferrer">' + esc(label) + '</a>';
-      } else {
-        html += esc(m[0]);
-      }
+function splitMarkdownTableRow(line) {
+  var raw = String(line || '').trim();
+  if (!raw || raw.indexOf('|') < 0) return null;
+  if (raw[0] === '|') raw = raw.slice(1);
+  if (raw[raw.length - 1] === '|') raw = raw.slice(0, -1);
+  var cells = [];
+  var cell = '';
+  var escaped = false;
+  for (var i = 0; i < raw.length; i++) {
+    var ch = raw[i];
+    if (escaped) {
+      cell += ch;
+      escaped = false;
+    } else if (ch === '\\') {
+      escaped = true;
+    } else if (ch === '|') {
+      cells.push(cell.trim());
+      cell = '';
+    } else {
+      cell += ch;
     }
-    last = re.lastIndex;
   }
-  html += esc(source.slice(last));
+  cells.push(cell.trim());
+  return cells.length > 1 ? cells : null;
+}
+
+function isMarkdownTableDivider(line) {
+  var cells = splitMarkdownTableRow(line);
+  if (!cells) return false;
+  return cells.every(function(cell) { return /^:?-{3,}:?$/.test(cell.trim()); });
+}
+
+function isMarkdownTableStart(lines, index) {
+  return index + 1 < lines.length && !!splitMarkdownTableRow(lines[index]) && isMarkdownTableDivider(lines[index + 1]);
+}
+
+function renderMarkdownLinkToken(matchText, alt, imageUrl, label, linkUrl) {
+  imageUrl = (imageUrl || '').trim();
+  linkUrl = (linkUrl || '').trim();
+  if (imageUrl) {
+    if (isImageLinkTarget(imageUrl)) {
+      return '<img class="msg-image" src="' + escAttr(normalizeImageSrc(imageUrl)) + '" alt="' + escAttr(alt || 'image') + '">';
+    }
+    return esc(matchText);
+  }
+  if (linkUrl) {
+    if (isFileLinkTarget(linkUrl)) {
+      var filePath = normalizeLinkedFilePath(linkUrl);
+      return '<button class="msg-file-link" data-path="' + escAttr(filePath) + '" onclick="window.openLinkedFile(this.getAttribute(&quot;data-path&quot;))">' + iconSvg('file-pen', 'Open file', 'tiny') + '<span>' + esc(label) + '</span></button>';
+    }
+    if (/^(https?:\/\/|mailto:)/i.test(linkUrl)) {
+      return '<a href="' + escAttr(linkUrl) + '" target="_blank" rel="noreferrer">' + renderMarkdownInline(label) + '</a>';
+    }
+    return esc(matchText);
+  }
+  return esc(matchText);
+}
+
+function renderMarkdownInline(text) {
+  var source = String(text || '');
+  var placeholders = [];
+  function hold(html) {
+    var token = '\u0000MD' + placeholders.length + '\u0000';
+    placeholders.push(html);
+    return token;
+  }
+  source = source.replace(/`([^`\n]+)`/g, function(_m, code) {
+    return hold('<code>' + esc(code) + '</code>');
+  });
+  source = source.replace(/\\\(([\s\S]+?)\\\)|\$([^\$\n]+?)\$/g, function(_m, parenMath, dollarMath) {
+    return hold('<span class="md-math-inline">' + esc(parenMath || dollarMath || '') + '</span>');
+  });
+  source = source.replace(/!\[([^\]\n]{0,160})\]\(([^)\n]+)\)|\[([^\]\n]{1,180})\]\(([^)\n]+)\)/g, function(m, alt, imageUrl, label, linkUrl) {
+    return hold(renderMarkdownLinkToken(m, alt, imageUrl, label, linkUrl));
+  });
+  var html = esc(source);
+  html = html
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    .replace(/(^|[^\w])_([^_\n]+?)_(?=[^\w]|$)/g, '$1<em>$2</em>');
+  for (var i = 0; i < placeholders.length; i++) {
+    html = html.replace(new RegExp('\u0000MD' + i + '\u0000', 'g'), placeholders[i]);
+  }
   return html;
+}
+
+function renderMarkdownTable(lines, start) {
+  var headers = splitMarkdownTableRow(lines[start]) || [];
+  var rows = [];
+  var i = start + 2;
+  while (i < lines.length) {
+    var cells = splitMarkdownTableRow(lines[i]);
+    if (!cells || isMarkdownTableDivider(lines[i])) break;
+    rows.push(cells);
+    i++;
+  }
+  var html = '<div class="md-table-wrap"><table class="md-table"><thead><tr>';
+  for (var h = 0; h < headers.length; h++) html += '<th>' + renderMarkdownInline(headers[h]) + '</th>';
+  html += '</tr></thead><tbody>';
+  for (var r = 0; r < rows.length; r++) {
+    html += '<tr>';
+    for (var c = 0; c < headers.length; c++) html += '<td>' + renderMarkdownInline(rows[r][c] || '') + '</td>';
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+  return { html: html, next: i };
+}
+
+function renderMarkdownBlocks(text) {
+  var source = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  var lines = source.split('\n');
+  var html = '';
+  var paragraph = [];
+  function flushParagraph() {
+    if (!paragraph.length) return;
+    html += '<p>' + renderMarkdownInline(paragraph.join('\n')).replace(/\n/g, '<br>') + '</p>';
+    paragraph = [];
+  }
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    var trimmed = line.trim();
+    if (/^```/.test(trimmed)) {
+      flushParagraph();
+      var lang = trimmed.replace(/^```+/, '').trim();
+      var codeLines = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i].trim())) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      html += '<pre><code' + (lang ? ' data-lang="' + escAttr(lang) + '"' : '') + '>' + esc(codeLines.join('\n')) + '</code></pre>';
+      continue;
+    }
+    if (trimmed === '$$' || trimmed === '\\[') {
+      flushParagraph();
+      var end = trimmed === '$$' ? '$$' : '\\]';
+      var mathLines = [];
+      i++;
+      while (i < lines.length && lines[i].trim() !== end) {
+        mathLines.push(lines[i]);
+        i++;
+      }
+      html += '<div class="md-math-block">' + esc(mathLines.join('\n').trim()) + '</div>';
+      continue;
+    }
+    if (!trimmed) {
+      flushParagraph();
+      continue;
+    }
+    if (isMarkdownTableStart(lines, i)) {
+      flushParagraph();
+      var table = renderMarkdownTable(lines, i);
+      html += table.html;
+      i = table.next - 1;
+      continue;
+    }
+    var heading = /^(#{1,4})\s+(.+)$/.exec(line);
+    if (heading) {
+      flushParagraph();
+      var level = heading[1].length;
+      html += '<h' + level + '>' + renderMarkdownInline(heading[2].trim()) + '</h' + level + '>';
+      continue;
+    }
+    if (/^>\s?/.test(line)) {
+      flushParagraph();
+      var quoteLines = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) {
+        quoteLines.push(lines[i].replace(/^>\s?/, ''));
+        i++;
+      }
+      i--;
+      html += '<blockquote>' + renderMarkdownInline(quoteLines.join('\n')).replace(/\n/g, '<br>') + '</blockquote>';
+      continue;
+    }
+    var listMatch = /^(\s*)([-*+]|\d+\.)\s+(.+)$/.exec(line);
+    if (listMatch) {
+      flushParagraph();
+      var ordered = /\d+\./.test(listMatch[2]);
+      var listHtml = ordered ? '<ol>' : '<ul>';
+      while (i < lines.length) {
+        var item = /^(\s*)([-*+]|\d+\.)\s+(.+)$/.exec(lines[i]);
+        if (!item || (/\d+\./.test(item[2]) !== ordered)) break;
+        listHtml += '<li>' + renderMarkdownInline(item[3].trim()) + '</li>';
+        i++;
+      }
+      i--;
+      listHtml += ordered ? '</ol>' : '</ul>';
+      html += listHtml;
+      continue;
+    }
+    paragraph.push(line);
+  }
+  flushParagraph();
+  return html || '<p></p>';
+}
+
+function renderMessageContent(text) {
+  return '<div class="md-rendered">' + renderMarkdownBlocks(text) + '</div>';
 }
 
 // === Icon Helpers ===
@@ -4902,6 +5321,13 @@ function updateMsg(div, text, role, mode, model) {
   els['chat-area'].scrollTop = els['chat-area'].scrollHeight;
 }
 
+function formatArchiveDate(value) {
+  if (!value) return '';
+  var date = new Date(value);
+  if (isNaN(date.getTime())) return String(value || '');
+  return date.toLocaleDateString(uiLocale());
+}
+
 function promptInsertText(text) {
   var target = els.prompt;
   if (!target) return;
@@ -4945,10 +5371,39 @@ function isHiddenWorkflowMessage(message) {
   return /^(Preparing request\.?|Response complete\.?|Preparing model request and available tools\.?|Executing \d+ tool call[s]?\.?|Guidance received\.?|Next message queued\.?|Next message recorded for the next turn\.?|Conversation queue updated\.?)$/i.test(content);
 }
 
-function ensureActiveAssistantMsg(mode, model) {
-  if (state._activeWorkflowMsg && state._activeWorkflowMsg.parentNode) return state._activeWorkflowMsg;
-  state._activeWorkflowMsg = addMsg('assistant', '', mode || state.mode, model || state.model);
-  return state._activeWorkflowMsg;
+function conversationWorkUiState(conversationId) {
+  var id = String(conversationId || activeConversationId() || 'default');
+  if (!state.agentWorkUiByConversation) state.agentWorkUiByConversation = {};
+  if (!state.agentWorkUiByConversation[id]) {
+    state.agentWorkUiByConversation[id] = {
+      activeWorkflowMsg: null,
+      activeWorkflowText: '',
+      toolEventMsgs: {},
+      toolEventBatch: null,
+      lastCompletedWorkflow: null
+    };
+  }
+  return state.agentWorkUiByConversation[id];
+}
+
+function resetConversationWorkUi(conversationId, keepCompleted) {
+  var id = String(conversationId || activeConversationId() || 'default');
+  var prior = conversationWorkUiState(id);
+  state.agentWorkUiByConversation[id] = {
+    activeWorkflowMsg: null,
+    activeWorkflowText: '',
+    toolEventMsgs: {},
+    toolEventBatch: null,
+    lastCompletedWorkflow: keepCompleted ? prior.lastCompletedWorkflow : null
+  };
+  return state.agentWorkUiByConversation[id];
+}
+
+function ensureActiveAssistantMsg(mode, model, conversationId) {
+  var ui = conversationWorkUiState(conversationId);
+  if (ui.activeWorkflowMsg && ui.activeWorkflowMsg.parentNode) return ui.activeWorkflowMsg;
+  ui.activeWorkflowMsg = addMsg('assistant', '', mode || state.mode, model || state.model);
+  return ui.activeWorkflowMsg;
 }
 
 function toolEventKey(event) {
@@ -4996,10 +5451,11 @@ function renderToolBatch(batch) {
 }
 
 function ensureToolBatch(event) {
-  if (!state._toolEventBatch) {
-    state._toolEventBatch = { el: null, calls: {}, done: false };
+  var ui = conversationWorkUiState(event && event.conversationId);
+  if (!ui.toolEventBatch) {
+    ui.toolEventBatch = { el: null, calls: {}, done: false };
   }
-  var batch = state._toolEventBatch;
+  var batch = ui.toolEventBatch;
   if (!batch.el || !batch.el.parentNode) {
     batch.el = addMsg('assistant', '', 'tools', event && event.model || state.model);
     batch.el.classList.add('tool-event');
@@ -5015,26 +5471,28 @@ function renderToolBatchInto(batch) {
 }
 
 function upsertToolEvent(event, resultText) {
-  if (!state._toolEventMsgs) state._toolEventMsgs = {};
+  var ui = conversationWorkUiState(event && event.conversationId);
+  if (!ui.toolEventMsgs) ui.toolEventMsgs = {};
   var batch = ensureToolBatch(event);
   batch.done = false;
   var key = toolEventKey(event);
-  var call = state._toolEventMsgs[key] || { name: event.toolName || 'tool', args: event.toolArgs || '', result: '' };
+  var call = ui.toolEventMsgs[key] || { name: event.toolName || 'tool', args: event.toolArgs || '', result: '' };
   call.name = event.toolName || call.name || 'tool';
   if (event.toolArgs) call.args = event.toolArgs;
   if (resultText) call.result = resultText;
-  state._toolEventMsgs[key] = call;
+  ui.toolEventMsgs[key] = call;
   batch.calls[key] = call;
   renderToolBatchInto(batch);
 }
 
-function finishToolBatch() {
-  var batch = state._toolEventBatch;
+function finishToolBatch(conversationId) {
+  var ui = conversationWorkUiState(conversationId);
+  var batch = ui.toolEventBatch;
   if (!batch || !batch.el || !Object.keys(batch.calls || {}).length) return;
   batch.done = true;
   renderToolBatchInto(batch);
-  state._toolEventBatch = null;
-  state._toolEventMsgs = {};
+  ui.toolEventBatch = null;
+  ui.toolEventMsgs = {};
 }
 
 function renderPersistedToolMessage(message) {
@@ -5063,11 +5521,8 @@ function renderPersistedToolMessage(message) {
 function renderChatMessages(messages) {
   if (!els['chat-area']) return;
   els['chat-area'].innerHTML = '';
-  state._activeWorkflowMsg = null;
-  state._activeWorkflowText = '';
-  state._toolEventMsgs = {};
-  state._toolEventBatch = null;
-  state._lastCompletedWorkflow = null;
+  var renderConversationId = activeConversationId();
+  resetConversationWorkUi(renderConversationId, false);
   if (!messages || !messages.length) {
     els['chat-area'].innerHTML = '<div class="welcome-msg"><div class="brand">Newmark Agent</div><div>' + esc(t('app.ready')) + '</div><div class="subtitle">' + esc(t('app.subtitle')) + '</div></div>';
     return;
@@ -5079,10 +5534,10 @@ function renderChatMessages(messages) {
       renderPersistedToolMessage(m);
       continue;
     }
-    finishToolBatch();
+    finishToolBatch(renderConversationId);
     addMsg(m.role || 'assistant', m.content || '', m.mode || '', m.model || '');
   }
-  finishToolBatch();
+  finishToolBatch(renderConversationId);
 }
 
 function activeConversationId() {
@@ -5136,34 +5591,36 @@ function renderAgentWorkEvent(event) {
   if (!event) return;
   var type = event.type || 'status';
   var content = event.content || '';
+  var eventConversationId = String(event.conversationId || activeConversationId() || 'default');
+  var ui = conversationWorkUiState(eventConversationId);
   if (type === 'start') {
-    state._activeWorkflowText = '';
-    state._lastCompletedWorkflow = null;
+    ui.activeWorkflowText = '';
+    ui.lastCompletedWorkflow = null;
   } else if (type === 'text') {
-    state._activeWorkflowText = (state._activeWorkflowText || '') + content;
-    updateMsg(ensureActiveAssistantMsg(event.mode || state.mode, event.model || state.model), state._activeWorkflowText, 'assistant', event.mode || state.mode, event.model || state.model);
+    ui.activeWorkflowText = (ui.activeWorkflowText || '') + content;
+    updateMsg(ensureActiveAssistantMsg(event.mode || state.mode, event.model || state.model, eventConversationId), ui.activeWorkflowText, 'assistant', event.mode || state.mode, event.model || state.model);
   } else if (type === 'tool_call') {
     upsertToolEvent(event, '');
   } else if (type === 'tool_result') {
     upsertToolEvent(event, content || 'Tool result received.');
   } else if (type === 'done') {
-    if (state._activeWorkflowMsg && state._activeWorkflowText) {
-      updateMsg(state._activeWorkflowMsg, state._activeWorkflowText, 'assistant', event.mode || state.mode, event.model || state.model);
-      state._lastCompletedWorkflow = {
-        conversationId: String(event.conversationId || activeConversationId() || 'default'),
-        text: state._activeWorkflowText,
-        msg: state._activeWorkflowMsg,
+    if (ui.activeWorkflowMsg && ui.activeWorkflowText) {
+      updateMsg(ui.activeWorkflowMsg, ui.activeWorkflowText, 'assistant', event.mode || state.mode, event.model || state.model);
+      ui.lastCompletedWorkflow = {
+        conversationId: eventConversationId,
+        text: ui.activeWorkflowText,
+        msg: ui.activeWorkflowMsg,
         at: Date.now()
       };
-    } else if (state._activeWorkflowMsg && !state._activeWorkflowText && state._activeWorkflowMsg.parentNode) {
-      state._activeWorkflowMsg.parentNode.removeChild(state._activeWorkflowMsg);
-      state._lastCompletedWorkflow = null;
+    } else if (ui.activeWorkflowMsg && !ui.activeWorkflowText && ui.activeWorkflowMsg.parentNode) {
+      ui.activeWorkflowMsg.parentNode.removeChild(ui.activeWorkflowMsg);
+      ui.lastCompletedWorkflow = null;
     }
-    state._activeWorkflowMsg = null;
-    state._activeWorkflowText = '';
-    finishToolBatch();
+    ui.activeWorkflowMsg = null;
+    ui.activeWorkflowText = '';
+    finishToolBatch(eventConversationId);
   } else if (type === 'error') {
-    finishToolBatch();
+    finishToolBatch(eventConversationId);
     addMsg('assistant', '[Error] ' + content, 'error', event.model || state.model);
   } else if (type === 'queue_update') {
     state.backendQueue = event.queue || { steering: [], followUp: [] };
@@ -5175,7 +5632,7 @@ function renderAgentWorkEvent(event) {
 }
 
 function findCompletedWorkflowMsg(conversationId, text) {
-  var done = state._lastCompletedWorkflow;
+  var done = conversationWorkUiState(conversationId).lastCompletedWorkflow;
   if (!done || !done.msg || !done.msg.parentNode) return null;
   if (String(done.conversationId || 'default') !== String(conversationId || activeConversationId() || 'default')) return null;
   if (Date.now() - Number(done.at || 0) > 30000) return null;
@@ -5188,10 +5645,7 @@ function replayActiveAgentWorkEvents() {
   var id = String(activeConversationId() || 'default');
   var events = (state.agentWorkEventsByConversation && state.agentWorkEventsByConversation[id]) || [];
   if (!events.length || !state.runningConversations || !state.runningConversations[id]) return;
-  state._activeWorkflowMsg = null;
-  state._activeWorkflowText = '';
-  state._toolEventMsgs = {};
-  state._toolEventBatch = null;
+  resetConversationWorkUi(id, true);
   for (var i = 0; i < events.length; i++) renderAgentWorkEvent(events[i]);
 }
 
@@ -5651,8 +6105,9 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   try {
     var r = await api.sendMessage(text, lockedConversationId);
     var stillActive = isActiveConversationId(lockedConversationId);
+    var lockedUi = conversationWorkUiState(lockedConversationId);
     if (stillActive) {
-      responseMsg = state._activeWorkflowMsg;
+      responseMsg = lockedUi.activeWorkflowMsg;
       if (r && r.error) {
         if (!responseMsg) responseMsg = addMsg('assistant', '', state.mode, state.model);
         updateMsg(responseMsg, '[Error] ' + r.error, 'error', state.mode, state.model);
@@ -5686,8 +6141,10 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       }
     }
   } catch(e) {
-    responseMsg = state._activeWorkflowMsg || addMsg('assistant', '', state.mode, state.model);
-    updateMsg(responseMsg, '[Error] ' + e.message, 'error', state.mode, state.model);
+    if (isActiveConversationId(lockedConversationId)) {
+      responseMsg = conversationWorkUiState(lockedConversationId).activeWorkflowMsg || addMsg('assistant', '', state.mode, state.model);
+      updateMsg(responseMsg, '[Error] ' + e.message, 'error', state.mode, state.model);
+    }
   }
   if (api.getState) {
     api.getState().then(function(s) {
@@ -5861,6 +6318,7 @@ window.setLeftCollapsed = function(collapsed) {
   left.classList.toggle('collapsing', collapsed);
   left.classList.toggle('expanding', !collapsed);
   queueLeftWidthAnimation(startWidth, targetWidth, collapsed, state.leftAnimationToken);
+  scheduleLayoutStateSave();
 };
 
 window.toggleLeft = function() {
@@ -5872,6 +6330,7 @@ window.setLeftSecondaryOpen = function(open) {
   if (!secondary) return;
   state.secondaryCollapsed = !open;
   secondary.classList.toggle('open', open);
+  scheduleLayoutStateSave();
 };
 
 window.toggleLeftSecondary = function() {
@@ -5892,6 +6351,52 @@ window.setRightWidthPx = function(px) {
   if (els.right) els.right.style.width = '';
 };
 
+function scheduleLayoutStateSave() {
+  if (!api.saveConfig) return;
+  if (state._layoutSaveTimer) clearTimeout(state._layoutSaveTimer);
+  state._layoutSaveTimer = setTimeout(function() {
+    state._layoutSaveTimer = null;
+    api.saveConfig({
+      layoutState: {
+        leftCollapsed: !!state.leftCollapsed,
+        rightCollapsed: !!state.rightCollapsed,
+        bottomCollapsed: !!state.bottomCollapsed,
+        secondaryCollapsed: !!state.secondaryCollapsed
+      }
+    }).catch(function(){});
+  }, 180);
+}
+
+function applySavedLayoutState(input) {
+  if (!input) return;
+  if (typeof input.leftCollapsed === 'boolean') {
+    state.leftCollapsed = input.leftCollapsed;
+    if (els.left) {
+      els.left.classList.toggle('collapsed', state.leftCollapsed);
+      setLeftWidthPx(state.leftCollapsed ? 48 : (state.leftWidth || 200));
+      updateLeftCollapseButton();
+    }
+  }
+  if (typeof input.secondaryCollapsed === 'boolean') {
+    state.secondaryCollapsed = input.secondaryCollapsed;
+    var secondary = els['left-secondary'];
+    if (secondary) secondary.classList.toggle('open', !state.secondaryCollapsed && !state.leftCollapsed);
+  }
+  if (typeof input.rightCollapsed === 'boolean') {
+    state.rightCollapsed = input.rightCollapsed;
+    if (els.right) {
+      els.right.style.width = '';
+      els.right.classList.toggle('open', !state.rightCollapsed);
+    }
+    var btn = document.getElementById('right-open-btn');
+    if (btn) btn.innerHTML = iconSvg(state.rightCollapsed ? 'panel-right' : 'x', state.rightCollapsed ? t('right.open') : t('right.close'), 'small');
+  }
+  if (typeof input.bottomCollapsed === 'boolean') {
+    state.bottomCollapsed = input.bottomCollapsed;
+    if (els.bottom) els.bottom.classList.toggle('open', !state.bottomCollapsed);
+  }
+}
+
 window.setRightCollapsed = function(collapsed) {
   state.rightCollapsed = !!collapsed;
   if (!els.right) return;
@@ -5901,6 +6406,7 @@ window.setRightCollapsed = function(collapsed) {
   setTimeout(function() { if (els.right) els.right.classList.remove('animating'); }, 360);
   var btn = document.getElementById('right-open-btn');
   if (btn) btn.innerHTML = iconSvg(state.rightCollapsed ? 'panel-right' : 'x', state.rightCollapsed ? t('right.open') : t('right.close'), 'small');
+  scheduleLayoutStateSave();
 };
 
 window.toggleRight = function() {
@@ -5910,6 +6416,7 @@ window.toggleRight = function() {
 window.toggleBottom = function() {
   state.bottomCollapsed = !state.bottomCollapsed;
   els.bottom.classList.toggle('open', !state.bottomCollapsed);
+  scheduleLayoutStateSave();
 };
 
 // === Right Sidebar Tabs ===
@@ -6290,13 +6797,11 @@ window.refreshRightArchives = function() {
     window.renderRightArchives();
     return;
   }
-  api.listArchives().then(function(items) {
-    state.archives = (items || []).map(function(a) {
-      return { name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '' };
+  api.listArchives('workspace').then(function(items) {
+    state.workspaceArchives = (items || []).map(function(a) {
+      return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '' };
     });
     window.renderRightArchives();
-    var stab = document.getElementById('stab-archive');
-    if (stab) stab.innerHTML = renderArchiveSettings();
   }).catch(function(err) {
     if (target) target.innerHTML = '<div class="right-empty">' + esc(t('archive.unavailable')) + ': ' + esc(err.message || String(err)) + '</div>';
   });
@@ -6305,7 +6810,7 @@ window.refreshRightArchives = function() {
 window.renderRightArchives = function() {
   var target = document.getElementById('right-archive-list');
   if (!target) return;
-  var items = state.archives || [];
+  var items = state.workspaceArchives || [];
   if (!items.length) {
     target.innerHTML = '<div class="right-empty">' + esc(t('archive.workspaceEmpty')) + '</div>';
     return;
@@ -6313,8 +6818,9 @@ window.renderRightArchives = function() {
   var html = '';
   for (var i = 0; i < items.length; i++) {
     var a = items[i];
+    var archiveMeta = a.firstLine || formatArchiveDate(a.date) || t('archive.workspace');
     html += '<div class="right-row">' +
-      '<div class="right-row-body"><span class="right-row-title">' + esc(a.name || '') + '</span><span class="right-row-meta">' + esc(a.firstLine || a.date || t('archive.workspace')) + '</span></div>' +
+      '<div class="right-row-body"><span class="right-row-title">' + esc(a.name || '') + '</span><span class="right-row-meta">' + esc(archiveMeta) + '</span></div>' +
       '<button class="archive-action-btn" onclick="window.loadArchive(' + i + ')">' + esc(t('archive.open')) + '</button>' +
       '<button class="archive-action-btn danger" onclick="window.deleteArchive(' + i + ')">' + esc(t('common.delete')) + '</button>' +
       '</div>';
@@ -6324,6 +6830,7 @@ window.renderRightArchives = function() {
 
 // === Terminal (Multi-Tab) ===
 var _terminalCounter = 0;
+var _terminalTakeoverTabs = {};
 
 window.getActiveTerminalPane = function() {
   var pane = document.querySelector('.terminal-pane.active');
@@ -6343,6 +6850,17 @@ window.terminalSend = function() {
   var cmd = input.value;
   if (!cmd) return;
   input.value = '';
+  var takeoverSession = pane.getAttribute('data-takeover-session');
+  if (takeoverSession) {
+    if (!api.terminalTakeoverWrite) {
+      if (output) output.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('terminal.notConnected')) + ']</span>';
+      return;
+    }
+    api.terminalTakeoverWrite(takeoverSession, cmd).catch(function(err) {
+      if (output) output.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('common.error')) + '] ' + esc(err.message) + '</span>';
+    });
+    return;
+  }
   var sessionId = pane.getAttribute('data-session');
   if (!sessionId) {
     if (output) output.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('terminal.notConnected')) + ']</span>';
@@ -6446,6 +6964,83 @@ window.addTerminalTab = function(shellId) {
   }, 200);
 };
 
+window.ensureTerminalTakeoverPane = function(session) {
+  if (!session || !session.id) return null;
+  var key = session.id;
+  var existingId = _terminalTakeoverTabs[key];
+  var existing = existingId ? document.getElementById('terminal-pane-' + existingId) : null;
+  if (existing) return existing;
+
+  var tabsContainer = els['terminal-tabs'];
+  var body = els['terminal-body'];
+  if (!tabsContainer || !body) return null;
+  var tabId = ++_terminalCounter;
+  _terminalTakeoverTabs[key] = tabId;
+
+  var tab = document.createElement('div');
+  tab.className = 'terminal-tab agent-takeover marquee-border';
+  tab.setAttribute('data-tab-id', tabId);
+  tab.setAttribute('data-takeover-session', key);
+  tab.innerHTML = 'Agent:' + esc(session.name || key) + '<button class="close-tab" onclick="event.stopPropagation();window.closeTerminalTab(' + tabId + ')" title="' + escAttr(t('common.closeTab')) + '">' + iconSvg('x', t('common.closeTab'), 'tiny') + '</button>';
+  tab.onclick = function() { window.switchTerminalTab(tabId); };
+
+  var allTabs = tabsContainer.querySelectorAll('.terminal-tab');
+  for (var i = 0; i < allTabs.length; i++) allTabs[i].classList.remove('active');
+  tab.classList.add('active');
+  tabsContainer.appendChild(tab);
+
+  var pane = document.createElement('div');
+  pane.className = 'terminal-pane active agent-takeover marquee-border';
+  pane.id = 'terminal-pane-' + tabId;
+  pane.setAttribute('data-tab-id', tabId);
+  pane.setAttribute('data-session', '');
+  pane.setAttribute('data-takeover-session', key);
+  pane.innerHTML =
+    '<div class="terminal-takeover-status">Agent takeover · ' + esc(session.name || key) + ' · ' + esc(session.shell || 'shell') + '</div>' +
+    '<div class="terminal-output"></div>' +
+    '<div class="terminal-input-row">' +
+    '<span class="terminal-prompt">Agent&gt;</span>' +
+    '<input class="terminal-input" type="text" placeholder="Enter command..." onkeydown="if(event.key===\'Enter\')window.terminalSend()">' +
+    '</div>';
+
+  var allPanes = body.querySelectorAll('.terminal-pane');
+  for (var j = 0; j < allPanes.length; j++) allPanes[j].classList.remove('active');
+  body.appendChild(pane);
+  tabsContainer.scrollLeft = tabsContainer.scrollWidth;
+  window.switchTerminalTab(tabId);
+  return pane;
+};
+
+window.applyTerminalTakeoverEvent = function(payload) {
+  if (!payload || !payload.session) return;
+  var session = payload.session;
+  var pane = window.ensureTerminalTakeoverPane(session);
+  if (!pane) return;
+  var tabId = pane.getAttribute('data-tab-id');
+  var tab = document.querySelector('.terminal-tab[data-tab-id="' + tabId + '"]');
+  var active = session.active !== false && payload.type !== 'stopped';
+  pane.classList.toggle('marquee-border', active);
+  pane.classList.toggle('agent-takeover', true);
+  if (tab) {
+    tab.classList.toggle('marquee-border', active);
+    tab.classList.toggle('agent-takeover', true);
+  }
+  var status = pane.querySelector('.terminal-takeover-status');
+  if (status) {
+    status.textContent = 'Agent takeover · ' + (session.name || session.id) + ' · ' + (session.shell || 'shell') + (active ? '' : ' · stopped');
+  }
+  var output = pane.querySelector('.terminal-output');
+  if (!output) return;
+  if (payload.type === 'started' && session.buffer) {
+    output.innerHTML = esc(session.buffer);
+  } else if (payload.data) {
+    output.innerHTML += esc(payload.data);
+  } else if (payload.type === 'stopped') {
+    output.innerHTML += '\r\n<span style="color:var(--text-dim);opacity:0.65;">[Agent takeover stopped]</span>';
+  }
+  output.scrollTop = output.scrollHeight;
+};
+
 window.switchTerminalTab = function(tabId) {
   // Update tabs
   var allTabs = document.querySelectorAll('.terminal-tab');
@@ -6467,6 +7062,8 @@ window.closeTerminalTab = function(tabId) {
   if (pane) {
     var sessionId = pane.getAttribute('data-session');
     if (sessionId) api.terminalKill(sessionId, state.terminalInterruptTimeoutMs || 0).catch(function(){});
+    var takeoverSession = pane.getAttribute('data-takeover-session');
+    if (takeoverSession && _terminalTakeoverTabs[takeoverSession]) delete _terminalTakeoverTabs[takeoverSession];
     pane.parentNode.removeChild(pane);
   }
   var tab = document.querySelector('.terminal-tab[data-tab-id="' + tabId + '"]');
@@ -6504,6 +7101,19 @@ if (api.onTerminalData) {
     var output = pane.querySelector('.terminal-output');
     if (output) output.innerHTML += '\r\n<span style="color:var(--text-dim);opacity:0.5;">[Process exited code=' + code + ']</span>';
   });
+}
+
+if (api.onTerminalTakeover) {
+  api.onTerminalTakeover(function(event, payload) {
+    window.applyTerminalTakeoverEvent(payload);
+  });
+}
+if (api.terminalTakeoverState) {
+  api.terminalTakeoverState().then(function(items) {
+    (items || []).forEach(function(session) {
+      window.applyTerminalTakeoverEvent({ type: session.active ? 'started' : 'stopped', session: session });
+    });
+  }).catch(function(){});
 }
 
 // === Scroll to Bottom ===
@@ -6706,11 +7316,13 @@ window.openSettings = function(tab) {
   var html = '<div class="settings-tabs">' +
     '<button class="stab-btn" data-stab="general" onclick="window.settingsTab(\'general\')">' + esc(t('settings.general')) + '</button>' +
     '<button class="stab-btn" data-stab="models" onclick="window.settingsTab(\'models\')">' + esc(t('settings.models')) + '</button>' +
+    '<button class="stab-btn" data-stab="tools" onclick="window.settingsTab(\'tools\')">' + esc(t('settings.tools')) + '</button>' +
     '<button class="stab-btn" data-stab="archive" onclick="window.settingsTab(\'archive\')">' + esc(t('settings.archive')) + '</button>' +
     '<button class="stab-btn" data-stab="updates" onclick="window.settingsTab(\'updates\')">' + esc(t('settings.updates')) + '</button>' +
     '</div>' +
     '<div class="stab-panel" id="stab-general">' + renderGeneralSettings() + '</div>' +
     '<div class="stab-panel" id="stab-models">' + renderModelSettings() + '</div>' +
+    '<div class="stab-panel" id="stab-tools">' + renderToolSettings() + '</div>' +
     '<div class="stab-panel" id="stab-archive">' + renderArchiveSettings() + '</div>' +
     '<div class="stab-panel" id="stab-updates">' + renderUpdateSettings() + '</div>';
   state.activeSubWindowView = { name: 'settings', tab: activeTab };
@@ -6836,7 +7448,9 @@ function renderModelSettings() {
     '<button class="sec-btn" onclick="window.addProvider()" style="margin-right:6px;">+ ' + esc(t('model.addProvider')) + '</button>' +
     '<button class="sec-btn primary" onclick="window.addModel()">+ ' + esc(t('model.addModel')) + '</button>' +
     '<button class="sec-btn" onclick="window.validateAllModels()" style="margin-left:6px;">' + esc(t('model.validateAll')) + '</button>' +
+    '<button class="sec-btn" onclick="window.githubCopilotLogin()" style="margin-left:6px;">' + esc(t('model.githubLogin')) + '</button>' +
     '</div>' +
+    '<div style="margin-top:6px;font-size:10px;color:var(--text-dim);">' + esc(t('model.githubLoginDesc')) + '</div>' +
     '<div class="fuzzy-inject-area">' +
     '<button class="fuzzy-inject-btn" onclick="window.fuzzyInject()">' + esc(t('model.fuzzy')) + '</button>' +
     '<div style="margin-top:6px;font-size:10px;color:var(--text-dim);">' + esc(t('model.fuzzyDesc')) + '</div>' +
@@ -6861,18 +7475,52 @@ function renderModelSettings() {
     '</div>';
 }
 
+function renderToolSettings() {
+  var tools = state.nativeTools || [];
+  var enabled = state.nativeToolEnabled || {};
+  var html = '<div class="provider-card" style="margin-bottom:10px;">' +
+    '<div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px;">' + esc(t('tools.title')) + '</div>' +
+    '<div style="font-size:11px;color:var(--text-dim);line-height:1.45;">' + esc(t('tools.desc')) + '</div>' +
+    '</div><div class="tool-settings-grid">';
+  for (var i = 0; i < tools.length; i++) {
+    var tool = tools[i] || {};
+    var checked = tool.protected || enabled[tool.name] !== false;
+    html += '<div class="setting-row tool-setting-row">' +
+      '<div class="tool-setting-main">' +
+      '<div class="tool-setting-title"><span>' + esc(tool.label || tool.name || '') + '</span><span class="tool-setting-name">' + esc(tool.name || '') + '</span>' + (tool.protected ? '<span class="model-eval-pending">' + esc(t('tools.protected')) + '</span>' : '') + '</div>' +
+      '<div class="tool-setting-desc">' + esc(tool.description || '') + '</div>' +
+      '</div>' +
+      '<div class="setting-control" style="flex:0 0 auto;"><input type="checkbox" ' + (checked ? 'checked' : '') + (tool.protected ? ' disabled' : '') + ' onchange="window.setNativeToolEnabled(\'' + escAttr(tool.name || '') + '\', this.checked)"></div>' +
+      '</div>';
+  }
+  return html + '</div>';
+}
+
 function renderArchiveSettings() {
+  if (api.listArchives && !state._archiveSettingsLoading) {
+    state._archiveSettingsLoading = true;
+    api.listArchives('all').then(function(items) {
+      state.allArchives = (items || []).map(function(a) {
+        return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || '', workspace: a.workspace || '' };
+      });
+      state._archiveSettingsLoading = false;
+      var stab = document.getElementById('stab-archive');
+      if (stab && state.settingsActiveTab === 'archive') stab.innerHTML = renderArchiveSettings();
+    }).catch(function() { state._archiveSettingsLoading = false; });
+  }
   var html = '<div style="margin-bottom:10px;"><button class="sec-btn primary" onclick="window.archiveCurrent()">' + esc(t('archive.current')) + '</button></div>';
-  if (state.archives.length === 0) {
+  var archiveSettingsItems = state.allArchives || [];
+  if (archiveSettingsItems.length === 0) {
     html += '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:20px;">' + esc(t('archive.empty')) + '</div>';
   } else {
-    for (var i = 0; i < state.archives.length; i++) {
-      var a = state.archives[i];
+    for (var i = 0; i < archiveSettingsItems.length; i++) {
+      var a = archiveSettingsItems[i];
+      var archiveDate = formatArchiveDate(a.date);
       html += '<div class="archive-item">' +
         '<span class="archive-name">' + esc(a.name || a.path || '') + '</span>' +
-        '<span class="archive-date">' + esc(a.date || '') + '</span>' +
-        '<button class="archive-action-btn" onclick="window.loadArchive(' + i + ')">' + esc(t('archive.load')) + '</button>' +
-        '<button class="archive-action-btn danger" onclick="window.deleteArchive(' + i + ')">' + esc(t('common.delete')) + '</button>' +
+        '<span class="archive-date">' + esc(a.workspace || a.scope || archiveDate || '') + '</span>' +
+        '<button class="archive-action-btn" onclick="window.loadArchive(' + i + ', &quot;all&quot;)">' + esc(t('archive.load')) + '</button>' +
+        '<button class="archive-action-btn danger" onclick="window.deleteArchive(' + i + ', &quot;all&quot;)">' + esc(t('common.delete')) + '</button>' +
         '</div>';
     }
   }
@@ -7081,9 +7729,32 @@ window.setSwitchTendency = function(v) {
   api.saveConfig({ switchTendency: v });
 };
 
+window.setNativeToolEnabled = function(name, enabled) {
+  if (!name) return;
+  state.nativeToolEnabled = state.nativeToolEnabled || {};
+  state.nativeToolEnabled[name] = enabled !== false;
+  for (var i = 0; i < (state.nativeTools || []).length; i++) {
+    if (state.nativeTools[i].name === name) state.nativeTools[i].enabled = state.nativeToolEnabled[name];
+  }
+  if (api.saveConfig) api.saveConfig({ nativeTools: state.nativeToolEnabled }).catch(function(){});
+};
+
+function githubModelsEndpoint(protocol) {
+  return protocol === 'github_models' ? 'https://models.github.ai' : '';
+}
+
+window.syncProviderProtocolDefaults = function(protocolId, endpointId) {
+  var protocolEl = document.getElementById(protocolId);
+  var endpointEl = document.getElementById(endpointId);
+  if (!protocolEl || !endpointEl) return;
+  var endpoint = githubModelsEndpoint(protocolEl.value);
+  if (endpoint && !String(endpointEl.value || '').trim()) endpointEl.value = endpoint;
+  if (endpoint) endpointEl.placeholder = endpoint;
+};
+
 window.addProvider = function() {
   window.openSubWin(t('model.addProvider'), '<div class="auto-input-group"><label>' + esc(t('model.providerName')) + '</label><input id="new-provider-name" placeholder="OpenAI"></div>' +
-    '<div class="auto-input-group"><label>' + esc(t('model.protocol')) + '</label><select id="new-provider-protocol"><option value="openai">' + esc(t('model.openaiCompat')) + '</option><option value="anthropic">' + esc(t('model.anthropicCompat')) + '</option></select></div>' +
+    '<div class="auto-input-group"><label>' + esc(t('model.protocol')) + '</label><select id="new-provider-protocol" onchange="window.syncProviderProtocolDefaults(&quot;new-provider-protocol&quot;,&quot;new-provider-endpoint&quot;)"><option value="openai">' + esc(t('model.openaiCompat')) + '</option><option value="anthropic">' + esc(t('model.anthropicCompat')) + '</option><option value="github_models">' + esc(t('model.githubModelsCompat')) + '</option></select></div>' +
     '<div class="auto-input-group"><label>' + esc(t('model.endpoint')) + '</label><input id="new-provider-endpoint" placeholder="https://api.openai.com/v1"></div>' +
     '<div class="auto-input-group"><label>' + esc(t('model.apiKey')) + '</label><input id="new-provider-key" type="password" placeholder="sk-..."></div>' +
     '<div style="margin-top:10px;"><button class="sec-btn primary" onclick="window.saveNewProvider()">' + esc(t('common.save')) + '</button></div>');
@@ -7095,6 +7766,7 @@ window.saveNewProvider = function() {
   var key = document.getElementById('new-provider-key').value;
   var protocolEl = document.getElementById('new-provider-protocol');
   var protocol = protocolEl ? protocolEl.value : 'openai';
+  endpoint = endpoint || githubModelsEndpoint(protocol);
   if (name && endpoint) {
     state.providers.push({name: name, base_url: endpoint, api_key: key, protocol: protocol, enabled: true, models: []});
     api.saveConfig({providers: state.providers});
@@ -7108,7 +7780,7 @@ window.editProvider = function(idx) {
   var p = state.providers[idx];
   if (!p) return;
   window.openSubWin(t('common.edit'), '<div class="auto-input-group"><label>' + esc(t('model.providerName')) + '</label><input id="edit-provider-name" value="' + escAttr(p.name || '') + '"></div>' +
-    '<div class="auto-input-group"><label>' + esc(t('model.protocol')) + '</label><select id="edit-provider-protocol"><option value="openai"' + ((p.protocol || 'openai') === 'openai' ? ' selected' : '') + '>' + esc(t('model.openaiCompat')) + '</option><option value="anthropic"' + (p.protocol === 'anthropic' ? ' selected' : '') + '>' + esc(t('model.anthropicCompat')) + '</option></select></div>' +
+    '<div class="auto-input-group"><label>' + esc(t('model.protocol')) + '</label><select id="edit-provider-protocol" onchange="window.syncProviderProtocolDefaults(&quot;edit-provider-protocol&quot;,&quot;edit-provider-endpoint&quot;)"><option value="openai"' + ((p.protocol || 'openai') === 'openai' ? ' selected' : '') + '>' + esc(t('model.openaiCompat')) + '</option><option value="anthropic"' + (p.protocol === 'anthropic' ? ' selected' : '') + '>' + esc(t('model.anthropicCompat')) + '</option><option value="github_models"' + (p.protocol === 'github_models' ? ' selected' : '') + '>' + esc(t('model.githubModelsCompat')) + '</option></select></div>' +
     '<div class="auto-input-group"><label>' + esc(t('model.endpoint')) + '</label><input id="edit-provider-endpoint" value="' + escAttr(p.base_url || p.endpoint || '') + '"></div>' +
     '<div class="auto-input-group"><label>' + esc(t('model.apiKey')) + '</label><input id="edit-provider-key" type="password" placeholder="' + (p.has_api_key ? 'Saved key retained when blank' : 'sk-...') + '"></div>' +
     '<div style="margin-top:10px;"><button class="sec-btn primary" onclick="window.saveProviderEdit(' + idx + ')">' + esc(t('common.save')) + '</button></div>');
@@ -7123,6 +7795,7 @@ window.saveProviderEdit = function(idx) {
   var protocolEl = document.getElementById('edit-provider-protocol');
   var name = nameEl ? nameEl.value.trim() : '';
   var endpoint = endpointEl ? endpointEl.value.trim() : '';
+  endpoint = endpoint || githubModelsEndpoint(protocolEl ? protocolEl.value : '');
   if (!name || !endpoint) return;
   state.providers[idx] = Object.assign({}, p, {
     name: name,
@@ -7303,6 +7976,35 @@ window.doFuzzyInject = function() {
   });
 };
 
+window.githubCopilotLogin = function() {
+  if (!api.githubCopilotLogin) {
+    addMsg('assistant', '[Error] GitHub login bridge is unavailable.', 'error', '');
+    return;
+  }
+  document.body.classList.add('model-evaluating');
+  window.openSubWin(t('model.githubLogin'), '<div class="provider-card marquee-border">' + esc(t('model.githubLoginDesc')) + '</div>');
+  api.githubCopilotLogin().then(function(result) {
+    document.body.classList.remove('model-evaluating');
+    if (result && result.ok) {
+      addMsg('assistant', '[System] ' + t('model.githubLoginOk'), 'success', '');
+    } else {
+      addMsg('assistant', redactSensitiveText('[Error] GitHub login failed: ' + ((result && (result.error || result.output)) || 'unknown error')), 'error', '');
+    }
+    return api.getState();
+  }).then(function(s) {
+    if (s && s.providers) state.providers = s.providers;
+    if (s && s.models) state.models = s.models;
+    window.refreshModelSelect();
+    window.closeSubWin();
+    window.openSettings('models');
+  }).catch(function(err) {
+    document.body.classList.remove('model-evaluating');
+    addMsg('assistant', redactSensitiveText('[Error] GitHub login failed: ' + err.message), 'error', '');
+    window.closeSubWin();
+    window.openSettings('models');
+  });
+};
+
 window.parseFuzzyInput = function(text) {
   var keyMatch = text.match(/(sk-[A-Za-z0-9_\-\.]+|[A-Za-z0-9_\-]{20,})/);
   var urlMatch = text.match(/https?:\/\/[^\s,;]+/);
@@ -7362,40 +8064,31 @@ window.showModelEvaluationResults = function(results) {
   html += '</div>';
   window.openSubWin(t('model.validationTitle'), html);
 };
-window.archiveCurrent = function() {
-  var name = 'Archive-' + new Date().toISOString().slice(0,10) + '-' + (state.archives.length + 1);
-  state.archives.push({name: name, date: new Date().toLocaleDateString(uiLocale())});
-  api.saveConfig({archives: state.archives});
-  window.openSettings();
-};
-
-window.loadArchive = function(idx) {
-  if (state.archives[idx]) {
-    addMsg('assistant', '[System] Loaded archive: ' + state.archives[idx].name, 'archive', '');
-  }
-  window.closeSubWin();
-};
-
-window.deleteArchive = function(idx) {
-  if (state.archives[idx]) {
-    state.archives.splice(idx, 1);
-    api.saveConfig({archives: state.archives});
-    window.openSettings();
-  }
-};
-
 renderArchiveSettings = function() {
-  var html = '<div style="margin-bottom:10px;display:flex;gap:8px;"><button class="sec-btn primary" onclick="window.archiveCurrent()">' + esc(t('archive.current')) + '</button><button class="sec-btn" onclick="window.refreshRightArchives()">' + esc(t('right.refresh')) + '</button></div>';
-  if (!state.archives || state.archives.length === 0) {
-    html += '<div class="right-empty">' + esc(t('archive.workspaceEmpty')) + '</div>';
+  if (api.listArchives && !state._allArchiveSettingsLoading) {
+    state._allArchiveSettingsLoading = true;
+    api.listArchives('all').then(function(items) {
+      state.allArchives = (items || []).map(function(a) {
+        return { name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || '', workspace: a.workspace || '' };
+      });
+      state._allArchiveSettingsLoading = false;
+      var stab = document.getElementById('stab-archive');
+      if (stab && state.settingsActiveTab === 'archive') stab.innerHTML = renderArchiveSettings();
+    }).catch(function(){ state._allArchiveSettingsLoading = false; });
+  }
+  var archives = state.allArchives || [];
+  var html = '<div style="margin-bottom:10px;display:flex;gap:8px;"><button class="sec-btn primary" onclick="window.archiveCurrent()">' + esc(t('archive.current')) + '</button><button class="sec-btn" onclick="state.allArchives=[];renderArchiveSettings();">' + esc(t('right.refresh')) + '</button></div>';
+  if (!archives || archives.length === 0) {
+    html += '<div class="right-empty">' + esc(t('archive.empty')) + '</div>';
   } else {
-    for (var i = 0; i < state.archives.length; i++) {
-      var a = state.archives[i];
+    for (var i = 0; i < archives.length; i++) {
+      var a = archives[i];
+      var archiveDate = formatArchiveDate(a.date);
       html += '<div class="archive-item">' +
         '<span class="archive-name">' + esc(a.name || '') + '</span>' +
-        '<span class="archive-date">' + esc(a.firstLine || a.date || '') + '</span>' +
-        '<button class="archive-action-btn" onclick="window.loadArchive(' + i + ')">' + esc(t('archive.open')) + '</button>' +
-        '<button class="archive-action-btn danger" onclick="window.deleteArchive(' + i + ')">' + esc(t('common.delete')) + '</button>' +
+        '<span class="archive-date">' + esc(a.workspace || a.scope || a.firstLine || archiveDate || '') + '</span>' +
+        '<button class="archive-action-btn" onclick="window.loadArchive(' + i + ', &quot;all&quot;)">' + esc(t('archive.open')) + '</button>' +
+        '<button class="archive-action-btn danger" onclick="window.deleteArchive(' + i + ', &quot;all&quot;)">' + esc(t('common.delete')) + '</button>' +
         '</div>';
     }
   }
@@ -7412,11 +8105,12 @@ window.archiveCurrent = function() {
   }
   api.archive(currentId).then(function(filePath) {
     addMsg('assistant', '[Archive] ' + t('archive.saved') + ': ' + filePath, 'archive', '');
-    return api.listArchives ? api.listArchives() : [];
+    return api.listArchives ? api.listArchives('workspace') : [];
   }).then(function(items) {
-    state.archives = (items || []).map(function(a) {
-      return { name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '' };
+    state.workspaceArchives = (items || []).map(function(a) {
+      return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '' };
     });
+    state.allArchives = [];
     window.renderRightArchives();
     var stab = document.getElementById('stab-archive');
     if (stab) stab.innerHTML = renderArchiveSettings();
@@ -7426,27 +8120,30 @@ window.archiveCurrent = function() {
   });
 };
 
-window.loadArchive = function(idx) {
-  var item = state.archives[idx];
+window.loadArchive = function(idx, scope) {
+  var item = (scope === 'all' ? state.allArchives : state.workspaceArchives)[idx];
   if (!item || !api.readArchive) return;
-  api.readArchive(item.name).then(function(content) {
+  api.readArchive(item.id || item.name).then(function(content) {
     window.openSubWin(t('archive.titlePrefix') + ': ' + item.name, '<pre style="white-space:pre-wrap;word-break:break-word;background:var(--glass-bg-1);border:1px solid var(--glass-border-1);border-radius:8px;padding:12px;font-size:11px;max-height:65vh;overflow:auto;">' + esc(content || '') + '</pre>');
   }).catch(function(err) {
     addMsg('assistant', '[Archive] ' + t('archive.readFailed') + ': ' + (err.message || String(err)), 'error', '');
   });
 };
 
-window.deleteArchive = function(idx) {
-  var item = state.archives[idx];
+window.deleteArchive = function(idx, scope) {
+  var listScope = scope === 'all' ? 'all' : 'workspace';
+  var item = (listScope === 'all' ? state.allArchives : state.workspaceArchives)[idx];
   if (!item || !api.deleteArchive) return;
-  api.deleteArchive(item.name).then(function(ok) {
+  api.deleteArchive(item.id || item.name).then(function(ok) {
     if (!ok) addMsg('assistant', '[Archive] ' + t('archive.deleteFailed') + ': ' + item.name, 'error', '');
-    return api.listArchives ? api.listArchives() : [];
+    return api.listArchives ? api.listArchives(listScope) : [];
   }).then(function(items) {
-    state.archives = (items || []).map(function(a) {
-      return { name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '' };
+    var mapped = (items || []).map(function(a) {
+      return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || listScope, workspace: a.workspace || '' };
     });
-    window.renderRightArchives();
+    if (listScope === 'all') state.allArchives = mapped;
+    else state.workspaceArchives = mapped;
+    if (listScope === 'workspace') window.renderRightArchives();
     var stab = document.getElementById('stab-archive');
     if (stab) stab.innerHTML = renderArchiveSettings();
   }).catch(function(err) {
@@ -8066,19 +8763,6 @@ function renderTreeNodes(nodes, parent, depth) {
 }
 
 // === Editor ===
-var mdSimpleRender = function(text) {
-  return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/\n\n/g, '</p><p>')
-    .replace(/\n/g, '<br>');
-};
-
 window.openFile = async function(path) {
   state.editorPath = path;
   try {
@@ -8087,7 +8771,7 @@ window.openFile = async function(path) {
     if (path.endsWith('.md') || path.endsWith('.MD')) {
       window.switchRightTab('md-viewer');
       var mc = window.getMarkdownContentNode();
-      if (mc) mc.innerHTML = '<div class="md-rendered">' + mdSimpleRender(content) + '</div>';
+      if (mc) mc.innerHTML = renderMessageContent(content);
     } else {
       window.switchRightTab('editor');
       els['editor-filename'].textContent = path;
@@ -8325,7 +9009,9 @@ function applyBackendConversations(items, activeId) {
       archived: false,
       active: id === requestedActiveId,
       messageCount: item.messageCount || 0,
-      updatedAt: item.updatedAt || ''
+      updatedAt: item.updatedAt || '',
+      pinned: !!item.pinned,
+      pinnedAt: item.pinnedAt || ''
     });
   }
   if (!convs.some(function(c) { return c.active; })) convs[0].active = true;
@@ -8392,6 +9078,7 @@ function renderConversations() {
     div.className = 'conv-item' + (conv.active ? ' active' : '');
     if (state.runningConversations && state.runningConversations[conv.id]) div.classList.add('marquee-border');
     div.innerHTML = '<span class="conv-summary">' + esc(conv.summary) + (conv.messageCount ? ' (' + esc(String(conv.messageCount)) + ')' : '') + '</span>' +
+      '<button class="conv-pin-btn' + (conv.pinned ? ' active' : '') + '" onclick="event.stopPropagation();window.toggleConversationPinned(' + i + ')" title="' + escAttr(conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '">' + iconOnly('pin', conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '</button>' +
       '<button class="conv-archive-btn" onclick="event.stopPropagation();window.archiveConv(' + i + ')" title="' + escAttr(t('conversation.archive')) + '">' + esc(t('conversation.archive')) + '</button>';
     div.onclick = function(idx) { return function() { window.switchConversation(idx); }; }(i);
     list.appendChild(div);
@@ -8420,8 +9107,6 @@ window.switchConversationOld = function(idx) {
 window.archiveConvOld = function(idx) {
   if (state.conversations[idx]) {
     state.conversations[idx].archived = true;
-    var name = state.conversations[idx].summary;
-    state.archives.push({name: name, date: new Date().toLocaleDateString(uiLocale())});
     state.conversations.splice(idx, 1);
     if (state.conversations.length === 0) {
       state.conversations.push({id: 'conv-default', summary: t('workspace.defaultConversation'), archived: false, active: true});
@@ -8514,8 +9199,6 @@ window.archiveConv = function(idx) {
   if (target) {
     var targetId = target.id || 'default';
     target.archived = true;
-    var name = target.summary;
-    state.archives.push({name: name, date: new Date().toLocaleDateString(uiLocale())});
     convs.splice(idx, 1);
     if (convs.length === 0) {
       convs.push({id: 'default', summary: t('workspace.defaultConversation'), archived: false, active: true});
@@ -8532,19 +9215,33 @@ window.archiveConv = function(idx) {
       return syncBackendConversation();
     }).then(function() {
       renderConversations();
-      if (api.listArchives) return api.listArchives();
+      if (api.listArchives) return api.listArchives('workspace');
       return [];
     }).then(function(items) {
-      if (items && items.length) {
-        state.archives = items.map(function(a) {
-          return { name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '' };
-        });
-        window.renderRightArchives();
-      }
+      state.workspaceArchives = (items || []).map(function(a) {
+        return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '' };
+      });
+      state.allArchives = [];
+      window.renderRightArchives();
     }).catch(function(err) {
       addMsg('assistant', '[Archive] ' + t('workspace.saveFailed') + ': ' + (err.message || String(err)), 'error', '');
     });
   }
+};
+
+window.toggleConversationPinned = function(idx) {
+  var convs = currentWorkspaceConversations();
+  var conv = convs[idx];
+  if (!conv || !api.setConversationPinned) return;
+  var nextPinned = !conv.pinned;
+  conv.pinned = nextPinned;
+  conv.pinnedAt = nextPinned ? new Date().toISOString() : '';
+  renderConversations();
+  api.setConversationPinned(conv.id, nextPinned).then(function() {
+    return api.getState ? api.getState() : null;
+  }).then(function(s) {
+    if (s) applyWorkspaceStateFromBackend(s);
+  }).catch(function(){});
 };
 
 // === Memory Lab ===
@@ -9263,10 +9960,30 @@ window.renderLeftWsList = function() {
     html += '<div class="left-ws-item' + (active ? ' active' : '') + '" onclick="window.switchToWorkspace(\'' + esc(ws.name) + '\')">' +
       '<span class="ws-icon">' + esc((ws.name || '?')[0].toUpperCase()) + '</span>' +
       '<span class="ws-label">' + esc(ws.name || t('workspace.untitled')) + '</span>' +
+      '<button class="ws-pin-btn' + (ws.pinned ? ' active' : '') + '" onclick="event.stopPropagation();window.toggleWorkspacePinned(\'' + escAttr(ws.name || '') + '\')" title="' + escAttr(ws.pinned ? t('workspace.unpin') : t('workspace.pin')) + '">' + iconOnly('pin', ws.pinned ? t('workspace.unpin') : t('workspace.pin')) + '</button>' +
       (active ? '<span class="ws-check">*</span>' : '') +
       '</div>';
   }
   container.innerHTML = html;
+};
+
+window.toggleWorkspacePinned = function(name) {
+  if (!name || !api.setWorkspacePinned) return;
+  var nextPinned = false;
+  for (var i = 0; i < (state.workspaces || []).length; i++) {
+    if (state.workspaces[i].name === name) {
+      nextPinned = !state.workspaces[i].pinned;
+      state.workspaces[i].pinned = nextPinned;
+      state.workspaces[i].pinnedAt = nextPinned ? new Date().toISOString() : '';
+      break;
+    }
+  }
+  window.renderLeftWsList();
+  api.setWorkspacePinned(name, nextPinned).then(function() {
+    return api.getState ? api.getState() : null;
+  }).then(function(s) {
+    if (s) applyWorkspaceStateFromBackend(s);
+  }).catch(function(){});
 };
 
 function applyWorkspaceStateFromBackend(s) {
@@ -9302,6 +10019,7 @@ window.showNewWorkspaceDialog = function() {
     '<div style="display:flex;gap:10px;margin-bottom:12px;">' +
     '<label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;"><input type="radio" name="ws-type" value="internal" checked onchange="window.toggleWsType()"> ' + esc(t('workspace.internal')) + '</label>' +
     '<label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;"><input type="radio" name="ws-type" value="external" onchange="window.toggleWsType()"> ' + esc(t('workspace.external')) + '</label>' +
+    '<label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;"><input type="radio" name="ws-type" value="ssh" onchange="window.toggleWsType()"> ' + esc(t('workspace.ssh')) + '</label>' +
     '</div>' +
     '<label id="ws-name-label-dlg" style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:8px;">' + esc(t('workspace.name')) + '</label>' +
     '<input id="new-ws-input" style="width:100%;padding:8px 10px;border:1px solid var(--glass-border-2);border-radius:var(--radius-sm);background:var(--glass-bg-1);color:var(--text);font-size:13px;outline:none;box-sizing:border-box;" placeholder="' + escAttr(t('workspace.enterName')) + '" onkeydown="if(event.key===\'Enter\')window.doCreateWorkspace()">' +
@@ -9311,6 +10029,16 @@ window.showNewWorkspaceDialog = function() {
     '<input id="ws-ext-path-input" style="flex:1;padding:8px 10px;border:1px solid var(--glass-border-2);border-radius:var(--radius-sm);background:var(--glass-bg-1);color:var(--text);font-size:12px;outline:none;box-sizing:border-box;" placeholder="' + escAttr(t('workspace.chooseFolder')) + '" readonly>' +
     '<button class="sec-btn" onclick="window.pickExternalFolder()">' + esc(t('workspace.browse')) + '</button>' +
     '</div></div>' +
+    '<div id="ws-ssh-fields" style="display:none;margin-top:8px;">' +
+    '<div style="display:grid;grid-template-columns:1fr 86px;gap:8px;">' +
+    '<label style="display:block;font-size:12px;color:var(--text-dim);">' + esc(t('workspace.sshHost')) + '<input id="ws-ssh-host" style="width:100%;margin-top:5px;padding:8px 10px;border:1px solid var(--glass-border-2);border-radius:var(--radius-sm);background:var(--glass-bg-1);color:var(--text);font-size:12px;outline:none;box-sizing:border-box;" placeholder="127.0.0.1"></label>' +
+    '<label style="display:block;font-size:12px;color:var(--text-dim);">' + esc(t('workspace.sshPort')) + '<input id="ws-ssh-port" type="number" value="22" style="width:100%;margin-top:5px;padding:8px 10px;border:1px solid var(--glass-border-2);border-radius:var(--radius-sm);background:var(--glass-bg-1);color:var(--text);font-size:12px;outline:none;box-sizing:border-box;"></label>' +
+    '</div>' +
+    '<label style="display:block;font-size:12px;color:var(--text-dim);margin-top:8px;">' + esc(t('workspace.sshUser')) + '<input id="ws-ssh-user" style="width:100%;margin-top:5px;padding:8px 10px;border:1px solid var(--glass-border-2);border-radius:var(--radius-sm);background:var(--glass-bg-1);color:var(--text);font-size:12px;outline:none;box-sizing:border-box;" placeholder="user"></label>' +
+    '<label style="display:block;font-size:12px;color:var(--text-dim);margin-top:8px;">' + esc(t('workspace.sshIdentity')) + '<input id="ws-ssh-identity" style="width:100%;margin-top:5px;padding:8px 10px;border:1px solid var(--glass-border-2);border-radius:var(--radius-sm);background:var(--glass-bg-1);color:var(--text);font-size:12px;outline:none;box-sizing:border-box;" placeholder="C:\\\\Users\\\\you\\\\.ssh\\\\id_ed25519"></label>' +
+    '<label style="display:block;font-size:12px;color:var(--text-dim);margin-top:8px;">' + esc(t('workspace.sshRemotePath')) + '<input id="ws-ssh-remote-path" style="width:100%;margin-top:5px;padding:8px 10px;border:1px solid var(--glass-border-2);border-radius:var(--radius-sm);background:var(--glass-bg-1);color:var(--text);font-size:12px;outline:none;box-sizing:border-box;" placeholder="~/.newmark-agent/workspaces/project"></label>' +
+    '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;"><button class="sec-btn" onclick="window.validateSshWorkspaceForm()">' + esc(t('workspace.sshValidate')) + '</button><span id="ws-ssh-status" style="font-size:12px;color:var(--text-dim);"></span></div>' +
+    '</div>' +
     '<div style="margin-top:12px;display:flex;gap:8px;">' +
     '<button class="sec-btn primary" style="flex:1;" onclick="window.doCreateWorkspace()">' + esc(t('common.create')) + '</button>' +
     '<button class="sec-btn" onclick="window.closeSubWin()">' + esc(t('common.cancel')) + '</button>' +
@@ -9323,14 +10051,16 @@ window.showNewWorkspaceDialog = function() {
 };
 window.toggleWsType = function() {
   var radios = document.getElementsByName('ws-type');
-  var isExternal = false;
+  var selected = 'internal';
   for (var i = 0; i < radios.length; i++) {
-    if (radios[i].checked && radios[i].value === 'external') { isExternal = true; break; }
+    if (radios[i].checked) { selected = radios[i].value; break; }
   }
   var extPath = document.getElementById('ws-ext-path');
+  var sshFields = document.getElementById('ws-ssh-fields');
   var nameLabel = document.getElementById('ws-name-label-dlg');
-  if (extPath) extPath.style.display = isExternal ? 'block' : 'none';
-  if (nameLabel) nameLabel.textContent = isExternal ? t('workspace.alias') : t('workspace.name');
+  if (extPath) extPath.style.display = selected === 'external' ? 'block' : 'none';
+  if (sshFields) sshFields.style.display = selected === 'ssh' ? 'block' : 'none';
+  if (nameLabel) nameLabel.textContent = selected === 'external' || selected === 'ssh' ? t('workspace.alias') : t('workspace.name');
 };
 
 window.pickExternalFolder = function() {
@@ -9348,11 +10078,11 @@ window.pickExternalFolder = function() {
 
 window.doCreateWorkspace = function() {
   var radios = document.getElementsByName('ws-type');
-  var isExternal = false;
+  var selected = 'internal';
   for (var i = 0; i < radios.length; i++) {
-    if (radios[i].checked && radios[i].value === 'external') { isExternal = true; break; }
+    if (radios[i].checked) { selected = radios[i].value; break; }
   }
-  if (isExternal) {
+  if (selected === 'external') {
     var pathInp = document.getElementById('ws-ext-path-input');
     var dir = pathInp ? pathInp.value.trim() : '';
     if (!dir) { addMsg('assistant', '[Notice] ' + t('workspace.chooseExternal'), 'error', ''); return; }
@@ -9368,6 +10098,8 @@ window.doCreateWorkspace = function() {
     }).catch(function(err) {
       addMsg('assistant', '[Error] ' + t('workspace.createExternalFailed') + ': ' + err.message, 'error', '');
     });
+  } else if (selected === 'ssh') {
+    window.createSshWorkspaceFromForm();
   } else {
     var inp = document.getElementById('new-ws-input');
     var name = inp ? inp.value.trim() : '';
@@ -9385,6 +10117,73 @@ window.doCreateWorkspace = function() {
       addMsg('assistant', '[Error] ' + t('workspace.createFailed') + ': ' + err.message, 'error', '');
     });
   }
+};
+
+function readSshWorkspaceForm() {
+  var host = document.getElementById('ws-ssh-host');
+  var port = document.getElementById('ws-ssh-port');
+  var user = document.getElementById('ws-ssh-user');
+  var identity = document.getElementById('ws-ssh-identity');
+  var remotePath = document.getElementById('ws-ssh-remote-path');
+  var nameInp = document.getElementById('new-ws-input');
+  var h = host ? host.value.trim() : '';
+  var u = user ? user.value.trim() : '';
+  var rp = remotePath ? remotePath.value.trim() : '';
+  return {
+    name: nameInp ? nameInp.value.trim() : '',
+    connection_name: h && u ? (u + '@' + h) : '',
+    host: h,
+    port: Number(port && port.value ? port.value : 22) || 22,
+    user: u,
+    identity_file: identity ? identity.value.trim() : '',
+    remote_root: rp,
+    remote_path: rp
+  };
+}
+
+window.validateSshWorkspaceForm = function() {
+  var input = readSshWorkspaceForm();
+  var status = document.getElementById('ws-ssh-status');
+  if (!input.host || !input.user || !input.remote_path) {
+    if (status) status.textContent = t('workspace.sshNeedsHostUser');
+    return;
+  }
+  if (status) status.textContent = t('app.ready') + '...';
+  api.saveSshConnection(input).then(function(saved) {
+    var conn = saved && saved.connection ? saved.connection : null;
+    if (!conn || !conn.id) throw new Error(saved && saved.error ? saved.error : 'save failed');
+    return api.validateSshConnection(conn.id, input.remote_path);
+  }).then(function(result) {
+    if (status) status.textContent = result && result.ok ? (t('workspace.sshValidated') + ': ' + (result.remotePcHash || 'PC_Hash')) : String(result && result.error ? result.error : 'SSH failed');
+  }).catch(function(err) {
+    if (status) status.textContent = String(err && err.message ? err.message : err);
+  });
+};
+
+window.createSshWorkspaceFromForm = function() {
+  var input = readSshWorkspaceForm();
+  if (!input.host || !input.user || !input.remote_path) {
+    addMsg('assistant', '[Notice] ' + t('workspace.sshNeedsHostUser'), 'error', '');
+    return;
+  }
+  if (!api.createSshWorkspace) {
+    addMsg('assistant', '[Error] ' + t('workspace.sshCreateFailed') + ': unavailable', 'error', '');
+    return;
+  }
+  api.createSshWorkspace(input).then(function(result) {
+    if (!result || !result.ok || !result.workspace) {
+      throw new Error(result && result.error ? result.error : t('workspace.sshCreateFailed'));
+    }
+    var ws = result.workspace;
+    if (!state.workspaces) state.workspaces = [];
+    state.workspaces.push(ws);
+    state.currentWorkspace = ws.name;
+    window.renderLeftWsList();
+    window.selectWorkspace(ws.name);
+    window.closeSubWin();
+  }).catch(function(err) {
+    addMsg('assistant', '[Error] ' + t('workspace.sshCreateFailed') + ': ' + (err && err.message ? err.message : err), 'error', '');
+  });
 };
 
 window.selectWorkspace = function(name) {
@@ -9742,6 +10541,12 @@ function stopMarqueeJS() {
       if (s.gradientColors && s.gradientColors.length) state.configGradientColors = s.gradientColors;
       if (s.gradientSpeed) state.configGradientSpeed = s.gradientSpeed;
       if (s.gradientWidth) state.configGradientWidth = s.gradientWidth;
+      applySavedLayoutState({
+        leftCollapsed: s.leftPanelCollapsed,
+        rightCollapsed: s.rightPanelCollapsed,
+        bottomCollapsed: s.bottomPanelCollapsed,
+        secondaryCollapsed: s.secondaryPanelCollapsed
+      });
       if (s.closeBehavior) state.closeBehavior = s.closeBehavior;
       if (s.automations) state.automationItems = s.automations;
       if (s.contextCompression !== undefined) state.contextCompression = s.contextCompression;
@@ -9750,6 +10555,8 @@ function stopMarqueeJS() {
       if (s.fileDiffs) state.fileDiffs = s.fileDiffs;
       if (s.pendingOptions) state.pendingOptions = s.pendingOptions;
       if (s.terminalInterruptTimeoutMs !== undefined) state.terminalInterruptTimeoutMs = Math.max(0, Number(s.terminalInterruptTimeoutMs) || 0);
+      if (s.nativeTools) state.nativeTools = s.nativeTools;
+      if (s.nativeToolEnabled) state.nativeToolEnabled = s.nativeToolEnabled;
       if (s.conversationId) state.activeBackendConversationId = s.conversationId;
       if (s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
       if (s.chatMessages) renderChatMessages(s.chatMessages);

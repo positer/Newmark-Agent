@@ -15,22 +15,24 @@ const hasCliCommand = args.some(a => (CLI_COMMANDS as readonly string[]).include
 const root = args.includes('--root') ? args[args.indexOf('--root') + 1] : process.cwd();
 
 function firstRunInit(r: string): void {
-  const cp = path.join(r, 'config.json');
-  if (!fs.existsSync(cp)) {
-    fs.mkdirSync(r, { recursive: true });
-    const { defaultConfig } = require('./core/config');
-    fs.writeFileSync(cp, JSON.stringify(defaultConfig(), null, 2), 'utf-8');
+  fs.mkdirSync(r, { recursive: true });
+  const { ensureRootConfig } = require('./core/config');
+  ensureRootConfig(r);
+  if (!fs.existsSync(path.join(r, 'agent.md'))) {
     fs.writeFileSync(path.join(r, 'agent.md'), '# Newmark Agent\n\nYou are a powerful coding assistant.\n', 'utf-8');
+  }
+  if (!fs.existsSync(path.join(r, 'PC_Hash.config'))) {
     fs.writeFileSync(path.join(r, 'PC_Hash.config'), `${require('os').hostname()}|${process.platform}|${process.arch}`, 'utf-8');
-    const fm = path.join(r, 'Flow', 'Flow.md');
-    fs.mkdirSync(path.join(r, 'Flow'), { recursive: true });
+  }
+  const fm = path.join(r, 'Flow', 'Flow.md');
+  fs.mkdirSync(path.join(r, 'Flow'), { recursive: true });
+  if (!fs.existsSync(fm)) {
     fs.writeFileSync(fm, `# Newmark Flow Format Guide\n\nA Flow workflow is saved as name.Flow.json in the Flow/ folder.\n\n## Component Types\n### dialog - id, type:"dialog", mode:"build"/"plan"/"goal", prompt (use {#prompt#} placeholder)\n### logic - id, type:"logic", prompt, goto_true, goto_false\n\nComponents execute in order unless logic redirects.`, 'utf-8');
-    for (const d of ['skills', 'Work', 'Flow', 'archive']) fs.mkdirSync(path.join(r, d), { recursive: true });
-    for (const fn of ['Local.json', 'External.json']) {
-      const p = path.join(r, 'Work', fn);
-      if (!fs.existsSync(p)) fs.writeFileSync(p, '[]', 'utf-8');
-    }
-    console.log('[Newmark] First run initialized.');
+  }
+  for (const d of ['skills', 'Work', 'Flow', 'archive']) fs.mkdirSync(path.join(r, d), { recursive: true });
+  for (const fn of ['Local.json', 'External.json']) {
+    const p = path.join(r, 'Work', fn);
+    if (!fs.existsSync(p)) fs.writeFileSync(p, '[]', 'utf-8');
   }
 }
 

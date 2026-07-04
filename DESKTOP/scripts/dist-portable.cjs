@@ -42,6 +42,7 @@ function verifyPackagedOutput() {
   const files = asar.listPackage(appAsar);
   if (!files.includes('\\dist\\ui\\index.html')) throw new Error('app.asar missing dist/ui/index.html');
   if (!files.includes('\\dist\\ui\\lucide-sprite.svg')) throw new Error('app.asar missing dist/ui/lucide-sprite.svg');
+  if (!files.includes('\\config.example.json')) throw new Error('app.asar missing config.example.json');
 
   const extractDir = path.join(outputDir, '.verify-asar');
   tryRm(extractDir);

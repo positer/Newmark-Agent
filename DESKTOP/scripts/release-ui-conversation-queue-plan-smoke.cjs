@@ -436,8 +436,16 @@ async function runUiCheck(root) {
     await waitFor(cdp, `(() => {
       const events = window.getAgentWorkEvents(${JSON.stringify(convA)});
       const text = events.map(e => [e.type, e.content || '', e.toolName || '', e.toolArgs || ''].join(' ')).join('\\n');
-      return text.includes('LONG_PARALLEL_CONV_A_STREAM_START_20260701') && text.includes('Preparing model request and available tools.');
-    })()`, 20000, 'background conversation A work events cached while B is foreground');
+      return text.includes('LONG_PARALLEL_CONV_A_STREAM_START_20260701') && text.includes('LONG_PARALLEL_CONV_A_STREAM_MID_20260701');
+    })()`, 20000, 'background conversation A live text events cached while B is foreground');
+    await waitFor(cdp, `(() => {
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      return body.includes('LONG_PARALLEL_CONV_B_STREAM_START_20260701') &&
+        !body.includes('LONG_PARALLEL_CONV_A_STREAM_START_20260701') &&
+        !body.includes('LONG_PARALLEL_CONV_A_STREAM_MID_20260701') &&
+        !body.includes('LONG_PARALLEL_CONV_A_DONE_20260701') &&
+        !body.includes('LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701');
+    })()`, 20000, 'foreground conversation B shows its own live text without A leakage');
     await evaluate(cdp, `(() => {
       const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convA)});
       window.switchConversation(idx);
@@ -445,8 +453,11 @@ async function runUiCheck(root) {
     })()`, 30000);
     await waitFor(cdp, `(() => {
       const body = document.querySelector('#chat-area')?.innerText || '';
-      return body.includes('LONG_PARALLEL_CONV_A_STREAM_START_20260701') && body.includes('Preparing model request and available tools.');
-    })()`, 20000, 'background conversation A work process replayed when opened');
+      return body.includes('LONG_PARALLEL_CONV_A_STREAM_START_20260701') &&
+        body.includes('LONG_PARALLEL_CONV_A_STREAM_MID_20260701') &&
+        !body.includes('LONG_PARALLEL_CONV_B_STREAM_START_20260701') &&
+        !body.includes('LONG_PARALLEL_CONV_B_STREAM_MID_20260701');
+    })()`, 20000, 'background conversation A live feedback replayed when opened');
     await waitFor(cdp, `(() => {
       const events = window.getAgentWorkEvents(${JSON.stringify(convA)});
       const text = events.map(e => [e.type, e.content || '', e.toolName || '', e.toolArgs || ''].join(' ')).join('\\n');
@@ -461,11 +472,30 @@ async function runUiCheck(root) {
     await waitFor(cdp, backendConversationHas(convB, 'LONG_PARALLEL_CONV_B_DONE_20260701', 'LONG_PARALLEL_CONV_A_DONE_20260701'), 45000, 'long conversation B backend persisted without A leakage');
     await evaluate(cdp, renderBackendConversation(convB), 30000);
     await waitFor(cdp, `(() => {
-      const body = document.querySelector('#chat-area')?.innerText || '';
-      return body.includes('LONG_PARALLEL_CONV_B_DONE_20260701') &&
-        body.includes('Tool bash result') &&
-        body.includes('LONG_PARALLEL_CONV_B_TOOL_RESULT_20260701') &&
-        !body.includes('LONG_PARALLEL_CONV_A_DONE_20260701');
+      const chat = document.querySelector('#chat-area');
+      const visible = chat?.innerText || '';
+      const allText = chat?.textContent || '';
+      const checks = {
+        hasBDone: visible.includes('LONG_PARALLEL_CONV_B_DONE_20260701'),
+        hasToolLabel: allText.includes('Tool bash result') || allText.includes('ToolbashdoneResult:'),
+        hasBToolResult: allText.includes('LONG_PARALLEL_CONV_B_TOOL_RESULT_20260701'),
+        leakedAStream: allText.includes('LONG_PARALLEL_CONV_A_STREAM_START_20260701'),
+        leakedADone: allText.includes('LONG_PARALLEL_CONV_A_DONE_20260701')
+      };
+      const ok = checks.hasBDone && checks.hasToolLabel && checks.hasBToolResult && !checks.leakedAStream && !checks.leakedADone;
+      if (!ok) {
+        window.__queueDrainDebug = {
+          label: 'long conversation B persisted tool process',
+          checks,
+          aStreamIndex: allText.indexOf('LONG_PARALLEL_CONV_A_STREAM_START_20260701'),
+          aDoneIndex: allText.indexOf('LONG_PARALLEL_CONV_A_DONE_20260701'),
+          textLength: allText.length,
+          visibleTail: visible.slice(-1600),
+          allTextTail: allText.slice(-1600),
+          bEvents: window.getAgentWorkEvents(${JSON.stringify(convB)}).map(e => ({ type: e.type, content: e.content || '', toolName: e.toolName || '', toolArgs: e.toolArgs || '' })).slice(-20)
+        };
+      }
+      return ok;
     })()`, 45000, 'long conversation B completed with persisted tool process and no A leakage');
     await evaluate(cdp, `(() => {
       const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convA)});
@@ -475,15 +505,32 @@ async function runUiCheck(root) {
     await waitFor(cdp, backendConversationHas(convA, 'LONG_PARALLEL_CONV_A_DONE_20260701', 'LONG_PARALLEL_CONV_B_DONE_20260701'), 45000, 'long conversation A backend persisted without B leakage');
     await evaluate(cdp, renderBackendConversation(convA), 30000);
     await waitFor(cdp, `(() => {
-      const body = document.querySelector('#chat-area')?.innerText || '';
-      return body.includes('Preparing request.') &&
-        body.includes('Preparing model request and available tools.') &&
-        body.includes('Executing 1 tool call.') &&
-        body.includes('Tool bash result') &&
-        body.includes('LONG_PARALLEL_CONV_A_DONE_20260701') &&
-        !body.includes('LONG_PARALLEL_CONV_B_DONE_20260701');
+      const chat = document.querySelector('#chat-area');
+      const visible = chat?.innerText || '';
+      const allText = chat?.textContent || '';
+      const checks = {
+        hasToolLabel: allText.includes('Tool bash result') || allText.includes('ToolbashdoneResult:'),
+        hasAToolResult: allText.includes('LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701'),
+        hasADone: visible.includes('LONG_PARALLEL_CONV_A_DONE_20260701'),
+        leakedBStream: allText.includes('LONG_PARALLEL_CONV_B_STREAM_START_20260701'),
+        leakedBDone: allText.includes('LONG_PARALLEL_CONV_B_DONE_20260701')
+      };
+      const ok = checks.hasToolLabel && checks.hasAToolResult && checks.hasADone && !checks.leakedBStream && !checks.leakedBDone;
+      if (!ok) {
+        window.__queueDrainDebug = {
+          label: 'long conversation A persisted tool process',
+          checks,
+          bStreamIndex: allText.indexOf('LONG_PARALLEL_CONV_B_STREAM_START_20260701'),
+          bDoneIndex: allText.indexOf('LONG_PARALLEL_CONV_B_DONE_20260701'),
+          textLength: allText.length,
+          visibleTail: visible.slice(-1600),
+          allTextTail: allText.slice(-1600),
+          aEvents: window.getAgentWorkEvents(${JSON.stringify(convA)}).map(e => ({ type: e.type, content: e.content || '', toolName: e.toolName || '', toolArgs: e.toolArgs || '' })).slice(-20)
+        };
+      }
+      return ok;
     })()`, 45000, 'long conversation A persisted complete work process and isolation');
-    log('long-running parallel work event visibility and persisted process ok');
+    log('long-running parallel live feedback binding and persisted process ok');
 
     await evaluate(cdp, `(() => {
       const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convA)});

@@ -101,6 +101,7 @@ async function verifyTitlebarIcon(cdp) {
       const rect = icon.getBoundingClientRect();
       const logoRect = logo.getBoundingClientRect();
       const before = getComputedStyle(logo, '::before');
+      const rootStyle = getComputedStyle(document.documentElement);
       return {
         missing: false,
         iconSrc: icon.getAttribute('src'),
@@ -115,6 +116,9 @@ async function verifyTitlebarIcon(cdp) {
         borderAnimationName: before.animationName,
         borderAnimationDuration: before.animationDuration,
         borderBackground: before.backgroundImage,
+        rootGradientColor: rootStyle.getPropertyValue('--g1').trim(),
+        rootMarqueeSpeed: rootStyle.getPropertyValue('--marquee-speed').trim(),
+        rootMarqueeWidth: rootStyle.getPropertyValue('--marquee-width').trim(),
       };
     })()`,
     returnByValue: true,
@@ -124,9 +128,10 @@ async function verifyTitlebarIcon(cdp) {
   if (!String(state.iconSrc || '').includes('app-icon-dark.png')) fail(`titlebar app icon src mismatch: ${JSON.stringify(state)}`);
   if (!state.complete || state.naturalWidth < 16 || state.naturalHeight < 16) fail(`titlebar app icon did not decode: ${JSON.stringify(state)}`);
   if (state.width < 20 || state.height < 20 || state.logoWidth < 24 || state.logoHeight < 24) fail(`titlebar app icon layout too small: ${JSON.stringify(state)}`);
-  if (state.borderAnimationName !== 'app-icon-border-spin') fail(`titlebar animated border missing animation: ${JSON.stringify(state)}`);
-  if (!String(state.borderAnimationDuration || '').includes('3s')) fail(`titlebar animated border duration mismatch: ${JSON.stringify(state)}`);
+  if (state.borderAnimationName !== 'marquee-rotate') fail(`titlebar animated border missing shared marquee animation: ${JSON.stringify(state)}`);
+  if (!String(state.borderAnimationDuration || '').includes('var(--marquee-speed)') && !String(state.borderAnimationDuration || '').includes('2s')) fail(`titlebar animated border duration mismatch: ${JSON.stringify(state)}`);
   if (!String(state.borderBackground || '').includes('conic-gradient')) fail(`titlebar animated border gradient missing: ${JSON.stringify(state)}`);
+  if (!state.rootGradientColor || !state.rootMarqueeSpeed || !state.rootMarqueeWidth) fail(`titlebar animated border is not backed by shared marquee variables: ${JSON.stringify(state)}`);
   return state;
 }
 

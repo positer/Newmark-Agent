@@ -11,6 +11,7 @@ const config: Configuration = {
   files: [
     'dist/**/*',
     'assets/**/*',
+    'config.example.json',
     'package.json',
   ],
   extraFiles: [

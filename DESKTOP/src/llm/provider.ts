@@ -1,4 +1,4 @@
-import { StreamToken } from '../core/types';
+﻿import { StreamToken } from '../core/types';
 import * as https from 'https';
 import * as http from 'http';
 import * as fs from 'fs';
@@ -10,14 +10,15 @@ export interface IntelligenceConfig {
   temperature: number;
   maxTokens: number;
 }
-
-export type ProviderProtocol = 'openai' | 'anthropic';
+export type ProviderProtocol = 'openai' | 'anthropic' | 'github_models';
 export type OpenAITransportMode = 'chat_stream' | 'chat' | 'responses';
 
 type AnthropicMessage = {
   role: 'user' | 'assistant';
   content: string | Array<Record<string, unknown>>;
 };
+
+type MessageContentPart = Record<string, unknown>;
 
 export class LLMProvider {
   static nodeHttpTransport: ((method: 'GET' | 'POST', url: string, headers: Record<string, string>, body?: string) => Promise<{ status: number; body: string }>) | null = null;
@@ -42,6 +43,7 @@ export class LLMProvider {
   private protocol(): ProviderProtocol {
     if (this.explicitProtocol) return this.explicitProtocol;
     const marker = `${this.name} ${this.baseUrl}`.toLowerCase();
+    if (marker.includes('github models') || marker.includes('github copilot') || marker.includes('models.github.ai') || marker.includes('api.githubcopilot.com')) return 'github_models';
     if (marker.includes('anthropic') || marker.includes('/anthropic') || marker.includes('claude')) return 'anthropic';
     return 'openai';
   }
@@ -57,10 +59,32 @@ export class LLMProvider {
     return this.baseUrl.replace(/\/+$/, '');
   }
 
+  private githubModelsBaseUrl(): string {
+    const base = this.cleanBaseUrl();
+    if (!base) return 'https://models.github.ai';
+    if (/\/inference$/i.test(base)) return base.replace(/\/inference$/i, '');
+    return base;
+  }
+
+  private githubModelsUrl(pathname: string): string {
+    const base = this.githubModelsBaseUrl();
+    const path = pathname.startsWith('/') ? pathname : `/${pathname}`;
+    return `${base}${path}`;
+  }
+
   private openAIHeaders(): Record<string, string> {
+    if (this.protocol() === 'github_models') return this.githubModelsHeaders();
     return {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${this.apiKey}`,
+    };
+  }
+
+  private githubModelsHeaders(): Record<string, string> {
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${this.apiKey}`,
+      'X-GitHub-Api-Version': '2022-11-28',
     };
   }
 
@@ -281,6 +305,58 @@ export class LLMProvider {
     return typeof value === 'object' ? JSON.stringify(value) : String(value);
   }
 
+  private normalizeOpenAIContent(value: unknown): string | MessageContentPart[] {
+    if (!Array.isArray(value)) return this.stringifyContent(value);
+    const parts: MessageContentPart[] = [];
+    for (const partRaw of value) {
+      const part = partRaw as Record<string, unknown>;
+      if (!part || typeof part !== 'object') continue;
+      if (part.type === 'text') {
+        parts.push({ type: 'text', text: String(part.text || '') });
+      } else if (part.type === 'image_url') {
+        parts.push({ type: 'image_url', image_url: part.image_url });
+      }
+    }
+    return parts.length ? parts : '';
+  }
+
+  private normalizeResponsesContent(value: unknown): string | MessageContentPart[] {
+    if (!Array.isArray(value)) return this.stringifyContent(value);
+    const parts: MessageContentPart[] = [];
+    for (const partRaw of value) {
+      const part = partRaw as Record<string, unknown>;
+      if (!part || typeof part !== 'object') continue;
+      if (part.type === 'text') {
+        parts.push({ type: 'input_text', text: String(part.text || '') });
+      } else if (part.type === 'image_url') {
+        const image = part.image_url as Record<string, unknown> | undefined;
+        const url = image && typeof image === 'object' ? String(image.url || '') : '';
+        if (url) parts.push({ type: 'input_image', image_url: url });
+      }
+    }
+    return parts.length ? parts : '';
+  }
+
+  private normalizeAnthropicContent(value: unknown): string | MessageContentPart[] {
+    if (!Array.isArray(value)) return this.stringifyContent(value);
+    const parts: MessageContentPart[] = [];
+    for (const partRaw of value) {
+      const part = partRaw as Record<string, unknown>;
+      if (!part || typeof part !== 'object') continue;
+      if (part.type === 'text') {
+        parts.push({ type: 'text', text: String(part.text || '') });
+      } else if (part.type === 'image_url') {
+        const image = part.image_url as Record<string, unknown> | undefined;
+        const url = image && typeof image === 'object' ? String(image.url || '') : '';
+        const match = url.match(/^data:(image\/[^;]+);base64,(.+)$/);
+        if (match) {
+          parts.push({ type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } });
+        }
+      }
+    }
+    return parts.length ? parts : '';
+  }
+
   private parseToolInput(value: unknown): Record<string, unknown> {
     if (typeof value === 'string') {
       const trimmed = value.trim();
@@ -330,7 +406,7 @@ export class LLMProvider {
         continue;
       }
       const normalizedRole = role === 'assistant' || role === 'system' ? role : 'user';
-      out.push({ role: normalizedRole, content: this.stringifyContent(msg.content) });
+      out.push({ role: normalizedRole, content: this.normalizeResponsesContent(msg.content) });
     }
     return out.length ? out : [{ role: 'user', content: '' }];
   }
@@ -496,7 +572,7 @@ export class LLMProvider {
         continue;
       }
 
-      out.push({ role: 'user', content: this.stringifyContent(msg.content) });
+      out.push({ role: 'user', content: this.normalizeAnthropicContent(msg.content) });
     }
 
     return {
@@ -518,12 +594,15 @@ export class LLMProvider {
       return;
     }
 
-    const url = `${this.cleanBaseUrl()}/chat/completions`;
+    const isGitHubModels = this.protocol() === 'github_models';
+    const url = isGitHubModels
+      ? this.githubModelsUrl('/inference/chat/completions')
+      : `${this.cleanBaseUrl()}/chat/completions`;
     const body = {
       model,
       messages: [
         ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-        ...messages,
+        ...messages.map(msg => ({ ...msg, content: this.normalizeOpenAIContent(msg.content) })),
       ],
       temperature,
       max_tokens: maxTokens,
@@ -533,7 +612,7 @@ export class LLMProvider {
     };
 
     const mode = this.openAITransportMode();
-    if (mode === 'responses') {
+    if (!isGitHubModels && mode === 'responses') {
       yield* this.openAIResponsesWithTools(model, messages, systemPrompt, temperature, maxTokens, tools);
       return;
     }
@@ -768,18 +847,21 @@ export class LLMProvider {
         .join('');
     }
 
-    const url = `${this.cleanBaseUrl()}/chat/completions`;
+    const isGitHubModels = this.protocol() === 'github_models';
+    const url = isGitHubModels
+      ? this.githubModelsUrl('/inference/chat/completions')
+      : `${this.cleanBaseUrl()}/chat/completions`;
     const body = {
       model,
       messages: [
         ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-        ...messages,
+        ...messages.map(msg => ({ ...msg, content: this.normalizeOpenAIContent(msg.content) })),
       ],
       temperature,
       max_tokens: maxTokens,
     };
 
-    if (this.openAITransportMode() === 'responses') {
+    if (!isGitHubModels && this.openAITransportMode() === 'responses') {
       return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens);
     }
 
@@ -787,7 +869,7 @@ export class LLMProvider {
 
     if (!response.ok) {
       const err = await response.text();
-      if (this.shouldUseResponsesFallback(response.status, err)) {
+      if (!isGitHubModels && this.shouldUseResponsesFallback(response.status, err)) {
         return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens);
       }
       throw new Error(`LLM Error: ${response.status} ${err}`);
@@ -798,6 +880,25 @@ export class LLMProvider {
   }
 
   async listModels(): Promise<string[]> {
+    if (this.protocol() === 'github_models') {
+      const response = await this.getJsonWithFetchFallback(
+        this.githubModelsUrl('/catalog/models'),
+        this.githubModelsHeaders(),
+      );
+
+      if (!response.ok) {
+        throw new Error(`GitHub Models catalog error: ${response.status} ${await response.text()}`);
+      }
+
+      const json = await response.json() as { data?: Array<{ id?: string; name?: string } | string>; models?: Array<{ id?: string; name?: string } | string> } | Array<{ id?: string; name?: string } | string>;
+      const rawModels = Array.isArray(json)
+        ? json
+        : (Array.isArray(json.data) ? json.data : (Array.isArray(json.models) ? json.models : []));
+      return rawModels
+        .map((entry) => typeof entry === 'string' ? entry : (entry.id || entry.name || ''))
+        .map((name) => String(name).trim())
+        .filter((name, index, all) => !!name && all.indexOf(name) === index);
+    }
     const response = await this.getJsonWithFetchFallback(
       `${this.cleanBaseUrl()}/models`,
       this.protocol() === 'anthropic' ? this.anthropicHeaders() : { 'Authorization': `Bearer ${this.apiKey}` },
@@ -826,4 +927,3 @@ export class LLMProvider {
     }
   }
 }
-

@@ -1,0 +1,74 @@
+{
+  "general": {
+    "tone": {
+      "_description": "Conversation style",
+      "_type": "choice",
+      "_values": ["strict_simple", "casual_friendly"],
+      "value": "strict_simple"
+    },
+    "language": {
+      "_description": "Default language",
+      "_type": "choice",
+      "_values": ["en", "zh", "auto"],
+      "value": "auto"
+    }
+  },
+  "models": {
+    "providers": {
+      "_description": "LLM providers. Fill api_key locally; never commit real keys.",
+      "_type": "array",
+      "value": [
+        {
+          "name": "ExampleOpenAICompatible",
+          "base_url": "https://api.example.com/v1",
+          "api_key": "",
+          "protocol": "openai",
+          "enabled": false,
+          "models": [
+            {
+              "name": "example-model",
+              "display": "Example Model",
+              "description": "Disabled example OpenAI-compatible model. Replace with your real provider and key.",
+              "cost_per_1k_input": 0,
+              "cost_per_1k_output": 0,
+              "max_tokens": 128000,
+              "vision": false,
+              "thinking": false,
+              "image_output": false,
+              "speed_rating": "unknown",
+              "capability_rating": "unknown",
+              "intelligence_tiers": {
+                "low": { "description": "Fast" },
+                "medium": { "description": "Balanced" },
+                "high": { "description": "Careful" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "default_model": {
+      "_description": "Default model",
+      "_type": "string",
+      "value": ""
+    },
+    "default_intelligence": {
+      "_description": "Default intelligence tier",
+      "_type": "choice",
+      "_values": ["low", "medium", "high"],
+      "value": "medium"
+    },
+    "agent_engine": {
+      "_description": "Agent engine",
+      "_type": "choice",
+      "_values": ["builtin", "codex", "opencode"],
+      "value": "builtin"
+    },
+    "openai_api_mode": {
+      "_description": "OpenAI-compatible API mode",
+      "_type": "choice",
+      "_values": ["chat_stream", "chat", "responses"],
+      "value": "chat_stream"
+    }
+  }
+}

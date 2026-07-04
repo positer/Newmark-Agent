@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, utilityProcess, Tray, Menu, nativeImage, nativeTheme, webContents } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, utilityProcess, Tray, Menu, nativeImage, nativeTheme, webContents, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
@@ -15,6 +15,8 @@ import { CLI_COMMANDS, runCliCommand } from './cli-commands';
 import { mergeProviderSecrets, sanitizeProvidersForState } from './core/config';
 import { MemoryLabManager } from './core/memoryLab';
 import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, installUpdate } from './core/installUpdate';
+import { onTerminalTakeoverEvent, terminalTakeoverState, writeTerminalTakeoverSession } from './tools/terminalTakeover';
+import { nativeToolCatalogForState, normalizeNativeToolEnabled } from './tools/nativeTools';
 
 let mainWindow: BrowserWindow | null = null;
 let agent: Agent | null = null;
@@ -69,7 +71,39 @@ function userArgs(): string[] {
 
 function argValue(args: string[], key: string): string | undefined {
   const idx = args.indexOf(key);
-  return idx >= 0 ? args[idx + 1] : undefined;
+  if (idx >= 0) return args[idx + 1];
+  const prefix = `${key}=`;
+  const inline = args.find(a => a.startsWith(prefix));
+  return inline ? inline.slice(prefix.length) : undefined;
+}
+
+function pathArgValue(args: string[], key: string): string | undefined {
+  const prefix = `${key}=`;
+  const inlineIdx = args.findIndex(a => a.startsWith(prefix));
+  if (inlineIdx >= 0) {
+    const parts = [args[inlineIdx].slice(prefix.length)];
+    let best = fs.existsSync(parts[0]) ? parts[0] : '';
+    for (let i = inlineIdx + 1; i < args.length; i++) {
+      const arg = args[i];
+      if (arg.startsWith('--')) break;
+      parts.push(arg);
+      const candidate = parts.join(' ');
+      if (fs.existsSync(candidate)) best = candidate;
+    }
+    return best || parts.join(' ') || undefined;
+  }
+  const idx = args.indexOf(key);
+  if (idx < 0 || idx + 1 >= args.length) return undefined;
+  const parts: string[] = [];
+  let best = '';
+  for (let i = idx + 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith('--')) break;
+    parts.push(arg);
+    const candidate = parts.join(' ');
+    if (fs.existsSync(candidate)) best = candidate;
+  }
+  return best || parts.join(' ') || undefined;
 }
 
 function positionalAfter(args: string[], commandName: string): string[] {
@@ -92,10 +126,9 @@ function firstRunInit(root: string): void {
   }
   new MemoryLabManager(root).ensure();
 
-  const cp = path.join(root, 'config.json');
-  if (!fs.existsSync(cp)) {
-    const configModule = require('./core/config');
-    fs.writeFileSync(cp, JSON.stringify(configModule.defaultConfig(), null, 2), 'utf-8');
+  const configModule = require('./core/config');
+  configModule.ensureRootConfig(root);
+  if (!fs.existsSync(path.join(root, 'agent.md'))) {
     fs.writeFileSync(path.join(root, 'agent.md'), '# Newmark Agent\n\nYou are a powerful coding assistant.\n', 'utf-8');
   }
 
@@ -154,7 +187,7 @@ function getRoot(): string {
 }
 
 function resolveRoot(args: string[]): string {
-  return argValue(args, '--root') || (app.isPackaged ? getRoot() : process.cwd());
+  return pathArgValue(args, '--root') || (app.isPackaged ? getRoot() : process.cwd());
 }
 
 function resolveAppPath(root: string, targetPath: string): string {
@@ -722,6 +755,10 @@ if (hasCliCommand) {
         gradientSpeed: agent.config.getNum('ui', 'gradient_speed'),
         gradientWidth: agent.config.getNum('ui', 'gradient_width'),
         glassAlpha: agent.config.getNum('ui', 'glass_alpha') || 0.85,
+        leftPanelCollapsed: agent.config.getBool('ui', 'left_panel_collapsed'),
+        rightPanelCollapsed: agent.config.getBool('ui', 'right_panel_collapsed'),
+        bottomPanelCollapsed: agent.config.getBool('ui', 'bottom_panel_collapsed'),
+        secondaryPanelCollapsed: agent.config.getBool('ui', 'secondary_panel_collapsed'),
         darkMode: agent.config.getStr('ui', 'dark_mode'),
         minimizeToTray: agent.config.getBool('ui', 'minimize_to_tray'),
         tone: agent.config.getStr('general', 'tone'),
@@ -737,6 +774,8 @@ if (hasCliCommand) {
         autoAdjust: agent.config.getBool('agent', 'auto_adjust_settings'),
         inputMode: agent.inputMode,
         terminalInterruptTimeoutMs: agent.config.getNum('terminal', 'interrupt_timeout_ms'),
+        nativeTools: nativeToolCatalogForState(agent.config.nativeToolEnabled()),
+        nativeToolEnabled: agent.config.nativeToolEnabled(),
         chatMessages: agent.chatMessages,
         automations: automation?.list() || [],
         closeBehavior: agent.config.getStr('general', 'close_behavior'),
@@ -753,6 +792,11 @@ if (hasCliCommand) {
     ipcMain.handle('agent:updateConversationPlan', async (_event, plan: Record<string, unknown>) => {
       if (!agent) return { items: [] };
       return agent.updateConversationPlan(plan as any);
+    });
+
+    ipcMain.handle('agent:setConversationPinned', async (_event, id: string, pinned: boolean) => {
+      if (!agent) return false;
+      return agent.setConversationPinned(id, pinned);
     });
 
     ipcMain.handle('automation:list', async () => {
@@ -802,6 +846,15 @@ if (hasCliCommand) {
               case 'gradientColors': agent.config.set('ui', 'gradient_colors', value); break;
               case 'gradientSpeed': agent.config.set('ui', 'gradient_speed', value); break;
               case 'gradientWidth': agent.config.set('ui', 'gradient_width', value); break;
+              case 'layoutState':
+                if (value && typeof value === 'object') {
+                  const layout = value as Record<string, unknown>;
+                  if (typeof layout.leftCollapsed === 'boolean') agent.config.set('ui', 'left_panel_collapsed', layout.leftCollapsed);
+                  if (typeof layout.rightCollapsed === 'boolean') agent.config.set('ui', 'right_panel_collapsed', layout.rightCollapsed);
+                  if (typeof layout.bottomCollapsed === 'boolean') agent.config.set('ui', 'bottom_panel_collapsed', layout.bottomCollapsed);
+                  if (typeof layout.secondaryCollapsed === 'boolean') agent.config.set('ui', 'secondary_panel_collapsed', layout.secondaryCollapsed);
+                }
+                break;
               case 'feedbackLevel': agent.config.set('agent', 'option_feedback', value); break;
               case 'language': agent.config.set('general', 'language', value); break;
               case 'autoSwitch': agent.config.set('models', 'auto_switch', value === true || value === 'on'); break;
@@ -809,6 +862,7 @@ if (hasCliCommand) {
               case 'fallbackOnUnavailable': agent.config.set('models', 'fallback_on_unavailable', value === true || value === 'on'); break;
               case 'switchTendency': agent.config.set('models', 'auto_switch_preference', value); break;
               case 'openAIApiMode': agent.config.set('models', 'openai_api_mode', ['chat_stream', 'chat', 'responses'].includes(String(value)) ? value : 'chat_stream'); break;
+              case 'nativeTools': agent.config.set('tools', 'enabled', normalizeNativeToolEnabled(value)); break;
               case 'providers': agent.config.set('models', 'providers', mergeProviderSecrets(value, agent.config.providers())); break;
               case 'defaultFlow': agent.config.set('flow', 'default_flow', value); break;
               case 'dialogStyle': agent.config.set('ui', 'dialog_style', value); break;
@@ -849,8 +903,8 @@ if (hasCliCommand) {
       return archived;
     });
 
-    ipcMain.handle('agent:listArchives', async () => {
-      return agent?.listArchives();
+    ipcMain.handle('agent:listArchives', async (_event, scope?: string) => {
+      return agent?.listArchives(scope === 'all' ? 'all' : 'workspace');
     });
 
     ipcMain.handle('agent:deleteArchive', async (_event, name: string) => {
@@ -1018,6 +1072,14 @@ if (hasCliCommand) {
       return { buffer: session.buffer };
     });
 
+    ipcMain.handle('agentTerminal:takeoverState', async () => terminalTakeoverState());
+    ipcMain.handle('agentTerminal:takeoverWrite', async (_event, sessionId: string, data: string) => writeTerminalTakeoverSession(sessionId, data));
+    onTerminalTakeoverEvent(event => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('agentTerminal:takeover', event);
+      }
+    });
+
     ipcMain.handle('agent:openExternal', async (_event, targetPath: string) => {
       if (agent) {
         try {
@@ -1059,6 +1121,61 @@ if (hasCliCommand) {
       return null;
     });
 
+    ipcMain.handle('ssh:listConnections', async () => {
+      if (!agent) return [];
+      return agent.listSshConnections();
+    });
+
+    ipcMain.handle('ssh:saveConnection', async (_event, input: Record<string, unknown>) => {
+      if (!agent) return { ok: false, error: 'Agent not initialized' };
+      try {
+        const connection = agent.saveSshConnection({
+          id: String(input.id || '').trim() || undefined,
+          name: String(input.name || '').trim() || undefined,
+          host: String(input.host || '').trim() || undefined,
+          port: Number(input.port || 22),
+          user: String(input.user || '').trim() || undefined,
+          identityFile: String(input.identity_file || input.identityFile || '').trim() || undefined,
+          remoteRoot: String(input.remote_root || input.remoteRoot || '').trim() || undefined,
+          enabled: input.enabled !== false,
+        });
+        return { ok: true, connection };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    });
+
+    ipcMain.handle('ssh:deleteConnection', async (_event, id: string) => {
+      if (!agent) return false;
+      return agent.deleteSshConnection(id);
+    });
+
+    ipcMain.handle('ssh:validateConnection', async (_event, id: string, remoteRoot?: string) => {
+      if (!agent) return { ok: false, error: 'Agent not initialized' };
+      return agent.validateSshConnection(id, remoteRoot);
+    });
+
+    ipcMain.handle('ssh:createWorkspace', async (_event, input: Record<string, unknown>) => {
+      if (!agent) return { ok: false, error: 'Agent not initialized' };
+      const result = agent.createSshWorkspace({
+        connectionId: String(input.connection_id || input.connectionId || '').trim() || undefined,
+        name: String(input.name || '').trim() || undefined,
+        remotePath: String(input.remote_path || input.remotePath || input.remote_root || input.remoteRoot || '').trim(),
+        connection: {
+          id: String(input.connection_id || input.connectionId || input.id || '').trim() || undefined,
+          name: String(input.connection_name || input.connectionName || input.name || '').trim() || undefined,
+          host: String(input.host || '').trim() || undefined,
+          port: Number(input.port || 22),
+          user: String(input.user || '').trim() || undefined,
+          identityFile: String(input.identity_file || input.identityFile || '').trim() || undefined,
+          remoteRoot: String(input.remote_root || input.remoteRoot || '').trim() || undefined,
+          enabled: true,
+        },
+      });
+      if (result.ok) resetConversationKernel();
+      return result;
+    });
+
     ipcMain.handle('agent:deleteWorkspace', async (_event, name: string) => {
       if (agent) {
         const removed = agent.removeWorkspace(name);
@@ -1066,6 +1183,11 @@ if (hasCliCommand) {
         return removed;
       }
       return false;
+    });
+
+    ipcMain.handle('agent:setWorkspacePinned', async (_event, id: string, pinned: boolean) => {
+      if (!agent) return null;
+      return agent.workspace.setPinned(id, pinned);
     });
 
     ipcMain.handle('dialog:selectFolder', async () => {
@@ -1088,6 +1210,101 @@ if (hasCliCommand) {
         return agent.fuzzyInject(name, url, key, protocol === 'anthropic' ? 'anthropic' : protocol === 'openai' ? 'openai' : undefined);
       }
       return { ok: false, warning: 'Agent not ready' };
+    });
+
+    ipcMain.handle('github:copilotLogin', async () => {
+      if (!agent) return { ok: false, error: 'Agent not ready' };
+      const currentAgent = agent;
+      const cwd = agent.workspace.current?.path || root;
+      const runGh = (args: string[], timeout: number, windowsHide: boolean) => {
+        const result = spawnSync('gh', args, {
+          cwd,
+          encoding: 'utf-8',
+          timeout,
+          windowsHide,
+          env: process.env,
+        });
+        return {
+          args,
+          status: result.status,
+          error: result.error,
+          output: `${result.stdout || ''}${result.stderr || ''}`.trim(),
+        };
+      };
+      const tokenFromGh = () => {
+        const tokenResult = spawnSync('gh', ['auth', 'token'], {
+          cwd,
+          encoding: 'utf-8',
+          timeout: 30000,
+          windowsHide: true,
+          env: process.env,
+        });
+        const token = String(tokenResult.stdout || '').trim();
+        return {
+          status: tokenResult.status,
+          error: tokenResult.error,
+          output: `${tokenResult.stdout || ''}${tokenResult.stderr || ''}`.trim(),
+          token,
+        };
+      };
+      const importToken = (token: string, authOutput = '') => {
+        currentAgent.config.upsertProvider('GitHub Copilot', 'https://models.github.ai', token, 'github_models');
+        const hasModel = currentAgent.config.providers().find(p => p.name === 'GitHub Copilot')?.models?.some(m => m.name === 'openai/gpt-4.1');
+        if (!hasModel) {
+          currentAgent.config.addModelToProvider('GitHub Copilot', 'openai/gpt-4.1', 'GPT-4.1 (GitHub Models)', 'GitHub Models default candidate; validate models to refresh the full catalog.');
+        }
+        currentAgent.config.save();
+        return { ok: true, provider: 'GitHub Copilot', endpoint: 'https://models.github.ai', hasToken: true, imported: true, output: authOutput };
+      };
+      const ghStatus = runGh(['auth', 'status'], 30000, true);
+      if (ghStatus.status === 0) {
+        const existingToken = tokenFromGh();
+        if (!existingToken.error && existingToken.status === 0 && existingToken.token) {
+          return importToken(existingToken.token, 'Imported existing GitHub CLI token. If GitHub Models rejects the token, run GitHub Copilot login again to refresh models:read scope.');
+        }
+      }
+      const authAttempts = ghStatus.status === 0
+        ? [
+            ['auth', 'refresh', '--scopes', 'models:read'],
+            ['auth', 'login', '--web', '--scopes', 'models:read'],
+          ]
+        : [
+            ['auth', 'login', '--web', '--scopes', 'models:read'],
+          ];
+      const authResults: ReturnType<typeof runGh>[] = [];
+      let authOk = false;
+      for (const authArgs of authAttempts) {
+        const authResult = runGh(authArgs, 300000, false);
+        authResults.push(authResult);
+        if (!authResult.error && authResult.status === 0) {
+          authOk = true;
+          break;
+        }
+      }
+      if (!authOk) {
+        await shell.openExternal('https://github.com/login/device');
+        const last = authResults[authResults.length - 1];
+        const output = authResults.map(r => `gh ${r.args.join(' ')} exited ${r.error ? r.error.message : r.status}\n${r.output}`.trim()).join('\n\n');
+        return {
+          ok: false,
+          webFallback: true,
+          error: last?.error?.message || `gh ${last?.args.join(' ') || 'auth'} exited ${last?.status ?? 'unknown'}`,
+          output,
+        };
+      }
+
+      const tokenResult = tokenFromGh();
+      const token = tokenResult.token;
+      if (tokenResult.error) {
+        await shell.openExternal('https://github.com/login/device');
+        return { ok: false, webFallback: true, error: tokenResult.error.message };
+      }
+      if (tokenResult.status !== 0 || !token) {
+        await shell.openExternal('https://github.com/login/device');
+        return { ok: false, webFallback: true, error: `gh auth token exited ${tokenResult.status}` };
+      }
+
+      return importToken(token);
     });
 
     ipcMain.handle('skills:list', async () => {

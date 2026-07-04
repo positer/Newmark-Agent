@@ -5,6 +5,7 @@ import {
   AgentTool,
   AgentToolCall,
   AssistantMessage,
+  ImageContent,
   TextContent,
   ToolResultMessage,
 } from './types';
@@ -145,7 +146,7 @@ async function executeToolCalls(toolCalls: AgentToolCall[], context: MutableCont
     await emit(config, { type: 'tool_execution_start', toolCallId: call.id, toolName: call.name, args });
     try {
       const result = await tool.execute(call.id, args);
-      const message = toolResult(call, result.content.map(item => item.type === 'text' ? item.text : '').join(''), false, result.details, result.terminate);
+      const message = toolResult(call, result.content, false, result.details, result.terminate);
       results.push(message);
       await emit(config, { type: 'tool_execution_end', toolCallId: call.id, toolName: call.name, result: { content: result.content, details: result.details, terminate: result.terminate }, isError: false });
     } catch (error) {
@@ -157,13 +158,26 @@ async function executeToolCalls(toolCalls: AgentToolCall[], context: MutableCont
   return results;
 }
 
-function toolResult(call: AgentToolCall, text: string, isError: boolean, details?: unknown, terminate?: boolean): ToolResultMessage {
+function toolResult(call: AgentToolCall, content: string | Array<TextContent | { type: 'image'; image?: string; imagePath?: string; mimeType?: string }>, isError: boolean, details?: unknown, terminate?: boolean): ToolResultMessage {
   const mergedDetails = terminate ? { ...(details && typeof details === 'object' ? details as Record<string, unknown> : {}), terminate } : details;
+  const normalizedContent: Array<TextContent | ImageContent> = [];
+  if (typeof content === 'string') {
+    normalizedContent.push({ type: 'text', text: content });
+  } else {
+    for (const item of content) {
+      if (item.type === 'image') {
+        const imageValue = item.image && String(item.image).trim() ? item.image : item.imagePath;
+        normalizedContent.push({ type: 'image', image: String(item.image || ''), imagePath: String(item.imagePath || imageValue || ''), mimeType: item.mimeType } as ImageContent & { imagePath?: string });
+      } else {
+        normalizedContent.push(item);
+      }
+    }
+  }
   return {
     role: 'toolResult',
     toolCallId: call.id,
     toolName: call.name,
-    content: [{ type: 'text', text }],
+    content: normalizedContent,
     details: mergedDetails,
     isError,
     timestamp: Date.now(),

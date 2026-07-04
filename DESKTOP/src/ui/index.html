@@ -1194,25 +1194,53 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 .md-math-inline,
 .md-math-block {
-  font-family: var(--font-mono);
+  font-family: "Cambria Math", "STIX Two Math", "Latin Modern Math", Georgia, serif;
   color: var(--text-bright);
-  background: rgba(255,255,255,0.035);
-  border: 1px solid var(--glass-border-1);
+  background: transparent;
+  border: 0;
 }
 .md-math-inline {
-  display: inline-block;
-  padding: 0 5px;
-  border-radius: 4px;
-  line-height: 1.5;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px;
+  line-height: 1.35;
+  vertical-align: baseline;
 }
 .md-math-block {
-  display: block;
-  margin: 8px 0;
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  margin: 10px 0;
+  padding: 6px 10px;
   overflow-x: auto;
   text-align: center;
-  white-space: pre-wrap;
+  white-space: normal;
+  font-size: 15px;
+}
+.math-frac {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  line-height: 1.05;
+  margin: 0 2px;
+}
+.math-frac > span:first-child {
+  border-bottom: 1px solid currentColor;
+  padding: 0 3px 1px;
+}
+.math-frac > span:last-child { padding: 1px 3px 0; }
+.md-math-inline sub,
+.md-math-inline sup,
+.md-math-block sub,
+.md-math-block sup {
+  font-size: 0.72em;
+  line-height: 0;
+}
+.math-symbol { display: inline-block; }
 }
 
 /* Subagent panel */
@@ -2307,6 +2335,57 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 #input-area textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
 #input-area textarea::placeholder { color: var(--text-dim); opacity: 0.6; }
+
+.prompt-attachments {
+  display: none;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 8px 10px 0;
+}
+.prompt-attachments.has-items { display: flex; }
+.prompt-attachment {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 220px;
+  padding: 5px 28px 5px 6px;
+  border: 1px solid var(--glass-border-1);
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.045);
+}
+.prompt-attachment img {
+  width: 42px;
+  height: 42px;
+  object-fit: cover;
+  border-radius: 5px;
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.prompt-attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 11px;
+}
+.prompt-attachment-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--glass-border-1);
+  border-radius: 50%;
+  background: rgba(0,0,0,0.35);
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
 #input-tools {
   display: flex;
@@ -3598,6 +3677,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
         <!-- Input area -->
         <div id="input-area">
+          <div id="prompt-attachments" class="prompt-attachments" aria-label="Prompt attachments"></div>
           <textarea id="prompt" rows="3" placeholder="Input instruction..."></textarea>
           <div id="input-tools">
             <select class="tool-select" id="mode-select">
@@ -3794,6 +3874,7 @@ var state = {
   subagents: [],
   fileDiffs: [],
   pendingOptions: [],
+  promptAttachments: [],
   defaultFlow: '',
   settingsActiveTab: 'general',
   pluginActiveTab: 'installed',
@@ -3819,7 +3900,7 @@ var state = {
 var els = {};
 function cacheEls() {
   var ids = [
-    'chat-area','prompt','mode-select','model-select','intel-select','submit-btn',
+    'chat-area','prompt','prompt-attachments','mode-select','model-select','intel-select','submit-btn',
     'input-area','goal-bar','goal-text','goal-pause-btn','context-compression-pill','context-token-ring','context-token-tooltip','todo-wrap','todo-header',
     'todo-list','todo-header-label','scroll-bottom-btn','right','right-content','bottom','left',
     'left-secondary','conversation-list','terminal-shell-select','terminal-tabs','terminal-body','terminal-timeout-input',
@@ -4985,6 +5066,102 @@ function renderMarkdownLinkToken(matchText, alt, imageUrl, label, linkUrl) {
   return esc(matchText);
 }
 
+function mathGroupLength(text, start) {
+  if (text[start] !== '{') return 1;
+  var depth = 0;
+  for (var i = start; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}') {
+      depth--;
+      if (depth === 0) return i - start + 1;
+    }
+  }
+  return text.length - start;
+}
+
+function mathStripOuterGroup(text) {
+  text = String(text || '');
+  if (text[0] === '{' && text[text.length - 1] === '}') return text.slice(1, -1);
+  return text;
+}
+
+function renderMathFormula(tex) {
+  var source = String(tex || '').replace(/\r?\n/g, ' ').trim();
+  var greek = {
+    alpha: 'alpha', beta: 'beta', gamma: 'gamma', delta: 'delta', epsilon: 'epsilon',
+    theta: 'theta', lambda: 'lambda', mu: 'mu', nu: 'nu', pi: 'pi', rho: 'rho',
+    sigma: 'sigma', tau: 'tau', phi: 'phi', omega: 'omega', Lambda: 'Lambda',
+    Delta: 'Delta', Sigma: 'Sigma', Omega: 'Omega', times: 'times', cdot: 'middot',
+    leq: 'leq', geq: 'geq', neq: 'ne', approx: 'approx', infty: 'infin',
+    partial: 'part', nabla: 'nabla', pm: 'plusmn'
+  };
+  var symbols = { times: 'x', cdot: '·', leq: '<=', geq: '>=', neq: '!=', approx: '≈', infty: '∞', partial: '∂', nabla: '∇', pm: '±' };
+  function parseUntil(input, stopChar) {
+    var html = '';
+    var i = 0;
+    while (i < input.length) {
+      var ch = input[i];
+      if (stopChar && ch === stopChar) break;
+      if (ch === '\\') {
+        var cmd = /^\\([A-Za-z]+|.)/.exec(input.slice(i));
+        var name = cmd ? cmd[1] : '';
+        i += cmd ? cmd[0].length : 1;
+        if (name === 'frac') {
+          while (input[i] === ' ') i++;
+          var nLen = mathGroupLength(input, i);
+          var numerator = mathStripOuterGroup(input.slice(i, i + nLen));
+          i += nLen;
+          while (input[i] === ' ') i++;
+          var dLen = mathGroupLength(input, i);
+          var denominator = mathStripOuterGroup(input.slice(i, i + dLen));
+          i += dLen;
+          html += '<span class="math-frac"><span>' + parseUntil(numerator, '') + '</span><span>' + parseUntil(denominator, '') + '</span></span>';
+        } else if (name === 'left' || name === 'right') {
+          continue;
+        } else if (name === ',' || name === ';' || name === ':' || name === '!') {
+          html += '<span class="math-space"> </span>';
+        } else if (symbols[name]) {
+          html += '<span class="math-symbol">' + esc(symbols[name]) + '</span>';
+        } else if (greek[name]) {
+          html += '<span class="math-symbol">&' + greek[name] + ';</span>';
+        } else {
+          html += '<span class="math-symbol">' + esc(name) + '</span>';
+        }
+        continue;
+      }
+      if (ch === '^' || ch === '_') {
+        var tag = ch === '^' ? 'sup' : 'sub';
+        i++;
+        while (input[i] === ' ') i++;
+        var len = mathGroupLength(input, i);
+        var group = mathStripOuterGroup(input.slice(i, i + len));
+        i += len;
+        html += '<' + tag + '>' + parseUntil(group, '') + '</' + tag + '>';
+        continue;
+      }
+      if (ch === '{') {
+        var gLen = mathGroupLength(input, i);
+        html += parseUntil(mathStripOuterGroup(input.slice(i, i + gLen)), '');
+        i += gLen;
+        continue;
+      }
+      if (ch === '}') {
+        i++;
+        continue;
+      }
+      if (/\s/.test(ch)) {
+        html += ' ';
+        i++;
+        continue;
+      }
+      html += esc(ch);
+      i++;
+    }
+    return html;
+  }
+  return parseUntil(source, '') || esc(source);
+}
+
 function renderMarkdownInline(text) {
   var source = String(text || '');
   var placeholders = [];
@@ -4997,7 +5174,8 @@ function renderMarkdownInline(text) {
     return hold('<code>' + esc(code) + '</code>');
   });
   source = source.replace(/\\\(([\s\S]+?)\\\)|\$([^\$\n]+?)\$/g, function(_m, parenMath, dollarMath) {
-    return hold('<span class="md-math-inline">' + esc(parenMath || dollarMath || '') + '</span>');
+    var formula = parenMath || dollarMath || '';
+    return hold('<span class="md-math-inline" title="' + escAttr(formula) + '">' + renderMathFormula(formula) + '</span>');
   });
   source = source.replace(/!\[([^\]\n]{0,160})\]\(([^)\n]+)\)|\[([^\]\n]{1,180})\]\(([^)\n]+)\)/g, function(m, alt, imageUrl, label, linkUrl) {
     return hold(renderMarkdownLinkToken(m, alt, imageUrl, label, linkUrl));
@@ -5070,7 +5248,8 @@ function renderMarkdownBlocks(text) {
         mathLines.push(lines[i]);
         i++;
       }
-      html += '<div class="md-math-block">' + esc(mathLines.join('\n').trim()) + '</div>';
+      var formula = mathLines.join('\n').trim();
+      html += '<div class="md-math-block" title="' + escAttr(formula) + '">' + renderMathFormula(formula) + '</div>';
       continue;
     }
     if (!trimmed) {
@@ -5362,6 +5541,107 @@ function clipboardFilePaths(dataTransfer) {
   return paths;
 }
 
+function isImageFile(file) {
+  return !!(file && /^image\//i.test(String(file.type || '')));
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function() { resolve(String(reader.result || '')); };
+    reader.onerror = function() { reject(reader.error || new Error('Failed to read image.')); };
+    reader.readAsDataURL(file);
+  });
+}
+
+function imageFilesFromDataTransfer(dataTransfer) {
+  var out = [];
+  if (!dataTransfer) return out;
+  var items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (item && item.kind === 'file' && /^image\//i.test(String(item.type || ''))) {
+      var file = null;
+      try { file = item.getAsFile ? item.getAsFile() : null; } catch(e) {}
+      if (file && out.indexOf(file) < 0) out.push(file);
+    }
+  }
+  var files = dataTransfer.files ? Array.from(dataTransfer.files) : [];
+  for (var j = 0; j < files.length; j++) {
+    if (isImageFile(files[j]) && out.indexOf(files[j]) < 0) out.push(files[j]);
+  }
+  return out;
+}
+
+function renderPromptAttachments() {
+  var wrap = els['prompt-attachments'];
+  if (!wrap) return;
+  var attachments = state.promptAttachments || [];
+  wrap.classList.toggle('has-items', attachments.length > 0);
+  wrap.innerHTML = attachments.map(function(item, index) {
+    return '<div class="prompt-attachment" data-attachment-id="' + escAttr(item.id) + '">' +
+      '<img src="' + escAttr(item.dataUrl) + '" alt="' + escAttr(item.name || 'pasted image') + '">' +
+      '<span class="prompt-attachment-name" title="' + escAttr(item.name || 'pasted image') + '">' + esc(item.name || 'pasted image') + '</span>' +
+      '<button class="prompt-attachment-remove" title="Remove image" onclick="window.removePromptAttachment(' + index + ')">' + iconSvg('x', 'Remove', 'tiny') + '</button>' +
+      '</div>';
+  }).join('');
+}
+
+window.removePromptAttachment = function(index) {
+  if (!state.promptAttachments) state.promptAttachments = [];
+  state.promptAttachments.splice(index, 1);
+  renderPromptAttachments();
+};
+
+function addPromptImageAttachment(file, dataUrl) {
+  if (!dataUrl || !/^data:image\//i.test(dataUrl)) return;
+  if (!state.promptAttachments) state.promptAttachments = [];
+  var max = 6;
+  if (state.promptAttachments.length >= max) state.promptAttachments.shift();
+  var name = (file && file.name) || ('pasted-image-' + (state.promptAttachments.length + 1) + '.png');
+  state.promptAttachments.push({
+    id: 'img-' + Date.now() + '-' + Math.random().toString(16).slice(2),
+    name: name,
+    type: (file && file.type) || 'image/png',
+    dataUrl: dataUrl
+  });
+  renderPromptAttachments();
+}
+
+async function attachPromptImagesFromDataTransfer(dataTransfer) {
+  var files = imageFilesFromDataTransfer(dataTransfer);
+  if (!files.length) return 0;
+  var added = 0;
+  for (var i = 0; i < files.length; i++) {
+    var file = files[i];
+    if (file && file.size && file.size > 10 * 1024 * 1024) continue;
+    try {
+      var dataUrl = await readFileAsDataUrl(file);
+      addPromptImageAttachment(file, dataUrl);
+      added++;
+    } catch(e) {}
+  }
+  return added;
+}
+
+function markdownForPromptAttachment(item) {
+  var name = String(item && item.name || 'pasted image').replace(/[\]\r\n]/g, ' ').trim() || 'pasted image';
+  return '![' + name + '](' + String(item && item.dataUrl || '') + ')';
+}
+
+function composePromptTextForSend(text) {
+  var base = String(text || '').trim();
+  var attachments = state.promptAttachments || [];
+  var images = attachments.map(markdownForPromptAttachment).filter(Boolean).join('\n');
+  if (!images) return base;
+  return (base ? base + '\n\n' : '') + images;
+}
+
+function clearPromptAttachments() {
+  state.promptAttachments = [];
+  renderPromptAttachments();
+}
+
 function isHiddenWorkflowMessage(message) {
   var role = String(message && message.role || '');
   var mode = String(message && message.mode || '');
@@ -5380,7 +5660,10 @@ function conversationWorkUiState(conversationId) {
       activeWorkflowText: '',
       toolEventMsgs: {},
       toolEventBatch: null,
-      lastCompletedWorkflow: null
+      lastCompletedWorkflow: null,
+      finalResponseMsg: null,
+      finalResponseText: '',
+      finalResponseAt: 0
     };
   }
   return state.agentWorkUiByConversation[id];
@@ -5394,7 +5677,10 @@ function resetConversationWorkUi(conversationId, keepCompleted) {
     activeWorkflowText: '',
     toolEventMsgs: {},
     toolEventBatch: null,
-    lastCompletedWorkflow: keepCompleted ? prior.lastCompletedWorkflow : null
+    lastCompletedWorkflow: keepCompleted ? prior.lastCompletedWorkflow : null,
+    finalResponseMsg: keepCompleted ? prior.finalResponseMsg : null,
+    finalResponseText: keepCompleted ? prior.finalResponseText : '',
+    finalResponseAt: keepCompleted ? prior.finalResponseAt : 0
   };
   return state.agentWorkUiByConversation[id];
 }
@@ -5493,6 +5779,64 @@ function finishToolBatch(conversationId) {
   renderToolBatchInto(batch);
   ui.toolEventBatch = null;
   ui.toolEventMsgs = {};
+}
+
+function normalizeResponseTextForDedupe(text) {
+  return String(text || '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+function responseTextsLikelySame(a, b) {
+  var left = normalizeResponseTextForDedupe(a);
+  var right = normalizeResponseTextForDedupe(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  var compactLeft = compactResponseTextForDedupe(left);
+  var compactRight = compactResponseTextForDedupe(right);
+  if (compactLeft && compactRight && compactLeft === compactRight && Math.min(compactLeft.length, compactRight.length) >= 12) return true;
+  if (left.length < 24 || right.length < 24) return false;
+  var short = left.length < right.length ? left : right;
+  var long = left.length < right.length ? right : left;
+  return long.indexOf(short) >= 0 && short.length / long.length > 0.82;
+}
+
+function responseTextLooksLikePrefix(prefix, full) {
+  var left = normalizeResponseTextForDedupe(prefix);
+  var right = normalizeResponseTextForDedupe(full);
+  if (!left || !right) return false;
+  return right === left || right.indexOf(left) === 0;
+}
+
+function compactResponseTextForDedupe(text) {
+  return normalizeResponseTextForDedupe(text).replace(/\s+/g, '');
+}
+
+function responseTextLooksLikeCompactPrefix(prefix, full) {
+  var left = compactResponseTextForDedupe(prefix);
+  var right = compactResponseTextForDedupe(full);
+  if (!left || !right) return false;
+  return right === left || right.indexOf(left) === 0;
+}
+
+function markFinalResponseMsg(conversationId, text, msg) {
+  if (!msg) return;
+  var ui = conversationWorkUiState(conversationId);
+  ui.finalResponseMsg = msg;
+  ui.finalResponseText = String(text || '');
+  ui.finalResponseAt = Date.now();
+}
+
+function findPendingFinalResponseMsg(conversationId, streamText) {
+  var ui = conversationWorkUiState(conversationId);
+  if (!ui.finalResponseMsg || !ui.finalResponseMsg.parentNode) return null;
+  if (Date.now() - Number(ui.finalResponseAt || 0) > 45000) return null;
+  if (responseTextLooksLikePrefix(streamText, ui.finalResponseText) || responseTextLooksLikeCompactPrefix(streamText, ui.finalResponseText) || responseTextsLikelySame(streamText, ui.finalResponseText)) return ui.finalResponseMsg;
+  return null;
 }
 
 function renderPersistedToolMessage(message) {
@@ -5598,6 +5942,14 @@ function renderAgentWorkEvent(event) {
     ui.lastCompletedWorkflow = null;
   } else if (type === 'text') {
     ui.activeWorkflowText = (ui.activeWorkflowText || '') + content;
+    var pendingFinalMsg = findPendingFinalResponseMsg(eventConversationId, ui.activeWorkflowText);
+    if (pendingFinalMsg) {
+      ui.activeWorkflowMsg = pendingFinalMsg;
+      if (responseTextsLikelySame(ui.activeWorkflowText, ui.finalResponseText)) {
+        updateMsg(pendingFinalMsg, ui.finalResponseText || ui.activeWorkflowText, 'assistant', event.mode || state.mode, event.model || state.model);
+      }
+      return;
+    }
     updateMsg(ensureActiveAssistantMsg(event.mode || state.mode, event.model || state.model, eventConversationId), ui.activeWorkflowText, 'assistant', event.mode || state.mode, event.model || state.model);
   } else if (type === 'tool_call') {
     upsertToolEvent(event, '');
@@ -5633,12 +5985,19 @@ function renderAgentWorkEvent(event) {
 
 function findCompletedWorkflowMsg(conversationId, text) {
   var done = conversationWorkUiState(conversationId).lastCompletedWorkflow;
-  if (!done || !done.msg || !done.msg.parentNode) return null;
-  if (String(done.conversationId || 'default') !== String(conversationId || activeConversationId() || 'default')) return null;
-  if (Date.now() - Number(done.at || 0) > 30000) return null;
-  var expected = String(done.text || '');
+  var targetConversation = String(conversationId || activeConversationId() || 'default');
   var actual = String(text || '');
-  return expected && actual && expected === actual ? done.msg : null;
+  if (done && done.msg && done.msg.parentNode) {
+    if (String(done.conversationId || 'default') === targetConversation && Date.now() - Number(done.at || 0) <= 45000 && responseTextsLikelySame(done.text, actual)) {
+      return done.msg;
+    }
+  }
+  var nodes = els['chat-area'] ? Array.from(els['chat-area'].querySelectorAll('.chat-msg.assistant')) : [];
+  for (var i = nodes.length - 1; i >= 0 && i >= nodes.length - 6; i--) {
+    var body = nodes[i].querySelector('.msg-body');
+    if (body && responseTextsLikelySame(body.innerText || body.textContent || '', actual)) return nodes[i];
+  }
+  return null;
 }
 
 function replayActiveAgentWorkEvents() {
@@ -6048,7 +6407,9 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   if (!window.requireWorkspace('send')) return;
   opts = opts || {};
   var effectiveInputMode = modeOverride || state.inputMode || 'guide';
-  var text = typeof queuedText === 'string' ? queuedText.trim() : els.prompt.value.trim();
+  var rawText = typeof queuedText === 'string' ? queuedText.trim() : els.prompt.value.trim();
+  var includePromptAttachments = typeof queuedText !== 'string' && !opts.fromQueue;
+  var text = includePromptAttachments ? composePromptTextForSend(rawText) : rawText;
   if (!text) return;
 
   var lockedConversationId = activeConversationId();
@@ -6057,6 +6418,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
 
   if (conversationRunning && effectiveInputMode === 'guide' && !opts.fromQueue) {
     els.prompt.value = '';
+    if (includePromptAttachments) clearPromptAttachments();
     if (api.setInputMode) await api.setInputMode('guide').catch(function(){});
     addMsg('user', text, 'guide', state.model);
     api.sendMessage(text, lockedConversationId).then(function(r) {
@@ -6078,6 +6440,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     if (!state.nextQueue) state.nextQueue = [];
     state.nextQueue.push(text);
     els.prompt.value = '';
+    if (includePromptAttachments) clearPromptAttachments();
     state.nextPrompt = text;
     window.renderInputStack();
     addMsg('user', '[Next queued] ' + text, effectiveInputMode, state.model);
@@ -6091,6 +6454,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   state._sendInFlight = Object.keys(state.runningConversations).length > 0;
   setWorking(true);
   if (!opts.fromQueue) els.prompt.value = '';
+  if (includePromptAttachments) clearPromptAttachments();
   var previousMode = state.mode;
   if (opts.forceBuild && state.mode !== 'build') {
     state.mode = 'build';
@@ -6115,10 +6479,15 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         var fullText = r.tokens.map(function(t) { return t.text || ''; }).join('');
         if (!responseMsg) responseMsg = findCompletedWorkflowMsg(lockedConversationId, fullText);
         if (fullText && !responseMsg) responseMsg = addMsg('assistant', '', r.mode || state.mode, r.model || state.model);
-        if (responseMsg) updateMsg(responseMsg, fullText || '(empty response)', 'assistant', r.mode || state.mode, r.model || state.model);
+        if (responseMsg) {
+          updateMsg(responseMsg, fullText || '(empty response)', 'assistant', r.mode || state.mode, r.model || state.model);
+          markFinalResponseMsg(lockedConversationId, fullText, responseMsg);
+        }
       } else if (r && r.response) {
+        if (!responseMsg) responseMsg = findCompletedWorkflowMsg(lockedConversationId, r.response);
         if (!responseMsg) responseMsg = addMsg('assistant', '', state.mode, state.model);
         updateMsg(responseMsg, r.response, 'assistant', state.mode, state.model);
+        markFinalResponseMsg(lockedConversationId, r.response, responseMsg);
       } else {
         if (!responseMsg) responseMsg = addMsg('assistant', '', state.mode, state.model);
         updateMsg(responseMsg, '(empty response)', 'assistant', state.mode, state.model);
@@ -10633,6 +11002,12 @@ function stopMarqueeJS() {
       }
     });
     els.prompt.addEventListener('paste', function(e) {
+      var imageFiles = imageFilesFromDataTransfer(e.clipboardData);
+      if (imageFiles.length) {
+        e.preventDefault();
+        attachPromptImagesFromDataTransfer(e.clipboardData);
+        return;
+      }
       var paths = clipboardFilePaths(e.clipboardData);
       if (!paths.length) return;
       e.preventDefault();
@@ -10646,6 +11021,12 @@ function stopMarqueeJS() {
       }
     });
     els.prompt.addEventListener('drop', function(e) {
+      var imageFiles = imageFilesFromDataTransfer(e.dataTransfer);
+      if (imageFiles.length) {
+        e.preventDefault();
+        attachPromptImagesFromDataTransfer(e.dataTransfer);
+        return;
+      }
       var paths = clipboardFilePaths(e.dataTransfer);
       if (!paths.length) return;
       e.preventDefault();

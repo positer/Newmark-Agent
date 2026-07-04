@@ -241,7 +241,7 @@ async function runUiCheck(root) {
 
     await evaluate(cdp, `(() => {
       const image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
-      addMsg('assistant', '# MEDIA_RENDER_MESSAGE_20260628\\n\\n![tiny](' + image + ')\\n\\n[Open target](media-link-target.txt)\\n\\n| Metric | Value |\\n| --- | --- |\\n| Alpha | $a^2 + b^2$ |\\n\\n$$\\nE = mc^2\\n$$', 'build', 'media-md-smoke');
+      addMsg('assistant', '# MEDIA_RENDER_MESSAGE_20260628\\n\\n![tiny](' + image + ')\\n\\n[Open target](media-link-target.txt)\\n\\n| Metric | Value |\\n| --- | --- |\\n| Alpha | $a^2 + b^2$ |\\n\\n$$\\nG_{\\\\mu\\\\nu} + \\\\Lambda g_{\\\\mu\\\\nu} = \\\\frac{8\\\\pi G}{c^4} T_{\\\\mu\\\\nu}\\n$$', 'build', 'media-md-smoke');
       return true;
     })()`, 30000);
 
@@ -253,10 +253,33 @@ async function runUiCheck(root) {
         !!link && link.textContent.includes('Open target') &&
         !!msg && !!msg.querySelector('.md-rendered h1') &&
         !!msg.querySelector('.md-table') &&
-        !!msg.querySelector('.md-math-inline') &&
-        !!msg.querySelector('.md-math-block');
+        !!msg.querySelector('.md-math-inline sup') &&
+        !!msg.querySelector('.md-math-block .math-frac') &&
+        !!msg.querySelector('.md-math-block sub') &&
+        msg.querySelector('.md-math-block').innerText.includes('Λ') &&
+        !msg.querySelector('.md-math-block').innerText.includes('\\\\frac');
     })()`, 30000, 'message image and file link');
     log('message markdown image, file link, table, and math render ok');
+
+    await evaluate(cdp, `(() => {
+      const prompt = document.querySelector('#prompt');
+      const bytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='), c => c.charCodeAt(0));
+      const file = new File([bytes], 'rootless-paste.png', { type: 'image/png' });
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+      prompt.dispatchEvent(ev);
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => {
+      const wrap = document.querySelector('#prompt-attachments');
+      const img = wrap && wrap.querySelector('.prompt-attachment img');
+      return wrap && wrap.classList.contains('has-items') &&
+        wrap.textContent.includes('rootless-paste.png') &&
+        img && img.getAttribute('src').startsWith('data:image/png;base64,') &&
+        document.querySelector('#prompt').value.trim() === '';
+    })()`, 30000, 'rootless pasted image attachment');
+    log('rootless pasted image attachment preview ok');
 
     await evaluate(cdp, `document.querySelector('.chat-msg .msg-file-link[data-path="media-link-target.txt"]').click()`, 30000);
     await waitFor(cdp, `(() => {

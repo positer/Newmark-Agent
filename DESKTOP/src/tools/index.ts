@@ -1252,7 +1252,27 @@ export class ToolExecutor {
       const args = ['repo', 'view'];
       if (repo) args.push(repo);
       args.push('--json', 'nameWithOwner,parent,isFork,url');
-      return this.gh(args, ws);
+      const raw = this.gh(args, ws);
+      try {
+        const parsed = JSON.parse(raw);
+        return JSON.stringify({ ok: true, source: 'github-cli', ...parsed }, null, 2);
+      } catch {
+        const repoRoot = this.findGitRoot(ws, ws);
+        const remoteRepo = repoRoot ? this.githubRemote(repoRoot) : null;
+        if (remoteRepo) {
+          return JSON.stringify({
+            ok: false,
+            source: 'git-remote-fallback',
+            nameWithOwner: `${remoteRepo.owner}/${remoteRepo.name}`,
+            isFork: false,
+            parent: null,
+            url: `https://github.com/${remoteRepo.owner}/${remoteRepo.name}`,
+            remote: remoteRepo.remote,
+            error: raw.slice(0, 500),
+          }, null, 2);
+        }
+        return JSON.stringify({ ok: false, source: 'github-cli', error: raw.slice(0, 500) }, null, 2);
+      }
     }
     if (normalized !== 'create') return `[gh_fork] Unknown action: ${action}`;
     const args = ['repo', 'fork'];

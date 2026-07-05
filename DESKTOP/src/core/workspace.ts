@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { ConfigManager } from '../core/config';
 
 export interface WorkspaceInfo {
@@ -113,6 +114,57 @@ export class WorkspaceManager {
     this.external = this.normalizeWorkspaceList(this.external);
   }
 
+  private canonicalWorkspacePath(target: string): string {
+    const resolved = path.resolve(target);
+    let real = resolved;
+    try {
+      real = fs.existsSync(resolved) ? fs.realpathSync.native(resolved) : resolved;
+    } catch {
+      real = resolved;
+    }
+    const normalized = path.normalize(real).replace(/[\\/]+$/, '');
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  }
+
+  private isInsideRoot(target: string): boolean {
+    const root = this.canonicalWorkspacePath(this.rootPath);
+    const candidate = this.canonicalWorkspacePath(target);
+    const rel = path.relative(root, candidate);
+    return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+  }
+
+  private canonicalRemotePath(target: string): string {
+    let cleaned = String(target || '').trim().replace(/\\/g, '/').replace(/\/+$/g, '');
+    if (cleaned.length > 1) cleaned = cleaned.replace(/\/{2,}/g, '/');
+    return cleaned;
+  }
+
+  private findSshWorkspaceByRemotePath(sshConnectionId: string, remotePath: string): WorkspaceInfo | null {
+    const wanted = this.canonicalRemotePath(remotePath);
+    return this.external.find(w =>
+      (w.kind === 'ssh' || w.sshConnectionId) &&
+      w.sshConnectionId === sshConnectionId &&
+      this.canonicalRemotePath(w.remotePath || '') === wanted
+    ) || null;
+  }
+
+  private findWorkspaceByPath(target: string): WorkspaceInfo | null {
+    const wanted = this.canonicalWorkspacePath(target);
+    return [...this.internal, ...this.external].find(w => this.canonicalWorkspacePath(w.path) === wanted) || null;
+  }
+
+  private dedupeByPath(list: WorkspaceInfo[]): WorkspaceInfo[] {
+    const seen = new Set<string>();
+    const deduped: WorkspaceInfo[] = [];
+    for (const item of list) {
+      const key = this.canonicalWorkspacePath(item.path);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(item);
+    }
+    return deduped;
+  }
+
   private statePath(): string {
     return path.join(this.rootPath, 'Work', 'State.json');
   }
@@ -174,12 +226,14 @@ export class WorkspaceManager {
 
   private saveInternal(): void {
     const p = path.join(this.rootPath, 'Work', 'Local.json');
+    this.internal = this.dedupeByPath(this.internal);
     this.sortWorkspaces();
     fs.writeFileSync(p, JSON.stringify(this.internal, null, 2), 'utf-8');
   }
 
   private saveExternal(): void {
     const p = path.join(this.rootPath, 'Work', 'External.json');
+    this.external = this.dedupeByPath(this.external);
     this.sortWorkspaces();
     fs.writeFileSync(p, JSON.stringify(this.external, null, 2), 'utf-8');
   }
@@ -236,6 +290,12 @@ export class WorkspaceManager {
     const n = name || new Date().toISOString().replace(/[:.]/g, '').replace('T', '_').slice(0, 15);
     const d = path.join(this.rootPath, 'Work', n);
     fs.mkdirSync(d, { recursive: true });
+    const existing = this.findWorkspaceByPath(d);
+    if (existing) {
+      this.current = existing;
+      this.saveState();
+      return existing;
+    }
     const ws: WorkspaceInfo = {
       name: n,
       path: d,
@@ -252,7 +312,13 @@ export class WorkspaceManager {
 
   addExternal(p: string): WorkspaceInfo | null {
     const resolved = path.resolve(p);
-    if (!fs.existsSync(resolved) || resolved.startsWith(this.rootPath)) return null;
+    if (!fs.existsSync(resolved) || this.isInsideRoot(resolved)) return null;
+    const existing = this.findWorkspaceByPath(resolved);
+    if (existing) {
+      this.current = existing;
+      this.saveState();
+      return existing;
+    }
     const name = path.basename(resolved);
     const ws: WorkspaceInfo = {
       name,
@@ -277,17 +343,14 @@ export class WorkspaceManager {
     remoteUserHost?: string;
   }): WorkspaceInfo | null {
     if (!input.sshConnectionId || !input.remotePath || !input.remotePcHash) return null;
-    const baseName = (input.name || path.basename(input.remotePath.replace(/[\\/]+$/, '')) || input.sshConnectionId || 'ssh-workspace').trim();
+    const remotePath = this.canonicalRemotePath(input.remotePath);
+    const baseName = (input.name || path.basename(remotePath.replace(/[\\/]+$/, '')) || input.sshConnectionId || 'ssh-workspace').trim();
     const safeName = baseName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '-').replace(/\s+/g, ' ').trim() || 'ssh-workspace';
     const shadowRoot = input.localPath
       ? path.resolve(input.localPath)
-      : path.join(this.rootPath, 'Work', '.ssh', `${input.sshConnectionId}-${Buffer.from(input.remotePath).toString('hex').slice(0, 16)}`);
+      : path.join(this.rootPath, 'Work', '.ssh', `${input.sshConnectionId}-${crypto.createHash('sha256').update(remotePath).digest('hex').slice(0, 16)}`);
     fs.mkdirSync(shadowRoot, { recursive: true });
-    const existing = this.external.find(w =>
-      (w.kind === 'ssh' || w.sshConnectionId) &&
-      w.sshConnectionId === input.sshConnectionId &&
-      w.remotePath === input.remotePath
-    );
+    const existing = this.findSshWorkspaceByRemotePath(input.sshConnectionId, remotePath);
     const ws: WorkspaceInfo = {
       ...(existing || {}),
       name: existing?.name || safeName,
@@ -297,7 +360,7 @@ export class WorkspaceManager {
       icon: safeName.charAt(0).toUpperCase(),
       kind: 'ssh',
       sshConnectionId: input.sshConnectionId,
-      remotePath: input.remotePath,
+      remotePath,
       remotePcHash: input.remotePcHash,
       remoteUserHost: input.remoteUserHost || existing?.remoteUserHost || '',
       status: 'linked',

@@ -10381,6 +10381,44 @@ window.refreshWorkspaceState = async function() {
   return s;
 };
 
+function canonicalUiWorkspaceKey(ws) {
+  if (!ws) return '';
+  if ((ws.kind === 'ssh' || ws.sshConnectionId) && ws.sshConnectionId && ws.remotePath) {
+    return 'ssh:' + String(ws.sshConnectionId).toLowerCase() + ':' + String(ws.remotePath).replace(/[\\/]+$/g, '');
+  }
+  var p = String(ws.path || '').replace(/[\\/]+$/g, '');
+  return p ? ('path:' + p.toLowerCase()) : ('name:' + String(ws.name || '').toLowerCase());
+}
+
+window.upsertWorkspaceState = function(ws) {
+  if (!ws) return null;
+  if (!state.workspaces) state.workspaces = [];
+  var key = canonicalUiWorkspaceKey(ws);
+  var replaced = false;
+  var next = [];
+  var seen = {};
+  for (var i = 0; i < state.workspaces.length; i++) {
+    var item = state.workspaces[i];
+    var itemKey = canonicalUiWorkspaceKey(item);
+    if (itemKey === key) {
+      if (!replaced) {
+        next.push(Object.assign({}, item, ws));
+        seen[itemKey] = true;
+        replaced = true;
+      }
+      continue;
+    }
+    if (itemKey && seen[itemKey]) continue;
+    if (itemKey) seen[itemKey] = true;
+    next.push(item);
+  }
+  if (!replaced) next.push(ws);
+  state.workspaces = next;
+  state.currentWorkspace = ws.name || state.currentWorkspace || '';
+  state.currentWorkspacePath = ws.path || state.currentWorkspacePath || '';
+  return ws;
+};
+
 window.showNewWorkspaceDialog = function() {
   state.activeSubWindowView = { name: 'workspaceNew' };
   var html = '<div style="padding:10px;">' +
@@ -10457,11 +10495,10 @@ window.doCreateWorkspace = function() {
     if (!dir) { addMsg('assistant', '[Notice] ' + t('workspace.chooseExternal'), 'error', ''); return; }
     api.createExternalWorkspace('', dir).then(function(ws) {
       if (ws) {
-        if (!state.workspaces) state.workspaces = [];
-        state.workspaces.push(ws);
-        state.currentWorkspace = ws.name;
+        window.upsertWorkspaceState(ws);
         window.renderLeftWsList();
         window.selectWorkspace(ws.name);
+        if (window.refreshWorkspaceState) window.refreshWorkspaceState().catch(function(){});
         window.closeSubWin();
       }
     }).catch(function(err) {
@@ -10475,11 +10512,10 @@ window.doCreateWorkspace = function() {
     if (!name) return;
     api.createWorkspace(name).then(function(ws) {
       if (ws) {
-        if (!state.workspaces) state.workspaces = [];
-        state.workspaces.push(ws);
-        state.currentWorkspace = ws.name;
+        window.upsertWorkspaceState(ws);
         window.renderLeftWsList();
         window.selectWorkspace(ws.name);
+        if (window.refreshWorkspaceState) window.refreshWorkspaceState().catch(function(){});
         window.closeSubWin();
       }
     }).catch(function(err) {
@@ -10544,11 +10580,10 @@ window.createSshWorkspaceFromForm = function() {
       throw new Error(result && result.error ? result.error : t('workspace.sshCreateFailed'));
     }
     var ws = result.workspace;
-    if (!state.workspaces) state.workspaces = [];
-    state.workspaces.push(ws);
-    state.currentWorkspace = ws.name;
+    window.upsertWorkspaceState(ws);
     window.renderLeftWsList();
     window.selectWorkspace(ws.name);
+    if (window.refreshWorkspaceState) window.refreshWorkspaceState().catch(function(){});
     window.closeSubWin();
   }).catch(function(err) {
     addMsg('assistant', '[Error] ' + t('workspace.sshCreateFailed') + ': ' + (err && err.message ? err.message : err), 'error', '');

@@ -227,7 +227,7 @@ async function runOptionalSshWorkspaceSmoke(root, argsDir) {
 
     const fork = await runPackaged(['tool', 'gh_fork', '--args-file', writeJson(argsDir, 'fork.json', { action: 'status' }), '--root', repoPath], appRoot);
     const parsedFork = JSON.parse(fork.stdout);
-    if (typeof parsedFork.isFork !== 'boolean' || !String(parsedFork.nameWithOwner || '').includes('/')) fail(`gh_fork status shape invalid: ${fork.stdout}`);
+    if (typeof parsedFork.isFork !== 'boolean' || !String(parsedFork.nameWithOwner || '').includes('/') || !['github-cli', 'git-remote-fallback'].includes(String(parsedFork.source || ''))) fail(`gh_fork status shape invalid: ${fork.stdout}`);
     log('gh_fork status ok');
 
     const security = await runPackaged(['tool', 'repo_security_audit', '--args-file', writeJson(argsDir, 'security.json', { path: repoPath }), '--root', repoPath], appRoot, {}, 180000);

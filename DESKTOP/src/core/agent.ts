@@ -58,6 +58,13 @@ export interface ConversationPlanState {
   items: ConversationPlanItem[];
   updatedAt?: string;
 }
+export interface ConversationSnapshot {
+  conversationId: string;
+  conversations: ReturnType<Agent['listConversationStates']>;
+  conversationPlan: ConversationPlanState;
+  chatMessages: ChatMessage[];
+  historyMessages: number;
+}
 let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant built into a native desktop application.
 
 ## Available Tools
@@ -487,6 +494,50 @@ export class Agent {
     return rows;
   }
 
+  public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {
+    this.saveWorkspaceConversationState();
+    const clean = this.safeConversationId(conversationId || 'default');
+    const stateKey = this.workspaceConversationStateKey(clean);
+    const memoryKey = (() => {
+      const ws = this.workspace.current;
+      if (!ws) return null;
+      return `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${clean}`;
+    })();
+    const memory = memoryKey ? this.workspaceConversations.get(memoryKey) : undefined;
+    const stored = this.readStoredConversationState();
+    const persisted = stateKey && stored.conversations ? stored.conversations[stateKey] : undefined;
+    const chatMessages = memory?.chatMessages || persisted?.chatMessages || [];
+    const history = memory?.history || persisted?.history || [];
+    return {
+      conversationId: clean,
+      conversations: this.listConversationStates(),
+      conversationPlan: this.normalizeConversationPlan(memory?.plan || persisted?.plan),
+      chatMessages: [...chatMessages],
+      historyMessages: history.length,
+    };
+  }
+
+  public ensureConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {
+    this.saveWorkspaceConversationState();
+    const clean = this.safeConversationId(conversationId || 'default');
+    const stateKey = this.workspaceConversationStateKey(clean);
+    if (stateKey) {
+      const stored = this.readStoredConversationState();
+      stored.conversations = stored.conversations || {};
+      if (!stored.conversations[stateKey]) {
+        stored.conversations[stateKey] = {
+          title: this.titleFromMessages([], clean),
+          chatMessages: [],
+          history: [],
+          plan: { items: [] },
+          updatedAt: new Date().toISOString(),
+        };
+        this.writeStoredConversationState(stored);
+      }
+    }
+    return this.getConversationSnapshot(clean);
+  }
+
   public setConversationPinned(id: string, pinned: boolean): boolean {
     const clean = this.safeConversationId(id || 'default');
     this.saveWorkspaceConversationState();
@@ -676,17 +727,32 @@ export class Agent {
     }
   }
 
-  getConversationPlan(): ConversationPlanState {
+  getConversationPlan(conversationId = this.activeConversationId): ConversationPlanState {
+    if (this.safeConversationId(conversationId || 'default') !== this.safeConversationId(this.activeConversationId || 'default')) {
+      return this.getConversationSnapshot(conversationId).conversationPlan;
+    }
     return this.normalizeConversationPlan(this.conversationPlan);
   }
 
-  updateConversationPlan(plan: Partial<ConversationPlanState>): ConversationPlanState {
+  updateConversationPlan(plan: Partial<ConversationPlanState>, conversationId = this.activeConversationId): ConversationPlanState {
+    const clean = this.safeConversationId(conversationId || this.activeConversationId || 'default');
+    const previous = this.activeConversationId || 'default';
+    if (clean !== previous) {
+      this.saveWorkspaceConversationState();
+      this.activeConversationId = clean;
+      this.loadWorkspaceConversationState();
+    }
     this.conversationPlan = this.normalizeConversationPlan({
       items: Array.isArray(plan?.items) ? plan.items : [],
       updatedAt: new Date().toISOString(),
     });
     this.saveWorkspaceConversationState();
-    return this.getConversationPlan();
+    const updated = this.getConversationPlan(clean);
+    if (clean !== previous) {
+      this.activeConversationId = previous;
+      this.loadWorkspaceConversationState();
+    }
+    return updated;
   }
 
   isConversationLocked(): boolean {

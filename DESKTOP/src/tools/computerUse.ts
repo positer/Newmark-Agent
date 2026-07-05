@@ -28,6 +28,7 @@ export interface ComputerUseOptions {
   gradient_colors?: string[];
   gradient_speed?: number;
   gradient_width?: number;
+  invocation?: 'agent' | 'cli';
 }
 
 interface ObservedElement {
@@ -123,7 +124,7 @@ function stopTakeoverOverlay(): void {
   runPowerShell(script, 7000);
 }
 
-function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?: number; width?: number } = {}): Record<string, unknown> {
+function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?: number; width?: number; ownerPid?: number } = {}): Record<string, unknown> {
   if (process.platform !== 'win32') return { ok: false, action: 'takeover_start', error: 'Computer Use takeover overlay is Windows-only.' };
   stopTakeoverOverlay();
   lastTakeoverOverlayStyle = { colors: input.colors, speed: input.speed, width: input.width };
@@ -131,12 +132,12 @@ function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?
   const lifetime = Math.max(0, Math.floor(Number(durationMs || 0)));
   const width = Math.max(1, Math.min(24, Math.floor(Number(input.width || 2))));
   const speedSeconds = Math.max(0.25, Math.min(30, Number(input.speed || 2)));
-  const ownerPid = Math.max(1, Math.floor(process.pid || 0));
+  const ownerPid = Math.max(0, Math.floor(Number(input.ownerPid ?? process.pid) || 0));
   const scriptPath = path.join(tempScreenshotDir(), `takeover-overlay-${timestampName()}-${crypto.randomBytes(4).toString('hex')}.ps1`);
   const script = [
     'Add-Type -AssemblyName System.Windows.Forms',
     'Add-Type -AssemblyName System.Drawing',
-    'Add-Type @\'',
+    'Add-Type -ReferencedAssemblies @("System.Windows.Forms", "System.Drawing") -TypeDefinition @\'',
     'using System;',
     'using System.Drawing;',
     'using System.Windows.Forms;',
@@ -179,12 +180,13 @@ function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?
     '$script:form.ShowInTaskbar = $false',
     '$script:form.TopMost = $true',
     '$script:form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual',
-    '$script:form.Bounds = New-Object System.Drawing.Rectangle($bounds.Left, $bounds.Top, $bounds.Width, $bounds.Height)',
+    '$script:form.Bounds = [System.Drawing.Rectangle]::new($bounds.Left, $bounds.Top, $bounds.Width, $bounds.Height)',
     '$regionPath = New-Object System.Drawing.Drawing2D.GraphicsPath',
-    '$regionPath.AddRectangle((New-Object System.Drawing.Rectangle(0, 0, $bounds.Width, $script:thick)))',
-    '$regionPath.AddRectangle((New-Object System.Drawing.Rectangle(($bounds.Width - $script:thick), 0, $script:thick, $bounds.Height)))',
-    '$regionPath.AddRectangle((New-Object System.Drawing.Rectangle(0, ($bounds.Height - $script:thick), $bounds.Width, $script:thick)))',
-    '$regionPath.AddRectangle((New-Object System.Drawing.Rectangle(0, 0, $script:thick, $bounds.Height)))',
+    '$regionPath.FillMode = [System.Drawing.Drawing2D.FillMode]::Winding',
+    '$regionPath.AddRectangle([System.Drawing.Rectangle]::new(0, 0, $bounds.Width, $script:thick))',
+    '$regionPath.AddRectangle([System.Drawing.Rectangle]::new(($bounds.Width - $script:thick), 0, $script:thick, $bounds.Height))',
+    '$regionPath.AddRectangle([System.Drawing.Rectangle]::new(0, ($bounds.Height - $script:thick), $bounds.Width, $script:thick))',
+    '$regionPath.AddRectangle([System.Drawing.Rectangle]::new(0, 0, $script:thick, $bounds.Height))',
     '$script:form.Region = New-Object System.Drawing.Region($regionPath)',
     '$regionPath.Dispose()',
     '$script:form.BackColor = [System.Drawing.Color]::Black',
@@ -305,7 +307,18 @@ function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?
     return { ok: false, action: 'takeover_start', error: result.error?.message || result.stderr || result.stdout || `overlay start exited ${result.status}` };
   }
   takeoverOverlayPid = pid;
-  return { ok: true, action: 'takeover_start', takeover: true, overlay: { pid, owner_pid: ownerPid, duration_ms: lifetime, indicator: 'desktop-edge-dynamic-gradient', mode: 'single-click-through-virtual-screen-overlay', lifecycle: 'owner-process-bound', width_px: width, speed_s: speedSeconds, colors } };
+  const aliveCheck = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `Start-Sleep -Milliseconds 500; if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { 'alive' } else { 'dead' }`], {
+    encoding: 'utf-8',
+    timeout: 3000,
+    windowsHide: true,
+  });
+  if (!String(aliveCheck.stdout || '').includes('alive')) {
+    takeoverOverlayPid = null;
+    try { fs.unlinkSync(scriptPath); } catch {}
+    return { ok: false, action: 'takeover_start', error: `overlay process exited during startup${aliveCheck.stderr ? `: ${aliveCheck.stderr}` : ''}`, overlay: { pid, owner_pid: ownerPid } };
+  }
+  const lifecycle = ownerPid > 0 ? 'owner-process-bound' : 'duration-bound';
+  return { ok: true, action: 'takeover_start', takeover: true, overlay: { pid, owner_pid: ownerPid, duration_ms: lifetime, indicator: 'desktop-edge-dynamic-gradient', mode: 'single-click-through-virtual-screen-overlay', lifecycle, width_px: width, speed_s: speedSeconds, colors } };
 }
 
 function pulseTakeoverOverlay(): void {
@@ -816,10 +829,12 @@ export function runComputerUse(options: ComputerUseOptions): string {
   if (process.platform !== 'win32') {
     result = { ok: false, action, error: 'computer_use currently supports native desktop control on Windows only.' };
   } else if (action === 'takeover_start') {
-    result = startTakeoverOverlay(Number(options.durationMs || options.duration_ms || 0), {
+    const durationMs = Number(options.durationMs || options.duration_ms || 0);
+    result = startTakeoverOverlay(durationMs, {
       colors: options.gradientColors || options.gradient_colors,
       speed: options.gradientSpeed ?? options.gradient_speed,
       width: options.gradientWidth ?? options.gradient_width,
+      ownerPid: options.invocation === 'cli' && durationMs > 0 ? 0 : process.pid,
     });
   } else if (action === 'takeover_stop') {
     stopTakeoverOverlay();

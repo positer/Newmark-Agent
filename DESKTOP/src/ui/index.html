@@ -6036,18 +6036,22 @@ function setupAgentWorkEvents() {
   });
 }
 
-function loadActiveConversationMessages() {
+function loadActiveConversationMessages(conversationId) {
   if (!api.getState) return Promise.resolve();
-  return api.getState().then(function(s) {
+  var requestedConversationId = String(conversationId || activeConversationId() || 'default');
+  return api.getState(requestedConversationId).then(function(s) {
     if (s && s.chatMessages) renderChatMessages(s.chatMessages);
-    if (s && s.conversationId) state.activeBackendConversationId = s.conversationId;
-    markConversationTracked(s && s.conversationId ? s.conversationId : activeConversationId(), state.conversationTrackMs || 300000);
+    if (s && s.conversationId) {
+      state.activeBackendConversationId = s.conversationId;
+      applyBackendConversations(s.conversations || [], s.conversationId || requestedConversationId);
+    }
+    markConversationTracked(s && s.conversationId ? s.conversationId : requestedConversationId, state.conversationTrackMs || 300000);
     if (s && s.queued) {
       state.backendQueue = s.queued;
       if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
     }
     if (s && Array.isArray(s.workEvents)) {
-      var eventConversationId = String(s.conversationId || activeConversationId() || 'default');
+      var eventConversationId = String(s.conversationId || requestedConversationId || 'default');
       if (!state.agentWorkEventsByConversation) state.agentWorkEventsByConversation = {};
       var existingEvents = state.agentWorkEventsByConversation[eventConversationId] || [];
       var mergedEvents = existingEvents.concat(s.workEvents || []);
@@ -6442,10 +6446,8 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     els.prompt.value = '';
     if (includePromptAttachments) clearPromptAttachments();
     state.nextPrompt = text;
+    state.queueCollapsed = false;
     window.renderInputStack();
-    addMsg('user', '[Next queued] ' + text, effectiveInputMode, state.model);
-    if (!state._sendInFlight) addMsg('assistant', '[Next] Queued for the next Build turn.', 'next', state.model);
-    else addMsg('system', '[Queue] Current turn is locked; prompt will run after it completes.', 'system', state.model);
     return;
   }
 
@@ -6516,7 +6518,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     }
   }
   if (api.getState) {
-    api.getState().then(function(s) {
+    api.getState(lockedConversationId).then(function(s) {
       if (s && s.contextCompression !== undefined) {
         state.contextCompression = s.contextCompression;
         window.renderContextCompression();
@@ -6537,7 +6539,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
       }
       if (s && s.conversations) {
-        applyBackendConversations(s.conversations || [], s.conversationId || activeConversationId() || lockedConversationId);
+        applyBackendConversations(s.conversations || [], s.conversationId || lockedConversationId);
         renderConversations();
       }
       if (state.rightTab === 'status') window.renderRightStatusPanel();
@@ -6933,7 +6935,7 @@ window.refreshConversationPlan = function() {
     window.renderConversationPlan();
     return;
   }
-  api.getConversationPlan().then(function(plan) {
+  api.getConversationPlan(activeConversationId()).then(function(plan) {
     state.conversationPlan = normalizeConversationPlan(plan);
     window.renderConversationPlan();
   }).catch(function(err) {
@@ -6946,7 +6948,7 @@ window.persistConversationPlan = function() {
   window.renderConversationPlan();
   if (window.renderInputStack) window.renderInputStack();
   if (!api.updateConversationPlan) return Promise.resolve(state.conversationPlan);
-  return api.updateConversationPlan(state.conversationPlan).then(function(plan) {
+  return api.updateConversationPlan(state.conversationPlan, activeConversationId()).then(function(plan) {
     state.conversationPlan = normalizeConversationPlan(plan);
     window.renderConversationPlan();
     if (window.renderInputStack) window.renderInputStack();
@@ -7072,7 +7074,7 @@ window.refreshRightStatus = function() {
     window.renderRightStatusPanel();
     return;
   }
-  api.getState().then(function(s) {
+  api.getState(activeConversationId()).then(function(s) {
     if (s && s.mode) state.mode = s.mode;
     if (s && s.model !== undefined) state.model = s.model;
     if (s && s.modelLabel) state.modelLabel = s.modelLabel;
@@ -9356,6 +9358,14 @@ function setActiveWorkspaceConversation(idx) {
   state.conversations = convs;
 }
 
+function setActiveWorkspaceConversationById(id) {
+  var convs = currentWorkspaceConversations();
+  if (!convs.length) return;
+  var targetId = String(id || '');
+  var idx = convs.findIndex(function(c) { return String(c && c.id || '') === targetId; });
+  setActiveWorkspaceConversation(idx >= 0 ? idx : 0);
+}
+
 function holdForegroundConversation(id, ms) {
   state.foregroundConversationHoldId = String(id || '');
   state.foregroundConversationHoldUntil = Date.now() + (ms || 4500);
@@ -9393,11 +9403,16 @@ function applyBackendConversations(items, activeId) {
 function syncBackendConversation() {
   var convs = currentWorkspaceConversations();
   var conv = convs[state.activeConversation] || convs[0];
-  if (conv && api.setConversation) {
-    return api.setConversation(conv.id).then(function(id) {
-      state.activeBackendConversationId = id || conv.id;
-      return loadActiveConversationMessages();
+  if (conv && api.ensureConversation) {
+    return api.ensureConversation(conv.id).then(function(s) {
+      var id = (s && s.conversationId) || conv.id;
+      state.activeBackendConversationId = id;
+      return loadActiveConversationMessages(id);
     }).catch(function(){});
+  }
+  if (conv) {
+    state.activeBackendConversationId = conv.id;
+    return loadActiveConversationMessages(conv.id);
   }
   return Promise.resolve();
 }
@@ -9440,7 +9455,9 @@ function renderConversations() {
     return;
   }
   var conversations = currentWorkspaceConversations();
-  setActiveWorkspaceConversation(state.workspaceActiveConversation[currentWorkspaceKey()] || 0);
+  var activeBeforeRender = (conversations.find(function(c) { return c && c.active; }) || {}).id;
+  if (activeBeforeRender) setActiveWorkspaceConversationById(activeBeforeRender);
+  else setActiveWorkspaceConversation(state.workspaceActiveConversation[currentWorkspaceKey()] || 0);
   for (var i = 0; i < conversations.length; i++) {
     var conv = conversations[i];
     var div = document.createElement('div');
@@ -9607,7 +9624,7 @@ window.toggleConversationPinned = function(idx) {
   conv.pinnedAt = nextPinned ? new Date().toISOString() : '';
   renderConversations();
   api.setConversationPinned(conv.id, nextPinned).then(function() {
-    return api.getState ? api.getState() : null;
+    return api.getState ? api.getState(activeConversationId()) : null;
   }).then(function(s) {
     if (s) applyWorkspaceStateFromBackend(s);
   }).catch(function(){});
@@ -10349,7 +10366,7 @@ window.toggleWorkspacePinned = function(name) {
   }
   window.renderLeftWsList();
   api.setWorkspacePinned(name, nextPinned).then(function() {
-    return api.getState ? api.getState() : null;
+    return api.getState ? api.getState(activeConversationId()) : null;
   }).then(function(s) {
     if (s) applyWorkspaceStateFromBackend(s);
   }).catch(function(){});
@@ -10364,7 +10381,13 @@ function applyWorkspaceStateFromBackend(s) {
     state.currentWorkspace = s.workspaces.current.name || '';
     state.currentWorkspacePath = s.workspaces.current.path || '';
     ensureWorkspaceConversations(state.currentWorkspace);
-    applyBackendConversations(s.conversations || [], s.conversationId || state.activeBackendConversationId || 'default');
+    var backendConversations = s.conversations || [];
+    var localActiveId = activeConversationId();
+    var hasLocalActive = backendConversations.some(function(item) {
+      return String((item && (item.id || item.key)) || '') === String(localActiveId || '');
+    });
+    var preferredActiveId = hasLocalActive ? localActiveId : (s.conversationId || state.activeBackendConversationId || 'default');
+    applyBackendConversations(backendConversations, preferredActiveId);
   } else {
     state.currentWorkspace = '';
     state.currentWorkspacePath = '';
@@ -10376,7 +10399,7 @@ function applyWorkspaceStateFromBackend(s) {
 
 window.refreshWorkspaceState = async function() {
   if (!api.getState) return null;
-  var s = await api.getState();
+  var s = await api.getState(activeConversationId());
   applyWorkspaceStateFromBackend(s);
   return s;
 };
@@ -10613,7 +10636,16 @@ window.selectWorkspace = function(name) {
   if (wsBtn) wsBtn.title = name || 'Workspace';
   ensureWorkspaceConversations(name);
   window.renderConversations();
+  renderChatMessages([]);
+  state.conversationPlan = { items: [] };
+  state.backendQueue = { steering: [], followUp: [] };
+  state.nextQueue = [];
+  state.nextPrompt = '';
+  if (window.renderInputStack) window.renderInputStack();
   updateWorkspaceGate();
+  syncBackendConversation().then(function() {
+    if (state.rightTab === 'plan') window.renderConversationPlan();
+  }).catch(function(){});
 };
 
 window.switchToWorkspace = function(name) {
@@ -10933,7 +10965,7 @@ function stopMarqueeJS() {
 
   // Load state from backend
   try {
-    var s = await api.getState();
+    var s = await api.getState(activeConversationId());
     if (s) {
       state.mode = s.mode || 'build';
       state.model = s.model || '';

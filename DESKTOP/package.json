@@ -1,6 +1,6 @@
 {
   "name": "newmark-agent",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "main": "dist/main.js",
   "scripts": {
@@ -40,6 +40,8 @@
     "release:ui-memory-lab-smoke": "node scripts/release-ui-memory-lab-smoke.cjs",
     "release:ui-conversation-queue-plan-smoke": "node scripts/release-ui-conversation-queue-plan-smoke.cjs",
     "release:ui-fast-conversation-switch-smoke": "node scripts/release-ui-fast-conversation-switch-smoke.cjs",
+    "release:ui-workspace-conversation-isolation-smoke": "node scripts/release-ui-workspace-conversation-isolation-smoke.cjs",
+    "release:ui-multi-window-shared-backend-smoke": "node scripts/release-ui-multi-window-shared-backend-smoke.cjs",
     "release:ui-startup-recovery-smoke": "node scripts/release-ui-startup-recovery-smoke.cjs",
     "release:ui-goal-continuation-smoke": "node scripts/release-ui-goal-continuation-smoke.cjs",
     "release:ui-workspace-lifecycle-smoke": "node scripts/release-ui-workspace-lifecycle-smoke.cjs",

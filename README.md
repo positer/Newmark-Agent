@@ -5,7 +5,7 @@
 <h1 align="center">Newmark Agent</h1>
 
 <p align="center">
-  <a href="https://github.com/positer/Newmark-Agent/releases/latest"><img alt="Release" src="https://img.shields.io/badge/release-dev%201.0.0-blue"></a>
+  <a href="https://github.com/positer/Newmark-Agent/releases/latest"><img alt="Release" src="https://img.shields.io/badge/release-dev%201.0.1-blue"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-lightgrey">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
@@ -13,7 +13,7 @@
 
 Newmark Agent is a local-first desktop Agent workspace for coding, automation, repository review, model-provider experimentation, and controlled desktop operation. It packages an Electron desktop UI, a TypeScript Agent runtime, workspace-scoped conversations, Flow workflows, subagents, skills, archives, browser/GitHub/automation tools, and configurable OpenAI-compatible, Anthropic-compatible, and GitHub Models providers.
 
-The current public development release is **dev 1.0.0**. It is intended for technical users who want a portable Windows Agent app that runs against their own model credentials and keeps runtime state local.
+The current public development release is **dev 1.0.1**. It is intended for technical users who want a portable Windows Agent app that runs against their own model credentials and keeps runtime state local.
 
 ## At A Glance
 
@@ -32,8 +32,8 @@ The current public development release is **dev 1.0.0**. It is intended for tech
 
 | Package | Release |
 |---|---|
-| Windows portable | `Newmark-Agent-1.0.0-portable-x64.exe` |
-| Compiled zip pack | `Newmark-Agent-1.0.0-win-unpacked-x64.zip` |
+| Windows portable | `Newmark-Agent-1.0.1-portable-x64.exe` |
+| Compiled zip pack | `Newmark-Agent-1.0.1-win-unpacked-x64.zip` |
 
 Download the assets from the latest GitHub release. Run the portable executable directly; no installer is required for the dev release. The portable distribution includes `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
@@ -50,7 +50,7 @@ npm.cmd run dist:portable
 The packaged Windows executable is written to:
 
 ```text
-release/Newmark-Agent-1.0.0-portable-x64.exe
+release/Newmark-Agent-1.0.1-portable-x64.exe
 ```
 
 ## Configuration
@@ -131,17 +131,20 @@ npm.cmd run release:111-cli-smoke
 npm.cmd run release:111-ui-smoke
 npm.cmd run release:computer-use-vision-smoke
 npm.cmd run release:ui-media-md-smoke
+npm.cmd run release:ui-conversation-queue-plan-smoke
 npm.cmd run release:ui-fast-conversation-switch-smoke
+npm.cmd run release:ui-workspace-conversation-isolation-smoke
+npm.cmd run release:ui-multi-window-shared-backend-smoke
 ```
 
-The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the public dev package version is reset to `1.0.0`.
+The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the public dev package version is now `1.0.1`.
 
 Portable update dry-runs can be delegated to the packaged CLI before copying files:
 
 ```powershell
 release\win-unpacked\Newmark Agent.exe install-update --check-github --repo positer/Newmark-Agent
-release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 1.0.0 --dry-run
-release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 1.0.0 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 1.0.1 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 1.0.1 --dry-run
 ```
 
 The update helper preserves local state by default, including `config.json`, `Work/`, `skills/`, `Memory Lab/`, and `archive/`.
@@ -155,11 +158,11 @@ npm.cmd run release:real-apinebula-memory-switch-smoke
 npm.cmd run release:real-provider-stress
 ```
 
-## Dev 1.0.0 Notes
+## Dev 1.0.1 Notes
 
-The dev 1.0.0 reset keeps the current native TypeScript desktop Agent stack while publishing a clean public development baseline. The package includes the latest closed-loop Computer Use takeover border, exact-folder workspace uniqueness, GitHub audit/security prompts, explicit GitHub Models login, native OpenSSH workspace linking, message Markdown/formula rendering, rootless pasted-image attachments, persistent terminal takeover, layout memory, and native tool switches.
+The dev 1.0.1 release keeps the current native TypeScript desktop Agent stack while publishing the latest public development baseline. The package includes the latest shared-backend multi-window desktop flow, closed-loop Computer Use takeover border with startup liveness checks and filled corners, exact-folder workspace uniqueness, GitHub audit/security prompts, explicit GitHub Models login, native OpenSSH workspace linking, message Markdown/formula rendering, rootless pasted-image attachments, persistent terminal takeover, layout memory, and native tool switches.
 
-Release validation for this baseline should include source tests and portable packaging before GitHub publication. Computer Use desktop screenshots are one-time inputs only and must not be archived.
+Release validation for this baseline should include source tests and portable packaging before GitHub publication. Computer Use desktop screenshots are one-time inputs only and must not be archived. The current Computer Use takeover overlay compiles its WinForms form with explicit assembly references, checks startup liveness, keeps CLI timed overlays duration-bound, and uses a winding border region so the four corners stay closed.
 
 ## Repository Hygiene
 

@@ -591,6 +591,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     const result = await agent.tools.execute(toolName, JSON.stringify(toolArgs), wsDir, {
       mode: agent.mode,
       workspacePath: wsDir,
+      invocation: 'cli',
     });
     safeStdout(`${result}\n`);
     return true;

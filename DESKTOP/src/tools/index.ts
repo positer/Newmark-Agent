@@ -28,6 +28,7 @@ export interface ToolExecutionContext {
   workspacePath?: string;
   allowEphemeralVisionImage?: boolean;
   conversationId?: string;
+  invocation?: 'agent' | 'cli';
 }
 
 type ComputerUseLock = {
@@ -369,6 +370,7 @@ export class ToolExecutor {
             gradientColors: Array.isArray((args as Record<string, unknown>).gradient_colors) ? (args as Record<string, unknown>).gradient_colors as string[] : (this.config.get<string[]>('ui', 'gradient_colors') || []),
             gradientSpeed: (args as Record<string, unknown>).gradient_speed !== undefined ? Number((args as Record<string, unknown>).gradient_speed) : this.config.getNum('ui', 'gradient_speed'),
             gradientWidth: (args as Record<string, unknown>).gradient_width !== undefined ? Number((args as Record<string, unknown>).gradient_width) : this.config.getNum('ui', 'gradient_width'),
+            invocation: context.invocation,
           });
           if (action === 'takeover_stop') releaseComputerUseLock(action, owner);
           return output;

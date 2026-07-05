@@ -33,20 +33,35 @@ function resetConversationKernel(): void {
   conversationKernel = null;
 }
 
-function ensureConversationKernel(root: string, eventSender?: Electron.WebContents): ConversationKernel | null {
+function broadcastAgentWorkEvent(event: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    win.webContents.send('agent:workEvent', event);
+  }
+}
+
+function ensureConversationKernel(root: string): ConversationKernel | null {
   if (!agent) return null;
   if (!conversationKernel) {
     conversationKernel = new ConversationKernel(root, agent, automation);
-    conversationKernel.subscribe(event => {
-      const target = eventSender && !eventSender.isDestroyed()
-        ? eventSender
-        : mainWindow && !mainWindow.isDestroyed()
-          ? mainWindow.webContents
-          : null;
-      target?.send('agent:workEvent', event);
-    });
+    conversationKernel.subscribe(event => broadcastAgentWorkEvent(event));
   }
   return conversationKernel;
+}
+
+function stateConversationId(requested?: string): string {
+  return String(requested || agent?.activeConversationId || 'default');
+}
+
+function backendConversationState(conversationId?: string): Record<string, unknown> {
+  if (!agent) return {};
+  const target = stateConversationId(conversationId);
+  const snapshot = agent.getConversationSnapshot(target);
+  return {
+    ...snapshot,
+    queued: conversationKernel?.queued(snapshot.conversationId || target) || { steering: [], followUp: [] },
+    workEvents: conversationKernel?.events(snapshot.conversationId || target) || [],
+  };
 }
 
 const FALLBACK_TRAY_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAhklEQVQ4T2NkYPj/n4EBBJgYKAQMDAwM//79Y2RkZGQYmpqMgYGBgYEhJSWFgYGBAaoRAkZGRoZ///4x/Pr1CyrKwAhVwMDw798/BgYGBqgCRqgCBgaoKEYGBgYGqAJGqAIGSJQzMDAw/P79m4GRkZGBkZGRgaSADg0NZWBgYGCYOnUq8QENUQADAC3oSsHtAAAAAElFTkSuQmCC';
@@ -435,6 +450,7 @@ if (hasCliCommand) {
 } else {
   let sidecarProcess: ReturnType<typeof utilityProcess.fork> | null = null;
   const sidecarPassword = randomUUID();
+  let createDesktopWindow: (() => BrowserWindow | null) | null = null;
 
   async function startSidecar(root: string): Promise<number> {
     const sidecarPath = path.join(__dirname, 'sidecar.js');
@@ -467,6 +483,19 @@ if (hasCliCommand) {
       return 0;
     }
   }
+
+  const singleInstanceLock = app.requestSingleInstanceLock();
+  if (!singleInstanceLock) {
+    app.quit();
+  } else {
+  app.on('second-instance', () => {
+    const win = createDesktopWindow ? createDesktopWindow() : mainWindow;
+    if (win && !win.isDestroyed()) {
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    }
+  });
 
   app.whenReady().then(async () => {
     const root = resolveRoot(args);
@@ -509,61 +538,68 @@ if (hasCliCommand) {
       }
     });
 
-    mainWindow = new BrowserWindow({
-      width: 1600,
-      height: 1000,
-      minWidth: 1000,
-      minHeight: 650,
-      show: false,
-      frame: false,
-      title: 'Newmark Agent',
-      icon: themedAppIconPath(),
-      backgroundColor: '#0a0a1a',
-      webPreferences: {
-        preload: path.join(__dirname, 'preload.js'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: false,
-        webviewTag: true,
-      },
-    });
+    createDesktopWindow = () => {
+      const win = new BrowserWindow({
+        width: 1600,
+        height: 1000,
+        minWidth: 1000,
+        minHeight: 650,
+        show: false,
+        frame: false,
+        title: 'Newmark Agent',
+        icon: themedAppIconPath(),
+        backgroundColor: '#0a0a1a',
+        webPreferences: {
+          preload: path.join(__dirname, 'preload.js'),
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: false,
+          webviewTag: true,
+        },
+      });
 
-    mainWindow.loadFile(path.join(__dirname, 'ui', 'index.html'));
-    mainWindow.webContents.on('will-attach-webview', (event, webPreferences) => {
-      delete webPreferences.preload;
-      webPreferences.nodeIntegration = false;
-      webPreferences.contextIsolation = true;
-      webPreferences.sandbox = true;
-    });
-    if (!automationWakeMode) {
-      mainWindow.maximize();
-      mainWindow.show();
-      if (!app.isPackaged) mainWindow.webContents.openDevTools({ mode: 'bottom' });
-    }
-
-    mainWindow.on('close', (e) => {
-      if (_forceQuit) return;
-      if (agent) {
-        const closeBehavior = agent.config.getStr('general', 'close_behavior');
-        if (closeBehavior === 'minimize') {
-          e.preventDefault();
-          mainWindow?.hide();
-          createTray();
-          return;
-        }
-        if (agent.config.getBool('general', 'auto_archive_on_close')) {
-          agent.archiveSession();
-        }
+      if (!mainWindow || mainWindow.isDestroyed()) mainWindow = win;
+      win.loadFile(path.join(__dirname, 'ui', 'index.html'));
+      win.webContents.on('will-attach-webview', (event, webPreferences) => {
+        delete webPreferences.preload;
+        webPreferences.nodeIntegration = false;
+        webPreferences.contextIsolation = true;
+        webPreferences.sandbox = true;
+      });
+      if (!automationWakeMode) {
+        win.maximize();
+        win.show();
+        if (!app.isPackaged) win.webContents.openDevTools({ mode: 'bottom' });
       }
-    });
 
-    mainWindow.on('closed', () => {
-      if (sidecarProcess) {
-        sidecarProcess.kill();
-        sidecarProcess = null;
-      }
-      mainWindow = null;
-    });
+      win.on('close', (e) => {
+        if (_forceQuit) return;
+        if (agent) {
+          const closeBehavior = agent.config.getStr('general', 'close_behavior');
+          if (closeBehavior === 'minimize') {
+            e.preventDefault();
+            win.hide();
+            createTray();
+            return;
+          }
+          if (agent.config.getBool('general', 'auto_archive_on_close')) {
+            agent.archiveSession();
+          }
+        }
+      });
+
+      win.on('closed', () => {
+        const remaining = BrowserWindow.getAllWindows().filter(candidate => !candidate.isDestroyed() && candidate !== browserControlWindow);
+        if (mainWindow === win) mainWindow = remaining[0] || null;
+        if (!remaining.length && sidecarProcess) {
+          sidecarProcess.kill();
+          sidecarProcess = null;
+        }
+      });
+      return win;
+    };
+
+    mainWindow = createDesktopWindow();
 
     app.on('will-quit', () => {
       if (automationWake && automation) lastWakeSync = automationWake.sync(automation.list());
@@ -591,7 +627,7 @@ if (hasCliCommand) {
       if (!agent) return { tokens: [], error: 'Agent not initialized' };
       try {
         const targetConversation = String(conversationId || agent.activeConversationId || 'default');
-        const kernel = ensureConversationKernel(root, _event.sender);
+        const kernel = ensureConversationKernel(root);
         if (!kernel) return { tokens: [], error: 'Conversation kernel not initialized' };
         const queueMode = agent.inputMode === 'guide' ? 'steer' : 'followUp';
         const result = await kernel.prompt(message, targetConversation, {
@@ -701,6 +737,10 @@ if (hasCliCommand) {
     ipcMain.handle('agent:setConversation', async (_event, id: string) => {
       return agent?.setConversation(id);
     });
+    ipcMain.handle('agent:ensureConversation', async (_event, id: string) => {
+      if (!agent) return {};
+      return agent.ensureConversationSnapshot(id || agent.activeConversationId || 'default');
+    });
     ipcMain.handle('agent:updateGoal', async (_event, goal: string) => {
       if (agent) agent.updateGoal(goal);
       return agent?.goal;
@@ -710,19 +750,15 @@ if (hasCliCommand) {
       return agent?.toggleGoalPause();
     });
 
-    ipcMain.handle('agent:getState', async () => {
+    ipcMain.handle('agent:getState', async (_event, conversationId?: string) => {
       if (!agent) return {};
+      const conversationSnapshot = backendConversationState(conversationId);
       return {
         mode: agent.mode,
         model: agent.model,
         modelLabel: agent.modelLabel(),
         intelligence: agent.intelligence,
-        conversationId: agent.activeConversationId,
-        conversations: agent.listConversationStates(),
-        conversationPlan: agent.getConversationPlan(),
-        queued: conversationKernel?.queued(agent.activeConversationId || 'default') || { steering: [], followUp: [] },
-        workEvents: conversationKernel?.events(agent.activeConversationId || 'default') || [],
-        historyMessages: agent.history.length,
+        ...conversationSnapshot,
         conversationLocked: agent.isConversationLocked(),
         status: agent.status,
         goal: agent.goal,
@@ -784,14 +820,14 @@ if (hasCliCommand) {
       };
     });
 
-    ipcMain.handle('agent:getConversationPlan', async () => {
+    ipcMain.handle('agent:getConversationPlan', async (_event, conversationId?: string) => {
       if (!agent) return { items: [] };
-      return agent.getConversationPlan();
+      return agent.getConversationPlan(conversationId || agent.activeConversationId || 'default');
     });
 
-    ipcMain.handle('agent:updateConversationPlan', async (_event, plan: Record<string, unknown>) => {
+    ipcMain.handle('agent:updateConversationPlan', async (_event, plan: Record<string, unknown>, conversationId?: string) => {
       if (!agent) return { items: [] };
-      return agent.updateConversationPlan(plan as any);
+      return agent.updateConversationPlan(plan as any, conversationId || agent.activeConversationId || 'default');
     });
 
     ipcMain.handle('agent:setConversationPinned', async (_event, id: string, pinned: boolean) => {
@@ -1488,32 +1524,35 @@ if (hasCliCommand) {
     });
 
     ipcMain.handle('app:minimize', () => {
+      const win = BrowserWindow.getFocusedWindow() || mainWindow;
       const closeBehavior = agent?.config.getStr('general', 'close_behavior');
       if (closeBehavior === 'minimize') {
-        mainWindow?.hide();
+        win?.hide();
         createTray();
       } else {
-        mainWindow?.minimize();
+        win?.minimize();
       }
     });
     ipcMain.handle('app:maximize', () => {
-      if (mainWindow?.isMaximized()) mainWindow.unmaximize();
-      else mainWindow?.maximize();
+      const win = BrowserWindow.getFocusedWindow() || mainWindow;
+      if (win?.isMaximized()) win.unmaximize();
+      else win?.maximize();
     });
     ipcMain.handle('app:close', () => {
+      const win = BrowserWindow.getFocusedWindow() || mainWindow;
       const closeBehavior = agent?.config.getStr('general', 'close_behavior');
       if (closeBehavior === 'minimize') {
-        mainWindow?.hide();
+        win?.hide();
         createTray();
       } else {
-        _forceQuit = true;
-        app.quit();
+        win?.close();
       }
     });
     ipcMain.handle('app:drag', () => {
       // Window drag is handled by the renderer
     });
   });
+  }
 }
 
 app.on('window-all-closed', () => {

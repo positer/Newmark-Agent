@@ -115,7 +115,7 @@ async function waitFor(cdp, expression, timeoutMs, label) {
 }
 
 function backendConversationHas(conversationId, includeText, excludeText = '') {
-  return `window.api.setConversation(${JSON.stringify(conversationId)}).then(() => window.api.getState()).then(s => {
+  return `window.api.setConversation(${JSON.stringify(conversationId)}).then(() => window.api.getState(${JSON.stringify(conversationId)})).then(s => {
     const messages = (s && Array.isArray(s.chatMessages)) ? s.chatMessages : [];
     const body = messages.map(m => String(m.content || '')).join('\\n');
     return s && s.conversationId === ${JSON.stringify(conversationId)} &&
@@ -125,10 +125,19 @@ function backendConversationHas(conversationId, includeText, excludeText = '') {
 }
 
 function renderBackendConversation(conversationId) {
-  return `window.api.setConversation(${JSON.stringify(conversationId)}).then(() => window.api.getState()).then(s => {
+  return `window.api.setConversation(${JSON.stringify(conversationId)}).then(() => window.api.getState(${JSON.stringify(conversationId)})).then(s => {
     if (window.renderChatMessages) window.renderChatMessages((s && s.chatMessages) || []);
     return s && s.conversationId === ${JSON.stringify(conversationId)};
   })`;
+}
+
+function switchConversationById(conversationId) {
+  return `(() => {
+    const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(conversationId)});
+    if (idx < 0) throw new Error('conversation missing before switch: ' + ${JSON.stringify(conversationId)});
+    window.switchConversation(idx);
+    return true;
+  })()`;
 }
 
 async function captureScreenshot(cdp) {
@@ -348,29 +357,31 @@ async function runUiCheck(root) {
       window.addConversationPlanItem();
       return true;
     })()`, 30000);
-    await waitFor(cdp, `window.api.getConversationPlan().then(p => p.items && p.items.some(i => i.text === 'PLAN_ITEM_CONV1_20260628'))`, 30000, 'conversation 1 plan persisted');
+    const planConvA = await evaluate(cdp, `activeConversationId()`, 30000);
+    await waitFor(cdp, `window.api.getConversationPlan(${JSON.stringify(planConvA)}).then(p => p.items && p.items.some(i => i.text === 'PLAN_ITEM_CONV1_20260628'))`, 30000, 'conversation 1 plan persisted');
     log('conversation 1 plan persisted');
 
     await evaluate(cdp, `window.newConversation()`, 30000);
-    await waitFor(cdp, `window.api.getConversationPlan().then(p => p.items && p.items.length === 0)`, 30000, 'new conversation empty plan');
+    const planConvB = await evaluate(cdp, `activeConversationId()`, 30000);
+    await waitFor(cdp, `window.api.getConversationPlan(${JSON.stringify(planConvB)}).then(p => p.items && p.items.length === 0)`, 30000, 'new conversation empty plan');
     await evaluate(cdp, `window.switchRightTab('plan')`, 30000);
     await evaluate(cdp, `(() => {
       document.querySelector('#conversation-plan-input').value = 'PLAN_ITEM_CONV2_20260628';
       window.addConversationPlanItem();
       return true;
     })()`, 30000);
-    await waitFor(cdp, `window.api.getConversationPlan().then(p => p.items && p.items.some(i => i.text === 'PLAN_ITEM_CONV2_20260628'))`, 30000, 'conversation 2 plan persisted');
+    await waitFor(cdp, `window.api.getConversationPlan(${JSON.stringify(planConvB)}).then(p => p.items && p.items.some(i => i.text === 'PLAN_ITEM_CONV2_20260628'))`, 30000, 'conversation 2 plan persisted');
     log('conversation 2 plan persisted');
 
-    await evaluate(cdp, `window.switchConversation(0)`, 30000);
-    await waitFor(cdp, `window.api.getConversationPlan().then(p => {
+    await evaluate(cdp, switchConversationById(planConvA), 30000);
+    await waitFor(cdp, `window.api.getConversationPlan(${JSON.stringify(planConvA)}).then(p => {
       const text = (p.items || []).map(i => i.text).join('\\n');
       return text.includes('PLAN_ITEM_CONV1_20260628') && !text.includes('PLAN_ITEM_CONV2_20260628');
     })`, 30000, 'conversation 1 plan restored without conversation 2 leakage');
     log('conversation plan isolation ok');
 
-    await evaluate(cdp, `window.switchConversation(0)`, 30000);
-    const convA = await evaluate(cdp, `window.api.getState().then(s => s.conversationId)`, 30000);
+    await evaluate(cdp, switchConversationById(planConvA), 30000);
+    const convA = await evaluate(cdp, `window.api.getState(activeConversationId()).then(s => s.conversationId)`, 30000);
     await evaluate(cdp, `(() => {
       window.setInputMode('guide');
       const prompt = document.querySelector('#prompt');
@@ -379,8 +390,8 @@ async function runUiCheck(root) {
       return true;
     })()`, 30000);
     await waitFor(cdp, `(() => window.state && window.state.runningConversations && window.state.runningConversations[${JSON.stringify(convA)}] === true)()`, 10000, 'conversation A send in flight');
-    await evaluate(cdp, `window.switchConversation(1)`, 30000);
-    const convB = await evaluate(cdp, `window.api.getState().then(s => s.conversationId)`, 30000);
+    await evaluate(cdp, switchConversationById(planConvB), 30000);
+    const convB = await evaluate(cdp, `window.api.getState(activeConversationId()).then(s => s.conversationId)`, 30000);
     if (convB === convA) fail(`conversation did not switch during active turn: ${convA}`);
     await evaluate(cdp, `(() => {
       const prompt = document.querySelector('#prompt');
@@ -410,7 +421,7 @@ async function runUiCheck(root) {
       window.switchConversation(idx);
       return true;
     })()`, 30000);
-    await waitFor(cdp, `window.api.getState().then(s => s.conversationId === ${JSON.stringify(convA)})`, 30000, 'conversation A selected before long run');
+    await waitFor(cdp, `window.api.getState(${JSON.stringify(convA)}).then(s => s.conversationId === ${JSON.stringify(convA)})`, 30000, 'conversation A selected before long run');
     await evaluate(cdp, `(() => {
       const prompt = document.querySelector('#prompt');
       prompt.value = 'LONG_PARALLEL_CONV_A_20260701';
@@ -425,7 +436,7 @@ async function runUiCheck(root) {
       window.switchConversation(idx);
       return true;
     })()`, 30000);
-    await waitFor(cdp, `window.api.getState().then(s => s.conversationId === ${JSON.stringify(convB)})`, 30000, 'conversation B selected during long A run');
+    await waitFor(cdp, `window.api.getState(${JSON.stringify(convB)}).then(s => s.conversationId === ${JSON.stringify(convB)})`, 30000, 'conversation B selected during long A run');
     await evaluate(cdp, `(() => {
       const prompt = document.querySelector('#prompt');
       prompt.value = 'LONG_PARALLEL_CONV_B_20260701';
@@ -556,8 +567,15 @@ async function runUiCheck(root) {
     await waitFor(cdp, `(() => {
       const panel = document.querySelector('#queue-panel');
       const label = document.querySelector('#queue-header-label');
-      return panel && panel.style.display !== 'none' && label && label.textContent.includes('1') && document.body.innerText.includes('[Next queued] QUEUE_SECOND_AUTO_BUILD');
-    })()`, 10000, 'queued input visible');
+      const input = document.querySelector('#queue-list .queue-edit');
+      const chat = document.querySelector('#chat-area')?.innerText || '';
+      return panel && panel.style.display !== 'none' &&
+        !panel.classList.contains('collapsed') &&
+        label && label.textContent.includes('1') &&
+        input && input.value === 'QUEUE_SECOND_AUTO_BUILD' &&
+        !chat.includes('[Next queued] QUEUE_SECOND_AUTO_BUILD') &&
+        !chat.includes('[Queue] Current turn is locked');
+    })()`, 10000, 'queued input visible in bottom queue only');
     await waitFor(cdp, `(() => {
       const body = document.querySelector('#chat-area')?.innerText || '';
       const panel = document.querySelector('#queue-panel');
@@ -582,8 +600,8 @@ async function runUiCheck(root) {
     })()`, 45000, 'queued turn drained into next Build turn');
     log('input queue drain ok');
 
-    await evaluate(cdp, `window.switchConversation(1)`, 30000);
-    await waitFor(cdp, `window.api.getConversationPlan().then(p => {
+    await evaluate(cdp, switchConversationById(convB), 30000);
+    await waitFor(cdp, `window.api.getConversationPlan(${JSON.stringify(convB)}).then(p => {
       const text = (p.items || []).map(i => i.text).join('\\n');
       return text.includes('PLAN_ITEM_CONV2_20260628') && !text.includes('PLAN_ITEM_CONV1_20260628');
     })`, 30000, 'conversation 2 plan restored');

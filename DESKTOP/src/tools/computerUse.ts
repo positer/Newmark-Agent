@@ -108,8 +108,17 @@ function gradientPalette(input?: string[]): string[] {
 function stopTakeoverOverlay(): void {
   const pid = takeoverOverlayPid;
   takeoverOverlayPid = null;
-  if (!pid) return;
-  runPowerShell(`try { Stop-Process -Id ${Math.floor(pid)} -Force -ErrorAction SilentlyContinue } catch {}; Write-Output 'overlay-stopped'`, 5000);
+  const explicitPid = pid && Number.isFinite(pid) && pid > 0 ? Math.floor(pid) : 0;
+  const script = [
+    '$stopped = 0',
+    explicitPid ? `try { Stop-Process -Id ${explicitPid} -Force -ErrorAction SilentlyContinue; $stopped++ } catch {}` : '',
+    "$targets = Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^powershell(\\.exe)?$' -and $_.CommandLine -like '*takeover-overlay-*.ps1*' }",
+    'foreach ($p in $targets) {',
+    '  try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue; $stopped++ } catch {}',
+    '}',
+    'Write-Output "overlay-stopped:$stopped"',
+  ].filter(Boolean).join('\r\n');
+  runPowerShell(script, 7000);
 }
 
 function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?: number; width?: number } = {}): Record<string, unknown> {
@@ -120,6 +129,7 @@ function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?
   const lifetime = Math.max(0, Math.floor(Number(durationMs || 0)));
   const width = Math.max(1, Math.min(24, Math.floor(Number(input.width || 2))));
   const speedSeconds = Math.max(0.25, Math.min(30, Number(input.speed || 2)));
+  const ownerPid = Math.max(1, Math.floor(process.pid || 0));
   const scriptPath = path.join(tempScreenshotDir(), `takeover-overlay-${timestampName()}-${crypto.randomBytes(4).toString('hex')}.ps1`);
   const script = [
     'Add-Type -AssemblyName System.Windows.Forms',
@@ -147,8 +157,10 @@ function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?
     'foreach ($hex in $colorHex) { $colors.Add([System.Drawing.ColorTranslator]::FromHtml($hex)) | Out-Null }',
     `$thick = ${width}`,
     `$speedSeconds = ${speedSeconds.toFixed(3)}`,
+    `$ownerPid = ${ownerPid}`,
     '$script:colors = $colors',
     '$script:thick = $thick',
+    '$script:ownerPid = $ownerPid',
     '$script:form = New-Object System.Windows.Forms.Form',
     '$script:form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None',
     '$script:form.ShowInTaskbar = $false',
@@ -196,31 +208,38 @@ function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?
     '      [int][Math]::Round($a.B + (($b.B - $a.B) * $t))',
     '    )',
     '  }',
-    '  $perimeter = [Math]::Max(1, (2 * $w) + (2 * $h))',
-    '  $offsetPixels = (($script:stopwatch.Elapsed.TotalSeconds / $speedSeconds) * $perimeter) % $perimeter',
-    '  function Newmark-ColorAtDistance([double]$distance) {',
-    '    $wrappedDistance = ($distance + $offsetPixels) % $perimeter',
+    '  $perimeter = [Math]::Max(1.0, (2.0 * $w) + (2.0 * $h))',
+    '  $clockwiseOffset = (($script:stopwatch.Elapsed.TotalSeconds / $speedSeconds) * $perimeter) % $perimeter',
+    '  function Newmark-ClockwiseBorderColor([double]$distance) {',
+    '    $wrappedDistance = ($distance - $clockwiseOffset) % $perimeter',
     '    if ($wrappedDistance -lt 0) { $wrappedDistance += $perimeter }',
     '    return Newmark-LerpColor (($wrappedDistance / $perimeter) * $count)',
     '  }',
-    '  $step = [Math]::Max(1, [int][Math]::Min(4, [Math]::Max(1, $script:thick)))',
-    '  for ($x = 0; $x -lt $w; $x += $step) {',
-    '    $rw = [Math]::Min($step, $w - $x)',
-    '    $color = Newmark-ColorAtDistance $x',
+    '  $step = [Math]::Max(1, [int][Math]::Min(2, [Math]::Max(1, $script:thick)))',
+    '  for ($distance = 0.0; $distance -lt $perimeter; $distance += $step) {',
+    '    $color = Newmark-ClockwiseBorderColor ($distance + ($step / 2.0))',
     '    $brush = New-Object System.Drawing.SolidBrush($color)',
-    '    try { $g.FillRectangle($brush, $x, 0, $rw, $script:thick) } finally { $brush.Dispose() }',
-    '    $color = Newmark-ColorAtDistance (($w + $h) + ($w - $x))',
-    '    $brush = New-Object System.Drawing.SolidBrush($color)',
-    '    try { $g.FillRectangle($brush, $x, $h - $script:thick, $rw, $script:thick) } finally { $brush.Dispose() }',
-    '  }',
-    '  for ($y = 0; $y -lt $h; $y += $step) {',
-    '    $rh = [Math]::Min($step, $h - $y)',
-    '    $color = Newmark-ColorAtDistance ($w + $y)',
-    '    $brush = New-Object System.Drawing.SolidBrush($color)',
-    '    try { $g.FillRectangle($brush, $w - $script:thick, $y, $script:thick, $rh) } finally { $brush.Dispose() }',
-    '    $color = Newmark-ColorAtDistance (($w + $h + $w) + ($h - $y))',
-    '    $brush = New-Object System.Drawing.SolidBrush($color)',
-    '    try { $g.FillRectangle($brush, 0, $y, $script:thick, $rh) } finally { $brush.Dispose() }',
+    '    try {',
+    '      if ($distance -lt $w) {',
+    '        $x = [int][Math]::Floor($distance)',
+    '        $rw = [Math]::Min($step, $w - $x)',
+    '        $g.FillRectangle($brush, $x, 0, $rw, $script:thick)',
+    '      } elseif ($distance -lt ($w + $h)) {',
+    '        $y = [int][Math]::Floor($distance - $w)',
+    '        $rh = [Math]::Min($step, $h - $y)',
+    '        $g.FillRectangle($brush, $w - $script:thick, $y, $script:thick, $rh)',
+    '      } elseif ($distance -lt ((2.0 * $w) + $h)) {',
+    '        $x = [int][Math]::Ceiling($w - ($distance - ($w + $h)))',
+    '        $rw = [Math]::Min($step, [Math]::Max(1, $x))',
+    '        $left = [Math]::Max(0, $x - $rw)',
+    '        $g.FillRectangle($brush, $left, $h - $script:thick, $rw, $script:thick)',
+    '      } else {',
+    '        $y = [int][Math]::Ceiling($h - ($distance - ((2.0 * $w) + $h)))',
+    '        $rh = [Math]::Min($step, [Math]::Max(1, $y))',
+    '        $top = [Math]::Max(0, $y - $rh)',
+    '        $g.FillRectangle($brush, 0, $top, $script:thick, $rh)',
+    '      }',
+    '    } finally { $brush.Dispose() }',
     '  }',
     '})',
     '$timer = New-Object System.Windows.Forms.Timer',
@@ -229,9 +248,21 @@ function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?
     '  $script:form.Invalidate()',
     '})',
     '$timer.Start()',
+    '$ownerTimer = New-Object System.Windows.Forms.Timer',
+    '$ownerTimer.Interval = 1000',
+    '$ownerTimer.Add_Tick({',
+    '  try {',
+    '    if ($script:ownerPid -gt 0 -and -not (Get-Process -Id $script:ownerPid -ErrorAction SilentlyContinue)) {',
+    '      $script:form.Close()',
+    '      [System.Windows.Forms.Application]::ExitThread()',
+    '    }',
+    '  } catch {}',
+    '})',
+    '$ownerTimer.Start()',
     lifetime > 0 ? `$closeTimer = New-Object System.Windows.Forms.Timer; $closeTimer.Interval = ${lifetime}; $closeTimer.Add_Tick({ $script:form.Close(); [System.Windows.Forms.Application]::ExitThread() }); $closeTimer.Start()` : '',
     '$script:form.Show()',
     '[System.Windows.Forms.Application]::Run()',
+    'try { Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue } catch {}',
   ].filter(Boolean).join('\r\n');
   fs.writeFileSync(scriptPath, `\uFEFF${script}`, 'utf8');
   const createCommand = [
@@ -253,7 +284,7 @@ function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?
     return { ok: false, action: 'takeover_start', error: result.error?.message || result.stderr || result.stdout || `overlay start exited ${result.status}` };
   }
   takeoverOverlayPid = pid;
-  return { ok: true, action: 'takeover_start', takeover: true, overlay: { pid, duration_ms: lifetime, indicator: 'desktop-edge-dynamic-gradient', mode: 'single-click-through-virtual-screen-overlay', width_px: width, speed_s: speedSeconds, colors } };
+  return { ok: true, action: 'takeover_start', takeover: true, overlay: { pid, owner_pid: ownerPid, duration_ms: lifetime, indicator: 'desktop-edge-dynamic-gradient', mode: 'single-click-through-virtual-screen-overlay', lifecycle: 'owner-process-bound', width_px: width, speed_s: speedSeconds, colors } };
 }
 
 function pulseTakeoverOverlay(): void {

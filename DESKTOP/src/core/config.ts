@@ -466,6 +466,7 @@ export function defaultModelConfig(modelName: string, display = modelName, descr
 }
 
 export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
+  const defaultShell = process.platform === 'win32' ? 'powershell' : 'bash';
   return JSON.parse(JSON.stringify({
     general: {
       tone: { _description: "Conversation style", _type: "choice", _values: ["strict_simple","casual_friendly"], value: "strict_simple" },
@@ -534,7 +535,7 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
       github_login: { _description: "GitHub token", _type: "string", value: "" },
     },
     terminal: {
-      default_shell: { _description: "Default shell", _type: "choice", _values: ["powershell","bash","cmd"], value: "powershell" },
+      default_shell: { _description: "Default shell", _type: "choice", _values: ["powershell","pwsh","bash","sh","cmd"], value: defaultShell },
       interrupt_timeout_ms: { _description: "Upper cap for Agent bash timeout_ms and terminal forced interruption in milliseconds; 0 means no cap/no forced timeout", _type: "integer", value: 0 },
     },
     tools: {

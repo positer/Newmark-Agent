@@ -122,8 +122,11 @@ export class ToolExecutor {
       },
     });
 
+    const shellDescription = process.platform === 'win32'
+      ? 'Run a shell command in Windows PowerShell. Use PowerShell syntax only (Get-ChildItem not dir /s, Get-Content not type, Set-Content not echo >, 2>$null not 2>nul, and `; if ($?) { ... }` instead of &&).'
+      : 'Run a shell command in bash on Linux/macOS. Use POSIX/bash syntax and normal Unix paths.';
     const tools = [
-      t('bash', 'Run a shell command. On Windows, use ONLY PowerShell syntax (Get-ChildItem not dir, Set-Content not echo>, etc). Optional timeout_ms lets the Agent choose this command timeout in milliseconds; 0 requests no limit, but a nonzero terminal.interrupt_timeout_ms setting is the upper cap. Valid PowerShell: Get-ChildItem, Get-Content, Set-Content, Remove-Item, New-Item, Move-Item, Copy-Item, Select-String, pwd, ls (alias), cd, mkdir. INVALID: dir /s, echo >, type, &&, 2>&1, 2>nul. Use `;` to chain commands.', { command: { type: 'string' }, timeout_ms: { type: 'number', description: 'Per-command timeout in milliseconds. 0 means no requested limit unless capped by settings.' } }, ['command']),
+      t('bash', `${shellDescription} Optional timeout_ms lets the Agent choose this command timeout in milliseconds; 0 requests no limit, but a nonzero terminal.interrupt_timeout_ms setting is the upper cap.`, { command: { type: 'string' }, timeout_ms: { type: 'number', description: 'Per-command timeout in milliseconds. 0 means no requested limit unless capped by settings.' } }, ['command']),
       t('pwd', 'Print working directory (current folder path)', {}, []),
       t('read', 'Read file contents. Use ABSOLUTE paths. The working directory is given in system prompt.', { path: { type: 'string' } }, ['path']),
       t('write', 'Write/create a file. Use ABSOLUTE paths.', { path: { type: 'string' }, content: { type: 'string' } }, ['path', 'content']),

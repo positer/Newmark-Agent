@@ -1,6 +1,7 @@
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
+import { spawnSync } from 'child_process';
 import { Agent } from './core/agent';
 import { AgentMode } from './core/types';
 import { AutomationManager } from './core/automation';
@@ -13,6 +14,48 @@ let automation: AutomationManager | null = null;
 function resolveAppPath(root: string, targetPath: string): string {
   if (!targetPath) return root;
   return path.isAbsolute(targetPath) ? targetPath : path.join(root, targetPath);
+}
+
+function defaultTerminalShell(): string {
+  return process.platform === 'win32' ? 'powershell' : 'bash';
+}
+
+function availableTerminalShells(): string[] {
+  return process.platform === 'win32' ? ['powershell', 'cmd', 'bash', 'pwsh'] : ['bash', 'sh', 'pwsh'];
+}
+
+function normalizeTerminalShell(shellId: string): string {
+  const requested = String(shellId || '').toLowerCase();
+  if (process.platform === 'win32') {
+    return availableTerminalShells().includes(requested) ? requested : 'powershell';
+  }
+  return availableTerminalShells().includes(requested) ? requested : 'bash';
+}
+
+function runShellCommand(command: string, shellId: string, cwd: string): { output: string; error?: string } {
+  const requested = normalizeTerminalShell(shellId || defaultTerminalShell());
+  const linuxShell = process.env.SHELL || '/bin/bash';
+  const exe =
+    requested === 'cmd' ? 'cmd.exe' :
+    requested === 'bash' ? (process.platform === 'win32' ? 'bash.exe' : linuxShell) :
+    requested === 'sh' ? '/bin/sh' :
+    requested === 'pwsh' ? (process.platform === 'win32' ? 'pwsh.exe' : 'pwsh') :
+    'powershell.exe';
+  const args =
+    requested === 'cmd' ? ['/d', '/s', '/c', command] :
+    requested === 'bash' ? ['-lc', command] :
+    requested === 'sh' ? ['-c', command] :
+    ['-NoProfile', '-NonInteractive', '-Command', command];
+  const result = spawnSync(exe, args, {
+    cwd,
+    encoding: 'utf-8',
+    timeout: 30000,
+    windowsHide: true,
+  });
+  const output = `${result.stdout || ''}${result.stderr || ''}`;
+  if (result.error) return { output, error: result.error.message };
+  if (result.status && result.status !== 0) return { output, error: output.trim() || `Shell exited ${result.status}` };
+  return { output };
 }
 
 function applyConfigPatch(cfg: Record<string, unknown>): void {
@@ -119,6 +162,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           automations: automation?.list() || [],
           contextCompression: agent.lastCompression,
           contextWindow: agent.contextWindow(),
+          platform: process.platform,
+          defaultTerminalShell: normalizeTerminalShell(agent.config.getStr('terminal', 'default_shell') || defaultTerminalShell()),
+          runtimeDefaultTerminalShell: defaultTerminalShell(),
+          terminalShells: availableTerminalShells(),
           chatMessages: agent.chatMessages,
           workspaces: { internal: agent.workspace.internal, external: agent.workspace.external, current: agent.workspace.current },
           providers: sanitizeProvidersForState(agent.config.providers()),
@@ -256,11 +303,9 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         return;
       }
       case '/api/bash': {
-        const { cmd, cwd } = JSON.parse(body || '{}');
+        const { cmd, command, shell, cwd } = JSON.parse(body || '{}');
         try {
-          const { execSync } = require('child_process');
-          const result = execSync(`powershell.exe -Command "${(cmd||'').replace(/"/g, '\\"')}"`, { cwd: cwd || agent.rootPath, encoding: 'utf-8', timeout: 30000 });
-          jsonResponse(res, { output: result });
+          jsonResponse(res, runShellCommand(String(command || cmd || ''), String(shell || ''), cwd || agent.rootPath));
         } catch(e: any) { jsonResponse(res, { output: e.stdout || '', error: e.stderr || String(e) }); }
         return;
       }

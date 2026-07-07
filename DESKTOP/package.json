@@ -1,10 +1,15 @@
 {
   "name": "newmark-agent",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
+  "homepage": "https://github.com/positer/Newmark-Agent",
+  "author": {
+    "name": "Newmark AI",
+    "email": "support@newmark.ai"
+  },
   "main": "dist/main.js",
   "scripts": {
-    "clean": "tsc --build --clean && if exist dist rmdir /s /q dist",
+    "clean": "tsc --build --clean && node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsc && node scripts/build-ui-icons.cjs",
     "build:clean": "npm run clean && npm run build",
     "dev": "npm run build && node dist/launcher.js --server",
@@ -42,6 +47,8 @@
     "release:ui-fast-conversation-switch-smoke": "node scripts/release-ui-fast-conversation-switch-smoke.cjs",
     "release:ui-workspace-conversation-isolation-smoke": "node scripts/release-ui-workspace-conversation-isolation-smoke.cjs",
     "release:ui-multi-window-shared-backend-smoke": "node scripts/release-ui-multi-window-shared-backend-smoke.cjs",
+    "release:linux-gui-smoke": "node scripts/release-linux-gui-smoke.cjs",
+    "release:linux-real-provider-smoke": "node scripts/release-linux-real-provider-smoke.cjs",
     "release:ui-startup-recovery-smoke": "node scripts/release-ui-startup-recovery-smoke.cjs",
     "release:ui-goal-continuation-smoke": "node scripts/release-ui-goal-continuation-smoke.cjs",
     "release:ui-workspace-lifecycle-smoke": "node scripts/release-ui-workspace-lifecycle-smoke.cjs",
@@ -110,6 +117,8 @@
       "artifactName": "Newmark-Agent-${version}-portable-${arch}.exe"
     },
     "linux": {
+      "icon": "assets/app-icon-dark.png",
+      "maintainer": "Newmark AI <support@newmark.ai>",
       "target": [
         "AppImage",
         "deb"

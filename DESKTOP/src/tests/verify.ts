@@ -85,6 +85,15 @@ function cleanup() {
       } catch {}
     }
   }
+  if (process.platform !== 'win32') {
+    try {
+      fs.rmSync(TEST_DIR, { recursive: true, force: true });
+      return;
+    } catch (e) {
+      console.warn(`  [WARN] cleanup: could not remove ${TEST_DIR}: ${e}`);
+      return;
+    }
+  }
   const ps = spawnSync('powershell.exe', [
     '-NoProfile',
     '-ExecutionPolicy',
@@ -574,6 +583,9 @@ async function main() {
   assert(mainTs.includes("ipcMain.handle('flow:run'") && mainTs.includes('chatMessages: agent.chatMessages') && mainTs.includes('conversations: agent.listConversationStates()'), 'main ipc: Flow run returns rendered conversation state');
   assert(mainTs.includes("ipcMain.handle('pty:kill'") && mainTs.includes('waitMs === 0') && mainTs.includes("session.proc.kill('SIGINT')"), 'main ipc: terminal interrupt timeout supports unlimited mode');
   assert(mainTs.includes("ipcMain.handle('agentTerminal:takeoverState'") && mainTs.includes("ipcMain.handle('agentTerminal:takeoverWrite'") && mainTs.includes("webContents.send('agentTerminal:takeover'"), 'main ipc: broadcasts Agent terminal takeover state to bottom terminal UI');
+  assert(mainTs.includes('function defaultTerminalShell()') && mainTs.includes("process.platform === 'win32' ? 'powershell' : 'bash'") && mainTs.includes('function resolveTerminalShell') && mainTs.includes('commandArgs: command => [\'-lc\', command]') && mainTs.includes('function availableTerminalShells()') && mainTs.includes('terminalShells: availableTerminalShells()') && mainTs.includes('runShellCommand(String(cmd || \'\')') && !mainTs.includes('const SHELL_MAP: Record<string, string>'), 'main ipc: built-in terminal and executeBash use platform-aware shell defaults instead of hard-coded Windows shells');
+  assert(serverTs.includes('function runShellCommand') && serverTs.includes("process.platform === 'win32' ? 'powershell' : 'bash'") && serverTs.includes("String(command || cmd || '')") && serverTs.includes('terminalShells: availableTerminalShells()') && serverTs.includes("requested === 'sh' ? ['-c', command]") && !serverTs.includes('powershell.exe -Command "${(cmd||\'\')'), 'server api: bash endpoint is platform-aware and accepts command/cmd payloads');
+  assert(uiHtml.includes('function normalizeTerminalShell(shellId)') && uiHtml.includes('function syncTerminalShellOptions()') && uiHtml.includes("spawnTerminal(normalizeTerminalShell(state._terminalShell))") && !uiHtml.includes("spawnTerminal('powershell')") && uiHtml.includes('data-platform-shell="win32"'), 'ui html: bottom terminal defaults to backend platform shell instead of hard-coded PowerShell');
   assert(mainTs.includes("ipcMain.handle('github:copilotLogin'") && mainTs.includes("'auth', 'status'") && mainTs.includes("const tokenFromGh = () =>") && mainTs.includes("const importToken = (token: string") && mainTs.includes("'auth', 'refresh', '--scopes', 'models:read'") && !mainTs.includes("'auth', 'refresh', '--web', '--scopes', 'models:read'") && mainTs.includes("'auth', 'login', '--web', '--scopes', 'models:read'") && mainTs.includes("shell.openExternal('https://github.com/login/device')") && mainTs.includes("currentAgent.config.upsertProvider('GitHub Copilot', 'https://models.github.ai'") && mainTs.includes("protocol === 'openai' ? 'openai' : undefined"), 'main ipc: GitHub Copilot login imports GitHub CLI token, uses refresh without unsupported --web, falls back to browser login, and fuzzy injection remains openai/anthropic only');
   assert(mainTs.includes('agent.subagents.listAll().map') && mainTs.includes("active: s.status !== 'closed'") && uiHtml.includes("t('subagent.empty')"), 'main ipc/ui: closed subagents remain visible as retained history');
   assert(toolsTs.includes('timeout_ms') && toolsTs.includes('resolveBashTimeout') && toolsTs.includes("this.config.getNum('terminal', 'interrupt_timeout_ms')"), 'tools: agent bash accepts per-call timeout and reads config cap');
@@ -719,8 +731,9 @@ async function main() {
   // bash
   const bashResult = await tools.execute('bash', '{"command":"echo hello"}', TEST_DIR);
   assert(bashResult.includes('hello'), 'bash: echo hello');
-  const bashPWSH = await tools.execute('bash', '{"command":"Get-Location"}', TEST_DIR);
-  assert(bashPWSH.length > 0, 'bash: powershell works');
+  const bashPlatformCommand = process.platform === 'win32' ? 'Get-Location' : 'pwd';
+  const bashPWSH = await tools.execute('bash', JSON.stringify({ command: bashPlatformCommand }), TEST_DIR);
+  assert(bashPWSH.length > 0, 'bash: platform shell works');
   const timeoutCfg = new ConfigManager(path.join(TEST_DIR, 'bash-timeout-cap'));
   const timeoutTools = new ToolExecutor(TEST_DIR, timeoutCfg);
   assert((timeoutTools as any).resolveBashTimeout(undefined) === undefined, 'bash timeout: default 0 has no cap and no timeout');
@@ -733,9 +746,11 @@ async function main() {
   assert((timeoutTools as any).resolveBashTimeout(5000) === 5000, 'bash timeout: shorter requested timeout is preserved under cap');
   const bashRequestedTimeout = await timeoutTools.execute('bash', JSON.stringify({ command: 'echo timeout-ok', timeout_ms: 10000 }), TEST_DIR);
   assert(bashRequestedTimeout.includes('timeout-ok'), 'bash timeout: execute accepts timeout_ms argument');
-  const takeoverStart = await tools.execute('terminal_takeover', JSON.stringify({ action: 'start', name: 'verify', shell: 'powershell' }), TEST_DIR);
+  const takeoverShell = process.platform === 'win32' ? 'powershell' : 'bash';
+  const takeoverCommand = process.platform === 'win32' ? 'Write-Output takeover-ok' : 'printf "takeover-ok\\n"';
+  const takeoverStart = await tools.execute('terminal_takeover', JSON.stringify({ action: 'start', name: 'verify', shell: takeoverShell }), TEST_DIR);
   assert(takeoverStart.includes('"ok": true') && takeoverStart.includes('"name": "verify"'), 'terminal_takeover: starts independent named session');
-  const takeoverWrite = await tools.execute('terminal_takeover', JSON.stringify({ action: 'write', name: 'verify', command: 'Write-Output takeover-ok' }), TEST_DIR);
+  const takeoverWrite = await tools.execute('terminal_takeover', JSON.stringify({ action: 'write', name: 'verify', command: takeoverCommand }), TEST_DIR);
   assert(takeoverWrite.includes('wrote to verify'), 'terminal_takeover: writes to persistent session without using bash');
   let takeoverRead = '';
   for (let attempt = 0; attempt < 24; attempt++) {
@@ -746,34 +761,39 @@ async function main() {
   assert(takeoverRead.includes('takeover-ok'), 'terminal_takeover: reads output from the same persistent shell environment');
   const takeoverStop = await tools.execute('terminal_takeover', JSON.stringify({ action: 'stop', name: 'verify' }), TEST_DIR);
   assert(takeoverStop.includes('stopped verify'), 'terminal_takeover: stops named session');
-  const computerDryMove = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 10, y: 20, dry_run: true }), TEST_DIR);
-  assert(computerDryMove.includes('"action": "move"') && computerDryMove.includes('"dry_run": true'), 'computer_use: supports dry-run native desktop move action');
-  const computerTargetBeforeObserve = await tools.execute('computer_use', JSON.stringify({ action: 'click', target_id: 'ui-1', dry_run: true }), TEST_DIR);
-  assert(computerTargetBeforeObserve.includes('Call computer_use observe first') || computerTargetBeforeObserve.includes('target_id not found'), 'computer_use: target_id actions require latest semantic observation');
-  const computerDryType = await tools.execute('computer_use', JSON.stringify({ action: 'type', text: 'hello', dry_run: true }), TEST_DIR);
-  assert(computerDryType.includes('"action": "type"') && computerDryType.includes('"chars": 5'), 'computer_use: supports dry-run native desktop type action');
-  const computerDryScroll = await tools.execute('computer_use', JSON.stringify({ action: 'scroll', x: 10, y: 20, scroll_y: 240, dry_run: true }), TEST_DIR);
-  assert(computerDryScroll.includes('"action": "scroll"') && computerDryScroll.includes('"scroll_y": 240'), 'computer_use: supports dry-run native desktop scroll action');
-  const computerTakeoverStop = await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR);
-  assert(computerTakeoverStop.includes('"action": "takeover_stop"') && computerTakeoverStop.includes('"ok": true'), 'computer_use: takeover_stop is safe and clears desktop takeover indicator');
-  const computerLockA1 = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 1, y: 1, dry_run: true }), TEST_DIR, { conversationId: 'conv-a' });
-  assert(computerLockA1.includes('"action": "move"') && computerLockA1.includes('"dry_run": true'), 'computer_use lock: first conversation acquires control');
-  const computerLockBBlocked = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 2, y: 2, dry_run: true }), TEST_DIR, { conversationId: 'conv-b' });
-  assert(computerLockBBlocked.includes('"ok": false') && computerLockBBlocked.includes('ComputerUse is already active') && computerLockBBlocked.includes('conversation:conv-a') && computerLockBBlocked.includes('conversation:conv-b'), 'computer_use lock: second conversation is blocked while another conversation owns ComputerUse');
-  const computerLockA2 = await tools.execute('computer_use', JSON.stringify({ action: 'scroll', x: 1, y: 1, scroll_y: 120, dry_run: true }), TEST_DIR, { conversationId: 'conv-a' });
-  assert(computerLockA2.includes('"action": "scroll"') && computerLockA2.includes('"scroll_y": 120'), 'computer_use lock: owning conversation can continue sequential actions');
-  const computerLockBStopBlocked = await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR, { conversationId: 'conv-b' });
-  assert(computerLockBStopBlocked.includes('"ok": false') && computerLockBStopBlocked.includes('ComputerUse is already active') && computerLockBStopBlocked.includes('conversation:conv-a'), 'computer_use lock: non-owner conversation cannot clear the active takeover');
-  const computerLockAStop = await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR, { conversationId: 'conv-a' });
-  assert(computerLockAStop.includes('"action": "takeover_stop"') && computerLockAStop.includes('"ok": true'), 'computer_use lock: owner releases control with takeover_stop');
-  const computerLockBAllowed = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 3, y: 3, dry_run: true }), TEST_DIR, { conversationId: 'conv-b' });
-  assert(computerLockBAllowed.includes('"action": "move"') && computerLockBAllowed.includes('"dry_run": true'), 'computer_use lock: another conversation can acquire after release');
-  await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR, { conversationId: 'conv-b' });
-  const computerAppList = await tools.execute('computer_use', JSON.stringify({ action: 'app_list', max_chars: 12000 }), TEST_DIR);
-  assert(computerAppList.includes('"action": "app_list"') && computerAppList.includes('"applications"'), 'computer_use: lists visible taskbar/application windows for app-scoped control');
-  const computerAppMissing = await tools.execute('computer_use', JSON.stringify({ action: 'app_observe', app_target: 'newmark-nonexistent-app-for-test', dry_run: true }), TEST_DIR);
-  assert(computerAppMissing.includes('"action": "app_observe"') && computerAppMissing.includes('No visible application window matched'), 'computer_use: app_observe reports unmatched taskbar/application targets');
-  await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR);
+  if (process.platform === 'win32') {
+    const computerDryMove = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 10, y: 20, dry_run: true }), TEST_DIR);
+    assert(computerDryMove.includes('"action": "move"') && computerDryMove.includes('"dry_run": true'), 'computer_use: supports dry-run native desktop move action');
+    const computerTargetBeforeObserve = await tools.execute('computer_use', JSON.stringify({ action: 'click', target_id: 'ui-1', dry_run: true }), TEST_DIR);
+    assert(computerTargetBeforeObserve.includes('Call computer_use observe first') || computerTargetBeforeObserve.includes('target_id not found'), 'computer_use: target_id actions require latest semantic observation');
+    const computerDryType = await tools.execute('computer_use', JSON.stringify({ action: 'type', text: 'hello', dry_run: true }), TEST_DIR);
+    assert(computerDryType.includes('"action": "type"') && computerDryType.includes('"chars": 5'), 'computer_use: supports dry-run native desktop type action');
+    const computerDryScroll = await tools.execute('computer_use', JSON.stringify({ action: 'scroll', x: 10, y: 20, scroll_y: 240, dry_run: true }), TEST_DIR);
+    assert(computerDryScroll.includes('"action": "scroll"') && computerDryScroll.includes('"scroll_y": 240'), 'computer_use: supports dry-run native desktop scroll action');
+    const computerTakeoverStop = await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR);
+    assert(computerTakeoverStop.includes('"action": "takeover_stop"') && computerTakeoverStop.includes('"ok": true'), 'computer_use: takeover_stop is safe and clears desktop takeover indicator');
+    const computerLockA1 = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 1, y: 1, dry_run: true }), TEST_DIR, { conversationId: 'conv-a' });
+    assert(computerLockA1.includes('"action": "move"') && computerLockA1.includes('"dry_run": true'), 'computer_use lock: first conversation acquires control');
+    const computerLockBBlocked = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 2, y: 2, dry_run: true }), TEST_DIR, { conversationId: 'conv-b' });
+    assert(computerLockBBlocked.includes('"ok": false') && computerLockBBlocked.includes('ComputerUse is already active') && computerLockBBlocked.includes('conversation:conv-a') && computerLockBBlocked.includes('conversation:conv-b'), 'computer_use lock: second conversation is blocked while another conversation owns ComputerUse');
+    const computerLockA2 = await tools.execute('computer_use', JSON.stringify({ action: 'scroll', x: 1, y: 1, scroll_y: 120, dry_run: true }), TEST_DIR, { conversationId: 'conv-a' });
+    assert(computerLockA2.includes('"action": "scroll"') && computerLockA2.includes('"scroll_y": 120'), 'computer_use lock: owning conversation can continue sequential actions');
+    const computerLockBStopBlocked = await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR, { conversationId: 'conv-b' });
+    assert(computerLockBStopBlocked.includes('"ok": false') && computerLockBStopBlocked.includes('ComputerUse is already active') && computerLockBStopBlocked.includes('conversation:conv-a'), 'computer_use lock: non-owner conversation cannot clear the active takeover');
+    const computerLockAStop = await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR, { conversationId: 'conv-a' });
+    assert(computerLockAStop.includes('"action": "takeover_stop"') && computerLockAStop.includes('"ok": true'), 'computer_use lock: owner releases control with takeover_stop');
+    const computerLockBAllowed = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 3, y: 3, dry_run: true }), TEST_DIR, { conversationId: 'conv-b' });
+    assert(computerLockBAllowed.includes('"action": "move"') && computerLockBAllowed.includes('"dry_run": true'), 'computer_use lock: another conversation can acquire after release');
+    await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR, { conversationId: 'conv-b' });
+    const computerAppList = await tools.execute('computer_use', JSON.stringify({ action: 'app_list', max_chars: 12000 }), TEST_DIR);
+    assert(computerAppList.includes('"action": "app_list"') && computerAppList.includes('"applications"'), 'computer_use: lists visible taskbar/application windows for app-scoped control');
+    const computerAppMissing = await tools.execute('computer_use', JSON.stringify({ action: 'app_observe', app_target: 'newmark-nonexistent-app-for-test', dry_run: true }), TEST_DIR);
+    assert(computerAppMissing.includes('"action": "app_observe"') && computerAppMissing.includes('No visible application window matched'), 'computer_use: app_observe reports unmatched taskbar/application targets');
+    await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR);
+  } else {
+    const computerLinuxUnsupported = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 10, y: 20, dry_run: true }), TEST_DIR);
+    assert(computerLinuxUnsupported.includes('"ok": false') && computerLinuxUnsupported.includes('Windows only'), 'computer_use: Linux reports explicit unsupported native desktop control instead of crashing');
+  }
   const disabledToolCfg = new ConfigManager(path.join(TEST_DIR, 'disabled-native-tools'));
   disabledToolCfg.set('tools', 'enabled', { ...disabledToolCfg.nativeToolEnabled(), computer_use: false });
   const disabledTools = new ToolExecutor(TEST_DIR, disabledToolCfg);
@@ -913,12 +933,14 @@ async function main() {
   assert(outsideReadAllowed.includes('outside'), 'permissions: outside_readonly allows outside read');
   const outsideWriteDenied = await tools.execute('write', JSON.stringify({ path: outsideFile, content: 'blocked' }), TEST_DIR, { workspacePath: TEST_DIR });
   assert(outsideWriteDenied.includes('[permission]'), 'permissions: outside_readonly blocks outside write');
-  const outsideBashReadAllowed = await tools.execute('bash', JSON.stringify({ command: `Get-Content "${outsideFile}"` }), TEST_DIR, { workspacePath: TEST_DIR });
+  const outsideReadCommand = process.platform === 'win32' ? `Get-Content "${outsideFile}"` : `cat "${outsideFile}"`;
+  const outsideWriteCommand = process.platform === 'win32' ? `Set-Content "${outsideFile}" blocked` : `echo blocked > "${outsideFile}"`;
+  const outsideBashReadAllowed = await tools.execute('bash', JSON.stringify({ command: outsideReadCommand }), TEST_DIR, { workspacePath: TEST_DIR });
   assert(outsideBashReadAllowed.includes('outside'), 'permissions: outside_readonly allows read-only bash outside workspace');
-  const outsideBashWriteDenied = await tools.execute('bash', JSON.stringify({ command: `Set-Content "${outsideFile}" blocked` }), TEST_DIR, { workspacePath: TEST_DIR });
+  const outsideBashWriteDenied = await tools.execute('bash', JSON.stringify({ command: outsideWriteCommand }), TEST_DIR, { workspacePath: TEST_DIR });
   assert(outsideBashWriteDenied.includes('[permission]'), 'permissions: outside_readonly blocks mutating bash outside workspace');
   cfg.set('workspace', 'access_permission', 'no_outside_access');
-  const outsideBashReadDenied = await tools.execute('bash', JSON.stringify({ command: `Get-Content "${outsideFile}"` }), TEST_DIR, { workspacePath: TEST_DIR });
+  const outsideBashReadDenied = await tools.execute('bash', JSON.stringify({ command: outsideReadCommand }), TEST_DIR, { workspacePath: TEST_DIR });
   assert(outsideBashReadDenied.includes('[permission]'), 'permissions: no_outside_access blocks bash outside read');
   cfg.set('workspace', 'access_permission', 'outside_readonly');
   const planWriteDenied = await tools.execute('write', '{"path":"not-readme.txt","content":"blocked"}', TEST_DIR, { mode: 'plan', workspacePath: TEST_DIR });
@@ -1030,6 +1052,7 @@ async function main() {
   const cliState = JSON.parse(cliStateOut);
   assert(cliState.mode === 'build' && cliState.workspace, 'cli state: returns agent state');
   assert(cliState.language === 'auto', 'cli state: returns current language');
+  assert(cliState.platform === process.platform && cliState.runtimeDefaultTerminalShell === (process.platform === 'win32' ? 'powershell' : 'bash') && Array.isArray(cliState.terminalShells) && cliState.terminalShells.includes(cliState.defaultTerminalShell), 'cli state: exposes platform-aware terminal shell defaults');
   assert(!cliStateOut.includes('test-key-123') && !cliStateOut.includes('test-key-456'), 'cli state: redacts provider API keys');
   const agentOnlyRoot = path.join(TEST_DIR, 'cli-agent-only-root');
   fs.mkdirSync(agentOnlyRoot, { recursive: true });
@@ -2795,11 +2818,21 @@ async function main() {
     };
   };
   globalThis.fetch = (async () => { throw new TypeError('fetch failed'); }) as typeof fetch;
-  const psFallbackText = await fallbackProvider.chat('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20);
+  if (process.platform === 'win32') {
+    const psFallbackText = await fallbackProvider.chat('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20);
+    assert(psFallbackText === 'powershell fallback ok 做了什么 验证 文件', 'LLMProvider fallback: PowerShell transport recovers after Node HTTP failure with UTF-8 text');
+  } else {
+    let nonWindowsError = '';
+    try {
+      await fallbackProvider.chat('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20);
+    } catch (e) {
+      nonWindowsError = e instanceof Error ? e.message : String(e);
+    }
+    assert(nonWindowsError.includes('node fallback failed'), 'LLMProvider fallback: non-Windows does not call Windows-only PowerShell transport');
+  }
   globalThis.fetch = originalFetch;
   LLMProvider.nodeHttpTransport = null;
   LLMProvider.powershellTransport = null;
-  assert(psFallbackText === 'powershell fallback ok 做了什么 验证 文件', 'LLMProvider fallback: PowerShell transport recovers after Node HTTP failure with UTF-8 text');
 
   // ---- 14. Workspace Goal Items Tests ----
   console.log('\n📋 Goal Items');

@@ -28,6 +28,42 @@ let tray: Tray | null = null;
 let _forceQuit = false;
 let browserControlWindow: BrowserWindow | null = null;
 
+function defaultTerminalShell(): string {
+  return process.platform === 'win32' ? 'powershell' : 'bash';
+}
+
+function availableTerminalShells(): string[] {
+  return process.platform === 'win32' ? ['powershell', 'cmd', 'bash', 'pwsh'] : ['bash', 'sh', 'pwsh'];
+}
+
+function resolveTerminalShell(shellId: string): { id: string; exe: string; args: string[]; commandArgs: (command: string) => string[] } {
+  const requested = String(shellId || '').toLowerCase();
+  if (process.platform === 'win32') {
+    if (requested === 'cmd') return { id: 'cmd', exe: 'cmd.exe', args: [], commandArgs: command => ['/d', '/s', '/c', command] };
+    if (requested === 'bash') return { id: 'bash', exe: 'bash.exe', args: [], commandArgs: command => ['-lc', command] };
+    if (requested === 'pwsh') return { id: 'pwsh', exe: 'pwsh.exe', args: [], commandArgs: command => ['-NoProfile', '-NonInteractive', '-Command', command] };
+    return { id: 'powershell', exe: 'powershell.exe', args: [], commandArgs: command => ['-NoProfile', '-NonInteractive', '-Command', command] };
+  }
+  if (requested === 'sh') return { id: 'sh', exe: '/bin/sh', args: [], commandArgs: command => ['-c', command] };
+  if (requested === 'pwsh') return { id: 'pwsh', exe: 'pwsh', args: [], commandArgs: command => ['-NoProfile', '-NonInteractive', '-Command', command] };
+  const userShell = process.env.SHELL || '/bin/bash';
+  return { id: 'bash', exe: userShell || '/bin/bash', args: [], commandArgs: command => ['-lc', command] };
+}
+
+function runShellCommand(command: string, shellId: string, cwd: string): { output?: string; error?: string } {
+  const shellInfo = resolveTerminalShell(shellId || defaultTerminalShell());
+  const result = spawnSync(shellInfo.exe, shellInfo.commandArgs(command), {
+    cwd,
+    encoding: 'utf-8',
+    timeout: 30000,
+    windowsHide: true,
+  });
+  const output = `${result.stdout || ''}${result.stderr || ''}`;
+  if (result.error) return { output, error: result.error.message };
+  if (result.status && result.status !== 0) return { output, error: output.trim() || `Shell exited ${result.status}` };
+  return { output };
+}
+
 function resetConversationKernel(): void {
   if (conversationKernel?.isAnyRunning()) return;
   conversationKernel = null;
@@ -810,6 +846,10 @@ if (hasCliCommand) {
         autoAdjust: agent.config.getBool('agent', 'auto_adjust_settings'),
         inputMode: agent.inputMode,
         terminalInterruptTimeoutMs: agent.config.getNum('terminal', 'interrupt_timeout_ms'),
+        platform: process.platform,
+        defaultTerminalShell: resolveTerminalShell(agent.config.getStr('terminal', 'default_shell') || defaultTerminalShell()).id,
+        runtimeDefaultTerminalShell: defaultTerminalShell(),
+        terminalShells: availableTerminalShells(),
         nativeTools: nativeToolCatalogForState(agent.config.nativeToolEnabled()),
         nativeToolEnabled: agent.config.nativeToolEnabled(),
         chatMessages: agent.chatMessages,
@@ -1019,40 +1059,28 @@ if (hasCliCommand) {
 
     ipcMain.handle('agent:executeBash', async (_event, cmd: string, shell: string, cwd: string) => {
       try {
-        const { execSync } = require('child_process');
-        const sh = process.platform === 'win32' ? 'powershell.exe' : '/bin/sh';
-        const arg = process.platform === 'win32' ? '-Command' : '-c';
-        const result = execSync(`"${sh}" ${arg} "${cmd.replace(/"/g, '\\"')}"`, {
-          cwd, encoding: 'utf-8', timeout: 30000,
-        });
-        return { output: result };
+        return runShellCommand(String(cmd || ''), shell, cwd || agent?.workspace.current?.path || root);
       } catch (e) { return { error: String(e) }; }
     });
 
     // === Native PTY Terminal ===
     const ptySessions = new Map<string, { proc: ChildProcess; shell: string; buffer: string }>();
 
-    const SHELL_MAP: Record<string, string> = {
-      powershell: 'powershell.exe',
-      cmd: 'cmd.exe',
-      bash: 'bash.exe',
-    };
-
     ipcMain.handle('pty:spawn', async (_event, shellId: string) => {
       const sessionId = randomUUID().slice(0, 8);
-      const shellExe = SHELL_MAP[shellId] || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
+      const shell = resolveTerminalShell(shellId || agent?.config.getStr('terminal', 'default_shell') || defaultTerminalShell());
       const cwd = agent?.workspace.current?.path || root;
-      const proc = spawn(shellExe, [], {
+      const proc = spawn(shell.exe, shell.args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env, TERM: 'xterm-256color' },
         windowsHide: true,
       });
-      const session = { proc, shell: shellId, buffer: '' };
+      const session = { proc, shell: shell.id, buffer: '' };
       ptySessions.set(sessionId, session);
 
-      // Force line-buffered output by sending an initial echo
-      proc.stdin?.write('\r\n');
+      // Wake the PTY without injecting a Windows carriage return into POSIX shells.
+      proc.stdin?.write(process.platform === 'win32' && ['powershell', 'pwsh', 'cmd'].includes(shell.id) ? '\r\n' : '\n');
 
       proc.stdout?.on('data', (chunk: Buffer) => {
         const text = chunk.toString('utf-8');
@@ -1074,7 +1102,7 @@ if (hasCliCommand) {
         }
       });
 
-      return { sessionId, shell: shellId };
+      return { sessionId, shell: shell.id };
     });
 
     ipcMain.handle('pty:write', async (_event, sessionId: string, data: string) => {

@@ -1,6 +1,5 @@
 import { spawn, ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
-import * as os from 'os';
 
 export type TerminalTakeoverAction = 'start' | 'write' | 'read' | 'stop' | 'list';
 
@@ -24,14 +23,6 @@ type TerminalTakeoverListener = (event: { type: 'started' | 'data' | 'stopped'; 
 const sessions = new Map<string, TerminalTakeoverSession>();
 const listeners = new Set<TerminalTakeoverListener>();
 const maxBuffer = 256 * 1024;
-
-const shellMap: Record<string, string> = {
-  powershell: 'powershell.exe',
-  pwsh: 'pwsh.exe',
-  cmd: 'cmd.exe',
-  bash: process.platform === 'win32' ? 'bash.exe' : '/bin/bash',
-  sh: process.platform === 'win32' ? 'powershell.exe' : '/bin/sh',
-};
 
 function snapshot(session: TerminalTakeoverSession): TerminalTakeoverState {
   return {
@@ -67,10 +58,21 @@ function normalizeName(name: string): string {
   return (name || 'agent').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'agent';
 }
 
-function resolveShell(shell: string): { id: string; exe: string } {
-  const id = (shell || (process.platform === 'win32' ? 'powershell' : 'bash')).toLowerCase();
-  const fallback = process.platform === 'win32' ? 'powershell.exe' : (os.userInfo().shell || '/bin/sh');
-  return { id, exe: shellMap[id] || fallback };
+function defaultShellId(): string {
+  return process.platform === 'win32' ? 'powershell' : 'bash';
+}
+
+function resolveShell(shell: string): { id: string; exe: string; args: string[]; newline: string } {
+  const requested = String(shell || defaultShellId()).toLowerCase();
+  if (process.platform === 'win32') {
+    if (requested === 'cmd') return { id: 'cmd', exe: 'cmd.exe', args: [], newline: '\r\n' };
+    if (requested === 'bash') return { id: 'bash', exe: 'bash.exe', args: [], newline: '\n' };
+    if (requested === 'pwsh') return { id: 'pwsh', exe: 'pwsh.exe', args: [], newline: '\r\n' };
+    return { id: 'powershell', exe: 'powershell.exe', args: [], newline: '\r\n' };
+  }
+  if (requested === 'sh') return { id: 'sh', exe: '/bin/sh', args: [], newline: '\n' };
+  if (requested === 'pwsh') return { id: 'pwsh', exe: 'pwsh', args: [], newline: '\n' };
+  return { id: 'bash', exe: process.env.SHELL || '/bin/bash', args: [], newline: '\n' };
 }
 
 function findSession(nameOrId: string): TerminalTakeoverSession | null {
@@ -84,7 +86,7 @@ function startSession(nameRaw: string, shellRaw: string, cwd: string): TerminalT
   if (existing && existing.active) return existing;
 
   const shell = resolveShell(shellRaw);
-  const proc = spawn(shell.exe, [], {
+  const proc = spawn(shell.exe, shell.args, {
     cwd,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env, TERM: 'xterm-256color', NEWMARK_TERMINAL_TAKEOVER: name },
@@ -120,7 +122,7 @@ function startSession(nameRaw: string, shellRaw: string, cwd: string): TerminalT
     emit('stopped', session);
   });
 
-  proc.stdin?.write('\r\n');
+  proc.stdin?.write(shell.newline);
   emit('started', session);
   return session;
 }
@@ -138,7 +140,8 @@ export function writeTerminalTakeoverSession(idOrName: string, command: string):
   const session = findSession(idOrName);
   if (!session) return { ok: false, error: 'Session not found' };
   if (!session.active || !session.proc.stdin) return { ok: false, error: 'Session is not active' };
-  session.proc.stdin.write(command.endsWith('\n') || command.endsWith('\r') ? command : `${command}\r\n`);
+  const newline = process.platform === 'win32' && (session.shell === 'powershell' || session.shell === 'cmd' || session.shell === 'pwsh') ? '\r\n' : '\n';
+  session.proc.stdin.write(command.endsWith('\n') || command.endsWith('\r') ? command : `${command}${newline}`);
   session.updatedAt = new Date().toISOString();
   return { ok: true };
 }

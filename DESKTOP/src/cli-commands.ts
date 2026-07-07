@@ -305,9 +305,17 @@ function safeState(agent: Agent, root: string): JsonObject {
     model_count: (p.models || []).length,
   }));
   const toolDefs = agent.tools.definitions(agent.mode) as Array<{ function?: { name?: string } }>;
+  const runtimeDefaultTerminalShell = process.platform === 'win32' ? 'powershell' : 'bash';
+  const terminalShells = process.platform === 'win32' ? ['powershell', 'cmd', 'bash', 'pwsh'] : ['bash', 'sh', 'pwsh'];
+  const configuredTerminalShell = agent.config.getStr('terminal', 'default_shell') || runtimeDefaultTerminalShell;
+  const defaultTerminalShell = terminalShells.includes(configuredTerminalShell) ? configuredTerminalShell : runtimeDefaultTerminalShell;
   return {
     root,
     agentOnly: agent.agentOnly,
+    platform: process.platform,
+    defaultTerminalShell,
+    runtimeDefaultTerminalShell,
+    terminalShells,
     mode: agent.mode,
     model: agent.model,
     modelLabel: agent.modelLabel(),

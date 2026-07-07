@@ -4,6 +4,13 @@ const config: Configuration = {
   appId: 'ai.newmark.agent',
   productName: 'Newmark Agent',
   copyright: 'Copyright © 2025 Newmark AI',
+  extraMetadata: {
+    homepage: 'https://github.com/positer/Newmark-Agent',
+    author: {
+      name: 'Newmark AI',
+      email: 'support@newmark.ai',
+    },
+  },
   directories: {
     output: '../release',
     buildResources: 'assets',
@@ -41,6 +48,8 @@ const config: Configuration = {
     artifactName: 'Newmark-Agent-${version}-portable-${arch}.exe',
   },
   linux: {
+    icon: 'assets/app-icon-dark.png',
+    maintainer: 'Newmark AI <support@newmark.ai>',
     target: ['AppImage', 'deb'],
     category: 'Development',
     artifactName: 'Newmark-Agent-${version}-${arch}.${ext}',

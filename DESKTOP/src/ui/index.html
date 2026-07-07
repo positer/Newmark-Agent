@@ -3711,9 +3711,11 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
         <div id="bottom-header">
           <div id="terminal-tabs"></div>
           <select id="terminal-shell-select" onchange="window.spawnTerminal(this.value)">
-            <option value="powershell">PowerShell</option>
-            <option value="cmd">CMD</option>
-            <option value="bash" id="wsl-option" style="display:none;">Bash (WSL)</option>
+            <option value="powershell" data-platform-shell="win32">PowerShell</option>
+            <option value="cmd" data-platform-shell="win32">CMD</option>
+            <option value="bash">Bash</option>
+            <option value="sh" data-platform-shell="linux">sh</option>
+            <option value="pwsh">PowerShell Core</option>
           </select>
           <button class="shell-btn" onclick="window.addTerminalTab()" title="New terminal"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#plus"></use></svg><span class="icon-only-label">New terminal</span></button>
           <label class="terminal-timeout-control" title="Upper cap for Agent bash timeout_ms and terminal forced interruption. 0 means no cap."><span>Max ms</span><input id="terminal-timeout-input" type="number" min="0" step="1000" value="0" onchange="window.setTerminalInterruptTimeout(this.value)"></label>
@@ -3888,6 +3890,10 @@ var state = {
   _terminalTabs: [],
   _terminalTabId: 0,
   _terminalActiveSession: null,
+  platform: 'win32',
+  terminalShells: ['powershell', 'cmd', 'bash'],
+  defaultTerminalShell: 'powershell',
+  runtimeDefaultTerminalShell: 'powershell',
   terminalInterruptTimeoutMs: 0,
   nativeTools: [],
   nativeToolEnabled: {},
@@ -5324,6 +5330,37 @@ function iconLabel(name, label, extraClass) {
   return '<span class="icon"><svg class="' + classes + '" aria-hidden="true" focusable="false"><use href="' + ICON_SPRITE_PATH + '#' + safeName + '"></use></svg></span><span>' + esc(label) + '</span>';
 }
 
+function terminalShellLabel(shellId) {
+  return ({powershell:'PS', pwsh:'Pwsh', cmd:'CMD', bash:'Bash', sh:'sh'}[shellId]) || 'Shell';
+}
+
+function normalizeTerminalShell(shellId) {
+  var allowed = state.terminalShells || [];
+  var candidate = shellId || state.defaultTerminalShell || state.runtimeDefaultTerminalShell || (state.platform === 'win32' ? 'powershell' : 'bash');
+  if (allowed.length && allowed.indexOf(candidate) < 0) candidate = allowed[0];
+  return candidate || 'bash';
+}
+
+function syncTerminalShellOptions() {
+  var select = document.getElementById('terminal-shell-select');
+  if (!select) return;
+  var allowed = state.terminalShells || [];
+  var options = select.querySelectorAll('option');
+  for (var i = 0; i < options.length; i++) {
+    var opt = options[i];
+    var value = opt.value;
+    var platform = opt.getAttribute('data-platform-shell') || '';
+    var show = allowed.length ? allowed.indexOf(value) >= 0 : (!platform || platform === state.platform);
+    opt.style.display = show ? '' : 'none';
+    opt.disabled = !show;
+  }
+  var selected = normalizeTerminalShell(select.value);
+  select.value = selected;
+  state._terminalShell = selected;
+  var prompt = document.querySelector('#terminal-pane-0 .terminal-prompt');
+  if (prompt) prompt.textContent = terminalShellLabel(selected) + '>';
+}
+
 // === API Bridge ===
 var api = window.api || {
   sendMessage: async function(msg, conversationId) {
@@ -5354,7 +5391,8 @@ var api = window.api || {
   },
   executeBash: async function(cmd) {
     try {
-      var r = await fetch('/api/bash', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd, shell: document.getElementById('terminal-shell-select').value})});
+      var shellSelect = document.getElementById('terminal-shell-select');
+      var r = await fetch('/api/bash', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd, shell: normalizeTerminalShell(shellSelect ? shellSelect.value : '')})});
       return r.json();
     } catch(e) { return {output: 'Error: ' + e.message}; }
   },
@@ -7269,13 +7307,13 @@ window.spawnTerminal = function(shellId) {
 };
 
 window.addTerminalTab = function(shellId) {
-  shellId = shellId || (state._terminalShell || 'powershell');
+  shellId = normalizeTerminalShell(shellId || state._terminalShell);
   var tabId = ++_terminalCounter;
   var tabsContainer = els['terminal-tabs'];
   var body = els['terminal-body'];
   if (!tabsContainer || !body) return;
 
-  var shellLabel = {powershell:'PS', cmd:'CMD', bash:'Bash'}[shellId] || 'Shell';
+  var shellLabel = terminalShellLabel(shellId);
   var name = shellLabel + tabId;
 
   // Create tab button
@@ -10990,6 +11028,11 @@ function stopMarqueeJS() {
       if (s.subagents) state.subagents = s.subagents;
       if (s.fileDiffs) state.fileDiffs = s.fileDiffs;
       if (s.pendingOptions) state.pendingOptions = s.pendingOptions;
+      if (s.platform) state.platform = s.platform;
+      if (Array.isArray(s.terminalShells) && s.terminalShells.length) state.terminalShells = s.terminalShells;
+      if (s.runtimeDefaultTerminalShell) state.runtimeDefaultTerminalShell = s.runtimeDefaultTerminalShell;
+      if (s.defaultTerminalShell) state.defaultTerminalShell = s.defaultTerminalShell;
+      state._terminalShell = normalizeTerminalShell(state._terminalShell || state.defaultTerminalShell);
       if (s.terminalInterruptTimeoutMs !== undefined) state.terminalInterruptTimeoutMs = Math.max(0, Number(s.terminalInterruptTimeoutMs) || 0);
       if (s.nativeTools) state.nativeTools = s.nativeTools;
       if (s.nativeToolEnabled) state.nativeToolEnabled = s.nativeToolEnabled;
@@ -11037,6 +11080,7 @@ function stopMarqueeJS() {
   if (els['mode-select']) els['mode-select'].value = state.mode;
   if (els['intel-select']) els['intel-select'].value = state.intelligence;
   if (els['terminal-timeout-input']) els['terminal-timeout-input'].value = String(state.terminalInterruptTimeoutMs || 0);
+  syncTerminalShellOptions();
 
   window.refreshModelSelect();
 
@@ -11137,11 +11181,11 @@ function stopMarqueeJS() {
     });
   }
 
-  // WSL detection
-  if (api.wslDetect) {
+  // WSL detection only affects the optional Windows Bash entry.
+  if (state.platform === 'win32' && api.wslDetect) {
     api.wslDetect().then(function(haveWsl) {
       if (haveWsl) {
-        var opt = document.getElementById('wsl-option');
+        var opt = document.querySelector('#terminal-shell-select option[value="bash"]');
         if (opt) opt.style.display = '';
       }
     }).catch(function(){});
@@ -11158,7 +11202,7 @@ function stopMarqueeJS() {
   }
 
   // Auto-spawn native terminal
-  spawnTerminal('powershell');
+  spawnTerminal(normalizeTerminalShell(state._terminalShell));
 
   console.log('[UI] init complete');
 })();

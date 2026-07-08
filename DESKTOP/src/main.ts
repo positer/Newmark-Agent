@@ -183,7 +183,7 @@ function firstRunInit(root: string): void {
   for (const d of ['skills', 'Work', 'Flow', 'archive', 'Memory Lab']) {
     fs.mkdirSync(path.join(root, d), { recursive: true });
   }
-  new MemoryLabManager(root).ensure();
+  new MemoryLabManager(root);
 
   const configModule = require('./core/config');
   configModule.ensureRootConfig(root);
@@ -194,7 +194,14 @@ function firstRunInit(root: string): void {
   // PC_Hash.config
   const hostname = require('os').hostname();
   const pcId = `${hostname}|${process.platform}|${process.arch}`;
-  fs.writeFileSync(path.join(root, 'PC_Hash.config'), pcId, 'utf-8');
+  const pcHashPath = path.join(root, 'PC_Hash.config');
+  let existingPcId = '';
+  try {
+    existingPcId = fs.existsSync(pcHashPath) ? fs.readFileSync(pcHashPath, 'utf-8') : '';
+  } catch {
+    existingPcId = '';
+  }
+  if (existingPcId !== pcId) fs.writeFileSync(pcHashPath, pcId, 'utf-8');
 
   // Flow.md
   const fm = path.join(root, 'Flow', 'Flow.md');
@@ -240,14 +247,86 @@ Components execute in order 0 -> 1 -> 2 -> ..., unless a logic component redirec
 
 }
 
-function getRoot(): string {
-  // Use the directory where the executable is located
+function exeRoot(): string {
   return path.dirname(app.getPath('exe'));
+}
+
+function hasPortableRootState(candidate: string): boolean {
+  return ['config.json', 'agent.md', 'PC_Hash.config', 'Work'].some(item => fs.existsSync(path.join(candidate, item)));
+}
+
+function canWriteDirectory(candidate: string): boolean {
+  const probeName = `.newmark-write-test-${process.pid}-${Date.now()}`;
+  const probePath = path.join(candidate, probeName);
+  try {
+    fs.mkdirSync(candidate, { recursive: true });
+    fs.writeFileSync(probePath, 'ok', 'utf-8');
+    fs.unlinkSync(probePath);
+    return true;
+  } catch {
+    try { if (fs.existsSync(probePath)) fs.unlinkSync(probePath); } catch {}
+    return false;
+  }
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  try {
+    const rel = path.relative(path.resolve(parent), path.resolve(child));
+    return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+  } catch {
+    return false;
+  }
+}
+
+function isProtectedInstallRoot(candidate: string): boolean {
+  if (process.platform !== 'win32') return false;
+  const roots = [
+    process.env.ProgramFiles,
+    process.env['ProgramFiles(x86)'],
+    process.env.ProgramW6432,
+  ].filter((value): value is string => !!value);
+  return roots.some(root => isPathInside(root, candidate));
+}
+
+function getRoot(): string {
+  const candidate = exeRoot();
+  if (isProtectedInstallRoot(candidate)) return app.getPath('userData');
+  const writable = canWriteDirectory(candidate);
+  if ((hasPortableRootState(candidate) && writable) || writable) return candidate;
+  return app.getPath('userData');
 }
 
 function resolveRoot(args: string[]): string {
   return pathArgValue(args, '--root') || (app.isPackaged ? getRoot() : process.cwd());
 }
+
+function startupLogPath(): string {
+  try {
+    const userData = app.getPath('userData');
+    fs.mkdirSync(userData, { recursive: true });
+    return path.join(userData, 'startup.log');
+  } catch {
+    return path.join(require('os').tmpdir(), 'newmark-agent-startup.log');
+  }
+}
+
+function logStartupFailure(stage: string, error: unknown): void {
+  const message = error instanceof Error ? `${error.stack || error.message}` : String(error);
+  const line = `[${new Date().toISOString()}] ${stage}\n${message}\n`;
+  try {
+    fs.appendFileSync(startupLogPath(), line, 'utf-8');
+  } catch {
+    try { fs.appendFileSync(path.join(require('os').tmpdir(), 'newmark-agent-startup.log'), line, 'utf-8'); } catch {}
+  }
+}
+
+process.on('uncaughtException', error => {
+  logStartupFailure('uncaughtException', error);
+});
+
+process.on('unhandledRejection', reason => {
+  logStartupFailure('unhandledRejection', reason);
+});
 
 function resolveAppPath(root: string, targetPath: string): string {
   if (!targetPath) return root;
@@ -542,7 +621,7 @@ if (hasCliCommand) {
   });
 
   app.whenReady().then(async () => {
-    const root = resolveRoot(args);
+    let root = resolveRoot(args);
     const automationWakeMode = args.includes('--automation-wake');
     const syncAutomationWakeSoon = () => {
       setTimeout(() => {
@@ -561,7 +640,16 @@ if (hasCliCommand) {
         }
       }, 100);
     };
-    firstRunInit(root);
+    try {
+      firstRunInit(root);
+    } catch (e) {
+      logStartupFailure(`firstRunInit:${root}`, e);
+      const explicitRoot = pathArgValue(args, '--root');
+      const fallbackRoot = app.getPath('userData');
+      if (explicitRoot || path.resolve(root) === path.resolve(fallbackRoot)) throw e;
+      root = fallbackRoot;
+      firstRunInit(fallbackRoot);
+    }
     installBrowserControlBackend();
     agent = new Agent(root);
     automationWake = new AutomationWakeScheduler(root, process.execPath);
@@ -1620,6 +1708,12 @@ if (hasCliCommand) {
     ipcMain.handle('app:drag', () => {
       // Window drag is handled by the renderer
     });
+  }).catch((e: Error) => {
+    logStartupFailure('desktop-startup', e);
+    try {
+      dialog.showErrorBox('Newmark Agent startup failed', `${e.message}\n\nSee ${startupLogPath()}`);
+    } catch {}
+    app.exit(1);
   });
   }
 }

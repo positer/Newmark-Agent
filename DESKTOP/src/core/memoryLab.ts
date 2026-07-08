@@ -84,8 +84,16 @@ export class MemoryLabManager {
 
   ensure(): void {
     fs.mkdirSync(this.componentsDir, { recursive: true });
-    if (!fs.existsSync(this.indexPath)) this.saveIndex(this.emptyIndex());
-    else this.saveIndex(this.normalizeIndex(this.loadIndex()));
+    if (!fs.existsSync(this.indexPath)) {
+      this.saveIndex(this.emptyIndex());
+      return;
+    }
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.indexPath, 'utf-8'));
+      this.normalizeIndex(raw);
+    } catch {
+      this.saveIndex(this.emptyIndex());
+    }
   }
 
   instructions(): string {

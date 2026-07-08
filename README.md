@@ -201,12 +201,12 @@ npm.cmd run release:real-provider-stress
 
 The dev 1.0.2 release keeps the current native TypeScript desktop Agent stack while adding Linux artifacts to the public GitHub release. The package includes the latest shared-backend multi-window desktop flow, closed-loop Computer Use takeover border with startup liveness checks and filled corners, exact-folder workspace uniqueness, GitHub audit/security prompts, explicit GitHub Models login, native OpenSSH workspace linking, message Markdown/formula rendering, rootless pasted-image attachments, persistent terminal takeover, layout memory, native tool switches, Linux AppImage/deb packaging, and platform-aware terminal defaults.
 
-The Windows dev 1.0.2 package was rebuilt on 2026-07-08 to fix clean-machine `win-unpacked` startup. Noncritical Windows automation wake scheduling now runs after the first desktop window is shown and Task Scheduler calls are timeout-bounded, preventing a no-window primary process from holding the single-instance lock. The Windows executable also registers and reports `Newmark Agent` through runtime app identity and patched version resources rather than `Electron`.
+The Windows dev 1.0.2 package was rebuilt on 2026-07-08 to fix clean-machine `win-unpacked` startup. Noncritical Windows automation wake scheduling now runs after the first desktop window is shown and Task Scheduler calls are timeout-bounded, preventing a no-window primary process from holding the single-instance lock. Packaged double-click startup also no longer uses protected install directories such as `C:\Program Files\Newmark Agent` as the writable runtime root; it falls back to the Electron user-data directory and logs fatal startup failures to `startup.log` instead of silently leaving a no-window background process. The Windows executable registers and reports `Newmark Agent` through runtime app identity and patched version resources rather than `Electron`.
 
 Current Windows artifact SHA256 values:
 
-- `Newmark-Agent-1.0.2-portable-x64.exe`: `55233F80269EC75804B1957D40A2BE0EDCB6E59E923ECBCBD90F61E731836073`
-- `Newmark-Agent-1.0.2-win-unpacked-x64.zip`: `7425015CEA86E391DBD12F6C4500BBE7360D3E2EEC3A76C119784ACD287EBB90`
+- `Newmark-Agent-1.0.2-portable-x64.exe`: `57AD33D231F077C4751D2C569286E9F1536D02BB04A2780B4BA48B2F8E2F064C`
+- `Newmark-Agent-1.0.2-win-unpacked-x64.zip`: `369FB8D45356C4C0338FF5002988F674D1C11D4EA27DAB0A1B3275695FDB78BD`
 
 Release validation for this baseline should include source tests, Windows portable packaging, Linux packaging, Linux WSLg GUI smoke, and the Linux real-provider smoke before GitHub publication. Computer Use desktop screenshots are one-time inputs only and must not be archived. The current Computer Use takeover overlay compiles its WinForms form with explicit assembly references, checks startup liveness, keeps CLI timed overlays duration-bound, and uses a winding border region so the four corners stay closed.
 

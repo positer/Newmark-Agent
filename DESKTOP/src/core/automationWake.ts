@@ -145,12 +145,12 @@ export class AutomationWakeScheduler {
 }
 
 function defaultWakeCommandRunner(command: string, args: string[]): WakeCommandResult {
-  const result = spawnSync(command, args, { windowsHide: true, encoding: 'utf-8' });
+  const result = spawnSync(command, args, { windowsHide: true, encoding: 'utf-8', timeout: 5000 });
   return {
     ok: result.status === 0,
     command,
     args,
-    error: result.status === 0 ? undefined : (result.stderr || result.stdout || `exit ${result.status}`),
+    error: result.status === 0 ? undefined : (result.error?.message || result.stderr || result.stdout || `exit ${result.status}`),
   };
 }
 

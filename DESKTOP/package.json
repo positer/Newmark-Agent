@@ -1,5 +1,6 @@
 {
   "name": "newmark-agent",
+  "productName": "Newmark Agent",
   "version": "1.0.2",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "homepage": "https://github.com/positer/Newmark-Agent",
@@ -63,6 +64,7 @@
   "build": {
     "appId": "ai.newmark.agent",
     "productName": "Newmark Agent",
+    "executableName": "Newmark Agent",
     "copyright": "Copyright © 2025 Newmark AI",
     "directories": {
       "output": "../release",
@@ -141,6 +143,7 @@
     "https-proxy-agent": "^9.1.0",
     "jsdom": "^29.1.1",
     "lucide-static": "^1.21.0",
+    "resedit": "^1.7.2",
     "typebox": "^1.1.38"
   },
   "devDependencies": {

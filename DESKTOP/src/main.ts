@@ -18,6 +18,14 @@ import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, installUpdate 
 import { onTerminalTakeoverEvent, terminalTakeoverState, writeTerminalTakeoverSession } from './tools/terminalTakeover';
 import { nativeToolCatalogForState, normalizeNativeToolEnabled } from './tools/nativeTools';
 
+const APP_NAME = 'Newmark Agent';
+const APP_ID = 'ai.newmark.agent';
+
+app.setName(APP_NAME);
+if (process.platform === 'win32') {
+  app.setAppUserModelId(APP_ID);
+}
+
 let mainWindow: BrowserWindow | null = null;
 let agent: Agent | null = null;
 let conversationKernel: ConversationKernel | null = null;
@@ -536,6 +544,23 @@ if (hasCliCommand) {
   app.whenReady().then(async () => {
     const root = resolveRoot(args);
     const automationWakeMode = args.includes('--automation-wake');
+    const syncAutomationWakeSoon = () => {
+      setTimeout(() => {
+        try {
+          if (automationWake && automation) lastWakeSync = automationWake.sync(automation.list());
+        } catch (e) {
+          lastWakeSync = {
+            platform: process.platform,
+            active: false,
+            nextRunAt: '',
+            taskName: automationWake?.taskName() || '',
+            registered: false,
+            deleted: false,
+            skippedReason: e instanceof Error ? e.message : String(e),
+          };
+        }
+      }, 100);
+    };
     firstRunInit(root);
     installBrowserControlBackend();
     agent = new Agent(root);
@@ -556,9 +581,22 @@ if (hasCliCommand) {
     agent.setAutomationManager(automation);
     ensureConversationKernel(root);
     automation.onChange(items => {
-      if (automationWake) lastWakeSync = automationWake.sync(items);
+      setTimeout(() => {
+        try {
+          if (automationWake) lastWakeSync = automationWake.sync(items);
+        } catch (e) {
+          lastWakeSync = {
+            platform: process.platform,
+            active: false,
+            nextRunAt: '',
+            taskName: automationWake?.taskName() || '',
+            registered: false,
+            deleted: false,
+            skippedReason: e instanceof Error ? e.message : String(e),
+          };
+        }
+      }, 100);
     });
-    lastWakeSync = automationWake.sync(automation.list());
     if (automationWakeMode) {
       await automation.tick();
       lastWakeSync = automationWake.sync(automation.list());
@@ -605,6 +643,7 @@ if (hasCliCommand) {
       if (!automationWakeMode) {
         win.maximize();
         win.show();
+        syncAutomationWakeSoon();
         if (!app.isPackaged) win.webContents.openDevTools({ mode: 'bottom' });
       }
 
@@ -638,7 +677,9 @@ if (hasCliCommand) {
     mainWindow = createDesktopWindow();
 
     app.on('will-quit', () => {
-      if (automationWake && automation) lastWakeSync = automationWake.sync(automation.list());
+      try {
+        if (automationWake && automation) lastWakeSync = automationWake.sync(automation.list());
+      } catch {}
       automation?.stop();
       if (tray) { tray.destroy(); tray = null; }
       BrowserControl.setBackend(null);

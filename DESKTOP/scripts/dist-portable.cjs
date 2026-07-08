@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const asar = require('@electron/asar');
-const { patchAndVerify, verifyExeIcon } = require('./patch-win-exe-icon.cjs');
+const { patchAndVerify, patchExeIdentity, verifyExeIcon } = require('./patch-win-exe-icon.cjs');
 
 const root = path.resolve(__dirname, '..');
 const outputDir = path.resolve(root, '..', 'release');
@@ -12,6 +12,7 @@ const unpackedExe = path.join(outputDir, 'win-unpacked', 'Newmark Agent.exe');
 const appAsar = path.join(outputDir, 'win-unpacked', 'resources', 'app.asar');
 const packageIcon = path.join(root, 'assets', 'icon.ico');
 const zipPath = path.join(outputDir, `Newmark-Agent-${appPackage.version}-win-unpacked-x64.zip`);
+const expectedProductName = 'Newmark Agent';
 
 function log(message) {
   console.log(`[dist-portable] ${message}`);
@@ -55,10 +56,33 @@ function verifyPackagedOutput() {
   if (html.includes('href="lucide-sprite.svg#')) throw new Error('packaged UI still uses external lucide sprite hrefs');
   if (!html.includes('href="#message-square') || !html.includes('href="#send')) throw new Error('packaged UI missing expected local icon hrefs');
   verifyExeIcon(unpackedExe, packageIcon);
+  verifyExeIdentity(unpackedExe);
 }
 
 function patchPackagedOutput() {
+  patchExeIdentity(unpackedExe);
   patchAndVerify(unpackedExe, packageIcon);
+}
+
+function verifyExeIdentity(exe) {
+  if (process.platform !== 'win32') return;
+  const psQuote = value => `'${String(value).replace(/'/g, "''")}'`;
+  const ps = [
+    '$ErrorActionPreference="Stop"',
+    `$vi=[System.Diagnostics.FileVersionInfo]::GetVersionInfo(${psQuote(path.resolve(exe))})`,
+    '[PSCustomObject]@{ProductName=$vi.ProductName;FileDescription=$vi.FileDescription;OriginalFilename=$vi.OriginalFilename}|ConvertTo-Json -Compress',
+  ].join('; ');
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
+    cwd: root,
+    encoding: 'utf-8',
+    windowsHide: true,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr || result.stdout || `exe identity check exited ${result.status}`);
+  const data = JSON.parse(String(result.stdout || '').trim());
+  if (data.ProductName !== expectedProductName) throw new Error(`win-unpacked exe ProductName is ${data.ProductName || '<empty>'}`);
+  if (!String(data.FileDescription || '').includes(expectedProductName)) throw new Error(`win-unpacked exe FileDescription is ${data.FileDescription || '<empty>'}`);
+  if (String(data.OriginalFilename || '').toLowerCase() === 'electron.exe') throw new Error('win-unpacked exe OriginalFilename still reports electron.exe');
 }
 
 function createZipPack() {

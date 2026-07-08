@@ -3,8 +3,10 @@ import type { Configuration } from 'electron-builder';
 const config: Configuration = {
   appId: 'ai.newmark.agent',
   productName: 'Newmark Agent',
+  executableName: 'Newmark Agent',
   copyright: 'Copyright © 2025 Newmark AI',
   extraMetadata: {
+    productName: 'Newmark Agent',
     homepage: 'https://github.com/positer/Newmark-Agent',
     author: {
       name: 'Newmark AI',

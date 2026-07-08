@@ -2,6 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const ResEdit = require('resedit');
 
 function fail(message) {
   throw new Error(message);
@@ -287,6 +288,58 @@ function verifyExeIcon(exePath, iconPath) {
   }
 }
 
+function normalizeVersion4(version) {
+  const parts = String(version || '0.0.0')
+    .split('.')
+    .map(part => {
+      const n = Number.parseInt(part, 10);
+      if (!Number.isFinite(n) || n < 0) return 0;
+      return Math.min(65535, n);
+    });
+  while (parts.length < 4) parts.push(0);
+  return parts.slice(0, 4).join('.');
+}
+
+function patchExeIdentity(exePath, options = {}) {
+  if (process.platform !== 'win32') return { skipped: true };
+  if (!fs.existsSync(exePath)) fail(`missing exe: ${exePath}`);
+  const packagePath = options.packagePath || path.join(__dirname, '..', 'package.json');
+  const pkg = fs.existsSync(packagePath) ? JSON.parse(fs.readFileSync(packagePath, 'utf8')) : {};
+  const productName = options.productName || pkg.productName || 'Newmark Agent';
+  const version = normalizeVersion4(options.version || pkg.version || '0.0.0');
+  const description = options.description || productName;
+  const copyright = options.copyright || (pkg.build && pkg.build.copyright) || 'Copyright (c) 2025 Newmark AI';
+  const companyName = options.companyName || (pkg.author && pkg.author.name) || 'Newmark AI';
+  const originalFilename = options.originalFilename || `${productName}.exe`;
+
+  const data = fs.readFileSync(exePath);
+  const exe = ResEdit.NtExecutable.from(data, { ignoreCert: true });
+  const res = ResEdit.NtExecutableResource.from(exe);
+  let versionInfos = ResEdit.Resource.VersionInfo.fromEntries(res.entries);
+  const language = { lang: 1033, codepage: 1200 };
+  if (versionInfos.length === 0) {
+    versionInfos = [ResEdit.Resource.VersionInfo.create(1033, {}, [{ ...language, values: {} }])];
+  }
+  for (const vi of versionInfos) {
+    vi.setFileVersion(version, language.lang);
+    vi.setProductVersion(version, language.lang);
+    vi.setStringValues(language, {
+      CompanyName: companyName,
+      FileDescription: description,
+      FileVersion: version,
+      InternalName: productName,
+      LegalCopyright: copyright,
+      OriginalFilename: originalFilename,
+      ProductName: productName,
+      ProductVersion: version,
+    });
+    vi.outputToResourceEntries(res.entries);
+  }
+  res.outputResource(exe);
+  fs.writeFileSync(exePath, Buffer.from(exe.generate()));
+  return { productName, description, originalFilename, version };
+}
+
 function patchAndVerify(exePath, iconPath) {
   let resourceIconPath = iconPath;
   let cleanupPath = null;
@@ -319,4 +372,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { patchAndVerify, verifyExeIcon };
+module.exports = { patchAndVerify, verifyExeIcon, patchExeIdentity };

@@ -201,6 +201,13 @@ npm.cmd run release:real-provider-stress
 
 The dev 1.0.2 release keeps the current native TypeScript desktop Agent stack while adding Linux artifacts to the public GitHub release. The package includes the latest shared-backend multi-window desktop flow, closed-loop Computer Use takeover border with startup liveness checks and filled corners, exact-folder workspace uniqueness, GitHub audit/security prompts, explicit GitHub Models login, native OpenSSH workspace linking, message Markdown/formula rendering, rootless pasted-image attachments, persistent terminal takeover, layout memory, native tool switches, Linux AppImage/deb packaging, and platform-aware terminal defaults.
 
+The Windows dev 1.0.2 package was rebuilt on 2026-07-08 to fix clean-machine `win-unpacked` startup. Noncritical Windows automation wake scheduling now runs after the first desktop window is shown and Task Scheduler calls are timeout-bounded, preventing a no-window primary process from holding the single-instance lock. The Windows executable also registers and reports `Newmark Agent` through runtime app identity and patched version resources rather than `Electron`.
+
+Current Windows artifact SHA256 values:
+
+- `Newmark-Agent-1.0.2-portable-x64.exe`: `55233F80269EC75804B1957D40A2BE0EDCB6E59E923ECBCBD90F61E731836073`
+- `Newmark-Agent-1.0.2-win-unpacked-x64.zip`: `7425015CEA86E391DBD12F6C4500BBE7360D3E2EEC3A76C119784ACD287EBB90`
+
 Release validation for this baseline should include source tests, Windows portable packaging, Linux packaging, Linux WSLg GUI smoke, and the Linux real-provider smoke before GitHub publication. Computer Use desktop screenshots are one-time inputs only and must not be archived. The current Computer Use takeover overlay compiles its WinForms form with explicit assembly references, checks startup liveness, keeps CLI timed overlays duration-bound, and uses a winding border region so the four corners stay closed.
 
 ## Repository Hygiene

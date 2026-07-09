@@ -2516,6 +2516,25 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   animation: btn-pulse 1.5s ease-in-out infinite;
 }
 
+#submit-btn.running-action {
+  position: relative;
+  overflow: visible;
+  background: rgba(14, 16, 24, 0.88);
+  border-color: rgba(255,255,255,0.08);
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.04), 0 2px 16px var(--accent-glow);
+  animation: none;
+}
+
+#submit-btn.running-action > svg,
+#submit-btn.running-action > .icon-only-label {
+  position: relative;
+  z-index: 1;
+}
+
+#submit-btn.stop-action {
+  color: #fff;
+}
+
 @keyframes btn-pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
 
 /* ============================================================
@@ -3701,7 +3720,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
               <button class="mode-toggle-btn active" data-mode="guide" onclick="window.setInputMode('guide')">Guide</button>
               <button class="mode-toggle-btn" data-mode="next" onclick="window.setInputMode('next')">Next</button>
             </div>
-            <button id="submit-btn" onclick="window.sendMessage()" title="Send (Enter)"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#send"></use></svg><span class="icon-only-label">Send</span></button>
+            <button id="submit-btn" onclick="window.submitCurrentAction()" title="Send"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#send"></use></svg><span class="icon-only-label">Send</span></button>
           </div>
         </div>
       </div>
@@ -3950,6 +3969,7 @@ var NEWMARK_I18N = {
     'left.collapseSecondary': 'Collapse workspace panel',
     'input.placeholder': 'Input instruction...',
     'input.send': 'Send',
+    'input.stop': 'Stop',
     'input.guide': 'Guide',
     'input.next': 'Next',
     'mode.build': 'Build',
@@ -4398,6 +4418,7 @@ var NEWMARK_I18N = {
     'left.collapseSecondary': '折叠工作区面板',
     'input.placeholder': '输入指令...',
     'input.send': '发送',
+    'input.stop': '停止',
     'input.guide': 'Guide',
     'input.next': 'Next',
     'mode.build': 'Build',
@@ -4893,7 +4914,7 @@ function applyLanguageToUi() {
   setTitleAndLabel('#left-thumb .lt-item[onclick="window.showFlowEditor()"]', t('left.flow'));
   setTitleAndLabel('#left-thumb .lt-item[onclick="window.openSettings()"]', t('left.settings'));
   setTitleAndLabel('#lt-ws-icon', t('left.workspaces'));
-  setTitleAndLabel('#submit-btn', t('input.send'));
+  updateSubmitButtonState();
   setTitleAndLabel('#left-collapse-btn', t('left.collapse'));
   setSelectOptionText('mode-select', { build: t('mode.build'), plan: t('mode.plan'), goal: t('mode.goal'), flow: t('mode.flow') });
   setSelectOptionText('intel-select', { low: t('intel.low'), medium: t('intel.medium'), high: t('intel.high') });
@@ -6204,7 +6225,64 @@ function setWorking(working) {
     if (title) title.classList.remove('animate');
     if (ws) ws.classList.remove('marquee-border');
   }
+  updateSubmitButtonState();
 }
+
+function promptHasText() {
+  return !!(els.prompt && String(els.prompt.value || '').trim());
+}
+
+function isCurrentConversationRunning() {
+  var id = activeConversationId();
+  return !!(id && state.runningConversations && state.runningConversations[id]);
+}
+
+function setSubmitButtonVisual(icon, label, running, stopMode) {
+  var btn = els['submit-btn'] || document.getElementById('submit-btn');
+  if (!btn) return;
+  btn.innerHTML = iconSvg(icon, label, 'small');
+  btn.setAttribute('title', label);
+  btn.setAttribute('aria-label', label);
+  btn.classList.toggle('running-action', !!running);
+  btn.classList.toggle('marquee-border', !!running);
+  btn.classList.toggle('stop-action', !!stopMode);
+  btn.classList.toggle('send-action', !!running && !stopMode);
+}
+
+function updateSubmitButtonState() {
+  var running = isCurrentConversationRunning();
+  var hasText = promptHasText();
+  if (running && !hasText) {
+    setSubmitButtonVisual('square', t('input.stop'), true, true);
+  } else {
+    setSubmitButtonVisual('send', t('input.send'), running, false);
+  }
+}
+
+window.stopCurrentConversation = async function() {
+  var conversationId = activeConversationId();
+  if (!conversationId || !state.runningConversations || !state.runningConversations[conversationId]) return false;
+  try {
+    if (api.abortConversation) await api.abortConversation(conversationId);
+  } catch(e) {
+    addMsg('assistant', '[Error] ' + (e.message || String(e)), 'error', state.model);
+    return false;
+  }
+  delete state.runningConversations[conversationId];
+  state._sendInFlight = Object.keys(state.runningConversations).length > 0;
+  setWorking(state._sendInFlight);
+  if (window.renderInputStack) window.renderInputStack();
+  renderConversations();
+  return true;
+};
+
+window.submitCurrentAction = function() {
+  if (isCurrentConversationRunning() && !promptHasText()) {
+    window.stopCurrentConversation();
+    return;
+  }
+  window.sendMessage();
+};
 
 window.renderContextCompression = function() {
   var el = els['context-compression-pill'] || document.getElementById('context-compression-pill');
@@ -6461,6 +6539,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   if (conversationRunning && effectiveInputMode === 'guide' && !opts.fromQueue) {
     els.prompt.value = '';
     if (includePromptAttachments) clearPromptAttachments();
+    updateSubmitButtonState();
     if (api.setInputMode) await api.setInputMode('guide').catch(function(){});
     addMsg('user', text, 'guide', state.model);
     api.sendMessage(text, lockedConversationId).then(function(r) {
@@ -6495,6 +6574,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   setWorking(true);
   if (!opts.fromQueue) els.prompt.value = '';
   if (includePromptAttachments) clearPromptAttachments();
+  updateSubmitButtonState();
   var previousMode = state.mode;
   if (opts.forceBuild && state.mode !== 'build') {
     state.mode = 'build';
@@ -7670,6 +7750,7 @@ window.renderInputStack = function() {
   renderTodo();
   window.renderQueuePanel();
   renderGoalBar();
+  updateSubmitButtonState();
 };
 
 // === Mode Selectors ===
@@ -11101,6 +11182,11 @@ function stopMarqueeJS() {
   // === Event Listeners ===
   if (els.prompt) {
     els.prompt.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && isCurrentConversationRunning() && !promptHasText()) {
+        e.preventDefault();
+        window.stopCurrentConversation();
+        return;
+      }
       if (e.key === 'Enter' && e.ctrlKey) {
         e.preventDefault();
         var opposite = state.inputMode === 'guide' ? 'next' : 'guide';
@@ -11111,6 +11197,9 @@ function stopMarqueeJS() {
         e.preventDefault();
         window.sendMessage();
       }
+    });
+    els.prompt.addEventListener('input', function() {
+      updateSubmitButtonState();
     });
     els.prompt.addEventListener('paste', function(e) {
       var imageFiles = imageFilesFromDataTransfer(e.clipboardData);

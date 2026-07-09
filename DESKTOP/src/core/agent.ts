@@ -345,7 +345,7 @@ export class Agent {
     return event;
   }
 
-  appendWorkflowMessage(content: string, toolName?: string, toolArgs?: string): void {
+  appendWorkflowMessage(content: string, toolName?: string, toolArgs?: string, persist = true): void {
     const safe = this.sanitizeAssistantOutput(content);
     const suffix = toolArgs ? `\n\n${toolArgs}` : '';
     if (toolName === 'agent_status') return;
@@ -356,7 +356,7 @@ export class Agent {
       model: this.model,
       timestamp: this.nowLabel(),
     });
-    this.saveWorkspaceConversationState();
+    if (persist) this.saveWorkspaceConversationState();
   }
 
   recordToolResult(toolName: string, result: string): void {

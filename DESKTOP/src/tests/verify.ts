@@ -197,6 +197,8 @@ async function main() {
   assert(uiHtml.includes("{ id: 'default', summary: t('workspace.defaultConversation')") && !uiHtml.includes("'conv-' + key + '-default'") && !uiHtml.includes("'conv-default-' + currentWorkspaceKey()"), 'ui html: default conversation id matches backend default id');
   assert(uiHtml.includes('function applyBackendConversations(items, activeId)') && uiHtml.includes('var preferredActiveId = hasLocalActive ? localActiveId') && uiHtml.includes('applyBackendConversations(backendConversations, preferredActiveId)'), 'ui html: reloads persisted conversation list from backend state while preserving each window-local active conversation');
   assert(uiHtml.includes('function activeConversationId()') && uiHtml.includes('api.sendMessage(text, lockedConversationId)'), 'ui html: sends initiating conversation id with each agent turn');
+  assert(uiHtml.includes('window.submitCurrentAction = function()') && uiHtml.includes('window.stopCurrentConversation = async function()') && uiHtml.includes("api.abortConversation(conversationId)") && uiHtml.includes("e.key === 'Escape' && isCurrentConversationRunning() && !promptHasText()"), 'ui html: current running conversation with empty prompt shows a Stop action bound to Esc and abortConversation');
+  assert(uiHtml.includes('function updateSubmitButtonState()') && uiHtml.includes("setSubmitButtonVisual('square', t('input.stop'), true, true)") && uiHtml.includes("setSubmitButtonVisual('send', t('input.send'), running, false)") && uiHtml.includes("els.prompt.addEventListener('input'"), 'ui html: submit button switches between Newmark marquee Stop and Send based on current conversation running state and prompt text');
   assert(uiHtml.includes('if (api.setMode) await api.setMode(state.mode)') && uiHtml.includes('if (api.setModel && state.model) await api.setModel(state.model)'), 'ui html: send synchronizes current mode and model before backend turn');
   assert(uiHtml.includes('renderConversations();') && uiHtml.includes('r.conversations') && uiHtml.includes('r.conversationId || lockedConversationId'), 'ui html: refreshes conversation titles from send response');
   assert(uiHtml.includes('runningConversations') && uiHtml.includes('setupAgentWorkEvents()') && uiHtml.includes('appendAgentWorkEvent(payload)') && uiHtml.includes('var id = String(event.conversationId ||') && uiHtml.includes('renderAgentWorkEvent(event)') && uiHtml.includes('summary: item.title ||'), 'ui html: supports per-conversation running state, conversation-bound live work events, and backend titles');
@@ -238,6 +240,11 @@ async function main() {
   assert(mainKernelSource.includes("ipcMain.handle('agent:send'") && mainKernelSource.includes('const kernel = ensureConversationKernel(root)') && mainKernelSource.includes('kernel.prompt(message, targetConversation'), 'kernel: desktop send path uses the shared native conversation backend');
   assert(mainKernelSource.includes('ensureConversationKernel(root') && mainKernelSource.includes('conversationKernel.subscribe(event => broadcastAgentWorkEvent(event))') && mainKernelSource.includes('workEvents: conversationKernel?.events') && conversationKernelSource.includes('isAnyRunning()'), 'kernel: desktop IPC subscribes one backend event stream and exposes cached event snapshots');
   assert(!piKernelSource.includes("tokens.push({ type: 'text', text });\n      agent.recordToolResult") && piKernelSource.includes("type: 'tool_result'") && piKernelSource.includes('toolCallId: event.toolCallId') && piKernelSource.includes("agent.appendWorkflowMessage(`Tool ${event.toolName} result:"), 'kernel: tool results are streamed and persisted as folded work events, not appended to assistant text tokens');
+  assert(agentKernelSource.includes('appendWorkflowMessage(content: string, toolName?: string, toolArgs?: string, persist = true)') && piKernelSource.includes("agent.appendWorkflowMessage(`Calling tool ${event.toolName}`, event.toolName, agent.visibleToolArgs(args), false)") && piKernelSource.includes("agent.appendWorkflowMessage(`Tool ${event.toolName} result:\\n${display}`, event.toolName, undefined, false)"), 'kernel: high-frequency workflow tool rows defer full conversation-state writes until turn persistence points');
+  assert(piKernelSource.includes('const newmarkTools = agent.subagentToolDefinitions(agent.tools.definitions(agent.mode))') && piKernelSource.includes('streamWithNewmarkProvider(agent, provider, KernelStreamCompat, newmarkTools)') && piKernelSource.includes('kernel.state.tools = toKernelTools(agent, newmarkTools)') && piKernelSource.includes('cachedTools'), 'kernel: per-turn tool schemas are built once and reused by streaming and execution adapters');
+  const streamProviderBody = (piKernelSource.match(/function streamWithNewmarkProvider[\s\S]*?async function transformContext/) || [''])[0];
+  assert(!streamProviderBody.includes('currentAgent.tools.definitions(currentAgent.mode)'), 'kernel: streaming provider does not rebuild tool schemas on every model round');
+  assert(piKernelSource.includes("if (!agent.config.getBool('context', 'auto_compress')) return messages;"), 'kernel: transformContext skips conversion and JSON comparison when auto compression is disabled');
   assert(mainKernelSource.includes("ipcMain.handle('agent:abortConversation'") && mainKernelSource.includes('conversationKernel?.abort(target)') && uiHtml.includes('api.archive(targetId)') && uiHtml.includes('delete state.runningConversations[targetId]'), 'kernel/ui: archiving a running conversation interrupts and archives directly');
   assert(uiHtml.includes('foregroundConversationHoldId') && uiHtml.includes('holdForegroundConversation(activeId, 4500)') && uiHtml.includes('Date.now() < Number(state.foregroundConversationHoldUntil'), 'ui html: foregrounded background conversations stay active briefly during backend refresh');
   assert(uiHtml.includes('trackedConversationUntil') && uiHtml.includes('conversationTrackMs: 300000') && uiHtml.includes('markConversationTracked(previousId') && uiHtml.includes('markConversationTracked(activeId'), 'ui html: conversations keep a five-minute tracking window after foreground switches without aborting background work');
@@ -2753,6 +2760,24 @@ async function main() {
   assert(responsesTokens.some(t => t.type === 'tool_call' && t.toolCall?.name === 'write' && t.toolCall.arguments.includes('README.md')), 'LLMProvider responses fallback: parses function_call tools');
   assert(responsesBodies.some(b => b.instructions === 'system text' && b.max_output_tokens === 20), 'LLMProvider responses fallback: maps instructions and max_output_tokens');
   assert(responsesBodies.some(b => Array.isArray(b.tools) && b.tools[0]?.type === 'function' && b.tools[0]?.name === 'write'), 'LLMProvider responses fallback: converts chat tools to responses tools');
+  responsesBodies.length = 0;
+  responsesPaths.length = 0;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const pathname = new URL(String(url)).pathname;
+    responsesPaths.push(pathname);
+    responsesBodies.push(JSON.parse(String(init?.body || '{}')));
+    return new Response(JSON.stringify({ output_text: 'responses tool result ok' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const responsesToolResultProvider = new LLMProvider('direct-responses-tool-result', 'https://responses.example/v1', 'test-key', 'openai', 'responses');
+  await responsesToolResultProvider.chatStreamWithTools('gpt-5.4-mini', [
+    { role: 'user', content: 'Use a tool' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'call_prev', type: 'function', function: { name: 'write', arguments: '{"path":"README.md"}' } }] },
+    { role: 'tool', tool_call_id: 'call_prev', name: 'write', content: 'write result' },
+  ], 'system text', 0, 20, []).next();
+  globalThis.fetch = originalFetch;
+  const toolResultBody = responsesBodies[0] || {};
+  assert(Array.isArray(toolResultBody.input) && toolResultBody.input.some((item: any) => item.type === 'function_call' && item.call_id === 'call_prev' && item.name === 'write') && toolResultBody.input.some((item: any) => item.type === 'function_call_output' && item.call_id === 'call_prev'), 'LLMProvider Responses mode: includes prior function_call before function_call_output');
+  assert(toolResultBody.input.findIndex((item: any) => item.type === 'function_call' && item.call_id === 'call_prev') < toolResultBody.input.findIndex((item: any) => item.type === 'function_call_output' && item.call_id === 'call_prev'), 'LLMProvider Responses mode: orders function_call before matching function_call_output');
 
   const directResponsesPaths: string[] = [];
   globalThis.fetch = (async (url: string) => {
@@ -2766,6 +2791,15 @@ async function main() {
   globalThis.fetch = originalFetch;
   assert(directResponsesText === 'direct responses ok' && directResponsesTokens.some(t => t.text === 'direct responses ok'), 'LLMProvider Responses mode: parses direct Responses API output');
   assert(directResponsesPaths.length === 2 && directResponsesPaths.every(p => p.endsWith('/responses')), 'LLMProvider Responses mode: uses /responses directly without chat-completions probe');
+
+  globalThis.fetch = (async () => {
+    return new Response(JSON.stringify({ error: { message: 'response mode rejected' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const directResponsesErrorProvider = new LLMProvider('direct-responses-error', 'https://responses.example/v1', 'test-key', 'openai', 'responses');
+  const directResponsesErrorText = await directResponsesErrorProvider.chat('bad-model', [{ role: 'user', content: 'Hi' }], null, 0, 20);
+  const directResponsesValidation = await directResponsesErrorProvider.validate('bad-model');
+  globalThis.fetch = originalFetch;
+  assert(directResponsesErrorText.startsWith('[LLM Error: 400]') && directResponsesValidation.ok === false, 'LLMProvider Responses mode: failed direct responses calls return controlled error text and validate as unavailable');
 
   const directChatPaths: string[] = [];
   const directChatBodies: any[] = [];

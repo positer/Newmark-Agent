@@ -405,6 +405,26 @@ export class LLMProvider {
         });
         continue;
       }
+      if (role === 'assistant') {
+        const content = this.normalizeResponsesContent(msg.content);
+        const hasText = (typeof content === 'string' && content.trim()) || (Array.isArray(content) && content.length);
+        if (hasText) out.push({ role: 'assistant', content });
+        const toolCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+        for (const tcRaw of toolCalls) {
+          const tc = tcRaw as Record<string, unknown>;
+          const fn = (tc.function || {}) as Record<string, unknown>;
+          const name = String(fn.name || '').trim();
+          const callId = String(tc.id || tc.call_id || '');
+          if (!name || !callId) continue;
+          out.push({
+            type: 'function_call',
+            call_id: callId,
+            name,
+            arguments: typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments || {}),
+          });
+        }
+        continue;
+      }
       const normalizedRole = role === 'assistant' || role === 'system' ? role : 'user';
       out.push({ role: normalizedRole, content: this.normalizeResponsesContent(msg.content) });
     }
@@ -502,7 +522,7 @@ export class LLMProvider {
       this.responsesBody(model, messages, systemPrompt, temperature, maxTokens)
     );
     if (!response.ok) {
-      throw new Error(`LLM Error: ${response.status} ${await response.text()}`);
+      return `[LLM Error: ${response.status}] ${await response.text()}`;
     }
     return this.extractResponsesText(await response.json() as Record<string, unknown>);
   }
@@ -921,7 +941,7 @@ export class LLMProvider {
     try {
       const result = await this.chat(model, [{ role: 'user', content: 'Hi' }], null, 0.1, 50);
       const latency = (Date.now() - start) / 1000;
-      return { ok: result.length > 0, latency };
+      return { ok: result.length > 0 && !/^\s*\[(?:LLM Error|Error)(?::|\])/i.test(result), latency };
     } catch {
       return { ok: false, latency: (Date.now() - start) / 1000 };
     }

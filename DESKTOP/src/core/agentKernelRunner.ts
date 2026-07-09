@@ -133,8 +133,9 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
 
   const systemPrompt = agent.buildSystemPrompt();
   const { temperature, maxTokens } = provider.intelligenceConfig(agent.intelligence);
+  const newmarkTools = agent.subagentToolDefinitions(agent.tools.definitions(agent.mode));
   const kernel = new NativeAgent({
-    streamFn: streamWithNewmarkProvider(agent, provider, KernelStreamCompat),
+    streamFn: streamWithNewmarkProvider(agent, provider, KernelStreamCompat, newmarkTools),
     toolExecution: 'sequential',
     convertToLlm: (messages: KernelMessage[]) => messages.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'toolResult'),
     transformContext: async (messages: KernelMessage[]) => transformContext(agent, provider, messages),
@@ -143,7 +144,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
 
   kernel.state.systemPrompt = systemPrompt;
   kernel.state.model = toKernelModel(agent);
-  kernel.state.tools = toKernelTools(agent);
+  kernel.state.tools = toKernelTools(agent, newmarkTools);
   kernel.state.messages = toKernelMessages(agent);
   agent.attachAgentKernelRuntime(kernel);
 
@@ -213,7 +214,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   agent.saveWorkspaceConversationState();
   return agent.sanitizeVisibleTokens(tokens);
 
-  function streamWithNewmarkProvider(currentAgent: Agent, currentProvider: LLMProvider, compat: KernelStreamCompat) {
+  function streamWithNewmarkProvider(currentAgent: Agent, currentProvider: LLMProvider, compat: KernelStreamCompat, cachedTools: unknown[]) {
     return async (model: KernelModel, context: { systemPrompt?: string; messages: KernelMessage[]; tools?: KernelTool[] }) => {
       const stream = compat.createAssistantMessageEventStream();
       void (async () => {
@@ -226,14 +227,13 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
         let textStarted = false;
         try {
           const newmarkMessages = fromKernelMessages(context.messages);
-          const tools = currentAgent.tools.definitions(currentAgent.mode);
           for await (const token of currentProvider.chatStreamWithTools(
             currentAgent.model,
             newmarkMessages,
             context.systemPrompt || '',
             temperature,
             maxTokens,
-            tools,
+            cachedTools,
           )) {
             if (token.reasoningContent) {
               const delta = token.reasoningContent.slice(thinking.length);
@@ -284,6 +284,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
 }
 
 async function transformContext(agent: Agent, provider: LLMProvider, messages: KernelMessage[]): Promise<KernelMessage[]> {
+  if (!agent.config.getBool('context', 'auto_compress')) return messages;
   const newmarkMessages = fromKernelMessages(messages, false);
   const beforeCompression = JSON.stringify(newmarkMessages);
   await agent.maybeCompress(newmarkMessages, provider);
@@ -338,7 +339,7 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
         toolName: event.toolName,
         toolArgs: agent.visibleToolArgs(args),
       });
-      agent.appendWorkflowMessage(`Calling tool ${event.toolName}`, event.toolName, agent.visibleToolArgs(args));
+      agent.appendWorkflowMessage(`Calling tool ${event.toolName}`, event.toolName, agent.visibleToolArgs(args), false);
       break;
     }
     case 'turn_end':
@@ -355,7 +356,7 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
         toolCallId: event.toolCallId,
         toolName: event.toolName,
       });
-      agent.appendWorkflowMessage(`Tool ${event.toolName} result:\n${display}`, event.toolName);
+      agent.appendWorkflowMessage(`Tool ${event.toolName} result:\n${display}`, event.toolName, undefined, false);
       break;
     }
     case 'message_end':
@@ -403,8 +404,9 @@ function apiForProtocol(protocol: ProviderProtocol, openAIMode: string): string 
   return 'openai-completions';
 }
 
-function toKernelTools(agent: Agent): KernelTool[] {
-  return agent.subagentToolDefinitions(agent.tools.definitions(agent.mode)).map((tool: any): KernelTool => {
+function toKernelTools(agent: Agent, definitions?: unknown[]): KernelTool[] {
+  const tools = definitions || agent.subagentToolDefinitions(agent.tools.definitions(agent.mode));
+  return tools.map((tool: any): KernelTool => {
     const fn = tool?.function || {};
     return {
       name: String(fn.name || ''),

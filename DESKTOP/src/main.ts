@@ -36,6 +36,25 @@ let tray: Tray | null = null;
 let _forceQuit = false;
 let browserControlWindow: BrowserWindow | null = null;
 
+const STARTUP_HTML = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Newmark Agent</title>
+<style>
+html,body{margin:0;width:100%;height:100%;background:#0a0a1a;color:#f8fafc;font-family:Segoe UI,Arial,sans-serif}
+body{display:flex;align-items:center;justify-content:center;overflow:hidden}
+.shell{min-width:320px;display:flex;gap:14px;align-items:center}
+.mark{width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,#36d399,#60a5fa,#f472b6);box-shadow:0 18px 70px rgba(96,165,250,.24)}
+.title{font-size:18px;font-weight:700;letter-spacing:0}
+.status{margin-top:6px;color:#a7b0c0;font-size:12px}
+</style>
+</head>
+<body>
+<div class="shell"><div class="mark"></div><div><div class="title">Newmark Agent</div><div class="status">Starting workspace runtime...</div></div></div>
+</body>
+</html>`;
+
 function defaultTerminalShell(): string {
   return process.platform === 'win32' ? 'powershell' : 'bash';
 }
@@ -573,7 +592,7 @@ if (hasCliCommand) {
 } else {
   let sidecarProcess: ReturnType<typeof utilityProcess.fork> | null = null;
   const sidecarPassword = randomUUID();
-  let createDesktopWindow: (() => BrowserWindow | null) | null = null;
+  let createDesktopWindow: ((loadUi?: boolean) => BrowserWindow | null) | null = null;
 
   async function startSidecar(root: string): Promise<number> {
     const sidecarPath = path.join(__dirname, 'sidecar.js');
@@ -612,7 +631,7 @@ if (hasCliCommand) {
     app.quit();
   } else {
   app.on('second-instance', () => {
-    const win = createDesktopWindow ? createDesktopWindow() : mainWindow;
+    const win = createDesktopWindow ? createDesktopWindow(!!agent) : mainWindow;
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore();
       win.show();
@@ -623,6 +642,13 @@ if (hasCliCommand) {
   app.whenReady().then(async () => {
     let root = resolveRoot(args);
     const automationWakeMode = args.includes('--automation-wake');
+    const startupMark = Date.now();
+    const recordStartup = (stage: string): void => {
+      if (!app.isPackaged && process.env.NEWMARK_STARTUP_LOG !== '1') return;
+      try {
+        fs.appendFileSync(startupLogPath(), `[${new Date().toISOString()}] startup:${stage}:${Date.now() - startupMark}ms\n`, 'utf-8');
+      } catch {}
+    };
     const syncAutomationWakeSoon = () => {
       setTimeout(() => {
         try {
@@ -640,67 +666,21 @@ if (hasCliCommand) {
         }
       }, 100);
     };
-    try {
-      firstRunInit(root);
-    } catch (e) {
-      logStartupFailure(`firstRunInit:${root}`, e);
-      const explicitRoot = pathArgValue(args, '--root');
-      const fallbackRoot = app.getPath('userData');
-      if (explicitRoot || path.resolve(root) === path.resolve(fallbackRoot)) throw e;
-      root = fallbackRoot;
-      firstRunInit(fallbackRoot);
-    }
-    installBrowserControlBackend();
-    agent = new Agent(root);
-    automationWake = new AutomationWakeScheduler(root, process.execPath);
-    automation = new AutomationManager(agent.config, async (prompt, model) => {
-      if (!agent) return '';
-      const previousModel = agent.model;
-      if (model) agent.setModel(model);
-      try {
-        const tokens = await agent.process(prompt);
-        const text = tokens.map(t => t.text).join('');
-        mainWindow?.webContents.send('automation:updated');
-        return text;
-      } finally {
-        if (model) agent.setModel(previousModel);
-      }
-    });
-    agent.setAutomationManager(automation);
-    ensureConversationKernel(root);
-    automation.onChange(items => {
-      setTimeout(() => {
-        try {
-          if (automationWake) lastWakeSync = automationWake.sync(items);
-        } catch (e) {
-          lastWakeSync = {
-            platform: process.platform,
-            active: false,
-            nextRunAt: '',
-            taskName: automationWake?.taskName() || '',
-            registered: false,
-            deleted: false,
-            skippedReason: e instanceof Error ? e.message : String(e),
-          };
-        }
-      }, 100);
-    });
-    if (automationWakeMode) {
-      await automation.tick();
-      lastWakeSync = automationWake.sync(automation.list());
-      automation.stop();
-      app.quit();
-      return;
-    }
-    automation.start();
+    const loadDesktopWindowUi = (win: BrowserWindow): void => {
+      if (win.isDestroyed()) return;
+      const url = win.webContents.getURL();
+      if (url && url !== 'about:blank' && !url.startsWith('data:text/html')) return;
+      void win.loadFile(path.join(__dirname, 'ui', 'index.html'));
+      recordStartup('ui-load-started');
+    };
+    const loadStartupShell = (win: BrowserWindow): void => {
+      if (win.isDestroyed()) return;
+      void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(STARTUP_HTML)}`);
+      recordStartup('startup-shell-load-started');
+      win.webContents.once('did-finish-load', () => recordStartup('startup-shell-loaded'));
+    };
 
-    void startSidecar(root).then(port => {
-      if (port > 0) {
-        console.log(`[Newmark] Sidecar started on port ${port}`);
-      }
-    });
-
-    createDesktopWindow = () => {
+    createDesktopWindow = (loadUi = true) => {
       const win = new BrowserWindow({
         width: 1600,
         height: 1000,
@@ -721,7 +701,8 @@ if (hasCliCommand) {
       });
 
       if (!mainWindow || mainWindow.isDestroyed()) mainWindow = win;
-      win.loadFile(path.join(__dirname, 'ui', 'index.html'));
+      if (loadUi) loadDesktopWindowUi(win);
+      else loadStartupShell(win);
       win.webContents.on('will-attach-webview', (event, webPreferences) => {
         delete webPreferences.preload;
         webPreferences.nodeIntegration = false;
@@ -731,6 +712,7 @@ if (hasCliCommand) {
       if (!automationWakeMode) {
         win.maximize();
         win.show();
+        recordStartup('window-shown');
         syncAutomationWakeSoon();
         if (!app.isPackaged) win.webContents.openDevTools({ mode: 'bottom' });
       }
@@ -762,7 +744,91 @@ if (hasCliCommand) {
       return win;
     };
 
-    mainWindow = createDesktopWindow();
+    try {
+      firstRunInit(root);
+    } catch (e) {
+      logStartupFailure(`firstRunInit:${root}`, e);
+      const explicitRoot = pathArgValue(args, '--root');
+      const fallbackRoot = app.getPath('userData');
+      if (explicitRoot || path.resolve(root) === path.resolve(fallbackRoot)) throw e;
+      root = fallbackRoot;
+      firstRunInit(fallbackRoot);
+    }
+    recordStartup('first-run-init');
+    if (!automationWakeMode) mainWindow = createDesktopWindow(false);
+
+    setTimeout(async () => {
+      try {
+        agent = new Agent(root);
+        recordStartup('agent-ready');
+        automationWake = new AutomationWakeScheduler(root, process.execPath);
+        automation = new AutomationManager(agent.config, async (prompt, model) => {
+          if (!agent) return '';
+          const previousModel = agent.model;
+          if (model) agent.setModel(model);
+          try {
+            const tokens = await agent.process(prompt);
+            const text = tokens.map(t => t.text).join('');
+            mainWindow?.webContents.send('automation:updated');
+            return text;
+          } finally {
+            if (model) agent.setModel(previousModel);
+          }
+        });
+        agent.setAutomationManager(automation);
+        automation.onChange(items => {
+          setTimeout(() => {
+            try {
+              if (automationWake) lastWakeSync = automationWake.sync(items);
+            } catch (e) {
+              lastWakeSync = {
+                platform: process.platform,
+                active: false,
+                nextRunAt: '',
+                taskName: automationWake?.taskName() || '',
+                registered: false,
+                deleted: false,
+                skippedReason: e instanceof Error ? e.message : String(e),
+              };
+            }
+          }, 100);
+        });
+        if (automationWakeMode) {
+          await automation.tick();
+          lastWakeSync = automationWake.sync(automation.list());
+          automation.stop();
+          app.quit();
+          return;
+        }
+        automation.start();
+        recordStartup('automation-started');
+        syncAutomationWakeSoon();
+
+        try {
+          installBrowserControlBackend();
+          ensureConversationKernel(root);
+          recordStartup('deferred-backends-ready');
+        } catch (e) {
+          logStartupFailure('deferred-backends', e);
+        }
+        void startSidecar(root).then(port => {
+          if (port > 0) {
+            console.log(`[Newmark] Sidecar started on port ${port}`);
+          }
+          recordStartup('sidecar-ready');
+        }).catch(e => logStartupFailure('sidecar-start', e));
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) loadDesktopWindowUi(win);
+        }
+      } catch (e) {
+        logStartupFailure('deferred-desktop-startup', e);
+        try {
+          const message = e instanceof Error ? e.message : String(e);
+          dialog.showErrorBox('Newmark Agent startup failed', `${message}\n\nSee ${startupLogPath()}`);
+        } catch {}
+        app.exit(1);
+      }
+    }, 80);
 
     app.on('will-quit', () => {
       try {
@@ -1708,6 +1774,7 @@ if (hasCliCommand) {
     ipcMain.handle('app:drag', () => {
       // Window drag is handled by the renderer
     });
+    if (agent && mainWindow && !mainWindow.isDestroyed()) loadDesktopWindowUi(mainWindow);
   }).catch((e: Error) => {
     logStartupFailure('desktop-startup', e);
     try {

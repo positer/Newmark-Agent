@@ -171,6 +171,7 @@ async function runUiCheck(root) {
   const port = Number(process.env.NEWMARK_UI_STARTUP_RECOVERY_SMOKE_PORT || '49355');
   let child;
   let cdp;
+  const startedAt = Date.now();
   try {
     child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
       stdio: 'ignore',
@@ -184,7 +185,22 @@ async function runUiCheck(root) {
     await cdp.call('Page.enable');
     await cdp.call('Page.bringToFront');
 
+    const windowProbe = spawnSync('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      `$p = Get-Process -Id ${child.pid} -ErrorAction SilentlyContinue; if (!$p) { 'missing' } else { [pscustomobject]@{ id=$p.Id; handle=$p.MainWindowHandle; responding=$p.Responding; name=$p.ProcessName } | ConvertTo-Json -Compress }`,
+    ], { encoding: 'utf8', windowsHide: true });
+    const windowText = String(windowProbe.stdout || '').trim();
+    if (!windowText || windowText === 'missing') fail('packaged process disappeared before renderer ready');
+    const windowInfo = JSON.parse(windowText);
+    if (!Number(windowInfo.handle)) fail(`packaged process has no visible main window handle: ${windowText}`);
+    if (windowInfo.responding === false) fail(`packaged process is not responding: ${windowText}`);
+
     await waitFor(cdp, `(() => document.readyState === 'complete' && !!window.api && !!document.querySelector('#prompt'))()`, 30000, 'renderer ready');
+    const startupMs = Date.now() - startedAt;
+    if (startupMs > 8000) fail(`packaged startup too slow: ${startupMs}ms`);
     await waitFor(cdp, `window.api.getState().then(s => !!(s.workspaces && s.workspaces.current && s.workspaces.current.isInternal))`, 30000, 'default internal workspace selected');
     const ws = verifyRecoveredRoot(root);
     const state = await evaluate(cdp, `window.api.getState().then(s => ({
@@ -199,7 +215,7 @@ async function runUiCheck(root) {
     if (state.language !== 'auto') fail(`renderer language should start auto: ${JSON.stringify(state)}`);
     if (!['Input instruction...', '输入指令...'].includes(state.promptPlaceholder)) fail(`prompt placeholder missing after recovery: ${JSON.stringify(state)}`);
     if (!state.workspaceNames.includes(ws.name)) fail(`renderer internal workspace list missing default workspace: ${JSON.stringify(state)}`);
-    log('companion files and default internal workspace recovered ok');
+    log(`companion files and default internal workspace recovered ok; startupMs=${startupMs}; window=${windowText}`);
     await captureScreenshot(cdp, screenshotPath);
   } finally {
     try { if (cdp?.ws) cdp.ws.close(); } catch {}

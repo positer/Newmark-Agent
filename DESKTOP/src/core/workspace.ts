@@ -64,11 +64,12 @@ export class WorkspaceManager {
   }
 
   private validate(): void {
+    const before = this.external.length;
     this.external = this.external.filter(w => {
       if (w.kind === 'ssh' || w.sshConnectionId) return !!w.remotePcHash;
       return !w.hostBinding || w.hostBinding === this.pcHash;
     });
-    this.saveExternal();
+    if (this.external.length !== before) this.saveExternal();
   }
 
   private scan(): void {

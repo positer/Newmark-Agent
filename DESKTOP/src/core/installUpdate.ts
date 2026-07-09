@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 
 export interface InstallUpdateOptions {
   source: string;
@@ -21,6 +21,9 @@ export interface InstallUpdateResult {
   copied: string[];
   preserved: string[];
   manifestPath?: string;
+  deferred?: boolean;
+  helperPath?: string;
+  helperPid?: number;
   error?: string;
 }
 
@@ -131,6 +134,109 @@ function copyDirectory(source: string, target: string, preserve: string[], dryRu
   }
 }
 
+function shellSingleQuote(value: string): string {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function runningExecutableTarget(target: string): string {
+  const names = ['Newmark Agent.exe', path.basename(process.execPath || '')].filter(Boolean);
+  for (const name of Array.from(new Set(names))) {
+    const candidate = path.join(target, name);
+    if (path.resolve(candidate).toLowerCase() === path.resolve(process.execPath || '').toLowerCase()) return candidate;
+  }
+  return '';
+}
+
+function collectDirectoryPlan(source: string, target: string, preserve: string[]): { copied: string[]; preserved: string[] } {
+  const copied: string[] = [];
+  const preserved: string[] = [];
+  copyDirectory(source, target, preserve, true, copied, preserved);
+  return { copied, preserved: Array.from(new Set(preserved)).sort() };
+}
+
+function writeDeferredWindowsUpdate(source: string, target: string, preserve: string[], appVersion: string): { helperPath: string; helperPid?: number } {
+  const helperPath = path.join(os.tmpdir(), `newmark-update-${process.pid}-${Date.now()}.ps1`);
+  const preserveItems = preserve.map(item => shellSingleQuote(item)).join(', ');
+  const manifestPath = path.join(target, '.newmark-install.json');
+  const logPath = path.join(os.tmpdir(), `newmark-update-${process.pid}.log`);
+  const script = `
+$ErrorActionPreference = 'Stop'
+$pidToWait = ${process.pid}
+$source = ${shellSingleQuote(source)}
+$target = ${shellSingleQuote(target)}
+$manifestPath = ${shellSingleQuote(manifestPath)}
+$logPath = ${shellSingleQuote(logPath)}
+$appVersion = ${shellSingleQuote(appVersion)}
+$preserve = @(${preserveItems})
+function Write-NewmarkLog([string]$message) {
+  try { Add-Content -LiteralPath $logPath -Value ("[" + (Get-Date).ToString("o") + "] " + $message) -Encoding UTF8 } catch {}
+}
+function Normalize-Rel([string]$value) {
+  return $value.Replace('\\', '/').TrimStart('/').TrimEnd('/')
+}
+function Should-Preserve([string]$rel) {
+  $n = Normalize-Rel $rel
+  foreach ($item in $preserve) {
+    if ($n -eq $item -or $n.StartsWith($item + '/')) { return $true }
+  }
+  return $false
+}
+function Copy-NewmarkDirectory {
+  New-Item -ItemType Directory -Force -Path $target | Out-Null
+  $sourceRoot = (Get-Item -LiteralPath $source).FullName.TrimEnd('\\')
+  Get-ChildItem -LiteralPath $source -Force -Recurse | ForEach-Object {
+    $rel = $_.FullName.Substring($sourceRoot.Length).TrimStart('\\')
+    if (-not $rel) { return }
+    if (Should-Preserve $rel) { return }
+    $dest = Join-Path $target $rel
+    if ($_.PSIsContainer) {
+      New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    } else {
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+      Copy-Item -LiteralPath $_.FullName -Destination $dest -Force
+    }
+  }
+  $manifest = @{
+    appVersion = $appVersion
+    updatedAt = (Get-Date).ToUniversalTime().ToString('o')
+    source = $source
+    deferred = $true
+    waitedForPid = $pidToWait
+    preserved = $preserve
+  } | ConvertTo-Json -Depth 4
+  Set-Content -LiteralPath $manifestPath -Value $manifest -Encoding UTF8
+}
+try {
+  Wait-Process -Id $pidToWait -Timeout 90 -ErrorAction SilentlyContinue
+} catch {}
+for ($i = 0; $i -lt 30; $i++) {
+  try {
+    Copy-NewmarkDirectory
+    Write-NewmarkLog "deferred update complete"
+    exit 0
+  } catch {
+    Write-NewmarkLog ("attempt " + $i + " failed: " + $_.Exception.Message)
+    Start-Sleep -Milliseconds 1000
+  }
+}
+exit 1
+`.trimStart();
+  fs.writeFileSync(helperPath, script, 'utf-8');
+  const launcher = [
+    '$ErrorActionPreference = "Stop"',
+    `$helper = ${shellSingleQuote(helperPath)}`,
+    '$argsList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $helper)',
+    'Start-Process -FilePath "powershell.exe" -ArgumentList $argsList -WindowStyle Hidden',
+  ].join('; ');
+  const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', launcher], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+  return { helperPath, helperPid: child.pid };
+}
+
 export function installUpdate(options: InstallUpdateOptions): InstallUpdateResult {
   const source = path.resolve(options.source || '');
   const target = path.resolve(options.target || '');
@@ -150,6 +256,24 @@ export function installUpdate(options: InstallUpdateOptions): InstallUpdateResul
 
     const stat = fs.statSync(source);
     if (stat.isDirectory()) {
+      const runningTarget = process.platform === 'win32' ? runningExecutableTarget(target) : '';
+      if (!dryRun && runningTarget && fs.existsSync(path.join(source, path.basename(runningTarget)))) {
+        const plan = collectDirectoryPlan(source, target, preserve);
+        const helper = writeDeferredWindowsUpdate(source, target, preserve, appVersion);
+        return {
+          ok: true,
+          appVersion,
+          source,
+          target,
+          dryRun,
+          copied: plan.copied,
+          preserved: plan.preserved,
+          manifestPath: path.join(target, '.newmark-install.json'),
+          deferred: true,
+          helperPath: helper.helperPath,
+          helperPid: helper.helperPid,
+        };
+      }
       if (!dryRun) fs.mkdirSync(target, { recursive: true });
       copyDirectory(source, target, preserve, dryRun, copied, preserved);
     } else if (stat.isFile()) {

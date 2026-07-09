@@ -293,6 +293,11 @@ export class ConfigManager {
 }
 
 export function ensureRootConfig(rootPath: string): void {
+  const configPath = path.join(rootPath, 'config.json');
+  if (fs.existsSync(configPath)) {
+    new ConfigManager(rootPath);
+    return;
+  }
   new ConfigManager(rootPath).save();
 }
 

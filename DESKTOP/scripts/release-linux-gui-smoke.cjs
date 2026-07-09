@@ -6,7 +6,9 @@ const { spawn } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const releaseRoot = path.join(repoRoot, 'release');
-const exePath = process.env.NEWMARK_LINUX_EXE || path.join(releaseRoot, 'linux-unpacked', 'newmark-agent');
+const defaultExePath = path.join(releaseRoot, 'linux-unpacked', 'newmark-agent');
+const productExePath = path.join(releaseRoot, 'linux-unpacked', 'Newmark Agent');
+const exePath = process.env.NEWMARK_LINUX_EXE || (fs.existsSync(defaultExePath) ? defaultExePath : productExePath);
 const screenshotPath = process.env.NEWMARK_LINUX_GUI_SCREENSHOT || path.join(repoRoot, 'archive', '2026-07-06-linux-wsl-gui-smoke.png');
 
 function log(message) {

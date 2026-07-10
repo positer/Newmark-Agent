@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, utilityProcess, Tray, Menu, nativeImage, nativeTheme, webContents, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { createHash, randomUUID } from 'crypto';
 import { spawn, spawnSync, ChildProcess } from 'child_process';
 import { Agent } from './core/agent';
@@ -270,6 +271,37 @@ function exeRoot(): string {
   return path.dirname(app.getPath('exe'));
 }
 
+function userRuntimeRoot(): string {
+  return path.join(os.homedir(), '.Newmark');
+}
+
+function legacyUserDataRoot(): string {
+  try {
+    return app.getPath('userData');
+  } catch {
+    if (process.platform === 'win32') {
+      const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+      return path.join(appData, 'Newmark Agent');
+    }
+    if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'Newmark Agent');
+    return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'Newmark Agent');
+  }
+}
+
+function migrateLegacyRuntimeRoot(root: string): void {
+  const targetRoot = path.resolve(root);
+  const legacyRoot = path.resolve(legacyUserDataRoot());
+  if (targetRoot === legacyRoot || !fs.existsSync(legacyRoot)) return;
+  const items = ['config.json', 'agent.md', 'PC_Hash.config', 'Work', 'Flow', 'skills', 'archive', 'Memory Lab', 'Roots'];
+  for (const item of items) {
+    const from = path.join(legacyRoot, item);
+    const to = path.join(targetRoot, item);
+    try {
+      if (fs.existsSync(from) && !fs.existsSync(to)) fs.cpSync(from, to, { recursive: true, errorOnExist: false });
+    } catch {}
+  }
+}
+
 function hasPortableRootState(candidate: string): boolean {
   return ['config.json', 'agent.md', 'PC_Hash.config', 'Work'].some(item => fs.existsSync(path.join(candidate, item)));
 }
@@ -308,10 +340,10 @@ function isProtectedInstallRoot(candidate: string): boolean {
 }
 
 function shadowRootFor(candidate: string): string {
-  const resolved = path.resolve(candidate || app.getPath('userData'));
+  const resolved = path.resolve(candidate || userRuntimeRoot());
   const base = path.basename(resolved).replace(/[^A-Za-z0-9._-]+/g, '_') || 'root';
   const hash = createHash('sha256').update(resolved.toLowerCase()).digest('hex').slice(0, 16);
-  return path.join(app.getPath('userData'), 'Roots', `${base}-${hash}`);
+  return path.join(userRuntimeRoot(), 'Roots', `${base}-${hash}`);
 }
 
 function writableRuntimeRoot(candidate: string): string {
@@ -322,22 +354,18 @@ function writableRuntimeRoot(candidate: string): string {
 }
 
 function getRoot(): string {
-  const candidate = exeRoot();
-  if (isProtectedInstallRoot(candidate)) return app.getPath('userData');
-  const writable = canWriteDirectory(candidate);
-  if ((hasPortableRootState(candidate) && writable) || writable) return candidate;
-  return app.getPath('userData');
+  return userRuntimeRoot();
 }
 
 function resolveRoot(args: string[]): string {
   const explicitRoot = pathArgValue(args, '--root');
   if (explicitRoot) return writableRuntimeRoot(explicitRoot);
-  return app.isPackaged ? getRoot() : process.cwd();
+  return getRoot();
 }
 
 function startupLogPath(): string {
   try {
-    const userData = app.getPath('userData');
+    const userData = userRuntimeRoot();
     fs.mkdirSync(userData, { recursive: true });
     return path.join(userData, 'startup.log');
   } catch {
@@ -765,7 +793,7 @@ if (hasCliCommand) {
     } catch (e) {
       logStartupFailure(`firstRunInit:${root}`, e);
       const explicitRoot = pathArgValue(args, '--root');
-      const fallbackRoot = app.getPath('userData');
+      const fallbackRoot = userRuntimeRoot();
       if (explicitRoot || path.resolve(root) === path.resolve(fallbackRoot)) throw e;
       root = fallbackRoot;
       firstRunInit(fallbackRoot);

@@ -1,7 +1,7 @@
 {
   "name": "newmark-agent",
   "productName": "Newmark Agent",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "homepage": "https://github.com/positer/Newmark-Agent",
   "author": {
@@ -57,9 +57,11 @@
     "release:real-provider-smoke": "node scripts/release-real-provider-smoke.cjs",
     "release:real-apinebula-memory-switch-smoke": "node scripts/release-real-apinebula-memory-switch-smoke.cjs",
     "release:real-provider-stress": "node scripts/release-real-provider-stress.cjs",
-    "dist:win:installer": "npm run build:clean && node -e \"require('fs').rmSync('../release',{recursive:true,force:true})\" && electron-builder --win nsis",
-    "dist:linux": "npm run build:clean && electron-builder --linux",
-    "dist:mac": "npm run build:clean && electron-builder --mac"
+    "dist:win:installer": "npm run dist:windows-release",
+    "dist:linux": "node scripts/dist-linux.cjs",
+    "dist:linux:native": "npm run build:clean && electron-builder --linux",
+    "dist:mac": "npm run build:clean && electron-builder --mac",
+    "dist:windows-release": "npm run build:clean && node scripts/dist-portable.cjs"
   },
   "build": {
     "appId": "ai.newmark.agent",
@@ -99,24 +101,13 @@
       "signAndEditExecutable": false,
       "target": [
         {
-          "target": "portable",
+          "target": "msi",
           "arch": [
             "x64"
           ]
         }
       ],
       "artifactName": "Newmark-Agent-${version}-${arch}.${ext}"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": false,
-      "createDesktopShortcut": true
-    },
-    "portable": {
-      "splashImage": null,
-      "artifactName": "Newmark-Agent-${version}-portable-${arch}.exe"
     },
     "linux": {
       "icon": "assets/app-icon-dark.png",
@@ -133,6 +124,12 @@
         "dmg"
       ],
       "category": "public.app-category.developer-tools",
+      "artifactName": "Newmark-Agent-${version}-${arch}.${ext}"
+    },
+    "msi": {
+      "oneClick": false,
+      "perMachine": false,
+      "warningsAsErrors": false,
       "artifactName": "Newmark-Agent-${version}-${arch}.${ext}"
     }
   },

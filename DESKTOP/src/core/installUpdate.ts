@@ -154,6 +154,18 @@ function collectDirectoryPlan(source: string, target: string, preserve: string[]
   return { copied, preserved: Array.from(new Set(preserved)).sort() };
 }
 
+function assertTargetWritableBeforeCopy(target: string): void {
+  const probePath = path.join(target, `.newmark-write-probe-${process.pid}-${Date.now()}`);
+  try {
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(probePath, 'ok', 'utf-8');
+    fs.unlinkSync(probePath);
+  } catch {
+    try { if (fs.existsSync(probePath)) fs.unlinkSync(probePath); } catch {}
+    throw new Error(`Update target is not writable: ${target}. Install the MSI or rerun the update with administrator privileges.`);
+  }
+}
+
 function writeDeferredWindowsUpdate(source: string, target: string, preserve: string[], appVersion: string): { helperPath: string; helperPid?: number } {
   const helperPath = path.join(os.tmpdir(), `newmark-update-${process.pid}-${Date.now()}.ps1`);
   const preserveItems = preserve.map(item => shellSingleQuote(item)).join(', ');
@@ -274,7 +286,7 @@ export function installUpdate(options: InstallUpdateOptions): InstallUpdateResul
           helperPid: helper.helperPid,
         };
       }
-      if (!dryRun) fs.mkdirSync(target, { recursive: true });
+      if (!dryRun) assertTargetWritableBeforeCopy(target);
       copyDirectory(source, target, preserve, dryRun, copied, preserved);
     } else if (stat.isFile()) {
       const targetFile = path.resolve(options.targetFile || path.join(target, path.basename(source)));
@@ -282,7 +294,7 @@ export function installUpdate(options: InstallUpdateOptions): InstallUpdateResul
       if (!targetFile.startsWith(target + path.sep) && targetFile !== target) throw new Error('Target file must stay inside target directory.');
       copied.push(normalizeItem(path.relative(target, targetFile) || path.basename(targetFile)));
       if (!dryRun) {
-        fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+        assertTargetWritableBeforeCopy(path.dirname(targetFile));
         fs.copyFileSync(source, targetFile);
       }
     } else {

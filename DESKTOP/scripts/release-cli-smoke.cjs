@@ -299,8 +299,8 @@ function startMockServer() {
     }
     log('memory-lab ok');
 
-    const updateSource = path.join(root, 'release-update-source');
-    const updateTarget = path.join(root, 'release-update-target');
+    const updateSource = path.join(root, 'release update source with spaces');
+    const updateTarget = path.join(root, 'release update target with spaces');
     fs.mkdirSync(path.join(updateSource, 'resources'), { recursive: true });
     fs.mkdirSync(path.join(updateTarget, 'Work'), { recursive: true });
     fs.writeFileSync(path.join(updateSource, 'Newmark Agent.exe'), 'release update binary', 'utf8');

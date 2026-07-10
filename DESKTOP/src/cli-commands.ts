@@ -24,6 +24,18 @@ function argValue(args: string[], key: string): string | undefined {
   return idx >= 0 ? args[idx + 1] : undefined;
 }
 
+function pathArgValue(args: string[], key: string): string | undefined {
+  const idx = args.indexOf(key);
+  if (idx < 0 || idx + 1 >= args.length) return undefined;
+  const parts: string[] = [];
+  for (let i = idx + 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith('--')) break;
+    parts.push(arg);
+  }
+  return parts.join(' ') || undefined;
+}
+
 function argValueFromEnv(args: string[], ...keys: string[]): string | undefined {
   for (const key of keys) {
     const direct = argValue(args, key);
@@ -764,7 +776,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
         repo,
         tag,
         asset,
-        target: argValue(args, '--target') || root,
+        target: pathArgValue(args, '--target') || root,
         expectedVersion: argValue(args, '--expected-version'),
         dryRun: args.includes('--dry-run'),
       });
@@ -772,8 +784,8 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
       if (!result.ok) process.exitCode = 1;
       return true;
     }
-    const source = argValue(args, '--source') || positionalAfter(args, 'install-update')[0] || '';
-    const target = argValue(args, '--target') || root;
+    const source = pathArgValue(args, '--source') || positionalAfter(args, 'install-update')[0] || '';
+    const target = pathArgValue(args, '--target') || root;
     if (!source) {
       safeStderr('Usage: Newmark.exe install-update (--source <portable-exe-or-unpacked-dir>|--check-github|--from-github) [--repo owner/name] [--tag vX.Y.Z] [--asset name] [--target <dir>] [--target-file <path>] [--expected-version <version>] [--preserve csv] [--dry-run] [--root <dir>]\n');
       process.exitCode = 1;
@@ -782,7 +794,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     const result = installUpdate({
       source,
       target,
-      targetFile: argValue(args, '--target-file'),
+      targetFile: pathArgValue(args, '--target-file'),
       expectedVersion: argValue(args, '--expected-version'),
       preserve: splitList(argValue(args, '--preserve')),
       dryRun: args.includes('--dry-run'),

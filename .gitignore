@@ -9,6 +9,7 @@ _ref/
 dist/
 dist-portable/
 DESKTOP/dist/
+DESKTOP/.electron-builder-cache/
 CLI/**/bin/
 CLI/**/obj/
 _attic/**/dist/

@@ -44,7 +44,11 @@ function pathArgValue(values: string[], key: string): string | undefined {
   return best || parts.join(' ') || undefined;
 }
 
-function cliUserDataRoot(): string {
+function userRuntimeRoot(): string {
+  return path.join(os.homedir(), '.Newmark');
+}
+
+function legacyUserDataRoot(): string {
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
     return path.join(appData, 'Newmark Agent');
@@ -86,11 +90,24 @@ function canWriteDirectory(candidate: string): boolean {
   }
 }
 
+function migrateLegacyRuntimeRoot(root: string): void {
+  const targetRoot = path.resolve(root);
+  const legacyRoot = path.resolve(legacyUserDataRoot());
+  if (targetRoot === legacyRoot || !fs.existsSync(legacyRoot)) return;
+  const items = ['config.json', 'agent.md', 'PC_Hash.config', 'Work', 'Flow', 'skills', 'archive', 'Memory Lab', 'Roots'];
+  for (const item of items) {
+    const from = path.join(legacyRoot, item);
+    const to = path.join(targetRoot, item);
+    try {
+      if (fs.existsSync(from) && !fs.existsSync(to)) fs.cpSync(from, to, { recursive: true, errorOnExist: false });
+    } catch {}
+  }
+}
 function shadowRootFor(candidate: string): string {
-  const resolved = path.resolve(candidate || cliUserDataRoot());
+  const resolved = path.resolve(candidate || userRuntimeRoot());
   const base = path.basename(resolved).replace(/[^A-Za-z0-9._-]+/g, '_') || 'root';
   const hash = createHash('sha256').update(resolved.toLowerCase()).digest('hex').slice(0, 16);
-  return path.join(cliUserDataRoot(), 'Roots', `${base}-${hash}`);
+  return path.join(userRuntimeRoot(), 'Roots', `${base}-${hash}`);
 }
 
 function writableRuntimeRoot(candidate: string): string {
@@ -101,10 +118,11 @@ function writableRuntimeRoot(candidate: string): string {
 }
 
 const explicitRoot = pathArgValue(args, '--root');
-const root = explicitRoot ? writableRuntimeRoot(explicitRoot) : process.cwd();
+const root = explicitRoot ? writableRuntimeRoot(explicitRoot) : userRuntimeRoot();
 
 function firstRunInit(r: string): void {
   fs.mkdirSync(r, { recursive: true });
+  migrateLegacyRuntimeRoot(r);
   const { ensureRootConfig } = require('./core/config');
   ensureRootConfig(r);
   if (!fs.existsSync(path.join(r, 'agent.md'))) {

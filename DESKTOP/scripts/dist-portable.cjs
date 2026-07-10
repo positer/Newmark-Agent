@@ -7,15 +7,17 @@ const { patchAndVerify, patchExeIdentity, verifyExeIcon } = require('./patch-win
 const root = path.resolve(__dirname, '..');
 const outputDir = path.resolve(root, '..', 'release');
 const appPackage = require(path.join(root, 'package.json'));
-const exePath = path.join(outputDir, `Newmark-Agent-${appPackage.version}-portable-x64.exe`);
-const unpackedExe = path.join(outputDir, 'win-unpacked', 'Newmark Agent.exe');
-const appAsar = path.join(outputDir, 'win-unpacked', 'resources', 'app.asar');
+const installerPath = path.join(outputDir, `Newmark-Agent-${appPackage.version}-x64.msi`);
+const unpackedDir = path.join(outputDir, 'win-unpacked');
+const unpackedExe = path.join(unpackedDir, 'Newmark Agent.exe');
+const appAsar = path.join(unpackedDir, 'resources', 'app.asar');
 const packageIcon = path.join(root, 'assets', 'icon.ico');
 const zipPath = path.join(outputDir, `Newmark-Agent-${appPackage.version}-win-unpacked-x64.zip`);
 const expectedProductName = 'Newmark Agent';
+const builderCacheDir = path.join(root, '.electron-builder-cache');
 
 function log(message) {
-  console.log(`[dist-portable] ${message}`);
+  console.log(`[dist-windows-release] ${message}`);
 }
 
 function tryRm(target) {
@@ -29,9 +31,28 @@ function tryRm(target) {
   }
 }
 
-function verifyPackagedOutput() {
+function quoteCmd(file, args) {
+  const quote = value => '"' + String(value).replace(/"/g, '\\"') + '"';
+  return [quote(file), ...args.map(arg => quote(arg))].join(' ');
+}
+
+function runBuilder(args, label) {
+  const builderCli = path.join(root, 'node_modules', 'electron-builder', 'cli.js');
+  fs.mkdirSync(builderCacheDir, { recursive: true });
+  const builderEnv = { ...process.env, ELECTRON_BUILDER_CACHE: builderCacheDir };
+  const result = spawnSync(process.execPath, [builderCli, ...args.map(arg => String(arg))], {
+    cwd: root,
+    stdio: 'inherit',
+    shell: false,
+    env: builderEnv,
+    windowsHide: true,
+  });
+  if (result.error) throw new Error(`${label} spawn error: ${result.error.code || ''} ${result.error.message}`);
+  if (result.status !== 0) throw new Error(`${label} failed with exit ${result.status}`);
+}
+
+function verifyUnpackedOutput() {
   const checks = [
-    [exePath, 'portable exe'],
     [unpackedExe, 'win-unpacked exe'],
     [appAsar, 'app.asar'],
   ];
@@ -86,7 +107,6 @@ function verifyExeIdentity(exe) {
 }
 
 function createZipPack() {
-  const unpackedDir = path.join(outputDir, 'win-unpacked');
   if (!fs.existsSync(unpackedDir)) throw new Error('missing win-unpacked directory for zip pack');
   if (fs.existsSync(zipPath)) fs.rmSync(zipPath, { force: true });
   const psQuote = value => `'${String(value).replace(/'/g, "''")}'`;
@@ -109,6 +129,11 @@ function verifyZipPack() {
   if (fs.statSync(zipPath).size <= 0) throw new Error(`empty zip pack: ${zipPath}`);
 }
 
+function verifyMsiInstaller() {
+  if (!fs.existsSync(installerPath)) throw new Error(`missing MSI installer: ${installerPath}`);
+  if (fs.statSync(installerPath).size <= 0) throw new Error(`empty MSI installer: ${installerPath}`);
+}
+
 function verifyReleaseCliSmoke() {
   const smokePath = path.join(root, 'scripts', 'release-cli-smoke.cjs');
   if (!fs.existsSync(smokePath)) throw new Error(`missing release CLI smoke script: ${smokePath}`);
@@ -117,43 +142,18 @@ function verifyReleaseCliSmoke() {
   if (result.status !== 0) throw new Error(`release CLI smoke failed with exit ${result.status}`);
 }
 
-tryRm(outputDir);
-
-const builderBin = process.platform === 'win32'
-  ? path.join(root, 'node_modules', '.bin', 'electron-builder.cmd')
-  : path.join(root, 'node_modules', '.bin', 'electron-builder');
-const result = process.platform === 'win32'
-  ? spawnSync(`"${builderBin}" --win portable`, { cwd: root, stdio: 'inherit', shell: true })
-  : spawnSync(builderBin, ['--win', 'portable'], { cwd: root, stdio: 'inherit', shell: false });
-
-if (result.error) {
-  log(`electron-builder spawn error: ${result.error.code || ''} ${result.error.message}`);
-}
-
-if (result.status === 0) {
-  patchPackagedOutput();
-  verifyPackagedOutput();
-  try {
-    createZipPack();
-    verifyZipPack();
-    verifyReleaseCliSmoke();
-    log('portable package and zip pack verified');
-    process.exit(0);
-  } catch (err) {
-    console.error(`[dist-portable] zip pack failed: ${err.message}`);
-    process.exit(1);
-  }
-}
-
 try {
+  tryRm(outputDir);
+  runBuilder(['--win', 'dir'], 'electron-builder dir');
   patchPackagedOutput();
-  verifyPackagedOutput();
+  verifyUnpackedOutput();
+  runBuilder(['--win', 'msi', '--prepackaged', unpackedDir], 'electron-builder msi --prepackaged');
+  verifyMsiInstaller();
   createZipPack();
   verifyZipPack();
   verifyReleaseCliSmoke();
-  log(`electron-builder exited ${result.status}, but portable outputs and zip pack are complete and verified`);
-  process.exit(0);
+  log('MSI installer and win-unpacked zip pack verified');
 } catch (err) {
-  console.error(`[dist-portable] verification failed after electron-builder exit ${result.status}: ${err.message}`);
-  process.exit(result.status || 1);
+  console.error(`[dist-windows-release] ${err.stack || err.message}`);
+  process.exit(1);
 }

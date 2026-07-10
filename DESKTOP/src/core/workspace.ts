@@ -75,9 +75,12 @@ export class WorkspaceManager {
   private scan(): void {
     const w = path.join(this.rootPath, 'Work');
     if (!fs.existsSync(w)) return;
+    let internalChanged = false;
     try {
       const local = JSON.parse(fs.readFileSync(path.join(w, 'Local.json'), 'utf-8'));
-      this.internal = local;
+      this.internal = Array.isArray(local)
+        ? local.map(item => this.normalizeInternalWorkspace(item, changed => { internalChanged = internalChanged || changed; }))
+        : [];
     } catch { /* empty */ }
     try {
       const ext = JSON.parse(fs.readFileSync(path.join(w, 'External.json'), 'utf-8'));
@@ -98,6 +101,22 @@ export class WorkspaceManager {
       }
     }
     this.sortWorkspaces();
+    if (internalChanged) this.saveInternal();
+  }
+
+  private normalizeInternalWorkspace(input: Partial<WorkspaceInfo>, markChanged: (changed: boolean) => void): WorkspaceInfo {
+    const rawName = String(input?.name || path.basename(String(input?.path || '')) || '').trim();
+    const name = rawName || new Date().toISOString().replace(/[:.]/g, '').replace('T', '_').slice(0, 15);
+    const expectedPath = path.join(this.rootPath, 'Work', name);
+    if (path.resolve(String(input?.path || '')) !== path.resolve(expectedPath) || input?.isInternal !== true) markChanged(true);
+    return {
+      ...input,
+      name,
+      path: expectedPath,
+      isInternal: true,
+      hostBinding: '',
+      icon: String(input?.icon || name.charAt(0).toUpperCase()),
+    };
   }
 
   private normalizeWorkspaceList(list: WorkspaceInfo[]): WorkspaceInfo[] {
@@ -211,9 +230,11 @@ export class WorkspaceManager {
   }
 
   private restoreCurrent(): void {
-    const stored = this.findWorkspace(this.readState().current || null);
+    const stateCurrent = this.readState().current || null;
+    const stored = this.findWorkspace(stateCurrent);
     if (stored) {
       this.current = stored;
+      if (!stateCurrent?.path || path.resolve(stateCurrent.path) !== path.resolve(stored.path)) this.saveState();
       return;
     }
 

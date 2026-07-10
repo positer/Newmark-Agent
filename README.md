@@ -34,8 +34,9 @@ The current public development release is **dev 1.0.4**. It is intended for tech
 |---|---|
 | Windows MSI installer | `Newmark-Agent-1.0.4-x64.msi` |
 | Windows unpacked update pack | `Newmark-Agent-1.0.4-win-unpacked-x64.zip` |
-| Linux AppImage | Latest Linux artifact remains `Newmark-Agent-1.0.2-x86_64.AppImage` |
-| Linux Debian package | Latest Linux artifact remains `Newmark-Agent-1.0.2-amd64.deb` |
+| Linux AppImage | `Newmark-Agent-1.0.4-x86_64.AppImage` |
+| Linux Debian package | `Newmark-Agent-1.0.4-amd64.deb` |
+| Linux unpacked update pack | `Newmark-Agent-1.0.4-linux-unpacked-x64.zip` |
 
 Download the assets from the latest GitHub release. On Windows, install the MSI for managed desktops or use the `win-unpacked` zip as the no-loss update source. On Linux, run the AppImage or install the `.deb` package. The distributions include `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
@@ -200,7 +201,7 @@ npm.cmd run release:real-provider-stress
 
 ## Dev 1.0.4 Notes
 
-The dev 1.0.4 release keeps the current native TypeScript desktop Agent stack and publishes the Windows MSI/update-pack release layout plus the protected-root state migration. The package includes the latest shared-backend multi-window desktop flow, closed-loop Computer Use takeover border with startup liveness checks and filled corners, exact-folder workspace uniqueness, GitHub audit/security prompts, explicit GitHub Models login, native OpenSSH workspace linking, message Markdown/formula rendering, rootless pasted-image attachments, persistent terminal takeover, layout memory, native tool switches, and platform-aware terminal defaults. Linux AppImage/deb assets remain available from dev 1.0.2 until a Linux-native build environment republishes them for 1.0.4.
+The dev 1.0.4 release keeps the current native TypeScript desktop Agent stack and publishes Windows MSI/update-pack plus Linux AppImage/deb/unpacked update assets. GitHub Models login now imports the real external catalog, reports its actual count, redraws the Models settings panel, and keeps provider credentials/catalogs in user-level `~/.Newmark` state so an empty workspace `config.json` cannot hide them.
 
 The Windows dev 1.0.3 package was rebuilt on 2026-07-09 to fix clean-machine `win-unpacked` startup. Noncritical Windows automation wake scheduling now runs after the first desktop window is shown and Task Scheduler calls are timeout-bounded, preventing a no-window primary process from holding the single-instance lock. Packaged double-click startup also no longer uses protected install directories such as `C:\Program Files\Newmark Agent` as the writable runtime root; it falls back to the Electron user-data directory and logs fatal startup failures to `startup.log` instead of silently leaving a no-window background process. Startup now paints a lightweight Newmark shell before Agent/workspace/skills initialization and switches to the full UI after IPC and backend runtime are ready, so slow or SSH-configured roots do not look like a hung background Electron. The Windows executable registers and reports `Newmark Agent` through runtime app identity and patched version resources rather than `Electron`.
 

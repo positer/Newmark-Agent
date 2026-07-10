@@ -4107,6 +4107,8 @@ var NEWMARK_I18N = {
     'model.githubLogin': 'Sign in with GitHub',
     'model.githubLoginDesc': 'Opens your default browser through GitHub CLI and stores a GitHub Models token locally.',
     'model.githubLoginOk': 'GitHub Copilot / Models connected.',
+    'model.githubModelsImported': 'Imported {count} models.',
+    'model.githubModelsWarning': 'Warning: {warning}',
     'model.autoDetect': 'Auto detect',
     'model.modelName': 'Model name',
     'model.provider': 'Provider',
@@ -4556,6 +4558,8 @@ var NEWMARK_I18N = {
     'model.githubLogin': '使用 GitHub 登录',
     'model.githubLoginDesc': '通过 GitHub CLI 打开默认浏览器登录，并在本地保存 GitHub Models token。',
     'model.githubLoginOk': 'GitHub Copilot / Models 已连接。',
+    'model.githubModelsImported': '已导入 {count} 个模型。',
+    'model.githubModelsWarning': '警告：{warning}',
     'model.autoDetect': '自动检测',
     'model.modelName': '模型名称',
     'model.provider': '供应商',
@@ -8476,7 +8480,10 @@ window.githubCopilotLogin = function() {
   api.githubCopilotLogin().then(function(result) {
     document.body.classList.remove('model-evaluating');
     if (result && result.ok) {
-      addMsg('assistant', '[System] ' + t('model.githubLoginOk'), 'success', '');
+      var modelCount = Number(result.catalogModels || result.modelsImported || 0);
+      var suffix = modelCount > 0 ? ' ' + t('model.githubModelsImported').replace('{count}', String(modelCount)) : '';
+      var warning = result.warning ? ' ' + t('model.githubModelsWarning').replace('{warning}', String(result.warning)) : '';
+      addMsg('assistant', redactSensitiveText('[System] ' + t('model.githubLoginOk') + suffix + warning), result.warning ? 'warning' : 'success', '');
     } else {
       addMsg('assistant', redactSensitiveText('[Error] GitHub login failed: ' + ((result && (result.error || result.output)) || 'unknown error')), 'error', '');
     }
@@ -8487,6 +8494,8 @@ window.githubCopilotLogin = function() {
     window.refreshModelSelect();
     window.closeSubWin();
     window.openSettings('models');
+    var modelsPanel = document.getElementById('stab-models');
+    if (modelsPanel) modelsPanel.innerHTML = renderModelSettings();
   }).catch(function(err) {
     document.body.classList.remove('model-evaluating');
     addMsg('assistant', redactSensitiveText('[Error] GitHub login failed: ' + err.message), 'error', '');

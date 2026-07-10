@@ -102,6 +102,11 @@ export class ConfigManager {
     return entry.value as T;
   }
 
+  private getGlobal<T = unknown>(section: string, key: string): T | undefined {
+    const entry = this.config[section]?.[key];
+    return entry?.value as T | undefined;
+  }
+
   getStr(section: string, key: string): string {
     return (this.get<string>(section, key)) || '';
   }
@@ -139,6 +144,9 @@ export class ConfigManager {
         const wsCfg: Record<string, Record<string, ConfigEntry>> = normalizeConfigShape(JSON.parse(readJsonText(cfgPath)), false);
         for (const [sectionName, section] of Object.entries(wsCfg)) {
           for (const [k, entry] of Object.entries(section)) {
+            // Provider credentials and catalogs are user-level state and must not
+            // be hidden by workspace templates that contain an empty providers list.
+            if (sectionName === 'models' && k === 'providers') continue;
             if (entry.value !== undefined) {
               this.workspaceOverrides.set(`${sectionName}.${k}`, entry.value);
             }
@@ -153,7 +161,7 @@ export class ConfigManager {
   }
 
   providers(): ProviderConfig[] {
-    return this.normalizeProviders((this.get<ProviderConfig[]>('models', 'providers')) || []);
+    return this.normalizeProviders((this.getGlobal<ProviderConfig[]>('models', 'providers')) || []);
   }
 
   allModels(): Array<ModelConfig & { provider: string; provider_url: string; api_key: string; provider_protocol: ProviderProtocol }> {

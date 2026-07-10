@@ -18,6 +18,7 @@ import { MemoryLabManager } from './core/memoryLab';
 import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, installUpdate } from './core/installUpdate';
 import { onTerminalTakeoverEvent, terminalTakeoverState, writeTerminalTakeoverSession } from './tools/terminalTakeover';
 import { nativeToolCatalogForState, normalizeNativeToolEnabled } from './tools/nativeTools';
+import { LLMProvider } from './llm/provider';
 
 const APP_NAME = 'Newmark Agent';
 const APP_ID = 'ai.newmark.agent';
@@ -1550,20 +1551,46 @@ if (hasCliCommand) {
           token,
         };
       };
-      const importToken = (token: string, authOutput = '') => {
+      const importToken = async (token: string, authOutput = '') => {
         currentAgent.config.upsertProvider('GitHub Copilot', 'https://models.github.ai', token, 'github_models');
-        const hasModel = currentAgent.config.providers().find(p => p.name === 'GitHub Copilot')?.models?.some(m => m.name === 'openai/gpt-4.1');
-        if (!hasModel) {
-          currentAgent.config.addModelToProvider('GitHub Copilot', 'openai/gpt-4.1', 'GPT-4.1 (GitHub Models)', 'GitHub Models default candidate; validate models to refresh the full catalog.');
+        let catalogModels = 0;
+        let savedModels = 0;
+        let fallbackAdded = false;
+        let catalogWarning = '';
+        try {
+          const listed = await new LLMProvider('GitHub Copilot', 'https://models.github.ai', token, 'github_models', currentAgent.config.openAIApiMode()).listModels();
+          catalogModels = listed.length;
+          for (const modelName of listed) {
+            if (currentAgent.config.addModelToProvider('GitHub Copilot', modelName, modelName, 'Listed by GitHub Models catalog after browser login.')) {
+              savedModels += 1;
+            }
+          }
+        } catch (error) {
+          catalogWarning = error instanceof Error ? error.message : String(error);
+        }
+        if (catalogModels === 0) {
+          currentAgent.config.addModelToProvider('GitHub Copilot', 'openai/gpt-4.1', 'GPT-4.1 (GitHub Models)', 'GitHub Models fallback candidate; catalog refresh failed during login.');
+          fallbackAdded = true;
         }
         currentAgent.config.save();
-        return { ok: true, provider: 'GitHub Copilot', endpoint: 'https://models.github.ai', hasToken: true, imported: true, output: authOutput };
+        return {
+          ok: true,
+          provider: 'GitHub Copilot',
+          endpoint: 'https://models.github.ai',
+          hasToken: true,
+          imported: catalogModels > 0,
+          catalogModels,
+          modelsImported: savedModels,
+          fallbackAdded,
+          warning: catalogWarning,
+          output: authOutput,
+        };
       };
       const ghStatus = runGh(['auth', 'status'], 30000, true);
       if (ghStatus.status === 0) {
         const existingToken = tokenFromGh();
         if (!existingToken.error && existingToken.status === 0 && existingToken.token) {
-          return importToken(existingToken.token, 'Imported existing GitHub CLI token. If GitHub Models rejects the token, run GitHub Copilot login again to refresh models:read scope.');
+          return await importToken(existingToken.token, 'Imported existing GitHub CLI token. If GitHub Models rejects the token, run GitHub Copilot login again to refresh models:read scope.');
         }
       }
       const authAttempts = ghStatus.status === 0
@@ -1607,7 +1634,7 @@ if (hasCliCommand) {
         return { ok: false, webFallback: true, error: `gh auth token exited ${tokenResult.status}` };
       }
 
-      return importToken(token);
+      return await importToken(token);
     });
 
     ipcMain.handle('skills:list', async () => {

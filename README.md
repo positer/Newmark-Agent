@@ -213,11 +213,14 @@ The same Responses follow-up also fixed tool-result continuation for direct Resp
 
 Lite responsiveness was then tightened without changing Agent behavior. The native Agent bridge now builds the Newmark tool schema once per Agent turn and reuses it for both provider streaming and tool execution instead of rebuilding the full schema on every model/tool round. Context conversion is skipped entirely when automatic context compression is disabled, and high-frequency workflow tool rows defer full conversation-state JSON writes until the normal turn persistence points. Local measurement showed tool schema construction at about `0.7 ms` per build on this machine, and the main practical gain is avoiding repeated schema work plus synchronous conversation-state writes during multi-tool turns on slower Lite or remote-backed environments. Verification passed `npm.cmd test` with `895` assertions, `npm.cmd run dist:portable`, and packaged `release:ui-smoke`; details are recorded in `archive/2026-07-09-lite-response-core-redundancy.md`.
 
-Current Windows artifact SHA256 values for dev 1.0.4:
+Current artifact SHA256 values for dev 1.0.4:
 
-- `Newmark-Agent-1.0.4-x64.msi`: `A3E12E7DAD7849A2A292E13EED03FC71FF4577118E300BE7FE804251AC3C6D5D`
-- `Newmark-Agent-1.0.4-win-unpacked-x64.zip`: `00E9E062BE653E68E688EA16844790DCD6E2F8EA7497FADE0023BD13D97D8339`
-- `release/win-unpacked/Newmark Agent.exe`: `853185D84BBF3E36DF8D7B5745A5CEFA17E50D173BCCED837934CDE4886A7FA8`
+- `Newmark-Agent-1.0.4-x64.msi`: `26399EAFA3DD76A005933BF1BE92EB126B46D9BD6EF0975C32965D0139A4B9CF`
+- `Newmark-Agent-1.0.4-win-unpacked-x64.zip`: `12BA564B0056639A058F52609CEC87172C1E411C84DFF719B4747E749086078A`
+- `Newmark-Agent-1.0.4-x86_64.AppImage`: `44D70F2358EE07469CEB8854E4763F57545C0D6B0F70127F70ADB887AB995F37`
+- `Newmark-Agent-1.0.4-amd64.deb`: `BF8E07F8DA1274C6A3536A9471DDDD64C193684EA5B64573BE68CE5BEA2743E1`
+- `Newmark-Agent-1.0.4-linux-unpacked-x64.zip`: `DE2105907C70E444325480B0C97CE2FD3D355A9AF4AB5F64641C329DEAB57C6F`
+- `release/win-unpacked/Newmark Agent.exe`: `ACC37626CB1A875A1F19CE462B91E90E2DAAECA30FFB91925B908B3AF57D4D07`
 
 The packaged `install-update` path now reconstructs space-containing `--source`, `--target`, and `--target-file` arguments when launched through PowerShell `Start-Process`, and it preflights target writability before copying. Non-admin updates into `C:\Program Files\Newmark Agent` fail before partial copy with a clear instruction to use the MSI or rerun with administrator privileges.
 

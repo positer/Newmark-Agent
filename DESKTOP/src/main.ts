@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, utilityProcess, Tray, Menu, nativeImage, nativeTheme, webContents, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { spawn, spawnSync, ChildProcess } from 'child_process';
 import { Agent } from './core/agent';
 import { AgentMode } from './core/types';
@@ -307,6 +307,20 @@ function isProtectedInstallRoot(candidate: string): boolean {
   return roots.some(root => isPathInside(root, candidate));
 }
 
+function shadowRootFor(candidate: string): string {
+  const resolved = path.resolve(candidate || app.getPath('userData'));
+  const base = path.basename(resolved).replace(/[^A-Za-z0-9._-]+/g, '_') || 'root';
+  const hash = createHash('sha256').update(resolved.toLowerCase()).digest('hex').slice(0, 16);
+  return path.join(app.getPath('userData'), 'Roots', `${base}-${hash}`);
+}
+
+function writableRuntimeRoot(candidate: string): string {
+  const resolved = path.resolve(candidate);
+  if (isProtectedInstallRoot(resolved)) return shadowRootFor(resolved);
+  if (!canWriteDirectory(resolved)) return shadowRootFor(resolved);
+  return resolved;
+}
+
 function getRoot(): string {
   const candidate = exeRoot();
   if (isProtectedInstallRoot(candidate)) return app.getPath('userData');
@@ -316,7 +330,9 @@ function getRoot(): string {
 }
 
 function resolveRoot(args: string[]): string {
-  return pathArgValue(args, '--root') || (app.isPackaged ? getRoot() : process.cwd());
+  const explicitRoot = pathArgValue(args, '--root');
+  if (explicitRoot) return writableRuntimeRoot(explicitRoot);
+  return app.isPackaged ? getRoot() : process.cwd();
 }
 
 function startupLogPath(): string {

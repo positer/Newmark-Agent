@@ -1,5 +1,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
+import { createHash } from 'crypto';
 import { Agent } from './core/agent';
 import { FlowEngine } from './core/flow';
 import { runFlow } from './core/flow-runner';
@@ -12,7 +14,94 @@ const isEdit = args[0] === 'edit';
 const editFile = isEdit ? args[1] : '';
 const isFlow = args[0] === 'flow';
 const hasCliCommand = args.some(a => (CLI_COMMANDS as readonly string[]).includes(a));
-const root = args.includes('--root') ? args[args.indexOf('--root') + 1] : process.cwd();
+
+function pathArgValue(values: string[], key: string): string | undefined {
+  const prefix = `${key}=`;
+  const inlineIdx = values.findIndex(a => a.startsWith(prefix));
+  if (inlineIdx >= 0) {
+    const parts = [values[inlineIdx].slice(prefix.length)];
+    let best = fs.existsSync(parts[0]) ? parts[0] : '';
+    for (let i = inlineIdx + 1; i < values.length; i++) {
+      const arg = values[i];
+      if (arg.startsWith('--')) break;
+      parts.push(arg);
+      const candidate = parts.join(' ');
+      if (fs.existsSync(candidate)) best = candidate;
+    }
+    return best || parts.join(' ') || undefined;
+  }
+  const idx = values.indexOf(key);
+  if (idx < 0 || idx + 1 >= values.length) return undefined;
+  const parts: string[] = [];
+  let best = '';
+  for (let i = idx + 1; i < values.length; i++) {
+    const arg = values[i];
+    if (arg.startsWith('--')) break;
+    parts.push(arg);
+    const candidate = parts.join(' ');
+    if (fs.existsSync(candidate)) best = candidate;
+  }
+  return best || parts.join(' ') || undefined;
+}
+
+function cliUserDataRoot(): string {
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(appData, 'Newmark Agent');
+  }
+  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'Newmark Agent');
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'Newmark Agent');
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  try {
+    const rel = path.relative(path.resolve(parent), path.resolve(child));
+    return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+  } catch {
+    return false;
+  }
+}
+
+function isProtectedInstallRoot(candidate: string): boolean {
+  if (process.platform !== 'win32') return false;
+  const roots = [
+    process.env.ProgramFiles,
+    process.env['ProgramFiles(x86)'],
+    process.env.ProgramW6432,
+  ].filter((value): value is string => !!value);
+  return roots.some(rootDir => isPathInside(rootDir, candidate));
+}
+
+function canWriteDirectory(candidate: string): boolean {
+  const probeName = `.newmark-write-test-${process.pid}-${Date.now()}`;
+  const probePath = path.join(candidate, probeName);
+  try {
+    fs.mkdirSync(candidate, { recursive: true });
+    fs.writeFileSync(probePath, 'ok', 'utf-8');
+    fs.unlinkSync(probePath);
+    return true;
+  } catch {
+    try { if (fs.existsSync(probePath)) fs.unlinkSync(probePath); } catch {}
+    return false;
+  }
+}
+
+function shadowRootFor(candidate: string): string {
+  const resolved = path.resolve(candidate || cliUserDataRoot());
+  const base = path.basename(resolved).replace(/[^A-Za-z0-9._-]+/g, '_') || 'root';
+  const hash = createHash('sha256').update(resolved.toLowerCase()).digest('hex').slice(0, 16);
+  return path.join(cliUserDataRoot(), 'Roots', `${base}-${hash}`);
+}
+
+function writableRuntimeRoot(candidate: string): string {
+  const resolved = path.resolve(candidate);
+  if (isProtectedInstallRoot(resolved)) return shadowRootFor(resolved);
+  if (!canWriteDirectory(resolved)) return shadowRootFor(resolved);
+  return resolved;
+}
+
+const explicitRoot = pathArgValue(args, '--root');
+const root = explicitRoot ? writableRuntimeRoot(explicitRoot) : process.cwd();
 
 function firstRunInit(r: string): void {
   fs.mkdirSync(r, { recursive: true });

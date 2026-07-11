@@ -230,6 +230,7 @@ The dev-0.0.5 source line adds application-lifetime tray continuity, independent
 Current dev-0.0.5 Windows artifact SHA256 values:
 
 - `Newmark-Agent-0.0.5-x64.msi`: `8928DA32E99FA1F192723C17E49368F2574CCF35AC1CF45B2680C19076F43695`
+- `Newmark-Agent-0.0.5-win-unpacked-x64.zip`: `E19C649D85D73567947BB160A245C46D0669C458882251D4809FDEB4E706EECC`
 - `release/win-unpacked/resources/app.asar`: `334C4AF6137EA340F9AD5B1391882A746077BED5816D3649B1640552C0EFA573`
 - `release/win-unpacked/Newmark Agent.exe`: `34C85FCADD492A587D13343568D5D0C111B217E325D5F5E4C9B1DF13BBCDDE23`
 

@@ -292,11 +292,17 @@ async function runUiCheck(root) {
 
     await evaluate(cdp, `window.openFile('media-doc.md')`, 30000);
     await waitFor(cdp, `(() => {
-      const panel = document.querySelector('#panel-md-viewer');
-      const md = document.querySelector('#md-viewer-content');
-      return panel && panel.classList.contains('active') && md && md.innerText.includes('MD_VIEWER_OK_20260628') && !!md.querySelector('strong') && !!md.querySelector('li');
-    })()`, 30000, 'markdown viewer content');
-    log('markdown viewer ok');
+      const panel = document.querySelector('#panel-editor');
+      const toggle = document.querySelector('#editor-md-toggle');
+      const text = document.querySelector('#editor-textarea');
+      return panel && panel.classList.contains('active') && toggle && toggle.classList.contains('visible') && text && text.value.includes('MD_VIEWER_OK_20260628');
+    })()`, 30000, 'markdown opens integrated editor');
+    await evaluate(cdp, `window.toggleEditorMarkdownPreview()`, 30000);
+    await waitFor(cdp, `(() => {
+      const md = document.querySelector('#editor-md-preview');
+      return md && md.classList.contains('open') && md.innerText.includes('MD_VIEWER_OK_20260628') && !!md.querySelector('strong') && !!md.querySelector('li');
+    })()`, 30000, 'integrated markdown preview content');
+    log('integrated markdown editor preview ok');
 
     await evaluate(cdp, `window.switchRightTab('file-tree'); window.loadFileTree();`, 30000);
     await waitFor(cdp, `(() => {

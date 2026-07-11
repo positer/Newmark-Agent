@@ -492,7 +492,20 @@ export class Agent {
       if (a.pinned && b.pinned) return b.pinnedAt.localeCompare(a.pinnedAt);
       return b.updatedAt.localeCompare(a.updatedAt);
     });
-    return rows;
+    const seenContent = new Set<string>();
+    return rows.filter(row => {
+      const value = stored.conversations?.[row.key];
+      const signature = this.conversationContentSignature(value?.chatMessages || []);
+      if (!signature) return true;
+      if (seenContent.has(signature)) return false;
+      seenContent.add(signature);
+      return true;
+    });
+  }
+
+  private conversationContentSignature(messages: ChatMessage[]): string {
+    if (!messages.length) return '';
+    return JSON.stringify(messages.map(message => ({ role: message.role, content: message.content })));
   }
 
   public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {
@@ -534,6 +547,41 @@ export class Agent {
         this.writeStoredConversationState(stored);
       }
     }
+    return this.getConversationSnapshot(clean);
+  }
+
+  public rewindConversation(conversationId: string, messageIndex: number): ConversationSnapshot {
+    const clean = this.safeConversationId(conversationId || 'default');
+    const snapshot = this.getConversationSnapshot(clean);
+    const index = Math.floor(Number(messageIndex));
+    const target = snapshot.chatMessages[index];
+    if (!Number.isFinite(index) || index < 0 || !target || target.role !== 'user') {
+      throw new Error('Conversation rewind target must be a user message.');
+    }
+
+    const userOrdinal = snapshot.chatMessages.slice(0, index + 1).filter(message => message.role === 'user').length;
+    const stateKey = this.workspaceConversationStateKey(clean);
+    const stored = this.readStoredConversationState();
+    const persisted = stateKey && stored.conversations ? stored.conversations[stateKey] : undefined;
+    const history = persisted?.history || [];
+    let seenUsers = 0;
+    let historyCut = history.length;
+    for (let i = 0; i < history.length; i++) {
+      if (String(history[i]?.role || '') !== 'user') continue;
+      seenUsers++;
+      if (seenUsers === userOrdinal) {
+        historyCut = i;
+        break;
+      }
+    }
+
+    const chatMessages = snapshot.chatMessages.slice(0, index);
+    const truncatedHistory = history.slice(0, historyCut);
+    this.mirrorConversationStateFrom(clean, {
+      chatMessages,
+      history: truncatedHistory,
+      conversationPlan: snapshot.conversationPlan,
+    });
     return this.getConversationSnapshot(clean);
   }
 
@@ -872,6 +920,45 @@ export class Agent {
     };
   }
 
+  private contextMaxTokens(modelName = this.model): number {
+    const resolvedName = modelName === 'auto' ? this.config.getStr('models', 'default_model') : modelName;
+    return Math.max(1, Number(this.config.findModel(resolvedName)?.max_tokens || 0) || 128000);
+  }
+
+  private compressionBudget(messages: Array<Record<string, unknown>>): {
+    estimatedTokens: number;
+    maxTokens: number;
+    triggerTokens: number;
+    targetTokens: number;
+    summaryTokens: number;
+  } {
+    const maxTokens = this.contextMaxTokens();
+    const reserveTokens = Math.min(8192, Math.max(256, Math.floor(maxTokens * 0.12)));
+    const usableTokens = Math.max(256, maxTokens - reserveTokens);
+    return {
+      estimatedTokens: this.estimateContextTokens(messages),
+      maxTokens,
+      triggerTokens: Math.max(128, Math.floor(usableTokens * 0.78)),
+      targetTokens: Math.max(128, Math.floor(usableTokens * 0.55)),
+      summaryTokens: Math.max(96, Math.min(1600, Math.floor(maxTokens * 0.12))),
+    };
+  }
+
+  private recentContextSuffix(
+    messages: Array<Record<string, unknown>>,
+    maxMessages: number,
+    tokenBudget: number
+  ): Array<Record<string, unknown>> {
+    if (!messages.length) return [];
+    let start = Math.max(1, messages.length - Math.max(1, maxMessages));
+    while (start > 1 && String(messages[start]?.role || '') !== 'user') start--;
+    while (start < messages.length - 1 && this.estimateContextTokens(messages.slice(start)) > tokenBudget) {
+      start++;
+      while (start < messages.length - 1 && String(messages[start]?.role || '') !== 'user') start++;
+    }
+    return messages.slice(start);
+  }
+
   updateGoal(newGoal: string): void {
     if (this.goal) {
       this.goal.update(newGoal);
@@ -892,22 +979,73 @@ export class Agent {
     return this.goal?.paused || false;
   }
 
-  archiveSession(): string {
-    const stamp = new Date().toISOString().replace(/[:.]/g, '').replace('T', '_').slice(0, 15);
+  private writeSessionArchive(messages: ChatMessage[], mode: string, model: string): string {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '').replace('T', '_').replace('Z', '');
     const archiveDir = this.archiveDir();
     fs.mkdirSync(archiveDir, { recursive: true });
     const filename = `session_${stamp}.md`;
     const outPath = path.join(archiveDir, filename);
 
     let md = `# Newmark Session — ${stamp}\n\n`;
-    md += `**Mode**: ${this.modeName()}\n**Model**: ${this.model}\n`;
-    md += `**Messages**: ${this.chatMessages.length}\n\n---\n\n`;
+    md += `**Mode**: ${mode}\n**Model**: ${model}\n`;
+    md += `**Messages**: ${messages.length}\n\n---\n\n`;
     if (this.goal) md += `**Goal**: ${this.goal.objective}\n\n`;
-    for (const msg of this.chatMessages) {
+    for (const msg of messages) {
       md += `**[${msg.role}] ${msg.timestamp}**\n\n${msg.content}\n\n`;
     }
     fs.writeFileSync(outPath, md, 'utf-8');
     return filename;
+  }
+
+  archiveSession(): string {
+    return this.writeSessionArchive(this.chatMessages, this.modeName(), this.model);
+  }
+
+  archiveConversation(conversationId: string): string | null {
+    const ws = this.workspace.current;
+    if (!ws) return null;
+    const clean = this.safeConversationId(conversationId || 'default');
+    const stateKey = this.workspaceConversationStateKey(clean);
+    if (!stateKey) return null;
+    const memoryKey = `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${clean}`;
+    const stored = this.readStoredConversationState(ws);
+    const persisted = stored.conversations?.[stateKey];
+    const memory = this.workspaceConversations.get(memoryKey);
+    const messages = persisted?.chatMessages || memory?.chatMessages || [];
+    const filename = this.writeSessionArchive(messages, this.modeName(), this.model);
+
+    const targetSignature = this.conversationContentSignature(messages);
+    if (stored.conversations) {
+      for (const [key, value] of Object.entries(stored.conversations)) {
+        const isTarget = key === stateKey;
+        const isExactDuplicate = !!targetSignature && this.conversationContentSignature(value.chatMessages || []) === targetSignature;
+        if (!isTarget && !isExactDuplicate) continue;
+        delete stored.conversations[key];
+        const duplicateId = key.slice(`${this.workspaceConversationPrefix() || ''}-`.length);
+        const duplicateMemoryKey = `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${duplicateId}`;
+        this.workspaceConversations.delete(duplicateMemoryKey);
+      }
+    }
+    this.workspaceConversations.delete(memoryKey);
+    const remaining = this.listStoredConversationIds(stored);
+    if (clean === this.safeConversationId(stored.activeConversationId || this.activeConversationId || 'default')) {
+      stored.activeConversationId = remaining[0] || 'default';
+    }
+    this.writeStoredConversationState(stored, ws);
+
+    if (clean === this.safeConversationId(this.activeConversationId || 'default')) {
+      this.activeConversationId = stored.activeConversationId || remaining[0] || 'default';
+      this.loadWorkspaceConversationState();
+    }
+    return filename;
+  }
+
+  private listStoredConversationIds(stored: StoredConversationState): string[] {
+    const prefix = `${this.workspaceConversationPrefix() || ''}-`;
+    return Object.keys(stored.conversations || {})
+      .filter(key => !prefix || key.startsWith(prefix))
+      .map(key => key.slice(prefix.length))
+      .filter(Boolean);
   }
 
   listArchives(scope: 'workspace' | 'all' = 'workspace'): Array<{ id: string; name: string; firstLine: string; scope: string; workspace?: string; date?: string }> {
@@ -979,7 +1117,10 @@ export class Agent {
   }
 
   allModelNames(): string[] {
-    const names = this.config.allModels().map(m => {
+    const names = this.config.allModels().filter(m => {
+      const status = String(m.evaluation?.status || 'unvalidated');
+      return status === 'available' || status === 'unvalidated';
+    }).map(m => {
       const label = m.display || m.name;
       return `${m.provider} / ${label}`;
     });
@@ -1075,10 +1216,12 @@ export class Agent {
   async validateModels(selectedNames?: string[]): Promise<ModelValidationResult[]> {
     const selected = new Set(selectedNames || []);
     const results: ModelValidationResult[] = [];
+    const catalogByProvider = new Map<string, Awaited<ReturnType<LLMProvider['modelCatalog']>>>();
+    const searchByModel = new Map<string, string>();
     for (const m of this.config.allModels()) {
       if (selected.size && !selected.has(m.name) && !selected.has(`${m.provider}/${m.name}`)) continue;
       const inferredVision = !!m.vision || inferModelVisionCapability(m.name, m.display, m.description, m.provider, m.provider_protocol);
-      const inferredImageOutput = !!m.image_output;
+      const inferredImageOutput = !!m.image_output || /(?:^|[-_.])(gpt-image|dall-e|imagen|imagegen|image-generation)(?:$|[-_.])/i.test(m.name);
       const base: ModelValidationResult = {
         name: `${m.provider}/${m.name}`,
         provider: m.provider,
@@ -1089,8 +1232,8 @@ export class Agent {
         checked_at: new Date().toISOString(),
         text_input: false,
         text_output: false,
-        vision_input: inferredVision,
-        image_output: inferredImageOutput,
+        vision_input: false,
+        image_output: false,
         cost_rating: this.costRating(m.cost_per_1k_input, m.cost_per_1k_output),
         performance_rating: this.performanceRating(m.name, m.capability_rating, m.description, m.display),
         speed_rating: 'unknown',
@@ -1105,18 +1248,66 @@ export class Agent {
       }
       const p = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode());
       try {
+        let catalog = catalogByProvider.get(m.provider);
+        if (!catalog) {
+          try { catalog = await p.modelCatalog(); } catch { catalog = []; }
+          catalogByProvider.set(m.provider, catalog);
+        }
+        const catalogEntry = catalog.find(entry => entry.id === m.name || entry.id.endsWith(`/${m.name}`));
+        const catalogText = JSON.stringify(catalogEntry?.raw || {}).toLowerCase();
+        const catalogVision = /vision|image[_ -]?input|multimodal|image_url|input_image/.test(catalogText);
+        const catalogImageOutput = /image[_ -]?(output|generation)|text[_ -]?to[_ -]?image|image-generation/.test(catalogText);
+        const officialDomain = m.provider_protocol === 'github_models'
+          ? 'docs.github.com'
+          : m.provider_protocol === 'anthropic'
+            ? 'docs.anthropic.com'
+            : (/openai/i.test(`${m.provider} ${m.provider_url}`) ? 'platform.openai.com' : new URL(m.provider_url).hostname);
+        let searchEvidence = '';
+        const searchKey = `${officialDomain}:${m.name}`;
+        const shouldSearchCapabilities = inferredVision || inferredImageOutput || catalogVision || catalogImageOutput;
+        if (!shouldSearchCapabilities) {
+          searchEvidence = '';
+        } else if (searchByModel.has(searchKey)) {
+          searchEvidence = searchByModel.get(searchKey) || '';
+        } else {
+          try {
+            searchEvidence = await this.tools.webSearch(`site:${officialDomain} ${m.name} vision image generation model capabilities`);
+          } catch {
+            searchEvidence = '';
+          }
+          searchByModel.set(searchKey, searchEvidence);
+        }
+        const searchFound = !!searchEvidence && !searchEvidence.startsWith('[web_search] No results');
+        const officialSearchFound = searchFound && searchEvidence.toLowerCase().includes(officialDomain.toLowerCase());
+        const searchText = searchFound ? searchEvidence.toLowerCase() : '';
+        const searchVision = /vision|image input|multimodal/.test(searchText);
+        const searchImageOutput = /image generation|text.to.image|generate images/.test(searchText);
         const { ok, latency } = await p.validate(m.name);
+        const shouldValidateVision = ok && (inferredVision || catalogVision || searchVision);
+        const shouldValidateImageOutput = ok && (inferredImageOutput || catalogImageOutput || searchImageOutput);
+        const visionResult = shouldValidateVision ? await p.validateVision(m.name) : { ok: false, latency: 0 };
+        const imageResult = shouldValidateImageOutput ? await p.validateImageOutput(m.name) : { ok: false, latency: 0 };
         const result: ModelValidationResult = {
           ...base,
           status: ok ? 'available' : 'unavailable',
           latency,
           text_input: ok,
           text_output: ok,
+          vision_input: visionResult.ok,
+          image_output: imageResult.ok,
           speed_rating: this.speedRating(latency, ok),
-          notes: ok ? 'Text chat validation succeeded' : 'Provider returned no usable text output',
+          notes: [
+            catalogEntry ? 'Network catalog: listed' : (catalog.length ? 'Network catalog: not listed' : 'Network catalog: unavailable'),
+            shouldSearchCapabilities
+              ? (officialSearchFound ? `official web search: evidence found on ${officialDomain}` : (searchFound ? 'web search: unverified capability hint found' : `official web search: no evidence on ${officialDomain}`))
+              : 'official web search: not required for text-only candidate',
+            ok ? 'text task: passed' : 'text task: failed',
+            shouldValidateVision ? `vision task: ${visionResult.ok ? 'passed' : `failed (${visionResult.error || 'no matching visual answer'})`}` : 'vision task: not claimed',
+            shouldValidateImageOutput ? `image generation task: ${imageResult.ok ? 'passed' : `failed (${imageResult.error || 'no image returned'})`}` : 'image generation task: not claimed',
+          ].join('; '),
         };
         results.push(result);
-        this.config.updateModel(m.provider, m.name, { evaluation: result, vision: result.vision_input, image_output: result.image_output, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: this.modelCapabilityDescription(capabilityModel, result.performance_rating, result.speed_rating, result.cost_rating, ok) });
+        this.config.updateModel(m.provider, m.name, { evaluation: result, vision: result.vision_input, image_output: result.image_output, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: this.modelCapabilityDescription({ ...capabilityModel, vision: result.vision_input, image_output: result.image_output }, result.performance_rating, result.speed_rating, result.cost_rating, ok) });
       } catch (e) {
         const result: ModelValidationResult = {
           ...base,
@@ -1140,6 +1331,36 @@ export class Agent {
     const m = this.config.findModel(this.model);
     if (!m) return null;
     return new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode());
+  }
+
+  async editorModelRequest(input: {
+    path?: string;
+    content?: string;
+    before?: string;
+    after?: string;
+    selection?: string;
+    instruction?: string;
+    completion?: boolean;
+    preferCopilot?: boolean;
+  }): Promise<{ ok: boolean; text: string; model?: string; provider?: string; error?: string }> {
+    const models = this.config.allModels().filter(model => (model.evaluation?.status || 'unvalidated') !== 'unavailable' && !String(model.evaluation?.status || '').startsWith('error'));
+    const current = this.config.findModel(this.model);
+    const selected = (current && models.find(model => model.provider === current.provider && model.name === current.name)) || models.find(model => model.evaluation?.status === 'available') || models[0];
+    if (!selected?.api_key || !selected.provider_url) return { ok: false, text: '', error: 'No available editor prediction model.' };
+    const provider = new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, this.config.openAIApiMode());
+    const language = path.extname(String(input.path || '')).replace(/^\./, '') || 'text';
+    const system = input.completion
+      ? 'You are an inline code completion engine. Return only the exact text to insert at the cursor. Do not use Markdown fences or explanations.'
+      : 'You are Newmark Editor Agent. Give concise, actionable code guidance grounded in the supplied file and selection. Do not claim changes were applied.';
+    const prompt = input.completion
+      ? `Language: ${language}\nFile: ${input.path || ''}\nBefore cursor:\n${String(input.before || '').slice(-12000)}\nAfter cursor:\n${String(input.after || '').slice(0, 4000)}\nComplete the code at the cursor.`
+      : `File: ${input.path || ''}\nInstruction: ${input.instruction || 'Review the current code and suggest the next useful change.'}\nSelection:\n${String(input.selection || '').slice(0, 8000)}\nFile content:\n${String(input.content || '').slice(0, 18000)}`;
+    try {
+      const text = (await provider.chat(selected.name, [{ role: 'user', content: prompt }], system, 0.1, input.completion ? 600 : 1800)).replace(/^```[\w-]*\s*|\s*```$/g, '');
+      return { ok: !!text, text, model: selected.name, provider: selected.provider };
+    } catch (error) {
+      return { ok: false, text: '', model: selected.name, provider: selected.provider, error: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   async fuzzyInject(name: string, url: string, key: string, protocol?: ProviderProtocol): Promise<{ ok: boolean; provider?: string; models?: string[]; warning?: string }> {
@@ -1847,37 +2068,45 @@ export class Agent {
     if (!this.config.getBool('context', 'auto_compress')) return;
     const total = msgs.reduce((sum, m) => sum + (String(m.content || '')).length, 0);
     const threshold = this.config.getNum('context', 'compress_threshold_chars') || 80000;
-    if (total < threshold) return;
+    const budget = this.compressionBudget(msgs);
+    if (total < threshold && budget.estimatedTokens < budget.triggerTokens) return;
+    const originalMessageCount = msgs.length;
     const keepFirst = 1;
-    const keepLast = this.config.getNum('context', 'keep_recent_messages') || 10;
-    if (msgs.length <= keepFirst + keepLast) return;
+    const configuredKeepLast = this.config.getNum('context', 'keep_recent_messages') || 10;
+    if (msgs.length <= keepFirst + 1) return;
 
-    const omitted = msgs.length - keepFirst - keepLast;
-    const middle = msgs.slice(keepFirst, -keepLast);
-    const compression = await this.buildCompressionSummary(middle, total, provider);
+    const recentBudget = Math.max(64, budget.targetTokens - budget.summaryTokens);
+    const recent = this.recentContextSuffix(msgs, configuredKeepLast, recentBudget);
+    const recentStart = Math.max(keepFirst, msgs.length - recent.length);
+    if (recentStart <= keepFirst) return;
+
+    const omitted = recentStart - keepFirst;
+    const middle = msgs.slice(keepFirst, recentStart);
+    const compression = await this.buildCompressionSummary(middle, total, budget, provider);
     const compressed: Array<Record<string, unknown>> = msgs.slice(0, keepFirst);
     compressed.push({
       role: 'system',
       content: compression.summary,
     });
-    compressed.push(...msgs.slice(-keepLast));
+    compressed.push(...recent);
     msgs.length = 0;
     msgs.push(...compressed);
     this.lastCompression = {
       at: new Date().toISOString(),
-      originalMessages: omitted + keepFirst + keepLast,
+      originalMessages: originalMessageCount,
       compressedMessages: compressed.length,
       originalChars: total,
       summary: compression.summary,
       model: compression.model,
       fallback: compression.fallback,
     };
-    this.persistCompressedHistory(compression.summary, keepLast);
+    this.persistCompressedHistory(compression.summary, recent.length);
   }
 
   private async buildCompressionSummary(
     middle: Array<Record<string, unknown>>,
     totalChars: number,
+    budget: { maxTokens: number; targetTokens: number; summaryTokens: number },
     provider?: LLMProvider | null
   ): Promise<{ summary: string; model: string; fallback: boolean }> {
     const workspacePath = this.workspace.current?.path || this.rootPath;
@@ -1892,13 +2121,14 @@ export class Agent {
       this.workspaceGoalItems.length ? `Goal items: ${this.workspaceGoalItems.map(i => `${i.done ? '[x]' : '[ ]'} ${i.text}`).join('; ')}` : '',
       this.fileDiffs.length ? `Recent file changes: ${this.fileDiffs.map(d => d.path).join('; ')}` : '',
     ].filter(Boolean).join('\n');
+    const transcriptLimit = Math.max(1200, Math.min(60000, (budget.targetTokens - budget.summaryTokens) * 4));
     const transcript = middle.map((m, i) => {
       const role = String(m.role || 'unknown');
       const toolName = m.name ? ` ${String(m.name)}` : '';
       const content = String(m.content || m.reasoning_content || '');
       const toolCalls = Array.isArray(m.tool_calls) ? ` tool_calls=${JSON.stringify(m.tool_calls).slice(0, 800)}` : '';
       return `#${i + 1} [${role}${toolName}]${toolCalls}\n${content}`;
-    }).join('\n\n').slice(0, 60000);
+    }).join('\n\n').slice(0, transcriptLimit);
 
     const fallbackSummary = this.localCompressionSummary(meta, transcript, middle.length, totalChars);
     if (!provider) return { summary: fallbackSummary, model: 'local-fallback', fallback: true };
@@ -1925,10 +2155,14 @@ export class Agent {
         transcript,
       ].join('\n');
       const generated = await this.withTimeout(
-        provider.chat(this.model, [{ role: 'user', content: prompt }], system, temperature, 1600),
+        provider.chat(this.model, [{ role: 'user', content: prompt }], system, temperature, budget.summaryTokens),
         120000
       );
-      const summary = this.formatCompressionSummary(generated || fallbackSummary, middle.length, totalChars, false);
+      const generatedText = String(generated || '').trim();
+      if (!generatedText || /^\[LLM Error(?::|\])/i.test(generatedText) || /^LLM Error:/i.test(generatedText)) {
+        return { summary: fallbackSummary, model: 'local-fallback', fallback: true };
+      }
+      const summary = this.formatCompressionSummary(this.compactSummaryBody(generatedText, budget.summaryTokens), middle.length, totalChars, false);
       return { summary, model: this.model, fallback: false };
     } catch {
       return { summary: fallbackSummary, model: 'local-fallback', fallback: true };
@@ -1938,7 +2172,7 @@ export class Agent {
   private localCompressionSummary(meta: string, transcript: string, messageCount: number, totalChars: number): string {
     const toolLines = transcript.split('\n').filter(l => l.includes('[tool') || l.includes('tool_calls=')).slice(-20);
     const recentLines = transcript.split('\n').filter(l => l.trim()).slice(-80).join('\n');
-    return this.formatCompressionSummary([
+    return this.formatCompressionSummary(this.compactSummaryBody([
       '## Preserved State',
       meta || 'No metadata available.',
       '',
@@ -1950,7 +2184,16 @@ export class Agent {
       '',
       '## Pending Work',
       'Continue from the latest visible messages. Treat this local fallback as incomplete if details are missing.',
-    ].join('\n'), messageCount, totalChars, true);
+    ].join('\n'), Math.max(96, Math.min(1600, Math.floor(this.contextMaxTokens() * 0.12)))), messageCount, totalChars, true);
+  }
+
+  private compactSummaryBody(body: string, tokenBudget: number): string {
+    const maxChars = Math.max(384, tokenBudget * 4);
+    const text = String(body || '').trim();
+    if (text.length <= maxChars) return text;
+    const headChars = Math.floor(maxChars * 0.65);
+    const tailChars = Math.max(0, maxChars - headChars - 42);
+    return `${text.slice(0, headChars).trimEnd()}\n\n[...summary compacted...]\n\n${text.slice(-tailChars).trimStart()}`;
   }
 
   private formatCompressionSummary(body: string, messageCount: number, totalChars: number, fallback: boolean): string {

@@ -216,10 +216,18 @@ async function main() {
   assert(uiHtml.includes("item.description || item.desc || ''") && uiHtml.includes("item.marketSourceName || ''") && uiHtml.includes("item.path || ''") && uiHtml.includes("item.url || ''") && uiHtml.includes('No matching skills.'), 'ui html: Skills Market search covers skill metadata, source metadata, and empty results');
   assert(uiHtml.includes('--right-width: 380px;') && uiHtml.includes('var rightSize = Math.max(340, Math.min(680, newSize2));'), 'ui html: right sidebar has larger default and resize range');
   assert(uiHtml.includes('lucide-sprite.svg#square-pen') && uiHtml.includes("iconOnly('square-pen', t('right.editor'))") && !uiHtml.includes('lucide-sprite.svg#edit'), 'ui html: Editor tab uses available open-source icon sprite symbol');
+  assert(uiHtml.includes("if (depth === 0) parent.innerHTML = '<div style=\"font-size:11px;color:var(--text-dim);padding:8px;\">' + esc(t('fileTree.empty'))"), 'ui html: file tree shows the empty label only for an empty root, not expanded empty directories');
   assert(uiHtml.includes('function renderMessageContent(text)') && uiHtml.includes('function renderMarkdownBlocks(text)') && uiHtml.includes('function renderMarkdownInline(text)') && uiHtml.includes('class="msg-image"') && uiHtml.includes('normalizeImageSrc(imageUrl)') && uiHtml.includes("if (/^data:image\\//i.test(url)) return true;"), 'ui html: conversation renders returned markdown images, including data URLs');
   assert(uiHtml.includes('class="md-table"') && uiHtml.includes('function renderMarkdownTable(lines, start)') && uiHtml.includes('class="md-math-inline"') && uiHtml.includes('class="md-math-block"') && uiHtml.includes('function renderMathFormula(tex)') && uiHtml.includes('class="math-frac"') && uiHtml.includes('"Cambria Math"') && uiHtml.includes('white-space: normal;'), 'ui html: conversation message markdown supports tables and rendered TeX-style formula blocks without pre-wrap text fallback');
   assert(uiHtml.includes('class="msg-file-link"') && uiHtml.includes('window.openLinkedFile = async function(path)') && uiHtml.includes("window.switchRightTab('editor');"), 'ui html: conversation file links open the right editor');
-  assert(uiHtml.includes("els['md-viewer-content'] = nextMd;") && uiHtml.includes('window.getMarkdownContentNode = function()') && uiHtml.includes("var mc = window.getMarkdownContentNode();") && uiHtml.includes("window.switchRightTab('md-viewer');"), 'ui html: markdown viewer writes to the rebuilt live panel node');
+  assert(!uiHtml.includes('data-tab="md-viewer"') && uiHtml.includes('id="editor-md-toggle"') && uiHtml.includes('window.toggleEditorMarkdownPreview') && uiHtml.includes("window.editorLanguageForPath(path) === 'markdown'"), 'ui html: Markdown preview is integrated as an editor-only toggle shown for Markdown files');
+  assert(uiHtml.includes('window.highlightEditorCode') && uiHtml.includes('window.handleEditorVimKey') && uiHtml.includes('window.requestEditorCompletion') && uiHtml.includes('window.requestEditorAssist') && uiHtml.includes('editor-completion'), 'ui html: native code editor provides highlighting, Vim state, model completion, and Agent assist controls');
+  assert(uiHtml.includes('window.toggleEditorPrediction') && uiHtml.includes('window.scheduleEditorCompletion') && uiHtml.includes('editorPredictionEnabled') && uiHtml.includes('class="editor-ghost"') && uiHtml.includes('editor-ghost-text') && uiHtml.includes("state.editorCompletionText && e.key === 'Tab'"), 'ui html: Copilot prediction is opt-in, debounced, cancellable, rendered as pale inline ghost text, and accepted with Tab');
+  const agentSourceForEditor = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
+  assert(mainSource.includes("completion: true, preferCopilot: false") && agentSourceForEditor.includes('const selected = (current && models.find'), 'editor assist: completion stays bound to the conversation-selected model instead of forcing Copilot');
+  assert(uiHtml.includes("if (providerOpts) modelOpts += '<optgroup") && uiHtml.includes("if (!state.model || (state.model === 'auto'") && uiHtml.includes("availableValues.indexOf(state.model) < 0"), 'ui model selector: skips empty provider groups and recovers an empty or unavailable saved model to the first usable model');
+  assert(uiHtml.includes('function messageActionsHtml(role, text, messageIndex)') && uiHtml.includes('window.copyMessageText = async function(button)') && uiHtml.includes('window.editUserMessage = async function(button, messageIndex)') && uiHtml.includes('api.rewindConversation(conversationId, Number(messageIndex))'), 'ui html: user and Agent messages expose copy, while user messages can rewind into the prompt for editing');
+  assert(preloadSource.includes("rewindConversation: (conversationId: string, messageIndex: number) => ipcRenderer.invoke('agent:rewindConversation'") && mainSource.includes("ipcMain.handle('agent:rewindConversation'") && mainSource.includes('conversationKernel.rewind(target, messageIndex)'), 'main/preload: conversation rewind IPC is bound to the requested conversation');
   assert(uiHtml.includes('function optionLabel(option)') && uiHtml.includes('function renderPendingOptionsInChat(options)') && uiHtml.includes("state.renderedOptionKeys[key] = true"), 'ui html: pending option feedback renders into chat once');
   assert(uiHtml.includes('if (r && r.options)') && uiHtml.includes('renderPendingOptionsInChat(state.pendingOptions)') && uiHtml.includes("optionDescription(opt)"), 'ui html: send result and right status render structured option labels');
   assert(uiHtml.includes('window.runFlowWork = async function(workIdx)') && uiHtml.includes("await api.saveFile('Flow/' + normalized.name + '.Flow.json'") && uiHtml.includes('api.runFlow(normalized.name, flowInput, 0)') && uiHtml.includes('renderChatMessages(r.chatMessages)'), 'ui html: Flow Run uses backend core runner and renders returned messages');
@@ -245,7 +253,11 @@ async function main() {
   const streamProviderBody = (piKernelSource.match(/function streamWithNewmarkProvider[\s\S]*?async function transformContext/) || [''])[0];
   assert(!streamProviderBody.includes('currentAgent.tools.definitions(currentAgent.mode)'), 'kernel: streaming provider does not rebuild tool schemas on every model round');
   assert(piKernelSource.includes("if (!agent.config.getBool('context', 'auto_compress')) return messages;"), 'kernel: transformContext skips conversion and JSON comparison when auto compression is disabled');
-  assert(mainKernelSource.includes("ipcMain.handle('agent:abortConversation'") && mainKernelSource.includes('conversationKernel?.abort(target)') && uiHtml.includes('api.archive(targetId)') && uiHtml.includes('delete state.runningConversations[targetId]'), 'kernel/ui: archiving a running conversation interrupts and archives directly');
+  assert(mainKernelSource.includes("ipcMain.handle('agent:abortConversation'") && mainKernelSource.includes('conversationKernel?.abort(target)') && mainKernelSource.includes('return agent.archiveConversation(target)') && uiHtml.includes('api.archive(targetId)') && uiHtml.includes('delete state.runningConversations[targetId]'), 'kernel/ui: archiving a running conversation interrupts and atomically removes the target conversation');
+  assert(uiHtml.includes('var seenIds = {};') && uiHtml.includes('if (seenIds[id]) continue;') && uiHtml.includes("displaySummary += ' · ' + String(conv.id || '').slice(-8);"), 'ui conversations: duplicate ids are ignored and distinct conversations with matching titles are disambiguated');
+  assert(uiHtml.includes('#model-select {') && uiHtml.includes('flex: 1 1 160px;') && uiHtml.includes('width: 0;') && uiHtml.includes('min-width: 72px;') && uiHtml.includes('container-type: inline-size;') && uiHtml.includes('@container (max-width: 430px)') && uiHtml.includes('@media (max-width: 720px)') && uiHtml.includes('#left, #left-secondary, #right, .right-open-btn { display: none !important; }') && uiHtml.includes('#input-tools {') && uiHtml.includes('overflow: hidden;'), 'ui input toolbar: model selector keeps readable minimum width and narrow-window layout preserves submit without changing saved sidebar state');
+  assert(uiHtml.includes("evaluationStatus !== 'available' && evaluationStatus !== 'unvalidated'") && agentKernelSource.includes("return status === 'available' || status === 'unvalidated';"), 'model selectors: show only validated available or unvalidated models');
+  assert(agentKernelSource.includes('const catalogByProvider = new Map') && agentKernelSource.includes('await p.modelCatalog()') && agentKernelSource.includes('await p.validateVision(m.name)') && agentKernelSource.includes('await p.validateImageOutput(m.name)') && agentKernelSource.includes('vision_input: visionResult.ok') && agentKernelSource.includes('image_output: imageResult.ok'), 'model validation: combines network catalog evidence with real text, vision, and image-generation tasks');
   assert(uiHtml.includes('foregroundConversationHoldId') && uiHtml.includes('holdForegroundConversation(activeId, 4500)') && uiHtml.includes('Date.now() < Number(state.foregroundConversationHoldUntil'), 'ui html: foregrounded background conversations stay active briefly during backend refresh');
   assert(uiHtml.includes('trackedConversationUntil') && uiHtml.includes('conversationTrackMs: 300000') && uiHtml.includes('markConversationTracked(previousId') && uiHtml.includes('markConversationTracked(activeId'), 'ui html: conversations keep a five-minute tracking window after foreground switches without aborting background work');
   assert(conversationKernelSource.includes("getNum('agent', 'process_timeout_ms')") && conversationKernelSource.includes('if (timeoutMs <= 0) return runtime.runner.process(message)') && conversationKernelSource.includes('clearTimeout(timeout)'), 'kernel: desktop conversation turns have configurable outer timeout disabled by default');
@@ -369,6 +381,7 @@ async function main() {
   const mainTs = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf-8');
   const serverTs = fs.readFileSync(path.join(process.cwd(), 'src', 'server.ts'), 'utf-8');
   const preloadTs = fs.readFileSync(path.join(process.cwd(), 'src', 'preload.ts'), 'utf-8');
+  assert(preloadTs.includes("ipcRenderer.invoke('agent:editorComplete'") && preloadTs.includes("ipcRenderer.invoke('agent:editorAssist'") && mainTs.includes("ipcMain.handle('agent:editorComplete'") && mainTs.includes("ipcMain.handle('agent:editorAssist'"), 'editor IPC: completion and Agent assist use dedicated conversation-independent model requests');
   const toolsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'index.ts'), 'utf-8');
   const nativeToolsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'nativeTools.ts'), 'utf-8');
   const agentTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
@@ -468,6 +481,9 @@ async function main() {
   assert(fs.existsSync(path.join(process.cwd(), 'assets', 'app-icon-dark.png')) && fs.existsSync(path.join(process.cwd(), 'assets', 'app-icon-light.png')) && appIconIco.length > 6 && appIconIco.readUInt16LE(2) === 1 && appIconIco.readUInt16LE(4) >= 1, 'app icons: themed PNG assets and Windows ICO exist');
   assert(packageJson.includes('"icon": "assets/icon.ico"') && electronBuilderConfigTs.includes("icon: 'assets/icon.ico'"), 'app icons: Windows package uses generated ICO');
   assert(mainTs.includes('nativeTheme') && mainTs.includes("app-icon-light.png") && mainTs.includes("app-icon-dark.png") && mainTs.includes('createAppIconImage(16)') && mainTs.includes('icon: themedAppIconPath()'), 'app icons: runtime windows and tray use themed assets');
+  assert(mainTs.includes('mainWindow = createDesktopWindow(false);') && mainTs.includes('createTray();') && mainTs.includes("tray.on('click', showMainWindow)") && mainTs.includes("tray.on('double-click', showMainWindow)"), 'tray lifecycle: creates the tray at desktop startup and reuses it while showing the window');
+  assert(mainTs.includes("agent?.config.getBool('ui', 'minimize_to_tray') ?? true") && mainTs.includes("agent?.config.getStr('general', 'close_behavior')") && mainTs.includes("ipcMain.handle('app:lifecycleState'"), 'window lifecycle: separates minimize-to-tray from close behavior and exposes a smoke-test state');
+  assert(preloadTs.includes("lifecycleState: () => ipcRenderer.invoke('app:lifecycleState')") && !uiHtml.includes("if (s.minimizeToTray) state.closeBehavior = 'minimize';"), 'window lifecycle: preload exposes lifecycle state without overwriting close behavior from minimize settings');
   assert(nativeToolsTs.includes('NATIVE_TOOL_CATALOG') && nativeToolsTs.includes("name: 'computer_use'") && nativeToolsTs.includes("name: 'terminal_takeover'") && nativeToolsTs.includes('normalizeNativeToolEnabled') && configTs.includes('defaultNativeToolEnabled()') && configTs.includes("tools:") && toolsTs.includes('isNativeToolEnabled') && mainTs.includes('nativeToolCatalogForState') && mainTs.includes("case 'nativeTools'"), 'native tools settings: catalog, defaults, backend state, and ToolExecutor gating are wired');
   assert(nativeToolsTs.includes("name: 'ssh_workspace'") && toolsTs.includes("t('ssh_workspace'") && toolsTs.includes('new SshManager') && preloadTs.includes('createSshWorkspace') && mainTs.includes("ssh:createWorkspace") && uiHtml.includes('ws-ssh-host') && uiHtml.includes('validateSshWorkspaceForm'), 'OpenSSH workspace: native tool, IPC, preload, and new-workspace UI are wired');
   assert(uiHtml.includes('id="title-app-logo"') && uiHtml.includes('id="title-app-icon"') && uiHtml.includes('../../assets/app-icon-dark.png') && uiHtml.includes('../../assets/app-icon-light.png'), 'app icons: custom titlebar renders themed icon assets');
@@ -496,6 +512,7 @@ async function main() {
   assert(release111UiSmoke.includes('window.applyTerminalTakeoverEvent') && release111UiSmoke.includes('terminal-tab.agent-takeover.marquee-border') && release111UiSmoke.includes('terminal-pane.agent-takeover.marquee-border') && release111UiSmoke.includes('2026-07-03-release-111-ui-smoke.png'), 'release 1.1.1 ui smoke: validates packaged bottom terminal takeover mirror with marquee border');
   assert(packageJson.includes('"release:ui-icon-smoke"') && fs.existsSync(path.join(process.cwd(), 'scripts', 'release-ui-icon-smoke.cjs')) && releaseUiIconSmoke.includes('verifyExeIcon(exePath, packageIcon)') && releaseUiIconSmoke.includes('verifyTitlebarIcon') && releaseUiIconSmoke.includes('marquee-rotate') && releaseUiIconSmoke.includes('rootGradientColor') && releaseUiIconSmoke.includes('rootMarqueeSpeed') && releaseUiIconSmoke.includes('rootMarqueeWidth'), 'release ui icon smoke: npm entry validates win-unpacked exe icon, runtime titlebar icon, and shared adjustable animated border');
   assert(packageJson.includes('"release:ui-agent-smoke"') && releaseUiAgentSmoke.includes('window.sendMessage()') && releaseUiAgentSmoke.includes('release-ui-agent-mock') && releaseUiAgentSmoke.includes('ACTIVE_TOOLCHAIN_RESULT_OK_20260627_SCRIPT'), 'release ui agent smoke: drives real packaged renderer send path with mock model');
+  assert(packageJson.includes('"msi"') && packageJson.includes('"perMachine": true'), 'windows MSI: installs per-machine so the managed install target is Program Files');
   assert(releaseUiAgentSmoke.includes("'write,bash,edit,read'") && releaseUiAgentSmoke.includes('"timeout_ms":10000') && releaseUiAgentSmoke.includes('terminal timeout cap ok') && releaseUiAgentSmoke.includes('[write] OK') && releaseUiAgentSmoke.includes('[edit] OK'), 'release ui agent smoke: validates write bash edit read tools and terminal timeout cap');
   assert(packageJson.includes('"release:ui-acceptance-smoke"') && releaseUiAcceptanceSmoke.includes("window.api.createWorkspace('acceptance-workspace')") && releaseUiAcceptanceSmoke.includes("window.api.sendMessage('ACCEPTANCE_BUILD_WRITE") && releaseUiAcceptanceSmoke.includes("window.api.sendMessage('ACCEPTANCE_PLAN_BLOCK"), 'release ui acceptance smoke: covers workspace creation, Build send, and Plan send in packaged UI');
   assert(releaseUiAcceptanceSmoke.includes("window.api.updateGoal('ACCEPTANCE_GOAL") && releaseUiAcceptanceSmoke.includes('window.api.toggleGoalPause()') && releaseUiAcceptanceSmoke.includes("window.api.runFlow('acceptance-flow'") && releaseUiAcceptanceSmoke.includes('window.api.archive()'), 'release ui acceptance smoke: covers Goal pause/resume, Flow run, and workspace archive');
@@ -528,7 +545,7 @@ async function main() {
   assert(releaseUiFlowSubagentSmoke.includes("window.switchRightTab('subagent')") && releaseUiFlowSubagentSmoke.includes("window.openSubagentHistory('release-child')") && releaseUiFlowSubagentSmoke.includes('Subagent history is read-only'), 'release ui Flow/subagent smoke: validates retained read-only subagent history UI');
   assert(packageJson.includes('"release:ui-media-md-smoke"') && releaseUiMediaMdSmoke.includes('--remote-debugging-port=') && releaseUiMediaMdSmoke.includes('window.api.createWorkspace') && releaseUiMediaMdSmoke.includes('addMsg('), 'release ui media/md smoke: drives real packaged renderer without model spend');
   assert(releaseUiMediaMdSmoke.includes('data:image/gif;base64') && releaseUiMediaMdSmoke.includes('.msg-image') && releaseUiMediaMdSmoke.includes('.msg-file-link') && releaseUiMediaMdSmoke.includes('.md-table') && releaseUiMediaMdSmoke.includes('.md-math-inline') && releaseUiMediaMdSmoke.includes('.md-math-block'), 'release ui media/md smoke: validates conversation markdown image, file-link, table, and math rendering');
-  assert(releaseUiMediaMdSmoke.includes("window.openFile('media-doc.md')") && releaseUiMediaMdSmoke.includes('#panel-md-viewer') && releaseUiMediaMdSmoke.includes('MD_VIEWER_OK_20260628'), 'release ui media/md smoke: validates markdown viewer rendering');
+  assert(releaseUiMediaMdSmoke.includes("window.openFile('media-doc.md')") && releaseUiMediaMdSmoke.includes('#editor-md-toggle') && releaseUiMediaMdSmoke.includes('#editor-md-preview') && releaseUiMediaMdSmoke.includes('MD_VIEWER_OK_20260628'), 'release ui media/md smoke: validates integrated Markdown editor preview');
   assert(releaseUiMediaMdSmoke.includes('#editor-textarea') && releaseUiMediaMdSmoke.includes('EDITOR_LINK_TARGET_OK_20260628') && releaseUiMediaMdSmoke.includes("window.switchRightTab('file-tree')"), 'release ui media/md smoke: validates linked file editor and file tree');
   assert(releaseUiMediaMdSmoke.includes('Page.captureScreenshot') && releaseUiMediaMdSmoke.includes('2026-06-28-release-ui-media-md-smoke.png'), 'release ui media/md smoke: captures visual evidence');
   assert(packageJson.includes('"release:ui-skills-smoke"') && releaseUiSkillsSmoke.includes('--remote-debugging-port=') && releaseUiSkillsSmoke.includes("window.showPluginList('market')") && releaseUiSkillsSmoke.includes('#skill-market-search'), 'release ui skills smoke: drives real packaged Plugins Skills Market through CDP');
@@ -688,7 +705,7 @@ async function main() {
   assert(models[0].provider === 'test-prov', 'model provider bound');
   assert(models[0].provider_protocol === 'openai', 'model carries provider protocol');
   cfg.addModelToProvider('test-prov', 'gpt-5.5', 'GPT 5.5', 'Provider-listed frontier GPT model');
-  assert(cfg.findModel('gpt-5.5')?.vision === true, 'model config: infers GPT-5.5 vision capability when model is added');
+  assert(cfg.findModel('gpt-5.5')?.vision === false, 'model config: newly added models remain capability-unvalidated until task validation');
 
   // Test save
   cfg.save();
@@ -1174,10 +1191,14 @@ async function main() {
   const cliFileStateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['state', '--conversation', 'cli-file-input', '--root', TEST_DIR]));
   assert(JSON.parse(cliFileStateOut).chatMessages >= 1, 'cli send: input-file prompt persists to requested conversation');
   const originalCliValidate = LLMProvider.prototype.validate;
+  const originalCliValidateVision = LLMProvider.prototype.validateVision;
   const originalCliListModels = LLMProvider.prototype.listModels;
   const originalAgentFuzzyInject = Agent.prototype.fuzzyInject;
   LLMProvider.prototype.validate = async function(modelName: string) {
     return { ok: modelName === 'gpt-test' || modelName === 'gpt-5.5' || modelName === 'cli-fast' || modelName === 'claude-cli' || modelName === 'env-claude', latency: modelName === 'cli-fast' ? 0.3 : 0.8 };
+  };
+  LLMProvider.prototype.validateVision = async function(modelName: string) {
+    return { ok: modelName === 'gpt-5.5', latency: 0.2 };
   };
   try {
     const cliValidateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['validate-models', '--selected', 'test-prov/gpt-test', '--root', TEST_DIR]));
@@ -1188,8 +1209,8 @@ async function main() {
     const cliVisionValidateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['validate-models', '--selected', 'test-prov/gpt-5.5', '--root', TEST_DIR]));
     const cliVisionValidate = JSON.parse(cliVisionValidateOut);
     const cliVisionModel = new ConfigManager(TEST_DIR).findModel('gpt-5.5');
-    assert(Array.isArray(cliVisionValidate) && cliVisionValidate.some((r: any) => r.name === 'test-prov/gpt-5.5' && r.vision_input === true), 'cli validate-models: infers GPT-5.5 vision input from model identity');
-    assert(cliVisionModel?.vision === true && cliVisionModel?.evaluation?.vision_input === true, 'cli validate-models: persists inferred GPT-5.5 vision capability');
+    assert(Array.isArray(cliVisionValidate) && cliVisionValidate.some((r: any) => r.name === 'test-prov/gpt-5.5' && r.vision_input === true), 'cli validate-models: confirms GPT-5.5 vision input through a vision task probe');
+    assert(cliVisionModel?.vision === true && cliVisionModel?.evaluation?.vision_input === true, 'cli validate-models: persists task-confirmed GPT-5.5 vision capability');
     LLMProvider.prototype.listModels = async function() {
       if (this.baseUrl.includes('cli-nebula.local')) return ['cli-fast', 'cli-pro'];
       if (this.baseUrl.includes('cli-anthropic.local')) return ['claude-cli'];
@@ -1293,6 +1314,7 @@ async function main() {
     delete process.env.NEWMARK_TEST_BAD_CLAUDE_ENV_FILE;
     Agent.prototype.fuzzyInject = originalAgentFuzzyInject;
     LLMProvider.prototype.validate = originalCliValidate;
+    LLMProvider.prototype.validateVision = originalCliValidateVision;
     LLMProvider.prototype.listModels = originalCliListModels;
   }
   const cliMarketDir = path.join(TEST_DIR, 'skills', 'cli-market-skill');
@@ -2096,6 +2118,29 @@ async function main() {
   const persistedConvs = scopedAgentReloaded.listConversationStates();
   assert(persistedConvs.some(c => c.id === 'conv-two' && c.messageCount === 1), 'conversation chat: lists persisted conversation state');
   assert(persistedConvs.some(c => c.id === 'conv-two' && c.title.includes('message in conv two')), 'conversation chat: derives persisted conversation title');
+  scopedAgentReloaded.chatMessages = [
+    { role: 'user', content: 'keep prompt', mode: 'Build', model: scopedAgentReloaded.model, timestamp: 'rw1' },
+    { role: 'assistant', content: 'keep reply', mode: 'Build', model: scopedAgentReloaded.model, timestamp: 'rw2' },
+    { role: 'user', content: 'edit prompt', mode: 'Build', model: scopedAgentReloaded.model, timestamp: 'rw3' },
+    { role: 'assistant', content: 'remove reply', mode: 'Build', model: scopedAgentReloaded.model, timestamp: 'rw4' },
+  ];
+  scopedAgentReloaded.history = [
+    { role: 'user', content: 'keep prompt' },
+    { role: 'assistant', content: 'keep reply' },
+    { role: 'user', content: 'edit prompt' },
+    { role: 'assistant', content: 'remove reply' },
+  ];
+  scopedAgentReloaded.saveWorkspaceConversationState();
+  const rewound = scopedAgentReloaded.rewindConversation('conv-two', 2);
+  assert(rewound.chatMessages.length === 2 && rewound.chatMessages[0]?.content === 'keep prompt' && scopedAgentReloaded.history.length === 2, 'conversation rewind: removes the edited user node and all later display/model history');
+  const rewindRoot = scopedAgentReloaded.rootPath;
+  const rewoundReloaded = new Agent(rewindRoot);
+  rewoundReloaded.workspace.select(scopedAgentReloaded.workspace.current?.name || '');
+  rewoundReloaded.setConversation('conv-two');
+  assert(rewoundReloaded.chatMessages.length === 2 && rewoundReloaded.chatMessages[1]?.content === 'keep reply', 'conversation rewind: persists the retained prefix across restart');
+  let rewindRejected = false;
+  try { scopedAgentReloaded.rewindConversation('conv-two', 1); } catch { rewindRejected = true; }
+  assert(rewindRejected, 'conversation rewind: rejects assistant nodes as edit targets');
   scopedAgentReloaded.setConversation('mirror-active');
   const mirroredSource: Parameters<Agent['mirrorConversationStateFrom']>[1] = {
     chatMessages: [{ role: 'user' as const, content: 'runner-owned message', mode: 'Build', model: scopedAgentReloaded.model, timestamp: 'tm' }],
@@ -2415,6 +2460,39 @@ async function main() {
   agent.deleteArchive(archiveName);
   assert(agent.listArchives().length === 0, 'deleteArchive: removes file');
 
+  const archiveIsolationRoot = path.join(TEST_DIR, 'archive-conversation-isolation');
+  const archiveAgent = new Agent(archiveIsolationRoot);
+  archiveAgent.createInternalWorkspace('archive-targets');
+  archiveAgent.setConversation('keep-active');
+  archiveAgent.chatMessages = [
+    { role: 'user', content: 'same title', mode: 'Build', model: archiveAgent.model, timestamp: 'ta' },
+    { role: 'assistant', content: 'keep response', mode: 'Build', model: archiveAgent.model, timestamp: 'ta2' },
+  ];
+  archiveAgent.flushConversationState();
+  archiveAgent.setConversation('archive-target');
+  archiveAgent.chatMessages = [
+    { role: 'user', content: 'same title', mode: 'Build', model: archiveAgent.model, timestamp: 'tb' },
+    { role: 'assistant', content: 'duplicate response', mode: 'Build', model: archiveAgent.model, timestamp: 'tb2' },
+  ];
+  archiveAgent.flushConversationState();
+  archiveAgent.setConversation('archive-target-duplicate');
+  archiveAgent.chatMessages = [
+    { role: 'user', content: 'same title', mode: 'Build', model: archiveAgent.model, timestamp: 'tc' },
+    { role: 'assistant', content: 'duplicate response', mode: 'Build', model: archiveAgent.model, timestamp: 'tc2' },
+  ];
+  archiveAgent.flushConversationState();
+  const sameTitleConversations = archiveAgent.listConversationStates().filter(c => c.title === 'same title');
+  assert(sameTitleConversations.length === 2 && sameTitleConversations.some(c => c.id === 'keep-active') && sameTitleConversations.some(c => c.id === 'archive-target-duplicate'), 'conversation registry: exact duplicate content registers only the newest id while different same-title content remains');
+  archiveAgent.setConversation('keep-active');
+  const archivedTargetName = archiveAgent.archiveConversation('archive-target');
+  assert(!!archivedTargetName && fs.existsSync(path.join(archiveAgent.workspace.current!.path, 'archive', archivedTargetName)), 'archiveConversation: writes the selected conversation archive');
+  assert(archiveAgent.activeConversationId === 'keep-active' && archiveAgent.chatMessages[1]?.content === 'keep response', 'archiveConversation: archiving a background conversation preserves the active conversation');
+  assert(!archiveAgent.listConversationStates().some(c => c.id === 'archive-target'), 'archiveConversation: removes the target id from persisted active conversation state');
+  assert(!archiveAgent.listConversationStates().some(c => c.id === 'archive-target-duplicate'), 'archiveConversation: removes exact duplicate registrations with the archived target');
+  const archiveAgentReloaded = new Agent(archiveIsolationRoot);
+  assert(!archiveAgentReloaded.listConversationStates().some(c => c.id === 'archive-target'), 'archiveConversation: removed target does not return after restart');
+  archiveAgentReloaded.deleteArchive(archivedTargetName!);
+
   // ---- 10. Context Compression Tests ----
   console.log('\n📐 Context Compression');
   agent.setMode('build');
@@ -2432,7 +2510,31 @@ async function main() {
   assert(String(msgs[1]?.content || '').includes('Preserved State'), 'maybeCompress: preserves structured summary');
   assert(agent.lastCompression?.fallback === false, 'maybeCompress: records model compression metadata');
   assert(agent.history.some(m => String(m.content || '').includes('Context Compression Model Summary')), 'maybeCompress: persists compressed history');
+  agent.history = Array(50).fill(null).map((_, i) => ({ role: i % 2 === 0 ? 'user' : 'assistant', content: 'y'.repeat(2000) }));
+  const errorCompressionMessages = [...agent.history];
+  await agent.maybeCompress(errorCompressionMessages, new FakeProvider(['[LLM Error: 400] unsupported response shape']) as unknown as LLMProvider);
+  assert(agent.lastCompression?.fallback === true && String(errorCompressionMessages[1]?.content || '').includes('Context Compression Fallback'), 'maybeCompress: empty/error provider summaries use local fallback instead of persisting a false model summary');
   agent.config.upsertProvider('context-prov', 'https://api.context.test/v1', 'test-key-context');
+  agent.config.addModelToProvider('context-prov', 'near-limit-context', 'Near Limit Context', 'Near-limit compression model');
+  agent.config.updateModel('context-prov', 'near-limit-context', { max_tokens: 1000 });
+  agent.setModel('near-limit-context');
+  agent.config.set('context', 'compress_threshold_chars', 80000);
+  agent.config.set('context', 'keep_recent_messages', 10);
+  agent.history = [
+    { role: 'system', content: 'system root' },
+    ...Array(14).fill(null).flatMap((_, i) => [
+      { role: 'user', content: `user-${i} ` + 'u'.repeat(180) },
+      { role: 'assistant', content: `assistant-${i} ` + 'a'.repeat(180) },
+    ]),
+  ];
+  const nearLimitMessages = [...agent.history];
+  const nearLimitBefore = agent.estimateContextTokens(nearLimitMessages);
+  assert(nearLimitBefore < 20000 && nearLimitBefore >= 686, 'maybeCompress near limit: fixture crosses model-driven trigger before fixed 80K character threshold');
+  await agent.maybeCompress(nearLimitMessages, new FakeProvider(['## Preserved State\nKeep the active implementation and pending verification.']) as unknown as LLMProvider);
+  const nearLimitAfter = agent.estimateContextTokens(nearLimitMessages);
+  assert(nearLimitMessages.length < 29 && nearLimitAfter < nearLimitBefore && nearLimitAfter <= 484, 'maybeCompress near limit: compacts below the model-driven target budget');
+  assert(String(nearLimitMessages[2]?.role || '') === 'user', 'maybeCompress near limit: retained recent context starts at a complete user turn');
+  assert(agent.lastCompression?.originalMessages === 29 && agent.lastCompression?.compressedMessages === nearLimitMessages.length, 'maybeCompress near limit: records exact original and compacted message counts');
   agent.config.addModelToProvider('context-prov', 'tiny-context', 'Tiny Context', 'Small context test model');
   agent.config.updateModel('context-prov', 'tiny-context', { max_tokens: 1000 });
   agent.setModel('tiny-context');
@@ -2455,8 +2557,20 @@ async function main() {
   modelAgent.config.addModelToProvider('model-prov', 'gpt5.5', 'GPT5.5', 'Frontier GPT model imported from provider');
   modelAgent.config.updateModel('model-prov', 'gpt5.5', { vision: false, description: 'Provider-listed model without multimodal metadata' });
   const originalValidate = LLMProvider.prototype.validate;
+  const originalValidateVision = LLMProvider.prototype.validateVision;
+  const originalValidateImageOutput = LLMProvider.prototype.validateImageOutput;
+  const originalModelWebSearch = modelAgent.tools.webSearch.bind(modelAgent.tools);
   LLMProvider.prototype.validate = async function(modelName: string) {
     return { ok: modelName !== 'bad-model', latency: modelName === 'fast-mini' ? 0.4 : 2.2 };
+  };
+  LLMProvider.prototype.validateVision = async function(modelName: string) {
+    return { ok: modelName === 'gpt-5.5', latency: 0.3 };
+  };
+  LLMProvider.prototype.validateImageOutput = async function() {
+    return { ok: false, latency: 0.1 };
+  };
+  modelAgent.tools.webSearch = async function(query: string) {
+    return query.includes('gpt5.5') ? 'Official model page says multimodal vision support.' : '[web_search] No results.';
   };
   const validation = await modelAgent.validateModels();
   assert(Array.isArray(validation), 'validateModels: returns array');
@@ -2468,10 +2582,10 @@ async function main() {
   assert(String(evaluatedFast?.description || '').includes('capability=') && String(evaluatedFast?.description || '').includes('speed=') && String(evaluatedFast?.description || '').includes('cost=') && String(evaluatedFast?.description || '').includes('multimodal='), 'validateModels: generates model description with capability speed cost and multimodal metadata');
   const evaluatedGpt55 = modelAgent.config.findModel('gpt-5.5');
   const evaluatedGpt55Compact = modelAgent.config.findModel('gpt5.5');
-  assert(validation.some(v => v.name === 'model-prov/gpt-5.5' && v.vision_input === true), 'validateModels: infers GPT-5.5 vision input even when stale config says text-only');
-  assert(validation.some(v => v.name === 'model-prov/gpt5.5' && v.vision_input === true), 'validateModels: infers compact GPT5.5 vision input naming');
-  assert(evaluatedGpt55?.vision === true && evaluatedGpt55?.evaluation?.vision_input === true, 'validateModels: persists inferred GPT-5.5 vision capability into config');
-  assert(String(evaluatedGpt55?.description || '').includes('vision-input') && String(evaluatedGpt55Compact?.description || '').includes('vision-input'), 'validateModels: generated descriptions reflect inferred GPT-5.5 multimodal support');
+  assert(validation.some(v => v.name === 'model-prov/gpt-5.5' && v.vision_input === true), 'validateModels: confirms GPT-5.5 vision input through task submission despite stale config');
+  assert(validation.some(v => v.name === 'model-prov/gpt5.5' && v.vision_input === false), 'validateModels: web/name evidence alone cannot mark vision available when the vision task fails');
+  assert(evaluatedGpt55?.vision === true && evaluatedGpt55?.evaluation?.vision_input === true, 'validateModels: persists task-confirmed GPT-5.5 vision capability into config');
+  assert(String(evaluatedGpt55?.description || '').includes('vision-input') && !String(evaluatedGpt55Compact?.description || '').includes('vision-input'), 'validateModels: generated descriptions include only task-confirmed multimodal support');
   modelAgent.history = [{ role: 'user', content: 'x'.repeat(3600) }];
   const nearWindow = modelAgent.contextWindow('fast-mini');
   assert(nearWindow.estimatedTokens >= 900 && nearWindow.warning === 'ok', 'context window: estimates conversation tokens against model max context');
@@ -2615,6 +2729,10 @@ async function main() {
   assert(runtimeFallback.some(t => t.text?.includes('[Model fallback] bad-model unavailable; switched to fast-mini.')), 'model fallback: emits visible switch notice');
   assert(runtimeFallback.some(t => t.text?.includes('FALLBACK_PRECHECK_OK')), 'model fallback: retries request on fallback model');
   LLMProvider.prototype.chatStreamWithTools = originalChatStream;
+  LLMProvider.prototype.validate = originalValidate;
+  LLMProvider.prototype.validateVision = originalValidateVision;
+  LLMProvider.prototype.validateImageOutput = originalValidateImageOutput;
+  modelAgent.tools.webSearch = originalModelWebSearch;
 
   // ---- 12. Fuzzy Injection Tests ----
   console.log('\n💉 Fuzzy Injection');
@@ -2734,6 +2852,11 @@ async function main() {
   assert(anthropicTokens.some(t => t.type === 'text' && t.text === 'anthropic ok'), 'LLMProvider Anthropic: parses text blocks');
   assert(anthropicTokens.some(t => t.type === 'tool_call' && t.toolCall?.name === 'write' && t.toolCall.arguments.includes('README.md')), 'LLMProvider Anthropic: parses tool_use blocks');
 
+  globalThis.fetch = (async () => new Response(JSON.stringify({ content: [{ type: 'text', text: { value: 'anthropic nested text' } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+  const anthropicNestedText = await anthropicProvider.chat('deepseek-v4-flash', [{ role: 'user', content: 'Hi' }], null, 0.1, 50);
+  globalThis.fetch = originalFetch;
+  assert(anthropicNestedText === 'anthropic nested text', 'LLMProvider Anthropic: normalizes nested text values through the shared native extractor');
+
   let explicitAnthropicUrl = '';
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
     explicitAnthropicUrl = String(url);
@@ -2840,6 +2963,13 @@ async function main() {
   assert(directResponsesText === 'direct responses ok' && directResponsesTokens.some(t => t.text === 'direct responses ok'), 'LLMProvider Responses mode: parses direct Responses API output');
   assert(directResponsesPaths.length === 2 && directResponsesPaths.every(p => p.endsWith('/responses')), 'LLMProvider Responses mode: uses /responses directly without chat-completions probe');
 
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    output: [{ type: 'message', content: [{ type: 'output_text', text: { value: 'nested responses text' } }] }],
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+  const nestedResponsesText = await directResponsesProvider.chat('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20);
+  globalThis.fetch = originalFetch;
+  assert(nestedResponsesText === 'nested responses text', 'LLMProvider Responses mode: parses nested output_text value blocks used by compatibility gateways');
+
   globalThis.fetch = (async () => {
     return new Response(JSON.stringify({ error: { message: 'response mode rejected' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
@@ -2862,6 +2992,41 @@ async function main() {
   globalThis.fetch = originalFetch;
   assert(directChatPaths.length === 1 && directChatPaths[0].endsWith('/chat/completions'), 'LLMProvider Chat mode: uses chat completions directly');
   assert(directChatBodies[0]?.stream === false && directChatTokens.some(t => t.text === 'direct chat ok'), 'LLMProvider Chat mode: disables streaming and yields text');
+
+  globalThis.fetch = (async () => new Response(JSON.stringify({ choices: [{ message: { content: [{ type: 'text', text: 'array chat text' }] } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+  const arrayChatText = await directChatProvider.chat('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20);
+  globalThis.fetch = (async () => new Response(JSON.stringify({ choices: [{ text: 'legacy completion text' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+  const legacyChatText = await directChatProvider.chat('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20);
+  globalThis.fetch = originalFetch;
+  assert(arrayChatText === 'array chat text' && legacyChatText === 'legacy completion text', 'LLMProvider Chat mode: parses content-part arrays and legacy choices text responses');
+
+  globalThis.fetch = (async () => new Response('data: {"choices":[{"delta":{"content":[{"type":"text","text":"stream array text"}]}}]}\n\ndata: [DONE]\n\n', { status: 200, headers: { 'Content-Type': 'text/event-stream' } })) as typeof fetch;
+  const arrayStreamProvider = new LLMProvider('stream-array', 'https://chat.example/v1', 'test-key', 'openai', 'chat_stream');
+  const arrayStreamTokens: StreamToken[] = [];
+  for await (const tok of arrayStreamProvider.chatStreamWithTools('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20, [])) arrayStreamTokens.push(tok);
+  globalThis.fetch = originalFetch;
+  assert(arrayStreamTokens.some(token => token.type === 'text' && token.text === 'stream array text'), 'LLMProvider Chat streaming: normalizes content-part delta arrays through the shared native extractor');
+
+  const capabilityPaths: string[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const pathname = new URL(String(url)).pathname;
+    capabilityPaths.push(pathname);
+    if (pathname.endsWith('/models')) {
+      return new Response(JSON.stringify({ data: [{ id: 'vision-image-model', capabilities: ['vision', 'image_generation'] }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (pathname.endsWith('/images/generations')) {
+      return new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    const hasImage = String(init?.body || '').includes('data:image/png;base64');
+    return new Response(JSON.stringify({ choices: [{ message: { content: hasImage ? 'RED_SQUARE' : 'TEXT_OK' } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  const capabilityProvider = new LLMProvider('capabilities', 'https://capabilities.example/v1', 'test-key', 'openai', 'chat');
+  const capabilityCatalog = await capabilityProvider.modelCatalog();
+  const capabilityVision = await capabilityProvider.validateVision('vision-image-model');
+  const capabilityImage = await capabilityProvider.validateImageOutput('vision-image-model');
+  globalThis.fetch = originalFetch;
+  assert(capabilityCatalog[0]?.id === 'vision-image-model' && JSON.stringify(capabilityCatalog[0]?.raw).includes('image_generation'), 'LLMProvider capability validation: preserves provider catalog metadata');
+  assert(capabilityVision.ok && capabilityImage.ok && capabilityPaths.some(p => p.endsWith('/images/generations')), 'LLMProvider capability validation: vision and image generation require successful task probes');
 
   const githubModelsRequests: Array<{ path: string; auth: string; apiVersion: string; body: any }> = [];
   globalThis.fetch = (async (url: string, init?: RequestInit) => {

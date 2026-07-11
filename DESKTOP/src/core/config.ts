@@ -465,7 +465,7 @@ export function defaultModelConfig(modelName: string, display = modelName, descr
     cost_per_1k_input: 0.001,
     cost_per_1k_output: 0.004,
     max_tokens: 128000,
-    vision: inferModelVisionCapability(modelName, display, description),
+    vision: false,
     thinking: false,
     image_output: false,
     speed_rating: 'unknown',

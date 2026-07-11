@@ -19,12 +19,15 @@ contextBridge.exposeInMainWorld('api', {
   runFlow: (name: string, input?: string, start?: number) => ipcRenderer.invoke('flow:run', name, input, start),
   saveConfig: (cfg: string | Record<string, unknown>) => ipcRenderer.invoke('agent:saveConfig', cfg),
   abortConversation: (conversationId?: string) => ipcRenderer.invoke('agent:abortConversation', conversationId),
+  rewindConversation: (conversationId: string, messageIndex: number) => ipcRenderer.invoke('agent:rewindConversation', conversationId, messageIndex),
   archive: (conversationId?: string) => ipcRenderer.invoke('agent:archive', conversationId),
   listArchives: (scope?: string) => ipcRenderer.invoke('agent:listArchives', scope),
   deleteArchive: (name: string) => ipcRenderer.invoke('agent:deleteArchive', name),
   readArchive: (name: string) => ipcRenderer.invoke('agent:readArchive', name),
   readFile: (path: string) => ipcRenderer.invoke('agent:readFile', path),
   saveFile: (path: string, content: string) => ipcRenderer.invoke('agent:saveFile', path, content),
+  editorComplete: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:editorComplete', request),
+  editorAssist: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:editorAssist', request),
   filePathForFile: (file: File) => {
     try {
       return webUtils && file ? webUtils.getPathForFile(file) : '';
@@ -78,6 +81,7 @@ contextBridge.exposeInMainWorld('api', {
   minimize: () => ipcRenderer.invoke('app:minimize'),
   maximize: () => ipcRenderer.invoke('app:maximize'),
   close: () => ipcRenderer.invoke('app:close'),
+  lifecycleState: () => ipcRenderer.invoke('app:lifecycleState'),
   sidecarStatus: () => ipcRenderer.invoke('sidecar:status'),
   sidecarRestart: () => ipcRenderer.invoke('sidecar:restart'),
   // Native PTY Terminal

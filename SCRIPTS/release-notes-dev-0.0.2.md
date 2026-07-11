@@ -4,7 +4,7 @@ Newmark Agent v1.0.2 is a visual packaging update for the local-first desktop Ag
 
 ## Download
 
-- `Newmark-Agent-1.0.2-portable-x64.exe`
+- `Newmark-Agent-0.0.2-portable-x64.exe`
 - SHA256: `883F840FB9AD9ED238CF1DEB421C038E94E8A1EF56BBECF93EF055BA560C0084`
 
 ## Highlights

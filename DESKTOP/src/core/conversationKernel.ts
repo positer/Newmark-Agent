@@ -112,6 +112,15 @@ export class ConversationKernel {
     return false;
   }
 
+  rewind(conversationId: string, messageIndex: number): ReturnType<Agent['rewindConversation']> {
+    const id = this.safeId(conversationId);
+    if (this.isRunning(id)) throw new Error('Cannot edit a message while this conversation is running.');
+    const runtime = this.runtimes.get(id);
+    if (runtime?.unsubscribe) runtime.unsubscribe();
+    this.runtimes.delete(id);
+    return this.host.rewindConversation(id, messageIndex);
+  }
+
   async prompt(
     message: string,
     conversationId: string,

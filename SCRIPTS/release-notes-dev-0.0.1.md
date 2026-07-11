@@ -4,7 +4,7 @@ Newmark Agent v1.0.1 is the first public release candidate of the local-first de
 
 ## Download
 
-- `Newmark-Agent-1.0.1-portable-x64.exe`
+- `Newmark-Agent-0.0.1-portable-x64.exe`
 - SHA256: `8d84f5984cd969a03d8f435bf0e19d6ef2ae765dc2b1d590b0fb88e75cec5d65`
 
 ## Highlights

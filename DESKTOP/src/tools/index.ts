@@ -108,6 +108,10 @@ export class ToolExecutor {
     this.root = root;
   }
 
+  async webSearch(query: string): Promise<string> {
+    return this.wsearch(query);
+  }
+
   definitions(mode?: string): unknown[] {
     const t = (name: string, desc: string, params: Record<string, unknown>, required: string[]) => ({
       type: 'function',

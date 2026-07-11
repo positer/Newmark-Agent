@@ -5,7 +5,7 @@
 <h1 align="center">Newmark Agent</h1>
 
 <p align="center">
-  <a href="https://github.com/positer/Newmark-Agent/releases/latest"><img alt="Release" src="https://img.shields.io/badge/release-dev%201.0.4-blue"></a>
+  <a href="https://github.com/positer/Newmark-Agent/releases/latest"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.0.5-blue"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Linux-lightgrey">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
@@ -13,9 +13,29 @@
 
 Newmark Agent is a local-first desktop Agent workspace for coding, automation, repository review, model-provider experimentation, and controlled desktop operation. It packages an Electron desktop UI, a TypeScript Agent runtime, workspace-scoped conversations, Flow workflows, subagents, skills, archives, browser/GitHub/automation tools, and configurable OpenAI-compatible, Anthropic-compatible, and GitHub Models providers.
 
-The current public development release is **dev 1.0.4**. It is intended for technical users who want an installer-backed desktop Agent app that runs against their own model credentials and keeps mutable runtime state local under `~/.Newmark`. Windows is the primary Computer Use target; Linux GUI, CLI, packaging, and terminal workflows are supported.
+The current source development version is **dev-0.0.5**. The latest published artifact record remains under the dev-0.0.4 notes until dev-0.0.5 packages are built and released. Newmark is intended for technical users who want an installer-backed desktop Agent app that runs against their own model credentials and keeps mutable runtime state local under `~/.Newmark`. Windows is the primary Computer Use target; Linux GUI, CLI, packaging, and terminal workflows are supported.
 
 Maintenance update (2026-07-11): same-workspace conversations now remain strictly isolated. Conversation-scoped state reads no longer overwrite the requested transcript with the shared backend host transcript, delayed conversation loads are rejected after a switch, and completed runner state is merged directly into its own persisted conversation key. Packaged Windows validation covers rapid switch-back, deliberately out-of-order state responses, multi-window shared-backend operation, and cross-workspace isolation.
+
+Archive and narrow-window follow-up (2026-07-11): archiving a conversation now atomically writes its Markdown archive and removes the target conversation from persisted and in-memory registries, including exact non-empty duplicate registrations, so it stays absent after refresh and restart. Distinct conversations that only share a title remain separate and receive a short id suffix in the list. The input toolbar now preserves a readable model label and fixed send action across narrow layouts, temporarily hiding sidebars only while the window is very narrow without changing saved layout state.
+
+Model validation follow-up (2026-07-11): Newmark now runs its own two-stage model validation. It gathers network evidence from the provider model catalog and Newmark's built-in web search restricted to the provider's official domain, then submits real text, visual recognition, and image-generation tasks. Vision and image output are confirmed only by successful task results; names and catalog hints only decide which probes to run. The model selector shows validated-available and unvalidated models while hiding validated-unavailable/error models.
+
+Native editor follow-up (2026-07-11): the right sidebar now contains a dependency-free Newmark text/code editor with line numbers, built-in syntax highlighting, a compact Vim command mode, undo/redo, save/dirty state, and Agent assistance. Markdown preview is an editor view toggle shown only for Markdown files. Copilot prediction is opt-in and debounced; it prefers a validated GitHub Copilot provider, cancels stale candidates while typing, accepts with `Tab`, and dismisses with `Esc`. The implementation was designed after reviewing Ace, CodeMirror, Monaco, Neovim, and CodeMirror Vim architecture, but no editor runtime or source code was imported.
+
+File-tree polish (2026-07-11): expanding an empty child directory now leaves the branch empty instead of rendering an extra “Empty directory” row. The root-level empty-workspace message remains available.
+
+Conversation actions (2026-07-11): user and Agent messages now expose a compact Copy action. User messages also expose Edit, which rewinds the current conversation to the selected user node, removes that node and all later model/display history, restores the original text to the prompt, and lets the user resend an edited branch. Rewind is conversation-scoped, persisted, and blocked while that conversation is running.
+
+Provider compatibility follow-up (2026-07-11): OpenAI-compatible parsing now accepts Chat Completions string/content-part arrays, legacy `choices[].text`, Responses `output_text`, nested `output[].content[].text`, and compatibility-gateway `text.value` shapes. Context compression treats empty or controlled error responses as failures and uses the local fallback summary instead of persisting a false model-generated summary.
+
+Copilot startup and editor binding follow-up (2026-07-11): model startup skips empty provider groups and replaces an empty or unavailable saved model with the first selectable model, synchronizing it to the backend. Editor prediction/Agent assist is bound to the model selected in the current conversation toolbar; it no longer forces GitHub Copilot. Real local validation showed 21 selectable GitHub Copilot models and 7 APInebula models, with editor requests returning the selected provider in both directions.
+
+Context-limit compression follow-up (2026-07-11): compression is now driven by the selected model's context window instead of only a fixed character threshold. Newmark reserves output capacity, starts compression near 78% of the usable window, targets roughly 55% after compression, caps summary input/output, and retains recent history from a complete user turn so tool results are not detached from their request. The implementation remains native and compact with no tokenizer or summarization dependency. OpenAI Chat/Responses and Anthropic normal/tool/stream response text all pass through one recursive text normalizer.
+
+Tray lifecycle follow-up (2026-07-11): the desktop tray icon is now created when the main window starts and remains the same live tray instance while the window is visible, hidden, restored, or minimized. Minimize behavior follows `ui.minimize_to_tray`, while the close button independently follows `general.close_behavior`; choosing direct close exits the process and removes the tray without leaving a background instance.
+
+Editor prediction follow-up (2026-07-11): model code predictions now render directly at the caret as subdued gray ghost text on the code layer instead of appearing in a detached dark popup. `Tab` accepts the complete candidate into the editor, while `Esc` dismisses it; the request remains bound to the model selected by the current conversation.
 
 ## At A Glance
 
@@ -34,13 +54,15 @@ Maintenance update (2026-07-11): same-workspace conversations now remain strictl
 
 | Package | Release |
 |---|---|
-| Windows MSI installer | `Newmark-Agent-1.0.4-x64.msi` |
-| Windows unpacked update pack | `Newmark-Agent-1.0.4-win-unpacked-x64.zip` |
-| Linux AppImage | `Newmark-Agent-1.0.4-x86_64.AppImage` |
-| Linux Debian package | `Newmark-Agent-1.0.4-amd64.deb` |
-| Linux unpacked update pack | `Newmark-Agent-1.0.4-linux-unpacked-x64.zip` |
+| Windows MSI installer | `Newmark-Agent-0.0.5-x64.msi` |
+| Windows unpacked update pack | `Newmark-Agent-0.0.5-win-unpacked-x64.zip` |
+| Linux AppImage | `Newmark-Agent-0.0.5-x86_64.AppImage` |
+| Linux Debian package | `Newmark-Agent-0.0.5-amd64.deb` |
+| Linux unpacked update pack | `Newmark-Agent-0.0.5-linux-unpacked-x64.zip` |
 
 Download the assets from the latest GitHub release. On Windows, install the MSI for managed desktops or use the `win-unpacked` zip as the no-loss update source. On Linux, run the AppImage or install the `.deb` package. The distributions include `LICENSE` and `THIRD_PARTY_NOTICES.md`.
+
+The Windows MSI is a per-machine installer and targets `Program Files`, requesting elevation through Windows Installer. Mutable configuration, conversations, archives, and credentials remain under `~/.Newmark` and are preserved across upgrades.
 
 ## Quick Start
 
@@ -55,8 +77,8 @@ npm.cmd run dist:windows-release
 The packaged Windows executable is written to:
 
 ```text
-release/Newmark-Agent-1.0.4-x64.msi
-release/Newmark-Agent-1.0.4-win-unpacked-x64.zip
+release/Newmark-Agent-0.0.5-x64.msi
+release/Newmark-Agent-0.0.5-win-unpacked-x64.zip
 ```
 
 Linux and WSLg development builds use native Linux Node/npm inside the distro:
@@ -80,8 +102,8 @@ npm run release:linux-real-provider-smoke
 Linux artifacts are written to:
 
 ```text
-release/Newmark-Agent-1.0.2-x86_64.AppImage
-release/Newmark-Agent-1.0.2-amd64.deb
+release/Newmark-Agent-0.0.2-x86_64.AppImage
+release/Newmark-Agent-0.0.2-amd64.deb
 release/linux-unpacked/newmark-agent
 ```
 
@@ -180,14 +202,14 @@ npm run dist:linux
 npm run release:linux-gui-smoke
 ```
 
-The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the public dev package version is now `1.0.4`.
+The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the source development version is now `0.0.5`.
 
 Unpacked update dry-runs can be delegated to the packaged CLI before copying files:
 
 ```powershell
 release\win-unpacked\Newmark Agent.exe install-update --check-github --repo positer/Newmark-Agent
-release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 1.0.4 --dry-run
-release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 1.0.4 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 0.0.5 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 0.0.5 --dry-run
 ```
 
 The update helper preserves local state by default. Current installer/update builds also keep mutable state outside the installation directory under `~/.Newmark`, including `config.json`, `Work/`, `skills/`, `Memory Lab/`, and `archive/`.
@@ -201,11 +223,21 @@ npm.cmd run release:real-apinebula-memory-switch-smoke
 npm.cmd run release:real-provider-stress
 ```
 
-## Dev 1.0.4 Notes
+## dev-0.0.5 Notes
 
-The dev 1.0.4 release keeps the current native TypeScript desktop Agent stack and publishes Windows MSI/update-pack plus Linux AppImage/deb/unpacked update assets. GitHub Models login now imports the real external catalog, reports its actual count, redraws the Models settings panel, and keeps provider credentials/catalogs in user-level `~/.Newmark` state so an empty workspace `config.json` cannot hide them.
+The dev-0.0.5 source line adds application-lifetime tray continuity, independent minimize-to-tray and close behavior, inline subdued-gray editor predictions accepted with `Tab`, context-window-aware compaction and broader OpenAI/Anthropic response normalization, stricter same-workspace conversation isolation, native editor/Markdown improvements, and the current SSH/remote-workspace follow-up work. Windows validation passed 948 source assertions, packaged tray/editor/conversation/media/startup smokes, real APInebula CLI/UI requests, and a real `GitHub Copilot/openai/gpt-4.1` editor prediction accepted with `Tab` and persisted to disk. The same unpacked build was then installed into Program Files through an uninstall/reinstall cycle; Windows registered only `0.0.5.0`, the installed `app.asar` matched the tested unpacked hash, mutable settings wrote only to `~/.Newmark`, and Program Files tray/Copilot tests passed. Linux dev-0.0.5 artifacts remain to be rebuilt before publication.
 
-The Windows dev 1.0.3 package was rebuilt on 2026-07-09 to fix clean-machine `win-unpacked` startup. Noncritical Windows automation wake scheduling now runs after the first desktop window is shown and Task Scheduler calls are timeout-bounded, preventing a no-window primary process from holding the single-instance lock. Packaged double-click startup also no longer uses protected install directories such as `C:\Program Files\Newmark Agent` as the writable runtime root; it falls back to the Electron user-data directory and logs fatal startup failures to `startup.log` instead of silently leaving a no-window background process. Startup now paints a lightweight Newmark shell before Agent/workspace/skills initialization and switches to the full UI after IPC and backend runtime are ready, so slow or SSH-configured roots do not look like a hung background Electron. The Windows executable registers and reports `Newmark Agent` through runtime app identity and patched version resources rather than `Electron`.
+Current dev-0.0.5 Windows artifact SHA256 values:
+
+- `Newmark-Agent-0.0.5-x64.msi`: `8928DA32E99FA1F192723C17E49368F2574CCF35AC1CF45B2680C19076F43695`
+- `release/win-unpacked/resources/app.asar`: `334C4AF6137EA340F9AD5B1391882A746077BED5816D3649B1640552C0EFA573`
+- `release/win-unpacked/Newmark Agent.exe`: `34C85FCADD492A587D13343568D5D0C111B217E325D5F5E4C9B1DF13BBCDDE23`
+
+## dev-0.0.4 Published Notes
+
+The dev-0.0.4 release keeps the current native TypeScript desktop Agent stack and publishes Windows MSI/update-pack plus Linux AppImage/deb/unpacked update assets. GitHub Models login now imports the real external catalog, reports its actual count, redraws the Models settings panel, and keeps provider credentials/catalogs in user-level `~/.Newmark` state so an empty workspace `config.json` cannot hide them.
+
+The Windows dev-0.0.3 package was rebuilt on 2026-07-09 to fix clean-machine `win-unpacked` startup. Noncritical Windows automation wake scheduling now runs after the first desktop window is shown and Task Scheduler calls are timeout-bounded, preventing a no-window primary process from holding the single-instance lock. Packaged double-click startup also no longer uses protected install directories such as `C:\Program Files\Newmark Agent` as the writable runtime root; it falls back to the Electron user-data directory and logs fatal startup failures to `startup.log` instead of silently leaving a no-window background process. Startup now paints a lightweight Newmark shell before Agent/workspace/skills initialization and switches to the full UI after IPC and backend runtime are ready, so slow or SSH-configured roots do not look like a hung background Electron. The Windows executable registers and reports `Newmark Agent` through runtime app identity and patched version resources rather than `Electron`.
 
 Follow-up protected-root hardening on 2026-07-10 separates installed program files from mutable user state. The executable and packaged application files may live in `Program Files`, `/opt`, or another managed install directory, but mutable Newmark state now defaults to `~/.Newmark`, including `config.json`, `agent.md`, `PC_Hash.config`, `Work/`, `Flow/`, `skills/`, `archive/`, and `Memory Lab/`. Existing state from the older Electron user-data directory is copied forward on first run when the new files are absent, and internal workspace absolute paths are normalized under the current runtime root after migration. Explicit `--root` remains available for tests or isolated runs; if that explicit root is protected or unwritable, it is remapped under `~/.Newmark/Roots/<source>-<hash>`.
 
@@ -215,13 +247,13 @@ The same Responses follow-up also fixed tool-result continuation for direct Resp
 
 Lite responsiveness was then tightened without changing Agent behavior. The native Agent bridge now builds the Newmark tool schema once per Agent turn and reuses it for both provider streaming and tool execution instead of rebuilding the full schema on every model/tool round. Context conversion is skipped entirely when automatic context compression is disabled, and high-frequency workflow tool rows defer full conversation-state JSON writes until the normal turn persistence points. Local measurement showed tool schema construction at about `0.7 ms` per build on this machine, and the main practical gain is avoiding repeated schema work plus synchronous conversation-state writes during multi-tool turns on slower Lite or remote-backed environments. Verification passed `npm.cmd test` with `895` assertions, `npm.cmd run dist:portable`, and packaged `release:ui-smoke`; details are recorded in `archive/2026-07-09-lite-response-core-redundancy.md`.
 
-Current artifact SHA256 values for dev 1.0.4:
+Published artifact SHA256 values for dev-0.0.4:
 
-- `Newmark-Agent-1.0.4-x64.msi`: `26399EAFA3DD76A005933BF1BE92EB126B46D9BD6EF0975C32965D0139A4B9CF`
-- `Newmark-Agent-1.0.4-win-unpacked-x64.zip`: `12BA564B0056639A058F52609CEC87172C1E411C84DFF719B4747E749086078A`
-- `Newmark-Agent-1.0.4-x86_64.AppImage`: `44D70F2358EE07469CEB8854E4763F57545C0D6B0F70127F70ADB887AB995F37`
-- `Newmark-Agent-1.0.4-amd64.deb`: `BF8E07F8DA1274C6A3536A9471DDDD64C193684EA5B64573BE68CE5BEA2743E1`
-- `Newmark-Agent-1.0.4-linux-unpacked-x64.zip`: `DE2105907C70E444325480B0C97CE2FD3D355A9AF4AB5F64641C329DEAB57C6F`
+- `Newmark-Agent-0.0.4-x64.msi`: `26399EAFA3DD76A005933BF1BE92EB126B46D9BD6EF0975C32965D0139A4B9CF`
+- `Newmark-Agent-0.0.4-win-unpacked-x64.zip`: `12BA564B0056639A058F52609CEC87172C1E411C84DFF719B4747E749086078A`
+- `Newmark-Agent-0.0.4-x86_64.AppImage`: `44D70F2358EE07469CEB8854E4763F57545C0D6B0F70127F70ADB887AB995F37`
+- `Newmark-Agent-0.0.4-amd64.deb`: `BF8E07F8DA1274C6A3536A9471DDDD64C193684EA5B64573BE68CE5BEA2743E1`
+- `Newmark-Agent-0.0.4-linux-unpacked-x64.zip`: `DE2105907C70E444325480B0C97CE2FD3D355A9AF4AB5F64641C329DEAB57C6F`
 - `release/win-unpacked/Newmark Agent.exe`: `ACC37626CB1A875A1F19CE462B91E90E2DAAECA30FFB91925B908B3AF57D4D07`
 
 The packaged `install-update` path now reconstructs space-containing `--source`, `--target`, and `--target-file` arguments when launched through PowerShell `Start-Process`, and it preflights target writability before copying. Non-admin updates into `C:\Program Files\Newmark Agent` fail before partial copy with a clear instruction to use the MSI or rerun with administrator privileges.

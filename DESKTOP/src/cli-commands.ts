@@ -636,7 +636,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
   }
 
   if (command === 'validate-models') {
-    const selected = splitList(argValue(args, '--selected') || argValue(args, '--models'));
+    const selected = splitList(pathArgValue(args, '--selected') || pathArgValue(args, '--models'));
     const result = await agent.validateModels(selected.length ? selected : undefined);
     printJson(result);
     return true;

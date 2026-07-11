@@ -291,6 +291,33 @@ async function selectConversationAndAssert(cdp, expectedId, includePrompt, inclu
   await waitFor(cdp, activeChatIsolationExpression(expectedId, includePrompt, includeReply, excludePrompt, excludeReply), 30000, label);
 }
 
+async function assertInputToolbarFits(cdp, width) {
+  await cdp.call('Emulation.setDeviceMetricsOverride', {
+    width,
+    height: 800,
+    deviceScaleFactor: 1,
+    mobile: false,
+  }, 10000);
+  await sleep(250);
+  const geometry = await evaluate(cdp, `(() => {
+    const rect = selector => {
+      const value = document.querySelector(selector)?.getBoundingClientRect();
+      return value ? { left: value.left, right: value.right, width: value.width } : null;
+    };
+    const area = rect('#input-area');
+    const tools = rect('#input-tools');
+    const model = rect('#model-select');
+    const submit = rect('#submit-btn');
+    return { area, tools, model, submit, viewport: innerWidth };
+  })()`, 30000);
+  if (!geometry?.area || !geometry?.model || !geometry?.submit ||
+      geometry.model.width < 70 || geometry.submit.right > geometry.area.right + 1 ||
+      geometry.submit.left < geometry.model.right - 1) {
+    fail(`input toolbar overflow at ${width}px: ${JSON.stringify(geometry)}`);
+  }
+  log(`input toolbar ${width}px ok: model=${Math.round(geometry.model.width)} submitRight=${Math.round(geometry.submit.right)} areaRight=${Math.round(geometry.area.right)}`);
+}
+
 async function runUiCheck(root) {
   const mock = await startMockServer();
   writeConfig(root, mock.port);
@@ -378,6 +405,32 @@ async function runUiCheck(root) {
     await captureScreenshot(cdp, screenshotAPath);
     await selectConversationAndAssert(cdp, convB, markerBPrompt, markerBReply, markerAPrompt, markerAReply, 'final conversation B visual isolation');
     await captureScreenshot(cdp, screenshotBPath);
+
+    await assertInputToolbarFits(cdp, 560);
+    await assertInputToolbarFits(cdp, 430);
+    await cdp.call('Emulation.clearDeviceMetricsOverride', {}, 10000).catch(() => undefined);
+
+    await evaluate(cdp, `window.api.archive(${jsString(convA)})`, 30000);
+    await waitFor(cdp, `window.api.getState(${jsString(convB)}).then(s => !((s && s.conversations) || []).some(c => c.id === ${jsString(convA)}))`, 30000, 'archived conversation removed from backend registry');
+    await evaluate(cdp, `loadActiveConversationMessages(${jsString(convB)})`, 30000);
+    await waitFor(cdp, `(() => !(window.state?.conversations || []).some(c => c.id === ${jsString(convA)}))()`, 30000, 'archived conversation removed from renderer list');
+    log('archived conversation removal ok');
+
+    if (cdp?.ws) cdp.ws.close();
+    cdp = null;
+    if (child && !child.killed) child.kill();
+    child = null;
+    await sleep(1200);
+    child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    const restartTarget = await waitForTarget(port);
+    cdp = connectCdp(restartTarget);
+    await cdp.ready;
+    await cdp.call('Runtime.enable');
+    await waitFor(cdp, `window.api.getState(${jsString(convB)}).then(s => !((s && s.conversations) || []).some(c => c.id === ${jsString(convA)}) && ((s && s.conversations) || []).some(c => c.id === ${jsString(convB)}))`, 30000, 'archived conversation remains removed after restart');
+    log('archived conversation restart persistence ok');
 
     if (mock.requests.filter(r => r.method === 'POST' && r.url === '/v1/chat/completions').length < 2) {
       fail('mock provider did not receive both conversation requests');

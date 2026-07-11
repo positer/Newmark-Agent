@@ -1049,22 +1049,27 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .et-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .et-btn.primary:hover { filter: brightness(1.1); }
 
-.editor-textarea {
-  width: 100%;
-  flex: 1;
-  background: var(--glass-bg-1);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  padding: 10px;
-  resize: none;
-  outline: none;
-  min-height: 200px;
-}
-
-.editor-textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+.native-editor { flex:1; min-height:0; display:flex; flex-direction:column; border:1px solid var(--border); border-radius:var(--radius-md); overflow:hidden; background:#0b0d14; }
+.native-editor-main { flex:1; min-height:0; display:grid; grid-template-columns:44px minmax(0,1fr); position:relative; overflow:hidden; }
+.editor-gutter { margin:0; padding:10px 8px 10px 0; overflow:hidden; text-align:right; color:var(--text-dim); background:rgba(255,255,255,.025); border-right:1px solid var(--glass-border-1); font:12px/1.55 var(--font-mono); user-select:none; }
+.editor-code-wrap { position:relative; min-width:0; min-height:0; overflow:hidden; }
+.editor-highlight, .editor-ghost, .editor-textarea { position:absolute; inset:0; margin:0; padding:10px 12px; border:0; overflow:auto; white-space:pre; tab-size:2; font:12px/1.55 var(--font-mono); }
+.editor-highlight { pointer-events:none; color:var(--text); background:transparent; }
+.editor-ghost { pointer-events:none; z-index:1; color:transparent; background:transparent; }
+.editor-ghost-text { color:rgba(205,211,222,.48); -webkit-text-fill-color:rgba(205,211,222,.48); }
+.editor-textarea { z-index:2; width:100%; height:100%; resize:none; outline:none; background:transparent; color:transparent; caret-color:#fff; -webkit-text-fill-color:transparent; }
+.editor-textarea::selection { background:rgba(91,120,255,.35); }
+.tok-comment{color:#6a737d}.tok-string{color:#9ecbff}.tok-number{color:#79b8ff}.tok-keyword{color:#f97583}.tok-type{color:#b392f0}.tok-tag{color:#85e89d}.tok-attr{color:#ffab70}.tok-heading{color:#79b8ff;font-weight:700}.tok-code{color:#9ecbff}.tok-punct{color:#959da5}
+.editor-status { min-height:25px; display:flex; align-items:center; gap:8px; padding:0 8px; border-top:1px solid var(--glass-border-1); color:var(--text-dim); font:10px var(--font-mono); }
+.editor-vim-mode { color:var(--accent2); font-weight:700; min-width:48px; }
+.editor-completion { position:absolute; left:12px; right:12px; bottom:10px; z-index:4; display:none; padding:8px 10px; border:1px solid var(--accent); border-radius:var(--radius-sm); background:rgba(12,14,22,.97); color:var(--text); font:11px/1.45 var(--font-mono); white-space:pre-wrap; box-shadow:var(--shadow-lg); }
+.editor-completion.open { display:block; }
+.editor-assist { display:none; max-height:34%; overflow:auto; padding:10px; border-top:1px solid var(--glass-border-1); color:var(--text); font-size:11px; line-height:1.55; }
+.editor-assist.open { display:block; }
+#editor-md-preview { display:none; flex:1; min-height:0; overflow:auto; padding:12px; }
+#editor-md-preview.open { display:block; }
+.editor-view-btn { display:none; }
+.editor-view-btn.visible { display:inline-flex; }
 
 /* Browser panel */
 .browser-url-bar {
@@ -1788,7 +1793,9 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 .chat-msg .meta {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 0;
   font-size: 10px;
   color: var(--text-dim);
   margin-bottom: 2px;
@@ -1811,6 +1818,36 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   white-space: normal;
   word-break: break-word;
 }
+
+.msg-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  opacity: 0.42;
+  transition: opacity 140ms ease;
+}
+
+.chat-msg:hover .msg-actions,
+.chat-msg:focus-within .msg-actions {
+  opacity: 1;
+}
+
+.msg-action-btn {
+  width: 24px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  background: transparent;
+  cursor: pointer;
+}
+
+.msg-action-btn:hover { color: var(--text); background: var(--glass-bg-2); }
 
 .chat-msg .msg-body .md-rendered {
   padding: 0;
@@ -2307,6 +2344,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
    ============================================================ */
 #input-area {
   flex-shrink: 0;
+  container-type: inline-size;
   padding: 12px 16px;
   border-top: 1px solid var(--glass-border-2);
   background: var(--glass-bg-2);
@@ -2392,6 +2430,9 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   gap: 8px;
   margin-top: 10px;
   align-items: center;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
 }
 
 .tool-select {
@@ -2408,6 +2449,46 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   transition: border-color var(--duration-fast) var(--ease-out-expo), box-shadow var(--duration-fast) var(--ease-out-expo);
   outline: none;
   transform: translateZ(0);
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+#model-select {
+  flex: 1 1 160px;
+  width: 0;
+  min-width: 72px;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#mode-select, #flow-select, #intel-select { max-width: 132px; }
+
+@container (max-width: 560px) {
+  #input-tools { gap: 5px; }
+  #model-select { min-width: 88px; }
+  #mode-select, #intel-select { max-width: 92px; padding-left: 7px; padding-right: 7px; }
+  .mode-toggle-btn { padding-left: 7px; padding-right: 7px; }
+}
+
+@container (max-width: 430px) {
+  #model-select { min-width: 72px; }
+  #mode-select, #intel-select { max-width: 74px; }
+  .context-token-wrap { width: 16px; }
+  .mode-toggle-btn { padding-left: 5px; padding-right: 5px; }
+}
+
+@media (max-width: 720px) {
+  #left, #left-secondary, #right, .right-open-btn { display: none !important; }
+  #input-area { padding-left: 10px; padding-right: 10px; }
+}
+
+@media (max-width: 460px) {
+  #input-tools { gap: 4px; }
+  #model-select { min-width: 72px; }
+  #mode-select, #intel-select { max-width: 70px; }
+  .context-token-wrap { display: none; }
+  .mode-toggle-btn { padding-left: 4px; padding-right: 4px; }
 }
 
 .tool-select:hover { border-color: var(--border-hover); }
@@ -3761,7 +3842,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
       <div id="right-tabs">
         <button class="tab-btn active" data-tab="file-tree" onclick="window.switchRightTab('file-tree')" title="Files"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#folder"></use></svg><span class="icon-only-label">Files</span></button>
         <button class="tab-btn" data-tab="editor" onclick="window.switchRightTab('editor')" title="Editor"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#square-pen"></use></svg><span class="icon-only-label">Editor</span></button>
-        <button class="tab-btn" data-tab="md-viewer" onclick="window.switchRightTab('md-viewer')" title="Markdown viewer"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#book-open"></use></svg><span class="icon-only-label">Markdown viewer</span></button>
         <button class="tab-btn" data-tab="plan" onclick="window.switchRightTab('plan')" title="Conversation plan"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#list-checks"></use></svg><span class="icon-only-label">Conversation plan</span></button>
         <button class="tab-btn" data-tab="subagent" onclick="window.switchRightTab('subagent')" title="Subagents"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#bot"></use></svg><span class="icon-only-label">Subagents</span></button>
         <button class="tab-btn" data-tab="browser" onclick="window.switchRightTab('browser')" title="Browser"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#globe"></use></svg><span class="icon-only-label">Browser</span></button>
@@ -3776,14 +3856,19 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
         <div class="tab-panel" id="panel-editor">
           <div class="editor-toolbar">
             <button class="et-btn icon-label-btn" onclick="window.saveEditor()" title="Save"><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#save"></use></svg><span>Save</span></button>
+            <button class="et-btn editor-view-btn" id="editor-md-toggle" onclick="window.toggleEditorMarkdownPreview()" title="Markdown preview"><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#book-open"></use></svg><span>Preview</span></button>
+            <button class="et-btn" onclick="window.toggleEditorVim()" title="Vim mode">Vim</button>
+            <button class="et-btn" id="editor-copilot-toggle" onclick="window.toggleEditorPrediction()" title="Toggle Copilot prediction">Copilot</button>
+            <button class="et-btn" onclick="window.requestEditorAssist()" title="Agent assist">Agent</button>
             <button class="et-btn icon-label-btn" onclick="window.closeEditor()" title="Close"><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#x"></use></svg><span>Close</span></button>
             <span style="flex:1;font-size:11px;color:var(--text-dim);text-align:right;" id="editor-filename"></span>
           </div>
-          <textarea class="editor-textarea" id="editor-textarea" placeholder="Open a file to edit..."></textarea>
-        </div>
-        <div class="tab-panel" id="panel-md-viewer">
-          <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">Markdown viewer</div>
-          <div id="md-viewer-content"></div>
+          <div class="native-editor" id="native-editor">
+            <div class="native-editor-main" id="native-editor-main"><pre class="editor-gutter" id="editor-gutter">1</pre><div class="editor-code-wrap"><pre class="editor-highlight" id="editor-highlight"></pre><pre class="editor-ghost" id="editor-ghost" aria-hidden="true"></pre><textarea class="editor-textarea" id="editor-textarea" spellcheck="false" placeholder="Open a file to edit..."></textarea><div class="editor-completion" id="editor-completion"></div></div></div>
+            <div id="editor-md-preview"></div>
+            <div class="editor-assist" id="editor-assist"></div>
+            <div class="editor-status"><span class="editor-vim-mode" id="editor-vim-mode">INSERT</span><span id="editor-language">text</span><span id="editor-position">1:1</span><span style="margin-left:auto" id="editor-dirty"></span></div>
+          </div>
         </div>
         <div class="tab-panel" id="panel-plan">
           <div class="right-section-head"><span class="right-section-title">Conversation plan</span><button class="archive-action-btn" onclick="window.refreshConversationPlan()">Refresh</button></div>
@@ -3882,6 +3967,18 @@ var state = {
   flowWorks: [],
   activeAgentRunning: false,
   editorPath: '',
+  editorOriginal: '',
+  editorVimEnabled: false,
+  editorVimMode: 'insert',
+  editorVimPending: '',
+  editorRegister: '',
+  editorUndo: [],
+  editorRedo: [],
+  editorPreview: false,
+  editorCompletionText: '',
+  editorCompletionRequest: 0,
+  editorPredictionEnabled: false,
+  editorCompletionTimer: null,
   dialogStyle: 'formal',
   language: 'auto',
   feedbackLevel: 'default',
@@ -3931,7 +4028,7 @@ function cacheEls() {
     'todo-list','todo-header-label','scroll-bottom-btn','right','right-content','bottom','left',
     'left-secondary','conversation-list','terminal-shell-select','terminal-tabs','terminal-body','terminal-timeout-input',
     'file-tree-container',
-    'editor-textarea','editor-filename','md-viewer-content','subagent-list',
+    'editor-textarea','editor-filename','editor-highlight','editor-ghost','editor-gutter','editor-md-preview','editor-md-toggle','editor-completion','editor-assist','editor-vim-mode','editor-language','editor-position','editor-dirty','subagent-list',
     'browser-frame','browser-webview','browser-url','sub-win-overlay','sub-win','sub-win-title',
     'sub-win-body','sub-win-header','title-text','right-tabs','ws-thumb',
     'mode-toggle','bottom-toggle-btn'
@@ -4075,6 +4172,8 @@ var NEWMARK_I18N = {
     'common.save': 'Save',
     'common.close': 'Close',
     'common.cancel': 'Cancel',
+    'common.copy': 'Copy',
+    'common.copied': 'Copied',
     'common.back': 'Back',
     'common.create': 'Create',
     'common.edit': 'Edit',
@@ -4526,6 +4625,8 @@ var NEWMARK_I18N = {
     'common.save': '保存',
     'common.close': '关闭',
     'common.cancel': '取消',
+    'common.copy': '复制',
+    'common.copied': '已复制',
     'common.back': '返回',
     'common.create': '创建',
     'common.edit': '编辑',
@@ -4954,8 +5055,6 @@ function applyLanguageToUi() {
   if (fileHead) fileHead.textContent = t('right.fileTree');
   var fileRefresh = document.querySelector('#panel-file-tree .archive-action-btn');
   if (fileRefresh) fileRefresh.textContent = t('right.refresh');
-  var mdHead = document.querySelector('#panel-md-viewer .right-section-title');
-  if (mdHead) mdHead.textContent = t('right.md');
   var editorArea = document.getElementById('editor-textarea');
   if (editorArea) editorArea.setAttribute('placeholder', t('editor.openPlaceholder'));
   var browserUrl = document.getElementById('browser-url');
@@ -5531,7 +5630,54 @@ function redactSensitiveText(value) {
     .replace(/(Authorization:\s*Bearer\s+)[^\s,;]+/ig, '$1[redacted]');
 }
 
-function addMsg(role, text, mode, model) {
+function messageActionsHtml(role, text, messageIndex) {
+  if (role !== 'user' && role !== 'assistant') return '';
+  var index = Number.isFinite(Number(messageIndex)) ? Number(messageIndex) : -1;
+  var html = '<span class="msg-actions">' +
+    '<button class="msg-action-btn" title="' + escAttr(t('common.copy')) + '" onclick="window.copyMessageText(this)">' + iconSvg('copy', t('common.copy'), 'tiny') + '</button>';
+  if (role === 'user' && index >= 0) {
+    html += '<button class="msg-action-btn" title="' + escAttr(t('common.edit')) + '" onclick="window.editUserMessage(this,' + index + ')">' + iconSvg('square-pen', t('common.edit'), 'tiny') + '</button>';
+  }
+  return html + '</span>';
+}
+
+window.copyMessageText = async function(button) {
+  var message = button && button.closest ? button.closest('.chat-msg') : null;
+  var value = String(message && message._newmarkMessageText || '');
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(value);
+    else {
+      var helper = document.createElement('textarea');
+      helper.value = value; helper.style.position = 'fixed'; helper.style.opacity = '0';
+      document.body.appendChild(helper); helper.select(); document.execCommand('copy'); helper.remove();
+    }
+    if (button) { button.title = t('common.copied'); setTimeout(function() { button.title = t('common.copy'); }, 1200); }
+  } catch(e) {}
+};
+
+window.editUserMessage = async function(button, messageIndex) {
+  var conversationId = activeConversationId();
+  if (state.runningConversations && state.runningConversations[conversationId]) return;
+  if (!api.rewindConversation) return;
+  var message = button && button.closest ? button.closest('.chat-msg') : null;
+  var text = String(message && message._newmarkMessageText || '');
+  var result = await api.rewindConversation(conversationId, Number(messageIndex));
+  if (!result || result.error) {
+    addMsg('assistant', '[Error] ' + ((result && result.error) || 'Unable to edit message.'), 'error', state.model);
+    return;
+  }
+  clearAgentWorkEvents(conversationId);
+  resetConversationWorkUi(conversationId, false);
+  state.backendQueue = { steering: [], followUp: [] };
+  if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
+  renderChatMessages(result.chatMessages || []);
+  els.prompt.value = String(text || '');
+  els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
+  els.prompt.focus();
+  els.prompt.setSelectionRange(els.prompt.value.length, els.prompt.value.length);
+};
+
+function addMsg(role, text, mode, model, messageIndex) {
   text = redactSensitiveText(text);
   var div = document.createElement('div');
   div.className = 'chat-msg ' + role;
@@ -5540,7 +5686,8 @@ function addMsg(role, text, mode, model) {
   if (mode) metaInfo += t('message.mode') + ': ' + mode;
   if (model) metaInfo += (metaInfo ? ' | ' : '') + t('message.model') + ': ' + model;
   div.innerHTML = '<div class="meta"><span class="msg-role">' + metaLabel + '</span><span> | ' + esc(new Date().toLocaleTimeString(uiLocale())) + '</span>' +
-    (metaInfo ? '<span class="meta-extra"> | ' + esc(metaInfo) + '</span>' : '') + '</div><div class="msg-body">' + renderMessageContent(text) + '</div>';
+    (metaInfo ? '<span class="meta-extra"> | ' + esc(metaInfo) + '</span>' : '') + messageActionsHtml(role, text, messageIndex) + '</div><div class="msg-body">' + renderMessageContent(text) + '</div>';
+  div._newmarkMessageText = String(text || '');
   els['chat-area'].appendChild(div);
   els['chat-area'].scrollTop = els['chat-area'].scrollHeight;
   return div;
@@ -5550,6 +5697,7 @@ function updateMsg(div, text, role, mode, model) {
   if (!div) return;
   if (role) div.className = 'chat-msg ' + role;
   text = redactSensitiveText(text);
+  div._newmarkMessageText = String(text || '');
   var body = div.querySelector('.msg-body');
   if (body) body.innerHTML = renderMessageContent(text);
   var meta = div.querySelector('.meta');
@@ -5559,7 +5707,7 @@ function updateMsg(div, text, role, mode, model) {
     if (mode) metaInfo += t('message.mode') + ': ' + mode;
     if (model) metaInfo += (metaInfo ? ' | ' : '') + t('message.model') + ': ' + model;
     meta.innerHTML = '<span class="msg-role">' + esc(roleLabel) + '</span><span> | ' + esc(new Date().toLocaleTimeString(uiLocale())) + '</span>' +
-      (metaInfo ? '<span class="meta-extra"> | ' + esc(metaInfo) + '</span>' : '');
+      (metaInfo ? '<span class="meta-extra"> | ' + esc(metaInfo) + '</span>' : '') + messageActionsHtml(div.classList.contains('user') ? 'user' : 'assistant', text, -1);
   }
   els['chat-area'].scrollTop = els['chat-area'].scrollHeight;
 }
@@ -5943,7 +6091,7 @@ function renderChatMessages(messages) {
       continue;
     }
     finishToolBatch(renderConversationId);
-    addMsg(m.role || 'assistant', m.content || '', m.mode || '', m.model || '');
+    addMsg(m.role || 'assistant', m.content || '', m.mode || '', m.model || '', i);
   }
   finishToolBatch(renderConversationId);
 }
@@ -6377,15 +6525,17 @@ window.refreshModelSelect = function() {
     for (var pidx = 0; pidx < state.providers.length; pidx++) {
       var p = state.providers[pidx];
       if (!p.models || !p.models.length) continue;
-      modelOpts += '<optgroup label="' + esc(p.name) + '">';
+      var providerOpts = '';
       for (var midx = 0; midx < p.models.length; midx++) {
         var modelEntry = p.models[midx];
+        var evaluationStatus = typeof modelEntry === 'string' ? 'unvalidated' : String((modelEntry.evaluation && modelEntry.evaluation.status) || 'unvalidated');
+        if (evaluationStatus !== 'available' && evaluationStatus !== 'unvalidated') continue;
         var modelName = typeof modelEntry === 'string' ? modelEntry : (modelEntry.name || '');
         var modelLabel = typeof modelEntry === 'string' ? modelEntry : (modelEntry.display || modelEntry.name || '');
         if (!firstConcreteModel && modelName) firstConcreteModel = modelName;
-        modelOpts += '<option value="' + esc(modelName) + '">' + esc(p.name + ' / ' + modelLabel) + '</option>';
+        providerOpts += '<option value="' + esc(modelName) + '">' + esc(p.name + ' / ' + modelLabel) + '</option>';
       }
-      modelOpts += '</optgroup>';
+      if (providerOpts) modelOpts += '<optgroup label="' + esc(p.name) + '">' + providerOpts + '</optgroup>';
     }
   } else {
     for (var i = 0; i < state.models.length; i++) {
@@ -6393,7 +6543,8 @@ window.refreshModelSelect = function() {
     }
   }
   sel.innerHTML = modelOpts;
-  if (state.model === 'auto' && state.autoSwitch !== 'on') {
+  var availableValues = Array.from(sel.options).map(function(option) { return option.value; });
+  if (!state.model || (state.model === 'auto' && state.autoSwitch !== 'on') || availableValues.indexOf(state.model) < 0) {
     state.model = firstConcreteModel || (state.models && state.models[0]) || '';
     if (state.model && api.setModel) api.setModel(state.model).catch(function(){});
   }
@@ -6626,6 +6777,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         updateMsg(responseMsg, '(empty response)', 'assistant', state.mode, state.model);
       }
     }
+    if (stillActive && r && Array.isArray(r.chatMessages)) renderChatMessages(r.chatMessages);
     if (r && r.conversations) {
       applyBackendConversations(r.conversations || [], activeConversationId() || lockedConversationId);
       renderConversations();
@@ -6933,7 +7085,6 @@ window.upgradeRightSidebar = function() {
   rightTabs.innerHTML =
     '<button class="tab-btn active" data-tab="file-tree" onclick="window.switchRightTab(&quot;file-tree&quot;)" title="' + escAttr(t('right.files')) + '">' + iconOnly('folder', t('right.files')) + '</button>' +
     '<button class="tab-btn" data-tab="editor" onclick="window.switchRightTab(&quot;editor&quot;)" title="' + escAttr(t('right.editor')) + '">' + iconOnly('square-pen', t('right.editor')) + '</button>' +
-    '<button class="tab-btn" data-tab="md-viewer" onclick="window.switchRightTab(&quot;md-viewer&quot;)" title="' + escAttr(t('right.md')) + '">' + iconOnly('book-open', t('right.md')) + '</button>' +
     '<button class="tab-btn" data-tab="plan" onclick="window.switchRightTab(&quot;plan&quot;)" title="' + escAttr(t('right.plan')) + '">' + iconOnly('list-checks', t('right.plan')) + '</button>' +
     '<button class="tab-btn" data-tab="subagent" onclick="window.switchRightTab(&quot;subagent&quot;)" title="' + escAttr(t('right.subagents')) + '">' + iconOnly('bot', t('right.subagents')) + '</button>' +
     '<button class="tab-btn" data-tab="browser" onclick="window.switchRightTab(&quot;browser&quot;)" title="' + escAttr(t('right.browser')) + '">' + iconOnly('globe', t('right.browser')) + '</button>' +
@@ -6948,17 +7099,6 @@ window.upgradeRightSidebar = function() {
     var tree = document.getElementById('file-tree-container');
     filePanel.innerHTML = '<div class="right-section-head"><span class="right-section-title">' + esc(t('right.fileTree')) + '</span><button class="archive-action-btn" onclick="window.loadFileTree()">' + esc(t('right.refresh')) + '</button></div><div id="file-tree-container"></div>';
     if (tree) document.getElementById('file-tree-container').innerHTML = tree.innerHTML;
-  }
-  var mdPanel = document.getElementById('panel-md-viewer');
-  if (mdPanel && !mdPanel.getAttribute('data-upgraded')) {
-    mdPanel.setAttribute('data-upgraded', 'true');
-    var md = document.getElementById('md-viewer-content');
-    mdPanel.innerHTML = '<div class="right-section-head"><span class="right-section-title">' + esc(t('right.md')) + '</span></div><div id="md-viewer-content"></div>';
-    var nextMd = document.getElementById('md-viewer-content');
-    if (nextMd) {
-      if (md) nextMd.innerHTML = md.innerHTML;
-      els['md-viewer-content'] = nextMd;
-    }
   }
   var subPanel = document.getElementById('panel-subagent');
   if (subPanel && !subPanel.getAttribute('data-upgraded')) {
@@ -7010,7 +7150,6 @@ window.switchRightTab = function(tab) {
   // Load content on first access
   if (tab === 'file-tree') window.loadFileTree();
   if (tab === 'editor') window.ensureEditorPanel();
-  if (tab === 'md-viewer') window.ensureMarkdownPanel();
   if (tab === 'plan') window.refreshConversationPlan();
   if (tab === 'subagent') window.renderSubagentList();
   if (tab === 'browser') {
@@ -7029,19 +7168,6 @@ window.ensureEditorPanel = function() {
   }
 };
 
-window.getMarkdownContentNode = function() {
-  var mc = document.getElementById('md-viewer-content') || els['md-viewer-content'];
-  if (mc) els['md-viewer-content'] = mc;
-  return mc;
-};
-
-window.ensureMarkdownPanel = function() {
-  var mc = window.getMarkdownContentNode();
-  if (!mc) return;
-  if (!mc.innerHTML.trim()) {
-    mc.innerHTML = '<div class="md-rendered"><h2>' + esc(t('md.viewerTitle')) + '</h2><p>' + esc(t('md.viewerHint')) + '</p></div>';
-  }
-};
 
 function normalizeConversationPlan(plan) {
   var raw = plan && Array.isArray(plan.items) ? plan.items : [];
@@ -9233,7 +9359,7 @@ window.loadFileTree = async function() {
 
 function renderTreeNodes(nodes, parent, depth) {
   if (!nodes || nodes.length === 0) {
-    parent.innerHTML = '<div style="font-size:11px;color:var(--text-dim);padding:8px;">' + esc(t('fileTree.empty')) + '</div>';
+    if (depth === 0) parent.innerHTML = '<div style="font-size:11px;color:var(--text-dim);padding:8px;">' + esc(t('fileTree.empty')) + '</div>';
     return;
   }
   for (var i = 0; i < nodes.length; i++) {
@@ -9274,24 +9400,188 @@ function renderTreeNodes(nodes, parent, depth) {
 }
 
 // === Editor ===
+window.editorLanguageForPath = function(path) {
+  var ext = String(path || '').split('.').pop().toLowerCase();
+  var map = { js:'javascript',jsx:'javascript',ts:'typescript',tsx:'typescript',py:'python',rs:'rust',go:'go',java:'java',cs:'csharp',cpp:'cpp',cc:'cpp',c:'c',h:'c',html:'html',htm:'html',css:'css',scss:'css',json:'json',jsonc:'json',md:'markdown',markdown:'markdown',yaml:'yaml',yml:'yaml',toml:'toml',sh:'shell',bash:'shell',ps1:'powershell',sql:'sql',xml:'xml',vue:'vue',svelte:'svelte',tex:'latex' };
+  return map[ext] || ext || 'text';
+};
+
+window.highlightEditorCode = function(code, language) {
+  var text = esc(String(code || ''));
+  if (language === 'markdown') {
+    return text.replace(/^(#{1,6} .+)$/gm, '<span class="tok-heading">$1</span>').replace(/(`[^`\n]+`)/g, '<span class="tok-code">$1</span>').replace(/(^|\s)(https?:\/\/[^\s<]+)/g, '$1<span class="tok-string">$2</span>');
+  }
+  text = text.replace(/(&quot;|&#39;|`)(?:\\.|(?!\1)[\s\S])*?\1/g, '<span class="tok-string">$&</span>');
+  text = text.replace(/(^|\s)(\/\/.*$|#.*$)/gm, '$1<span class="tok-comment">$2</span>');
+  text = text.replace(/\b(0x[\da-f]+|\d+(?:\.\d+)?)\b/gi, '<span class="tok-number">$1</span>');
+  text = text.replace(/\b(const|let|var|function|class|interface|type|enum|import|export|from|return|if|else|for|while|switch|case|break|continue|try|catch|finally|throw|async|await|new|this|extends|implements|public|private|protected|static|def|lambda|yield|with|as|match|struct|fn|impl|trait|package|using|namespace|SELECT|FROM|WHERE|JOIN|INSERT|UPDATE|DELETE|CREATE|ALTER)\b/g, '<span class="tok-keyword">$1</span>');
+  text = text.replace(/\b(string|number|boolean|void|unknown|any|null|undefined|int|float|double|char|bool|usize|i32|u32|Promise|Record|Array)\b/g, '<span class="tok-type">$1</span>');
+  if (language === 'html' || language === 'xml' || language === 'vue' || language === 'svelte') text = text.replace(/(&lt;\/?)([\w-]+)/g, '$1<span class="tok-tag">$2</span>');
+  return text;
+};
+
+window.renderNativeEditor = function() {
+  var ta = els['editor-textarea'];
+  if (!ta) return;
+  var code = ta.value || '';
+  var language = window.editorLanguageForPath(state.editorPath);
+  if (els['editor-highlight']) els['editor-highlight'].innerHTML = window.highlightEditorCode(code, language) + '\n';
+  if (els['editor-gutter']) els['editor-gutter'].textContent = Array.from({length: Math.max(1, code.split('\n').length)}, function(_, i) { return i + 1; }).join('\n');
+  if (els['editor-language']) els['editor-language'].textContent = language;
+  var before = code.slice(0, ta.selectionStart || 0).split('\n');
+  if (els['editor-position']) els['editor-position'].textContent = before.length + ':' + (before[before.length - 1].length + 1);
+  if (els['editor-dirty']) els['editor-dirty'].textContent = code !== state.editorOriginal ? 'modified' : '';
+  if (els['editor-vim-mode']) els['editor-vim-mode'].textContent = state.editorVimEnabled ? state.editorVimMode.toUpperCase() : 'INSERT';
+  if (state.editorPreview && els['editor-md-preview']) els['editor-md-preview'].innerHTML = renderMessageContent(code);
+  window.renderEditorGhostText();
+};
+
+window.renderEditorGhostText = function() {
+  var ta = els['editor-textarea'];
+  var ghost = els['editor-ghost'];
+  if (!ta || !ghost) return;
+  if (!state.editorCompletionText) { ghost.textContent = ''; return; }
+  var pos = ta.selectionStart || 0;
+  ghost.innerHTML = esc(ta.value.slice(0, pos)) + '<span class="editor-ghost-text">' + esc(state.editorCompletionText) + '</span>' + esc(ta.value.slice(pos)) + '\n';
+  ghost.scrollTop = ta.scrollTop;
+  ghost.scrollLeft = ta.scrollLeft;
+};
+
+window.syncNativeEditorScroll = function() {
+  var ta = els['editor-textarea'];
+  if (!ta) return;
+  if (els['editor-highlight']) { els['editor-highlight'].scrollTop = ta.scrollTop; els['editor-highlight'].scrollLeft = ta.scrollLeft; }
+  if (els['editor-ghost']) { els['editor-ghost'].scrollTop = ta.scrollTop; els['editor-ghost'].scrollLeft = ta.scrollLeft; }
+  if (els['editor-gutter']) els['editor-gutter'].scrollTop = ta.scrollTop;
+};
+
+window.editorSetValue = function(value, preserveUndo) {
+  var ta = els['editor-textarea'];
+  if (!ta) return;
+  if (!preserveUndo && ta.value !== value) { state.editorUndo.push(ta.value); if (state.editorUndo.length > 100) state.editorUndo.shift(); state.editorRedo = []; }
+  ta.value = value;
+  window.renderNativeEditor();
+};
+
+window.toggleEditorMarkdownPreview = function() {
+  if (window.editorLanguageForPath(state.editorPath) !== 'markdown') return;
+  state.editorPreview = !state.editorPreview;
+  var main = document.getElementById('native-editor-main');
+  if (main) main.style.display = state.editorPreview ? 'none' : 'grid';
+  if (els['editor-md-preview']) els['editor-md-preview'].classList.toggle('open', state.editorPreview);
+  window.renderNativeEditor();
+};
+
+window.toggleEditorVim = function() {
+  state.editorVimEnabled = !state.editorVimEnabled;
+  state.editorVimMode = state.editorVimEnabled ? 'normal' : 'insert';
+  state.editorVimPending = '';
+  window.renderNativeEditor();
+  if (els['editor-textarea']) els['editor-textarea'].focus();
+};
+
+window.editorReplaceSelection = function(text) {
+  var ta = els['editor-textarea']; if (!ta) return;
+  var start = ta.selectionStart, end = ta.selectionEnd;
+  state.editorUndo.push(ta.value); state.editorRedo = [];
+  ta.setRangeText(text, start, end, 'end');
+  window.renderNativeEditor();
+};
+
+window.requestEditorCompletion = async function() {
+  var ta = els['editor-textarea']; if (!ta || !state.editorPath || !api.editorComplete) return;
+  var requestId = ++state.editorCompletionRequest;
+  var pos = ta.selectionStart;
+  if (els['editor-completion']) { els['editor-completion'].textContent = 'Predicting...'; els['editor-completion'].classList.add('open'); }
+  var result = await api.editorComplete({ path: state.editorPath, before: ta.value.slice(0, pos), after: ta.value.slice(pos) });
+  if (requestId !== state.editorCompletionRequest) return;
+  state.editorCompletionText = result && result.ok ? String(result.text || '') : '';
+  window.renderEditorGhostText();
+  if (els['editor-completion']) {
+    els['editor-completion'].textContent = state.editorCompletionText ? '' : (result.error || 'No completion');
+    els['editor-completion'].classList.toggle('open', !state.editorCompletionText);
+  }
+};
+
+window.toggleEditorPrediction = function() {
+  state.editorPredictionEnabled = !state.editorPredictionEnabled;
+  var button = document.getElementById('editor-copilot-toggle');
+  if (button) button.classList.toggle('active', state.editorPredictionEnabled);
+  if (!state.editorPredictionEnabled) {
+    if (state.editorCompletionTimer) clearTimeout(state.editorCompletionTimer);
+    state.editorCompletionTimer = null;
+    window.dismissEditorCompletion();
+  } else if (state.editorPath) {
+    window.scheduleEditorCompletion();
+  }
+};
+
+window.scheduleEditorCompletion = function() {
+  if (state.editorCompletionTimer) clearTimeout(state.editorCompletionTimer);
+  state.editorCompletionTimer = null;
+  window.dismissEditorCompletion();
+  if (!state.editorPredictionEnabled || !state.editorPath) return;
+  state.editorCompletionTimer = setTimeout(function() {
+    state.editorCompletionTimer = null;
+    window.requestEditorCompletion();
+  }, 700);
+};
+
+window.acceptEditorCompletion = function() { if (state.editorCompletionText) window.editorReplaceSelection(state.editorCompletionText); window.dismissEditorCompletion(); };
+window.dismissEditorCompletion = function() { state.editorCompletionText = ''; state.editorCompletionRequest++; if (els['editor-completion']) els['editor-completion'].classList.remove('open'); window.renderEditorGhostText(); };
+
+window.requestEditorAssist = async function() {
+  var ta = els['editor-textarea']; if (!ta || !state.editorPath || !api.editorAssist) return;
+  var instruction = window.prompt('Agent instruction', 'Review the selected code and suggest the next useful change.');
+  if (!instruction) return;
+  var panel = els['editor-assist']; if (panel) { panel.textContent = 'Agent working...'; panel.classList.add('open'); }
+  var result = await api.editorAssist({ path: state.editorPath, content: ta.value, selection: ta.value.slice(ta.selectionStart, ta.selectionEnd), instruction: instruction });
+  if (panel) panel.innerHTML = result && result.ok ? renderMessageContent(result.text || '') : esc(result.error || 'Agent assist failed');
+};
+
+window.handleEditorVimKey = function(e) {
+  if (!state.editorVimEnabled || state.editorVimMode === 'insert') return false;
+  var ta = els['editor-textarea']; if (!ta) return false;
+  var value = ta.value, pos = ta.selectionStart, key = e.key;
+  var lineStart = value.lastIndexOf('\n', Math.max(0, pos - 1)) + 1;
+  var lineEnd = value.indexOf('\n', pos); if (lineEnd < 0) lineEnd = value.length;
+  var setPos = function(next) { ta.setSelectionRange(Math.max(0, Math.min(value.length, next)), Math.max(0, Math.min(value.length, next))); window.renderNativeEditor(); };
+  if (key === 'i') { state.editorVimMode = 'insert'; }
+  else if (key === 'a') { setPos(Math.min(value.length, pos + 1)); state.editorVimMode = 'insert'; }
+  else if (key === 'h') setPos(pos - 1);
+  else if (key === 'l') setPos(pos + 1);
+  else if (key === '0') setPos(lineStart);
+  else if (key === '$') setPos(lineEnd);
+  else if (key === 'w') { var wm = value.slice(pos + 1).search(/\b\w/); setPos(wm < 0 ? value.length : pos + 1 + wm); }
+  else if (key === 'b') { var left = value.slice(0, pos).match(/\b\w+\W*$/); setPos(left ? pos - left[0].length : 0); }
+  else if (key === 'j' || key === 'k') { var col = pos - lineStart; var targetBreak = key === 'j' ? value.indexOf('\n', lineEnd) : value.lastIndexOf('\n', Math.max(0, lineStart - 2)); var targetStart = key === 'j' ? lineEnd + 1 : (targetBreak < 0 ? 0 : value.lastIndexOf('\n', Math.max(0, targetBreak - 1)) + 1); var targetEnd = value.indexOf('\n', targetStart); if (targetEnd < 0) targetEnd = value.length; setPos(Math.min(targetStart + col, targetEnd)); }
+  else if (key === 'x') { ta.setSelectionRange(pos, Math.min(value.length, pos + 1)); window.editorReplaceSelection(''); }
+  else if (key === 'v') { state.editorVimMode = 'visual'; ta.setSelectionRange(pos, Math.min(value.length, pos + 1)); }
+  else if (key === 'u') { if (state.editorUndo.length) { state.editorRedo.push(ta.value); window.editorSetValue(state.editorUndo.pop(), true); } }
+  else if (e.ctrlKey && key === 'r') { if (state.editorRedo.length) { state.editorUndo.push(ta.value); window.editorSetValue(state.editorRedo.pop(), true); } }
+  else if (key === 'p' && state.editorRegister) window.editorReplaceSelection(state.editorRegister);
+  else if (key === 'd' || key === 'y') { if (state.editorVimPending === key) { var end = lineEnd < value.length ? lineEnd + 1 : lineEnd; state.editorRegister = value.slice(lineStart, end); if (key === 'd') { ta.setSelectionRange(lineStart, end); window.editorReplaceSelection(''); } state.editorVimPending = ''; } else state.editorVimPending = key; }
+  else if (key === 'o' || key === 'O') { var insert = key === 'o' ? lineEnd : lineStart; ta.setSelectionRange(insert, insert); window.editorReplaceSelection(key === 'o' ? '\n' : '\n'); setPos(key === 'o' ? insert + 1 : insert); state.editorVimMode = 'insert'; }
+  else if (key === ':') { var cmd = window.prompt(':', 'w'); if (cmd === 'w' || cmd === 'wq') window.saveEditor(); if (cmd === 'q' || cmd === 'wq') window.closeEditor(); }
+  else state.editorVimPending = '';
+  window.renderNativeEditor();
+  e.preventDefault(); return true;
+};
+
 window.openFile = async function(path) {
   state.editorPath = path;
   try {
     var result = await api.readFile(path);
     var content = result.content || '';
-    if (path.endsWith('.md') || path.endsWith('.MD')) {
-      window.switchRightTab('md-viewer');
-      var mc = window.getMarkdownContentNode();
-      if (mc) mc.innerHTML = renderMessageContent(content);
-    } else {
-      window.switchRightTab('editor');
-      els['editor-filename'].textContent = path;
-      els['editor-textarea'].value = content;
-    }
+    window.switchRightTab('editor');
+    els['editor-filename'].textContent = path;
+    state.editorOriginal = content; state.editorUndo = []; state.editorRedo = []; state.editorPreview = false;
+    window.editorSetValue(content, true);
+    if (els['editor-md-toggle']) els['editor-md-toggle'].classList.toggle('visible', window.editorLanguageForPath(path) === 'markdown');
   } catch(e) {
     window.switchRightTab('editor');
     els['editor-filename'].textContent = path;
-    els['editor-textarea'].value = t('editor.readFailed') + ': ' + e.message;
+    window.editorSetValue(t('editor.readFailed') + ': ' + e.message, true);
   }
 };
 
@@ -9304,12 +9594,13 @@ window.openLinkedFile = async function(path) {
   try {
     var result = await api.readFile(path);
     if (result && result.error) {
-      els['editor-textarea'].value = t('editor.readFailed') + ': ' + result.error;
+      window.editorSetValue(t('editor.readFailed') + ': ' + result.error, true);
     } else {
-      els['editor-textarea'].value = (result && result.content) || '';
+      state.editorOriginal = (result && result.content) || '';
+      window.editorSetValue(state.editorOriginal, true);
     }
   } catch(e) {
-    els['editor-textarea'].value = t('editor.readFailed') + ': ' + e.message;
+    window.editorSetValue(t('editor.readFailed') + ': ' + e.message, true);
   }
 };
 
@@ -9318,6 +9609,7 @@ window.saveEditor = async function() {
     var content = els['editor-textarea'].value;
     try {
       await api.saveFile(state.editorPath, content);
+      state.editorOriginal = content; window.renderNativeEditor();
       addMsg('assistant', '[System] ' + t('editor.fileSaved') + ': ' + state.editorPath, 'editor', '');
     } catch(e) {
       addMsg('assistant', '[Error] ' + t('workspace.saveFailed') + ': ' + e.message, 'error', '');
@@ -9329,6 +9621,9 @@ window.closeEditor = function() {
   state.editorPath = '';
   els['editor-filename'].textContent = '';
   els['editor-textarea'].value = '';
+  state.editorOriginal = ''; state.editorPreview = false;
+  if (state.editorCompletionTimer) clearTimeout(state.editorCompletionTimer);
+  state.editorCompletionTimer = null; window.dismissEditorCompletion(); window.renderNativeEditor();
 };
 
 // === Subagent List ===
@@ -9518,9 +9813,12 @@ function applyBackendConversations(items, activeId) {
   var requestedActiveId = String(activeId || '');
   var holdId = String(state.foregroundConversationHoldId || '');
   var useHold = !!(holdId && Date.now() < Number(state.foregroundConversationHoldUntil || 0));
+  var seenIds = {};
   for (var i = 0; i < items.length; i++) {
     var item = items[i] || {};
-    var id = item.id || item.key || ('conv-' + i);
+    var id = String(item.id || item.key || ('conv-' + i));
+    if (seenIds[id]) continue;
+    seenIds[id] = true;
     if (useHold && id === holdId) requestedActiveId = holdId;
     convs.push({
       id: id,
@@ -9603,15 +9901,24 @@ function renderConversations() {
     return;
   }
   var conversations = currentWorkspaceConversations();
+  var summaryCounts = {};
+  for (var ci = 0; ci < conversations.length; ci++) {
+    var summaryKey = String(conversations[ci] && conversations[ci].summary || '');
+    summaryCounts[summaryKey] = (summaryCounts[summaryKey] || 0) + 1;
+  }
   var activeBeforeRender = (conversations.find(function(c) { return c && c.active; }) || {}).id;
   if (activeBeforeRender) setActiveWorkspaceConversationById(activeBeforeRender);
   else setActiveWorkspaceConversation(state.workspaceActiveConversation[currentWorkspaceKey()] || 0);
   for (var i = 0; i < conversations.length; i++) {
     var conv = conversations[i];
+    var displaySummary = conv.summary;
+    if (summaryCounts[String(conv.summary || '')] > 1) {
+      displaySummary += ' · ' + String(conv.id || '').slice(-8);
+    }
     var div = document.createElement('div');
     div.className = 'conv-item' + (conv.active ? ' active' : '');
     if (state.runningConversations && state.runningConversations[conv.id]) div.classList.add('marquee-border');
-    div.innerHTML = '<span class="conv-summary">' + esc(conv.summary) + (conv.messageCount ? ' (' + esc(String(conv.messageCount)) + ')' : '') + '</span>' +
+    div.innerHTML = '<span class="conv-summary" title="' + escAttr(String(conv.id || '')) + '">' + esc(displaySummary) + (conv.messageCount ? ' (' + esc(String(conv.messageCount)) + ')' : '') + '</span>' +
       '<button class="conv-pin-btn' + (conv.pinned ? ' active' : '') + '" onclick="event.stopPropagation();window.toggleConversationPinned(' + i + ')" title="' + escAttr(conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '">' + iconOnly('pin', conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '</button>' +
       '<button class="conv-archive-btn" onclick="event.stopPropagation();window.archiveConv(' + i + ')" title="' + escAttr(t('conversation.archive')) + '">' + esc(t('conversation.archive')) + '</button>';
     div.onclick = function(idx) { return function() { window.switchConversation(idx); }; }(i);
@@ -11155,7 +11462,6 @@ function stopMarqueeJS() {
       if (s.openAIApiMode) state.openAIApiMode = (s.openAIApiMode === 'chat' || s.openAIApiMode === 'responses') ? s.openAIApiMode : 'chat_stream';
       if (s.fallbackOnUnavailable !== undefined) state.fallbackOnUnavailable = s.fallbackOnUnavailable ? 'on' : 'off';
       if (s.switchTendency) state.switchTendency = s.switchTendency;
-      if (s.minimizeToTray) state.closeBehavior = 'minimize';
       if (s.providers) {
         state.providers = s.providers;
       }
@@ -11296,6 +11602,21 @@ function stopMarqueeJS() {
   if (els['chat-area']) {
     els['chat-area'].addEventListener('scroll', function() {
       if (window.renderScrollBottomAffordance) window.renderScrollBottomAffordance();
+    });
+  }
+
+  if (els['editor-textarea']) {
+    els['editor-textarea'].addEventListener('input', function() { window.renderNativeEditor(); window.scheduleEditorCompletion(); });
+    els['editor-textarea'].addEventListener('scroll', window.syncNativeEditorScroll);
+    els['editor-textarea'].addEventListener('click', window.renderNativeEditor);
+    els['editor-textarea'].addEventListener('keyup', window.renderNativeEditor);
+    els['editor-textarea'].addEventListener('keydown', function(e) {
+      if (state.editorCompletionText && e.key === 'Tab') { e.preventDefault(); window.acceptEditorCompletion(); return; }
+      if (e.key === 'Escape' && (state.editorCompletionText || (els['editor-completion'] && els['editor-completion'].classList.contains('open')))) { e.preventDefault(); window.dismissEditorCompletion(); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); window.saveEditor(); return; }
+      if ((e.ctrlKey && e.key === ' ') || (e.altKey && e.key === '\\')) { e.preventDefault(); window.requestEditorCompletion(); return; }
+      if (state.editorVimEnabled && e.key === 'Escape') { state.editorVimMode = 'normal'; state.editorVimPending = ''; e.preventDefault(); window.renderNativeEditor(); return; }
+      if (window.handleEditorVimKey(e)) return;
     });
   }
 

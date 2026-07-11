@@ -20,6 +20,11 @@ type AnthropicMessage = {
 
 type MessageContentPart = Record<string, unknown>;
 
+export interface ProviderModelCatalogEntry {
+  id: string;
+  raw: Record<string, unknown>;
+}
+
 export class LLMProvider {
   static nodeHttpTransport: ((method: 'GET' | 'POST', url: string, headers: Record<string, string>, body?: string) => Promise<{ status: number; body: string }>) | null = null;
   static powershellTransport: ((method: 'GET' | 'POST', url: string, headers: Record<string, string>, body?: string) => Promise<{ status: number; body: string }>) | null = null;
@@ -305,6 +310,32 @@ export class LLMProvider {
     return typeof value === 'object' ? JSON.stringify(value) : String(value);
   }
 
+  private extractTextValue(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (value === undefined || value === null) return '';
+    if (Array.isArray(value)) return value.map(item => this.extractTextValue(item)).join('');
+    if (typeof value !== 'object') return String(value);
+    const record = value as Record<string, unknown>;
+    if (typeof record.value === 'string') return record.value;
+    if (typeof record.text === 'string') return record.text;
+    if (record.text && typeof record.text === 'object') return this.extractTextValue(record.text);
+    if (typeof record.output_text === 'string') return record.output_text;
+    if (typeof record.refusal === 'string') return record.refusal;
+    if (record.content !== undefined) return this.extractTextValue(record.content);
+    return '';
+  }
+
+  private extractChatCompletionText(json: Record<string, unknown>): string {
+    const choices = Array.isArray(json.choices) ? json.choices as Array<Record<string, unknown>> : [];
+    const choice = choices[0] || {};
+    const message = choice.message && typeof choice.message === 'object' ? choice.message as Record<string, unknown> : {};
+    return this.extractTextValue(message.content)
+      || this.extractTextValue(message.refusal)
+      || this.extractTextValue(choice.text)
+      || this.extractTextValue(json.output_text)
+      || this.extractTextValue(json.output);
+  }
+
   private normalizeOpenAIContent(value: unknown): string | MessageContentPart[] {
     if (!Array.isArray(value)) return this.stringifyContent(value);
     const parts: MessageContentPart[] = [];
@@ -455,7 +486,8 @@ export class LLMProvider {
   }
 
   private extractResponsesText(json: Record<string, unknown>): string {
-    if (json.output_text) return String(json.output_text);
+    const direct = this.extractTextValue(json.output_text);
+    if (direct) return direct;
     const chunks: string[] = [];
     const output = Array.isArray(json.output) ? json.output : [];
     for (const itemRaw of output) {
@@ -463,13 +495,14 @@ export class LLMProvider {
       if (item.type === 'message' && Array.isArray(item.content)) {
         for (const blockRaw of item.content) {
           const block = blockRaw as Record<string, unknown>;
-          if ((block.type === 'output_text' || block.type === 'text') && block.text) {
-            chunks.push(String(block.text));
+          if (block.type === 'output_text' || block.type === 'text' || block.type === 'refusal') {
+            const text = this.extractTextValue(block.text || block.refusal || block.content);
+            if (text) chunks.push(text);
           }
         }
       }
     }
-    return chunks.join('');
+    return chunks.join('') || this.extractChatCompletionText(json);
   }
 
   private async *openAIResponsesWithTools(
@@ -710,8 +743,9 @@ export class LLMProvider {
               currentReasoningContent += delta.reasoning_content;
             }
 
-            if (delta.content) {
-              yield { type: 'text', text: delta.content, reasoningContent: currentReasoningContent || undefined };
+            const deltaText = this.extractTextValue(delta.content);
+            if (deltaText) {
+              yield { type: 'text', text: deltaText, reasoningContent: currentReasoningContent || undefined };
             }
 
             if (delta.tool_calls) {
@@ -769,8 +803,9 @@ export class LLMProvider {
     if (message.reasoning_content) {
       yield { type: 'status', text: '', reasoningContent: String(message.reasoning_content) };
     }
-    if (message.content) {
-      yield { type: 'text', text: String(message.content), reasoningContent: message.reasoning_content ? String(message.reasoning_content) : undefined };
+    const messageText = this.extractTextValue(message.content) || this.extractTextValue(choice?.text);
+    if (messageText) {
+      yield { type: 'text', text: messageText, reasoningContent: message.reasoning_content ? String(message.reasoning_content) : undefined };
     }
     for (const tc of message.tool_calls || []) {
       yield {
@@ -820,7 +855,8 @@ export class LLMProvider {
     for (const block of json.content || []) {
       const type = String(block.type || '');
       if (type === 'text' && block.text) {
-        yield { type: 'text', text: String(block.text) };
+        const text = this.extractTextValue(block.text);
+        if (text) yield { type: 'text', text };
       } else if (type === 'thinking' && block.thinking) {
         yield { type: 'status', text: '', reasoningContent: String(block.thinking) };
       } else if (type === 'tool_use') {
@@ -863,7 +899,7 @@ export class LLMProvider {
       const json = await response.json() as { content?: Array<Record<string, unknown>> };
       return (json.content || [])
         .filter(block => block.type === 'text' && block.text)
-        .map(block => String(block.text))
+        .map(block => this.extractTextValue(block.text))
         .join('');
     }
 
@@ -895,11 +931,11 @@ export class LLMProvider {
       throw new Error(`LLM Error: ${response.status} ${err}`);
     }
 
-    const json = await response.json();
-    return json.choices?.[0]?.message?.content || '';
+    const json = await response.json() as Record<string, unknown>;
+    return this.extractChatCompletionText(json);
   }
 
-  async listModels(): Promise<string[]> {
+  async modelCatalog(): Promise<ProviderModelCatalogEntry[]> {
     if (this.protocol() === 'github_models') {
       const response = await this.getJsonWithFetchFallback(
         this.githubModelsUrl('/catalog/models'),
@@ -914,10 +950,10 @@ export class LLMProvider {
       const rawModels = Array.isArray(json)
         ? json
         : (Array.isArray(json.data) ? json.data : (Array.isArray(json.models) ? json.models : []));
-      return rawModels
-        .map((entry) => typeof entry === 'string' ? entry : (entry.id || entry.name || ''))
-        .map((name) => String(name).trim())
-        .filter((name, index, all) => !!name && all.indexOf(name) === index);
+      return rawModels.map(entry => ({
+        id: String(typeof entry === 'string' ? entry : (entry.id || entry.name || '')).trim(),
+        raw: typeof entry === 'string' ? { id: entry } : entry,
+      })).filter((entry, index, all) => !!entry.id && all.findIndex(candidate => candidate.id === entry.id) === index);
     }
     const response = await this.getJsonWithFetchFallback(
       `${this.cleanBaseUrl()}/models`,
@@ -930,10 +966,14 @@ export class LLMProvider {
 
     const json = await response.json() as { data?: Array<{ id?: string; name?: string } | string>; models?: Array<{ id?: string; name?: string } | string> };
     const rawModels = Array.isArray(json.data) ? json.data : (Array.isArray(json.models) ? json.models : []);
-    return rawModels
-      .map((entry) => typeof entry === 'string' ? entry : (entry.id || entry.name || ''))
-      .map((name) => String(name).trim())
-      .filter((name, index, all) => !!name && all.indexOf(name) === index);
+    return rawModels.map(entry => ({
+      id: String(typeof entry === 'string' ? entry : (entry.id || entry.name || '')).trim(),
+      raw: typeof entry === 'string' ? { id: entry } : entry,
+    })).filter((entry, index, all) => !!entry.id && all.findIndex(candidate => candidate.id === entry.id) === index);
+  }
+
+  async listModels(): Promise<string[]> {
+    return (await this.modelCatalog()).map(entry => entry.id);
   }
 
   async validate(model: string): Promise<{ ok: boolean; latency: number }> {
@@ -944,6 +984,45 @@ export class LLMProvider {
       return { ok: result.length > 0 && !/^\s*\[(?:LLM Error|Error)(?::|\])/i.test(result), latency };
     } catch {
       return { ok: false, latency: (Date.now() - start) / 1000 };
+    }
+  }
+
+  async validateVision(model: string): Promise<{ ok: boolean; latency: number; error?: string }> {
+    const start = Date.now();
+    const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACHSURBVHhe7dAhAQAADITA719681QAcQbJbjuzMdg0gMGmAQw2DWCwaQCDTQMYbBrAYNMABpsGMNg0gMGmAQw2DWCwaQCDTQMYbBrAYNMABpsGMNg0gMGmAQw2DWCwaQCDTQMYbBrAYNMABpsGMNg0gMGmAQw2DWCwaQCDTQMYbBrAYNMABpsHQ4jh0hEeUY0AAAAASUVORK5CYII=';
+    try {
+      const result = await this.chat(model, [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Identify the dominant color and shape in the attached image. Reply with exactly RED_SQUARE and no other text.' },
+          { type: 'image_url', image_url: { url: image } },
+        ],
+      }], null, 0, 30);
+      const ok = /\bRED_SQUARE\b/i.test(result);
+      return { ok, latency: (Date.now() - start) / 1000, error: ok ? undefined : `unexpected answer: ${result.slice(0, 120)}` };
+    } catch (error) {
+      return { ok: false, latency: (Date.now() - start) / 1000, error: error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160) };
+    }
+  }
+
+  async validateImageOutput(model: string): Promise<{ ok: boolean; latency: number; error?: string }> {
+    if (this.protocol() !== 'openai') return { ok: false, latency: 0 };
+    const start = Date.now();
+    try {
+      const response = await this.postJsonWithFetchFallback(`${this.cleanBaseUrl()}/images/generations`, this.openAIHeaders(), {
+        model,
+        prompt: 'A single solid blue square on a white background.',
+        size: '256x256',
+        n: 1,
+        response_format: 'b64_json',
+      }, 120000);
+      if (!response.ok) return { ok: false, latency: (Date.now() - start) / 1000, error: `HTTP ${response.status}: ${(await response.text()).slice(0, 120)}` };
+      const json = await response.json() as { data?: Array<{ b64_json?: string; url?: string }> };
+      const item = json.data?.[0];
+      const ok = !!(item?.b64_json || item?.url);
+      return { ok, latency: (Date.now() - start) / 1000, error: ok ? undefined : 'response contained no image URL or base64 data' };
+    } catch (error) {
+      return { ok: false, latency: (Date.now() - start) / 1000, error: error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160) };
     }
   }
 }

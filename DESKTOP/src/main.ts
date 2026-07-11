@@ -724,6 +724,15 @@ if (hasCliCommand) {
       recordStartup('startup-shell-load-started');
       win.webContents.once('did-finish-load', () => recordStartup('startup-shell-loaded'));
     };
+    const showMainWindow = (): void => {
+      const win = mainWindow && !mainWindow.isDestroyed()
+        ? mainWindow
+        : (createDesktopWindow ? createDesktopWindow(!!agent) : null);
+      if (!win || win.isDestroyed()) return;
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    };
 
     createDesktopWindow = (loadUi = true) => {
       const win = new BrowserWindow({
@@ -800,7 +809,10 @@ if (hasCliCommand) {
       firstRunInit(fallbackRoot);
     }
     recordStartup('first-run-init');
-    if (!automationWakeMode) mainWindow = createDesktopWindow(false);
+    if (!automationWakeMode) {
+      mainWindow = createDesktopWindow(false);
+      createTray();
+    }
 
     setTimeout(async () => {
       try {
@@ -891,12 +903,13 @@ if (hasCliCommand) {
       tray = new Tray(createAppIconImage(16));
       tray.setToolTip('Newmark Agent');
       const contextMenu = Menu.buildFromTemplate([
-        { label: 'Show Window', click: () => { mainWindow?.show(); mainWindow?.focus(); tray?.destroy(); tray = null; } },
+        { label: 'Show Window', click: showMainWindow },
         { type: 'separator' },
         { label: 'Exit', click: () => { _forceQuit = true; tray?.destroy(); tray = null; app.quit(); } },
       ]);
       tray.setContextMenu(contextMenu);
-      tray.on('double-click', () => { mainWindow?.show(); mainWindow?.focus(); tray?.destroy(); tray = null; });
+      tray.on('click', showMainWindow);
+      tray.on('double-click', showMainWindow);
     }
 
     ipcMain.handle('agent:send', async (_event, message: string, conversationId?: string) => {
@@ -1207,15 +1220,24 @@ if (hasCliCommand) {
       return !!conversationKernel?.abort(target);
     });
 
+    ipcMain.handle('agent:rewindConversation', async (_event, conversationId: string, messageIndex: number) => {
+      if (!agent) return { error: 'Agent not initialized' };
+      const target = String(conversationId || agent.activeConversationId || 'default');
+      try {
+        const snapshot = conversationKernel
+          ? conversationKernel.rewind(target, messageIndex)
+          : agent.rewindConversation(target, messageIndex);
+        return { ...snapshot, queued: { steering: [], followUp: [] }, workEvents: [] };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
     ipcMain.handle('agent:archive', async (_event, conversationId?: string) => {
       if (!agent) return null;
       const target = String(conversationId || agent.activeConversationId || 'default');
       conversationKernel?.abort(target);
-      const previous = agent.activeConversationId || 'default';
-      if (target !== previous) agent.setConversation(target);
-      const archived = agent.archiveSession();
-      if (target !== previous) agent.setConversation(previous);
-      return archived;
+      return agent.archiveConversation(target);
     });
 
     ipcMain.handle('agent:listArchives', async (_event, scope?: string) => {
@@ -1636,6 +1658,14 @@ if (hasCliCommand) {
       return await importToken(token);
     });
 
+    ipcMain.handle('agent:editorComplete', async (_event, request: Record<string, unknown>) => {
+      return agent?.editorModelRequest({ ...request, completion: true, preferCopilot: false } as any) || { ok: false, text: '', error: 'Agent not initialized' };
+    });
+
+    ipcMain.handle('agent:editorAssist', async (_event, request: Record<string, unknown>) => {
+      return agent?.editorModelRequest({ ...request, completion: false } as any) || { ok: false, text: '', error: 'Agent not initialized' };
+    });
+
     ipcMain.handle('skills:list', async () => {
       if (!agent) return [];
       return agent.skills.listDetailed();
@@ -1818,10 +1848,9 @@ if (hasCliCommand) {
 
     ipcMain.handle('app:minimize', () => {
       const win = BrowserWindow.getFocusedWindow() || mainWindow;
-      const closeBehavior = agent?.config.getStr('general', 'close_behavior');
-      if (closeBehavior === 'minimize') {
+      const minimizeToTray = agent?.config.getBool('ui', 'minimize_to_tray') ?? true;
+      if (minimizeToTray) {
         win?.hide();
-        createTray();
       } else {
         win?.minimize();
       }
@@ -1836,11 +1865,16 @@ if (hasCliCommand) {
       const closeBehavior = agent?.config.getStr('general', 'close_behavior');
       if (closeBehavior === 'minimize') {
         win?.hide();
-        createTray();
       } else {
         win?.close();
       }
     });
+    ipcMain.handle('app:lifecycleState', () => ({
+      trayActive: !!tray && !tray.isDestroyed(),
+      windowExists: !!mainWindow && !mainWindow.isDestroyed(),
+      windowVisible: !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible(),
+      windowMinimized: !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isMinimized(),
+    }));
     ipcMain.handle('app:drag', () => {
       // Window drag is handled by the renderer
     });

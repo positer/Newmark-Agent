@@ -504,6 +504,8 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
     },
     agent: {
       default_mode: { _description: "Default mode", _type: "choice", _values: ["build","plan","goal","flow"], value: "build" },
+      run_in_wsl: { _description: "Run the Agent backend in WSL on Windows", _type: "boolean", value: false },
+      wsl_distro: { _description: "WSL distribution used by the Agent backend", _type: "string", value: "Ubuntu-24.04" },
       option_feedback: { _description: "Option feedback level", _type: "choice", _values: ["default","ask_more","ask_less","fully_autonomous"], value: "default" },
       auto_adjust_settings: { _description: "Agent can adjust settings", _type: "boolean", value: false },
       process_timeout_ms: { _description: "Optional outer timeout for one desktop conversation turn in milliseconds; 0 means no extra conversation-kernel timeout", _type: "integer", value: 0 },

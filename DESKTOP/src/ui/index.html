@@ -2866,6 +2866,36 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 .setting-control { flex: 1; }
 
+.segmented-control {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-deep);
+}
+
+.segmented-control .segment {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.segmented-control .segment.active {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.segmented-control .segment:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .setting-control select,
 .setting-control input[type="text"],
 .setting-control input[type="number"] {
@@ -4009,6 +4039,11 @@ var state = {
   _terminalActiveSession: null,
   platform: 'win32',
   terminalShells: ['powershell', 'cmd', 'bash'],
+  agentBackend: { enabled: false, connected: true, distro: '', pid: 0, error: '' },
+  configuredAgentBackend: 'windows',
+  agentBackendRestartRequired: false,
+  wslAvailable: false,
+  wslDistros: [],
   defaultTerminalShell: 'powershell',
   runtimeDefaultTerminalShell: 'powershell',
   terminalInterruptTimeoutMs: 0,
@@ -4118,6 +4153,16 @@ var NEWMARK_I18N = {
     'plan.clearDone': 'Clear done',
     'settings.title': 'Settings',
     'settings.general': 'General',
+    'settings.runInWsl': 'Run Agent backend in WSL',
+    'settings.runInWslDesc': 'Keeps the Windows UI and native desktop tools local while running the persistent Agent kernel, model calls, shell, and file tools inside WSL.',
+    'settings.wslDistro': 'WSL distribution',
+    'settings.testWslBackend': 'Test WSL backend',
+    'settings.wslConnected': 'WSL backend connected',
+    'settings.wslDisconnected': 'WSL backend unavailable',
+    'settings.windowsNative': 'Windows native',
+    'settings.wslBased': 'Run on WSL',
+    'settings.restartRequired': 'Restart Newmark Agent to apply this backend change.',
+    'settings.wslRequired': 'Install and initialize a WSL distribution before enabling this mode.',
     'settings.models': 'Models & Providers',
     'settings.tools': 'Tools',
     'settings.archive': 'Archive',
@@ -4571,6 +4616,16 @@ var NEWMARK_I18N = {
     'plan.clearDone': '清理已完成',
     'settings.title': '设置',
     'settings.general': '通用',
+    'settings.runInWsl': '在 WSL 上运行 Agent 后端',
+    'settings.runInWslDesc': 'Windows UI 与桌面原生工具保留在本机，持续 Agent 内核、模型请求、Shell 和文件工具运行在 WSL。',
+    'settings.wslDistro': 'WSL 发行版',
+    'settings.testWslBackend': '测试 WSL 后端',
+    'settings.wslConnected': 'WSL 后端已连接',
+    'settings.wslDisconnected': 'WSL 后端不可用',
+    'settings.windowsNative': 'Windows 原生',
+    'settings.wslBased': '基于 WSL 运行',
+    'settings.restartRequired': '需要重启 Newmark Agent 才能应用此后端变更。',
+    'settings.wslRequired': '请先安装并初始化一个 WSL 发行版，再启用此模式。',
     'settings.models': '模型与供应商',
     'settings.tools': '工具',
     'settings.archive': '归档',
@@ -7974,7 +8029,19 @@ function renderGeneralSettings() {
     themeHtml += '<option value="' + themeOpts[i].v + '"' + (state.theme === themeOpts[i].v ? ' selected' : '') + '>' + themeOpts[i].l + '</option>';
   }
   var gradColors = state.configGradientColors || ['#ff6b6b','#ffd93d','#6bcb77','#4d96ff'];
-  return '<div class="setting-row">' +
+  var wslOptions = (state.wslDistros || []).map(function(name) { return '<option value="' + escAttr(name) + '"' + ((state.agentBackend && state.agentBackend.distro) === name ? ' selected' : '') + '>' + esc(name) + '</option>'; }).join('');
+  var wslHtml = state.platform === 'win32' ? '<div class="setting-row">' +
+    '<span class="setting-label">' + esc(t('settings.runInWsl')) + '</span>' +
+    '<div class="setting-control"><div class="segmented-control"><button class="segment' + (state.configuredAgentBackend !== 'wsl' ? ' active' : '') + '" onclick="window.setAgentBackendMode(\'windows\')">' + esc(t('settings.windowsNative')) + '</button>' +
+    '<button class="segment' + (state.configuredAgentBackend === 'wsl' ? ' active' : '') + '"' + (state.wslAvailable ? '' : ' disabled') + ' onclick="window.setAgentBackendMode(\'wsl\')">' + esc(t('settings.wslBased')) + '</button></div>' +
+    '<div class="setting-desc">' + esc(t('settings.runInWslDesc')) + '</div>' +
+    (!state.wslAvailable ? '<div class="setting-desc warning">' + esc(t('settings.wslRequired')) + '</div>' : '') +
+    (state.agentBackendRestartRequired ? '<div class="setting-desc warning">' + esc(t('settings.restartRequired')) + '</div>' : '') + '</div></div>' +
+    '<div class="setting-row"><span class="setting-label">' + esc(t('settings.wslDistro')) + '</span>' +
+    '<div class="setting-control"><select id="agent-wsl-distro" onchange="window.setAgentWslDistro(this.value)"' + (state.wslAvailable ? '' : ' disabled') + '>' + (wslOptions || '<option>Ubuntu-24.04</option>') + '</select>' +
+    '<button class="secondary-btn"' + (state.agentBackend && state.agentBackend.enabled ? '' : ' disabled') + ' onclick="window.testAgentWslBackend()">' + esc(t('settings.testWslBackend')) + '</button>' +
+    '<div class="setting-desc" id="agent-wsl-status">' + esc(state.agentBackend && state.agentBackend.connected ? t('settings.wslConnected') : t('settings.wslDisconnected')) + '</div></div></div>' : '';
+  return wslHtml + '<div class="setting-row">' +
     '<span class="setting-label">' + esc(t('settings.language')) + '</span>' +
     '<div class="setting-control"><select id="language-select" onchange="window.setLanguage(this.value)">' +
     '<option value="auto"' + (state.language === 'auto' ? ' selected' : '') + '>' + esc(t('language.auto')) + '</option>' +
@@ -8340,6 +8407,34 @@ window.setAutoSwitchMode = function(v) {
   state.autoSwitchScope = v === 'provider' ? 'provider' : 'all';
   api.saveConfig({ autoSwitch: state.autoSwitch, autoSwitchScope: state.autoSwitchScope });
   window.refreshModelSelect();
+};
+
+window.setAgentBackendMode = async function(mode) {
+  var next = mode === 'wsl' ? 'wsl' : 'windows';
+  if (next === 'wsl' && !state.wslAvailable) return false;
+  await api.saveSetting('agent', 'run_in_wsl', next === 'wsl');
+  state.configuredAgentBackend = next;
+  state.agentBackendRestartRequired = (state.agentBackend && state.agentBackend.enabled ? 'wsl' : 'windows') !== next;
+  window.settingsTab('general');
+  return true;
+};
+
+window.setAgentWslDistro = async function(value) {
+  var distro = String(value || '').trim() || 'Ubuntu-24.04';
+  await api.saveSetting('agent', 'wsl_distro', distro);
+  state.agentBackend = { ...(state.agentBackend || {}), distro: distro, connected: false };
+  state.agentBackendRestartRequired = true;
+  window.settingsTab('general');
+};
+
+window.testAgentWslBackend = async function() {
+  if (!state.agentBackend || !state.agentBackend.enabled) return { ok: false, error: t('settings.restartRequired') };
+  var label = document.getElementById('agent-wsl-status');
+  if (label) label.textContent = '...';
+  var result = api.wslBackendTest ? await api.wslBackendTest() : { ok: false, error: 'WSL backend API unavailable' };
+  state.agentBackend = { ...(state.agentBackend || {}), ...result, enabled: true, connected: !!result.ok };
+  if (label) label.textContent = result.ok ? t('settings.wslConnected') : (result.error || t('settings.wslDisconnected'));
+  return result;
 };
 
 window.setAutoSwitch = function(v) {
@@ -11453,6 +11548,11 @@ function stopMarqueeJS() {
       if (s.terminalInterruptTimeoutMs !== undefined) state.terminalInterruptTimeoutMs = Math.max(0, Number(s.terminalInterruptTimeoutMs) || 0);
       if (s.nativeTools) state.nativeTools = s.nativeTools;
       if (s.nativeToolEnabled) state.nativeToolEnabled = s.nativeToolEnabled;
+      if (s.agentBackend) state.agentBackend = s.agentBackend;
+      if (s.configuredAgentBackend) state.configuredAgentBackend = s.configuredAgentBackend;
+      if (s.agentBackendRestartRequired !== undefined) state.agentBackendRestartRequired = !!s.agentBackendRestartRequired;
+      if (s.wslAvailable !== undefined) state.wslAvailable = !!s.wslAvailable;
+      if (Array.isArray(s.wslDistros)) state.wslDistros = s.wslDistros;
       if (s.conversationId) state.activeBackendConversationId = s.conversationId;
       if (s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
       if (s.chatMessages) renderChatMessages(s.chatMessages);

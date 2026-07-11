@@ -25,6 +25,7 @@ import { MemoryLabManager } from '../core/memoryLab';
 import { checkGitHubUpdate, currentAppVersion, installUpdate } from '../core/installUpdate';
 import { ConversationKernel } from '../core/conversationKernel';
 import { SshManager, SshRunner } from '../core/ssh';
+import { WslAgentClient, windowsDrivePathToWsl } from '../core/wslAgentClient';
 
 const TEST_DIR = path.join(process.cwd(), 'test-tmp');
 const PASS = '[PASS]';
@@ -199,12 +200,13 @@ async function main() {
   assert(uiHtml.includes('function activeConversationId()') && uiHtml.includes('api.sendMessage(text, lockedConversationId)'), 'ui html: sends initiating conversation id with each agent turn');
   assert(uiHtml.includes('window.submitCurrentAction = function()') && uiHtml.includes('window.stopCurrentConversation = async function()') && uiHtml.includes("api.abortConversation(conversationId)") && uiHtml.includes("e.key === 'Escape' && isCurrentConversationRunning() && !promptHasText()"), 'ui html: current running conversation with empty prompt shows a Stop action bound to Esc and abortConversation');
   assert(uiHtml.includes('function updateSubmitButtonState()') && uiHtml.includes("setSubmitButtonVisual('square', t('input.stop'), true, true)") && uiHtml.includes("setSubmitButtonVisual('send', t('input.send'), running, false)") && uiHtml.includes("els.prompt.addEventListener('input'"), 'ui html: submit button switches between Newmark marquee Stop and Send based on current conversation running state and prompt text');
+  assert(uiHtml.includes("window.setAgentBackendMode = async function(mode)") && uiHtml.includes("state.wslAvailable ? '' : ' disabled'") && uiHtml.includes("t('settings.restartRequired')") && !uiHtml.includes('window.setAgentWslBackend'), 'ui html: Windows native/WSL backend is a restart-required segmented choice and WSL mode is disabled when unavailable');
   assert(uiHtml.includes('if (api.setMode) await api.setMode(state.mode)') && uiHtml.includes('if (api.setModel && state.model) await api.setModel(state.model)'), 'ui html: send synchronizes current mode and model before backend turn');
   assert(uiHtml.includes('renderConversations();') && uiHtml.includes('r.conversations') && uiHtml.includes('r.conversationId || lockedConversationId'), 'ui html: refreshes conversation titles from send response');
   assert(uiHtml.includes('runningConversations') && uiHtml.includes('setupAgentWorkEvents()') && uiHtml.includes('appendAgentWorkEvent(payload)') && uiHtml.includes('var id = String(event.conversationId ||') && uiHtml.includes('renderAgentWorkEvent(event)') && uiHtml.includes('summary: item.title ||'), 'ui html: supports per-conversation running state, conversation-bound live work events, and backend titles');
   assert(uiHtml.includes("type === 'queue_update'") && uiHtml.includes('state.backendQueue = event.queue') && uiHtml.includes('if (s && s.queued) {') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue)'), 'ui html: caches backend queue_update events for foreground/background conversation debugging');
   assert(uiHtml.includes('if (s && Array.isArray(s.workEvents))') && uiHtml.includes('var mergedEvents = existingEvents.concat(s.workEvents || [])') && uiHtml.includes('dedupedEvents.slice(-Number(state.agentWorkEventLimit || 240))'), 'ui html: merges backend work-event snapshots when foregrounding a conversation');
-  assert(mainSource.includes('function broadcastAgentWorkEvent(event: unknown)') && mainSource.includes('BrowserWindow.getAllWindows()') && mainSource.includes("win.webContents.send('agent:workEvent', event)") && mainSource.includes("ipcMain.handle('agent:getState', async (_event, conversationId?: string)") && mainSource.includes("ipcMain.handle('agent:ensureConversation'") && mainSource.includes('backendConversationState(conversationId)') && mainSource.includes('agent.getConversationSnapshot(target)') && preloadSource.includes('ensureConversation: (id: string)') && preloadSource.includes('getState: (conversationId?: string)'), 'backend sharing: all desktop windows receive one backend event stream and can request read-only conversation-scoped snapshots without forcing window-local active conversation');
+  assert(mainSource.includes('function broadcastAgentWorkEvent(event: unknown)') && mainSource.includes('BrowserWindow.getAllWindows()') && mainSource.includes("win.webContents.send('agent:workEvent', event)") && mainSource.includes("ipcMain.handle('agent:getState', async (_event, conversationId?: string)") && mainSource.includes("ipcMain.handle('agent:ensureConversation'") && mainSource.includes('backendConversationState(targetConversation)') && mainSource.includes('client.snapshot(targetConversation') && mainSource.includes('agent.getConversationSnapshot(target)') && preloadSource.includes('ensureConversation: (id: string)') && preloadSource.includes('getState: (conversationId?: string)'), 'backend sharing: all desktop windows receive one backend event stream and can request local or WSL conversation-scoped snapshots without forcing window-local active conversation');
   assert(mainSource.includes('const singleInstanceLock = app.requestSingleInstanceLock()') && mainSource.includes("app.on('second-instance'") && mainSource.includes('createDesktopWindow = (loadUi = true)') && mainSource.includes('BrowserWindow.getAllWindows().filter'), 'main process: repeated desktop launches route into one shared backend process and create additional windows instead of duplicate runners');
   assert(uiHtml.includes('function loadActiveConversationMessages(conversationId)') && uiHtml.includes('var requestedConversationId = String(conversationId || activeConversationId() ||') && uiHtml.includes('api.getState(lockedConversationId)') && !uiHtml.includes('api.getState().then(function(s) {\n      if (s && s.contextCompression'), 'ui html: active window refreshes are bound to the owning conversation to prevent cross-window spillover');
   assert(uiHtml.includes('function setActiveWorkspaceConversationById(id)') && uiHtml.includes('var activeBeforeRender = (conversations.find(function(c)') && uiHtml.includes('if (activeBeforeRender) setActiveWorkspaceConversationById(activeBeforeRender);'), 'ui html: conversation list rerender preserves active conversation by id instead of stale cross-window index');
@@ -382,6 +384,32 @@ async function main() {
   const serverTs = fs.readFileSync(path.join(process.cwd(), 'src', 'server.ts'), 'utf-8');
   const preloadTs = fs.readFileSync(path.join(process.cwd(), 'src', 'preload.ts'), 'utf-8');
   assert(preloadTs.includes("ipcRenderer.invoke('agent:editorComplete'") && preloadTs.includes("ipcRenderer.invoke('agent:editorAssist'") && mainTs.includes("ipcMain.handle('agent:editorComplete'") && mainTs.includes("ipcMain.handle('agent:editorAssist'"), 'editor IPC: completion and Agent assist use dedicated conversation-independent model requests');
+  const wslClientTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'wslAgentClient.ts'), 'utf-8');
+  const wslHostTs = fs.readFileSync(path.join(process.cwd(), 'src', 'wsl-agent-host.ts'), 'utf-8');
+  assert(mainTs.includes("activeAgentBackendMode: 'windows' | 'wsl'") && mainTs.includes("configuredAgentBackend") && mainTs.includes('agentBackendRestartRequired') && !mainTs.includes("if (key === 'run_in_wsl' && value === true) await ensureWslAgentClient()"), 'main WSL backend: configured backend changes only after restart and does not hot-switch active conversations');
+  assert(mainTs.includes('function availableWslDistros()') && mainTs.includes('const wslDistros = availableWslDistros()') && mainTs.includes('wslAvailable: wslDistros.length > 0') && mainTs.includes('wslDistros,'), 'main WSL backend: caches and reports real available distributions for UI gating');
+  const wslPackageConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
+  assert(mainTs.includes('function ensureWslRuntimeBundle()') && mainTs.includes("'app.asar.unpacked', 'dist', 'wsl-agent-host.bundle.cjs'") && !mainTs.includes("path.join(userRuntimeRoot(), 'Runtime', 'wsl'") && wslPackageConfig.build?.asarUnpack?.includes('dist/wsl-agent-host.bundle.cjs'), 'main WSL backend: loads one read-only unpacked Agent bundle without copying runtime code into .Newmark');
+  assert(wslClientTs.includes("spawn('wsl.exe'") && wslClientTs.includes('windowsDrivePathToWsl') && wslClientTs.includes("message.event === 'work'") && wslHostTs.includes('new ConversationKernel(root, host, null)') && wslHostTs.includes("backend: 'wsl'"), 'WSL backend bridge: persistent JSONL RPC host runs ConversationKernel in WSL and streams conversation events');
+  assert(preloadTs.includes("wslBackendStatus: () => ipcRenderer.invoke('wsl:backendStatus')") && preloadTs.includes("wslBackendTest: () => ipcRenderer.invoke('wsl:backendTest')"), 'preload: exposes WSL backend status and test actions');
+  assert(windowsDrivePathToWsl('C:\\Users\\Test User\\repo') === '/mnt/c/Users/Test User/repo' && windowsDrivePathToWsl('D:/work/project') === '/mnt/d/work/project', 'WSL path mapping: converts Windows drive paths without shell escaping loss');
+  if (process.platform === 'win32') {
+    const wslProbe = spawnSync('wsl.exe', ['-d', 'Ubuntu-24.04', '--', 'true'], { windowsHide: true, timeout: 10000 });
+    if (!wslProbe.error && wslProbe.status === 0) {
+      const wslRoot = path.join(TEST_DIR, 'wsl-client');
+      fs.mkdirSync(wslRoot, { recursive: true });
+      const wslClient = new WslAgentClient('Ubuntu-24.04', wslRoot, path.join(process.cwd(), 'dist', 'wsl-agent-host.js'));
+      try {
+        await wslClient.start();
+        const wslA = await wslClient.snapshot('wsl-conv-a', { name: 'wsl-workspace', path: TEST_DIR, isInternal: false, kind: 'local' });
+        const wslB = await wslClient.snapshot('wsl-conv-b', { name: 'wsl-workspace', path: TEST_DIR, isInternal: false, kind: 'local' });
+        assert(wslClient.status().connected && wslClient.status().distro === 'Ubuntu-24.04' && wslA.backend === 'wsl', 'WSL backend client: starts persistent Linux Agent host and reports connected backend');
+        assert(wslA.conversationId === 'wsl-conv-a' && wslB.conversationId === 'wsl-conv-b', 'WSL backend client: keeps requested conversation snapshots isolated');
+      } finally {
+        await wslClient.stop();
+      }
+    }
+  }
   const toolsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'index.ts'), 'utf-8');
   const nativeToolsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'nativeTools.ts'), 'utf-8');
   const agentTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');

@@ -92,6 +92,8 @@ contextBridge.exposeInMainWorld('api', {
   terminalTakeoverState: () => ipcRenderer.invoke('agentTerminal:takeoverState'),
   terminalTakeoverWrite: (sessionId: string, data: string) => ipcRenderer.invoke('agentTerminal:takeoverWrite', sessionId, data),
   wslDetect: () => ipcRenderer.invoke('wsl:detect'),
+  wslBackendStatus: () => ipcRenderer.invoke('wsl:backendStatus'),
+  wslBackendTest: () => ipcRenderer.invoke('wsl:backendTest'),
   onTerminalData: (callback: (event: unknown, sessionId: string, data: string) => void) => {
     ipcRenderer.on('pty:data', callback);
   },

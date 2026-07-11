@@ -19,6 +19,7 @@ import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, installUpdate 
 import { onTerminalTakeoverEvent, terminalTakeoverState, writeTerminalTakeoverSession } from './tools/terminalTakeover';
 import { nativeToolCatalogForState, normalizeNativeToolEnabled } from './tools/nativeTools';
 import { LLMProvider } from './llm/provider';
+import { WslAgentClient } from './core/wslAgentClient';
 
 const APP_NAME = 'Newmark Agent';
 const APP_ID = 'ai.newmark.agent';
@@ -31,6 +32,8 @@ if (process.platform === 'win32') {
 let mainWindow: BrowserWindow | null = null;
 let agent: Agent | null = null;
 let conversationKernel: ConversationKernel | null = null;
+let wslAgentClient: WslAgentClient | null = null;
+let activeAgentBackendMode: 'windows' | 'wsl' = 'windows';
 let automation: AutomationManager | null = null;
 let automationWake: AutomationWakeScheduler | null = null;
 let lastWakeSync: WakeSyncResult | null = null;
@@ -96,6 +99,31 @@ function runShellCommand(command: string, shellId: string, cwd: string): { outpu
 function resetConversationKernel(): void {
   if (conversationKernel?.isAnyRunning()) return;
   conversationKernel = null;
+}
+
+let wslDistroCache: { at: number; items: string[] } = { at: 0, items: [] };
+function availableWslDistros(): string[] {
+  if (process.platform !== 'win32') return [];
+  if (Date.now() - wslDistroCache.at < 5000) return wslDistroCache.items.slice();
+  const result = spawnSync('wsl.exe', ['--list', '--quiet'], { encoding: 'buffer', windowsHide: true, timeout: 10000 });
+  if (result.error || result.status !== 0) return [];
+  const raw = result.stdout || Buffer.alloc(0);
+  const utf16 = raw.toString('utf16le').replace(/\0/g, '').trim();
+  const text = utf16 && /[A-Za-z0-9]/.test(utf16) ? utf16 : raw.toString('utf8').replace(/\0/g, '').trim();
+  const items = text.split(/\r?\n/).map(line => line.replace(/\s*\(Default\)\s*$/i, '').trim()).filter(Boolean);
+  wslDistroCache = { at: Date.now(), items };
+  return items.slice();
+}
+
+async function resetWslAgentClient(): Promise<void> {
+  const current = wslAgentClient;
+  wslAgentClient = null;
+  if (current) await current.stop();
+}
+
+async function resetAgentRuntimes(): Promise<void> {
+  resetConversationKernel();
+  await resetWslAgentClient();
 }
 
 function broadcastAgentWorkEvent(event: unknown): void {
@@ -274,6 +302,14 @@ function exeRoot(): string {
 
 function userRuntimeRoot(): string {
   return path.join(os.homedir(), '.Newmark');
+}
+
+function ensureWslRuntimeBundle(): string {
+  const packagedHost = path.join(process.resourcesPath, 'app.asar.unpacked', 'dist', 'wsl-agent-host.bundle.cjs');
+  const developmentHost = path.join(app.getAppPath(), 'dist', 'wsl-agent-host.bundle.cjs');
+  const host = app.isPackaged ? packagedHost : developmentHost;
+  if (!fs.existsSync(host)) throw new Error(`WSL Agent runtime host is missing: ${host}`);
+  return host;
 }
 
 function legacyUserDataRoot(): string {
@@ -817,6 +853,7 @@ if (hasCliCommand) {
     setTimeout(async () => {
       try {
         agent = new Agent(root);
+        activeAgentBackendMode = process.platform === 'win32' && agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows';
         recordStartup('agent-ready');
         automationWake = new AutomationWakeScheduler(root, process.execPath);
         automation = new AutomationManager(agent.config, async (prompt, model) => {
@@ -896,6 +933,7 @@ if (hasCliCommand) {
       BrowserControl.setBackend(null);
       if (browserControlWindow && !browserControlWindow.isDestroyed()) browserControlWindow.destroy();
       if (sidecarProcess) { sidecarProcess.kill(); sidecarProcess = null; }
+      void resetWslAgentClient();
     });
 
     function createTray() {
@@ -912,10 +950,46 @@ if (hasCliCommand) {
       tray.on('double-click', showMainWindow);
     }
 
+    const wslBackendEnabled = (): boolean => process.platform === 'win32' && activeAgentBackendMode === 'wsl';
+    const ensureWslAgentClient = async (): Promise<WslAgentClient | null> => {
+      if (!wslBackendEnabled() || !agent) return null;
+      if (!wslAgentClient) {
+        const distro = agent.config.getStr('agent', 'wsl_distro') || 'Ubuntu-24.04';
+        wslAgentClient = new WslAgentClient(distro, root, ensureWslRuntimeBundle());
+        wslAgentClient.subscribe(event => broadcastAgentWorkEvent(event));
+      }
+      await wslAgentClient.start();
+      return wslAgentClient;
+    };
+
     ipcMain.handle('agent:send', async (_event, message: string, conversationId?: string) => {
       if (!agent) return { tokens: [], error: 'Agent not initialized' };
       try {
         const targetConversation = String(conversationId || agent.activeConversationId || 'default');
+        if (wslBackendEnabled()) {
+          const client = await ensureWslAgentClient();
+          if (!client) return { error: 'WSL Agent backend is enabled but unavailable.' };
+          const result = await client.prompt({
+            message,
+            conversationId: targetConversation,
+            options: {
+              mode: agent.mode,
+              model: agent.model,
+              intelligence: agent.intelligence,
+              inputMode: agent.inputMode,
+              engine: agent.engine,
+            },
+            queueMode: agent.inputMode === 'guide' ? 'steer' : 'followUp',
+            workspace: agent.workspace.current ? {
+              name: agent.workspace.current.name,
+              path: agent.workspace.current.path,
+              isInternal: agent.workspace.current.isInternal,
+              kind: agent.workspace.current.kind,
+            } : null,
+          });
+          if ((agent.activeConversationId || 'default') === targetConversation) agent.setConversation(targetConversation);
+          return result;
+        }
         const kernel = ensureConversationKernel(root);
         if (!kernel) return { tokens: [], error: 'Conversation kernel not initialized' };
         const queueMode = agent.inputMode === 'guide' ? 'steer' : 'followUp';
@@ -1041,7 +1115,22 @@ if (hasCliCommand) {
 
     ipcMain.handle('agent:getState', async (_event, conversationId?: string) => {
       if (!agent) return {};
-      const conversationSnapshot = backendConversationState(conversationId);
+      const wslDistros = availableWslDistros();
+      const targetConversation = stateConversationId(conversationId);
+      let conversationSnapshot = backendConversationState(targetConversation);
+      if (wslBackendEnabled()) {
+        try {
+          const client = await ensureWslAgentClient();
+          if (client) conversationSnapshot = await client.snapshot(targetConversation, agent.workspace.current ? {
+            name: agent.workspace.current.name,
+            path: agent.workspace.current.path,
+            isInternal: agent.workspace.current.isInternal,
+            kind: agent.workspace.current.kind,
+          } : null);
+        } catch (error) {
+          conversationSnapshot = { ...conversationSnapshot, wslBackendError: error instanceof Error ? error.message : String(error) };
+        }
+      }
       return {
         mode: agent.mode,
         model: agent.model,
@@ -1109,6 +1198,13 @@ if (hasCliCommand) {
         closeBehavior: agent.config.getStr('general', 'close_behavior'),
         contextCompression: agent.lastCompression,
         contextWindow: agent.contextWindow(),
+        agentBackend: wslBackendEnabled()
+          ? (wslAgentClient?.status() || { enabled: true, connected: false, distro: agent.config.getStr('agent', 'wsl_distro') || 'Ubuntu-24.04', pid: 0, error: '' })
+          : { enabled: false, connected: true, distro: '', pid: process.pid, error: '' },
+        configuredAgentBackend: agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows',
+        agentBackendRestartRequired: (agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows') !== activeAgentBackendMode,
+        wslAvailable: wslDistros.length > 0,
+        wslDistros,
       };
     });
 
@@ -1119,6 +1215,7 @@ if (hasCliCommand) {
 
     ipcMain.handle('agent:updateConversationPlan', async (_event, plan: Record<string, unknown>, conversationId?: string) => {
       if (!agent) return { items: [] };
+      await resetWslAgentClient();
       return agent.updateConversationPlan(plan as any, conversationId || agent.activeConversationId || 'default');
     });
 
@@ -1217,6 +1314,7 @@ if (hasCliCommand) {
     ipcMain.handle('agent:abortConversation', async (_event, conversationId?: string) => {
       if (!agent) return false;
       const target = String(conversationId || agent.activeConversationId || 'default');
+      if (wslBackendEnabled()) return !!await wslAgentClient?.abort(target);
       return !!conversationKernel?.abort(target);
     });
 
@@ -1224,6 +1322,7 @@ if (hasCliCommand) {
       if (!agent) return { error: 'Agent not initialized' };
       const target = String(conversationId || agent.activeConversationId || 'default');
       try {
+        if (wslBackendEnabled()) await resetWslAgentClient();
         const snapshot = conversationKernel
           ? conversationKernel.rewind(target, messageIndex)
           : agent.rewindConversation(target, messageIndex);
@@ -1237,6 +1336,7 @@ if (hasCliCommand) {
       if (!agent) return null;
       const target = String(conversationId || agent.activeConversationId || 'default');
       conversationKernel?.abort(target);
+      if (wslBackendEnabled()) await resetWslAgentClient();
       return agent.archiveConversation(target);
     });
 
@@ -1422,7 +1522,7 @@ if (hasCliCommand) {
     ipcMain.handle('agent:selectWorkspace', async (_event, id: string) => {
       if (agent) {
         agent.selectWorkspace(id);
-        resetConversationKernel();
+        await resetAgentRuntimes();
         return agent.workspace.current;
       }
       return null;
@@ -1431,7 +1531,7 @@ if (hasCliCommand) {
     ipcMain.handle('agent:createWorkspace', async (_event, name?: string) => {
       if (agent) {
         const created = agent.createInternalWorkspace(name);
-        resetConversationKernel();
+        await resetAgentRuntimes();
         return created;
       }
       return null;
@@ -1440,7 +1540,7 @@ if (hasCliCommand) {
     ipcMain.handle('agent:createExternalWorkspace', async (_event, name: string, dirPath: string) => {
       if (agent) {
         const created = agent.addExternalWorkspace(dirPath);
-        resetConversationKernel();
+        await resetAgentRuntimes();
         return created;
       }
       return null;
@@ -1497,14 +1597,14 @@ if (hasCliCommand) {
           enabled: true,
         },
       });
-      if (result.ok) resetConversationKernel();
+      if (result.ok) await resetAgentRuntimes();
       return result;
     });
 
     ipcMain.handle('agent:deleteWorkspace', async (_event, name: string) => {
       if (agent) {
         const removed = agent.removeWorkspace(name);
-        resetConversationKernel();
+        await resetAgentRuntimes();
         return removed;
       }
       return false;
@@ -1867,6 +1967,25 @@ if (hasCliCommand) {
         win?.hide();
       } else {
         win?.close();
+      }
+    });
+    ipcMain.handle('wsl:backendStatus', async () => {
+      if (!agent) return { enabled: false, connected: false, distro: '', pid: 0, error: 'Agent not initialized' };
+      if (!wslBackendEnabled()) return { enabled: false, connected: false, distro: agent.config.getStr('agent', 'wsl_distro') || 'Ubuntu-24.04', pid: 0, error: '' };
+      try {
+        const client = await ensureWslAgentClient();
+        return client?.status();
+      } catch (error) {
+        return { enabled: true, connected: false, distro: agent.config.getStr('agent', 'wsl_distro') || 'Ubuntu-24.04', pid: 0, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+    ipcMain.handle('wsl:backendTest', async () => {
+      if (!agent) return { ok: false, error: 'Agent not initialized' };
+      try {
+        const client = await ensureWslAgentClient();
+        return { ok: !!client, ...(client?.status() || {}) };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
     });
     ipcMain.handle('app:lifecycleState', () => ({

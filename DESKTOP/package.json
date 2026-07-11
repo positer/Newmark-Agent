@@ -51,6 +51,8 @@
     "release:ui-workspace-conversation-isolation-smoke": "node scripts/release-ui-workspace-conversation-isolation-smoke.cjs",
     "release:ui-multi-window-shared-backend-smoke": "node scripts/release-ui-multi-window-shared-backend-smoke.cjs",
     "release:linux-gui-smoke": "node scripts/release-linux-gui-smoke.cjs",
+    "release:linux-unpacked-zip-smoke": "node scripts/release-linux-unpacked-zip-smoke.cjs",
+    "release:linux-deb-smoke": "node scripts/release-linux-deb-smoke.cjs",
     "release:linux-real-provider-smoke": "node scripts/release-linux-real-provider-smoke.cjs",
     "release:ui-startup-recovery-smoke": "node scripts/release-ui-startup-recovery-smoke.cjs",
     "release:ui-tray-lifecycle-smoke": "node scripts/release-ui-tray-lifecycle-smoke.cjs",

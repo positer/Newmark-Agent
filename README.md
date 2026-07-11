@@ -225,7 +225,7 @@ npm.cmd run release:real-provider-stress
 
 ## dev-0.0.5 Notes
 
-The dev-0.0.5 source line adds application-lifetime tray continuity, independent minimize-to-tray and close behavior, inline subdued-gray editor predictions accepted with `Tab`, context-window-aware compaction and broader OpenAI/Anthropic response normalization, stricter same-workspace conversation isolation, native editor/Markdown improvements, and the current SSH/remote-workspace follow-up work. Windows validation passed 948 source assertions, packaged tray/editor/conversation/media/startup smokes, real APInebula CLI/UI requests, and a real `GitHub Copilot/openai/gpt-4.1` editor prediction accepted with `Tab` and persisted to disk. The same unpacked build was then installed into Program Files through an uninstall/reinstall cycle; Windows registered only `0.0.5.0`, the installed `app.asar` matched the tested unpacked hash, mutable settings wrote only to `~/.Newmark`, and Program Files tray/Copilot tests passed. Linux dev-0.0.5 artifacts remain to be rebuilt before publication.
+The dev-0.0.5 source line adds application-lifetime tray continuity, independent minimize-to-tray and close behavior, inline subdued-gray editor predictions accepted with `Tab`, context-window-aware compaction and broader OpenAI/Anthropic response normalization, stricter same-workspace conversation isolation, native editor/Markdown improvements, and the current SSH/remote-workspace follow-up work. Windows validation passed 948 source assertions, packaged tray/editor/conversation/media/startup smokes, real APInebula CLI/UI requests, and a real `GitHub Copilot/openai/gpt-4.1` editor prediction accepted with `Tab` and persisted to disk. The same unpacked build was then installed into Program Files through an uninstall/reinstall cycle; Windows registered only `0.0.5.0`, the installed `app.asar` matched the tested unpacked hash, mutable settings wrote only to `~/.Newmark`, and Program Files tray/Copilot tests passed. Linux validation passed 936 native assertions, WSLg GUI startup from the build directory, GUI startup after extracting the `linux-unpacked` upgrade zip, and GUI startup from the extracted deb installation layout. The AppImage is the direct-run package, the deb is the system installer, and the unpacked zip supports no-loss replacement while preserving mutable state under `~/.Newmark`.
 
 Current dev-0.0.5 Windows artifact SHA256 values:
 
@@ -233,6 +233,9 @@ Current dev-0.0.5 Windows artifact SHA256 values:
 - `Newmark-Agent-0.0.5-win-unpacked-x64.zip`: `E19C649D85D73567947BB160A245C46D0669C458882251D4809FDEB4E706EECC`
 - `release/win-unpacked/resources/app.asar`: `334C4AF6137EA340F9AD5B1391882A746077BED5816D3649B1640552C0EFA573`
 - `release/win-unpacked/Newmark Agent.exe`: `34C85FCADD492A587D13343568D5D0C111B217E325D5F5E4C9B1DF13BBCDDE23`
+- `Newmark-Agent-0.0.5-x86_64.AppImage`: `30359DF4EC0C860A900FC8B811DDC1D0E750D2AA35823B7775D1249297A0A5B5`
+- `Newmark-Agent-0.0.5-amd64.deb`: `6467255870F5CAAB7AB9D0B318560B67999507BBDA8DA4680F8384A5DC57E7B4`
+- `Newmark-Agent-0.0.5-linux-unpacked-x64.zip`: `FDEF9732F9D774BA70B5F2566D623B55A8BD47BA5E9A0FF0755632EC00267914`
 
 ## dev-0.0.4 Published Notes
 

@@ -106,6 +106,7 @@ async function verifyTitlebarIcon(cdp) {
         missing: false,
         iconSrc: icon.getAttribute('src'),
         resolvedSrc: icon.currentSrc || icon.src,
+        systemDark: matchMedia('(prefers-color-scheme: dark)').matches,
         complete: icon.complete,
         naturalWidth: icon.naturalWidth,
         naturalHeight: icon.naturalHeight,
@@ -125,7 +126,9 @@ async function verifyTitlebarIcon(cdp) {
   });
   const state = result.result && result.result.value;
   if (!state || state.missing) fail(`titlebar app icon missing in packaged renderer: ${JSON.stringify(state)}`);
-  if (!String(state.iconSrc || '').includes('app-icon-dark.png')) fail(`titlebar app icon src mismatch: ${JSON.stringify(state)}`);
+  if (!String(state.iconSrc || '').includes('app-icon-light.png')) fail(`titlebar app icon base src mismatch: ${JSON.stringify(state)}`);
+  const expectedResolved = state.systemDark ? 'app-icon-light.png' : 'app-icon-dark.png';
+  if (!String(state.resolvedSrc || '').includes(expectedResolved)) fail(`titlebar system-theme icon mismatch: ${JSON.stringify(state)}`);
   if (!state.complete || state.naturalWidth < 16 || state.naturalHeight < 16) fail(`titlebar app icon did not decode: ${JSON.stringify(state)}`);
   if (state.width < 20 || state.height < 20 || state.logoWidth < 24 || state.logoHeight < 24) fail(`titlebar app icon layout too small: ${JSON.stringify(state)}`);
   if (state.borderAnimationName !== 'marquee-rotate') fail(`titlebar animated border missing shared marquee animation: ${JSON.stringify(state)}`);

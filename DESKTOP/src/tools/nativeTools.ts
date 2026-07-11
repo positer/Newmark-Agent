@@ -27,6 +27,7 @@ export const NATIVE_TOOL_CATALOG: NativeToolCatalogEntry[] = [
   { name: 'browser_reload', label: 'Browser reload', description: 'Reload the built-in browser.', category: 'browser', defaultEnabled: true },
   { name: 'browser_cdp', label: 'Browser CDP', description: 'Run an advanced Chrome DevTools Protocol command.', category: 'browser', defaultEnabled: true },
   { name: 'computer_use', label: 'Computer Use', description: 'Observe and control Windows desktop UI with screenshots and semantic objects.', category: 'desktop', defaultEnabled: true },
+  { name: 'image_inspect', label: 'Image inspect', description: 'Crop and magnify images submitted in the current conversation for closer visual inspection.', category: 'core', defaultEnabled: true },
   { name: 'terminal_takeover', label: 'Terminal takeover', description: 'Maintain a persistent Agent-controlled shell session.', category: 'desktop', defaultEnabled: true },
   { name: 'ssh_workspace', label: 'OpenSSH workspace', description: 'Manage native OpenSSH connections and link remote workspaces by PC_Hash.', category: 'ssh', defaultEnabled: true },
   { name: 'task', label: 'Subagent task', description: 'Create a constrained subagent for parallel work.', category: 'agent', defaultEnabled: true },

@@ -276,12 +276,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   display: block;
   width: 22px;
   height: 22px;
-  border-radius: 6px;
-  object-fit: cover;
-}
-
-[data-theme="light"] #title-app-icon {
-  content: url("../../assets/app-icon-light.png");
+  object-fit: contain;
 }
 
 .top-btn {
@@ -1026,6 +1021,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 /* Editor panel */
 .editor-toolbar {
   display: flex;
+  align-items: center;
   gap: 6px;
   padding: 4px 0 8px;
   border-bottom: 1px solid var(--glass-border-1);
@@ -1034,7 +1030,10 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 .editor-toolbar .et-btn {
-  padding: 3px 10px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--glass-bg-1);
@@ -1042,10 +1041,18 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   font-size: 11px;
   font-family: var(--font-ui);
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  overflow: hidden;
+  line-height: 1;
   transition: background var(--duration-fast) var(--ease-out-expo);
 }
 
 .et-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-bright); }
+.et-btn.active { background:rgba(91,120,255,.16); color:var(--accent2); border-color:rgba(91,120,255,.55); }
+.et-btn .nm-icon { width:15px; height:15px; }
 .et-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .et-btn.primary:hover { filter: brightness(1.1); }
 
@@ -1055,7 +1062,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .editor-code-wrap { position:relative; min-width:0; min-height:0; overflow:hidden; }
 .editor-highlight, .editor-ghost, .editor-textarea { position:absolute; inset:0; margin:0; padding:10px 12px; border:0; overflow:auto; white-space:pre; tab-size:2; font:12px/1.55 var(--font-mono); }
 .editor-highlight { pointer-events:none; color:var(--text); background:transparent; }
-.editor-ghost { pointer-events:none; z-index:1; color:transparent; background:transparent; }
+.editor-ghost { pointer-events:none; z-index:1; color:var(--text); background:#0b0d14; }
 .editor-ghost-text { color:rgba(205,211,222,.48); -webkit-text-fill-color:rgba(205,211,222,.48); }
 .editor-textarea { z-index:2; width:100%; height:100%; resize:none; outline:none; background:transparent; color:transparent; caret-color:#fff; -webkit-text-fill-color:transparent; }
 .editor-textarea::selection { background:rgba(91,120,255,.35); }
@@ -1068,8 +1075,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .editor-assist.open { display:block; }
 #editor-md-preview { display:none; flex:1; min-height:0; overflow:auto; padding:12px; }
 #editor-md-preview.open { display:block; }
-.editor-view-btn { display:none; }
-.editor-view-btn.visible { display:inline-flex; }
+.editor-toolbar .editor-view-btn { display:none; }
+.editor-toolbar .editor-view-btn.visible { display:inline-flex; }
 
 /* Browser panel */
 .browser-url-bar {
@@ -2081,6 +2088,9 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 .option-btn:hover { background: rgba(91,120,255,0.15); border-color: var(--accent); color: var(--text-bright); }
 .option-btn:active { transform: scale(0.96) translateZ(0); }
+.option-btn.selected { background:rgba(91,120,255,.24); border-color:var(--accent); color:var(--text-bright); }
+.option-btn:disabled { cursor:default; opacity:.55; }
+.option-btn.selected:disabled { opacity:1; }
 .option-desc {
   display: block;
   margin-top: 2px;
@@ -2406,7 +2416,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text);
-  font-size: 11px;
+  font-size: 0;
 }
 .prompt-attachment-remove {
   position: absolute;
@@ -2432,7 +2442,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   align-items: center;
   min-width: 0;
   width: 100%;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .tool-select {
@@ -3689,7 +3699,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   <div id="topbar">
     <span class="title" id="title-text">
       <span class="logo" id="title-app-logo">
-        <img id="title-app-icon" src="../../assets/app-icon-dark.png" alt="" aria-hidden="true">
+        <img id="title-app-icon" src="../../assets/app-icon-light.png" alt="" aria-hidden="true">
       </span>
       Newmark Agent
     </span>
@@ -3885,13 +3895,11 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
         </div>
         <div class="tab-panel" id="panel-editor">
           <div class="editor-toolbar">
-            <button class="et-btn icon-label-btn" onclick="window.saveEditor()" title="Save"><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#save"></use></svg><span>Save</span></button>
-            <button class="et-btn editor-view-btn" id="editor-md-toggle" onclick="window.toggleEditorMarkdownPreview()" title="Markdown preview"><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#book-open"></use></svg><span>Preview</span></button>
-            <button class="et-btn" onclick="window.toggleEditorVim()" title="Vim mode">Vim</button>
-            <button class="et-btn" id="editor-copilot-toggle" onclick="window.toggleEditorPrediction()" title="Toggle Copilot prediction">Copilot</button>
-            <button class="et-btn" onclick="window.requestEditorAssist()" title="Agent assist">Agent</button>
-            <button class="et-btn icon-label-btn" onclick="window.closeEditor()" title="Close"><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#x"></use></svg><span>Close</span></button>
-            <span style="flex:1;font-size:11px;color:var(--text-dim);text-align:right;" id="editor-filename"></span>
+            <button class="et-btn" onclick="window.saveEditor()" title="Save" aria-label="Save"><svg class="nm-icon" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#save"></use></svg></button>
+            <button class="et-btn editor-view-btn" id="editor-md-toggle" onclick="window.toggleEditorMarkdownPreview()" title="Markdown preview" aria-label="Markdown preview"><svg class="nm-icon" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#book-open"></use></svg></button>
+            <button class="et-btn active" id="editor-copilot-toggle" onclick="window.toggleEditorPrediction()" title="Copilot prediction enabled" aria-label="Copilot prediction" aria-pressed="true"><svg class="nm-icon" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#sparkles"></use></svg></button>
+            <button class="et-btn" onclick="window.closeEditor()" title="Close editor" aria-label="Close editor"><svg class="nm-icon" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#x"></use></svg></button>
+            <span style="flex:1;min-width:0;font-size:11px;color:var(--text-dim);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="editor-filename"></span>
           </div>
           <div class="native-editor" id="native-editor">
             <div class="native-editor-main" id="native-editor-main"><pre class="editor-gutter" id="editor-gutter">1</pre><div class="editor-code-wrap"><pre class="editor-highlight" id="editor-highlight"></pre><pre class="editor-ghost" id="editor-ghost" aria-hidden="true"></pre><textarea class="editor-textarea" id="editor-textarea" spellcheck="false" placeholder="Open a file to edit..."></textarea><div class="editor-completion" id="editor-completion"></div></div></div>
@@ -4007,7 +4015,9 @@ var state = {
   editorPreview: false,
   editorCompletionText: '',
   editorCompletionRequest: 0,
-  editorPredictionEnabled: false,
+  editorCompletionAnchor: null,
+  editorCaretSignature: '',
+  editorPredictionEnabled: true,
   editorCompletionTimer: null,
   dialogStyle: 'formal',
   language: 'auto',
@@ -4023,6 +4033,8 @@ var state = {
   subagents: [],
   fileDiffs: [],
   pendingOptions: [],
+  pendingOptionAnswers: {},
+  pendingOptionBatchKey: '',
   promptAttachments: [],
   defaultFlow: '',
   settingsActiveTab: 'general',
@@ -4153,7 +4165,7 @@ var NEWMARK_I18N = {
     'plan.clearDone': 'Clear done',
     'settings.title': 'Settings',
     'settings.general': 'General',
-    'settings.runInWsl': 'Run Agent backend in WSL',
+    'settings.runInWsl': 'Agent runtime environment',
     'settings.runInWslDesc': 'Keeps the Windows UI and native desktop tools local while running the persistent Agent kernel, model calls, shell, and file tools inside WSL.',
     'settings.wslDistro': 'WSL distribution',
     'settings.testWslBackend': 'Test WSL backend',
@@ -4616,7 +4628,7 @@ var NEWMARK_I18N = {
     'plan.clearDone': '清理已完成',
     'settings.title': '设置',
     'settings.general': '通用',
-    'settings.runInWsl': '在 WSL 上运行 Agent 后端',
+    'settings.runInWsl': 'Agent 运行环境',
     'settings.runInWslDesc': 'Windows UI 与桌面原生工具保留在本机，持续 Agent 内核、模型请求、Shell 和文件工具运行在 WSL。',
     'settings.wslDistro': 'WSL 发行版',
     'settings.testWslBackend': '测试 WSL 后端',
@@ -5823,19 +5835,27 @@ function readFileAsDataUrl(file) {
 
 function imageFilesFromDataTransfer(dataTransfer) {
   var out = [];
+  var seen = {};
   if (!dataTransfer) return out;
+  var add = function(file) {
+    if (!isImageFile(file)) return;
+    var key = [file.name || '', file.type || '', file.size || 0, file.lastModified || 0].join('|');
+    if (seen[key]) return;
+    seen[key] = true;
+    out.push(file);
+  };
   var items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
   for (var i = 0; i < items.length; i++) {
     var item = items[i];
     if (item && item.kind === 'file' && /^image\//i.test(String(item.type || ''))) {
       var file = null;
       try { file = item.getAsFile ? item.getAsFile() : null; } catch(e) {}
-      if (file && out.indexOf(file) < 0) out.push(file);
+      add(file);
     }
   }
   var files = dataTransfer.files ? Array.from(dataTransfer.files) : [];
   for (var j = 0; j < files.length; j++) {
-    if (isImageFile(files[j]) && out.indexOf(files[j]) < 0) out.push(files[j]);
+    add(files[j]);
   }
   return out;
 }
@@ -5863,6 +5883,7 @@ window.removePromptAttachment = function(index) {
 function addPromptImageAttachment(file, dataUrl) {
   if (!dataUrl || !/^data:image\//i.test(dataUrl)) return;
   if (!state.promptAttachments) state.promptAttachments = [];
+  if (state.promptAttachments.some(function(item) { return item.dataUrl === dataUrl; })) return;
   var max = 6;
   if (state.promptAttachments.length >= max) state.promptAttachments.shift();
   var name = (file && file.name) || ('pasted-image-' + (state.promptAttachments.length + 1) + '.png');
@@ -5902,6 +5923,15 @@ function composePromptTextForSend(text) {
   var images = attachments.map(markdownForPromptAttachment).filter(Boolean).join('\n');
   if (!images) return base;
   return (base ? base + '\n\n' : '') + images;
+}
+
+function composePromptRequestForSend(text) {
+  var attachments = state.promptAttachments || [];
+  if (!attachments.length) return String(text || '').trim();
+  return {
+    text: String(text || '').trim(),
+    images: attachments.map(function(item) { return { dataUrl: item.dataUrl, name: item.name, type: item.type }; })
+  };
 }
 
 function clearPromptAttachments() {
@@ -6384,14 +6414,19 @@ function optionDescription(option) {
   return option.description || option.desc || '';
 }
 
-function addOptionBlock(question, options) {
+function optionQuestionKey(question, options, index) {
+  return JSON.stringify({ index: index, question: question || '', options: (options || []).map(optionLabel) });
+}
+
+function addOptionBlock(question, options, questionKey) {
   var div = document.createElement('div');
   div.className = 'chat-msg assistant';
+  div.setAttribute('data-option-question', encodeURIComponent(questionKey));
   var html = '<div class="option-block"><div class="option-question">' + esc(question) + '</div>';
   for (var i = 0; i < options.length; i++) {
     var label = optionLabel(options[i]);
     var desc = optionDescription(options[i]);
-    html += '<button class="option-btn" onclick="window.optionSelected(' + JSON.stringify(label).replace(/</g, '\\u003c') + ')">' +
+    html += '<button class="option-btn" data-option-question-key="' + escAttr(encodeURIComponent(questionKey)) + '" data-option-label="' + escAttr(label) + '" onclick="window.optionSelected(decodeURIComponent(this.dataset.optionQuestionKey),this.dataset.optionLabel,this)">' +
       esc(label) + (desc ? '<span class="option-desc">' + esc(desc) + '</span>' : '') + '</button>';
   }
   html += '</div>';
@@ -6403,22 +6438,46 @@ function addOptionBlock(question, options) {
 function renderPendingOptionsInChat(options) {
   options = options || [];
   if (!options.length) return;
+  var batchKey = JSON.stringify(options.map(function(q, index) { return optionQuestionKey(q.question || q.id || '', q.options || [], index); }));
+  if (state.pendingOptionBatchKey !== batchKey) {
+    state.pendingOptionBatchKey = batchKey;
+    state.pendingOptionAnswers = {};
+  }
   for (var i = 0; i < options.length; i++) {
     var q = options[i] || {};
-    var key = JSON.stringify({
-      question: q.question || q.id || '',
-      options: (q.options || []).map(optionLabel),
-    });
+    var key = optionQuestionKey(q.question || q.id || '', q.options || [], i);
     if (!state.renderedOptionKeys) state.renderedOptionKeys = {};
     if (state.renderedOptionKeys[key]) continue;
     state.renderedOptionKeys[key] = true;
-    addOptionBlock(q.question || q.id || t('status.question'), q.options || []);
+    addOptionBlock(q.question || q.id || t('status.question'), q.options || [], key);
   }
 }
 
-window.optionSelected = function(opt) {
-  addMsg('user', opt, 'option', '');
-  console.log('[UI] Option selected:', opt);
+window.optionSelected = function(questionKey, opt, button) {
+  if (!questionKey || state.pendingOptionAnswers[questionKey] !== undefined) return;
+  state.pendingOptionAnswers[questionKey] = opt;
+  var block = button && button.closest ? button.closest('[data-option-question]') : null;
+  if (block) {
+    Array.from(block.querySelectorAll('.option-btn')).forEach(function(candidate) {
+      candidate.disabled = true;
+      candidate.classList.toggle('selected', candidate === button);
+    });
+  }
+  var questions = state.pendingOptions || [];
+  var answered = questions.map(function(q, index) {
+    var key = optionQuestionKey(q.question || q.id || '', q.options || [], index);
+    return { question: q.question || q.id || t('status.question'), answer: state.pendingOptionAnswers[key] };
+  });
+  if (answered.some(function(item) { return item.answer === undefined; })) return;
+  var feedback = answered.map(function(item, index) { return (index + 1) + '. ' + item.question + '\nAnswer: ' + item.answer; }).join('\n\n');
+  state.pendingOptions = [];
+  state.pendingOptionAnswers = {};
+  state.pendingOptionBatchKey = '';
+  if (els.prompt) {
+    els.prompt.value = feedback;
+    els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  window.sendMessage();
 };
 
 // === Working State ===
@@ -6749,6 +6808,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   var rawText = typeof queuedText === 'string' ? queuedText.trim() : els.prompt.value.trim();
   var includePromptAttachments = typeof queuedText !== 'string' && !opts.fromQueue;
   var text = includePromptAttachments ? composePromptTextForSend(rawText) : rawText;
+  var requestMessage = includePromptAttachments ? composePromptRequestForSend(rawText) : rawText;
   if (!text) return;
 
   var lockedConversationId = activeConversationId();
@@ -6761,7 +6821,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     updateSubmitButtonState();
     if (api.setInputMode) await api.setInputMode('guide').catch(function(){});
     addMsg('user', text, 'guide', state.model);
-    api.sendMessage(text, lockedConversationId).then(function(r) {
+    api.sendMessage(requestMessage, lockedConversationId).then(function(r) {
       if (r && r.queued) {
         state.backendQueue = r.queued;
         if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
@@ -6806,7 +6866,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   addMsg('user', text, opts.fromQueue ? 'next-build' : state.mode, state.model);
   var responseMsg = null;
   try {
-    var r = await api.sendMessage(text, lockedConversationId);
+    var r = await api.sendMessage(requestMessage, lockedConversationId);
     var stillActive = isActiveConversationId(lockedConversationId);
     var lockedUi = conversationWorkUiState(lockedConversationId);
     if (stillActive) {
@@ -8032,8 +8092,9 @@ function renderGeneralSettings() {
   var wslOptions = (state.wslDistros || []).map(function(name) { return '<option value="' + escAttr(name) + '"' + ((state.agentBackend && state.agentBackend.distro) === name ? ' selected' : '') + '>' + esc(name) + '</option>'; }).join('');
   var wslHtml = state.platform === 'win32' ? '<div class="setting-row">' +
     '<span class="setting-label">' + esc(t('settings.runInWsl')) + '</span>' +
-    '<div class="setting-control"><div class="segmented-control"><button class="segment' + (state.configuredAgentBackend !== 'wsl' ? ' active' : '') + '" onclick="window.setAgentBackendMode(\'windows\')">' + esc(t('settings.windowsNative')) + '</button>' +
-    '<button class="segment' + (state.configuredAgentBackend === 'wsl' ? ' active' : '') + '"' + (state.wslAvailable ? '' : ' disabled') + ' onclick="window.setAgentBackendMode(\'wsl\')">' + esc(t('settings.wslBased')) + '</button></div>' +
+    '<div class="setting-control"><select id="agent-runtime-environment" onchange="window.setAgentBackendMode(this.value)">' +
+    '<option value="windows"' + (state.configuredAgentBackend !== 'wsl' ? ' selected' : '') + '>' + esc(t('settings.windowsNative')) + '</option>' +
+    '<option value="wsl"' + (state.configuredAgentBackend === 'wsl' ? ' selected' : '') + (state.wslAvailable ? '' : ' disabled') + '>' + esc(t('settings.wslBased')) + '</option></select>' +
     '<div class="setting-desc">' + esc(t('settings.runInWslDesc')) + '</div>' +
     (!state.wslAvailable ? '<div class="setting-desc warning">' + esc(t('settings.wslRequired')) + '</div>' : '') +
     (state.agentBackendRestartRequired ? '<div class="setting-desc warning">' + esc(t('settings.restartRequired')) + '</div>' : '') + '</div></div>' +
@@ -8408,6 +8469,15 @@ window.setAutoSwitchMode = function(v) {
   api.saveConfig({ autoSwitch: state.autoSwitch, autoSwitchScope: state.autoSwitchScope });
   window.refreshModelSelect();
 };
+
+var systemColorScheme = window.matchMedia('(prefers-color-scheme: dark)');
+window.refreshTitlebarSystemIcon = function() {
+  var icon = document.getElementById('title-app-icon');
+  if (icon) icon.src = systemColorScheme.matches ? '../../assets/app-icon-light.png' : '../../assets/app-icon-dark.png';
+};
+if (systemColorScheme.addEventListener) systemColorScheme.addEventListener('change', window.refreshTitlebarSystemIcon);
+else if (systemColorScheme.addListener) systemColorScheme.addListener(window.refreshTitlebarSystemIcon);
+window.refreshTitlebarSystemIcon();
 
 window.setAgentBackendMode = async function(mode) {
   var next = mode === 'wsl' ? 'wsl' : 'windows';
@@ -9506,12 +9576,22 @@ window.highlightEditorCode = function(code, language) {
   if (language === 'markdown') {
     return text.replace(/^(#{1,6} .+)$/gm, '<span class="tok-heading">$1</span>').replace(/(`[^`\n]+`)/g, '<span class="tok-code">$1</span>').replace(/(^|\s)(https?:\/\/[^\s<]+)/g, '$1<span class="tok-string">$2</span>');
   }
-  text = text.replace(/(&quot;|&#39;|`)(?:\\.|(?!\1)[\s\S])*?\1/g, '<span class="tok-string">$&</span>');
-  text = text.replace(/(^|\s)(\/\/.*$|#.*$)/gm, '$1<span class="tok-comment">$2</span>');
-  text = text.replace(/\b(0x[\da-f]+|\d+(?:\.\d+)?)\b/gi, '<span class="tok-number">$1</span>');
-  text = text.replace(/\b(const|let|var|function|class|interface|type|enum|import|export|from|return|if|else|for|while|switch|case|break|continue|try|catch|finally|throw|async|await|new|this|extends|implements|public|private|protected|static|def|lambda|yield|with|as|match|struct|fn|impl|trait|package|using|namespace|SELECT|FROM|WHERE|JOIN|INSERT|UPDATE|DELETE|CREATE|ALTER)\b/g, '<span class="tok-keyword">$1</span>');
-  text = text.replace(/\b(string|number|boolean|void|unknown|any|null|undefined|int|float|double|char|bool|usize|i32|u32|Promise|Record|Array)\b/g, '<span class="tok-type">$1</span>');
-  if (language === 'html' || language === 'xml' || language === 'vue' || language === 'svelte') text = text.replace(/(&lt;\/?)([\w-]+)/g, '$1<span class="tok-tag">$2</span>');
+  var protectedTokens = [];
+  var protect = function(value, kind) {
+    var index = protectedTokens.length;
+    protectedTokens.push('<span class="tok-' + kind + '">' + value + '</span>');
+    return String.fromCharCode(0xE100 + index);
+  };
+  text = text.replace(/(&quot;|&#39;|`)(?:\\.|(?!\1)[\s\S])*?\1/g, function(value) { return protect(value, 'string'); });
+  text = text.replace(/(^|\s)(\/\/.*$|#.*$)/gm, function(_, prefix, value) { return prefix + protect(value, 'comment'); });
+  text = text.replace(/\b(0x[\da-f]+|\d+(?:\.\d+)?)\b/gi, function(value) { return protect(value, 'number'); });
+  text = text.replace(/\b(const|let|var|function|class|interface|type|enum|import|export|from|return|if|else|for|while|switch|case|break|continue|try|catch|finally|throw|async|await|new|this|extends|implements|public|private|protected|static|def|lambda|yield|with|as|match|struct|fn|impl|trait|package|using|namespace|SELECT|FROM|WHERE|JOIN|INSERT|UPDATE|DELETE|CREATE|ALTER)\b/g, function(value) { return protect(value, 'keyword'); });
+  text = text.replace(/\b(string|number|boolean|void|unknown|any|null|undefined|int|float|double|char|bool|usize|i32|u32|Promise|Record|Array)\b/g, function(value) { return protect(value, 'type'); });
+  if (language === 'html' || language === 'xml' || language === 'vue' || language === 'svelte') text = text.replace(/(&lt;\/?)([\w-]+)/g, function(_, prefix, value) { return prefix + protect(value, 'tag'); });
+  text = text.replace(/[\uE100-\uE1FF]/g, function(marker) {
+    var index = marker.charCodeAt(0) - 0xE100;
+    return protectedTokens[index] || '';
+  });
   return text;
 };
 
@@ -9535,9 +9615,15 @@ window.renderEditorGhostText = function() {
   var ta = els['editor-textarea'];
   var ghost = els['editor-ghost'];
   if (!ta || !ghost) return;
-  if (!state.editorCompletionText) { ghost.textContent = ''; return; }
-  var pos = ta.selectionStart || 0;
-  ghost.innerHTML = esc(ta.value.slice(0, pos)) + '<span class="editor-ghost-text">' + esc(state.editorCompletionText) + '</span>' + esc(ta.value.slice(pos)) + '\n';
+  if (!state.editorCompletionText || !window.editorCompletionAnchorIsCurrent()) { ghost.textContent = ''; return; }
+  var pos = state.editorCompletionAnchor.start;
+  var language = window.editorLanguageForPath(state.editorPath);
+  var startMarker = '\uE010';
+  var endMarker = '\uE011';
+  var combined = ta.value.slice(0, pos) + startMarker + state.editorCompletionText + endMarker + ta.value.slice(pos);
+  ghost.innerHTML = window.highlightEditorCode(combined, language)
+    .replace(startMarker, '<span class="editor-ghost-text">')
+    .replace(endMarker, '</span>') + '\n';
   ghost.scrollTop = ta.scrollTop;
   ghost.scrollLeft = ta.scrollLeft;
 };
@@ -9587,9 +9673,12 @@ window.requestEditorCompletion = async function() {
   var ta = els['editor-textarea']; if (!ta || !state.editorPath || !api.editorComplete) return;
   var requestId = ++state.editorCompletionRequest;
   var pos = ta.selectionStart;
+  var anchor = { path: state.editorPath, value: ta.value, start: pos, end: ta.selectionEnd };
+  state.editorCompletionAnchor = anchor;
   if (els['editor-completion']) { els['editor-completion'].textContent = 'Predicting...'; els['editor-completion'].classList.add('open'); }
   var result = await api.editorComplete({ path: state.editorPath, before: ta.value.slice(0, pos), after: ta.value.slice(pos) });
   if (requestId !== state.editorCompletionRequest) return;
+  if (!window.editorAnchorMatches(anchor)) { window.dismissEditorCompletion(); window.scheduleEditorCompletion(); return; }
   state.editorCompletionText = result && result.ok ? String(result.text || '') : '';
   window.renderEditorGhostText();
   if (els['editor-completion']) {
@@ -9601,7 +9690,11 @@ window.requestEditorCompletion = async function() {
 window.toggleEditorPrediction = function() {
   state.editorPredictionEnabled = !state.editorPredictionEnabled;
   var button = document.getElementById('editor-copilot-toggle');
-  if (button) button.classList.toggle('active', state.editorPredictionEnabled);
+  if (button) {
+    button.classList.toggle('active', state.editorPredictionEnabled);
+    button.setAttribute('aria-pressed', state.editorPredictionEnabled ? 'true' : 'false');
+    button.title = state.editorPredictionEnabled ? 'Copilot prediction enabled' : 'Copilot prediction disabled';
+  }
   if (!state.editorPredictionEnabled) {
     if (state.editorCompletionTimer) clearTimeout(state.editorCompletionTimer);
     state.editorCompletionTimer = null;
@@ -9619,11 +9712,34 @@ window.scheduleEditorCompletion = function() {
   state.editorCompletionTimer = setTimeout(function() {
     state.editorCompletionTimer = null;
     window.requestEditorCompletion();
-  }, 700);
+  }, 500);
 };
 
-window.acceptEditorCompletion = function() { if (state.editorCompletionText) window.editorReplaceSelection(state.editorCompletionText); window.dismissEditorCompletion(); };
-window.dismissEditorCompletion = function() { state.editorCompletionText = ''; state.editorCompletionRequest++; if (els['editor-completion']) els['editor-completion'].classList.remove('open'); window.renderEditorGhostText(); };
+window.editorCaretSignature = function() {
+  var ta = els['editor-textarea'];
+  return ta ? [state.editorPath, ta.selectionStart, ta.selectionEnd, ta.value.length].join(':') : '';
+};
+
+window.editorAnchorMatches = function(anchor) {
+  var ta = els['editor-textarea'];
+  return !!(ta && anchor && anchor.path === state.editorPath && anchor.value === ta.value && anchor.start === ta.selectionStart && anchor.end === ta.selectionEnd);
+};
+
+window.editorCompletionAnchorIsCurrent = function() { return window.editorAnchorMatches(state.editorCompletionAnchor); };
+
+window.handleEditorCaretChange = function() {
+  var signature = window.editorCaretSignature();
+  if (signature === state.editorCaretSignature) return;
+  state.editorCaretSignature = signature;
+  window.renderNativeEditor();
+  window.scheduleEditorCompletion();
+};
+
+window.acceptEditorCompletion = function() {
+  if (state.editorCompletionText && window.editorCompletionAnchorIsCurrent()) window.editorReplaceSelection(state.editorCompletionText);
+  window.dismissEditorCompletion();
+};
+window.dismissEditorCompletion = function() { state.editorCompletionText = ''; state.editorCompletionAnchor = null; state.editorCompletionRequest++; if (els['editor-completion']) els['editor-completion'].classList.remove('open'); window.renderEditorGhostText(); };
 
 window.requestEditorAssist = async function() {
   var ta = els['editor-textarea']; if (!ta || !state.editorPath || !api.editorAssist) return;
@@ -9673,6 +9789,7 @@ window.openFile = async function(path) {
     state.editorOriginal = content; state.editorUndo = []; state.editorRedo = []; state.editorPreview = false;
     window.editorSetValue(content, true);
     if (els['editor-md-toggle']) els['editor-md-toggle'].classList.toggle('visible', window.editorLanguageForPath(path) === 'markdown');
+    window.scheduleEditorCompletion();
   } catch(e) {
     window.switchRightTab('editor');
     els['editor-filename'].textContent = path;
@@ -11708,8 +11825,9 @@ function stopMarqueeJS() {
   if (els['editor-textarea']) {
     els['editor-textarea'].addEventListener('input', function() { window.renderNativeEditor(); window.scheduleEditorCompletion(); });
     els['editor-textarea'].addEventListener('scroll', window.syncNativeEditorScroll);
-    els['editor-textarea'].addEventListener('click', window.renderNativeEditor);
-    els['editor-textarea'].addEventListener('keyup', window.renderNativeEditor);
+    els['editor-textarea'].addEventListener('click', window.handleEditorCaretChange);
+    els['editor-textarea'].addEventListener('select', window.handleEditorCaretChange);
+    els['editor-textarea'].addEventListener('keyup', window.handleEditorCaretChange);
     els['editor-textarea'].addEventListener('keydown', function(e) {
       if (state.editorCompletionText && e.key === 'Tab') { e.preventDefault(); window.acceptEditorCompletion(); return; }
       if (e.key === 'Escape' && (state.editorCompletionText || (els['editor-completion'] && els['editor-completion'].classList.contains('open')))) { e.preventDefault(); window.dismissEditorCompletion(); return; }

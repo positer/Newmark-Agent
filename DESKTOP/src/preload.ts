@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
-  sendMessage: (message: string, conversationId?: string) => ipcRenderer.invoke('agent:send', message, conversationId),
+  sendMessage: (message: string | Record<string, unknown>, conversationId?: string) => ipcRenderer.invoke('agent:send', message, conversationId),
   sendPrompt: (message: string, _model?: string) => ipcRenderer.invoke('agent:sendPrompt', message),
   setMode: (mode: string) => ipcRenderer.invoke('agent:setMode', mode),
   setModel: (model: string) => ipcRenderer.invoke('agent:setModel', model),

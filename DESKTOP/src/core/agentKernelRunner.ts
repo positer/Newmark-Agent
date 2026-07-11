@@ -420,9 +420,11 @@ function toKernelTools(agent: Agent, definitions?: unknown[]): KernelTool[] {
         const args = JSON.stringify(params || {});
         const rawText = await executeNewmarkTool(agent, name, args);
         const visionImagePath = computerUseVisionImagePath(agent, name, rawText);
-        const text = sanitizeComputerUseToolText(name, rawText);
+        const directImage = imageInspectDataUrl(name, rawText);
+        const text = sanitizeVisualToolText(name, rawText);
         const content: Array<KernelTextContent | KernelImageContent> = [{ type: 'text', text }];
         if (visionImagePath) content.push({ type: 'image', imagePath: visionImagePath, mimeType: 'image/png' });
+        if (directImage) content.push({ type: 'image', image: directImage, mimeType: 'image/png' });
         const terminate = shouldTerminateAfterToolResult(name);
         return { content, details: { tool: name, ok: !text.startsWith('[Error]'), terminate, visionImagePath: visionImagePath || undefined }, terminate };
       },
@@ -430,14 +432,26 @@ function toKernelTools(agent: Agent, definitions?: unknown[]): KernelTool[] {
   }).filter((tool: KernelTool) => !!tool.name);
 }
 
-function sanitizeComputerUseToolText(name: string, text: string): string {
-  if (name !== 'computer_use') return text;
+function sanitizeVisualToolText(name: string, text: string): string {
+  if (name !== 'computer_use' && name !== 'image_inspect') return text;
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
-    delete parsed.vision_image_path;
+    if (name === 'computer_use') delete parsed.vision_image_path;
+    if (name === 'image_inspect') delete parsed.image_data_url;
     return JSON.stringify(parsed, null, 2);
   } catch {
     return text;
+  }
+}
+
+function imageInspectDataUrl(name: string, text: string): string {
+  if (name !== 'image_inspect') return '';
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const dataUrl = String(parsed.image_data_url || '');
+    return dataUrl.startsWith('data:image/') ? dataUrl : '';
+  } catch {
+    return '';
   }
 }
 
@@ -475,6 +489,8 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string): Pro
     await agent.handleSkillDownload(args);
     return result;
   }
+  if (name === 'image_generate') return agent.handleImageGeneration(args);
+  if (name === 'image_inspect') return agent.handleImageInspect(args);
   if (name === 'flow_run') return agent.handleFlowRun(args);
   if (name.startsWith('memory_lab_')) return agent.handleMemoryLabTool(name, args);
   if (name.startsWith('automation_')) return agent.handleAutomationTool(name, args);
@@ -506,7 +522,20 @@ function toKernelMessages(agent: Agent): KernelMessage[] {
 function toKernelMessagesFromHistory(history: Array<Record<string, unknown>>, agent: Agent): KernelMessage[] {
   return history.flatMap(msg => {
     const role = String(msg.role || '');
-    if (role === 'user') return [{ role: 'user', content: String(msg.content || ''), timestamp: Date.now() } as KernelMessage];
+    if (role === 'user') {
+      const parts = Array.isArray(msg.content) ? msg.content as Array<Record<string, unknown>> : [];
+      if (!parts.length) return [{ role: 'user', content: String(msg.content || ''), timestamp: Date.now() } as KernelMessage];
+      const content: Array<KernelTextContent | KernelImageContent> = [];
+      for (const part of parts) {
+        if (part.type === 'text') content.push({ type: 'text', text: String(part.text || '') });
+        if (part.type === 'image_url') {
+          const image = part.image_url as Record<string, unknown> | undefined;
+          const url = image && typeof image === 'object' ? String(image.url || '') : '';
+          if (url.startsWith('data:image/')) content.push({ type: 'image', image: url, mimeType: url.slice(5, url.indexOf(';')) || 'image/png' });
+        }
+      }
+      return [{ role: 'user', content, timestamp: Date.now() } as KernelMessage];
+    }
     if (role === 'assistant') {
       const content: KernelContent[] = [];
       const text = String(msg.content || '');
@@ -546,7 +575,15 @@ function fromKernelMessages(messages: KernelMessage[], includeEphemeralImages = 
 }
 
 function toHistoryMessage(message: KernelMessage, includeEphemeralImages = false): Record<string, unknown> {
-  if (message.role === 'user') return { role: 'user', content: typeof message.content === 'string' ? message.content : KernelMessageText(message) };
+  if (message.role === 'user') {
+    if (typeof message.content === 'string') return { role: 'user', content: message.content };
+    const content: Array<Record<string, unknown>> = [];
+    for (const part of message.content as KernelContent[]) {
+      if (part.type === 'text') content.push({ type: 'text', text: part.text });
+      if (part.type === 'image' && typeof part.image === 'string' && part.image.startsWith('data:image/')) content.push({ type: 'image_url', image_url: { url: part.image } });
+    }
+    return { role: 'user', content };
+  }
   if (message.role === 'assistant') {
     const text = KernelMessageText(message);
     const toolCalls = message.content.filter((c): c is KernelToolCall => c.type === 'toolCall').map(tc => ({
@@ -566,7 +603,7 @@ function toHistoryMessage(message: KernelMessage, includeEphemeralImages = false
     role: 'tool',
     tool_call_id: message.toolCallId,
     name: message.toolName,
-    content: imagePart ? [{ type: 'text', text }, imagePart] : directImage && directImage.startsWith('data:image/') ? [{ type: 'text', text }, { type: 'image_url', image_url: { url: directImage } }] : text,
+    content: imagePart ? [{ type: 'text', text }, imagePart] : includeEphemeralImages && directImage && directImage.startsWith('data:image/') ? [{ type: 'text', text }, { type: 'image_url', image_url: { url: directImage } }] : text,
   };
 }
 

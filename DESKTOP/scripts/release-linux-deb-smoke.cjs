@@ -4,7 +4,8 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
-const debPath = path.join(repoRoot, 'release', 'Newmark-Agent-0.0.5-amd64.deb');
+const version = require(path.join(repoRoot, 'DESKTOP', 'package.json')).version;
+const debPath = path.join(repoRoot, 'release', `Newmark-Agent-${version}-amd64.deb`);
 const screenshotPath = path.join(repoRoot, 'archive', '2026-07-11-linux-deb-extract-gui-smoke.png');
 
 function run(command, args, options = {}) {

@@ -1025,4 +1025,21 @@ export class LLMProvider {
       return { ok: false, latency: (Date.now() - start) / 1000, error: error instanceof Error ? error.message.slice(0, 160) : String(error).slice(0, 160) };
     }
   }
+
+  async generateImage(model: string, prompt: string, size = '1024x1024'): Promise<{ dataUrl?: string; url?: string }> {
+    if (this.protocol() !== 'openai') throw new Error('Image generation requires an OpenAI-compatible provider.');
+    const response = await this.postJsonWithFetchFallback(`${this.cleanBaseUrl()}/images/generations`, this.openAIHeaders(), {
+      model,
+      prompt,
+      size,
+      n: 1,
+      response_format: 'b64_json',
+    }, 180000);
+    if (!response.ok) throw new Error(`Image generation failed: HTTP ${response.status}: ${(await response.text()).slice(0, 160)}`);
+    const json = await response.json() as { data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }> };
+    const item = json.data?.[0];
+    if (item?.b64_json) return { dataUrl: `data:image/png;base64,${item.b64_json}` };
+    if (item?.url) return { url: item.url };
+    throw new Error('Image generation response contained no image.');
+  }
 }

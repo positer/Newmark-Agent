@@ -29,15 +29,18 @@ The Electron desktop package directly depends on these npm packages:
 | `glob` | 7.2.3 | ISC |
 | `https-proxy-agent` | 9.1.0 | MIT |
 | `jsdom` | 29.1.1 | MIT |
+| `jpeg-js` | 0.4.4 | BSD-3-Clause |
 | `lucide-static` | 1.21.0 | ISC |
+| `pngjs` | 7.0.0 | MIT |
 | `@types/jsdom` | 28.0.3 | MIT |
 | `@types/node` | 22.19.21 | MIT |
+| `@types/pngjs` | 6.0.5 | MIT |
 | `electron` | 33.4.11 | MIT |
 | `electron-builder` | 25.1.8 | MIT |
 | `oxlint` | 0.9.10 | MIT |
 | `typescript` | 5.9.3 | Apache-2.0 |
 
-The locked npm dependency graph currently contains 479 packages with these
+The locked npm dependency graph currently contains 510 packages with these
 detected license expressions: MIT, ISC, Apache-2.0, BSD-2-Clause,
 BSD-3-Clause, BlueOak-1.0.0, MIT-0, CC0-1.0, Python-2.0, WTFPL,
 `(MIT OR CC0-1.0)`, `(WTFPL OR MIT)`, and `WTFPL OR ISC`.

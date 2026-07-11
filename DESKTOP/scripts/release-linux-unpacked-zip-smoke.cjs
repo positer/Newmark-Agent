@@ -4,7 +4,8 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
-const zipPath = path.join(repoRoot, 'release', 'Newmark-Agent-0.0.5-linux-unpacked-x64.zip');
+const version = require(path.join(repoRoot, 'DESKTOP', 'package.json')).version;
+const zipPath = path.join(repoRoot, 'release', `Newmark-Agent-${version}-linux-unpacked-x64.zip`);
 const screenshotPath = path.join(repoRoot, 'archive', '2026-07-11-linux-unpacked-zip-gui-smoke.png');
 
 function run(command, args, options = {}) {

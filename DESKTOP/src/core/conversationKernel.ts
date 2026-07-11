@@ -3,6 +3,10 @@ import { AgentMode, AgentWorkEvent, OptionQuestion, StreamToken } from './types'
 import { AutomationManager } from './automation';
 
 export type ConversationQueueMode = 'steer' | 'followUp';
+export interface AgentPromptMessage {
+  text: string;
+  images?: Array<{ dataUrl: string; name?: string; type?: string }>;
+}
 
 export interface ConversationKernelRunOptions {
   mode: AgentMode;
@@ -37,7 +41,7 @@ interface ConversationRuntime {
   runner: Agent;
   activePromise: Promise<ConversationKernelRunResult> | null;
   events: AgentWorkEvent[];
-  pendingNextTurn: Array<{ message: string; queueMode: ConversationQueueMode }>;
+  pendingNextTurn: Array<{ message: string | AgentPromptMessage; queueMode: ConversationQueueMode }>;
   queued: { steering: string[]; followUp: string[] };
   unsubscribe?: () => void;
 }
@@ -93,6 +97,18 @@ export class ConversationKernel {
     return this.runtimes.get(this.safeId(conversationId))?.events.slice() || [];
   }
 
+  pendingOptions(conversationId: string): OptionQuestion[] | undefined {
+    const runtime = this.runtimes.get(this.safeId(conversationId));
+    return runtime ? runtime.runner.pendingOptions.map(question => ({
+      ...question,
+      options: question.options.map(option => ({ ...option })),
+    })) : undefined;
+  }
+
+  updateSetting(section: string, key: string, value: unknown): void {
+    for (const runtime of this.runtimes.values()) runtime.runner.config.set(section, key, value);
+  }
+
   abort(conversationId: string): boolean {
     const runtime = this.runtimes.get(this.safeId(conversationId));
     if (!runtime) return false;
@@ -122,7 +138,7 @@ export class ConversationKernel {
   }
 
   async prompt(
-    message: string,
+    message: string | AgentPromptMessage,
     conversationId: string,
     options: ConversationKernelRunOptions,
     queueMode: ConversationQueueMode = 'followUp',
@@ -144,7 +160,7 @@ export class ConversationKernel {
 
   private async run(
     runtime: ConversationRuntime,
-    message: string,
+    message: string | AgentPromptMessage,
     options: ConversationKernelRunOptions,
   ): Promise<ConversationKernelRunResult> {
     this.applyOptions(runtime.runner, options);
@@ -160,8 +176,8 @@ export class ConversationKernel {
     return this.result(runtime, lastTokens);
   }
 
-  private async runSingle(runtime: ConversationRuntime, message: string): Promise<StreamToken[]> {
-    this.consumeQueuedMessage(runtime, message);
+  private async runSingle(runtime: ConversationRuntime, message: string | AgentPromptMessage): Promise<StreamToken[]> {
+    this.consumeQueuedMessage(runtime, typeof message === 'string' ? message : message.text);
     const timeoutMs = this.processTimeoutMs(runtime);
     if (timeoutMs <= 0) return runtime.runner.process(message);
 
@@ -250,9 +266,10 @@ export class ConversationKernel {
     };
   }
 
-  private enqueueSameSession(runtime: ConversationRuntime, message: string, queueMode: ConversationQueueMode): void {
+  private enqueueSameSession(runtime: ConversationRuntime, message: string | AgentPromptMessage, queueMode: ConversationQueueMode): void {
     const isSteer = queueMode === 'steer';
-    const prompt = isSteer ? message : `[Next queued while current turn is running]\n${message}`;
+    const text = typeof message === 'string' ? message : message.text;
+    const prompt = isSteer ? text : `[Next queued while current turn is running]\n${text}`;
     if (!isSteer) this.trackQueuedMessage(runtime, prompt, queueMode);
     const queued = runtime.runner.queueActiveKernelMessage(prompt, queueMode);
     if (!queued) runtime.pendingNextTurn.push({ message: prompt, queueMode });

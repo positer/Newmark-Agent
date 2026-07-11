@@ -1,5 +1,5 @@
 import { AgentWorkEvent } from './types';
-import { ConversationKernelRunOptions, ConversationKernelRunResult, ConversationQueueMode } from './conversationKernel';
+import { AgentPromptMessage, ConversationKernelRunOptions, ConversationKernelRunResult, ConversationQueueMode } from './conversationKernel';
 
 export interface WslAgentWorkspace {
   id?: string;
@@ -10,7 +10,7 @@ export interface WslAgentWorkspace {
 }
 
 export interface WslAgentPromptRequest {
-  message: string;
+  message: string | AgentPromptMessage;
   conversationId: string;
   options: ConversationKernelRunOptions;
   queueMode: ConversationQueueMode;

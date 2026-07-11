@@ -162,13 +162,15 @@ function startMockServer() {
         res.end(JSON.stringify({ content: [] }));
         return;
       }
+      const isVisionProbe = body.includes('RED_SQUARE') && body.includes('image_url') && body.includes('data:image/png;base64,');
+      const currentResponseText = isVisionProbe ? 'RED_SQUARE' : responseText;
       if (parsed.stream) {
         res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' });
-        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: responseText } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: currentResponseText } }] })}\n\n`);
         res.end('data: [DONE]\n\n');
       } else {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ choices: [{ message: { content: responseText } }] }));
+        res.end(JSON.stringify({ choices: [{ message: { content: currentResponseText } }] }));
       }
     });
   });

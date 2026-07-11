@@ -13,9 +13,11 @@
 
 Newmark Agent is a local-first desktop Agent workspace for coding, automation, repository review, model-provider experimentation, and controlled desktop operation. It packages an Electron desktop UI, a TypeScript Agent runtime, workspace-scoped conversations, Flow workflows, subagents, skills, archives, browser/GitHub/automation tools, and configurable OpenAI-compatible, Anthropic-compatible, and GitHub Models providers.
 
-The current source development version is **dev-0.0.6**. The latest published packages remain **dev-0.0.5** until dev-0.0.6 is explicitly released. Newmark is intended for technical users who want an installer-backed desktop Agent app that runs against their own model credentials and keeps mutable runtime state local under `~/.Newmark`. Windows is the primary Computer Use target; Linux GUI, CLI, packaging, and terminal workflows are supported.
+The current source and published development version is **dev-0.0.6**. Newmark is intended for technical users who want an installer-backed desktop Agent app that runs against their own model credentials and keeps mutable runtime state local under `~/.Newmark`. Windows is the primary Computer Use target; Linux GUI, CLI, packaging, and terminal workflows are supported.
 
 WSL Agent backend preview (2026-07-11): Windows settings now provide a restart-required `Windows native / WSL based` Agent backend choice. WSL mode is selectable only when at least one installed distribution is detected, and the chosen distribution is locked at application startup so active conversations are never hot-migrated between runtimes. The Electron UI and executable remain native Windows components; only the Agent backend runs as a persistent JSONL-controlled Linux process, maps Windows workspaces through `/mnt/<drive>`, and keeps configuration, conversations, and archives under the normal `~/.Newmark` user-state root. Packaged validation covers restart activation, real Linux PID reporting, WSL-local provider requests, tool writes into a Windows external workspace, and conversation isolation.
+
+Real-model WSL validation (2026-07-11): the packaged 0.0.6 Windows UI started the Agent under Ubuntu 24.04, reported Linux PID 10, and sent both Chat Completions and Responses requests through the configured APInebula `gpt-5.4-mini` provider. Per-run random markers returned in 4.873 seconds for `chat` and 5.702 seconds for `responses`, and each result persisted under its requested isolated conversation id. The repeatable smokes copy configuration into a temporary root, verify the active API mode in renderer state, and check that provider credentials do not appear in returned content.
 
 Maintenance update (2026-07-11): same-workspace conversations now remain strictly isolated. Conversation-scoped state reads no longer overwrite the requested transcript with the shared backend host transcript, delayed conversation loads are rejected after a switch, and completed runner state is merged directly into its own persisted conversation key. Packaged Windows validation covers rapid switch-back, deliberately out-of-order state responses, multi-window shared-backend operation, and cross-workspace isolation.
 
@@ -39,6 +41,18 @@ Tray lifecycle follow-up (2026-07-11): the desktop tray icon is now created when
 
 Editor prediction follow-up (2026-07-11): model code predictions now render directly at the caret as subdued gray ghost text on the code layer instead of appearing in a detached dark popup. `Tab` accepts the complete candidate into the editor, while `Esc` dismisses it; the request remains bound to the model selected by the current conversation.
 
+Multimodal and interaction hardening (2026-07-11): pasted images now travel as native structured image input through Windows, WSL, OpenAI Chat, Responses, and Anthropic request paths instead of being flattened into Markdown text. Non-validated vision models reject attachments explicitly, while image-output models expose a native `image_generate` tool backed by the provider image-generation endpoint. The editor toolbar is fixed-size and icon-only, Copilot prediction is enabled by default with a 500 ms idle trigger, file-aware highlighting is restored, and duplicate clipboard image events are collapsed. Option questions are conversation-scoped, remain stable across state refreshes, and resume only after every simultaneously displayed question is answered.
+
+Single-instance hardening (2026-07-11): a second launch now restores and focuses the existing main window rather than creating another window. The lock is independent of executable location; validation launched `Newmark Agent.exe` from `release/win-unpacked` and then the same-named installed executable from `Program Files`, confirmed the second process exited, and observed one renderer page and one top-level executable path.
+
+Runtime-layout correction (2026-07-12): Windows settings present **Agent runtime environment** as a normal list with Windows native and WSL choices; the WSL choice remains disabled when no initialized distribution is available. The input toolbar no longer clips the running/send button's hover transform or animated border. The right file tree now defaults to the active workspace rather than the `~/.Newmark` runtime root, preventing internal `Roots` shadow storage and configuration files from appearing as nested workspace content.
+
+Editor placement and completion-anchor correction (2026-07-12): all editor toolbar icons, including Markdown Preview, use a fixed centered 15 px icon registration inside a 30 px button and cannot escape the control box. Inline model predictions are bound to the exact file path, editor content, and selection range that produced them. Clicking, selecting, navigating with the keyboard, or otherwise moving the caret immediately removes the old candidate, cancels stale asynchronous responses, and restarts the 500 ms idle timer at the new position; `Tab` accepts only a candidate whose anchor still matches.
+
+Adaptive application icons (2026-07-12): Newmark now uses the supplied transparent dark and light N marks throughout the desktop shell. Windows and Linux windows, the taskbar application entry, and the persistent tray refresh from the operating-system color scheme at runtime; the custom titlebar listens for system scheme changes independently from the application's UI theme. Startup ordering is regression-tested so tray creation cannot call the native icon refresher before initialization. Windows still embeds one static multi-size dark-mark ICO for Explorer and Task Manager's executable-details view because those shell surfaces do not support runtime light/dark icon selection.
+
+Active visual inspection (2026-07-12): validated vision models now receive an `image_inspect` tool for images submitted in the latest user message. The Agent can query exact source dimensions, select an image by 1-based index, crop a source-pixel rectangle, and magnify it by 1-4x while keeping output within 2048 pixels per side. PNG and JPEG decoding, bounds checks, and bilinear RGBA scaling run identically in Windows, Linux, and the WSL Agent backend. Derived crops are returned as structured image tool content for the current model turn only: base64 is removed from visible tool text, no temporary file is created, and the crop is omitted from persisted conversation history. The design follows Codex's public `view_image` boundary of vision capability gating and structured `input_image` results, while Newmark's crop/index implementation is original.
+
 ## At A Glance
 
 | Area | What Newmark provides |
@@ -56,11 +70,11 @@ Editor prediction follow-up (2026-07-11): model code predictions now render dire
 
 | Package | Release |
 |---|---|
-| Windows MSI installer | `Newmark-Agent-0.0.5-x64.msi` |
-| Windows unpacked update pack | `Newmark-Agent-0.0.5-win-unpacked-x64.zip` |
-| Linux AppImage | `Newmark-Agent-0.0.5-x86_64.AppImage` |
-| Linux Debian package | `Newmark-Agent-0.0.5-amd64.deb` |
-| Linux unpacked update pack | `Newmark-Agent-0.0.5-linux-unpacked-x64.zip` |
+| Windows MSI installer | `Newmark-Agent-0.0.6-x64.msi` |
+| Windows unpacked update pack | `Newmark-Agent-0.0.6-win-unpacked-x64.zip` |
+| Linux AppImage | `Newmark-Agent-0.0.6-x86_64.AppImage` |
+| Linux Debian package | `Newmark-Agent-0.0.6-amd64.deb` |
+| Linux unpacked update pack | `Newmark-Agent-0.0.6-linux-unpacked-x64.zip` |
 
 Download the assets from the latest GitHub release. On Windows, install the MSI for managed desktops or use the `win-unpacked` zip as the no-loss update source. On Linux, run the AppImage or install the `.deb` package. The distributions include `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
@@ -79,8 +93,8 @@ npm.cmd run dist:windows-release
 The packaged Windows executable is written to:
 
 ```text
-release/Newmark-Agent-0.0.5-x64.msi
-release/Newmark-Agent-0.0.5-win-unpacked-x64.zip
+release/Newmark-Agent-0.0.6-x64.msi
+release/Newmark-Agent-0.0.6-win-unpacked-x64.zip
 ```
 
 Linux and WSLg development builds use native Linux Node/npm inside the distro:
@@ -104,9 +118,9 @@ npm run release:linux-real-provider-smoke
 Linux artifacts are written to:
 
 ```text
-release/Newmark-Agent-0.0.2-x86_64.AppImage
-release/Newmark-Agent-0.0.2-amd64.deb
-release/linux-unpacked/newmark-agent
+release/Newmark-Agent-0.0.6-x86_64.AppImage
+release/Newmark-Agent-0.0.6-amd64.deb
+release/Newmark-Agent-0.0.6-linux-unpacked-x64.zip
 ```
 
 The GUI smoke test expects WSLg or another Linux display server with `DISPLAY` or `WAYLAND_DISPLAY` set.
@@ -204,14 +218,14 @@ npm run dist:linux
 npm run release:linux-gui-smoke
 ```
 
-The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the source development version is now `0.0.5`.
+The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the source development version is now `0.0.6`.
 
 Unpacked update dry-runs can be delegated to the packaged CLI before copying files:
 
 ```powershell
 release\win-unpacked\Newmark Agent.exe install-update --check-github --repo positer/Newmark-Agent
-release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 0.0.5 --dry-run
-release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 0.0.5 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 0.0.6 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 0.0.6 --dry-run
 ```
 
 The update helper preserves local state by default. Current installer/update builds also keep mutable state outside the installation directory under `~/.Newmark`, including `config.json`, `Work/`, `skills/`, `Memory Lab/`, and `archive/`.
@@ -224,6 +238,20 @@ npm.cmd run release:real-provider-smoke
 npm.cmd run release:real-apinebula-memory-switch-smoke
 npm.cmd run release:real-provider-stress
 ```
+
+## dev-0.0.6 Notes
+
+dev-0.0.6 adds a restart-gated WSL Agent backend, structured multimodal attachments across OpenAI Chat/Responses and Anthropic-compatible paths, active model-driven image inspection, stricter same-workspace conversation isolation, archive registry cleanup, responsive model/send controls, a native highlighted editor with caret-bound inline completion, adaptive application icons, and additional tray/single-instance/runtime-layout hardening. Validated vision models can call `image_inspect` to query original dimensions and crop/magnify a submitted PNG or JPEG; derived crops stay in the current model turn and are never written to conversation history or temporary files.
+
+Release validation passed 979 source assertions. The final Windows package passed CLI, editor, option-feedback, conversation queue/isolation, WSL backend, tray lifecycle, Computer Use vision, icon, and narrow-layout smokes. Real APInebula `gpt-5.4-mini` validation used a 6000 x 4000 fixture and proved two `image_inspect` calls while recognizing `NEWMARK 42`, a blue circle, green square, red triangle, and cropped code `CROP-7391`. The packaged WSL backend passed both Chat and Responses requests with a real Linux PID. Ubuntu 24.04 produced and validated AppImage, deb, and unpacked ZIP assets; clean ZIP/deb extraction and direct WSLg launch all rendered a connected Bash terminal, and a real Linux CLI plus UI model request passed. These tests ran only from repository and temporary directories; dev-0.0.6 was not installed over the local Program Files copy.
+
+Current dev-0.0.6 artifact SHA256 values:
+
+- `Newmark-Agent-0.0.6-x64.msi`: `F2301FF18CF2DBBA0D2ED37B62317943A51A1403A33E18CFCA70F7892F02E161`
+- `Newmark-Agent-0.0.6-win-unpacked-x64.zip`: `7A47616FCE2E9F489FC5D7A840BDA66944484B40CCA17A37072781F2B396A029`
+- `Newmark-Agent-0.0.6-x86_64.AppImage`: `3587475887839CB01D430FD451C3C7DC1A4531F52475057590FE2F19E0FF3676`
+- `Newmark-Agent-0.0.6-amd64.deb`: `1E99E3ABFBDE257092013ABFBEADE261F2B701D1488BD103DDEF72723DEB9906`
+- `Newmark-Agent-0.0.6-linux-unpacked-x64.zip`: `702C9E4A644A4FA5CF83119D54B25743BF0DF6D71D9F2CE91B887DA9C0163EF0`
 
 ## dev-0.0.5 Notes
 

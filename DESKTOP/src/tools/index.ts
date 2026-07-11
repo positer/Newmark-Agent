@@ -163,6 +163,15 @@ export class ToolExecutor {
         duration_ms: { type: 'number' },
         dry_run: { type: 'boolean' },
       }, ['action']),
+      t('image_inspect', 'Inspect an image submitted in the current conversation by returning a cropped and optionally magnified image directly to vision. image_index is 1-based within the latest user message containing images. Use source_info first when dimensions are unknown, then crop with pixel coordinates. Results are current-turn only and are never written to disk.', {
+        action: { type: 'string', enum: ['source_info', 'crop'] },
+        image_index: { type: 'number', description: '1-based image index in the latest user message containing submitted images. Defaults to 1.' },
+        x: { type: 'number', description: 'Crop left edge in source-image pixels.' },
+        y: { type: 'number', description: 'Crop top edge in source-image pixels.' },
+        width: { type: 'number', description: 'Crop width in source-image pixels.' },
+        height: { type: 'number', description: 'Crop height in source-image pixels.' },
+        scale: { type: 'number', description: 'Magnification from 1 to 4. Output is capped at 2048 pixels per side.' },
+      }, ['action']),
       t('terminal_takeover', 'Take over a persistent shell session that is independent from the one-shot bash tool. Actions: start creates/reuses a named session, write sends a command to the same session, read returns its output buffer, stop interrupts it, list shows sessions. Use this when the user wants continuous terminal state such as cd/env/process context.', {
         action: { type: 'string', enum: ['start', 'write', 'read', 'stop', 'list'] },
         name: { type: 'string', description: 'Stable takeover session name. Defaults to agent.' },
@@ -258,7 +267,7 @@ export class ToolExecutor {
     }
     if (mode === 'plan') {
       return visibleTools.filter((tool: any) =>
-        ['pwd', 'read', 'glob', 'grep', 'web_search', 'web_fetch', 'browser_open', 'browser_snapshot', 'git_status', 'file_audit', 'repo_security_audit'].includes(tool.function?.name)
+        ['pwd', 'read', 'glob', 'grep', 'web_search', 'web_fetch', 'browser_open', 'browser_snapshot', 'image_inspect', 'git_status', 'file_audit', 'repo_security_audit'].includes(tool.function?.name)
         || tool.function?.name === 'automation_list'
         || tool.function?.name === 'memory_lab_read'
       );

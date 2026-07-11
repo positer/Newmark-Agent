@@ -207,6 +207,11 @@ function startMockServer(outsidePath) {
         return;
       }
 
+      if (marker === 'OPTION_SMOKE_FULLY_AUTONOMOUS') {
+        sendSse(res, [textChunk('OPTION_SMOKE_FULLY_AUTONOMOUS_FINAL Disabled by fully_autonomous option feedback')]);
+        return;
+      }
+
       toolOrder.push('question');
       sendSse(res, [toolCallChunk(`call_${toolOrder.length}_question`, 'question', {
         questions: [{
@@ -384,6 +389,27 @@ async function sendPrompt(cdp, prompt) {
     await waitFor(cdp, `window.api.getState().then(s => s.workspaces && s.workspaces.current && s.workspaces.current.isInternal === true)`, 30000, 'initial workspace');
     await waitFor(cdp, `(() => document.readyState === 'complete' && !!window.sendMessage && !!window.switchRightTab && !!window.renderRightStatusPanel)()`, 30000, 'renderer send and status functions');
 
+    const simultaneous = await evaluate(cdp, `(async()=>{
+      const originalSend=window.sendMessage;
+      const sends=[];
+      window.sendMessage=function(){sends.push(document.getElementById('prompt').value);};
+      window.state.pendingOptions=[
+        {question:'Choose editor mode',options:[{label:'EDIT',description:'Edit now'},{label:'SKIP',description:'Skip'}]},
+        {question:'Choose test scope',options:[{label:'FULL',description:'Full test'},{label:'FAST',description:'Fast test'}]}
+      ];
+      window.state.renderedOptionKeys={};
+      window.renderPendingOptionsInChat(window.state.pendingOptions);
+      const blocks=Array.from(document.querySelectorAll('[data-option-question]')).slice(-2);
+      blocks[0].querySelector('[data-option-label="EDIT"]').click();
+      const afterFirst={sends:sends.length,selected:blocks[0].querySelector('.option-btn.selected')?.dataset.optionLabel,firstDisabled:Array.from(blocks[0].querySelectorAll('.option-btn')).every(button=>button.disabled),secondEnabled:Array.from(blocks[1].querySelectorAll('.option-btn')).every(button=>!button.disabled)};
+      blocks[1].querySelector('[data-option-label="FULL"]').click();
+      const result={afterFirst,sendCount:sends.length,payload:sends[0]||'',pending:window.state.pendingOptions.length};
+      window.sendMessage=originalSend;
+      return result;
+    })()`, 15000);
+    if (simultaneous.afterFirst.sends !== 0 || simultaneous.afterFirst.selected !== 'EDIT' || !simultaneous.afterFirst.firstDisabled || !simultaneous.afterFirst.secondEnabled || simultaneous.sendCount !== 1 || simultaneous.pending !== 0 || !simultaneous.payload.includes('Choose editor mode') || !simultaneous.payload.includes('Answer: EDIT') || !simultaneous.payload.includes('Choose test scope') || !simultaneous.payload.includes('Answer: FULL')) fail(`simultaneous option selection failed: ${JSON.stringify(simultaneous)}`);
+    log('simultaneous option selection waits for all answers and resumes once');
+
     const levels = [
       ['default', 'OPTION_SMOKE_DEFAULT'],
       ['ask_more', 'OPTION_SMOKE_ASK_MORE'],
@@ -392,7 +418,7 @@ async function sendPrompt(cdp, prompt) {
     for (const [level, marker] of levels) {
       await setFeedback(cdp, level);
       await sendPrompt(cdp, `${marker} trigger question`);
-      await waitFor(cdp, `window.api.getState().then(s => (s.pendingOptions || []).some(q => String(q.question || '').includes(${JSON.stringify(marker)})))`, 45000, `${level} pending option`);
+      await waitFor(cdp, `(() => (window.state.pendingOptions || []).some(q => String(q.question || '').includes(${JSON.stringify(marker)})))()`, 45000, `${level} pending option`);
       await waitFor(cdp, `(() => document.body.innerText.includes(${JSON.stringify(marker + '_ALLOW')}) && document.body.innerText.includes('Approve this action'))()`, 30000, `${level} visible option block`);
       log(`${level} option prompt ok`);
     }

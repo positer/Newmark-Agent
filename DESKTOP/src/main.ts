@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'crypto';
 import { spawn, spawnSync, ChildProcess } from 'child_process';
 import { Agent } from './core/agent';
 import { AgentMode } from './core/types';
-import { ConversationKernel } from './core/conversationKernel';
+import { AgentPromptMessage, ConversationKernel } from './core/conversationKernel';
 import { AutomationManager } from './core/automation';
 import { AutomationWakeScheduler, WakeSyncResult } from './core/automationWake';
 import { BrowserControl, BrowserControlRequest, BrowserControlResult } from './core/browserControl';
@@ -154,6 +154,7 @@ function backendConversationState(conversationId?: string): Record<string, unkno
     ...snapshot,
     queued: conversationKernel?.queued(snapshot.conversationId || target) || { steering: [], followUp: [] },
     workEvents: conversationKernel?.events(snapshot.conversationId || target) || [],
+    pendingOptions: conversationKernel?.pendingOptions(snapshot.conversationId || target) || [],
   };
 }
 
@@ -712,7 +713,9 @@ if (hasCliCommand) {
     app.quit();
   } else {
   app.on('second-instance', () => {
-    const win = createDesktopWindow ? createDesktopWindow(!!agent) : mainWindow;
+    const win = mainWindow && !mainWindow.isDestroyed()
+      ? mainWindow
+      : BrowserWindow.getAllWindows().find(candidate => !candidate.isDestroyed()) || null;
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore();
       win.show();
@@ -924,7 +927,17 @@ if (hasCliCommand) {
       }
     }, 80);
 
+    function refreshNativeThemeIcons(): void {
+      const windowIcon = createAppIconImage();
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.setIcon(windowIcon);
+      }
+      if (tray && !tray.isDestroyed()) tray.setImage(createAppIconImage(16));
+    }
+    nativeTheme.on('updated', refreshNativeThemeIcons);
+
     app.on('will-quit', () => {
+      nativeTheme.removeListener('updated', refreshNativeThemeIcons);
       try {
         if (automationWake && automation) lastWakeSync = automationWake.sync(automation.list());
       } catch {}
@@ -948,6 +961,7 @@ if (hasCliCommand) {
       tray.setContextMenu(contextMenu);
       tray.on('click', showMainWindow);
       tray.on('double-click', showMainWindow);
+      refreshNativeThemeIcons();
     }
 
     const wslBackendEnabled = (): boolean => process.platform === 'win32' && activeAgentBackendMode === 'wsl';
@@ -962,7 +976,7 @@ if (hasCliCommand) {
       return wslAgentClient;
     };
 
-    ipcMain.handle('agent:send', async (_event, message: string, conversationId?: string) => {
+    ipcMain.handle('agent:send', async (_event, message: string | AgentPromptMessage, conversationId?: string) => {
       if (!agent) return { tokens: [], error: 'Agent not initialized' };
       try {
         const targetConversation = String(conversationId || agent.activeConversationId || 'default');
@@ -1161,7 +1175,7 @@ if (hasCliCommand) {
           oldLength: d.oldContent.length,
           newLength: d.newContent.length,
         })),
-        pendingOptions: agent.pendingOptions,
+        pendingOptions: conversationKernel?.pendingOptions(targetConversation) || agent.pendingOptions,
         proxyEnabled: agent.config.getBool('proxy', 'enabled'),
         proxyUrl: agent.config.getStr('proxy', 'url'),
         proxyAuth: agent.config.getStr('proxy', 'auth'),
@@ -1306,6 +1320,7 @@ if (hasCliCommand) {
       if (agent) {
         agent.config.set(section, key, value);
         agent.config.save();
+        conversationKernel?.updateSetting(section, key, value);
         return true;
       }
       return false;
@@ -1413,7 +1428,9 @@ if (hasCliCommand) {
 
     ipcMain.handle('agent:getFileTree', async (_event, dirPath: string) => {
       try {
-        const treeRoot = resolveAppPath(root, dirPath || '');
+        const treeRoot = dirPath
+          ? resolveAppPath(root, dirPath)
+          : path.resolve(agent?.workspace.current?.path || root);
         return walkTree(treeRoot, treeRoot);
       } catch (e) { return { error: String(e) }; }
     });

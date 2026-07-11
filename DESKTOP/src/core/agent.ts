@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { cropAndMagnifyImage, decodeInspectionImage } from './imageInspect';
 import { ConfigManager, ModelConfig, ModelEvaluation, ProviderProtocol, inferModelVisionCapability, inferProviderProtocol } from './config';
 import { LLMProvider } from '../llm/provider';
 import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, tokenizeFuzzyProviderInput } from './fuzzy';
@@ -14,6 +15,7 @@ import { FlowEngine, FlowWorkflow } from './flow';
 import { AutomationCondition, AutomationManager, AutomationSchedule } from './automation';
 import { MemoryLabManager, MemoryLabPreparedUpdate, MemoryLabUpdateInput, MemoryLabWriteResult } from './memoryLab';
 import { runAgentKernel } from './agentKernelRunner';
+import type { AgentPromptMessage } from './conversationKernel';
 import {
   AgentMode, InputMode, AgentStatus, StreamToken,
   ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent,
@@ -78,6 +80,7 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - web_fetch: Fetch and extract content from URLs
 - browser_open/browser_snapshot/browser_click/browser_type/browser_eval/browser_back/browser_forward/browser_reload/browser_cdp: Control Newmark's built-in Chromium browser through the Desktop CDP/WebContents backend. Use this for interactive sites, page state inspection, and browser workflows that web_fetch cannot cover.
 - computer_use: Native desktop Computer Use control for full desktop or app-scoped observe/move/click/scroll/type/key/wait against Windows desktop applications. Use takeover_start when actively taking over the desktop; it shows a full-virtual-desktop dynamic gradient edge indicator so the user can see the Agent is controlling the desktop, and use takeover_stop when done. Use app_list/app_observe/app_activate/app_click/app_scroll/app_type/app_key when the task can be scoped to a visible taskbar application by title, process name, PID, or window handle; this narrows screenshots and actions to that application. Use observe/app_observe first, reason over returned screenshot plus UI Automation objects. If the model supports vision, Newmark sends the screenshot image and UI object tree together in the same tool-result context; use both for stable decisions. Prefer target_id from perception.scene_summary.high_priority_objects or perception.objects for move/click/scroll when available; fall back to exact coordinates only when necessary.
+- image_inspect: For submitted visual attachments, query source_info and actively crop/magnify a precise pixel region when text or geometry is too small to inspect reliably. Cropped images are current-turn-only and never saved to disk.
 - task: Create a subagent for parallel work
 - subagent_send: Continue an existing subagent
 - subagent_result: Read get.subagent(name) results
@@ -1529,7 +1532,7 @@ export class Agent {
     return fuzzyCandidateModels(providerName, baseUrl);
   }
 
-  async process(input: string): Promise<StreamToken[]> {
+  async process(input: string | AgentPromptMessage): Promise<StreamToken[]> {
     if (!this.workspace.current && !this.agentOnly) {
       this.status = 'idle';
       return [{ type: 'text', text: '[Workspace required] Select or create a workspace before starting a conversation.' }];
@@ -1542,14 +1545,28 @@ export class Agent {
     this.pendingOptions = [];
 
     try {
+      const text = typeof input === 'string' ? input : String(input.text || '');
+      const images = typeof input === 'string' ? [] : (input.images || []).filter(image => /^data:image\//i.test(String(image.dataUrl || '')));
+      if (images.length && this.model === 'auto') await this.evaluateAndSwitch(`${text}\n[image attachment]`);
+      const selectedModel = this.config.findModel(this.model);
+      if (images.length && !selectedModel?.vision) {
+        this.status = 'idle';
+        return [{ type: 'text', text: `[Vision unavailable] ${this.model} has not passed image-input validation. Select a validated vision model before asking about attachments.` }];
+      }
       const now = this.nowLabel();
-      this.chatMessages.push({ role: 'user', content: input, mode: this.modeName(), model: this.model, timestamp: now });
-      this.history.push({ role: 'user', content: input });
+      const displayText = images.length ? `${text}${text ? '\n\n' : ''}[${images.length} image attachment${images.length === 1 ? '' : 's'}]` : text;
+      this.chatMessages.push({ role: 'user', content: displayText, mode: this.modeName(), model: this.model, timestamp: now });
+      this.history.push({
+        role: 'user',
+        content: images.length
+          ? [{ type: 'text', text }, ...images.map(image => ({ type: 'image_url', image_url: { url: image.dataUrl } }))]
+          : text,
+      });
       this.saveWorkspaceConversationState();
       this.emitWorkEvent({ type: 'start', content: 'Preparing request.' });
 
       if (this.model === 'auto') {
-        await this.evaluateAndSwitch(input);
+        await this.evaluateAndSwitch(displayText);
       }
       if (this.modelIsUnavailable(this.model)) {
         this.switchToFallbackModel();
@@ -1557,7 +1574,8 @@ export class Agent {
 
       // Use external opencode CLI engine
       if (this.engine === 'opencode') {
-        const result = await this.processOpencode(input);
+        if (images.length) return [{ type: 'text', text: '[Vision unavailable] The OpenCode engine does not accept Newmark image attachments.' }];
+        const result = await this.processOpencode(text);
         this.status = 'idle';
         this.saveWorkspaceConversationState();
         this.emitWorkEvent({ type: 'done', content: 'Response complete.' });
@@ -2007,8 +2025,91 @@ export class Agent {
   }
 
   subagentToolDefinitions(defs: unknown[]): unknown[] {
-    if (!this.isSubagentRuntime) return defs;
-    return defs.filter((tool: any) => !this.isSubagentBlockedTool(tool.function?.name || ''));
+    const modelCapabilities = this.config.findModel(this.model);
+    const visionFiltered = modelCapabilities?.vision
+      ? defs
+      : defs.filter((tool: any) => tool.function?.name !== 'image_inspect');
+    const withImageGeneration = modelCapabilities?.image_output
+      ? [...visionFiltered, {
+        type: 'function',
+        function: {
+          name: 'image_generate',
+          description: 'Generate an image with the selected validated image-output model. Use this tool for user image-generation requests; never claim an image was generated without this tool result.',
+          parameters: { type: 'object', properties: { prompt: { type: 'string' }, size: { type: 'string', enum: ['256x256', '512x512', '1024x1024'] } }, required: ['prompt'] },
+        },
+      }]
+      : visionFiltered;
+    if (!this.isSubagentRuntime) return withImageGeneration;
+    return withImageGeneration.filter((tool: any) => !this.isSubagentBlockedTool(tool.function?.name || ''));
+  }
+
+  async handleImageGeneration(args: string): Promise<string> {
+    const model = this.config.findModel(this.model);
+    if (!model?.image_output) return `[Image generation unavailable] ${this.model} has not passed image-output validation.`;
+    const provider = this.engineModel();
+    if (!provider) return '[Image generation unavailable] No provider is configured.';
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(args); } catch {}
+    const prompt = String(input.prompt || '').trim();
+    if (!prompt) return '[Image generation error] prompt is required.';
+    try {
+      const generated = await provider.generateImage(this.model, prompt, String(input.size || '1024x1024'));
+      const source = generated.dataUrl || generated.url || '';
+      return source ? `![Generated image](${source})` : '[Image generation error] Provider returned no image.';
+    } catch (error) {
+      return `[Image generation error] ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  async handleImageInspect(args: string): Promise<string> {
+    if (!this.config.findModel(this.model)?.vision) return '[Image inspect unavailable] The selected model has not passed vision validation.';
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(args); } catch {}
+    const action = String(input.action || '').trim();
+    if (action !== 'source_info' && action !== 'crop') return '[Image inspect error] action must be source_info or crop.';
+    const images = this.latestSubmittedImages();
+    const imageIndex = Math.max(1, Math.floor(Number(input.image_index || 1)));
+    const dataUrl = images[imageIndex - 1];
+    if (!dataUrl) return `[Image inspect error] image_index ${imageIndex} is unavailable; latest submitted image count is ${images.length}.`;
+    try {
+      const source = decodeInspectionImage(dataUrl);
+      const sourceWidth = source.width;
+      const sourceHeight = source.height;
+      if (action === 'source_info') {
+        return JSON.stringify({ ok: true, action, image_index: imageIndex, width: sourceWidth, height: sourceHeight, format: source.mimeType }, null, 2);
+      }
+      const x = Math.floor(Number(input.x));
+      const y = Math.floor(Number(input.y));
+      const width = Math.floor(Number(input.width));
+      const height = Math.floor(Number(input.height));
+      const requestedScale = Number(input.scale || 2);
+      const output = cropAndMagnifyImage(source, { x, y, width, height }, requestedScale);
+      return JSON.stringify({
+        ok: true,
+        action,
+        image_index: imageIndex,
+        source: { width: sourceWidth, height: sourceHeight },
+        crop: { x, y, width, height },
+        output: { width: output.width, height: output.height, scale: Number(output.scale.toFixed(4)) },
+        image_data_url: output.dataUrl,
+      });
+    } catch (error) {
+      return `[Image inspect error] ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  private latestSubmittedImages(): string[] {
+    for (let index = this.history.length - 1; index >= 0; index -= 1) {
+      const message = this.history[index];
+      if (message?.role !== 'user' || !Array.isArray(message.content)) continue;
+      const images = (message.content as Array<Record<string, unknown>>).flatMap(part => {
+        if (part?.type !== 'image_url' || !part.image_url || typeof part.image_url !== 'object') return [];
+        const url = String((part.image_url as Record<string, unknown>).url || '');
+        return url.startsWith('data:image/') ? [url] : [];
+      });
+      if (images.length) return images;
+    }
+    return [];
   }
 
   isSubagentBlockedTool(name: string): boolean {

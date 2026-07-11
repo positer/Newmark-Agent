@@ -271,6 +271,9 @@ function activeChatIsolationExpression(expectedId, includePrompt, includeReply, 
         leakedExcludePrompt: body.includes(${jsString(excludePrompt)}),
         leakedExcludeReply: body.includes(${jsString(excludeReply)}),
         activeItems: activeItems.length,
+        activeConversationId: typeof activeConversationId === 'function' ? activeConversationId() : '',
+        conversationLoadGeneration: window.state && window.state.conversationLoadGeneration,
+        backendMessages: (s && s.chatMessages || []).map(m => String(m && m.content || '')).slice(-6),
         chatTail: body.slice(-1200),
       };
     }
@@ -339,6 +342,24 @@ async function runUiCheck(root) {
 
     await selectConversationAndAssert(cdp, convA, markerAPrompt, markerAReply, markerBPrompt, markerBReply, 'conversation A isolated before rapid switching');
     await selectConversationAndAssert(cdp, convB, markerBPrompt, markerBReply, markerAPrompt, markerAReply, 'conversation B isolated before rapid switching');
+
+    await evaluate(cdp, `(() => {
+      const originalGetState = window.api.getState.bind(window.api);
+      window.api.getState = function(id) {
+        const result = originalGetState(id);
+        return String(id || '') === ${jsString(convA)}
+          ? new Promise((resolve, reject) => setTimeout(() => result.then(resolve, reject), 900))
+          : result;
+      };
+      const idxA = window.state.conversations.findIndex(c => c.id === ${jsString(convA)});
+      const idxB = window.state.conversations.findIndex(c => c.id === ${jsString(convB)});
+      window.switchConversation(idxA);
+      setTimeout(() => window.switchConversation(idxB), 20);
+      return true;
+    })()`, 30000);
+    await sleep(1400);
+    await waitFor(cdp, activeChatIsolationExpression(convB, markerBPrompt, markerBReply, markerAPrompt, markerAReply), 15000, 'stale delayed conversation A response cannot overwrite conversation B');
+    log('out-of-order conversation state response isolation ok');
 
     const order = [];
     for (let i = 0; i < 20; i++) order.push(i % 2 === 0 ? 0 : 1);

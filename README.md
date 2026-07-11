@@ -15,6 +15,8 @@ Newmark Agent is a local-first desktop Agent workspace for coding, automation, r
 
 The current public development release is **dev 1.0.4**. It is intended for technical users who want an installer-backed desktop Agent app that runs against their own model credentials and keeps mutable runtime state local under `~/.Newmark`. Windows is the primary Computer Use target; Linux GUI, CLI, packaging, and terminal workflows are supported.
 
+Maintenance update (2026-07-11): same-workspace conversations now remain strictly isolated. Conversation-scoped state reads no longer overwrite the requested transcript with the shared backend host transcript, delayed conversation loads are rejected after a switch, and completed runner state is merged directly into its own persisted conversation key. Packaged Windows validation covers rapid switch-back, deliberately out-of-order state responses, multi-window shared-backend operation, and cross-workspace isolation.
+
 ## At A Glance
 
 | Area | What Newmark provides |

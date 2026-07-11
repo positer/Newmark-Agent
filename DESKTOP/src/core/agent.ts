@@ -496,7 +496,6 @@ export class Agent {
   }
 
   public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {
-    this.saveWorkspaceConversationState();
     const clean = this.safeConversationId(conversationId || 'default');
     const stateKey = this.workspaceConversationStateKey(clean);
     const memoryKey = (() => {
@@ -507,19 +506,18 @@ export class Agent {
     const memory = memoryKey ? this.workspaceConversations.get(memoryKey) : undefined;
     const stored = this.readStoredConversationState();
     const persisted = stateKey && stored.conversations ? stored.conversations[stateKey] : undefined;
-    const chatMessages = memory?.chatMessages || persisted?.chatMessages || [];
-    const history = memory?.history || persisted?.history || [];
+    const chatMessages = persisted?.chatMessages || memory?.chatMessages || [];
+    const history = persisted?.history || memory?.history || [];
     return {
       conversationId: clean,
       conversations: this.listConversationStates(),
-      conversationPlan: this.normalizeConversationPlan(memory?.plan || persisted?.plan),
+      conversationPlan: this.normalizeConversationPlan(persisted?.plan || memory?.plan),
       chatMessages: [...chatMessages],
       historyMessages: history.length,
     };
   }
 
   public ensureConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {
-    this.saveWorkspaceConversationState();
     const clean = this.safeConversationId(conversationId || 'default');
     const stateKey = this.workspaceConversationStateKey(clean);
     if (stateKey) {
@@ -705,26 +703,42 @@ export class Agent {
   }
 
   mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'>): void {
-    const previous = this.activeConversationId || 'default';
     const clean = this.safeConversationId(id || 'default');
-    this.saveWorkspaceConversationState();
-    this.activeConversationId = clean;
-    this.chatMessages = [...source.chatMessages];
-    this.history = [...source.history];
-    this.conversationPlan = this.normalizeConversationPlan(source.conversationPlan);
-    const key = this.workspaceConversationKey();
+    const ws = this.workspace.current;
+    if (!ws) return;
+    const key = `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${clean}`;
+    const plan = this.normalizeConversationPlan(source.conversationPlan);
+    const updatedAt = new Date().toISOString();
     if (key) {
       this.workspaceConversations.set(key, {
-        chatMessages: [...this.chatMessages],
-        history: [...this.history],
-        plan: this.normalizeConversationPlan(this.conversationPlan),
-        updatedAt: new Date().toISOString(),
+        chatMessages: [...source.chatMessages],
+        history: [...source.history],
+        plan,
+        updatedAt,
       });
     }
-    this.saveWorkspaceConversationState();
-    if (previous !== clean) {
-      this.activeConversationId = previous;
-      this.loadWorkspaceConversationState();
+    const stateKey = this.workspaceConversationStateKey(clean);
+    if (!stateKey) return;
+    const stored = this.readStoredConversationState(ws);
+    stored.conversations = stored.conversations || {};
+    const previous = stored.conversations[stateKey];
+    const derivedTitle = this.titleFromMessages(source.chatMessages, clean);
+    const title = this.hasUserConversationTitle(source.chatMessages) && this.isGeneratedConversationTitle(previous?.title, clean, previous?.chatMessages || [])
+      ? derivedTitle
+      : (previous?.title || derivedTitle);
+    stored.conversations[stateKey] = {
+      ...(previous || {}),
+      title,
+      chatMessages: [...source.chatMessages],
+      history: [...source.history],
+      plan,
+      updatedAt,
+    };
+    this.writeStoredConversationState(stored, ws);
+    if (this.safeConversationId(this.activeConversationId || 'default') === clean) {
+      this.chatMessages = [...source.chatMessages];
+      this.history = [...source.history];
+      this.conversationPlan = plan;
     }
   }
 

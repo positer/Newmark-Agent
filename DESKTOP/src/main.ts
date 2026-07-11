@@ -1092,7 +1092,6 @@ if (hasCliCommand) {
         terminalShells: availableTerminalShells(),
         nativeTools: nativeToolCatalogForState(agent.config.nativeToolEnabled()),
         nativeToolEnabled: agent.config.nativeToolEnabled(),
-        chatMessages: agent.chatMessages,
         automations: automation?.list() || [],
         closeBehavior: agent.config.getStr('general', 'close_behavior'),
         contextCompression: agent.lastCompression,

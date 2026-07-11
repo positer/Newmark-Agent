@@ -338,6 +338,9 @@ async function main() {
   ]);
   assert(Date.now() - t0 < 250 && parallelProbeA.processCalls[0] === 'one' && parallelProbeB.processCalls[0] === 'two', 'kernel: different conversations run through independent parallel runtimes');
   assert(uiHtml.includes('window.setLeftCollapsed = function(collapsed)'), 'ui html: left collapse uses unified state function');
+  assert(uiHtml.includes('conversationLoadGeneration: 0') && uiHtml.includes('var loadGeneration = ++state.conversationLoadGeneration') && uiHtml.includes('loadGeneration === state.conversationLoadGeneration') && uiHtml.includes('requestedWorkspaceKey === currentWorkspaceKey()') && uiHtml.includes("requestedConversationId === String(activeConversationId() || 'default')"), 'ui html: stale conversation loads cannot overwrite a newer same-workspace conversation selection');
+  assert(uiHtml.includes('function requestIsCurrent()') && uiHtml.includes('if (!requestIsCurrent() || String(id) !== requestedConversationId) return;'), 'ui html: delayed ensureConversation chains cannot start a stale conversation load after switching');
+  assert(uiHtml.includes('applyBackendConversations(r.conversations || [], activeConversationId() || lockedConversationId)') && uiHtml.includes('var stillActiveAfterRefresh = isActiveConversationId(lockedConversationId)'), 'ui html: background conversation completions preserve the foreground conversation and scoped details');
   assert(uiHtml.includes('function animateLeftWidth(startWidth, targetWidth, finalCollapsed, token)') && uiHtml.includes('requestAnimationFrame(step)') && uiHtml.includes('easeOutCubic') && uiHtml.includes('var duration = reduceMotion ? 320 : 620;'), 'ui html: left collapse uses visible frame-driven width animation');
   assert(uiHtml.includes('function clearLeftWidthAnimation()') && uiHtml.includes('cancelAnimationFrame(state.leftAnimationFrame)') && uiHtml.includes('cancelAnimationFrame(state.leftAnimationQueuedFrame)') && uiHtml.includes('leftAnimationToken'), 'ui html: left collapse cancels stale animation frames');
   assert(uiHtml.includes('#left.width-animating') && uiHtml.includes('transition: background var(--duration-normal) var(--ease-out-expo) !important;'), 'ui html: left width animation disables coalesced CSS width transition');
@@ -369,7 +372,10 @@ async function main() {
   const toolsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'index.ts'), 'utf-8');
   const nativeToolsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'nativeTools.ts'), 'utf-8');
   const agentTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
+  assert(!agentTs.includes('public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && !agentTs.includes('public ensureConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && agentTs.includes('const chatMessages = persisted?.chatMessages || memory?.chatMessages || [];') && agentTs.includes('mirrorConversationStateFrom(id: string') && agentTs.includes('const stateKey = this.workspaceConversationStateKey(clean);') && agentTs.includes("this.safeConversationId(this.activeConversationId || 'default') === clean"), 'agent conversation snapshots are read-only, persisted target state is authoritative, and runner mirrors synchronize active host memory');
   const configTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'config.ts'), 'utf-8');
+  const getStateHandler = mainTs.slice(mainTs.indexOf("ipcMain.handle('agent:getState'"), mainTs.indexOf("ipcMain.handle('agent:getConversationPlan'"));
+  assert(getStateHandler.includes('...conversationSnapshot') && !getStateHandler.includes('chatMessages: agent.chatMessages'), 'main process: conversation-scoped getState does not overwrite target messages with shared host messages');
   const fuzzyTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'fuzzy.ts'), 'utf-8');
   const providerTs = fs.readFileSync(path.join(process.cwd(), 'src', 'llm', 'provider.ts'), 'utf-8');
   const agentKernelRunnerTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
@@ -2090,6 +2096,16 @@ async function main() {
   const persistedConvs = scopedAgentReloaded.listConversationStates();
   assert(persistedConvs.some(c => c.id === 'conv-two' && c.messageCount === 1), 'conversation chat: lists persisted conversation state');
   assert(persistedConvs.some(c => c.id === 'conv-two' && c.title.includes('message in conv two')), 'conversation chat: derives persisted conversation title');
+  scopedAgentReloaded.setConversation('mirror-active');
+  const mirroredSource: Parameters<Agent['mirrorConversationStateFrom']>[1] = {
+    chatMessages: [{ role: 'user' as const, content: 'runner-owned message', mode: 'Build', model: scopedAgentReloaded.model, timestamp: 'tm' }],
+    history: [{ role: 'user' as const, content: 'runner-owned history' }],
+    conversationPlan: { items: [{ id: 'mirror-plan', text: 'runner-owned plan', status: 'done' as const }] },
+  };
+  scopedAgentReloaded.mirrorConversationStateFrom('mirror-active', mirroredSource);
+  scopedAgentReloaded.setConversation('mirror-active');
+  assert(scopedAgentReloaded.chatMessages[0]?.content === 'runner-owned message' && String(scopedAgentReloaded.history[0]?.content) === 'runner-owned history', 'conversation mirror: active host memory cannot overwrite completed runner messages');
+  assert(scopedAgentReloaded.getConversationPlan().items[0]?.id === 'mirror-plan', 'conversation mirror: active host memory preserves completed runner plan');
   scopedAgentReloaded.setConversation('empty-title-first');
   scopedAgentReloaded.flushConversationState();
   const emptyTitleBefore = scopedAgentReloaded.listConversationStates().find(c => c.id === 'empty-title-first')?.title || '';

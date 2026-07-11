@@ -3840,6 +3840,7 @@ var state = {
   agentWorkEventLimit: 240,
   foregroundConversationHoldId: '',
   foregroundConversationHoldUntil: 0,
+  conversationLoadGeneration: 0,
   trackedConversationUntil: {},
   conversationTrackMs: 300000,
   conversations: [
@@ -6102,7 +6103,15 @@ function setupAgentWorkEvents() {
 function loadActiveConversationMessages(conversationId) {
   if (!api.getState) return Promise.resolve();
   var requestedConversationId = String(conversationId || activeConversationId() || 'default');
+  var requestedWorkspaceKey = currentWorkspaceKey();
+  var loadGeneration = ++state.conversationLoadGeneration;
   return api.getState(requestedConversationId).then(function(s) {
+    var responseConversationId = String((s && s.conversationId) || requestedConversationId);
+    var responseIsCurrent = loadGeneration === state.conversationLoadGeneration &&
+      requestedWorkspaceKey === currentWorkspaceKey() &&
+      requestedConversationId === String(activeConversationId() || 'default') &&
+      responseConversationId === requestedConversationId;
+    if (!responseIsCurrent) return;
     if (s && s.chatMessages) renderChatMessages(s.chatMessages);
     if (s && s.conversationId) {
       state.activeBackendConversationId = s.conversationId;
@@ -6618,7 +6627,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       }
     }
     if (r && r.conversations) {
-      applyBackendConversations(r.conversations || [], r.activeConversationId || r.conversationId || lockedConversationId);
+      applyBackendConversations(r.conversations || [], activeConversationId() || lockedConversationId);
       renderConversations();
     }
     if (stillActive && r && r.conversationPlan) {
@@ -6641,6 +6650,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   }
   if (api.getState) {
     api.getState(lockedConversationId).then(function(s) {
+      var stillActiveAfterRefresh = isActiveConversationId(lockedConversationId);
       if (s && s.contextCompression !== undefined) {
         state.contextCompression = s.contextCompression;
         window.renderContextCompression();
@@ -6651,23 +6661,25 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       }
       if (s && s.subagents) state.subagents = s.subagents;
       if (s && s.fileDiffs) state.fileDiffs = s.fileDiffs;
-      if (s && s.pendingOptions) {
+      if (stillActiveAfterRefresh && s && s.pendingOptions) {
         state.pendingOptions = s.pendingOptions;
         renderPendingOptionsInChat(state.pendingOptions);
       }
-      if (s && s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
-      if (s && s.queued) {
+      if (stillActiveAfterRefresh && s && s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
+      if (stillActiveAfterRefresh && s && s.queued) {
         state.backendQueue = s.queued;
         if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
       }
       if (s && s.conversations) {
-        applyBackendConversations(s.conversations || [], s.conversationId || lockedConversationId);
+        applyBackendConversations(s.conversations || [], activeConversationId() || lockedConversationId);
         renderConversations();
       }
-      if (state.rightTab === 'status') window.renderRightStatusPanel();
-      if (state.rightTab === 'subagent') window.renderSubagentList();
-      if (state.rightTab === 'plan') window.renderConversationPlan();
-      if (window.renderInputStack) window.renderInputStack();
+      if (stillActiveAfterRefresh) {
+        if (state.rightTab === 'status') window.renderRightStatusPanel();
+        if (state.rightTab === 'subagent') window.renderSubagentList();
+        if (state.rightTab === 'plan') window.renderConversationPlan();
+        if (window.renderInputStack) window.renderInputStack();
+      }
     }).catch(function(){});
   }
   if (opts.forceBuild && previousMode !== state.mode) {
@@ -9531,14 +9543,22 @@ function applyBackendConversations(items, activeId) {
 function syncBackendConversation() {
   var convs = currentWorkspaceConversations();
   var conv = convs[state.activeConversation] || convs[0];
+  var requestedConversationId = String((conv && conv.id) || '');
+  var requestedWorkspaceKey = currentWorkspaceKey();
+  function requestIsCurrent() {
+    return requestedWorkspaceKey === currentWorkspaceKey() &&
+      requestedConversationId === String(activeConversationId() || 'default');
+  }
   if (conv && api.ensureConversation) {
     return api.ensureConversation(conv.id).then(function(s) {
       var id = (s && s.conversationId) || conv.id;
+      if (!requestIsCurrent() || String(id) !== requestedConversationId) return;
       state.activeBackendConversationId = id;
       return loadActiveConversationMessages(id);
     }).catch(function(){});
   }
   if (conv) {
+    if (!requestIsCurrent()) return Promise.resolve();
     state.activeBackendConversationId = conv.id;
     return loadActiveConversationMessages(conv.id);
   }

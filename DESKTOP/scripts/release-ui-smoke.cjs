@@ -213,7 +213,7 @@ async function readLanguageSnapshot(cdp) {
     secondarySettingsTitle: document.querySelector('.secondary-top button[onclick="window.openWsSettings()"]')?.getAttribute('title') || '',
     rightCloseTitle: document.querySelector('button.tab-btn[onclick="window.toggleRight()"]')?.getAttribute('title') || '',
     rightRefreshText: document.querySelector('#panel-file-tree .archive-action-btn')?.textContent || '',
-    editorCloseText: document.querySelector('button.et-btn[onclick="window.closeEditor()"] span:last-child')?.textContent || '',
+    editorCloseText: document.querySelector('button.et-btn[onclick="window.closeEditor()"]')?.getAttribute('title') || '',
     subWinCloseTitle: document.querySelector('.sub-win-close')?.getAttribute('title') || '',
     terminalConnected: Array.from(document.querySelectorAll('.terminal-output span')).map(el => el.textContent || '').find(text => text.startsWith('Terminal connected') || text.startsWith('终端已连接')) || '',
     contextCompression: (document.querySelector('#context-compression-pill')?.textContent || '').split(' | ').slice(0, 3).join(' | '),

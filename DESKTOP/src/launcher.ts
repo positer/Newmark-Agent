@@ -112,6 +112,8 @@ function shadowRootFor(candidate: string): string {
 
 function writableRuntimeRoot(candidate: string): string {
   const resolved = path.resolve(candidate);
+  const installRoot = path.dirname(process.execPath);
+  if (isPathInside(installRoot, resolved)) return userRuntimeRoot();
   if (isProtectedInstallRoot(resolved)) return shadowRootFor(resolved);
   if (!canWriteDirectory(resolved)) return shadowRootFor(resolved);
   return resolved;

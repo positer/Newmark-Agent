@@ -2107,7 +2107,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   flex-direction: column;
   align-items: stretch;
   padding: 0 16px;
-  gap: 0;
+  gap: 4px;
   pointer-events: none;
 }
 
@@ -2116,25 +2116,26 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 .stack-card {
-  width: calc(100% - 24px);
-  margin: 0 12px;
-  background: var(--glass-bg-3);
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-  border: 1px solid var(--glass-border-2);
-  box-shadow: 0 -8px 28px rgba(0,0,0,0.16);
+  width: calc(100% - 40px);
+  margin: 0 20px;
+  background: rgba(18,20,34,0.92);
+  backdrop-filter: blur(10px) saturate(125%);
+  -webkit-backdrop-filter: blur(10px) saturate(125%);
+  border: 1px solid var(--glass-border-1);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.12);
   overflow: hidden;
   transform: translateY(0) translateZ(0);
   animation: fade-in-up 180ms var(--ease-out-expo);
 }
 
 .stack-row {
-  min-height: 32px;
+  min-height: 30px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  padding: 0 8px 0 10px;
+  padding: 0 6px 0 9px;
 }
 
 .stack-title,
@@ -2144,12 +2145,12 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 12px;
-  line-height: 32px;
+  line-height: 30px;
 }
 
 .stack-title {
-  color: var(--text-bright);
-  font-weight: 650;
+  color: var(--text);
+  font-weight: 600;
 }
 
 .stack-text {
@@ -2189,8 +2190,15 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 #goal-bar {
   border-bottom: none;
-  border-radius: 14px 14px 0 0 / 10px 10px 0 0;
+  border-radius: 8px 8px 0 0;
+  border-color: rgba(91,120,255,0.24);
+  background: linear-gradient(90deg, rgba(91,120,255,0.10), rgba(18,20,34,0.94) 34%);
+  box-shadow: none;
 }
+
+#goal-bar .stack-row { grid-template-columns: auto minmax(0,1fr) auto; }
+#goal-bar .stack-row::before { content:""; width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 3px rgba(91,120,255,.12); }
+#goal-bar.goal-paused .stack-row::before { background:#f4c95d; box-shadow:0 0 0 3px rgba(244,201,93,.12); }
 
 #goal-bar .goal-text {
   outline: none;
@@ -2204,12 +2212,20 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 #todo-wrap {
-  border-radius: var(--radius-lg);
+  border-radius: 8px;
 }
 
 #todo-wrap.collapsed {
-  border-radius: 999px;
+  height: 30px;
+  border-radius: 7px;
+  box-shadow: none;
+  display: flex;
+  align-items: center;
 }
+
+#todo-wrap.collapsed #todo-header { width:100%; height:30px; min-height:30px; padding-top:0; padding-bottom:0; }
+#todo-wrap.collapsed .stack-title { display:flex; align-items:center; height:30px; line-height:30px; }
+#todo-wrap.collapsed .stack-actions { height:30px; align-items:center; }
 
 #todo-list {
   max-height: 192px;
@@ -2267,16 +2283,16 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 #queue-panel.collapsed {
-  height: 32px;
-  border-radius: 999px;
+  height: 30px;
+  border-radius: 7px;
   display: flex;
   align-items: center;
 }
 
 #queue-panel.collapsed #queue-header {
   width: 100%;
-  height: 32px;
-  min-height: 32px;
+  height: 30px;
+  min-height: 30px;
   align-items: center;
   padding-top: 0;
   padding-bottom: 0;
@@ -2285,18 +2301,35 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 #queue-panel.collapsed .stack-title {
   display: flex;
   align-items: center;
-  height: 32px;
-  line-height: 32px;
+  height: 30px;
+  line-height: 30px;
 }
 
 #queue-panel.collapsed .stack-actions {
-  height: 32px;
+  height: 30px;
   align-items: center;
 }
 
 #queue-panel.collapsed .stack-icon-btn {
-  border-radius: 999px;
+  border-radius: 6px;
 }
+
+.work-review { margin:10px 0 8px; border:1px solid var(--glass-border-2); border-radius:8px; background:rgba(18,20,28,.94); overflow:hidden; }
+.work-review-head { min-height:54px; display:grid; grid-template-columns:34px minmax(0,1fr) auto; align-items:center; gap:10px; padding:9px 12px; }
+.work-review-mark { width:32px; height:32px; border-radius:7px; background:rgba(255,255,255,.04); display:flex; align-items:center; justify-content:center; color:var(--text); }
+.work-review-title { color:var(--text-bright); font-size:13px; font-weight:650; }
+.work-review-stats { margin-top:1px; font:11px/1.4 var(--font-mono); }
+.work-review-add { color:#35d98a; }
+.work-review-del { color:#ff6b75; margin-left:7px; }
+.work-review-actions { display:flex; align-items:center; gap:5px; }
+.work-review-btn { height:28px; padding:0 10px; border:1px solid var(--glass-border-2); border-radius:6px; background:transparent; color:var(--text); cursor:pointer; font:600 11px var(--font); }
+.work-review-btn:hover { background:rgba(255,255,255,.06); border-color:var(--border-hover); }
+.work-review-list { border-top:1px solid var(--glass-border-1); }
+.work-review-file { min-height:34px; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; padding:0 12px; color:var(--text); }
+.work-review-file:hover { background:rgba(255,255,255,.025); }
+.work-review-path { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:11px var(--font-mono); }
+.work-review-more { width:100%; height:30px; border:0; border-top:1px solid var(--glass-border-1); background:rgba(255,255,255,.025); color:var(--text-dim); cursor:pointer; font:11px var(--font); text-align:left; padding:0 12px; }
+.work-review-more:hover { color:var(--text); background:rgba(255,255,255,.045); }
 
 #queue-list {
   max-height: 112px;
@@ -4142,6 +4175,12 @@ var NEWMARK_I18N = {
     'queue.guideNow': 'Guide now',
     'queue.expand': 'Expand queue',
     'queue.collapse': 'Collapse queue',
+    'review.fileChanges': 'File changes',
+    'review.editedOne': 'Edited 1 file',
+    'review.editedMany': 'Edited {count} files',
+    'review.open': 'Review',
+    'review.title': 'Review file changes',
+    'review.showMore': 'Show {count} more files',
     'right.files': 'Files',
     'right.fileTree': 'Workspace file tree',
     'right.editor': 'Editor',
@@ -4168,7 +4207,6 @@ var NEWMARK_I18N = {
     'settings.runInWsl': 'Agent runtime environment',
     'settings.runInWslDesc': 'Keeps the Windows UI and native desktop tools local while running the persistent Agent kernel, model calls, shell, and file tools inside WSL.',
     'settings.wslDistro': 'WSL distribution',
-    'settings.testWslBackend': 'Test WSL backend',
     'settings.wslConnected': 'WSL backend connected',
     'settings.wslDisconnected': 'WSL backend unavailable',
     'settings.windowsNative': 'Windows native',
@@ -4605,6 +4643,12 @@ var NEWMARK_I18N = {
     'queue.guideNow': '立即引导',
     'queue.expand': '展开队列',
     'queue.collapse': '折叠队列',
+    'review.fileChanges': '文件变动',
+    'review.editedOne': '已编辑 1 个文件',
+    'review.editedMany': '已编辑 {count} 个文件',
+    'review.open': '审查',
+    'review.title': '审查文件变动',
+    'review.showMore': '再显示 {count} 个文件',
     'right.files': '文件',
     'right.fileTree': '工作区文件树',
     'right.editor': '编辑器',
@@ -4631,7 +4675,6 @@ var NEWMARK_I18N = {
     'settings.runInWsl': 'Agent 运行环境',
     'settings.runInWslDesc': 'Windows UI 与桌面原生工具保留在本机，持续 Agent 内核、模型请求、Shell 和文件工具运行在 WSL。',
     'settings.wslDistro': 'WSL 发行版',
-    'settings.testWslBackend': '测试 WSL 后端',
     'settings.wslConnected': 'WSL 后端已连接',
     'settings.wslDisconnected': 'WSL 后端不可用',
     'settings.windowsNative': 'Windows 原生',
@@ -5760,6 +5803,60 @@ function addMsg(role, text, mode, model, messageIndex) {
   return div;
 }
 
+function normalizeWorkReviewDiffs(diffs) {
+  var byPath = {};
+  (Array.isArray(diffs) ? diffs : []).forEach(function(diff) {
+    var filePath = String(diff && diff.path || '').trim();
+    if (!filePath) return;
+    if (!byPath[filePath]) byPath[filePath] = { path:filePath, added:0, deleted:0 };
+    byPath[filePath].added += Math.max(0, Number(diff.new || 0));
+    byPath[filePath].deleted += Math.max(0, Number(diff.old || 0));
+  });
+  return Object.keys(byPath).map(function(key) { return byPath[key]; });
+}
+
+window.toggleWorkReviewFiles = function(button) {
+  var review = button && button.closest ? button.closest('.work-review') : null;
+  if (!review) return;
+  review.classList.toggle('expanded');
+  var files = review.querySelectorAll('.work-review-file');
+  for (var i = 0; i < files.length; i++) files[i].style.display = review.classList.contains('expanded') || i < 3 ? '' : 'none';
+  var hidden = Math.max(0, files.length - 3);
+  button.textContent = review.classList.contains('expanded') ? t('queue.collapse') : t('review.showMore').replace('{count}', hidden);
+};
+
+window.openWorkReview = function(button) {
+  var review = button && button.closest ? button.closest('.work-review') : null;
+  if (!review) return;
+  var files = JSON.parse(review.getAttribute('data-files') || '[]');
+  var html = '<div class="work-review-detail">' + files.map(function(file) {
+    return '<button class="file-row" onclick="window.closeSubWin();window.openFile(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ')">' +
+      '<span class="work-review-path">' + esc(file.path) + '</span><span><span class="work-review-add">+' + file.added + '</span><span class="work-review-del">-' + file.deleted + '</span></span></button>';
+  }).join('') + '</div>';
+  window.openSubWin(t('review.title'), html);
+};
+
+function addWorkReview(diffs) {
+  var files = normalizeWorkReviewDiffs(diffs);
+  if (!files.length) return null;
+  var added = files.reduce(function(total, file) { return total + file.added; }, 0);
+  var deleted = files.reduce(function(total, file) { return total + file.deleted; }, 0);
+  var review = document.createElement('div');
+  review.className = 'work-review';
+  review.setAttribute('data-files', JSON.stringify(files));
+  var rows = files.map(function(file, index) {
+    return '<div class="work-review-file"' + (index >= 3 ? ' style="display:none"' : '') + '><span class="work-review-path">' + esc(file.path) + '</span><span><span class="work-review-add">+' + file.added + '</span><span class="work-review-del">-' + file.deleted + '</span></span></div>';
+  }).join('');
+  var editedLabel = files.length === 1 ? t('review.editedOne') : t('review.editedMany').replace('{count}', files.length);
+  review.innerHTML = '<div class="work-review-head"><div class="work-review-mark">' + iconSvg('file-diff', t('review.fileChanges'), 'small') + '</div>' +
+    '<div><div class="work-review-title">' + esc(editedLabel) + '</div><div class="work-review-stats"><span class="work-review-add">+' + added + '</span><span class="work-review-del">-' + deleted + '</span></div></div>' +
+    '<div class="work-review-actions"><button class="work-review-btn" onclick="window.openWorkReview(this)">' + esc(t('review.open')) + '</button></div></div>' +
+    '<div class="work-review-list">' + rows + (files.length > 3 ? '<button class="work-review-more" onclick="window.toggleWorkReviewFiles(this)">' + esc(t('review.showMore').replace('{count}', files.length - 3)) + '</button>' : '') + '</div>';
+  els['chat-area'].appendChild(review);
+  els['chat-area'].scrollTop = els['chat-area'].scrollHeight;
+  return review;
+}
+
 function updateMsg(div, text, role, mode, model) {
   if (!div) return;
   if (role) div.className = 'chat-msg ' + role;
@@ -5960,7 +6057,8 @@ function conversationWorkUiState(conversationId) {
       lastCompletedWorkflow: null,
       finalResponseMsg: null,
       finalResponseText: '',
-      finalResponseAt: 0
+      finalResponseAt: 0,
+      pendingWorkReview: null
     };
   }
   return state.agentWorkUiByConversation[id];
@@ -5977,7 +6075,8 @@ function resetConversationWorkUi(conversationId, keepCompleted) {
     lastCompletedWorkflow: keepCompleted ? prior.lastCompletedWorkflow : null,
     finalResponseMsg: keepCompleted ? prior.finalResponseMsg : null,
     finalResponseText: keepCompleted ? prior.finalResponseText : '',
-    finalResponseAt: keepCompleted ? prior.finalResponseAt : 0
+    finalResponseAt: keepCompleted ? prior.finalResponseAt : 0,
+    pendingWorkReview: keepCompleted ? prior.pendingWorkReview : null
   };
   return state.agentWorkUiByConversation[id];
 }
@@ -6163,7 +6262,9 @@ function renderChatMessages(messages) {
   if (!els['chat-area']) return;
   els['chat-area'].innerHTML = '';
   var renderConversationId = activeConversationId();
+  var pendingWorkReview = conversationWorkUiState(renderConversationId).pendingWorkReview;
   resetConversationWorkUi(renderConversationId, false);
+  conversationWorkUiState(renderConversationId).pendingWorkReview = pendingWorkReview;
   if (!messages || !messages.length) {
     els['chat-area'].innerHTML = '<div class="welcome-msg"><div class="brand">Newmark Agent</div><div>' + esc(t('app.ready')) + '</div><div class="subtitle">' + esc(t('app.subtitle')) + '</div></div>';
     return;
@@ -6179,6 +6280,7 @@ function renderChatMessages(messages) {
     addMsg(m.role || 'assistant', m.content || '', m.mode || '', m.model || '', i);
   }
   finishToolBatch(renderConversationId);
+  if (pendingWorkReview) addWorkReview(pendingWorkReview);
 }
 
 function activeConversationId() {
@@ -6891,8 +6993,16 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         if (!responseMsg) responseMsg = addMsg('assistant', '', state.mode, state.model);
         updateMsg(responseMsg, '(empty response)', 'assistant', state.mode, state.model);
       }
+      if (r && Array.isArray(r.diffs) && r.diffs.length) {
+        var reviewUi = conversationWorkUiState(lockedConversationId);
+        reviewUi.pendingWorkReview = r.diffs;
+      }
     }
     if (stillActive && r && Array.isArray(r.chatMessages)) renderChatMessages(r.chatMessages);
+    else if (stillActive) {
+      var completedReviewUi = conversationWorkUiState(lockedConversationId);
+      if (completedReviewUi.pendingWorkReview) addWorkReview(completedReviewUi.pendingWorkReview);
+    }
     if (r && r.conversations) {
       applyBackendConversations(r.conversations || [], activeConversationId() || lockedConversationId);
       renderConversations();
@@ -7981,6 +8091,7 @@ function renderGoalBar() {
   if (!bar || !text) return;
   var visible = state.mode === 'goal' || !!state.goalText;
   bar.style.display = visible ? '' : 'none';
+  bar.classList.toggle('goal-paused', !!state.goalPaused);
   if (text.getAttribute('contenteditable') !== 'true') {
     text.textContent = (state.goalText || t('goal.set')).split(/\r?\n/)[0] || t('goal.set');
   }
@@ -8100,7 +8211,6 @@ function renderGeneralSettings() {
     (state.agentBackendRestartRequired ? '<div class="setting-desc warning">' + esc(t('settings.restartRequired')) + '</div>' : '') + '</div></div>' +
     '<div class="setting-row"><span class="setting-label">' + esc(t('settings.wslDistro')) + '</span>' +
     '<div class="setting-control"><select id="agent-wsl-distro" onchange="window.setAgentWslDistro(this.value)"' + (state.wslAvailable ? '' : ' disabled') + '>' + (wslOptions || '<option>Ubuntu-24.04</option>') + '</select>' +
-    '<button class="secondary-btn"' + (state.agentBackend && state.agentBackend.enabled ? '' : ' disabled') + ' onclick="window.testAgentWslBackend()">' + esc(t('settings.testWslBackend')) + '</button>' +
     '<div class="setting-desc" id="agent-wsl-status">' + esc(state.agentBackend && state.agentBackend.connected ? t('settings.wslConnected') : t('settings.wslDisconnected')) + '</div></div></div>' : '';
   return wslHtml + '<div class="setting-row">' +
     '<span class="setting-label">' + esc(t('settings.language')) + '</span>' +
@@ -8409,6 +8519,7 @@ window.setTheme = function(t) {
   } else {
     document.documentElement.removeAttribute('data-theme');
   }
+  window.refreshTitlebarThemeIcon();
 };
 
 window.setGlassLevel = function(v) {
@@ -8471,13 +8582,20 @@ window.setAutoSwitchMode = function(v) {
 };
 
 var systemColorScheme = window.matchMedia('(prefers-color-scheme: dark)');
-window.refreshTitlebarSystemIcon = function() {
+window.refreshTitlebarThemeIcon = function() {
   var icon = document.getElementById('title-app-icon');
-  if (icon) icon.src = systemColorScheme.matches ? '../../assets/app-icon-light.png' : '../../assets/app-icon-dark.png';
+  if (!icon) return;
+  var useDarkTheme = state.theme === 'system' ? systemColorScheme.matches : state.theme !== 'light';
+  icon.src = useDarkTheme ? '../../assets/app-icon-light.png' : '../../assets/app-icon-dark.png';
 };
-if (systemColorScheme.addEventListener) systemColorScheme.addEventListener('change', window.refreshTitlebarSystemIcon);
-else if (systemColorScheme.addListener) systemColorScheme.addListener(window.refreshTitlebarSystemIcon);
-window.refreshTitlebarSystemIcon();
+window.refreshTitlebarSystemIcon = window.refreshTitlebarThemeIcon;
+if (systemColorScheme.addEventListener) systemColorScheme.addEventListener('change', function() {
+  if (state.theme === 'system') window.refreshTitlebarThemeIcon();
+});
+else if (systemColorScheme.addListener) systemColorScheme.addListener(function() {
+  if (state.theme === 'system') window.refreshTitlebarThemeIcon();
+});
+window.refreshTitlebarThemeIcon();
 
 window.setAgentBackendMode = async function(mode) {
   var next = mode === 'wsl' ? 'wsl' : 'windows';
@@ -8495,16 +8613,6 @@ window.setAgentWslDistro = async function(value) {
   state.agentBackend = { ...(state.agentBackend || {}), distro: distro, connected: false };
   state.agentBackendRestartRequired = true;
   window.settingsTab('general');
-};
-
-window.testAgentWslBackend = async function() {
-  if (!state.agentBackend || !state.agentBackend.enabled) return { ok: false, error: t('settings.restartRequired') };
-  var label = document.getElementById('agent-wsl-status');
-  if (label) label.textContent = '...';
-  var result = api.wslBackendTest ? await api.wslBackendTest() : { ok: false, error: 'WSL backend API unavailable' };
-  state.agentBackend = { ...(state.agentBackend || {}), ...result, enabled: true, connected: !!result.ok };
-  if (label) label.textContent = result.ok ? t('settings.wslConnected') : (result.error || t('settings.wslDisconnected'));
-  return result;
 };
 
 window.setAutoSwitch = function(v) {
@@ -11836,16 +11944,6 @@ function stopMarqueeJS() {
       if (state.editorVimEnabled && e.key === 'Escape') { state.editorVimMode = 'normal'; state.editorVimPending = ''; e.preventDefault(); window.renderNativeEditor(); return; }
       if (window.handleEditorVimKey(e)) return;
     });
-  }
-
-  // WSL detection only affects the optional Windows Bash entry.
-  if (state.platform === 'win32' && api.wslDetect) {
-    api.wslDetect().then(function(haveWsl) {
-      if (haveWsl) {
-        var opt = document.querySelector('#terminal-shell-select option[value="bash"]');
-        if (opt) opt.style.display = '';
-      }
-    }).catch(function(){});
   }
 
   // Handle bottom terminal collapse - text sync

@@ -102,17 +102,45 @@ function resetConversationKernel(): void {
 }
 
 let wslDistroCache: { at: number; items: string[] } = { at: 0, items: [] };
-function availableWslDistros(): string[] {
-  if (process.platform !== 'win32') return [];
-  if (Date.now() - wslDistroCache.at < 5000) return wslDistroCache.items.slice();
-  const result = spawnSync('wsl.exe', ['--list', '--quiet'], { encoding: 'buffer', windowsHide: true, timeout: 10000 });
-  if (result.error || result.status !== 0) return [];
-  const raw = result.stdout || Buffer.alloc(0);
+let wslDetection: Promise<string[]> | null = null;
+
+function decodeWslDistros(raw: Buffer): string[] {
   const utf16 = raw.toString('utf16le').replace(/\0/g, '').trim();
   const text = utf16 && /[A-Za-z0-9]/.test(utf16) ? utf16 : raw.toString('utf8').replace(/\0/g, '').trim();
-  const items = text.split(/\r?\n/).map(line => line.replace(/\s*\(Default\)\s*$/i, '').trim()).filter(Boolean);
-  wslDistroCache = { at: Date.now(), items };
-  return items.slice();
+  return text.split(/\r?\n/).map(line => line.replace(/\s*\(Default\)\s*$/i, '').trim()).filter(Boolean);
+}
+
+function detectWslDistrosAtStartup(): Promise<string[]> {
+  if (process.platform !== 'win32') return Promise.resolve([]);
+  if (wslDetection) return wslDetection;
+  wslDetection = new Promise(resolve => {
+    const child = spawn('wsl.exe', ['--list', '--quiet'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    const chunks: Buffer[] = [];
+    let settled = false;
+    const finish = (items: string[]) => {
+      if (settled) return;
+      settled = true;
+      wslDistroCache = { at: Date.now(), items };
+      resolve(items.slice());
+    };
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      finish([]);
+    }, 10000);
+    child.stdout?.on('data', chunk => chunks.push(Buffer.from(chunk)));
+    child.once('error', () => { clearTimeout(timer); finish([]); });
+    child.once('close', code => {
+      clearTimeout(timer);
+      finish(code === 0 ? decodeWslDistros(Buffer.concat(chunks)) : []);
+    });
+  });
+  return wslDetection;
+}
+
+async function availableWslDistros(): Promise<string[]> {
+  if (process.platform !== 'win32') return [];
+  if (wslDistroCache.at) return wslDistroCache.items.slice();
+  return detectWslDistrosAtStartup();
 }
 
 async function resetWslAgentClient(): Promise<void> {
@@ -386,6 +414,7 @@ function shadowRootFor(candidate: string): string {
 
 function writableRuntimeRoot(candidate: string): string {
   const resolved = path.resolve(candidate);
+  if (isPathInside(exeRoot(), resolved)) return userRuntimeRoot();
   if (isProtectedInstallRoot(resolved)) return shadowRootFor(resolved);
   if (!canWriteDirectory(resolved)) return shadowRootFor(resolved);
   return resolved;
@@ -852,6 +881,7 @@ if (hasCliCommand) {
       mainWindow = createDesktopWindow(false);
       createTray();
     }
+    void detectWslDistrosAtStartup();
 
     setTimeout(async () => {
       try {
@@ -1073,7 +1103,7 @@ if (hasCliCommand) {
           conversations: agent.listConversationStates(),
           conversationId: agent.activeConversationId,
           conversationPlan: agent.getConversationPlan(),
-          diffs: agent.fileDiffs.map(d => ({ path: d.path, old: d.oldContent.length, new: d.newContent.length })),
+          diffs: agent.fileDiffs.map(d => ({ path: d.path, old: d.oldContent ? d.oldContent.split(/\r?\n/).length : 0, new: d.newContent ? d.newContent.split(/\r?\n/).length : 0 })),
         };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -1129,7 +1159,7 @@ if (hasCliCommand) {
 
     ipcMain.handle('agent:getState', async (_event, conversationId?: string) => {
       if (!agent) return {};
-      const wslDistros = availableWslDistros();
+      const wslDistros = await availableWslDistros();
       const targetConversation = stateConversationId(conversationId);
       let conversationSnapshot = backendConversationState(targetConversation);
       if (wslBackendEnabled()) {
@@ -1941,16 +1971,6 @@ if (hasCliCommand) {
 
     ipcMain.handle('sidecar:status', async () => {
       return { running: sidecarProcess !== null };
-    });
-
-    ipcMain.handle('wsl:detect', async () => {
-      try {
-        const { execSync } = require('child_process');
-        execSync('wsl.exe --status', { timeout: 5000 });
-        return true;
-      } catch {
-        return false;
-      }
     });
 
     ipcMain.handle('sidecar:restart', async () => {

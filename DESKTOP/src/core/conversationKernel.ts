@@ -48,6 +48,11 @@ interface ConversationRuntime {
 
 type WorkListener = (event: AgentWorkEvent) => void;
 
+function changedLineCount(value: string): number {
+  if (!value) return 0;
+  return value.split(/\r?\n/).length;
+}
+
 /**
  * Newmark native Agent-kernel-backed conversation manager.
  *
@@ -247,7 +252,7 @@ export class ConversationKernel {
     this.refreshHostIfActive(runtime.id);
     return {
       tokens: tokens.map(t => ({ type: t.type, text: t.text })),
-      diffs: runtime.runner.fileDiffs.map(d => ({ path: d.path, old: d.oldContent.length, new: d.newContent.length })),
+      diffs: runtime.runner.fileDiffs.map(d => ({ path: d.path, old: changedLineCount(d.oldContent), new: changedLineCount(d.newContent) })),
       mode: runtime.runner.mode,
       model: runtime.runner.model,
       status: runtime.runner.status,

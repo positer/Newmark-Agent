@@ -62,9 +62,9 @@ function connectCdp(target) {
 
   function call(method, params = {}, timeoutMs = 15000) {
     const id = nextId++;
-    ws.send(JSON.stringify({ id, method, params }));
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject });
+      ws.send(JSON.stringify({ id, method, params }));
       setTimeout(() => {
         if (!pending.has(id)) return;
         pending.delete(id);

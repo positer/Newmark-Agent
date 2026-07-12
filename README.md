@@ -5,7 +5,7 @@
 <h1 align="center">Newmark Agent</h1>
 
 <p align="center">
-  <a href="https://github.com/positer/Newmark-Agent/releases/latest"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.0.6-blue"></a>
+  <a href="https://github.com/positer/Newmark-Agent/releases/latest"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.0.7-blue"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Linux-lightgrey">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
@@ -13,7 +13,7 @@
 
 Newmark Agent is a local-first desktop Agent workspace for coding, automation, repository review, model-provider experimentation, and controlled desktop operation. It packages an Electron desktop UI, a TypeScript Agent runtime, workspace-scoped conversations, Flow workflows, subagents, skills, archives, browser/GitHub/automation tools, and configurable OpenAI-compatible, Anthropic-compatible, and GitHub Models providers.
 
-The current source and published development version is **dev-0.0.6**. Newmark is intended for technical users who want an installer-backed desktop Agent app that runs against their own model credentials and keeps mutable runtime state local under `~/.Newmark`. Windows is the primary Computer Use target; Linux GUI, CLI, packaging, and terminal workflows are supported.
+The current source development version is **dev-0.0.7**. Newmark is intended for technical users who want an installer-backed desktop Agent app that runs against their own model credentials and keeps mutable runtime state local under `~/.Newmark`. Windows is the primary Computer Use target; Linux GUI, CLI, packaging, and terminal workflows are supported.
 
 WSL Agent backend preview (2026-07-11): Windows settings now provide a restart-required `Windows native / WSL based` Agent backend choice. WSL mode is selectable only when at least one installed distribution is detected, and the chosen distribution is locked at application startup so active conversations are never hot-migrated between runtimes. The Electron UI and executable remain native Windows components; only the Agent backend runs as a persistent JSONL-controlled Linux process, maps Windows workspaces through `/mnt/<drive>`, and keeps configuration, conversations, and archives under the normal `~/.Newmark` user-state root. Packaged validation covers restart activation, real Linux PID reporting, WSL-local provider requests, tool writes into a Windows external workspace, and conversation isolation.
 
@@ -53,6 +53,10 @@ Adaptive application icons (2026-07-12): Newmark now uses the supplied transpare
 
 Active visual inspection (2026-07-12): validated vision models now receive an `image_inspect` tool for images submitted in the latest user message. The Agent can query exact source dimensions, select an image by 1-based index, crop a source-pixel rectangle, and magnify it by 1-4x while keeping output within 2048 pixels per side. PNG and JPEG decoding, bounds checks, and bilinear RGBA scaling run identically in Windows, Linux, and the WSL Agent backend. Derived crops are returned as structured image tool content for the current model turn only: base64 is removed from visible tool text, no temporary file is created, and the crop is omitted from persisted conversation history. The design follows Codex's public `view_image` boundary of vision capability gating and structured `input_image` results, while Newmark's crop/index implementation is original.
 
+Work-completion review and input-stack polish (2026-07-12): every completed Agent turn that changes files now appends a conversation-bound review card with the changed-file count, per-file additions/deletions, expandable rows, and a Review detail window. The card is restored only with its owning conversation and survives transcript rerenders without duplicating or leaking into another conversation. Task, Queue, and Goal controls are now compact 30-31 px control bands with restrained surfaces, an explicit Goal state marker, preserved edit/pause/drag interactions, and clear separation from the prompt. Source tests pass 982 assertions, while the Electron smoke verifies all five review rows, the detail window, and non-overlapping bar geometry.
+
+Application-theme title icon correction (2026-07-12): the custom titlebar icon now follows Newmark's selected application theme instead of always following the operating-system scheme. Dark application mode uses the light transparent mark, light mode uses the dark mark, and system mode alone listens for live operating-system light/dark changes. Window, taskbar, and tray native icons remain managed independently by Electron's native theme path.
+
 ## At A Glance
 
 | Area | What Newmark provides |
@@ -70,15 +74,15 @@ Active visual inspection (2026-07-12): validated vision models now receive an `i
 
 | Package | Release |
 |---|---|
-| Windows MSI installer | `Newmark-Agent-0.0.6-x64.msi` |
-| Windows unpacked update pack | `Newmark-Agent-0.0.6-win-unpacked-x64.zip` |
-| Linux AppImage | `Newmark-Agent-0.0.6-x86_64.AppImage` |
-| Linux Debian package | `Newmark-Agent-0.0.6-amd64.deb` |
-| Linux unpacked update pack | `Newmark-Agent-0.0.6-linux-unpacked-x64.zip` |
+| Windows MSI installer | `Newmark-Agent-0.0.7-x64.msi` |
+| Windows unpacked update pack | `Newmark-Agent-0.0.7-win-unpacked-x64.zip` |
+| Linux AppImage | `Newmark-Agent-0.0.7-x86_64.AppImage` |
+| Linux Debian package | `Newmark-Agent-0.0.7-amd64.deb` |
+| Linux unpacked update pack | `Newmark-Agent-0.0.7-linux-unpacked-x64.zip` |
 
 Download the assets from the latest GitHub release. On Windows, install the MSI for managed desktops or use the `win-unpacked` zip as the no-loss update source. On Linux, run the AppImage or install the `.deb` package. The distributions include `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
-The Windows MSI is a per-machine installer and targets `Program Files`, requesting elevation through Windows Installer. Mutable configuration, conversations, archives, and credentials remain under `~/.Newmark` and are preserved across upgrades.
+The Windows MSI is a per-machine installer and targets `Program Files`, requesting elevation through Windows Installer. Regardless of whether Newmark runs from Program Files, an unpacked folder, a removable drive, or another installation path, mutable configuration, conversations, archives, and credentials are resolved from `~/.Newmark` and preserved across upgrades. An installation directory passed back as `--root` is normalized to `~/.Newmark`; explicit non-install roots remain available for isolated tests.
 
 ## Quick Start
 
@@ -93,8 +97,8 @@ npm.cmd run dist:windows-release
 The packaged Windows executable is written to:
 
 ```text
-release/Newmark-Agent-0.0.6-x64.msi
-release/Newmark-Agent-0.0.6-win-unpacked-x64.zip
+release/Newmark-Agent-0.0.7-x64.msi
+release/Newmark-Agent-0.0.7-win-unpacked-x64.zip
 ```
 
 Linux and WSLg development builds use native Linux Node/npm inside the distro:
@@ -118,9 +122,9 @@ npm run release:linux-real-provider-smoke
 Linux artifacts are written to:
 
 ```text
-release/Newmark-Agent-0.0.6-x86_64.AppImage
-release/Newmark-Agent-0.0.6-amd64.deb
-release/Newmark-Agent-0.0.6-linux-unpacked-x64.zip
+release/Newmark-Agent-0.0.7-x86_64.AppImage
+release/Newmark-Agent-0.0.7-amd64.deb
+release/Newmark-Agent-0.0.7-linux-unpacked-x64.zip
 ```
 
 The GUI smoke test expects WSLg or another Linux display server with `DISPLAY` or `WAYLAND_DISPLAY` set.
@@ -218,14 +222,14 @@ npm run dist:linux
 npm run release:linux-gui-smoke
 ```
 
-The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the source development version is now `0.0.6`.
+The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the source development version is now `0.0.7`.
 
 Unpacked update dry-runs can be delegated to the packaged CLI before copying files:
 
 ```powershell
 release\win-unpacked\Newmark Agent.exe install-update --check-github --repo positer/Newmark-Agent
-release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 0.0.6 --dry-run
-release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 0.0.6 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 0.0.7 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 0.0.7 --dry-run
 ```
 
 The update helper preserves local state by default. Current installer/update builds also keep mutable state outside the installation directory under `~/.Newmark`, including `config.json`, `Work/`, `skills/`, `Memory Lab/`, and `archive/`.
@@ -238,6 +242,20 @@ npm.cmd run release:real-provider-smoke
 npm.cmd run release:real-apinebula-memory-switch-smoke
 npm.cmd run release:real-provider-stress
 ```
+
+## dev-0.0.7 Notes
+
+dev-0.0.7 adds conversation-bound work-completion file review, compact Task/Queue/Goal control bands, application-theme-aware titlebar icons, installation-independent `~/.Newmark` state normalization, and startup-owned WSL availability detection. The settings page no longer runs or exposes a manual WSL detection/test action; Windows startup asynchronously enumerates installed distributions once, caches the result, and supplies it to both the Agent runtime selector and terminal UI.
+
+The release is gated across Windows native, Windows UI with the WSL Agent backend, and native Linux packages. Validation covers source regressions, packaged CLI/UI startup, file-review interactions, titlebar theme switching, conversation isolation, editor behavior, WSL backend process and workspace bridging, Linux AppImage/deb/unpacked startup, and update-safe user-state preservation.
+
+Current dev-0.0.7 artifact SHA256 values:
+
+- `Newmark-Agent-0.0.7-x64.msi`: `47D04433851E6709FD44519A2855B636A83A7A940A281D54C752682A72814302`
+- `Newmark-Agent-0.0.7-win-unpacked-x64.zip`: `666208437859FDA7B3276A6288CCDE5D98E0DD620F7ABA85E21D7FDF65E83D18`
+- `Newmark-Agent-0.0.7-x86_64.AppImage`: `B7AE25D2D02E907157199A4749896697884C73002C31F04C6DB830BD54FF9BDD`
+- `Newmark-Agent-0.0.7-amd64.deb`: `14CB009A3D3E010571266EDD0DD71E3F2EC43EC658F959895726A8F053C923CF`
+- `Newmark-Agent-0.0.7-linux-unpacked-x64.zip`: `876FD35063C9567E3408BE51466FCEC3059F12BB1966CECC377E2084E9C7C817`
 
 ## dev-0.0.6 Notes
 

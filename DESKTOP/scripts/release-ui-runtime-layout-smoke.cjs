@@ -131,14 +131,22 @@ async function evaluate(cdp, expression) {
     })()`);
     if (!editor.visible || editor.button.width !== 30 || editor.button.height !== 30 || editor.icon.width !== 15 || editor.icon.height !== 15 || !editor.icon.contained) fail(`Markdown preview icon placement failed: ${JSON.stringify(editor)}`);
     if (!editor.beforeMove.text || !editor.beforeMove.current || editor.afterMove.text || editor.afterMove.anchor || !editor.afterMove.timer || editor.afterMove.ghost) fail(`caret completion invalidation failed: ${JSON.stringify(editor)}`);
+    await evaluate(cdp, `window.setTheme('dark')`);
+    await sleep(100);
+    const darkAppIcon = await evaluate(cdp, `document.getElementById('title-app-icon').currentSrc`);
+    await evaluate(cdp, `window.setTheme('light')`);
+    await sleep(100);
+    const lightAppIcon = await evaluate(cdp, `document.getElementById('title-app-icon').currentSrc`);
     await cdp.call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
-    await evaluate(cdp, `window.refreshTitlebarSystemIcon()`);
+    await evaluate(cdp, `window.setTheme('system')`);
+    await sleep(100);
     const darkSystemIcon = await evaluate(cdp, `document.getElementById('title-app-icon').currentSrc`);
     await cdp.call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
-    await evaluate(cdp, `window.refreshTitlebarSystemIcon()`);
+    await evaluate(cdp, `window.refreshTitlebarThemeIcon()`);
+    await sleep(100);
     const lightSystemIcon = await evaluate(cdp, `document.getElementById('title-app-icon').currentSrc`);
-    if (!String(darkSystemIcon).includes('app-icon-light.png') || !String(lightSystemIcon).includes('app-icon-dark.png')) fail(`system theme title icon mismatch: ${JSON.stringify({ darkSystemIcon, lightSystemIcon })}`);
-    console.log(`[release-ui-runtime-layout-smoke] PASS layout=${JSON.stringify(result)} editor=${JSON.stringify(editor)} icons=${JSON.stringify({ darkSystemIcon, lightSystemIcon })}`);
+    if (!String(darkAppIcon).includes('app-icon-light.png') || !String(lightAppIcon).includes('app-icon-dark.png') || !String(darkSystemIcon).includes('app-icon-light.png') || !String(lightSystemIcon).includes('app-icon-dark.png')) fail(`application theme title icon mismatch: ${JSON.stringify({ darkAppIcon, lightAppIcon, darkSystemIcon, lightSystemIcon })}`);
+    console.log(`[release-ui-runtime-layout-smoke] PASS layout=${JSON.stringify(result)} editor=${JSON.stringify(editor)} icons=${JSON.stringify({ darkAppIcon, lightAppIcon, darkSystemIcon, lightSystemIcon })}`);
   } finally {
     try { cdp?.ws.close(); } catch {}
     if (child?.pid) spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });

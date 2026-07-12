@@ -1,0 +1,46 @@
+const fs = require('fs');
+const http = require('http');
+const os = require('os');
+const path = require('path');
+const { spawn, spawnSync } = require('child_process');
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const fail = message => { throw new Error(message); };
+function getJson(url) { return new Promise((resolve, reject) => http.get(url, response => { let body=''; response.on('data', chunk => body += chunk); response.on('end', () => { try { resolve(JSON.parse(body)); } catch (error) { reject(error); } }); }).on('error', reject)); }
+async function target(port) { for(let i=0;i<160;i++){ try { const pages=await getJson(`http://127.0.0.1:${port}/json/list`); const page=pages.find(item=>item.webSocketDebuggerUrl&&String(item.url||'').includes('index.html')); if(page)return page; } catch {} await sleep(300); } fail('CDP target timeout'); }
+function connect(page) { let id=0; const pending=new Map(); const ws=new WebSocket(page.webSocketDebuggerUrl); const ready=new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;ws.onmessage=event=>{const msg=JSON.parse(event.data);const entry=pending.get(msg.id);if(!entry)return;pending.delete(msg.id);msg.error?entry.reject(new Error(msg.error.message)):entry.resolve(msg.result);};}); const call=(method,params={})=>new Promise((resolve,reject)=>{const current=++id;pending.set(current,{resolve,reject});ws.send(JSON.stringify({id:current,method,params}));setTimeout(()=>{if(pending.delete(current))reject(new Error(`timeout ${method}`));},20000);}); return{ws,ready,call}; }
+async function evaluate(cdp, expression) { const result=await cdp.call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(result.exceptionDetails)fail(result.exceptionDetails.exception?.description||result.exceptionDetails.text);return result.result?.value; }
+
+(async()=>{
+  const repoRoot=path.resolve(__dirname,'..','..');
+  const desktopRoot=path.join(repoRoot,'DESKTOP');
+  const electron=path.join(desktopRoot,'node_modules','electron','dist','electron.exe');
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'NewmarkWorkReviewBars-'));
+  const screenshot=path.join(repoRoot,'archive','2026-07-12-work-review-bars-smoke.png');
+  const port=49610+Math.floor(Math.random()*100);
+  let child,cdp;
+  try {
+    child=spawn(electron,['.',`--remote-debugging-port=${port}`,`--user-data-dir=${path.join(root,'ElectronData')}`,'--no-sandbox','--root',root],{cwd:desktopRoot,stdio:'ignore',windowsHide:true});
+    cdp=connect(await target(port));await cdp.ready;await cdp.call('Runtime.enable');await cdp.call('Page.enable');
+    for(let i=0;i<100;i++){if(await evaluate(cdp,`typeof window.addWorkReview==='function'&&typeof window.renderInputStack==='function'`))break;await sleep(200);if(i===99)fail('renderer init timeout');}
+    const state=await evaluate(cdp,`(() => {
+      window.state.conversationPlan={items:[{id:'a',text:'Inspect repository changes',status:'pending'},{id:'b',text:'Run UI regression',status:'done'}]};
+      window.state.todoCollapsed=true;window.state.nextQueue=['Verify packaged interaction'];window.state.queueCollapsed=true;window.state.goalText='Ship a stable interaction pass';window.state.goalPaused=false;window.renderInputStack();
+      window.addWorkReview([{path:'DESKTOP/src/ui/index.html',old:12,new:44},{path:'DESKTOP/src/main.ts',old:3,new:8},{path:'README.md',old:1,new:4},{path:'OVERVIEW.md',old:0,new:3},{path:'DESKTOP/src/tests/verify.ts',old:2,new:9}]);
+      const more=document.querySelector('.work-review-more');more.click();document.querySelector('.work-review-btn').click();
+      const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();return{top:r.top,bottom:r.bottom,height:r.height,width:r.width}};
+      return {todo:rect('todo-wrap'),queue:rect('queue-panel'),goal:rect('goal-bar'),reviewRows:document.querySelectorAll('.work-review-file').length,visibleRows:Array.from(document.querySelectorAll('.work-review-file')).filter(x=>getComputedStyle(x).display!=='none').length,reviewOpen:document.getElementById('sub-win-overlay').classList.contains('open'),goalText:document.getElementById('goal-text').textContent,queueLabel:document.getElementById('queue-header-label').textContent};
+    })()`);
+    if(state.todo.height>34||state.queue.height>34||state.goal.height>34)fail(`bars are oversized: ${JSON.stringify(state)}`);
+    if(state.todo.bottom>state.queue.top||state.queue.bottom>state.goal.top)fail(`bars overlap: ${JSON.stringify(state)}`);
+    if(state.reviewRows!==5||state.visibleRows!==5||!state.reviewOpen||!state.goalText.includes('Ship')||!state.queueLabel.includes('1'))fail(`interaction state failed: ${JSON.stringify(state)}`);
+    await cdp.call('Emulation.setDeviceMetricsOverride',{width:1400,height:900,deviceScaleFactor:1,mobile:false});
+    await evaluate(cdp,`window.closeSubWin()`);
+    const shot=await cdp.call('Page.captureScreenshot',{format:'png',fromSurface:true},30000);fs.mkdirSync(path.dirname(screenshot),{recursive:true});fs.writeFileSync(screenshot,Buffer.from(shot.data,'base64'));if(fs.statSync(screenshot).size<10000)fail('screenshot too small');
+    console.log(`[release-ui-work-review-bars-smoke] PASS ${JSON.stringify(state)} screenshot=${screenshot}`);
+  } finally {
+    try{cdp?.ws.close();}catch{}
+    if(child?.pid)spawnSync('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore',timeout:15000});
+    for(let i=0;i<6;i++){try{fs.rmSync(root,{recursive:true,force:true,maxRetries:3,retryDelay:200});if(!fs.existsSync(root))break;}catch{}await sleep(300);}
+  }
+})().catch(error=>{console.error(error.stack||error);process.exit(1);});

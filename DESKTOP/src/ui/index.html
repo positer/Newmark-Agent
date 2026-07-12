@@ -3815,7 +3815,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
           <button id="scroll-bottom-btn" onclick="window.scrollToBottom()" title="Scroll to bottom"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#arrow-down"></use></svg><span class="icon-only-label">Scroll to bottom</span></button>
 
           <!-- Goal checklist -->
-          <div id="todo-wrap" class="stack-card collapsed">
+          <div id="todo-wrap" class="stack-card collapsed" style="display:none">
             <div id="todo-header" class="stack-row" onclick="window.toggleTodoCollapse()">
               <span id="todo-header-label" class="stack-title">Tasks</span>
               <span class="stack-actions">
@@ -3826,7 +3826,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
           </div>
 
           <!-- Queued input -->
-          <div id="queue-panel" class="stack-card collapsed">
+          <div id="queue-panel" class="stack-card collapsed" style="display:none">
             <div id="queue-header" class="stack-row" onclick="window.toggleQueuePanel()">
               <span id="queue-header-label" class="stack-title">Next</span>
               <span class="stack-actions">

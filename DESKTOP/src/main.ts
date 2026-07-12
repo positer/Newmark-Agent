@@ -779,6 +779,7 @@ if (hasCliCommand) {
         }
       }, 100);
     };
+    let startupShellReady: Promise<void> = Promise.resolve();
     const loadDesktopWindowUi = (win: BrowserWindow): void => {
       if (win.isDestroyed()) return;
       const url = win.webContents.getURL();
@@ -788,9 +789,10 @@ if (hasCliCommand) {
     };
     const loadStartupShell = (win: BrowserWindow): void => {
       if (win.isDestroyed()) return;
-      void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(STARTUP_HTML)}`);
       recordStartup('startup-shell-load-started');
-      win.webContents.once('did-finish-load', () => recordStartup('startup-shell-loaded'));
+      startupShellReady = win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(STARTUP_HTML)}`).then(() => {
+        recordStartup('startup-shell-loaded');
+      });
     };
     const showMainWindow = (): void => {
       const win = mainWindow && !mainWindow.isDestroyed()
@@ -885,6 +887,7 @@ if (hasCliCommand) {
 
     setTimeout(async () => {
       try {
+        await startupShellReady;
         agent = new Agent(root);
         activeAgentBackendMode = process.platform === 'win32' && agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows';
         recordStartup('agent-ready');

@@ -57,6 +57,8 @@ Work-completion review and input-stack polish (2026-07-12): every completed Agen
 
 Application-theme title icon correction (2026-07-12): the custom titlebar icon now follows Newmark's selected application theme instead of always following the operating-system scheme. Dark application mode uses the light transparent mark, light mode uses the dark mark, and system mode alone listens for live operating-system light/dark changes. Window, taskbar, and tray native icons remain managed independently by Electron's native theme path.
 
+Windows startup follow-up (2026-07-12): the startup shell and full UI navigation are now strictly serialized. The Agent waits for the lightweight shell navigation to finish before loading `index.html`, preventing the installed renderer from being replaced or terminated by a late shell load. Empty Task and Queue controls are hidden before state hydration, so no empty bar flashes during startup.
+
 ## At A Glance
 
 | Area | What Newmark provides |
@@ -251,8 +253,8 @@ The release is gated across Windows native, Windows UI with the WSL Agent backen
 
 Current dev-0.0.7 artifact SHA256 values:
 
-- `Newmark-Agent-0.0.7-x64.msi`: `47D04433851E6709FD44519A2855B636A83A7A940A281D54C752682A72814302`
-- `Newmark-Agent-0.0.7-win-unpacked-x64.zip`: `666208437859FDA7B3276A6288CCDE5D98E0DD620F7ABA85E21D7FDF65E83D18`
+- `Newmark-Agent-0.0.7-x64.msi`: `2A7F6BD0D94A5D0C9C1C45960A0BF905983D4FBD317335345BFE922AE9758FDA`
+- `Newmark-Agent-0.0.7-win-unpacked-x64.zip`: `B8B7585FA514F3E0B6BC33504A50751C8DE412F0C133DBC0F22102B75817FEF5`
 - `Newmark-Agent-0.0.7-x86_64.AppImage`: `B7AE25D2D02E907157199A4749896697884C73002C31F04C6DB830BD54FF9BDD`
 - `Newmark-Agent-0.0.7-amd64.deb`: `14CB009A3D3E010571266EDD0DD71E3F2EC43EC658F959895726A8F053C923CF`
 - `Newmark-Agent-0.0.7-linux-unpacked-x64.zip`: `876FD35063C9567E3408BE51466FCEC3059F12BB1966CECC377E2084E9C7C817`

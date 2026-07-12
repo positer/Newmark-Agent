@@ -1062,7 +1062,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .editor-code-wrap { position:relative; min-width:0; min-height:0; overflow:hidden; }
 .editor-highlight, .editor-ghost, .editor-textarea { position:absolute; inset:0; margin:0; padding:10px 12px; border:0; overflow:auto; white-space:pre; tab-size:2; font:12px/1.55 var(--font-mono); }
 .editor-highlight { pointer-events:none; color:var(--text); background:transparent; }
-.editor-ghost { pointer-events:none; z-index:1; color:var(--text); background:#0b0d14; }
+.editor-ghost { display:none; pointer-events:none; z-index:1; color:var(--text); background:#0b0d14; }
+.editor-ghost.visible { display:block; }
 .editor-ghost-text { color:rgba(205,211,222,.48); -webkit-text-fill-color:rgba(205,211,222,.48); }
 .editor-textarea { z-index:2; width:100%; height:100%; resize:none; outline:none; background:transparent; color:transparent; caret-color:#fff; -webkit-text-fill-color:transparent; }
 .editor-textarea::selection { background:rgba(91,120,255,.35); }
@@ -3732,7 +3733,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   <div id="topbar">
     <span class="title" id="title-text">
       <span class="logo" id="title-app-logo">
-        <img id="title-app-icon" src="../../assets/app-icon-light.png" alt="" aria-hidden="true">
+        <img id="title-app-icon" src="../../assets/app-icon-dark.png" alt="" aria-hidden="true">
       </span>
       Newmark Agent
     </span>
@@ -5208,7 +5209,7 @@ function applyLanguageToUi() {
   if (window.renderContextWindow) window.renderContextWindow();
   if (window.renderInputStack) window.renderInputStack();
   if (window.refreshModelSelect) window.refreshModelSelect();
-  if (window.loadFileTree) window.loadFileTree();
+  if (window.loadFileTree && !state.rightCollapsed && state.rightTab === 'file-tree') window.loadFileTree();
   if (!els['chat-area'] || !els['chat-area'].querySelector('.chat-msg')) renderChatMessages([]);
 }
 
@@ -7292,7 +7293,9 @@ window.setRightCollapsed = function(collapsed) {
 };
 
 window.toggleRight = function() {
+  var opening = state.rightCollapsed;
   window.setRightCollapsed(!state.rightCollapsed);
+  if (opening && state.rightTab === 'file-tree') window.loadFileTree();
 };
 
 window.toggleBottom = function() {
@@ -8586,7 +8589,7 @@ window.refreshTitlebarThemeIcon = function() {
   var icon = document.getElementById('title-app-icon');
   if (!icon) return;
   var useDarkTheme = state.theme === 'system' ? systemColorScheme.matches : state.theme !== 'light';
-  icon.src = useDarkTheme ? '../../assets/app-icon-light.png' : '../../assets/app-icon-dark.png';
+  icon.src = useDarkTheme ? '../../assets/app-icon-dark.png' : '../../assets/app-icon-light.png';
 };
 window.refreshTitlebarSystemIcon = window.refreshTitlebarThemeIcon;
 if (systemColorScheme.addEventListener) systemColorScheme.addEventListener('change', function() {
@@ -9504,7 +9507,7 @@ window.saveFlowToDisk = async function(workIdx) {
   state.flowWorks[workIdx] = window.flowToUiWork(normalized);
   addMsg('assistant', '[System] ' + t('flow.saved') + ': ' + normalized.name + '.Flow.json', 'flow', '');
   window.renderFlowSelector();
-  window.loadFileTree();
+  if (!state.rightCollapsed && state.rightTab === 'file-tree') window.loadFileTree();
   window.closeSubWin();
 };
 
@@ -9642,27 +9645,34 @@ function renderTreeNodes(nodes, parent, depth) {
     div.style.paddingLeft = (8 + depth * 14) + 'px';
     var icon = n.type === 'directory' ? iconSvg('folder', 'Folder', 'small') : iconSvg('file', 'File', 'small');
     if (n.type === 'directory') {
-      div.innerHTML = '<span class="ft-toggle" id="ft-toggle-' + depth + '-' + i + '">' + iconSvg('chevron-right', t('fileTree.toggleFolder'), 'tiny') + '</span>' +
+      div.innerHTML = '<span class="ft-toggle collapsed">' + iconSvg('chevron-right', t('fileTree.toggleFolder'), 'tiny') + '</span>' +
         '<span class="ft-icon">' + icon + '</span><span class="ft-name">' + esc(n.name) + '</span>';
-      div.onclick = function(idx, d, node) {
-        return function() {
-          var toggle = document.getElementById('ft-toggle-' + d + '-' + idx);
-          var children = document.getElementById('ft-children-' + d + '-' + idx);
-          if (children) {
-            var isCollapsed = children.style.display === 'none';
-            children.style.display = isCollapsed ? 'block' : 'none';
-            if (toggle) toggle.classList.toggle('collapsed', !isCollapsed);
-          }
-        };
-      }(i, depth, n);
       parent.appendChild(div);
       var childContainer = document.createElement('div');
-      childContainer.id = 'ft-children-' + depth + '-' + i;
       childContainer.className = 'ft-children';
+      childContainer.style.display = 'none';
       parent.appendChild(childContainer);
-      if (n.children) {
-        renderTreeNodes(n.children, childContainer, depth + 1);
-      }
+      div.onclick = function(node, toggle, children, childDepth) {
+        return async function() {
+          if (children.getAttribute('data-loading') === 'true') return;
+          var opening = children.style.display === 'none';
+          children.style.display = opening ? 'block' : 'none';
+          toggle.classList.toggle('collapsed', !opening);
+          if (!opening || children.getAttribute('data-loaded') === 'true') return;
+          children.setAttribute('data-loading', 'true');
+          try {
+            var result = await api.getFileTree(node.path);
+            var childNodes = Array.isArray(result) ? result : (result.tree || result.nodes || []);
+            children.innerHTML = '';
+            renderTreeNodes(childNodes, children, childDepth);
+            children.setAttribute('data-loaded', 'true');
+          } catch(e) {
+            children.innerHTML = '<div style="font-size:11px;color:var(--text-dim);padding:8px;">' + esc(t('fileTree.unavailable')) + '</div>';
+          } finally {
+            children.removeAttribute('data-loading');
+          }
+        };
+      }(n, div.querySelector('.ft-toggle'), childContainer, depth + 1);
     } else {
       div.innerHTML = '<span class="ft-toggle" style="opacity:0;">' + iconSvg('chevron-right', t('fileTree.file'), 'tiny') + '</span>' +
         '<span class="ft-icon">' + icon + '</span><span class="ft-name">' + esc(n.name) + '</span>';
@@ -9723,7 +9733,11 @@ window.renderEditorGhostText = function() {
   var ta = els['editor-textarea'];
   var ghost = els['editor-ghost'];
   if (!ta || !ghost) return;
-  if (!state.editorCompletionText || !window.editorCompletionAnchorIsCurrent()) { ghost.textContent = ''; return; }
+  if (!state.editorCompletionText || !window.editorCompletionAnchorIsCurrent()) {
+    ghost.textContent = '';
+    ghost.classList.remove('visible');
+    return;
+  }
   var pos = state.editorCompletionAnchor.start;
   var language = window.editorLanguageForPath(state.editorPath);
   var startMarker = '\uE010';
@@ -9732,6 +9746,7 @@ window.renderEditorGhostText = function() {
   ghost.innerHTML = window.highlightEditorCode(combined, language)
     .replace(startMarker, '<span class="editor-ghost-text">')
     .replace(endMarker, '</span>') + '\n';
+  ghost.classList.add('visible');
   ghost.scrollTop = ta.scrollTop;
   ghost.scrollLeft = ta.scrollLeft;
 };
@@ -11831,9 +11846,6 @@ function stopMarqueeJS() {
   renderConversations();
   updateWorkspaceGate();
   applyLanguageToUi();
-
-  // Load file tree (async, non-blocking)
-  window.loadFileTree();
 
   window.renderSubagentList();
   window.renderLeftWsList();

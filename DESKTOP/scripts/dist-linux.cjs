@@ -103,10 +103,43 @@ function runWindowsWslBuild() {
       'Linux packaging must run in Linux/WSL. No WSL distro is available, and Windows-native AppImage/deb packaging is intentionally skipped because it requires symlink privileges and fpm.'
     );
   }
-  const wslRoot = toWslPath(distro, root);
-  log(`forwarding Linux package build to WSL distro ${distro}`);
-  const script = `cd ${wslQuote(wslRoot)} && node scripts/dist-linux.cjs --native`;
-  run('wsl.exe', ['-d', distro, '--', 'bash', '-lc', script], { cwd: root });
+  const wslSourceRoot = toWslPath(distro, root);
+  const wslRepoRoot = toWslPath(distro, repoRoot);
+  const wslReleaseDir = toWslPath(distro, releaseDir);
+  log(`building in an isolated Linux filesystem through WSL distro ${distro}`);
+  const script = [
+    'set -euo pipefail',
+    "build_root=$(mktemp -d /tmp/newmark-linux-build.XXXXXX)",
+    "cleanup() { rm -rf \"$build_root\"; }",
+    'trap cleanup EXIT',
+    'mkdir -p "$build_root/repo/DESKTOP" "$build_root/repo/release"',
+    `rsync -a --delete --exclude='node_modules/' --exclude='dist/' --exclude='test-tmp*/' ${wslQuote(`${wslSourceRoot}/`)} "$build_root/repo/DESKTOP/"`,
+    `cp ${wslQuote(`${wslRepoRoot}/LICENSE`)} "$build_root/repo/LICENSE"`,
+    `cp ${wslQuote(`${wslRepoRoot}/THIRD_PARTY_NOTICES.md`)} "$build_root/repo/THIRD_PARTY_NOTICES.md"`,
+    'cd "$build_root/repo/DESKTOP"',
+    'npm ci --include=dev --no-audit --no-fund',
+    'node scripts/dist-linux.cjs --native',
+    `mkdir -p ${wslQuote(wslReleaseDir)}`,
+    `rm -rf ${wslQuote(`${wslReleaseDir}/linux-unpacked`)}`,
+    `cp "$build_root/repo/release/Newmark-Agent-${version}-x86_64.AppImage" ${wslQuote(`${wslReleaseDir}/`)}`,
+    `cp "$build_root/repo/release/Newmark-Agent-${version}-amd64.deb" ${wslQuote(`${wslReleaseDir}/`)}`,
+    `cp "$build_root/repo/release/Newmark-Agent-${version}-linux-unpacked-x64.zip" ${wslQuote(`${wslReleaseDir}/`)}`,
+    `rsync -a --delete "$build_root/repo/release/linux-unpacked/" ${wslQuote(`${wslReleaseDir}/linux-unpacked/`)}`,
+  ].join('\n');
+  run('wsl.exe', ['-d', distro, '--', 'bash', '-s'], {
+    cwd: root,
+    input: `${script}\n`,
+    stdio: ['pipe', 'inherit', 'inherit'],
+  });
+
+  const appImage = path.join(releaseDir, `Newmark-Agent-${version}-x86_64.AppImage`);
+  const deb = path.join(releaseDir, `Newmark-Agent-${version}-amd64.deb`);
+  const zipPath = path.join(releaseDir, `Newmark-Agent-${version}-linux-unpacked-x64.zip`);
+  const unpackedExe = findLinuxExecutable(path.join(releaseDir, 'linux-unpacked'));
+  assertExists(appImage, 'copied Linux AppImage');
+  assertExists(deb, 'copied Linux Debian package');
+  assertExists(zipPath, 'copied Linux unpacked zip');
+  if (!unpackedExe) throw new Error(`copied Linux unpacked executable was not found in ${path.join(releaseDir, 'linux-unpacked')}`);
 }
 
 try {

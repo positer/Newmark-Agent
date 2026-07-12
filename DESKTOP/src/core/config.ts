@@ -17,6 +17,14 @@ export interface ConfigEntry {
 
 export type ProviderProtocol = 'openai' | 'anthropic' | 'github_models';
 
+const USER_LEVEL_CONFIG_KEYS = new Set([
+  'models.providers',
+  'ui.left_panel_collapsed',
+  'ui.right_panel_collapsed',
+  'ui.bottom_panel_collapsed',
+  'ui.secondary_panel_collapsed',
+]);
+
 export interface ProviderConfig {
   name: string;
   base_url: string;
@@ -144,9 +152,9 @@ export class ConfigManager {
         const wsCfg: Record<string, Record<string, ConfigEntry>> = normalizeConfigShape(JSON.parse(readJsonText(cfgPath)), false);
         for (const [sectionName, section] of Object.entries(wsCfg)) {
           for (const [k, entry] of Object.entries(section)) {
-            // Provider credentials and catalogs are user-level state and must not
-            // be hidden by workspace templates that contain an empty providers list.
-            if (sectionName === 'models' && k === 'providers') continue;
+            // Credentials/catalogs and application layout belong to the user root,
+            // not to stale workspace templates copied between Newmark versions.
+            if (USER_LEVEL_CONFIG_KEYS.has(`${sectionName}.${k}`)) continue;
             if (entry.value !== undefined) {
               this.workspaceOverrides.set(`${sectionName}.${k}`, entry.value);
             }

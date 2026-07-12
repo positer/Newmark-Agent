@@ -2,6 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const asar = require('@electron/asar');
 const { verifyExeIcon } = require('./patch-win-exe-icon.cjs');
@@ -12,6 +13,10 @@ const appAsar = path.join(repoRoot, 'release', 'win-unpacked', 'resources', 'app
 const packageIcon = path.join(repoRoot, 'DESKTOP', 'assets', 'icon.ico');
 const screenshotPath = path.join(repoRoot, 'archive', '2026-06-28-v1.0.2-ui-icon-smoke.png');
 const windowIconPath = path.join(repoRoot, 'archive', '2026-06-28-v1.0.2-runtime-window-icon.png');
+const expectedIconHashes = {
+  'assets/app-icon-dark.png': 'D07F670051677EEF1BD4B60EF186E8ADB81A37202BE49F929DA84D38C54E4305',
+  'assets/app-icon-light.png': 'E8482757BC5AB5BD4C9A4589A878170C0D3DAE25A8F27A5461CEC45F2EFCB3CA',
+};
 
 function fail(message) {
   throw new Error(message);
@@ -23,6 +28,10 @@ function ensureReleaseAssets() {
   const files = asar.listPackage(appAsar);
   for (const file of ['\\assets\\app-icon-dark.png', '\\assets\\app-icon-light.png', '\\assets\\icon.ico']) {
     if (!files.includes(file)) fail(`app.asar missing icon asset: ${file}`);
+  }
+  for (const [file, expectedHash] of Object.entries(expectedIconHashes)) {
+    const actualHash = crypto.createHash('sha256').update(asar.extractFile(appAsar, file)).digest('hex').toUpperCase();
+    if (actualHash !== expectedHash) fail(`app.asar icon content mismatch for ${file}: ${actualHash}`);
   }
   verifyExeIcon(exePath, packageIcon);
 }
@@ -126,7 +135,7 @@ async function verifyTitlebarIcon(cdp) {
   });
   const state = result.result && result.result.value;
   if (!state || state.missing) fail(`titlebar app icon missing in packaged renderer: ${JSON.stringify(state)}`);
-  const expectedResolved = state.appTheme === 'light' ? 'app-icon-dark.png' : 'app-icon-light.png';
+  const expectedResolved = state.appTheme === 'light' ? 'app-icon-light.png' : 'app-icon-dark.png';
   if (!String(state.resolvedSrc || '').includes(expectedResolved)) fail(`titlebar application-theme icon mismatch: ${JSON.stringify(state)}`);
   if (!state.complete || state.naturalWidth < 16 || state.naturalHeight < 16) fail(`titlebar app icon did not decode: ${JSON.stringify(state)}`);
   if (state.width < 20 || state.height < 20 || state.logoWidth < 24 || state.logoHeight < 24) fail(`titlebar app icon layout too small: ${JSON.stringify(state)}`);

@@ -838,7 +838,7 @@ if (hasCliCommand) {
         win.show();
         recordStartup('window-shown');
         syncAutomationWakeSoon();
-        if (!app.isPackaged) win.webContents.openDevTools({ mode: 'bottom' });
+        if (!app.isPackaged && !args.includes('--no-devtools')) win.webContents.openDevTools({ mode: 'bottom' });
       }
 
       win.on('close', (e) => {
@@ -1400,8 +1400,8 @@ if (hasCliCommand) {
       return agent?.readArchive(name);
     });
 
-    function walkTree(_root: string, current: string): any {
-      const entries = fs.readdirSync(current, { withFileTypes: true });
+    async function listTreeLevel(current: string): Promise<any[]> {
+      const entries = await fs.promises.readdir(current, { withFileTypes: true });
       const nodes: any[] = [];
       for (const e of entries) {
         if (e.name.startsWith('.')) continue;
@@ -1412,7 +1412,6 @@ if (hasCliCommand) {
             name: e.name,
             type: 'directory',
             path: fullPath,
-            children: walkTree(root, fullPath),
           });
         } else {
           nodes.push({ name: e.name, type: 'file', path: fullPath });
@@ -1461,10 +1460,15 @@ if (hasCliCommand) {
 
     ipcMain.handle('agent:getFileTree', async (_event, dirPath: string) => {
       try {
-        const treeRoot = dirPath
-          ? resolveAppPath(root, dirPath)
-          : path.resolve(agent?.workspace.current?.path || root);
-        return walkTree(treeRoot, treeRoot);
+        const workspaceRoot = path.resolve(agent?.workspace.current?.path || root);
+        const treeRoot = dirPath ? path.resolve(resolveAppPath(workspaceRoot, dirPath)) : workspaceRoot;
+        if (!isPathInside(workspaceRoot, treeRoot)) return { error: 'File tree path is outside the active workspace' };
+        const [realWorkspaceRoot, realTreeRoot] = await Promise.all([
+          fs.promises.realpath(workspaceRoot).catch(() => workspaceRoot),
+          fs.promises.realpath(treeRoot).catch(() => treeRoot),
+        ]);
+        if (!isPathInside(realWorkspaceRoot, realTreeRoot)) return { error: 'File tree path is outside the active workspace' };
+        return await listTreeLevel(treeRoot);
       } catch (e) { return { error: String(e) }; }
     });
 

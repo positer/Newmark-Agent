@@ -45,14 +45,12 @@ async function waitForTarget(port) {
   while (Date.now() < deadline) {
     try {
       const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
-      const target = targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview') && String(t.url || '').includes('index.html'))
-        || targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview'))
-        || targets.find(t => t.webSocketDebuggerUrl);
+      const target = targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview') && String(t.url || '').includes('index.html'));
       if (target) return target;
     } catch {}
     await sleep(500);
   }
-  fail('Timed out waiting for Electron CDP target');
+  fail('Timed out waiting for the final Electron index.html CDP target');
 }
 
 function connectCdp(target) {

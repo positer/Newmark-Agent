@@ -74,11 +74,16 @@ async function evaluate(cdp, expression) {
       await sleep(200);
       if (attempt === 99) fail('renderer initialization timeout');
     }
+    const activeState = await evaluate(cdp, `window.api.getState()`);
+    const workspacePath = String(activeState?.workspaces?.current?.path || '');
+    if (!workspacePath) fail('runtime layout smoke has no active workspace');
+    fs.mkdirSync(path.join(workspacePath, 'lazy-tree'), { recursive: true });
+    fs.writeFileSync(path.join(workspacePath, 'lazy-tree', 'child.txt'), 'LAZY_TREE_CHILD_OK', 'utf8');
+    fs.writeFileSync(path.join(workspacePath, 'layout-preview.md'), '# Preview\n\nBody', 'utf8');
     const result = await evaluate(cdp, `(async () => {
       window.openSettings('general');
       const state = await window.api.getState();
       const workspacePath = String(state.workspaces?.current?.path || '');
-      await window.api.saveFile(workspacePath + '/lazy-tree/child.txt', 'LAZY_TREE_CHILD_OK');
       const tree = await window.api.getFileTree();
       const lazyRoot = (Array.isArray(tree) ? tree : []).find(node => node.name === 'lazy-tree');
       const lazyChildren = lazyRoot ? await window.api.getFileTree(lazyRoot.path) : [];
@@ -151,7 +156,6 @@ async function evaluate(cdp, expression) {
     })()`);
     if (treeUi.error || !treeUi.childVisible || treeUi.afterExpand <= treeUi.beforeExpand || !treeUi.editorFile.includes('child.txt') || !treeUi.editorText.includes('LAZY_TREE_CHILD_OK')) fail(`file tree UI expansion failed: ${JSON.stringify(treeUi)}`);
     const editor = await evaluate(cdp, `(async () => {
-      await window.api.saveFile('layout-preview.md', '# Preview\\n\\nBody');
       await window.openFile('layout-preview.md');
       const button = document.getElementById('editor-md-toggle');
       const icon = button.querySelector('.nm-icon');

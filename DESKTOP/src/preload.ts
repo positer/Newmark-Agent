@@ -24,8 +24,13 @@ contextBridge.exposeInMainWorld('api', {
   listArchives: (scope?: string) => ipcRenderer.invoke('agent:listArchives', scope),
   deleteArchive: (name: string) => ipcRenderer.invoke('agent:deleteArchive', name),
   readArchive: (name: string) => ipcRenderer.invoke('agent:readArchive', name),
-  readFile: (path: string) => ipcRenderer.invoke('agent:readFile', path),
-  saveFile: (path: string, content: string) => ipcRenderer.invoke('agent:saveFile', path, content),
+  openWorkspaceFile: (path: string) => ipcRenderer.invoke('agent:openWorkspaceFile', path),
+  saveWorkspaceFile: (token: string, content: string, expectedRevision: string) => ipcRenderer.invoke('agent:saveWorkspaceFile', token, content, expectedRevision),
+  listFlows: () => ipcRenderer.invoke('flow:list'),
+  readFlow: (name: string) => ipcRenderer.invoke('flow:read', name),
+  saveFlow: (workflow: Record<string, unknown>) => ipcRenderer.invoke('flow:save', workflow),
+  readWorkspacePrompt: () => ipcRenderer.invoke('workspace:readPrompt'),
+  saveWorkspacePrompt: (content: string) => ipcRenderer.invoke('workspace:savePrompt', content),
   editorComplete: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:editorComplete', request),
   editorAssist: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:editorAssist', request),
   filePathForFile: (file: File) => {
@@ -35,7 +40,6 @@ contextBridge.exposeInMainWorld('api', {
       return '';
     }
   },
-  listFiles: (dir: string) => ipcRenderer.invoke('agent:listFiles', dir),
   getFileTree: (dir?: string) => ipcRenderer.invoke('agent:getFileTree', dir),
   selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
   executeBash: (cmd: string, shell: string, cwd: string) => ipcRenderer.invoke('agent:executeBash', cmd, shell, cwd),
@@ -89,8 +93,11 @@ contextBridge.exposeInMainWorld('api', {
   terminalWrite: (sessionId: string, data: string) => ipcRenderer.invoke('pty:write', sessionId, data),
   terminalKill: (sessionId: string, timeoutMs?: number) => ipcRenderer.invoke('pty:kill', sessionId, timeoutMs),
   terminalGetBuffer: (sessionId: string) => ipcRenderer.invoke('pty:getBuffer', sessionId),
-  terminalTakeoverState: () => ipcRenderer.invoke('agentTerminal:takeoverState'),
-  terminalTakeoverWrite: (sessionId: string, data: string) => ipcRenderer.invoke('agentTerminal:takeoverWrite', sessionId, data),
+  terminalTakeoverState: (conversationId?: string, actorId?: string) => ipcRenderer.invoke('agentTerminal:takeoverState', conversationId, actorId),
+  terminalTakeoverWrite: (sessionId: string, data: string, conversationId?: string, actorId?: string) => ipcRenderer.invoke('agentTerminal:takeoverWrite', sessionId, data, conversationId, actorId),
+  terminalTakeoverResize: (sessionId: string, cols: number, rows: number, conversationId?: string, actorId?: string) => ipcRenderer.invoke('agentTerminal:takeoverResize', sessionId, cols, rows, conversationId, actorId),
+  terminalTakeoverStop: (sessionId: string, conversationId?: string, actorId?: string) => ipcRenderer.invoke('agentTerminal:takeoverStop', sessionId, conversationId, actorId),
+  terminalTakeoverDetach: (sessionId: string, conversationId?: string, actorId?: string) => ipcRenderer.invoke('agentTerminal:takeoverDetach', sessionId, conversationId, actorId),
   wslBackendStatus: () => ipcRenderer.invoke('wsl:backendStatus'),
   wslBackendTest: () => ipcRenderer.invoke('wsl:backendTest'),
   onTerminalData: (callback: (event: unknown, sessionId: string, data: string) => void) => {

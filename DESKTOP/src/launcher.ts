@@ -151,6 +151,10 @@ function isTerminal(): boolean {
 
 async function drainCliNetworkHandles(): Promise<void> {
   try {
+    const { stopComputerUsePowerShellHost } = require('./tools/computerUsePowerShellHost');
+    stopComputerUsePowerShellHost();
+  } catch {}
+  try {
     const undici = require('undici');
     const dispatcher = undici.getGlobalDispatcher?.();
     if (dispatcher?.close) {

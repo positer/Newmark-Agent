@@ -15,6 +15,7 @@ const packageIcon = path.join(root, 'assets', 'icon.ico');
 const zipPath = path.join(outputDir, `Newmark-Agent-${appPackage.version}-win-unpacked-x64.zip`);
 const expectedProductName = 'Newmark Agent';
 const builderCacheDir = path.join(root, '.electron-builder-cache');
+const nodePtyRoot = path.join(root, 'node_modules', 'node-pty');
 
 function log(message) {
   console.log(`[dist-windows-release] ${message}`);
@@ -49,6 +50,17 @@ function runBuilder(args, label) {
   });
   if (result.error) throw new Error(`${label} spawn error: ${result.error.code || ''} ${result.error.message}`);
   if (result.status !== 0) throw new Error(`${label} failed with exit ${result.status}`);
+}
+
+function ensureNodePtyConptyAssets(baseDir) {
+  const sourceDir = path.join(baseDir, 'prebuilds', 'win32-x64', 'conpty');
+  const targetDir = path.join(baseDir, 'build', 'Release', 'conpty');
+  for (const name of ['conpty.dll', 'OpenConsole.exe']) {
+    const source = path.join(sourceDir, name);
+    if (!fs.existsSync(source)) throw new Error(`node-pty ${name} source asset is missing: ${source}`);
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.copyFileSync(source, path.join(targetDir, name));
+  }
 }
 
 function verifyUnpackedOutput() {
@@ -145,6 +157,8 @@ function verifyReleaseCliSmoke() {
 try {
   tryRm(outputDir);
   runBuilder(['--win', 'dir'], 'electron-builder dir');
+  ensureNodePtyConptyAssets(nodePtyRoot);
+  ensureNodePtyConptyAssets(path.join(unpackedDir, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty'));
   patchPackagedOutput();
   verifyUnpackedOutput();
   runBuilder(['--win', 'msi', '--prepackaged', unpackedDir], 'electron-builder msi --prepackaged');

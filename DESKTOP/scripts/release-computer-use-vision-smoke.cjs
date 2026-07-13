@@ -98,7 +98,7 @@ function requestHasComputerUseText(body) {
 
 function requestHasImage(body) {
   const text = JSON.stringify(body.messages || []);
-  return text.includes('"image_url"') && text.includes('data:image/png;base64,');
+  return text.includes('"image_url"') && /data:image\/(?:png|jpeg|webp);base64,/i.test(text);
 }
 
 function requestSummary(body) {
@@ -113,21 +113,21 @@ function requestSummary(body) {
     hasUiAutomation: JSON.stringify(messages).includes('UI Automation'),
     hasScreenshotPath: JSON.stringify(messages).includes('screenshot_path'),
     leaksVisionImagePath: JSON.stringify(messages).includes('vision_image_path'),
-    leaksTempPngPath: /newmark-computer-use[^"]+\.png/i.test(JSON.stringify(messages)),
+    leaksTempImagePath: /newmark-computer-use[^"]+\.(?:png|jpe?g|webp)/i.test(JSON.stringify(messages)),
     hasImage: requestHasImage(body),
   };
 }
 
 function requestLeaksTempScreenshotPath(body) {
   const text = JSON.stringify(body.messages || []);
-  return text.includes('vision_image_path') || /newmark-computer-use[^"]+\.png/i.test(text);
+  return text.includes('vision_image_path') || /newmark-computer-use[^"]+\.(?:png|jpe?g|webp)/i.test(text);
 }
 
 function tempScreenshotResidue() {
   const dir = path.join(os.tmpdir(), 'newmark-computer-use');
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir)
-    .filter(entry => /^observe-.*\.png$/i.test(entry))
+    .filter(entry => /^(?:observe|app)-.*\.(?:png|jpe?g|webp)$/i.test(entry))
     .map(entry => path.join(dir, entry));
 }
 

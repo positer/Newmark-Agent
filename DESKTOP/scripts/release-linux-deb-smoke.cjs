@@ -2,11 +2,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { assertLinuxPackageVersion, hasCommand } = require('./release-linux-package-smoke-lib.cjs');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const version = require(path.join(repoRoot, 'DESKTOP', 'package.json')).version;
-const debPath = path.join(repoRoot, 'release', `Newmark-Agent-${version}-amd64.deb`);
-const screenshotPath = path.join(repoRoot, 'archive', '2026-07-11-linux-deb-extract-gui-smoke.png');
+const debPath = path.resolve(process.env.NEWMARK_LINUX_DEB || path.join(repoRoot, 'release', `Newmark-Agent-${version}-amd64.deb`));
+const screenshotPath = path.resolve(process.env.NEWMARK_LINUX_GUI_SCREENSHOT || path.join(repoRoot, 'archive', '2026-07-11-linux-deb-extract-gui-smoke.png'));
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { stdio: 'inherit', ...options });
@@ -31,14 +32,18 @@ try {
   if (!fs.existsSync(desktopEntry)) throw new Error('deb desktop entry missing');
   if (!fs.readFileSync(desktopEntry, 'utf8').includes('/opt/Newmark Agent/Newmark Agent')) throw new Error('deb desktop entry has an unexpected Exec target');
   if (!fs.existsSync(appAsar) || fs.statSync(appAsar).size < 1000000) throw new Error('deb app.asar missing or incomplete');
-  run(process.execPath, [path.join(__dirname, 'release-linux-gui-smoke.cjs')], {
-    cwd: path.resolve(__dirname, '..'),
-    env: {
-      ...process.env,
-      NEWMARK_LINUX_EXE: executable,
-      NEWMARK_LINUX_GUI_SCREENSHOT: screenshotPath,
-    },
-  });
+  assertLinuxPackageVersion(executable);
+  const guiEnv = { ...process.env, NEWMARK_LINUX_EXE: executable, NEWMARK_LINUX_GUI_SCREENSHOT: screenshotPath };
+  const guiScript = path.join(__dirname, 'release-linux-gui-smoke.cjs');
+  if (process.env.DISPLAY || process.env.WAYLAND_DISPLAY) {
+    run(process.execPath, [guiScript], { cwd: path.resolve(__dirname, '..'), env: guiEnv });
+  } else if (hasCommand('xvfb-run')) {
+    run('xvfb-run', ['-a', process.execPath, guiScript], { cwd: path.resolve(__dirname, '..'), env: guiEnv });
+  } else if (process.env.NEWMARK_ALLOW_HEADLESS_ASSET_SMOKE === '1') {
+    console.log('[release-linux-deb-smoke] GUI startup skipped: no display server or xvfb-run; extraction and CLI passed');
+  } else {
+    throw new Error('DISPLAY/WAYLAND_DISPLAY is not set and xvfb-run is unavailable');
+  }
   console.log('[release-linux-deb-smoke] PASS');
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true });

@@ -1,0 +1,57 @@
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
+const { expectedVersion, psQuote, smokeWindowsUnpacked } = require('./release-windows-package-smoke-lib.cjs');
+
+const repoRoot = path.resolve(__dirname, '..', '..');
+
+function argValue(name) {
+  const index = process.argv.indexOf(name);
+  return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
+function expandArchive(zipPath, destination) {
+  const script = [
+    '$ErrorActionPreference = "Stop"',
+    `Expand-Archive -LiteralPath ${psQuote(zipPath)} -DestinationPath ${psQuote(destination)} -Force`,
+    'Write-Output "expanded"',
+  ].join('; ');
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 180000,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`Expand-Archive exited ${result.status}: ${result.stderr || result.stdout}`);
+}
+
+(async () => {
+  if (process.platform !== 'win32') {
+    console.log('[release-windows-zip-smoke] skipped outside Windows');
+    return;
+  }
+  const zipPath = path.resolve(argValue('--asset') || process.env.NEWMARK_WINDOWS_ZIP
+    || path.join(repoRoot, 'release', `Newmark-Agent-${expectedVersion}-win-unpacked-x64.zip`));
+  if (!fs.existsSync(zipPath) || !fs.statSync(zipPath).isFile()) throw new Error(`missing Windows unpacked ZIP: ${zipPath}`);
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-windows-zip-smoke-'));
+  try {
+    expandArchive(zipPath, tempRoot);
+    const unpackedRoot = await smokeWindowsUnpacked(tempRoot, 'Windows ZIP');
+    const featureSmoke = spawnSync(process.execPath, [path.join(__dirname, 'release-dev008-features-smoke.cjs')], {
+      cwd: path.resolve(__dirname, '..'),
+      encoding: 'utf8',
+      env: { ...process.env, NEWMARK_TEST_EXE: path.join(unpackedRoot, 'Newmark Agent.exe') },
+      stdio: 'inherit',
+      timeout: 300000,
+    });
+    if (featureSmoke.error) throw featureSmoke.error;
+    if (featureSmoke.status !== 0) throw new Error(`dev-0.0.8 packaged feature smoke exited ${featureSmoke.status}`);
+    console.log(`[release-windows-zip-smoke] PASS ${path.relative(tempRoot, unpackedRoot) || '.'}`);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+  }
+})().catch(error => {
+  console.error(`[release-windows-zip-smoke] ${error.stack || error.message}`);
+  process.exit(1);
+});

@@ -30,6 +30,8 @@ export interface ConversationKernelRunResult {
   activeConversationId: string;
   conversations: ReturnType<Agent['listConversationStates']>;
   conversationPlan: ReturnType<Agent['getConversationPlan']>;
+  linkedPlan: ReturnType<Agent['getLinkedPlan']>;
+  subagents: Array<NonNullable<ReturnType<Agent['subagents']['toRecord']>>>;
   chatMessages: Agent['chatMessages'];
   historyMessages: number;
   conversationLocked: false;
@@ -39,11 +41,13 @@ export interface ConversationKernelRunResult {
 interface ConversationRuntime {
   id: string;
   runner: Agent;
+  options: ConversationKernelRunOptions;
   activePromise: Promise<ConversationKernelRunResult> | null;
   events: AgentWorkEvent[];
   pendingNextTurn: Array<{ message: string | AgentPromptMessage; queueMode: ConversationQueueMode }>;
   queued: { steering: string[]; followUp: string[] };
   unsubscribe?: () => void;
+  unsubscribeRootInboxWake?: () => void;
 }
 
 type WorkListener = (event: AgentWorkEvent) => void;
@@ -150,6 +154,7 @@ export class ConversationKernel {
   ): Promise<ConversationKernelRunResult> {
     const id = this.safeId(conversationId);
     const runtime = this.runtime(id, options);
+    runtime.options = { ...options };
     this.applyOptions(runtime.runner, options);
 
     if (runtime.activePromise) {
@@ -171,9 +176,18 @@ export class ConversationKernel {
     this.applyOptions(runtime.runner, options);
     runtime.runner.setConversation(runtime.id);
     let lastTokens = await this.runSingle(runtime, message);
-    while (runtime.pendingNextTurn.length > 0) {
-      const next = runtime.pendingNextTurn.shift()!;
-      lastTokens = await this.runSingle(runtime, next.message);
+    for (;;) {
+      while (runtime.pendingNextTurn.length > 0) {
+        const next = runtime.pendingNextTurn.shift()!;
+        lastTokens = await this.runSingle(runtime, next.message);
+      }
+      const rootMessage = runtime.runner.subagents.readRootInbox()[0];
+      if (!rootMessage) break;
+      const marker = `[Root subagent inbox id=${rootMessage.id} ${rootMessage.kind} from ${rootMessage.fromAgentId}]`;
+      const prompt = `${marker}\n${rootMessage.body}\n\nReview this persisted peer result and summarize or continue the parent task as needed.`;
+      if (!runtime.pendingNextTurn.some(item => item.message === prompt)) {
+        runtime.pendingNextTurn.push({ message: prompt, queueMode: 'followUp' });
+      }
     }
     this.clearQueued(runtime);
     this.host.mirrorConversationStateFrom(runtime.id, runtime.runner);
@@ -208,7 +222,7 @@ export class ConversationKernel {
   private runtime(id: string, options: ConversationKernelRunOptions): ConversationRuntime {
     const existing = this.runtimes.get(id);
     if (existing) return existing;
-    const runner = new Agent(this.root);
+    const runner = new Agent(this.root, { actorId: this.host.runtimeActorId });
     runner.setAutomationManager(this.automation);
     if (this.host.workspace.current) {
       runner.workspace.current = { ...this.host.workspace.current };
@@ -219,6 +233,7 @@ export class ConversationKernel {
     const runtime: ConversationRuntime = {
       id,
       runner,
+      options: { ...options },
       activePromise: null,
       events: [],
       pendingNextTurn: [],
@@ -232,8 +247,28 @@ export class ConversationKernel {
     runner.subscribeAgentKernelUserMessageStart(content => {
       this.consumeQueuedMessage(runtime, content);
     });
+    runtime.unsubscribeRootInboxWake = runner.subscribeRootInboxWake(message => {
+      this.enqueueRootInboxWake(runtime, message);
+      return true;
+    });
     this.runtimes.set(id, runtime);
     return runtime;
+  }
+
+  private enqueueRootInboxWake(runtime: ConversationRuntime, message: string): void {
+    queueMicrotask(() => {
+      const rootInboxId = message.match(/^\[Root subagent inbox id=([0-9a-f-]{36})\b/i)?.[1];
+      if (rootInboxId && !runtime.runner.subagents.readRootInbox().some(item => item.id === rootInboxId)) return;
+      if (runtime.activePromise) {
+        if (!runtime.pendingNextTurn.some(item => item.message === message)) {
+          runtime.pendingNextTurn.push({ message, queueMode: 'followUp' });
+        }
+        return;
+      }
+      void this.prompt(message, runtime.id, runtime.options, 'followUp').catch(error => {
+        runtime.runner.recordWorkStatus(`Subagent result follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    });
   }
 
   private applyOptions(agent: Agent, options: ConversationKernelRunOptions): void {
@@ -264,6 +299,8 @@ export class ConversationKernel {
       activeConversationId: this.host.activeConversationId,
       conversations: this.host.listConversationStates(),
       conversationPlan: runtime.runner.getConversationPlan(),
+      linkedPlan: runtime.runner.getLinkedPlan(),
+      subagents: runtime.runner.subagents.listAll().map(record => runtime.runner.subagents.toRecord(record.id)).filter((record): record is NonNullable<typeof record> => !!record),
       chatMessages: runtime.runner.chatMessages,
       historyMessages: runtime.runner.history.length,
       conversationLocked: false,

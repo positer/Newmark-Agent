@@ -25,10 +25,18 @@ if "%1"=="--gui" set "IS_CLI=0"
 
 if "%IS_CLI%"=="1" (
     echo [Newmark] CLI Mode
-    node "%NEWMARK_ROOT%\dist\cli.js" --cli --root "%NEWMARK_ROOT%"
+    if exist "%NEWMARK_ROOT%\Newmark Agent.exe" (
+        "%NEWMARK_ROOT%\Newmark Agent.exe" --cli --root "%NEWMARK_ROOT%"
+    ) else (
+        node "%NEWMARK_ROOT%\dist\launcher.js" --cli --root "%NEWMARK_ROOT%"
+    )
 ) else (
     echo [Newmark] GUI Mode
-    start "" "%NEWMARK_ROOT%\Newmark.exe"
+    if exist "%NEWMARK_ROOT%\Newmark Agent.exe" (
+        start "" "%NEWMARK_ROOT%\Newmark Agent.exe"
+    ) else (
+        node "%NEWMARK_ROOT%\dist\launcher.js" --server --root "%NEWMARK_ROOT%"
+    )
 )
 
 endlocal

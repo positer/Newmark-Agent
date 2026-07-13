@@ -1,14 +1,27 @@
 import { ChildProcessWithoutNullStreams, spawn, spawnSync } from 'child_process';
 import * as readline from 'readline';
 import { AgentWorkEvent } from './types';
-import { WslAgentPromptRequest, WslAgentPromptResult, WslAgentRequest, WslAgentResponse, WslAgentWorkspace } from './wslAgentProtocol';
+import { TerminalTakeoverEvent, TerminalTakeoverOwnerFilter, TerminalTakeoverState } from '../tools/terminalTakeover';
+import {
+  WslAgentPromptRequest,
+  WslAgentPromptResult,
+  WslAgentRequest,
+  WslAgentResponse,
+  WslAgentWorkspace,
+  WslHostToolRequest,
+  WslHostToolResult,
+} from './wslAgentProtocol';
 
 type WorkListener = (event: AgentWorkEvent) => void;
+type TerminalListener = (event: TerminalTakeoverEvent) => void;
+type HostToolHandler = (request: WslHostToolRequest) => Promise<unknown>;
 
 export class WslAgentClient {
   private child: ChildProcessWithoutNullStreams | null = null;
   private pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> | null }>();
   private listeners = new Set<WorkListener>();
+  private terminalListeners = new Set<TerminalListener>();
+  private hostToolHandler: HostToolHandler | null = null;
   private sequence = 0;
   private lastError = '';
   private stderrBuffer = '';
@@ -23,6 +36,15 @@ export class WslAgentClient {
   subscribe(listener: WorkListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  subscribeTerminal(listener: TerminalListener): () => void {
+    this.terminalListeners.add(listener);
+    return () => this.terminalListeners.delete(listener);
+  }
+
+  setHostToolHandler(handler: HostToolHandler | null): void {
+    this.hostToolHandler = handler;
   }
 
   status(): { enabled: true; connected: boolean; distro: string; pid: number; error: string } {
@@ -59,6 +81,28 @@ export class WslAgentClient {
     this.remotePid = 0;
   }
 
+  shutdownNow(): void {
+    const child = this.child;
+    if (!child) return;
+    const id = `wsl-${process.pid}-${Date.now()}-${++this.sequence}`;
+    try { child.stdin.write(`${JSON.stringify({ id, method: 'shutdown' })}\n`); } catch {}
+    try { child.stdin.end(); } catch {}
+    try { if (!child.killed) child.kill(); } catch {}
+    this.child = null;
+    this.remotePid = 0;
+    const error = new Error('WSL Agent backend shut down with the desktop application');
+    for (const pending of this.pending.values()) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
+
+  async resetAgent(): Promise<void> {
+    if (!this.child || this.child.killed) return;
+    await this.request('reset', undefined, 15000);
+  }
+
   async prompt(params: WslAgentPromptRequest): Promise<WslAgentPromptResult> {
     await this.start();
     return await this.request('prompt', { ...params, workspace: this.mapWorkspace(params.workspace) }, 0) as WslAgentPromptResult;
@@ -72,6 +116,31 @@ export class WslAgentClient {
   async snapshot(conversationId: string, workspace: WslAgentWorkspace | null): Promise<Record<string, unknown>> {
     await this.start();
     return await this.request('snapshot', { conversationId, workspace: this.mapWorkspace(workspace) }, 15000) as Record<string, unknown>;
+  }
+
+  async terminalState(owner: TerminalTakeoverOwnerFilter, persistenceRoot?: string): Promise<TerminalTakeoverState[]> {
+    await this.start();
+    return await this.request('terminal_state', { owner, persistenceRoot: persistenceRoot ? this.toWslPath(persistenceRoot) : undefined }, 15000) as TerminalTakeoverState[];
+  }
+
+  async terminalWrite(owner: TerminalTakeoverOwnerFilter, sessionId: string, data: string, persistenceRoot?: string): Promise<{ ok: boolean; error?: string }> {
+    await this.start();
+    return await this.request('terminal_write', { owner, sessionId, data, persistenceRoot: persistenceRoot ? this.toWslPath(persistenceRoot) : undefined }, 15000) as { ok: boolean; error?: string };
+  }
+
+  async terminalResize(owner: TerminalTakeoverOwnerFilter, sessionId: string, cols: number, rows: number, persistenceRoot?: string): Promise<{ ok: boolean; error?: string }> {
+    await this.start();
+    return await this.request('terminal_resize', { owner, sessionId, cols, rows, persistenceRoot: persistenceRoot ? this.toWslPath(persistenceRoot) : undefined }, 15000) as { ok: boolean; error?: string };
+  }
+
+  async terminalStop(owner: TerminalTakeoverOwnerFilter, sessionId: string, persistenceRoot?: string): Promise<{ ok: boolean; error?: string }> {
+    await this.start();
+    return await this.request('terminal_stop', { owner, sessionId, persistenceRoot: persistenceRoot ? this.toWslPath(persistenceRoot) : undefined }, 15000) as { ok: boolean; error?: string };
+  }
+
+  async terminalDetach(owner: TerminalTakeoverOwnerFilter, sessionId: string, persistenceRoot?: string): Promise<{ ok: boolean; error?: string }> {
+    await this.start();
+    return await this.request('terminal_detach', { owner, sessionId, persistenceRoot: persistenceRoot ? this.toWslPath(persistenceRoot) : undefined }, 15000) as { ok: boolean; error?: string };
   }
 
   private mapWorkspace(workspace: WslAgentWorkspace | null): WslAgentWorkspace | null {
@@ -108,6 +177,14 @@ export class WslAgentClient {
       for (const listener of this.listeners) listener(message.data as AgentWorkEvent);
       return;
     }
+    if (message.event === 'terminal' && message.data) {
+      for (const listener of this.terminalListeners) listener(message.data as TerminalTakeoverEvent);
+      return;
+    }
+    if (message.event === 'host_tool_request' && message.data) {
+      void this.handleHostToolRequest(message.data as WslHostToolRequest);
+      return;
+    }
     const response = message as WslAgentResponse;
     const pending = response.id ? this.pending.get(response.id) : undefined;
     if (!pending) return;
@@ -115,6 +192,26 @@ export class WslAgentClient {
     if (pending.timer) clearTimeout(pending.timer);
     if (response.ok) pending.resolve(response.result);
     else pending.reject(new Error(response.error));
+  }
+
+  private async handleHostToolRequest(request: WslHostToolRequest): Promise<void> {
+    let result: WslHostToolResult;
+    if (!this.hostToolHandler) {
+      result = { requestId: request.requestId, ok: false, error: 'No Windows host tool handler is registered' };
+    } else if (request.tool !== 'computer_use') {
+      result = { requestId: request.requestId, ok: false, error: `WSL host tool is not allowed: ${String(request.tool)}` };
+    } else {
+      try {
+        result = { requestId: request.requestId, ok: true, result: await this.hostToolHandler(request) };
+      } catch (error) {
+        result = { requestId: request.requestId, ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+    try {
+      await this.request('host_tool_result', result, 5000);
+    } catch {
+      // The remote process may have exited while a native host tool was running.
+    }
   }
 
   private handleExit(code: number | null): void {

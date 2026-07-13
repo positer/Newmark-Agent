@@ -1176,6 +1176,23 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   color: var(--text-dim);
   background: rgba(255,255,255,0.025);
 }
+.linked-plan-head {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--glass-border-1);
+}
+.linked-plan-reader {
+  flex: none;
+  min-height: 118px;
+  max-height: 42vh;
+  margin-top: 7px;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--glass-border-1);
+  border-radius: var(--radius-md);
+  background: rgba(0,0,0,.14);
+  user-select: text;
+}
 .md-table-wrap {
   max-width: 100%;
   overflow-x: auto;
@@ -1573,7 +1590,14 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   font-size: 10px;
   line-height: 1.3;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
+
+.terminal-takeover-status span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-takeover-status button { flex-shrink: 0; }
 
 #terminal-shell-select {
   background: var(--glass-bg-1);
@@ -3945,6 +3969,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
         <div class="tab-panel" id="panel-plan">
           <div class="right-section-head"><span class="right-section-title">Conversation plan</span><button class="archive-action-btn" onclick="window.refreshConversationPlan()">Refresh</button></div>
           <div id="conversation-plan-content"></div>
+          <div class="right-section-head linked-plan-head"><span class="right-section-title">Linked plan</span><span class="right-row-meta" id="linked-plan-revision"></span></div>
+          <div id="linked-plan-content" class="linked-plan-reader md-rendered" aria-live="polite"></div>
         </div>
         <div class="tab-panel" id="panel-subagent">
           <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">Subagents</div>
@@ -3959,7 +3985,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
             <button class="shell-btn" onclick="window.navigateBrowser(document.getElementById('browser-url').value)" title="Go"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#send"></use></svg><span class="icon-only-label">Go</span></button>
           </div>
           <div class="browser-frame" id="browser-frame">
-            <webview id="browser-webview" partition="persist:newmark-browser" allowpopups></webview>
+            <webview id="browser-webview" partition="persist:newmark-browser"></webview>
           </div>
         </div>
       </div>
@@ -4004,6 +4030,7 @@ var state = {
     {id: 'conv-1', summary: 'New chat 1', archived: false, active: true}
   ],
   conversationPlan: { items: [] },
+  linkedPlan: { markdown: '', revision: 0 },
   activeConversation: 0,
   workspaceConversations: {},
   workspaceActiveConversation: {},
@@ -4040,6 +4067,9 @@ var state = {
   activeAgentRunning: false,
   editorPath: '',
   editorOriginal: '',
+  editorToken: '',
+  editorRevision: '',
+  editorEncoding: 'utf8',
   editorVimEnabled: false,
   editorVimMode: 'insert',
   editorVimPending: '',
@@ -4203,6 +4233,9 @@ var NEWMARK_I18N = {
     'plan.edit': 'Edit',
     'plan.delete': 'Delete',
     'plan.clearDone': 'Clear done',
+    'linkedPlan.title': 'Linked plan',
+    'linkedPlan.empty': 'The Agent has not linked a working plan yet.',
+    'linkedPlan.revision': 'revision {revision}',
     'settings.title': 'Settings',
     'settings.general': 'General',
     'settings.runInWsl': 'Agent runtime environment',
@@ -4553,6 +4586,7 @@ var NEWMARK_I18N = {
     'subagent.result': 'Result',
     'subagent.history': 'History',
     'subagent.noMessages': 'No messages recorded.',
+    'subagent.unread': '{count} unread',
     'conversation.archive': 'Archive',
     'conversation.pin': 'Pin conversation',
     'conversation.unpin': 'Unpin conversation',
@@ -4671,6 +4705,9 @@ var NEWMARK_I18N = {
     'plan.edit': '编辑',
     'plan.delete': '删除',
     'plan.clearDone': '清理已完成',
+    'linkedPlan.title': 'Linked Plan',
+    'linkedPlan.empty': 'Agent 尚未建立工作计划。',
+    'linkedPlan.revision': '修订 {revision}',
     'settings.title': '设置',
     'settings.general': '通用',
     'settings.runInWsl': 'Agent 运行环境',
@@ -5021,6 +5058,7 @@ var NEWMARK_I18N = {
     'subagent.result': '结果',
     'subagent.history': '历史',
     'subagent.noMessages': '没有记录消息。',
+    'subagent.unread': '{count} 条未读',
     'conversation.archive': '归档',
     'conversation.pin': '置顶对话',
     'conversation.unpin': '取消置顶对话',
@@ -5160,6 +5198,8 @@ function applyLanguageToUi() {
   setTitleAndLabel('.sub-win-close', t('common.close'));
   var planHead = document.querySelector('#panel-plan .right-section-title');
   if (planHead) planHead.textContent = t('right.plan');
+  var linkedPlanHead = document.querySelector('#panel-plan .linked-plan-head .right-section-title');
+  if (linkedPlanHead) linkedPlanHead.textContent = t('linkedPlan.title');
   var planRefresh = document.querySelector('#panel-plan .archive-action-btn');
   if (planRefresh) planRefresh.textContent = t('right.refresh');
   var fileHead = document.querySelector('#panel-file-tree .right-section-title');
@@ -5226,10 +5266,7 @@ function isImageLinkTarget(url) {
 
 function normalizeImageSrc(url) {
   url = String(url || '').trim();
-  if (/^(https?:\/\/|file:\/\/\/|data:image\/)/i.test(url)) return url;
-  if (/^[A-Za-z]:[\\/]/.test(url)) return 'file:///' + url.replace(/\\/g, '/');
-  if (/^\\\\/.test(url)) return 'file:' + url.replace(/\\/g, '/');
-  return url;
+  return /^(https?:\/\/|data:image\/)/i.test(url) ? url : '';
 }
 
 function isFileLinkTarget(url) {
@@ -5290,8 +5327,12 @@ function renderMarkdownLinkToken(matchText, alt, imageUrl, label, linkUrl) {
   imageUrl = (imageUrl || '').trim();
   linkUrl = (linkUrl || '').trim();
   if (imageUrl) {
-    if (isImageLinkTarget(imageUrl)) {
+    if (/^(https?:\/\/|data:image\/)/i.test(imageUrl) && isImageLinkTarget(imageUrl)) {
       return '<img class="msg-image" src="' + escAttr(normalizeImageSrc(imageUrl)) + '" alt="' + escAttr(alt || 'image') + '">';
+    }
+    if (isImageLinkTarget(imageUrl) && isFileLinkTarget(imageUrl)) {
+      var imagePath = normalizeLinkedFilePath(imageUrl);
+      return '<button class="msg-file-link" data-path="' + escAttr(imagePath) + '" onclick="window.openLinkedFile(this.getAttribute(&quot;data-path&quot;))">' + iconSvg('image', 'Open image', 'tiny') + '<span>' + esc(alt || imagePath) + '</span></button>';
     }
     return esc(matchText);
   }
@@ -5632,21 +5673,41 @@ var api = window.api || {
       return r.json();
     } catch(e) { return {output: 'Error: ' + e.message}; }
   },
-  getFileTree: async function() {
-    try { var r = await fetch('/api/filetree'); return r.json(); }
+  getFileTree: async function(path) {
+    try { var r = await fetch('/api/filetree', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path || ''})}); return r.json(); }
     catch(e) { return {tree: []}; }
   },
-  readFile: async function(path) {
+  openWorkspaceFile: async function(path) {
     try {
-      var r = await fetch('/api/read', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})});
+      var r = await fetch('/api/open-workspace-file', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})});
       return r.json();
-    } catch(e) { return {content: '', error: e.message}; }
+    } catch(e) { return {kind:'rejected', error: e.message}; }
   },
-  saveFile: async function(path, content) {
+  saveWorkspaceFile: async function(token, content, expectedRevision) {
     try {
-      var r = await fetch('/api/write', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path, content:content})});
+      var r = await fetch('/api/save-workspace-file', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token, content:content, expectedRevision:expectedRevision})});
       return r.json();
     } catch(e) { return {error: e.message}; }
+  },
+  listFlows: async function() {
+    try { var r = await fetch('/api/flows'); return r.json(); }
+    catch(e) { return []; }
+  },
+  readFlow: async function(name) {
+    try { var r = await fetch('/api/flow-read', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})}); return r.json(); }
+    catch(e) { return {error:e.message}; }
+  },
+  saveFlow: async function(workflow) {
+    try { var r = await fetch('/api/flow-save', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(workflow || {})}); return r.json(); }
+    catch(e) { return {error:e.message}; }
+  },
+  readWorkspacePrompt: async function() {
+    try { var r = await fetch('/api/workspace-prompt'); return r.json(); }
+    catch(e) { return {content:'',error:e.message}; }
+  },
+  saveWorkspacePrompt: async function(content) {
+    try { var r = await fetch('/api/workspace-prompt', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:content})}); return r.json(); }
+    catch(e) { return {error:e.message}; }
   },
   saveConfig: async function(cfg) {
     try { await fetch('/api/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)}); } catch(e) {}
@@ -5689,10 +5750,6 @@ var api = window.api || {
   loadConfig: async function() {
     try { var r = await fetch('/api/config'); return r.json(); }
     catch(e) { return {}; }
-  },
-  listFiles: async function(dir) {
-    try { var r = await fetch('/api/list', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dir:dir})}); return r.json(); }
-    catch(e) { return []; }
   },
   listSkills: async function() { return []; },
   marketSkills: async function() { return []; },
@@ -6419,6 +6476,16 @@ function appendAgentWorkEvent(event) {
   } else if (active) {
     renderAgentWorkEvent(event);
   }
+  if (active && event.type === 'tool_result' && ['linked_plan', 'task', 'subagent_send', 'subagent_read', 'subagent_close'].indexOf(String(event.toolName || '')) >= 0 && api.getState) {
+    var eventWorkspaceKey = currentWorkspaceKey();
+    api.getState(id).then(function(snapshot) {
+      if (!isActiveConversationId(id) || eventWorkspaceKey !== currentWorkspaceKey()) return;
+      if (snapshot && snapshot.linkedPlan) state.linkedPlan = snapshot.linkedPlan;
+      if (snapshot && snapshot.subagents) state.subagents = snapshot.subagents;
+      if (state.rightTab === 'plan') window.renderLinkedPlan();
+      if (state.rightTab === 'subagent') window.renderSubagentList();
+    }).catch(function(){});
+  }
   if (typeof renderConversations === 'function') renderConversations();
 }
 
@@ -6479,6 +6546,12 @@ function loadActiveConversationMessages(conversationId) {
       if (state.rightTab === 'plan') window.renderConversationPlan();
       if (window.renderInputStack) window.renderInputStack();
     }
+    if (s && s.linkedPlan) {
+      state.linkedPlan = s.linkedPlan;
+      if (state.rightTab === 'plan') window.renderLinkedPlan();
+    }
+    if (s && s.subagents) state.subagents = s.subagents;
+    if (s && s.linkedPlan) state.linkedPlan = s.linkedPlan;
     replayActiveAgentWorkEvents();
   }).catch(function(){});
 }
@@ -7012,6 +7085,14 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       state.conversationPlan = normalizeConversationPlan(r.conversationPlan);
       if (state.rightTab === 'plan') window.renderConversationPlan();
     }
+    if (stillActive && r && r.linkedPlan) {
+      state.linkedPlan = r.linkedPlan;
+      if (state.rightTab === 'plan') window.renderLinkedPlan();
+    }
+    if (stillActive && r && r.subagents) {
+      state.subagents = r.subagents;
+      if (state.rightTab === 'subagent') window.renderSubagentList();
+    }
     if (stillActive && r && r.queued) state.backendQueue = r.queued;
     if (r && r.options) {
       if (stillActive) {
@@ -7038,6 +7119,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         window.renderContextWindow();
       }
       if (s && s.subagents) state.subagents = s.subagents;
+      if (stillActiveAfterRefresh && s && s.linkedPlan) state.linkedPlan = s.linkedPlan;
       if (s && s.fileDiffs) state.fileDiffs = s.fileDiffs;
       if (stillActiveAfterRefresh && s && s.pendingOptions) {
         state.pendingOptions = s.pendingOptions;
@@ -7346,7 +7428,7 @@ window.upgradeRightSidebar = function() {
     var planPanel = document.createElement('div');
     planPanel.className = 'tab-panel';
     planPanel.id = 'panel-plan';
-    planPanel.innerHTML = '<div class="right-section-head"><span class="right-section-title">' + esc(t('right.plan')) + '</span><button class="archive-action-btn" onclick="window.refreshConversationPlan()">' + esc(t('right.refresh')) + '</button></div><div id="conversation-plan-content"></div>';
+    planPanel.innerHTML = '<div class="right-section-head"><span class="right-section-title">' + esc(t('right.plan')) + '</span><button class="archive-action-btn" onclick="window.refreshConversationPlan()">' + esc(t('right.refresh')) + '</button></div><div id="conversation-plan-content"></div><div class="right-section-head linked-plan-head"><span class="right-section-title">' + esc(t('linkedPlan.title')) + '</span><span class="right-row-meta" id="linked-plan-revision"></span></div><div id="linked-plan-content" class="linked-plan-reader md-rendered" aria-live="polite"></div>';
     rightContent.appendChild(planPanel);
   }
   if (!document.getElementById('panel-archives')) {
@@ -7426,6 +7508,12 @@ window.refreshConversationPlan = function() {
   api.getConversationPlan(activeConversationId()).then(function(plan) {
     state.conversationPlan = normalizeConversationPlan(plan);
     window.renderConversationPlan();
+    if (api.getState) api.getState(activeConversationId()).then(function(snapshot) {
+      if (snapshot && snapshot.linkedPlan) state.linkedPlan = snapshot.linkedPlan;
+      if (snapshot && snapshot.subagents) state.subagents = snapshot.subagents;
+      window.renderLinkedPlan();
+      window.renderSubagentList();
+    }).catch(function(){});
   }).catch(function(err) {
     if (target) target.innerHTML = '<div class="right-empty">' + esc(t('status.unavailable')) + ': ' + esc(err.message || String(err)) + '</div>';
   });
@@ -7479,6 +7567,16 @@ window.renderConversationPlan = function() {
   }
   target.innerHTML = html;
   if (window.renderInputStack) window.renderInputStack();
+};
+
+window.renderLinkedPlan = function() {
+  var target = document.getElementById('linked-plan-content');
+  var revision = document.getElementById('linked-plan-revision');
+  if (!target) return;
+  var plan = state.linkedPlan || { markdown: '', revision: 0 };
+  var markdown = String(plan.markdown || '').trim();
+  target.innerHTML = markdown ? renderMarkdownBlocks(markdown) : '<div class="right-empty">' + esc(t('linkedPlan.empty')) + '</div>';
+  if (revision) revision.textContent = plan.revision ? t('linkedPlan.revision').replace('{revision}', String(plan.revision)) : '';
 };
 
 window.addConversationPlanItem = function() {
@@ -7647,6 +7745,7 @@ window.renderRightStatusPanel = function() {
     }
   }
   target.innerHTML = html;
+  window.renderLinkedPlan();
 };
 
 window.refreshRightArchives = function() {
@@ -7690,6 +7789,45 @@ window.renderRightArchives = function() {
 // === Terminal (Multi-Tab) ===
 var _terminalCounter = 0;
 var _terminalTakeoverTabs = {};
+var _terminalTakeoverRefreshToken = 0;
+var _terminalTakeoverDetached = {};
+
+window.portableTerminalWorkspacePath = function(input) {
+  var raw = String(input || '').trim().replace(/\\/g, '/').replace(/\/+$/g, '');
+  var wsl = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(raw);
+  if (wsl) return (wsl[1].toLowerCase() + ':/' + String(wsl[2] || '').replace(/^\/+|\/+$/g, '')).replace(/\/$/, '').toLowerCase();
+  var drive = /^([a-zA-Z]):(?:\/(.*))?$/.exec(raw);
+  if (drive) return (drive[1].toLowerCase() + ':/' + String(drive[2] || '').replace(/^\/+|\/+$/g, '')).replace(/\/$/, '').toLowerCase();
+  return raw;
+};
+
+window.currentTerminalTakeoverScope = function() {
+  return {
+    workspaceName: String(state.currentWorkspace || ''),
+    workspacePath: String(state.currentWorkspacePath || ''),
+    conversationId: String(activeConversationId() || 'default')
+  };
+};
+
+window.terminalTakeoverMatchesCurrent = function(session) {
+  if (!session) return false;
+  var scope = window.currentTerminalTakeoverScope();
+  if (String(session.conversationId || 'default') !== scope.conversationId) return false;
+  var paneScope = window.portableTerminalWorkspacePath(session.uiWorkspacePath || session.workspacePath || session.cwd || '');
+  var currentPath = window.portableTerminalWorkspacePath(scope.workspacePath);
+  if (!currentPath) return false;
+  if (paneScope && currentPath) {
+    var rel = paneScope.indexOf(currentPath + '/') === 0 || currentPath.indexOf(paneScope + '/') === 0;
+    if (paneScope !== currentPath && !rel) return false;
+  }
+  return !!scope.workspaceName;
+};
+
+window.expandBottomForTerminalTakeover = function() {
+  state.bottomCollapsed = false;
+  if (els.bottom) els.bottom.classList.add('open');
+  scheduleLayoutStateSave();
+};
 
 window.getActiveTerminalPane = function() {
   var pane = document.querySelector('.terminal-pane.active');
@@ -7715,7 +7853,10 @@ window.terminalSend = function() {
       if (output) output.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('terminal.notConnected')) + ']</span>';
       return;
     }
-    api.terminalTakeoverWrite(takeoverSession, cmd).catch(function(err) {
+    var takeoverConversation = pane.getAttribute('data-takeover-conversation') || activeConversationId();
+    api.terminalTakeoverWrite(takeoverSession, cmd, takeoverConversation).then(function(result) {
+      if (result && result.ok === false) throw new Error(result.error || 'Terminal write failed');
+    }).catch(function(err) {
       if (output) output.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('common.error')) + '] ' + esc(err.message) + '</span>';
     });
     return;
@@ -7824,7 +7965,7 @@ window.addTerminalTab = function(shellId) {
 };
 
 window.ensureTerminalTakeoverPane = function(session) {
-  if (!session || !session.id) return null;
+  if (!session || !session.id || !window.terminalTakeoverMatchesCurrent(session)) return null;
   var key = session.id;
   var existingId = _terminalTakeoverTabs[key];
   var existing = existingId ? document.getElementById('terminal-pane-' + existingId) : null;
@@ -7840,6 +7981,8 @@ window.ensureTerminalTakeoverPane = function(session) {
   tab.className = 'terminal-tab agent-takeover marquee-border';
   tab.setAttribute('data-tab-id', tabId);
   tab.setAttribute('data-takeover-session', key);
+  tab.setAttribute('data-takeover-workspace-id', session.workspaceId || '');
+  tab.setAttribute('data-takeover-conversation', session.conversationId || 'default');
   tab.innerHTML = 'Agent:' + esc(session.name || key) + '<button class="close-tab" onclick="event.stopPropagation();window.closeTerminalTab(' + tabId + ')" title="' + escAttr(t('common.closeTab')) + '">' + iconSvg('x', t('common.closeTab'), 'tiny') + '</button>';
   tab.onclick = function() { window.switchTerminalTab(tabId); };
 
@@ -7854,8 +7997,11 @@ window.ensureTerminalTakeoverPane = function(session) {
   pane.setAttribute('data-tab-id', tabId);
   pane.setAttribute('data-session', '');
   pane.setAttribute('data-takeover-session', key);
+  pane.setAttribute('data-takeover-workspace-id', session.workspaceId || '');
+  pane.setAttribute('data-takeover-conversation', session.conversationId || 'default');
+  pane.setAttribute('data-takeover-workspace-path', session.cwd || '');
   pane.innerHTML =
-    '<div class="terminal-takeover-status">Agent takeover · ' + esc(session.name || key) + ' · ' + esc(session.shell || 'shell') + '</div>' +
+    '<div class="terminal-takeover-status"><span>Agent takeover · ' + esc(session.name || key) + ' · ' + esc(session.shell || 'shell') + '</span><button class="archive-action-btn danger" onclick="window.stopTerminalTakeover(' + JSON.stringify(key).replace(/"/g, '&quot;') + ')">Stop</button></div>' +
     '<div class="terminal-output"></div>' +
     '<div class="terminal-input-row">' +
     '<span class="terminal-prompt">Agent&gt;</span>' +
@@ -7873,20 +8019,30 @@ window.ensureTerminalTakeoverPane = function(session) {
 window.applyTerminalTakeoverEvent = function(payload) {
   if (!payload || !payload.session) return;
   var session = payload.session;
+  if (payload.type === 'detached') return;
+  if (_terminalTakeoverDetached[session.id]) return;
+  if (!window.terminalTakeoverMatchesCurrent(session)) return;
+  if (payload.type === 'started') window.expandBottomForTerminalTakeover();
   var pane = window.ensureTerminalTakeoverPane(session);
   if (!pane) return;
   var tabId = pane.getAttribute('data-tab-id');
   var tab = document.querySelector('.terminal-tab[data-tab-id="' + tabId + '"]');
   var active = session.active !== false && payload.type !== 'stopped';
+  pane.setAttribute('data-takeover-active', active ? 'true' : 'false');
   pane.classList.toggle('marquee-border', active);
   pane.classList.toggle('agent-takeover', true);
   if (tab) {
     tab.classList.toggle('marquee-border', active);
     tab.classList.toggle('agent-takeover', true);
   }
+  var stopButton = pane.querySelector('.terminal-takeover-status button');
+  if (stopButton) stopButton.style.display = active ? '' : 'none';
+  var input = pane.querySelector('.terminal-input');
+  if (input) input.disabled = !active;
   var status = pane.querySelector('.terminal-takeover-status');
   if (status) {
-    status.textContent = 'Agent takeover · ' + (session.name || session.id) + ' · ' + (session.shell || 'shell') + (active ? '' : ' · stopped');
+    var label = status.querySelector('span');
+    if (label) label.textContent = 'Agent takeover · ' + (session.name || session.id) + ' · ' + (session.shell || 'shell') + (active ? '' : ' · stopped');
   }
   var output = pane.querySelector('.terminal-output');
   if (!output) return;
@@ -7898,6 +8054,50 @@ window.applyTerminalTakeoverEvent = function(payload) {
     output.innerHTML += '\r\n<span style="color:var(--text-dim);opacity:0.65;">[Agent takeover stopped]</span>';
   }
   output.scrollTop = output.scrollHeight;
+  if (!active) window.pruneTerminalTakeoverEndedPanes(session.id);
+};
+
+window.pruneTerminalTakeoverEndedPanes = function(keepSessionId) {
+  var ended = Array.prototype.slice.call(document.querySelectorAll('.terminal-pane[data-takeover-session][data-takeover-active="false"]'));
+  ended.forEach(function(pane) {
+    if (pane.getAttribute('data-takeover-session') === String(keepSessionId || '')) return;
+    window.removeTerminalTabDom(parseInt(pane.getAttribute('data-tab-id')));
+  });
+};
+
+window.stopTerminalTakeover = function(sessionId) {
+  if (!api.terminalTakeoverStop) return;
+  var pane = document.querySelector('.terminal-pane[data-takeover-session="' + sessionId + '"]');
+  var conversationId = pane ? (pane.getAttribute('data-takeover-conversation') || activeConversationId()) : activeConversationId();
+  api.terminalTakeoverStop(sessionId, conversationId).then(function(result) {
+    if (result && result.ok === false) throw new Error(result.error || 'Terminal stop failed');
+  }).catch(function(err) {
+    addMsg('assistant', '[Terminal] ' + (err.message || String(err)), 'error', '');
+  });
+};
+
+window.refreshTerminalTakeoverPanes = function() {
+  var refreshToken = ++_terminalTakeoverRefreshToken;
+  var requestedScope = window.currentTerminalTakeoverScope();
+  _terminalTakeoverDetached = {};
+  var panes = Array.prototype.slice.call(document.querySelectorAll('.terminal-pane[data-takeover-session]'));
+  panes.forEach(function(pane) {
+    var tabId = parseInt(pane.getAttribute('data-tab-id'));
+    window.removeTerminalTabDom(tabId);
+  });
+  if (!api.terminalTakeoverState) return;
+  api.terminalTakeoverState(requestedScope.conversationId).then(function(items) {
+    var currentScope = window.currentTerminalTakeoverScope();
+    if (refreshToken !== _terminalTakeoverRefreshToken || requestedScope.workspaceName !== currentScope.workspaceName || requestedScope.workspacePath !== currentScope.workspacePath || requestedScope.conversationId !== currentScope.conversationId) return;
+    var matching = (items || []).filter(window.terminalTakeoverMatchesCurrent);
+    var active = matching.filter(function(session) { return session.active !== false; });
+    var ended = matching.filter(function(session) { return session.active === false; }).sort(function(a, b) {
+      return String(b.stoppedAt || b.updatedAt || '').localeCompare(String(a.stoppedAt || a.updatedAt || ''));
+    }).slice(0, 1);
+    ended.concat(active).forEach(function(session) {
+      window.applyTerminalTakeoverEvent({ type: session.active ? 'started' : 'stopped', session: session });
+    });
+  }).catch(function(){});
 };
 
 window.switchTerminalTab = function(tabId) {
@@ -7916,11 +8116,9 @@ window.switchTerminalTab = function(tabId) {
   state._terminalActiveSession = activePane ? activePane.getAttribute('data-session') : null;
 };
 
-window.closeTerminalTab = function(tabId) {
+window.removeTerminalTabDom = function(tabId) {
   var pane = document.getElementById('terminal-pane-' + tabId);
   if (pane) {
-    var sessionId = pane.getAttribute('data-session');
-    if (sessionId) api.terminalKill(sessionId, state.terminalInterruptTimeoutMs || 0).catch(function(){});
     var takeoverSession = pane.getAttribute('data-takeover-session');
     if (takeoverSession && _terminalTakeoverTabs[takeoverSession]) delete _terminalTakeoverTabs[takeoverSession];
     pane.parentNode.removeChild(pane);
@@ -7939,6 +8137,21 @@ window.closeTerminalTab = function(tabId) {
   } else {
     state._terminalActiveSession = null;
   }
+};
+
+window.closeTerminalTab = function(tabId) {
+  var pane = document.getElementById('terminal-pane-' + tabId);
+  if (pane) {
+    var sessionId = pane.getAttribute('data-session');
+    if (sessionId) api.terminalKill(sessionId, state.terminalInterruptTimeoutMs || 0).catch(function(){});
+    var takeoverSession = pane.getAttribute('data-takeover-session');
+    if (takeoverSession && api.terminalTakeoverDetach) {
+      var takeoverConversation = pane.getAttribute('data-takeover-conversation') || activeConversationId();
+      _terminalTakeoverDetached[takeoverSession] = true;
+      api.terminalTakeoverDetach(takeoverSession, takeoverConversation).catch(function(){});
+    }
+  }
+  window.removeTerminalTabDom(tabId);
 };
 
 // Listen for PTY data
@@ -7967,13 +8180,7 @@ if (api.onTerminalTakeover) {
     window.applyTerminalTakeoverEvent(payload);
   });
 }
-if (api.terminalTakeoverState) {
-  api.terminalTakeoverState().then(function(items) {
-    (items || []).forEach(function(session) {
-      window.applyTerminalTakeoverEvent({ type: session.active ? 'started' : 'stopped', session: session });
-    });
-  }).catch(function(){});
-}
+if (api.terminalTakeoverState) window.refreshTerminalTakeoverPanes();
 
 // === Scroll to Bottom ===
 window.scrollToBottom = function() {
@@ -9380,7 +9587,7 @@ window.saveFlowToDisk = function(workIdx) {
       return base;
     })
   };
-  api.saveFile('Flow/' + work.name + '.Flow.json', JSON.stringify(flowData, null, 2));
+  api.saveFlow(flowData);
   addMsg('assistant', '[System] ' + t('flow.saved') + ': ' + work.name + '.Flow.json', 'flow', '');
   window.closeSubWin();
 };
@@ -9498,8 +9705,7 @@ window.saveFlowToDisk = async function(workIdx) {
   var work = state.flowWorks[workIdx];
   if (!work) return;
   var normalized = window.normalizeFlowWork({ name: work.name, components: work.components || [] });
-  var json = JSON.stringify({ name: normalized.name, components: normalized.components }, null, 2);
-  var r = await api.saveFile('Flow/' + normalized.name + '.Flow.json', json);
+  var r = await api.saveFlow({ name: normalized.name, components: normalized.components });
   if (r && r.error) {
     addMsg('assistant', '[Flow error] ' + t('workspace.saveFailed') + ': ' + r.error, 'error', '');
     return;
@@ -9529,8 +9735,8 @@ window.runFlowWork = async function(workIdx) {
   addMsg('assistant', '[System] ' + t('flow.started') + ': ' + normalized.name, 'flow', state.model);
   window.closeSubWin();
   try {
-    if (api.saveFile) {
-      await api.saveFile('Flow/' + normalized.name + '.Flow.json', JSON.stringify(normalized, null, 2));
+    if (api.saveFlow) {
+      await api.saveFlow(normalized);
     }
     if (api.setMode) await api.setMode('flow');
     state.mode = 'flow';
@@ -9902,48 +10108,65 @@ window.handleEditorVimKey = function(e) {
   e.preventDefault(); return true;
 };
 
+window.applyWorkspaceFileOpenResult = function(path, result) {
+  if (!result || result.kind === 'rejected') {
+    window.switchRightTab('editor');
+    state.editorPath = ''; state.editorToken = ''; state.editorRevision = '';
+    els['editor-filename'].textContent = path;
+    window.editorSetValue(t('editor.readFailed') + ': ' + ((result && result.error) || 'Unable to open file'), true);
+    return;
+  }
+  if (result.kind === 'browser') {
+    state.editorPath = ''; state.editorToken = ''; state.editorRevision = '';
+    window.switchRightTab('browser');
+    window.navigateBrowser(result.url);
+    return;
+  }
+  if (result.kind === 'external' || result.kind === 'reveal') {
+    state.editorPath = ''; state.editorToken = ''; state.editorRevision = '';
+    return;
+  }
+  state.editorPath = result.path || path;
+  state.editorToken = result.token || '';
+  state.editorRevision = result.revision || '';
+  state.editorEncoding = result.encoding || 'utf8';
+  var content = result.content || '';
+  window.switchRightTab('editor');
+  els['editor-filename'].textContent = state.editorPath;
+  state.editorOriginal = content; state.editorUndo = []; state.editorRedo = []; state.editorPreview = false;
+  window.editorSetValue(content, true);
+  if (els['editor-md-toggle']) els['editor-md-toggle'].classList.toggle('visible', window.editorLanguageForPath(state.editorPath) === 'markdown');
+  window.scheduleEditorCompletion();
+};
+
 window.openFile = async function(path) {
-  state.editorPath = path;
   try {
-    var result = await api.readFile(path);
-    var content = result.content || '';
-    window.switchRightTab('editor');
-    els['editor-filename'].textContent = path;
-    state.editorOriginal = content; state.editorUndo = []; state.editorRedo = []; state.editorPreview = false;
-    window.editorSetValue(content, true);
-    if (els['editor-md-toggle']) els['editor-md-toggle'].classList.toggle('visible', window.editorLanguageForPath(path) === 'markdown');
-    window.scheduleEditorCompletion();
+    var result = await api.openWorkspaceFile(path);
+    window.applyWorkspaceFileOpenResult(path, result);
   } catch(e) {
-    window.switchRightTab('editor');
-    els['editor-filename'].textContent = path;
-    window.editorSetValue(t('editor.readFailed') + ': ' + e.message, true);
+    window.applyWorkspaceFileOpenResult(path, { kind: 'rejected', error: e.message });
   }
 };
 
 window.openLinkedFile = async function(path) {
   path = String(path || '').trim();
   if (!path) return;
-  state.editorPath = path;
-  window.switchRightTab('editor');
-  if (els['editor-filename']) els['editor-filename'].textContent = path;
   try {
-    var result = await api.readFile(path);
-    if (result && result.error) {
-      window.editorSetValue(t('editor.readFailed') + ': ' + result.error, true);
-    } else {
-      state.editorOriginal = (result && result.content) || '';
-      window.editorSetValue(state.editorOriginal, true);
-    }
+    var result = await api.openWorkspaceFile(path);
+    window.applyWorkspaceFileOpenResult(path, result);
   } catch(e) {
-    window.editorSetValue(t('editor.readFailed') + ': ' + e.message, true);
+    window.applyWorkspaceFileOpenResult(path, { kind: 'rejected', error: e.message });
   }
 };
 
 window.saveEditor = async function() {
-  if (state.editorPath) {
+  if (state.editorPath && state.editorToken) {
     var content = els['editor-textarea'].value;
     try {
-      await api.saveFile(state.editorPath, content);
+      var result = await api.saveWorkspaceFile(state.editorToken, content, state.editorRevision);
+      if (!result || !result.ok) throw new Error((result && result.error) || 'Save failed');
+      state.editorRevision = result.revision || state.editorRevision;
+      state.editorToken = result.token || state.editorToken;
       state.editorOriginal = content; window.renderNativeEditor();
       addMsg('assistant', '[System] ' + t('editor.fileSaved') + ': ' + state.editorPath, 'editor', '');
     } catch(e) {
@@ -9954,6 +10177,7 @@ window.saveEditor = async function() {
 
 window.closeEditor = function() {
   state.editorPath = '';
+  state.editorToken = ''; state.editorRevision = ''; state.editorEncoding = 'utf8';
   els['editor-filename'].textContent = '';
   els['editor-textarea'].value = '';
   state.editorOriginal = ''; state.editorPreview = false;
@@ -9973,34 +10197,36 @@ window.renderSubagentList = function() {
   var html = '';
   for (var i = 0; i < agents.length; i++) {
     var a = agents[i];
-    html += '<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;font-size:12px;border-bottom:1px solid var(--glass-border-1);">' +
-      iconSvg('bot', 'Subagent', 'small') +
-      '<span style="flex:1;color:var(--text);">' + esc(a.name || 'Agent') + '</span>' +
-      '<span style="color:var(--accent2);font-size:10px;">' + esc(a.status || t('common.idle')) + '</span>' +
-      '</div>';
-  }
-  container.innerHTML = html;
-};
-
-window.renderSubagentList = function() {
-  var container = document.getElementById('subagent-list');
-  if (!container) return;
-  var agents = state.subagents || [];
-  if (agents.length === 0) {
-    container.innerHTML = '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:30px;">' + esc(t('subagent.empty')) + '</div>';
-    return;
-  }
-  var html = '';
-  for (var i = 0; i < agents.length; i++) {
-    var a = agents[i];
-    var meta = esc((a.mode || 'build') + ' / ' + (a.model || t('common.default')) + ' / ' + (a.messageCount || 0) + ' ' + t('common.messageShort'));
+    var unread = Number(a.mailbox && a.mailbox.unread || 0);
+    var queue = a.status === 'queued' && a.queueSequence ? (' · #' + a.queueSequence) : '';
+    var meta = esc((a.agentMode || a.mode || 'build') + ' / ' + (a.model || t('common.default')) + ' / ' + ((a.messages || []).length || a.messageCount || 0) + ' ' + t('common.messageShort') + queue + (unread ? (' · ' + t('subagent.unread').replace('{count}', String(unread))) : ''));
+    var display = a.displayName || a.name || a.id || 'Agent';
+    var qualified = a.qualifiedName || a.name || a.id || display;
     html += '<button type="button" onclick="window.openSubagentHistory(' + JSON.stringify(a.id || a.name).replace(/"/g, '&quot;') + ')" title="' + escAttr(t('subagent.openHistory')) + '" style="width:100%;display:flex;align-items:center;gap:6px;padding:7px 8px;font-size:12px;border:0;border-bottom:1px solid var(--glass-border-1);background:transparent;text-align:left;cursor:pointer;">' +
       iconSvg('bot', 'Subagent', 'small') +
-      '<span style="flex:1;min-width:0;color:var(--text);"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(a.name || 'Agent') + '</span><span style="display:block;color:var(--text-dim);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + meta + '</span></span>' +
+      '<span style="flex:1;min-width:0;color:var(--text);" title="' + escAttr(qualified) + '"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(display) + '</span><span style="display:block;color:var(--text-dim);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + meta + '</span></span>' +
       '<span style="color:var(--accent2);font-size:10px;">' + esc(a.status || t('common.idle')) + '</span>' +
       '</button>';
   }
   container.innerHTML = html;
+  window.scheduleSubagentStateRefresh();
+};
+
+window.scheduleSubagentStateRefresh = function() {
+  if (state.subagentRefreshTimer) clearTimeout(state.subagentRefreshTimer);
+  state.subagentRefreshTimer = null;
+  var agents = state.subagents || [];
+  if (state.rightTab !== 'subagent' || !agents.some(function(agent) { return agent.status === 'working' || agent.status === 'queued'; }) || !api.getState) return;
+  var conversationId = activeConversationId();
+  var workspaceKey = currentWorkspaceKey();
+  state.subagentRefreshTimer = setTimeout(function() {
+    api.getState(conversationId).then(function(snapshot) {
+      if (conversationId !== activeConversationId() || workspaceKey !== currentWorkspaceKey()) return;
+      if (snapshot && snapshot.subagents) state.subagents = snapshot.subagents;
+      if (snapshot && snapshot.linkedPlan) state.linkedPlan = snapshot.linkedPlan;
+      window.renderSubagentList();
+    }).catch(function(){});
+  }, 1200);
 };
 
 window.openSubagentHistory = function(id) {
@@ -10008,8 +10234,13 @@ window.openSubagentHistory = function(id) {
   var agent = agents.find(function(a) { return a.id === id || a.name === id; });
   if (!agent) return;
   var lines = [];
-  lines.push('<div style="font-size:13px;color:var(--text);font-weight:600;margin-bottom:8px;">' + esc(agent.name || t('subagent.historyTitle')) + '</div>');
-  lines.push('<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;">' + esc((agent.status || t('common.idle')) + ' / ' + (agent.mode || 'build') + ' / ' + (agent.model || t('common.default'))) + '</div>');
+  lines.push('<div style="font-size:13px;color:var(--text);font-weight:600;margin-bottom:4px;">' + esc(agent.displayName || agent.name || t('subagent.historyTitle')) + '</div>');
+  lines.push('<div style="font-size:10px;color:var(--text-dim);word-break:break-all;margin-bottom:8px;">' + esc(agent.qualifiedName || agent.name || agent.id || '') + '</div>');
+  lines.push('<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;">' + esc((agent.status || t('common.idle')) + ' / ' + (agent.agentMode || agent.mode || 'build') + ' / ' + (agent.model || t('common.default')) + (agent.mailbox && agent.mailbox.unread ? (' / ' + agent.mailbox.unread + ' unread') : '')) + '</div>');
+  var compression = agent.metadata && agent.metadata.contextCompression;
+  if (compression) {
+    lines.push('<div style="font-size:10px;color:var(--accent2);margin-bottom:8px;">Context compressed ' + esc(String(compression.originalMessages || 0)) + ' -> ' + esc(String(compression.compressedMessages || 0)) + ' messages / ' + esc(compression.model || '') + '</div>');
+  }
   if (agent.result) {
     lines.push('<div style="font-size:11px;color:var(--accent2);margin:10px 0 4px;">' + esc(t('subagent.result')) + '</div>');
     lines.push('<pre style="white-space:pre-wrap;word-break:break-word;background:var(--glass-bg-2);border:1px solid var(--glass-border-1);border-radius:8px;padding:10px;max-height:180px;overflow:auto;">' + esc(agent.result) + '</pre>');
@@ -10021,7 +10252,9 @@ window.openSubagentHistory = function(id) {
   } else {
     for (var i = 0; i < messages.length; i++) {
       var m = messages[i];
-      lines.push('<div style="margin:8px 0;"><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;">' + esc(m.role || '') + '</div><pre style="white-space:pre-wrap;word-break:break-word;background:var(--glass-bg-1);border:1px solid var(--glass-border-1);border-radius:8px;padding:8px;">' + esc(m.content || '') + '</pre></div>');
+      var messageRole = m.role || m.kind || '';
+      var messageContent = m.content || m.body || '';
+      lines.push('<div style="margin:8px 0;"><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;">' + esc(messageRole) + '</div><pre style="white-space:pre-wrap;word-break:break-word;background:var(--glass-bg-1);border:1px solid var(--glass-border-1);border-radius:8px;padding:8px;">' + esc(messageContent) + '</pre></div>');
     }
   }
   var overlay = document.createElement('div');
@@ -10038,7 +10271,8 @@ window.openSubagentHistory = function(id) {
 
 // === Browser ===
 window.navigateBrowser = function(url) {
-  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+  url = String(url || '').trim();
+  if (!/^(?:https?:\/\/|about:blank$|newmark-preview:\/\/)/i.test(url)) {
     url = 'https://' + url;
   }
   var input = els['browser-url'];
@@ -10360,6 +10594,9 @@ window.switchConversation = function(idx) {
   holdForegroundConversation(activeId, 4500);
   markConversationTracked(activeId, state.conversationTrackMs || 300000);
   state.conversationPlan = { items: [] };
+  state.linkedPlan = { markdown: '', revision: 0 };
+  state.subagents = [];
+  window.refreshTerminalTakeoverPanes();
   renderConversations();
   els['chat-area'].innerHTML = '';
   addMsg('workflow running', t('conversation.loadingIsolated'), 'system', state.model);
@@ -11185,6 +11422,7 @@ function applyWorkspaceStateFromBackend(s) {
   window.renderLeftWsList();
   renderConversations();
   updateWorkspaceGate();
+  if (window.refreshTerminalTakeoverPanes) window.refreshTerminalTakeoverPanes();
 }
 
 window.refreshWorkspaceState = async function() {
@@ -11428,6 +11666,8 @@ window.selectWorkspace = function(name) {
   window.renderConversations();
   renderChatMessages([]);
   state.conversationPlan = { items: [] };
+  state.linkedPlan = { markdown: '', revision: 0 };
+  state.subagents = [];
   state.backendQueue = { steering: [], followUp: [] };
   state.nextQueue = [];
   state.nextPrompt = '';
@@ -11435,6 +11675,7 @@ window.selectWorkspace = function(name) {
   updateWorkspaceGate();
   syncBackendConversation().then(function() {
     if (state.rightTab === 'plan') window.renderConversationPlan();
+    window.refreshTerminalTakeoverPanes();
   }).catch(function(){});
 };
 
@@ -11518,8 +11759,8 @@ window.openWsSettings = function() {
   window.openSubWin(t('workspace.settingsTitle') + ' - ' + esc(wsName), html);
 
   // Load current workspace prompt if possible
-  if (api.readFile) {
-    api.readFile(state.currentWorkspacePath ? (state.currentWorkspacePath + '/agent.md') : (state.currentWorkspace + '/agent.md')).then(function(r) {
+  if (api.readWorkspacePrompt) {
+    api.readWorkspacePrompt().then(function(r) {
       if (r && r.content) {
         var ta = document.getElementById('ws-agent-md');
         if (ta) ta.value = r.content;
@@ -11532,9 +11773,8 @@ window.saveWsAgentMd = function() {
   var ta = document.getElementById('ws-agent-md');
   if (!ta) return;
   var content = ta.value;
-  var path = state.currentWorkspacePath || state.currentWorkspace;
-  if (!path) return;
-  api.saveFile(path + '/agent.md', content).then(function(r) {
+  if (!state.currentWorkspacePath && !state.currentWorkspace) return;
+  api.saveWorkspacePrompt(content).then(function(r) {
     if (r && r.ok) addMsg('assistant', '[System] ' + t('workspace.promptSaved'), 'info', '');
     else addMsg('assistant', '[Error] ' + t('workspace.saveFailed'), 'error', '');
   }).catch(function(err) {
@@ -11588,24 +11828,24 @@ window.renderFlowSelector = function() {
 };
 
 window.loadFlows = function() {
-  if (api.listFiles) {
-    api.listFiles('Flow').then(function(entries) {
+  if (api.listFlows) {
+    api.listFlows().then(function(entries) {
       state.flowWorks = [];
       if (entries && entries.length > 0) {
         var pending = 0;
         for (var fi = 0; fi < entries.length; fi++) {
           var fname = typeof entries[fi] === 'string' ? entries[fi] : (entries[fi].name || '');
-          if (fname.endsWith('.Flow.json')) pending++;
+          if (fname) pending++;
         }
         if (pending === 0) { window.renderFlowSelector(); return; }
         for (var fi2 = 0; fi2 < entries.length; fi2++) {
           (function(entry) {
             var fname = typeof entry === 'string' ? entry : (entry.name || '');
-            if (fname.endsWith('.Flow.json')) {
-              api.readFile('Flow/' + fname).then(function(r) {
-                if (r && r.content) {
+            if (fname) {
+              api.readFlow(fname.replace(/\.Flow\.json$/, '')).then(function(r) {
+                if (r && r.workflow) {
                   try {
-                    var data = JSON.parse(r.content);
+                    var data = r.workflow;
                     state.flowWorks.push({
                       name: data.name || fname.replace('.Flow.json',''),
                       components: (data.components || []).map(function(c) {

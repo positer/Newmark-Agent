@@ -6,10 +6,13 @@ import { Agent } from './core/agent';
 import { AgentMode } from './core/types';
 import { AutomationManager } from './core/automation';
 import { mergeProviderSecrets, sanitizeProvidersForState } from './core/config';
+import { FlowEngine, FlowWorkflow } from './core/flow';
+import { WorkspaceFileRouter } from './core/workspaceFileRouter';
 
 const PORT = 47890;
 let agent: Agent | null = null;
 let automation: AutomationManager | null = null;
+let workspaceFileRouter: WorkspaceFileRouter | null = null;
 
 function resolveAppPath(root: string, targetPath: string): string {
   if (!targetPath) return root;
@@ -81,16 +84,26 @@ function applyConfigPatch(cfg: Record<string, unknown>): void {
   agent.config.save();
 }
 
-function fileTree(root: string, current: string): unknown[] {
-  const entries = fs.readdirSync(current, { withFileTypes: true });
+function isPathInside(parent: string, child: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+async function fileTreeLevel(workspaceRoot: string, requestedPath: string): Promise<unknown[]> {
+  const lexicalRoot = path.resolve(workspaceRoot);
+  const lexicalTarget = requestedPath ? path.resolve(requestedPath) : lexicalRoot;
+  if (!isPathInside(lexicalRoot, lexicalTarget)) throw new Error('File tree path is outside the active workspace');
+  const [realRoot, realTarget] = await Promise.all([fs.promises.realpath(lexicalRoot), fs.promises.realpath(lexicalTarget)]);
+  if (!isPathInside(realRoot, realTarget)) throw new Error('File tree path escapes the active workspace through a link');
+  const entries = await fs.promises.readdir(realTarget, { withFileTypes: true });
   return entries
-    .filter(e => !e.name.startsWith('.') && !e.name.startsWith('node_modules'))
-    .map(e => {
-      const full = path.join(current, e.name);
-      return e.isDirectory()
-        ? { name: e.name, type: 'directory', path: full, children: fileTree(root, full) }
-        : { name: e.name, type: 'file', path: full };
-    });
+    .filter(entry => !entry.name.startsWith('.') && entry.name !== 'node_modules')
+    .map(entry => ({
+      name: entry.name,
+      type: entry.isDirectory() ? 'directory' : 'file',
+      path: path.join(lexicalTarget, entry.name),
+    }))
+    .sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : (a.type === 'directory' ? -1 : 1));
 }
 
 function mimeType(fp: string): string {
@@ -282,24 +295,17 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         jsonResponse(res, { name });
         return;
       }
-      case '/api/read':
-      case '/api/read-file': {
+      case '/api/open-workspace-file': {
         const fp = JSON.parse(body || '{}').path || '';
-        try { jsonResponse(res, { content: fs.readFileSync(resolveAppPath(agent.rootPath, fp), 'utf-8') }); }
-        catch(e) { jsonResponse(res, { error: String(e) }, 500); }
+        if (!workspaceFileRouter) { jsonResponse(res, { kind: 'rejected', error: 'Workspace file router unavailable' }, 500); return; }
+        jsonResponse(res, await workspaceFileRouter.open(fp, 'http-server'));
         return;
       }
-      case '/api/list':
-      case '/api/list-files': {
+      case '/api/save-workspace-file': {
         const params = JSON.parse(body || '{}');
-        const dir = resolveAppPath(agent.rootPath, params.path || params.dir || '');
-        try {
-          const entries = fs.readdirSync(dir, { withFileTypes: true })
-            .filter(e => !e.name.startsWith('.'))
-            .map(e => ({ name: e.name, isDir: e.isDirectory(), path: path.join(dir, e.name) }))
-            .sort((a, b) => { if (a.isDir !== b.isDir) return a.isDir ? -1 : 1; return a.name.localeCompare(b.name); });
-          jsonResponse(res, entries);
-        } catch(e) { jsonResponse(res, { error: String(e) }, 500); }
+        if (agent.mode === 'plan') { jsonResponse(res, { error: 'Plan mode is fully read-only; save is blocked.' }, 403); return; }
+        if (!workspaceFileRouter) { jsonResponse(res, { error: 'Workspace file router unavailable' }, 500); return; }
+        jsonResponse(res, await workspaceFileRouter.save(String(params.token || ''), String(params.content || ''), String(params.expectedRevision || ''), 'http-server'));
         return;
       }
       case '/api/bash': {
@@ -309,20 +315,59 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         } catch(e: any) { jsonResponse(res, { output: e.stdout || '', error: e.stderr || String(e) }); }
         return;
       }
-      case '/api/write': {
+      case '/api/flows': {
+        jsonResponse(res, FlowEngine.listAll(path.join(agent.rootPath, 'Flow')));
+        return;
+      }
+      case '/api/flow-read': {
         const params = JSON.parse(body || '{}');
-        const fp = resolveAppPath(agent.rootPath, params.path || '');
-        try {
-          fs.mkdirSync(path.dirname(fp), { recursive: true });
-          fs.writeFileSync(fp, params.content || '', 'utf-8');
-          jsonResponse(res, { ok: true });
-        } catch(e) { jsonResponse(res, { error: String(e) }, 500); }
+        const name = String(params.name || '').trim();
+        if (!name || name !== path.basename(name) || /[\\/]/.test(name)) { jsonResponse(res, { error: 'Invalid workflow name' }, 400); return; }
+        const workflow = FlowEngine.load(path.join(agent.rootPath, 'Flow'), name);
+        jsonResponse(res, workflow ? { ok: true, workflow } : { error: `Workflow not found: ${name}` }, workflow ? 200 : 404);
+        return;
+      }
+      case '/api/flow-save': {
+        if (agent.mode === 'plan') { jsonResponse(res, { error: 'Plan mode is fully read-only; Flow save is blocked.' }, 403); return; }
+        const params = JSON.parse(body || '{}');
+        const name = String(params.name || '').trim();
+        if (!name || name !== path.basename(name) || /[<>:"/\\|?*]/.test(name)) { jsonResponse(res, { error: 'Invalid workflow name' }, 400); return; }
+        const workflow = { name, components: Array.isArray(params.components) ? params.components : [] } as FlowWorkflow;
+        const validation = FlowEngine.validate(workflow);
+        if (validation.length) { jsonResponse(res, { error: validation.map(item => item.message).join('; ') }, 400); return; }
+        const flowDir = path.join(agent.rootPath, 'Flow');
+        fs.mkdirSync(flowDir, { recursive: true });
+        FlowEngine.save(flowDir, workflow);
+        jsonResponse(res, { ok: true, workflow });
+        return;
+      }
+      case '/api/workspace-prompt': {
+        const workspace = agent.workspace.current;
+        if (!workspace) { jsonResponse(res, { error: 'No active workspace' }, 400); return; }
+        const promptPath = path.join(workspace.path, 'agent.md');
+        if (req.method === 'GET') {
+          try {
+            const stat = fs.statSync(promptPath);
+            if (stat.size > 256 * 1024) { jsonResponse(res, { error: 'Workspace prompt exceeds 256 KiB.' }, 400); return; }
+            jsonResponse(res, { content: fs.readFileSync(promptPath, 'utf-8') });
+          } catch (error) {
+            const code = error && typeof error === 'object' && 'code' in error ? String((error as NodeJS.ErrnoException).code || '') : '';
+            jsonResponse(res, code === 'ENOENT' ? { content: '' } : { error: String(error) }, code === 'ENOENT' ? 200 : 500);
+          }
+          return;
+        }
+        if (agent.mode === 'plan') { jsonResponse(res, { error: 'Plan mode is fully read-only; workspace prompt save is blocked.' }, 403); return; }
+        const content = String(JSON.parse(body || '{}').content || '');
+        if (Buffer.byteLength(content, 'utf8') > 256 * 1024) { jsonResponse(res, { error: 'Workspace prompt exceeds 256 KiB.' }, 400); return; }
+        fs.writeFileSync(promptPath, content, 'utf-8');
+        jsonResponse(res, { ok: true });
         return;
       }
       case '/api/filetree': {
         const params = body ? JSON.parse(body || '{}') : {};
-        const treeRoot = resolveAppPath(agent.rootPath, params.path || '');
-        try { jsonResponse(res, fileTree(treeRoot, treeRoot)); }
+        const workspaceRoot = path.resolve(agent.workspace.current?.path || agent.rootPath);
+        const treeRoot = params.path ? path.resolve(String(params.path)) : workspaceRoot;
+        try { jsonResponse(res, await fileTreeLevel(workspaceRoot, treeRoot)); }
         catch(e) { jsonResponse(res, { error: String(e) }, 500); }
         return;
       }
@@ -398,6 +443,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
 
 function startServer(root: string): void {
   agent = new Agent(root);
+  workspaceFileRouter = new WorkspaceFileRouter(() => path.resolve(agent?.workspace.current?.path || root));
   automation = new AutomationManager(agent.config, async (prompt, model) => {
     if (!agent) return '';
     const previousModel = agent.model;

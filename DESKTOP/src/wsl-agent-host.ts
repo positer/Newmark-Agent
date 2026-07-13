@@ -2,6 +2,16 @@ import * as readline from 'readline';
 import { Agent } from './core/agent';
 import { ConversationKernel } from './core/conversationKernel';
 import { WslAgentRequest, WslAgentResponse, WslAgentWorkspace } from './core/wslAgentProtocol';
+import { configureWslHostToolWriter, rejectPendingWslHostTools, settleWslHostToolResult } from './core/wslHostToolBridge';
+import {
+  detachTerminalTakeoverSession,
+  onTerminalTakeoverEvent,
+  resizeTerminalTakeoverSession,
+  shutdownTerminalTakeoverSessions,
+  stopTerminalTakeoverSession,
+  terminalTakeoverState,
+  writeTerminalTakeoverSession,
+} from './tools/terminalTakeover';
 
 const root = process.env.NEWMARK_WSL_ROOT || '';
 const distro = process.env.NEWMARK_WSL_DISTRO || 'WSL';
@@ -15,13 +25,15 @@ console.log = diagnostic;
 console.info = diagnostic;
 console.warn = diagnostic;
 
-const host = new Agent(root);
-const kernel = new ConversationKernel(root, host, null);
-kernel.subscribe(event => write({ event: 'work', data: event }));
+let host = new Agent(root);
+let kernel = new ConversationKernel(root, host, null);
+let unsubscribeKernel = kernel.subscribe(event => write({ event: 'work', data: event }));
+onTerminalTakeoverEvent(event => write({ event: 'terminal', data: event }));
 
 function write(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
+configureWslHostToolWriter(write);
 
 function applyWorkspace(workspace: WslAgentWorkspace | null): void {
   if (!workspace) {
@@ -40,11 +52,41 @@ function applyWorkspace(workspace: WslAgentWorkspace | null): void {
   host.config.loadWorkspaceConfig(workspace.path);
 }
 
+function resetAgentRuntime(): void {
+  unsubscribeKernel();
+  host = new Agent(root);
+  kernel = new ConversationKernel(root, host, null);
+  unsubscribeKernel = kernel.subscribe(event => write({ event: 'work', data: event }));
+}
+
 async function handle(request: WslAgentRequest): Promise<unknown> {
   if (request.method === 'ping') return { backend: 'wsl', distro, pid: process.pid, platform: process.platform, root };
   if (request.method === 'shutdown') {
+    shutdownTerminalTakeoverSessions('wsl-host-shutdown');
     setTimeout(() => process.exit(0), 10);
     return true;
+  }
+  if (request.method === 'reset') {
+    resetAgentRuntime();
+    return true;
+  }
+  if (request.method === 'host_tool_result') {
+    return settleWslHostToolResult(request.params);
+  }
+  if (request.method === 'terminal_state') {
+    return terminalTakeoverState(request.params.owner, request.params.persistenceRoot || root);
+  }
+  if (request.method === 'terminal_write') {
+    return writeTerminalTakeoverSession(request.params.sessionId, request.params.data, request.params.owner);
+  }
+  if (request.method === 'terminal_resize') {
+    return resizeTerminalTakeoverSession(request.params.sessionId, request.params.cols, request.params.rows, request.params.owner);
+  }
+  if (request.method === 'terminal_stop') {
+    return stopTerminalTakeoverSession(request.params.sessionId, request.params.owner, 'remote-stop');
+  }
+  if (request.method === 'terminal_detach') {
+    return detachTerminalTakeoverSession(request.params.sessionId, request.params.owner);
   }
   if (request.method === 'abort') return kernel.abort(request.params.conversationId);
   if (request.method === 'snapshot') {
@@ -76,4 +118,9 @@ input.on('line', line => {
     .then(result => write({ id: request.id, ok: true, result } satisfies WslAgentResponse))
     .catch(error => write({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error) } satisfies WslAgentResponse));
 });
-input.on('close', () => process.exit(0));
+input.on('close', () => {
+  shutdownTerminalTakeoverSessions('wsl-stdin-closed');
+  configureWslHostToolWriter(null);
+  rejectPendingWslHostTools('WSL Agent host stdin closed');
+  process.exit(0);
+});

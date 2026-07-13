@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Date: 2026-06-29
+Date: 2026-07-12
 
 This file summarizes the current copyright and license audit for Newmark Agent.
 It is not legal advice. It is an engineering record of the licenses detected in
@@ -45,20 +45,6 @@ detected license expressions: MIT, ISC, Apache-2.0, BSD-2-Clause,
 BSD-3-Clause, BlueOak-1.0.0, MIT-0, CC0-1.0, Python-2.0, WTFPL,
 `(MIT OR CC0-1.0)`, `(WTFPL OR MIT)`, and `WTFPL OR ISC`.
 
-## Direct C# CLI Dependencies
-
-The legacy C# CLI project directly references these NuGet packages, with
-licenses detected from the local restored package metadata:
-
-| Package | Version | License |
-|---|---:|---|
-| `Terminal.Gui` | 1.17.1 | MIT |
-| `Spectre.Console` | 0.49.1 | MIT |
-| `System.Text.Json` | 9.0.17 | MIT |
-
-Restored transitive packages detected during this audit were also MIT-licensed
-or referenced the .NET project license URL in local metadata.
-
 ## Icons And Assets
 
 - `lucide-static` SVG icons are third-party open-source assets under ISC.
@@ -76,13 +62,13 @@ same thing as bundled runtime dependencies.
 
 | Project or Material | Local Evidence | Detected License / Status | Newmark Position |
 |---|---|---|---|
-| OpenCode (`anomalyco/opencode`) | `_vendor/opencode-dev`, `_vendor/opencode-clean/opencode-dev`, legacy C# external-engine support | MIT; local license text says `Copyright (c) 2025 opencode` | Reference/vendor copy and optional external-engine compatibility. Do not publish vendored copies without preserving MIT license text. |
+| OpenCode (`anomalyco/opencode`) | `_vendor/opencode-dev`, `_vendor/opencode-clean/opencode-dev`, TypeScript external-engine compatibility | MIT; local license text says `Copyright (c) 2025 opencode` | Reference/vendor copy and optional external-engine compatibility. Do not publish vendored copies without preserving MIT license text. |
 | OpenCode goal plugin (`willytop8/OpenCode-goal-plugin`) | `_vendor/OpenCode-goal-plugin-main/OpenCode-goal-plugin-main` | MIT; local license text says `Copyright (c) 2026 willytop8` | Reference/sample material. Do not publish vendored copies without preserving MIT license text. |
 | Liquid Glass React | `_ref/Liquid Glass/extracted/liquid-glass-react-master/liquid-glass-react-master` | MIT; local license text says `Copyright 2025 MAX ROVENSKY` | Visual/reference material only. No React package copy is part of the Newmark desktop runtime. |
 | Liquid Glass Studio | `_ref/Liquid Glass/extracted/liquid-glass-studio-main/liquid-glass-studio-main` | MIT; local license text says `Copyright (c) 2024 Charles Yin` | Visual/reference material only. Preserve MIT license text if published. |
 | liquid-dom | `_ref/Liquid Glass/extracted/liquid-dom-master/liquid-dom-master` | Root package is private and has no root license field; one subpackage (`layout`) declares MIT, other inspected subpackages did not declare a license | Treat as uncleared reference material. Do not publish or copy substantial code before a separate upstream license review. |
 | Apple Liquid Glass documentation/concept | `skills/design-taste-frontend/SKILL.md` and Flow planning prompts | Documentation/design concept reference, not a local source package | Any web implementation must be described as a glassmorphism-style approximation, not official Apple Liquid Glass or Apple-provided code. |
-| Codex CLI and OpenCode CLI external tools | `CLI/Newmark/LLM/EngineManager.cs`, `DESKTOP/src/core/config.ts`, `DESKTOP/src/core/agent.ts` | External optional tools installed or detected from user environment; not bundled by the current desktop package | Users and maintainers must follow the upstream tool license when installing or redistributing those tools. |
+| Codex CLI and OpenCode CLI external tools | `DESKTOP/src/core/config.ts`, `DESKTOP/src/core/agent.ts` | External optional tools installed or detected from user environment; not bundled by the current desktop package | Users and maintainers must follow the upstream tool license when installing or redistributing those tools. |
 
 ## Internal And Reference Material
 

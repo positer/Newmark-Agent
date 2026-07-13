@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, utilityProcess, Tray, Menu, nativeImage, nativeTheme, webContents, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, utilityProcess, Tray, Menu, nativeImage, nativeTheme, webContents, shell, protocol } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -16,13 +16,31 @@ import { CLI_COMMANDS, runCliCommand } from './cli-commands';
 import { mergeProviderSecrets, sanitizeProvidersForState } from './core/config';
 import { MemoryLabManager } from './core/memoryLab';
 import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, installUpdate } from './core/installUpdate';
-import { onTerminalTakeoverEvent, terminalTakeoverState, writeTerminalTakeoverSession } from './tools/terminalTakeover';
+import {
+  detachTerminalTakeoverSession,
+  normalizeTerminalTakeoverOwner,
+  onTerminalTakeoverEvent,
+  resizeTerminalTakeoverSession,
+  ROOT_TERMINAL_ACTOR_ID,
+  shutdownTerminalTakeoverSessions,
+  stopTerminalTakeoverSession,
+  terminalTakeoverState,
+  terminalTakeoverWorkspaceId,
+  writeTerminalTakeoverSession,
+} from './tools/terminalTakeover';
 import { nativeToolCatalogForState, normalizeNativeToolEnabled } from './tools/nativeTools';
 import { LLMProvider } from './llm/provider';
 import { WslAgentClient } from './core/wslAgentClient';
+import { previewResponse, WorkspaceFileRouter } from './core/workspaceFileRouter';
+import { runComputerUse } from './tools/computerUse';
 
 const APP_NAME = 'Newmark Agent';
 const APP_ID = 'ai.newmark.agent';
+
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'newmark-preview',
+  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
+}]);
 
 app.setName(APP_NAME);
 if (process.platform === 'win32') {
@@ -144,9 +162,7 @@ async function availableWslDistros(): Promise<string[]> {
 }
 
 async function resetWslAgentClient(): Promise<void> {
-  const current = wslAgentClient;
-  wslAgentClient = null;
-  if (current) await current.stop();
+  if (wslAgentClient) await wslAgentClient.resetAgent();
 }
 
 async function resetAgentRuntimes(): Promise<void> {
@@ -331,6 +347,13 @@ function exeRoot(): string {
 
 function userRuntimeRoot(): string {
   return path.join(os.homedir(), '.Newmark');
+}
+
+function broadcastTerminalTakeoverEvent(event: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    win.webContents.send('agentTerminal:takeover', event);
+  }
 }
 
 function ensureWslRuntimeBundle(): string {
@@ -615,6 +638,10 @@ const hasCliCommand = args.some(a => (CLI_COMMANDS as readonly string[]).include
 
 async function drainCliNetworkHandles(): Promise<void> {
   try {
+    const { stopComputerUsePowerShellHost } = require('./tools/computerUsePowerShellHost');
+    stopComputerUsePowerShellHost();
+  } catch {}
+  try {
     const undici = require('undici');
     const dispatcher = undici.getGlobalDispatcher?.();
     if (dispatcher?.close) {
@@ -754,6 +781,11 @@ if (hasCliCommand) {
 
   app.whenReady().then(async () => {
     let root = resolveRoot(args);
+    const fileRouter = new WorkspaceFileRouter(() => path.resolve(agent?.workspace.current?.path || root));
+    protocol.handle('newmark-preview', async request => {
+      const resource = await fileRouter.resolvePreview(request.url, request.headers.get('range'));
+      return previewResponse(resource, request.method);
+    });
     const automationWakeMode = args.includes('--automation-wake');
     const startupMark = Date.now();
     const recordStartup = (stage: string): void => {
@@ -823,6 +855,7 @@ if (hasCliCommand) {
           webviewTag: true,
         },
       });
+      const fileRouterOwnerId = String(win.webContents.id);
 
       if (!mainWindow || mainWindow.isDestroyed()) mainWindow = win;
       if (loadUi) loadDesktopWindowUi(win);
@@ -832,6 +865,20 @@ if (hasCliCommand) {
         webPreferences.nodeIntegration = false;
         webPreferences.contextIsolation = true;
         webPreferences.sandbox = true;
+        webPreferences.javascript = true;
+        webPreferences.allowRunningInsecureContent = false;
+      });
+      win.webContents.on('did-attach-webview', (_event, contents) => {
+        contents.on('will-prevent-unload', event => event.preventDefault());
+        contents.setWindowOpenHandler(details => {
+          const localPreview = contents.getURL().startsWith('newmark-preview:');
+          if (!localPreview && /^https?:/i.test(details.url)) void shell.openExternal(details.url);
+          return { action: 'deny' };
+        });
+        contents.on('will-navigate', (event, url) => {
+          if (/^(?:https?:|about:blank|newmark-preview:)/i.test(url)) return;
+          event.preventDefault();
+        });
       });
       if (!automationWakeMode) {
         win.maximize();
@@ -858,6 +905,7 @@ if (hasCliCommand) {
       });
 
       win.on('closed', () => {
+        fileRouter.revokeOwner(fileRouterOwnerId);
         const remaining = BrowserWindow.getAllWindows().filter(candidate => !candidate.isDestroyed() && candidate !== browserControlWindow);
         if (mainWindow === win) mainWindow = remaining[0] || null;
         if (!remaining.length && sidecarProcess) {
@@ -969,7 +1017,25 @@ if (hasCliCommand) {
     }
     nativeTheme.on('updated', refreshNativeThemeIcons);
 
-    app.on('will-quit', () => {
+    let appExitCleanupStarted = false;
+    let appExitCleanupComplete = false;
+    app.on('will-quit', event => {
+      if (!appExitCleanupComplete && wslAgentClient) {
+        event.preventDefault();
+        if (!appExitCleanupStarted) {
+          appExitCleanupStarted = true;
+          const client = wslAgentClient;
+          wslAgentClient = null;
+          void Promise.race([
+            client.stop(),
+            new Promise<void>(resolve => setTimeout(() => { client.shutdownNow(); resolve(); }, 2200)),
+          ]).finally(() => {
+            appExitCleanupComplete = true;
+            app.quit();
+          });
+        }
+        return;
+      }
       nativeTheme.removeListener('updated', refreshNativeThemeIcons);
       try {
         if (automationWake && automation) lastWakeSync = automationWake.sync(automation.list());
@@ -979,7 +1045,7 @@ if (hasCliCommand) {
       BrowserControl.setBackend(null);
       if (browserControlWindow && !browserControlWindow.isDestroyed()) browserControlWindow.destroy();
       if (sidecarProcess) { sidecarProcess.kill(); sidecarProcess = null; }
-      void resetWslAgentClient();
+      shutdownTerminalTakeoverSessions('app-exit');
     });
 
     function createTray() {
@@ -1004,6 +1070,50 @@ if (hasCliCommand) {
         const distro = agent.config.getStr('agent', 'wsl_distro') || 'Ubuntu-24.04';
         wslAgentClient = new WslAgentClient(distro, root, ensureWslRuntimeBundle());
         wslAgentClient.subscribe(event => broadcastAgentWorkEvent(event));
+        wslAgentClient.subscribeTerminal(event => broadcastTerminalTakeoverEvent(event));
+        wslAgentClient.setHostToolHandler(async request => {
+          if (request.tool !== 'computer_use') throw new Error(`WSL host tool is not allowed: ${String(request.tool)}`);
+          const args = request.args || {};
+          const result = await runComputerUse({
+            action: String(args.action || ''),
+            x: Number(args.x),
+            y: Number(args.y),
+            scrollX: Number(args.scroll_x || args.scrollX || 0),
+            scrollY: Number(args.scroll_y || args.scrollY || 0),
+            targetId: String(args.target_id || args.targetId || ''),
+            button: String(args.button || ''),
+            text: String(args.text || ''),
+            key: String(args.key || ''),
+            appTarget: String(args.app_target || args.appTarget || ''),
+            windowHandle: String(args.window_handle || args.windowHandle || ''),
+            durationMs: Number(args.duration_ms || args.durationMs || 0),
+            maxChars: Number(args.max_chars || args.maxChars || 30000),
+            dryRun: args.dry_run === true || args.dryRun === true,
+            allowEphemeralVisionImage: args.allow_ephemeral_vision_image === true || args.allowEphemeralVisionImage === true,
+            includeRawUi: args.include_raw_ui === true || args.includeRawUi === true,
+            gradientColors: Array.isArray(args.gradient_colors) ? args.gradient_colors.map(String) : undefined,
+            gradientSpeed: Number(args.gradient_speed || 0) || undefined,
+            gradientWidth: Number(args.gradient_width || 0) || undefined,
+            steps: Array.isArray(args.steps) ? args.steps.slice(0, 3).map(stepRaw => {
+              const step = stepRaw && typeof stepRaw === 'object' ? stepRaw as Record<string, unknown> : {};
+              return {
+                action: String(step.action || '') as 'move' | 'click' | 'scroll' | 'wait' | 'app_activate',
+                x: Number(step.x),
+                y: Number(step.y),
+                scrollX: Number(step.scroll_x || step.scrollX || 0),
+                scrollY: Number(step.scroll_y || step.scrollY || 0),
+                button: String(step.button || 'left'),
+                targetId: String(step.target_id || step.targetId || ''),
+                appTarget: String(step.app_target || step.appTarget || ''),
+                windowHandle: String(step.window_handle || step.windowHandle || ''),
+                durationMs: Number(step.duration_ms || step.durationMs || 0),
+              };
+            }) : undefined,
+            workspacePath: agent?.workspace.current?.path || root,
+            ownerId: `wsl:${request.context.workspaceId}:${request.context.conversationId}:${request.context.actorId}`,
+          });
+          try { return JSON.parse(result); } catch { return result; }
+        });
       }
       await wslAgentClient.start();
       return wslAgentClient;
@@ -1065,6 +1175,8 @@ if (hasCliCommand) {
           activeConversationId: agent.activeConversationId || previousConversation,
           conversations: agent.listConversationStates(),
           conversationPlan: result.conversationPlan,
+          linkedPlan: result.linkedPlan,
+          subagents: result.subagents,
           chatMessages: result.chatMessages,
           historyMessages: result.historyMessages,
           conversationLocked: false,
@@ -1106,6 +1218,8 @@ if (hasCliCommand) {
           conversations: agent.listConversationStates(),
           conversationId: agent.activeConversationId,
           conversationPlan: agent.getConversationPlan(),
+          linkedPlan: agent.getLinkedPlan(),
+          subagents: agent.subagents.listAll().map(record => agent!.subagents.toRecord(record.id)).filter(Boolean),
           diffs: agent.fileDiffs.map(d => ({ path: d.path, old: d.oldContent ? d.oldContent.split(/\r?\n/).length : 0, new: d.newContent ? d.newContent.split(/\r?\n/).length : 0 })),
         };
       } catch (e) {
@@ -1191,18 +1305,7 @@ if (hasCliCommand) {
         providers: sanitizeProvidersForState(agent.config.providers()),
         workspaces: { internal: agent.workspace.internal, external: agent.workspace.external, current: agent.workspace.current },
         skills: agent.skills.listDetailed(),
-        subagents: agent.subagents.listAll().map(s => ({
-          id: s.id,
-          name: s.name,
-          status: s.status,
-          active: s.status !== 'closed',
-          model: s.model,
-          mode: s.agentMode,
-          inputMode: s.inputMode,
-          result: s.result,
-          messageCount: s.messages.length,
-          messages: s.messages.slice(-20),
-        })),
+        subagents: conversationSnapshot.subagents,
         fileDiffs: agent.fileDiffs.map(d => ({
           path: d.path,
           oldLength: d.oldContent.length,
@@ -1379,6 +1482,30 @@ if (hasCliCommand) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
     });
+    ipcMain.handle('flow:list', async () => {
+      if (!agent) return [];
+      return FlowEngine.listAll(path.join(agent.rootPath, 'Flow'));
+    });
+    ipcMain.handle('flow:read', async (_event, name: string) => {
+      if (!agent) return { error: 'Agent not initialized' };
+      const cleanName = String(name || '').trim();
+      if (!cleanName || cleanName !== path.basename(cleanName) || /[\\/]/.test(cleanName)) return { error: 'Invalid workflow name' };
+      const workflow = FlowEngine.load(path.join(agent.rootPath, 'Flow'), cleanName);
+      return workflow ? { ok: true, workflow } : { error: `Workflow not found: ${cleanName}` };
+    });
+    ipcMain.handle('flow:save', async (_event, workflowInput: Record<string, unknown>) => {
+      if (!agent) return { error: 'Agent not initialized' };
+      if (agent.mode === 'plan') return { error: 'Plan mode is fully read-only; Flow save is blocked.' };
+      const name = String(workflowInput?.name || '').trim();
+      if (!name || name !== path.basename(name) || /[<>:"/\\|?*]/.test(name)) return { error: 'Invalid workflow name' };
+      const workflow = { name, components: Array.isArray(workflowInput?.components) ? workflowInput.components : [] } as any;
+      const validation = FlowEngine.validate(workflow);
+      if (validation.length) return { error: validation.map(item => item.message).join('; ') };
+      const flowDir = path.join(agent.rootPath, 'Flow');
+      fs.mkdirSync(flowDir, { recursive: true });
+      FlowEngine.save(flowDir, workflow);
+      return { ok: true, workflow };
+    });
 
     ipcMain.handle('agent:archive', async (_event, conversationId?: string) => {
       if (!agent) return null;
@@ -1423,39 +1550,45 @@ if (hasCliCommand) {
       });
     }
 
-    ipcMain.handle('agent:readFile', async (_event, filePath: string) => {
-      try {
-        return { content: fs.readFileSync(resolveAppPath(root, filePath), 'utf-8') };
-      } catch (e) { return { error: String(e) }; }
+    ipcMain.handle('agent:openWorkspaceFile', async (event, filePath: string) => {
+      const result = await fileRouter.open(filePath, String(event.sender.id));
+      if (result.kind === 'external') {
+        const error = await shell.openPath(result.path);
+        return error ? { kind: 'rejected', error } : result;
+      }
+      if (result.kind === 'reveal') {
+        shell.showItemInFolder(result.path);
+      }
+      return result;
     });
 
-    ipcMain.handle('agent:saveFile', async (_event, filePath: string, content: string) => {
+    ipcMain.handle('agent:saveWorkspaceFile', async (event, token: string, content: string, expectedRevision: string) => {
+      if (agent?.mode === 'plan') return { ok: false, error: 'Plan mode is fully read-only; saveFile is blocked.' };
+      return fileRouter.save(token, content, expectedRevision, String(event.sender.id));
+    });
+
+    ipcMain.handle('workspace:readPrompt', async () => {
+      if (!agent?.workspace.current) return { error: 'No active workspace' };
+      const promptPath = path.join(agent.workspace.current.path, 'agent.md');
       try {
-        if (agent?.mode === 'plan') return { error: 'Plan mode is fully read-only; saveFile is blocked.' };
-        const resolved = resolveAppPath(root, filePath);
-        const dir = path.dirname(resolved);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(resolved, content, 'utf-8');
+        const stat = await fs.promises.stat(promptPath);
+        if (stat.size > 256 * 1024) return { error: 'Workspace prompt exceeds 256 KiB.' };
+        return { content: await fs.promises.readFile(promptPath, 'utf-8') };
+      } catch (error) {
+        const code = error && typeof error === 'object' && 'code' in error ? String((error as NodeJS.ErrnoException).code || '') : '';
+        return code === 'ENOENT' ? { content: '' } : { error: String(error) };
+      }
+    });
+
+    ipcMain.handle('workspace:savePrompt', async (_event, content: string) => {
+      if (!agent?.workspace.current) return { error: 'No active workspace' };
+      if (agent.mode === 'plan') return { error: 'Plan mode is fully read-only; workspace prompt save is blocked.' };
+      if (Buffer.byteLength(String(content || ''), 'utf8') > 256 * 1024) return { error: 'Workspace prompt exceeds 256 KiB.' };
+      const promptPath = path.join(agent.workspace.current.path, 'agent.md');
+      try {
+        await fs.promises.writeFile(promptPath, String(content || ''), 'utf-8');
         return { ok: true };
-      } catch (e) { return { error: String(e) }; }
-    });
-
-    ipcMain.handle('agent:listFiles', async (_event, dirPath: string) => {
-      try {
-        const resolved = resolveAppPath(root, dirPath);
-        const entries = fs.readdirSync(resolved, { withFileTypes: true });
-        return entries
-          .filter(e => !e.name.startsWith('.'))
-          .map(e => ({
-            name: e.name,
-            isDir: e.isDirectory(),
-            path: path.join(resolved, e.name),
-          }))
-          .sort((a, b) => {
-            if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-            return a.name.localeCompare(b.name);
-          });
-      } catch (e) { return { error: String(e) }; }
+      } catch (error) { return { error: String(error) }; }
     });
 
     ipcMain.handle('agent:getFileTree', async (_event, dirPath: string) => {
@@ -1551,12 +1684,65 @@ if (hasCliCommand) {
       return { buffer: session.buffer };
     });
 
-    ipcMain.handle('agentTerminal:takeoverState', async () => terminalTakeoverState());
-    ipcMain.handle('agentTerminal:takeoverWrite', async (_event, sessionId: string, data: string) => writeTerminalTakeoverSession(sessionId, data));
-    onTerminalTakeoverEvent(event => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('agentTerminal:takeover', event);
+    const terminalOwnerFor = (conversationId?: string, actorId?: string) => normalizeTerminalTakeoverOwner({
+      backend: wslBackendEnabled() ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
+      workspaceId: terminalTakeoverWorkspaceId(agent?.workspace.current?.path || root),
+      conversationId: String(conversationId || agent?.activeConversationId || 'default'),
+      actorId: String(actorId || ROOT_TERMINAL_ACTOR_ID),
+    }, agent?.workspace.current?.path || root);
+    const terminalOwnerFilterFor = (conversationId?: string, actorId?: string) => {
+      const owner = terminalOwnerFor(conversationId, actorId);
+      return actorId ? owner : {
+        backend: owner.backend,
+        workspaceId: owner.workspaceId,
+        conversationId: owner.conversationId,
+      };
+    };
+    const visibleTerminalSessions = (items: ReturnType<typeof terminalTakeoverState>) => items.filter(session =>
+      !!session.active || (String(session.stoppedAt || session.updatedAt) && Date.now() - Date.parse(String(session.stoppedAt || session.updatedAt)) < 24 * 60 * 60 * 1000)
+    );
+    ipcMain.handle('agentTerminal:takeoverState', async (_event, conversationId?: string, actorId?: string) => {
+      const owner = terminalOwnerFilterFor(conversationId, actorId);
+      if (wslBackendEnabled()) {
+        const client = await ensureWslAgentClient();
+        return client ? visibleTerminalSessions(await client.terminalState(owner, root)) : [];
       }
+      return visibleTerminalSessions(terminalTakeoverState(owner, root));
+    });
+    ipcMain.handle('agentTerminal:takeoverWrite', async (_event, sessionId: string, data: string, conversationId?: string, actorId?: string) => {
+      const owner = terminalOwnerFilterFor(conversationId, actorId);
+      if (wslBackendEnabled()) {
+        const client = await ensureWslAgentClient();
+        return client ? client.terminalWrite(owner, sessionId, data, root) : { ok: false, error: 'WSL Agent backend is unavailable' };
+      }
+      return writeTerminalTakeoverSession(sessionId, data, owner);
+    });
+    ipcMain.handle('agentTerminal:takeoverResize', async (_event, sessionId: string, cols: number, rows: number, conversationId?: string, actorId?: string) => {
+      const owner = terminalOwnerFilterFor(conversationId, actorId);
+      if (wslBackendEnabled()) {
+        const client = await ensureWslAgentClient();
+        return client ? client.terminalResize(owner, sessionId, cols, rows, root) : { ok: false, error: 'WSL Agent backend is unavailable' };
+      }
+      return resizeTerminalTakeoverSession(sessionId, cols, rows, owner);
+    });
+    ipcMain.handle('agentTerminal:takeoverStop', async (_event, sessionId: string, conversationId?: string, actorId?: string) => {
+      const owner = terminalOwnerFilterFor(conversationId, actorId);
+      if (wslBackendEnabled()) {
+        const client = await ensureWslAgentClient();
+        return client ? client.terminalStop(owner, sessionId, root) : { ok: false, error: 'WSL Agent backend is unavailable' };
+      }
+      return stopTerminalTakeoverSession(sessionId, owner);
+    });
+    ipcMain.handle('agentTerminal:takeoverDetach', async (_event, sessionId: string, conversationId?: string, actorId?: string) => {
+      const owner = terminalOwnerFilterFor(conversationId, actorId);
+      if (wslBackendEnabled()) {
+        const client = await ensureWslAgentClient();
+        return client ? client.terminalDetach(owner, sessionId, root) : { ok: false, error: 'WSL Agent backend is unavailable' };
+      }
+      return detachTerminalTakeoverSession(sessionId, owner);
+    });
+    onTerminalTakeoverEvent(event => {
+      broadcastTerminalTakeoverEvent(event);
     });
 
     ipcMain.handle('agent:openExternal', async (_event, targetPath: string) => {

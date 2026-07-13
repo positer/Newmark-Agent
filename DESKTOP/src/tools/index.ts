@@ -17,17 +17,22 @@ import {
   legacyToolToNewmark,
   normalizeToolResult,
 } from '../core/compat';
-import { runTerminalTakeover } from './terminalTakeover';
+import { ROOT_TERMINAL_ACTOR_ID, runTerminalTakeover, terminalTakeoverWorkspaceId } from './terminalTakeover';
 import { runComputerUse } from './computerUse';
 import { isNativeToolEnabled } from './nativeTools';
 import { SshManager } from '../core/ssh';
 import { WorkspaceManager } from '../core/workspace';
+import { requestWindowsHostTool } from '../core/wslHostToolBridge';
+import { evaluateToolPolicy, filterToolDefinitions } from '../core/toolPolicy';
 
 export interface ToolExecutionContext {
   mode?: string;
   workspacePath?: string;
   allowEphemeralVisionImage?: boolean;
   conversationId?: string;
+  actorId?: string;
+  workspaceId?: string;
+  backend?: string;
   invocation?: 'agent' | 'cli';
 }
 
@@ -148,8 +153,8 @@ export class ToolExecutor {
       t('browser_forward', 'Navigate the controlled browser forward.', {}, []),
       t('browser_reload', 'Reload the controlled browser.', {}, []),
       t('browser_cdp', 'Run a raw Chrome DevTools Protocol command against the controlled browser. Advanced use only.', { method: { type: 'string' }, params: { type: 'object' } }, ['method']),
-      t('computer_use', 'Native desktop Computer Use control. takeover_start/takeover_stop show or clear a full-virtual-desktop dynamic gradient edge indicator while the Agent is taking over the desktop. observe captures an ephemeral full desktop screenshot; app_list/app_observe/app_activate/app_click/app_scroll/app_type/app_key scope perception and actions to a specific taskbar/visible application window by title, process name, PID, or window handle. Vision screenshots remain one-time inputs and are deleted immediately after request preparation or before non-vision returns.', {
-        action: { type: 'string', enum: ['observe', 'app_list', 'app_observe', 'takeover_start', 'takeover_stop', 'move', 'click', 'scroll', 'type', 'key', 'wait', 'app_activate', 'app_click', 'app_scroll', 'app_type', 'app_key'] },
+      t('computer_use', 'Native Windows desktop control with persistent observation/action helpers. Use observe/app_observe before acting. sequence may perform up to three stable low-risk move/click/scroll/wait/app_activate steps and stops when focus, window, menu, dialog, scene, or risk changes. Vision screenshots remain one-time inputs and are deleted immediately.', {
+        action: { type: 'string', enum: ['observe', 'app_list', 'app_observe', 'sequence', 'takeover_start', 'takeover_stop', 'move', 'click', 'scroll', 'type', 'key', 'wait', 'app_activate', 'app_click', 'app_scroll', 'app_type', 'app_key'] },
         x: { type: 'number' },
         y: { type: 'number' },
         target_id: { type: 'string', description: 'Stable id from the latest observe perception.objects entry. Preferred over raw coordinates when available.' },
@@ -162,6 +167,28 @@ export class ToolExecutor {
         key: { type: 'string' },
         duration_ms: { type: 'number' },
         dry_run: { type: 'boolean' },
+        include_raw_ui: { type: 'boolean', description: 'Debug only. Include the raw UI Automation element list; normal observation returns compact semantic objects.' },
+        steps: {
+          type: 'array',
+          maxItems: 3,
+          description: 'For action=sequence, one to three low-risk steps. Type/key actions and medium-risk targets are intentionally excluded.',
+          items: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', enum: ['move', 'click', 'scroll', 'wait', 'app_activate'] },
+              x: { type: 'number' },
+              y: { type: 'number' },
+              target_id: { type: 'string' },
+              app_target: { type: 'string' },
+              window_handle: { type: 'string' },
+              scroll_x: { type: 'number' },
+              scroll_y: { type: 'number' },
+              button: { type: 'string', enum: ['left', 'right'] },
+              duration_ms: { type: 'number' },
+            },
+            required: ['action'],
+          },
+        },
       }, ['action']),
       t('image_inspect', 'Inspect an image submitted in the current conversation by returning a cropped and optionally magnified image directly to vision. image_index is 1-based within the latest user message containing images. Use source_info first when dimensions are unknown, then crop with pixel coordinates. Results are current-turn only and are never written to disk.', {
         action: { type: 'string', enum: ['source_info', 'crop'] },
@@ -172,12 +199,14 @@ export class ToolExecutor {
         height: { type: 'number', description: 'Crop height in source-image pixels.' },
         scale: { type: 'number', description: 'Magnification from 1 to 4. Output is capped at 2048 pixels per side.' },
       }, ['action']),
-      t('terminal_takeover', 'Take over a persistent shell session that is independent from the one-shot bash tool. Actions: start creates/reuses a named session, write sends a command to the same session, read returns its output buffer, stop interrupts it, list shows sessions. Use this when the user wants continuous terminal state such as cd/env/process context.', {
-        action: { type: 'string', enum: ['start', 'write', 'read', 'stop', 'list'] },
+      t('terminal_takeover', 'Take over a persistent owner-scoped PTY session that is independent from the one-shot bash tool. Actions: start creates/reuses a named PTY, write sends a command to the same session, read returns its output buffer, resize updates PTY geometry, detach releases the UI attachment without stopping the shell, stop interrupts it, list shows sessions. Use this when the user wants continuous terminal state such as cd/env/process context or interactive TTY programs.', {
+        action: { type: 'string', enum: ['start', 'write', 'read', 'resize', 'detach', 'stop', 'list'] },
         name: { type: 'string', description: 'Stable takeover session name. Defaults to agent.' },
         shell: { type: 'string', enum: ['powershell', 'pwsh', 'cmd', 'bash', 'sh'] },
         command: { type: 'string', description: 'Command text for action=write.' },
         max_chars: { type: 'number', description: 'Maximum trailing buffer characters for action=read.' },
+        cols: { type: 'number', description: 'PTY columns for action=start or action=resize.' },
+        rows: { type: 'number', description: 'PTY rows for action=start or action=resize.' },
       }, ['action']),
       t('ssh_workspace', 'Manage native OpenSSH connections and remote external workspaces. Uses the system ssh executable with argument-array invocation, BatchMode, ConnectTimeout, and no stored passwords. Actions: list, upsert, remove, validate, create_workspace. validate reads/creates remote PC_Hash.config; create_workspace validates SSH, creates the remote directory if needed, links saved remote workspaces with matching PC_Hash, and creates a local shadow workspace for conversation state.', {
         action: { type: 'string', enum: ['list', 'upsert', 'remove', 'validate', 'create_workspace'] },
@@ -190,10 +219,13 @@ export class ToolExecutor {
         remote_root: { type: 'string' },
         remote_path: { type: 'string' },
       }, ['action']),
-      t('task', 'Create and run a constrained subagent. Optional preset/agent selects a normalized Codex, Claude Code, OpenCode, or Newmark agent preset. Subagents cannot change settings or choose their own model.', { name: { type: 'string' }, prompt: { type: 'string' }, preset: { type: 'string' }, agent: { type: 'string' }, model: { type: 'string' }, mode: { type: 'string' }, input_mode: { type: 'string' }, flow: { type: 'string' } }, ['prompt']),
-      t('subagent_send', 'Continue an existing subagent by name or id with another prompt.', { name: { type: 'string' }, prompt: { type: 'string' } }, ['name', 'prompt']),
-      t('subagent_result', 'Return get.subagent(name): the latest result and conversation content for a subagent.', { name: { type: 'string' } }, ['name']),
-      t('subagent_close', 'Close an existing subagent by name or id and release it from the active agent list.', { name: { type: 'string' } }, ['name']),
+      t('task', 'Create a same-conversation peer agent and return immediately. The peer has a nature slug, short id, and canonical UUID-qualified name. Plan mode peers are forced to Plan.', { nature: { type: 'string' }, name: { type: 'string', description: 'Legacy alias for nature.' }, prompt: { type: 'string' }, preset: { type: 'string' }, agent: { type: 'string' }, model: { type: 'string' }, mode: { type: 'string' }, input_mode: { type: 'string' }, flow: { type: 'string' } }, ['prompt']),
+      t('subagent_list', 'List flat same-conversation peer agents, optionally filtered by status.', { status: { type: 'string', enum: ['idle', 'queued', 'working', 'completed', 'error', 'closed'] } }, []),
+      t('subagent_read', 'Read one same-conversation peer status, queue/mailbox summary, latest bounded feedback, and result. Available for running, queued, completed, error, and closed peers.', { id: { type: 'string' }, name: { type: 'string' }, max_chars: { type: 'number', description: 'Bounded result size from 2000 to 32000 characters.' } }, []),
+      t('subagent_send', 'Persist a mailbox message to a same-conversation peer agent.', { id: { type: 'string' }, name: { type: 'string' }, message: { type: 'string' }, prompt: { type: 'string', description: 'Legacy alias for message.' }, kind: { type: 'string', enum: ['directive', 'question', 'result', 'handoff'] }, reply_to: { type: 'string' }, correlation_id: { type: 'string' } }, []),
+      t('subagent_result', 'Return the persisted transcript, mailbox summary, status, and latest result for a peer agent.', { id: { type: 'string' }, name: { type: 'string' } }, []),
+      t('subagent_close', 'Close a same-conversation peer. Root can close any peer; a peer can close only itself.', { id: { type: 'string' }, name: { type: 'string' } }, []),
+      t('linked_plan', 'Read or update the current conversation linked Markdown plan. Update requires the current expected_revision.', { action: { type: 'string', enum: ['get', 'update'] }, markdown: { type: 'string' }, expected_revision: { type: 'number' } }, ['action']),
       t('question', 'Ask user a multiple-choice question', { questions: { type: 'array' } }, ['questions']),
       t('skill_download', 'Download a skill', { name: { type: 'string' }, source: { type: 'string' } }, ['name', 'source']),
       t('flow_list', 'List available Newmark Flow workflows from the Flow folder so the agent can choose one.', {}, []),
@@ -265,14 +297,20 @@ export class ToolExecutor {
     if (this.config.getStr('agent', 'option_feedback') === 'fully_autonomous') {
       visibleTools = visibleTools.filter((tool: any) => tool.function?.name !== 'question');
     }
-    if (mode === 'plan') {
-      return visibleTools.filter((tool: any) =>
-        ['pwd', 'read', 'glob', 'grep', 'web_search', 'web_fetch', 'browser_open', 'browser_snapshot', 'image_inspect', 'git_status', 'file_audit', 'repo_security_audit'].includes(tool.function?.name)
-        || tool.function?.name === 'automation_list'
-        || tool.function?.name === 'memory_lab_read'
-      );
-    }
-    return visibleTools;
+    const policyFiltered = filterToolDefinitions(visibleTools, { mode });
+    if (mode !== 'plan') return policyFiltered;
+    return policyFiltered.map((tool: any) => {
+      if (tool.function?.name !== 'computer_use') return tool;
+      const copy = JSON.parse(JSON.stringify(tool));
+      copy.function.description = 'Read-only Windows desktop observation for Plan mode. Observe the desktop, list visible applications, or inspect one visible application; all control actions are unavailable.';
+      copy.function.parameters.properties = {
+        action: { type: 'string', enum: ['observe', 'app_list', 'app_observe'] },
+        app_target: copy.function.parameters.properties.app_target,
+        window_handle: copy.function.parameters.properties.window_handle,
+        include_raw_ui: copy.function.parameters.properties.include_raw_ui,
+      };
+      return copy;
+    });
   }
 
   canonicalDefinitions(mode?: string): NewmarkToolDefinition[] {
@@ -304,6 +342,8 @@ export class ToolExecutor {
     }
     let args: Record<string, unknown> = {};
     try { args = JSON.parse(argsStr); } catch { /* use empty */ }
+    const policy = evaluateToolPolicy({ name: tool, mode: context.mode || '', args });
+    if (!policy.allowed) return policy.reason || `[permission] Blocked: ${tool}`;
     const g = (k: string) => {
       const value = args[k];
       return value === undefined || value === null ? '' : String(value);
@@ -330,8 +370,6 @@ export class ToolExecutor {
       }
     };
 
-    const planGuard = this.checkPlanMode(tool, targetForTool(), context.mode || '', context.workspacePath || wsPath);
-    if (planGuard) return planGuard;
     const permissionGuard = this.checkWorkspaceAccess(tool, targetForTool(), context.workspacePath || wsPath);
     if (permissionGuard) return permissionGuard;
     const bashGuard = (tool === 'bash' || (tool === 'terminal_takeover' && g('action') === 'write'))
@@ -361,12 +399,23 @@ export class ToolExecutor {
         case 'browser_cdp': return await this.browserRun({ action: 'cdp', method: g('method'), params: (args as Record<string, unknown>).params || {} });
         case 'computer_use': {
           const action = normalizeComputerUseAction(g('action'));
-          const owner = computerUseOwner(context, wsPath);
+          const owner = `${computerUseOwner(context, wsPath)}:${String(context.actorId || 'root')}`;
           const lockGuard = action === 'takeover_stop'
             ? assertComputerUseLockOwner(action, owner)
             : acquireComputerUseLock(action, owner, wsPath);
           if (lockGuard) return lockGuard;
-          const output = runComputerUse({
+          if (process.env.NEWMARK_WSL_DISTRO) {
+            try {
+              return JSON.stringify(await requestWindowsHostTool('computer_use', args, {
+                conversationId: context.conversationId || 'default',
+                workspaceId: context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath),
+                actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
+              }));
+            } finally {
+              if (action === 'takeover_stop') releaseComputerUseLock(action, owner);
+            }
+          }
+          const output = await runComputerUse({
             action,
             x: Number((args as Record<string, unknown>).x),
             y: Number((args as Record<string, unknown>).y),
@@ -387,6 +436,22 @@ export class ToolExecutor {
             gradientSpeed: (args as Record<string, unknown>).gradient_speed !== undefined ? Number((args as Record<string, unknown>).gradient_speed) : this.config.getNum('ui', 'gradient_speed'),
             gradientWidth: (args as Record<string, unknown>).gradient_width !== undefined ? Number((args as Record<string, unknown>).gradient_width) : this.config.getNum('ui', 'gradient_width'),
             invocation: context.invocation,
+            ownerId: owner,
+            includeRawUi: (args as Record<string, unknown>).include_raw_ui === true,
+            steps: Array.isArray((args as Record<string, unknown>).steps)
+              ? ((args as Record<string, unknown>).steps as Array<Record<string, unknown>>).slice(0, 3).map(step => ({
+                action: String(step.action || '') as 'move' | 'click' | 'scroll' | 'wait' | 'app_activate',
+                x: Number(step.x),
+                y: Number(step.y),
+                scrollX: Number(step.scroll_x || 0),
+                scrollY: Number(step.scroll_y || 0),
+                button: String(step.button || 'left'),
+                targetId: String(step.target_id || ''),
+                appTarget: String(step.app_target || ''),
+                windowHandle: String(step.window_handle || ''),
+                durationMs: Number(step.duration_ms || 0),
+              }))
+              : undefined,
           });
           if (action === 'takeover_stop') releaseComputerUseLock(action, owner);
           return output;
@@ -398,10 +463,20 @@ export class ToolExecutor {
           command: g('command'),
           cwd: wsPath,
           maxChars: Number((args as Record<string, unknown>).max_chars || 12000),
+          cols: Number((args as Record<string, unknown>).cols || 0),
+          rows: Number((args as Record<string, unknown>).rows || 0),
+          owner: {
+            backend: context.backend || (process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform)),
+            workspaceId: context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath),
+            conversationId: context.conversationId || 'default',
+            actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
+          },
+          persistenceRoot: this.root,
         });
         case 'ssh_workspace': return this.sshWorkspace(args, wsPath);
         case 'task': return `[task] Subagent request accepted: ${g('name')}`;
         case 'subagent_send': return `[subagent_send] Routed to Agent runtime: ${g('name')}`;
+        case 'subagent_read': return `[subagent_read] Routed to Agent runtime: ${g('name') || g('id')}`;
         case 'subagent_result': return `[subagent_result] Routed to Agent runtime: ${g('name')}`;
         case 'subagent_close': return `[subagent_close] Routed to Agent runtime: ${g('name')}`;
         case 'question':

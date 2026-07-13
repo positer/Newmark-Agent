@@ -8,13 +8,14 @@ import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, tokenizeFuzzyProviderI
 import { ToolExecutor } from '../tools/index';
 import { WorkspaceInfo, WorkspaceManager } from './workspace';
 import { SshConnectionInfo, SshManager, SshValidateResult } from './ssh';
-import { NewmarkSubagentToolResult, SubagentManager } from './subagent';
-import { NewmarkAgentPreset, findAgentPreset } from './compat';
+import { NewmarkSubagentToolResult, SubagentManager, SubagentRootMessage, SubagentState, sharedSubagentManager } from './subagent';
+import { NewmarkAgentPreset, NewmarkToolResult, findAgentPreset } from './compat';
 import { SkillsManager } from './skills';
 import { FlowEngine, FlowWorkflow } from './flow';
 import { AutomationCondition, AutomationManager, AutomationSchedule } from './automation';
 import { MemoryLabManager, MemoryLabPreparedUpdate, MemoryLabUpdateInput, MemoryLabWriteResult } from './memoryLab';
 import { runAgentKernel } from './agentKernelRunner';
+import { evaluateToolPolicy, planModePolicyPrompt } from './toolPolicy';
 import type { AgentPromptMessage } from './conversationKernel';
 import {
   AgentMode, InputMode, AgentStatus, StreamToken,
@@ -35,14 +36,25 @@ interface AgentRuntimeOptions {
   subagentName?: string;
   subagentPrompt?: string;
   agentOnly?: boolean;
+  actorId?: string;
+  conversationId?: string;
+  linkedPlanAccess?: {
+    get(conversationId?: string): LinkedPlanState;
+    update(markdown: string, expectedRevision: number, actorId: string, conversationId?: string): LinkedPlanState;
+  };
 }
+export const ROOT_AGENT_ACTOR_ID = '00000000-0000-4000-8000-000000000001';
+type StoredConversationEntry = NonNullable<StoredConversationState['conversations']>[string];
 interface StoredConversationState {
+  version?: number;
   activeConversationId?: string;
   conversations?: Record<string, {
     title?: string;
     chatMessages?: ChatMessage[];
     history?: Array<Record<string, unknown>>;
     plan?: ConversationPlanState;
+    linkedPlan?: LinkedPlanState;
+    subagentState?: SubagentState;
     updatedAt?: string;
     pinned?: boolean;
     pinnedAt?: string;
@@ -60,10 +72,18 @@ export interface ConversationPlanState {
   items: ConversationPlanItem[];
   updatedAt?: string;
 }
+export interface LinkedPlanState {
+  markdown: string;
+  revision: number;
+  updatedAt?: string;
+  updatedBy?: string;
+}
 export interface ConversationSnapshot {
   conversationId: string;
   conversations: ReturnType<Agent['listConversationStates']>;
   conversationPlan: ConversationPlanState;
+  linkedPlan: LinkedPlanState;
+  subagents: Array<NonNullable<ReturnType<SubagentManager['toRecord']>>>;
   chatMessages: ChatMessage[];
   historyMessages: number;
 }
@@ -82,9 +102,8 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - computer_use: Native desktop Computer Use control for full desktop or app-scoped observe/move/click/scroll/type/key/wait against Windows desktop applications. Use takeover_start when actively taking over the desktop; it shows a full-virtual-desktop dynamic gradient edge indicator so the user can see the Agent is controlling the desktop, and use takeover_stop when done. Use app_list/app_observe/app_activate/app_click/app_scroll/app_type/app_key when the task can be scoped to a visible taskbar application by title, process name, PID, or window handle; this narrows screenshots and actions to that application. Use observe/app_observe first, reason over returned screenshot plus UI Automation objects. If the model supports vision, Newmark sends the screenshot image and UI object tree together in the same tool-result context; use both for stable decisions. Prefer target_id from perception.scene_summary.high_priority_objects or perception.objects for move/click/scroll when available; fall back to exact coordinates only when necessary.
 - image_inspect: For submitted visual attachments, query source_info and actively crop/magnify a precise pixel region when text or geometry is too small to inspect reliably. Cropped images are current-turn-only and never saved to disk.
 - task: Create a subagent for parallel work
-- subagent_send: Continue an existing subagent
-- subagent_result: Read get.subagent(name) results
-- subagent_close: Close and release a subagent
+- subagent_list/subagent_read/subagent_send/subagent_result/subagent_close: List, read bounded peer feedback, message, inspect, and close same-conversation peer agents
+- linked_plan: Read or conservatively update the conversation-linked Markdown plan in every mode
 - question: Ask the user a multiple-choice question
 - skill_download: Download a skill/plugin
 - git_status: Show git working tree status
@@ -159,6 +178,7 @@ export class Agent {
   public fileDiffs: FileDiff[] = [];
   public pendingOptions: OptionQuestion[] = [];
   public conversationPlan: ConversationPlanState = { items: [] };
+  public linkedPlan: LinkedPlanState = { markdown: '', revision: 0 };
   public model: string;
   public intelligence: string;
   public engine: string;
@@ -177,7 +197,7 @@ export class Agent {
     model: string;
     fallback: boolean;
   } | null = null;
-  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; plan: ConversationPlanState; updatedAt?: string }>();
+  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; updatedAt?: string }>();
   public isSubagentRuntime = false;
   private subagentName = '';
   private subagentPrompt = '';
@@ -186,16 +206,25 @@ export class Agent {
   private processDepth = 0;
   private automationManager: AutomationManager | null = null;
   private activeAgentKernelRuntime: { steer(message: unknown): void; followUp(message: unknown): void; abort?(): void } | null = null;
+  private activePeerAgents = new Map<string, Agent>();
   private awaitingAgentKernelRuntime = false;
   private pendingAgentKernelQueue: Array<{ content: string; queueMode: 'steer' | 'followUp' }> = [];
+  private linkedPlanAccess: AgentRuntimeOptions['linkedPlanAccess'];
+  private subagentContextPersist?: (history: Array<Record<string, unknown>>, compression: Agent['lastCompression']) => void;
   private agentKernelUserMessageStartSubscribers: Array<(content: string) => void> = [];
+  private rootInboxWakeSubscribers: Array<(message: string) => boolean | void> = [];
+  private readonly rootInboxListener = (message: SubagentRootMessage) => this.deliverRootInboxMessage(message);
   public readonly agentOnly: boolean;
+  public readonly runtimeActorId: string;
 
   constructor(public rootPath: string, options: AgentRuntimeOptions = {}) {
     this.isSubagentRuntime = !!options.subagent;
     this.agentOnly = !!options.agentOnly;
+    this.runtimeActorId = options.actorId || ROOT_AGENT_ACTOR_ID;
+    if (options.conversationId) this.activeConversationId = this.safeConversationId(options.conversationId);
     this.subagentName = options.subagentName || '';
     this.subagentPrompt = options.subagentPrompt || '';
+    this.linkedPlanAccess = options.linkedPlanAccess;
     this.config = new ConfigManager(rootPath);
     if (this.isSubagentRuntime || this.agentOnly) {
       this.config.set('workspace', 'auto_create_timestamp_workspace', false);
@@ -220,7 +249,7 @@ export class Agent {
     this.tools = new ToolExecutor(rootPath, this.config, this.ssh, this.workspace);
     this.skills = new SkillsManager(rootPath);
     this.memoryLab = new MemoryLabManager(rootPath);
-    this.subagents = new SubagentManager();
+    this.subagents = new SubagentManager({ rootAgentId: this.runtimeActorId });
 
     if (this.mode === 'goal' && !this.goal) {
       this.goal = new GoalStateImpl('Set your objective');
@@ -229,7 +258,7 @@ export class Agent {
     if (this.workspace.current) {
       this.config.loadWorkspaceConfig(this.workspace.current.path);
       const stored = this.readStoredConversationState(this.workspace.current);
-      if (stored.activeConversationId) this.activeConversationId = stored.activeConversationId;
+      if (!options.conversationId && stored.activeConversationId) this.activeConversationId = stored.activeConversationId;
     }
     if (!this.isSubagentRuntime && !this.agentOnly) this.loadWorkspaceConversationState();
   }
@@ -397,9 +426,18 @@ export class Agent {
     };
   }
 
+  subscribeRootInboxWake(fn: (message: string) => boolean | void): () => void {
+    this.rootInboxWakeSubscribers.push(fn);
+    return () => {
+      this.rootInboxWakeSubscribers = this.rootInboxWakeSubscribers.filter(sub => sub !== fn);
+    };
+  }
+
   notifyAgentKernelUserMessageStart(content: string): void {
     const text = String(content || '');
     if (!text) return;
+    const rootInboxMatch = text.match(/^\[Root subagent inbox id=([0-9a-f-]{36})\b/i);
+    if (rootInboxMatch) this.subagents.acknowledgeRootInbox(rootInboxMatch[1]);
     for (const sub of this.agentKernelUserMessageStartSubscribers) {
       try { sub(text); } catch { /* ignore subscriber errors */ }
     }
@@ -454,22 +492,111 @@ export class Agent {
     try {
       const raw = fs.readFileSync(file, 'utf-8').replace(/^\uFEFF/, '');
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') return parsed as StoredConversationState;
+      if (parsed && typeof parsed === 'object') {
+        const state = parsed as StoredConversationState;
+        state.version = Math.max(1, Number(state.version || 1));
+        state.conversations = state.conversations || {};
+        return state;
+      }
     } catch {
       return {};
     }
     return {};
   }
 
-  private writeStoredConversationState(state: StoredConversationState, ws: WorkspaceInfo | null = this.workspace.current): void {
+  private writeStoredConversationState(state: StoredConversationState, ws: WorkspaceInfo | null = this.workspace.current, deletedKeys: Iterable<string> = []): void {
+    this.mutateStoredConversationState(ws, latest => {
+      const merged: Record<string, StoredConversationEntry> = { ...(latest.conversations || {}) };
+      for (const key of deletedKeys) delete merged[String(key)];
+      for (const [key, incoming] of Object.entries(state.conversations || {})) {
+        const existing = merged[key];
+        if (!existing) {
+          merged[key] = incoming;
+          continue;
+        }
+        const incomingUpdatedAt = Date.parse(incoming.updatedAt || '') || 0;
+        const existingUpdatedAt = Date.parse(existing.updatedAt || '') || 0;
+        const preferred = incomingUpdatedAt >= existingUpdatedAt ? { ...existing, ...incoming } : { ...incoming, ...existing };
+        const incomingPlanRevision = Math.max(0, Number(incoming.linkedPlan?.revision || 0));
+        const existingPlanRevision = Math.max(0, Number(existing.linkedPlan?.revision || 0));
+        preferred.linkedPlan = incomingPlanRevision >= existingPlanRevision ? incoming.linkedPlan : existing.linkedPlan;
+        const incomingSequence = Math.max(0, Number(incoming.subagentState?.nextSequence || 0));
+        const existingSequence = Math.max(0, Number(existing.subagentState?.nextSequence || 0));
+        preferred.subagentState = incomingSequence >= existingSequence ? incoming.subagentState : existing.subagentState;
+        merged[key] = preferred;
+      }
+      return {
+        version: 2,
+        activeConversationId: state.activeConversationId || latest.activeConversationId,
+        conversations: merged,
+      };
+    });
+  }
+
+  private mutateStoredConversationState<T>(
+    ws: WorkspaceInfo | null,
+    mutate: (latest: StoredConversationState) => StoredConversationState,
+    select?: (written: StoredConversationState) => T
+  ): T | undefined {
     const file = this.workspaceConversationStorePath(ws);
-    if (!file) return;
+    if (!file) return undefined;
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({
-      version: 1,
-      activeConversationId: state.activeConversationId || this.activeConversationId || 'default',
-      conversations: state.conversations || {},
-    }, null, 2), 'utf-8');
+    const lock = `${file}.lock`;
+    let lockHandle: number | null = null;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      try {
+        lockHandle = fs.openSync(lock, 'wx');
+        break;
+      } catch (error) {
+        const code = error && typeof error === 'object' && 'code' in error ? String((error as NodeJS.ErrnoException).code || '') : '';
+        if (code !== 'EEXIST') throw error;
+        try {
+          if (Date.now() - fs.statSync(lock).mtimeMs > 30000) fs.unlinkSync(lock);
+        } catch {}
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 + attempt);
+      }
+    }
+    if (lockHandle === null) throw new Error(`Timed out acquiring conversation state lock: ${lock}`);
+    const latest = this.readStoredConversationState(ws);
+    const contentState = mutate({
+      version: Math.max(1, Number(latest.version || 1)),
+      activeConversationId: latest.activeConversationId,
+      conversations: { ...(latest.conversations || {}) },
+    });
+    contentState.version = 2;
+    contentState.conversations = contentState.conversations || {};
+    const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    const content = JSON.stringify({
+      version: 2,
+      activeConversationId: contentState.activeConversationId || this.activeConversationId || 'default',
+      conversations: contentState.conversations || {},
+    }, null, 2);
+    try {
+      const handle = fs.openSync(temp, 'w');
+      try {
+        fs.writeFileSync(handle, content, 'utf-8');
+        fs.fsyncSync(handle);
+      } finally {
+        fs.closeSync(handle);
+      }
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        try {
+          fs.renameSync(temp, file);
+          return select ? select(contentState) : undefined;
+        } catch (error) {
+          lastError = error;
+          const code = error && typeof error === 'object' && 'code' in error ? String((error as NodeJS.ErrnoException).code || '') : '';
+          if (!['EPERM', 'EACCES', 'EBUSY'].includes(code)) break;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 * (attempt + 1));
+        }
+      }
+      throw lastError;
+    } finally {
+      try { fs.unlinkSync(temp); } catch {}
+      try { fs.closeSync(lockHandle); } catch {}
+      try { fs.unlinkSync(lock); } catch {}
+    }
   }
 
   public listConversationStates(): Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string }> {
@@ -506,6 +633,89 @@ export class Agent {
     });
   }
 
+  private normalizeLinkedPlan(plan: Partial<LinkedPlanState> | null | undefined): LinkedPlanState {
+    const markdown = String(plan?.markdown || '').slice(0, 256 * 1024);
+    return {
+      markdown,
+      revision: Math.max(0, Math.floor(Number(plan?.revision || 0))),
+      updatedAt: plan?.updatedAt,
+      updatedBy: plan?.updatedBy,
+    };
+  }
+
+  private subagentManagerKey(conversationId = this.activeConversationId): string {
+    const ws = this.workspace.current;
+    const workspace = ws ? path.resolve(ws.path).toLowerCase() : path.resolve(this.rootPath).toLowerCase();
+    return `${workspace}::${this.safeConversationId(conversationId || 'default')}`;
+  }
+
+  private bindConversationSubagents(conversationId: string, state?: SubagentState): void {
+    if (this.isSubagentRuntime) return;
+    const clean = this.safeConversationId(conversationId || 'default');
+    this.subagents.removeRootInboxListener(this.rootInboxListener);
+    this.subagents = sharedSubagentManager(this.subagentManagerKey(clean), {
+      conversationId: clean,
+      rootAgentId: state?.rootAgentId || this.runtimeActorId,
+      state,
+      executor: job => this.runSubagentJob(job.record.id, job.prompt, job.flowName, job.reason),
+      persist: subagentState => this.persistSubagentState(clean, subagentState),
+      onMailboxMessage: message => this.deliverActivePeerMailbox(message.toAgentId, message),
+      onRootInboxMessage: this.rootInboxListener,
+      onSettled: record => this.deliverPeerSettlement(record),
+      onChange: () => {
+        if (this.safeConversationId(this.activeConversationId) === clean) this.saveWorkspaceConversationState();
+      },
+    });
+  }
+
+  private persistSubagentState(conversationId: string, subagentState: SubagentState): void {
+    if (this.isSubagentRuntime) return;
+    const ws = this.workspace.current;
+    const stateKey = this.workspaceConversationStateKey(conversationId);
+    if (!ws || !stateKey) return;
+    this.mutateStoredConversationState(ws, stored => {
+      stored.conversations = stored.conversations || {};
+      const previous = stored.conversations[stateKey] || {};
+      stored.conversations[stateKey] = { ...previous, subagentState, updatedAt: new Date().toISOString() };
+      return stored;
+    });
+  }
+
+  private deliverActivePeerMailbox(agentId: string, message: { id: string; body: string; kind: string; fromAgentId: string }): boolean {
+    const child = this.activePeerAgents.get(agentId);
+    if (!child) return false;
+    const marker = `[Peer mailbox id=${message.id} ${message.kind} from ${message.fromAgentId}]`;
+    return child.queueActiveKernelMessage(`${marker}\n${message.body}`, 'steer');
+  }
+
+  private deliverRootInboxMessage(message: SubagentRootMessage): boolean {
+    const marker = `[Root subagent inbox id=${message.id} ${message.kind} from ${message.fromAgentId}]`;
+    const prompt = `${marker}\n${message.body}\n\nReview this persisted peer result and summarize or continue the parent task as needed.`;
+    for (const sub of this.rootInboxWakeSubscribers) {
+      try {
+        if (sub(prompt)) return true;
+      } catch { /* ignore subscriber errors */ }
+    }
+    return this.queueActiveKernelMessage(prompt, 'followUp');
+  }
+
+  private deliverPeerSettlement(record: { id: string; createdByAgentId: string; qualifiedName: string; status: string; result: string | null; error?: string }): void {
+    const target = record.createdByAgentId === record.id ? this.subagents.rootAgentId : record.createdByAgentId;
+    const body = `${record.qualifiedName} ${record.status}: ${record.result || record.error || '(empty result)'}`;
+    const creator = target === this.subagents.rootAgentId ? undefined : this.subagents.get(target);
+    if (creator && creator.status !== 'closed') {
+      const delivery = this.subagents.sendMessage(record.id, creator.id, body, 'result');
+      if (delivery.ok) return;
+    }
+    this.subagents.sendRootMessage(record.id, body, 'result');
+  }
+
+  private recordsForState(state?: SubagentState): Array<NonNullable<ReturnType<SubagentManager['toRecord']>>> {
+    if (!state) return [];
+    const manager = new SubagentManager({ conversationId: this.activeConversationId, state });
+    return manager.listAll().map(record => manager.toRecord(record.id)).filter((record): record is NonNullable<typeof record> => !!record);
+  }
+
   private conversationContentSignature(messages: ChatMessage[]): string {
     if (!messages.length) return '';
     return JSON.stringify(messages.map(message => ({ role: message.role, content: message.content })));
@@ -528,6 +738,8 @@ export class Agent {
       conversationId: clean,
       conversations: this.listConversationStates(),
       conversationPlan: this.normalizeConversationPlan(persisted?.plan || memory?.plan),
+      linkedPlan: this.normalizeLinkedPlan(persisted?.linkedPlan || memory?.linkedPlan),
+      subagents: this.recordsForState(persisted?.subagentState || memory?.subagentState),
       chatMessages: [...chatMessages],
       historyMessages: history.length,
     };
@@ -545,6 +757,7 @@ export class Agent {
           chatMessages: [],
           history: [],
           plan: { items: [] },
+          linkedPlan: { markdown: '', revision: 0 },
           updatedAt: new Date().toISOString(),
         };
         this.writeStoredConversationState(stored);
@@ -584,6 +797,8 @@ export class Agent {
       chatMessages,
       history: truncatedHistory,
       conversationPlan: snapshot.conversationPlan,
+      linkedPlan: snapshot.linkedPlan,
+      subagents: this.subagents,
     });
     return this.getConversationSnapshot(clean);
   }
@@ -662,6 +877,7 @@ export class Agent {
   }
 
   saveWorkspaceConversationState(): void {
+    if (this.isSubagentRuntime) return;
     const key = this.workspaceConversationKey();
     if (!key) return;
     const updatedAt = new Date().toISOString();
@@ -669,6 +885,8 @@ export class Agent {
       chatMessages: [...this.chatMessages],
       history: [...this.history],
       plan: this.normalizeConversationPlan(this.conversationPlan),
+      linkedPlan: this.normalizeLinkedPlan(this.linkedPlan),
+      subagentState: this.subagents.serialize(),
       updatedAt,
     });
     const stored = this.readStoredConversationState();
@@ -688,6 +906,8 @@ export class Agent {
       chatMessages: [...this.chatMessages],
       history: [...this.history],
       plan: this.normalizeConversationPlan(this.conversationPlan),
+      linkedPlan: this.normalizeLinkedPlan(this.linkedPlan),
+      subagentState: this.subagents.serialize(),
       updatedAt,
     };
     this.writeStoredConversationState(stored);
@@ -699,6 +919,8 @@ export class Agent {
       this.chatMessages = [];
       this.history = [];
       this.conversationPlan = { items: [] };
+      this.linkedPlan = { markdown: '', revision: 0 };
+      this.bindConversationSubagents(this.activeConversationId);
       return;
     }
     const saved = this.workspaceConversations.get(key);
@@ -706,6 +928,8 @@ export class Agent {
       this.chatMessages = [...saved.chatMessages];
       this.history = [...saved.history];
       this.conversationPlan = this.normalizeConversationPlan(saved.plan);
+      this.linkedPlan = this.normalizeLinkedPlan(saved.linkedPlan);
+      this.bindConversationSubagents(this.activeConversationId, saved.subagentState);
       return;
     }
     const stored = this.readStoredConversationState();
@@ -714,10 +938,14 @@ export class Agent {
     this.chatMessages = persisted?.chatMessages ? [...persisted.chatMessages] : [];
     this.history = persisted?.history ? [...persisted.history] : [];
     this.conversationPlan = this.normalizeConversationPlan(persisted?.plan);
+    this.linkedPlan = this.normalizeLinkedPlan(persisted?.linkedPlan);
+    this.bindConversationSubagents(this.activeConversationId, persisted?.subagentState);
     this.workspaceConversations.set(key, {
       chatMessages: [...this.chatMessages],
       history: [...this.history],
       plan: this.normalizeConversationPlan(this.conversationPlan),
+      linkedPlan: this.normalizeLinkedPlan(this.linkedPlan),
+      subagentState: this.subagents.serialize(),
       updatedAt: persisted?.updatedAt,
     });
   }
@@ -753,18 +981,22 @@ export class Agent {
     return true;
   }
 
-  mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'>): void {
+  mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'> & Partial<Pick<Agent, 'linkedPlan' | 'subagents'>>): void {
     const clean = this.safeConversationId(id || 'default');
     const ws = this.workspace.current;
     if (!ws) return;
     const key = `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${clean}`;
     const plan = this.normalizeConversationPlan(source.conversationPlan);
+    const linkedPlan = this.normalizeLinkedPlan(source.linkedPlan || this.getLinkedPlan(clean));
+    const subagentState = source.subagents?.serialize() || this.subagents.serialize();
     const updatedAt = new Date().toISOString();
     if (key) {
       this.workspaceConversations.set(key, {
         chatMessages: [...source.chatMessages],
         history: [...source.history],
         plan,
+        linkedPlan,
+        subagentState,
         updatedAt,
       });
     }
@@ -783,6 +1015,8 @@ export class Agent {
       chatMessages: [...source.chatMessages],
       history: [...source.history],
       plan,
+      linkedPlan,
+      subagentState,
       updatedAt,
     };
     this.writeStoredConversationState(stored, ws);
@@ -790,6 +1024,8 @@ export class Agent {
       this.chatMessages = [...source.chatMessages];
       this.history = [...source.history];
       this.conversationPlan = plan;
+      this.linkedPlan = linkedPlan;
+      if (source.subagents) this.subagents = source.subagents;
     }
   }
 
@@ -819,6 +1055,63 @@ export class Agent {
       this.loadWorkspaceConversationState();
     }
     return updated;
+  }
+
+  getLinkedPlan(conversationId = this.activeConversationId): LinkedPlanState {
+    if (this.isSubagentRuntime && this.linkedPlanAccess) return this.normalizeLinkedPlan(this.linkedPlanAccess.get(conversationId));
+    if (this.safeConversationId(conversationId || 'default') !== this.safeConversationId(this.activeConversationId || 'default')) {
+      return this.getConversationSnapshot(conversationId).linkedPlan;
+    }
+    return this.normalizeLinkedPlan(this.linkedPlan);
+  }
+
+  updateLinkedPlan(markdown: string, expectedRevision: number, actorId = this.runtimeActorId, conversationId = this.activeConversationId): LinkedPlanState {
+    if (this.isSubagentRuntime && this.linkedPlanAccess) {
+      return this.normalizeLinkedPlan(this.linkedPlanAccess.update(markdown, expectedRevision, actorId, conversationId));
+    }
+    const clean = this.safeConversationId(conversationId || this.activeConversationId || 'default');
+    if (Buffer.byteLength(String(markdown || ''), 'utf8') > 256 * 1024) throw new Error('Linked plan exceeds 256 KiB.');
+    const ws = this.workspace.current;
+    const stateKey = this.workspaceConversationStateKey(clean);
+    if (!ws || !stateKey) throw new Error('No active workspace conversation for linked plan.');
+    const updated = this.mutateStoredConversationState(ws, stored => {
+      stored.conversations = stored.conversations || {};
+      const previous = stored.conversations[stateKey] || {};
+      const current = this.normalizeLinkedPlan(previous.linkedPlan);
+      if (!Number.isInteger(expectedRevision) || expectedRevision !== current.revision) {
+        throw new Error(`Linked plan revision conflict: expected ${expectedRevision}, current ${current.revision}.`);
+      }
+      stored.conversations[stateKey] = {
+        ...previous,
+        linkedPlan: {
+          markdown: String(markdown || ''),
+          revision: current.revision + 1,
+          updatedAt: this.nowIso(),
+          updatedBy: actorId,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+      return stored;
+    }, written => this.normalizeLinkedPlan(written.conversations?.[stateKey]?.linkedPlan));
+    if (!updated) throw new Error('Linked plan update could not be persisted.');
+    if (clean === this.safeConversationId(this.activeConversationId || 'default')) this.linkedPlan = updated;
+    const memoryKey = `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${clean}`;
+    const memory = this.workspaceConversations.get(memoryKey);
+    if (memory) memory.linkedPlan = updated;
+    return updated;
+  }
+
+  handleLinkedPlanTool(args: string): string {
+    try {
+      const input = JSON.parse(args || '{}') as Record<string, unknown>;
+      const action = String(input.action || 'get').toLowerCase();
+      if (action === 'get') return JSON.stringify({ ok: true, linkedPlan: this.getLinkedPlan() }, null, 2);
+      if (action !== 'update') return JSON.stringify({ ok: false, error: `Unknown linked_plan action: ${action}` });
+      const expectedRevision = Number(input.expected_revision ?? input.expectedRevision);
+      return JSON.stringify({ ok: true, linkedPlan: this.updateLinkedPlan(String(input.markdown || ''), expectedRevision) }, null, 2);
+    } catch (error) {
+      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   isConversationLocked(): boolean {
@@ -1018,11 +1311,13 @@ export class Agent {
     const filename = this.writeSessionArchive(messages, this.modeName(), this.model);
 
     const targetSignature = this.conversationContentSignature(messages);
+    const deletedKeys: string[] = [];
     if (stored.conversations) {
       for (const [key, value] of Object.entries(stored.conversations)) {
         const isTarget = key === stateKey;
         const isExactDuplicate = !!targetSignature && this.conversationContentSignature(value.chatMessages || []) === targetSignature;
         if (!isTarget && !isExactDuplicate) continue;
+        deletedKeys.push(key);
         delete stored.conversations[key];
         const duplicateId = key.slice(`${this.workspaceConversationPrefix() || ''}-`.length);
         const duplicateMemoryKey = `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${duplicateId}`;
@@ -1034,7 +1329,7 @@ export class Agent {
     if (clean === this.safeConversationId(stored.activeConversationId || this.activeConversationId || 'default')) {
       stored.activeConversationId = remaining[0] || 'default';
     }
-    this.writeStoredConversationState(stored, ws);
+    this.writeStoredConversationState(stored, ws, deletedKeys);
 
     if (clean === this.safeConversationId(this.activeConversationId || 'default')) {
       this.activeConversationId = stored.activeConversationId || remaining[0] || 'default';
@@ -1562,6 +1857,9 @@ export class Agent {
           ? [{ type: 'text', text }, ...images.map(image => ({ type: 'image_url', image_url: { url: image.dataUrl } }))]
           : text,
       });
+      // Agent.process seeds the kernel from history, so its initial prompt does
+      // not otherwise emit a kernel message_start event.
+      this.notifyAgentKernelUserMessageStart(text);
       this.saveWorkspaceConversationState();
       this.emitWorkEvent({ type: 'start', content: 'Preparing request.' });
 
@@ -1611,22 +1909,28 @@ export class Agent {
   }
 
   async handleSubagent(args: string): Promise<string> {
-    return (await this.handleSubagentEnvelope(args)).output;
+    const accepted = await this.handleSubagentEnvelope(args);
+    if (!accepted.ok || !accepted.data?.id) return accepted.output;
+    const settled = await this.waitForSubagentSettlement(accepted.data.id);
+    return `${accepted.output}\n${settled?.result || settled?.error || ''}`.trim();
   }
 
   async handleSubagentEnvelope(args: string): Promise<NewmarkSubagentToolResult> {
     try {
       const params = JSON.parse(args);
       const preset = this.resolveSubagentPreset(params);
-      const name = params.name || preset?.name || 'subagent';
+      const name = params.nature || params.name || preset?.name || 'subagent';
       const prompt = this.buildSubagentPrompt(String(params.prompt || ''), preset);
       if (!name || !prompt) return { ok: false, output: '[Subagent] Name and prompt required.', error: 'Name and prompt required.' };
+      const peerMode = this.mode === 'plan' ? 'plan' : (params.mode || preset?.mode || this.mode || 'build');
       const id = this.subagents.create(
         name,
         prompt,
         params.model || preset?.model || this.model,
         params.input_mode || params.inputMode || preset?.inputMode || 'guide',
-        params.mode || preset?.mode || 'build'
+        peerMode,
+        this.runtimeActorId,
+        params.flow || ''
       );
       const sa = this.subagents.get(id);
       if (sa && preset) {
@@ -1644,8 +1948,8 @@ export class Agent {
           },
         };
       }
-      const result = await this.runSubagentPrompt(id, prompt, params.flow || '');
-      return this.subagents.toToolResult(id, `[Subagent '${name}' (${id}) completed]\n${result}`, !result.startsWith('[Subagent Error]'));
+      const accepted = this.subagents.get(id)!;
+      return this.subagents.toToolResult(id, `[Subagent accepted] ${accepted.qualifiedName} status=${accepted.status}`, true);
     } catch { return { ok: false, output: '[Subagent] Invalid arguments.', error: 'Invalid arguments.' }; }
   }
 
@@ -1669,20 +1973,30 @@ export class Agent {
   }
 
   async handleSubagentContinue(args: string): Promise<string> {
-    return (await this.handleSubagentContinueEnvelope(args)).output;
+    const accepted = await this.handleSubagentContinueEnvelope(args);
+    if (!accepted.ok || !accepted.data?.id) return accepted.output;
+    const settled = await this.waitForSubagentSettlement(accepted.data.id);
+    return `${accepted.output}\n${settled?.result || settled?.error || ''}`.trim();
+  }
+
+  private async waitForSubagentSettlement(id: string, timeoutMs = 120000): Promise<ReturnType<SubagentManager['get']>> {
+    return this.subagents.waitForSettlement(id, timeoutMs);
   }
 
   async handleSubagentContinueEnvelope(args: string): Promise<NewmarkSubagentToolResult> {
     try {
       const params = JSON.parse(args);
       const name = params.name || params.id || '';
-      const prompt = params.prompt || '';
+      const prompt = params.message || params.prompt || '';
       const sa = this.subagents.get(name);
       if (!sa) return { ok: false, output: `[Subagent] Not found: ${name}`, error: `Not found: ${name}` };
       if (!prompt) return this.subagents.toToolResult(sa.id, '[Subagent] Prompt required.', false);
-      if (!this.subagents.send(sa.id, prompt)) return this.subagents.toToolResult(sa.id, `[Subagent] Cannot continue closed subagent: ${name}`, false);
-      const result = await this.runSubagentPrompt(sa.id, prompt, params.flow || '');
-      return this.subagents.toToolResult(sa.id, `[Subagent '${sa.name}' continued]\n${result}`, !result.startsWith('[Subagent Error]'));
+      sa.messages.push({ role: 'user', content: String(prompt) });
+      const delivery = this.subagents.sendMessage(this.runtimeActorId, sa.id, String(prompt), params.kind || 'directive', {
+        correlationId: params.correlation_id,
+        replyTo: params.reply_to,
+      });
+      return this.subagents.toToolResult(sa.id, delivery.ok ? `[Subagent message persisted] ${delivery.message?.id}` : `[Subagent] ${delivery.error}`, delivery.ok);
     } catch { return { ok: false, output: '[Subagent] Invalid continue arguments.', error: 'Invalid continue arguments.' }; }
   }
 
@@ -1705,6 +2019,26 @@ export class Agent {
     } catch { return { ok: false, output: '[Subagent] Invalid result arguments.', error: 'Invalid result arguments.' }; }
   }
 
+  handleSubagentReadEnvelope(args: string): NewmarkToolResult {
+    try {
+      const params = JSON.parse(args || '{}') as Record<string, unknown>;
+      const target = String(params.id || params.name || '').trim();
+      if (!target) return { ok: false, output: '[Subagent] id or name required.', error: 'id or name required.' };
+      const read = this.subagents.read(this.runtimeActorId, target, Number(params.max_chars || 16000));
+      if (!read.ok) return { ok: false, output: `[Subagent] ${read.error}`, error: read.error, metadata: { kind: 'subagent-read' } };
+      return { ok: true, output: JSON.stringify(read.snapshot, null, 2), data: read.snapshot, metadata: { kind: 'subagent-read' } };
+    } catch {
+      return { ok: false, output: '[Subagent] Invalid read arguments.', error: 'Invalid read arguments.' };
+    }
+  }
+
+  handleSubagentListEnvelope(args: string): NewmarkToolResult {
+    let status = '';
+    try { status = String((JSON.parse(args || '{}') as Record<string, unknown>).status || ''); } catch {}
+    const subagents = this.subagents.listAll().filter(record => !status || record.status === status).map(record => this.subagents.toRecord(record.id));
+    return { ok: true, output: JSON.stringify({ conversationId: this.activeConversationId, subagents }, null, 2), metadata: { kind: 'subagent-list' } };
+  }
+
   handleSubagentClose(args: string): string {
     return this.handleSubagentCloseEnvelope(args).output;
   }
@@ -1715,8 +2049,9 @@ export class Agent {
       const name = params.name || params.id || '';
       const sa = this.subagents.get(name);
       if (!sa) return { ok: false, output: `[Subagent] Not found: ${name}`, error: `Not found: ${name}` };
-      this.subagents.close(sa.id);
-      return this.subagents.toToolResult(sa.id, `[Subagent '${sa.name}' closed]`, true);
+      const actorId = this.isSubagentRuntime ? this.runtimeActorId : this.subagents.rootAgentId;
+      const closed = this.subagents.close(sa.id, actorId);
+      return this.subagents.toToolResult(sa.id, closed ? `[Subagent '${sa.name}' closed]` : '[Subagent] Close denied.', closed);
     } catch { return { ok: false, output: '[Subagent] Invalid close arguments.', error: 'Invalid close arguments.' }; }
   }
 
@@ -1973,15 +2308,12 @@ export class Agent {
     ].join(' ');
   }
 
-  private async runSubagentPrompt(id: string, prompt: string, flowName: string): Promise<string> {
+  private async runSubagentJob(id: string, prompt: string, flowName: string, reason: 'spawn' | 'mailbox' | 'resume'): Promise<string> {
     const sa = this.subagents.get(id);
     if (!sa) return '[Subagent] Not found.';
-    this.subagents.markWorking(id);
     const parentProvider = this.engineModel();
     if (!parentProvider) {
-      const msg = 'No LLM configured. Add provider in Settings > Models.';
-      this.subagents.fail(id, msg);
-      return `[Subagent Error] ${msg}`;
+      throw new Error('No LLM configured. Add provider in Settings > Models.');
     }
 
     try {
@@ -1991,6 +2323,12 @@ export class Agent {
         subagent: true,
         subagentName: sa.name,
         subagentPrompt: sa.prompt,
+        actorId: sa.id,
+        conversationId: this.activeConversationId,
+        linkedPlanAccess: {
+          get: conversationId => this.getLinkedPlan(conversationId || this.activeConversationId),
+          update: (markdown, revision, actorId, conversationId) => this.updateLinkedPlan(markdown, revision, actorId, conversationId || this.activeConversationId),
+        },
       });
       child.forcedProvider = parentProvider;
       child.model = model;
@@ -2004,10 +2342,23 @@ export class Agent {
       }
       child.config.set('models', 'auto_switch', false);
       child.config.set('skills', 'auto_download', 'disabled');
-      child.history = sa.messages
-        .filter(m => m.role !== 'system')
-        .slice(0, -1)
-        .map(m => ({ role: m.role, content: m.content }));
+      child.subagents = this.subagents;
+      child.subagentContextPersist = (history, compression) => this.subagents.replaceContext(sa.id, history, compression);
+      const persistedMessages = sa.messages
+        .filter((message, index) => !(index === 0
+          && message.role === 'system'
+          && message.content.startsWith("Peer agent '")));
+      const latestPersisted = persistedMessages.at(-1);
+      if (latestPersisted?.role === 'user'
+        && (reason === 'spawn' || reason === 'resume' || prompt.includes(latestPersisted.content))) {
+        persistedMessages.pop();
+      }
+      child.history = persistedMessages.map(message => ({ role: message.role, content: message.content }));
+      child.subscribeAgentKernelUserMessageStart(content => {
+        const match = String(content || '').match(/^\[Peer mailbox id=([0-9a-f-]{36})\b/i);
+        if (match) this.subagents.acknowledgeMailbox(sa.id, match[1]);
+      });
+      this.activePeerAgents.set(sa.id, child);
       const delegatedPrompt = [
         flowName ? `[Workflow requested: ${flowName}]` : '',
         `Workspace: ${workspacePath}`,
@@ -2015,12 +2366,12 @@ export class Agent {
       ].filter(Boolean).join('\n\n');
       const tokens = await this.withTimeout(child.process(delegatedPrompt), 120000);
       const result = tokens.map(t => t.text || '').join('').trim();
-      this.subagents.complete(id, result || '[Subagent] Completed with empty response.');
       return result || '[Subagent] Completed with empty response.';
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      this.subagents.fail(id, msg);
-      return `[Subagent Error] ${msg}`;
+      throw new Error(msg);
+    } finally {
+      this.activePeerAgents.delete(sa.id);
     }
   }
 
@@ -2039,8 +2390,11 @@ export class Agent {
         },
       }]
       : visionFiltered;
-    if (!this.isSubagentRuntime) return withImageGeneration;
-    return withImageGeneration.filter((tool: any) => !this.isSubagentBlockedTool(tool.function?.name || ''));
+    return withImageGeneration.filter((tool: any) => evaluateToolPolicy({
+      name: tool.function?.name || '',
+      mode: this.mode,
+      isSubagent: this.isSubagentRuntime,
+    }).allowed);
   }
 
   async handleImageGeneration(args: string): Promise<string> {
@@ -2113,8 +2467,7 @@ export class Agent {
   }
 
   isSubagentBlockedTool(name: string): boolean {
-    return ['task', 'subagent_send', 'subagent_result', 'subagent_close', 'skill_download', 'question'].includes(name)
-      || name.startsWith('automation_');
+    return !evaluateToolPolicy({ name, mode: this.mode, isSubagent: this.isSubagentRuntime }).allowed;
   }
 
   handleQuestion(args: string): void {
@@ -2201,7 +2554,7 @@ export class Agent {
       model: compression.model,
       fallback: compression.fallback,
     };
-    this.persistCompressedHistory(compression.summary, recent.length);
+    this.persistCompressedHistory(compression.summary, recent.length, msgs);
   }
 
   private async buildCompressionSummary(
@@ -2305,15 +2658,20 @@ export class Agent {
     ].join('\n\n');
   }
 
-  private persistCompressedHistory(summary: string, keepLast: number): void {
-    if (this.history.length <= keepLast + 2) return;
-    const first = this.history.slice(0, 1);
-    const recent = this.history.slice(-keepLast);
-    this.history = [
-      ...first,
-      { role: 'system', content: summary },
-      ...recent,
-    ];
+  private persistCompressedHistory(summary: string, keepLast: number, compressedMessages?: Array<Record<string, unknown>>): void {
+    if (compressedMessages?.length) {
+      this.history = compressedMessages.map(message => ({ ...message }));
+    } else {
+      if (this.history.length <= keepLast + 2) return;
+      const first = this.history.slice(0, 1);
+      const recent = this.history.slice(-keepLast);
+      this.history = [
+        ...first,
+        { role: 'system', content: summary },
+        ...recent,
+      ];
+    }
+    if (this.isSubagentRuntime) this.subagentContextPersist?.(this.history.map(message => ({ ...message })), this.lastCompression);
   }
 
   buildSystemPrompt(): string {
@@ -2325,12 +2683,15 @@ export class Agent {
         `You are subagent "${this.subagentName || 'subagent'}".`,
         `Delegated task: ${this.subagentPrompt || '(none)'}`,
         'You may use normal workspace tools allowed by the selected mode and workspace permissions.',
-        'You must not change Newmark settings, provider/model configuration, skill installation state, parent-agent policy, or spawn/continue/close other subagents.',
+        'You must not change Newmark settings, provider/model configuration, skill installation state, or parent-agent policy. You may create and message same-conversation peer agents through the flat shared coordinator.',
         'The model is fixed by the parent agent for this run. Do not request or perform model switching.',
         'Return concise results for the parent agent, including files touched and verification evidence.',
       ].join('\n'));
     }
     parts.push(this.buildFeatureDisclosurePrompt());
+    if (this.mode === 'plan') parts.push(`[Plan Tool Policy]\n${planModePolicyPrompt()}`);
+    const linkedPlan = this.getLinkedPlan();
+    parts.push(`[Linked Plan revision=${linkedPlan.revision}]\n${linkedPlan.markdown || '(empty)'}`);
 
     const pm = this.config.getStr('workspace', 'prompt_mode');
     if ((pm === 'global_only' || pm === 'both') && fs.existsSync(path.join(this.rootPath, 'agent.md'))) {

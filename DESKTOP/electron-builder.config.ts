@@ -23,31 +23,27 @@ const config: Configuration = {
     'config.example.json',
     'package.json',
   ],
+  asarUnpack: [
+    'dist/wsl-agent-host.bundle.cjs',
+    'node_modules/node-pty/**/*',
+  ],
   extraFiles: [
     { from: '../LICENSE', to: 'LICENSE' },
     { from: '../THIRD_PARTY_NOTICES.md', to: 'THIRD_PARTY_NOTICES.md' },
-  ],
-  extraResources: [
-    { from: 'node_modules', to: 'node_modules', filter: ['**/*'] },
+    { from: 'Flow', to: 'Flow', filter: ['**/*'] },
   ],
   win: {
     icon: 'assets/icon.ico',
-    target: [
-      { target: 'portable', arch: ['x64'] },
-      { target: 'nsis', arch: ['x64'] },
-    ],
+    sign: false,
+    signAndEditExecutable: false,
+    target: [{ target: 'msi', arch: ['x64'] }],
     artifactName: 'Newmark-Agent-${version}-${arch}.${ext}',
   },
-  nsis: {
+  msi: {
     oneClick: false,
-    perMachine: false,
-    allowToChangeInstallationDirectory: true,
-    deleteAppDataOnUninstall: false,
-    createDesktopShortcut: true,
-  },
-  portable: {
-    splashImage: null,
-    artifactName: 'Newmark-Agent-${version}-portable-${arch}.exe',
+    perMachine: true,
+    warningsAsErrors: false,
+    artifactName: 'Newmark-Agent-${version}-${arch}.${ext}',
   },
   linux: {
     icon: 'assets/app-icon-dark.png',

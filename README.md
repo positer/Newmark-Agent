@@ -5,7 +5,7 @@
 <h1 align="center">Newmark Agent</h1>
 
 <p align="center">
-  <a href="https://github.com/positer/Newmark-Agent/releases/latest"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.0.7-blue"></a>
+  <a href="https://github.com/positer/Newmark-Agent/releases/latest"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.0.8-blue"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Linux-lightgrey">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
@@ -13,7 +13,9 @@
 
 Newmark Agent is a local-first desktop Agent workspace for coding, automation, repository review, model-provider experimentation, and controlled desktop operation. It packages an Electron desktop UI, a TypeScript Agent runtime, workspace-scoped conversations, Flow workflows, subagents, skills, archives, browser/GitHub/automation tools, and configurable OpenAI-compatible, Anthropic-compatible, and GitHub Models providers.
 
-The current source development version is **dev-0.0.7**. Newmark is intended for technical users who want an installer-backed desktop Agent app that runs against their own model credentials and keeps mutable runtime state local under `~/.Newmark`. Windows is the primary Computer Use target; Linux GUI, CLI, packaging, and terminal workflows are supported.
+The current source development version is **dev-0.0.8**. Newmark is intended for technical users who want an installer-backed desktop Agent app that runs against their own model credentials and keeps mutable runtime state local under `~/.Newmark`. Windows is the primary Computer Use target; Linux GUI, CLI, packaging, and terminal workflows are supported.
+
+dev-0.0.8 restores persistent Agent terminal takeover with owner-scoped sessions, adds flat same-conversation parallel Subagents with durable peer/root mailboxes, persisted context compression, and `subagent_read`, introduces a revisioned read-only Linked Plan panel available in every mode, enforces Plan through a unified schema/runtime ToolPolicy, accelerates Computer Use with persistent helpers and bounded sequences, and routes file-tree opens through header-based text/binary/HTML/PDF classification before the editor is invoked.
 
 WSL Agent backend preview (2026-07-11): Windows settings now provide a restart-required `Windows native / WSL based` Agent backend choice. WSL mode is selectable only when at least one installed distribution is detected, and the chosen distribution is locked at application startup so active conversations are never hot-migrated between runtimes. The Electron UI and executable remain native Windows components; only the Agent backend runs as a persistent JSONL-controlled Linux process, maps Windows workspaces through `/mnt/<drive>`, and keeps configuration, conversations, and archives under the normal `~/.Newmark` user-state root. Packaged validation covers restart activation, real Linux PID reporting, WSL-local provider requests, tool writes into a Windows external workspace, and conversation isolation.
 
@@ -82,11 +84,11 @@ Windows startup follow-up (2026-07-12): the startup shell and full UI navigation
 
 | Package | Release |
 |---|---|
-| Windows MSI installer | `Newmark-Agent-0.0.7-x64.msi` |
-| Windows unpacked update pack | `Newmark-Agent-0.0.7-win-unpacked-x64.zip` |
-| Linux AppImage | `Newmark-Agent-0.0.7-x86_64.AppImage` |
-| Linux Debian package | `Newmark-Agent-0.0.7-amd64.deb` |
-| Linux unpacked update pack | `Newmark-Agent-0.0.7-linux-unpacked-x64.zip` |
+| Windows MSI installer | `Newmark-Agent-0.0.8-x64.msi` |
+| Windows unpacked update pack | `Newmark-Agent-0.0.8-win-unpacked-x64.zip` |
+| Linux AppImage | `Newmark-Agent-0.0.8-x86_64.AppImage` |
+| Linux Debian package | `Newmark-Agent-0.0.8-amd64.deb` |
+| Linux unpacked update pack | `Newmark-Agent-0.0.8-linux-unpacked-x64.zip` |
 
 Download the assets from the latest GitHub release. On Windows, install the MSI for managed desktops or use the `win-unpacked` zip as the no-loss update source. On Linux, run the AppImage or install the `.deb` package. The distributions include `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
@@ -105,8 +107,8 @@ npm.cmd run dist:windows-release
 The packaged Windows executable is written to:
 
 ```text
-release/Newmark-Agent-0.0.7-x64.msi
-release/Newmark-Agent-0.0.7-win-unpacked-x64.zip
+release/Newmark-Agent-0.0.8-x64.msi
+release/Newmark-Agent-0.0.8-win-unpacked-x64.zip
 ```
 
 Linux and WSLg development builds use native Linux Node/npm inside the distro:
@@ -130,9 +132,9 @@ npm run release:linux-real-provider-smoke
 Linux artifacts are written to:
 
 ```text
-release/Newmark-Agent-0.0.7-x86_64.AppImage
-release/Newmark-Agent-0.0.7-amd64.deb
-release/Newmark-Agent-0.0.7-linux-unpacked-x64.zip
+release/Newmark-Agent-0.0.8-x86_64.AppImage
+release/Newmark-Agent-0.0.8-amd64.deb
+release/Newmark-Agent-0.0.8-linux-unpacked-x64.zip
 ```
 
 The GUI smoke test expects WSLg or another Linux display server with `DISPLAY` or `WAYLAND_DISPLAY` set.
@@ -230,14 +232,14 @@ npm run dist:linux
 npm run release:linux-gui-smoke
 ```
 
-The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the source development version is now `0.0.7`.
+The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the source development version is now `0.0.8`.
 
 Unpacked update dry-runs can be delegated to the packaged CLI before copying files:
 
 ```powershell
 release\win-unpacked\Newmark Agent.exe install-update --check-github --repo positer/Newmark-Agent
-release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 0.0.7 --dry-run
-release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 0.0.7 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 0.0.8 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 0.0.8 --dry-run
 ```
 
 The update helper preserves local state by default. Current installer/update builds also keep mutable state outside the installation directory under `~/.Newmark`, including `config.json`, `Work/`, `skills/`, `Memory Lab/`, and `archive/`.
@@ -250,6 +252,20 @@ npm.cmd run release:real-provider-smoke
 npm.cmd run release:real-apinebula-memory-switch-smoke
 npm.cmd run release:real-provider-stress
 ```
+
+## dev-0.0.8 Notes
+
+dev-0.0.8 restores persistent owner-scoped Agent terminal takeover, adds four-way FIFO parallel Subagents with durable peer/root communication, bounded `subagent_read`, and the same model-window-aware context compression used by the root Agent. Compressed Peer summaries and recent messages persist across completion, reactivation, and restart. The release also exposes a revisioned read-only Linked Plan reader beneath the editable conversation checklist. Plan mode now uses one ToolPolicy for prompt constraints, visible schemas, runtime denial, and settings visibility; peer Agents inherit the same Plan restrictions. Computer Use reuses persistent Windows helpers, scopes UI Automation, returns bounded observations, and supports guarded sequences of up to three low-risk actions. File opening reads only a bounded header before routing text to the editor, PDF/HTML to the built-in preview, ordinary binary files to the default application, and executable-like content to reveal-only handling; text scripts such as `.bat` remain editor-only.
+
+The release gate covers TypeScript/build verification, the complete source suite, focused Subagent/Linked Plan/terminal/file-router/Computer Use tests, Windows MSI and unpacked ZIP, Linux AppImage/deb/unpacked ZIP, and post-publication remote SHA256 comparison. The hashes below are the final local build values used for the remote comparison gate.
+
+Current dev-0.0.8 artifact SHA256 values:
+
+- `Newmark-Agent-0.0.8-x64.msi`: `43AE931D352B499ADEFAD6A2FA42F54738B2E707800E692991003D11C00F0CD8`
+- `Newmark-Agent-0.0.8-win-unpacked-x64.zip`: `F71C844A45F505AE6850596087D42CD24C398A993DBF9067216FBEEE6526DC55`
+- `Newmark-Agent-0.0.8-x86_64.AppImage`: `15D6E6E2F2DC5751931586191B147ABD2A112889F4CCA879ABAAE97D455EFA8B`
+- `Newmark-Agent-0.0.8-amd64.deb`: `638A896DDCBEC6309A7B6688581E62C35E8CCFE02F72ED65B29674088882552E`
+- `Newmark-Agent-0.0.8-linux-unpacked-x64.zip`: `CC7D9C094B49AEE6490F1E9C34B73342A20AAE187729E477818F658C4D0002F1`
 
 ## dev-0.0.7 Notes
 

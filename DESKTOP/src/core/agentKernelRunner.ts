@@ -3,6 +3,9 @@ import { Agent } from './agent';
 import { ModelConfig, ProviderProtocol } from './config';
 import { StreamToken } from './types';
 import * as fs from 'fs';
+import * as path from 'path';
+import { terminalTakeoverWorkspaceId } from '../tools/terminalTakeover';
+import { evaluateToolPolicy } from './toolPolicy';
 
 type NativeAgentConstructor = new (options?: Record<string, unknown>) => NativeAgentInstance;
 
@@ -423,7 +426,7 @@ function toKernelTools(agent: Agent, definitions?: unknown[]): KernelTool[] {
         const directImage = imageInspectDataUrl(name, rawText);
         const text = sanitizeVisualToolText(name, rawText);
         const content: Array<KernelTextContent | KernelImageContent> = [{ type: 'text', text }];
-        if (visionImagePath) content.push({ type: 'image', imagePath: visionImagePath, mimeType: 'image/png' });
+        if (visionImagePath) content.push({ type: 'image', imagePath: visionImagePath, mimeType: imageMimeForPath(visionImagePath) });
         if (directImage) content.push({ type: 'image', image: directImage, mimeType: 'image/png' });
         const terminate = shouldTerminateAfterToolResult(name);
         return { content, details: { tool: name, ok: !text.startsWith('[Error]'), terminate, visionImagePath: visionImagePath || undefined }, terminate };
@@ -461,7 +464,7 @@ function computerUseVisionImagePath(agent: Agent, name: string, text: string): s
   if (!model?.vision) return '';
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
-    if (parsed.action !== 'observe') return '';
+    if (parsed.action !== 'observe' && parsed.action !== 'app_observe') return '';
     const screenshotPath = String(parsed.vision_image_path || '');
     if (!screenshotPath) return '';
     return screenshotPath;
@@ -472,21 +475,34 @@ function computerUseVisionImagePath(agent: Agent, name: string, text: string): s
 
 async function executeNewmarkTool(agent: Agent, name: string, args: string): Promise<string> {
   const wsDir = agent.workspace.current?.path || agent.rootPath;
-  if (agent.isSubagentRuntime && agent.isSubagentBlockedTool(name)) {
-    return `[Subagent sandbox] Tool '${name}' is disabled for subagents.`;
-  }
+  let parsedArgs: Record<string, unknown> = {};
+  try { parsedArgs = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
+  const policy = evaluateToolPolicy({ name, mode: agent.mode, isSubagent: agent.isSubagentRuntime, args: parsedArgs });
+  if (!policy.allowed) return policy.reason || `[permission] Blocked: ${name}`;
   if (name === 'task') return (await agent.handleSubagentEnvelope(args)).output;
   if (name === 'subagent_send') return (await agent.handleSubagentContinueEnvelope(args)).output;
+  if (name === 'subagent_list') return agent.handleSubagentListEnvelope(args).output;
+  if (name === 'subagent_read') return agent.handleSubagentReadEnvelope(args).output;
   if (name === 'subagent_result') return agent.handleSubagentResultEnvelope(args).output;
   if (name === 'subagent_close') return agent.handleSubagentCloseEnvelope(args).output;
+  if (name === 'linked_plan') return agent.handleLinkedPlanTool(args);
   if (name === 'question') {
     if (agent.config.getStr('agent', 'option_feedback') === 'fully_autonomous') return '[question] Disabled by fully_autonomous option feedback.';
     agent.handleQuestion(args);
     return '[Options sent]';
   }
   if (name === 'skill_download') {
-    const result = await agent.tools.execute(name, args, wsDir, { mode: agent.mode, workspacePath: wsDir, conversationId: agent.activeConversationId || 'default' });
-    await agent.handleSkillDownload(args);
+    const result = await agent.tools.execute(name, args, wsDir, {
+      mode: agent.mode,
+      workspacePath: wsDir,
+      conversationId: agent.activeConversationId || 'default',
+      actorId: agent.runtimeActorId,
+      workspaceId: terminalTakeoverWorkspaceId(wsDir),
+      backend: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
+    });
+    if (!result.startsWith('[permission]') && !result.startsWith('[tool disabled]') && !result.startsWith('[Subagent sandbox]')) {
+      await agent.handleSkillDownload(args);
+    }
     return result;
   }
   if (name === 'image_generate') return agent.handleImageGeneration(args);
@@ -498,6 +514,9 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string): Pro
     mode: agent.mode,
     workspacePath: wsDir,
     conversationId: agent.activeConversationId || 'default',
+    actorId: agent.runtimeActorId,
+    workspaceId: terminalTakeoverWorkspaceId(wsDir),
+    backend: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
     allowEphemeralVisionImage: name === 'computer_use' && !!agent.config.findModel(agent.model)?.vision,
   });
   trackFileDiff(agent, name, args);
@@ -508,10 +527,6 @@ function shouldTerminateAfterToolResult(name: string): boolean {
   return name === 'flow_run'
     || name.startsWith('automation_')
     || name.startsWith('memory_lab_')
-    || name === 'task'
-    || name === 'subagent_send'
-    || name === 'subagent_result'
-    || name === 'subagent_close'
     || name === 'question';
 }
 
@@ -522,6 +537,13 @@ function toKernelMessages(agent: Agent): KernelMessage[] {
 function toKernelMessagesFromHistory(history: Array<Record<string, unknown>>, agent: Agent): KernelMessage[] {
   return history.flatMap(msg => {
     const role = String(msg.role || '');
+    if (role === 'system') {
+      return [{
+        role: 'user',
+        content: `[Preserved context record]\n${String(msg.content || '')}`,
+        timestamp: Date.now(),
+      } as KernelMessage];
+    }
     if (role === 'user') {
       const parts = Array.isArray(msg.content) ? msg.content as Array<Record<string, unknown>> : [];
       if (!parts.length) return [{ role: 'user', content: String(msg.content || ''), timestamp: Date.now() } as KernelMessage];
@@ -556,7 +578,7 @@ function toKernelMessagesFromHistory(history: Array<Record<string, unknown>>, ag
         .join('');
       const content: Array<KernelTextContent | KernelImageContent> = [{ type: 'text', text: existingText || String(msg.content || '') }];
       const imagePath = typeof msg.vision_image_path === 'string' ? String(msg.vision_image_path) : '';
-      if (imagePath) content.push({ type: 'image', imagePath, mimeType: 'image/png' });
+      if (imagePath) content.push({ type: 'image', imagePath, mimeType: imageMimeForPath(imagePath) });
       return [{
         role: 'toolResult',
         toolCallId: String(msg.tool_call_id || ''),
@@ -616,14 +638,24 @@ function imagePathToOpenAIContentPart(imagePath: string): Record<string, unknown
   }
 }
 
+export const agentKernelRunnerInternals = { imagePathToOpenAIContentPart, imageMimeForPath, toKernelMessagesFromHistory };
+
 function imagePathToDataUrl(imagePath: string): string {
   if (!imagePath || !fs.existsSync(imagePath)) return '';
   try {
     const data = fs.readFileSync(imagePath).toString('base64');
-    return `data:image/png;base64,${data}`;
+    return `data:${imageMimeForPath(imagePath)};base64,${data}`;
   } finally {
     try { fs.unlinkSync(imagePath); } catch {}
   }
+}
+
+function imageMimeForPath(imagePath: string): string {
+  const ext = path.extname(String(imagePath || '')).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  return 'image/png';
 }
 
 function assistantMessage(model: KernelModel, content: KernelContent[], stopReason: string): Extract<KernelMessage, { role: 'assistant' }> {

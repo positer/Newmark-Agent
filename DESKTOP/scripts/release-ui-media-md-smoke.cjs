@@ -234,10 +234,8 @@ async function runUiCheck(root) {
     await evaluate(cdp, `window.selectWorkspace('media-md-workspace')`, 30000);
     await waitFor(cdp, `window.api.getState().then(s => s.workspaces && s.workspaces.current && s.workspaces.current.name === 'media-md-workspace')`, 30000, 'workspace selected');
 
-    await evaluate(cdp, `Promise.all([
-      window.api.saveFile('media-link-target.txt', 'EDITOR_LINK_TARGET_OK_20260628'),
-      window.api.saveFile('media-doc.md', '# Media Smoke\\n\\n**MD_VIEWER_OK_20260628**\\n\\n- item')
-    ])`, 30000);
+    fs.writeFileSync(path.join(workspace.path, 'media-link-target.txt'), 'EDITOR_LINK_TARGET_OK_20260628', 'utf8');
+    fs.writeFileSync(path.join(workspace.path, 'media-doc.md'), '# Media Smoke\n\n**MD_VIEWER_OK_20260628**\n\n- item', 'utf8');
 
     await evaluate(cdp, `(() => {
       const image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';

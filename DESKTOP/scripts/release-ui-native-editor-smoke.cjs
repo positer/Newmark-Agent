@@ -28,7 +28,8 @@ async function waitFor(cdp, expression, label) { for(let i=0;i<100;i++){try{if(a
     if(!created||created.error)fail(`workspace create failed: ${JSON.stringify(created)}`);
     const workspaceId=created.id||created.name||'editor-smoke';
     await evalJs(cdp,`window.api.selectWorkspace(${JSON.stringify(workspaceId)})`);
-    await evalJs(cdp,`window.api.saveFile('sample.ts','const answer: number = 41;\\nfunction plusOne(n: number) {\\n  return n + 1;\\n}\\n')`);
+    fs.mkdirSync(workspace,{recursive:true});
+    fs.writeFileSync(path.join(workspace,'sample.ts'),'const answer: number = 41;\nfunction plusOne(n: number) {\n  return n + 1;\n}\n','utf8');
     await evalJs(cdp,`window.openFile('sample.ts')`);
     try {
       await waitFor(cdp,`document.querySelector('#editor-highlight')?.innerHTML.includes('tok-keyword')&&document.querySelector('#editor-gutter')?.innerText.includes('4')`,'highlight and gutter');
@@ -49,7 +50,7 @@ async function waitFor(cdp, expression, label) { for(let i=0;i<100;i++){try{if(a
     const pasteCount=await evalJs(cdp,`(async()=>{const bytes=Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZrGQAAAAASUVORK5CYII='),c=>c.charCodeAt(0));const file=new File([bytes],'image.png',{type:'image/png',lastModified:1});const transfer={items:[{kind:'file',type:'image/png',getAsFile:()=>file}],files:[file]};window.state.promptAttachments=[];await attachPromptImagesFromDataTransfer(transfer);return window.state.promptAttachments.length;})()`);
     if(pasteCount!==1)fail(`duplicate paste attachment count=${pasteCount}`);
     await evalJs(cdp,`window.saveEditor()`);
-    await waitFor(cdp,`window.api.readFile('sample.ts').then(r=>r.content.includes('predicted by model'))`,'completion saved');
+    await waitFor(cdp,`window.api.openWorkspaceFile('sample.ts').then(r=>r.kind==='editor'&&r.content.includes('predicted by model'))`,'completion saved');
     const result=await evalJs(cdp,`({language:document.querySelector('#editor-language').textContent,mode:document.querySelector('#editor-vim-mode').textContent,previewVisible:document.querySelector('#editor-md-toggle').classList.contains('visible'),saved:document.querySelector('#editor-textarea').value.includes('predicted by model')})`);
     if(result.language!=='typescript'||result.previewVisible||!result.saved)fail(JSON.stringify(result));
     log(`native editor ok ${JSON.stringify(result)}`);

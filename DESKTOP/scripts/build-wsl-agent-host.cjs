@@ -8,6 +8,7 @@ buildSync({
   platform: 'node',
   format: 'cjs',
   target: 'node18',
+  external: ['node-pty'],
   sourcemap: false,
   legalComments: 'none',
 });

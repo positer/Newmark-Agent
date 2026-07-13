@@ -79,6 +79,9 @@ async function evaluate(cdp, expression) {
   }
 
   const port = 49383;
+  const editorWorkspace = path.join(root, 'Work', 'real-copilot-editor');
+  fs.mkdirSync(editorWorkspace, { recursive: true });
+  fs.writeFileSync(path.join(editorWorkspace, 'prediction.ts'), 'function add(a: number, b: number) {\n  ', 'utf8');
   let child;
   let cdp;
   try {
@@ -113,7 +116,6 @@ async function evaluate(cdp, expression) {
       const created = await window.api.createWorkspace('real-copilot-editor');
       if (!created || created.error) return { ok: false, error: 'workspace: ' + JSON.stringify(created) };
       await window.api.selectWorkspace(created.id || created.name);
-      await window.api.saveFile('prediction.ts', 'function add(a: number, b: number) {\\n  ');
       await window.openFile('prediction.ts');
       const textarea = document.querySelector('#editor-textarea');
       textarea.setSelectionRange(textarea.value.length, textarea.value.length);
@@ -125,9 +127,9 @@ async function evaluate(cdp, expression) {
       const popup = document.querySelector('#editor-completion').classList.contains('open');
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
       await window.saveEditor();
-      const saved = await window.api.readFile('prediction.ts');
+      const saved = await window.api.openWorkspaceFile('prediction.ts');
       return {
-        ok: !!completion && !!ghost && !popup && textarea.value !== beforeTab && saved.content === textarea.value,
+        ok: !!completion && !!ghost && !popup && textarea.value !== beforeTab && saved.kind === 'editor' && saved.content === textarea.value,
         model: modelValue,
         completion,
         color,

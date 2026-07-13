@@ -10,8 +10,6 @@ dist/
 dist-portable/
 DESKTOP/dist/
 DESKTOP/.electron-builder-cache/
-CLI/**/bin/
-CLI/**/obj/
 _attic/**/dist/
 _attic/**/target/
 _attic/**/node_modules/
@@ -43,10 +41,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# === NuGet ===
-packages/
-*.nupkg
-
 # === Rust ===
 _attic/**/Cargo.lock
 
@@ -70,8 +64,3 @@ DESKTOP/agent.md
 DESKTOP/PC_Hash.config
 DESKTOP/Work/
 _attic/
-
-# === .NET ===
-*.user
-*.suo
-*.DotSettings

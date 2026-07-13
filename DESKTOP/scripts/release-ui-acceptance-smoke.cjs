@@ -373,14 +373,14 @@ function ensureNoReleaseProcess() {
     if (!goalResumed) fail('Goal resume state was not persisted in real UI');
     log('goal pause/resume ok');
 
-    const flowJson = JSON.stringify({
+    const flowJson = {
       name: 'acceptance-flow',
       description: 'Release UI acceptance flow',
       components: [
         { type: 'dialog', id: 0, mode: 'build', prompt: 'ACCEPTANCE_FLOW_RUN {#prompt#}' },
       ],
-    }, null, 2);
-    await evaluate(cdp, `window.api.saveFile('Flow/acceptance-flow.Flow.json', ${JSON.stringify(flowJson)})`, 30000);
+    };
+    await evaluate(cdp, `window.api.saveFlow(${JSON.stringify(flowJson)})`, 30000);
     const flowResult = await evaluate(cdp, `window.api.runFlow('acceptance-flow', 'from release UI', 0)`, 90000);
     if (!JSON.stringify(flowResult || {}).includes('ACCEPTANCE_FLOW_RESULT_OK')) fail(`flow result marker missing: ${JSON.stringify(flowResult || {})}`);
     log('flow run ok');

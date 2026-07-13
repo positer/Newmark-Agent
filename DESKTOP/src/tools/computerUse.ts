@@ -2,7 +2,20 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as os from 'os';
-import { spawnSync } from 'child_process';
+import { runPersistentPowerShell } from './computerUsePowerShellHost';
+
+export interface ComputerUseSequenceStep {
+  action: 'move' | 'click' | 'scroll' | 'wait' | 'app_activate';
+  x?: number;
+  y?: number;
+  scrollX?: number;
+  scrollY?: number;
+  button?: string;
+  targetId?: string;
+  appTarget?: string;
+  windowHandle?: string;
+  durationMs?: number;
+}
 
 export interface ComputerUseOptions {
   action: string;
@@ -29,6 +42,9 @@ export interface ComputerUseOptions {
   gradient_speed?: number;
   gradient_width?: number;
   invocation?: 'agent' | 'cli';
+  ownerId?: string;
+  includeRawUi?: boolean;
+  steps?: ComputerUseSequenceStep[];
 }
 
 interface ObservedElement {
@@ -53,7 +69,16 @@ interface SemanticObject extends ObservedElement {
   normalized_bbox: { x: number; y: number; width: number; height: number };
 }
 
-let lastObservation: { workspacePath: string; objects: SemanticObject[]; width: number; height: number; at: string } | null = null;
+interface ObservationCache {
+  workspacePath: string;
+  objects: SemanticObject[];
+  width: number;
+  height: number;
+  at: string;
+  sceneGeneration: string;
+}
+
+const observations = new Map<string, ObservationCache>();
 let takeoverOverlayPid: number | null = null;
 let lastTakeoverOverlayStyle: { colors?: string[]; speed?: number; width?: number } = {};
 
@@ -71,30 +96,51 @@ function psQuote(value: string): string {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-function runPowerShell(script: string, timeout = 30000): { ok: boolean; output: string } {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-computer-use-ps-'));
-  const scriptPath = path.join(tempDir, 'run.ps1');
-  try {
-    fs.writeFileSync(scriptPath, `\uFEFF${script}`, 'utf8');
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
-      encoding: 'utf-8',
-      timeout,
-      maxBuffer: 1024 * 1024,
-      windowsHide: true,
-    });
-    const output = `${result.stdout || ''}${result.stderr || ''}`.trim();
-    if (result.error) return { ok: false, output: result.error.message + (output ? `\n${output}` : '') };
-    if (result.status !== 0) return { ok: false, output: output || `Exit: ${result.status ?? -1}` };
-    return { ok: true, output };
-  } finally {
-    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
-  }
+async function runPowerShell(script: string, timeout = 30000, lane: 'action' | 'uia' | 'windows' = 'action'): Promise<{ ok: boolean; output: string; elapsedMs: number }> {
+  return await runPersistentPowerShell(script, timeout, lane);
 }
 
 function tempScreenshotDir(): string {
   const dir = path.join(os.tmpdir(), 'newmark-computer-use');
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+const SCREENSHOT_FILE_BUDGET = 768 * 1024;
+
+function jpegCaptureScript(outPath: string, boundsScript: string[]): string {
+  return [
+    ...boundsScript,
+    '$source = New-Object System.Drawing.Bitmap $w, $h',
+    '$sourceGraphics = [System.Drawing.Graphics]::FromImage($source)',
+    '$sourceGraphics.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size($w,$h)))',
+    '$maxWidth = 1280; $maxHeight = 960',
+    '$scale = [Math]::Min(1.0, [Math]::Min(($maxWidth / [double]$w), ($maxHeight / [double]$h)))',
+    '$imageWidth = [Math]::Max(1, [int][Math]::Round($w * $scale))',
+    '$imageHeight = [Math]::Max(1, [int][Math]::Round($h * $scale))',
+    '$target = New-Object System.Drawing.Bitmap $imageWidth, $imageHeight',
+    '$targetGraphics = [System.Drawing.Graphics]::FromImage($target)',
+    '$targetGraphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighSpeed',
+    '$targetGraphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBilinear',
+    '$targetGraphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighSpeed',
+    '$targetGraphics.DrawImage($source, 0, 0, $imageWidth, $imageHeight)',
+    '$codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq "image/jpeg" } | Select-Object -First 1',
+    '$fileSize = 0L; $qualityUsed = 0L',
+    'foreach ($quality in @(72L, 58L, 44L, 32L)) {',
+    `  if ([System.IO.File]::Exists(${psQuote(outPath)})) { [System.IO.File]::Delete(${psQuote(outPath)}) }`,
+    '  $encoderParams = [System.Drawing.Imaging.EncoderParameters]::new(1)',
+    '  $encoderParams.Param[0] = [System.Drawing.Imaging.EncoderParameter]::new([System.Drawing.Imaging.Encoder]::Quality, [long]$quality)',
+    `  $target.Save(${psQuote(outPath)}, $codec, $encoderParams)`,
+    '  $encoderParams.Dispose()',
+    `  $fileSize = (Get-Item -LiteralPath ${psQuote(outPath)}).Length`,
+    '  $qualityUsed = $quality',
+    `  if ($fileSize -le ${SCREENSHOT_FILE_BUDGET}) { break }`,
+    '}',
+    '$targetGraphics.Dispose(); $target.Dispose(); $sourceGraphics.Dispose(); $source.Dispose()',
+    `$imageAvailable = $fileSize -le ${SCREENSHOT_FILE_BUDGET}`,
+    `if (-not $imageAvailable -and [System.IO.File]::Exists(${psQuote(outPath)})) { [System.IO.File]::Delete(${psQuote(outPath)}) }`,
+    'Write-Output (@{ ok=$true; left=$x; top=$y; width=$w; height=$h; image_width=$imageWidth; image_height=$imageHeight; image_bytes=$fileSize; image_quality=$qualityUsed; image_available=$imageAvailable; image_mime="image/jpeg" } | ConvertTo-Json -Compress)',
+  ].join('\r\n');
 }
 
 function gradientPalette(input?: string[]): string[] {
@@ -106,7 +152,7 @@ function gradientPalette(input?: string[]): string[] {
   return raw.length >= 2 ? raw.slice(0, 6) : fallback;
 }
 
-function stopTakeoverOverlay(): void {
+async function stopTakeoverOverlay(): Promise<void> {
   const pid = takeoverOverlayPid;
   takeoverOverlayPid = null;
   const explicitPid = pid && Number.isFinite(pid) && pid > 0 ? Math.floor(pid) : 0;
@@ -121,12 +167,12 @@ function stopTakeoverOverlay(): void {
     '}',
     'Write-Output "overlay-stopped:$stopped"',
   ].filter(Boolean).join('\r\n');
-  runPowerShell(script, 7000);
+  await runPowerShell(script, 7000);
 }
 
-function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?: number; width?: number; ownerPid?: number } = {}): Record<string, unknown> {
+async function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?: number; width?: number; ownerPid?: number } = {}): Promise<Record<string, unknown>> {
   if (process.platform !== 'win32') return { ok: false, action: 'takeover_start', error: 'Computer Use takeover overlay is Windows-only.' };
-  stopTakeoverOverlay();
+  await stopTakeoverOverlay();
   lastTakeoverOverlayStyle = { colors: input.colors, speed: input.speed, width: input.width };
   const colors = gradientPalette(input.colors);
   const lifetime = Math.max(0, Math.floor(Number(durationMs || 0)));
@@ -175,6 +221,17 @@ function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?
     '$script:colors = $colors',
     '$script:thick = $thick',
     '$script:ownerPid = $ownerPid',
+    '$script:brushes = New-Object System.Collections.Generic.List[System.Drawing.SolidBrush]',
+    '$brushSteps = 256',
+    'for ($brushIndex = 0; $brushIndex -lt $brushSteps; $brushIndex++) {',
+    '  $wrapped = (($brushIndex / [double]$brushSteps) * $colors.Count) % $colors.Count',
+    '  $idx = [int][Math]::Floor($wrapped)',
+    '  $next = ($idx + 1) % $colors.Count',
+    '  $t = $wrapped - $idx',
+    '  $a = $colors[$idx]; $b = $colors[$next]',
+    '  $color = [System.Drawing.Color]::FromArgb([int][Math]::Round($a.A + (($b.A - $a.A) * $t)), [int][Math]::Round($a.R + (($b.R - $a.R) * $t)), [int][Math]::Round($a.G + (($b.G - $a.G) * $t)), [int][Math]::Round($a.B + (($b.B - $a.B) * $t)))',
+    '  $script:brushes.Add((New-Object System.Drawing.SolidBrush($color))) | Out-Null',
+    '}',
     '$script:form = New-Object NewmarkOverlayForm',
     '$script:form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None',
     '$script:form.ShowInTaskbar = $false',
@@ -202,71 +259,44 @@ function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?
     '  param($sender, $e)',
     '  $w = [Math]::Max(1, $sender.ClientSize.Width)',
     '  $h = [Math]::Max(1, $sender.ClientSize.Height)',
-    '  $frame = New-Object System.Drawing.Bitmap($w, $h)',
-    '  $g = [System.Drawing.Graphics]::FromImage($frame)',
     '  $target = $e.Graphics',
-    '  $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::None',
-    '  $g.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighSpeed',
-    '  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor',
-    '  $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half',
     '  $target.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighSpeed',
     '  $target.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor',
     '  $target.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half',
-    '  $count = [Math]::Max(2, $script:colors.Count)',
-    '  function Newmark-LerpColor([double]$pos) {',
-    '    $wrapped = $pos % $script:colors.Count',
-    '    if ($wrapped -lt 0) { $wrapped += $script:colors.Count }',
-    '    $idx = [int][Math]::Floor($wrapped)',
-    '    $next = ($idx + 1) % $script:colors.Count',
-    '    $t = $wrapped - $idx',
-    '    $a = $script:colors[$idx]',
-    '    $b = $script:colors[$next]',
-    '    return [System.Drawing.Color]::FromArgb(',
-    '      [int][Math]::Round($a.A + (($b.A - $a.A) * $t)),',
-    '      [int][Math]::Round($a.R + (($b.R - $a.R) * $t)),',
-    '      [int][Math]::Round($a.G + (($b.G - $a.G) * $t)),',
-    '      [int][Math]::Round($a.B + (($b.B - $a.B) * $t))',
-    '    )',
-    '  }',
     '  $perimeter = [Math]::Max(1.0, (2.0 * $w) + (2.0 * $h))',
     '  $clockwiseOffset = (($script:stopwatch.Elapsed.TotalSeconds / $speedSeconds) * $perimeter) % $perimeter',
-    '  function Newmark-ClockwiseBorderColor([double]$distance) {',
-    '    $wrappedDistance = ($distance - $clockwiseOffset) % $perimeter',
-    '    if ($wrappedDistance -lt 0) { $wrappedDistance += $perimeter }',
-    '    return Newmark-LerpColor (($wrappedDistance / $perimeter) * $count)',
-    '  }',
-    '  $step = [Math]::Max(1.0, [double][Math]::Min(2, [Math]::Max(1, $script:thick)))',
+    '  $step = [Math]::Max(2.0, [double][Math]::Min(6, [Math]::Max(2, $script:thick * 2)))',
     '  for ($distance = 0.0; $distance -lt $perimeter; $distance += $step) {',
     '    $segment = [Math]::Min($step, $perimeter - $distance)',
     '    if ($segment -le 0) { continue }',
-    '    $color = Newmark-ClockwiseBorderColor ($distance + ($segment / 2.0))',
-    '    $brush = New-Object System.Drawing.SolidBrush($color)',
-    '    try {',
-    '      if ($distance -lt $w) {',
+    '    $wrappedDistance = (($distance + ($segment / 2.0)) - $clockwiseOffset) % $perimeter',
+    '    if ($wrappedDistance -lt 0) { $wrappedDistance += $perimeter }',
+    '    $brushIndex = [int][Math]::Floor(($wrappedDistance / $perimeter) * $script:brushes.Count) % $script:brushes.Count',
+    '    $brush = $script:brushes[$brushIndex]',
+    '    if ($distance -lt $w) {',
     '        $x = [int][Math]::Floor($distance)',
     '        $rw = [Math]::Min($segment, $w - $x)',
-    '        $g.FillRectangle($brush, $x, 0, $rw, $script:thick)',
+    '      $target.FillRectangle($brush, $x, 0, $rw, $script:thick)',
     '      } elseif ($distance -lt ($w + $h)) {',
     '        $y = [int][Math]::Floor($distance - $w)',
     '        $rh = [Math]::Min($segment, $h - $y)',
-    '        $g.FillRectangle($brush, $w - $script:thick, $y, $script:thick, $rh)',
+    '      $target.FillRectangle($brush, $w - $script:thick, $y, $script:thick, $rh)',
     '      } elseif ($distance -lt ((2.0 * $w) + $h)) {',
     '        $x = [int][Math]::Ceiling($w - ($distance - ($w + $h)))',
     '        $rw = [Math]::Min($segment, [Math]::Max(1, $x))',
     '        $left = [Math]::Max(0, $x - $rw)',
-    '        $g.FillRectangle($brush, $left, $h - $script:thick, $rw, $script:thick)',
+    '      $target.FillRectangle($brush, $left, $h - $script:thick, $rw, $script:thick)',
     '      } else {',
     '        $y = [int][Math]::Ceiling($h - ($distance - ((2.0 * $w) + $h)))',
     '        $rh = [Math]::Min($segment, [Math]::Max(1, $y))',
     '        $top = [Math]::Max(0, $y - $rh)',
-    '        $g.FillRectangle($brush, 0, $top, $script:thick, $rh)',
+    '      $target.FillRectangle($brush, 0, $top, $script:thick, $rh)',
     '      }',
-    '    } finally { $brush.Dispose() }',
+    '    ',
     '  }',
-    '  try { $target.DrawImageUnscaled($frame, 0, 0) } finally { $g.Dispose(); $frame.Dispose() }',
     '})',
     '$timer = New-Object System.Windows.Forms.Timer',
-    '$timer.Interval = 16',
+    '$timer.Interval = 33',
     '$timer.Add_Tick({',
     '  $script:form.Invalidate()',
     '})',
@@ -283,6 +313,7 @@ function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?
     '})',
     '$ownerTimer.Start()',
     lifetime > 0 ? `$closeTimer = New-Object System.Windows.Forms.Timer; $closeTimer.Interval = ${lifetime}; $closeTimer.Add_Tick({ $script:form.Close(); [System.Windows.Forms.Application]::ExitThread() }); $closeTimer.Start()` : '',
+    '$script:form.Add_FormClosed({ foreach ($brush in $script:brushes) { try { $brush.Dispose() } catch {} } })',
     '$script:form.Show()',
     '[System.Windows.Forms.Application]::Run()',
     'try { Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue } catch {}',
@@ -296,34 +327,20 @@ function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?
     'if ($created.ReturnValue -ne 0) { throw "Win32_Process.Create failed: $($created.ReturnValue)" }',
     '$created.ProcessId',
   ].join('; ');
-  const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', createCommand], {
-    encoding: 'utf-8',
-    timeout: 10000,
-    windowsHide: true,
-  });
-  const pid = Number(String(result.stdout || '').trim().split(/\r?\n/).pop() || 0);
-  if (!Number.isFinite(pid) || pid <= 0 || result.status !== 0 || result.error) {
+  const result = await runPowerShell(`${createCommand}; Start-Sleep -Milliseconds 350; if (Get-Process -Id $created.ProcessId -ErrorAction SilentlyContinue) { Write-Output $created.ProcessId } else { throw 'Overlay exited during startup.' }`, 10000);
+  const pid = Number(String(result.output || '').trim().split(/\r?\n/).pop() || 0);
+  if (!Number.isFinite(pid) || pid <= 0 || !result.ok) {
     try { fs.unlinkSync(scriptPath); } catch {}
-    return { ok: false, action: 'takeover_start', error: result.error?.message || result.stderr || result.stdout || `overlay start exited ${result.status}` };
+    return { ok: false, action: 'takeover_start', error: result.output || 'Overlay failed to start.' };
   }
   takeoverOverlayPid = pid;
-  const aliveCheck = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `Start-Sleep -Milliseconds 500; if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { 'alive' } else { 'dead' }`], {
-    encoding: 'utf-8',
-    timeout: 3000,
-    windowsHide: true,
-  });
-  if (!String(aliveCheck.stdout || '').includes('alive')) {
-    takeoverOverlayPid = null;
-    try { fs.unlinkSync(scriptPath); } catch {}
-    return { ok: false, action: 'takeover_start', error: `overlay process exited during startup${aliveCheck.stderr ? `: ${aliveCheck.stderr}` : ''}`, overlay: { pid, owner_pid: ownerPid } };
-  }
   const lifecycle = ownerPid > 0 ? 'owner-process-bound' : 'duration-bound';
   return { ok: true, action: 'takeover_start', takeover: true, overlay: { pid, owner_pid: ownerPid, duration_ms: lifetime, indicator: 'desktop-edge-dynamic-gradient', mode: 'single-click-through-virtual-screen-overlay', lifecycle, width_px: width, speed_s: speedSeconds, colors } };
 }
 
-function pulseTakeoverOverlay(): void {
+async function pulseTakeoverOverlay(): Promise<void> {
   if (process.platform !== 'win32') return;
-  if (!takeoverOverlayPid) startTakeoverOverlay(2500, lastTakeoverOverlayStyle);
+  if (!takeoverOverlayPid) await startTakeoverOverlay(2500, lastTakeoverOverlayStyle);
 }
 
 function timestampName(): string {
@@ -342,68 +359,90 @@ function parseJsonArray<T>(text: string): T[] {
   return [];
 }
 
-function observeUiAutomation(maxChars: number): { elements: ObservedElement[]; error?: string } {
+function observationKey(workspacePath: string, ownerId?: string): string {
+  return `${path.resolve(workspacePath || process.cwd()).toLowerCase()}::${String(ownerId || 'direct')}`;
+}
+
+function sceneGeneration(apps: AppWindowInfo[], elements: ObservedElement[]): string {
+  const seed = [
+    ...apps.slice(0, 32).map(app => `${app.handle}|${app.title}|${app.bbox.x},${app.bbox.y},${app.bbox.width},${app.bbox.height}`),
+    ...elements.slice(0, 80).map(el => `${el.process_id}|${el.control_type}|${el.name}|${el.bbox.x},${el.bbox.y},${el.bbox.width},${el.bbox.height}`),
+  ].join('\n');
+  return crypto.createHash('sha256').update(seed).digest('hex').slice(0, 16);
+}
+
+async function observeUiAutomation(maxChars: number, rootHandle?: string): Promise<{ elements: ObservedElement[]; visited: number; error?: string; elapsedMs: number }> {
   const limit = Math.min(Math.max(Math.floor(maxChars || 30000), 1000), 200000);
+  const handleHex = String(rootHandle || '').trim().replace(/^0x/i, '').replace(/[^0-9a-f]/gi, '');
   const script = [
-    'Add-Type -AssemblyName UIAutomationClient',
-    'Add-Type -AssemblyName UIAutomationTypes',
-    '$root = [System.Windows.Automation.AutomationElement]::RootElement',
-    '$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker',
-    '$queue = New-Object System.Collections.Queue',
-    '$queue.Enqueue($root)',
+    handleHex
+      ? `$nativeHandle = [System.IntPtr]::new([Convert]::ToInt64(${psQuote(handleHex)}, 16)); $root = [System.Windows.Automation.AutomationElement]::FromHandle($nativeHandle)`
+      : '$root = [System.Windows.Automation.AutomationElement]::RootElement',
+    'if ($null -eq $root) { throw "UI Automation root is unavailable." }',
+    '$cache = New-Object System.Windows.Automation.CacheRequest',
+    '$cache.TreeScope = [System.Windows.Automation.TreeScope]::Element',
+    '$cache.TreeFilter = [System.Windows.Automation.Automation]::ControlViewCondition',
+    '@([System.Windows.Automation.AutomationElement]::NameProperty, [System.Windows.Automation.AutomationElement]::AutomationIdProperty, [System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.AutomationElement]::ClassNameProperty, [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [System.Windows.Automation.AutomationElement]::BoundingRectangleProperty, [System.Windows.Automation.AutomationElement]::IsOffscreenProperty) | ForEach-Object { $cache.Add($_) }',
+    '$cache.Push()',
+    'try { $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) } finally { $cache.Pop() }',
     '$items = New-Object System.Collections.Generic.List[object]',
-    '$visited = 0',
-    'while ($queue.Count -gt 0 -and $items.Count -lt 160 -and $visited -lt 1200) {',
-    '  $el = $queue.Dequeue(); $visited++',
+    '$visited = [Math]::Min(1200, $all.Count)',
+    '$limit = [Math]::Min($visited, 240)',
+    'for ($index = 0; $index -lt $limit -and $items.Count -lt 160; $index++) {',
+    '  $el = $all.Item($index)',
     '  try {',
-    '    if ($el -ne $root) {',
-    '      $r = $el.Current.BoundingRectangle',
-    '      $name = [string]$el.Current.Name',
-    '      $auto = [string]$el.Current.AutomationId',
-    '      if (($name -or $auto) -and $r.Width -gt 1 -and $r.Height -gt 1 -and -not $el.Current.IsOffscreen) {',
+    '      $r = $el.Cached.BoundingRectangle',
+    '      $name = [string]$el.Cached.Name',
+    '      $auto = [string]$el.Cached.AutomationId',
+    '      if (($name -or $auto) -and $r.Width -gt 1 -and $r.Height -gt 1 -and -not $el.Cached.IsOffscreen) {',
     '        $items.Add([pscustomobject]@{',
     '          name=$name;',
     '          automation_id=$auto;',
-    '          control_type=$el.Current.ControlType.ProgrammaticName.Replace("ControlType.","");',
-    '          class_name=[string]$el.Current.ClassName;',
-    '          process_id=[int]$el.Current.ProcessId;',
+    '          control_type=$el.Cached.ControlType.ProgrammaticName.Replace("ControlType.","");',
+    '          class_name=[string]$el.Cached.ClassName;',
+    '          process_id=[int]$el.Cached.ProcessId;',
     '          bbox=[pscustomobject]@{ x=[int]$r.X; y=[int]$r.Y; width=[int]$r.Width; height=[int]$r.Height };',
     '          center=[pscustomobject]@{ x=[int]($r.X + ($r.Width / 2)); y=[int]($r.Y + ($r.Height / 2)) }',
     '        }) | Out-Null',
     '      }',
-    '    }',
-    '    $child = $walker.GetFirstChild($el)',
-    '    while ($child -ne $null) { $queue.Enqueue($child); $child = $walker.GetNextSibling($child) }',
     '  } catch {}',
     '}',
-    '$json = $items | ConvertTo-Json -Depth 5 -Compress',
-    `if ($json.Length -gt ${limit}) { $json = $json.Substring(0, ${limit}) }`,
+    `$maxChars = ${limit}`,
+    'while ($items.Count -gt 0) {',
+    '  $payload = [pscustomobject]@{ visited=$visited; items=$items.ToArray() }',
+    '  $json = $payload | ConvertTo-Json -Depth 5 -Compress',
+    '  if ($json.Length -le $maxChars) { break }',
+    '  $items.RemoveAt($items.Count - 1)',
+    '}',
     'Write-Output $json',
   ].join('\r\n');
-  const result = runPowerShell(script, 30000);
-  if (!result.ok) return { elements: [], error: result.output };
-  return { elements: parseJsonArray<ObservedElement>(result.output) };
+  const result = await runPowerShell(script, 30000, 'uia');
+  if (!result.ok) return { elements: [], visited: 0, error: result.output, elapsedMs: result.elapsedMs };
+  try {
+    const parsed = JSON.parse(result.output) as { visited?: number; items?: ObservedElement[] };
+    return { elements: Array.isArray(parsed.items) ? parsed.items : [], visited: Number(parsed.visited || 0), elapsedMs: result.elapsedMs };
+  } catch {
+    return { elements: parseJsonArray<ObservedElement>(result.output), visited: 0, error: 'UI Automation returned invalid JSON.', elapsedMs: result.elapsedMs };
+  }
 }
 
-function observeAppWindows(maxChars: number): { apps: AppWindowInfo[]; error?: string } {
+async function observeAppWindows(maxChars: number): Promise<{ apps: AppWindowInfo[]; error?: string; elapsedMs: number }> {
   const limit = Math.min(Math.max(Math.floor(maxChars || 30000), 1000), 200000);
   const script = [
-    'Add-Type -AssemblyName UIAutomationClient',
-    'Add-Type -AssemblyName UIAutomationTypes',
     '$root = [System.Windows.Automation.AutomationElement]::RootElement',
     '$children = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)',
     '$items = New-Object System.Collections.Generic.List[object]',
     'foreach ($el in $children) {',
     '  try {',
     '    $r = $el.Current.BoundingRectangle',
-    '    $pid = [int]$el.Current.ProcessId',
-    '    $proc = ""; try { $proc = (Get-Process -Id $pid -ErrorAction SilentlyContinue).ProcessName } catch {}',
+    '    $processId = [int]$el.Current.ProcessId',
+    '    $proc = ""; try { $proc = (Get-Process -Id $processId -ErrorAction SilentlyContinue).ProcessName } catch {}',
     '    $title = [string]$el.Current.Name',
-    '    if ($pid -gt 0 -and ($title -or $proc) -and $r.Width -gt 40 -and $r.Height -gt 40 -and -not $el.Current.IsOffscreen) {',
+    '    if ($processId -gt 0 -and ($title -or $proc) -and $r.Width -gt 40 -and $r.Height -gt 40 -and -not $el.Current.IsOffscreen) {',
     '      $items.Add([pscustomobject]@{',
     '        handle=("0x{0:X}" -f [int64]$el.Current.NativeWindowHandle);',
     '        title=$title;',
-    '        process_id=$pid;',
+    '        process_id=$processId;',
     '        process_name=$proc;',
     '        class_name=[string]$el.Current.ClassName;',
     '        bbox=[pscustomobject]@{ x=[int]$r.X; y=[int]$r.Y; width=[int]$r.Width; height=[int]$r.Height };',
@@ -412,13 +451,55 @@ function observeAppWindows(maxChars: number): { apps: AppWindowInfo[]; error?: s
     '    }',
     '  } catch {}',
     '}',
-    '$json = $items | ConvertTo-Json -Depth 5 -Compress',
-    `if ($json.Length -gt ${limit}) { $json = $json.Substring(0, ${limit}) }`,
+    `$maxChars = ${limit}`,
+    '$json = ConvertTo-Json -InputObject @($items.ToArray()) -Depth 5 -Compress',
+    'while ($items.Count -gt 0 -and $json.Length -gt $maxChars) {',
+    '  $items.RemoveAt($items.Count - 1)',
+    '  $json = ConvertTo-Json -InputObject @($items.ToArray()) -Depth 5 -Compress',
+    '}',
     'Write-Output $json',
   ].join('\r\n');
-  const result = runPowerShell(script, 30000);
-  if (!result.ok) return { apps: [], error: result.output };
-  return { apps: parseJsonArray<AppWindowInfo>(result.output) };
+  const result = await runPowerShell(script, 30000, 'windows');
+  if (!result.ok) return { apps: [], error: result.output, elapsedMs: result.elapsedMs };
+  return { apps: parseJsonArray<AppWindowInfo>(result.output), elapsedMs: result.elapsedMs };
+}
+
+async function observeAppWindowByHandle(handle: string): Promise<{ app?: AppWindowInfo; error?: string; elapsedMs: number }> {
+  const handleHex = String(handle || '').trim().replace(/^0x/i, '').replace(/[^0-9a-f]/gi, '');
+  if (!handleHex) return { error: 'window_handle is invalid.', elapsedMs: 0 };
+  const script = [
+    `$nativeHandle = [System.IntPtr]::new([Convert]::ToInt64(${psQuote(handleHex)}, 16))`,
+    '$el = [System.Windows.Automation.AutomationElement]::FromHandle($nativeHandle)',
+    'if ($null -eq $el) { throw "Window handle is no longer available." }',
+    '$r = $el.Current.BoundingRectangle',
+    '$processId = [int]$el.Current.ProcessId',
+    '$proc = ""; try { $proc = (Get-Process -Id $processId -ErrorAction SilentlyContinue).ProcessName } catch {}',
+    '$title = [string]$el.Current.Name',
+    'if ($processId -le 0 -or $r.Width -le 40 -or $r.Height -le 40 -or $el.Current.IsOffscreen) { throw "Window handle does not reference a visible application window." }',
+    'Write-Output ([pscustomobject]@{',
+    '  handle=("0x{0:X}" -f [int64]$el.Current.NativeWindowHandle);',
+    '  title=$title;',
+    '  process_id=$processId;',
+    '  process_name=$proc;',
+    '  class_name=[string]$el.Current.ClassName;',
+    '  bbox=[pscustomobject]@{ x=[int]$r.X; y=[int]$r.Y; width=[int]$r.Width; height=[int]$r.Height };',
+    '  center=[pscustomobject]@{ x=[int]($r.X + ($r.Width / 2)); y=[int]($r.Y + ($r.Height / 2)) }',
+    '} | ConvertTo-Json -Depth 5 -Compress)',
+  ].join('\r\n');
+  const result = await runPowerShell(script, 5000, 'windows');
+  if (!result.ok) return { error: result.output, elapsedMs: result.elapsedMs };
+  try {
+    return { app: JSON.parse(result.output) as AppWindowInfo, elapsedMs: result.elapsedMs };
+  } catch {
+    return { error: 'Window handle lookup returned invalid JSON.', elapsedMs: result.elapsedMs };
+  }
+}
+
+async function foregroundWindowHandle(): Promise<{ handle: string; elapsedMs: number; error?: string }> {
+  const result = await runPowerShell('Write-Output ("0x{0:X}" -f [NewmarkComputerUseNative]::GetForegroundWindow().ToInt64())', 5000);
+  return result.ok
+    ? { handle: result.output.trim(), elapsedMs: result.elapsedMs }
+    : { handle: '', elapsedMs: result.elapsedMs, error: result.output };
 }
 
 function appMatches(app: AppWindowInfo, target: string, handle?: string): boolean {
@@ -429,40 +510,35 @@ function appMatches(app: AppWindowInfo, target: string, handle?: string): boolea
   return normalizeText(app.title).includes(q) || normalizeText(app.process_name).includes(q) || String(app.process_id) === q;
 }
 
-function selectAppWindow(target?: string, handle?: string): { app?: AppWindowInfo; apps: AppWindowInfo[]; error?: string } {
-  const observed = observeAppWindows(60000);
+async function selectAppWindow(target?: string, handle?: string): Promise<{ app?: AppWindowInfo; apps: AppWindowInfo[]; error?: string; elapsedMs: number }> {
+  if (String(handle || '').trim()) {
+    const direct = await observeAppWindowByHandle(String(handle));
+    if (direct.app) return { app: direct.app, apps: [direct.app], elapsedMs: direct.elapsedMs };
+  }
+  const observed = await observeAppWindows(60000);
   const apps = observed.apps;
-  if (!target && !handle) return { apps, error: 'app_target, window_handle, process name, title, or process id is required.' };
+  if (!target && !handle) return { apps, error: 'app_target, window_handle, process name, title, or process id is required.', elapsedMs: observed.elapsedMs };
   const app = apps.find(item => appMatches(item, String(target || ''), handle));
-  if (!app) return { apps, error: `No visible application window matched: ${target || handle}.` };
-  return { app, apps };
+  if (!app) return { apps, error: `No visible application window matched: ${target || handle}.`, elapsedMs: observed.elapsedMs };
+  return { app, apps, elapsedMs: observed.elapsedMs };
 }
 
-function cropScreenshot(workspacePath: string, allowEphemeralVisionImage: boolean, app: AppWindowInfo): Record<string, unknown> {
-  const outPath = path.join(tempScreenshotDir(), `app-${timestampName()}-${crypto.randomBytes(4).toString('hex')}.png`);
+async function cropScreenshot(workspacePath: string, ownerId: string, allowEphemeralVisionImage: boolean, app: AppWindowInfo, includeRawUi = false): Promise<Record<string, unknown>> {
+  const totalStarted = Date.now();
+  const outPath = path.join(tempScreenshotDir(), `app-${timestampName()}-${crypto.randomBytes(4).toString('hex')}.jpg`);
   const b = app.bbox;
-  const script = [
-    'Add-Type -AssemblyName System.Drawing',
+  const script = jpegCaptureScript(outPath, [
     `$x=${Math.floor(b.x)}; $y=${Math.floor(b.y)}; $w=${Math.max(1, Math.floor(b.width))}; $h=${Math.max(1, Math.floor(b.height))}`,
-    '$bmp = New-Object System.Drawing.Bitmap $w, $h',
-    '$graphics = [System.Drawing.Graphics]::FromImage($bmp)',
-    '$graphics.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size($w,$h)))',
-    `$bmp.Save(${psQuote(outPath)}, [System.Drawing.Imaging.ImageFormat]::Png)`,
-    '$graphics.Dispose()',
-    '$bmp.Dispose()',
-    `Write-Output (@{ ok=$true; left=$x; top=$y; width=$w; height=$h } | ConvertTo-Json -Compress)`,
-  ].join('\r\n');
-  const result = runPowerShell(script, 30000);
+  ]);
+  const [result, ui] = await Promise.all([
+    runPowerShell(script, 30000),
+    observeUiAutomation(30000, app.handle),
+  ]);
   if (!result.ok) return { ok: false, action: 'app_observe', error: result.output, app };
   let parsed: Record<string, unknown> = {};
   try { parsed = JSON.parse(result.output); } catch { parsed = { raw: result.output }; }
-  const ui = observeUiAutomation(30000);
-  const elements = ui.elements.filter(el => {
-    const cx = el.center?.x ?? el.bbox.x;
-    const cy = el.center?.y ?? el.bbox.y;
-    return cx >= b.x && cx <= b.x + b.width && cy >= b.y && cy <= b.y + b.height;
-  });
-  const objects = semanticObjects(elements, Number(parsed.width || b.width || 1), Number(parsed.height || b.height || 1), workspacePath);
+  const elements = ui.elements;
+  const objects = semanticObjects(elements, Number(parsed.width || b.width || 1), Number(parsed.height || b.height || 1), workspacePath, ownerId);
   for (const obj of objects) {
     obj.normalized_bbox = {
       x: Number(((obj.bbox.x - b.x) / Math.max(1, b.width)).toFixed(4)),
@@ -471,7 +547,9 @@ function cropScreenshot(workspacePath: string, allowEphemeralVisionImage: boolea
       height: Number((obj.bbox.height / Math.max(1, b.height)).toFixed(4)),
     };
   }
-  lastObservation = { workspacePath, objects, width: Number(parsed.width || b.width || 1), height: Number(parsed.height || b.height || 1), at: new Date().toISOString() };
+  const cacheKey = observationKey(workspacePath, ownerId);
+  const generation = sceneGeneration([app], elements);
+  observations.set(cacheKey, { workspacePath, objects, width: Number(parsed.width || b.width || 1), height: Number(parsed.height || b.height || 1), at: new Date().toISOString(), sceneGeneration: generation });
   const payload: Record<string, unknown> = {
     ok: true,
     action: 'app_observe',
@@ -483,32 +561,42 @@ function cropScreenshot(workspacePath: string, allowEphemeralVisionImage: boolea
       mode: 'native-application-screenshot-plus-windows-ui-automation',
       application_scope: 'single-visible-window',
       element_count: elements.length,
+      visited_count: ui.visited,
+      scene_generation: generation,
       scene_summary: buildSceneSummary(objects, Number(parsed.width || b.width || 1), Number(parsed.height || b.height || 1)),
-      elements,
-      objects,
+      objects: compactSemanticObjects(objects),
       warning: ui.error || undefined,
+    },
+    telemetry: {
+      capture_ms: result.elapsedMs,
+      uia_ms: ui.elapsedMs,
+      total_ms: Date.now() - totalStarted,
+      element_count: elements.length,
+      visited_count: ui.visited,
     },
     ...parsed,
   };
-  if (allowEphemeralVisionImage) {
+  if (includeRawUi) (payload.perception as Record<string, unknown>).elements = elements;
+  const imageAvailable = parsed.image_available === true && fs.existsSync(outPath);
+  if (allowEphemeralVisionImage && imageAvailable) {
     payload.vision_image_path = outPath;
   } else {
     try { fs.unlinkSync(outPath); } catch {}
+    if (allowEphemeralVisionImage && !imageAvailable) payload.screenshot_warning = 'Screenshot exceeded the 768 KiB transfer budget and was omitted; semantic UI data remains available.';
   }
   return payload;
 }
 
-function activateApp(app: AppWindowInfo, dryRun = false): Record<string, unknown> {
+async function activateApp(app: AppWindowInfo, dryRun = false): Promise<Record<string, unknown>> {
   if (dryRun) return { ok: true, action: 'app_activate', dry_run: true, app };
-  pulseTakeoverOverlay();
+  await pulseTakeoverOverlay();
   const script = [
-    'Add-Type -TypeDefinition "using System; using System.Runtime.InteropServices; public class NativeWindow { [DllImport(\\"user32.dll\\")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport(\\"user32.dll\\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); }"',
     `$h = [IntPtr]${Number.parseInt(String(app.handle || '0').replace(/^0x/i, ''), 16) || 0}`,
-    '[NativeWindow]::ShowWindow($h, 9) | Out-Null',
-    '[NativeWindow]::SetForegroundWindow($h) | Out-Null',
+    '[NewmarkComputerUseNative]::ShowWindow($h, 9) | Out-Null',
+    '[NewmarkComputerUseNative]::SetForegroundWindow($h) | Out-Null',
     `Write-Output (@{ ok=$true; action='app_activate'; handle=${psQuote(app.handle)} } | ConvertTo-Json -Compress)`,
   ].join('\r\n');
-  const result = runPowerShell(script, 10000);
+  const result = await runPowerShell(script, 10000);
   if (!result.ok) return { ok: false, action: 'app_activate', error: result.output, app };
   try {
     const parsed = JSON.parse(result.output);
@@ -589,13 +677,11 @@ function intersectionOverUnion(left: ObservedElement['bbox'], right: ObservedEle
   return union > 0 ? intersection / union : 0;
 }
 
-function reusableTargetId(element: ObservedElement, role: string, key: string, workspacePath: string): string {
-  const previous = lastObservation?.workspacePath === workspacePath ? lastObservation.objects : [];
+function reusableTargetId(element: ObservedElement, role: string, key: string, previousByKey: Map<string, SemanticObject>, previousByLabel: Map<string, SemanticObject[]>): string {
+  const direct = previousByKey.get(key);
+  if (direct) return direct.target_id;
   const label = normalizeText(element.name || element.automation_id);
-  for (const candidate of previous) {
-    if (candidate.stable_key === key) return candidate.target_id;
-    if (candidate.role !== role) continue;
-    if (normalizeText(candidate.name || candidate.automation_id) !== label) continue;
+  for (const candidate of previousByLabel.get(`${role}|${label}`) || []) {
     if (intersectionOverUnion(candidate.bbox, element.bbox) >= 0.55) return candidate.target_id;
   }
   return `ui-${key}`;
@@ -621,16 +707,25 @@ function objectPriority(element: ObservedElement, role: string, risk: 'low' | 'm
   return score;
 }
 
-function semanticObjects(elements: ObservedElement[], screenWidth: number, screenHeight: number, workspacePath: string): SemanticObject[] {
+function semanticObjects(elements: ObservedElement[], screenWidth: number, screenHeight: number, workspacePath: string, ownerId: string): SemanticObject[] {
   const width = Math.max(1, screenWidth || 1);
   const height = Math.max(1, screenHeight || 1);
+  const previous = observations.get(observationKey(workspacePath, ownerId))?.objects || [];
+  const previousByKey = new Map(previous.map(candidate => [candidate.stable_key, candidate]));
+  const previousByLabel = new Map<string, SemanticObject[]>();
+  for (const candidate of previous) {
+    const labelKey = `${candidate.role}|${normalizeText(candidate.name || candidate.automation_id)}`;
+    const list = previousByLabel.get(labelKey) || [];
+    list.push(candidate);
+    previousByLabel.set(labelKey, list);
+  }
   return elements.slice(0, 120).map((element, index) => {
     const role = semanticRole(element.control_type);
     const risk = objectRisk(element);
     const key = stableKey(element, role);
     return {
       ...element,
-      target_id: reusableTargetId(element, role, key, workspacePath),
+      target_id: reusableTargetId(element, role, key, previousByKey, previousByLabel),
       stable_key: key,
       role,
       label: element.name || element.automation_id || `${role}-${index + 1}`,
@@ -674,38 +769,58 @@ function buildSceneSummary(objects: SemanticObject[], screenWidth: number, scree
   };
 }
 
-function resolveTarget(targetId: string, workspacePath: string): { x: number; y: number; target?: SemanticObject; error?: string } | null {
+function compactSemanticObjects(objects: SemanticObject[], limit = 48): Record<string, unknown>[] {
+  return objects
+    .slice()
+    .sort((left, right) => right.priority - left.priority || left.label.localeCompare(right.label))
+    .slice(0, limit)
+    .map(object => ({
+      target_id: object.target_id,
+      label: object.label,
+      role: object.role,
+      group: object.group,
+      risk: object.risk,
+      priority: object.priority,
+      allowed_actions: object.allowed_actions,
+      bbox: object.bbox,
+      center: object.center,
+      normalized_bbox: object.normalized_bbox,
+      process_id: object.process_id,
+      automation_id: object.automation_id || undefined,
+    }));
+}
+
+function resolveTarget(targetId: string, workspacePath: string, ownerId: string): { x: number; y: number; target?: SemanticObject; error?: string } | null {
   const id = String(targetId || '').trim();
   if (!id) return null;
-  if (!lastObservation || lastObservation.workspacePath !== workspacePath) return { x: 0, y: 0, error: `No observation cache for target_id=${id}. Call computer_use observe first.` };
-  const target = lastObservation.objects.find(obj => obj.target_id === id);
+  const observation = observations.get(observationKey(workspacePath, ownerId));
+  if (!observation) return { x: 0, y: 0, error: `No observation cache for target_id=${id}. Call computer_use observe first.` };
+  const target = observation.objects.find(obj => obj.target_id === id);
   if (!target) return { x: 0, y: 0, error: `target_id not found in latest observation: ${id}.` };
   return { x: target.center.x, y: target.center.y, target };
 }
 
-function screenshot(workspacePath: string, allowEphemeralVisionImage: boolean): Record<string, unknown> {
-  const outPath = path.join(tempScreenshotDir(), `observe-${timestampName()}-${crypto.randomBytes(4).toString('hex')}.png`);
-  const script = [
-    'Add-Type -AssemblyName System.Windows.Forms',
-    'Add-Type -AssemblyName System.Drawing',
+async function screenshot(workspacePath: string, ownerId: string, allowEphemeralVisionImage: boolean, includeRawUi = false): Promise<Record<string, unknown>> {
+  const totalStarted = Date.now();
+  const outPath = path.join(tempScreenshotDir(), `observe-${timestampName()}-${crypto.randomBytes(4).toString('hex')}.jpg`);
+  const script = jpegCaptureScript(outPath, [
     '$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen',
-    '$bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height',
-    '$graphics = [System.Drawing.Graphics]::FromImage($bmp)',
-    '$graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bounds.Size)',
-    `$bmp.Save(${psQuote(outPath)}, [System.Drawing.Imaging.ImageFormat]::Png)`,
-    '$graphics.Dispose()',
-    '$bmp.Dispose()',
-    'Write-Output (@{ ok=$true; left=$bounds.Left; top=$bounds.Top; width=$bounds.Width; height=$bounds.Height } | ConvertTo-Json -Compress)',
-  ].join('\r\n');
-  const result = runPowerShell(script, 30000);
+    '$x=$bounds.Left; $y=$bounds.Top; $w=$bounds.Width; $h=$bounds.Height',
+  ]);
+  const foreground = await foregroundWindowHandle();
+  const [result, ui, apps] = await Promise.all([
+    runPowerShell(script, 30000),
+    observeUiAutomation(30000, foreground.handle),
+    observeAppWindows(30000),
+  ]);
   if (!result.ok) return { ok: false, action: 'observe', error: result.output };
   let parsed: Record<string, unknown> = {};
   try { parsed = JSON.parse(result.output); } catch { parsed = { raw: result.output }; }
-  const ui = observeUiAutomation(30000);
   const screenWidth = Number(parsed.width || 1);
   const screenHeight = Number(parsed.height || 1);
-  const objects = semanticObjects(ui.elements, screenWidth, screenHeight, workspacePath);
-  lastObservation = { workspacePath, objects, width: screenWidth, height: screenHeight, at: new Date().toISOString() };
+  const objects = semanticObjects(ui.elements, screenWidth, screenHeight, workspacePath, ownerId);
+  const generation = sceneGeneration(apps.apps, ui.elements);
+  observations.set(observationKey(workspacePath, ownerId), { workspacePath, objects, width: screenWidth, height: screenHeight, at: new Date().toISOString(), sceneGeneration: generation });
   const payload: Record<string, unknown> = {
     ok: true,
     action: 'observe',
@@ -719,31 +834,44 @@ function screenshot(workspacePath: string, allowEphemeralVisionImage: boolean): 
         fallback_without_vision: 'Use the UI Automation element tree, bbox, center coordinates, and semantic target IDs only; no screenshot file path is retained or exposed.',
       },
       element_count: ui.elements.length,
+      visited_count: ui.visited,
+      scene_generation: generation,
       scene_summary: buildSceneSummary(objects, screenWidth, screenHeight),
-      elements: ui.elements,
-      objects,
+      objects: compactSemanticObjects(objects),
       object_usage: 'Prefer target_id from scene_summary.high_priority_objects or objects for click/move/scroll when available; it resolves to the latest observed center coordinate and keeps actions tied to a semantic UI object.',
-      warning: ui.error || undefined,
+      warning: foreground.error || ui.error || apps.error || undefined,
       note: 'Inspired by capture-parse-decide-act and MCP-style Computer Control agents: screenshot capture plus native Windows UI Automation text/control bounding boxes, semantic target objects, stable target IDs, high-priority object summaries, normalized bboxes, allowed actions, and risk hints. It does not copy third-party code.',
+    },
+    telemetry: {
+      capture_ms: result.elapsedMs,
+      uia_ms: ui.elapsedMs,
+      app_list_ms: apps.elapsedMs,
+      foreground_ms: foreground.elapsedMs,
+      total_ms: Date.now() - totalStarted,
+      element_count: ui.elements.length,
+      visited_count: ui.visited,
     },
     ...parsed,
   };
-  if (allowEphemeralVisionImage) {
+  if (includeRawUi) (payload.perception as Record<string, unknown>).elements = ui.elements;
+  const imageAvailable = parsed.image_available === true && fs.existsSync(outPath);
+  if (allowEphemeralVisionImage && imageAvailable) {
     payload.vision_image_path = outPath;
   } else {
     try { fs.unlinkSync(outPath); } catch {}
+    if (allowEphemeralVisionImage && !imageAvailable) payload.screenshot_warning = 'Screenshot exceeded the 768 KiB transfer budget and was omitted; semantic UI data remains available.';
   }
   return payload;
 }
 
-function wait(durationMs: number): Record<string, unknown> {
+async function wait(durationMs: number): Promise<Record<string, unknown>> {
   const ms = Math.min(Math.max(Math.floor(durationMs || 1000), 0), 60000);
   const start = Date.now();
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  await new Promise(resolve => setTimeout(resolve, ms));
   return { ok: true, action: 'wait', duration_ms: Date.now() - start };
 }
 
-function moveOrClick(action: string, x: number, y: number, button: string, dryRun: boolean, target?: SemanticObject): Record<string, unknown> {
+async function moveOrClick(action: string, x: number, y: number, button: string, dryRun: boolean, target?: SemanticObject): Promise<Record<string, unknown>> {
   const safeX = Math.floor(Number(x));
   const safeY = Math.floor(Number(y));
   if (!Number.isFinite(safeX) || !Number.isFinite(safeY)) return { ok: false, action, error: 'x and y are required pixel coordinates.' };
@@ -752,15 +880,14 @@ function moveOrClick(action: string, x: number, y: number, button: string, dryRu
   const down = isRight ? '0x0008' : '0x0002';
   const up = isRight ? '0x0010' : '0x0004';
   const clickScript = action === 'click'
-    ? `[NativeMouse]::mouse_event(${down},0,0,0,0); Start-Sleep -Milliseconds 40; [NativeMouse]::mouse_event(${up},0,0,0,0);`
+    ? `[NewmarkComputerUseNative]::mouse_event(${down},0,0,0,0); Start-Sleep -Milliseconds 40; [NewmarkComputerUseNative]::mouse_event(${up},0,0,0,0);`
     : '';
   const script = [
-    'Add-Type -TypeDefinition "using System; using System.Runtime.InteropServices; public class NativeMouse { [DllImport(\\"user32.dll\\")] public static extern bool SetCursorPos(int X, int Y); [DllImport(\\"user32.dll\\")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo); }"',
-    `[NativeMouse]::SetCursorPos(${safeX}, ${safeY}) | Out-Null`,
+    `[NewmarkComputerUseNative]::SetCursorPos(${safeX}, ${safeY}) | Out-Null`,
     clickScript,
     `Write-Output (@{ ok=$true; action=${psQuote(action)}; x=${safeX}; y=${safeY}; button=${psQuote(button || 'left')} } | ConvertTo-Json -Compress)`,
   ].filter(Boolean).join('\r\n');
-  const result = runPowerShell(script, 15000);
+  const result = await runPowerShell(script, 15000);
   if (!result.ok) return { ok: false, action, error: result.output };
   try {
     const parsed = JSON.parse(result.output);
@@ -769,7 +896,7 @@ function moveOrClick(action: string, x: number, y: number, button: string, dryRu
   } catch { return { ok: true, action, raw: result.output }; }
 }
 
-function scrollAt(x: number, y: number, scrollX: number, scrollY: number, dryRun: boolean, target?: SemanticObject): Record<string, unknown> {
+async function scrollAt(x: number, y: number, scrollX: number, scrollY: number, dryRun: boolean, target?: SemanticObject): Promise<Record<string, unknown>> {
   const safeX = Math.floor(Number(x));
   const safeY = Math.floor(Number(y));
   const deltaY = Math.floor(Number(scrollY || 0));
@@ -780,13 +907,12 @@ function scrollAt(x: number, y: number, scrollX: number, scrollY: number, dryRun
   const wheel = -deltaY;
   const hwheel = deltaX;
   const script = [
-    'Add-Type -TypeDefinition "using System; using System.Runtime.InteropServices; public class NativeMouse { [DllImport(\\"user32.dll\\")] public static extern bool SetCursorPos(int X, int Y); [DllImport(\\"user32.dll\\")] public static extern void mouse_event(uint dwFlags, int dx, int dy, int dwData, UIntPtr dwExtraInfo); }"',
-    `[NativeMouse]::SetCursorPos(${safeX}, ${safeY}) | Out-Null`,
-    wheel ? `[NativeMouse]::mouse_event(0x0800,0,0,${wheel},0);` : '',
-    hwheel ? `[NativeMouse]::mouse_event(0x1000,0,0,${hwheel},0);` : '',
+    `[NewmarkComputerUseNative]::SetCursorPos(${safeX}, ${safeY}) | Out-Null`,
+    wheel ? `[NewmarkComputerUseNative]::mouse_event(0x0800,0,0,${wheel},0);` : '',
+    hwheel ? `[NewmarkComputerUseNative]::mouse_event(0x1000,0,0,${hwheel},0);` : '',
     `Write-Output (@{ ok=$true; action='scroll'; x=${safeX}; y=${safeY}; scroll_x=${deltaX}; scroll_y=${deltaY} } | ConvertTo-Json -Compress)`,
   ].filter(Boolean).join('\r\n');
-  const result = runPowerShell(script, 15000);
+  const result = await runPowerShell(script, 15000);
   if (!result.ok) return { ok: false, action: 'scroll', error: result.output };
   try {
     const parsed = JSON.parse(result.output);
@@ -795,133 +921,218 @@ function scrollAt(x: number, y: number, scrollX: number, scrollY: number, dryRun
   } catch { return { ok: true, action: 'scroll', raw: result.output }; }
 }
 
-function typeText(text: string, dryRun: boolean): Record<string, unknown> {
+async function typeText(text: string, dryRun: boolean): Promise<Record<string, unknown>> {
   const value = String(text || '');
   if (!value) return { ok: false, action: 'type', error: 'text is required.' };
   if (dryRun) return { ok: true, action: 'type', dry_run: true, chars: value.length };
   const script = [
-    'Add-Type -AssemblyName System.Windows.Forms',
     `[System.Windows.Forms.SendKeys]::SendWait(${psQuote(value)})`,
     `Write-Output (@{ ok=$true; action='type'; chars=${value.length} } | ConvertTo-Json -Compress)`,
   ].join('\r\n');
-  const result = runPowerShell(script, 15000);
+  const result = await runPowerShell(script, 15000);
   if (!result.ok) return { ok: false, action: 'type', error: result.output };
   try { return JSON.parse(result.output); } catch { return { ok: true, action: 'type', raw: result.output }; }
 }
 
-function sendKey(key: string, dryRun: boolean): Record<string, unknown> {
+async function sendKey(key: string, dryRun: boolean): Promise<Record<string, unknown>> {
   const value = String(key || '').trim();
   if (!value) return { ok: false, action: 'key', error: 'key is required.' };
   if (dryRun) return { ok: true, action: 'key', dry_run: true, key: value };
   const script = [
-    'Add-Type -AssemblyName System.Windows.Forms',
     `[System.Windows.Forms.SendKeys]::SendWait(${psQuote(value)})`,
     `Write-Output (@{ ok=$true; action='key'; key=${psQuote(value)} } | ConvertTo-Json -Compress)`,
   ].join('\r\n');
-  const result = runPowerShell(script, 15000);
+  const result = await runPowerShell(script, 15000);
   if (!result.ok) return { ok: false, action: 'key', error: result.output };
   try { return JSON.parse(result.output); } catch { return { ok: true, action: 'key', raw: result.output }; }
 }
 
-export function runComputerUse(options: ComputerUseOptions): string {
+async function foregroundSceneGeneration(): Promise<{ generation: string; elapsedMs: number; warning?: string }> {
+  const handleResult = await foregroundWindowHandle();
+  const handle = handleResult.handle;
+  const [apps, ui] = await Promise.all([
+    observeAppWindows(30000),
+    observeUiAutomation(30000, handle),
+  ]);
+  return {
+    generation: sceneGeneration(apps.apps, ui.elements),
+    elapsedMs: Math.max(handleResult.elapsedMs, apps.elapsedMs, ui.elapsedMs),
+    warning: handleResult.error || apps.error || ui.error,
+  };
+}
+
+async function executeSequence(options: ComputerUseOptions, ownerId: string): Promise<Record<string, unknown>> {
+  const steps = Array.isArray(options.steps) ? options.steps.slice(0, 3) : [];
+  if (!steps.length) return { ok: false, action: 'sequence', error: 'steps must contain one to three low-risk actions.' };
+  const cache = observations.get(observationKey(options.workspacePath, ownerId));
+  if (!cache) return { ok: false, action: 'sequence', error: 'Call observe or app_observe before sequence.' };
+  let expectedGeneration = cache.sceneGeneration;
+  const completed: Record<string, unknown>[] = [];
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index];
+    const action = String(step.action || '').toLowerCase();
+    if (!['move', 'click', 'scroll', 'wait', 'app_activate'].includes(action)) {
+      return { ok: false, action: 'sequence', completed, stopped_at: index, requires_observe: true, error: `Unsupported sequence action: ${action}` };
+    }
+    let stepResult: Record<string, unknown>;
+    if (action === 'move' || action === 'click') {
+      const target = resolveTarget(String(step.targetId || ''), options.workspacePath, ownerId);
+      if (target?.error) return { ok: false, action: 'sequence', completed, stopped_at: index, requires_observe: true, error: target.error };
+      if (target?.target?.risk === 'medium') return { ok: false, action: 'sequence', completed, stopped_at: index, requires_observe: true, error: 'Medium-risk targets require a single action followed by observe.' };
+      if (!options.dryRun) await pulseTakeoverOverlay();
+      stepResult = await moveOrClick(action, target ? target.x : Number(step.x), target ? target.y : Number(step.y), String(step.button || 'left'), !!options.dryRun, target?.target);
+    } else if (action === 'scroll') {
+      const target = resolveTarget(String(step.targetId || ''), options.workspacePath, ownerId);
+      if (target?.error) return { ok: false, action: 'sequence', completed, stopped_at: index, requires_observe: true, error: target.error };
+      if (!options.dryRun) await pulseTakeoverOverlay();
+      stepResult = await scrollAt(target ? target.x : Number(step.x), target ? target.y : Number(step.y), Number(step.scrollX || 0), Number(step.scrollY || 0), !!options.dryRun, target?.target);
+    } else if (action === 'wait') {
+      stepResult = await wait(Number(step.durationMs || 250));
+    } else {
+      const selected = await selectAppWindow(step.appTarget, step.windowHandle);
+      if (!selected.app) return { ok: false, action: 'sequence', completed, stopped_at: index, requires_observe: true, error: selected.error };
+      stepResult = await activateApp(selected.app, !!options.dryRun);
+    }
+    completed.push(stepResult);
+    if (stepResult.ok !== true) return { ok: false, action: 'sequence', completed, stopped_at: index, requires_observe: true };
+    if (index >= steps.length - 1 || options.dryRun) continue;
+    const scene = await foregroundSceneGeneration();
+    if (scene.generation !== expectedGeneration) {
+      return {
+        ok: true,
+        action: 'sequence',
+        completed,
+        stopped_at: index + 1,
+        requires_observe: true,
+        stop_reason: 'focus-window-menu-dialog-or-scene-changed',
+        previous_scene_generation: expectedGeneration,
+        current_scene_generation: scene.generation,
+        warning: scene.warning,
+      };
+    }
+    expectedGeneration = scene.generation;
+  }
+  return { ok: true, action: 'sequence', completed, requires_observe: false, scene_generation: expectedGeneration };
+}
+
+function stringifyComputerUseResult(result: Record<string, unknown>): string {
+  let output = JSON.stringify(result, null, 2);
+  if (Buffer.byteLength(output, 'utf8') <= 32768) return output;
+  const perception = result.perception as Record<string, unknown> | undefined;
+  if (perception) {
+    delete perception.elements;
+    if (Array.isArray(perception.objects)) perception.objects = perception.objects.slice(0, 32);
+    perception.result_truncated = true;
+  }
+  if (Array.isArray(result.applications)) result.applications = result.applications.slice(0, 20);
+  output = JSON.stringify(result, null, 2);
+  return Buffer.byteLength(output, 'utf8') <= 32768
+    ? output
+    : JSON.stringify({ ok: result.ok === true, action: result.action, error: result.error, warning: 'Computer Use result exceeded 32 KiB and was compacted.', telemetry: result.telemetry }, null, 2);
+}
+
+export async function runComputerUse(options: ComputerUseOptions): Promise<string> {
   const action = String(options.action || 'observe').toLowerCase();
+  const ownerId = String(options.ownerId || 'direct');
   let result: Record<string, unknown>;
   if (process.platform !== 'win32') {
     result = { ok: false, action, error: 'computer_use currently supports native desktop control on Windows only.' };
   } else if (action === 'takeover_start') {
     const durationMs = Number(options.durationMs || options.duration_ms || 0);
-    result = startTakeoverOverlay(durationMs, {
+    result = await startTakeoverOverlay(durationMs, {
       colors: options.gradientColors || options.gradient_colors,
       speed: options.gradientSpeed ?? options.gradient_speed,
       width: options.gradientWidth ?? options.gradient_width,
       ownerPid: options.invocation === 'cli' && durationMs > 0 ? 0 : process.pid,
     });
   } else if (action === 'takeover_stop') {
-    stopTakeoverOverlay();
+    await stopTakeoverOverlay();
     result = { ok: true, action: 'takeover_stop', takeover: false };
   } else if (action === 'observe') {
-    result = screenshot(options.workspacePath, !!options.allowEphemeralVisionImage);
+    result = await screenshot(options.workspacePath, ownerId, !!options.allowEphemeralVisionImage, !!options.includeRawUi);
   } else if (action === 'app_list') {
-    const apps = observeAppWindows(Number(options.maxChars || 60000));
-    result = { ok: true, action, applications: apps.apps, count: apps.apps.length, warning: apps.error || undefined };
+    const apps = await observeAppWindows(Number(options.maxChars || 60000));
+    result = { ok: true, action, applications: apps.apps, count: apps.apps.length, warning: apps.error || undefined, telemetry: { total_ms: apps.elapsedMs } };
   } else if (action === 'app_observe') {
-    const selected = selectAppWindow(options.appTarget, options.windowHandle);
+    const selected = await selectAppWindow(options.appTarget, options.windowHandle);
     result = selected.app
-      ? cropScreenshot(options.workspacePath, !!options.allowEphemeralVisionImage, selected.app)
+      ? await cropScreenshot(options.workspacePath, ownerId, !!options.allowEphemeralVisionImage, selected.app, !!options.includeRawUi)
       : { ok: false, action, error: selected.error, applications: selected.apps.slice(0, 20) };
   } else if (action === 'app_activate') {
-    const selected = selectAppWindow(options.appTarget, options.windowHandle);
-    result = selected.app ? activateApp(selected.app, !!options.dryRun) : { ok: false, action, error: selected.error, applications: selected.apps.slice(0, 20) };
+    const selected = await selectAppWindow(options.appTarget, options.windowHandle);
+    result = selected.app ? await activateApp(selected.app, !!options.dryRun) : { ok: false, action, error: selected.error, applications: selected.apps.slice(0, 20) };
   } else if (action === 'wait') {
-    result = wait(Number(options.durationMs || 1000));
+    result = await wait(Number(options.durationMs || 1000));
+  } else if (action === 'sequence') {
+    result = await executeSequence(options, ownerId);
   } else if (action === 'move' || action === 'click') {
-    const target = resolveTarget(String(options.targetId || ''), options.workspacePath);
+    const target = resolveTarget(String(options.targetId || ''), options.workspacePath, ownerId);
     if (target?.error) {
       result = { ok: false, action, error: target.error };
     } else {
-      if (!options.dryRun) pulseTakeoverOverlay();
-      result = moveOrClick(action, target ? target.x : Number(options.x), target ? target.y : Number(options.y), String(options.button || 'left'), !!options.dryRun, target?.target);
+      if (!options.dryRun) await pulseTakeoverOverlay();
+      result = await moveOrClick(action, target ? target.x : Number(options.x), target ? target.y : Number(options.y), String(options.button || 'left'), !!options.dryRun, target?.target);
     }
   } else if (action === 'app_click') {
-    const selected = selectAppWindow(options.appTarget, options.windowHandle);
+    const selected = await selectAppWindow(options.appTarget, options.windowHandle);
     if (!selected.app) result = { ok: false, action, error: selected.error, applications: selected.apps.slice(0, 20) };
     else {
       const point = scopedPoint(selected.app, options.x, options.y);
       if (point.error) result = { ok: false, action, error: point.error, app: selected.app };
       else {
-        activateApp(selected.app, !!options.dryRun);
-        result = moveOrClick('click', point.x, point.y, String(options.button || 'left'), !!options.dryRun);
+        await activateApp(selected.app, !!options.dryRun);
+        result = await moveOrClick('click', point.x, point.y, String(options.button || 'left'), !!options.dryRun);
         result.action = action;
         result.app = selected.app;
       }
     }
   } else if (action === 'scroll') {
-    const target = resolveTarget(String(options.targetId || ''), options.workspacePath);
+    const target = resolveTarget(String(options.targetId || ''), options.workspacePath, ownerId);
     if (target?.error) {
       result = { ok: false, action, error: target.error };
     } else {
-      if (!options.dryRun) pulseTakeoverOverlay();
-      result = scrollAt(target ? target.x : Number(options.x), target ? target.y : Number(options.y), Number(options.scrollX || 0), Number(options.scrollY || 0), !!options.dryRun, target?.target);
+      if (!options.dryRun) await pulseTakeoverOverlay();
+      result = await scrollAt(target ? target.x : Number(options.x), target ? target.y : Number(options.y), Number(options.scrollX || 0), Number(options.scrollY || 0), !!options.dryRun, target?.target);
     }
   } else if (action === 'app_scroll') {
-    const selected = selectAppWindow(options.appTarget, options.windowHandle);
+    const selected = await selectAppWindow(options.appTarget, options.windowHandle);
     if (!selected.app) result = { ok: false, action, error: selected.error, applications: selected.apps.slice(0, 20) };
     else {
       const point = scopedPoint(selected.app, options.x, options.y);
       if (point.error) result = { ok: false, action, error: point.error, app: selected.app };
       else {
-        activateApp(selected.app, !!options.dryRun);
-        result = scrollAt(point.x, point.y, Number(options.scrollX || 0), Number(options.scrollY || 0), !!options.dryRun);
+        await activateApp(selected.app, !!options.dryRun);
+        result = await scrollAt(point.x, point.y, Number(options.scrollX || 0), Number(options.scrollY || 0), !!options.dryRun);
         result.action = action;
         result.app = selected.app;
       }
     }
   } else if (action === 'type') {
-    if (!options.dryRun) pulseTakeoverOverlay();
-    result = typeText(String(options.text || ''), !!options.dryRun);
+    if (!options.dryRun) await pulseTakeoverOverlay();
+    result = await typeText(String(options.text || ''), !!options.dryRun);
   } else if (action === 'app_type') {
-    const selected = selectAppWindow(options.appTarget, options.windowHandle);
+    const selected = await selectAppWindow(options.appTarget, options.windowHandle);
     if (!selected.app) result = { ok: false, action, error: selected.error, applications: selected.apps.slice(0, 20) };
     else {
-      activateApp(selected.app, !!options.dryRun);
-      result = typeText(String(options.text || ''), !!options.dryRun);
+      await activateApp(selected.app, !!options.dryRun);
+      result = await typeText(String(options.text || ''), !!options.dryRun);
       result.action = action;
       result.app = selected.app;
     }
   } else if (action === 'key') {
-    if (!options.dryRun) pulseTakeoverOverlay();
-    result = sendKey(String(options.key || ''), !!options.dryRun);
+    if (!options.dryRun) await pulseTakeoverOverlay();
+    result = await sendKey(String(options.key || ''), !!options.dryRun);
   } else if (action === 'app_key') {
-    const selected = selectAppWindow(options.appTarget, options.windowHandle);
+    const selected = await selectAppWindow(options.appTarget, options.windowHandle);
     if (!selected.app) result = { ok: false, action, error: selected.error, applications: selected.apps.slice(0, 20) };
     else {
-      activateApp(selected.app, !!options.dryRun);
-      result = sendKey(String(options.key || ''), !!options.dryRun);
+      await activateApp(selected.app, !!options.dryRun);
+      result = await sendKey(String(options.key || ''), !!options.dryRun);
       result.action = action;
       result.app = selected.app;
     }
   } else {
     result = { ok: false, action, error: `Unknown computer_use action: ${action}` };
   }
-  return JSON.stringify(result, null, 2);
+  return stringifyComputerUseResult(result);
 }

@@ -5,16 +5,17 @@ export interface NativeToolCatalogEntry {
   category: 'core' | 'browser' | 'desktop' | 'agent' | 'workflow' | 'memory' | 'automation' | 'git' | 'github' | 'web' | 'ssh';
   defaultEnabled: boolean;
   protected?: boolean;
+  availability?: 'required' | 'mode-scoped' | 'configurable';
 }
 
 export const NATIVE_TOOL_CATALOG: NativeToolCatalogEntry[] = [
   { name: 'bash', label: 'Shell command', description: 'Run one-shot PowerShell or bash commands inside the workspace.', category: 'core', defaultEnabled: true },
-  { name: 'pwd', label: 'Working directory', description: 'Report the active workspace path.', category: 'core', defaultEnabled: true, protected: true },
-  { name: 'read', label: 'Read file', description: 'Read workspace file contents.', category: 'core', defaultEnabled: true },
+  { name: 'pwd', label: 'Working directory', description: 'Report the active workspace path.', category: 'core', defaultEnabled: true, protected: true, availability: 'required' },
+  { name: 'read', label: 'Read file', description: 'Read workspace file contents.', category: 'core', defaultEnabled: true, protected: true, availability: 'required' },
   { name: 'write', label: 'Write file', description: 'Create or overwrite workspace files.', category: 'core', defaultEnabled: true },
   { name: 'edit', label: 'Edit file', description: 'Patch workspace files through exact find and replace.', category: 'core', defaultEnabled: true },
-  { name: 'glob', label: 'Glob files', description: 'Find files by glob pattern.', category: 'core', defaultEnabled: true },
-  { name: 'grep', label: 'Search files', description: 'Search workspace text by regex.', category: 'core', defaultEnabled: true },
+  { name: 'glob', label: 'Glob files', description: 'Find files by glob pattern.', category: 'core', defaultEnabled: true, protected: true, availability: 'required' },
+  { name: 'grep', label: 'Search files', description: 'Search workspace text by regex.', category: 'core', defaultEnabled: true, protected: true, availability: 'required' },
   { name: 'web_search', label: 'Web search', description: 'Search the web from the Agent.', category: 'web', defaultEnabled: true },
   { name: 'web_fetch', label: 'Web fetch', description: 'Fetch and extract URL text.', category: 'web', defaultEnabled: true },
   { name: 'browser_open', label: 'Browser open', description: 'Open a URL in the built-in browser control.', category: 'browser', defaultEnabled: true },
@@ -27,14 +28,17 @@ export const NATIVE_TOOL_CATALOG: NativeToolCatalogEntry[] = [
   { name: 'browser_reload', label: 'Browser reload', description: 'Reload the built-in browser.', category: 'browser', defaultEnabled: true },
   { name: 'browser_cdp', label: 'Browser CDP', description: 'Run an advanced Chrome DevTools Protocol command.', category: 'browser', defaultEnabled: true },
   { name: 'computer_use', label: 'Computer Use', description: 'Observe and control Windows desktop UI with screenshots and semantic objects.', category: 'desktop', defaultEnabled: true },
-  { name: 'image_inspect', label: 'Image inspect', description: 'Crop and magnify images submitted in the current conversation for closer visual inspection.', category: 'core', defaultEnabled: true },
+  { name: 'image_inspect', label: 'Image inspect', description: 'Crop and magnify images submitted in the current conversation for closer visual inspection.', category: 'core', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'terminal_takeover', label: 'Terminal takeover', description: 'Maintain a persistent Agent-controlled shell session.', category: 'desktop', defaultEnabled: true },
   { name: 'ssh_workspace', label: 'OpenSSH workspace', description: 'Manage native OpenSSH connections and link remote workspaces by PC_Hash.', category: 'ssh', defaultEnabled: true },
-  { name: 'task', label: 'Subagent task', description: 'Create a constrained subagent for parallel work.', category: 'agent', defaultEnabled: true },
-  { name: 'subagent_send', label: 'Subagent send', description: 'Continue an existing subagent.', category: 'agent', defaultEnabled: true },
-  { name: 'subagent_result', label: 'Subagent result', description: 'Read subagent transcript and result.', category: 'agent', defaultEnabled: true },
-  { name: 'subagent_close', label: 'Subagent close', description: 'Close an existing subagent.', category: 'agent', defaultEnabled: true },
-  { name: 'question', label: 'Ask question', description: 'Ask the user for structured option feedback.', category: 'agent', defaultEnabled: true },
+  { name: 'task', label: 'Subagent task', description: 'Create a same-conversation peer agent.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
+  { name: 'subagent_list', label: 'Subagent list', description: 'List same-conversation peer agents.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
+  { name: 'subagent_read', label: 'Subagent read', description: 'Read bounded status, feedback, result, queue, and mailbox summaries for a same-conversation peer.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
+  { name: 'subagent_send', label: 'Subagent send', description: 'Persist a message to a peer mailbox.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
+  { name: 'subagent_result', label: 'Subagent result', description: 'Read peer transcript and result.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
+  { name: 'subagent_close', label: 'Subagent close', description: 'Close a same-conversation peer agent.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
+  { name: 'linked_plan', label: 'Linked plan', description: 'Read or conservatively update the conversation-linked Markdown plan.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
+  { name: 'question', label: 'Ask question', description: 'Ask the user for structured option feedback.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'skill_download', label: 'Skill download', description: 'Download and install a skill.', category: 'agent', defaultEnabled: true },
   { name: 'flow_list', label: 'Flow list', description: 'List saved Flow workflows.', category: 'workflow', defaultEnabled: true },
   { name: 'flow_save', label: 'Flow save', description: 'Create or update a Flow workflow.', category: 'workflow', defaultEnabled: true },
@@ -84,7 +88,9 @@ export function normalizeNativeToolEnabled(raw: unknown): Record<string, boolean
 
 export function nativeToolCatalogForState(enabled?: Record<string, boolean>): Array<NativeToolCatalogEntry & { enabled: boolean }> {
   const resolved = normalizeNativeToolEnabled(enabled || {});
-  return NATIVE_TOOL_CATALOG.map(tool => ({ ...tool, enabled: resolved[tool.name] !== false || !!tool.protected }));
+  return NATIVE_TOOL_CATALOG
+    .filter(tool => (tool.availability || 'configurable') === 'configurable')
+    .map(tool => ({ ...tool, enabled: resolved[tool.name] !== false || !!tool.protected }));
 }
 
 export function isNativeToolEnabled(name: string, enabled?: Record<string, boolean>): boolean {

@@ -119,7 +119,10 @@ function findWslDistro() {
 }
 
 function toWslPath(distro, windowsPath) {
-  const result = spawnSync('wsl.exe', ['-d', distro, '--', 'wslpath', '-a', windowsPath], {
+  // wsl.exe reparses backslashes in Linux argv; forward slashes preserve the
+  // Windows drive path while remaining valid input for wslpath.
+  const portableWindowsPath = path.resolve(windowsPath).replace(/\\/g, '/');
+  const result = spawnSync('wsl.exe', ['-d', distro, '--', 'wslpath', '-a', portableWindowsPath], {
     encoding: 'utf8',
     windowsHide: true,
   });

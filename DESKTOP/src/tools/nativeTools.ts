@@ -27,6 +27,7 @@ export const NATIVE_TOOL_CATALOG: NativeToolCatalogEntry[] = [
   { name: 'browser_forward', label: 'Browser forward', description: 'Navigate the built-in browser forward.', category: 'browser', defaultEnabled: true },
   { name: 'browser_reload', label: 'Browser reload', description: 'Reload the built-in browser.', category: 'browser', defaultEnabled: true },
   { name: 'browser_cdp', label: 'Browser CDP', description: 'Run an advanced Chrome DevTools Protocol command.', category: 'browser', defaultEnabled: true },
+  { name: 'browser_use', label: 'Browser Use', description: 'Observe and control the built-in browser through scoped opaque element refs and structured receipts.', category: 'browser', defaultEnabled: true },
   { name: 'computer_use', label: 'Computer Use', description: 'Observe and control Windows desktop UI with screenshots and semantic objects.', category: 'desktop', defaultEnabled: true },
   { name: 'image_inspect', label: 'Image inspect', description: 'Crop and magnify images submitted in the current conversation for closer visual inspection.', category: 'core', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'terminal_takeover', label: 'Terminal takeover', description: 'Maintain a persistent Agent-controlled shell session.', category: 'desktop', defaultEnabled: true },

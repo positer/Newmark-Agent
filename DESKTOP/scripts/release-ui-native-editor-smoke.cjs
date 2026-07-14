@@ -1,3 +1,4 @@
+const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -22,7 +23,8 @@ async function waitFor(cdp, expression, label) { for(let i=0;i<100;i++){try{if(a
   const port=49382;let child,cdp;
   try{
     child=spawn(exePath,[`--remote-debugging-port=${port}`,'--no-sandbox','--root',root],{stdio:'ignore',windowsHide:true});
-    const target=await waitTarget(port);cdp=connect(target);await cdp.ready;await cdp.call('Runtime.enable');
+    const target=await waitTarget(port);cdp=connect(target);await cdp.ready;
+    await waitForPromotedMainUi(cdp);await cdp.call('Runtime.enable');
     await waitFor(cdp,`document.readyState==='complete'&&window.api&&window.openFile`,'renderer');
     const created=await evalJs(cdp,`window.api.createWorkspace('editor-smoke')`);
     if(!created||created.error)fail(`workspace create failed: ${JSON.stringify(created)}`);

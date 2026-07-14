@@ -1,3 +1,4 @@
+const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -45,10 +46,7 @@ async function waitForTarget(port) {
   while (Date.now() < deadline) {
     try {
       const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
-      const target = targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview') && String(t.url || '').includes('index.html'))
-        || targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview') && String(t.title || '').includes('Newmark'))
-        || targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview'))
-        || targets.find(t => t.webSocketDebuggerUrl);
+      const target = targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview') && String(t.url || '').includes('index.html'));
       if (target) return target;
     } catch {}
     await sleep(500);
@@ -333,6 +331,7 @@ async function runUiCheck(root) {
     log(`connected target: ${target.title || '(untitled)'} ${target.url || ''}`);
     cdp = connectCdp(target);
     await cdp.ready;
+    await waitForPromotedMainUi(cdp);
     await cdp.call('Runtime.enable');
     await cdp.call('Page.enable');
     await cdp.call('Page.bringToFront');
@@ -428,6 +427,7 @@ async function runUiCheck(root) {
     const restartTarget = await waitForTarget(port);
     cdp = connectCdp(restartTarget);
     await cdp.ready;
+    await waitForPromotedMainUi(cdp);
     await cdp.call('Runtime.enable');
     await waitFor(cdp, `window.api.getState(${jsString(convB)}).then(s => !((s && s.conversations) || []).some(c => c.id === ${jsString(convA)}) && ((s && s.conversations) || []).some(c => c.id === ${jsString(convB)}))`, 30000, 'archived conversation remains removed after restart');
     log('archived conversation restart persistence ok');

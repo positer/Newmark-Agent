@@ -47,6 +47,7 @@ _attic/**/Cargo.lock
 # === Project-specific ignores ===
 release/
 release-*verify*/
+DESKTOP/test-tmp*/
 _local/
 .opencode/
 archive/

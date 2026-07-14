@@ -2,6 +2,38 @@ export type AgentMode = 'build' | 'plan' | 'goal' | 'flow';
 export type InputMode = 'guide' | 'next';
 export type AgentStatus = 'idle' | 'working' | 'error' | 'goal_paused';
 
+/** Public routing identity used by renderer/main/runtime envelopes. */
+export interface ConversationTarget {
+  workspaceId: string;
+  conversationId: string;
+}
+
+export type ConversationInputDeliveryMode = 'turn' | 'steer' | 'followUp';
+export type GuideReceiptStatus = 'accepted' | 'applied' | 'deferred' | 'rejected';
+export type ConversationWorkRunStatus = 'running' | 'completed' | 'interrupted' | 'force_interrupted' | 'error';
+
+export interface ConversationInputEnvelope {
+  clientMessageId: string;
+  target: ConversationTarget;
+  runId?: string;
+  deliveryMode: ConversationInputDeliveryMode;
+  text: string;
+  images?: Array<{ dataUrl: string; name?: string; type?: string }>;
+  createdAt: string;
+}
+
+export interface GuideReceipt {
+  clientMessageId: string;
+  target: ConversationTarget;
+  runId: string;
+  status: GuideReceiptStatus;
+  content?: string;
+  createdAt: string;
+  updatedAt: string;
+  appliedAt?: string;
+  reason?: string;
+}
+
 export interface StreamToken {
   type: 'text' | 'tool_call' | 'status';
   text: string;
@@ -15,12 +47,14 @@ export interface ChatMessage {
   mode: string;
   model: string;
   timestamp: string;
+  clientMessageId?: string;
+  runId?: string;
 }
 
 export interface AgentWorkEvent {
   id: string;
   conversationId: string;
-  type: 'start' | 'text' | 'tool_call' | 'tool_result' | 'status' | 'done' | 'error' | 'queue_update';
+  type: 'start' | 'text' | 'tool_call' | 'tool_result' | 'status' | 'done' | 'error' | 'queue_update' | 'guide';
   content: string;
   mode: string;
   model: string;
@@ -29,6 +63,27 @@ export interface AgentWorkEvent {
   toolName?: string;
   toolArgs?: string;
   queue?: { steering: string[]; followUp: string[] };
+  workspaceId?: string;
+  workspaceKey?: string;
+  runtimeKey?: string;
+  runId?: string;
+  generation?: number;
+  sequence?: number;
+  status?: GuideReceiptStatus | ConversationWorkRunStatus | 'stopping' | 'force_restarting';
+  guide?: GuideReceipt;
+}
+
+export interface ConversationWorkRun {
+  runId: string;
+  target: ConversationTarget;
+  runtimeKey: string;
+  status: ConversationWorkRunStatus;
+  startedAt: string;
+  endedAt?: string;
+  expanded: boolean;
+  sequence: number;
+  events: AgentWorkEvent[];
+  guides: GuideReceipt[];
 }
 
 export interface GoalState {

@@ -20,9 +20,14 @@ import type { AgentPromptMessage } from './conversationKernel';
 import {
   AgentMode, InputMode, AgentStatus, StreamToken,
   ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent,
+  ConversationTarget, ConversationWorkRun, ConversationWorkRunStatus, GuideReceipt,
 } from './types';
+import { conversationRuntimeKey } from './conversationTarget';
+import { requestUtilityHostTool } from './utilityHostToolBridge';
+import { requestWindowsHostTool } from './wslHostToolBridge';
+import { runAsyncProcess, runAsyncWindowsBatch } from './asyncProcess';
 
-export { AgentMode, InputMode, AgentStatus, StreamToken, ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent };
+export { AgentMode, InputMode, AgentStatus, StreamToken, ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent, ConversationTarget, ConversationWorkRun, GuideReceipt };
 
 export interface ModelValidationResult extends ModelEvaluation {
   name: string;
@@ -44,6 +49,14 @@ interface AgentRuntimeOptions {
   };
 }
 export const ROOT_AGENT_ACTOR_ID = '00000000-0000-4000-8000-000000000001';
+function throwIfAgentAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason instanceof Error) throw reason;
+  const error = new Error(reason ? String(reason) : 'Agent run aborted');
+  error.name = 'AbortError';
+  throw error;
+}
 type StoredConversationEntry = NonNullable<StoredConversationState['conversations']>[string];
 interface StoredConversationState {
   version?: number;
@@ -55,6 +68,8 @@ interface StoredConversationState {
     plan?: ConversationPlanState;
     linkedPlan?: LinkedPlanState;
     subagentState?: SubagentState;
+    workRuns?: ConversationWorkRun[];
+    continuations?: ConversationContinuation[];
     updatedAt?: string;
     pinned?: boolean;
     pinnedAt?: string;
@@ -86,6 +101,16 @@ export interface ConversationSnapshot {
   subagents: Array<NonNullable<ReturnType<SubagentManager['toRecord']>>>;
   chatMessages: ChatMessage[];
   historyMessages: number;
+  workRuns: ConversationWorkRun[];
+  continuations: ConversationContinuation[];
+}
+export interface ConversationContinuation {
+  content: string;
+  queueMode: 'steer' | 'followUp';
+  clientMessageId?: string;
+  runId?: string;
+  images?: Array<{ dataUrl: string; name?: string; type?: string }>;
+  createdAt: string;
 }
 let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant built into a native desktop application.
 
@@ -98,7 +123,8 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - grep: Search file contents with regex
 - web_search: Search the web via DuckDuckGo
 - web_fetch: Fetch and extract content from URLs
-- browser_open/browser_snapshot/browser_click/browser_type/browser_eval/browser_back/browser_forward/browser_reload/browser_cdp: Control Newmark's built-in Chromium browser through the Desktop CDP/WebContents backend. Use this for interactive sites, page state inspection, and browser workflows that web_fetch cannot cover.
+- browser_use: Preferred native built-in-browser workflow. Observe first, then use the returned page generation, observation id, and opaque refs for click/type/select/scroll/key/navigation/wait/extraction. Every receipt is bound to the current workspace/conversation runtime and actor. Stale page capabilities are rejected; observe again to recover.
+- browser_open/browser_snapshot/browser_click/browser_type/browser_eval/browser_back/browser_forward/browser_reload/browser_cdp: Legacy and expert Chromium controls. Prefer browser_use for normal interactive work; raw eval/CDP remain advanced escape hatches.
 - computer_use: Native desktop Computer Use control for full desktop or app-scoped observe/move/click/scroll/type/key/wait against Windows desktop applications. Use takeover_start when actively taking over the desktop; it shows a full-virtual-desktop dynamic gradient edge indicator so the user can see the Agent is controlling the desktop, and use takeover_stop when done. Use app_list/app_observe/app_activate/app_click/app_scroll/app_type/app_key when the task can be scoped to a visible taskbar application by title, process name, PID, or window handle; this narrows screenshots and actions to that application. Use observe/app_observe first, reason over returned screenshot plus UI Automation objects. If the model supports vision, Newmark sends the screenshot image and UI object tree together in the same tool-result context; use both for stable decisions. Prefer target_id from perception.scene_summary.high_priority_objects or perception.objects for move/click/scroll when available; fall back to exact coordinates only when necessary.
 - image_inspect: For submitted visual attachments, query source_info and actively crop/magnify a precise pixel region when text or geometry is too small to inspect reliably. Cropped images are current-turn-only and never saved to disk.
 - task: Create a subagent for parallel work
@@ -187,6 +213,8 @@ export class Agent {
   public workspaceGoalItems: GoalItem[] = [];
   public subscribers: Array<(msg: string) => void> = [];
   public workEventSubscribers: Array<(event: AgentWorkEvent) => void> = [];
+  public workRuns: ConversationWorkRun[] = [];
+  public continuations: ConversationContinuation[] = [];
   public activeConversationId = 'default';
   public lastCompression: {
     at: string;
@@ -197,22 +225,32 @@ export class Agent {
     model: string;
     fallback: boolean;
   } | null = null;
-  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; updatedAt?: string }>();
+  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; updatedAt?: string }>();
   public isSubagentRuntime = false;
   private subagentName = '';
   private subagentPrompt = '';
   private forcedProvider: LLMProvider | null = null;
   private processingConversationId: string | null = null;
   private processDepth = 0;
+  private activeProcessAbortController: AbortController | null = null;
   private automationManager: AutomationManager | null = null;
-  private activeAgentKernelRuntime: { steer(message: unknown): void; followUp(message: unknown): void; abort?(): void } | null = null;
+  private activeAgentKernelRuntime: {
+    steer(message: unknown): unknown;
+    followUp(message: unknown): unknown;
+    abort?(): void;
+    drainQueuedMessages?(): Array<{ message: unknown; queueMode: 'steer' | 'followUp' }>;
+  } | null = null;
   private activePeerAgents = new Map<string, Agent>();
   private awaitingAgentKernelRuntime = false;
-  private pendingAgentKernelQueue: Array<{ content: string; queueMode: 'steer' | 'followUp' }> = [];
+  private pendingAgentKernelQueue: Array<{ content: string; queueMode: 'steer' | 'followUp'; clientMessageId?: string; runId?: string; images?: Array<{ dataUrl: string; name?: string; type?: string }> }> = [];
   private linkedPlanAccess: AgentRuntimeOptions['linkedPlanAccess'];
   private subagentContextPersist?: (history: Array<Record<string, unknown>>, compression: Agent['lastCompression']) => void;
-  private agentKernelUserMessageStartSubscribers: Array<(content: string) => void> = [];
+  private agentKernelUserMessageStartSubscribers: Array<(content: string, clientMessageId?: string) => void> = [];
   private rootInboxWakeSubscribers: Array<(message: string) => boolean | void> = [];
+  private activeWorkRunId = '';
+  private loadedWorkspaceConversationKey = '';
+  private managedWorkRunIds = new Set<string>();
+  private finalizingWorkRunId = '';
   private readonly rootInboxListener = (message: SubagentRootMessage) => this.deliverRootInboxMessage(message);
   public readonly agentOnly: boolean;
   public readonly runtimeActorId: string;
@@ -346,44 +384,389 @@ export class Agent {
     const raw = String(args || '');
     try {
       const parsed = JSON.parse(raw);
-      const compact: Record<string, unknown> = {};
-      for (const key of Object.keys(parsed).slice(0, 8)) {
-        const value = parsed[key];
-        compact[key] = typeof value === 'string' && value.length > 300 ? `${value.slice(0, 300)}...[truncated]` : value;
-      }
+      const sanitizeValue = (value: unknown, depth: number): unknown => {
+        if (depth > 4) return '[truncated]';
+        if (typeof value === 'string') {
+          const visible = this.sanitizeAssistantOutput(value);
+          return visible.length > 300 ? `${visible.slice(0, 300)}...[truncated]` : visible;
+        }
+        if (Array.isArray(value)) return value.slice(0, 12).map(item => sanitizeValue(item, depth + 1));
+        if (!value || typeof value !== 'object') return value;
+        const output: Record<string, unknown> = {};
+        for (const key of Object.keys(value as Record<string, unknown>).slice(0, 12)) {
+          if (/^(?:reasoning(?:_content)?|thinking(?:_content|_delta|_start|_end)?|analysis|chain[_-]?of[_-]?thought|hidden[_-]?reasoning)$/i.test(key)) continue;
+          const item = (value as Record<string, unknown>)[key];
+          output[key] = /(?:api[_-]?key|token|secret|password|authorization|cookie)/i.test(key)
+            ? '[REDACTED]'
+            : sanitizeValue(item, depth + 1);
+        }
+        return output;
+      };
+      const compact = sanitizeValue(parsed, 0);
       return this.sanitizeAssistantOutput(JSON.stringify(compact));
     } catch {
       return this.sanitizeAssistantOutput(raw.length > 600 ? `${raw.slice(0, 600)}...[truncated]` : raw);
     }
   }
 
+  private currentConversationTarget(conversationId = this.activeConversationId): ConversationTarget {
+    return {
+      workspaceId: this.workspaceConversationPrefix() || 'workspace:none',
+      conversationId: this.safeConversationId(conversationId || 'default'),
+    };
+  }
+
+  private sanitizePublicWorkContent(value: string): string {
+    return this.sanitizeAssistantOutput(String(value || ''))
+      .split(/\r?\n/)
+      .filter(line => !/^\s*(?:reasoning_content|thinking_delta|thinking_start|thinking_end)\s*[:：]?/i.test(line))
+      .join('\n')
+      .trim();
+  }
+
+  private sanitizePublicToolName(value: unknown): string {
+    const name = this.sanitizePublicWorkContent(String(value || ''))
+      .split(/\r?\n/, 1)[0]
+      .trim()
+      .slice(0, 120);
+    return name || 'tool';
+  }
+
+  private publicToolEventContent(type: 'tool_call' | 'tool_result', toolName: string): string {
+    return type === 'tool_call' ? `Using tool ${toolName}.` : `Tool ${toolName} completed.`;
+  }
+
+  private isPersistablePublicWorkEvent(event: { type?: unknown; content?: unknown; toolArgs?: unknown }): boolean {
+    const type = String(event.type || '').toLowerCase();
+    const publicTypes = new Set(['start', 'text', 'tool_call', 'tool_result', 'status', 'done', 'error', 'queue_update', 'guide']);
+    if (!publicTypes.has(type)) return false;
+    // Tool implementation details are never public. They are dropped before
+    // publication/persistence, so private arguments must not suppress the one
+    // allowed fact: which tool was used.
+    if (type === 'tool_call' || type === 'tool_result') return true;
+    const raw = `${String(event.content || '')}\n${String(event.toolArgs || '')}`;
+    return !/<\/?think\b|\b(?:reasoning(?:_content)?|thinking(?:_delta|_start|_end)?)\b\s*[:：]/i.test(raw);
+  }
+
+  private normalizeGuideReceipt(input: GuideReceipt): GuideReceipt {
+    const target = {
+      workspaceId: String(input.target?.workspaceId || this.currentConversationTarget().workspaceId),
+      conversationId: this.safeConversationId(input.target?.conversationId || this.activeConversationId || 'default'),
+    };
+    return {
+      clientMessageId: String(input.clientMessageId || '').trim().slice(0, 200),
+      target,
+      runId: String(input.runId || '').trim().slice(0, 200),
+      status: input.status,
+      content: input.content === undefined ? undefined : this.sanitizePublicWorkContent(input.content),
+      createdAt: input.createdAt || this.nowIso(),
+      updatedAt: input.updatedAt || this.nowIso(),
+      appliedAt: input.appliedAt,
+      reason: input.reason ? this.sanitizePublicWorkContent(input.reason) : undefined,
+    };
+  }
+
+  private normalizeWorkRuns(runs: ConversationWorkRun[] | null | undefined): ConversationWorkRun[] {
+    if (!Array.isArray(runs)) return [];
+    const byRun = new Map<string, ConversationWorkRun>();
+    for (const raw of runs) {
+      const runId = String(raw?.runId || '').trim().slice(0, 200);
+      if (!runId) continue;
+      const target = {
+        workspaceId: String(raw.target?.workspaceId || this.currentConversationTarget().workspaceId),
+        conversationId: this.safeConversationId(raw.target?.conversationId || this.activeConversationId || 'default'),
+      };
+      const status: ConversationWorkRunStatus = ['running', 'completed', 'interrupted', 'force_interrupted', 'error'].includes(raw.status)
+        ? raw.status
+        : 'error';
+      const guidesById = new Map<string, GuideReceipt>();
+      for (const item of Array.isArray(raw.guides) ? raw.guides : []) {
+        const guide = this.normalizeGuideReceipt({ ...item, target, runId });
+        if (guide.clientMessageId) guidesById.set(guide.clientMessageId, guide);
+      }
+      const events = (Array.isArray(raw.events) ? raw.events : [])
+        .filter(event => event && this.isPersistablePublicWorkEvent(event))
+        .map((event, index): AgentWorkEvent => {
+          const type = String(event.type || 'status') as AgentWorkEvent['type'];
+          const isToolEvent = type === 'tool_call' || type === 'tool_result';
+          const toolName = isToolEvent ? this.sanitizePublicToolName(event.toolName) : undefined;
+          // Explicitly reconstruct the public event instead of spreading old
+          // records. This is also the v2/v3 migration boundary and therefore
+          // strips undeclared fields such as command, args, result, and IDs.
+          return {
+            id: String(event.id || `${runId}-${index + 1}`),
+            conversationId: target.conversationId,
+            type,
+            content: isToolEvent
+              ? this.publicToolEventContent(type, toolName!)
+              : this.sanitizePublicWorkContent(event.content || ''),
+            mode: String(event.mode || this.modeName()),
+            model: String(event.model || this.model),
+            timestamp: String(event.timestamp || this.nowLabel()),
+            toolName,
+            queue: isToolEvent ? undefined : event.queue,
+            workspaceId: target.workspaceId,
+            workspaceKey: event.workspaceKey,
+            runtimeKey: String(raw.runtimeKey || conversationRuntimeKey(target)),
+            runId,
+            generation: event.generation,
+            sequence: Math.max(1, Number(event.sequence || index + 1)),
+            status: event.status,
+            guide: !isToolEvent && event.guide ? this.normalizeGuideReceipt({ ...event.guide, target, runId }) : undefined,
+          };
+        })
+        .sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
+      const sequence = Math.max(Number(raw.sequence || 0), ...events.map(event => Number(event.sequence || 0)), 0);
+      byRun.set(runId, {
+        runId,
+        target,
+        runtimeKey: String(raw.runtimeKey || conversationRuntimeKey(target)),
+        status,
+        startedAt: raw.startedAt || this.nowIso(),
+        endedAt: raw.endedAt,
+        expanded: status === 'running' ? true : !!raw.expanded,
+        sequence,
+        events,
+        guides: [...guidesById.values()],
+      });
+    }
+    return [...byRun.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  }
+
+  beginConversationWorkRun(
+    runId: string,
+    target = this.currentConversationTarget(),
+    startedAt = this.nowIso(),
+    managed = false,
+    runtimeKey?: string,
+  ): ConversationWorkRun {
+    const cleanRunId = String(runId || crypto.randomUUID()).trim().slice(0, 200);
+    const existing = this.workRuns.find(run => run.runId === cleanRunId);
+    if (existing) {
+      if (managed) this.managedWorkRunIds.add(existing.runId);
+      this.activeWorkRunId = existing.status === 'running' ? existing.runId : '';
+      return existing;
+    }
+    const normalizedTarget = {
+      workspaceId: String(target.workspaceId || this.currentConversationTarget().workspaceId),
+      conversationId: this.safeConversationId(target.conversationId || this.activeConversationId || 'default'),
+    };
+    const run: ConversationWorkRun = {
+      runId: cleanRunId,
+      target: normalizedTarget,
+      runtimeKey: String(runtimeKey || conversationRuntimeKey(normalizedTarget)),
+      status: 'running',
+      startedAt,
+      expanded: true,
+      sequence: 0,
+      events: [],
+      guides: [],
+    };
+    this.workRuns.push(run);
+    if (managed) this.managedWorkRunIds.add(run.runId);
+    this.activeWorkRunId = run.runId;
+    return run;
+  }
+
+  resumeConversationWorkRun(runId: string): boolean {
+    const run = this.workRuns.find(item => item.runId === String(runId || ''));
+    if (!run || run.status !== 'completed') return false;
+    run.status = 'running';
+    delete run.endedAt;
+    run.expanded = true;
+    this.activeWorkRunId = run.runId;
+    this.finalizingWorkRunId = '';
+    this.managedWorkRunIds.add(run.runId);
+    this.emitWorkEvent({
+      type: 'status',
+      content: 'Guide received; continuing the current work run.',
+      status: 'running',
+      runId: run.runId,
+      conversationId: run.target.conversationId,
+    });
+    this.saveWorkspaceConversationState();
+    return true;
+  }
+
+  recordGuideReceipt(input: GuideReceipt): GuideReceipt {
+    const receipt = this.normalizeGuideReceipt(input);
+    let run = this.workRuns.find(item => item.runId === receipt.runId);
+    if (!run) run = this.beginConversationWorkRun(receipt.runId, receipt.target, receipt.createdAt);
+    const index = run.guides.findIndex(item => item.clientMessageId === receipt.clientMessageId);
+    const rank: Record<GuideReceipt['status'], number> = { accepted: 1, deferred: 2, applied: 3, rejected: 3 };
+    const existing = index >= 0 ? run.guides[index] : undefined;
+    if (existing && rank[existing.status] > rank[receipt.status]) return existing;
+    if (index >= 0) run.guides[index] = receipt;
+    else run.guides.push(receipt);
+    const previousActiveRun = this.activeWorkRunId;
+    this.activeWorkRunId = run.runId;
+    this.emitWorkEvent({
+      type: 'guide',
+      content: receipt.content || 'Guide',
+      status: receipt.status,
+      guide: receipt,
+      runId: run.runId,
+      conversationId: run.target.conversationId,
+    });
+    if (run.status !== 'running') this.activeWorkRunId = previousActiveRun;
+    this.saveWorkspaceConversationState();
+    return receipt;
+  }
+
+  persistGuideMessage(clientMessageId: string, content: string, runId = this.activeWorkRunId, historyContent?: unknown): boolean {
+    const id = String(clientMessageId || '').trim().slice(0, 200);
+    if (!id) return false;
+    const inChat = this.chatMessages.some(message => message.clientMessageId === id);
+    const inHistory = this.history.some(message => String(message.client_message_id || '') === id);
+    if (!inChat) {
+      this.chatMessages.push({
+        role: 'user',
+        content: String(content || ''),
+        mode: 'guide',
+        model: this.model,
+        timestamp: this.nowLabel(),
+        clientMessageId: id,
+        runId: runId || undefined,
+      });
+    }
+    if (!inHistory) {
+      this.history.push({ role: 'user', content: historyContent === undefined ? String(content || '') : historyContent, client_message_id: id, run_id: runId || undefined });
+    }
+    const changed = !inChat || !inHistory;
+    if (changed) this.saveWorkspaceConversationState();
+    return changed;
+  }
+
+  setConversationWorkRunExpanded(runId: string, expanded: boolean): boolean {
+    const run = this.workRuns.find(item => item.runId === String(runId || ''));
+    if (!run || run.status === 'running') return false;
+    run.expanded = !!expanded;
+    this.saveWorkspaceConversationState();
+    return true;
+  }
+
+  finishConversationWorkRun(
+    runId: string,
+    status: Exclude<ConversationWorkRunStatus, 'running'>,
+    endedAt = this.nowIso(),
+  ): boolean {
+    const run = this.workRuns.find(item => item.runId === String(runId || ''));
+    if (!run) return false;
+    if (run.status !== 'running') {
+      if (run.status !== 'interrupted' || status !== 'force_interrupted') return run.status === status;
+      this.activeWorkRunId = run.runId;
+      this.finalizingWorkRunId = run.runId;
+      this.emitWorkEvent({
+        type: 'status',
+        content: 'Force interrupted.',
+        status,
+        runId: run.runId,
+        conversationId: run.target.conversationId,
+        timestamp: endedAt,
+      });
+      run.status = 'force_interrupted';
+      run.endedAt = endedAt;
+      run.expanded = false;
+      this.activeWorkRunId = '';
+      this.finalizingWorkRunId = '';
+      this.managedWorkRunIds.delete(run.runId);
+      this.saveWorkspaceConversationState();
+      return true;
+    }
+    this.activeWorkRunId = run.runId;
+    this.finalizingWorkRunId = run.runId;
+    this.emitWorkEvent({
+      type: status === 'completed' ? 'done' : status === 'error' ? 'error' : 'status',
+      content: status === 'force_interrupted' ? 'Force interrupted.' : status === 'interrupted' ? 'Interrupted.' : 'Response complete.',
+      status,
+      runId: run.runId,
+      conversationId: run.target.conversationId,
+      timestamp: endedAt,
+    });
+    run.status = status;
+    run.endedAt = endedAt;
+    run.expanded = false;
+    this.activeWorkRunId = '';
+    this.finalizingWorkRunId = '';
+    this.managedWorkRunIds.delete(run.runId);
+    this.saveWorkspaceConversationState();
+    return true;
+  }
+
   emitWorkEvent(input: Omit<AgentWorkEvent, 'id' | 'conversationId' | 'mode' | 'model' | 'timestamp'> & Partial<Pick<AgentWorkEvent, 'conversationId' | 'mode' | 'model' | 'timestamp'>>): AgentWorkEvent {
+    if (input.type === 'start' && !this.workRuns.some(run => run.runId === this.activeWorkRunId && run.status === 'running')) {
+      this.beginConversationWorkRun(input.runId || crypto.randomUUID(), this.currentConversationTarget(input.conversationId));
+    }
+    const activeRun = this.workRuns.find(run => run.runId === (input.runId || this.activeWorkRunId));
+    const managedTurnBoundary = input.type === 'done'
+      && !!activeRun
+      && this.managedWorkRunIds.has(activeRun.runId)
+      && this.finalizingWorkRunId !== activeRun.runId;
+    const sequence = activeRun ? activeRun.sequence + 1 : input.sequence;
+    const publishedType = managedTurnBoundary ? 'status' : input.type;
+    const isToolEvent = publishedType === 'tool_call' || publishedType === 'tool_result';
+    if (isToolEvent && process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') {
+      console.error(`[NewmarkWork] event-start type=${publishedType} active=${activeRun ? 'yes' : 'no'} runs=${this.workRuns.length}`);
+    }
+    const toolName = isToolEvent ? this.sanitizePublicToolName(input.toolName) : undefined;
     const event: AgentWorkEvent = {
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       conversationId: input.conversationId || this.activeConversationId || 'default',
-      type: input.type,
-      content: this.sanitizeAssistantOutput(input.content || ''),
+      type: publishedType,
+      content: isToolEvent
+        ? this.publicToolEventContent(publishedType, toolName!)
+        : input.type === 'text'
+          ? this.sanitizeAssistantStreamingOutput(input.content || '')
+          : this.sanitizePublicWorkContent(input.content || ''),
       mode: input.mode || this.modeName(),
       model: input.model || this.model,
       timestamp: input.timestamp || this.nowLabel(),
-      toolCallId: input.toolCallId,
-      toolName: input.toolName,
-      toolArgs: input.toolArgs,
-      queue: input.queue,
+      toolName,
+      queue: isToolEvent ? undefined : input.queue,
+      workspaceId: input.workspaceId || activeRun?.target.workspaceId || this.currentConversationTarget(input.conversationId).workspaceId,
+      workspaceKey: input.workspaceKey,
+      runtimeKey: input.runtimeKey || activeRun?.runtimeKey,
+      runId: input.runId || activeRun?.runId,
+      generation: input.generation,
+      sequence,
+      status: input.status,
+      guide: !isToolEvent && input.guide ? this.normalizeGuideReceipt(input.guide) : undefined,
     };
+    if (activeRun && this.isPersistablePublicWorkEvent(event)) {
+      activeRun.sequence = Number(sequence || activeRun.sequence + 1);
+      activeRun.events.push(event);
+      if (event.type === 'done' || event.type === 'error') {
+        activeRun.status = event.type === 'done' ? 'completed' : 'error';
+        activeRun.endedAt = /^\d{4}-\d{2}-\d{2}T/.test(event.timestamp) ? event.timestamp : this.nowIso();
+        activeRun.expanded = false;
+        this.activeWorkRunId = '';
+      }
+    }
+    if (isToolEvent && process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') {
+      console.error(`[NewmarkWork] event-persisted type=${publishedType} active=${activeRun ? 'yes' : 'no'} events=${activeRun?.events.length || 0}`);
+    }
     for (const sub of this.workEventSubscribers) {
       try { sub(event); } catch { /* ignore subscriber errors */ }
     }
+    if (isToolEvent && process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') {
+      console.error(`[NewmarkWork] event-published type=${publishedType} subscribers=${this.workEventSubscribers.length}`);
+    }
+    if (event.type === 'start' || event.type === 'done' || event.type === 'error') this.saveWorkspaceConversationState();
     return event;
   }
 
   appendWorkflowMessage(content: string, toolName?: string, toolArgs?: string, persist = true): void {
-    const safe = this.sanitizeAssistantOutput(content);
-    const suffix = toolArgs ? `\n\n${toolArgs}` : '';
     if (toolName === 'agent_status') return;
+    const publicToolName = toolName ? this.sanitizePublicToolName(toolName) : '';
+    const safe = publicToolName
+      ? (/\b(?:result|completed)\b/i.test(content)
+          ? this.publicToolEventContent('tool_result', publicToolName)
+          : this.publicToolEventContent('tool_call', publicToolName))
+      : this.sanitizeAssistantOutput(content);
+    void toolArgs;
     this.chatMessages.push({
       role: 'workflow',
-      content: safe + suffix,
+      content: safe,
       mode: toolName ? `tool:${toolName}` : this.modeName(),
       model: this.model,
       timestamp: this.nowLabel(),
@@ -391,15 +774,14 @@ export class Agent {
     if (persist) this.saveWorkspaceConversationState();
   }
 
-  recordToolResult(toolName: string, result: string): void {
-    const text = String(result || '');
-    const display = text.length > 3000 ? `${text.slice(0, 3000)}...[truncated]` : text;
+  recordToolResult(toolName: string, _result: string): void {
+    const publicToolName = this.sanitizePublicToolName(toolName);
     this.emitWorkEvent({
       type: 'tool_result',
-      content: `Tool ${toolName} result:\n${display}`,
-      toolName,
+      content: this.publicToolEventContent('tool_result', publicToolName),
+      toolName: publicToolName,
     });
-    this.appendWorkflowMessage(`Tool ${toolName} result:\n${display}`, toolName);
+    this.appendWorkflowMessage(this.publicToolEventContent('tool_result', publicToolName), publicToolName);
   }
 
   recordWorkStatus(content: string): void {
@@ -408,18 +790,18 @@ export class Agent {
     this.emitWorkEvent({ type: 'status', content: text });
   }
 
-  attachAgentKernelRuntime(runtime: { steer(message: unknown): void; followUp(message: unknown): void; abort?(): void } | null): void {
+  attachAgentKernelRuntime(runtime: { steer(message: unknown): unknown; followUp(message: unknown): unknown; abort?(): void; drainQueuedMessages?(): Array<{ message: unknown; queueMode: 'steer' | 'followUp' }> } | null): void {
     this.activeAgentKernelRuntime = runtime;
     this.awaitingAgentKernelRuntime = false;
-    if (!runtime) {
-      this.pendingAgentKernelQueue = [];
-      return;
-    }
+    if (!runtime) return;
     const queued = this.pendingAgentKernelQueue.splice(0);
-    for (const item of queued) this.forwardAgentKernelQueueMessage(item.content, item.queueMode);
+    for (const item of queued) {
+      const accepted = this.forwardAgentKernelQueueMessage(item.content, item.queueMode, item.clientMessageId, item.runId, item.images);
+      if (!accepted) this.pendingAgentKernelQueue.push(item);
+    }
   }
 
-  subscribeAgentKernelUserMessageStart(fn: (content: string) => void): () => void {
+  subscribeAgentKernelUserMessageStart(fn: (content: string, clientMessageId?: string) => void): () => void {
     this.agentKernelUserMessageStartSubscribers.push(fn);
     return () => {
       this.agentKernelUserMessageStartSubscribers = this.agentKernelUserMessageStartSubscribers.filter(sub => sub !== fn);
@@ -433,37 +815,121 @@ export class Agent {
     };
   }
 
-  notifyAgentKernelUserMessageStart(content: string): void {
+  notifyAgentKernelUserMessageStart(content: string, clientMessageId?: string): void {
     const text = String(content || '');
     if (!text) return;
     const rootInboxMatch = text.match(/^\[Root subagent inbox id=([0-9a-f-]{36})\b/i);
     if (rootInboxMatch) this.subagents.acknowledgeRootInbox(rootInboxMatch[1]);
     for (const sub of this.agentKernelUserMessageStartSubscribers) {
-      try { sub(text); } catch { /* ignore subscriber errors */ }
+        try { sub(text, clientMessageId); } catch { /* ignore subscriber errors */ }
     }
   }
 
-  queueActiveKernelMessage(content: string, queueMode: 'steer' | 'followUp'): boolean {
+  queueActiveKernelMessage(content: string, queueMode: 'steer' | 'followUp', clientMessageId?: string, runId?: string, images?: Array<{ dataUrl: string; name?: string; type?: string }>): boolean {
     if (!this.activeAgentKernelRuntime) {
       if (this.awaitingAgentKernelRuntime) {
-        this.pendingAgentKernelQueue.push({ content, queueMode });
+        this.pendingAgentKernelQueue.push({ content, queueMode, clientMessageId, runId, images });
         return true;
       }
       return false;
     }
-    this.forwardAgentKernelQueueMessage(content, queueMode);
+    return this.forwardAgentKernelQueueMessage(content, queueMode, clientMessageId, runId, images);
+  }
+
+  private forwardAgentKernelQueueMessage(content: string, queueMode: 'steer' | 'followUp', clientMessageId?: string, runId?: string, images?: Array<{ dataUrl: string; name?: string; type?: string }>): boolean {
+    if (!this.activeAgentKernelRuntime) return false;
+    const message = {
+      role: 'user',
+      content: images?.length
+        ? [
+            { type: 'text', text: content },
+            ...images.filter(image => /^data:image\//i.test(String(image.dataUrl || ''))).map(image => ({ type: 'image', image: image.dataUrl, mimeType: image.type || 'image/png' })),
+          ]
+        : content,
+      clientMessageId,
+      runId,
+      timestamp: Date.now(),
+    };
+    const accepted = queueMode === 'steer' ? this.activeAgentKernelRuntime.steer(message) : this.activeAgentKernelRuntime.followUp(message);
+    return accepted !== false;
+  }
+
+  drainPendingAgentKernelMessages(): Array<{ content: string; queueMode: 'steer' | 'followUp'; clientMessageId?: string; runId?: string; images?: Array<{ dataUrl: string; name?: string; type?: string }> }> {
+    return this.pendingAgentKernelQueue.splice(0);
+  }
+
+  drainAllUnconsumedAgentKernelMessages(): Array<{ content: string; queueMode: 'steer' | 'followUp'; clientMessageId?: string; runId?: string; images?: Array<{ dataUrl: string; name?: string; type?: string }> }> {
+    const pending = this.pendingAgentKernelQueue.splice(0);
+    const active = this.activeAgentKernelRuntime?.drainQueuedMessages?.() || [];
+    for (const item of active) {
+      const raw = item.message && typeof item.message === 'object' ? item.message as Record<string, unknown> : {};
+      const contentValue = raw.content;
+      const content = typeof contentValue === 'string'
+        ? contentValue
+        : Array.isArray(contentValue)
+          ? contentValue.filter(part => part && typeof part === 'object' && (part as { type?: string }).type === 'text')
+            .map(part => String((part as { text?: string }).text || '')).join('\n')
+          : String(contentValue || '');
+      const images = Array.isArray(contentValue)
+        ? contentValue.filter(part => part && typeof part === 'object' && (part as { type?: string }).type === 'image')
+          .map(part => ({
+            dataUrl: String((part as { image?: string }).image || ''),
+            type: String((part as { mimeType?: string }).mimeType || 'image/png'),
+          })).filter(image => !!image.dataUrl)
+        : undefined;
+      pending.push({
+        content,
+        queueMode: item.queueMode,
+        clientMessageId: String(raw.clientMessageId || '') || undefined,
+        runId: String(raw.runId || '') || undefined,
+        images,
+      });
+    }
+    return pending;
+  }
+
+  retainConversationContinuations(items: Array<Omit<ConversationContinuation, 'createdAt'> & { createdAt?: string }>): ConversationContinuation[] {
+    const combined = this.normalizeContinuations([...this.continuations, ...items.map(item => ({
+      ...item,
+      createdAt: item.createdAt || new Date().toISOString(),
+    }))]);
+    this.continuations = combined;
+    this.saveWorkspaceConversationState();
+    return combined.map(item => ({ ...item, images: item.images?.map(image => ({ ...image })) }));
+  }
+
+  consumeConversationContinuation(match: Pick<ConversationContinuation, 'content' | 'queueMode' | 'clientMessageId'>): boolean {
+    const index = this.continuations.findIndex(item => match.clientMessageId
+      ? item.clientMessageId === match.clientMessageId
+      : item.queueMode === match.queueMode && item.content === match.content);
+    if (index < 0) return false;
+    this.continuations.splice(index, 1);
+    this.saveWorkspaceConversationState();
     return true;
   }
 
-  private forwardAgentKernelQueueMessage(content: string, queueMode: 'steer' | 'followUp'): void {
-    if (!this.activeAgentKernelRuntime) return;
-    const message = {
-      role: 'user',
-      content,
-      timestamp: Date.now(),
-    };
-    if (queueMode === 'steer') this.activeAgentKernelRuntime.steer(message);
-    else this.activeAgentKernelRuntime.followUp(message);
+  conversationContinuations(): ConversationContinuation[] {
+    return this.continuations.map(item => ({ ...item, images: item.images?.map(image => ({ ...image })) }));
+  }
+
+  private normalizeContinuations(items: ConversationContinuation[] | undefined): ConversationContinuation[] {
+    const deduped = new Map<string, ConversationContinuation>();
+    for (const raw of items || []) {
+      const content = String(raw?.content || '');
+      if (!content) continue;
+      const queueMode = raw.queueMode === 'steer' ? 'steer' : 'followUp';
+      const clientMessageId = String(raw.clientMessageId || '').trim() || undefined;
+      const key = clientMessageId ? `id:${clientMessageId}` : `${queueMode}:${content}`;
+      deduped.set(key, {
+        content,
+        queueMode,
+        clientMessageId,
+        runId: String(raw.runId || '').trim() || undefined,
+        images: raw.images?.map(image => ({ ...image })),
+        createdAt: String(raw.createdAt || new Date().toISOString()),
+      });
+    }
+    return Array.from(deduped.values()).slice(-100);
   }
 
   private normalizeConversationPlan(plan: Partial<ConversationPlanState> | null | undefined): ConversationPlanState {
@@ -523,10 +989,11 @@ export class Agent {
         const incomingSequence = Math.max(0, Number(incoming.subagentState?.nextSequence || 0));
         const existingSequence = Math.max(0, Number(existing.subagentState?.nextSequence || 0));
         preferred.subagentState = incomingSequence >= existingSequence ? incoming.subagentState : existing.subagentState;
+        preferred.workRuns = this.normalizeWorkRuns([...(existing.workRuns || []), ...(incoming.workRuns || [])]);
         merged[key] = preferred;
       }
       return {
-        version: 2,
+        version: 3,
         activeConversationId: state.activeConversationId || latest.activeConversationId,
         conversations: merged,
       };
@@ -563,11 +1030,11 @@ export class Agent {
       activeConversationId: latest.activeConversationId,
       conversations: { ...(latest.conversations || {}) },
     });
-    contentState.version = 2;
+    contentState.version = 3;
     contentState.conversations = contentState.conversations || {};
     const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
     const content = JSON.stringify({
-      version: 2,
+      version: 3,
       activeConversationId: contentState.activeConversationId || this.activeConversationId || 'default',
       conversations: contentState.conversations || {},
     }, null, 2);
@@ -723,6 +1190,7 @@ export class Agent {
 
   public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {
     const clean = this.safeConversationId(conversationId || 'default');
+    const isActiveConversation = clean === this.safeConversationId(this.activeConversationId || 'default');
     const stateKey = this.workspaceConversationStateKey(clean);
     const memoryKey = (() => {
       const ws = this.workspace.current;
@@ -732,16 +1200,23 @@ export class Agent {
     const memory = memoryKey ? this.workspaceConversations.get(memoryKey) : undefined;
     const stored = this.readStoredConversationState();
     const persisted = stateKey && stored.conversations ? stored.conversations[stateKey] : undefined;
-    const chatMessages = persisted?.chatMessages || memory?.chatMessages || [];
-    const history = persisted?.history || memory?.history || [];
+    // A live run intentionally does not flush every text/tool delta to disk.
+    // Snapshot callers must therefore observe the active in-memory state; an
+    // older persisted start event must never mask newer public work events.
+    const chatMessages = isActiveConversation ? this.chatMessages : (persisted?.chatMessages || memory?.chatMessages || []);
+    const history = isActiveConversation ? this.history : (persisted?.history || memory?.history || []);
+    const workRuns = this.normalizeWorkRuns(isActiveConversation ? this.workRuns : (persisted?.workRuns || memory?.workRuns));
+    const continuations = this.normalizeContinuations(isActiveConversation ? this.continuations : (persisted?.continuations || memory?.continuations));
     return {
       conversationId: clean,
       conversations: this.listConversationStates(),
-      conversationPlan: this.normalizeConversationPlan(persisted?.plan || memory?.plan),
-      linkedPlan: this.normalizeLinkedPlan(persisted?.linkedPlan || memory?.linkedPlan),
-      subagents: this.recordsForState(persisted?.subagentState || memory?.subagentState),
+      conversationPlan: this.normalizeConversationPlan(isActiveConversation ? this.conversationPlan : (persisted?.plan || memory?.plan)),
+      linkedPlan: this.normalizeLinkedPlan(isActiveConversation ? this.linkedPlan : (persisted?.linkedPlan || memory?.linkedPlan)),
+      subagents: this.recordsForState(isActiveConversation ? this.subagents.serialize() : (persisted?.subagentState || memory?.subagentState)),
       chatMessages: [...chatMessages],
       historyMessages: history.length,
+      workRuns,
+      continuations,
     };
   }
 
@@ -758,6 +1233,8 @@ export class Agent {
           history: [],
           plan: { items: [] },
           linkedPlan: { markdown: '', revision: 0 },
+          workRuns: [],
+          continuations: [],
           updatedAt: new Date().toISOString(),
         };
         this.writeStoredConversationState(stored);
@@ -799,6 +1276,7 @@ export class Agent {
       conversationPlan: snapshot.conversationPlan,
       linkedPlan: snapshot.linkedPlan,
       subagents: this.subagents,
+      workRuns: snapshot.workRuns,
     });
     return this.getConversationSnapshot(clean);
   }
@@ -844,14 +1322,26 @@ export class Agent {
     return false;
   }
 
-  public sanitizeAssistantOutput(text: string): string {
+  public sanitizeAssistantStreamingOutput(text: string): string {
     let out = String(text || '');
-    out = out.replace(/<think>[\s\S]*?<\/think>/gi, '');
-    out = out.replace(/<\/?think>/gi, '');
+    out = out.replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '');
+    // An interrupted provider may never emit the closing tag. Treat the
+    // remainder as hidden instead of exposing it during final snapshot redraw.
+    out = out.replace(/<think\b[^>]*>[\s\S]*$/gi, '');
+    out = out.replace(/<\/?think\b[^>]*>/gi, '');
     out = out.replace(/^\s*(analysis|commentary|final)\s*[:：]?\s*$/gim, '');
     out = out.replace(/^\s*<\|?(analysis|commentary|final|assistant|system|user)\|?>\s*$/gim, '');
     out = out.replace(/^\s*```(?:analysis|commentary|final)\s*$/gim, '```');
-    return out.replace(/\n{3,}/g, '\n\n').trim();
+    return out.replace(/\n{3,}/g, '\n\n');
+  }
+
+  public sanitizeAssistantOutput(text: string): string {
+    return this.sanitizeAssistantStreamingOutput(text)
+      .split(/\r?\n/)
+      .filter(line => !/^\s*(?:reasoning(?:_content)?|thinking(?:_content|_delta|_start|_end)?|analysis)\s*[:：]/i.test(line))
+      .filter(line => !/["'](?:reasoning(?:_content)?|thinking(?:_content|_delta|_start|_end)?|chain[_-]?of[_-]?thought|hidden[_-]?reasoning)["']\s*:/i.test(line))
+      .join('\n')
+      .trim();
   }
 
   sanitizeVisibleTokens(tokens: StreamToken[]): StreamToken[] {
@@ -887,6 +1377,8 @@ export class Agent {
       plan: this.normalizeConversationPlan(this.conversationPlan),
       linkedPlan: this.normalizeLinkedPlan(this.linkedPlan),
       subagentState: this.subagents.serialize(),
+      workRuns: this.normalizeWorkRuns(this.workRuns),
+      continuations: this.normalizeContinuations(this.continuations),
       updatedAt,
     });
     const stored = this.readStoredConversationState();
@@ -908,18 +1400,25 @@ export class Agent {
       plan: this.normalizeConversationPlan(this.conversationPlan),
       linkedPlan: this.normalizeLinkedPlan(this.linkedPlan),
       subagentState: this.subagents.serialize(),
+      workRuns: this.normalizeWorkRuns(this.workRuns),
+      continuations: this.normalizeContinuations(this.continuations),
       updatedAt,
     };
     this.writeStoredConversationState(stored);
   }
 
   private loadWorkspaceConversationState(): void {
+    this.managedWorkRunIds.clear();
     const key = this.workspaceConversationKey();
+    this.loadedWorkspaceConversationKey = key || '';
     if (!key) {
       this.chatMessages = [];
       this.history = [];
       this.conversationPlan = { items: [] };
       this.linkedPlan = { markdown: '', revision: 0 };
+      this.workRuns = [];
+      this.continuations = [];
+      this.activeWorkRunId = '';
       this.bindConversationSubagents(this.activeConversationId);
       return;
     }
@@ -930,6 +1429,9 @@ export class Agent {
       this.conversationPlan = this.normalizeConversationPlan(saved.plan);
       this.linkedPlan = this.normalizeLinkedPlan(saved.linkedPlan);
       this.bindConversationSubagents(this.activeConversationId, saved.subagentState);
+      this.workRuns = this.normalizeWorkRuns(saved.workRuns);
+      this.continuations = this.normalizeContinuations(saved.continuations);
+      this.activeWorkRunId = this.workRuns.find(run => run.status === 'running')?.runId || '';
       return;
     }
     const stored = this.readStoredConversationState();
@@ -939,6 +1441,9 @@ export class Agent {
     this.history = persisted?.history ? [...persisted.history] : [];
     this.conversationPlan = this.normalizeConversationPlan(persisted?.plan);
     this.linkedPlan = this.normalizeLinkedPlan(persisted?.linkedPlan);
+    this.workRuns = this.normalizeWorkRuns(persisted?.workRuns);
+    this.continuations = this.normalizeContinuations(persisted?.continuations);
+    this.activeWorkRunId = this.workRuns.find(run => run.status === 'running')?.runId || '';
     this.bindConversationSubagents(this.activeConversationId, persisted?.subagentState);
     this.workspaceConversations.set(key, {
       chatMessages: [...this.chatMessages],
@@ -946,6 +1451,8 @@ export class Agent {
       plan: this.normalizeConversationPlan(this.conversationPlan),
       linkedPlan: this.normalizeLinkedPlan(this.linkedPlan),
       subagentState: this.subagents.serialize(),
+      workRuns: this.normalizeWorkRuns(this.workRuns),
+      continuations: this.normalizeContinuations(this.continuations),
       updatedAt: persisted?.updatedAt,
     });
   }
@@ -967,7 +1474,12 @@ export class Agent {
 
   setConversation(id: string): string {
     const clean = this.safeConversationId(id || 'default');
-    this.saveWorkspaceConversationState();
+    // Conversation runners may bind a target workspace directly before their
+    // first setConversation(). Do not save state loaded for another workspace
+    // under the new workspace key during that hand-off.
+    if (this.workspaceConversationKey() === this.loadedWorkspaceConversationKey) {
+      this.saveWorkspaceConversationState();
+    }
     this.activeConversationId = clean;
     this.loadWorkspaceConversationState();
     this.saveWorkspaceConversationState();
@@ -975,13 +1487,24 @@ export class Agent {
   }
 
   abortActiveKernelRun(): boolean {
-    if (!this.activeAgentKernelRuntime?.abort) return false;
-    this.activeAgentKernelRuntime.abort();
+    let aborted = false;
+    this.subagents.pauseScheduling();
+    if (this.activeProcessAbortController && !this.activeProcessAbortController.signal.aborted) {
+      this.activeProcessAbortController.abort(new Error('Agent run aborted'));
+      aborted = true;
+    }
+    if (this.activeAgentKernelRuntime?.abort) {
+      this.activeAgentKernelRuntime.abort();
+      aborted = true;
+    }
+    for (const peer of this.activePeerAgents.values()) {
+      aborted = peer.abortActiveKernelRun() || aborted;
+    }
     this.pendingAgentKernelQueue = [];
-    return true;
+    return aborted;
   }
 
-  mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'> & Partial<Pick<Agent, 'linkedPlan' | 'subagents'>>): void {
+  mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'> & Partial<Pick<Agent, 'linkedPlan' | 'subagents' | 'workRuns' | 'continuations'>>): void {
     const clean = this.safeConversationId(id || 'default');
     const ws = this.workspace.current;
     if (!ws) return;
@@ -989,6 +1512,8 @@ export class Agent {
     const plan = this.normalizeConversationPlan(source.conversationPlan);
     const linkedPlan = this.normalizeLinkedPlan(source.linkedPlan || this.getLinkedPlan(clean));
     const subagentState = source.subagents?.serialize() || this.subagents.serialize();
+    const workRuns = this.normalizeWorkRuns(source.workRuns || this.getConversationSnapshot(clean).workRuns);
+    const continuations = this.normalizeContinuations(source.continuations || this.getConversationSnapshot(clean).continuations);
     const updatedAt = new Date().toISOString();
     if (key) {
       this.workspaceConversations.set(key, {
@@ -997,6 +1522,8 @@ export class Agent {
         plan,
         linkedPlan,
         subagentState,
+        workRuns,
+        continuations,
         updatedAt,
       });
     }
@@ -1017,6 +1544,8 @@ export class Agent {
       plan,
       linkedPlan,
       subagentState,
+      workRuns,
+      continuations,
       updatedAt,
     };
     this.writeStoredConversationState(stored, ws);
@@ -1026,6 +1555,9 @@ export class Agent {
       this.conversationPlan = plan;
       this.linkedPlan = linkedPlan;
       if (source.subagents) this.subagents = source.subagents;
+      this.workRuns = workRuns;
+      this.continuations = continuations;
+      this.activeWorkRunId = this.workRuns.find(run => run.status === 'running')?.runId || '';
     }
   }
 
@@ -1140,26 +1672,26 @@ export class Agent {
     return this.ssh.remove(idOrName);
   }
 
-  validateSshConnection(idOrName: string, remoteRoot?: string): SshValidateResult {
-    const result = this.ssh.validate(idOrName, remoteRoot);
+  async validateSshConnection(idOrName: string, remoteRoot?: string): Promise<SshValidateResult> {
+    const result = await this.ssh.validate(idOrName, remoteRoot);
     if (result.ok && result.remotePcHash) {
       this.workspace.activateSshExternalByPcHash(result.connection.id, result.remotePcHash);
     }
     return result;
   }
 
-  createSshWorkspace(input: {
+  async createSshWorkspace(input: {
     connection: Partial<SshConnectionInfo>;
     connectionId?: string;
     name?: string;
     remotePath: string;
-  }): { ok: boolean; workspace?: WorkspaceInfo | null; validation: SshValidateResult; linkedExisting: number; error?: string } {
+  }): Promise<{ ok: boolean; workspace?: WorkspaceInfo | null; validation: SshValidateResult; linkedExisting: number; error?: string }> {
     this.saveWorkspaceConversationState();
     const cleanConnection = Object.fromEntries(Object.entries(input.connection || {}).filter(([, value]) => value !== undefined && value !== ''));
     const saved = input.connectionId
       ? this.ssh.upsert({ ...(this.ssh.get(input.connectionId) || {}), ...cleanConnection, id: input.connectionId })
       : this.ssh.upsert(input.connection);
-    const validation = this.ssh.ensureRemoteWorkspace(saved.id, input.remotePath || saved.remoteRoot || '~/.newmark-agent/workspaces/default');
+    const validation = await this.ssh.ensureRemoteWorkspace(saved.id, input.remotePath || saved.remoteRoot || '~/.newmark-agent/workspaces/default');
     if (!validation.ok || !validation.remotePcHash) {
       return { ok: false, validation, linkedExisting: 0, error: validation.error || 'SSH validation failed' };
     }
@@ -1179,7 +1711,8 @@ export class Agent {
   }
 
   removeWorkspace(name: string): boolean {
-    const removingCurrent = this.workspace.current?.name === name;
+    const current = this.workspace.current;
+    const removingCurrent = current?.id === name || current?.path === name || current?.name === name;
     this.saveWorkspaceConversationState();
     const removed = this.workspace.remove(name);
     if (removed && removingCurrent) {
@@ -1833,14 +2366,22 @@ export class Agent {
       return [{ type: 'text', text: '[Workspace required] Select or create a workspace before starting a conversation.' }];
     }
 
-    if (this.processDepth === 0) this.processingConversationId = this.activeConversationId || 'default';
+    if (this.processDepth === 0) {
+      this.processingConversationId = this.activeConversationId || 'default';
+      this.activeProcessAbortController = new AbortController();
+      this.subagents.resumeScheduling();
+    }
     this.processDepth++;
+    const processSignal = this.activeProcessAbortController?.signal;
     this.status = 'working';
     this.fileDiffs = [];
     this.pendingOptions = [];
 
     try {
       const text = typeof input === 'string' ? input : String(input.text || '');
+      const inputEnvelope = typeof input === 'string' ? null : input as AgentPromptMessage & { clientMessageId?: string; runId?: string };
+      const clientMessageId = String(inputEnvelope?.clientMessageId || '').trim();
+      const inputRunId = String(inputEnvelope?.runId || this.activeWorkRunId || '').trim();
       const images = typeof input === 'string' ? [] : (input.images || []).filter(image => /^data:image\//i.test(String(image.dataUrl || '')));
       if (images.length && this.model === 'auto') await this.evaluateAndSwitch(`${text}\n[image attachment]`);
       const selectedModel = this.config.findModel(this.model);
@@ -1850,16 +2391,18 @@ export class Agent {
       }
       const now = this.nowLabel();
       const displayText = images.length ? `${text}${text ? '\n\n' : ''}[${images.length} image attachment${images.length === 1 ? '' : 's'}]` : text;
-      this.chatMessages.push({ role: 'user', content: displayText, mode: this.modeName(), model: this.model, timestamp: now });
-      this.history.push({
-        role: 'user',
-        content: images.length
-          ? [{ type: 'text', text }, ...images.map(image => ({ type: 'image_url', image_url: { url: image.dataUrl } }))]
-          : text,
-      });
+      const historyContent = images.length
+        ? [{ type: 'text', text }, ...images.map(image => ({ type: 'image_url', image_url: { url: image.dataUrl } }))]
+        : text;
+      if (clientMessageId) {
+        this.persistGuideMessage(clientMessageId, displayText, inputRunId, historyContent);
+      } else {
+        this.chatMessages.push({ role: 'user', content: displayText, mode: this.modeName(), model: this.model, timestamp: now });
+        this.history.push({ role: 'user', content: historyContent });
+      }
       // Agent.process seeds the kernel from history, so its initial prompt does
       // not otherwise emit a kernel message_start event.
-      this.notifyAgentKernelUserMessageStart(text);
+      this.notifyAgentKernelUserMessageStart(text, clientMessageId || undefined);
       this.saveWorkspaceConversationState();
       this.emitWorkEvent({ type: 'start', content: 'Preparing request.' });
 
@@ -1873,7 +2416,7 @@ export class Agent {
       // Use external opencode CLI engine
       if (this.engine === 'opencode') {
         if (images.length) return [{ type: 'text', text: '[Vision unavailable] The OpenCode engine does not accept Newmark image attachments.' }];
-        const result = await this.processOpencode(text);
+        const result = await this.processOpencode(text, processSignal);
         this.status = 'idle';
         this.saveWorkspaceConversationState();
         this.emitWorkEvent({ type: 'done', content: 'Response complete.' });
@@ -1897,7 +2440,10 @@ export class Agent {
       throw e;
     } finally {
       this.processDepth = Math.max(0, this.processDepth - 1);
-      if (this.processDepth === 0) this.processingConversationId = null;
+      if (this.processDepth === 0) {
+        this.processingConversationId = null;
+        this.activeProcessAbortController = null;
+      }
     }
   }
 
@@ -2055,8 +2601,9 @@ export class Agent {
     } catch { return { ok: false, output: '[Subagent] Invalid close arguments.', error: 'Invalid close arguments.' }; }
   }
 
-  async handleFlowRun(args: string): Promise<string> {
+  async handleFlowRun(args: string, signal?: AbortSignal): Promise<string> {
     try {
+      throwIfAgentAborted(signal);
       const params = JSON.parse(args);
       const name = String(params.name || '').trim();
       if (!name) return '[Flow] name is required.';
@@ -2071,25 +2618,60 @@ export class Agent {
       this.flow = workflow;
       this.flowPc = Number(params.start || 0);
       const { runFlow } = require('./flow-runner') as typeof import('./flow-runner');
-      await runFlow(this, workflow, {
-        startInput: String(params.input || ''),
-        startPc: this.flowPc,
-        quiet: true,
-      });
-      this.flow = previousFlow;
-      this.flowPc = previousPc;
-      this.setMode(previousMode);
-      return `[Flow] Completed: ${workflow.name}`;
+      try {
+        await runFlow(this, workflow, {
+          startInput: String(params.input || ''),
+          startPc: this.flowPc,
+          quiet: true,
+          signal,
+        });
+        throwIfAgentAborted(signal);
+        return `[Flow] Completed: ${workflow.name}`;
+      } finally {
+        this.flow = previousFlow;
+        this.flowPc = previousPc;
+        this.setMode(previousMode);
+      }
     } catch (e) {
+      throwIfAgentAborted(signal);
       return `[Flow] ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
-  handleAutomationTool(tool: string, args: string): string {
+  handleAutomationTool(tool: string, args: string, signal?: AbortSignal): string | Promise<string> {
+    throwIfAgentAborted(signal);
     if (this.mode === 'plan' && tool !== 'automation_list') {
       return `[permission] Plan mode is fully read-only. Blocked: ${tool}`;
     }
-    if (!this.automationManager) return `[${tool}] Automation manager not initialized.`;
+    if (!this.automationManager) {
+      if (process.env.NEWMARK_ISOLATED_RUNTIME === '1' && process.env.NEWMARK_WSL_DISTRO) {
+        const workspace = this.workspace.current;
+        return requestWindowsHostTool('automation', { tool, payload: args }, {
+          conversationId: process.env.NEWMARK_CONVERSATION_ID || this.activeConversationId || 'default',
+          workspaceId: process.env.NEWMARK_WORKSPACE_ID || workspace?.name || workspace?.path || 'none',
+          actorId: this.runtimeActorId,
+          runtimeKey: process.env.NEWMARK_RUNTIME_KEY || '',
+        }, 120_000, signal).then(result => typeof result === 'string' ? result : JSON.stringify(result)).catch(error => {
+          throwIfAgentAborted(signal);
+          return `[${tool}] ${JSON.stringify({ ok: false, delegatedTo: 'desktop-main', error: error instanceof Error ? error.message : String(error) })}`;
+        });
+      }
+      if (process.env.NEWMARK_ISOLATED_RUNTIME === '1') {
+        const workspace = this.workspace.current;
+        return requestUtilityHostTool('automation', { tool, payload: args }, {
+          conversationId: this.activeConversationId || 'default',
+          workspaceId: workspace?.name || workspace?.path || 'none',
+          actorId: this.runtimeActorId,
+          workspacePath: workspace?.path || this.rootPath,
+          backend: 'utility',
+          mode: this.mode,
+        }, 120_000, signal).then(result => typeof result === 'string' ? result : JSON.stringify(result)).catch(error => {
+          throwIfAgentAborted(signal);
+          return `[${tool}] ${JSON.stringify({ ok: false, delegatedTo: 'desktop-main', error: error instanceof Error ? error.message : String(error) })}`;
+        });
+      }
+      return `[${tool}] Automation manager not initialized.`;
+    }
     try {
       const params = JSON.parse(args || '{}') as Record<string, unknown>;
       switch (tool) {
@@ -2135,7 +2717,8 @@ export class Agent {
     }
   }
 
-  async handleMemoryLabTool(tool: string, args: string): Promise<string> {
+  async handleMemoryLabTool(tool: string, args: string, signal?: AbortSignal): Promise<string> {
+    throwIfAgentAborted(signal);
     if (this.mode === 'plan' && tool !== 'memory_lab_read') {
       return `[permission] Plan mode is fully read-only. Blocked: ${tool}`;
     }
@@ -2153,31 +2736,35 @@ export class Agent {
             tags: Array.isArray(params.tags) ? params.tags.map(String) : String(params.tags || '').split(/[,，\n]+/),
             content: String(params.content || ''),
             kind: params.kind === 'folder' ? 'folder' : 'file',
-          });
+          }, signal);
           return this.memoryLab.formatWrite('memory_lab_update', result);
         }
         case 'memory_lab_reindex': {
-          return this.memoryLab.formatWrite('memory_lab_reindex', await this.reindexMemoryLab());
+          return this.memoryLab.formatWrite('memory_lab_reindex', await this.reindexMemoryLab(signal));
         }
         default:
           return `[${tool}] Unknown Memory Lab tool.`;
       }
     } catch (e) {
+      throwIfAgentAborted(signal);
       return `[${tool}] ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
-  async updateMemoryLab(input: MemoryLabUpdateInput): Promise<MemoryLabWriteResult> {
-    const update = await this.prepareMemoryLabUpdate(input);
+  async updateMemoryLab(input: MemoryLabUpdateInput, signal?: AbortSignal): Promise<MemoryLabWriteResult> {
+    const update = await this.prepareMemoryLabUpdate(input, signal);
+    throwIfAgentAborted(signal);
     return this.memoryLab.update(update);
   }
 
-  async reindexMemoryLab(): Promise<MemoryLabWriteResult> {
-    await this.organizeMemoryLabIndex();
+  async reindexMemoryLab(signal?: AbortSignal): Promise<MemoryLabWriteResult> {
+    await this.organizeMemoryLabIndex(signal);
+    throwIfAgentAborted(signal);
     return this.memoryLab.reindex();
   }
 
-  private async prepareMemoryLabUpdate(input: MemoryLabUpdateInput): Promise<MemoryLabPreparedUpdate> {
+  private async prepareMemoryLabUpdate(input: MemoryLabUpdateInput, signal?: AbortSignal): Promise<MemoryLabPreparedUpdate> {
+    throwIfAgentAborted(signal);
     const deterministic = this.memoryLab.prepareUpdate(input);
     const provider = this.engineModel();
     if (!provider) return deterministic;
@@ -2200,7 +2787,7 @@ export class Agent {
     try {
       const cfg = provider.intelligenceConfig(this.intelligence);
       const response = await this.withTimeout(
-        provider.chat(this.model, [{ role: 'user', content: prompt }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 3000)),
+        provider.chat(this.model, [{ role: 'user', content: prompt }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 3000), signal),
         120000
       );
       const parsed = this.extractMemoryLabJson(response);
@@ -2213,11 +2800,13 @@ export class Agent {
         kind: parsed.kind === 'folder' ? 'folder' : deterministic.kind,
       });
     } catch {
+      throwIfAgentAborted(signal);
       return deterministic;
     }
   }
 
-  private async organizeMemoryLabIndex(): Promise<void> {
+  private async organizeMemoryLabIndex(signal?: AbortSignal): Promise<void> {
+    throwIfAgentAborted(signal);
     const provider = this.engineModel();
     if (!provider) return;
     const read = this.memoryLab.read();
@@ -2229,10 +2818,10 @@ export class Agent {
     try {
       const cfg = provider.intelligenceConfig(this.intelligence);
       await this.withTimeout(
-        provider.chat(this.model, [{ role: 'user', content: JSON.stringify({ index: read.index }, null, 2) }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 1200)),
+        provider.chat(this.model, [{ role: 'user', content: JSON.stringify({ index: read.index }, null, 2) }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 1200), signal),
         120000
       );
-    } catch { /* deterministic reindex still runs */ }
+    } catch { throwIfAgentAborted(signal); /* deterministic reindex still runs */ }
   }
 
   private extractMemoryLabJson(response: string): Record<string, unknown> | null {
@@ -2397,7 +2986,8 @@ export class Agent {
     }).allowed);
   }
 
-  async handleImageGeneration(args: string): Promise<string> {
+  async handleImageGeneration(args: string, signal?: AbortSignal): Promise<string> {
+    throwIfAgentAborted(signal);
     const model = this.config.findModel(this.model);
     if (!model?.image_output) return `[Image generation unavailable] ${this.model} has not passed image-output validation.`;
     const provider = this.engineModel();
@@ -2407,10 +2997,12 @@ export class Agent {
     const prompt = String(input.prompt || '').trim();
     if (!prompt) return '[Image generation error] prompt is required.';
     try {
-      const generated = await provider.generateImage(this.model, prompt, String(input.size || '1024x1024'));
+      const generated = await provider.generateImage(this.model, prompt, String(input.size || '1024x1024'), signal);
+      throwIfAgentAborted(signal);
       const source = generated.dataUrl || generated.url || '';
       return source ? `![Generated image](${source})` : '[Image generation error] Provider returned no image.';
     } catch (error) {
+      throwIfAgentAborted(signal);
       return `[Image generation error] ${error instanceof Error ? error.message : String(error)}`;
     }
   }
@@ -2505,20 +3097,44 @@ export class Agent {
     this.skills = new SkillsManager(this.rootPath);
   }
 
-  private async processOpencode(input: string): Promise<StreamToken[]> {
+  private async processOpencode(input: string, signal?: AbortSignal): Promise<StreamToken[]> {
     try {
-      const { execSync } = require('child_process');
       const configPath = path.join(this.rootPath, 'config.json');
-      const result = execSync(`opencode --config "${configPath}" prompt --message "${input.replace(/"/g, '\\"')}" --format json`, {
-        encoding: 'utf-8', timeout: 120000,
-      });
-      return [{ type: 'text', text: result.trim() }];
+      const args = [
+        '--config', configPath,
+        'prompt',
+        '--message', input,
+        '--format', 'json',
+      ];
+      const result = await (process.platform === 'win32' ? runAsyncWindowsBatch('opencode.cmd', args, {
+        timeoutMs: 120_000,
+        maxBuffer: 1024 * 1024,
+        signal,
+      }) : runAsyncProcess('opencode', args, {
+        timeoutMs: 120_000,
+        maxBuffer: 1024 * 1024,
+        signal,
+      }));
+      if (result.aborted || signal?.aborted) {
+        const reason = signal?.reason;
+        if (reason instanceof Error) throw reason;
+        const abortError = new Error(reason ? String(reason) : 'OpenCode run aborted');
+        abortError.name = 'AbortError';
+        throw abortError;
+      }
+      if (result.status !== 0 || result.error) {
+        const detail = result.stderr.trim() || result.error || `OpenCode exited with status ${String(result.status)}`;
+        return [{ type: 'text', text: `[OpenCode Error] ${detail}\nFalling back to built-in engine.` }];
+      }
+      return [{ type: 'text', text: result.stdout.trim() }];
     } catch (e) {
+      if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : e);
       return [{ type: 'text', text: `[OpenCode Error] ${e}\nFalling back to built-in engine.` }];
     }
   }
 
-  async maybeCompress(msgs: Array<Record<string, unknown>>, provider?: LLMProvider | null): Promise<void> {
+  async maybeCompress(msgs: Array<Record<string, unknown>>, provider?: LLMProvider | null, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return;
     if (!this.config.getBool('context', 'auto_compress')) return;
     const total = msgs.reduce((sum, m) => sum + (String(m.content || '')).length, 0);
     const threshold = this.config.getNum('context', 'compress_threshold_chars') || 80000;
@@ -2536,7 +3152,8 @@ export class Agent {
 
     const omitted = recentStart - keepFirst;
     const middle = msgs.slice(keepFirst, recentStart);
-    const compression = await this.buildCompressionSummary(middle, total, budget, provider);
+    const compression = await this.buildCompressionSummary(middle, total, budget, provider, signal);
+    if (signal?.aborted) return;
     const compressed: Array<Record<string, unknown>> = msgs.slice(0, keepFirst);
     compressed.push({
       role: 'system',
@@ -2561,7 +3178,8 @@ export class Agent {
     middle: Array<Record<string, unknown>>,
     totalChars: number,
     budget: { maxTokens: number; targetTokens: number; summaryTokens: number },
-    provider?: LLMProvider | null
+    provider?: LLMProvider | null,
+    signal?: AbortSignal,
   ): Promise<{ summary: string; model: string; fallback: boolean }> {
     const workspacePath = this.workspace.current?.path || this.rootPath;
     const meta = [
@@ -2609,7 +3227,7 @@ export class Agent {
         transcript,
       ].join('\n');
       const generated = await this.withTimeout(
-        provider.chat(this.model, [{ role: 'user', content: prompt }], system, temperature, budget.summaryTokens),
+        provider.chat(this.model, [{ role: 'user', content: prompt }], system, temperature, budget.summaryTokens, signal),
         120000
       );
       const generatedText = String(generated || '').trim();
@@ -2772,7 +3390,7 @@ export class Agent {
           'You are in fully READ-ONLY exploration mode.',
           'Do NOT modify any files, including README.md, generated files, configs, archives, or workspace files.',
           'Explore the workspace, understand the codebase, research if needed, and produce a plan in the conversation only.',
-          'Use read-only tools only: web_search, web_fetch, read, glob, grep, browser_open, browser_snapshot, pwd, git_status, file_audit, and repo_security_audit.',
+          'Use read-only tools only: web_search, web_fetch, read, glob, grep, browser_open, browser_snapshot, browser_use (observe/navigate/wait/extract only), pwd, git_status, file_audit, and repo_security_audit.',
         ].join('\n');
       case 'goal': {
         const g = this.goal?.history() || '';

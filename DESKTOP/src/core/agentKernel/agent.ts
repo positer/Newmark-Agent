@@ -38,8 +38,16 @@ const DEFAULT_MODEL: Model = {
 
 class PendingMessageQueue {
   private messages: AgentMessage[] = [];
+  // A kernel is constructed immediately before its first prompt. Accepting
+  // during that attachment window prevents early Guide input from being lost;
+  // every completed run closes the gate again until the next prompt starts.
+  private accepting = true;
   constructor(public mode: QueueMode) {}
-  enqueue(message: AgentMessage): void { this.messages.push(message); }
+  enqueue(message: AgentMessage): boolean {
+    if (!this.accepting) return false;
+    this.messages.push(message);
+    return true;
+  }
   hasItems(): boolean { return this.messages.length > 0; }
   drain(): AgentMessage[] {
     if (this.mode === 'all') {
@@ -50,7 +58,18 @@ class PendingMessageQueue {
     const first = this.messages.shift();
     return first ? [first] : [];
   }
+  drainAll(): AgentMessage[] {
+    const all = this.messages.slice();
+    this.messages = [];
+    return all;
+  }
   clear(): void { this.messages = []; }
+  open(): void { this.accepting = true; }
+  closeAndDrain(): AgentMessage[] {
+    this.accepting = false;
+    return this.drain();
+  }
+  close(): void { this.accepting = false; }
 }
 
 type ActiveRun = {
@@ -129,10 +148,16 @@ export class Agent {
     return () => this.listeners.delete(listener);
   }
 
-  steer(message: AgentMessage): void { this.steeringQueue.enqueue(message); }
-  followUp(message: AgentMessage): void { this.followUpQueue.enqueue(message); }
+  steer(message: AgentMessage): boolean { return this.steeringQueue.enqueue(message); }
+  followUp(message: AgentMessage): boolean { return this.followUpQueue.enqueue(message); }
   clearAllQueues(): void { this.steeringQueue.clear(); this.followUpQueue.clear(); }
   hasQueuedMessages(): boolean { return this.steeringQueue.hasItems() || this.followUpQueue.hasItems(); }
+  drainQueuedMessages(): Array<{ message: AgentMessage; queueMode: 'steer' | 'followUp' }> {
+    return [
+      ...this.steeringQueue.drainAll().map(message => ({ message, queueMode: 'steer' as const })),
+      ...this.followUpQueue.drainAll().map(message => ({ message, queueMode: 'followUp' as const })),
+    ];
+  }
   waitForIdle(): Promise<void> { return this.activeRun?.promise || Promise.resolve(); }
   abort(): void { this.activeRun?.abortController.abort(); }
 
@@ -167,6 +192,12 @@ export class Agent {
       emit: (event: AgentEvent) => this.processEvent(event),
       getSteeringMessages: async () => this.steeringQueue.drain(),
       getFollowUpMessages: async () => this.followUpQueue.drain(),
+      closeSteeringMessages: async () => this.steeringQueue.closeAndDrain(),
+      closeFollowUpMessages: async () => this.followUpQueue.closeAndDrain(),
+      reopenMessageQueues: () => {
+        this.steeringQueue.open();
+        this.followUpQueue.open();
+      },
       toolExecution: this.toolExecution,
       shouldStopAfterTurn: this.shouldStopAfterTurn,
     };
@@ -177,9 +208,13 @@ export class Agent {
     let resolveRun!: () => void;
     const promise = new Promise<void>(resolve => { resolveRun = resolve; });
     this.activeRun = { promise, resolve: resolveRun, abortController };
+    this.steeringQueue.open();
+    this.followUpQueue.open();
     try {
       await run(abortController.signal);
     } finally {
+      this.steeringQueue.close();
+      this.followUpQueue.close();
       this.activeRun.resolve();
       this.activeRun = undefined;
     }
@@ -187,7 +222,8 @@ export class Agent {
 
   private async processEvent(event: AgentEvent): Promise<void> {
     if (event.type === 'message_end') {
-      this._state.messages.push(event.message);
+      const abortedAssistant = event.message.role === 'assistant' && event.message.stopReason === 'aborted';
+      if (!abortedAssistant) this._state.messages.push(event.message);
       if (event.message.role === 'assistant') this._state.streamingMessage = undefined;
     } else if (event.type === 'message_update') {
       this._state.streamingMessage = event.message;

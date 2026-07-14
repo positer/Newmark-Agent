@@ -47,6 +47,13 @@ export interface GitHubUpdateCheckResult {
   error?: string;
 }
 
+export interface GitHubUpdateCheckRuntimeOptions {
+  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  timeoutMs?: number;
+  currentVersion?: string;
+  apiBaseUrl?: string;
+}
+
 export interface GitHubUpdateApplyOptions {
   repo?: string;
   tag?: string;
@@ -321,12 +328,58 @@ function normalizeRepo(repo?: string): string {
   return String(repo || 'positer/Newmark-Agent').replace(/^https:\/\/github\.com\//i, '').replace(/\.git$/i, '').replace(/^\/+|\/+$/g, '');
 }
 
-function compareSemver(a: string, b: string): number {
-  const pa = String(a || '').replace(/^v/i, '').split(/[.-]/).map(n => Number(n) || 0);
-  const pb = String(b || '').replace(/^v/i, '').split(/[.-]/).map(n => Number(n) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const diff = (pa[i] || 0) - (pb[i] || 0);
-    if (diff) return diff > 0 ? 1 : -1;
+export function normalizeReleaseVersion(input: string): string {
+  const value = String(input || '')
+    .trim()
+    .replace(/^refs\/tags\//i, '')
+    .replace(/^dev-/i, '')
+    .replace(/^v/i, '');
+  const match = value.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
+  if (!match) return '';
+  return `${Number(match[1])}.${Number(match[2])}.${Number(match[3])}${match[4] ? `-${match[4]}` : ''}`;
+}
+
+interface ParsedSemver {
+  major: number;
+  minor: number;
+  patch: number;
+  prerelease: string[];
+}
+
+function parseSemver(input: string): ParsedSemver | null {
+  const normalized = normalizeReleaseVersion(input);
+  const match = normalized.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] ? match[4].split('.') : [],
+  };
+}
+
+export function compareSemver(a: string, b: string): number {
+  const left = parseSemver(a);
+  const right = parseSemver(b);
+  if (!left || !right) return 0;
+  for (const key of ['major', 'minor', 'patch'] as const) {
+    if (left[key] !== right[key]) return left[key] > right[key] ? 1 : -1;
+  }
+  if (!left.prerelease.length && !right.prerelease.length) return 0;
+  if (!left.prerelease.length) return 1;
+  if (!right.prerelease.length) return -1;
+  for (let i = 0; i < Math.max(left.prerelease.length, right.prerelease.length); i++) {
+    const l = left.prerelease[i];
+    const r = right.prerelease[i];
+    if (l === undefined) return -1;
+    if (r === undefined) return 1;
+    if (l === r) continue;
+    const ln = /^\d+$/.test(l) ? Number(l) : null;
+    const rn = /^\d+$/.test(r) ? Number(r) : null;
+    if (ln !== null && rn !== null) return ln > rn ? 1 : -1;
+    if (ln !== null) return -1;
+    if (rn !== null) return 1;
+    return l > r ? 1 : -1;
   }
   return 0;
 }
@@ -350,24 +403,55 @@ function selectReleaseAsset(assets: GitHubReleaseAsset[], wanted?: string): GitH
     assets.find(a => /\.zip$/i.test(a.name));
 }
 
-export async function checkGitHubUpdate(repoInput?: string, tagInput?: string, assetName?: string, token?: string): Promise<GitHubUpdateCheckResult> {
+export async function checkGitHubUpdate(
+  repoInput?: string,
+  tagInput?: string,
+  assetName?: string,
+  token?: string,
+  runtime: GitHubUpdateCheckRuntimeOptions = {},
+): Promise<GitHubUpdateCheckResult> {
   const repo = normalizeRepo(repoInput);
   const tag = String(tagInput || 'latest').replace(/^refs\/tags\//, '');
-  const endpoint = tag && tag !== 'latest'
-    ? `https://api.github.com/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`
-    : `https://api.github.com/repos/${repo}/releases/latest`;
-  const currentVersion = currentAppVersion();
+  const manualTag = !!tag && tag !== 'latest';
+  const apiBaseUrl = String(runtime.apiBaseUrl || 'https://api.github.com').replace(/\/+$/, '');
+  const endpoint = manualTag
+    ? `${apiBaseUrl}/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`
+    : `${apiBaseUrl}/repos/${repo}/releases?per_page=30`;
+  const currentVersion = normalizeReleaseVersion(runtime.currentVersion || currentAppVersion()) || currentAppVersion();
+  const fetchImpl = runtime.fetchImpl || fetch;
+  const timeoutMs = Math.max(1, Number(runtime.timeoutMs ?? 5_000));
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   try {
-    const response = await fetch(endpoint, { headers: githubHeaders(token) });
+    const response = await fetchImpl(endpoint, { headers: githubHeaders(token), signal: controller.signal });
     if (!response.ok) throw new Error(`GitHub release request failed: HTTP ${response.status}`);
-    const data = await response.json() as Record<string, any>;
+    const payload = await response.json() as Record<string, any> | Array<Record<string, any>>;
+    // GitHub's releases endpoint returns an array, while older proxies and
+    // compatibility gateways may still return a single latest-release object.
+    const payloadItems = Array.isArray(payload) ? payload : [payload];
+    const candidates: Array<Record<string, any>> = manualTag
+      ? payloadItems.slice(0, 1)
+      : payloadItems;
+    const releases = candidates
+      .filter(item => item && typeof item === 'object')
+      .filter(item => manualTag || item.draft !== true)
+      .map(item => ({ item, version: normalizeReleaseVersion(String(item.tag_name || '')) }))
+      .filter(entry => !!entry.version)
+      .sort((a, b) => compareSemver(b.version, a.version));
+    const selectedRelease = releases[0];
+    if (!selectedRelease) throw new Error('GitHub release check returned no valid non-draft semantic version.');
+    const data = selectedRelease.item;
     const assets = Array.isArray(data.assets) ? data.assets.map((a: Record<string, any>) => ({
       name: String(a.name || ''),
       size: Number(a.size || 0),
       browserDownloadUrl: String(a.browser_download_url || ''),
       contentType: String(a.content_type || ''),
     })).filter((a: GitHubReleaseAsset) => a.name && a.browserDownloadUrl) : [];
-    const version = String(data.tag_name || '').replace(/^v/i, '') || currentVersion;
+    const version = selectedRelease.version;
     const selectedAsset = selectReleaseAsset(assets, assetName);
     return {
       ok: true,
@@ -375,13 +459,18 @@ export async function checkGitHubUpdate(repoInput?: string, tagInput?: string, a
       tag: String(data.tag_name || tag),
       version,
       currentVersion,
-      updateAvailable: compareSemver(version, currentVersion) > 0 || String(data.tag_name || '') === `v${currentVersion}`,
+      updateAvailable: compareSemver(version, currentVersion) > 0,
       url: String(data.html_url || ''),
       assets,
       selectedAsset,
     };
   } catch (e) {
-    return { ok: false, repo, tag, version: '', currentVersion, updateAvailable: false, assets: [], error: e instanceof Error ? e.message : String(e) };
+    const error = timedOut
+      ? `GitHub release check timed out after ${timeoutMs}ms`
+      : (e instanceof Error ? e.message : String(e));
+    return { ok: false, repo, tag, version: '', currentVersion, updateAvailable: false, assets: [], error };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

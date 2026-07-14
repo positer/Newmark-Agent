@@ -1,7 +1,7 @@
 {
   "name": "newmark-agent",
   "productName": "Newmark Agent",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "homepage": "https://github.com/positer/Newmark-Agent",
   "author": {
@@ -11,7 +11,7 @@
   "main": "dist/main.js",
   "scripts": {
     "clean": "tsc --build --clean && node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "tsc && node scripts/build-ui-icons.cjs && node scripts/build-wsl-agent-host.cjs",
+    "build": "tsc && node scripts/build-ui-icons.cjs && node scripts/build-wsl-agent-host.cjs && node scripts/build-conversation-utility-host.cjs",
     "build:clean": "npm run clean && npm run build",
     "dev": "npm run build && node dist/launcher.js --server",
     "dev:cli": "npm run build && node dist/launcher.js --cli",
@@ -20,7 +20,15 @@
     "start:cli": "node dist/launcher.js --cli",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src",
-    "test": "npm run build && node dist/tests/verify.js && node dist/tests/dev008-subagent.js && node dist/tests/terminalTakeoverVerify.js && node dist/tests/workspaceFileRouterVerify.js && node dist/tests/computerUsePerformanceVerify.js",
+    "test": "npm run build && node dist/tests/verify.js && node dist/tests/dev008-subagent.js && node dist/tests/dev009Verify.js && node dist/tests/runtimeIsolationVerify.js && node dist/tests/guideWorkRunVerify.js && node dist/tests/guideUiReconcileVerify.js && node dist/tests/browserUseVerify.js && node dist/tests/toolProcessVerify.js && node dist/tests/startupPrewarmVerify.js && node dist/tests/pdfPreviewServerVerify.js && node dist/tests/editorLifecycleVerify.js && node dist/tests/terminalTakeoverVerify.js && node dist/tests/workspaceFileRouterVerify.js && node dist/tests/computerUsePerformanceVerify.js",
+    "test:runtime-isolation": "npm run build && node dist/tests/runtimeIsolationVerify.js",
+    "test:guide-workrun": "npm run build && node dist/tests/guideWorkRunVerify.js",
+    "test:guide-ui": "npm run build && node dist/tests/guideUiReconcileVerify.js",
+    "test:browser-use": "npm run build && node dist/tests/browserUseVerify.js",
+    "test:tool-process": "npm run build && node dist/tests/toolProcessVerify.js",
+    "test:startup-prewarm": "npm run build && node dist/tests/startupPrewarmVerify.js",
+    "test:browser-use-electron": "npm run build && electron dist/tests/browserUseElectronVerify.js",
+    "test:dev009": "npm run build && node dist/tests/dev009Verify.js && node dist/tests/runtimeIsolationVerify.js && node dist/tests/guideWorkRunVerify.js && node dist/tests/guideUiReconcileVerify.js && node dist/tests/browserUseVerify.js && node dist/tests/toolProcessVerify.js && node dist/tests/startupPrewarmVerify.js && node dist/tests/pdfPreviewServerVerify.js && node dist/tests/editorLifecycleVerify.js && electron dist/tests/browserUseElectronVerify.js",
     "test:dev008": "npm run build && node dist/tests/dev008-subagent.js",
     "test:computer-use-performance": "npm run build && node dist/tests/computerUsePerformanceVerify.js",
     "test:terminal-takeover": "npm run build && node dist/tests/terminalTakeoverVerify.js",
@@ -62,6 +70,7 @@
     "release:windows-zip-smoke": "node scripts/release-windows-zip-smoke.cjs",
     "release:windows-msi-smoke": "node scripts/release-windows-msi-smoke.cjs",
     "release:dev008-features-smoke": "node scripts/release-dev008-features-smoke.cjs",
+    "release:dev009-features-smoke": "node scripts/release-dev009-features-smoke.cjs",
     "release:github-assets-verify": "node scripts/verify-github-release-assets.cjs",
     "release:linux-real-provider-smoke": "node scripts/release-linux-real-provider-smoke.cjs",
     "release:ui-startup-recovery-smoke": "node scripts/release-ui-startup-recovery-smoke.cjs",
@@ -100,6 +109,7 @@
     ],
     "asarUnpack": [
       "dist/wsl-agent-host.bundle.cjs",
+      "dist/conversation-utility-host.bundle.cjs",
       "node_modules/node-pty/**/*"
     ],
     "extraFiles": [

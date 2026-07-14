@@ -25,6 +25,23 @@ export interface ProviderModelCatalogEntry {
   raw: Record<string, unknown>;
 }
 
+function abortFailure(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  const error = reason instanceof Error ? reason : new Error(reason ? String(reason) : 'LLM request aborted');
+  if (!error.name || error.name === 'Error') error.name = 'AbortError';
+  return error;
+}
+
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortFailure(signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortFailure(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
 export class LLMProvider {
   static nodeHttpTransport: ((method: 'GET' | 'POST', url: string, headers: Record<string, string>, body?: string) => Promise<{ status: number; body: string }>) | null = null;
   static powershellTransport: ((method: 'GET' | 'POST', url: string, headers: Record<string, string>, body?: string) => Promise<{ status: number; body: string }>) | null = null;
@@ -85,6 +102,22 @@ export class LLMProvider {
     };
   }
 
+  private isPlainHttpLoopback(urlValue: string): boolean {
+    try {
+      const parsed = new URL(urlValue);
+      const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+      return parsed.protocol === 'http:'
+        && (hostname === 'localhost' || hostname === '::1' || /^127(?:\.\d{1,3}){3}$/.test(hostname));
+    } catch {
+      return false;
+    }
+  }
+
+  private transportDiagnostic(stage: string, detail = ''): void {
+    if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS !== '1') return;
+    console.error(`[NewmarkProvider] ${stage}${detail ? ` ${detail}` : ''}`);
+  }
+
   private githubModelsHeaders(): Record<string, string> {
     return {
       'Content-Type': 'application/json',
@@ -97,9 +130,29 @@ export class LLMProvider {
     url: string,
     headers: Record<string, string>,
     body: Record<string, unknown>,
-    timeoutMs = 120000
+    timeoutMs = 120000,
+    signal?: AbortSignal,
   ): Promise<{ ok: boolean; status: number; text(): Promise<string>; json(): Promise<any> }> {
+    // Electron utility processes can leave an undici response body pending when
+    // several isolated workers concurrently call a plain-HTTP local provider.
+    // Node's HTTP client owns the full body lifecycle and is deterministic for
+    // loopback transports, while remote HTTPS providers retain fetch semantics.
+    if (this.isPlainHttpLoopback(url)) {
+      const pathname = (() => { try { return new URL(url).pathname; } catch { return ''; } })();
+      this.transportDiagnostic('loopback:start', pathname);
+      const local = await this.nodeHttpJson('POST', url, headers, JSON.stringify(body), signal);
+      this.transportDiagnostic('loopback:complete', `status=${local.status} bytes=${Buffer.byteLength(local.body || '')}`);
+      return {
+        ok: local.status >= 200 && local.status < 300,
+        status: local.status,
+        text: async () => local.body,
+        json: async () => JSON.parse(local.body || '{}'),
+      };
+    }
     const abort = new AbortController();
+    const forwardAbort = () => abort.abort(signal?.reason);
+    if (signal?.aborted) forwardAbort();
+    else signal?.addEventListener('abort', forwardAbort, { once: true });
     const timer = setTimeout(() => abort.abort(), timeoutMs);
     try {
       const response = await fetch(url, {
@@ -110,8 +163,9 @@ export class LLMProvider {
       });
       return response;
     } catch (e) {
+      if (signal?.aborted) throw abortFailure(signal);
       if (!this.shouldUseNodeHttpFallback(e)) throw e;
-      const fallback = await this.nodeHttpJson('POST', url, headers, JSON.stringify(body));
+      const fallback = await this.nodeHttpJson('POST', url, headers, JSON.stringify(body), signal);
       return {
         ok: fallback.status >= 200 && fallback.status < 300,
         status: fallback.status,
@@ -120,6 +174,7 @@ export class LLMProvider {
       };
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', forwardAbort);
     }
   }
 
@@ -158,12 +213,14 @@ export class LLMProvider {
     method: 'GET' | 'POST',
     urlValue: string,
     headers: Record<string, string>,
-    body = ''
+    body = '',
+    signal?: AbortSignal,
   ): Promise<{ status: number; body: string }> {
     if (LLMProvider.nodeHttpTransport) {
-      return LLMProvider.nodeHttpTransport(method, urlValue, headers, body).catch(error => {
+      return abortable(LLMProvider.nodeHttpTransport(method, urlValue, headers, body), signal).catch(error => {
+        if (signal?.aborted) throw abortFailure(signal);
         if (process.platform === 'win32') {
-          return this.powershellJson(method, urlValue, headers, body);
+          return this.powershellJson(method, urlValue, headers, body, signal);
         }
         throw error;
       });
@@ -185,18 +242,41 @@ export class LLMProvider {
       }, (res) => {
         res.setEncoding('utf8');
         let responseBody = '';
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          resolve({ status: res.statusCode || 0, body: responseBody });
+        };
+        const fail = (error: Error) => {
+          if (settled) return;
+          settled = true;
+          reject(error);
+        };
         res.on('data', chunk => { responseBody += chunk; });
-        res.on('end', () => resolve({ status: res.statusCode || 0, body: responseBody }));
+        res.once('end', finish);
+        res.once('aborted', () => fail(new Error('Node HTTP response aborted before completion')));
+        res.once('error', error => fail(error));
+        res.once('close', () => {
+          if (settled) return;
+          if (res.complete) finish();
+          else fail(new Error('Node HTTP response closed before completion'));
+        });
       });
       req.setTimeout(120000, () => {
         req.destroy(new Error('Node HTTP fallback timeout'));
       });
       req.on('error', reject);
+      const onAbort = () => req.destroy(abortFailure(signal));
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
+      req.once('close', () => signal?.removeEventListener('abort', onAbort));
       if (body) req.write(body);
       req.end();
     }).catch(error => {
+      if (signal?.aborted) throw abortFailure(signal);
       if (process.platform === 'win32') {
-        return this.powershellJson(method, urlValue, headers, body);
+        return this.powershellJson(method, urlValue, headers, body, signal);
       }
       throw error;
     });
@@ -206,7 +286,8 @@ export class LLMProvider {
     method: 'GET' | 'POST',
     urlValue: string,
     headers: Record<string, string>,
-    body = ''
+    body = '',
+    signal?: AbortSignal,
   ): Promise<{ status: number; body: string }> {
     if (LLMProvider.powershellTransport) {
       return LLMProvider.powershellTransport(method, urlValue, headers, body);
@@ -254,6 +335,13 @@ export class LLMProvider {
       });
       let stdout = '';
       let stderr = '';
+      const onAbort = () => {
+        try { child.kill(); } catch {}
+        cleanup();
+        reject(abortFailure(signal));
+      };
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
       const timer = setTimeout(() => {
         child.kill();
         cleanup();
@@ -265,11 +353,13 @@ export class LLMProvider {
       child.stderr.on('data', chunk => { stderr += chunk; });
       child.on('error', error => {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
         cleanup();
         reject(error);
       });
       child.on('close', code => {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
         if (code !== 0) {
           cleanup();
           reject(new Error(`PowerShell HTTP fallback failed: ${this.redactSecret(stderr || stdout)}`));
@@ -505,25 +595,39 @@ export class LLMProvider {
     return chunks.join('') || this.extractChatCompletionText(json);
   }
 
+  private normalizeResponsesPayload(payload: unknown): Record<string, unknown> {
+    // Some OpenAI-compatible gateways wrap the standard Responses object in a
+    // single-element array. Normalize that transport quirk once so plain chat
+    // and tool-stream consumers share the same response shape.
+    let current = payload;
+    while (Array.isArray(current) && current.length === 1) current = current[0];
+    return current && typeof current === 'object' && !Array.isArray(current)
+      ? current as Record<string, unknown>
+      : {};
+  }
+
   private async *openAIResponsesWithTools(
     model: string,
     messages: Array<Record<string, unknown>>,
     systemPrompt: string | null,
     temperature: number,
     maxTokens: number,
-    tools: unknown[]
+    tools: unknown[],
+    signal?: AbortSignal,
   ): AsyncGenerator<StreamToken> {
     const response = await this.postJsonWithFetchFallback(
       `${this.cleanBaseUrl()}/responses`,
       this.openAIHeaders(),
-      this.responsesBody(model, messages, systemPrompt, temperature, maxTokens, tools)
+      this.responsesBody(model, messages, systemPrompt, temperature, maxTokens, tools),
+      120000,
+      signal,
     );
     if (!response.ok) {
       const err = await response.text();
       yield { type: 'text', text: `[LLM Error: ${response.status}] ${err}` };
       return;
     }
-    const json = await response.json() as Record<string, unknown>;
+    const json = this.normalizeResponsesPayload(await response.json());
     const text = this.extractResponsesText(json);
     if (text) yield { type: 'text', text };
     const output = Array.isArray(json.output) ? json.output : [];
@@ -547,17 +651,20 @@ export class LLMProvider {
     messages: Array<Record<string, unknown>>,
     systemPrompt: string | null,
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    signal?: AbortSignal,
   ): Promise<string> {
     const response = await this.postJsonWithFetchFallback(
       `${this.cleanBaseUrl()}/responses`,
       this.openAIHeaders(),
-      this.responsesBody(model, messages, systemPrompt, temperature, maxTokens)
+      this.responsesBody(model, messages, systemPrompt, temperature, maxTokens),
+      120000,
+      signal,
     );
     if (!response.ok) {
       return `[LLM Error: ${response.status}] ${await response.text()}`;
     }
-    return this.extractResponsesText(await response.json() as Record<string, unknown>);
+    return this.extractResponsesText(this.normalizeResponsesPayload(await response.json()));
   }
 
   private anthropicTools(tools: unknown[]): Array<Record<string, unknown>> {
@@ -640,10 +747,12 @@ export class LLMProvider {
     systemPrompt: string | null,
     temperature: number,
     maxTokens: number,
-    tools: unknown[]
+    tools: unknown[],
+    signal?: AbortSignal,
   ): AsyncGenerator<StreamToken> {
+    if (signal?.aborted) throw abortFailure(signal);
     if (this.protocol() === 'anthropic') {
-      yield* this.anthropicChatWithTools(model, messages, systemPrompt, temperature, maxTokens, tools);
+      yield* this.anthropicChatWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal);
       return;
     }
 
@@ -666,16 +775,19 @@ export class LLMProvider {
 
     const mode = this.openAITransportMode();
     if (!isGitHubModels && mode === 'responses') {
-      yield* this.openAIResponsesWithTools(model, messages, systemPrompt, temperature, maxTokens, tools);
+      yield* this.openAIResponsesWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal);
       return;
     }
 
     if (mode === 'chat') {
-      yield* this.openAIChatWithToolsNodeFallback(url, body);
+      yield* this.openAIChatWithToolsNodeFallback(url, body, signal);
       return;
     }
 
     const abort = new AbortController();
+    const forwardAbort = () => abort.abort(signal?.reason);
+    if (signal?.aborted) forwardAbort();
+    else signal?.addEventListener('abort', forwardAbort, { once: true });
     const timeout = setTimeout(() => abort.abort(), 120000);
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
@@ -691,7 +803,8 @@ export class LLMProvider {
       } catch (e) {
         if (!this.shouldUseNodeHttpFallback(e)) throw e;
         clearTimeout(timeout);
-        yield* this.openAIChatWithToolsNodeFallback(url, body);
+        if (signal?.aborted) throw abortFailure(signal);
+        yield* this.openAIChatWithToolsNodeFallback(url, body, signal);
         return;
       }
 
@@ -699,7 +812,7 @@ export class LLMProvider {
         const err = await response.text();
         if (this.shouldUseResponsesFallback(response.status, err)) {
           clearTimeout(timeout);
-          yield* this.openAIResponsesWithTools(model, messages, systemPrompt, temperature, maxTokens, tools);
+          yield* this.openAIResponsesWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal);
           return;
         }
         yield { type: 'text', text: `[LLM Error: ${response.status}] ${err}` };
@@ -718,6 +831,7 @@ export class LLMProvider {
       let currentReasoningContent = '';
 
       while (true) {
+        if (signal?.aborted) throw abortFailure(signal);
         const readPromise = reader.read();
         const timeoutPromise = new Promise<{ done: boolean; value?: Uint8Array }>((_, reject) =>
           setTimeout(() => reject(new Error('Stream read timeout')), 30000)
@@ -770,15 +884,19 @@ export class LLMProvider {
     } finally {
       reader?.releaseLock();
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', forwardAbort);
     }
   }
 
   private async *openAIChatWithToolsNodeFallback(
     url: string,
-    streamingBody: Record<string, unknown>
+    streamingBody: Record<string, unknown>,
+    signal?: AbortSignal,
   ): AsyncGenerator<StreamToken> {
     const body: Record<string, unknown> = { ...streamingBody, stream: false };
-    const response = await this.postJsonWithFetchFallback(url, this.openAIHeaders(), body);
+    this.transportDiagnostic('chat-tools:start');
+    const response = await this.postJsonWithFetchFallback(url, this.openAIHeaders(), body, 120000, signal);
+    this.transportDiagnostic('chat-tools:headers', `status=${response.status}`);
     if (!response.ok) {
       const err = await response.text();
       if (this.shouldUseResponsesFallback(response.status, err)) {
@@ -790,7 +908,8 @@ export class LLMProvider {
           systemMessage ? String(systemMessage.content || '') : null,
           Number(body.temperature || 0),
           Number(body.max_tokens || 0),
-          Array.isArray(body.tools) ? body.tools : []
+          Array.isArray(body.tools) ? body.tools : [],
+          signal,
         );
         return;
       }
@@ -798,6 +917,7 @@ export class LLMProvider {
       return;
     }
     const json = await response.json();
+    this.transportDiagnostic('chat-tools:parsed', `tools=${Array.isArray(json?.choices?.[0]?.message?.tool_calls) ? json.choices[0].message.tool_calls.length : 0}`);
     const choice = json.choices?.[0];
     const message = choice?.message || {};
     if (message.reasoning_content) {
@@ -808,6 +928,7 @@ export class LLMProvider {
       yield { type: 'text', text: messageText, reasoningContent: message.reasoning_content ? String(message.reasoning_content) : undefined };
     }
     for (const tc of message.tool_calls || []) {
+      this.transportDiagnostic('chat-tools:yield', `name=${String(tc.function?.name || '').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80) || 'tool'}`);
       yield {
         type: 'tool_call',
         text: '',
@@ -817,6 +938,7 @@ export class LLMProvider {
           arguments: String(tc.function?.arguments || '{}'),
         },
       };
+      this.transportDiagnostic('chat-tools:yield-returned');
     }
   }
 
@@ -826,7 +948,8 @@ export class LLMProvider {
     systemPrompt: string | null,
     temperature: number,
     maxTokens: number,
-    tools: unknown[]
+    tools: unknown[],
+    signal?: AbortSignal,
   ): AsyncGenerator<StreamToken> {
     const { system, messages: anthropicMessages } = this.anthropicMessages(messages, systemPrompt);
     const body: Record<string, unknown> = {
@@ -843,6 +966,7 @@ export class LLMProvider {
       method: 'POST',
       headers: this.anthropicHeaders(),
       body: JSON.stringify(body),
+      signal,
     });
 
     if (!response.ok) {
@@ -878,7 +1002,8 @@ export class LLMProvider {
     messages: Array<Record<string, unknown>>,
     systemPrompt: string | null,
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    signal?: AbortSignal,
   ): Promise<string> {
     if (this.protocol() === 'anthropic') {
       const { system, messages: anthropicMessages } = this.anthropicMessages(messages, systemPrompt);
@@ -890,7 +1015,7 @@ export class LLMProvider {
       };
       if (system) body.system = system;
 
-      const response = await this.postJsonWithFetchFallback(`${this.cleanBaseUrl()}/messages`, this.anthropicHeaders(), body);
+      const response = await this.postJsonWithFetchFallback(`${this.cleanBaseUrl()}/messages`, this.anthropicHeaders(), body, 120000, signal);
 
       if (!response.ok) {
         throw new Error(`LLM Error: ${response.status} ${await response.text()}`);
@@ -918,15 +1043,15 @@ export class LLMProvider {
     };
 
     if (!isGitHubModels && this.openAITransportMode() === 'responses') {
-      return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens);
+      return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens, signal);
     }
 
-    const response = await this.postJsonWithFetchFallback(url, this.openAIHeaders(), body);
+    const response = await this.postJsonWithFetchFallback(url, this.openAIHeaders(), body, 120000, signal);
 
     if (!response.ok) {
       const err = await response.text();
       if (!isGitHubModels && this.shouldUseResponsesFallback(response.status, err)) {
-        return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens);
+        return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens, signal);
       }
       throw new Error(`LLM Error: ${response.status} ${err}`);
     }
@@ -1026,7 +1151,7 @@ export class LLMProvider {
     }
   }
 
-  async generateImage(model: string, prompt: string, size = '1024x1024'): Promise<{ dataUrl?: string; url?: string }> {
+  async generateImage(model: string, prompt: string, size = '1024x1024', signal?: AbortSignal): Promise<{ dataUrl?: string; url?: string }> {
     if (this.protocol() !== 'openai') throw new Error('Image generation requires an OpenAI-compatible provider.');
     const response = await this.postJsonWithFetchFallback(`${this.cleanBaseUrl()}/images/generations`, this.openAIHeaders(), {
       model,
@@ -1034,7 +1159,7 @@ export class LLMProvider {
       size,
       n: 1,
       response_format: 'b64_json',
-    }, 180000);
+    }, 180000, signal);
     if (!response.ok) throw new Error(`Image generation failed: HTTP ${response.status}: ${(await response.text()).slice(0, 160)}`);
     const json = await response.json() as { data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }> };
     const item = json.data?.[0];

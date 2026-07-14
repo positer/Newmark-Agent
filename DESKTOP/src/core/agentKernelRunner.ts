@@ -1,6 +1,6 @@
 ﻿import { LLMProvider } from '../llm/provider';
 import { Agent } from './agent';
-import { ModelConfig, ProviderProtocol } from './config';
+import { ProviderProtocol } from './config';
 import { StreamToken } from './types';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -8,6 +8,133 @@ import { terminalTakeoverWorkspaceId } from '../tools/terminalTakeover';
 import { evaluateToolPolicy } from './toolPolicy';
 
 type NativeAgentConstructor = new (options?: Record<string, unknown>) => NativeAgentInstance;
+
+interface PublicStreamFilterState {
+  insideThink: boolean;
+  thinkPending: string;
+  hiddenLine: boolean;
+  atLineStart: boolean;
+  linePrefixPending: string;
+}
+
+const publicStreamFilters = new WeakMap<Agent, PublicStreamFilterState>();
+const HIDDEN_LINE_PREFIXES = [
+  'reasoning:',
+  'reasoning：',
+  'reasoning_content:',
+  'reasoning_content：',
+  'thinking:',
+  'thinking：',
+  'thinking_content:',
+  'thinking_content：',
+  'thinking_delta:',
+  'thinking_delta：',
+  'thinking_start:',
+  'thinking_start：',
+  'thinking_end:',
+  'thinking_end：',
+  'analysis:',
+  'analysis：',
+];
+
+function partialMarkerSuffix(value: string, marker: string): string {
+  const lower = value.toLowerCase();
+  const target = marker.toLowerCase();
+  for (let length = Math.min(value.length, marker.length - 1); length > 0; length--) {
+    if (lower.slice(-length) === target.slice(0, length)) return value.slice(-length);
+  }
+  return '';
+}
+
+export function filterPublicAssistantDelta(agent: Agent, delta: string): string {
+  const state = publicStreamFilters.get(agent) || {
+    insideThink: false,
+    thinkPending: '',
+    hiddenLine: false,
+    atLineStart: true,
+    linePrefixPending: '',
+  };
+  let input = state.thinkPending + String(delta || '');
+  state.thinkPending = '';
+  let withoutThink = '';
+  while (input) {
+    if (state.insideThink) {
+      const closeIndex = input.toLowerCase().indexOf('</think>');
+      if (closeIndex < 0) {
+        state.thinkPending = partialMarkerSuffix(input, '</think>');
+        input = '';
+        continue;
+      }
+      input = input.slice(closeIndex + '</think>'.length);
+      state.insideThink = false;
+      continue;
+    }
+    const openIndex = input.toLowerCase().indexOf('<think');
+    if (openIndex < 0) {
+      const suffix = partialMarkerSuffix(input, '<think');
+      withoutThink += input.slice(0, input.length - suffix.length);
+      state.thinkPending = suffix;
+      input = '';
+      continue;
+    }
+    withoutThink += input.slice(0, openIndex);
+    const tagEnd = input.indexOf('>', openIndex);
+    if (tagEnd < 0) {
+      state.thinkPending = input.slice(openIndex);
+      input = '';
+      continue;
+    }
+    state.insideThink = true;
+    input = input.slice(tagEnd + 1);
+  }
+
+  let visible = '';
+  for (const character of withoutThink) {
+    if (state.hiddenLine) {
+      if (character === '\n') {
+        state.hiddenLine = false;
+        state.atLineStart = true;
+        state.linePrefixPending = '';
+      }
+      continue;
+    }
+    if (!state.atLineStart) {
+      visible += character;
+      if (character === '\n') state.atLineStart = true;
+      continue;
+    }
+
+    if (character === '\n') {
+      visible += state.linePrefixPending + character;
+      state.linePrefixPending = '';
+      state.atLineStart = true;
+      continue;
+    }
+    state.linePrefixPending += character;
+    const candidate = state.linePrefixPending.trimStart().toLowerCase();
+    const couldBeHidden = HIDDEN_LINE_PREFIXES.some(prefix => prefix.startsWith(candidate));
+    const isHidden = HIDDEN_LINE_PREFIXES.some(prefix => candidate === prefix);
+    if (isHidden) {
+      state.linePrefixPending = '';
+      state.hiddenLine = true;
+      state.atLineStart = false;
+    } else if (!couldBeHidden) {
+      visible += state.linePrefixPending;
+      state.linePrefixPending = '';
+      state.atLineStart = false;
+    }
+  }
+  publicStreamFilters.set(agent, state);
+  // Streaming deltas are positional text fragments. Trimming each fragment
+  // corrupts normal prose (for example `Hello` + ` world`). Full-message
+  // persistence still uses sanitizeAssistantOutput(), which trims once at the
+  // final boundary.
+  return agent.sanitizeAssistantStreamingOutput(visible);
+}
+
+export function resetPublicAssistantDeltaFilter(agent: Agent): void {
+  publicStreamFilters.delete(agent);
+}
 
 interface NativeAgentInstance {
   state: {
@@ -18,8 +145,8 @@ interface NativeAgentInstance {
   };
   subscribe(listener: (event: KernelAgentEvent, signal: AbortSignal) => Promise<void> | void): () => void;
   prompt(message: KernelMessage | KernelMessage[]): Promise<void>;
-  steer(message: unknown): void;
-  followUp(message: unknown): void;
+  steer(message: unknown): boolean;
+  followUp(message: unknown): boolean;
   abort(): void;
 }
 
@@ -58,7 +185,7 @@ interface KernelToolCall {
 type KernelContent = KernelTextContent | KernelImageContent | KernelToolCall | { type: string; [key: string]: unknown };
 
 type KernelMessage =
-  | { role: 'user'; content: string | KernelTextContent[]; timestamp: number }
+  | { role: 'user'; content: string | Array<KernelTextContent | KernelImageContent>; timestamp: number; clientMessageId?: string; runId?: string }
   | { role: 'assistant'; content: KernelContent[]; api: string; provider: string; model: string; usage: KernelUsage; stopReason: string; errorMessage?: string; timestamp: number }
   | { role: 'toolResult'; toolCallId: string; toolName: string; content: Array<KernelTextContent | KernelImageContent>; details?: unknown; isError: boolean; timestamp: number };
 
@@ -77,7 +204,7 @@ interface KernelTool {
   description: string;
   parameters: Record<string, unknown>;
   prepareArguments?: (args: unknown) => Record<string, unknown>;
-  execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ content: Array<KernelTextContent | KernelImageContent>; details: unknown; terminate?: boolean }>;
+  execute: (toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) => Promise<{ content: Array<KernelTextContent | KernelImageContent>; details: unknown; terminate?: boolean }>;
   executionMode?: 'sequential' | 'parallel';
 }
 
@@ -141,7 +268,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
     streamFn: streamWithNewmarkProvider(agent, provider, KernelStreamCompat, newmarkTools),
     toolExecution: 'sequential',
     convertToLlm: (messages: KernelMessage[]) => messages.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'toolResult'),
-    transformContext: async (messages: KernelMessage[]) => transformContext(agent, provider, messages),
+    transformContext: async (messages: KernelMessage[], signal?: AbortSignal) => transformContext(agent, provider, messages, signal),
     shouldStopAfterTurn: async ({ message }: { message: KernelMessage }) => shouldStopAfterTurn(agent, message),
   });
 
@@ -218,7 +345,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   return agent.sanitizeVisibleTokens(tokens);
 
   function streamWithNewmarkProvider(currentAgent: Agent, currentProvider: LLMProvider, compat: KernelStreamCompat, cachedTools: unknown[]) {
-    return async (model: KernelModel, context: { systemPrompt?: string; messages: KernelMessage[]; tools?: KernelTool[] }) => {
+    return async (model: KernelModel, context: { systemPrompt?: string; messages: KernelMessage[]; tools?: KernelTool[] }, options?: { signal?: AbortSignal }) => {
       const stream = compat.createAssistantMessageEventStream();
       void (async () => {
         const partial = assistantMessage(model, [], 'stop');
@@ -237,7 +364,10 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
             temperature,
             maxTokens,
             cachedTools,
+            options?.signal,
           )) {
+            if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error(`[NewmarkKernel] provider-token type=${token.type}`);
+            if (options?.signal?.aborted) break;
             if (token.reasoningContent) {
               const delta = token.reasoningContent.slice(thinking.length);
               thinking = token.reasoningContent;
@@ -269,13 +399,26 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
               const contents: KernelContent[] = text ? [{ type: 'text', text }, toolCall] : [toolCall];
               finalContent.push(toolCall);
               stream.push({ type: 'toolcall_end', contentIndex, toolCall, partial: assistantMessage(model, contents, 'toolUse') } as KernelProviderEventStreamEvent);
+              if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error('[NewmarkKernel] toolcall-pushed');
               contentIndex++;
             }
+          }
+          if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error('[NewmarkKernel] provider-loop-complete');
+          if (options?.signal?.aborted) {
+            const aborted = assistantMessage(model, text ? [{ type: 'text', text }] : [], 'aborted');
+            stream.push({ type: 'done', reason: 'aborted', message: aborted } as KernelProviderEventStreamEvent);
+            return;
           }
           if (textStarted) finalContent.push({ type: 'text', text });
           const final = assistantMessage(model, finalContent, finalContent.some(c => c.type === 'toolCall') ? 'toolUse' : 'stop');
           stream.push({ type: 'done', reason: final.stopReason, message: final } as KernelProviderEventStreamEvent);
+          if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error(`[NewmarkKernel] done-pushed reason=${final.stopReason}`);
         } catch (error) {
+          if (options?.signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
+            const aborted = assistantMessage(model, text ? [{ type: 'text', text }] : [], 'aborted');
+            stream.push({ type: 'done', reason: 'aborted', message: aborted } as KernelProviderEventStreamEvent);
+            return;
+          }
           const final = assistantMessage(model, [{ type: 'text', text: `[Error] ${error instanceof Error ? error.message : String(error)}` }], 'error');
           final.errorMessage = error instanceof Error ? error.message : String(error);
           stream.push({ type: 'error', reason: 'error', error: final } as KernelProviderEventStreamEvent);
@@ -286,11 +429,13 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   }
 }
 
-async function transformContext(agent: Agent, provider: LLMProvider, messages: KernelMessage[]): Promise<KernelMessage[]> {
+async function transformContext(agent: Agent, provider: LLMProvider, messages: KernelMessage[], signal?: AbortSignal): Promise<KernelMessage[]> {
+  if (signal?.aborted) return messages;
   if (!agent.config.getBool('context', 'auto_compress')) return messages;
   const newmarkMessages = fromKernelMessages(messages, false);
   const beforeCompression = JSON.stringify(newmarkMessages);
-  await agent.maybeCompress(newmarkMessages, provider);
+  await agent.maybeCompress(newmarkMessages, provider, signal);
+  if (signal?.aborted) return messages;
   if (JSON.stringify(newmarkMessages) === beforeCompression) return messages;
   return toKernelMessagesFromHistory(newmarkMessages, agent);
 }
@@ -317,11 +462,24 @@ async function shouldStopAfterTurn(agent: Agent, message: KernelMessage): Promis
 async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: StreamToken[]): Promise<void> {
   switch (event.type) {
     case 'message_start':
-      if (event.message.role === 'user') agent.notifyAgentKernelUserMessageStart(KernelMessageText(event.message));
+      if (event.message.role === 'user') {
+        const text = KernelMessageText(event.message);
+        if (event.message.clientMessageId) {
+          const imageCount = Array.isArray(event.message.content)
+            ? event.message.content.filter(item => item.type === 'image').length
+            : 0;
+          const display = imageCount ? `${text}${text ? '\n\n' : ''}[${imageCount} image attachment${imageCount === 1 ? '' : 's'}]` : text;
+          const history = toHistoryMessage(event.message);
+          agent.persistGuideMessage(event.message.clientMessageId, display, event.message.runId, history.content);
+        }
+        agent.notifyAgentKernelUserMessageStart(text, event.message.clientMessageId);
+      } else if (event.message.role === 'assistant') {
+        resetPublicAssistantDeltaFilter(agent);
+      }
       break;
     case 'message_update':
       if (event.assistantMessageEvent.type === 'text_delta') {
-        const text = String(event.assistantMessageEvent.delta || '');
+        const text = filterPublicAssistantDelta(agent, String(event.assistantMessageEvent.delta || ''));
         if (text) {
           tokens.push({ type: 'text', text });
           agent.emitWorkEvent({ type: 'text', content: text });
@@ -334,42 +492,46 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
       }
       break;
     case 'tool_execution_start': {
-      const args = JSON.stringify(event.args || {});
       agent.emitWorkEvent({
         type: 'tool_call',
         content: `Calling tool ${event.toolName}`,
         toolCallId: event.toolCallId,
         toolName: event.toolName,
-        toolArgs: agent.visibleToolArgs(args),
       });
-      agent.appendWorkflowMessage(`Calling tool ${event.toolName}`, event.toolName, agent.visibleToolArgs(args), false);
+      if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error('[NewmarkKernel] tool-work-event-emitted');
+      agent.appendWorkflowMessage(`Calling tool ${event.toolName}`, event.toolName, undefined, false);
+      if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error('[NewmarkKernel] tool-workflow-appended');
       break;
     }
     case 'turn_end':
       break;
     case 'tool_execution_end': {
       const text = toolResultText(event.result);
-      const display = text.length > 3000 ? `${text.slice(0, 3000)}...[truncated]` : text;
       if (toolResultTerminates(event.result)) {
         tokens.push({ type: 'text', text });
       }
       agent.emitWorkEvent({
         type: 'tool_result',
-        content: display,
+        content: `Tool ${event.toolName} completed.`,
         toolCallId: event.toolCallId,
         toolName: event.toolName,
       });
-      agent.appendWorkflowMessage(`Tool ${event.toolName} result:\n${display}`, event.toolName, undefined, false);
+      agent.appendWorkflowMessage(`Tool ${event.toolName} completed.`, event.toolName, undefined, false);
       break;
     }
     case 'message_end':
       if (event.message.role === 'assistant') {
         const text = agent.sanitizeAssistantOutput(KernelMessageText(event.message));
-        if (text) {
+        if (text && event.message.stopReason !== 'aborted') {
           agent.chatMessages.push({ role: 'assistant', content: text, mode: agent.modeName(), model: agent.model, timestamp: agent.nowLabel() });
-          agent.history.push(toHistoryMessage(event.message));
+          const historyMessage = toHistoryMessage(event.message);
+          // Keep tool-call metadata, but never replay a hidden-reasoning line
+          // that was deliberately removed from the public completed message.
+          historyMessage.content = text;
+          agent.history.push(historyMessage);
           agent.saveWorkspaceConversationState();
         }
+        resetPublicAssistantDeltaFilter(agent);
       } else if (event.message.role === 'toolResult') {
         agent.history.push(toHistoryMessage(event.message));
         agent.saveWorkspaceConversationState();
@@ -418,10 +580,12 @@ function toKernelTools(agent: Agent, definitions?: unknown[]): KernelTool[] {
       parameters: fn.parameters || { type: 'object', properties: {}, required: [] },
       prepareArguments: parseToolArgs,
       executionMode: 'sequential' as const,
-      execute: async (_toolCallId: string, params: Record<string, unknown>) => {
+      execute: async (_toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) => {
+        if (signal?.aborted) throw abortError();
         const name = String(fn.name || '');
         const args = JSON.stringify(params || {});
-        const rawText = await executeNewmarkTool(agent, name, args);
+        const rawText = await executeNewmarkTool(agent, name, args, signal);
+        if (signal?.aborted) throw abortError();
         const visionImagePath = computerUseVisionImagePath(agent, name, rawText);
         const directImage = imageInspectDataUrl(name, rawText);
         const text = sanitizeVisualToolText(name, rawText);
@@ -433,6 +597,12 @@ function toKernelTools(agent: Agent, definitions?: unknown[]): KernelTool[] {
       },
     };
   }).filter((tool: KernelTool) => !!tool.name);
+}
+
+function abortError(): Error {
+  const error = new Error('Agent run aborted');
+  error.name = 'AbortError';
+  return error;
 }
 
 function sanitizeVisualToolText(name: string, text: string): string {
@@ -473,12 +643,17 @@ function computerUseVisionImagePath(agent: Agent, name: string, text: string): s
   }
 }
 
-async function executeNewmarkTool(agent: Agent, name: string, args: string): Promise<string> {
+async function executeNewmarkTool(agent: Agent, name: string, args: string, signal?: AbortSignal): Promise<string> {
   const wsDir = agent.workspace.current?.path || agent.rootPath;
   let parsedArgs: Record<string, unknown> = {};
   try { parsedArgs = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
   const policy = evaluateToolPolicy({ name, mode: agent.mode, isSubagent: agent.isSubagentRuntime, args: parsedArgs });
   if (!policy.allowed) return policy.reason || `[permission] Blocked: ${name}`;
+  const checked = async (value: string | Promise<string>): Promise<string> => {
+    const result = await value;
+    if (signal?.aborted) throw abortError();
+    return result;
+  };
   if (name === 'task') return (await agent.handleSubagentEnvelope(args)).output;
   if (name === 'subagent_send') return (await agent.handleSubagentContinueEnvelope(args)).output;
   if (name === 'subagent_list') return agent.handleSubagentListEnvelope(args).output;
@@ -499,17 +674,19 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string): Pro
       actorId: agent.runtimeActorId,
       workspaceId: terminalTakeoverWorkspaceId(wsDir),
       backend: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
+      signal,
     });
     if (!result.startsWith('[permission]') && !result.startsWith('[tool disabled]') && !result.startsWith('[Subagent sandbox]')) {
-      await agent.handleSkillDownload(args);
+      if (signal?.aborted) throw abortError();
+      agent.refreshSkills();
     }
     return result;
   }
-  if (name === 'image_generate') return agent.handleImageGeneration(args);
-  if (name === 'image_inspect') return agent.handleImageInspect(args);
-  if (name === 'flow_run') return agent.handleFlowRun(args);
-  if (name.startsWith('memory_lab_')) return agent.handleMemoryLabTool(name, args);
-  if (name.startsWith('automation_')) return agent.handleAutomationTool(name, args);
+  if (name === 'image_generate') return await checked(agent.handleImageGeneration(args, signal));
+  if (name === 'image_inspect') return await checked(agent.handleImageInspect(args));
+  if (name === 'flow_run') return await checked(agent.handleFlowRun(args, signal));
+  if (name.startsWith('memory_lab_')) return await checked(agent.handleMemoryLabTool(name, args, signal));
+  if (name.startsWith('automation_')) return await checked(agent.handleAutomationTool(name, args, signal));
   const result = await agent.tools.execute(name, args, wsDir, {
     mode: agent.mode,
     workspacePath: wsDir,
@@ -518,7 +695,9 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string): Pro
     workspaceId: terminalTakeoverWorkspaceId(wsDir),
     backend: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
     allowEphemeralVisionImage: name === 'computer_use' && !!agent.config.findModel(agent.model)?.vision,
+    signal,
   });
+  if (signal?.aborted) throw abortError();
   trackFileDiff(agent, name, args);
   return result;
 }
@@ -545,8 +724,10 @@ function toKernelMessagesFromHistory(history: Array<Record<string, unknown>>, ag
       } as KernelMessage];
     }
     if (role === 'user') {
+      const clientMessageId = typeof msg.client_message_id === 'string' ? String(msg.client_message_id) : undefined;
+      const runId = typeof msg.run_id === 'string' ? String(msg.run_id) : undefined;
       const parts = Array.isArray(msg.content) ? msg.content as Array<Record<string, unknown>> : [];
-      if (!parts.length) return [{ role: 'user', content: String(msg.content || ''), timestamp: Date.now() } as KernelMessage];
+      if (!parts.length) return [{ role: 'user', content: String(msg.content || ''), timestamp: Date.now(), clientMessageId, runId } as KernelMessage];
       const content: Array<KernelTextContent | KernelImageContent> = [];
       for (const part of parts) {
         if (part.type === 'text') content.push({ type: 'text', text: String(part.text || '') });
@@ -556,7 +737,7 @@ function toKernelMessagesFromHistory(history: Array<Record<string, unknown>>, ag
           if (url.startsWith('data:image/')) content.push({ type: 'image', image: url, mimeType: url.slice(5, url.indexOf(';')) || 'image/png' });
         }
       }
-      return [{ role: 'user', content, timestamp: Date.now() } as KernelMessage];
+      return [{ role: 'user', content, timestamp: Date.now(), clientMessageId, runId } as KernelMessage];
     }
     if (role === 'assistant') {
       const content: KernelContent[] = [];
@@ -598,13 +779,18 @@ function fromKernelMessages(messages: KernelMessage[], includeEphemeralImages = 
 
 function toHistoryMessage(message: KernelMessage, includeEphemeralImages = false): Record<string, unknown> {
   if (message.role === 'user') {
-    if (typeof message.content === 'string') return { role: 'user', content: message.content };
+    if (typeof message.content === 'string') return {
+      role: 'user',
+      content: message.content,
+      client_message_id: message.clientMessageId,
+      run_id: message.runId,
+    };
     const content: Array<Record<string, unknown>> = [];
     for (const part of message.content as KernelContent[]) {
       if (part.type === 'text') content.push({ type: 'text', text: part.text });
       if (part.type === 'image' && typeof part.image === 'string' && part.image.startsWith('data:image/')) content.push({ type: 'image_url', image_url: { url: part.image } });
     }
-    return { role: 'user', content };
+    return { role: 'user', content, client_message_id: message.clientMessageId, run_id: message.runId };
   }
   if (message.role === 'assistant') {
     const text = KernelMessageText(message);
@@ -685,7 +871,7 @@ function parseToolArgs(args: unknown): Record<string, unknown> {
 function KernelMessageText(message: KernelMessage): string {
   if (message.role === 'user') {
     if (typeof message.content === 'string') return message.content;
-    return message.content.map(c => c.text || '').join('');
+    return message.content.filter((c): c is KernelTextContent => c.type === 'text').map(c => c.text || '').join('');
   }
   if (message.role === 'assistant') {
     return message.content.filter((c): c is KernelTextContent => c.type === 'text').map(c => c.text || '').join('');

@@ -1,3 +1,4 @@
+const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -89,6 +90,7 @@ function stopReleaseProcesses() {
     child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', `--user-data-dir=${path.join(root, 'electron-profile')}`, '--root', root], { stdio: 'ignore', windowsHide: true });
     cdp = connect(await waitTarget(port));
     await cdp.ready;
+    await waitForPromotedMainUi(cdp);
     await cdp.call('Runtime.enable');
     const state = await evaluate(cdp, `window.api.getState(${JSON.stringify(conversation)}).then(s => ({backend:s.agentBackend,model:s.model,apiMode:s.openAIApiMode,configured:s.configuredAgentBackend,restart:s.agentBackendRestartRequired}))`);
     if (!state.backend?.enabled || !state.backend?.connected || !state.backend?.pid || state.configured !== 'wsl' || state.restart) fail(`WSL backend not active: ${JSON.stringify(state)}`);

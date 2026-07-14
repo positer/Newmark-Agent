@@ -7,6 +7,7 @@ export const FILE_HEADER_BYTES = 64 * 1024;
 export const MAX_EDITOR_BYTES = 5 * 1024 * 1024;
 
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+const PDF_CAPABILITY_TTL_MS = 60 * 60 * 1000;
 const SCRIPT_EXTENSIONS = new Set([
   '.bat', '.cmd', '.ps1', '.psm1', '.psd1', '.sh', '.bash', '.zsh', '.fish', '.ksh', '.csh',
   '.py', '.pyw', '.rb', '.pl', '.php', '.lua', '.tcl', '.r', '.groovy', '.js', '.jse', '.mjs',
@@ -36,7 +37,8 @@ export type WorkspaceFileOpenResult =
       token: string;
       revision: string;
     }
-  | { kind: 'browser'; path: string; size: number; mime: 'application/pdf' | 'text/html'; url: string }
+  | { kind: 'browser'; path: string; size: number; mime: 'text/html'; url: string }
+  | { kind: 'browser'; path: string; size: number; mime: 'application/pdf'; capability: PdfPreviewCapability }
   | { kind: 'external'; path: string; size: number; reason: 'binary' | 'too-large' }
   | { kind: 'reveal'; path: string; size: number; reason: 'executable' | 'script-too-large' | 'script-non-text' }
   | { kind: 'rejected'; error: string };
@@ -44,6 +46,18 @@ export type WorkspaceFileOpenResult =
 export type WorkspaceFileSaveResult =
   | { ok: true; revision: string; size: number; token: string }
   | { ok: false; error: string; conflict?: boolean };
+
+export interface PdfPreviewCapability {
+  token: string;
+  fileName: string;
+  expiresAt: number;
+}
+
+export interface WorkspaceFileRouterOptions {
+  now?: () => number;
+  tokenTtlMs?: number;
+  pdfCapabilityTtlMs?: number;
+}
 
 interface EditTokenRecord {
   token: string;
@@ -255,11 +269,18 @@ function parseRange(value: string | null, size: number): { start: number; end: n
 export class WorkspaceFileRouter {
   private readonly editTokens = new Map<string, EditTokenRecord>();
   private readonly previewTokens = new Map<string, PreviewTokenRecord>();
+  private readonly now: () => number;
+  private readonly tokenTtlMs: number;
+  private readonly pdfCapabilityTtlMs: number;
 
-  constructor(private readonly workspaceRoot: () => string) {}
+  constructor(private readonly workspaceRoot: () => string, options: WorkspaceFileRouterOptions = {}) {
+    this.now = options.now || Date.now;
+    this.tokenTtlMs = options.tokenTtlMs ?? TOKEN_TTL_MS;
+    this.pdfCapabilityTtlMs = options.pdfCapabilityTtlMs ?? PDF_CAPABILITY_TTL_MS;
+  }
 
   private purgeExpiredTokens(): void {
-    const now = Date.now();
+    const now = this.now();
     for (const [token, record] of this.editTokens) if (record.expiresAt <= now) this.editTokens.delete(token);
     for (const [token, record] of this.previewTokens) if (record.expiresAt <= now) this.previewTokens.delete(token);
   }
@@ -284,15 +305,16 @@ export class WorkspaceFileRouter {
     return { workspaceRoot, realWorkspaceRoot, filePath, realFilePath, stat };
   }
 
-  private issuePreviewToken(
+  private issuePreviewCapability(
     ownerId: string,
     workspaceRoot: string,
     realWorkspaceRoot: string,
     realFilePath: string,
     entryMime: 'application/pdf' | 'text/html',
     allowRelativeResources: boolean,
-  ): string {
+  ): PdfPreviewCapability & { relativePath: string } {
     const token = randomUUID().replace(/-/g, '');
+    const expiresAt = this.now() + (entryMime === 'application/pdf' ? this.pdfCapabilityTtlMs : this.tokenTtlMs);
     this.previewTokens.set(token, {
       token,
       ownerId,
@@ -301,10 +323,10 @@ export class WorkspaceFileRouter {
       entryFilePath: realFilePath,
       entryMime,
       allowRelativeResources,
-      expiresAt: Date.now() + TOKEN_TTL_MS,
+      expiresAt,
     });
     const relative = path.relative(realWorkspaceRoot, realFilePath).split(path.sep).map(encodeURIComponent).join('/');
-    return `newmark-preview://${token}/${relative}`;
+    return { token, fileName: path.basename(realFilePath), expiresAt, relativePath: relative };
   }
 
   async open(targetPath: string, ownerId: string): Promise<WorkspaceFileOpenResult> {
@@ -326,12 +348,13 @@ export class WorkspaceFileRouter {
         return { kind: 'reveal', path: resolved.realFilePath, size: resolved.stat.size, reason: 'executable' };
       }
       if (looksPdf(header)) {
+        const capability = this.issuePreviewCapability(ownerId, resolved.workspaceRoot, resolved.realWorkspaceRoot, resolved.realFilePath, 'application/pdf', false);
         return {
           kind: 'browser',
           path: resolved.realFilePath,
           size: resolved.stat.size,
           mime: 'application/pdf',
-          url: this.issuePreviewToken(ownerId, resolved.workspaceRoot, resolved.realWorkspaceRoot, resolved.realFilePath, 'application/pdf', false),
+          capability: { token: capability.token, fileName: capability.fileName, expiresAt: capability.expiresAt },
         };
       }
 
@@ -344,12 +367,13 @@ export class WorkspaceFileRouter {
         return { kind: 'reveal', path: resolved.realFilePath, size: resolved.stat.size, reason: 'script-too-large' };
       }
       if (headerProbe && looksHtml(headerProbe.text, extension)) {
+        const capability = this.issuePreviewCapability(ownerId, resolved.workspaceRoot, resolved.realWorkspaceRoot, resolved.realFilePath, 'text/html', true);
         return {
           kind: 'browser',
           path: resolved.realFilePath,
           size: resolved.stat.size,
           mime: 'text/html',
-          url: this.issuePreviewToken(ownerId, resolved.workspaceRoot, resolved.realWorkspaceRoot, resolved.realFilePath, 'text/html', true),
+          url: `newmark-preview://${capability.token}/${capability.relativePath}`,
         };
       }
       if (!headerProbe) {
@@ -392,7 +416,7 @@ export class WorkspaceFileRouter {
         revision,
         device: identity.dev,
         inode: identity.ino,
-        expiresAt: Date.now() + TOKEN_TTL_MS,
+        expiresAt: this.now() + this.tokenTtlMs,
       });
       return {
         kind: 'editor',
@@ -452,7 +476,7 @@ export class WorkspaceFileRouter {
         await handle.close();
       }
       record.revision = hashBuffer(nextBuffer);
-      record.expiresAt = Date.now() + TOKEN_TTL_MS;
+      record.expiresAt = this.now() + this.tokenTtlMs;
       return { ok: true, revision: record.revision, size: nextBuffer.length, token: record.token };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
@@ -466,7 +490,7 @@ export class WorkspaceFileRouter {
       if (url.protocol !== 'newmark-preview:') return null;
       const token = url.hostname.toLowerCase();
       const record = this.previewTokens.get(token);
-      if (!record) return null;
+      if (!record || record.entryMime !== 'text/html') return null;
       const currentRealWorkspaceRoot = await fs.promises.realpath(path.resolve(this.workspaceRoot()));
       if (normalizeForComparison(currentRealWorkspaceRoot) !== normalizeForComparison(record.realWorkspaceRoot)) return null;
       const relative = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
@@ -488,6 +512,40 @@ export class WorkspaceFileRouter {
     } catch {
       return null;
     }
+  }
+
+  async resolvePdfCapability(tokenValue: string, ownerId: string): Promise<PreviewResource | null> {
+    this.purgeExpiredTokens();
+    try {
+      const token = String(tokenValue || '').toLowerCase();
+      if (!/^[a-f0-9]{32}$/.test(token)) return null;
+      const record = this.previewTokens.get(token);
+      if (!record || record.ownerId !== ownerId || record.entryMime !== 'application/pdf' || record.allowRelativeResources) return null;
+      const realFilePath = await fs.promises.realpath(record.entryFilePath);
+      if (!isPathInside(record.realWorkspaceRoot, realFilePath)
+        || normalizeForComparison(realFilePath) !== normalizeForComparison(record.entryFilePath)) return null;
+      const stat = await fs.promises.stat(realFilePath);
+      if (!stat.isFile()) return null;
+      return { filePath: realFilePath, mime: 'application/pdf', size: stat.size };
+    } catch {
+      return null;
+    }
+  }
+
+  revokeEditToken(tokenValue: string, ownerId: string): boolean {
+    const token = String(tokenValue || '').toLowerCase();
+    const record = this.editTokens.get(token);
+    if (!record || record.ownerId !== ownerId) return false;
+    this.editTokens.delete(token);
+    return true;
+  }
+
+  revokePreviewToken(tokenValue: string, ownerId: string): boolean {
+    const token = String(tokenValue || '').toLowerCase();
+    const record = this.previewTokens.get(token);
+    if (!record || record.ownerId !== ownerId) return false;
+    this.previewTokens.delete(token);
+    return true;
   }
 
   revokeOwner(ownerId: string): void {

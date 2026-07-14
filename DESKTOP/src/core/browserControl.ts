@@ -7,7 +7,8 @@ export type BrowserControlAction =
   | 'back'
   | 'forward'
   | 'reload'
-  | 'cdp';
+  | 'cdp'
+  | 'use';
 
 export interface BrowserControlRequest {
   action: BrowserControlAction;
@@ -18,6 +19,8 @@ export interface BrowserControlRequest {
   method?: string;
   params?: unknown;
   maxChars?: number;
+  /** Structured native Browser-Use request. Kept opaque at the legacy control boundary. */
+  browserUse?: unknown;
 }
 
 export interface BrowserControlResult {
@@ -32,7 +35,7 @@ export interface BrowserControlResult {
 }
 
 export interface BrowserControlBackend {
-  run(request: BrowserControlRequest): Promise<BrowserControlResult>;
+  run(request: BrowserControlRequest, signal?: AbortSignal): Promise<BrowserControlResult>;
 }
 
 const SUPPORTED_ACTIONS = new Set<BrowserControlAction>([
@@ -45,6 +48,7 @@ const SUPPORTED_ACTIONS = new Set<BrowserControlAction>([
   'forward',
   'reload',
   'cdp',
+  'use',
 ]);
 
 export class BrowserControl {
@@ -58,7 +62,8 @@ export class BrowserControl {
     return this.backend !== null;
   }
 
-  static async run(request: BrowserControlRequest): Promise<BrowserControlResult> {
+  static async run(request: BrowserControlRequest, signal?: AbortSignal): Promise<BrowserControlResult> {
+    throwIfAborted(signal);
     const normalized = this.normalize(request);
     if (!normalized.ok) return normalized.result;
     if (!this.backend) {
@@ -70,8 +75,11 @@ export class BrowserControl {
       };
     }
     try {
-      return await this.backend.run(normalized.request);
+      const result = await this.backend.run(normalized.request, signal);
+      throwIfAborted(signal);
+      return result;
     } catch (e) {
+      throwIfAborted(signal);
       return {
         ok: false,
         action: normalized.request.action,
@@ -154,6 +162,18 @@ export class BrowserControl {
       };
     }
 
+    if (action === 'use' && (!request.browserUse || typeof request.browserUse !== 'object' || Array.isArray(request.browserUse))) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          action,
+          source: 'validator',
+          error: 'browser_use requires a structured Browser-Use request.',
+        },
+      };
+    }
+
     if (typeof normalized.maxChars !== 'number' || normalized.maxChars <= 0) {
       normalized.maxChars = 12000;
     }
@@ -175,4 +195,13 @@ export class BrowserControl {
       return '';
     }
   }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason instanceof Error) throw reason;
+  const error = new Error(reason ? String(reason) : 'Browser control aborted');
+  error.name = 'AbortError';
+  throw error;
 }

@@ -62,7 +62,7 @@ async function waitForCdp(port) {
   while (Date.now() < deadline) {
     try {
       const pages = await fetchJson(`http://127.0.0.1:${port}/json`);
-      const page = pages.find(p => p.type === 'page' && p.webSocketDebuggerUrl);
+      const page = pages.find(p => p.type === 'page' && p.webSocketDebuggerUrl && String(p.url || '').includes('index.html'));
       if (page) return page.webSocketDebuggerUrl;
     } catch (_) {}
     await sleep(500);

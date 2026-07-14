@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawnSync } from 'child_process';
+import { runAsyncProcess } from './asyncProcess';
 
 export interface SshConnectionInfo {
   id: string;
@@ -39,20 +39,26 @@ export interface SshCommandResult {
   args: string[];
 }
 
-export type SshRunner = (command: string, args: string[], cwd?: string, timeoutMs?: number) => SshCommandResult;
+export type SshRunner = (
+  command: string,
+  args: string[],
+  cwd?: string,
+  timeoutMs?: number,
+  signal?: AbortSignal,
+) => SshCommandResult | Promise<SshCommandResult>;
 
-function defaultSshRunner(command: string, args: string[], cwd?: string, timeoutMs = 12000): SshCommandResult {
-  const result = spawnSync(command, args, {
+async function defaultSshRunner(command: string, args: string[], cwd?: string, timeoutMs = 12000, signal?: AbortSignal): Promise<SshCommandResult> {
+  const result = await runAsyncProcess(command, args, {
     cwd,
-    encoding: 'utf-8',
-    timeout: timeoutMs,
+    timeoutMs,
     maxBuffer: 1024 * 1024,
+    signal,
   });
   return {
-    status: typeof result.status === 'number' ? result.status : null,
-    stdout: result.stdout || '',
-    stderr: result.stderr || '',
-    error: result.error ? result.error.message : undefined,
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    error: result.error,
     args,
   };
 }
@@ -199,14 +205,28 @@ export class SshManager {
     return `mkdir -p ${qRoot} && if [ ! -f ${qRoot}/PC_Hash.config ]; then printf "%s|%s|%s" "$(hostname)" "$(uname -s 2>/dev/null || echo unknown)" "$(uname -m 2>/dev/null || echo unknown)" > ${qRoot}/PC_Hash.config; fi && cat ${qRoot}/PC_Hash.config`;
   }
 
-  validate(idOrName: string, remoteRoot?: string): SshValidateResult {
+  private async runSsh(args: string[], timeoutMs: number, signal?: AbortSignal): Promise<SshCommandResult> {
+    try {
+      return await this.runner('ssh', args, this.rootPath, timeoutMs, signal);
+    } catch (error) {
+      return {
+        status: null,
+        stdout: '',
+        stderr: '',
+        error: error instanceof Error ? error.message : String(error),
+        args,
+      };
+    }
+  }
+
+  async validate(idOrName: string, remoteRoot?: string, signal?: AbortSignal): Promise<SshValidateResult> {
     const conn = this.get(idOrName);
     if (!conn) {
       return { ok: false, connection: { id: idOrName, name: idOrName, host: '', port: 22, user: '', enabled: false }, error: 'SSH connection not found' };
     }
     const root = remoteRoot || conn.remoteRoot || '~/.newmark-agent';
     const args = this.buildSshArgs(conn, this.pcHashCommand(root));
-    const result = this.runner('ssh', args, this.rootPath, 15000);
+    const result = await this.runSsh(args, 15000, signal);
     const remotePcHash = (result.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop() || '';
     const ok = result.status === 0 && !!remotePcHash && !result.error;
     const updated: SshConnectionInfo = {
@@ -236,7 +256,7 @@ export class SshManager {
     };
   }
 
-  ensureRemoteWorkspace(idOrName: string, remotePath: string): SshValidateResult {
+  async ensureRemoteWorkspace(idOrName: string, remotePath: string, signal?: AbortSignal): Promise<SshValidateResult> {
     const conn = this.get(idOrName);
     if (!conn) {
       return { ok: false, connection: { id: idOrName, name: idOrName, host: '', port: 22, user: '', enabled: false }, error: 'SSH connection not found' };
@@ -244,11 +264,11 @@ export class SshManager {
     const cleanRemotePath = remotePath || conn.remoteRoot || '~/.newmark-agent/workspaces/default';
     const command = `mkdir -p ${shellQuote(cleanRemotePath)} && ${this.pcHashCommand(cleanRemotePath)}`;
     const args = this.buildSshArgs(conn, command);
-    const result = this.runner('ssh', args, this.rootPath, 15000);
+    const result = await this.runSsh(args, 15000, signal);
     const remotePcHash = (result.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop() || '';
     const ok = result.status === 0 && !!remotePcHash && !result.error;
     if (!ok) {
-      this.validate(conn.id, conn.remoteRoot);
+      if (!signal?.aborted) await this.validate(conn.id, conn.remoteRoot, signal);
       return {
         ok: false,
         connection: redactedConnection(conn),

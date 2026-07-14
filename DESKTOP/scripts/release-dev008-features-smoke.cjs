@@ -1,3 +1,4 @@
+const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -46,9 +47,7 @@ async function waitForTarget(port) {
   while (Date.now() < deadline) {
     try {
       const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
-      const target = targets.find(item => item.webSocketDebuggerUrl && String(item.url || '').includes('index.html'))
-        || targets.find(item => item.webSocketDebuggerUrl && (item.type === 'page' || item.type === 'webview'))
-        || targets.find(item => item.webSocketDebuggerUrl);
+      const target = targets.find(item => item.webSocketDebuggerUrl && String(item.url || '').includes('index.html'));
       if (target) return target;
     } catch {}
     await sleep(400);
@@ -299,7 +298,11 @@ function createFileFixtures(workspacePath) {
   fs.writeFileSync(path.join(workspacePath, 'dev008-script.bat'), '@echo off\r\necho DEV008_BAT_EDITOR_ONLY\r\n', 'utf8');
   fs.writeFileSync(path.join(workspacePath, 'dev008-doc.pdf'), Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n', 'ascii'));
   fs.writeFileSync(path.join(workspacePath, 'dev008-page.html'), '<!doctype html><html><body><h1>DEV008_HTML_BROWSER_OK</h1></body></html>', 'utf8');
-  fs.writeFileSync(path.join(workspacePath, 'dev008-binary.bin'), Buffer.from([0x00, 0xff, 0x01, 0x02, 0x03, 0x00, 0x80]));
+  // Use executable magic behind a neutral extension so the packaged smoke
+  // exercises reveal-only routing without launching an arbitrary OS handler.
+  // Ordinary binary -> default-application routing remains covered by the
+  // deterministic workspaceFileRouter unit suite.
+  fs.writeFileSync(path.join(workspacePath, 'dev008-binary.bin'), Buffer.from([0x4d, 0x5a, 0x00, 0x00, 0x01, 0x02, 0x03]));
 }
 
 function stopProcessTree(child) {
@@ -332,6 +335,7 @@ function stopProcessTree(child) {
     const target = await waitForTarget(port);
     cdp = connectCdp(target);
     await cdp.ready;
+    await waitForPromotedMainUi(cdp);
     await cdp.call('Runtime.enable');
     await cdp.call('Page.enable');
     await cdp.call('Page.bringToFront');
@@ -344,6 +348,18 @@ function stopProcessTree(child) {
     const workspaceId = created.id || created.name || 'dev008-features-smoke';
     const selected = await evaluate(cdp, `window.api.selectWorkspace(${JSON.stringify(workspaceId)})`, 30000);
     const workspacePath = selected?.path || created.path || path.join(root, 'Work', 'dev008-features-smoke');
+    const conversationTarget = {
+      workspaceId: String(selected?.id || created.id || workspaceId),
+      conversationId: 'default',
+    };
+    const rendererTarget = await evaluate(cdp, `(async () => {
+      if (window.refreshWorkspaceState) await window.refreshWorkspaceState();
+      if (window.selectWorkspace) await window.selectWorkspace(${JSON.stringify(conversationTarget.workspaceId)});
+      return window.currentConversationTarget ? window.currentConversationTarget() : null;
+    })()`, 45000);
+    if (!rendererTarget || rendererTarget.workspaceId !== conversationTarget.workspaceId || rendererTarget.conversationId !== conversationTarget.conversationId) {
+      fail(`Renderer did not bind the explicit workspace/conversation target: ${JSON.stringify(rendererTarget)}`);
+    }
     if (!workspacePath || !path.resolve(workspacePath).startsWith(path.resolve(root))) fail(`Workspace escaped isolated root: ${workspacePath}`);
     createFileFixtures(workspacePath);
     log('workspace and fixtures ready');
@@ -354,15 +370,16 @@ function stopProcessTree(child) {
     }
     if (fileRoutes['dev008-text.txt']?.kind !== 'editor' || !fileRoutes['dev008-text.txt']?.token) fail(`Text route failed: ${JSON.stringify(fileRoutes['dev008-text.txt'])}`);
     if (fileRoutes['dev008-script.bat']?.kind !== 'editor' || !String(fileRoutes['dev008-script.bat']?.content || '').includes('DEV008_BAT_EDITOR_ONLY')) fail(`BAT route failed: ${JSON.stringify(fileRoutes['dev008-script.bat'])}`);
-    if (fileRoutes['dev008-doc.pdf']?.kind !== 'browser' || fileRoutes['dev008-doc.pdf']?.mime !== 'application/pdf' || !String(fileRoutes['dev008-doc.pdf']?.url || '').startsWith('newmark-preview://')) fail(`PDF route failed: ${JSON.stringify(fileRoutes['dev008-doc.pdf'])}`);
+    if (fileRoutes['dev008-doc.pdf']?.kind !== 'browser' || fileRoutes['dev008-doc.pdf']?.mime !== 'application/pdf' || !/^http:\/\/127\.0\.0\.1:\d+\/pdf\//.test(String(fileRoutes['dev008-doc.pdf']?.url || ''))) fail(`PDF loopback route failed: ${JSON.stringify(fileRoutes['dev008-doc.pdf'])}`);
     if (fileRoutes['dev008-page.html']?.kind !== 'browser' || fileRoutes['dev008-page.html']?.mime !== 'text/html' || !String(fileRoutes['dev008-page.html']?.url || '').startsWith('newmark-preview://')) fail(`HTML route failed: ${JSON.stringify(fileRoutes['dev008-page.html'])}`);
-    if (!fileRoutes['dev008-binary.bin'] || !['external', 'reveal'].includes(fileRoutes['dev008-binary.bin'].kind)) fail(`Binary route failed: ${JSON.stringify(fileRoutes['dev008-binary.bin'])}`);
+    if (fileRoutes['dev008-binary.bin']?.kind !== 'reveal') fail(`Executable-magic reveal route failed: ${JSON.stringify(fileRoutes['dev008-binary.bin'])}`);
     log(`file routing ok: ${Object.entries(fileRoutes).map(([name, result]) => `${name}=${result.kind}`).join(', ')}`);
 
+    await evaluate(cdp, `window.api.ensureConversation(${JSON.stringify(conversationTarget)})`, 45000);
     const startedAt = Date.now();
     await evaluate(cdp, `(() => {
       window.__dev008RootRun = { done: false, value: null, error: '' };
-      Promise.resolve(window.api.sendMessage('DEV008_PACKAGED_FEATURES_BEGIN', typeof activeConversationId === 'function' ? activeConversationId() : undefined))
+      Promise.resolve(window.api.sendMessage('DEV008_PACKAGED_FEATURES_BEGIN', ${JSON.stringify(conversationTarget)}))
         .then(value => { window.__dev008RootRun = { done: true, value, error: '' }; })
         .catch(error => { window.__dev008RootRun = { done: true, value: null, error: String(error?.stack || error) }; });
       return true;
@@ -372,7 +389,7 @@ function stopProcessTree(child) {
     if (rootRun.error) fail(`Root Agent run threw: ${rootRun.error}`);
     const rootResult = rootRun.value;
     const elapsedMs = Date.now() - startedAt;
-    if (!rootResult || rootResult.ok === false) fail(`Root Agent run failed: ${JSON.stringify(rootResult)}`);
+    if (!rootResult || rootResult.ok === false || rootResult.error) fail(`Root Agent run failed: ${JSON.stringify(rootResult)}`);
     const expectedOrder = 'linked_plan,task,task,subagent_list,subagent_read,subagent_send';
     if (mock.rootToolOrder.join(',') !== expectedOrder) fail(`Unexpected root tool order: ${mock.rootToolOrder.join(',')}`);
     const taskRequestIndexes = mock.requests
@@ -380,7 +397,7 @@ function stopProcessTree(child) {
       .filter(index => index >= 0);
     if (taskRequestIndexes.length < 2 || elapsedMs > 180000) fail(`task did not return through the non-blocking sequence: requests=${taskRequestIndexes.length}, elapsed=${elapsedMs}`);
 
-    await evaluate(cdp, `window.switchRightTab('plan'); window.refreshConversationPlan();`, 30000);
+    await evaluate(cdp, `(async () => { window.switchRightTab('plan'); await window.refreshConversationPlan(); return true; })()`, 30000);
     const linkedPlan = await waitFor(cdp, `(() => {
       const reader = document.querySelector('#linked-plan-content');
       const revision = document.querySelector('#linked-plan-revision');
@@ -389,7 +406,7 @@ function stopProcessTree(child) {
     })()`, 30000, 'live read-only Linked Plan panel');
     if (linkedPlan.editable || !String(linkedPlan.revision).match(/1/)) fail(`Linked Plan panel is not read-only/revisioned: ${JSON.stringify(linkedPlan)}`);
 
-    const peerState = await waitFor(cdp, `window.api.getState().then(state => {
+    const peerState = await waitFor(cdp, `window.api.getState(${JSON.stringify(conversationTarget)}).then(state => {
       const peers = Array.isArray(state.subagents) ? state.subagents : [];
       const alpha = peers.find(peer => String(peer.natureSlug || peer.name || '').includes('alpha-review'));
       const beta = peers.find(peer => String(peer.natureSlug || peer.name || '').includes('beta-review'));

@@ -1,15 +1,19 @@
-import { app, BrowserWindow, ipcMain, dialog, utilityProcess, Tray, Menu, nativeImage, nativeTheme, webContents, shell, protocol } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, utilityProcess, Tray, Menu, nativeImage, nativeTheme, webContents, shell, protocol, session } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { createHash, randomUUID } from 'crypto';
 import { spawn, spawnSync, ChildProcess } from 'child_process';
 import { Agent } from './core/agent';
-import { AgentMode } from './core/types';
-import { AgentPromptMessage, ConversationKernel } from './core/conversationKernel';
+import { AgentMode, AgentWorkEvent, ConversationInputEnvelope } from './core/types';
+import { AgentPromptMessage, ConversationKernel, ConversationTargetInput } from './core/conversationKernel';
+import { ConversationRuntimeTarget, normalizeConversationTarget } from './core/conversationTarget';
 import { AutomationManager } from './core/automation';
 import { AutomationWakeScheduler, WakeSyncResult } from './core/automationWake';
 import { BrowserControl, BrowserControlRequest, BrowserControlResult } from './core/browserControl';
+import { bindBrowserUseRequest, BrowserUse, BrowserUseEngine, BrowserUseReceipt } from './core/browserUse';
+import { NativeBrowserUsePageAdapter } from './core/browserUsePageAdapter';
+import { ElectronBrowserUseHost } from './core/electronBrowserUseHost';
 import { FlowEngine } from './core/flow';
 import { runFlow } from './core/flow-runner';
 import { CLI_COMMANDS, runCliCommand } from './cli-commands';
@@ -28,11 +32,19 @@ import {
   terminalTakeoverWorkspaceId,
   writeTerminalTakeoverSession,
 } from './tools/terminalTakeover';
-import { nativeToolCatalogForState, normalizeNativeToolEnabled } from './tools/nativeTools';
+import { isNativeToolEnabled, nativeToolCatalogForState, normalizeNativeToolEnabled } from './tools/nativeTools';
 import { LLMProvider } from './llm/provider';
-import { WslAgentClient } from './core/wslAgentClient';
+import { WslAgentClient, WslHostToolHandler } from './core/wslAgentClient';
+import { WslHostToolRequest } from './core/wslAgentProtocol';
 import { previewResponse, WorkspaceFileRouter } from './core/workspaceFileRouter';
-import { runComputerUse } from './tools/computerUse';
+import { PdfPreviewServer } from './core/pdfPreviewServer';
+import { WorkspaceSelectionCoordinator } from './core/workspaceSelectionCoordinator';
+import { ElectronUtilityRuntimePool } from './core/electronUtilityRuntimePool';
+import { shutdownWindowsProcessHelpers } from './core/electronUtilityAgentClient';
+import { WslAgentRuntimePool } from './core/wslAgentRuntimePool';
+import { createUtilityHostToolHandler } from './core/utilityHostToolRouter';
+import { runStartupPrewarmBarrier, StartupPrewarmProgress, startupUpdatePromptContent } from './core/startupPrewarm';
+import { runRuntimeShutdownBarrier } from './core/runtimeShutdown';
 
 const APP_NAME = 'Newmark Agent';
 const APP_ID = 'ai.newmark.agent';
@@ -51,13 +63,19 @@ let mainWindow: BrowserWindow | null = null;
 let agent: Agent | null = null;
 let conversationKernel: ConversationKernel | null = null;
 let wslAgentClient: WslAgentClient | null = null;
+let electronUtilityRuntimePool: ElectronUtilityRuntimePool | null = null;
+let wslAgentRuntimePool: WslAgentRuntimePool | null = null;
 let activeAgentBackendMode: 'windows' | 'wsl' = 'windows';
 let automation: AutomationManager | null = null;
 let automationWake: AutomationWakeScheduler | null = null;
 let lastWakeSync: WakeSyncResult | null = null;
 let tray: Tray | null = null;
 let _forceQuit = false;
-let browserControlWindow: BrowserWindow | null = null;
+let electronBrowserUseHost: ElectronBrowserUseHost | null = null;
+let browserUseEngine: BrowserUseEngine | null = null;
+const browserGuestContentsByHost = new Map<number, number>();
+let workspaceSwitchGeneration = 0;
+let workspaceSelectionCoordinator: WorkspaceSelectionCoordinator<string, ReturnType<Agent['selectWorkspace']>> | null = null;
 
 const STARTUP_HTML = `<!doctype html>
 <html>
@@ -67,14 +85,47 @@ const STARTUP_HTML = `<!doctype html>
 <style>
 html,body{margin:0;width:100%;height:100%;background:#0a0a1a;color:#f8fafc;font-family:Segoe UI,Arial,sans-serif}
 body{display:flex;align-items:center;justify-content:center;overflow:hidden}
-.shell{min-width:320px;display:flex;gap:14px;align-items:center}
-.mark{width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,#36d399,#60a5fa,#f472b6);box-shadow:0 18px 70px rgba(96,165,250,.24)}
+.shell{width:min(520px,calc(100vw - 48px));display:flex;gap:16px;align-items:flex-start}
+.mark{width:48px;height:48px;flex:0 0 auto;border-radius:11px;object-fit:contain;background:linear-gradient(135deg,#36d399,#60a5fa,#f472b6);box-shadow:0 18px 70px rgba(96,165,250,.24);animation:pulse 1.8s ease-in-out infinite}
+.copy{min-width:0;flex:1;padding-top:1px}
 .title{font-size:18px;font-weight:700;letter-spacing:0}
-.status{margin-top:6px;color:#a7b0c0;font-size:12px}
+.status{margin-top:7px;color:#c4ccda;font-size:12px;line-height:1.45;min-height:18px}
+.detail{margin-top:4px;color:#768197;font-size:11px;line-height:1.4;white-space:pre-wrap;word-break:break-word;min-height:16px}
+.bar{height:3px;margin-top:12px;border-radius:99px;background:#1c2638;overflow:hidden}
+.bar>i{display:block;height:100%;width:18%;border-radius:inherit;background:linear-gradient(90deg,#36d399,#60a5fa);transition:width .24s ease}
+.retry{display:none;margin-top:14px;border:1px solid #3d4a63;background:#131d2e;color:#f8fafc;border-radius:8px;padding:7px 14px;font:600 12px Segoe UI,Arial,sans-serif;cursor:pointer}
+.retry:hover{border-color:#60a5fa;background:#17243a}
+@keyframes pulse{0%,100%{transform:scale(1);filter:saturate(1)}50%{transform:scale(1.04);filter:saturate(1.25)}}
 </style>
 </head>
 <body>
-<div class="shell"><div class="mark"></div><div><div class="title">Newmark Agent</div><div class="status">Starting workspace runtime...</div></div></div>
+<div class="shell"><img class="mark" id="startup-icon" src="__NEWMARK_STARTUP_ICON__" alt="Newmark Agent"><div class="copy"><div class="title">Newmark Agent</div><div class="status" id="startup-status">正在预热内核与界面…</div><div class="detail" id="startup-detail">Preparing kernel and UI…</div><div class="bar"><i id="startup-progress"></i></div><button class="retry" id="startup-retry" type="button">重试 / Retry</button></div></div>
+<script>
+(function(){
+  var status=document.getElementById('startup-status');
+  var detail=document.getElementById('startup-detail');
+  var progress=document.getElementById('startup-progress');
+  var retry=document.getElementById('startup-retry');
+  function apply(payload){
+    payload=payload||{};
+    if(payload.message)status.textContent=String(payload.message);
+    if(payload.detail!==undefined)detail.textContent=String(payload.detail||'');
+    var total=Math.max(1,Number(payload.total||1));
+    var completed=Math.max(0,Number(payload.completed||0));
+    progress.style.width=Math.max(8,Math.min(100,Math.round(completed/total*100)))+'%';
+    retry.style.display=payload.retry?'inline-flex':'none';
+  }
+  if(window.api&&window.api.onStartupStatus)window.api.onStartupStatus(apply);
+  retry.addEventListener('click',function(){
+    retry.disabled=true;
+    retry.textContent='重试中… / Retrying…';
+    Promise.resolve(window.api&&window.api.startupRetry?window.api.startupRetry():null).finally(function(){
+      retry.disabled=false;
+      retry.textContent='重试 / Retry';
+    });
+  });
+})();
+</script>
 </body>
 </html>`;
 
@@ -123,8 +174,8 @@ let wslDistroCache: { at: number; items: string[] } = { at: 0, items: [] };
 let wslDetection: Promise<string[]> | null = null;
 
 function decodeWslDistros(raw: Buffer): string[] {
-  const utf16 = raw.toString('utf16le').replace(/\0/g, '').trim();
-  const text = utf16 && /[A-Za-z0-9]/.test(utf16) ? utf16 : raw.toString('utf8').replace(/\0/g, '').trim();
+  const utf16 = raw.toString('utf16le').split('\0').join('').trim();
+  const text = utf16 && /[A-Za-z0-9]/.test(utf16) ? utf16 : raw.toString('utf8').split('\0').join('').trim();
   return text.split(/\r?\n/).map(line => line.replace(/\s*\(Default\)\s*$/i, '').trim()).filter(Boolean);
 }
 
@@ -165,12 +216,12 @@ async function resetWslAgentClient(): Promise<void> {
   if (wslAgentClient) await wslAgentClient.resetAgent();
 }
 
-async function resetAgentRuntimes(): Promise<void> {
-  resetConversationKernel();
-  await resetWslAgentClient();
-}
-
 function broadcastAgentWorkEvent(event: unknown): void {
+  const workEvent = event as Partial<AgentWorkEvent>;
+  if ((workEvent.type === 'done' || workEvent.type === 'error') && workEvent.runtimeKey) {
+    browserUseEngine?.clearRuntime(workEvent.runtimeKey);
+    electronBrowserUseHost?.clear({ runtimeKey: workEvent.runtimeKey, owner: '' });
+  }
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     win.webContents.send('agent:workEvent', event);
@@ -186,19 +237,51 @@ function ensureConversationKernel(root: string): ConversationKernel | null {
   return conversationKernel;
 }
 
-function stateConversationId(requested?: string): string {
-  return String(requested || agent?.activeConversationId || 'default');
+function ensureWorkspaceSelectionCoordinator(): WorkspaceSelectionCoordinator<string, ReturnType<Agent['selectWorkspace']>> | null {
+  if (!agent) return null;
+  if (!workspaceSelectionCoordinator) {
+    workspaceSelectionCoordinator = new WorkspaceSelectionCoordinator<string, ReturnType<Agent['selectWorkspace']>>({
+      keyOf: value => String(value || '').trim(),
+      apply: async value => agent?.selectWorkspace(value) || null,
+      failureThreshold: 2,
+      failureWindowMs: 10_000,
+      circuitOpenMs: 5_000,
+    });
+    if (agent.workspace.current) workspaceSelectionCoordinator.setCurrent(agent.workspace.current.id || agent.workspace.current.path || agent.workspace.current.name);
+  }
+  return workspaceSelectionCoordinator;
 }
 
-function backendConversationState(conversationId?: string): Record<string, unknown> {
-  if (!agent) return {};
-  const target = stateConversationId(conversationId);
-  const snapshot = agent.getConversationSnapshot(target);
+function conversationRuntimeTarget(requested?: ConversationTargetInput | { target?: ConversationTargetInput }): ConversationRuntimeTarget {
+  let raw: ConversationTargetInput | undefined;
+  if (requested && typeof requested === 'object' && 'target' in requested) raw = requested.target;
+  else raw = requested as ConversationTargetInput | undefined;
+  const requestedWorkspaceId = typeof raw === 'object' && raw ? String(raw.workspaceId || '').trim() : '';
+  const allWorkspaces = agent
+    ? [agent.workspace.current, ...agent.workspace.internal, ...agent.workspace.external].filter(Boolean)
+    : [];
+  const requestedMatches = requestedWorkspaceId
+    ? allWorkspaces.filter(item => item!.id === requestedWorkspaceId || item!.path === requestedWorkspaceId || item!.name === requestedWorkspaceId)
+    : [];
+  const noWorkspaceRequested = requestedMatches.length === 0 && (requestedWorkspaceId === 'none' || requestedWorkspaceId === 'no-workspace');
+  const identityMatch = requestedMatches.find(item => item!.id === requestedWorkspaceId || item!.path === requestedWorkspaceId);
+  const workspace = (noWorkspaceRequested ? null : requestedWorkspaceId
+    ? (identityMatch || (requestedMatches.length === 1 ? requestedMatches[0] : null))
+    : agent?.workspace.current) || null;
+  if (requestedWorkspaceId && !workspace && !noWorkspaceRequested) throw new Error(`Unknown workspace: ${requestedWorkspaceId}`);
+  const conversationId = typeof raw === 'string'
+    ? raw
+    : (raw && typeof raw === 'object' ? raw.conversationId : '') || agent?.activeConversationId || 'default';
   return {
-    ...snapshot,
-    queued: conversationKernel?.queued(snapshot.conversationId || target) || { steering: [], followUp: [] },
-    workEvents: conversationKernel?.events(snapshot.conversationId || target) || [],
-    pendingOptions: conversationKernel?.pendingOptions(snapshot.conversationId || target) || [],
+    workspaceId: workspace?.id || (noWorkspaceRequested ? 'none' : requestedWorkspaceId) || workspace?.path || 'none',
+    conversationId: String(conversationId || 'default'),
+    workspace: workspace ? {
+      id: workspace.id || workspace.path,
+      name: workspace.name || workspace.path,
+      path: workspace.path,
+      isInternal: workspace.isInternal,
+      kind: workspace.kind,
+    } : undefined,
   };
 }
 
@@ -364,6 +447,14 @@ function ensureWslRuntimeBundle(): string {
   return host;
 }
 
+function ensureElectronUtilityRuntimeHost(): string {
+  const packagedHost = path.join(process.resourcesPath, 'app.asar.unpacked', 'dist', 'conversation-utility-host.bundle.cjs');
+  const developmentHost = path.join(app.getAppPath(), 'dist', 'conversation-utility-host.bundle.cjs');
+  const host = app.isPackaged ? packagedHost : developmentHost;
+  if (!fs.existsSync(host)) throw new Error(`Electron utility Agent runtime host is missing: ${host}`);
+  return host;
+}
+
 function legacyUserDataRoot(): string {
   try {
     return app.getPath('userData');
@@ -509,28 +600,87 @@ async function waitForWebContentsLoad(contents: Electron.WebContents, timeoutMs 
   });
 }
 
-async function ensureBrowserWebContents(): Promise<Electron.WebContents> {
-  const guests = webContents.getAllWebContents().filter(wc => wc.getType() === 'webview' && !wc.isDestroyed());
-  const visibleGuest = guests.find(wc => wc.getURL() !== '') || guests[0];
-  if (visibleGuest) return visibleGuest;
-
-  if (!browserControlWindow || browserControlWindow.isDestroyed()) {
-    browserControlWindow = new BrowserWindow({
-      width: 1280,
-      height: 900,
-      show: false,
-      title: 'Newmark Browser Control',
-      icon: themedAppIconPath(),
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    });
-    browserControlWindow.on('closed', () => { browserControlWindow = null; });
-    await browserControlWindow.loadURL('about:blank');
+function registeredBrowserGuest(hostContentsId?: number): Electron.WebContents | null {
+  const hostIds = hostContentsId
+    ? [hostContentsId]
+    : [
+      BrowserWindow.getFocusedWindow()?.webContents.id || 0,
+      mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.id : 0,
+      ...browserGuestContentsByHost.keys(),
+    ];
+  for (const hostId of hostIds) {
+    if (!hostId) continue;
+    const guestId = browserGuestContentsByHost.get(hostId);
+    if (!guestId) continue;
+    const guest = webContents.fromId(guestId);
+    if (guest && !guest.isDestroyed() && guest.getType() === 'webview' && guest.hostWebContents?.id === hostId) return guest;
+    browserGuestContentsByHost.delete(hostId);
   }
-  return browserControlWindow.webContents;
+  return null;
+}
+
+function registerBrowserGuest(host: Electron.WebContents, guest: Electron.WebContents): boolean {
+  if (host.isDestroyed() || guest.isDestroyed() || guest.getType() !== 'webview' || guest.hostWebContents?.id !== host.id) return false;
+  browserGuestContentsByHost.set(host.id, guest.id);
+  guest.once('destroyed', () => {
+    if (browserGuestContentsByHost.get(host.id) === guest.id) browserGuestContentsByHost.delete(host.id);
+  });
+  ensureElectronBrowserUseHost().attach(guest);
+  return true;
+}
+
+async function waitForRegisteredBrowserGuest(host: Electron.WebContents, timeoutMs = 8_000): Promise<Electron.WebContents> {
+  const deadline = Date.now() + Math.max(250, timeoutMs);
+  while (!host.isDestroyed() && Date.now() < deadline) {
+    const guest = registeredBrowserGuest(host.id);
+    if (guest) return guest;
+    await new Promise<void>(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error('Built-in Browser guest did not become ready before the Browser-Use timeout');
+}
+
+async function ensureBrowserWebContents(boundContentsId?: number): Promise<Electron.WebContents> {
+  if (boundContentsId) {
+    const bound = webContents.fromId(boundContentsId);
+    if (bound && !bound.isDestroyed() && bound.getType() === 'webview'
+      && browserGuestContentsByHost.get(bound.hostWebContents?.id || 0) === bound.id) return bound;
+  }
+  const registered = registeredBrowserGuest();
+  if (registered) return registered;
+
+  const hostWindow = BrowserWindow.getFocusedWindow()
+    || (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+  const host = hostWindow?.webContents;
+  if (!host || host.isDestroyed()) throw new Error('Built-in Browser UI is unavailable');
+  host.send('browser:ensureGuest');
+  return await waitForRegisteredBrowserGuest(host);
+}
+
+function ensureElectronBrowserUseHost(): ElectronBrowserUseHost {
+  if (!electronBrowserUseHost) {
+    electronBrowserUseHost = new ElectronBrowserUseHost({
+      resolveContents: async (_scope, boundContentsId) => await ensureBrowserWebContents(boundContentsId),
+      openExternal: async url => { await shell.openExternal(url); },
+    });
+  }
+  return electronBrowserUseHost;
+}
+
+function ensureBrowserUseEngine(): BrowserUseEngine {
+  if (!browserUseEngine) {
+    const adapter = new NativeBrowserUsePageAdapter(scope => ensureElectronBrowserUseHost().resolve(scope));
+    browserUseEngine = new BrowserUseEngine(adapter);
+  }
+  return browserUseEngine;
+}
+
+function currentBrowserUseContext(): { runtimeKey: string; actorId: string } {
+  const target = normalizeConversationTarget(conversationRuntimeTarget());
+  return { runtimeKey: target.runtimeKey, actorId: agent?.runtimeActorId || ROOT_TERMINAL_ACTOR_ID };
+}
+
+async function runBoundBrowserUse(input: unknown, context: { runtimeKey: string; actorId: string }, signal?: AbortSignal): Promise<BrowserUseReceipt> {
+  return await ensureBrowserUseEngine().run(bindBrowserUseRequest(input, context), signal);
 }
 
 async function executeInBrowser<T>(contents: Electron.WebContents, script: string): Promise<T> {
@@ -550,19 +700,31 @@ function browserSnapshotScript(maxChars: number): string {
 }
 
 async function runBrowserControl(request: BrowserControlRequest): Promise<BrowserControlResult> {
-  const contents = await ensureBrowserWebContents();
   const action = request.action;
+  if (action === 'use') {
+    const receipt = await runBoundBrowserUse(request.browserUse, currentBrowserUseContext());
+    return {
+      ok: receipt.ok,
+      action,
+      source: 'native-browser-use',
+      url: receipt.url,
+      title: receipt.title,
+      data: receipt,
+      error: receipt.error,
+    };
+  }
+  const contents = await ensureBrowserWebContents();
   try {
     if (action === 'open') {
       await contents.loadURL(request.url || 'about:blank');
       await waitForWebContentsLoad(contents);
       const snap = await executeInBrowser<{ url: string; title: string; text: string }>(contents, browserSnapshotScript(request.maxChars || 12000));
-      return { ok: true, action, source: contents.getType() === 'webview' ? 'webview-cdp' : 'hidden-cdp', ...snap };
+      return { ok: true, action, source: 'webview-cdp', ...snap };
     }
     if (action === 'snapshot') {
       await waitForWebContentsLoad(contents);
       const snap = await executeInBrowser<{ url: string; title: string; text: string }>(contents, browserSnapshotScript(request.maxChars || 12000));
-      return { ok: true, action, source: contents.getType() === 'webview' ? 'webview-cdp' : 'hidden-cdp', ...snap };
+      return { ok: true, action, source: 'webview-cdp', ...snap };
     }
     if (action === 'click') {
       const data = await executeInBrowser(contents, `(() => {
@@ -575,7 +737,7 @@ async function runBrowserControl(request: BrowserControlRequest): Promise<Browse
         el.click();
         return { clicked: true, tag: el.tagName, text: (el.innerText || el.value || '').slice(0, 200) };
       })()`);
-      return { ok: true, action, source: contents.getType() === 'webview' ? 'webview-cdp' : 'hidden-cdp', url: contents.getURL(), data };
+      return { ok: true, action, source: 'webview-cdp', url: contents.getURL(), data };
     }
     if (action === 'type') {
       const data = await executeInBrowser(contents, `(() => {
@@ -593,39 +755,41 @@ async function runBrowserControl(request: BrowserControlRequest): Promise<Browse
         }
         return { typed: true, tag: el.tagName };
       })()`);
-      return { ok: true, action, source: contents.getType() === 'webview' ? 'webview-cdp' : 'hidden-cdp', url: contents.getURL(), data };
+      return { ok: true, action, source: 'webview-cdp', url: contents.getURL(), data };
     }
     if (action === 'eval') {
       const data = await executeInBrowser(contents, request.script || 'undefined');
-      return { ok: true, action, source: contents.getType() === 'webview' ? 'webview-cdp' : 'hidden-cdp', url: contents.getURL(), data };
+      return { ok: true, action, source: 'webview-cdp', url: contents.getURL(), data };
     }
     if (action === 'back') {
       if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
       await waitForWebContentsLoad(contents);
-      return { ok: true, action, source: contents.getType() === 'webview' ? 'webview-cdp' : 'hidden-cdp', url: contents.getURL() };
+      return { ok: true, action, source: 'webview-cdp', url: contents.getURL() };
     }
     if (action === 'forward') {
       if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
       await waitForWebContentsLoad(contents);
-      return { ok: true, action, source: contents.getType() === 'webview' ? 'webview-cdp' : 'hidden-cdp', url: contents.getURL() };
+      return { ok: true, action, source: 'webview-cdp', url: contents.getURL() };
     }
     if (action === 'reload') {
       contents.reload();
       await waitForWebContentsLoad(contents);
-      return { ok: true, action, source: contents.getType() === 'webview' ? 'webview-cdp' : 'hidden-cdp', url: contents.getURL() };
+      return { ok: true, action, source: 'webview-cdp', url: contents.getURL() };
     }
     if (action === 'cdp') {
       if (!contents.debugger.isAttached()) contents.debugger.attach('1.3');
       const data = await contents.debugger.sendCommand(request.method || '', (request.params || {}) as Record<string, unknown>);
-      return { ok: true, action, source: contents.getType() === 'webview' ? 'webview-cdp' : 'hidden-cdp', url: contents.getURL(), data };
+      return { ok: true, action, source: 'webview-cdp', url: contents.getURL(), data };
     }
     return { ok: false, action, source: 'desktop', error: `Unsupported browser action: ${action}` };
   } catch (e) {
-    return { ok: false, action, source: contents.getType() === 'webview' ? 'webview-cdp' : 'hidden-cdp', url: contents.getURL(), error: e instanceof Error ? e.message : String(e) };
+    return { ok: false, action, source: 'webview-cdp', url: contents.getURL(), error: e instanceof Error ? e.message : String(e) };
   }
 }
 
 function installBrowserControlBackend(): void {
+  const engine = ensureBrowserUseEngine();
+  BrowserUse.setBackend(engine);
   BrowserControl.setBackend({ run: runBrowserControl });
 }
 const args = userArgs();
@@ -729,14 +893,20 @@ if (hasCliCommand) {
   })();
 } else {
   let sidecarProcess: ReturnType<typeof utilityProcess.fork> | null = null;
+  let sidecarPort = 0;
   const sidecarPassword = randomUUID();
-  let createDesktopWindow: ((loadUi?: boolean) => BrowserWindow | null) | null = null;
+  let startupWindow: BrowserWindow | null = null;
+  let uiPrewarmWindow: BrowserWindow | null = null;
+  let startupAttempt = 0;
+  let startupAttemptPromise: Promise<{ ok: boolean; error?: string }> | null = null;
+  let createDesktopWindow: ((loadUi?: boolean, showWindow?: boolean, attemptId?: number) => BrowserWindow | null) | null = null;
 
   async function startSidecar(root: string): Promise<number> {
+    if (sidecarProcess && sidecarPort > 0) return sidecarPort;
     const sidecarPath = path.join(__dirname, 'sidecar.js');
     if (!fs.existsSync(sidecarPath)) return 0;
     try {
-      sidecarProcess = utilityProcess.fork(sidecarPath, [], {
+      const spawnedSidecar = utilityProcess.fork(sidecarPath, [], {
         env: {
           ...process.env,
           SIDECAR_ROOT: root,
@@ -745,21 +915,35 @@ if (hasCliCommand) {
           SIDECAR_PORT: '0',
         },
       });
+      sidecarProcess = spawnedSidecar;
       return await new Promise<number>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Sidecar timeout')), 10000);
-        sidecarProcess!.on('message', (msg: unknown) => {
+        const timeout = setTimeout(() => {
+          try { spawnedSidecar.kill(); } catch {}
+          reject(new Error('Sidecar timeout'));
+        }, 10000);
+        let ready = false;
+        spawnedSidecar.on('message', (msg: unknown) => {
           const data = msg as { type: string; method: string; result?: { port: number } };
           if (data.type === 'response' && data.method === 'ready' && data.result?.port) {
             clearTimeout(timeout);
-            resolve(data.result.port);
+            ready = true;
+            sidecarPort = data.result.port;
+            resolve(sidecarPort);
           }
         });
-        sidecarProcess!.on('exit', (code: number) => {
+        spawnedSidecar.on('exit', (code: number) => {
           clearTimeout(timeout);
-          if (code !== 0) reject(new Error(`Sidecar exited: ${code}`));
+          if (sidecarProcess === spawnedSidecar) {
+            sidecarProcess = null;
+            sidecarPort = 0;
+          }
+          if (!ready && code !== 0) reject(new Error(`Sidecar exited: ${code}`));
         });
       });
     } catch {
+      try { sidecarProcess?.kill(); } catch {}
+      sidecarProcess = null;
+      sidecarPort = 0;
       return 0;
     }
   }
@@ -782,6 +966,11 @@ if (hasCliCommand) {
   app.whenReady().then(async () => {
     let root = resolveRoot(args);
     const fileRouter = new WorkspaceFileRouter(() => path.resolve(agent?.workspace.current?.path || root));
+    const pdfPreviewServer = new PdfPreviewServer((token, ownerId) => fileRouter.resolvePdfCapability(token, ownerId));
+    await pdfPreviewServer.start();
+    app.once('will-quit', () => {
+      void pdfPreviewServer.close();
+    });
     protocol.handle('newmark-preview', async request => {
       const resource = await fileRouter.resolvePreview(request.url, request.headers.get('range'));
       return previewResponse(resource, request.method);
@@ -811,32 +1000,112 @@ if (hasCliCommand) {
         }
       }, 100);
     };
+    const REQUIRED_STARTUP_UI_HYDRATION = ['state', 'fileTree', 'rightStatus', 'flows', 'terminal', 'browser', 'rendered'] as const;
+    type StartupUiReadyPayload = { attemptId: number; hydrated?: Record<string, unknown>; error?: string };
+    type StartupUiWaiter = {
+      attemptId: number;
+      promise: Promise<StartupUiReadyPayload>;
+      resolve: (payload: StartupUiReadyPayload) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    };
+    const startupUiWaiters = new Map<number, StartupUiWaiter>();
     let startupShellReady: Promise<void> = Promise.resolve();
-    const loadDesktopWindowUi = (win: BrowserWindow): void => {
+    let startupComplete = false;
+    let automationStarted = false;
+    let startupUpdateCheckPromise: ReturnType<typeof checkGitHubUpdate> | null = null;
+    let startupUpdateResult: Awaited<ReturnType<typeof checkGitHubUpdate>> | null = null;
+    let promptedStartupVersion = '';
+
+    const sendStartupStatus = (payload: Record<string, unknown>): void => {
+      const shellWindow = startupWindow;
+      if (!shellWindow || shellWindow.isDestroyed()) return;
+      shellWindow.webContents.send('startup:status', payload);
+    };
+    const loadDesktopWindowUi = async (win: BrowserWindow, attemptId = 0): Promise<void> => {
       if (win.isDestroyed()) return;
       const url = win.webContents.getURL();
       if (url && url !== 'about:blank' && !url.startsWith('data:text/html')) return;
-      void win.loadFile(path.join(__dirname, 'ui', 'index.html'));
       recordStartup('ui-load-started');
+      await win.loadFile(path.join(__dirname, 'ui', 'index.html'), attemptId > 0 ? {
+        query: { startupAttempt: String(attemptId), startupPrewarm: '1' },
+      } : undefined);
     };
     const loadStartupShell = (win: BrowserWindow): void => {
       if (win.isDestroyed()) return;
       recordStartup('startup-shell-load-started');
-      startupShellReady = win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(STARTUP_HTML)}`).then(() => {
+      const startupIconDataUrl = createAppIconImage(64).toDataURL();
+      const startupHtml = STARTUP_HTML.replace('__NEWMARK_STARTUP_ICON__', startupIconDataUrl || FALLBACK_TRAY_ICON);
+      startupShellReady = win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(startupHtml)}`).then(() => {
         recordStartup('startup-shell-loaded');
       });
     };
     const showMainWindow = (): void => {
-      const win = mainWindow && !mainWindow.isDestroyed()
-        ? mainWindow
-        : (createDesktopWindow ? createDesktopWindow(!!agent) : null);
+      let win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+      if (!win && createDesktopWindow) {
+        win = createDesktopWindow(startupComplete, true);
+        if (!startupComplete) startupWindow = win;
+        mainWindow = win;
+      }
       if (!win || win.isDestroyed()) return;
       if (win.isMinimized()) win.restore();
       win.show();
       win.focus();
     };
 
-    createDesktopWindow = (loadUi = true) => {
+    const registerUiReadiness = (win: BrowserWindow, attemptId: number): void => {
+      const webContentsId = win.webContents.id;
+      let resolve!: (payload: StartupUiReadyPayload) => void;
+      let reject!: (error: Error) => void;
+      const promise = new Promise<StartupUiReadyPayload>((res, rej) => { resolve = res; reject = rej; });
+      const timer = setTimeout(() => {
+        startupUiWaiters.delete(webContentsId);
+        reject(new Error('Full UI readiness handshake timed out after 30000ms'));
+      }, 30_000);
+      startupUiWaiters.set(webContentsId, { attemptId, promise, resolve, reject, timer });
+    };
+    const rejectUiReadinessById = (webContentsId: number, error: Error): void => {
+      const waiter = startupUiWaiters.get(webContentsId);
+      if (!waiter) return;
+      clearTimeout(waiter.timer);
+      startupUiWaiters.delete(webContentsId);
+      waiter.reject(error);
+    };
+    const rejectUiReadiness = (win: BrowserWindow, error: Error): void => {
+      if (win.isDestroyed()) return;
+      rejectUiReadinessById(win.webContents.id, error);
+    };
+    const waitForUiReadiness = (win: BrowserWindow): Promise<StartupUiReadyPayload> => {
+      const waiter = startupUiWaiters.get(win.webContents.id);
+      return waiter ? waiter.promise : Promise.reject(new Error('UI readiness waiter was not registered before navigation'));
+    };
+
+    ipcMain.handle('startup:uiReady', (event, payload: StartupUiReadyPayload) => {
+      const waiter = startupUiWaiters.get(event.sender.id);
+      if (!waiter || waiter.attemptId !== Number(payload?.attemptId || 0)) return { accepted: false };
+      const missingHydration = REQUIRED_STARTUP_UI_HYDRATION.filter(key => payload?.hydrated?.[key] !== true);
+      if (missingHydration.length > 0) {
+        const hydrationError = `Full UI readiness rejected; required hydration is incomplete: ${missingHydration.join(', ')}`;
+        clearTimeout(waiter.timer);
+        startupUiWaiters.delete(event.sender.id);
+        waiter.reject(new Error(hydrationError));
+        return { accepted: false, error: hydrationError };
+      }
+      clearTimeout(waiter.timer);
+      startupUiWaiters.delete(event.sender.id);
+      waiter.resolve(payload || { attemptId: waiter.attemptId });
+      return { accepted: true };
+    });
+    ipcMain.handle('startup:uiFailed', (event, payload: StartupUiReadyPayload) => {
+      const waiter = startupUiWaiters.get(event.sender.id);
+      if (!waiter || waiter.attemptId !== Number(payload?.attemptId || 0)) return { accepted: false };
+      clearTimeout(waiter.timer);
+      startupUiWaiters.delete(event.sender.id);
+      waiter.reject(new Error(String(payload?.error || 'Full UI prewarm failed')));
+      return { accepted: true };
+    });
+
+    createDesktopWindow = (loadUi = true, showWindow = true, attemptId = 0) => {
       const win = new BrowserWindow({
         width: 1600,
         height: 1000,
@@ -853,12 +1122,17 @@ if (hasCliCommand) {
           nodeIntegration: false,
           sandbox: false,
           webviewTag: true,
+          devTools: loadUi,
         },
       });
       const fileRouterOwnerId = String(win.webContents.id);
+      const startupSurface = !loadUi;
 
       if (!mainWindow || mainWindow.isDestroyed()) mainWindow = win;
-      if (loadUi) loadDesktopWindowUi(win);
+      if (loadUi) {
+        if (attemptId > 0) registerUiReadiness(win, attemptId);
+        void loadDesktopWindowUi(win, attemptId).catch(error => rejectUiReadiness(win, error instanceof Error ? error : new Error(String(error))));
+      }
       else loadStartupShell(win);
       win.webContents.on('will-attach-webview', (event, webPreferences) => {
         delete webPreferences.preload;
@@ -870,26 +1144,18 @@ if (hasCliCommand) {
       });
       win.webContents.on('did-attach-webview', (_event, contents) => {
         contents.on('will-prevent-unload', event => event.preventDefault());
-        contents.setWindowOpenHandler(details => {
-          const localPreview = contents.getURL().startsWith('newmark-preview:');
-          if (!localPreview && /^https?:/i.test(details.url)) void shell.openExternal(details.url);
-          return { action: 'deny' };
-        });
-        contents.on('will-navigate', (event, url) => {
-          if (/^(?:https?:|about:blank|newmark-preview:)/i.test(url)) return;
-          event.preventDefault();
-        });
+        if (contents.session === session.fromPartition('persist:newmark-browser')) registerBrowserGuest(win.webContents, contents);
       });
-      if (!automationWakeMode) {
-        win.maximize();
+      if (!automationWakeMode) win.maximize();
+      if (!automationWakeMode && showWindow) {
         win.show();
         recordStartup('window-shown');
-        syncAutomationWakeSoon();
-        if (!app.isPackaged && !args.includes('--no-devtools')) win.webContents.openDevTools({ mode: 'bottom' });
+        if (loadUi && !app.isPackaged && !args.includes('--no-devtools')) win.webContents.openDevTools({ mode: 'bottom' });
       }
 
       win.on('close', (e) => {
         if (_forceQuit) return;
+        if (startupSurface) return;
         if (agent) {
           const closeBehavior = agent.config.getStr('general', 'close_behavior');
           if (closeBehavior === 'minimize') {
@@ -905,41 +1171,59 @@ if (hasCliCommand) {
       });
 
       win.on('closed', () => {
+        rejectUiReadinessById(Number(fileRouterOwnerId), new Error('UI prewarm window closed before readiness'));
         fileRouter.revokeOwner(fileRouterOwnerId);
-        const remaining = BrowserWindow.getAllWindows().filter(candidate => !candidate.isDestroyed() && candidate !== browserControlWindow);
+        pdfPreviewServer.revokeOwner(fileRouterOwnerId);
+        browserGuestContentsByHost.delete(Number(fileRouterOwnerId));
+        const remaining = BrowserWindow.getAllWindows().filter(candidate => !candidate.isDestroyed() && candidate !== win);
         if (mainWindow === win) mainWindow = remaining[0] || null;
         if (!remaining.length && sidecarProcess) {
           sidecarProcess.kill();
           sidecarProcess = null;
+          sidecarPort = 0;
         }
       });
       return win;
     };
 
-    try {
-      firstRunInit(root);
-    } catch (e) {
-      logStartupFailure(`firstRunInit:${root}`, e);
-      const explicitRoot = pathArgValue(args, '--root');
-      const fallbackRoot = userRuntimeRoot();
-      if (explicitRoot || path.resolve(root) === path.resolve(fallbackRoot)) throw e;
-      root = fallbackRoot;
-      firstRunInit(fallbackRoot);
-    }
-    recordStartup('first-run-init');
+    let firstRunInitialized = false;
     if (!automationWakeMode) {
-      mainWindow = createDesktopWindow(false);
+      startupWindow = createDesktopWindow(false, true);
+      mainWindow = startupWindow;
       createTray();
     }
-    void detectWslDistrosAtStartup();
 
-    setTimeout(async () => {
-      try {
-        await startupShellReady;
+    const startupUsesChinese = (): boolean => {
+      const language = String(agent?.config.getStr('general', 'language') || 'auto').toLowerCase();
+      return language === 'zh' || (language === 'auto' && String(app.getLocale() || '').toLowerCase().startsWith('zh'));
+    };
+    const startupMessageForProgress = (progress: StartupPrewarmProgress): string => {
+      return startupUsesChinese()
+        ? `正在预热：${progress.label}`
+        : `Prewarming: ${progress.label}`;
+    };
+    const ensureStartupAgentAndAutomation = async (): Promise<void> => {
+      if (!firstRunInitialized) {
+        try {
+          firstRunInit(root);
+        } catch (error) {
+          logStartupFailure(`firstRunInit:${root}`, error);
+          const explicitRoot = pathArgValue(args, '--root');
+          const fallbackRoot = userRuntimeRoot();
+          if (explicitRoot || path.resolve(root) === path.resolve(fallbackRoot)) throw error;
+          root = fallbackRoot;
+          firstRunInit(fallbackRoot);
+        }
+        firstRunInitialized = true;
+        recordStartup('first-run-init');
+      }
+      if (!agent) {
         agent = new Agent(root);
         activeAgentBackendMode = process.platform === 'win32' && agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows';
         recordStartup('agent-ready');
-        automationWake = new AutomationWakeScheduler(root, process.execPath);
+      }
+      if (!automationWake) automationWake = new AutomationWakeScheduler(root, process.execPath);
+      if (!automation) {
         automation = new AutomationManager(agent.config, async (prompt, model) => {
           if (!agent) return '';
           const previousModel = agent.model;
@@ -958,7 +1242,7 @@ if (hasCliCommand) {
           setTimeout(() => {
             try {
               if (automationWake) lastWakeSync = automationWake.sync(items);
-            } catch (e) {
+            } catch (error) {
               lastWakeSync = {
                 platform: process.platform,
                 active: false,
@@ -966,47 +1250,227 @@ if (hasCliCommand) {
                 taskName: automationWake?.taskName() || '',
                 registered: false,
                 deleted: false,
-                skippedReason: e instanceof Error ? e.message : String(e),
+                skippedReason: error instanceof Error ? error.message : String(error),
               };
             }
           }, 100);
         });
-        if (automationWakeMode) {
-          await automation.tick();
-          lastWakeSync = automationWake.sync(automation.list());
-          automation.stop();
-          app.quit();
-          return;
-        }
-        automation.start();
-        recordStartup('automation-started');
-        syncAutomationWakeSoon();
-
-        try {
-          installBrowserControlBackend();
-          ensureConversationKernel(root);
-          recordStartup('deferred-backends-ready');
-        } catch (e) {
-          logStartupFailure('deferred-backends', e);
-        }
-        void startSidecar(root).then(port => {
-          if (port > 0) {
-            console.log(`[Newmark] Sidecar started on port ${port}`);
-          }
-          recordStartup('sidecar-ready');
-        }).catch(e => logStartupFailure('sidecar-start', e));
-        for (const win of BrowserWindow.getAllWindows()) {
-          if (!win.isDestroyed()) loadDesktopWindowUi(win);
-        }
-      } catch (e) {
-        logStartupFailure('deferred-desktop-startup', e);
-        try {
-          const message = e instanceof Error ? e.message : String(e);
-          dialog.showErrorBox('Newmark Agent startup failed', `${message}\n\nSee ${startupLogPath()}`);
-        } catch {}
-        app.exit(1);
       }
-    }, 80);
+      if (!automationWakeMode && !automationStarted) {
+        automation.start();
+        automationStarted = true;
+        recordStartup('automation-started');
+      }
+    };
+
+    const promotePrewarmedUi = (win: BrowserWindow): void => {
+      if (win.isDestroyed()) throw new Error('Prewarmed UI was destroyed before promotion');
+      sendStartupStatus({
+        phase: 'ready',
+        message: startupUsesChinese() ? '预热完成，正在打开 Newmark Agent…' : 'Prewarm complete. Opening Newmark Agent…',
+        detail: '',
+        completed: 7,
+        total: 7,
+        retry: false,
+      });
+      mainWindow = win;
+      uiPrewarmWindow = null;
+      startupComplete = true;
+      win.maximize();
+      win.show();
+      win.focus();
+      recordStartup('prewarmed-ui-shown');
+      const shellWindow = startupWindow;
+      startupWindow = null;
+      if (shellWindow && !shellWindow.isDestroyed()) {
+        shellWindow.hide();
+        shellWindow.destroy();
+      }
+      syncAutomationWakeSoon();
+      if (!app.isPackaged && !args.includes('--no-devtools')) win.webContents.openDevTools({ mode: 'bottom' });
+    };
+
+    const showStartupUpdatePrompt = async (win: BrowserWindow): Promise<void> => {
+      const release = startupUpdateResult;
+      const content = startupUpdatePromptContent(
+        release,
+        agent?.config.getStr('general', 'language') || 'auto',
+        app.getLocale(),
+      );
+      if (!content || promptedStartupVersion === content.version || win.isDestroyed()) return;
+      promptedStartupVersion = content.version;
+      const response = await dialog.showMessageBox(win, {
+        type: 'info',
+        title: content.title,
+        message: content.message,
+        detail: content.detail,
+        buttons: content.buttons,
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (response.response === 0 && /^https:\/\//i.test(content.url)) {
+        await shell.openExternal(content.url);
+      }
+    };
+
+    const runStartupAttempt = (): Promise<{ ok: boolean; error?: string }> => {
+      if (startupComplete) return Promise.resolve({ ok: true });
+      if (startupAttemptPromise) return startupAttemptPromise;
+      const attemptId = ++startupAttempt;
+      const promise = (async (): Promise<{ ok: boolean; error?: string }> => {
+        try {
+          await startupShellReady;
+          sendStartupStatus({
+            phase: 'warming',
+            message: startupUsesChinese() ? '正在预热内核与界面…' : 'Prewarming kernel and UI…',
+            detail: '',
+            completed: 0,
+            total: 7,
+            retry: false,
+          });
+          await ensureStartupAgentAndAutomation();
+          if (automationWakeMode) {
+            await automation!.tick();
+            lastWakeSync = automationWake!.sync(automation!.list());
+            automation!.stop();
+            app.quit();
+            return { ok: true };
+          }
+          sendStartupStatus({
+            phase: 'warming',
+            message: startupUsesChinese() ? '内核配置已就绪' : 'Kernel configuration ready',
+            detail: '',
+            completed: 1,
+            total: 7,
+            retry: false,
+          });
+          if (!startupUpdateCheckPromise) {
+            startupUpdateCheckPromise = checkGitHubUpdate('', '', '', undefined, { timeoutMs: 5_000 });
+          }
+          const coreReport = await runStartupPrewarmBarrier([
+            {
+              id: 'core-services',
+              label: startupUsesChinese() ? '对话内核与浏览器控制' : 'conversation kernel and browser control',
+              required: true,
+              run: async () => {
+                installBrowserControlBackend();
+                if (!ensureConversationKernel(root)) throw new Error('Conversation kernel did not initialize');
+                recordStartup('core-services-ready');
+              },
+            },
+            {
+              id: 'runtime-prewarm',
+              label: startupUsesChinese() ? '当前对话运行时' : 'current conversation runtime',
+              required: true,
+              run: async () => {
+                const target = conversationRuntimeTarget();
+                try {
+                  const snapshot = wslBackendEnabled()
+                    ? await ensureWslConversationPool()!.snapshot(target)
+                    : await ensureElectronUtilityPool().snapshot(target);
+                  if (!snapshot || snapshot.runtimeStatus === 'unavailable') {
+                    throw new Error(String(snapshot?.runtimeError || 'Conversation runtime snapshot unavailable'));
+                  }
+                  recordStartup('runtime-prewarm-ready');
+                  return snapshot;
+                } catch (error) {
+                  if (wslBackendEnabled()) await wslAgentRuntimePool?.stopTarget(target);
+                  else await electronUtilityRuntimePool?.stopTarget(target);
+                  throw error;
+                }
+              },
+            },
+            {
+              id: 'wsl-detection',
+              label: startupUsesChinese() ? '运行环境探测' : 'runtime environment detection',
+              required: false,
+              run: async () => await detectWslDistrosAtStartup(),
+            },
+            {
+              id: 'sidecar',
+              label: startupUsesChinese() ? '本地辅助服务' : 'local sidecar',
+              required: false,
+              run: async () => {
+                const port = await startSidecar(root);
+                if (port <= 0) throw new Error('Sidecar is unavailable');
+                console.log(`[Newmark] Sidecar started on port ${port}`);
+                recordStartup('sidecar-ready');
+                return port;
+              },
+            },
+            {
+              id: 'update-check',
+              label: startupUsesChinese() ? '版本更新检查' : 'update check',
+              required: false,
+              run: async () => {
+                const result = await startupUpdateCheckPromise!;
+                startupUpdateResult = result;
+                recordStartup('update-check-complete');
+                if (!result.ok) throw new Error(result.error || 'Update check unavailable');
+                return result;
+              },
+            },
+          ], progress => sendStartupStatus({
+            phase: 'warming',
+            message: startupMessageForProgress(progress),
+            detail: progress.status === 'warning' || progress.status === 'failed' ? String(progress.id) : '',
+            completed: 1 + progress.completed,
+            total: 7,
+            retry: false,
+          }));
+          if (!coreReport.ok) {
+            throw new Error(coreReport.failures.map(item => `${item.label}: ${item.error || 'failed'}`).join('\n'));
+          }
+
+          if (uiPrewarmWindow && !uiPrewarmWindow.isDestroyed()) uiPrewarmWindow.destroy();
+          const candidate = createDesktopWindow!(true, false, attemptId);
+          if (!candidate) throw new Error('Could not create hidden UI prewarm window');
+          uiPrewarmWindow = candidate;
+          const uiReport = await runStartupPrewarmBarrier([{
+            id: 'ui-prewarm',
+            label: startupUsesChinese() ? '界面状态与文件树' : 'UI state and file tree',
+            required: true,
+            run: async () => await waitForUiReadiness(candidate),
+          }], progress => sendStartupStatus({
+            phase: 'warming',
+            message: startupMessageForProgress(progress),
+            detail: '',
+            completed: 6 + progress.completed,
+            total: 7,
+            retry: false,
+          }));
+          if (!uiReport.ok) {
+            throw new Error(uiReport.failures.map(item => `${item.label}: ${item.error || 'failed'}`).join('\n'));
+          }
+          promotePrewarmedUi(candidate);
+          setTimeout(() => { void showStartupUpdatePrompt(candidate); }, 250);
+          return { ok: true };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          logStartupFailure(`startup-prewarm-attempt-${attemptId}`, error);
+          if (uiPrewarmWindow && !uiPrewarmWindow.isDestroyed()) uiPrewarmWindow.destroy();
+          uiPrewarmWindow = null;
+          sendStartupStatus({
+            phase: 'failed',
+            message: startupUsesChinese() ? '预热失败，主界面尚未打开' : 'Prewarm failed; the main UI remains closed',
+            detail: `${message}\n${startupLogPath()}`,
+            completed: 0,
+            total: 7,
+            retry: true,
+          });
+          return { ok: false, error: message };
+        }
+      })();
+      startupAttemptPromise = promise;
+      void promise.finally(() => {
+        if (startupAttemptPromise === promise) startupAttemptPromise = null;
+      });
+      return promise;
+    };
+
+    ipcMain.handle('startup:retry', async () => await runStartupAttempt());
+    setTimeout(() => { void runStartupAttempt(); }, 80);
 
     function refreshNativeThemeIcons(): void {
       const windowIcon = createAppIconImage();
@@ -1020,16 +1484,32 @@ if (hasCliCommand) {
     let appExitCleanupStarted = false;
     let appExitCleanupComplete = false;
     app.on('will-quit', event => {
-      if (!appExitCleanupComplete && wslAgentClient) {
+      if (!appExitCleanupComplete && (wslAgentClient || wslAgentRuntimePool || electronUtilityRuntimePool)) {
         event.preventDefault();
         if (!appExitCleanupStarted) {
           appExitCleanupStarted = true;
-          const client = wslAgentClient;
+          const legacyClient = wslAgentClient;
+          const wslPool = wslAgentRuntimePool;
+          const utilityPool = electronUtilityRuntimePool;
           wslAgentClient = null;
-          void Promise.race([
-            client.stop(),
-            new Promise<void>(resolve => setTimeout(() => { client.shutdownNow(); resolve(); }, 2200)),
-          ]).finally(() => {
+          wslAgentRuntimePool = null;
+          electronUtilityRuntimePool = null;
+          const legacyStop = legacyClient
+            ? legacyClient.stop().catch(async error => {
+              try { await legacyClient.shutdownNow(); } catch {}
+              throw error;
+            })
+            : undefined;
+          void runRuntimeShutdownBarrier({
+            operations: [
+              legacyStop,
+              wslPool?.stopAll(),
+              utilityPool?.stopAll(),
+            ],
+            shutdownHelpers: async () => await shutdownWindowsProcessHelpers(2_000),
+          }).catch(error => {
+            console.error('[Newmark] Runtime shutdown cleanup failed:', error instanceof Error ? error.message : String(error));
+          }).finally(() => {
             appExitCleanupComplete = true;
             app.quit();
           });
@@ -1042,8 +1522,13 @@ if (hasCliCommand) {
       } catch {}
       automation?.stop();
       if (tray) { tray.destroy(); tray = null; }
+      BrowserUse.setBackend(null);
+      browserUseEngine?.clear();
+      browserUseEngine = null;
+      electronBrowserUseHost?.dispose();
+      electronBrowserUseHost = null;
       BrowserControl.setBackend(null);
-      if (browserControlWindow && !browserControlWindow.isDestroyed()) browserControlWindow.destroy();
+      browserGuestContentsByHost.clear();
       if (sidecarProcess) { sidecarProcess.kill(); sidecarProcess = null; }
       shutdownTerminalTakeoverSessions('app-exit');
     });
@@ -1064,6 +1549,73 @@ if (hasCliCommand) {
     }
 
     const wslBackendEnabled = (): boolean => process.platform === 'win32' && activeAgentBackendMode === 'wsl';
+    const utilityHostToolHandler = createUtilityHostToolHandler({
+      persistenceRoot: root,
+      isToolEnabled: toolName => !!agent && isNativeToolEnabled(toolName, agent.config.nativeToolEnabled()),
+      runBrowserUse: async (request, signal) => await ensureBrowserUseEngine().run(request, signal),
+      cancelBrowserUseTarget: runtimeKey => {
+        browserUseEngine?.clearRuntime(runtimeKey);
+        electronBrowserUseHost?.clear({ runtimeKey, owner: '' });
+      },
+      runAutomation: async (tool, payload, signal) => {
+        if (!agent) throw new Error('Automation manager is unavailable');
+        return await agent.handleAutomationTool(tool, payload, signal);
+      },
+    });
+    const ensureElectronUtilityPool = (): ElectronUtilityRuntimePool => {
+      if (!electronUtilityRuntimePool) {
+        electronUtilityRuntimePool = new ElectronUtilityRuntimePool(root, ensureElectronUtilityRuntimeHost());
+        electronUtilityRuntimePool.subscribe(event => broadcastAgentWorkEvent(event));
+        electronUtilityRuntimePool.setHostToolHandler(utilityHostToolHandler);
+      }
+      return electronUtilityRuntimePool;
+    };
+    const runWslHostTool: WslHostToolHandler = async (request: WslHostToolRequest, signal?: AbortSignal): Promise<unknown> => {
+      const target = normalizeConversationTarget(conversationRuntimeTarget({
+        workspaceId: request.context.workspaceId,
+        conversationId: request.context.conversationId,
+      }));
+      if (!request.context.runtimeKey || request.context.runtimeKey !== target.runtimeKey) {
+        throw new Error('WSL host tool target/context mismatch');
+      }
+      const routedTarget = {
+        workspaceId: target.workspaceId,
+        conversationId: target.conversationId,
+        runtimeKey: target.runtimeKey,
+        workspaceKey: target.workspaceKey,
+        workspacePath: target.workspace?.path || root,
+      };
+      const routedContext = {
+        conversationId: target.conversationId,
+        workspaceId: target.workspaceId,
+        actorId: request.context.actorId,
+        workspacePath: target.workspace?.path || root,
+        backend: 'wsl',
+        mode: request.context.mode || agent?.mode || 'build',
+        runtimeKey: target.runtimeKey,
+      };
+      if (request.tool === 'browser_control') {
+        return await utilityHostToolHandler({ ...request, target: routedTarget }, signal);
+      }
+      if (request.tool === 'automation') {
+        return await utilityHostToolHandler({ ...request, target: routedTarget, context: routedContext }, signal);
+      }
+      if (request.tool === 'terminal_takeover') {
+        return await utilityHostToolHandler({ ...request, target: routedTarget, context: routedContext }, signal);
+      }
+      return await utilityHostToolHandler({ ...request, target: routedTarget, context: routedContext }, signal);
+    };
+    runWslHostTool.cancelTarget = (runtimeKey: string): void => utilityHostToolHandler.cancelTarget(runtimeKey);
+    const ensureWslConversationPool = (): WslAgentRuntimePool | null => {
+      if (!wslBackendEnabled() || !agent) return null;
+      if (!wslAgentRuntimePool) {
+        const distro = agent.config.getStr('agent', 'wsl_distro') || 'Ubuntu-24.04';
+        wslAgentRuntimePool = new WslAgentRuntimePool(distro, root, ensureWslRuntimeBundle());
+        wslAgentRuntimePool.subscribe(event => broadcastAgentWorkEvent(event));
+        wslAgentRuntimePool.setHostToolHandler(runWslHostTool);
+      }
+      return wslAgentRuntimePool;
+    };
     const ensureWslAgentClient = async (): Promise<WslAgentClient | null> => {
       if (!wslBackendEnabled() || !agent) return null;
       if (!wslAgentClient) {
@@ -1071,122 +1623,165 @@ if (hasCliCommand) {
         wslAgentClient = new WslAgentClient(distro, root, ensureWslRuntimeBundle());
         wslAgentClient.subscribe(event => broadcastAgentWorkEvent(event));
         wslAgentClient.subscribeTerminal(event => broadcastTerminalTakeoverEvent(event));
-        wslAgentClient.setHostToolHandler(async request => {
-          if (request.tool !== 'computer_use') throw new Error(`WSL host tool is not allowed: ${String(request.tool)}`);
-          const args = request.args || {};
-          const result = await runComputerUse({
-            action: String(args.action || ''),
-            x: Number(args.x),
-            y: Number(args.y),
-            scrollX: Number(args.scroll_x || args.scrollX || 0),
-            scrollY: Number(args.scroll_y || args.scrollY || 0),
-            targetId: String(args.target_id || args.targetId || ''),
-            button: String(args.button || ''),
-            text: String(args.text || ''),
-            key: String(args.key || ''),
-            appTarget: String(args.app_target || args.appTarget || ''),
-            windowHandle: String(args.window_handle || args.windowHandle || ''),
-            durationMs: Number(args.duration_ms || args.durationMs || 0),
-            maxChars: Number(args.max_chars || args.maxChars || 30000),
-            dryRun: args.dry_run === true || args.dryRun === true,
-            allowEphemeralVisionImage: args.allow_ephemeral_vision_image === true || args.allowEphemeralVisionImage === true,
-            includeRawUi: args.include_raw_ui === true || args.includeRawUi === true,
-            gradientColors: Array.isArray(args.gradient_colors) ? args.gradient_colors.map(String) : undefined,
-            gradientSpeed: Number(args.gradient_speed || 0) || undefined,
-            gradientWidth: Number(args.gradient_width || 0) || undefined,
-            steps: Array.isArray(args.steps) ? args.steps.slice(0, 3).map(stepRaw => {
-              const step = stepRaw && typeof stepRaw === 'object' ? stepRaw as Record<string, unknown> : {};
-              return {
-                action: String(step.action || '') as 'move' | 'click' | 'scroll' | 'wait' | 'app_activate',
-                x: Number(step.x),
-                y: Number(step.y),
-                scrollX: Number(step.scroll_x || step.scrollX || 0),
-                scrollY: Number(step.scroll_y || step.scrollY || 0),
-                button: String(step.button || 'left'),
-                targetId: String(step.target_id || step.targetId || ''),
-                appTarget: String(step.app_target || step.appTarget || ''),
-                windowHandle: String(step.window_handle || step.windowHandle || ''),
-                durationMs: Number(step.duration_ms || step.durationMs || 0),
-              };
-            }) : undefined,
-            workspacePath: agent?.workspace.current?.path || root,
-            ownerId: `wsl:${request.context.workspaceId}:${request.context.conversationId}:${request.context.actorId}`,
-          });
-          try { return JSON.parse(result); } catch { return result; }
-        });
+        wslAgentClient.setHostToolHandler(runWslHostTool);
       }
       await wslAgentClient.start();
       return wslAgentClient;
     };
 
-    ipcMain.handle('agent:send', async (_event, message: string | AgentPromptMessage, conversationId?: string) => {
-      if (!agent) return { tokens: [], error: 'Agent not initialized' };
+    const mutatingRuntimeKeys = new Set<string>();
+    const mutatingWorkspaceKeys = new Set<string>();
+    const activePromptLeases = new Map<string, number>();
+    const activePromptWorkspaces = new Map<string, number>();
+    const assertTargetNotMutating = (target: ConversationRuntimeTarget, allowPromptLease = false): void => {
+      const normalized = normalizeConversationTarget(target);
+      if (mutatingRuntimeKeys.has(normalized.runtimeKey)
+        || mutatingWorkspaceKeys.has(normalized.workspaceKey)
+        || (!allowPromptLease && (activePromptLeases.get(normalized.runtimeKey) || 0) > 0)) {
+        throw new Error('This conversation or workspace is being mutated. Retry after the operation completes.');
+      }
+    };
+    const runtimeSnapshotForTarget = async (target: ConversationRuntimeTarget): Promise<Record<string, unknown>> => {
+      return wslBackendEnabled()
+        ? await ensureWslConversationPool()!.snapshot(target)
+        : await ensureElectronUtilityPool().snapshot(target) as unknown as Record<string, unknown>;
+    };
+    const runtimeIsRestarting = (target: ConversationRuntimeTarget): boolean => wslBackendEnabled()
+      ? !!wslAgentRuntimePool?.isRestarting(target)
+      : !!electronUtilityRuntimePool?.isRestarting(target);
+    const runtimeIsStopping = (target: ConversationRuntimeTarget): boolean => wslBackendEnabled()
+      ? !!wslAgentRuntimePool?.isStopping(target)
+      : !!electronUtilityRuntimePool?.isStopping(target);
+    const assertTargetRuntimeMutable = async (target: ConversationRuntimeTarget): Promise<void> => {
+      if (runtimeIsRestarting(target)) throw new Error('Cannot mutate a conversation while its runtime is force restarting.');
+      if (runtimeIsStopping(target)) throw new Error('Cannot mutate a conversation while its runtime is stopping.');
+      const snapshot = await runtimeSnapshotForTarget(target);
+      const runtime = snapshot.runtime as { running?: boolean; stopRequested?: boolean } | null | undefined;
+      const events = Array.isArray(snapshot.workEvents) ? snapshot.workEvents as Array<{ status?: string }> : [];
+      const lastStatus = String(events.at(-1)?.status || '');
+      if (runtime?.running || runtime?.stopRequested || lastStatus === 'stopping' || lastStatus === 'force_restarting') {
+        throw new Error('Cannot mutate a conversation while its runtime is running or stopping.');
+      }
+    };
+    const stopTargetRuntime = async (target: ConversationRuntimeTarget): Promise<void> => {
+      if (wslBackendEnabled()) await wslAgentRuntimePool?.stopTarget(target);
+      else await electronUtilityRuntimePool?.stopTarget(target);
+    };
+    const isolatedConversationAgent = (target: ConversationRuntimeTarget): Agent => {
+      const normalized = normalizeConversationTarget(target);
+      const isolated = new Agent(root, { agentOnly: true });
+      if (normalized.workspace) {
+        isolated.workspace.current = {
+          id: normalized.workspace.id,
+          name: normalized.workspace.name,
+          path: normalized.workspace.path,
+          isInternal: normalized.workspace.isInternal,
+          hostBinding: '',
+          icon: '',
+          kind: normalized.workspace.kind === 'ssh' ? 'ssh' : 'local',
+        };
+        isolated.config.loadWorkspaceConfig(normalized.workspace.path);
+      } else {
+        isolated.workspace.current = null;
+        isolated.config.clearWorkspaceOverrides();
+      }
+      isolated.setConversation(normalized.conversationId);
+      return isolated;
+    };
+    const mutateTargetConversation = async <T>(target: ConversationRuntimeTarget, mutation: () => T | Promise<T>): Promise<T> => {
+      const normalized = normalizeConversationTarget(target);
+      assertTargetNotMutating(normalized);
+      mutatingRuntimeKeys.add(normalized.runtimeKey);
       try {
-        const targetConversation = String(conversationId || agent.activeConversationId || 'default');
-        if (wslBackendEnabled()) {
-          const client = await ensureWslAgentClient();
-          if (!client) return { error: 'WSL Agent backend is enabled but unavailable.' };
-          const result = await client.prompt({
-            message,
-            conversationId: targetConversation,
-            options: {
-              mode: agent.mode,
-              model: agent.model,
-              intelligence: agent.intelligence,
-              inputMode: agent.inputMode,
-              engine: agent.engine,
-            },
-            queueMode: agent.inputMode === 'guide' ? 'steer' : 'followUp',
-            workspace: agent.workspace.current ? {
-              name: agent.workspace.current.name,
-              path: agent.workspace.current.path,
-              isInternal: agent.workspace.current.isInternal,
-              kind: agent.workspace.current.kind,
-            } : null,
-          });
-          if ((agent.activeConversationId || 'default') === targetConversation) agent.setConversation(targetConversation);
-          return result;
-        }
-        const kernel = ensureConversationKernel(root);
-        if (!kernel) return { tokens: [], error: 'Conversation kernel not initialized' };
-        const queueMode = agent.inputMode === 'guide' ? 'steer' : 'followUp';
-        const result = await kernel.prompt(message, targetConversation, {
+        await assertTargetRuntimeMutable(normalized);
+        const result = await mutation();
+        await stopTargetRuntime(normalized);
+        return result;
+      } finally {
+        mutatingRuntimeKeys.delete(normalized.runtimeKey);
+      }
+    };
+
+    ipcMain.handle('agent:send', async (_event, message: string | AgentPromptMessage, targetInput?: ConversationTargetInput) => {
+      if (!agent) return { tokens: [], error: 'Agent not initialized' };
+      let promptLeaseKey = '';
+      let promptLeaseWorkspaceKey = '';
+      try {
+        const target = conversationRuntimeTarget(targetInput);
+        assertTargetNotMutating(target, true);
+        const normalizedPromptTarget = normalizeConversationTarget(target);
+        promptLeaseKey = normalizedPromptTarget.runtimeKey;
+        promptLeaseWorkspaceKey = normalizedPromptTarget.workspaceKey;
+        activePromptLeases.set(promptLeaseKey, (activePromptLeases.get(promptLeaseKey) || 0) + 1);
+        activePromptWorkspaces.set(promptLeaseWorkspaceKey, (activePromptWorkspaces.get(promptLeaseWorkspaceKey) || 0) + 1);
+        const targetConversation = target.conversationId;
+        const options = {
           mode: agent.mode,
           model: agent.model,
           intelligence: agent.intelligence,
           inputMode: agent.inputMode,
           engine: agent.engine,
-        }, queueMode);
+        };
+        const queueMode = agent.inputMode === 'guide' ? 'steer' : 'followUp';
+        let result;
+        if (wslBackendEnabled()) {
+          const pool = ensureWslConversationPool();
+          if (!pool) return { error: 'WSL Agent backend is enabled but unavailable.' };
+          result = await pool.prompt({
+            message,
+            target,
+            conversationId: targetConversation,
+            options,
+            queueMode,
+            workspace: target.workspace ? {
+              id: target.workspace.id,
+              name: target.workspace.name,
+              path: target.workspace.path,
+              isInternal: target.workspace.isInternal,
+              kind: target.workspace.kind,
+            } : null,
+          });
+        } else {
+          result = await ensureElectronUtilityPool().prompt({ message, target, options, queueMode });
+        }
         const previousConversation = agent.activeConversationId || 'default';
-        if (previousConversation === targetConversation) {
+        const currentWorkspace = agent.workspace.current;
+        const currentMatchesTarget = !!currentWorkspace && (
+          currentWorkspace.id === target.workspaceId
+          || currentWorkspace.path === target.workspaceId
+          || (currentWorkspace.name === target.workspaceId
+            && [...agent.workspace.internal, ...agent.workspace.external].filter(item => item.name === target.workspaceId).length === 1)
+        );
+        if (currentMatchesTarget && previousConversation === targetConversation) {
           agent.setConversation(targetConversation);
         }
         return {
-          tokens: result.tokens,
-          diffs: result.diffs,
-          mode: result.mode,
-          model: result.model,
-          status: result.status,
-          goal: result.goal,
-          options: result.options,
-          contextCompression: result.contextCompression,
-          contextWindow: result.contextWindow,
+          ...result,
           conversationId: targetConversation,
           activeConversationId: agent.activeConversationId || previousConversation,
-          conversations: agent.listConversationStates(),
-          conversationPlan: result.conversationPlan,
-          linkedPlan: result.linkedPlan,
-          subagents: result.subagents,
-          chatMessages: result.chatMessages,
-          historyMessages: result.historyMessages,
           conversationLocked: false,
-          queued: result.queued,
+          workspaceId: result.target.workspaceId,
         };
       } catch (e: unknown) {
         return { error: e instanceof Error ? e.message : String(e) };
+      } finally {
+        if (promptLeaseKey) {
+          const remaining = (activePromptLeases.get(promptLeaseKey) || 1) - 1;
+          if (remaining > 0) activePromptLeases.set(promptLeaseKey, remaining);
+          else activePromptLeases.delete(promptLeaseKey);
+        }
+        if (promptLeaseWorkspaceKey) {
+          const remaining = (activePromptWorkspaces.get(promptLeaseWorkspaceKey) || 1) - 1;
+          if (remaining > 0) activePromptWorkspaces.set(promptLeaseWorkspaceKey, remaining);
+          else activePromptWorkspaces.delete(promptLeaseWorkspaceKey);
+        }
       }
     });
 
+    ipcMain.handle('browser:registerGuest', (event, guestContentsId: number) => {
+      const guest = webContents.fromId(Number(guestContentsId || 0));
+      return { accepted: !!guest && registerBrowserGuest(event.sender, guest) };
+    });
     ipcMain.handle('browser:control', async (_event, request: BrowserControlRequest) => {
       return await BrowserControl.run(request);
     });
@@ -1261,9 +1856,10 @@ if (hasCliCommand) {
     ipcMain.handle('agent:setConversation', async (_event, id: string) => {
       return agent?.setConversation(id);
     });
-    ipcMain.handle('agent:ensureConversation', async (_event, id: string) => {
+    ipcMain.handle('agent:ensureConversation', async (_event, targetInput: ConversationTargetInput) => {
       if (!agent) return {};
-      return agent.ensureConversationSnapshot(id || agent.activeConversationId || 'default');
+      const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
+      return await runtimeSnapshotForTarget(target);
     });
     ipcMain.handle('agent:updateGoal', async (_event, goal: string) => {
       if (agent) agent.updateGoal(goal);
@@ -1274,23 +1870,26 @@ if (hasCliCommand) {
       return agent?.toggleGoalPause();
     });
 
-    ipcMain.handle('agent:getState', async (_event, conversationId?: string) => {
+    ipcMain.handle('agent:getState', async (_event, targetInput?: ConversationTargetInput) => {
       if (!agent) return {};
       const wslDistros = await availableWslDistros();
-      const targetConversation = stateConversationId(conversationId);
-      let conversationSnapshot = backendConversationState(targetConversation);
-      if (wslBackendEnabled()) {
-        try {
-          const client = await ensureWslAgentClient();
-          if (client) conversationSnapshot = await client.snapshot(targetConversation, agent.workspace.current ? {
-            name: agent.workspace.current.name,
-            path: agent.workspace.current.path,
-            isInternal: agent.workspace.current.isInternal,
-            kind: agent.workspace.current.kind,
-          } : null);
-        } catch (error) {
-          conversationSnapshot = { ...conversationSnapshot, wslBackendError: error instanceof Error ? error.message : String(error) };
-        }
+      const target = conversationRuntimeTarget(targetInput);
+      let conversationSnapshot: Record<string, unknown>;
+      try {
+        conversationSnapshot = wslBackendEnabled()
+          ? await ensureWslConversationPool()!.snapshot(target)
+          : await ensureElectronUtilityPool().snapshot(target);
+      } catch (error) {
+        conversationSnapshot = {
+          target,
+          workspaceId: target.workspaceId,
+          conversationId: target.conversationId,
+          runtimeStatus: 'unavailable',
+          runtimeError: error instanceof Error ? error.message : String(error),
+          queued: { steering: [], followUp: [] },
+          workEvents: [],
+          workRuns: [],
+        };
       }
       return {
         mode: agent.mode,
@@ -1298,20 +1897,16 @@ if (hasCliCommand) {
         modelLabel: agent.modelLabel(),
         intelligence: agent.intelligence,
         ...conversationSnapshot,
-        conversationLocked: agent.isConversationLocked(),
-        status: agent.status,
-        goal: agent.goal,
+        conversationLocked: conversationSnapshot.conversationLocked ?? false,
+        status: conversationSnapshot.status ?? 'idle',
+        goal: conversationSnapshot.goal ?? null,
         models: agent.allModelNames(),
         providers: sanitizeProvidersForState(agent.config.providers()),
         workspaces: { internal: agent.workspace.internal, external: agent.workspace.external, current: agent.workspace.current },
         skills: agent.skills.listDetailed(),
         subagents: conversationSnapshot.subagents,
-        fileDiffs: agent.fileDiffs.map(d => ({
-          path: d.path,
-          oldLength: d.oldContent.length,
-          newLength: d.newContent.length,
-        })),
-        pendingOptions: conversationKernel?.pendingOptions(targetConversation) || agent.pendingOptions,
+        fileDiffs: conversationSnapshot.fileDiffs || [],
+        pendingOptions: conversationSnapshot.pendingOptions || agent.pendingOptions,
         proxyEnabled: agent.config.getBool('proxy', 'enabled'),
         proxyUrl: agent.config.getStr('proxy', 'url'),
         proxyAuth: agent.config.getStr('proxy', 'auth'),
@@ -1346,11 +1941,11 @@ if (hasCliCommand) {
         nativeToolEnabled: agent.config.nativeToolEnabled(),
         automations: automation?.list() || [],
         closeBehavior: agent.config.getStr('general', 'close_behavior'),
-        contextCompression: agent.lastCompression,
-        contextWindow: agent.contextWindow(),
+        contextCompression: conversationSnapshot.contextCompression ?? null,
+        contextWindow: conversationSnapshot.contextWindow || { estimatedTokens: 0, maxTokens: 1, ratio: 0, warning: 'ok', model: String(conversationSnapshot.model || agent.model) },
         agentBackend: wslBackendEnabled()
-          ? (wslAgentClient?.status() || { enabled: true, connected: false, distro: agent.config.getStr('agent', 'wsl_distro') || 'Ubuntu-24.04', pid: 0, error: '' })
-          : { enabled: false, connected: true, distro: '', pid: process.pid, error: '' },
+          ? (wslAgentRuntimePool?.status(target) || { enabled: true, connected: false, distro: agent.config.getStr('agent', 'wsl_distro') || 'Ubuntu-24.04', pid: 0, error: '' })
+          : { ...ensureElectronUtilityPool().status(target), enabled: false, distro: '' },
         configuredAgentBackend: agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows',
         agentBackendRestartRequired: (agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows') !== activeAgentBackendMode,
         wslAvailable: wslDistros.length > 0,
@@ -1457,26 +2052,75 @@ if (hasCliCommand) {
         agent.config.set(section, key, value);
         agent.config.save();
         conversationKernel?.updateSetting(section, key, value);
+        await Promise.all([
+          electronUtilityRuntimePool?.updateSetting(section, key, value),
+          wslAgentRuntimePool?.updateSetting(section, key, value),
+        ]);
         return true;
       }
       return false;
     });
 
-    ipcMain.handle('agent:abortConversation', async (_event, conversationId?: string) => {
-      if (!agent) return false;
-      const target = String(conversationId || agent.activeConversationId || 'default');
-      if (wslBackendEnabled()) return !!await wslAgentClient?.abort(target);
-      return !!conversationKernel?.abort(target);
+    ipcMain.handle('agent:enqueueGuide', async (_event, raw: ConversationInputEnvelope) => {
+      if (!agent) throw new Error('Agent not initialized');
+      const target = conversationRuntimeTarget({ target: raw?.target });
+      const envelope: ConversationInputEnvelope = {
+        clientMessageId: String(raw?.clientMessageId || '').trim().slice(0, 200),
+        target: { workspaceId: target.workspaceId, conversationId: target.conversationId },
+        runId: String(raw?.runId || '').trim(),
+        deliveryMode: raw?.deliveryMode === 'followUp' ? 'followUp' : 'steer',
+        text: String(raw?.text || ''),
+        images: Array.isArray(raw?.images) ? raw.images : [],
+        createdAt: String(raw?.createdAt || new Date().toISOString()),
+      };
+      return wslBackendEnabled()
+        ? await ensureWslConversationPool()!.enqueueGuide(envelope)
+        : await ensureElectronUtilityPool().enqueueGuide(envelope);
     });
 
-    ipcMain.handle('agent:rewindConversation', async (_event, conversationId: string, messageIndex: number) => {
+    ipcMain.handle('agent:checkpointConversation', async (_event, request: { target?: ConversationTargetInput }) => {
+      if (!agent) throw new Error('Agent not initialized');
+      const target = conversationRuntimeTarget(request);
+      return wslBackendEnabled()
+        ? await ensureWslConversationPool()!.checkpoint(target)
+        : await ensureElectronUtilityPool().checkpoint(target);
+    });
+
+    ipcMain.handle('agent:stopConversation', async (_event, request: { target?: ConversationTargetInput; runId?: string; force?: boolean }) => {
+      if (!agent) throw new Error('Agent not initialized');
+      const target = conversationRuntimeTarget(request);
+      const runId = String(request?.runId || '').trim() || undefined;
+      // The runtime, not a renderer flag, decides whether this is the first
+      // checkpointing stop or the second target-local hard restart.
+      return wslBackendEnabled()
+        ? await ensureWslConversationPool()!.requestStop(target, runId)
+        : await ensureElectronUtilityPool().requestStop(target, runId);
+    });
+
+    ipcMain.handle('agent:setWorkRunExpanded', async (_event, request: { target?: ConversationTargetInput; runId?: string; expanded?: boolean }) => {
+      if (!agent) return false;
+      const target = conversationRuntimeTarget(request);
+      const runId = String(request?.runId || '').trim();
+      if (!runId) return false;
+      return wslBackendEnabled()
+        ? await ensureWslConversationPool()!.setWorkRunExpanded(target, runId, request?.expanded !== false)
+        : await ensureElectronUtilityPool().setWorkRunExpanded(target, runId, request?.expanded !== false);
+    });
+
+    ipcMain.handle('agent:abortConversation', async (_event, targetInput?: ConversationTargetInput) => {
+      if (!agent) return false;
+      const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
+      const result = wslBackendEnabled()
+        ? await ensureWslConversationPool()!.requestStop(target)
+        : await ensureElectronUtilityPool().requestStop(target);
+      return result.action !== 'not_running' && result.action !== 'stale';
+    });
+
+    ipcMain.handle('agent:rewindConversation', async (_event, targetInput: ConversationTargetInput, messageIndex: number) => {
       if (!agent) return { error: 'Agent not initialized' };
-      const target = String(conversationId || agent.activeConversationId || 'default');
+      const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
       try {
-        if (wslBackendEnabled()) await resetWslAgentClient();
-        const snapshot = conversationKernel
-          ? conversationKernel.rewind(target, messageIndex)
-          : agent.rewindConversation(target, messageIndex);
+        const snapshot = await mutateTargetConversation(target, () => isolatedConversationAgent(target).rewindConversation(target.conversationId, messageIndex));
         return { ...snapshot, queued: { steering: [], followUp: [] }, workEvents: [] };
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };
@@ -1507,12 +2151,10 @@ if (hasCliCommand) {
       return { ok: true, workflow };
     });
 
-    ipcMain.handle('agent:archive', async (_event, conversationId?: string) => {
+    ipcMain.handle('agent:archive', async (_event, targetInput?: ConversationTargetInput) => {
       if (!agent) return null;
-      const target = String(conversationId || agent.activeConversationId || 'default');
-      conversationKernel?.abort(target);
-      if (wslBackendEnabled()) await resetWslAgentClient();
-      return agent.archiveConversation(target);
+      const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
+      return await mutateTargetConversation(target, () => isolatedConversationAgent(target).archiveConversation(target.conversationId));
     });
 
     ipcMain.handle('agent:listArchives', async (_event, scope?: string) => {
@@ -1551,7 +2193,18 @@ if (hasCliCommand) {
     }
 
     ipcMain.handle('agent:openWorkspaceFile', async (event, filePath: string) => {
-      const result = await fileRouter.open(filePath, String(event.sender.id));
+      const ownerId = String(event.sender.id);
+      const result = await fileRouter.open(filePath, ownerId);
+      if (result.kind === 'browser' && result.mime === 'application/pdf') {
+        return {
+          kind: 'browser',
+          path: result.path,
+          size: result.size,
+          mime: result.mime,
+          url: pdfPreviewServer.urlFor(result.capability, ownerId),
+          previewToken: result.capability.token,
+        };
+      }
       if (result.kind === 'external') {
         const error = await shell.openPath(result.path);
         return error ? { kind: 'rejected', error } : result;
@@ -1565,6 +2218,36 @@ if (hasCliCommand) {
     ipcMain.handle('agent:saveWorkspaceFile', async (event, token: string, content: string, expectedRevision: string) => {
       if (agent?.mode === 'plan') return { ok: false, error: 'Plan mode is fully read-only; saveFile is blocked.' };
       return fileRouter.save(token, content, expectedRevision, String(event.sender.id));
+    });
+
+    ipcMain.handle('agent:closeWorkspaceFile', (event, token: string) => ({
+      ok: fileRouter.revokeEditToken(token, String(event.sender.id)),
+    }));
+
+    ipcMain.handle('agent:closeWorkspacePreview', (event, token: string) => {
+      const ownerId = String(event.sender.id);
+      const serverRevoked = pdfPreviewServer.revokeCapability(token, ownerId);
+      const routerRevoked = fileRouter.revokePreviewToken(token, ownerId);
+      return { ok: serverRevoked || routerRevoked };
+    });
+
+    ipcMain.handle('agent:confirmEditorClose', async (event, language: string, filePath: string) => {
+      const chinese = String(language || '').toLowerCase().startsWith('zh');
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const options = {
+        type: 'warning',
+        title: chinese ? '未保存的更改' : 'Unsaved changes',
+        message: chinese ? '当前文件有未保存的更改。' : 'The current file has unsaved changes.',
+        detail: String(filePath || ''),
+        buttons: chinese ? ['保存', '丢弃', '取消'] : ['Save', 'Discard', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      } as const;
+      const result = owner
+        ? await dialog.showMessageBox(owner, options)
+        : await dialog.showMessageBox(options);
+      return result.response === 0 ? 'save' : result.response === 1 ? 'discard' : 'cancel';
     });
 
     ipcMain.handle('workspace:readPrompt', async () => {
@@ -1761,27 +2444,34 @@ if (hasCliCommand) {
 
     ipcMain.handle('agent:selectWorkspace', async (_event, id: string) => {
       if (agent) {
-        agent.selectWorkspace(id);
-        await resetAgentRuntimes();
-        return agent.workspace.current;
+        const requested = String(id || '').trim();
+        const current = agent.workspace.current;
+        const uniqueNameMatch = current?.name === requested
+          && [...agent.workspace.internal, ...agent.workspace.external].filter(item => item.name === requested).length === 1;
+        if (current && (current.id === requested || current.path === requested || uniqueNameMatch)) return current;
+        const generation = ++workspaceSwitchGeneration;
+        const coordinator = ensureWorkspaceSelectionCoordinator();
+        const result = coordinator ? await coordinator.select(requested) : null;
+        if (generation !== workspaceSwitchGeneration) return agent.workspace.current;
+        if (!result) return agent.workspace.current;
+        if (result.status === 'failed') throw new Error(result.error || `Workspace selection failed: ${requested}`);
+        if (result.status === 'circuit_open') throw new Error(`Workspace selection temporarily paused after repeated failures: ${requested}`);
+        if (result.status === 'stale') return agent.workspace.current;
+        return result.value || agent.workspace.current;
       }
       return null;
     });
 
     ipcMain.handle('agent:createWorkspace', async (_event, name?: string) => {
       if (agent) {
-        const created = agent.createInternalWorkspace(name);
-        await resetAgentRuntimes();
-        return created;
+        return agent.createInternalWorkspace(name);
       }
       return null;
     });
 
     ipcMain.handle('agent:createExternalWorkspace', async (_event, name: string, dirPath: string) => {
       if (agent) {
-        const created = agent.addExternalWorkspace(dirPath);
-        await resetAgentRuntimes();
-        return created;
+        return agent.addExternalWorkspace(dirPath);
       }
       return null;
     });
@@ -1837,17 +2527,32 @@ if (hasCliCommand) {
           enabled: true,
         },
       });
-      if (result.ok) await resetAgentRuntimes();
       return result;
     });
 
-    ipcMain.handle('agent:deleteWorkspace', async (_event, name: string) => {
-      if (agent) {
-        const removed = agent.removeWorkspace(name);
-        await resetAgentRuntimes();
-        return removed;
+    ipcMain.handle('agent:deleteWorkspace', async (_event, workspaceReference: string) => {
+      if (!agent) return false;
+      const target = conversationRuntimeTarget({ workspaceId: String(workspaceReference || ''), conversationId: 'default' });
+      const normalized = normalizeConversationTarget(target);
+      assertTargetNotMutating(normalized);
+      if ((activePromptWorkspaces.get(normalized.workspaceKey) || 0) > 0) {
+        throw new Error('Cannot delete a workspace while one of its conversations is starting or running.');
       }
-      return false;
+      mutatingWorkspaceKeys.add(normalized.workspaceKey);
+      try {
+        const [nativeActive, wslActive] = await Promise.all([
+          electronUtilityRuntimePool?.hasActiveWorkspace(normalized) || false,
+          wslAgentRuntimePool?.hasActiveWorkspace(normalized) || false,
+        ]);
+        if (nativeActive || wslActive) throw new Error('Cannot delete a workspace while one of its conversations is running, stopping, or restarting.');
+        await Promise.all([
+          electronUtilityRuntimePool?.stopWorkspace(normalized),
+          wslAgentRuntimePool?.stopWorkspace(normalized),
+        ]);
+        return agent.removeWorkspace(String(workspaceReference || ''));
+      } finally {
+        mutatingWorkspaceKeys.delete(normalized.workspaceKey);
+      }
     });
 
     ipcMain.handle('agent:setWorkspacePinned', async (_event, id: string, pinned: boolean) => {
@@ -2213,7 +2918,7 @@ if (hasCliCommand) {
       if (!agent) return { ok: false, error: 'Agent not initialized' };
       try {
         const client = await ensureWslAgentClient();
-        return { ok: !!client, ...(client?.status() || {}) };
+        return { ok: !!client, ...client?.status() };
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }

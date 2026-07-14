@@ -1,3 +1,4 @@
+const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -109,9 +110,7 @@ async function waitForTarget(port) {
   while (Date.now() < deadline) {
     try {
       const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
-      const target = targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview') && String(t.url || '').includes('index.html'))
-        || targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview'))
-        || targets.find(t => t.webSocketDebuggerUrl);
+      const target = targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview') && String(t.url || '').includes('index.html'));
       if (target) return target;
     } catch {}
     await sleep(500);
@@ -252,6 +251,7 @@ async function runGuiCheck(root, model, secrets) {
     const target = await waitForTarget(port);
     cdp = connectCdp(target);
     await cdp.ready;
+    await waitForPromotedMainUi(cdp);
     await cdp.call('Runtime.enable');
     await cdp.call('Page.enable').catch(() => undefined);
     const initial = await waitFor(cdp, `window.api.getState().then(state => {

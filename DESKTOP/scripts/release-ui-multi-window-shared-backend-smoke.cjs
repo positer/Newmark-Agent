@@ -1,3 +1,4 @@
+const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -34,9 +35,8 @@ async function waitForTargets(port, minTargets) {
     try {
       const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
       lastTargets = targets.filter(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview'));
-      const appTargets = lastTargets.filter(t => String(t.url || '').includes('index.html') || String(t.title || '').includes('Newmark'));
+      const appTargets = lastTargets.filter(t => String(t.url || '').includes('index.html'));
       if (appTargets.length >= minTargets) return appTargets.slice(0, minTargets);
-      if (lastTargets.length >= minTargets) return lastTargets.slice(0, minTargets);
     } catch {}
     await sleep(500);
   }
@@ -169,6 +169,7 @@ async function runUiCheck(root) {
     const firstTargetId = targets[0].id;
     cdpA = connectCdp(targets[0]);
     await cdpA.ready;
+    await waitForPromotedMainUi(cdpA);
     await prepareWindow(cdpA, 'window A');
 
     second = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
@@ -180,6 +181,7 @@ async function runUiCheck(root) {
     if (!secondTarget || secondTarget.id === firstTargetId) fail(`second launch did not expose a distinct CDP target; targets=${JSON.stringify(targets.map(t => ({ id: t.id, title: t.title, url: t.url })))}`);
     cdpB = connectCdp(secondTarget);
     await cdpB.ready;
+    await waitForPromotedMainUi(cdpB);
     await prepareWindow(cdpB, 'window B');
 
     await evaluate(cdpA, `window.api.getState('default').then(s => {

@@ -88,6 +88,8 @@ export interface UserMessage {
   role: 'user';
   content: string | Array<TextContent | ImageContent>;
   timestamp: number;
+  clientMessageId?: string;
+  runId?: string;
 }
 
 export interface ToolResultMessage {

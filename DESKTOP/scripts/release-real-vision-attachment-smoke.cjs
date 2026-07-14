@@ -1,3 +1,4 @@
+const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -51,7 +52,8 @@ function stop(){spawnSync('powershell.exe',['-NoProfile','-Command',"Get-Process
   try{
     stop();
     child=spawn(exe,['--remote-debugging-port=49418','--no-sandbox',`--user-data-dir=${path.join(root,'electron-profile')}`,'--root',root],{stdio:'ignore',windowsHide:true});
-    cdp=connect(await target(49418));await cdp.ready;await cdp.call('Runtime.enable');
+    cdp=connect(await target(49418));await cdp.ready;
+    await waitForPromotedMainUi(cdp);await cdp.call('Runtime.enable');
     const prompt='You must call image_inspect with action=source_info first. Then call image_inspect with action=crop, image_index=1, x=5000, y=3150, width=800, height=600, scale=3. Read the tiny code in that crop and inspect the full image. Reply in this exact field format using only what you actually see: TEXT=<heading>; LEFT=<color shape>; CENTER=<color shape>; RIGHT=<color shape>; CODE=<tiny code>';
     const result=await evaluate(cdp,`window.api.sendMessage({text:${JSON.stringify(prompt)},images:[{dataUrl:${JSON.stringify(image)},name:'vision-shapes-and-text.png',type:'image/png'}]},'real-vision')`);
     const content=(result.chatMessages||[]).filter(m=>m.role==='assistant').map(m=>String(m.content||'')).join('\n');

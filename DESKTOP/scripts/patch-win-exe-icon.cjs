@@ -246,7 +246,15 @@ $out = Join-Path $env:TEMP ("newmark-associated-icon-" + [Guid]::NewGuid().ToStr
 if ($null -eq $icon) { throw "associated icon missing" }
 $bmp = $icon.ToBitmap()
 $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
-$hash = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+$stream = [System.IO.File]::OpenRead($out)
+try {
+  $hashBytes = $sha256.ComputeHash($stream)
+} finally {
+  $stream.Dispose()
+  $sha256.Dispose()
+}
+$hash = -join ($hashBytes | ForEach-Object { $_.ToString("X2") })
 $w = $bmp.Width
 $h = $bmp.Height
 $bmp.Dispose()

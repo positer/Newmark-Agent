@@ -6,9 +6,15 @@ export interface FlowRunnerOptions {
   startInput?: string;
   startPc?: number;
   quiet?: boolean;
+  signal?: AbortSignal;
 }
 
 const MAX_VISITS = 300;
+
+function throwIfFlowAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason || 'Flow run aborted'));
+}
 
 export async function runFlow(
   agent: Agent,
@@ -39,6 +45,7 @@ export async function runFlow(
   }
 
   while (true) {
+    throwIfFlowAborted(options.signal);
     const cid = cur;
     const visits = (visitCounts.get(cid) || 0) + 1;
     visitCounts.set(cid, visits);
@@ -60,6 +67,7 @@ export async function runFlow(
         const resultTokens = await agent.process(
           `## Conditional Evaluation\n\n${step.prompt}\n\nRespond with ONLY "true" or "false" (lowercase).`
         );
+        throwIfFlowAborted(options.signal);
         const resultText = resultTokens.map(t => t.text).join('').toLowerCase().trim();
         const cond = resultText === 'true';
         const nextGoto = FlowEngine.resolveGoto(workflow, step.id, cond);
@@ -72,6 +80,7 @@ export async function runFlow(
         const targetMode = (step.mode?.toLowerCase() === 'plan' ? 'plan' : step.mode?.toLowerCase() === 'goal' ? 'goal' : 'build') as AgentMode;
         agent.setMode(targetMode);
         const resultTokens = await agent.process(step.prompt);
+        throwIfFlowAborted(options.signal);
         const resultText = resultTokens.map(t => t.text).join('');
         totalChars += resultText.length;
 
@@ -92,6 +101,7 @@ export async function runFlow(
           const checkTokens = await agent.process(
             `## Goal Verification\n\n${checkPrompt}\n\nRespond with ONLY "true" or "false" (lowercase).`
           );
+          throwIfFlowAborted(options.signal);
           const checkText = checkTokens.map(t => t.text).join('').toLowerCase().trim();
           const achieved = checkText === 'true';
           if (!quiet) console.log(`  \u2192 Goal ${achieved ? 'ACHIEVED' : 'NOT achieved'}, ${achieved ? 'advancing' : 're-executing component ' + step.id}`);

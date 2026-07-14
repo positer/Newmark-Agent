@@ -1,3 +1,4 @@
+const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -68,6 +69,7 @@ async function evaluate(cdp, expression) {
     child = spawn(electron, ['.', `--remote-debugging-port=${port}`, `--user-data-dir=${path.join(root, 'ElectronData')}`, '--no-sandbox', '--no-devtools', '--root', root], { cwd: desktopRoot, stdio: 'ignore', windowsHide: true });
     cdp = connect(await target(port));
     await cdp.ready;
+    await waitForPromotedMainUi(cdp);
     await cdp.call('Runtime.enable');
     for (let attempt = 0; attempt < 100; attempt++) {
       if (await evaluate(cdp, `typeof window.openSettings === 'function' && !!window.api`)) break;

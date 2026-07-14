@@ -1,7 +1,9 @@
 import * as readline from 'readline';
+import * as fs from 'fs';
 import { Agent } from './core/agent';
 import { ConversationKernel } from './core/conversationKernel';
 import { WslAgentRequest, WslAgentResponse, WslAgentWorkspace } from './core/wslAgentProtocol';
+import { ConversationRuntimeTarget, normalizeConversationTarget } from './core/conversationTarget';
 import { configureWslHostToolWriter, rejectPendingWslHostTools, settleWslHostToolResult } from './core/wslHostToolBridge';
 import {
   detachTerminalTakeoverSession,
@@ -35,6 +37,21 @@ function write(value: unknown): void {
 }
 configureWslHostToolWriter(write);
 
+function runtimeIdentity(): { pid: number; pgid: number; sessionId: number } {
+  const pid = process.pid;
+  const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+  const commandEnd = stat.lastIndexOf(')');
+  if (commandEnd < 0) throw new Error(`Unable to read WSL runtime identity for pid ${pid}`);
+  // /proc/<pid>/stat fields following comm: state, ppid, pgrp, session, ...
+  const fields = stat.slice(commandEnd + 2).trim().split(/\s+/);
+  const pgid = Number(fields[2] || 0);
+  const sessionId = Number(fields[3] || 0);
+  if (![pid, pgid, sessionId].every(value => Number.isSafeInteger(value) && value > 1)) {
+    throw new Error(`Invalid WSL runtime identity: pid=${pid} pgid=${pgid} session=${sessionId}`);
+  }
+  return { pid, pgid, sessionId };
+}
+
 function applyWorkspace(workspace: WslAgentWorkspace | null): void {
   if (!workspace) {
     host.workspace.current = null;
@@ -42,6 +59,7 @@ function applyWorkspace(workspace: WslAgentWorkspace | null): void {
     return;
   }
   host.workspace.current = {
+    id: workspace.id,
     name: workspace.name,
     path: workspace.path,
     isInternal: !!workspace.isInternal,
@@ -52,6 +70,22 @@ function applyWorkspace(workspace: WslAgentWorkspace | null): void {
   host.config.loadWorkspaceConfig(workspace.path);
 }
 
+function requestTarget(input: { target?: ConversationRuntimeTarget; conversationId?: string; workspace?: WslAgentWorkspace | null }): ConversationRuntimeTarget {
+  if (input.target) return normalizeConversationTarget(input.target);
+  const workspace = input.workspace || null;
+  return normalizeConversationTarget({
+    workspaceId: String(workspace?.id || workspace?.name || workspace?.path || 'none'),
+    conversationId: String(input.conversationId || 'default'),
+    workspace: workspace ? {
+      id: String(workspace.id || workspace.name || workspace.path),
+      name: workspace.name,
+      path: workspace.path,
+      isInternal: !!workspace.isInternal,
+      kind: workspace.kind,
+    } : null,
+  });
+}
+
 function resetAgentRuntime(): void {
   unsubscribeKernel();
   host = new Agent(root);
@@ -60,7 +94,7 @@ function resetAgentRuntime(): void {
 }
 
 async function handle(request: WslAgentRequest): Promise<unknown> {
-  if (request.method === 'ping') return { backend: 'wsl', distro, pid: process.pid, platform: process.platform, root };
+  if (request.method === 'ping') return { backend: 'wsl', distro, ...runtimeIdentity(), platform: process.platform, root };
   if (request.method === 'shutdown') {
     shutdownTerminalTakeoverSessions('wsl-host-shutdown');
     setTimeout(() => process.exit(0), 10);
@@ -88,22 +122,41 @@ async function handle(request: WslAgentRequest): Promise<unknown> {
   if (request.method === 'terminal_detach') {
     return detachTerminalTakeoverSession(request.params.sessionId, request.params.owner);
   }
-  if (request.method === 'abort') return kernel.abort(request.params.conversationId);
-  if (request.method === 'snapshot') {
-    applyWorkspace(request.params.workspace);
-    const snapshot = host.getConversationSnapshot(request.params.conversationId);
-    return { ...snapshot, queued: kernel.queued(request.params.conversationId), workEvents: kernel.events(request.params.conversationId), backend: 'wsl', distro };
+  if (request.method === 'abort') return kernel.abort(requestTarget(request.params));
+  if (request.method === 'stop') {
+    return { ...kernel.requestStop(requestTarget(request.params), request.params.runId), backend: 'wsl', distro };
   }
-  applyWorkspace(request.params.workspace);
-  const target = request.params.conversationId || 'default';
-  host.setConversation(target);
-  const result = await kernel.prompt(
-    request.params.message,
-    target,
-    request.params.options,
-    request.params.queueMode,
-  );
-  return { ...result, backend: 'wsl', distro };
+  if (request.method === 'snapshot') {
+    const target = requestTarget(request.params);
+    return { ...kernel.snapshot(target), backend: 'wsl', distro };
+  }
+  if (request.method === 'guide') {
+    const target = requestTarget(request.params);
+    return kernel.enqueueGuide({
+      ...request.params.envelope,
+      target,
+    });
+  }
+  if (request.method === 'checkpoint') return kernel.checkpoint(requestTarget(request.params));
+  if (request.method === 'set_work_run_expanded') {
+    return kernel.setWorkRunExpanded(requestTarget(request.params), request.params.runId, request.params.expanded);
+  }
+  if (request.method === 'update_setting') {
+    host.config.set(request.params.section, request.params.key, request.params.value);
+    kernel.updateSetting(request.params.section, request.params.key, request.params.value);
+    return true;
+  }
+  if (request.method === 'prompt') {
+    const target = requestTarget(request.params);
+    const result = await kernel.prompt(
+      request.params.message,
+      target,
+      request.params.options,
+      request.params.queueMode,
+    );
+    return { ...result, backend: 'wsl', distro };
+  }
+  throw new Error(`Unsupported WSL Agent method: ${(request as { method?: string }).method || 'unknown'}`);
 }
 
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });

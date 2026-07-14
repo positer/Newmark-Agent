@@ -1,3 +1,4 @@
+const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -6,9 +7,10 @@ const { spawn, spawnSync } = require('child_process');
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const fail = message => { throw new Error(message); };
-function getJson(url) { return new Promise((resolve, reject) => http.get(url, response => { let body=''; response.on('data', chunk => body += chunk); response.on('end', () => { try { resolve(JSON.parse(body)); } catch (error) { reject(error); } }); }).on('error', reject)); }
-async function target(port) { for(let i=0;i<160;i++){ try { const pages=await getJson(`http://127.0.0.1:${port}/json/list`); const page=pages.find(item=>item.webSocketDebuggerUrl&&String(item.url||'').includes('index.html')); if(page)return page; } catch {} await sleep(300); } fail('CDP target timeout'); }
-function connect(page) { let id=0; const pending=new Map(); const ws=new WebSocket(page.webSocketDebuggerUrl); const ready=new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;ws.onmessage=event=>{const msg=JSON.parse(event.data);const entry=pending.get(msg.id);if(!entry)return;pending.delete(msg.id);msg.error?entry.reject(new Error(msg.error.message)):entry.resolve(msg.result);};}); const call=(method,params={})=>new Promise((resolve,reject)=>{const current=++id;pending.set(current,{resolve,reject});ws.send(JSON.stringify({id:current,method,params}));setTimeout(()=>{if(pending.delete(current))reject(new Error(`timeout ${method}`));},20000);}); return{ws,ready,call}; }
+function getJson(url) { return new Promise((resolve, reject) => { const request=http.get(url, response => { let body=''; response.on('data', chunk => body += chunk); response.on('end', () => { try { resolve(JSON.parse(body)); } catch (error) { reject(error); } }); }); request.setTimeout(1000,()=>request.destroy(new Error('CDP discovery timeout'))); request.on('error',reject); }); }
+function freeTcpPort() { return new Promise((resolve,reject)=>{ const server=http.createServer(); server.unref(); server.once('error',reject); server.listen(0,'127.0.0.1',()=>{ const address=server.address(); server.close(error=>error?reject(error):resolve(address.port)); }); }); }
+async function target(port, child) { let lastPages=[],lastError=''; for(let i=0;i<300;i++){ if(child.exitCode!==null)fail(`Electron exited before CDP target discovery: ${child.exitCode}`); try { const pages=await getJson(`http://127.0.0.1:${port}/json/list`); lastPages=pages.map(page=>String(page.url||'')); const page=pages.find(item=>item.webSocketDebuggerUrl&&String(item.url||'').includes('index.html')); if(page)return page; } catch(error) { lastError=String(error?.message||error); } await sleep(300); } fail(`CDP target timeout pages=${JSON.stringify(lastPages)} error=${lastError}`); }
+function connect(page) { let id=0; const pending=new Map(); const ws=new WebSocket(page.webSocketDebuggerUrl); const opened=new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;ws.onmessage=event=>{const msg=JSON.parse(event.data);const entry=pending.get(msg.id);if(!entry)return;pending.delete(msg.id);msg.error?entry.reject(new Error(msg.error.message)):entry.resolve(msg.result);};}); const ready=Promise.race([opened,new Promise((_,reject)=>setTimeout(()=>reject(new Error('CDP websocket timeout')),10000))]); const call=(method,params={})=>new Promise((resolve,reject)=>{const current=++id;pending.set(current,{resolve,reject});ws.send(JSON.stringify({id:current,method,params}));setTimeout(()=>{if(pending.delete(current))reject(new Error(`timeout ${method}`));},20000);}); return{ws,ready,call}; }
 async function evaluate(cdp, expression) { const result=await cdp.call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(result.exceptionDetails)fail(result.exceptionDetails.exception?.description||result.exceptionDetails.text);return result.result?.value; }
 
 (async()=>{
@@ -17,11 +19,12 @@ async function evaluate(cdp, expression) { const result=await cdp.call('Runtime.
   const electron=path.join(desktopRoot,'node_modules','electron','dist','electron.exe');
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'NewmarkWorkReviewBars-'));
   const screenshot=path.join(repoRoot,'archive','2026-07-12-work-review-bars-smoke.png');
-  const port=49610+Math.floor(Math.random()*100);
+  const port=await freeTcpPort();
   let child,cdp;
   try {
-    child=spawn(electron,['.',`--remote-debugging-port=${port}`,`--user-data-dir=${path.join(root,'ElectronData')}`,'--no-sandbox','--root',root],{cwd:desktopRoot,stdio:'ignore',windowsHide:true});
-    cdp=connect(await target(port));await cdp.ready;await cdp.call('Runtime.enable');await cdp.call('Page.enable');
+    child=spawn(electron,['.',`--remote-debugging-port=${port}`,`--user-data-dir=${path.join(root,'ElectronData')}`,'--no-sandbox','--root',root],{cwd:desktopRoot,stdio:process.env.NEWMARK_SMOKE_DEBUG==='1'?'inherit':'ignore',windowsHide:true});
+    cdp=connect(await target(port,child));await cdp.ready;
+    await waitForPromotedMainUi(cdp);await cdp.call('Runtime.enable');await cdp.call('Page.enable');
     for(let i=0;i<100;i++){if(await evaluate(cdp,`typeof window.addWorkReview==='function'&&typeof window.renderInputStack==='function'`))break;await sleep(200);if(i===99)fail('renderer init timeout');}
     const state=await evaluate(cdp,`(() => {
       window.state.conversationPlan={items:[{id:'a',text:'Inspect repository changes',status:'pending'},{id:'b',text:'Run UI regression',status:'done'}]};

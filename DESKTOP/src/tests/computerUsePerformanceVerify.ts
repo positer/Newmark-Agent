@@ -67,13 +67,27 @@ async function main(): Promise<void> {
 
     await runComputerUse({ action: 'app_list', workspacePath: process.cwd(), ownerId });
     await runComputerUse({ action: 'observe', workspacePath: process.cwd(), ownerId, allowEphemeralVisionImage: false });
-    previousTick = Date.now();
-    maxEventLoopGapMs = 0;
-    measureEventLoop = true;
     const appList = JSON.parse(await runComputerUse({ action: 'app_list', workspacePath: process.cwd(), ownerId })) as Record<string, any>;
     assert.strictEqual(appList.ok, true);
     assert.ok(Array.isArray(appList.applications) && appList.applications.length > 0, 'app_list should return visible Windows applications');
-    const app = appList.applications.find((item: Record<string, unknown>) => String(item.title || '').trim()) || appList.applications[0];
+    // Keep the performance fixture independent from whichever heavyweight app
+    // happens to be foreground (Chromium UIA trees vary by page and machine).
+    // Program Manager is the stable Windows shell surface; fall back only when
+    // a nonstandard shell does not expose it. Warm the app-scoped lane once,
+    // matching the existing desktop-lane warm-up before collecting samples.
+    const app = appList.applications.find((item: Record<string, unknown>) => String(item.class_name || '') === 'Progman')
+      || appList.applications.find((item: Record<string, unknown>) => String(item.title || '').trim())
+      || appList.applications[0];
+    await runComputerUse({
+      action: 'app_observe',
+      workspacePath: process.cwd(),
+      ownerId,
+      allowEphemeralVisionImage: false,
+      windowHandle: String(app.handle || ''),
+    });
+    previousTick = Date.now();
+    maxEventLoopGapMs = 0;
+    measureEventLoop = true;
 
     const desktopSamples: ObservationSample[] = [];
     for (let index = 0; index < 3; index += 1) desktopSamples.push(await observe(ownerId, 'observe'));

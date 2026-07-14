@@ -43,6 +43,9 @@ export async function verifyWorkspaceFileRouter(testRoot: string, assert: Assert
   fs.writeFileSync(outsidePath, 'outside', 'utf8');
 
   const router = new WorkspaceFileRouter(() => workspaceRoot);
+  const fixedNow = 1_000_000;
+  const defaultTtlRouter = new WorkspaceFileRouter(() => workspaceRoot, { now: () => fixedNow });
+  const defaultTtlPdf = await defaultTtlRouter.open(pdfPath, 'renderer-default-pdf-ttl');
   const utf8 = await router.open(utf8Path, 'renderer-a');
   const utf16 = await router.open(utf16Path, 'renderer-a');
   const invalidUtf16 = await router.open(invalidUtf16Path, 'renderer-a');
@@ -66,7 +69,10 @@ export async function verifyWorkspaceFileRouter(testRoot: string, assert: Assert
   assert(invalidScript.kind === 'reveal' && invalidScript.reason === 'script-non-text', 'file router: non-text script extensions are only revealed and never executed');
   assert(html.kind === 'browser' && html.mime === 'text/html' && html.url.startsWith('newmark-preview://'), 'file router: HTML routes through controlled internal preview');
   assert(disguisedHtml.kind === 'browser' && disguisedHtml.mime === 'text/html', 'file router: HTML content detection wins over a text extension');
-  assert(pdf.kind === 'browser' && pdf.mime === 'application/pdf' && pdf.url.startsWith('newmark-preview://'), 'file router: PDF magic routes through controlled internal preview');
+  assert(pdf.kind === 'browser' && pdf.mime === 'application/pdf' && !!pdf.capability && !('url' in pdf), 'file router: PDF magic returns a transport-neutral capability');
+  assert(defaultTtlPdf.kind === 'browser' && defaultTtlPdf.mime === 'application/pdf'
+    && defaultTtlPdf.capability.expiresAt - fixedNow === 60 * 60 * 1000,
+  'file router: the default PDF bearer capability expires after one hour');
   assert(disguisedPdf.kind === 'browser' && disguisedPdf.mime === 'application/pdf', 'file router: PDF magic wins over a binary extension');
   assert(binary.kind === 'external' && binary.reason === 'binary', 'file router: other binary files route to the default application');
   assert(disguisedExe.kind === 'reveal' && disguisedExe.reason === 'executable', 'file router: executable magic wins over a text extension and only reveals the file');
@@ -83,18 +89,25 @@ export async function verifyWorkspaceFileRouter(testRoot: string, assert: Assert
     const stale = await router.save(utf8.token, 'stale', utf8.revision, 'renderer-a');
     assert(!stale.ok && stale.conflict === true, 'file router: stale editor revision is rejected');
   }
+  if (script.kind === 'editor') {
+    assert(!router.revokeEditToken(script.token, 'renderer-b'), 'file router: another renderer cannot close an editor token');
+    assert(router.revokeEditToken(script.token, 'renderer-a'), 'file router: owning renderer can close its editor token');
+    const closedSave = await router.save(script.token, 'must not save', script.revision, 'renderer-a');
+    assert(!closedSave.ok, 'file router: closed editor token cannot be reused for saving');
+  }
 
-  if (html.kind === 'browser') {
+  if (html.kind === 'browser' && html.mime === 'text/html') {
     const htmlResource = await router.resolvePreview(html.url);
     assert(htmlResource?.filePath === fs.realpathSync(htmlPath) && htmlResource.mime.startsWith('text/html'), 'file router: preview token resolves only its workspace resource');
     const escaped = await router.resolvePreview(html.url.replace(/page\.html$/, '../../file-router-outside/outside.txt'));
     assert(escaped === null, 'file router: preview token rejects path traversal');
   }
-  if (disguisedHtml.kind === 'browser' && disguisedPdf.kind === 'browser') {
+  if (disguisedHtml.kind === 'browser' && disguisedHtml.mime === 'text/html'
+    && disguisedPdf.kind === 'browser' && disguisedPdf.mime === 'application/pdf') {
     const htmlResource = await router.resolvePreview(disguisedHtml.url);
-    const pdfResource = await router.resolvePreview(disguisedPdf.url, 'bytes=0-3');
+    const pdfResource = await router.resolvePdfCapability(disguisedPdf.capability.token, 'renderer-a');
     assert(htmlResource?.mime === 'text/html' && pdfResource?.mime === 'application/pdf', 'file router: content-classified preview entries keep their detected MIME');
-    assert(pdfResource?.range?.start === 0 && pdfResource.range.end === 3, 'file router: PDF preview supports bounded byte ranges');
+    assert(pdfResource?.filePath === fs.realpathSync(disguisedPdfPath), 'file router: PDF capability resolves to the inspected canonical file');
   }
 
   const linkPath = path.join(workspaceRoot, 'outside-link.txt');

@@ -1,3 +1,4 @@
+const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -182,6 +183,7 @@ async function runUiVersion(executable, runtimeRoot, profileRoot) {
     const target = await waitForFinalTarget(port);
     cdp = connectWebSocket(target.webSocketDebuggerUrl);
     await cdp.ready;
+    await waitForPromotedMainUi(cdp);
     await cdp.call('Runtime.enable');
     const deadline = Date.now() + 30000;
     let snapshot = {};

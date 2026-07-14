@@ -1,6 +1,9 @@
-import { AgentWorkEvent } from './types';
-import { AgentPromptMessage, ConversationKernelRunOptions, ConversationKernelRunResult, ConversationQueueMode } from './conversationKernel';
+import { AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
+import { AgentPromptMessage, ConversationKernelRunOptions, ConversationKernelRunResult, ConversationQueueMode, ConversationStopResult } from './conversationKernel';
+import { ConversationRuntimeTarget } from './conversationTarget';
 import { TerminalTakeoverEvent, TerminalTakeoverOwnerFilter, TerminalTakeoverState } from '../tools/terminalTakeover';
+import { BrowserUseRequest } from './browserUse';
+import { BrowserControlRequest } from './browserControl';
 
 export interface WslAgentWorkspace {
   id?: string;
@@ -12,6 +15,8 @@ export interface WslAgentWorkspace {
 
 export interface WslAgentPromptRequest {
   message: string | AgentPromptMessage;
+  target?: ConversationRuntimeTarget;
+  /** @deprecated use target */
   conversationId: string;
   options: ConversationKernelRunOptions;
   queueMode: ConversationQueueMode;
@@ -23,16 +28,25 @@ export interface WslTerminalRequestBase {
   persistenceRoot?: string;
 }
 
-export interface WslHostToolRequest {
-  requestId: string;
-  tool: 'computer_use';
-  args: Record<string, unknown>;
-  context: {
-    conversationId: string;
-    workspaceId: string;
-    actorId: string;
-  };
+export interface WslHostToolContext {
+  conversationId: string;
+  workspaceId: string;
+  actorId: string;
+  runtimeKey: string;
+  mode?: string;
 }
+
+interface WslHostToolRequestBase {
+  requestId: string;
+  context: WslHostToolContext;
+}
+
+export type WslHostToolRequest =
+  | (WslHostToolRequestBase & { tool: 'browser_control'; args: BrowserControlRequest })
+  | (WslHostToolRequestBase & { tool: 'computer_use'; args: Record<string, unknown> })
+  | (WslHostToolRequestBase & { tool: 'browser_use'; args: BrowserUseRequest })
+  | (WslHostToolRequestBase & { tool: 'automation'; args: { tool: string; payload: string } })
+  | (WslHostToolRequestBase & { tool: 'terminal_takeover'; args: Record<string, unknown> });
 
 export interface WslHostToolResult {
   requestId: string;
@@ -44,8 +58,13 @@ export interface WslHostToolResult {
 export type WslAgentRequest =
   | { id: string; method: 'ping' }
   | { id: string; method: 'prompt'; params: WslAgentPromptRequest }
-  | { id: string; method: 'abort'; params: { conversationId: string } }
-  | { id: string; method: 'snapshot'; params: { conversationId: string; workspace: WslAgentWorkspace | null } }
+  | { id: string; method: 'abort'; params: { conversationId?: string; target?: ConversationRuntimeTarget } }
+  | { id: string; method: 'stop'; params: { conversationId?: string; target?: ConversationRuntimeTarget; runId?: string } }
+  | { id: string; method: 'snapshot'; params: { conversationId?: string; target?: ConversationRuntimeTarget; workspace?: WslAgentWorkspace | null } }
+  | { id: string; method: 'guide'; params: { target: ConversationRuntimeTarget; envelope: ConversationInputEnvelope } }
+  | { id: string; method: 'checkpoint'; params: { target: ConversationRuntimeTarget } }
+  | { id: string; method: 'set_work_run_expanded'; params: { target: ConversationRuntimeTarget; runId: string; expanded: boolean } }
+  | { id: string; method: 'update_setting'; params: { section: string; key: string; value: unknown } }
   | { id: string; method: 'terminal_state'; params: WslTerminalRequestBase }
   | { id: string; method: 'terminal_write'; params: WslTerminalRequestBase & { sessionId: string; data: string } }
   | { id: string; method: 'terminal_resize'; params: WslTerminalRequestBase & { sessionId: string; cols: number; rows: number } }
@@ -62,7 +81,8 @@ export type WslAgentResponse =
 export type WslAgentEventEnvelope =
   | { event: 'work'; data: AgentWorkEvent }
   | { event: 'terminal'; data: TerminalTakeoverEvent }
-  | { event: 'host_tool_request'; data: WslHostToolRequest };
+  | { event: 'host_tool_request'; data: WslHostToolRequest }
+  | { event: 'host_tool_cancel'; data: { requestId: string } };
 
 export type WslTerminalStateResult = TerminalTakeoverState[];
 
@@ -70,3 +90,6 @@ export interface WslAgentPromptResult extends ConversationKernelRunResult {
   backend: 'wsl';
   distro: string;
 }
+
+export type WslAgentStopResult = ConversationStopResult & { backend: 'wsl'; distro: string };
+export type WslGuideResult = GuideReceipt;

@@ -70,6 +70,8 @@ export interface SubagentState {
   version: 2;
   rootAgentId: string;
   nextSequence: number;
+  /** Cooperative root-run stop gate. Pending peers stay durable but cannot start until the next root run resumes scheduling. */
+  schedulingPaused?: boolean;
   records: SubagentInstance[];
   mailbox: SubagentMessage[];
   rootInbox: SubagentRootMessage[];
@@ -183,6 +185,7 @@ export class SubagentManager {
   private rootInbox: SubagentRootMessage[] = [];
   private pending: PendingJob[] = [];
   private running = new Set<string>();
+  private schedulingPaused = false;
   private nextSequence = 1;
   private readonly concurrency: number;
   private executor?: (job: SubagentExecutionJob) => Promise<string>;
@@ -206,6 +209,7 @@ export class SubagentManager {
     this.running.clear();
     this.settledWaiters.clear();
     this.nextSequence = 1;
+    this.schedulingPaused = false;
   }
 
   constructor(options: SubagentManagerOptions = {}) {
@@ -220,6 +224,7 @@ export class SubagentManager {
     const state = options.state;
     this.rootAgentId = String(state?.rootAgentId || options.rootAgentId || randomUUID());
     this.nextSequence = Math.max(1, Number(state?.nextSequence || 1));
+    this.schedulingPaused = state?.schedulingPaused === true;
     for (const raw of state?.records || []) {
       const record = cloneRecord(raw);
       if (record.status === 'working') record.status = 'queued';
@@ -574,6 +579,23 @@ export class SubagentManager {
   listActive(): SubagentInstance[] { return this.listAll().filter(item => item.status !== 'closed'); }
   listAll(): SubagentInstance[] { return [...this.subs.values()].map(cloneRecord); }
 
+  pauseScheduling(): void {
+    if (this.schedulingPaused) return;
+    this.schedulingPaused = true;
+    this.persistNow();
+    this.changed();
+  }
+
+  resumeScheduling(): void {
+    if (!this.schedulingPaused) return;
+    this.schedulingPaused = false;
+    this.persistNow();
+    this.changed();
+    this.pump();
+  }
+
+  isSchedulingPaused(): boolean { return this.schedulingPaused; }
+
   remove(id: string): boolean {
     const record = this.get(id);
     if (!record) return false;
@@ -589,6 +611,7 @@ export class SubagentManager {
       version: 2,
       rootAgentId: this.rootAgentId,
       nextSequence: this.nextSequence,
+      schedulingPaused: this.schedulingPaused,
       records: this.listAll().map(record => record.status === 'working' ? { ...record, status: 'queued' as const } : record),
       mailbox: this.mailbox.map(message => ({ ...message })),
       rootInbox: this.rootInbox.map(message => ({ ...message })),
@@ -672,7 +695,7 @@ export class SubagentManager {
   }
 
   private pump(): void {
-    if (!this.executor) return;
+    if (!this.executor || this.schedulingPaused) return;
     while (this.running.size < this.concurrency && this.pending.length > 0) {
       const job = this.pending.shift()!;
       const record = this.subs.get(job.id);

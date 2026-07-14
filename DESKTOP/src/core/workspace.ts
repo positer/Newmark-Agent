@@ -4,6 +4,8 @@ import * as crypto from 'crypto';
 import { ConfigManager } from '../core/config';
 
 export interface WorkspaceInfo {
+  /** Stable identity derived from workspace kind + canonical path. */
+  id?: string;
   name: string;
   path: string;
   isInternal: boolean;
@@ -21,6 +23,7 @@ export interface WorkspaceInfo {
 
 interface WorkspaceState {
   current?: {
+    id?: string;
     name?: string;
     path?: string;
     isInternal?: boolean;
@@ -76,6 +79,7 @@ export class WorkspaceManager {
     const w = path.join(this.rootPath, 'Work');
     if (!fs.existsSync(w)) return;
     let internalChanged = false;
+    let externalChanged = false;
     try {
       const local = JSON.parse(fs.readFileSync(path.join(w, 'Local.json'), 'utf-8'));
       this.internal = Array.isArray(local)
@@ -84,13 +88,16 @@ export class WorkspaceManager {
     } catch { /* empty */ }
     try {
       const ext = JSON.parse(fs.readFileSync(path.join(w, 'External.json'), 'utf-8'));
-      this.external = ext;
+      this.external = Array.isArray(ext)
+        ? ext.map(item => this.normalizeExternalWorkspace(item, changed => { externalChanged = externalChanged || changed; }))
+        : [];
     } catch { /* empty */ }
     // Scan for directories not in Local.json
     for (const entry of fs.readdirSync(w, { withFileTypes: true })) {
       if (entry.isDirectory() && !['Local.json', 'External.json', '.ssh'].includes(entry.name)) {
         if (!this.internal.find(wi => wi.name === entry.name)) {
           this.internal.push({
+            id: this.stableWorkspaceId('local', path.join(w, entry.name)),
             name: entry.name,
             path: path.join(w, entry.name),
             isInternal: true,
@@ -102,20 +109,40 @@ export class WorkspaceManager {
     }
     this.sortWorkspaces();
     if (internalChanged) this.saveInternal();
+    if (externalChanged) this.saveExternal();
   }
 
   private normalizeInternalWorkspace(input: Partial<WorkspaceInfo>, markChanged: (changed: boolean) => void): WorkspaceInfo {
     const rawName = String(input?.name || path.basename(String(input?.path || '')) || '').trim();
     const name = rawName || new Date().toISOString().replace(/[:.]/g, '').replace('T', '_').slice(0, 15);
     const expectedPath = path.join(this.rootPath, 'Work', name);
-    if (path.resolve(String(input?.path || '')) !== path.resolve(expectedPath) || input?.isInternal !== true) markChanged(true);
+    const id = this.stableWorkspaceId('local', expectedPath);
+    if (path.resolve(String(input?.path || '')) !== path.resolve(expectedPath) || input?.isInternal !== true || input?.id !== id) markChanged(true);
     return {
       ...input,
+      id,
       name,
       path: expectedPath,
       isInternal: true,
       hostBinding: '',
       icon: String(input?.icon || name.charAt(0).toUpperCase()),
+    };
+  }
+
+  private normalizeExternalWorkspace(input: Partial<WorkspaceInfo>, markChanged: (changed: boolean) => void): WorkspaceInfo {
+    const workspacePath = path.resolve(String(input?.path || this.rootPath));
+    const kind = input?.kind === 'ssh' || input?.sshConnectionId ? 'ssh' : 'local';
+    const id = this.stableWorkspaceId(kind, workspacePath);
+    if (input?.id !== id || input?.path !== workspacePath) markChanged(true);
+    return {
+      ...input,
+      id,
+      name: String(input?.name || path.basename(workspacePath) || id),
+      path: workspacePath,
+      isInternal: false,
+      hostBinding: String(input?.hostBinding || ''),
+      icon: String(input?.icon || path.basename(workspacePath).charAt(0).toUpperCase()),
+      kind,
     };
   }
 
@@ -144,6 +171,27 @@ export class WorkspaceManager {
     }
     const normalized = path.normalize(real).replace(/[\\/]+$/, '');
     return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  }
+
+  private stableWorkspaceId(kind: 'local' | 'ssh', workspacePath: string): string {
+    const identity = `${kind}:${this.canonicalWorkspacePath(workspacePath)}`;
+    return `workspace-${crypto.createHash('sha256').update(identity).digest('hex').slice(0, 24)}`;
+  }
+
+  private resolveWorkspaceReference(reference: string): WorkspaceInfo | null {
+    const clean = String(reference || '').trim();
+    if (!clean) return null;
+    const all = [...this.internal, ...this.external];
+    const byId = all.find(workspace => workspace.id === clean);
+    if (byId) return byId;
+    let byPath: WorkspaceInfo | undefined;
+    try {
+      const wanted = this.canonicalWorkspacePath(clean);
+      byPath = all.find(workspace => this.canonicalWorkspacePath(workspace.path) === wanted);
+    } catch {}
+    if (byPath) return byPath;
+    const byName = all.filter(workspace => workspace.name === clean);
+    return byName.length === 1 ? byName[0] : null;
   }
 
   private isInsideRoot(target: string): boolean {
@@ -206,6 +254,7 @@ export class WorkspaceManager {
     const p = this.statePath();
     const state: WorkspaceState = {
       current: this.current ? {
+        id: this.current.id,
         name: this.current.name,
         path: this.current.path,
         isInternal: this.current.isInternal,
@@ -221,12 +270,22 @@ export class WorkspaceManager {
   private findWorkspace(ref: WorkspaceState['current']): WorkspaceInfo | null {
     if (!ref) return null;
     const all = [...this.internal, ...this.external];
+    if (ref.id) {
+      const byId = all.find(workspace => workspace.id === ref.id);
+      if (byId) return byId;
+    }
     const refPath = ref.path ? path.resolve(ref.path) : '';
-    return all.find(w => {
+    const pathMatch = all.find(w => {
       if (typeof ref.isInternal === 'boolean' && w.isInternal !== ref.isInternal) return false;
       if (refPath && path.resolve(w.path) === refPath) return true;
+      return false;
+    });
+    if (pathMatch) return pathMatch;
+    const nameMatches = all.filter(w => {
+      if (typeof ref.isInternal === 'boolean' && w.isInternal !== ref.isInternal) return false;
       return !!ref.name && w.name === ref.name;
-    }) || null;
+    });
+    return nameMatches.length === 1 ? nameMatches[0] : null;
   }
 
   private restoreCurrent(): void {
@@ -234,7 +293,7 @@ export class WorkspaceManager {
     const stored = this.findWorkspace(stateCurrent);
     if (stored) {
       this.current = stored;
-      if (!stateCurrent?.path || path.resolve(stateCurrent.path) !== path.resolve(stored.path)) this.saveState();
+      if (!stateCurrent?.id || stateCurrent.id !== stored.id || !stateCurrent.path || path.resolve(stateCurrent.path) !== path.resolve(stored.path)) this.saveState();
       return;
     }
 
@@ -319,6 +378,7 @@ export class WorkspaceManager {
       return existing;
     }
     const ws: WorkspaceInfo = {
+      id: this.stableWorkspaceId('local', d),
       name: n,
       path: d,
       isInternal: true,
@@ -343,6 +403,7 @@ export class WorkspaceManager {
     }
     const name = path.basename(resolved);
     const ws: WorkspaceInfo = {
+      id: this.stableWorkspaceId('local', resolved),
       name,
       path: resolved,
       isInternal: false,
@@ -375,6 +436,7 @@ export class WorkspaceManager {
     const existing = this.findSshWorkspaceByRemotePath(input.sshConnectionId, remotePath);
     const ws: WorkspaceInfo = {
       ...(existing || {}),
+      id: this.stableWorkspaceId('ssh', shadowRoot),
       name: existing?.name || safeName,
       path: shadowRoot,
       isInternal: false,
@@ -410,21 +472,24 @@ export class WorkspaceManager {
   }
 
   remove(name: string): boolean {
-    const idxInt = this.internal.findIndex(w => w.name === name);
+    const resolved = this.resolveWorkspaceReference(name);
+    if (!resolved) return false;
+    const idxInt = this.internal.indexOf(resolved);
     if (idxInt >= 0) {
       const removedWorkspace = this.internal[idxInt];
       if (!this.removeInternalDirectory(removedWorkspace.path)) return false;
       this.internal.splice(idxInt, 1);
       this.saveInternal();
-      if (this.current?.name === name) this.current = null;
+      if (this.current?.id === removedWorkspace.id || this.current?.path === removedWorkspace.path) this.current = null;
       this.saveState();
       return true;
     }
-    const idxExt = this.external.findIndex(w => w.name === name);
+    const idxExt = this.external.indexOf(resolved);
     if (idxExt >= 0) {
+      const removedWorkspace = this.external[idxExt];
       this.external.splice(idxExt, 1);
       this.saveExternal();
-      if (this.current?.name === name) this.current = null;
+      if (this.current?.id === removedWorkspace.id || this.current?.path === removedWorkspace.path) this.current = null;
       this.saveState();
       return true;
     }
@@ -432,18 +497,14 @@ export class WorkspaceManager {
   }
 
   select(id: string): WorkspaceInfo | null {
-    const found = [...this.internal, ...this.external].find(
-      w => w.name === id || w.path === id
-    );
+    const found = this.resolveWorkspaceReference(id);
     this.current = found || null;
     this.saveState();
     return this.current;
   }
 
   setPinned(id: string, pinned: boolean): WorkspaceInfo | null {
-    const found = [...this.internal, ...this.external].find(
-      w => w.name === id || w.path === id
-    );
+    const found = this.resolveWorkspaceReference(id);
     if (!found) return null;
     found.pinned = !!pinned;
     found.pinnedAt = found.pinned ? new Date().toISOString() : '';

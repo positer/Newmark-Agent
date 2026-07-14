@@ -53,6 +53,7 @@ const PLAN_READ_ONLY_TOOLS = new Set([
   'question',
 ]);
 const PLAN_COMPUTER_USE_ACTIONS = new Set(['observe', 'app_list', 'app_observe']);
+const PLAN_BROWSER_USE_ACTIONS = new Set(['observe', 'navigate', 'wait', 'extract']);
 
 export function toolAvailability(name: string): ToolAvailability {
   if (REQUIRED_TOOLS.has(name)) return 'required';
@@ -74,6 +75,13 @@ export function evaluateToolPolicy(request: ToolPolicyRequest): ToolPolicyDecisi
       }
       return { ...base, allowed: true };
     }
+    if (name === 'browser_use') {
+      const action = String(request.args?.action || '').trim();
+      if (!PLAN_BROWSER_USE_ACTIONS.has(action)) {
+        return { ...base, allowed: false, reason: `[permission] Plan mode only allows Browser-Use observation and read-only navigation. Blocked: browser_use.${action || '(missing action)'}` };
+      }
+      return { ...base, allowed: true };
+    }
     if (!PLAN_READ_ONLY_TOOLS.has(name)) {
       return { ...base, allowed: false, reason: `[permission] Plan mode is fully read-only. Blocked: ${name}` };
     }
@@ -90,7 +98,7 @@ export function evaluateToolPolicy(request: ToolPolicyRequest): ToolPolicyDecisi
 export function filterToolDefinitions<T>(definitions: T[], request: Omit<ToolPolicyRequest, 'name' | 'args'>): T[] {
   return definitions.filter(definition => {
     const name = String((definition as any)?.function?.name || '');
-    if (request.mode === 'plan' && name === 'computer_use') return true;
+    if (request.mode === 'plan' && (name === 'computer_use' || name === 'browser_use')) return true;
     return evaluateToolPolicy({ ...request, name }).allowed;
   });
 }

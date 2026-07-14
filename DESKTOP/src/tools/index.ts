@@ -1,12 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { execSync, spawnSync } from 'child_process';
 // glob v7 - imported via require for CommonJS compatibility
 const globSync: (pattern: string, opts?: { cwd?: string; ignore?: string | string[] }) => string[]
   = require('glob').sync;
 import { ConfigManager } from '../core/config';
 import { BrowserControl, BrowserControlRequest, BrowserControlResult } from '../core/browserControl';
+import { BrowserUse, BrowserUseAction, BrowserUseRequest } from '../core/browserUse';
+import { normalizeConversationTarget } from '../core/conversationTarget';
 import { MemoryLabManager } from '../core/memoryLab';
 import {
   NewmarkToolDefinition,
@@ -23,7 +24,9 @@ import { isNativeToolEnabled } from './nativeTools';
 import { SshManager } from '../core/ssh';
 import { WorkspaceManager } from '../core/workspace';
 import { requestWindowsHostTool } from '../core/wslHostToolBridge';
+import { requestUtilityHostTool } from '../core/utilityHostToolBridge';
 import { evaluateToolPolicy, filterToolDefinitions } from '../core/toolPolicy';
+import { runAsyncProcess } from '../core/asyncProcess';
 
 export interface ToolExecutionContext {
   mode?: string;
@@ -32,8 +35,10 @@ export interface ToolExecutionContext {
   conversationId?: string;
   actorId?: string;
   workspaceId?: string;
+  runtimeKey?: string;
   backend?: string;
   invocation?: 'agent' | 'cli';
+  signal?: AbortSignal;
 }
 
 type ComputerUseLock = {
@@ -56,6 +61,41 @@ function computerUseOwner(context: ToolExecutionContext, wsPath: string): string
   const resolved = path.resolve(context.workspacePath || wsPath || process.cwd());
   const workspaceHash = crypto.createHash('sha256').update(resolved).digest('hex').slice(0, 12);
   return `direct:${workspaceHash}`;
+}
+
+function browserUseScope(context: ToolExecutionContext, wsPath: string): { owner: string; runtimeKey: string } {
+  const workspaceId = String(context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath)).trim();
+  const conversationId = String(context.conversationId || 'default').trim() || 'default';
+  const suppliedRuntimeKey = String(context.runtimeKey || process.env.NEWMARK_RUNTIME_KEY || '').trim();
+  const runtimeKey = suppliedRuntimeKey || normalizeConversationTarget({ workspaceId, conversationId }).runtimeKey;
+  const actorId = String(context.actorId || ROOT_TERMINAL_ACTOR_ID).trim() || ROOT_TERMINAL_ACTOR_ID;
+  return { runtimeKey, owner: `browser-use:${runtimeKey}:actor:${actorId}` };
+}
+
+function abortReason(signal?: AbortSignal): Error {
+  if (signal?.reason instanceof Error) return signal.reason;
+  const error = new Error(signal?.reason ? String(signal.reason) : 'Agent run aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function abortGuard(parent: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(parent?.reason || abortReason(parent));
+  if (parent?.aborted) onAbort();
+  else parent?.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => {
+    const error = new Error(`Timed out after ${timeoutMs} ms`);
+    error.name = 'TimeoutError';
+    controller.abort(error);
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      parent?.removeEventListener('abort', onAbort);
+    },
+  };
 }
 
 function clearStaleComputerUseLock(now = Date.now()): void {
@@ -134,6 +174,9 @@ export class ToolExecutor {
     const shellDescription = process.platform === 'win32'
       ? 'Run a shell command in Windows PowerShell. Use PowerShell syntax only (Get-ChildItem not dir /s, Get-Content not type, Set-Content not echo >, 2>$null not 2>nul, and `; if ($?) { ... }` instead of &&).'
       : 'Run a shell command in bash on Linux/macOS. Use POSIX/bash syntax and normal Unix paths.';
+    const browserUseActions: BrowserUseAction[] = mode === 'plan'
+      ? ['observe', 'navigate', 'wait', 'extract']
+      : ['observe', 'click', 'type', 'select', 'scroll', 'key', 'navigate', 'wait', 'extract'];
     const tools = [
       t('bash', `${shellDescription} Optional timeout_ms lets the Agent choose this command timeout in milliseconds; 0 requests no limit, but a nonzero terminal.interrupt_timeout_ms setting is the upper cap.`, { command: { type: 'string' }, timeout_ms: { type: 'number', description: 'Per-command timeout in milliseconds. 0 means no requested limit unless capped by settings.' } }, ['command']),
       t('pwd', 'Print working directory (current folder path)', {}, []),
@@ -153,6 +196,23 @@ export class ToolExecutor {
       t('browser_forward', 'Navigate the controlled browser forward.', {}, []),
       t('browser_reload', 'Reload the controlled browser.', {}, []),
       t('browser_cdp', 'Run a raw Chrome DevTools Protocol command against the controlled browser. Advanced use only.', { method: { type: 'string' }, params: { type: 'object' } }, ['method']),
+      t('browser_use', 'Native observe-then-act control for Newmark\'s built-in browser. Call observe first, then pass its page_generation, observation_id, and opaque ref to actions. Receipts are owner/runtime scoped; stale observations are rejected. This path does not require arbitrary page scripts or raw CDP.', {
+        action: { type: 'string', enum: browserUseActions },
+        action_id: { type: 'string', description: 'Unique idempotency id for this action. Reusing it returns the original receipt without repeating the action.' },
+        page_generation: { type: 'number', description: 'Generation returned by the latest observe receipt.' },
+        observation_id: { type: 'string', description: 'Opaque observation capability returned by the latest observe receipt.' },
+        ref: { type: 'string', description: 'Opaque element ref such as r3 from the latest observation.' },
+        text: { type: 'string' },
+        value: { type: 'string', description: 'Visible option label returned by observe; internal option values are not exposed or accepted.' },
+        key: { type: 'string' },
+        url: { type: 'string' },
+        delta_x: { type: 'number' },
+        delta_y: { type: 'number' },
+        duration_ms: { type: 'number' },
+        max_chars: { type: 'number' },
+        max_refs: { type: 'number' },
+        attribute: { type: 'string' },
+      }, ['action']),
       t('computer_use', 'Native Windows desktop control with persistent observation/action helpers. Use observe/app_observe before acting. sequence may perform up to three stable low-risk move/click/scroll/wait/app_activate steps and stops when focus, window, menu, dialog, scene, or risk changes. Vision screenshots remain one-time inputs and are deleted immediately.', {
         action: { type: 'string', enum: ['observe', 'app_list', 'app_observe', 'sequence', 'takeover_start', 'takeover_stop', 'move', 'click', 'scroll', 'type', 'key', 'wait', 'app_activate', 'app_click', 'app_scroll', 'app_type', 'app_key'] },
         x: { type: 'number' },
@@ -379,24 +439,68 @@ export class ToolExecutor {
 
     try {
       switch (tool) {
-        case 'bash': return this.bash(g('command'), wsPath, args.timeout_ms);
+        case 'bash': return await this.bash(g('command'), wsPath, args.timeout_ms, context.signal);
         case 'pwd': return `Current directory: ${wsPath}`;
         case 'read': return this.fread(resolve(g('path')));
         case 'write': return this.fwrite(resolve(g('path')), g('content'));
         case 'edit': return this.fedit(resolve(g('path')), g('old_str'), g('new_str'));
         case 'glob': return this.glob(g('pattern'), wsPath);
         case 'grep': return this.grep(g('pattern'), resolve(g('path')));
-        case 'web_search': return await this.wsearch(g('query'));
-        case 'web_fetch': return await this.wfetch(g('url'));
-        case 'browser_open': return await this.browserRun({ action: 'open', url: g('url') });
-        case 'browser_snapshot': return await this.browserRun({ action: 'snapshot', maxChars: Number((args as Record<string, unknown>).max_chars || 12000) });
-        case 'browser_click': return await this.browserRun({ action: 'click', selector: g('selector') });
-        case 'browser_type': return await this.browserRun({ action: 'type', selector: g('selector'), text: g('text') });
-        case 'browser_eval': return await this.browserRun({ action: 'eval', script: g('script') });
-        case 'browser_back': return await this.browserRun({ action: 'back' });
-        case 'browser_forward': return await this.browserRun({ action: 'forward' });
-        case 'browser_reload': return await this.browserRun({ action: 'reload' });
-        case 'browser_cdp': return await this.browserRun({ action: 'cdp', method: g('method'), params: (args as Record<string, unknown>).params || {} });
+        case 'web_search': return await this.wsearch(g('query'), context.signal);
+        case 'web_fetch': return await this.wfetch(g('url'), context.signal);
+        case 'browser_open': return await this.browserRun({ action: 'open', url: g('url') }, context.signal, context, wsPath);
+        case 'browser_snapshot': return await this.browserRun({ action: 'snapshot', maxChars: Number((args as Record<string, unknown>).max_chars || 12000) }, context.signal, context, wsPath);
+        case 'browser_click': return await this.browserRun({ action: 'click', selector: g('selector') }, context.signal, context, wsPath);
+        case 'browser_type': return await this.browserRun({ action: 'type', selector: g('selector'), text: g('text') }, context.signal, context, wsPath);
+        case 'browser_eval': return await this.browserRun({ action: 'eval', script: g('script') }, context.signal, context, wsPath);
+        case 'browser_back': return await this.browserRun({ action: 'back' }, context.signal, context, wsPath);
+        case 'browser_forward': return await this.browserRun({ action: 'forward' }, context.signal, context, wsPath);
+        case 'browser_reload': return await this.browserRun({ action: 'reload' }, context.signal, context, wsPath);
+        case 'browser_cdp': return await this.browserRun({ action: 'cdp', method: g('method'), params: (args as Record<string, unknown>).params || {} }, context.signal, context, wsPath);
+        case 'browser_use': {
+          const scope = browserUseScope(context, wsPath);
+          const request: BrowserUseRequest = {
+            ...scope,
+            action: String(args.action || '').trim().toLowerCase() as BrowserUseAction,
+            ...(g('action_id') ? { actionId: g('action_id') } : {}),
+            ...(args.page_generation !== undefined ? { pageGeneration: Number(args.page_generation) } : {}),
+            ...(g('observation_id') ? { observationId: g('observation_id') } : {}),
+            ...(g('ref') ? { ref: g('ref') } : {}),
+            ...(args.text !== undefined ? { text: String(args.text) } : {}),
+            ...(args.value !== undefined ? { value: String(args.value) } : {}),
+            ...(g('key') ? { key: g('key') } : {}),
+            ...(g('url') ? { url: g('url') } : {}),
+            ...(args.delta_x !== undefined ? { deltaX: Number(args.delta_x) } : {}),
+            ...(args.delta_y !== undefined ? { deltaY: Number(args.delta_y) } : {}),
+            ...(args.duration_ms !== undefined ? { durationMs: Number(args.duration_ms) } : {}),
+            ...(args.max_chars !== undefined ? { maxChars: Number(args.max_chars) } : {}),
+            ...(args.max_refs !== undefined ? { maxRefs: Number(args.max_refs) } : {}),
+            ...(g('attribute') ? { attribute: g('attribute') } : {}),
+          };
+          if (process.env.NEWMARK_WSL_DISTRO) {
+            const result = await requestWindowsHostTool('browser_use', request, {
+              conversationId: context.conversationId || process.env.NEWMARK_CONVERSATION_ID || 'default',
+              workspaceId: process.env.NEWMARK_WORKSPACE_ID || context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath),
+              actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
+              runtimeKey: scope.runtimeKey,
+              mode: context.mode || 'build',
+            }, 30_000, context.signal);
+            return JSON.stringify(result, null, 2);
+          }
+          if (process.env.NEWMARK_ISOLATED_RUNTIME === '1') {
+            const result = await requestUtilityHostTool('browser_use', request, {
+              conversationId: context.conversationId || process.env.NEWMARK_CONVERSATION_ID || 'default',
+              workspaceId: process.env.NEWMARK_WORKSPACE_ID || context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath),
+              actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
+              workspacePath: context.workspacePath || wsPath,
+              backend: 'utility',
+              mode: context.mode || 'build',
+              runtimeKey: scope.runtimeKey,
+            }, 30_000, context.signal);
+            return JSON.stringify(result, null, 2);
+          }
+          return JSON.stringify(await BrowserUse.run(request, context.signal), null, 2);
+        }
         case 'computer_use': {
           const action = normalizeComputerUseAction(g('action'));
           const owner = `${computerUseOwner(context, wsPath)}:${String(context.actorId || 'root')}`;
@@ -410,7 +514,23 @@ export class ToolExecutor {
                 conversationId: context.conversationId || 'default',
                 workspaceId: context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath),
                 actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
-              }));
+                runtimeKey: browserUseScope(context, wsPath).runtimeKey,
+              }, 120_000, context.signal));
+            } finally {
+              if (action === 'takeover_stop') releaseComputerUseLock(action, owner);
+            }
+          }
+          if (process.env.NEWMARK_ISOLATED_RUNTIME === '1') {
+            try {
+              const result = await requestUtilityHostTool('computer_use', args, {
+                conversationId: context.conversationId || 'default',
+                workspaceId: context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath),
+                actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
+                workspacePath: context.workspacePath || wsPath,
+                backend: 'utility',
+                mode: context.mode || 'build',
+              }, 120_000, context.signal);
+              return typeof result === 'string' ? result : JSON.stringify(result);
             } finally {
               if (action === 'takeover_stop') releaseComputerUseLock(action, owner);
             }
@@ -456,7 +576,28 @@ export class ToolExecutor {
           if (action === 'takeover_stop') releaseComputerUseLock(action, owner);
           return output;
         }
-        case 'terminal_takeover': return runTerminalTakeover({
+        case 'terminal_takeover': {
+          if (process.env.NEWMARK_WSL_DISTRO) {
+            const result = await requestWindowsHostTool('terminal_takeover', args, {
+              conversationId: process.env.NEWMARK_CONVERSATION_ID || context.conversationId || 'default',
+              workspaceId: process.env.NEWMARK_WORKSPACE_ID || context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath),
+              actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
+              runtimeKey: process.env.NEWMARK_RUNTIME_KEY || browserUseScope(context, wsPath).runtimeKey,
+            }, 120_000, context.signal);
+            return typeof result === 'string' ? result : JSON.stringify(result);
+          }
+          if (process.env.NEWMARK_ISOLATED_RUNTIME === '1') {
+            const result = await requestUtilityHostTool('terminal_takeover', args, {
+              conversationId: context.conversationId || 'default',
+              workspaceId: context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath),
+              actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
+              workspacePath: context.workspacePath || wsPath,
+              backend: 'utility',
+              mode: context.mode || 'build',
+            }, 120_000, context.signal);
+            return typeof result === 'string' ? result : JSON.stringify(result);
+          }
+          return runTerminalTakeover({
           action: g('action'),
           name: g('name'),
           shell: g('shell'),
@@ -472,8 +613,9 @@ export class ToolExecutor {
             actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
           },
           persistenceRoot: this.root,
-        });
-        case 'ssh_workspace': return this.sshWorkspace(args, wsPath);
+          });
+        }
+        case 'ssh_workspace': return await this.sshWorkspace(args, wsPath, context.signal);
         case 'task': return `[task] Subagent request accepted: ${g('name')}`;
         case 'subagent_send': return `[subagent_send] Routed to Agent runtime: ${g('name')}`;
         case 'subagent_read': return `[subagent_read] Routed to Agent runtime: ${g('name') || g('id')}`;
@@ -484,7 +626,7 @@ export class ToolExecutor {
             return '[question] Disabled by fully_autonomous option feedback.';
           }
           return '[question] Options sent to user.';
-        case 'skill_download': return await this.skillDownload(g('name'), g('source'));
+        case 'skill_download': return await this.skillDownload(g('name'), g('source'), context.signal);
         case 'flow_list': return this.flowList();
         case 'flow_save': return this.flowSave(g('name'), (args as Record<string, unknown>).components);
         case 'flow_run': return `[flow_run] Routed to Agent runtime: ${g('name')}`;
@@ -496,19 +638,19 @@ export class ToolExecutor {
         case 'automation_update': return `[automation_update] Routed to Agent runtime: ${g('id')}`;
         case 'automation_toggle': return `[automation_toggle] Routed to Agent runtime: ${g('id')}`;
         case 'automation_delete': return `[automation_delete] Routed to Agent runtime: ${g('id')}`;
-        case 'git_status': return this.gstat(wsPath);
-        case 'file_audit': return await this.fileAudit(resolve(g('path') || '.'), wsPath, (args as Record<string, unknown>).include_remote !== false, g('base_ref'));
-        case 'repo_security_audit': return this.repoSecurityAudit(resolve(g('path') || '.'), wsPath, g('base_ref'));
-        case 'git_pull': return this.gpull(wsPath);
-        case 'git_push': return this.withRemoteSecurityPreamble(wsPath, this.gpush(g('message'), wsPath));
-        case 'git_clone': return this.gclone(g('url'), resolve(g('path')));
-        case 'git_branch': return this.gbranch(g('action'), g('name'), g('start_point'), wsPath);
-        case 'gh_auth_status': return this.gh(['auth', 'status'], wsPath);
-        case 'gh_repo_view': return this.ghRepoView(g('repo'), wsPath);
-        case 'gh_issue_list': return this.ghList('issue', g('repo'), Number((args as Record<string, unknown>).limit || 20), wsPath);
-        case 'gh_pr_list': return this.ghList('pr', g('repo'), Number((args as Record<string, unknown>).limit || 20), wsPath);
-        case 'gh_fork': return this.ghFork(g('action'), g('repo'), (args as Record<string, unknown>).clone === true, (args as Record<string, unknown>).remote === true, g('remote_name'), wsPath);
-        case 'gh_pr_create': return this.withRemoteSecurityPreamble(wsPath, this.ghPrCreate(g('title'), g('body'), g('base'), g('head'), (args as Record<string, unknown>).draft === true, wsPath));
+        case 'git_status': return await this.gstat(wsPath, context.signal);
+        case 'file_audit': return await this.fileAudit(resolve(g('path') || '.'), wsPath, (args as Record<string, unknown>).include_remote !== false, g('base_ref'), context.signal);
+        case 'repo_security_audit': return await this.repoSecurityAudit(resolve(g('path') || '.'), wsPath, g('base_ref'), context.signal);
+        case 'git_pull': return await this.gpull(wsPath, context.signal);
+        case 'git_push': return await this.withRemoteSecurityPreamble(wsPath, () => this.gpush(g('message'), wsPath, context.signal), context.signal);
+        case 'git_clone': return await this.gclone(g('url'), resolve(g('path')), context.signal);
+        case 'git_branch': return await this.gbranch(g('action'), g('name'), g('start_point'), wsPath, context.signal);
+        case 'gh_auth_status': return await this.gh(['auth', 'status'], wsPath, context.signal);
+        case 'gh_repo_view': return await this.ghRepoView(g('repo'), wsPath, context.signal);
+        case 'gh_issue_list': return await this.ghList('issue', g('repo'), Number((args as Record<string, unknown>).limit || 20), wsPath, context.signal);
+        case 'gh_pr_list': return await this.ghList('pr', g('repo'), Number((args as Record<string, unknown>).limit || 20), wsPath, context.signal);
+        case 'gh_fork': return await this.ghFork(g('action'), g('repo'), (args as Record<string, unknown>).clone === true, (args as Record<string, unknown>).remote === true, g('remote_name'), wsPath, context.signal);
+        case 'gh_pr_create': return await this.withRemoteSecurityPreamble(wsPath, () => this.ghPrCreate(g('title'), g('body'), g('base'), g('head'), (args as Record<string, unknown>).draft === true, wsPath, context.signal), context.signal);
         default: return `[?] Unknown tool: ${tool}`;
       }
     } catch (e: unknown) {
@@ -521,7 +663,7 @@ export class ToolExecutor {
     return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
   }
 
-  private sshWorkspace(args: Record<string, unknown>, wsPath: string): string {
+  private async sshWorkspace(args: Record<string, unknown>, wsPath: string, signal?: AbortSignal): Promise<string> {
     const manager = this.ssh || new SshManager(this.root);
     const action = String(args.action || 'list').toLowerCase();
     const id = String(args.id || '').trim();
@@ -549,7 +691,7 @@ export class ToolExecutor {
       const target = id || input.id || input.name || '';
       const conn = target ? manager.get(target) : null;
       const saved = conn || manager.upsert(input);
-      return JSON.stringify(manager.validate(saved.id, input.remoteRoot), null, 2);
+      return JSON.stringify(await manager.validate(saved.id, input.remoteRoot, signal), null, 2);
     }
     if (action === 'create_workspace') {
       const remotePath = String(args.remote_path || args.remote_root || '').trim();
@@ -559,7 +701,7 @@ export class ToolExecutor {
       const conn = existing
         ? manager.upsert({ ...existing, ...cleanInput, id: existing.id })
         : manager.upsert(input);
-      const validation = manager.ensureRemoteWorkspace(conn.id, remotePath);
+      const validation = await manager.ensureRemoteWorkspace(conn.id, remotePath, signal);
       if (!validation.ok || !validation.remotePcHash) return JSON.stringify({ ok: false, validation }, null, 2);
       if (!this.workspace) {
         return JSON.stringify({ ok: false, validation, error: 'Workspace manager is not available in this runtime.' }, null, 2);
@@ -656,29 +798,28 @@ export class ToolExecutor {
     return cap === undefined ? requested : Math.min(requested, cap);
   }
 
-  private bash(cmd: string, ws: string, timeoutMs?: unknown): string {
+  private async bash(cmd: string, ws: string, timeoutMs?: unknown, signal?: AbortSignal): Promise<string> {
     if (!cmd.trim()) return '[bash] No command.';
     const timeout = this.resolveBashTimeout(timeoutMs);
-    const execOptions = {
-      cwd: ws, encoding: 'utf-8' as const, timeout, maxBuffer: 1024 * 1024,
-    };
     try {
-      if (process.platform === 'win32') {
-        const result = spawnSync('powershell.exe', [
-          '-NoProfile', '-NonInteractive', '-Command', cmd,
-        ], execOptions);
-        const out = (result.stdout || '') + (result.stderr || '');
-        if (result.error) return (out.trim() ? `${out.trim()}\n` : '') + `[bash] ${result.error.message}`;
-        return out.trim() || `[bash] Exit: ${result.status ?? -1}`;
-      } else {
-        const result = spawnSync('/bin/bash', ['-c', cmd], execOptions);
-        const out = (result.stdout || '') + (result.stderr || '');
-        if (result.error) return (out.trim() ? `${out.trim()}\n` : '') + `[bash] ${result.error.message}`;
-        return out.trim() || `[bash] Exit: ${result.status ?? -1}`;
+      const command = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
+      const args = process.platform === 'win32'
+        ? ['-NoProfile', '-NonInteractive', '-Command', cmd]
+        : ['-c', cmd];
+      const result = await runAsyncProcess(command, args, {
+        cwd: ws,
+        timeoutMs: timeout,
+        maxBuffer: 1024 * 1024,
+        signal,
+      });
+      const out = `${result.stdout || ''}${result.stderr || ''}`.trim();
+      if (result.error) {
+        const kind = result.aborted ? 'Aborted' : result.timedOut ? 'Timed out' : result.overflowed ? 'Output limit' : 'Error';
+        return `${out ? `${out}\n` : ''}[bash] ${kind}: ${result.error}`;
       }
+      return out || `[bash] Exit: ${result.status ?? -1}`;
     } catch (e: unknown) {
-      const err = e as { stdout?: string; stderr?: string; status?: number };
-      return (err.stdout || '') + (err.stderr || '') || `[bash] ${e}`;
+      return `[bash] ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -761,25 +902,42 @@ export class ToolExecutor {
     return fetch(url, options);
   }
 
-  private proxyExec(cmd: string, opts: { cwd?: string; encoding?: string; timeout?: number; maxBuffer?: number } = {}): string {
+  private proxyEnvironment(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env };
     const proxyUrl = this.config.getStr('proxy', 'url');
-    const proxyEnabled = this.config.getBool('proxy', 'enabled');
-    const env: Record<string, string> = { ...process.env as Record<string, string> };
-    if (proxyEnabled && proxyUrl) {
-      env.HTTP_PROXY = proxyUrl;
-      env.HTTPS_PROXY = proxyUrl;
-      env.http_proxy = proxyUrl;
-      env.https_proxy = proxyUrl;
-    }
+    if (!this.config.getBool('proxy', 'enabled') || !proxyUrl) return env;
+    env.HTTP_PROXY = proxyUrl;
+    env.HTTPS_PROXY = proxyUrl;
+    env.http_proxy = proxyUrl;
+    env.https_proxy = proxyUrl;
+    return env;
+  }
+
+  private async proxyExec(
+    cmd: string,
+    opts: { cwd?: string; timeout?: number; maxBuffer?: number } = {},
+    signal?: AbortSignal,
+  ): Promise<string> {
     try {
-      return execSync(cmd, { ...opts, encoding: 'utf-8' as const, env }).toString().trim();
-    } catch (e: unknown) {
-      const err = e as { stdout?: string; stderr?: string; status?: number };
-      return (err.stdout || '') + (err.stderr || '') || `[exec] ${e}`;
+      const command = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
+      const args = process.platform === 'win32'
+        ? ['-NoProfile', '-NonInteractive', '-Command', cmd]
+        : ['-c', cmd];
+      const result = await runAsyncProcess(command, args, {
+        cwd: opts.cwd,
+        timeoutMs: opts.timeout,
+        maxBuffer: opts.maxBuffer,
+        env: this.proxyEnvironment(),
+        signal,
+      });
+      const out = `${result.stdout || ''}${result.stderr || ''}`.trim();
+      return result.error ? (out || `[exec] ${result.error}`) : out;
+    } catch (error) {
+      return `[exec] ${error instanceof Error ? error.message : String(error)}`;
     }
   }
 
-  private async wsearch(query: string): Promise<string> {
+  private async wsearch(query: string, signal?: AbortSignal): Promise<string> {
     const clean = (s: string) => s
       .replace(/<[^>]+>/g, ' ')
       .replace(/&amp;/g, '&')
@@ -794,11 +952,17 @@ export class ToolExecutor {
 
     try {
       const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-      const resp = await this.proxyFetch(url, {
-        headers: { 'User-Agent': 'NewmarkAgent/1.0' },
-        signal: AbortSignal.timeout(15000),
-      });
-      const html = await resp.text();
+      const guard = abortGuard(signal, 15000);
+      let html = '';
+      try {
+        const resp = await this.proxyFetch(url, {
+          headers: { 'User-Agent': 'NewmarkAgent/1.0' },
+          signal: guard.signal,
+        });
+        html = await resp.text();
+      } finally {
+        guard.dispose();
+      }
       const re = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>[\s\S]*?class="result__snippet">(.*?)<\/a>/g;
       const results: string[] = [];
       let m;
@@ -808,16 +972,23 @@ export class ToolExecutor {
       if (results.length > 0) return results.join('\n\n');
       errors.push('DuckDuckGo returned no parseable results');
     } catch (e) {
+      if (signal?.aborted) throw abortReason(signal);
       errors.push(`DuckDuckGo: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     try {
       const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
-      const resp = await this.proxyFetch(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 NewmarkAgent/1.0' },
-        signal: AbortSignal.timeout(15000),
-      });
-      const html = await resp.text();
+      const guard = abortGuard(signal, 15000);
+      let html = '';
+      try {
+        const resp = await this.proxyFetch(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 NewmarkAgent/1.0' },
+          signal: guard.signal,
+        });
+        html = await resp.text();
+      } finally {
+        guard.dispose();
+      }
       const blockRe = /<li class="b_algo"[\s\S]*?<\/li>/g;
       const results: string[] = [];
       let block;
@@ -831,19 +1002,26 @@ export class ToolExecutor {
       if (results.length > 0) return results.join('\n\n');
       errors.push('Bing returned no parseable results');
     } catch (e) {
+      if (signal?.aborted) throw abortReason(signal);
       errors.push(`Bing: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     return `[web_search] No results. ${errors.join('; ')}`;
   }
 
-  private async wfetch(url: string): Promise<string> {
+  private async wfetch(url: string, signal?: AbortSignal): Promise<string> {
     try {
-      const resp = await this.proxyFetch(url, {
-        headers: { 'User-Agent': 'NewmarkAgent/1.0' },
-        signal: AbortSignal.timeout(30000),
-      });
-      const html = await resp.text();
+      const guard = abortGuard(signal, 30000);
+      let html = '';
+      try {
+        const resp = await this.proxyFetch(url, {
+          headers: { 'User-Agent': 'NewmarkAgent/1.0' },
+          signal: guard.signal,
+        });
+        html = await resp.text();
+      } finally {
+        guard.dispose();
+      }
       let text = this.extractReadableText(html, url);
       if (!text) {
         text = html.replace(/<script[^>]*>.*?<\/script>/gs, '')
@@ -854,11 +1032,30 @@ export class ToolExecutor {
         .trim();
       }
       return text.length > 8000 ? text.slice(0, 8000) + '...\n[truncated]' : text;
-    } catch (e) { return `[web_fetch] ${e}`; }
+    } catch (e) {
+      if (signal?.aborted) throw abortReason(signal);
+      return `[web_fetch] ${e}`;
+    }
   }
 
-  private async browserRun(request: BrowserControlRequest): Promise<string> {
-    const result = await BrowserControl.run(request);
+  private async browserRun(
+    request: BrowserControlRequest,
+    signal?: AbortSignal,
+    context: ToolExecutionContext = {},
+    workspacePath = this.root,
+  ): Promise<string> {
+    if (process.env.NEWMARK_WSL_DISTRO) {
+      const scope = browserUseScope(context, workspacePath);
+      const result = await requestWindowsHostTool('browser_control', request, {
+        conversationId: context.conversationId || process.env.NEWMARK_CONVERSATION_ID || 'default',
+        workspaceId: process.env.NEWMARK_WORKSPACE_ID || context.workspaceId || terminalTakeoverWorkspaceId(workspacePath),
+        actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
+        runtimeKey: scope.runtimeKey,
+        mode: context.mode || 'build',
+      }, 30_000, signal) as BrowserControlResult;
+      return this.formatBrowserResult(result);
+    }
+    const result = await BrowserControl.run(request, signal);
     return this.formatBrowserResult(result);
   }
 
@@ -898,10 +1095,10 @@ export class ToolExecutor {
     }
   }
 
-  private async skillDownload(name: string, src: string): Promise<string> {
+  private async skillDownload(name: string, src: string, signal?: AbortSignal): Promise<string> {
     if (!src.startsWith('http')) return `[skill] Not a URL: ${src}`;
     try {
-      const resp = await this.proxyFetch(src);
+      const resp = await this.proxyFetch(src, { signal });
       const content = await resp.text();
       const dir = path.join(this.root, 'skills', name);
       fs.mkdirSync(dir, { recursive: true });
@@ -959,31 +1156,21 @@ export class ToolExecutor {
     return lab.formatRead(lab.read(selector));
   }
 
-  private gitExec(cmd: string, ws: string): string {
-    return this.proxyExec(cmd, { cwd: ws, timeout: 120000, maxBuffer: 1024 * 1024 });
+  private async gitExec(cmd: string, ws: string, signal?: AbortSignal): Promise<string> {
+    return this.proxyExec(cmd, { cwd: ws, timeout: 120000, maxBuffer: 1024 * 1024 }, signal);
   }
 
-  private gitExecAt(repoRoot: string, args: string[]): string {
-    const proxyUrl = this.config.getStr('proxy', 'url');
-    const proxyEnabled = this.config.getBool('proxy', 'enabled');
-    const env: Record<string, string> = { ...process.env as Record<string, string> };
-    if (proxyEnabled && proxyUrl) {
-      env.HTTP_PROXY = proxyUrl;
-      env.HTTPS_PROXY = proxyUrl;
-      env.http_proxy = proxyUrl;
-      env.https_proxy = proxyUrl;
-    }
+  private async gitExecAt(repoRoot: string, args: string[], signal?: AbortSignal): Promise<string> {
     try {
-      const result = spawnSync('git', args, {
+      const result = await runAsyncProcess('git', args, {
         cwd: repoRoot,
-        encoding: 'utf-8',
-        timeout: 120000,
+        timeoutMs: 120000,
         maxBuffer: 1024 * 1024,
-        windowsHide: true,
-        env,
+        env: this.proxyEnvironment(),
+        signal,
       });
       const out = `${result.stdout || ''}${result.stderr || ''}`.trim();
-      if (result.error) return `[git] ${result.error.message}`;
+      if (result.error) return `${out ? `${out}\n` : ''}[git] ${result.error}`;
       if (result.status === 0) return out;
       return out || `[git] Exit: ${result.status ?? -1}`;
     } catch (e) {
@@ -991,68 +1178,58 @@ export class ToolExecutor {
     }
   }
 
-  private spawnTool(command: string, args: string[], ws: string, timeout = 60000): string {
-    const proxyUrl = this.config.getStr('proxy', 'url');
-    const proxyEnabled = this.config.getBool('proxy', 'enabled');
-    const env: Record<string, string> = { ...process.env as Record<string, string> };
-    if (proxyEnabled && proxyUrl) {
-      env.HTTP_PROXY = proxyUrl;
-      env.HTTPS_PROXY = proxyUrl;
-      env.http_proxy = proxyUrl;
-      env.https_proxy = proxyUrl;
-    }
+  private async spawnTool(command: string, args: string[], ws: string, timeout = 60000, signal?: AbortSignal): Promise<string> {
     try {
-      const result = spawnSync(command, args, {
+      const result = await runAsyncProcess(command, args, {
         cwd: ws,
-        encoding: 'utf-8',
-        timeout,
+        timeoutMs: timeout,
         maxBuffer: 1024 * 1024,
-        windowsHide: true,
-        env,
+        env: this.proxyEnvironment(),
+        signal,
       });
       const out = `${result.stdout || ''}${result.stderr || ''}`.trim();
-      if (result.error) return `[${command}] ${result.error.message}`;
+      if (result.error) return `${out ? `${out}\n` : ''}[${command}] ${result.error}`;
       return out || `[${command}] Exit: ${result.status ?? -1}`;
     } catch (e) {
       return `[${command}] ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
-  private gh(args: string[], ws: string): string {
-    return this.spawnTool('gh', args, ws, 60000);
+  private async gh(args: string[], ws: string, signal?: AbortSignal): Promise<string> {
+    return this.spawnTool('gh', args, ws, 60000, signal);
   }
 
-  private ghRepoView(repo: string, ws: string): string {
+  private async ghRepoView(repo: string, ws: string, signal?: AbortSignal): Promise<string> {
     const args = ['repo', 'view'];
     if (repo) args.push(repo);
     args.push('--json', 'nameWithOwner,description,url,isPrivate,defaultBranchRef');
-    return this.gh(args, ws);
+    return this.gh(args, ws, signal);
   }
 
-  private ghList(kind: 'issue' | 'pr', repo: string, limit: number, ws: string): string {
+  private async ghList(kind: 'issue' | 'pr', repo: string, limit: number, ws: string, signal?: AbortSignal): Promise<string> {
     const args = [kind, 'list'];
     if (repo) args.push('--repo', repo);
     args.push('--limit', String(Math.min(Math.max(limit || 20, 1), 100)), '--json', 'number,title,state,url');
-    return this.gh(args, ws);
+    return this.gh(args, ws, signal);
   }
 
-  private async fileAudit(target: string, ws: string, includeRemote: boolean, baseRef: string): Promise<string> {
+  private async fileAudit(target: string, ws: string, includeRemote: boolean, baseRef: string, signal?: AbortSignal): Promise<string> {
     const resolvedTarget = path.resolve(target || ws);
     const exists = fs.existsSync(resolvedTarget);
     const stat = exists ? fs.statSync(resolvedTarget) : null;
-    const repoRoot = this.findGitRoot(exists && stat?.isDirectory() ? resolvedTarget : path.dirname(resolvedTarget), ws);
+    const repoRoot = await this.findGitRoot(exists && stat?.isDirectory() ? resolvedTarget : path.dirname(resolvedTarget), ws, signal);
     const audit: Record<string, unknown> = {
       ok: true,
       target: resolvedTarget,
       exists,
       kind: stat?.isDirectory() ? 'directory' : stat?.isFile() ? 'file' : exists ? 'other' : 'missing',
       local: this.localFileAudit(resolvedTarget, stat),
-      git: repoRoot ? this.gitFileAudit(repoRoot, resolvedTarget, baseRef) : { tracked: false, repository: null, note: 'No local git repository contains this path.' },
+      git: repoRoot ? await this.gitFileAudit(repoRoot, resolvedTarget, baseRef, signal) : { tracked: false, repository: null, note: 'No local git repository contains this path.' },
       remote: { enabled: includeRemote, provider: 'local-only', note: includeRemote ? 'No GitHub remote was detected for this path.' : 'Remote audit disabled by include_remote=false.' },
     };
     if (includeRemote && repoRoot) {
-      const ghRemote = this.githubRemote(repoRoot);
-      if (ghRemote) audit.remote = await this.githubFileAudit(repoRoot, resolvedTarget, ghRemote);
+      const ghRemote = await this.githubRemote(repoRoot, signal);
+      if (ghRemote) audit.remote = await this.githubFileAudit(repoRoot, resolvedTarget, ghRemote, signal);
     }
     return JSON.stringify(audit, null, 2);
   }
@@ -1077,9 +1254,9 @@ export class ToolExecutor {
     return base;
   }
 
-  private findGitRoot(start: string, fallback: string): string | null {
+  private async findGitRoot(start: string, fallback: string, signal?: AbortSignal): Promise<string | null> {
     for (const candidate of [start, fallback]) {
-      const out = this.gitExecAt(candidate, ['rev-parse', '--show-toplevel']);
+      const out = await this.gitExecAt(candidate, ['rev-parse', '--show-toplevel'], signal);
       if (!out.startsWith('[git]') && !out.includes('not a git repository')) {
         const root = out.split(/\r?\n/)[0].trim();
         if (root && fs.existsSync(root)) return path.resolve(root);
@@ -1088,21 +1265,21 @@ export class ToolExecutor {
     return null;
   }
 
-  private gitFileAudit(repoRoot: string, target: string, baseRef: string): Record<string, unknown> {
+  private async gitFileAudit(repoRoot: string, target: string, baseRef: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
     const rel = path.relative(repoRoot, target).replace(/\\/g, '/');
     const inside = rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
     if (!inside) return { repository: repoRoot, tracked: false, note: 'Path is outside the detected repository.' };
-    const branch = this.gitExecAt(repoRoot, ['branch', '--show-current']);
+    const branch = await this.gitExecAt(repoRoot, ['branch', '--show-current'], signal);
     const status = rel === ''
-      ? this.gitExecAt(repoRoot, ['status', '--short'])
-      : this.gitExecAt(repoRoot, ['status', '--short', '--', rel]);
-    const trackedOutput = rel !== '' ? this.gitExecAt(repoRoot, ['ls-files', '--error-unmatch', '--', rel]) : '';
+      ? await this.gitExecAt(repoRoot, ['status', '--short'], signal)
+      : await this.gitExecAt(repoRoot, ['status', '--short', '--', rel], signal);
+    const trackedOutput = rel !== '' ? await this.gitExecAt(repoRoot, ['ls-files', '--error-unmatch', '--', rel], signal) : '';
     const lastCommit = rel === ''
-      ? this.gitExecAt(repoRoot, ['log', '-1', '--format=%H%x09%cI%x09%an%x09%s'])
-      : this.gitExecAt(repoRoot, ['log', '-1', '--format=%H%x09%cI%x09%an%x09%s', '--', rel]);
-    const chosenBase = baseRef || this.defaultRemoteRef(repoRoot);
+      ? await this.gitExecAt(repoRoot, ['log', '-1', '--format=%H%x09%cI%x09%an%x09%s'], signal)
+      : await this.gitExecAt(repoRoot, ['log', '-1', '--format=%H%x09%cI%x09%an%x09%s', '--', rel], signal);
+    const chosenBase = baseRef || await this.defaultRemoteRef(repoRoot, signal);
     const diff = chosenBase && rel
-      ? this.gitExecAt(repoRoot, ['diff', '--name-status', chosenBase, '--', rel])
+      ? await this.gitExecAt(repoRoot, ['diff', '--name-status', chosenBase, '--', rel], signal)
       : '';
     return {
       repository: repoRoot,
@@ -1123,23 +1300,23 @@ export class ToolExecutor {
     return { sha, committed_at: committedAt || '', author: author || '', subject: subjectParts.join('\t') };
   }
 
-  private defaultRemoteRef(repoRoot: string): string {
-    const upstream = this.gitExecAt(repoRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  private async defaultRemoteRef(repoRoot: string, signal?: AbortSignal): Promise<string> {
+    const upstream = await this.gitExecAt(repoRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], signal);
     if (upstream && !upstream.startsWith('[git]') && !upstream.includes('no upstream')) return upstream.trim();
-    const branch = this.gitExecAt(repoRoot, ['branch', '--show-current']).trim();
+    const branch = (await this.gitExecAt(repoRoot, ['branch', '--show-current'], signal)).trim();
     if (branch) {
       const originBranch = `origin/${branch}`;
-      const hasOriginBranch = this.gitExecAt(repoRoot, ['rev-parse', '--verify', '--quiet', originBranch]);
+      const hasOriginBranch = await this.gitExecAt(repoRoot, ['rev-parse', '--verify', '--quiet', originBranch], signal);
       if (hasOriginBranch && !hasOriginBranch.startsWith('[git]')) return originBranch;
     }
-    const symbolic = this.gitExecAt(repoRoot, ['symbolic-ref', 'refs/remotes/origin/HEAD']);
+    const symbolic = await this.gitExecAt(repoRoot, ['symbolic-ref', 'refs/remotes/origin/HEAD'], signal);
     const match = symbolic.match(/refs\/remotes\/(.+)$/);
     if (match) return match[1].trim();
     return '';
   }
 
-  private githubRemote(repoRoot: string): { owner: string; name: string; remote: string; url: string } | null {
-    const remotes = this.gitExecAt(repoRoot, ['remote', '-v']).split(/\r?\n/);
+  private async githubRemote(repoRoot: string, signal?: AbortSignal): Promise<{ owner: string; name: string; remote: string; url: string } | null> {
+    const remotes = (await this.gitExecAt(repoRoot, ['remote', '-v'], signal)).split(/\r?\n/);
     for (const line of remotes) {
       const match = line.match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/);
       if (!match || match[3] !== 'fetch') continue;
@@ -1157,20 +1334,20 @@ export class ToolExecutor {
     return null;
   }
 
-  private async githubFileAudit(repoRoot: string, target: string, remote: { owner: string; name: string; remote: string; url: string }): Promise<Record<string, unknown>> {
+  private async githubFileAudit(repoRoot: string, target: string, remote: { owner: string; name: string; remote: string; url: string }, signal?: AbortSignal): Promise<Record<string, unknown>> {
     const repo = `${remote.owner}/${remote.name}`;
     const rel = path.relative(repoRoot, target).replace(/\\/g, '/');
-    const branch = this.gitExecAt(repoRoot, ['branch', '--show-current']).trim();
+    const branch = (await this.gitExecAt(repoRoot, ['branch', '--show-current'], signal)).trim();
     const encodedPath = rel && rel !== '.' ? rel.split('/').map(part => encodeURIComponent(part)).join('/') : '';
-    const repoInfo = this.ghJson(['api', `repos/${repo}`, '--jq', '{name: .full_name, private: .private, default_branch: .default_branch, fork: .fork, html_url: .html_url}'], repoRoot);
+    const repoInfo = await this.ghJson(['api', `repos/${repo}`, '--jq', '{name: .full_name, private: .private, default_branch: .default_branch, fork: .fork, html_url: .html_url}'], repoRoot, signal);
     const branchName = branch || String((repoInfo && (repoInfo as Record<string, unknown>).default_branch) || '');
-    const branchInfo = branchName ? this.ghJson(['api', `repos/${repo}/branches/${encodeURIComponent(branchName)}`, '--jq', '{name: .name, protected: .protected, commit: .commit.sha}'], repoRoot) : null;
+    const branchInfo = branchName ? await this.ghJson(['api', `repos/${repo}/branches/${encodeURIComponent(branchName)}`, '--jq', '{name: .name, protected: .protected, commit: .commit.sha}'], repoRoot, signal) : null;
     const commitsPath = encodedPath
       ? `repos/${repo}/commits?path=${encodedPath}&per_page=5`
       : `repos/${repo}/commits?per_page=5`;
-    const commits = this.ghJson(['api', commitsPath, '--jq', '[.[] | {sha: .sha, html_url: .html_url, committed_at: .commit.committer.date, message: .commit.message}]'], repoRoot);
+    const commits = await this.ghJson(['api', commitsPath, '--jq', '[.[] | {sha: .sha, html_url: .html_url, committed_at: .commit.committer.date, message: .commit.message}]'], repoRoot, signal);
     const content = encodedPath
-      ? this.ghJson(['api', `repos/${repo}/contents/${encodedPath}${branchName ? `?ref=${encodeURIComponent(branchName)}` : ''}`, '--jq', '{path: .path, type: .type, sha: .sha, size: .size, html_url: .html_url}'], repoRoot)
+      ? await this.ghJson(['api', `repos/${repo}/contents/${encodedPath}${branchName ? `?ref=${encodeURIComponent(branchName)}` : ''}`, '--jq', '{path: .path, type: .type, sha: .sha, size: .size, html_url: .html_url}'], repoRoot, signal)
       : null;
     return {
       enabled: true,
@@ -1187,9 +1364,9 @@ export class ToolExecutor {
     };
   }
 
-  private repoSecurityAudit(target: string, ws: string, baseRef: string): string {
+  private async repoSecurityAudit(target: string, ws: string, baseRef: string, signal?: AbortSignal): Promise<string> {
     const resolvedTarget = path.resolve(target || ws);
-    const repoRoot = this.findGitRoot(fs.existsSync(resolvedTarget) && fs.statSync(resolvedTarget).isDirectory() ? resolvedTarget : path.dirname(resolvedTarget), ws);
+    const repoRoot = await this.findGitRoot(fs.existsSync(resolvedTarget) && fs.statSync(resolvedTarget).isDirectory() ? resolvedTarget : path.dirname(resolvedTarget), ws, signal);
     if (!repoRoot) {
       return JSON.stringify({
         ok: true,
@@ -1203,17 +1380,17 @@ export class ToolExecutor {
         },
       }, null, 2);
     }
-    const ghRemote = this.githubRemote(repoRoot);
-    const remotesRaw = this.gitExecAt(repoRoot, ['remote', '-v']);
-    const chosenBase = baseRef || this.defaultRemoteRef(repoRoot);
-    const statusShort = this.gitExecAt(repoRoot, ['status', '--short']);
-    const trackedFiles = this.gitExecAt(repoRoot, ['ls-files']);
-    const ignoredFiles = this.gitExecAt(repoRoot, ['ls-files', '--others', '--ignored', '--exclude-standard']);
-    const changedAgainstBase = chosenBase ? this.gitExecAt(repoRoot, ['diff', '--name-status', chosenBase]) : '';
+    const ghRemote = await this.githubRemote(repoRoot, signal);
+    const remotesRaw = await this.gitExecAt(repoRoot, ['remote', '-v'], signal);
+    const chosenBase = baseRef || await this.defaultRemoteRef(repoRoot, signal);
+    const statusShort = await this.gitExecAt(repoRoot, ['status', '--short'], signal);
+    const trackedFiles = await this.gitExecAt(repoRoot, ['ls-files'], signal);
+    const ignoredFiles = await this.gitExecAt(repoRoot, ['ls-files', '--others', '--ignored', '--exclude-standard'], signal);
+    const changedAgainstBase = chosenBase ? await this.gitExecAt(repoRoot, ['diff', '--name-status', chosenBase], signal) : '';
     const secretFindings = this.scanRepositorySecrets(repoRoot, trackedFiles, statusShort);
     const localOnlyFindings = this.releaseExcludedPathFindings(repoRoot, ignoredFiles);
     const repoInfo = ghRemote
-      ? this.ghJson(['api', `repos/${ghRemote.owner}/${ghRemote.name}`, '--jq', '{name: .full_name, private: .private, visibility: .visibility, fork: .fork, archived: .archived, default_branch: .default_branch, html_url: .html_url}'], repoRoot)
+      ? await this.ghJson(['api', `repos/${ghRemote.owner}/${ghRemote.name}`, '--jq', '{name: .full_name, private: .private, visibility: .visibility, fork: .fork, archived: .archived, default_branch: .default_branch, html_url: .html_url}'], repoRoot, signal)
       : null;
     const remotePrivate = repoInfo && typeof repoInfo === 'object' && !Array.isArray(repoInfo)
       ? (repoInfo as Record<string, unknown>).private
@@ -1248,7 +1425,7 @@ export class ToolExecutor {
         remotes: remotesRaw && !remotesRaw.startsWith('[git]') ? remotesRaw.split(/\r?\n/).filter(Boolean) : [],
       },
       git: {
-        branch: this.gitExecAt(repoRoot, ['branch', '--show-current']).trim(),
+        branch: (await this.gitExecAt(repoRoot, ['branch', '--show-current'], signal)).trim(),
         base_ref: chosenBase || '',
         status: String(statusShort || '').trim() || 'clean',
         changed_from_base: String(changedAgainstBase || '').trim() || 'none',
@@ -1312,8 +1489,8 @@ export class ToolExecutor {
     return Array.from(new Set([...fromIgnored, ...direct])).slice(0, 80);
   }
 
-  private ghJson(args: string[], ws: string): unknown {
-    const raw = this.gh(args, ws);
+  private async ghJson(args: string[], ws: string, signal?: AbortSignal): Promise<unknown> {
+    const raw = await this.gh(args, ws, signal);
     if (raw.startsWith('[gh]')) return { error: raw };
     try {
       return JSON.parse(raw);
@@ -1322,36 +1499,36 @@ export class ToolExecutor {
     }
   }
 
-  private gbranch(action: string, name: string, startPoint: string, ws: string): string {
+  private async gbranch(action: string, name: string, startPoint: string, ws: string, signal?: AbortSignal): Promise<string> {
     const normalized = (action || 'current').toLowerCase();
-    if (normalized === 'current') return this.gitExecAt(ws, ['branch', '--show-current']);
-    if (normalized === 'list') return this.gitExecAt(ws, ['branch', '--all', '--verbose', '--no-abbrev']);
+    if (normalized === 'current') return this.gitExecAt(ws, ['branch', '--show-current'], signal);
+    if (normalized === 'list') return this.gitExecAt(ws, ['branch', '--all', '--verbose', '--no-abbrev'], signal);
     if (normalized === 'create') {
       if (!name) return '[git_branch] Branch name is required for create.';
       const args = ['switch', '-c', name];
       if (startPoint) args.push(startPoint);
-      return this.gitExecAt(ws, args);
+      return this.gitExecAt(ws, args, signal);
     }
     if (normalized === 'switch') {
       if (!name) return '[git_branch] Branch name is required for switch.';
-      return this.gitExecAt(ws, ['switch', name]);
+      return this.gitExecAt(ws, ['switch', name], signal);
     }
     return `[git_branch] Unknown action: ${action}`;
   }
 
-  private ghFork(action: string, repo: string, clone: boolean, remote: boolean, remoteName: string, ws: string): string {
+  private async ghFork(action: string, repo: string, clone: boolean, remote: boolean, remoteName: string, ws: string, signal?: AbortSignal): Promise<string> {
     const normalized = (action || 'status').toLowerCase();
     if (normalized === 'status') {
       const args = ['repo', 'view'];
       if (repo) args.push(repo);
       args.push('--json', 'nameWithOwner,parent,isFork,url');
-      const raw = this.gh(args, ws);
+      const raw = await this.gh(args, ws, signal);
       try {
         const parsed = JSON.parse(raw);
         return JSON.stringify({ ok: true, source: 'github-cli', ...parsed }, null, 2);
       } catch {
-        const repoRoot = this.findGitRoot(ws, ws);
-        const remoteRepo = repoRoot ? this.githubRemote(repoRoot) : null;
+        const repoRoot = await this.findGitRoot(ws, ws, signal);
+        const remoteRepo = repoRoot ? await this.githubRemote(repoRoot, signal) : null;
         if (remoteRepo) {
           return JSON.stringify({
             ok: false,
@@ -1373,26 +1550,26 @@ export class ToolExecutor {
     if (clone) args.push('--clone');
     if (remote) args.push('--remote');
     if (remoteName) args.push('--remote-name', remoteName);
-    return this.gh(args, ws);
+    return this.gh(args, ws, signal);
   }
 
-  private ghPrCreate(title: string, body: string, base: string, head: string, draft: boolean, ws: string): string {
+  private async ghPrCreate(title: string, body: string, base: string, head: string, draft: boolean, ws: string, signal?: AbortSignal): Promise<string> {
     if (!title || !body) return '[gh_pr_create] title and body are required.';
     const args = ['pr', 'create', '--title', title, '--body', body];
     if (base) args.push('--base', base);
     if (head) args.push('--head', head);
     if (draft) args.push('--draft');
-    return this.gh(args, ws);
+    return this.gh(args, ws, signal);
   }
 
-  private withRemoteSecurityPreamble(ws: string, actionOutput: string): string {
-    const repoRoot = this.findGitRoot(ws, ws);
-    if (!repoRoot) return actionOutput;
-    const remotes = this.gitExecAt(repoRoot, ['remote', '-v']);
-    if (!remotes || remotes.startsWith('[git]')) return actionOutput;
+  private async withRemoteSecurityPreamble(ws: string, action: () => Promise<string>, signal?: AbortSignal): Promise<string> {
+    const repoRoot = await this.findGitRoot(ws, ws, signal);
+    if (!repoRoot) return await action();
+    const remotes = await this.gitExecAt(repoRoot, ['remote', '-v'], signal);
+    if (!remotes || remotes.startsWith('[git]')) return await action();
     let summary = '[repo_security_audit] Remote repository safety review should be considered before remote writes.';
     try {
-      const audit = JSON.parse(this.repoSecurityAudit(repoRoot, ws, '')) as Record<string, any>;
+      const audit = JSON.parse(await this.repoSecurityAudit(repoRoot, ws, '', signal)) as Record<string, any>;
       const review = audit.security_review || {};
       const remote = audit.remote || {};
       const risks = Array.isArray(review.risks) ? review.risks : [];
@@ -1409,38 +1586,39 @@ export class ToolExecutor {
     } catch {
       // Keep the remote action result visible even if the preflight summary cannot be parsed.
     }
+    const actionOutput = await action();
     return `${summary}\n${actionOutput}`;
   }
 
-  private gstat(ws: string): string {
+  private async gstat(ws: string, signal?: AbortSignal): Promise<string> {
     try {
-      const r = this.gitExec('git status --short', ws);
+      const r = await this.gitExec('git status --short', ws, signal);
       return r.trim() || '[git] Clean.';
     } catch (e) { return `[git] ${e}`; }
   }
 
-  private gpull(ws: string): string {
+  private async gpull(ws: string, signal?: AbortSignal): Promise<string> {
     try {
-      const r = this.gitExec('git pull --ff-only', ws);
+      const r = await this.gitExec('git pull --ff-only', ws, signal);
       return `[git pull]\n${r.trim()}`;
     } catch (e) { return `[git] ${e}`; }
   }
 
-  private gpush(msg: string, ws: string): string {
+  private async gpush(msg: string, ws: string, signal?: AbortSignal): Promise<string> {
     let out = '';
     try {
       if (msg) {
-        this.gitExec('git add -A', ws);
-        this.gitExec(`git commit -m "${msg.replace(/"/g, '\\"')}"`, ws);
+        await this.gitExec('git add -A', ws, signal);
+        await this.gitExec(`git commit -m "${msg.replace(/"/g, '\\"')}"`, ws, signal);
       }
-      out += this.gitExec('git push', ws);
+      out += await this.gitExec('git push', ws, signal);
     } catch (e) { out += `[git] ${e}`; }
     return out.trim() || '[git push] Done.';
   }
 
-  private gclone(url: string, target: string): string {
+  private async gclone(url: string, target: string, signal?: AbortSignal): Promise<string> {
     try {
-      const r = this.gitExec(`git clone ${url} "${target}"`, target);
+      const r = await this.gitExec(`git clone ${url} "${target}"`, target, signal);
       return `[git clone]\n${r.trim()}`;
     } catch (e) { return `[git clone] ${e}`; }
   }

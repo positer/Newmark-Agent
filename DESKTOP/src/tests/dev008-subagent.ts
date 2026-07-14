@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Agent } from '../core/agent';
 import { ConversationKernel } from '../core/conversationKernel';
+import { normalizeConversationTarget } from '../core/conversationTarget';
 import { agentKernelRunnerInternals } from '../core/agentKernelRunner';
 import { SubagentManager, SubagentState } from '../core/subagent';
 import { evaluateToolPolicy } from '../core/toolPolicy';
@@ -194,17 +195,28 @@ async function main(): Promise<void> {
   const kernelHost = new Agent(kernelRoot, { agentOnly: true });
   const kernel = new ConversationKernel(kernelRoot, kernelHost, null);
   const wakeProbe = new RootWakeProbeAgent(kernelRoot, { agentOnly: true });
+  const wakeTarget = normalizeConversationTarget({ workspaceId: 'none', conversationId: 'root-wake-conversation' });
   const wakeRuntime = {
-    id: 'root-wake-conversation',
+    id: wakeTarget.conversationId,
+    target: wakeTarget,
+    runtimeKey: wakeTarget.runtimeKey,
     runner: wakeProbe,
     options: { mode: 'build', model: 'default', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' },
     activePromise: null,
     events: [],
     pendingNextTurn: [],
     queued: { steering: [], followUp: [] },
+    runId: '',
+    generation: 0,
+    stopRequestedRunId: '',
+    forceStopArmedRunId: '',
+    stopCheckpointed: false,
+    guideAcceptanceClosedRunId: '',
+    guideReceipts: new Map(),
+    guideEnvelopes: new Map(),
   };
   wakeProbe.subscribeRootInboxWake(message => (kernel as unknown as { enqueueRootInboxWake(runtime: typeof wakeRuntime, prompt: string): void }).enqueueRootInboxWake(wakeRuntime, message));
-  (kernel as unknown as { runtimes: Map<string, typeof wakeRuntime> }).runtimes.set(wakeRuntime.id, wakeRuntime);
+  (kernel as unknown as { runtimes: Map<string, typeof wakeRuntime> }).runtimes.set(wakeRuntime.runtimeKey, wakeRuntime);
   (wakeProbe.subagents as unknown as { bind(options: Record<string, unknown>): void }).bind({
     onRootInboxMessage: (message: { id: string; body: string; kind: string; fromAgentId: string }) =>
       (wakeProbe as unknown as { deliverRootInboxMessage(value: typeof message): boolean }).deliverRootInboxMessage(message),

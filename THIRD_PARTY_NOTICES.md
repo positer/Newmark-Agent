@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Date: 2026-07-12
+Date: 2026-07-13
 
 This file summarizes the current copyright and license audit for Newmark Agent.
 It is not legal advice. It is an engineering record of the licenses detected in
@@ -40,7 +40,7 @@ The Electron desktop package directly depends on these npm packages:
 | `oxlint` | 0.9.10 | MIT |
 | `typescript` | 5.9.3 | Apache-2.0 |
 
-The locked npm dependency graph currently contains 510 packages with these
+The locked npm dependency graph currently contains 512 packages with these
 detected license expressions: MIT, ISC, Apache-2.0, BSD-2-Clause,
 BSD-3-Clause, BlueOak-1.0.0, MIT-0, CC0-1.0, Python-2.0, WTFPL,
 `(MIT OR CC0-1.0)`, `(WTFPL OR MIT)`, and `WTFPL OR ISC`.
@@ -69,6 +69,7 @@ same thing as bundled runtime dependencies.
 | liquid-dom | `_ref/Liquid Glass/extracted/liquid-dom-master/liquid-dom-master` | Root package is private and has no root license field; one subpackage (`layout`) declares MIT, other inspected subpackages did not declare a license | Treat as uncleared reference material. Do not publish or copy substantial code before a separate upstream license review. |
 | Apple Liquid Glass documentation/concept | `skills/design-taste-frontend/SKILL.md` and Flow planning prompts | Documentation/design concept reference, not a local source package | Any web implementation must be described as a glassmorphism-style approximation, not official Apple Liquid Glass or Apple-provided code. |
 | Codex CLI and OpenCode CLI external tools | `DESKTOP/src/core/config.ts`, `DESKTOP/src/core/agent.ts` | External optional tools installed or detected from user environment; not bundled by the current desktop package | Users and maintainers must follow the upstream tool license when installing or redistributing those tools. |
+| Alibaba page-agent (`alibaba/page-agent`), commit `fa4664dfa5379e6e91deaf85bc1db2ae14d8e1d7` | Architecture links and attribution comments in `DESKTOP/src/core/browserUse.ts`; implementation record in `archive/2026-07-13-dev-0.0.9-native-browser-use.md` | MIT; reviewed license at `https://github.com/alibaba/page-agent/blob/fa4664dfa5379e6e91deaf85bc1db2ae14d8e1d7/LICENSE`, copyright 2026 SimonLuvRamen and Alibaba Group Holding Limited | Architectural reference only for observe/action separation and explicit action results. No page-agent source, runtime, package, or vendored copy is bundled; Newmark's Browser-Use implementation is original TypeScript. Preserve this reference record and re-review upstream obligations before any future code reuse or redistribution. |
 
 ## Internal And Reference Material
 

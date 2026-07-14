@@ -1,3 +1,4 @@
+const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -92,6 +93,7 @@ async function evaluate(cdp, expression) {
     const target = await waitTarget(port);
     cdp = connect(target);
     await cdp.ready;
+    await waitForPromotedMainUi(cdp);
     await cdp.call('Runtime.enable');
 
     const result = await evaluate(cdp, `(async () => {

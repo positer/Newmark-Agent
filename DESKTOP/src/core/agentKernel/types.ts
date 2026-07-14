@@ -39,7 +39,7 @@ export type StreamFn = (
 export type AgentMessage = Message;
 export type AgentTool = Tool & {
   prepareArguments?: (args: unknown) => Record<string, unknown>;
-  execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{
+  execute: (toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) => Promise<{
     content: Array<TextContent | ImageContent>;
     details?: unknown;
     terminate?: boolean;
@@ -81,6 +81,9 @@ export interface AgentLoopConfig {
   emit: (event: AgentEvent) => Promise<void> | void;
   getSteeringMessages?: () => Promise<AgentMessage[]> | AgentMessage[];
   getFollowUpMessages?: () => Promise<AgentMessage[]> | AgentMessage[];
+  closeSteeringMessages?: () => Promise<AgentMessage[]> | AgentMessage[];
+  closeFollowUpMessages?: () => Promise<AgentMessage[]> | AgentMessage[];
+  reopenMessageQueues?: () => void;
   shouldStopAfterTurn?: (context: { message: AgentMessage; toolResults: AgentMessage[]; context: { messages: AgentMessage[] }; newMessages: AgentMessage[] }) => Promise<boolean> | boolean;
   toolExecution?: 'sequential' | 'parallel';
 }

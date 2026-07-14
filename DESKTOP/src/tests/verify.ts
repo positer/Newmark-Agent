@@ -4,6 +4,7 @@
  * Run: npm run build && node dist/tests/verify.js
  */
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
@@ -29,6 +30,8 @@ import { SshManager, SshRunner } from '../core/ssh';
 import { WslAgentClient, windowsDrivePathToWsl } from '../core/wslAgentClient';
 import { agentKernelRunnerInternals } from '../core/agentKernelRunner';
 import { verifyWorkspaceFileRouter } from './workspaceFileRouterVerify';
+import { verifyPdfPreviewServer } from './pdfPreviewServerVerify';
+import { verifyEditorLifecycle } from './editorLifecycleVerify';
 import { PNG } from 'pngjs';
 
 const TEST_DIR = path.join(process.cwd(), 'test-tmp');
@@ -36,6 +39,7 @@ const PASS = '[PASS]';
 const FAIL = '[FAIL]';
 let passed = 0;
 let failed = 0;
+let externalTestDir = '';
 
 function assert(cond: boolean | undefined | null, name: string, detail?: string): void {
   if (cond) { passed++; console.log(`  ${PASS} ${name}`); }
@@ -79,6 +83,10 @@ function setup() {
 }
 
 function cleanup() {
+  if (externalTestDir) {
+    try { fs.rmSync(externalTestDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch {}
+    externalTestDir = '';
+  }
   if (!fs.existsSync(TEST_DIR)) return;
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
@@ -132,12 +140,14 @@ async function main() {
 
   console.log('\nSafe Workspace File Router');
   await verifyWorkspaceFileRouter(TEST_DIR, assert);
+  await verifyPdfPreviewServer(TEST_DIR, assert);
 
   // ---- 0. UI HTML Regression Tests ----
   console.log('\nUI HTML');
   const uiHtmlPath = path.join(process.cwd(), 'src', 'ui', 'index.html');
   assert(fs.existsSync(uiHtmlPath), 'ui html: index.html exists');
   const uiHtml = fs.readFileSync(uiHtmlPath, 'utf-8');
+  await verifyEditorLifecycle(uiHtml, assert);
   const mainSource = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf-8');
   const preloadSource = fs.readFileSync(path.join(process.cwd(), 'src', 'preload.ts'), 'utf-8');
   const fileRouterSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'workspaceFileRouter.ts'), 'utf-8');
@@ -153,7 +163,10 @@ async function main() {
   assert(scriptParses, 'ui html: inline script parses');
   assert(Buffer.from(uiHtml, 'utf8').toString('utf8') === uiHtml, 'ui html: UTF-8 source is readable');
   assert(preloadSource.includes("ipcRenderer.invoke('agent:openWorkspaceFile'") && preloadSource.includes("ipcRenderer.invoke('agent:saveWorkspaceFile'")
-    && mainSource.includes("protocol.handle('newmark-preview'") && mainSource.includes("shell.showItemInFolder(result.path)") && mainSource.includes("shell.openPath(result.path)"),
+    && preloadSource.includes("ipcRenderer.invoke('agent:closeWorkspaceFile'") && preloadSource.includes("ipcRenderer.invoke('agent:confirmEditorClose'")
+    && mainSource.includes("protocol.handle('newmark-preview'") && mainSource.includes('new PdfPreviewServer(')
+    && mainSource.includes('pdfPreviewServer.urlFor(result.capability, ownerId)') && mainSource.includes('pdfPreviewServer.revokeOwner(fileRouterOwnerId)')
+    && mainSource.includes("shell.showItemInFolder(result.path)") && mainSource.includes("shell.openPath(result.path)"),
   'safe file router: preload/main expose controlled editor, preview, external, and reveal routes');
   assert(preloadSource.includes("ipcRenderer.invoke('flow:list'") && preloadSource.includes("ipcRenderer.invoke('workspace:readPrompt'")
     && !preloadSource.includes("ipcRenderer.invoke('agent:readFile'") && !preloadSource.includes("ipcRenderer.invoke('agent:saveFile'") && !preloadSource.includes("ipcRenderer.invoke('agent:listFiles'")
@@ -162,6 +175,19 @@ async function main() {
   assert(uiHtml.includes('api.openWorkspaceFile(path)') && uiHtml.includes('api.saveWorkspaceFile(state.editorToken, content, state.editorRevision)')
     && uiHtml.includes('newmark-preview:\\/\\/') && !uiHtml.includes('partition="persist:newmark-browser" allowpopups'),
   'safe file router: tree and linked files use token-bound routing while browser popups stay disabled');
+  assert(uiHtml.includes('window.resetEditorSurface = function')
+    && uiHtml.includes('window.requestEditorTransition = async function')
+    && uiHtml.includes("api.confirmEditorClose(currentLang(), state.editorPath)")
+    && uiHtml.includes('state.editorOpenGeneration')
+    && uiHtml.includes('window.resetEditorSurface({ revoke: true });')
+    && uiHtml.includes('window.resetEditorSurface({ revoke: false });')
+    && uiHtml.includes('generation !== state.editorOpenGeneration')
+    && uiHtml.includes("result.kind === 'editor' && result.token && api.closeWorkspaceFile")
+    && uiHtml.includes("preview.classList.remove('open')")
+    && uiHtml.includes('preview.replaceChildren()')
+    && uiHtml.includes("main.style.display = 'grid'")
+    && uiHtml.includes("toggle.classList.remove('visible')"),
+  'native editor: every transition resets Markdown DOM and serializes dirty save/discard/cancel decisions');
   assert(uiHtml.includes("iconSvg('image', 'Open image', 'tiny')") && !uiHtml.includes("return 'file:///' + url.replace"),
   'safe file router: local Markdown images no longer bypass workspace routing with direct file URLs');
   assert(fileRouterSource.includes('FILE_HEADER_BYTES = 64 * 1024') && fileRouterSource.includes('MAX_EDITOR_BYTES = 5 * 1024 * 1024')
@@ -217,28 +243,29 @@ async function main() {
   assert(uiHtml.includes("'model.fuzzy': 'Fuzzy inject model'") && uiHtml.includes("t('model.fuzzy')"), 'ui html: fuzzy injection label present through i18n');
   assert(uiHtml.includes('function redactSensitiveText(value)') && uiHtml.includes("replace(/sk-[A-Za-z0-9_\\-.]{8,}/g, 'sk-redacted')"), 'ui html: redacts API keys from visible messages');
   assert(uiHtml.includes("redactSensitiveText('[System] Fuzzy injection did not pass validation:") && uiHtml.includes("redactSensitiveText('[Error] Fuzzy injection failed:"), 'ui html: fuzzy injection messages are redacted');
-  assert(uiHtml.includes('WORKFLOW TIMELINE') && uiHtml.includes('function renderChatMessages(messages)') && uiHtml.includes('function currentLang()') && uiHtml.includes('function conversationWorkUiState(conversationId)') && uiHtml.includes('agentWorkUiByConversation') && uiHtml.includes('function ensureActiveAssistantMsg(mode, model, conversationId)') && uiHtml.includes('function upsertToolEvent(event, resultText)') && uiHtml.includes('function toolBatchSummary(batch)') && uiHtml.includes('function renderToolBatch(batch)') && uiHtml.includes('function finishToolBatch(conversationId)') && uiHtml.includes('function findCompletedWorkflowMsg(conversationId, text)') && uiHtml.includes('function markFinalResponseMsg(conversationId, text, msg)') && uiHtml.includes('function findPendingFinalResponseMsg(conversationId, streamText)') && uiHtml.includes('function responseTextLooksLikeCompactPrefix(prefix, full)') && uiHtml.includes('conversationWorkUiState(conversationId).lastCompletedWorkflow') && uiHtml.includes('findCompletedWorkflowMsg(lockedConversationId, fullText)') && uiHtml.includes('markFinalResponseMsg(lockedConversationId, fullText, responseMsg)') && uiHtml.includes('正在编辑 ') && uiHtml.includes('已编辑 ') && uiHtml.includes('class="tool-event-details"') && !uiHtml.includes("addMsg('workflow running', 'Preparing request...'") && !uiHtml.includes('Agent is working'), 'ui html: conversation renders live assistant text and folded batched tool details without workflow placeholders or duplicate final echoes');
+  assert(uiHtml.includes('WORKFLOW TIMELINE') && uiHtml.includes('function renderChatMessages(messages)') && uiHtml.includes('function currentLang()') && uiHtml.includes('function conversationWorkUiState(conversationId, workspaceId)') && uiHtml.includes('agentWorkUiByConversation') && uiHtml.includes('function ensureActiveAssistantMsg(mode, model, conversationId)') && uiHtml.includes('function upsertToolEvent(event, resultText)') && uiHtml.includes('function toolBatchSummary(batch)') && uiHtml.includes('function renderToolBatch(batch)') && uiHtml.includes('function finishToolBatch(conversationId)') && uiHtml.includes('function renderConversationWorkRuns(runs, target)') && uiHtml.includes('function findCompletedWorkflowMsg(conversationId, text)') && uiHtml.includes('function markFinalResponseMsg(conversationId, text, msg)') && uiHtml.includes('function findPendingFinalResponseMsg(conversationId, streamText)') && uiHtml.includes('function responseTextLooksLikeCompactPrefix(prefix, full)') && uiHtml.includes('conversationWorkUiState(conversationId).lastCompletedWorkflow') && uiHtml.includes('findCompletedWorkflowMsg(lockedConversationId, fullText)') && uiHtml.includes('markFinalResponseMsg(lockedConversationId, fullText, responseMsg)') && uiHtml.includes('正在编辑 ') && uiHtml.includes('已编辑 ') && uiHtml.includes('class="tool-event-details"') && !uiHtml.includes("addMsg('workflow running', 'Preparing request...'") && !uiHtml.includes('Agent is working'), 'ui html: conversation renders live assistant text, public work runs, and folded tool details without duplicate final echoes');
   assert(!uiHtml.includes('state._activeWorkflowMsg') && !uiHtml.includes('state._activeWorkflowText') && !uiHtml.includes('state._toolEventMsgs') && !uiHtml.includes('state._toolEventBatch') && !uiHtml.includes('state._lastCompletedWorkflow'), 'ui html: live workflow feedback state is conversation-scoped, not a global singleton');
   assert(uiHtml.includes('function isHiddenWorkflowMessage(message)') && uiHtml.includes('Preparing model request and available tools') && uiHtml.includes('Executing \\d+ tool call') && uiHtml.includes('renderPersistedToolMessage(m)'), 'ui html: hides internal workflow status rows and folds persisted tool workflow messages');
   assert(uiHtml.includes('background: transparent;') && uiHtml.includes('border-radius: 0;') && uiHtml.includes('.chat-msg::before') && uiHtml.includes('.chat-msg::after'), 'ui html: chat messages are not bubble cards');
-  assert(uiHtml.includes('if (conv && api.ensureConversation)') && uiHtml.includes('return api.ensureConversation(conv.id).then(function(s)') && uiHtml.includes('return loadActiveConversationMessages(id);') && uiHtml.includes('api.getState(requestedConversationId)') && uiHtml.includes('if (s && s.chatMessages) renderChatMessages(s.chatMessages);'), 'ui html: workspace conversation switching reloads isolated backend messages by conversation id without mutating global backend active conversation');
+  assert(uiHtml.includes('if (conv && api.ensureConversation)') && uiHtml.includes('return loadActiveConversationMessages(id);') && uiHtml.includes('api.getState(requestedTarget)') && uiHtml.includes('requestedWorkspaceKey === currentWorkspaceKey()') && uiHtml.includes('if (s && s.chatMessages) renderChatMessages(s.chatMessages);'), 'ui html: workspace conversation switching reloads a composite-target snapshot without mutating another runtime');
+  assert(uiHtml.includes('guideMessagesByTarget') && uiHtml.includes('function recordGuideUiMessage') && uiHtml.includes('function renderPendingGuideMessages') && uiHtml.includes('function syncGuideMessagesFromWorkRuns') && uiHtml.includes('renderPendingGuideMessages(renderTarget, persistedGuideIds)') && uiHtml.includes("guideStatus: 'applied'") && !uiHtml.includes("optimisticGuide.setAttribute('data-guide-status'"), 'ui html: Guide receipts are target-scoped and snapshot redraw reconciles optimistic rows by clientMessageId');
   assert(uiHtml.includes("{ id: 'default', summary: t('workspace.defaultConversation')") && !uiHtml.includes("'conv-' + key + '-default'") && !uiHtml.includes("'conv-default-' + currentWorkspaceKey()"), 'ui html: default conversation id matches backend default id');
-  assert(uiHtml.includes('function applyBackendConversations(items, activeId)') && uiHtml.includes('var preferredActiveId = hasLocalActive ? localActiveId') && uiHtml.includes('applyBackendConversations(backendConversations, preferredActiveId)'), 'ui html: reloads persisted conversation list from backend state while preserving each window-local active conversation');
-  assert(uiHtml.includes('function activeConversationId()') && uiHtml.includes('api.sendMessage(requestMessage, lockedConversationId)') && uiHtml.includes('composePromptRequestForSend(rawText)'), 'ui html: sends the initiating conversation id with structured text and image attachments');
-  assert(uiHtml.includes('window.submitCurrentAction = function()') && uiHtml.includes('window.stopCurrentConversation = async function()') && uiHtml.includes("api.abortConversation(conversationId)") && uiHtml.includes("e.key === 'Escape' && isCurrentConversationRunning() && !promptHasText()"), 'ui html: current running conversation with empty prompt shows a Stop action bound to Esc and abortConversation');
-  assert(uiHtml.includes('function updateSubmitButtonState()') && uiHtml.includes("setSubmitButtonVisual('square', t('input.stop'), true, true)") && uiHtml.includes("setSubmitButtonVisual('send', t('input.send'), running, false)") && uiHtml.includes("els.prompt.addEventListener('input'"), 'ui html: submit button switches between Newmark marquee Stop and Send based on current conversation running state and prompt text');
+  assert(uiHtml.includes('function applyBackendConversations(items, activeId, workspaceId)') && uiHtml.includes('var preferredActiveId = hasLocalActive ? localActiveId') && uiHtml.includes('applyBackendConversations(backendConversations, preferredActiveId)'), 'ui html: reloads persisted conversation list into a workspace-scoped cache while preserving each window-local active conversation');
+  assert(uiHtml.includes('function activeConversationId()') && uiHtml.includes('api.sendMessage(requestMessage, lockedTarget)') && uiHtml.includes('composePromptRequestForSend(rawText)'), 'ui html: sends the initiating composite target with structured text and image attachments');
+  assert(uiHtml.includes('window.submitCurrentAction = function()') && uiHtml.includes('window.stopCurrentConversation = async function()') && uiHtml.includes('api.stopConversation({ target: target, runId: runId, force: force })') && uiHtml.includes("e.key === 'Escape' && isCurrentConversationRunning() && !promptHasText()"), 'ui html: current running conversation with empty prompt shows target-bound graceful/force Stop bound to Esc');
+  assert(uiHtml.includes('function updateSubmitButtonState()') && uiHtml.includes("setSubmitButtonVisual(escalating ? 'octagon-x' : 'square', label, true, true)") && uiHtml.includes("setSubmitButtonVisual('send', t('input.send'), running, false)") && uiHtml.includes("els.prompt.addEventListener('input'") && uiHtml.includes("['stopping', 'force_restarting']"), 'ui html: submit button switches between Send, Stop, and Force stop from the target runtime state');
   assert(uiHtml.includes("window.setAgentBackendMode = async function(mode)") && uiHtml.includes('id="agent-runtime-environment"') && uiHtml.includes("state.wslAvailable ? '' : ' disabled'") && uiHtml.includes("t('settings.restartRequired')") && !uiHtml.includes('window.setAgentWslBackend'), 'ui html: Windows native/WSL backend is a restart-required list choice and WSL mode is disabled when unavailable');
   assert(uiHtml.includes('if (api.setMode) await api.setMode(state.mode)') && uiHtml.includes('if (api.setModel && state.model) await api.setModel(state.model)'), 'ui html: send synchronizes current mode and model before backend turn');
-  assert(uiHtml.includes('renderConversations();') && uiHtml.includes('r.conversations') && uiHtml.includes('r.conversationId || lockedConversationId'), 'ui html: refreshes conversation titles from send response');
+  assert(uiHtml.includes('renderConversations();') && uiHtml.includes('r.conversations') && uiHtml.includes('applyBackendConversations(r.conversations || [], lockedConversationId, lockedTarget.workspaceId)'), 'ui html: refreshes the initiating workspace conversation cache without changing the foreground target');
   assert(uiHtml.includes('runningConversations') && uiHtml.includes('setupAgentWorkEvents()') && uiHtml.includes('appendAgentWorkEvent(payload)') && uiHtml.includes('var id = String(event.conversationId ||') && uiHtml.includes('renderAgentWorkEvent(event)') && uiHtml.includes('summary: item.title ||'), 'ui html: supports per-conversation running state, conversation-bound live work events, and backend titles');
   assert(uiHtml.includes("type === 'queue_update'") && uiHtml.includes('state.backendQueue = event.queue') && uiHtml.includes('if (s && s.queued) {') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue)'), 'ui html: caches backend queue_update events for foreground/background conversation debugging');
   assert(uiHtml.includes('if (s && Array.isArray(s.workEvents))') && uiHtml.includes('var mergedEvents = existingEvents.concat(s.workEvents || [])') && uiHtml.includes('dedupedEvents.slice(-Number(state.agentWorkEventLimit || 240))'), 'ui html: merges backend work-event snapshots when foregrounding a conversation');
-  assert(mainSource.includes('function broadcastAgentWorkEvent(event: unknown)') && mainSource.includes('BrowserWindow.getAllWindows()') && mainSource.includes("win.webContents.send('agent:workEvent', event)") && mainSource.includes("ipcMain.handle('agent:getState', async (_event, conversationId?: string)") && mainSource.includes("ipcMain.handle('agent:ensureConversation'") && mainSource.includes('backendConversationState(targetConversation)') && mainSource.includes('client.snapshot(targetConversation') && mainSource.includes('agent.getConversationSnapshot(target)') && preloadSource.includes('ensureConversation: (id: string)') && preloadSource.includes('getState: (conversationId?: string)'), 'backend sharing: all desktop windows receive one backend event stream and can request local or WSL conversation-scoped snapshots without forcing window-local active conversation');
+  assert(mainSource.includes('function broadcastAgentWorkEvent(event: unknown)') && mainSource.includes('BrowserWindow.getAllWindows()') && mainSource.includes("win.webContents.send('agent:workEvent', event)") && mainSource.includes("ipcMain.handle('agent:getState', async (_event, targetInput?: ConversationTargetInput)") && mainSource.includes("ipcMain.handle('agent:ensureConversation'") && mainSource.includes('ensureWslConversationPool()!.snapshot(target)') && mainSource.includes('ensureElectronUtilityPool().snapshot(target)') && preloadSource.includes('ensureConversation: (target: string | Record<string, unknown>)') && preloadSource.includes('getState: (target?: string | Record<string, unknown>)'), 'backend sharing: all desktop windows receive one composite-target event stream and can request isolated Windows/WSL snapshots');
   assert(mainSource.includes('const singleInstanceLock = app.requestSingleInstanceLock()') && mainSource.includes("app.on('second-instance'") && mainSource.includes('const win = mainWindow && !mainWindow.isDestroyed()') && !mainSource.includes('const win = createDesktopWindow ? createDesktopWindow(!!agent) : mainWindow'), 'main process: repeated launches from installed or unpacked executables focus the existing window instead of creating a duplicate');
-  assert(uiHtml.includes('function loadActiveConversationMessages(conversationId)') && uiHtml.includes('var requestedConversationId = String(conversationId || activeConversationId() ||') && uiHtml.includes('api.getState(lockedConversationId)') && !uiHtml.includes('api.getState().then(function(s) {\n      if (s && s.contextCompression'), 'ui html: active window refreshes are bound to the owning conversation to prevent cross-window spillover');
+  assert(uiHtml.includes('function loadActiveConversationMessages(conversationId)') && uiHtml.includes('var requestedConversationId = String(conversationId || activeConversationId() ||') && uiHtml.includes('var requestedTarget = currentConversationTarget(requestedConversationId)') && uiHtml.includes('api.getState(lockedTarget)') && !uiHtml.includes('api.getState().then(function(s) {\n      if (s && s.contextCompression'), 'ui html: active window refreshes are bound to the owning workspace and conversation target');
   assert(uiHtml.includes('function setActiveWorkspaceConversationById(id)') && uiHtml.includes('var activeBeforeRender = (conversations.find(function(c)') && uiHtml.includes('if (activeBeforeRender) setActiveWorkspaceConversationById(activeBeforeRender);'), 'ui html: conversation list rerender preserves active conversation by id instead of stale cross-window index');
   assert(uiHtml.includes('function applyWorkspaceStateFromBackend(s)') && uiHtml.includes('var localActiveId = activeConversationId();') && uiHtml.includes('var hasLocalActive = backendConversations.some(function(item)') && uiHtml.includes('window.openWorkspaceManager = async function()') && uiHtml.includes('await window.refreshWorkspaceState().catch(function(){})'), 'ui html: workspace manager refresh keeps each window-local active conversation before rendering');
-  assert(uiHtml.includes('window.selectWorkspace = function(name)') && uiHtml.includes('renderChatMessages([]);') && uiHtml.includes('state.backendQueue = { steering: [], followUp: [] };') && uiHtml.includes('syncBackendConversation().then(function()'), 'ui html: workspace switching clears stale conversation UI and reloads the workspace-bound backend conversation');
+  assert(uiHtml.includes('window.selectWorkspace = function(reference)') && uiHtml.includes('renderChatMessages([]);') && uiHtml.includes('state.backendQueue = { steering: [], followUp: [] };') && uiHtml.includes('syncBackendConversation().then(function()'), 'ui html: workspace switching clears stale conversation UI and reloads the workspace-bound backend conversation');
   assert(uiHtml.includes('function canonicalUiWorkspaceKey(ws)') && uiHtml.includes('window.upsertWorkspaceState = function(ws)') && !uiHtml.includes('state.workspaces.push(ws);'), 'ui html: workspace creation upserts exact folder bindings instead of showing temporary duplicates');
   assert(uiHtml.includes('id="skill-market-search"') && uiHtml.includes('window.updateSkillMarketSearch') && uiHtml.includes('window.filteredSkillMarket') && uiHtml.includes('window.renderSkillsMarketList'), 'ui html: Skills Market has searchable filtered list');
   assert(uiHtml.includes('window.renderSkillMarketSources') && uiHtml.includes('id="skill-market-source-name"') && uiHtml.includes('window.addSkillMarketSourceFromUi') && uiHtml.includes('window.setSkillMarketSourceEnabledFromUi'), 'ui html: Skills Market lets users add and manage market sources');
@@ -265,8 +292,8 @@ async function main() {
   const agentSourceForEditor = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
   assert(mainSource.includes("completion: true, preferCopilot: false") && agentSourceForEditor.includes('const selected = (current && models.find'), 'editor assist: completion stays bound to the conversation-selected model instead of forcing Copilot');
   assert(uiHtml.includes("if (providerOpts) modelOpts += '<optgroup") && uiHtml.includes("if (!state.model || (state.model === 'auto'") && uiHtml.includes("availableValues.indexOf(state.model) < 0"), 'ui model selector: skips empty provider groups and recovers an empty or unavailable saved model to the first usable model');
-  assert(uiHtml.includes('function messageActionsHtml(role, text, messageIndex)') && uiHtml.includes('window.copyMessageText = async function(button)') && uiHtml.includes('window.editUserMessage = async function(button, messageIndex)') && uiHtml.includes('api.rewindConversation(conversationId, Number(messageIndex))'), 'ui html: user and Agent messages expose copy, while user messages can rewind into the prompt for editing');
-  assert(preloadSource.includes("rewindConversation: (conversationId: string, messageIndex: number) => ipcRenderer.invoke('agent:rewindConversation'") && mainSource.includes("ipcMain.handle('agent:rewindConversation'") && mainSource.includes('conversationKernel.rewind(target, messageIndex)'), 'main/preload: conversation rewind IPC is bound to the requested conversation');
+  assert(uiHtml.includes('function messageActionsHtml(role, text, messageIndex)') && uiHtml.includes('window.copyMessageText = async function(button)') && uiHtml.includes('window.editUserMessage = async function(button, messageIndex)') && uiHtml.includes('api.rewindConversation(currentConversationTarget(conversationId), Number(messageIndex))'), 'ui html: user and Agent messages expose copy, while user messages rewind through the composite target');
+  assert(preloadSource.includes("rewindConversation: (target: string | Record<string, unknown>, messageIndex: number) => ipcRenderer.invoke('agent:rewindConversation'") && mainSource.includes("ipcMain.handle('agent:rewindConversation'") && mainSource.includes('mutateTargetConversation(target'), 'main/preload: conversation rewind IPC is target-bound and guarded against active runtimes');
   assert(uiHtml.includes('function optionLabel(option)') && uiHtml.includes('function renderPendingOptionsInChat(options)') && uiHtml.includes("state.renderedOptionKeys[key] = true"), 'ui html: pending option feedback renders into chat once');
   assert(uiHtml.includes('if (r && r.options)') && uiHtml.includes('renderPendingOptionsInChat(state.pendingOptions)') && uiHtml.includes("optionDescription(opt)"), 'ui html: send result and right status render structured option labels');
   assert(uiHtml.includes('pendingOptionAnswers: {}') && uiHtml.includes('window.optionSelected = function(questionKey, opt, button)') && uiHtml.includes("answered.some(function(item) { return item.answer === undefined; })") && uiHtml.includes("window.sendMessage();"), 'ui option feedback: records each question selection and resumes only after every simultaneous question is answered');
@@ -280,7 +307,7 @@ async function main() {
   const piKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
   const conversationKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8');
   assert(conversationKernelSource.includes('function changedLineCount(value: string)') && conversationKernelSource.includes('old: changedLineCount(d.oldContent)') && conversationKernelSource.includes('new: changedLineCount(d.newContent)'), 'work completion review: backend reports changed-line additions and deletions');
-  assert(conversationKernelSource.includes('pendingOptions(conversationId: string): OptionQuestion[] | undefined') && mainSource.includes('conversationKernel?.pendingOptions(targetConversation) || agent.pendingOptions'), 'conversation options: state refresh reads pending questions from the requested conversation runtime instead of erasing them with shared host state');
+  assert(conversationKernelSource.includes('pendingOptions(target: ConversationTargetInput)') && mainSource.includes('conversationSnapshot.pendingOptions || agent.pendingOptions'), 'conversation options: state refresh reads pending questions from the requested composite runtime snapshot');
   assert(conversationKernelSource.includes('updateSetting(section: string, key: string, value: unknown)') && mainSource.includes('conversationKernel?.updateSetting(section, key, value)'), 'conversation settings: saved settings propagate to existing isolated runners without destroying their runtime state');
   const mainKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf-8');
   const packageJsonForKernel = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
@@ -289,26 +316,26 @@ async function main() {
   assert(fs.existsSync(path.join(process.cwd(), 'src', 'core', 'agentKernel', 'agent.ts')) && fs.existsSync(path.join(process.cwd(), 'src', 'core', 'agentKernel', 'agent-loop.ts')) && fs.existsSync(path.join(process.cwd(), 'src', 'core', 'agentKernel', 'types.ts')) && !fs.existsSync(path.join(process.cwd(), 'src', 'vendor')), 'kernel: agent loop source is native core code and src/vendor is absent');
   assert(agentKernelSource.includes("import { runAgentKernel } from './agentKernelRunner'") && agentKernelSource.includes('await runAgentKernel(this)') && !agentKernelSource.includes('processLegacyForMigrationOnly'), 'kernel: Agent.process routes builtin turns through pi and has no legacy loop sentinel');
   assert(conversationKernelSource.includes('runner.queueActiveKernelMessage(prompt, queueMode)') && conversationKernelSource.includes('runner.subscribeAgentKernelUserMessageStart') && !conversationKernelSource.includes("runtime.runner.history.push({ role: 'user', content: prompt })"), 'kernel: same-session queue is handed to native kernel and consumed on user message start without duplicating history');
-  assert(agentKernelSource.includes('queue: input.queue') && agentKernelSource.includes('notifyAgentKernelUserMessageStart') && piKernelSource.includes("case 'message_start'") && piKernelSource.includes('agent.notifyAgentKernelUserMessageStart'), 'kernel: backend queue snapshots survive work events and native message_start notifies conversation runtime');
-  assert(mainKernelSource.includes("ipcMain.handle('agent:send'") && mainKernelSource.includes('const kernel = ensureConversationKernel(root)') && mainKernelSource.includes('kernel.prompt(message, targetConversation'), 'kernel: desktop send path uses the shared native conversation backend');
-  assert(mainKernelSource.includes('ensureConversationKernel(root') && mainKernelSource.includes('conversationKernel.subscribe(event => broadcastAgentWorkEvent(event))') && mainKernelSource.includes('workEvents: conversationKernel?.events') && conversationKernelSource.includes('isAnyRunning()'), 'kernel: desktop IPC subscribes one backend event stream and exposes cached event snapshots');
-  assert(!piKernelSource.includes("tokens.push({ type: 'text', text });\n      agent.recordToolResult") && piKernelSource.includes("type: 'tool_result'") && piKernelSource.includes('toolCallId: event.toolCallId') && piKernelSource.includes("agent.appendWorkflowMessage(`Tool ${event.toolName} result:"), 'kernel: tool results are streamed and persisted as folded work events, not appended to assistant text tokens');
-  assert(agentKernelSource.includes('appendWorkflowMessage(content: string, toolName?: string, toolArgs?: string, persist = true)') && piKernelSource.includes("agent.appendWorkflowMessage(`Calling tool ${event.toolName}`, event.toolName, agent.visibleToolArgs(args), false)") && piKernelSource.includes("agent.appendWorkflowMessage(`Tool ${event.toolName} result:\\n${display}`, event.toolName, undefined, false)"), 'kernel: high-frequency workflow tool rows defer full conversation-state writes until turn persistence points');
+  assert(agentKernelSource.includes('queue: isToolEvent ? undefined : input.queue') && agentKernelSource.includes('notifyAgentKernelUserMessageStart') && piKernelSource.includes("case 'message_start'") && piKernelSource.includes('agent.notifyAgentKernelUserMessageStart'), 'kernel: backend queue snapshots survive public non-tool work events and native message_start notifies conversation runtime');
+  assert(mainKernelSource.includes("ipcMain.handle('agent:send'") && mainKernelSource.includes('ensureElectronUtilityPool().prompt({ message, target, options, queueMode })') && mainKernelSource.includes('ensureWslConversationPool()') && mainKernelSource.includes('conversationRuntimeTarget(targetInput)'), 'kernel: desktop send path routes every composite target through its isolated native runtime pool');
+  assert(mainKernelSource.includes('electronUtilityRuntimePool.subscribe(event => broadcastAgentWorkEvent(event))') && mainKernelSource.includes('wslAgentRuntimePool.subscribe(event => broadcastAgentWorkEvent(event))') && mainKernelSource.includes('ensureElectronUtilityPool().snapshot(target)') && conversationKernelSource.includes('runtimeKey'), 'kernel: desktop IPC subscribes isolated runtime pools and exposes target-scoped event snapshots');
+  assert(!piKernelSource.includes("tokens.push({ type: 'text', text });\n      agent.recordToolResult") && piKernelSource.includes("type: 'tool_result'") && piKernelSource.includes('toolCallId: event.toolCallId') && piKernelSource.includes("content: `Tool ${event.toolName} completed.`"), 'kernel: tool results stay available to the model while public work events contain only tool completion metadata');
+  assert(agentKernelSource.includes('appendWorkflowMessage(content: string, toolName?: string, toolArgs?: string, persist = true)') && piKernelSource.includes("agent.appendWorkflowMessage(`Calling tool ${event.toolName}`, event.toolName, undefined, false)") && piKernelSource.includes("agent.appendWorkflowMessage(`Tool ${event.toolName} completed.`, event.toolName, undefined, false)") && !piKernelSource.includes('agent.visibleToolArgs(args)'), 'kernel: high-frequency workflow rows expose only tool names and defer conversation-state writes until turn persistence points');
   assert(piKernelSource.includes('const newmarkTools = agent.subagentToolDefinitions(agent.tools.definitions(agent.mode))') && piKernelSource.includes('streamWithNewmarkProvider(agent, provider, KernelStreamCompat, newmarkTools)') && piKernelSource.includes('kernel.state.tools = toKernelTools(agent, newmarkTools)') && piKernelSource.includes('cachedTools'), 'kernel: per-turn tool schemas are built once and reused by streaming and execution adapters');
   const streamProviderBody = (piKernelSource.match(/function streamWithNewmarkProvider[\s\S]*?async function transformContext/) || [''])[0];
   assert(!streamProviderBody.includes('currentAgent.tools.definitions(currentAgent.mode)'), 'kernel: streaming provider does not rebuild tool schemas on every model round');
   assert(piKernelSource.includes("if (!agent.config.getBool('context', 'auto_compress')) return messages;"), 'kernel: transformContext skips conversion and JSON comparison when auto compression is disabled');
-  assert(mainKernelSource.includes("ipcMain.handle('agent:abortConversation'") && mainKernelSource.includes('conversationKernel?.abort(target)') && mainKernelSource.includes('return agent.archiveConversation(target)') && uiHtml.includes('api.archive(targetId)') && uiHtml.includes('delete state.runningConversations[targetId]'), 'kernel/ui: archiving a running conversation interrupts and atomically removes the target conversation');
+  assert(mainKernelSource.includes("ipcMain.handle('agent:abortConversation'") && mainKernelSource.includes("ipcMain.handle('agent:stopConversation'") && uiHtml.includes('api.archive(targetRuntime)') && uiHtml.includes("['running', 'stopping', 'force_restarting']"), 'kernel/ui: target stop state is authoritative and running conversations cannot be archived from the UI');
   assert(uiHtml.includes('var seenIds = {};') && uiHtml.includes('if (seenIds[id]) continue;') && uiHtml.includes("displaySummary += ' · ' + String(conv.id || '').slice(-8);"), 'ui conversations: duplicate ids are ignored and distinct conversations with matching titles are disambiguated');
   assert(uiHtml.includes('#model-select {') && uiHtml.includes('flex: 1 1 160px;') && uiHtml.includes('width: 0;') && uiHtml.includes('min-width: 72px;') && uiHtml.includes('container-type: inline-size;') && uiHtml.includes('@container (max-width: 430px)') && uiHtml.includes('@media (max-width: 720px)') && uiHtml.includes('#left, #left-secondary, #right, .right-open-btn { display: none !important; }') && uiHtml.includes('#input-tools {') && uiHtml.includes('overflow: hidden;'), 'ui input toolbar: model selector keeps readable minimum width and narrow-window layout preserves submit without changing saved sidebar state');
   assert(uiHtml.includes("evaluationStatus !== 'available' && evaluationStatus !== 'unvalidated'") && agentKernelSource.includes("return status === 'available' || status === 'unvalidated';"), 'model selectors: show only validated available or unvalidated models');
   assert(agentKernelSource.includes('const catalogByProvider = new Map') && agentKernelSource.includes('await p.modelCatalog()') && agentKernelSource.includes('await p.validateVision(m.name)') && agentKernelSource.includes('await p.validateImageOutput(m.name)') && agentKernelSource.includes('vision_input: visionResult.ok') && agentKernelSource.includes('image_output: imageResult.ok'), 'model validation: combines network catalog evidence with real text, vision, and image-generation tasks');
   assert(uiHtml.includes('foregroundConversationHoldId') && uiHtml.includes('holdForegroundConversation(activeId, 4500)') && uiHtml.includes('Date.now() < Number(state.foregroundConversationHoldUntil'), 'ui html: foregrounded background conversations stay active briefly during backend refresh');
   assert(uiHtml.includes('trackedConversationUntil') && uiHtml.includes('conversationTrackMs: 300000') && uiHtml.includes('markConversationTracked(previousId') && uiHtml.includes('markConversationTracked(activeId'), 'ui html: conversations keep a five-minute tracking window after foreground switches without aborting background work');
-  assert(conversationKernelSource.includes("getNum('agent', 'process_timeout_ms')") && conversationKernelSource.includes('if (timeoutMs <= 0) return runtime.runner.process(message)') && conversationKernelSource.includes('clearTimeout(timeout)'), 'kernel: desktop conversation turns have configurable outer timeout disabled by default');
+  assert(conversationKernelSource.includes("getNum('agent', 'process_timeout_ms')") && conversationKernelSource.includes('if (timeoutMs <= 0)') && conversationKernelSource.includes('const tokens = await runtime.runner.process(message)') && conversationKernelSource.includes('if (timeout) clearTimeout(timeout)'), 'kernel: desktop conversation turns have configurable outer timeout disabled by default');
   assert(conversationKernelSource.includes("options.mode === 'goal' && this.host.goal") && conversationKernelSource.includes('agent.updateGoal(this.host.goal.objective)'), 'kernel: per-conversation Goal runners inherit the active Goal objective');
   assert(mainKernelSource.includes('if (conversationKernel?.isAnyRunning()) return;'), 'kernel: desktop settings changes do not discard running conversation kernels');
-  assert(mainKernelSource.includes('queued: result.queued') && mainKernelSource.includes('conversationKernel?.queued(snapshot.conversationId || target)'), 'kernel: desktop IPC exposes scoped backend conversation queue snapshots');
+  assert(mainKernelSource.includes('...conversationSnapshot') && mainKernelSource.includes('ensureElectronUtilityPool().snapshot(target)') && mainKernelSource.includes('ensureWslConversationPool()!.snapshot(target)'), 'kernel: desktop IPC exposes queue state from the requested isolated runtime snapshot');
   assert(uiHtml.includes('window.refreshSkillsRuntime = function(next)') && uiHtml.includes('api.refreshSkills().then(done)') && uiHtml.includes('window.refreshSkillsRuntime(function(){ window.showPluginList'), 'ui html: skills changes refresh runtime without restart');
   assert(uiHtml.includes('api.updateGoal(state.goalText)') && uiHtml.includes('api.toggleGoalPause().then'), 'ui html: Goal edits and pause are synchronized to Agent backend');
   assert(uiHtml.includes('window.setRightWidthPx = function(px)') && uiHtml.includes("document.documentElement.style.setProperty('--right-width', rightSize + 'px')") && uiHtml.includes('if (els.right) els.right.style.width = \'\';'), 'ui html: right resize stores width in CSS variable and clears inline width');
@@ -342,62 +369,60 @@ async function main() {
     }
   }
   const kernelHost = new Agent(path.join(TEST_DIR, 'pi-kernel-host'));
-  const kernel = new ConversationKernel(TEST_DIR, kernelHost, null);
-  const runtimeMap = (kernel as unknown as { runtimes: Map<string, { runner: Agent }> }).runtimes;
+  const queueProbes = new Map<string, QueueProbeAgent>();
+  const kernel = new ConversationKernel(TEST_DIR, kernelHost, null, {
+    createRunner(target) {
+      const probe = queueProbes.get(target.conversationId);
+      if (!probe) throw new Error(`Missing queue probe for ${target.conversationId}`);
+      return probe;
+    },
+  });
+  const target = (conversationId: string, workspaceId = 'verify-workspace') => ({ workspaceId, conversationId });
   const probe = new QueueProbeAgent(TEST_DIR, { agentOnly: true });
-  runtimeMap.set('parallel-a', { id: 'parallel-a', runner: probe, activePromise: null, events: [], pendingNextTurn: [] } as any);
-  const firstPrompt = kernel.prompt('first', 'parallel-a', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' }, 'steer');
+  queueProbes.set('parallel-a', probe);
+  const firstPrompt = kernel.prompt('first', target('parallel-a'), { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' }, 'steer');
   await new Promise(resolve => setTimeout(resolve, 1));
-  const samePromise = kernel.prompt('second', 'parallel-a', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' }, 'steer');
+  const samePromise = kernel.prompt('second', target('parallel-a'), { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' }, 'steer');
   await Promise.all([firstPrompt, samePromise]);
   assert(probe.processCalls.length === 1 && probe.processCalls[0] === 'first', 'kernel: same-conversation active prompt keeps one active process');
   assert(probe.queued.length === 1 && probe.queued[0].content.includes('second') && probe.queued[0].queueMode === 'steer', 'kernel: same-conversation active prompt queues to active Agent kernel');
-  assert(kernel.queued('parallel-a').steering.length === 0 && kernel.queued('parallel-a').followUp.length === 0, 'kernel: queued snapshot clears after active steering message is consumed');
+  assert(kernel.queued(target('parallel-a')).steering.length === 0 && kernel.queued(target('parallel-a')).followUp.length === 0, 'kernel: queued snapshot clears after active steering message is consumed');
   const eventProbe = new QueueProbeAgent(TEST_DIR, { agentOnly: true });
-  const eventRuntime: any = { id: 'parallel-events', runner: eventProbe, activePromise: null, events: [], pendingNextTurn: [], queued: { steering: [], followUp: [] } };
-  eventProbe.subscribeWorkEvents(event => {
-    eventRuntime.events.push(event);
-    for (const listener of ((kernel as any).listeners as Set<(event: any) => void>)) listener(event);
-  });
-  eventProbe.subscribeAgentKernelUserMessageStart(content => {
-    (kernel as any).consumeQueuedMessage(eventRuntime, content);
-  });
-  runtimeMap.set('parallel-events', eventRuntime);
+  queueProbes.set('parallel-events', eventProbe);
   const queueEvents: any[] = [];
   kernel.subscribe(event => {
     if (event.conversationId === 'parallel-events' && event.type === 'queue_update') queueEvents.push(event);
   });
-  const eventRun = kernel.prompt('event-first', 'parallel-events', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' }, 'steer');
+  const eventRun = kernel.prompt('event-first', target('parallel-events'), { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' }, 'steer');
   await new Promise(resolve => setTimeout(resolve, 1));
-  const eventQueuedRun = kernel.prompt('event-second', 'parallel-events', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' }, 'steer');
-  const eventRunner = (runtimeMap.get('parallel-events') as any).runner as Agent;
-  eventRunner.notifyAgentKernelUserMessageStart('event-second');
+  const eventQueuedRun = kernel.prompt('event-second', target('parallel-events'), { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' }, 'steer');
+  eventProbe.notifyAgentKernelUserMessageStart('event-second');
   await Promise.all([eventRun, eventQueuedRun]);
   assert(eventProbe.queued.some(item => item.content === 'event-second' && item.queueMode === 'steer') && queueEvents.every(event => !(event.queue?.steering || []).length), 'kernel: Guide steering is delivered to active kernel without entering the visible queue');
   const fallbackProbe = new QueueProbeAgent(TEST_DIR, { agentOnly: true });
   fallbackProbe.queueActiveKernelMessage = () => false;
-  runtimeMap.set('parallel-fallback', { id: 'parallel-fallback', runner: fallbackProbe, activePromise: null, events: [], pendingNextTurn: [], queued: { steering: [], followUp: [] } } as any);
-  const fallbackPrompt = kernel.prompt('fallback-first', 'parallel-fallback', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin' }, 'followUp');
+  queueProbes.set('parallel-fallback', fallbackProbe);
+  const fallbackPrompt = kernel.prompt('fallback-first', target('parallel-fallback'), { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin' }, 'followUp');
   await new Promise(resolve => setTimeout(resolve, 1));
-  const fallbackSame = kernel.prompt('fallback-second', 'parallel-fallback', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin' }, 'followUp');
-  const duringFallbackQueue = kernel.queued('parallel-fallback');
+  const fallbackSame = kernel.prompt('fallback-second', target('parallel-fallback'), { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin' }, 'followUp');
+  const duringFallbackQueue = kernel.queued(target('parallel-fallback'));
   assert(duringFallbackQueue.followUp.some(item => item.includes('fallback-second')), 'kernel: queued snapshot records pending next-turn follow-up messages');
   await Promise.all([fallbackPrompt, fallbackSame]);
-  assert(kernel.queued('parallel-fallback').followUp.length === 0 && fallbackProbe.processCalls.length === 2, 'kernel: queued snapshot clears after fallback next-turn follow-up drains');
+  assert(kernel.queued(target('parallel-fallback')).followUp.length === 0 && fallbackProbe.processCalls.length === 2, 'kernel: queued snapshot clears after fallback next-turn follow-up drains');
   const parallelProbeA = new QueueProbeAgent(TEST_DIR, { agentOnly: true });
   const parallelProbeB = new QueueProbeAgent(TEST_DIR, { agentOnly: true });
-  runtimeMap.set('parallel-b', { id: 'parallel-b', runner: parallelProbeA, activePromise: null, events: [], pendingNextTurn: [] } as any);
-  runtimeMap.set('parallel-c', { id: 'parallel-c', runner: parallelProbeB, activePromise: null, events: [], pendingNextTurn: [] } as any);
+  queueProbes.set('parallel-b', parallelProbeA);
+  queueProbes.set('parallel-c', parallelProbeB);
   const t0 = Date.now();
   await Promise.all([
-    kernel.prompt('one', 'parallel-b', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin' }, 'followUp'),
-    kernel.prompt('two', 'parallel-c', { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin' }, 'followUp'),
+    kernel.prompt('one', target('parallel-b'), { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin' }, 'followUp'),
+    kernel.prompt('two', target('parallel-c'), { mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin' }, 'followUp'),
   ]);
   assert(Date.now() - t0 < 250 && parallelProbeA.processCalls[0] === 'one' && parallelProbeB.processCalls[0] === 'two', 'kernel: different conversations run through independent parallel runtimes');
   assert(uiHtml.includes('window.setLeftCollapsed = function(collapsed)'), 'ui html: left collapse uses unified state function');
   assert(uiHtml.includes('conversationLoadGeneration: 0') && uiHtml.includes('var loadGeneration = ++state.conversationLoadGeneration') && uiHtml.includes('loadGeneration === state.conversationLoadGeneration') && uiHtml.includes('requestedWorkspaceKey === currentWorkspaceKey()') && uiHtml.includes("requestedConversationId === String(activeConversationId() || 'default')"), 'ui html: stale conversation loads cannot overwrite a newer same-workspace conversation selection');
   assert(uiHtml.includes('function requestIsCurrent()') && uiHtml.includes('if (!requestIsCurrent() || String(id) !== requestedConversationId) return;'), 'ui html: delayed ensureConversation chains cannot start a stale conversation load after switching');
-  assert(uiHtml.includes('applyBackendConversations(r.conversations || [], activeConversationId() || lockedConversationId)') && uiHtml.includes('var stillActiveAfterRefresh = isActiveConversationId(lockedConversationId)'), 'ui html: background conversation completions preserve the foreground conversation and scoped details');
+  assert(uiHtml.includes('applyBackendConversations(r.conversations || [], lockedConversationId, lockedTarget.workspaceId)') && uiHtml.includes('var stillActiveAfterRefresh = isActiveConversationTarget(lockedTarget)') && uiHtml.includes('if (stillActiveAfterRefresh && s && s.contextCompression !== undefined)'), 'ui html: background target completions update only their workspace cache and preserve foreground scoped details');
   assert(uiHtml.includes('function animateLeftWidth(startWidth, targetWidth, finalCollapsed, token)') && uiHtml.includes('requestAnimationFrame(step)') && uiHtml.includes('easeOutCubic') && uiHtml.includes('var duration = reduceMotion ? 320 : 620;'), 'ui html: left collapse uses visible frame-driven width animation');
   assert(uiHtml.includes('function clearLeftWidthAnimation()') && uiHtml.includes('cancelAnimationFrame(state.leftAnimationFrame)') && uiHtml.includes('cancelAnimationFrame(state.leftAnimationQueuedFrame)') && uiHtml.includes('leftAnimationToken'), 'ui html: left collapse cancels stale animation frames');
   assert(uiHtml.includes('#left.width-animating') && uiHtml.includes('transition: background var(--duration-normal) var(--ease-out-expo) !important;'), 'ui html: left width animation disables coalesced CSS width transition');
@@ -433,12 +458,12 @@ async function main() {
   const wslProtocolTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'wslAgentProtocol.ts'), 'utf-8');
   const wslHostToolBridgeTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'wslHostToolBridge.ts'), 'utf-8');
   assert(mainTs.includes("activeAgentBackendMode: 'windows' | 'wsl'") && mainTs.includes("configuredAgentBackend") && mainTs.includes('agentBackendRestartRequired') && !mainTs.includes("if (key === 'run_in_wsl' && value === true) await ensureWslAgentClient()"), 'main WSL backend: configured backend changes only after restart and does not hot-switch active conversations');
-  assert(mainTs.includes('function detectWslDistrosAtStartup()') && mainTs.includes('void detectWslDistrosAtStartup()') && mainTs.includes('const wslDistros = await availableWslDistros()') && mainTs.includes('wslAvailable: wslDistros.length > 0') && mainTs.includes('wslDistros,'), 'main WSL backend: detects distributions asynchronously at startup and reports the cached result for UI gating');
+  assert(mainTs.includes('function detectWslDistrosAtStartup(): Promise<string[]>') && mainTs.includes("id: 'wsl-detection'") && mainTs.includes('required: false') && mainTs.includes('run: async () => await detectWslDistrosAtStartup()') && mainTs.includes('const wslDistros = await availableWslDistros()') && mainTs.includes('wslAvailable: wslDistros.length > 0') && mainTs.includes('wslDistros,'), 'main WSL backend: detects distributions asynchronously during prewarm and reports the cached result for UI gating');
   const wslPackageConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
   assert(mainTs.includes('function ensureWslRuntimeBundle()') && mainTs.includes("'app.asar.unpacked', 'dist', 'wsl-agent-host.bundle.cjs'") && !mainTs.includes("path.join(userRuntimeRoot(), 'Runtime', 'wsl'") && wslPackageConfig.build?.asarUnpack?.includes('dist/wsl-agent-host.bundle.cjs'), 'main WSL backend: loads one read-only unpacked Agent bundle without copying runtime code into .Newmark');
   assert(wslClientTs.includes("spawn('wsl.exe'") && wslClientTs.includes('windowsDrivePathToWsl') && wslClientTs.includes("message.event === 'work'") && wslHostTs.includes('new ConversationKernel(root, host, null)') && wslHostTs.includes("backend: 'wsl'"), 'WSL backend bridge: persistent JSONL RPC host runs ConversationKernel in WSL and streams conversation events');
   assert(wslProtocolTs.includes("method: 'terminal_state'") && wslProtocolTs.includes("method: 'terminal_write'") && wslProtocolTs.includes("method: 'terminal_stop'") && wslProtocolTs.includes("method: 'terminal_detach'") && wslProtocolTs.includes("event: 'terminal'") && wslClientTs.includes('subscribeTerminal') && wslHostTs.includes('onTerminalTakeoverEvent'), 'WSL terminal bridge: state/write/stop/detach requests and terminal events cross the persistent JSONL host');
-  assert(wslProtocolTs.includes("event: 'host_tool_request'") && wslProtocolTs.includes("method: 'host_tool_result'") && wslHostToolBridgeTs.includes('requestWindowsHostTool') && wslClientTs.includes('setHostToolHandler') && mainTs.includes("request.tool !== 'computer_use'") && toolsTs.includes("requestWindowsHostTool('computer_use'"), 'WSL host-tool bridge: computer_use reverse requests are allowlisted and settled through Electron main');
+  assert(wslProtocolTs.includes("event: 'host_tool_request'") && wslProtocolTs.includes("method: 'host_tool_result'") && wslHostToolBridgeTs.includes('requestWindowsHostTool') && wslClientTs.includes('setHostToolHandler') && wslClientTs.includes("'computer_use', 'browser_use', 'automation', 'terminal_takeover'") && toolsTs.includes("requestWindowsHostTool('computer_use'") && toolsTs.includes("requestWindowsHostTool('terminal_takeover'"), 'WSL host-tool bridge: desktop-global browser/computer/automation/terminal requests are allowlisted and settled through Electron main');
   assert(wslProtocolTs.includes("method: 'reset'") && wslClientTs.includes('resetAgent()') && wslHostTs.includes('resetAgentRuntime()') && mainTs.includes('await wslAgentClient.resetAgent()') && mainTs.includes("shutdownTerminalTakeoverSessions('app-exit')"), 'WSL lifecycle: Agent resets preserve the host terminal registry while app exit shuts down terminal sessions');
   assert(preloadTs.includes("wslBackendStatus: () => ipcRenderer.invoke('wsl:backendStatus')") && preloadTs.includes("wslBackendTest: () => ipcRenderer.invoke('wsl:backendTest')") && !preloadTs.includes('wslDetect:') && !uiHtml.includes('window.testAgentWslBackend') && !uiHtml.includes('settings.testWslBackend'), 'WSL detection: remains a startup backend concern without a settings-page detect/test control');
   assert(windowsDrivePathToWsl('C:\\Users\\Test User\\repo') === '/mnt/c/Users/Test User/repo' && windowsDrivePathToWsl('D:/work/project') === '/mnt/d/work/project', 'WSL path mapping: converts Windows drive paths without shell escaping loss');
@@ -461,7 +486,7 @@ async function main() {
   }
   const nativeToolsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'nativeTools.ts'), 'utf-8');
   const agentTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
-  assert(!agentTs.includes('public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && !agentTs.includes('public ensureConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && agentTs.includes('const chatMessages = persisted?.chatMessages || memory?.chatMessages || [];') && agentTs.includes('mirrorConversationStateFrom(id: string') && agentTs.includes('const stateKey = this.workspaceConversationStateKey(clean);') && agentTs.includes("this.safeConversationId(this.activeConversationId || 'default') === clean"), 'agent conversation snapshots are read-only, persisted target state is authoritative, and runner mirrors synchronize active host memory');
+  assert(!agentTs.includes('public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && !agentTs.includes('public ensureConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && agentTs.includes('const isActiveConversation = clean === this.safeConversationId') && agentTs.includes('isActiveConversation ? this.chatMessages : (persisted?.chatMessages || memory?.chatMessages || [])') && agentTs.includes('isActiveConversation ? this.workRuns : (persisted?.workRuns || memory?.workRuns)') && agentTs.includes('mirrorConversationStateFrom(id: string') && agentTs.includes('const stateKey = this.workspaceConversationStateKey(clean);') && agentTs.includes("this.safeConversationId(this.activeConversationId || 'default') === clean"), 'agent conversation snapshots are read-only, active target state is live, cold target state is persisted, and runner mirrors synchronize active host memory');
   const configTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'config.ts'), 'utf-8');
   const getStateHandler = mainTs.slice(mainTs.indexOf("ipcMain.handle('agent:getState'"), mainTs.indexOf("ipcMain.handle('agent:getConversationPlan'"));
   assert(getStateHandler.includes('...conversationSnapshot') && !getStateHandler.includes('chatMessages: agent.chatMessages'), 'main process: conversation-scoped getState does not overwrite target messages with shared host messages');
@@ -558,8 +583,8 @@ async function main() {
   assert(launcherTs.includes('function pathArgValue') && launcherTs.includes('function userRuntimeRoot') && launcherTs.includes("path.join(os.homedir(), '.Newmark')") && launcherTs.includes('function legacyUserDataRoot') && launcherTs.includes('function migrateLegacyRuntimeRoot') && launcherTs.includes('function writableRuntimeRoot') && launcherTs.includes('const installRoot = path.dirname(process.execPath)') && launcherTs.includes('if (isPathInside(installRoot, resolved)) return userRuntimeRoot()') && launcherTs.includes("path.join(userRuntimeRoot(), 'Roots'") && launcherTs.includes("const explicitRoot = pathArgValue(args, '--root')") && launcherTs.includes('const root = explicitRoot ? writableRuntimeRoot(explicitRoot) : userRuntimeRoot()'), 'launcher entrypoint: every install location resolves settings to user home .Newmark while isolated explicit roots remain supported');
   assert(mainTs.includes('function userRuntimeRoot') && mainTs.includes("path.join(os.homedir(), '.Newmark')") && mainTs.includes('function legacyUserDataRoot') && mainTs.includes('function migrateLegacyRuntimeRoot') && mainTs.includes('function canWriteDirectory') && mainTs.includes('function isProtectedInstallRoot') && mainTs.includes('function shadowRootFor') && mainTs.includes('function writableRuntimeRoot') && mainTs.includes('if (isPathInside(exeRoot(), resolved)) return userRuntimeRoot()') && mainTs.includes("process.env.ProgramFiles") && mainTs.includes("path.join(userRuntimeRoot(), 'Roots'") && mainTs.includes('if (explicitRoot) return writableRuntimeRoot(explicitRoot)') && mainTs.includes('return getRoot();') && mainTs.includes('firstRunInit(root);') && mainTs.includes('firstRunInit(fallbackRoot)') && mainTs.includes('logStartupFailure(`firstRunInit:${root}`'), 'main startup: every packaged install location resolves settings to user home .Newmark and never treats its executable directory as mutable state');
   assert(mainTs.includes('existingPcId = fs.existsSync(pcHashPath)') && mainTs.includes('if (existingPcId !== pcId) fs.writeFileSync(pcHashPath, pcId') && memoryLabTs.includes('if (!fs.existsSync(this.indexPath))') && memoryLabTs.includes('this.normalizeIndex(raw);') && !memoryLabTs.includes('else this.saveIndex(this.normalizeIndex(this.loadIndex()))') && configTs.includes('if (fs.existsSync(configPath))') && workspaceTs.includes('if (this.external.length !== before) this.saveExternal();'), 'startup initialization: avoids rewriting config.json, PC_Hash.config, Memory Lab index, and External.json on every launch');
-  assert(workspaceTs.includes('normalizeInternalWorkspace') && workspaceTs.includes("const expectedPath = path.join(this.rootPath, 'Work', name)") && workspaceTs.includes('if (internalChanged) this.saveInternal();') && workspaceTs.includes('if (!stateCurrent?.path || path.resolve(stateCurrent.path) !== path.resolve(stored.path)) this.saveState();'), 'workspace migration: internal workspace absolute paths are normalized under the current runtime root after .Newmark/userData migration');
-  assert(mainTs.includes('const STARTUP_HTML') && mainTs.includes('loadStartupShell(win)') && mainTs.includes('let startupShellReady: Promise<void> = Promise.resolve()') && mainTs.includes('startupShellReady = win.loadURL') && mainTs.includes('await startupShellReady;') && mainTs.includes("recordStartup('startup-shell-loaded')") && mainTs.includes('createDesktopWindow(false)') && mainTs.includes("recordStartup('window-shown')") && mainTs.includes("recordStartup('agent-ready')") && mainTs.includes('for (const win of BrowserWindow.getAllWindows())') && mainTs.includes('loadDesktopWindowUi(win)') && mainTs.includes('}, 80);') && !mainTs.includes('win.webContents.stop();') && mainTs.indexOf('createDesktopWindow(false)') < mainTs.indexOf('await startupShellReady;') && mainTs.indexOf('await startupShellReady;') < mainTs.indexOf('agent = new Agent(root)'), 'main startup: serializes startup-shell and full-UI navigation without aborting webContents');
+  assert(workspaceTs.includes('normalizeInternalWorkspace') && workspaceTs.includes("const expectedPath = path.join(this.rootPath, 'Work', name)") && workspaceTs.includes('if (internalChanged) this.saveInternal();') && workspaceTs.includes('!stateCurrent?.id || stateCurrent.id !== stored.id') && workspaceTs.includes('path.resolve(stateCurrent.path) !== path.resolve(stored.path)'), 'workspace migration: internal workspace absolute paths and stable ids are normalized under the current runtime root after .Newmark/userData migration');
+  assert(mainTs.includes('const STARTUP_HTML') && mainTs.includes('loadStartupShell(win)') && mainTs.includes('let startupShellReady: Promise<void> = Promise.resolve()') && mainTs.includes('startupShellReady = win.loadURL') && mainTs.includes('await startupShellReady;') && mainTs.includes("recordStartup('startup-shell-loaded')") && mainTs.includes('startupWindow = createDesktopWindow(false, true)') && mainTs.includes('runStartupPrewarmBarrier') && mainTs.includes('createDesktopWindow!(true, false, attemptId)') && mainTs.includes('waitForUiReadiness(candidate)') && mainTs.includes('promotePrewarmedUi(candidate)') && mainTs.includes('shellWindow.destroy()') && !mainTs.includes('win.webContents.stop();'), 'main startup: keeps the startup shell visible while kernel and hidden UI prewarm, then atomically promotes the hydrated UI');
   assert(uiHtml.includes('id="todo-wrap" class="stack-card collapsed" style="display:none"') && uiHtml.includes('id="queue-panel" class="stack-card collapsed" style="display:none"'), 'input stack: task and queue bars stay hidden before state-driven rendering to avoid empty startup flashes');
   assert(mainTs.includes("const APP_NAME = 'Newmark Agent'") && mainTs.includes("const APP_ID = 'ai.newmark.agent'") && mainTs.includes('app.setName(APP_NAME)') && mainTs.includes('app.setAppUserModelId(APP_ID)'), 'main entrypoint: registers Newmark process/app identity instead of Electron');
   assert(packageJson.includes('"productName": "Newmark Agent"') && packageJson.includes('"executableName": "Newmark Agent"') && packageJson.includes('"signAndEditExecutable": false') && packageJson.includes('"target": "msi"') && packageJson.includes('"msi"') && packageJson.includes('Newmark-Agent-${version}-${arch}.${ext}') && packageJson.includes('"dist:windows-release"') && packageJson.includes('"resedit": "^1.7.2"') && electronBuilderConfigTs.includes("productName: 'Newmark Agent'") && electronBuilderConfigTs.includes("executableName: 'Newmark Agent'") && electronBuilderConfigTs.includes("productName: 'Newmark Agent'"), 'package metadata: product and executable names are fixed to Newmark Agent, Windows releases target MSI, and resource editing is handled by local resedit patching');
@@ -568,7 +593,7 @@ async function main() {
   assert(packageJson.includes('"icon": "assets/icon.ico"') && electronBuilderConfigTs.includes("icon: 'assets/icon.ico'"), 'app icons: Windows package uses generated ICO');
   assert(mainTs.includes('nativeTheme') && mainTs.includes("app-icon-light.png") && mainTs.includes("app-icon-dark.png") && mainTs.includes('createAppIconImage(16)') && mainTs.includes('icon: themedAppIconPath()') && mainTs.includes("nativeTheme.on('updated', refreshNativeThemeIcons)") && mainTs.includes('win.setIcon(windowIcon)') && mainTs.includes('tray.setImage(createAppIconImage(16))'), 'app icons: runtime windows, taskbar, and tray update themed transparent assets when the system theme changes');
   assert(mainTs.includes('function refreshNativeThemeIcons(): void') && !mainTs.includes('const refreshNativeThemeIcons ='), 'app icons: theme refresh is hoisted so early tray creation cannot hit a temporal-dead-zone startup failure');
-  assert(mainTs.includes('mainWindow = createDesktopWindow(false);') && mainTs.includes('createTray();') && mainTs.includes("tray.on('click', showMainWindow)") && mainTs.includes("tray.on('double-click', showMainWindow)"), 'tray lifecycle: creates the tray at desktop startup and reuses it while showing the window');
+  assert(mainTs.includes('startupWindow = createDesktopWindow(false, true)') && mainTs.includes('mainWindow = startupWindow') && mainTs.includes('createTray();') && mainTs.includes("tray.on('click', showMainWindow)") && mainTs.includes("tray.on('double-click', showMainWindow)"), 'tray lifecycle: creates the tray with the startup window and reuses it while showing the prewarmed main window');
   assert(mainTs.includes("path.resolve(agent?.workspace.current?.path || root)") && mainTs.includes("ipcMain.handle('agent:getFileTree'"), 'file tree: defaults to the active workspace instead of exposing the ~/.Newmark runtime root and nested Roots shadows');
   assert(mainTs.includes("agent?.config.getBool('ui', 'minimize_to_tray') ?? true") && mainTs.includes("agent?.config.getStr('general', 'close_behavior')") && mainTs.includes("ipcMain.handle('app:lifecycleState'"), 'window lifecycle: separates minimize-to-tray from close behavior and exposes a smoke-test state');
   assert(preloadTs.includes("lifecycleState: () => ipcRenderer.invoke('app:lifecycleState')") && !uiHtml.includes("if (s.minimizeToTray) state.closeBehavior = 'minimize';"), 'window lifecycle: preload exposes lifecycle state without overwriting close behavior from minimize settings');
@@ -637,7 +662,10 @@ async function main() {
   assert(releaseUiFlowSubagentSmoke.includes("window.switchRightTab('subagent')") && releaseUiFlowSubagentSmoke.includes("window.openSubagentHistory('release-child')") && releaseUiFlowSubagentSmoke.includes('Subagent history is read-only'), 'release ui Flow/subagent smoke: validates retained read-only subagent history UI');
   assert(packageJson.includes('"release:ui-media-md-smoke"') && releaseUiMediaMdSmoke.includes('--remote-debugging-port=') && releaseUiMediaMdSmoke.includes('window.api.createWorkspace') && releaseUiMediaMdSmoke.includes('addMsg('), 'release ui media/md smoke: drives real packaged renderer without model spend');
   assert(releaseUiMediaMdSmoke.includes('data:image/gif;base64') && releaseUiMediaMdSmoke.includes('.msg-image') && releaseUiMediaMdSmoke.includes('.msg-file-link') && releaseUiMediaMdSmoke.includes('.md-table') && releaseUiMediaMdSmoke.includes('.md-math-inline') && releaseUiMediaMdSmoke.includes('.md-math-block'), 'release ui media/md smoke: validates conversation markdown image, file-link, table, and math rendering');
-  assert(releaseUiMediaMdSmoke.includes("window.openFile('media-doc.md')") && releaseUiMediaMdSmoke.includes('#editor-md-toggle') && releaseUiMediaMdSmoke.includes('#editor-md-preview') && releaseUiMediaMdSmoke.includes('MD_VIEWER_OK_20260628'), 'release ui media/md smoke: validates integrated Markdown editor preview');
+  assert(releaseUiMediaMdSmoke.includes("window.openFile('media-doc.md')") && releaseUiMediaMdSmoke.includes("window.openFile('media-link-target.txt')")
+    && releaseUiMediaMdSmoke.includes('markdown preview resets before non-markdown editor')
+    && releaseUiMediaMdSmoke.includes('#editor-md-toggle') && releaseUiMediaMdSmoke.includes('#editor-md-preview') && releaseUiMediaMdSmoke.includes('MD_VIEWER_OK_20260628'),
+  'release ui media/md smoke: validates integrated Markdown preview and its reset before a non-Markdown editor');
   assert(releaseUiMediaMdSmoke.includes('.msg-file-link[data-path="media-link-target.txt"]') && releaseUiMediaMdSmoke.includes('.click()')
     && releaseUiMediaMdSmoke.includes('#editor-textarea') && releaseUiMediaMdSmoke.includes('EDITOR_LINK_TARGET_OK_20260628'),
   'release ui media/md smoke: clicks a rendered Markdown local-file link through the safe linked-file route');
@@ -706,7 +734,7 @@ async function main() {
   assert(distPortableScript.includes('verifyReleaseCliSmoke()') && distPortableScript.includes('release-cli-smoke.cjs') && distPortableScript.includes('ensureNodePtyConptyAssets(nodePtyRoot)') && distPortableScript.includes("'conpty.dll', 'OpenConsole.exe'"), 'dist windows release: restores node-pty ConPTY assets after ABI rebuild and runs release CLI smoke after packaging');
   assert(distPortableScript.includes('win-unpacked-x64.zip') && distPortableScript.includes('Compress-Archive') && distPortableScript.includes('verifyZipPack()'), 'dist windows release: creates and verifies compiled win-unpacked zip update pack');
   assert(installUpdateTs.includes('writeDeferredWindowsUpdate') && installUpdateTs.includes('runningExecutableTarget(target)') && installUpdateTs.includes('deferred: true') && installUpdateTs.includes('Wait-Process -Id $pidToWait') && installUpdateTs.includes('Start-Process -FilePath "powershell.exe"') && installUpdateTs.includes("spawn('powershell.exe'"), 'install update: Windows self-update defers copying the running executable until the current process exits');
-  assert(mainTs.includes('if (automationWakeMode)') && mainTs.includes('await automation.tick()') && mainTs.includes('app.quit();') && mainTs.indexOf('if (automationWakeMode)') < mainTs.indexOf('void startSidecar(root)'), 'main automation wake: runs due schedules headless and exits before sidecar/window setup');
+  assert(mainTs.includes('if (automationWakeMode)') && mainTs.includes('await automation!.tick()') && mainTs.includes('automation!.stop();') && mainTs.includes('app.quit();') && mainTs.indexOf('await automation!.tick()') < mainTs.indexOf('const port = await startSidecar(root)'), 'main automation wake: runs due schedules headless and exits before sidecar prewarm');
   assert(mainTs.includes('const syncAutomationWakeSoon = () =>') && mainTs.includes('syncAutomationWakeSoon();') && mainTs.indexOf('mainWindow = createDesktopWindow(false)') < mainTs.indexOf("app.on('will-quit'"), 'main startup: desktop window is created before noncritical automation wake sync can block startup');
   assert(automationWakeTs.includes('timeout: 5000') && automationWakeTs.includes('result.error?.message'), 'automation wake: Windows Task Scheduler calls are timeout-bounded so first desktop launch cannot hang indefinitely');
   assert(preloadTs.includes("refreshSkills: () => ipcRenderer.invoke('skills:refresh')") && preloadTs.includes("marketSkillSources: () => ipcRenderer.invoke('skills:marketSources')") && preloadTs.includes("memoryLabRead: (selector?: string) => ipcRenderer.invoke('memoryLab:read'") && preloadTs.includes('updateCheckGithub') && preloadTs.includes('updateApplyGithub') && preloadTs.includes('terminalKill: (sessionId: string, timeoutMs?: number)'), 'preload: exposes skills refresh, market source management, Memory Lab, updates, and terminal kill timeout');
@@ -1066,7 +1094,7 @@ async function main() {
   const auditSource = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'index.ts'), 'utf-8');
   assert(auditSource.includes("case 'file_audit'") && auditSource.includes("repos/${repo}/commits?path=") && auditSource.includes("repos/${repo}/contents/") && auditSource.includes("repos/${repo}/branches/"), 'file_audit: native GitHub REST paths are wired through gh api for commits, contents, and branches');
   assert(auditSource.includes("case 'repo_security_audit'") && auditSource.includes('scanRepositorySecrets') && auditSource.includes('releaseExcludedPathFindings') && auditSource.includes('withRemoteSecurityPreamble'), 'repo_security_audit: remote safety, privacy, and remote-write preflight paths are wired');
-  assert(auditSource.includes("spawnSync('git', args") && auditSource.includes("spawnTool('gh', args"), 'git/github tools: use native spawn argument arrays instead of shell string concatenation for new audit flows');
+  assert(auditSource.includes("runAsyncProcess('git', args") && auditSource.includes("spawnTool('gh', args") && !auditSource.includes("spawnSync('git', args"), 'git/github tools: use cancellable asynchronous spawn with native argument arrays');
   const auditRepo = path.join(TEST_DIR, 'audit-repo');
   fs.mkdirSync(auditRepo, { recursive: true });
   fs.writeFileSync(path.join(auditRepo, 'tracked.txt'), 'audit v1', 'utf-8');
@@ -1089,7 +1117,29 @@ async function main() {
   assert(securityAudit.remote_repository_detected === true && securityAudit.remote.repository === 'example/public-audit' && securityAudit.security_review.required === true, 'repo_security_audit: detects remote GitHub repository and requires safety review');
   assert(securityAudit.security_review.secret_findings.some((f: any) => f.path === 'config.json') && securityAudit.security_review.release_excluded_local_files.some((p: string) => p === 'archive' || p.startsWith('archive/')), 'repo_security_audit: reports secret-like tracked material and release-excluded local files');
   const pushSource = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'index.ts'), 'utf-8');
-  assert(pushSource.includes("case 'git_push': return this.withRemoteSecurityPreamble") && pushSource.includes("case 'gh_pr_create': return this.withRemoteSecurityPreamble"), 'repo_security_audit: git_push and gh_pr_create include remote safety preflight summary');
+  assert(pushSource.includes("case 'git_push': return await this.withRemoteSecurityPreamble") && pushSource.includes("case 'gh_pr_create': return await this.withRemoteSecurityPreamble") && pushSource.includes('action: () => Promise<string>') && pushSource.indexOf('const actionOutput = await action();') > pushSource.indexOf('await this.repoSecurityAudit('), 'repo_security_audit: git_push and gh_pr_create defer their write actions until the remote safety preflight completes');
+  const remoteWriteTools = new ToolExecutor(TEST_DIR, cfg) as any;
+  const remoteWriteOrder: string[] = [];
+  remoteWriteTools.findGitRoot = async () => auditRepo;
+  remoteWriteTools.gitExecAt = async () => 'origin\thttps://github.com/example/public-audit.git (fetch)';
+  remoteWriteTools.repoSecurityAudit = async () => {
+    remoteWriteOrder.push('audit');
+    return JSON.stringify({
+      remote: { provider: 'github', repository: 'example/public-audit' },
+      security_review: { verdict: 'review', risks: [], secret_findings: [], release_excluded_local_files: [] },
+    });
+  };
+  remoteWriteTools.gpush = async () => { remoteWriteOrder.push('git_push'); return '[git push] complete'; };
+  remoteWriteTools.ghPrCreate = async () => { remoteWriteOrder.push('gh_pr_create'); return '[gh pr create] complete'; };
+  const orderedPush = await remoteWriteTools.execute('git_push', '{"message":"ordered preflight"}', auditRepo);
+  assert(remoteWriteOrder.join(',') === 'audit,git_push' && orderedPush.startsWith('[repo_security_audit]'), 'repo_security_audit: git_push executes only after the preflight summary is ready');
+  remoteWriteOrder.length = 0;
+  const orderedPr = await remoteWriteTools.execute('gh_pr_create', '{"title":"ordered","body":"preflight"}', auditRepo);
+  assert(remoteWriteOrder.join(',') === 'audit,gh_pr_create' && orderedPr.startsWith('[repo_security_audit]'), 'repo_security_audit: gh_pr_create executes only after the preflight summary is ready');
+  remoteWriteOrder.length = 0;
+  remoteWriteTools.repoSecurityAudit = async () => { remoteWriteOrder.push('audit_error'); throw new Error('planned audit failure'); };
+  const fallbackPush = await remoteWriteTools.execute('git_push', '{"message":"fallback preflight"}', auditRepo);
+  assert(remoteWriteOrder.join(',') === 'audit_error,git_push' && fallbackPush.includes('Remote repository safety review should be considered') && fallbackPush.includes('[git push] complete'), 'repo_security_audit: an unavailable summary preserves the established nonblocking remote-write behavior and reports a generic warning');
   const branchResult = await tools.execute('git_branch', '{"action":"current"}', auditRepo);
   assert(branchResult.trim().length > 0, 'git_branch: current branch returns local branch name');
 
@@ -1587,7 +1637,8 @@ async function main() {
   assert(wsMgr.current?.name === 'test-ws-manual', 'select: switches workspace');
   const wsMgrReloaded = new WorkspaceManager(TEST_DIR, cfg);
   assert(wsMgrReloaded.current?.name === 'test-ws-manual', 'workspace: restores last selected workspace');
-  const extBase = path.join(path.dirname(TEST_DIR), `${path.basename(TEST_DIR)}-external-unique`);
+  externalTestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-external-unique-'));
+  const extBase = externalTestDir;
   const extChild = path.join(extBase, 'child');
   fs.mkdirSync(extChild, { recursive: true });
   const extWs = wsMgr.addExternal(extBase);
@@ -1707,7 +1758,7 @@ async function main() {
   const subRead = taskAgent.handleSubagentReadEnvelope(JSON.stringify({ name: 'worker', max_chars: 8000 }));
   assert(subRead.ok === true && subRead.output.includes('subagent continued result') && subRead.output.includes('mailbox'), 'Agent subagent_read: returns bounded status, feedback, result, and mailbox summary');
   assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'subagent.ts'), 'utf-8').includes('replaceContext') && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('subagentContextPersist'), 'Agent subagent context: compressed history and metadata persist back to the peer record');
-  assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('this.notifyAgentKernelUserMessageStart(text);') && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes("return this.queueActiveKernelMessage(prompt, 'followUp')") && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8').includes('runtime.pendingNextTurn.push({ message, queueMode: \'followUp\' })'), 'Agent subagent result delivery: initial process boundaries acknowledge persisted inbox messages and conversation-owned routing appends one next turn without feedback loops');
+  assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('this.notifyAgentKernelUserMessageStart(text, clientMessageId || undefined);') && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes("return this.queueActiveKernelMessage(prompt, 'followUp')") && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8').includes("runtime.pendingNextTurn.push({ message, queueMode: 'followUp' });"), 'Agent subagent result delivery: initial process boundaries acknowledge persisted inbox messages and conversation-owned routing appends one next turn without feedback loops');
   const subResult = (taskAgent as unknown as { handleSubagentResult: (args: string) => string })
     .handleSubagentResult(JSON.stringify({ name: 'worker' }));
   assert(subResult.includes('get.subagent("') && subResult.includes('subagent continued result'), 'Agent subagent_result: returns result and transcript');
@@ -3147,12 +3198,14 @@ async function main() {
   assert(directResponsesText === 'direct responses ok' && directResponsesTokens.some(t => t.text === 'direct responses ok'), 'LLMProvider Responses mode: parses direct Responses API output');
   assert(directResponsesPaths.length === 2 && directResponsesPaths.every(p => p.endsWith('/responses')), 'LLMProvider Responses mode: uses /responses directly without chat-completions probe');
 
-  globalThis.fetch = (async () => new Response(JSON.stringify({
+  globalThis.fetch = (async () => new Response(JSON.stringify([{
     output: [{ type: 'message', content: [{ type: 'output_text', text: { value: 'nested responses text' } }] }],
-  }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+  }]), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
   const nestedResponsesText = await directResponsesProvider.chat('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20);
+  const nestedResponsesTokens: StreamToken[] = [];
+  for await (const tok of directResponsesProvider.chatStreamWithTools('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20, [])) nestedResponsesTokens.push(tok);
   globalThis.fetch = originalFetch;
-  assert(nestedResponsesText === 'nested responses text', 'LLMProvider Responses mode: parses nested output_text value blocks used by compatibility gateways');
+  assert(nestedResponsesText === 'nested responses text' && nestedResponsesTokens.some(token => token.text === 'nested responses text'), 'LLMProvider Responses mode: normalizes single-element gateway arrays and parses nested output_text in chat and tool-stream paths');
 
   globalThis.fetch = (async () => {
     return new Response(JSON.stringify({ error: { message: 'response mode rejected' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
@@ -3176,6 +3229,28 @@ async function main() {
   globalThis.fetch = originalFetch;
   assert(directChatPaths.length === 1 && directChatPaths[0].endsWith('/chat/completions'), 'LLMProvider Chat mode: uses chat completions directly');
   assert(directChatBodies[0]?.stream === false && directChatTokens.some(t => t.text === 'direct chat ok'), 'LLMProvider Chat mode: disables streaming and yields text');
+
+  let loopbackFetchCalls = 0;
+  let loopbackNodePath = '';
+  globalThis.fetch = (async () => {
+    loopbackFetchCalls += 1;
+    throw new Error('loopback chat must not use undici fetch');
+  }) as typeof fetch;
+  LLMProvider.nodeHttpTransport = async (_method, url) => {
+    loopbackNodePath = new URL(url).pathname;
+    return { status: 200, body: JSON.stringify({ choices: [{ message: { content: 'loopback chat ok' } }] }) };
+  };
+  const loopbackProvider = new LLMProvider('loopback-chat', 'http://127.0.0.1:45678/v1', 'test-key', 'openai', 'chat');
+  const loopbackTokens: StreamToken[] = [];
+  for await (const tok of loopbackProvider.chatStreamWithTools('local-model', [{ role: 'user', content: 'Hi' }], null, 0, 20, [])) loopbackTokens.push(tok);
+  LLMProvider.nodeHttpTransport = null;
+  globalThis.fetch = originalFetch;
+  assert(loopbackFetchCalls === 0 && loopbackNodePath === '/v1/chat/completions' && loopbackTokens.some(t => t.text === 'loopback chat ok'), 'LLMProvider Chat mode: plain HTTP loopback uses deterministic Node transport for concurrent utility workers');
+  const providerTransportSource = fs.readFileSync(path.join(process.cwd(), 'src', 'llm', 'provider.ts'), 'utf8');
+  assert(providerTransportSource.includes("res.once('end', finish)")
+    && providerTransportSource.includes("res.once('close'")
+    && providerTransportSource.includes('if (res.complete) finish()')
+    && providerTransportSource.includes("res.once('aborted'"), 'LLMProvider fallback: Node response lifecycle settles complete close and rejects incomplete or aborted bodies');
 
   const multimodalChatBodies: any[] = [];
   globalThis.fetch = (async (_url: string, init?: RequestInit) => {

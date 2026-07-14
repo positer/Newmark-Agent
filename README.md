@@ -5,7 +5,7 @@
 <h1 align="center">Newmark Agent</h1>
 
 <p align="center">
-  <a href="https://github.com/positer/Newmark-Agent/releases/latest"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.0.8-blue"></a>
+  <a href="https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.9"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.0.9-blue"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Linux-lightgrey">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
@@ -13,9 +13,13 @@
 
 Newmark Agent is a local-first desktop Agent workspace for coding, automation, repository review, model-provider experimentation, and controlled desktop operation. It packages an Electron desktop UI, a TypeScript Agent runtime, workspace-scoped conversations, Flow workflows, subagents, skills, archives, browser/GitHub/automation tools, and configurable OpenAI-compatible, Anthropic-compatible, and GitHub Models providers.
 
-The current source development version is **dev-0.0.8**. Newmark is intended for technical users who want an installer-backed desktop Agent app that runs against their own model credentials and keeps mutable runtime state local under `~/.Newmark`. Windows is the primary Computer Use target; Linux GUI, CLI, packaging, and terminal workflows are supported.
+The current source development version is **dev-0.0.9**. Newmark is intended for technical users who want an installer-backed desktop Agent app that runs against their own model credentials and keeps mutable runtime state local under `~/.Newmark`. Windows is the primary Computer Use target; Linux GUI, CLI, packaging, and terminal workflows are supported.
 
-dev-0.0.8 restores persistent Agent terminal takeover with owner-scoped sessions, adds flat same-conversation parallel Subagents with durable peer/root mailboxes, persisted context compression, and `subagent_read`, introduces a revisioned read-only Linked Plan panel available in every mode, enforces Plan through a unified schema/runtime ToolPolicy, accelerates Computer Use with persistent helpers and bounded sequences, and routes file-tree opens through header-based text/binary/HTML/PDF classification before the editor is invoked.
+dev-0.0.9 maintenance update (2026-07-13): conversation execution is now addressed by a composite workspace/conversation target, with one independently stoppable Windows utility process or WSL process group per active target. Workspace switching is background-safe and latest-wins instead of resetting the global Agent. Guide input has durable accepted/applied/deferred/rejected receipts, and each run persists a public work record that stays expanded while active, folds to an elapsed-time summary when complete, and can be reopened without exposing hidden model reasoning. Expanded work records show only filtered public streamed natural language plus tool names and running/completed status; tool arguments, call IDs, commands, paths, results, and hidden reasoning are never rendered or persisted there. The fold preference remains writable after the worker is evicted by using a target-bound cold persistence path, without registering a new active runtime. The Archive action once again uses the bundled Archive icon. Editor transitions now share one dirty Save/Discard/Cancel guard, clear stale Markdown surfaces, and reject out-of-order opens. PDF preview uses a short-lived loopback HTTP capability rather than sending Chromium PDFium a `newmark-preview://` URL. The built-in browser also gains Newmark-native Browser-Use with opaque observations, target-bound host RPC, physical-page action serialization, Plan revalidation, and force-stop cancellation. Startup prewarms the actual embedded Browser guest at `about:blank`; a cold Browser-Use request initializes and binds that same guest with a bounded wait, never a hidden fallback window. Browser observations exclude password inputs, textarea values, contenteditable text, hidden DOM text, and internal option values. Long-running native tools now use bounded asynchronous child processes and carry the run cancellation signal through providers, Flow, SSH, utility workers, and WSL workers, so Guide/stop IPC remains responsive. Windows force restart snapshots PID, parent PID, and process-creation identity through Win32 Toolhelp, terminates only identity-matched handles, rescans for late descendants until three stable empty observations, and permanently quarantines an uncertain generation instead of starting a replacement. Alibaba page-agent was reviewed as an MIT architectural reference at an immutable commit; no page-agent code or runtime is bundled.
+
+Startup now paints a dedicated Newmark prewarm window while first-run recovery, configuration/workspace state, automation, Browser Control, the selected conversation runtime, WSL detection, sidecar startup, update discovery, and a hidden fully hydrated renderer settle. Renderer attestation covers `state`, `fileTree`, `rightStatus`, `flows`, `terminal`, the prewarmed `browser` guest, and `rendered`; Electron validates all seven fields before promotion and uses the canonical `none` target for a valid first launch with no workspace. The main page is promoted only after every required stage succeeds; a required failure stays on the prewarm surface with its log path and a retry action. Update discovery includes GitHub prereleases such as `dev-0.0.9`, prompts only for a strictly newer semantic version, and shows the localized update dialog after the main UI is visible rather than interrupting prewarm. Release CDP drivers select only `index.html` and then wait for the renderer to be visible, complete, API-connected, and prompt-hydrated before bringing it forward or driving the UI, so the hidden prewarm renderer cannot bypass the startup barrier.
+
+dev-0.0.8 restored persistent Agent terminal takeover with owner-scoped sessions, added flat same-conversation parallel Subagents with durable peer/root mailboxes, persisted context compression, and `subagent_read`, introduced a revisioned read-only Linked Plan panel available in every mode, enforced Plan through a unified schema/runtime ToolPolicy, accelerated Computer Use with persistent helpers and bounded sequences, and routed file-tree opens through header-based text/binary/HTML/PDF classification before the editor was invoked.
 
 WSL Agent backend preview (2026-07-11): Windows settings now provide a restart-required `Windows native / WSL based` Agent backend choice. WSL mode is selectable only when at least one installed distribution is detected, and the chosen distribution is locked at application startup so active conversations are never hot-migrated between runtimes. The Electron UI and executable remain native Windows components; only the Agent backend runs as a persistent JSONL-controlled Linux process, maps Windows workspaces through `/mnt/<drive>`, and keeps configuration, conversations, and archives under the normal `~/.Newmark` user-state root. Packaged validation covers restart activation, real Linux PID reporting, WSL-local provider requests, tool writes into a Windows external workspace, and conversation isolation.
 
@@ -67,30 +71,42 @@ Linux release isolation correction (2026-07-12): Windows-triggered Linux packagi
 
 Windows startup follow-up (2026-07-12): the startup shell and full UI navigation are now strictly serialized. The Agent waits for the lightweight shell navigation to finish before loading `index.html`, preventing the installed renderer from being replaced or terminated by a late shell load. Empty Task and Queue controls are hidden before state hydration, so no empty bar flashes during startup.
 
+## Commercial Development Positioning
+
+Newmark Agent is being developed as a local-first commercial desktop workbench for engineering teams, independent developers, repository maintainers, and organizations that need auditable Agent operation without moving workspace state into a Newmark-hosted cloud. Customers bring their own compatible model/provider credentials; mutable configuration, transcripts, archives, work records, and credentials remain under the user's selected local state root.
+
+The product boundary is intentionally modular: model providers, skills, Flow definitions, local/SSH workspaces, and host tools can be configured independently, while high-impact desktop capabilities remain mediated by explicit runtime targets, mode policy, capability tokens, and visible stop/review surfaces. This makes the source line suitable for controlled pilots, internal deployment evaluation, integration development, and commercial customization. It is still a development preview rather than an SLA-certified production service; organizations remain responsible for provider terms, credential handling, model-output review, backup policy, and release qualification in their own environment.
+
+First-party Newmark code and project assets remain proprietary and all-rights-reserved unless separate written release or commercial metadata grants additional rights. Third-party packages and reference projects retain their own licenses; architectural references are not automatically bundled dependencies.
+
 ## At A Glance
 
 | Area | What Newmark provides |
 |---|---|
 | Desktop shell | Windows MSI install plus `win-unpacked` update pack, with Linux AppImage/deb builds and local user-state storage. |
 | Agent runtime | Build, Plan, Goal, Flow, subagents, queued input, and live work events. |
+| Isolated conversation runtimes | Workspace/conversation composite targets, background execution, target-only stop/restart, durable Guide receipts, and persisted foldable work records. |
 | Model providers | OpenAI-compatible, Anthropic-compatible, GitHub Models/Copilot login flow, and local runtimes through normal provider settings. |
 | Repository work | Local Git inspection, GitHub audit, branch/fork/PR helpers, and remote-repository security review prompts. |
 | Computer Use | Native Windows observe/action flow with ephemeral screenshots, UI Automation objects, app-scoped control, and a visible takeover border. Linux reports native desktop control as unsupported instead of crashing. |
+| Built-in Browser-Use | Native observe-then-act control with opaque refs, fixed isolated-world programs, target-bound host RPC, shared-page serialization, and popup/download/navigation guards. |
 | Terminal takeover | Persistent Agent-owned terminal sessions independent from one-shot shell tools, available in desktop and CLI Agent paths with PowerShell on Windows and bash on Linux. |
 | Workspace control | Local, external, and SSH-linked workspaces with exact-folder uniqueness and parent/child folder support. |
 | Privacy posture | Local-first config; provider keys stay in local runtime config or environment files and must not be committed. |
 
 ## Download
 
+The latest published development preview is **dev-0.0.9**. It is distributed as an unsigned GitHub prerelease after complete local Windows/Linux acceptance and post-publication asset verification.
+
 | Package | Release |
 |---|---|
-| Windows MSI installer | `Newmark-Agent-0.0.8-x64.msi` |
-| Windows unpacked update pack | `Newmark-Agent-0.0.8-win-unpacked-x64.zip` |
-| Linux AppImage | `Newmark-Agent-0.0.8-x86_64.AppImage` |
-| Linux Debian package | `Newmark-Agent-0.0.8-amd64.deb` |
-| Linux unpacked update pack | `Newmark-Agent-0.0.8-linux-unpacked-x64.zip` |
+| Windows MSI installer | `Newmark-Agent-0.0.9-x64.msi` |
+| Windows unpacked update pack | `Newmark-Agent-0.0.9-win-unpacked-x64.zip` |
+| Linux AppImage | `Newmark-Agent-0.0.9-x86_64.AppImage` |
+| Linux Debian package | `Newmark-Agent-0.0.9-amd64.deb` |
+| Linux unpacked update pack | `Newmark-Agent-0.0.9-linux-unpacked-x64.zip` |
 
-Download the assets from the latest GitHub release. On Windows, install the MSI for managed desktops or use the `win-unpacked` zip as the no-loss update source. On Linux, run the AppImage or install the `.deb` package. The distributions include `LICENSE` and `THIRD_PARTY_NOTICES.md`.
+Download the assets from the [dev-0.0.9 GitHub prerelease](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.9). On Windows, install the MSI for managed desktops or use the `win-unpacked` zip as the no-loss update source. On Linux, run the AppImage or install the `.deb` package. The distributions include `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
 The Windows MSI is a per-machine installer and targets `Program Files`, requesting elevation through Windows Installer. Regardless of whether Newmark runs from Program Files, an unpacked folder, a removable drive, or another installation path, mutable configuration, conversations, archives, and credentials are resolved from `~/.Newmark` and preserved across upgrades. An installation directory passed back as `--root` is normalized to `~/.Newmark`; explicit non-install roots remain available for isolated tests.
 
@@ -107,8 +123,8 @@ npm.cmd run dist:windows-release
 The packaged Windows executable is written to:
 
 ```text
-release/Newmark-Agent-0.0.8-x64.msi
-release/Newmark-Agent-0.0.8-win-unpacked-x64.zip
+release/Newmark-Agent-0.0.9-x64.msi
+release/Newmark-Agent-0.0.9-win-unpacked-x64.zip
 ```
 
 Linux and WSLg development builds use native Linux Node/npm inside the distro:
@@ -132,9 +148,9 @@ npm run release:linux-real-provider-smoke
 Linux artifacts are written to:
 
 ```text
-release/Newmark-Agent-0.0.8-x86_64.AppImage
-release/Newmark-Agent-0.0.8-amd64.deb
-release/Newmark-Agent-0.0.8-linux-unpacked-x64.zip
+release/Newmark-Agent-0.0.9-x86_64.AppImage
+release/Newmark-Agent-0.0.9-amd64.deb
+release/Newmark-Agent-0.0.9-linux-unpacked-x64.zip
 ```
 
 The GUI smoke test expects WSLg or another Linux display server with `DISPLAY` or `WAYLAND_DISPLAY` set.
@@ -193,6 +209,8 @@ For Anthropic-compatible providers, set `"protocol": "anthropic"`. GitHub Models
 | Native OpenSSH external workspace linking | Available |
 | Computer Use with one-time screenshots and UI Automation summaries | Available |
 | Single-conversation Computer Use ownership lock | Available |
+| Native built-in Browser-Use with target and page isolation | Available and locally package-validated in dev-0.0.9 |
+| Durable Guide receipts and foldable elapsed-time work records | Available and locally package-validated in dev-0.0.9 |
 | Continuous closed-loop Computer Use takeover border | Available |
 | Persistent terminal takeover sessions | Available |
 | Native built-in tool switches in Settings | Available |
@@ -221,6 +239,8 @@ npm.cmd run release:ui-conversation-queue-plan-smoke
 npm.cmd run release:ui-fast-conversation-switch-smoke
 npm.cmd run release:ui-workspace-conversation-isolation-smoke
 npm.cmd run release:ui-multi-window-shared-backend-smoke
+npm.cmd run test:dev009
+npm.cmd run release:dev009-features-smoke
 ```
 
 Linux/WSLg release gates:
@@ -232,14 +252,14 @@ npm run dist:linux
 npm run release:linux-gui-smoke
 ```
 
-The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the source development version is now `0.0.8`.
+The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the source development version is now `0.0.9`.
 
 Unpacked update dry-runs can be delegated to the packaged CLI before copying files:
 
 ```powershell
 release\win-unpacked\Newmark Agent.exe install-update --check-github --repo positer/Newmark-Agent
-release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 0.0.8 --dry-run
-release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 0.0.8 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 0.0.9 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 0.0.9 --dry-run
 ```
 
 The update helper preserves local state by default. Current installer/update builds also keep mutable state outside the installation directory under `~/.Newmark`, including `config.json`, `Work/`, `skills/`, `Memory Lab/`, and `archive/`.
@@ -252,6 +272,24 @@ npm.cmd run release:real-provider-smoke
 npm.cmd run release:real-apinebula-memory-switch-smoke
 npm.cmd run release:real-provider-stress
 ```
+
+## dev-0.0.9 Notes
+
+dev-0.0.9 is the current source maintenance line. It replaces conversation-id-only runtime identity with deterministic workspace/conversation targets, introduces per-target Windows utility and WSL runtime pools, keeps background work alive across workspace changes, and adds cooperative then force-restart stop semantics without resetting unrelated conversations. Guide delivery is idempotent and receipt-backed: optimistic rows are scoped by the composite target and `clientMessageId`, survive snapshot redraws in accepted/deferred/rejected state, and are replaced exactly once when applied. Public work progress is persisted as a foldable elapsed-time run separate from the final answer. Its expandable content is deliberately limited to filtered public streamed natural language and tool name/status; hidden reasoning, tool arguments, call IDs, commands, paths, and results never enter the work record. Completed-run fold changes also persist when no worker is active and remain isolated from another workspace with the same conversation id. Repeated workspace-selection and stop failures are deduplicated by operation namespace and stay out of conversation history.
+
+The editor and preview boundary now has one reset/transition lifecycle, revision-safe dirty decisions, asynchronous open generations, and owner-bound token revocation. PDF delivery uses a loopback-only, expiring capability server with owner/path/Host/method/range checks; HTML remains on the sandboxed custom protocol. Native Browser-Use adds nine structured actions over opaque observations, uses only fixed Newmark DOM programs, serializes every full observe/action transaction by physical `WebContents`, rechecks Plan policy in the host, and propagates target cancellation through utility/WSL workers to Electron. It acts only on the prewarmed built-in Browser guest, including cold requests before the Browser tab is opened; it has no hidden-window fallback, and observation/extraction consistently redact textarea and contenteditable content. The Archive conversation action again renders its bundled icon instead of falling back to a text-like placeholder.
+
+Desktop startup uses a visible Newmark-icon prewarm surface and a separate hidden UI renderer. The prewarm barrier waits for all required kernel stages plus the renderer's seven-field `state/fileTree/rightStatus/flows/terminal/browser/rendered` attestation before atomically revealing the main page; required failures remain retryable on the prewarm surface, and a first launch without a workspace is represented consistently as `none`. The same startup pass checks GitHub release and prerelease tags, compares normalized semantic versions, and defers any strictly-newer localized prompt until after the main UI is shown.
+
+The complete local source suite passes 1,084 assertions; focused gates pass 27 dev-0.0.9 contracts, 79 Browser-Use checks, 21 asynchronous-process checks, 59 real-Electron Browser-Use/utility checks, and 41 startup-prewarm checks. Windows MSI/unpacked, Windows Native/WSL, workspace/editor/Markdown/PDF UI, and Linux AppImage/deb/unpacked GUI smokes all pass. Browser observations expose rendered text and allowlisted public metadata, never password inputs, textarea/contenteditable content, hidden DOM text, internal option values, or model-hidden reasoning. Real utility-worker tests prove identity-bound worker/branch/leaf cleanup, late-descendant capture, target/generation helper ownership, single-flight force stop, sticky quarantine on uncertainty, replacement readiness validation, and strict all-settled runtime teardown while another target remains alive. Windows does not yet place the worker tree in a Job Object, so the zero-residue property is runtime-tested rather than an OS-enforced formal process-tree guarantee. The five local acceptance artifacts have these SHA256 values:
+
+- `Newmark-Agent-0.0.9-x64.msi`: `2B65F667F4B1438DD0C677EFEF40DE5F62D70E4D396E8EB2938E23D5AF2D6617`
+- `Newmark-Agent-0.0.9-win-unpacked-x64.zip`: `B2B9CB449CD2F78D1FC9B7E6D77B4D0F3D823CFE9424CD10A2AD36645595AF7D`
+- `Newmark-Agent-0.0.9-x86_64.AppImage`: `FFE7190EB197F3ABDC9F65F79ABD587F7E02DA5A90DA6499AD4A2B055033971B`
+- `Newmark-Agent-0.0.9-amd64.deb`: `213F910723C3C63428DF11639A70884E7CB948E15D9E0F0919CDE524BD92E88F`
+- `Newmark-Agent-0.0.9-linux-unpacked-x64.zip`: `5A56D1422993FA57747A16CA3A94043AC0AB13D5093468E7ED1778C7B2AA1AB7`
+
+The five unsigned artifacts are published under GitHub prerelease [`dev-0.0.9`](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.9). Clean GitHub-downloaded copies match the SHA256 values above and pass the Windows ZIP/MSI plus Linux AppImage/deb/unpacked startup smoke gates.
 
 ## dev-0.0.8 Notes
 
@@ -344,10 +382,9 @@ The public repository intentionally excludes local runtime state and internal pr
 - `agent.md`
 - `PC_Hash.config`
 - `Work/`
-- `archive/`
+- `archive/`, except curated release records that are explicitly reviewed and force-added
 - `skills/`
 - `Memory Lab/`
-- `OVERVIEW.md`
 - `_local/`
 - `vendor/` release bundles must be empty or absent; reference code is either ignored as `_ref/` material or reimplemented natively before release.
 - `Design.md`

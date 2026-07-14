@@ -1,3 +1,4 @@
+const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -66,10 +67,7 @@ async function waitForTarget(port) {
   while (Date.now() < deadline) {
     try {
       const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
-      const target = targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview') && String(t.url || '').includes('index.html'))
-        || targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview') && String(t.title || '').includes('Newmark'))
-        || targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview'))
-        || targets.find(t => t.webSocketDebuggerUrl);
+      const target = targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview') && String(t.url || '').includes('index.html'));
       if (target) return target;
     } catch {}
     await sleep(500);
@@ -224,6 +222,7 @@ async function runUiCheck(root) {
     log(`connected target: ${target.title || '(untitled)'} ${target.url || ''}`);
     cdp = connectCdp(target);
     await cdp.ready;
+    await waitForPromotedMainUi(cdp);
     await cdp.call('Runtime.enable');
     await cdp.call('Page.enable');
     await cdp.call('Page.bringToFront');
@@ -301,6 +300,19 @@ async function runUiCheck(root) {
       return md && md.classList.contains('open') && md.innerText.includes('MD_VIEWER_OK_20260628') && !!md.querySelector('strong') && !!md.querySelector('li');
     })()`, 30000, 'integrated markdown preview content');
     log('integrated markdown editor preview ok');
+
+    await evaluate(cdp, `window.openFile('media-link-target.txt')`, 30000);
+    await waitFor(cdp, `(() => {
+      const main = document.querySelector('#native-editor-main');
+      const md = document.querySelector('#editor-md-preview');
+      const toggle = document.querySelector('#editor-md-toggle');
+      const text = document.querySelector('#editor-textarea');
+      return main && main.style.display === 'grid'
+        && md && !md.classList.contains('open') && !md.textContent
+        && toggle && !toggle.classList.contains('visible')
+        && text && text.value.includes('EDITOR_LINK_TARGET_OK_20260628');
+    })()`, 30000, 'markdown preview resets before non-markdown editor');
+    log('markdown preview to text editor reset ok');
 
     await evaluate(cdp, `window.switchRightTab('file-tree'); window.loadFileTree();`, 30000);
     await waitFor(cdp, `(() => {

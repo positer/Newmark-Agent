@@ -38,15 +38,17 @@ function expandArchive(zipPath, destination) {
   try {
     expandArchive(zipPath, tempRoot);
     const unpackedRoot = await smokeWindowsUnpacked(tempRoot, 'Windows ZIP');
-    const featureSmoke = spawnSync(process.execPath, [path.join(__dirname, 'release-dev008-features-smoke.cjs')], {
-      cwd: path.resolve(__dirname, '..'),
-      encoding: 'utf8',
-      env: { ...process.env, NEWMARK_TEST_EXE: path.join(unpackedRoot, 'Newmark Agent.exe') },
-      stdio: 'inherit',
-      timeout: 300000,
-    });
-    if (featureSmoke.error) throw featureSmoke.error;
-    if (featureSmoke.status !== 0) throw new Error(`dev-0.0.8 packaged feature smoke exited ${featureSmoke.status}`);
+    for (const featureScript of ['release-dev008-features-smoke.cjs', 'release-dev009-features-smoke.cjs']) {
+      const featureSmoke = spawnSync(process.execPath, [path.join(__dirname, featureScript)], {
+        cwd: path.resolve(__dirname, '..'),
+        encoding: 'utf8',
+        env: { ...process.env, NEWMARK_TEST_EXE: path.join(unpackedRoot, 'Newmark Agent.exe') },
+        stdio: 'inherit',
+        timeout: 360000,
+      });
+      if (featureSmoke.error) throw featureSmoke.error;
+      if (featureSmoke.status !== 0) throw new Error(`${featureScript} exited ${featureSmoke.status}`);
+    }
     console.log(`[release-windows-zip-smoke] PASS ${path.relative(tempRoot, unpackedRoot) || '.'}`);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });

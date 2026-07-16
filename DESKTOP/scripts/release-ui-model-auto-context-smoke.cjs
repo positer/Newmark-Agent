@@ -22,6 +22,112 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function cssRgb(value) {
+  const channels = String(value || '').match(/[\d.]+/g)?.map(Number) || [];
+  if (channels.length < 3 || channels.slice(0, 3).some(channel => !Number.isFinite(channel))) {
+    fail(`unsupported computed CSS color: ${JSON.stringify(value)}`);
+  }
+  return channels.slice(0, 3);
+}
+
+function relativeLuminance(value) {
+  const channels = cssRgb(value).map(channel => {
+    const normalized = channel / 255;
+    return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  });
+  return (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2]);
+}
+
+function contrastRatio(foreground, background) {
+  const lighter = Math.max(relativeLuminance(foreground), relativeLuminance(background));
+  const darker = Math.min(relativeLuminance(foreground), relativeLuminance(background));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function assertThemeSelectContrast(snapshot, expectedTheme) {
+  if (!snapshot?.ok) fail(`${expectedTheme} model select palette unavailable: ${JSON.stringify(snapshot)}`);
+  if (snapshot.theme !== expectedTheme || snapshot.rootTheme !== expectedTheme || snapshot.select.colorScheme !== expectedTheme) {
+    fail(`${expectedTheme} model select color scheme mismatch: ${JSON.stringify(snapshot)}`);
+  }
+  for (const role of ['select', 'option', 'optgroup', 'selectedOption']) {
+    const style = snapshot[role];
+    if (!style?.color || !style?.effectiveBackgroundColor) {
+      fail(`${expectedTheme} ${role} computed style missing: ${JSON.stringify(snapshot)}`);
+    }
+    const ratio = contrastRatio(style.color, style.effectiveBackgroundColor);
+    style.contrastRatio = Math.round(ratio * 100) / 100;
+    if (ratio < 4.5) {
+      fail(`${expectedTheme} ${role} contrast ${ratio.toFixed(2)} is below WCAG AA 4.5:1: ${JSON.stringify(style)}`);
+    }
+  }
+}
+
+async function captureThemeSelectPalette(cdp, theme) {
+  return evaluate(cdp, `(async () => {
+    window.setTheme(${JSON.stringify(theme)});
+    window.refreshModelSelect();
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const model = document.getElementById('model-select');
+    const optgroup = model?.querySelector('optgroup');
+    const selectedOption = model ? Array.from(model.options).find(option => option.selected) : null;
+    const option = model?.querySelector('optgroup option:not(:checked):not(:disabled)')
+      || (model ? Array.from(model.options).find(candidate => !candidate.selected && !candidate.disabled) : null);
+    if (!model || !option || !optgroup || !selectedOption) {
+      return {
+        ok: false,
+        reason: 'missing model select fixture elements',
+        counts: {
+          options: model?.options?.length || 0,
+          optgroups: model?.querySelectorAll('optgroup').length || 0,
+        },
+      };
+    }
+    const parseColor = value => {
+      const channels = String(value || '').match(/[\\d.]+/g)?.map(Number) || [];
+      if (channels.length < 3) return [0, 0, 0, 0];
+      return [channels[0], channels[1], channels[2], channels.length >= 4 ? channels[3] : 1];
+    };
+    const over = (front, back) => {
+      const alpha = front[3] + (back[3] * (1 - front[3]));
+      if (alpha <= 0) return [0, 0, 0, 0];
+      return [
+        ((front[0] * front[3]) + (back[0] * back[3] * (1 - front[3]))) / alpha,
+        ((front[1] * front[3]) + (back[1] * back[3] * (1 - front[3]))) / alpha,
+        ((front[2] * front[3]) + (back[2] * back[3] * (1 - front[3]))) / alpha,
+        alpha,
+      ];
+    };
+    const effectiveBackground = element => {
+      let resolved = [0, 0, 0, 0];
+      for (let current = element; current; current = current.parentElement) {
+        resolved = over(resolved, parseColor(getComputedStyle(current).backgroundColor));
+        if (resolved[3] >= 0.999) break;
+      }
+      if (resolved[3] < 0.999) resolved = over(resolved, [255, 255, 255, 1]);
+      return 'rgb(' + resolved.slice(0, 3).map(channel => Math.round(channel)).join(', ') + ')';
+    };
+    const styleFor = element => {
+      const style = getComputedStyle(element);
+      return {
+        label: element.label || element.textContent?.trim() || '',
+        color: style.color,
+        backgroundColor: style.backgroundColor,
+        effectiveBackgroundColor: effectiveBackground(element),
+        colorScheme: style.colorScheme,
+      };
+    };
+    return {
+      ok: true,
+      theme: window.state.theme,
+      rootTheme: document.documentElement.getAttribute('data-theme') || 'dark',
+      select: styleFor(model),
+      option: styleFor(option),
+      optgroup: styleFor(optgroup),
+      selectedOption: styleFor(selectedOption),
+    };
+  })()`);
+}
+
 function getJson(url) {
   return new Promise((resolve, reject) => {
     http.get(url, res => {
@@ -236,40 +342,34 @@ async function launch(root, port) {
     stdio: 'ignore',
     windowsHide: true,
   });
-  const target = await waitForTarget(port);
-  log(`connected target: ${target.title || '(untitled)'} ${target.url || ''}`);
-  const cdp = connectCdp(target);
-  await cdp.ready;
+  let cdp;
+  try {
+    const target = await waitForTarget(port);
+    log(`connected target: ${target.title || '(untitled)'} ${target.url || ''}`);
+    cdp = connectCdp(target);
+    await cdp.ready;
     await waitForPromotedMainUi(cdp);
-  await cdp.call('Runtime.enable');
-  await cdp.call('Page.enable');
-  await cdp.call('Page.bringToFront');
-  return { child, cdp };
-}
-
-function stopChild(child) {
-  try { if (child && !child.killed) child.kill(); } catch {}
-}
-
-function ensureNoReleaseProcess() {
-  const running = spawnSync('powershell.exe', [
-    '-NoProfile',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-Command',
-    "(@(Get-Process | Where-Object { $_.Path -like '*Newmark Agent*release*' })).Count",
-  ], { encoding: 'utf8', windowsHide: true });
-  const count = Number(String(running.stdout || '').trim());
-  if (count > 0) {
-    spawnSync('powershell.exe', [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-Command',
-      "Get-Process | Where-Object { $_.Path -like '*Newmark Agent*release*' } | Stop-Process -Force; Write-Output 'STOP_RELEASE_PROCESSES_OK'",
-    ], { windowsHide: true, encoding: 'utf8' });
-    log('warning: cleaned packaged Newmark release process residue after smoke');
+    await cdp.call('Runtime.enable');
+    await cdp.call('Page.enable');
+    await cdp.call('Page.bringToFront');
+    return { child, cdp };
+  } catch (error) {
+    try { if (cdp?.ws) cdp.ws.close(); } catch {}
+    stopChildTree(child);
+    throw error;
   }
+}
+
+function stopChildTree(child) {
+  const pid = Number(child?.pid || 0);
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  const result = spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error) log(`warning: could not terminate smoke process tree ${pid}: ${result.error.message}`);
+  else if (result.status !== 0) log(`smoke process tree ${pid} had already exited or could not be terminated`);
+  else log(`terminated smoke process tree ${pid}`);
 }
 
 (async () => {
@@ -312,6 +412,31 @@ function ensureNoReleaseProcess() {
       return { options, hasAuto: options.includes('auto') };
     })()`);
     if (!fullAutoSnapshot.hasAuto) fail(`Auto option should be visible in full Auto: ${JSON.stringify(fullAutoSnapshot)}`);
+
+    const darkSelectPalette = await captureThemeSelectPalette(cdp, 'dark');
+    const lightSelectPalette = await captureThemeSelectPalette(cdp, 'light');
+    assertThemeSelectContrast(darkSelectPalette, 'dark');
+    assertThemeSelectContrast(lightSelectPalette, 'light');
+    const darkPaletteSignature = JSON.stringify([
+      darkSelectPalette.select.color,
+      darkSelectPalette.select.effectiveBackgroundColor,
+      darkSelectPalette.option.color,
+      darkSelectPalette.option.backgroundColor,
+      darkSelectPalette.optgroup.color,
+      darkSelectPalette.selectedOption.backgroundColor,
+    ]);
+    const lightPaletteSignature = JSON.stringify([
+      lightSelectPalette.select.color,
+      lightSelectPalette.select.effectiveBackgroundColor,
+      lightSelectPalette.option.color,
+      lightSelectPalette.option.backgroundColor,
+      lightSelectPalette.optgroup.color,
+      lightSelectPalette.selectedOption.backgroundColor,
+    ]);
+    if (darkPaletteSignature === lightPaletteSignature) {
+      fail(`dark/light model select palettes are identical: ${darkPaletteSignature}`);
+    }
+    log(`model select theme contrast ok dark=${JSON.stringify(darkSelectPalette)} light=${JSON.stringify(lightSelectPalette)}`);
 
     await evaluate(cdp, `window.setAutoSwitchMode('provider')`);
     await waitFor(cdp, `window.api.getState().then(s => s.autoSwitch === true && s.autoSwitchScope === 'provider')`, 15000, 'provider Auto state saved');
@@ -357,14 +482,13 @@ function ensureNoReleaseProcess() {
     log('all release UI model auto/context checks passed');
   } finally {
     try { if (cdp?.ws) cdp.ws.close(); } catch {}
-    stopChild(child);
+    stopChildTree(child);
     await sleep(1200);
     if (!keepRoot) {
       try { fs.rmSync(root, { recursive: true, force: true }); } catch (error) { log(`warning: could not remove temp root ${root}: ${error.message}`); }
     } else {
       log(`kept temp root: ${root}`);
     }
-    ensureNoReleaseProcess();
     if (!completed) log('cleanup complete after failed model auto/context smoke');
   }
 })().catch(error => {

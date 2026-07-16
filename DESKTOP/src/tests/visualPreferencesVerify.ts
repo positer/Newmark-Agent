@@ -115,6 +115,47 @@ function main(): void {
       const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(ui)?.[1] || '';
     };
+    const cssToken = (block: string, name: string): string => {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`${escaped}:\\s*(#[0-9a-f]{6}|[a-z]+)`, 'i').exec(block)?.[1].toLowerCase() || '';
+    };
+    const relativeLuminance = (hex: string): number => {
+      const channels = (hex.match(/[0-9a-f]{2}/gi) || []).map((value) => parseInt(value, 16) / 255);
+      const linear = channels.map((value) => value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4));
+      return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+    };
+    const contrastRatio = (foreground: string, background: string): number => {
+      const foregroundLuminance = relativeLuminance(foreground);
+      const backgroundLuminance = relativeLuminance(background);
+      return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
+        / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+    };
+    const darkTheme = cssBlock(':root');
+    const lightTheme = cssBlock('[data-theme="light"]');
+    const selectPalettes = [
+      { name: 'dark', block: darkTheme, scheme: 'dark' },
+      { name: 'light', block: lightTheme, scheme: 'light' },
+    ];
+    for (const palette of selectPalettes) {
+      const background = cssToken(palette.block, '--select-popup-bg');
+      const text = cssToken(palette.block, '--select-popup-text');
+      const group = cssToken(palette.block, '--select-popup-group');
+      const selectedBackground = cssToken(palette.block, '--select-popup-selected-bg');
+      const selectedText = cssToken(palette.block, '--select-popup-selected-text');
+      const disabledText = cssToken(palette.block, '--select-popup-disabled');
+      assert.equal(cssToken(palette.block, '--select-color-scheme'), palette.scheme, `${palette.name} native select uses the matching OS color scheme`);
+      assert.ok(background && text && group && selectedBackground && selectedText && disabledText, `${palette.name} select popup palette is complete`);
+      assert.ok(contrastRatio(text, background) >= 4.5, `${palette.name} select option text meets WCAG AA contrast`);
+      assert.ok(contrastRatio(group, background) >= 4.5, `${palette.name} select group labels meet WCAG AA contrast`);
+      assert.ok(contrastRatio(selectedText, selectedBackground) >= 4.5, `${palette.name} selected option meets WCAG AA contrast`);
+      assert.ok(contrastRatio(disabledText, background) >= 4.5, `${palette.name} disabled option text remains readable`);
+    }
+    assert.notEqual(cssToken(darkTheme, '--select-popup-bg'), cssToken(lightTheme, '--select-popup-bg'), 'dark and light native select popups use separate background colors');
+    assert.ok(/color-scheme:\s*var\(--select-color-scheme\)/.test(cssBlock('select'))
+      && ui.includes('background-color: var(--select-popup-bg);')
+      && ui.includes('color: var(--select-popup-group);')
+      && ui.includes('background-color: var(--select-popup-selected-bg);'),
+    'all native select menus apply the theme-specific option, group, and selected colors');
     assert.ok(!/backdrop-filter|translateZ/.test(cssBlock('#input-area textarea'))
       && !/backdrop-filter|translateZ/.test(cssBlock('.tool-select'))
       && /backdrop-filter:\s*blur\(var\(--glass-blur-3\)\)/.test(cssBlock('#input-area')),

@@ -76,9 +76,11 @@ async function main(): Promise<void> {
       && splitAgent.lastRouteDecision.excludedCandidates.some(candidate => candidate.deployment.modelId === 'chat-only'
         && candidate.reasons.some(reason => reason.includes('capability:tool_use'))),
     'an explicit tool request hard-filters candidates without verified tool_use');
+    splitAgent.history.push({ role: 'user', content: 'Call a tool to inspect the workspace' });
     const toolSurface = agentKernelRunnerInternals.routeToolSurface(splitAgent, [{ name: 'read', parameters: { type: 'object' } }]);
     ok(toolSurface.definitions.length === 1 && !toolSurface.systemPromptNotice,
-      'a tool-capable Auto route keeps the normal tool schema surface');
+      'a tool-capable Auto route preloads the task-relevant schema');
+    splitAgent.history.pop();
 
     splitAgent.resetAutoRoute();
     await splitAgent.evaluateAndSwitch('Implement a fix for this repository bug');
@@ -88,8 +90,9 @@ async function main(): Promise<void> {
 
     splitAgent.setModel('chat-only');
     const fixedCompatibilitySurface = agentKernelRunnerInternals.routeToolSurface(splitAgent, [{ name: 'read', parameters: { type: 'object' } }]);
-    ok(fixedCompatibilitySurface.definitions.length === 1,
-      'fixed model selections retain the legacy tool surface even when Standard tool evidence is absent');
+    ok(fixedCompatibilitySurface.definitions.length === 0
+      && fixedCompatibilitySurface.systemPromptNotice.includes('tool_provision'),
+    'fixed model selections also start from the on-demand broker instead of the legacy full schema surface');
   } finally {
     fs.rmSync(splitRoot, { recursive: true, force: true });
   }

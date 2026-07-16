@@ -6,6 +6,7 @@ import {
   WslAgentPromptResult,
   WslAutoRouteRatingResult,
   WslAgentStopResult,
+  WslConversationRewindResult,
 } from './wslAgentProtocol';
 import { RuntimePoolCapacityError } from './runtimePoolCapacity';
 
@@ -14,6 +15,7 @@ export interface WslTargetRuntimeClient {
   setHostToolHandler(handler: WslHostToolHandler | null): void;
   prompt(params: WslAgentPromptRequest): Promise<WslAgentPromptResult>;
   snapshotTarget(target: ConversationRuntimeTarget): Promise<Record<string, unknown>>;
+  rewind(target: ConversationRuntimeTarget, messageIndex: number): Promise<WslConversationRewindResult>;
   requestStop(target: ConversationRuntimeTarget, runId?: string): Promise<WslAgentStopResult>;
   enqueueGuide(target: ConversationRuntimeTarget, envelope: ConversationInputEnvelope): Promise<GuideReceipt>;
   checkpoint(target: ConversationRuntimeTarget): Promise<Record<string, unknown>>;
@@ -117,6 +119,22 @@ export class WslAgentRuntimePool {
       return result;
     } finally {
       this.release(entry, scheduleIdle);
+    }
+  }
+
+  async rewind(target: ConversationRuntimeTarget, messageIndex: number): Promise<WslConversationRewindResult> {
+    const normalized = normalizeConversationTarget(target);
+    const entry = await this.acquire(normalized);
+    try {
+      if (entry.stopIntent) throw new Error('Cannot edit a message while this conversation is stopping.');
+      const result = await entry.client.rewind(normalized, messageIndex);
+      entry.lastSnapshot = null;
+      entry.workEvents = [];
+      entry.lastRunId = '';
+      entry.stopIntent = null;
+      return result;
+    } finally {
+      this.release(entry, true);
     }
   }
 

@@ -130,7 +130,7 @@ function verifyPackagedSources() {
   const asarPath = path.join(path.dirname(exePath), 'resources', 'app.asar');
   assert(fs.existsSync(asarPath), `packaged app.asar is missing: ${asarPath}`);
   const packaged = JSON.parse(readAsarText(asarPath, 'package.json'));
-  assert(packaged.version === packageJson.version && packaged.version === '0.0.10', `packaged version mismatch: ${packaged.version}`);
+  assert(packaged.version === packageJson.version, `packaged version mismatch: expected ${packageJson.version}, got ${packaged.version}`);
 
   const auto = readAsarText(asarPath, 'dist/core/autoRouter.js');
   assert(auto.includes('catalogSnapshotHash') && auto.includes('maxQualityLoss') && auto.includes('rankedCandidates'), 'packaged Auto router lacks auditable decision fields');
@@ -140,10 +140,24 @@ function verifyPackagedSources() {
   assert(validation.includes('MODEL_VALIDATION_TTL_MS') && validation.includes('strict_json') && validation.includes('tool_result'), 'packaged Standard validation service is incomplete');
   assert(validation.includes('auth_error') && validation.includes('rate_limited') && validation.includes('invalid_config'), 'packaged validation status taxonomy is incomplete');
 
+  const kernelRunner = readAsarText(asarPath, 'dist/core/agentKernelRunner.js');
+  assert(kernelRunner.includes("TOOL_PROVISION_NAME = 'tool_provision'")
+    && kernelRunner.includes('INITIAL_TOOL_SCHEMA_LIMIT = 8')
+    && kernelRunner.includes('TOOL_PROVISION_BATCH_LIMIT = 8')
+    && kernelRunner.includes('provisionedNames'), 'packaged Agent lacks bounded on-demand tool provisioning');
+
   const ui = readAsarText(asarPath, 'dist/ui/index.html');
   assert(!/<webview\b[^>]*id=["']browser-webview/i.test(ui), 'packaged UI still creates a static Browser guest');
   assert(ui.includes("document.createElement('webview')") && ui.includes('persist:newmark-browser'), 'packaged UI lacks demand-created persistent Browser guest');
   assert(ui.includes('20 * transparencyPercent / 100') && ui.includes("--glass-blur-3"), 'packaged glass opacity-to-width inversion is missing');
+  assert(ui.includes('queue-guide-btn')
+    && ui.includes("'queue.guideAction': '引导'")
+    && ui.includes('restoreQueueItemAfterGuideFailure')
+    && ui.includes('!outcome.guideReceipt'), 'packaged queue lacks visible Guide delivery and failure recovery');
+  assert(ui.includes('--control-hover-bg')
+    && ui.includes('settings-action-btn')
+    && ui.includes('settings-terminal-timeout-input')
+    && ui.includes('color-scheme: var(--select-color-scheme)'), 'packaged settings controls lack theme-consistent states');
 }
 
 function verifyPackagedCli(root) {
@@ -189,7 +203,7 @@ function verifyPackagedCli(root) {
     writeRuntimeConfig(root);
     verifyPackagedSources();
     verifyPackagedCli(root);
-    console.log(JSON.stringify({ ok: true, version: packageJson.version, assertions: 19, real_api_called: false }));
+    console.log(JSON.stringify({ ok: true, version: packageJson.version, assertions: 22, real_api_called: false }));
   } finally {
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 200 });
   }

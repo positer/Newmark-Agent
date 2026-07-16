@@ -11,6 +11,7 @@ import {
   UtilityAgentResponse,
   UtilityAgentSnapshotResult,
   UtilityAgentStopResult,
+  UtilityConversationRewindResult,
   UtilityHostToolRequest,
   UtilityHostToolResult,
   UtilityPromptRequest,
@@ -1052,6 +1053,14 @@ export class ElectronUtilityAgentClient {
   async snapshot(): Promise<UtilityAgentSnapshotResult> {
     await this.start();
     return await this.requestTargetSnapshot();
+  }
+
+  async rewind(messageIndex: number): Promise<UtilityConversationRewindResult> {
+    await this.start();
+    return await this.request('rewind', {
+      target: this.target,
+      messageIndex: Math.floor(Number(messageIndex)),
+    }, 15_000) as UtilityConversationRewindResult;
   }
 
   async requestStop(runId?: string): Promise<UtilityAgentStopResult> {

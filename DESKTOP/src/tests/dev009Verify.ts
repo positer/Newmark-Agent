@@ -370,7 +370,7 @@ export function verifyDev009SourceContracts(): Assertion[] {
     && hasAll(browserUse, ['isPublicBrowserUseAttribute', 'PUBLIC_BROWSER_USE_ARIA_ATTRIBUTES'])
     && hasAll(main, ["workEvent.type === 'done'", 'electronBrowserUseHost?.clear']), 'dev009 Browser-Use privacy: only rendered text, visible option labels, and allowlisted public attributes escape; terminal runs release browser bindings', results);
 
-  check(packageJson.includes('"version": "0.0.10"') && packageJson.includes('release:dev009-features-smoke') && packageJson.includes('release:dev010-features-smoke'), 'dev009 release: compatibility gate remains registered in the dev-0.0.10 package', results);
+  check(packageJson.includes('release:dev009-features-smoke') && packageJson.includes('release:dev010-features-smoke'), 'dev009 release: compatibility gates remain registered in the current package', results);
 
   check(
     String(packageConfig.scripts?.build || '').includes('node scripts/build-windows-process-tree-helper.cjs')

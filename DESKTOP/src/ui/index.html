@@ -42,6 +42,25 @@ try {
   --select-popup-selected-bg: #355fce;
   --select-popup-selected-text: #ffffff;
   --select-popup-disabled: #8f99b5;
+  --control-hover-bg: rgba(255,255,255,0.08);
+
+  /* Native editor palette */
+  --editor-bg: #0b0d14;
+  --editor-gutter-bg: rgba(255,255,255,0.025);
+  --editor-ghost-text: rgba(205,211,222,0.48);
+  --editor-caret: #ffffff;
+  --editor-selection: rgba(91,120,255,0.35);
+  --editor-completion-bg: rgba(12,14,22,0.97);
+  --editor-comment: #8b949e;
+  --editor-string: #9ecbff;
+  --editor-number: #79b8ff;
+  --editor-keyword: #f97583;
+  --editor-type: #b392f0;
+  --editor-tag: #85e89d;
+  --editor-attr: #ffab70;
+  --editor-heading: #79b8ff;
+  --editor-code: #9ecbff;
+  --editor-punct: #a8b0bd;
 
   /* Accent colors */
   --accent: #5b78ff;
@@ -133,6 +152,23 @@ try {
   --select-popup-selected-bg: #2459b8;
   --select-popup-selected-text: #ffffff;
   --select-popup-disabled: #687189;
+  --control-hover-bg: rgba(0,0,0,0.055);
+  --editor-bg: #f7f8fc;
+  --editor-gutter-bg: rgba(29,36,58,0.045);
+  --editor-ghost-text: rgba(58,65,88,0.62);
+  --editor-caret: #172033;
+  --editor-selection: rgba(62,99,221,0.24);
+  --editor-completion-bg: rgba(255,255,255,0.98);
+  --editor-comment: #596275;
+  --editor-string: #087443;
+  --editor-number: #1d4ed8;
+  --editor-keyword: #b42318;
+  --editor-type: #6d28d9;
+  --editor-tag: #067647;
+  --editor-attr: #9a3412;
+  --editor-heading: #1d4ed8;
+  --editor-code: #0f6b66;
+  --editor-punct: #596275;
   --glass-rgb-1: 255 255 255;
   --glass-rgb-2: 255 255 255;
   --glass-rgb-3: 255 255 255;
@@ -876,10 +912,19 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   white-space: nowrap;
 }
 
-.sec-btn:hover { background: rgba(255,255,255,0.08); border-color: var(--border-hover); }
+.sec-btn:hover { background: var(--control-hover-bg); border-color: var(--border-hover); }
 .sec-btn:active { transform: scale(0.96) translateZ(0); }
 .sec-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .sec-btn.primary:hover { filter: brightness(1.1); }
+.sec-btn:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.sec-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
 
 #conversation-list {
   flex: 1;
@@ -1155,21 +1200,21 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .et-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .et-btn.primary:hover { filter: brightness(1.1); }
 
-.native-editor { flex:1; min-height:0; display:flex; flex-direction:column; border:1px solid var(--border); border-radius:var(--radius-md); overflow:hidden; background:#0b0d14; }
+.native-editor { flex:1; min-height:0; display:flex; flex-direction:column; border:1px solid var(--border); border-radius:var(--radius-md); overflow:hidden; background:var(--editor-bg); }
 .native-editor-main { flex:1; min-height:0; display:grid; grid-template-columns:44px minmax(0,1fr); position:relative; overflow:hidden; }
-.editor-gutter { margin:0; padding:10px 8px 10px 0; overflow:hidden; text-align:right; color:var(--text-dim); background:rgba(255,255,255,.025); border-right:1px solid var(--glass-border-1); font:12px/1.55 var(--font-mono); user-select:none; }
+.editor-gutter { margin:0; padding:10px 8px 10px 0; overflow:hidden; text-align:right; color:var(--text-dim); background:var(--editor-gutter-bg); border-right:1px solid var(--glass-border-1); font:12px/1.55 var(--font-mono); user-select:none; }
 .editor-code-wrap { position:relative; min-width:0; min-height:0; overflow:hidden; }
 .editor-highlight, .editor-ghost, .editor-textarea { position:absolute; inset:0; margin:0; padding:10px 12px; border:0; overflow:auto; white-space:pre; tab-size:2; font:12px/1.55 var(--font-mono); }
 .editor-highlight { pointer-events:none; color:var(--text); background:transparent; }
-.editor-ghost { display:none; pointer-events:none; z-index:1; color:var(--text); background:#0b0d14; }
+.editor-ghost { display:none; pointer-events:none; z-index:1; color:var(--text); background:var(--editor-bg); }
 .editor-ghost.visible { display:block; }
-.editor-ghost-text { color:rgba(205,211,222,.48); -webkit-text-fill-color:rgba(205,211,222,.48); }
-.editor-textarea { z-index:2; width:100%; height:100%; resize:none; outline:none; background:transparent; color:transparent; caret-color:#fff; -webkit-text-fill-color:transparent; }
-.editor-textarea::selection { background:rgba(91,120,255,.35); }
-.tok-comment{color:#6a737d}.tok-string{color:#9ecbff}.tok-number{color:#79b8ff}.tok-keyword{color:#f97583}.tok-type{color:#b392f0}.tok-tag{color:#85e89d}.tok-attr{color:#ffab70}.tok-heading{color:#79b8ff;font-weight:700}.tok-code{color:#9ecbff}.tok-punct{color:#959da5}
+.editor-ghost-text { color:var(--editor-ghost-text); -webkit-text-fill-color:var(--editor-ghost-text); }
+.editor-textarea { z-index:2; width:100%; height:100%; resize:none; outline:none; background:transparent; color:transparent; caret-color:var(--editor-caret); -webkit-text-fill-color:transparent; }
+.editor-textarea::selection { background:var(--editor-selection); }
+.tok-comment{color:var(--editor-comment)}.tok-string{color:var(--editor-string)}.tok-number{color:var(--editor-number)}.tok-keyword{color:var(--editor-keyword)}.tok-type{color:var(--editor-type)}.tok-tag{color:var(--editor-tag)}.tok-attr{color:var(--editor-attr)}.tok-heading{color:var(--editor-heading);font-weight:700}.tok-code{color:var(--editor-code)}.tok-punct{color:var(--editor-punct)}
 .editor-status { min-height:25px; display:flex; align-items:center; gap:8px; padding:0 8px; border-top:1px solid var(--glass-border-1); color:var(--text-dim); font:10px var(--font-mono); }
 .editor-vim-mode { color:var(--accent2); font-weight:700; min-width:48px; }
-.editor-completion { position:absolute; left:12px; right:12px; bottom:10px; z-index:4; display:none; padding:8px 10px; border:1px solid var(--accent); border-radius:var(--radius-sm); background:rgba(12,14,22,.97); color:var(--text); font:11px/1.45 var(--font-mono); white-space:pre-wrap; box-shadow:var(--shadow-lg); }
+.editor-completion { position:absolute; left:12px; right:12px; bottom:10px; z-index:4; display:none; padding:8px 10px; border:1px solid var(--accent); border-radius:var(--radius-sm); background:var(--editor-completion-bg); color:var(--text); font:11px/1.45 var(--font-mono); white-space:pre-wrap; box-shadow:var(--shadow-lg); }
 .editor-completion.open { display:block; }
 .editor-assist { display:none; max-height:34%; overflow:auto; padding:10px; border-top:1px solid var(--glass-border-1); color:var(--text); font-size:11px; line-height:1.55; }
 .editor-assist.open { display:block; }
@@ -1735,6 +1780,24 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 .terminal-timeout-control input:focus { border-color: var(--accent); }
+
+.terminal-timeout-control input[type="number"],
+.setting-control input[type="number"] {
+  color-scheme: var(--select-color-scheme);
+}
+
+.terminal-timeout-control input[type="number"]::-webkit-inner-spin-button,
+.setting-control input[type="number"]::-webkit-inner-spin-button {
+  cursor: pointer;
+  opacity: 0.72;
+}
+
+.terminal-timeout-control input[type="number"]:hover::-webkit-inner-spin-button,
+.terminal-timeout-control input[type="number"]:focus::-webkit-inner-spin-button,
+.setting-control input[type="number"]:hover::-webkit-inner-spin-button,
+.setting-control input[type="number"]:focus::-webkit-inner-spin-button {
+  opacity: 1;
+}
 
 .shell-btn {
   padding: 3px 10px;
@@ -2410,6 +2473,15 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .stack-icon-btn:active { transform: scale(0.94); }
 .stack-icon-btn.warn { color: #ffcc44; }
 .stack-icon-btn.danger { color: #ff7777; }
+.stack-icon-btn:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.stack-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
 
 #goal-bar {
   border-bottom: none;
@@ -2563,6 +2635,27 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .work-review-path { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:11px var(--font-mono); }
 .work-review-more { width:100%; height:30px; border:0; border-top:1px solid var(--glass-border-1); background:rgba(255,255,255,.025); color:var(--text-dim); cursor:pointer; font:11px var(--font); text-align:left; padding:0 12px; }
 .work-review-more:hover { color:var(--text); background:rgba(255,255,255,.045); }
+.work-review-detail { display:flex; flex-direction:column; gap:6px; }
+.work-review-detail .file-row {
+  appearance:none;
+  width:100%;
+  min-height:38px;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  gap:12px;
+  padding:7px 10px;
+  border:1px solid var(--glass-border-2);
+  border-radius:6px;
+  background:transparent;
+  color:var(--text);
+  text-align:left;
+  cursor:pointer;
+  font:11px var(--font);
+  transition:background var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo);
+}
+.work-review-detail .file-row:hover { background:var(--control-hover-bg); border-color:var(--border-hover); }
+.work-review-detail .file-row:focus-visible { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-glow); outline:none; }
 
 #queue-list {
   max-height: 112px;
@@ -2631,6 +2724,16 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 .queue-edit:focus {
   color: var(--text-bright);
+}
+
+.stack-icon-btn.queue-guide-btn {
+  width: auto;
+  min-width: 54px;
+  height: 28px;
+  padding: 0 7px;
+  gap: 4px;
+  color: var(--text);
+  font: 11px var(--font-ui);
 }
 
 /* ============================================================
@@ -3181,6 +3284,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .setting-control input[type="text"],
 .setting-control input[type="number"] {
   width: 100%;
+  min-height: 36px;
+  box-sizing: border-box;
   padding: 5px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -3193,6 +3298,32 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 .setting-control select:focus,
 .setting-control input:focus { border-color: var(--accent); }
+
+.setting-control input[type="number"]:hover,
+.terminal-timeout-control input[type="number"]:hover { border-color: var(--border-hover); }
+
+.setting-control input[type="number"]:focus-visible,
+.terminal-timeout-control input[type="number"]:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.setting-control input[type="number"]:disabled,
+.terminal-timeout-control input[type="number"]:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.settings-action-btn {
+  display: inline-flex;
+  width: auto;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.settings-terminal-timeout-input { width: 110px !important; }
 
 .tool-settings-grid {
   display: flex;
@@ -4497,6 +4628,7 @@ var NEWMARK_I18N = {
     'todo.addPrompt': 'Add task:',
     'queue.title': 'Queue',
     'queue.guideNow': 'Guide now',
+    'queue.guideAction': 'Guide',
     'queue.expand': 'Expand queue',
     'queue.collapse': 'Collapse queue',
     'review.fileChanges': 'File changes',
@@ -4986,6 +5118,7 @@ var NEWMARK_I18N = {
     'todo.addPrompt': '添加任务：',
     'queue.title': '队列',
     'queue.guideNow': '立即引导',
+    'queue.guideAction': '引导',
     'queue.expand': '展开队列',
     'queue.collapse': '折叠队列',
     'review.fileChanges': '文件变动',
@@ -6124,6 +6257,11 @@ function redactSensitiveText(value) {
     .replace(/(Authorization:\s*Bearer\s+)[^\s,;]+/ig, '$1[redacted]');
 }
 
+function formatChatError(value, fallback) {
+  var detail = redactSensitiveText(String(value || '').trim() || fallback || 'Agent run failed.');
+  return /^\s*\[Error\]/i.test(detail) ? detail : '[Error] ' + detail;
+}
+
 function messageActionsHtml(role, text, messageIndex) {
   if (role !== 'user' && role !== 'assistant') return '';
   var index = Number.isFinite(Number(messageIndex)) ? Number(messageIndex) : -1;
@@ -6231,31 +6369,54 @@ window.rateAutoRoute = async function(button, score) {
 };
 
 window.editUserMessage = async function(button, messageIndex) {
-  var conversationId = activeConversationId();
-  if (runningConversationRecord(conversationId)) return;
-  if (!api.rewindConversation) return;
   var message = button && button.closest ? button.closest('.chat-msg') : null;
+  var target = message && message._newmarkMessageTarget ? message._newmarkMessageTarget : currentConversationTarget();
+  var conversationId = String(target.conversationId || activeConversationId() || 'default');
+  if (runningConversationRecord(conversationId, target.workspaceId)) return;
+  if (!api.rewindConversation) return;
+  var rewindKey = runtimeKeyFor(target.workspaceId, conversationId);
+  if (!state.pendingConversationRewinds) state.pendingConversationRewinds = {};
+  if (state.pendingConversationRewinds[rewindKey]) return;
+  state.pendingConversationRewinds[rewindKey] = true;
+  if (button) button.disabled = true;
   var text = String(message && message._newmarkMessageText || '').replace(/\n\n\[\d+ image attachments?\]\s*$/i, '');
   var attachments = normalizeConversationImageAttachments(message && message._newmarkMessageAttachments);
-  var result = await api.rewindConversation(currentConversationTarget(conversationId), Number(messageIndex));
-  if (!result || result.error) {
-    addMsg('assistant', '[Error] ' + ((result && result.error) || 'Unable to edit message.'), 'error', state.model);
-    return;
+  try {
+    var result = await api.rewindConversation(target, Number(messageIndex));
+    if (!result || result.error) {
+      var reason = (result && result.error) || 'Unable to edit message.';
+      showUiNotice(
+        currentLang() === 'zh' ? '无法编辑历史消息：' + reason : 'Unable to edit message: ' + reason,
+        'error',
+        'conversation-rewind-' + rewindKey
+      );
+      return;
+    }
+    if (!isActiveConversationTarget(target)) return;
+    clearAgentWorkEvents(conversationId);
+    resetConversationWorkUi(conversationId, false);
+    state.backendQueue = setBackendQueueForTarget({ steering: [], followUp: [] }, target);
+    if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue, target);
+    renderChatMessages(result.chatMessages || []);
+    els.prompt.value = String(text || '');
+    state.promptAttachments = attachments.map(function(item) {
+      return { id: item.id, name: item.name, type: item.mimeType, dataUrl: item.dataUrl };
+    });
+    renderPromptAttachments();
+    els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
+    els.prompt.focus();
+    els.prompt.setSelectionRange(els.prompt.value.length, els.prompt.value.length);
+  } catch (error) {
+    var errorText = error && error.message ? error.message : String(error || 'Unable to edit message.');
+    showUiNotice(
+      currentLang() === 'zh' ? '无法编辑历史消息：' + errorText : 'Unable to edit message: ' + errorText,
+      'error',
+      'conversation-rewind-' + rewindKey
+    );
+  } finally {
+    delete state.pendingConversationRewinds[rewindKey];
+    if (button && button.isConnected) button.disabled = false;
   }
-  clearAgentWorkEvents(conversationId);
-  resetConversationWorkUi(conversationId, false);
-  var editedTarget = currentConversationTarget(conversationId);
-  state.backendQueue = setBackendQueueForTarget({ steering: [], followUp: [] }, editedTarget);
-  if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue, editedTarget);
-  renderChatMessages(result.chatMessages || []);
-  els.prompt.value = String(text || '');
-  state.promptAttachments = attachments.map(function(item) {
-    return { id: item.id, name: item.name, type: item.mimeType, dataUrl: item.dataUrl };
-  });
-  renderPromptAttachments();
-  els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
-  els.prompt.focus();
-  els.prompt.setSelectionRange(els.prompt.value.length, els.prompt.value.length);
 };
 
 function normalizeConversationImageAttachments(input) {
@@ -6318,6 +6479,23 @@ function appendConversationImageAttachments(container, input) {
 
 function addMsg(role, text, mode, model, messageIndex, messageMeta) {
   text = redactSensitiveText(text);
+  var guideMessageId = messageMeta && String(messageMeta.clientMessageId || '');
+  var existingGuide = guideMessageId ? findGuideMessageElement(guideMessageId) : null;
+  if (existingGuide) {
+    var existingBody = existingGuide.querySelector('.msg-body');
+    if (existingBody) {
+      existingBody.innerHTML = renderMessageContent(text);
+      existingGuide._newmarkMessageAttachments = appendConversationImageAttachments(existingBody, messageMeta && messageMeta.attachments);
+    }
+    existingGuide._newmarkMessageText = String(text || '');
+    existingGuide._newmarkMessageTarget = messageMeta && messageMeta.target ? {
+      workspaceId: String(messageMeta.target.workspaceId || ''),
+      conversationId: String(messageMeta.target.conversationId || 'default')
+    } : null;
+    applyGuideMessageMeta(existingGuide, messageMeta);
+    els['chat-area'].scrollTop = els['chat-area'].scrollHeight;
+    return existingGuide;
+  }
   var div = document.createElement('div');
   div.className = 'chat-msg ' + role;
   var metaLabel = role === 'user' ? t('message.user') : (role === 'workflow' ? t('message.workflow') : (role === 'system' ? t('message.system') : t('message.agent')));
@@ -6328,6 +6506,10 @@ function addMsg(role, text, mode, model, messageIndex, messageMeta) {
     (metaInfo ? '<span class="meta-extra"> | ' + esc(metaInfo) + '</span>' : '') + messageActionsHtml(role, text, messageIndex) + '</div><div class="msg-body">' + renderMessageContent(text) + '</div>';
   div._newmarkMessageText = String(text || '');
   div._newmarkMessageAttachments = appendConversationImageAttachments(div.querySelector('.msg-body'), messageMeta && messageMeta.attachments);
+  div._newmarkMessageTarget = messageMeta && messageMeta.target ? {
+    workspaceId: String(messageMeta.target.workspaceId || ''),
+    conversationId: String(messageMeta.target.conversationId || 'default')
+  } : null;
   if (messageMeta && messageMeta.clientMessageId) applyGuideMessageMeta(div, messageMeta);
   els['chat-area'].appendChild(div);
   els['chat-area'].scrollTop = els['chat-area'].scrollHeight;
@@ -6361,7 +6543,7 @@ window.openWorkReview = function(button) {
   if (!review) return;
   var files = JSON.parse(review.getAttribute('data-files') || '[]');
   var html = '<div class="work-review-detail">' + files.map(function(file) {
-    return '<button class="file-row" onclick="window.closeSubWin();window.openFile(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ')">' +
+    return '<button type="button" class="file-row" onclick="window.closeSubWin();window.openFile(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ')">' +
       '<span class="work-review-path">' + esc(file.path) + '</span><span><span class="work-review-add">+' + file.added + '</span><span class="work-review-del">-' + file.deleted + '</span></span></button>';
   }).join('') + '</div>';
   window.openSubWin(t('review.title'), html);
@@ -6675,7 +6857,9 @@ function recordGuideUiMessage(input, target) {
   var prior = messages[clientMessageId] || null;
   var requestedStatus = normalizeGuideUiStatus(receipt.status || input.guideStatus || input.status);
   var rank = { accepted: 1, deferred: 2, rejected: 3, applied: 4 };
-  var status = prior && rank[prior.status] > rank[requestedStatus] ? prior.status : requestedStatus;
+  var allowStatusReset = (input.allowStatusReset === true || receipt.allowStatusReset === true)
+    && (!prior || prior.status !== 'applied');
+  var status = prior && !allowStatusReset && rank[prior.status] > rank[requestedStatus] ? prior.status : requestedStatus;
   var explicitReason = String(receipt.reason || receipt.error || input.reason || input.error || '');
   var record = {
     clientMessageId: clientMessageId,
@@ -7372,7 +7556,8 @@ function renderChatMessages(messages) {
       clientMessageId: clientMessageId,
       guideStatus: clientMessageId ? 'applied' : '',
       runId: m.runId || '',
-      attachments: m.attachments || []
+      attachments: m.attachments || [],
+      target: renderTarget
     });
     if (clientMessageId) delete guideMessages[clientMessageId];
   }
@@ -7475,7 +7660,7 @@ function renderAgentWorkEvent(event) {
   } else if (type === 'error') {
     finishToolBatch(eventConversationId);
     if (workRun) showUiNotice(content || 'Agent run failed.', 'error', 'agent-run-' + String(event.runId || event.id || 'error'));
-    else addMsg('assistant', '[Error] ' + content, 'error', event.model || state.model);
+    else addMsg('assistant', formatChatError(content, 'Agent run failed.'), 'error', event.model || state.model);
   } else if (type === 'queue_update') {
     var eventQueueTarget = { workspaceId: eventWorkspaceId || runtimeWorkspaceId(''), conversationId: eventConversationId };
     state.backendQueue = setBackendQueueForTarget(event.queue || { steering: [], followUp: [] }, eventQueueTarget);
@@ -8061,6 +8246,7 @@ function bindQueuedRequestToTarget(request, text, target) {
   return {
     text: String(source.text === undefined ? (text || '') : (source.text || '')),
     images: (Array.isArray(source.images) ? source.images : []).slice(0, 6).map(function(image) { return Object.assign({}, image); }),
+    clientMessageId: String(source.clientMessageId || '').trim().slice(0, 200),
     target: owner,
     backendManaged: false,
     provenance: 'local-next'
@@ -8204,7 +8390,7 @@ window.renderQueuePanel = function() {
       ? ' readonly aria-readonly="true"'
       : ' oninput="window.editQueueItem(' + queueIndex + ',this.value)" onkeydown="if(event.key===&quot;Enter&quot;)this.blur()"';
     var actions = backendManaged ? '' :
-      '<button class="stack-icon-btn" onclick="window.guideQueueItem(' + queueIndex + ')" title="' + escAttr(t('queue.guideNow')) + '">' + iconSvg('send', t('queue.guideNow'), 'tiny') + '</button>' +
+      '<button type="button" class="stack-icon-btn queue-guide-btn" onclick="window.guideQueueItem(' + queueIndex + ')" title="' + escAttr(t('queue.guideNow')) + '">' + iconSvg('corner-down-right', t('queue.guideNow'), 'tiny') + '<span>' + esc(t('queue.guideAction')) + '</span></button>' +
       '<button class="stack-icon-btn" onclick="window.focusQueueItem(' + queueIndex + ')" title="' + escAttr(t('common.edit')) + '">' + iconSvg('square-pen', t('common.edit'), 'tiny') + '</button>' +
       '<button class="stack-icon-btn danger" onclick="window.deleteQueueItem(' + queueIndex + ')" title="' + escAttr(t('common.delete')) + '">' + iconSvg('trash', t('common.delete'), 'tiny') + '</button>';
     html += '<div class="queue-item"' + dragAttributes + '>' +
@@ -8261,24 +8447,48 @@ window.deleteQueueItem = function(idx) {
   window.renderInputStack();
 };
 
+function restoreQueueItemAfterGuideFailure(idx, text, request, target, reuseClientMessageId) {
+  if (!request || (state.nextQueueRequests || []).indexOf(request) >= 0) return;
+  if (!reuseClientMessageId) request.clientMessageId = '';
+  var insertAt = Math.max(0, Math.min(Number(idx) || 0, (state.nextQueue || []).length));
+  state.nextQueue.splice(insertAt, 0, text);
+  state.nextQueueRequests.splice(insertAt, 0, request);
+  if (state.queueHiddenItems) delete state.queueHiddenItems[queueHiddenItemKey(text, target)];
+  refreshNextPromptForTarget(target);
+  window.renderInputStack();
+}
+
 window.guideQueueItem = function(idx) {
   if (!state.nextQueue || !state.nextQueue[idx]) return;
   var request = state.nextQueueRequests && state.nextQueueRequests[idx];
   if (queuedRequestIsBackendManaged(request) || !queuedRequestMatchesTarget(request, currentConversationTarget())) return;
+  var target = normalizeQueuedConversationTarget(request.target) || currentConversationTarget();
   var deliverDuringRun = isCurrentConversationRunning();
   var next = state.nextQueue.splice(idx, 1)[0];
   var nextRequest = state.nextQueueRequests ? state.nextQueueRequests.splice(idx, 1)[0] : null;
   if (!state.queueHiddenItems) state.queueHiddenItems = {};
-  if (next) state.queueHiddenItems[queueHiddenItemKey(next, currentConversationTarget())] = true;
+  if (next) state.queueHiddenItems[queueHiddenItemKey(next, target)] = true;
   refreshNextPromptForTarget(currentConversationTarget());
   window.renderInputStack();
   if (next) {
-    window.sendMessage('guide', next, {
+    var delivery = window.sendMessage('guide', next, {
       fromQueue: true,
       forceBuild: true,
       deliverAsGuide: deliverDuringRun,
       queuedRequest: nextRequest
     });
+    if (deliverDuringRun && delivery && typeof delivery.then === 'function') {
+      return Promise.resolve(delivery).then(function(outcome) {
+        if (outcome && outcome.ok === false) {
+          restoreQueueItemAfterGuideFailure(idx, next, nextRequest, target, !outcome.guideReceipt);
+        }
+        return outcome;
+      }, function(error) {
+        restoreQueueItemAfterGuideFailure(idx, next, nextRequest, target, true);
+        return { ok: false, error: error && error.message ? error.message : String(error) };
+      });
+    }
+    return delivery;
   }
 };
 
@@ -8352,11 +8562,22 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   var conversationRunning = !!activeRuntime;
   markConversationTracked(lockedConversationId, state.conversationTrackMs || 300000, lockedTarget.workspaceId);
 
+  if (opts.deliverAsGuide && !conversationRunning) {
+    var endedGuideMessage = currentLang() === 'zh' ? '当前运行已结束，Guide 已恢复到队列' : 'The active run ended; the Guide was restored to the queue';
+    showUiNotice(endedGuideMessage, 'error', 'guide-run-ended');
+    return Promise.resolve({ ok: false, error: endedGuideMessage });
+  }
+
   if (conversationRunning && effectiveInputMode === 'guide' && (!opts.fromQueue || opts.deliverAsGuide)) {
     if (!opts.fromQueue) els.prompt.value = '';
     if (usesPromptAttachments) clearPromptAttachments();
     updateSubmitButtonState();
-    var clientMessageId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('guide-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+    var clientMessageId = queuedRequestRecord && String(queuedRequestRecord.clientMessageId || '').trim().slice(0, 200);
+    var retryingUnacknowledgedGuide = !!clientMessageId;
+    if (!clientMessageId) {
+      clientMessageId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('guide-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+      if (queuedRequestRecord) queuedRequestRecord.clientMessageId = clientMessageId;
+    }
     var envelope = {
       clientMessageId: clientMessageId,
       target: lockedTarget,
@@ -8374,12 +8595,15 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       content: displayText,
       attachments: optimisticAttachments,
       model: state.model,
-      createdAt: envelope.createdAt
+      createdAt: envelope.createdAt,
+      allowStatusReset: retryingUnacknowledgedGuide
     }, lockedTarget);
     addMsg('user', displayText, 'guide', state.model, undefined, optimisticGuide);
     var enqueue = api.enqueueGuide ? api.enqueueGuide(envelope) : api.sendMessage(requestMessage, lockedConversationId);
-    Promise.resolve(enqueue).then(function(receipt) {
-      receipt = receipt || { status: 'accepted', clientMessageId: clientMessageId, runId: envelope.runId };
+    return Promise.resolve(enqueue).then(function(receipt) {
+      if (!receipt || typeof receipt !== 'object' || !String(receipt.status || '').trim()) {
+        throw new Error(currentLang() === 'zh' ? '未收到有效的 Guide 回执' : 'A valid Guide acknowledgement was not received');
+      }
       var status = normalizeGuideUiStatus(receipt.status);
       var guideRecord = recordGuideUiMessage({
         clientMessageId: clientMessageId,
@@ -8405,6 +8629,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         guide: guideRecord
       });
       if (status === 'rejected') showUiNotice(receipt.reason || receipt.error || (currentLang() === 'zh' ? 'Guide 未被接收' : 'Guide was rejected'), 'error', 'guide-' + clientMessageId);
+      return { ok: status !== 'rejected', guideReceipt: receipt };
     }).catch(function(e) {
       recordGuideUiMessage({
         clientMessageId: clientMessageId,
@@ -8417,8 +8642,8 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         reason: e && e.message ? e.message : String(e)
       }, lockedTarget);
       showUiNotice(e.message || String(e), 'error', 'guide-' + clientMessageId);
+      return { ok: false, error: e && e.message ? e.message : String(e) };
     });
-    return;
   }
 
   if (effectiveInputMode === 'next' && !opts.fromQueue) {
@@ -8467,7 +8692,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       responseMsg = lockedUi.activeWorkflowMsg;
       if (r && r.error) {
         if (!responseMsg) responseMsg = addMsg('assistant', '', state.mode, state.model);
-        updateMsg(responseMsg, '[Error] ' + r.error, 'error', state.mode, state.model);
+        updateMsg(responseMsg, formatChatError(r.error, 'Agent run failed.'), 'error', state.mode, state.model);
       } else if (r && r.tokens) {
         var fullText = r.tokens.map(function(t) { return t.text || ''; }).join('');
         if (!responseMsg) responseMsg = findCompletedWorkflowMsg(lockedConversationId, fullText);
@@ -8526,7 +8751,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   } catch(e) {
     if (isActiveConversationTarget(lockedTarget)) {
       responseMsg = conversationWorkUiState(lockedConversationId, lockedTarget.workspaceId).activeWorkflowMsg || addMsg('assistant', '', state.mode, state.model);
-      updateMsg(responseMsg, '[Error] ' + e.message, 'error', state.mode, state.model);
+      updateMsg(responseMsg, formatChatError(e && e.message, 'Agent run failed.'), 'error', state.mode, state.model);
     }
   }
   if (api.getState) {
@@ -9989,9 +10214,9 @@ function renderGeneralSettings() {
     '</select><div class="setting-desc">' + esc(t('settings.ctrlEnter')) + '</div></div>' +
     '</div>' +
     '<div class="setting-row">' +
-    '<span class="setting-label">' + esc(t('settings.terminalTimeout')) + '</span>' +
-    '<div class="setting-control"><input type="number" min="0" step="1000" value="' + esc(String(state.terminalInterruptTimeoutMs || 0)) + '" onchange="window.setTerminalInterruptTimeout(this.value)" style="width:110px;">' +
-    '<div class="setting-desc">' + esc(t('settings.terminalTimeoutDesc')) + '</div></div>' +
+    '<label class="setting-label" for="settings-terminal-timeout">' + esc(t('settings.terminalTimeout')) + '</label>' +
+    '<div class="setting-control"><input id="settings-terminal-timeout" class="settings-terminal-timeout-input" type="number" min="0" step="1000" value="' + esc(String(state.terminalInterruptTimeoutMs || 0)) + '" aria-describedby="settings-terminal-timeout-desc" onchange="window.setTerminalInterruptTimeout(this.value)">' +
+    '<div class="setting-desc" id="settings-terminal-timeout-desc">' + esc(t('settings.terminalTimeoutDesc')) + '</div></div>' +
     '</div>' +
     '<div class="setting-row">' +
     '<span class="setting-label">' + esc(t('settings.dialogStyle')) + '</span>' +
@@ -10084,7 +10309,7 @@ function renderModelSettings() {
     '<option value="balanced"' + (state.switchTendency === 'balanced' ? ' selected' : '') + '>' + esc(t('model.balancedPolicy')) + '</option>' +
     '<option value="cost"' + (state.switchTendency === 'cost' ? ' selected' : '') + '>' + esc(t('model.costPolicy')) + '</option>' +
     '<option value="speed"' + (state.switchTendency === 'speed' ? ' selected' : '') + '>' + esc(t('model.speedPolicy')) + '</option></select></div></div>' +
-    '<div class="setting-row"><span class="setting-label">' + esc(t('model.learnedPreference')) + '</span><div class="setting-control"><button class="settings-action-btn" onclick="window.clearLearnedAutoPreferences()">' + esc(t('model.clearLearnedPreference')) + '</button></div></div>' +
+    '<div class="setting-row"><span class="setting-label">' + esc(t('model.learnedPreference')) + '</span><div class="setting-control"><button type="button" class="sec-btn settings-action-btn" onclick="window.clearLearnedAutoPreferences()">' + esc(t('model.clearLearnedPreference')) + '</button></div></div>' +
     '</div>';
 }
 

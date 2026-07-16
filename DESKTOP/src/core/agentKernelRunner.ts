@@ -18,6 +18,8 @@ interface PublicStreamFilterState {
 }
 
 const publicStreamFilters = new WeakMap<Agent, PublicStreamFilterState>();
+const brokerOnlyAssistantBuffers = new WeakMap<Agent, { brokerOnly: boolean; pending: string[]; released: boolean }>();
+const BROKER_PREFACE_BUFFER_CHARS = 96;
 const HIDDEN_LINE_PREFIXES = [
   'reasoning:',
   'reasoning：',
@@ -136,6 +138,29 @@ export function resetPublicAssistantDeltaFilter(agent: Agent): void {
   publicStreamFilters.delete(agent);
 }
 
+function prepareAssistantToolVisibility(agent: Agent, definitions: unknown[]): void {
+  brokerOnlyAssistantBuffers.set(agent, {
+    brokerOnly: definitions.length === 1 && toolDefinitionName(definitions[0]) === TOOL_PROVISION_NAME,
+    pending: [],
+    released: false,
+  });
+}
+
+function emitBufferedAssistantText(agent: Agent, tokens: StreamToken[]): void {
+  const state = brokerOnlyAssistantBuffers.get(agent);
+  if (!state?.pending.length) return;
+  const text = state.pending.join('');
+  state.pending = [];
+  if (!text) return;
+  tokens.push({ type: 'text', text });
+  agent.emitWorkEvent({ type: 'text', content: text });
+  agent.markRouteStreamCommitted();
+}
+
+function resetAssistantToolVisibility(agent: Agent): void {
+  brokerOnlyAssistantBuffers.delete(agent);
+}
+
 interface NativeAgentInstance {
   state: {
     systemPrompt: string;
@@ -248,6 +273,61 @@ const EMPTY_USAGE: KernelUsage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
+interface KernelTurnOutcome {
+  text: string;
+  stopReason: string;
+  errorMessage: string;
+}
+
+class ProviderRunError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProviderRunError';
+  }
+}
+
+function kernelTurnFailed(agent: Agent, turn: KernelTurnOutcome): boolean {
+  return turn.stopReason === 'error' || agent.isLlmErrorText(turn.text);
+}
+
+function removeTrailingFailedAssistant(agent: Agent, messages: KernelMessage[]): void {
+  const last = messages[messages.length - 1];
+  if (last?.role !== 'assistant') return;
+  const text = KernelMessageText(last);
+  if (last.stopReason === 'error' || agent.isLlmErrorText(text)) messages.pop();
+}
+
+function normalizePublicProviderError(error: unknown, secrets: unknown[] = []): string {
+  let raw = '';
+  if (error instanceof Error) {
+    raw = String(error.message || '');
+    const cause = (error as Error & { cause?: unknown }).cause;
+    if (!raw.trim() && cause !== undefined) raw = cause instanceof Error ? cause.message : String(cause || '');
+  } else {
+    raw = String(error || '');
+  }
+  const literalSecrets = [...new Set(secrets.map(secret => String(secret || '').trim()).filter(secret => secret.length >= 4))];
+  for (const secret of literalSecrets) {
+    raw = raw.split(secret).join('[redacted]');
+    try {
+      const encoded = encodeURIComponent(secret);
+      if (encoded && encoded !== secret) raw = raw.split(encoded).join('[redacted]');
+    } catch {}
+  }
+  raw = raw
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think\b[^>]*>[\s\S]*$/gi, '')
+    .replace(/^\s*(?:analysis|reasoning(?:_content)?|thinking(?:_content)?)\s*[:：].*$/gim, '')
+    .replace(/\b(?:sk|ghp|github_pat)-?[A-Za-z0-9_.-]{8,}\b/g, '[redacted]')
+    .replace(/(Authorization\s*:\s*Bearer\s+)[^\s,;]+/ig, '$1[redacted]')
+    .replace(/([?&](?:api[_-]?key|apikey|access_token|x-goog-api-key|token|key)=)[^&\s]+/ig, '$1[redacted]')
+    .replace(/((?:["']?(?:api[_ -]?key|apikey|access[_ -]?token|x-goog-api-key|authorization|token|key)["']?)\s*[:=]\s*["']?)[^"'},\s;&]+/ig, '$1[redacted]')
+    .replace(/^\s*\[Error\]\s*/i, '')
+    .trim();
+  if (!raw) return 'Provider request failed without diagnostic details.';
+  return raw.slice(0, 1_200);
+}
+
 export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   if (!agent.engineModel()) {
     agent.status = 'error';
@@ -260,31 +340,51 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
     import('./agentKernel/stream-types.js') as Promise<KernelStreamCompat>,
   ]);
 
-  const availableTools = agent.subagentToolDefinitions(agent.tools.definitions(agent.mode));
-  const toolSurface = routeToolSurface(agent, availableTools);
-  const systemPrompt = [agent.buildSystemPrompt(), toolSurface.systemPromptNotice].filter(Boolean).join('\n\n');
-  const newmarkTools = toolSurface.definitions;
+  const toolProvisioning = new ToolProvisionSession([], []);
+  let activeToolSurfaceIdentity = '';
+  let activeToolSurfaceNotice = '';
+  const refreshToolSurface = (force = false): { definitions: unknown[]; systemPromptNotice: string } => {
+    const identity = toolSurfaceIdentityForAgent(agent);
+    if (force || identity !== activeToolSurfaceIdentity) {
+      const catalog = agent.subagentToolDefinitions(agent.tools.definitions(agent.mode));
+      const surface = routeToolSurface(agent, catalog);
+      toolProvisioning.reconcile(catalog, surface.definitions);
+      activeToolSurfaceNotice = surface.systemPromptNotice;
+      activeToolSurfaceIdentity = identity;
+    }
+    return {
+      definitions: agent.shouldExposeToolInterface() ? toolProvisioning.currentDefinitions() : [],
+      systemPromptNotice: activeToolSurfaceNotice,
+    };
+  };
+  const initialToolSurface = refreshToolSurface(true);
+  const systemPrompt = [agent.buildSystemPrompt(), initialToolSurface.systemPromptNotice].filter(Boolean).join('\n\n');
   const kernel = new NativeAgent({
-    streamFn: streamWithNewmarkProvider(agent, KernelStreamCompat, newmarkTools),
+    streamFn: streamWithNewmarkProvider(agent, KernelStreamCompat),
     toolExecution: 'sequential',
     convertToLlm: (messages: KernelMessage[]) => messages.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'toolResult'),
     transformContext: async (messages: KernelMessage[], signal?: AbortSignal) => transformContext(agent, messages, signal),
+    resolveTools: () => {
+      const definitions = refreshToolSurface().definitions;
+      prepareAssistantToolVisibility(agent, definitions);
+      return toKernelTools(agent, definitions, toolProvisioning);
+    },
     shouldStopAfterTurn: async ({ message }: { message: KernelMessage }) => shouldStopAfterTurn(agent, message),
   });
 
   kernel.state.systemPrompt = systemPrompt;
   kernel.state.model = toKernelModel(agent);
-  kernel.state.tools = toKernelTools(agent, newmarkTools);
+  kernel.state.tools = toKernelTools(agent, initialToolSurface.definitions, toolProvisioning);
   kernel.state.messages = toKernelMessages(agent);
   agent.attachAgentKernelRuntime(kernel);
 
   const tokens: StreamToken[] = [];
   const runOnce = async (promptMessages: KernelMessage[], appendPromptToAgentHistory: boolean) => {
-    let lastAssistant = '';
+    let lastAssistant: Extract<KernelMessage, { role: 'assistant' }> | null = null;
     const unsubscribe = kernel.subscribe(async event => {
       await handleKernelEvent(agent, event, tokens);
       if (event.type === 'message_end' && event.message.role === 'assistant') {
-        lastAssistant = KernelMessageText(event.message);
+        lastAssistant = event.message;
       }
     });
     try {
@@ -297,7 +397,12 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
         agent.saveWorkspaceConversationState();
       }
       await kernel.prompt(promptMessages);
-      return lastAssistant;
+      const assistant = lastAssistant as Extract<KernelMessage, { role: 'assistant' }> | null;
+      return {
+        text: assistant ? KernelMessageText(assistant) : '',
+        stopReason: String(assistant?.stopReason || ''),
+        errorMessage: String(assistant?.errorMessage || ''),
+      };
     } finally {
       unsubscribe();
     }
@@ -305,21 +410,30 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
 
   try {
     const modelBeforeKernelRun = agent.model;
-    let lastAssistant = await runOnce([], false);
+    let lastTurn = await runOnce([], false);
     if (modelBeforeKernelRun && modelBeforeKernelRun !== agent.model && !tokens.some(t => t.text?.includes('[Model fallback]'))) {
       tokens.unshift({ type: 'text', text: `[Model fallback] ${modelBeforeKernelRun} unavailable; switched to ${agent.model}.` });
     }
-    if (agent.isLlmErrorText(lastAssistant)) {
-      const previous = agent.switchToFallbackModel(lastAssistant);
-      if (previous) {
-        const notice = routeTransitionNotice(agent, previous);
-        tokens.push({ type: 'text', text: notice });
-        agent.recordWorkStatus(notice);
-        kernel.state.model = toKernelModel(agent);
-        await agent.waitForPlannedRouteRetry();
-        lastAssistant = await runOnce([], false);
-      }
+    let routeRetries = 0;
+    while (kernelTurnFailed(agent, lastTurn) && routeRetries < 2) {
+      const previous = agent.switchToFallbackModel(lastTurn.errorMessage || lastTurn.text);
+      if (!previous) break;
+      removeTrailingFailedAssistant(agent, kernel.state.messages);
+      routeRetries += 1;
+      const notice = routeTransitionNotice(agent, previous);
+      tokens.push({ type: 'text', text: notice });
+      agent.recordWorkStatus(notice);
+      kernel.state.model = toKernelModel(agent);
+      const fallbackToolSurface = refreshToolSurface(true);
+      kernel.state.systemPrompt = [agent.buildSystemPrompt(), fallbackToolSurface.systemPromptNotice].filter(Boolean).join('\n\n');
+      kernel.state.tools = toKernelTools(agent, fallbackToolSurface.definitions, toolProvisioning);
+      await agent.waitForPlannedRouteRetry();
+      lastTurn = await runOnce([], false);
     }
+    if (kernelTurnFailed(agent, lastTurn)) {
+      throw new ProviderRunError(normalizePublicProviderError(lastTurn.errorMessage || lastTurn.text, [agent.activeModelConfig()?.api_key]));
+    }
+    let lastAssistant = lastTurn.text;
     const maxGoalContinuations = Math.max(0, Math.floor(agent.config.getNum('agent', 'goal_max_continuations') || 0));
     let goalContinuations = 0;
     while (agent.mode === 'goal' && agent.goal && !agent.goal.paused && !agent.goal.checkComplete(lastAssistant)) {
@@ -332,7 +446,11 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       }
       goalContinuations += 1;
       const goalPrompt = `Continue working toward this goal:\n${agent.goal.objective}\n\nProgress made. What remains?`;
-      lastAssistant = await runOnce([{ role: 'user', content: goalPrompt, timestamp: Date.now() }], true);
+      lastTurn = await runOnce([{ role: 'user', content: goalPrompt, timestamp: Date.now() }], true);
+      if (kernelTurnFailed(agent, lastTurn)) {
+        throw new ProviderRunError(normalizePublicProviderError(lastTurn.errorMessage || lastTurn.text, [agent.activeModelConfig()?.api_key]));
+      }
+      lastAssistant = lastTurn.text;
       if (agent.goal.checkComplete(lastAssistant)) {
         tokens.push({ type: 'text', text: '\n[Goal Complete]' });
         break;
@@ -345,7 +463,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   agent.saveWorkspaceConversationState();
   return agent.sanitizeVisibleTokens(tokens);
 
-  function streamWithNewmarkProvider(currentAgent: Agent, compat: KernelStreamCompat, cachedTools: unknown[]) {
+  function streamWithNewmarkProvider(currentAgent: Agent, compat: KernelStreamCompat) {
     return async (model: KernelModel, context: { systemPrompt?: string; messages: KernelMessage[]; tools?: KernelTool[] }, options?: { signal?: AbortSignal }) => {
       const stream = compat.createAssistantMessageEventStream();
       void (async () => {
@@ -357,6 +475,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
         const finalContent: KernelContent[] = [];
         let textStarted = false;
         const requestStartedAt = Date.now();
+        const brokerOnlySurface = (context.tools || []).length === 1 && context.tools?.[0]?.name === TOOL_PROVISION_NAME;
         currentAgent.beginRouteAttempt();
         try {
           const currentProvider = currentAgent.engineModel();
@@ -370,7 +489,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
             context.systemPrompt || '',
             temperature,
             maxTokens,
-            cachedTools,
+            toProviderToolDefinitions(context.tools || []),
             options?.signal,
           )) {
             if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error(`[NewmarkKernel] provider-token type=${token.type}`);
@@ -383,7 +502,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
               }
             }
             if (token.type === 'text' && token.text) {
-              if (!/^\s*\[(?:LLM Error|Error)(?::|\])/i.test(token.text)) currentAgent.markRouteStreamCommitted();
+              if (!brokerOnlySurface && !/^\s*\[(?:LLM Error|Error)(?::|\])/i.test(token.text)) currentAgent.markRouteStreamCommitted();
               if (!textStarted) {
                 textStarted = true;
                 stream.push({ type: 'text_start', contentIndex, partial: assistantMessage(model, [{ type: 'text', text }], 'stop') } as KernelProviderEventStreamEvent);
@@ -424,6 +543,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
           }
           const final = assistantMessage(model, finalContent, finalContent.some(c => c.type === 'toolCall') ? 'toolUse' : 'stop');
           if (!currentAgent.isLlmErrorText(text)) {
+            if (brokerOnlySurface && !finalContent.some(content => content.type === 'toolCall') && text) currentAgent.markRouteStreamCommitted();
             const durationMs = Math.max(1, Date.now() - requestStartedAt);
             const outputTokens = Math.max(0, (text.length + thinking.length) / 4);
             currentAgent.recordRouteSuccess(durationMs, outputTokens / (durationMs / 1_000));
@@ -436,8 +556,9 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
             stream.push({ type: 'done', reason: 'aborted', message: aborted } as KernelProviderEventStreamEvent);
             return;
           }
-          const final = assistantMessage(model, [{ type: 'text', text: `[Error] ${error instanceof Error ? error.message : String(error)}` }], 'error');
-          final.errorMessage = error instanceof Error ? error.message : String(error);
+          const publicError = normalizePublicProviderError(error, [currentAgent.activeModelConfig()?.api_key]);
+          const final = assistantMessage(model, [{ type: 'text', text: `[Error] ${publicError}` }], 'error');
+          final.errorMessage = publicError;
           stream.push({ type: 'error', reason: 'error', error: final } as KernelProviderEventStreamEvent);
         }
       })();
@@ -451,7 +572,10 @@ async function transformContext(agent: Agent, messages: KernelMessage[], signal?
   if (!agent.config.getBool('context', 'auto_compress')) return messages;
   const provider: LLMProvider | null = agent.engineModel();
   if (!provider) return messages;
-  const newmarkMessages = fromKernelMessages(messages, false);
+  // Context compression persists Agent history. Feed it only the public
+  // projection so the internal broker call/result and its compact catalog can
+  // never be written into conversation state or revived after a reload.
+  const newmarkMessages = publicHistoryFromKernelMessages(messages);
   const beforeCompression = JSON.stringify(newmarkMessages);
   await agent.maybeCompress(newmarkMessages, provider, signal);
   if (signal?.aborted) return messages;
@@ -462,12 +586,11 @@ async function transformContext(agent: Agent, messages: KernelMessage[], signal?
 async function shouldStopAfterTurn(agent: Agent, message: KernelMessage): Promise<boolean> {
   const text = KernelMessageText(message);
   if (message.role === 'assistant' && (message.stopReason === 'error' || agent.isLlmErrorText(text))) {
-    const previous = agent.switchToFallbackModel(text);
-    if (previous) {
-      agent.recordWorkStatus(routeTransitionNotice(agent, previous));
-      await agent.waitForPlannedRouteRetry();
-      return false;
-    }
+    // Route retries are owned by runAgentKernel's outer executor. Stopping the
+    // native loop here prevents a failed assistant from being followed inside
+    // the same provider context before it can be removed and the deployment,
+    // system prompt, and tool catalog can be refreshed atomically.
+    return true;
   }
   if (agent.mode === 'goal' && agent.goal && message.role === 'assistant') {
     if (agent.goal.checkComplete(text)) return true;
@@ -495,23 +618,41 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
         agent.notifyAgentKernelUserMessageStart(text, event.message.clientMessageId);
       } else if (event.message.role === 'assistant') {
         resetPublicAssistantDeltaFilter(agent);
+        const visibility = brokerOnlyAssistantBuffers.get(agent);
+        if (visibility) {
+          visibility.pending = [];
+          visibility.released = false;
+        }
       }
       break;
     case 'message_update':
       if (event.assistantMessageEvent.type === 'text_delta') {
         const text = filterPublicAssistantDelta(agent, String(event.assistantMessageEvent.delta || ''));
         if (text) {
-          tokens.push({ type: 'text', text });
-          agent.emitWorkEvent({ type: 'text', content: text });
+          const visibility = brokerOnlyAssistantBuffers.get(agent);
+          if (visibility?.brokerOnly && !visibility.released) {
+            visibility.pending.push(text);
+            if (visibility.pending.join('').length >= BROKER_PREFACE_BUFFER_CHARS) {
+              emitBufferedAssistantText(agent, tokens);
+              visibility.released = true;
+            }
+          }
+          else {
+            tokens.push({ type: 'text', text });
+            agent.emitWorkEvent({ type: 'text', content: text });
+          }
         }
       } else if (event.assistantMessageEvent.type === 'thinking_delta') {
         // Hidden reasoning is intentionally not surfaced in the chat transcript.
       } else if (event.assistantMessageEvent.type === 'toolcall_end') {
         const tool = event.assistantMessageEvent.toolCall as KernelToolCall;
-        tokens.push({ type: 'tool_call', text: '', toolCall: { id: tool.id, name: tool.name, arguments: JSON.stringify(tool.arguments || {}) } });
+        if (tool.name !== TOOL_PROVISION_NAME) {
+          tokens.push({ type: 'tool_call', text: '', toolCall: { id: tool.id, name: tool.name, arguments: JSON.stringify(tool.arguments || {}) } });
+        }
       }
       break;
     case 'tool_execution_start': {
+      if (event.toolName === TOOL_PROVISION_NAME) break;
       agent.emitWorkEvent({
         type: 'tool_call',
         content: `Calling tool ${event.toolName}`,
@@ -526,25 +667,40 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
     case 'turn_end':
       break;
     case 'tool_execution_end': {
+      if (event.toolName === TOOL_PROVISION_NAME) break;
       const text = toolResultText(event.result);
       if (toolResultTerminates(event.result)) {
         tokens.push({ type: 'text', text });
       }
+      const outcome = event.isError ? 'failed' : 'completed';
       agent.emitWorkEvent({
         type: 'tool_result',
-        content: `Tool ${event.toolName} completed.`,
+        content: `Tool ${event.toolName} ${outcome}.`,
         toolCallId: event.toolCallId,
         toolName: event.toolName,
       });
-      agent.appendWorkflowMessage(`Tool ${event.toolName} completed.`, event.toolName, undefined, false);
+      agent.appendWorkflowMessage(`Tool ${event.toolName} ${outcome}.`, event.toolName, undefined, false);
       break;
     }
     case 'message_end':
       if (event.message.role === 'assistant') {
-        const text = agent.sanitizeAssistantOutput(KernelMessageText(event.message));
-        if (text && event.message.stopReason !== 'aborted') {
-          agent.chatMessages.push({ role: 'assistant', content: text, mode: agent.modeName(), model: agent.model, timestamp: agent.nowLabel() });
-          const historyMessage = toHistoryMessage(event.message);
+        const internalProvision = event.message.content.some(content => content.type === 'toolCall' && content.name === TOOL_PROVISION_NAME);
+        const publicContent = internalProvision
+          ? event.message.content.filter(content => !(content.type === 'toolCall' && content.name === TOOL_PROVISION_NAME))
+          : event.message.content;
+        const realToolCalls = publicContent.filter(content => content.type === 'toolCall');
+        if (internalProvision && !realToolCalls.length) {
+          resetPublicAssistantDeltaFilter(agent);
+          resetAssistantToolVisibility(agent);
+          break;
+        }
+        const publicMessage = internalProvision ? { ...event.message, content: publicContent } : event.message;
+        const text = agent.sanitizeAssistantOutput(KernelMessageText(publicMessage));
+        const failed = event.message.stopReason === 'error' || agent.isLlmErrorText(text);
+        if (!failed) emitBufferedAssistantText(agent, tokens);
+        if ((text || realToolCalls.length) && event.message.stopReason !== 'aborted' && !failed) {
+          if (text) agent.chatMessages.push({ role: 'assistant', content: text, mode: agent.modeName(), model: agent.model, timestamp: agent.nowLabel() });
+          const historyMessage = toHistoryMessage(publicMessage);
           // Keep tool-call metadata, but never replay a hidden-reasoning line
           // that was deliberately removed from the public completed message.
           historyMessage.content = text;
@@ -552,7 +708,8 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
           agent.saveWorkspaceConversationState();
         }
         resetPublicAssistantDeltaFilter(agent);
-      } else if (event.message.role === 'toolResult') {
+        resetAssistantToolVisibility(agent);
+      } else if (event.message.role === 'toolResult' && event.message.toolName !== TOOL_PROVISION_NAME) {
         agent.history.push(toHistoryMessage(event.message));
         agent.saveWorkspaceConversationState();
       }
@@ -597,19 +754,333 @@ function routeTransitionNotice(agent: Agent, previous: string): string {
     : `[Model fallback] ${previous} unavailable; switched to ${active}.`;
 }
 
+const TOOL_PROVISION_NAME = 'tool_provision';
+const INITIAL_TOOL_SCHEMA_LIMIT = 8;
+const TOOL_PROVISION_BATCH_LIMIT = 8;
+
+interface ToolProvisionResult {
+  ok: boolean;
+  provisioned: string[];
+  alreadyAvailable: string[];
+  unknown: string[];
+  deferred: string[];
+  matches: string[];
+  error?: { code: string; message: string };
+}
+
+class ToolProvisionSession {
+  private readonly definitionsByName = new Map<string, unknown>();
+  private readonly initialNames = new Set<string>();
+  private readonly provisionedNames = new Set<string>();
+  private catalog: unknown[] = [];
+  private broker: unknown;
+  private brokerCalls = 0;
+
+  constructor(catalog: unknown[], initial: unknown[]) {
+    this.broker = {};
+    this.reconcile(catalog, initial);
+  }
+
+  reconcile(catalog: unknown[], initial: unknown[]): void {
+    this.catalog = catalog.slice();
+    this.definitionsByName.clear();
+    for (const definition of catalog) {
+      const name = toolDefinitionName(definition);
+      if (name && name !== TOOL_PROVISION_NAME) this.definitionsByName.set(name, definition);
+    }
+    this.initialNames.clear();
+    for (const definition of initial.slice(0, INITIAL_TOOL_SCHEMA_LIMIT)) {
+      const name = toolDefinitionName(definition);
+      if (this.definitionsByName.has(name)) this.initialNames.add(name);
+    }
+    for (const name of this.provisionedNames) {
+      if (!this.definitionsByName.has(name)) this.provisionedNames.delete(name);
+    }
+    this.broker = this.brokerDefinition();
+  }
+
+  currentDefinitions(): unknown[] {
+    const active = new Set([...this.initialNames, ...this.provisionedNames]);
+    return [
+      ...this.catalog.filter(definition => active.has(toolDefinitionName(definition))),
+      this.broker,
+    ];
+  }
+
+  provision(params: unknown): ToolProvisionResult {
+    const fail = (code: string, message: string): ToolProvisionResult => ({
+      ok: false,
+      provisioned: [],
+      alreadyAvailable: [],
+      unknown: [],
+      deferred: [],
+      matches: [],
+      error: { code, message },
+    });
+    if (!params || typeof params !== 'object' || Array.isArray(params)) return fail('invalid_request', 'Tool provision request must be an object.');
+    const request = params as Record<string, unknown>;
+    const unexpected = Object.keys(request).filter(key => key !== 'names' && key !== 'query');
+    if (unexpected.length) return fail('unexpected_field', `Unsupported field: ${unexpected[0]}`);
+    if (request.names !== undefined && !Array.isArray(request.names)) return fail('invalid_names', 'names must be an array of exact tool names.');
+    const rawNames = Array.isArray(request.names) ? request.names : [];
+    if (rawNames.length > TOOL_PROVISION_BATCH_LIMIT) return fail('batch_limit', `At most ${TOOL_PROVISION_BATCH_LIMIT} tool names may be provisioned per request.`);
+    if (rawNames.some(value => typeof value !== 'string' || !/^[A-Za-z0-9_.-]{1,80}$/.test(value.trim()))) {
+      return fail('invalid_name', 'Each tool name must be a 1-80 character catalog identifier.');
+    }
+    if (request.query !== undefined && (typeof request.query !== 'string' || request.query.length > 160)) {
+      return fail('invalid_query', 'query must be a string no longer than 160 characters.');
+    }
+    const requested = rawNames.map(value => String(value).trim());
+    const query = typeof request.query === 'string' ? request.query.trim() : '';
+    if (!requested.length && !query) return fail('empty_request', 'Provide exact names or a capability query.');
+    if (this.brokerCalls >= 3) return fail('call_limit', 'Tool provisioning call limit reached for this run.');
+    this.brokerCalls += 1;
+    const matches = query ? this.search(query) : [];
+    const unique = [...new Set(requested)];
+    const provisioned: string[] = [];
+    const alreadyAvailable: string[] = [];
+    const unknown: string[] = [];
+    const deferred: string[] = [];
+    for (const name of unique) {
+      if (!this.definitionsByName.has(name)) {
+        unknown.push(name);
+        continue;
+      }
+      if (this.initialNames.has(name) || this.provisionedNames.has(name)) {
+        alreadyAvailable.push(name);
+        continue;
+      }
+      if (this.provisionedNames.size >= 16) {
+        deferred.push(name);
+        continue;
+      }
+      this.provisionedNames.add(name);
+      provisioned.push(name);
+    }
+    return {
+      ok: provisioned.length > 0 || alreadyAvailable.length > 0 || matches.length > 0,
+      provisioned,
+      alreadyAvailable,
+      unknown,
+      deferred,
+      matches,
+    };
+  }
+
+  private search(query: string): string[] {
+    const expanded = String(query || '').toLowerCase()
+      .replace(/浏览器|网页|页面/g, ' browser ')
+      .replace(/电脑|桌面|屏幕/g, ' computer screen ')
+      .replace(/终端|命令|脚本/g, ' terminal command script ')
+      .replace(/文件|目录|仓库|代码/g, ' file directory repository code ')
+      .replace(/联网|搜索|查找/g, ' web search ')
+      .replace(/自动化|定时|提醒/g, ' automation schedule reminder ');
+    const terms = [...new Set(expanded.split(/[^a-z0-9_-]+/).filter(term => term.length > 1))];
+    if (!terms.length) return [];
+    return [...this.definitionsByName.entries()]
+      .map(([name, definition], index) => {
+        const description = toolDefinitionDescription(definition).toLowerCase();
+        const lowerName = name.toLowerCase();
+        const score = terms.reduce((sum, term) => sum
+          + (lowerName === term ? 12 : lowerName.startsWith(term) ? 8 : lowerName.includes(term) ? 5 : 0)
+          + (description.includes(term) ? 2 : 0), 0);
+        return { name, score, index };
+      })
+      .filter(entry => entry.score > 0)
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .slice(0, TOOL_PROVISION_BATCH_LIMIT)
+      .map(entry => entry.name);
+  }
+
+  private brokerDefinition(): unknown {
+    const catalog = [...this.definitionsByName.entries()]
+      .map(([name, definition]) => `${name}: ${compactToolDescription(toolDefinitionDescription(definition))}`)
+      .join('\n');
+    const initial = [...this.initialNames].join(', ') || '(none)';
+    return {
+      type: 'function',
+      function: {
+        name: TOOL_PROVISION_NAME,
+        description: [
+          'Provision full JSON schemas for additional Newmark tools before calling them. Provisioned tools appear by their original names on the next model turn; their requests and policy checks are unchanged.',
+          'Call tool_provision as the only tool in that assistant subturn and emit no user-visible prose in the provisioning subturn.',
+          'Use exact names to provision. A query only searches this catalog and returns matches; submit the chosen exact names in a following request.',
+          `Initially provisioned: ${initial}.`,
+          'Complete callable tool catalog (name: brief capability):',
+          catalog,
+        ].join('\n'),
+        parameters: {
+          type: 'object',
+          properties: {
+            names: {
+              type: 'array',
+              items: { type: 'string' },
+              maxItems: TOOL_PROVISION_BATCH_LIMIT,
+              description: 'Exact tool names from the catalog to provision.',
+            },
+            query: {
+              type: 'string',
+              maxLength: 160,
+              description: 'Search-only capability keywords. Returned matches are not provisioned until sent through names.',
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+    };
+  }
+}
+
+function toolDefinitionDescription(definition: unknown): string {
+  const record = definition && typeof definition === 'object' ? definition as Record<string, any> : {};
+  return String(record.function?.description || record.description || 'Available Newmark capability.').replace(/\s+/g, ' ').trim();
+}
+
+function compactToolDescription(description: string): string {
+  const text = String(description || 'Available Newmark capability.').replace(/\s+/g, ' ').trim();
+  return `${text.slice(0, 72)}${text.length > 72 ? '…' : ''}`;
+}
+
+function toolSurfaceIdentityForAgent(agent: Agent): string {
+  const deployment = agent.activeDeployment();
+  const model = agent.activeModelConfig();
+  return JSON.stringify({
+    providerId: deployment?.providerId || '',
+    modelId: deployment?.modelId || agent.activeModelName() || agent.model,
+    mode: agent.mode,
+    toolInterface: agent.shouldExposeToolInterface(),
+    vision: !!model?.vision,
+    imageOutput: !!model?.image_output,
+    nativeTools: agent.config.nativeToolEnabled(),
+    optionFeedback: agent.config.getStr('agent', 'option_feedback'),
+  });
+}
+
 function routeToolSurface(agent: Agent, definitions: unknown[]): { definitions: unknown[]; systemPromptNotice: string } {
-  if (agent.shouldExposeToolInterface()) return { definitions, systemPromptNotice: '' };
+  if (!agent.shouldExposeToolInterface()) {
+    return {
+      definitions: [],
+      systemPromptNotice: [
+        '## Tool Interface Availability',
+        'No tool interface is available for this turn because the selected Auto model has not verified tool-use capability.',
+        'Answer using the conversation context only. Do not claim to call, inspect, or modify external resources.',
+      ].join('\n'),
+    };
+  }
+  const task = latestUserTaskText(agent);
+  const selected = selectTaskToolDefinitions(task, definitions).slice(0, INITIAL_TOOL_SCHEMA_LIMIT);
+  if (selected.length === definitions.length) return { definitions, systemPromptNotice: '' };
+  if (!selected.length) {
+    return {
+      definitions: [],
+      systemPromptNotice: [
+        '## Tool Interface Availability',
+        'This turn was classified as conversational, so no task-specific tool schema was preloaded.',
+        `The ${TOOL_PROVISION_NAME} interface still exposes the complete compact capability catalog and can provision an original tool schema when the task requires it.`,
+      ].join('\n'),
+    };
+  }
   return {
-    definitions: [],
+    definitions: selected,
     systemPromptNotice: [
       '## Tool Interface Availability',
-      'No tool interface is available for this turn because the selected Auto model has not verified tool-use capability.',
-      'Answer using the conversation context only. Do not claim to call, inspect, or modify external resources.',
+      `At most ${INITIAL_TOOL_SCHEMA_LIMIT} deterministic task-relevant schemas are preloaded for this turn.`,
+      `Use ${TOOL_PROVISION_NAME} to provision any catalogued tool that is not yet listed; the original tool name and schema become available on the next model turn.`,
     ].join('\n'),
   };
 }
 
-function toKernelTools(agent: Agent, definitions?: unknown[]): KernelTool[] {
+function latestUserTaskText(agent: Agent): string {
+  for (let index = agent.history.length - 1; index >= 0; index--) {
+    const message = agent.history[index];
+    if (String(message?.role || '') !== 'user') continue;
+    if (typeof message.content === 'string') return message.content;
+    if (Array.isArray(message.content)) {
+      return message.content
+        .filter(item => item && typeof item === 'object' && String((item as Record<string, unknown>).type || '') === 'text')
+        .map(item => String((item as Record<string, unknown>).text || ''))
+        .join('\n');
+    }
+  }
+  return '';
+}
+
+function toolDefinitionName(definition: unknown): string {
+  const record = definition && typeof definition === 'object' ? definition as Record<string, any> : {};
+  return String(record.function?.name || record.name || '').trim();
+}
+
+function selectTaskToolDefinitions(task: string, definitions: unknown[]): unknown[] {
+  const text = String(task || '');
+  const lower = text.toLowerCase();
+  const names = definitions.map(toolDefinitionName);
+  const selected = new Set<string>();
+  const explicit = new Set<string>();
+  const include = (...wanted: string[]) => wanted.forEach(name => selected.add(name));
+  const includePrefix = (...prefixes: string[]) => names.forEach(name => {
+    if (prefixes.some(prefix => name.startsWith(prefix))) selected.add(name);
+  });
+
+  const fileIntent = /\b(?:code|repo(?:sitory)?|workspace|files?|director(?:y|ies)|project)\b/i.test(text)
+    || /(?:代码|仓库|工作区|文件|目录|项目)/.test(text);
+  const codingIntent = fileIntent
+    || /\b(?:implement|fix|debug|refactor|build|test|change|update|patch|error|bug)\b/i.test(text)
+    || /(?:实现|修复|调试|重构|构建|测试|改动|更新|排查|报错|错误|故障)/.test(text);
+  const webIntent = /\b(?:web|internet|online|website|url|news)\b|https?:\/\//i.test(text)
+    || /(?:联网|网页|网站|新闻|网址|链接)/.test(text)
+    || (!fileIntent && (/\b(?:search|lookup|find online)\b/i.test(text) || /(?:搜索|查找|搜一下)/.test(text)));
+  const browserIntent = /\b(?:browser|webpage|click|login|form|chrome|edge)\b/i.test(text)
+    || /(?:浏览器|页面|点击|登录|表单)/.test(text);
+  const computerIntent = /\b(?:computer[ _-]?use|desktop|screen|mouse|keyboard|window|application)\b/i.test(text)
+    || /(?:电脑操作|桌面|屏幕|鼠标|键盘|窗口|应用程序)/.test(text);
+  const terminalIntent = /\b(?:terminal takeover|interactive shell|interactive terminal)\b/i.test(text)
+    || /(?:终端接管|交互式终端|交互式 shell)/i.test(text);
+  const githubIntent = /\b(?:github|pull request|issue|fork)\b|\bpr\b/i.test(text)
+    || /(?:拉取请求|议题)/.test(text);
+  const sshIntent = /\bssh\b|(?:远程主机|远程工作区)/i.test(text);
+  const automationIntent = /\b(?:automation|schedule|reminder|recurring)\b/i.test(text)
+    || /(?:自动化|定时|提醒|周期任务)/.test(text);
+  const memoryIntent = /\bmemory(?: lab)?\b/i.test(text) || /(?:记忆实验室|记忆库)/.test(text);
+  const skillIntent = /\bskills?\b/i.test(text) || /(?:技能市场|安装技能)/.test(text);
+  const flowIntent = /\b(?:flow|workflow)\b/i.test(text) || /(?:工作流|流程文件)/.test(text);
+  const planIntent = /\b(?:linked plan|project plan)\b/i.test(text) || /(?:关联计划|项目计划)/.test(text);
+
+  if (codingIntent) {
+    include('pwd', 'glob', 'grep', 'read', 'write', 'edit', 'bash', 'git_status', 'git_pull', 'git_push', 'git_branch', 'file_audit', 'repo_security_audit', 'task');
+    includePrefix('subagent_');
+  }
+  if (webIntent) include('web_search', 'web_fetch');
+  if (browserIntent) {
+    include('browser_use');
+    includePrefix('browser_');
+  }
+  if (computerIntent) include('computer_use');
+  if (terminalIntent) include('terminal_takeover', 'bash');
+  if (githubIntent) includePrefix('gh_');
+  if (sshIntent) include('ssh_workspace');
+  if (automationIntent) includePrefix('automation_');
+  if (memoryIntent) includePrefix('memory_lab_');
+  if (skillIntent) include('skill_download');
+  if (flowIntent) includePrefix('flow_');
+  if (planIntent) include('linked_plan');
+
+  // An explicitly named tool is always retained, even when the surrounding
+  // wording does not match a task class.
+  for (const name of names) {
+    if (name && new RegExp(`(?:^|[^A-Za-z0-9_])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[^A-Za-z0-9_])`, 'i').test(lower)) {
+      explicit.add(name);
+      selected.add(name);
+    }
+  }
+  if (selected.size) include('question');
+  return definitions
+    .map((definition, index) => ({ definition, name: names[index] || toolDefinitionName(definition), index }))
+    .filter(entry => selected.has(entry.name))
+    .sort((a, b) => Number(explicit.has(b.name)) - Number(explicit.has(a.name)) || a.index - b.index)
+    .map(entry => entry.definition);
+}
+
+function toKernelTools(agent: Agent, definitions?: unknown[], provisioning?: ToolProvisionSession | null): KernelTool[] {
   const tools = definitions || agent.subagentToolDefinitions(agent.tools.definitions(agent.mode));
   return tools.map((tool: any): KernelTool => {
     const fn = tool?.function || {};
@@ -623,11 +1094,31 @@ function toKernelTools(agent: Agent, definitions?: unknown[]): KernelTool[] {
       execute: async (_toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) => {
         if (signal?.aborted) throw abortError();
         const name = String(fn.name || '');
+        if (name === TOOL_PROVISION_NAME) {
+          const result = provisioning?.provision(params) || {
+            ok: false,
+            provisioned: [],
+            alreadyAvailable: [],
+            unknown: [],
+            deferred: [],
+            matches: [],
+            error: { code: 'broker_unavailable', message: 'Tool provisioning is unavailable.' },
+          };
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result) }],
+            details: { tool: name, ok: result.ok, terminate: false, provisioned: result.provisioned },
+            terminate: false,
+          };
+        }
         const args = JSON.stringify(params || {});
         const rawText = await executeNewmarkTool(agent, name, args, fn.parameters, signal);
         if (signal?.aborted) {
           discardComputerUseVisionImage(name, rawText);
           throw abortError();
+        }
+        if (toolResultIndicatesFailure(rawText)) {
+          discardComputerUseVisionImage(name, rawText);
+          throw new Error(rawText);
         }
         const visionImage = computerUseVisionImageInput(agent, name, rawText);
         const directImage = imageInspectDataUrl(name, rawText);
@@ -637,7 +1128,7 @@ function toKernelTools(agent: Agent, definitions?: unknown[]): KernelTool[] {
         else if (visionImage.image) content.push({ type: 'image', image: visionImage.image, mimeType: visionImage.mimeType });
         if (directImage) content.push({ type: 'image', image: directImage, mimeType: 'image/png' });
         const terminate = shouldTerminateAfterToolResult(name);
-        return { content, details: { tool: name, ok: !text.startsWith('[Error]'), terminate, visionImagePath: visionImage.imagePath || undefined, ephemeralVisionImage: !!visionImage.image }, terminate };
+        return { content, details: { tool: name, ok: true, terminate, visionImagePath: visionImage.imagePath || undefined, ephemeralVisionImage: !!visionImage.image }, terminate };
       },
     };
   }).filter((tool: KernelTool) => !!tool.name);
@@ -647,6 +1138,17 @@ function abortError(): Error {
   const error = new Error('Agent run aborted');
   error.name = 'AbortError';
   return error;
+}
+
+function toolResultIndicatesFailure(text: string): boolean {
+  const value = String(text || '').trim();
+  if (/^\[(?:error|permission|tool disabled|tool schema error|tool unsupported|subagent sandbox|workspace required|[^\]]*(?:unavailable|denied|blocked|rejected|failed)[^\]]*)\]/i.test(value)) return true;
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    return parsed.ok === false;
+  } catch {
+    return false;
+  }
 }
 
 function sanitizeVisualToolText(name: string, text: string): string {
@@ -704,15 +1206,25 @@ function computerUseVisionImageInput(agent: Agent, name: string, text: string): 
 
 async function executeNewmarkTool(agent: Agent, name: string, args: string, inputSchema: unknown, signal?: AbortSignal): Promise<string> {
   const wsDir = agent.workspace.current?.path || agent.rootPath;
+  if (name !== 'image_generate') {
+    const currentAvailability = agent.tools.validateInvocation(name, args || '{}', agent.mode);
+    if (!currentAvailability.ok) {
+      agent.recordRouteToolOutcome(false);
+      return currentAvailability.error;
+    }
+  }
   const invocation = agent.tools.validateInvocation(name, args || '{}', agent.mode, inputSchema);
   if (!invocation.ok) {
     agent.recordRouteToolOutcome(false);
     return invocation.error;
   }
   const parsedArgs = invocation.args;
-  agent.recordRouteToolOutcome(true);
   const policy = evaluateToolPolicy({ name, mode: agent.mode, isSubagent: agent.isSubagentRuntime, args: parsedArgs });
-  if (!policy.allowed) return policy.reason || `[permission] Blocked: ${name}`;
+  if (!policy.allowed) {
+    agent.recordRouteToolOutcome(false);
+    return policy.reason || `[permission] Blocked: ${name}`;
+  }
+  agent.recordRouteToolOutcome(true);
   agent.markRouteToolExecuted(name, args);
   const checked = async (value: string | Promise<string>): Promise<string> => {
     const result = await value;
@@ -856,8 +1368,32 @@ function toKernelMessagesFromHistory(history: Array<Record<string, unknown>>, ag
   });
 }
 
+function toProviderToolDefinitions(tools: KernelTool[]): unknown[] {
+  return tools.map(tool => ({
+    type: 'function',
+    function: {
+      name: tool.name,
+      description: tool.description || tool.label || tool.name,
+      parameters: tool.parameters || { type: 'object', properties: {}, required: [] },
+    },
+  }));
+}
+
 function fromKernelMessages(messages: KernelMessage[], includeEphemeralImages = true): Array<Record<string, unknown>> {
   return messages.flatMap(message => [toHistoryMessage(message, includeEphemeralImages)]);
+}
+
+function publicHistoryFromKernelMessages(messages: KernelMessage[]): Array<Record<string, unknown>> {
+  return messages.flatMap(message => {
+    if (message.role === 'toolResult' && message.toolName === TOOL_PROVISION_NAME) return [];
+    if (message.role !== 'assistant') return [toHistoryMessage(message, false)];
+    const brokerCalls = message.content.filter(content => content.type === 'toolCall' && content.name === TOOL_PROVISION_NAME);
+    if (!brokerCalls.length) return [toHistoryMessage(message, false)];
+    const publicContent = message.content.filter(content => !(content.type === 'toolCall' && content.name === TOOL_PROVISION_NAME));
+    const hasRealToolCall = publicContent.some(content => content.type === 'toolCall');
+    if (!hasRealToolCall) return [];
+    return [toHistoryMessage({ ...message, content: publicContent }, false)];
+  });
 }
 
 function toHistoryMessage(message: KernelMessage, includeEphemeralImages = false): Record<string, unknown> {
@@ -930,6 +1466,12 @@ export const agentKernelRunnerInternals = {
   computerUseVisionImageInput,
   sanitizeVisualToolText,
   routeToolSurface,
+  selectTaskToolDefinitions,
+  normalizePublicProviderError,
+  ToolProvisionSession,
+  toProviderToolDefinitions,
+  TOOL_PROVISION_NAME,
+  INITIAL_TOOL_SCHEMA_LIMIT,
 };
 
 function imagePathToDataUrl(imagePath: string): string {

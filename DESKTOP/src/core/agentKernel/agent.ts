@@ -82,6 +82,7 @@ export interface AgentOptions {
   initialState?: Partial<Omit<AgentState, 'pendingToolCalls' | 'isStreaming' | 'streamingMessage' | 'errorMessage'>>;
   convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
   transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+  resolveTools?: () => AgentTool[] | Promise<AgentTool[]>;
   streamFn?: StreamFn;
   prepareNextTurn?: () => unknown;
   prepareNextTurnWithContext?: (...args: any[]) => unknown;
@@ -118,6 +119,7 @@ export class Agent {
 
   public convertToLlm: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
   public transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+  public resolveTools?: () => AgentTool[] | Promise<AgentTool[]>;
   public streamFn: StreamFn;
   public sessionId?: string;
   public thinkingBudgets?: ThinkingBudgets;
@@ -130,6 +132,7 @@ export class Agent {
     this._state = createState(options.initialState);
     this.convertToLlm = options.convertToLlm || ((messages) => messages.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'toolResult'));
     this.transformContext = options.transformContext;
+    this.resolveTools = options.resolveTools;
     this.streamFn = options.streamFn || streamSimple;
     this.steeringQueue = new PendingMessageQueue(options.steeringMode || 'one-at-a-time');
     this.followUpQueue = new PendingMessageQueue(options.followUpMode || 'one-at-a-time');
@@ -189,6 +192,7 @@ export class Agent {
       streamFn: this.streamFn,
       convertToLlm: this.convertToLlm,
       transformContext: this.transformContext,
+      resolveTools: this.resolveTools,
       emit: (event: AgentEvent) => this.processEvent(event),
       getSteeringMessages: async () => this.steeringQueue.drain(),
       getFollowUpMessages: async () => this.followUpQueue.drain(),

@@ -163,14 +163,14 @@ async function evaluate(cdp, expression) {
       const lazyItem = rootItems.find(item => item.querySelector('.ft-name')?.textContent === 'lazy-tree');
       if (!lazyItem) return { error: 'lazy-tree root item missing' };
       const beforeExpand = document.querySelectorAll('#file-tree-container .ft-item').length;
-      lazyItem.click();
+      await lazyItem.onclick();
       for (let attempt = 0; attempt < 100; attempt++) {
         if (lazyItem.nextElementSibling?.getAttribute('data-loaded') === 'true') break;
         await new Promise(resolve => setTimeout(resolve, 20));
       }
       const child = Array.from(lazyItem.nextElementSibling?.querySelectorAll('.ft-item') || [])
         .find(item => item.querySelector('.ft-name')?.textContent === 'child.txt');
-      if (child) child.click();
+      if (child) await child.onclick();
       for (let attempt = 0; attempt < 100; attempt++) {
         if (document.getElementById('editor-filename')?.textContent?.includes('child.txt')) break;
         await new Promise(resolve => setTimeout(resolve, 20));
@@ -229,6 +229,174 @@ async function evaluate(cdp, expression) {
     await sleep(100);
     const lightSystemIcon = await evaluate(cdp, `document.getElementById('title-app-icon').currentSrc`);
     if (!String(darkAppIcon).includes('app-icon-dark-64.png') || !String(lightAppIcon).includes('app-icon-light-64.png') || !String(darkSystemIcon).includes('app-icon-dark-64.png') || !String(lightSystemIcon).includes('app-icon-light-64.png')) fail(`application theme title icon mismatch: ${JSON.stringify({ darkAppIcon, lightAppIcon, darkSystemIcon, lightSystemIcon })}`);
+    async function sampleSettingsControls(theme) {
+      const metrics = await evaluate(cdp, `(async () => {
+        const theme = '__THEME__';
+        window.setTheme(theme);
+        window.openSettings('models');
+        await new Promise(resolve => setTimeout(resolve, 180));
+        const button = document.querySelector('.settings-action-btn');
+        if (!button) throw new Error('Model settings action control is missing');
+        const parse = value => {
+          const values = String(value || '').match(/[\\d.]+/g)?.map(Number) || [];
+          return { r: values[0] || 0, g: values[1] || 0, b: values[2] || 0, a: values.length > 3 ? values[3] : 1 };
+        };
+        const blend = (top, bottom) => {
+          const alpha = top.a + bottom.a * (1 - top.a);
+          if (!alpha) return { r: 0, g: 0, b: 0, a: 0 };
+          return {
+            r: (top.r * top.a + bottom.r * bottom.a * (1 - top.a)) / alpha,
+            g: (top.g * top.a + bottom.g * bottom.a * (1 - top.a)) / alpha,
+            b: (top.b * top.a + bottom.b * bottom.a * (1 - top.a)) / alpha,
+            a: alpha,
+          };
+        };
+        const background = element => {
+          const layers = [];
+          for (let current = element; current; current = current.parentElement) {
+            layers.push(parse(getComputedStyle(current).backgroundColor));
+          }
+          let result = theme === 'dark' ? { r: 0, g: 0, b: 0, a: 1 } : { r: 255, g: 255, b: 255, a: 1 };
+          for (let index = layers.length - 1; index >= 0; index -= 1) result = blend(layers[index], result);
+          return result;
+        };
+        const luminance = color => {
+          const channel = value => {
+            const normalized = value / 255;
+            return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+          };
+          return channel(color.r) * 0.2126 + channel(color.g) * 0.7152 + channel(color.b) * 0.0722;
+        };
+        const contrast = (foreground, backgroundColor) => {
+          const a = luminance(foreground);
+          const b = luminance(backgroundColor);
+          return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+        };
+        const buttonStyle = getComputedStyle(button);
+        const buttonRect = button.getBoundingClientRect();
+        const buttonMetrics = {
+          contrast: contrast(parse(buttonStyle.color), background(button)),
+          effectiveBackground: background(button),
+          size: { width: buttonRect.width, height: buttonRect.height },
+          color: buttonStyle.color,
+          background: buttonStyle.backgroundColor,
+        };
+        window.openSettings('general');
+        await new Promise(resolve => setTimeout(resolve, 180));
+        const input = document.getElementById('settings-terminal-timeout');
+        if (!input) throw new Error('General settings terminal timeout control is missing');
+        const inputStyle = getComputedStyle(input);
+        const inputRect = input.getBoundingClientRect();
+        return {
+          theme,
+          buttonContrast: buttonMetrics.contrast,
+          buttonEffectiveBackground: buttonMetrics.effectiveBackground,
+          inputContrast: contrast(parse(inputStyle.color), background(input)),
+          inputEffectiveBackground: background(input),
+          inputColorScheme: inputStyle.colorScheme,
+          buttonSize: buttonMetrics.size,
+          inputSize: { width: inputRect.width, height: inputRect.height },
+          buttonColor: buttonMetrics.color,
+          buttonBackground: buttonMetrics.background,
+          inputColor: inputStyle.color,
+          inputBackground: inputStyle.backgroundColor,
+        };
+      })()`.replace('__THEME__', theme));
+      const screenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
+      fs.writeFileSync(path.join(repoRoot, 'archive', `2026-07-16-settings-controls-${theme}.png`), Buffer.from(screenshot.data, 'base64'));
+      return metrics;
+    }
+    const controlDark = await sampleSettingsControls('dark');
+    const controlLight = await sampleSettingsControls('light');
+    for (const sample of [controlDark, controlLight]) {
+      if (sample.buttonContrast < 4.5 || sample.inputContrast < 4.5
+        || !sample.inputColorScheme.includes(sample.theme)
+        || sample.buttonSize.height < 31.5 || Math.abs(sample.inputSize.width - 110) > 0.5 || sample.inputSize.height < 35.5) {
+        fail(`settings controls are not readable in ${sample.theme}: ${JSON.stringify(sample)}`);
+      }
+    }
+    async function sampleEditorTheme(theme) {
+      const metrics = await evaluate(cdp, `(async () => {
+        const theme = '__THEME__';
+        window.setTheme(theme);
+        window.closeSubWin();
+        window.switchRightTab('editor');
+        await new Promise(resolve => setTimeout(resolve, 180));
+        const editor = document.getElementById('native-editor');
+        const highlight = document.getElementById('editor-highlight');
+        const gutter = document.getElementById('editor-gutter');
+        const textarea = document.getElementById('editor-textarea');
+        const ghost = document.getElementById('editor-ghost');
+        const completion = document.getElementById('editor-completion');
+        if (!editor || !highlight || !gutter || !textarea || !ghost || !completion) throw new Error('Native editor theme surfaces are missing');
+        const parse = value => {
+          const values = String(value || '').match(/[\\d.]+/g)?.map(Number) || [];
+          return { r: values[0] || 0, g: values[1] || 0, b: values[2] || 0, a: values.length > 3 ? values[3] : 1 };
+        };
+        const luminance = color => {
+          const channel = value => {
+            const normalized = value / 255;
+            return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+          };
+          return channel(color.r) * 0.2126 + channel(color.g) * 0.7152 + channel(color.b) * 0.0722;
+        };
+        const contrast = (foreground, background) => {
+          const a = luminance(foreground);
+          const b = luminance(background);
+          return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+        };
+        const blend = (top, bottom) => ({
+          r: top.r * top.a + bottom.r * (1 - top.a),
+          g: top.g * top.a + bottom.g * (1 - top.a),
+          b: top.b * top.a + bottom.b * (1 - top.a),
+          a: 1,
+        });
+        const keyword = document.createElement('span');
+        keyword.className = 'tok-keyword';
+        keyword.textContent = 'const';
+        highlight.appendChild(keyword);
+        const editorStyle = getComputedStyle(editor);
+        const editorBackground = parse(editorStyle.backgroundColor);
+        const highlightColor = parse(getComputedStyle(highlight).color);
+        const gutterColor = parse(getComputedStyle(gutter).color);
+        const keywordColor = parse(getComputedStyle(keyword).color);
+        const ghostColor = parse(getComputedStyle(ghost).getPropertyValue('--editor-ghost-text') || getComputedStyle(document.documentElement).getPropertyValue('--editor-ghost-text'));
+        const completionStyle = getComputedStyle(completion);
+        const completionBackground = blend(parse(completionStyle.backgroundColor), editorBackground);
+        const result = {
+          theme,
+          editorBackground: editorStyle.backgroundColor,
+          gutterBackground: getComputedStyle(gutter).backgroundColor,
+          ghostBackground: getComputedStyle(ghost).backgroundColor,
+          completionBackground: completionStyle.backgroundColor,
+          caretColor: getComputedStyle(textarea).caretColor,
+          textContrast: contrast(highlightColor, editorBackground),
+          gutterContrast: contrast(gutterColor, editorBackground),
+          keywordContrast: contrast(keywordColor, editorBackground),
+          ghostContrast: contrast(blend(ghostColor, editorBackground), editorBackground),
+          completionContrast: contrast(parse(completionStyle.color), completionBackground),
+          editorSize: { width: editor.getBoundingClientRect().width, height: editor.getBoundingClientRect().height },
+        };
+        keyword.remove();
+        return result;
+      })()`.replace('__THEME__', theme));
+      const screenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
+      fs.writeFileSync(path.join(repoRoot, 'archive', `2026-07-16-editor-${theme}.png`), Buffer.from(screenshot.data, 'base64'));
+      return metrics;
+    }
+    const editorDark = await sampleEditorTheme('dark');
+    const editorLight = await sampleEditorTheme('light');
+    if (editorDark.editorBackground !== 'rgb(11, 13, 20)' || editorDark.caretColor !== 'rgb(255, 255, 255)'
+      || editorLight.editorBackground !== 'rgb(247, 248, 252)' || editorLight.caretColor !== 'rgb(23, 32, 51)') {
+      fail(`native editor did not switch its base palette with the application theme: ${JSON.stringify({ editorDark, editorLight })}`);
+    }
+    for (const sample of [editorDark, editorLight]) {
+      if (sample.textContrast < 4.5 || sample.gutterContrast < 4.5 || sample.keywordContrast < 4.5
+        || sample.ghostContrast < 3 || sample.completionContrast < 4.5
+        || sample.editorSize.width < 300 || sample.editorSize.height < 80) {
+        fail(`native editor theme is not readable in ${sample.theme}: ${JSON.stringify(sample)}`);
+      }
+    }
     const appearance = await evaluate(cdp, `(async () => {
       window.setTheme('dark');
       window.setBackgroundColor('#123456');
@@ -285,7 +453,7 @@ async function evaluate(cdp, expression) {
     if (durableImageUi.cards !== 1 || durableImageUi.name !== 'diagram.png' || !durableImageUi.src.startsWith('data:image/png;base64,')) fail(`durable user image UI failed: ${JSON.stringify(durableImageUi)}`);
     const durableImageScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
     fs.writeFileSync(path.join(repoRoot, 'archive', '2026-07-14-durable-user-image-ui.png'), Buffer.from(durableImageScreenshot.data, 'base64'));
-    console.log(`[release-ui-runtime-layout-smoke] PASS workspaceFocusMenu=${JSON.stringify(workspaceFocusMenu)} layout=${JSON.stringify(result)} editor=${JSON.stringify(editor)} icons=${JSON.stringify({ darkAppIcon, lightAppIcon, darkSystemIcon, lightSystemIcon })} appearance=${JSON.stringify(appearance)} durableImageUi=${JSON.stringify(durableImageUi)}`);
+    console.log(`[release-ui-runtime-layout-smoke] PASS workspaceFocusMenu=${JSON.stringify(workspaceFocusMenu)} layout=${JSON.stringify(result)} editor=${JSON.stringify(editor)} editorThemes=${JSON.stringify({ editorDark, editorLight })} icons=${JSON.stringify({ darkAppIcon, lightAppIcon, darkSystemIcon, lightSystemIcon })} controls=${JSON.stringify({ controlDark, controlLight })} appearance=${JSON.stringify(appearance)} durableImageUi=${JSON.stringify(durableImageUi)}`);
   } finally {
     try { cdp?.ws.close(); } catch {}
     if (child?.pid) spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });

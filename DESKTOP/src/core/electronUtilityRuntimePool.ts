@@ -4,6 +4,7 @@ import { drainWindowsProcessHelpers, ElectronUtilityAgentClient, UtilityHostTool
 import {
   UtilityAgentPromptResult,
   UtilityAutoRouteRatingResult,
+  UtilityConversationRewindResult,
   UtilityAgentSnapshotResult,
   UtilityAgentStopResult,
   UtilityPromptRequest,
@@ -15,6 +16,7 @@ export interface ElectronTargetRuntimeClient {
   setHostToolHandler(handler: UtilityHostToolHandler | null): void;
   prompt(params: UtilityPromptRequest): Promise<UtilityAgentPromptResult>;
   snapshot(): Promise<UtilityAgentSnapshotResult>;
+  rewind(messageIndex: number): Promise<UtilityConversationRewindResult>;
   requestStop(runId?: string): Promise<UtilityAgentStopResult>;
   enqueueGuide(envelope: ConversationInputEnvelope): Promise<GuideReceipt>;
   checkpoint(): Promise<Record<string, unknown>>;
@@ -124,6 +126,21 @@ export class ElectronUtilityRuntimePool {
       return result;
     } finally {
       this.release(entry, scheduleIdle);
+    }
+  }
+
+  async rewind(target: ConversationRuntimeTarget, messageIndex: number): Promise<UtilityConversationRewindResult> {
+    const entry = await this.acquire(normalizeConversationTarget(target));
+    try {
+      if (entry.stopIntent) throw new Error('Cannot edit a message while this conversation is stopping.');
+      const result = await entry.client.rewind(messageIndex);
+      entry.lastSnapshot = null;
+      entry.workEvents = [];
+      entry.lastRunId = '';
+      entry.stopIntent = null;
+      return result;
+    } finally {
+      this.release(entry, true);
     }
   }
 

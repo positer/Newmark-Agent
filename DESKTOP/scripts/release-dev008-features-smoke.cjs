@@ -210,6 +210,7 @@ function startMockProvider() {
   const rootToolOrder = [];
   const rootInboxReplies = new Set();
   const rootSequence = [
+    ['tool_provision', { names: ['linked_plan', 'task', 'subagent_list', 'subagent_read', 'subagent_send'] }],
     ['linked_plan', { action: 'update', markdown: '# dev-0.0.8 packaged plan\n\n- [x] Linked Plan live refresh\n- [ ] Parallel peer aggregation', expected_revision: 0 }],
     ['task', { nature: 'alpha-review', prompt: 'DEV008_ALPHA_PEER initial work', model: modelName, mode: 'build', input_mode: 'guide' }],
     ['task', { nature: 'beta-review', prompt: 'DEV008_BETA_PEER initial work', model: modelName, mode: 'build', input_mode: 'guide' }],
@@ -416,7 +417,7 @@ async function stopPackagedRun(child, cdp) {
     const rootResult = rootRun.value;
     const elapsedMs = Date.now() - startedAt;
     if (!rootResult || rootResult.ok === false || rootResult.error) fail(`Root Agent run failed: ${JSON.stringify(rootResult)}`);
-    const expectedOrder = 'linked_plan,task,task,subagent_list,subagent_read,subagent_send';
+    const expectedOrder = 'tool_provision,linked_plan,task,task,subagent_list,subagent_read,subagent_send';
     if (mock.rootToolOrder.join(',') !== expectedOrder) fail(`Unexpected root tool order: ${mock.rootToolOrder.join(',')}`);
     const taskRequestIndexes = mock.requests
       .map((entry, index) => JSON.stringify(entry.parsed || {}).includes('"task"') ? index : -1)

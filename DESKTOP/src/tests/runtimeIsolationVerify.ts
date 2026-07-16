@@ -795,6 +795,7 @@ class FakeWslTargetClient implements WslTargetRuntimeClient {
   stopResults: WslAgentStopResult[] = [];
   settings = 0;
   folds = 0;
+  rewindCalls: Array<{ target: ConversationRuntimeTarget; messageIndex: number }> = [];
   stopCalls = 0;
   hangStops = false;
   connected = true;
@@ -827,6 +828,20 @@ class FakeWslTargetClient implements WslTargetRuntimeClient {
 
   async snapshotTarget(): Promise<Record<string, unknown>> {
     return { target: normalizeConversationTarget(this.targetInfo), runtime: null, queued: { steering: [], followUp: [] }, workEvents: [] };
+  }
+  async rewind(target: ConversationRuntimeTarget, messageIndex: number): Promise<any> {
+    this.rewindCalls.push({ target, messageIndex });
+    return {
+      conversationId: target.conversationId,
+      conversations: [],
+      conversationPlan: { items: [] },
+      linkedPlan: { markdown: '', revision: 0 },
+      subagents: [],
+      chatMessages: [],
+      historyMessages: 0,
+      workRuns: [],
+      continuations: [],
+    };
   }
   async enqueueGuide(_target: ConversationRuntimeTarget, envelope: ConversationInputEnvelope): Promise<GuideReceipt> {
     return {
@@ -872,6 +887,12 @@ async function verifyWslPerTargetPool(): Promise<void> {
   const betaClient = clients.get(conversationRuntimeKey(beta))!;
   assert.equal(alphaClient.prompts, 2);
   assert.equal(betaClient.prompts, 1);
+  const wslRewound = await pool.rewind(alpha, 2);
+  assert.equal(wslRewound.conversationId, 'same');
+  assert.equal(alphaClient.rewindCalls.length, 1, 'WSL rewind must execute inside the target runtime client');
+  assert.equal(alphaClient.rewindCalls[0].messageIndex, 2);
+  assert.equal(normalizeConversationTarget(alphaClient.rewindCalls[0].target).runtimeKey, conversationRuntimeKey(alpha));
+  assert.equal(betaClient.rewindCalls.length, 0, 'WSL rewind must not cross the composite target boundary');
 
   alphaClient.stopResults.push(
     { action: 'graceful', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'wsl', distro: 'Fake' },
@@ -1152,6 +1173,7 @@ class FakeElectronTargetClient implements ElectronTargetRuntimeClient {
   guides = 0;
   checkpoints = 0;
   folds = 0;
+  rewindIndices: number[] = [];
   restarts = 0;
   forceStops = 0;
   stops = 0;
@@ -1187,6 +1209,20 @@ class FakeElectronTargetClient implements ElectronTargetRuntimeClient {
   }
   async snapshot(): Promise<UtilityAgentSnapshotResult> {
     return { target: normalizeConversationTarget(this.targetInfo), runtime: null, queued: { steering: [], followUp: [] }, workEvents: [] };
+  }
+  async rewind(messageIndex: number): Promise<any> {
+    this.rewindIndices.push(messageIndex);
+    return {
+      conversationId: this.targetInfo.conversationId,
+      conversations: [],
+      conversationPlan: { items: [] },
+      linkedPlan: { markdown: '', revision: 0 },
+      subagents: [],
+      chatMessages: [],
+      historyMessages: 0,
+      workRuns: [],
+      continuations: [],
+    };
   }
   async requestStop(): Promise<UtilityAgentStopResult> {
     this.stopCalls++;
@@ -1254,6 +1290,10 @@ async function verifyElectronPerTargetPool(): Promise<void> {
   const betaClient = clients.get(conversationRuntimeKey(beta))!;
   assert.equal(alphaClient.prompts, 2);
   assert.equal(betaClient.prompts, 1);
+  const utilityRewound = await pool.rewind(alpha, 2);
+  assert.equal(utilityRewound.conversationId, 'same');
+  assert.deepEqual(alphaClient.rewindIndices, [2], 'Utility rewind must execute inside the target runtime client');
+  assert.deepEqual(betaClient.rewindIndices, [], 'Utility rewind must not cross the composite target boundary');
 
   const now = new Date().toISOString();
   await pool.enqueueGuide({

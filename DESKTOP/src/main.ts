@@ -200,12 +200,14 @@ function ensureConversationKernel(root: string): ConversationKernel | null {
   return conversationKernel;
 }
 
-function ensureWorkspaceSelectionCoordinator(): WorkspaceSelectionCoordinator<string, ReturnType<Agent['selectWorkspace']>> | null {
+function ensureWorkspaceSelectionCoordinator(): WorkspaceSelectionCoordinator<string, ReturnType<Agent['selectWorkspaceFromStorage']>> | null {
   if (!agent) return null;
   if (!workspaceSelectionCoordinator) {
-    workspaceSelectionCoordinator = new WorkspaceSelectionCoordinator<string, ReturnType<Agent['selectWorkspace']>>({
+    workspaceSelectionCoordinator = new WorkspaceSelectionCoordinator<string, ReturnType<Agent['selectWorkspaceFromStorage']>>({
       keyOf: value => String(value || '').trim(),
-      apply: async value => agent?.selectWorkspace(value) || null,
+      // Utility/WSL runtimes own target conversation persistence. A renderer
+      // switch must refresh the host view without saving its older snapshot.
+      apply: async value => agent?.selectWorkspaceFromStorage(value) || null,
       failureThreshold: 2,
       failureWindowMs: 10_000,
       circuitOpenMs: 5_000,
@@ -1962,7 +1964,7 @@ if (hasCliCommand) {
         const targetConversation = target.conversationId;
         const options = {
           mode: agent.mode,
-          model: agent.model,
+          model: agent.ensureUsableModelSelection(),
           intelligence: agent.intelligence,
           inputMode: agent.inputMode,
           engine: agent.engine,
@@ -1990,16 +1992,11 @@ if (hasCliCommand) {
           result = await ensureElectronUtilityPool().prompt({ message, target, options, queueMode });
         }
         const previousConversation = agent.activeConversationId || 'default';
-        const currentWorkspace = agent.workspace.current;
-        const currentMatchesTarget = !!currentWorkspace && (
-          currentWorkspace.id === target.workspaceId
-          || currentWorkspace.path === target.workspaceId
-          || (currentWorkspace.name === target.workspaceId
-            && [...agent.workspace.internal, ...agent.workspace.external].filter(item => item.name === target.workspaceId).length === 1)
-        );
-        if (currentMatchesTarget && previousConversation === targetConversation) {
-          agent.setConversation(targetConversation);
-        }
+        // The isolated runtime owns conversation persistence for this prompt.
+        // Calling setConversation() here first saves the host's stale snapshot
+        // and can overwrite the plan, subagents, or messages just produced by
+        // the Utility/WSL runtime. The prompt result already carries the fresh
+        // target-scoped snapshot consumed by the renderer.
         return {
           ...result,
           conversationId: targetConversation,
@@ -2099,7 +2096,7 @@ if (hasCliCommand) {
       return agent?.inputMode;
     });
     ipcMain.handle('agent:setConversation', async (_event, id: string) => {
-      return agent?.setConversation(id);
+      return agent?.setConversationFromStorage(id);
     });
     ipcMain.handle('agent:ensureConversation', async (_event, targetInput: ConversationTargetInput) => {
       if (!agent) return {};
@@ -2404,7 +2401,9 @@ if (hasCliCommand) {
       if (!agent) return { error: 'Agent not initialized' };
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
       try {
-        const snapshot = await mutateTargetConversation(target, () => isolatedConversationAgent(target).rewindConversation(target.conversationId, messageIndex));
+        const snapshot = await mutateTargetConversation(target, () => wslBackendEnabled()
+          ? ensureWslConversationPool()!.rewind(target, messageIndex)
+          : ensureElectronUtilityPool().rewind(target, messageIndex));
         return { ...snapshot, queued: { steering: [], followUp: [] }, workEvents: [] };
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };

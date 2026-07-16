@@ -62,6 +62,7 @@ class CapacityElectronClient implements ElectronTargetRuntimeClient {
 
   setHostToolHandler(): void {}
   async prompt(): Promise<never> { throw new Error('unused'); }
+  async rewind(): Promise<never> { throw new Error('unused'); }
   async requestStop(): Promise<never> { throw new Error('unused'); }
   async enqueueGuide(): Promise<never> { throw new Error('unused'); }
   async checkpoint(): Promise<Record<string, unknown>> { return {}; }
@@ -133,6 +134,7 @@ class CapacityWslClient implements WslTargetRuntimeClient {
 
   setHostToolHandler(): void {}
   async prompt(): Promise<never> { throw new Error('unused'); }
+  async rewind(): Promise<never> { throw new Error('unused'); }
   async requestStop(): Promise<never> { throw new Error('unused'); }
   async enqueueGuide(): Promise<never> { throw new Error('unused'); }
   async checkpoint(): Promise<Record<string, unknown>> { return {}; }

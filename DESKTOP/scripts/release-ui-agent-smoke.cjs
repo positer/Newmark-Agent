@@ -342,9 +342,8 @@ function ensureNoReleaseProcess() {
     const finalVisible = await waitFor(cdp, `(() => {
       const text = document.body.innerText || '';
       return text.includes('ACTIVE_TOOLCHAIN_RESULT_OK_20260627_SCRIPT') &&
-        text.includes('[write] OK') &&
+        text.includes('Tools') &&
         text.includes('TERMINAL_TOOL_USED') &&
-        text.includes('[edit] OK') &&
         text.includes('EDIT_REPLACED_OK') ? text : '';
     })()`, 90000, 'visible toolchain result');
 
@@ -370,6 +369,29 @@ function ensureNoReleaseProcess() {
     const metaText = await evaluate(cdp, `Array.from(document.querySelectorAll('.chat-msg .meta-extra')).map(el => el.textContent || '').join('\\n')`);
     if (!/Mode:\s*(build|Build)/.test(metaText) || !metaText.includes('Model: release-ui-agent-mock')) {
       fail(`timeline hover metadata did not include mode/model: ${metaText}`);
+    }
+
+    const reviewRowStyle = await evaluate(cdp, `(() => {
+      const review = document.querySelector('.work-review-btn');
+      if (!review) return null;
+      review.click();
+      const row = document.querySelector('#sub-win-overlay.open .work-review-detail .file-row');
+      if (!row) return null;
+      const style = getComputedStyle(row);
+      return {
+        title: document.querySelector('#sub-win-title')?.textContent || '',
+        appearance: style.appearance,
+        display: style.display,
+        minHeight: style.minHeight,
+        borderRadius: style.borderRadius,
+        borderStyle: style.borderStyle,
+        color: style.color,
+      };
+    })()`);
+    if (!reviewRowStyle || reviewRowStyle.appearance !== 'none' || reviewRowStyle.display !== 'grid'
+      || reviewRowStyle.minHeight !== '38px' || reviewRowStyle.borderRadius !== '6px'
+      || reviewRowStyle.borderStyle !== 'solid' || !reviewRowStyle.title) {
+      fail(`review file row did not use the themed control style: ${JSON.stringify(reviewRowStyle)}`);
     }
 
     try {

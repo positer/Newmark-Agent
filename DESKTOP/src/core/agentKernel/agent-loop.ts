@@ -77,6 +77,7 @@ async function runLoop(
       }
       pendingMessages = [];
 
+      if (config.resolveTools) context.tools = (await config.resolveTools()).slice();
       const assistant = await streamAssistantResponse(context, config, signal);
       context.messages.push(assistant);
       newMessages.push(assistant);
@@ -91,8 +92,10 @@ async function runLoop(
       const toolResults = toolCalls.length ? await executeToolCalls(toolCalls, context, config, signal) : [];
       hasMoreToolCalls = toolResults.some(result => result.role === 'toolResult' && result.details && typeof result.details === 'object' && (result.details as Record<string, unknown>).terminate === true) ? false : toolResults.length > 0;
       for (const result of toolResults) {
+        await emit(config, { type: 'message_start', message: result });
         context.messages.push(result);
         newMessages.push(result);
+        await emit(config, { type: 'message_end', message: result });
       }
       await emit(config, { type: 'turn_end', message: assistant, toolResults });
 

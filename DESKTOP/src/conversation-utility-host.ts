@@ -74,6 +74,9 @@ async function handle(request: UtilityAgentRequest): Promise<unknown> {
     return { ...result, backend: 'utility', pid: process.pid };
   }
   if (request.method === 'snapshot') return kernel.snapshot(checkedTarget(request.params.target));
+  if (request.method === 'rewind') {
+    return kernel.rewind(checkedTarget(request.params.target), request.params.messageIndex);
+  }
   if (request.method === 'stop') {
     return { ...kernel.requestStop(checkedTarget(request.params.target), request.params.runId), backend: 'utility', pid: process.pid };
   }

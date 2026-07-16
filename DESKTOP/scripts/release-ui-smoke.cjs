@@ -183,6 +183,7 @@ async function seedDynamicI18nState(cdp) {
   await evaluate(cdp, `(() => {
     state.contextCompression = { fallback: false, originalMessages: 8, compressedMessages: 2, at: '2026-06-27T00:00:00.000Z', summary: 'smoke' };
     state.nextQueue = ['queued follow-up'];
+    state.nextQueueRequests = [bindQueuedRequestToTarget(null, 'queued follow-up', currentConversationTarget())];
     state.autoSwitch = 'on';
     state.autoSwitchScope = 'all';
     state.providers = [{
@@ -195,6 +196,7 @@ async function seedDynamicI18nState(cdp) {
       ]
     }];
     applyLanguageToUi();
+    window.renderQueuePanel();
     return true;
   })()`);
   await sleep(300);
@@ -294,6 +296,22 @@ function ensureNoReleaseProcess() {
     await cdp.call('Page.enable');
     await cdp.call('Page.bringToFront');
     await sleep(2500);
+
+    const terminalStarted = await evaluate(cdp, `(async () => {
+      const response = await window.ensureTerminalStarted();
+      const pane = document.querySelector('.terminal-pane[data-session]');
+      return {
+        sessionId: response?.sessionId || '',
+        paneSessionId: pane?.getAttribute('data-session') || '',
+        status: pane?.querySelector('.terminal-output span')?.textContent || ''
+      };
+    })()`);
+    if (!terminalStarted.sessionId || terminalStarted.paneSessionId !== terminalStarted.sessionId) {
+      fail(`terminal did not start on demand: ${JSON.stringify(terminalStarted)}`);
+    }
+    if (!terminalStarted.status.includes('(powershell)')) {
+      fail(`terminal connected status mismatch: ${JSON.stringify(terminalStarted)}`);
+    }
 
     await seedDynamicI18nState(cdp);
     await setLanguage(cdp, 'auto');

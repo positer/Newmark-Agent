@@ -21,7 +21,7 @@ import { FlowEngine, FlowWorkflow } from './flow';
 import { AutomationCondition, AutomationManager, AutomationSchedule } from './automation';
 import { MemoryLabManager, MemoryLabPreparedUpdate, MemoryLabUpdateInput, MemoryLabWriteResult } from './memoryLab';
 import { runAgentKernel } from './agentKernelRunner';
-import { evaluateToolPolicy, planModePolicyPrompt } from './toolPolicy';
+import { evaluateToolPolicy, filterToolDefinitions, isReadOnlyScopedToolAction, planModePolicyPrompt } from './toolPolicy';
 import type { AgentPromptMessage } from './conversationKernel';
 import {
   AgentMode, InputMode, AgentStatus, StreamToken,
@@ -332,9 +332,19 @@ export class Agent {
     const inputStr = this.config.getStr('general', 'default_input');
     this.inputMode = inputStr === 'next' ? 'next' : 'guide';
 
-    this.model = this.config.getStr('models', 'default_model');
-    const initialModel = this.config.findModel(this.model);
-    this.fixedDeployment = initialModel ? this.deploymentRef(initialModel) : null;
+    const configuredModel = this.config.getStr('models', 'default_model');
+    this.model = '';
+    this.fixedDeployment = null;
+    if (configuredModel === 'auto' && this.config.autoSwitchEnabled()) {
+      this.model = 'auto';
+    } else if (configuredModel) {
+      this.setModel(configuredModel);
+    }
+    // A configured provider catalog is already enough to establish a stable
+    // deployment identity. Do this in the core instead of waiting for the
+    // deferred renderer catalog: otherwise the first prompt after startup can
+    // race the UI and reach the kernel with an empty model.
+    this.ensureUsableModelSelection();
     this.intelligence = this.config.getStr('models', 'default_intelligence') || 'medium';
     this.engine = this.config.getStr('models', 'agent_engine') || 'builtin';
 
@@ -406,6 +416,44 @@ export class Agent {
     this.routeAttemptStartedAt = 0;
     this.routeStreamCommitted = false;
     this.routeSideEffectCommitted = false;
+  }
+
+  /**
+   * Resolve an empty, removed, or ambiguous fixed selection without mutating
+   * the persisted default. The qualified value is carried to every runtime so
+   * same-named deployments never fall back to provider-order guessing.
+   */
+  ensureUsableModelSelection(): string {
+    if (this.model === 'auto' && this.config.autoSwitchEnabled()) return 'auto';
+    if (this.activeModelConfig()) return this.modelSelectionValue();
+    const candidate = this.defaultModelCandidate();
+    if (candidate) {
+      this.setModel(`deployment:${encodeURIComponent(candidate.provider_id)}:${encodeURIComponent(candidate.name)}`);
+    }
+    return this.modelSelectionValue();
+  }
+
+  private defaultModelCandidate(): ReturnType<ConfigManager['allModels']>[number] | undefined {
+    const rejected = new Set(['unavailable', 'auth_error', 'invalid_config']);
+    return this.config.allModels()
+      .map((model, index) => {
+        const validationStatus = String(model.validation?.status || '').toLowerCase();
+        const evaluationStatus = String(model.evaluation?.status || '').toLowerCase();
+        const level = String(model.validation?.level || '').toLowerCase();
+        if (model.enabled === false || rejected.has(validationStatus) || rejected.has(evaluationStatus) || evaluationStatus.startsWith('error')) {
+          return null;
+        }
+        let score = 0;
+        if (level === 'standard' || level === 'extended') score += 100;
+        if (validationStatus === 'verified') score += 40;
+        else if (validationStatus === 'degraded') score += 20;
+        if (evaluationStatus === 'available') score += 30;
+        else if (evaluationStatus === 'degraded') score += 10;
+        if (model.preview) score -= 25;
+        return { model, index, score };
+      })
+      .filter((entry): entry is { model: ReturnType<ConfigManager['allModels']>[number]; index: number; score: number } => !!entry)
+      .sort((a, b) => b.score - a.score || a.index - b.index)[0]?.model;
   }
   setIntelligence(tier: string): void { this.intelligence = tier; }
   setAutomationManager(manager: AutomationManager | null): void { this.automationManager = manager; }
@@ -1692,6 +1740,7 @@ export class Agent {
       linkedPlan: snapshot.linkedPlan,
       subagents: this.subagents,
       workRuns: snapshot.workRuns,
+      continuations: [],
     });
     return this.getConversationSnapshot(clean);
   }
@@ -1887,6 +1936,17 @@ export class Agent {
     return this.applyWorkspaceContext(this.workspace.select(id));
   }
 
+  selectWorkspaceFromStorage(id: string): WorkspaceInfo | null {
+    const selected = this.workspace.select(id);
+    if (selected) this.config.loadWorkspaceConfig(selected.path);
+    else this.config.clearWorkspaceOverrides();
+    this.activeConversationId = this.safeConversationId(this.activeConversationId || 'default');
+    const key = this.workspaceConversationKey();
+    if (key) this.workspaceConversations.delete(key);
+    this.loadWorkspaceConversationState();
+    return selected;
+  }
+
   setConversation(id: string): string {
     const clean = this.safeConversationId(id || 'default');
     // Conversation runners may bind a target workspace directly before their
@@ -1898,6 +1958,14 @@ export class Agent {
     this.activeConversationId = clean;
     this.loadWorkspaceConversationState();
     this.saveWorkspaceConversationState();
+    return this.activeConversationId;
+  }
+
+  setConversationFromStorage(id: string): string {
+    this.activeConversationId = this.safeConversationId(id || 'default');
+    const key = this.workspaceConversationKey();
+    if (key) this.workspaceConversations.delete(key);
+    this.loadWorkspaceConversationState();
     return this.activeConversationId;
   }
 
@@ -2648,7 +2716,9 @@ export class Agent {
   }
 
   modelIsUnavailable(modelName: string): boolean {
-    const model = modelName === 'auto' ? this.activeModelConfig() : this.config.findModel(modelName);
+    const model = modelName === this.model || modelName === 'auto'
+      ? this.activeModelConfig()
+      : this.config.findModel(modelName);
     if (!model) return true;
     const validationStatus = model.validation?.status;
     // `discovered` means unvalidated, not a failed endpoint. Explicit fixed
@@ -2721,6 +2791,7 @@ export class Agent {
       return current.modelId;
     }
     if (!fallbackEnabled) return null;
+    if (!observedFailure.retryable || !observedFailure.switchAllowed || this.routeStreamCommitted || this.routeSideEffectCommitted) return null;
     const current = this.model;
     const all = this.scopedSwitchModels(current).filter(m => m.name !== current);
     if (!all.length) return null;
@@ -3089,6 +3160,7 @@ export class Agent {
     try {
       const text = typeof input === 'string' ? input : String(input.text || '');
       const inputEnvelope = typeof input === 'string' ? null : input as AgentPromptMessage & { clientMessageId?: string; runId?: string };
+      this.ensureUsableModelSelection();
       const clientMessageId = String(inputEnvelope?.clientMessageId || '').trim();
       const inputRunId = String(inputEnvelope?.runId || this.activeWorkRunId || '').trim();
       const rawImages = typeof input === 'string' ? [] : (Array.isArray(input.images) ? input.images : []);
@@ -3206,10 +3278,15 @@ export class Agent {
   }
 
   private async withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-    return Promise.race([
-      promise,
-      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms)),
-    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms);
+    });
+    try {
+      return await Promise.race([promise, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async handleSubagent(args: string): Promise<string> {
@@ -3746,15 +3823,14 @@ export class Agent {
         function: {
           name: 'image_generate',
           description: 'Generate an image with the selected validated image-output model. Use this tool for user image-generation requests; never claim an image was generated without this tool result.',
-          parameters: { type: 'object', properties: { prompt: { type: 'string' }, size: { type: 'string', enum: ['256x256', '512x512', '1024x1024'] } }, required: ['prompt'] },
+          parameters: { type: 'object', properties: { prompt: { type: 'string' }, size: { type: 'string', enum: ['256x256', '512x512', '1024x1024'] } }, required: ['prompt'], additionalProperties: false },
         },
       }]
       : visionFiltered;
-    return withImageGeneration.filter((tool: any) => evaluateToolPolicy({
-      name: tool.function?.name || '',
+    return filterToolDefinitions(withImageGeneration, {
       mode: this.mode,
       isSubagent: this.isSubagentRuntime,
-    }).allowed);
+    });
   }
 
   async handleImageGeneration(args: string, signal?: AbortSignal): Promise<string> {
@@ -4523,7 +4599,7 @@ function routeToolIsReadOnly(name: string, rawArgs: string): boolean {
   if (tool === 'computer_use') {
     try {
       const action = String((JSON.parse(rawArgs || '{}') as Record<string, unknown>).action || '').toLowerCase();
-      return action === 'observe' || action === 'app_observe' || action === 'screenshot';
+      return isReadOnlyScopedToolAction(tool, action);
     } catch {
       return false;
     }
@@ -4531,7 +4607,7 @@ function routeToolIsReadOnly(name: string, rawArgs: string): boolean {
   if (tool === 'browser_use') {
     try {
       const action = String((JSON.parse(rawArgs || '{}') as Record<string, unknown>).action || '').toLowerCase();
-      return action === 'observe' || action === 'read' || action === 'screenshot';
+      return isReadOnlyScopedToolAction(tool, action);
     } catch {
       return false;
     }

@@ -7,7 +7,7 @@ const { spawn, spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
-const screenshotPath = path.join(repoRoot, 'archive', '2026-06-28-release-ui-conversation-queue-plan-smoke.png');
+const screenshotPath = path.join(repoRoot, 'archive', '2026-07-16-dev-0.0.11-queue-guide-smoke.png');
 const keepRoot = process.env.NEWMARK_KEEP_UI_CONVERSATION_QUEUE_PLAN_SMOKE === '1';
 
 function log(message) {
@@ -219,6 +219,9 @@ function startMockServer() {
       let parsed = {};
       try { parsed = JSON.parse(body || '{}'); } catch {}
       const messagesText = JSON.stringify(parsed.messages || []);
+      const requestToolNames = new Set((parsed.tools || [])
+        .map(tool => String(tool && tool.function && tool.function.name || tool && tool.name || ''))
+        .filter(Boolean));
 
       if (req.method === 'GET' && req.url === '/v1/models') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -242,8 +245,12 @@ function startMockServer() {
         sendSse(res, [textChunk('QUEUE_SECOND_DONE_20260628')]);
         return;
       }
+      if (messagesText.includes('QUEUE_GUIDE_INSERT_TEST')) {
+        sendSse(res, [textChunk('QUEUE_GUIDE_DONE_20260716')]);
+        return;
+      }
       if (messagesText.includes('QUEUE_FIRST_LOCK_TEST')) {
-        setTimeout(() => sendSse(res, [textChunk('QUEUE_FIRST_DONE_20260628')]), 1800);
+        setTimeout(() => sendSse(res, [textChunk('QUEUE_FIRST_DONE_20260628')]), 20000);
         return;
       }
       if (messagesText.includes('LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701')) {
@@ -259,6 +266,10 @@ function startMockServer() {
         return;
       }
       if (messagesText.includes('LONG_PARALLEL_CONV_A_20260701')) {
+        if (!requestToolNames.has('bash') && requestToolNames.has('tool_provision')) {
+          sendSse(res, [{ payload: toolCallChunk('call-provision-long-a', 'tool_provision', { names: ['bash'] }) }]);
+          return;
+        }
         sendSse(res, [
           delayedTextChunk('LONG_PARALLEL_CONV_A_STREAM_START_20260701 ', 1000),
           delayedTextChunk('LONG_PARALLEL_CONV_A_STREAM_MID_20260701 ', 2000),
@@ -267,6 +278,10 @@ function startMockServer() {
         return;
       }
       if (messagesText.includes('LONG_PARALLEL_CONV_B_20260701')) {
+        if (!requestToolNames.has('bash') && requestToolNames.has('tool_provision')) {
+          sendSse(res, [{ payload: toolCallChunk('call-provision-long-b', 'tool_provision', { names: ['bash'] }) }]);
+          return;
+        }
         sendSse(res, [
           delayedTextChunk('LONG_PARALLEL_CONV_B_STREAM_START_20260701 ', 1000),
           delayedTextChunk('LONG_PARALLEL_CONV_B_STREAM_MID_20260701 ', 2000),
@@ -345,9 +360,13 @@ async function runUiCheck(root) {
     await cdp.call('Page.bringToFront');
 
     await waitFor(cdp, `(() => document.readyState === 'complete' && !!window.api && !!window.sendMessage && !!document.querySelector('#prompt'))()`, 30000, 'renderer ready');
-    await evaluate(cdp, `window.api.createWorkspace('conversation-queue-plan-workspace').then(ws => window.api.selectWorkspace(ws.name))`, 30000);
-    await evaluate(cdp, `window.selectWorkspace('conversation-queue-plan-workspace')`, 30000);
+    const createdWorkspace = await evaluate(cdp, `window.api.createWorkspace('conversation-queue-plan-workspace')`, 30000);
+    const workspaceReference = String(createdWorkspace && (createdWorkspace.id || createdWorkspace.path || createdWorkspace.name) || '');
+    if (!workspaceReference) fail('created workspace did not expose a stable identity');
+    await evaluate(cdp, `window.refreshWorkspaceState()`, 30000);
+    await evaluate(cdp, `window.switchToWorkspace(${JSON.stringify(workspaceReference)})`, 30000);
     await waitFor(cdp, `window.api.getState().then(s => s.workspaces && s.workspaces.current && s.workspaces.current.name === 'conversation-queue-plan-workspace')`, 30000, 'workspace selected');
+    await waitFor(cdp, `(() => window.state && window.state.currentWorkspaceId === ${JSON.stringify(workspaceReference)})()`, 30000, 'workspace stable identity selected');
 
     await evaluate(cdp, `window.switchRightTab('plan')`, 30000);
     await waitFor(cdp, `(() => !!document.querySelector('#conversation-plan-input'))()`, 30000, 'plan panel visible');
@@ -388,7 +407,7 @@ async function runUiCheck(root) {
       window.sendMessage();
       return true;
     })()`, 30000);
-    await waitFor(cdp, `(() => window.state && window.state.runningConversations && window.state.runningConversations[${JSON.stringify(convA)}] === true)()`, 10000, 'conversation A send in flight');
+    await waitFor(cdp, `(() => !!window.runningConversationRecord(${JSON.stringify(convA)}))()`, 10000, 'conversation A send in flight');
     await evaluate(cdp, switchConversationById(planConvB), 30000);
     const convB = await evaluate(cdp, `window.api.getState(activeConversationId()).then(s => s.conversationId)`, 30000);
     if (convB === convA) fail(`conversation did not switch during active turn: ${convA}`);
@@ -398,8 +417,32 @@ async function runUiCheck(root) {
       window.sendMessage();
       return true;
     })()`, 30000);
-    await waitFor(cdp, `(() => window.state && window.state.runningConversations && window.state.runningConversations[${JSON.stringify(convB)}] === true)()`, 10000, 'conversation B send in flight');
-    await waitFor(cdp, `(() => (document.querySelector('#chat-area')?.innerText || '').includes('PARALLEL_CONV_B_DONE_20260701'))()`, 45000, 'conversation B result visible while A was running');
+    await waitFor(cdp, `(() => !!window.runningConversationRecord(${JSON.stringify(convB)}))()`, 10000, 'conversation B send in flight');
+    try {
+      await waitFor(cdp, `(() => (document.querySelector('#chat-area')?.innerText || '').includes('PARALLEL_CONV_B_DONE_20260701'))()`, 45000, 'conversation B result visible while A was running');
+    } catch (error) {
+      const debug = await evaluate(cdp, `Promise.all([
+        window.api.getState(${JSON.stringify(convA)}),
+        window.api.getState(${JSON.stringify(convB)})
+      ]).then(states => ({
+        activeConversationId: window.activeConversationId(),
+        runningKeys: Object.keys(window.state && window.state.runningConversations || {}),
+        visibleText: (document.querySelector('#chat-area')?.innerText || '').slice(-1200),
+        visibleMarkers: (document.querySelector('#chat-area')?.innerText || '').match(/PARALLEL_[A-Z0-9_]+/g) || [],
+        snapshots: states.map(item => ({
+          conversationId: item && item.conversationId,
+          error: item && item.error,
+          chatMarkers: JSON.stringify(item && item.chatMessages || []).match(/PARALLEL_[A-Z0-9_]+/g) || [],
+          runtime: item && item.runtime ? { running: !!item.runtime.running, runId: item.runtime.runId, status: item.runtime.status } : null
+        }))
+      }))`, 30000);
+      const requestMarkers = mock.requests.map(item => {
+        const matches = String(item.body || '').match(/PARALLEL_[A-Z0-9_]+/g) || [];
+        return { method: item.method, url: item.url, markers: [...new Set(matches)] };
+      });
+      log(`parallel result diagnostic ${JSON.stringify({ debug, requestMarkers })}`);
+      throw error;
+    }
     await evaluate(cdp, `(() => {
       const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convA)});
       if (idx < 0) throw new Error('conversation A missing after parallel run');
@@ -427,7 +470,7 @@ async function runUiCheck(root) {
       window.sendMessage();
       return true;
     })()`, 30000);
-    await waitFor(cdp, `(() => window.state && window.state.runningConversations && window.state.runningConversations[${JSON.stringify(convA)}] === true)()`, 10000, 'long conversation A running');
+    await waitFor(cdp, `(() => !!window.runningConversationRecord(${JSON.stringify(convA)}))()`, 10000, 'long conversation A running');
     await waitFor(cdp, `(() => (document.querySelector('#chat-area')?.innerText || '').includes('LONG_PARALLEL_CONV_A_STREAM_START_20260701'))()`, 20000, 'long conversation A stream visible in foreground');
     await evaluate(cdp, `(() => {
       const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convB)});
@@ -442,7 +485,7 @@ async function runUiCheck(root) {
       window.sendMessage();
       return true;
     })()`, 30000);
-    await waitFor(cdp, `(() => window.state && window.state.runningConversations && window.state.runningConversations[${JSON.stringify(convA)}] === true && window.state.runningConversations[${JSON.stringify(convB)}] === true)()`, 10000, 'long conversations A and B running together');
+    await waitFor(cdp, `(() => !!window.runningConversationRecord(${JSON.stringify(convA)}) && !!window.runningConversationRecord(${JSON.stringify(convB)}))()`, 10000, 'long conversations A and B running together');
     await waitFor(cdp, `(() => {
       const events = window.getAgentWorkEvents(${JSON.stringify(convA)});
       const text = events.map(e => [e.type, e.content || '', e.toolName || '', e.toolArgs || ''].join(' ')).join('\\n');
@@ -468,11 +511,37 @@ async function runUiCheck(root) {
         !body.includes('LONG_PARALLEL_CONV_B_STREAM_START_20260701') &&
         !body.includes('LONG_PARALLEL_CONV_B_STREAM_MID_20260701');
     })()`, 20000, 'background conversation A live feedback replayed when opened');
-    await waitFor(cdp, `(() => {
+    try {
+      await waitFor(cdp, `(() => {
       const events = window.getAgentWorkEvents(${JSON.stringify(convA)});
-      const text = events.map(e => [e.type, e.content || '', e.toolName || '', e.toolArgs || ''].join(' ')).join('\\n');
-      return text.includes('bash') && text.includes('LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701');
-    })()`, 30000, 'background conversation A tool call and result cached');
+      return events.some(e => e.type === 'tool_call' && e.toolName === 'bash') &&
+        events.some(e => e.type === 'tool_result' && e.toolName === 'bash');
+      })()`, 30000, 'background conversation A tool call and result cached');
+      const toolResultDeadline = Date.now() + 10000;
+      while (!mock.requests.some(item => String(item.body || '').includes('LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701')) && Date.now() < toolResultDeadline) {
+        await sleep(100);
+      }
+      if (!mock.requests.some(item => String(item.body || '').includes('LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701'))) {
+        fail('background conversation A tool result was not delivered to the model continuation');
+      }
+    } catch (error) {
+      const eventDebug = await evaluate(cdp, `(() => window.getAgentWorkEvents(${JSON.stringify(convA)}).map(e => ({
+        type: e.type,
+        toolName: e.toolName || '',
+        contentMarkers: String(e.content || '').match(/LONG_PARALLEL_[A-Z0-9_]+/g) || []
+      })))()`, 30000);
+      const requestDebug = mock.requests.map(item => {
+        let parsed = {};
+        try { parsed = JSON.parse(item.body || '{}'); } catch {}
+        return {
+          url: item.url,
+          tools: (parsed.tools || []).map(tool => tool && tool.function && tool.function.name || tool && tool.name).filter(Boolean),
+          markers: [...new Set(String(item.body || '').match(/LONG_PARALLEL_[A-Z0-9_]+/g) || [])]
+        };
+      });
+      log(`long tool diagnostic ${JSON.stringify({ eventDebug, requestDebug })}`);
+      throw error;
+    }
     await waitFor(cdp, `(() => (document.querySelector('#chat-area')?.innerText || '').includes('LONG_PARALLEL_CONV_A_DONE_20260701'))()`, 45000, 'long conversation A completed visibly');
     await evaluate(cdp, `(() => {
       const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convB)});
@@ -480,19 +549,23 @@ async function runUiCheck(root) {
       return true;
     })()`, 30000);
     await waitFor(cdp, backendConversationHas(convB, 'LONG_PARALLEL_CONV_B_DONE_20260701', 'LONG_PARALLEL_CONV_A_DONE_20260701'), 45000, 'long conversation B backend persisted without A leakage');
+    if (!mock.requests.some(item => String(item.body || '').includes('LONG_PARALLEL_CONV_B_TOOL_RESULT_20260701'))) {
+      fail('background conversation B tool result was not delivered to the model continuation');
+    }
     await evaluate(cdp, renderBackendConversation(convB), 30000);
     await waitFor(cdp, `(() => {
       const chat = document.querySelector('#chat-area');
       const visible = chat?.innerText || '';
       const allText = chat?.textContent || '';
+      const events = window.getAgentWorkEvents(${JSON.stringify(convB)});
       const checks = {
         hasBDone: visible.includes('LONG_PARALLEL_CONV_B_DONE_20260701'),
-        hasToolLabel: allText.includes('Tool bash result') || allText.includes('ToolbashdoneResult:'),
-        hasBToolResult: allText.includes('LONG_PARALLEL_CONV_B_TOOL_RESULT_20260701'),
+        hasToolCall: events.some(e => e.type === 'tool_call' && e.toolName === 'bash'),
+        hasToolResult: events.some(e => e.type === 'tool_result' && e.toolName === 'bash'),
         leakedAStream: allText.includes('LONG_PARALLEL_CONV_A_STREAM_START_20260701'),
         leakedADone: allText.includes('LONG_PARALLEL_CONV_A_DONE_20260701')
       };
-      const ok = checks.hasBDone && checks.hasToolLabel && checks.hasBToolResult && !checks.leakedAStream && !checks.leakedADone;
+      const ok = checks.hasBDone && checks.hasToolCall && checks.hasToolResult && !checks.leakedAStream && !checks.leakedADone;
       if (!ok) {
         window.__queueDrainDebug = {
           label: 'long conversation B persisted tool process',
@@ -518,14 +591,15 @@ async function runUiCheck(root) {
       const chat = document.querySelector('#chat-area');
       const visible = chat?.innerText || '';
       const allText = chat?.textContent || '';
+      const events = window.getAgentWorkEvents(${JSON.stringify(convA)});
       const checks = {
-        hasToolLabel: allText.includes('Tool bash result') || allText.includes('ToolbashdoneResult:'),
-        hasAToolResult: allText.includes('LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701'),
+        hasToolCall: events.some(e => e.type === 'tool_call' && e.toolName === 'bash'),
+        hasToolResult: events.some(e => e.type === 'tool_result' && e.toolName === 'bash'),
         hasADone: visible.includes('LONG_PARALLEL_CONV_A_DONE_20260701'),
         leakedBStream: allText.includes('LONG_PARALLEL_CONV_B_STREAM_START_20260701'),
         leakedBDone: allText.includes('LONG_PARALLEL_CONV_B_DONE_20260701')
       };
-      const ok = checks.hasToolLabel && checks.hasAToolResult && checks.hasADone && !checks.leakedBStream && !checks.leakedBDone;
+      const ok = checks.hasToolCall && checks.hasToolResult && checks.hasADone && !checks.leakedBStream && !checks.leakedBDone;
       if (!ok) {
         window.__queueDrainDebug = {
           label: 'long conversation A persisted tool process',
@@ -559,6 +633,59 @@ async function runUiCheck(root) {
     await evaluate(cdp, `(() => {
       window.setInputMode('next');
       const prompt = document.querySelector('#prompt');
+      prompt.value = 'QUEUE_GUIDE_INSERT_TEST';
+      window.sendMessage();
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => {
+      const panel = document.querySelector('#queue-panel');
+      const label = document.querySelector('#queue-header-label');
+      const input = document.querySelector('#queue-list .queue-edit');
+      const guide = document.querySelector('#queue-list .queue-guide-btn');
+      const rect = guide?.getBoundingClientRect();
+      const text = guide?.innerText || '';
+      const chat = document.querySelector('#chat-area')?.innerText || '';
+      const ok = panel && panel.style.display !== 'none' &&
+        !panel.classList.contains('collapsed') &&
+        label && label.textContent.includes('1') &&
+        input && input.value === 'QUEUE_GUIDE_INSERT_TEST' &&
+        guide && rect && rect.width >= 54 && rect.height >= 28 &&
+        (text.includes('Guide') || text.includes('引导')) &&
+        !chat.includes('[Next queued] QUEUE_GUIDE_INSERT_TEST') &&
+        !chat.includes('[Queue] Current turn is locked');
+      if (!ok) window.__queueDrainDebug = {
+        label: 'queued Guide action visibility',
+        panelDisplay: panel?.style.display || '',
+        panelClass: panel?.className || '',
+        queueLabel: label?.textContent || '',
+        inputValue: input?.value || '',
+        guideText: text,
+        guideWidth: rect?.width || 0,
+        guideHeight: rect?.height || 0,
+        nextQueue: (window.state?.nextQueue || []).slice(),
+        sendInFlight: !!window.state?._sendInFlight
+      };
+      return ok;
+    })()`, 10000, 'queued input exposes a visible localized Guide action');
+    await captureScreenshot(cdp);
+    await evaluate(cdp, `(() => {
+      const guide = document.querySelector('#queue-list .queue-guide-btn');
+      if (!guide) throw new Error('queue Guide button disappeared before click');
+      guide.click();
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => {
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      const state = window.state || {};
+      return (state.nextQueue || []).length === 0 &&
+        body.includes('QUEUE_GUIDE_INSERT_TEST') &&
+        state._sendInFlight === true;
+    })()`, 10000, 'queued Guide inserted into the active run without ending it');
+    log('visible queue Guide action delivered to active run');
+
+    await evaluate(cdp, `(() => {
+      window.setInputMode('next');
+      const prompt = document.querySelector('#prompt');
       prompt.value = 'QUEUE_SECOND_AUTO_BUILD';
       window.sendMessage();
       return true;
@@ -574,17 +701,21 @@ async function runUiCheck(root) {
         input && input.value === 'QUEUE_SECOND_AUTO_BUILD' &&
         !chat.includes('[Next queued] QUEUE_SECOND_AUTO_BUILD') &&
         !chat.includes('[Queue] Current turn is locked');
-    })()`, 10000, 'queued input visible in bottom queue only');
+    })()`, 10000, 'second queued input remains visible after Guide insertion');
     await waitFor(cdp, `(() => {
       const body = document.querySelector('#chat-area')?.innerText || '';
       const panel = document.querySelector('#queue-panel');
       const label = document.querySelector('#queue-header-label');
       const state = window.state || {};
       const queueVisible = panel && panel.style.display !== 'none' && label && label.textContent.includes('1');
-      const ok = body.includes('QUEUE_FIRST_DONE_20260628') && body.includes('QUEUE_SECOND_DONE_20260628') && !queueVisible && state._sendInFlight === false;
+      const ok = body.includes('QUEUE_FIRST_DONE_20260628') &&
+        body.includes('QUEUE_GUIDE_DONE_20260716') &&
+        body.includes('QUEUE_SECOND_DONE_20260628') &&
+        !queueVisible && state._sendInFlight === false;
       if (!ok) {
         window.__queueDrainDebug = {
           hasFirst: body.includes('QUEUE_FIRST_DONE_20260628'),
+          hasGuide: body.includes('QUEUE_GUIDE_DONE_20260716'),
           hasSecond: body.includes('QUEUE_SECOND_DONE_20260628'),
           hasQueuedPrompt: body.includes('QUEUE_SECOND_AUTO_BUILD'),
           queueLabel: label ? label.textContent : '',
@@ -592,12 +723,12 @@ async function runUiCheck(root) {
           runningKeys: Object.keys(state.runningConversations || {}),
           nextQueue: state.nextQueue || [],
           conversationId: state.conversationId,
-          bodyTail: body.slice(-1200),
+          bodyTail: body.slice(-1600),
         };
       }
       return ok;
-    })()`, 45000, 'queued turn drained into next Build turn');
-    log('input queue drain ok');
+    })()`, 60000, 'Guide completed in the active run and the remaining queue drained');
+    log('queue Guide delivery and subsequent Build drain ok');
 
     await evaluate(cdp, switchConversationById(convB), 30000);
     await waitFor(cdp, `window.api.getConversationPlan(${JSON.stringify(convB)}).then(p => {
@@ -610,7 +741,6 @@ async function runUiCheck(root) {
     })()`, 30000, 'conversation 2 chat isolated from queued conversation 1 results');
     log('conversation chat isolation after queued turn ok');
 
-    await captureScreenshot(cdp);
   } finally {
     try { if (cdp?.ws) cdp.ws.close(); } catch {}
     try { if (child && !child.killed) child.kill(); } catch {}

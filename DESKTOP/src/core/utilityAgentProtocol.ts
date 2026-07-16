@@ -10,7 +10,7 @@ import {
 } from './conversationKernel';
 import { ConversationRuntimeTarget, NormalizedConversationTarget } from './conversationTarget';
 import { AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
-import type { AutoRouteRatingResult } from './agent';
+import type { AutoRouteRatingResult, ConversationSnapshot } from './agent';
 
 export interface UtilityPromptRequest {
   message: string | AgentPromptMessage;
@@ -61,6 +61,7 @@ export type UtilityAgentRequest =
   | { id: string; method: 'ping' }
   | { id: string; method: 'prompt'; params: UtilityPromptRequest }
   | { id: string; method: 'snapshot'; params: { target: ConversationRuntimeTarget } }
+  | { id: string; method: 'rewind'; params: { target: ConversationRuntimeTarget; messageIndex: number } }
   | { id: string; method: 'stop'; params: { target: ConversationRuntimeTarget; runId?: string } }
   | { id: string; method: 'guide'; params: { target: ConversationRuntimeTarget; envelope: ConversationInputEnvelope } }
   | { id: string; method: 'checkpoint'; params: { target: ConversationRuntimeTarget } }
@@ -96,3 +97,4 @@ export interface UtilityAgentSnapshotResult {
 
 export type UtilityGuideResult = GuideReceipt;
 export type UtilityAutoRouteRatingResult = AutoRouteRatingResult;
+export type UtilityConversationRewindResult = ConversationSnapshot;

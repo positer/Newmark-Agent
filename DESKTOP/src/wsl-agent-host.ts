@@ -157,6 +157,9 @@ async function handle(request: WslAgentRequest): Promise<unknown> {
     const target = requestTarget(request.params);
     return { ...kernel.snapshot(target), backend: 'wsl', distro };
   }
+  if (request.method === 'rewind') {
+    return kernel.rewind(requestTarget(request.params), request.params.messageIndex);
+  }
   if (request.method === 'guide') {
     const target = requestTarget(request.params);
     return kernel.enqueueGuide({

@@ -262,6 +262,9 @@ function startFixtureAndProvider() {
       const allText = messages.map(messageText).join('\n');
       const isNewmarkAgentRequest = messages.some(message =>
         message?.role === 'system' && messageText(message).includes('You are Newmark Agent'));
+      const requestToolNames = new Set((Array.isArray(parsed.tools) ? parsed.tools : [])
+        .map(tool => String(tool?.function?.name || tool?.name || ''))
+        .filter(Boolean));
       const send = (payload, delay = 0) => {
         requestRecord.response = { state: 'scheduled', delay, destroyed: response.destroyed, finished: false, closed: false };
         const timer = setTimeout(() => {
@@ -290,6 +293,10 @@ function startFixtureAndProvider() {
 
       if (isNewmarkAgentRequest && allText.includes('DEV009_FORCE_STOP_B')) {
         const completedBash = messages.some(message => message?.role === 'tool' && message?.name === 'bash');
+        if (!completedBash && !requestToolNames.has('bash') && requestToolNames.has('tool_provision')) {
+          send(toolResponse('tool_provision', { names: ['bash'] }));
+          return;
+        }
         if (!completedBash) {
           send(toolResponse('bash', {
             command: "Start-Sleep -Seconds 30; Write-Output 'DEV009_FORCE_STOP_SHOULD_NOT_COMPLETE'",
@@ -302,6 +309,10 @@ function startFixtureAndProvider() {
       }
       if (isNewmarkAgentRequest && allText.includes('DEV009_BROWSER_RUN_A')) {
         const receipt = latestBrowserReceipt(messages);
+        if (!receipt && !requestToolNames.has('browser_use') && requestToolNames.has('tool_provision')) {
+          send(toolResponse('tool_provision', { names: ['browser_use'] }));
+          return;
+        }
         if (!receipt) {
           browserObserveCalls += 1;
           // Keep the first provider boundary open long enough to exercise an

@@ -52,8 +52,16 @@ const PLAN_READ_ONLY_TOOLS = new Set([
   'subagent_close',
   'question',
 ]);
-const PLAN_COMPUTER_USE_ACTIONS = new Set(['observe', 'app_list', 'app_observe']);
-const PLAN_BROWSER_USE_ACTIONS = new Set(['observe', 'navigate', 'wait', 'extract']);
+export const PLAN_COMPUTER_USE_ACTIONS = ['observe', 'app_list', 'app_observe'] as const;
+export const PLAN_BROWSER_USE_ACTIONS = ['observe', 'navigate', 'wait', 'extract'] as const;
+const PLAN_COMPUTER_USE_ACTION_SET = new Set<string>(PLAN_COMPUTER_USE_ACTIONS);
+const PLAN_BROWSER_USE_ACTION_SET = new Set<string>(PLAN_BROWSER_USE_ACTIONS);
+
+export function isReadOnlyScopedToolAction(name: string, action: string): boolean {
+  if (name === 'computer_use') return PLAN_COMPUTER_USE_ACTION_SET.has(action);
+  if (name === 'browser_use') return PLAN_BROWSER_USE_ACTION_SET.has(action);
+  return false;
+}
 
 export function toolAvailability(name: string): ToolAvailability {
   if (REQUIRED_TOOLS.has(name)) return 'required';
@@ -70,14 +78,14 @@ export function evaluateToolPolicy(request: ToolPolicyRequest): ToolPolicyDecisi
   if (request.mode === 'plan') {
     if (name === 'computer_use') {
       const action = String(request.args?.action || '').trim();
-      if (!PLAN_COMPUTER_USE_ACTIONS.has(action)) {
+      if (!PLAN_COMPUTER_USE_ACTION_SET.has(action)) {
         return { ...base, allowed: false, reason: `[permission] Plan mode only allows Computer Use observation. Blocked: computer_use.${action || '(missing action)'}` };
       }
       return { ...base, allowed: true };
     }
     if (name === 'browser_use') {
       const action = String(request.args?.action || '').trim();
-      if (!PLAN_BROWSER_USE_ACTIONS.has(action)) {
+      if (!PLAN_BROWSER_USE_ACTION_SET.has(action)) {
         return { ...base, allowed: false, reason: `[permission] Plan mode only allows Browser-Use observation and read-only navigation. Blocked: browser_use.${action || '(missing action)'}` };
       }
       return { ...base, allowed: true };

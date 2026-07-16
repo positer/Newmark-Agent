@@ -78,6 +78,7 @@ export interface AgentLoopConfig {
   streamFn: StreamFn;
   convertToLlm: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
   transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+  resolveTools?: () => AgentTool[] | Promise<AgentTool[]>;
   emit: (event: AgentEvent) => Promise<void> | void;
   getSteeringMessages?: () => Promise<AgentMessage[]> | AgentMessage[];
   getFollowUpMessages?: () => Promise<AgentMessage[]> | AgentMessage[];

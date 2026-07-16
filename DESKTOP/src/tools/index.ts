@@ -25,7 +25,12 @@ import { SshManager } from '../core/ssh';
 import { WorkspaceManager } from '../core/workspace';
 import { requestWindowsHostTool } from '../core/wslHostToolBridge';
 import { requestUtilityHostTool } from '../core/utilityHostToolBridge';
-import { evaluateToolPolicy, filterToolDefinitions } from '../core/toolPolicy';
+import {
+  evaluateToolPolicy,
+  filterToolDefinitions,
+  PLAN_BROWSER_USE_ACTIONS,
+  PLAN_COMPUTER_USE_ACTIONS,
+} from '../core/toolPolicy';
 import { runAsyncProcess } from '../core/asyncProcess';
 import { closeToolArgumentSchema, ToolArgumentValidatorRegistry } from '../core/toolArgumentValidator';
 
@@ -195,7 +200,7 @@ export class ToolExecutor {
       ? 'Run a shell command in Windows PowerShell. Use PowerShell syntax only (Get-ChildItem not dir /s, Get-Content not type, Set-Content not echo >, 2>$null not 2>nul, and `; if ($?) { ... }` instead of &&).'
       : 'Run a shell command in bash on Linux/macOS. Use POSIX/bash syntax and normal Unix paths.';
     const browserUseActions: BrowserUseAction[] = mode === 'plan'
-      ? ['observe', 'navigate', 'wait', 'extract']
+      ? [...PLAN_BROWSER_USE_ACTIONS]
       : ['observe', 'click', 'type', 'select', 'scroll', 'key', 'navigate', 'wait', 'extract'];
     const tools = [
       t('bash', `${shellDescription} Optional timeout_ms lets the Agent choose this command timeout in milliseconds; 0 requests no limit, but a nonzero terminal.interrupt_timeout_ms setting is the upper cap.`, { command: { type: 'string' }, timeout_ms: { type: 'number', description: 'Per-command timeout in milliseconds. 0 means no requested limit unless capped by settings.' } }, ['command']),
@@ -384,11 +389,28 @@ export class ToolExecutor {
     }
     const policyFiltered = filterToolDefinitions(visibleTools, { mode });
     const modeScoped = mode !== 'plan' ? policyFiltered : policyFiltered.map((tool: any) => {
+      if (tool.function?.name === 'browser_use') {
+        const copy = JSON.parse(JSON.stringify(tool));
+        copy.function.description = 'Plan read-only browser: observe, navigate, wait, extract only.';
+        copy.function.parameters.properties = {
+          action: { type: 'string', enum: [...PLAN_BROWSER_USE_ACTIONS] },
+          action_id: copy.function.parameters.properties.action_id,
+          page_generation: copy.function.parameters.properties.page_generation,
+          observation_id: copy.function.parameters.properties.observation_id,
+          ref: copy.function.parameters.properties.ref,
+          url: copy.function.parameters.properties.url,
+          duration_ms: copy.function.parameters.properties.duration_ms,
+          max_chars: copy.function.parameters.properties.max_chars,
+          max_refs: copy.function.parameters.properties.max_refs,
+          attribute: copy.function.parameters.properties.attribute,
+        };
+        return copy;
+      }
       if (tool.function?.name !== 'computer_use') return tool;
       const copy = JSON.parse(JSON.stringify(tool));
-      copy.function.description = 'Read-only Windows desktop observation for Plan mode. Observe the desktop, list visible applications, or inspect one visible application; all control actions are unavailable.';
+      copy.function.description = 'Plan read-only desktop: observe, app_list, app_observe only.';
       copy.function.parameters.properties = {
-        action: { type: 'string', enum: ['observe', 'app_list', 'app_observe'] },
+        action: { type: 'string', enum: [...PLAN_COMPUTER_USE_ACTIONS] },
         app_target: copy.function.parameters.properties.app_target,
         window_handle: copy.function.parameters.properties.window_handle,
         max_chars: copy.function.parameters.properties.max_chars,

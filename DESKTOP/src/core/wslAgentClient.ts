@@ -10,6 +10,7 @@ import {
   WslAgentResponse,
   WslAgentWorkspace,
   WslAgentStopResult,
+  WslConversationRewindResult,
   WslHostToolRequest,
   WslHostToolResult,
 } from './wslAgentProtocol';
@@ -254,6 +255,14 @@ export class WslAgentClient {
   async snapshotTarget(target: ConversationRuntimeTarget): Promise<Record<string, unknown>> {
     await this.start();
     return await this.request('snapshot', { target: await this.mapTarget(target) }, 15000) as Record<string, unknown>;
+  }
+
+  async rewind(target: ConversationRuntimeTarget, messageIndex: number): Promise<WslConversationRewindResult> {
+    await this.start();
+    return await this.request('rewind', {
+      target: await this.mapTarget(target),
+      messageIndex: Math.floor(Number(messageIndex)),
+    }, 15_000) as WslConversationRewindResult;
   }
 
   async enqueueGuide(target: ConversationRuntimeTarget, envelope: ConversationInputEnvelope): Promise<GuideReceipt> {

@@ -156,6 +156,22 @@ function main(): void {
       && ui.includes('color: var(--select-popup-group);')
       && ui.includes('background-color: var(--select-popup-selected-bg);'),
     'all native select menus apply the theme-specific option, group, and selected colors');
+    assert.ok(darkTheme.includes('--control-hover-bg: rgba(255,255,255,0.08)')
+      && lightTheme.includes('--control-hover-bg: rgba(0,0,0,0.055)')
+      && cssBlock('.sec-btn:hover').includes('background: var(--control-hover-bg)'),
+    'secondary buttons use separate dark and light hover surfaces');
+    assert.ok(cssBlock('.sec-btn:focus-visible').includes('box-shadow: 0 0 0 3px var(--accent-glow)')
+      && cssBlock('.sec-btn:disabled').includes('cursor: not-allowed'),
+    'secondary buttons retain visible keyboard focus and disabled states');
+    assert.ok(ui.includes('type="button" class="sec-btn settings-action-btn"')
+      && cssBlock('.settings-action-btn').includes('display: inline-flex'),
+    'adaptive preference reset reuses the themed secondary-button design instead of the browser default');
+    assert.ok(ui.includes('.terminal-timeout-control input[type="number"],')
+      && ui.includes('.setting-control input[type="number"] {\n  color-scheme: var(--select-color-scheme);')
+      && ui.includes('::-webkit-inner-spin-button')
+      && ui.includes('id="settings-terminal-timeout"')
+      && ui.includes('aria-describedby="settings-terminal-timeout-desc"'),
+    'terminal timeout number controls theme their native steppers in both surfaces and expose an accessible label/description');
     assert.ok(!/backdrop-filter|translateZ/.test(cssBlock('#input-area textarea'))
       && !/backdrop-filter|translateZ/.test(cssBlock('.tool-select'))
       && /backdrop-filter:\s*blur\(var\(--glass-blur-3\)\)/.test(cssBlock('#input-area')),

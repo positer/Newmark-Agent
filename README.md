@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.10"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.0.10-blue"></a>
+  <a href="https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.11"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.0.11-blue"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -53,16 +53,19 @@ The shared validation service verifies text, streaming, strict JSON, tool select
 - Workspace-scoped conversations and runtime isolation
 - Build, Plan, Goal, Guide, and Flow modes
 - Persistent Linked Plan and task/queue/goal controls
+- One-click queue-to-Guide delivery with target, image, draft, and retry safety
 - Parallel subagents with durable mailboxes
 - Context compression and archived conversations
 - Local, external-folder, WSL, and SSH-linked workspace support
 
 ### Tools and Automation
 
+- Compact all-tool discovery with bounded, on-demand JSON Schema provisioning
 - Native terminal and persistent terminal takeover
 - Built-in browser with observe-then-act Browser Use
 - Windows Computer Use with screenshots plus UI Automation targets
 - Safe file editor, Markdown preview, PDF preview, and file routing
+- Theme-aware native code editor with synchronized dark and light palettes
 - Git and GitHub operations
 - Skills, Flow workflows, recurring automation, and Memory Lab
 - CLI mode with consistent schemas, policy enforcement, JSON envelopes, and exit codes
@@ -71,20 +74,20 @@ Computer Use follows an observe-before-act contract. Screenshots are one-use mod
 
 ## Download
 
-### Windows: dev-0.0.10
+### Windows: dev-0.0.11
 
 The current Windows prerelease contains two unsigned artifacts:
 
 | Package | Purpose | SHA256 |
 | --- | --- | --- |
-| [`Newmark-Agent-0.0.10-x64.msi`](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.10) | Per-machine installer for `Program Files` | `BC16757E1AA9E70E40B2AA21A800426FBFA24735C84532E4062D7F3409A5BD01` |
-| [`Newmark-Agent-0.0.10-win-unpacked-x64.zip`](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.10) | Unpacked update or portable application files | `A7A2A31861AB7D49BDDE70881DB568702689B603C46381576EDB92C4010BEF35` |
+| [`Newmark-Agent-0.0.11-x64.msi`](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.11) | Per-machine installer for `Program Files` | `77F3CFE8FC17C7E175EB06CD9A37F6659B34FA7DBE043F4FBE2AB4977AB7E46E` |
+| [`Newmark-Agent-0.0.11-win-unpacked-x64.zip`](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.11) | Unpacked update or portable application files | `22ECE27A54C7EA0C8BBD0C7CEB69E96740A5149D4682B626B6DF784195F700BE` |
 
 The MSI requests administrator elevation. Windows may show an unknown-publisher warning because the package is not code-signed.
 
 ### Linux: dev-0.0.9
 
-Linux packages were not rebuilt for dev-0.0.10. Continue using the [dev-0.0.9 prerelease](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.9) for AppImage, Debian, or unpacked Linux builds. Do not relabel those files as dev-0.0.10.
+Linux packages were not rebuilt for dev-0.0.11. Continue using the [dev-0.0.9 prerelease](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.9) for AppImage, Debian, or unpacked Linux builds. Do not relabel those files as dev-0.0.11.
 
 ## Quick Start
 
@@ -179,7 +182,7 @@ Important boundaries:
 - Tool schemas are validated before policy checks and again at native host boundaries.
 - The startup cover and hydrated application share one `BrowserWindow`; prewarm does not open a second splash window.
 
-For a source-level map, see [OVERVIEW.md](OVERVIEW.md). Detailed release verification is kept in [the dev-0.0.10 release notes](SCRIPTS/release-notes-dev-0.0.10.md) and curated files under `archive/`.
+For a source-level map, see [OVERVIEW.md](OVERVIEW.md). Detailed release verification is kept in [the dev-0.0.11 release notes](SCRIPTS/release-notes-dev-0.0.11.md) and curated files under `archive/`.
 
 ## Development
 

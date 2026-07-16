@@ -151,6 +151,7 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
     'queueHiddenItemKey',
   ].map(name => functionSource(source, name)).join('\n\n');
   const normalizeAttachmentsSource = functionSource(source, 'normalizeConversationImageAttachments');
+  const restoreQueueSource = functionSource(source, 'restoreQueueItemAfterGuideFailure');
   const sendMessageSource = assignedFunctionSource(source, 'sendMessage');
   const guideQueueSource = assignedFunctionSource(source, 'guideQueueItem');
   const target = { workspaceId: 'workspace-running-guide', conversationId: 'default' };
@@ -170,14 +171,21 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
     promptAttachments: [{ id: 'draft-image', dataUrl: image.dataUrl, name: 'draft.png', type: 'image/png' }],
   };
   const apiCalls: Array<Record<string, any>> = [];
+  const guideRecords: Array<Record<string, any>> = [];
+  let rejectGuide = false;
+  let transportFailure = false;
+  let emptyReceipt = false;
+  let activeRuntimePresent = true;
   const api = {
     enqueueGuide: (envelope: Record<string, any>) => {
       apiCalls.push(envelope);
+      if (transportFailure) return Promise.reject(new Error('transport timeout'));
+      if (emptyReceipt) return Promise.resolve(undefined);
       return Promise.resolve({
         clientMessageId: envelope.clientMessageId,
         target: envelope.target,
         runId: envelope.runId,
-        status: 'accepted',
+        status: rejectGuide ? 'rejected' : 'accepted',
         content: envelope.text,
         createdAt: envelope.createdAt,
         updatedAt: envelope.createdAt,
@@ -185,9 +193,10 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
     },
   };
   let promptAttachmentClears = 0;
+  let clientMessageSequence = 0;
   const els = { prompt: { value: 'unfinished draft' } };
   const windowObject: Record<string, any> = {
-    crypto: { randomUUID: () => 'queued-guide-client-id' },
+    crypto: { randomUUID: () => `queued-guide-client-${++clientMessageSequence}` },
     requireWorkspace: () => true,
     renderInputStack: () => undefined,
   };
@@ -197,7 +206,7 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
     'markConversationTracked', 'composePromptTextForSend', 'clearPromptAttachments',
     'updateSubmitButtonState', 'recordGuideUiMessage', 'addMsg', 'normalizeGuideUiStatus',
     'applyAgentWorkEventToRun', 'showUiNotice', 'currentLang',
-    `${helpers}\n${normalizeAttachmentsSource}\nwindow.bindQueuedRequestToTarget = bindQueuedRequestToTarget;\nwindow.sendMessage = ${sendMessageSource};\nwindow.guideQueueItem = ${guideQueueSource};`,
+    `${helpers}\n${normalizeAttachmentsSource}\n${restoreQueueSource}\nwindow.bindQueuedRequestToTarget = bindQueuedRequestToTarget;\nwindow.sendMessage = ${sendMessageSource};\nwindow.guideQueueItem = ${guideQueueSource};`,
   );
   install(
     windowObject,
@@ -208,12 +217,12 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
     (workspaceId: string, conversationId: string) => `${workspaceId}::${conversationId}`,
     () => true,
     () => target.conversationId,
-    () => ({ runId: 'run-running-guide', provisional: false }),
+    () => activeRuntimePresent ? ({ runId: 'run-running-guide', provisional: false }) : undefined,
     () => undefined,
     (text: string) => text,
     () => { promptAttachmentClears += 1; state.promptAttachments = []; },
     () => undefined,
-    (input: Record<string, any>) => input,
+    (input: Record<string, any>) => { guideRecords.push(input); return input; },
     () => undefined,
     (value: unknown) => String(value || 'accepted'),
     () => undefined,
@@ -222,9 +231,7 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
   );
   state.nextQueueRequests.push(windowObject.bindQueuedRequestToTarget({ text: 'Inspect the queued image', images: [image] }, 'Inspect the queued image', target));
 
-  windowObject.guideQueueItem(0);
-  await Promise.resolve();
-  await Promise.resolve();
+  await windowObject.guideQueueItem(0);
 
   assert.equal(apiCalls.length, 1, 'running Queue -> Guide invokes the immediate Guide IPC exactly once');
   assert.deepEqual(apiCalls[0].target, target, 'running Queue -> Guide preserves its composite conversation target');
@@ -237,10 +244,70 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
   assert.equal(els.prompt.value, 'unfinished draft', 'delivering a queued Guide does not erase the unrelated prompt draft');
   assert.equal(promptAttachmentClears, 0, 'delivering queued images does not clear unrelated draft attachments');
   assert.equal(state.promptAttachments.length, 1);
+
+  rejectGuide = true;
+  state.nextQueue = ['Retain rejected guidance'];
+  state.nextQueueRequests = [windowObject.bindQueuedRequestToTarget({ text: 'Retain rejected guidance', images: [] }, 'Retain rejected guidance', target)];
+  const rejected = await windowObject.guideQueueItem(0);
+  assert.equal(rejected.ok, false, 'a rejected direct Guide reports failure to the queue action');
+  assert.deepEqual(state.nextQueue, ['Retain rejected guidance'], 'a rejected direct Guide is restored instead of silently losing the queued instruction');
+  assert.equal(state.nextQueueRequests.length, 1, 'the target-bound structured request is restored with its text');
+  assert.deepEqual(state.nextQueueRequests[0].target, target, 'restoration keeps the original composite conversation target');
+  const rejectedClientMessageId = apiCalls[1].clientMessageId;
+  rejectGuide = false;
+  await windowObject.guideQueueItem(0);
+  assert.notEqual(apiCalls[2].clientMessageId, rejectedClientMessageId, 'retrying an explicitly rejected Guide uses a fresh idempotency key instead of replaying a cached rejection');
+  assert.equal(guideRecords.some(record => record.clientMessageId === apiCalls[2].clientMessageId && record.allowStatusReset === true), false, 'a new-id retry does not rewrite the explicitly rejected audit row');
+  assert.deepEqual(state.nextQueue, [], 'the accepted retry finally removes the restored queue item');
+
+  transportFailure = true;
+  state.nextQueue = ['Retain uncertain guidance'];
+  state.nextQueueRequests = [windowObject.bindQueuedRequestToTarget({ text: 'Retain uncertain guidance', images: [] }, 'Retain uncertain guidance', target)];
+  const uncertain = await windowObject.guideQueueItem(0);
+  assert.equal(uncertain.ok, false, 'a transport failure is surfaced to the queue action');
+  assert.deepEqual(state.nextQueue, ['Retain uncertain guidance'], 'a Guide with an uncertain delivery outcome is restored');
+  const uncertainClientMessageId = apiCalls[3].clientMessageId;
+  transportFailure = false;
+  await windowObject.guideQueueItem(0);
+  assert.equal(apiCalls[4].clientMessageId, uncertainClientMessageId, 'retrying after a lost receipt reuses the idempotency key to prevent duplicate delivery');
+  assert.equal(guideRecords.some(record => record.clientMessageId === uncertainClientMessageId && record.allowStatusReset === true), true, 'an uncertain same-id retry resets the optimistic UI state on the existing Guide row');
+  assert.deepEqual(state.nextQueue, [], 'the accepted retry removes the transport-restored queue item');
+
+  emptyReceipt = true;
+  state.nextQueue = ['Retain unacknowledged guidance'];
+  state.nextQueueRequests = [windowObject.bindQueuedRequestToTarget({ text: 'Retain unacknowledged guidance', images: [] }, 'Retain unacknowledged guidance', target)];
+  const unacknowledged = await windowObject.guideQueueItem(0);
+  assert.equal(unacknowledged.ok, false, 'an empty Guide receipt is treated as an uncertain failure');
+  assert.deepEqual(state.nextQueue, ['Retain unacknowledged guidance'], 'an unacknowledged Guide is restored instead of being dropped');
+  const unacknowledgedClientMessageId = apiCalls[5].clientMessageId;
+  emptyReceipt = false;
+  await windowObject.guideQueueItem(0);
+  assert.equal(apiCalls[6].clientMessageId, unacknowledgedClientMessageId, 'retrying an unacknowledged Guide retains its idempotency key');
+  assert.deepEqual(state.nextQueue, [], 'the acknowledged retry removes the restored queue item');
+
+  activeRuntimePresent = false;
+  state.nextQueue = ['Retain guidance after run end'];
+  state.nextQueueRequests = [windowObject.bindQueuedRequestToTarget({ text: 'Retain guidance after run end', images: [] }, 'Retain guidance after run end', target)];
+  const settledRun = await windowObject.guideQueueItem(0);
+  assert.equal(settledRun.ok, false, 'a Guide is rejected locally if its active run ended between click and delivery');
+  assert.equal(apiCalls.length, 7, 'the settled-run race never reaches Guide IPC or starts a replacement turn');
+  assert.deepEqual(state.nextQueue, ['Retain guidance after run end'], 'the Guide is restored when its target run has already ended');
 }
 
 async function main(): Promise<void> {
   const source = uiScriptSource();
+  const addMsgSource = functionSource(source, 'addMsg');
+  const recordGuideSource = functionSource(source, 'recordGuideUiMessage');
+  assert.ok(addMsgSource.includes('findGuideMessageElement(guideMessageId)')
+    && addMsgSource.includes('return existingGuide')
+    && recordGuideSource.includes('allowStatusReset'),
+  'same-id Guide retries reuse one rendered row and can reset an uncertain local status');
+  assert.ok(source.includes("'queue.guideAction': 'Guide'")
+    && source.includes("'queue.guideAction': '引导'")
+    && source.includes('class="stack-icon-btn queue-guide-btn"')
+    && source.includes("iconSvg('corner-down-right', t('queue.guideNow'), 'tiny')")
+    && source.includes("<span>' + esc(t('queue.guideAction')) + '</span>"),
+  'each editable queued message exposes a visible localized Guide action instead of an icon-only affordance');
   verifyPersistedWorkRunsCannotRewriteRuntimeIdentity(source);
   const helpers = [
     'normalizeQueueItemText',

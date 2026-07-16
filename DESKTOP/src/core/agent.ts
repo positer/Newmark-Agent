@@ -67,11 +67,12 @@ export interface ModelValidationResult extends ModelEvaluation {
   display: string;
 }
 
-interface AgentRuntimeOptions {
+export interface AgentRuntimeOptions {
   subagent?: boolean;
   subagentName?: string;
   subagentPrompt?: string;
   agentOnly?: boolean;
+  workspaceRegistryMode?: 'managed' | 'detached';
   actorId?: string;
   conversationId?: string;
   linkedPlanAccess?: {
@@ -337,7 +338,9 @@ export class Agent {
     this.intelligence = this.config.getStr('models', 'default_intelligence') || 'medium';
     this.engine = this.config.getStr('models', 'agent_engine') || 'builtin';
 
-    this.workspace = new WorkspaceManager(rootPath, this.config);
+    this.workspace = new WorkspaceManager(rootPath, this.config, {
+      detached: options.workspaceRegistryMode === 'detached',
+    });
     this.ssh = new SshManager(rootPath);
     this.tools = new ToolExecutor(rootPath, this.config, this.ssh, this.workspace);
     this.skills = new SkillsManager(rootPath);

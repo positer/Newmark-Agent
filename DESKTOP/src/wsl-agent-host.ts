@@ -38,9 +38,24 @@ function configureWslToolHost(agent: Agent): void {
   });
 }
 
-let host = new Agent(root);
-configureWslToolHost(host);
-let kernel = new ConversationKernel(root, host, null);
+function createWslAgent(actorId?: string): Agent {
+  const agent = new Agent(root, {
+    agentOnly: true,
+    workspaceRegistryMode: 'detached',
+    actorId,
+  });
+  configureWslToolHost(agent);
+  return agent;
+}
+
+function createWslKernel(agent: Agent): ConversationKernel {
+  return new ConversationKernel(root, agent, null, {
+    createRunner: () => createWslAgent(agent.runtimeActorId),
+  });
+}
+
+let host = createWslAgent();
+let kernel = createWslKernel(host);
 let unsubscribeKernel = kernel.subscribe(event => write({ event: 'work', data: event }));
 onTerminalTakeoverEvent(event => write({ event: 'terminal', data: event }));
 
@@ -100,9 +115,8 @@ function requestTarget(input: { target?: ConversationRuntimeTarget; conversation
 
 function resetAgentRuntime(): void {
   unsubscribeKernel();
-  host = new Agent(root);
-  configureWslToolHost(host);
-  kernel = new ConversationKernel(root, host, null);
+  host = createWslAgent();
+  kernel = createWslKernel(host);
   unsubscribeKernel = kernel.subscribe(event => write({ event: 'work', data: event }));
 }
 

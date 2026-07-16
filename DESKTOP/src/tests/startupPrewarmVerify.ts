@@ -310,6 +310,15 @@ function verifyDesktopContracts(): void {
     && uiHtml.includes("if (inp) inp.focus();\n  }, 0);")
     && terminalSendSource.includes('return window.ensureTerminalStarted().then')
     && terminalSendSource.includes("api.terminalWrite(resp.sessionId, cmd + '\\r\\n')"), 'PTY starts only on terminal demand and a command entered before connection is forwarded exactly after the lazy session resolves');
+  const bottomClosedCssStart = uiHtml.indexOf('#bottom {');
+  const bottomOpenCssStart = uiHtml.indexOf('#bottom.open {', bottomClosedCssStart);
+  const bottomHeaderCssStart = uiHtml.indexOf('#bottom-header {', bottomOpenCssStart);
+  const bottomClosedCss = uiHtml.slice(bottomClosedCssStart, bottomOpenCssStart);
+  const bottomOpenCss = uiHtml.slice(bottomOpenCssStart, bottomHeaderCssStart);
+  const bottomHeaderCss = uiHtml.slice(bottomHeaderCssStart, uiHtml.indexOf('}', bottomHeaderCssStart) + 1);
+  ok(bottomClosedCss.includes('height: 34px;')
+    && bottomOpenCss.includes('height: var(--bottom-height);')
+    && bottomHeaderCss.includes('min-height: 33px;'), 'collapsed terminal retains its header and reopen control while only the terminal body disappears');
   const mainHydrationContractStart = mainTs.indexOf('const REQUIRED_STARTUP_UI_HYDRATION');
   const mainHydrationContractEnd = mainTs.indexOf('] as const', mainHydrationContractStart);
   const mainHydrationContract = mainHydrationContractStart >= 0 && mainHydrationContractEnd > mainHydrationContractStart

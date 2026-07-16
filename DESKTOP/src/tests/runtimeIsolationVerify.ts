@@ -12,6 +12,7 @@ import {
   ConversationStopResult,
 } from '../core/conversationKernel';
 import { Agent } from '../core/agent';
+import { normalizeHostWorkspacePath } from '../core/workspace';
 import { AgentWorkEvent, ConversationInputEnvelope, GuideReceipt, StreamToken } from '../core/types';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -106,6 +107,34 @@ async function verifyStableWorkspaceIds(): Promise<void> {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(externalRoot, { recursive: true, force: true });
+  }
+}
+
+async function verifyCrossHostWorkspaceRegistryIsolation(): Promise<void> {
+  assert.equal(normalizeHostWorkspacePath('/mnt/c/Users/test/.Newmark/Work/Legacy', 'win32'), 'C:\\Users\\test\\.Newmark\\Work\\Legacy');
+  const damaged = '/mnt/c/Newmark/C:\\mnt\\c\\Newmark\\release\\C:\\Users\\test\\Projects\\Actual';
+  assert.equal(normalizeHostWorkspacePath(damaged, 'win32'), 'C:\\Users\\test\\Projects\\Actual', 'Windows recovers the final absolute path from repeated WSL/Windows concatenation');
+  assert.equal(normalizeHostWorkspacePath('C:\\Users\\test\\Projects\\Actual', 'linux'), '/mnt/c/Users/test/Projects/Actual', 'Linux maps a Windows drive path without treating it as a relative filename');
+
+  const detachedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-detached-workspace-'));
+  try {
+    const work = path.join(detachedRoot, 'Work');
+    fs.mkdirSync(work, { recursive: true });
+    const localPath = path.join(work, 'Local.json');
+    const externalPath = path.join(work, 'External.json');
+    const statePath = path.join(work, 'State.json');
+    fs.writeFileSync(localPath, '[{"name":"Legacy","path":"C:\\\\Old\\\\Legacy","isInternal":true}]', 'utf8');
+    fs.writeFileSync(externalPath, '[{"name":"External","path":"C:\\\\Old\\\\External","isInternal":false}]', 'utf8');
+    fs.writeFileSync(statePath, '{"current":{"name":"Legacy","path":"C:\\\\Old\\\\Legacy","isInternal":true}}', 'utf8');
+    const before = [localPath, externalPath, statePath].map(file => fs.readFileSync(file, 'utf8'));
+    const worker = new Agent(detachedRoot, { agentOnly: true, workspaceRegistryMode: 'detached' });
+    assert.equal(worker.workspace.current, null);
+    assert.deepEqual(worker.workspace.internal, []);
+    assert.deepEqual(worker.workspace.external, []);
+    assert.deepEqual([localPath, externalPath, statePath].map(file => fs.readFileSync(file, 'utf8')), before,
+      'a detached WSL/utility worker never normalizes or rewrites the main-process workspace registry');
+  } finally {
+    fs.rmSync(detachedRoot, { recursive: true, force: true });
   }
 }
 
@@ -1824,6 +1853,7 @@ async function verifyStoppedRootPausesQueuedSubagents(): Promise<void> {
 async function main(): Promise<void> {
   await verifyConversationTargets();
   await verifyStableWorkspaceIds();
+  await verifyCrossHostWorkspaceRegistryIsolation();
   await verifyWorkspaceSelectionCoordination();
   await verifyWorkspaceSelectionCircuitBreaker();
   await verifyColdSnapshotBindsTargetWorkspace();

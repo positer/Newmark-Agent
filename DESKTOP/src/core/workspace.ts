@@ -31,16 +31,51 @@ interface WorkspaceState {
   updatedAt?: string;
 }
 
+export interface WorkspaceManagerOptions {
+  /** Runtime workers receive an explicit workspace target and must not rewrite the shared registry. */
+  detached?: boolean;
+}
+
+function lastEmbeddedWindowsPath(input: string): string {
+  const matcher = /[A-Za-z]:[\\/]/g;
+  let lastIndex = -1;
+  for (let match = matcher.exec(input); match; match = matcher.exec(input)) lastIndex = match.index;
+  return lastIndex >= 0 ? input.slice(lastIndex) : '';
+}
+
+/** Normalize persisted Windows/WSL aliases and recover paths damaged by cross-host path.resolve calls. */
+export function normalizeHostWorkspacePath(input: string, platform: NodeJS.Platform = process.platform): string {
+  const raw = String(input || '').trim();
+  const embeddedWindowsPath = lastEmbeddedWindowsPath(raw);
+  if (platform === 'win32') {
+    if (embeddedWindowsPath) return path.win32.normalize(embeddedWindowsPath.replace(/\//g, '\\'));
+    const wsl = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(raw.replace(/\\/g, '/'));
+    if (wsl) return path.win32.normalize(`${wsl[1].toUpperCase()}:\\${String(wsl[2] || '').replace(/\//g, '\\')}`);
+    return path.win32.resolve(raw || '.');
+  }
+  if (platform === 'linux' && embeddedWindowsPath) {
+    const drive = embeddedWindowsPath[0].toLowerCase();
+    const rest = embeddedWindowsPath.slice(3).replace(/\\/g, '/').replace(/^\/+/, '');
+    return path.posix.resolve(`/mnt/${drive}/${rest}`);
+  }
+  return path.posix.resolve(raw || '.');
+}
+
 export class WorkspaceManager {
   public current: WorkspaceInfo | null = null;
   public internal: WorkspaceInfo[] = [];
   public external: WorkspaceInfo[] = [];
   private pcHash: string;
+  private readonly detached: boolean;
 
   constructor(
     public rootPath: string,
-    private config: ConfigManager
+    private config: ConfigManager,
+    options: WorkspaceManagerOptions = {}
   ) {
+    this.detached = options.detached === true;
+    this.pcHash = this.loadPcHash();
+    if (this.detached) return;
     // Ensure Work directory exists
     const workDir = path.join(rootPath, 'Work');
     try { fs.mkdirSync(workDir, { recursive: true }); } catch {}
@@ -50,7 +85,6 @@ export class WorkspaceManager {
         try { fs.writeFileSync(p, '[]', 'utf-8'); } catch {}
       }
     }
-    this.pcHash = this.loadPcHash();
     this.scan();
     this.validate();
     this.restoreCurrent();
@@ -117,7 +151,7 @@ export class WorkspaceManager {
     const name = rawName || new Date().toISOString().replace(/[:.]/g, '').replace('T', '_').slice(0, 15);
     const expectedPath = path.join(this.rootPath, 'Work', name);
     const id = this.stableWorkspaceId('local', expectedPath);
-    if (path.resolve(String(input?.path || '')) !== path.resolve(expectedPath) || input?.isInternal !== true || input?.id !== id) markChanged(true);
+    if (normalizeHostWorkspacePath(String(input?.path || '')) !== normalizeHostWorkspacePath(expectedPath) || input?.isInternal !== true || input?.id !== id) markChanged(true);
     return {
       ...input,
       id,
@@ -130,7 +164,7 @@ export class WorkspaceManager {
   }
 
   private normalizeExternalWorkspace(input: Partial<WorkspaceInfo>, markChanged: (changed: boolean) => void): WorkspaceInfo {
-    const workspacePath = path.resolve(String(input?.path || this.rootPath));
+    const workspacePath = normalizeHostWorkspacePath(String(input?.path || this.rootPath));
     const kind = input?.kind === 'ssh' || input?.sshConnectionId ? 'ssh' : 'local';
     const id = this.stableWorkspaceId(kind, workspacePath);
     if (input?.id !== id || input?.path !== workspacePath) markChanged(true);
@@ -162,7 +196,7 @@ export class WorkspaceManager {
   }
 
   private canonicalWorkspacePath(target: string): string {
-    const resolved = path.resolve(target);
+    const resolved = normalizeHostWorkspacePath(target);
     let real = resolved;
     try {
       real = fs.existsSync(resolved) ? fs.realpathSync.native(resolved) : resolved;
@@ -251,6 +285,7 @@ export class WorkspaceManager {
   }
 
   private saveState(): void {
+    if (this.detached) return;
     const p = this.statePath();
     const state: WorkspaceState = {
       current: this.current ? {
@@ -274,10 +309,10 @@ export class WorkspaceManager {
       const byId = all.find(workspace => workspace.id === ref.id);
       if (byId) return byId;
     }
-    const refPath = ref.path ? path.resolve(ref.path) : '';
+    const refPath = ref.path ? normalizeHostWorkspacePath(ref.path) : '';
     const pathMatch = all.find(w => {
       if (typeof ref.isInternal === 'boolean' && w.isInternal !== ref.isInternal) return false;
-      if (refPath && path.resolve(w.path) === refPath) return true;
+      if (refPath && normalizeHostWorkspacePath(w.path) === refPath) return true;
       return false;
     });
     if (pathMatch) return pathMatch;
@@ -293,7 +328,7 @@ export class WorkspaceManager {
     const stored = this.findWorkspace(stateCurrent);
     if (stored) {
       this.current = stored;
-      if (!stateCurrent?.id || stateCurrent.id !== stored.id || !stateCurrent.path || path.resolve(stateCurrent.path) !== path.resolve(stored.path)) this.saveState();
+      if (!stateCurrent?.id || stateCurrent.id !== stored.id || !stateCurrent.path || normalizeHostWorkspacePath(stateCurrent.path) !== normalizeHostWorkspacePath(stored.path)) this.saveState();
       return;
     }
 
@@ -306,6 +341,7 @@ export class WorkspaceManager {
   }
 
   private saveInternal(): void {
+    if (this.detached) return;
     const p = path.join(this.rootPath, 'Work', 'Local.json');
     this.internal = this.dedupeByPath(this.internal);
     this.sortWorkspaces();
@@ -313,6 +349,7 @@ export class WorkspaceManager {
   }
 
   private saveExternal(): void {
+    if (this.detached) return;
     const p = path.join(this.rootPath, 'Work', 'External.json');
     this.external = this.dedupeByPath(this.external);
     this.sortWorkspaces();

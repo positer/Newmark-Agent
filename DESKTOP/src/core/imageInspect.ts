@@ -10,6 +10,27 @@ export interface DecodedInspectionImage {
 
 const MAX_INPUT_PIXELS = 40_000_000;
 const MAX_OUTPUT_SIDE = 2048;
+const PNG_SIGNATURE = Buffer.from('89504e470d0a1a0a', 'hex');
+const PNG_IHDR_LENGTH = 13;
+
+function preflightPngDimensions(bytes: Buffer): { width: number; height: number } {
+  // PNG decoders allocate from IHDR dimensions. Validate that fixed header
+  // before PNG.sync.read so a tiny compressed input cannot request an
+  // attacker-controlled bitmap allocation first.
+  if (bytes.length < 33 || !bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+    throw new Error('Submitted PNG has an invalid signature or truncated IHDR header.');
+  }
+  if (bytes.readUInt32BE(8) !== PNG_IHDR_LENGTH || bytes.toString('ascii', 12, 16) !== 'IHDR') {
+    throw new Error('Submitted PNG must begin with a 13-byte IHDR chunk.');
+  }
+  const width = bytes.readUInt32BE(16);
+  const height = bytes.readUInt32BE(20);
+  if (!width || !height) throw new Error('Submitted PNG has invalid zero dimensions.');
+  if (width > Math.floor(MAX_INPUT_PIXELS / height)) {
+    throw new Error('Decoded image exceeds the 40 megapixel inspection limit.');
+  }
+  return { width, height };
+}
 
 export function decodeInspectionImage(dataUrl: string): DecodedInspectionImage {
   const match = /^data:(image\/(?:png|jpe?g));base64,([A-Za-z0-9+/=\r\n]+)$/i.exec(dataUrl);
@@ -18,6 +39,7 @@ export function decodeInspectionImage(dataUrl: string): DecodedInspectionImage {
   if (encoded.length > 32 * 1024 * 1024) throw new Error('Submitted image exceeds the 24 MiB inspection limit.');
   const bytes = Buffer.from(encoded, 'base64');
   const mimeType = /^image\/png$/i.test(match[1]) ? 'image/png' : 'image/jpeg';
+  if (mimeType === 'image/png') preflightPngDimensions(bytes);
   const decoded = mimeType === 'image/png'
     ? PNG.sync.read(bytes, { skipRescale: false })
     : jpeg.decode(bytes, { useTArray: true, formatAsRGBA: true, maxResolutionInMP: 40, maxMemoryUsageInMB: 256 });

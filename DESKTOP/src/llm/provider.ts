@@ -25,6 +25,30 @@ export interface ProviderModelCatalogEntry {
   raw: Record<string, unknown>;
 }
 
+export type ProviderStreamCompletionEvent =
+  | 'openai_done'
+  | 'openai_response_completed'
+  | 'anthropic_message_stop';
+
+export interface ProviderStreamProbeResult {
+  chunks: string[];
+  completionEvent?: ProviderStreamCompletionEvent;
+}
+
+interface ProviderHttpResponse {
+  ok: boolean;
+  status: number;
+  headers?: { get(name: string): string | null };
+  text(): Promise<string>;
+  json(): Promise<any>;
+}
+
+interface NodeHttpResult {
+  status: number;
+  body: string;
+  headers?: Record<string, string | string[] | undefined>;
+}
+
 function abortFailure(signal?: AbortSignal): Error {
   const reason = signal?.reason;
   const error = reason instanceof Error ? reason : new Error(reason ? String(reason) : 'LLM request aborted');
@@ -42,9 +66,23 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   });
 }
 
+function parseProviderSse(raw: string): Array<{ event?: string; data: string }> {
+  const events: Array<{ event?: string; data: string }> = [];
+  for (const block of String(raw || '').replace(/\r\n/g, '\n').split(/\n\n+/)) {
+    let event: string | undefined;
+    const data: string[] = [];
+    for (const line of block.split('\n')) {
+      if (line.startsWith('event:')) event = line.slice('event:'.length).trim();
+      else if (line.startsWith('data:')) data.push(line.slice('data:'.length).trimStart());
+    }
+    if (data.length) events.push({ event, data: data.join('\n') });
+  }
+  return events;
+}
+
 export class LLMProvider {
-  static nodeHttpTransport: ((method: 'GET' | 'POST', url: string, headers: Record<string, string>, body?: string) => Promise<{ status: number; body: string }>) | null = null;
-  static powershellTransport: ((method: 'GET' | 'POST', url: string, headers: Record<string, string>, body?: string) => Promise<{ status: number; body: string }>) | null = null;
+  static nodeHttpTransport: ((method: 'GET' | 'POST', url: string, headers: Record<string, string>, body?: string) => Promise<NodeHttpResult>) | null = null;
+  static powershellTransport: ((method: 'GET' | 'POST', url: string, headers: Record<string, string>, body?: string) => Promise<NodeHttpResult>) | null = null;
 
   constructor(
     public name: string,
@@ -102,6 +140,29 @@ export class LLMProvider {
     };
   }
 
+  private llmErrorText(response: Pick<ProviderHttpResponse, 'status' | 'headers'>, body: string): string {
+    const rawRetryAfter = response.headers?.get('retry-after')?.trim() || '';
+    let retryAfter = '';
+    if (/^\d+(?:\.\d+)?$/.test(rawRetryAfter)) {
+      retryAfter = ` Retry-After: ${rawRetryAfter}s`;
+    } else if (rawRetryAfter) {
+      const retryAt = Date.parse(rawRetryAfter);
+      if (Number.isFinite(retryAt)) retryAfter = ` Retry-After: ${Math.max(0, Math.ceil((retryAt - Date.now()) / 1_000))}s`;
+    }
+    return `[LLM Error: ${response.status}]${retryAfter} ${body}`;
+  }
+
+  private headerReader(headers?: NodeHttpResult['headers']): ProviderHttpResponse['headers'] | undefined {
+    if (!headers) return undefined;
+    return {
+      get(name: string): string | null {
+        const value = headers[String(name || '').toLowerCase()];
+        if (Array.isArray(value)) return value.join(', ');
+        return value === undefined ? null : String(value);
+      },
+    };
+  }
+
   private isPlainHttpLoopback(urlValue: string): boolean {
     try {
       const parsed = new URL(urlValue);
@@ -132,7 +193,7 @@ export class LLMProvider {
     body: Record<string, unknown>,
     timeoutMs = 120000,
     signal?: AbortSignal,
-  ): Promise<{ ok: boolean; status: number; text(): Promise<string>; json(): Promise<any> }> {
+  ): Promise<ProviderHttpResponse> {
     // Electron utility processes can leave an undici response body pending when
     // several isolated workers concurrently call a plain-HTTP local provider.
     // Node's HTTP client owns the full body lifecycle and is deterministic for
@@ -145,6 +206,7 @@ export class LLMProvider {
       return {
         ok: local.status >= 200 && local.status < 300,
         status: local.status,
+        headers: this.headerReader(local.headers),
         text: async () => local.body,
         json: async () => JSON.parse(local.body || '{}'),
       };
@@ -169,6 +231,7 @@ export class LLMProvider {
       return {
         ok: fallback.status >= 200 && fallback.status < 300,
         status: fallback.status,
+        headers: this.headerReader(fallback.headers),
         text: async () => fallback.body,
         json: async () => JSON.parse(fallback.body || '{}'),
       };
@@ -182,7 +245,7 @@ export class LLMProvider {
     url: string,
     headers: Record<string, string>,
     timeoutMs = 30000
-  ): Promise<{ ok: boolean; status: number; text(): Promise<string>; json(): Promise<any> }> {
+  ): Promise<ProviderHttpResponse> {
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), timeoutMs);
     try {
@@ -194,6 +257,7 @@ export class LLMProvider {
       return {
         ok: fallback.status >= 200 && fallback.status < 300,
         status: fallback.status,
+        headers: this.headerReader(fallback.headers),
         text: async () => fallback.body,
         json: async () => JSON.parse(fallback.body || '{}'),
       };
@@ -215,7 +279,7 @@ export class LLMProvider {
     headers: Record<string, string>,
     body = '',
     signal?: AbortSignal,
-  ): Promise<{ status: number; body: string }> {
+  ): Promise<NodeHttpResult> {
     if (LLMProvider.nodeHttpTransport) {
       return abortable(LLMProvider.nodeHttpTransport(method, urlValue, headers, body), signal).catch(error => {
         if (signal?.aborted) throw abortFailure(signal);
@@ -225,7 +289,7 @@ export class LLMProvider {
         throw error;
       });
     }
-    return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    return new Promise<NodeHttpResult>((resolve, reject) => {
       const parsed = new URL(urlValue);
       const client = parsed.protocol === 'http:' ? http : https;
       const requestHeaders: Record<string, string | number> = { ...headers };
@@ -246,7 +310,7 @@ export class LLMProvider {
         const finish = () => {
           if (settled) return;
           settled = true;
-          resolve({ status: res.statusCode || 0, body: responseBody });
+          resolve({ status: res.statusCode || 0, body: responseBody, headers: res.headers });
         };
         const fail = (error: Error) => {
           if (settled) return;
@@ -288,11 +352,11 @@ export class LLMProvider {
     headers: Record<string, string>,
     body = '',
     signal?: AbortSignal,
-  ): Promise<{ status: number; body: string }> {
+  ): Promise<NodeHttpResult> {
     if (LLMProvider.powershellTransport) {
       return LLMProvider.powershellTransport(method, urlValue, headers, body);
     }
-    return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    return new Promise<NodeHttpResult>((resolve, reject) => {
       const headerJson = JSON.stringify(headers);
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-llm-'));
       const bodyPath = path.join(tempDir, 'body.json');
@@ -424,6 +488,20 @@ export class LLMProvider {
       || this.extractTextValue(choice.text)
       || this.extractTextValue(json.output_text)
       || this.extractTextValue(json.output);
+  }
+
+  private contentPolicyBlocked(json: Record<string, unknown>): boolean {
+    const choices = Array.isArray(json.choices) ? json.choices as Array<Record<string, unknown>> : [];
+    const choice = choices[0] || {};
+    if (String(choice.finish_reason || '').toLowerCase() === 'content_filter') return true;
+    const incomplete = json.incomplete_details && typeof json.incomplete_details === 'object'
+      ? json.incomplete_details as Record<string, unknown>
+      : {};
+    if (String(incomplete.reason || '').toLowerCase().includes('content_filter')) return true;
+    const error = json.error && typeof json.error === 'object' ? json.error as Record<string, unknown> : {};
+    if (/content[_ -]?filter|safety|moderation/i.test(String(error.code || error.type || ''))) return true;
+    const filterEvidence = JSON.stringify(choice.content_filter_results || json.prompt_filter_results || {});
+    return /"filtered"\s*:\s*true/i.test(filterEvidence);
   }
 
   private normalizeOpenAIContent(value: unknown): string | MessageContentPart[] {
@@ -624,16 +702,21 @@ export class LLMProvider {
     );
     if (!response.ok) {
       const err = await response.text();
-      yield { type: 'text', text: `[LLM Error: ${response.status}] ${err}` };
+      yield { type: 'text', text: this.llmErrorText(response, err) };
       return;
     }
     const json = this.normalizeResponsesPayload(await response.json());
     const text = this.extractResponsesText(json);
-    if (text) yield { type: 'text', text };
+    let emitted = false;
+    if (text) {
+      emitted = true;
+      yield { type: 'text', text };
+    }
     const output = Array.isArray(json.output) ? json.output : [];
     for (const itemRaw of output) {
       const item = itemRaw as Record<string, unknown>;
       if (item.type !== 'function_call') continue;
+      emitted = true;
       yield {
         type: 'tool_call',
         text: '',
@@ -643,6 +726,9 @@ export class LLMProvider {
           arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments || {}),
         },
       };
+    }
+    if (!emitted && this.contentPolicyBlocked(json)) {
+      yield { type: 'text', text: '[Error] Content policy refusal (content_filter).' };
     }
   }
 
@@ -662,7 +748,7 @@ export class LLMProvider {
       signal,
     );
     if (!response.ok) {
-      return `[LLM Error: ${response.status}] ${await response.text()}`;
+      return this.llmErrorText(response, await response.text());
     }
     return this.extractResponsesText(this.normalizeResponsesPayload(await response.json()));
   }
@@ -815,7 +901,7 @@ export class LLMProvider {
           yield* this.openAIResponsesWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal);
           return;
         }
-        yield { type: 'text', text: `[LLM Error: ${response.status}] ${err}` };
+        yield { type: 'text', text: this.llmErrorText(response, err) };
         return;
       }
 
@@ -829,6 +915,8 @@ export class LLMProvider {
       let buffer = '';
       let currentToolCall: { id: string; name: string; arguments: string } | null = null;
       let currentReasoningContent = '';
+      let contentPolicyBlocked = false;
+      let emittedContent = false;
 
       while (true) {
         if (signal?.aborted) throw abortFailure(signal);
@@ -850,6 +938,7 @@ export class LLMProvider {
 
           try {
             const json = JSON.parse(data);
+            if (this.contentPolicyBlocked(json)) contentPolicyBlocked = true;
             const delta = json.choices?.[0]?.delta;
             if (!delta) continue;
 
@@ -859,6 +948,7 @@ export class LLMProvider {
 
             const deltaText = this.extractTextValue(delta.content);
             if (deltaText) {
+              emittedContent = true;
               yield { type: 'text', text: deltaText, reasoningContent: currentReasoningContent || undefined };
             }
 
@@ -880,6 +970,8 @@ export class LLMProvider {
 
       if (currentToolCall && currentToolCall.arguments) {
         yield { type: 'tool_call', text: '', toolCall: currentToolCall, reasoningContent: currentReasoningContent || undefined };
+      } else if (!emittedContent && contentPolicyBlocked) {
+        yield { type: 'text', text: '[Error] Content policy refusal (content_filter).' };
       }
     } finally {
       reader?.releaseLock();
@@ -913,7 +1005,7 @@ export class LLMProvider {
         );
         return;
       }
-      yield { type: 'text', text: `[LLM Error: ${response.status}] ${err}` };
+      yield { type: 'text', text: this.llmErrorText(response, err) };
       return;
     }
     const json = await response.json();
@@ -939,6 +1031,9 @@ export class LLMProvider {
         },
       };
       this.transportDiagnostic('chat-tools:yield-returned');
+    }
+    if (!messageText && !(message.tool_calls || []).length && this.contentPolicyBlocked(json)) {
+      yield { type: 'text', text: '[Error] Content policy refusal (content_filter).' };
     }
   }
 
@@ -971,7 +1066,7 @@ export class LLMProvider {
 
     if (!response.ok) {
       const err = await response.text();
-      yield { type: 'text', text: `[LLM Error: ${response.status}] ${err}` };
+      yield { type: 'text', text: this.llmErrorText(response, err) };
       return;
     }
 
@@ -997,6 +1092,181 @@ export class LLMProvider {
     }
   }
 
+  /**
+   * Deterministic capability probe that sends the schema through the native
+   * protocol field. Prompt-only JSON requests must not be treated as evidence
+   * that a deployment supports structured output.
+   */
+  async chatStrictJson(
+    model: string,
+    messages: Array<Record<string, unknown>>,
+    systemPrompt: string | null,
+    temperature: number,
+    maxTokens: number,
+    schema: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const schemaName = 'newmark_validation_probe';
+    if (this.protocol() === 'anthropic') {
+      const { system, messages: anthropicMessages } = this.anthropicMessages(messages, systemPrompt);
+      const body: Record<string, unknown> = {
+        model,
+        messages: anthropicMessages,
+        temperature,
+        max_tokens: maxTokens,
+        output_config: {
+          format: { type: 'json_schema', schema },
+        },
+      };
+      if (system) body.system = system;
+      const response = await this.postJsonWithFetchFallback(`${this.cleanBaseUrl()}/messages`, this.anthropicHeaders(), body, 120000, signal);
+      if (!response.ok) throw new Error(this.llmErrorText(response, await response.text()));
+      const json = await response.json() as { content?: Array<Record<string, unknown>> };
+      return (json.content || [])
+        .filter(block => block.type === 'text' && block.text)
+        .map(block => this.extractTextValue(block.text))
+        .join('');
+    }
+
+    if (this.protocol() !== 'github_models' && this.openAITransportMode() === 'responses') {
+      const body = this.responsesBody(model, messages, systemPrompt, temperature, maxTokens);
+      body.text = {
+        format: { type: 'json_schema', name: schemaName, strict: true, schema },
+      };
+      const response = await this.postJsonWithFetchFallback(`${this.cleanBaseUrl()}/responses`, this.openAIHeaders(), body, 120000, signal);
+      if (!response.ok) throw new Error(this.llmErrorText(response, await response.text()));
+      return this.extractResponsesText(this.normalizeResponsesPayload(await response.json()));
+    }
+
+    const isGitHubModels = this.protocol() === 'github_models';
+    const url = isGitHubModels
+      ? this.githubModelsUrl('/inference/chat/completions')
+      : `${this.cleanBaseUrl()}/chat/completions`;
+    const body = {
+      model,
+      messages: [
+        ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+        ...messages.map(message => ({ ...message, content: this.normalizeOpenAIContent(message.content) })),
+      ],
+      temperature,
+      max_tokens: maxTokens,
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: schemaName, strict: true, schema },
+      },
+    };
+    const response = await this.postJsonWithFetchFallback(
+      url,
+      isGitHubModels ? this.githubModelsHeaders() : this.openAIHeaders(),
+      body,
+      120000,
+      signal,
+    );
+    if (!response.ok) throw new Error(this.llmErrorText(response, await response.text()));
+    return this.extractChatCompletionText(await response.json() as Record<string, unknown>);
+  }
+
+  /**
+   * Small streaming probe with explicit terminal-event evidence. Reading until
+   * the socket closes is insufficient: truncated SSE must not validate.
+   */
+  async probeStreamCompletion(
+    model: string,
+    messages: Array<Record<string, unknown>>,
+    systemPrompt: string | null,
+    temperature: number,
+    maxTokens: number,
+    signal?: AbortSignal,
+  ): Promise<ProviderStreamProbeResult> {
+    const abort = new AbortController();
+    const forwardAbort = () => abort.abort(signal?.reason);
+    if (signal?.aborted) forwardAbort();
+    else signal?.addEventListener('abort', forwardAbort, { once: true });
+    const timeout = setTimeout(() => abort.abort(), 30_000);
+    try {
+      let url: string;
+      let headers: Record<string, string>;
+      let body: Record<string, unknown>;
+      let family: 'openai_chat' | 'openai_responses' | 'anthropic';
+      if (this.protocol() === 'anthropic') {
+        const prepared = this.anthropicMessages(messages, systemPrompt);
+        url = `${this.cleanBaseUrl()}/messages`;
+        headers = this.anthropicHeaders();
+        body = {
+          model,
+          messages: prepared.messages,
+          temperature,
+          max_tokens: maxTokens,
+          stream: true,
+        };
+        if (prepared.system) body.system = prepared.system;
+        family = 'anthropic';
+      } else if (this.protocol() !== 'github_models' && this.openAITransportMode() === 'responses') {
+        url = `${this.cleanBaseUrl()}/responses`;
+        headers = this.openAIHeaders();
+        body = { ...this.responsesBody(model, messages, systemPrompt, temperature, maxTokens), stream: true };
+        family = 'openai_responses';
+      } else {
+        const isGitHubModels = this.protocol() === 'github_models';
+        url = isGitHubModels
+          ? this.githubModelsUrl('/inference/chat/completions')
+          : `${this.cleanBaseUrl()}/chat/completions`;
+        headers = isGitHubModels ? this.githubModelsHeaders() : this.openAIHeaders();
+        body = {
+          model,
+          messages: [
+            ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+            ...messages.map(message => ({ ...message, content: this.normalizeOpenAIContent(message.content) })),
+          ],
+          temperature,
+          max_tokens: maxTokens,
+          stream: true,
+        };
+        family = 'openai_chat';
+      }
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: abort.signal,
+      });
+      if (!response.ok) throw new Error(this.llmErrorText(response, await response.text()));
+      const events = parseProviderSse(await response.text());
+      const chunks: string[] = [];
+      let completionEvent: ProviderStreamCompletionEvent | undefined;
+      for (const event of events) {
+        if (family === 'openai_chat' && event.data === '[DONE]') {
+          completionEvent = 'openai_done';
+          continue;
+        }
+        let payload: Record<string, any>;
+        try { payload = JSON.parse(event.data) as Record<string, any>; } catch { continue; }
+        const eventType = String(event.event || payload.type || '');
+        if (family === 'anthropic') {
+          if (eventType === 'message_stop') completionEvent = 'anthropic_message_stop';
+          const deltaText = eventType === 'content_block_delta' && payload.delta?.type === 'text_delta'
+            ? this.extractTextValue(payload.delta.text)
+            : '';
+          if (deltaText) chunks.push(deltaText);
+        } else if (family === 'openai_responses') {
+          if (eventType === 'response.completed') completionEvent = 'openai_response_completed';
+          if (eventType === 'response.output_text.delta') {
+            const deltaText = this.extractTextValue(payload.delta);
+            if (deltaText) chunks.push(deltaText);
+          }
+        } else {
+          const deltaText = this.extractTextValue(payload.choices?.[0]?.delta?.content);
+          if (deltaText) chunks.push(deltaText);
+        }
+      }
+      return { chunks, completionEvent };
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', forwardAbort);
+    }
+  }
+
   async chat(
     model: string,
     messages: Array<Record<string, unknown>>,
@@ -1018,7 +1288,7 @@ export class LLMProvider {
       const response = await this.postJsonWithFetchFallback(`${this.cleanBaseUrl()}/messages`, this.anthropicHeaders(), body, 120000, signal);
 
       if (!response.ok) {
-        throw new Error(`LLM Error: ${response.status} ${await response.text()}`);
+        throw new Error(this.llmErrorText(response, await response.text()));
       }
 
       const json = await response.json() as { content?: Array<Record<string, unknown>> };
@@ -1053,7 +1323,7 @@ export class LLMProvider {
       if (!isGitHubModels && this.shouldUseResponsesFallback(response.status, err)) {
         return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens, signal);
       }
-      throw new Error(`LLM Error: ${response.status} ${err}`);
+      throw new Error(this.llmErrorText(response, err));
     }
 
     const json = await response.json() as Record<string, unknown>;

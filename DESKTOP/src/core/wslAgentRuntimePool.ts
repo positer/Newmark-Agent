@@ -4,8 +4,10 @@ import { WslAgentClient, WslHostToolHandler } from './wslAgentClient';
 import {
   WslAgentPromptRequest,
   WslAgentPromptResult,
+  WslAutoRouteRatingResult,
   WslAgentStopResult,
 } from './wslAgentProtocol';
+import { RuntimePoolCapacityError } from './runtimePoolCapacity';
 
 export interface WslTargetRuntimeClient {
   subscribe(listener: (event: AgentWorkEvent) => void): () => void;
@@ -15,6 +17,7 @@ export interface WslTargetRuntimeClient {
   requestStop(target: ConversationRuntimeTarget, runId?: string): Promise<WslAgentStopResult>;
   enqueueGuide(target: ConversationRuntimeTarget, envelope: ConversationInputEnvelope): Promise<GuideReceipt>;
   checkpoint(target: ConversationRuntimeTarget): Promise<Record<string, unknown>>;
+  rateAutoRoute?(target: ConversationRuntimeTarget, score: number, routeId?: string): Promise<WslAutoRouteRatingResult>;
   setWorkRunExpanded(target: ConversationRuntimeTarget, runId: string, expanded: boolean): Promise<boolean>;
   updateSetting(section: string, key: string, value: unknown): Promise<void>;
   forceRestartRuntimeGroup(): Promise<void>;
@@ -43,11 +46,13 @@ interface RuntimeEntry {
   lastGeneration: number;
   workEvents: AgentWorkEvent[];
   stopIntent: SupervisorStopIntent | null;
+  activeOperations: number;
 }
 
 export interface WslAgentRuntimePoolOptions {
   idleTtlMs?: number;
   stopRequestTimeoutMs?: number;
+  maxResidentRuntimes?: number;
 }
 
 /**
@@ -60,6 +65,9 @@ export class WslAgentRuntimePool {
   private listeners = new Set<(event: AgentWorkEvent) => void>();
   private hostToolHandler: WslHostToolHandler | null = null;
   private restarting = new Set<string>();
+  private disposing = new Set<string>();
+  private capacityTail: Promise<void> = Promise.resolve();
+  private accessSequence = 0;
 
   constructor(
     private readonly distro: string,
@@ -81,27 +89,35 @@ export class WslAgentRuntimePool {
 
   async prompt(params: WslAgentPromptRequest): Promise<WslAgentPromptResult> {
     const target = this.normalizeRequestTarget(params);
-    const entry = this.ensure(target);
+    const entry = await this.acquire(target);
     entry.stopIntent = null;
-    const result = await entry.client.prompt({ ...params, target });
-    entry.lastRunId = result.runId || entry.lastRunId;
-    entry.lastGeneration = Number(result.generation || entry.lastGeneration || 0);
-    this.scheduleIdle(entry);
-    return result;
+    try {
+      const result = await entry.client.prompt({ ...params, target });
+      entry.lastRunId = result.runId || entry.lastRunId;
+      entry.lastGeneration = Number(result.generation || entry.lastGeneration || 0);
+      return result;
+    } finally {
+      this.release(entry, true);
+    }
   }
 
   async snapshot(target: ConversationRuntimeTarget): Promise<Record<string, unknown>> {
     const normalized = normalizeConversationTarget(target);
-    const entry = this.ensure(normalized);
-    if (entry.stopIntent) return this.supervisorSnapshot(entry);
-    const result = await entry.client.snapshotTarget(normalized);
-    entry.lastSnapshot = result;
-    const runtime = result.runtime as { running?: boolean; stopRequested?: boolean } | null | undefined;
-    const runtimeIdentity = result.runtime as { runId?: string; generation?: number } | null | undefined;
-    if (runtimeIdentity?.runId) entry.lastRunId = runtimeIdentity.runId;
-    if (runtimeIdentity?.generation) entry.lastGeneration = runtimeIdentity.generation;
-    if (!runtime?.running && !runtime?.stopRequested) this.scheduleIdle(entry);
-    return result;
+    const entry = await this.acquire(normalized);
+    let scheduleIdle = false;
+    try {
+      if (entry.stopIntent) return this.supervisorSnapshot(entry);
+      const result = await entry.client.snapshotTarget(normalized);
+      entry.lastSnapshot = result;
+      const runtime = result.runtime as { running?: boolean; stopRequested?: boolean } | null | undefined;
+      const runtimeIdentity = result.runtime as { runId?: string; generation?: number } | null | undefined;
+      if (runtimeIdentity?.runId) entry.lastRunId = runtimeIdentity.runId;
+      if (runtimeIdentity?.generation) entry.lastGeneration = runtimeIdentity.generation;
+      scheduleIdle = !runtime?.running && !runtime?.stopRequested;
+      return result;
+    } finally {
+      this.release(entry, scheduleIdle);
+    }
   }
 
   async requestStop(target: ConversationRuntimeTarget, runId?: string): Promise<WslPoolStopResult> {
@@ -168,7 +184,7 @@ export class WslAgentRuntimePool {
   }
 
   async enqueueGuide(envelope: ConversationInputEnvelope): Promise<GuideReceipt> {
-    const entry = this.findEntry(envelope.target);
+    const entry = await this.acquireExisting(envelope.target);
     if (!entry) {
       const now = new Date().toISOString();
       return {
@@ -183,28 +199,56 @@ export class WslAgentRuntimePool {
       };
     }
     entry.stopIntent = null;
-    return await entry.client.enqueueGuide(entry.target, envelope);
+    try {
+      return await entry.client.enqueueGuide(entry.target, envelope);
+    } finally {
+      this.release(entry, true);
+    }
   }
 
   async checkpoint(target: ConversationRuntimeTarget): Promise<Record<string, unknown>> {
     const normalized = normalizeConversationTarget(target);
-    const entry = this.entries.get(normalized.runtimeKey);
-    return entry ? await entry.client.checkpoint(normalized) : {
-      runtimeKey: normalized.runtimeKey,
-      runId: '',
-      generation: 0,
-      checkpointed: false,
-      at: new Date().toISOString(),
-    };
+    const entry = await this.acquireExisting(normalized);
+    if (!entry) {
+      return {
+        runtimeKey: normalized.runtimeKey,
+        runId: '',
+        generation: 0,
+        checkpointed: false,
+        at: new Date().toISOString(),
+      };
+    }
+    try {
+      return await entry.client.checkpoint(normalized);
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async rateAutoRoute(
+    target: ConversationRuntimeTarget,
+    score: number,
+    routeId = '',
+  ): Promise<WslAutoRouteRatingResult> {
+    const normalized = normalizeConversationTarget(target);
+    const entry = await this.acquireExisting(normalized);
+    if (!entry || !entry.client.rateAutoRoute) {
+      return { ok: false, reason: 'no_active_auto_route' };
+    }
+    try {
+      return await entry.client.rateAutoRoute(normalized, score, routeId);
+    } finally {
+      this.release(entry, true);
+    }
   }
 
   async setWorkRunExpanded(target: ConversationRuntimeTarget, runId: string, expanded: boolean): Promise<boolean> {
     const normalized = normalizeConversationTarget(target);
-    const entry = this.ensure(normalized);
+    const entry = await this.acquire(normalized);
     try {
       return await entry.client.setWorkRunExpanded(normalized, runId, expanded);
     } finally {
-      this.scheduleIdle(entry);
+      this.release(entry, true);
     }
   }
 
@@ -228,7 +272,8 @@ export class WslAgentRuntimePool {
   }
 
   isStopping(target: ConversationRuntimeTarget): boolean {
-    return !!this.entries.get(normalizeConversationTarget(target).runtimeKey)?.stopIntent;
+    const runtimeKey = normalizeConversationTarget(target).runtimeKey;
+    return this.disposing.has(runtimeKey) || !!this.entries.get(runtimeKey)?.stopIntent;
   }
 
   async hasActiveWorkspace(target: ConversationRuntimeTarget): Promise<boolean> {
@@ -256,25 +301,15 @@ export class WslAgentRuntimePool {
 
   async stopTarget(target: ConversationRuntimeTarget): Promise<void> {
     const key = conversationRuntimeKey(target);
-    const entry = this.entries.get(key);
-    if (!entry) return;
-    this.entries.delete(key);
-    entry.stopIntent = null;
-    if (entry.idleTimer) clearTimeout(entry.idleTimer);
-    entry.unsubscribe();
-    entry.client.setHostToolHandler(null);
-    await entry.client.stop();
+    await this.serializeCapacity(async () => {
+      const entry = this.entries.get(key);
+      if (entry) await this.stopEntry(entry);
+    });
   }
 
   async stopAll(): Promise<void> {
-    const entries = Array.from(this.entries.values());
-    this.entries.clear();
-    const results = await Promise.allSettled(entries.map(async entry => {
-      if (entry.idleTimer) clearTimeout(entry.idleTimer);
-      entry.unsubscribe();
-      entry.client.setHostToolHandler(null);
-      await entry.client.stop();
-    }));
+    const targets = Array.from(this.entries.values(), entry => entry.target);
+    const results = await Promise.allSettled(targets.map(target => this.stopTarget(target)));
     this.throwStopFailures(results, 'One or more WSL runtimes could not be stopped');
   }
 
@@ -285,31 +320,69 @@ export class WslAgentRuntimePool {
     if (failures.length) throw new AggregateError(failures, message);
   }
 
-  private ensure(target: NormalizedConversationTarget): RuntimeEntry {
-    const existing = this.entries.get(target.runtimeKey);
-    if (existing) {
-      this.touch(existing);
-      return existing;
+  private async stopEntry(entry: RuntimeEntry): Promise<void> {
+    const runtimeKey = entry.target.runtimeKey;
+    this.disposing.add(runtimeKey);
+    entry.stopIntent = null;
+    if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    entry.idleTimer = null;
+    try {
+      await entry.client.stop();
+      if (this.entries.get(runtimeKey) === entry) {
+        this.entries.delete(runtimeKey);
+        entry.unsubscribe();
+        entry.client.setHostToolHandler(null);
+      }
+    } finally {
+      this.disposing.delete(runtimeKey);
     }
+  }
+
+  private async acquire(target: NormalizedConversationTarget): Promise<RuntimeEntry> {
+    return await this.serializeCapacity(async () => {
+      const existing = this.entries.get(target.runtimeKey);
+      if (existing) {
+        this.touch(existing);
+        existing.activeOperations += 1;
+        return existing;
+      }
+      const capacity = this.maxResidentRuntimes();
+      if (this.entries.size >= capacity) await this.evictLeastRecentlyUsedIdle();
+      if (this.entries.size >= capacity) throw new RuntimePoolCapacityError('wsl', capacity);
+      return this.createEntry(target);
+    });
+  }
+
+  private async acquireExisting(target: { workspaceId: string; conversationId: string }): Promise<RuntimeEntry | undefined> {
+    return await this.serializeCapacity(async () => {
+      const entry = this.findEntry(target);
+      if (!entry || this.disposing.has(entry.target.runtimeKey)) return undefined;
+      this.touch(entry);
+      entry.activeOperations += 1;
+      return entry;
+    });
+  }
+
+  private createEntry(target: NormalizedConversationTarget): RuntimeEntry {
     const client = this.createClient(target);
     client.setHostToolHandler(this.hostToolHandler);
     const entry: RuntimeEntry = {
       target,
       client,
-      lastUsedAt: Date.now(),
+      lastUsedAt: this.nextAccessSequence(),
       idleTimer: null,
       lastSnapshot: null,
       lastRunId: '',
       lastGeneration: 0,
       workEvents: [],
       stopIntent: null,
+      activeOperations: 1,
       unsubscribe: client.subscribe(event => {
         if (event.runId) entry.lastRunId = event.runId;
         if (event.generation) entry.lastGeneration = event.generation;
         if (entry.stopIntent
           && (!entry.stopIntent.runId || !event.runId || entry.stopIntent.runId === event.runId)
-          && (event.type === 'done' || event.type === 'error'
-            || ['completed', 'interrupted', 'force_interrupted', 'error'].includes(String(event.status || '')))) {
+          && ['completed', 'interrupted', 'force_interrupted', 'error'].includes(String(event.status || ''))) {
           entry.stopIntent = null;
         }
         const routed: AgentWorkEvent = {
@@ -329,9 +402,66 @@ export class WslAgentRuntimePool {
   }
 
   private touch(entry: RuntimeEntry): void {
-    entry.lastUsedAt = Date.now();
+    entry.lastUsedAt = this.nextAccessSequence();
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
     entry.idleTimer = null;
+  }
+
+  private release(entry: RuntimeEntry, shouldScheduleIdle: boolean): void {
+    entry.activeOperations = Math.max(0, entry.activeOperations - 1);
+    if (this.entries.get(entry.target.runtimeKey) !== entry) return;
+    if (shouldScheduleIdle) this.scheduleIdle(entry);
+  }
+
+  private nextAccessSequence(): number {
+    this.accessSequence += 1;
+    return this.accessSequence;
+  }
+
+  private maxResidentRuntimes(): number {
+    const configured = Number(this.options.maxResidentRuntimes ?? 2);
+    return Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 2;
+  }
+
+  private async serializeCapacity<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.capacityTail;
+    let release!: () => void;
+    this.capacityTail = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  private async evictLeastRecentlyUsedIdle(): Promise<void> {
+    const candidates = Array.from(this.entries.values()).sort((left, right) => left.lastUsedAt - right.lastUsedAt);
+    for (const entry of candidates) {
+      const runtimeKey = entry.target.runtimeKey;
+      if (entry.activeOperations > 0
+        || entry.stopIntent
+        || this.restarting.has(runtimeKey)
+        || this.disposing.has(runtimeKey)) continue;
+      const expectedLastUsedAt = entry.lastUsedAt;
+      let snapshot: Record<string, unknown>;
+      try {
+        snapshot = await entry.client.snapshotTarget(entry.target);
+      } catch {
+        // An unknown state is not proof that a runtime is idle.
+        continue;
+      }
+      const runtime = snapshot.runtime as { running?: boolean; stopRequested?: boolean } | null | undefined;
+      if (this.entries.get(runtimeKey) !== entry
+        || entry.lastUsedAt !== expectedLastUsedAt
+        || entry.activeOperations > 0
+        || entry.stopIntent
+        || this.restarting.has(runtimeKey)
+        || this.disposing.has(runtimeKey)) continue;
+      if (runtime?.running || runtime?.stopRequested) continue;
+      await this.stopEntry(entry);
+      return;
+    }
   }
 
   private scheduleIdle(entry: RuntimeEntry): void {
@@ -343,21 +473,29 @@ export class WslAgentRuntimePool {
   }
 
   private async evictIfIdle(runtimeKey: string, expectedLastUsedAt: number): Promise<void> {
-    const entry = this.entries.get(runtimeKey);
-    if (!entry || entry.lastUsedAt !== expectedLastUsedAt) return;
-    try {
-      const snapshot = await entry.client.snapshotTarget(entry.target);
+    await this.serializeCapacity(async () => {
+      const entry = this.entries.get(runtimeKey);
+      if (!entry || entry.lastUsedAt !== expectedLastUsedAt) return;
+      if (entry.activeOperations > 0 || entry.stopIntent || this.restarting.has(runtimeKey) || this.disposing.has(runtimeKey)) {
+        this.scheduleIdle(entry);
+        return;
+      }
+      let snapshot: Record<string, unknown>;
+      try {
+        snapshot = await entry.client.snapshotTarget(entry.target);
+      } catch {
+        if (this.entries.get(runtimeKey) !== entry || entry.lastUsedAt !== expectedLastUsedAt) return;
+        await this.stopEntry(entry);
+        return;
+      }
       if (this.entries.get(runtimeKey) !== entry || entry.lastUsedAt !== expectedLastUsedAt) return;
       const runtime = snapshot.runtime as { running?: boolean; stopRequested?: boolean } | null | undefined;
       if (runtime?.running || runtime?.stopRequested) {
         this.scheduleIdle(entry);
         return;
       }
-      await this.stopTarget(entry.target);
-    } catch {
-      if (this.entries.get(runtimeKey) !== entry || entry.lastUsedAt !== expectedLastUsedAt) return;
-      await this.stopTarget(entry.target);
-    }
+      await this.stopEntry(entry);
+    });
   }
 
   private findEntry(target: { workspaceId: string; conversationId: string }): RuntimeEntry | undefined {

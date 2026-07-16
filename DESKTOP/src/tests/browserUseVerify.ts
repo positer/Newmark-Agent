@@ -362,8 +362,6 @@ async function main(): Promise<void> {
   const toolOutput = await tools.execute('browser_use', JSON.stringify({
     action: 'observe',
     action_id: 'tool-observe',
-    owner: 'model-spoof',
-    runtime_key: 'model-spoof-runtime',
   }), toolRoot, {
     workspaceId: 'workspace-alpha',
     conversationId: 'default',
@@ -375,7 +373,7 @@ async function main(): Promise<void> {
   assert(capturedRequests.at(-1)?.runtimeKey === 'workspace:trusted::conversation:default' && capturedRequests.at(-1)?.owner === 'browser-use:workspace:trusted::conversation:default:actor:root', 'ToolExecutor derives scope only from trusted execution context');
   const callsBeforeBlockedPlan = capturedRequests.length;
   const blockedPlan = await tools.execute('browser_use', JSON.stringify({ action: 'click', page_generation: 1, observation_id: 'x', ref: 'r1' }), toolRoot, { mode: 'plan', runtimeKey: 'plan-runtime', conversationId: 'default' });
-  assert(blockedPlan.includes('Plan mode only allows Browser-Use') && capturedRequests.length === callsBeforeBlockedPlan, 'runtime policy blocks hidden mutating Browser-Use calls in Plan mode');
+  assert(blockedPlan.includes('Plan mode only allows Browser-Use') && capturedRequests.length === callsBeforeBlockedPlan, `runtime policy blocks hidden mutating Browser-Use calls in Plan mode: ${blockedPlan}`);
   const allowedPlan = await tools.execute('browser_use', JSON.stringify({ action: 'observe' }), toolRoot, { mode: 'plan', runtimeKey: 'plan-runtime', conversationId: 'default' });
   assert(allowedPlan.includes('tool-observation') && capturedRequests.at(-1)?.runtimeKey === 'plan-runtime', 'Plan mode can execute Browser-Use observe');
   BrowserUse.setBackend(null);

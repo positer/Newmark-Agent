@@ -35,6 +35,11 @@ function signalMessage(signal?: AbortSignal): string {
   return 'The operation was aborted';
 }
 
+function trustedWindowsTaskkillPath(): string {
+  const windowsRoot = String(process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows');
+  return path.join(windowsRoot, 'System32', 'taskkill.exe');
+}
+
 function stopProcessTree(child: ChildProcess): void {
   const pid = child.pid;
   if (!pid) {
@@ -43,7 +48,10 @@ function stopProcessTree(child: ChildProcess): void {
   }
   if (process.platform === 'win32') {
     try {
-      const killer = spawn('taskkill.exe', ['/pid', String(pid), '/T', '/F'], {
+      // Never resolve a process-tree killer through cwd/PATH: a workspace may
+      // contain an untrusted taskkill.exe, and searching it also adds cold
+      // CreateProcess latency on low-performance systems.
+      const killer = spawn(trustedWindowsTaskkillPath(), ['/pid', String(pid), '/T', '/F'], {
         windowsHide: true,
         stdio: 'ignore',
       });

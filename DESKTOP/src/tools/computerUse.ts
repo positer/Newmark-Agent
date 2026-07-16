@@ -35,6 +35,8 @@ export interface ComputerUseOptions {
   dryRun?: boolean;
   workspacePath: string;
   allowEphemeralVisionImage?: boolean;
+  captureMaxWidth?: number;
+  captureMaxHeight?: number;
   gradientColors?: string[];
   gradientSpeed?: number;
   gradientWidth?: number;
@@ -103,18 +105,136 @@ async function runPowerShell(script: string, timeout = 30000, lane: 'action' | '
 function tempScreenshotDir(): string {
   const dir = path.join(os.tmpdir(), 'newmark-computer-use');
   fs.mkdirSync(dir, { recursive: true });
+  const now = Date.now();
+  if (now - lastScreenshotCleanupAt >= SCREENSHOT_CLEANUP_INTERVAL_MS) {
+    lastScreenshotCleanupAt = now;
+    cleanupStaleScreenshots({ directory: dir, now });
+  }
   return dir;
 }
 
 const SCREENSHOT_FILE_BUDGET = 768 * 1024;
+const SCREENSHOT_OWNER_DEATH_GRACE_MS = 30 * 1000;
+const SCREENSHOT_LEGACY_TTL_MS = 24 * 60 * 60 * 1000;
+const SCREENSHOT_CLEANUP_INTERVAL_MS = 60 * 1000;
+const DEFAULT_CAPTURE_MAX_WIDTH = 1280;
+const DEFAULT_CAPTURE_MAX_HEIGHT = 960;
+const MIN_CAPTURE_MAX_WIDTH = 320;
+const MIN_CAPTURE_MAX_HEIGHT = 240;
+const MAX_CAPTURE_DIMENSION = 2048;
+let lastScreenshotCleanupAt = 0;
 
-function jpegCaptureScript(outPath: string, boundsScript: string[]): string {
+interface ScreenshotCleanupOptions {
+  directory?: string;
+  now?: number;
+  isProcessAlive?: (pid: number) => boolean;
+}
+
+function ephemeralScreenshotPath(
+  kind: 'observe' | 'app',
+  directory = tempScreenshotDir(),
+  createdAt = Date.now(),
+  ownerPid = process.pid,
+  suffix = crypto.randomBytes(4).toString('hex'),
+): string {
+  const pid = Math.max(1, Math.floor(Number(ownerPid) || process.pid));
+  const timestamp = Math.max(0, Math.floor(Number(createdAt) || Date.now()));
+  const nonce = /^[a-f0-9]{8}$/i.test(String(suffix)) ? String(suffix).toLowerCase() : crypto.randomBytes(4).toString('hex');
+  return path.join(directory, `${kind}-p${pid}-t${timestamp}-${nonce}.jpg`);
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === 'EPERM';
+  }
+}
+
+function cleanupStaleScreenshots(options: ScreenshotCleanupOptions = {}): { removed: number } {
+  const directory = options.directory || path.join(os.tmpdir(), 'newmark-computer-use');
+  const now = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const processAlive = options.isProcessAlive || isProcessAlive;
+  const ownedPattern = /^(?:observe|app)-p([1-9]\d*)-t(\d{10,16})-[a-f0-9]{8}\.jpg$/i;
+  const legacyPattern = /^(?:observe|app)-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}\.jpg$/i;
+  let names: string[] = [];
+  try { names = fs.readdirSync(directory); } catch { return { removed: 0 }; }
+  let removed = 0;
+  for (const name of names) {
+    const owned = ownedPattern.exec(name);
+    const isLegacy = !owned && legacyPattern.test(name);
+    if (!owned && !isLegacy) continue;
+    const filePath = path.join(directory, name);
+    let stats: fs.Stats;
+    try {
+      stats = fs.lstatSync(filePath);
+      if (!stats.isFile() || stats.isSymbolicLink()) continue;
+    } catch {
+      continue;
+    }
+    let shouldRemove = false;
+    if (owned) {
+      const ownerPid = Number(owned[1]);
+      const createdAt = Number(owned[2]);
+      const ageMs = Math.max(0, now - createdAt);
+      if (ageMs >= SCREENSHOT_OWNER_DEATH_GRACE_MS) {
+        let ownerAlive = true;
+        try { ownerAlive = processAlive(ownerPid); } catch { ownerAlive = true; }
+        shouldRemove = !ownerAlive;
+      }
+    } else {
+      shouldRemove = Math.max(0, now - stats.mtimeMs) >= SCREENSHOT_LEGACY_TTL_MS;
+    }
+    if (!shouldRemove) continue;
+    try {
+      fs.unlinkSync(filePath);
+      removed += 1;
+    } catch {}
+  }
+  return { removed };
+}
+
+cleanupStaleScreenshots();
+const staleScreenshotCleanupTimer = setInterval(() => cleanupStaleScreenshots(), SCREENSHOT_CLEANUP_INTERVAL_MS);
+staleScreenshotCleanupTimer.unref();
+
+function boundedCaptureDimension(value: number | undefined, fallback: number, minimum: number): number {
+  const requested = Number(value);
+  if (!Number.isFinite(requested) || requested <= 0) return fallback;
+  return Math.min(MAX_CAPTURE_DIMENSION, Math.max(minimum, Math.floor(requested)));
+}
+
+function captureBounds(maxWidth?: number, maxHeight?: number): { maxWidth: number; maxHeight: number } {
+  return {
+    maxWidth: boundedCaptureDimension(maxWidth, DEFAULT_CAPTURE_MAX_WIDTH, MIN_CAPTURE_MAX_WIDTH),
+    maxHeight: boundedCaptureDimension(maxHeight, DEFAULT_CAPTURE_MAX_HEIGHT, MIN_CAPTURE_MAX_HEIGHT),
+  };
+}
+
+function removeEphemeralScreenshot(outPath: string): void {
+  try { fs.unlinkSync(outPath); } catch {}
+}
+
+function captureFailure(action: 'observe' | 'app_observe', app?: AppWindowInfo): Record<string, unknown> {
+  return {
+    ok: false,
+    action,
+    error: 'Native screenshot capture failed.',
+    ...(app ? { app } : {}),
+  };
+}
+
+function jpegCaptureScript(outPath: string, boundsScript: string[], requestedMaxWidth?: number, requestedMaxHeight?: number): string {
+  const { maxWidth, maxHeight } = captureBounds(requestedMaxWidth, requestedMaxHeight);
   return [
     ...boundsScript,
     '$source = New-Object System.Drawing.Bitmap $w, $h',
     '$sourceGraphics = [System.Drawing.Graphics]::FromImage($source)',
     '$sourceGraphics.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size($w,$h)))',
-    '$maxWidth = 1280; $maxHeight = 960',
+    `$maxWidth = ${maxWidth}; $maxHeight = ${maxHeight}`,
     '$scale = [Math]::Min(1.0, [Math]::Min(($maxWidth / [double]$w), ($maxHeight / [double]$h)))',
     '$imageWidth = [Math]::Max(1, [int][Math]::Round($w * $scale))',
     '$imageHeight = [Math]::Max(1, [int][Math]::Round($h * $scale))',
@@ -139,7 +259,7 @@ function jpegCaptureScript(outPath: string, boundsScript: string[]): string {
     '$targetGraphics.Dispose(); $target.Dispose(); $sourceGraphics.Dispose(); $source.Dispose()',
     `$imageAvailable = $fileSize -le ${SCREENSHOT_FILE_BUDGET}`,
     `if (-not $imageAvailable -and [System.IO.File]::Exists(${psQuote(outPath)})) { [System.IO.File]::Delete(${psQuote(outPath)}) }`,
-    'Write-Output (@{ ok=$true; left=$x; top=$y; width=$w; height=$h; image_width=$imageWidth; image_height=$imageHeight; image_bytes=$fileSize; image_quality=$qualityUsed; image_available=$imageAvailable; image_mime="image/jpeg" } | ConvertTo-Json -Compress)',
+    'Write-Output (@{ ok=$true; left=$x; top=$y; width=$w; height=$h; capture_max_width=$maxWidth; capture_max_height=$maxHeight; image_width=$imageWidth; image_height=$imageHeight; image_bytes=$fileSize; image_quality=$qualityUsed; image_available=$imageAvailable; image_mime="image/jpeg" } | ConvertTo-Json -Compress)',
   ].join('\r\n');
 }
 
@@ -383,13 +503,17 @@ async function observeUiAutomation(maxChars: number, rootHandle?: string): Promi
     '$cache.TreeScope = [System.Windows.Automation.TreeScope]::Element',
     '$cache.TreeFilter = [System.Windows.Automation.Automation]::ControlViewCondition',
     '@([System.Windows.Automation.AutomationElement]::NameProperty, [System.Windows.Automation.AutomationElement]::AutomationIdProperty, [System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.AutomationElement]::ClassNameProperty, [System.Windows.Automation.AutomationElement]::ProcessIdProperty, [System.Windows.Automation.AutomationElement]::BoundingRectangleProperty, [System.Windows.Automation.AutomationElement]::IsOffscreenProperty) | ForEach-Object { $cache.Add($_) }',
-    '$cache.Push()',
-    'try { $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) } finally { $cache.Pop() }',
+    '$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker',
+    '$stack = New-Object System.Collections.Stack',
+    '$first = $walker.GetFirstChild($root, $cache)',
+    'if ($null -ne $first) { $stack.Push($first) }',
     '$items = New-Object System.Collections.Generic.List[object]',
-    '$visited = [Math]::Min(1200, $all.Count)',
-    '$limit = [Math]::Min($visited, 240)',
-    'for ($index = 0; $index -lt $limit -and $items.Count -lt 160; $index++) {',
-    '  $el = $all.Item($index)',
+    '$visited = 0',
+    'while ($stack.Count -gt 0 -and $visited -lt 240 -and $items.Count -lt 160) {',
+    '  $el = [System.Windows.Automation.AutomationElement]$stack.Pop()',
+    '  $visited++',
+    '  try { $sibling = $walker.GetNextSibling($el, $cache); if ($null -ne $sibling) { $stack.Push($sibling) } } catch {}',
+    '  try { $child = $walker.GetFirstChild($el, $cache); if ($null -ne $child) { $stack.Push($child) } } catch {}',
     '  try {',
     '      $r = $el.Cached.BoundingRectangle',
     '      $name = [string]$el.Cached.Name',
@@ -408,11 +532,12 @@ async function observeUiAutomation(maxChars: number, rootHandle?: string): Promi
     '  } catch {}',
     '}',
     `$maxChars = ${limit}`,
-    'while ($items.Count -gt 0) {',
+    '$payload = [pscustomobject]@{ visited=$visited; items=$items.ToArray() }',
+    '$json = $payload | ConvertTo-Json -Depth 5 -Compress',
+    'while ($json.Length -gt $maxChars -and $items.Count -gt 0) {',
+    '  $items.RemoveAt($items.Count - 1)',
     '  $payload = [pscustomobject]@{ visited=$visited; items=$items.ToArray() }',
     '  $json = $payload | ConvertTo-Json -Depth 5 -Compress',
-    '  if ($json.Length -le $maxChars) { break }',
-    '  $items.RemoveAt($items.Count - 1)',
     '}',
     'Write-Output $json',
   ].join('\r\n');
@@ -523,68 +648,81 @@ async function selectAppWindow(target?: string, handle?: string): Promise<{ app?
   return { app, apps, elapsedMs: observed.elapsedMs };
 }
 
-async function cropScreenshot(workspacePath: string, ownerId: string, allowEphemeralVisionImage: boolean, app: AppWindowInfo, includeRawUi = false): Promise<Record<string, unknown>> {
+async function cropScreenshot(
+  workspacePath: string,
+  ownerId: string,
+  allowEphemeralVisionImage: boolean,
+  app: AppWindowInfo,
+  includeRawUi = false,
+  captureMaxWidth?: number,
+  captureMaxHeight?: number,
+): Promise<Record<string, unknown>> {
   const totalStarted = Date.now();
-  const outPath = path.join(tempScreenshotDir(), `app-${timestampName()}-${crypto.randomBytes(4).toString('hex')}.jpg`);
-  const b = app.bbox;
-  const script = jpegCaptureScript(outPath, [
-    `$x=${Math.floor(b.x)}; $y=${Math.floor(b.y)}; $w=${Math.max(1, Math.floor(b.width))}; $h=${Math.max(1, Math.floor(b.height))}`,
-  ]);
-  const [result, ui] = await Promise.all([
-    runPowerShell(script, 30000),
-    observeUiAutomation(30000, app.handle),
-  ]);
-  if (!result.ok) return { ok: false, action: 'app_observe', error: result.output, app };
-  let parsed: Record<string, unknown> = {};
-  try { parsed = JSON.parse(result.output); } catch { parsed = { raw: result.output }; }
-  const elements = ui.elements;
-  const objects = semanticObjects(elements, Number(parsed.width || b.width || 1), Number(parsed.height || b.height || 1), workspacePath, ownerId);
-  for (const obj of objects) {
-    obj.normalized_bbox = {
-      x: Number(((obj.bbox.x - b.x) / Math.max(1, b.width)).toFixed(4)),
-      y: Number(((obj.bbox.y - b.y) / Math.max(1, b.height)).toFixed(4)),
-      width: Number((obj.bbox.width / Math.max(1, b.width)).toFixed(4)),
-      height: Number((obj.bbox.height / Math.max(1, b.height)).toFixed(4)),
+  const outPath = ephemeralScreenshotPath('app');
+  let retainedForVision = false;
+  try {
+    const b = app.bbox;
+    const script = jpegCaptureScript(outPath, [
+      `$x=${Math.floor(b.x)}; $y=${Math.floor(b.y)}; $w=${Math.max(1, Math.floor(b.width))}; $h=${Math.max(1, Math.floor(b.height))}`,
+    ], captureMaxWidth, captureMaxHeight);
+    const [result, ui] = await Promise.all([
+      runPowerShell(script, 30000),
+      observeUiAutomation(30000, app.handle),
+    ]);
+    if (!result.ok) return captureFailure('app_observe', app);
+    let parsed: Record<string, unknown> = {};
+    try { parsed = JSON.parse(result.output); } catch { return captureFailure('app_observe', app); }
+    const elements = ui.elements;
+    const objects = semanticObjects(elements, Number(parsed.width || b.width || 1), Number(parsed.height || b.height || 1), workspacePath, ownerId);
+    for (const obj of objects) {
+      obj.normalized_bbox = {
+        x: Number(((obj.bbox.x - b.x) / Math.max(1, b.width)).toFixed(4)),
+        y: Number(((obj.bbox.y - b.y) / Math.max(1, b.height)).toFixed(4)),
+        width: Number((obj.bbox.width / Math.max(1, b.width)).toFixed(4)),
+        height: Number((obj.bbox.height / Math.max(1, b.height)).toFixed(4)),
+      };
+    }
+    const cacheKey = observationKey(workspacePath, ownerId);
+    const generation = sceneGeneration([app], elements);
+    observations.set(cacheKey, { workspacePath, objects, width: Number(parsed.width || b.width || 1), height: Number(parsed.height || b.height || 1), at: new Date().toISOString(), sceneGeneration: generation });
+    const payload: Record<string, unknown> = {
+      ok: true,
+      action: 'app_observe',
+      app,
+      screenshot_path: '[ephemeral application screenshot attached to this tool result when the selected model supports vision; deleted immediately after model input is prepared]',
+      screenshot_retention: allowEphemeralVisionImage ? 'ephemeral-delete-after-vision-input' : 'ephemeral-deleted-before-tool-return',
+      coordinate_system: 'virtual-screen-pixels',
+      perception: {
+        mode: 'native-application-screenshot-plus-windows-ui-automation',
+        application_scope: 'single-visible-window',
+        element_count: elements.length,
+        visited_count: ui.visited,
+        scene_generation: generation,
+        scene_summary: buildSceneSummary(objects, Number(parsed.width || b.width || 1), Number(parsed.height || b.height || 1)),
+        objects: compactSemanticObjects(objects),
+        warning: ui.error || undefined,
+      },
+      telemetry: {
+        capture_ms: result.elapsedMs,
+        uia_ms: ui.elapsedMs,
+        total_ms: Date.now() - totalStarted,
+        element_count: elements.length,
+        visited_count: ui.visited,
+      },
+      ...parsed,
     };
+    if (includeRawUi) (payload.perception as Record<string, unknown>).elements = elements;
+    const imageAvailable = parsed.image_available === true && fs.existsSync(outPath);
+    if (allowEphemeralVisionImage && imageAvailable) {
+      payload.vision_image_path = outPath;
+      retainedForVision = true;
+    } else if (allowEphemeralVisionImage && !imageAvailable) {
+      payload.screenshot_warning = 'Screenshot exceeded the 768 KiB transfer budget and was omitted; semantic UI data remains available.';
+    }
+    return payload;
+  } finally {
+    if (!retainedForVision) removeEphemeralScreenshot(outPath);
   }
-  const cacheKey = observationKey(workspacePath, ownerId);
-  const generation = sceneGeneration([app], elements);
-  observations.set(cacheKey, { workspacePath, objects, width: Number(parsed.width || b.width || 1), height: Number(parsed.height || b.height || 1), at: new Date().toISOString(), sceneGeneration: generation });
-  const payload: Record<string, unknown> = {
-    ok: true,
-    action: 'app_observe',
-    app,
-    screenshot_path: '[ephemeral application screenshot attached to this tool result when the selected model supports vision; deleted immediately after model input is prepared]',
-    screenshot_retention: allowEphemeralVisionImage ? 'ephemeral-delete-after-vision-input' : 'ephemeral-deleted-before-tool-return',
-    coordinate_system: 'virtual-screen-pixels',
-    perception: {
-      mode: 'native-application-screenshot-plus-windows-ui-automation',
-      application_scope: 'single-visible-window',
-      element_count: elements.length,
-      visited_count: ui.visited,
-      scene_generation: generation,
-      scene_summary: buildSceneSummary(objects, Number(parsed.width || b.width || 1), Number(parsed.height || b.height || 1)),
-      objects: compactSemanticObjects(objects),
-      warning: ui.error || undefined,
-    },
-    telemetry: {
-      capture_ms: result.elapsedMs,
-      uia_ms: ui.elapsedMs,
-      total_ms: Date.now() - totalStarted,
-      element_count: elements.length,
-      visited_count: ui.visited,
-    },
-    ...parsed,
-  };
-  if (includeRawUi) (payload.perception as Record<string, unknown>).elements = elements;
-  const imageAvailable = parsed.image_available === true && fs.existsSync(outPath);
-  if (allowEphemeralVisionImage && imageAvailable) {
-    payload.vision_image_path = outPath;
-  } else {
-    try { fs.unlinkSync(outPath); } catch {}
-    if (allowEphemeralVisionImage && !imageAvailable) payload.screenshot_warning = 'Screenshot exceeded the 768 KiB transfer budget and was omitted; semantic UI data remains available.';
-  }
-  return payload;
 }
 
 async function activateApp(app: AppWindowInfo, dryRun = false): Promise<Record<string, unknown>> {
@@ -800,68 +938,80 @@ function resolveTarget(targetId: string, workspacePath: string, ownerId: string)
   return { x: target.center.x, y: target.center.y, target };
 }
 
-async function screenshot(workspacePath: string, ownerId: string, allowEphemeralVisionImage: boolean, includeRawUi = false): Promise<Record<string, unknown>> {
+async function screenshot(
+  workspacePath: string,
+  ownerId: string,
+  allowEphemeralVisionImage: boolean,
+  includeRawUi = false,
+  captureMaxWidth?: number,
+  captureMaxHeight?: number,
+): Promise<Record<string, unknown>> {
   const totalStarted = Date.now();
-  const outPath = path.join(tempScreenshotDir(), `observe-${timestampName()}-${crypto.randomBytes(4).toString('hex')}.jpg`);
-  const script = jpegCaptureScript(outPath, [
-    '$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen',
-    '$x=$bounds.Left; $y=$bounds.Top; $w=$bounds.Width; $h=$bounds.Height',
-  ]);
-  const foreground = await foregroundWindowHandle();
-  const [result, ui, apps] = await Promise.all([
-    runPowerShell(script, 30000),
-    observeUiAutomation(30000, foreground.handle),
-    observeAppWindows(30000),
-  ]);
-  if (!result.ok) return { ok: false, action: 'observe', error: result.output };
-  let parsed: Record<string, unknown> = {};
-  try { parsed = JSON.parse(result.output); } catch { parsed = { raw: result.output }; }
-  const screenWidth = Number(parsed.width || 1);
-  const screenHeight = Number(parsed.height || 1);
-  const objects = semanticObjects(ui.elements, screenWidth, screenHeight, workspacePath, ownerId);
-  const generation = sceneGeneration(apps.apps, ui.elements);
-  observations.set(observationKey(workspacePath, ownerId), { workspacePath, objects, width: screenWidth, height: screenHeight, at: new Date().toISOString(), sceneGeneration: generation });
-  const payload: Record<string, unknown> = {
-    ok: true,
-    action: 'observe',
-    screenshot_path: '[ephemeral screenshot attached to this tool result when the selected model supports vision; deleted immediately after model input is prepared]',
-    screenshot_retention: allowEphemeralVisionImage ? 'ephemeral-delete-after-vision-input' : 'ephemeral-deleted-before-tool-return',
-    coordinate_system: 'virtual-screen-pixels',
-    perception: {
-      mode: 'native-screenshot-plus-windows-ui-automation',
-      vision_assist: {
-        when_model_supports_vision: 'The Agent sends this screenshot as image input together with the UI Automation element tree, so visual recognition and control bounding boxes can be used in the same decision step.',
-        fallback_without_vision: 'Use the UI Automation element tree, bbox, center coordinates, and semantic target IDs only; no screenshot file path is retained or exposed.',
+  const outPath = ephemeralScreenshotPath('observe');
+  let retainedForVision = false;
+  try {
+    const script = jpegCaptureScript(outPath, [
+      '$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen',
+      '$x=$bounds.Left; $y=$bounds.Top; $w=$bounds.Width; $h=$bounds.Height',
+    ], captureMaxWidth, captureMaxHeight);
+    const foreground = await foregroundWindowHandle();
+    const [result, ui, apps] = await Promise.all([
+      runPowerShell(script, 30000),
+      observeUiAutomation(30000, foreground.handle),
+      observeAppWindows(30000),
+    ]);
+    if (!result.ok) return captureFailure('observe');
+    let parsed: Record<string, unknown> = {};
+    try { parsed = JSON.parse(result.output); } catch { return captureFailure('observe'); }
+    const screenWidth = Number(parsed.width || 1);
+    const screenHeight = Number(parsed.height || 1);
+    const objects = semanticObjects(ui.elements, screenWidth, screenHeight, workspacePath, ownerId);
+    const generation = sceneGeneration(apps.apps, ui.elements);
+    observations.set(observationKey(workspacePath, ownerId), { workspacePath, objects, width: screenWidth, height: screenHeight, at: new Date().toISOString(), sceneGeneration: generation });
+    const payload: Record<string, unknown> = {
+      ok: true,
+      action: 'observe',
+      screenshot_path: '[ephemeral screenshot attached to this tool result when the selected model supports vision; deleted immediately after model input is prepared]',
+      screenshot_retention: allowEphemeralVisionImage ? 'ephemeral-delete-after-vision-input' : 'ephemeral-deleted-before-tool-return',
+      coordinate_system: 'virtual-screen-pixels',
+      perception: {
+        mode: 'native-screenshot-plus-windows-ui-automation',
+        vision_assist: {
+          when_model_supports_vision: 'The Agent sends this screenshot as image input together with the UI Automation element tree, so visual recognition and control bounding boxes can be used in the same decision step.',
+          fallback_without_vision: 'Use the UI Automation element tree, bbox, center coordinates, and semantic target IDs only; no screenshot file path is retained or exposed.',
+        },
+        element_count: ui.elements.length,
+        visited_count: ui.visited,
+        scene_generation: generation,
+        scene_summary: buildSceneSummary(objects, screenWidth, screenHeight),
+        objects: compactSemanticObjects(objects),
+        object_usage: 'Prefer target_id from scene_summary.high_priority_objects or objects for click/move/scroll when available; it resolves to the latest observed center coordinate and keeps actions tied to a semantic UI object.',
+        warning: foreground.error || ui.error || apps.error || undefined,
+        note: 'Inspired by capture-parse-decide-act and MCP-style Computer Control agents: screenshot capture plus native Windows UI Automation text/control bounding boxes, semantic target objects, stable target IDs, high-priority object summaries, normalized bboxes, allowed actions, and risk hints. It does not copy third-party code.',
       },
-      element_count: ui.elements.length,
-      visited_count: ui.visited,
-      scene_generation: generation,
-      scene_summary: buildSceneSummary(objects, screenWidth, screenHeight),
-      objects: compactSemanticObjects(objects),
-      object_usage: 'Prefer target_id from scene_summary.high_priority_objects or objects for click/move/scroll when available; it resolves to the latest observed center coordinate and keeps actions tied to a semantic UI object.',
-      warning: foreground.error || ui.error || apps.error || undefined,
-      note: 'Inspired by capture-parse-decide-act and MCP-style Computer Control agents: screenshot capture plus native Windows UI Automation text/control bounding boxes, semantic target objects, stable target IDs, high-priority object summaries, normalized bboxes, allowed actions, and risk hints. It does not copy third-party code.',
-    },
-    telemetry: {
-      capture_ms: result.elapsedMs,
-      uia_ms: ui.elapsedMs,
-      app_list_ms: apps.elapsedMs,
-      foreground_ms: foreground.elapsedMs,
-      total_ms: Date.now() - totalStarted,
-      element_count: ui.elements.length,
-      visited_count: ui.visited,
-    },
-    ...parsed,
-  };
-  if (includeRawUi) (payload.perception as Record<string, unknown>).elements = ui.elements;
-  const imageAvailable = parsed.image_available === true && fs.existsSync(outPath);
-  if (allowEphemeralVisionImage && imageAvailable) {
-    payload.vision_image_path = outPath;
-  } else {
-    try { fs.unlinkSync(outPath); } catch {}
-    if (allowEphemeralVisionImage && !imageAvailable) payload.screenshot_warning = 'Screenshot exceeded the 768 KiB transfer budget and was omitted; semantic UI data remains available.';
+      telemetry: {
+        capture_ms: result.elapsedMs,
+        uia_ms: ui.elapsedMs,
+        app_list_ms: apps.elapsedMs,
+        foreground_ms: foreground.elapsedMs,
+        total_ms: Date.now() - totalStarted,
+        element_count: ui.elements.length,
+        visited_count: ui.visited,
+      },
+      ...parsed,
+    };
+    if (includeRawUi) (payload.perception as Record<string, unknown>).elements = ui.elements;
+    const imageAvailable = parsed.image_available === true && fs.existsSync(outPath);
+    if (allowEphemeralVisionImage && imageAvailable) {
+      payload.vision_image_path = outPath;
+      retainedForVision = true;
+    } else if (allowEphemeralVisionImage && !imageAvailable) {
+      payload.screenshot_warning = 'Screenshot exceeded the 768 KiB transfer budget and was omitted; semantic UI data remains available.';
+    }
+    return payload;
+  } finally {
+    if (!retainedForVision) removeEphemeralScreenshot(outPath);
   }
-  return payload;
 }
 
 async function wait(durationMs: number): Promise<Record<string, unknown>> {
@@ -1016,6 +1166,9 @@ async function executeSequence(options: ComputerUseOptions, ownerId: string): Pr
 }
 
 function stringifyComputerUseResult(result: Record<string, unknown>): string {
+  const retainedVisionImagePath = typeof result.vision_image_path === 'string' && result.vision_image_path.length <= 4096
+    ? result.vision_image_path
+    : '';
   let output = JSON.stringify(result, null, 2);
   if (Buffer.byteLength(output, 'utf8') <= 32768) return output;
   const perception = result.perception as Record<string, unknown> | undefined;
@@ -1028,8 +1181,21 @@ function stringifyComputerUseResult(result: Record<string, unknown>): string {
   output = JSON.stringify(result, null, 2);
   return Buffer.byteLength(output, 'utf8') <= 32768
     ? output
-    : JSON.stringify({ ok: result.ok === true, action: result.action, error: result.error, warning: 'Computer Use result exceeded 32 KiB and was compacted.', telemetry: result.telemetry }, null, 2);
+    : JSON.stringify({
+      ok: result.ok === true,
+      action: result.action,
+      error: result.error,
+      warning: 'Computer Use result exceeded 32 KiB and was compacted.',
+      telemetry: result.telemetry,
+      ...(retainedVisionImagePath ? { vision_image_path: retainedVisionImagePath } : {}),
+    }, null, 2);
 }
+
+export const computerUseInternals = {
+  cleanupStaleScreenshots,
+  ephemeralScreenshotPath,
+  stringifyComputerUseResult,
+};
 
 export async function runComputerUse(options: ComputerUseOptions): Promise<string> {
   const action = String(options.action || 'observe').toLowerCase();
@@ -1049,14 +1215,29 @@ export async function runComputerUse(options: ComputerUseOptions): Promise<strin
     await stopTakeoverOverlay();
     result = { ok: true, action: 'takeover_stop', takeover: false };
   } else if (action === 'observe') {
-    result = await screenshot(options.workspacePath, ownerId, !!options.allowEphemeralVisionImage, !!options.includeRawUi);
+    result = await screenshot(
+      options.workspacePath,
+      ownerId,
+      !!options.allowEphemeralVisionImage,
+      !!options.includeRawUi,
+      options.captureMaxWidth,
+      options.captureMaxHeight,
+    );
   } else if (action === 'app_list') {
     const apps = await observeAppWindows(Number(options.maxChars || 60000));
     result = { ok: true, action, applications: apps.apps, count: apps.apps.length, warning: apps.error || undefined, telemetry: { total_ms: apps.elapsedMs } };
   } else if (action === 'app_observe') {
     const selected = await selectAppWindow(options.appTarget, options.windowHandle);
     result = selected.app
-      ? await cropScreenshot(options.workspacePath, ownerId, !!options.allowEphemeralVisionImage, selected.app, !!options.includeRawUi)
+      ? await cropScreenshot(
+        options.workspacePath,
+        ownerId,
+        !!options.allowEphemeralVisionImage,
+        selected.app,
+        !!options.includeRawUi,
+        options.captureMaxWidth,
+        options.captureMaxHeight,
+      )
       : { ok: false, action, error: selected.error, applications: selected.apps.slice(0, 20) };
   } else if (action === 'app_activate') {
     const selected = await selectAppWindow(options.appTarget, options.windowHandle);

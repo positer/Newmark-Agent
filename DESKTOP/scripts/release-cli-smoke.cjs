@@ -6,9 +6,13 @@ const { spawn, spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const appRoot = path.resolve(__dirname, '..');
-const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
+const exePath = path.resolve(process.env.NEWMARK_TEST_EXE || path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe'));
 const appVersion = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8')).version;
 const keepRoot = process.env.NEWMARK_KEEP_SMOKE === '1';
+const configuredCliTimeoutMs = Number(process.env.NEWMARK_RELEASE_CLI_TIMEOUT_MS || 90000);
+const cliTimeoutMs = Number.isFinite(configuredCliTimeoutMs)
+  ? Math.max(1000, Math.min(300000, Math.trunc(configuredCliTimeoutMs)))
+  : 90000;
 
 function log(message) {
   console.log(`[release-cli-smoke] ${message}`);
@@ -22,10 +26,42 @@ function psQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
+function readProcessId(pidPath) {
+  try {
+    const pid = Number(fs.readFileSync(pidPath, 'utf8').trim());
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function processIsRunning(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function terminateProcessTree(pid) {
+  if (!pid || process.platform !== 'win32') return;
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
+  const taskkill = path.join(systemRoot, 'System32', 'taskkill.exe');
+  spawnSync(taskkill, ['/PID', String(pid), '/T', '/F'], {
+    windowsHide: true,
+    stdio: 'ignore',
+    shell: false,
+    timeout: 15000,
+  });
+}
+
 function runPowerShellCli(args, root, extraEnv = {}) {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-cli-run-'));
   const stdoutPath = path.join(workDir, 'stdout.txt');
   const stderrPath = path.join(workDir, 'stderr.txt');
+  const pidPath = path.join(workDir, 'pid.txt');
   const scriptPath = path.join(workDir, 'run.ps1');
   const argList = args.map(psQuote).join(', ');
   fs.writeFileSync(scriptPath, [
@@ -34,7 +70,10 @@ function runPowerShellCli(args, root, extraEnv = {}) {
     `$argList = @(${argList})`,
     `$stdout = ${psQuote(stdoutPath)}`,
     `$stderr = ${psQuote(stderrPath)}`,
-    '$p = Start-Process -FilePath $exe -ArgumentList $argList -NoNewWindow -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr',
+    `$pidFile = ${psQuote(pidPath)}`,
+    '$p = Start-Process -FilePath $exe -ArgumentList $argList -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr',
+    '$p.Id | Set-Content -LiteralPath $pidFile -Encoding ascii -NoNewline',
+    '$p.WaitForExit()',
     'exit $p.ExitCode',
   ].join('\r\n'), 'utf8');
 
@@ -51,16 +90,25 @@ function runPowerShellCli(args, root, extraEnv = {}) {
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', chunk => { psStdout += chunk; });
     child.stderr.on('data', chunk => { psStderr += chunk; });
+    let timedOut = false;
     const timeout = setTimeout(() => {
+      timedOut = true;
+      const cliPid = readProcessId(pidPath);
+      // Kill the Electron tree before its PowerShell parent. Killing only the
+      // wrapper reparents Chromium GPU/network children and leaks them into the
+      // release build that invoked this smoke.
+      terminateProcessTree(cliPid);
       child.kill('SIGKILL');
-      reject(new Error(`PowerShell timed out for ${args[0]}. stdout=${psStdout} stderr=${psStderr}`));
-    }, 90000);
+      reject(new Error(`PowerShell timed out after ${cliTimeoutMs}ms for ${args[0]} (pid=${cliPid || 'unknown'}). stdout=${psStdout} stderr=${psStderr}`));
+    }, cliTimeoutMs);
     child.on('error', error => {
       clearTimeout(timeout);
+      terminateProcessTree(readProcessId(pidPath));
       reject(new Error(`PowerShell failed for ${args[0]}: ${error.message}`));
     });
     child.on('close', code => {
       clearTimeout(timeout);
+      const cliPid = readProcessId(pidPath);
       const stdout = fs.existsSync(stdoutPath) ? fs.readFileSync(stdoutPath, 'utf8') : '';
       const stderr = fs.existsSync(stderrPath) ? fs.readFileSync(stderrPath, 'utf8') : '';
       try {
@@ -68,26 +116,14 @@ function runPowerShellCli(args, root, extraEnv = {}) {
       } catch (error) {
         log(`warning: could not remove temp CLI run dir ${workDir}: ${error.message}`);
       }
+      if (timedOut) return;
       if (code !== 0) {
         reject(new Error(`CLI ${args[0]} exited ${code}. stdout=${stdout || psStdout} stderr=${stderr || psStderr}`));
         return;
       }
-      const running = spawnSync('powershell.exe', [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        "(@(Get-Process | Where-Object { $_.Path -like '*Newmark Agent*release*' })).Count",
-      ], { encoding: 'utf8', windowsHide: true });
-      if (Number(String(running.stdout || '').trim()) > 0) {
-        spawnSync('powershell.exe', [
-          '-NoProfile',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-Command',
-          "Get-Process | Where-Object { $_.Path -like '*Newmark Agent*release*' } | Stop-Process -Force",
-        ], { windowsHide: true });
-        reject(new Error(`CLI ${args[0]} left a release GUI process running`));
+      if (processIsRunning(cliPid)) {
+        terminateProcessTree(cliPid);
+        reject(new Error(`CLI ${args[0]} left its packaged process tree running (pid=${cliPid})`));
         return;
       }
       resolve({ stdout, stderr, root });
@@ -120,6 +156,41 @@ function writeConfig(root, port) {
   fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify(config, null, 2), 'utf8');
 }
 
+function collectStrings(value, output = []) {
+  if (typeof value === 'string') output.push(value);
+  else if (Array.isArray(value)) value.forEach(item => collectStrings(item, output));
+  else if (value && typeof value === 'object') Object.values(value).forEach(item => collectStrings(item, output));
+  return output;
+}
+
+function validationMockReply(parsed, fallback) {
+  const text = collectStrings(parsed).join('\n');
+  const nonce = text.match(/Nonce:\s*([A-Za-z0-9._:-]+)/)?.[1]
+    || text.match(/"const"\s*:\s*"([A-Za-z0-9._:-]+)"/)?.[1]
+    || '';
+  const serializedMessages = JSON.stringify(parsed.messages || parsed.input || []);
+  const hasToolResult = serializedMessages.includes('"role":"tool"') || serializedMessages.includes('tool_result');
+  const hasValidationEchoTool = JSON.stringify(parsed.tools || []).includes('newmark_validation_echo');
+  if (text.includes('Return exactly NEWMARK_HEALTH_OK')) return { kind: 'text', text: 'NEWMARK_HEALTH_OK' };
+  if (JSON.stringify(parsed).includes('data:image/png;base64,')) {
+    return { kind: 'text', text: '{"left":"red_square","right":"blue_circle","bottom":"green_triangle","marker":"NM7"}' };
+  }
+  if (hasValidationEchoTool && hasToolResult) return { kind: 'text', text: nonce };
+  if (hasValidationEchoTool) {
+    return {
+      kind: 'tool',
+      id: 'call_newmark_validation',
+      name: 'newmark_validation_echo',
+      input: { nonce },
+    };
+  }
+  if (text.includes('strict JSON object') || text.includes('"additionalProperties":false')) {
+    return { kind: 'text', text: JSON.stringify({ nonce }) };
+  }
+  if (nonce) return { kind: 'text', text: nonce };
+  return { kind: 'text', text: fallback };
+}
+
 function startMockServer() {
   const requests = [];
   const sockets = new Set();
@@ -147,14 +218,18 @@ function startMockServer() {
         res.end(JSON.stringify({ data: [] }));
         return;
       }
-      if (req.method === 'POST' && req.url === '/anthropic/messages') {
+      if (req.method === 'GET' && req.url === '/v1/models') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ content: [{ type: 'text', text: 'ANTHROPIC_RELEASE_OK' }] }));
+        res.end(JSON.stringify({ data: [{ id: 'release-cli-mock' }, { id: 'gpt-5.5' }] }));
         return;
       }
-      if (req.method === 'POST' && req.url === '/env-anthropic/messages') {
+      if (req.method === 'POST' && (req.url === '/anthropic/messages' || req.url === '/env-anthropic/messages')) {
+        const reply = validationMockReply(parsed, req.url === '/anthropic/messages' ? 'ANTHROPIC_RELEASE_OK' : 'ANTHROPIC_ENV_RELEASE_OK');
+        const content = reply.kind === 'tool'
+          ? [{ type: 'tool_use', id: reply.id, name: reply.name, input: reply.input }]
+          : [{ type: 'text', text: reply.text }];
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ content: [{ type: 'text', text: 'ANTHROPIC_ENV_RELEASE_OK' }] }));
+        res.end(JSON.stringify({ content }));
         return;
       }
       if (req.method === 'POST' && req.url === '/bad-env-anthropic/messages') {
@@ -162,15 +237,21 @@ function startMockServer() {
         res.end(JSON.stringify({ content: [] }));
         return;
       }
-      const isVisionProbe = body.includes('RED_SQUARE') && body.includes('image_url') && body.includes('data:image/png;base64,');
-      const currentResponseText = isVisionProbe ? 'RED_SQUARE' : responseText;
+      const reply = validationMockReply(parsed, responseText);
       if (parsed.stream) {
         res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' });
-        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: currentResponseText } }] })}\n\n`);
+        if (reply.kind === 'tool') {
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: reply.id, type: 'function', function: { name: reply.name, arguments: JSON.stringify(reply.input) } }] } }] })}\n\n`);
+        } else {
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: reply.text } }] })}\n\n`);
+        }
         res.end('data: [DONE]\n\n');
       } else {
+        const message = reply.kind === 'tool'
+          ? { content: '', tool_calls: [{ id: reply.id, type: 'function', function: { name: reply.name, arguments: JSON.stringify(reply.input) } }] }
+          : { content: reply.text };
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ choices: [{ message: { content: currentResponseText } }] }));
+        res.end(JSON.stringify({ choices: [{ message }] }));
       }
     });
   });
@@ -212,7 +293,8 @@ function startMockServer() {
     const toolArgsFile = path.join(root, 'tool-args.json');
     fs.writeFileSync(toolArgsFile, JSON.stringify({ path: toolFile, content: 'RELEASE_CLI_TOOL_OK' }), 'utf8');
     const tool = await runPowerShellCli(['tool', 'write', '--args-file', toolArgsFile, '--root', root], root);
-    if (!tool.stdout.includes('[write] OK')) fail('tool write did not report success');
+    const toolResult = JSON.parse(tool.stdout);
+    if (toolResult.ok !== true || toolResult.tool !== 'write' || !Object.prototype.hasOwnProperty.call(toolResult, 'result')) fail(`tool write did not return the unified JSON envelope: ${tool.stdout}`);
     if (fs.readFileSync(toolFile, 'utf8') !== 'RELEASE_CLI_TOOL_OK') fail('tool write did not create expected file');
     log('tool ok');
 
@@ -232,23 +314,26 @@ function startMockServer() {
     const parsedValidation = JSON.parse(validation.stdout);
     if (!Array.isArray(parsedValidation)) fail(`validate-models did not return an array: ${validation.stdout}`);
     const releaseModelValidation = parsedValidation.find(r => r.name === 'ReleaseCliMock/release-cli-mock');
-    if (!releaseModelValidation || releaseModelValidation.status !== 'available') {
-      fail(`validate-models did not mark selected release model available: ${validation.stdout}`);
+    if (!releaseModelValidation || !['verified', 'degraded'].includes(releaseModelValidation.status) || !String(releaseModelValidation.notes || '').includes('level=standard')) {
+      fail(`validate-models did not grant Standard eligibility to the selected release model: ${validation.stdout}`);
     }
     if (validation.stdout.includes('mock-key')) fail('validate-models leaked provider API key');
-    if (!mock.requests.some(r => r.url === '/v1/chat/completions' && r.body.includes('"model":"release-cli-mock"') && r.body.includes('"content":"Hi"'))) {
-      fail('validate-models did not call chat completions for the selected release model');
+    const selectedProbeRequests = mock.requests.filter(r => r.url === '/v1/chat/completions' && r.body.includes('"model":"release-cli-mock"'));
+    if (!selectedProbeRequests.some(r => r.body.includes('NEWMARK_HEALTH_OK'))
+      || !selectedProbeRequests.some(r => r.body.includes('newmark_validation_echo'))
+      || !selectedProbeRequests.some(r => r.body.includes('strict JSON object'))) {
+      fail('validate-models did not execute the Standard health, strict-JSON, and tool probe families');
     }
     const visionValidation = await runPowerShellCli(['validate-models', '--selected', 'ReleaseCliMock/gpt-5.5', '--root', root], root);
     const parsedVisionValidation = JSON.parse(visionValidation.stdout);
     const releaseVisionValidation = parsedVisionValidation.find(r => r.name === 'ReleaseCliMock/gpt-5.5');
-    if (!releaseVisionValidation || releaseVisionValidation.status !== 'available' || releaseVisionValidation.vision_input !== true) {
+    if (!releaseVisionValidation || !['verified', 'degraded'].includes(releaseVisionValidation.status) || releaseVisionValidation.vision_input !== true || !String(releaseVisionValidation.notes || '').includes('level=standard')) {
       fail(`validate-models did not infer GPT-5.5 vision input in packaged CLI: ${visionValidation.stdout}`);
     }
     const validatedConfig = JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
     const validatedProviders = validatedConfig.models?.providers?.value || validatedConfig.models?.providers || [];
     const validatedGpt55 = validatedProviders.find(p => p.name === 'ReleaseCliMock')?.models?.find(m => m.name === 'gpt-5.5');
-    if (!validatedGpt55 || validatedGpt55.vision !== true || validatedGpt55.evaluation?.vision_input !== true || !String(validatedGpt55.description || '').includes('vision-input')) {
+    if (!validatedGpt55 || validatedGpt55.vision !== true || validatedGpt55.evaluation?.vision_input !== true || validatedGpt55.validation?.level !== 'standard' || !['verified', 'degraded'].includes(validatedGpt55.validation?.status) || !String(validatedGpt55.description || '').includes('vision-input')) {
       fail(`validate-models did not persist inferred GPT-5.5 vision metadata: ${JSON.stringify(validatedGpt55)}`);
     }
     log('validate-models ok');
@@ -345,7 +430,7 @@ function startMockServer() {
     const persistedProviders = updatedConfig.models?.providers?.value || updatedConfig.models?.providers || [];
     const releaseAnthropic = persistedProviders.find(p => p.name === 'ReleaseAnthropic');
     if (!releaseAnthropic || releaseAnthropic.protocol !== 'anthropic') fail('fuzzy-inject did not persist anthropic protocol');
-    if (!releaseAnthropic.models.some(m => m.name === 'claude-release-cli' && m.evaluation?.status === 'available')) fail('fuzzy-inject did not persist available model evaluation');
+    if (!releaseAnthropic.models.some(m => m.name === 'claude-release-cli' && ['verified', 'degraded'].includes(m.validation?.status) && m.validation?.level === 'standard')) fail('fuzzy-inject did not persist Standard model validation');
     const modelListRequest = mock.requests.find(r => r.url === '/anthropic/models');
     const messageRequest = mock.requests.find(r => r.url === '/anthropic/messages');
     if (!modelListRequest || !messageRequest) fail('fuzzy-inject did not call anthropic /models and /messages');
@@ -376,7 +461,7 @@ function startMockServer() {
     const envProviders = envUpdatedConfig.models?.providers?.value || envUpdatedConfig.models?.providers || [];
     const releaseEnvAnthropic = envProviders.find(p => p.name === 'ReleaseEnvAnthropic');
     if (!releaseEnvAnthropic || releaseEnvAnthropic.protocol !== 'anthropic') fail('env-file fuzzy-inject did not persist anthropic protocol');
-    if (!releaseEnvAnthropic.models.some(m => m.name === 'claude-release-env' && m.evaluation?.status === 'available')) fail('env-file fuzzy-inject did not persist available env model evaluation');
+    if (!releaseEnvAnthropic.models.some(m => m.name === 'claude-release-env' && ['verified', 'degraded'].includes(m.validation?.status) && m.validation?.level === 'standard')) fail('env-file fuzzy-inject did not persist Standard env model validation');
     if (!mock.requests.some(r => r.url === '/env-anthropic/models') || !mock.requests.some(r => r.url === '/env-anthropic/messages')) {
       fail('env-file fuzzy-inject did not call env anthropic /models and /messages');
     }

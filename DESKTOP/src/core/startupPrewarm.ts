@@ -38,8 +38,84 @@ export interface StartupPrewarmReport {
 
 export type StartupPrewarmProgressListener = (progress: StartupPrewarmProgress) => void;
 
+export interface DeferredStartupTask<T = unknown> {
+  id: string;
+  label: string;
+  delayMs?: number;
+  run: (signal: AbortSignal) => Promise<T> | T;
+}
+
+export interface DeferredStartupTaskResult<T = unknown> {
+  id: string;
+  label: string;
+  status: 'ready' | 'warning' | 'cancelled';
+  value?: T;
+  error?: string;
+}
+
+export interface DeferredStartupTaskOptions {
+  delayMs?: number;
+  signal?: AbortSignal;
+  onResult?: (result: DeferredStartupTaskResult) => void;
+}
+
+export interface DeferredStartupTaskHandle {
+  signal: AbortSignal;
+  done: Promise<DeferredStartupTaskResult[]>;
+  cancel: () => void;
+}
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Starts noncritical work after promotion without coupling its outcome to the
+ * first-frame barrier. Cancelling settles pending/running receipts promptly;
+ * task implementations also receive the signal so they can stop underlying IO.
+ */
+export function scheduleDeferredStartupTasks(
+  tasks: DeferredStartupTask[],
+  options: DeferredStartupTaskOptions = {},
+): DeferredStartupTaskHandle {
+  const controller = new AbortController();
+  const externalSignal = options.signal;
+  const cancel = (): void => controller.abort();
+  if (externalSignal?.aborted) cancel();
+  else externalSignal?.addEventListener('abort', cancel, { once: true });
+
+  const done = Promise.all(tasks.map(task => new Promise<DeferredStartupTaskResult>(resolve => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
+    const settle = (result: DeferredStartupTaskResult): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      controller.signal.removeEventListener('abort', onAbort);
+      options.onResult?.(result);
+      resolve(result);
+    };
+    const onAbort = (): void => settle({ id: task.id, label: task.label, status: 'cancelled' });
+    controller.signal.addEventListener('abort', onAbort, { once: true });
+    const delayMs = Math.max(0, Number(task.delayMs ?? options.delayMs ?? 0));
+    timer = setTimeout(() => {
+      timer = null;
+      if (controller.signal.aborted) return onAbort();
+      Promise.resolve()
+        .then(() => task.run(controller.signal))
+        .then(value => settle(controller.signal.aborted
+          ? { id: task.id, label: task.label, status: 'cancelled' }
+          : { id: task.id, label: task.label, status: 'ready', value }))
+        .catch(error => settle(controller.signal.aborted
+          ? { id: task.id, label: task.label, status: 'cancelled' }
+          : { id: task.id, label: task.label, status: 'warning', error: errorText(error) }));
+    }, delayMs);
+    if (controller.signal.aborted) onAbort();
+  }))).finally(() => {
+    externalSignal?.removeEventListener('abort', cancel);
+  });
+
+  return { signal: controller.signal, done, cancel };
 }
 
 /**

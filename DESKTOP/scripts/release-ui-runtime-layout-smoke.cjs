@@ -76,6 +76,33 @@ async function evaluate(cdp, expression) {
       await sleep(200);
       if (attempt === 99) fail('renderer initialization timeout');
     }
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await evaluate(cdp, `!!document.querySelector('#left-ws-list .left-ws-item.active')`)) break;
+      await sleep(100);
+      if (attempt === 99) fail('deferred workspace list rendering timeout');
+    }
+    const workspaceFocusMenu = await evaluate(cdp, `(async () => {
+      const secondary = document.getElementById('left-secondary');
+      const beforeConversationId = typeof activeConversationId === 'function' ? activeConversationId() : '';
+      window.setLeftSecondaryOpen(false);
+      const activeWorkspace = document.querySelector('#left-ws-list .left-ws-item.active');
+      if (activeWorkspace) activeWorkspace.click();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return {
+        activeWorkspaceFound: !!activeWorkspace,
+        secondaryOpen: !!secondary?.classList.contains('open'),
+        secondaryCollapsed: !!window.state.secondaryCollapsed,
+        beforeConversationId,
+        afterConversationId: typeof activeConversationId === 'function' ? activeConversationId() : '',
+      };
+    })()`);
+    if (!workspaceFocusMenu.activeWorkspaceFound || !workspaceFocusMenu.secondaryOpen || workspaceFocusMenu.secondaryCollapsed
+      || workspaceFocusMenu.beforeConversationId !== workspaceFocusMenu.afterConversationId) {
+      fail(`focused workspace did not reopen its conversation menu: ${JSON.stringify(workspaceFocusMenu)}`);
+    }
+    await cdp.call('Page.enable');
+    const focusMenuScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(path.join(repoRoot, 'archive', '2026-07-14-workspace-focus-menu.png'), Buffer.from(focusMenuScreenshot.data, 'base64'));
     const activeState = await evaluate(cdp, `window.api.getState()`);
     const workspacePath = String(activeState?.workspaces?.current?.path || '');
     if (!workspacePath) fail('runtime layout smoke has no active workspace');
@@ -201,8 +228,64 @@ async function evaluate(cdp, expression) {
     await evaluate(cdp, `window.refreshTitlebarThemeIcon()`);
     await sleep(100);
     const lightSystemIcon = await evaluate(cdp, `document.getElementById('title-app-icon').currentSrc`);
-    if (!String(darkAppIcon).includes('app-icon-dark.png') || !String(lightAppIcon).includes('app-icon-light.png') || !String(darkSystemIcon).includes('app-icon-dark.png') || !String(lightSystemIcon).includes('app-icon-light.png')) fail(`application theme title icon mismatch: ${JSON.stringify({ darkAppIcon, lightAppIcon, darkSystemIcon, lightSystemIcon })}`);
-    console.log(`[release-ui-runtime-layout-smoke] PASS layout=${JSON.stringify(result)} editor=${JSON.stringify(editor)} icons=${JSON.stringify({ darkAppIcon, lightAppIcon, darkSystemIcon, lightSystemIcon })}`);
+    if (!String(darkAppIcon).includes('app-icon-dark-64.png') || !String(lightAppIcon).includes('app-icon-light-64.png') || !String(darkSystemIcon).includes('app-icon-dark-64.png') || !String(lightSystemIcon).includes('app-icon-light-64.png')) fail(`application theme title icon mismatch: ${JSON.stringify({ darkAppIcon, lightAppIcon, darkSystemIcon, lightSystemIcon })}`);
+    const appearance = await evaluate(cdp, `(async () => {
+      window.setTheme('dark');
+      window.setBackgroundColor('#123456');
+      window.setFontFamily('Segoe UI');
+      await new Promise(resolve => setTimeout(resolve, 250));
+      window.openSettings('general');
+      const backend = await window.api.getState();
+      const rootStyle = getComputedStyle(document.documentElement);
+      return {
+        theme: window.state.theme,
+        background: rootStyle.getPropertyValue('--app-bg').trim(),
+        bodyBackground: getComputedStyle(document.body).backgroundColor,
+        font: rootStyle.getPropertyValue('--font').trim(),
+        backendBackground: backend.backgroundColor,
+        backendFont: backend.fontFamily,
+        backgroundControl: document.getElementById('settings-background-color')?.value || '',
+        fontControl: document.getElementById('settings-font-family')?.value || '',
+      };
+    })()`);
+    if (appearance.theme !== 'dark' || appearance.background.toUpperCase() !== '#123456'
+      || appearance.bodyBackground !== 'rgb(18, 52, 86)' || !appearance.font.includes('Segoe UI')
+      || appearance.backendBackground !== '#123456' || appearance.backendFont !== 'Segoe UI'
+      || appearance.backgroundControl.toUpperCase() !== '#123456' || appearance.fontControl !== 'Segoe UI') {
+      fail(`visual preferences were not applied and persisted: ${JSON.stringify(appearance)}`);
+    }
+    const appearanceScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(path.join(repoRoot, 'archive', '2026-07-14-visual-preferences.png'), Buffer.from(appearanceScreenshot.data, 'base64'));
+    const resetAppearance = await evaluate(cdp, `(async () => {
+      window.resetBackgroundColor();
+      window.resetFontFamily();
+      await new Promise(resolve => setTimeout(resolve, 250));
+      const backend = await window.api.getState();
+      return {
+        background: window.state.backgroundColor,
+        font: window.state.fontFamily,
+        backendBackground: backend.backgroundColor,
+        backendFont: backend.fontFamily,
+      };
+    })()`);
+    if (resetAppearance.background || resetAppearance.font || resetAppearance.backendBackground || resetAppearance.backendFont) fail(`visual preference reset failed: ${JSON.stringify(resetAppearance)}`);
+    const durableImageUi = await evaluate(cdp, `(async () => {
+      window.closeSubWin();
+      await new Promise(resolve => setTimeout(resolve, 250));
+      renderChatMessages([{ role: 'user', content: 'A durable submitted diagram\\n\\n[1 image attachment]', mode: 'build', model: 'fixture', timestamp: 'now', attachments: [{
+        id: 'user-image-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        origin: 'user',
+        name: 'diagram.png',
+        mimeType: 'image/png',
+        dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4AWP4DwQACfsD/c8LaHIAAAAASUVORK5CYII='
+      }] }]);
+      const card = document.querySelector('.conversation-image-attachment');
+      return { cards: document.querySelectorAll('.conversation-image-attachment').length, name: card?.querySelector('span')?.textContent || '', src: card?.querySelector('img')?.getAttribute('src') || '' };
+    })()`);
+    if (durableImageUi.cards !== 1 || durableImageUi.name !== 'diagram.png' || !durableImageUi.src.startsWith('data:image/png;base64,')) fail(`durable user image UI failed: ${JSON.stringify(durableImageUi)}`);
+    const durableImageScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(path.join(repoRoot, 'archive', '2026-07-14-durable-user-image-ui.png'), Buffer.from(durableImageScreenshot.data, 'base64'));
+    console.log(`[release-ui-runtime-layout-smoke] PASS workspaceFocusMenu=${JSON.stringify(workspaceFocusMenu)} layout=${JSON.stringify(result)} editor=${JSON.stringify(editor)} icons=${JSON.stringify({ darkAppIcon, lightAppIcon, darkSystemIcon, lightSystemIcon })} appearance=${JSON.stringify(appearance)} durableImageUi=${JSON.stringify(durableImageUi)}`);
   } finally {
     try { cdp?.ws.close(); } catch {}
     if (child?.pid) spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });

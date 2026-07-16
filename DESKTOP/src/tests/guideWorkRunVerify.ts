@@ -9,6 +9,8 @@ import { ConversationKernel, type AgentPromptMessage } from '../core/conversatio
 import { filterPublicAssistantDelta, resetPublicAssistantDeltaFilter } from '../core/agentKernelRunner';
 import type { AgentWorkEvent, ConversationTarget, GuideReceipt, StreamToken } from '../core/types';
 
+const VALID_GUIDE_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4AWP4DwQACfsD/c8LaHIAAAAASUVORK5CYII=';
+
 const EMPTY_USAGE = {
   input: 0,
   output: 0,
@@ -342,6 +344,113 @@ async function verifyGuideFromCompletionEventAutoContinues(): Promise<void> {
   }
 }
 
+class ReloadedImageGuideRunner extends Agent {
+  readonly guideInputs: AgentPromptMessage[] = [];
+
+  override async process(input: string | AgentPromptMessage): Promise<StreamToken[]> {
+    if (typeof input !== 'string' && input.clientMessageId) {
+      this.guideInputs.push(input);
+      const prepared = this.prepareSubmittedConversationImages(input.images);
+      const displayText = `${input.text}${input.text ? '\n\n' : ''}[${prepared.images.length} image attachment${prepared.images.length === 1 ? '' : 's'}]`;
+      const historyContent = [
+        { type: 'text', text: input.text },
+        ...prepared.images.map(image => ({ type: 'image_url', image_url: { url: image.dataUrl } })),
+      ];
+      this.persistGuideMessage(input.clientMessageId, displayText, input.runId, historyContent, prepared.attachments);
+      this.notifyAgentKernelUserMessageStart(input.text, input.clientMessageId);
+    }
+    return [{ type: 'text', text: 'reloaded-reply' }];
+  }
+}
+
+async function verifyImageOnlyDeferredGuideSurvivesCheckpointReloadExactlyOnce(): Promise<void> {
+  const root = path.join(process.cwd(), 'test-tmp-guide-image-only-reload');
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(root, { recursive: true });
+  let blockedRunner: ClosedGateRunner | undefined;
+  try {
+    const { target, workspace } = workspaceFixture(root);
+    const host = new Agent(root, { agentOnly: true });
+    host.workspace.current = workspace;
+    host.setConversation('default');
+    blockedRunner = new ClosedGateRunner(root);
+    blockedRunner.workspace.current = workspace;
+    blockedRunner.setConversation('default');
+    const firstKernel = new ConversationKernel(root, host, null, { createRunner: () => blockedRunner! });
+    const firstRun = firstKernel.prompt('original prompt', target, {
+      mode: 'build', model: blockedRunner.model, intelligence: blockedRunner.intelligence, inputMode: 'guide', engine: blockedRunner.engine,
+    });
+    await blockedRunner.enteredFirstProcess;
+    const runtime = firstKernel.runtimeState(target);
+    assert.ok(runtime?.runId);
+
+    const deferred = firstKernel.enqueueGuide({
+      clientMessageId: 'guide-image-only-reload',
+      target,
+      runId: runtime!.runId,
+      deliveryMode: 'steer',
+      text: '',
+      images: [{ dataUrl: VALID_GUIDE_PNG, name: 'image-only.png', type: 'image/png' }],
+      createdAt: '2026-07-15T00:10:00.000Z',
+    }) as GuideReceipt & { attachments?: Array<{ id: string; dataUrl?: string }> };
+    assert.equal(deferred.status, 'deferred', 'an image-only Guide is deferred after the active worker steering gate closes');
+    assert.equal(deferred.attachments?.length, 1, 'accepted/deferred receipt owns a durable attachment reference before chat insertion');
+    assert.match(String(deferred.attachments?.[0]?.id || ''), /^user-image-[a-f0-9]{64}$/);
+
+    const stopped = firstKernel.requestStop(target, runtime!.runId);
+    assert.equal(stopped.action, 'graceful');
+    assert.equal(stopped.checkpointed, true, 'first stop checkpoints the deferred image-only Guide');
+    assert.equal(firstKernel.snapshot(target).continuations.length, 1,
+      'checkpoint retains an image-only continuation even though its text is empty');
+    const checkpointState = fs.readFileSync(path.join(workspace!.path, 'conversations', 'state.json'), 'utf8');
+    assert.match(checkpointState, /user-image-[a-f0-9]{64}/,
+      'checkpoint stores a stable attachment reference for the deferred Guide');
+    assert.doesNotMatch(checkpointState, /data:image\/(?:png|jpe?g);base64,/i,
+      'accepted/deferred receipt and continuation metadata do not duplicate content-addressed image bytes in state.json');
+    blockedRunner.release();
+    await firstRun;
+
+    const reloadedRunner = new ReloadedImageGuideRunner(root, { agentOnly: true });
+    const reloadedHost = new Agent(root, { agentOnly: true });
+    reloadedHost.workspace.current = workspace;
+    reloadedHost.setConversation('default');
+    const reloadedKernel = new ConversationKernel(root, reloadedHost, null, { createRunner: () => reloadedRunner });
+    const reloadedResult = await reloadedKernel.prompt('resume checkpoint', target, {
+      mode: 'build', model: reloadedRunner.model, intelligence: reloadedRunner.intelligence, inputMode: 'guide', engine: reloadedRunner.engine,
+    });
+    assert.equal(reloadedRunner.guideInputs.length, 1, 'reload applies the retained image-only Guide once');
+    assert.equal(reloadedRunner.guideInputs[0].clientMessageId, 'guide-image-only-reload');
+    assert.equal(reloadedRunner.guideInputs[0].images?.length, 1);
+    assert.equal(reloadedResult.chatMessages.filter(message => message.clientMessageId === 'guide-image-only-reload').length, 1,
+      'image-only Guide creates one durable chat row');
+    assert.equal(reloadedRunner.history.filter(message => String(message.client_message_id || '') === 'guide-image-only-reload').length, 1,
+      'image-only Guide creates one model-history row');
+    const appliedReceipt = reloadedResult.workRuns.flatMap(run => run.guides)
+      .find(item => item.clientMessageId === 'guide-image-only-reload') as GuideReceipt & { attachments?: Array<{ id: string; dataUrl?: string }> } | undefined;
+    assert.equal(appliedReceipt?.status, 'applied', 'empty natural-language content does not prevent the image-only Guide receipt from becoming applied');
+    assert.equal(appliedReceipt?.attachments?.[0]?.id, deferred.attachments?.[0]?.id,
+      'the applied receipt preserves the same content-addressed attachment identity');
+    assert.ok(String(appliedReceipt?.attachments?.[0]?.dataUrl || '').startsWith('data:image/png;base64,'),
+      'snapshot hydration restores the durable receipt attachment for the UI');
+    assert.equal(reloadedKernel.snapshot(target).continuations.length, 0, 'successful application consumes the durable continuation');
+
+    const secondRunner = new ReloadedImageGuideRunner(root, { agentOnly: true });
+    const secondHost = new Agent(root, { agentOnly: true });
+    secondHost.workspace.current = workspace;
+    secondHost.setConversation('default');
+    const secondKernel = new ConversationKernel(root, secondHost, null, { createRunner: () => secondRunner });
+    const secondResult = await secondKernel.prompt('second reload', target, {
+      mode: 'build', model: secondRunner.model, intelligence: secondRunner.intelligence, inputMode: 'guide', engine: secondRunner.engine,
+    });
+    assert.equal(secondRunner.guideInputs.length, 0, 'a consumed image-only continuation is not replayed after another reload');
+    assert.equal(secondResult.chatMessages.filter(message => message.clientMessageId === 'guide-image-only-reload').length, 1);
+    assert.equal(secondRunner.history.filter(message => String(message.client_message_id || '') === 'guide-image-only-reload').length, 1);
+  } finally {
+    blockedRunner?.release();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function workspaceFixture(root: string): { target: ConversationTarget; workspace: Agent['workspace']['current'] } {
   const workspacePath = path.join(root, 'workspace');
   fs.mkdirSync(path.join(workspacePath, 'conversations'), { recursive: true });
@@ -382,7 +491,7 @@ function verifyExactlyOnceAndV3Persistence(): void {
     let routedGuide: unknown;
     agent.attachAgentKernelRuntime({ steer: message => { routedGuide = message; return true; }, followUp: () => true });
     assert.equal(agent.queueActiveKernelMessage('visual guide', 'steer', 'visual-guide-id', 'run-guide-test', [{
-      dataUrl: 'data:image/png;base64,AA==',
+      dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4AWP4DwQACfsD/c8LaHIAAAAASUVORK5CYII=',
       name: 'guide.png',
       type: 'image/png',
     }]), true);
@@ -602,6 +711,7 @@ async function main(): Promise<void> {
   await verifyTaskBoundaryGuideIsDeferredAndContinued();
   await verifyGuideInPendingEmptyFinalizeWindowIsApplied();
   await verifyGuideFromCompletionEventAutoContinues();
+  await verifyImageOnlyDeferredGuideSurvivesCheckpointReloadExactlyOnce();
   verifyExactlyOnceAndV3Persistence();
   verifyStatefulHiddenReasoningAndLiveToolArgsSanitization();
   console.log('Guide and work-run verification passed');

@@ -6,8 +6,8 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
-const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
-const screenshotPath = path.join(repoRoot, 'archive', '2026-07-01-release-ui-model-auto-context-smoke.png');
+const exePath = path.resolve(process.env.NEWMARK_TEST_EXE || path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe'));
+const screenshotPath = path.join(repoRoot, 'archive', '2026-07-15-dev-0.0.10-model-auto-context-smoke.png');
 const keepRoot = process.env.NEWMARK_KEEP_UI_MODEL_AUTO_CONTEXT_SMOKE === '1';
 
 function log(message) {
@@ -110,6 +110,8 @@ async function waitFor(cdp, expression, timeoutMs, label) {
 }
 
 function writeConfig(root) {
+  const checkedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   const config = {
     models: {
       providers: [{
@@ -138,6 +140,21 @@ function writeConfig(root) {
             performance_rating: 'medium',
             speed_rating: 'fast',
           },
+          validation: {
+            level: 'standard',
+            status: 'verified',
+            checked_at: checkedAt,
+            expires_at: expiresAt,
+            capabilities: {
+              text_input: true,
+              text_output: true,
+              streaming: true,
+              json_schema: true,
+              tool_use: true,
+              image_input: false,
+              image_output: false,
+            },
+          },
         }],
       }, {
         name: 'AutoAnthropic',
@@ -165,13 +182,28 @@ function writeConfig(root) {
             performance_rating: 'high',
             speed_rating: 'medium',
           },
+          validation: {
+            level: 'standard',
+            status: 'verified',
+            checked_at: checkedAt,
+            expires_at: expiresAt,
+            capabilities: {
+              text_input: true,
+              text_output: true,
+              streaming: true,
+              json_schema: true,
+              tool_use: true,
+              image_input: true,
+              image_output: false,
+            },
+          },
         }],
       }],
       default_model: 'auto-text-small',
       default_intelligence: 'medium',
       auto_switch: false,
       auto_switch_scope: 'all',
-      auto_switch_preference: 'default',
+      auto_switch_preference: 'balanced',
       openai_api_mode: 'chat_stream',
       fallback_on_unavailable: false,
     },
@@ -311,6 +343,12 @@ function ensureNoReleaseProcess() {
     })()`);
     if (!ringSnapshot.ok || ringSnapshot.ringWidth !== 16 || ringSnapshot.ringHeight !== 16 || !ringSnapshot.besideModel || !ringSnapshot.sameRow || ringSnapshot.tooltipDisplay !== 'block' || !ringSnapshot.tooltipText.includes('1536 / 4096') || !ringSnapshot.tooltipText.includes('38%') || !ringSnapshot.tooltipAbove || ringSnapshot.hasLabel) {
       fail(`context token ring placement/tooltip mismatch: ${JSON.stringify(ringSnapshot)}`);
+    }
+    const persistedConfig = JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
+    const providers = persistedConfig.models?.providers?.value || persistedConfig.models?.providers || [];
+    const persistedModels = providers.flatMap(provider => provider.models || []);
+    if (persistedModels.length !== 2 || persistedModels.some(model => model.validation?.level !== 'standard' || model.validation?.status !== 'verified')) {
+      fail(`model UI smoke lost Standard validation eligibility: ${JSON.stringify(persistedModels)}`);
     }
     log('model Auto controls and context token ring ok');
 

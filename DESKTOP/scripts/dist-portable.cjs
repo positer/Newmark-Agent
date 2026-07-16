@@ -64,9 +64,14 @@ function ensureNodePtyConptyAssets(baseDir) {
 }
 
 function verifyUnpackedOutput() {
+  const unpackedRuntimeDist = path.join(unpackedDir, 'resources', 'app.asar.unpacked', 'dist');
   const checks = [
     [unpackedExe, 'win-unpacked exe'],
     [appAsar, 'app.asar'],
+    [path.join(unpackedRuntimeDist, 'windows-process-tree-helper.dll'), 'precompiled Windows process-tree helper'],
+    [path.join(unpackedRuntimeDist, 'typebox-compile.bundle.cjs'), 'Electron Node 20 TypeBox compiler bundle'],
+    [path.join(unpackedRuntimeDist, 'wsl-agent-host.bundle.cjs'), 'WSL Agent host bundle'],
+    [path.join(unpackedRuntimeDist, 'conversation-utility-host.bundle.cjs'), 'Electron utility Agent host bundle'],
   ];
   for (const [file, label] of checks) {
     if (!fs.existsSync(file)) throw new Error(`missing ${label}: ${file}`);
@@ -155,7 +160,9 @@ function verifyReleaseCliSmoke() {
 }
 
 try {
-  tryRm(outputDir);
+  if (!tryRm(outputDir)) {
+    throw new Error(`Refusing to build into a partially locked release directory: ${outputDir}`);
+  }
   runBuilder(['--win', 'dir'], 'electron-builder dir');
   ensureNodePtyConptyAssets(nodePtyRoot);
   ensureNodePtyConptyAssets(path.join(unpackedDir, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty'));

@@ -21,6 +21,12 @@ const parentPort = process.parentPort;
 if (!parentPort) throw new Error('Electron utility parentPort is unavailable');
 
 const host = new Agent(root);
+host.tools.setHostProfile({
+  kind: 'electron-utility',
+  platform: process.platform,
+  electronBrowser: true,
+  windowsComputerUse: process.platform === 'win32',
+});
 const kernel = new ConversationKernel(root, host, null);
 let activeTarget: NormalizedConversationTarget | null = null;
 
@@ -79,6 +85,13 @@ async function handle(request: UtilityAgentRequest): Promise<unknown> {
     });
   }
   if (request.method === 'checkpoint') return kernel.checkpoint(checkedTarget(request.params.target));
+  if (request.method === 'rate_auto_route') {
+    return kernel.rateAutoRoute(
+      checkedTarget(request.params.target),
+      request.params.score,
+      request.params.routeId,
+    );
+  }
   if (request.method === 'set_work_run_expanded') {
     return kernel.setWorkRunExpanded(checkedTarget(request.params.target), request.params.runId, request.params.expanded);
   }

@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   startupRetry: () => ipcRenderer.invoke('startup:retry'),
+  startupWaitForBackend: () => ipcRenderer.invoke('startup:waitForBackend'),
   startupUiReady: (payload: Record<string, unknown>) => ipcRenderer.invoke('startup:uiReady', payload),
   startupUiFailed: (payload: Record<string, unknown>) => ipcRenderer.invoke('startup:uiFailed', payload),
   onStartupStatus: (callback: (payload: Record<string, unknown>) => void) => {
@@ -10,6 +11,7 @@ contextBridge.exposeInMainWorld('api', {
   sendMessage: (message: string | Record<string, unknown>, target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:send', message, target),
   enqueueGuide: (envelope: Record<string, unknown>) => ipcRenderer.invoke('agent:enqueueGuide', envelope),
   checkpointConversation: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:checkpointConversation', request),
+  rateAutoRoute: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:rateAutoRoute', request),
   stopConversation: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:stopConversation', request),
   setWorkRunExpanded: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:setWorkRunExpanded', request),
   sendPrompt: (message: string, _model?: string) => ipcRenderer.invoke('agent:sendPrompt', message),

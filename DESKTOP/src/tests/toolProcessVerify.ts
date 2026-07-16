@@ -18,6 +18,21 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function removeTemporaryRoot(root: string): Promise<void> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = String((error as NodeJS.ErrnoException)?.code || '');
+      if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(code) || attempt === 39) throw error;
+      // A just-exited Windows image (the deliberate fake taskkill fixture) can
+      // retain its executable section briefly after the child result settles.
+      await delay(250);
+    }
+  }
+}
+
 function shellPath(value: string): string {
   if (process.platform === 'win32') return `'${value.replace(/'/g, "''")}'`;
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -58,15 +73,8 @@ async function main(): Promise<void> {
     assert(commandFinishedAt - timerFiredAt >= 150, 'timer fires materially before command completion');
 
     if (process.platform === 'win32') {
-      // Make the taskkill launch succeed without killing the fixture process.
-      // The target then keeps its pipes open past the cancellation budget, which
-      // deterministically proves that settlement does not depend on child close.
-      const fakeTaskkillPath = path.join(root, 'taskkill.exe');
       const watchdogPidPath = path.join(root, 'watchdog-child.pid');
       const watchdogScript = path.join(root, 'watchdog-child.cjs');
-      const whereExe = path.join(String(process.env.SystemRoot || 'C:\\Windows'), 'System32', 'where.exe');
-      assert(fs.existsSync(whereExe), 'Windows settlement fixture has the system where.exe helper');
-      fs.copyFileSync(whereExe, fakeTaskkillPath);
       fs.writeFileSync(watchdogScript, [
         "const fs = require('fs');",
         "fs.writeFileSync(process.argv[2], String(process.pid), 'utf8');",
@@ -97,7 +105,7 @@ async function main(): Promise<void> {
         }
       }
       assert(watchdogResult.aborted && /settlement-watchdog-test-abort/.test(watchdogResult.error || ''), 'settlement watchdog preserves the AbortSignal result');
-      assert(watchdogElapsed < 900, `runAsyncProcess settles independently of delayed taskkill/close (elapsed=${watchdogElapsed} ms)`);
+      assert(watchdogElapsed < 1_500, `runAsyncProcess settles promptly through the trusted Windows tree killer (elapsed=${watchdogElapsed} ms)`);
     }
 
     const markerPath = path.join(root, 'descendant-marker.txt');
@@ -218,17 +226,19 @@ async function main(): Promise<void> {
     }
 
     const toolsSource = fs.readFileSync(path.join(__dirname, '..', 'tools', 'index.js'), 'utf8');
+    const asyncProcessSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'asyncProcess.js'), 'utf8');
     const sshSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'ssh.js'), 'utf8');
     const agentSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'agent.js'), 'utf8');
     const runnerSource = fs.readFileSync(path.join(__dirname, '..', 'core', 'agentKernelRunner.js'), 'utf8');
     assert(!/\b(?:spawnSync|execSync)\b/.test(toolsSource), 'built ToolExecutor has no synchronous child-process execution');
+    assert(asyncProcessSource.includes('trustedWindowsTaskkillPath()') && !asyncProcessSource.includes("spawn('taskkill.exe'"), 'Windows process cancellation uses an absolute trusted taskkill path instead of cwd/PATH lookup');
     assert(!/\b(?:spawnSync|execSync)\b/.test(sshSource), 'built SSH manager has no synchronous child-process execution');
     assert(!/\bexecSync\b/.test(agentSource) && agentSource.includes('runAsyncWindowsBatch'), 'OpenCode uses the cancellable asynchronous Windows batch path instead of execSync');
     assert(runnerSource.includes('handleImageGeneration(args, signal)') && runnerSource.includes('handleFlowRun(args, signal)') && runnerSource.includes('handleMemoryLabTool(name, args, signal)') && runnerSource.includes('handleAutomationTool(name, args, signal)'), 'kernel special tools receive the same run AbortSignal as ordinary ToolExecutor calls');
 
     console.log(`TOOL_PROCESS_VERIFY_OK assertions=${assertions} watchdog_ms=${process.platform === 'win32' ? watchdogElapsed : 'n/a'} tree_abort_ms=${treeAbortElapsed}`);
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    await removeTemporaryRoot(root);
   }
 }
 

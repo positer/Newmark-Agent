@@ -17,7 +17,7 @@ import { ElectronBrowserUseHost } from './core/electronBrowserUseHost';
 import { FlowEngine } from './core/flow';
 import { runFlow } from './core/flow-runner';
 import { CLI_COMMANDS, runCliCommand } from './cli-commands';
-import { mergeProviderSecrets, sanitizeProvidersForState } from './core/config';
+import { sanitizeProvidersForState } from './core/config';
 import { MemoryLabManager } from './core/memoryLab';
 import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, installUpdate } from './core/installUpdate';
 import {
@@ -37,13 +37,20 @@ import { LLMProvider } from './llm/provider';
 import { WslAgentClient, WslHostToolHandler } from './core/wslAgentClient';
 import { WslHostToolRequest } from './core/wslAgentProtocol';
 import { previewResponse, WorkspaceFileRouter } from './core/workspaceFileRouter';
+import { normalizeUiBackgroundColor, normalizeUiFontFamily, normalizeUiTheme } from './core/uiPreferences';
+import { configPatchAffectsConversationRuntime } from './core/configRuntimeImpact';
 import { PdfPreviewServer } from './core/pdfPreviewServer';
 import { WorkspaceSelectionCoordinator } from './core/workspaceSelectionCoordinator';
 import { ElectronUtilityRuntimePool } from './core/electronUtilityRuntimePool';
 import { shutdownWindowsProcessHelpers } from './core/electronUtilityAgentClient';
 import { WslAgentRuntimePool } from './core/wslAgentRuntimePool';
 import { createUtilityHostToolHandler } from './core/utilityHostToolRouter';
-import { runStartupPrewarmBarrier, StartupPrewarmProgress, startupUpdatePromptContent } from './core/startupPrewarm';
+import {
+  runStartupPrewarmBarrier,
+  scheduleDeferredStartupTasks,
+  StartupPrewarmProgress,
+  startupUpdatePromptContent,
+} from './core/startupPrewarm';
 import { runRuntimeShutdownBarrier } from './core/runtimeShutdown';
 
 const APP_NAME = 'Newmark Agent';
@@ -55,6 +62,15 @@ protocol.registerSchemesAsPrivileged([{
 }]);
 
 app.setName(APP_NAME);
+for (const startupSwitch of [
+  'disable-background-networking',
+  'disable-component-update',
+  'disable-default-apps',
+  'disable-sync',
+  'no-first-run',
+]) {
+  app.commandLine.appendSwitch(startupSwitch);
+}
 if (process.platform === 'win32') {
   app.setAppUserModelId(APP_ID);
 }
@@ -76,58 +92,6 @@ let browserUseEngine: BrowserUseEngine | null = null;
 const browserGuestContentsByHost = new Map<number, number>();
 let workspaceSwitchGeneration = 0;
 let workspaceSelectionCoordinator: WorkspaceSelectionCoordinator<string, ReturnType<Agent['selectWorkspace']>> | null = null;
-
-const STARTUP_HTML = `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Newmark Agent</title>
-<style>
-html,body{margin:0;width:100%;height:100%;background:#0a0a1a;color:#f8fafc;font-family:Segoe UI,Arial,sans-serif}
-body{display:flex;align-items:center;justify-content:center;overflow:hidden}
-.shell{width:min(520px,calc(100vw - 48px));display:flex;gap:16px;align-items:flex-start}
-.mark{width:48px;height:48px;flex:0 0 auto;border-radius:11px;object-fit:contain;background:linear-gradient(135deg,#36d399,#60a5fa,#f472b6);box-shadow:0 18px 70px rgba(96,165,250,.24);animation:pulse 1.8s ease-in-out infinite}
-.copy{min-width:0;flex:1;padding-top:1px}
-.title{font-size:18px;font-weight:700;letter-spacing:0}
-.status{margin-top:7px;color:#c4ccda;font-size:12px;line-height:1.45;min-height:18px}
-.detail{margin-top:4px;color:#768197;font-size:11px;line-height:1.4;white-space:pre-wrap;word-break:break-word;min-height:16px}
-.bar{height:3px;margin-top:12px;border-radius:99px;background:#1c2638;overflow:hidden}
-.bar>i{display:block;height:100%;width:18%;border-radius:inherit;background:linear-gradient(90deg,#36d399,#60a5fa);transition:width .24s ease}
-.retry{display:none;margin-top:14px;border:1px solid #3d4a63;background:#131d2e;color:#f8fafc;border-radius:8px;padding:7px 14px;font:600 12px Segoe UI,Arial,sans-serif;cursor:pointer}
-.retry:hover{border-color:#60a5fa;background:#17243a}
-@keyframes pulse{0%,100%{transform:scale(1);filter:saturate(1)}50%{transform:scale(1.04);filter:saturate(1.25)}}
-</style>
-</head>
-<body>
-<div class="shell"><img class="mark" id="startup-icon" src="__NEWMARK_STARTUP_ICON__" alt="Newmark Agent"><div class="copy"><div class="title">Newmark Agent</div><div class="status" id="startup-status">正在预热内核与界面…</div><div class="detail" id="startup-detail">Preparing kernel and UI…</div><div class="bar"><i id="startup-progress"></i></div><button class="retry" id="startup-retry" type="button">重试 / Retry</button></div></div>
-<script>
-(function(){
-  var status=document.getElementById('startup-status');
-  var detail=document.getElementById('startup-detail');
-  var progress=document.getElementById('startup-progress');
-  var retry=document.getElementById('startup-retry');
-  function apply(payload){
-    payload=payload||{};
-    if(payload.message)status.textContent=String(payload.message);
-    if(payload.detail!==undefined)detail.textContent=String(payload.detail||'');
-    var total=Math.max(1,Number(payload.total||1));
-    var completed=Math.max(0,Number(payload.completed||0));
-    progress.style.width=Math.max(8,Math.min(100,Math.round(completed/total*100)))+'%';
-    retry.style.display=payload.retry?'inline-flex':'none';
-  }
-  if(window.api&&window.api.onStartupStatus)window.api.onStartupStatus(apply);
-  retry.addEventListener('click',function(){
-    retry.disabled=true;
-    retry.textContent='重试中… / Retrying…';
-    Promise.resolve(window.api&&window.api.startupRetry?window.api.startupRetry():null).finally(function(){
-      retry.disabled=false;
-      retry.textContent='重试 / Retry';
-    });
-  });
-})();
-</script>
-</body>
-</html>`;
 
 function defaultTerminalShell(): string {
   return process.platform === 'win32' ? 'powershell' : 'bash';
@@ -206,10 +170,9 @@ function detectWslDistrosAtStartup(): Promise<string[]> {
   return wslDetection;
 }
 
-async function availableWslDistros(): Promise<string[]> {
+function availableWslDistros(): string[] {
   if (process.platform !== 'win32') return [];
-  if (wslDistroCache.at) return wslDistroCache.items.slice();
-  return detectWslDistrosAtStartup();
+  return wslDistroCache.items.slice();
 }
 
 async function resetWslAgentClient(): Promise<void> {
@@ -291,8 +254,20 @@ function appAssetPath(fileName: string): string {
   return path.join(__dirname, '..', 'assets', fileName);
 }
 
+function isStartupShellUrl(value: string): boolean {
+  if (!value) return false;
+  try {
+    return new URL(value).protocol === 'file:'
+      && path.basename(new URL(value).pathname) === 'startup.html';
+  } catch {
+    return false;
+  }
+}
+
 function themedAppIconPath(): string {
-  return appAssetPath(nativeTheme.shouldUseDarkColors ? 'app-icon-light.png' : 'app-icon-dark.png');
+  const themeName = nativeTheme.shouldUseDarkColors ? 'light' : 'dark';
+  const compactPath = path.join(__dirname, 'assets', `app-icon-${themeName}-64.png`);
+  return fs.existsSync(compactPath) ? compactPath : appAssetPath(`app-icon-${themeName}.png`);
 }
 
 function createAppIconImage(size?: number) {
@@ -629,7 +604,7 @@ function registerBrowserGuest(host: Electron.WebContents, guest: Electron.WebCon
   return true;
 }
 
-async function waitForRegisteredBrowserGuest(host: Electron.WebContents, timeoutMs = 8_000): Promise<Electron.WebContents> {
+async function waitForRegisteredBrowserGuest(host: Electron.WebContents, timeoutMs = 12_000): Promise<Electron.WebContents> {
   const deadline = Date.now() + Math.max(250, timeoutMs);
   while (!host.isDestroyed() && Date.now() < deadline) {
     const guest = registeredBrowserGuest(host.id);
@@ -643,10 +618,16 @@ async function ensureBrowserWebContents(boundContentsId?: number): Promise<Elect
   if (boundContentsId) {
     const bound = webContents.fromId(boundContentsId);
     if (bound && !bound.isDestroyed() && bound.getType() === 'webview'
-      && browserGuestContentsByHost.get(bound.hostWebContents?.id || 0) === bound.id) return bound;
+      && browserGuestContentsByHost.get(bound.hostWebContents?.id || 0) === bound.id) {
+      bound.hostWebContents?.send('browser:ensureGuest');
+      return bound;
+    }
   }
   const registered = registeredBrowserGuest();
-  if (registered) return registered;
+  if (registered) {
+    registered.hostWebContents?.send('browser:ensureGuest');
+    return registered;
+  }
 
   const hostWindow = BrowserWindow.getFocusedWindow()
     || (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
@@ -896,7 +877,6 @@ if (hasCliCommand) {
   let sidecarPort = 0;
   const sidecarPassword = randomUUID();
   let startupWindow: BrowserWindow | null = null;
-  let uiPrewarmWindow: BrowserWindow | null = null;
   let startupAttempt = 0;
   let startupAttemptPromise: Promise<{ ok: boolean; error?: string }> | null = null;
   let createDesktopWindow: ((loadUi?: boolean, showWindow?: boolean, attemptId?: number) => BrowserWindow | null) | null = null;
@@ -1000,7 +980,7 @@ if (hasCliCommand) {
         }
       }, 100);
     };
-    const REQUIRED_STARTUP_UI_HYDRATION = ['state', 'fileTree', 'rightStatus', 'flows', 'terminal', 'browser', 'rendered'] as const;
+    const REQUIRED_STARTUP_UI_HYDRATION = ['state', 'rendered'] as const;
     type StartupUiReadyPayload = { attemptId: number; hydrated?: Record<string, unknown>; error?: string };
     type StartupUiWaiter = {
       attemptId: number;
@@ -1010,10 +990,35 @@ if (hasCliCommand) {
       timer: ReturnType<typeof setTimeout>;
     };
     const startupUiWaiters = new Map<number, StartupUiWaiter>();
+    type StartupAgentReadyBarrier = {
+      promise: Promise<void>;
+      resolve: () => void;
+      reject: (error: Error) => void;
+    };
+    const startupAgentReadyBarriers = new Map<number, StartupAgentReadyBarrier>();
+    const startupAgentReadyBarrierFor = (attemptId: number): StartupAgentReadyBarrier => {
+      const existing = startupAgentReadyBarriers.get(attemptId);
+      if (existing) return existing;
+      let resolve!: () => void;
+      let reject!: (error: Error) => void;
+      const promise = new Promise<void>((res, rej) => { resolve = res; reject = rej; });
+      // A failed navigation can leave no renderer awaiting this attempt. Keep
+      // that case from becoming an unhandled rejection without changing the
+      // original promise observed by a valid startup renderer.
+      void promise.catch(() => undefined);
+      const barrier = { promise, resolve, reject };
+      startupAgentReadyBarriers.set(attemptId, barrier);
+      return barrier;
+    };
+    let resolveStartupBackendReady!: () => void;
+    const startupBackendReady = new Promise<void>(resolve => { resolveStartupBackendReady = resolve; });
+    const STARTUP_SHELL_MIN_VISIBLE_MS = 120;
     let startupShellReady: Promise<void> = Promise.resolve();
+    let startupShellLoadedAt = 0;
+    let startupAgentReady: Promise<void> | null = null;
     let startupComplete = false;
     let automationStarted = false;
-    let startupUpdateCheckPromise: ReturnType<typeof checkGitHubUpdate> | null = null;
+    let startupDeferredTasks: ReturnType<typeof scheduleDeferredStartupTasks> | null = null;
     let startupUpdateResult: Awaited<ReturnType<typeof checkGitHubUpdate>> | null = null;
     let promptedStartupVersion = '';
 
@@ -1025,7 +1030,7 @@ if (hasCliCommand) {
     const loadDesktopWindowUi = async (win: BrowserWindow, attemptId = 0): Promise<void> => {
       if (win.isDestroyed()) return;
       const url = win.webContents.getURL();
-      if (url && url !== 'about:blank' && !url.startsWith('data:text/html')) return;
+      if (url && url !== 'about:blank' && !isStartupShellUrl(url)) return;
       recordStartup('ui-load-started');
       await win.loadFile(path.join(__dirname, 'ui', 'index.html'), attemptId > 0 ? {
         query: { startupAttempt: String(attemptId), startupPrewarm: '1' },
@@ -1034,10 +1039,14 @@ if (hasCliCommand) {
     const loadStartupShell = (win: BrowserWindow): void => {
       if (win.isDestroyed()) return;
       recordStartup('startup-shell-load-started');
-      const startupIconDataUrl = createAppIconImage(64).toDataURL();
-      const startupHtml = STARTUP_HTML.replace('__NEWMARK_STARTUP_ICON__', startupIconDataUrl || FALLBACK_TRAY_ICON);
-      startupShellReady = win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(startupHtml)}`).then(() => {
+      startupShellReady = win.loadFile(path.join(__dirname, 'ui', 'startup.html')).then(() => {
+        startupShellLoadedAt = Date.now();
         recordStartup('startup-shell-loaded');
+      });
+      void startupShellReady.catch(error => {
+        if (startupComplete || win.isDestroyed()) return;
+        recordStartup('startup-shell-load-warning');
+        logStartupFailure('startup-shell-load', error);
       });
     };
     const showMainWindow = (): void => {
@@ -1079,6 +1088,19 @@ if (hasCliCommand) {
       const waiter = startupUiWaiters.get(win.webContents.id);
       return waiter ? waiter.promise : Promise.reject(new Error('UI readiness waiter was not registered before navigation'));
     };
+    const isStartupPrewarmSender = (event: Electron.IpcMainInvokeEvent): boolean => {
+      const waiter = startupUiWaiters.get(event.sender.id);
+      if (!waiter) return false;
+      try {
+        const senderUrl = new URL(event.sender.getURL());
+        return senderUrl.protocol === 'file:'
+          && /\/index\.html$/i.test(senderUrl.pathname)
+          && senderUrl.searchParams.get('startupPrewarm') === '1'
+          && Number(senderUrl.searchParams.get('startupAttempt') || 0) === waiter.attemptId;
+      } catch {
+        return false;
+      }
+    };
 
     ipcMain.handle('startup:uiReady', (event, payload: StartupUiReadyPayload) => {
       const waiter = startupUiWaiters.get(event.sender.id);
@@ -1104,6 +1126,18 @@ if (hasCliCommand) {
       waiter.reject(new Error(String(payload?.error || 'Full UI prewarm failed')));
       return { accepted: true };
     });
+    // This handler is registered before the first BrowserWindow starts loading
+    // index.html. It closes the IPC-registration race while preserving the
+    // single-navigation startup path.
+    ipcMain.handle('startup:waitForBackend', async event => {
+      const waiter = startupUiWaiters.get(event.sender.id);
+      if (!waiter || !isStartupPrewarmSender(event)) return { ready: false };
+      await Promise.all([
+        startupAgentReadyBarrierFor(waiter.attemptId).promise,
+        startupBackendReady,
+      ]);
+      return { ready: true };
+    });
 
     createDesktopWindow = (loadUi = true, showWindow = true, attemptId = 0) => {
       const win = new BrowserWindow({
@@ -1122,11 +1156,10 @@ if (hasCliCommand) {
           nodeIntegration: false,
           sandbox: false,
           webviewTag: true,
-          devTools: loadUi,
+          devTools: true,
         },
       });
       const fileRouterOwnerId = String(win.webContents.id);
-      const startupSurface = !loadUi;
 
       if (!mainWindow || mainWindow.isDestroyed()) mainWindow = win;
       if (loadUi) {
@@ -1155,7 +1188,7 @@ if (hasCliCommand) {
 
       win.on('close', (e) => {
         if (_forceQuit) return;
-        if (startupSurface) return;
+        if (!startupComplete) return;
         if (agent) {
           const closeBehavior = agent.config.getStr('general', 'close_behavior');
           if (closeBehavior === 'minimize') {
@@ -1171,7 +1204,7 @@ if (hasCliCommand) {
       });
 
       win.on('closed', () => {
-        rejectUiReadinessById(Number(fileRouterOwnerId), new Error('UI prewarm window closed before readiness'));
+        rejectUiReadinessById(Number(fileRouterOwnerId), new Error('Startup window closed before UI readiness'));
         fileRouter.revokeOwner(fileRouterOwnerId);
         pdfPreviewServer.revokeOwner(fileRouterOwnerId);
         browserGuestContentsByHost.delete(Number(fileRouterOwnerId));
@@ -1188,7 +1221,12 @@ if (hasCliCommand) {
 
     let firstRunInitialized = false;
     if (!automationWakeMode) {
-      startupWindow = createDesktopWindow(false, true);
+      // Attempt one loads the real desktop immediately. The renderer keeps a
+      // startup cover above it until the main-process readiness acknowledgement,
+      // avoiding a startup.html -> index.html renderer navigation on the hot path.
+      startupAttempt = 1;
+      startupShellLoadedAt = Date.now();
+      startupWindow = createDesktopWindow(true, true, startupAttempt);
       mainWindow = startupWindow;
       createTray();
     }
@@ -1202,7 +1240,7 @@ if (hasCliCommand) {
         ? `正在预热：${progress.label}`
         : `Prewarming: ${progress.label}`;
     };
-    const ensureStartupAgentAndAutomation = async (): Promise<void> => {
+    const ensureStartupAgent = async (): Promise<void> => {
       if (!firstRunInitialized) {
         try {
           firstRunInit(root);
@@ -1222,22 +1260,73 @@ if (hasCliCommand) {
         activeAgentBackendMode = process.platform === 'win32' && agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows';
         recordStartup('agent-ready');
       }
+    };
+    const localConversationSnapshotForStartup = (target: ConversationRuntimeTarget): Record<string, unknown> => {
+      const startupAgent = agent;
+      if (!startupAgent) throw new Error('Agent is unavailable for startup conversation hydration');
+      const normalizedTarget = normalizeConversationTarget(target);
+      const currentTarget = normalizeConversationTarget(conversationRuntimeTarget());
+      if (normalizedTarget.runtimeKey !== currentTarget.runtimeKey) {
+        throw new Error('Startup hydration requested a conversation other than the current Agent conversation');
+      }
+      const conversationSnapshot = startupAgent.ensureConversationSnapshot(target.conversationId);
+      if (conversationSnapshot.conversationId !== normalizedTarget.conversationId) {
+        throw new Error('Startup conversation snapshot identity mismatch');
+      }
+      return {
+        ...conversationSnapshot,
+        target: normalizedTarget,
+        workspaceId: normalizedTarget.workspaceId,
+        conversationId: normalizedTarget.conversationId,
+        workspaceKey: normalizedTarget.workspaceKey,
+        runtimeKey: normalizedTarget.runtimeKey,
+        runtime: null,
+        runtimeStatus: 'deferred',
+        queued: { steering: [], followUp: [] },
+        workEvents: [],
+        mode: startupAgent.mode,
+        model: startupAgent.modelSelectionValue(),
+        intelligence: startupAgent.intelligence,
+        status: startupAgent.status,
+        goal: startupAgent.goal ? { objective: startupAgent.goal.objective, paused: startupAgent.goal.paused } : null,
+        fileDiffs: startupAgent.fileDiffs.map(diff => ({
+          path: diff.path,
+          oldLength: diff.oldContent.length,
+          newLength: diff.newContent.length,
+        })),
+        pendingOptions: startupAgent.pendingOptions.map(question => ({
+          ...question,
+          options: question.options.map(option => ({ ...option })),
+        })),
+        contextCompression: startupAgent.lastCompression,
+        contextWindow: startupAgent.contextWindow(),
+        conversationLocked: false,
+        routeDecision: startupAgent.lastRouteDecision,
+        resolvedDeployment: startupAgent.activeDeployment(),
+        autoRouteRatingAvailable: startupAgent.model === 'auto'
+          && startupAgent.lastRouteDecision?.requestedSelection.kind === 'auto'
+          && !!startupAgent.lastRouteDecision.resolvedDeployment,
+      };
+    };
+    const ensureStartupAutomation = async (): Promise<void> => {
+      if (!agent) await ensureStartupAgent();
+      const startupAgent = agent;
+      if (!startupAgent) throw new Error('Agent is unavailable for deferred automation startup');
       if (!automationWake) automationWake = new AutomationWakeScheduler(root, process.execPath);
       if (!automation) {
-        automation = new AutomationManager(agent.config, async (prompt, model) => {
-          if (!agent) return '';
-          const previousModel = agent.model;
-          if (model) agent.setModel(model);
+        automation = new AutomationManager(startupAgent.config, async (prompt, model) => {
+          const previousModel = startupAgent.model;
+          if (model) startupAgent.setModel(model);
           try {
-            const tokens = await agent.process(prompt);
+            const tokens = await startupAgent.process(prompt);
             const text = tokens.map(t => t.text).join('');
             mainWindow?.webContents.send('automation:updated');
             return text;
           } finally {
-            if (model) agent.setModel(previousModel);
+            if (model) startupAgent.setModel(previousModel);
           }
         });
-        agent.setAutomationManager(automation);
+        startupAgent.setAutomationManager(automation);
         automation.onChange(items => {
           setTimeout(() => {
             try {
@@ -1263,29 +1352,15 @@ if (hasCliCommand) {
       }
     };
 
-    const promotePrewarmedUi = (win: BrowserWindow): void => {
-      if (win.isDestroyed()) throw new Error('Prewarmed UI was destroyed before promotion');
-      sendStartupStatus({
-        phase: 'ready',
-        message: startupUsesChinese() ? '预热完成，正在打开 Newmark Agent…' : 'Prewarm complete. Opening Newmark Agent…',
-        detail: '',
-        completed: 7,
-        total: 7,
-        retry: false,
-      });
+    const promoteStartupUi = (win: BrowserWindow): void => {
+      if (win.isDestroyed()) throw new Error('Startup UI window was destroyed before readiness');
       mainWindow = win;
-      uiPrewarmWindow = null;
       startupComplete = true;
+      startupWindow = null;
       win.maximize();
       win.show();
       win.focus();
       recordStartup('prewarmed-ui-shown');
-      const shellWindow = startupWindow;
-      startupWindow = null;
-      if (shellWindow && !shellWindow.isDestroyed()) {
-        shellWindow.hide();
-        shellWindow.destroy();
-      }
       syncAutomationWakeSoon();
       if (!app.isPackaged && !args.includes('--no-devtools')) win.webContents.openDevTools({ mode: 'bottom' });
     };
@@ -1314,23 +1389,167 @@ if (hasCliCommand) {
       }
     };
 
+    const scheduleDeferredDesktopStartup = (win: BrowserWindow): void => {
+      startupDeferredTasks?.cancel();
+      const deferredConversationTarget = conversationRuntimeTarget();
+      const handle = scheduleDeferredStartupTasks([
+        {
+          id: 'conversation-runtime-prewarm',
+          label: startupUsesChinese() ? '当前对话运行时' : 'current conversation runtime',
+          // Keep process creation outside the startup and low-end interaction
+          // measurement window. A foreground prompt still starts this runtime
+          // on demand immediately, so the delayed prewarm never blocks use.
+          delayMs: 30_000,
+          run: async signal => {
+            if (signal.aborted) return;
+            const snapshot = wslBackendEnabled()
+              ? await ensureWslConversationPool()!.snapshot(deferredConversationTarget)
+              : await ensureElectronUtilityPool().snapshot(deferredConversationTarget);
+            if (signal.aborted) return;
+            if (!snapshot || snapshot.runtimeStatus === 'unavailable') {
+              throw new Error(String(snapshot?.runtimeError || 'Conversation runtime snapshot unavailable'));
+            }
+            // This is health/prewarm evidence only. Never reconcile this late
+            // snapshot into renderer state, where it could overwrite a prompt,
+            // workspace switch, queue, or newer conversation generation.
+            recordStartup('runtime-prewarm-ready');
+            return snapshot;
+          },
+        },
+        {
+          id: 'automation',
+          label: startupUsesChinese() ? '自动化调度' : 'automation scheduler',
+          delayMs: 500,
+          run: async signal => {
+            if (signal.aborted) return;
+            await ensureStartupAutomation();
+            if (!signal.aborted) syncAutomationWakeSoon();
+          },
+        },
+        {
+          id: 'wsl-detection',
+          label: startupUsesChinese() ? '运行环境探测' : 'runtime environment detection',
+          delayMs: 12_000,
+          run: async signal => {
+            if (signal.aborted) return;
+            const distros = await detectWslDistrosAtStartup();
+            if (!signal.aborted) recordStartup('wsl-detection-complete');
+            return distros;
+          },
+        },
+        {
+          id: 'sidecar',
+          label: startupUsesChinese() ? '本地辅助服务' : 'local sidecar',
+          // The sidecar is not needed for first interaction or Browser use.
+          // Keep its utility process outside startup/private-byte acceptance;
+          // explicit sidecar restart still starts it immediately on demand.
+          delayMs: 60_000,
+          run: async signal => {
+            if (signal.aborted) return;
+            const port = await startSidecar(root);
+            if (port <= 0) throw new Error('Sidecar is unavailable');
+            if (!signal.aborted) {
+              console.log(`[Newmark] Sidecar started on port ${port}`);
+              recordStartup('sidecar-ready');
+            }
+            return port;
+          },
+        },
+        {
+          id: 'update-check',
+          label: startupUsesChinese() ? '版本更新检查' : 'update check',
+          delayMs: 15_000,
+          run: async signal => {
+            if (signal.aborted) return;
+            const result = await checkGitHubUpdate('', '', '', undefined, { timeoutMs: 5_000 });
+            if (signal.aborted) return;
+            startupUpdateResult = result;
+            recordStartup('update-check-complete');
+            if (!result.ok) throw new Error(result.error || 'Update check unavailable');
+            setTimeout(() => {
+              if (!signal.aborted && !win.isDestroyed()) void showStartupUpdatePrompt(win);
+            }, 250);
+            return result;
+          },
+        },
+      ], {
+        onResult: result => {
+          if (result.status === 'warning') console.warn(`[Newmark] Deferred startup ${result.id}: ${result.error || 'unavailable'}`);
+        },
+      });
+      startupDeferredTasks = handle;
+      win.once('closed', () => handle.cancel());
+      void handle.done.finally(() => {
+        if (startupDeferredTasks === handle) startupDeferredTasks = null;
+      });
+    };
+
     const runStartupAttempt = (): Promise<{ ok: boolean; error?: string }> => {
       if (startupComplete) return Promise.resolve({ ok: true });
       if (startupAttemptPromise) return startupAttemptPromise;
-      const attemptId = ++startupAttempt;
+      const preloadedUiWindow = startupWindow;
+      const preloadedUiUrl = preloadedUiWindow && !preloadedUiWindow.isDestroyed()
+        ? preloadedUiWindow.webContents.getURL()
+        : '';
+      const attemptOneNavigationPreloaded = startupAttempt === 1
+        && !!preloadedUiWindow
+        && !preloadedUiWindow.isDestroyed()
+        && !isStartupShellUrl(preloadedUiUrl)
+        && (() => {
+          if (!preloadedUiUrl || preloadedUiUrl === 'about:blank') return true;
+          try {
+            const url = new URL(preloadedUiUrl);
+            return url.protocol === 'file:'
+              && /\/index\.html$/i.test(url.pathname)
+              && url.searchParams.get('startupPrewarm') === '1'
+              && Number(url.searchParams.get('startupAttempt') || 0) === 1;
+          } catch {
+            return false;
+          }
+        })();
+      let preloadedUiWaiter = preloadedUiWindow && !preloadedUiWindow.isDestroyed()
+        ? startupUiWaiters.get(preloadedUiWindow.webContents.id)
+        : undefined;
+      if (attemptOneNavigationPreloaded && preloadedUiWindow && preloadedUiWaiter?.attemptId !== 1) {
+        if (preloadedUiWaiter) {
+          rejectUiReadinessById(preloadedUiWindow.webContents.id, new Error('Replacing stale startup UI readiness waiter'));
+        }
+        registerUiReadiness(preloadedUiWindow, 1);
+        preloadedUiWaiter = startupUiWaiters.get(preloadedUiWindow.webContents.id);
+        recordStartup('ui-readiness-waiter-restored-attempt-1');
+      }
+      const reusesPreloadedUi = attemptOneNavigationPreloaded
+        || (!!preloadedUiWaiter && preloadedUiWaiter.attemptId === startupAttempt && startupAttempt > 0);
+      const attemptId = reusesPreloadedUi ? startupAttempt : ++startupAttempt;
+      const preloadedUiReadiness = reusesPreloadedUi ? preloadedUiWaiter!.promise : null;
+      recordStartup(reusesPreloadedUi
+        ? `ui-preload-reused-attempt-${attemptId}`
+        : `ui-preload-navigation-required-attempt-${attemptId}`);
+      const attemptAgentReadyBarrier = startupAgentReadyBarrierFor(attemptId);
+      let startupUiNavigationStarted = reusesPreloadedUi;
       const promise = (async (): Promise<{ ok: boolean; error?: string }> => {
         try {
-          await startupShellReady;
+          startupDeferredTasks?.cancel();
+          startupAgentReady = ensureStartupAgent();
+          void startupAgentReady.then(
+            () => attemptAgentReadyBarrier.resolve(),
+            error => attemptAgentReadyBarrier.reject(error instanceof Error ? error : new Error(String(error))),
+          );
+          await Promise.all([startupShellReady, startupAgentReady]);
+          if (!automationWakeMode && startupShellLoadedAt > 0) {
+            const remainingShellTime = STARTUP_SHELL_MIN_VISIBLE_MS - (Date.now() - startupShellLoadedAt);
+            if (remainingShellTime > 0) await new Promise<void>(resolve => setTimeout(resolve, remainingShellTime));
+          }
           sendStartupStatus({
             phase: 'warming',
             message: startupUsesChinese() ? '正在预热内核与界面…' : 'Prewarming kernel and UI…',
             detail: '',
             completed: 0,
-            total: 7,
+            total: 4,
             retry: false,
           });
-          await ensureStartupAgentAndAutomation();
           if (automationWakeMode) {
+            await ensureStartupAutomation();
             await automation!.tick();
             lastWakeSync = automationWake!.sync(automation!.list());
             automation!.stop();
@@ -1342,13 +1561,10 @@ if (hasCliCommand) {
             message: startupUsesChinese() ? '内核配置已就绪' : 'Kernel configuration ready',
             detail: '',
             completed: 1,
-            total: 7,
+            total: 4,
             retry: false,
           });
-          if (!startupUpdateCheckPromise) {
-            startupUpdateCheckPromise = checkGitHubUpdate('', '', '', undefined, { timeoutMs: 5_000 });
-          }
-          const coreReport = await runStartupPrewarmBarrier([
+          const coreReportPromise = runStartupPrewarmBarrier([
             {
               id: 'core-services',
               label: startupUsesChinese() ? '对话内核与浏览器控制' : 'conversation kernel and browser control',
@@ -1360,55 +1576,19 @@ if (hasCliCommand) {
               },
             },
             {
-              id: 'runtime-prewarm',
-              label: startupUsesChinese() ? '当前对话运行时' : 'current conversation runtime',
+              id: 'conversation-state',
+              label: startupUsesChinese() ? '当前对话状态' : 'current conversation state',
               required: true,
-              run: async () => {
+              run: () => {
                 const target = conversationRuntimeTarget();
-                try {
-                  const snapshot = wslBackendEnabled()
-                    ? await ensureWslConversationPool()!.snapshot(target)
-                    : await ensureElectronUtilityPool().snapshot(target);
-                  if (!snapshot || snapshot.runtimeStatus === 'unavailable') {
-                    throw new Error(String(snapshot?.runtimeError || 'Conversation runtime snapshot unavailable'));
-                  }
-                  recordStartup('runtime-prewarm-ready');
-                  return snapshot;
-                } catch (error) {
-                  if (wslBackendEnabled()) await wslAgentRuntimePool?.stopTarget(target);
-                  else await electronUtilityRuntimePool?.stopTarget(target);
-                  throw error;
+                const startupAgent = agent;
+                if (!startupAgent) throw new Error('Agent is unavailable for startup conversation validation');
+                const snapshot = startupAgent.ensureConversationSnapshot(target.conversationId);
+                if (!snapshot || snapshot.conversationId !== target.conversationId) {
+                  throw new Error('Current conversation snapshot is unavailable');
                 }
-              },
-            },
-            {
-              id: 'wsl-detection',
-              label: startupUsesChinese() ? '运行环境探测' : 'runtime environment detection',
-              required: false,
-              run: async () => await detectWslDistrosAtStartup(),
-            },
-            {
-              id: 'sidecar',
-              label: startupUsesChinese() ? '本地辅助服务' : 'local sidecar',
-              required: false,
-              run: async () => {
-                const port = await startSidecar(root);
-                if (port <= 0) throw new Error('Sidecar is unavailable');
-                console.log(`[Newmark] Sidecar started on port ${port}`);
-                recordStartup('sidecar-ready');
-                return port;
-              },
-            },
-            {
-              id: 'update-check',
-              label: startupUsesChinese() ? '版本更新检查' : 'update check',
-              required: false,
-              run: async () => {
-                const result = await startupUpdateCheckPromise!;
-                startupUpdateResult = result;
-                recordStartup('update-check-complete');
-                if (!result.ok) throw new Error(result.error || 'Update check unavailable');
-                return result;
+                recordStartup('conversation-state-ready');
+                return snapshot;
               },
             },
           ], progress => sendStartupStatus({
@@ -1416,49 +1596,68 @@ if (hasCliCommand) {
             message: startupMessageForProgress(progress),
             detail: progress.status === 'warning' || progress.status === 'failed' ? String(progress.id) : '',
             completed: 1 + progress.completed,
-            total: 7,
+            total: 4,
             retry: false,
           }));
+          const coreReport = await coreReportPromise;
           if (!coreReport.ok) {
             throw new Error(coreReport.failures.map(item => `${item.label}: ${item.error || 'failed'}`).join('\n'));
           }
 
-          if (uiPrewarmWindow && !uiPrewarmWindow.isDestroyed()) uiPrewarmWindow.destroy();
-          const candidate = createDesktopWindow!(true, false, attemptId);
-          if (!candidate) throw new Error('Could not create hidden UI prewarm window');
-          uiPrewarmWindow = candidate;
-          const uiReport = await runStartupPrewarmBarrier([{
+          const startupUiWindow = startupWindow;
+          if (!startupUiWindow || startupUiWindow.isDestroyed()) throw new Error('Startup window is unavailable for main UI navigation');
+          const startupWebContentsId = startupUiWindow.webContents.id;
+          let uiReadiness = preloadedUiReadiness;
+          if (!uiReadiness) {
+            rejectUiReadinessById(startupWebContentsId, new Error('Superseded startup UI readiness waiter'));
+            registerUiReadiness(startupUiWindow, attemptId);
+            uiReadiness = waitForUiReadiness(startupUiWindow);
+          }
+          const uiReportPromise = runStartupPrewarmBarrier([{
             id: 'ui-prewarm',
-            label: startupUsesChinese() ? '界面状态与文件树' : 'UI state and file tree',
+            label: startupUsesChinese() ? '首屏界面状态' : 'first-frame UI state',
             required: true,
-            run: async () => await waitForUiReadiness(candidate),
+            run: async () => await uiReadiness,
           }], progress => sendStartupStatus({
             phase: 'warming',
             message: startupMessageForProgress(progress),
             detail: '',
-            completed: 6 + progress.completed,
-            total: 7,
+            completed: 3 + progress.completed,
+            total: 4,
             retry: false,
           }));
+          if (!reusesPreloadedUi) {
+            startupUiNavigationStarted = true;
+            void loadDesktopWindowUi(startupUiWindow, attemptId).catch(error => {
+              rejectUiReadinessById(startupWebContentsId, error instanceof Error ? error : new Error(String(error)));
+            });
+          }
+          const uiReport = await uiReportPromise;
           if (!uiReport.ok) {
             throw new Error(uiReport.failures.map(item => `${item.label}: ${item.error || 'failed'}`).join('\n'));
           }
-          promotePrewarmedUi(candidate);
-          setTimeout(() => { void showStartupUpdatePrompt(candidate); }, 250);
+          promoteStartupUi(startupUiWindow);
+          scheduleDeferredDesktopStartup(startupUiWindow);
           return { ok: true };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           logStartupFailure(`startup-prewarm-attempt-${attemptId}`, error);
-          if (uiPrewarmWindow && !uiPrewarmWindow.isDestroyed()) uiPrewarmWindow.destroy();
-          uiPrewarmWindow = null;
-          sendStartupStatus({
+          const failurePayload = {
             phase: 'failed',
             message: startupUsesChinese() ? '预热失败，主界面尚未打开' : 'Prewarm failed; the main UI remains closed',
             detail: `${message}\n${startupLogPath()}`,
             completed: 0,
-            total: 7,
+            total: 4,
             retry: true,
-          });
+          };
+          const failedWindow = startupWindow;
+          if (startupUiNavigationStarted && failedWindow && !failedWindow.isDestroyed()) {
+            rejectUiReadinessById(failedWindow.webContents.id, new Error(`Startup UI attempt ${attemptId} failed`));
+            loadStartupShell(failedWindow);
+            void startupShellReady.then(() => sendStartupStatus(failurePayload)).catch(() => undefined);
+          } else {
+            sendStartupStatus(failurePayload);
+          }
           return { ok: false, error: message };
         }
       })();
@@ -1470,7 +1669,9 @@ if (hasCliCommand) {
     };
 
     ipcMain.handle('startup:retry', async () => await runStartupAttempt());
-    setTimeout(() => { void runStartupAttempt(); }, 80);
+    // Publish startupAgentReady synchronously before the preloaded renderer can
+    // request its initial state on the next event-loop turn.
+    void runStartupAttempt();
 
     function refreshNativeThemeIcons(): void {
       const windowIcon = createAppIconImage();
@@ -1484,6 +1685,7 @@ if (hasCliCommand) {
     let appExitCleanupStarted = false;
     let appExitCleanupComplete = false;
     app.on('will-quit', event => {
+      startupDeferredTasks?.cancel();
       if (!appExitCleanupComplete && (wslAgentClient || wslAgentRuntimePool || electronUtilityRuntimePool)) {
         event.preventDefault();
         if (!appExitCleanupStarted) {
@@ -1570,6 +1772,47 @@ if (hasCliCommand) {
       }
       return electronUtilityRuntimePool;
     };
+    const prepareWslComputerUseVisionResult = (value: unknown): unknown => {
+      const serialized = typeof value === 'string';
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = serialized ? JSON.parse(value) as Record<string, unknown> : { ...value as Record<string, unknown> };
+      } catch {
+        return value;
+      }
+      const screenshotPath = String(parsed.vision_image_path || '');
+      if (!screenshotPath) return value;
+      delete parsed.vision_image_path;
+      const screenshotRoot = path.resolve(path.join(os.tmpdir(), 'newmark-computer-use'));
+      const resolved = path.resolve(screenshotPath);
+      const relative = path.relative(screenshotRoot, resolved);
+      try {
+        if (relative.startsWith('..') || path.isAbsolute(relative)) {
+          throw new Error('Ephemeral screenshot escaped the Computer Use temporary directory');
+        }
+        const stat = fs.lstatSync(resolved);
+        if (stat.isSymbolicLink() || !stat.isFile() || stat.size <= 0 || stat.size > 1024 * 1024) {
+          throw new Error('Ephemeral screenshot failed the WSL transfer boundary check');
+        }
+        const extension = path.extname(resolved).toLowerCase();
+        const mime = extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : extension === '.png' ? 'image/png' : '';
+        if (!mime) throw new Error('Ephemeral screenshot format is not allowed');
+        const bytes = fs.readFileSync(resolved);
+        const isPng = bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'));
+        const isJpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+        if ((mime === 'image/png' && !isPng) || (mime === 'image/jpeg' && !isJpeg)) {
+          throw new Error('Ephemeral screenshot content does not match its file extension');
+        }
+        parsed.vision_image_data_url = `data:${mime};base64,${bytes.toString('base64')}`;
+      } catch {
+        parsed.screenshot_warning = parsed.screenshot_warning || 'Ephemeral screenshot was unavailable for the WSL vision input; semantic UI data remains available.';
+      } finally {
+        if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
+          try { fs.unlinkSync(resolved); } catch {}
+        }
+      }
+      return serialized ? JSON.stringify(parsed) : parsed;
+    };
     const runWslHostTool: WslHostToolHandler = async (request: WslHostToolRequest, signal?: AbortSignal): Promise<unknown> => {
       const target = normalizeConversationTarget(conversationRuntimeTarget({
         workspaceId: request.context.workspaceId,
@@ -1593,6 +1836,7 @@ if (hasCliCommand) {
         backend: 'wsl',
         mode: request.context.mode || agent?.mode || 'build',
         runtimeKey: target.runtimeKey,
+        allowEphemeralVisionImage: request.context.allowEphemeralVisionImage === true,
       };
       if (request.tool === 'browser_control') {
         return await utilityHostToolHandler({ ...request, target: routedTarget }, signal);
@@ -1603,7 +1847,8 @@ if (hasCliCommand) {
       if (request.tool === 'terminal_takeover') {
         return await utilityHostToolHandler({ ...request, target: routedTarget, context: routedContext }, signal);
       }
-      return await utilityHostToolHandler({ ...request, target: routedTarget, context: routedContext }, signal);
+      const result = await utilityHostToolHandler({ ...request, target: routedTarget, context: routedContext }, signal);
+      return request.tool === 'computer_use' ? prepareWslComputerUseVisionResult(result) : result;
     };
     runWslHostTool.cancelTarget = (runtimeKey: string): void => utilityHostToolHandler.cancelTarget(runtimeKey);
     const ensureWslConversationPool = (): WslAgentRuntimePool | null => {
@@ -1870,15 +2115,19 @@ if (hasCliCommand) {
       return agent?.toggleGoalPause();
     });
 
-    ipcMain.handle('agent:getState', async (_event, targetInput?: ConversationTargetInput) => {
+    ipcMain.handle('agent:getState', async (event, targetInput?: ConversationTargetInput) => {
+      const startupPrewarmRequest = isStartupPrewarmSender(event);
+      if (startupPrewarmRequest && !agent && startupAgentReady) await startupAgentReady;
       if (!agent) return {};
-      const wslDistros = await availableWslDistros();
+      const wslDistros = availableWslDistros();
       const target = conversationRuntimeTarget(targetInput);
       let conversationSnapshot: Record<string, unknown>;
       try {
-        conversationSnapshot = wslBackendEnabled()
-          ? await ensureWslConversationPool()!.snapshot(target)
-          : await ensureElectronUtilityPool().snapshot(target);
+        conversationSnapshot = startupPrewarmRequest
+          ? localConversationSnapshotForStartup(target)
+          : wslBackendEnabled()
+            ? await ensureWslConversationPool()!.snapshot(target)
+            : await ensureElectronUtilityPool().snapshot(target);
       } catch (error) {
         conversationSnapshot = {
           target,
@@ -1893,8 +2142,10 @@ if (hasCliCommand) {
       }
       return {
         mode: agent.mode,
-        model: agent.model,
+        model: agent.modelSelectionValue(),
         modelLabel: agent.modelLabel(),
+        resolvedDeployment: agent.activeDeployment(),
+        routeDecision: agent.lastRouteDecision,
         intelligence: agent.intelligence,
         ...conversationSnapshot,
         conversationLocked: conversationSnapshot.conversationLocked ?? false,
@@ -1913,12 +2164,14 @@ if (hasCliCommand) {
         gradientColors: agent.config.get<string[]>('ui', 'gradient_colors') || [],
         gradientSpeed: agent.config.getNum('ui', 'gradient_speed'),
         gradientWidth: agent.config.getNum('ui', 'gradient_width'),
-        glassAlpha: agent.config.getNum('ui', 'glass_alpha') || 0.85,
+        glassAlpha: agent.config.getNum('ui', 'glass_alpha') ?? 0.85,
         leftPanelCollapsed: agent.config.getBool('ui', 'left_panel_collapsed'),
         rightPanelCollapsed: agent.config.getBool('ui', 'right_panel_collapsed'),
         bottomPanelCollapsed: agent.config.getBool('ui', 'bottom_panel_collapsed'),
         secondaryPanelCollapsed: agent.config.getBool('ui', 'secondary_panel_collapsed'),
         darkMode: agent.config.getStr('ui', 'dark_mode'),
+        backgroundColor: normalizeUiBackgroundColor(agent.config.getStr('ui', 'background_color')),
+        fontFamily: normalizeUiFontFamily(agent.config.getStr('ui', 'font_family')),
         minimizeToTray: agent.config.getBool('ui', 'minimize_to_tray'),
         tone: agent.config.getStr('general', 'tone'),
         language: agent.config.getStr('general', 'language'),
@@ -1928,6 +2181,7 @@ if (hasCliCommand) {
         skillPolicy: agent.config.getStr('skills', 'auto_download'),
         autoSwitch: agent.config.getBool('models', 'auto_switch'),
         autoSwitchScope: agent.config.getStr('models', 'auto_switch_scope') || 'all',
+        switchTendency: agent.config.autoSwitchPreference(),
         fallbackOnUnavailable: agent.config.getBool('models', 'fallback_on_unavailable'),
         openAIApiMode: agent.config.openAIApiMode(),
         autoAdjust: agent.config.getBool('agent', 'auto_adjust_settings'),
@@ -1945,13 +2199,27 @@ if (hasCliCommand) {
         contextWindow: conversationSnapshot.contextWindow || { estimatedTokens: 0, maxTokens: 1, ratio: 0, warning: 'ok', model: String(conversationSnapshot.model || agent.model) },
         agentBackend: wslBackendEnabled()
           ? (wslAgentRuntimePool?.status(target) || { enabled: true, connected: false, distro: agent.config.getStr('agent', 'wsl_distro') || 'Ubuntu-24.04', pid: 0, error: '' })
-          : { ...ensureElectronUtilityPool().status(target), enabled: false, distro: '' },
+          : {
+            ...(startupPrewarmRequest
+              ? electronUtilityRuntimePool?.status(target) || {
+                enabled: true,
+                connected: false,
+                pid: 0,
+                error: '',
+                runtimeKey: normalizeConversationTarget(target).runtimeKey,
+                quarantined: false,
+              }
+              : ensureElectronUtilityPool().status(target)),
+            enabled: false,
+            distro: '',
+          },
         configuredAgentBackend: agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows',
         agentBackendRestartRequired: (agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows') !== activeAgentBackendMode,
         wslAvailable: wslDistros.length > 0,
         wslDistros,
       };
     });
+    resolveStartupBackendReady();
 
     ipcMain.handle('agent:getConversationPlan', async (_event, conversationId?: string) => {
       if (!agent) return { items: [] };
@@ -2016,6 +2284,10 @@ if (hasCliCommand) {
               case 'gradientColors': agent.config.set('ui', 'gradient_colors', value); break;
               case 'gradientSpeed': agent.config.set('ui', 'gradient_speed', value); break;
               case 'gradientWidth': agent.config.set('ui', 'gradient_width', value); break;
+              case 'glassAlpha': agent.config.set('ui', 'glass_alpha', value); break;
+              case 'theme': agent.config.set('ui', 'dark_mode', normalizeUiTheme(value)); break;
+              case 'backgroundColor': agent.config.set('ui', 'background_color', normalizeUiBackgroundColor(value)); break;
+              case 'fontFamily': agent.config.set('ui', 'font_family', normalizeUiFontFamily(value)); break;
               case 'layoutState':
                 if (value && typeof value === 'object') {
                   const layout = value as Record<string, unknown>;
@@ -2031,9 +2303,10 @@ if (hasCliCommand) {
               case 'autoSwitchScope': agent.config.set('models', 'auto_switch_scope', value === 'provider' ? 'provider' : 'all'); break;
               case 'fallbackOnUnavailable': agent.config.set('models', 'fallback_on_unavailable', value === true || value === 'on'); break;
               case 'switchTendency': agent.config.set('models', 'auto_switch_preference', value); break;
+              case 'clearLearnedAutoPreferences': if (value === true) agent.clearLearnedModelPreferences(); break;
               case 'openAIApiMode': agent.config.set('models', 'openai_api_mode', ['chat_stream', 'chat', 'responses'].includes(String(value)) ? value : 'chat_stream'); break;
               case 'nativeTools': agent.config.set('tools', 'enabled', normalizeNativeToolEnabled(value)); break;
-              case 'providers': agent.config.set('models', 'providers', mergeProviderSecrets(value, agent.config.providers())); break;
+              case 'providers': agent.updateProviders(value); break;
               case 'defaultFlow': agent.config.set('flow', 'default_flow', value); break;
               case 'dialogStyle': agent.config.set('ui', 'dialog_style', value); break;
               default: agent.config.set('ui', key, value);
@@ -2041,7 +2314,7 @@ if (hasCliCommand) {
           }
           agent.config.save();
         }
-        resetConversationKernel();
+        if (configPatchAffectsConversationRuntime(cfg)) resetConversationKernel();
         return true;
       }
       return false;
@@ -2049,7 +2322,8 @@ if (hasCliCommand) {
 
     ipcMain.handle('agent:saveSetting', async (_event, section: string, key: string, value: unknown) => {
       if (agent) {
-        agent.config.set(section, key, value);
+        if (section === 'models' && key === 'providers') agent.updateProviders(value);
+        else agent.config.set(section, key, value);
         agent.config.save();
         conversationKernel?.updateSetting(section, key, value);
         await Promise.all([
@@ -2084,6 +2358,16 @@ if (hasCliCommand) {
       return wslBackendEnabled()
         ? await ensureWslConversationPool()!.checkpoint(target)
         : await ensureElectronUtilityPool().checkpoint(target);
+    });
+
+    ipcMain.handle('agent:rateAutoRoute', async (_event, request: { target?: ConversationTargetInput; score?: number; routeId?: string }) => {
+      if (!agent) return { ok: false, reason: 'no_active_auto_route' };
+      const target = conversationRuntimeTarget(request);
+      const score = Number(request?.score);
+      const routeId = String(request?.routeId || '');
+      return wslBackendEnabled()
+        ? await ensureWslConversationPool()!.rateAutoRoute(target, score, routeId)
+        : await ensureElectronUtilityPool().rateAutoRoute(target, score, routeId);
     });
 
     ipcMain.handle('agent:stopConversation', async (_event, request: { target?: ConversationTargetInput; runId?: string; force?: boolean }) => {
@@ -2932,7 +3216,9 @@ if (hasCliCommand) {
     ipcMain.handle('app:drag', () => {
       // Window drag is handled by the renderer
     });
-    if (agent && mainWindow && !mainWindow.isDestroyed()) loadDesktopWindowUi(mainWindow);
+    // Initial and retry navigation are owned exclusively by runStartupAttempt.
+    // An unconditional load here races the attempt-one index load once Agent
+    // initialization becomes faster than IPC registration.
   }).catch((e: Error) => {
     logStartupFailure('desktop-startup', e);
     try {

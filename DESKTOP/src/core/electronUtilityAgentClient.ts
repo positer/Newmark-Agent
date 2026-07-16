@@ -1,9 +1,12 @@
-import { utilityProcess } from 'electron';
+import * as fs from 'fs';
+import * as path from 'path';
+import { app, utilityProcess } from 'electron';
 import { spawn } from 'child_process';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, normalizeConversationTarget } from './conversationTarget';
 import { AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
 import {
   UtilityAgentPromptResult,
+  UtilityAutoRouteRatingResult,
   UtilityAgentRequest,
   UtilityAgentResponse,
   UtilityAgentSnapshotResult,
@@ -14,8 +17,8 @@ import {
 } from './utilityAgentProtocol';
 
 type UtilityChild = ReturnType<typeof utilityProcess.fork>;
-// PowerShell startup plus Add-Type compilation can exceed three seconds on a
-// cold or busy Windows host even though Toolhelp itself is healthy.
+// PowerShell startup can be slow on a cold or busy Windows host even though
+// the precompiled Toolhelp helper itself is healthy.
 const WINDOWS_TREE_SNAPSHOT_TIMEOUT_MS = 12_000;
 const WINDOWS_TREE_PRIMARY_HOOK_TIMEOUT_MS = 4_000;
 const WINDOWS_TREE_MAX_RESCANS = 6;
@@ -31,6 +34,37 @@ const windowsProcessHelperRetryTimers = new Map<number, ReturnType<typeof setTim
 let windowsProcessHelperSequence = 0;
 let windowsProcessHelpersShuttingDown = false;
 let windowsProcessQueryScriptOverrideForTest: string | null = null;
+let windowsProcessQueryAnchorBarrierForTest: { readyPath: string; continuePath: string } | null = null;
+
+type WindowsProcessTreeHelperRuntime = {
+  kind: 'precompiled' | 'runtime_compile';
+  path: string;
+};
+
+function resolveWindowsProcessTreeHelperRuntime(): WindowsProcessTreeHelperRuntime {
+  const isPackaged = !!app?.isPackaged;
+  const helperPath = isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'dist', 'windows-process-tree-helper.dll')
+    : path.join(__dirname, '..', 'windows-process-tree-helper.dll');
+  if (fs.existsSync(helperPath) && fs.statSync(helperPath).isFile()) {
+    return { kind: 'precompiled', path: helperPath };
+  }
+  if (isPackaged) {
+    throw new Error(`Packaged Windows process-tree helper is missing: ${helperPath}`);
+  }
+  return { kind: 'runtime_compile', path: '' };
+}
+
+export function windowsProcessTreeHelperRuntimeForTest(): WindowsProcessTreeHelperRuntime {
+  return resolveWindowsProcessTreeHelperRuntime();
+}
+
+function windowsProcessTreeHelperLoadScript(helperPath: string): string {
+  const encodedPath = Buffer.from(helperPath, 'utf16le').toString('base64');
+  return String.raw`$helperPath = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encodedPath}'))
+if (![IO.File]::Exists($helperPath)) { throw 'Windows process-tree helper assembly is missing' }
+Add-Type -Path $helperPath`;
+}
 
 export function activeWindowsProcessHelperPidsForTest(): number[] {
   return [...activeWindowsProcessHelpers.values()].map(record => record.pid);
@@ -38,6 +72,14 @@ export function activeWindowsProcessHelperPidsForTest(): number[] {
 
 export function setWindowsProcessQueryScriptForTest(script: string | null): void {
   windowsProcessQueryScriptOverrideForTest = script;
+}
+
+export function setWindowsProcessQueryAnchorBarrierForTest(
+  barrier: { readyPath: string; continuePath: string } | null,
+): void {
+  windowsProcessQueryAnchorBarrierForTest = barrier
+    ? { readyPath: String(barrier.readyPath || ''), continuePath: String(barrier.continuePath || '') }
+    : null;
 }
 
 function trackWindowsProcessHelper(child: ReturnType<typeof spawn>, ownerKey: string): void {
@@ -150,20 +192,40 @@ export interface ElectronUtilityAgentClientOptions {
   startupGate?: () => void | Promise<void>;
 }
 
-function runWindowsProcessQuery(rootPid: number, timeoutMs: number, anchorPids: readonly number[] = [], ownerKey = 'global'): Promise<string> {
+function runWindowsProcessQuery(
+  rootPid: number,
+  timeoutMs: number,
+  anchorPids: readonly number[] = [],
+  ownerKey = 'global',
+  anchorCreationIdentities: ReadonlyMap<number, string> = new Map(),
+): Promise<string> {
   if (windowsProcessHelpersShuttingDown) return Promise.reject(new Error('Windows process helper subsystem is shutting down'));
   const encodedAnchors = [...new Set(anchorPids)]
     .filter(pid => Number.isInteger(pid) && pid > 0)
-    .map(pid => String(pid))
+    .map(pid => {
+      const identity = String(anchorCreationIdentities.get(pid) || '');
+      return /^\d+$/.test(identity) ? `${pid}:${identity}` : String(pid);
+    })
     .join(';');
-  const script = String.raw`$ErrorActionPreference = 'Stop'
+  const barrierReady = Buffer.from(windowsProcessQueryAnchorBarrierForTest?.readyPath || '', 'utf8').toString('base64');
+  const barrierContinue = Buffer.from(windowsProcessQueryAnchorBarrierForTest?.continuePath || '', 'utf8').toString('base64');
+  const helper = windowsProcessQueryScriptOverrideForTest ? null : resolveWindowsProcessTreeHelperRuntime();
+  const precompiledScript = helper?.kind === 'precompiled' ? String.raw`$ErrorActionPreference = 'Stop'
+${windowsProcessTreeHelperLoadScript(helper.path)}
+[NewmarkProcessSnapshot]::Capture(${rootPid}, '${encodedAnchors}', '${barrierReady}', '${barrierContinue}')` : '';
+  const runtimeCompileScript = String.raw`$ErrorActionPreference = 'Stop'
 $source = @'
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
 public static class NewmarkProcessSnapshot {
   private const uint TH32CS_SNAPPROCESS = 0x00000002;
   private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
+  private const int ERROR_INVALID_PARAMETER = 87;
+  private const string PROCESS_ABSENT = "-";
   private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
   private struct PROCESSENTRY32 {
@@ -188,15 +250,23 @@ public static class NewmarkProcessSnapshot {
   private struct FILETIME { public uint Low; public uint High; }
   private static string CreationIdentity(uint pid) {
     IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
-    if (process == IntPtr.Zero) return "";
+    if (process == IntPtr.Zero) {
+      int error = Marshal.GetLastWin32Error();
+      if (error == ERROR_INVALID_PARAMETER) return PROCESS_ABSENT;
+      throw new System.ComponentModel.Win32Exception(error);
+    }
     try {
       FILETIME creation, exit, kernel, user;
-      if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) return "";
+      if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) {
+        int error = Marshal.GetLastWin32Error();
+        if (error == ERROR_INVALID_PARAMETER) return PROCESS_ABSENT;
+        throw new System.ComponentModel.Win32Exception(error);
+      }
       ulong value = ((ulong)creation.High << 32) | creation.Low;
       return value.ToString(System.Globalization.CultureInfo.InvariantCulture);
     } finally { CloseHandle(process); }
   }
-  public static string Capture(uint rootPid, string encodedAnchors) {
+  public static string Capture(uint rootPid, string encodedAnchors, string barrierReadyBase64, string barrierContinueBase64) {
     IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
     try {
@@ -207,10 +277,78 @@ public static class NewmarkProcessSnapshot {
         do { processes.Add(Tuple.Create(entry.th32ProcessID, entry.th32ParentProcessID)); }
         while (Process32NextW(snapshot, ref entry));
       }
+      var livePids = new HashSet<uint>();
+      foreach (var process in processes) livePids.Add(process.Item1);
+      if (!String.IsNullOrEmpty(barrierReadyBase64) && !String.IsNullOrEmpty(barrierContinueBase64)) {
+        string readyPath = Encoding.UTF8.GetString(Convert.FromBase64String(barrierReadyBase64));
+        string continuePath = Encoding.UTF8.GetString(Convert.FromBase64String(barrierContinueBase64));
+        File.WriteAllText(readyPath, "ready");
+        DateTime deadline = DateTime.UtcNow.AddSeconds(8);
+        while (!File.Exists(continuePath)) {
+          if (DateTime.UtcNow >= deadline) throw new TimeoutException("Windows process snapshot test barrier timed out");
+          Thread.Sleep(10);
+        }
+      }
       var owned = new HashSet<uint>();
-      owned.Add(rootPid);
-      foreach (string encoded in encodedAnchors.Split(new[]{';'}, StringSplitOptions.RemoveEmptyEntries))
-        owned.Add(UInt32.Parse(encoded, System.Globalization.CultureInfo.InvariantCulture));
+      var parentOnlyWitnesses = new HashSet<uint>();
+      var verifiedIdentities = new Dictionary<uint, string>();
+      bool rootHasBoundIdentity = false;
+      foreach (string encoded in encodedAnchors.Split(new[]{';'}, StringSplitOptions.RemoveEmptyEntries)) {
+        string[] parts = encoded.Split(':');
+        uint anchorPid = UInt32.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture);
+        if (parts.Length < 2 || String.IsNullOrEmpty(parts[1])) {
+          owned.Add(anchorPid);
+          continue;
+        }
+        if (anchorPid == rootPid) rootHasBoundIdentity = true;
+        ulong expectedCreation;
+        if (!UInt64.TryParse(parts[1], out expectedCreation)) continue;
+        if (!livePids.Contains(anchorPid)) {
+          // Preserve the old PID as a parent-only witness. Toolhelp keeps a
+          // child's original parent PID after the parent exits, so this lets a
+          // late orphan surface and fail closed in the JS identity merge.
+          owned.Add(anchorPid);
+          parentOnlyWitnesses.Add(anchorPid);
+          continue;
+        }
+        string actualCreationText = CreationIdentity(anchorPid);
+        if (actualCreationText == PROCESS_ABSENT) {
+          // Toolhelp is a point-in-time list. The anchor may exit after that
+          // list is captured but before OpenProcess; retain only its old PID as
+          // a parent witness and never output or terminate a replacement.
+          owned.Add(anchorPid);
+          parentOnlyWitnesses.Add(anchorPid);
+          continue;
+        }
+        ulong actualCreation;
+        if (!UInt64.TryParse(actualCreationText, out actualCreation))
+          throw new InvalidOperationException("Could not verify a Windows anchor creation identity");
+        if (actualCreation == expectedCreation) {
+          owned.Add(anchorPid);
+          verifiedIdentities[anchorPid] = actualCreationText;
+          continue;
+        }
+        // The PID now belongs to another process. Never seed that replacement
+        // or its new children. A direct child that predates the replacement can
+        // only be an orphan from an earlier PID owner; seed just that candidate
+        // so the JS merge can quarantine an unprovable late descendant.
+        foreach (var process in processes) {
+          if (process.Item2 != anchorPid) continue;
+          string childCreationText = CreationIdentity(process.Item1);
+          if (childCreationText == PROCESS_ABSENT) continue;
+          ulong childCreation;
+          if (!UInt64.TryParse(childCreationText, out childCreation))
+            throw new InvalidOperationException("Could not verify a Windows child creation identity");
+          if (childCreation >= expectedCreation && childCreation < actualCreation) {
+            owned.Add(process.Item1);
+            verifiedIdentities[process.Item1] = childCreationText;
+          }
+        }
+      }
+      // The initial snapshot has no bound anchors and must discover the root.
+      // Rescans pass the captured root identity, so a reused root PID is never
+      // adopted as a member of the old runtime tree.
+      if (!rootHasBoundIdentity) owned.Add(rootPid);
       bool changed;
       do {
         changed = false;
@@ -223,7 +361,15 @@ public static class NewmarkProcessSnapshot {
       var rows = new List<string>();
       foreach (var process in processes) {
         if (!owned.Contains(process.Item1)) continue;
-        rows.Add(process.Item1.ToString() + "," + process.Item2.ToString() + "," + CreationIdentity(process.Item1));
+        if (parentOnlyWitnesses.Contains(process.Item1)) continue;
+        string creationIdentity;
+        if (!verifiedIdentities.TryGetValue(process.Item1, out creationIdentity))
+          creationIdentity = CreationIdentity(process.Item1);
+        if (creationIdentity == PROCESS_ABSENT) continue;
+        ulong parsedCreationIdentity;
+        if (!UInt64.TryParse(creationIdentity, out parsedCreationIdentity))
+          throw new InvalidOperationException("Could not verify an owned Windows process creation identity");
+        rows.Add(process.Item1.ToString() + "," + process.Item2.ToString() + "," + creationIdentity);
       }
       return string.Join("\n", rows);
     } finally { CloseHandle(snapshot); }
@@ -231,7 +377,9 @@ public static class NewmarkProcessSnapshot {
 }
 '@
 Add-Type -TypeDefinition $source
-[NewmarkProcessSnapshot]::Capture(${rootPid}, '${encodedAnchors}')`;
+[NewmarkProcessSnapshot]::Capture(${rootPid}, '${encodedAnchors}', '${barrierReady}', '${barrierContinue}')`;
+  const script = windowsProcessQueryScriptOverrideForTest
+    || (helper?.kind === 'precompiled' ? precompiledScript : runtimeCompileScript);
   return new Promise<string>((resolve, reject) => {
     let settled = false;
     let stdout = '';
@@ -254,7 +402,7 @@ Add-Type -TypeDefinition $source
       void terminateWindowsProcessHelperAndWait(query).then(() => finish(terminalError!));
     };
     try {
-      query = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', windowsProcessQueryScriptOverrideForTest || script], {
+      query = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       });
@@ -292,9 +440,16 @@ export async function snapshotWindowsProcessTree(
   timeoutMs = WINDOWS_TREE_SNAPSHOT_TIMEOUT_MS,
   anchorPids: readonly number[] = [],
   ownerKey = 'global',
+  anchorCreationIdentities: ReadonlyMap<number, string> = new Map(),
 ): Promise<WindowsProcessTreeSnapshot> {
   if (!Number.isInteger(rootPid) || rootPid <= 0) throw new Error('Invalid Windows utility process id');
-  const raw = (await runWindowsProcessQuery(rootPid, timeoutMs, anchorPids, ownerKey)).replace(/^\uFEFF/, '').trim();
+  const raw = (await runWindowsProcessQuery(
+    rootPid,
+    timeoutMs,
+    anchorPids,
+    ownerKey,
+    anchorCreationIdentities,
+  )).replace(/^\uFEFF/, '').trim();
   const rows = raw.split(/\r?\n/)
     .map(line => line.trim().split(','))
     .filter(parts => parts.length === 3)
@@ -367,7 +522,11 @@ function runWindowsIdentityTermination(entries: WindowsProcessTreeEntry[], timeo
     return Promise.reject(new Error('Invalid identity-bound Windows process termination request'));
   }
   const encodedTargets = entries.map(entry => `${entry.pid}:${entry.creationIdentity}`).join(';');
-  const script = String.raw`$ErrorActionPreference = 'Stop'
+  const helper = resolveWindowsProcessTreeHelperRuntime();
+  const precompiledScript = helper.kind === 'precompiled' ? String.raw`$ErrorActionPreference = 'Stop'
+${windowsProcessTreeHelperLoadScript(helper.path)}
+[NewmarkIdentityTerminator]::KillAll('${encodedTargets}')` : '';
+  const runtimeCompileScript = String.raw`$ErrorActionPreference = 'Stop'
 $source = @'
 using System;
 using System.Collections.Generic;
@@ -423,6 +582,7 @@ public static class NewmarkIdentityTerminator {
 '@
 Add-Type -TypeDefinition $source
 [NewmarkIdentityTerminator]::KillAll('${encodedTargets}')`;
+  const script = helper.kind === 'precompiled' ? precompiledScript : runtimeCompileScript;
   return new Promise<void>((resolve, reject) => {
     let settled = false;
     let stderr = '';
@@ -503,7 +663,18 @@ function mergeWindowsProcessTreeSnapshots(
     const known = entries.get(entry.pid);
     if (known) {
       if (known.creationIdentity !== entry.creationIdentity) {
-        throw new Error(`Windows PID reuse detected for ${entry.pid}; restart was blocked`);
+        const knownParent = entries.get(entry.parentPid);
+        const currentParent = current.get(entry.parentPid);
+        if (!knownParent || !currentParent || knownParent.creationIdentity !== currentParent.creationIdentity) {
+          throw new Error(`Windows PID reuse detected for ${entry.pid}; restart was blocked`);
+        }
+        // A still-identity-bound parent may legitimately create a new child
+        // after an earlier child PID exits and is reused. The current snapshot
+        // proves ownership through that parent, so replace only the historical
+        // identity for this PID and keep the termination handle identity-bound.
+        assertWindowsCreationOrder(entry, currentParent);
+        entries.set(entry.pid, entry);
+        continue;
       }
       if (known.parentPid !== entry.parentPid) {
         throw new Error(`Windows parent identity changed for PID ${entry.pid}; restart was blocked`);
@@ -582,6 +753,20 @@ async function confirmWindowsProcessTreeQuiescence(
   const maxRescans = Math.max(1, Math.floor(options.maxRescans ?? WINDOWS_TREE_MAX_RESCANS));
   const stableRequired = Math.max(1, Math.min(maxRescans, Math.floor(options.stableEmptyRescans ?? WINDOWS_TREE_STABLE_EMPTY_RESCANS)));
   const rescanDelayMs = Math.max(0, Math.floor(options.rescanDelayMs ?? WINDOWS_TREE_RESCAN_DELAY_MS));
+  const rescanKnownTree = async (timeoutMs: number): Promise<WindowsProcessTreeSnapshot> => {
+    const anchorPids = known.entries.map(entry => entry.pid);
+    if (options.snapshot) {
+      return await snapshotter(initial.rootPid, timeoutMs, anchorPids, options.helperOwnerKey);
+    }
+    const anchorCreationIdentities = new Map(known.entries.map(entry => [entry.pid, entry.creationIdentity]));
+    return await snapshotWindowsProcessTree(
+      initial.rootPid,
+      timeoutMs,
+      anchorPids,
+      options.helperOwnerKey,
+      anchorCreationIdentities,
+    );
+  };
   for (let scan = 0; scan < maxRescans; scan++) {
     if (scan > 0) await withinWindowsTreeDeadline(delay(rescanDelayMs), deadline, 'rescan delay');
     const timeoutMs = remainingWindowsTreeBudget(
@@ -591,7 +776,7 @@ async function confirmWindowsProcessTreeQuiescence(
       !options.snapshot,
     );
     let current = await withinWindowsTreeDeadline(
-      snapshotter(initial.rootPid, timeoutMs, known.entries.map(entry => entry.pid), options.helperOwnerKey),
+      rescanKnownTree(timeoutMs),
       deadline,
       'rescan',
     );
@@ -614,7 +799,7 @@ async function confirmWindowsProcessTreeQuiescence(
         !options.snapshot,
       );
       current = await withinWindowsTreeDeadline(
-        snapshotter(initial.rootPid, postRootTimeoutMs, known.entries.map(entry => entry.pid), options.helperOwnerKey),
+        rescanKnownTree(postRootTimeoutMs),
         deadline,
         'post-root rescan',
       );
@@ -632,7 +817,7 @@ async function confirmWindowsProcessTreeQuiescence(
         !options.snapshot,
       );
       current = await withinWindowsTreeDeadline(
-        snapshotter(initial.rootPid, survivorTimeoutMs, known.entries.map(entry => entry.pid), options.helperOwnerKey),
+        rescanKnownTree(survivorTimeoutMs),
         deadline,
         'survivor rescan',
       );
@@ -884,6 +1069,15 @@ export class ElectronUtilityAgentClient {
   async checkpoint(): Promise<Record<string, unknown>> {
     await this.start();
     return await this.request('checkpoint', { target: this.target }, 5_000) as Record<string, unknown>;
+  }
+
+  async rateAutoRoute(score: number, routeId = ''): Promise<UtilityAutoRouteRatingResult> {
+    await this.start();
+    return await this.request('rate_auto_route', {
+      target: this.target,
+      score,
+      routeId: String(routeId || ''),
+    }, 5_000) as UtilityAutoRouteRatingResult;
   }
 
   async setWorkRunExpanded(runId: string, expanded: boolean): Promise<boolean> {

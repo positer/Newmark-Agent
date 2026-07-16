@@ -219,9 +219,14 @@ export function emitAnthropicTool(def: NewmarkToolDefinition): unknown {
 }
 
 export function normalizeToolResult(output: string, metadata?: Record<string, unknown>): NewmarkToolResult {
-  const error = /^\[[^\]]+(?: error|)\]/i.test(output) && !/\bOK\b/i.test(output)
+  let semanticError = '';
+  try {
+    const parsed = JSON.parse(output) as Record<string, unknown>;
+    if (parsed && parsed.ok === false) semanticError = String(parsed.error || 'Tool reported an unsuccessful result.');
+  } catch {}
+  const error = semanticError || (/^\[[^\]]+(?: error|)\]/i.test(output) && !/\bOK\b/i.test(output)
     ? output.split(/\r?\n/)[0]
-    : undefined;
+    : undefined);
   return { ok: !error, output, error, metadata };
 }
 

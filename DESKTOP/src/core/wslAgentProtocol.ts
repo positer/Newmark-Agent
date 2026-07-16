@@ -4,6 +4,7 @@ import { ConversationRuntimeTarget } from './conversationTarget';
 import { TerminalTakeoverEvent, TerminalTakeoverOwnerFilter, TerminalTakeoverState } from '../tools/terminalTakeover';
 import { BrowserUseRequest } from './browserUse';
 import { BrowserControlRequest } from './browserControl';
+import type { AutoRouteRatingResult } from './agent';
 
 export interface WslAgentWorkspace {
   id?: string;
@@ -34,6 +35,8 @@ export interface WslHostToolContext {
   actorId: string;
   runtimeKey: string;
   mode?: string;
+  /** Trusted runner capability; never sourced from model-authored tool arguments. */
+  allowEphemeralVisionImage?: boolean;
 }
 
 interface WslHostToolRequestBase {
@@ -63,6 +66,7 @@ export type WslAgentRequest =
   | { id: string; method: 'snapshot'; params: { conversationId?: string; target?: ConversationRuntimeTarget; workspace?: WslAgentWorkspace | null } }
   | { id: string; method: 'guide'; params: { target: ConversationRuntimeTarget; envelope: ConversationInputEnvelope } }
   | { id: string; method: 'checkpoint'; params: { target: ConversationRuntimeTarget } }
+  | { id: string; method: 'rate_auto_route'; params: { target: ConversationRuntimeTarget; score: number; routeId?: string } }
   | { id: string; method: 'set_work_run_expanded'; params: { target: ConversationRuntimeTarget; runId: string; expanded: boolean } }
   | { id: string; method: 'update_setting'; params: { section: string; key: string; value: unknown } }
   | { id: string; method: 'terminal_state'; params: WslTerminalRequestBase }
@@ -93,3 +97,4 @@ export interface WslAgentPromptResult extends ConversationKernelRunResult {
 
 export type WslAgentStopResult = ConversationStopResult & { backend: 'wsl'; distro: string };
 export type WslGuideResult = GuideReceipt;
+export type WslAutoRouteRatingResult = AutoRouteRatingResult;

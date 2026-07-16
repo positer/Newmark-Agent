@@ -5,6 +5,7 @@ import { TerminalTakeoverEvent, TerminalTakeoverOwnerFilter, TerminalTakeoverSta
 import {
   WslAgentPromptRequest,
   WslAgentPromptResult,
+  WslAutoRouteRatingResult,
   WslAgentRequest,
   WslAgentResponse,
   WslAgentWorkspace,
@@ -265,6 +266,19 @@ export class WslAgentClient {
     return await this.request('checkpoint', { target: await this.mapTarget(target) }, 5_000) as Record<string, unknown>;
   }
 
+  async rateAutoRoute(
+    target: ConversationRuntimeTarget,
+    score: number,
+    routeId = '',
+  ): Promise<WslAutoRouteRatingResult> {
+    await this.start();
+    return await this.request('rate_auto_route', {
+      target: await this.mapTarget(target),
+      score,
+      routeId: String(routeId || ''),
+    }, 5_000) as WslAutoRouteRatingResult;
+  }
+
   async setWorkRunExpanded(target: ConversationRuntimeTarget, runId: string, expanded: boolean): Promise<boolean> {
     await this.start();
     return !!await this.request('set_work_run_expanded', { target: await this.mapTarget(target), runId, expanded }, 5_000);
@@ -427,15 +441,25 @@ export class WslAgentClient {
     let result: WslHostToolResult;
     const controller = new AbortController();
     this.hostToolRuns.set(request.requestId, { generation, controller });
-    if (!this.hostToolHandler) {
+    const trustedTarget = this.runtimeTarget;
+    if (!trustedTarget || request?.context?.runtimeKey !== trustedTarget.runtimeKey) {
+      result = { requestId: request.requestId, ok: false, error: 'WSL host tool target mismatch' };
+    } else if (!this.hostToolHandler) {
       result = { requestId: request.requestId, ok: false, error: 'No Windows host tool handler is registered' };
     } else if (!['browser_control', 'computer_use', 'browser_use', 'automation', 'terminal_takeover'].includes(request.tool)) {
       result = { requestId: request.requestId, ok: false, error: `WSL host tool is not allowed: ${String(request.tool)}` };
-    } else if (!this.runtimeTarget || request.context.runtimeKey !== this.runtimeTarget.runtimeKey) {
-      result = { requestId: request.requestId, ok: false, error: 'WSL host tool target mismatch' };
     } else {
+      const trustedRequest = {
+        ...request,
+        context: {
+          ...request.context,
+          workspaceId: trustedTarget.workspaceId,
+          conversationId: trustedTarget.conversationId,
+          runtimeKey: trustedTarget.runtimeKey,
+        },
+      } as WslHostToolRequest;
       try {
-        result = { requestId: request.requestId, ok: true, result: await this.hostToolHandler(request, controller.signal) };
+        result = { requestId: request.requestId, ok: true, result: await this.hostToolHandler(trustedRequest, controller.signal) };
       } catch (error) {
         result = { requestId: request.requestId, ok: false, error: error instanceof Error ? error.message : String(error) };
       }

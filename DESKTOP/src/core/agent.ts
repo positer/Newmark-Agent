@@ -2,7 +2,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { cropAndMagnifyImage, decodeInspectionImage } from './imageInspect';
-import { ConfigManager, ModelConfig, ModelEvaluation, ProviderProtocol, inferModelVisionCapability, inferProviderProtocol } from './config';
+import {
+  archiveConversationImageAttachment,
+  hydrateConversationImageAttachments,
+  persistAttachmentsFromHistoryContent,
+  persistSubmittedConversationImages,
+} from './conversationAttachments';
+import { ConfigManager, ModelConfig, ModelEvaluation, ModelValidationSummary, ProviderProtocol, inferModelVisionCapability, inferProviderProtocol, mergeProviderSecrets } from './config';
 import { LLMProvider } from '../llm/provider';
 import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, tokenizeFuzzyProviderInput } from './fuzzy';
 import { ToolExecutor } from '../tools/index';
@@ -20,17 +26,42 @@ import type { AgentPromptMessage } from './conversationKernel';
 import {
   AgentMode, InputMode, AgentStatus, StreamToken,
   ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent,
-  ConversationTarget, ConversationWorkRun, ConversationWorkRunStatus, GuideReceipt,
+  ConversationTarget, ConversationWorkRun, ConversationWorkRunStatus, GuideReceipt, ConversationImageAttachment,
 } from './types';
 import { conversationRuntimeKey } from './conversationTarget';
 import { requestUtilityHostTool } from './utilityHostToolBridge';
 import { requestWindowsHostTool } from './wslHostToolBridge';
 import { runAsyncProcess, runAsyncWindowsBatch } from './asyncProcess';
+import { PNG } from 'pngjs';
+import {
+  ModelValidationProbeAdapter,
+  ModelValidationProbeError,
+  ModelValidationRecord,
+  ModelValidationService,
+  ToolProbeObservation,
+  ToolProbeScenario,
+  VisionChallenge,
+} from './modelValidation';
+import { FileModelValidationCache } from './modelValidationStore';
+import {
+  AutoRouteCandidate,
+  AutoRouter,
+  DeploymentRef,
+  ModelSelection,
+  PlannedRouteAttempt,
+  RouteDecision,
+  RouteFeedbackEvent,
+  RouteMode,
+  classifyRouteFailure,
+  defaultRoutePolicy,
+  normalizeAutoPreference,
+} from './autoRouter';
 
-export { AgentMode, InputMode, AgentStatus, StreamToken, ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent, ConversationTarget, ConversationWorkRun, GuideReceipt };
+export { AgentMode, InputMode, AgentStatus, StreamToken, ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent, ConversationTarget, ConversationWorkRun, GuideReceipt, ConversationImageAttachment };
 
 export interface ModelValidationResult extends ModelEvaluation {
   name: string;
+  provider_id: string;
   provider: string;
   model: string;
   display: string;
@@ -47,6 +78,13 @@ interface AgentRuntimeOptions {
     get(conversationId?: string): LinkedPlanState;
     update(markdown: string, expectedRevision: number, actorId: string, conversationId?: string): LinkedPlanState;
   };
+}
+
+export interface AutoRouteRatingResult {
+  ok: boolean;
+  score?: -1 | 1;
+  routeId?: string;
+  reason?: 'invalid_score' | 'no_active_auto_route' | 'stale_route' | 'already_rated';
 }
 export const ROOT_AGENT_ACTOR_ID = '00000000-0000-4000-8000-000000000001';
 function throwIfAgentAborted(signal?: AbortSignal): void {
@@ -110,6 +148,7 @@ export interface ConversationContinuation {
   clientMessageId?: string;
   runId?: string;
   images?: Array<{ dataUrl: string; name?: string; type?: string }>;
+  attachments?: ConversationImageAttachment[];
   createdAt: string;
 }
 let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant built into a native desktop application.
@@ -126,7 +165,7 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - browser_use: Preferred native built-in-browser workflow. Observe first, then use the returned page generation, observation id, and opaque refs for click/type/select/scroll/key/navigation/wait/extraction. Every receipt is bound to the current workspace/conversation runtime and actor. Stale page capabilities are rejected; observe again to recover.
 - browser_open/browser_snapshot/browser_click/browser_type/browser_eval/browser_back/browser_forward/browser_reload/browser_cdp: Legacy and expert Chromium controls. Prefer browser_use for normal interactive work; raw eval/CDP remain advanced escape hatches.
 - computer_use: Native desktop Computer Use control for full desktop or app-scoped observe/move/click/scroll/type/key/wait against Windows desktop applications. Use takeover_start when actively taking over the desktop; it shows a full-virtual-desktop dynamic gradient edge indicator so the user can see the Agent is controlling the desktop, and use takeover_stop when done. Use app_list/app_observe/app_activate/app_click/app_scroll/app_type/app_key when the task can be scoped to a visible taskbar application by title, process name, PID, or window handle; this narrows screenshots and actions to that application. Use observe/app_observe first, reason over returned screenshot plus UI Automation objects. If the model supports vision, Newmark sends the screenshot image and UI object tree together in the same tool-result context; use both for stable decisions. Prefer target_id from perception.scene_summary.high_priority_objects or perception.objects for move/click/scroll when available; fall back to exact coordinates only when necessary.
-- image_inspect: For submitted visual attachments, query source_info and actively crop/magnify a precise pixel region when text or geometry is too small to inspect reliably. Cropped images are current-turn-only and never saved to disk.
+- image_inspect: For durable user-submitted visual attachments, query source_info by stable attachment_id (or latest-message image_index) and actively crop/magnify a precise pixel region when text or geometry is too small to inspect reliably. Original user images remain revisitable; derived crops are current-turn-only and never saved to disk.
 - task: Create a subagent for parallel work
 - subagent_list/subagent_read/subagent_send/subagent_result/subagent_close: List, read bounded peer feedback, message, inspect, and close same-conversation peer agents
 - linked_plan: Read or conservatively update the conversation-linked Markdown plan in every mode
@@ -206,6 +245,7 @@ export class Agent {
   public conversationPlan: ConversationPlanState = { items: [] };
   public linkedPlan: LinkedPlanState = { markdown: '', revision: 0 };
   public model: string;
+  public lastRouteDecision: RouteDecision | null = null;
   public intelligence: string;
   public engine: string;
   public flow: FlowWorkflow | null = null;
@@ -251,6 +291,17 @@ export class Agent {
   private loadedWorkspaceConversationKey = '';
   private managedWorkRunIds = new Set<string>();
   private finalizingWorkRunId = '';
+  private readonly autoRouter: AutoRouter;
+  private resolvedDeployment: DeploymentRef | null = null;
+  private fixedDeployment: DeploymentRef | null = null;
+  private routeTransactionId = '';
+  private pendingAutoAttempts: PlannedRouteAttempt[] = [];
+  private routeStreamCommitted = false;
+  private routeSideEffectCommitted = false;
+  private lastRouteTransition: PlannedRouteAttempt['kind'] | '' = '';
+  private lastRouteRetryDelayMs = 0;
+  private routeAttemptStartedAt = 0;
+  private readonly explicitlyRatedRoutes = new Map<string, -1 | 1>();
   private readonly rootInboxListener = (message: SubagentRootMessage) => this.deliverRootInboxMessage(message);
   public readonly agentOnly: boolean;
   public readonly runtimeActorId: string;
@@ -264,6 +315,8 @@ export class Agent {
     this.subagentPrompt = options.subagentPrompt || '';
     this.linkedPlanAccess = options.linkedPlanAccess;
     this.config = new ConfigManager(rootPath);
+    this.autoRouter = new AutoRouter({ policyVersion: 'newmark-auto-v1' });
+    this.loadLearnedRouteFeedback();
     if (this.isSubagentRuntime || this.agentOnly) {
       this.config.set('workspace', 'auto_create_timestamp_workspace', false);
     }
@@ -279,6 +332,8 @@ export class Agent {
     this.inputMode = inputStr === 'next' ? 'next' : 'guide';
 
     this.model = this.config.getStr('models', 'default_model');
+    const initialModel = this.config.findModel(this.model);
+    this.fixedDeployment = initialModel ? this.deploymentRef(initialModel) : null;
     this.intelligence = this.config.getStr('models', 'default_intelligence') || 'medium';
     this.engine = this.config.getStr('models', 'agent_engine') || 'builtin';
 
@@ -323,18 +378,225 @@ export class Agent {
         this.model = fallback || '';
         return;
       }
-      const current = this.model && this.model !== 'auto' ? this.config.findModel(this.model) : null;
-      const anchor = current?.provider || this.config.autoSwitchAnchorProvider() || this.config.findModel(this.config.getStr('models', 'default_model'))?.provider || '';
+      const current = this.activeModelConfig();
+      const anchor = current?.provider_id || this.autoSwitchAnchorProviderId();
       if (anchor) this.config.set('models', 'auto_switch_anchor_provider', anchor);
       this.model = 'auto';
+      this.fixedDeployment = null;
+      this.resetAutoRoute();
       return;
     }
-    this.model = requested;
-    const current = requested ? this.config.findModel(requested) : null;
-    if (current?.provider) this.config.set('models', 'auto_switch_anchor_provider', current.provider);
+    const previousAuto = this.model === 'auto' ? this.resolvedDeployment : null;
+    const qualified = parseDeploymentSelectionValue(requested);
+    const current = qualified ? this.config.findDeployment(qualified) : (requested ? this.config.findModel(requested) : undefined);
+    this.model = current?.name || requested;
+    this.fixedDeployment = current ? this.deploymentRef(current) : qualified;
+    this.resolvedDeployment = null;
+    this.pendingAutoAttempts = [];
+    if (current?.provider_id) this.config.set('models', 'auto_switch_anchor_provider', current.provider_id);
+    if (previousAuto && current) {
+      const taskClass = this.lastRouteDecision?.taskClasses[0] || 'chat';
+      this.recordRouteFeedbackFor(previousAuto, taskClass, -1, 'manual_switch');
+      this.recordRouteFeedbackFor(this.deploymentRef(current), taskClass, 1, 'manual_switch');
+    }
+    this.lastRouteDecision = null;
+    this.routeAttemptStartedAt = 0;
+    this.routeStreamCommitted = false;
+    this.routeSideEffectCommitted = false;
   }
   setIntelligence(tier: string): void { this.intelligence = tier; }
   setAutomationManager(manager: AutomationManager | null): void { this.automationManager = manager; }
+
+  activeDeployment(): DeploymentRef | null {
+    if (this.model === 'auto') return this.resolvedDeployment ? { ...this.resolvedDeployment } : null;
+    if (this.fixedDeployment) return { ...this.fixedDeployment };
+    const model = this.config.findModel(this.model);
+    return model ? this.deploymentRef(model) : null;
+  }
+
+  activeModelName(): string {
+    return this.activeDeployment()?.modelId || (this.model === 'auto' ? '' : this.model);
+  }
+
+  modelSelectionValue(): string {
+    if (this.model === 'auto') return 'auto';
+    const deployment = this.activeDeployment();
+    return deployment
+      ? `deployment:${encodeURIComponent(deployment.providerId)}:${encodeURIComponent(deployment.modelId)}`
+      : this.model;
+  }
+
+  activeModelConfig(): ReturnType<ConfigManager['allModels']>[number] | undefined {
+    const deployment = this.activeDeployment();
+    return deployment ? this.config.findDeployment(deployment) : this.config.findModel(this.model);
+  }
+
+  requestedModelSelection(): ModelSelection {
+    if (this.model !== 'auto') {
+      return { kind: 'fixed', deployment: this.activeDeployment() || { providerId: '', modelId: this.model } };
+    }
+    const scope = this.config.autoSwitchScope() === 'provider'
+      ? { kind: 'provider' as const, providerId: this.autoSwitchAnchorProviderId() }
+      : { kind: 'global' as const };
+    return { kind: 'auto', scope, policyId: normalizeAutoPreference(this.config.autoSwitchPreference()) };
+  }
+
+  resetAutoRoute(): void {
+    if (this.routeTransactionId) this.autoRouter.endTransaction(this.routeTransactionId);
+    this.resolvedDeployment = null;
+    this.lastRouteDecision = null;
+    this.pendingAutoAttempts = [];
+    this.routeStreamCommitted = false;
+    this.routeSideEffectCommitted = false;
+    this.lastRouteTransition = '';
+    this.lastRouteRetryDelayMs = 0;
+    this.routeAttemptStartedAt = 0;
+  }
+
+  markRouteStreamCommitted(): void {
+    this.routeStreamCommitted = true;
+  }
+
+  markRouteToolExecuted(name: string, rawArgs = ''): void {
+    if (!routeToolIsReadOnly(name, rawArgs)) this.routeSideEffectCommitted = true;
+  }
+
+  routeTransitionKind(): PlannedRouteAttempt['kind'] | '' {
+    return this.lastRouteTransition;
+  }
+
+  beginRouteAttempt(): void {
+    this.routeAttemptStartedAt = Date.now();
+  }
+
+  async waitForPlannedRouteRetry(): Promise<void> {
+    const waitBudgetMs = Math.max(0, Math.min(15_000, this.lastRouteDecision?.retryBudgetMs ?? 5_000));
+    const delay = Math.max(0, Math.min(waitBudgetMs, this.lastRouteRetryDelayMs));
+    this.lastRouteRetryDelayMs = 0;
+    if (!delay) return;
+    await new Promise<void>(resolve => setTimeout(resolve, delay));
+  }
+
+  recordRouteSuccess(latencyMs?: number, throughput?: number): void {
+    const deployment = this.activeDeployment();
+    if (!deployment) return;
+    this.autoRouter.recordEndpointSuccess(deployment, latencyMs, throughput);
+    if (this.lastRouteDecision) {
+      const attempt = [...this.lastRouteDecision.attempts].reverse().find(item => deploymentIdentity(item.deployment) === deploymentIdentity(deployment));
+      if (attempt) {
+        attempt.status = 'success';
+        if (Number.isFinite(latencyMs)) attempt.durationMs = Math.max(0, Number(latencyMs));
+      }
+      this.lastRouteDecision.resolvedDeployment = { ...deployment };
+      this.lastRouteDecision.finalStatus = 'succeeded';
+      this.persistRouteDecision(this.lastRouteDecision);
+    }
+    this.pendingAutoAttempts = [];
+    this.routeAttemptStartedAt = 0;
+  }
+
+  recordRouteToolOutcome(valid: boolean): void {
+    const deployment = this.activeDeployment();
+    if (!deployment) return;
+    this.autoRouter.recordToolOutcome(deployment, valid);
+  }
+
+  updateProviders(value: unknown): void {
+    const before = this.config.providers();
+    this.config.set('models', 'providers', mergeProviderSecrets(value, before));
+    const after = this.config.providers();
+    const beforeById = new Map(before.map(provider => [provider.id, provider]));
+    const afterById = new Map(after.map(provider => [provider.id, provider]));
+    let changed = false;
+    for (const providerId of new Set([...beforeById.keys(), ...afterById.keys()])) {
+      const previous = beforeById.get(providerId);
+      const next = afterById.get(providerId);
+      if (routeProviderFingerprint(previous) === routeProviderFingerprint(next)) continue;
+      changed = true;
+      for (const provider of [previous, next]) {
+        if (!provider) continue;
+        for (const model of provider.models || []) {
+          this.autoRouter.resetEndpointAfterConfigChange({
+            providerId: provider.id,
+            modelId: model.name,
+            logicalModelGroupId: model.logical_model_group_id || undefined,
+          });
+        }
+      }
+    }
+    if (changed) this.resetAutoRoute();
+  }
+
+  clearLearnedModelPreferences(): void {
+    this.autoRouter.clearLearnedPreferences();
+    const target = path.join(this.rootPath, 'routing', 'feedback.jsonl');
+    try { fs.rmSync(target, { force: true }); } catch {}
+  }
+
+  rateActiveAutoRoute(score: number, expectedRouteId = ''): AutoRouteRatingResult {
+    const normalizedScore = Number(score);
+    if (normalizedScore !== -1 && normalizedScore !== 1) {
+      return { ok: false, reason: 'invalid_score' };
+    }
+    const decision = this.lastRouteDecision;
+    const deployment = this.activeDeployment();
+    if (this.model !== 'auto'
+      || decision?.requestedSelection.kind !== 'auto'
+      || !decision.routeId
+      || !decision.resolvedDeployment
+      || !deployment) {
+      return { ok: false, reason: 'no_active_auto_route' };
+    }
+    const requestedRouteId = String(expectedRouteId || '').trim();
+    if (requestedRouteId && requestedRouteId !== decision.routeId) {
+      return { ok: false, routeId: decision.routeId, reason: 'stale_route' };
+    }
+    const previousScore = this.explicitlyRatedRoutes.get(decision.routeId);
+    if (previousScore !== undefined) {
+      return { ok: false, score: previousScore, routeId: decision.routeId, reason: 'already_rated' };
+    }
+    const taskClasses = [...new Set(decision.taskClasses)];
+    for (const taskClass of taskClasses) {
+      this.recordRouteFeedbackFor(deployment, taskClass, normalizedScore, 'explicit_rating');
+    }
+    this.recordRouteQualityObservation(deployment, taskClasses, normalizedScore > 0);
+    this.explicitlyRatedRoutes.set(decision.routeId, normalizedScore);
+    while (this.explicitlyRatedRoutes.size > 1_000) {
+      const oldest = this.explicitlyRatedRoutes.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.explicitlyRatedRoutes.delete(oldest);
+    }
+    return { ok: true, score: normalizedScore, routeId: decision.routeId };
+  }
+
+  recordObjectiveRouteResult(success: boolean): void {
+    const deployment = this.activeDeployment();
+    if (!deployment || !this.lastRouteDecision) return;
+    const taskClasses = [...new Set(this.lastRouteDecision.taskClasses)];
+    this.recordRouteQualityObservation(deployment, taskClasses, success);
+    for (const taskClass of taskClasses) {
+      if (success) this.recordRouteFeedbackFor(deployment, taskClass, 1, 'objective_success');
+    }
+  }
+
+  private recordRouteQualityObservation(
+    deployment: DeploymentRef,
+    taskClasses: RouteDecision['taskClasses'],
+    success: boolean,
+  ): void {
+    const model = this.config.findDeployment(deployment);
+    if (!model) return;
+    const quality = Object.assign({}, model.quality_by_task);
+    for (const taskClass of new Set(taskClasses)) {
+      const previous = quality[taskClass] || { successes: 0, attempts: 0 };
+      quality[taskClass] = {
+        attempts: Math.max(0, previous.attempts) + 1,
+        successes: Math.max(0, previous.successes) + (success ? 1 : 0),
+      };
+    }
+    if (!this.config.updateModelByDeployment(deployment.providerId, deployment.modelId, { quality_by_task: quality })) return;
+    this.config.save();
+  }
 
   private workspaceConversationKey(): string | null {
     const ws = this.workspace.current;
@@ -374,6 +636,17 @@ export class Agent {
 
   nowLabel(): string {
     return new Date().toLocaleTimeString();
+  }
+
+  prepareSubmittedConversationImages(input: Array<{ dataUrl: string; name?: string; type?: string }> | null | undefined): {
+    images: Array<{ dataUrl: string; name: string; type: string }>;
+    attachments: ConversationImageAttachment[];
+  } {
+    const attachments = persistSubmittedConversationImages(this.rootPath, input);
+    return {
+      attachments,
+      images: attachments.map(image => ({ dataUrl: String(image.dataUrl || ''), name: image.name, type: image.mimeType })),
+    };
   }
 
   private nowIso(): string {
@@ -453,6 +726,7 @@ export class Agent {
       workspaceId: String(input.target?.workspaceId || this.currentConversationTarget().workspaceId),
       conversationId: this.safeConversationId(input.target?.conversationId || this.activeConversationId || 'default'),
     };
+    const attachments = hydrateConversationImageAttachments(this.rootPath, input.attachments);
     return {
       clientMessageId: String(input.clientMessageId || '').trim().slice(0, 200),
       target,
@@ -463,6 +737,54 @@ export class Agent {
       updatedAt: input.updatedAt || this.nowIso(),
       appliedAt: input.appliedAt,
       reason: input.reason ? this.sanitizePublicWorkContent(input.reason) : undefined,
+      attachments: attachments.length ? attachments : undefined,
+    };
+  }
+
+  private durableAttachmentReferences(
+    input: ConversationImageAttachment[] | null | undefined,
+  ): ConversationImageAttachment[] | undefined {
+    const references = (Array.isArray(input) ? input : []).map(attachment => {
+      const { dataUrl: _dataUrl, ...reference } = attachment;
+      return reference;
+    });
+    return references.length ? references : undefined;
+  }
+
+  /** Keep media bytes in one content-addressed asset and state.json as refs. */
+  private conversationEntryForDisk(entry: StoredConversationEntry): StoredConversationEntry {
+    const workRuns = (entry.workRuns || []).map(run => ({
+      ...run,
+      guides: (run.guides || []).map(guide => ({
+        ...guide,
+        attachments: this.durableAttachmentReferences(guide.attachments),
+      })),
+      events: (run.events || []).map(event => ({
+        ...event,
+        guide: event.guide ? {
+          ...event.guide,
+          attachments: this.durableAttachmentReferences(event.guide.attachments),
+        } : undefined,
+      })),
+    }));
+    const continuations = (entry.continuations || []).map(continuation => {
+      const attachments = this.durableAttachmentReferences(continuation.attachments);
+      return {
+        ...continuation,
+        // Rebuild new image continuations from the validated references. Keep
+        // legacy raw-image records only when no reference exists yet.
+        images: attachments?.length ? undefined : continuation.images,
+        attachments,
+      };
+    });
+    return {
+      ...entry,
+      chatMessages: (entry.chatMessages || []).map(message => ({
+        ...message,
+        attachments: this.durableAttachmentReferences(message.attachments),
+      })),
+      workRuns,
+      continuations,
     };
   }
 
@@ -613,11 +935,60 @@ export class Agent {
     return receipt;
   }
 
-  persistGuideMessage(clientMessageId: string, content: string, runId = this.activeWorkRunId, historyContent?: unknown): boolean {
+  private durableAttachmentsFromHistoryContent(historyContent: unknown): ConversationImageAttachment[] {
+    try {
+      return persistAttachmentsFromHistoryContent(this.rootPath, historyContent);
+    } catch {
+      return [];
+    }
+  }
+
+  private normalizeConversationChatMessages(
+    messages: ChatMessage[] | null | undefined,
+    history: Array<Record<string, unknown>> = this.history,
+  ): ChatMessage[] {
+    const userHistory = (Array.isArray(history) ? history : []).filter(message => message?.role === 'user');
+    const consumedUserHistory = new Set<number>();
+    let nextUserHistoryIndex = 0;
+    return (Array.isArray(messages) ? messages : []).map(message => {
+      if (!message || message.role !== 'user') return { ...message };
+      let matchingHistoryIndex = -1;
+      if (message.clientMessageId) {
+        matchingHistoryIndex = userHistory.findIndex((item, index) => (
+          !consumedUserHistory.has(index)
+          && String(item.client_message_id || '') === message.clientMessageId
+        ));
+      }
+      if (matchingHistoryIndex < 0) {
+        while (consumedUserHistory.has(nextUserHistoryIndex)) nextUserHistoryIndex += 1;
+        if (nextUserHistoryIndex < userHistory.length) matchingHistoryIndex = nextUserHistoryIndex;
+      }
+      let matchingHistory: Record<string, unknown> | undefined;
+      if (matchingHistoryIndex >= 0) {
+        consumedUserHistory.add(matchingHistoryIndex);
+        matchingHistory = userHistory[matchingHistoryIndex];
+        while (consumedUserHistory.has(nextUserHistoryIndex)) nextUserHistoryIndex += 1;
+      }
+      const existing = hydrateConversationImageAttachments(this.rootPath, message.attachments);
+      const migrated = existing.length ? existing : this.durableAttachmentsFromHistoryContent(matchingHistory?.content);
+      return migrated.length ? { ...message, attachments: migrated } : { ...message, attachments: undefined };
+    });
+  }
+
+  persistGuideMessage(
+    clientMessageId: string,
+    content: string,
+    runId = this.activeWorkRunId,
+    historyContent?: unknown,
+    attachments?: ConversationImageAttachment[],
+  ): boolean {
     const id = String(clientMessageId || '').trim().slice(0, 200);
     if (!id) return false;
     const inChat = this.chatMessages.some(message => message.clientMessageId === id);
     const inHistory = this.history.some(message => String(message.client_message_id || '') === id);
+    const durableAttachments = hydrateConversationImageAttachments(this.rootPath, attachments);
+    const resolvedAttachments = durableAttachments.length ? durableAttachments : this.durableAttachmentsFromHistoryContent(historyContent);
+    let attachmentChanged = false;
     if (!inChat) {
       this.chatMessages.push({
         role: 'user',
@@ -627,12 +998,19 @@ export class Agent {
         timestamp: this.nowLabel(),
         clientMessageId: id,
         runId: runId || undefined,
+        attachments: resolvedAttachments.length ? resolvedAttachments : undefined,
       });
+    } else if (resolvedAttachments.length) {
+      const message = this.chatMessages.find(item => item.clientMessageId === id);
+      if (message && !(message.attachments || []).length) {
+        message.attachments = resolvedAttachments;
+        attachmentChanged = true;
+      }
     }
     if (!inHistory) {
       this.history.push({ role: 'user', content: historyContent === undefined ? String(content || '') : historyContent, client_message_id: id, run_id: runId || undefined });
     }
-    const changed = !inChat || !inHistory;
+    const changed = !inChat || !inHistory || attachmentChanged;
     if (changed) this.saveWorkspaceConversationState();
     return changed;
   }
@@ -817,8 +1195,8 @@ export class Agent {
 
   notifyAgentKernelUserMessageStart(content: string, clientMessageId?: string): void {
     const text = String(content || '');
-    if (!text) return;
-    const rootInboxMatch = text.match(/^\[Root subagent inbox id=([0-9a-f-]{36})\b/i);
+    if (!text && !clientMessageId) return;
+    const rootInboxMatch = text ? text.match(/^\[Root subagent inbox id=([0-9a-f-]{36})\b/i) : null;
     if (rootInboxMatch) this.subagents.acknowledgeRootInbox(rootInboxMatch[1]);
     for (const sub of this.agentKernelUserMessageStartSubscribers) {
         try { sub(text, clientMessageId); } catch { /* ignore subscriber errors */ }
@@ -895,7 +1273,11 @@ export class Agent {
     }))]);
     this.continuations = combined;
     this.saveWorkspaceConversationState();
-    return combined.map(item => ({ ...item, images: item.images?.map(image => ({ ...image })) }));
+    return combined.map(item => ({
+      ...item,
+      images: item.images?.map(image => ({ ...image })),
+      attachments: item.attachments?.map(attachment => ({ ...attachment })),
+    }));
   }
 
   consumeConversationContinuation(match: Pick<ConversationContinuation, 'content' | 'queueMode' | 'clientMessageId'>): boolean {
@@ -909,14 +1291,29 @@ export class Agent {
   }
 
   conversationContinuations(): ConversationContinuation[] {
-    return this.continuations.map(item => ({ ...item, images: item.images?.map(image => ({ ...image })) }));
+    return this.continuations.map(item => ({
+      ...item,
+      images: item.images?.map(image => ({ ...image })),
+      attachments: item.attachments?.map(attachment => ({ ...attachment })),
+    }));
   }
 
   private normalizeContinuations(items: ConversationContinuation[] | undefined): ConversationContinuation[] {
     const deduped = new Map<string, ConversationContinuation>();
     for (const raw of items || []) {
       const content = String(raw?.content || '');
-      if (!content) continue;
+      const attachments = hydrateConversationImageAttachments(this.rootPath, raw?.attachments);
+      const rawImages = (Array.isArray(raw?.images) ? raw.images : [])
+        .filter(image => image && /^data:image\/(?:png|jpe?g);base64,/i.test(String(image.dataUrl || '')))
+        .map(image => ({ ...image }));
+      const images = rawImages.length
+        ? rawImages
+        : attachments.flatMap(attachment => attachment.dataUrl ? [{
+            dataUrl: attachment.dataUrl,
+            name: attachment.name,
+            type: attachment.mimeType,
+          }] : []);
+      if (!content && !images.length && !attachments.length) continue;
       const queueMode = raw.queueMode === 'steer' ? 'steer' : 'followUp';
       const clientMessageId = String(raw.clientMessageId || '').trim() || undefined;
       const key = clientMessageId ? `id:${clientMessageId}` : `${queueMode}:${content}`;
@@ -925,7 +1322,8 @@ export class Agent {
         queueMode,
         clientMessageId,
         runId: String(raw.runId || '').trim() || undefined,
-        images: raw.images?.map(image => ({ ...image })),
+        images: images.length ? images : undefined,
+        attachments: attachments.length ? attachments : undefined,
         createdAt: String(raw.createdAt || new Date().toISOString()),
       });
     }
@@ -1033,10 +1431,12 @@ export class Agent {
     contentState.version = 3;
     contentState.conversations = contentState.conversations || {};
     const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    const diskConversations = Object.fromEntries(Object.entries(contentState.conversations || {})
+      .map(([key, entry]) => [key, this.conversationEntryForDisk(entry)]));
     const content = JSON.stringify({
       version: 3,
       activeConversationId: contentState.activeConversationId || this.activeConversationId || 'default',
-      conversations: contentState.conversations || {},
+      conversations: diskConversations,
     }, null, 2);
     try {
       const handle = fs.openSync(temp, 'w');
@@ -1185,7 +1585,11 @@ export class Agent {
 
   private conversationContentSignature(messages: ChatMessage[]): string {
     if (!messages.length) return '';
-    return JSON.stringify(messages.map(message => ({ role: message.role, content: message.content })));
+    return JSON.stringify(messages.map(message => ({
+      role: message.role,
+      content: message.content,
+      attachmentIds: (message.attachments || []).map(attachment => attachment.id).sort(),
+    })));
   }
 
   public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {
@@ -1203,8 +1607,16 @@ export class Agent {
     // A live run intentionally does not flush every text/tool delta to disk.
     // Snapshot callers must therefore observe the active in-memory state; an
     // older persisted start event must never mask newer public work events.
-    const chatMessages = isActiveConversation ? this.chatMessages : (persisted?.chatMessages || memory?.chatMessages || []);
-    const history = isActiveConversation ? this.history : (persisted?.history || memory?.history || []);
+    const persistedMessagesAvailable = persisted?.chatMessages !== undefined;
+    const sourceChatMessages = isActiveConversation
+      ? this.chatMessages
+      : (persisted?.chatMessages ?? memory?.chatMessages ?? []);
+    const history = isActiveConversation
+      ? this.history
+      : (persistedMessagesAvailable ? (persisted?.history ?? []) : (memory?.history ?? persisted?.history ?? []));
+    const chatMessages = isActiveConversation
+      ? sourceChatMessages
+      : this.normalizeConversationChatMessages(sourceChatMessages, history);
     const workRuns = this.normalizeWorkRuns(isActiveConversation ? this.workRuns : (persisted?.workRuns || memory?.workRuns));
     const continuations = this.normalizeContinuations(isActiveConversation ? this.continuations : (persisted?.continuations || memory?.continuations));
     return {
@@ -1424,8 +1836,8 @@ export class Agent {
     }
     const saved = this.workspaceConversations.get(key);
     if (saved) {
-      this.chatMessages = [...saved.chatMessages];
       this.history = [...saved.history];
+      this.chatMessages = this.normalizeConversationChatMessages(saved.chatMessages, this.history);
       this.conversationPlan = this.normalizeConversationPlan(saved.plan);
       this.linkedPlan = this.normalizeLinkedPlan(saved.linkedPlan);
       this.bindConversationSubagents(this.activeConversationId, saved.subagentState);
@@ -1437,8 +1849,8 @@ export class Agent {
     const stored = this.readStoredConversationState();
     const stateKey = this.workspaceConversationStateKey();
     const persisted = stateKey && stored.conversations ? stored.conversations[stateKey] : null;
-    this.chatMessages = persisted?.chatMessages ? [...persisted.chatMessages] : [];
     this.history = persisted?.history ? [...persisted.history] : [];
+    this.chatMessages = this.normalizeConversationChatMessages(persisted?.chatMessages || [], this.history);
     this.conversationPlan = this.normalizeConversationPlan(persisted?.plan);
     this.linkedPlan = this.normalizeLinkedPlan(persisted?.linkedPlan);
     this.workRuns = this.normalizeWorkRuns(persisted?.workRuns);
@@ -1490,7 +1902,9 @@ export class Agent {
     let aborted = false;
     this.subagents.pauseScheduling();
     if (this.activeProcessAbortController && !this.activeProcessAbortController.signal.aborted) {
-      this.activeProcessAbortController.abort(new Error('Agent run aborted'));
+      const abortError = new Error('Agent run aborted');
+      abortError.name = 'AbortError';
+      this.activeProcessAbortController.abort(abortError);
       aborted = true;
     }
     if (this.activeAgentKernelRuntime?.abort) {
@@ -1514,10 +1928,11 @@ export class Agent {
     const subagentState = source.subagents?.serialize() || this.subagents.serialize();
     const workRuns = this.normalizeWorkRuns(source.workRuns || this.getConversationSnapshot(clean).workRuns);
     const continuations = this.normalizeContinuations(source.continuations || this.getConversationSnapshot(clean).continuations);
+    const normalizedChatMessages = this.normalizeConversationChatMessages(source.chatMessages, source.history);
     const updatedAt = new Date().toISOString();
     if (key) {
       this.workspaceConversations.set(key, {
-        chatMessages: [...source.chatMessages],
+        chatMessages: normalizedChatMessages,
         history: [...source.history],
         plan,
         linkedPlan,
@@ -1532,14 +1947,14 @@ export class Agent {
     const stored = this.readStoredConversationState(ws);
     stored.conversations = stored.conversations || {};
     const previous = stored.conversations[stateKey];
-    const derivedTitle = this.titleFromMessages(source.chatMessages, clean);
-    const title = this.hasUserConversationTitle(source.chatMessages) && this.isGeneratedConversationTitle(previous?.title, clean, previous?.chatMessages || [])
+    const derivedTitle = this.titleFromMessages(normalizedChatMessages, clean);
+    const title = this.hasUserConversationTitle(normalizedChatMessages) && this.isGeneratedConversationTitle(previous?.title, clean, previous?.chatMessages || [])
       ? derivedTitle
       : (previous?.title || derivedTitle);
     stored.conversations[stateKey] = {
       ...(previous || {}),
       title,
-      chatMessages: [...source.chatMessages],
+      chatMessages: normalizedChatMessages,
       history: [...source.history],
       plan,
       linkedPlan,
@@ -1550,7 +1965,7 @@ export class Agent {
     };
     this.writeStoredConversationState(stored, ws);
     if (this.safeConversationId(this.activeConversationId || 'default') === clean) {
-      this.chatMessages = [...source.chatMessages];
+      this.chatMessages = normalizedChatMessages;
       this.history = [...source.history];
       this.conversationPlan = plan;
       this.linkedPlan = linkedPlan;
@@ -1722,6 +2137,9 @@ export class Agent {
   }
 
   modelLabel(): string {
+    const active = this.activeModelConfig();
+    if (this.model === 'auto') return active ? `Auto → ${active.provider} / ${active.display || active.name}` : 'Auto';
+    if (active) return `${active.provider} / ${active.display || active.name}`;
     const names = this.allModelNames();
     return names.find(n => n.includes(this.model)) || this.model;
   }
@@ -1750,8 +2168,8 @@ export class Agent {
   }
 
   private contextMaxTokens(modelName = this.model): number {
-    const resolvedName = modelName === 'auto' ? this.config.getStr('models', 'default_model') : modelName;
-    return Math.max(1, Number(this.config.findModel(resolvedName)?.max_tokens || 0) || 128000);
+    const model = modelName === 'auto' ? this.activeModelConfig() : this.config.findModel(modelName);
+    return Math.max(1, Number(model?.max_tokens || 0) || 128000);
   }
 
   private compressionBudget(messages: Array<Record<string, unknown>>): {
@@ -1821,6 +2239,12 @@ export class Agent {
     if (this.goal) md += `**Goal**: ${this.goal.objective}\n\n`;
     for (const msg of messages) {
       md += `**[${msg.role}] ${msg.timestamp}**\n\n${msg.content}\n\n`;
+      for (const attachment of hydrateConversationImageAttachments(this.rootPath, msg.attachments)) {
+        const archived = archiveConversationImageAttachment(this.rootPath, archiveDir, attachment);
+        if (!archived) continue;
+        const alt = archived.name.replace(/[\]\r\n]/g, ' ').trim() || 'Submitted image';
+        md += `![${alt}](${archived.relativePath})\n\n`;
+      }
     }
     fs.writeFileSync(outPath, md, 'utf-8');
     return filename;
@@ -1840,7 +2264,12 @@ export class Agent {
     const stored = this.readStoredConversationState(ws);
     const persisted = stored.conversations?.[stateKey];
     const memory = this.workspaceConversations.get(memoryKey);
-    const messages = persisted?.chatMessages || memory?.chatMessages || [];
+    const persistedMessagesAvailable = persisted?.chatMessages !== undefined;
+    const sourceMessages = persisted?.chatMessages ?? memory?.chatMessages ?? [];
+    const sourceHistory = persistedMessagesAvailable
+      ? (persisted?.history ?? [])
+      : (memory?.history ?? persisted?.history ?? []);
+    const messages = this.normalizeConversationChatMessages(sourceMessages, sourceHistory);
     const filename = this.writeSessionArchive(messages, this.modeName(), this.model);
 
     const targetSignature = this.conversationContentSignature(messages);
@@ -1947,10 +2376,179 @@ export class Agent {
     return path.join(this.workspace.current?.path || this.rootPath, 'archive');
   }
 
+  private deploymentRef(model: ReturnType<ConfigManager['allModels']>[number]): DeploymentRef {
+    return {
+      providerId: model.provider_id,
+      modelId: model.name,
+      logicalModelGroupId: model.logical_model_group_id || undefined,
+    };
+  }
+
+  private autoSwitchAnchorProviderId(): string {
+    const configured = this.config.autoSwitchAnchorProvider();
+    const provider = this.config.findProvider(configured);
+    if (provider) return provider.id;
+    const active = this.activeModelConfig();
+    if (active?.provider_id) return active.provider_id;
+    const fallback = this.config.findModel(this.config.getStr('models', 'default_model'));
+    return fallback?.provider_id || this.config.providers()[0]?.id || '';
+  }
+
+  private autoSwitchSubset(): DeploymentRef[] {
+    const raw = this.config.get<unknown[]>('models', 'auto_switch_subset');
+    if (!Array.isArray(raw)) return [];
+    return raw.flatMap(item => {
+      if (typeof item === 'string') {
+        const parsed = parseDeploymentSelectionValue(item);
+        return parsed ? [parsed] : [];
+      }
+      if (!item || typeof item !== 'object') return [];
+      const value = item as Record<string, unknown>;
+      const providerId = String(value.providerId || value.provider_id || '').trim();
+      const modelId = String(value.modelId || value.model_id || '').trim();
+      if (!providerId || !modelId) return [];
+      return [{
+        providerId,
+        modelId,
+        logicalModelGroupId: String(value.logicalModelGroupId || value.logical_model_group_id || '').trim() || undefined,
+      }];
+    });
+  }
+
+  private autoRouteCandidates(): AutoRouteCandidate[] {
+    return this.config.allModels().map(model => {
+      const routeMetadata = model as ModelConfig & { data_regions?: string[]; supported_parameters?: string[]; route_preference?: number };
+      const validation = model.validation || {
+        level: 'discovered' as const,
+        status: 'unavailable' as const,
+        checked_at: '',
+        capabilities: {},
+      };
+      const hasStandardEvidence = validation.level === 'standard' || validation.level === 'extended';
+      const supportsTools = validation.capabilities?.tool_use === true || validation.capabilities?.tools === true;
+      const capabilities = new Set<string>();
+      for (const rawCapability of model.capabilities || []) {
+        const capability = String(rawCapability).toLowerCase();
+        // Once Standard evidence exists, tool routing must use that evidence
+        // rather than a provider/catalog claim. Computer Use also depends on a
+        // verified tool transport.
+        if (hasStandardEvidence && (capability === 'tools' || capability === 'tool_use')) continue;
+        if (hasStandardEvidence && capability === 'computer_use' && !supportsTools) continue;
+        capabilities.add(capability);
+      }
+      for (const [capability, verified] of Object.entries(validation.capabilities || {})) {
+        if (!verified) continue;
+        if (capability === 'text') {
+          capabilities.add('text_input');
+          capabilities.add('text_output');
+        } else if (capability === 'streaming') {
+          capabilities.add('streaming');
+        } else if (capability === 'strict_json' || capability === 'json_schema') {
+          capabilities.add('json_schema');
+        } else if (capability === 'tools' || capability === 'tool_use') {
+          capabilities.add('tool_use');
+        } else if (capability === 'vision' || capability === 'image_input') {
+          capabilities.add('image_input');
+        } else {
+          capabilities.add(capability);
+        }
+      }
+      const health = this.autoRouter.endpointMetrics(this.deploymentRef(model));
+      const latencySeconds = Number(model.evaluation?.latency);
+      const configuredPrivacy = (model.privacy || ['default']).filter(value => value === 'default' || value === 'no_training' || value === 'zdr');
+      const supportedParameters = new Set((routeMetadata.supported_parameters || []).map(value => String(value).toLowerCase()));
+      supportedParameters.add('temperature');
+      supportedParameters.add('max_tokens');
+      if (validation.capabilities?.streaming) supportedParameters.add('stream');
+      const supportsStrictJson = validation.capabilities?.json_schema === true || validation.capabilities?.strict_json === true;
+      if (supportsStrictJson) {
+        supportedParameters.add('json_schema');
+        supportedParameters.add(model.provider_protocol === 'anthropic' ? 'output_config' : 'response_format');
+      }
+      if (supportsTools) {
+        supportedParameters.add('tools');
+        supportedParameters.add('tool_choice');
+      }
+      return {
+        deployment: this.deploymentRef(model),
+        enabled: model.enabled !== false,
+        validation: {
+          level: validation.level,
+          status: validation.status,
+          checkedAt: validation.checked_at,
+        },
+        capabilities: [...capabilities],
+        maxContextTokens: Number(model.max_tokens || 0) || 8192,
+        preview: !!model.preview,
+        privacy: configuredPrivacy.length ? configuredPrivacy : ['default'],
+        dataRegions: (routeMetadata.data_regions || []).map(value => String(value)),
+        supportedProtocolParameters: [...supportedParameters],
+        expectedInputCostUsdPerM: typeof model.cost_per_1k_input === 'number' && Number.isFinite(model.cost_per_1k_input) && model.cost_per_1k_input >= 0
+          ? model.cost_per_1k_input * 1000
+          : undefined,
+        expectedOutputCostUsdPerM: typeof model.cost_per_1k_output === 'number' && Number.isFinite(model.cost_per_1k_output) && model.cost_per_1k_output >= 0
+          ? model.cost_per_1k_output * 1000
+          : undefined,
+        latencyMs: health.p50 ?? (Number.isFinite(latencySeconds) && latencySeconds >= 0 ? latencySeconds * 1000 : undefined),
+        reliability: health.attempts ? health.reliability : 0.5,
+        toolValidity: health.toolAttempts ? health.toolValidity : undefined,
+        throughput: health.throughput ?? (model.speed_rating === 'fast' ? 80 : model.speed_rating === 'medium' ? 40 : model.speed_rating === 'slow' ? 15 : undefined),
+        qualityByTask: model.quality_by_task,
+        preference: Number.isFinite(Number(routeMetadata.route_preference)) ? Number(routeMetadata.route_preference) : undefined,
+        fallbackOnly: !!model.fallback_only,
+      };
+    });
+  }
+
+  private persistRouteDecision(decision: RouteDecision): void {
+    try {
+      const directory = path.join(this.rootPath, 'routing');
+      fs.mkdirSync(directory, { recursive: true });
+      fs.appendFileSync(path.join(directory, 'route-decisions.jsonl'), `${JSON.stringify(decision)}\n`, 'utf-8');
+    } catch {
+      // Routing remains available when metrics-only audit storage is read-only.
+    }
+  }
+
+  private loadLearnedRouteFeedback(): void {
+    try {
+      const file = path.join(this.rootPath, 'routing', 'feedback.jsonl');
+      if (!fs.existsSync(file)) return;
+      const lines = fs.readFileSync(file, 'utf-8').split(/\r?\n/).filter(Boolean).slice(-2000);
+      for (const line of lines) {
+        const value = JSON.parse(line) as Partial<RouteFeedbackEvent>;
+        const deployment = value.deployment;
+        if (!deployment?.providerId || !deployment.modelId) continue;
+        if (!['chat', 'coding', 'reasoning', 'long_context', 'vision', 'image_generation', 'tool_use', 'computer_use'].includes(String(value.taskClass))) continue;
+        if (!['manual_switch', 'explicit_rating', 'objective_success'].includes(String(value.source))) continue;
+        if (!Number.isFinite(Number(value.score)) || !Number.isFinite(Number(value.at))) continue;
+        this.autoRouter.recordFeedback(value as RouteFeedbackEvent);
+      }
+    } catch {
+      // A malformed preference log is ignored instead of influencing routing.
+    }
+  }
+
+  private recordRouteFeedbackFor(
+    deployment: DeploymentRef,
+    taskClass: RouteFeedbackEvent['taskClass'],
+    score: number,
+    source: RouteFeedbackEvent['source'],
+  ): void {
+    const event: RouteFeedbackEvent = { deployment: { ...deployment }, taskClass, score, source, at: Date.now() };
+    this.autoRouter.recordFeedback(event);
+    try {
+      const directory = path.join(this.rootPath, 'routing');
+      fs.mkdirSync(directory, { recursive: true });
+      fs.appendFileSync(path.join(directory, 'feedback.jsonl'), `${JSON.stringify(event)}\n`, 'utf-8');
+    } catch {}
+  }
+
   allModelNames(): string[] {
     const names = this.config.allModels().filter(m => {
       const status = String(m.evaluation?.status || 'unvalidated');
-      return status === 'available' || status === 'unvalidated';
+      const validationStatus = m.validation?.status;
+      return status === 'available' || status === 'unvalidated' || validationStatus === 'verified' || validationStatus === 'degraded';
     }).map(m => {
       const label = m.display || m.name;
       return `${m.provider} / ${label}`;
@@ -1958,58 +2556,168 @@ export class Agent {
     return this.config.autoSwitchEnabled() && this.config.allModels().length > 0 ? ['auto', ...names] : names;
   }
 
-  async evaluateAndSwitch(task: string): Promise<boolean> {
+  async evaluateAndSwitch(task: string, override: AgentPromptMessage['routePolicy'] = undefined): Promise<boolean> {
     if (!this.config.autoSwitchEnabled() || this.model !== 'auto') return false;
-    const all = this.scopedSwitchModels(this.model);
-    if (all.length < 1) return false;
-
-    const pref = this.config.autoSwitchPreference();
-    const isComplex = task.includes('implement') || task.includes('refactor') ||
-      task.includes('complex') || task.includes('rewrite') || task.length > 500;
-    const isSimple = task.includes('check') || task.includes('list') ||
-      task.includes('read') || task.length < 50;
-    const needsMultimodal = this.needsMultimodalModel(task);
-
-    const requiredTokens = this.estimateContextTokens() + 2048;
-    const statusUsable = all.filter(m => {
-      const status = (m.evaluation?.status || 'unknown');
-      return status !== 'unavailable' && !status.startsWith('error');
-    });
-    const available = statusUsable.filter(m => {
-      const maxTokens = Number(m.max_tokens || 0) || 128000;
-      const supportsMultimodal = !!m.vision || !!m.image_output;
-      return maxTokens >= requiredTokens && (!needsMultimodal || supportsMultimodal);
-    });
-    if (!available.length) return false;
-    const candidates = available;
-    const ranked = [...candidates].sort((a, b) => this.modelScore(b, pref, isComplex, isSimple) - this.modelScore(a, pref, isComplex, isSimple));
-    const best = ranked.find(m => {
-      const cap = this.performanceRating(m.name, m.capability_rating, m.description, m.display);
-      const spd = m.speed_rating || '';
-      switch (pref) {
-        case 'performance': return cap === 'high';
-        case 'speed': return spd === 'fast';
-        case 'cheap_save': return !isComplex;
-        default: return isComplex ? cap === 'high' : isSimple ? spd === 'fast' : true;
-      }
-    }) || ranked[0];
-
-    if (best && best.name) {
-      this.model = best.name;
-      if (best.provider) this.config.set('models', 'auto_switch_anchor_provider', best.provider);
-      return true;
+    const extendedOverride = override as (AgentPromptMessage['routePolicy'] & {
+      dataRegion?: string;
+      requiredProtocolParameters?: string[];
+    }) | undefined;
+    const before = this.resolvedDeployment ? deploymentIdentity(this.resolvedDeployment) : '';
+    const mode = override?.mode || normalizeAutoPreference(this.config.autoSwitchPreference());
+    const policy = defaultRoutePolicy(mode);
+    const configuredQualityLoss = this.config.get<number>('models', 'auto_max_quality_loss');
+    if (typeof configuredQualityLoss === 'number' && Number.isFinite(configuredQualityLoss) && configuredQualityLoss >= 0) {
+      policy.maxQualityLoss = Math.min(1, configuredQualityLoss);
     }
-    return false;
+    if (typeof override?.maxQualityLoss === 'number' && Number.isFinite(override.maxQualityLoss) && override.maxQualityLoss >= 0) {
+      policy.maxQualityLoss = Math.min(1, override.maxQualityLoss);
+    }
+    const maxExpectedCost = this.config.get<number>('models', 'auto_max_expected_cost_usd');
+    if (typeof maxExpectedCost === 'number' && Number.isFinite(maxExpectedCost) && maxExpectedCost > 0) policy.maxExpectedCostUsd = maxExpectedCost;
+    if (typeof override?.maxExpectedCostUsd === 'number' && Number.isFinite(override.maxExpectedCostUsd) && override.maxExpectedCostUsd > 0) policy.maxExpectedCostUsd = override.maxExpectedCostUsd;
+    policy.allowPreview = this.config.getBool('models', 'auto_allow_preview');
+    if (typeof override?.allowPreview === 'boolean') policy.allowPreview = override.allowPreview;
+    const privacy = this.config.getStr('models', 'auto_privacy');
+    if (privacy === 'no_training' || privacy === 'zdr') policy.privacy = privacy;
+    if (override?.privacy === 'default' || override?.privacy === 'no_training' || override?.privacy === 'zdr') policy.privacy = override.privacy;
+    const configuredRegion = this.config.getStr('models', 'auto_data_region').trim();
+    if (configuredRegion) policy.dataRegion = configuredRegion;
+    if (extendedOverride?.dataRegion?.trim()) policy.dataRegion = extendedOverride.dataRegion.trim();
+    const configuredParameters = this.config.get<unknown[]>('models', 'auto_required_protocol_parameters');
+    const requiredProtocolParameters = Array.isArray(configuredParameters)
+      ? configuredParameters.map(value => String(value).trim().toLowerCase()).filter(Boolean)
+      : [];
+    if (extendedOverride?.requiredProtocolParameters?.length) {
+      requiredProtocolParameters.splice(0, requiredProtocolParameters.length, ...extendedOverride.requiredProtocolParameters.map(value => String(value).trim().toLowerCase()).filter(Boolean));
+    }
+    policy.requiredProtocolParameters = [...new Set(requiredProtocolParameters)];
+
+    const requiredCapabilities = new Set<string>(['text_input', 'text_output']);
+    const requiresComputerUse = /computer[_ -]?use|computer use|电脑操作|屏幕点击/i.test(task);
+    if (requiresComputerUse || taskDeterministicallyRequiresToolInterface(task)) requiredCapabilities.add('tool_use');
+    if (this.needsMultimodalModel(task)) requiredCapabilities.add('image_input');
+    if (requiresComputerUse) requiredCapabilities.add('computer_use');
+    if (/image generation|generate (?:an )?image|生成图片|图像生成/i.test(task)) requiredCapabilities.add('image_output');
+    if (/strict json|json schema|结构化 json/i.test(task)) requiredCapabilities.add('json_schema');
+    policy.requiredCapabilities = [...requiredCapabilities];
+
+    const anchorProviderId = this.autoSwitchAnchorProviderId();
+    const scope = this.config.autoSwitchScope() === 'provider'
+      ? { kind: 'provider' as const, providerId: anchorProviderId }
+      : { kind: 'global' as const };
+    const subset = override?.subset?.length ? override.subset : this.autoSwitchSubset();
+    const selection: ModelSelection = {
+      kind: 'auto',
+      scope,
+      policyId: mode,
+      subset: subset.length ? subset : undefined,
+    };
+    const ownsTransaction = !this.routeTransactionId;
+    const transactionId = this.routeTransactionId || `route-${crypto.randomUUID()}`;
+    const decision = this.autoRouter.route(selection, policy, this.autoRouteCandidates(), {
+      transactionId,
+      affinityKey: `${this.workspace.current?.path || this.rootPath}\u0000${this.activeConversationId || 'default'}`,
+      taskText: task,
+      estimatedInputTokens: this.estimateContextTokens(),
+      expectedOutputTokens: this.intelligence === 'high' ? 8192 : this.intelligence === 'low' ? 2048 : 4096,
+      requiredCapabilities: [...requiredCapabilities],
+      batch: override?.batch === true,
+    });
+    if (ownsTransaction) this.autoRouter.endTransaction(transactionId);
+    this.lastRouteDecision = decision;
+    this.resolvedDeployment = decision.resolvedDeployment ? { ...decision.resolvedDeployment } : null;
+    this.pendingAutoAttempts = [];
+    this.routeAttemptStartedAt = this.resolvedDeployment ? Date.now() : 0;
+    this.persistRouteDecision(decision);
+    return !!this.resolvedDeployment && before !== deploymentIdentity(this.resolvedDeployment);
+  }
+
+  shouldExposeToolInterface(): boolean {
+    // Fixed selections and pre-Standard legacy configurations keep the
+    // historical behavior. Auto can safely suppress schemas because its
+    // eligible deployments have explicit Standard/Extended evidence.
+    if (this.model !== 'auto') return true;
+    const model = this.activeModelConfig();
+    if (!model) return false;
+    const validation = model.validation;
+    if (validation?.level !== 'standard' && validation?.level !== 'extended') return true;
+    return validation.capabilities?.tool_use === true || validation.capabilities?.tools === true;
   }
 
   modelIsUnavailable(modelName: string): boolean {
-    const model = this.config.findModel(modelName);
+    const model = modelName === 'auto' ? this.activeModelConfig() : this.config.findModel(modelName);
+    if (!model) return true;
+    const validationStatus = model.validation?.status;
+    // `discovered` means unvalidated, not a failed endpoint. Explicit fixed
+    // selections remain usable for backwards compatibility; only an executed
+    // Basic/Standard/Extended validation may pre-emptively mark them bad.
+    if (model.validation?.level !== 'discovered'
+      && (validationStatus === 'unavailable' || validationStatus === 'auth_error' || validationStatus === 'invalid_config')) return true;
     const status = String(model?.evaluation?.status || '').toLowerCase();
     return status === 'unavailable' || status.startsWith('error');
   }
 
-  switchToFallbackModel(): string | null {
-    if (!this.config.getBool('models', 'fallback_on_unavailable')) return null;
+  switchToFallbackModel(errorText = 'transport failure'): string | null {
+    const fallbackEnabled = this.config.getBool('models', 'fallback_on_unavailable');
+    const observedFailure = classifyRouteFailure(errorText);
+    const observedDeployment = this.activeDeployment();
+    const previousAttempt = observedDeployment && this.lastRouteDecision
+      ? [...this.lastRouteDecision.attempts].reverse().find(attempt => deploymentIdentity(attempt.deployment) === deploymentIdentity(observedDeployment))
+      : undefined;
+    if (this.model === 'auto'
+      && this.routeAttemptStartedAt === 0
+      && (this.lastRouteDecision?.finalStatus === 'failed' || this.lastRouteDecision?.finalStatus === 'blocked')
+      && previousAttempt?.status === 'failed'
+      && previousAttempt.errorType === observedFailure.type) {
+      return null;
+    }
+    if (observedDeployment) this.autoRouter.recordEndpointFailure(observedDeployment, observedFailure);
+    if (this.model === 'auto') {
+      const current = this.activeDeployment();
+      if (!current || !this.lastRouteDecision) return null;
+      const failure = observedFailure;
+      this.lastRouteDecision.resolvedDeployment = { ...current };
+      const currentAttempt = [...this.lastRouteDecision.attempts].reverse()
+        .find(item => deploymentIdentity(item.deployment) === deploymentIdentity(current));
+      if (currentAttempt) {
+        currentAttempt.status = 'failed';
+        currentAttempt.errorType = failure.type;
+        currentAttempt.streamCommitted = this.routeStreamCommitted;
+        currentAttempt.sideEffectBoundary = this.routeSideEffectCommitted;
+        if (this.routeAttemptStartedAt > 0) currentAttempt.durationMs = Math.max(0, Date.now() - this.routeAttemptStartedAt);
+      }
+      if (!fallbackEnabled) {
+        this.lastRouteDecision.finalStatus = 'failed';
+        this.routeAttemptStartedAt = 0;
+        this.persistRouteDecision(this.lastRouteDecision);
+        return null;
+      }
+      if (!this.pendingAutoAttempts.length) {
+        this.pendingAutoAttempts = this.autoRouter.planAttempts(this.lastRouteDecision, this.autoRouteCandidates(), {
+          error: failure,
+          streamCommitted: this.routeStreamCommitted,
+          sideEffectCommitted: this.routeSideEffectCommitted,
+        });
+      }
+      const next = this.pendingAutoAttempts.shift();
+      if (!next) {
+        this.lastRouteDecision.finalStatus = (!failure.switchAllowed || this.routeStreamCommitted || this.routeSideEffectCommitted) ? 'blocked' : 'failed';
+        this.routeAttemptStartedAt = 0;
+        this.persistRouteDecision(this.lastRouteDecision);
+        return null;
+      }
+      this.lastRouteTransition = next.kind;
+      this.lastRouteRetryDelayMs = next.retryDelayMs || 0;
+      this.resolvedDeployment = { ...next.deployment };
+      this.lastRouteDecision.attempts.push({ ...next });
+      this.lastRouteDecision.resolvedDeployment = { ...next.deployment };
+      this.lastRouteDecision.finalStatus = 'retrying';
+      this.autoRouter.claimEndpointAttempt(next.deployment);
+      this.routeAttemptStartedAt = Date.now();
+      this.persistRouteDecision(this.lastRouteDecision);
+      return current.modelId;
+    }
+    if (!fallbackEnabled) return null;
     const current = this.model;
     const all = this.scopedSwitchModels(current).filter(m => m.name !== current);
     if (!all.length) return null;
@@ -2023,6 +2731,7 @@ export class Agent {
     const next = ranked[0];
     if (!next?.name) return null;
     this.model = next.name;
+    this.fixedDeployment = this.deploymentRef(next);
     if (next.provider) this.config.set('models', 'auto_switch_anchor_provider', next.provider);
     return current;
   }
@@ -2035,119 +2744,104 @@ export class Agent {
     const all = this.config.allModels();
     if (this.config.autoSwitchScope() !== 'provider') return all;
     const current = currentModelName === 'auto' ? undefined : this.config.findModel(currentModelName);
-    const provider = current?.provider ||
+    const providerId = current?.provider_id ||
       this.config.autoSwitchAnchorProvider() ||
-      this.config.findModel(this.config.getStr('models', 'default_model'))?.provider ||
-      all[0]?.provider ||
+      this.config.findModel(this.config.getStr('models', 'default_model'))?.provider_id ||
+      all[0]?.provider_id ||
       '';
-    if (!provider) return all;
-    return all.filter(m => m.provider === provider);
+    if (!providerId) return all;
+    const provider = this.config.findProvider(providerId);
+    return all.filter(m => m.provider_id === (provider?.id || providerId));
   }
 
   async validateModels(selectedNames?: string[]): Promise<ModelValidationResult[]> {
-    const selected = new Set(selectedNames || []);
     const results: ModelValidationResult[] = [];
     const catalogByProvider = new Map<string, Awaited<ReturnType<LLMProvider['modelCatalog']>>>();
-    const searchByModel = new Map<string, string>();
-    for (const m of this.config.allModels()) {
-      if (selected.size && !selected.has(m.name) && !selected.has(`${m.provider}/${m.name}`)) continue;
+    const cache = new FileModelValidationCache(this.rootPath);
+    const service = new ModelValidationService({ cache });
+    for (const m of this.config.modelsForSelections(selectedNames)) {
       const inferredVision = !!m.vision || inferModelVisionCapability(m.name, m.display, m.description, m.provider, m.provider_protocol);
       const inferredImageOutput = !!m.image_output || /(?:^|[-_.])(gpt-image|dall-e|imagen|imagegen|image-generation)(?:$|[-_.])/i.test(m.name);
-      const base: ModelValidationResult = {
+      const p = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode());
+      let catalog = catalogByProvider.get(m.provider_id);
+      if (!catalog && m.provider_url && m.api_key) {
+        try { catalog = await p.modelCatalog(); } catch { catalog = []; }
+        catalogByProvider.set(m.provider_id, catalog);
+      }
+      catalog ||= [];
+      const catalogEntry = catalog.find(entry => entry.id === m.name || entry.id.endsWith(`/${m.name}`));
+      const catalogText = JSON.stringify(catalogEntry?.raw || {}).toLowerCase();
+      const declaredVision = inferredVision || /vision|image[_ -]?input|multimodal|image_url|input_image/.test(catalogText);
+      const declaredImageOutput = inferredImageOutput || /image[_ -]?(?:output|generation)|text[_ -]?to[_ -]?image|image-generation/.test(catalogText);
+      const previous = service.getCached({ provider: m.provider_id, model: m.name });
+      const level = declaredImageOutput ? 'extended' as const : 'standard' as const;
+      const adapter = m.provider_url && m.api_key
+        ? createProviderValidationAdapter(p, m.name)
+        : missingProviderValidationAdapter();
+      let record = await service.validate({
+        model: { provider: m.provider_id, model: m.name },
+        level,
+        adapter,
+        declaredCapabilities: { vision: declaredVision, imageOutput: declaredImageOutput },
+        visionChallenge: declaredVision ? deterministicVisionChallenge() : undefined,
+        redactionSecrets: [m.api_key],
+      });
+      record = preserveVerifiedCapabilitiesAcrossTransientHealth(previous, record);
+      cache.set(record);
+
+      const textOk = validationCapabilityOk(record, 'text');
+      const visionOk = validationCapabilityOk(record, 'vision');
+      const imageOk = validationCapabilityOk(record, 'image_output');
+      const capabilityMap = validationCapabilityMap(record);
+      const validation: ModelValidationSummary = {
+        level: record.level,
+        status: record.status,
+        checked_at: record.checkedAt,
+        expires_at: record.expiresAt,
+        capabilities: capabilityMap,
+        error: record.status === 'verified' || record.status === 'degraded'
+          ? undefined
+          : { code: record.status, message: validationReasonCodes(record).join(', ') || 'probe_failed' },
+      };
+      const latency = typeof record.health?.latencyMs === 'number' ? record.health.latencyMs / 1000 : -1;
+      const costRating = this.costRating(m.cost_per_1k_input, m.cost_per_1k_output);
+      const performanceRating = this.performanceRating(m.name, m.capability_rating, m.description, m.display);
+      const speedRating = this.speedRating(latency, record.status === 'verified' || record.status === 'degraded');
+      const result: ModelValidationResult = {
         name: `${m.provider}/${m.name}`,
+        provider_id: m.provider_id,
         provider: m.provider,
         model: m.name,
         display: m.display || m.name,
-        status: 'unavailable',
-        latency: -1,
-        checked_at: new Date().toISOString(),
-        text_input: false,
-        text_output: false,
-        vision_input: false,
-        image_output: false,
-        cost_rating: this.costRating(m.cost_per_1k_input, m.cost_per_1k_output),
-        performance_rating: this.performanceRating(m.name, m.capability_rating, m.description, m.display),
-        speed_rating: 'unknown',
-        notes: '',
+        status: record.status,
+        latency,
+        checked_at: record.checkedAt,
+        text_input: textOk,
+        text_output: textOk,
+        vision_input: visionOk,
+        image_output: imageOk,
+        cost_rating: costRating,
+        performance_rating: performanceRating,
+        speed_rating: speedRating,
+        notes: [
+          `level=${record.level}`,
+          catalogEntry ? 'catalog=listed-hypothesis-only' : (catalog.length ? 'catalog=not-listed' : 'catalog=unavailable'),
+          `health=${record.health?.status || 'not-run'}`,
+          `probes=${validationReasonCodes(record).join(',') || 'passed'}`,
+        ].join('; '),
       };
-      const capabilityModel = { ...m, vision: inferredVision, image_output: inferredImageOutput };
-      if (!m.provider_url || !m.api_key) {
-        base.notes = 'Missing provider URL or API key';
-        results.push(base);
-        this.config.updateModel(m.provider, m.name, { evaluation: base, vision: base.vision_input, image_output: base.image_output, speed_rating: base.speed_rating, capability_rating: base.performance_rating, description: this.modelCapabilityDescription(capabilityModel, base.performance_rating, base.speed_rating, base.cost_rating, false) });
-        continue;
-      }
-      const p = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode());
-      try {
-        let catalog = catalogByProvider.get(m.provider);
-        if (!catalog) {
-          try { catalog = await p.modelCatalog(); } catch { catalog = []; }
-          catalogByProvider.set(m.provider, catalog);
-        }
-        const catalogEntry = catalog.find(entry => entry.id === m.name || entry.id.endsWith(`/${m.name}`));
-        const catalogText = JSON.stringify(catalogEntry?.raw || {}).toLowerCase();
-        const catalogVision = /vision|image[_ -]?input|multimodal|image_url|input_image/.test(catalogText);
-        const catalogImageOutput = /image[_ -]?(output|generation)|text[_ -]?to[_ -]?image|image-generation/.test(catalogText);
-        const officialDomain = m.provider_protocol === 'github_models'
-          ? 'docs.github.com'
-          : m.provider_protocol === 'anthropic'
-            ? 'docs.anthropic.com'
-            : (/openai/i.test(`${m.provider} ${m.provider_url}`) ? 'platform.openai.com' : new URL(m.provider_url).hostname);
-        let searchEvidence = '';
-        const searchKey = `${officialDomain}:${m.name}`;
-        const shouldSearchCapabilities = inferredVision || inferredImageOutput || catalogVision || catalogImageOutput;
-        if (!shouldSearchCapabilities) {
-          searchEvidence = '';
-        } else if (searchByModel.has(searchKey)) {
-          searchEvidence = searchByModel.get(searchKey) || '';
-        } else {
-          try {
-            searchEvidence = await this.tools.webSearch(`site:${officialDomain} ${m.name} vision image generation model capabilities`);
-          } catch {
-            searchEvidence = '';
-          }
-          searchByModel.set(searchKey, searchEvidence);
-        }
-        const searchFound = !!searchEvidence && !searchEvidence.startsWith('[web_search] No results');
-        const officialSearchFound = searchFound && searchEvidence.toLowerCase().includes(officialDomain.toLowerCase());
-        const searchText = searchFound ? searchEvidence.toLowerCase() : '';
-        const searchVision = /vision|image input|multimodal/.test(searchText);
-        const searchImageOutput = /image generation|text.to.image|generate images/.test(searchText);
-        const { ok, latency } = await p.validate(m.name);
-        const shouldValidateVision = ok && (inferredVision || catalogVision || searchVision);
-        const shouldValidateImageOutput = ok && (inferredImageOutput || catalogImageOutput || searchImageOutput);
-        const visionResult = shouldValidateVision ? await p.validateVision(m.name) : { ok: false, latency: 0 };
-        const imageResult = shouldValidateImageOutput ? await p.validateImageOutput(m.name) : { ok: false, latency: 0 };
-        const result: ModelValidationResult = {
-          ...base,
-          status: ok ? 'available' : 'unavailable',
-          latency,
-          text_input: ok,
-          text_output: ok,
-          vision_input: visionResult.ok,
-          image_output: imageResult.ok,
-          speed_rating: this.speedRating(latency, ok),
-          notes: [
-            catalogEntry ? 'Network catalog: listed' : (catalog.length ? 'Network catalog: not listed' : 'Network catalog: unavailable'),
-            shouldSearchCapabilities
-              ? (officialSearchFound ? `official web search: evidence found on ${officialDomain}` : (searchFound ? 'web search: unverified capability hint found' : `official web search: no evidence on ${officialDomain}`))
-              : 'official web search: not required for text-only candidate',
-            ok ? 'text task: passed' : 'text task: failed',
-            shouldValidateVision ? `vision task: ${visionResult.ok ? 'passed' : `failed (${visionResult.error || 'no matching visual answer'})`}` : 'vision task: not claimed',
-            shouldValidateImageOutput ? `image generation task: ${imageResult.ok ? 'passed' : `failed (${imageResult.error || 'no image returned'})`}` : 'image generation task: not claimed',
-          ].join('; '),
-        };
-        results.push(result);
-        this.config.updateModel(m.provider, m.name, { evaluation: result, vision: result.vision_input, image_output: result.image_output, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: this.modelCapabilityDescription({ ...capabilityModel, vision: result.vision_input, image_output: result.image_output }, result.performance_rating, result.speed_rating, result.cost_rating, ok) });
-      } catch (e) {
-        const result: ModelValidationResult = {
-          ...base,
-          status: `error: ${e instanceof Error ? e.message : String(e)}`,
-          notes: 'Validation request failed',
-        };
-        results.push(result);
-        this.config.updateModel(m.provider, m.name, { evaluation: result, vision: result.vision_input, image_output: result.image_output, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: this.modelCapabilityDescription(capabilityModel, result.performance_rating, result.speed_rating, result.cost_rating, false) });
-      }
+      results.push(result);
+      const capabilities = Object.entries(capabilityMap).flatMap(([name, ok]) => ok ? [name] : []);
+      this.config.updateModelByDeployment(m.provider_id, m.name, {
+        evaluation: result,
+        validation,
+        capabilities,
+        vision: visionOk,
+        image_output: imageOk,
+        speed_rating: speedRating,
+        capability_rating: performanceRating,
+        description: this.modelCapabilityDescription({ ...m, vision: visionOk, image_output: imageOk }, performanceRating, speedRating, costRating, record.status === 'verified'),
+      });
     }
     this.config.save();
     return results;
@@ -2155,11 +2849,7 @@ export class Agent {
 
   engineModel(): LLMProvider | null {
     if (this.forcedProvider) return this.forcedProvider;
-    if (this.model === 'auto') {
-      const best = this.config.allModels().find(m => (m.evaluation?.status || 'available') === 'available') || this.config.allModels()[0];
-      if (best) this.model = best.name;
-    }
-    const m = this.config.findModel(this.model);
+    const m = this.activeModelConfig();
     if (!m) return null;
     return new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode());
   }
@@ -2175,8 +2865,11 @@ export class Agent {
     preferCopilot?: boolean;
   }): Promise<{ ok: boolean; text: string; model?: string; provider?: string; error?: string }> {
     const models = this.config.allModels().filter(model => (model.evaluation?.status || 'unvalidated') !== 'unavailable' && !String(model.evaluation?.status || '').startsWith('error'));
-    const current = this.config.findModel(this.model);
-    const selected = (current && models.find(model => model.provider === current.provider && model.name === current.name)) || models.find(model => model.evaluation?.status === 'available') || models[0];
+    const current = this.activeModelConfig();
+    const selected = (current && models.find(model => model.provider_id === current.provider_id && model.name === current.name)) || models.find(model =>
+      (model.validation?.level === 'standard' || model.validation?.level === 'extended') &&
+      (model.validation.status === 'verified' || model.validation.status === 'degraded')
+    ) || models.find(model => model.evaluation?.status === 'available') || models[0];
     if (!selected?.api_key || !selected.provider_url) return { ok: false, text: '', error: 'No available editor prediction model.' };
     const provider = new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, this.config.openAIApiMode());
     const language = path.extname(String(input.path || '')).replace(/^\./, '') || 'text';
@@ -2195,7 +2888,10 @@ export class Agent {
   }
 
   async fuzzyInject(name: string, url: string, key: string, protocol?: ProviderProtocol): Promise<{ ok: boolean; provider?: string; models?: string[]; warning?: string }> {
-    const hasUsableModel = this.config.allModels().some(m => (m.evaluation?.status || 'available') === 'available');
+    const hasUsableModel = this.config.allModels().some(m =>
+      (m.validation?.level === 'standard' || m.validation?.level === 'extended') &&
+      (m.validation.status === 'verified' || m.validation.status === 'degraded')
+    );
     const tokenizerInput = `${name} ${url} ${key}`;
     const tokens = tokenizeFuzzyProviderInput(tokenizerInput, {
       providerName: name,
@@ -2204,7 +2900,7 @@ export class Agent {
       protocol,
     });
     const providerName = (tokens.providerName || this.inferProviderName(tokenizerInput)).trim();
-    const existing = providerName ? this.config.providers().find(p => p.name === providerName) : undefined;
+    const existing = providerName ? this.config.findProvider(providerName) : undefined;
     let baseUrl = (tokens.baseUrl || existing?.base_url || this.inferProviderUrl(providerName)).trim();
     const apiKey = (tokens.apiKey || existing?.api_key || '').trim();
 
@@ -2237,14 +2933,16 @@ export class Agent {
       if (!apiKey) return { ok: false, warning: 'API key is required for new providers or existing providers without a saved key.' };
       discovery = await this.discoverProviderModels(providerName, baseUrl, apiKey, safeProtocol);
     }
-    this.config.upsertProvider(providerName, baseUrl, apiKey, safeProtocol);
+    const providerId = this.config.upsertProvider(providerName, baseUrl, apiKey, safeProtocol);
     const candidates = discovery.models.length ? discovery.models : this.inferCandidateModels(providerName, baseUrl);
     for (const model of candidates) {
-      this.config.addModelToProvider(providerName, model, model, `${discovery.source === 'models_endpoint' ? 'Listed by provider /models endpoint' : discovery.source === 'suffix_probe' ? 'Discovered by fuzzy suffix probing' : 'Discovered by fuzzy injection'} for ${providerName}`);
+      this.config.addModelToProvider(providerId, model, model, `${discovery.source === 'models_endpoint' ? 'Listed by provider /models endpoint' : discovery.source === 'suffix_probe' ? 'Discovered by fuzzy suffix probing' : 'Discovered by fuzzy injection'} for ${providerName}`);
     }
     this.config.save();
-    const validation = await this.validateModels(candidates.map(m => `${providerName}/${m}`));
-    const ok = validation.some(v => v.status === 'available');
+    const validation = await this.validateModels(candidates.map(modelId =>
+      `deployment:${encodeURIComponent(providerId)}:${encodeURIComponent(modelId)}`
+    ));
+    const ok = validation.some(v => v.status === 'verified' || v.status === 'degraded');
     return {
       ok,
       provider: providerName,
@@ -2278,7 +2976,7 @@ export class Agent {
     const speed = m.speed_rating === 'fast' ? 3 : m.speed_rating === 'medium' ? 2 : m.speed_rating === 'slow' ? 1 : 0;
     const rating = this.performanceRating(m.name, m.capability_rating, m.description, (m as Partial<ModelConfig>).display);
     const perf = rating === 'high' ? 3 : rating === 'medium' ? 2 : 1;
-    const cost = this.costRating(m.cost_per_1k_input || 0, m.cost_per_1k_output || 0);
+    const cost = this.costRating(m.cost_per_1k_input, m.cost_per_1k_output);
     const cheap = cost === 'free' ? 4 : cost === 'cheap' ? 3 : cost === 'standard' ? 2 : 1;
     if (pref === 'speed') return speed * 5 + perf + cheap;
     if (pref === 'performance') return perf * 5 + speed + cheap;
@@ -2301,7 +2999,9 @@ export class Agent {
     return 'slow';
   }
 
-  private costRating(input = 0, output = 0): string {
+  private costRating(input?: number, output?: number): string {
+    if (typeof input !== 'number' || !Number.isFinite(input) || input < 0
+      || typeof output !== 'number' || !Number.isFinite(output) || output < 0) return 'unknown';
     const total = input + output;
     if (total <= 0) return 'free';
     if (total <= 0.005) return 'cheap';
@@ -2370,6 +3070,12 @@ export class Agent {
       this.processingConversationId = this.activeConversationId || 'default';
       this.activeProcessAbortController = new AbortController();
       this.subagents.resumeScheduling();
+      this.routeTransactionId = `turn-${crypto.randomUUID()}`;
+      this.pendingAutoAttempts = [];
+      this.routeStreamCommitted = false;
+      this.routeSideEffectCommitted = false;
+      this.lastRouteTransition = '';
+      this.lastRouteRetryDelayMs = 0;
     }
     this.processDepth++;
     const processSignal = this.activeProcessAbortController?.signal;
@@ -2382,12 +3088,40 @@ export class Agent {
       const inputEnvelope = typeof input === 'string' ? null : input as AgentPromptMessage & { clientMessageId?: string; runId?: string };
       const clientMessageId = String(inputEnvelope?.clientMessageId || '').trim();
       const inputRunId = String(inputEnvelope?.runId || this.activeWorkRunId || '').trim();
-      const images = typeof input === 'string' ? [] : (input.images || []).filter(image => /^data:image\//i.test(String(image.dataUrl || '')));
-      if (images.length && this.model === 'auto') await this.evaluateAndSwitch(`${text}\n[image attachment]`);
-      const selectedModel = this.config.findModel(this.model);
+      const rawImages = typeof input === 'string' ? [] : (Array.isArray(input.images) ? input.images : []);
+      let autoRouteEvaluated = false;
+      let attachments: ConversationImageAttachment[] = [];
+      let images: Array<{ dataUrl: string; name: string; type: string }> = [];
+      try {
+        const attachmentRefs = typeof input === 'string' ? [] : (Array.isArray(input.attachments) ? input.attachments : []);
+        const referenced = hydrateConversationImageAttachments(this.rootPath, attachmentRefs);
+        if (attachmentRefs.length && referenced.length !== attachmentRefs.length) {
+          throw new Error('One or more durable image attachment references are invalid.');
+        }
+        if (referenced.length) {
+          attachments = referenced;
+          images = referenced.flatMap(image => image.dataUrl ? [{
+            dataUrl: image.dataUrl,
+            name: image.name,
+            type: image.mimeType,
+          }] : []);
+        } else {
+          const prepared = this.prepareSubmittedConversationImages(rawImages);
+          attachments = prepared.attachments;
+          images = prepared.images;
+        }
+      } catch (error) {
+        this.status = 'idle';
+        return [{ type: 'text', text: `[Attachment rejected] ${error instanceof Error ? error.message : String(error)}` }];
+      }
+      if (images.length && this.model === 'auto') {
+        await this.evaluateAndSwitch(`${text}\n[image attachment]`, inputEnvelope?.routePolicy);
+        autoRouteEvaluated = true;
+      }
+      const selectedModel = this.activeModelConfig();
       if (images.length && !selectedModel?.vision) {
         this.status = 'idle';
-        return [{ type: 'text', text: `[Vision unavailable] ${this.model} has not passed image-input validation. Select a validated vision model before asking about attachments.` }];
+        return [{ type: 'text', text: `[Vision unavailable] ${this.activeModelName() || this.model} has not passed image-input validation. Select a validated vision model before asking about attachments.` }];
       }
       const now = this.nowLabel();
       const displayText = images.length ? `${text}${text ? '\n\n' : ''}[${images.length} image attachment${images.length === 1 ? '' : 's'}]` : text;
@@ -2395,9 +3129,16 @@ export class Agent {
         ? [{ type: 'text', text }, ...images.map(image => ({ type: 'image_url', image_url: { url: image.dataUrl } }))]
         : text;
       if (clientMessageId) {
-        this.persistGuideMessage(clientMessageId, displayText, inputRunId, historyContent);
+        this.persistGuideMessage(clientMessageId, displayText, inputRunId, historyContent, attachments);
       } else {
-        this.chatMessages.push({ role: 'user', content: displayText, mode: this.modeName(), model: this.model, timestamp: now });
+        this.chatMessages.push({
+          role: 'user',
+          content: displayText,
+          mode: this.modeName(),
+          model: this.model,
+          timestamp: now,
+          attachments: attachments.length ? attachments : undefined,
+        });
         this.history.push({ role: 'user', content: historyContent });
       }
       // Agent.process seeds the kernel from history, so its initial prompt does
@@ -2406,10 +3147,10 @@ export class Agent {
       this.saveWorkspaceConversationState();
       this.emitWorkEvent({ type: 'start', content: 'Preparing request.' });
 
-      if (this.model === 'auto') {
-        await this.evaluateAndSwitch(displayText);
+      if (this.model === 'auto' && !autoRouteEvaluated) {
+        await this.evaluateAndSwitch(displayText, inputEnvelope?.routePolicy);
       }
-      if (this.modelIsUnavailable(this.model)) {
+      if (this.model && this.modelIsUnavailable(this.model)) {
         this.switchToFallbackModel();
       }
 
@@ -2434,6 +3175,18 @@ export class Agent {
       this.emitWorkEvent({ type: 'done', content: 'Response complete.' });
       return result;
     } catch (e) {
+      if (processSignal?.aborted) {
+        // Cooperative stop is finalized by ConversationKernel after the active
+        // promise settles. Publishing an error here would prematurely mark the
+        // managed work run as failed and disarm the supervisor's second-click
+        // force-stop path before settlement is complete.
+        this.status = 'idle';
+        const interruptedRunId = this.activeWorkRunId;
+        if (interruptedRunId && !this.managedWorkRunIds.has(interruptedRunId)) {
+          this.finishConversationWorkRun(interruptedRunId, 'interrupted');
+        }
+        throw e;
+      }
       const msg = e instanceof Error ? e.message : String(e);
       this.status = 'error';
       this.emitWorkEvent({ type: 'error', content: msg });
@@ -2441,6 +3194,8 @@ export class Agent {
     } finally {
       this.processDepth = Math.max(0, this.processDepth - 1);
       if (this.processDepth === 0) {
+        if (this.routeTransactionId) this.autoRouter.endTransaction(this.routeTransactionId);
+        this.routeTransactionId = '';
         this.processingConversationId = null;
         this.activeProcessAbortController = null;
       }
@@ -2787,7 +3542,7 @@ export class Agent {
     try {
       const cfg = provider.intelligenceConfig(this.intelligence);
       const response = await this.withTimeout(
-        provider.chat(this.model, [{ role: 'user', content: prompt }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 3000), signal),
+        provider.chat(this.activeModelName(), [{ role: 'user', content: prompt }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 3000), signal),
         120000
       );
       const parsed = this.extractMemoryLabJson(response);
@@ -2818,7 +3573,7 @@ export class Agent {
     try {
       const cfg = provider.intelligenceConfig(this.intelligence);
       await this.withTimeout(
-        provider.chat(this.model, [{ role: 'user', content: JSON.stringify({ index: read.index }, null, 2) }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 1200), signal),
+        provider.chat(this.activeModelName(), [{ role: 'user', content: JSON.stringify({ index: read.index }, null, 2) }], system, Math.min(cfg.temperature, 0.2), Math.min(cfg.maxTokens, 1200), signal),
         120000
       );
     } catch { throwIfAgentAborted(signal); /* deterministic reindex still runs */ }
@@ -2900,13 +3655,19 @@ export class Agent {
   private async runSubagentJob(id: string, prompt: string, flowName: string, reason: 'spawn' | 'mailbox' | 'resume'): Promise<string> {
     const sa = this.subagents.get(id);
     if (!sa) return '[Subagent] Not found.';
-    const parentProvider = this.engineModel();
-    if (!parentProvider) {
+    const requestedModel = sa.model && sa.model !== 'default' ? sa.model : this.model;
+    const assignedModel = requestedModel === 'auto' ? this.activeModelConfig() : this.config.findModel(requestedModel);
+    const model = assignedModel?.name || (requestedModel === 'auto' ? this.activeModelName() : requestedModel);
+    const activeModel = this.activeModelConfig();
+    const activeProvider = this.engineModel();
+    const assignedProvider = assignedModel && assignedModel.provider_id !== activeModel?.provider_id
+      ? new LLMProvider(assignedModel.provider, assignedModel.provider_url, assignedModel.api_key, assignedModel.provider_protocol, this.config.openAIApiMode())
+      : activeProvider;
+    if (!assignedProvider || !model) {
       throw new Error('No LLM configured. Add provider in Settings > Models.');
     }
 
     try {
-      const model = sa.model && sa.model !== 'default' ? sa.model : this.model;
       const workspacePath = this.workspace.current?.path || this.rootPath;
       const child = new Agent(this.rootPath, {
         subagent: true,
@@ -2919,8 +3680,6 @@ export class Agent {
           update: (markdown, revision, actorId, conversationId) => this.updateLinkedPlan(markdown, revision, actorId, conversationId || this.activeConversationId),
         },
       });
-      child.forcedProvider = parentProvider;
-      child.model = model;
       child.intelligence = this.intelligence;
       child.engine = 'builtin';
       child.inputMode = sa.inputMode === 'next' ? 'next' : 'guide';
@@ -2929,6 +3688,15 @@ export class Agent {
         child.workspace.current = { ...this.workspace.current };
         child.config.loadWorkspaceConfig(this.workspace.current.path);
       }
+      // The parent catalog is authoritative for an accepted job, including
+      // in-memory provider edits that have not been persisted yet. Resolve the
+      // child by deployment after workspace overrides load so a constructor
+      // default cannot silently replace the assigned model or provider.
+      child.config.set('models', 'providers', this.config.providers());
+      child.forcedProvider = assignedProvider;
+      child.setModel(assignedModel
+        ? `deployment:${encodeURIComponent(assignedModel.provider_id)}:${encodeURIComponent(assignedModel.name)}`
+        : model);
       child.config.set('models', 'auto_switch', false);
       child.config.set('skills', 'auto_download', 'disabled');
       child.subagents = this.subagents;
@@ -2965,7 +3733,7 @@ export class Agent {
   }
 
   subagentToolDefinitions(defs: unknown[]): unknown[] {
-    const modelCapabilities = this.config.findModel(this.model);
+    const modelCapabilities = this.activeModelConfig();
     const visionFiltered = modelCapabilities?.vision
       ? defs
       : defs.filter((tool: any) => tool.function?.name !== 'image_inspect');
@@ -2988,8 +3756,8 @@ export class Agent {
 
   async handleImageGeneration(args: string, signal?: AbortSignal): Promise<string> {
     throwIfAgentAborted(signal);
-    const model = this.config.findModel(this.model);
-    if (!model?.image_output) return `[Image generation unavailable] ${this.model} has not passed image-output validation.`;
+    const model = this.activeModelConfig();
+    if (!model?.image_output) return `[Image generation unavailable] ${this.activeModelName() || this.model} has not passed image-output validation.`;
     const provider = this.engineModel();
     if (!provider) return '[Image generation unavailable] No provider is configured.';
     let input: Record<string, unknown> = {};
@@ -2997,7 +3765,7 @@ export class Agent {
     const prompt = String(input.prompt || '').trim();
     if (!prompt) return '[Image generation error] prompt is required.';
     try {
-      const generated = await provider.generateImage(this.model, prompt, String(input.size || '1024x1024'), signal);
+      const generated = await provider.generateImage(this.activeModelName(), prompt, String(input.size || '1024x1024'), signal);
       throwIfAgentAborted(signal);
       const source = generated.dataUrl || generated.url || '';
       return source ? `![Generated image](${source})` : '[Image generation error] Provider returned no image.';
@@ -3008,21 +3776,27 @@ export class Agent {
   }
 
   async handleImageInspect(args: string): Promise<string> {
-    if (!this.config.findModel(this.model)?.vision) return '[Image inspect unavailable] The selected model has not passed vision validation.';
+    if (!this.activeModelConfig()?.vision) return '[Image inspect unavailable] The selected model has not passed vision validation.';
     let input: Record<string, unknown> = {};
     try { input = JSON.parse(args); } catch {}
     const action = String(input.action || '').trim();
     if (action !== 'source_info' && action !== 'crop') return '[Image inspect error] action must be source_info or crop.';
-    const images = this.latestSubmittedImages();
+    const attachmentId = String(input.attachment_id || '').trim();
+    const images = this.latestSubmittedImages(attachmentId);
     const imageIndex = Math.max(1, Math.floor(Number(input.image_index || 1)));
-    const dataUrl = images[imageIndex - 1];
-    if (!dataUrl) return `[Image inspect error] image_index ${imageIndex} is unavailable; latest submitted image count is ${images.length}.`;
+    const selected = images[attachmentId ? 0 : imageIndex - 1];
+    const dataUrl = selected?.dataUrl;
+    if (!dataUrl) {
+      return attachmentId
+        ? `[Image inspect error] attachment_id ${attachmentId} is unavailable.`
+        : `[Image inspect error] image_index ${imageIndex} is unavailable; latest submitted image count is ${images.length}.`;
+    }
     try {
       const source = decodeInspectionImage(dataUrl);
       const sourceWidth = source.width;
       const sourceHeight = source.height;
       if (action === 'source_info') {
-        return JSON.stringify({ ok: true, action, image_index: imageIndex, width: sourceWidth, height: sourceHeight, format: source.mimeType }, null, 2);
+        return JSON.stringify({ ok: true, action, image_index: imageIndex, attachment_id: selected.id || undefined, width: sourceWidth, height: sourceHeight, format: source.mimeType }, null, 2);
       }
       const x = Math.floor(Number(input.x));
       const y = Math.floor(Number(input.y));
@@ -3034,6 +3808,7 @@ export class Agent {
         ok: true,
         action,
         image_index: imageIndex,
+        attachment_id: selected.id || undefined,
         source: { width: sourceWidth, height: sourceHeight },
         crop: { x, y, width, height },
         output: { width: output.width, height: output.height, scale: Number(output.scale.toFixed(4)) },
@@ -3044,14 +3819,30 @@ export class Agent {
     }
   }
 
-  private latestSubmittedImages(): string[] {
+  private latestSubmittedImages(attachmentId = ''): Array<{ id?: string; dataUrl: string }> {
+    const normalizedId = String(attachmentId || '').trim();
+    for (let index = this.chatMessages.length - 1; index >= 0; index -= 1) {
+      const message = this.chatMessages[index];
+      if (message?.role !== 'user') continue;
+      const attachments = hydrateConversationImageAttachments(this.rootPath, message.attachments);
+      const available = attachments.flatMap(attachment => attachment.dataUrl
+        ? [{ id: attachment.id, dataUrl: attachment.dataUrl }]
+        : []);
+      if (normalizedId) {
+        const match = available.find(item => item.id === normalizedId);
+        if (match) return [match];
+      } else if (available.length) {
+        return available;
+      }
+    }
+    if (normalizedId) return [];
     for (let index = this.history.length - 1; index >= 0; index -= 1) {
       const message = this.history[index];
       if (message?.role !== 'user' || !Array.isArray(message.content)) continue;
       const images = (message.content as Array<Record<string, unknown>>).flatMap(part => {
         if (part?.type !== 'image_url' || !part.image_url || typeof part.image_url !== 'object') return [];
         const url = String((part.image_url as Record<string, unknown>).url || '');
-        return url.startsWith('data:image/') ? [url] : [];
+        return url.startsWith('data:image/') ? [{ dataUrl: url }] : [];
       });
       if (images.length) return images;
     }
@@ -3227,7 +4018,7 @@ export class Agent {
         transcript,
       ].join('\n');
       const generated = await this.withTimeout(
-        provider.chat(this.model, [{ role: 'user', content: prompt }], system, temperature, budget.summaryTokens, signal),
+        provider.chat(this.activeModelName(), [{ role: 'user', content: prompt }], system, temperature, budget.summaryTokens, signal),
         120000
       );
       const generatedText = String(generated || '').trim();
@@ -3415,6 +4206,334 @@ export class Agent {
     }
   }
 
+}
+
+function missingProviderValidationAdapter(): ModelValidationProbeAdapter {
+  const missing = async (): Promise<never> => {
+    throw new ModelValidationProbeError('Provider URL or credential is missing.', {
+      status: 'invalid_config',
+      permanent: true,
+      code: 'missing_provider_configuration',
+    });
+  };
+  return { health: missing };
+}
+
+function createProviderValidationAdapter(provider: LLMProvider, model: string): ModelValidationProbeAdapter {
+  const textCall = async (instruction: string, maxTokens = 256): Promise<string> => {
+    const output = await provider.chat(model, [{ role: 'user', content: instruction }], 'You are a deterministic API capability probe. Follow the requested output contract exactly.', 0, maxTokens);
+    assertProviderProbeResponse(output);
+    return String(output || '').trim();
+  };
+  const streamCall = async (instruction: string): Promise<{
+    chunks: string[];
+    completed: boolean;
+    completionEvent?: 'openai_done' | 'openai_response_completed' | 'anthropic_message_stop';
+  }> => {
+    try {
+      const result = await provider.probeStreamCompletion(
+        model,
+        [{ role: 'user', content: instruction }],
+        'You are a deterministic API streaming probe. Return only the requested marker.',
+        0,
+        256,
+      );
+      for (const chunk of result.chunks) assertProviderProbeResponse(chunk);
+      return { chunks: result.chunks, completed: true, completionEvent: result.completionEvent };
+    } catch (error) {
+      if (error instanceof Error) assertProviderProbeResponse(error.message);
+      throw error;
+    }
+  };
+  return {
+    health: async () => {
+      const started = Date.now();
+      const output = await textCall('Return exactly NEWMARK_HEALTH_OK and no other text.', 32);
+      return { ok: output === 'NEWMARK_HEALTH_OK', latencyMs: Date.now() - started, reasonCode: output === 'NEWMARK_HEALTH_OK' ? undefined : 'health_nonce_mismatch' };
+    },
+    textNonce: async request => {
+      const started = Date.now();
+      const output = await textCall(`${request.instruction}\nNonce: ${request.nonce}`, 64);
+      return { output, latencyMs: Date.now() - started };
+    },
+    streamNonce: async request => {
+      const started = Date.now();
+      const output = await streamCall(`${request.instruction}\nNonce: ${request.nonce}`);
+      return { ...output, latencyMs: Date.now() - started };
+    },
+    strictJson: async request => {
+      const started = Date.now();
+      try {
+        const raw = await provider.chatStrictJson(
+          model,
+          [{ role: 'user', content: `${request.instruction}\nNonce: ${request.nonce}` }],
+          'You are a deterministic structured-output capability probe. Return only the schema-conforming object.',
+          0,
+          128,
+          request.schema,
+        );
+        assertProviderProbeResponse(raw);
+        return { raw: String(raw || '').trim(), latencyMs: Date.now() - started };
+      } catch (error) {
+        if (error instanceof Error) assertProviderProbeResponse(error.message);
+        throw error;
+      }
+    },
+    tool: scenario => runProviderToolProbe(provider, model, scenario),
+    vision: async challenge => {
+      const started = Date.now();
+      const dataUrl = `data:${challenge.mimeType};base64,${Buffer.from(challenge.bytes).toString('base64')}`;
+      const answer = await provider.chat(model, [{
+        role: 'user',
+        content: [
+          { type: 'text', text: challenge.instruction || 'Inspect the image and return the requested strict JSON object.' },
+          { type: 'image_url', image_url: { url: dataUrl } },
+        ],
+      }], 'This is a deterministic visual capability probe. Return strict JSON only.', 0, 160);
+      assertProviderProbeResponse(answer);
+      return { answer: String(answer || '').trim(), latencyMs: Date.now() - started };
+    },
+    imageOutput: async request => {
+      const started = Date.now();
+      const generated = await provider.generateImage(model, `${request.instruction} Marker: ${request.nonce}.`, '256x256');
+      const image = await loadGeneratedImageBytes(generated);
+      return { ...image, latencyMs: Date.now() - started };
+    },
+  };
+}
+
+async function runProviderToolProbe(provider: LLMProvider, model: string, scenario: ToolProbeScenario): Promise<ToolProbeObservation> {
+  const started = Date.now();
+  const tools = scenario.allowedTools.map(tool => ({
+    type: 'function',
+    function: { name: tool.name, description: tool.description, parameters: tool.inputSchema },
+  }));
+  const firstMessages: Array<Record<string, unknown>> = [{ role: 'user', content: `${scenario.instruction}\nNonce: ${scenario.nonce}` }];
+  let selected: { id: string; name: string; arguments: string } | undefined;
+  let unknownToolAttempted = false;
+  for await (const token of provider.chatStreamWithTools(model, firstMessages, 'Use only registered tools and obey their JSON Schema exactly.', 0, 256, tools)) {
+    if (token.type === 'text' && token.text) assertProviderProbeResponse(token.text);
+    if (token.type !== 'tool_call' || !token.toolCall) continue;
+    selected ||= token.toolCall;
+    if (token.toolCall.name !== scenario.knownToolName) unknownToolAttempted = true;
+  }
+  const observation: ToolProbeObservation = {
+    selectedToolName: selected?.name,
+    rawArguments: selected?.arguments,
+    unknownToolAttempted,
+    latencyMs: Date.now() - started,
+  };
+  if (scenario.kind !== 'tool_result' || !selected) return observation;
+  const followUp: Array<Record<string, unknown>> = [
+    ...firstMessages,
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: selected.id, type: 'function', function: { name: selected.name, arguments: selected.arguments } }],
+    },
+    { role: 'tool', tool_call_id: selected.id, content: JSON.stringify(scenario.simulatedToolResult || {}) },
+  ];
+  let finalText = '';
+  for await (const token of provider.chatStreamWithTools(model, followUp, 'Consume the tool result and return only its nonce.', 0, 128, tools)) {
+    if (token.type === 'text' && token.text) {
+      assertProviderProbeResponse(token.text);
+      finalText += token.text;
+    }
+  }
+  observation.toolResultAccepted = finalText.trim() === scenario.nonce;
+  observation.finalText = finalText.trim();
+  observation.latencyMs = Date.now() - started;
+  return observation;
+}
+
+function assertProviderProbeResponse(output: string): void {
+  const text = String(output || '');
+  const statusMatch = text.match(/^\s*\[(?:LLM Error|Error)(?::\s*(\d{3}))?[^\]]*\]/i);
+  if (!statusMatch) {
+    if (!text.trim()) throw new ModelValidationProbeError('Provider returned an empty response.', { status: 'unavailable', code: 'empty_response' });
+    return;
+  }
+  const status = Number(statusMatch[1] || 0);
+  if (status === 401 || status === 403) throw new ModelValidationProbeError('Provider authentication failed.', { status: 'auth_error', permanent: true, code: `http_${status}`, httpStatus: status });
+  if (status === 429) throw new ModelValidationProbeError('Provider rate limited the validation probe.', { status: 'rate_limited', code: 'http_429', httpStatus: 429 });
+  if (status === 400 || status === 404 || status === 422) throw new ModelValidationProbeError('Provider rejected the validation configuration.', { status: 'invalid_config', permanent: true, code: `http_${status}`, httpStatus: status });
+  throw new ModelValidationProbeError('Provider validation request was unavailable.', { status: 'unavailable', code: status ? `http_${status}` : 'provider_error', httpStatus: status || undefined });
+}
+
+async function loadGeneratedImageBytes(generated: { dataUrl?: string; url?: string }): Promise<{ bytes: Uint8Array; mimeType: string }> {
+  if (generated.dataUrl) {
+    const match = generated.dataUrl.match(/^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)$/i);
+    if (!match) throw new ModelValidationProbeError('Image data URL is malformed.', { status: 'unavailable', code: 'malformed_image_data_url' });
+    return { bytes: Buffer.from(match[2], 'base64'), mimeType: match[1].toLowerCase() };
+  }
+  if (!generated.url) throw new ModelValidationProbeError('Image generation returned no bytes or URL.', { status: 'unavailable', code: 'empty_image_response' });
+  const response = await fetch(generated.url);
+  if (!response.ok) throw new ModelValidationProbeError('Generated image URL could not be downloaded.', { status: 'unavailable', code: `image_http_${response.status}`, httpStatus: response.status });
+  const length = Number(response.headers.get('content-length') || 0);
+  if (length > 50 * 1024 * 1024) throw new ModelValidationProbeError('Generated image is too large.', { status: 'invalid_config', permanent: true, code: 'image_too_large' });
+  const mimeType = String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  return { bytes: new Uint8Array(await response.arrayBuffer()), mimeType };
+}
+
+let cachedVisionChallenge: VisionChallenge | null = null;
+function deterministicVisionChallenge(): VisionChallenge {
+  cachedVisionChallenge ||= buildDeterministicVisionChallenge();
+  return { ...cachedVisionChallenge, bytes: new Uint8Array(cachedVisionChallenge.bytes) };
+}
+
+function buildDeterministicVisionChallenge(): VisionChallenge {
+  const width = 320;
+  const height = 180;
+  const image = new PNG({ width, height });
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) setValidationPixel(image, x, y, 250, 250, 250);
+  }
+  for (let y = 35; y < 95; y += 1) for (let x = 30; x < 90; x += 1) setValidationPixel(image, x, y, 220, 35, 35);
+  for (let y = 30; y < 100; y += 1) for (let x = 200; x < 270; x += 1) {
+    const dx = x - 235;
+    const dy = y - 65;
+    if (dx * dx + dy * dy <= 34 * 34) setValidationPixel(image, x, y, 30, 90, 220);
+  }
+  for (let y = 105; y < 165; y += 1) {
+    const half = Math.floor((y - 105) * 0.7);
+    for (let x = 150 - half; x <= 150 + half; x += 1) setValidationPixel(image, x, y, 25, 165, 75);
+  }
+  drawValidationMarker(image, 18, 135, 'NM7');
+  const expectedAnswer = '{"left":"red_square","right":"blue_circle","bottom":"green_triangle","marker":"NM7"}';
+  return {
+    bytes: PNG.sync.write(image),
+    mimeType: 'image/png',
+    expectedAnswer,
+    instruction: 'Inspect the image. Return exactly one compact JSON object with keys left,right,bottom,marker. Use snake_case shape/color values and copy the short marker. Do not add Markdown or spaces.',
+  };
+}
+
+function setValidationPixel(image: PNG, x: number, y: number, red: number, green: number, blue: number): void {
+  if (x < 0 || y < 0 || x >= image.width || y >= image.height) return;
+  const offset = (y * image.width + x) * 4;
+  image.data[offset] = red;
+  image.data[offset + 1] = green;
+  image.data[offset + 2] = blue;
+  image.data[offset + 3] = 255;
+}
+
+function drawValidationMarker(image: PNG, startX: number, startY: number, marker: string): void {
+  const glyphs: Record<string, string[]> = {
+    N: ['10001', '11001', '10101', '10011', '10001', '10001', '10001'],
+    M: ['10001', '11011', '10101', '10101', '10001', '10001', '10001'],
+    '7': ['11111', '00001', '00010', '00100', '01000', '01000', '01000'],
+  };
+  [...marker].forEach((character, index) => {
+    const glyph = glyphs[character] || [];
+    glyph.forEach((row, y) => [...row].forEach((pixel, x) => {
+      if (pixel !== '1') return;
+      for (let yy = 0; yy < 3; yy += 1) for (let xx = 0; xx < 3; xx += 1) setValidationPixel(image, startX + index * 20 + x * 3 + xx, startY + y * 3 + yy, 10, 10, 10);
+    }));
+  });
+}
+
+function preserveVerifiedCapabilitiesAcrossTransientHealth(previous: ModelValidationRecord | undefined, current: ModelValidationRecord): ModelValidationRecord {
+  if (!previous || (current.status !== 'unavailable' && current.status !== 'rate_limited')) return current;
+  if (!Object.keys(previous.capabilities).length) return current;
+  return {
+    ...current,
+    capabilities: JSON.parse(JSON.stringify(previous.capabilities)) as ModelValidationRecord['capabilities'],
+  };
+}
+
+function validationCapabilityOk(record: ModelValidationRecord, capability: keyof ModelValidationRecord['capabilities']): boolean {
+  const status = record.capabilities[capability]?.status;
+  return status === 'verified' || status === 'degraded';
+}
+
+function validationCapabilityMap(record: ModelValidationRecord): Record<string, boolean> {
+  const text = validationCapabilityOk(record, 'text');
+  return {
+    text_input: text,
+    text_output: text,
+    streaming: validationCapabilityOk(record, 'streaming'),
+    json_schema: validationCapabilityOk(record, 'strict_json'),
+    tool_use: validationCapabilityOk(record, 'tools'),
+    image_input: validationCapabilityOk(record, 'vision'),
+    image_output: validationCapabilityOk(record, 'image_output'),
+  };
+}
+
+function taskDeterministicallyRequiresToolInterface(task: string): boolean {
+  const text = String(task || '');
+  return /\b(?:call|invoke|use)\b[^.\n]{0,48}\b(?:tool|function)\b/i.test(text)
+    || /\b(?:implement|fix|debug|refactor|build|test|change|update)\b/i.test(text)
+    || /\b(?:run|execute)\b[^.\n]{0,48}\b(?:command|script|test|shell|terminal)\b/i.test(text)
+    || /\b(?:list|inspect|search|read|write|edit|modify|create|delete)\b[^.\n]{0,48}\b(?:workspace|repo(?:sitory)?|files?|director(?:y|ies))\b/i.test(text)
+    || /(?:调用|使用).{0,16}(?:工具|函数)/.test(text)
+    || /(?:实现|修复|调试|重构|构建|测试|改动|更新)/.test(text)
+    || /(?:运行|执行).{0,16}(?:命令|脚本|测试)/.test(text)
+    || /(?:列出|查看|检查|搜索|读取|写入|编辑|修改|创建|删除).{0,16}(?:工作区|仓库|文件|目录)/.test(text);
+}
+
+function validationReasonCodes(record: ModelValidationRecord): string[] {
+  const codes = new Set(record.health?.reasonCodes || []);
+  for (const capability of Object.values(record.capabilities)) {
+    for (const evidence of capability?.evidence || []) for (const code of evidence.reasonCodes || []) codes.add(code);
+  }
+  return [...codes];
+}
+
+function deploymentIdentity(deployment: DeploymentRef): string {
+  return `${deployment.providerId}\u0000${deployment.modelId}`;
+}
+
+function routeProviderFingerprint(provider: ReturnType<ConfigManager['providers']>[number] | undefined): string {
+  if (!provider) return '';
+  return JSON.stringify({
+    id: provider.id,
+    name: provider.name,
+    baseUrl: provider.base_url,
+    apiKey: provider.api_key,
+    protocol: provider.protocol,
+    enabled: provider.enabled,
+    models: (provider.models || []).map(model => ({
+      name: model.name,
+      enabled: model.enabled !== false,
+      logicalModelGroupId: model.logical_model_group_id || '',
+    })),
+  });
+}
+
+function parseDeploymentSelectionValue(value: string): DeploymentRef | null {
+  const marker = String(value || '').trim();
+  if (!marker.startsWith('deployment:')) return null;
+  const parts = marker.slice('deployment:'.length).split(':');
+  if (parts.length < 2) return null;
+  try {
+    const providerId = decodeURIComponent(parts.shift() || '').trim();
+    const modelId = decodeURIComponent(parts.join(':')).trim();
+    return providerId && modelId ? { providerId, modelId } : null;
+  } catch {
+    return null;
+  }
+}
+
+function routeToolIsReadOnly(name: string, rawArgs: string): boolean {
+  const tool = String(name || '').toLowerCase();
+  if (/^(?:read|read_file|list|list_files|grep|glob|web_search|web_fetch|image_inspect|subagent_list|subagent_read|subagent_result|get_goal)$/.test(tool)) return true;
+  if (tool === 'computer_use') {
+    try {
+      const action = String((JSON.parse(rawArgs || '{}') as Record<string, unknown>).action || '').toLowerCase();
+      return action === 'observe' || action === 'app_observe' || action === 'screenshot';
+    } catch {
+      return false;
+    }
+  }
+  if (tool === 'browser_use') {
+    try {
+      const action = String((JSON.parse(rawArgs || '{}') as Record<string, unknown>).action || '').toLowerCase();
+      return action === 'observe' || action === 'read' || action === 'screenshot';
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 class GoalStateImpl implements GoalState {

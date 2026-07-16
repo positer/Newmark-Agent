@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { Agent, AgentMode } from './core/agent';
-import { ConfigManager, ModelEvaluation, ProviderProtocol, inferModelVisionCapability, inferProviderProtocol } from './core/config';
+import { ProviderProtocol, inferProviderProtocol } from './core/config';
 import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, providerNameFromUrl, tokenizeFuzzyProviderInput } from './core/fuzzy';
 import { LLMProvider } from './llm/provider';
 import { discoverAgentPresets, discoverOpenCodeTools, discoverPluginManifests, discoverPluginMarketplaces, runOpenCodeTool } from './core/compat';
@@ -158,6 +158,53 @@ function argValueFromFile(args: string[], key: string): string | undefined {
 
 function printJson(value: unknown): void {
   safeStdout(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+type CliToolExitCode = 0 | 2 | 3 | 4 | 130;
+
+interface CliToolEnvelope {
+  ok: boolean;
+  tool: string;
+  result?: unknown;
+  error?: string;
+  route?: string;
+}
+
+function emitCliToolEnvelope(envelope: CliToolEnvelope, exitCode: CliToolExitCode): void {
+  printJson(envelope);
+  process.exitCode = exitCode;
+}
+
+function parsedToolOutput(output: string): unknown {
+  const trimmed = output.trim();
+  if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) return output;
+  try { return JSON.parse(trimmed); } catch { return output; }
+}
+
+function classifyCliToolOutput(tool: string, output: string): { envelope: CliToolEnvelope; exitCode: CliToolExitCode } {
+  const result = parsedToolOutput(output);
+  if (result && typeof result === 'object' && !Array.isArray(result) && (result as JsonObject).ok === false) {
+    const error = String((result as JsonObject).error || `${tool} reported an unsuccessful result.`);
+    return { envelope: { ok: false, tool, error, route: 'direct' }, exitCode: 4 };
+  }
+  const firstLine = output.trim().split(/\r?\n/, 1)[0] || `${tool} failed.`;
+  if (/^\[(?:tool schema error|\?)]/i.test(firstLine)) {
+    return { envelope: { ok: false, tool, error: firstLine, route: 'direct' }, exitCode: 2 };
+  }
+  if (/^\[tool unsupported]/i.test(firstLine)) {
+    const unavailableHostCapability = tool === 'computer_use' || tool.startsWith('browser_');
+    return { envelope: { ok: false, tool, error: firstLine, route: 'direct' }, exitCode: unavailableHostCapability ? 3 : 2 };
+  }
+  if (/^\[(?:tool disabled|permission|Subagent sandbox)]/i.test(firstLine)) {
+    return { envelope: { ok: false, tool, error: firstLine, route: 'direct' }, exitCode: 3 };
+  }
+  if (/abort(?:ed|ing)?/i.test(firstLine)) {
+    return { envelope: { ok: false, tool, error: firstLine, route: 'direct' }, exitCode: 130 };
+  }
+  if (/^\[[^\]]+ error]/i.test(firstLine)) {
+    return { envelope: { ok: false, tool, error: firstLine, route: 'direct' }, exitCode: 4 };
+  }
+  return { envelope: { ok: true, tool, result, route: 'direct' }, exitCode: 0 };
 }
 
 let cliPipeGuardInstalled = false;
@@ -360,48 +407,6 @@ function safeState(agent: Agent, root: string): JsonObject {
   };
 }
 
-function speedRating(latency: number, ok: boolean): string {
-  if (!ok || latency < 0) return 'unknown';
-  if (latency <= 1.5) return 'fast';
-  if (latency <= 5) return 'medium';
-  return 'slow';
-}
-
-function costRating(input = 0, output = 0): string {
-  const total = input + output;
-  if (total <= 0) return 'free';
-  if (total <= 0.005) return 'cheap';
-  if (total <= 0.05) return 'standard';
-  return 'expensive';
-}
-
-function performanceRating(name: string, existing?: string, description?: string, display?: string): string {
-  if (existing && existing !== 'unknown') return existing;
-  const text = `${description || ''} ${display || ''}`.toLowerCase();
-  if (/(high capability|capability=high|performance|reasoning|complex|deep|advanced|frontier|large|pro|opus|gpt-4|o3|70b|120b)/.test(text)) return 'high';
-  if (/(low capability|capability=low|small|tiny|cheap|economical|basic|lightweight)/.test(text)) return 'low';
-  if (/(medium capability|capability=medium|balanced|standard|mini|flash|haiku|fast)/.test(text)) return 'medium';
-  const n = name.toLowerCase();
-  if (/(opus|gpt-4\.1|gpt-4o|o3|r1|deepseek-v3|70b|120b)/.test(n)) return 'high';
-  if (/(mini|haiku|flash|8b|7b|3b)/.test(n)) return 'medium';
-  return 'medium';
-}
-
-function modelCapabilityDescription(m: { name: string; description?: string; display?: string; vision?: boolean; thinking?: boolean; image_output?: boolean }, capability: string, speed: string, cost: string, ok: boolean): string {
-  const prior = String(m.description || '').trim();
-  const multimodal = [
-    m.vision ? 'vision-input' : '',
-    m.image_output ? 'image-output' : '',
-    m.thinking ? 'thinking' : '',
-  ].filter(Boolean).join(',') || 'text-only';
-  const generated = `${ok ? 'Validated text model' : 'Unvalidated text model'}; capability=${capability || 'medium'}; speed=${speed || 'unknown'}; cost=${cost || 'unknown'}; multimodal=${multimodal}; source=model validation.`;
-  if (!prior || /^(Listed by provider \/models endpoint|Discovered by fuzzy suffix probing|Discovered by fuzzy injection)/i.test(prior)) return generated;
-  if (/capability=/.test(prior) && /speed=/.test(prior) && /cost=/.test(prior) && /multimodal=/.test(prior)) {
-    return prior.replace(/multimodal=[^;.]*/i, `multimodal=${multimodal}`);
-  }
-  return `${prior} ${generated}`;
-}
-
 function inferCandidateModels(providerName: string, baseUrl: string): string[] {
   return fuzzyCandidateModels(providerName, baseUrl);
 }
@@ -421,65 +426,6 @@ async function discoverCliProviderModels(
   }
 }
 
-async function validateCliModels(config: ConfigManager, selectedNames?: string[]): Promise<Array<ModelEvaluation & { name: string; provider: string; model: string; display: string }>> {
-  const selected = new Set(selectedNames || []);
-  const results: Array<ModelEvaluation & { name: string; provider: string; model: string; display: string }> = [];
-  for (const m of config.allModels()) {
-    if (selected.size && !selected.has(m.name) && !selected.has(`${m.provider}/${m.name}`)) continue;
-    const inferredVision = !!m.vision || inferModelVisionCapability(m.name, m.display, m.description, m.provider, m.provider_protocol);
-    const inferredImageOutput = !!m.image_output;
-    const base = {
-      name: `${m.provider}/${m.name}`,
-      provider: m.provider,
-      model: m.name,
-      display: m.display || m.name,
-      status: 'unavailable',
-      latency: -1,
-      checked_at: new Date().toISOString(),
-      text_input: false,
-      text_output: false,
-      vision_input: inferredVision,
-      image_output: inferredImageOutput,
-      cost_rating: costRating(m.cost_per_1k_input, m.cost_per_1k_output),
-      performance_rating: performanceRating(m.name, m.capability_rating, m.description, m.display),
-      speed_rating: 'unknown',
-      notes: '',
-    };
-    const capabilityModel = { ...m, vision: inferredVision, image_output: inferredImageOutput };
-    if (!m.provider_url || !m.api_key) {
-      const result = { ...base, notes: 'Missing provider URL or API key' };
-      results.push(result);
-      config.updateModel(m.provider, m.name, { evaluation: result, vision: result.vision_input, image_output: result.image_output, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: modelCapabilityDescription(capabilityModel, result.performance_rating, result.speed_rating, result.cost_rating, false) });
-      continue;
-    }
-    const provider = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol);
-    try {
-      const { ok, latency } = await provider.validate(m.name);
-      const result = {
-        ...base,
-        status: ok ? 'available' : 'unavailable',
-        latency,
-        text_input: ok,
-        text_output: ok,
-        speed_rating: speedRating(latency, ok),
-        notes: ok ? 'Text chat validation succeeded' : 'Provider returned no usable text output',
-      };
-      results.push(result);
-      config.updateModel(m.provider, m.name, { evaluation: result, vision: result.vision_input, image_output: result.image_output, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: modelCapabilityDescription(capabilityModel, result.performance_rating, result.speed_rating, result.cost_rating, ok) });
-    } catch (e) {
-      const result = {
-        ...base,
-        status: `error: ${e instanceof Error ? e.message : String(e)}`,
-        notes: 'Validation request failed',
-      };
-      results.push(result);
-      config.updateModel(m.provider, m.name, { evaluation: result, vision: result.vision_input, image_output: result.image_output, speed_rating: result.speed_rating, capability_rating: result.performance_rating, description: modelCapabilityDescription(capabilityModel, result.performance_rating, result.speed_rating, result.cost_rating, false) });
-    }
-  }
-  config.save();
-  return results;
-}
-
 function summarizeValidationFailure(
   validation: Array<{ name?: string; model?: string; status?: string; notes?: string }>,
   discoveryWarning?: string
@@ -493,7 +439,7 @@ function summarizeValidationFailure(
 }
 
 async function runCliFuzzyInject(
-  root: string,
+  agent: Agent,
   name: string,
   url: string,
   key: string,
@@ -501,9 +447,12 @@ async function runCliFuzzyInject(
   preferredModels?: string[]
 ): Promise<{ ok: boolean; provider?: string; models?: string[]; warning?: string }> {
   cliDebug('fuzzy: load config');
-  const config = new ConfigManager(root);
+  const config = agent.config;
   cliDebug('fuzzy: check guiding models');
-  const hasUsableModel = config.allModels().some(m => (m.evaluation?.status || 'available') === 'available');
+  const hasUsableModel = config.allModels().some(m =>
+    (m.validation?.level === 'standard' || m.validation?.level === 'extended') &&
+    (m.validation.status === 'verified' || m.validation.status === 'degraded')
+  );
   const tokenizerInput = `${name} ${url} ${key}`;
   const tokens = tokenizeFuzzyProviderInput(tokenizerInput, {
     providerName: name,
@@ -563,9 +512,9 @@ async function runCliFuzzyInject(
   cliDebug('fuzzy: save imported models');
   config.save();
   cliDebug('fuzzy: validate candidates');
-  const validation = await validateCliModels(config, candidates.map(m => `${providerName}/${m}`));
+  const validation = await agent.validateModels(candidates.map(m => `${providerName}/${m}`));
   cliDebug(`fuzzy: validation results ${validation.length}`);
-  const ok = validation.some(v => v.status === 'available');
+  const ok = validation.some(v => v.status === 'verified' || v.status === 'degraded');
   return {
     ok,
     provider: providerName,
@@ -580,21 +529,49 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
   if (!command) return false;
 
   const agent = new Agent(root, { agentOnly: args.includes('--agent-only') });
+  agent.tools.setHostProfile({
+    kind: 'cli',
+    platform: process.platform,
+    electronBrowser: false,
+    windowsComputerUse: process.platform === 'win32',
+  });
   const conversation = argValue(args, '--conversation');
   if (conversation) agent.setConversation(conversation);
   const language = argValue(args, '--language');
   if (language && ['auto', 'en', 'zh'].includes(language)) agent.config.set('general', 'language', language);
+  const requestedMode = argValue(args, '--mode');
+  if ((command === 'send' || command === 'tool') && requestedMode) {
+    if (!['build', 'plan', 'goal', 'flow'].includes(requestedMode)) {
+      if (command === 'tool') {
+        const positional = positionalAfter(args, 'tool');
+        emitCliToolEnvelope({ ok: false, tool: positional[0] || '', error: `Invalid mode: ${requestedMode}. Expected build, plan, goal, or flow.`, route: 'direct' }, 2);
+      } else {
+        safeStderr(`Invalid mode: ${requestedMode}. Expected build, plan, goal, or flow.\n`);
+        process.exitCode = 2;
+      }
+      return true;
+    }
+    agent.setMode(requestedMode as AgentMode);
+  }
   if (command === 'state') {
     printJson(safeState(agent, root));
     return true;
   }
 
   if (command === 'tool') {
+    if (args.includes('--list')) {
+      emitCliToolEnvelope({
+        ok: true,
+        tool: 'catalog',
+        result: { mode: agent.mode, tools: agent.tools.canonicalDefinitions(agent.mode) },
+        route: 'direct',
+      }, 0);
+      return true;
+    }
     const positional = positionalAfter(args, 'tool');
     const toolName = positional[0] || '';
     if (!toolName) {
-      safeStderr('Usage: Newmark.exe tool <tool-name> [json-args | key=value ... | --args-file path] [--root <dir>]\n');
-      process.exitCode = 1;
+      emitCliToolEnvelope({ ok: false, tool: '', error: 'Tool name is required. Usage: Newmark.exe tool <tool-name> [json-args | key=value ... | --args-file path] [--mode build|plan|goal|flow] [--root <dir>]', route: 'direct' }, 2);
       return true;
     }
     const parsedArgs = parseToolArgs(
@@ -602,18 +579,24 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
       argValue(args, '--args') || argValueFromFile(args, '--args-file') || argValue(args, '--input')
     );
     if (!parsedArgs.ok) {
-      safeStderr(`CLI tool argument error: ${parsedArgs.error}\n`);
-      process.exitCode = 1;
+      emitCliToolEnvelope({ ok: false, tool: toolName, error: parsedArgs.error, route: 'direct' }, 2);
       return true;
     }
     const toolArgs = parsedArgs.value;
     const wsDir = agent.workspace.current?.path || root;
-    const result = await agent.tools.execute(toolName, JSON.stringify(toolArgs), wsDir, {
-      mode: agent.mode,
-      workspacePath: wsDir,
-      invocation: 'cli',
-    });
-    safeStdout(`${result}\n`);
+    try {
+      const result = await agent.tools.execute(toolName, JSON.stringify(toolArgs), wsDir, {
+        mode: agent.mode,
+        workspacePath: wsDir,
+        invocation: 'cli',
+      });
+      const classified = classifyCliToolOutput(toolName, result);
+      emitCliToolEnvelope(classified.envelope, classified.exitCode);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const aborted = error instanceof Error && error.name === 'AbortError';
+      emitCliToolEnvelope({ ok: false, tool: toolName, error: message, route: 'direct' }, aborted ? 130 : 4);
+    }
     return true;
   }
 
@@ -625,8 +608,6 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
       process.exitCode = 1;
       return true;
     }
-    const mode = argValue(args, '--mode');
-    if (mode && ['build', 'plan', 'goal', 'flow'].includes(mode)) agent.setMode(mode as AgentMode);
     const model = argValue(args, '--model');
     if (model) agent.setModel(model);
     const tokens = await agent.process(prompt);
@@ -670,7 +651,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
       });
       return true;
     }
-    const result = await runCliFuzzyInject(root, inferredName, url, key, safeProtocol, preferredModels);
+    const result = await runCliFuzzyInject(agent, inferredName, url, key, safeProtocol, preferredModels);
     printJson(result);
     return true;
   }

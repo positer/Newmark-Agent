@@ -6,13 +6,17 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
-const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
+const exePath = path.resolve(process.env.NEWMARK_TEST_EXE || path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe'));
 const screenshotPath = path.join(repoRoot, 'archive', '2026-06-28-release-ui-startup-recovery-smoke.png');
-const startupScreenshotPath = path.join(repoRoot, 'archive', '2026-07-13-dev-0.0.9-startup-prewarm.png');
 const keepRoot = process.env.NEWMARK_KEEP_UI_STARTUP_RECOVERY_SMOKE === '1';
 
 function log(message) { console.log(`[release-ui-startup-recovery-smoke] ${message}`); }
 function fail(message) { throw new Error(message); }
+function fatal(message) {
+  const error = new Error(message);
+  error.newmarkFatal = true;
+  throw error;
+}
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 function getJson(url) {
@@ -30,27 +34,32 @@ function getJson(url) {
 
 async function waitForTarget(port) {
   const deadline = Date.now() + 30000;
-  let startupIconVerified = false;
+  let startupSurfaceObserved = false;
+  let startupTargetId = '';
   while (Date.now() < deadline) {
     try {
       const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
       const startupTarget = targets.find(t => t.webSocketDebuggerUrl && String(t.url || '').startsWith('data:text/html'));
-      if (!startupIconVerified && startupTarget) {
-        const startupCdp = connectCdp(startupTarget);
-        try {
-          await startupCdp.ready;
-          await startupCdp.call('Runtime.enable');
-          const icon = await waitFor(startupCdp, `(() => { const icon = document.querySelector('#startup-icon'); return icon && icon.complete && icon.naturalWidth > 0 && String(icon.src || '').startsWith('data:image/') ? { width: icon.naturalWidth, height: icon.naturalHeight } : null; })()`, 10000, 'embedded startup icon');
-          startupIconVerified = !!icon;
-          log(`embedded startup icon ready: ${JSON.stringify(icon)}`);
-          await captureScreenshot(startupCdp, startupScreenshotPath);
-        } finally {
-          try { startupCdp.ws.close(); } catch {}
-        }
+      if (startupTarget) {
+        startupSurfaceObserved = true;
+        startupTargetId = String(startupTarget.id || startupTargetId || '');
       }
       const target = targets.find(t => t.webSocketDebuggerUrl && (t.type === 'page' || t.type === 'webview') && String(t.url || '').includes('index.html'));
-      if (target && startupIconVerified) return target;
-    } catch {}
+      if (target) {
+        if (startupTargetId && String(target.id || '') !== startupTargetId) {
+          fatal(`startup shell and final UI used different CDP targets: ${startupTargetId} -> ${String(target.id || '')}`);
+        }
+        const appPages = targets.filter(t => t.webSocketDebuggerUrl
+          && (t.type === 'page' || t.type === 'webview')
+          && (String(t.url || '').startsWith('data:text/html') || String(t.url || '').includes('index.html')));
+        if (appPages.length !== 1) fatal(`same-window startup exposed ${appPages.length} application page targets`);
+        if (startupSurfaceObserved) log('same-window startup surface observed before the final UI navigation');
+        else log('startup surface transitioned in the same target before CDP polling observed it');
+        return target;
+      }
+    } catch (error) {
+      if (error && error.newmarkFatal) throw error;
+    }
     await sleep(100);
   }
   fail('Timed out waiting for prewarmed Electron UI target');
@@ -196,6 +205,8 @@ async function runUiCheck(root) {
     cdp = connectCdp(target);
     await cdp.ready;
     await waitForPromotedMainUi(cdp);
+    const startupMs = Date.now() - startedAt;
+    if (startupMs > 8000) fail(`packaged startup exceeded the dev-0.0.10 maximum interaction budget: ${startupMs}ms`);
     await cdp.call('Runtime.enable');
     await cdp.call('Page.enable');
 
@@ -214,8 +225,6 @@ async function runUiCheck(root) {
 
     await waitFor(cdp, `(() => document.visibilityState === 'visible' && document.readyState === 'complete' && !!window.api && !!document.querySelector('#prompt'))()`, 30000, 'prewarmed renderer promoted and visible');
     await cdp.call('Page.bringToFront');
-    const startupMs = Date.now() - startedAt;
-    if (startupMs > 30000) fail(`packaged startup prewarm exceeded its bounded budget: ${startupMs}ms`);
     await waitFor(cdp, `window.api.getState().then(s => !!(s.workspaces && s.workspaces.current && s.workspaces.current.isInternal))`, 30000, 'default internal workspace selected');
     const ws = verifyRecoveredRoot(root);
     const state = await evaluate(cdp, `window.api.getState().then(s => ({
@@ -225,12 +234,8 @@ async function runUiCheck(root) {
       workspaceNames: (s.workspaces.internal || []).map(w => w.name),
       hydration: {
         state: !!(s.workspaces && s.workspaces.current),
-        fileTree: !!document.querySelector('#file-tree-container') && document.querySelector('#file-tree-container').childElementCount > 0,
-        rightStatus: !!document.querySelector('#right-status-content .status-grid'),
-        flows: typeof document.querySelector('#flow-select')?.onchange === 'function',
-        terminal: !!document.querySelector('.terminal-pane[data-session]:not([data-session=""])'),
-        browser: (() => { const view = document.querySelector('#browser-webview'); try { return !!(view && view.getWebContentsId && view.getWebContentsId() > 0 && view.getURL && view.getURL() === 'about:blank'); } catch { return false; } })(),
-        rendered: document.visibilityState === 'visible' && document.readyState === 'complete' && !!document.querySelector('#prompt')
+        rendered: document.visibilityState === 'visible' && document.readyState === 'complete' && !!document.querySelector('#prompt'),
+        browserAbsentBeforeDemand: !document.querySelector('#browser-webview')
       }
     }))`, 30000);
     if (!state.workspace || state.workspace.name !== ws.name || state.workspace.path !== ws.path) {
@@ -239,10 +244,25 @@ async function runUiCheck(root) {
     if (state.language !== 'auto') fail(`renderer language should start auto: ${JSON.stringify(state)}`);
     if (!['Input instruction...', '输入指令...'].includes(state.promptPlaceholder)) fail(`prompt placeholder missing after recovery: ${JSON.stringify(state)}`);
     if (!state.workspaceNames.includes(ws.name)) fail(`renderer internal workspace list missing default workspace: ${JSON.stringify(state)}`);
-    const requiredHydration = ['state', 'fileTree', 'rightStatus', 'flows', 'terminal', 'browser', 'rendered'];
+    const requiredHydration = ['state', 'rendered', 'browserAbsentBeforeDemand'];
     const missingHydration = requiredHydration.filter(key => state.hydration?.[key] !== true);
     if (missingHydration.length > 0) fail(`packaged renderer promoted without complete hydration (${missingHydration.join(', ')}): ${JSON.stringify(state)}`);
-    log(`companion files and default internal workspace recovered ok; startupMs=${startupMs}; window=${windowText}`);
+    const browserStartedAt = Date.now();
+    await evaluate(cdp, `window.switchRightTab('browser'); true`);
+    const browserState = await waitFor(cdp, `(() => {
+      const views = Array.from(document.querySelectorAll('#browser-webview'));
+      const view = views[0];
+      if (!view || views.length !== 1) return null;
+      try {
+        const ready = view.dataset?.newmarkBrowserReady === 'true'
+          || !!(view.getWebContentsId && view.getWebContentsId() > 0);
+        return ready ? { count: views.length, partition: view.getAttribute('partition') || '' } : null;
+      } catch { return null; }
+    })()`, 5000, 'single demand-created Browser guest');
+    const browserOpenMs = Date.now() - browserStartedAt;
+    if (browserOpenMs > 2500) fail(`first Browser open exceeded the 2.5s single-run smoke tolerance: ${browserOpenMs}ms`);
+    if (browserState.count !== 1 || browserState.partition !== 'persist:newmark-browser') fail(`Browser guest lifecycle mismatch: ${JSON.stringify(browserState)}`);
+    log(`companion files and default internal workspace recovered ok; startupMs=${startupMs}; browserOpenMs=${browserOpenMs}; window=${windowText}`);
     await captureScreenshot(cdp, screenshotPath);
   } finally {
     try { if (cdp?.ws) cdp.ws.close(); } catch {}

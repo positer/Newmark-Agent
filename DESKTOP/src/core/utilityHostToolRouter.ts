@@ -1,4 +1,5 @@
 import { BrowserControl } from './browserControl';
+import * as fs from 'fs';
 import { bindBrowserUseRequest, BrowserUse, BrowserUseReceipt, BrowserUseRequest } from './browserUse';
 import { evaluateToolPolicy } from './toolPolicy';
 import { UtilityHostToolRequest } from './utilityAgentProtocol';
@@ -54,11 +55,20 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
     workspaceId: string;
     conversationId: string;
   }>();
+  const ephemeralScreenshots = new Map<string, Set<string>>();
   const lockTtlMs = 10 * 60 * 1000;
 
   const handler = async (request: UtilityHostToolRequest, signal?: AbortSignal): Promise<unknown> => {
     throwIfAborted(signal);
     validateTargetContext(request);
+    const policy = evaluateUtilityHostToolPolicy(request);
+    if (!policy.allowed) throw new Error(policy.reason || `Electron host policy blocked ${request.tool}`);
+    const nativeToolName = request.tool === 'automation'
+      ? String((request.args as { tool?: string }).tool || '')
+      : request.tool;
+    if (request.tool !== 'browser_control' && options.isToolEnabled && !options.isToolEnabled(nativeToolName)) {
+      throw new Error(`[permission] ${nativeToolName || request.tool} is disabled in Native Tools settings`);
+    }
     if (request.tool === 'browser_control') {
       if (request.args.action === 'use') throw new Error('Isolated Browser-Use must use the target-bound browser_use host RPC');
       const result = await (options.runBrowser || BrowserControl.run.bind(BrowserControl))(request.args, signal);
@@ -67,21 +77,11 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
     }
 
     if (request.tool === 'browser_use') {
-      if (options.isToolEnabled && !options.isToolEnabled('browser_use')) {
-        throw new Error('[permission] Browser-Use is disabled in Native Tools settings');
-      }
       if (request.context.runtimeKey !== request.target.runtimeKey) throw new Error('Electron Browser-Use runtime target/context mismatch');
       const bound = bindBrowserUseRequest(request.args, {
         runtimeKey: request.target.runtimeKey,
         actorId: request.context.actorId,
       });
-      const policy = evaluateToolPolicy({
-        name: 'browser_use',
-        mode: request.context.mode,
-        isSubagent: request.context.actorId !== ROOT_AGENT_ACTOR_ID,
-        args: { ...bound },
-      });
-      if (!policy.allowed) throw new Error(policy.reason || `Browser-Use policy blocked ${bound.action}`);
       const result = await (options.runBrowserUse || (async (value, abortSignal) => await BrowserUse.run(value, abortSignal)))(bound, signal);
       throwIfAborted(signal);
       return result;
@@ -90,15 +90,6 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
     if (request.tool === 'automation') {
       const tool = String(request.args.tool || '').trim();
       if (!AUTOMATION_TOOLS.has(tool)) throw new Error(`Automation host tool is not allowed: ${tool || '(missing)'}`);
-      let parsed: Record<string, unknown> = {};
-      try { parsed = JSON.parse(request.args.payload || '{}') as Record<string, unknown>; } catch {}
-      const policy = evaluateToolPolicy({
-        name: tool,
-        mode: request.context.mode,
-        isSubagent: request.context.actorId !== ROOT_AGENT_ACTOR_ID,
-        args: parsed,
-      });
-      if (!policy.allowed) throw new Error(policy.reason || `Automation policy blocked ${tool}`);
       const result = await options.runAutomation(tool, request.args.payload, signal);
       throwIfAborted(signal);
       return result;
@@ -131,6 +122,9 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
 
     const args = request.args || {};
     const action = String(args.action || '').trim().toLowerCase();
+    const trustedComputerUseContext = request.context as typeof request.context & {
+      allowEphemeralVisionImage?: boolean;
+    };
     const owner = `${request.target.runtimeKey}:${String(request.context.actorId || ROOT_TERMINAL_ACTOR_ID)}`;
     const now = Date.now();
     if (computerUseLease && now - computerUseLease.updatedAt > lockTtlMs) computerUseLease = null;
@@ -144,6 +138,7 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
       computerUseLease = { owner, runtimeKey: request.target.runtimeKey, workspacePath: request.target.workspacePath, updatedAt: now };
     }
 
+    let retainedScreenshotPath = '';
     try {
       const result = await (options.runComputer || runComputerUse)({
         action,
@@ -160,11 +155,15 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
         durationMs: Number(args.duration_ms || args.durationMs || 0),
         maxChars: Number(args.max_chars || args.maxChars || 30_000),
         dryRun: args.dry_run === true || args.dryRun === true,
+        captureMaxWidth: Number(args.capture_max_width || args.captureMaxWidth),
+        captureMaxHeight: Number(args.capture_max_height || args.captureMaxHeight),
         gradientColors: Array.isArray(args.gradient_colors) ? args.gradient_colors as string[] : undefined,
         gradientSpeed: Number(args.gradient_speed || 0) || undefined,
         gradientWidth: Number(args.gradient_width || 0) || undefined,
         includeRawUi: args.include_raw_ui === true || args.includeRawUi === true,
-        allowEphemeralVisionImage: args.allow_ephemeral_vision_image === true,
+        // Retaining a one-use image until provider-input preparation is a
+        // host/runtime capability. Model-authored args must never enable it.
+        allowEphemeralVisionImage: trustedComputerUseContext.allowEphemeralVisionImage === true,
         steps: Array.isArray(args.steps) ? args.steps.slice(0, 3).map(raw => {
           const step = raw as Record<string, unknown>;
           return {
@@ -184,9 +183,27 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
         invocation: 'agent',
         ownerId: owner,
       });
+      try {
+        const parsed = typeof result === 'string' ? JSON.parse(result) as Record<string, unknown> : result as unknown as Record<string, unknown>;
+        retainedScreenshotPath = String(parsed?.vision_image_path || '');
+        if (retainedScreenshotPath) {
+          const active = ephemeralScreenshots.get(request.target.runtimeKey) || new Set<string>();
+          for (const existing of active) if (!fs.existsSync(existing)) active.delete(existing);
+          active.add(retainedScreenshotPath);
+          while (active.size > 32) {
+            const oldest = active.values().next().value as string;
+            active.delete(oldest);
+            try { fs.unlinkSync(oldest); } catch {}
+          }
+          ephemeralScreenshots.set(request.target.runtimeKey, active);
+        }
+      } catch {}
       throwIfAborted(signal);
       return result;
     } finally {
+      if (signal?.aborted && retainedScreenshotPath) {
+        try { fs.unlinkSync(retainedScreenshotPath); } catch {}
+      }
       if (action === 'takeover_stop' && (!computerUseLease || computerUseLease.owner === owner)) computerUseLease = null;
       else if (computerUseLease?.owner === owner) computerUseLease.updatedAt = Date.now();
     }
@@ -194,6 +211,11 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
 
   handler.cancelTarget = (runtimeKey: string): void => {
     options.cancelBrowserUseTarget?.(runtimeKey);
+    const screenshots = ephemeralScreenshots.get(runtimeKey);
+    ephemeralScreenshots.delete(runtimeKey);
+    for (const screenshot of screenshots || []) {
+      try { fs.unlinkSync(screenshot); } catch {}
+    }
     const terminalOwner = terminalOwners.get(runtimeKey);
     terminalOwners.delete(runtimeKey);
     if (terminalOwner) {
@@ -231,6 +253,43 @@ function validateTargetContext(request: UtilityHostToolRequest): void {
       throw new Error('Electron host tool target/context mismatch');
     }
   }
+}
+
+function evaluateUtilityHostToolPolicy(request: UtilityHostToolRequest) {
+  const rawArgs = request.args as unknown as Record<string, unknown>;
+  const context = 'context' in request ? request.context : undefined;
+  let name: string = request.tool;
+  let args = rawArgs;
+  if (request.tool === 'automation') {
+    name = String(rawArgs.tool || '');
+    try {
+      const parsed = JSON.parse(String(rawArgs.payload || '{}'));
+      args = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+    } catch {
+      args = {};
+    }
+  } else if (request.tool === 'browser_control') {
+    const action = String(rawArgs.action || '').toLowerCase();
+    const mapped: Record<string, string> = {
+      open: 'browser_open',
+      snapshot: 'browser_snapshot',
+      click: 'browser_click',
+      type: 'browser_type',
+      eval: 'browser_eval',
+      back: 'browser_back',
+      forward: 'browser_forward',
+      reload: 'browser_reload',
+      cdp: 'browser_cdp',
+    };
+    name = mapped[action] || 'browser_use';
+    args = action === 'use' ? rawArgs : {};
+  }
+  return evaluateToolPolicy({
+    name,
+    mode: context?.mode || 'build',
+    isSubagent: !!context && context.actorId !== ROOT_AGENT_ACTOR_ID,
+    args,
+  });
 }
 
 function computerUseLockError(action: string, requestedOwner: string, activeOwner: string): string {

@@ -1,8 +1,9 @@
-import { Agent } from './agent';
+import { Agent, AutoRouteRatingResult } from './agent';
 import {
   AgentMode,
   AgentWorkEvent,
   ConversationInputEnvelope,
+  ConversationImageAttachment,
   GuideReceipt,
   OptionQuestion,
   StreamToken,
@@ -20,8 +21,20 @@ export type ConversationQueueMode = 'steer' | 'followUp';
 export interface AgentPromptMessage {
   text: string;
   images?: Array<{ dataUrl: string; name?: string; type?: string }>;
+  attachments?: ConversationImageAttachment[];
   clientMessageId?: string;
   runId?: string;
+  routePolicy?: {
+    mode?: 'quality' | 'balanced' | 'cost' | 'speed';
+    maxQualityLoss?: number;
+    maxExpectedCostUsd?: number;
+    allowPreview?: boolean;
+    privacy?: 'default' | 'no_training' | 'zdr';
+    dataRegion?: string;
+    requiredProtocolParameters?: string[];
+    batch?: boolean;
+    subset?: Array<{ providerId: string; modelId: string; logicalModelGroupId?: string }>;
+  };
 }
 
 export interface ConversationKernelRunOptions {
@@ -58,6 +71,9 @@ export interface ConversationKernelRunResult {
   runId: string;
   generation: number;
   workRuns: Agent['workRuns'];
+  routeDecision?: Agent['lastRouteDecision'];
+  resolvedDeployment?: ReturnType<Agent['activeDeployment']>;
+  autoRouteRatingAvailable?: boolean;
 }
 
 export type ConversationTargetInput = string | ConversationRuntimeTarget;
@@ -186,12 +202,17 @@ export class ConversationKernel {
     contextCompression: Agent['lastCompression'];
     contextWindow: ReturnType<Agent['contextWindow']>;
     conversationLocked: false;
+    routeDecision: Agent['lastRouteDecision'];
+    resolvedDeployment: ReturnType<Agent['activeDeployment']>;
+    autoRouteRatingAvailable: boolean;
   } {
     const normalized = this.normalizeTarget(target);
     const runtime = this.findRuntime(normalized);
     const runner = runtime?.runner || this.createRunner(normalized);
+    const conversationSnapshot = runner.getConversationSnapshot(normalized.conversationId);
     return {
-      ...runner.getConversationSnapshot(normalized.conversationId),
+      ...conversationSnapshot,
+      workRuns: this.bindWorkRunsToRuntimeTarget(conversationSnapshot.workRuns, normalized),
       target: normalized,
       queued: this.queued(normalized),
       workEvents: this.events(normalized),
@@ -213,6 +234,11 @@ export class ConversationKernel {
       contextCompression: runner.lastCompression,
       contextWindow: runner.contextWindow(),
       conversationLocked: false,
+      routeDecision: runner.lastRouteDecision,
+      resolvedDeployment: runner.activeDeployment(),
+      autoRouteRatingAvailable: runner.model === 'auto'
+        && runner.lastRouteDecision?.requestedSelection.kind === 'auto'
+        && !!runner.lastRouteDecision.resolvedDeployment,
     };
   }
 
@@ -251,10 +277,33 @@ export class ConversationKernel {
       return runtime.runner.recordGuideReceipt(rejected);
     }
 
-    const accepted: GuideReceipt = { ...base, runId: runtime.runId, status: 'accepted', reason: undefined };
+    let safeImages: AgentPromptMessage['images'] = [];
+    let safeAttachments: ConversationImageAttachment[] = [];
+    try {
+      const prepared = runtime.runner.prepareSubmittedConversationImages(envelope.images);
+      safeImages = prepared.images;
+      safeAttachments = prepared.attachments;
+    } catch (error) {
+      const rejected = {
+        ...base,
+        runId: runtime.runId,
+        reason: `Attachment rejected: ${error instanceof Error ? error.message : String(error)}`,
+      };
+      runtime.guideReceipts.set(clientMessageId, rejected);
+      return runtime.runner.recordGuideReceipt(rejected);
+    }
+    const safeEnvelope: ConversationInputEnvelope = { ...envelope, images: safeImages };
+
+    const accepted: GuideReceipt = {
+      ...base,
+      runId: runtime.runId,
+      status: 'accepted',
+      reason: undefined,
+      attachments: safeAttachments.length ? safeAttachments : undefined,
+    };
     runtime.guideEnvelopes.set(clientMessageId, {
-      ...envelope,
-      images: envelope.images?.map(image => ({ ...image })),
+      ...safeEnvelope,
+      images: safeEnvelope.images?.map(image => ({ ...image })),
     });
     runtime.guideReceipts.set(clientMessageId, accepted);
     runtime.runner.recordGuideReceipt(accepted);
@@ -274,8 +323,9 @@ export class ConversationKernel {
       if (!runtime.pendingNextTurn.some(item => typeof item.message !== 'string' && item.message.clientMessageId === clientMessageId)) {
         runtime.pendingNextTurn.push({
           message: {
-            text: envelope.text,
-            images: envelope.images?.map(image => ({ ...image })),
+            text: safeEnvelope.text,
+            images: safeEnvelope.images?.map(image => ({ ...image })),
+            attachments: safeAttachments.map(attachment => ({ ...attachment })),
             clientMessageId,
             runId: runtime.runId,
           },
@@ -283,14 +333,15 @@ export class ConversationKernel {
         });
       }
       runtime.runner.retainConversationContinuations([{
-        content: envelope.text,
+        content: safeEnvelope.text,
         queueMode: 'steer',
         clientMessageId,
         runId: runtime.runId,
-        images: envelope.images?.map(image => ({ ...image })),
+        images: safeEnvelope.images?.map(image => ({ ...image })),
+        attachments: safeAttachments.map(attachment => ({ ...attachment })),
         createdAt: deferred.createdAt,
       }]);
-      this.trackQueuedMessage(runtime, envelope.text, 'steer');
+      this.trackQueuedMessage(runtime, safeEnvelope.text, 'steer');
       runtime.runner.recordGuideReceipt(deferred);
       this.emitQueueUpdate(runtime);
       return deferred;
@@ -306,16 +357,26 @@ export class ConversationKernel {
       runtime.runner.recordGuideReceipt(deferred);
       runtime.pendingNextTurn.push({
         message: {
-          text: envelope.text,
-          images: envelope.images,
+          text: safeEnvelope.text,
+          images: safeEnvelope.images,
+          attachments: safeAttachments.map(attachment => ({ ...attachment })),
           clientMessageId,
           runId: runtime.runId,
         },
         queueMode: 'steer',
       });
+      runtime.runner.retainConversationContinuations([{
+        content: safeEnvelope.text,
+        queueMode: 'steer',
+        clientMessageId,
+        runId: runtime.runId,
+        images: safeEnvelope.images?.map(image => ({ ...image })),
+        attachments: safeAttachments.map(attachment => ({ ...attachment })),
+        createdAt: deferred.createdAt,
+      }]);
       return deferred;
     }
-    const queued = runtime.runner.queueActiveKernelMessage(envelope.text, 'steer', clientMessageId, runtime.runId, envelope.images);
+    const queued = runtime.runner.queueActiveKernelMessage(safeEnvelope.text, 'steer', clientMessageId, runtime.runId, safeEnvelope.images);
     if (queued) return accepted;
 
     const deferred: GuideReceipt = { ...accepted, status: 'deferred', updatedAt: new Date().toISOString() };
@@ -323,13 +384,23 @@ export class ConversationKernel {
     runtime.runner.recordGuideReceipt(deferred);
     runtime.pendingNextTurn.push({
       message: {
-        text: envelope.text,
-        images: envelope.images,
+        text: safeEnvelope.text,
+        images: safeEnvelope.images,
+        attachments: safeAttachments.map(attachment => ({ ...attachment })),
         clientMessageId,
         runId: runtime.runId,
       },
       queueMode: 'steer',
     });
+    runtime.runner.retainConversationContinuations([{
+      content: safeEnvelope.text,
+      queueMode: 'steer',
+      clientMessageId,
+      runId: runtime.runId,
+      images: safeEnvelope.images?.map(image => ({ ...image })),
+      attachments: safeAttachments.map(attachment => ({ ...attachment })),
+      createdAt: deferred.createdAt,
+    }]);
     return deferred;
   }
 
@@ -354,6 +425,12 @@ export class ConversationKernel {
     };
   }
 
+  rateAutoRoute(target: ConversationTargetInput, score: number, expectedRouteId = ''): AutoRouteRatingResult {
+    const runtime = this.findRuntime(target);
+    if (!runtime) return { ok: false, reason: 'no_active_auto_route' };
+    return runtime.runner.rateActiveAutoRoute(score, expectedRouteId);
+  }
+
   setWorkRunExpanded(target: ConversationTargetInput, runId: string, expanded: boolean): boolean {
     const normalized = this.normalizeTarget(target);
     const runtime = this.findRuntime(normalized);
@@ -366,7 +443,10 @@ export class ConversationKernel {
   }
 
   updateSetting(section: string, key: string, value: unknown): void {
-    for (const runtime of this.runtimes.values()) runtime.runner.config.set(section, key, value);
+    for (const runtime of this.runtimes.values()) {
+      if (section === 'models' && key === 'providers') runtime.runner.updateProviders(value);
+      else runtime.runner.config.set(section, key, value);
+    }
   }
 
   runtimeState(target: ConversationTargetInput): ConversationRuntimeState | null {
@@ -382,7 +462,10 @@ export class ConversationKernel {
       generation: runtime.generation,
       running: !!runtime.activePromise,
       stopRequested: !!runtime.runId && runtime.stopRequestedRunId === runtime.runId,
-      workRuns: runtime.runner.getConversationSnapshot(runtime.id).workRuns,
+      workRuns: this.bindWorkRunsToRuntimeTarget(
+        runtime.runner.getConversationSnapshot(runtime.id).workRuns,
+        runtime.target,
+      ),
     };
   }
 
@@ -390,6 +473,9 @@ export class ConversationKernel {
     const normalized = this.normalizeTarget(target);
     const runtime = this.findRuntime(target);
     const runtimeKey = runtime?.runtimeKey || normalized.runtimeKey;
+    if (runtime && !runtime.activePromise && runtime.runId && runtime.stopRequestedRunId === runtime.runId) {
+      this.settleCooperativeStop(runtime, runtime.runId);
+    }
     if (!runtime?.activePromise || !runtime.runId) {
       return { action: 'not_running', runtimeKey, runId: runtime?.runId || undefined, generation: runtime?.generation || undefined, checkpointed: false };
     }
@@ -475,26 +561,52 @@ export class ConversationKernel {
       conversationId: runtime.target.conversationId,
     }, undefined, true, runtime.runtimeKey);
     const runId = runtime.runId;
-    const activePromise = this.run(runtime, message, options).then(result => {
-      if (runtime.runId === runId && runtime.stopRequestedRunId === runId) {
-        runtime.runner.finishConversationWorkRun(runId, 'interrupted');
+    let activePromise!: Promise<ConversationKernelRunResult>;
+    activePromise = (async (): Promise<ConversationKernelRunResult> => {
+      let result: ConversationKernelRunResult | null = null;
+      let stopped = false;
+      try {
+        result = await this.run(runtime, message, options);
+        stopped = runtime.runId === runId && runtime.stopRequestedRunId === runId;
+      } catch (error) {
+        if (runtime.runId === runId && runtime.stopRequestedRunId === runId) {
+          stopped = true;
+        } else {
+          runtime.runner.finishConversationWorkRun(runId, 'error');
+          throw error;
+        }
+      } finally {
+        if (runtime.runId === runId && runtime.activePromise === activePromise) {
+          runtime.activePromise = null;
+          if (runtime.stopRequestedRunId === runId) {
+            stopped = true;
+            this.settleCooperativeStop(runtime, runId);
+          }
+        }
       }
-      return result;
-    }).catch(error => {
-      if (runtime.runId === runId && runtime.stopRequestedRunId === runId) {
-        runtime.runner.finishConversationWorkRun(runId, 'interrupted');
-        this.mirrorHostIfTargetActive(runtime);
-        return this.result(runtime, []);
+      if (stopped) {
+        const settled = this.result(runtime, []);
+        if (result?.tokens) settled.tokens = result.tokens;
+        return settled;
       }
-      runtime.runner.finishConversationWorkRun(runId, 'error');
-      throw error;
-    }).finally(() => {
-      if (runtime.runId === runId && runtime.activePromise === activePromise) {
-        runtime.activePromise = null;
-      }
-    });
+      return result!;
+    })();
     runtime.activePromise = activePromise;
     return activePromise;
+  }
+
+  private settleCooperativeStop(runtime: ConversationRuntime, runId: string): boolean {
+    if (runtime.runId !== runId || runtime.stopRequestedRunId !== runId) return false;
+    // Clear supervisor-visible stop state before publishing the terminal event,
+    // so an interrupted event can never race a snapshot back into `stopping`.
+    runtime.stopRequestedRunId = '';
+    runtime.forceStopArmedRunId = '';
+    runtime.stopCheckpointed = false;
+    runtime.guideAcceptanceClosedRunId = '';
+    runtime.runner.finishConversationWorkRun(runId, 'interrupted');
+    this.mirrorHostIfTargetActive(runtime);
+    this.emitQueueUpdate(runtime);
+    return true;
   }
 
   private async run(
@@ -626,6 +738,7 @@ export class ConversationKernel {
           ? {
               text: continuation.content,
               images: continuation.images,
+              attachments: continuation.attachments,
               clientMessageId: continuation.clientMessageId,
               runId: continuation.runId,
             }
@@ -751,8 +864,50 @@ export class ConversationKernel {
       runtimeKey: runtime.runtimeKey,
       runId: runtime.runId,
       generation: runtime.generation,
-      workRuns: runtime.runner.getConversationSnapshot(runtime.id).workRuns,
+      workRuns: this.bindWorkRunsToRuntimeTarget(
+        runtime.runner.getConversationSnapshot(runtime.id).workRuns,
+        runtime.target,
+      ),
+      routeDecision: runtime.runner.lastRouteDecision,
+      resolvedDeployment: runtime.runner.activeDeployment(),
+      autoRouteRatingAvailable: runtime.runner.model === 'auto'
+        && runtime.runner.lastRouteDecision?.requestedSelection.kind === 'auto'
+        && !!runtime.runner.lastRouteDecision.resolvedDeployment,
     };
+  }
+
+  /**
+   * Treat persisted work-run routing fields as untrusted display data.
+   * Old or damaged state can contain another target's identity, so every
+   * public kernel boundary returns fresh records bound to its supervisor-owned
+   * normalized target without rewriting the runner's durable state.
+   */
+  private bindWorkRunsToRuntimeTarget(
+    workRuns: Agent['workRuns'],
+    target: NormalizedConversationTarget,
+  ): Agent['workRuns'] {
+    const publicTarget = (): { workspaceId: string; conversationId: string } => ({
+      workspaceId: target.workspaceId,
+      conversationId: target.conversationId,
+    });
+    const bindGuide = (guide: GuideReceipt): GuideReceipt => ({
+      ...guide,
+      target: publicTarget(),
+    });
+    return (workRuns || []).map(run => ({
+      ...run,
+      target: publicTarget(),
+      runtimeKey: target.runtimeKey,
+      events: (run.events || []).map(event => ({
+        ...event,
+        workspaceId: target.workspaceId,
+        workspaceKey: target.workspaceKey,
+        conversationId: target.conversationId,
+        runtimeKey: target.runtimeKey,
+        guide: event.guide ? bindGuide(event.guide) : undefined,
+      })),
+      guides: (run.guides || []).map(bindGuide),
+    }));
   }
 
   private enqueueSameSession(runtime: ConversationRuntime, message: string | AgentPromptMessage, queueMode: ConversationQueueMode): void {
@@ -907,6 +1062,7 @@ export class ConversationKernel {
           message: {
             text: envelope?.text || receipt.content || '',
             images: envelope?.images?.map(image => ({ ...image })),
+            attachments: receipt.attachments?.map(attachment => ({ ...attachment })),
             clientMessageId,
             runId: receipt.runId,
           },
@@ -919,6 +1075,7 @@ export class ConversationKernel {
         clientMessageId,
         runId: receipt.runId,
         images: envelope?.images?.map(image => ({ ...image })),
+        attachments: receipt.attachments?.map(attachment => ({ ...attachment })),
       }]);
       const deferred: GuideReceipt = {
         ...receipt,
@@ -975,8 +1132,14 @@ export class ConversationKernel {
   private retainUnconsumedKernelMessages(runtime: ConversationRuntime): void {
     const drained = runtime.runner.drainAllUnconsumedAgentKernelMessages();
     if (!drained.length) return;
-    runtime.runner.retainConversationContinuations(drained);
-    for (const item of drained) {
+    const retained = drained.map(item => ({
+      ...item,
+      attachments: item.clientMessageId
+        ? this.guideReceipt(runtime, item.clientMessageId)?.attachments?.map(attachment => ({ ...attachment }))
+        : undefined,
+    }));
+    runtime.runner.retainConversationContinuations(retained);
+    for (const item of retained) {
       const duplicate = runtime.pendingNextTurn.some(existing => {
         const existingText = typeof existing.message === 'string' ? existing.message : existing.message.text;
         const existingId = typeof existing.message === 'string' ? undefined : existing.message.clientMessageId;
@@ -984,8 +1147,14 @@ export class ConversationKernel {
       });
       if (duplicate) continue;
       runtime.pendingNextTurn.push({
-        message: item.clientMessageId || item.images?.length
-          ? { text: item.content, images: item.images, clientMessageId: item.clientMessageId, runId: item.runId }
+        message: item.clientMessageId || item.images?.length || item.attachments?.length
+          ? {
+              text: item.content,
+              images: item.images,
+              attachments: item.attachments,
+              clientMessageId: item.clientMessageId,
+              runId: item.runId,
+            }
           : item.content,
         queueMode: item.queueMode,
       });

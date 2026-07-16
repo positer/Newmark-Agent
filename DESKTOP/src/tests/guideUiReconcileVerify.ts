@@ -37,6 +37,8 @@ function createFixture(): {
 } {
   const source = uiScriptSource();
   const names = [
+    'normalizeConversationImageAttachments',
+    'appendConversationImageAttachments',
     'normalizeGuideUiStatus',
     'guideUiStatusLabel',
     'guideMessagesForTarget',
@@ -77,6 +79,7 @@ function createFixture(): {
     function finishToolBatch() {}
     function renderConversationWorkRun() {}
     function addWorkReview() {}
+    function renderAutoRouteRatingControls() {}
     ${extracted}
     return {
       document: document,
@@ -103,17 +106,29 @@ function main(): void {
   const fixture = createFixture();
   try {
     const acceptedId = 'guide-accepted';
+    const durableAttachment = {
+      id: 'user-image-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      origin: 'user',
+      name: 'guide-image.png',
+      mimeType: 'image/png',
+      dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4AWP4DwQACfsD/c8LaHIAAAAASUVORK5CYII=',
+      width: 1,
+      height: 1,
+    };
     fixture.recordGuideUiMessage({
       clientMessageId: acceptedId,
       target: fixture.targetA,
       runId: 'run-a',
       status: 'accepted',
       content: 'keep me through redraw',
+      attachments: [durableAttachment],
       createdAt: '2026-07-13T00:00:00.000Z',
     }, fixture.targetA);
     fixture.renderChatMessages([]);
     assert.equal(guideRows(fixture.document, acceptedId).length, 1, 'accepted optimistic Guide is rendered once');
     assert.equal(guideRows(fixture.document, acceptedId)[0].getAttribute('data-guide-status'), 'accepted');
+    assert.equal(guideRows(fixture.document, acceptedId)[0].querySelectorAll('.conversation-image-attachment').length, 1,
+      'accepted Guide attachment is revisitable before message_start persists the chat row');
 
     fixture.syncGuideMessagesFromWorkRuns([{
       runId: 'run-a',
@@ -124,12 +139,15 @@ function main(): void {
         runId: 'run-a',
         status: 'deferred',
         content: 'keep me through redraw',
+        attachments: [durableAttachment],
         createdAt: '2026-07-13T00:00:00.000Z',
       }],
     }], fixture.targetA);
     fixture.renderChatMessages([]);
     assert.equal(guideRows(fixture.document, acceptedId).length, 1, 'deferred Guide survives a destructive snapshot redraw');
     assert.equal(guideRows(fixture.document, acceptedId)[0].getAttribute('data-guide-status'), 'deferred');
+    assert.equal(guideRows(fixture.document, acceptedId)[0].querySelectorAll('.conversation-image-attachment').length, 1,
+      'deferred receipt restores its durable attachment after a destructive snapshot redraw');
 
     const persisted = [{
       role: 'user',
@@ -138,10 +156,13 @@ function main(): void {
       model: 'fixture-model',
       clientMessageId: acceptedId,
       runId: 'run-a',
+      attachments: [durableAttachment],
     }];
     fixture.renderChatMessages(persisted);
     assert.equal(guideRows(fixture.document, acceptedId).length, 1, 'applied persisted Guide replaces rather than duplicates the optimistic row');
     assert.equal(guideRows(fixture.document, acceptedId)[0].getAttribute('data-guide-status'), 'applied');
+    assert.equal(guideRows(fixture.document, acceptedId)[0].querySelectorAll('.conversation-image-attachment').length, 1,
+      'applied persisted Guide reuses the attachment without duplicating the optimistic gallery');
     assert.equal(fixture.guideMessagesForTarget(fixture.targetA)[acceptedId], undefined, 'applied Guide leaves the optimistic receipt cache');
     fixture.renderChatMessages(persisted);
     assert.equal(guideRows(fixture.document, acceptedId).length, 1, 'repeated applied snapshots remain exactly once');

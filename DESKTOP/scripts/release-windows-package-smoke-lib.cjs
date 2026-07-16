@@ -157,12 +157,31 @@ function connectWebSocket(url) {
 
 function stopSpawnedProcessTree(child) {
   if (!child || !Number.isInteger(child.pid)) return;
-  const result = spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
+  const taskkill = path.join(systemRoot, 'System32', 'taskkill.exe');
+  const result = spawnSync(taskkill, ['/PID', String(child.pid), '/T', '/F'], {
     encoding: 'utf8',
     windowsHide: true,
     timeout: 15000,
+    shell: false,
   });
   if (result.error && result.error.code !== 'ENOENT') throw result.error;
+}
+
+async function removeTreeWithRetries(target, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  do {
+    try {
+      fs.rmSync(target, { recursive: true, force: true, maxRetries: 2, retryDelay: 150 });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(error?.code) || Date.now() >= deadline) throw error;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  } while (Date.now() < deadline);
+  throw lastError;
 }
 
 async function runUiVersion(executable, runtimeRoot, profileRoot) {
@@ -232,7 +251,7 @@ async function smokeWindowsUnpacked(extractRoot, label) {
     runCliVersion(executable, runtimeRoot);
     await runUiVersion(executable, runtimeRoot, profileRoot);
   } finally {
-    fs.rmSync(isolatedRoot, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+    await removeTreeWithRetries(isolatedRoot);
   }
   return unpackedRoot;
 }

@@ -1,11 +1,12 @@
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
+import { normalizeUiBackgroundColor, normalizeUiFontFamily, normalizeUiTheme } from './core/uiPreferences';
 import { spawnSync } from 'child_process';
 import { Agent } from './core/agent';
 import { AgentMode } from './core/types';
 import { AutomationManager } from './core/automation';
-import { mergeProviderSecrets, sanitizeProvidersForState } from './core/config';
+import { sanitizeProvidersForState } from './core/config';
 import { FlowEngine, FlowWorkflow } from './core/flow';
 import { WorkspaceFileRouter } from './core/workspaceFileRouter';
 
@@ -68,14 +69,19 @@ function applyConfigPatch(cfg: Record<string, unknown>): void {
       case 'gradientColors': agent.config.set('ui', 'gradient_colors', value); break;
       case 'gradientSpeed': agent.config.set('ui', 'gradient_speed', value); break;
       case 'gradientWidth': agent.config.set('ui', 'gradient_width', value); break;
+      case 'glassAlpha': agent.config.set('ui', 'glass_alpha', value); break;
+    case 'theme': agent.config.set('ui', 'dark_mode', normalizeUiTheme(value)); break;
+    case 'backgroundColor': agent.config.set('ui', 'background_color', normalizeUiBackgroundColor(value)); break;
+    case 'fontFamily': agent.config.set('ui', 'font_family', normalizeUiFontFamily(value)); break;
     case 'feedbackLevel': agent.config.set('agent', 'option_feedback', value); break;
     case 'language': agent.config.set('general', 'language', value); break;
     case 'autoSwitch': agent.config.set('models', 'auto_switch', value === true || value === 'on'); break;
     case 'autoSwitchScope': agent.config.set('models', 'auto_switch_scope', value === 'provider' ? 'provider' : 'all'); break;
     case 'fallbackOnUnavailable': agent.config.set('models', 'fallback_on_unavailable', value === true || value === 'on'); break;
     case 'switchTendency': agent.config.set('models', 'auto_switch_preference', value); break;
+    case 'clearLearnedAutoPreferences': if (value === true) agent.clearLearnedModelPreferences(); break;
     case 'openAIApiMode': agent.config.set('models', 'openai_api_mode', ['chat_stream', 'chat', 'responses'].includes(String(value)) ? value : 'chat_stream'); break;
-    case 'providers': agent.config.set('models', 'providers', mergeProviderSecrets(value, agent.config.providers())); break;
+    case 'providers': agent.updateProviders(value); break;
     case 'defaultFlow': agent.config.set('flow', 'default_flow', value); break;
       case 'dialogStyle': agent.config.set('ui', 'dialog_style', value); break;
       default: agent.config.set('ui', key, value);
@@ -149,7 +155,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
     switch (pathname) {
       case '/api/state': {
         jsonResponse(res, {
-          mode: agent.mode, model: agent.model, modelLabel: agent.modelLabel(),
+          mode: agent.mode, model: agent.modelSelectionValue(), modelLabel: agent.modelLabel(),
+          resolvedDeployment: agent.activeDeployment(), routeDecision: agent.lastRouteDecision,
           intelligence: agent.intelligence, status: agent.status, goal: agent.goal,
           models: agent.allModelNames(), inputMode: agent.inputMode,
           conversationId: agent.activeConversationId,
@@ -162,6 +169,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           gradientWidth: agent.config.getNum('ui', 'gradient_width'),
           glassAlpha: agent.config.getNum('ui', 'glass_alpha'),
           darkMode: agent.config.getStr('ui', 'dark_mode'),
+          backgroundColor: normalizeUiBackgroundColor(agent.config.getStr('ui', 'background_color')),
+          fontFamily: normalizeUiFontFamily(agent.config.getStr('ui', 'font_family')),
           tone: agent.config.getStr('general', 'tone'),
           language: agent.config.getStr('general', 'language'),
           feedback: agent.config.getStr('agent', 'option_feedback'),
@@ -170,6 +179,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           skillPolicy: agent.config.getStr('skills', 'auto_download'),
           autoSwitch: agent.config.getBool('models', 'auto_switch'),
           autoSwitchScope: agent.config.getStr('models', 'auto_switch_scope') || 'all',
+          switchTendency: agent.config.autoSwitchPreference(),
           fallbackOnUnavailable: agent.config.getBool('models', 'fallback_on_unavailable'),
           openAIApiMode: agent.config.openAIApiMode(),
           automations: automation?.list() || [],
@@ -212,7 +222,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         jsonResponse(res, {
           tokens: tokens.map(t => ({ type: t.type, text: t.text })),
           diffs: agent.fileDiffs.map(d => ({ path: d.path, old: d.oldContent.length, new: d.newContent.length })),
-          mode: agent.mode, model: agent.model, status: agent.status,
+          mode: agent.mode, model: agent.modelSelectionValue(), status: agent.status,
+          resolvedDeployment: agent.activeDeployment(), routeDecision: agent.lastRouteDecision,
           goal: agent.goal ? { objective: agent.goal.objective, paused: agent.goal.paused } : null,
           options: agent.pendingOptions,
           contextCompression: agent.lastCompression,
@@ -243,7 +254,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
       }
       case '/api/model': {
         agent.setModel(JSON.parse(body || '{}').model || '');
-        jsonResponse(res, { model: agent.model });
+        jsonResponse(res, { model: agent.modelSelectionValue(), resolvedDeployment: agent.activeDeployment() });
         return;
       }
       case '/api/intelligence': {
@@ -373,7 +384,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
       }
       case '/api/config': {
         if (req.method === 'GET') {
-          jsonResponse(res, agent.config);
+          jsonResponse(res, { error: 'Direct config export is disabled; use /api/state for the redacted runtime view.' }, 405);
           return;
         }
         applyConfigPatch(JSON.parse(body || '{}'));
@@ -383,7 +394,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
       case '/api/settings': {
         const cfg = JSON.parse(body || '{}');
         if (cfg.section && cfg.key !== undefined) {
-          agent.config.set(cfg.section, cfg.key, cfg.value);
+          if (cfg.section === 'models' && cfg.key === 'providers') agent.updateProviders(cfg.value);
+          else agent.config.set(cfg.section, cfg.key, cfg.value);
           agent.config.save();
         }
         jsonResponse(res, { ok: true });
@@ -460,11 +472,6 @@ function startServer(root: string): void {
   const uiDir = path.join(__dirname, 'ui');
 
   const server = http.createServer(async (req, res) => {
-    // CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
     if (req.method === 'OPTIONS') {
       res.writeHead(204); res.end(); return;
     }
@@ -491,7 +498,7 @@ function startServer(root: string): void {
     serveFile(res, fullPath);
   });
 
-  server.listen(PORT, () => {
+  server.listen(PORT, '127.0.0.1', () => {
     console.log(`\n  Newmark Agent v1.0 - Server Mode`);
     console.log(`  GUI: http://localhost:${PORT}`);
     console.log(`  Press Ctrl+C to stop\n`);

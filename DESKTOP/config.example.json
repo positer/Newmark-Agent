@@ -13,12 +13,31 @@
       "value": "auto"
     }
   },
+  "ui": {
+    "dark_mode": {
+      "_description": "Dark, light, or system theme",
+      "_type": "choice",
+      "_values": ["dark", "light", "system"],
+      "value": "dark"
+    },
+    "background_color": {
+      "_description": "Optional application background color in #RRGGBB form",
+      "_type": "string",
+      "value": ""
+    },
+    "font_family": {
+      "_description": "Optional local application font family",
+      "_type": "string",
+      "value": ""
+    }
+  },
   "models": {
     "providers": {
       "_description": "LLM providers. Fill api_key locally; never commit real keys.",
       "_type": "array",
       "value": [
         {
+          "id": "provider-example-openai-compatible",
           "name": "ExampleOpenAICompatible",
           "base_url": "https://api.example.com/v1",
           "api_key": "",
@@ -35,6 +54,21 @@
               "vision": false,
               "thinking": false,
               "image_output": false,
+              "enabled": true,
+              "preview": false,
+              "logical_model_group_id": "",
+              "privacy": ["default"],
+              "data_regions": [],
+              "supported_parameters": ["streaming", "json_schema", "tool_use"],
+              "route_preference": 0,
+              "capabilities": ["text_input", "text_output"],
+              "fallback_only": false,
+              "validation": {
+                "level": "discovered",
+                "status": "unavailable",
+                "checked_at": "",
+                "capabilities": {}
+              },
               "speed_rating": "unknown",
               "capability_rating": "unknown",
               "intelligence_tiers": {
@@ -63,6 +97,64 @@
       "_type": "choice",
       "_values": ["builtin", "codex", "opencode"],
       "value": "builtin"
+    },
+    "auto_switch": {
+      "_description": "Enable auditable single-model Auto routing",
+      "_type": "boolean",
+      "value": false
+    },
+    "auto_switch_preference": {
+      "_description": "Auto routing policy",
+      "_type": "choice",
+      "_values": ["quality", "balanced", "cost", "speed"],
+      "value": "balanced"
+    },
+    "auto_switch_scope": {
+      "_description": "Auto candidate scope",
+      "_type": "choice",
+      "_values": ["all", "provider"],
+      "value": "all"
+    },
+    "auto_switch_anchor_provider": {
+      "_description": "Stable provider id for provider-scoped Auto",
+      "_type": "string",
+      "value": ""
+    },
+    "auto_switch_subset": {
+      "_description": "Explicit Auto deployment allowlist; newly discovered models are not added",
+      "_type": "array",
+      "value": []
+    },
+    "auto_allow_preview": {
+      "_description": "Allow preview or experimental deployments in Auto",
+      "_type": "boolean",
+      "value": false
+    },
+    "auto_privacy": {
+      "_description": "Required Auto privacy policy",
+      "_type": "choice",
+      "_values": ["default", "no_training", "zdr"],
+      "value": "default"
+    },
+    "auto_data_region": {
+      "_description": "Required Auto data region; empty disables the region filter",
+      "_type": "string",
+      "value": ""
+    },
+    "auto_required_protocol_parameters": {
+      "_description": "Protocol parameters every Auto candidate must support",
+      "_type": "array",
+      "value": []
+    },
+    "auto_max_expected_cost_usd": {
+      "_description": "Hard per-request cost ceiling; 0 disables it",
+      "_type": "number",
+      "value": 0
+    },
+    "fallback_on_unavailable": {
+      "_description": "Use the scope-safe retry/fallback ladder",
+      "_type": "boolean",
+      "value": true
     },
     "openai_api_mode": {
       "_description": "OpenAI-compatible API mode",

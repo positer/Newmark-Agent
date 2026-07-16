@@ -25,7 +25,7 @@ import {
   WslCommandRunner,
   WslRuntimeIdentity,
 } from '../core/wslAgentClient';
-import { WslAgentPromptRequest, WslAgentPromptResult, WslAgentStopResult } from '../core/wslAgentProtocol';
+import { WslAgentPromptRequest, WslAgentPromptResult, WslAgentStopResult, WslHostToolRequest } from '../core/wslAgentProtocol';
 import { ElectronTargetRuntimeClient, ElectronUtilityRuntimePool } from '../core/electronUtilityRuntimePool';
 import {
   UtilityAgentPromptResult,
@@ -41,6 +41,7 @@ import { runAsyncProcess } from '../core/asyncProcess';
 import {
   activeWindowsProcessHelperPidsForTest,
   drainWindowsProcessHelpers,
+  setWindowsProcessQueryAnchorBarrierForTest,
   setWindowsProcessQueryScriptForTest,
   snapshotWindowsProcessTree,
   terminateCapturedWindowsProcessTree,
@@ -284,6 +285,115 @@ class RuntimeProbeAgent extends Agent {
   }
 }
 
+function assertWorkRunsBoundToTarget(
+  workRuns: Agent['workRuns'],
+  expected: ReturnType<typeof normalizeConversationTarget>,
+  label: string,
+): void {
+  assert.ok(workRuns.length > 0, `${label}: fixture must expose at least one work run`);
+  for (const run of workRuns) {
+    assert.deepEqual(run.target, {
+      workspaceId: expected.workspaceId,
+      conversationId: expected.conversationId,
+    }, `${label}: work-run target is rebound to the requested composite target`);
+    assert.equal(run.runtimeKey, expected.runtimeKey, `${label}: work-run runtimeKey is supervisor-owned`);
+    for (const event of run.events) {
+      assert.equal(event.workspaceId, expected.workspaceId, `${label}: event workspaceId is rebound`);
+      assert.equal(event.workspaceKey, expected.workspaceKey, `${label}: event workspaceKey is rebound`);
+      assert.equal(event.conversationId, expected.conversationId, `${label}: event conversationId is rebound`);
+      assert.equal(event.runtimeKey, expected.runtimeKey, `${label}: event runtimeKey is rebound`);
+      if (event.guide) {
+        assert.deepEqual(event.guide.target, {
+          workspaceId: expected.workspaceId,
+          conversationId: expected.conversationId,
+        }, `${label}: nested event Guide target is rebound`);
+      }
+    }
+    for (const guide of run.guides) {
+      assert.deepEqual(guide.target, {
+        workspaceId: expected.workspaceId,
+        conversationId: expected.conversationId,
+      }, `${label}: persisted Guide target is rebound`);
+    }
+  }
+}
+
+async function verifyKernelPublicWorkRunTargetBinding(): Promise<void> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-workrun-target-binding-'));
+  try {
+    const host = new Agent(root, { agentOnly: true });
+    const probes = new Map<string, RuntimeProbeAgent>();
+    const kernel = new ConversationKernel(root, host, null, {
+      createRunner: normalizedTarget => {
+        const probe = new RuntimeProbeAgent(root, { agentOnly: true });
+        probes.set(normalizedTarget.runtimeKey, probe);
+        return probe;
+      },
+    });
+    const options: ConversationKernelRunOptions = {
+      mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'builtin',
+    };
+    const alphaInput = target('alpha-binding', path.join(root, 'alpha'), 'same');
+    const betaInput = target('beta-binding', path.join(root, 'beta'), 'same');
+    fs.mkdirSync(alphaInput.workspace!.path, { recursive: true });
+    fs.mkdirSync(betaInput.workspace!.path, { recursive: true });
+    const alpha = normalizeConversationTarget(alphaInput);
+    const beta = normalizeConversationTarget(betaInput);
+
+    const alphaPromise = kernel.prompt('alpha binding prompt', alphaInput, options, 'steer');
+    const betaPromise = kernel.prompt('beta binding prompt', betaInput, options, 'steer');
+    await Promise.resolve();
+    const alphaRunner = probes.get(alpha.runtimeKey)!;
+    const betaRunner = probes.get(beta.runtimeKey)!;
+    const poisonedRun = alphaRunner.workRuns[0];
+    assert.ok(poisonedRun, 'alpha runner creates a work run before processing');
+    poisonedRun.target = { workspaceId: beta.workspaceId, conversationId: 'poisoned-conversation' };
+    poisonedRun.runtimeKey = `${beta.runtimeKey}::poisoned`;
+    const poisonedGuide: GuideReceipt = {
+      clientMessageId: 'poisoned-guide',
+      target: { workspaceId: beta.workspaceId, conversationId: beta.conversationId },
+      runId: poisonedRun.runId,
+      status: 'accepted',
+      content: 'poisoned routing fixture',
+      createdAt: '2026-07-15T00:00:00.000Z',
+      updatedAt: '2026-07-15T00:00:00.000Z',
+    };
+    poisonedRun.guides.push(poisonedGuide);
+    poisonedRun.events.push({
+      id: 'poisoned-work-event',
+      workspaceId: beta.workspaceId,
+      workspaceKey: beta.workspaceKey,
+      conversationId: beta.conversationId,
+      runtimeKey: `${beta.runtimeKey}::poisoned`,
+      type: 'guide',
+      content: 'poisoned routing fixture',
+      mode: 'Build',
+      model: 'test-model',
+      timestamp: '2026-07-15T00:00:00.000Z',
+      guide: { ...poisonedGuide },
+    });
+
+    const alphaSnapshot = kernel.snapshot(alphaInput);
+    assertWorkRunsBoundToTarget(alphaSnapshot.workRuns, alpha, 'snapshot(A)');
+    assertWorkRunsBoundToTarget(kernel.runtimeState(alphaInput)!.workRuns, alpha, 'runtimeState(A)');
+    assert.equal(alphaRunner.workRuns[0].runtimeKey, `${beta.runtimeKey}::poisoned`,
+      'public rebinding does not destructively rewrite the runner persistence model');
+
+    const betaSnapshot = kernel.snapshot(betaInput);
+    assertWorkRunsBoundToTarget(betaSnapshot.workRuns, beta, 'snapshot(B)');
+    assert.ok(!betaSnapshot.workRuns.some(run => run.events.some(event => event.id === 'poisoned-work-event')),
+      'poisoned A work-run records never leak into B');
+
+    alphaRunner.finish('alpha binding done');
+    betaRunner.finish('beta binding done');
+    const [alphaResult, betaResult] = await Promise.all([alphaPromise, betaPromise]);
+    assertWorkRunsBoundToTarget(alphaResult.workRuns, alpha, 'result(A)');
+    assertWorkRunsBoundToTarget(betaResult.workRuns, beta, 'result(B)');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 async function verifyKernelCompositeRuntimeAndStop(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-runtime-isolation-'));
   try {
@@ -341,7 +451,7 @@ async function verifyKernelCompositeRuntimeAndStop(): Promise<void> {
       runId: alphaState!.runId,
       deliveryMode: 'steer',
       text: 'preserve this guidance',
-      images: [{ dataUrl: 'data:image/png;base64,AA==', name: 'guide.png', type: 'image/png' }],
+      images: [{ dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4AWP4DwQACfsD/c8LaHIAAAAASUVORK5CYII=', name: 'guide.png', type: 'image/png' }],
       createdAt: new Date().toISOString(),
     });
     assert.equal(guide.status, 'accepted');
@@ -382,6 +492,83 @@ async function verifyKernelCompositeRuntimeAndStop(): Promise<void> {
   }
 }
 
+async function verifyCooperativeStopSettlesInterrupted(): Promise<void> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-cooperative-stop-settle-'));
+  try {
+    fs.mkdirSync(path.join(root, 'Work'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'Work', 'Local.json'), '[]', 'utf-8');
+    fs.writeFileSync(path.join(root, 'Work', 'External.json'), '[]', 'utf-8');
+    const workspacePath = path.join(root, 'workspace');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    const stopTarget = target('cooperative-stop', workspacePath, 'default');
+    const host = new Agent(root, { agentOnly: true });
+    let runner!: Agent;
+    let enteredResolve!: () => void;
+    const entered = new Promise<void>(resolve => { enteredResolve = resolve; });
+    const kernel = new ConversationKernel(root, host, null, {
+      createRunner: () => {
+        runner = new Agent(root, { agentOnly: true });
+        (runner as unknown as {
+          processOpencode(prompt: string, signal?: AbortSignal): Promise<StreamToken[]>;
+        }).processOpencode = async (_prompt: string, signal?: AbortSignal): Promise<StreamToken[]> => {
+          enteredResolve();
+          return await new Promise<StreamToken[]>((_resolve, reject) => {
+            const onAbort = () => reject(signal?.reason instanceof Error ? signal.reason : new Error('Agent run aborted'));
+            if (!signal) reject(new Error('Missing cooperative AbortSignal'));
+            else if (signal.aborted) onAbort();
+            else signal.addEventListener('abort', onAbort, { once: true });
+          });
+        };
+        return runner;
+      },
+    });
+    const events: AgentWorkEvent[] = [];
+    kernel.subscribe(event => events.push(event));
+    const options: ConversationKernelRunOptions = {
+      mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'opencode',
+    };
+
+    const running = kernel.prompt('abort me cooperatively', stopTarget, options, 'steer');
+    await entered;
+    const before = kernel.runtimeState(stopTarget);
+    assert.ok(before?.runId && before.running);
+    assert.equal(kernel.requestStop(stopTarget, before!.runId).action, 'graceful');
+    const settled = await running;
+
+    const after = kernel.runtimeState(stopTarget);
+    assert.equal(after?.running, false, 'cooperative cancellation clears the active promise');
+    assert.equal(after?.stopRequested, false, 'cooperative cancellation clears the stop latch after settlement');
+    assert.equal(after?.workRuns.find(run => run.runId === before!.runId)?.status, 'interrupted',
+      'cooperative cancellation persists interrupted instead of error');
+    assert.equal(settled.workRuns.find(run => run.runId === before!.runId)?.status, 'interrupted',
+      'the resolved prompt snapshot is captured after interrupted finalization');
+    assert.ok(events.some(event => event.runId === before!.runId && event.status === 'interrupted'));
+    assert.ok(!events.some(event => event.runId === before!.runId && event.type === 'error'),
+      'cooperative settlement publishes no terminal error event');
+    assert.equal(kernel.requestStop(stopTarget, before!.runId).action, 'not_running',
+      'a stop after cooperative settlement cannot escalate a completed run');
+
+    const unrelatedAbort = new Agent(root, { agentOnly: true });
+    unrelatedAbort.engine = 'opencode';
+    unrelatedAbort.setModel('test-model');
+    (unrelatedAbort as unknown as {
+      processOpencode(prompt: string, signal?: AbortSignal): Promise<StreamToken[]>;
+    }).processOpencode = async (): Promise<StreamToken[]> => {
+      const error = new Error('provider-side AbortError without a stop request');
+      error.name = 'AbortError';
+      throw error;
+    };
+    const unrelatedEvents: AgentWorkEvent[] = [];
+    unrelatedAbort.subscribeWorkEvents(event => unrelatedEvents.push(event));
+    await assert.rejects(unrelatedAbort.process('fail without cooperative stop'), /provider-side AbortError/);
+    assert.equal(unrelatedAbort.status, 'error', 'an AbortError without an aborted run signal remains a real error');
+    assert.ok(unrelatedEvents.some(event => event.type === 'error'),
+      'an unrelated provider AbortError retains its diagnostic terminal event');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 async function verifyInputsArrivingAfterStopAreDurable(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-stop-arrival-durable-'));
   try {
@@ -414,7 +601,7 @@ async function verifyInputsArrivingAfterStopAreDurable(): Promise<void> {
       runId: state!.runId,
       deliveryMode: 'steer',
       text: 'durable Guide after stop',
-      images: [{ dataUrl: 'data:image/png;base64,AA==', name: 'late.png', type: 'image/png' }],
+      images: [{ dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4AWP4DwQACfsD/c8LaHIAAAAASUVORK5CYII=', name: 'late.png', type: 'image/png' }],
       createdAt: '2026-07-13T08:30:00.000Z',
     };
     const lateGuide = kernel.enqueueGuide(lateGuideEnvelope);
@@ -474,6 +661,7 @@ async function verifyRendererReconcilesCompletionAgainstFirstStop(): Promise<voi
     conversationRuntimeStates: {},
     workRunsByTarget: {},
     backendQueue: { steering: [], followUp: [] },
+    backendQueuesByTarget: {},
   };
   let stopResult: Record<string, unknown> = {};
   let snapshot: Record<string, any> = {};
@@ -500,7 +688,7 @@ async function verifyRendererReconcilesCompletionAgainstFirstStop(): Promise<voi
   const windowObject: Record<string, any> = { renderInputStack: () => undefined };
   const run = new Function(
     'window', 'state', 'api', 'activeConversationId', 'runningConversationRecord', 'currentConversationTarget',
-    'runtimeKeyFor', 'registerRuntimeKey', 'syncWorkRunsSnapshot', 'setConversationRuntimeState', 'updateSubmitButtonState',
+    'runtimeKeyFor', 'registerRuntimeKey', 'setBackendQueueForTarget', 'isActiveConversationTarget', 'syncWorkRunsSnapshot', 'setConversationRuntimeState', 'updateSubmitButtonState',
     'renderConversations', 'setWorking', 'showUiNotice',
     uiHtml.slice(start, end),
   );
@@ -513,6 +701,11 @@ async function verifyRendererReconcilesCompletionAgainstFirstStop(): Promise<voi
     () => target,
     (workspaceId: string, conversationId: string) => `${workspaceId}::${conversationId}`,
     () => keyFor(target),
+    (queue: Record<string, unknown>, runtimeTarget: typeof target) => {
+      state.backendQueuesByTarget[keyFor(runtimeTarget)] = queue;
+      return queue;
+    },
+    (runtimeTarget: typeof target) => keyFor(runtimeTarget) === keyFor(target),
     (runs: unknown[]) => { syncedRuns = runs; return runs; },
     setConversationRuntimeState,
     () => { buttonMode = Object.keys(state.runningConversations).length ? 'stop' : 'send'; },
@@ -657,6 +850,12 @@ async function verifyWslPerTargetPool(): Promise<void> {
   );
   assert.equal((await pool.requestStop(alpha, 'run-a')).action, 'graceful');
   assert.equal(alphaClient.restarts, 0);
+  for (const listener of alphaClient.listeners) listener({
+    id: 'wsl-bare-abort-error', conversationId: 'same', type: 'error', content: 'This operation was aborted',
+    mode: 'Build', model: 'm', timestamp: new Date().toISOString(), runId: 'run-a',
+  });
+  assert.equal(pool.isStopping(alpha), true,
+    'a bare worker error cannot disarm WSL force-stop before an explicit terminal settlement status');
   await pool.enqueueGuide({
     clientMessageId: 'wsl-guide-disarms-force', target: normalizeConversationTarget(alpha), runId: 'run-a',
     deliveryMode: 'steer', text: 'intervening Guide', createdAt: new Date().toISOString(),
@@ -669,6 +868,15 @@ async function verifyWslPerTargetPool(): Promise<void> {
   assert.equal(forced.restarted, true);
   assert.equal(alphaClient.restarts, 1);
   assert.equal(betaClient.restarts, 0, 'forcing alpha must never restart beta');
+  alphaClient.stopResults.push(
+    { action: 'graceful', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'wsl', distro: 'Fake' },
+  );
+  assert.equal((await pool.requestStop(alpha, 'run-a')).action, 'graceful');
+  for (const listener of alphaClient.listeners) listener({
+    id: 'wsl-explicit-interrupted', conversationId: 'same', type: 'status', content: 'Interrupted.',
+    mode: 'Build', model: 'm', timestamp: new Date().toISOString(), runId: 'run-a', status: 'interrupted',
+  });
+  assert.equal(pool.isStopping(alpha), false, 'an explicit WSL interrupted status settles supervisor stop intent');
   await pool.updateSetting('agent', 'process_timeout_ms', 1234);
   assert.equal(alphaClient.settings, 1);
   assert.equal(betaClient.settings, 1, 'setting updates broadcast to every live WSL worker');
@@ -804,6 +1012,71 @@ async function verifyWslAsyncProcessGroupTermination(): Promise<void> {
   assert.ok(!productionSource.includes('spawnSync'), 'WSL runtime control production code must not contain synchronous process helpers');
   assert.match(productionSource, /request\('ping', undefined, 30_000\)/,
     'cold WSL startup receives a dedicated 30-second ping budget without widening ordinary request timeouts');
+}
+
+async function verifyWslHostToolIdentityBinding(): Promise<void> {
+  const trustedTarget = normalizeConversationTarget(target('windows-workspace-id', 'C:\\work\\identity-binding', 'trusted-conversation'));
+  const client = new WslAgentClient('Fake', 'C:\\root', 'host.js', trustedTarget);
+  const writes: string[] = [];
+  const child = {
+    killed: false,
+    stdin: {
+      write(value: string): boolean {
+        writes.push(String(value));
+        return true;
+      },
+    },
+  };
+  Object.assign(client as unknown as Record<string, unknown>, { child, childGeneration: 17 });
+
+  let forwarded: WslHostToolRequest | null = null;
+  client.setHostToolHandler(async request => {
+    forwarded = request;
+    return { accepted: true };
+  });
+  const workerDerivedRequest: WslHostToolRequest = {
+    requestId: 'host-tool-rebind',
+    tool: 'computer_use',
+    args: { action: 'observe' },
+    context: {
+      workspaceId: 'workspace-derived-from-mnt-path',
+      conversationId: 'forged-conversation',
+      actorId: 'root',
+      runtimeKey: trustedTarget.runtimeKey,
+      allowEphemeralVisionImage: true,
+    },
+  };
+  await (client as unknown as {
+    handleHostToolRequest(child: unknown, generation: number, request: WslHostToolRequest): Promise<void>;
+  }).handleHostToolRequest(child, 17, workerDerivedRequest);
+  assert.ok(forwarded, 'a request carrying the exact trusted runtime key reaches the Windows host handler');
+  const delivered = forwarded as unknown as WslHostToolRequest;
+  assert.deepEqual({
+    workspaceId: delivered.context.workspaceId,
+    conversationId: delivered.context.conversationId,
+    runtimeKey: delivered.context.runtimeKey,
+  }, {
+    workspaceId: trustedTarget.workspaceId,
+    conversationId: trustedTarget.conversationId,
+    runtimeKey: trustedTarget.runtimeKey,
+  }, 'path-derived or forged WSL identity fields are rebound to the client runtime target before crossing the trusted host boundary');
+  assert.equal(delivered.context.allowEphemeralVisionImage, true, 'trusted per-run vision capability survives identity rebinding');
+  const accepted = JSON.parse(writes.at(-1) || '{}').params;
+  assert.equal(accepted.ok, true);
+
+  forwarded = null;
+  writes.length = 0;
+  await (client as unknown as {
+    handleHostToolRequest(child: unknown, generation: number, request: WslHostToolRequest): Promise<void>;
+  }).handleHostToolRequest(child, 17, {
+    ...workerDerivedRequest,
+    requestId: 'host-tool-wrong-runtime',
+    context: { ...workerDerivedRequest.context, runtimeKey: `${trustedTarget.runtimeKey}-forged` },
+  });
+  assert.equal(forwarded, null, 'a forged runtime key never reaches the Windows host handler');
+  const rejected = JSON.parse(writes.at(-1) || '{}').params;
+  assert.equal(rejected.ok, false);
+  assert.match(String(rejected.error || ''), /target mismatch/i);
 }
 
 async function verifyRealUbuntuProcessGroupTermination(): Promise<void> {
@@ -969,6 +1242,12 @@ async function verifyElectronPerTargetPool(): Promise<void> {
     { action: 'graceful', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'utility', pid: 123 },
   );
   assert.equal((await pool.requestStop(alpha, 'run-a')).action, 'graceful');
+  for (const listener of alphaClient.listeners) listener({
+    id: 'utility-bare-abort-error', conversationId: 'same', type: 'error', content: 'This operation was aborted',
+    mode: 'Build', model: 'm', timestamp: new Date().toISOString(), runId: 'run-a',
+  });
+  assert.equal(pool.isStopping(alpha), true,
+    'a bare worker error cannot disarm utility force-stop before an explicit terminal settlement status');
   await pool.enqueueGuide({
     clientMessageId: 'utility-guide-disarms-force', target: normalizeConversationTarget(alpha), runId: 'run-a',
     deliveryMode: 'steer', text: 'intervening Guide', createdAt: new Date().toISOString(),
@@ -981,6 +1260,15 @@ async function verifyElectronPerTargetPool(): Promise<void> {
   assert.equal(forced.restarted, true);
   assert.equal(alphaClient.restarts, 1);
   assert.equal(betaClient.restarts, 0, 'forcing one utility runtime must not restart another target');
+  alphaClient.stopResults.push(
+    { action: 'graceful', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'utility', pid: 123 },
+  );
+  assert.equal((await pool.requestStop(alpha, 'run-a')).action, 'graceful');
+  for (const listener of alphaClient.listeners) listener({
+    id: 'utility-explicit-interrupted', conversationId: 'same', type: 'status', content: 'Interrupted.',
+    mode: 'Build', model: 'm', timestamp: new Date().toISOString(), runId: 'run-a', status: 'interrupted',
+  });
+  assert.equal(pool.isStopping(alpha), false, 'an explicit utility interrupted status settles supervisor stop intent');
   await pool.updateSetting('agent', 'process_timeout_ms', 1234);
   assert.equal(alphaClient.settings, 1);
   assert.equal(betaClient.settings, 1, 'setting updates broadcast to every live utility worker');
@@ -1194,6 +1482,26 @@ async function verifyWindowsHelperRetainedDrain(): Promise<void> {
     const snapshot = await snapshotWindowsProcessTree(fixturePid);
     const root = snapshot.entries.find(entry => entry.pid === fixturePid);
     assert.ok(root?.creationIdentity, 'identity helper fixture root creation identity is captured');
+    const mismatchedIdentity = (BigInt(root!.creationIdentity) + 1n).toString();
+    const rejectedReusedAnchor = await snapshotWindowsProcessTree(
+      fixturePid,
+      12_000,
+      [fixturePid],
+      'runtime-isolation-anchor-mismatch',
+      new Map([[fixturePid, mismatchedIdentity]]),
+    );
+    assert.equal(rejectedReusedAnchor.entries.some(entry => entry.pid === fixturePid), false,
+      'identity-bound rescans exclude a live PID when it no longer matches the captured runtime identity');
+    const acceptedBoundAnchor = await snapshotWindowsProcessTree(
+      fixturePid,
+      12_000,
+      [fixturePid],
+      'runtime-isolation-anchor-match',
+      new Map([[fixturePid, root!.creationIdentity]]),
+    );
+    assert.equal(acceptedBoundAnchor.entries.some(entry => entry.pid === fixturePid
+      && entry.creationIdentity === root!.creationIdentity), true,
+    'identity-bound rescans retain the original runtime process while its creation identity still matches');
     await terminateCapturedWindowsProcessTree({ rootPid: fixturePid, entries: [root!] });
     await new Promise<void>(resolve => {
       if (identityFixture.exitCode !== null || identityFixture.signalCode !== null) resolve();
@@ -1206,6 +1514,88 @@ async function verifyWindowsHelperRetainedDrain(): Promise<void> {
     if (identityFixture.exitCode === null && identityFixture.signalCode === null) {
       try { identityFixture.kill(); } catch {}
     }
+  }
+
+  const barrierDir = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-anchor-exit-race-'));
+  const childPidPath = path.join(barrierDir, 'child.pid');
+  const barrierReadyPath = path.join(barrierDir, 'snapshot-ready');
+  const barrierContinuePath = path.join(barrierDir, 'snapshot-continue');
+  const barrierScript = `
+    const fs = require('fs');
+    const { spawn } = require('child_process');
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore', windowsHide: true });
+    child.once('spawn', () => fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid)));
+    setInterval(() => {}, 1000);
+  `;
+  const barrierRoot = spawn(process.execPath, ['-e', barrierScript], { stdio: 'ignore', windowsHide: true });
+  let survivingChildPid = 0;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      barrierRoot.once('spawn', () => resolve());
+      barrierRoot.once('error', reject);
+    });
+    const waitForPath = async (candidate: string, label: string): Promise<void> => {
+      const deadline = Date.now() + 8_000;
+      while (!fs.existsSync(candidate)) {
+        if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${label}`);
+        await new Promise<void>(resolve => setTimeout(resolve, 20));
+      }
+    };
+    await waitForPath(childPidPath, 'anchor race child');
+    survivingChildPid = Number(fs.readFileSync(childPidPath, 'utf8').trim());
+    const rootPid = Number(barrierRoot.pid || 0);
+    const initial = await snapshotWindowsProcessTree(rootPid);
+    const rootEntry = initial.entries.find(entry => entry.pid === rootPid);
+    const childEntry = initial.entries.find(entry => entry.pid === survivingChildPid);
+    assert.ok(rootEntry?.creationIdentity && childEntry?.creationIdentity,
+      'anchor exit-race fixture captures root and surviving child identities before teardown');
+
+    setWindowsProcessQueryAnchorBarrierForTest({
+      readyPath: barrierReadyPath,
+      continuePath: barrierContinuePath,
+    });
+    const rescanPromise = snapshotWindowsProcessTree(
+      rootPid,
+      12_000,
+      [rootPid, survivingChildPid],
+      'runtime-isolation-anchor-exit-race',
+      new Map([
+        [rootPid, rootEntry!.creationIdentity],
+        [survivingChildPid, childEntry!.creationIdentity],
+      ]),
+    );
+    await waitForPath(barrierReadyPath, 'post-Toolhelp anchor barrier');
+    const rootClosed = new Promise<void>(resolve => {
+      if (barrierRoot.exitCode !== null || barrierRoot.signalCode !== null) resolve();
+      else barrierRoot.once('close', () => resolve());
+    });
+    barrierRoot.kill();
+    await Promise.race([
+      rootClosed,
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('Anchor race root did not exit')), 5_000)),
+    ]);
+    fs.writeFileSync(barrierContinuePath, 'continue', 'utf8');
+    const rescan = await rescanPromise;
+    const survivingEntry = rescan.entries.find(entry => entry.pid === survivingChildPid);
+    assert.equal(rescan.entries.some(entry => entry.pid === rootPid), false,
+      'an anchor that exits after Toolhelp capture remains a parent-only witness and is never emitted as a live row');
+    assert.equal(survivingEntry?.creationIdentity, childEntry!.creationIdentity,
+      'a same-snapshot surviving child retains its identity while the parent anchor exits during lookup');
+    await terminateCapturedWindowsProcessTree({
+      rootPid: survivingChildPid,
+      entries: [{ ...survivingEntry!, depth: 0 }],
+    });
+    survivingChildPid = 0;
+  } finally {
+    try { fs.writeFileSync(barrierContinuePath, 'continue', 'utf8'); } catch {}
+    setWindowsProcessQueryAnchorBarrierForTest(null);
+    if (barrierRoot.exitCode === null && barrierRoot.signalCode === null) {
+      try { barrierRoot.kill(); } catch {}
+    }
+    if (survivingChildPid > 0) {
+      try { process.kill(survivingChildPid); } catch {}
+    }
+    fs.rmSync(barrierDir, { recursive: true, force: true });
   }
 }
 
@@ -1341,7 +1731,21 @@ async function verifyUtilityHostToolRouting(): Promise<void> {
   });
   const request = <T extends UtilityHostToolRequest>(value: T): T => value;
 
-  assert.equal(await handler(request({ requestId: 'c1', tool: 'computer_use', args: { action: 'observe' }, target: targetInfo, context })), 'computer-ok');
+  assert.equal(await handler(request({
+    requestId: 'c1',
+    tool: 'computer_use',
+    args: {
+      action: 'observe',
+      capture_max_width: 640,
+      capture_max_height: 480,
+      allow_ephemeral_vision_image: true,
+    },
+    target: targetInfo,
+    context,
+  })), 'computer-ok');
+  assert.equal(computerCalls[0].captureMaxWidth, 640, 'utility host forwards bounded capture width requests');
+  assert.equal(computerCalls[0].captureMaxHeight, 480, 'utility host forwards bounded capture height requests');
+  assert.equal(computerCalls[0].allowEphemeralVisionImage, false, 'model-authored args cannot enable ephemeral screenshot retention');
   const beta = normalizeConversationTarget(target('beta', 'C:\\work\\beta', 'same'));
   const betaTarget = { workspaceId: beta.workspaceId, conversationId: beta.conversationId, runtimeKey: beta.runtimeKey, workspaceKey: beta.workspaceKey, workspacePath: beta.workspace!.path };
   const betaContext = { ...context, workspaceId: beta.workspaceId, conversationId: beta.conversationId, workspacePath: beta.workspace!.path };
@@ -1349,8 +1753,10 @@ async function verifyUtilityHostToolRouting(): Promise<void> {
   assert.match(String(locked), /already active/, 'main-process Computer Use lock must span all utility runtimes');
   assert.equal(computerCalls.length, 1);
   await handler(request({ requestId: 'c3', tool: 'computer_use', args: { action: 'takeover_stop' }, target: targetInfo, context }));
-  await handler(request({ requestId: 'c4', tool: 'computer_use', args: { action: 'observe' }, target: betaTarget, context: betaContext }));
+  const betaVisionContext = { ...betaContext, allowEphemeralVisionImage: true };
+  await handler(request({ requestId: 'c4', tool: 'computer_use', args: { action: 'observe' }, target: betaTarget, context: betaVisionContext }));
   assert.equal(computerCalls.length, 3);
+  assert.equal(computerCalls[2].allowEphemeralVisionImage, true, 'trusted utility runtime context may enable one-use vision input');
   handler.cancelTarget(beta.runtimeKey);
   await Promise.resolve();
   assert.equal(computerCalls.at(-1)?.action, 'takeover_stop', 'target cancellation revokes its global Computer Use lease');
@@ -1421,10 +1827,13 @@ async function main(): Promise<void> {
   await verifyWorkspaceSelectionCoordination();
   await verifyWorkspaceSelectionCircuitBreaker();
   await verifyColdSnapshotBindsTargetWorkspace();
+  await verifyKernelPublicWorkRunTargetBinding();
   await verifyKernelCompositeRuntimeAndStop();
+  await verifyCooperativeStopSettlesInterrupted();
   await verifyInputsArrivingAfterStopAreDurable();
   await verifyRendererReconcilesCompletionAgainstFirstStop();
   await verifyWslPerTargetPool();
+  await verifyWslHostToolIdentityBinding();
   await verifyWslAsyncProcessGroupTermination();
   await verifyRealUbuntuProcessGroupTermination();
   await verifyElectronPerTargetPool();

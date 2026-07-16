@@ -3,10 +3,12 @@ import { ConversationRuntimeTarget, NormalizedConversationTarget, normalizeConve
 import { drainWindowsProcessHelpers, ElectronUtilityAgentClient, UtilityHostToolHandler } from './electronUtilityAgentClient';
 import {
   UtilityAgentPromptResult,
+  UtilityAutoRouteRatingResult,
   UtilityAgentSnapshotResult,
   UtilityAgentStopResult,
   UtilityPromptRequest,
 } from './utilityAgentProtocol';
+import { RuntimePoolCapacityError } from './runtimePoolCapacity';
 
 export interface ElectronTargetRuntimeClient {
   subscribe(listener: (event: AgentWorkEvent) => void): () => void;
@@ -16,6 +18,7 @@ export interface ElectronTargetRuntimeClient {
   requestStop(runId?: string): Promise<UtilityAgentStopResult>;
   enqueueGuide(envelope: ConversationInputEnvelope): Promise<GuideReceipt>;
   checkpoint(): Promise<Record<string, unknown>>;
+  rateAutoRoute?(score: number, routeId?: string): Promise<UtilityAutoRouteRatingResult>;
   setWorkRunExpanded(runId: string, expanded: boolean): Promise<boolean>;
   updateSetting(section: string, key: string, value: unknown): Promise<void>;
   forceRestart(): Promise<void>;
@@ -55,11 +58,13 @@ interface RuntimeEntry {
   lastGeneration: number;
   workEvents: AgentWorkEvent[];
   stopIntent: SupervisorStopIntent | null;
+  activeOperations: number;
 }
 
 export interface ElectronUtilityRuntimePoolOptions {
   idleTtlMs?: number;
   stopRequestTimeoutMs?: number;
+  maxResidentRuntimes?: number;
 }
 
 /** One real Electron utilityProcess per active ConversationTarget. */
@@ -69,6 +74,9 @@ export class ElectronUtilityRuntimePool {
   private hostToolHandler: UtilityHostToolHandler | null = null;
   private restarting = new Set<string>();
   private quarantined = new Map<string, string>();
+  private disposing = new Set<string>();
+  private capacityTail: Promise<void> = Promise.resolve();
+  private accessSequence = 0;
 
   constructor(
     private readonly root: string,
@@ -89,26 +97,34 @@ export class ElectronUtilityRuntimePool {
 
   async prompt(params: UtilityPromptRequest): Promise<UtilityAgentPromptResult> {
     const target = normalizeConversationTarget(params.target);
-    const entry = this.ensure(target);
+    const entry = await this.acquire(target);
     // Any new prompt is an intervening instruction and starts a fresh
     // two-click stop sequence.
     entry.stopIntent = null;
-    const result = await entry.client.prompt({ ...params, target });
-    entry.lastRunId = result.runId || entry.lastRunId;
-    entry.lastGeneration = Number(result.generation || entry.lastGeneration || 0);
-    this.scheduleIdle(entry);
-    return result;
+    try {
+      const result = await entry.client.prompt({ ...params, target });
+      entry.lastRunId = result.runId || entry.lastRunId;
+      entry.lastGeneration = Number(result.generation || entry.lastGeneration || 0);
+      return result;
+    } finally {
+      this.release(entry, true);
+    }
   }
 
   async snapshot(target: ConversationRuntimeTarget): Promise<UtilityAgentSnapshotResult> {
-    const entry = this.ensure(normalizeConversationTarget(target));
-    if (entry.stopIntent) return this.supervisorSnapshot(entry);
-    const result = await entry.client.snapshot();
-    entry.lastSnapshot = result;
-    if (result.runtime?.runId) entry.lastRunId = result.runtime.runId;
-    if (result.runtime?.generation) entry.lastGeneration = result.runtime.generation;
-    if (!result.runtime?.running && !result.runtime?.stopRequested) this.scheduleIdle(entry);
-    return result;
+    const entry = await this.acquire(normalizeConversationTarget(target));
+    let scheduleIdle = false;
+    try {
+      if (entry.stopIntent) return this.supervisorSnapshot(entry);
+      const result = await entry.client.snapshot();
+      entry.lastSnapshot = result;
+      if (result.runtime?.runId) entry.lastRunId = result.runtime.runId;
+      if (result.runtime?.generation) entry.lastGeneration = result.runtime.generation;
+      scheduleIdle = !result.runtime?.running && !result.runtime?.stopRequested;
+      return result;
+    } finally {
+      this.release(entry, scheduleIdle);
+    }
   }
 
   async requestStop(target: ConversationRuntimeTarget, runId?: string): Promise<ElectronPoolStopResult> {
@@ -181,7 +197,7 @@ export class ElectronUtilityRuntimePool {
   }
 
   async enqueueGuide(envelope: ConversationInputEnvelope): Promise<GuideReceipt> {
-    const entry = this.findEntry(envelope.target);
+    const entry = await this.acquireExisting(envelope.target);
     if (!entry) {
       const now = new Date().toISOString();
       return {
@@ -198,27 +214,55 @@ export class ElectronUtilityRuntimePool {
     // A Guide is an intervening instruction: it cancels the supervisor's
     // second-click force eligibility before delivery to the worker.
     entry.stopIntent = null;
-    return await entry.client.enqueueGuide(envelope);
+    try {
+      return await entry.client.enqueueGuide(envelope);
+    } finally {
+      this.release(entry, true);
+    }
   }
 
   async checkpoint(target: ConversationRuntimeTarget): Promise<Record<string, unknown>> {
     const normalized = normalizeConversationTarget(target);
-    const entry = this.entries.get(normalized.runtimeKey);
-    return entry ? await entry.client.checkpoint() : {
-      runtimeKey: normalized.runtimeKey,
-      runId: '',
-      generation: 0,
-      checkpointed: false,
-      at: new Date().toISOString(),
-    };
+    const entry = await this.acquireExisting(normalized);
+    if (!entry) {
+      return {
+        runtimeKey: normalized.runtimeKey,
+        runId: '',
+        generation: 0,
+        checkpointed: false,
+        at: new Date().toISOString(),
+      };
+    }
+    try {
+      return await entry.client.checkpoint();
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async rateAutoRoute(
+    target: ConversationRuntimeTarget,
+    score: number,
+    routeId = '',
+  ): Promise<UtilityAutoRouteRatingResult> {
+    const normalized = normalizeConversationTarget(target);
+    const entry = await this.acquireExisting(normalized);
+    if (!entry || !entry.client.rateAutoRoute) {
+      return { ok: false, reason: 'no_active_auto_route' };
+    }
+    try {
+      return await entry.client.rateAutoRoute(score, routeId);
+    } finally {
+      this.release(entry, true);
+    }
   }
 
   async setWorkRunExpanded(target: ConversationRuntimeTarget, runId: string, expanded: boolean): Promise<boolean> {
-    const entry = this.ensure(normalizeConversationTarget(target));
+    const entry = await this.acquire(normalizeConversationTarget(target));
     try {
       return await entry.client.setWorkRunExpanded(runId, expanded);
     } finally {
-      this.scheduleIdle(entry);
+      this.release(entry, true);
     }
   }
 
@@ -247,7 +291,8 @@ export class ElectronUtilityRuntimePool {
   }
 
   isStopping(target: ConversationRuntimeTarget): boolean {
-    return !!this.entries.get(normalizeConversationTarget(target).runtimeKey)?.stopIntent;
+    const runtimeKey = normalizeConversationTarget(target).runtimeKey;
+    return this.disposing.has(runtimeKey) || !!this.entries.get(runtimeKey)?.stopIntent;
   }
 
   async hasActiveWorkspace(target: ConversationRuntimeTarget): Promise<boolean> {
@@ -274,35 +319,10 @@ export class ElectronUtilityRuntimePool {
 
   async stopTarget(target: ConversationRuntimeTarget): Promise<void> {
     const normalized = normalizeConversationTarget(target);
-    const entry = this.entries.get(normalized.runtimeKey);
-    if (!entry) return;
-    this.rememberClientQuarantine(entry);
-    entry.stopIntent = null;
-    if (entry.idleTimer) clearTimeout(entry.idleTimer);
-    entry.idleTimer = null;
-    try {
-      const status = entry.client.status();
-      if (status.quarantined && status.connected) {
-        await this.forceCleanupQuarantinedEntry(entry, entry.lastRunId);
-      } else {
-        await entry.client.stop();
-      }
-    } catch (error) {
-      this.rememberClientQuarantine(entry);
-      // A failed stop can leave a live child behind.  Keep the entry, event
-      // subscription and host-tool route because they are the only remaining
-      // owner of the UtilityProcess handle needed for an explicit retry.
-      if (entry.client.status().connected) throw error;
-    }
-    this.rememberClientQuarantine(entry);
-    if (entry.client.status().connected) {
-      throw new Error(`Electron utility runtime ${normalized.runtimeKey} remained connected after stop`);
-    }
-    if (this.entries.get(normalized.runtimeKey) === entry) {
-      this.entries.delete(normalized.runtimeKey);
-      entry.unsubscribe();
-      entry.client.setHostToolHandler(null);
-    }
+    await this.serializeCapacity(async () => {
+      const entry = this.entries.get(normalized.runtimeKey);
+      if (entry) await this.stopEntry(entry);
+    });
   }
 
   async stopAll(): Promise<void> {
@@ -328,38 +348,97 @@ export class ElectronUtilityRuntimePool {
     if (failures.length) throw new AggregateError(failures, message);
   }
 
-  private ensure(target: NormalizedConversationTarget): RuntimeEntry {
+  private async stopEntry(entry: RuntimeEntry): Promise<void> {
+    const runtimeKey = entry.target.runtimeKey;
+    this.disposing.add(runtimeKey);
+    this.rememberClientQuarantine(entry);
+    entry.stopIntent = null;
+    if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    entry.idleTimer = null;
+    try {
+      try {
+        const status = entry.client.status();
+        if (status.quarantined && status.connected) {
+          await this.forceCleanupQuarantinedEntry(entry, entry.lastRunId);
+        } else {
+          await entry.client.stop();
+        }
+      } catch (error) {
+        this.rememberClientQuarantine(entry);
+        // A failed stop can leave a live child behind. Keep the entry, event
+        // subscription and host-tool route for an explicit cleanup retry.
+        if (entry.client.status().connected) throw error;
+      }
+      this.rememberClientQuarantine(entry);
+      if (entry.client.status().connected) {
+        throw new Error(`Electron utility runtime ${runtimeKey} remained connected after stop`);
+      }
+      if (this.entries.get(runtimeKey) === entry) {
+        this.entries.delete(runtimeKey);
+        entry.unsubscribe();
+        entry.client.setHostToolHandler(null);
+      }
+    } finally {
+      this.disposing.delete(runtimeKey);
+    }
+  }
+
+  private async acquire(target: NormalizedConversationTarget): Promise<RuntimeEntry> {
+    return await this.serializeCapacity(async () => {
+      const quarantined = this.quarantined.get(target.runtimeKey);
+      if (quarantined) {
+        throw new Error(`Electron utility runtime is quarantined until the app backend is restarted: ${quarantined}`);
+      }
+      const existing = this.entries.get(target.runtimeKey);
+      if (existing) {
+        if (this.rememberClientQuarantine(existing)) {
+          throw new Error(`Electron utility runtime is quarantined until the app backend is restarted: ${this.quarantined.get(target.runtimeKey)}`);
+        }
+        this.touch(existing);
+        existing.activeOperations += 1;
+        return existing;
+      }
+      const capacity = this.maxResidentRuntimes();
+      if (this.entries.size >= capacity) await this.evictLeastRecentlyUsedIdle();
+      if (this.entries.size >= capacity) throw new RuntimePoolCapacityError('utility', capacity);
+      return this.createEntry(target);
+    });
+  }
+
+  private async acquireExisting(target: { workspaceId: string; conversationId: string }): Promise<RuntimeEntry | undefined> {
+    return await this.serializeCapacity(async () => {
+      const entry = this.findEntry(target);
+      if (!entry || this.disposing.has(entry.target.runtimeKey)) return undefined;
+      this.touch(entry);
+      entry.activeOperations += 1;
+      return entry;
+    });
+  }
+
+  private createEntry(target: NormalizedConversationTarget): RuntimeEntry {
     const quarantined = this.quarantined.get(target.runtimeKey);
     if (quarantined) {
       throw new Error(`Electron utility runtime is quarantined until the app backend is restarted: ${quarantined}`);
-    }
-    const existing = this.entries.get(target.runtimeKey);
-    if (existing) {
-      if (this.rememberClientQuarantine(existing)) {
-        throw new Error(`Electron utility runtime is quarantined until the app backend is restarted: ${this.quarantined.get(target.runtimeKey)}`);
-      }
-      this.touch(existing);
-      return existing;
     }
     const client = this.createClient(target);
     client.setHostToolHandler(this.hostToolHandler);
     const entry: RuntimeEntry = {
       target,
       client,
-      lastUsedAt: Date.now(),
+      lastUsedAt: this.nextAccessSequence(),
       idleTimer: null,
       lastSnapshot: null,
       lastRunId: '',
       lastGeneration: 0,
       workEvents: [],
       stopIntent: null,
+      activeOperations: 1,
       unsubscribe: client.subscribe(event => {
         if (event.runId) entry.lastRunId = event.runId;
         if (event.generation) entry.lastGeneration = event.generation;
         if (entry.stopIntent
           && (!entry.stopIntent.runId || !event.runId || entry.stopIntent.runId === event.runId)
-          && (event.type === 'done' || event.type === 'error'
-            || ['completed', 'interrupted', 'force_interrupted', 'error'].includes(String(event.status || '')))) {
+          && ['completed', 'interrupted', 'force_interrupted', 'error'].includes(String(event.status || ''))) {
           entry.stopIntent = null;
         }
         const routed = {
@@ -379,9 +458,66 @@ export class ElectronUtilityRuntimePool {
   }
 
   private touch(entry: RuntimeEntry): void {
-    entry.lastUsedAt = Date.now();
+    entry.lastUsedAt = this.nextAccessSequence();
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
     entry.idleTimer = null;
+  }
+
+  private release(entry: RuntimeEntry, shouldScheduleIdle: boolean): void {
+    entry.activeOperations = Math.max(0, entry.activeOperations - 1);
+    if (this.entries.get(entry.target.runtimeKey) !== entry) return;
+    if (shouldScheduleIdle) this.scheduleIdle(entry);
+  }
+
+  private nextAccessSequence(): number {
+    this.accessSequence += 1;
+    return this.accessSequence;
+  }
+
+  private maxResidentRuntimes(): number {
+    const configured = Number(this.options.maxResidentRuntimes ?? 2);
+    return Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 2;
+  }
+
+  private async serializeCapacity<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.capacityTail;
+    let release!: () => void;
+    this.capacityTail = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  private async evictLeastRecentlyUsedIdle(): Promise<void> {
+    const candidates = Array.from(this.entries.values()).sort((left, right) => left.lastUsedAt - right.lastUsedAt);
+    for (const entry of candidates) {
+      const runtimeKey = entry.target.runtimeKey;
+      if (entry.activeOperations > 0
+        || entry.stopIntent
+        || this.restarting.has(runtimeKey)
+        || this.disposing.has(runtimeKey)
+        || entry.client.status().quarantined) continue;
+      const expectedLastUsedAt = entry.lastUsedAt;
+      let snapshot: UtilityAgentSnapshotResult;
+      try {
+        snapshot = await entry.client.snapshot();
+      } catch {
+        // An unknown state is not proof that a runtime is idle.
+        continue;
+      }
+      if (this.entries.get(runtimeKey) !== entry
+        || entry.lastUsedAt !== expectedLastUsedAt
+        || entry.activeOperations > 0
+        || entry.stopIntent
+        || this.restarting.has(runtimeKey)
+        || this.disposing.has(runtimeKey)) continue;
+      if (snapshot.runtime?.running || snapshot.runtime?.stopRequested) continue;
+      await this.stopEntry(entry);
+      return;
+    }
   }
 
   private scheduleIdle(entry: RuntimeEntry): void {
@@ -395,21 +531,29 @@ export class ElectronUtilityRuntimePool {
   }
 
   private async evictIfIdle(runtimeKey: string, expectedLastUsedAt: number): Promise<void> {
-    const entry = this.entries.get(runtimeKey);
-    if (!entry || entry.lastUsedAt !== expectedLastUsedAt) return;
-    try {
-      const snapshot = await entry.client.snapshot();
+    await this.serializeCapacity(async () => {
+      const entry = this.entries.get(runtimeKey);
+      if (!entry || entry.lastUsedAt !== expectedLastUsedAt) return;
+      if (entry.activeOperations > 0 || entry.stopIntent || this.restarting.has(runtimeKey) || this.disposing.has(runtimeKey)) {
+        this.scheduleIdle(entry);
+        return;
+      }
+      let snapshot: UtilityAgentSnapshotResult;
+      try {
+        snapshot = await entry.client.snapshot();
+      } catch {
+        // A dead idle child is still safe to evict; stop() clears local handles.
+        if (this.entries.get(runtimeKey) !== entry || entry.lastUsedAt !== expectedLastUsedAt) return;
+        await this.stopEntry(entry);
+        return;
+      }
       if (this.entries.get(runtimeKey) !== entry || entry.lastUsedAt !== expectedLastUsedAt) return;
       if (snapshot.runtime?.running || snapshot.runtime?.stopRequested) {
         this.scheduleIdle(entry);
         return;
       }
-      await this.stopTarget(entry.target);
-    } catch {
-      // A dead idle child is still safe to evict; stop() clears local handles.
-      if (this.entries.get(runtimeKey) !== entry || entry.lastUsedAt !== expectedLastUsedAt) return;
-      await this.stopTarget(entry.target);
-    }
+      await this.stopEntry(entry);
+    });
   }
 
   private findEntry(target: { workspaceId: string; conversationId: string }): RuntimeEntry | undefined {

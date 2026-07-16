@@ -32,6 +32,8 @@ export interface GuideReceipt {
   updatedAt: string;
   appliedAt?: string;
   reason?: string;
+  /** Durable user-authored media referenced while the Guide is pending. */
+  attachments?: ConversationImageAttachment[];
 }
 
 export interface StreamToken {
@@ -39,6 +41,21 @@ export interface StreamToken {
   text: string;
   toolCall?: { id: string; name: string; arguments: string };
   reasoningContent?: string;
+}
+
+export interface ConversationImageAttachment {
+  id: string;
+  origin: 'user';
+  name: string;
+  mimeType: 'image/png' | 'image/jpeg';
+  byteLength: number;
+  width: number;
+  height: number;
+  sha256: string;
+  assetPath: string;
+  createdAt: string;
+  /** Hydrated only from a validated user submission or its content-addressed asset. */
+  dataUrl?: string;
 }
 
 export interface ChatMessage {
@@ -49,6 +66,7 @@ export interface ChatMessage {
   timestamp: string;
   clientMessageId?: string;
   runId?: string;
+  attachments?: ConversationImageAttachment[];
 }
 
 export interface AgentWorkEvent {

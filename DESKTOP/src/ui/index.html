@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Newmark Agent</title>
+<script>
+try {
+  var startupQuery = new URLSearchParams(window.location.search || '');
+  if (startupQuery.get('startupPrewarm') === '1' && Number(startupQuery.get('startupAttempt') || 0) > 0) {
+    document.documentElement.classList.add('startup-prewarm');
+  }
+} catch {}
+</script>
 <style>
 /* ============================================================
    NEWMARK AGENT - Design System v2.0
@@ -13,6 +21,7 @@
 :root {
   /* Deep space palette */
   --bg: #0a0a1a;
+  --app-bg: var(--bg);
   --bg2: #11112a;
   --bg3: #1a1a38;
   --surface: #1e1e40;
@@ -33,9 +42,15 @@
 
   /* Glass layers */
   --glass-alpha: 0.85;
-  --glass-bg-1: rgba(10,10,26,0.75);
-  --glass-bg-2: rgba(17,17,42,0.8);
-  --glass-bg-3: rgba(26,26,56,0.85);
+  --glass-rgb-1: 10 10 26;
+  --glass-rgb-2: 17 17 42;
+  --glass-rgb-3: 26 26 56;
+  --glass-alpha-1: 0.6375;
+  --glass-alpha-2: 0.68;
+  --glass-alpha-3: 0.7225;
+  --glass-bg-1: rgb(var(--glass-rgb-1) / var(--glass-alpha-1));
+  --glass-bg-2: rgb(var(--glass-rgb-2) / var(--glass-alpha-2));
+  --glass-bg-3: rgb(var(--glass-rgb-3) / var(--glass-alpha-3));
   --glass-border-1: rgba(255,255,255,0.06);
   --glass-border-2: rgba(255,255,255,0.08);
   --glass-border-3: rgba(255,255,255,0.10);
@@ -69,10 +84,10 @@
   --shadow-lg: 0 8px 32px rgba(0,0,0,0.6);
   --shadow-glow: 0 0 24px var(--accent-glow);
 
-  /* Glass blur levels - controlled by JS slider */
-  --glass-blur-1: 8px;
-  --glass-blur-2: 16px;
-  --glass-blur-3: 20px;
+  /* At the default 85% opacity: T=15, B=3px, levels=.4B/.8B/B. */
+  --glass-blur-1: 1.2px;
+  --glass-blur-2: 2.4px;
+  --glass-blur-3: 3px;
 
   /* Transitions */
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
@@ -102,9 +117,9 @@
   --text-dim: #6a7090;
   --text-bright: #0a0a1a;
   --text-accent: #4a68df;
-  --glass-bg-1: rgba(255,255,255,0.7);
-  --glass-bg-2: rgba(255,255,255,0.75);
-  --glass-bg-3: rgba(255,255,255,0.8);
+  --glass-rgb-1: 255 255 255;
+  --glass-rgb-2: 255 255 255;
+  --glass-rgb-3: 255 255 255;
   --glass-border-1: rgba(0,0,0,0.06);
   --glass-border-2: rgba(0,0,0,0.08);
   --glass-border-3: rgba(0,0,0,0.10);
@@ -127,13 +142,58 @@ html, body {
   font-family: var(--font);
   font-size: 13px;
   line-height: 1.5;
-  background: var(--bg);
+  background: var(--app-bg);
   color: var(--text);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
+}
+
+#startup-cover {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #0a0a1a;
+  color: #f8fafc;
+  font-family: 'Segoe UI', Arial, sans-serif;
+}
+
+.startup-prewarm #startup-cover { display: flex; }
+
+.startup-cover-shell {
+  width: min(520px, calc(100vw - 48px));
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.startup-cover-mark {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  object-fit: contain;
+  background: linear-gradient(135deg, #36d399, #60a5fa, #f472b6);
+  box-shadow: 0 18px 70px rgba(96,165,250,.24);
+  animation: startup-cover-pulse 1.8s ease-in-out infinite;
+}
+
+.startup-cover-copy { min-width: 0; flex: 1; padding-top: 1px; }
+.startup-cover-title { font-size: 18px; font-weight: 700; }
+.startup-cover-status { margin-top: 7px; color: #c4ccda; font-size: 12px; line-height: 1.45; }
+.startup-cover-detail { margin-top: 4px; color: #768197; font-size: 11px; line-height: 1.4; }
+.startup-cover-bar { height: 3px; margin-top: 12px; border-radius: 99px; background: #1c2638; overflow: hidden; }
+.startup-cover-bar > i { display: block; height: 100%; width: 38%; border-radius: inherit; background: linear-gradient(90deg, #36d399, #60a5fa); }
+
+@keyframes startup-cover-pulse {
+  0%, 100% { transform: scale(1); filter: saturate(1); }
+  50% { transform: scale(1.04); filter: saturate(1.25); }
 }
 
 ::selection { background: rgba(91,120,255,0.35); color: #fff; }
@@ -195,9 +255,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   background:
     radial-gradient(ellipse 80% 60% at 50% 0%, rgba(91,120,255,0.06) 0%, transparent 60%),
     radial-gradient(ellipse 60% 50% at 80% 80%, rgba(56,212,160,0.04) 0%, transparent 50%),
-    var(--bg);
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
+    var(--app-bg);
 }
 
 /* ============================================================
@@ -215,7 +273,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   padding: 0 12px;
   -webkit-app-region: drag;
   user-select: none;
-  transform: translateZ(0);
   z-index: 100;
 }
 
@@ -228,7 +285,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   align-items: center;
   gap: 7px;
   color: var(--text-bright);
-  transform: translateZ(0);
 }
 
 #topbar .title.animate {
@@ -293,8 +349,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   align-items: center;
   justify-content: center;
   transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo);
-  transform: translateZ(0);
-  will-change: background, color;
 }
 
 .top-btn:hover { background: rgba(255,255,255,0.08); color: var(--text-bright); }
@@ -309,7 +363,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   flex: 1;
   overflow: hidden;
   position: relative;
-  transform: translateZ(0);
 }
 
 /* ============================================================
@@ -327,8 +380,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   overflow: hidden;
   position: relative;
   transition: width var(--duration-slow) var(--ease-out-expo), min-width var(--duration-slow) var(--ease-out-expo), max-width var(--duration-slow) var(--ease-out-expo), flex-basis var(--duration-slow) var(--ease-out-expo), background var(--duration-normal) var(--ease-out-expo);
-  transform: translateZ(0);
-  will-change: width;
 }
 
 #left.width-animating {
@@ -344,7 +395,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   min-height: 0;
   transform: translateX(0);
   transition: opacity var(--duration-normal) var(--ease-out-expo), transform var(--duration-normal) var(--ease-out-expo), visibility 0ms linear var(--duration-normal);
-  will-change: opacity, transform;
 }
 
 #left-thumb {
@@ -362,7 +412,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   pointer-events: none;
   transform: scale(0.96);
   transition: opacity var(--duration-normal) var(--ease-out-expo), transform var(--duration-normal) var(--ease-out-expo), visibility 0ms linear var(--duration-normal);
-  will-change: opacity, transform;
 }
 
 .lt-item {
@@ -746,24 +795,23 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   width: 0;
   flex-shrink: 0;
   background: var(--glass-bg-3);
-  backdrop-filter: blur(16px) saturate(130%);
-  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  backdrop-filter: blur(var(--glass-blur-3)) saturate(130%);
+  -webkit-backdrop-filter: blur(var(--glass-blur-3)) saturate(130%);
   border-right: 1px solid var(--glass-border-1);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   opacity: 0;
   visibility: hidden;
-  transform: translateX(-8px) translateZ(0);
+  transform: translateX(-8px);
   transition: width var(--duration-slow) var(--ease-out-expo), opacity var(--duration-normal) var(--ease-out-expo), transform var(--duration-normal) var(--ease-out-expo), visibility 0ms linear var(--duration-slow);
-  will-change: width, opacity, transform;
 }
 
 #left-secondary.open {
   width: var(--left-secondary-width);
   opacity: 1;
   visibility: visible;
-  transform: translateX(0) translateZ(0);
+  transform: translateX(0);
   transition: width var(--duration-slow) var(--ease-out-expo), opacity var(--duration-normal) var(--ease-out-expo), transform var(--duration-normal) var(--ease-out-expo), visibility 0ms linear 0ms;
 }
 
@@ -909,8 +957,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   align-items: center;
   justify-content: center;
   transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo), right var(--duration-slow) var(--ease-out-expo);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(var(--glass-blur-1));
+  -webkit-backdrop-filter: blur(var(--glass-blur-1));
   border-left: 1px solid var(--glass-border-1);
   border-top: 1px solid var(--glass-border-1);
   border-bottom: 1px solid var(--glass-border-1);
@@ -926,15 +974,13 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   opacity: 0;
   flex-shrink: 0;
   background: var(--glass-bg-2);
-  backdrop-filter: blur(16px) saturate(130%);
-  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  backdrop-filter: blur(var(--glass-blur-2)) saturate(130%);
+  -webkit-backdrop-filter: blur(var(--glass-blur-2)) saturate(130%);
   border-left: 1px solid var(--glass-border-1);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   transition: width var(--duration-slow) var(--ease-out-expo), opacity var(--duration-normal) var(--ease-out-expo), box-shadow var(--duration-normal) var(--ease-out-expo);
-  transform: translateZ(0);
-  will-change: width, opacity;
 }
 
 #right.open {
@@ -998,7 +1044,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   pointer-events: none;
   transform: translateX(8px);
   transition: opacity var(--duration-normal) var(--ease-out-expo), transform var(--duration-normal) var(--ease-out-expo), visibility 0ms linear var(--duration-normal);
-  will-change: opacity, transform;
 }
 
 .tab-panel.active {
@@ -1488,14 +1533,13 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   height: 0;
   flex-shrink: 0;
   background: var(--glass-bg-3);
-  backdrop-filter: blur(16px) saturate(130%);
-  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  backdrop-filter: blur(var(--glass-blur-3)) saturate(130%);
+  -webkit-backdrop-filter: blur(var(--glass-blur-3)) saturate(130%);
   border-top: 1px solid var(--glass-border-1);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   transition: height var(--duration-slow) var(--ease-out-expo);
-  transform: translateZ(0);
 }
 
 #bottom.open {
@@ -1719,7 +1763,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
-  transform: translateZ(0);
 }
 
 #center {
@@ -1729,7 +1772,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   overflow: hidden;
   position: relative;
   min-height: 0;
-  transform: translateZ(0);
 }
 
 #chat-area {
@@ -1738,7 +1780,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   overflow-x: hidden;
   padding: 20px 24px;
   -webkit-overflow-scrolling: touch;
-  transform: translateZ(0);
 }
 
 /* Welcome message */
@@ -1913,6 +1954,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 .msg-action-btn:hover { color: var(--text); background: var(--glass-bg-2); }
+.msg-action-btn.route-rating-selected { color: var(--accent); background: var(--glass-bg-2); }
+.msg-action-btn:disabled { cursor: default; opacity: 0.62; }
 
 .chat-msg .msg-body .md-rendered {
   padding: 0;
@@ -2257,8 +2300,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   width: calc(100% - 40px);
   margin: 0 20px;
   background: rgba(18,20,34,0.92);
-  backdrop-filter: blur(10px) saturate(125%);
-  -webkit-backdrop-filter: blur(10px) saturate(125%);
+  backdrop-filter: blur(var(--glass-blur-2)) saturate(125%);
+  -webkit-backdrop-filter: blur(var(--glass-blur-2)) saturate(125%);
   border: 1px solid var(--glass-border-1);
   border-radius: 8px;
   box-shadow: 0 6px 18px rgba(0,0,0,0.12);
@@ -2420,6 +2463,16 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   border-radius: var(--radius-md);
 }
 
+.browser-guest-placeholder {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-dim);
+  background: var(--glass-bg-1);
+  font-size: 11px;
+}
+
 #queue-panel.collapsed {
   height: 30px;
   border-radius: 7px;
@@ -2547,9 +2600,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   padding: 12px 16px;
   border-top: 1px solid var(--glass-border-2);
   background: var(--glass-bg-2);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
-  transform: translateZ(0);
+  backdrop-filter: blur(var(--glass-blur-3)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur-3)) saturate(140%);
 }
 
 #input-area textarea {
@@ -2559,15 +2611,12 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--glass-bg-1);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   color: var(--text);
   font-family: var(--font);
   font-size: 13px;
   line-height: 1.6;
   transition: border-color var(--duration-normal) var(--ease-out-expo), box-shadow var(--duration-normal) var(--ease-out-expo);
   outline: none;
-  transform: translateZ(0);
 }
 
 #input-area textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
@@ -2636,8 +2685,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 .tool-select {
   background: var(--glass-bg-1);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: var(--radius-md);
@@ -2647,7 +2694,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   cursor: pointer;
   transition: border-color var(--duration-fast) var(--ease-out-expo), box-shadow var(--duration-fast) var(--ease-out-expo);
   outline: none;
-  transform: translateZ(0);
   min-width: 0;
   flex: 0 0 auto;
 }
@@ -2781,13 +2827,11 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   align-items: center;
   justify-content: center;
   transition: transform var(--duration-fast) var(--ease-out-back), box-shadow var(--duration-fast) var(--ease-out-expo);
-  transform: translateZ(0);
-  will-change: transform;
   box-shadow: 0 2px 12px var(--accent-glow);
 }
 
-#submit-btn:hover { transform: translateZ(0) scale(1.08); box-shadow: 0 4px 20px rgba(91,120,255,0.5); }
-#submit-btn:active { transform: translateZ(0) scale(0.92); transition: transform 80ms var(--ease-out-expo); }
+#submit-btn:hover { transform: scale(1.08); box-shadow: 0 4px 20px rgba(91,120,255,0.5); }
+#submit-btn:active { transform: scale(0.92); transition: transform 80ms var(--ease-out-expo); }
 
 #submit-btn.working {
   background: linear-gradient(135deg, #3a3a60 0%, #4a4a70 100%);
@@ -2829,15 +2873,14 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   border-radius: 50%;
   border: 1px solid var(--border);
   background: var(--glass-bg-3);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(var(--glass-blur-2));
+  -webkit-backdrop-filter: blur(var(--glass-blur-2));
   color: var(--text-dim);
   cursor: pointer;
   font-size: 14px;
   z-index: 5;
   align-items: center;
   justify-content: center;
-  transform: translateZ(0);
   transition: opacity var(--duration-fast) var(--ease-out-expo), background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo), box-shadow var(--duration-fast) var(--ease-out-expo);
   box-shadow: var(--shadow-md);
   animation: fade-in-up 250ms var(--ease-out-expo);
@@ -2918,8 +2961,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   visibility: hidden;
   pointer-events: none;
   transition: opacity var(--duration-normal) var(--ease-out-expo), visibility 0ms linear var(--duration-normal);
-  transform: translateZ(0);
-  will-change: opacity;
 }
 
 .sub-win-overlay.open {
@@ -2933,8 +2974,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 .sub-win {
   background: var(--glass-bg-2);
-  backdrop-filter: blur(24px) saturate(150%);
-  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(var(--glass-blur-3)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--glass-blur-3)) saturate(150%);
   border: 1px solid var(--glass-border-2);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
@@ -2947,7 +2988,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   transform: scale(0.96) translateY(10px);
   transition: opacity var(--duration-normal) var(--ease-out-expo), transform var(--duration-normal) var(--ease-out-expo);
   overflow: hidden;
-  will-change: opacity, transform;
 }
 
 .sub-win-overlay.open .sub-win {
@@ -3254,6 +3294,48 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   border: 1px solid var(--glass-border-1);
   background: var(--glass-bg-1);
 }
+
+.conversation-image-attachments {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 190px));
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.conversation-image-attachment {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid var(--glass-border-2);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg-1);
+  color: var(--text);
+  font: 11px/1.35 var(--font-ui);
+  text-align: left;
+  cursor: zoom-in;
+}
+
+.conversation-image-attachment:hover,
+.conversation-image-attachment:focus-visible {
+  border-color: var(--accent);
+  background: var(--glass-bg-2);
+}
+
+.conversation-image-attachment img {
+  width: 100%;
+  height: 112px;
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+  background: rgba(0,0,0,.18);
+}
+
+.conversation-image-attachment span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .memory-lab-view-menu button,
 .memory-lab-overview-actions button,
 .memory-lab-overview-actions select {
@@ -3537,7 +3619,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   font: 11px var(--font-ui);
   transform: translate(-50%, -50%);
   cursor: pointer;
-  backdrop-filter: blur(14px);
+  backdrop-filter: blur(var(--glass-blur-2));
   transition: opacity var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo), background var(--duration-fast) var(--ease-out-expo), box-shadow var(--duration-fast) var(--ease-out-expo);
 }
 .memory-lab-overview-dot {
@@ -3883,12 +3965,23 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 </style>
 </head>
 <body>
+<div id="startup-cover" role="status" aria-live="polite">
+  <div class="startup-cover-shell">
+    <img class="startup-cover-mark" src="../../assets/icon.ico" alt="Newmark Agent">
+    <div class="startup-cover-copy">
+      <div class="startup-cover-title">Newmark Agent</div>
+      <div class="startup-cover-status">正在预热内核与界面…</div>
+      <div class="startup-cover-detail">Preparing kernel and UI…</div>
+      <div class="startup-cover-bar"><i></i></div>
+    </div>
+  </div>
+</div>
 <div id="app">
   <!-- ========== TOP BAR ========== -->
   <div id="topbar">
     <span class="title" id="title-text">
       <span class="logo" id="title-app-logo">
-        <img id="title-app-icon" src="../../assets/app-icon-dark.png" alt="" aria-hidden="true">
+        <img id="title-app-icon" src="../assets/app-icon-dark-64.png" alt="" aria-hidden="true">
       </span>
       Newmark Agent
     </span>
@@ -4056,7 +4149,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
             <div class="terminal-output"><span style="color:var(--text-dim);opacity:0.5;">Terminal ready</span></div>
             <div class="terminal-input-row">
               <span class="terminal-prompt">PS&gt;</span>
-              <input class="terminal-input" type="text" placeholder="Enter command..." onkeydown="if(event.key==='Enter')window.terminalSend()">
+              <input class="terminal-input" type="text" placeholder="Enter command..." onfocus="window.ensureTerminalStarted&&window.ensureTerminalStarted()" onkeydown="if(event.key==='Enter')window.terminalSend()">
             </div>
           </div>
         </div>
@@ -4116,7 +4209,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
             <button class="shell-btn" onclick="window.navigateBrowser(document.getElementById('browser-url').value)" title="Go"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#send"></use></svg><span class="icon-only-label">Go</span></button>
           </div>
           <div class="browser-frame" id="browser-frame">
-            <webview id="browser-webview" partition="persist:newmark-browser"></webview>
+            <div class="browser-guest-placeholder" id="browser-guest-placeholder">Browser loads on first use</div>
           </div>
         </div>
       </div>
@@ -4142,6 +4235,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
    ============================================================ */
 
 // === Global State ===
+var newmarkRendererStartedAt = Date.now();
 var state = {
   mode: 'build',
   model: '',
@@ -4176,6 +4270,8 @@ var state = {
   configGradientWidth: 2,
   inputMode: 'guide',
   theme: 'dark',
+  backgroundColor: '',
+  fontFamily: '',
   glassLevel: 85,
   leftCollapsed: false,
   leftAnimationFrame: 0,
@@ -4232,7 +4328,10 @@ var state = {
   autoSwitchScope: 'all',
   openAIApiMode: 'chat_stream',
   fallbackOnUnavailable: 'off',
-  switchTendency: 'default',
+  switchTendency: 'balanced',
+  autoRouteRatingAvailable: false,
+  autoRouteRatingRouteId: '',
+  autoRouteRatingScore: 0,
   workspaces: [],
   currentWorkspace: '',
   currentWorkspaceId: '',
@@ -4243,6 +4342,12 @@ var state = {
   pendingOptionAnswers: {},
   pendingOptionBatchKey: '',
   promptAttachments: [],
+  nextQueue: [],
+  nextQueueRequests: [],
+  nextPrompt: '',
+  nextQueueDrainsByTarget: {},
+  backendQueue: { steering: [], followUp: [] },
+  backendQueuesByTarget: {},
   defaultFlow: '',
   settingsActiveTab: 'general',
   pluginActiveTab: 'installed',
@@ -4252,10 +4357,13 @@ var state = {
   memoryLabSelectedComponent: '',
   memoryLabNavDirection: 'fade',
   flowExpanded: {},
+  _flowsLoaded: false,
+  _flowLoadPromise: null,
   activeSubWindowView: null,
   _terminalTabs: [],
   _terminalTabId: 0,
   _terminalActiveSession: null,
+  _terminalStartPromise: null,
   platform: 'win32',
   terminalShells: ['powershell', 'cmd', 'bash'],
   agentBackend: { enabled: false, connected: true, distro: '', pid: 0, error: '' },
@@ -4403,8 +4511,19 @@ var NEWMARK_I18N = {
     'settings.dark': 'Dark',
     'settings.light': 'Light',
     'settings.system': 'Follow system',
+    'settings.backgroundColor': 'Main background',
+    'settings.backgroundColorDesc': 'Choose a solid application-shell background. Reset follows the active theme.',
+    'settings.fontFamily': 'Application font',
+    'settings.fontFamilyDesc': 'Use one installed local font family. Code and terminal text keep their monospaced font.',
+    'settings.fontPlaceholder': 'For example: Segoe UI',
+    'settings.resetAppearance': 'Reset',
+    'settings.invalidBackground': 'Use a six-digit color such as #123456.',
+    'settings.invalidFont': 'Use one local font name without CSS punctuation.',
     'settings.glass': 'Glass intensity',
     'settings.opacity': 'Opacity',
+    'settings.transparency': 'Transparency',
+    'settings.glassWidth': 'Glass width',
+    'settings.glassLevels': 'levels',
     'settings.gradient': 'Gradient colors',
     'settings.speed': 'Speed',
     'settings.width': 'Width',
@@ -4505,6 +4624,12 @@ var NEWMARK_I18N = {
     'model.preference': 'Switch preference',
     'model.costSaving': 'Cost saving',
     'model.performance': 'Quality',
+    'model.qualityPolicy': 'Quality · 0% loss band',
+    'model.balancedPolicy': 'Balanced · 2% loss band',
+    'model.costPolicy': 'Cost · 6% loss band',
+    'model.speedPolicy': 'Speed · 4% loss band',
+    'model.learnedPreference': 'Adaptive preference',
+    'model.clearLearnedPreference': 'Clear learned preference',
     'model.validationTitle': 'Model validation',
     'model.validating': 'Validating model latency and capabilities...',
     'model.validationFailed': 'Validation failed',
@@ -4875,8 +5000,19 @@ var NEWMARK_I18N = {
     'settings.dark': '深色',
     'settings.light': '浅色',
     'settings.system': '跟随系统',
+    'settings.backgroundColor': '主体背景色',
+    'settings.backgroundColorDesc': '设置应用主体的纯色背景；恢复默认后跟随当前主题。',
+    'settings.fontFamily': '应用字体',
+    'settings.fontFamilyDesc': '使用一个已安装的本机字体；代码与终端仍保持等宽字体。',
+    'settings.fontPlaceholder': '例如：思源黑体',
+    'settings.resetAppearance': '恢复默认',
+    'settings.invalidBackground': '请输入 #123456 形式的六位颜色值。',
+    'settings.invalidFont': '请输入不含 CSS 标点的单个本机字体名称。',
     'settings.glass': '玻璃强度',
     'settings.opacity': '不透明度',
+    'settings.transparency': '透明度',
+    'settings.glassWidth': '玻璃宽度',
+    'settings.glassLevels': '三级',
     'settings.gradient': '渐变颜色',
     'settings.speed': '速度',
     'settings.width': '宽度',
@@ -4977,6 +5113,12 @@ var NEWMARK_I18N = {
     'model.preference': '切换倾向',
     'model.costSaving': '节省优先',
     'model.performance': '质量优先',
+    'model.qualityPolicy': '质量 · 0% 损失带',
+    'model.balancedPolicy': '均衡 · 2% 损失带',
+    'model.costPolicy': '成本 · 6% 损失带',
+    'model.speedPolicy': '速度 · 4% 损失带',
+    'model.learnedPreference': '自适应偏好',
+    'model.clearLearnedPreference': '清空学习偏好',
     'model.validationTitle': '模型校验',
     'model.validating': '正在校验模型延迟和能力...',
     'model.validationFailed': '校验失败',
@@ -5392,7 +5534,6 @@ function applyLanguageToUi() {
   if (window.renderContextWindow) window.renderContextWindow();
   if (window.renderInputStack) window.renderInputStack();
   if (window.refreshModelSelect) window.refreshModelSelect();
-  if (window.loadFileTree && !state.rightCollapsed && state.rightTab === 'file-tree') window.loadFileTree();
   if (!els['chat-area'] || !els['chat-area'].querySelector('.chat-msg')) renderChatMessages([]);
 }
 
@@ -5966,12 +6107,94 @@ window.copyMessageText = async function(button) {
   } catch(e) {}
 };
 
+function applyAutoRouteRatingState(snapshot) {
+  snapshot = snapshot || {};
+  var decision = snapshot.routeDecision && typeof snapshot.routeDecision === 'object' ? snapshot.routeDecision : null;
+  var routeId = decision ? String(decision.routeId || '') : '';
+  var selection = decision && decision.requestedSelection;
+  var available = !!routeId && !!decision.resolvedDeployment && selection && selection.kind === 'auto'
+    && snapshot.autoRouteRatingAvailable !== false;
+  if (routeId !== state.autoRouteRatingRouteId) state.autoRouteRatingScore = 0;
+  state.autoRouteRatingAvailable = !!available;
+  state.autoRouteRatingRouteId = available ? routeId : '';
+  if (!available) state.autoRouteRatingScore = 0;
+}
+
+function autoRouteRatingLabel(score) {
+  if (currentLang() === 'zh') return score > 0 ? '此 Auto 路由有帮助' : '此 Auto 路由没有帮助';
+  return score > 0 ? 'This Auto route was helpful' : 'This Auto route was not helpful';
+}
+
+function attachAutoRouteRatingControls(message) {
+  if (!message || !api.rateAutoRoute || !state.autoRouteRatingAvailable || !state.autoRouteRatingRouteId) return;
+  var actions = message.querySelector('.msg-actions');
+  if (!actions) return;
+  var old = actions.querySelectorAll('.route-rating-btn');
+  for (var i = 0; i < old.length; i++) old[i].remove();
+  [1, -1].forEach(function(score) {
+    var label = autoRouteRatingLabel(score);
+    var selected = Number(state.autoRouteRatingScore || 0) === score;
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'msg-action-btn route-rating-btn' + (selected ? ' route-rating-selected' : '');
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    button.setAttribute('data-route-id', state.autoRouteRatingRouteId);
+    button.innerHTML = iconSvg(score > 0 ? 'thumbs-up' : 'thumbs-down', label, 'tiny');
+    button.disabled = !!state.autoRouteRatingScore;
+    button.addEventListener('click', function() { window.rateAutoRoute(button, score); });
+    actions.appendChild(button);
+  });
+}
+
+function renderAutoRouteRatingControls() {
+  if (!els['chat-area']) return;
+  var existing = els['chat-area'].querySelectorAll('.route-rating-btn');
+  for (var i = 0; i < existing.length; i++) existing[i].remove();
+  if (!state.autoRouteRatingAvailable) return;
+  var messages = els['chat-area'].querySelectorAll('.chat-msg.assistant:not(.work-run-message)');
+  attachAutoRouteRatingControls(messages.length ? messages[messages.length - 1] : null);
+}
+
+window.rateAutoRoute = async function(button, score) {
+  if (!api.rateAutoRoute || !button) return;
+  var message = button.closest ? button.closest('.chat-msg') : null;
+  var buttons = message ? message.querySelectorAll('.route-rating-btn') : [];
+  for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
+  var routeId = String(button.getAttribute('data-route-id') || '');
+  try {
+    var result = await api.rateAutoRoute({
+      target: currentConversationTarget(),
+      score: score,
+      routeId: routeId
+    });
+    if (result && (result.ok || result.reason === 'already_rated')) {
+      state.autoRouteRatingScore = Number(result.score) === -1 || Number(result.score) === 1 ? Number(result.score) : score;
+      renderAutoRouteRatingControls();
+      showUiNotice(currentLang() === 'zh' ? '已记录 Auto 路由反馈。' : 'Auto route feedback recorded.', 'info', 'auto-route-rating-' + routeId);
+      return;
+    }
+    for (var j = 0; j < buttons.length; j++) buttons[j].disabled = false;
+    var reason = result && result.reason ? String(result.reason) : 'no_active_auto_route';
+    showUiNotice(
+      currentLang() === 'zh' ? '无法记录 Auto 路由反馈：' + reason : 'Unable to record Auto route feedback: ' + reason,
+      'error',
+      'auto-route-rating-' + routeId
+    );
+  } catch (error) {
+    for (var k = 0; k < buttons.length; k++) buttons[k].disabled = false;
+    showUiNotice(error && error.message ? error.message : String(error), 'error', 'auto-route-rating-' + routeId);
+  }
+};
+
 window.editUserMessage = async function(button, messageIndex) {
   var conversationId = activeConversationId();
   if (runningConversationRecord(conversationId)) return;
   if (!api.rewindConversation) return;
   var message = button && button.closest ? button.closest('.chat-msg') : null;
-  var text = String(message && message._newmarkMessageText || '');
+  var text = String(message && message._newmarkMessageText || '').replace(/\n\n\[\d+ image attachments?\]\s*$/i, '');
+  var attachments = normalizeConversationImageAttachments(message && message._newmarkMessageAttachments);
   var result = await api.rewindConversation(currentConversationTarget(conversationId), Number(messageIndex));
   if (!result || result.error) {
     addMsg('assistant', '[Error] ' + ((result && result.error) || 'Unable to edit message.'), 'error', state.model);
@@ -5979,14 +6202,77 @@ window.editUserMessage = async function(button, messageIndex) {
   }
   clearAgentWorkEvents(conversationId);
   resetConversationWorkUi(conversationId, false);
-  state.backendQueue = { steering: [], followUp: [] };
-  if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
+  var editedTarget = currentConversationTarget(conversationId);
+  state.backendQueue = setBackendQueueForTarget({ steering: [], followUp: [] }, editedTarget);
+  if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue, editedTarget);
   renderChatMessages(result.chatMessages || []);
   els.prompt.value = String(text || '');
+  state.promptAttachments = attachments.map(function(item) {
+    return { id: item.id, name: item.name, type: item.mimeType, dataUrl: item.dataUrl };
+  });
+  renderPromptAttachments();
   els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
   els.prompt.focus();
   els.prompt.setSelectionRange(els.prompt.value.length, els.prompt.value.length);
 };
+
+function normalizeConversationImageAttachments(input) {
+  return (Array.isArray(input) ? input : []).slice(0, 6).flatMap(function(item) {
+    if (!item || String(item.origin || '') !== 'user') return [];
+    var mimeType = String(item.mimeType || item.type || '').toLowerCase().replace('image/jpg', 'image/jpeg');
+    if (mimeType !== 'image/png' && mimeType !== 'image/jpeg') return [];
+    var dataUrl = String(item.dataUrl || '');
+    if (!new RegExp('^data:' + mimeType.replace('/', '\\/') + ';base64,[A-Za-z0-9+/]+={0,2}$', 'i').test(dataUrl)) return [];
+    if (dataUrl.length > 14 * 1024 * 1024) return [];
+    return [{
+      id: String(item.id || ('optimistic-user-image-' + Math.random().toString(16).slice(2))),
+      origin: 'user',
+      name: String(item.name || 'submitted image').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 120) || 'submitted image',
+      mimeType: mimeType,
+      dataUrl: dataUrl,
+      width: Math.max(0, Number(item.width || 0)),
+      height: Math.max(0, Number(item.height || 0))
+    }];
+  });
+}
+
+function promptAttachmentsForConversation() {
+  return normalizeConversationImageAttachments((state.promptAttachments || []).map(function(item) {
+    return Object.assign({}, item, { origin: 'user', mimeType: item.type || '' });
+  }));
+}
+
+window.openConversationImage = function(attachment) {
+  var safe = normalizeConversationImageAttachments([attachment])[0];
+  if (!safe) return;
+  window.openSubWin(safe.name, '<div style="display:flex;align-items:center;justify-content:center;min-height:220px;"><img src="' + escAttr(safe.dataUrl) + '" alt="' + escAttr(safe.name) + '" style="display:block;max-width:100%;max-height:72vh;object-fit:contain;border-radius:8px;"></div>');
+};
+
+function appendConversationImageAttachments(container, input) {
+  var attachments = normalizeConversationImageAttachments(input);
+  if (!container || !attachments.length) return attachments;
+  var gallery = document.createElement('div');
+  gallery.className = 'conversation-image-attachments';
+  gallery.setAttribute('aria-label', attachments.length === 1 ? '1 submitted image' : attachments.length + ' submitted images');
+  attachments.forEach(function(attachment) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'conversation-image-attachment';
+    button.title = attachment.name;
+    button.setAttribute('aria-label', 'Open submitted image ' + attachment.name);
+    var image = document.createElement('img');
+    image.src = attachment.dataUrl;
+    image.alt = attachment.name;
+    var label = document.createElement('span');
+    label.textContent = attachment.name;
+    button.appendChild(image);
+    button.appendChild(label);
+    button.addEventListener('click', function() { window.openConversationImage(attachment); });
+    gallery.appendChild(button);
+  });
+  container.appendChild(gallery);
+  return attachments;
+}
 
 function addMsg(role, text, mode, model, messageIndex, messageMeta) {
   text = redactSensitiveText(text);
@@ -5999,6 +6285,7 @@ function addMsg(role, text, mode, model, messageIndex, messageMeta) {
   div.innerHTML = '<div class="meta"><span class="msg-role">' + metaLabel + '</span><span> | ' + esc(new Date().toLocaleTimeString(uiLocale())) + '</span>' +
     (metaInfo ? '<span class="meta-extra"> | ' + esc(metaInfo) + '</span>' : '') + messageActionsHtml(role, text, messageIndex) + '</div><div class="msg-body">' + renderMessageContent(text) + '</div>';
   div._newmarkMessageText = String(text || '');
+  div._newmarkMessageAttachments = appendConversationImageAttachments(div.querySelector('.msg-body'), messageMeta && messageMeta.attachments);
   if (messageMeta && messageMeta.clientMessageId) applyGuideMessageMeta(div, messageMeta);
   els['chat-area'].appendChild(div);
   els['chat-area'].scrollTop = els['chat-area'].scrollHeight;
@@ -6120,7 +6407,7 @@ function clipboardFilePaths(dataTransfer) {
 }
 
 function isImageFile(file) {
-  return !!(file && /^image\//i.test(String(file.type || '')));
+  return !!(file && /^image\/(?:png|jpe?g)$/i.test(String(file.type || '')));
 }
 
 function readFileAsDataUrl(file) {
@@ -6146,7 +6433,7 @@ function imageFilesFromDataTransfer(dataTransfer) {
   var items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
   for (var i = 0; i < items.length; i++) {
     var item = items[i];
-    if (item && item.kind === 'file' && /^image\//i.test(String(item.type || ''))) {
+    if (item && item.kind === 'file' && /^image\/(?:png|jpe?g)$/i.test(String(item.type || ''))) {
       var file = null;
       try { file = item.getAsFile ? item.getAsFile() : null; } catch(e) {}
       add(file);
@@ -6180,7 +6467,7 @@ window.removePromptAttachment = function(index) {
 };
 
 function addPromptImageAttachment(file, dataUrl) {
-  if (!dataUrl || !/^data:image\//i.test(dataUrl)) return;
+  if (!dataUrl || !/^data:image\/(?:png|jpe?g);base64,/i.test(dataUrl)) return;
   if (!state.promptAttachments) state.promptAttachments = [];
   if (state.promptAttachments.some(function(item) { return item.dataUrl === dataUrl; })) return;
   var max = 6;
@@ -6261,7 +6548,7 @@ function registerRuntimeKey(target, runtimeKey) {
   if (!state.runtimeKeyAliases) state.runtimeKeyAliases = {};
   state.runtimeKeyAliases[base] = runtimeKey;
   if (previous !== runtimeKey) {
-    ['runningConversations', 'conversationRuntimeStates', 'agentWorkEventsByConversation', 'agentWorkUiByConversation', 'workRunsByTarget', 'guideMessagesByTarget', 'trackedConversationUntil'].forEach(function(storeName) {
+    ['runningConversations', 'conversationRuntimeStates', 'agentWorkEventsByConversation', 'agentWorkUiByConversation', 'workRunsByTarget', 'guideMessagesByTarget', 'trackedConversationUntil', 'backendQueuesByTarget'].forEach(function(storeName) {
       var store = state[storeName];
       if (!store || store[previous] === undefined) return;
       if (store[runtimeKey] === undefined) store[runtimeKey] = store[previous];
@@ -6357,7 +6644,8 @@ function recordGuideUiMessage(input, target) {
     model: String(input.model || (prior && prior.model) || state.model || ''),
     createdAt: String(receipt.createdAt || input.createdAt || (prior && prior.createdAt) || new Date().toISOString()),
     updatedAt: String(receipt.updatedAt || input.updatedAt || new Date().toISOString()),
-    reason: explicitReason || (status === 'deferred' || status === 'rejected' ? String(prior && prior.reason || '') : '')
+    reason: explicitReason || (status === 'deferred' || status === 'rejected' ? String(prior && prior.reason || '') : ''),
+    attachments: normalizeConversationImageAttachments(input.attachments || receipt.attachments || (prior && prior.attachments) || [])
   };
   messages[clientMessageId] = record;
   if (isActiveConversationTarget(target)) {
@@ -6369,20 +6657,21 @@ function recordGuideUiMessage(input, target) {
 
 function syncGuideMessagesFromWorkRuns(runs, target) {
   target = target || currentConversationTarget();
+  target = {
+    workspaceId: String(target.workspaceId || runtimeWorkspaceId('')),
+    conversationId: String(target.conversationId || 'default')
+  };
   (Array.isArray(runs) ? runs : []).forEach(function(run) {
-    var rawTarget = run && run.target || {};
-    var runTarget = {
-      workspaceId: String(rawTarget.workspaceId || target.workspaceId || runtimeWorkspaceId('')),
-      conversationId: String(rawTarget.conversationId || target.conversationId || 'default')
-    };
     (Array.isArray(run && run.guides) ? run.guides : []).forEach(function(receipt) {
       recordGuideUiMessage(Object.assign({}, receipt, {
-        target: receipt && receipt.target || runTarget,
+        target: target,
         runId: receipt && receipt.runId || run && run.runId || ''
-      }), runTarget);
+      }), target);
     });
     (Array.isArray(run && run.events) ? run.events : []).forEach(function(event) {
-      if (event && event.guide && event.guide.clientMessageId) recordGuideUiMessage(event, runTarget);
+      if (event && event.guide && event.guide.clientMessageId) {
+        recordGuideUiMessage(Object.assign({}, event, { target: target }), target);
+      }
     });
   });
 }
@@ -6402,7 +6691,8 @@ function renderPendingGuideMessages(target, persistedGuideIds) {
     else addMsg('user', item.content || 'Guide', 'guide', item.model || state.model, undefined, {
       clientMessageId: item.clientMessageId,
       guideStatus: item.status,
-      reason: item.reason
+      reason: item.reason,
+      attachments: item.attachments
     });
   });
   return pending.length;
@@ -6541,18 +6831,32 @@ function publicWorkEventForUi(event) {
 function normalizedWorkRun(run, target) {
   run = run || {};
   target = target || run.target || currentConversationTarget(run.conversationId);
+  var boundTarget = {
+    workspaceId: String(target.workspaceId || runtimeWorkspaceId('')),
+    conversationId: String(target.conversationId || 'default')
+  };
+  var boundRuntimeKey = runtimeKeyFor(boundTarget.workspaceId, boundTarget.conversationId);
   var startedAt = run.startedAt || run.createdAt || new Date().toISOString();
   var status = String(run.status || 'running');
   var live = ['running', 'stopping', 'force_restarting'].indexOf(status) >= 0;
   var expanded = live ? true : !!run.expanded;
   return {
     runId: String(run.runId || run.id || ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2))),
-    target: { workspaceId: String(target.workspaceId || runtimeWorkspaceId('')), conversationId: String(target.conversationId || 'default') },
+    target: boundTarget,
     status: status,
     startedAt: startedAt,
     endedAt: run.endedAt || '',
     expanded: expanded,
-    events: (Array.isArray(run.events) ? run.events : []).filter(publicWorkEvent).map(publicWorkEventForUi),
+    events: (Array.isArray(run.events) ? run.events : []).filter(publicWorkEvent).map(function(event) {
+      var item = Object.assign({}, publicWorkEventForUi(event), {
+        workspaceId: boundTarget.workspaceId,
+        conversationId: boundTarget.conversationId,
+        runtimeKey: boundRuntimeKey,
+        target: boundTarget
+      });
+      if (item.guide) item.guide = Object.assign({}, item.guide, { target: boundTarget, runtimeKey: boundRuntimeKey });
+      return item;
+    }),
     sequence: Number(run.sequence || 0)
   };
 }
@@ -6568,9 +6872,6 @@ function workRunsForTarget(target) {
 function syncWorkRunsSnapshot(runs, target) {
   target = target || currentConversationTarget();
   syncGuideMessagesFromWorkRuns(runs, target);
-  (Array.isArray(runs) ? runs : []).forEach(function(run) {
-    if (run && run.runtimeKey) registerRuntimeKey(target, run.runtimeKey);
-  });
   var key = runtimeKeyFor(target.workspaceId, target.conversationId);
   var prior = workRunsForTarget(target);
   var expandedById = {};
@@ -7025,17 +7326,19 @@ function renderChatMessages(messages) {
     }
     var clientMessageId = String(m.clientMessageId || '');
     if (clientMessageId) persistedGuideIds[clientMessageId] = true;
-    addMsg(m.role || 'assistant', m.content || '', m.mode || (clientMessageId ? 'guide' : ''), m.model || '', i, clientMessageId ? {
+    addMsg(m.role || 'assistant', m.content || '', m.mode || (clientMessageId ? 'guide' : ''), m.model || '', i, {
       clientMessageId: clientMessageId,
-      guideStatus: 'applied',
-      runId: m.runId || ''
-    } : null);
+      guideStatus: clientMessageId ? 'applied' : '',
+      runId: m.runId || '',
+      attachments: m.attachments || []
+    });
     if (clientMessageId) delete guideMessages[clientMessageId];
   }
   finishToolBatch(renderConversationId);
   while (persistedRunIndex < persistedRuns.length) renderConversationWorkRun(persistedRuns[persistedRunIndex++]);
   renderPendingGuideMessages(renderTarget, persistedGuideIds);
   if (pendingWorkReview) addWorkReview(pendingWorkReview);
+  renderAutoRouteRatingControls();
 }
 
 function activeConversationId() {
@@ -7132,8 +7435,9 @@ function renderAgentWorkEvent(event) {
     if (workRun) showUiNotice(content || 'Agent run failed.', 'error', 'agent-run-' + String(event.runId || event.id || 'error'));
     else addMsg('assistant', '[Error] ' + content, 'error', event.model || state.model);
   } else if (type === 'queue_update') {
-    state.backendQueue = event.queue || { steering: [], followUp: [] };
-    if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
+    var eventQueueTarget = { workspaceId: eventWorkspaceId || runtimeWorkspaceId(''), conversationId: eventConversationId };
+    state.backendQueue = setBackendQueueForTarget(event.queue || { steering: [], followUp: [] }, eventQueueTarget);
+    if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue, eventQueueTarget);
     if (window.renderInputStack) window.renderInputStack();
   } else {
     return;
@@ -7172,6 +7476,7 @@ function appendAgentWorkEvent(event) {
   var id = String(event.conversationId || (event.target && event.target.conversationId) || 'default');
   var workspaceId = String(event.workspaceId || (event.target && event.target.workspaceId) || runtimeWorkspaceId(''));
   var target = { workspaceId: workspaceId, conversationId: id };
+  eventRuntimeKey(event);
   var active = isActiveConversationTarget(target);
   if (active) markConversationTracked(id, state.conversationTrackMs || 300000, workspaceId);
   if (active || isConversationTracked(id, workspaceId)) cacheAgentWorkEvent(event);
@@ -7234,6 +7539,7 @@ function loadActiveConversationMessages(conversationId) {
     };
     if (s && s.runtimeKey) registerRuntimeKey(snapshotTarget, s.runtimeKey);
     if (s && Array.isArray(s.workRuns)) syncWorkRunsSnapshot(s.workRuns, snapshotTarget);
+    applyAutoRouteRatingState(s);
     if (s && s.chatMessages) renderChatMessages(s.chatMessages);
     if (s && s.conversationId) {
       state.activeBackendConversationId = s.conversationId;
@@ -7241,8 +7547,8 @@ function loadActiveConversationMessages(conversationId) {
     }
     markConversationTracked(s && s.conversationId ? s.conversationId : requestedConversationId, state.conversationTrackMs || 300000, snapshotTarget.workspaceId);
     if (s && s.queued) {
-      state.backendQueue = s.queued;
-      if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
+      state.backendQueue = setBackendQueueForTarget(s.queued, snapshotTarget);
+      if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue, snapshotTarget);
     }
     if (s && Array.isArray(s.workEvents)) {
       var eventConversationId = runtimeKeyFor(snapshotTarget.workspaceId, s.conversationId || requestedConversationId || 'default');
@@ -7399,7 +7705,7 @@ function setWorking(working) {
 }
 
 function promptHasText() {
-  return !!(els.prompt && String(els.prompt.value || '').trim());
+  return !!(els.prompt && /\S/.test(String(els.prompt.value || '')));
 }
 
 function isCurrentConversationRunning() {
@@ -7410,6 +7716,9 @@ function isCurrentConversationRunning() {
 function setSubmitButtonVisual(icon, label, running, stopMode) {
   var btn = els['submit-btn'] || document.getElementById('submit-btn');
   if (!btn) return;
+  var visualKey = [icon, label, running ? '1' : '0', stopMode ? '1' : '0'].join('|');
+  if (btn.getAttribute('data-visual-key') === visualKey) return;
+  btn.setAttribute('data-visual-key', visualKey);
   btn.innerHTML = iconSvg(icon, label, 'small');
   btn.setAttribute('title', label);
   btn.setAttribute('aria-label', label);
@@ -7430,6 +7739,29 @@ function updateSubmitButtonState() {
   } else {
     setSubmitButtonVisual('send', t('input.send'), running, false);
   }
+}
+
+var promptInputRefreshFrame = 0;
+function schedulePromptInputRefresh() {
+  // While idle, prompt contents do not change the send-button presentation.
+  // Avoid scheduling paint work for large text until a running conversation
+  // needs the empty-input Stop/Send distinction.
+  if (!isCurrentConversationRunning()) return;
+  if (promptInputRefreshFrame) return;
+  promptInputRefreshFrame = requestAnimationFrame(function() {
+    promptInputRefreshFrame = 0;
+    updateSubmitButtonState();
+  });
+}
+
+var editorInputRefreshFrame = 0;
+function scheduleEditorInputRefresh() {
+  if (editorInputRefreshFrame) return;
+  editorInputRefreshFrame = requestAnimationFrame(function() {
+    editorInputRefreshFrame = 0;
+    window.renderNativeEditor();
+    window.scheduleEditorCompletion();
+  });
 }
 
 async function refreshConversationRuntimeAfterStopRace(target, expectedRunId, stopResult) {
@@ -7469,8 +7801,11 @@ async function refreshConversationRuntimeAfterStopRace(target, expectedRunId, st
       if (matchingRun && matchingRun.runId) resolvedRunId = String(matchingRun.runId);
     }
     if (snapshot.queued) {
-      state.backendQueue = snapshot.queued;
-      if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
+      var resolvedQueue = setBackendQueueForTarget(snapshot.queued, resolvedTarget);
+      if (isActiveConversationTarget(resolvedTarget)) {
+        state.backendQueue = resolvedQueue;
+        if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(resolvedQueue, resolvedTarget);
+      }
     }
   }
   setConversationRuntimeState(resolvedTarget, resolvedStatus, resolvedRunId, { provisional: false, generation: generation });
@@ -7606,9 +7941,17 @@ window.hideContextWindowTooltip = function() {
   if (tip) tip.style.display = 'none';
 };
 
-window.refreshModelSelect = function() {
+window.refreshModelSelect = function(options) {
   var sel = els['model-select'] || document.getElementById('model-select');
   if (!sel) return;
+  options = options || {};
+  if (options.minimal === true) {
+    var minimalValue = state.model || '';
+    var minimalLabel = state.modelLabel || (minimalValue === 'auto' ? t('language.auto') : minimalValue) || t('language.auto');
+    sel.innerHTML = '<option value="' + esc(minimalValue) + '">' + esc(minimalLabel) + '</option>';
+    sel.value = minimalValue;
+    return;
+  }
   var modelOpts = '';
   var hasProviderModels = false;
   if (state.providers && state.providers.length > 0) {
@@ -7629,11 +7972,14 @@ window.refreshModelSelect = function() {
       for (var midx = 0; midx < p.models.length; midx++) {
         var modelEntry = p.models[midx];
         var evaluationStatus = typeof modelEntry === 'string' ? 'unvalidated' : String((modelEntry.evaluation && modelEntry.evaluation.status) || 'unvalidated');
-        if (evaluationStatus !== 'available' && evaluationStatus !== 'unvalidated') continue;
+        var validationStatus = typeof modelEntry === 'string' ? '' : String((modelEntry.validation && modelEntry.validation.status) || '');
+        if (evaluationStatus !== 'available' && evaluationStatus !== 'unvalidated' && validationStatus !== 'verified' && validationStatus !== 'degraded') continue;
         var modelName = typeof modelEntry === 'string' ? modelEntry : (modelEntry.name || '');
         var modelLabel = typeof modelEntry === 'string' ? modelEntry : (modelEntry.display || modelEntry.name || '');
-        if (!firstConcreteModel && modelName) firstConcreteModel = modelName;
-        providerOpts += '<option value="' + esc(modelName) + '">' + esc(p.name + ' / ' + modelLabel) + '</option>';
+        var providerId = String(p.id || p.name || '');
+        var modelValue = providerId && modelName ? 'deployment:' + encodeURIComponent(providerId) + ':' + encodeURIComponent(modelName) : modelName;
+        if (!firstConcreteModel && modelValue) firstConcreteModel = modelValue;
+        providerOpts += '<option value="' + esc(modelValue) + '">' + esc(p.name + ' / ' + modelLabel) + '</option>';
       }
       if (providerOpts) modelOpts += '<optgroup label="' + esc(p.name) + '">' + providerOpts + '</optgroup>';
     }
@@ -7660,18 +8006,116 @@ function normalizeQueueItemText(text) {
     .trim();
 }
 
-window.syncNextQueueFromBackend = function(queue) {
-  queue = queue || state.backendQueue || {};
-  var merged = [];
-  var followUp = Array.isArray(queue.followUp) ? queue.followUp : [];
-  for (var j = 0; j < followUp.length; j++) merged.push(normalizeQueueItemText(followUp[j]));
-  if (!merged.length) return;
-  if (!state.nextQueue) state.nextQueue = [];
-  if (!state.queueHiddenItems) state.queueHiddenItems = {};
-  for (var k = 0; k < merged.length; k++) {
-    if (merged[k] && !state.queueHiddenItems[merged[k]] && state.nextQueue.indexOf(merged[k]) < 0) state.nextQueue.push(merged[k]);
+function normalizeQueuedConversationTarget(target) {
+  if (!target || typeof target !== 'object') return null;
+  var workspaceId = String(target.workspaceId || '').trim();
+  var conversationId = String(target.conversationId || 'default').trim() || 'default';
+  return workspaceId ? { workspaceId: workspaceId, conversationId: conversationId } : null;
+}
+
+function bindQueuedRequestToTarget(request, text, target) {
+  var source = request && typeof request === 'object' ? request : {};
+  var owner = normalizeQueuedConversationTarget(target);
+  return {
+    text: String(source.text === undefined ? (text || '') : (source.text || '')),
+    images: (Array.isArray(source.images) ? source.images : []).slice(0, 6).map(function(image) { return Object.assign({}, image); }),
+    target: owner,
+    backendManaged: false,
+    provenance: 'local-next'
+  };
+}
+
+function bindBackendQueuedRequestToTarget(text, target, occurrence) {
+  var request = bindQueuedRequestToTarget(null, text, target);
+  request.backendManaged = true;
+  request.provenance = 'backend-follow-up';
+  request.backendOccurrence = Math.max(0, Number(occurrence || 0));
+  return request;
+}
+
+function queuedRequestIsBackendManaged(request) {
+  return !!request && request.backendManaged === true && request.provenance === 'backend-follow-up';
+}
+
+function queuedRequestMatchesTarget(request, target) {
+  var owner = normalizeQueuedConversationTarget(request && request.target);
+  var active = normalizeQueuedConversationTarget(target);
+  if (!owner || !active) return false;
+  return runtimeKeyFor(owner.workspaceId, owner.conversationId) === runtimeKeyFor(active.workspaceId, active.conversationId);
+}
+
+function queueIndexesForTarget(target) {
+  var indexes = [];
+  var queue = state.nextQueue || [];
+  var requests = state.nextQueueRequests || [];
+  for (var index = 0; index < queue.length; index++) {
+    if (queuedRequestMatchesTarget(requests[index], target)) indexes.push(index);
   }
-  state.nextPrompt = state.nextQueue[0] || '';
+  return indexes;
+}
+
+function refreshNextPromptForTarget(target) {
+  var indexes = queueIndexesForTarget(target || currentConversationTarget()).filter(function(index) {
+    return !queuedRequestIsBackendManaged(state.nextQueueRequests && state.nextQueueRequests[index]);
+  });
+  state.nextPrompt = indexes.length ? String((state.nextQueue || [])[indexes[0]] || '') : '';
+  return state.nextPrompt;
+}
+
+function queueHiddenItemKey(text, target) {
+  var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  return (owner ? runtimeKeyFor(owner.workspaceId, owner.conversationId) : 'unbound') + '::' + String(text || '');
+}
+
+function normalizeBackendQueue(queue) {
+  queue = queue && typeof queue === 'object' ? queue : {};
+  return {
+    steering: Array.isArray(queue.steering) ? queue.steering.map(function(item) { return String(item || ''); }) : [],
+    followUp: Array.isArray(queue.followUp) ? queue.followUp.map(function(item) { return String(item || ''); }) : []
+  };
+}
+
+function backendQueueForTarget(target) {
+  var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  if (!owner) return { steering: [], followUp: [] };
+  if (!state.backendQueuesByTarget) state.backendQueuesByTarget = {};
+  return normalizeBackendQueue(state.backendQueuesByTarget[runtimeKeyFor(owner.workspaceId, owner.conversationId)]);
+}
+
+function setBackendQueueForTarget(queue, target) {
+  var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  var normalized = normalizeBackendQueue(queue);
+  if (!owner) return normalized;
+  if (!state.backendQueuesByTarget) state.backendQueuesByTarget = {};
+  state.backendQueuesByTarget[runtimeKeyFor(owner.workspaceId, owner.conversationId)] = normalized;
+  if (queuedRequestMatchesTarget({ target: owner }, currentConversationTarget())) state.backendQueue = normalized;
+  return normalized;
+}
+
+window.syncNextQueueFromBackend = function(queue, target) {
+  target = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  if (!target) return;
+  queue = normalizeBackendQueue(queue || backendQueueForTarget(target));
+  if (!state.nextQueue) state.nextQueue = [];
+  if (!state.nextQueueRequests) state.nextQueueRequests = [];
+  var retainedQueue = [];
+  var retainedRequests = [];
+  for (var index = 0; index < state.nextQueue.length; index++) {
+    var existingRequest = state.nextQueueRequests[index];
+    if (queuedRequestIsBackendManaged(existingRequest) && queuedRequestMatchesTarget(existingRequest, target)) continue;
+    retainedQueue.push(state.nextQueue[index]);
+    retainedRequests.push(existingRequest || null);
+  }
+  state.nextQueue = retainedQueue;
+  state.nextQueueRequests = retainedRequests;
+  var followUp = Array.isArray(queue.followUp) ? queue.followUp : [];
+  for (var occurrence = 0; occurrence < followUp.length; occurrence++) {
+    var text = normalizeQueueItemText(followUp[occurrence]);
+    if (!text) continue;
+    state.nextQueue.push(text);
+    state.nextQueueRequests.push(bindBackendQueuedRequestToTarget(text, target, occurrence));
+  }
+  refreshNextPromptForTarget(target);
 };
 
 window.renderQueuePanel = function() {
@@ -7679,8 +8123,18 @@ window.renderQueuePanel = function() {
   var label = document.getElementById('queue-header-label');
   var list = document.getElementById('queue-list');
   if (!panel || !label || !list) return;
-  window.syncNextQueueFromBackend(state.backendQueue);
-  var count = (state.nextQueue || []).length;
+  var target = currentConversationTarget();
+  window.syncNextQueueFromBackend(backendQueueForTarget(target), target);
+  var total = (state.nextQueue || []).length;
+  if (!state.nextQueueRequests) state.nextQueueRequests = [];
+  while (state.nextQueueRequests.length < total) {
+    // An unbound queue entry must never be guessed to belong to whichever
+    // workspace happens to be active while rendering.
+    state.nextQueueRequests.push(null);
+  }
+  if (state.nextQueueRequests.length > total) state.nextQueueRequests = state.nextQueueRequests.slice(0, total);
+  var visibleIndexes = queueIndexesForTarget(target);
+  var count = visibleIndexes.length;
   panel.style.display = count ? '' : 'none';
   panel.classList.toggle('collapsed', !!state.queueCollapsed);
   label.textContent = t('queue.title') + ' ' + count;
@@ -7695,14 +8149,26 @@ window.renderQueuePanel = function() {
   }
   var html = '';
   for (var i = 0; i < count; i++) {
-    html += '<div class="queue-item" draggable="true" ondragstart="window.startQueueDrag(event,' + i + ')" ondragover="window.overQueueDrag(event,' + i + ')" ondrop="window.dropQueueDrag(event,' + i + ')" ondragend="window.endQueueDrag(event)">' +
-      '<button class="queue-drag" title="' + escAttr(t('queue.title')) + '">' + iconSvg('grip-vertical', t('queue.title'), 'tiny') + '</button>' +
-      '<input class="queue-edit" value="' + escAttr(state.nextQueue[i] || '') + '" oninput="window.editQueueItem(' + i + ',this.value)" onkeydown="if(event.key===&quot;Enter&quot;)this.blur()">' +
-      '<span class="stack-actions">' +
-        '<button class="stack-icon-btn" onclick="window.guideQueueItem(' + i + ')" title="' + escAttr(t('queue.guideNow')) + '">' + iconSvg('send', t('queue.guideNow'), 'tiny') + '</button>' +
-        '<button class="stack-icon-btn" onclick="window.focusQueueItem(' + i + ')" title="' + escAttr(t('common.edit')) + '">' + iconSvg('square-pen', t('common.edit'), 'tiny') + '</button>' +
-        '<button class="stack-icon-btn danger" onclick="window.deleteQueueItem(' + i + ')" title="' + escAttr(t('common.delete')) + '">' + iconSvg('trash', t('common.delete'), 'tiny') + '</button>' +
-      '</span>' +
+    var queueIndex = visibleIndexes[i];
+    var request = state.nextQueueRequests[queueIndex];
+    var backendManaged = queuedRequestIsBackendManaged(request);
+    var dragAttributes = backendManaged
+      ? ' draggable="false"'
+      : ' draggable="true" ondragstart="window.startQueueDrag(event,' + queueIndex + ')" ondragover="window.overQueueDrag(event,' + queueIndex + ')" ondrop="window.dropQueueDrag(event,' + queueIndex + ')" ondragend="window.endQueueDrag(event)"';
+    var dragHandle = backendManaged
+      ? '<span class="queue-drag" aria-hidden="true">' + iconSvg('grip-vertical', t('queue.title'), 'tiny') + '</span>'
+      : '<button class="queue-drag" title="' + escAttr(t('queue.title')) + '">' + iconSvg('grip-vertical', t('queue.title'), 'tiny') + '</button>';
+    var inputAttributes = backendManaged
+      ? ' readonly aria-readonly="true"'
+      : ' oninput="window.editQueueItem(' + queueIndex + ',this.value)" onkeydown="if(event.key===&quot;Enter&quot;)this.blur()"';
+    var actions = backendManaged ? '' :
+      '<button class="stack-icon-btn" onclick="window.guideQueueItem(' + queueIndex + ')" title="' + escAttr(t('queue.guideNow')) + '">' + iconSvg('send', t('queue.guideNow'), 'tiny') + '</button>' +
+      '<button class="stack-icon-btn" onclick="window.focusQueueItem(' + queueIndex + ')" title="' + escAttr(t('common.edit')) + '">' + iconSvg('square-pen', t('common.edit'), 'tiny') + '</button>' +
+      '<button class="stack-icon-btn danger" onclick="window.deleteQueueItem(' + queueIndex + ')" title="' + escAttr(t('common.delete')) + '">' + iconSvg('trash', t('common.delete'), 'tiny') + '</button>';
+    html += '<div class="queue-item"' + dragAttributes + '>' +
+      dragHandle +
+      '<input class="queue-edit" value="' + escAttr(state.nextQueue[queueIndex] || '') + '"' + inputAttributes + '>' +
+      '<span class="stack-actions">' + actions + '</span>' +
     '</div>';
   }
   list.innerHTML = html;
@@ -7717,48 +8183,69 @@ window.toggleQueuePanel = function() {
 
 window.editQueueItem = function(idx, value) {
   if (!state.nextQueue || !state.nextQueue[idx]) return;
+  var request = state.nextQueueRequests && state.nextQueueRequests[idx];
+  if (queuedRequestIsBackendManaged(request) || !queuedRequestMatchesTarget(request, currentConversationTarget())) return;
   if (!state.queueHiddenItems) state.queueHiddenItems = {};
-  state.queueHiddenItems[state.nextQueue[idx]] = true;
+  state.queueHiddenItems[queueHiddenItemKey(state.nextQueue[idx], currentConversationTarget())] = true;
   state.nextQueue[idx] = String(value || '');
-  delete state.queueHiddenItems[state.nextQueue[idx]];
-  state.nextPrompt = state.nextQueue[0] || '';
+  if (state.nextQueueRequests && state.nextQueueRequests[idx] && typeof state.nextQueueRequests[idx] === 'object') {
+    state.nextQueueRequests[idx].text = String(value || '').replace(/\n\n\[\d+ image attachments?\]\s*$/i, '');
+  }
+  delete state.queueHiddenItems[queueHiddenItemKey(state.nextQueue[idx], currentConversationTarget())];
+  refreshNextPromptForTarget(currentConversationTarget());
 };
 
 window.focusQueueItem = function(idx) {
+  var request = state.nextQueueRequests && state.nextQueueRequests[idx];
+  if (queuedRequestIsBackendManaged(request) || !queuedRequestMatchesTarget(request, currentConversationTarget())) return;
   state.queueCollapsed = false;
   window.renderInputStack();
   setTimeout(function() {
     var inputs = document.querySelectorAll('#queue-list .queue-edit');
-    if (inputs[idx]) { inputs[idx].focus(); inputs[idx].select(); }
+    var visiblePosition = queueIndexesForTarget(currentConversationTarget()).indexOf(idx);
+    if (visiblePosition >= 0 && inputs[visiblePosition]) { inputs[visiblePosition].focus(); inputs[visiblePosition].select(); }
   }, 0);
 };
 
 window.deleteQueueItem = function(idx) {
   if (!state.nextQueue) return;
+  var request = state.nextQueueRequests && state.nextQueueRequests[idx];
+  if (queuedRequestIsBackendManaged(request) || !queuedRequestMatchesTarget(request, currentConversationTarget())) return;
   if (!state.queueHiddenItems) state.queueHiddenItems = {};
-  if (state.nextQueue[idx]) state.queueHiddenItems[state.nextQueue[idx]] = true;
+  if (state.nextQueue[idx]) state.queueHiddenItems[queueHiddenItemKey(state.nextQueue[idx], currentConversationTarget())] = true;
   state.nextQueue.splice(idx, 1);
-  state.nextPrompt = state.nextQueue[0] || '';
+  if (state.nextQueueRequests) state.nextQueueRequests.splice(idx, 1);
+  refreshNextPromptForTarget(currentConversationTarget());
   window.renderInputStack();
 };
 
 window.guideQueueItem = function(idx) {
   if (!state.nextQueue || !state.nextQueue[idx]) return;
+  var request = state.nextQueueRequests && state.nextQueueRequests[idx];
+  if (queuedRequestIsBackendManaged(request) || !queuedRequestMatchesTarget(request, currentConversationTarget())) return;
+  var deliverDuringRun = isCurrentConversationRunning();
   var next = state.nextQueue.splice(idx, 1)[0];
+  var nextRequest = state.nextQueueRequests ? state.nextQueueRequests.splice(idx, 1)[0] : null;
   if (!state.queueHiddenItems) state.queueHiddenItems = {};
-  if (next) state.queueHiddenItems[next] = true;
-  state.nextPrompt = state.nextQueue[0] || '';
+  if (next) state.queueHiddenItems[queueHiddenItemKey(next, currentConversationTarget())] = true;
+  refreshNextPromptForTarget(currentConversationTarget());
   window.renderInputStack();
-  if (next && !isCurrentConversationRunning()) {
-    window.sendMessage('guide', next, { fromQueue: true, forceBuild: true });
-  } else if (next) {
-    state.nextQueue.unshift(next);
-    state.nextPrompt = next;
-    window.renderInputStack();
+  if (next) {
+    window.sendMessage('guide', next, {
+      fromQueue: true,
+      forceBuild: true,
+      deliverAsGuide: deliverDuringRun,
+      queuedRequest: nextRequest
+    });
   }
 };
 
 window.startQueueDrag = function(event, idx) {
+  var request = state.nextQueueRequests && state.nextQueueRequests[idx];
+  if (queuedRequestIsBackendManaged(request) || !queuedRequestMatchesTarget(request, currentConversationTarget())) {
+    state.queueDragIndex = -1;
+    return;
+  }
   state.queueDragIndex = idx;
   if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
   var row = event.currentTarget;
@@ -7774,10 +8261,17 @@ window.dropQueueDrag = function(event, idx) {
   event.preventDefault();
   var from = state.queueDragIndex;
   if (!state.nextQueue || from < 0 || from === idx || from >= state.nextQueue.length) return;
+  var sourceRequest = state.nextQueueRequests && state.nextQueueRequests[from];
+  var destinationRequest = state.nextQueueRequests && state.nextQueueRequests[idx];
+  if (queuedRequestIsBackendManaged(sourceRequest) || queuedRequestIsBackendManaged(destinationRequest)
+    || !queuedRequestMatchesTarget(sourceRequest, currentConversationTarget())
+    || !queuedRequestMatchesTarget(destinationRequest, currentConversationTarget())) return;
   var item = state.nextQueue.splice(from, 1)[0];
+  var requestItem = state.nextQueueRequests ? state.nextQueueRequests.splice(from, 1)[0] : null;
   state.nextQueue.splice(idx, 0, item);
+  if (state.nextQueueRequests) state.nextQueueRequests.splice(idx, 0, requestItem || null);
   state.queueDragIndex = -1;
-  state.nextPrompt = state.nextQueue[0] || '';
+  refreshNextPromptForTarget(currentConversationTarget());
   window.renderInputStack();
 };
 
@@ -7791,11 +8285,23 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   if (!window.requireWorkspace('send')) return;
   opts = opts || {};
   var effectiveInputMode = modeOverride || state.inputMode || 'guide';
-  var rawText = typeof queuedText === 'string' ? queuedText.trim() : els.prompt.value.trim();
-  var includePromptAttachments = typeof queuedText !== 'string' && !opts.fromQueue;
-  var text = includePromptAttachments ? composePromptTextForSend(rawText) : rawText;
-  var requestMessage = includePromptAttachments ? composePromptRequestForSend(rawText) : rawText;
-  if (!text) return;
+  var queuedRequestRecord = opts.queuedRequest && typeof opts.queuedRequest === 'object' ? opts.queuedRequest : null;
+  if (queuedRequestRecord && !queuedRequestMatchesTarget(queuedRequestRecord, currentConversationTarget())) return;
+  var queuedRequest = queuedRequestRecord ? {
+    text: String(queuedRequestRecord.text || ''),
+    images: Array.isArray(queuedRequestRecord.images) ? queuedRequestRecord.images.map(function(image) { return Object.assign({}, image); }) : []
+  } : null;
+  var rawText = queuedRequest ? String(queuedRequest.text || '').trim() : (typeof queuedText === 'string' ? queuedText.trim() : els.prompt.value.trim());
+  var usesPromptAttachments = !queuedRequest && typeof queuedText !== 'string' && !opts.fromQueue;
+  var text = usesPromptAttachments ? composePromptTextForSend(rawText) : rawText;
+  var requestMessage = queuedRequest || (usesPromptAttachments ? composePromptRequestForSend(rawText) : rawText);
+  var optimisticAttachments = queuedRequest
+    ? normalizeConversationImageAttachments((queuedRequest.images || []).map(function(item) { return Object.assign({}, item, { origin: 'user', mimeType: item.type || '' }); }))
+    : (usesPromptAttachments ? promptAttachmentsForConversation() : []);
+  var displayText = optimisticAttachments.length
+    ? rawText + (rawText ? '\n\n' : '') + '[' + optimisticAttachments.length + ' image attachment' + (optimisticAttachments.length === 1 ? '' : 's') + ']'
+    : text;
+  if (!text && !optimisticAttachments.length) return;
 
   var lockedConversationId = activeConversationId();
   var lockedTarget = currentConversationTarget(lockedConversationId);
@@ -7804,9 +8310,9 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   var conversationRunning = !!activeRuntime;
   markConversationTracked(lockedConversationId, state.conversationTrackMs || 300000, lockedTarget.workspaceId);
 
-  if (conversationRunning && effectiveInputMode === 'guide' && !opts.fromQueue) {
-    els.prompt.value = '';
-    if (includePromptAttachments) clearPromptAttachments();
+  if (conversationRunning && effectiveInputMode === 'guide' && (!opts.fromQueue || opts.deliverAsGuide)) {
+    if (!opts.fromQueue) els.prompt.value = '';
+    if (usesPromptAttachments) clearPromptAttachments();
     updateSubmitButtonState();
     var clientMessageId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('guide-' + Date.now() + '-' + Math.random().toString(16).slice(2));
     var envelope = {
@@ -7823,11 +8329,12 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       target: lockedTarget,
       runId: envelope.runId,
       status: 'accepted',
-      content: text,
+      content: displayText,
+      attachments: optimisticAttachments,
       model: state.model,
       createdAt: envelope.createdAt
     }, lockedTarget);
-    addMsg('user', text, 'guide', state.model, undefined, optimisticGuide);
+    addMsg('user', displayText, 'guide', state.model, undefined, optimisticGuide);
     var enqueue = api.enqueueGuide ? api.enqueueGuide(envelope) : api.sendMessage(requestMessage, lockedConversationId);
     Promise.resolve(enqueue).then(function(receipt) {
       receipt = receipt || { status: 'accepted', clientMessageId: clientMessageId, runId: envelope.runId };
@@ -7837,7 +8344,8 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         target: receipt.target || lockedTarget,
         runId: receipt.runId || envelope.runId,
         status: status,
-        content: receipt.content === undefined ? text : receipt.content,
+        content: receipt.content === undefined ? displayText : receipt.content,
+        attachments: optimisticAttachments,
         createdAt: receipt.createdAt || envelope.createdAt,
         updatedAt: receipt.updatedAt,
         reason: receipt.reason || receipt.error || ''
@@ -7845,7 +8353,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       applyAgentWorkEventToRun({
         id: 'guide-' + clientMessageId + '-' + status,
         type: 'guide_' + status,
-        content: text,
+        content: displayText,
         workspaceId: lockedTarget.workspaceId,
         conversationId: lockedTarget.conversationId,
         runId: receipt.runId || envelope.runId,
@@ -7861,7 +8369,8 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         target: lockedTarget,
         runId: envelope.runId,
         status: 'rejected',
-        content: text,
+        content: displayText,
+        attachments: optimisticAttachments,
         createdAt: envelope.createdAt,
         reason: e && e.message ? e.message : String(e)
       }, lockedTarget);
@@ -7872,10 +8381,12 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
 
   if (effectiveInputMode === 'next' && !opts.fromQueue) {
     if (!state.nextQueue) state.nextQueue = [];
-    state.nextQueue.push(text);
+    if (!state.nextQueueRequests) state.nextQueueRequests = [];
+    state.nextQueue.push(displayText);
+    state.nextQueueRequests.push(bindQueuedRequestToTarget(requestMessage, rawText, lockedTarget));
     els.prompt.value = '';
-    if (includePromptAttachments) clearPromptAttachments();
-    state.nextPrompt = text;
+    if (usesPromptAttachments) clearPromptAttachments();
+    refreshNextPromptForTarget(lockedTarget);
     state.queueCollapsed = false;
     window.renderInputStack();
     return;
@@ -7886,7 +8397,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   setConversationRuntimeState(lockedTarget, 'running', localRunId, { provisional: true });
   setWorking(true);
   if (!opts.fromQueue) els.prompt.value = '';
-  if (includePromptAttachments) clearPromptAttachments();
+  if (usesPromptAttachments) clearPromptAttachments();
   updateSubmitButtonState();
   var previousMode = state.mode;
   if (opts.forceBuild && state.mode !== 'build') {
@@ -7897,12 +8408,18 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   if (api.setMode) await api.setMode(state.mode).catch(function(){});
   if (api.setModel && state.model) await api.setModel(state.model).catch(function(){});
   if (api.setInputMode) await api.setInputMode(effectiveInputMode).catch(function(){});
-  addMsg('user', text, opts.fromQueue ? 'next-build' : state.mode, state.model);
+  if (isActiveConversationTarget(lockedTarget)) {
+    addMsg('user', displayText, opts.fromQueue ? 'next-build' : state.mode, state.model, undefined, { attachments: optimisticAttachments });
+    applyAutoRouteRatingState(null);
+    renderAutoRouteRatingControls();
+  }
   var responseMsg = null;
   try {
     var r = await api.sendMessage(requestMessage, lockedTarget);
+    if (r && r.runtimeKey) registerRuntimeKey(lockedTarget, r.runtimeKey);
     if (r && r.runId) setConversationRuntimeState(lockedTarget, r.status || 'running', r.runId, { provisional: false, generation: r.generation || 0, runtimeKey: r.runtimeKey || '' });
     var stillActive = isActiveConversationTarget(lockedTarget);
+    if (stillActive) applyAutoRouteRatingState(r);
     var lockedUi = conversationWorkUiState(lockedConversationId, lockedTarget.workspaceId);
     if (stillActive) {
       responseMsg = lockedUi.activeWorkflowMsg;
@@ -7953,7 +8470,10 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       state.subagents = r.subagents;
       if (state.rightTab === 'subagent') window.renderSubagentList();
     }
-    if (stillActive && r && r.queued) state.backendQueue = r.queued;
+    if (r && r.queued) {
+      var responseQueue = setBackendQueueForTarget(r.queued, lockedTarget);
+      if (stillActive) state.backendQueue = responseQueue;
+    }
     if (r && r.options) {
       if (stillActive) {
         state.pendingOptions = r.options || [];
@@ -7969,6 +8489,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   }
   if (api.getState) {
     api.getState(lockedTarget).then(function(s) {
+      if (s && s.runtimeKey) registerRuntimeKey(lockedTarget, s.runtimeKey);
       var stillActiveAfterRefresh = isActiveConversationTarget(lockedTarget);
       if (stillActiveAfterRefresh && s && s.contextCompression !== undefined) {
         state.contextCompression = s.contextCompression;
@@ -7987,12 +8508,13 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       }
       if (stillActiveAfterRefresh && s && s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
       if (stillActiveAfterRefresh && s && Array.isArray(s.workRuns)) {
+        applyAutoRouteRatingState(s);
         syncWorkRunsSnapshot(s.workRuns, lockedTarget);
         renderChatMessages(s.chatMessages || []);
       }
       if (stillActiveAfterRefresh && s && s.queued) {
-        state.backendQueue = s.queued;
-        if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue);
+        state.backendQueue = setBackendQueueForTarget(s.queued, lockedTarget);
+        if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue, lockedTarget);
       }
       if (s && s.conversations) {
         applyBackendConversations(s.conversations || [], lockedConversationId, lockedTarget.workspaceId);
@@ -8023,11 +8545,32 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
 window.drainNextQueue = function() {
   if (isCurrentConversationRunning()) return;
   if (!state.nextQueue || !state.nextQueue.length) return;
-  var next = state.nextQueue.shift();
-  state.nextPrompt = state.nextQueue[0] || '';
-  window.renderInputStack();
+  var target = currentConversationTarget();
+  var targetKey = runtimeKeyFor(target.workspaceId, target.conversationId);
+  if (!state.nextQueueDrainsByTarget) state.nextQueueDrainsByTarget = {};
+  if (state.nextQueueDrainsByTarget[targetKey]) return;
+  var indexes = queueIndexesForTarget(target).filter(function(index) {
+    return !queuedRequestIsBackendManaged(state.nextQueueRequests && state.nextQueueRequests[index]);
+  });
+  if (!indexes.length) return;
+  var index = indexes[0];
+  var nextRequest = state.nextQueueRequests ? state.nextQueueRequests[index] : null;
+  if (!queuedRequestMatchesTarget(nextRequest, target)) return;
+  var drainToken = { request: nextRequest, target: target };
+  state.nextQueueDrainsByTarget[targetKey] = drainToken;
   setTimeout(function() {
-    window.sendMessage('guide', next, { fromQueue: true, forceBuild: true });
+    if (state.nextQueueDrainsByTarget[targetKey] !== drainToken) return;
+    delete state.nextQueueDrainsByTarget[targetKey];
+    var activeTarget = currentConversationTarget();
+    if (isCurrentConversationRunning()
+      || runtimeKeyFor(activeTarget.workspaceId, activeTarget.conversationId) !== targetKey) return;
+    var currentIndex = state.nextQueueRequests ? state.nextQueueRequests.indexOf(nextRequest) : -1;
+    if (currentIndex < 0 || queuedRequestIsBackendManaged(nextRequest) || !queuedRequestMatchesTarget(nextRequest, activeTarget)) return;
+    var next = state.nextQueue.splice(currentIndex, 1)[0];
+    state.nextQueueRequests.splice(currentIndex, 1);
+    refreshNextPromptForTarget(activeTarget);
+    window.renderInputStack();
+    window.sendMessage('guide', next, { fromQueue: true, forceBuild: true, queuedRequest: nextRequest });
   }, 80);
 };
 
@@ -8249,6 +8792,7 @@ window.toggleRight = function() {
 window.toggleBottom = function() {
   state.bottomCollapsed = !state.bottomCollapsed;
   els.bottom.classList.toggle('open', !state.bottomCollapsed);
+  if (!state.bottomCollapsed && window.ensureTerminalStarted) window.ensureTerminalStarted();
   scheduleLayoutStateSave();
 };
 
@@ -8329,7 +8873,12 @@ window.switchRightTab = function(tab) {
   if (tab === 'plan') window.refreshConversationPlan();
   if (tab === 'subagent') window.renderSubagentList();
   if (tab === 'browser') {
-    window.initBrowserPanel();
+    cancelBrowserGuestIdleDestroy();
+    window.ensureBrowserPanel({ activate: true }).catch(function(error) {
+      console.error('[Browser] guest initialization failed:', error && error.message ? error.message : String(error));
+    });
+  } else {
+    scheduleBrowserGuestIdleDestroy();
   }
   if (tab === 'status') window.refreshRightStatus();
   if (tab === 'archives') window.refreshRightArchives();
@@ -8529,6 +9078,8 @@ window.refreshRightStatus = function(options) {
     return Promise.resolve(null);
   }
   return api.getState(currentConversationTarget()).then(function(s) {
+    applyAutoRouteRatingState(s);
+    renderAutoRouteRatingControls();
     if (s && s.mode) state.mode = s.mode;
     if (s && s.model !== undefined) state.model = s.model;
     if (s && s.modelLabel) state.modelLabel = s.modelLabel;
@@ -8710,16 +9261,39 @@ window.getActiveTabId = function() {
   return active ? parseInt(active.getAttribute('data-tab-id')) : -1;
 };
 
+window.ensureTerminalStarted = function() {
+  var activePane = window.getActiveTerminalPane();
+  var activeSession = activePane && activePane.getAttribute('data-session');
+  var takeoverSession = activePane && activePane.getAttribute('data-takeover-session');
+  if (activeSession || takeoverSession) return Promise.resolve({ sessionId: activeSession || '', takeoverSession: takeoverSession || '' });
+  if (state._terminalStartPromise) return state._terminalStartPromise;
+  var sourceInput = activePane && activePane.querySelector('.terminal-input');
+  var expectedTabId = _terminalCounter + 1;
+  state._terminalStartPromise = window.spawnTerminal(normalizeTerminalShell(state._terminalShell)).then(function(resp) {
+    var targetPane = document.getElementById('terminal-pane-' + expectedTabId);
+    var targetInput = targetPane && targetPane.querySelector('.terminal-input');
+    if (resp && sourceInput && targetInput && sourceInput !== targetInput && sourceInput.value && !targetInput.value) {
+      targetInput.value = sourceInput.value;
+      sourceInput.value = '';
+    }
+    return resp;
+  }).finally(function() {
+    state._terminalStartPromise = null;
+  });
+  return state._terminalStartPromise;
+};
+
 window.terminalSend = function() {
   var pane = window.getActiveTerminalPane();
   if (!pane) return;
   var input = pane.querySelector('.terminal-input');
   var output = pane.querySelector('.terminal-output');
+  if (!input) return;
   var cmd = input.value;
   if (!cmd) return;
-  input.value = '';
   var takeoverSession = pane.getAttribute('data-takeover-session');
   if (takeoverSession) {
+    input.value = '';
     if (!api.terminalTakeoverWrite) {
       if (output) output.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('terminal.notConnected')) + ']</span>';
       return;
@@ -8734,9 +9308,23 @@ window.terminalSend = function() {
   }
   var sessionId = pane.getAttribute('data-session');
   if (!sessionId) {
-    if (output) output.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('terminal.notConnected')) + ']</span>';
-    return;
+    input.disabled = true;
+    return window.ensureTerminalStarted().then(function(resp) {
+      input.disabled = false;
+      if (!resp || !resp.sessionId) throw new Error(t('terminal.notConnected'));
+      input.value = '';
+      var startedPane = document.querySelector('.terminal-pane[data-session="' + resp.sessionId + '"]');
+      var startedInput = startedPane && startedPane.querySelector('.terminal-input');
+      if (startedInput && startedInput.value === cmd) startedInput.value = '';
+      return api.terminalWrite(resp.sessionId, cmd + '\r\n');
+    }).catch(function(err) {
+      input.disabled = false;
+      var currentPane = window.getActiveTerminalPane();
+      var currentOutput = (currentPane && currentPane.querySelector('.terminal-output')) || output;
+      if (currentOutput) currentOutput.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('common.error')) + '] ' + esc(err.message || String(err)) + '</span>';
+    });
   }
+  input.value = '';
   api.terminalWrite(sessionId, cmd + '\r\n').catch(function(err) {
     if (output) output.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('common.error')) + '] ' + esc(err.message) + '</span>';
   });
@@ -8842,7 +9430,7 @@ window.addTerminalTab = function(shellId, options) {
   setTimeout(function() {
     var inp = pane.querySelector('.terminal-input');
     if (inp) inp.focus();
-  }, 200);
+  }, 0);
   return terminalReadyPromise;
 };
 
@@ -9281,7 +9869,9 @@ window.openSettings = function(tab) {
 };
 
 function renderGeneralSettings() {
-  var glassVal = state.glassLevel;
+  var glassPresentation = glassPresentationForOpacity(state.glassLevel);
+  var glassVal = glassPresentation.opacityPercent;
+  var glassDescription = glassDescriptionText(glassPresentation);
   var themeOpts = [
     {v:'dark', l:t('settings.dark')},
     {v:'light', l:t('settings.light')},
@@ -9292,6 +9882,10 @@ function renderGeneralSettings() {
     themeHtml += '<option value="' + themeOpts[i].v + '"' + (state.theme === themeOpts[i].v ? ' selected' : '') + '>' + themeOpts[i].l + '</option>';
   }
   var gradColors = state.configGradientColors || ['#ff6b6b','#ffd93d','#6bcb77','#4d96ff'];
+  var backgroundColor = /^#[0-9a-f]{6}$/i.test(String(state.backgroundColor || ''))
+    ? state.backgroundColor
+    : (state.theme === 'light' ? '#F0F2F8' : '#0A0A1A');
+  var fontFamily = String(state.fontFamily || '');
   var wslOptions = (state.wslDistros || []).map(function(name) { return '<option value="' + escAttr(name) + '"' + ((state.agentBackend && state.agentBackend.distro) === name ? ' selected' : '') + '>' + esc(name) + '</option>'; }).join('');
   var wslHtml = state.platform === 'win32' ? '<div class="setting-row">' +
     '<span class="setting-label">' + esc(t('settings.runInWsl')) + '</span>' +
@@ -9314,12 +9908,26 @@ function renderGeneralSettings() {
     '</div>' +
     '<div class="setting-row">' +
     '<span class="setting-label">' + esc(t('settings.theme')) + '</span>' +
-    '<div class="setting-control"><select onchange="window.setTheme(this.value)">' + themeHtml + '</select></div>' +
+    '<div class="setting-control"><select aria-label="' + escAttr(t('settings.theme')) + '" onchange="window.setTheme(this.value)">' + themeHtml + '</select></div>' +
     '</div>' +
     '<div class="setting-row">' +
-    '<span class="setting-label">' + esc(t('settings.glass')) + '</span>' +
-    '<div class="setting-control"><input type="range" min="0" max="100" value="' + glassVal + '" oninput="window.setGlassLevel(this.value)">' +
-    '<div class="setting-desc" id="glass-desc">' + esc(t('settings.opacity')) + ': ' + glassVal + '%</div></div>' +
+    '<label class="setting-label" for="settings-background-color">' + esc(t('settings.backgroundColor')) + '</label>' +
+    '<div class="setting-control"><div style="display:flex;align-items:center;gap:7px;">' +
+    '<input id="settings-background-color" type="color" value="' + escAttr(backgroundColor) + '" aria-describedby="settings-background-color-desc" oninput="window.previewBackgroundColor(this.value)" onchange="window.setBackgroundColor(this.value)">' +
+    '<button type="button" class="sec-btn" onclick="window.resetBackgroundColor()">' + esc(t('settings.resetAppearance')) + '</button></div>' +
+    '<div class="setting-desc" id="settings-background-color-desc">' + esc(t('settings.backgroundColorDesc')) + '</div></div>' +
+    '</div>' +
+    '<div class="setting-row">' +
+    '<label class="setting-label" for="settings-font-family">' + esc(t('settings.fontFamily')) + '</label>' +
+    '<div class="setting-control"><div style="display:flex;align-items:center;gap:7px;">' +
+    '<input id="settings-font-family" type="text" maxlength="80" value="' + escAttr(fontFamily) + '" placeholder="' + escAttr(t('settings.fontPlaceholder')) + '" aria-describedby="settings-font-family-desc" oninput="window.previewFontFamily(this.value)" onchange="window.setFontFamily(this.value)">' +
+    '<button type="button" class="sec-btn" onclick="window.resetFontFamily()">' + esc(t('settings.resetAppearance')) + '</button></div>' +
+    '<div class="setting-desc" id="settings-font-family-desc">' + esc(t('settings.fontFamilyDesc')) + '</div></div>' +
+    '</div>' +
+    '<div class="setting-row">' +
+    '<label class="setting-label" for="settings-glass-opacity">' + esc(t('settings.glass')) + '</label>' +
+    '<div class="setting-control"><input id="settings-glass-opacity" type="range" min="0" max="100" step="1" value="' + glassVal + '" aria-describedby="glass-desc" aria-valuetext="' + escAttr(glassDescription) + '" oninput="window.previewGlassOpacity(this.value)" onchange="window.commitGlassOpacity(this.value)">' +
+    '<div class="setting-desc" id="glass-desc" aria-live="polite">' + esc(glassDescription) + '</div></div>' +
     '</div>' +
     '<div class="setting-row">' +
     '<span class="setting-label">' + esc(t('settings.gradient')) + '</span>' +
@@ -9430,10 +10038,11 @@ function renderModelSettings() {
     '<option value="off"' + (state.fallbackOnUnavailable === 'off' ? ' selected' : '') + '>' + esc(t('common.off')) + '</option>' +
     '<option value="on"' + (state.fallbackOnUnavailable === 'on' ? ' selected' : '') + '>' + esc(t('common.on')) + '</option></select></div></div>' +
     '<div class="setting-row"><span class="setting-label">' + esc(t('model.preference')) + '</span><div class="setting-control"><select onchange="window.setSwitchTendency(this.value)">' +
-    '<option value="default"' + (state.switchTendency === 'default' ? ' selected' : '') + '>' + esc(t('settings.default')) + '</option>' +
-    '<option value="cheap_save"' + (state.switchTendency === 'cheap_save' ? ' selected' : '') + '>' + esc(t('model.costSaving')) + '</option>' +
-    '<option value="performance"' + (state.switchTendency === 'performance' ? ' selected' : '') + '>' + esc(t('model.performance')) + '</option>' +
-    '<option value="speed"' + (state.switchTendency === 'speed' ? ' selected' : '') + '>' + esc(t('settings.speed')) + '</option></select></div></div>' +
+    '<option value="quality"' + (state.switchTendency === 'quality' ? ' selected' : '') + '>' + esc(t('model.qualityPolicy')) + '</option>' +
+    '<option value="balanced"' + (state.switchTendency === 'balanced' ? ' selected' : '') + '>' + esc(t('model.balancedPolicy')) + '</option>' +
+    '<option value="cost"' + (state.switchTendency === 'cost' ? ' selected' : '') + '>' + esc(t('model.costPolicy')) + '</option>' +
+    '<option value="speed"' + (state.switchTendency === 'speed' ? ' selected' : '') + '>' + esc(t('model.speedPolicy')) + '</option></select></div></div>' +
+    '<div class="setting-row"><span class="setting-label">' + esc(t('model.learnedPreference')) + '</span><div class="setting-control"><button class="settings-action-btn" onclick="window.clearLearnedAutoPreferences()">' + esc(t('model.clearLearnedPreference')) + '</button></div></div>' +
     '</div>';
 }
 
@@ -9600,36 +10209,171 @@ window.setLanguage = function(value) {
   rerenderActiveSubWindowForLanguage();
 };
 
-window.setTheme = function(t) {
-  state.theme = t;
-  if (t === 'system') {
+function normalizeUiThemeClient(value) {
+  value = String(value || '').trim().toLowerCase();
+  return value === 'light' || value === 'system' ? value : 'dark';
+}
+
+function normalizeUiBackgroundColorClient(value) {
+  value = String(value || '').trim();
+  return /^#[0-9a-f]{6}$/i.test(value) ? value.toUpperCase() : '';
+}
+
+function normalizeUiFontFamilyClient(value) {
+  value = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!value) return '';
+  if (value.length > 80 || /[\u0000-\u001f\u007f"'\\;,{}()<>\[\]]/.test(value) || /\burl\s*\(/i.test(value)) return '';
+  return value;
+}
+
+function applyUiAppearance() {
+  state.theme = normalizeUiThemeClient(state.theme);
+  var root = document.documentElement;
+  if (state.theme === 'system') {
     var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    document.documentElement.removeAttribute('data-theme');
-    if (!prefersDark) document.documentElement.setAttribute('data-theme', 'light');
-  } else if (t === 'light') {
-    document.documentElement.setAttribute('data-theme', 'light');
+    root.removeAttribute('data-theme');
+    if (!prefersDark) root.setAttribute('data-theme', 'light');
+  } else if (state.theme === 'light') {
+    root.setAttribute('data-theme', 'light');
   } else {
-    document.documentElement.removeAttribute('data-theme');
+    root.removeAttribute('data-theme');
   }
+  state.backgroundColor = normalizeUiBackgroundColorClient(state.backgroundColor);
+  if (state.backgroundColor) root.style.setProperty('--app-bg', state.backgroundColor);
+  else root.style.removeProperty('--app-bg');
+  state.fontFamily = normalizeUiFontFamilyClient(state.fontFamily);
+  if (state.fontFamily) {
+    var trustedFontStack = '"' + state.fontFamily + '", -apple-system, "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif';
+    root.style.setProperty('--font', trustedFontStack);
+    root.style.setProperty('--font-ui', trustedFontStack);
+  } else {
+    root.style.removeProperty('--font');
+    root.style.removeProperty('--font-ui');
+  }
+  applyGlassPresentation(glassPresentationForOpacity(state.glassLevel));
   window.refreshTitlebarThemeIcon();
+}
+
+window.setTheme = function(value) {
+  state.theme = normalizeUiThemeClient(value);
+  applyUiAppearance();
+  if (api.saveConfig) api.saveConfig({ theme: state.theme }).catch(function(){});
 };
 
-window.setGlassLevel = function(v) {
-  state.glassLevel = parseInt(v);
-  var alpha = state.glassLevel / 100;
-  var blurPx = Math.round(state.glassLevel * 0.2);
+window.previewBackgroundColor = function(value) {
+  var normalized = normalizeUiBackgroundColorClient(value);
+  if (!normalized) return;
+  state.backgroundColor = normalized;
+  applyUiAppearance();
+};
+
+window.setBackgroundColor = function(value) {
+  var normalized = normalizeUiBackgroundColorClient(value);
+  if (!normalized && String(value || '').trim()) {
+    showUiNotice(t('settings.invalidBackground'), 'error', 'appearance-background');
+    return;
+  }
+  state.backgroundColor = normalized;
+  applyUiAppearance();
+  if (api.saveConfig) api.saveConfig({ backgroundColor: normalized }).catch(function(){});
+};
+
+window.resetBackgroundColor = function() {
+  state.backgroundColor = '';
+  applyUiAppearance();
+  if (api.saveConfig) api.saveConfig({ backgroundColor: '' }).catch(function(){});
+  window.openSettings('general');
+};
+
+window.previewFontFamily = function(value) {
+  var normalized = normalizeUiFontFamilyClient(value);
+  if (!normalized && String(value || '').trim()) return;
+  state.fontFamily = normalized;
+  applyUiAppearance();
+};
+
+window.setFontFamily = function(value) {
+  var normalized = normalizeUiFontFamilyClient(value);
+  if (!normalized && String(value || '').trim()) {
+    showUiNotice(t('settings.invalidFont'), 'error', 'appearance-font');
+    var input = document.getElementById('settings-font-family');
+    if (input) input.value = state.fontFamily || '';
+    return;
+  }
+  state.fontFamily = normalized;
+  applyUiAppearance();
+  if (api.saveConfig) api.saveConfig({ fontFamily: normalized }).catch(function(){});
+};
+
+window.resetFontFamily = function() {
+  state.fontFamily = '';
+  applyUiAppearance();
+  if (api.saveConfig) api.saveConfig({ fontFamily: '' }).catch(function(){});
+  window.openSettings('general');
+};
+
+function glassPresentationForOpacity(value) {
+  var opacityPercent = Number(value);
+  if (!Number.isFinite(opacityPercent)) opacityPercent = 85;
+  opacityPercent = Math.min(100, Math.max(0, opacityPercent));
+  var alpha = opacityPercent / 100;
+  var transparencyPercent = 100 - opacityPercent;
+  var glassWidth = 20 * transparencyPercent / 100;
+  var rounded = function(number) { return Math.round(number * 10000) / 10000; };
+  return {
+    opacityPercent: rounded(opacityPercent),
+    transparencyPercent: rounded(transparencyPercent),
+    glassWidth: rounded(glassWidth),
+    blur1: rounded(0.4 * glassWidth),
+    blur2: rounded(0.8 * glassWidth),
+    blur3: rounded(glassWidth),
+    alpha1: rounded(0.75 * alpha),
+    alpha2: rounded(0.80 * alpha),
+    alpha3: rounded(0.85 * alpha),
+    alpha: rounded(alpha)
+  };
+}
+
+function glassNumberText(value) {
+  return String(Math.round(Number(value) * 100) / 100);
+}
+
+function glassDescriptionText(presentation) {
+  return t('settings.opacity') + ': ' + glassNumberText(presentation.opacityPercent) + '% · ' +
+    t('settings.transparency') + ': ' + glassNumberText(presentation.transparencyPercent) + '% · ' +
+    t('settings.glassWidth') + ': ' + glassNumberText(presentation.glassWidth) + 'px (' +
+    t('settings.glassLevels') + ' ' + glassNumberText(presentation.blur1) + '/' +
+    glassNumberText(presentation.blur2) + '/' + glassNumberText(presentation.blur3) + 'px)';
+}
+
+function applyGlassPresentation(presentation) {
+  state.glassLevel = presentation.opacityPercent;
   var root = document.documentElement;
-  var bg1 = 'rgba(10,10,26,' + (alpha * 0.75).toFixed(2) + ')';
-  var bg2 = 'rgba(17,17,42,' + (alpha * 0.8).toFixed(2) + ')';
-  var bg3 = 'rgba(26,26,56,' + (alpha * 0.85).toFixed(2) + ')';
-  root.style.setProperty('--glass-bg-1', bg1);
-  root.style.setProperty('--glass-bg-2', bg2);
-  root.style.setProperty('--glass-bg-3', bg3);
-  root.style.setProperty('--glass-blur-1', blurPx + 'px');
-  root.style.setProperty('--glass-blur-2', (blurPx * 0.8) + 'px');
-  root.style.setProperty('--glass-blur-3', (blurPx * 0.7) + 'px');
+  var defaultPresentation = presentation.opacityPercent === 85 && !root.style.getPropertyValue('--glass-alpha');
+  if (!defaultPresentation) {
+    root.style.setProperty('--glass-alpha', String(presentation.alpha));
+    root.style.setProperty('--glass-alpha-1', String(presentation.alpha1));
+    root.style.setProperty('--glass-alpha-2', String(presentation.alpha2));
+    root.style.setProperty('--glass-alpha-3', String(presentation.alpha3));
+    root.style.setProperty('--glass-blur-1', presentation.blur1 + 'px');
+    root.style.setProperty('--glass-blur-2', presentation.blur2 + 'px');
+    root.style.setProperty('--glass-blur-3', presentation.blur3 + 'px');
+  }
+  var description = glassDescriptionText(presentation);
   var desc = document.getElementById('glass-desc');
-  if (desc) desc.textContent = t('settings.glass') + ': ' + blurPx + 'px | ' + t('settings.opacity') + ': ' + Math.round(alpha * 100) + '%';
+  if (desc) desc.textContent = description;
+  var slider = document.getElementById('settings-glass-opacity');
+  if (slider) slider.setAttribute('aria-valuetext', description);
+  return presentation;
+}
+
+window.previewGlassOpacity = function(value) {
+  return applyGlassPresentation(glassPresentationForOpacity(value));
+};
+
+window.commitGlassOpacity = function(value) {
+  var presentation = window.previewGlassOpacity(value);
+  if (api.saveConfig) api.saveConfig({ glassAlpha: presentation.alpha }).catch(function(){});
 };
 
 window.setGradientColor = function(idx, color) {
@@ -9678,14 +10422,14 @@ window.refreshTitlebarThemeIcon = function() {
   var icon = document.getElementById('title-app-icon');
   if (!icon) return;
   var useDarkTheme = state.theme === 'system' ? systemColorScheme.matches : state.theme !== 'light';
-  icon.src = useDarkTheme ? '../../assets/app-icon-dark.png' : '../../assets/app-icon-light.png';
+  icon.src = useDarkTheme ? '../assets/app-icon-dark-64.png' : '../assets/app-icon-light-64.png';
 };
 window.refreshTitlebarSystemIcon = window.refreshTitlebarThemeIcon;
 if (systemColorScheme.addEventListener) systemColorScheme.addEventListener('change', function() {
-  if (state.theme === 'system') window.refreshTitlebarThemeIcon();
+  if (state.theme === 'system') applyUiAppearance();
 });
 else if (systemColorScheme.addListener) systemColorScheme.addListener(function() {
-  if (state.theme === 'system') window.refreshTitlebarThemeIcon();
+  if (state.theme === 'system') applyUiAppearance();
 });
 window.refreshTitlebarThemeIcon();
 
@@ -9722,8 +10466,12 @@ window.setFallbackOnUnavailable = function(v) {
 };
 
 window.setSwitchTendency = function(v) {
-  state.switchTendency = v;
-  api.saveConfig({ switchTendency: v });
+  state.switchTendency = ['quality', 'balanced', 'cost', 'speed'].indexOf(v) >= 0 ? v : 'balanced';
+  api.saveConfig({ switchTendency: state.switchTendency });
+};
+
+window.clearLearnedAutoPreferences = function() {
+  api.saveConfig({ clearLearnedAutoPreferences: true }).catch(function(){});
 };
 
 window.setNativeToolEnabled = function(name, enabled) {
@@ -9856,8 +10604,6 @@ window.saveNewModel = function() {
       name: name,
       display: name,
       description: descEl ? descEl.value : '',
-      cost_per_1k_input: 0.001,
-      cost_per_1k_output: 0.004,
       max_tokens: ctxEl ? parseInt(ctxEl.value || '4096') : 4096,
       vision: !!(visionEl && visionEl.checked),
       thinking: !!(thinkingEl && thinkingEl.checked),
@@ -10054,7 +10800,7 @@ window.showModelEvaluationResults = function(results) {
   } else {
     for (var i = 0; i < results.length; i++) {
       var r = results[i];
-      var cls = r.status === 'available' ? 'model-eval-ok' : 'model-eval-bad';
+      var cls = r.status === 'verified' || r.status === 'degraded' || r.status === 'available' ? 'model-eval-ok' : 'model-eval-bad';
       html += '<div class="model-eval-row">' +
         '<div class="model-eval-title"><span>' + esc(r.name || r.model || '') + '</span><span class="' + cls + '">' + esc(r.status || '') + '</span></div>' +
         '<div style="margin-top:4px;color:var(--text-dim);">' + esc(t('model.latency')) + ' ' + esc(r.latency) + 's | ' + esc(t('model.textOutput')) + ' ' + (r.text_output ? esc(t('model.ok')) : esc(t('model.no'))) + ' | ' + esc(t('model.visionInput')) + ' ' + (r.vision_input ? esc(t('model.yes')) : esc(t('model.no'))) + ' | ' + esc(t('model.imageOutput')) + ' ' + (r.image_output ? esc(t('model.yes')) : esc(t('model.no'))) + '</div>' +
@@ -10342,6 +11088,13 @@ window.createAutomation = async function() {
 // === Flow Editor ===
 window.showFlowEditor = function() {
   state.activeSubWindowView = { name: 'flow' };
+  if (!state._flowsLoaded) {
+    window.openSubWin(t('flow.title'), '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:20px;">' + esc(t('common.loading')) + '</div>');
+    return window.ensureFlowsLoaded().then(function() {
+      if (state.activeSubWindowView && state.activeSubWindowView.name === 'flow') window.showFlowEditor();
+      return state.flowWorks;
+    });
+  }
   var html = '<div style="margin-bottom:10px;font-size:11px;color:var(--text-dim);">' + esc(t('flow.desc')) + '</div>';
   html += '<div class="flow-list" id="flow-list-container">';
   if (state.flowWorks.length === 0) {
@@ -11248,10 +12001,116 @@ window.openSubagentHistory = function(id) {
 };
 
 // === Browser ===
+var NEWMARK_BROWSER_PARTITION = 'persist:newmark-browser';
+var NEWMARK_BROWSER_MIN_CREATE_DELAY_MS = 5000;
+var NEWMARK_BROWSER_IDLE_DESTROY_MS = 60000;
+var browserGuestCreatePromise = null;
+var browserGuestIdleTimer = null;
+var browserRetainedUrl = 'about:blank';
+var browserGuestCreateCount = 0;
+var browserGuestFirstCreatedAtMs = null;
+
+window.browserGuestLifecycleSnapshot = function() {
+  return {
+    createCount: browserGuestCreateCount,
+    firstCreatedAtMs: browserGuestFirstCreatedAtMs,
+    present: !!currentBrowserGuest(),
+    minimumCreateDelayMs: NEWMARK_BROWSER_MIN_CREATE_DELAY_MS,
+    idleDestroyMs: NEWMARK_BROWSER_IDLE_DESTROY_MS
+  };
+};
+
 function browserUrlsEquivalent(left, right) {
   var a = String(left || '').trim().replace(/\/+$/, '');
   var b = String(right || '').trim().replace(/\/+$/, '');
   return !!a && a === b;
+}
+
+function currentBrowserGuest() {
+  var view = document.getElementById('browser-webview');
+  return view && view.isConnected ? view : null;
+}
+
+function rememberBrowserUrl(url, force) {
+  url = String(url || '').trim();
+  if (!force && url === 'about:blank' && browserRetainedUrl !== 'about:blank') return;
+  if (url) browserRetainedUrl = url;
+}
+
+function waitForBrowserCreationFloor() {
+  var remaining = NEWMARK_BROWSER_MIN_CREATE_DELAY_MS - (Date.now() - newmarkRendererStartedAt);
+  if (remaining <= 0) return Promise.resolve();
+  return new Promise(function(resolve) { setTimeout(resolve, remaining); });
+}
+
+function createBrowserGuestElement() {
+  var existing = currentBrowserGuest();
+  if (existing) return existing;
+  var frame = els['browser-frame'] || document.getElementById('browser-frame');
+  if (!frame) throw new Error('Built-in Browser frame is unavailable');
+  var placeholder = document.getElementById('browser-guest-placeholder');
+  if (placeholder) placeholder.remove();
+  var view = document.createElement('webview');
+  browserGuestCreateCount += 1;
+  if (browserGuestFirstCreatedAtMs === null) browserGuestFirstCreatedAtMs = Date.now() - newmarkRendererStartedAt;
+  view.id = 'browser-webview';
+  view.setAttribute('partition', NEWMARK_BROWSER_PARTITION);
+  frame.appendChild(view);
+  els['browser-webview'] = view;
+  return view;
+}
+
+function restoreBrowserPlaceholder() {
+  var frame = els['browser-frame'] || document.getElementById('browser-frame');
+  if (!frame || document.getElementById('browser-guest-placeholder')) return;
+  var placeholder = document.createElement('div');
+  placeholder.className = 'browser-guest-placeholder';
+  placeholder.id = 'browser-guest-placeholder';
+  placeholder.textContent = 'Browser loads on first use';
+  frame.appendChild(placeholder);
+}
+
+function cancelBrowserGuestIdleDestroy() {
+  if (browserGuestIdleTimer) clearTimeout(browserGuestIdleTimer);
+  browserGuestIdleTimer = null;
+}
+
+function destroyIdleBrowserGuest() {
+  browserGuestIdleTimer = null;
+  if (state.rightTab === 'browser') return;
+  var view = currentBrowserGuest();
+  if (!view) return;
+  try { rememberBrowserUrl(view.getURL ? view.getURL() : ''); } catch {}
+  if (view.parentNode) view.parentNode.removeChild(view);
+  if (els['browser-webview'] === view) els['browser-webview'] = null;
+  browserGuestCreatePromise = null;
+  restoreBrowserPlaceholder();
+}
+
+function scheduleBrowserGuestIdleDestroy() {
+  cancelBrowserGuestIdleDestroy();
+  if (state.rightTab === 'browser' || (!currentBrowserGuest() && !browserGuestCreatePromise)) return;
+  browserGuestIdleTimer = setTimeout(destroyIdleBrowserGuest, NEWMARK_BROWSER_IDLE_DESTROY_MS);
+}
+
+function navigateBrowserView(view, url) {
+  if (!view) return;
+  view._newmarkPendingUrl = url;
+  if (view._newmarkDomReady && view.loadURL) {
+    try {
+      var navigation = view.loadURL(url);
+      if (navigation && navigation.catch) navigation.catch(function() {
+        if (String(view._newmarkPendingUrl || '') !== url) return;
+        var currentUrl = '';
+        try { currentUrl = view.getURL ? view.getURL() : ''; } catch {}
+        if (!browserUrlsEquivalent(currentUrl, url)) view.setAttribute('src', url);
+      });
+    } catch {
+      view.setAttribute('src', url);
+    }
+  } else {
+    view.setAttribute('src', url);
+  }
 }
 
 window.navigateBrowser = function(url) {
@@ -11260,37 +12119,19 @@ window.navigateBrowser = function(url) {
     url = 'https://' + url;
   }
   if (state.browserPreviewToken && url !== state.browserPreviewUrl) window.revokeBrowserPreviewCapability();
+  rememberBrowserUrl(url, true);
   var input = els['browser-url'];
   if (input) input.value = url;
-  var view = els['browser-webview'] || document.getElementById('browser-webview');
-  if (view) {
-    // Keep the requested URL pending until a navigation event confirms it.
-    // loadURL can be asynchronously aborted while the first webview guest is
-    // attaching; clearing this value before commit loses that navigation.
-    view._newmarkPendingUrl = url;
-    if (view._newmarkDomReady && view.loadURL) {
-      try {
-        var navigation = view.loadURL(url);
-        if (navigation && navigation.catch) navigation.catch(function() {
-          if (String(view._newmarkPendingUrl || '') !== url) return;
-          var currentUrl = '';
-          try { currentUrl = view.getURL ? view.getURL() : ''; } catch {}
-          if (!browserUrlsEquivalent(currentUrl, url)) view.setAttribute('src', url);
-        });
-      } catch {
-        view.setAttribute('src', url);
-      }
-    } else {
-      // A webview can ignore a rapid src replacement while its first guest is
-      // still being attached. Keep only the latest requested URL and replay it
-      // once at the first safe dom-ready boundary.
-      view.setAttribute('src', url);
-    }
-  }
+  cancelBrowserGuestIdleDestroy();
+  return window.ensureBrowserPanel({ activate: false }).then(function(view) {
+    navigateBrowserView(view, url);
+    if (state.rightTab !== 'browser') scheduleBrowserGuestIdleDestroy();
+    return view;
+  });
 };
 
 window.browserBack = function() {
-  var view = els['browser-webview'] || document.getElementById('browser-webview');
+  var view = currentBrowserGuest();
   if (view && view.canGoBack && view.canGoBack()) {
     window.revokeBrowserPreviewCapability();
     view.goBack();
@@ -11298,7 +12139,7 @@ window.browserBack = function() {
 };
 
 window.browserForward = function() {
-  var view = els['browser-webview'] || document.getElementById('browser-webview');
+  var view = currentBrowserGuest();
   if (view && view.canGoForward && view.canGoForward()) {
     window.revokeBrowserPreviewCapability();
     view.goForward();
@@ -11306,16 +12147,12 @@ window.browserForward = function() {
 };
 
 window.browserReload = function() {
-  var view = els['browser-webview'] || document.getElementById('browser-webview');
+  var view = currentBrowserGuest();
   if (view && view.reload) view.reload();
 };
 
-window.prewarmBrowserPanel = function(options) {
-  options = options || {};
-  var view = els['browser-webview'] || document.getElementById('browser-webview');
-  if (!view) return Promise.reject(new Error('Built-in Browser view is unavailable'));
+function initializeBrowserGuest(view) {
   if (!view._newmarkReadyPromise) {
-    view._newmarkReady = true;
     view._newmarkDomReady = false;
     view._newmarkReadySettled = false;
     view._newmarkReadyPromise = new Promise(function(resolve, reject) {
@@ -11330,6 +12167,8 @@ window.prewarmBrowserPanel = function(options) {
         currentUrl = view.getURL ? view.getURL() : '';
         if (input && currentUrl && currentUrl !== 'about:blank') input.value = currentUrl;
       } catch {}
+      rememberBrowserUrl(currentUrl);
+      if (view._newmarkReadySettled) return;
       var registration = Promise.resolve({ accepted: true });
       try {
         if (!api.browserRegisterGuest || !view.getWebContentsId) throw new Error('Built-in Browser registration API is unavailable');
@@ -11339,7 +12178,13 @@ window.prewarmBrowserPanel = function(options) {
       }
       registration.then(function(result) {
         if (!result || result.accepted !== true) throw new Error('Main process rejected the built-in Browser guest');
+        var guestId = view.getWebContentsId ? view.getWebContentsId() : 0;
+        if (!view.isConnected || guestId <= 0) throw new Error('Built-in Browser guest detached before registration settled');
+        var readyUrl = '';
+        try { readyUrl = view.getURL ? view.getURL() : ''; } catch {}
         if (!view._newmarkReadySettled) {
+          view.dataset.newmarkBrowserReady = 'true';
+          view.dataset.newmarkBrowserReadyUrl = readyUrl || 'about:blank';
           view._newmarkReadySettled = true;
           view._newmarkResolveReady(view);
         }
@@ -11367,11 +12212,13 @@ window.prewarmBrowserPanel = function(options) {
     view.addEventListener('did-navigate', function(e) {
       var input = els['browser-url'];
       if (input && e.url && e.url !== 'about:blank') input.value = e.url;
+      rememberBrowserUrl(e.url);
       if (browserUrlsEquivalent(e.url, view._newmarkPendingUrl)) view._newmarkPendingUrl = '';
     });
     view.addEventListener('did-navigate-in-page', function(e) {
       var input = els['browser-url'];
       if (input && e.url && e.url !== 'about:blank') input.value = e.url;
+      rememberBrowserUrl(e.url);
       if (browserUrlsEquivalent(e.url, view._newmarkPendingUrl)) view._newmarkPendingUrl = '';
     });
     view.addEventListener('did-fail-load', function(e) {
@@ -11387,20 +12234,41 @@ window.prewarmBrowserPanel = function(options) {
     try { current = view.getURL ? view.getURL() : ''; } catch { current = ''; }
     if (!current && !view.getAttribute('src')) view.setAttribute('src', 'about:blank');
   }
-  var ready = view._newmarkReadyPromise;
-  if (options.activate === true) {
-    return ready.then(function() {
-      var current = '';
-      try { current = view.getURL ? view.getURL() : ''; } catch { current = ''; }
-      if ((!current || current === 'about:blank') && !view._newmarkPendingUrl) window.navigateBrowser('https://github.com');
-      return view;
+  return view._newmarkReadyPromise;
+}
+
+window.ensureBrowserPanel = function(options) {
+  options = options || {};
+  cancelBrowserGuestIdleDestroy();
+  if (!browserGuestCreatePromise) {
+    browserGuestCreatePromise = waitForBrowserCreationFloor().then(function() {
+      return initializeBrowserGuest(createBrowserGuestElement());
+    }).catch(function(error) {
+      browserGuestCreatePromise = null;
+      throw error;
     });
   }
-  return ready;
+  return browserGuestCreatePromise.then(function(view) {
+    if (options.activate === true) {
+      var current = '';
+      try { current = view.getURL ? view.getURL() : ''; } catch { current = ''; }
+      var targetUrl = browserRetainedUrl || 'about:blank';
+      if (targetUrl !== 'about:blank' && (!current || current === 'about:blank') && !view._newmarkPendingUrl) {
+        navigateBrowserView(view, targetUrl);
+      }
+    } else if (state.rightTab !== 'browser') {
+      scheduleBrowserGuestIdleDestroy();
+    }
+    return view;
+  });
+};
+
+window.prewarmBrowserPanel = function(options) {
+  return window.ensureBrowserPanel(options);
 };
 
 window.initBrowserPanel = function() {
-  return window.prewarmBrowserPanel({ activate: true });
+  return window.ensureBrowserPanel({ activate: true });
 };
 
 // === Conversations ===
@@ -11541,6 +12409,24 @@ window.requireWorkspace = function(_action) {
   return false;
 };
 
+var domBatchGenerations = {};
+function appendDomNodesInBatches(container, nodes, batchKey, batchSize) {
+  batchSize = Math.max(1, Number(batchSize) || 24);
+  var generation = (domBatchGenerations[batchKey] || 0) + 1;
+  domBatchGenerations[batchKey] = generation;
+  container.innerHTML = '';
+  var index = 0;
+  function appendBatch() {
+    if (domBatchGenerations[batchKey] !== generation || !container.isConnected) return;
+    var fragment = document.createDocumentFragment();
+    var end = Math.min(nodes.length, index + batchSize);
+    while (index < end) fragment.appendChild(nodes[index++]);
+    container.appendChild(fragment);
+    if (index < nodes.length) requestAnimationFrame(appendBatch);
+  }
+  appendBatch();
+}
+
 function renderConversations() {
   var list = els['conversation-list'];
   if (!list) return;
@@ -11559,6 +12445,7 @@ function renderConversations() {
   var activeBeforeRender = (conversations.find(function(c) { return c && c.active; }) || {}).id;
   if (activeBeforeRender) setActiveWorkspaceConversationById(activeBeforeRender);
   else setActiveWorkspaceConversation(state.workspaceActiveConversation[currentWorkspaceKey()] || 0);
+  var conversationNodes = [];
   for (var i = 0; i < conversations.length; i++) {
     var conv = conversations[i];
     var runtimeKey = currentRuntimeKey(conv.id);
@@ -11576,8 +12463,9 @@ function renderConversations() {
       '<button class="conv-pin-btn' + (conv.pinned ? ' active' : '') + '" onclick="event.stopPropagation();window.toggleConversationPinned(' + i + ')" title="' + escAttr(conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '">' + iconOnly('pin', conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '</button>' +
       '<button class="conv-archive-btn" ' + (runtimeState && ['running', 'stopping', 'force_restarting'].indexOf(String(runtimeState.status || '')) >= 0 ? 'disabled ' : '') + 'onclick="event.stopPropagation();window.archiveConv(' + i + ')" title="' + escAttr(t('conversation.archive')) + '">' + iconOnly('archive', t('conversation.archive')) + '</button>';
     div.onclick = function(idx) { return function() { window.switchConversation(idx); }; }(i);
-    list.appendChild(div);
+    conversationNodes.push(div);
   }
+  appendDomNodesInBatches(list, conversationNodes, 'conversation-list', 24);
   updateWorkspaceGate();
 }
 
@@ -11677,6 +12565,7 @@ window.switchConversation = function(idx) {
   if (previousId) markConversationTracked(previousId, state.conversationTrackMs || 300000);
   setActiveWorkspaceConversation(idx);
   var activeId = activeConversationId();
+  state.backendQueue = backendQueueForTarget(currentConversationTarget(activeId));
   holdForegroundConversation(activeId, 4500);
   markConversationTracked(activeId, state.conversationTrackMs || 300000);
   state.conversationPlan = { items: [] };
@@ -11688,6 +12577,9 @@ window.switchConversation = function(idx) {
   addMsg('workflow running', t('conversation.loadingIsolated'), 'system', state.model);
   syncBackendConversation().then(function() {
     renderConversations();
+    refreshNextPromptForTarget(currentConversationTarget());
+    window.renderInputStack();
+    window.drainNextQueue();
   });
 };
 
@@ -12496,7 +13388,9 @@ window.renderLeftWsList = function() {
       (active ? '<span class="ws-check">*</span>' : '') +
       '</div>';
   }
-  container.innerHTML = html;
+  var holder = document.createElement('div');
+  holder.innerHTML = html;
+  appendDomNodesInBatches(container, Array.from(holder.children), 'workspace-list', 24);
 };
 
 window.toggleWorkspacePinned = function(identity) {
@@ -12786,21 +13680,29 @@ window.selectWorkspace = function(reference) {
   state.conversationPlan = { items: [] };
   state.linkedPlan = { markdown: '', revision: 0 };
   state.subagents = [];
-  state.backendQueue = { steering: [], followUp: [] };
-  state.nextQueue = [];
-  state.nextPrompt = '';
+  state.backendQueue = backendQueueForTarget(currentConversationTarget());
+  refreshNextPromptForTarget(currentConversationTarget());
   if (window.renderInputStack) window.renderInputStack();
   updateWorkspaceGate();
   syncBackendConversation().then(function() {
     if (state.rightTab === 'plan') window.renderConversationPlan();
     window.refreshTerminalTakeoverPanes();
+    refreshNextPromptForTarget(currentConversationTarget());
+    window.renderInputStack();
+    window.drainNextQueue();
   }).catch(function(){});
 };
 
 window.switchToWorkspace = async function(reference) {
   reference = String(reference || '');
   if (!reference) return Promise.resolve(null);
-  if (reference === state.currentWorkspaceId && !state.workspaceSwitchInFlight) return Promise.resolve(null);
+  if (reference === state.currentWorkspaceId && !state.workspaceSwitchInFlight) {
+    // Reselecting the workspace that owns the focused conversation is a backend
+    // no-op, but it is still an explicit request to reveal its conversation menu.
+    window.setLeftCollapsed(true);
+    window.setLeftSecondaryOpen(true);
+    return Promise.resolve(null);
+  }
   var generation = ++state.workspaceSwitchGeneration;
   if (window.requestEditorTransition && !await window.requestEditorTransition()) return null;
   if (generation !== state.workspaceSwitchGeneration) return null;
@@ -12858,6 +13760,12 @@ window.openWsSettings = function() {
   if (!wsName) {
     window.openWorkspaceManager();
     return;
+  }
+  if (!state._flowsLoaded) {
+    window.openSubWin(t('workspace.settingsTitle') + ' - ' + esc(wsName), '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:20px;">' + esc(t('common.loading')) + '</div>');
+    return window.ensureFlowsLoaded().then(function() {
+      if (state.activeSubWindowView && state.activeSubWindowView.name === 'workspaceSettings') window.openWsSettings();
+    });
   }
   var html =
     '<div style="padding:4px 0 10px;font-size:12px;color:var(--text);font-weight:600;">' + esc(wsName) + '</div>' +
@@ -13014,6 +13922,18 @@ window.loadFlows = function(options) {
   });
 };
 
+window.ensureFlowsLoaded = function(options) {
+  if (state._flowsLoaded) return Promise.resolve(state.flowWorks);
+  if (state._flowLoadPromise) return state._flowLoadPromise;
+  state._flowLoadPromise = window.loadFlows(options).then(function(flows) {
+    state._flowsLoaded = true;
+    return flows;
+  }).finally(function() {
+    state._flowLoadPromise = null;
+  });
+  return state._flowLoadPromise;
+};
+
 // === Update Marquee ===
 var marqueeRAF = null;
 function updateMarqueeFromConfig() {
@@ -13045,6 +13965,40 @@ function startMarqueeJS() {
 
 function stopMarqueeJS() {
   if (marqueeRAF) { cancelAnimationFrame(marqueeRAF); marqueeRAF = null; }
+}
+
+function schedulePostStartupUiRendering() {
+  if (state._postStartupUiRendering && state._postStartupUiRendering.cancel) state._postStartupUiRendering.cancel();
+  var tasks = [
+    function() { window.refreshModelSelect(); },
+    function() { window.upgradeRightSidebar(); },
+    function() { renderConversations(); },
+    function() { applyLanguageToUi(); },
+    function() { window.renderSubagentList(); },
+    function() { window.renderLeftWsList(); }
+  ];
+  var index = 0;
+  var cancelled = false;
+  var timer = 0;
+  var idle = 0;
+  function runNext() {
+    if (cancelled || index >= tasks.length) return;
+    try { tasks[index++](); }
+    catch (error) { console.warn('[UI] post-startup render failed:', error && error.message ? error.message : String(error)); }
+    if (cancelled || index >= tasks.length) return;
+    if (window.requestIdleCallback) idle = window.requestIdleCallback(runNext, { timeout: 1000 });
+    else timer = setTimeout(runNext, 16);
+  }
+  timer = setTimeout(runNext, 750);
+  state._postStartupUiRendering = {
+    cancel: function() {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      if (idle && window.cancelIdleCallback) window.cancelIdleCallback(idle);
+      timer = 0;
+      idle = 0;
+    }
+  };
 }
 
 // Start JS marquee if @property not supported
@@ -13141,7 +14095,8 @@ function stopMarqueeJS() {
   setupAgentWorkEvents();
   if (api.onBrowserEnsureGuest) {
     api.onBrowserEnsureGuest(function() {
-      window.prewarmBrowserPanel({ activate: false }).catch(function(error) {
+      cancelBrowserGuestIdleDestroy();
+      window.ensureBrowserPanel({ activate: false }).catch(function(error) {
         console.error('[Browser] guest initialization failed:', error && error.message ? error.message : String(error));
       });
     });
@@ -13150,7 +14105,12 @@ function stopMarqueeJS() {
 
   // Load state from backend
   try {
-    var s = await api.getState(activeConversationId());
+    if (startupPrewarmRequired) {
+      if (!api.startupWaitForBackend) throw new Error('Startup backend readiness API is unavailable');
+      var backendReadyAck = await api.startupWaitForBackend();
+      if (!backendReadyAck || backendReadyAck.ready !== true) throw new Error('Main process rejected the startup backend readiness barrier');
+    }
+    var s = await api.getState(startupPrewarmRequired ? undefined : activeConversationId());
     if (startupPrewarmRequired && (!s || !s.workspaces || s.runtimeStatus === 'unavailable')) {
       throw new Error((s && s.runtimeError) || 'Initial workspace/conversation state is unavailable');
     }
@@ -13161,6 +14121,10 @@ function stopMarqueeJS() {
       state.agentStatus = s.status || 'idle';
       state.intelligence = s.intelligence || 'medium';
       state.language = normalizeLanguage(s.language || state.language);
+      state.theme = normalizeUiThemeClient(s.darkMode || state.theme);
+      state.backgroundColor = normalizeUiBackgroundColorClient(s.backgroundColor || '');
+      state.fontFamily = normalizeUiFontFamilyClient(s.fontFamily || '');
+      state.glassLevel = glassPresentationForOpacity((s.glassAlpha ?? 0.85) * 100).opacityPercent;
       state.models = s.models || [];
       if (s.gradientColors && s.gradientColors.length) state.configGradientColors = s.gradientColors;
       if (s.gradientSpeed) state.configGradientSpeed = s.gradientSpeed;
@@ -13193,13 +14157,16 @@ function stopMarqueeJS() {
       if (Array.isArray(s.wslDistros)) state.wslDistros = s.wslDistros;
       if (s.conversationId) state.activeBackendConversationId = s.conversationId;
       if (s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
+      applyAutoRouteRatingState(s);
       if (s.chatMessages) renderChatMessages(s.chatMessages);
       if (s.defaultFlow) state.defaultFlow = s.defaultFlow;
       if (s.autoSwitch !== undefined) state.autoSwitch = s.autoSwitch ? 'on' : 'off';
       if (s.autoSwitchScope) state.autoSwitchScope = s.autoSwitchScope === 'provider' ? 'provider' : 'all';
       if (s.openAIApiMode) state.openAIApiMode = (s.openAIApiMode === 'chat' || s.openAIApiMode === 'responses') ? s.openAIApiMode : 'chat_stream';
       if (s.fallbackOnUnavailable !== undefined) state.fallbackOnUnavailable = s.fallbackOnUnavailable ? 'on' : 'off';
-      if (s.switchTendency) state.switchTendency = s.switchTendency;
+      if (s.switchTendency) {
+        state.switchTendency = s.switchTendency === 'performance' ? 'quality' : (s.switchTendency === 'cheap_save' ? 'cost' : (s.switchTendency === 'default' ? 'balanced' : s.switchTendency));
+      }
       if (s.providers) {
         state.providers = s.providers;
       }
@@ -13214,19 +14181,21 @@ function stopMarqueeJS() {
           state.currentWorkspacePath = s.workspaces.current.path || '';
           ensureWorkspaceConversations(state.currentWorkspaceId);
           applyBackendConversations(s.conversations || [], s.conversationId || state.activeBackendConversationId || 'default');
-          if (Array.isArray(s.workRuns)) syncWorkRunsSnapshot(s.workRuns, {
+          var initialSnapshotTarget = {
             workspaceId: String(s.workspaceId || s.workspaces.current.id || s.workspaces.current.name || ''),
             conversationId: String(s.conversationId || state.activeBackendConversationId || 'default')
-          });
+          };
+          if (s.runtimeKey) registerRuntimeKey(initialSnapshotTarget, s.runtimeKey);
+          if (Array.isArray(s.workRuns)) syncWorkRunsSnapshot(s.workRuns, initialSnapshotTarget);
           if (s.chatMessages) renderChatMessages(s.chatMessages);
         }
-        window.renderLeftWsList();
       }
     }
   } catch(e) {
     console.log('[UI] init warning:', e.message);
     startupHydrationError = e;
   }
+  applyUiAppearance();
   window.renderContextCompression();
   window.renderContextWindow();
   if (api.onAutomationUpdated) {
@@ -13243,18 +14212,11 @@ function stopMarqueeJS() {
   if (els['terminal-timeout-input']) els['terminal-timeout-input'].value = String(state.terminalInterruptTimeoutMs || 0);
   syncTerminalShellOptions();
 
-  window.refreshModelSelect();
+  window.refreshModelSelect(startupPrewarmRequired ? { minimal: true } : undefined);
 
-  // Render conversations
-  window.upgradeRightSidebar();
-  if (!startupPrewarmRequired) window.refreshRightStatus();
-  renderConversations();
+  // Keep only input-critical state on the acknowledgement path. Secondary
+  // navigation surfaces render after promotion on cancellable browser tasks.
   updateWorkspaceGate();
-  applyLanguageToUi();
-
-  window.renderSubagentList();
-  window.renderLeftWsList();
-  if (!startupPrewarmRequired) window.loadFlows();
 
   // === Event Listeners ===
   if (els.prompt) {
@@ -13276,7 +14238,7 @@ function stopMarqueeJS() {
       }
     });
     els.prompt.addEventListener('input', function() {
-      updateSubmitButtonState();
+      schedulePromptInputRefresh();
     });
     els.prompt.addEventListener('paste', function(e) {
       var imageFiles = imageFilesFromDataTransfer(e.clipboardData);
@@ -13320,7 +14282,11 @@ function stopMarqueeJS() {
       var flowSel = document.getElementById('flow-select');
       if (flowSel) {
         flowSel.style.display = state.mode === 'flow' ? '' : 'none';
-        if (state.mode === 'flow') window.renderFlowSelector();
+        if (state.mode === 'flow') {
+          flowSel.innerHTML = '<option value="">' + esc(t('common.loading')) + '</option>';
+          await window.ensureFlowsLoaded();
+          window.renderFlowSelector();
+        }
       }
       await api.setMode(state.mode);
     });
@@ -13348,7 +14314,7 @@ function stopMarqueeJS() {
   }
 
   if (els['editor-textarea']) {
-    els['editor-textarea'].addEventListener('input', function() { window.renderNativeEditor(); window.scheduleEditorCompletion(); });
+    els['editor-textarea'].addEventListener('input', scheduleEditorInputRefresh);
     els['editor-textarea'].addEventListener('scroll', window.syncNativeEditorScroll);
     els['editor-textarea'].addEventListener('click', window.handleEditorCaretChange);
     els['editor-textarea'].addEventListener('select', window.handleEditorCaretChange);
@@ -13373,44 +14339,30 @@ function stopMarqueeJS() {
     observer.observe(bottomBody, { attributes: true, attributeFilter: ['class'] });
   }
 
-  // Auto-spawn native terminal
-  if (!startupPrewarmRequired) window.spawnTerminal(normalizeTerminalShell(state._terminalShell));
-  var startupBrowserReady = window.prewarmBrowserPanel({ activate: false, required: startupPrewarmRequired });
-  if (!startupPrewarmRequired) startupBrowserReady.catch(function(error) {
-    console.error('[Browser] background prewarm failed:', error && error.message ? error.message : String(error));
-  });
-
   if (startupPrewarmRequired) {
     try {
       if (startupHydrationError) throw startupHydrationError;
-      var startupRightStatusReady = window.refreshRightStatus({ required: true });
-      var startupFlowsReady = window.loadFlows({ required: true });
-      var startupTerminalReady = window.spawnTerminal(normalizeTerminalShell(state._terminalShell), { required: true });
-      await Promise.all([
-        startupRightStatusReady,
-        startupFlowsReady,
-        startupTerminalReady,
-        startupBrowserReady,
-        window.loadFileTree({ required: true })
-      ]);
+      // Yield one task and force a layout read so readiness proves that the
+      // interactive DOM is hydrated without making startup depend on a paint
+      // callback. The fixed cover remains in this same window until the main
+      // process accepts the acknowledgement below.
       await new Promise(function(resolve) {
-        requestAnimationFrame(function() { requestAnimationFrame(resolve); });
+        setTimeout(resolve, 0);
       });
+      void document.documentElement.offsetWidth;
       var readyAck = await api.startupUiReady({
         attemptId: startupAttemptId,
         hydrated: {
           state: true,
           workspaceId: state.currentWorkspaceId || '',
           conversationId: activeConversationId() || 'default',
-          fileTree: true,
-          rightStatus: true,
-          flows: true,
-          terminal: true,
-          browser: true,
           rendered: true
         }
       });
       if (!readyAck || readyAck.accepted !== true) throw new Error('Main process rejected the UI readiness handshake');
+      var startupCover = document.getElementById('startup-cover');
+      if (startupCover) startupCover.remove();
+      document.documentElement.classList.remove('startup-prewarm');
     } catch (startupError) {
       console.error('[UI] startup prewarm failed:', startupError);
       if (api.startupUiFailed) {
@@ -13422,6 +14374,13 @@ function stopMarqueeJS() {
       return;
     }
   }
+
+  schedulePostStartupUiRendering();
+
+  window.addEventListener('beforeunload', function() {
+    if (state._postStartupUiRendering && state._postStartupUiRendering.cancel) state._postStartupUiRendering.cancel();
+    cancelBrowserGuestIdleDestroy();
+  }, { once: true });
 
   console.log('[UI] init complete');
 })();

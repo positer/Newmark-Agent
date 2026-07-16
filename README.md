@@ -5,7 +5,7 @@
 <h1 align="center">Newmark Agent</h1>
 
 <p align="center">
-  <a href="https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.9"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.0.9-blue"></a>
+  <a href="https://github.com/positer/Newmark-Agent"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.0.10-blue"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%2B%20Linux-lightgrey">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
@@ -13,11 +13,15 @@
 
 Newmark Agent is a local-first desktop Agent workspace for coding, automation, repository review, model-provider experimentation, and controlled desktop operation. It packages an Electron desktop UI, a TypeScript Agent runtime, workspace-scoped conversations, Flow workflows, subagents, skills, archives, browser/GitHub/automation tools, and configurable OpenAI-compatible, Anthropic-compatible, and GitHub Models providers.
 
-The current source development version is **dev-0.0.9**. Newmark is intended for technical users who want an installer-backed desktop Agent app that runs against their own model credentials and keeps mutable runtime state local under `~/.Newmark`. Windows is the primary Computer Use target; Linux GUI, CLI, packaging, and terminal workflows are supported.
+The current source development version is **dev-0.0.10**. Newmark is intended for technical users who want an installer-backed desktop Agent app that runs against their own model credentials and keeps mutable runtime state local under `~/.Newmark`. Windows is the primary Computer Use target; Linux GUI, CLI, packaging, and terminal workflows are supported.
 
 dev-0.0.9 maintenance update (2026-07-13): conversation execution is now addressed by a composite workspace/conversation target, with one independently stoppable Windows utility process or WSL process group per active target. Workspace switching is background-safe and latest-wins instead of resetting the global Agent. Guide input has durable accepted/applied/deferred/rejected receipts, and each run persists a public work record that stays expanded while active, folds to an elapsed-time summary when complete, and can be reopened without exposing hidden model reasoning. Expanded work records show only filtered public streamed natural language plus tool names and running/completed status; tool arguments, call IDs, commands, paths, results, and hidden reasoning are never rendered or persisted there. The fold preference remains writable after the worker is evicted by using a target-bound cold persistence path, without registering a new active runtime. The Archive action once again uses the bundled Archive icon. Editor transitions now share one dirty Save/Discard/Cancel guard, clear stale Markdown surfaces, and reject out-of-order opens. PDF preview uses a short-lived loopback HTTP capability rather than sending Chromium PDFium a `newmark-preview://` URL. The built-in browser also gains Newmark-native Browser-Use with opaque observations, target-bound host RPC, physical-page action serialization, Plan revalidation, and force-stop cancellation. Startup prewarms the actual embedded Browser guest at `about:blank`; a cold Browser-Use request initializes and binds that same guest with a bounded wait, never a hidden fallback window. Browser observations exclude password inputs, textarea values, contenteditable text, hidden DOM text, and internal option values. Long-running native tools now use bounded asynchronous child processes and carry the run cancellation signal through providers, Flow, SSH, utility workers, and WSL workers, so Guide/stop IPC remains responsive. Windows force restart snapshots PID, parent PID, and process-creation identity through Win32 Toolhelp, terminates only identity-matched handles, rescans for late descendants until three stable empty observations, and permanently quarantines an uncertain generation instead of starting a replacement. Alibaba page-agent was reviewed as an MIT architectural reference at an immutable commit; no page-agent code or runtime is bundled.
 
-Startup now paints a dedicated Newmark prewarm window while first-run recovery, configuration/workspace state, automation, Browser Control, the selected conversation runtime, WSL detection, sidecar startup, update discovery, and a hidden fully hydrated renderer settle. Renderer attestation covers `state`, `fileTree`, `rightStatus`, `flows`, `terminal`, the prewarmed `browser` guest, and `rendered`; Electron validates all seven fields before promotion and uses the canonical `none` target for a valid first launch with no workspace. The main page is promoted only after every required stage succeeds; a required failure stays on the prewarm surface with its log path and a retry action. Update discovery includes GitHub prereleases such as `dev-0.0.9`, prompts only for a strictly newer semantic version, and shows the localized update dialog after the main UI is visible rather than interrupting prewarm. Release CDP drivers select only `index.html` and then wait for the renderer to be visible, complete, API-connected, and prompt-hydrated before bringing it forward or driving the UI, so the hidden prewarm renderer cannot bypass the startup barrier.
+dev-0.0.9 follow-up maintenance (2026-07-15): clicking the workspace that already owns the focused conversation now reopens its conversation-management secondary pane while leaving the backend workspace selection and focused conversation unchanged. User-submitted PNG/JPEG images are durable, content-addressed conversation attachments under the Newmark state root, survive conversation reload/restart, remain inspectable through stable attachment IDs, and are copied into the owning conversation archive. Image-only Guide continuations checkpoint stable attachment references, apply to chat/history/work-run state exactly once after a cold reload, and are not replayed by a second reload; structured local Next entries retain the same image payload and remain bound to their original `{ workspaceId, conversationId }`. Backend follow-up queue snapshots are separate target-keyed, read-only mirrors: the renderer cannot edit, delete, drag, convert, or drain them, and removes them when the owning backend reports consumption, preventing stale same-`default` queues from crossing workspaces or being sent twice. Computer Use captures remain a separate one-use channel: `observe` and `app_observe` accept bounded variable capture dimensions, preserve aspect ratio without upscaling, expose an image only when trusted vision-capable runtime context grants it, remove it after model input preparation, and exclude its path/data from chat, public work runs, snapshots, and archives. General settings now persist an optional validated `#RRGGBB` application background and one installed local UI font at user scope; code and terminal surfaces retain their monospaced font.
+
+dev-0.0.10 startup/performance maintenance (2026-07-15): startup creates one visible `BrowserWindow` and loads the final `index.html` directly. A fixed cover inside that page remains above the desktop until the same `webContents` acknowledges `state/rendered`; there is no second hidden candidate or separate prewarm popup. If the first-attempt readiness waiter must be recovered, main restores it for that same `webContents` and attempt without loading the page again. A required failure navigates that same window to the static `startup.html` retry surface, and retry returns through the same window. The blocking path now stops at configuration/Agent initialization, core services, a local/persisted current-conversation snapshot, and renderer state plus one task yield/layout read; it does not create a Utility or WSL conversation runtime. File tree, right status, Flows, and terminal start only on explicit UI demand. Warning-only main-process work is delayed after promotion: automation 0.5 seconds, WSL discovery 12 seconds, update discovery 15 seconds, conversation-runtime prewarm 30 seconds, and the non-interactive sidecar 60 seconds. The Browser panel has no first-frame `<webview>`: the first Browser tab or Browser tool demand creates one `persist:newmark-browser` guest after a five-second creation floor, repeated demand reuses it, and sixty seconds off Browser destroys it while retaining the last URL. A navigation requested before guest `dom-ready` is retained and replayed exactly once after attachment. General settings still expose one glass/opacity slider, but opacity `A` now drives complementary transparency `T=100-A` and width `B=20T/100`; blur levels are `.4B/.8B/B`, alpha levels remain `.75A/.80A/.85A`, `input` previews, and `change` explicitly saves `glassAlpha` to `ui.glass_alpha` without losing a valid zero. The generated UI now embeds 72 used Lucide symbols instead of the full 1,737-symbol sprite, and sidebar batches plus prompt/editor rAF coalescing reduce renderer work on low-performance systems. Exact source evidence is in `archive/2026-07-15-dev-0.0.10-glass-startup-webview-performance.md`.
+
+dev-0.0.10 Auto/validation architecture (2026-07-15): Auto is now a persistent selection intent, not a model name that is overwritten after the first turn. A local deterministic router builds either a global or provider-scoped candidate pool, rejects unverified/preview/context/capability/privacy/budget mismatches, applies explicit Quality/Balanced/Cost/Speed quality-loss bands, and resolves exactly one deployment per turn. Every fallback resolves provider URL, key, protocol, and adapter from the chosen `{providerId, modelId}`; equal model names are not interchangeable without an explicit logical group. Five-minute affinity, bounded learned preference, endpoint health/circuit state, and a maximum three-attempt scope-safe chain feed a redacted `RouteDecision` record without prompt, key, tool-argument, or file content. The shared Validation Service uses four evidence levels, six operational statuses, seven-day expiry, two-of-three deterministic probes, strict JSON/tool/tool-result checks, and real byte/MIME/dimension checks for image output; only Standard or Extended evidence can enter Auto. The policy design adapts documented patterns from [OpenRouter](https://openrouter.ai/docs/guides/routing/routers/auto-router), [AWS Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-routing.html), [Microsoft Foundry](https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-router), [LiteLLM](https://docs.litellm.ai/docs/routing), and [Portkey](https://portkey.ai/docs/product/ai-gateway/fallbacks) while keeping workspace prompts out of external black-box routers.
 
 dev-0.0.8 restored persistent Agent terminal takeover with owner-scoped sessions, added flat same-conversation parallel Subagents with durable peer/root mailboxes, persisted context compression, and `subagent_read`, introduced a revisioned read-only Linked Plan panel available in every mode, enforced Plan through a unified schema/runtime ToolPolicy, accelerated Computer Use with persistent helpers and bounded sequences, and routed file-tree opens through header-based text/binary/HTML/PDF classification before the editor was invoked.
 
@@ -33,7 +37,7 @@ Maintenance update (2026-07-11): same-workspace conversations now remain strictl
 
 Archive and narrow-window follow-up (2026-07-11): archiving a conversation now atomically writes its Markdown archive and removes the target conversation from persisted and in-memory registries, including exact non-empty duplicate registrations, so it stays absent after refresh and restart. Distinct conversations that only share a title remain separate and receive a short id suffix in the list. The input toolbar now preserves a readable model label and fixed send action across narrow layouts, temporarily hiding sidebars only while the window is very narrow without changing saved layout state.
 
-Model validation follow-up (2026-07-11): Newmark now runs its own two-stage model validation. It gathers network evidence from the provider model catalog and Newmark's built-in web search restricted to the provider's official domain, then submits real text, visual recognition, and image-generation tasks. Vision and image output are confirmed only by successful task results; names and catalog hints only decide which probes to run. The model selector shows validated-available and unvalidated models while hiding validated-unavailable/error models.
+Model validation follow-up (superseded by dev-0.0.10): provider catalogs and official documentation now create capability hypotheses only. They cannot mark a model verified. The shared service performs live deterministic health and capability probes, keeps health separate from seven-day capability evidence, and records `verified/degraded/unavailable/auth_error/rate_limited/invalid_config` with structured error details.
 
 Native editor follow-up (2026-07-11): the right sidebar now contains a dependency-free Newmark text/code editor with line numbers, built-in syntax highlighting, a compact Vim command mode, undo/redo, save/dirty state, and Agent assistance. Markdown preview is an editor view toggle shown only for Markdown files. Copilot prediction is opt-in and debounced; it prefers a validated GitHub Copilot provider, cancels stale candidates while typing, accepts with `Tab`, and dismisses with `Esc`. The implementation was designed after reviewing Ace, CodeMirror, Monaco, Neovim, and CodeMirror Vim architecture, but no editor runtime or source code was imported.
 
@@ -88,25 +92,27 @@ First-party Newmark code and project assets remain proprietary and all-rights-re
 | Isolated conversation runtimes | Workspace/conversation composite targets, background execution, target-only stop/restart, durable Guide receipts, and persisted foldable work records. |
 | Model providers | OpenAI-compatible, Anthropic-compatible, GitHub Models/Copilot login flow, and local runtimes through normal provider settings. |
 | Repository work | Local Git inspection, GitHub audit, branch/fork/PR helpers, and remote-repository security review prompts. |
-| Computer Use | Native Windows observe/action flow with ephemeral screenshots, UI Automation objects, app-scoped control, and a visible takeover border. Linux reports native desktop control as unsupported instead of crashing. |
+| Conversation images | User-submitted PNG/JPEG attachments are validated, content-addressed, reloadable by stable ID, and copied with their conversation archive. |
+| Computer Use | Native Windows observe/action flow with bounded variable-size, strictly one-use screenshots, UI Automation objects, app-scoped control, and a visible takeover border. Linux reports native desktop control as unsupported instead of crashing. |
 | Built-in Browser-Use | Native observe-then-act control with opaque refs, fixed isolated-world programs, target-bound host RPC, shared-page serialization, and popup/download/navigation guards. |
 | Terminal takeover | Persistent Agent-owned terminal sessions independent from one-shot shell tools, available in desktop and CLI Agent paths with PowerShell on Windows and bash on Linux. |
 | Workspace control | Local, external, and SSH-linked workspaces with exact-folder uniqueness and parent/child folder support. |
+| Appearance | Dark/light/system theme plus a user-scoped solid application background and installed local UI font; code and terminal typography remain monospaced. |
 | Privacy posture | Local-first config; provider keys stay in local runtime config or environment files and must not be committed. |
 
 ## Download
 
-The latest published development preview is **dev-0.0.9**. It is distributed as an unsigned GitHub prerelease after complete local Windows/Linux acceptance and post-publication asset verification.
+The latest published development preview is **dev-0.0.10**. This is an unsigned, Windows-only GitHub prerelease containing exactly the validated MSI and unpacked ZIP listed below. Linux packages were not rebuilt for dev-0.0.10; Linux users must remain on the published **dev-0.0.9** assets rather than treating or relabeling them as dev-0.0.10.
 
-| Package | Release |
-|---|---|
-| Windows MSI installer | `Newmark-Agent-0.0.9-x64.msi` |
-| Windows unpacked update pack | `Newmark-Agent-0.0.9-win-unpacked-x64.zip` |
-| Linux AppImage | `Newmark-Agent-0.0.9-x86_64.AppImage` |
-| Linux Debian package | `Newmark-Agent-0.0.9-amd64.deb` |
-| Linux unpacked update pack | `Newmark-Agent-0.0.9-linux-unpacked-x64.zip` |
+| Platform | Package | Release |
+|---|---|---|
+| Windows | MSI installer | `Newmark-Agent-0.0.10-x64.msi` |
+| Windows | Unpacked update pack | `Newmark-Agent-0.0.10-win-unpacked-x64.zip` |
+| Linux | AppImage | `Newmark-Agent-0.0.9-x86_64.AppImage` |
+| Linux | Debian package | `Newmark-Agent-0.0.9-amd64.deb` |
+| Linux | Unpacked update pack | `Newmark-Agent-0.0.9-linux-unpacked-x64.zip` |
 
-Download the assets from the [dev-0.0.9 GitHub prerelease](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.9). On Windows, install the MSI for managed desktops or use the `win-unpacked` zip as the no-loss update source. On Linux, run the AppImage or install the `.deb` package. The distributions include `LICENSE` and `THIRD_PARTY_NOTICES.md`.
+Windows users should download the two assets from the [dev-0.0.10 GitHub prerelease](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.10). Linux users should continue to use the [dev-0.0.9 GitHub prerelease](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.9). On Windows, install the MSI for managed desktops or use the `win-unpacked` ZIP as the no-loss update source. On Linux, run the dev-0.0.9 AppImage or install its `.deb` package. The distributions include `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
 The Windows MSI is a per-machine installer and targets `Program Files`, requesting elevation through Windows Installer. Regardless of whether Newmark runs from Program Files, an unpacked folder, a removable drive, or another installation path, mutable configuration, conversations, archives, and credentials are resolved from `~/.Newmark` and preserved across upgrades. An installation directory passed back as `--root` is normalized to `~/.Newmark`; explicit non-install roots remain available for isolated tests.
 
@@ -123,8 +129,8 @@ npm.cmd run dist:windows-release
 The packaged Windows executable is written to:
 
 ```text
-release/Newmark-Agent-0.0.9-x64.msi
-release/Newmark-Agent-0.0.9-win-unpacked-x64.zip
+release/Newmark-Agent-0.0.10-x64.msi
+release/Newmark-Agent-0.0.10-win-unpacked-x64.zip
 ```
 
 Linux and WSLg development builds use native Linux Node/npm inside the distro:
@@ -203,8 +209,8 @@ For Anthropic-compatible providers, set `"protocol": "anthropic"`. GitHub Models
 | Subagents and installable skills | Available |
 | Safe Markdown display for headings, tables, links, images, and formulas | Available |
 | Rootless pasted-image prompt attachments | Available |
-| Model validation with multimodal metadata persistence | Available |
-| Auto model switching and context-window checks | Available |
+| Standard/Extended deterministic model validation with seven-day evidence | Available in dev-0.0.10 |
+| Auditable global/provider-scoped single-model Auto routing | Available in dev-0.0.10 |
 | GitHub file audit and repository security audit | Available |
 | Native OpenSSH external workspace linking | Available |
 | Computer Use with one-time screenshots and UI Automation summaries | Available |
@@ -239,6 +245,12 @@ npm.cmd run release:ui-conversation-queue-plan-smoke
 npm.cmd run release:ui-fast-conversation-switch-smoke
 npm.cmd run release:ui-workspace-conversation-isolation-smoke
 npm.cmd run release:ui-multi-window-shared-backend-smoke
+npm.cmd run test:cli-tools
+npm.cmd run test:dev010
+npm.cmd run release:dev010-features-smoke
+npm.cmd run release:windows-zip-smoke
+npm.cmd run release:windows-msi-smoke
+npm.cmd run benchmark:dev010-startup -- --runs 20 --output ..\archive\2026-07-15-dev-0.0.10-performance.json
 npm.cmd run test:dev009
 npm.cmd run release:dev009-features-smoke
 ```
@@ -252,14 +264,14 @@ npm run dist:linux
 npm run release:linux-gui-smoke
 ```
 
-The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the source development version is now `0.0.9`.
+The `release:111-*` smoke names are historical regression gates for the current feature set; they are retained even though the source development version is now `0.0.10`.
 
 Unpacked update dry-runs can be delegated to the packaged CLI before copying files:
 
 ```powershell
 release\win-unpacked\Newmark Agent.exe install-update --check-github --repo positer/Newmark-Agent
-release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 0.0.9 --dry-run
-release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 0.0.9 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --from-github --repo positer/Newmark-Agent --expected-version 0.0.10 --dry-run
+release\win-unpacked\Newmark Agent.exe install-update --source C:\path\to\new\win-unpacked --target C:\path\to\current\install --expected-version 0.0.10 --dry-run
 ```
 
 The update helper preserves local state by default. Current installer/update builds also keep mutable state outside the installation directory under `~/.Newmark`, including `config.json`, `Work/`, `skills/`, `Memory Lab/`, and `archive/`.
@@ -271,15 +283,43 @@ cd DESKTOP
 npm.cmd run release:real-provider-smoke
 npm.cmd run release:real-apinebula-memory-switch-smoke
 npm.cmd run release:real-provider-stress
+$env:NEWMARK_RUN_REAL_OPENAI_HUB='1'
+npm.cmd run release:real-openai-hub-anthropic-smoke
+Remove-Item Env:NEWMARK_RUN_REAL_OPENAI_HUB
 ```
+
+The OpenAI-Hub Anthropic smoke reads and trims `_ref/OpenAI-hub key.txt` by default, creates an independent temporary root unless `--root` is supplied, and performs exactly three POSTs only after explicit opt-in: streamed marker, strict closed-schema `tool_use`, then matching `tool_result` plus a second streamed marker. Logs are limited to status, bounded request ID, and redacted error category; the key, authorization, response body, and tool arguments are never printed or persisted. Ordinary `npm.cmd test` runs only its static safety contract and never calls the real API.
+
+The three-call OpenAI-Hub acceptance has already completed with `200 / 200 / 200`; do not rerun it during ordinary dev-0.0.10 closure. Use `npm.cmd run test:cli-tools` for the offline safety contract. Exact redacted evidence is in `archive/2026-07-15-dev-0010-cli-tool-anthropic.md`.
+
+## dev-0.0.10 Notes
+
+Auto uses a two-level identity: the selection records global/provider scope and policy, while each turn records one resolved deployment. Hard constraints precede scoring; Quality/Balanced/Cost/Speed modes apply quality-loss bands before cost, reliability, latency, cache affinity, and bounded preference. The fallback executor is deterministic and scope-safe: one limited retry, an explicitly equivalent endpoint if configured, then a fallback-only model, with no more than three total attempts and no transparent switch after visible output or a side-effect tool. Audit data records candidates, exclusion reasons, component scores, attempt status, policy version, and catalog hash without recording user content.
+
+Only fresh Standard/Extended validation can grant Auto eligibility. The validation cache lives under the selected Newmark root, samples stable probes twice and split results a third time, caps concurrency at two, and does not erase proven capabilities on a transient endpoint failure. Legacy `available` metadata migrates to `legacy_basic`, requiring a new Standard pass.
+
+Startup, Browser guest lifetime, glass inversion, runtime-pool capacity, CLI host contracts, and OpenAI-Hub compatibility are described in the highlights above. The normal build emits four runtime artifacts: the precompiled Windows process-tree helper DLL, an Electron Node 20-compatible CommonJS TypeBox compiler bundle, the WSL Agent host bundle, and the Electron utility Agent host bundle. Packaging keeps the first two outside `app.asar` through `asarUnpack` and verifies all four before accepting an unpacked directory. The complete `npm test` and `test:dev010` gates pass, the real Electron BrowserUse/utility test passes all 61 checks, and the offline packaged dev010 feature smoke passes all 19 checks with `real_api_called:false`. ZIP extraction passes the dev008, dev009, and dev010 feature smokes; MSI administrative extraction passes its 19-check dev010 smoke. Startup recovery remains in one window and recorded `startupMs=3123` and `browserOpenMs=111`. The packaged icon and runtime-layout smokes also pass.
+
+The unsigned Windows artifacts published for dev-0.0.10 are:
+
+| Artifact | Size | SHA256 |
+| --- | ---: | --- |
+| `Newmark-Agent-0.0.10-win-unpacked-x64.zip` | 141729309 bytes / 135.16 MiB | `A7A2A31861AB7D49BDDE70881DB568702689B603C46381576EDB92C4010BEF35` |
+| `Newmark-Agent-0.0.10-x64.msi` | 110623345 bytes / 105.50 MiB | `BC16757E1AA9E70E40B2AA21A800426FBFA24735C84532E4062D7F3409A5BD01` |
+
+The formal 20-run benchmark remains authoritative: interactive readiness P50/P95/max is `2360/3820/4066 ms`, startup-before-Browser private-bytes P95 is `498.74 MiB`, first-Browser-open P95 is `450 ms`, four-times-CPU input-latency P95 is `111.3 ms`, and every first-five-second observation reports zero Browser guests. Bounded ControlView DFS keeps ComputerUse desktop observation at `881/874/874 ms` and application observation at `332/341/329 ms`; the CLI fixture remains 10/10 exact. The complete evidence is recorded in `archive/2026-07-15-dev-0.0.10-integration-acceptance.md`; the publication judgment is `windows-prerelease-ready-for-publication`.
+
+Release boundary: dev-0.0.10 publishes only the two validated, unsigned Windows artifacts above. No dev-0.0.10 Linux artifact exists; dev-0.0.9 remains the supported Linux prerelease. No additional real-provider call was made during release closure, and remote-download verification and local installation are separate post-publication checks.
 
 ## dev-0.0.9 Notes
 
-dev-0.0.9 is the current source maintenance line. It replaces conversation-id-only runtime identity with deterministic workspace/conversation targets, introduces per-target Windows utility and WSL runtime pools, keeps background work alive across workspace changes, and adds cooperative then force-restart stop semantics without resetting unrelated conversations. Guide delivery is idempotent and receipt-backed: optimistic rows are scoped by the composite target and `clientMessageId`, survive snapshot redraws in accepted/deferred/rejected state, and are replaced exactly once when applied. Public work progress is persisted as a foldable elapsed-time run separate from the final answer. Its expandable content is deliberately limited to filtered public streamed natural language and tool name/status; hidden reasoning, tool arguments, call IDs, commands, paths, and results never enter the work record. Completed-run fold changes also persist when no worker is active and remain isolated from another workspace with the same conversation id. Repeated workspace-selection and stop failures are deduplicated by operation namespace and stay out of conversation history.
+dev-0.0.9 is the previous cross-platform prerelease baseline and remains the current Linux package line. It replaces conversation-id-only runtime identity with deterministic workspace/conversation targets, introduces per-target Windows utility and WSL runtime pools, keeps background work alive across workspace changes, and adds cooperative then force-restart stop semantics without resetting unrelated conversations. Guide delivery is idempotent and receipt-backed: optimistic rows are scoped by the composite target and `clientMessageId`, survive snapshot redraws in accepted/deferred/rejected state, and are replaced exactly once when applied. Public work progress is persisted as a foldable elapsed-time run separate from the final answer. Its expandable content is deliberately limited to filtered public streamed natural language plus tool names and running/completed status; hidden reasoning, tool arguments, call IDs, commands, paths, and results never enter the work record. Completed-run fold changes also persist when no worker is active and remain isolated from another workspace with the same conversation id. Repeated workspace-selection and stop failures are deduplicated by operation namespace and stay out of conversation history.
 
 The editor and preview boundary now has one reset/transition lifecycle, revision-safe dirty decisions, asynchronous open generations, and owner-bound token revocation. PDF delivery uses a loopback-only, expiring capability server with owner/path/Host/method/range checks; HTML remains on the sandboxed custom protocol. Native Browser-Use adds nine structured actions over opaque observations, uses only fixed Newmark DOM programs, serializes every full observe/action transaction by physical `WebContents`, rechecks Plan policy in the host, and propagates target cancellation through utility/WSL workers to Electron. It acts only on the prewarmed built-in Browser guest, including cold requests before the Browser tab is opened; it has no hidden-window fallback, and observation/extraction consistently redact textarea and contenteditable content. The Archive conversation action again renders its bundled icon instead of falling back to a text-like placeholder.
 
-Desktop startup uses a visible Newmark-icon prewarm surface and a separate hidden UI renderer. The prewarm barrier waits for all required kernel stages plus the renderer's seven-field `state/fileTree/rightStatus/flows/terminal/browser/rendered` attestation before atomically revealing the main page; required failures remain retryable on the prewarm surface, and a first launch without a workspace is represented consistently as `none`. The same startup pass checks GitHub release and prerelease tags, compares normalized semantic versions, and defers any strictly-newer localized prompt until after the main UI is shown.
+The 2026-07-15 follow-up closes the Focus-menu, intentional-image, queue-isolation, Computer Use lifecycle, and appearance gaps. Re-clicking the workspace that contains the focused conversation reopens the conversation-management secondary pane locally without issuing a redundant backend workspace change or disturbing Focus. Submitted PNG/JPEG images become durable content-addressed chat attachments with strict count, per-file, aggregate, pre-decode dimension, and MIME validation plus a canonical content-addressed asset layout; they hydrate after restart, can be selected by stable attachment ID for later visual inspection, and are copied beside archived Markdown. Image-only Guide receipt/continuation metadata persist stable attachment references without duplicating the content-addressed bytes, survive checkpoint plus cold reload, insert one chat row and one model-history row when applied, and cannot replay on a later reload. Local Next requests retain their text/image object and composite target until the delayed drain revalidates both target and idle state; a workspace switch or newly busy runtime leaves the item untouched for a later retry, while **Guide now** converts a local queued item into one immediate receipt-backed Guide without clearing the user's unrelated draft. Backend `steering`/`followUp` snapshots are target-keyed read-only mirrors rather than renderer-owned Next work: equal text keeps occurrence multiplicity, mirror entries cannot be edited/deleted/dragged/guided/drained, and a later empty backend snapshot removes only that target's mirrors. Persisted work-run routing fields are treated as display data: renderer and kernel output boundaries rebind them to the trusted outer target, so damaged state cannot rewrite runtime aliases or move a queue across workspaces. By contrast, Computer Use screenshots are never explicit conversation assets: requested capture bounds are clamped from `320 x 240` through `2048 x 2048` with `1280 x 960` defaults, downscaling preserves aspect ratio and never enlarges the source, only trusted vision runtime context can admit one frame into the current model turn, and Windows/WSL paths delete or discard that frame after preparation without exposing it in visible tool text, chat, work runs, or archives. A tool-result image is consumed after its first provider serialization, preventing a later tool round from replaying it; durable user-role images are deliberately not consumed. General settings also persist validated user-level background color and local UI-font choices while keeping code and terminal text on the monospaced stack.
+
+The 1,084-assertion and package matrix below describe the already-published dev-0.0.9 cross-platform baseline. The later 2026-07-15 follow-up passes a fresh `npm.cmd test` with 1,101 core assertions plus all focused suites; real Electron/CDP verifies the Focus menu, icon, durable image card, and persisted appearance controls; the real Electron Browser-Use/utility host passes 59 checks; and a source Electron + Ubuntu WSL Computer Use run reports `visionRequests=2`, `visionImages=1`, and `tempResidue=0`. No Computer Use frame was retained as evidence. These changes are included in the validated dev-0.0.10 Windows artifacts; Linux remains on the dev-0.0.9 package line. See `archive/2026-07-15-focus-images-computer-use-preferences.md` for the exact source-level evidence.
 
 The complete local source suite passes 1,084 assertions; focused gates pass 27 dev-0.0.9 contracts, 79 Browser-Use checks, 21 asynchronous-process checks, 59 real-Electron Browser-Use/utility checks, and 41 startup-prewarm checks. Windows MSI/unpacked, Windows Native/WSL, workspace/editor/Markdown/PDF UI, and Linux AppImage/deb/unpacked GUI smokes all pass. Browser observations expose rendered text and allowlisted public metadata, never password inputs, textarea/contenteditable content, hidden DOM text, internal option values, or model-hidden reasoning. Real utility-worker tests prove identity-bound worker/branch/leaf cleanup, late-descendant capture, target/generation helper ownership, single-flight force stop, sticky quarantine on uncertainty, replacement readiness validation, and strict all-settled runtime teardown while another target remains alive. Windows does not yet place the worker tree in a Job Object, so the zero-residue property is runtime-tested rather than an OS-enforced formal process-tree guarantee. The five local acceptance artifacts have these SHA256 values:
 
@@ -382,6 +422,7 @@ The public repository intentionally excludes local runtime state and internal pr
 - `agent.md`
 - `PC_Hash.config`
 - `Work/`
+- `conversation-media/`
 - `archive/`, except curated release records that are explicitly reviewed and force-added
 - `skills/`
 - `Memory Lab/`

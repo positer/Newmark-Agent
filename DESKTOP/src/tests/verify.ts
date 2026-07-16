@@ -119,6 +119,97 @@ function cleanup() {
   }
 }
 
+type ValidationProviderFixture = {
+  validModels: ReadonlySet<string>;
+  visionModels?: ReadonlySet<string>;
+  catalogs?: Readonly<Record<string, readonly string[]>>;
+  rejectedBaseUrls?: ReadonlySet<string>;
+};
+
+/**
+ * Exercise Agent.validateModels through the same provider adapter used in
+ * production while keeping the legacy integration suite provider-offline.
+ */
+function installValidationProviderFixture(fixture: ValidationProviderFixture): () => void {
+  const originalChat = LLMProvider.prototype.chat;
+  const originalChatStreamWithTools = LLMProvider.prototype.chatStreamWithTools;
+  const originalChatStrictJson = LLMProvider.prototype.chatStrictJson;
+  const originalProbeStreamCompletion = LLMProvider.prototype.probeStreamCompletion;
+  const originalModelCatalog = LLMProvider.prototype.modelCatalog;
+  const expectedVisionAnswer = '{"left":"red_square","right":"blue_circle","bottom":"green_triangle","marker":"NM7"}';
+  const nonceFrom = (value: unknown): string => {
+    const matches = JSON.stringify(value).match(/NMK-[a-z0-9-]+/gi) || [];
+    return matches[matches.length - 1] || '';
+  };
+  const rejects = (provider: LLMProvider, modelName: string): boolean =>
+    !fixture.validModels.has(modelName) || [...(fixture.rejectedBaseUrls || [])].some(baseUrl => provider.baseUrl.includes(baseUrl));
+
+  LLMProvider.prototype.modelCatalog = async function() {
+    const entry = Object.entries(fixture.catalogs || {}).find(([baseUrl]) => this.baseUrl.includes(baseUrl));
+    return (entry?.[1] || []).map(id => ({ id, raw: { id } }));
+  };
+  LLMProvider.prototype.chat = async function(modelName: string, messages: Array<Record<string, unknown>>, systemPrompt?: string | null) {
+    if (rejects(this, modelName)) return '[LLM Error: 404] deterministic validation fixture rejected model';
+    const serialized = JSON.stringify(messages);
+    if (serialized.includes('NEWMARK_HEALTH_OK')) return 'NEWMARK_HEALTH_OK';
+    if (String(systemPrompt || '').includes('visual capability probe')) {
+      return fixture.visionModels?.has(modelName) ? expectedVisionAnswer : '{"vision":"probe_failed"}';
+    }
+    const nonce = nonceFrom(messages);
+    if (serialized.includes('strict JSON object') || serialized.includes('Schema:')) return JSON.stringify({ nonce });
+    return nonce || 'DETERMINISTIC_VALIDATION_TEXT';
+  };
+  LLMProvider.prototype.chatStreamWithTools = async function* (
+    modelName: string,
+    messages: Array<Record<string, unknown>>,
+    _systemPrompt: string | null,
+    _temperature: number,
+    _maxTokens: number,
+    tools: unknown[],
+  ) {
+    if (rejects(this, modelName)) {
+      yield { type: 'text', text: '[LLM Error: 404] deterministic validation fixture rejected model' } as StreamToken;
+      return;
+    }
+    const nonce = nonceFrom(messages);
+    if (tools.length > 0) {
+      if (messages.some(message => message.role === 'tool')) {
+        yield { type: 'text', text: nonce } as StreamToken;
+        return;
+      }
+      yield {
+        type: 'tool_call',
+        toolCall: {
+          id: `validation-${modelName}`,
+          name: 'newmark_validation_echo',
+          arguments: JSON.stringify({ nonce }),
+        },
+      } as StreamToken;
+      return;
+    }
+    yield { type: 'text', text: nonce } as StreamToken;
+  };
+  LLMProvider.prototype.chatStrictJson = async function(modelName: string, messages: Array<Record<string, unknown>>) {
+    if (rejects(this, modelName)) return '[LLM Error: 404] deterministic validation fixture rejected model';
+    return JSON.stringify({ nonce: nonceFrom(messages) });
+  };
+  LLMProvider.prototype.probeStreamCompletion = async function(modelName: string, messages: Array<Record<string, unknown>>) {
+    if (rejects(this, modelName)) throw new Error('[LLM Error: 404] deterministic validation fixture rejected model');
+    return {
+      chunks: [nonceFrom(messages)],
+      completionEvent: 'openai_done' as const,
+    };
+  };
+
+  return () => {
+    LLMProvider.prototype.chat = originalChat;
+    LLMProvider.prototype.chatStreamWithTools = originalChatStreamWithTools;
+    LLMProvider.prototype.chatStrictJson = originalChatStrictJson;
+    LLMProvider.prototype.probeStreamCompletion = originalProbeStreamCompletion;
+    LLMProvider.prototype.modelCatalog = originalModelCatalog;
+  };
+}
+
 function chmodTree(target: string) {
   if (!fs.existsSync(target)) return;
   const stat = fs.lstatSync(target);
@@ -151,16 +242,21 @@ async function main() {
   const mainSource = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf-8');
   const preloadSource = fs.readFileSync(path.join(process.cwd(), 'src', 'preload.ts'), 'utf-8');
   const fileRouterSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'workspaceFileRouter.ts'), 'utf-8');
-  const scriptMatch = uiHtml.match(/<script>([\s\S]*)<\/script>/);
-  assert(!!scriptMatch, 'ui html: inline script exists');
-  let scriptParses = false;
-  try {
-    if (scriptMatch) new Function(scriptMatch[1]);
-    scriptParses = true;
-  } catch (e) {
-    scriptParses = false;
+  const conversationAttachmentsSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationAttachments.ts'), 'utf-8');
+  const uiPreferencesSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'uiPreferences.ts'), 'utf-8');
+  const inlineScripts = Array.from(uiHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g), match => match[1])
+    .filter(source => source.trim().length > 0);
+  assert(inlineScripts.length > 0, 'ui html: inline script exists');
+  let scriptParseError = '';
+  for (const source of inlineScripts) {
+    try {
+      new Function(source);
+    } catch (error) {
+      scriptParseError = error instanceof Error ? error.message : String(error);
+      break;
+    }
   }
-  assert(scriptParses, 'ui html: inline script parses');
+  assert(!scriptParseError, 'ui html: inline script parses', scriptParseError);
   assert(Buffer.from(uiHtml, 'utf8').toString('utf8') === uiHtml, 'ui html: UTF-8 source is readable');
   assert(preloadSource.includes("ipcRenderer.invoke('agent:openWorkspaceFile'") && preloadSource.includes("ipcRenderer.invoke('agent:saveWorkspaceFile'")
     && preloadSource.includes("ipcRenderer.invoke('agent:closeWorkspaceFile'") && preloadSource.includes("ipcRenderer.invoke('agent:confirmEditorClose'")
@@ -248,7 +344,7 @@ async function main() {
   assert(uiHtml.includes('function isHiddenWorkflowMessage(message)') && uiHtml.includes('Preparing model request and available tools') && uiHtml.includes('Executing \\d+ tool call') && uiHtml.includes('renderPersistedToolMessage(m)'), 'ui html: hides internal workflow status rows and folds persisted tool workflow messages');
   assert(uiHtml.includes('background: transparent;') && uiHtml.includes('border-radius: 0;') && uiHtml.includes('.chat-msg::before') && uiHtml.includes('.chat-msg::after'), 'ui html: chat messages are not bubble cards');
   assert(uiHtml.includes('if (conv && api.ensureConversation)') && uiHtml.includes('return loadActiveConversationMessages(id);') && uiHtml.includes('api.getState(requestedTarget)') && uiHtml.includes('requestedWorkspaceKey === currentWorkspaceKey()') && uiHtml.includes('if (s && s.chatMessages) renderChatMessages(s.chatMessages);'), 'ui html: workspace conversation switching reloads a composite-target snapshot without mutating another runtime');
-  assert(uiHtml.includes('guideMessagesByTarget') && uiHtml.includes('function recordGuideUiMessage') && uiHtml.includes('function renderPendingGuideMessages') && uiHtml.includes('function syncGuideMessagesFromWorkRuns') && uiHtml.includes('renderPendingGuideMessages(renderTarget, persistedGuideIds)') && uiHtml.includes("guideStatus: 'applied'") && !uiHtml.includes("optimisticGuide.setAttribute('data-guide-status'"), 'ui html: Guide receipts are target-scoped and snapshot redraw reconciles optimistic rows by clientMessageId');
+  assert(uiHtml.includes('guideMessagesByTarget') && uiHtml.includes('function recordGuideUiMessage') && uiHtml.includes('function renderPendingGuideMessages') && uiHtml.includes('function syncGuideMessagesFromWorkRuns') && uiHtml.includes('renderPendingGuideMessages(renderTarget, persistedGuideIds)') && uiHtml.includes("guideStatus: clientMessageId ? 'applied' : ''") && !uiHtml.includes("optimisticGuide.setAttribute('data-guide-status'"), 'ui html: Guide receipts are target-scoped and snapshot redraw reconciles optimistic rows by clientMessageId');
   assert(uiHtml.includes("{ id: 'default', summary: t('workspace.defaultConversation')") && !uiHtml.includes("'conv-' + key + '-default'") && !uiHtml.includes("'conv-default-' + currentWorkspaceKey()"), 'ui html: default conversation id matches backend default id');
   assert(uiHtml.includes('function applyBackendConversations(items, activeId, workspaceId)') && uiHtml.includes('var preferredActiveId = hasLocalActive ? localActiveId') && uiHtml.includes('applyBackendConversations(backendConversations, preferredActiveId)'), 'ui html: reloads persisted conversation list into a workspace-scoped cache while preserving each window-local active conversation');
   assert(uiHtml.includes('function activeConversationId()') && uiHtml.includes('api.sendMessage(requestMessage, lockedTarget)') && uiHtml.includes('composePromptRequestForSend(rawText)'), 'ui html: sends the initiating composite target with structured text and image attachments');
@@ -258,14 +354,14 @@ async function main() {
   assert(uiHtml.includes('if (api.setMode) await api.setMode(state.mode)') && uiHtml.includes('if (api.setModel && state.model) await api.setModel(state.model)'), 'ui html: send synchronizes current mode and model before backend turn');
   assert(uiHtml.includes('renderConversations();') && uiHtml.includes('r.conversations') && uiHtml.includes('applyBackendConversations(r.conversations || [], lockedConversationId, lockedTarget.workspaceId)'), 'ui html: refreshes the initiating workspace conversation cache without changing the foreground target');
   assert(uiHtml.includes('runningConversations') && uiHtml.includes('setupAgentWorkEvents()') && uiHtml.includes('appendAgentWorkEvent(payload)') && uiHtml.includes('var id = String(event.conversationId ||') && uiHtml.includes('renderAgentWorkEvent(event)') && uiHtml.includes('summary: item.title ||'), 'ui html: supports per-conversation running state, conversation-bound live work events, and backend titles');
-  assert(uiHtml.includes("type === 'queue_update'") && uiHtml.includes('state.backendQueue = event.queue') && uiHtml.includes('if (s && s.queued) {') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue)'), 'ui html: caches backend queue_update events for foreground/background conversation debugging');
+  assert(uiHtml.includes("type === 'queue_update'") && uiHtml.includes('backendQueuesByTarget') && uiHtml.includes('setBackendQueueForTarget(event.queue || { steering: [], followUp: [] }, eventQueueTarget)') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue, eventQueueTarget)') && uiHtml.includes('setBackendQueueForTarget(s.queued, snapshotTarget)') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue, snapshotTarget)'), 'ui html: caches backend queue_update events by composite target for foreground/background conversation debugging');
   assert(uiHtml.includes('if (s && Array.isArray(s.workEvents))') && uiHtml.includes('var mergedEvents = existingEvents.concat(s.workEvents || [])') && uiHtml.includes('dedupedEvents.slice(-Number(state.agentWorkEventLimit || 240))'), 'ui html: merges backend work-event snapshots when foregrounding a conversation');
-  assert(mainSource.includes('function broadcastAgentWorkEvent(event: unknown)') && mainSource.includes('BrowserWindow.getAllWindows()') && mainSource.includes("win.webContents.send('agent:workEvent', event)") && mainSource.includes("ipcMain.handle('agent:getState', async (_event, targetInput?: ConversationTargetInput)") && mainSource.includes("ipcMain.handle('agent:ensureConversation'") && mainSource.includes('ensureWslConversationPool()!.snapshot(target)') && mainSource.includes('ensureElectronUtilityPool().snapshot(target)') && preloadSource.includes('ensureConversation: (target: string | Record<string, unknown>)') && preloadSource.includes('getState: (target?: string | Record<string, unknown>)'), 'backend sharing: all desktop windows receive one composite-target event stream and can request isolated Windows/WSL snapshots');
+  assert(mainSource.includes('function broadcastAgentWorkEvent(event: unknown)') && mainSource.includes('BrowserWindow.getAllWindows()') && mainSource.includes("win.webContents.send('agent:workEvent', event)") && mainSource.includes("ipcMain.handle('agent:getState', async (event, targetInput?: ConversationTargetInput)") && mainSource.includes('const startupPrewarmRequest = isStartupPrewarmSender(event)') && mainSource.includes("ipcMain.handle('agent:ensureConversation'") && mainSource.includes('ensureWslConversationPool()!.snapshot(target)') && mainSource.includes('ensureElectronUtilityPool().snapshot(target)') && preloadSource.includes('ensureConversation: (target: string | Record<string, unknown>)') && preloadSource.includes('getState: (target?: string | Record<string, unknown>)'), 'backend sharing: all desktop windows receive one composite-target event stream and can request isolated Windows/WSL snapshots');
   assert(mainSource.includes('const singleInstanceLock = app.requestSingleInstanceLock()') && mainSource.includes("app.on('second-instance'") && mainSource.includes('const win = mainWindow && !mainWindow.isDestroyed()') && !mainSource.includes('const win = createDesktopWindow ? createDesktopWindow(!!agent) : mainWindow'), 'main process: repeated launches from installed or unpacked executables focus the existing window instead of creating a duplicate');
   assert(uiHtml.includes('function loadActiveConversationMessages(conversationId)') && uiHtml.includes('var requestedConversationId = String(conversationId || activeConversationId() ||') && uiHtml.includes('var requestedTarget = currentConversationTarget(requestedConversationId)') && uiHtml.includes('api.getState(lockedTarget)') && !uiHtml.includes('api.getState().then(function(s) {\n      if (s && s.contextCompression'), 'ui html: active window refreshes are bound to the owning workspace and conversation target');
   assert(uiHtml.includes('function setActiveWorkspaceConversationById(id)') && uiHtml.includes('var activeBeforeRender = (conversations.find(function(c)') && uiHtml.includes('if (activeBeforeRender) setActiveWorkspaceConversationById(activeBeforeRender);'), 'ui html: conversation list rerender preserves active conversation by id instead of stale cross-window index');
   assert(uiHtml.includes('function applyWorkspaceStateFromBackend(s)') && uiHtml.includes('var localActiveId = activeConversationId();') && uiHtml.includes('var hasLocalActive = backendConversations.some(function(item)') && uiHtml.includes('window.openWorkspaceManager = async function()') && uiHtml.includes('await window.refreshWorkspaceState().catch(function(){})'), 'ui html: workspace manager refresh keeps each window-local active conversation before rendering');
-  assert(uiHtml.includes('window.selectWorkspace = function(reference)') && uiHtml.includes('renderChatMessages([]);') && uiHtml.includes('state.backendQueue = { steering: [], followUp: [] };') && uiHtml.includes('syncBackendConversation().then(function()'), 'ui html: workspace switching clears stale conversation UI and reloads the workspace-bound backend conversation');
+  assert(uiHtml.includes('window.selectWorkspace = function(reference)') && uiHtml.includes('renderChatMessages([]);') && uiHtml.includes('state.backendQueue = backendQueueForTarget(currentConversationTarget());') && uiHtml.includes('state.backendQueue = backendQueueForTarget(currentConversationTarget(activeId));') && uiHtml.includes('syncBackendConversation().then(function()'), 'ui html: workspace switching clears stale conversation UI, restores only the composite-target queue cache, and reloads the workspace-bound backend conversation');
   assert(uiHtml.includes('function canonicalUiWorkspaceKey(ws)') && uiHtml.includes('window.upsertWorkspaceState = function(ws)') && !uiHtml.includes('state.workspaces.push(ws);'), 'ui html: workspace creation upserts exact folder bindings instead of showing temporary duplicates');
   assert(uiHtml.includes('id="skill-market-search"') && uiHtml.includes('window.updateSkillMarketSearch') && uiHtml.includes('window.filteredSkillMarket') && uiHtml.includes('window.renderSkillsMarketList'), 'ui html: Skills Market has searchable filtered list');
   assert(uiHtml.includes('window.renderSkillMarketSources') && uiHtml.includes('id="skill-market-source-name"') && uiHtml.includes('window.addSkillMarketSourceFromUi') && uiHtml.includes('window.setSkillMarketSourceEnabledFromUi'), 'ui html: Skills Market lets users add and manage market sources');
@@ -275,7 +371,11 @@ async function main() {
   assert(uiHtml.includes("if (depth === 0) parent.innerHTML = '<div style=\"font-size:11px;color:var(--text-dim);padding:8px;\">' + esc(t('fileTree.empty'))"), 'ui html: file tree shows the empty label only for an empty root, not expanded empty directories');
   assert(mainSource.includes('async function listTreeLevel(current: string)') && mainSource.includes('await fs.promises.readdir(current, { withFileTypes: true })') && !mainSource.includes('children: walkTree(root, fullPath)') && mainSource.includes('fs.promises.realpath(workspaceRoot)') && mainSource.includes('fs.promises.realpath(treeRoot)') && mainSource.includes("return { error: 'File tree path is outside the active workspace' }"), 'file tree: backend returns one async directory level and confines lexical and linked paths to the active workspace');
   assert(uiHtml.includes("var result = await api.getFileTree(node.path)") && uiHtml.includes("children.getAttribute('data-loaded') === 'true'") && uiHtml.includes("childContainer.style.display = 'none'") && !uiHtml.includes('id="ft-toggle-\' + depth + \'-\' + i'), 'file tree: renderer loads children only on first expansion and uses branch-local DOM references');
-  assert(uiHtml.includes("if (window.loadFileTree && !state.rightCollapsed && state.rightTab === 'file-tree') window.loadFileTree()") && !uiHtml.includes('// Load file tree (async, non-blocking)'), 'file tree: startup and language refresh avoid hidden duplicate workspace scans');
+  const postStartupUiSource = uiHtml.match(/function schedulePostStartupUiRendering\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
+  assert(uiHtml.includes("if (opening && state.rightTab === 'file-tree') window.loadFileTree();")
+    && uiHtml.includes("if (tab === 'file-tree') window.loadFileTree();")
+    && !postStartupUiSource.includes('loadFileTree')
+    && !uiHtml.includes('// Load file tree (async, non-blocking)'), 'file tree: startup and language refresh avoid hidden duplicate workspace scans');
   assert(uiHtml.includes('function renderMessageContent(text)') && uiHtml.includes('function renderMarkdownBlocks(text)') && uiHtml.includes('function renderMarkdownInline(text)') && uiHtml.includes('class="msg-image"') && uiHtml.includes('normalizeImageSrc(imageUrl)') && uiHtml.includes("if (/^data:image\\//i.test(url)) return true;"), 'ui html: conversation renders returned markdown images, including data URLs');
   assert(uiHtml.includes('class="md-table"') && uiHtml.includes('function renderMarkdownTable(lines, start)') && uiHtml.includes('class="md-math-inline"') && uiHtml.includes('class="md-math-block"') && uiHtml.includes('function renderMathFormula(tex)') && uiHtml.includes('class="math-frac"') && uiHtml.includes('"Cambria Math"') && uiHtml.includes('white-space: normal;'), 'ui html: conversation message markdown supports tables and rendered TeX-style formula blocks without pre-wrap text fallback');
   assert(uiHtml.includes('class="msg-file-link"') && uiHtml.includes('onclick="window.openLinkedFile(')
@@ -301,7 +401,7 @@ async function main() {
   assert(uiHtml.includes('#input-tools {') && uiHtml.includes('overflow: visible;'), 'input toolbar: permits submit hover and running marquee pixels outside the fixed button box without clipping');
   assert(uiHtml.includes('window.runFlowWork = async function(workIdx)') && uiHtml.includes('await api.saveFlow(normalized)') && uiHtml.includes('api.runFlow(normalized.name, flowInput, 0)') && uiHtml.includes('renderChatMessages(r.chatMessages)'), 'ui html: Flow Run uses the constrained Flow API and backend core runner');
   assert(uiHtml.includes('function stopFlowRunInternal()') && uiHtml.includes('window.stopFlowRun = function()') && uiHtml.includes('stopFlowRunInternal();') && !uiHtml.includes('window.stopFlowRun = function() {\n  stopFlowRun();'), 'ui html: Flow stop handler avoids global recursive self-call');
-  assert(uiHtml.includes("conversationRunning && effectiveInputMode === 'guide'") && uiHtml.includes("effectiveInputMode === 'next' && !opts.fromQueue") && uiHtml.includes('state.nextQueue.push(text)') && uiHtml.includes('state.queueCollapsed = false') && !uiHtml.includes('[Queue] Current turn is locked; prompt will run after it completes.'), 'ui html: Guide steers active turns while Next queues future work in the bottom queue');
+  assert(uiHtml.includes("conversationRunning && effectiveInputMode === 'guide'") && uiHtml.includes("effectiveInputMode === 'next' && !opts.fromQueue") && uiHtml.includes('state.nextQueue.push(displayText)') && uiHtml.includes('bindQueuedRequestToTarget(requestMessage, rawText, lockedTarget)') && uiHtml.includes('queuedRequestMatchesTarget') && uiHtml.includes('state.queueCollapsed = false') && !uiHtml.includes('[Queue] Current turn is locked; prompt will run after it completes.'), 'ui html: Guide steers active turns while target-bound Next requests queue future text and images without cross-conversation delivery');
   assert(uiHtml.includes('id="terminal-timeout-input"') && uiHtml.includes('Max ms') && uiHtml.includes('Terminal timeout cap') && uiHtml.includes('window.setTerminalInterruptTimeout = function(value)') && uiHtml.includes("api.saveSetting('terminal', 'interrupt_timeout_ms', n)"), 'ui html: terminal timeout cap is editable and persisted');
   const agentKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
   const piKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
@@ -321,15 +421,16 @@ async function main() {
   assert(mainKernelSource.includes('electronUtilityRuntimePool.subscribe(event => broadcastAgentWorkEvent(event))') && mainKernelSource.includes('wslAgentRuntimePool.subscribe(event => broadcastAgentWorkEvent(event))') && mainKernelSource.includes('ensureElectronUtilityPool().snapshot(target)') && conversationKernelSource.includes('runtimeKey'), 'kernel: desktop IPC subscribes isolated runtime pools and exposes target-scoped event snapshots');
   assert(!piKernelSource.includes("tokens.push({ type: 'text', text });\n      agent.recordToolResult") && piKernelSource.includes("type: 'tool_result'") && piKernelSource.includes('toolCallId: event.toolCallId') && piKernelSource.includes("content: `Tool ${event.toolName} completed.`"), 'kernel: tool results stay available to the model while public work events contain only tool completion metadata');
   assert(agentKernelSource.includes('appendWorkflowMessage(content: string, toolName?: string, toolArgs?: string, persist = true)') && piKernelSource.includes("agent.appendWorkflowMessage(`Calling tool ${event.toolName}`, event.toolName, undefined, false)") && piKernelSource.includes("agent.appendWorkflowMessage(`Tool ${event.toolName} completed.`, event.toolName, undefined, false)") && !piKernelSource.includes('agent.visibleToolArgs(args)'), 'kernel: high-frequency workflow rows expose only tool names and defer conversation-state writes until turn persistence points');
-  assert(piKernelSource.includes('const newmarkTools = agent.subagentToolDefinitions(agent.tools.definitions(agent.mode))') && piKernelSource.includes('streamWithNewmarkProvider(agent, provider, KernelStreamCompat, newmarkTools)') && piKernelSource.includes('kernel.state.tools = toKernelTools(agent, newmarkTools)') && piKernelSource.includes('cachedTools'), 'kernel: per-turn tool schemas are built once and reused by streaming and execution adapters');
+  assert(piKernelSource.includes('const availableTools = agent.subagentToolDefinitions(agent.tools.definitions(agent.mode))') && piKernelSource.includes('const newmarkTools = toolSurface.definitions') && piKernelSource.includes('streamWithNewmarkProvider(agent, KernelStreamCompat, newmarkTools)') && piKernelSource.includes('kernel.state.tools = toKernelTools(agent, newmarkTools)') && piKernelSource.includes('cachedTools'), 'kernel: per-turn tool schemas are built once and reused by streaming and execution adapters');
   const streamProviderBody = (piKernelSource.match(/function streamWithNewmarkProvider[\s\S]*?async function transformContext/) || [''])[0];
   assert(!streamProviderBody.includes('currentAgent.tools.definitions(currentAgent.mode)'), 'kernel: streaming provider does not rebuild tool schemas on every model round');
   assert(piKernelSource.includes("if (!agent.config.getBool('context', 'auto_compress')) return messages;"), 'kernel: transformContext skips conversion and JSON comparison when auto compression is disabled');
   assert(mainKernelSource.includes("ipcMain.handle('agent:abortConversation'") && mainKernelSource.includes("ipcMain.handle('agent:stopConversation'") && uiHtml.includes('api.archive(targetRuntime)') && uiHtml.includes("['running', 'stopping', 'force_restarting']"), 'kernel/ui: target stop state is authoritative and running conversations cannot be archived from the UI');
   assert(uiHtml.includes('var seenIds = {};') && uiHtml.includes('if (seenIds[id]) continue;') && uiHtml.includes("displaySummary += ' · ' + String(conv.id || '').slice(-8);"), 'ui conversations: duplicate ids are ignored and distinct conversations with matching titles are disambiguated');
   assert(uiHtml.includes('#model-select {') && uiHtml.includes('flex: 1 1 160px;') && uiHtml.includes('width: 0;') && uiHtml.includes('min-width: 72px;') && uiHtml.includes('container-type: inline-size;') && uiHtml.includes('@container (max-width: 430px)') && uiHtml.includes('@media (max-width: 720px)') && uiHtml.includes('#left, #left-secondary, #right, .right-open-btn { display: none !important; }') && uiHtml.includes('#input-tools {') && uiHtml.includes('overflow: hidden;'), 'ui input toolbar: model selector keeps readable minimum width and narrow-window layout preserves submit without changing saved sidebar state');
-  assert(uiHtml.includes("evaluationStatus !== 'available' && evaluationStatus !== 'unvalidated'") && agentKernelSource.includes("return status === 'available' || status === 'unvalidated';"), 'model selectors: show only validated available or unvalidated models');
-  assert(agentKernelSource.includes('const catalogByProvider = new Map') && agentKernelSource.includes('await p.modelCatalog()') && agentKernelSource.includes('await p.validateVision(m.name)') && agentKernelSource.includes('await p.validateImageOutput(m.name)') && agentKernelSource.includes('vision_input: visionResult.ok') && agentKernelSource.includes('image_output: imageResult.ok'), 'model validation: combines network catalog evidence with real text, vision, and image-generation tasks');
+  assert(uiHtml.includes("validationStatus !== 'verified' && validationStatus !== 'degraded'") && agentKernelSource.includes("validationStatus === 'verified' || validationStatus === 'degraded'"), 'model selectors: keep fixed unvalidated models visible while accepting Standard verified or degraded evidence');
+  const modelValidationSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'modelValidation.ts'), 'utf-8');
+  assert(agentKernelSource.includes('const service = new ModelValidationService({ cache })') && agentKernelSource.includes('await p.modelCatalog()') && agentKernelSource.includes('createProviderValidationAdapter(p, m.name)') && agentKernelSource.includes('visionChallenge: declaredVision') && modelValidationSource.includes("'strict_json'") && modelValidationSource.includes("'unknown_tool_exclusion'") && modelValidationSource.includes("'tool_result'") && modelValidationSource.includes('validateImageOutput('), 'model validation: uses the shared Standard/Extended service for catalog hypotheses and real text, stream, JSON, tool, vision, and image-byte probes');
   assert(uiHtml.includes('foregroundConversationHoldId') && uiHtml.includes('holdForegroundConversation(activeId, 4500)') && uiHtml.includes('Date.now() < Number(state.foregroundConversationHoldUntil'), 'ui html: foregrounded background conversations stay active briefly during backend refresh');
   assert(uiHtml.includes('trackedConversationUntil') && uiHtml.includes('conversationTrackMs: 300000') && uiHtml.includes('markConversationTracked(previousId') && uiHtml.includes('markConversationTracked(activeId'), 'ui html: conversations keep a five-minute tracking window after foreground switches without aborting background work');
   assert(conversationKernelSource.includes("getNum('agent', 'process_timeout_ms')") && conversationKernelSource.includes('if (timeoutMs <= 0)') && conversationKernelSource.includes('const tokens = await runtime.runner.process(message)') && conversationKernelSource.includes('if (timeout) clearTimeout(timeout)'), 'kernel: desktop conversation turns have configurable outer timeout disabled by default');
@@ -438,7 +539,25 @@ async function main() {
   assert(uiHtml.includes("els.left.style.flexBasis = px;") && uiHtml.includes('setLeftWidthPx(leftSize);'), 'ui html: left width setter covers flex-basis and resize');
   assert(!uiHtml.includes('#left.collapsed .left-nav-icon span:not(.icon),\n#left.collapsed #left-ws-header'), 'ui html: left collapse labels are not hard-hidden by grouped display rule');
   assert(uiHtml.includes('#left.collapsed .left-nav-icon span:not(.icon)') && uiHtml.includes('max-width: 0;'), 'ui html: left labels animate closed with max-width');
-  assert(uiHtml.includes('#left-secondary.open') && uiHtml.includes('opacity: 1;') && uiHtml.includes('translateX(0) translateZ(0)'), 'ui html: left secondary panel animates width opacity transform');
+  const leftSecondaryBaseCss = uiHtml.match(/#left-secondary\s*\{([\s\S]*?)\}/)?.[1] || '';
+  const leftSecondaryOpenCss = uiHtml.match(/#left-secondary\.open\s*\{([\s\S]*?)\}/)?.[1] || '';
+  assert(
+    leftSecondaryBaseCss.includes('width: 0;')
+      && leftSecondaryBaseCss.includes('opacity: 0;')
+      && leftSecondaryBaseCss.includes('transform: translateX(-8px);')
+      && leftSecondaryBaseCss.includes('transition: width ')
+      && leftSecondaryBaseCss.includes('opacity var(--duration-normal)')
+      && leftSecondaryBaseCss.includes('transform var(--duration-normal)')
+      && leftSecondaryOpenCss.includes('width: var(--left-secondary-width);')
+      && leftSecondaryOpenCss.includes('opacity: 1;')
+      && leftSecondaryOpenCss.includes('transform: translateX(0);')
+      && leftSecondaryOpenCss.includes('transition: width ')
+      && leftSecondaryOpenCss.includes('opacity var(--duration-normal)')
+      && leftSecondaryOpenCss.includes('transform var(--duration-normal)')
+      && !leftSecondaryBaseCss.includes('translateZ(')
+      && !leftSecondaryOpenCss.includes('translateZ('),
+    'ui html: left secondary panel animates width opacity transform'
+  );
   assert(uiHtml.includes("left.removeAttribute('data-left-motion');") && uiHtml.includes('panel-left-open'), 'ui html: collapsed left button uses open panel icon and clears motion marker');
   assert(uiHtml.includes('id="new-provider-protocol"') && uiHtml.includes('id="fuzzy-protocol"') && uiHtml.includes("t('model.protocol')"), 'ui html: provider protocol is editable and visible');
   assert(uiHtml.includes('window.editProvider = function(idx)') && uiHtml.includes('window.saveProviderEdit = function(idx)') && uiHtml.includes('window.removeProvider = function(idx)') && uiHtml.includes('_previous_name: p.name || name'), 'ui html: provider settings support edit/delete and renamed-key preservation');
@@ -458,7 +577,7 @@ async function main() {
   const wslProtocolTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'wslAgentProtocol.ts'), 'utf-8');
   const wslHostToolBridgeTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'wslHostToolBridge.ts'), 'utf-8');
   assert(mainTs.includes("activeAgentBackendMode: 'windows' | 'wsl'") && mainTs.includes("configuredAgentBackend") && mainTs.includes('agentBackendRestartRequired') && !mainTs.includes("if (key === 'run_in_wsl' && value === true) await ensureWslAgentClient()"), 'main WSL backend: configured backend changes only after restart and does not hot-switch active conversations');
-  assert(mainTs.includes('function detectWslDistrosAtStartup(): Promise<string[]>') && mainTs.includes("id: 'wsl-detection'") && mainTs.includes('required: false') && mainTs.includes('run: async () => await detectWslDistrosAtStartup()') && mainTs.includes('const wslDistros = await availableWslDistros()') && mainTs.includes('wslAvailable: wslDistros.length > 0') && mainTs.includes('wslDistros,'), 'main WSL backend: detects distributions asynchronously during prewarm and reports the cached result for UI gating');
+  assert(mainTs.includes('function detectWslDistrosAtStartup(): Promise<string[]>') && mainTs.includes("id: 'wsl-detection'") && mainTs.includes('delayMs: 500') && mainTs.includes('const distros = await detectWslDistrosAtStartup()') && mainTs.includes('function availableWslDistros(): string[]') && mainTs.includes('return wslDistroCache.items.slice()') && mainTs.includes('const wslDistros = availableWslDistros()') && mainTs.includes('wslAvailable: wslDistros.length > 0') && mainTs.includes('wslDistros,'), 'main WSL backend: detects distributions only after promotion and reports the non-blocking cached result for UI gating');
   const wslPackageConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
   assert(mainTs.includes('function ensureWslRuntimeBundle()') && mainTs.includes("'app.asar.unpacked', 'dist', 'wsl-agent-host.bundle.cjs'") && !mainTs.includes("path.join(userRuntimeRoot(), 'Runtime', 'wsl'") && wslPackageConfig.build?.asarUnpack?.includes('dist/wsl-agent-host.bundle.cjs'), 'main WSL backend: loads one read-only unpacked Agent bundle without copying runtime code into .Newmark');
   assert(wslClientTs.includes("spawn('wsl.exe'") && wslClientTs.includes('windowsDrivePathToWsl') && wslClientTs.includes("message.event === 'work'") && wslHostTs.includes('new ConversationKernel(root, host, null)') && wslHostTs.includes("backend: 'wsl'"), 'WSL backend bridge: persistent JSONL RPC host runs ConversationKernel in WSL and streams conversation events');
@@ -472,7 +591,7 @@ async function main() {
     if (!wslProbe.error && wslProbe.status === 0) {
       const wslRoot = path.join(TEST_DIR, 'wsl-client');
       fs.mkdirSync(wslRoot, { recursive: true });
-      const wslClient = new WslAgentClient('Ubuntu-24.04', wslRoot, path.join(process.cwd(), 'dist', 'wsl-agent-host.js'));
+      const wslClient = new WslAgentClient('Ubuntu-24.04', wslRoot, path.join(process.cwd(), 'dist', 'wsl-agent-host.bundle.cjs'));
       try {
         await wslClient.start();
         const wslA = await wslClient.snapshot('wsl-conv-a', { name: 'wsl-workspace', path: TEST_DIR, isInternal: false, kind: 'local' });
@@ -486,7 +605,7 @@ async function main() {
   }
   const nativeToolsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'nativeTools.ts'), 'utf-8');
   const agentTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
-  assert(!agentTs.includes('public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && !agentTs.includes('public ensureConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && agentTs.includes('const isActiveConversation = clean === this.safeConversationId') && agentTs.includes('isActiveConversation ? this.chatMessages : (persisted?.chatMessages || memory?.chatMessages || [])') && agentTs.includes('isActiveConversation ? this.workRuns : (persisted?.workRuns || memory?.workRuns)') && agentTs.includes('mirrorConversationStateFrom(id: string') && agentTs.includes('const stateKey = this.workspaceConversationStateKey(clean);') && agentTs.includes("this.safeConversationId(this.activeConversationId || 'default') === clean"), 'agent conversation snapshots are read-only, active target state is live, cold target state is persisted, and runner mirrors synchronize active host memory');
+  assert(!agentTs.includes('public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && !agentTs.includes('public ensureConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && agentTs.includes('const isActiveConversation = clean === this.safeConversationId') && agentTs.includes('const sourceChatMessages = isActiveConversation') && agentTs.includes('? this.chatMessages') && agentTs.includes(': (persisted?.chatMessages ?? memory?.chatMessages ?? [])') && agentTs.includes('const chatMessages = isActiveConversation') && agentTs.includes(': this.normalizeConversationChatMessages(sourceChatMessages, history)') && agentTs.includes('isActiveConversation ? this.workRuns : (persisted?.workRuns || memory?.workRuns)') && agentTs.includes('mirrorConversationStateFrom(id: string') && agentTs.includes('const stateKey = this.workspaceConversationStateKey(clean);') && agentTs.includes("this.safeConversationId(this.activeConversationId || 'default') === clean"), 'agent conversation snapshots are read-only, active target state is live, cold target state is persisted and attachment-normalized, and runner mirrors synchronize active host memory');
   const configTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'config.ts'), 'utf-8');
   const getStateHandler = mainTs.slice(mainTs.indexOf("ipcMain.handle('agent:getState'"), mainTs.indexOf("ipcMain.handle('agent:getConversationPlan'"));
   assert(getStateHandler.includes('...conversationSnapshot') && !getStateHandler.includes('chatMessages: agent.chatMessages'), 'main process: conversation-scoped getState does not overwrite target messages with shared host messages');
@@ -520,6 +639,8 @@ async function main() {
   const releaseUiModelSettingsSmoke = fs.existsSync(releaseUiModelSettingsSmokePath) ? fs.readFileSync(releaseUiModelSettingsSmokePath, 'utf-8') : '';
   const releaseUiModelAutoContextSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-model-auto-context-smoke.cjs');
   const releaseUiModelAutoContextSmoke = fs.existsSync(releaseUiModelAutoContextSmokePath) ? fs.readFileSync(releaseUiModelAutoContextSmokePath, 'utf-8') : '';
+  const releaseDev010FeaturesSmoke = fs.readFileSync(path.join(process.cwd(), 'scripts', 'release-dev010-features-smoke.cjs'), 'utf-8');
+  const dev010PerformanceBenchmark = fs.readFileSync(path.join(process.cwd(), 'scripts', 'benchmark-dev010-startup-memory.cjs'), 'utf-8');
   const releaseUiGemmaRemovalSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-gemma-removal-smoke.cjs');
   const releaseUiGemmaRemovalSmoke = fs.existsSync(releaseUiGemmaRemovalSmokePath) ? fs.readFileSync(releaseUiGemmaRemovalSmokePath, 'utf-8') : '';
   const releaseUiFlowSubagentSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-flow-subagent-smoke.cjs');
@@ -584,22 +705,22 @@ async function main() {
   assert(mainTs.includes('function userRuntimeRoot') && mainTs.includes("path.join(os.homedir(), '.Newmark')") && mainTs.includes('function legacyUserDataRoot') && mainTs.includes('function migrateLegacyRuntimeRoot') && mainTs.includes('function canWriteDirectory') && mainTs.includes('function isProtectedInstallRoot') && mainTs.includes('function shadowRootFor') && mainTs.includes('function writableRuntimeRoot') && mainTs.includes('if (isPathInside(exeRoot(), resolved)) return userRuntimeRoot()') && mainTs.includes("process.env.ProgramFiles") && mainTs.includes("path.join(userRuntimeRoot(), 'Roots'") && mainTs.includes('if (explicitRoot) return writableRuntimeRoot(explicitRoot)') && mainTs.includes('return getRoot();') && mainTs.includes('firstRunInit(root);') && mainTs.includes('firstRunInit(fallbackRoot)') && mainTs.includes('logStartupFailure(`firstRunInit:${root}`'), 'main startup: every packaged install location resolves settings to user home .Newmark and never treats its executable directory as mutable state');
   assert(mainTs.includes('existingPcId = fs.existsSync(pcHashPath)') && mainTs.includes('if (existingPcId !== pcId) fs.writeFileSync(pcHashPath, pcId') && memoryLabTs.includes('if (!fs.existsSync(this.indexPath))') && memoryLabTs.includes('this.normalizeIndex(raw);') && !memoryLabTs.includes('else this.saveIndex(this.normalizeIndex(this.loadIndex()))') && configTs.includes('if (fs.existsSync(configPath))') && workspaceTs.includes('if (this.external.length !== before) this.saveExternal();'), 'startup initialization: avoids rewriting config.json, PC_Hash.config, Memory Lab index, and External.json on every launch');
   assert(workspaceTs.includes('normalizeInternalWorkspace') && workspaceTs.includes("const expectedPath = path.join(this.rootPath, 'Work', name)") && workspaceTs.includes('if (internalChanged) this.saveInternal();') && workspaceTs.includes('!stateCurrent?.id || stateCurrent.id !== stored.id') && workspaceTs.includes('path.resolve(stateCurrent.path) !== path.resolve(stored.path)'), 'workspace migration: internal workspace absolute paths and stable ids are normalized under the current runtime root after .Newmark/userData migration');
-  assert(mainTs.includes('const STARTUP_HTML') && mainTs.includes('loadStartupShell(win)') && mainTs.includes('let startupShellReady: Promise<void> = Promise.resolve()') && mainTs.includes('startupShellReady = win.loadURL') && mainTs.includes('await startupShellReady;') && mainTs.includes("recordStartup('startup-shell-loaded')") && mainTs.includes('startupWindow = createDesktopWindow(false, true)') && mainTs.includes('runStartupPrewarmBarrier') && mainTs.includes('createDesktopWindow!(true, false, attemptId)') && mainTs.includes('waitForUiReadiness(candidate)') && mainTs.includes('promotePrewarmedUi(candidate)') && mainTs.includes('shellWindow.destroy()') && !mainTs.includes('win.webContents.stop();'), 'main startup: keeps the startup shell visible while kernel and hidden UI prewarm, then atomically promotes the hydrated UI');
+  assert(mainTs.includes('startupAttempt = 1') && mainTs.includes('startupWindow = createDesktopWindow(true, true, startupAttempt)') && mainTs.includes("ipcMain.handle('startup:waitForBackend'") && mainTs.includes('runStartupPrewarmBarrier') && mainTs.includes('const reusesPreloadedUi = attemptOneNavigationPreloaded') && mainTs.includes('if (!reusesPreloadedUi)') && mainTs.includes('waitForUiReadiness(startupUiWindow)') && mainTs.includes('promoteStartupUi(startupUiWindow)') && uiHtml.includes('id="startup-cover"') && uiHtml.indexOf('startupCover.remove()') > uiHtml.indexOf('readyAck.accepted !== true') && !mainTs.includes('createDesktopWindow!(true, false, attemptId)') && !mainTs.includes('shellWindow.destroy()') && !mainTs.includes('win.webContents.stop();'), 'main startup: keeps the in-window startup cover until readiness acknowledgement and atomically promotes that same hydrated window');
   assert(uiHtml.includes('id="todo-wrap" class="stack-card collapsed" style="display:none"') && uiHtml.includes('id="queue-panel" class="stack-card collapsed" style="display:none"'), 'input stack: task and queue bars stay hidden before state-driven rendering to avoid empty startup flashes');
   assert(mainTs.includes("const APP_NAME = 'Newmark Agent'") && mainTs.includes("const APP_ID = 'ai.newmark.agent'") && mainTs.includes('app.setName(APP_NAME)') && mainTs.includes('app.setAppUserModelId(APP_ID)'), 'main entrypoint: registers Newmark process/app identity instead of Electron');
   assert(packageJson.includes('"productName": "Newmark Agent"') && packageJson.includes('"executableName": "Newmark Agent"') && packageJson.includes('"signAndEditExecutable": false') && packageJson.includes('"target": "msi"') && packageJson.includes('"msi"') && packageJson.includes('Newmark-Agent-${version}-${arch}.${ext}') && packageJson.includes('"dist:windows-release"') && packageJson.includes('"resedit": "^1.7.2"') && electronBuilderConfigTs.includes("productName: 'Newmark Agent'") && electronBuilderConfigTs.includes("executableName: 'Newmark Agent'") && electronBuilderConfigTs.includes("productName: 'Newmark Agent'"), 'package metadata: product and executable names are fixed to Newmark Agent, Windows releases target MSI, and resource editing is handled by local resedit patching');
   assert(fs.existsSync(path.join(process.cwd(), 'assets', 'app-icon-dark.png')) && fs.existsSync(path.join(process.cwd(), 'assets', 'app-icon-light.png')) && appIconIco.length > 6 && appIconIco.readUInt16LE(2) === 1 && appIconIco.readUInt16LE(4) >= 1, 'app icons: themed PNG assets and Windows ICO exist');
   assert(createHash('sha256').update(appIconDark).digest('hex').toUpperCase() === 'D07F670051677EEF1BD4B60EF186E8ADB81A37202BE49F929DA84D38C54E4305' && createHash('sha256').update(appIconLight).digest('hex').toUpperCase() === 'E8482757BC5AB5BD4C9A4589A878170C0D3DAE25A8F27A5461CEC45F2EFCB3CA', 'app icons: source assets exactly match the supplied dark and light finished PNGs');
   assert(packageJson.includes('"icon": "assets/icon.ico"') && electronBuilderConfigTs.includes("icon: 'assets/icon.ico'"), 'app icons: Windows package uses generated ICO');
-  assert(mainTs.includes('nativeTheme') && mainTs.includes("app-icon-light.png") && mainTs.includes("app-icon-dark.png") && mainTs.includes('createAppIconImage(16)') && mainTs.includes('icon: themedAppIconPath()') && mainTs.includes("nativeTheme.on('updated', refreshNativeThemeIcons)") && mainTs.includes('win.setIcon(windowIcon)') && mainTs.includes('tray.setImage(createAppIconImage(16))'), 'app icons: runtime windows, taskbar, and tray update themed transparent assets when the system theme changes');
+  assert(mainTs.includes('nativeTheme') && mainTs.includes("const themeName = nativeTheme.shouldUseDarkColors ? 'light' : 'dark'") && mainTs.includes("`app-icon-${themeName}-64.png`") && mainTs.includes("appAssetPath(`app-icon-${themeName}.png`)") && mainTs.includes('createAppIconImage(16)') && mainTs.includes('icon: themedAppIconPath()') && mainTs.includes("nativeTheme.on('updated', refreshNativeThemeIcons)") && mainTs.includes('win.setIcon(windowIcon)') && mainTs.includes('tray.setImage(createAppIconImage(16))'), 'app icons: runtime windows, taskbar, and tray update compact themed assets with full-resolution fallback when the system theme changes');
   assert(mainTs.includes('function refreshNativeThemeIcons(): void') && !mainTs.includes('const refreshNativeThemeIcons ='), 'app icons: theme refresh is hoisted so early tray creation cannot hit a temporal-dead-zone startup failure');
-  assert(mainTs.includes('startupWindow = createDesktopWindow(false, true)') && mainTs.includes('mainWindow = startupWindow') && mainTs.includes('createTray();') && mainTs.includes("tray.on('click', showMainWindow)") && mainTs.includes("tray.on('double-click', showMainWindow)"), 'tray lifecycle: creates the tray with the startup window and reuses it while showing the prewarmed main window');
+  assert(mainTs.includes('startupWindow = createDesktopWindow(true, true, startupAttempt)') && mainTs.includes('mainWindow = startupWindow') && mainTs.includes('createTray();') && mainTs.includes("tray.on('click', showMainWindow)") && mainTs.includes("tray.on('double-click', showMainWindow)") && mainTs.includes('if (tray) return;'), 'tray lifecycle: creates one tray with the single startup window and reuses it while showing the promoted main window');
   assert(mainTs.includes("path.resolve(agent?.workspace.current?.path || root)") && mainTs.includes("ipcMain.handle('agent:getFileTree'"), 'file tree: defaults to the active workspace instead of exposing the ~/.Newmark runtime root and nested Roots shadows');
   assert(mainTs.includes("agent?.config.getBool('ui', 'minimize_to_tray') ?? true") && mainTs.includes("agent?.config.getStr('general', 'close_behavior')") && mainTs.includes("ipcMain.handle('app:lifecycleState'"), 'window lifecycle: separates minimize-to-tray from close behavior and exposes a smoke-test state');
   assert(preloadTs.includes("lifecycleState: () => ipcRenderer.invoke('app:lifecycleState')") && !uiHtml.includes("if (s.minimizeToTray) state.closeBehavior = 'minimize';"), 'window lifecycle: preload exposes lifecycle state without overwriting close behavior from minimize settings');
   assert(nativeToolsTs.includes('NATIVE_TOOL_CATALOG') && nativeToolsTs.includes("name: 'computer_use'") && nativeToolsTs.includes("name: 'terminal_takeover'") && nativeToolsTs.includes("name: 'subagent_read'") && nativeToolsTs.includes(".filter(tool => (tool.availability || 'configurable') === 'configurable')") && nativeToolsTs.includes('normalizeNativeToolEnabled') && configTs.includes('defaultNativeToolEnabled()') && configTs.includes("tools:") && toolsTs.includes('isNativeToolEnabled') && mainTs.includes('nativeToolCatalogForState') && mainTs.includes("case 'nativeTools'"), 'native tools settings: configurable catalog is exposed while required/mode-scoped tools stay system-managed and runtime-gated');
   assert(nativeToolsTs.includes("name: 'ssh_workspace'") && toolsTs.includes("t('ssh_workspace'") && toolsTs.includes('new SshManager') && preloadTs.includes('createSshWorkspace') && mainTs.includes("ssh:createWorkspace") && uiHtml.includes('ws-ssh-host') && uiHtml.includes('validateSshWorkspaceForm'), 'OpenSSH workspace: native tool, IPC, preload, and new-workspace UI are wired');
-  assert(uiHtml.includes('id="title-app-logo"') && uiHtml.includes('id="title-app-icon"') && uiHtml.includes('src="../../assets/app-icon-dark.png"') && uiHtml.includes('window.refreshTitlebarThemeIcon') && uiHtml.includes("state.theme === 'system' ? systemColorScheme.matches : state.theme !== 'light'") && uiHtml.includes("useDarkTheme ? '../../assets/app-icon-dark.png' : '../../assets/app-icon-light.png'") && uiHtml.includes("if (state.theme === 'system') window.refreshTitlebarThemeIcon()"), 'app icons: custom titlebar uses the supplied dark finished icon in dark mode, the supplied light finished icon in light mode, and consults the system scheme only in system mode');
+  assert(uiHtml.includes('id="title-app-logo"') && uiHtml.includes('id="title-app-icon"') && uiHtml.includes('src="../assets/app-icon-dark-64.png"') && uiHtml.includes('window.refreshTitlebarThemeIcon') && uiHtml.includes("state.theme === 'system' ? systemColorScheme.matches : state.theme !== 'light'") && uiHtml.includes("useDarkTheme ? '../assets/app-icon-dark-64.png' : '../assets/app-icon-light-64.png'") && uiHtml.includes("if (state.theme === 'system') applyUiAppearance()"), 'app icons: custom titlebar uses compact build-derived dark/light icons and reapplies appearance when the system scheme changes');
   assert(uiHtml.includes('#topbar .logo::before') && uiHtml.includes('animation: marquee-rotate var(--marquee-speed) linear infinite') && uiHtml.includes('var(--g1), var(--g2), var(--g3), var(--g4), var(--g1)') && uiHtml.includes('calc(-2 * var(--marquee-width))'), 'app icons: custom titlebar border uses shared adjustable marquee settings');
   assert(fs.existsSync(path.join(process.cwd(), 'scripts', 'patch-win-exe-icon.cjs')) && distPortableScript.includes("require('./patch-win-exe-icon.cjs')") && distPortableScript.includes('patchExeIdentity(unpackedExe)') && distPortableScript.includes('patchAndVerify(unpackedExe, packageIcon)') && distPortableScript.includes('verifyExeIcon(unpackedExe, packageIcon)') && distPortableScript.includes('verifyExeIdentity(unpackedExe)') && distPortableScript.includes('ProductName') && distPortableScript.includes('FileDescription') && distPortableScript.includes('electron.exe'), 'app icons: dist-portable patches/verifies win-unpacked exe associated icon and Newmark Windows resource identity before zipping');
   assert(packageJson.includes('"release:cli-smoke"') && releaseCliSmoke.includes('Start-Process') && releaseCliSmoke.includes('-RedirectStandardOutput'), 'release cli smoke: uses stable redirected packaged exe invocation');
@@ -651,7 +772,19 @@ async function main() {
   assert(releaseUiModelSettingsSmoke.includes('max_tokens === 8192') && releaseUiModelSettingsSmoke.includes('vision === false') && releaseUiModelSettingsSmoke.includes('thinking === true') && releaseUiModelSettingsSmoke.includes('Edited CRUD model description'), 'release ui model settings smoke: verifies model context, vision, thinking, and description fields');
   assert(packageJson.includes('"release:ui-model-auto-context-smoke"') && releaseUiModelAutoContextSmoke.includes('--remote-debugging-port=') && releaseUiModelAutoContextSmoke.includes("window.openSettings('models')"), 'release ui model auto/context smoke: drives real packaged Models settings UI through CDP');
   assert(releaseUiModelAutoContextSmoke.includes("window.setAutoSwitchMode('all')") && releaseUiModelAutoContextSmoke.includes("window.setAutoSwitchMode('provider')") && releaseUiModelAutoContextSmoke.includes("window.setOpenAIApiMode('responses')"), 'release ui model auto/context smoke: validates full/provider Auto modes and Responses API mode');
-  assert(releaseUiModelAutoContextSmoke.includes('context-token-ring') && releaseUiModelAutoContextSmoke.includes('ringWidth !== 16') && releaseUiModelAutoContextSmoke.includes('tooltipText.includes') && releaseUiModelAutoContextSmoke.includes('2026-07-01-release-ui-model-auto-context-smoke.png'), 'release ui model auto/context smoke: validates small context token ring placement, hover tooltip, and screenshot evidence');
+  assert(releaseUiModelAutoContextSmoke.includes('context-token-ring') && releaseUiModelAutoContextSmoke.includes('ringWidth !== 16') && releaseUiModelAutoContextSmoke.includes('tooltipText.includes') && releaseUiModelAutoContextSmoke.includes('2026-07-15-dev-0.0.10-model-auto-context-smoke.png'), 'release ui model auto/context smoke: validates small context token ring placement, hover tooltip, and dev-0.0.10 screenshot evidence');
+  assert(releaseUiModelAutoContextSmoke.includes("level: 'standard'") && releaseUiModelAutoContextSmoke.includes("status: 'verified'") && releaseUiModelAutoContextSmoke.includes('NEWMARK_TEST_EXE'), 'release ui model auto/context smoke: uses Standard-eligible fixtures and the artifact-selected executable');
+  assert(packageJson.includes('"test:dev010"') && packageJson.includes('"release:dev010-features-smoke"') && packageJson.includes('"benchmark:dev010-startup"'), 'dev-0.0.10: package scripts register focused, packaged, and performance gates');
+  assert(releaseDev010FeaturesSmoke.includes('dist/core/autoRouter.js') && releaseDev010FeaturesSmoke.includes('dist/core/modelValidation.js') && releaseDev010FeaturesSmoke.includes('NEWMARK_TEST_EXE') && releaseDev010FeaturesSmoke.includes('real_api_called: false'), 'dev-0.0.10 packaged smoke: inspects Auto/validation and remains provider-offline');
+  assert(dev010PerformanceBenchmark.includes('MINIMUM_ACCEPTANCE_RUNS = 20') && dev010PerformanceBenchmark.includes('setCPUThrottlingRate') && dev010PerformanceBenchmark.includes('privateMiBBeforeBrowser') && dev010PerformanceBenchmark.includes('browserOpenMs'), 'dev-0.0.10 benchmark: enforces twenty runs and records low-performance, pre-Browser private-byte, and Browser metrics');
+  assert(dev010PerformanceBenchmark.includes('STARTUP_ABSOLUTE_PRIVATE_MIB_LIMIT = 525')
+    && dev010PerformanceBenchmark.includes('BROWSER_ON_DEMAND_TOTAL_PRIVATE_MIB_LIMIT = 696')
+    && dev010PerformanceBenchmark.includes('BROWSER_ON_DEMAND_DELTA_PRIVATE_MIB_LIMIT = 300')
+    && dev010PerformanceBenchmark.includes('startupMemoryAcceptance')
+    && dev010PerformanceBenchmark.includes('browserOnDemandMemoryAcceptance')
+    && dev010PerformanceBenchmark.includes('startupBeforeBrowser: startupMemoryGate')
+    && dev010PerformanceBenchmark.includes('browserOnDemand: browserMemoryGate')
+    && !dev010PerformanceBenchmark.includes('afterMemoryGate = memoryAcceptance'), 'dev-0.0.10 benchmark: keeps the 525 MiB/25% startup gate while auditing Browser-on-demand total and delta with separate runaway limits');
   assert(packageJson.includes('"release:ui-gemma-removal-smoke"') && releaseUiGemmaRemovalSmoke.includes('--remote-debugging-port=') && releaseUiGemmaRemovalSmoke.includes("window.openSettings('models')"), 'release ui Gemma removal smoke: drives real packaged Models settings UI through CDP');
   assert(releaseUiGemmaRemovalSmoke.includes('typeof window.api.downloadGemma') && releaseUiGemmaRemovalSmoke.includes('Gemma download UI absent') && releaseUiGemmaRemovalSmoke.includes('Fuzzy inject model'), 'release ui Gemma removal smoke: verifies removed download bridge/UI and retained fuzzy entry');
   assert(releaseUiGemmaRemovalSmoke.includes('LocalRuntimeCheck') && releaseUiGemmaRemovalSmoke.includes('http://127.0.0.1:11434/v1') && releaseUiGemmaRemovalSmoke.includes('local-runtime-manual-model'), 'release ui Gemma removal smoke: verifies manual local OpenAI-compatible provider/model path');
@@ -672,6 +805,19 @@ async function main() {
   assert(releaseUiRuntimeLayoutSmoke.includes("find(item => item.querySelector('.ft-name')?.textContent === 'child.txt')")
     && releaseUiRuntimeLayoutSmoke.includes('if (child) child.click()') && releaseUiRuntimeLayoutSmoke.includes('LAZY_TREE_CHILD_OK'),
   'release ui runtime layout smoke: expands the file tree and clicks a file through the safe file-open route');
+  assert(releaseUiRuntimeLayoutSmoke.includes("document.querySelector('#left-ws-list .left-ws-item.active')")
+    && releaseUiRuntimeLayoutSmoke.includes('focused workspace did not reopen its conversation menu')
+    && releaseUiRuntimeLayoutSmoke.includes('beforeConversationId !== workspaceFocusMenu.afterConversationId'),
+  'release ui runtime layout smoke: clicking the focused conversation workspace reopens the secondary menu without changing conversation');
+  assert(releaseUiRuntimeLayoutSmoke.includes("window.setBackgroundColor('#123456')")
+    && releaseUiRuntimeLayoutSmoke.includes("window.setFontFamily('Segoe UI')")
+    && releaseUiRuntimeLayoutSmoke.includes('visual preferences were not applied and persisted')
+    && releaseUiRuntimeLayoutSmoke.includes('2026-07-14-visual-preferences.png'),
+  'release ui runtime layout smoke: applies, persists, resets, and captures General visual preferences');
+  assert(releaseUiRuntimeLayoutSmoke.includes('A durable submitted diagram')
+    && releaseUiRuntimeLayoutSmoke.includes('.conversation-image-attachment')
+    && releaseUiRuntimeLayoutSmoke.includes('2026-07-14-durable-user-image-ui.png'),
+  'release ui runtime layout smoke: renders a revisitable user-image card and captures ordinary CDP UI evidence');
   assert(releaseUiMediaMdSmoke.includes('Page.captureScreenshot') && releaseUiMediaMdSmoke.includes('2026-06-28-release-ui-media-md-smoke.png'), 'release ui media/md smoke: captures visual evidence');
   assert(packageJson.includes('"release:ui-skills-smoke"') && releaseUiSkillsSmoke.includes('--remote-debugging-port=') && releaseUiSkillsSmoke.includes("window.showPluginList('market')") && releaseUiSkillsSmoke.includes('#skill-market-search'), 'release ui skills smoke: drives real packaged Plugins Skills Market through CDP');
   assert(releaseUiSkillsSmoke.includes('installLocalSkill') && releaseUiSkillsSmoke.includes('release-ui-local-skill') && releaseUiSkillsSmoke.includes('window.refreshSkillsRuntime'), 'release ui skills smoke: installs local skill and refreshes runtime without restart');
@@ -734,20 +880,33 @@ async function main() {
   assert(distPortableScript.includes('verifyReleaseCliSmoke()') && distPortableScript.includes('release-cli-smoke.cjs') && distPortableScript.includes('ensureNodePtyConptyAssets(nodePtyRoot)') && distPortableScript.includes("'conpty.dll', 'OpenConsole.exe'"), 'dist windows release: restores node-pty ConPTY assets after ABI rebuild and runs release CLI smoke after packaging');
   assert(distPortableScript.includes('win-unpacked-x64.zip') && distPortableScript.includes('Compress-Archive') && distPortableScript.includes('verifyZipPack()'), 'dist windows release: creates and verifies compiled win-unpacked zip update pack');
   assert(installUpdateTs.includes('writeDeferredWindowsUpdate') && installUpdateTs.includes('runningExecutableTarget(target)') && installUpdateTs.includes('deferred: true') && installUpdateTs.includes('Wait-Process -Id $pidToWait') && installUpdateTs.includes('Start-Process -FilePath "powershell.exe"') && installUpdateTs.includes("spawn('powershell.exe'"), 'install update: Windows self-update defers copying the running executable until the current process exits');
-  assert(mainTs.includes('if (automationWakeMode)') && mainTs.includes('await automation!.tick()') && mainTs.includes('automation!.stop();') && mainTs.includes('app.quit();') && mainTs.indexOf('await automation!.tick()') < mainTs.indexOf('const port = await startSidecar(root)'), 'main automation wake: runs due schedules headless and exits before sidecar prewarm');
+  assert(mainTs.includes('if (!automationWakeMode)') && mainTs.includes('startupWindow = createDesktopWindow(true, true, startupAttempt)') && mainTs.includes('if (automationWakeMode)') && mainTs.includes('await ensureStartupAutomation()') && mainTs.includes('await automation!.tick()') && mainTs.includes('automation!.stop();') && mainTs.includes('app.quit();') && mainTs.indexOf('await automation!.tick()') < mainTs.indexOf('scheduleDeferredDesktopStartup(startupUiWindow)'), 'main automation wake: skips desktop-window creation, runs due schedules headless, and exits before deferred sidecar prewarm');
   assert(mainTs.includes('const syncAutomationWakeSoon = () =>') && mainTs.includes('syncAutomationWakeSoon();') && mainTs.indexOf('mainWindow = createDesktopWindow(false)') < mainTs.indexOf("app.on('will-quit'"), 'main startup: desktop window is created before noncritical automation wake sync can block startup');
   assert(automationWakeTs.includes('timeout: 5000') && automationWakeTs.includes('result.error?.message'), 'automation wake: Windows Task Scheduler calls are timeout-bounded so first desktop launch cannot hang indefinitely');
   assert(preloadTs.includes("refreshSkills: () => ipcRenderer.invoke('skills:refresh')") && preloadTs.includes("marketSkillSources: () => ipcRenderer.invoke('skills:marketSources')") && preloadTs.includes("memoryLabRead: (selector?: string) => ipcRenderer.invoke('memoryLab:read'") && preloadTs.includes('updateCheckGithub') && preloadTs.includes('updateApplyGithub') && preloadTs.includes('terminalKill: (sessionId: string, timeoutMs?: number)'), 'preload: exposes skills refresh, market source management, Memory Lab, updates, and terminal kill timeout');
   assert(preloadTs.includes("terminalTakeoverState: (conversationId?: string, actorId?: string) => ipcRenderer.invoke('agentTerminal:takeoverState'") && preloadTs.includes("terminalTakeoverWrite: (sessionId: string, data: string, conversationId?: string, actorId?: string) => ipcRenderer.invoke('agentTerminal:takeoverWrite'") && preloadTs.includes("terminalTakeoverStop: (sessionId: string") && preloadTs.includes("terminalTakeoverDetach: (sessionId: string") && preloadTs.includes('onTerminalTakeover'), 'preload: exposes owner-scoped Agent terminal state, write, stop, detach, and event IPC');
   assert(preloadTs.includes("githubCopilotLogin: () => ipcRenderer.invoke('github:copilotLogin')"), 'preload: exposes GitHub Copilot browser login bridge');
   assert(preloadTs.includes('webUtils') && preloadTs.includes('filePathForFile') && uiHtml.includes('function promptInsertText(text)') && uiHtml.includes('function clipboardFilePaths(dataTransfer)') && uiHtml.includes('function imageFilesFromDataTransfer(dataTransfer)') && uiHtml.includes('function attachPromptImagesFromDataTransfer(dataTransfer)') && uiHtml.includes('id="prompt-attachments"') && uiHtml.includes("els.prompt.addEventListener('paste'") && uiHtml.includes("els.prompt.addEventListener('drop'") && uiHtml.includes("paths.join('\\n')") && uiHtml.includes('composePromptTextForSend(rawText)'), 'ui html/preload: pasted or dropped files insert filesystem paths, and rootless pasted images render as prompt attachments');
+  assert(conversationAttachmentsSource.includes('MAX_USER_IMAGE_COUNT = 6') && conversationAttachmentsSource.includes('MAX_USER_IMAGE_BYTES = 10 * 1024 * 1024')
+    && conversationAttachmentsSource.includes('decodeInspectionImage') && conversationAttachmentsSource.includes('conversation-media')
+    && conversationAttachmentsSource.includes('archiveConversationImageAttachment'),
+  'user image persistence: validates bounded PNG/JPEG input, stores content-addressed assets, and exports portable archive copies');
+  assert(uiHtml.includes('conversation-image-attachments') && uiHtml.includes('normalizeConversationImageAttachments')
+    && uiHtml.includes('promptAttachmentsForConversation') && uiHtml.includes('nextQueueRequests')
+    && uiHtml.includes('attachments: m.attachments || []'),
+  'user image UI: durable attachments remain visible across snapshots, Guide reconciliation, edits, and queued sends');
+  assert(uiPreferencesSource.includes('normalizeUiBackgroundColor') && uiPreferencesSource.includes('normalizeUiFontFamily')
+    && mainTs.includes("case 'backgroundColor'") && mainTs.includes("case 'fontFamily'")
+    && serverTs.includes('backgroundColor: normalizeUiBackgroundColor') && uiHtml.includes('applyUiAppearance()')
+    && uiHtml.includes('settings-background-color') && uiHtml.includes('settings-font-family'),
+  'visual preferences: background and font use validated shared persistence plus accessible General settings controls');
   assert(preloadTs.includes('saveConfig: (cfg: string | Record<string, unknown>)'), 'preload: saveConfig accepts structured config patches');
   assert(preloadTs.includes("getConversationPlan: (conversationId?: string) => ipcRenderer.invoke('agent:getConversationPlan', conversationId)") && preloadTs.includes("updateConversationPlan: (plan: Record<string, unknown>, conversationId?: string) => ipcRenderer.invoke('agent:updateConversationPlan', plan, conversationId)"), 'preload: exposes conversation-bound plan IPC');
   assert(mainTs.includes("language: agent.config.getStr('general', 'language')") && mainTs.includes("case 'language': agent.config.set('general', 'language', value); break;"), 'main ipc: exposes and persists language setting');
   assert(serverTs.includes("language: agent.config.getStr('general', 'language')") && serverTs.includes("case 'language': agent.config.set('general', 'language', value); break;"), 'server api: exposes and persists language setting');
   assert(cliCommandsTs.includes("language: agent.config.getStr('general', 'language') || 'auto'") && cliCommandsTs.includes("const language = argValue(args, '--language')") && cliCommandsTs.includes("[--language auto|en|zh]"), 'cli commands: expose and accept language switching');
-  assert(mainTs.includes('sanitizeProvidersForState(agent.config.providers())') && mainTs.includes('mergeProviderSecrets(value, agent.config.providers())'), 'main ipc: redacts provider keys and preserves secrets on provider save');
-  assert(serverTs.includes('sanitizeProvidersForState(agent.config.providers())') && serverTs.includes('mergeProviderSecrets(value, agent.config.providers())'), 'server api: redacts provider keys and preserves secrets on provider save');
+  assert(mainTs.includes('sanitizeProvidersForState(agent.config.providers())') && mainTs.includes('agent.updateProviders(value)') && agentTs.includes('mergeProviderSecrets(value, before)'), 'main ipc: redacts provider keys and preserves secrets on provider save');
+  assert(serverTs.includes('sanitizeProvidersForState(agent.config.providers())') && serverTs.includes("cfg.section === 'models' && cfg.key === 'providers'") && serverTs.includes('agent.updateProviders(cfg.value)') && !serverTs.includes('jsonResponse(res, agent.config)') && !serverTs.includes("Access-Control-Allow-Origin', '*'") && serverTs.includes("server.listen(PORT, '127.0.0.1'"), 'server api: redacts provider keys, preserves secrets on provider save, disables raw config export, and binds without wildcard CORS');
   assert(mainTs.includes("ipcMain.handle('skills:refresh'") && mainTs.includes('agent.refreshSkills();') && mainTs.includes("ipcMain.handle('skills:addMarketSource'") && mainTs.includes("ipcMain.handle('memoryLab:read'") && mainTs.includes('agent.updateMemoryLab') && mainTs.includes('agent.reindexMemoryLab') && mainTs.includes('terminalInterruptTimeoutMs'), 'main ipc: refreshes skills runtime, manages market sources and Memory Lab through Agent organizer, and returns terminal timeout state');
   assert(mainTs.includes("ipcMain.handle('agent:getConversationPlan', async (_event, conversationId?: string)") && mainTs.includes("ipcMain.handle('agent:updateConversationPlan', async (_event, plan: Record<string, unknown>, conversationId?: string)") && mainTs.includes('conversationPlan: agent.getConversationPlan()'), 'main ipc: exposes and returns conversation-bound plan state');
   assert(mainTs.includes("ipcMain.handle('flow:run'") && mainTs.includes('chatMessages: agent.chatMessages') && mainTs.includes('conversations: agent.listConversationStates()'), 'main ipc: Flow run returns rendered conversation state');
@@ -764,8 +923,11 @@ async function main() {
   assert(toolsTs.includes("t('computer_use'") && toolsTs.includes("'app_observe'") && toolsTs.includes("'takeover_start'") && toolsTs.includes('app_target') && toolsTs.includes('window_handle') && toolsTs.includes("'scroll'") && toolsTs.includes('scroll_x') && toolsTs.includes('runComputerUse') && toolsTs.includes('allowEphemeralVisionImage') && toolsTs.includes("invocation?: 'agent' | 'cli'") && toolsTs.includes('invocation: context.invocation') && cliCommandsTs.includes("invocation: 'cli'") && toolsTs.includes('conversationId?: string') && toolsTs.includes('COMPUTER_USE_LOCK_TTL_MS') && toolsTs.includes('computerUseOwner(context, wsPath)') && toolsTs.includes('ComputerUse is already active') && toolsTs.includes('releaseComputerUseLock(action, owner)') && agentKernelRunnerTs.includes("conversationId: agent.activeConversationId || 'default'") && !toolsTs.includes('archive/computer-use') && agentTs.includes('observe -> decide -> act -> observe') && agentTs.includes('takeover_start') && agentTs.includes('app_list/app_observe/app_*'), 'tools/agent prompt: exposes native Computer Use observe/action loop, takeover border, app scoping, single-conversation lock, and ephemeral-only screenshot handling');
   const computerUseTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'computerUse.ts'), 'utf-8');
   const computerUseHostTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'computerUsePowerShellHost.ts'), 'utf-8');
+  const utilityHostToolRouterTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'utilityHostToolRouter.ts'), 'utf-8');
+  assert(toolsTs.includes('capture_max_width') && toolsTs.includes('capture_max_height') && toolsTs.includes('minimum: 320') && toolsTs.includes('minimum: 240') && toolsTs.includes('maximum: 2048') && computerUseTs.includes('DEFAULT_CAPTURE_MAX_WIDTH = 1280') && computerUseTs.includes('DEFAULT_CAPTURE_MAX_HEIGHT = 960') && computerUseTs.includes('MAX_CAPTURE_DIMENSION = 2048') && computerUseTs.includes('[Math]::Min(1.0') && computerUseTs.includes('removeEphemeralScreenshot(outPath)'), 'computer_use: observe and app_observe support bounded variable-size, aspect-preserving, no-upscale ephemeral captures');
+  assert(toolsTs.includes('trustedComputerUseContext') && toolsTs.includes('allowEphemeralVisionImage: context.allowEphemeralVisionImage === true') && utilityHostToolRouterTs.includes('trustedComputerUseContext.allowEphemeralVisionImage === true') && !utilityHostToolRouterTs.includes('allowEphemeralVisionImage: args.allow_ephemeral_vision_image === true'), 'computer_use: utility host screenshot retention is granted by trusted runtime context rather than model-authored arguments');
   assert(computerUseTs.includes('System.Windows.Forms') && computerUseTs.includes('CopyFromScreen') && computerUseHostTs.includes('SetCursorPos') && computerUseHostTs.includes('UIAutomationClient') && computerUseTs.includes('CacheRequest') && computerUseTs.includes('BoundingRectangle') && computerUseTs.includes('vision_assist') && computerUseTs.includes('target_id') && computerUseTs.includes('stable_key') && computerUseTs.includes('high_priority_objects') && computerUseTs.includes('intersectionOverUnion') && computerUseTs.includes('normalized_bbox') && computerUseTs.includes('allowed_actions') && computerUseTs.includes('compactSemanticObjects') && computerUseTs.includes('scrollAt') && computerUseTs.includes('executeSequence') && computerUseTs.includes('requires_observe') && computerUseTs.includes('startTakeoverOverlay') && computerUseTs.includes('lastTakeoverOverlayStyle') && computerUseTs.includes('colors: options.gradientColors || options.gradient_colors') && computerUseTs.includes('speed: options.gradientSpeed ?? options.gradient_speed') && computerUseTs.includes('width: options.gradientWidth ?? options.gradient_width') && computerUseTs.includes("options.invocation === 'cli' && durationMs > 0 ? 0 : process.pid") && computerUseTs.includes("const lifecycle = ownerPid > 0 ? 'owner-process-bound' : 'duration-bound'") && computerUseTs.includes('desktop-edge-dynamic-gradient') && computerUseTs.includes('single-click-through-virtual-screen-overlay') && computerUseTs.includes('WS_EX_TRANSPARENT') && !computerUseTs.includes('WS_EX_LAYERED') && !computerUseTs.includes('TransparencyKey') && computerUseTs.includes('public class NewmarkOverlayForm : Form') && computerUseTs.includes('this.DoubleBuffered = true') && computerUseTs.includes('ControlStyles.Opaque') && computerUseTs.includes('OnPaintBackground(PaintEventArgs e)') && computerUseTs.includes('Add-Type -ReferencedAssemblies @("System.Windows.Forms", "System.Drawing") -TypeDefinition') && computerUseTs.includes('$script:brushes') && computerUseTs.includes('$timer.Interval = 33') && computerUseTs.includes('New-Object System.Drawing.Drawing2D.GraphicsPath') && computerUseTs.includes('$regionPath.FillMode = [System.Drawing.Drawing2D.FillMode]::Winding') && computerUseTs.includes('[System.Drawing.Rectangle]::new($bounds.Left, $bounds.Top, $bounds.Width, $bounds.Height)') && computerUseTs.includes('$regionPath.AddRectangle([System.Drawing.Rectangle]::new') && computerUseTs.includes('$script:form.Region = New-Object System.Drawing.Region($regionPath)') && computerUseTs.includes('$perimeter = [Math]::Max(1.0, (2.0 * $w) + (2.0 * $h))') && computerUseTs.includes('$clockwiseOffset = (($script:stopwatch.Elapsed.TotalSeconds / $speedSeconds) * $perimeter) % $perimeter') && computerUseTs.includes('$wrappedDistance = (($distance + ($segment / 2.0)) - $clockwiseOffset) % $perimeter') && computerUseTs.includes('$segment = [Math]::Min($step, $perimeter - $distance)') && computerUseTs.includes('for ($distance = 0.0; $distance -lt $perimeter; $distance += $step)') && computerUseTs.includes('if ($distance -lt $w)') && computerUseTs.includes('elseif ($distance -lt ($w + $h))') && computerUseTs.includes('elseif ($distance -lt ((2.0 * $w) + $h))') && computerUseTs.includes('$ownerTimer = New-Object System.Windows.Forms.Timer') && computerUseTs.includes('Get-Process -Id $script:ownerPid') && computerUseTs.includes('Overlay exited during startup') && computerUseTs.includes('lifecycle') && computerUseTs.includes('$overlayPattern =') && computerUseTs.includes('takeover-overlay-') && computerUseTs.includes('$_.CommandLine -match $overlayPattern') && computerUseTs.includes('$_.ProcessId -ne $selfPid') && computerUseTs.includes('$target.FillRectangle($brush') && !computerUseTs.includes('$script:phase = ($script:phase + 1)') && computerUseTs.includes('[System.Drawing.Color]::FromArgb') && computerUseTs.includes('SetWindowPos($script:form.Handle') && computerUseTs.includes("([wmiclass]'Win32_Process').Create") && computerUseHostTs.includes("spawn('powershell.exe'") && !computerUseTs.includes('spawnSync') && !computerUseTs.includes('Atomics.wait') && computerUseTs.includes('observeAppWindows') && computerUseTs.includes('app_observe') && computerUseTs.includes('app_click') && computerUseTs.includes('NewmarkComputerUseNative') && computerUseTs.includes('tempScreenshotDir') && computerUseTs.includes('screenshot_retention') && computerUseTs.includes('ephemeral-deleted-before-tool-return') && computerUseTs.includes('fs.unlinkSync(outPath)') && toolsTs.includes('gradient_colors) ?') && toolsTs.includes("this.config.get<string[]>('ui', 'gradient_colors')") && toolsTs.includes('gradient_width !== undefined') && toolsTs.includes("this.config.getNum('ui', 'gradient_width')") && !computerUseTs.includes("archive', 'computer-use") && !computerUseTs.includes('github.com/gtt116/enikk') && !computerUseTs.includes('RapidOCR') && !computerUseTs.includes('ultralytics'), 'computer_use: uses persistent async PowerShell lanes, cached UIA, compact semantic results, adaptive sequences, ephemeral screenshots, and a cached 30fps click-through takeover border');
-  assert(agentKernelRunnerTs.includes('computerUseVisionImagePath') && agentKernelRunnerTs.includes('sanitizeVisualToolText') && agentKernelRunnerTs.includes('imagePathToOpenAIContentPart') && agentKernelRunnerTs.includes('fs.unlinkSync(imagePath)') && agentKernelRunnerTs.includes('allowEphemeralVisionImage: name === \'computer_use\'') && providerTs.includes('normalizeOpenAIContent') && providerTs.includes('normalizeAnthropicContent') && providerTs.includes('input_image'), 'computer_use: vision-capable models receive screenshot image input synchronized with UI Automation text and delete the ephemeral image after preparation');
+  assert(agentKernelRunnerTs.includes('computerUseVisionImageInput') && agentKernelRunnerTs.includes('sanitizeVisualToolText') && agentKernelRunnerTs.includes('delete parsed.vision_image_path') && agentKernelRunnerTs.includes('delete parsed.vision_image_data_url') && agentKernelRunnerTs.includes('imagePathToOpenAIContentPart') && agentKernelRunnerTs.includes('fs.unlinkSync(imagePath)') && agentKernelRunnerTs.includes('allowEphemeralVisionImage: name === \'computer_use\'') && providerTs.includes('normalizeOpenAIContent') && providerTs.includes('normalizeAnthropicContent') && providerTs.includes('input_image'), 'computer_use: vision-capable direct, utility, and WSL runtimes receive one-use screenshot input synchronized with UI Automation text, strip it from public tool output, and delete filesystem captures after preparation');
   assert(agentTs.includes('Agent terminal timeout: bash accepts per-call timeout_ms') && agentTs.includes('is a nonzero upper cap'), 'agent prompt: discloses bash timeout_ms and settings cap semantics');
   assert(agentTs.includes('repo_security_audit') && agentTs.includes('Remote repository safety') && agentTs.includes('public/private visibility') && agentTs.includes('private URLs, secrets, local runtime state'), 'agent prompt: proactively drives remote repository security and privacy review');
   assert(agentTs.includes('GitHub Copilot') && agentTs.includes('https://models.github.ai'), 'agent core: GitHub Copilot/Models provider is inferred to the official GitHub Models endpoint');
@@ -1152,7 +1314,7 @@ async function main() {
   assert(qResult.includes('Options'), 'question: acknowledges');
   cfg.set('agent', 'option_feedback', 'fully_autonomous');
   const qDisabled = await tools.execute('question', '{"questions":[]}', TEST_DIR);
-  assert(qDisabled.includes('Disabled'), 'question: fully autonomous disables options');
+  assert(qDisabled.includes('[permission]') && qDisabled.includes('disabled'), 'question: fully autonomous disables options');
   assert(!tools.definitions().some((tool: any) => tool.function?.name === 'question'), 'definitions: fully autonomous hides question tool');
   cfg.set('agent', 'option_feedback', 'default');
 
@@ -1178,9 +1340,9 @@ async function main() {
   assert(outsideBashReadDenied.includes('[permission]'), 'permissions: no_outside_access blocks bash outside read');
   cfg.set('workspace', 'access_permission', 'outside_readonly');
   const planWriteDenied = await tools.execute('write', '{"path":"not-readme.txt","content":"blocked"}', TEST_DIR, { mode: 'plan', workspacePath: TEST_DIR });
-  assert(planWriteDenied.includes('fully read-only'), 'plan permissions: blocks arbitrary writes');
+  assert(planWriteDenied.includes('[permission]'), 'plan permissions: blocks arbitrary writes');
   const planReadmeDenied = await tools.execute('write', '{"path":"README.md","content":"plan blocked"}', TEST_DIR, { mode: 'plan', workspacePath: TEST_DIR });
-  assert(planReadmeDenied.includes('fully read-only'), 'plan permissions: blocks README writes');
+  assert(planReadmeDenied.includes('[permission]'), 'plan permissions: blocks README writes');
   fs.rmSync(outsideFile, { force: true });
   cfg.set('workspace', 'access_permission', 'full_access');
 
@@ -1213,11 +1375,13 @@ async function main() {
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'browser_open'), 'definitions: exposes browser_open');
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'browser_cdp'), 'definitions: exposes browser_cdp');
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'computer_use'), 'definitions: exposes native computer_use desktop tool');
+  const buildComputerUse = tools.definitions().find((tool: any) => tool.function?.name === 'computer_use') as any;
+  assert(buildComputerUse?.function?.parameters?.properties?.capture_max_width?.maximum === 2048 && buildComputerUse?.function?.parameters?.properties?.capture_max_height?.maximum === 2048 && !buildComputerUse?.function?.parameters?.properties?.allow_ephemeral_vision_image, 'definitions: Computer Use exposes bounded capture dimensions but no model-controlled retention permission');
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'image_inspect') && tools.definitions('plan').some((tool: any) => tool.function?.name === 'image_inspect'), 'definitions: exposes read-only image_inspect in Build and Plan modes');
   assert(tools.definitions('plan').some((tool: any) => tool.function?.name === 'browser_snapshot'), 'definitions: plan exposes browser_snapshot');
   assert(!tools.definitions('plan').some((tool: any) => tool.function?.name === 'browser_click'), 'definitions: plan hides browser_click');
   const planComputerUse = tools.definitions('plan').find((tool: any) => tool.function?.name === 'computer_use') as any;
-  assert(JSON.stringify(planComputerUse?.function?.parameters?.properties?.action?.enum) === JSON.stringify(['observe', 'app_list', 'app_observe']) && !planComputerUse.function.parameters.properties.x && !planComputerUse.function.parameters.properties.steps, 'definitions: Plan exposes only observation-class Computer Use schema');
+  assert(JSON.stringify(planComputerUse?.function?.parameters?.properties?.action?.enum) === JSON.stringify(['observe', 'app_list', 'app_observe']) && !!planComputerUse.function.parameters.properties.capture_max_width && !!planComputerUse.function.parameters.properties.capture_max_height && !planComputerUse.function.parameters.properties.x && !planComputerUse.function.parameters.properties.steps, 'definitions: Plan exposes only observation-class Computer Use schema, including bounded capture dimensions');
   const canonicalTools = tools.canonicalDefinitions();
   const writeCanonical = canonicalTools.find(t => t.name === 'write');
   assert(!!writeCanonical && writeCanonical.inputSchema.type === 'object' && writeCanonical.sideEffects === 'write', 'compat tools: canonical definitions preserve schema and side effects');
@@ -1255,11 +1419,11 @@ async function main() {
   const planBrowserSnapshot = await tools.execute('browser_snapshot', '{}', TEST_DIR, { mode: 'plan', workspacePath: TEST_DIR });
   assert(planBrowserSnapshot.includes('snapshot text'), 'browser control: Plan mode allows read-only browser_snapshot execution');
   const planBrowserClick = await tools.execute('browser_click', JSON.stringify({ selector: '#run' }), TEST_DIR, { mode: 'plan', workspacePath: TEST_DIR });
-  assert(planBrowserClick.includes('fully read-only'), 'browser control: Plan mode blocks mutating browser_click execution');
+  assert(planBrowserClick.includes('[permission]'), 'browser control: Plan mode blocks mutating browser_click execution');
   const planBrowserType = await tools.execute('browser_type', JSON.stringify({ selector: '#q', text: 'blocked' }), TEST_DIR, { mode: 'plan', workspacePath: TEST_DIR });
-  assert(planBrowserType.includes('fully read-only'), 'browser control: Plan mode blocks mutating browser_type execution');
+  assert(planBrowserType.includes('[permission]'), 'browser control: Plan mode blocks mutating browser_type execution');
   const planBrowserEval = await tools.execute('browser_eval', JSON.stringify({ script: 'location.href' }), TEST_DIR, { mode: 'plan', workspacePath: TEST_DIR });
-  assert(planBrowserEval.includes('fully read-only'), 'browser control: Plan mode blocks browser_eval execution');
+  assert(planBrowserEval.includes('[permission]'), 'browser control: Plan mode blocks browser_eval execution');
   const browserClick = await tools.execute('browser_click', JSON.stringify({ selector: '#run' }), TEST_DIR);
   assert(browserClick.includes('[browser:click] OK') && browserClick.includes('"clicked": true'), 'browser control: formats click result data');
   const browserType = await tools.execute('browser_type', JSON.stringify({ selector: '#q', text: 'typed value' }), TEST_DIR);
@@ -1329,19 +1493,10 @@ async function main() {
   fs.writeFileSync(cliArgsFile, JSON.stringify({ path: cliArgsFileTarget, content: 'cli args-file wrote file' }), 'utf-8');
   const cliArgsFileOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'write', '--args-file', cliArgsFile, '--root', TEST_DIR]));
   assert(cliArgsFileOut.includes('[write] OK') && fs.readFileSync(cliArgsFileTarget, 'utf-8') === 'cli args-file wrote file', 'cli tool: supports args-file JSON input');
-  let cliBadJsonErr = '';
-  const originalErr = process.stderr.write;
-  (process.stderr.write as unknown as (chunk: unknown) => boolean) = (chunk: unknown) => {
-    cliBadJsonErr += String(chunk);
-    return true;
-  };
-  try {
-    process.exitCode = 0;
-    await runCliCommand(TEST_DIR, ['tool', 'write', '{bad-json', '--root', TEST_DIR]);
-  } finally {
-    process.stderr.write = originalErr;
-  }
-  assert(cliBadJsonErr.includes('Invalid JSON object') && process.exitCode === 1, 'cli tool: invalid JSON reports explicit error');
+  process.exitCode = 0;
+  const cliBadJsonOut = await captureStdout(() => runCliCommand(TEST_DIR, ['tool', 'write', '{bad-json', '--root', TEST_DIR]));
+  const cliBadJson = JSON.parse(cliBadJsonOut);
+  assert(cliBadJson.ok === false && cliBadJson.tool === 'write' && String(cliBadJson.error || '').includes('Invalid JSON object') && process.exitCode === 2, 'cli tool: invalid JSON uses the common validation envelope and exit 2');
   process.exitCode = 0;
   const cliSendOut = await captureStdout(() => runCliCommand(TEST_DIR, ['send', 'hello from cli', '--root', TEST_DIR]));
   assert(cliSendOut.includes('[Error] No LLM configured'), 'cli send: routes through Agent process and reports missing provider');
@@ -1368,20 +1523,22 @@ async function main() {
   assert(JSON.parse(cliEnvStateOut).chatMessages >= 1, 'cli send: env prompt persists to requested conversation');
   const cliFileStateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['state', '--conversation', 'cli-file-input', '--root', TEST_DIR]));
   assert(JSON.parse(cliFileStateOut).chatMessages >= 1, 'cli send: input-file prompt persists to requested conversation');
-  const originalCliValidate = LLMProvider.prototype.validate;
-  const originalCliValidateVision = LLMProvider.prototype.validateVision;
-  const originalCliListModels = LLMProvider.prototype.listModels;
   const originalAgentFuzzyInject = Agent.prototype.fuzzyInject;
-  LLMProvider.prototype.validate = async function(modelName: string) {
-    return { ok: modelName === 'gpt-test' || modelName === 'gpt-5.5' || modelName === 'cli-fast' || modelName === 'claude-cli' || modelName === 'env-claude', latency: modelName === 'cli-fast' ? 0.3 : 0.8 };
-  };
-  LLMProvider.prototype.validateVision = async function(modelName: string) {
-    return { ok: modelName === 'gpt-5.5', latency: 0.2 };
-  };
+  const restoreCliValidationProviderFixture = installValidationProviderFixture({
+    validModels: new Set(['gpt-test', 'gpt-5.5', 'cli-fast', 'claude-cli', 'env-claude', 'cli-noguide-fast']),
+    visionModels: new Set(['gpt-5.5']),
+    catalogs: {
+      'api.test.com': ['gpt-test', 'gpt-5.5'],
+      'cli-nebula.local': ['cli-fast', 'cli-pro'],
+      'cli-anthropic.local': ['claude-cli'],
+      'api.cli-noguide.test': ['cli-noguide-fast'],
+      'cli-env-anthropic.local': ['env-claude'],
+    },
+  });
   try {
     const cliValidateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['validate-models', '--selected', 'test-prov/gpt-test', '--root', TEST_DIR]));
     const cliValidate = JSON.parse(cliValidateOut);
-    assert(Array.isArray(cliValidate) && cliValidate.some((r: any) => r.name === 'test-prov/gpt-test' && r.status === 'available'), 'cli validate-models: validates selected model');
+    assert(Array.isArray(cliValidate) && cliValidate.some((r: any) => r.name === 'test-prov/gpt-test' && r.status === 'verified'), 'cli validate-models: records selected model only after Standard probes pass');
     assert(!cliValidateOut.includes('test-key-123') && !cliValidateOut.includes('test-key-456'), 'cli validate-models: redacts provider API keys');
     new ConfigManager(TEST_DIR).updateModel('test-prov', 'gpt-5.5', { vision: false, description: 'CLI stale text-only validation metadata' });
     const cliVisionValidateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['validate-models', '--selected', 'test-prov/gpt-5.5', '--root', TEST_DIR]));
@@ -1389,11 +1546,6 @@ async function main() {
     const cliVisionModel = new ConfigManager(TEST_DIR).findModel('gpt-5.5');
     assert(Array.isArray(cliVisionValidate) && cliVisionValidate.some((r: any) => r.name === 'test-prov/gpt-5.5' && r.vision_input === true), 'cli validate-models: confirms GPT-5.5 vision input through a vision task probe');
     assert(cliVisionModel?.vision === true && cliVisionModel?.evaluation?.vision_input === true, 'cli validate-models: persists task-confirmed GPT-5.5 vision capability');
-    LLMProvider.prototype.listModels = async function() {
-      if (this.baseUrl.includes('cli-nebula.local')) return ['cli-fast', 'cli-pro'];
-      if (this.baseUrl.includes('cli-anthropic.local')) return ['claude-cli'];
-      return [];
-    };
     Agent.prototype.fuzzyInject = async function() {
       throw new Error('CLI fuzzy-inject must use the release-safe lightweight path');
     };
@@ -1422,9 +1574,6 @@ async function main() {
       }
       return new Response('missing', { status: 404 });
     }) as typeof fetch;
-    LLMProvider.prototype.validate = async function(modelName: string) {
-      return { ok: modelName === 'cli-noguide-fast', latency: 0.5 };
-    };
     process.env.NEWMARK_TEST_CLI_NOGUIDE_ENDPOINT = 'https://api.cli-noguide.test/v1/chat/completions';
     process.env.NEWMARK_TEST_CLI_NOGUIDE_KEY = 'sk-cli-noguide-redacted-12345678901234567890';
     const cliNoGuideRoot = path.join(TEST_DIR, 'cli-fuzzy-empty-root');
@@ -1434,9 +1583,6 @@ async function main() {
     assert(cliNoGuide.ok === true && cliNoGuide.provider === 'CliNoguide' && cliNoGuide.models.includes('cli-noguide-fast'), 'cli fuzzy-inject: no-guide tokenizer infers provider and imports /models result');
     assert(cliNoGuideProvider?.base_url === 'https://api.cli-noguide.test/v1' && !cliNoGuideOut.includes('sk-cli-noguide-redacted'), 'cli fuzzy-inject: no-guide path normalizes endpoint and redacts key');
     globalThis.fetch = originalCliFetch;
-    LLMProvider.prototype.validate = async function(modelName: string) {
-      return { ok: modelName === 'gpt-test' || modelName === 'gpt-5.5' || modelName === 'cli-fast' || modelName === 'claude-cli' || modelName === 'env-claude', latency: modelName === 'cli-fast' ? 0.3 : 0.8 };
-    };
     const cliEnvFile = path.join(TEST_DIR, 'claude code env.ps1');
     fs.writeFileSync(cliEnvFile, [
       '$env:ANTHROPIC_BASE_URL="https://cli-env-anthropic.local/anthropic"',
@@ -1478,7 +1624,7 @@ async function main() {
     const cliBadEnvFuzzyOut = await captureStdout(() => runCliCommand(TEST_DIR, ['fuzzy-inject', '--env-file-env', 'NEWMARK_TEST_BAD_CLAUDE_ENV_FILE', '--root', TEST_DIR]));
     const cliBadEnvFuzzy = JSON.parse(cliBadEnvFuzzyOut);
     assert(cliBadEnvFuzzy.ok === false && cliBadEnvFuzzy.models.includes('bad-env-claude'), 'cli fuzzy-inject: imports env-file candidates even when validation fails');
-    assert(cliBadEnvFuzzy.warning.includes('none validated as available') && cliBadEnvFuzzy.warning.includes('bad-env-claude: unavailable') && cliBadEnvFuzzy.warning.includes('Discovery:'), 'cli fuzzy-inject: failed validation warning includes model status and discovery context');
+    assert(cliBadEnvFuzzy.warning.includes('none validated as available') && cliBadEnvFuzzy.warning.includes('bad-env-claude: invalid_config') && cliBadEnvFuzzy.warning.includes('Discovery:'), 'cli fuzzy-inject: failed Standard validation warning includes classified model status and discovery context');
     assert(!cliBadEnvFuzzyOut.includes('test-key-cli-bad-env'), 'cli fuzzy-inject: failed env-file path does not print API key');
   } finally {
     delete process.env.NEWMARK_TEST_FUZZY_ENDPOINT;
@@ -1491,9 +1637,7 @@ async function main() {
     delete process.env.NEWMARK_TEST_PREVIEW_CLAUDE_ENV_FILE;
     delete process.env.NEWMARK_TEST_BAD_CLAUDE_ENV_FILE;
     Agent.prototype.fuzzyInject = originalAgentFuzzyInject;
-    LLMProvider.prototype.validate = originalCliValidate;
-    LLMProvider.prototype.validateVision = originalCliValidateVision;
-    LLMProvider.prototype.listModels = originalCliListModels;
+    restoreCliValidationProviderFixture();
   }
   const cliMarketDir = path.join(TEST_DIR, 'skills', 'cli-market-skill');
   fs.mkdirSync(cliMarketDir, { recursive: true });
@@ -1769,6 +1913,8 @@ async function main() {
   assert(workerRecord?.active === false && !!workerRecord.closedAt && !!workerRecord.result?.includes('subagent continued result'), 'Agent subagent compat: retained closed record has result and closedAt');
 
   const subagentToolFile = path.join(taskAgent.workspace.current?.path || TEST_DIR, 'subagent-tool.txt');
+  taskAgent.config.addModelToProvider('test-prov', 'fixed-child-model', 'Fixed Child Model', 'Registered deterministic subagent fixture model');
+  taskAgent.setModel('fixed-child-model');
   let toolCallRound = 0;
   const toolProvider = {
     modelsSeen: [] as string[],
@@ -1795,9 +1941,9 @@ async function main() {
   const toolSub = await (taskAgent as unknown as { handleSubagent: (args: string) => Promise<string> })
     .handleSubagent(JSON.stringify({ name: 'tool-worker', prompt: 'Write a delegated file', model: 'fixed-child-model', mode: 'build' }));
   assert(fs.existsSync(subagentToolFile), 'Agent task sandbox: subagent can execute allowed file tools');
-  assert(fs.readFileSync(subagentToolFile, 'utf-8') === 'from isolated subagent', 'Agent task sandbox: tool writes into active workspace');
+  assert(fs.existsSync(subagentToolFile) && fs.readFileSync(subagentToolFile, 'utf-8') === 'from isolated subagent', 'Agent task sandbox: tool writes into active workspace');
   assert(toolSub.includes('subagent used write tool'), 'Agent task sandbox: returns child agent result');
-  assert(toolProvider.modelsSeen.every(m => m === 'fixed-child-model'), 'Agent task sandbox: uses parent-assigned fixed model');
+  assert(toolProvider.modelsSeen.every(m => m === 'fixed-child-model'), 'Agent task sandbox: uses parent-assigned fixed model', JSON.stringify(toolProvider.modelsSeen));
 
   const blockedPlanFile = path.join(taskAgent.workspace.current?.path || TEST_DIR, 'blocked-plan-subagent.txt');
   let planRound = 0;
@@ -2355,12 +2501,14 @@ async function main() {
   const noWorkspaceTokens = await scopedAgent.process('should be blocked');
   assert(noWorkspaceTokens.map(t => t.text).join('').includes('Workspace required'), 'workspace chat: process requires selected workspace');
   const pureAgent = new Agent(path.join(TEST_DIR, 'pure-agent-runtime'), { agentOnly: true });
+  pureAgent.setModel('pure-agent-test-model');
   const pureProvider = new FakeProvider(['PURE_AGENT_NO_WORKSPACE_OK']);
   (pureAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => pureProvider;
   const pureTokens = await pureAgent.process('run without workspace');
   assert(pureTokens.map(t => t.text).join('').includes('PURE_AGENT_NO_WORKSPACE_OK') && pureAgent.workspace.current === null, 'pure Agent mode: process runs without workspace dependency');
 
-  const formatAgent = new Agent(TEST_DIR);
+  const formatAgent = new Agent(path.join(TEST_DIR, 'format-agent-runtime'), { agentOnly: true });
+  formatAgent.setModel('format-agent-test-model');
   const formatProvider = new FakeProvider(['<think>hidden reasoning</think>\n做了什么\n- visible result\n</think>\nfinal']);
   (formatAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => formatProvider;
   const formatTokens = await formatAgent.process('test response cleanup');
@@ -2368,7 +2516,8 @@ async function main() {
   assert(formatText.includes('visible result') && !formatText.includes('<think>') && !formatText.includes('</think>') && !formatText.includes('hidden reasoning'), 'agent output: strips think tags and hidden reasoning from visible tokens');
   assert(!formatAgent.chatMessages.some(m => m.content.includes('</think>') || m.content.includes('hidden reasoning')), 'agent output: stores sanitized assistant messages');
 
-  const reactivatingAgent = new Agent(TEST_DIR);
+  const reactivatingAgent = new Agent(path.join(TEST_DIR, 'reactivating-agent-runtime'), { agentOnly: true });
+  reactivatingAgent.setModel('reactivating-agent-test-model');
   const reactivatingProvider = new FakeProvider(['Not done yet.', 'Goal Complete!']);
   (reactivatingAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => reactivatingProvider;
   reactivatingAgent.updateGoal('Finish the deterministic goal test');
@@ -2378,7 +2527,8 @@ async function main() {
   assert(reactivationText.includes('[Goal Complete]'), 'goal process: retried response completes goal');
   assert(reactivatingAgent.history.some(m => String(m.content).includes('Continue working toward this goal')), 'goal process: continuation prompt recorded');
 
-  const continuingAgent = new Agent(TEST_DIR);
+  const continuingAgent = new Agent(path.join(TEST_DIR, 'continuing-agent-runtime'), { agentOnly: true });
+  continuingAgent.setModel('continuing-agent-test-model');
   const continuingProvider = new FakeProvider(['Still incomplete.', 'Goal Complete!']);
   (continuingAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => continuingProvider;
   continuingAgent.updateGoal('Exercise unlimited goal continuation');
@@ -2632,6 +2782,46 @@ async function main() {
   }
   const inspectPng = PNG.sync.write(inspectFixture);
   const inspectDataUrl = `data:image/png;base64,${inspectPng.toString('base64')}`;
+  const wslVisionInput = (agentKernelRunnerInternals as any).computerUseVisionImageInput(visionAgent, 'computer_use', JSON.stringify({ action: 'observe', vision_image_data_url: inspectDataUrl }));
+  const sanitizedWslVisionText = (agentKernelRunnerInternals as any).sanitizeVisualToolText('computer_use', JSON.stringify({ action: 'observe', vision_image_data_url: inspectDataUrl }));
+  assert(wslVisionInput.image === inspectDataUrl && !sanitizedWslVisionText.includes('vision_image_data_url') && !sanitizedWslVisionText.includes('data:image/'), 'computer_use WSL vision: transfers a one-use in-memory image while removing it from visible tool text');
+  const providerImageCount = (messages: Array<Record<string, any>>): number => messages.reduce((count, message) => (
+    count + (Array.isArray(message.content)
+      ? message.content.filter((part: Record<string, any>) => part?.type === 'image_url').length
+      : 0)
+  ), 0);
+  for (const toolName of ['computer_use', 'image_inspect']) {
+    const ephemeralToolResult: any = {
+      role: 'toolResult',
+      toolCallId: `call-${toolName}-one-use`,
+      toolName,
+      content: [
+        { type: 'text', text: `${toolName} visual result` },
+        { type: 'image', image: inspectDataUrl, mimeType: 'image/png' },
+      ],
+      isError: false,
+      timestamp: Date.now(),
+    };
+    const persistenceView = (agentKernelRunnerInternals as any).fromKernelMessages([ephemeralToolResult], false);
+    assert(providerImageCount(persistenceView) === 0 && ephemeralToolResult.content.some((part: Record<string, unknown>) => part.type === 'image'), `${toolName} privacy: non-provider serialization never persists or prematurely consumes the ephemeral image`);
+    const firstProviderView = (agentKernelRunnerInternals as any).fromKernelMessages([ephemeralToolResult], true);
+    assert(providerImageCount(firstProviderView) === 1 && !ephemeralToolResult.content.some((part: Record<string, unknown>) => part.type === 'image'), `${toolName} privacy: first provider serialization includes and consumes exactly one ephemeral image`);
+    const secondProviderView = (agentKernelRunnerInternals as any).fromKernelMessages([ephemeralToolResult], true);
+    assert(providerImageCount(secondProviderView) === 0, `${toolName} privacy: later model rounds cannot replay the consumed ephemeral image`);
+  }
+  const durableUserImageMessage: any = {
+    role: 'user',
+    content: [
+      { type: 'text', text: 'durable user image' },
+      { type: 'image', image: inspectDataUrl, mimeType: 'image/png' },
+    ],
+    timestamp: Date.now(),
+  };
+  const firstUserProviderView = (agentKernelRunnerInternals as any).fromKernelMessages([durableUserImageMessage], true);
+  const secondUserProviderView = (agentKernelRunnerInternals as any).fromKernelMessages([durableUserImageMessage], true);
+  assert(providerImageCount(firstUserProviderView) === 1 && providerImageCount(secondUserProviderView) === 1
+    && durableUserImageMessage.content.some((part: Record<string, unknown>) => part.type === 'image'),
+  'user image privacy: provider serialization never consumes intentionally durable user-role images');
   visionAgent.history.push({ role: 'user', content: [{ type: 'text', text: 'inspect attachment' }, { type: 'image_url', image_url: { url: inspectDataUrl } }] });
   const inspectInfo = JSON.parse(await visionAgent.handleImageInspect(JSON.stringify({ action: 'source_info', image_index: 1 })));
   assert(inspectInfo.width === 100 && inspectInfo.height === 80, 'image_inspect: reports submitted source dimensions before pixel cropping');
@@ -2791,34 +2981,35 @@ async function main() {
   modelAgent.config.updateModel('model-prov', 'gpt-5.5', { vision: false, description: 'Previously validated text-only model' });
   modelAgent.config.addModelToProvider('model-prov', 'gpt5.5', 'GPT5.5', 'Frontier GPT model imported from provider');
   modelAgent.config.updateModel('model-prov', 'gpt5.5', { vision: false, description: 'Provider-listed model without multimodal metadata' });
-  const originalValidate = LLMProvider.prototype.validate;
-  const originalValidateVision = LLMProvider.prototype.validateVision;
-  const originalValidateImageOutput = LLMProvider.prototype.validateImageOutput;
-  const originalModelWebSearch = modelAgent.tools.webSearch.bind(modelAgent.tools);
-  LLMProvider.prototype.validate = async function(modelName: string) {
-    return { ok: modelName !== 'bad-model', latency: modelName === 'fast-mini' ? 0.4 : 2.2 };
-  };
-  LLMProvider.prototype.validateVision = async function(modelName: string) {
-    return { ok: modelName === 'gpt-5.5', latency: 0.3 };
-  };
-  LLMProvider.prototype.validateImageOutput = async function() {
-    return { ok: false, latency: 0.1 };
-  };
-  modelAgent.tools.webSearch = async function(query: string) {
-    return query.includes('gpt5.5') ? 'Official model page says multimodal vision support.' : '[web_search] No results.';
-  };
+  const restoreModelValidationProviderFixture = installValidationProviderFixture({
+    validModels: new Set([
+      'fast-mini', 'deep-opus', 'gpt-5.5', 'gpt5.5', 'other-flash', 'vision-pro',
+      'noguide-fast', 'model', 'deepseek-chat', 'deepseek-reasoner', 'nebula-fast',
+    ]),
+    visionModels: new Set(['gpt-5.5', 'vision-pro']),
+    catalogs: {
+      'api.model.test': ['bad-model', 'fast-mini', 'deep-opus', 'gpt-5.5', 'gpt5.5'],
+      'api.other-model.test': ['other-flash', 'vision-pro'],
+      'api.noguide.test': ['noguide-fast'],
+      'probe-only.test': ['model'],
+      'api.deepseek.com': ['deepseek-chat', 'deepseek-reasoner'],
+      'nebula.local': ['nebula-fast', 'nebula-pro'],
+    },
+    rejectedBaseUrls: new Set(['broken.local']),
+  });
   const validation = await modelAgent.validateModels();
   assert(Array.isArray(validation), 'validateModels: returns array');
-  assert(validation.some(v => v.name === 'model-prov/fast-mini' && v.status === 'available'), 'validateModels: records available model');
+  assert(validation.some(v => v.name === 'model-prov/fast-mini' && v.status === 'verified'), 'validateModels: records a model only after Standard probes pass');
+  assert(validation.some(v => v.name === 'model-prov/bad-model' && v.status === 'invalid_config'), 'validateModels: deterministic provider rejection keeps a bad model unavailable');
   assert(validation.some(v => v.speed_rating === 'fast'), 'validateModels: records response speed');
   assert(validation.every(v => !(v as unknown as Record<string, unknown>).api_key), 'validateModels: does not leak API keys');
   const evaluatedFast = modelAgent.config.findModel('fast-mini');
-  assert(evaluatedFast?.evaluation?.status === 'available', 'validateModels: persists evaluation into config');
+  assert(evaluatedFast?.evaluation?.status === 'verified' && evaluatedFast.validation?.level === 'standard', 'validateModels: persists Standard evaluation into config');
   assert(String(evaluatedFast?.description || '').includes('capability=') && String(evaluatedFast?.description || '').includes('speed=') && String(evaluatedFast?.description || '').includes('cost=') && String(evaluatedFast?.description || '').includes('multimodal='), 'validateModels: generates model description with capability speed cost and multimodal metadata');
   const evaluatedGpt55 = modelAgent.config.findModel('gpt-5.5');
   const evaluatedGpt55Compact = modelAgent.config.findModel('gpt5.5');
-  assert(validation.some(v => v.name === 'model-prov/gpt-5.5' && v.vision_input === true), 'validateModels: confirms GPT-5.5 vision input through task submission despite stale config');
-  assert(validation.some(v => v.name === 'model-prov/gpt5.5' && v.vision_input === false), 'validateModels: web/name evidence alone cannot mark vision available when the vision task fails');
+  assert(validation.some(v => v.name === 'model-prov/gpt-5.5' && v.status === 'verified' && v.vision_input === true), 'validateModels: confirms GPT-5.5 vision input only through the deterministic visual probe');
+  assert(validation.some(v => v.name === 'model-prov/gpt5.5' && v.status === 'degraded' && v.vision_input === false), 'validateModels: catalog/name hypotheses alone cannot mark vision available when the visual probe fails');
   assert(evaluatedGpt55?.vision === true && evaluatedGpt55?.evaluation?.vision_input === true, 'validateModels: persists task-confirmed GPT-5.5 vision capability into config');
   assert(String(evaluatedGpt55?.description || '').includes('vision-input') && !String(evaluatedGpt55Compact?.description || '').includes('vision-input'), 'validateModels: generated descriptions include only task-confirmed multimodal support');
   modelAgent.history = [{ role: 'user', content: 'x'.repeat(3600) }];
@@ -2831,9 +3022,17 @@ async function main() {
     capability_rating: 'medium',
     cost_per_1k_input: 0,
     cost_per_1k_output: 0,
+    quality_by_task: { tool_use: { successes: 8, attempts: 10 } },
+    validation: {
+      level: 'standard',
+      status: 'verified',
+      checked_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      capabilities: { text_input: true, text_output: true, streaming: true, json_schema: true, tool_use: true, image_input: false, image_output: false },
+    },
     evaluation: {
-      status: 'available',
-      latency: 0.2,
+      status: 'verified',
+      latency: 0,
       checked_at: new Date().toISOString(),
       text_input: true,
       text_output: true,
@@ -2842,8 +3041,25 @@ async function main() {
       cost_rating: 'free',
       performance_rating: 'medium',
       speed_rating: 'fast',
-      notes: 'available cross-provider Auto test model',
+      notes: 'Standard-verified cross-provider Auto test model',
     },
+  });
+  const fastEvaluation = modelAgent.config.findModel('fast-mini')?.evaluation;
+  const deepEvaluation = modelAgent.config.findModel('deep-opus')?.evaluation;
+  assert(!!fastEvaluation && !!deepEvaluation, 'auto model fixture: Standard validation produced routable baseline models');
+  modelAgent.config.updateModel('model-prov', 'fast-mini', {
+    speed_rating: 'slow',
+    cost_per_1k_input: 0.001,
+    cost_per_1k_output: 0.002,
+    quality_by_task: { tool_use: { successes: 9, attempts: 11 }, coding: { successes: 9, attempts: 11 } },
+    evaluation: { ...fastEvaluation!, latency: 1, speed_rating: 'slow' },
+  });
+  modelAgent.config.updateModel('model-prov', 'deep-opus', {
+    speed_rating: 'slow',
+    cost_per_1k_input: 0.02,
+    cost_per_1k_output: 0.06,
+    quality_by_task: { tool_use: { successes: 10, attempts: 12 }, coding: { successes: 10, attempts: 12 } },
+    evaluation: { ...deepEvaluation!, latency: 2.2, speed_rating: 'slow' },
   });
   modelAgent.config.updateModel('other-prov', 'other-flash', { max_tokens: 512 });
   modelAgent.config.set('models', 'auto_switch', true);
@@ -2851,7 +3067,7 @@ async function main() {
   modelAgent.config.set('models', 'auto_switch_preference', 'speed');
   modelAgent.setModel('auto');
   const contextSafeSwitch = await modelAgent.evaluateAndSwitch('list files');
-  assert(contextSafeSwitch && modelAgent.model === 'fast-mini', 'auto model: skips faster candidate when its context window is too small');
+  assert(contextSafeSwitch && modelAgent.model === 'auto' && modelAgent.activeModelName() === 'fast-mini', 'auto model: preserves Auto intent and skips a faster candidate whose context window is too small');
   modelAgent.history = [];
   modelAgent.config.updateModel('other-prov', 'other-flash', { max_tokens: 128000 });
   modelAgent.config.set('models', 'auto_switch', true);
@@ -2863,26 +3079,26 @@ async function main() {
   assert(modelAgent.allModelNames()[0] === 'auto', 'auto model: Auto is listed only while autonomous switching is enabled');
   modelAgent.setModel('auto');
   const switchedForSpeed = await modelAgent.evaluateAndSwitch('list files');
-  assert(switchedForSpeed && modelAgent.model === 'other-flash', 'auto model: full autonomous mode may switch across providers');
+  assert(switchedForSpeed && modelAgent.model === 'auto' && modelAgent.activeModelName() === 'other-flash', 'auto model: global scope resolves across providers without replacing Auto intent');
   modelAgent.setModel('deep-opus');
   modelAgent.config.set('models', 'auto_switch_scope', 'provider');
   modelAgent.setModel('auto');
   const providerScopedSwitch = await modelAgent.evaluateAndSwitch('list files');
-  assert(providerScopedSwitch && modelAgent.model === 'fast-mini', 'auto model: provider-scoped mode stays within the anchor provider');
+  assert(providerScopedSwitch && modelAgent.model === 'auto' && modelAgent.activeModelName() === 'fast-mini', 'auto model: provider-scoped mode stays within the anchor provider');
   modelAgent.config.set('models', 'auto_switch_preference', 'default');
   modelAgent.config.set('models', 'auto_switch_scope', 'all');
   modelAgent.setModel('auto');
   const switchedForDefault = await modelAgent.evaluateAndSwitch('list files');
-  assert(switchedForDefault && modelAgent.model === 'other-flash', 'auto model: default preference chooses fast model for simple tasks');
+  assert(switchedForDefault && modelAgent.model === 'auto' && modelAgent.activeModelName() === 'fast-mini', 'auto model: Balanced quality band excludes a cheaper candidate beyond the 2% loss budget');
   modelAgent.config.set('models', 'auto_switch_preference', 'performance');
   modelAgent.config.set('models', 'auto_switch_scope', 'all');
   modelAgent.setModel('auto');
   const switchedForPerformance = await modelAgent.evaluateAndSwitch('implement a complex refactor across modules');
-  assert(switchedForPerformance && modelAgent.model === 'deep-opus', 'auto model: switches using quality/performance preference');
+  assert(switchedForPerformance && modelAgent.model === 'auto' && modelAgent.activeModelName() === 'deep-opus', 'auto model: Quality mode selects the highest task-domain quality candidate');
   modelAgent.config.set('models', 'auto_switch_preference', 'cheap_save');
   modelAgent.setModel('auto');
   const switchedForCost = await modelAgent.evaluateAndSwitch('list files');
-  assert(switchedForCost && modelAgent.model === 'other-flash', 'auto model: switches using cost-saving preference');
+  assert(switchedForCost && modelAgent.model === 'auto' && modelAgent.activeModelName() === 'other-flash', 'auto model: Cost mode selects the cheapest candidate inside its 6% quality band');
   modelAgent.config.addModelToProvider('other-prov', 'vision-pro', 'Vision Pro', 'High capability multimodal vision model');
   modelAgent.config.updateModel('other-prov', 'vision-pro', {
     vision: true,
@@ -2890,8 +3106,15 @@ async function main() {
     capability_rating: 'high',
     cost_per_1k_input: 0.01,
     cost_per_1k_output: 0.03,
+    validation: {
+      level: 'standard',
+      status: 'verified',
+      checked_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      capabilities: { text_input: true, text_output: true, streaming: true, json_schema: true, tool_use: true, image_input: true, image_output: false },
+    },
     evaluation: {
-      status: 'available',
+      status: 'verified',
       latency: 1.2,
       checked_at: new Date().toISOString(),
       text_input: true,
@@ -2901,14 +3124,14 @@ async function main() {
       cost_rating: 'standard',
       performance_rating: 'high',
       speed_rating: 'medium',
-      notes: 'available multimodal Auto test model',
+      notes: 'Standard-verified multimodal Auto test model',
     },
   });
   modelAgent.config.set('models', 'auto_switch_preference', 'speed');
   modelAgent.config.set('models', 'auto_switch_scope', 'all');
   modelAgent.setModel('auto');
   const switchedForVision = await modelAgent.evaluateAndSwitch('analyze this screenshot ![shot](C:/tmp/shot.png)');
-  assert(switchedForVision && modelAgent.config.findModel(modelAgent.model)?.vision === true, 'auto model: multimodal input switches to a vision-capable model within allowed scope');
+  assert(switchedForVision && modelAgent.model === 'auto' && modelAgent.activeModelConfig()?.vision === true, 'auto model: multimodal input resolves to a Standard-validated vision model within scope');
   modelAgent.config.set('models', 'auto_switch', false);
   assert(!modelAgent.allModelNames().includes('auto'), 'auto model: Auto is unavailable when autonomous switching is disabled');
   modelAgent.setModel('auto');
@@ -2920,7 +3143,23 @@ async function main() {
   modelAgent.config.set('models', 'auto_switch_scope', 'provider');
   modelAgent.config.set('models', 'auto_switch_anchor_provider', 'model-prov');
   modelAgent.config.set('models', 'fallback_on_unavailable', true);
+  const fallbackFastEvaluation = modelAgent.config.findModel('fast-mini')?.evaluation;
+  modelAgent.config.updateModel('model-prov', 'fast-mini', {
+    speed_rating: 'fast',
+    capability_rating: 'high',
+    cost_per_1k_input: 0,
+    cost_per_1k_output: 0,
+    evaluation: { ...fallbackFastEvaluation!, latency: 0.1, speed_rating: 'fast', performance_rating: 'high', cost_rating: 'free' },
+  });
   modelAgent.config.updateModel('model-prov', 'bad-model', {
+    validation: {
+      level: 'standard',
+      status: 'unavailable',
+      checked_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      capabilities: {},
+      error: { code: 'fixture_unavailable', message: 'forced unavailable for fallback test' },
+    },
     evaluation: {
       status: 'unavailable',
       latency: -1,
@@ -2935,7 +3174,7 @@ async function main() {
       notes: 'forced unavailable for fallback test',
     },
   });
-  const originalChatStream = LLMProvider.prototype.chatStreamWithTools;
+  const validationFixtureChatStream = LLMProvider.prototype.chatStreamWithTools;
   LLMProvider.prototype.chatStreamWithTools = async function* (modelName: string) {
     yield { type: 'text', text: modelName === 'fast-mini' ? 'FALLBACK_PRECHECK_OK' : '[LLM Error: 404] bad model' };
   };
@@ -2944,8 +3183,15 @@ async function main() {
   assert(modelAgent.model === 'fast-mini', 'model fallback: pre-switches away from known unavailable model');
   assert(precheckedFallback.some(t => t.text?.includes('FALLBACK_PRECHECK_OK')), 'model fallback: completes after pre-switch');
   modelAgent.config.updateModel('model-prov', 'bad-model', {
+    validation: {
+      level: 'standard',
+      status: 'verified',
+      checked_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      capabilities: { text_input: true, text_output: true, streaming: true, json_schema: true, tool_use: true, image_input: false, image_output: false },
+    },
     evaluation: {
-      status: 'available',
+      status: 'verified',
       latency: 1,
       checked_at: new Date().toISOString(),
       text_input: true,
@@ -2955,7 +3201,7 @@ async function main() {
       cost_rating: 'cheap',
       performance_rating: 'medium',
       speed_rating: 'fast',
-      notes: 'available before runtime failure test',
+      notes: 'Standard-verified before runtime failure test',
     },
   });
   modelAgent.setModel('bad-model');
@@ -2963,11 +3209,7 @@ async function main() {
   assert(modelAgent.model === 'fast-mini', 'model fallback: switches after runtime LLM error');
   assert(runtimeFallback.some(t => t.text?.includes('[Model fallback] bad-model unavailable; switched to fast-mini.')), 'model fallback: emits visible switch notice');
   assert(runtimeFallback.some(t => t.text?.includes('FALLBACK_PRECHECK_OK')), 'model fallback: retries request on fallback model');
-  LLMProvider.prototype.chatStreamWithTools = originalChatStream;
-  LLMProvider.prototype.validate = originalValidate;
-  LLMProvider.prototype.validateVision = originalValidateVision;
-  LLMProvider.prototype.validateImageOutput = originalValidateImageOutput;
-  modelAgent.tools.webSearch = originalModelWebSearch;
+  LLMProvider.prototype.chatStreamWithTools = validationFixtureChatStream;
 
   // ---- 12. Fuzzy Injection Tests ----
   console.log('\n💉 Fuzzy Injection');
@@ -2987,9 +3229,6 @@ async function main() {
     }
     return new Response('missing', { status: 404 });
   }) as typeof fetch;
-  LLMProvider.prototype.validate = async function(modelName: string) {
-    return { ok: modelName === 'noguide-fast' || modelName === 'model', latency: 0.7 };
-  };
   const noGuideFuzzy = await isolatedFuzzyAgent.fuzzyInject('', 'https://api.noguide.test/v1/chat/completions', 'sk-noguide-token-12345678901234567890');
   assert(noGuideFuzzy.ok === true && noGuideFuzzy.provider === 'Noguide' && noGuideFuzzy.models?.includes('noguide-fast'), 'fuzzy injection: no-guide tokenizer infers provider and imports /models result');
   const noGuideProvider = isolatedFuzzyAgent.config.providers().find(p => p.name === 'Noguide');
@@ -3004,13 +3243,6 @@ async function main() {
   assert(fuzzyResult.ok === true, 'fuzzy injection: validates imported candidate');
   assert(agent.config.providers().some(p => p.name === 'DeepSeek'), 'fuzzy injection: provider added or merged');
   assert(agent.config.findModel('deepseek-chat') !== undefined, 'fuzzy injection: candidate model imported');
-  const originalListModels = LLMProvider.prototype.listModels;
-  LLMProvider.prototype.listModels = async function() {
-    return this.baseUrl.includes('nebula.local') ? ['nebula-fast', 'nebula-pro'] : [];
-  };
-  LLMProvider.prototype.validate = async function(modelName: string) {
-    return { ok: modelName === 'nebula-fast', latency: 0.6 };
-  };
   const nebulaFuzzy = await agent.fuzzyInject('APInebula', 'https://nebula.local/v1', 'test-key-nebula');
   assert(nebulaFuzzy.ok === true, 'fuzzy injection: custom provider validates listed model');
   assert(nebulaFuzzy.models?.includes('nebula-fast') && nebulaFuzzy.models?.includes('nebula-pro'), 'fuzzy injection: imports provider /models listing');
@@ -3019,16 +3251,13 @@ async function main() {
   const nebulaExistingFuzzy = await agent.fuzzyInject('APInebula', '', '');
   assert(nebulaExistingFuzzy.ok === true && nebulaExistingFuzzy.models?.includes('nebula-fast'), 'fuzzy injection: existing provider reuses saved endpoint and key');
   assert(agent.config.providers().find(p => p.name === 'APInebula')?.api_key === 'test-key-nebula', 'fuzzy injection: empty key does not overwrite saved provider key');
-  LLMProvider.prototype.listModels = async function() { return []; };
-  LLMProvider.prototype.validate = async function() { return { ok: false, latency: 1.1 }; };
   const failedFuzzy = await agent.fuzzyInject('BrokenProvider', 'https://broken.local/v1', 'test-key-broken');
   assert(failedFuzzy.ok === false && failedFuzzy.warning?.includes('none validated as available'), 'fuzzy injection: failed validation reports no available models');
-  assert(failedFuzzy.warning?.includes('model: unavailable') && failedFuzzy.warning?.includes('Discovery:'), 'fuzzy injection: failed validation warning includes model status and discovery context');
+  assert(failedFuzzy.warning?.includes('model: invalid_config') && failedFuzzy.warning?.includes('Discovery:'), 'fuzzy injection: failed Standard validation warning includes classified model status and discovery context');
   assert(!JSON.stringify(failedFuzzy).includes('test-key-broken'), 'fuzzy injection: failed validation result does not leak API key');
   const githubFuzzy = await agent.fuzzyInject('GitHub Copilot', 'https://models.github.ai', 'ghp-test-token');
   assert(githubFuzzy.ok === false && githubFuzzy.warning?.includes('precise browser login'), 'fuzzy injection: GitHub/Copilot requires exact browser login and is rejected');
-  LLMProvider.prototype.listModels = originalListModels;
-  LLMProvider.prototype.validate = originalValidate;
+  restoreModelValidationProviderFixture();
 
   // ---- 13. LLM Provider Tests ----
   console.log('\n🤖 LLM Provider');

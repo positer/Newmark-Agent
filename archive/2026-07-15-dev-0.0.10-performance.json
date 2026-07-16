@@ -1,0 +1,4285 @@
+{
+  "ok": true,
+  "version": "0.0.10",
+  "runs": 20,
+  "sampleCount": 20,
+  "runSet": {
+    "requestedRuns": 20,
+    "completedRuns": 20,
+    "sampleCount": 20,
+    "minimumAcceptanceRuns": 20,
+    "sequentialRunNumbers": true,
+    "consistent": true,
+    "acceptanceEligible": true
+  },
+  "acceptanceEligible": true,
+  "acceptancePassed": true,
+  "acceptanceStatus": "passed",
+  "coldDefinition": "fresh packaged process per run; one isolated persistent runtime root and Electron profile are reused across the run set; OS filesystem cache is not flushed",
+  "interactiveMs": {
+    "p50": 2360,
+    "p95": 3820,
+    "max": 4066
+  },
+  "browserOpenMs": {
+    "p50": 256,
+    "p95": 450,
+    "max": 818
+  },
+  "inputLatencyFourTimesCpuMs": {
+    "p50": 77.5,
+    "p95": 111.3,
+    "max": 115.1
+  },
+  "inputFixture": {
+    "minimumBytes": 66560,
+    "maximumBytes": 66560,
+    "linesPerRun": 1024
+  },
+  "privateMiBBeforeBrowser": {
+    "p50": 423.59,
+    "p95": 498.74,
+    "max": 545.31
+  },
+  "privateMiBAfterBrowser": {
+    "p50": 488.21,
+    "p95": 554.75,
+    "max": 587.88
+  },
+  "privateMiBDeltaAfterBrowser": {
+    "p50": 86.23,
+    "p95": 150.6,
+    "min": -63.79,
+    "max": 158.79
+  },
+  "browserGuestTargets": {
+    "beforeDemand": {
+      "min": 0,
+      "max": 0
+    },
+    "afterDemand": {
+      "min": 1,
+      "max": 1
+    },
+    "delta": {
+      "min": 1,
+      "max": 1
+    }
+  },
+  "startupFirstFiveSeconds": {
+    "windowMs": 5000,
+    "endpointReachableRuns": 20,
+    "endpointReachabilityIsDiagnostic": true,
+    "lifecycleVerifiedRuns": 20,
+    "requiredLifecycleVerifiedRuns": 20,
+    "browserGuestViolationCount": 0,
+    "maximumBrowserGuestCount": 0
+  },
+  "promptInteractivity": {
+    "enabledAndWritableRuns": 20,
+    "trustedInputEvents": {
+      "min": 1,
+      "max": 1
+    },
+    "submitClickInvocations": {
+      "min": 1,
+      "max": 1
+    }
+  },
+  "processClassPrivateMiBBeforeBrowser": {
+    "main": {
+      "privateMiB": {
+        "p50": 63.55,
+        "p95": 66.86,
+        "max": 67.22
+      },
+      "count": {
+        "p50": 1,
+        "p95": 1,
+        "max": 1
+      }
+    },
+    "renderer": {
+      "privateMiB": {
+        "p50": 68.6,
+        "p95": 71.47,
+        "max": 71.66
+      },
+      "count": {
+        "p50": 1,
+        "p95": 1,
+        "max": 1
+      }
+    },
+    "gpu": {
+      "privateMiB": {
+        "p50": 277.38,
+        "p95": 352.7,
+        "max": 397.84
+      },
+      "count": {
+        "p50": 1,
+        "p95": 1,
+        "max": 1
+      }
+    },
+    "utility": {
+      "privateMiB": {
+        "p50": 13.74,
+        "p95": 13.93,
+        "max": 13.96
+      },
+      "count": {
+        "p50": 1,
+        "p95": 1,
+        "max": 1
+      }
+    },
+    "webview_guest": {
+      "privateMiB": {
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "count": {
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      }
+    },
+    "other": {
+      "privateMiB": {
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "count": {
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      }
+    }
+  },
+  "processClassPrivateMiBAfterBrowser": {
+    "main": {
+      "privateMiB": {
+        "p50": 102.05,
+        "p95": 105.11,
+        "max": 105.75
+      },
+      "count": {
+        "p50": 1,
+        "p95": 1,
+        "max": 1
+      }
+    },
+    "renderer": {
+      "privateMiB": {
+        "p50": 105.23,
+        "p95": 107.88,
+        "max": 107.98
+      },
+      "count": {
+        "p50": 2,
+        "p95": 2,
+        "max": 2
+      }
+    },
+    "gpu": {
+      "privateMiB": {
+        "p50": 267.49,
+        "p95": 363.29,
+        "max": 364.02
+      },
+      "count": {
+        "p50": 1,
+        "p95": 1,
+        "max": 1
+      }
+    },
+    "utility": {
+      "privateMiB": {
+        "p50": 14,
+        "p95": 14.19,
+        "max": 14.22
+      },
+      "count": {
+        "p50": 1,
+        "p95": 1,
+        "max": 1
+      }
+    },
+    "webview_guest": {
+      "privateMiB": {
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "count": {
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      }
+    },
+    "other": {
+      "privateMiB": {
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "count": {
+        "p50": 0,
+        "p95": 0,
+        "max": 0
+      }
+    }
+  },
+  "baselineMiB": 696,
+  "privateMemoryAcceptance": {
+    "startupBeforeBrowser": {
+      "criterion": "p95_lte_absolute_or_reduced_baseline",
+      "p95MiB": 498.74,
+      "absoluteLimitMiB": 525,
+      "relativeLimitMiB": 522,
+      "minimumReductionPercent": 25,
+      "effectiveOrLimitMiB": 525,
+      "deltaFromBaselineMiB": -197.26,
+      "reductionFromBaselinePercent": 28.34,
+      "passed": true
+    },
+    "browserOnDemand": {
+      "criterion": "total_p95_lte_limit_and_delta_p95_lte_limit",
+      "totalP95MiB": 554.75,
+      "totalLimitMiB": 696,
+      "totalHeadroomMiB": 141.25,
+      "deltaP95MiB": 150.6,
+      "deltaLimitMiB": 300,
+      "deltaHeadroomMiB": 149.4,
+      "totalPassed": true,
+      "deltaPassed": true,
+      "passed": true
+    }
+  },
+  "samples": [
+    {
+      "run": 1,
+      "interactiveMs": 3449,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 37,
+        "endpointReachable": true,
+        "reachablePollCount": 28,
+        "firstEndpointReachableMs": 2458,
+        "lastEndpointReachableMs": 4913,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 9143,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 68.7,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 319,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 447987712,
+      "privateMiBBeforeBrowser": 427.23,
+      "privateBytesAfterBrowser": 576724992,
+      "privateMiBAfterBrowser": 550.01,
+      "privateMiBDeltaAfterBrowser": 122.77,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 31.94,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 36.79,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 70488064,
+          "privateMiB": 67.22,
+          "processes": [
+            {
+              "pid": 195836,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 70488064,
+              "privateMiB": 67.22
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 70848512,
+          "privateMiB": 67.57,
+          "processes": [
+            {
+              "pid": 185196,
+              "parentPid": 195836,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 70848512,
+              "privateMiB": 67.57
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 292016128,
+          "privateMiB": 278.49,
+          "processes": [
+            {
+              "pid": 237024,
+              "parentPid": 195836,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 292016128,
+              "privateMiB": 278.49
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14635008,
+          "privateMiB": 13.96,
+          "processes": [
+            {
+              "pid": 216912,
+              "parentPid": 195836,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14635008,
+              "privateMiB": 13.96
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 71593984,
+          "privateMiB": 68.28,
+          "processes": [
+            {
+              "pid": 195836,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 71593984,
+              "privateMiB": 68.28
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 109289472,
+          "privateMiB": 104.23,
+          "processes": [
+            {
+              "pid": 185196,
+              "parentPid": 195836,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 84701184,
+              "privateMiB": 80.78
+            },
+            {
+              "pid": 235908,
+              "parentPid": 195836,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 24588288,
+              "privateMiB": 23.45
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 380932096,
+          "privateMiB": 363.29,
+          "processes": [
+            {
+              "pid": 237024,
+              "parentPid": 195836,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 380932096,
+              "privateMiB": 363.29
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14909440,
+          "privateMiB": 14.22,
+          "processes": [
+            {
+              "pid": 216912,
+              "parentPid": 195836,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14909440,
+              "privateMiB": 14.22
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 2,
+      "interactiveMs": 1814,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 54,
+        "endpointReachable": true,
+        "reachablePollCount": 46,
+        "firstEndpointReachableMs": 1077,
+        "lastEndpointReachableMs": 4973,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 10084,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 111.3,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 243,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 571797504,
+      "privateMiBBeforeBrowser": 545.31,
+      "privateBytesAfterBrowser": 504905728,
+      "privateMiBAfterBrowser": 481.52,
+      "privateMiBDeltaAfterBrowser": -63.79,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 0.48,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 36.82,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66822144,
+          "privateMiB": 63.73,
+          "processes": [
+            {
+              "pid": 222960,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66822144,
+              "privateMiB": 63.73
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 73277440,
+          "privateMiB": 69.88,
+          "processes": [
+            {
+              "pid": 227988,
+              "parentPid": 222960,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 73277440,
+              "privateMiB": 69.88
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 417169408,
+          "privateMiB": 397.84,
+          "processes": [
+            {
+              "pid": 226912,
+              "parentPid": 222960,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 417169408,
+              "privateMiB": 397.84
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14528512,
+          "privateMiB": 13.86,
+          "processes": [
+            {
+              "pid": 231308,
+              "parentPid": 222960,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14528512,
+              "privateMiB": 13.86
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 108343296,
+          "privateMiB": 103.32,
+          "processes": [
+            {
+              "pid": 222960,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 108343296,
+              "privateMiB": 103.32
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 110342144,
+          "privateMiB": 105.23,
+          "processes": [
+            {
+              "pid": 227988,
+              "parentPid": 222960,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 86802432,
+              "privateMiB": 82.78
+            },
+            {
+              "pid": 242312,
+              "parentPid": 222960,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 23539712,
+              "privateMiB": 22.45
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 271421440,
+          "privateMiB": 258.85,
+          "processes": [
+            {
+              "pid": 226912,
+              "parentPid": 222960,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 271421440,
+              "privateMiB": 258.85
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14798848,
+          "privateMiB": 14.11,
+          "processes": [
+            {
+              "pid": 231308,
+              "parentPid": 222960,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14798848,
+              "privateMiB": 14.11
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 3,
+      "interactiveMs": 2990,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 48,
+        "endpointReachable": true,
+        "reachablePollCount": 38,
+        "firstEndpointReachableMs": 1580,
+        "lastEndpointReachableMs": 4950,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 9718,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 72.6,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 450,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 400805888,
+      "privateMiBBeforeBrowser": 382.24,
+      "privateBytesAfterBrowser": 525103104,
+      "privateMiBAfterBrowser": 500.78,
+      "privateMiBDeltaAfterBrowser": 118.54,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 47.62,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 0.84,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 68395008,
+          "privateMiB": 65.23,
+          "processes": [
+            {
+              "pid": 235112,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 68395008,
+              "privateMiB": 65.23
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 75141120,
+          "privateMiB": 71.66,
+          "processes": [
+            {
+              "pid": 246316,
+              "parentPid": 235112,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 75141120,
+              "privateMiB": 71.66
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 242782208,
+          "privateMiB": 231.54,
+          "processes": [
+            {
+              "pid": 244692,
+              "parentPid": 235112,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 242782208,
+              "privateMiB": 231.54
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14487552,
+          "privateMiB": 13.82,
+          "processes": [
+            {
+              "pid": 221436,
+              "parentPid": 235112,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14487552,
+              "privateMiB": 13.82
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 109674496,
+          "privateMiB": 104.59,
+          "processes": [
+            {
+              "pid": 235112,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 109674496,
+              "privateMiB": 104.59
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 111804416,
+          "privateMiB": 106.63,
+          "processes": [
+            {
+              "pid": 246316,
+              "parentPid": 235112,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 88391680,
+              "privateMiB": 84.3
+            },
+            {
+              "pid": 233712,
+              "parentPid": 235112,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 23412736,
+              "privateMiB": 22.33
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 288837632,
+          "privateMiB": 275.46,
+          "processes": [
+            {
+              "pid": 244692,
+              "parentPid": 235112,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 288837632,
+              "privateMiB": 275.46
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14786560,
+          "privateMiB": 14.1,
+          "processes": [
+            {
+              "pid": 221436,
+              "parentPid": 235112,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14786560,
+              "privateMiB": 14.1
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 4,
+      "interactiveMs": 3570,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 47,
+        "endpointReachable": true,
+        "reachablePollCount": 31,
+        "firstEndpointReachableMs": 1958,
+        "lastEndpointReachableMs": 4910,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 10719,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 79.2,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 337,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 392822784,
+      "privateMiBBeforeBrowser": 374.63,
+      "privateBytesAfterBrowser": 507752448,
+      "privateMiBAfterBrowser": 484.23,
+      "privateMiBDeltaAfterBrowser": 109.61,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 52.76,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 12.49,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 70107136,
+          "privateMiB": 66.86,
+          "processes": [
+            {
+              "pid": 241452,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 70107136,
+              "privateMiB": 66.86
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 70647808,
+          "privateMiB": 67.38,
+          "processes": [
+            {
+              "pid": 246132,
+              "parentPid": 241452,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 70647808,
+              "privateMiB": 67.38
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 237998080,
+          "privateMiB": 226.97,
+          "processes": [
+            {
+              "pid": 55856,
+              "parentPid": 241452,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 237998080,
+              "privateMiB": 226.97
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14069760,
+          "privateMiB": 13.42,
+          "processes": [
+            {
+              "pid": 214200,
+              "parentPid": 241452,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14069760,
+              "privateMiB": 13.42
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 110891008,
+          "privateMiB": 105.75,
+          "processes": [
+            {
+              "pid": 241452,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 110891008,
+              "privateMiB": 105.75
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 109395968,
+          "privateMiB": 104.33,
+          "processes": [
+            {
+              "pid": 246132,
+              "parentPid": 241452,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 84856832,
+              "privateMiB": 80.93
+            },
+            {
+              "pid": 246348,
+              "parentPid": 241452,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 24539136,
+              "privateMiB": 23.4
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 273113088,
+          "privateMiB": 260.46,
+          "processes": [
+            {
+              "pid": 55856,
+              "parentPid": 241452,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 273113088,
+              "privateMiB": 260.46
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14352384,
+          "privateMiB": 13.69,
+          "processes": [
+            {
+              "pid": 214200,
+              "parentPid": 241452,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14352384,
+              "privateMiB": 13.69
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 5,
+      "interactiveMs": 3228,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 42,
+        "endpointReachable": true,
+        "reachablePollCount": 29,
+        "firstEndpointReachableMs": 1595,
+        "lastEndpointReachableMs": 4997,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 12553,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 82.4,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 399,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 407814144,
+      "privateMiBBeforeBrowser": 388.92,
+      "privateBytesAfterBrowser": 498233344,
+      "privateMiBAfterBrowser": 475.15,
+      "privateMiBDeltaAfterBrowser": 86.23,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 6.66,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 4.31,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66514944,
+          "privateMiB": 63.43,
+          "processes": [
+            {
+              "pid": 238204,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66514944,
+              "privateMiB": 63.43
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 73326592,
+          "privateMiB": 69.93,
+          "processes": [
+            {
+              "pid": 240308,
+              "parentPid": 238204,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 73326592,
+              "privateMiB": 69.93
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 253739008,
+          "privateMiB": 241.98,
+          "processes": [
+            {
+              "pid": 236664,
+              "parentPid": 238204,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 253739008,
+              "privateMiB": 241.98
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14233600,
+          "privateMiB": 13.57,
+          "processes": [
+            {
+              "pid": 222860,
+              "parentPid": 238204,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14233600,
+              "privateMiB": 13.57
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 106704896,
+          "privateMiB": 101.76,
+          "processes": [
+            {
+              "pid": 238204,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 106704896,
+              "privateMiB": 101.76
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 110346240,
+          "privateMiB": 105.23,
+          "processes": [
+            {
+              "pid": 240308,
+              "parentPid": 238204,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 86863872,
+              "privateMiB": 82.84
+            },
+            {
+              "pid": 223560,
+              "parentPid": 238204,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 23482368,
+              "privateMiB": 22.39
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 266690560,
+          "privateMiB": 254.34,
+          "processes": [
+            {
+              "pid": 236664,
+              "parentPid": 238204,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 266690560,
+              "privateMiB": 254.34
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14491648,
+          "privateMiB": 13.82,
+          "processes": [
+            {
+              "pid": 222860,
+              "parentPid": 238204,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14491648,
+              "privateMiB": 13.82
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 6,
+      "interactiveMs": 2875,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 53,
+        "endpointReachable": true,
+        "reachablePollCount": 43,
+        "firstEndpointReachableMs": 1306,
+        "lastEndpointReachableMs": 4949,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 9610,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 77.5,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 321,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 396427264,
+      "privateMiBBeforeBrowser": 378.06,
+      "privateBytesAfterBrowser": 554340352,
+      "privateMiBAfterBrowser": 528.66,
+      "privateMiBDeltaAfterBrowser": 150.6,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 42.84,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 4.84,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66236416,
+          "privateMiB": 63.17,
+          "processes": [
+            {
+              "pid": 240164,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66236416,
+              "privateMiB": 63.17
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 73248768,
+          "privateMiB": 69.86,
+          "processes": [
+            {
+              "pid": 171620,
+              "parentPid": 240164,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 73248768,
+              "privateMiB": 69.86
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 242483200,
+          "privateMiB": 231.25,
+          "processes": [
+            {
+              "pid": 220196,
+              "parentPid": 240164,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 242483200,
+              "privateMiB": 231.25
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14458880,
+          "privateMiB": 13.79,
+          "processes": [
+            {
+              "pid": 240584,
+              "parentPid": 240164,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14458880,
+              "privateMiB": 13.79
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 106639360,
+          "privateMiB": 101.7,
+          "processes": [
+            {
+              "pid": 240164,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 106639360,
+              "privateMiB": 101.7
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 110596096,
+          "privateMiB": 105.47,
+          "processes": [
+            {
+              "pid": 171620,
+              "parentPid": 240164,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 87244800,
+              "privateMiB": 83.2
+            },
+            {
+              "pid": 243100,
+              "parentPid": 240164,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 23351296,
+              "privateMiB": 22.27
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 322379776,
+          "privateMiB": 307.45,
+          "processes": [
+            {
+              "pid": 220196,
+              "parentPid": 240164,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 322379776,
+              "privateMiB": 307.45
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14725120,
+          "privateMiB": 14.04,
+          "processes": [
+            {
+              "pid": 240584,
+              "parentPid": 240164,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14725120,
+              "privateMiB": 14.04
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 7,
+      "interactiveMs": 2727,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 44,
+        "endpointReachable": true,
+        "reachablePollCount": 32,
+        "firstEndpointReachableMs": 1876,
+        "lastEndpointReachableMs": 5000,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 10847,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 90.8,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 253,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 510971904,
+      "privateMiBBeforeBrowser": 487.3,
+      "privateBytesAfterBrowser": 581283840,
+      "privateMiBAfterBrowser": 554.36,
+      "privateMiBDeltaAfterBrowser": 67.05,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 0.7,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 1.42,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66428928,
+          "privateMiB": 63.35,
+          "processes": [
+            {
+              "pid": 210668,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66428928,
+              "privateMiB": 63.35
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 69873664,
+          "privateMiB": 66.64,
+          "processes": [
+            {
+              "pid": 219164,
+              "parentPid": 210668,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 69873664,
+              "privateMiB": 66.64
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 360226816,
+          "privateMiB": 343.54,
+          "processes": [
+            {
+              "pid": 243312,
+              "parentPid": 210668,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 360226816,
+              "privateMiB": 343.54
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14442496,
+          "privateMiB": 13.77,
+          "processes": [
+            {
+              "pid": 245792,
+              "parentPid": 210668,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14442496,
+              "privateMiB": 13.77
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 106868736,
+          "privateMiB": 101.92,
+          "processes": [
+            {
+              "pid": 210668,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 106868736,
+              "privateMiB": 101.92
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 111030272,
+          "privateMiB": 105.89,
+          "processes": [
+            {
+              "pid": 219164,
+              "parentPid": 210668,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 86376448,
+              "privateMiB": 82.38
+            },
+            {
+              "pid": 237304,
+              "parentPid": 210668,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 24653824,
+              "privateMiB": 23.51
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 348643328,
+          "privateMiB": 332.49,
+          "processes": [
+            {
+              "pid": 243312,
+              "parentPid": 210668,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 348643328,
+              "privateMiB": 332.49
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14741504,
+          "privateMiB": 14.06,
+          "processes": [
+            {
+              "pid": 245792,
+              "parentPid": 210668,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14741504,
+              "privateMiB": 14.06
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 8,
+      "interactiveMs": 2360,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 47,
+        "endpointReachable": true,
+        "reachablePollCount": 36,
+        "firstEndpointReachableMs": 1614,
+        "lastEndpointReachableMs": 4938,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 11556,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 53.7,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 246,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 449150976,
+      "privateMiBBeforeBrowser": 428.34,
+      "privateBytesAfterBrowser": 581693440,
+      "privateMiBAfterBrowser": 554.75,
+      "privateMiBDeltaAfterBrowser": 126.4,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 0.58,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 97.16,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66695168,
+          "privateMiB": 63.61,
+          "processes": [
+            {
+              "pid": 236184,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66695168,
+              "privateMiB": 63.61
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 73465856,
+          "privateMiB": 70.06,
+          "processes": [
+            {
+              "pid": 235740,
+              "parentPid": 236184,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 73465856,
+              "privateMiB": 70.06
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 294596608,
+          "privateMiB": 280.95,
+          "processes": [
+            {
+              "pid": 242600,
+              "parentPid": 236184,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 294596608,
+              "privateMiB": 280.95
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14393344,
+          "privateMiB": 13.73,
+          "processes": [
+            {
+              "pid": 239360,
+              "parentPid": 236184,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14393344,
+              "privateMiB": 13.73
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 106975232,
+          "privateMiB": 102.02,
+          "processes": [
+            {
+              "pid": 236184,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 106975232,
+              "privateMiB": 102.02
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 112955392,
+          "privateMiB": 107.72,
+          "processes": [
+            {
+              "pid": 235740,
+              "parentPid": 236184,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 88444928,
+              "privateMiB": 84.35
+            },
+            {
+              "pid": 242940,
+              "parentPid": 236184,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 24510464,
+              "privateMiB": 23.38
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 347099136,
+          "privateMiB": 331.02,
+          "processes": [
+            {
+              "pid": 242600,
+              "parentPid": 236184,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 347099136,
+              "privateMiB": 331.02
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14663680,
+          "privateMiB": 13.98,
+          "processes": [
+            {
+              "pid": 239360,
+              "parentPid": 236184,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14663680,
+              "privateMiB": 13.98
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 9,
+      "interactiveMs": 2655,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 50,
+        "endpointReachable": true,
+        "reachablePollCount": 41,
+        "firstEndpointReachableMs": 1361,
+        "lastEndpointReachableMs": 4987,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 9758,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 80.4,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 248,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 522969088,
+      "privateMiBBeforeBrowser": 498.74,
+      "privateBytesAfterBrowser": 563437568,
+      "privateMiBAfterBrowser": 537.34,
+      "privateMiBDeltaAfterBrowser": 38.59,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 0.86,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 35.43,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66777088,
+          "privateMiB": 63.68,
+          "processes": [
+            {
+              "pid": 245724,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66777088,
+              "privateMiB": 63.68
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 71827456,
+          "privateMiB": 68.5,
+          "processes": [
+            {
+              "pid": 246520,
+              "parentPid": 245724,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 71827456,
+              "privateMiB": 68.5
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 369827840,
+          "privateMiB": 352.7,
+          "processes": [
+            {
+              "pid": 240020,
+              "parentPid": 245724,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 369827840,
+              "privateMiB": 352.7
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14536704,
+          "privateMiB": 13.86,
+          "processes": [
+            {
+              "pid": 230216,
+              "parentPid": 245724,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14536704,
+              "privateMiB": 13.86
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 107130880,
+          "privateMiB": 102.17,
+          "processes": [
+            {
+              "pid": 245724,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 107130880,
+              "privateMiB": 102.17
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 108916736,
+          "privateMiB": 103.87,
+          "processes": [
+            {
+              "pid": 246520,
+              "parentPid": 245724,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 85360640,
+              "privateMiB": 81.41
+            },
+            {
+              "pid": 93992,
+              "parentPid": 245724,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 23556096,
+              "privateMiB": 22.46
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 332587008,
+          "privateMiB": 317.18,
+          "processes": [
+            {
+              "pid": 240020,
+              "parentPid": 245724,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 332587008,
+              "privateMiB": 317.18
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14802944,
+          "privateMiB": 14.12,
+          "processes": [
+            {
+              "pid": 230216,
+              "parentPid": 245724,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14802944,
+              "privateMiB": 14.12
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 10,
+      "interactiveMs": 2299,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 55,
+        "endpointReachable": true,
+        "reachablePollCount": 46,
+        "firstEndpointReachableMs": 1219,
+        "lastEndpointReachableMs": 4957,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 10707,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 106,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 253,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 396574720,
+      "privateMiBBeforeBrowser": 378.2,
+      "privateBytesAfterBrowser": 506535936,
+      "privateMiBAfterBrowser": 483.07,
+      "privateMiBDeltaAfterBrowser": 104.87,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 1.49,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 9.14,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66510848,
+          "privateMiB": 63.43,
+          "processes": [
+            {
+              "pid": 44716,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66510848,
+              "privateMiB": 63.43
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 71999488,
+          "privateMiB": 68.66,
+          "processes": [
+            {
+              "pid": 133284,
+              "parentPid": 44716,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 71999488,
+              "privateMiB": 68.66
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 243453952,
+          "privateMiB": 232.18,
+          "processes": [
+            {
+              "pid": 245324,
+              "parentPid": 44716,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 243453952,
+              "privateMiB": 232.18
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14610432,
+          "privateMiB": 13.93,
+          "processes": [
+            {
+              "pid": 171976,
+              "parentPid": 44716,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14610432,
+              "privateMiB": 13.93
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 107012096,
+          "privateMiB": 102.05,
+          "processes": [
+            {
+              "pid": 44716,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 107012096,
+              "privateMiB": 102.05
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 112640000,
+          "privateMiB": 107.42,
+          "processes": [
+            {
+              "pid": 133284,
+              "parentPid": 44716,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 88125440,
+              "privateMiB": 84.04
+            },
+            {
+              "pid": 240180,
+              "parentPid": 44716,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 24514560,
+              "privateMiB": 23.38
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 272003072,
+          "privateMiB": 259.4,
+          "processes": [
+            {
+              "pid": 245324,
+              "parentPid": 44716,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 272003072,
+              "privateMiB": 259.4
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14880768,
+          "privateMiB": 14.19,
+          "processes": [
+            {
+              "pid": 171976,
+              "parentPid": 44716,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14880768,
+              "privateMiB": 14.19
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 11,
+      "interactiveMs": 2100,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 54,
+        "endpointReachable": true,
+        "reachablePollCount": 44,
+        "firstEndpointReachableMs": 1433,
+        "lastEndpointReachableMs": 4948,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 10078,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 67.1,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 818,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 401444864,
+      "privateMiBBeforeBrowser": 382.85,
+      "privateBytesAfterBrowser": 502255616,
+      "privateMiBAfterBrowser": 478.99,
+      "privateMiBDeltaAfterBrowser": 96.14,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 45.43,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 4.84,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66711552,
+          "privateMiB": 63.62,
+          "processes": [
+            {
+              "pid": 238048,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66711552,
+              "privateMiB": 63.62
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 71929856,
+          "privateMiB": 68.6,
+          "processes": [
+            {
+              "pid": 185328,
+              "parentPid": 238048,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 71929856,
+              "privateMiB": 68.6
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 248397824,
+          "privateMiB": 236.89,
+          "processes": [
+            {
+              "pid": 241780,
+              "parentPid": 238048,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 248397824,
+              "privateMiB": 236.89
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14405632,
+          "privateMiB": 13.74,
+          "processes": [
+            {
+              "pid": 151464,
+              "parentPid": 238048,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14405632,
+              "privateMiB": 13.74
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 107507712,
+          "privateMiB": 102.53,
+          "processes": [
+            {
+              "pid": 238048,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 107507712,
+              "privateMiB": 102.53
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 109932544,
+          "privateMiB": 104.84,
+          "processes": [
+            {
+              "pid": 185328,
+              "parentPid": 238048,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 86462464,
+              "privateMiB": 82.46
+            },
+            {
+              "pid": 226560,
+              "parentPid": 238048,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 23470080,
+              "privateMiB": 22.38
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 270139392,
+          "privateMiB": 257.63,
+          "processes": [
+            {
+              "pid": 241780,
+              "parentPid": 238048,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 270139392,
+              "privateMiB": 257.63
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14675968,
+          "privateMiB": 14,
+          "processes": [
+            {
+              "pid": 151464,
+              "parentPid": 238048,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14675968,
+              "privateMiB": 14
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 12,
+      "interactiveMs": 2196,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 56,
+        "endpointReachable": true,
+        "reachablePollCount": 47,
+        "firstEndpointReachableMs": 1201,
+        "lastEndpointReachableMs": 4958,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 9926,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 75.9,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 249,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 448675840,
+      "privateMiBBeforeBrowser": 427.89,
+      "privateBytesAfterBrowser": 511922176,
+      "privateMiBAfterBrowser": 488.21,
+      "privateMiBDeltaAfterBrowser": 60.32,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 0.86,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 5.01,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66387968,
+          "privateMiB": 63.31,
+          "processes": [
+            {
+              "pid": 237828,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66387968,
+              "privateMiB": 63.31
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 71262208,
+          "privateMiB": 67.96,
+          "processes": [
+            {
+              "pid": 221288,
+              "parentPid": 237828,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 71262208,
+              "privateMiB": 67.96
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 296804352,
+          "privateMiB": 283.05,
+          "processes": [
+            {
+              "pid": 202700,
+              "parentPid": 237828,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 296804352,
+              "privateMiB": 283.05
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14221312,
+          "privateMiB": 13.56,
+          "processes": [
+            {
+              "pid": 147272,
+              "parentPid": 237828,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14221312,
+              "privateMiB": 13.56
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 106397696,
+          "privateMiB": 101.47,
+          "processes": [
+            {
+              "pid": 237828,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 106397696,
+              "privateMiB": 101.47
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 110542848,
+          "privateMiB": 105.42,
+          "processes": [
+            {
+              "pid": 221288,
+              "parentPid": 237828,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 85692416,
+              "privateMiB": 81.72
+            },
+            {
+              "pid": 222296,
+              "parentPid": 237828,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 24850432,
+              "privateMiB": 23.7
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 280485888,
+          "privateMiB": 267.49,
+          "processes": [
+            {
+              "pid": 202700,
+              "parentPid": 237828,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 280485888,
+              "privateMiB": 267.49
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14495744,
+          "privateMiB": 13.82,
+          "processes": [
+            {
+              "pid": 147272,
+              "parentPid": 237828,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14495744,
+              "privateMiB": 13.82
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 13,
+      "interactiveMs": 2419,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 52,
+        "endpointReachable": true,
+        "reachablePollCount": 41,
+        "firstEndpointReachableMs": 1629,
+        "lastEndpointReachableMs": 4992,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 9661,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 69.2,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 255,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 449933312,
+      "privateMiBBeforeBrowser": 429.09,
+      "privateBytesAfterBrowser": 616435712,
+      "privateMiBAfterBrowser": 587.88,
+      "privateMiBDeltaAfterBrowser": 158.79,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 0.53,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 33.08,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66863104,
+          "privateMiB": 63.77,
+          "processes": [
+            {
+              "pid": 242032,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66863104,
+              "privateMiB": 63.77
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 73371648,
+          "privateMiB": 69.97,
+          "processes": [
+            {
+              "pid": 245396,
+              "parentPid": 242032,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 73371648,
+              "privateMiB": 69.97
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 295440384,
+          "privateMiB": 281.75,
+          "processes": [
+            {
+              "pid": 243584,
+              "parentPid": 242032,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 295440384,
+              "privateMiB": 281.75
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14258176,
+          "privateMiB": 13.6,
+          "processes": [
+            {
+              "pid": 5040,
+              "parentPid": 242032,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14258176,
+              "privateMiB": 13.6
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 107085824,
+          "privateMiB": 102.13,
+          "processes": [
+            {
+              "pid": 242032,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 107085824,
+              "privateMiB": 102.13
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 113115136,
+          "privateMiB": 107.88,
+          "processes": [
+            {
+              "pid": 245396,
+              "parentPid": 242032,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 88637440,
+              "privateMiB": 84.53
+            },
+            {
+              "pid": 170128,
+              "parentPid": 242032,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 24477696,
+              "privateMiB": 23.34
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 381698048,
+          "privateMiB": 364.02,
+          "processes": [
+            {
+              "pid": 243584,
+              "parentPid": 242032,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 381698048,
+              "privateMiB": 364.02
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14536704,
+          "privateMiB": 13.86,
+          "processes": [
+            {
+              "pid": 5040,
+              "parentPid": 242032,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14536704,
+              "privateMiB": 13.86
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 14,
+      "interactiveMs": 1908,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 56,
+        "endpointReachable": true,
+        "reachablePollCount": 48,
+        "firstEndpointReachableMs": 1160,
+        "lastEndpointReachableMs": 4997,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 10405,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 81.7,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 256,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 513523712,
+      "privateMiBBeforeBrowser": 489.73,
+      "privateBytesAfterBrowser": 512126976,
+      "privateMiBAfterBrowser": 488.4,
+      "privateMiBDeltaAfterBrowser": -1.33,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 0.61,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 2.71,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66633728,
+          "privateMiB": 63.55,
+          "processes": [
+            {
+              "pid": 185156,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66633728,
+              "privateMiB": 63.55
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 68521984,
+          "privateMiB": 65.35,
+          "processes": [
+            {
+              "pid": 242408,
+              "parentPid": 185156,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 68521984,
+              "privateMiB": 65.35
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 363950080,
+          "privateMiB": 347.09,
+          "processes": [
+            {
+              "pid": 245664,
+              "parentPid": 185156,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 363950080,
+              "privateMiB": 347.09
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14417920,
+          "privateMiB": 13.75,
+          "processes": [
+            {
+              "pid": 228440,
+              "parentPid": 185156,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14417920,
+              "privateMiB": 13.75
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 106045440,
+          "privateMiB": 101.13,
+          "processes": [
+            {
+              "pid": 185156,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 106045440,
+              "privateMiB": 101.13
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 107139072,
+          "privateMiB": 102.18,
+          "processes": [
+            {
+              "pid": 242408,
+              "parentPid": 185156,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 82501632,
+              "privateMiB": 78.68
+            },
+            {
+              "pid": 164596,
+              "parentPid": 185156,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 24637440,
+              "privateMiB": 23.5
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 284258304,
+          "privateMiB": 271.09,
+          "processes": [
+            {
+              "pid": 245664,
+              "parentPid": 185156,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 284258304,
+              "privateMiB": 271.09
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14684160,
+          "privateMiB": 14,
+          "processes": [
+            {
+              "pid": 228440,
+              "parentPid": 185156,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14684160,
+              "privateMiB": 14
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 15,
+      "interactiveMs": 2125,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 42,
+        "endpointReachable": true,
+        "reachablePollCount": 30,
+        "firstEndpointReachableMs": 1373,
+        "lastEndpointReachableMs": 4989,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 11000,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 76.9,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 254,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 404381696,
+      "privateMiBBeforeBrowser": 385.65,
+      "privateBytesAfterBrowser": 505647104,
+      "privateMiBAfterBrowser": 482.22,
+      "privateMiBDeltaAfterBrowser": 96.57,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 0.82,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 0.91,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 69263360,
+          "privateMiB": 66.05,
+          "processes": [
+            {
+              "pid": 237264,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 69263360,
+              "privateMiB": 66.05
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 71692288,
+          "privateMiB": 68.37,
+          "processes": [
+            {
+              "pid": 144504,
+              "parentPid": 237264,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 71692288,
+              "privateMiB": 68.37
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 248999936,
+          "privateMiB": 237.46,
+          "processes": [
+            {
+              "pid": 230452,
+              "parentPid": 237264,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 248999936,
+              "privateMiB": 237.46
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14426112,
+          "privateMiB": 13.76,
+          "processes": [
+            {
+              "pid": 211568,
+              "parentPid": 237264,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14426112,
+              "privateMiB": 13.76
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 109502464,
+          "privateMiB": 104.43,
+          "processes": [
+            {
+              "pid": 237264,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 109502464,
+              "privateMiB": 104.43
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 108544000,
+          "privateMiB": 103.52,
+          "processes": [
+            {
+              "pid": 144504,
+              "parentPid": 237264,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 85094400,
+              "privateMiB": 81.15
+            },
+            {
+              "pid": 243992,
+              "parentPid": 237264,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 23449600,
+              "privateMiB": 22.36
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 272887808,
+          "privateMiB": 260.25,
+          "processes": [
+            {
+              "pid": 230452,
+              "parentPid": 237264,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 272887808,
+              "privateMiB": 260.25
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14712832,
+          "privateMiB": 14.03,
+          "processes": [
+            {
+              "pid": 211568,
+              "parentPid": 237264,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14712832,
+              "privateMiB": 14.03
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 16,
+      "interactiveMs": 2162,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 51,
+        "endpointReachable": true,
+        "reachablePollCount": 42,
+        "firstEndpointReachableMs": 1225,
+        "lastEndpointReachableMs": 4984,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 9952,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 115.1,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 226,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 522776576,
+      "privateMiBBeforeBrowser": 498.56,
+      "privateBytesAfterBrowser": 567984128,
+      "privateMiBAfterBrowser": 541.67,
+      "privateMiBDeltaAfterBrowser": 43.11,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 0.82,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 2.66,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66445312,
+          "privateMiB": 63.37,
+          "processes": [
+            {
+              "pid": 240400,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66445312,
+              "privateMiB": 63.37
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 73146368,
+          "privateMiB": 69.76,
+          "processes": [
+            {
+              "pid": 230544,
+              "parentPid": 240400,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 73146368,
+              "privateMiB": 69.76
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 369000448,
+          "privateMiB": 351.91,
+          "processes": [
+            {
+              "pid": 236024,
+              "parentPid": 240400,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 369000448,
+              "privateMiB": 351.91
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14184448,
+          "privateMiB": 13.53,
+          "processes": [
+            {
+              "pid": 240712,
+              "parentPid": 240400,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14184448,
+              "privateMiB": 13.53
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 105496576,
+          "privateMiB": 100.61,
+          "processes": [
+            {
+              "pid": 240400,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 105496576,
+              "privateMiB": 100.61
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 110297088,
+          "privateMiB": 105.19,
+          "processes": [
+            {
+              "pid": 230544,
+              "parentPid": 240400,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 85864448,
+              "privateMiB": 81.89
+            },
+            {
+              "pid": 246476,
+              "parentPid": 240400,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 24432640,
+              "privateMiB": 23.3
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 337719296,
+          "privateMiB": 322.07,
+          "processes": [
+            {
+              "pid": 236024,
+              "parentPid": 240400,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 337719296,
+              "privateMiB": 322.07
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14471168,
+          "privateMiB": 13.8,
+          "processes": [
+            {
+              "pid": 240712,
+              "parentPid": 240400,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14471168,
+              "privateMiB": 13.8
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 17,
+      "interactiveMs": 1966,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 56,
+        "endpointReachable": true,
+        "reachablePollCount": 47,
+        "firstEndpointReachableMs": 1252,
+        "lastEndpointReachableMs": 4982,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 10626,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 73.8,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 363,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 393142272,
+      "privateMiBBeforeBrowser": 374.93,
+      "privateBytesAfterBrowser": 503320576,
+      "privateMiBAfterBrowser": 480,
+      "privateMiBDeltaAfterBrowser": 105.07,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 44.89,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 9.32,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66605056,
+          "privateMiB": 63.52,
+          "processes": [
+            {
+              "pid": 12700,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66605056,
+              "privateMiB": 63.52
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 74944512,
+          "privateMiB": 71.47,
+          "processes": [
+            {
+              "pid": 241292,
+              "parentPid": 12700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 74944512,
+              "privateMiB": 71.47
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 237215744,
+          "privateMiB": 226.23,
+          "processes": [
+            {
+              "pid": 236920,
+              "parentPid": 12700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 237215744,
+              "privateMiB": 226.23
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14376960,
+          "privateMiB": 13.71,
+          "processes": [
+            {
+              "pid": 243268,
+              "parentPid": 12700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14376960,
+              "privateMiB": 13.71
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 107077632,
+          "privateMiB": 102.12,
+          "processes": [
+            {
+              "pid": 12700,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 107077632,
+              "privateMiB": 102.12
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 113229824,
+          "privateMiB": 107.98,
+          "processes": [
+            {
+              "pid": 241292,
+              "parentPid": 12700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 88670208,
+              "privateMiB": 84.56
+            },
+            {
+              "pid": 223964,
+              "parentPid": 12700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 24559616,
+              "privateMiB": 23.42
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 268365824,
+          "privateMiB": 255.93,
+          "processes": [
+            {
+              "pid": 236920,
+              "parentPid": 12700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 268365824,
+              "privateMiB": 255.93
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14647296,
+          "privateMiB": 13.97,
+          "processes": [
+            {
+              "pid": 243268,
+              "parentPid": 12700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14647296,
+              "privateMiB": 13.97
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 18,
+      "interactiveMs": 4066,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 44,
+        "endpointReachable": true,
+        "reachablePollCount": 28,
+        "firstEndpointReachableMs": 2355,
+        "lastEndpointReachableMs": 4622,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 8661,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 79.7,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 258,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 416059392,
+      "privateMiBBeforeBrowser": 396.79,
+      "privateBytesAfterBrowser": 502235136,
+      "privateMiBAfterBrowser": 478.97,
+      "privateMiBDeltaAfterBrowser": 82.18,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 37.52,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 27.54,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66211840,
+          "privateMiB": 63.14,
+          "processes": [
+            {
+              "pid": 228800,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66211840,
+              "privateMiB": 63.14
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 67321856,
+          "privateMiB": 64.2,
+          "processes": [
+            {
+              "pid": 242352,
+              "parentPid": 228800,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 67321856,
+              "privateMiB": 64.2
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 268210176,
+          "privateMiB": 255.79,
+          "processes": [
+            {
+              "pid": 246348,
+              "parentPid": 228800,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 268210176,
+              "privateMiB": 255.79
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14315520,
+          "privateMiB": 13.65,
+          "processes": [
+            {
+              "pid": 7868,
+              "parentPid": 228800,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14315520,
+              "privateMiB": 13.65
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 105594880,
+          "privateMiB": 100.7,
+          "processes": [
+            {
+              "pid": 228800,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 105594880,
+              "privateMiB": 100.7
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 106401792,
+          "privateMiB": 101.47,
+          "processes": [
+            {
+              "pid": 242352,
+              "parentPid": 228800,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 81985536,
+              "privateMiB": 78.19
+            },
+            {
+              "pid": 208904,
+              "parentPid": 228800,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 24416256,
+              "privateMiB": 23.29
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 275628032,
+          "privateMiB": 262.86,
+          "processes": [
+            {
+              "pid": 246348,
+              "parentPid": 228800,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 275628032,
+              "privateMiB": 262.86
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14610432,
+          "privateMiB": 13.93,
+          "processes": [
+            {
+              "pid": 7868,
+              "parentPid": 228800,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14610432,
+              "privateMiB": 13.93
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 19,
+      "interactiveMs": 2019,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 55,
+        "endpointReachable": true,
+        "reachablePollCount": 46,
+        "firstEndpointReachableMs": 1284,
+        "lastEndpointReachableMs": 4976,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 11850,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 70.9,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 406,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 444170240,
+      "privateMiBBeforeBrowser": 423.59,
+      "privateBytesAfterBrowser": 529010688,
+      "privateMiBAfterBrowser": 504.5,
+      "privateMiBDeltaAfterBrowser": 80.91,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 0.53,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 0.89,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 66252800,
+          "privateMiB": 63.18,
+          "processes": [
+            {
+              "pid": 239612,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 66252800,
+              "privateMiB": 63.18
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 72835072,
+          "privateMiB": 69.46,
+          "processes": [
+            {
+              "pid": 63020,
+              "parentPid": 239612,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 72835072,
+              "privateMiB": 69.46
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 290852864,
+          "privateMiB": 277.38,
+          "processes": [
+            {
+              "pid": 239444,
+              "parentPid": 239612,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 290852864,
+              "privateMiB": 277.38
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14229504,
+          "privateMiB": 13.57,
+          "processes": [
+            {
+              "pid": 222560,
+              "parentPid": 239612,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14229504,
+              "privateMiB": 13.57
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 107462656,
+          "privateMiB": 102.48,
+          "processes": [
+            {
+              "pid": 239612,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 107462656,
+              "privateMiB": 102.48
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 111939584,
+          "privateMiB": 106.75,
+          "processes": [
+            {
+              "pid": 63020,
+              "parentPid": 239612,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 87306240,
+              "privateMiB": 83.26
+            },
+            {
+              "pid": 227640,
+              "parentPid": 239612,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 24633344,
+              "privateMiB": 23.49
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 295112704,
+          "privateMiB": 281.44,
+          "processes": [
+            {
+              "pid": 239444,
+              "parentPid": 239612,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 295112704,
+              "privateMiB": 281.44
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14495744,
+          "privateMiB": 13.82,
+          "processes": [
+            {
+              "pid": 222560,
+              "parentPid": 239612,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14495744,
+              "privateMiB": 13.82
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    },
+    {
+      "run": 20,
+      "interactiveMs": 3820,
+      "promptInteractivity": {
+        "promptEnabled": true,
+        "promptWritable": true,
+        "trustedInputEvents": 1,
+        "submitEnabled": true,
+        "submitClickInvocations": 1
+      },
+      "startupGuestMonitor": {
+        "windowMs": 5000,
+        "pollCount": 34,
+        "endpointReachable": true,
+        "reachablePollCount": 21,
+        "firstEndpointReachableMs": 2777,
+        "lastEndpointReachableMs": 4848,
+        "maximumGuestCount": 0,
+        "guestViolations": [],
+        "lastEndpointError": ""
+      },
+      "browserLifecycleBefore": {
+        "createCount": 0,
+        "firstCreatedAtMs": null,
+        "present": false,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "browserLifecycleAfter": {
+        "createCount": 1,
+        "firstCreatedAtMs": 10149,
+        "present": true,
+        "minimumCreateDelayMs": 5000,
+        "idleDestroyMs": 60000
+      },
+      "inputLatencyMs": 85.4,
+      "inputFixtureBytes": 66560,
+      "inputFixtureLines": 1024,
+      "browserOpenMs": 311,
+      "browserGuestCountBefore": 0,
+      "browserGuestCountAfter": 1,
+      "browserGuestCountDelta": 1,
+      "privateBytesBeforeBrowser": 444497920,
+      "privateMiBBeforeBrowser": 423.91,
+      "privateBytesAfterBrowser": 506048512,
+      "privateMiBAfterBrowser": 482.61,
+      "privateMiBDeltaAfterBrowser": 58.7,
+      "processCountBeforeBrowser": 4,
+      "processCountAfterBrowser": 5,
+      "privateMemoryStableSamplesBeforeBrowser": 3,
+      "privateMemoryStableRangeMiBBeforeBrowser": 1.5,
+      "privateMemoryStableSamplesAfterBrowser": 3,
+      "privateMemoryStableRangeMiBAfterBrowser": 11.32,
+      "processClassesBeforeBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 69017600,
+          "privateMiB": 65.82,
+          "processes": [
+            {
+              "pid": 226700,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 69017600,
+              "privateMiB": 65.82
+            }
+          ]
+        },
+        "renderer": {
+          "count": 1,
+          "privateBytes": 69480448,
+          "privateMiB": 66.26,
+          "processes": [
+            {
+              "pid": 243044,
+              "parentPid": 226700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 69480448,
+              "privateMiB": 66.26
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 291586048,
+          "privateMiB": 278.08,
+          "processes": [
+            {
+              "pid": 230060,
+              "parentPid": 226700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 291586048,
+              "privateMiB": 278.08
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14413824,
+          "privateMiB": 13.75,
+          "processes": [
+            {
+              "pid": 240852,
+              "parentPid": 226700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14413824,
+              "privateMiB": 13.75
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      },
+      "processClassesAfterBrowser": {
+        "main": {
+          "count": 1,
+          "privateBytes": 110215168,
+          "privateMiB": 105.11,
+          "processes": [
+            {
+              "pid": 226700,
+              "parentPid": 134708,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 110215168,
+              "privateMiB": 105.11
+            }
+          ]
+        },
+        "renderer": {
+          "count": 2,
+          "privateBytes": 107397120,
+          "privateMiB": 102.42,
+          "processes": [
+            {
+              "pid": 243044,
+              "parentPid": 226700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 82972672,
+              "privateMiB": 79.13
+            },
+            {
+              "pid": 222472,
+              "parentPid": 226700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 24424448,
+              "privateMiB": 23.29
+            }
+          ]
+        },
+        "gpu": {
+          "count": 1,
+          "privateBytes": 273743872,
+          "privateMiB": 261.06,
+          "processes": [
+            {
+              "pid": 230060,
+              "parentPid": 226700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 273743872,
+              "privateMiB": 261.06
+            }
+          ]
+        },
+        "utility": {
+          "count": 1,
+          "privateBytes": 14692352,
+          "privateMiB": 14.01,
+          "processes": [
+            {
+              "pid": 240852,
+              "parentPid": 226700,
+              "name": "Newmark Agent.exe",
+              "privateBytes": 14692352,
+              "privateMiB": 14.01
+            }
+          ]
+        },
+        "webview_guest": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        },
+        "other": {
+          "count": 0,
+          "privateBytes": 0,
+          "privateMiB": 0,
+          "processes": []
+        }
+      }
+    }
+  ]
+}

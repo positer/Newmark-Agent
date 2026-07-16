@@ -1,9 +1,16 @@
 'use strict';
 
-const PROMOTED_MAIN_UI_EXPRESSION = `(() => document.visibilityState === 'visible'
-  && document.readyState === 'complete'
-  && !!window.api
-  && !!document.querySelector('#prompt'))()`;
+const PROMOTED_MAIN_UI_EXPRESSION = `(() => {
+  const prompt = document.querySelector('#prompt');
+  return document.visibilityState === 'visible'
+    && document.readyState === 'complete'
+    && !!window.api
+    && !!prompt
+    && !prompt.disabled
+    && !prompt.readOnly
+    && !document.documentElement.classList.contains('startup-prewarm')
+    && !document.querySelector('#startup-cover');
+})()`;
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));

@@ -11,9 +11,11 @@ import { normalizeConversationTarget } from '../core/conversationTarget';
 import {
   activeWindowsProcessHelperPidsForTest,
   ElectronUtilityAgentClient,
+  setWindowsProcessQueryScriptForTest,
   snapshotWindowsProcessTree,
   terminateCapturedWindowsProcessTree,
   terminateWindowsUtilityProcessTree,
+  windowsProcessTreeHelperRuntimeForTest,
 } from '../core/electronUtilityAgentClient';
 import { ElectronBrowserUseHost } from '../core/electronBrowserUseHost';
 import { NativeBrowserUsePageAdapter } from '../core/browserUsePageAdapter';
@@ -386,12 +388,18 @@ async function run(): Promise<void> {
   ok(alphaResult.receipt.observation?.title === 'Browser Use Fixture' && (betaResult.receipt.observation?.refs.length || 0) >= 7, 'real utility receipts contain the native built-in-browser observation');
 
   if (process.platform === 'win32') {
+    const processTreeHelper = windowsProcessTreeHelperRuntimeForTest();
+    ok(processTreeHelper.kind === 'precompiled' && fs.existsSync(processTreeHelper.path),
+      'real Electron process-tree operations load the build-time helper DLL instead of compiling C# at runtime');
     const cscBaseline = new Set(await readWindowsProcessPids('csc'));
     let helperTimeoutError = '';
+    setWindowsProcessQueryScriptForTest('Start-Sleep -Seconds 30');
     try {
       await snapshotWindowsProcessTree(process.pid, 100);
     } catch (error) {
       helperTimeoutError = error instanceof Error ? error.message : String(error);
+    } finally {
+      setWindowsProcessQueryScriptForTest(null);
     }
     await waitFor(() => activeWindowsProcessHelperPidsForTest().length === 0 ? true : null, 3_000);
     const cscAfterTimeout = await waitForAsync(async () => {
@@ -612,6 +620,50 @@ async function run(): Promise<void> {
     }
     ok(/PID reuse detected/i.test(reusedPidError) && reusedTerminationAttempts.length === 0,
       'creation-identity mismatch fails closed before any termination can target a reused PID');
+
+    const reusedOwnedChildRootPid = 2_000_000_012;
+    const reusedOwnedChildPid = 2_000_000_013;
+    let reusedOwnedSnapshotCalls = 0;
+    const reusedOwnedTerminations: Array<{ pid: number; creationIdentity: string }> = [];
+    await terminateWindowsUtilityProcessTree(reusedOwnedChildRootPid, '4001', {
+      snapshot: async rootPid => {
+        reusedOwnedSnapshotCalls += 1;
+        if (reusedOwnedSnapshotCalls === 1) {
+          return {
+            rootPid,
+            entries: [
+              { pid: rootPid, parentPid: 0, depth: 0, creationIdentity: '4001' },
+              { pid: reusedOwnedChildPid, parentPid: rootPid, depth: 1, creationIdentity: '4002' },
+            ],
+          };
+        }
+        if (reusedOwnedSnapshotCalls === 2) {
+          return {
+            rootPid,
+            entries: [
+              { pid: rootPid, parentPid: 0, depth: 0, creationIdentity: '4001' },
+              { pid: reusedOwnedChildPid, parentPid: rootPid, depth: 1, creationIdentity: '4003' },
+            ],
+          };
+        }
+        if (reusedOwnedSnapshotCalls === 3) {
+          return {
+            rootPid,
+            entries: [{ pid: reusedOwnedChildPid, parentPid: rootPid, depth: 1, creationIdentity: '4003' }],
+          };
+        }
+        return { rootPid, entries: [] };
+      },
+      primaryKill: async () => true,
+      terminatePid: (pid, creationIdentity) => { reusedOwnedTerminations.push({ pid, creationIdentity }); },
+      maxRescans: 5,
+      stableEmptyRescans: 1,
+      rescanDelayMs: 0,
+      rescanTimeoutMs: 50,
+      forceStopDeadlineMs: 1_000,
+    });
+    ok(reusedOwnedTerminations.some(entry => entry.pid === reusedOwnedChildPid && entry.creationIdentity === '4003'),
+      'a live identity-confirmed parent may adopt and terminate its newly created child when that child reuses a historical PID');
 
     const rootIdentityMismatchTarget = target('RootIdentityMismatch');
     fs.mkdirSync(rootIdentityMismatchTarget.workspace!.path, { recursive: true });

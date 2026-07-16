@@ -26,7 +26,7 @@ function ensureReleaseAssets() {
   if (!fs.existsSync(exePath)) fail(`missing release exe: ${exePath}`);
   if (!fs.existsSync(appAsar)) fail(`missing app.asar: ${appAsar}`);
   const files = asar.listPackage(appAsar);
-  for (const file of ['\\assets\\app-icon-dark.png', '\\assets\\app-icon-light.png', '\\assets\\icon.ico']) {
+  for (const file of ['\\assets\\app-icon-dark.png', '\\assets\\app-icon-light.png', '\\assets\\icon.ico', '\\dist\\assets\\app-icon-dark-64.png', '\\dist\\assets\\app-icon-light-64.png']) {
     if (!files.includes(file)) fail(`app.asar missing icon asset: ${file}`);
   }
   for (const [file, expectedHash] of Object.entries(expectedIconHashes)) {
@@ -135,7 +135,7 @@ async function verifyTitlebarIcon(cdp) {
   });
   const state = result.result && result.result.value;
   if (!state || state.missing) fail(`titlebar app icon missing in packaged renderer: ${JSON.stringify(state)}`);
-  const expectedResolved = state.appTheme === 'light' ? 'app-icon-light.png' : 'app-icon-dark.png';
+  const expectedResolved = state.appTheme === 'light' ? 'app-icon-light-64.png' : 'app-icon-dark-64.png';
   if (!String(state.resolvedSrc || '').includes(expectedResolved)) fail(`titlebar application-theme icon mismatch: ${JSON.stringify(state)}`);
   if (!state.complete || state.naturalWidth < 16 || state.naturalHeight < 16) fail(`titlebar app icon did not decode: ${JSON.stringify(state)}`);
   if (state.width < 20 || state.height < 20 || state.logoWidth < 24 || state.logoHeight < 24) fail(`titlebar app icon layout too small: ${JSON.stringify(state)}`);

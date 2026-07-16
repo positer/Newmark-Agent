@@ -432,6 +432,18 @@ function stopProcessTree(child) {
   if (result.error && result.error.code !== 'ENOENT') log(`cleanup warning: ${result.error.message}`);
 }
 
+async function stopPackagedRun(child, cdp) {
+  if (cdp) {
+    try { await cdp.call('Browser.close', {}, 2000); } catch {}
+  }
+  const gracefulDeadline = Date.now() + 4000;
+  while (child && child.exitCode === null && child.signalCode === null && Date.now() < gracefulDeadline) {
+    await sleep(100);
+  }
+  if (child && child.exitCode === null && child.signalCode === null) stopProcessTree(child);
+  await sleep(1500);
+}
+
 (async () => {
   if (process.platform !== 'win32') {
     log('skipped: Windows packaged smoke only');
@@ -440,12 +452,17 @@ function stopProcessTree(child) {
   if (!fs.existsSync(exePath)) fail(`Missing packaged executable: ${exePath}`);
   fs.mkdirSync(path.join(repoRoot, 'archive'), { recursive: true });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'NewmarkDev009Features-'));
-  const userDataDir = path.join(os.tmpdir(), `NewmarkDev009Electron-${process.pid}`);
+  const userDataDir = process.env.NEWMARK_TEST_USER_DATA_DIR
+    ? path.resolve(process.env.NEWMARK_TEST_USER_DATA_DIR)
+    : path.join(os.tmpdir(), `NewmarkDev009Electron-${process.pid}`);
   const fixture = await startFixtureAndProvider();
   const cdpPort = Number(process.env.NEWMARK_DEV009_FEATURES_PORT || await freeTcpPort());
   let child;
   let cdp;
   let primaryError = null;
+  let childStdout = '';
+  let childStderr = '';
+  let childExit = null;
   try {
     writeConfig(root, fixture.port);
     const appEntry = String(process.env.NEWMARK_TEST_APP_ENTRY || '').trim();
@@ -453,9 +470,15 @@ function stopProcessTree(child) {
     child = spawn(exePath, appEntry
       ? [...chromiumArgs, path.resolve(appEntry), '--root', root]
       : [...chromiumArgs, '--root', root], {
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
       env: { ...process.env, NEWMARK_PROVIDER_DIAGNOSTICS: '1' },
+    });
+    child.stdout?.on('data', chunk => { childStdout = `${childStdout}${String(chunk || '')}`.slice(-8000); });
+    child.stderr?.on('data', chunk => { childStderr = `${childStderr}${String(chunk || '')}`.slice(-8000); });
+    child.once('exit', (code, signal) => {
+      childExit = { code, signal, at: new Date().toISOString() };
+      log(`packaged process exited ${JSON.stringify(childExit)}`);
     });
     const rendererTarget = await waitForTarget(cdpPort);
     cdp = connectCdp(rendererTarget);
@@ -465,6 +488,7 @@ function stopProcessTree(child) {
     await cdp.call('Page.enable');
     await cdp.call('Page.bringToFront');
     await waitFor(cdp, `document.readyState === 'complete' && !!window.api && !!window.sendMessage && !!document.querySelector('#prompt')`, 45_000, 'packaged renderer');
+    log('packaged renderer ready');
 
     const workspaceA = await evaluate(cdp, `window.api.createWorkspace('dev009-alpha')`, 30_000);
     const workspaceB = await evaluate(cdp, `window.api.createWorkspace('dev009-beta')`, 30_000);
@@ -489,8 +513,17 @@ function stopProcessTree(child) {
     const coldBrowserUse = await evaluate(cdp, `window.api.browserControl({ action: 'use', browserUse: { action: 'navigate', action_id: 'dev009-cold-navigate', url: ${js(fixtureUrl)} } })`);
     if (!coldBrowserUse?.ok || coldBrowserUse?.source !== 'native-browser-use') fail(`Cold Browser-Use did not bind the built-in guest: ${JSON.stringify(coldBrowserUse)}`);
     await waitFor(cdp, `(() => { const view = document.querySelector('#browser-webview'); try { return view && view.getURL && view.getURL() === ${js(fixtureUrl)}; } catch { return false; } })()`, 30_000, 'cold Browser-Use fixture in prewarmed built-in guest');
+    const coldGuestReady = await evaluate(cdp, `window.ensureBrowserPanel({ activate: false }).then(view => {
+      let url = '';
+      try { url = view?.getURL ? view.getURL() : ''; } catch {}
+      return { ready: view?.dataset?.newmarkBrowserReady === 'true', connected: !!view?.isConnected, url };
+    }).catch(error => ({ ready: false, connected: false, url: '', error: String(error?.message || error) }))`);
+    if (!coldGuestReady?.ready || !coldGuestReady?.connected || coldGuestReady?.url !== fixtureUrl) {
+      fail(`Cold Browser guest readiness was poisoned by immediate navigation: ${JSON.stringify(coldGuestReady)}`);
+    }
     await evaluate(cdp, `window.switchRightTab('browser'); true`);
     await waitFor(cdp, `(() => { const view = document.querySelector('#browser-webview'); try { return view && view.getURL && view.getURL() === ${js(fixtureUrl)}; } catch { return false; } })()`, 15_000, 'cold Browser-Use page survives first visible Browser activation');
+    log('cold Browser-Use prewarm ready');
 
     await evaluate(cdp, `(() => {
       window.__dev009Runs = window.__dev009Runs || {};
@@ -598,6 +631,7 @@ function stopProcessTree(child) {
     if (stopResult.first?.action !== 'graceful' || stopResult.first?.checkpointed !== true || (!forceRestarted && !racedToTerminal)) {
       fail(`Two-stage target stop failed: ${JSON.stringify(stopResult)}`);
     }
+    log(`two-stage stop settled ${JSON.stringify(stopResult)}`);
 
     const alphaRun = await waitFor(cdp, `window.__dev009Runs.alpha?.done ? window.__dev009Runs.alpha : null`, 90_000, 'alpha Browser-Use and Guide completion');
     if (alphaRun.error) fail(`Alpha run failed: ${alphaRun.error}`);
@@ -620,6 +654,7 @@ function stopProcessTree(child) {
       fail(`Applied Guide was duplicated after snapshot reconciliation: ${JSON.stringify(guideAfterAppliedRedraw)}`);
     }
     if (/reasoning_content|thinking_delta|<think>/i.test(alphaJson)) fail('Hidden reasoning leaked into snapshot/workRuns');
+    log('Guide and background target isolation ready');
     const alphaToolEvents = alpha.workRuns.flatMap(run => run.events || []).filter(event => event.type === 'tool_call' || event.type === 'tool_result');
     if (!alphaToolEvents.length || alphaToolEvents.some(event => {
       const keys = Object.keys(event || {});
@@ -664,6 +699,7 @@ function stopProcessTree(child) {
     await waitFor(cdp, `document.querySelector('.conversation-work-run.expanded .conversation-work-run-body')?.textContent?.includes('DEV009_BROWSER_USE_DONE')`, 15_000, 'public streamed natural-language work text');
     await evaluate(cdp, `document.querySelector('.conversation-work-run.expanded .conversation-work-run-head')?.click(); true`);
     await waitFor(cdp, `!!document.querySelector('.conversation-work-run.collapsed')`, 15_000, 'work run re-collapsed');
+    log('work-run folding ready');
     const collapsedWorkRun = await evaluate(cdp, `(() => {
       const run = document.querySelector('.conversation-work-run.collapsed');
       if (!run) return null;
@@ -694,6 +730,7 @@ function stopProcessTree(child) {
       const text = document.querySelector('#editor-textarea');
       return preview && !preview.classList.contains('open') && !preview.textContent && toggle && !toggle.classList.contains('visible') && text?.value.includes('DEV009 TEXT EDITOR');
     })()`, 20_000, 'Markdown preview reset before text file');
+    log('editor transition ready');
 
     const pdfRoute = await evaluate(cdp, `window.api.openWorkspaceFile('dev009.pdf')`);
     if (pdfRoute?.kind !== 'browser' || pdfRoute?.mime !== 'application/pdf' || !/^http:\/\/127\.0\.0\.1:\d+\/pdf\//.test(String(pdfRoute?.url || ''))) {
@@ -753,16 +790,17 @@ function stopProcessTree(child) {
     log('cross-workspace isolation, Guide, work-run folding, two-stage stop, Browser-Use, editor, and PDF checks passed');
   } catch (error) {
     primaryError = error;
+    log(`failure diagnostics child=${JSON.stringify(childExit || { exitCode: child?.exitCode, signalCode: child?.signalCode })} stderr=${JSON.stringify(childStderr)} stdout=${JSON.stringify(childStdout)}`);
     throw error;
   } finally {
+    await stopPackagedRun(child, cdp);
     try { cdp?.ws.close(); } catch {}
-    stopProcessTree(child);
     await new Promise(resolve => fixture.server.close(resolve));
-    await sleep(750);
     try {
       if (keepRoot) log(`kept isolated root: ${root}`);
       else await removeTreeWithRetry(root);
-      await removeTreeWithRetry(userDataDir);
+      try { await removeTreeWithRetry(userDataDir); }
+      catch (error) { log(`profile cleanup deferred to parent: ${error?.message || error}`); }
     } catch (cleanupError) {
       if (!primaryError) throw cleanupError;
       log(`cleanup warning after primary failure: ${cleanupError?.message || cleanupError}`);

@@ -10,11 +10,25 @@ const exePath = process.env.NEWMARK_TEST_EXE
   : path.resolve(__dirname, '..', '..', 'release', 'win-unpacked', 'Newmark Agent.exe');
 const keepRoot = process.env.NEWMARK_KEEP_DEV008_FEATURES_SMOKE === '1';
 const modelName = 'release-dev008-features-mock';
-const userDataDir = path.join(os.tmpdir(), `NewmarkDev008Electron-${process.pid}`);
+const userDataDir = process.env.NEWMARK_TEST_USER_DATA_DIR
+  ? path.resolve(process.env.NEWMARK_TEST_USER_DATA_DIR)
+  : path.join(os.tmpdir(), `NewmarkDev008Electron-${process.pid}`);
 
 function log(message) { console.log(`[release-dev008-features-smoke] ${message}`); }
 function fail(message) { throw new Error(message); }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+async function removeTreeWithRetry(target) {
+  for (let attempt = 0; attempt < 80; attempt++) {
+    try {
+      fs.rmSync(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(error?.code) || attempt === 79) throw error;
+      await sleep(250);
+    }
+  }
+}
 
 function freeTcpPort() {
   return new Promise((resolve, reject) => {
@@ -315,6 +329,18 @@ function stopProcessTree(child) {
   if (result.error && result.error.code !== 'ENOENT') log(`warning: process cleanup failed: ${result.error.message}`);
 }
 
+async function stopPackagedRun(child, cdp) {
+  if (cdp) {
+    try { await cdp.call('Browser.close', {}, 2000); } catch {}
+  }
+  const gracefulDeadline = Date.now() + 4000;
+  while (child && child.exitCode === null && child.signalCode === null && Date.now() < gracefulDeadline) {
+    await sleep(100);
+  }
+  if (child && child.exitCode === null && child.signalCode === null) stopProcessTree(child);
+  await sleep(1500);
+}
+
 (async () => {
   if (process.platform !== 'win32') {
     log('skipped: Windows packaged smoke only');
@@ -435,13 +461,13 @@ function stopProcessTree(child) {
     log('subagent_read, mailbox persistence/reactivation, and root feedback ok');
     log('all packaged dev-0.0.8 feature smoke checks passed');
   } finally {
+    await stopPackagedRun(child, cdp);
     try { cdp?.ws.close(); } catch {}
-    stopProcessTree(child);
     await new Promise(resolve => mock.server.close(resolve));
-    await sleep(1000);
     if (keepRoot) log(`kept isolated root: ${root}`);
-    else fs.rmSync(root, { recursive: true, force: true });
-    fs.rmSync(userDataDir, { recursive: true, force: true });
+    else await removeTreeWithRetry(root);
+    try { await removeTreeWithRetry(userDataDir); }
+    catch (error) { log(`profile cleanup deferred to parent: ${error?.message || error}`); }
   }
 })().catch(error => {
   console.error(`[release-dev008-features-smoke] ${error.stack || error.message}`);

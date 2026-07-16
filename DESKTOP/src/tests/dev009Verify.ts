@@ -45,6 +45,14 @@ export function verifyDev009SourceContracts(): Assertion[] {
   const wslClient = source('core/wslAgentClient.ts');
   const wslPool = source('core/wslAgentRuntimePool.ts');
   const packageJson = fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf-8');
+  const packageConfig = JSON.parse(packageJson) as {
+    scripts?: Record<string, string>;
+    build?: { asarUnpack?: string[] };
+  };
+  const windowsProcessTreeHelper = fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'windows-process-tree-helper.cs'), 'utf-8');
+  const windowsProcessTreeBuild = fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'build-windows-process-tree-helper.cjs'), 'utf-8');
+  const typeboxBuild = fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'build-typebox-compile.cjs'), 'utf-8');
+  const distPortable = fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'dist-portable.cjs'), 'utf-8');
   const dev009Smoke = fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'release-dev009-features-smoke.cjs'), 'utf-8');
 
   check(hasAll(types, [
@@ -97,8 +105,8 @@ export function verifyDev009SourceContracts(): Assertion[] {
     'showUiNotice',
     'clearUiNotice',
     'previousExpanded',
-  ]) && hasAll(electronUtilityPool, ['setWorkRunExpanded', 'this.ensure(normalizeConversationTarget(target))'])
-    && hasAll(wslPool, ['setWorkRunExpanded', 'this.ensure(normalized)'])
+  ]) && hasAll(electronUtilityPool, ['setWorkRunExpanded', 'this.acquire(normalizeConversationTarget(target))'])
+    && hasAll(wslPool, ['setWorkRunExpanded', 'this.acquire(normalized)'])
     && !ui.includes('Date.now() - 5000'),
   'dev009 UI: composite caches, persistent duration/folding after worker eviction, reliable Guide, two-stage stop, and notices are present', results);
 
@@ -108,7 +116,7 @@ export function verifyDev009SourceContracts(): Assertion[] {
     'function renderPendingGuideMessages',
     'function syncGuideMessagesFromWorkRuns',
     'data-client-message-id',
-    "guideStatus: 'applied'",
+    "guideStatus: clientMessageId ? 'applied' : ''",
     'renderPendingGuideMessages(renderTarget, persistedGuideIds)',
   ]) && !ui.includes("optimisticGuide.setAttribute('data-guide-status'")
     && hasAll(dev009Smoke, [
@@ -134,6 +142,16 @@ export function verifyDev009SourceContracts(): Assertion[] {
   ]), 'dev009 browser UI: the latest pre-dom-ready navigation is replayed exactly once after guest attachment', results);
 
   check(hasAll(ui, [
+    "if (!view.isConnected || guestId <= 0) throw new Error('Built-in Browser guest detached before registration settled')",
+    "view.dataset.newmarkBrowserReadyUrl = readyUrl || 'about:blank'",
+  ]) && !ui.includes('Built-in Browser guest did not settle at about:blank')
+    && hasAll(dev009Smoke, [
+      'window.ensureBrowserPanel({ activate: false }).then(view =>',
+      'Cold Browser guest readiness was poisoned by immediate navigation',
+    ]),
+  'dev009 browser UI: accepted guest registration survives immediate navigation away from about:blank', results);
+
+  check(hasAll(ui, [
     'The target runtime supervisor owns the checkpoint + cooperative-stop',
     'latestAfterStop',
     'latestAfterError',
@@ -143,15 +161,22 @@ export function verifyDev009SourceContracts(): Assertion[] {
   const forceStopImplementation = (electronUtilityClient.match(/async forceStop\(\): Promise<void>[\s\S]*?\n  async forceRestart\(\): Promise<void>/) || [''])[0];
   const snapshotTimeoutMatch = electronUtilityClient.match(/const WINDOWS_TREE_SNAPSHOT_TIMEOUT_MS\s*=\s*([\d_]+);/);
   const snapshotTimeoutMs = Number(String(snapshotTimeoutMatch?.[1] || '0').replace(/_/g, ''));
-  check(hasAll(electronUtilityClient, [
+  check(hasAll(`${electronUtilityClient}\n${windowsProcessTreeHelper}`, [
     'snapshotWindowsProcessTree',
     'creationIdentity',
     'PID reuse detected',
     'runWindowsIdentityTermination(entries',
     'stable empty rescans',
     'anchorPids?: readonly number[]',
-    "encodedAnchors.Split(new[]{';'}",
+    'anchorCreationIdentities: ReadonlyMap<number, string>',
+    "encodedAnchors.Split(new[] { ';' }",
     'known.entries.map(entry => entry.pid)',
+    'rootHasBoundIdentity',
+    'ERROR_INVALID_PARAMETER = 87',
+    'parentOnlyWitnesses',
+    'if (creationIdentity == PROCESS_ABSENT) continue',
+    'throw new System.ComponentModel.Win32Exception(error)',
+    'childCreation >= expectedCreation && childCreation < actualCreation',
     'WINDOWS_TREE_FORCE_STOP_DEADLINE_MS = 29_000',
     'const primaryKill = options.primaryKill || null',
     'default cleanup is identity-handle-bound from the first termination',
@@ -177,6 +202,12 @@ export function verifyDev009SourceContracts(): Assertion[] {
     'failAfterDrain(new Error(\'Windows process-tree snapshot exceeded its output limit\'))',
     "stdout = '';",
     'WINDOWS_HELPER_CLOSE_GRACE_MS',
+  ]) && hasAll(electronUtilityClient, [
+    'windowsProcessTreeHelperLoadScript',
+    'Add-Type -Path $helperPath',
+    "'app.asar.unpacked', 'dist', 'windows-process-tree-helper.dll'",
+    'Packaged Windows process-tree helper is missing',
+    "kind: 'runtime_compile'",
   ]) && !electronUtilityClient.includes("spawn('taskkill.exe'")
     && snapshotTimeoutMs >= 10_000
     && forceStopImplementation.includes('rootIdentity.creationIdentity')
@@ -188,14 +219,26 @@ export function verifyDev009SourceContracts(): Assertion[] {
     && forceStopImplementation.indexOf('await terminateWindowsUtilityProcessTree(') < forceStopImplementation.indexOf('killChildHandleAndAwaitExit(child, 1_000)'),
   'dev009 utility force-stop: Windows uses creation identity, bounded quiescence, sticky quarantine, and transactional restart snapshot validation', results);
 
+  const embeddedWindowsHelpers = [...electronUtilityClient.matchAll(/\$source = @'\r?\n([\s\S]*?)\r?\n'@/g)]
+    .map(match => match[1])
+    .join('\n');
+  const normalizeWindowsHelperSource = (value: string): string => value
+    .replace(/^using\s+[^;]+;\s*$/gm, '')
+    .replace(/\s+/g, '');
+  check(
+    normalizeWindowsHelperSource(embeddedWindowsHelpers) === normalizeWindowsHelperSource(windowsProcessTreeHelper),
+    'dev009 utility force-stop: the build-time helper preserves the exact controlled runtime-fallback C# semantics',
+    results,
+  );
+
   check(hasAll(electronUtilityPool, [
     'private quarantined = new Map<string, string>()',
     'this.rememberClientQuarantine(entry)',
     'if (entry.client.status().connected) throw error',
-    'this.entries.delete(normalized.runtimeKey)',
+    'this.entries.delete(runtimeKey)',
+    'A failed stop can leave a live child behind',
     'Electron utility runtime is quarantined until the app backend is restarted',
-  ]) && electronUtilityPool.indexOf('if (entry.client.status().connected) throw error')
-      < electronUtilityPool.indexOf('this.entries.delete(normalized.runtimeKey)'),
+  ]),
   'dev009 utility pool: stop failure retains the live client entry while quarantine survives entry eviction for the pool lifetime', results);
 
   check(hasAll(electronUtilityPool, [
@@ -294,17 +337,20 @@ export function verifyDev009SourceContracts(): Assertion[] {
 
   check(hasAll(utilityRouter, [
     'isToolEnabled?(toolName: string): boolean',
-    "!options.isToolEnabled('browser_use')",
+    'options.isToolEnabled(nativeToolName)',
   ]) && main.includes('isToolEnabled: toolName => !!agent && isNativeToolEnabled(toolName, agent.config.nativeToolEnabled())'),
   'dev009 Browser-Use: main-process host RPC rechecks the live Native Tools setting', results);
 
   check(hasAll(agent, [
     'runAsyncWindowsBatch',
     'activeProcessAbortController',
+    'if (processSignal?.aborted)',
+    "this.status = 'idle'",
     'activePeerAgents.values()',
     'subagents.pauseScheduling()',
     'subagents.resumeScheduling()',
-  ]) && hasAll(subagents, ['schedulingPaused', 'pauseScheduling()', 'resumeScheduling()', 'if (!this.executor || this.schedulingPaused) return']), 'dev009 cancellation: OpenCode and active peers stop while durable queued peers remain paused until the next root run', results);
+  ]) && hasAll(kernel, ['settleCooperativeStop', "finishConversationWorkRun(runId, 'interrupted')"])
+    && hasAll(subagents, ['schedulingPaused', 'pauseScheduling()', 'resumeScheduling()', 'if (!this.executor || this.schedulingPaused) return']), 'dev009 cancellation: cooperative stop settles interrupted without a false error while durable queued peers remain paused until the next root run', results);
 
   check(hasAll(runner, [
     'handleImageGeneration(args, signal)',
@@ -324,7 +370,29 @@ export function verifyDev009SourceContracts(): Assertion[] {
     && hasAll(browserUse, ['isPublicBrowserUseAttribute', 'PUBLIC_BROWSER_USE_ARIA_ATTRIBUTES'])
     && hasAll(main, ["workEvent.type === 'done'", 'electronBrowserUseHost?.clear']), 'dev009 Browser-Use privacy: only rendered text, visible option labels, and allowlisted public attributes escape; terminal runs release browser bindings', results);
 
-  check(packageJson.includes('"version": "0.0.9"') && packageJson.includes('release:dev009-features-smoke'), 'dev009 release: package version and packaged acceptance gate are registered', results);
+  check(packageJson.includes('"version": "0.0.10"') && packageJson.includes('release:dev009-features-smoke') && packageJson.includes('release:dev010-features-smoke'), 'dev009 release: compatibility gate remains registered in the dev-0.0.10 package', results);
+
+  check(
+    String(packageConfig.scripts?.build || '').includes('node scripts/build-windows-process-tree-helper.cjs')
+      && String(packageConfig.scripts?.build || '').includes('node scripts/build-typebox-compile.cjs')
+      && Array.isArray(packageConfig.build?.asarUnpack)
+      && packageConfig.build.asarUnpack.includes('dist/windows-process-tree-helper.dll')
+      && packageConfig.build.asarUnpack.includes('dist/typebox-compile.bundle.cjs')
+      && hasAll(windowsProcessTreeBuild, [
+        "'windows-process-tree-helper.cs'",
+        "'windows-process-tree-helper.dll'",
+        '-OutputAssembly $outputPath',
+        "bytes[0] !== 0x4d || bytes[1] !== 0x5a",
+      ])
+      && distPortable.includes("windows-process-tree-helper.dll'), 'precompiled Windows process-tree helper'")
+      && hasAll(typeboxBuild, [
+        "require.resolve('typebox/compile')",
+        "dist', 'typebox-compile.bundle.cjs'",
+        "format: 'cjs'",
+      ]),
+    'packaged utility startup: the build emits and asarUnpack carries the precompiled Windows process-tree and synchronous TypeBox helpers',
+    results,
+  );
 
   return results;
 }

@@ -27,7 +27,19 @@ console.log = diagnostic;
 console.info = diagnostic;
 console.warn = diagnostic;
 
+function configureWslToolHost(agent: Agent): void {
+  agent.tools.setHostProfile({
+    kind: 'wsl',
+    platform: 'linux',
+    // This process is Electron-managed and can route Browser-Use back to the
+    // owning window, but it must never advertise Windows desktop control.
+    electronBrowser: true,
+    windowsComputerUse: false,
+  });
+}
+
 let host = new Agent(root);
+configureWslToolHost(host);
 let kernel = new ConversationKernel(root, host, null);
 let unsubscribeKernel = kernel.subscribe(event => write({ event: 'work', data: event }));
 onTerminalTakeoverEvent(event => write({ event: 'terminal', data: event }));
@@ -89,6 +101,7 @@ function requestTarget(input: { target?: ConversationRuntimeTarget; conversation
 function resetAgentRuntime(): void {
   unsubscribeKernel();
   host = new Agent(root);
+  configureWslToolHost(host);
   kernel = new ConversationKernel(root, host, null);
   unsubscribeKernel = kernel.subscribe(event => write({ event: 'work', data: event }));
 }
@@ -138,6 +151,13 @@ async function handle(request: WslAgentRequest): Promise<unknown> {
     });
   }
   if (request.method === 'checkpoint') return kernel.checkpoint(requestTarget(request.params));
+  if (request.method === 'rate_auto_route') {
+    return kernel.rateAutoRoute(
+      requestTarget(request.params),
+      request.params.score,
+      request.params.routeId,
+    );
+  }
   if (request.method === 'set_work_run_expanded') {
     return kernel.setWorkRunExpanded(requestTarget(request.params), request.params.runId, request.params.expanded);
   }

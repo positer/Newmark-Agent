@@ -27,6 +27,7 @@ import { requestWindowsHostTool } from '../core/wslHostToolBridge';
 import { requestUtilityHostTool } from '../core/utilityHostToolBridge';
 import { evaluateToolPolicy, filterToolDefinitions } from '../core/toolPolicy';
 import { runAsyncProcess } from '../core/asyncProcess';
+import { closeToolArgumentSchema, ToolArgumentValidatorRegistry } from '../core/toolArgumentValidator';
 
 export interface ToolExecutionContext {
   mode?: string;
@@ -39,6 +40,13 @@ export interface ToolExecutionContext {
   backend?: string;
   invocation?: 'agent' | 'cli';
   signal?: AbortSignal;
+}
+
+export interface ToolHostProfile {
+  kind: 'desktop' | 'cli' | 'wsl' | 'electron-utility';
+  platform: string;
+  electronBrowser: boolean;
+  windowsComputerUse: boolean;
 }
 
 type ComputerUseLock = {
@@ -148,6 +156,13 @@ function assertComputerUseLockOwner(action: string, owner: string): string | nul
 
 export class ToolExecutor {
   private root: string;
+  private readonly argumentValidators = new ToolArgumentValidatorRegistry();
+  private hostProfile: ToolHostProfile = {
+    kind: 'desktop',
+    platform: process.platform,
+    electronBrowser: true,
+    windowsComputerUse: process.platform === 'win32',
+  };
 
   constructor(root: string, private config: ConfigManager, private ssh?: SshManager, private workspace?: WorkspaceManager) {
     this.root = root;
@@ -157,17 +172,22 @@ export class ToolExecutor {
     return this.wsearch(query);
   }
 
+  setHostProfile(profile: ToolHostProfile): void {
+    this.hostProfile = { ...profile };
+  }
+
   definitions(mode?: string): unknown[] {
     const t = (name: string, desc: string, params: Record<string, unknown>, required: string[]) => ({
       type: 'function',
       function: {
         name,
         description: desc,
-        parameters: {
-          type: 'object',
-          properties: params,
-          required,
-        },
+          parameters: {
+            type: 'object',
+            properties: params,
+            required,
+            additionalProperties: false,
+          },
       },
     });
 
@@ -215,11 +235,14 @@ export class ToolExecutor {
       }, ['action']),
       t('computer_use', 'Native Windows desktop control with persistent observation/action helpers. Use observe/app_observe before acting. sequence may perform up to three stable low-risk move/click/scroll/wait/app_activate steps and stops when focus, window, menu, dialog, scene, or risk changes. Vision screenshots remain one-time inputs and are deleted immediately.', {
         action: { type: 'string', enum: ['observe', 'app_list', 'app_observe', 'sequence', 'takeover_start', 'takeover_stop', 'move', 'click', 'scroll', 'type', 'key', 'wait', 'app_activate', 'app_click', 'app_scroll', 'app_type', 'app_key'] },
+        capture_max_width: { type: 'number', minimum: 320, maximum: 2048, description: 'For observe/app_observe only. Maximum ephemeral screenshot width; defaults to 1280. Aspect ratio is preserved and the source is never enlarged.' },
+        capture_max_height: { type: 'number', minimum: 240, maximum: 2048, description: 'For observe/app_observe only. Maximum ephemeral screenshot height; defaults to 960. Aspect ratio is preserved and the source is never enlarged.' },
         x: { type: 'number' },
         y: { type: 'number' },
         target_id: { type: 'string', description: 'Stable id from the latest observe perception.objects entry. Preferred over raw coordinates when available.' },
         app_target: { type: 'string', description: 'Application title, process name, or process id for app-scoped observation and actions.' },
         window_handle: { type: 'string', description: 'Native window handle from app_list/app_observe for exact app-scoped actions.' },
+        max_chars: { type: 'number', minimum: 1000, maximum: 100000, description: 'Maximum returned text characters for observation and application listings.' },
         scroll_x: { type: 'number', description: 'Horizontal scroll delta for action=scroll.' },
         scroll_y: { type: 'number', description: 'Vertical scroll delta for action=scroll. Positive scrolls down.' },
         button: { type: 'string', enum: ['left', 'right'] },
@@ -250,8 +273,9 @@ export class ToolExecutor {
           },
         },
       }, ['action']),
-      t('image_inspect', 'Inspect an image submitted in the current conversation by returning a cropped and optionally magnified image directly to vision. image_index is 1-based within the latest user message containing images. Use source_info first when dimensions are unknown, then crop with pixel coordinates. Results are current-turn only and are never written to disk.', {
+      t('image_inspect', 'Inspect a durable user-submitted image by stable attachment_id, or use image_index within the latest user message containing images. Use source_info first when dimensions are unknown, then crop with pixel coordinates. Derived crops are current-turn only and are never written to disk.', {
         action: { type: 'string', enum: ['source_info', 'crop'] },
+        attachment_id: { type: 'string', description: 'Stable user-image attachment id from the visible conversation. Prefer this when revisiting an older submitted image.' },
         image_index: { type: 'number', description: '1-based image index in the latest user message containing submitted images. Defaults to 1.' },
         x: { type: 'number', description: 'Crop left edge in source-image pixels.' },
         y: { type: 'number', description: 'Crop top edge in source-image pixels.' },
@@ -354,12 +378,12 @@ export class ToolExecutor {
       }, ['title', 'body']),
     ];
     let visibleTools = tools.filter((tool: any) => isNativeToolEnabled(tool.function?.name || '', this.config.nativeToolEnabled()));
+    visibleTools = visibleTools.filter((tool: any) => this.hostSupportsTool(String(tool.function?.name || '')));
     if (this.config.getStr('agent', 'option_feedback') === 'fully_autonomous') {
       visibleTools = visibleTools.filter((tool: any) => tool.function?.name !== 'question');
     }
     const policyFiltered = filterToolDefinitions(visibleTools, { mode });
-    if (mode !== 'plan') return policyFiltered;
-    return policyFiltered.map((tool: any) => {
+    const modeScoped = mode !== 'plan' ? policyFiltered : policyFiltered.map((tool: any) => {
       if (tool.function?.name !== 'computer_use') return tool;
       const copy = JSON.parse(JSON.stringify(tool));
       copy.function.description = 'Read-only Windows desktop observation for Plan mode. Observe the desktop, list visible applications, or inspect one visible application; all control actions are unavailable.';
@@ -367,8 +391,18 @@ export class ToolExecutor {
         action: { type: 'string', enum: ['observe', 'app_list', 'app_observe'] },
         app_target: copy.function.parameters.properties.app_target,
         window_handle: copy.function.parameters.properties.window_handle,
+        max_chars: copy.function.parameters.properties.max_chars,
+        capture_max_width: copy.function.parameters.properties.capture_max_width,
+        capture_max_height: copy.function.parameters.properties.capture_max_height,
         include_raw_ui: copy.function.parameters.properties.include_raw_ui,
       };
+      return copy;
+    });
+    return modeScoped.map((tool: any) => {
+      const copy = JSON.parse(JSON.stringify(tool));
+      const name = String(copy.function?.name || '');
+      const schema = closeToolArgumentSchema(copy.function?.parameters || {});
+      copy.function.parameters = this.argumentValidators.register(name, schema);
       return copy;
     });
   }
@@ -396,12 +430,51 @@ export class ToolExecutor {
     return normalizeToolResult(output, { tool, workspacePath: wsPath, mode: context.mode || '' });
   }
 
-  async execute(tool: string, argsStr: string, wsPath: string, context: ToolExecutionContext = {}): Promise<string> {
-    if (!isNativeToolEnabled(tool, this.config.nativeToolEnabled())) {
-      return `[tool disabled] ${tool} is disabled in Settings > Tools.`;
+  validateInvocation(tool: string, argsStr: string, _mode = '', inputSchema?: unknown): { ok: true; args: Record<string, unknown> } | { ok: false; error: string } {
+    if (inputSchema === undefined && !isNativeToolEnabled(tool, this.config.nativeToolEnabled())) {
+      return { ok: false, error: `[tool disabled] ${tool} is disabled in Settings > Tools.` };
     }
-    let args: Record<string, unknown> = {};
-    try { args = JSON.parse(argsStr); } catch { /* use empty */ }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(argsStr);
+    } catch {
+      return { ok: false, error: `[tool schema error] Invalid JSON object for ${tool}.` };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ok: false, error: `[tool schema error] Invalid arguments for ${tool}: expected a JSON object.` };
+    }
+    const args = parsed as Record<string, unknown>;
+    if (inputSchema === undefined
+      && tool === 'question'
+      && this.config.getStr('agent', 'option_feedback') === 'fully_autonomous') {
+      const validation = this.argumentValidators.validate(tool, {
+        type: 'object',
+        properties: { questions: { type: 'array' } },
+        required: ['questions'],
+        additionalProperties: false,
+      }, args);
+      return validation.ok
+        ? { ok: false, error: '[permission] Question is disabled by fully_autonomous option feedback.' }
+        : { ok: false, error: `[tool schema error] ${validation.error}` };
+    }
+    const definition = inputSchema === undefined
+      // Validate against the host's complete schema first. Mode-specific
+      // catalogs may advertise a narrower enum, but a structurally valid
+      // hidden call must reach evaluateToolPolicy so it is classified as a
+      // policy denial rather than a misleading schema failure.
+      ? (this.definitions() as any[]).find(candidate => candidate.function?.name === tool)
+      : { function: { name: tool, parameters: inputSchema } };
+    if (!definition) {
+      return { ok: false, error: `[tool unsupported] ${tool || '(missing tool)'} is not available for the ${this.hostProfile.kind} host on ${this.hostProfile.platform}.` };
+    }
+    const validation = this.argumentValidators.validate(tool, definition.function.parameters, args);
+    return validation.ok ? { ok: true, args } : { ok: false, error: `[tool schema error] ${validation.error}` };
+  }
+
+  async execute(tool: string, argsStr: string, wsPath: string, context: ToolExecutionContext = {}): Promise<string> {
+    const invocation = this.validateInvocation(tool, argsStr, context.mode || '');
+    if (!invocation.ok) return invocation.error;
+    const args = invocation.args;
     const policy = evaluateToolPolicy({ name: tool, mode: context.mode || '', args });
     if (!policy.allowed) return policy.reason || `[permission] Blocked: ${tool}`;
     const g = (k: string) => {
@@ -510,26 +583,34 @@ export class ToolExecutor {
           if (lockGuard) return lockGuard;
           if (process.env.NEWMARK_WSL_DISTRO) {
             try {
-              return JSON.stringify(await requestWindowsHostTool('computer_use', args, {
+              const result = await requestWindowsHostTool('computer_use', args, {
                 conversationId: context.conversationId || 'default',
                 workspaceId: context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath),
                 actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
                 runtimeKey: browserUseScope(context, wsPath).runtimeKey,
-              }, 120_000, context.signal));
+                allowEphemeralVisionImage: context.allowEphemeralVisionImage === true,
+                mode: context.mode || 'build',
+              }, 120_000, context.signal);
+              return typeof result === 'string' ? result : JSON.stringify(result);
             } finally {
               if (action === 'takeover_stop') releaseComputerUseLock(action, owner);
             }
           }
           if (process.env.NEWMARK_ISOLATED_RUNTIME === '1') {
             try {
-              const result = await requestUtilityHostTool('computer_use', args, {
+              // This flag is supplied by the trusted runtime context, not by
+              // model-authored tool arguments. The host must ignore any
+              // similarly named property smuggled through `args`.
+              const trustedComputerUseContext = {
                 conversationId: context.conversationId || 'default',
                 workspaceId: context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath),
                 actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
                 workspacePath: context.workspacePath || wsPath,
                 backend: 'utility',
                 mode: context.mode || 'build',
-              }, 120_000, context.signal);
+                allowEphemeralVisionImage: context.allowEphemeralVisionImage === true,
+              };
+              const result = await requestUtilityHostTool('computer_use', args, trustedComputerUseContext, 120_000, context.signal);
               return typeof result === 'string' ? result : JSON.stringify(result);
             } finally {
               if (action === 'takeover_stop') releaseComputerUseLock(action, owner);
@@ -552,6 +633,8 @@ export class ToolExecutor {
             dryRun: (args as Record<string, unknown>).dry_run === true,
             workspacePath: wsPath,
             allowEphemeralVisionImage: context.allowEphemeralVisionImage === true,
+            captureMaxWidth: Number((args as Record<string, unknown>).capture_max_width),
+            captureMaxHeight: Number((args as Record<string, unknown>).capture_max_height),
             gradientColors: Array.isArray((args as Record<string, unknown>).gradient_colors) ? (args as Record<string, unknown>).gradient_colors as string[] : (this.config.get<string[]>('ui', 'gradient_colors') || []),
             gradientSpeed: (args as Record<string, unknown>).gradient_speed !== undefined ? Number((args as Record<string, unknown>).gradient_speed) : this.config.getNum('ui', 'gradient_speed'),
             gradientWidth: (args as Record<string, unknown>).gradient_width !== undefined ? Number((args as Record<string, unknown>).gradient_width) : this.config.getNum('ui', 'gradient_width'),
@@ -583,6 +666,7 @@ export class ToolExecutor {
               workspaceId: process.env.NEWMARK_WORKSPACE_ID || context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath),
               actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
               runtimeKey: process.env.NEWMARK_RUNTIME_KEY || browserUseScope(context, wsPath).runtimeKey,
+              mode: context.mode || 'build',
             }, 120_000, context.signal);
             return typeof result === 'string' ? result : JSON.stringify(result);
           }
@@ -663,6 +747,12 @@ export class ToolExecutor {
     return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
   }
 
+  private hostSupportsTool(name: string): boolean {
+    if (name.startsWith('browser_') && !this.hostProfile.electronBrowser) return false;
+    if (name === 'computer_use' && !this.hostProfile.windowsComputerUse) return false;
+    return true;
+  }
+
   private async sshWorkspace(args: Record<string, unknown>, wsPath: string, signal?: AbortSignal): Promise<string> {
     const manager = this.ssh || new SshManager(this.root);
     const action = String(args.action || 'list').toLowerCase();
@@ -718,12 +808,6 @@ export class ToolExecutor {
       return JSON.stringify({ ok: !!workspace, workspace, validation, linkedExisting: linkedExisting.length, shadowPath: workspace?.path || wsPath }, null, 2);
     }
     return `[ssh_workspace] Unknown action: ${action}`;
-  }
-
-  private checkPlanMode(tool: string, target: string, mode: string, wsPath: string): string | null {
-    if (mode !== 'plan') return null;
-    if (['read', 'glob', 'grep', 'web_search', 'web_fetch', 'browser_open', 'browser_snapshot', 'pwd', 'git_status', 'file_audit', 'repo_security_audit', 'automation_list'].includes(tool)) return null;
-    return `[permission] Plan mode is fully read-only. Blocked: ${tool}`;
   }
 
   private checkWorkspaceAccess(tool: string, target: string, wsPath: string): string | null {

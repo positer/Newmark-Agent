@@ -1,5 +1,8 @@
 import { randomUUID } from 'crypto';
 import { WslHostToolRequest } from './wslAgentProtocol';
+import { evaluateToolPolicy, ToolPolicyDecision } from './toolPolicy';
+
+const ROOT_AGENT_ACTOR_ID = '00000000-0000-4000-8000-000000000001';
 
 interface PendingHostTool {
   resolve(value: unknown): void;
@@ -35,10 +38,13 @@ export function requestWindowsHostTool(
   timeoutMs = 30000,
   signal?: AbortSignal,
 ): Promise<unknown> {
+  const request = { requestId: '', tool, args, context } as WslHostToolRequest;
+  const policy = evaluateWslHostToolPolicy(request);
+  if (!policy.allowed) return Promise.reject(new Error(policy.reason || `Windows host policy blocked ${tool}`));
   if (!writer) return Promise.reject(new Error('Windows host tool bridge is unavailable'));
   if (signal?.aborted) return Promise.reject(abortError(signal));
   const requestId = `host-tool-${process.pid}-${randomUUID()}`;
-  const request = { requestId, tool, args, context } as WslHostToolRequest;
+  request.requestId = requestId;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       const active = pending.get(requestId);
@@ -63,6 +69,42 @@ export function requestWindowsHostTool(
       return;
     }
     writer?.({ event: 'host_tool_request', data: request });
+  });
+}
+
+function evaluateWslHostToolPolicy(request: WslHostToolRequest): ToolPolicyDecision {
+  const rawArgs = request.args as unknown as Record<string, unknown>;
+  let name: string = request.tool;
+  let args = rawArgs;
+  if (request.tool === 'automation') {
+    name = String(rawArgs.tool || '');
+    try {
+      const parsed = JSON.parse(String(rawArgs.payload || '{}'));
+      args = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+    } catch {
+      args = {};
+    }
+  } else if (request.tool === 'browser_control') {
+    const action = String(rawArgs.action || '').toLowerCase();
+    const mapped: Record<string, string> = {
+      open: 'browser_open',
+      snapshot: 'browser_snapshot',
+      click: 'browser_click',
+      type: 'browser_type',
+      eval: 'browser_eval',
+      back: 'browser_back',
+      forward: 'browser_forward',
+      reload: 'browser_reload',
+      cdp: 'browser_cdp',
+    };
+    name = String(mapped[action] || 'browser_use');
+    args = action === 'use' ? rawArgs : {};
+  }
+  return evaluateToolPolicy({
+    name,
+    mode: request.context.mode || 'build',
+    isSubagent: request.context.actorId !== ROOT_AGENT_ACTOR_ID,
+    args,
   });
 }
 

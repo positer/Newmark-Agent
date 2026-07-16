@@ -249,8 +249,7 @@ const EMPTY_USAGE: KernelUsage = {
 };
 
 export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
-  const provider = agent.engineModel();
-  if (!provider) {
+  if (!agent.engineModel()) {
     agent.status = 'error';
     agent.saveWorkspaceConversationState();
     return [{ type: 'text', text: '[Error] No LLM configured. Add provider in Settings > Models.' }];
@@ -261,14 +260,15 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
     import('./agentKernel/stream-types.js') as Promise<KernelStreamCompat>,
   ]);
 
-  const systemPrompt = agent.buildSystemPrompt();
-  const { temperature, maxTokens } = provider.intelligenceConfig(agent.intelligence);
-  const newmarkTools = agent.subagentToolDefinitions(agent.tools.definitions(agent.mode));
+  const availableTools = agent.subagentToolDefinitions(agent.tools.definitions(agent.mode));
+  const toolSurface = routeToolSurface(agent, availableTools);
+  const systemPrompt = [agent.buildSystemPrompt(), toolSurface.systemPromptNotice].filter(Boolean).join('\n\n');
+  const newmarkTools = toolSurface.definitions;
   const kernel = new NativeAgent({
-    streamFn: streamWithNewmarkProvider(agent, provider, KernelStreamCompat, newmarkTools),
+    streamFn: streamWithNewmarkProvider(agent, KernelStreamCompat, newmarkTools),
     toolExecution: 'sequential',
     convertToLlm: (messages: KernelMessage[]) => messages.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'toolResult'),
-    transformContext: async (messages: KernelMessage[], signal?: AbortSignal) => transformContext(agent, provider, messages, signal),
+    transformContext: async (messages: KernelMessage[], signal?: AbortSignal) => transformContext(agent, messages, signal),
     shouldStopAfterTurn: async ({ message }: { message: KernelMessage }) => shouldStopAfterTurn(agent, message),
   });
 
@@ -310,12 +310,13 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       tokens.unshift({ type: 'text', text: `[Model fallback] ${modelBeforeKernelRun} unavailable; switched to ${agent.model}.` });
     }
     if (agent.isLlmErrorText(lastAssistant)) {
-      const previous = agent.switchToFallbackModel();
+      const previous = agent.switchToFallbackModel(lastAssistant);
       if (previous) {
-        const notice = `[Model fallback] ${previous} unavailable; switched to ${agent.model}.`;
+        const notice = routeTransitionNotice(agent, previous);
         tokens.push({ type: 'text', text: notice });
         agent.recordWorkStatus(notice);
         kernel.state.model = toKernelModel(agent);
+        await agent.waitForPlannedRouteRetry();
         lastAssistant = await runOnce([], false);
       }
     }
@@ -344,7 +345,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   agent.saveWorkspaceConversationState();
   return agent.sanitizeVisibleTokens(tokens);
 
-  function streamWithNewmarkProvider(currentAgent: Agent, currentProvider: LLMProvider, compat: KernelStreamCompat, cachedTools: unknown[]) {
+  function streamWithNewmarkProvider(currentAgent: Agent, compat: KernelStreamCompat, cachedTools: unknown[]) {
     return async (model: KernelModel, context: { systemPrompt?: string; messages: KernelMessage[]; tools?: KernelTool[] }, options?: { signal?: AbortSignal }) => {
       const stream = compat.createAssistantMessageEventStream();
       void (async () => {
@@ -355,10 +356,16 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
         let contentIndex = 0;
         const finalContent: KernelContent[] = [];
         let textStarted = false;
+        const requestStartedAt = Date.now();
+        currentAgent.beginRouteAttempt();
         try {
+          const currentProvider = currentAgent.engineModel();
+          const currentModelName = currentAgent.activeModelName();
+          if (!currentProvider || !currentModelName) throw new Error('No resolved model deployment is available.');
+          const { temperature, maxTokens } = currentProvider.intelligenceConfig(currentAgent.intelligence);
           const newmarkMessages = fromKernelMessages(context.messages);
           for await (const token of currentProvider.chatStreamWithTools(
-            currentAgent.model,
+            currentModelName,
             newmarkMessages,
             context.systemPrompt || '',
             temperature,
@@ -376,6 +383,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
               }
             }
             if (token.type === 'text' && token.text) {
+              if (!/^\s*\[(?:LLM Error|Error)(?::|\])/i.test(token.text)) currentAgent.markRouteStreamCommitted();
               if (!textStarted) {
                 textStarted = true;
                 stream.push({ type: 'text_start', contentIndex, partial: assistantMessage(model, [{ type: 'text', text }], 'stop') } as KernelProviderEventStreamEvent);
@@ -410,7 +418,16 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
             return;
           }
           if (textStarted) finalContent.push({ type: 'text', text });
+          if (!finalContent.length) {
+            text = '[Error] Provider returned an empty response.';
+            finalContent.push({ type: 'text', text });
+          }
           const final = assistantMessage(model, finalContent, finalContent.some(c => c.type === 'toolCall') ? 'toolUse' : 'stop');
+          if (!currentAgent.isLlmErrorText(text)) {
+            const durationMs = Math.max(1, Date.now() - requestStartedAt);
+            const outputTokens = Math.max(0, (text.length + thinking.length) / 4);
+            currentAgent.recordRouteSuccess(durationMs, outputTokens / (durationMs / 1_000));
+          }
           stream.push({ type: 'done', reason: final.stopReason, message: final } as KernelProviderEventStreamEvent);
           if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error(`[NewmarkKernel] done-pushed reason=${final.stopReason}`);
         } catch (error) {
@@ -429,9 +446,11 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   }
 }
 
-async function transformContext(agent: Agent, provider: LLMProvider, messages: KernelMessage[], signal?: AbortSignal): Promise<KernelMessage[]> {
+async function transformContext(agent: Agent, messages: KernelMessage[], signal?: AbortSignal): Promise<KernelMessage[]> {
   if (signal?.aborted) return messages;
   if (!agent.config.getBool('context', 'auto_compress')) return messages;
+  const provider: LLMProvider | null = agent.engineModel();
+  if (!provider) return messages;
   const newmarkMessages = fromKernelMessages(messages, false);
   const beforeCompression = JSON.stringify(newmarkMessages);
   await agent.maybeCompress(newmarkMessages, provider, signal);
@@ -443,9 +462,10 @@ async function transformContext(agent: Agent, provider: LLMProvider, messages: K
 async function shouldStopAfterTurn(agent: Agent, message: KernelMessage): Promise<boolean> {
   const text = KernelMessageText(message);
   if (message.role === 'assistant' && (message.stopReason === 'error' || agent.isLlmErrorText(text))) {
-    const previous = agent.switchToFallbackModel();
+    const previous = agent.switchToFallbackModel(text);
     if (previous) {
-      agent.recordWorkStatus(`[Model fallback] ${previous} unavailable; switched to ${agent.model}.`);
+      agent.recordWorkStatus(routeTransitionNotice(agent, previous));
+      await agent.waitForPlannedRouteRetry();
       return false;
     }
   }
@@ -541,11 +561,12 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
 }
 
 function toKernelModel(agent: Agent): KernelModel {
-  const m = agent.config.findModel(agent.model);
+  const m = agent.activeModelConfig();
+  const modelName = agent.activeModelName() || agent.model;
   const api = apiForProtocol(m?.provider_protocol || 'openai', agent.config.openAIApiMode());
   return {
-    id: agent.model || 'unknown',
-    name: m?.display || agent.model || 'unknown',
+    id: modelName || 'unknown',
+    name: m?.display || modelName || 'unknown',
     api,
     provider: m?.provider || 'newmark',
     baseUrl: m?.provider_url || '',
@@ -569,6 +590,25 @@ function apiForProtocol(protocol: ProviderProtocol, openAIMode: string): string 
   return 'openai-completions';
 }
 
+function routeTransitionNotice(agent: Agent, previous: string): string {
+  const active = agent.activeModelName() || agent.model;
+  return agent.routeTransitionKind() === 'retry_same_deployment'
+    ? `[Model retry] ${previous} encountered a retryable transport failure; retrying the same deployment.`
+    : `[Model fallback] ${previous} unavailable; switched to ${active}.`;
+}
+
+function routeToolSurface(agent: Agent, definitions: unknown[]): { definitions: unknown[]; systemPromptNotice: string } {
+  if (agent.shouldExposeToolInterface()) return { definitions, systemPromptNotice: '' };
+  return {
+    definitions: [],
+    systemPromptNotice: [
+      '## Tool Interface Availability',
+      'No tool interface is available for this turn because the selected Auto model has not verified tool-use capability.',
+      'Answer using the conversation context only. Do not claim to call, inspect, or modify external resources.',
+    ].join('\n'),
+  };
+}
+
 function toKernelTools(agent: Agent, definitions?: unknown[]): KernelTool[] {
   const tools = definitions || agent.subagentToolDefinitions(agent.tools.definitions(agent.mode));
   return tools.map((tool: any): KernelTool => {
@@ -584,16 +624,20 @@ function toKernelTools(agent: Agent, definitions?: unknown[]): KernelTool[] {
         if (signal?.aborted) throw abortError();
         const name = String(fn.name || '');
         const args = JSON.stringify(params || {});
-        const rawText = await executeNewmarkTool(agent, name, args, signal);
-        if (signal?.aborted) throw abortError();
-        const visionImagePath = computerUseVisionImagePath(agent, name, rawText);
+        const rawText = await executeNewmarkTool(agent, name, args, fn.parameters, signal);
+        if (signal?.aborted) {
+          discardComputerUseVisionImage(name, rawText);
+          throw abortError();
+        }
+        const visionImage = computerUseVisionImageInput(agent, name, rawText);
         const directImage = imageInspectDataUrl(name, rawText);
         const text = sanitizeVisualToolText(name, rawText);
         const content: Array<KernelTextContent | KernelImageContent> = [{ type: 'text', text }];
-        if (visionImagePath) content.push({ type: 'image', imagePath: visionImagePath, mimeType: imageMimeForPath(visionImagePath) });
+        if (visionImage.imagePath) content.push({ type: 'image', imagePath: visionImage.imagePath, mimeType: imageMimeForPath(visionImage.imagePath) });
+        else if (visionImage.image) content.push({ type: 'image', image: visionImage.image, mimeType: visionImage.mimeType });
         if (directImage) content.push({ type: 'image', image: directImage, mimeType: 'image/png' });
         const terminate = shouldTerminateAfterToolResult(name);
-        return { content, details: { tool: name, ok: !text.startsWith('[Error]'), terminate, visionImagePath: visionImagePath || undefined }, terminate };
+        return { content, details: { tool: name, ok: !text.startsWith('[Error]'), terminate, visionImagePath: visionImage.imagePath || undefined, ephemeralVisionImage: !!visionImage.image }, terminate };
       },
     };
   }).filter((tool: KernelTool) => !!tool.name);
@@ -609,12 +653,24 @@ function sanitizeVisualToolText(name: string, text: string): string {
   if (name !== 'computer_use' && name !== 'image_inspect') return text;
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
-    if (name === 'computer_use') delete parsed.vision_image_path;
+    if (name === 'computer_use') {
+      delete parsed.vision_image_path;
+      delete parsed.vision_image_data_url;
+    }
     if (name === 'image_inspect') delete parsed.image_data_url;
     return JSON.stringify(parsed, null, 2);
   } catch {
     return text;
   }
+}
+
+function discardComputerUseVisionImage(name: string, text: string): void {
+  if (name !== 'computer_use') return;
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const screenshotPath = String(parsed.vision_image_path || '');
+    if (screenshotPath) fs.unlinkSync(screenshotPath);
+  } catch {}
 }
 
 function imageInspectDataUrl(name: string, text: string): string {
@@ -628,27 +684,36 @@ function imageInspectDataUrl(name: string, text: string): string {
   }
 }
 
-function computerUseVisionImagePath(agent: Agent, name: string, text: string): string {
-  if (name !== 'computer_use') return '';
-  const model = agent.config.findModel(agent.model);
-  if (!model?.vision) return '';
+function computerUseVisionImageInput(agent: Agent, name: string, text: string): { imagePath?: string; image?: string; mimeType?: string } {
+  if (name !== 'computer_use') return {};
+  const model = agent.activeModelConfig();
+  if (!model?.vision) return {};
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
-    if (parsed.action !== 'observe' && parsed.action !== 'app_observe') return '';
+    if (parsed.action !== 'observe' && parsed.action !== 'app_observe') return {};
+    const directImage = String(parsed.vision_image_data_url || '');
+    if (/^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/i.test(directImage) && directImage.length <= 2 * 1024 * 1024) {
+      return { image: directImage, mimeType: directImage.slice(5, directImage.indexOf(';')).toLowerCase() };
+    }
     const screenshotPath = String(parsed.vision_image_path || '');
-    if (!screenshotPath) return '';
-    return screenshotPath;
+    return screenshotPath ? { imagePath: screenshotPath } : {};
   } catch {
-    return '';
+    return {};
   }
 }
 
-async function executeNewmarkTool(agent: Agent, name: string, args: string, signal?: AbortSignal): Promise<string> {
+async function executeNewmarkTool(agent: Agent, name: string, args: string, inputSchema: unknown, signal?: AbortSignal): Promise<string> {
   const wsDir = agent.workspace.current?.path || agent.rootPath;
-  let parsedArgs: Record<string, unknown> = {};
-  try { parsedArgs = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
+  const invocation = agent.tools.validateInvocation(name, args || '{}', agent.mode, inputSchema);
+  if (!invocation.ok) {
+    agent.recordRouteToolOutcome(false);
+    return invocation.error;
+  }
+  const parsedArgs = invocation.args;
+  agent.recordRouteToolOutcome(true);
   const policy = evaluateToolPolicy({ name, mode: agent.mode, isSubagent: agent.isSubagentRuntime, args: parsedArgs });
   if (!policy.allowed) return policy.reason || `[permission] Blocked: ${name}`;
+  agent.markRouteToolExecuted(name, args);
   const checked = async (value: string | Promise<string>): Promise<string> => {
     const result = await value;
     if (signal?.aborted) throw abortError();
@@ -694,12 +759,30 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, sign
     actorId: agent.runtimeActorId,
     workspaceId: terminalTakeoverWorkspaceId(wsDir),
     backend: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
-    allowEphemeralVisionImage: name === 'computer_use' && !!agent.config.findModel(agent.model)?.vision,
+    allowEphemeralVisionImage: name === 'computer_use' && !!agent.activeModelConfig()?.vision,
     signal,
   });
   if (signal?.aborted) throw abortError();
   trackFileDiff(agent, name, args);
+  const objectiveResult = toolResultObjectiveOutcome(result);
+  if (objectiveResult !== undefined) agent.recordObjectiveRouteResult(objectiveResult);
   return result;
+}
+
+export function toolResultObjectiveOutcome(result: string): boolean | undefined {
+  try {
+    const parsed = JSON.parse(result) as Record<string, unknown>;
+    if (typeof parsed.postcondition === 'boolean') return parsed.postcondition;
+    if (typeof parsed.test_result === 'boolean') return parsed.test_result;
+    if (parsed.test_result && typeof parsed.test_result === 'object') {
+      const testResult = parsed.test_result as Record<string, unknown>;
+      if (typeof testResult.passed === 'boolean') return testResult.passed;
+    }
+    if (parsed.objective_evidence === true && typeof parsed.ok === 'boolean') return parsed.ok;
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function shouldTerminateAfterToolResult(name: string): boolean {
@@ -803,9 +886,24 @@ function toHistoryMessage(message: KernelMessage, includeEphemeralImages = false
       ? { role: 'assistant', content: text, tool_calls: toolCalls }
       : { role: 'assistant', content: text };
   }
-  const imagePath = message.content.find((c): c is KernelImageContent => c.type === 'image')?.imagePath || '';
-  const directImage = message.content.find((c): c is KernelImageContent => c.type === 'image')?.image || '';
-  const imagePart = includeEphemeralImages ? imagePathToOpenAIContentPart(imagePath || directImage) : null;
+  const ephemeralImage = message.content.find((c): c is KernelImageContent => c.type === 'image');
+  const imagePath = ephemeralImage?.imagePath || '';
+  const directImage = ephemeralImage?.image || '';
+  const imagePart = includeEphemeralImages
+    ? (imagePath
+        ? imagePathToOpenAIContentPart(imagePath)
+        : directImage.startsWith('data:image/')
+          ? { type: 'image_url', image_url: { url: directImage } }
+          : null)
+    : null;
+  if (imagePart && ephemeralImage) {
+    // Tool-result images are one provider-input capability, not history. Once
+    // this request has materialized the image part, consume it from the live
+    // Kernel message so later tool rounds cannot replay the same screenshot or
+    // derived image. User-role image content returns through the branch above
+    // and is intentionally durable.
+    message.content = message.content.filter(content => content !== ephemeralImage);
+  }
   const text = KernelMessageText(message);
   return {
     role: 'tool',
@@ -824,7 +922,15 @@ function imagePathToOpenAIContentPart(imagePath: string): Record<string, unknown
   }
 }
 
-export const agentKernelRunnerInternals = { imagePathToOpenAIContentPart, imageMimeForPath, toKernelMessagesFromHistory };
+export const agentKernelRunnerInternals = {
+  fromKernelMessages,
+  imagePathToOpenAIContentPart,
+  imageMimeForPath,
+  toKernelMessagesFromHistory,
+  computerUseVisionImageInput,
+  sanitizeVisualToolText,
+  routeToolSurface,
+};
 
 function imagePathToDataUrl(imagePath: string): string {
   if (!imagePath || !fs.existsSync(imagePath)) return '';

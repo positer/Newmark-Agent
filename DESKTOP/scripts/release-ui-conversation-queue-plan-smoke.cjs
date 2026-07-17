@@ -7,6 +7,8 @@ const { spawn, spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
+const sourceMode = process.env.NEWMARK_UI_QUEUE_SOURCE === '1';
+const sourceElectronPath = path.join(repoRoot, 'DESKTOP', 'node_modules', 'electron', 'dist', 'electron.exe');
 const screenshotPath = path.join(repoRoot, 'archive', '2026-07-16-dev-0.0.11-queue-guide-smoke.png');
 const keepRoot = process.env.NEWMARK_KEEP_UI_CONVERSATION_QUEUE_PLAN_SMOKE === '1';
 
@@ -20,6 +22,18 @@ function fail(message) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function freeTcpPort() {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer();
+    server.unref();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      server.close(error => error ? reject(error) : resolve(address.port));
+    });
+  });
 }
 
 function getJson(url) {
@@ -250,7 +264,7 @@ function startMockServer() {
         return;
       }
       if (messagesText.includes('QUEUE_FIRST_LOCK_TEST')) {
-        setTimeout(() => sendSse(res, [textChunk('QUEUE_FIRST_DONE_20260628')]), 20000);
+        setTimeout(() => sendSse(res, [textChunk('QUEUE_FIRST_DONE_20260628')]), 60000);
         return;
       }
       if (messagesText.includes('LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701')) {
@@ -342,11 +356,14 @@ function writeConfig(root, mockPort) {
 async function runUiCheck(root) {
   const mock = await startMockServer();
   writeConfig(root, mock.port);
-  const port = Number(process.env.NEWMARK_UI_CONVERSATION_QUEUE_PLAN_SMOKE_PORT || '49351');
+  const port = process.env.NEWMARK_UI_CONVERSATION_QUEUE_PLAN_SMOKE_PORT
+    ? Number(process.env.NEWMARK_UI_CONVERSATION_QUEUE_PLAN_SMOKE_PORT)
+    : await freeTcpPort();
   let child;
   let cdp;
   try {
-    child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
+    child = spawn(sourceMode ? sourceElectronPath : exePath, [...(sourceMode ? ['.'] : []), `--remote-debugging-port=${port}`, '--allow-multiple-instances', '--no-sandbox', '--root', root], {
+      cwd: sourceMode ? path.join(repoRoot, 'DESKTOP') : undefined,
       stdio: 'ignore',
       windowsHide: true,
     });
@@ -776,7 +793,7 @@ function ensureNoReleaseProcess() {
     log('skipped: packaged Windows UI smoke only runs on win32');
     return;
   }
-  if (!fs.existsSync(exePath)) fail(`missing release exe: ${exePath}`);
+  if (!fs.existsSync(sourceMode ? sourceElectronPath : exePath)) fail(`missing ${sourceMode ? 'source Electron' : 'release exe'}`);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'NewmarkConversationQueuePlanSmoke-'));
   try {
     await runUiCheck(root);

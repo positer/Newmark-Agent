@@ -2,11 +2,9 @@
 
 const PROMOTED_MAIN_UI_EXPRESSION = `(() => {
   const prompt = document.querySelector('#prompt');
-  return document.visibilityState === 'visible'
-    && document.readyState === 'complete'
+  return document.readyState === 'complete'
     && !!window.api
     && !!prompt
-    && !prompt.disabled
     && !prompt.readOnly
     && !document.documentElement.classList.contains('startup-prewarm')
     && !document.querySelector('#startup-cover');
@@ -34,7 +32,10 @@ async function waitForPromotedMainUi(cdp, options = {}) {
         returnByValue: true,
       }, Math.min(5_000, remaining));
       lastValue = result?.result?.value;
-      if (lastValue === true) return true;
+      if (lastValue === true) {
+        await cdp.call('Page.bringToFront', {}, Math.min(5_000, remaining)).catch(() => undefined);
+        return true;
+      }
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }

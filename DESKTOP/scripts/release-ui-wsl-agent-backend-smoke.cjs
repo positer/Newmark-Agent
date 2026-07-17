@@ -123,7 +123,21 @@ async function launch(root, port) {
   const target = await waitTarget(port);
   const cdp = connect(target);
   await cdp.ready;
-  await waitForPromotedMainUi(cdp);
+  try {
+    await waitForPromotedMainUi(cdp);
+  } catch (error) {
+    const diagnostic = await evaluate(cdp, `(() => ({
+      url: location.href,
+      visibility: document.visibilityState,
+      readyState: document.readyState,
+      hasApi: !!window.api,
+      prompt: (() => { const p=document.querySelector('#prompt'); return p ? { disabled:p.disabled, readOnly:p.readOnly } : null; })(),
+      startupClass: document.documentElement.classList.contains('startup-prewarm'),
+      startupCover: !!document.querySelector('#startup-cover'),
+      bodyTail: (document.body?.innerText || '').slice(-800)
+    }))()`).catch(diagnosticError => ({ diagnosticError: diagnosticError.message }));
+    throw new Error(`${error.message}; diagnostic=${JSON.stringify(diagnostic)}`);
+  }
   await cdp.call('Runtime.enable');
   return { child, cdp };
 }
@@ -180,7 +194,12 @@ function computerUseTempFiles() {
   try {
     writeConfig(root, mockPort, false);
     app = await launch(root, nativeCdpPort);
-    const before = await evaluate(app.cdp, `window.api.getState().then(s => ({actual:s.agentBackend,configured:s.configuredAgentBackend,wslAvailable:s.wslAvailable,wslDistros:s.wslDistros}))`);
+    let before;
+    for (let attempt = 0; attempt < 80; attempt++) {
+      before = await evaluate(app.cdp, `window.api.getState().then(s => ({actual:s.agentBackend,configured:s.configuredAgentBackend,wslAvailable:s.wslAvailable,wslDistros:s.wslDistros}))`);
+      if (before.wslAvailable) break;
+      await sleep(250);
+    }
     if (before.actual.enabled || before.configured !== 'windows' || !before.wslAvailable) fail(`native precondition failed: ${JSON.stringify(before)}`);
     await evaluate(app.cdp, `window.api.saveSetting('agent','run_in_wsl',true)`);
     const pending = await evaluate(app.cdp, `window.api.getState().then(s => ({actual:s.agentBackend,configured:s.configuredAgentBackend,restart:s.agentBackendRestartRequired}))`);

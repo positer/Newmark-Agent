@@ -56,6 +56,7 @@ import {
   defaultRoutePolicy,
   normalizeAutoPreference,
 } from './autoRouter';
+import { performanceTimer } from './performanceDiagnostics';
 
 export { AgentMode, InputMode, AgentStatus, StreamToken, ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent, ConversationTarget, ConversationWorkRun, GuideReceipt, ConversationImageAttachment };
 
@@ -303,6 +304,11 @@ export class Agent {
   private lastRouteRetryDelayMs = 0;
   private routeAttemptStartedAt = 0;
   private readonly explicitlyRatedRoutes = new Map<string, -1 | 1>();
+  private conversationStateCache = new Map<string, StoredConversationState>();
+  private conversationStateFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private conversationStateDirty = new Map<string, { state: StoredConversationState; ws: WorkspaceInfo | null }>();
+  private systemPromptCache: { identity: string; value: string } | null = null;
+  private toolDefinitionCache = new Map<string, unknown[]>();
   private readonly rootInboxListener = (message: SubagentRootMessage) => this.deliverRootInboxMessage(message);
   public readonly agentOnly: boolean;
   public readonly runtimeActorId: string;
@@ -376,6 +382,8 @@ export class Agent {
     if (m !== 'goal') this.goal = null;
     if (m === 'flow') { this.goal = null; this.flowPc = 0; }
     this.mode = m;
+    this.systemPromptCache = null;
+    this.toolDefinitionCache.clear();
     this.status = 'idle';
   }
 
@@ -1062,7 +1070,7 @@ export class Agent {
       this.history.push({ role: 'user', content: historyContent === undefined ? String(content || '') : historyContent, client_message_id: id, run_id: runId || undefined });
     }
     const changed = !inChat || !inHistory || attachmentChanged;
-    if (changed) this.saveWorkspaceConversationState();
+    if (changed) this.saveWorkspaceConversationState(true);
     return changed;
   }
 
@@ -1070,7 +1078,7 @@ export class Agent {
     const run = this.workRuns.find(item => item.runId === String(runId || ''));
     if (!run || run.status === 'running') return false;
     run.expanded = !!expanded;
-    this.saveWorkspaceConversationState();
+    this.saveWorkspaceConversationState(true);
     return true;
   }
 
@@ -1180,7 +1188,8 @@ export class Agent {
     if (isToolEvent && process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') {
       console.error(`[NewmarkWork] event-published type=${publishedType} subscribers=${this.workEventSubscribers.length}`);
     }
-    if (event.type === 'start' || event.type === 'done' || event.type === 'error') this.saveWorkspaceConversationState();
+    if (event.type === 'start') this.saveWorkspaceConversationState(false);
+    if (event.type === 'done' || event.type === 'error') this.saveWorkspaceConversationState(true);
     return event;
   }
 
@@ -1200,7 +1209,7 @@ export class Agent {
       model: this.model,
       timestamp: this.nowLabel(),
     });
-    if (persist) this.saveWorkspaceConversationState();
+    if (persist) this.saveWorkspaceConversationState(false);
   }
 
   recordToolResult(toolName: string, _result: string): void {
@@ -1323,7 +1332,7 @@ export class Agent {
       createdAt: item.createdAt || new Date().toISOString(),
     }))]);
     this.continuations = combined;
-    this.saveWorkspaceConversationState();
+    this.saveWorkspaceConversationState(true);
     return combined.map(item => ({
       ...item,
       images: item.images?.map(image => ({ ...image })),
@@ -1337,7 +1346,7 @@ export class Agent {
       : item.queueMode === match.queueMode && item.content === match.content);
     if (index < 0) return false;
     this.continuations.splice(index, 1);
-    this.saveWorkspaceConversationState();
+    this.saveWorkspaceConversationState(true);
     return true;
   }
 
@@ -1404,6 +1413,8 @@ export class Agent {
   private readStoredConversationState(ws: WorkspaceInfo | null = this.workspace.current): StoredConversationState {
     const file = this.workspaceConversationStorePath(ws);
     if (!file || !fs.existsSync(file)) return {};
+    const cached = this.conversationStateCache.get(file);
+    if (cached) return cached;
     try {
       const raw = fs.readFileSync(file, 'utf-8').replace(/^\uFEFF/, '');
       const parsed = JSON.parse(raw);
@@ -1411,6 +1422,7 @@ export class Agent {
         const state = parsed as StoredConversationState;
         state.version = Math.max(1, Number(state.version || 1));
         state.conversations = state.conversations || {};
+        this.conversationStateCache.set(file, state);
         return state;
       }
     } catch {
@@ -1420,6 +1432,38 @@ export class Agent {
   }
 
   private writeStoredConversationState(state: StoredConversationState, ws: WorkspaceInfo | null = this.workspace.current, deletedKeys: Iterable<string> = []): void {
+    this.writeStoredConversationStateNow(state, ws, deletedKeys);
+  }
+
+  private scheduleStoredConversationState(state: StoredConversationState, ws: WorkspaceInfo | null = this.workspace.current, delayMs = 80): void {
+    const file = this.workspaceConversationStorePath(ws);
+    if (!file) return;
+    this.conversationStateDirty.set(file, { state, ws });
+    const current = this.conversationStateFlushTimers.get(file);
+    if (current) clearTimeout(current);
+    this.conversationStateFlushTimers.set(file, setTimeout(() => {
+      this.conversationStateFlushTimers.delete(file);
+      const pending = this.conversationStateDirty.get(file);
+      if (!pending) return;
+      this.conversationStateDirty.delete(file);
+      this.writeStoredConversationStateNow(pending.state, pending.ws);
+    }, Math.max(0, delayMs)));
+  }
+
+  flushWorkspaceConversationState(): void {
+    const file = this.workspaceConversationStorePath();
+    if (!file) return;
+    const timer = this.conversationStateFlushTimers.get(file);
+    if (timer) clearTimeout(timer);
+    this.conversationStateFlushTimers.delete(file);
+    const pending = this.conversationStateDirty.get(file);
+    if (!pending) return;
+    this.conversationStateDirty.delete(file);
+    this.writeStoredConversationStateNow(pending.state, pending.ws);
+  }
+
+  private writeStoredConversationStateNow(state: StoredConversationState, ws: WorkspaceInfo | null = this.workspace.current, deletedKeys: Iterable<string> = []): void {
+    const stopTimer = performanceTimer('persistence', { conversationId: this.activeConversationId });
     this.mutateStoredConversationState(ws, latest => {
       const merged: Record<string, StoredConversationEntry> = { ...(latest.conversations || {}) };
       for (const key of deletedKeys) delete merged[String(key)];
@@ -1447,6 +1491,7 @@ export class Agent {
         conversations: merged,
       };
     });
+    stopTimer();
   }
 
   private mutateStoredConversationState<T>(
@@ -1473,6 +1518,9 @@ export class Agent {
       }
     }
     if (lockHandle === null) throw new Error(`Timed out acquiring conversation state lock: ${lock}`);
+    // Merge against disk while holding the lock because another isolated
+    // conversation process may have committed since this process cached it.
+    this.conversationStateCache.delete(file);
     const latest = this.readStoredConversationState(ws);
     const contentState = mutate({
       version: Math.max(1, Number(latest.version || 1)),
@@ -1501,6 +1549,7 @@ export class Agent {
       for (let attempt = 0; attempt < 12; attempt += 1) {
         try {
           fs.renameSync(temp, file);
+          this.conversationStateCache.set(file, contentState);
           return select ? select(contentState) : undefined;
         } catch (error) {
           lastError = error;
@@ -1830,7 +1879,7 @@ export class Agent {
     return cleaned;
   }
 
-  saveWorkspaceConversationState(): void {
+  saveWorkspaceConversationState(flush = true): void {
     if (this.isSubagentRuntime) return;
     const key = this.workspaceConversationKey();
     if (!key) return;
@@ -1868,7 +1917,8 @@ export class Agent {
       continuations: this.normalizeContinuations(this.continuations),
       updatedAt,
     };
-    this.writeStoredConversationState(stored);
+    if (flush) this.writeStoredConversationStateNow(stored);
+    else this.scheduleStoredConversationState(stored);
   }
 
   private loadWorkspaceConversationState(): void {
@@ -1953,7 +2003,7 @@ export class Agent {
     // first setConversation(). Do not save state loaded for another workspace
     // under the new workspace key during that hand-off.
     if (this.workspaceConversationKey() === this.loadedWorkspaceConversationKey) {
-      this.saveWorkspaceConversationState();
+      this.saveWorkspaceConversationState(true);
     }
     this.activeConversationId = clean;
     this.loadWorkspaceConversationState();
@@ -3135,8 +3185,10 @@ export class Agent {
   }
 
   async process(input: string | AgentPromptMessage): Promise<StreamToken[]> {
+    const stopTotalTimer = performanceTimer('total', { conversationId: this.activeConversationId });
     if (!this.workspace.current && !this.agentOnly) {
       this.status = 'idle';
+      stopTotalTimer();
       return [{ type: 'text', text: '[Workspace required] Select or create a workspace before starting a conversation.' }];
     }
 
@@ -3219,7 +3271,7 @@ export class Agent {
       // Agent.process seeds the kernel from history, so its initial prompt does
       // not otherwise emit a kernel message_start event.
       this.notifyAgentKernelUserMessageStart(text, clientMessageId || undefined);
-      this.saveWorkspaceConversationState();
+      this.saveWorkspaceConversationState(true);
       this.emitWorkEvent({ type: 'start', content: 'Preparing request.' });
 
       if (this.model === 'auto' && !autoRouteEvaluated) {
@@ -3234,7 +3286,7 @@ export class Agent {
         if (images.length) return [{ type: 'text', text: '[Vision unavailable] The OpenCode engine does not accept Newmark image attachments.' }];
         const result = await this.processOpencode(text, processSignal);
         this.status = 'idle';
-        this.saveWorkspaceConversationState();
+        this.saveWorkspaceConversationState(true);
         this.emitWorkEvent({ type: 'done', content: 'Response complete.' });
         return this.sanitizeVisibleTokens(result);
       }
@@ -3267,6 +3319,7 @@ export class Agent {
       this.emitWorkEvent({ type: 'error', content: msg });
       throw e;
     } finally {
+      stopTotalTimer();
       this.processDepth = Math.max(0, this.processDepth - 1);
       if (this.processDepth === 0) {
         if (this.routeTransactionId) this.autoRouter.endTransaction(this.routeTransactionId);
@@ -4164,6 +4217,30 @@ export class Agent {
 
   buildSystemPrompt(): string {
     const cwd = this.workspace.current?.path || this.rootPath;
+    const enabledSkills = this.skills.active();
+    const linkedPlan = this.getLinkedPlan();
+    const globalPromptPath = path.join(this.rootPath, 'agent.md');
+    const globalPrompt = fs.existsSync(globalPromptPath) ? fs.readFileSync(globalPromptPath, 'utf-8') : '';
+    const workspacePrompt = this.workspace.currentAgentPrompt();
+    const identity = JSON.stringify({
+      cwd,
+      mode: this.mode,
+      conversationId: this.activeConversationId,
+      subagent: this.isSubagentRuntime ? [this.subagentName, this.subagentPrompt] : null,
+      linkedPlanRevision: linkedPlan.revision,
+      goal: this.goal ? [this.goal.objective, this.goal.paused] : null,
+      promptMode: this.config.getStr('workspace', 'prompt_mode'),
+      customPrompt: this.config.getStr('agent', 'custom_prompt'),
+      language: this.config.getStr('general', 'language'),
+      permission: this.config.getStr('workspace', 'access_permission'),
+      optionFeedback: this.config.getStr('agent', 'option_feedback'),
+      model: this.model,
+      intelligence: this.intelligence,
+      skills: enabledSkills.map(skill => [skill.name, skill.description, skill.path]),
+      globalPrompt,
+      workspacePrompt,
+    });
+    if (this.systemPromptCache?.identity === identity) return this.systemPromptCache.value;
     const parts: string[] = [`${CORE_SYSTEM_PROMPT}\n\n## Current Working Directory\n${cwd}\n\nWhen using file tools (read, write, edit, glob), use ABSOLUTE paths rooted at this directory. Never guess paths. First use \`pwd\` or \`bash\` to verify.`];
     if (this.isSubagentRuntime) {
       parts.push([
@@ -4178,24 +4255,20 @@ export class Agent {
     }
     parts.push(this.buildFeatureDisclosurePrompt());
     if (this.mode === 'plan') parts.push(`[Plan Tool Policy]\n${planModePolicyPrompt()}`);
-    const linkedPlan = this.getLinkedPlan();
     parts.push(`[Linked Plan revision=${linkedPlan.revision}]\n${linkedPlan.markdown || '(empty)'}`);
 
     const pm = this.config.getStr('workspace', 'prompt_mode');
-    if ((pm === 'global_only' || pm === 'both') && fs.existsSync(path.join(this.rootPath, 'agent.md'))) {
-      const content = fs.readFileSync(path.join(this.rootPath, 'agent.md'), 'utf-8');
-      if (content) parts.push(`[Global Prompt]\n${content}`);
+    if ((pm === 'global_only' || pm === 'both') && globalPrompt) {
+      parts.push(`[Global Prompt]\n${globalPrompt}`);
     }
 
     if (pm === 'workspace_only' || pm === 'both') {
-      const wp = this.workspace.currentAgentPrompt();
-      if (wp) parts.push(`[Workspace Prompt]\n${wp}`);
+      if (workspacePrompt) parts.push(`[Workspace Prompt]\n${workspacePrompt}`);
     }
 
     const custom = this.config.getStr('agent', 'custom_prompt');
     if (custom) parts.push(`[Custom Settings Prompt]\n${custom}`);
 
-    const enabledSkills = this.skills.active();
     if (enabledSkills.length) {
       parts.push([
         '[Enabled Skills]',
@@ -4205,7 +4278,27 @@ export class Agent {
     }
 
     parts.push(this.buildModePrompt());
-    return parts.join('\n\n');
+    const value = parts.join('\n\n');
+    this.systemPromptCache = { identity, value };
+    return value;
+  }
+
+  cachedToolDefinitions(): unknown[] {
+    const identity = JSON.stringify({
+      mode: this.mode,
+      nativeTools: this.config.nativeToolEnabled(),
+      optionFeedback: this.config.getStr('agent', 'option_feedback'),
+      platform: process.platform,
+      hostProfile: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : 'native',
+      vision: !!this.activeModelConfig()?.vision,
+      imageOutput: !!this.activeModelConfig()?.image_output,
+    });
+    const cached = this.toolDefinitionCache.get(identity);
+    if (cached) return cached;
+    const definitions = this.subagentToolDefinitions(this.tools.definitions(this.mode));
+    this.toolDefinitionCache.clear();
+    this.toolDefinitionCache.set(identity, definitions);
+    return definitions;
   }
 
   private buildFeatureDisclosurePrompt(): string {

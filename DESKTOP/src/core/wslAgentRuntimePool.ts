@@ -25,6 +25,7 @@ export interface WslTargetRuntimeClient {
   forceRestartRuntimeGroup(): Promise<void>;
   stop(): Promise<void>;
   status(): { enabled: true; connected: boolean; distro: string; pid: number; error: string };
+  start?(): Promise<void>;
 }
 
 export type WslTargetRuntimeClientFactory = (target: NormalizedConversationTarget) => WslTargetRuntimeClient;
@@ -98,6 +99,17 @@ export class WslAgentRuntimePool {
       entry.lastRunId = result.runId || entry.lastRunId;
       entry.lastGeneration = Number(result.generation || entry.lastGeneration || 0);
       return result;
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async prewarm(target: ConversationRuntimeTarget): Promise<void> {
+    const normalized = normalizeConversationTarget(target);
+    const entry = await this.acquire(normalized);
+    try {
+      if (entry.client.start) await entry.client.start();
+      else await entry.client.snapshotTarget(normalized);
     } finally {
       this.release(entry, true);
     }

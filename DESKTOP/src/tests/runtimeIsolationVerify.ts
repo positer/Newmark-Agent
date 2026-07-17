@@ -792,6 +792,7 @@ class FakeWslTargetClient implements WslTargetRuntimeClient {
   restarts = 0;
   forceStops = 0;
   stops = 0;
+  starts = 0;
   stopResults: WslAgentStopResult[] = [];
   settings = 0;
   folds = 0;
@@ -863,6 +864,7 @@ class FakeWslTargetClient implements WslTargetRuntimeClient {
     return this.stopResults.shift() || { action: 'not_running', runtimeKey: '', checkpointed: false, backend: 'wsl', distro: 'Fake' };
   }
   async forceRestartRuntimeGroup(): Promise<void> { this.restarts++; }
+  async start(): Promise<void> { this.starts++; }
   async stop(): Promise<void> { this.stops++; }
   status(): { enabled: true; connected: boolean; distro: string; pid: number; error: string } {
     return { enabled: true, connected: true, distro: 'Fake', pid: 1, error: '' };
@@ -879,6 +881,8 @@ async function verifyWslPerTargetPool(): Promise<void> {
   const options: ConversationKernelRunOptions = { mode: 'build', model: 'm', intelligence: 'medium', inputMode: 'guide', engine: 'builtin' };
   const alpha = target('alpha', 'C:\\work\\alpha', 'same');
   const beta = target('beta', 'C:\\work\\beta', 'same');
+  await pool.prewarm(alpha);
+  assert.equal(clients.get(conversationRuntimeKey(alpha))?.starts, 1, 'WSL runtime pool prewarms the target client without prompting');
   await pool.prompt({ message: 'a', target: alpha, conversationId: 'same', options, queueMode: 'steer', workspace: null });
   await pool.prompt({ message: 'a2', target: alpha, conversationId: 'same', options, queueMode: 'steer', workspace: null });
   await pool.prompt({ message: 'b', target: beta, conversationId: 'same', options, queueMode: 'steer', workspace: null });

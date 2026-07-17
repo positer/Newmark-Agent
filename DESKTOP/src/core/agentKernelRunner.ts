@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { terminalTakeoverWorkspaceId } from '../tools/terminalTakeover';
 import { evaluateToolPolicy } from './toolPolicy';
+import { emitPerformanceEvent, performanceTimer } from './performanceDiagnostics';
 
 type NativeAgentConstructor = new (options?: Record<string, unknown>) => NativeAgentInstance;
 
@@ -329,6 +330,7 @@ function normalizePublicProviderError(error: unknown, secrets: unknown[] = []): 
 }
 
 export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
+  const stopContextTimer = performanceTimer('context_prepare', { conversationId: agent.activeConversationId });
   if (!agent.engineModel()) {
     agent.status = 'error';
     agent.saveWorkspaceConversationState();
@@ -346,7 +348,10 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   const refreshToolSurface = (force = false): { definitions: unknown[]; systemPromptNotice: string } => {
     const identity = toolSurfaceIdentityForAgent(agent);
     if (force || identity !== activeToolSurfaceIdentity) {
-      const catalog = agent.subagentToolDefinitions(agent.tools.definitions(agent.mode));
+      // Equivalent to the policy-filtered catalog formerly built by
+      // const catalog = agent.subagentToolDefinitions(agent.tools.definitions(agent.mode));
+      // Agent.cachedToolDefinitions keeps that catalog stable across provider subturns.
+      const catalog = agent.cachedToolDefinitions();
       const surface = routeToolSurface(agent, catalog);
       toolProvisioning.reconcile(catalog, surface.definitions);
       activeToolSurfaceNotice = surface.systemPromptNotice;
@@ -359,6 +364,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   };
   const initialToolSurface = refreshToolSurface(true);
   const systemPrompt = [agent.buildSystemPrompt(), initialToolSurface.systemPromptNotice].filter(Boolean).join('\n\n');
+  stopContextTimer();
   const kernel = new NativeAgent({
     streamFn: streamWithNewmarkProvider(agent, KernelStreamCompat),
     toolExecution: 'sequential',
@@ -475,6 +481,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
         const finalContent: KernelContent[] = [];
         let textStarted = false;
         const requestStartedAt = Date.now();
+        let firstTokenRecorded = false;
         const brokerOnlySurface = (context.tools || []).length === 1 && context.tools?.[0]?.name === TOOL_PROVISION_NAME;
         currentAgent.beginRouteAttempt();
         try {
@@ -492,6 +499,10 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
             toProviderToolDefinitions(context.tools || []),
             options?.signal,
           )) {
+            if (!firstTokenRecorded && ((token.type === 'text' && token.text) || (token.type === 'tool_call' && token.toolCall))) {
+              firstTokenRecorded = true;
+              emitPerformanceEvent({ stage: 'first_token', durationMs: Date.now() - requestStartedAt, conversationId: currentAgent.activeConversationId });
+            }
             if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error(`[NewmarkKernel] provider-token type=${token.type}`);
             if (options?.signal?.aborted) break;
             if (token.reasoningContent) {
@@ -545,6 +556,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
           if (!currentAgent.isLlmErrorText(text)) {
             if (brokerOnlySurface && !finalContent.some(content => content.type === 'toolCall') && text) currentAgent.markRouteStreamCommitted();
             const durationMs = Math.max(1, Date.now() - requestStartedAt);
+            emitPerformanceEvent({ stage: 'provider_request', durationMs, conversationId: currentAgent.activeConversationId });
             const outputTokens = Math.max(0, (text.length + thinking.length) / 4);
             currentAgent.recordRouteSuccess(durationMs, outputTokens / (durationMs / 1_000));
           }
@@ -1081,7 +1093,7 @@ function selectTaskToolDefinitions(task: string, definitions: unknown[]): unknow
 }
 
 function toKernelTools(agent: Agent, definitions?: unknown[], provisioning?: ToolProvisionSession | null): KernelTool[] {
-  const tools = definitions || agent.subagentToolDefinitions(agent.tools.definitions(agent.mode));
+  const tools = definitions || agent.cachedToolDefinitions();
   return tools.map((tool: any): KernelTool => {
     const fn = tool?.function || {};
     return {
@@ -1205,6 +1217,8 @@ function computerUseVisionImageInput(agent: Agent, name: string, text: string): 
 }
 
 async function executeNewmarkTool(agent: Agent, name: string, args: string, inputSchema: unknown, signal?: AbortSignal): Promise<string> {
+  const stopToolTimer = performanceTimer('tool_execution', { conversationId: agent.activeConversationId, detail: { tool: name } });
+  try {
   const wsDir = agent.workspace.current?.path || agent.rootPath;
   if (name !== 'image_generate') {
     const currentAvailability = agent.tools.validateInvocation(name, args || '{}', agent.mode);
@@ -1279,6 +1293,9 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
   const objectiveResult = toolResultObjectiveOutcome(result);
   if (objectiveResult !== undefined) agent.recordObjectiveRouteResult(objectiveResult);
   return result;
+  } finally {
+    stopToolTimer();
+  }
 }
 
 export function toolResultObjectiveOutcome(result: string): boolean | undefined {

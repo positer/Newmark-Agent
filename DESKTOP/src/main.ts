@@ -930,8 +930,9 @@ if (hasCliCommand) {
     }
   }
 
+  const allowMultipleInstances = args.includes('--allow-multiple-instances');
   const singleInstanceLock = app.requestSingleInstanceLock();
-  if (!singleInstanceLock) {
+  if (!singleInstanceLock && !allowMultipleInstances) {
     app.quit();
   } else {
   app.on('second-instance', () => {
@@ -1398,12 +1399,14 @@ if (hasCliCommand) {
         {
           id: 'conversation-runtime-prewarm',
           label: startupUsesChinese() ? '当前对话运行时' : 'current conversation runtime',
-          // Keep process creation outside the startup and low-end interaction
-          // measurement window. A foreground prompt still starts this runtime
-          // on demand immediately, so the delayed prewarm never blocks use.
-          delayMs: 30_000,
+          // Start after the UI is interactive. Foreground prompts share the
+          // same single-flight startup promise instead of launching twice.
+          delayMs: 250,
           run: async signal => {
             if (signal.aborted) return;
+            if (wslBackendEnabled()) {
+              await ensureWslConversationPool()!.prewarm(deferredConversationTarget);
+            }
             const snapshot = wslBackendEnabled()
               ? await ensureWslConversationPool()!.snapshot(deferredConversationTarget)
               : await ensureElectronUtilityPool().snapshot(deferredConversationTarget);
@@ -1688,6 +1691,8 @@ if (hasCliCommand) {
     let appExitCleanupComplete = false;
     app.on('will-quit', event => {
       startupDeferredTasks?.cancel();
+      agent?.flushWorkspaceConversationState();
+      conversationKernel?.flushPersistence();
       if (!appExitCleanupComplete && (wslAgentClient || wslAgentRuntimePool || electronUtilityRuntimePool)) {
         event.preventDefault();
         if (!appExitCleanupStarted) {

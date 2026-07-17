@@ -1,5 +1,11 @@
 # Newmark Agent Overview
 
+## Current dev-0.1.0 Release Line
+
+The working release line is `dev-0.1.0`. The agent request path now emits opt-in segmented latency diagnostics, coalesces high-frequency conversation persistence behind an in-memory cache and single writer, and caches stable prompt/tool definitions with precise invalidation. Windows-to-WSL launches copy the host bundle by content hash into the Linux cache and reuse single-flight runtime startup promises; the UI becomes interactive before WSL detection, update checks, or prewarming finish. A 20-run local streaming benchmark is archived at `archive/2026-07-17-dev-0.1.0-linux-agent-latency.json` and currently passes the hot first-event, hot first-token, and cold local-overhead gates.
+
+Renderer work also includes terminal-event-driven automatic Next queue draining with target isolation and deduplication, language-aware fenced Markdown code highlighting while preserving inline code behavior, and transparent light-mode modal glass with an explicit luminous shadow/border treatment. The complete release asset set is Windows MSI/ZIP plus Linux AppImage/deb/unpacked ZIP; hashes are filled after the GitHub download audit.
+
 ## Project Goal
 
 Newmark Agent is a local-first desktop coding-agent environment. The project combines an Electron desktop UI, a shared TypeScript Agent/CLI core, portable workspace state, Flow workflows, skills, archiving, automation, and model/provider configuration. The practical goal is a self-contained agent app that can be carried offline, recover its required companion files on startup, and expose real user-facing controls for workspaces, modes, prompts, tools, skills, Flow, subagents, archives, and automation without maintaining a second legacy runtime.

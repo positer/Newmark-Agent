@@ -166,6 +166,11 @@ export class ConversationKernel {
     return false;
   }
 
+  flushPersistence(): void {
+    this.host.flushWorkspaceConversationState();
+    for (const runtime of this.runtimes.values()) runtime.runner.flushWorkspaceConversationState();
+  }
+
   queued(target: ConversationTargetInput): { steering: string[]; followUp: string[] } {
     const runtime = this.findRuntime(target);
     const queued = runtime ? this.queueState(runtime).queued : undefined;

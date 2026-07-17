@@ -7,6 +7,8 @@ const { spawn, spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
+const sourceMode = process.env.NEWMARK_UI_MEDIA_MD_SOURCE === '1';
+const sourceElectronPath = path.join(repoRoot, 'DESKTOP', 'node_modules', 'electron', 'dist', 'electron.exe');
 const screenshotPath = path.join(repoRoot, 'archive', '2026-06-28-release-ui-media-md-smoke.png');
 const keepRoot = process.env.NEWMARK_KEEP_UI_MEDIA_MD_SMOKE === '1';
 
@@ -20,6 +22,18 @@ function fail(message) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function freeTcpPort() {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer();
+    server.unref();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      server.close(error => error ? reject(error) : resolve(address.port));
+    });
+  });
 }
 
 function psQuote(value) {
@@ -210,11 +224,14 @@ function writeConfig(root) {
 }
 
 async function runUiCheck(root) {
-  const port = Number(process.env.NEWMARK_UI_MEDIA_MD_SMOKE_PORT || '49349');
+  const port = process.env.NEWMARK_UI_MEDIA_MD_SMOKE_PORT
+    ? Number(process.env.NEWMARK_UI_MEDIA_MD_SMOKE_PORT)
+    : await freeTcpPort();
   let child;
   let cdp;
   try {
-    child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
+    child = spawn(sourceMode ? sourceElectronPath : exePath, [...(sourceMode ? ['.'] : []), `--remote-debugging-port=${port}`, '--allow-multiple-instances', '--no-sandbox', '--root', root], {
+      cwd: sourceMode ? path.join(repoRoot, 'DESKTOP') : undefined,
       stdio: 'ignore',
       windowsHide: true,
     });
@@ -239,6 +256,7 @@ async function runUiCheck(root) {
     await evaluate(cdp, `(() => {
       const image = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
       addMsg('assistant', '# MEDIA_RENDER_MESSAGE_20260628\\n\\n![tiny](' + image + ')\\n\\n[Open target](media-link-target.txt)\\n\\n| Metric | Value |\\n| --- | --- |\\n| Alpha | $a^2 + b^2$ |\\n\\n$$\\nG_{\\\\mu\\\\nu} + \\\\Lambda g_{\\\\mu\\\\nu} = \\\\frac{8\\\\pi G}{c^4} T_{\\\\mu\\\\nu}\\n$$', 'build', 'media-md-smoke');
+      addMsg('assistant', '\\x60\\x60\\x60typescript\\nconst answer: number = 42;\\n\\x60\\x60\\x60', 'build', 'typed-code-smoke');
       return true;
     })()`, 30000);
 
@@ -246,10 +264,12 @@ async function runUiCheck(root) {
       const img = document.querySelector('.chat-msg .msg-image');
       const link = document.querySelector('.chat-msg .msg-file-link[data-path="media-link-target.txt"]');
       const msg = document.querySelector('.chat-msg .msg-body');
+      const code = Array.from(document.querySelectorAll('.chat-msg .msg-body')).find(node => node.textContent.includes('const answer: number = 42;'));
       return !!img && img.getAttribute('src').startsWith('data:image/gif') &&
         !!link && link.textContent.includes('Open target') &&
         !!msg && !!msg.querySelector('.md-rendered h1') &&
         !!msg.querySelector('.md-table') &&
+        !!code && !!code.querySelector('code.md-code-block.language-typescript .tok-keyword') &&
         !!msg.querySelector('.md-math-inline sup') &&
         !!msg.querySelector('.md-math-block .math-frac') &&
         !!msg.querySelector('.md-math-block sub') &&

@@ -16,6 +16,9 @@ import {
 } from './wslAgentProtocol';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, normalizeConversationTarget } from './conversationTarget';
 import { AsyncProcessResult, runAsyncProcess } from './asyncProcess';
+import { createHash } from 'crypto';
+import { readFileSync } from 'fs';
+import { performanceTimer } from './performanceDiagnostics';
 
 type WorkListener = (event: AgentWorkEvent) => void;
 type TerminalListener = (event: TerminalTakeoverEvent) => void;
@@ -122,6 +125,7 @@ export class WslAgentClient {
   private remotePid = 0;
   private remotePgid = 0;
   private remoteSessionId = 0;
+  private startPromise: Promise<void> | null = null;
 
   constructor(
     private readonly distro: string,
@@ -159,9 +163,35 @@ export class WslAgentClient {
 
   async start(): Promise<void> {
     if (this.child && !this.child.killed) return;
+    if (this.startPromise) return await this.startPromise;
+    this.startPromise = this.startInternal();
+    try {
+      await this.startPromise;
+    } finally {
+      this.startPromise = null;
+    }
+  }
+
+  private async startInternal(): Promise<void> {
+    const stopTimer = performanceTimer('runtime_acquire', {
+      runtimeKey: this.runtimeTarget?.runtimeKey,
+      conversationId: this.runtimeTarget?.conversationId,
+    });
+    try {
     const root = await this.toWslPath(this.windowsRoot);
     const hostScript = await this.toWslPath(this.windowsHostScript);
-    const command = `command -v setsid >/dev/null 2>&1 || { echo 'setsid is required for isolated Newmark WSL runtimes' >&2; exit 127; }; exec setsid --wait node ${shellQuote(hostScript)}`;
+    const typeboxCompiler = await this.toWslPath(pathSibling(this.windowsHostScript, 'typebox-compile.bundle.cjs'));
+    const digest = createHash('sha256').update(readFileSync(this.windowsHostScript)).digest('hex').slice(0, 24);
+    const cachedHostDir = `$HOME/.cache/newmark-agent/wsl-host/${digest}`;
+    const cachedHost = `${cachedHostDir}/wsl-agent-host.bundle.cjs`;
+    const command = [
+      `set -e`,
+      `command -v setsid >/dev/null 2>&1 || { echo 'setsid is required for isolated Newmark WSL runtimes' >&2; exit 127; }`,
+      `mkdir -p "${cachedHostDir}"`,
+      `if [ ! -s "${cachedHost}" ]; then cp ${shellQuote(hostScript)} "${cachedHost}.tmp.$$"; chmod 600 "${cachedHost}.tmp.$$"; mv -f "${cachedHost}.tmp.$$" "${cachedHost}"; fi`,
+      `if [ ! -s "${cachedHostDir}/typebox-compile.bundle.cjs" ]; then cp ${shellQuote(typeboxCompiler)} "${cachedHostDir}/typebox-compile.bundle.cjs.tmp.$$"; chmod 600 "${cachedHostDir}/typebox-compile.bundle.cjs.tmp.$$"; mv -f "${cachedHostDir}/typebox-compile.bundle.cjs.tmp.$$" "${cachedHostDir}/typebox-compile.bundle.cjs"; fi`,
+      `exec setsid --wait node "${cachedHost}"`,
+    ].join('; ');
     const runtimeEnv = this.runtimeTarget ? [
       `NEWMARK_RUNTIME_KEY=${this.runtimeTarget.runtimeKey}`,
       `NEWMARK_WORKSPACE_ID=${this.runtimeTarget.workspaceId}`,
@@ -197,6 +227,9 @@ export class WslAgentClient {
     this.remotePgid = identity.pgid;
     this.remoteSessionId = identity.sessionId;
     this.lastError = '';
+    } finally {
+      stopTimer();
+    }
   }
 
   async stop(): Promise<void> {
@@ -505,6 +538,12 @@ export class WslAgentClient {
     }
     this.pending.clear();
   }
+}
+
+function pathSibling(filePath: string, name: string): string {
+  const separator = filePath.includes('\\') ? '\\' : '/';
+  const index = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+  return `${index >= 0 ? filePath.slice(0, index) : '.'}${separator}${name}`;
 }
 
 export function windowsDrivePathToWsl(input: string): string {

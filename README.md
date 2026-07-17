@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.11"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.0.11-blue"></a>
+  <a href="https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.0"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.1.0-blue"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -74,20 +74,21 @@ Computer Use follows an observe-before-act contract. Screenshots are one-use mod
 
 ## Download
 
-### Windows: dev-0.0.11
+### Windows and Linux: dev-0.1.0
 
-The current Windows prerelease contains two unsigned artifacts:
+The current public prerelease contains five unsigned artifacts:
 
 | Package | Purpose | SHA256 |
 | --- | --- | --- |
-| [`Newmark-Agent-0.0.11-x64.msi`](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.11) | Per-machine installer for `Program Files` | `77F3CFE8FC17C7E175EB06CD9A37F6659B34FA7DBE043F4FBE2AB4977AB7E46E` |
-| [`Newmark-Agent-0.0.11-win-unpacked-x64.zip`](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.11) | Unpacked update or portable application files | `22ECE27A54C7EA0C8BBD0C7CEB69E96740A5149D4682B626B6DF784195F700BE` |
+| [`Newmark-Agent-0.1.0-x64.msi`](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.0) | Windows per-machine installer | `54214E03DDF4C3829CC2FAB64723F5090DE02086ABA463392D55C1879FB761BB` |
+| [`Newmark-Agent-0.1.0-win-unpacked-x64.zip`](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.0) | Windows portable archive | `AA105A696DF2ECF49FAE3BD7C3DF960F5F9D5F97983D5AD92E9C493819E783E1` |
+| [`Newmark-Agent-0.1.0-x86_64.AppImage`](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.0) | Linux portable AppImage | `CDB7FE6A8C6B87EFBB2BD6B9569A66332FECA210D9FA368B7662D8426461A353` |
+| [`Newmark-Agent-0.1.0-amd64.deb`](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.0) | Debian/Ubuntu package | `AF86AE0A616A2B6CA6B63E37C05086A3BC24254A10E4AAADEF023499B009B6F1` |
+| [`Newmark-Agent-0.1.0-linux-unpacked-x64.zip`](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.0) | Linux portable archive | `A8CC6FF43D14FF0B3860FBB35086DA486838B3A60FAF85BD069F6C681534E11D` |
 
 The MSI requests administrator elevation. Windows may show an unknown-publisher warning because the package is not code-signed.
 
-### Linux: dev-0.0.9
-
-Linux packages were not rebuilt for dev-0.0.11. Continue using the [dev-0.0.9 prerelease](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.0.9) for AppImage, Debian, or unpacked Linux builds. Do not relabel those files as dev-0.0.11.
+The 0.1.0 performance line includes merged persistence writes, cached prompt/tool context, Linux-local WSL host bundles, runtime prewarming, and language-aware fenced Markdown code highlighting. The Next queue now advances automatically after terminal work events. In light mode, modal surfaces remain transparent while gaining a bright glass glow for readable foreground content.
 
 ## Quick Start
 

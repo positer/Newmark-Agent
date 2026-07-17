@@ -31,10 +31,10 @@ function configureWslToolHost(agent: Agent): void {
   agent.tools.setHostProfile({
     kind: 'wsl',
     platform: 'linux',
-    // This process is Electron-managed and can route Browser-Use back to the
-    // owning window, but it must never advertise Windows desktop control.
+    // This process is Electron-managed and routes Browser/Computer Use back to
+    // the owning Windows window through the authenticated host-tool bridge.
     electronBrowser: true,
-    windowsComputerUse: false,
+    windowsComputerUse: true,
   });
 }
 

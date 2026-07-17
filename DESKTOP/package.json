@@ -1,7 +1,7 @@
 {
   "name": "newmark-agent",
   "productName": "Newmark Agent",
-  "version": "0.0.11",
+  "version": "0.1.0",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "homepage": "https://github.com/positer/Newmark-Agent",
   "author": {
@@ -20,7 +20,7 @@
     "start:cli": "node dist/launcher.js --cli",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src",
-    "test": "npm run build && node dist/tests/verify.js && node dist/tests/normalChatRegressionVerify.js && node dist/tests/dev008-subagent.js && node dist/tests/dev009Verify.js && node dist/tests/runtimeIsolationVerify.js && node dist/tests/runtimePoolCapacityVerify.js && node dist/tests/guideWorkRunVerify.js && node dist/tests/guideUiReconcileVerify.js && node dist/tests/queueAttachmentIsolationVerify.js && node dist/tests/workspaceMenuVerify.js && node dist/tests/userImagePersistenceVerify.js && node dist/tests/visualPreferencesVerify.js && node dist/tests/browserUseVerify.js && node dist/tests/toolProcessVerify.js && node dist/tests/toolProvisioningVerify.js && node dist/tests/startupPrewarmVerify.js && node dist/tests/pdfPreviewServerVerify.js && node dist/tests/editorLifecycleVerify.js && node dist/tests/terminalTakeoverVerify.js && node dist/tests/workspaceFileRouterVerify.js && node dist/tests/computerUsePerformanceVerify.js && node dist/tests/autoRouterVerify.js && node dist/tests/autoAgentIntegrationVerify.js && node dist/tests/autoRouteRatingVerify.js && node dist/tests/providerIdentityVerify.js && node dist/tests/modelValidationVerify.js && node dist/tests/modelValidationAgentIntegrationVerify.js && node dist/tests/cliToolContractVerify.js && node dist/tests/openAIHubAnthropicSmokeContractVerify.js && node dist/tests/cliComputerUseAccuracyVerify.js",
+    "test": "npm run build && node dist/tests/verify.js && node dist/tests/performanceOptimizationVerify.js && node dist/tests/normalChatRegressionVerify.js && node dist/tests/dev008-subagent.js && node dist/tests/dev009Verify.js && node dist/tests/runtimeIsolationVerify.js && node dist/tests/runtimePoolCapacityVerify.js && node dist/tests/guideWorkRunVerify.js && node dist/tests/guideUiReconcileVerify.js && node dist/tests/queueAttachmentIsolationVerify.js && node dist/tests/workspaceMenuVerify.js && node dist/tests/userImagePersistenceVerify.js && node dist/tests/visualPreferencesVerify.js && node dist/tests/browserUseVerify.js && node dist/tests/toolProcessVerify.js && node dist/tests/toolProvisioningVerify.js && node dist/tests/startupPrewarmVerify.js && node dist/tests/pdfPreviewServerVerify.js && node dist/tests/editorLifecycleVerify.js && node dist/tests/terminalTakeoverVerify.js && node dist/tests/workspaceFileRouterVerify.js && node dist/tests/computerUsePerformanceVerify.js && node dist/tests/autoRouterVerify.js && node dist/tests/autoAgentIntegrationVerify.js && node dist/tests/autoRouteRatingVerify.js && node dist/tests/providerIdentityVerify.js && node dist/tests/modelValidationVerify.js && node dist/tests/modelValidationAgentIntegrationVerify.js && node dist/tests/cliToolContractVerify.js && node dist/tests/openAIHubAnthropicSmokeContractVerify.js && node dist/tests/cliComputerUseAccuracyVerify.js",
     "test:runtime-isolation": "npm run build && node dist/tests/runtimeIsolationVerify.js",
     "test:guide-workrun": "npm run build && node dist/tests/guideWorkRunVerify.js",
     "test:guide-ui": "npm run build && node dist/tests/guideUiReconcileVerify.js",
@@ -82,6 +82,7 @@
     "release:dev009-features-smoke": "node scripts/release-dev009-features-smoke.cjs",
     "release:dev010-features-smoke": "node scripts/release-dev010-features-smoke.cjs",
     "benchmark:dev010-startup": "node scripts/benchmark-dev010-startup-memory.cjs",
+    "benchmark:linux-agent-latency": "node scripts/benchmark-linux-agent-latency.cjs",
     "release:github-assets-verify": "node scripts/verify-github-release-assets.cjs",
     "release:linux-real-provider-smoke": "node scripts/release-linux-real-provider-smoke.cjs",
     "release:ui-startup-recovery-smoke": "node scripts/release-ui-startup-recovery-smoke.cjs",

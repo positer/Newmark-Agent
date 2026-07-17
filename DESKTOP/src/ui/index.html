@@ -73,6 +73,7 @@ try {
   --glass-rgb-1: 10 10 26;
   --glass-rgb-2: 17 17 42;
   --glass-rgb-3: 26 26 56;
+  --modal-surface: rgb(var(--glass-rgb-2) / max(var(--glass-alpha-2), 0.9));
   --glass-alpha-1: 0.6375;
   --glass-alpha-2: 0.68;
   --glass-alpha-3: 0.7225;
@@ -172,6 +173,8 @@ try {
   --glass-rgb-1: 255 255 255;
   --glass-rgb-2: 255 255 255;
   --glass-rgb-3: 255 255 255;
+  --modal-surface: rgba(248,250,255,0.76);
+  --modal-shadow: 0 24px 80px rgba(41,55,92,0.22), 0 0 42px rgba(255,255,255,0.72), inset 0 1px 0 rgba(255,255,255,0.96), inset 0 0 28px rgba(255,255,255,0.42);
   --glass-border-1: rgba(0,0,0,0.06);
   --glass-border-2: rgba(0,0,0,0.08);
   --glass-border-3: rgba(0,0,0,0.10);
@@ -3118,7 +3121,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 @keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
 
 .sub-win {
-  background: var(--glass-bg-2);
+  background: var(--modal-surface);
   backdrop-filter: blur(var(--glass-blur-3)) saturate(150%);
   -webkit-backdrop-filter: blur(var(--glass-blur-3)) saturate(150%);
   border: 1px solid var(--glass-border-2);
@@ -3448,7 +3451,13 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   border-radius: var(--radius-md);
   border: 1px solid var(--glass-border-1);
   background: var(--panel-2);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--modal-shadow, var(--shadow-lg));
+}
+
+[data-theme="light"] .sub-win {
+  backdrop-filter: blur(calc(var(--glass-blur-3) * 1.35)) saturate(185%) brightness(1.12);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur-3) * 1.35)) saturate(185%) brightness(1.12);
+  border-color: rgba(255,255,255,0.82);
 }
 .memory-lab-search-results[hidden] {
   display: none;
@@ -5978,7 +5987,10 @@ function renderMarkdownBlocks(text) {
         codeLines.push(lines[i]);
         i++;
       }
-      html += '<pre><code' + (lang ? ' data-lang="' + escAttr(lang) + '"' : '') + '>' + esc(codeLines.join('\n')) + '</code></pre>';
+      var code = codeLines.join('\n');
+      var normalizedLanguage = lang ? normalizeCodeLanguage(lang) : 'text';
+      var highlighted = normalizedLanguage === 'text' ? esc(code) : highlightCodeByLanguage(code, normalizedLanguage);
+      html += '<pre><code' + (lang ? ' data-lang="' + escAttr(lang) + '"' : '') + ' class="md-code-block language-' + escAttr(normalizedLanguage) + '">' + highlighted + '</code></pre>';
       continue;
     }
     if (trimmed === '$$' || trimmed === '\\[') {
@@ -7715,6 +7727,8 @@ function appendAgentWorkEvent(event) {
   else if (['done', 'error', 'interrupted', 'force_interrupted'].indexOf(String(event.type || '')) >= 0) {
     setConversationRuntimeState(target, event.type === 'done' ? 'completed' : event.type, event.runId || '');
   }
+  var terminalEvent = (event.status && ['completed', 'interrupted', 'force_interrupted', 'error'].indexOf(String(event.status)) >= 0)
+    || ['done', 'error', 'interrupted', 'force_interrupted'].indexOf(String(event.type || '')) >= 0;
   if (event.type === 'done' || event.type === 'error') {
     if (active) renderAgentWorkEvent(event);
   } else if (active) {
@@ -7730,6 +7744,7 @@ function appendAgentWorkEvent(event) {
       if (state.rightTab === 'subagent') window.renderSubagentList();
     }).catch(function(){});
   }
+  if (active && terminalEvent && window.scheduleNextQueueDrain) window.scheduleNextQueueDrain(target);
   if (typeof renderConversations === 'function') renderConversations();
 }
 
@@ -8809,6 +8824,31 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   window.drainNextQueue();
 };
 
+window.scheduleNextQueueDrain = function(target) {
+  var expectedTarget = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  if (!expectedTarget) return;
+  var expectedKey = runtimeKeyFor(expectedTarget.workspaceId, expectedTarget.conversationId);
+  if (!state.nextQueueSchedulesByTarget) state.nextQueueSchedulesByTarget = {};
+  var existing = state.nextQueueSchedulesByTarget[expectedKey];
+  if (existing) return;
+  var schedule = { target: expectedTarget };
+  state.nextQueueSchedulesByTarget[expectedKey] = schedule;
+  setTimeout(function() {
+    if (state.nextQueueSchedulesByTarget[expectedKey] !== schedule) return;
+    var activeTarget = currentConversationTarget();
+    if (runtimeKeyFor(activeTarget.workspaceId, activeTarget.conversationId) !== expectedKey) {
+      delete state.nextQueueSchedulesByTarget[expectedKey];
+      return;
+    }
+    if (isCurrentConversationRunning()) {
+      delete state.nextQueueSchedulesByTarget[expectedKey];
+      return;
+    }
+    window.drainNextQueue();
+    delete state.nextQueueSchedulesByTarget[expectedKey];
+  }, 250);
+};
+
 window.drainNextQueue = function() {
   if (isCurrentConversationRunning()) return;
   if (!state.nextQueue || !state.nextQueue.length) return;
@@ -8829,8 +8869,11 @@ window.drainNextQueue = function() {
     if (state.nextQueueDrainsByTarget[targetKey] !== drainToken) return;
     delete state.nextQueueDrainsByTarget[targetKey];
     var activeTarget = currentConversationTarget();
-    if (isCurrentConversationRunning()
-      || runtimeKeyFor(activeTarget.workspaceId, activeTarget.conversationId) !== targetKey) return;
+    if (runtimeKeyFor(activeTarget.workspaceId, activeTarget.conversationId) !== targetKey) return;
+    if (isCurrentConversationRunning()) {
+      window.scheduleNextQueueDrain(activeTarget);
+      return;
+    }
     var currentIndex = state.nextQueueRequests ? state.nextQueueRequests.indexOf(nextRequest) : -1;
     if (currentIndex < 0 || queuedRequestIsBackendManaged(nextRequest) || !queuedRequestMatchesTarget(nextRequest, activeTarget)) return;
     var next = state.nextQueue.splice(currentIndex, 1)[0];
@@ -11795,13 +11838,18 @@ function renderTreeNodes(nodes, parent, depth) {
 }
 
 // === Editor ===
+function normalizeCodeLanguage(language) {
+  var value = String(language || '').trim().toLowerCase().replace(/^language-/, '');
+  var aliases = { js:'javascript',jsx:'javascript',ts:'typescript',tsx:'typescript',py:'python',rs:'rust',cs:'csharp',cpp:'cpp',cc:'cpp',h:'c',htm:'html',scss:'css',jsonc:'json',md:'markdown',yml:'yaml',sh:'shell',bash:'shell',zsh:'shell',ps1:'powershell',pwsh:'powershell',vue:'vue',svelte:'svelte',tex:'latex' };
+  return aliases[value] || value || 'text';
+}
+
 window.editorLanguageForPath = function(path) {
   var ext = String(path || '').split('.').pop().toLowerCase();
-  var map = { js:'javascript',jsx:'javascript',ts:'typescript',tsx:'typescript',py:'python',rs:'rust',go:'go',java:'java',cs:'csharp',cpp:'cpp',cc:'cpp',c:'c',h:'c',html:'html',htm:'html',css:'css',scss:'css',json:'json',jsonc:'json',md:'markdown',markdown:'markdown',yaml:'yaml',yml:'yaml',toml:'toml',sh:'shell',bash:'shell',ps1:'powershell',sql:'sql',xml:'xml',vue:'vue',svelte:'svelte',tex:'latex' };
-  return map[ext] || ext || 'text';
+  return normalizeCodeLanguage(ext);
 };
 
-window.highlightEditorCode = function(code, language) {
+function highlightCodeByLanguage(code, language) {
   var text = esc(String(code || ''));
   if (language === 'markdown') {
     return text.replace(/^(#{1,6} .+)$/gm, '<span class="tok-heading">$1</span>').replace(/(`[^`\n]+`)/g, '<span class="tok-code">$1</span>').replace(/(^|\s)(https?:\/\/[^\s<]+)/g, '$1<span class="tok-string">$2</span>');
@@ -11823,6 +11871,10 @@ window.highlightEditorCode = function(code, language) {
     return protectedTokens[index] || '';
   });
   return text;
+}
+
+window.highlightEditorCode = function(code, language) {
+  return highlightCodeByLanguage(code, normalizeCodeLanguage(language));
 };
 
 window.renderNativeEditor = function() {

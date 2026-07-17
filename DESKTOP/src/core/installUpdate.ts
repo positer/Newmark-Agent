@@ -228,6 +228,11 @@ function Copy-NewmarkDirectory {
 try {
   Wait-Process -Id $pidToWait -Timeout 90 -ErrorAction SilentlyContinue
 } catch {}
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+  $_.Name -eq 'Newmark Agent.exe' -and $_.ProcessId -ne $pidToWait
+} | ForEach-Object {
+  try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+}
 for ($i = 0; $i -lt 30; $i++) {
   try {
     Copy-NewmarkDirectory

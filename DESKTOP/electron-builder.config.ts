@@ -42,9 +42,11 @@ const config: Configuration = {
   msi: {
     oneClick: false,
     perMachine: true,
+    runAfterFinish: false,
     warningsAsErrors: false,
     artifactName: 'Newmark-Agent-${version}-${arch}.${ext}',
   },
+  msiProjectCreated: './scripts/patch-msi-project.cjs',
   linux: {
     icon: 'assets/app-icon-dark.png',
     maintainer: 'Newmark AI <support@newmark.ai>',

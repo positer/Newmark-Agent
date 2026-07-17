@@ -106,6 +106,7 @@
     "dist:windows-release": "npm run build:clean && node scripts/dist-portable.cjs"
   },
   "build": {
+    "msiProjectCreated": "./scripts/patch-msi-project.cjs",
     "appId": "ai.newmark.agent",
     "productName": "Newmark Agent",
     "executableName": "Newmark Agent",
@@ -178,6 +179,7 @@
     "msi": {
       "oneClick": false,
       "perMachine": true,
+      "runAfterFinish": false,
       "warningsAsErrors": false,
       "artifactName": "Newmark-Agent-${version}-${arch}.${ext}"
     }

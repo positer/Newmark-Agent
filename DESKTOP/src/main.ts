@@ -3112,7 +3112,7 @@ if (hasCliCommand) {
     });
 
     ipcMain.handle('update:applyGithub', async (_event, input: Record<string, unknown> = {}) => {
-      return applyGitHubUpdate({
+      const result = await applyGitHubUpdate({
         repo: String(input.repo || ''),
         tag: String(input.tag || ''),
         asset: String(input.asset || ''),
@@ -3120,10 +3120,12 @@ if (hasCliCommand) {
         expectedVersion: String(input.expectedVersion || ''),
         dryRun: input.dryRun !== false,
       });
+      if (result.ok && !result.dryRun && result.deferred) setTimeout(() => app.quit(), 150);
+      return result;
     });
 
     ipcMain.handle('update:installLocal', async (_event, input: Record<string, unknown> = {}) => {
-      return installUpdate({
+      const result = installUpdate({
         source: String(input.source || ''),
         target: String(input.target || root),
         targetFile: typeof input.targetFile === 'string' ? input.targetFile : undefined,
@@ -3131,6 +3133,8 @@ if (hasCliCommand) {
         preserve: Array.isArray(input.preserve) ? input.preserve.map(String) : undefined,
         dryRun: input.dryRun !== false,
       });
+      if (result.ok && !result.dryRun && result.deferred) setTimeout(() => app.quit(), 150);
+      return result;
     });
 
     ipcMain.handle('github:gh', async (_event, argv: string[] = []) => {

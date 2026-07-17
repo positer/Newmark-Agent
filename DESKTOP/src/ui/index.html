@@ -182,8 +182,8 @@ try {
   --border-hover: rgba(0,0,0,0.14);
   --border-active: rgba(0,0,0,0.20);
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.1);
-  --shadow-md: 0 4px 16px rgba(0,0,0,0.12);
-  --shadow-lg: 0 8px 32px rgba(0,0,0,0.15);
+  --shadow-md: 0 2px 8px rgba(40,52,86,0.07);
+  --shadow-lg: 0 6px 18px rgba(40,52,86,0.09);
   --accent-glow: rgba(74,104,223,0.25);
 }
 
@@ -1340,6 +1340,11 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   background: rgba(0,0,0,.14);
   user-select: text;
 }
+[data-theme="light"] .linked-plan-reader {
+  background: rgba(255,255,255,0.42);
+  border-color: rgba(55,68,105,0.1);
+  box-shadow: none;
+}
 .md-table-wrap {
   max-width: 100%;
   overflow-x: auto;
@@ -1628,6 +1633,11 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   flex-direction: column;
   overflow: hidden;
   transition: height var(--duration-slow) var(--ease-out-expo);
+}
+[data-theme="light"] .right-empty {
+  background: rgba(255,255,255,0.48);
+  border-color: rgba(55,68,105,0.11);
+  box-shadow: none;
 }
 
 #bottom.open {
@@ -2417,6 +2427,11 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   transform: translateY(0) translateZ(0);
   animation: fade-in-up 180ms var(--ease-out-expo);
 }
+[data-theme="light"] .stack-card {
+  background: rgba(255,255,255,0.72);
+  border-color: rgba(52,65,101,0.12);
+  box-shadow: 0 3px 12px rgba(40,52,86,0.08);
+}
 
 .stack-row {
   min-height: 30px;
@@ -2472,6 +2487,10 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   color: var(--text-bright);
   border-color: var(--glass-border-1);
 }
+[data-theme="light"] .stack-icon-btn:hover {
+  background: rgba(45,58,92,0.07);
+  border-color: rgba(45,58,92,0.11);
+}
 
 .stack-icon-btn:active { transform: scale(0.94); }
 .stack-icon-btn.warn { color: #ffcc44; }
@@ -2492,6 +2511,13 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   border-color: rgba(91,120,255,0.24);
   background: linear-gradient(90deg, rgba(91,120,255,0.10), rgba(18,20,34,0.94) 34%);
   box-shadow: none;
+}
+[data-theme="light"] #goal-bar {
+  background: linear-gradient(90deg, rgba(91,120,255,0.13), rgba(255,255,255,0.82) 36%, rgba(255,255,255,0.72) 100%);
+  border-color: rgba(74,104,223,0.2);
+}
+[data-theme="light"] #goal-bar.goal-paused {
+  background: linear-gradient(90deg, rgba(244,201,93,0.16), rgba(255,255,255,0.82) 36%, rgba(255,255,255,0.72) 100%);
 }
 
 #goal-bar .stack-row { grid-template-columns: auto minmax(0,1fr) auto; }
@@ -2678,6 +2704,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 .queue-item:hover { background: rgba(255,255,255,0.05); }
+[data-theme="light"] .queue-item:hover { background: rgba(45,58,92,0.055); }
 .queue-item.dragging { opacity: 0.58; transform: scale(0.99); }
 
 .queue-drag {
@@ -2728,6 +2755,16 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .queue-edit:focus {
   color: var(--text-bright);
 }
+[data-theme="light"] #queue-panel {
+  background: rgba(255,255,255,0.8);
+  color: var(--text);
+}
+[data-theme="light"] .queue-edit,
+[data-theme="light"] .queue-drag,
+[data-theme="light"] .stack-icon-btn.queue-guide-btn {
+  color: var(--text);
+}
+[data-theme="light"] .queue-edit::placeholder { color: var(--text-dim); }
 
 .stack-icon-btn.queue-guide-btn {
   width: auto;
@@ -3006,6 +3043,19 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 #submit-btn.stop-action {
   color: #fff;
 }
+
+[data-theme="light"] #submit-btn,
+[data-theme="light"] #submit-btn.working,
+[data-theme="light"] #submit-btn.running-action {
+  background: rgba(255,255,255,0.72);
+  border-color: rgba(47,60,96,0.16);
+  color: var(--text-bright);
+  box-shadow: 0 2px 10px rgba(38,50,84,0.1);
+}
+[data-theme="light"] #submit-btn:hover {
+  box-shadow: 0 4px 14px rgba(38,50,84,0.14);
+}
+[data-theme="light"] #submit-btn.stop-action { color: var(--text-bright); }
 
 @keyframes btn-pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
 
@@ -3869,6 +3919,49 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   margin-top: 2px;
   font-size: 11px;
   color: var(--text-dim);
+}
+[data-theme="light"] .memory-lab-view-menu,
+[data-theme="light"] .memory-lab-overview-actions,
+[data-theme="light"] .memory-lab-search input,
+[data-theme="light"] .memory-lab-graph,
+[data-theme="light"] .memory-lab-overview {
+  background: rgba(255,255,255,0.64);
+  border-color: rgba(52,65,101,0.11);
+}
+[data-theme="light"] .memory-lab-view-menu button.active,
+[data-theme="light"] .memory-lab-overview-actions button.active,
+[data-theme="light"] .memory-lab-node,
+[data-theme="light"] .memory-lab-overview-title,
+[data-theme="light"] .memory-lab-overview-status,
+[data-theme="light"] .memory-lab-overview-node {
+  background: rgba(255,255,255,0.78);
+  border-color: rgba(52,65,101,0.13);
+  color: var(--text);
+  box-shadow: 0 2px 8px rgba(40,52,86,0.07);
+}
+[data-theme="light"] .memory-lab-node:hover,
+[data-theme="light"] .memory-lab-view-menu button:hover,
+[data-theme="light"] .memory-lab-overview-actions button:hover,
+[data-theme="light"] .memory-lab-overview-actions select:hover {
+  background: rgba(238,241,249,0.92);
+}
+[data-theme="light"] .memory-lab-node.selected,
+[data-theme="light"] .memory-lab-overview-node.focus {
+  background: rgba(91,120,255,0.1);
+  color: var(--text-bright);
+  box-shadow: 0 0 0 3px rgba(91,120,255,0.08);
+}
+[data-theme="light"] .memory-lab-overview-grid {
+  opacity: 0.34;
+  background-image:
+    linear-gradient(rgba(55,68,105,0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(55,68,105,0.055) 1px, transparent 1px);
+}
+[data-theme="light"] .memory-lab-overview-tip,
+[data-theme="light"] .memory-lab-search-results {
+  background: rgba(255,255,255,0.94);
+  color: var(--text);
+  box-shadow: 0 8px 24px rgba(40,52,86,0.12);
 }
 
 .model-chip {
@@ -10122,14 +10215,38 @@ window.setInputMode = function(mode) {
 
 // === Sub-Window System ===
 window.openSubWin = function(title, html) {
+  var overlayOpen = els['sub-win-overlay'].classList.contains('open');
+  if (overlayOpen && !state.restoringSubWindow && state.activeSubWindowView) {
+    if (!state.subWindowStack) state.subWindowStack = [];
+    state.subWindowStack.push({
+      view: Object.assign({}, state.activeSubWindowView),
+      title: els['sub-win-title'].textContent,
+      html: els['sub-win-body'].innerHTML,
+      scrollTop: els['sub-win-body'].scrollTop || 0
+    });
+  }
   els['sub-win-title'].textContent = title;
   els['sub-win-body'].innerHTML = html;
   els['sub-win-overlay'].classList.add('open');
 };
 
 window.closeSubWin = function() {
+  var previous = state.subWindowStack && state.subWindowStack.pop();
+  if (previous) {
+    state.restoringSubWindow = true;
+    state.activeSubWindowView = previous.view;
+    els['sub-win-title'].textContent = previous.title;
+    els['sub-win-body'].innerHTML = previous.html;
+    requestAnimationFrame(function() {
+      els['sub-win-body'].scrollTop = previous.scrollTop || 0;
+      state.restoringSubWindow = false;
+    });
+    return;
+  }
   els['sub-win-overlay'].classList.remove('open');
   state.activeSubWindowView = null;
+  var win = els['sub-win'];
+  if (win) { win.style.left = ''; win.style.top = ''; win.style.margin = ''; }
 };
 
 function rerenderActiveSubWindowForLanguage() {
@@ -10161,6 +10278,7 @@ function formatModelStatus(status) {
 // === Settings ===
 window.openSettings = function(tab) {
   var activeTab = tab || state.settingsActiveTab || 'general';
+  var refreshingSettings = els['sub-win-overlay'].classList.contains('open') && state.activeSubWindowView && state.activeSubWindowView.name === 'settings';
   var html = '<div class="settings-tabs">' +
     '<button class="stab-btn" data-stab="general" onclick="window.settingsTab(\'general\')">' + esc(t('settings.general')) + '</button>' +
     '<button class="stab-btn" data-stab="models" onclick="window.settingsTab(\'models\')">' + esc(t('settings.models')) + '</button>' +
@@ -10174,7 +10292,9 @@ window.openSettings = function(tab) {
     '<div class="stab-panel" id="stab-archive">' + renderArchiveSettings() + '</div>' +
     '<div class="stab-panel" id="stab-updates">' + renderUpdateSettings() + '</div>';
   state.activeSubWindowView = { name: 'settings', tab: activeTab };
+  if (refreshingSettings) state.restoringSubWindow = true;
   window.openSubWin(t('settings.title'), html);
+  state.restoringSubWindow = false;
   window.settingsTab(activeTab);
 };
 
@@ -11396,7 +11516,8 @@ window.createAutomation = async function() {
 };
 
 // === Flow Editor ===
-window.showFlowEditor = function() {
+window.showFlowEditor = function(expandedIndex) {
+  var refreshingFlow = els['sub-win-overlay'].classList.contains('open') && state.activeSubWindowView && state.activeSubWindowView.name === 'flow';
   state.activeSubWindowView = { name: 'flow' };
   if (!state._flowsLoaded) {
     window.openSubWin(t('flow.title'), '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:20px;">' + esc(t('common.loading')) + '</div>');
@@ -11410,13 +11531,15 @@ window.showFlowEditor = function() {
   if (state.flowWorks.length === 0) {
     html += '<div style="font-size:12px;color:var(--text-dim);text-align:center;padding:20px;">' + esc(t('flow.empty')) + '</div>';
   } else {
-    for (var i = 0; i < state.flowWorks.length; i++) html += renderFlowItem(state.flowWorks[i], i);
+    for (var i = 0; i < state.flowWorks.length; i++) html += renderFlowItem(state.flowWorks[i], i, Number(expandedIndex) === i);
   }
   html += '</div><button class="flow-new-btn" onclick="window.newFlowWork()">+ ' + esc(t('flow.new')) + '</button>';
+  if (refreshingFlow) state.restoringSubWindow = true;
   window.openSubWin(t('flow.title'), html);
+  state.restoringSubWindow = false;
 };
 
-function renderFlowItem(work, idx) {
+function renderFlowItem(work, idx, expanded) {
   var componentsHtml = '';
   for (var j = 0; j < (work.components || []).length; j++) {
     var c = work.components[j];
@@ -11446,7 +11569,7 @@ function renderFlowItem(work, idx) {
     componentsHtml += '</div>';
   }
   return '<div class="flow-item">' +
-    '<div class="flow-item-header collapsed" onclick="this.classList.toggle(\'collapsed\')">' +
+    '<div class="flow-item-header' + (expanded ? '' : ' collapsed') + '" onclick="this.classList.toggle(\'collapsed\')">' +
     '<span class="arrow">></span><span class="flow-item-name">' + esc(work.name || t('flow.untitled')) + '</span>' +
     '<span class="flow-item-type">' + (work.components ? work.components.length : 0) + ' ' + esc(t('flow.components')) + '</span>' +
     '</div>' +
@@ -11470,6 +11593,7 @@ window.newFlowWork = function() {
     '<button class="sec-btn" onclick="window.showFlowEditor()">' + esc(t('common.cancel')) + '</button>' +
     '</div></div>';
   window.openSubWin(t('flow.new'), html);
+  state.activeSubWindowView = { name: 'flowNew' };
   setTimeout(function() { var inp = document.getElementById('new-flow-input'); if (inp) inp.focus(); }, 100);
 };
 
@@ -11478,7 +11602,8 @@ window.doNewFlowWork = function() {
   var name = inp ? inp.value.trim() : '';
   if (!name) name = t('flow.new') + ' ' + (state.flowWorks.length + 1);
   state.flowWorks.push({name: name, components: []});
-  window.showFlowEditor();
+  if (state.subWindowStack && state.subWindowStack.length) state.subWindowStack.pop();
+  window.showFlowEditor(state.flowWorks.length - 1);
 };
 
 window.addFlowComp = function(workIdx, type) {
@@ -11486,7 +11611,7 @@ window.addFlowComp = function(workIdx, type) {
     if (!state.flowWorks[workIdx].components) state.flowWorks[workIdx].components = [];
     if (type === 'logic') state.flowWorks[workIdx].components.push({type: 'logic', prompt: '', goto1: 0, goto2: 0});
     else state.flowWorks[workIdx].components.push({type: 'dialog', dialogMode: 'build', prompt: ''});
-    window.showFlowEditor();
+    window.showFlowEditor(workIdx);
   }
 };
 
@@ -11495,13 +11620,13 @@ window.changeCompType = function(workIdx, compIdx, newType) {
   if (!c) return;
   if (newType === 'logic' && c.type !== 'logic') state.flowWorks[workIdx].components[compIdx] = {type: 'logic', prompt: c.prompt || '', goto1: 0, goto2: 0};
   else if (newType === 'dialog' && c.type !== 'dialog') state.flowWorks[workIdx].components[compIdx] = {type: 'dialog', dialogMode: 'build', prompt: c.prompt || ''};
-  window.showFlowEditor();
+  window.showFlowEditor(workIdx);
 };
 
 window.deleteFlowComp = function(workIdx, compIdx) {
   if (state.flowWorks[workIdx] && state.flowWorks[workIdx].components) {
     state.flowWorks[workIdx].components.splice(compIdx, 1);
-    window.showFlowEditor();
+    window.showFlowEditor(workIdx);
   }
 };
 
@@ -14382,24 +14507,39 @@ function schedulePostStartupUiRendering() {
   var header = document.getElementById('sub-win-header');
   var win = document.getElementById('sub-win');
   if (!header || !win) return;
-  var offsetX, offsetY;
-  header.addEventListener('mousedown', function(e) {
-    if (e.target.tagName === 'BUTTON') return;
-    offsetX = e.clientX - win.getBoundingClientRect().left;
-    offsetY = e.clientY - win.getBoundingClientRect().top;
+  header.addEventListener('pointerdown', function(e) {
+    if (e.button !== 0 || e.target.closest('button')) return;
+    var rect = win.getBoundingClientRect();
+    var startX = e.clientX;
+    var startY = e.clientY;
+    var originLeft = rect.left;
+    var originTop = rect.top;
+    var padding = 8;
+    header.setPointerCapture(e.pointerId);
     win.classList.add('dragging');
     function onMove(ev) {
-      win.style.left = (ev.clientX - offsetX) + 'px';
-      win.style.top = (ev.clientY - offsetY) + 'px';
+      var left = originLeft + ev.clientX - startX;
+      var top = originTop + ev.clientY - startY;
+      left = Math.max(padding, Math.min(window.innerWidth - rect.width - padding, left));
+      top = Math.max(padding, Math.min(window.innerHeight - rect.height - padding, top));
+      win.style.position = 'fixed';
+      win.style.left = left + 'px';
+      win.style.top = top + 'px';
       win.style.margin = '0';
+      ev.preventDefault();
     }
-    function onUp() {
+    function onUp(ev) {
       win.classList.remove('dragging');
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      try { header.releasePointerCapture(ev.pointerId); } catch {}
+      header.removeEventListener('pointermove', onMove);
+      header.removeEventListener('pointerup', onUp);
+      header.removeEventListener('pointercancel', onUp);
     }
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    header.addEventListener('pointermove', onMove);
+    header.addEventListener('pointerup', onUp);
+    header.addEventListener('pointercancel', onUp);
+    e.preventDefault();
+    e.stopPropagation();
   });
 })();
 

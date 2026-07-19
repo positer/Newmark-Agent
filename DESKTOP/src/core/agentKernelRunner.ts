@@ -140,8 +140,9 @@ export function resetPublicAssistantDeltaFilter(agent: Agent): void {
 }
 
 function prepareAssistantToolVisibility(agent: Agent, definitions: unknown[]): void {
+  const names = definitions.map(toolDefinitionName);
   brokerOnlyAssistantBuffers.set(agent, {
-    brokerOnly: definitions.length === 1 && toolDefinitionName(definitions[0]) === TOOL_PROVISION_NAME,
+    brokerOnly: names.includes(TOOL_PROVISION_NAME) && names.every(name => name === TOOL_PROVISION_NAME || name === 'skill'),
     pending: [],
     released: false,
   });
@@ -374,7 +375,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   stopContextTimer();
   const kernel = new NativeAgent({
     streamFn: streamWithNewmarkProvider(agent, KernelStreamCompat),
-    toolExecution: 'sequential',
+    toolExecution: 'parallel',
     convertToLlm: (messages: KernelMessage[]) => messages.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'toolResult'),
     transformContext: async (messages: KernelMessage[], signal?: AbortSignal) => transformContext(agent, messages, signal),
     resolveTools: () => {
@@ -421,9 +422,32 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
     }
   };
 
+  const runWithCompressionResume = async (promptMessages: KernelMessage[], appendPromptToAgentHistory: boolean) => {
+    let resumeCount = 0;
+    let compressionAt = agent.lastCompression?.at || '';
+    for (;;) {
+      try {
+        const outcome = await runOnce(promptMessages, appendPromptToAgentHistory);
+        const compressed = !!agent.lastCompression?.at && agent.lastCompression.at !== compressionAt;
+        if (outcome.stopReason !== 'aborted' || !compressed || agent.activeProcessSignal()?.aborted || resumeCount >= 2) return outcome;
+      } catch (error) {
+        const compressed = !!agent.lastCompression?.at && agent.lastCompression.at !== compressionAt;
+        const aborted = error instanceof Error && error.name === 'AbortError';
+        if (!aborted || !compressed || agent.activeProcessSignal()?.aborted || resumeCount >= 2) throw error;
+      }
+      resumeCount += 1;
+      compressionAt = agent.lastCompression?.at || compressionAt;
+      kernel.state.messages = toKernelMessages(agent);
+      resetPublicAssistantDeltaFilter(agent);
+      resetAssistantToolVisibility(agent);
+      promptMessages = [{ role: 'user', content: agent.compressionContinuationPrompt(), timestamp: Date.now() }];
+      appendPromptToAgentHistory = false;
+    }
+  };
+
   try {
     const modelBeforeKernelRun = agent.model;
-    let lastTurn = await runOnce([], false);
+    let lastTurn = await runWithCompressionResume([], false);
     if (modelBeforeKernelRun && modelBeforeKernelRun !== agent.model && !tokens.some(t => t.text?.includes('[Model fallback]'))) {
       tokens.unshift({ type: 'text', text: `[Model fallback] ${modelBeforeKernelRun} unavailable; switched to ${agent.model}.` });
     }
@@ -441,7 +465,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       kernel.state.systemPrompt = [agent.buildSystemPrompt(), fallbackToolSurface.systemPromptNotice].filter(Boolean).join('\n\n');
       kernel.state.tools = toKernelTools(agent, fallbackToolSurface.definitions, toolProvisioning);
       await agent.waitForPlannedRouteRetry();
-      lastTurn = await runOnce([], false);
+      lastTurn = await runWithCompressionResume([], false);
     }
     if (kernelTurnFailed(agent, lastTurn)) {
       throw new ProviderRunError(normalizePublicProviderError(lastTurn.errorMessage || lastTurn.text, [agent.activeModelConfig()?.api_key]));
@@ -459,7 +483,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       }
       goalContinuations += 1;
       const goalPrompt = `Continue working toward this goal:\n${agent.goal.objective}\n\nProgress made. What remains?`;
-      lastTurn = await runOnce([{ role: 'user', content: goalPrompt, timestamp: Date.now() }], true);
+      lastTurn = await runWithCompressionResume([{ role: 'user', content: goalPrompt, timestamp: Date.now() }], true);
       if (kernelTurnFailed(agent, lastTurn)) {
         throw new ProviderRunError(normalizePublicProviderError(lastTurn.errorMessage || lastTurn.text, [agent.activeModelConfig()?.api_key]));
       }
@@ -594,8 +618,9 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   }
 }
 
-async function transformContext(agent: Agent, messages: KernelMessage[], signal?: AbortSignal): Promise<KernelMessage[]> {
-  if (signal?.aborted) return messages;
+async function transformContext(agent: Agent, messages: KernelMessage[], signal?: AbortSignal): Promise<KernelMessage[] | { messages: KernelMessage[]; replacementMessages: KernelMessage[] }> {
+  const processSignal = agent.activeProcessSignal();
+  if (processSignal?.aborted) return messages;
   if (!agent.config.getBool('context', 'auto_compress')) return messages;
   // Bind compaction to one request-scoped deployment snapshot. Re-reading the
   // active model after an Auto/fallback transition can pair the wrong model
@@ -608,13 +633,24 @@ async function transformContext(agent: Agent, messages: KernelMessage[], signal?
   // never be written into conversation state or revived after a reload.
   const newmarkMessages = publicHistoryFromKernelMessages(messages);
   const beforeCompression = JSON.stringify(newmarkMessages);
-  await agent.maybeCompress(newmarkMessages, provider, signal, compressionModel);
-  if (signal?.aborted) return messages;
-  if (agent.estimateContextTokens(newmarkMessages) >= Math.floor(agent.contextWindow(compressionModel).maxTokens * 0.82)) {
-    await agent.maybeCompress(newmarkMessages, null, signal, compressionModel);
+  const compressionAt = agent.lastCompression?.at || '';
+  await agent.maybeCompress(newmarkMessages, provider, processSignal, compressionModel);
+  if (processSignal?.aborted) return messages;
+  const primaryCompressed = JSON.stringify(newmarkMessages) !== beforeCompression;
+  if (primaryCompressed && agent.estimateContextTokens(newmarkMessages) >= Math.floor(agent.contextWindow(compressionModel).maxTokens * 0.82)) {
+    await agent.maybeCompress(newmarkMessages, null, processSignal, compressionModel, true);
   }
   if (JSON.stringify(newmarkMessages) === beforeCompression) return messages;
-  return toKernelMessagesFromHistory(newmarkMessages, agent);
+  const durableMessages = toKernelMessagesFromHistory(newmarkMessages, agent);
+  if (agent.lastCompression?.at && agent.lastCompression.at !== compressionAt) {
+    agent.recordContextCompressionStep();
+    const requestMessages = toKernelMessagesFromHistory([
+      ...newmarkMessages,
+      { role: 'system', content: agent.compressionContinuationPrompt() },
+    ], agent);
+    return { messages: requestMessages, replacementMessages: durableMessages };
+  }
+  return { messages: durableMessages, replacementMessages: durableMessages };
 }
 
 function buildRequestTaskFocus(agent: Agent, messages: KernelMessage[]): string {
@@ -633,7 +669,7 @@ function buildRequestTaskFocus(agent: Agent, messages: KernelMessage[]): string 
     'The latest real user-role message in the request is the current instruction and has highest user-level priority for this provider turn.',
     'Keep the user content in its original user role; this system block never copies or elevates user-authored text.',
     'Use older conversation history for facts, decisions, constraints, and continuity, not as a flat backlog.',
-    'If the current instruction asks to continue, resume, finish remaining work, or depends on earlier work, continue the nearest relevant unfinished task and its required dependencies.',
+    'If the current instruction asks to continue, resume, finish remaining work, or depends on earlier work, process applicable unfinished tasks in strict newest-to-oldest order: finish the newest unfinished task first, then the next-newest.',
     'If the current instruction is a new independent task, do not revive completed, superseded, abandoned, or unrelated historical tasks.',
     'Never assume an older task is complete merely because it is old; use explicit completion evidence and tracked state.',
     continuityAnchors.length ? `Explicit continuity anchors (supporting state; they do not override a new independent instruction):\n${continuityAnchors.join('\n')}` : 'No explicit goal or unfinished plan tracker is active; infer continuity only from the latest instruction and adjacent conversation state.',
@@ -757,7 +793,7 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
         if (!failed) emitBufferedAssistantText(agent, tokens);
         if (text && !failed) agent.emitWorkEvent({ type: realToolCalls.length ? 'response' : 'final_response', content: text });
         if ((text || realToolCalls.length) && event.message.stopReason !== 'aborted' && !failed) {
-          if (text && !realToolCalls.length) agent.chatMessages.push({ role: 'assistant', content: text, mode: agent.modeName(), model: agent.model, timestamp: agent.nowLabel() });
+          if (text && !realToolCalls.length) agent.chatMessages.push({ role: 'assistant', content: text, mode: agent.modeName(), model: agent.model, timestamp: agent.nowLabel(), runId: agent.currentWorkRunId() || undefined });
           const historyMessage = toHistoryMessage(publicMessage);
           // Keep tool-call metadata, but never replay a hidden-reasoning line
           // that was deliberately removed from the public completed message.
@@ -1122,7 +1158,8 @@ function selectTaskToolDefinitions(task: string, definitions: unknown[]): unknow
     includePrefix('memory_lab_');
     names.filter(name => name.startsWith('memory_lab_')).forEach(name => priority.add(name));
   }
-  if (skillIntent) include('skill_download');
+  if (skillIntent) include('skill', 'skill_download');
+  else include('skill');
   if (flowIntent) includePrefix('flow_');
   if (planIntent) include('linked_plan');
 
@@ -1134,7 +1171,7 @@ function selectTaskToolDefinitions(task: string, definitions: unknown[]): unknow
       selected.add(name);
     }
   }
-  if (selected.size) include('question');
+  if (selected.size && !(selected.size === 1 && selected.has('skill'))) include('question');
   return definitions
     .map((definition, index) => ({ definition, name: names[index] || toolDefinitionName(definition), index }))
     .filter(entry => selected.has(entry.name))
@@ -1156,7 +1193,7 @@ function toKernelTools(agent: Agent, definitions?: unknown[], provisioning?: Too
       description: String(fn.description || ''),
       parameters: fn.parameters || { type: 'object', properties: {}, required: [] },
       prepareArguments: parseToolArgs,
-      executionMode: 'sequential' as const,
+      executionMode: 'parallel' as const,
       execute: async (_toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) => {
         if (signal?.aborted) throw abortError();
         const name = String(fn.name || '');
@@ -1194,7 +1231,8 @@ function toKernelTools(agent: Agent, definitions?: unknown[], provisioning?: Too
         else if (visionImage.image) content.push({ type: 'image', image: visionImage.image, mimeType: visionImage.mimeType });
         if (directImage) content.push({ type: 'image', image: directImage, mimeType: 'image/png' });
         const terminate = shouldTerminateAfterToolResult(name);
-        return { content, details: { tool: name, ok: true, terminate, visionImagePath: visionImage.imagePath || undefined, ephemeralVisionImage: !!visionImage.image }, terminate };
+        const launchReceipt = continuationToolLaunchReceipt(name, params, text);
+        return { content, details: { tool: name, ok: true, terminate, ...(launchReceipt ? { launchReceipt } : {}), visionImagePath: visionImage.imagePath || undefined, ephemeralVisionImage: !!visionImage.image }, terminate };
       },
     };
   }).filter((tool: KernelTool) => !!tool.name);
@@ -1327,6 +1365,26 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
     }
     return result;
   }
+  if (name === 'skill') {
+    let params: Record<string, unknown> = {};
+    try { params = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
+    const exactName = String(params.name || '').trim();
+    if (exactName) {
+      const loaded = agent.skills.load(exactName);
+      if (!loaded) return JSON.stringify({ ok: false, error: `Skill not found or disabled: ${exactName}`, available: agent.skills.search(exactName, 8).map(skill => ({ name: skill.name, description: skill.description })) });
+      return [
+        `<skill_content name="${loaded.skill.name.replace(/[<>&"]/g, '')}">`,
+        loaded.content.trim(),
+        `Base directory: ${loaded.skill.path}`,
+        '<skill_files>',
+        ...loaded.files.map(file => `<file>${file}</file>`),
+        '</skill_files>',
+        '</skill_content>',
+      ].join('\n');
+    }
+    const query = String(params.query || '').trim();
+    return JSON.stringify({ ok: true, matches: agent.skills.search(query, 8).map(skill => ({ name: skill.name, description: skill.description })) });
+  }
   if (name === 'image_generate') return await checked(agent.handleImageGeneration(args, signal));
   if (name === 'image_inspect') return await checked(agent.handleImageInspect(args));
   if (name === 'flow_run') return await checked(agent.handleFlowRun(args, signal));
@@ -1372,6 +1430,14 @@ function shouldTerminateAfterToolResult(name: string): boolean {
   return name === 'flow_run'
     || name.startsWith('automation_')
     || name === 'question';
+}
+
+function continuationToolLaunchReceipt(name: string, params: Record<string, unknown>, text: string): { phase: 'started'; continueBuild: true } | null {
+  const action = String(params.action || '').toLowerCase();
+  if (name === 'terminal_takeover' && action === 'start') return { phase: 'started', continueBuild: true };
+  if (name === 'computer_use' && action === 'takeover_start') return { phase: 'started', continueBuild: true };
+  if (name === 'browser_use' && /"ok"\s*:\s*true/i.test(text)) return { phase: 'started', continueBuild: true };
+  return null;
 }
 
 function toKernelMessages(agent: Agent): KernelMessage[] {

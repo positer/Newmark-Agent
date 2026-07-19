@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.0"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.1.0-blue"></a>
+  <a href="https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.1"><img alt="Development" src="https://img.shields.io/badge/development-dev--0.1.1-blue"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -18,6 +18,18 @@
 Newmark Agent brings model routing, persistent workspaces, tools, subagents, workflows, and local state into one desktop application. It is designed for technical users who want to work with their own model providers without sending workspace prompts to an external routing service.
 
 > Newmark Agent is under active development. The current Windows packages are unsigned prerelease builds.
+
+### dev-0.1.2 kernel study
+
+The first `dev-0.1.2` slice is a source-driven Agent-kernel audit rather than a runtime rewrite. The complete [`bojieli/ai-agent-book`](https://github.com/bojieli/ai-agent-book) repository is retained as an ignored, independent Git reference under `_ref/ai-agent-book` and fixed at commit `fb2afa9f9473ecadf59522adb38def72c0124fe3`. Its ten chapters were indexed, with focused comparison of stable context and KV cache behavior, context-aware compression, active tool discovery, asynchronous interruption, parallel tools, Coding Agent state hints, staged prompts, and completion semantics.
+
+The comparison confirms that Newmark already implements the main production boundaries represented by those teaching examples: stable prompt caching, request-scoped task focus, atomic compression continuation, bounded on-demand tool schemas, parallel all-receipt tool batches, target-bound Guide/Next queues, and exactly one final result for normal completion. The remaining `dev-0.1.2` candidates are measurement-first: cache/prefix observability, a unified compression-retention benchmark, tool-provision token/success evaluation, and a consolidated interruption/finalization trajectory contract. No Agent kernel code, public interface, version, tag, or release asset changes in this study slice. Detailed evidence is recorded in `archive/20260719-222856-dev-0.1.2-ai-agent-book-kernel-study.md`.
+
+### dev-0.1.1 maintenance release
+
+The `dev-0.1.1` maintenance release adds run-bound Build/final-response adjacency, guaranteed final results for normally completed Build runs, bounded on-demand skill discovery and loading, restart-safe conversation archiving, Memory Lab tag graph v2 with multi-parent paths and legacy migration, temporary provider disable/restore, per-conversation model selection, and per-conversation Guide/Next input-mode memory. Guide is always rendered as a right-aligned user message: collapsed Builds list Guides beneath the primary Build submission, while expanded Builds interleave each Guide at its exact work-event sequence. Tool calls emitted together execute concurrently behind an all-receipts barrier. Persistent terminal takeover, Computer Use takeover, and Browser-Use steps continue after a successful launch/action receipt without waiting for session closure. Memory Lab rebuilds inspect final tag keys, component tags, and every `tagPaths` element so legacy `#A/B/C` results become independent nodes and edges, while hyphens remain inside names. Context compression remains a completed Build activity and resumes the same run before producing its final result. Windows MSI/ZIP packages are validated and installed locally before remote prerelease publication.
+
+The final release also freezes crashed Build timers as interrupted, orders unfinished historical work newest-to-oldest, triggers context compression only at 80% of the active model context window and targets 20%, and lets model validation persist explicit context-window limits returned by provider catalogs.
 
 ## Why Newmark
 
@@ -58,6 +70,8 @@ The shared validation service verifies text, streaming, strict JSON, tool select
 - Context compression and archived conversations
 - Local, external-folder, WSL, and SSH-linked workspace support
 
+Conversation model choices are persisted per conversation as either Auto intent or a provider/model deployment. A temporarily disabled provider remains visible in Settings, but its models are excluded from routing and selection; re-enabling it restores a preserved conversation preference when available.
+
 ### Tools and Automation
 
 - Compact all-tool discovery with bounded, on-demand JSON Schema provisioning
@@ -69,6 +83,8 @@ The shared validation service verifies text, streaming, strict JSON, tool select
 - Git and GitHub operations
 - Skills, Flow workflows, recurring automation, and Memory Lab
 - CLI mode with consistent schemas, policy enforcement, JSON envelopes, and exit codes
+
+Skills use progressive disclosure: the initial prompt contains only a bounded relevant metadata shortlist, while the read-only `skill` tool searches the catalog or loads one named `SKILL.md` on demand. Build final replies carry their owning run identity and are merged immediately after that Build block, including after conversation switching and snapshot replay.
 
 Computer Use follows an observe-before-act contract. Screenshots are one-use model inputs: they are removed after preparation and are not written to chat history, public work records, or archives.
 
@@ -184,6 +200,10 @@ Important boundaries:
 - The startup cover and hydrated application share one `BrowserWindow`; prewarm does not open a second splash window.
 - OpenAI Responses turns request `text/event-stream`, consume text/tool deltas incrementally, and require an explicit `response.completed` terminal event.
 - Context compression binds one provider/model deployment snapshot for the full compression request and records the concrete model ID used.
+- A successful compression atomically replaces both the active Kernel run context and persisted Kernel state. The detailed resume prompt is request-only, so later tool subturns continue from the compacted history instead of repeatedly compressing the same stale prefix.
+- Reload recovery converts persisted `running` Build records from a prior crashed or force-closed runtime to `interrupted` with a frozen end time before rendering, so a new task cannot inherit their live duration. Recompression requires meaningful growth beyond the compacted baseline, and unfinished historical tasks are resumed newest-to-oldest.
+- Context compression now uses only the active model context window: it triggers at approximately `80%` of `max_tokens` and compacts toward `20%`; the legacy character threshold no longer causes early compression.
+- Model validation reads explicit context-window limits from provider model-list/catalog responses, persists the verified response value into the deployment model configuration, and ignores output-token-only fields.
 - The Agent harness rebuilds a non-persistent request-focus contract for every provider/tool subturn. It treats the latest real user-role message as the current instruction, resumes earlier work only when the instruction or explicit unfinished tracker requires continuity, and never copies user-authored prompt text into the higher-priority system block.
 - Compression summaries use explicit active/unfinished, completed/background, decisions, verification, and file sections. The first historical user task is no longer retained verbatim forever; a single post-compression system anchor immediately resumes the latest retained real user instruction without copying its text into system role, and recent context still starts at a complete user turn so tool and conversation continuity remain intact.
 - Build work appears as a collapsible narrative timeline: public reply text stays readable while repeated commands, file edits, searches, and image inspections are summarized by activity.

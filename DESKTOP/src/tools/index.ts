@@ -317,11 +317,12 @@ export class ToolExecutor {
       t('linked_plan', 'Read or update the current conversation linked Markdown plan. Update requires the current expected_revision.', { action: { type: 'string', enum: ['get', 'update'] }, markdown: { type: 'string' }, expected_revision: { type: 'number' } }, ['action']),
       t('question', 'Ask user a multiple-choice question', { questions: { type: 'array' } }, ['questions']),
       t('skill_download', 'Download a skill', { name: { type: 'string' }, source: { type: 'string' } }, ['name', 'source']),
+      t('skill', 'Search enabled skill metadata or load one exact skill body on demand. Use query when unsure, then name to load the selected skill.', { query: { type: 'string', maxLength: 200 }, name: { type: 'string', maxLength: 200 } }, []),
       t('flow_list', 'List available Newmark Flow workflows from the Flow folder so the agent can choose one.', {}, []),
       t('flow_save', 'Design or update a Newmark Flow workflow. Components must be an array of dialog/logic objects compatible with *.Flow.json.', { name: { type: 'string' }, components: { type: 'array' } }, ['name', 'components']),
       t('flow_run', 'Trigger an existing Newmark Flow workflow by name with optional input and start component.', { name: { type: 'string' }, input: { type: 'string' }, start: { type: 'number' } }, ['name']),
       t('memory_lab_read', 'Read Memory Lab index.json, its path, and usage instructions. Optionally pass component/name/slug to read a memory component core markdown.', { component: { type: 'string' }, name: { type: 'string' }, slug: { type: 'string' } }, []),
-      t('memory_lab_update', 'Create or update a Memory Lab persistent memory component. Agent must pass name, description, hierarchical tags, concrete markdown content, and optional kind=file|folder. Routed through the Agent runtime so MemoryLabIndexAgent can organize it with the current working model.', { name: { type: 'string' }, description: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, content: { type: 'string' }, kind: { type: 'string', enum: ['file', 'folder'] } }, ['name', 'tags', 'content']),
+      t('memory_lab_update', 'Create or update a Memory Lab persistent memory component. Tag names are independent; optional tagPaths expresses a multi-parent DAG. Legacy slash paths such as #A/B/C migrate to separate nodes on rebuild; hyphens stay inside one tag name.', { name: { type: 'string' }, description: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, tagPaths: { type: 'array', items: { type: 'array', items: { type: 'string' } } }, content: { type: 'string' }, kind: { type: 'string', enum: ['file', 'folder'] } }, ['name', 'tags', 'content']),
       t('memory_lab_reindex', 'Rebuild and organize Memory Lab index links. Routed through Agent runtime when invoked by the model.', {}, []),
       t('automation_list', 'List persisted Newmark automations so the agent can inspect scheduled work.', {}, []),
       t('automation_create', 'Create a persisted Newmark automation. Supports once, loop, and schedule conditions. The prompt is what the agent will run later.', {
@@ -733,6 +734,7 @@ export class ToolExecutor {
           }
           return '[question] Options sent to user.';
         case 'skill_download': return await this.skillDownload(g('name'), g('source'), context.signal);
+        case 'skill': return '[skill] Routed to Agent runtime.';
         case 'flow_list': return this.flowList();
         case 'flow_save': return this.flowSave(g('name'), (args as Record<string, unknown>).components);
         case 'flow_run': return `[flow_run] Routed to Agent runtime: ${g('name')}`;

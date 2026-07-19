@@ -53,7 +53,10 @@ async function handle(request: UtilityAgentRequest): Promise<unknown> {
       return await new Promise<never>(() => undefined);
     }
     if (request.params.message === '__spawn_descendant_tree__') {
-      const markerDelayMs = 15_000;
+      // Keep the delayed child marker beyond the production force-stop budget.
+      // Electron 43 startup can consume several seconds before replacement
+      // ping, so a 15s marker made this lifecycle assertion timing-sensitive.
+      const markerDelayMs = 60_000;
       const readyPath = path.join(root, 'utility-descendant-ready.json');
       const markerPath = path.join(root, 'utility-descendant-marker.json');
       const lateTriggerPath = path.join(root, 'utility-descendant-late-trigger');

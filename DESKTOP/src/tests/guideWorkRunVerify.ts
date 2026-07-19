@@ -135,6 +135,93 @@ async function verifySteeringCanArriveBeforeTheFirstProviderTurn(): Promise<void
     'continue() still consumes its pre-existing steering queue before the provider turn');
 }
 
+async function verifyParallelToolBatchBarrier(): Promise<void> {
+  const events: string[] = [];
+  let providerCalls = 0;
+  const toolCall = (id: string, name: string): any => ({ type: 'toolCall', id, name, arguments: {} });
+  const kernel = new KernelAgent({
+    initialState: {
+      model: MODEL,
+      tools: [
+        { name: 'fast', label: 'fast', description: '', parameters: {}, execute: async () => { events.push('fast-start'); await new Promise(resolve => setTimeout(resolve, 15)); events.push('fast-end'); return { content: [{ type: 'text', text: 'fast-ok' }] }; } },
+        { name: 'slow', label: 'slow', description: '', parameters: {}, execute: async () => { events.push('slow-start'); await new Promise(resolve => setTimeout(resolve, 45)); events.push('slow-end'); throw new Error('slow-failed'); } },
+      ],
+    },
+    toolExecution: 'parallel',
+    shouldStopAfterTurn: ({ message }) => message.role === 'assistant' && !message.content.some(item => item.type === 'toolCall'),
+    streamFn: async (_model, context) => {
+      providerCalls += 1;
+      if (providerCalls === 2) {
+        assert.deepEqual(events, ['fast-start', 'slow-start', 'fast-end', 'slow-end'], 'the next provider step starts only after the complete concurrent batch settles');
+        const receipts = context.messages.filter(message => message.role === 'toolResult');
+        assert.equal(receipts.length, 2, 'the batch barrier exposes all success/failure receipts together');
+        assert.equal(receipts.filter(message => message.role === 'toolResult' && message.isError).length, 1, 'one failed concurrent call remains a failure receipt instead of rejecting the whole batch');
+      }
+      const stream = createAssistantMessageEventStream();
+      const message = providerCalls === 1
+        ? { ...assistant(''), content: [toolCall('fast-call', 'fast'), toolCall('slow-call', 'slow')], stopReason: 'toolUse' }
+        : assistant('parallel-complete');
+      queueMicrotask(() => stream.push({ type: 'done', reason: message.stopReason, message }));
+      return stream;
+    },
+  });
+  await kernel.prompt('run tools concurrently');
+  assert.equal(providerCalls, 2);
+}
+
+async function verifyCompressionReplacesLiveToolTurnContext(): Promise<void> {
+  const oldPrefix = `OLD_CONTEXT_PREFIX_${'x'.repeat(4000)}`;
+  const transientContinuation = 'TRANSIENT_COMPRESSION_CONTINUATION';
+  let compressionCount = 0;
+  let providerCalls = 0;
+  const providerContexts: AgentMessage[][] = [];
+  const kernel = new KernelAgent({
+    initialState: {
+      model: MODEL,
+      messages: [{ role: 'user', content: oldPrefix, timestamp: Date.now() }],
+      tools: [{
+        name: 'step',
+        label: 'step',
+        description: '',
+        parameters: {},
+        execute: async () => ({ content: [{ type: 'text', text: 'step-ok' }] }),
+      }],
+    },
+    transformContext: async messages => {
+      const text = JSON.stringify(messages);
+      if (!text.includes('OLD_CONTEXT_PREFIX')) return messages;
+      compressionCount += 1;
+      const replacementMessages: AgentMessage[] = [{ role: 'user', content: 'COMPRESSED_CONTEXT', timestamp: Date.now() }];
+      return {
+        messages: [...replacementMessages, { role: 'user', content: transientContinuation, timestamp: Date.now() }],
+        replacementMessages,
+      };
+    },
+    streamFn: async (_model, context) => {
+      providerCalls += 1;
+      providerContexts.push(context.messages.slice());
+      const stream = createAssistantMessageEventStream();
+      const message = providerCalls === 1
+        ? { ...assistant(''), content: [{ type: 'toolCall', id: 'step-call', name: 'step', arguments: {} } as any], stopReason: 'toolUse' as const }
+        : assistant('done after compression');
+      queueMicrotask(() => stream.push({ type: 'done', reason: message.stopReason, message }));
+      return stream;
+    },
+  });
+
+  await kernel.prompt('current task');
+  assert.equal(providerCalls, 2, 'the tool receipt starts one provider continuation');
+  assert.equal(compressionCount, 1, 'one stale source context is compressed exactly once across tool subturns');
+  assert.match(JSON.stringify(providerContexts[0]), /TRANSIENT_COMPRESSION_CONTINUATION/,
+    'the immediate post-compression request receives the one-time continuation prompt');
+  assert.doesNotMatch(JSON.stringify(providerContexts[1]), /OLD_CONTEXT_PREFIX|TRANSIENT_COMPRESSION_CONTINUATION/,
+    'later tool subturns use the durable compressed context without the stale prefix or transient prompt');
+  assert.match(JSON.stringify(providerContexts[1]), /COMPRESSED_CONTEXT|step-ok/,
+    'the durable replacement continues with new assistant and tool messages appended');
+  assert.doesNotMatch(JSON.stringify(kernel.state.messages), /OLD_CONTEXT_PREFIX|TRANSIENT_COMPRESSION_CONTINUATION/,
+    'kernel state persists only the durable compressed context for later runs');
+}
+
 class ClosedGateRunner extends Agent {
   readonly enteredFirstProcess: Promise<void>;
   private signalEntered!: () => void;
@@ -725,6 +812,8 @@ function verifyStatefulHiddenReasoningAndLiveToolArgsSanitization(): void {
 async function main(): Promise<void> {
   await verifySteeringWinsTheFinalBoundary();
   await verifySteeringCanArriveBeforeTheFirstProviderTurn();
+  await verifyParallelToolBatchBarrier();
+  await verifyCompressionReplacesLiveToolTurnContext();
   await verifyTaskBoundaryGuideIsDeferredAndContinued();
   await verifyGuideInPendingEmptyFinalizeWindowIsApplied();
   await verifyGuideFromCompletionEventAutoContinues();

@@ -1,5 +1,72 @@
 # Newmark Agent Overview
 
+## dev-0.1.2 Kernel Study Status (2026-07-19)
+
+The first `dev-0.1.2` slice is complete as a source and experiment audit; it intentionally makes no Agent-kernel or public-interface change. The full `bojieli/ai-agent-book` repository is cloned as an independent ignored repository at `_ref/ai-agent-book`, detached at `fb2afa9f9473ecadf59522adb38def72c0124fe3`, with `git fsck` passing, tracked status empty, and `_ref/` confirmed against `.gitignore:6`. The Apache-2.0 source remains local reference material and is excluded from Newmark tracking and packaging.
+
+Reference-tree responsibilities:
+
+```text
+_ref/
+└── ai-agent-book/                  # ignored, independent upstream study repository
+    ├── book/                       # Chinese source chapters 1-10 and compiled book assets
+    ├── chapter1/                   # Agent/context foundations and ReAct experiments
+    ├── chapter2/                   # context, KV cache, Skills and compression experiments
+    ├── chapter3/                   # memory, RAG and structured knowledge experiments
+    ├── chapter4/                   # tools, active selection and asynchronous runtime experiments
+    ├── chapter5/                   # production-style Coding Agent and code-as-tool experiments
+    ├── chapter6/                   # Agent evaluation guides and benchmark integrations
+    ├── chapter7/                   # post-training and tool-learning reproduction guides
+    ├── chapter8/                   # experience learning, discovery and self-evolving tools
+    ├── chapter9/                   # speech, Computer Use and embodied interaction
+    └── chapter10/                  # staged roles, handoff and multi-Agent coordination
+```
+
+The focused comparison covers Chapters 1, 2, 4, 5, 8 and 10. Newmark already has stable system-prompt caching, a request-scoped current-instruction contract, atomic compression replacement with same-run continuation, progressive tool-schema provisioning, parallel tool batches with an all-receipts barrier, durable Guide/Next ownership, and a stronger completion boundary than the upstream teaching loops. The actionable gaps are measurement gaps: provider cache/prefix observability, a scored compression-retention fixture, a combined tool-provision token/success workload, and one consolidated response trajectory for interruption, queue recovery, receipt completeness and final-answer uniqueness.
+
+Offline upstream experiments were reproduced locally. Four simulated independent tools measured `4.53 s` serial versus `1.52 s` parallel (`2.98x`); interruption cancelled three partial tasks and the same runtime completed a replacement task; checkpoint restore retained three trajectory events and two task progress values. With 126 tools across eight scripted tasks, active discovery injected `7,796` total tokens and completed `8/8`, compared with `93,040` and `8/8` for full injection; one-shot prefiltering injected `8,236` but completed only `4/8`. These are mechanism results from an offline mock, not production-model quality claims. Windows execution requires `PYTHONUTF8=1` because the upstream demo prints characters unsupported by the default GBK console.
+
+The complete source map, gap matrix, commands, limitations and next-candidate acceptance gates are recorded in `archive/20260719-222856-dev-0.1.2-ai-agent-book-kernel-study.md`. No version bump, tag or release publication is part of this slice.
+
+Verification is complete: `typecheck` passed; lint passed with zero errors and 31 existing warnings; the focused normal-chat, 58/58 tool-provision, Guide/work-run and runtime-isolation baselines passed; `npm.cmd test` passed its `1204/1204` main assertions and every chained suite; and `npm.cmd run test:dev010` passed. The only repeated build warning is the existing jsdom `xhr-sync-worker.js` externalization notice.
+
+## dev-0.1.1 Maintenance Status (2026-07-19)
+
+The `dev-0.1.1` source maintenance slice is implemented and verified. The preceding public `dev-0.1.0` upload is complete. The final Windows MSI/ZIP release build is installed under `C:\Program Files\Newmark Agent` for user acceptance; remote prerelease publication remains intentionally paused.
+
+Implemented boundaries:
+
+- Build transcript final replies persist `runId`, deduplicate by run/event identity, and render immediately after the owning Build block.
+- Every normally completed Build run persists exactly one final result; failed and interrupted runs do not synthesize a completion summary.
+- Skills expose bounded metadata first and load exact bodies through a read-only `skill` query/name tool; frontmatter cache fingerprints include SHA-256 content digests.
+- Archive IPC peeks without allocating a cold runtime, stops resident writers before deletion, returns structured receipts, and lets the host Agent own current-workspace deletion so stale writer caches cannot resurrect a conversation.
+- Memory Lab index v2 stores independent tag names plus separate multi-parent paths, migrates legacy `#A/B/C` and direction-word paths deterministically, preserves hyphens inside tag names, and rejects or warns on cycles.
+- Reindex applies slash migration to legacy tag keys, aliases, component `tags`, and each node inside `tagPaths`, then verifies that the rebuilt tag graph and component metadata contain no slash-bearing tag result.
+- High-confidence multilingual tag synonyms share one node and remain as aliases; reindex selects the primary name from the current user language and changes it when the language setting changes.
+- The Memory Lab animated gradient border is state-bound to an active reindex request, disables duplicate rebuild clicks, exposes `aria-busy`, and clears in the Promise `finally` path; ordinary loading and idle graph display have no activity border.
+- Provider cards use semantic Lucide icon buttons with localized labels, confirmation for permanent delete, and temporary enable/disable state; disabled providers are excluded from model selection and routing candidates.
+- Conversation model selection persists Auto intent or a qualified provider/model deployment, temporarily falls back when unavailable, and restores the original preference after re-enabling the provider.
+- Guide/Next input mode persists independently for every conversation and is restored on conversation switch, runtime recreation, and application restart.
+- Context compression remains inside the owning Build as a completed activity. Compression-side Kernel cancellation resumes the same `runId` using the compression summary, Build primary prompt, latest Guide, and current activity snapshot, then completes the normal final-result boundary.
+- Compression context transforms return separate request and durable message sets. The native loop atomically replaces its live context and Kernel state with the durable compacted set, while the detailed continuation prompt appears only in the immediate post-compression provider request; consecutive tool subturns therefore cannot recompress the same pre-compression history.
+- Startup loading migrates orphaned persisted `running` work runs to `interrupted` with a frozen persisted end boundary, while ordinary in-memory conversation switching leaves live runs untouched. Compression also records its compacted baseline and suppresses same-context retries until meaningful growth; continuation prompts and compression summaries order applicable unfinished tasks newest-to-oldest.
+- The active compression budget is model-token-only: `80%` of the current deployment `max_tokens` triggers compaction and the target is `20%`; the former fixed character threshold is retained only as a migrated setting and cannot trigger early compression.
+- Model validation inspects the selected model's raw provider catalog response for explicit context-window fields such as `context_window`, `context_length`, `max_context_tokens`, and `input_token_limit`. Valid response values replace the deployment `max_tokens`; output-only limits remain ignored.
+- Guide presentation uses the persisted work-event sequence as its only ordering source. Every Guide is a right-aligned user message; collapsed Builds list Guides after the primary submission, and expanded Builds place each Guide between the exact Build phases it separated.
+- Provider tool-call batches execute concurrently. A batch-level `Promise.all` barrier waits for every success or failure receipt before the next provider step, while preserving each failed call as an ordinary tool failure receipt instead of rejecting the whole batch.
+- `terminal_takeover.start`, `computer_use.takeover_start`, and successful Browser-Use actions publish launch receipts that allow the Build to continue immediately; persistent session/window/overlay closure is a later lifecycle action and never gates the current Build step.
+
+Verification completed on Windows:
+
+- `npm.cmd test`: passed, including the full runtime, UI, archive, model-routing, tool provisioning, and computer-use suite.
+- Main feature verification: `1204/1204` assertions passed.
+- Electron/CDP host gate: `BROWSER_USE_ELECTRON_HOST_OK assertions=61`.
+- Installed Memory Lab CDP state gate: `idle=true`, `running=true`, `complete=true`; installed and unpacked executables match.
+- GitHub repository About now includes a concise product description, the Releases homepage, and ten capability topics. No `dev-0.1.1` release asset was uploaded during this step.
+- Official boundary review: OpenAI Codex Skills documentation confirms bounded initial metadata and progressive disclosure; OpenCode documentation confirms on-demand loading through a native skill tool.
+
+Final cross-platform release validation completed on 2026-07-20. Windows MSI/ZIP passed resource verification and all release CLI smoke checks. WSL Linux passed its complete suite, the 20-run latency benchmark, AppImage/deb/unpacked ZIP packaging, and real GUI Bash/sh round-trip smoke. The `dev-0.1.1` tag and prerelease are ready for publication with all five assets.
+
 ## Current dev-0.1.0 Release Line
 
 The working release line is `dev-0.1.0`. The agent request path now emits opt-in segmented latency diagnostics, coalesces high-frequency conversation persistence behind an in-memory cache and single writer, and caches stable prompt/tool definitions with precise invalidation. Windows-to-WSL launches copy the host bundle by content hash into the Linux cache and reuse single-flight runtime startup promises; the UI becomes interactive before WSL detection, update checks, or prewarming finish. A 20-run local streaming benchmark is archived at `archive/2026-07-17-dev-0.1.0-linux-agent-latency.json` and currently passes the hot first-event, hot first-token, and cold local-overhead gates.
@@ -437,7 +504,7 @@ DESKTOP/
 - `toolArgumentValidator.ts`: recursively closed JSON Schema registration/validation used by model-authored and direct CLI tool calls before policy or execution.
 - Conversation persistence in `agent.ts` stores workspace-local `conversations/state.json`, saves conversation Plan items and user-image attachment metadata with each conversation, hydrates the content-addressed assets on reload, sanitizes visible assistant output, derives titles from first user messages, exposes read-only snapshots by explicit conversation ID, and supports visible switching while another conversation continues through its own runner. Conversation archiving writes attachment copies under `archive/assets/user-images/` and links them from the archived Markdown.
 - `agentKernel/`: native Newmark TypeScript agent-loop package. `agent.ts` owns the queue-capable Agent facade, `agent-loop.ts` owns turn lifecycle/tool execution/steering and follow-up draining, `event-stream.ts` and `stream-types.ts` normalize provider stream events, and `types.ts` defines kernel message/model/tool/event contracts. This folder is source code, not vendor material.
-- `agentKernelRunner.ts`: bridge from the Newmark `Agent` facade into the native kernel. It converts Newmark conversation history into kernel messages, maps provider streaming/tool-call output into kernel events, executes Newmark tools, records visible work events, notifies the conversation runtime when queued user messages actually start, handles tool results, model fallback, Memory Lab/Flow/automation/subagent routing, context compression, and Goal continuation. The active run `AbortSignal` reaches ordinary and special tools. For Computer Use, it accepts only trusted one-use `vision_image_path` or WSL `vision_image_data_url` payloads, prepares structured current-turn model input, strips both transport fields from visible/persisted text, and deletes filesystem captures after preparation or abort. Tool definitions are built once per Agent turn and reused by provider streaming plus kernel execution; context conversion is skipped when auto compression is off; high-frequency tool workflow rows defer full state writes to existing persistence points.
+- `agentKernelRunner.ts`: bridge from the Newmark `Agent` facade into the native kernel. It converts Newmark conversation history into kernel messages, maps provider streaming/tool-call output into kernel events, executes Newmark tools, records visible work events, notifies the conversation runtime when queued user messages actually start, handles tool results, model fallback, Memory Lab/Flow/automation/subagent routing, context compression, and Goal continuation. Compression returns a request message set plus an optional durable replacement set so one-time continuation instructions do not become permanent context. The active run `AbortSignal` reaches ordinary and special tools. For Computer Use, it accepts only trusted one-use `vision_image_path` or WSL `vision_image_data_url` payloads, prepares structured current-turn model input, strips both transport fields from visible/persisted text, and deletes filesystem captures after preparation or abort. Tool definitions are built once per Agent turn and reused by provider streaming plus kernel execution; context conversion is skipped when auto compression is off; high-frequency tool workflow rows defer full state writes to existing persistence points.
 - `conversationKernel.ts`: target-aware conversation orchestrator inside each worker. It manages `runId` state, safe-boundary Guide delivery, continuation, checkpoint/snapshot, graceful stop, public work-run events, queue snapshots, completed runner persistence, and work-run expansion state for the worker's bound conversation. Guide acceptance prepares durable user-image attachments immediately; accepted/deferred receipts and empty-text continuations retain stable attachment references through checkpoint, then exactly-once application consumes the continuation and reconciles one chat/history row under its `clientMessageId`. A cold fold update creates a transient target-bound runner only for atomic state mutation and never registers it as an active runtime, so completed runs remain toggleable after worker eviction without cross-workspace leakage.
 - `conversationAttachments.ts`: durable user-submitted image boundary. It accepts only decoded PNG/JPEG data URLs, enforces six-image, 10 MiB-per-image, and 30 MiB-total limits, verifies MIME/content and SHA-256 integrity, writes atomically to canonical `conversation-media/user-images/<prefix>/<hash>.<ext>` assets, hydrates legacy/current attachment records, sanitizes display names, and copies content-addressed assets into conversation archives. These assets are intentional user content and are not used for Computer Use frames.
 - `conversationTarget.ts`: canonical composite-target boundary. It normalizes workspace identity/path plus safe conversation id, derives stable `workspaceKey`/`runtimeKey`, and prevents two workspaces whose public conversation id is `default` from sharing runtime or cache identity.

@@ -92,9 +92,10 @@ async function main(): Promise<void> {
     assert.ok(JSON.stringify(successCalls[1]?.messages).includes('你好') && JSON.stringify(successCalls[1]?.messages).includes('NORMAL_CHAT_OK'),
       'the second provider payload contains the previous turn content');
     assert.ok(successCalls[1]?.system.includes('## Request-Scoped Task Focus')
-      && successCalls[1]?.system.includes('continue the nearest relevant unfinished task')
+      && successCalls[1]?.system.includes('strict newest-to-oldest order')
+      && successCalls[1]?.system.includes('finish the newest unfinished task first, then the next-newest')
       && successCalls[1]?.system.includes('do not revive completed, superseded, abandoned, or unrelated historical tasks'),
-    'each provider turn receives an ephemeral focus contract that prioritizes the latest instruction without discarding relevant unfinished history');
+    'each provider turn prioritizes the latest instruction and resumes relevant unfinished history newest-to-oldest');
     assert.ok(!successCalls[1]?.system.includes('第二轮')
       && String(successCalls[1]?.messages.at(-1)?.content || '').includes('第二轮'),
     'request focus preserves the current instruction in its original user role instead of elevating user-authored text into the system prompt');

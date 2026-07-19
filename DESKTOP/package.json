@@ -1,7 +1,7 @@
 {
   "name": "newmark-agent",
   "productName": "Newmark Agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "homepage": "https://github.com/positer/Newmark-Agent",
   "author": {
@@ -106,6 +106,7 @@
     "dist:windows-release": "npm run build:clean && node scripts/dist-portable.cjs"
   },
   "build": {
+    "npmRebuild": false,
     "afterPack": "scripts/after-pack-win-icon.cjs",
     "msiProjectCreated": "./scripts/patch-msi-project.cjs",
     "appId": "ai.newmark.agent",
@@ -148,7 +149,7 @@
     ],
     "win": {
       "icon": "assets/icon.ico",
-      "sign": false,
+      "signExecutable": false,
       "signAndEditExecutable": false,
       "target": [
         {
@@ -202,8 +203,8 @@
     "@types/jsdom": "^28.0.3",
     "@types/node": "^22.0.0",
     "@types/pngjs": "^6.0.5",
-    "electron": "^33.0.0",
-    "electron-builder": "^25.0.0",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.28.1",
     "oxlint": "^0.9.0",
     "typescript": "^5.6.0"

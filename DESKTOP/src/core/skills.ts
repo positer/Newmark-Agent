@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createHash } from 'crypto';
 
 export interface SkillInfo {
   name: string;
@@ -47,6 +48,7 @@ export class SkillsManager {
   private skillsDir: string;
   private metaPath: string;
   private marketSourcesPath: string;
+  private metadataCache = new Map<string, { fingerprint: string; info: SkillInfo }>();
 
   constructor(root: string) {
     this.skillsDir = path.join(root, 'skills');
@@ -67,6 +69,33 @@ export class SkillsManager {
 
   active(): SkillInfo[] {
     return this.listDetailed().filter(s => s.enabled && this.has(s.name));
+  }
+
+  search(query: string, limit = 8): SkillInfo[] {
+    const terms = this.searchTerms(query);
+    const active = this.active();
+    if (!terms.length) return active.slice(0, Math.max(1, Math.min(limit, 20)));
+    return active.map((skill, index) => {
+      const name = skill.name.toLowerCase();
+      const description = skill.description.toLowerCase();
+      const score = terms.reduce((sum, term) => sum
+        + (name === term ? 30 : name.includes(term) ? 14 : 0)
+        + (description.includes(term) ? 5 : 0), 0);
+      return { skill, score, index };
+    }).filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .slice(0, Math.max(1, Math.min(limit, 20)))
+      .map(item => item.skill);
+  }
+
+  load(name: string): { skill: SkillInfo; content: string; files: string[] } | null {
+    const reference = String(name || '').trim().toLowerCase();
+    const skill = this.active().find(item => item.name.toLowerCase() === reference || path.basename(item.path).toLowerCase() === reference);
+    if (!skill) return null;
+    const skillPath = path.join(skill.path, 'SKILL.md');
+    const content = fs.readFileSync(skillPath, 'utf-8');
+    const files = this.sampleSkillFiles(skill.path, 10);
+    return { skill, content, files };
   }
 
   has(name: string): boolean {
@@ -526,7 +555,16 @@ export class SkillsManager {
     warnings?: string[];
   } {
     try {
-      const content = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf-8');
+      const skillPath = path.join(dir, 'SKILL.md');
+      const stat = fs.statSync(skillPath);
+      const content = fs.readFileSync(skillPath, 'utf-8');
+      const digest = createHash('sha256').update(content).digest('hex');
+      const fingerprint = `${stat.mtimeMs}:${stat.size}:${digest}`;
+      const cached = this.metadataCache.get(skillPath);
+      if (cached?.fingerprint === fingerprint) {
+        const { info } = cached;
+        return { name: info.name, description: info.description, license: info.license, compatibility: info.compatibility, metadata: info.metadata, allowedTools: info.allowedTools, warnings: info.warnings };
+      }
       const front = content.match(/^---\s*([\s\S]*?)\s*---/);
       const block = front ? front[1] : content.slice(0, 1000);
       let name = (block.match(/^name:\s*(.+)$/m)?.[1] || '').trim().replace(/^["']|["']$/g, '');
@@ -547,7 +585,7 @@ export class SkillsManager {
         description = summary.slice(0, 500);
       }
       const warnings = this.validateSkillInfo(name, description, dir);
-      return {
+      const parsed = {
         name,
         description,
         license,
@@ -556,9 +594,40 @@ export class SkillsManager {
         allowedTools,
         warnings,
       };
+      this.metadataCache.set(skillPath, {
+        fingerprint,
+        info: { ...parsed, path: dir, enabled: this.isEnabled(path.basename(dir)), installed: true, source: 'project' },
+      });
+      return parsed;
     } catch {
       return { name: '', description: '', warnings: ['SKILL.md could not be read.'] };
     }
+  }
+
+  private searchTerms(query: string): string[] {
+    const expanded = String(query || '').toLowerCase()
+      .replace(/代码|编程|仓库/g, ' code coding repository ')
+      .replace(/前端|界面/g, ' frontend ui interface ')
+      .replace(/测试|调试|错误/g, ' test debug error ')
+      .replace(/论文|研究/g, ' paper research ');
+    return Array.from(new Set(expanded.split(/[^a-z0-9_\-\u4e00-\u9fff]+/i).filter(term => term.length > 1)));
+  }
+
+  private sampleSkillFiles(root: string, limit: number): string[] {
+    const files: string[] = [];
+    const walk = (dir: string, depth: number) => {
+      if (files.length >= limit || depth > 2) return;
+      let entries: fs.Dirent[] = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        if (files.length >= limit || entry.name === 'SKILL.md' || entry.name.startsWith('.')) continue;
+        const target = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(target, depth + 1);
+        else if (entry.isFile()) files.push(target);
+      }
+    };
+    walk(root, 0);
+    return files;
   }
 
   private findSkillDirs(root: string, maxDepth: number, maxItems: number): string[] {

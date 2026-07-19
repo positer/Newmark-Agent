@@ -299,6 +299,19 @@ export class ElectronUtilityRuntimePool {
     };
   }
 
+  peek(target: ConversationRuntimeTarget): { resident: boolean; running: boolean; stopping: boolean; connected: boolean } {
+    const normalized = normalizeConversationTarget(target);
+    const entry = this.entries.get(normalized.runtimeKey);
+    if (!entry) return { resident: false, running: false, stopping: false, connected: false };
+    const runtime = entry.lastSnapshot?.runtime;
+    return {
+      resident: true,
+      running: !!runtime?.running || entry.activeOperations > 0,
+      stopping: this.disposing.has(normalized.runtimeKey) || !!entry.stopIntent,
+      connected: entry.client.status().connected,
+    };
+  }
+
   runtimeKeys(): string[] {
     return Array.from(this.entries.keys());
   }

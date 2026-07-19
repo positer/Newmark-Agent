@@ -1919,6 +1919,9 @@ if (hasCliCommand) {
         throw new Error('Cannot mutate a conversation while its runtime is running or stopping.');
       }
     };
+    const peekTargetRuntime = (target: ConversationRuntimeTarget) => wslBackendEnabled()
+      ? (wslAgentRuntimePool?.peek(target) || { resident: false, running: false, stopping: false, connected: false })
+      : (electronUtilityRuntimePool?.peek(target) || { resident: false, running: false, stopping: false, connected: false });
     const stopTargetRuntime = async (target: ConversationRuntimeTarget): Promise<void> => {
       if (wslBackendEnabled()) await wslAgentRuntimePool?.stopTarget(target);
       else await electronUtilityRuntimePool?.stopTarget(target);
@@ -2086,7 +2089,7 @@ if (hasCliCommand) {
 
     ipcMain.handle('agent:setModel', async (_event, model: string) => {
       if (agent) {
-        agent.setModel(model);
+        agent.setModel(model, true);
         resetConversationKernel();
       }
       return agent?.model;
@@ -2100,9 +2103,25 @@ if (hasCliCommand) {
       return agent?.intelligence;
     });
 
+    ipcMain.handle('agent:setProviderEnabled', async (_event, providerId: string, enabled: boolean) => {
+      if (!agent) return { ok: false, error: 'Agent not initialized' };
+      const ok = agent.config.setProviderEnabled(String(providerId || ''), !!enabled);
+      if (!ok) return { ok: false, error: 'Provider not found' };
+      agent.config.save();
+      agent.reconcileConversationModelSelection();
+      agent.flushConversationState();
+      resetConversationKernel();
+      return {
+        ok: true,
+        enabled: !!enabled,
+        model: agent.modelSelectionValue(),
+        providers: sanitizeProvidersForState(agent.config.providers()),
+        models: agent.allModelNames(),
+      };
+    });
+
     ipcMain.handle('agent:setInputMode', async (_event, mode: string) => {
-      if (agent) agent.inputMode = mode === 'next' ? 'next' : 'guide';
-      return agent?.inputMode;
+      return agent?.setInputMode(mode);
     });
     ipcMain.handle('agent:setConversation', async (_event, id: string) => {
       return agent?.setConversationFromStorage(id);
@@ -2444,9 +2463,31 @@ if (hasCliCommand) {
     });
 
     ipcMain.handle('agent:archive', async (_event, targetInput?: ConversationTargetInput) => {
-      if (!agent) return null;
+      if (!agent) return { ok: false, error: 'Agent not initialized' };
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
-      return await mutateTargetConversation(target, () => isolatedConversationAgent(target).archiveConversation(target.conversationId));
+      const normalized = normalizeConversationTarget(target);
+      assertTargetNotMutating(normalized);
+      mutatingRuntimeKeys.add(normalized.runtimeKey);
+      try {
+        const peek = peekTargetRuntime(normalized);
+        if (peek.running || peek.stopping) return { ok: false, error: 'Cannot archive a conversation while its runtime is running or stopping.' };
+        if (peek.resident) await stopTargetRuntime(normalized);
+        const currentWorkspacePath = path.resolve(agent.workspace.current?.path || '');
+        const targetWorkspacePath = path.resolve(normalized.workspace?.path || '');
+        const ownsTargetWorkspace = !!normalized.workspace
+          && !!agent.workspace.current
+          && currentWorkspacePath === targetWorkspacePath;
+        // The host Agent owns the current workspace persistence cache. Archiving
+        // through it prevents a delayed host flush from resurrecting the target.
+        const archiveOwner = ownsTargetWorkspace ? agent : isolatedConversationAgent(normalized);
+        const archived = archiveOwner.archiveConversation(normalized.conversationId);
+        if (!archived) return { ok: false, error: 'Conversation archive could not be written.' };
+        return { ok: true, fileName: archived, conversationId: normalized.conversationId, workspaceId: normalized.workspaceId };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      } finally {
+        mutatingRuntimeKeys.delete(normalized.runtimeKey);
+      }
     });
 
     ipcMain.handle('agent:listArchives', async (_event, scope?: string) => {

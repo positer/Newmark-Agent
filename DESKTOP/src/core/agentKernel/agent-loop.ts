@@ -144,7 +144,14 @@ async function runLoop(
 async function streamAssistantResponse(context: MutableContext, config: AgentLoopConfig, signal?: AbortSignal): Promise<AssistantMessage> {
   throwIfAborted(signal);
   const llmMessages = await config.convertToLlm(context.messages);
-  const transformed = config.transformContext ? await config.transformContext(llmMessages, signal) : llmMessages;
+  const transformOutput = config.transformContext ? await config.transformContext(llmMessages, signal) : llmMessages;
+  const transformed = Array.isArray(transformOutput) ? transformOutput : transformOutput.messages;
+  if (!Array.isArray(transformOutput) && transformOutput.replacementMessages) {
+    // Compression must replace the live run context. Otherwise each tool
+    // subturn sees and recompresses the same stale historical prefix.
+    context.messages = transformOutput.replacementMessages.slice();
+    config.state.messages = transformOutput.replacementMessages.slice();
+  }
   const stream = await config.streamFn(config.state.model, {
     systemPrompt: context.systemPrompt,
     messages: transformed,
@@ -173,14 +180,12 @@ async function streamAssistantResponse(context: MutableContext, config: AgentLoo
 }
 
 async function executeToolCalls(toolCalls: AgentToolCall[], context: MutableContext, config: AgentLoopConfig, signal?: AbortSignal): Promise<ToolResultMessage[]> {
-  const results: ToolResultMessage[] = [];
   const tools = context.tools || [];
-  for (const call of toolCalls) {
+  const executeOne = async (call: AgentToolCall): Promise<ToolResultMessage> => {
     throwIfAborted(signal);
     const tool = tools.find(candidate => candidate.name === call.name);
     if (!tool) {
-      results.push(toolResult(call, `Tool "${call.name}" not found`, true));
-      continue;
+      return toolResult(call, `Tool "${call.name}" not found`, true);
     }
     const args = tool.prepareArguments ? tool.prepareArguments(call.arguments) : call.arguments;
     if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error(`[NewmarkKernel] tool-execution-start name=${call.name.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80) || 'tool'}`);
@@ -190,14 +195,21 @@ async function executeToolCalls(toolCalls: AgentToolCall[], context: MutableCont
       const result = await tool.execute(call.id, args, signal);
       throwIfAborted(signal);
       const message = toolResult(call, result.content, false, result.details, result.terminate);
-      results.push(message);
       await emit(config, { type: 'tool_execution_end', toolCallId: call.id, toolName: call.name, result: { content: result.content, details: result.details, terminate: result.terminate }, isError: false });
+      return message;
     } catch (error) {
       const message = toolResult(call, error instanceof Error ? error.message : String(error), true);
-      results.push(message);
       await emit(config, { type: 'tool_execution_end', toolCallId: call.id, toolName: call.name, result: { content: message.content }, isError: true });
+      return message;
     }
+  };
+  if (config.toolExecution === 'parallel') {
+    // Promise.all is the batch barrier: every launch succeeds or fails before
+    // the provider receives any result and starts the next reasoning step.
+    return await Promise.all(toolCalls.map(call => executeOne(call)));
   }
+  const results: ToolResultMessage[] = [];
+  for (const call of toolCalls) results.push(await executeOne(call));
   return results;
 }
 

@@ -98,6 +98,7 @@ function throwIfAgentAborted(signal?: AbortSignal): void {
   throw error;
 }
 type StoredConversationEntry = NonNullable<StoredConversationState['conversations']>[string];
+type ConversationModelSelection = { kind: 'auto' } | { kind: 'deployment'; providerId: string; modelId: string };
 interface StoredConversationState {
   version?: number;
   activeConversationId?: string;
@@ -110,6 +111,8 @@ interface StoredConversationState {
     subagentState?: SubagentState;
     workRuns?: ConversationWorkRun[];
     continuations?: ConversationContinuation[];
+    modelSelection?: ConversationModelSelection;
+    inputMode?: InputMode;
     updatedAt?: string;
     pinned?: boolean;
     pinnedAt?: string;
@@ -155,6 +158,8 @@ export interface ConversationSnapshot {
   historyMessages: number;
   workRuns: ConversationWorkRun[];
   continuations: ConversationContinuation[];
+  modelSelection: ConversationModelSelection;
+  inputMode: InputMode;
 }
 export interface ConversationContinuation {
   content: string;
@@ -176,14 +181,15 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - grep: Search file contents with regex
 - web_search: Search the web via DuckDuckGo
 - web_fetch: Fetch and extract content from URLs
-- browser_use: Preferred native built-in-browser workflow. Observe first, then use the returned page generation, observation id, and opaque refs for click/type/select/scroll/key/navigation/wait/extraction. Every receipt is bound to the current workspace/conversation runtime and actor. Stale page capabilities are rejected; observe again to recover.
+- browser_use: Preferred native built-in-browser workflow. Observe first, then use the returned page generation, observation id, and opaque refs for click/type/select/scroll/key/navigation/wait/extraction. A successful action receipt is enough to continue the Build; do not wait for the browser session or window to close. Every receipt is bound to the current workspace/conversation runtime and actor. Stale page capabilities are rejected; observe again to recover.
 - browser_open/browser_snapshot/browser_click/browser_type/browser_eval/browser_back/browser_forward/browser_reload/browser_cdp: Legacy and expert Chromium controls. Prefer browser_use for normal interactive work; raw eval/CDP remain advanced escape hatches.
-- computer_use: Native desktop Computer Use control for full desktop or app-scoped observe/move/click/scroll/type/key/wait against Windows desktop applications. Use takeover_start when actively taking over the desktop; it shows a full-virtual-desktop dynamic gradient edge indicator so the user can see the Agent is controlling the desktop, and use takeover_stop when done. Use app_list/app_observe/app_activate/app_click/app_scroll/app_type/app_key when the task can be scoped to a visible taskbar application by title, process name, PID, or window handle; this narrows screenshots and actions to that application. Use observe/app_observe first, reason over returned screenshot plus UI Automation objects. If the model supports vision, Newmark sends the screenshot image and UI object tree together in the same tool-result context; use both for stable decisions. Prefer target_id from perception.scene_summary.high_priority_objects or perception.objects for move/click/scroll when available; fall back to exact coordinates only when necessary.
+- computer_use: Native desktop Computer Use control for full desktop or app-scoped observe/move/click/scroll/type/key/wait against Windows desktop applications. A successful takeover_start receipt means the persistent control surface started and the Build may continue immediately; do not wait for takeover_stop or closure before taking the next step. Use takeover_stop when control is no longer needed. Use app_list/app_observe/app_activate/app_click/app_scroll/app_type/app_key when the task can be scoped to a visible taskbar application by title, process name, PID, or window handle; this narrows screenshots and actions to that application. Use observe/app_observe first, reason over returned screenshot plus UI Automation objects. If the model supports vision, Newmark sends the screenshot image and UI object tree together in the same tool-result context; use both for stable decisions. Prefer target_id from perception.scene_summary.high_priority_objects or perception.objects for move/click/scroll when available; fall back to exact coordinates only when necessary.
 - image_inspect: For durable user-submitted visual attachments, query source_info by stable attachment_id (or latest-message image_index) and actively crop/magnify a precise pixel region when text or geometry is too small to inspect reliably. Original user images remain revisitable; derived crops are current-turn-only and never saved to disk.
 - task: Create a subagent for parallel work
 - subagent_list/subagent_read/subagent_send/subagent_result/subagent_close: List, read bounded peer feedback, message, inspect, and close same-conversation peer agents
 - linked_plan: Read or conservatively update the conversation-linked Markdown plan in every mode
 - question: Ask the user a multiple-choice question
+- skill: Search enabled skill metadata or load one selected SKILL.md body on demand
 - skill_download: Download a skill/plugin
 - git_status: Show git working tree status
 - file_audit: Audit local file creation/change metadata and, for GitHub-backed files, remote repository/branch/path metadata
@@ -218,6 +224,8 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - Be thorough and precise. Verify your work.
 - Use tools appropriately - don't just describe, do it.
 - For desktop Computer Use requests, follow observe -> decide -> act -> observe. Start visible takeover with computer_use takeover_start before multi-step desktop control and stop it when finished. Prefer app-scoped actions through app_list/app_observe/app_* when controlling one taskbar application, because this preserves human collaboration around other windows. Prefer target_id from the latest high-priority semantic UI objects, otherwise precise coordinates from the latest observation. Use vision plus UI controls together when the selected model has vision input. Avoid destructive UI actions unless the user asked for them, and do not claim YOLO/OCR perception unless an actual detector/OCR result is present.
+- Multiple tool calls emitted in one provider turn run concurrently. Treat their returned records as one barrier: continue reasoning only after every call in that batch has returned either a successful receipt or a failure receipt.
+- terminal_takeover start creates or reuses a persistent session. Its successful start receipt completes that Build step immediately; continue with write/read or other work without waiting for detach, stop, shell exit, or terminal closure.
 - When editing files, show exactly what changed.
 - For Chinese users, respond in Chinese if the user writes in Chinese.
 - Default reply format for completed work must be concise and structured. Use the section headers selected by the runtime language policy:
@@ -275,11 +283,13 @@ export class Agent {
     originalMessages: number;
     compressedMessages: number;
     originalChars: number;
+    compressedChars: number;
+    compressedTokens: number;
     summary: string;
     model: string;
     fallback: boolean;
   } | null = null;
-  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; updatedAt?: string }>();
+  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; inputMode?: InputMode; updatedAt?: string }>();
   public isSubagentRuntime = false;
   private subagentName = '';
   private subagentPrompt = '';
@@ -310,6 +320,7 @@ export class Agent {
   private readonly autoRouter: AutoRouter;
   private resolvedDeployment: DeploymentRef | null = null;
   private fixedDeployment: DeploymentRef | null = null;
+  private preferredConversationModelSelection: ConversationModelSelection | null = null;
   private routeTransactionId = '';
   private pendingAutoAttempts: PlannedRouteAttempt[] = [];
   private routeStreamCommitted = false;
@@ -375,7 +386,7 @@ export class Agent {
     this.ssh = new SshManager(rootPath);
     this.tools = new ToolExecutor(rootPath, this.config, this.ssh, this.workspace);
     this.skills = new SkillsManager(rootPath);
-    this.memoryLab = new MemoryLabManager(rootPath);
+    this.memoryLab = new MemoryLabManager(rootPath, this.config.getStr('general', 'language'));
     this.subagents = new SubagentManager({ rootAgentId: this.runtimeActorId });
 
     if (this.mode === 'goal' && !this.goal) {
@@ -406,12 +417,16 @@ export class Agent {
     return this.mode.charAt(0).toUpperCase() + this.mode.slice(1);
   }
 
-  setModel(model: string): void {
+  setModel(model: string, persistForConversation = false): void {
     const requested = String(model || '').trim();
     if (requested === 'auto') {
       if (!this.config.autoSwitchEnabled()) {
         const fallback = this.config.getStr('models', 'default_model') || this.config.allModels()[0]?.name || this.model;
         this.model = fallback || '';
+        if (persistForConversation) {
+          this.preferredConversationModelSelection = { kind: 'auto' };
+          this.saveWorkspaceConversationState(true);
+        }
         return;
       }
       const current = this.activeModelConfig();
@@ -420,6 +435,10 @@ export class Agent {
       this.model = 'auto';
       this.fixedDeployment = null;
       this.resetAutoRoute();
+      if (persistForConversation) {
+        this.preferredConversationModelSelection = { kind: 'auto' };
+        this.saveWorkspaceConversationState(true);
+      }
       return;
     }
     const previousAuto = this.model === 'auto' ? this.resolvedDeployment : null;
@@ -439,6 +458,45 @@ export class Agent {
     this.routeAttemptStartedAt = 0;
     this.routeStreamCommitted = false;
     this.routeSideEffectCommitted = false;
+    if (persistForConversation) {
+      this.preferredConversationModelSelection = current
+        ? { kind: 'deployment', ...this.deploymentRef(current) }
+        : (qualified ? { kind: 'deployment', ...qualified } : null);
+      this.saveWorkspaceConversationState(true);
+    }
+  }
+
+  private currentConversationModelSelection(): ConversationModelSelection {
+    if (this.preferredConversationModelSelection) return { ...this.preferredConversationModelSelection };
+    if (this.model === 'auto') return { kind: 'auto' };
+    const deployment = this.activeDeployment();
+    if (deployment?.providerId && deployment.modelId) return { kind: 'deployment', ...deployment };
+    const fallback = this.defaultModelCandidate();
+    return fallback
+      ? { kind: 'deployment', providerId: fallback.provider_id, modelId: fallback.name }
+      : { kind: 'auto' };
+  }
+
+  private restoreConversationModelSelection(selection?: ConversationModelSelection): void {
+    this.preferredConversationModelSelection = selection ? { ...selection } : null;
+    if (selection?.kind === 'auto') {
+      this.setModel(this.config.autoSwitchEnabled() ? 'auto' : this.ensureUsableModelSelection());
+      return;
+    }
+    if (selection?.kind === 'deployment') {
+      const value = `deployment:${encodeURIComponent(selection.providerId)}:${encodeURIComponent(selection.modelId)}`;
+      if (this.config.findDeployment(selection)) this.setModel(value);
+      else this.ensureUsableModelSelection();
+      return;
+    }
+    this.ensureUsableModelSelection();
+  }
+
+  reconcileConversationModelSelection(): string {
+    const preferred = this.preferredConversationModelSelection;
+    if (preferred) this.restoreConversationModelSelection(preferred);
+    else this.ensureUsableModelSelection();
+    return this.modelSelectionValue();
   }
 
   /**
@@ -498,6 +556,10 @@ export class Agent {
     return deployment
       ? `deployment:${encodeURIComponent(deployment.providerId)}:${encodeURIComponent(deployment.modelId)}`
       : this.model;
+  }
+
+  currentWorkRunId(): string {
+    return this.activeWorkRunId || this.finalizingWorkRunId || '';
   }
 
   activeModelConfig(): ReturnType<ConfigManager['allModels']>[number] | undefined {
@@ -927,9 +989,26 @@ export class Agent {
         sequence,
         events,
         guides: [...guidesById.values()],
+        primaryPrompt: this.sanitizePublicWorkContent(raw.primaryPrompt || ''),
       });
     }
     return [...byRun.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  }
+
+  private recoverPersistedWorkRuns(
+    runs: ConversationWorkRun[] | null | undefined,
+    persistedUpdatedAt?: string,
+  ): { runs: ConversationWorkRun[]; changed: boolean } {
+    const normalized = this.normalizeWorkRuns(runs);
+    let changed = false;
+    for (const run of normalized) {
+      if (run.status !== 'running') continue;
+      run.status = 'interrupted';
+      run.endedAt = persistedUpdatedAt || run.startedAt || this.nowIso();
+      run.expanded = true;
+      changed = true;
+    }
+    return { runs: normalized, changed };
   }
 
   beginConversationWorkRun(
@@ -960,6 +1039,7 @@ export class Agent {
       sequence: 0,
       events: [],
       guides: [],
+      primaryPrompt: '',
     };
     this.workRuns.push(run);
     if (managed) this.managedWorkRunIds.add(run.runId);
@@ -1130,6 +1210,7 @@ export class Agent {
     }
     this.activeWorkRunId = run.runId;
     this.finalizingWorkRunId = run.runId;
+    if (status === 'completed') this.ensureCompletedWorkRunFinalResult(run);
     this.emitWorkEvent({
       type: status === 'completed' ? 'done' : status === 'error' ? 'error' : 'status',
       content: status === 'force_interrupted' ? 'Force interrupted.' : status === 'interrupted' ? 'Interrupted.' : 'Response complete.',
@@ -1146,6 +1227,32 @@ export class Agent {
     this.managedWorkRunIds.delete(run.runId);
     this.saveWorkspaceConversationState();
     return true;
+  }
+
+  private ensureCompletedWorkRunFinalResult(run: ConversationWorkRun): void {
+    const finalEvents = run.events.filter(event => event.type === 'final_response');
+    for (const earlier of finalEvents.slice(0, -1)) earlier.type = 'response';
+    if (finalEvents.length) return;
+    const persisted = [...this.chatMessages].reverse().find(message => message.role === 'assistant' && message.runId === run.runId);
+    const content = persisted?.content || (this.config.getStr('general', 'language') === 'zh'
+      ? 'Build 已完成；本次运行未返回额外的结果说明。'
+      : 'Build completed; this run returned no additional result summary.');
+    if (!persisted) {
+      this.chatMessages.push({
+        role: 'assistant',
+        content,
+        mode: this.modeName(),
+        model: this.model,
+        timestamp: this.nowLabel(),
+        runId: run.runId,
+      });
+    }
+    this.emitWorkEvent({
+      type: 'final_response',
+      content,
+      runId: run.runId,
+      conversationId: run.target.conversationId,
+    });
   }
 
   emitWorkEvent(input: Omit<AgentWorkEvent, 'id' | 'conversationId' | 'mode' | 'model' | 'timestamp'> & Partial<Pick<AgentWorkEvent, 'conversationId' | 'mode' | 'model' | 'timestamp'>>): AgentWorkEvent {
@@ -1757,6 +1864,10 @@ export class Agent {
       historyMessages: history.length,
       workRuns,
       continuations,
+      modelSelection: isActiveConversation
+        ? this.currentConversationModelSelection()
+        : (persisted?.modelSelection || memory?.modelSelection || this.currentConversationModelSelection()),
+      inputMode: isActiveConversation ? this.inputMode : (persisted?.inputMode || memory?.inputMode || this.defaultInputMode()),
     };
   }
 
@@ -1775,6 +1886,8 @@ export class Agent {
           linkedPlan: { markdown: '', revision: 0 },
           workRuns: [],
           continuations: [],
+          modelSelection: this.currentConversationModelSelection(),
+          inputMode: this.inputMode,
           updatedAt: new Date().toISOString(),
         };
         this.writeStoredConversationState(stored);
@@ -1920,6 +2033,8 @@ export class Agent {
       subagentState: this.subagents.serialize(),
       workRuns: this.normalizeWorkRuns(this.workRuns),
       continuations: this.normalizeContinuations(this.continuations),
+      modelSelection: this.currentConversationModelSelection(),
+      inputMode: this.inputMode,
       updatedAt,
     });
     const stored = this.readStoredConversationState();
@@ -1943,6 +2058,8 @@ export class Agent {
       subagentState: this.subagents.serialize(),
       workRuns: this.normalizeWorkRuns(this.workRuns),
       continuations: this.normalizeContinuations(this.continuations),
+      modelSelection: this.currentConversationModelSelection(),
+      inputMode: this.inputMode,
       updatedAt,
     };
     if (flush) this.writeStoredConversationStateNow(stored);
@@ -1973,6 +2090,8 @@ export class Agent {
       this.bindConversationSubagents(this.activeConversationId, saved.subagentState);
       this.workRuns = this.normalizeWorkRuns(saved.workRuns);
       this.continuations = this.normalizeContinuations(saved.continuations);
+      this.restoreConversationModelSelection(saved.modelSelection);
+      this.inputMode = saved.inputMode === 'next' ? 'next' : saved.inputMode === 'guide' ? 'guide' : this.defaultInputMode();
       this.activeWorkRunId = this.workRuns.find(run => run.status === 'running')?.runId || '';
       return;
     }
@@ -1983,9 +2102,12 @@ export class Agent {
     this.chatMessages = this.normalizeConversationChatMessages(persisted?.chatMessages || [], this.history);
     this.conversationPlan = this.normalizeConversationPlan(persisted?.plan);
     this.linkedPlan = this.normalizeLinkedPlan(persisted?.linkedPlan);
-    this.workRuns = this.normalizeWorkRuns(persisted?.workRuns);
+    const recoveredWorkRuns = this.recoverPersistedWorkRuns(persisted?.workRuns, persisted?.updatedAt);
+    this.workRuns = recoveredWorkRuns.runs;
     this.continuations = this.normalizeContinuations(persisted?.continuations);
-    this.activeWorkRunId = this.workRuns.find(run => run.status === 'running')?.runId || '';
+    this.restoreConversationModelSelection(persisted?.modelSelection);
+    this.inputMode = persisted?.inputMode === 'next' ? 'next' : persisted?.inputMode === 'guide' ? 'guide' : this.defaultInputMode();
+    this.activeWorkRunId = '';
     this.bindConversationSubagents(this.activeConversationId, persisted?.subagentState);
     this.workspaceConversations.set(key, {
       chatMessages: [...this.chatMessages],
@@ -1995,8 +2117,20 @@ export class Agent {
       subagentState: this.subagents.serialize(),
       workRuns: this.normalizeWorkRuns(this.workRuns),
       continuations: this.normalizeContinuations(this.continuations),
+      modelSelection: persisted?.modelSelection || this.currentConversationModelSelection(),
+      inputMode: persisted?.inputMode === 'next' ? 'next' : persisted?.inputMode === 'guide' ? 'guide' : this.defaultInputMode(),
       updatedAt: persisted?.updatedAt,
     });
+    if (recoveredWorkRuns.changed && stateKey && persisted) {
+      const recoveredAt = this.nowIso();
+      stored.conversations![stateKey] = {
+        ...persisted,
+        workRuns: this.normalizeWorkRuns(this.workRuns),
+        updatedAt: recoveredAt,
+      };
+      this.workspaceConversations.get(key)!.updatedAt = recoveredAt;
+      this.writeStoredConversationStateNow(stored);
+    }
   }
 
   private applyWorkspaceContext(ws: WorkspaceInfo | null): WorkspaceInfo | null {
@@ -2047,6 +2181,16 @@ export class Agent {
     return this.activeConversationId;
   }
 
+  setInputMode(mode: string): InputMode {
+    this.inputMode = mode === 'next' ? 'next' : 'guide';
+    this.saveWorkspaceConversationState(true);
+    return this.inputMode;
+  }
+
+  private defaultInputMode(): InputMode {
+    return this.config.getStr('general', 'default_input') === 'next' ? 'next' : 'guide';
+  }
+
   abortActiveKernelRun(): boolean {
     let aborted = false;
     this.subagents.pauseScheduling();
@@ -2067,7 +2211,50 @@ export class Agent {
     return aborted;
   }
 
-  mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'> & Partial<Pick<Agent, 'linkedPlan' | 'subagents' | 'workRuns' | 'continuations'>>): void {
+  activeProcessSignal(): AbortSignal | undefined {
+    return this.activeProcessAbortController?.signal;
+  }
+
+  recordWorkRunPrimaryPrompt(content: string): void {
+    const run = this.workRuns.find(item => item.runId === this.currentWorkRunId());
+    if (!run || run.primaryPrompt) return;
+    run.primaryPrompt = this.sanitizePublicWorkContent(content).slice(0, 50_000);
+    this.saveWorkspaceConversationState(false);
+  }
+
+  recordContextCompressionStep(): void {
+    const runId = this.currentWorkRunId();
+    if (!runId) return;
+    const toolCallId = `context-compression-${Date.now()}`;
+    this.emitWorkEvent({ type: 'tool_call', content: 'Compressing context.', toolCallId, toolName: 'context_compression', runId });
+    this.emitWorkEvent({ type: 'tool_result', content: 'Context compression completed.', toolCallId, toolName: 'context_compression', runId });
+  }
+
+  compressionContinuationPrompt(): string {
+    const run = this.workRuns.find(item => item.runId === this.currentWorkRunId());
+    const latestGuide = [...(run?.guides || [])].reverse().find(guide => guide.status === 'applied' || guide.status === 'accepted' || guide.status === 'deferred');
+    const events = (run?.events || []).filter(event => !['text', 'response', 'final_response'].includes(event.type)).slice(-80);
+    return [
+      '[Continue Same Build After Context Compression]',
+      'This is a runtime continuation of the same Build and runId, not a new user task.',
+      'Continue unfinished work in strict newest-to-oldest order: finish the newest unfinished task first, then the next-newest, and continue backward only while work remains relevant.',
+      'After all applicable unfinished work is complete, provide the one final result summary required for this Build.',
+      '',
+      '## Compression Summary',
+      this.lastCompression?.summary || '(Compression summary unavailable.)',
+      '',
+      '## Build Primary Prompt',
+      run?.primaryPrompt || '(Primary prompt unavailable; use the retained real user instruction.)',
+      '',
+      '## Latest Guide',
+      latestGuide?.content || '(No Guide was submitted for this Build.)',
+      '',
+      '## Current Build Activity Snapshot',
+      events.length ? events.map(event => `- [${event.type}] ${event.toolName ? `${event.toolName}: ` : ''}${event.content}`).join('\n') : '(No public activity has been recorded yet.)',
+    ].join('\n');
+  }
+
+  mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'> & Partial<Pick<Agent, 'linkedPlan' | 'subagents' | 'workRuns' | 'continuations'>> & { modelSelection?: ConversationModelSelection; inputMode?: InputMode }): void {
     const clean = this.safeConversationId(id || 'default');
     const ws = this.workspace.current;
     if (!ws) return;
@@ -2088,6 +2275,8 @@ export class Agent {
         subagentState,
         workRuns,
         continuations,
+        modelSelection: source.modelSelection || this.currentConversationModelSelection(),
+        inputMode: source.inputMode || this.inputMode,
         updatedAt,
       });
     }
@@ -2110,6 +2299,8 @@ export class Agent {
       subagentState,
       workRuns,
       continuations,
+      modelSelection: source.modelSelection || previous?.modelSelection || this.currentConversationModelSelection(),
+      inputMode: source.inputMode || previous?.inputMode || this.inputMode,
       updatedAt,
     };
     this.writeStoredConversationState(stored, ws);
@@ -2329,13 +2520,11 @@ export class Agent {
     summaryTokens: number;
   } {
     const maxTokens = this.contextMaxTokens();
-    const reserveTokens = Math.min(8192, Math.max(256, Math.floor(maxTokens * 0.12)));
-    const usableTokens = Math.max(256, maxTokens - reserveTokens);
     return {
       estimatedTokens: this.estimateContextTokens(messages),
       maxTokens,
-      triggerTokens: Math.max(128, Math.floor(usableTokens * 0.78)),
-      targetTokens: Math.max(128, Math.floor(usableTokens * 0.55)),
+      triggerTokens: Math.max(128, Math.floor(maxTokens * 0.8)),
+      targetTokens: Math.max(128, Math.floor(maxTokens * 0.2)),
       summaryTokens: Math.max(96, Math.min(1600, Math.floor(maxTokens * 0.12))),
     };
   }
@@ -2346,12 +2535,20 @@ export class Agent {
     tokenBudget: number
   ): Array<Record<string, unknown>> {
     if (!messages.length) return [];
+    let latestUserIndex = -1;
+    for (let index = messages.length - 1; index >= 0; index--) {
+      if (String(messages[index]?.role || '') === 'user') {
+        latestUserIndex = index;
+        break;
+      }
+    }
     let start = Math.max(0, messages.length - Math.max(1, maxMessages));
     while (start > 0 && String(messages[start]?.role || '') !== 'user') start--;
-    while (start < messages.length - 1 && this.estimateContextTokens(messages.slice(start)) > tokenBudget) {
-      start++;
-      while (start < messages.length - 1 && String(messages[start]?.role || '') !== 'user') start++;
+    while (start < latestUserIndex && this.estimateContextTokens(messages.slice(start)) > tokenBudget) {
+      start += 1;
+      while (start < latestUserIndex && String(messages[start]?.role || '') !== 'user') start += 1;
     }
+    if (latestUserIndex >= 0 && String(messages[start]?.role || '') !== 'user') start = latestUserIndex;
     return messages.slice(start);
   }
 
@@ -2375,7 +2572,7 @@ export class Agent {
         '[Post-Compression Task Continuation]',
         'Context compression just occurred. Continue the active task immediately instead of treating compression as a stopping point.',
         'The latest retained real user-role message below is the authoritative pre-compression task instruction.',
-        'If it depends on an older unfinished task, resume only the nearest relevant unfinished work recorded in the compression summary; do not revive completed, superseded, or unrelated history.',
+        'If multiple older unfinished tasks remain relevant, resume them in strict newest-to-oldest order. Finish the newest unfinished task before the next-newest; do not revive completed, superseded, or unrelated history.',
       ].join('\n'),
     };
   }
@@ -3022,6 +3219,7 @@ export class Agent {
       }
       catalog ||= [];
       const catalogEntry = catalog.find(entry => entry.id === m.name || entry.id.endsWith(`/${m.name}`));
+      const responseMaxContextTokens = modelResponseMaxContextTokens(catalogEntry?.raw);
       const catalogText = JSON.stringify(catalogEntry?.raw || {}).toLowerCase();
       const declaredVision = inferredVision || /vision|image[_ -]?input|multimodal|image_url|input_image/.test(catalogText);
       const declaredImageOutput = inferredImageOutput || /image[_ -]?(?:output|generation)|text[_ -]?to[_ -]?image|image-generation/.test(catalogText);
@@ -3078,6 +3276,7 @@ export class Agent {
         notes: [
           `level=${record.level}`,
           catalogEntry ? 'catalog=listed-hypothesis-only' : (catalog.length ? 'catalog=not-listed' : 'catalog=unavailable'),
+          responseMaxContextTokens ? `context_window=response:${responseMaxContextTokens}` : `context_window=config:${m.max_tokens}`,
           `health=${record.health?.status || 'not-run'}`,
           `probes=${validationReasonCodes(record).join(',') || 'passed'}`,
         ].join('; '),
@@ -3085,6 +3284,7 @@ export class Agent {
       results.push(result);
       const capabilities = Object.entries(capabilityMap).flatMap(([name, ok]) => ok ? [name] : []);
       this.config.updateModelByDeployment(m.provider_id, m.name, {
+        max_tokens: responseMaxContextTokens || m.max_tokens,
         evaluation: result,
         validation,
         capabilities,
@@ -3396,12 +3596,14 @@ export class Agent {
           model: this.model,
           timestamp: now,
           attachments: attachments.length ? attachments : undefined,
+          runId: this.currentWorkRunId() || undefined,
         });
         this.history.push({ role: 'user', content: historyContent });
       }
       // Agent.process seeds the kernel from history, so its initial prompt does
       // not otherwise emit a kernel message_start event.
       this.notifyAgentKernelUserMessageStart(text, clientMessageId || undefined);
+      this.recordWorkRunPrimaryPrompt(displayText);
       this.saveWorkspaceConversationState(true);
       this.emitWorkEvent({ type: 'start', content: 'Preparing request.' });
 
@@ -3760,6 +3962,7 @@ export class Agent {
             name: String(params.name || ''),
             description: String(params.description || ''),
             tags: Array.isArray(params.tags) ? params.tags.map(String) : String(params.tags || '').split(/[,，\n]+/),
+            tagPaths: Array.isArray(params.tagPaths) ? params.tagPaths.filter(Array.isArray).map(pathValue => pathValue.map(String)) : [],
             content: String(params.content || ''),
             kind: params.kind === 'folder' ? 'folder' : 'file',
           }, signal);
@@ -3786,6 +3989,7 @@ export class Agent {
   }
 
   async updateMemoryLab(input: MemoryLabUpdateInput, signal?: AbortSignal): Promise<MemoryLabWriteResult> {
+    this.memoryLab.setPreferredLanguage(this.config.getStr('general', 'language'));
     const update = await this.prepareMemoryLabUpdate(input, signal);
     throwIfAgentAborted(signal);
     const written = this.memoryLab.update(update);
@@ -3813,6 +4017,7 @@ export class Agent {
   }
 
   async reindexMemoryLab(signal?: AbortSignal): Promise<MemoryLabWriteResult> {
+    this.memoryLab.setPreferredLanguage(this.config.getStr('general', 'language'));
     await this.organizeMemoryLabIndex(signal);
     throwIfAgentAborted(signal);
     const rebuilt = this.memoryLab.reindex();
@@ -3846,16 +4051,17 @@ export class Agent {
     const system = [
       'You are MemoryLabIndexAgent.',
       'Clean and organize one persistent memory component for Newmark Memory Lab.',
-      'Return only JSON with keys: name, description, tags, content, kind.',
-      'Keep tags hierarchical and prefixed with #. Preserve technical facts. Do not invent facts.',
+      'Return only JSON with keys: name, description, tags, tagPaths, content, kind.',
+      'Keep tag names independent and prefixed with #. Express hierarchy only through tagPaths. A tag may have multiple parents and children. Preserve technical facts. Do not invent facts.',
       'The content must be Markdown for the core memory component.',
     ].join('\n');
     const prompt = JSON.stringify({
       request: 'Organize this Memory Lab update.',
       input: deterministic,
       tagRules: [
-        'A tag like #物理-理论物理 has parent #物理.',
-        'Components are linked only to deepest supplied tags.',
+        'Use ["#物理", "#理论物理"] rather than a legacy path node such as #物理/理论物理.',
+        'A hyphen is part of a tag name and may replace a space; never interpret #Theoretical-Physics as a hierarchy.',
+        'Multiple paths may share a child, for example ["#数学", "#理论物理"].',
         'Use concise descriptions.',
       ],
     }, null, 2);
@@ -3871,6 +4077,7 @@ export class Agent {
         name: String(parsed.name || deterministic.name),
         description: String(parsed.description || deterministic.description),
         tags: Array.isArray(parsed.tags) ? parsed.tags.map(String) : deterministic.tags,
+        tagPaths: Array.isArray(parsed.tagPaths) ? parsed.tagPaths.filter(Array.isArray).map(pathValue => pathValue.map(String)) : deterministic.tagPaths,
         content: String(parsed.content || deterministic.content),
         kind: parsed.kind === 'folder' ? 'folder' : deterministic.kind,
       });
@@ -4243,13 +4450,21 @@ export class Agent {
     }
   }
 
-  async maybeCompress(msgs: Array<Record<string, unknown>>, provider?: LLMProvider | null, signal?: AbortSignal, compressionModel?: string): Promise<void> {
+  async maybeCompress(msgs: Array<Record<string, unknown>>, provider?: LLMProvider | null, signal?: AbortSignal, compressionModel?: string, force = false): Promise<void> {
     if (signal?.aborted) return;
     if (!this.config.getBool('context', 'auto_compress')) return;
     const total = msgs.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length), 0);
-    const threshold = this.config.getNum('context', 'compress_threshold_chars') || 80000;
     const budget = this.compressionBudget(msgs);
-    if (total < threshold && budget.estimatedTokens < budget.triggerTokens) return;
+    if (budget.estimatedTokens < budget.triggerTokens) return;
+    if (!force && this.lastCompression && String(msgs[0]?.content || '').includes(this.lastCompression.summary)) {
+      const baselineChars = Math.max(0, Number(this.lastCompression.compressedChars || 0));
+      const baselineTokens = Math.max(0, Number(this.lastCompression.compressedTokens || 0));
+      const charGrowth = baselineChars ? Math.max(0, total - baselineChars) : Number.POSITIVE_INFINITY;
+      const tokenGrowth = baselineTokens ? Math.max(0, budget.estimatedTokens - baselineTokens) : Number.POSITIVE_INFINITY;
+      const minCharGrowth = Math.max(12_000, Math.floor(baselineChars * 0.25));
+      const minTokenGrowth = Math.max(1_024, Math.floor(budget.triggerTokens * 0.2));
+      if (charGrowth < minCharGrowth && tokenGrowth < minTokenGrowth) return;
+    }
     const originalMessageCount = msgs.length;
     const configuredKeepLast = this.config.getNum('context', 'keep_recent_messages') || 10;
     if (msgs.length <= 1) return;
@@ -4285,6 +4500,10 @@ export class Agent {
     compressed.push(this.postCompressionContinuationMessage());
     compressed.push(...recent);
     const imageCompacted = this.compactHistoricalImages(compressed);
+    const compressedChars = imageCompacted.reduce((sum, message) => sum + (typeof message.content === 'string'
+      ? message.content.length
+      : JSON.stringify(message.content || '').length), 0);
+    const compressedTokens = this.estimateContextTokens(imageCompacted);
     msgs.length = 0;
     msgs.push(...imageCompacted);
     this.lastCompression = {
@@ -4292,6 +4511,8 @@ export class Agent {
       originalMessages: originalMessageCount,
       compressedMessages: imageCompacted.length,
       originalChars: total,
+      compressedChars,
+      compressedTokens,
       summary: compression.summary,
       model: compression.model,
       fallback: compression.fallback,
@@ -4343,6 +4564,7 @@ export class Agent {
         'Summarize an older omitted conversation segment for a coding agent. The latest retained user instruction is outside this segment and remains authoritative.',
         'Classify task state instead of treating every historical user request as still active.',
         'Preserve an older task as active or unfinished only when the transcript or explicit tracker shows concrete unfinished work and it remains relevant to the latest instruction or a required dependency.',
+        'Within Active Or Unfinished Work, order every retained historical task from newest to oldest. The newest unfinished task must be completed before the next-newest task.',
         'Completed, superseded, abandoned, and unrelated tasks belong under Completed Or Background Work and must not be revived as the current objective.',
         'Preserve concrete facts, current workspace, mode, model, tool results, files changed, decisions, errors, constraints, and user preferences.',
         'Do not invent completion. Mark uncertainty explicitly.',
@@ -4385,14 +4607,14 @@ export class Agent {
     const recentLines = transcript.split('\n').filter(l => l.trim()).slice(-80).join('\n');
     return this.formatCompressionSummary(this.compactSummaryBody([
       '## Active Or Unfinished Work',
-      'Only explicit active goal/plan items in the preserved state below are continuity anchors. Historical requests are not promoted without completion-state evidence.',
+      'Only explicit active goal/plan items in the preserved state below are continuity anchors. Historical requests are not promoted without completion-state evidence. List and resume applicable unfinished tasks in strict newest-to-oldest order.',
       meta || 'No metadata available.',
       '',
       '## Completed Or Background Work',
       recentLines || 'No historical transcript content available.',
       '',
       '## Decisions And Constraints',
-      'Treat the latest retained user message as authoritative. Continue older unfinished work only when it is relevant or required.',
+      'Treat the latest retained user message as authoritative. Continue older unfinished work only when it is relevant or required, always completing the newest unfinished task before the next-newest.',
       '',
       '## Tool And Verification Evidence',
       toolLines.length ? toolLines.join('\n') : 'No explicit tool evidence found in omitted segment.',
@@ -4463,6 +4685,8 @@ export class Agent {
   buildSystemPrompt(): string {
     const cwd = this.workspace.current?.path || this.rootPath;
     const enabledSkills = this.skills.active();
+    const currentSkillTask = this.latestUserHistoryText(this.history);
+    const relevantSkills = this.skills.search(currentSkillTask, 8);
     const linkedPlan = this.getLinkedPlan();
     const globalPromptPath = path.join(this.rootPath, 'agent.md');
     const globalPrompt = fs.existsSync(globalPromptPath) ? fs.readFileSync(globalPromptPath, 'utf-8') : '';
@@ -4481,7 +4705,8 @@ export class Agent {
       optionFeedback: this.config.getStr('agent', 'option_feedback'),
       model: this.model,
       intelligence: this.intelligence,
-      skills: enabledSkills.map(skill => [skill.name, skill.description, skill.path]),
+      skills: enabledSkills.map(skill => [skill.name, skill.description]),
+      relevantSkills: relevantSkills.map(skill => [skill.name, skill.description]),
       globalPrompt,
       workspacePrompt,
     });
@@ -4517,8 +4742,8 @@ export class Agent {
     if (enabledSkills.length) {
       parts.push([
         '[Enabled Skills]',
-        ...enabledSkills.slice(0, 40).map(s => `- ${s.name}: ${s.description || 'No description'} (${s.path})`),
-        'Use these skills when relevant. Disabled skills are intentionally omitted.',
+        ...(!currentSkillTask ? enabledSkills.slice(0, 8) : relevantSkills).map(s => `- ${s.name}: ${s.description || 'No description'}`),
+        'Use the skill tool with query when the matching skill is uncertain, then load exactly one skill by name. Skill bodies and paths are intentionally omitted until loaded. Disabled skills are intentionally omitted.',
       ].join('\n'));
     }
 
@@ -4570,7 +4795,7 @@ export class Agent {
       `- Automation: automation_create/list/update/toggle/delete manage persisted schedules through the active Newmark scheduler when available; Plan may only list automations, and subagents cannot manage automation.`,
       '- Memory Lab exists and provides persistent memory.',
       '- A memory_lab_update or memory_lab_reindex call is unfinished until its awaited tool result contains rebuildReceipt.completed=true. The completion receipt is represented by the tool activity inside the current Build block and should not be repeated as a separate completion message.',
-      `- Skills and subagents: skill_download installs offline SKILL.md folders; only enabled skills are disclosed in the system prompt; task creates constrained subagents tracked in agent state.`,
+      `- Skills and subagents: skill searches enabled metadata and loads one SKILL.md body on demand; skill_download installs offline skill folders; task creates constrained subagents tracked in agent state.`,
       `- Visible output contract: assistant replies are sanitized before display to remove hidden-reasoning markers. ${visibleOutputContract}`,
       '- During Build work, before the first tool call and between materially different tool phases, emit a concise public progress explanation of what you are checking or changing and why. This is visible commentary, not hidden chain-of-thought. Do not wait until the final answer to explain the work.',
     ].join('\n');
@@ -4876,6 +5101,32 @@ function validationCapabilityMap(record: ModelValidationRecord): Record<string, 
     image_input: validationCapabilityOk(record, 'vision'),
     image_output: validationCapabilityOk(record, 'image_output'),
   };
+}
+
+function modelResponseMaxContextTokens(raw: unknown): number | undefined {
+  const contextKeys = new Set([
+    'context_window',
+    'context_length',
+    'max_context_tokens',
+    'max_context_length',
+    'input_token_limit',
+    'max_input_tokens',
+  ]);
+  const visit = (value: unknown, depth: number): number | undefined => {
+    if (!value || typeof value !== 'object' || depth > 4) return undefined;
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      if (contextKeys.has(key.toLowerCase())) {
+        const parsed = Number(nested);
+        if (Number.isInteger(parsed) && parsed >= 128 && parsed <= 10_000_000) return parsed;
+      }
+    }
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      const parsed = visit(nested, depth + 1);
+      if (parsed) return parsed;
+    }
+    return undefined;
+  };
+  return visit(raw, 0);
 }
 
 function taskDeterministicallyRequiresToolInterface(task: string): boolean {

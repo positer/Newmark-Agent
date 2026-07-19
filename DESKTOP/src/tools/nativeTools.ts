@@ -41,6 +41,7 @@ export const NATIVE_TOOL_CATALOG: NativeToolCatalogEntry[] = [
   { name: 'linked_plan', label: 'Linked plan', description: 'Read or conservatively update the conversation-linked Markdown plan.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'question', label: 'Ask question', description: 'Ask the user for structured option feedback.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'skill_download', label: 'Skill download', description: 'Download and install a skill.', category: 'agent', defaultEnabled: true },
+  { name: 'skill', label: 'Skill', description: 'Search enabled skill metadata or load one skill body on demand.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'flow_list', label: 'Flow list', description: 'List saved Flow workflows.', category: 'workflow', defaultEnabled: true },
   { name: 'flow_save', label: 'Flow save', description: 'Create or update a Flow workflow.', category: 'workflow', defaultEnabled: true },
   { name: 'flow_run', label: 'Flow run', description: 'Run a saved Flow workflow.', category: 'workflow', defaultEnabled: true },

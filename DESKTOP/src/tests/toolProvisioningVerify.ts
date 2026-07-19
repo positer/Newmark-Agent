@@ -222,7 +222,7 @@ async function main(): Promise<void> {
       if (event.toolName) publicToolEvents.push(event.toolName);
     });
     const output = (await agent.process('Complete the request without assuming unavailable interfaces.')).map(token => token.text || '').join('');
-    assert.deepEqual(providerTurns[0], ['tool_provision'], 'first provider request carries only the compact broker for ordinary chat');
+    assert.deepEqual(providerTurns[0], ['skill', 'tool_provision'], 'first provider request carries only the compact broker plus bounded skill discovery for ordinary chat');
     assert.ok(providerTurns[1].includes('pwd') && providerTurns[1].includes('tool_provision'),
       'broker result refreshes the next provider request in the same user run');
     assert.ok(providerTurns[1].length < catalog.length, 'dynamic refresh does not expand back to the whole catalog');
@@ -280,7 +280,7 @@ async function main(): Promise<void> {
       const reachOutput = (await probe.process('Continue using the available capability boundary.'))
         .map(token => token.text || '')
         .join('');
-      assert.deepEqual(reachTurns[0].map(toolName), ['tool_provision'], `${targetName} starts behind the broker boundary`);
+      assert.deepEqual(reachTurns[0].map(toolName), ['skill', 'tool_provision'], `${targetName} starts behind the broker plus bounded skill discovery boundary`);
       const reachedDefinition = reachTurns[1]?.find(definition => toolName(definition) === targetName);
       assert.deepEqual(reachedDefinition, catalog.find(definition => toolName(definition) === targetName),
         `${targetName} original schema reaches the next provider subturn without drift`);
@@ -322,8 +322,9 @@ async function main(): Promise<void> {
       const compressionAgent = new Agent(compressionRoot, { conversationId: 'tool-provision-compression' });
       compressionAgent.createInternalWorkspace('tool-provision-compression');
       compressionAgent.config.set('context', 'auto_compress', true);
-      compressionAgent.config.set('context', 'compress_threshold_chars', 200);
       compressionAgent.config.set('context', 'keep_recent_messages', 2);
+      compressionAgent.config.updateModel('fixture-provider', 'fixture-model', { max_tokens: 1_000 });
+      compressionAgent.setModel('fixture-model');
       compressionAgent.config.save();
       compressionAgent.history = Array.from({ length: 12 }, (_, index) => ({
         role: index % 2 === 0 ? 'user' : 'assistant',
@@ -331,21 +332,31 @@ async function main(): Promise<void> {
       }));
       compressionAgent.saveWorkspaceConversationState();
       let compressionRound = 0;
+      const compressionContexts: string[] = [];
       const compressionProvider = {
         intelligenceConfig: () => ({ temperature: 0, maxTokens: 64 }),
-        async *chatStreamWithTools(): AsyncGenerator<StreamToken> {
+        async *chatStreamWithTools(_model: string, messages: Array<Record<string, unknown>>): AsyncGenerator<StreamToken> {
+          compressionContexts.push(JSON.stringify(messages));
           if (compressionRound++ === 0) {
             yield { type: 'tool_call', text: '', toolCall: { id: 'compressed-provision', name: 'tool_provision', arguments: JSON.stringify({ names: ['pwd'] }) } };
             return;
           }
           yield { type: 'text', text: 'COMPRESSION_OK' };
         },
-        async chat(): Promise<string> { return 'PUBLIC_COMPRESSION_SUMMARY'; },
+        async chat(): Promise<string> {
+          setTimeout(() => (compressionAgent as unknown as { activeAgentKernelRuntime?: { abort(): void } }).activeAgentKernelRuntime?.abort(), 0);
+          return 'PUBLIC_COMPRESSION_SUMMARY';
+        },
       };
       (compressionAgent as unknown as { forcedProvider: typeof compressionProvider }).forcedProvider = compressionProvider;
-      await compressionAgent.process('Continue after compacting this long public context.');
+      const compressionOutput = (await compressionAgent.process('Continue after compacting this long public context.')).map(token => token.text || '').join('');
       assert.ok(compressionAgent.lastCompression && !JSON.stringify(compressionAgent.history).includes('tool_provision'),
         'automatic compression persists only the public projection of broker-backed context');
+      assert.ok(compressionOutput.includes('COMPRESSION_OK') && compressionAgent.workRuns.at(-1)?.events.some(event => event.type === 'final_response'),
+        'a compression-side kernel abort resumes the same Build through its final response instead of interrupting the task');
+      assert.ok(compressionAgent.workRuns.at(-1)?.events.some(event => event.type === 'tool_result' && event.toolName === 'context_compression')
+        && compressionContexts.some(context => context.includes('Continue Same Build After Context Compression') && context.includes('Build Primary Prompt') && context.includes('Continue after compacting this long public context.')),
+      'context compression is a completed Build activity and continuation submits the summary, primary prompt, Guide slot, and current Build snapshot');
       const reloaded = new Agent(compressionRoot, { conversationId: 'tool-provision-compression' });
       assert.ok(!JSON.stringify(reloaded.history).includes('tool_provision'),
         'reloading compressed conversation state cannot revive the internal broker');

@@ -46,7 +46,7 @@ async function main(): Promise<void> {
     }, null, 2));
 
     LLMProvider.prototype.modelCatalog = async function() {
-      return [{ id: 'fixture-model', raw: { capabilities: ['vision', 'tools', 'json_schema'] } }];
+      return [{ id: 'fixture-model', raw: { capabilities: ['vision', 'tools', 'json_schema'], limits: { context_window: 131072, max_output_tokens: 4096 } } }];
     };
     LLMProvider.prototype.chat = async function(_model, messages) {
       chatCalls += 1;
@@ -125,6 +125,7 @@ async function main(): Promise<void> {
     ok(first.length === 1 && first[0].status === 'verified', 'Agent validation maps the complete Standard probe suite to verified');
     const saved = agent.config.findDeployment({ providerId: 'fixture-provider', modelId: 'fixture-model' });
     ok(saved?.validation?.level === 'standard' && saved.validation.status === 'verified', 'Standard evidence is persisted separately from legacy evaluation');
+    ok(saved?.max_tokens === 131072, 'model validation persists the maximum context window reported by the provider response');
     ok(saved?.validation?.capabilities?.image_input === true
       && saved.validation.capabilities.tool_use === true
       && saved.validation.capabilities.json_schema === true,

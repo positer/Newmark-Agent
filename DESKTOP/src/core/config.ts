@@ -303,6 +303,15 @@ export class ConfigManager {
     return next.id;
   }
 
+  setProviderEnabled(providerIdOrLegacyName: string, enabled: boolean): boolean {
+    const providers = this.providers();
+    const providerIndex = providerMutationIndex(providers, providerIdOrLegacyName);
+    if (providerIndex < 0) return false;
+    providers[providerIndex].enabled = !!enabled;
+    this.set('models', 'providers', providers);
+    return true;
+  }
+
   addModelToProvider(providerIdOrLegacyName: string, modelName: string, display: string, description: string): boolean {
     const ps = this.providers();
     const providerIndex = providerMutationIndex(ps, providerIdOrLegacyName);

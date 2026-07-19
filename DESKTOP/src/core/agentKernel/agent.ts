@@ -4,6 +4,7 @@ import {
   AgentMessage,
   AgentState,
   AgentTool,
+  ContextTransformOutput,
   ImageContent,
   Model,
   QueueMode,
@@ -81,7 +82,7 @@ type ActiveRun = {
 export interface AgentOptions {
   initialState?: Partial<Omit<AgentState, 'pendingToolCalls' | 'isStreaming' | 'streamingMessage' | 'errorMessage'>>;
   convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
-  transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+  transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<ContextTransformOutput>;
   resolveTools?: () => AgentTool[] | Promise<AgentTool[]>;
   streamFn?: StreamFn;
   prepareNextTurn?: () => unknown;
@@ -118,7 +119,7 @@ export class Agent {
   private _state: AgentState;
 
   public convertToLlm: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
-  public transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+  public transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<ContextTransformOutput>;
   public resolveTools?: () => AgentTool[] | Promise<AgentTool[]>;
   public streamFn: StreamFn;
   public sessionId?: string;

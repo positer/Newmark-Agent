@@ -75,6 +75,7 @@ contextBridge.exposeInMainWorld('api', {
   deleteWorkspace: (name: string) => ipcRenderer.invoke('agent:deleteWorkspace', name),
   setWorkspacePinned: (id: string, pinned: boolean) => ipcRenderer.invoke('agent:setWorkspacePinned', id, pinned),
   saveSetting: (section: string, key: string, value: unknown) => ipcRenderer.invoke('agent:saveSetting', section, key, value),
+  setProviderEnabled: (providerId: string, enabled: boolean) => ipcRenderer.invoke('agent:setProviderEnabled', providerId, enabled),
   validateModels: (selected?: string[]) => ipcRenderer.invoke('agent:validateModels', selected),
   fuzzyInject: (name: string, url: string, key: string, protocol?: string) => ipcRenderer.invoke('agent:fuzzyInject', name, url, key, protocol),
   githubCopilotLogin: () => ipcRenderer.invoke('github:copilotLogin'),

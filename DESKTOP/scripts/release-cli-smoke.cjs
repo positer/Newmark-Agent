@@ -353,20 +353,21 @@ function startMockServer() {
       '--update',
       '--name', 'release-cli-memory',
       '--description', 'Release CLI Memory Lab smoke component',
-      '--tags', '#Release-CLI,#Agent-Skill',
+      '--tags', '#Release/CLI,#Agent-Skill',
       '--content-file', memoryContentFile,
       '--root', root,
     ], root);
     const parsedMemoryUpdate = JSON.parse(memoryUpdate.stdout);
     if (parsedMemoryUpdate.ok !== true) fail(`memory-lab update failed: ${memoryUpdate.stdout}`);
-    if (!parsedMemoryUpdate.index?.tags?.['#Release-CLI']?.components?.includes('release-cli-memory')) {
-      fail(`memory-lab update did not link component to deepest Release tag: ${memoryUpdate.stdout}`);
+    if (!parsedMemoryUpdate.index?.tags?.['#CLI']?.components?.includes('release-cli-memory')) {
+      fail(`memory-lab update did not link component to the independent CLI tag: ${memoryUpdate.stdout}`);
     }
-    if (!parsedMemoryUpdate.index?.tags?.['#Release']?.children?.includes('#Release-CLI')) {
+    if (!parsedMemoryUpdate.index?.tags?.['#Release']?.children?.includes('#CLI')
+      || !parsedMemoryUpdate.index?.tags?.['#CLI']?.parents?.includes('#Release')) {
       fail(`memory-lab update did not create Release parent tag: ${memoryUpdate.stdout}`);
     }
-    if (!parsedMemoryUpdate.index?.tags?.['#Agent']?.children?.includes('#Agent-Skill')) {
-      fail(`memory-lab update did not create Agent parent tag: ${memoryUpdate.stdout}`);
+    if (!parsedMemoryUpdate.index?.tags?.['#Agent-Skill']?.components?.includes('release-cli-memory')) {
+      fail(`memory-lab update did not preserve the hyphenated Agent-Skill tag: ${memoryUpdate.stdout}`);
     }
     const memoryRead = await runPowerShellCli(['memory-lab', '--component', 'release-cli-memory', '--root', root], root);
     const parsedMemoryRead = JSON.parse(memoryRead.stdout);
@@ -381,7 +382,9 @@ function startMockServer() {
     }
     const memoryReindex = await runPowerShellCli(['memory-lab', '--reindex', '--root', root], root);
     const parsedMemoryReindex = JSON.parse(memoryReindex.stdout);
-    if (parsedMemoryReindex.ok !== true || !parsedMemoryReindex.index?.tags?.['#Release-CLI']?.components?.includes('release-cli-memory')) {
+    if (parsedMemoryReindex.ok !== true
+      || !parsedMemoryReindex.index?.tags?.['#CLI']?.components?.includes('release-cli-memory')
+      || !parsedMemoryReindex.index?.tags?.['#Release']?.children?.includes('#CLI')) {
       fail(`memory-lab reindex did not preserve component links: ${memoryReindex.stdout}`);
     }
     log('memory-lab ok');

@@ -288,8 +288,11 @@ async function main(): Promise<void> {
     conversationId: 'compression-test',
   });
   compressionAgent.config.set('context', 'auto_compress', true);
-  compressionAgent.config.set('context', 'compress_threshold_chars', 1000);
   compressionAgent.config.set('context', 'keep_recent_messages', 4);
+  compressionAgent.config.upsertProvider('subagent-compression-provider', 'https://subagent-compression.invalid/v1', 'subagent-compression-key');
+  compressionAgent.config.addModelToProvider('subagent-compression-provider', 'subagent-compression-model', 'Subagent Compression Model', 'Subagent compression budget fixture');
+  compressionAgent.config.updateModel('subagent-compression-provider', 'subagent-compression-model', { max_tokens: 4_000 });
+  compressionAgent.setModel('subagent-compression-model');
   compressionAgent.history = Array.from({ length: 24 }, (_, index) => ({
     role: index % 2 === 0 ? 'user' : 'assistant',
     content: `${index}:` + (index % 2 === 0 ? 'u' : 'a').repeat(600),

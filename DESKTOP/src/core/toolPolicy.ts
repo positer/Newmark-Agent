@@ -43,6 +43,7 @@ const PLAN_READ_ONLY_TOOLS = new Set([
   'repo_security_audit',
   'automation_list',
   'memory_lab_read',
+  'skill',
   'linked_plan',
   'task',
   'subagent_list',

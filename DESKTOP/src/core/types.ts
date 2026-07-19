@@ -102,6 +102,7 @@ export interface ConversationWorkRun {
   sequence: number;
   events: AgentWorkEvent[];
   guides: GuideReceipt[];
+  primaryPrompt?: string;
 }
 
 export interface GoalState {

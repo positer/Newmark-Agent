@@ -317,6 +317,10 @@ async function main() {
   assert(uiHtml.includes('function rerenderActiveSubWindowForLanguage()') && uiHtml.includes("state.activeSubWindowView = { name: 'workspaceRequired' }") && uiHtml.includes("state.activeSubWindowView = { name: 'plugins'"), 'ui html: language switch rerenders active secondary windows');
   assert(uiHtml.includes('window.showMemoryLab = function()') && uiHtml.includes("state.activeSubWindowView = { name: 'memoryLab'") && uiHtml.includes("t('memoryLab.title')"), 'ui html: Memory Lab left toolbar entry and panel renderer exist');
   assert(uiHtml.includes('api.memoryLabRead') && uiHtml.includes('memoryLabReindex') && uiHtml.includes("lucide-sprite.svg#brain"), 'ui html: Memory Lab preload API and icon are wired');
+  assert(uiHtml.includes('window.setInputMode = function(mode, persist)') && uiHtml.includes('api.setInputMode(state.inputMode)') && uiHtml.includes('window.setInputMode(s.inputMode, false)'), 'ui html: Guide/Next mode persists through backend and restores without write-back on state hydration');
+  assert(uiHtml.includes('function renderWorkRunGuideMessage(event)') && uiHtml.includes('function workRunGuideEvents(run)') && uiHtml.includes('work-run-collapsed-guides') && uiHtml.includes('work-run-guide-message chat-msg') === false && uiHtml.includes('chat-msg user work-run-guide-message'), 'ui html: Guide renders as a right-aligned user message, interleaves by work-event sequence when expanded, and lists below the Build header when collapsed');
+  assert(uiHtml.includes("name === 'context_compression'") && uiHtml.includes("'已完成上下文压缩'") && uiHtml.includes("'Completed context compression'"), 'ui html: completed context compression renders as a Build activity alongside tool work');
+  assert(uiHtml.includes('window.setMemoryLabReindexing = function(running)') && uiHtml.includes("panel.classList.toggle('marquee-border', state.memoryLabReindexing)") && uiHtml.includes('window.setMemoryLabReindexing(true);') && uiHtml.includes('.finally(function()') && uiHtml.includes('window.setMemoryLabReindexing(false);') && !uiHtml.includes('id="memory-lab-panel" class="provider-card marquee-border"'), 'ui html: Memory Lab animated border is shown only while reindex is pending and always clears afterward');
   assert(uiHtml.includes('.memory-lab-graph') && uiHtml.includes("t('memoryLab.parents')") && uiHtml.includes("t('memoryLab.children')") && uiHtml.includes("t('memoryLab.rootTags')") && !uiHtml.includes('memoryLabConnectionSvg') && !uiHtml.includes('memory-lab-links'), 'ui html: Memory Lab renders centered parent-child tag graph without connector lines and shows root tags at top-level');
   assert(uiHtml.includes('memory-lab-search-input') && uiHtml.includes('window.updateMemoryLabSearch') && uiHtml.includes("t('memoryLab.search')"), 'ui html: Memory Lab exposes tag search and jump controls');
   assert(uiHtml.includes('memory-lab-view-menu') && uiHtml.includes('window.switchMemoryLabView = function(view)') && uiHtml.includes("t('memoryLab.overview')") && uiHtml.includes("t('memoryLab.detail')") && uiHtml.includes('memory-lab-overview-stage') && uiHtml.includes('window.buildMemoryLabOverviewGraph'), 'ui html: Memory Lab has switchable overview/detail views with overview graph renderer');
@@ -358,6 +362,7 @@ async function main() {
   assert(uiHtml.includes('guideMessagesByTarget') && uiHtml.includes('function recordGuideUiMessage') && uiHtml.includes('function renderPendingGuideMessages') && uiHtml.includes('function syncGuideMessagesFromWorkRuns') && uiHtml.includes('renderPendingGuideMessages(renderTarget, persistedGuideIds)') && uiHtml.includes("guideStatus: clientMessageId ? 'applied' : ''") && !uiHtml.includes("optimisticGuide.setAttribute('data-guide-status'"), 'ui html: Guide receipts are target-scoped and snapshot redraw reconciles optimistic rows by clientMessageId');
   assert(uiHtml.includes("{ id: 'default', summary: t('workspace.defaultConversation')") && !uiHtml.includes("'conv-' + key + '-default'") && !uiHtml.includes("'conv-default-' + currentWorkspaceKey()"), 'ui html: default conversation id matches backend default id');
   assert(uiHtml.includes('function applyBackendConversations(items, activeId, workspaceId)') && uiHtml.includes('var preferredActiveId = hasLocalActive ? localActiveId') && uiHtml.includes('applyBackendConversations(backendConversations, preferredActiveId)'), 'ui html: reloads persisted conversation list into a workspace-scoped cache while preserving each window-local active conversation');
+  assert(uiHtml.includes("runWrapper.insertAdjacentElement('afterend', div)") && uiHtml.includes("addMsg('assistant', content, event.mode || state.mode") && uiHtml.includes("{ runId: event.runId || ''"), 'Build transcript: live and restored final replies remain immediately adjacent to their owning runId block');
   assert(uiHtml.includes('function activeConversationId()') && uiHtml.includes('api.sendMessage(requestMessage, lockedTarget)') && uiHtml.includes('composePromptRequestForSend(rawText)'), 'ui html: sends the initiating composite target with structured text and image attachments');
   assert(uiHtml.includes('window.submitCurrentAction = function()') && uiHtml.includes('window.stopCurrentConversation = async function()') && uiHtml.includes('api.stopConversation({ target: target, runId: runId, force: force })') && uiHtml.includes("e.key === 'Escape' && isCurrentConversationRunning() && !promptHasText()"), 'ui html: current running conversation with empty prompt shows target-bound graceful/force Stop bound to Esc');
   assert(uiHtml.includes('function updateSubmitButtonState()') && uiHtml.includes("setSubmitButtonVisual(escalating ? 'octagon-x' : 'square', label, true, true)") && uiHtml.includes("setSubmitButtonVisual('send', t('input.send'), running, false)") && uiHtml.includes("els.prompt.addEventListener('input'") && uiHtml.includes("['stopping', 'force_restarting']"), 'ui html: submit button switches between Send, Stop, and Force stop from the target runtime state');
@@ -368,6 +373,8 @@ async function main() {
   assert(uiHtml.includes("type === 'queue_update'") && uiHtml.includes('backendQueuesByTarget') && uiHtml.includes('setBackendQueueForTarget(event.queue || { steering: [], followUp: [] }, eventQueueTarget)') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue, eventQueueTarget)') && uiHtml.includes('setBackendQueueForTarget(s.queued, snapshotTarget)') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue, snapshotTarget)'), 'ui html: caches backend queue_update events by composite target for foreground/background conversation debugging');
   assert(uiHtml.includes('if (s && Array.isArray(s.workEvents))') && uiHtml.includes('var mergedEvents = existingEvents.concat(s.workEvents || [])') && uiHtml.includes('dedupedEvents.slice(-Number(state.agentWorkEventLimit || 240))'), 'ui html: merges backend work-event snapshots when foregrounding a conversation');
   assert(mainSource.includes('function broadcastAgentWorkEvent(event: unknown)') && mainSource.includes('BrowserWindow.getAllWindows()') && mainSource.includes("win.webContents.send('agent:workEvent', event)") && mainSource.includes("ipcMain.handle('agent:getState', async (event, targetInput?: ConversationTargetInput)") && mainSource.includes('const startupPrewarmRequest = isStartupPrewarmSender(event)') && mainSource.includes("ipcMain.handle('agent:ensureConversation'") && mainSource.includes('ensureWslConversationPool()!.snapshot(target)') && mainSource.includes('ensureElectronUtilityPool().snapshot(target)') && preloadSource.includes('ensureConversation: (target: string | Record<string, unknown>)') && preloadSource.includes('getState: (target?: string | Record<string, unknown>)'), 'backend sharing: all desktop windows receive one composite-target event stream and can request isolated Windows/WSL snapshots');
+  assert(mainSource.includes('const peek = peekTargetRuntime(normalized)') && mainSource.includes('if (peek.resident) await stopTargetRuntime(normalized)') && mainSource.indexOf('if (peek.resident) await stopTargetRuntime(normalized)') < mainSource.indexOf('const archiveOwner = ownsTargetWorkspace ? agent : isolatedConversationAgent(normalized)'), 'archive IPC: observes cold targets without allocation and stops resident writers before deleting persisted state');
+  assert(mainSource.includes('const archiveOwner = ownsTargetWorkspace ? agent : isolatedConversationAgent(normalized)') && mainSource.includes('archiveOwner.archiveConversation(normalized.conversationId)'), 'archive IPC: current workspace uses the host persistence owner so delayed cache flushes cannot resurrect deleted conversations');
   assert(mainSource.includes('const singleInstanceLock = allowMultipleInstances || app.requestSingleInstanceLock()') && mainSource.includes("app.on('second-instance'") && mainSource.includes('const win = mainWindow && !mainWindow.isDestroyed()') && !mainSource.includes('const win = createDesktopWindow ? createDesktopWindow(!!agent) : mainWindow'), 'main process: production launches focus the existing window while explicitly isolated test instances skip lock coordination');
   assert(uiHtml.includes('function loadActiveConversationMessages(conversationId)') && uiHtml.includes('var requestedConversationId = String(conversationId || activeConversationId() ||') && uiHtml.includes('var requestedTarget = currentConversationTarget(requestedConversationId)') && uiHtml.includes('api.getState(lockedTarget)') && !uiHtml.includes('api.getState().then(function(s) {\n      if (s && s.contextCompression'), 'ui html: active window refreshes are bound to the owning workspace and conversation target');
   assert(uiHtml.includes('function setActiveWorkspaceConversationById(id)') && uiHtml.includes('var activeBeforeRender = (conversations.find(function(c)') && uiHtml.includes('if (activeBeforeRender) setActiveWorkspaceConversationById(activeBeforeRender);'), 'ui html: conversation list rerender preserves active conversation by id instead of stale cross-window index');
@@ -456,6 +463,7 @@ async function main() {
   const streamProviderBody = (piKernelSource.match(/function streamWithNewmarkProvider[\s\S]*?async function transformContext/) || [''])[0];
   assert(!streamProviderBody.includes('currentAgent.tools.definitions(currentAgent.mode)'), 'kernel: streaming provider does not rebuild tool schemas on every model round');
   assert(piKernelSource.includes("if (!agent.config.getBool('context', 'auto_compress')) return messages;"), 'kernel: transformContext skips conversion and JSON comparison when auto compression is disabled');
+  assert(piKernelSource.includes("toolExecution: 'parallel'") && piKernelSource.includes('continuationToolLaunchReceipt') && agentKernelSource.includes('Multiple tool calls emitted in one provider turn run concurrently'), 'kernel: enables concurrent tool batches and documents continuation-tool launch receipts');
   assert(mainKernelSource.includes("ipcMain.handle('agent:abortConversation'") && mainKernelSource.includes("ipcMain.handle('agent:stopConversation'") && uiHtml.includes('api.archive(targetRuntime)') && uiHtml.includes("['running', 'stopping', 'force_restarting']"), 'kernel/ui: target stop state is authoritative and running conversations cannot be archived from the UI');
   assert(uiHtml.includes('var seenIds = {};') && uiHtml.includes('if (seenIds[id]) continue;') && uiHtml.includes("displaySummary += ' · ' + String(conv.id || '').slice(-8);"), 'ui conversations: duplicate ids are ignored and distinct conversations with matching titles are disambiguated');
   assert(uiHtml.includes('#model-select {') && uiHtml.includes('flex: 1 1 160px;') && uiHtml.includes('width: 0;') && uiHtml.includes('min-width: 72px;') && uiHtml.includes('container-type: inline-size;') && uiHtml.includes('@container (max-width: 430px)') && uiHtml.includes('@media (max-width: 720px)') && uiHtml.includes('#left, #left-secondary, #right, .right-open-btn { display: none !important; }') && uiHtml.includes('#input-tools {') && uiHtml.includes('overflow: hidden;'), 'ui input toolbar: model selector keeps readable minimum width and narrow-window layout preserves submit without changing saved sidebar state');
@@ -955,6 +963,8 @@ async function main() {
   assert(serverTs.includes("language: agent.config.getStr('general', 'language')") && serverTs.includes("case 'language': agent.config.set('general', 'language', value); break;"), 'server api: exposes and persists language setting');
   assert(cliCommandsTs.includes("language: agent.config.getStr('general', 'language') || 'auto'") && cliCommandsTs.includes("const language = argValue(args, '--language')") && cliCommandsTs.includes("[--language auto|en|zh]"), 'cli commands: expose and accept language switching');
   assert(mainTs.includes('sanitizeProvidersForState(agent.config.providers())') && mainTs.includes('agent.updateProviders(value)') && agentTs.includes('mergeProviderSecrets(value, before)'), 'main ipc: redacts provider keys and preserves secrets on provider save');
+  assert(mainTs.includes("ipcMain.handle('agent:setProviderEnabled'") && preloadTs.includes('setProviderEnabled:') && uiHtml.includes('window.toggleProviderEnabled') && uiHtml.includes("iconSvg(providerEnabled ? 'power' : 'power-off'"), 'provider settings: expose accessible enable/disable controls while retaining delete separately');
+  assert(uiHtml.includes("if (p.enabled === false || !p.models || !p.models.length) continue") && uiHtml.includes("if (!confirm(t('model.deleteProviderConfirm')"), 'provider settings: disabled providers are excluded from model selection and permanent deletion remains confirmed');
   assert(serverTs.includes('sanitizeProvidersForState(agent.config.providers())') && serverTs.includes("cfg.section === 'models' && cfg.key === 'providers'") && serverTs.includes('agent.updateProviders(cfg.value)') && !serverTs.includes('jsonResponse(res, agent.config)') && !serverTs.includes("Access-Control-Allow-Origin', '*'") && serverTs.includes("server.listen(PORT, '127.0.0.1'"), 'server api: redacts provider keys, preserves secrets on provider save, disables raw config export, and binds without wildcard CORS');
   assert(mainTs.includes("ipcMain.handle('skills:refresh'") && mainTs.includes('agent.refreshSkills();') && mainTs.includes("ipcMain.handle('skills:addMarketSource'") && mainTs.includes("ipcMain.handle('memoryLab:read'") && mainTs.includes('agent.updateMemoryLab') && mainTs.includes('agent.reindexMemoryLab') && mainTs.includes('terminalInterruptTimeoutMs'), 'main ipc: refreshes skills runtime, manages market sources and Memory Lab through Agent organizer, and returns terminal timeout state');
   assert(mainTs.includes("ipcMain.handle('agent:getConversationPlan', async (_event, conversationId?: string)") && mainTs.includes("ipcMain.handle('agent:updateConversationPlan', async (_event, plan: Record<string, unknown>, conversationId?: string)") && mainTs.includes('conversationPlan: agent.getConversationPlan()'), 'main ipc: exposes and returns conversation-bound plan state');
@@ -1025,6 +1035,8 @@ async function main() {
   assert(providers[0].name === 'test-prov', 'provider name correct');
   assert(providers[0].base_url === 'https://api.test.com/v1', 'provider url correct');
   assert(providers[0].protocol === 'openai', 'provider protocol defaults to openai');
+  assert(cfg.setProviderEnabled(providers[0].id, false) && cfg.allModels().every(model => model.provider_id !== providers[0].id), 'provider disable: preserves provider while excluding all deployments');
+  assert(cfg.setProviderEnabled(providers[0].id, true), 'provider disable: provider can be re-enabled without reconfiguration');
   cfg.upsertProvider('test-prov', '', '');
   assert(cfg.providers().find(p => p.name === 'test-prov')?.api_key === 'test-key-123', 'provider upsert: empty key preserves saved key');
   assert(cfg.providers().find(p => p.name === 'test-prov')?.base_url === 'https://api.test.com/v1', 'provider upsert: empty url preserves saved endpoint');
@@ -1728,27 +1740,92 @@ async function main() {
   const memoryUpdate = memoryLab.update(memoryLab.prepareUpdate({
     name: '用于分析理论物理与数学的Skill',
     description: 'A theory and math analysis skill memory.',
-    tags: ['#数学', '#物理-理论物理', '#Agent-Skill'],
+    tags: ['#数学', '#物理/理论物理', '#Agent-Skill'],
     content: '# Theory Skill\n\nUse rigorous derivations.',
     kind: 'folder',
   }));
   assert(memoryUpdate.ok === true && !!memoryUpdate.slug && fs.existsSync(memoryUpdate.component?.coreMd || ''), 'memory lab: writes folder memory component core markdown');
   const memoryIndex = memoryUpdate.index;
-  assert(!!memoryIndex.tags['#物理'] && memoryIndex.tags['#物理'].children.includes('#物理-理论物理'), 'memory lab: creates hierarchical parent tag link');
-  assert(memoryIndex.tags['#物理-理论物理'].parents.includes('#物理') && memoryIndex.tags['#物理-理论物理'].components.includes(memoryUpdate.slug || ''), 'memory lab: links component only to deepest hierarchical tag');
-  assert(memoryIndex.tags['#数学'].components.includes(memoryUpdate.slug || '') && memoryIndex.tags['#Agent-Skill'].components.includes(memoryUpdate.slug || ''), 'memory lab: links independent deepest tags to component');
+  assert(memoryIndex.version === 2 && !!memoryIndex.tags['#物理'] && memoryIndex.tags['#物理'].children.includes('#理论物理'), 'memory lab: migrates legacy slash paths into independent v2 nodes');
+  assert(memoryIndex.tags['#理论物理'].parents.includes('#物理') && memoryIndex.tags['#理论物理'].components.includes(memoryUpdate.slug || ''), 'memory lab: links component only to the terminal independent tag');
+  assert(memoryIndex.tags['#数学'].components.includes(memoryUpdate.slug || '') && memoryIndex.tags['#Agent-Skill'].components.includes(memoryUpdate.slug || ''), 'memory lab: links independent and legacy-migrated terminal tags while preserving hyphenated tag names');
   const readComponent = memoryLab.read(memoryUpdate.slug || '');
   assert(readComponent.ok === true && readComponent.component?.content.includes('rigorous derivations'), 'memory lab: reads component core markdown by slug');
   const duplicateTagUpdate = memoryLab.update(memoryLab.prepareUpdate({
     name: '用于分析理论物理与数学的Skill',
     description: 'Updated description.',
-    tags: ['物理-理论物理', '#物理-理论物理', '#数学'],
+    tags: ['物理/理论物理', '#物理/理论物理', '#数学'],
     content: '# Theory Skill\n\nUpdated content.',
     kind: 'file',
   }));
-  assert(duplicateTagUpdate.index.tags['#物理-理论物理'].components.filter((slug: string) => slug === duplicateTagUpdate.slug).length === 1, 'memory lab: reuses tags and avoids duplicate component links');
+  assert(duplicateTagUpdate.index.tags['#理论物理'].components.filter((slug: string) => slug === duplicateTagUpdate.slug).length === 1, 'memory lab: reuses migrated tags and avoids duplicate component links');
   const reindexedMemory = memoryLab.reindex();
-  assert(reindexedMemory.ok === true && reindexedMemory.index.tags['#物理'].children.includes('#物理-理论物理'), 'memory lab: reindex preserves repaired tag graph');
+  assert(reindexedMemory.ok === true && reindexedMemory.index.tags['#物理'].children.includes('#理论物理'), 'memory lab: reindex preserves repaired tag graph');
+  const malformedLegacyIndex = memoryLab.normalizeIndex({
+    version: 2,
+    updatedAt: new Date().toISOString(),
+    tags: {
+      '#用户画像/专业方向/理论物理/弦论': { parents: [], children: [], components: ['legacy-result'], aliases: [] },
+      '#research/downloads': { parents: [], children: [], components: ['legacy-result'], aliases: [] },
+    },
+    components: {
+      'legacy-result': {
+        name: 'legacy-result', description: '',
+        tags: ['#用户画像/专业方向/理论物理/弦论', '#research/downloads'],
+        tagPaths: [['#用户画像/专业方向/理论物理/弦论'], ['#research/downloads']],
+        path: path.join(memoryLab.componentsDir, 'legacy-result.md'), coreMd: path.join(memoryLab.componentsDir, 'legacy-result.md'),
+        kind: 'file', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      },
+    },
+  }).index;
+  assert(Object.keys(malformedLegacyIndex.tags).every(tag => !tag.includes('/')) && malformedLegacyIndex.tags['#用户画像'].children.includes('#专业方向') && malformedLegacyIndex.tags['#专业方向'].children.includes('#理论物理') && malformedLegacyIndex.tags['#理论物理'].children.includes('#弦论') && malformedLegacyIndex.tags['#research'].children.includes('#downloads'), 'memory lab: reindex inspects final v2 tag names and splits slash paths found inside legacy tags and single-node tagPaths');
+  assert(malformedLegacyIndex.components['legacy-result'].tags.every(tag => !tag.includes('/')) && malformedLegacyIndex.components['legacy-result'].tagPaths.flat().every(tag => !tag.includes('/')), 'memory lab: rebuilt component metadata contains no slash-bearing tag results');
+  const multiParentMemory = memoryLab.update(memoryLab.prepareUpdate({
+    name: 'multi-parent-memory',
+    description: 'Tag DAG test.',
+    tags: ['#理论物理'],
+    tagPaths: [['#物理', '#理论物理'], ['#数学', '#理论物理']],
+    content: '# Multi parent',
+  }));
+  assert(multiParentMemory.index.tags['#理论物理'].parents.includes('#物理') && multiParentMemory.index.tags['#理论物理'].parents.includes('#数学'), 'memory lab: one independent tag supports multiple parents');
+  const literalHyphenMemory = memoryLab.update(memoryLab.prepareUpdate({
+    name: 'literal-hyphen-memory',
+    description: 'Literal hyphen tag test.',
+    tags: [],
+    tagPaths: [['#Agent-Skill']],
+    content: '# Literal hyphen',
+  }));
+  assert(literalHyphenMemory.index.tags['#Agent-Skill'].components.includes(literalHyphenMemory.slug || ''), 'memory lab: single-node tagPaths preserves a literal hyphenated tag name');
+  const legacyDirectionMemory = memoryLab.update(memoryLab.prepareUpdate({
+    name: 'legacy-direction-tag',
+    tags: ['#父tag:物理 -> 子tag:理论物理'],
+    content: 'legacy direction migration',
+  }));
+  assert(legacyDirectionMemory.index.tags['#物理'].children.includes('#理论物理') && !legacyDirectionMemory.index.tags['#父tag:物理 -> 子tag:理论物理'], 'memory lab: rebuild migrates legacy parent/child direction wording into independent nodes and edges');
+  memoryLab.setPreferredLanguage('en');
+  const synonymIndex = memoryLab.normalizeIndex({
+    version: 2,
+    updatedAt: new Date().toISOString(),
+    preferredLanguage: 'en',
+    tags: {
+      '#Physics': { parents: [], children: [], components: [], aliases: ['#物理'] },
+      '#物理': { parents: [], children: [], components: [], aliases: ['#Physics'] },
+    },
+    components: {
+      bilingual: {
+        name: 'bilingual', description: '', tags: ['#Physics', '#物理'], tagPaths: [['#Physics']],
+        path: path.join(memoryLab.componentsDir, 'bilingual.md'), coreMd: path.join(memoryLab.componentsDir, 'bilingual.md'),
+        kind: 'file', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      },
+    },
+  });
+  assert(!!synonymIndex.index.tags['#Physics'] && synonymIndex.index.tags['#Physics'].aliases.includes('#物理') && !synonymIndex.index.tags['#物理'], 'memory lab: English user language merges bilingual synonyms under the English primary name');
+  memoryLab.setPreferredLanguage('zh');
+  const chineseSynonymIndex = memoryLab.normalizeIndex(synonymIndex.index);
+  assert(!!chineseSynonymIndex.index.tags['#物理'] && chineseSynonymIndex.index.tags['#物理'].aliases.includes('#Physics') && !chineseSynonymIndex.index.tags['#Physics'], 'memory lab: language switch updates the primary tag name while preserving aliases');
+  let cyclicTagBlocked = false;
+  try { memoryLab.prepareUpdate({ name: 'cycle', tags: ['#A'], tagPaths: [['#A', '#B', '#A']], content: 'bad' }); } catch { cyclicTagBlocked = true; }
+  assert(cyclicTagBlocked, 'memory lab: rejects cyclic tag paths on new writes');
   let traversalBlocked = false;
   try { memoryLab.prepareUpdate({ name: '..', tags: ['#bad'], content: 'bad' }); } catch { traversalBlocked = true; }
   assert(traversalBlocked, 'memory lab: rejects traversal-like invalid slug');
@@ -2076,6 +2153,25 @@ async function main() {
   assert(skMgr2.active().length === 0, 'skills: disabled skill not active');
   assert(skMgr2.setEnabled('test-skill', true) === true, 'skills: can re-enable skill');
   assert(skMgr2.active().some(s => s.name === 'test-skill'), 'skills: enabled skill is active');
+  for (let skillIndex = 0; skillIndex < 105; skillIndex++) {
+    const name = `bulk-skill-${skillIndex}`;
+    const dir = path.join(TEST_DIR, 'skills', name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: ${skillIndex === 77 ? 'Special frontend regression workflow' : 'Generic bulk fixture'}\n---\n# ${name}`);
+  }
+  const bulkSkills = new SkillsManager(TEST_DIR);
+  assert(bulkSkills.search('frontend regression', 8)[0]?.name === 'bulk-skill-77' && bulkSkills.search('frontend regression', 8).length <= 8, 'skills: large catalogs return a bounded relevant metadata shortlist');
+  assert(bulkSkills.load('bulk-skill-77')?.content.includes('Special frontend regression workflow'), 'skills: exact load returns one selected SKILL.md body on demand');
+  const digestSkillPath = path.join(TEST_DIR, 'skills', 'bulk-skill-77', 'SKILL.md');
+  const digestSkillBefore = '---\nname: bulk-skill-77\ndescription: Special frontend regression workflow\n---\n# bulk-skill-77';
+  fs.writeFileSync(digestSkillPath, digestSkillBefore, 'utf-8');
+  const digestSkillStat = fs.statSync(digestSkillPath);
+  bulkSkills.search('frontend regression', 8);
+  const digestSkillAfter = digestSkillBefore.replace('Special frontend regression workflow', 'Updated frontend regression workflow');
+  assert(Buffer.byteLength(digestSkillBefore) === Buffer.byteLength(digestSkillAfter), 'skills: digest invalidation fixture preserves file size');
+  fs.writeFileSync(digestSkillPath, digestSkillAfter, 'utf-8');
+  fs.utimesSync(digestSkillPath, digestSkillStat.atime, digestSkillStat.mtime);
+  assert(bulkSkills.search('updated frontend', 8)[0]?.name === 'bulk-skill-77', 'skills: content digest invalidates cached metadata even when mtime and size are unchanged');
   const localSkillSource = path.join(TEST_DIR, 'local-source-skill');
   fs.mkdirSync(localSkillSource, { recursive: true });
   fs.writeFileSync(path.join(localSkillSource, 'SKILL.md'), '---\nname: local-copy-skill\ndescription: Local copy test\n---\n# Local');
@@ -2203,7 +2299,7 @@ async function main() {
 
   skMgr2.remove('test-skill');
   skMgr2.remove('local-copy-skill');
-  assert(skMgr2.count() === 0, 'remove: skill deleted');
+  assert(!skMgr2.has('test-skill') && !skMgr2.has('local-copy-skill'), 'remove: selected skills deleted without affecting the large catalog fixture');
 
   // ---- 5b. Automation Tests ----
   console.log('\n�?Automation Manager');
@@ -2426,6 +2522,27 @@ async function main() {
 
   agent.setMode('build');
   assert(agent.mode === 'build', 'agent: switch back to Build');
+  const completedSummaryRun = agent.beginConversationWorkRun('completed-summary-run', { workspaceId: 'summary-workspace', conversationId: 'default' });
+  agent.finishConversationWorkRun(completedSummaryRun.runId, 'completed');
+  assert(completedSummaryRun.events.filter(event => event.type === 'final_response').length === 1
+    && agent.chatMessages.filter(message => message.role === 'assistant' && message.runId === completedSummaryRun.runId).length === 1,
+  'Build completion: a normally completed run always persists exactly one final result');
+  const failedSummaryRun = agent.beginConversationWorkRun('failed-summary-run', { workspaceId: 'summary-workspace', conversationId: 'default' });
+  agent.finishConversationWorkRun(failedSummaryRun.runId, 'error');
+  assert(failedSummaryRun.events.every(event => event.type !== 'final_response')
+    && !agent.chatMessages.some(message => message.role === 'assistant' && message.runId === failedSummaryRun.runId),
+  'Build completion: failed runs do not synthesize a final result summary');
+  const interruptedSummaryRun = agent.beginConversationWorkRun('interrupted-summary-run', { workspaceId: 'summary-workspace', conversationId: 'default' });
+  agent.finishConversationWorkRun(interruptedSummaryRun.runId, 'interrupted');
+  assert(interruptedSummaryRun.events.every(event => event.type !== 'final_response')
+    && !agent.chatMessages.some(message => message.role === 'assistant' && message.runId === interruptedSummaryRun.runId),
+  'Build completion: interrupted runs do not synthesize a final result summary');
+  const crashedRun = agent.beginConversationWorkRun('crashed-reload-run', { workspaceId: 'summary-workspace', conversationId: 'default' }, '2026-07-19T10:00:00.000Z');
+  // @ts-expect-error exercising the persisted-state recovery boundary
+  const recoveredRuns = agent.recoverPersistedWorkRuns([crashedRun], '2026-07-19T10:05:00.000Z');
+  assert(recoveredRuns.changed && recoveredRuns.runs[0]?.status === 'interrupted'
+    && recoveredRuns.runs[0]?.endedAt === '2026-07-19T10:05:00.000Z',
+  'Build recovery: a persisted running run becomes interrupted at the last persisted update so its timer cannot grow after restart');
 
   // Goal management
   agent.updateGoal('Create a web app');
@@ -2596,6 +2713,30 @@ async function main() {
   // Model management
   agent.setModel('test-model');
   assert(agent.model === 'test-model', 'setModel: updates model');
+  agent.config.addModelToProvider('test-prov', 'conversation-model-a', 'Conversation A', 'Conversation model fixture A');
+  agent.config.addModelToProvider('test-prov', 'conversation-model-b', 'Conversation B', 'Conversation model fixture B');
+  agent.config.upsertProvider('conversation-fallback-provider', 'https://fallback.example/v1', 'fallback-key');
+  agent.config.addModelToProvider('conversation-fallback-provider', 'conversation-fallback-model', 'Conversation fallback', 'Conversation fallback fixture');
+  agent.config.save();
+  agent.setConversation('model-memory-a');
+  agent.setModel('conversation-model-a', true);
+  agent.setConversation('model-memory-b');
+  agent.setModel('conversation-model-b', true);
+  agent.setConversation('model-memory-a');
+  assert(agent.activeModelName() === 'conversation-model-a', 'conversation model: switching back restores the conversation-specific deployment');
+  agent.setConversation('model-memory-b');
+  assert(agent.activeModelName() === 'conversation-model-b', 'conversation model: each conversation keeps an independent deployment selection');
+  const conversationModelReloaded = new Agent(TEST_DIR);
+  conversationModelReloaded.setConversation('model-memory-a');
+  assert(conversationModelReloaded.activeModelName() === 'conversation-model-a', 'conversation model: application restart restores the last selected deployment');
+  const conversationProviderA = agent.config.findModel('conversation-model-a')?.provider_id || '';
+  assert(!!conversationProviderA && agent.config.setProviderEnabled(conversationProviderA, false), 'conversation model: preferred provider can be temporarily disabled');
+  agent.setConversation('model-memory-a');
+  agent.reconcileConversationModelSelection();
+  assert(agent.activeModelName() !== 'conversation-model-a', 'conversation model: disabled preferred provider temporarily falls back to an available deployment');
+  assert(agent.config.setProviderEnabled(conversationProviderA, true), 'conversation model: preferred provider can be re-enabled');
+  agent.reconcileConversationModelSelection();
+  assert(agent.activeModelName() === 'conversation-model-a', 'conversation model: re-enabling the provider restores the preserved conversation preference');
   agent.setIntelligence('high');
   assert(agent.intelligence === 'high', 'setIntelligence: updates tier');
 
@@ -2616,7 +2757,9 @@ async function main() {
   fs.mkdirSync(path.join(TEST_DIR, 'skills', 'prompt-skill'), { recursive: true });
   fs.writeFileSync(path.join(TEST_DIR, 'skills', 'prompt-skill', 'SKILL.md'), '---\nname: prompt-skill\ndescription: Prompt visible skill\n---\n# Prompt Skill');
   assert(agent.skills.setEnabled('prompt-skill', true), 'buildSystemPrompt: test skill enabled');
+  agent.history.push({ role: 'user', content: 'Use prompt-skill for this task.' });
   assert(agent.buildSystemPrompt().includes('prompt-skill'), 'buildSystemPrompt: includes enabled skills');
+  assert((agent.buildSystemPrompt().match(/bulk-skill-/g) || []).length <= 8 && !agent.buildSystemPrompt().includes(path.join(TEST_DIR, 'skills')), 'buildSystemPrompt: large skill catalogs stay bounded and omit filesystem paths');
   assert(agent.skills.setEnabled('prompt-skill', false), 'buildSystemPrompt: test skill disabled');
   assert(!agent.buildSystemPrompt().includes('prompt-skill'), 'buildSystemPrompt: excludes disabled skills');
   fs.writeFileSync(path.join(TEST_DIR, 'agent.md'), 'GLOBAL_PROMPT');
@@ -2983,6 +3126,16 @@ async function main() {
   assert(agent.inputMode === 'guide', 'inputMode: guide');
   agent.inputMode = 'next';
   assert(agent.inputMode === 'next', 'inputMode: next');
+  const inputModeConversation = `input-mode-${Date.now()}`;
+  agent.setConversation(inputModeConversation);
+  agent.setInputMode('next');
+  agent.setConversation('default');
+  agent.setInputMode('guide');
+  agent.setConversation(inputModeConversation);
+  assert(agent.inputMode === 'next' && agent.getConversationSnapshot(inputModeConversation).inputMode === 'next', 'inputMode: persists Guide/Next selection per conversation');
+  const inputModeReloaded = new Agent(TEST_DIR);
+  inputModeReloaded.setConversationFromStorage(inputModeConversation);
+  assert(inputModeReloaded.inputMode === 'next', 'inputMode: restores the selected conversation mode after application restart');
   agent.nextPrompt = 'Queued task';
   assert(agent.nextPrompt === 'Queued task', 'nextPrompt: stores queued prompt');
 
@@ -3048,6 +3201,10 @@ async function main() {
   // ---- 10. Context Compression Tests ----
   console.log('\n📐 Context Compression');
   agent.setMode('build');
+  agent.config.upsertProvider('compression-test-provider', 'https://api.compression-test.invalid/v1', 'compression-test-key');
+  agent.config.addModelToProvider('compression-test-provider', 'compression-test-model', 'Compression Test Model', 'Compression budget test model');
+  agent.config.updateModel('compression-test-provider', 'compression-test-model', { max_tokens: 20_000 });
+  agent.setModel('compression-test-model');
   // Build large history
   agent.history = Array(50).fill(null).map((_, i) => ({
     role: i % 2 === 0 ? 'user' : 'assistant',
@@ -3065,6 +3222,16 @@ async function main() {
   'maybeCompress: injects exactly one immediate continuation anchor after the summary');
   assert(agent.lastCompression?.fallback === false, 'maybeCompress: records model compression metadata');
   assert(agent.history.some(m => String(m.content || '').includes('Context Compression Model Summary')), 'maybeCompress: persists compressed history');
+  const repeatCompressionCallsBefore = (agent as any).lastCompression?.at;
+  let repeatedProviderCalls = 0;
+  const repeatedProvider = new FakeProvider(['SHOULD_NOT_RUN']) as unknown as LLMProvider;
+  repeatedProvider.chat = async () => { repeatedProviderCalls += 1; return 'SHOULD_NOT_RUN'; };
+  msgs.push({ role: 'tool', name: 'read', content: 'small post-compression receipt' });
+  await agent.maybeCompress(msgs, repeatedProvider);
+  assert(repeatedProviderCalls === 0 && agent.lastCompression?.at === repeatCompressionCallsBefore,
+    'maybeCompress: a small tool-result growth after compression cannot immediately recompress the same retained context');
+  agent.config.updateModel('compression-test-provider', 'compression-test-model', { max_tokens: 10_000 });
+  agent.setModel('compression-test-model');
   agent.history = [
     { role: 'user', content: 'LEGACY_FIRST_TASK_MUST_NOT_STAY_PINNED ' + 'l'.repeat(6000) },
     ...Array.from({ length: 18 }, (_, index) => ({
@@ -3098,8 +3265,9 @@ async function main() {
   assert(requestedCompressionModel === 'current-session-model' && agent.lastCompression?.model === 'current-session-model', 'maybeCompress: binds provider request and metadata to the current session model snapshot');
   assert(compressionSystemPrompt.includes('Completed Or Background Work')
     && compressionSystemPrompt.includes('must not be revived as the current objective')
+    && compressionSystemPrompt.includes('newest to oldest')
     && compressionUserPrompt.includes('Latest retained user instruction'),
-  'maybeCompress: model prompt classifies historical task state relative to the retained current instruction');
+  'maybeCompress: model prompt classifies historical task state and orders unfinished tasks newest-to-oldest');
   const oversizedImage = `data:image/png;base64,${'A'.repeat(40000)}`;
   agent.history = Array.from({ length: 12 }, (_, index) => index === 0
     ? { role: 'user', content: [{ type: 'text', text: 'old image' }, { type: 'image_url', image_url: { url: oversizedImage } }] }
@@ -3127,10 +3295,10 @@ async function main() {
   ];
   const nearLimitMessages = [...agent.history];
   const nearLimitBefore = agent.estimateContextTokens(nearLimitMessages);
-  assert(nearLimitBefore < 20000 && nearLimitBefore >= 686, 'maybeCompress near limit: fixture crosses model-driven trigger before fixed 80K character threshold');
+  assert(nearLimitBefore < 20000 && nearLimitBefore >= 800, 'maybeCompress near limit: fixture crosses 80% of the current model context window');
   await agent.maybeCompress(nearLimitMessages, new FakeProvider(['## Preserved State\nKeep the active implementation and pending verification.']) as unknown as LLMProvider);
   const nearLimitAfter = agent.estimateContextTokens(nearLimitMessages);
-  assert(nearLimitMessages.length < 29 && nearLimitAfter < nearLimitBefore && nearLimitAfter <= 484, 'maybeCompress near limit: compacts below the model-driven target budget');
+  assert(nearLimitMessages.length < 29 && nearLimitAfter < nearLimitBefore && nearLimitAfter <= 300, 'maybeCompress near limit: compacts toward 20% of the model context window');
   assert(String(nearLimitMessages[2]?.role || '') === 'user', 'maybeCompress near limit: retained recent context starts at a complete user turn after the summary and continuation records');
   assert(agent.lastCompression?.originalMessages === 29 && agent.lastCompression?.compressedMessages === nearLimitMessages.length, 'maybeCompress near limit: records exact original and compacted message counts');
   agent.config.addModelToProvider('context-prov', 'tiny-context', 'Tiny Context', 'Small context test model');

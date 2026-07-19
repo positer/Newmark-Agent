@@ -219,6 +219,7 @@ async function verifyElectronCapacity(): Promise<number> {
   }, { idleTtlMs: 600_000 });
   await busyPool.snapshot(a);
   await busyPool.snapshot(b);
+  assert.deepEqual(busyPool.peek(c), { resident: false, running: false, stopping: false, connected: false }, 'Electron peek observes a cold target without allocating a third runtime'); assertions++;
   await assert.rejects(
     () => busyPool.snapshot(c),
     (error: unknown) => error instanceof Error
@@ -272,6 +273,7 @@ async function verifyWslCapacity(): Promise<number> {
   }, { idleTtlMs: 600_000 });
   await busyPool.snapshot(a);
   await busyPool.snapshot(b);
+  assert.deepEqual(busyPool.peek(c), { resident: false, running: false, stopping: false, connected: false }, 'WSL peek observes a cold target without allocating a third process group'); assertions++;
   await assert.rejects(
     () => busyPool.snapshot(c),
     (error: unknown) => error instanceof Error

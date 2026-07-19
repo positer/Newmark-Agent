@@ -49,6 +49,13 @@ export type AgentTool = Tool & {
 
 export type QueueMode = 'all' | 'one-at-a-time';
 
+export interface ContextTransformResult {
+  messages: AgentMessage[];
+  replacementMessages?: AgentMessage[];
+}
+
+export type ContextTransformOutput = AgentMessage[] | ContextTransformResult;
+
 export interface AgentState {
   systemPrompt: string;
   model: Model;
@@ -77,7 +84,7 @@ export interface AgentLoopConfig {
   state: AgentState;
   streamFn: StreamFn;
   convertToLlm: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
-  transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+  transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<ContextTransformOutput>;
   resolveTools?: () => AgentTool[] | Promise<AgentTool[]>;
   emit: (event: AgentEvent) => Promise<void> | void;
   getSteeringMessages?: () => Promise<AgentMessage[]> | AgentMessage[];

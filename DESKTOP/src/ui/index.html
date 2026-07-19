@@ -2227,6 +2227,11 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .conversation-work-run-status { color: var(--text-dim); font: 10px var(--font-mono); }
 .conversation-work-run-body { border: 0; padding: 4px 0 8px; }
 .conversation-work-run.collapsed .conversation-work-run-body { display: none; }
+.work-run-collapsed-guides { display: none; }
+.work-run-message:has(.conversation-work-run.collapsed) > .work-run-collapsed-guides { display: flex; flex-direction: column; }
+.work-run-guide-message.chat-msg { padding: 8px 28px 8px 0; }
+.work-run-guide-message.chat-msg::after { left: auto; right: 3px; border-color: var(--accent); }
+.conversation-work-run-body .work-run-guide-message { margin: 5px 0; }
 .conversation-work-run-events { display: flex; flex-direction: column; gap: 6px; }
 .conversation-work-event { display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; align-items: start; color: var(--text-dim); font-size: 11px; line-height: 1.5; }
 .conversation-work-event .nm-icon { margin-top: 1px; color: var(--text-dim); }
@@ -3504,6 +3509,14 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 .provider-card h4 { font-size: 12px; font-weight: 600; color: var(--text-bright); margin-bottom: 6px; }
+.provider-card.is-disabled { opacity: .72; }
+.provider-card-actions { display:flex; align-items:center; gap:5px; }
+.provider-icon-btn { width:26px; height:26px; padding:0; display:inline-flex; align-items:center; justify-content:center; border:1px solid transparent; border-radius:var(--radius-sm); color:var(--text-dim); background:transparent; cursor:pointer; transition:color var(--duration-fast) var(--ease-out-expo),background var(--duration-fast) var(--ease-out-expo),border-color var(--duration-fast) var(--ease-out-expo); }
+.provider-icon-btn:hover { color:var(--text-bright); background:var(--control-hover-bg); border-color:var(--border-hover); }
+.provider-icon-btn:focus-visible { outline:none; color:var(--text-bright); border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-glow); }
+.provider-icon-btn.danger:hover,.provider-icon-btn.danger:focus-visible { color:var(--danger); }
+.provider-icon-btn:disabled { opacity:.45; cursor:not-allowed; }
+.provider-status { display:inline-flex; align-items:center; min-height:18px; margin-left:6px; padding:1px 6px; border:1px solid var(--glass-border-2); border-radius:999px; color:var(--text-dim); font-size:9px; font-weight:600; }
 .provider-meta { font-size: 11px; color: var(--text-dim); word-break: break-all; }
 .newmark-list { display:flex; flex-direction:column; gap:6px; }
 .newmark-list-row { min-height:42px; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; padding:8px 10px; border:1px solid var(--glass-border-1); border-radius:var(--radius-md); background:var(--glass-bg-1); color:var(--text); text-decoration:none; transition:background var(--duration-fast) var(--ease-out-expo),border-color var(--duration-fast) var(--ease-out-expo); }
@@ -4935,6 +4948,7 @@ var NEWMARK_I18N = {
     'common.closeTab': 'Close',
     'model.addProvider': 'Add provider',
     'model.addModel': 'Add model',
+    'model.deleteProviderConfirm': 'Permanently delete provider',
     'model.validateAll': 'Validate all models',
     'model.fuzzy': 'Fuzzy inject model',
     'model.fuzzyDesc': 'Enter an API key and provider details. Newmark will discover, import, and validate models.',
@@ -4984,6 +4998,9 @@ var NEWMARK_I18N = {
     'model.validating': 'Validating model latency and capabilities...',
     'model.validationFailed': 'Validation failed',
     'model.noValidationModels': 'No models were available for validation.',
+    'model.enableProvider': 'Enable provider',
+    'model.disableProvider': 'Disable provider',
+    'model.providerDisabled': 'Disabled',
     'model.latency': 'latency',
     'model.textOutput': 'text',
     'model.visionInput': 'vision',
@@ -5435,6 +5452,7 @@ var NEWMARK_I18N = {
     'common.closeTab': '关闭',
     'model.addProvider': '添加供应商',
     'model.addModel': '添加模型',
+    'model.deleteProviderConfirm': '永久删除供应商',
     'model.validateAll': '校验全部模型',
     'model.fuzzy': '模糊注入模型',
     'model.fuzzyDesc': '输入 API key 和供应商信息，Newmark 会发现、导入并校验模型。',
@@ -5484,6 +5502,9 @@ var NEWMARK_I18N = {
     'model.validating': '正在校验模型延迟和能力...',
     'model.validationFailed': '校验失败',
     'model.noValidationModels': '没有可校验的模型。',
+    'model.enableProvider': '启用供应商',
+    'model.disableProvider': '停用供应商',
+    'model.providerDisabled': '已停用',
     'model.latency': '延迟',
     'model.textOutput': '文本',
     'model.visionInput': '视觉',
@@ -6678,6 +6699,15 @@ function appendConversationImageAttachments(container, input) {
 
 function addMsg(role, text, mode, model, messageIndex, messageMeta) {
   text = redactSensitiveText(text);
+  var owningRunId = messageMeta && String(messageMeta.runId || '');
+  if (owningRunId && role === 'assistant' && els['chat-area']) {
+    var finalRows = els['chat-area'].querySelectorAll('.run-final-response[data-run-id]');
+    for (var finalIndex = 0; finalIndex < finalRows.length; finalIndex++) {
+      if (String(finalRows[finalIndex].getAttribute('data-run-id') || '') !== owningRunId) continue;
+      updateMsg(finalRows[finalIndex], text, role, mode, model);
+      return finalRows[finalIndex];
+    }
+  }
   var guideMessageId = messageMeta && String(messageMeta.clientMessageId || '');
   var existingGuide = guideMessageId ? findGuideMessageElement(guideMessageId) : null;
   if (existingGuide) {
@@ -6710,7 +6740,14 @@ function addMsg(role, text, mode, model, messageIndex, messageMeta) {
     conversationId: String(messageMeta.target.conversationId || 'default')
   } : null;
   if (messageMeta && messageMeta.clientMessageId) applyGuideMessageMeta(div, messageMeta);
-  els['chat-area'].appendChild(div);
+  if (owningRunId && role === 'assistant') {
+    div.setAttribute('data-run-id', owningRunId);
+    div.classList.add('run-final-response');
+    var runElement = findWorkRunElement({ runId: owningRunId });
+    var runWrapper = runElement && runElement.closest ? runElement.closest('.work-run-message') : null;
+    if (runWrapper && runWrapper.parentNode === els['chat-area']) runWrapper.insertAdjacentElement('afterend', div);
+    else els['chat-area'].appendChild(div);
+  } else els['chat-area'].appendChild(div);
   els['chat-area'].scrollTop = els['chat-area'].scrollHeight;
   return div;
 }
@@ -7143,7 +7180,10 @@ function recordGuideUiMessage(input, target) {
   messages[clientMessageId] = record;
   if (isActiveConversationTarget(target)) {
     var element = findGuideMessageElement(clientMessageId);
-    if (element) applyGuideMessageMeta(element, record);
+    if (element) {
+      applyGuideMessageMeta(element, record);
+      if (record.runId && !element.classList.contains('work-run-guide-message')) element.remove();
+    }
   }
   return record;
 }
@@ -7466,6 +7506,7 @@ function workEventIcon(type) {
 
 function workToolActivity(event) {
   var name = publicToolNameForUi(event && event.toolName).toLowerCase();
+  if (name === 'context_compression') return { key: 'context_compression', type: 'tool_context_compression' };
   if (name === 'memory_lab_update' || name === 'memory_lab_reindex') return { key: 'memory_lab', type: 'tool_memory_lab' };
   if (name === 'image_inspect' || name === 'computer_use') return { key: 'images', type: 'tool_images' };
   if (name === 'write' || name === 'edit') return { key: 'files', type: 'tool_files' };
@@ -7476,6 +7517,7 @@ function workToolActivity(event) {
 
 function workToolActivityLabel(activity, count, completed) {
   var zh = currentLang() === 'zh';
+  if (activity.key === 'context_compression') return completed ? (zh ? '已完成上下文压缩' : 'Completed context compression') : (zh ? '正在压缩上下文' : 'Compressing context');
   if (activity.key === 'memory_lab') return completed
     ? (zh ? '更新了记忆' : 'Updated memory')
     : (zh ? '正在更新 Memory Lab' : 'Updating Memory Lab');
@@ -7500,6 +7542,26 @@ function workEventLabel(event) {
     return 'Guide · ' + lifecycle + (content ? '\n' + content : '');
   }
   return content || type.replace(/_/g, ' ');
+}
+
+function renderWorkRunGuideMessage(event) {
+  var guide = event && event.guide || event || {};
+  var status = normalizeGuideUiStatus(guide.status || event.status || 'accepted');
+  var content = String(guide.content !== undefined ? guide.content : event.content || '');
+  var timestamp = String(guide.createdAt || event.timestamp || '');
+  var time = timestamp ? new Date(timestamp).toLocaleTimeString(uiLocale()) : '';
+  return '<div class="chat-msg user work-run-guide-message" data-client-message-id="' + escAttr(String(guide.clientMessageId || event.clientMessageId || '')) + '">' +
+    '<div class="meta"><span class="msg-role">' + esc(t('message.user')) + '</span>' + (time ? '<span> | ' + esc(time) + '</span>' : '') +
+    '<span class="guide-receipt-status ' + escAttr(status) + '">Guide · ' + esc(guideUiStatusLabel(status)) + '</span></div>' +
+    '<div class="msg-body">' + renderMessageContent(content) + '</div></div>';
+}
+
+function workRunGuideEvents(run) {
+  return dedupeGuideWorkEvents((run && run.events || []).filter(function(event) {
+    return String(event && event.type || '').toLowerCase().indexOf('guide') === 0 || !!(event && event.guide);
+  })).sort(function(a, b) {
+    return Number(a.sequence || 0) - Number(b.sequence || 0) || String(a.timestamp || '').localeCompare(String(b.timestamp || ''));
+  });
 }
 
 function renderWorkRunEvents(run) {
@@ -7577,6 +7639,7 @@ function renderWorkRunEvents(run) {
         : workEventLabel(event);
       return '<div class="conversation-work-event narrative"><div class="conversation-work-event-content">' + renderMessageContent(responseLabel) + '</div></div>';
     }
+    if (type.indexOf('guide') === 0 || event.guide) return renderWorkRunGuideMessage(event);
     var activitySummary = type.indexOf('tool_') === 0 && type !== 'tool_call' && type !== 'tool_result';
     var cls = type.indexOf('guide') === 0 ? ' guide' : (type === 'error' ? ' error' : (activitySummary ? ' activity-summary' : ''));
     var label = activitySummary ? workToolActivityLabel(event.activity, Number(event.count || 1), !!event.completed) : workEventLabel(event) + (event.completed ? (currentLang() === 'zh' ? ' · 已完成' : ' · completed') : '');
@@ -7625,6 +7688,16 @@ function updateConversationWorkRunElement(run, element) {
     '<span class="conversation-work-run-status">' + esc(String(run.status || '')) + '</span>' +
     '<span class="conversation-work-run-chevron" aria-hidden="true"></span></button>' +
     '<div class="conversation-work-run-body">' + renderWorkRunEvents(run) + '</div>';
+  var wrapper = element.closest ? element.closest('.work-run-message') : null;
+  if (wrapper) {
+    var guideStack = wrapper.querySelector(':scope > .work-run-collapsed-guides');
+    if (!guideStack) {
+      guideStack = document.createElement('div');
+      guideStack.className = 'work-run-collapsed-guides';
+      wrapper.appendChild(guideStack);
+    }
+    guideStack.innerHTML = workRunGuideEvents(run).map(renderWorkRunGuideMessage).join('');
+  }
   var refreshedActivities = element.querySelectorAll ? element.querySelectorAll('details.conversation-work-activity[data-activity-key]') : [];
   for (var refreshedIndex = 0; refreshedIndex < refreshedActivities.length; refreshedIndex++) {
     var refreshedKey = String(refreshedActivities[refreshedIndex].getAttribute('data-activity-key') || '');
@@ -8093,7 +8166,7 @@ function renderAgentWorkEvent(event) {
     ui.activeWorkflowText = '';
     ui.activeWorkflowMsg = null;
     if (content) {
-      var finalMsg = addMsg('assistant', content, event.mode || state.mode, event.model || state.model);
+      var finalMsg = addMsg('assistant', content, event.mode || state.mode, event.model || state.model, undefined, { runId: event.runId || '', target: workRun.target || currentConversationTarget(eventConversationId) });
       markFinalResponseMsg(eventConversationId, content, finalMsg);
     }
   } else if (type === 'tool_call' && !workRun) {
@@ -8645,7 +8718,7 @@ window.refreshModelSelect = function(options) {
   var hasProviderModels = false;
   if (state.providers && state.providers.length > 0) {
     for (var pi = 0; pi < state.providers.length; pi++) {
-      if (state.providers[pi].models && state.providers[pi].models.length > 0) {
+      if (state.providers[pi].enabled !== false && state.providers[pi].models && state.providers[pi].models.length > 0) {
         hasProviderModels = true;
         break;
       }
@@ -8656,7 +8729,7 @@ window.refreshModelSelect = function(options) {
     if (state.autoSwitch === 'on') modelOpts += '<option value="auto">' + esc(t('language.auto')) + '</option>';
     for (var pidx = 0; pidx < state.providers.length; pidx++) {
       var p = state.providers[pidx];
-      if (!p.models || !p.models.length) continue;
+      if (p.enabled === false || !p.models || !p.models.length) continue;
       var providerOpts = '';
       for (var midx = 0; midx < p.models.length; midx++) {
         var modelEntry = p.models[midx];
@@ -10596,12 +10669,13 @@ window.renderInputStack = function() {
 };
 
 // === Mode Selectors ===
-window.setInputMode = function(mode) {
-  state.inputMode = mode;
+window.setInputMode = function(mode, persist) {
+  state.inputMode = mode === 'next' ? 'next' : 'guide';
   var btns = els['mode-toggle'].querySelectorAll('.mode-toggle-btn');
   for (var i = 0; i < btns.length; i++) {
-    btns[i].classList.toggle('active', btns[i].getAttribute('data-mode') === mode);
+    btns[i].classList.toggle('active', btns[i].getAttribute('data-mode') === state.inputMode);
   }
+  if (persist !== false && api.setInputMode) api.setInputMode(state.inputMode).catch(function(){});
 };
 
 // === Sub-Window System ===
@@ -10825,10 +10899,14 @@ function renderModelSettings() {
         '<span class="remove" onclick="window.editModel(' + i + ',' + j + ')" title="' + escAttr(t('common.edit')) + '">' + iconSvg('square-pen', t('common.edit'), 'tiny') + '</span>' +
         '<span class="remove" onclick="window.removeModel(' + i + ',' + j + ')" title="' + escAttr(t('common.remove')) + '">' + iconSvg('x', t('common.remove'), 'tiny') + '</span></span>';
     }
-    providersHtml += '<div class="provider-card"><h4 style="display:flex;align-items:center;gap:6px;">' +
-      '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;">' + esc(p.name) + '</span>' +
-      '<button class="icon-btn" style="width:22px;height:22px;" onclick="window.editProvider(' + i + ')" title="' + escAttr(t('common.edit')) + '">' + iconSvg('square-pen', t('common.edit'), 'tiny') + '</button>' +
-      '<button class="icon-btn" style="width:22px;height:22px;color:#ff6666;" onclick="window.removeProvider(' + i + ')" title="' + escAttr(t('common.delete')) + '">' + iconSvg('trash', t('common.delete'), 'tiny') + '</button>' +
+    var providerEnabled = p.enabled !== false;
+    var providerToggleLabel = providerEnabled ? t('model.disableProvider') : t('model.enableProvider');
+    providersHtml += '<div class="provider-card' + (providerEnabled ? '' : ' is-disabled') + '"><h4 style="display:flex;align-items:center;gap:6px;">' +
+      '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;">' + esc(p.name) + (providerEnabled ? '' : '<span class="provider-status">' + esc(t('model.providerDisabled')) + '</span>') + '</span>' +
+      '<span class="provider-card-actions">' +
+      '<button class="provider-icon-btn" onclick="window.editProvider(' + i + ')" aria-label="' + escAttr(t('common.edit')) + '" title="' + escAttr(t('common.edit')) + '">' + iconSvg('square-pen', t('common.edit'), 'tiny') + '</button>' +
+      '<button class="provider-icon-btn" onclick="window.toggleProviderEnabled(' + i + ')" aria-label="' + escAttr(providerToggleLabel) + '" title="' + escAttr(providerToggleLabel) + '">' + iconSvg(providerEnabled ? 'power' : 'power-off', providerToggleLabel, 'tiny') + '</button>' +
+      '<button class="provider-icon-btn danger" onclick="window.removeProvider(' + i + ')" aria-label="' + escAttr(t('common.delete')) + '" title="' + escAttr(t('common.delete')) + '">' + iconSvg('trash-2', t('common.delete'), 'tiny') + '</button></span>' +
       '</h4>' +
       '<div class="provider-meta">' + esc(t('model.protocol')) + ': ' + esc(p.protocol || 'openai') + '</div>' +
       '<div class="provider-meta">API: ' + esc(p.base_url || p.endpoint || '') + '</div>' +
@@ -11390,6 +11468,7 @@ window.saveProviderEdit = function(idx) {
 
 window.removeProvider = function(idx) {
   if (!state.providers[idx]) return;
+  if (!confirm(t('model.deleteProviderConfirm') + ' "' + state.providers[idx].name + '"?')) return;
   state.providers.splice(idx, 1);
   api.saveConfig({ providers: state.providers }).then(function() {
     return api.getState ? api.getState() : null;
@@ -11541,6 +11620,22 @@ window.doFuzzyInject = function() {
   });
 };
 
+window.toggleProviderEnabled = function(idx) {
+  var provider = state.providers[idx];
+  if (!provider || !api.setProviderEnabled) return;
+  var enabled = provider.enabled === false;
+  api.setProviderEnabled(provider.id || provider.name, enabled).then(function(result) {
+    if (!result || !result.ok) throw new Error((result && result.error) || 'Provider update failed');
+    state.providers = result.providers || state.providers;
+    state.models = result.models || state.models;
+    state.model = result.model || state.model;
+    window.refreshModelSelect();
+    window.openSettings('models');
+  }).catch(function(error) {
+    showUiNotice(error && error.message ? error.message : String(error), 'error', 'provider-enabled-' + idx);
+  });
+};
+
 window.githubCopilotLogin = function() {
   if (!api.githubCopilotLogin) {
     addMsg('assistant', '[Error] GitHub login bridge is unavailable.', 'error', '');
@@ -11673,14 +11768,23 @@ window.archiveCurrent = function() {
     showUiNotice(currentLang() === 'zh' ? '请先停止当前对话再归档。' : 'Stop the active conversation before archiving it.', 'error', 'archive-running-' + currentRuntimeKey(currentId));
     return;
   }
-  api.archive(currentConversationTarget(currentId)).then(function(filePath) {
-    addMsg('assistant', '[Archive] ' + t('archive.saved') + ': ' + filePath, 'archive', '');
-    return api.listArchives ? api.listArchives('workspace') : [];
-  }).then(function(items) {
+  api.archive(currentConversationTarget(currentId)).then(function(receipt) {
+    if (!receipt || !receipt.ok) throw new Error((receipt && receipt.error) || 'Archive failed');
+    showUiNotice('[Archive] ' + t('archive.saved') + ': ' + receipt.fileName, 'success', 'archive-saved-' + receipt.conversationId);
+    return Promise.all([api.listArchives ? api.listArchives('workspace') : [], api.getState ? api.getState() : null]);
+  }).then(function(result) {
+    var items = result[0] || [];
+    var refreshed = result[1];
     state.workspaceArchives = (items || []).map(function(a) {
       return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '', restorable: !!a.restorable, conversationId: a.conversationId || '' };
     });
     state.allArchives = [];
+    if (refreshed && refreshed.conversations) {
+      state.activeBackendConversationId = refreshed.conversationId || state.activeBackendConversationId;
+      applyBackendConversations(refreshed.conversations, state.activeBackendConversationId, refreshed.workspaceId || runtimeWorkspaceId(''));
+      if (refreshed.chatMessages) renderChatMessages(refreshed.chatMessages);
+      renderConversations();
+    }
     window.renderRightArchives();
     var stab = document.getElementById('stab-archive');
     if (stab) stab.innerHTML = renderArchiveSettings();
@@ -13550,7 +13654,7 @@ window.showMemoryLab = function() {
     cancelAnimationFrame(state.memoryLabOverviewAnimation);
     state.memoryLabOverviewAnimation = null;
   }
-  window.openSubWin(t('memoryLab.title'), '<div id="memory-lab-panel" class="provider-card marquee-border">' + esc(t('memoryLab.loading')) + '</div>');
+  window.openSubWin(t('memoryLab.title'), '<div id="memory-lab-panel" class="provider-card' + (state.memoryLabReindexing ? ' marquee-border' : '') + '" aria-busy="' + (state.memoryLabReindexing ? 'true' : 'false') + '">' + esc(t('memoryLab.loading')) + '</div>');
   window.loadMemoryLab();
 };
 
@@ -13597,8 +13701,23 @@ window.memoryLabTopbar = function(lab) {
       '<input id="memory-lab-search-input" value="' + escAttr(state.memoryLabSearchQuery || '') + '" placeholder="' + escAttr(t('memoryLab.search')) + '" oninput="window.updateMemoryLabSearch(this.value)" onfocus="window.updateMemoryLabSearch(this.value)" />' +
       '<div id="memory-lab-search-results" class="memory-lab-search-results" hidden></div>' +
     '</div>' +
-    '<button class="sec-btn" onclick="window.reindexMemoryLab()">' + esc(t('memoryLab.reindex')) + '</button>' +
+    '<button id="memory-lab-reindex" class="sec-btn" onclick="window.reindexMemoryLab()"' + (state.memoryLabReindexing ? ' disabled aria-busy="true"' : '') + '>' + esc(t('memoryLab.reindex')) + '</button>' +
     '</div>';
+};
+
+window.setMemoryLabReindexing = function(running) {
+  state.memoryLabReindexing = !!running;
+  var panel = document.getElementById('memory-lab-panel');
+  if (panel) {
+    panel.classList.toggle('marquee-border', state.memoryLabReindexing);
+    panel.setAttribute('aria-busy', state.memoryLabReindexing ? 'true' : 'false');
+  }
+  var button = document.getElementById('memory-lab-reindex');
+  if (button) {
+    button.disabled = state.memoryLabReindexing;
+    if (state.memoryLabReindexing) button.setAttribute('aria-busy', 'true');
+    else button.removeAttribute('aria-busy');
+  }
 };
 
 window.renderMemoryLabDetail = function(lab, index) {
@@ -13968,11 +14087,16 @@ window.selectMemoryLabComponent = function(slug) {
 };
 
 window.reindexMemoryLab = function() {
-  if (!api.memoryLabReindex) return;
-  api.memoryLabReindex().then(function(result) {
+  if (!api.memoryLabReindex || state.memoryLabReindexing) return;
+  window.setMemoryLabReindexing(true);
+  return api.memoryLabReindex().then(function(result) {
     state.memoryLab = result || state.memoryLab;
     addMsg('assistant', '[Memory Lab] ' + (result && result.ok ? t('memoryLab.updated') : t('memoryLab.updateFailed')), result && result.ok ? 'success' : 'error', '');
     window.renderMemoryLab();
+  }).catch(function(err) {
+    addMsg('assistant', '[Memory Lab] ' + t('memoryLab.updateFailed') + ': ' + (err && err.message ? err.message : String(err)), 'error', '');
+  }).finally(function() {
+    window.setMemoryLabReindexing(false);
   });
 };
 
@@ -14381,6 +14505,7 @@ window.toggleWorkspacePinned = function(identity) {
 
 function applyWorkspaceStateFromBackend(s) {
   if (!s || !s.workspaces) return;
+  if (s.inputMode) window.setInputMode(s.inputMode, false);
   state.workspaces = [];
   if (s.workspaces.internal) state.workspaces = state.workspaces.concat(s.workspaces.internal);
   if (s.workspaces.external) state.workspaces = state.workspaces.concat(s.workspaces.external);
@@ -15102,6 +15227,7 @@ function schedulePostStartupUiRendering() {
       state.modelLabel = s.modelLabel || '';
       state.agentStatus = s.status || 'idle';
       state.intelligence = s.intelligence || 'medium';
+      if (s.inputMode) window.setInputMode(s.inputMode, false);
       state.language = normalizeLanguage(s.language || state.language);
       state.theme = normalizeUiThemeClient(s.darkMode || state.theme);
       state.backgroundColor = normalizeUiBackgroundColorClient(s.backgroundColor || '');

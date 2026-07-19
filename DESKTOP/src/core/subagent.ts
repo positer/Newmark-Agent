@@ -61,6 +61,8 @@ export interface SubagentCompressionState {
   originalMessages: number;
   compressedMessages: number;
   originalChars: number;
+  compressedChars?: number;
+  compressedTokens?: number;
   summary: string;
   model: string;
   fallback: boolean;

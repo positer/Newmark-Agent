@@ -100,7 +100,13 @@ function stopReleaseProcesses() {
     const result = await evaluate(cdp, `window.api.sendMessage(${JSON.stringify(`Reply with exactly ${marker} and nothing else.`)}, ${JSON.stringify(conversation)})`);
     const elapsedMs = Date.now() - started;
     const content = (result.chatMessages || []).filter(message => message.role === 'assistant').map(message => String(message.content || '')).join('\n');
-    if (!content.includes(marker)) fail(`Real model marker missing: ${content.slice(0, 500)}`);
+    if (!content.includes(marker)) fail(`Real model marker missing: content=${content.slice(0, 500)} result=${JSON.stringify({
+      error: result && result.error,
+      status: result && result.status,
+      model: result && result.model,
+      tokens: result && result.tokens,
+      workRuns: result && result.workRuns,
+    }).slice(0, 5000)}`);
     if (content.includes(String(config.models?.providers?.value?.[0]?.api_key || '___never___'))) fail('Provider key leaked into response');
     const persisted = await evaluate(cdp, `window.api.getState(${JSON.stringify(conversation)}).then(s => ({id:s.conversationId,model:s.model,messages:s.chatMessages,backend:s.agentBackend}))`);
     if (persisted.id !== conversation || !persisted.messages?.some(message => String(message.content || '').includes(marker))) fail('Real WSL conversation did not persist in its own id');

@@ -519,6 +519,73 @@ export class LLMProvider {
     return parts.length ? parts : '';
   }
 
+  private openAIToolName(value: unknown): string {
+    const normalized = String(value || '').trim().replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 64);
+    return normalized || 'newmark_tool';
+  }
+
+  private openAIChatMessages(messages: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+    const out: Array<Record<string, unknown>> = [];
+    const emittedCallIds = new Set<string>();
+    for (const [index, msg] of (messages || []).entries()) {
+      const role = String(msg.role || 'user');
+      if (role === 'assistant') {
+        const toolCalls: Array<Record<string, unknown>> = [];
+        for (const [toolIndex, rawToolCall] of (Array.isArray(msg.tool_calls) ? msg.tool_calls : []).entries()) {
+          const toolCall = rawToolCall as Record<string, unknown>;
+          const fn = toolCall.function && typeof toolCall.function === 'object'
+            ? toolCall.function as Record<string, unknown>
+            : {};
+          const name = this.openAIToolName(fn.name);
+          const callId = String(toolCall.id || toolCall.call_id || `call_newmark_${index}_${toolIndex}`);
+          toolCalls.push({
+            id: callId,
+            type: 'function',
+            function: {
+              name,
+              arguments: typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments || {}),
+            },
+          });
+          emittedCallIds.add(callId);
+        }
+        const assistant: Record<string, unknown> = {
+          role: 'assistant',
+          content: this.normalizeOpenAIContent(msg.content),
+        };
+        if (toolCalls.length) assistant.tool_calls = toolCalls;
+        out.push(assistant);
+        continue;
+      }
+      if (role === 'tool') {
+        const callId = String(msg.tool_call_id || msg.call_id || `call_newmark_recovered_${index}`);
+        const name = this.openAIToolName(msg.name);
+        // Imported, compressed, and legacy histories may retain a tool result
+        // after losing the assistant tool_calls envelope. Chat Completions
+        // rejects that orphan result, so reconstruct the minimum valid pair.
+        if (!emittedCallIds.has(callId)) {
+          out.push({
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: callId, type: 'function', function: { name, arguments: '{}' } }],
+          });
+          emittedCallIds.add(callId);
+        }
+        out.push({
+          role: 'tool',
+          tool_call_id: callId,
+          name,
+          content: this.stringifyContent(msg.content),
+        });
+        continue;
+      }
+      out.push({
+        role: role === 'system' ? 'system' : 'user',
+        content: this.normalizeOpenAIContent(msg.content),
+      });
+    }
+    return out.length ? out : [{ role: 'user', content: '' }];
+  }
+
   private normalizeResponsesContent(value: unknown): string | MessageContentPart[] {
     if (!Array.isArray(value)) return this.stringifyContent(value);
     const parts: MessageContentPart[] = [];
@@ -594,12 +661,22 @@ export class LLMProvider {
 
   private responsesInput(messages: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
     const out: Array<Record<string, unknown>> = [];
-    for (const msg of messages || []) {
+    const emittedCallIds = new Set<string>();
+    for (const [index, msg] of (messages || []).entries()) {
       const role = String(msg.role || 'user');
       if (role === 'tool') {
+        const callId = String(msg.tool_call_id || msg.call_id || `call_newmark_recovered_${index}`);
+        const name = this.openAIToolName(msg.name);
+        // Chat-compatible gateways and migrated history can retain the tool
+        // result while losing the preceding assistant tool_calls envelope.
+        // Responses requires the matching function_call to precede output.
+        if (!emittedCallIds.has(callId)) {
+          out.push({ type: 'function_call', call_id: callId, name, arguments: '{}' });
+          emittedCallIds.add(callId);
+        }
         out.push({
           type: 'function_call_output',
-          call_id: String(msg.tool_call_id || ''),
+          call_id: callId,
           output: this.stringifyContent(msg.content),
         });
         continue;
@@ -612,15 +689,15 @@ export class LLMProvider {
         for (const tcRaw of toolCalls) {
           const tc = tcRaw as Record<string, unknown>;
           const fn = (tc.function || {}) as Record<string, unknown>;
-          const name = String(fn.name || '').trim();
-          const callId = String(tc.id || tc.call_id || '');
-          if (!name || !callId) continue;
+          const name = this.openAIToolName(fn.name);
+          const callId = String(tc.id || tc.call_id || `call_newmark_${index}_${out.length}`);
           out.push({
             type: 'function_call',
             call_id: callId,
             name,
             arguments: typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments || {}),
           });
+          emittedCallIds.add(callId);
         }
         continue;
       }
@@ -644,6 +721,7 @@ export class LLMProvider {
       temperature,
       max_output_tokens: maxTokens,
     };
+    if (/^(?:gpt-5|o[134](?:-|$))|codex/i.test(model)) body.reasoning = { summary: 'auto' };
     if (systemPrompt) body.instructions = systemPrompt;
     const convertedTools = this.responsesTools(tools);
     if (convertedTools.length) {
@@ -673,6 +751,20 @@ export class LLMProvider {
     return chunks.join('') || this.extractChatCompletionText(json);
   }
 
+  private extractResponsesReasoningSummaries(json: Record<string, unknown>): string[] {
+    const summaries: string[] = [];
+    for (const itemRaw of Array.isArray(json.output) ? json.output : []) {
+      const item = itemRaw as Record<string, unknown>;
+      if (item.type !== 'reasoning') continue;
+      for (const partRaw of Array.isArray(item.summary) ? item.summary : []) {
+        const part = partRaw as Record<string, unknown>;
+        const text = this.extractTextValue(part.text || part.summary_text || part.content);
+        if (text && !summaries.includes(text)) summaries.push(text);
+      }
+    }
+    return summaries;
+  }
+
   private normalizeResponsesPayload(payload: unknown): Record<string, unknown> {
     // Some OpenAI-compatible gateways wrap the standard Responses object in a
     // single-element array. Normalize that transport quirk once so plain chat
@@ -693,42 +785,150 @@ export class LLMProvider {
     tools: unknown[],
     signal?: AbortSignal,
   ): AsyncGenerator<StreamToken> {
-    const response = await this.postJsonWithFetchFallback(
-      `${this.cleanBaseUrl()}/responses`,
-      this.openAIHeaders(),
-      this.responsesBody(model, messages, systemPrompt, temperature, maxTokens, tools),
-      120000,
-      signal,
-    );
+    const abort = new AbortController();
+    const forwardAbort = () => abort.abort(signal?.reason);
+    if (signal?.aborted) forwardAbort();
+    else signal?.addEventListener('abort', forwardAbort, { once: true });
+    const timeout = setTimeout(() => abort.abort(), 120000);
+    const body = { ...this.responsesBody(model, messages, systemPrompt, temperature, maxTokens, tools), stream: true };
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    let response: Response;
+    try {
+      response = await fetch(`${this.cleanBaseUrl()}/responses`, {
+        method: 'POST',
+        headers: { ...this.openAIHeaders(), Accept: 'text/event-stream' },
+        body: JSON.stringify(body),
+        signal: abort.signal,
+      });
+    } catch (error) {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', forwardAbort);
+      if (signal?.aborted) throw abortFailure(signal);
+      if (!this.shouldUseNodeHttpFallback(error)) throw error;
+      const fallback = await this.postJsonWithFetchFallback(
+        `${this.cleanBaseUrl()}/responses`,
+        this.openAIHeaders(),
+        { ...body, stream: false },
+        120000,
+        signal,
+      );
+      if (!fallback.ok) {
+        yield { type: 'text', text: this.llmErrorText(fallback, await fallback.text()) };
+        return;
+      }
+      const json = this.normalizeResponsesPayload(await fallback.json());
+      for (const summary of this.extractResponsesReasoningSummaries(json)) yield { type: 'status', text: summary };
+      const text = this.extractResponsesText(json);
+      if (text) yield { type: 'text', text };
+      for (const itemRaw of Array.isArray(json.output) ? json.output : []) {
+        const item = itemRaw as Record<string, unknown>;
+        if (item.type === 'function_call') yield { type: 'tool_call', text: '', toolCall: { id: String(item.call_id || item.id || ''), name: String(item.name || ''), arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments || {}) } };
+      }
+      return;
+    }
+
+    try {
     if (!response.ok) {
       const err = await response.text();
       yield { type: 'text', text: this.llmErrorText(response, err) };
       return;
     }
-    const json = this.normalizeResponsesPayload(await response.json());
-    const text = this.extractResponsesText(json);
-    let emitted = false;
-    if (text) {
-      emitted = true;
-      yield { type: 'text', text };
-    }
-    const output = Array.isArray(json.output) ? json.output : [];
-    for (const itemRaw of output) {
-      const item = itemRaw as Record<string, unknown>;
-      if (item.type !== 'function_call') continue;
-      emitted = true;
-      yield {
-        type: 'tool_call',
-        text: '',
-        toolCall: {
-          id: String(item.call_id || item.id || ''),
-          name: String(item.name || ''),
-          arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments || {}),
-        },
-      };
-    }
-    if (!emitted && this.contentPolicyBlocked(json)) {
-      yield { type: 'text', text: '[Error] Content policy refusal (content_filter).' };
+      const contentType = response.headers.get('content-type') || '';
+      if (!/text\/event-stream/i.test(contentType)) {
+        const json = this.normalizeResponsesPayload(await response.json());
+        for (const summary of this.extractResponsesReasoningSummaries(json)) yield { type: 'status', text: summary };
+        const text = this.extractResponsesText(json);
+        let emitted = false;
+        if (text) { emitted = true; yield { type: 'text', text }; }
+        for (const itemRaw of Array.isArray(json.output) ? json.output : []) {
+          const item = itemRaw as Record<string, unknown>;
+          if (item.type !== 'function_call') continue;
+          emitted = true;
+          yield { type: 'tool_call', text: '', toolCall: { id: String(item.call_id || item.id || ''), name: String(item.name || ''), arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments || {}) } };
+        }
+        if (!emitted && this.contentPolicyBlocked(json)) yield { type: 'text', text: '[Error] Content policy refusal (content_filter).' };
+        return;
+      }
+
+      reader = response.body?.getReader() ?? null;
+      if (!reader) {
+        yield { type: 'text', text: '[Error] No response body' };
+        return;
+      }
+      const decoder = new TextDecoder();
+      const calls = new Map<string, { id: string; name: string; arguments: string; emitted: boolean }>();
+      const reasoningSummaries = new Map<string, string>();
+      let buffer = '';
+      let emittedContent = false;
+      let completed = false;
+      let streamError = '';
+
+      while (true) {
+        if (signal?.aborted) throw abortFailure(signal);
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+        const blocks = buffer.split(/\n\n+/);
+        buffer = blocks.pop() || '';
+        for (const block of blocks) {
+          for (const event of parseProviderSse(block + '\n\n')) {
+            if (event.data === '[DONE]') continue;
+            let payload: Record<string, any>;
+            try { payload = JSON.parse(event.data) as Record<string, any>; } catch { continue; }
+            const eventType = String(event.event || payload.type || '');
+            if (eventType === 'response.reasoning_summary_text.delta') {
+              const key = `${String(payload.item_id || '')}:${String(payload.summary_index || 0)}`;
+              reasoningSummaries.set(key, (reasoningSummaries.get(key) || '') + this.extractTextValue(payload.delta));
+              continue;
+            }
+            if (eventType === 'response.reasoning_summary_text.done') {
+              const key = `${String(payload.item_id || '')}:${String(payload.summary_index || 0)}`;
+              const summary = this.extractTextValue(payload.text) || reasoningSummaries.get(key) || '';
+              reasoningSummaries.delete(key);
+              if (summary) { emittedContent = true; yield { type: 'status', text: summary }; }
+              continue;
+            }
+            if (eventType === 'response.output_text.delta') {
+              const delta = this.extractTextValue(payload.delta);
+              if (delta) { emittedContent = true; yield { type: 'text', text: delta }; }
+              continue;
+            }
+            if (eventType === 'response.output_item.added' && payload.item?.type === 'function_call') {
+              const key = String(payload.item.id || payload.item.call_id || payload.output_index || calls.size);
+              calls.set(key, { id: String(payload.item.call_id || payload.item.id || key), name: String(payload.item.name || ''), arguments: String(payload.item.arguments || ''), emitted: false });
+              continue;
+            }
+            if (eventType === 'response.function_call_arguments.delta') {
+              const key = String(payload.item_id || payload.call_id || payload.output_index || '');
+              const call = calls.get(key) || { id: String(payload.call_id || key), name: String(payload.name || ''), arguments: '', emitted: false };
+              call.arguments += String(payload.delta || '');
+              calls.set(key, call);
+              continue;
+            }
+            if (eventType === 'response.output_item.done' && payload.item?.type === 'function_call') {
+              const key = String(payload.item.id || payload.item.call_id || payload.output_index || '');
+              const call = calls.get(key) || { id: String(payload.item.call_id || payload.item.id || key), name: String(payload.item.name || ''), arguments: '', emitted: false };
+              call.id = String(payload.item.call_id || call.id);
+              call.name = String(payload.item.name || call.name);
+              call.arguments = typeof payload.item.arguments === 'string' ? payload.item.arguments : call.arguments;
+              if (!call.emitted) { call.emitted = true; yield { type: 'tool_call', text: '', toolCall: { id: call.id, name: call.name, arguments: call.arguments } }; }
+              calls.set(key, call);
+              continue;
+            }
+            if (eventType === 'response.completed') { completed = true; continue; }
+            if (eventType === 'response.failed' || eventType === 'response.incomplete' || eventType === 'error') {
+              streamError = this.extractTextValue(payload.error?.message || payload.response?.error?.message || payload.message) || eventType;
+            }
+          }
+        }
+      }
+      if (streamError) yield { type: 'text', text: `[LLM Error] ${streamError}` };
+      else if (!completed) yield { type: 'text', text: '[LLM Error] Responses stream ended before response.completed.' };
+      else if (!emittedContent && calls.size === 0) yield { type: 'text', text: '[Error] Empty Responses stream.' };
+    } finally {
+      reader?.releaseLock();
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', forwardAbort);
     }
   }
 
@@ -850,7 +1050,7 @@ export class LLMProvider {
       model,
       messages: [
         ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-        ...messages.map(msg => ({ ...msg, content: this.normalizeOpenAIContent(msg.content) })),
+        ...this.openAIChatMessages(messages),
       ],
       temperature,
       max_tokens: maxTokens,
@@ -1146,7 +1346,7 @@ export class LLMProvider {
       model,
       messages: [
         ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-        ...messages.map(message => ({ ...message, content: this.normalizeOpenAIContent(message.content) })),
+        ...this.openAIChatMessages(messages),
       ],
       temperature,
       max_tokens: maxTokens,
@@ -1216,7 +1416,7 @@ export class LLMProvider {
           model,
           messages: [
             ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-            ...messages.map(message => ({ ...message, content: this.normalizeOpenAIContent(message.content) })),
+            ...this.openAIChatMessages(messages),
           ],
           temperature,
           max_tokens: maxTokens,
@@ -1306,7 +1506,7 @@ export class LLMProvider {
       model,
       messages: [
         ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-        ...messages.map(msg => ({ ...msg, content: this.normalizeOpenAIContent(msg.content) })),
+        ...this.openAIChatMessages(messages),
       ],
       temperature,
       max_tokens: maxTokens,

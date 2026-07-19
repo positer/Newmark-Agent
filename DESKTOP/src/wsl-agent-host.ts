@@ -93,6 +93,7 @@ function applyWorkspace(workspace: WslAgentWorkspace | null): void {
     hostBinding: '',
     icon: '',
     kind: workspace.kind === 'ssh' ? 'ssh' : 'local',
+    conversationStatePrefix: workspace.conversationStatePrefix,
   };
   host.config.loadWorkspaceConfig(workspace.path);
 }
@@ -109,6 +110,7 @@ function requestTarget(input: { target?: ConversationRuntimeTarget; conversation
       path: workspace.path,
       isInternal: !!workspace.isInternal,
       kind: workspace.kind,
+      conversationStatePrefix: workspace.conversationStatePrefix,
     } : null,
   });
 }

@@ -197,6 +197,10 @@ export class WslAgentClient {
       `NEWMARK_WORKSPACE_ID=${this.runtimeTarget.workspaceId}`,
       `NEWMARK_CONVERSATION_ID=${this.runtimeTarget.conversationId}`,
     ] : [];
+    for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy']) {
+      const value = String(process.env[key] || '').trim();
+      if (value && !/[\r\n\0]/.test(value)) runtimeEnv.push(`${key}=${value}`);
+    }
     const child = spawn('wsl.exe', ['-d', this.distro, '--', 'env', `NEWMARK_WSL_ROOT=${root}`, `NEWMARK_WSL_DISTRO=${this.distro}`, 'NEWMARK_ISOLATED_RUNTIME=1', ...runtimeEnv, 'bash', '-lc', command], {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -401,6 +405,7 @@ export class WslAgentClient {
         path: workspace.path,
         isInternal: !!workspace.isInternal,
         kind: workspace.kind,
+        conversationStatePrefix: String((workspace as WslAgentWorkspace & { conversationStatePrefix?: string }).conversationStatePrefix || ''),
       } : null,
     };
   }

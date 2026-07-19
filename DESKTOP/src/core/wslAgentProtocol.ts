@@ -12,6 +12,7 @@ export interface WslAgentWorkspace {
   path: string;
   isInternal?: boolean;
   kind?: string;
+  conversationStatePrefix?: string;
 }
 
 export interface WslAgentPromptRequest {

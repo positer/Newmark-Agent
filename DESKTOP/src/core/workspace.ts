@@ -10,6 +10,7 @@ export interface WorkspaceInfo {
   path: string;
   isInternal: boolean;
   hostBinding: string;
+  conversationStatePrefix?: string;
   icon: string;
   pinned?: boolean;
   pinnedAt?: string;

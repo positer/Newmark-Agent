@@ -264,7 +264,7 @@ function startMockServer() {
         return;
       }
       if (messagesText.includes('QUEUE_FIRST_LOCK_TEST')) {
-        setTimeout(() => sendSse(res, [textChunk('QUEUE_FIRST_DONE_20260628')]), 60000);
+        setTimeout(() => sendSse(res, [textChunk('QUEUE_FIRST_DONE_20260628')]), 3000);
         return;
       }
       if (messagesText.includes('LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701')) {
@@ -684,13 +684,13 @@ async function runUiCheck(root) {
       };
       return ok;
     })()`, 10000, 'queued input exposes a visible localized Guide action');
-    await captureScreenshot(cdp);
     await evaluate(cdp, `(() => {
       const guide = document.querySelector('#queue-list .queue-guide-btn');
       if (!guide) throw new Error('queue Guide button disappeared before click');
       guide.click();
       return true;
     })()`, 30000);
+    await captureScreenshot(cdp);
     await waitFor(cdp, `(() => {
       const body = document.querySelector('#chat-area')?.innerText || '';
       const state = window.state || {};
@@ -738,13 +738,14 @@ async function runUiCheck(root) {
           queueLabel: label ? label.textContent : '',
           sendInFlight: state._sendInFlight,
           runningKeys: Object.keys(state.runningConversations || {}),
+          activeSendKeys: Object.keys(state.activeSendCallsByTarget || {}),
           nextQueue: state.nextQueue || [],
           conversationId: state.conversationId,
           bodyTail: body.slice(-1600),
         };
       }
       return ok;
-    })()`, 60000, 'Guide completed in the active run and the remaining queue drained');
+    })()`, 30000, 'Guide completed in the active run and the remaining queue drained');
     log('queue Guide delivery and subsequent Build drain ok');
 
     await evaluate(cdp, switchConversationById(convB), 30000);

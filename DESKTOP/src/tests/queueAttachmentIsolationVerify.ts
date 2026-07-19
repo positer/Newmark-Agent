@@ -49,6 +49,10 @@ function verifyPersistedWorkRunsCannotRewriteRuntimeIdentity(source: string): vo
     'eventRuntimeKey',
     'publicWorkEvent',
     'publicToolNameForUi',
+    'guideWorkEventKey',
+    'guideWorkEventStatus',
+    'mergeGuideWorkEvent',
+    'dedupeGuideWorkEvents',
     'publicWorkEventForUi',
     'normalizedWorkRun',
     'workRunsForTarget',
@@ -324,6 +328,7 @@ async function main(): Promise<void> {
     'setBackendQueueForTarget',
   ].map(name => functionSource(source, name)).join('\n\n');
   const drainSource = assignedFunctionSource(source, 'drainNextQueue');
+  const scheduleDrainSource = assignedFunctionSource(source, 'scheduleNextQueueDrain');
   const syncSource = assignedFunctionSource(source, 'syncNextQueueFromBackend');
   const dropSource = assignedFunctionSource(source, 'dropQueueDrag');
   const editSource = assignedFunctionSource(source, 'editQueueItem');
@@ -336,10 +341,12 @@ async function main(): Promise<void> {
   const targetB = { workspaceId: 'workspace-b', conversationId: 'default' };
   let activeTarget = targetA;
   let running = false;
+  let acceptSend = true;
   const state: Record<string, any> = {
     nextQueue: [],
     nextQueueRequests: [],
     nextQueueDrainsByTarget: {},
+    activeSendCallsByTarget: {},
     nextPrompt: '',
     backendQueue: { steering: [], followUp: [] },
     backendQueuesByTarget: {},
@@ -348,17 +355,20 @@ async function main(): Promise<void> {
   const windowObject: Record<string, any> = {
     renderInputStack: () => undefined,
     sendMessage: (mode: string, text: string, options: Record<string, any>) => {
+      if (!acceptSend) return;
+      if (typeof options.onStarted === 'function') options.onStarted();
       sent.push({ mode, text, request: options.queuedRequest, activeTarget: { ...activeTarget }, options: { ...options } });
       running = true;
     },
   };
-  const install = new Function('window', 'state', 'currentConversationTarget', 'runtimeKeyFor', 'isCurrentConversationRunning', 'setTimeout', `
+  const install = new Function('window', 'state', 'currentConversationTarget', 'runtimeKeyFor', 'isCurrentConversationRunning', 'queueMicrotask', `
     ${helpers}
     window.bindQueuedRequestToTarget = bindQueuedRequestToTarget;
     window.queueIndexesForTarget = queueIndexesForTarget;
     window.setBackendQueueForTarget = setBackendQueueForTarget;
     window.backendQueueForTarget = backendQueueForTarget;
     window.syncNextQueueFromBackend = ${syncSource};
+    window.scheduleNextQueueDrain = ${scheduleDrainSource};
     window.drainNextQueue = ${drainSource};
     window.dropQueueDrag = ${dropSource};
     window.editQueueItem = ${editSource};
@@ -431,6 +441,39 @@ async function main(): Promise<void> {
   windowObject.drainNextQueue();
   assert.equal(scheduled.length, 0, 'the consumed backend mirror cannot be resurrected and resent');
 
+  state.nextQueue = [];
+  state.nextQueueRequests = [];
+  sent.length = 0;
+
+  const completionRaceRequest = windowObject.bindQueuedRequestToTarget({ text: 'after terminal event', images: [] }, 'after terminal event', targetA);
+  state.nextQueue = ['after terminal event'];
+  state.nextQueueRequests = [completionRaceRequest];
+  state.activeSendCallsByTarget['workspace-a::default'] = true;
+  activeTarget = targetA;
+  running = false;
+  windowObject.scheduleNextQueueDrain(targetA);
+  assert.equal(scheduled.length, 1, 'a terminal event schedules one immediate microtask while the original send is finalizing');
+  scheduled.shift()!();
+  assert.equal(sent.length, 0, 'the terminal event cannot consume the next item before the original send promise finalizes');
+  assert.deepEqual(state.nextQueue, ['after terminal event'], 'the completion race keeps the queued item intact');
+  delete state.activeSendCallsByTarget['workspace-a::default'];
+  windowObject.drainNextQueue();
+  assert.equal(scheduled.length, 1, 'clearing the send-finalization lock immediately reschedules the retained item');
+  scheduled.shift()!();
+  assert.equal(sent.length, 1, 'the retained item enters Build immediately after send finalization');
+  assert.equal(sent[0].text, 'after terminal event');
+
+  acceptSend = false;
+  running = false;
+  state.nextQueue = ['runtime snapshot race'];
+  state.nextQueueRequests = [windowObject.bindQueuedRequestToTarget({ text: 'runtime snapshot race', images: [] }, 'runtime snapshot race', targetA)];
+  windowObject.drainNextQueue();
+  assert.equal(scheduled.length, 1, 'the handoff reaches sendMessage before the runtime snapshot rejection');
+  scheduled.shift()!();
+  assert.deepEqual(state.nextQueue, ['runtime snapshot race'], 'a send rejected by a racing runtime snapshot remains queued');
+  assert.equal(sent.length, 1, 'a rejected queue handoff does not create another send');
+  acceptSend = true;
+  running = false;
   state.nextQueue = [];
   state.nextQueueRequests = [];
   sent.length = 0;

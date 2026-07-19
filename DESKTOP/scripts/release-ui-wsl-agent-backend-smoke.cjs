@@ -110,6 +110,7 @@ async function launch(root, port) {
     ...(sourceMode ? ['.'] : []),
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${userDataDir}`,
+    '--allow-multiple-instances',
     '--no-sandbox',
     '--no-devtools',
     '--root',
@@ -123,21 +124,8 @@ async function launch(root, port) {
   const target = await waitTarget(port);
   const cdp = connect(target);
   await cdp.ready;
-  try {
-    await waitForPromotedMainUi(cdp);
-  } catch (error) {
-    const diagnostic = await evaluate(cdp, `(() => ({
-      url: location.href,
-      visibility: document.visibilityState,
-      readyState: document.readyState,
-      hasApi: !!window.api,
-      prompt: (() => { const p=document.querySelector('#prompt'); return p ? { disabled:p.disabled, readOnly:p.readOnly } : null; })(),
-      startupClass: document.documentElement.classList.contains('startup-prewarm'),
-      startupCover: !!document.querySelector('#startup-cover'),
-      bodyTail: (document.body?.innerText || '').slice(-800)
-    }))()`).catch(diagnosticError => ({ diagnosticError: diagnosticError.message }));
-    throw new Error(`${error.message}; diagnostic=${JSON.stringify(diagnostic)}`);
-  }
+  await waitForPromotedMainUi(cdp);
+  await cdp.call('Page.bringToFront', {}, 10000).catch(() => undefined);
   await cdp.call('Runtime.enable');
   return { child, cdp };
 }

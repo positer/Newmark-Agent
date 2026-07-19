@@ -335,6 +335,8 @@ async function main() {
   assert(uiHtml.includes('id="input-stack"') && uiHtml.includes('id="queue-panel"') && uiHtml.includes('window.renderQueuePanel = function()') && uiHtml.includes('window.editQueueItem = function(idx, value)') && uiHtml.includes('window.dropQueueDrag = function(event, idx)') && uiHtml.includes('window.renderScrollBottomAffordance = renderScrollBottomAffordance') && uiHtml.includes('state.conversationPlan.items.push') && uiHtml.includes('state.todoCollapsed = false'), 'ui html: bottom input stack exposes editable queue, draggable ordering, scroll affordance, Goal bar, and Plan-backed checklist');
   assert(uiHtml.includes('.work-review-head') && uiHtml.includes('function addWorkReview(diffs)') && uiHtml.includes('window.openWorkReview') && uiHtml.includes('window.toggleWorkReviewFiles') && uiHtml.includes('reviewUi.pendingWorkReview = r.diffs'), 'work completion review: shows conversation-bound changed files with expandable rows and a review action');
   assert(uiHtml.includes('.work-review-detail .file-row {') && uiHtml.includes('.work-review-detail .file-row:hover') && uiHtml.includes('.work-review-detail .file-row:focus-visible') && uiHtml.includes('<button type="button" class="file-row"'), 'work completion review: detail rows use themed button, hover, and keyboard-focus states');
+  assert(uiHtml.includes('--review-bg: rgba(255,255,255,.82)') && uiHtml.includes('background:var(--review-bg)') && uiHtml.includes('background:var(--review-row-hover)'), 'work completion review: uses explicit light-theme surfaces instead of hard-coded dark cards');
+  assert(uiHtml.includes('window.openWorkReviewFile') && uiHtml.includes('editor-review-deletions') && uiHtml.includes('editor-review-added-line') && uiHtml.includes('window.reviewAddedLineIndexes') && uiHtml.includes('state.editorReviewDiff.addedLines'), 'work completion review: opens an editable green-added-line diff while rendering red deleted lines in a separate read-only layer');
   assert(uiHtml.includes('#goal-bar .stack-row::before') && uiHtml.includes('#goal-bar.goal-paused') && uiHtml.includes('width: calc(100% - 40px)') && uiHtml.includes("bar.classList.toggle('goal-paused'"), 'task/queue/goal bars: use a compact restrained control-band hierarchy with explicit goal state');
   assert(!uiHtml.includes("window.openSubWin('Model validation'") && !uiHtml.includes("window.openSubWin('Workspace required'") && !uiHtml.includes("window.openSubWin('New conversation'") && !uiHtml.includes("window.openSubWin('Plugin manager'"), 'ui html: dynamic window titles are not hard-coded English');
   assert(!/(^|[^<])\/(span|button|option|label|div)>/.test(uiHtml), 'ui html: no broken inline closing tags');
@@ -345,9 +347,13 @@ async function main() {
   assert(uiHtml.includes('function redactSensitiveText(value)') && uiHtml.includes("replace(/sk-[A-Za-z0-9_\\-.]{8,}/g, 'sk-redacted')"), 'ui html: redacts API keys from visible messages');
   assert(uiHtml.includes("redactSensitiveText('[System] Fuzzy injection did not pass validation:") && uiHtml.includes("redactSensitiveText('[Error] Fuzzy injection failed:"), 'ui html: fuzzy injection messages are redacted');
   assert(uiHtml.includes('WORKFLOW TIMELINE') && uiHtml.includes('function renderChatMessages(messages)') && uiHtml.includes('function currentLang()') && uiHtml.includes('function conversationWorkUiState(conversationId, workspaceId)') && uiHtml.includes('agentWorkUiByConversation') && uiHtml.includes('function ensureActiveAssistantMsg(mode, model, conversationId)') && uiHtml.includes('function upsertToolEvent(event, resultText)') && uiHtml.includes('function toolBatchSummary(batch)') && uiHtml.includes('function renderToolBatch(batch)') && uiHtml.includes('function finishToolBatch(conversationId)') && uiHtml.includes('function renderConversationWorkRuns(runs, target)') && uiHtml.includes('function findCompletedWorkflowMsg(conversationId, text)') && uiHtml.includes('function markFinalResponseMsg(conversationId, text, msg)') && uiHtml.includes('function findPendingFinalResponseMsg(conversationId, streamText)') && uiHtml.includes('function responseTextLooksLikeCompactPrefix(prefix, full)') && uiHtml.includes('conversationWorkUiState(conversationId).lastCompletedWorkflow') && uiHtml.includes('findCompletedWorkflowMsg(lockedConversationId, fullText)') && uiHtml.includes('markFinalResponseMsg(lockedConversationId, fullText, responseMsg)') && uiHtml.includes('正在编辑 ') && uiHtml.includes('已编辑 ') && uiHtml.includes('class="tool-event-details"') && !uiHtml.includes("addMsg('workflow running', 'Preparing request...'") && !uiHtml.includes('Agent is working'), 'ui html: conversation renders live assistant text, public work runs, and folded tool details without duplicate final echoes');
+  assert(uiHtml.includes("events[priorEventIndex] = Object.assign({}, priorEvent, { completed: true })")
+    && uiHtml.includes("event.completed ? (currentLang() === 'zh' ? ' · 已完成' : ' · completed')")
+    && !uiHtml.includes("element.classList.contains('running')")
+    && uiHtml.includes('var expanded = run.expanded === undefined ? live : !!run.expanded'), 'ui html: completed tools update their original row and running Build blocks remain collapsible with a default-expanded state');
   assert(!uiHtml.includes('state._activeWorkflowMsg') && !uiHtml.includes('state._activeWorkflowText') && !uiHtml.includes('state._toolEventMsgs') && !uiHtml.includes('state._toolEventBatch') && !uiHtml.includes('state._lastCompletedWorkflow'), 'ui html: live workflow feedback state is conversation-scoped, not a global singleton');
-  assert(uiHtml.includes('function isHiddenWorkflowMessage(message)') && uiHtml.includes('Preparing model request and available tools') && uiHtml.includes('Executing \\d+ tool call') && uiHtml.includes('renderPersistedToolMessage(m)'), 'ui html: hides internal workflow status rows and folds persisted tool workflow messages');
-  assert(uiHtml.includes('background: transparent;') && uiHtml.includes('border-radius: 0;') && uiHtml.includes('.chat-msg::before') && uiHtml.includes('.chat-msg::after'), 'ui html: chat messages are not bubble cards');
+  assert(uiHtml.includes('function isHiddenWorkflowMessage(message)') && uiHtml.includes('Preparing model request and available tools') && uiHtml.includes('Executing \\d+ tool call') && uiHtml.includes("if (String(m.role || '') === 'workflow' && /^tool:/.test(String(m.mode || ''))) continue;"), 'ui html: hides internal workflow status rows and suppresses legacy persisted tool chat rows now owned by Build runs');
+  assert(uiHtml.includes('background: transparent;') && uiHtml.includes('border-radius: 0;') && uiHtml.includes('#chat-area:has(> .chat-msg)') && uiHtml.includes('background-position: left 32px top, right 32px top;') && uiHtml.includes('background-attachment: local;') && !uiHtml.includes('.chat-msg::before') && uiHtml.includes('.chat-msg::after'), 'ui html: chat messages are not bubble cards and the scrolling conversation owns continuous left/right timeline rails');
   assert(uiHtml.includes('if (conv && api.ensureConversation)') && uiHtml.includes('return loadActiveConversationMessages(id);') && uiHtml.includes('api.getState(requestedTarget)') && uiHtml.includes('requestedWorkspaceKey === currentWorkspaceKey()') && uiHtml.includes('if (s && s.chatMessages) renderChatMessages(s.chatMessages);'), 'ui html: workspace conversation switching reloads a composite-target snapshot without mutating another runtime');
   assert(uiHtml.includes('guideMessagesByTarget') && uiHtml.includes('function recordGuideUiMessage') && uiHtml.includes('function renderPendingGuideMessages') && uiHtml.includes('function syncGuideMessagesFromWorkRuns') && uiHtml.includes('renderPendingGuideMessages(renderTarget, persistedGuideIds)') && uiHtml.includes("guideStatus: clientMessageId ? 'applied' : ''") && !uiHtml.includes("optimisticGuide.setAttribute('data-guide-status'"), 'ui html: Guide receipts are target-scoped and snapshot redraw reconciles optimistic rows by clientMessageId');
   assert(uiHtml.includes("{ id: 'default', summary: t('workspace.defaultConversation')") && !uiHtml.includes("'conv-' + key + '-default'") && !uiHtml.includes("'conv-default-' + currentWorkspaceKey()"), 'ui html: default conversation id matches backend default id');
@@ -362,7 +368,7 @@ async function main() {
   assert(uiHtml.includes("type === 'queue_update'") && uiHtml.includes('backendQueuesByTarget') && uiHtml.includes('setBackendQueueForTarget(event.queue || { steering: [], followUp: [] }, eventQueueTarget)') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue, eventQueueTarget)') && uiHtml.includes('setBackendQueueForTarget(s.queued, snapshotTarget)') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue, snapshotTarget)'), 'ui html: caches backend queue_update events by composite target for foreground/background conversation debugging');
   assert(uiHtml.includes('if (s && Array.isArray(s.workEvents))') && uiHtml.includes('var mergedEvents = existingEvents.concat(s.workEvents || [])') && uiHtml.includes('dedupedEvents.slice(-Number(state.agentWorkEventLimit || 240))'), 'ui html: merges backend work-event snapshots when foregrounding a conversation');
   assert(mainSource.includes('function broadcastAgentWorkEvent(event: unknown)') && mainSource.includes('BrowserWindow.getAllWindows()') && mainSource.includes("win.webContents.send('agent:workEvent', event)") && mainSource.includes("ipcMain.handle('agent:getState', async (event, targetInput?: ConversationTargetInput)") && mainSource.includes('const startupPrewarmRequest = isStartupPrewarmSender(event)') && mainSource.includes("ipcMain.handle('agent:ensureConversation'") && mainSource.includes('ensureWslConversationPool()!.snapshot(target)') && mainSource.includes('ensureElectronUtilityPool().snapshot(target)') && preloadSource.includes('ensureConversation: (target: string | Record<string, unknown>)') && preloadSource.includes('getState: (target?: string | Record<string, unknown>)'), 'backend sharing: all desktop windows receive one composite-target event stream and can request isolated Windows/WSL snapshots');
-  assert(mainSource.includes('const singleInstanceLock = app.requestSingleInstanceLock()') && mainSource.includes("app.on('second-instance'") && mainSource.includes('const win = mainWindow && !mainWindow.isDestroyed()') && !mainSource.includes('const win = createDesktopWindow ? createDesktopWindow(!!agent) : mainWindow'), 'main process: repeated launches from installed or unpacked executables focus the existing window instead of creating a duplicate');
+  assert(mainSource.includes('const singleInstanceLock = allowMultipleInstances || app.requestSingleInstanceLock()') && mainSource.includes("app.on('second-instance'") && mainSource.includes('const win = mainWindow && !mainWindow.isDestroyed()') && !mainSource.includes('const win = createDesktopWindow ? createDesktopWindow(!!agent) : mainWindow'), 'main process: production launches focus the existing window while explicitly isolated test instances skip lock coordination');
   assert(uiHtml.includes('function loadActiveConversationMessages(conversationId)') && uiHtml.includes('var requestedConversationId = String(conversationId || activeConversationId() ||') && uiHtml.includes('var requestedTarget = currentConversationTarget(requestedConversationId)') && uiHtml.includes('api.getState(lockedTarget)') && !uiHtml.includes('api.getState().then(function(s) {\n      if (s && s.contextCompression'), 'ui html: active window refreshes are bound to the owning workspace and conversation target');
   assert(uiHtml.includes('function setActiveWorkspaceConversationById(id)') && uiHtml.includes('var activeBeforeRender = (conversations.find(function(c)') && uiHtml.includes('if (activeBeforeRender) setActiveWorkspaceConversationById(activeBeforeRender);'), 'ui html: conversation list rerender preserves active conversation by id instead of stale cross-window index');
   assert(uiHtml.includes('function applyWorkspaceStateFromBackend(s)') && uiHtml.includes('var localActiveId = activeConversationId();') && uiHtml.includes('var hasLocalActive = backendConversations.some(function(item)') && uiHtml.includes('window.openWorkspaceManager = async function()') && uiHtml.includes('await window.refreshWorkspaceState().catch(function(){})'), 'ui html: workspace manager refresh keeps each window-local active conversation before rendering');
@@ -390,6 +396,7 @@ async function main() {
   assert(uiHtml.includes('[data-theme="light"] .stack-card') && uiHtml.includes('[data-theme="light"] #queue-panel') && uiHtml.includes('[data-theme="light"] .queue-item:hover') && uiHtml.includes('[data-theme="light"] .queue-edit'), 'ui light theme: queue stack, rows, controls, and editable text use readable light surfaces');
   assert(uiHtml.includes('[data-theme="light"] #goal-bar') && uiHtml.includes('rgba(255,255,255,0.82) 36%') && uiHtml.includes('[data-theme="light"] #goal-bar.goal-paused'), 'ui light theme: Goal emphasis fades into a white glass mask instead of the dark stack surface');
   assert(uiHtml.includes('[data-theme="light"] .memory-lab-overview-node') && uiHtml.includes('[data-theme="light"] .memory-lab-overview-title') && uiHtml.includes('[data-theme="light"] .memory-lab-node.selected') && uiHtml.includes('[data-theme="light"] .memory-lab-overview-grid'), 'ui light theme: Memory Lab controls, nodes, status pills, and graph grid use harmonious light surfaces');
+  assert(uiHtml.includes("activity.key === 'memory_lab'") && uiHtml.includes('更新了记忆') && uiHtml.includes('Updated memory'), 'ui work run: Memory Lab rebuild receipt is rendered only as an in-block tool activity completion');
   assert(uiHtml.includes('state.subWindowStack.push') && uiHtml.includes('state.subWindowStack && state.subWindowStack.pop') && uiHtml.includes("header.addEventListener('pointerdown'") && uiHtml.includes('Math.min(window.innerWidth - rect.width - padding') && uiHtml.includes('Math.min(window.innerHeight - rect.height - padding'), 'ui sub-windows: nested views restore their parent and pointer dragging is clamped to the visible viewport');
   assert(uiHtml.includes('window.showFlowEditor = function(expandedIndex)') && uiHtml.includes("renderFlowItem(state.flowWorks[i], i, Number(expandedIndex) === i)") && uiHtml.includes("state.activeSubWindowView = { name: 'flowNew' }") && uiHtml.includes('window.showFlowEditor(workIdx)'), 'ui Flow editor: same-level rerenders do not stack windows and newly added controls remain expanded');
   assert(uiHtml.includes('class="msg-file-link"') && uiHtml.includes('onclick="window.openLinkedFile(')
@@ -398,13 +405,14 @@ async function main() {
   'ui html: conversation and Markdown local-file links use the safe workspace file router');
   assert(!uiHtml.includes('data-tab="md-viewer"') && uiHtml.includes('id="editor-md-toggle"') && uiHtml.includes('window.toggleEditorMarkdownPreview') && uiHtml.includes("window.editorLanguageForPath(state.editorPath) === 'markdown'") && uiHtml.includes('.editor-toolbar .editor-view-btn { display:none; }'), 'ui html: Markdown preview is integrated as an editor-only toggle shown only for Markdown files with sufficient CSS specificity');
   assert(uiHtml.includes('window.highlightEditorCode') && uiHtml.includes('window.handleEditorVimKey') && uiHtml.includes('window.requestEditorCompletion') && uiHtml.includes('window.requestEditorAssist') && uiHtml.includes('editor-completion'), 'ui html: native code editor provides file-aware highlighting, Vim keyboard state, model completion, and Agent assist internals');
-  assert(uiHtml.includes('editorPredictionEnabled: true') && uiHtml.includes('window.toggleEditorPrediction') && uiHtml.includes('window.scheduleEditorCompletion') && uiHtml.includes('}, 500);') && uiHtml.includes('class="editor-ghost"') && uiHtml.includes('window.highlightEditorCode(combined, language)') && uiHtml.includes('editor-ghost-text') && uiHtml.includes("state.editorCompletionText && e.key === 'Tab'"), 'ui html: Copilot prediction defaults on, retriggers after 500ms idle, reflows highlighted code as pale insertion text, and accepts with Tab');
+  assert(uiHtml.includes('wrap="soft"') && uiHtml.includes('window.editorVisualRowsForLine') && uiHtml.includes('window.renderEditorGutter') && uiHtml.includes('white-space:pre-wrap') && uiHtml.includes('overflow-wrap:anywhere'), 'ui editor wrapping: long logical lines soft-wrap while the gutter keeps one number spanning all visual rows');
+  assert(uiHtml.includes('editorPredictionEnabled: true') && uiHtml.includes('window.toggleEditorPrediction') && uiHtml.includes('window.scheduleEditorCompletion') && uiHtml.includes('}, 180);') && uiHtml.includes('beforeStart = Math.max(0, pos - 6000)') && uiHtml.includes('class="editor-ghost"') && uiHtml.includes('window.highlightEditorCode(combined, language)') && uiHtml.includes('editor-ghost-text') && uiHtml.includes("state.editorCompletionText && e.key === 'Tab'"), 'ui html: Copilot prediction defaults on, retriggers after a short idle window, sends bounded cursor-local context, reflows pale insertion text, and accepts with Tab');
   assert(uiHtml.includes('editorCompletionAnchor: null') && uiHtml.includes('window.editorAnchorMatches = function(anchor)') && uiHtml.includes('window.handleEditorCaretChange = function()') && uiHtml.includes("addEventListener('select', window.handleEditorCaretChange)"), 'ui editor prediction: binds candidates to path, content, and caret selection, then invalidates and restarts after caret movement');
   assert(uiHtml.includes('.editor-ghost { display:none;') && uiHtml.includes('.editor-ghost.visible { display:block; }') && uiHtml.includes("ghost.classList.remove('visible')") && uiHtml.includes("ghost.classList.add('visible')"), 'ui editor highlighting: opaque completion overlay is visible only while an anchored prediction exists');
   assert(uiHtml.includes('width: 30px;') && uiHtml.includes('aria-label="Copilot prediction"') && uiHtml.includes('aria-pressed="true"') && !uiHtml.includes('title="Vim mode">Vim</button>') && !uiHtml.includes('title="Agent assist">Agent</button>') && !uiHtml.includes('<span>Preview</span>'), 'ui editor toolbar: uses fixed icon-only controls with tooltips and explicit Copilot state without Vim or Agent buttons');
   assert(uiHtml.includes("var key = [file.name || '', file.type || '', file.size || 0, file.lastModified || 0].join('|')") && uiHtml.includes('item.dataUrl === dataUrl'), 'ui prompt paste: deduplicates clipboard images across DataTransfer items/files and decoded content');
   const agentSourceForEditor = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
-  assert(mainSource.includes("completion: true, preferCopilot: false") && agentSourceForEditor.includes('const selected = (current && models.find'), 'editor assist: completion stays bound to the conversation-selected model instead of forcing Copilot');
+  assert(mainSource.includes("completion: true, preferCopilot: true") && mainSource.includes('editorCompletionControllers.get(ownerId)?.abort') && agentSourceForEditor.includes("model.provider_protocol === 'github_models'") && agentSourceForEditor.includes('input.completion ? 192 : 1800'), 'editor prediction: prefers configured Copilot, cancels superseded requests, and uses a bounded low-latency completion budget');
   assert(uiHtml.includes("if (providerOpts) modelOpts += '<optgroup") && uiHtml.includes("if (!state.model || (state.model === 'auto'") && uiHtml.includes("availableValues.indexOf(state.model) < 0"), 'ui model selector: skips empty provider groups and recovers an empty or unavailable saved model to the first usable model');
   assert(uiHtml.includes('function messageActionsHtml(role, text, messageIndex)') && uiHtml.includes('window.copyMessageText = async function(button)') && uiHtml.includes('window.editUserMessage = async function(button, messageIndex)') && uiHtml.includes('api.rewindConversation(target, Number(messageIndex))') && uiHtml.includes('message._newmarkMessageTarget') && uiHtml.includes('pendingConversationRewinds[rewindKey]') && !uiHtml.includes("addMsg('assistant', '[Error] ' + ((result && result.error) || 'Unable to edit message.')"), 'ui html: user messages retain their rendered composite target, suppress duplicate rewinds, and report failures outside the chat timeline');
   assert(preloadSource.includes("rewindConversation: (target: string | Record<string, unknown>, messageIndex: number) => ipcRenderer.invoke('agent:rewindConversation'") && mainSource.includes("ipcMain.handle('agent:rewindConversation'") && mainSource.includes('mutateTargetConversation(target') && mainSource.includes('ensureWslConversationPool()!.rewind(target, messageIndex)') && mainSource.includes('ensureElectronUtilityPool().rewind(target, messageIndex)'), 'main/preload: conversation rewind is target-bound, mutation-guarded, and executes inside the selected WSL or Utility runtime');
@@ -415,12 +423,12 @@ async function main() {
   assert(uiHtml.includes('#input-tools {') && uiHtml.includes('overflow: visible;'), 'input toolbar: permits submit hover and running marquee pixels outside the fixed button box without clipping');
   assert(uiHtml.includes('window.runFlowWork = async function(workIdx)') && uiHtml.includes('await api.saveFlow(normalized)') && uiHtml.includes('api.runFlow(normalized.name, flowInput, 0)') && uiHtml.includes('renderChatMessages(r.chatMessages)'), 'ui html: Flow Run uses the constrained Flow API and backend core runner');
   assert(uiHtml.includes('function stopFlowRunInternal()') && uiHtml.includes('window.stopFlowRun = function()') && uiHtml.includes('stopFlowRunInternal();') && !uiHtml.includes('window.stopFlowRun = function() {\n  stopFlowRun();'), 'ui html: Flow stop handler avoids global recursive self-call');
-  assert(uiHtml.includes("conversationRunning && effectiveInputMode === 'guide'") && uiHtml.includes("effectiveInputMode === 'next' && !opts.fromQueue") && uiHtml.includes('state.nextQueue.push(displayText)') && uiHtml.includes('bindQueuedRequestToTarget(requestMessage, rawText, lockedTarget)') && uiHtml.includes('queuedRequestMatchesTarget') && uiHtml.includes('state.queueCollapsed = false') && !uiHtml.includes('[Queue] Current turn is locked; prompt will run after it completes.'), 'ui html: Guide steers active turns while target-bound Next requests queue future text and images without cross-conversation delivery');
+  assert(uiHtml.includes("conversationRunning && effectiveInputMode === 'guide'") && uiHtml.includes("effectiveInputMode === 'next' && !opts.fromQueue && conversationRunning") && uiHtml.includes("idleNextImmediate = effectiveInputMode === 'next' && !opts.fromQueue && !conversationRunning") && uiHtml.includes('state.nextQueue.push(displayText)') && uiHtml.includes('bindQueuedRequestToTarget(requestMessage, rawText, lockedTarget)') && uiHtml.includes('queuedRequestMatchesTarget') && uiHtml.includes('queueMicrotask(function()') && !uiHtml.includes('}, 250);') && !uiHtml.includes('}, 80);') && uiHtml.includes('state.queueCollapsed = false'), 'ui html: idle Next starts immediately while active-run Next stays target-bound and terminal events drain without fixed timer latency');
   assert(uiHtml.includes('id="terminal-timeout-input"') && uiHtml.includes('Max ms') && uiHtml.includes('Terminal timeout cap') && uiHtml.includes('window.setTerminalInterruptTimeout = function(value)') && uiHtml.includes("api.saveSetting('terminal', 'interrupt_timeout_ms', n)"), 'ui html: terminal timeout cap is editable and persisted');
   const agentKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
   const piKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
   const conversationKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8');
-  assert(conversationKernelSource.includes('function changedLineCount(value: string)') && conversationKernelSource.includes('old: changedLineCount(d.oldContent)') && conversationKernelSource.includes('new: changedLineCount(d.newContent)'), 'work completion review: backend reports changed-line additions and deletions');
+  assert(conversationKernelSource.includes('function changedLineCount(value: string)') && conversationKernelSource.includes('old: changedLineCount(d.oldContent)') && conversationKernelSource.includes('new: changedLineCount(d.newContent)') && conversationKernelSource.includes('oldContent: d.oldContent') && conversationKernelSource.includes('newContent: d.newContent'), 'work completion review: backend reports changed-line counts and bounded review content');
   assert(conversationKernelSource.includes('pendingOptions(target: ConversationTargetInput)') && mainSource.includes('conversationSnapshot.pendingOptions || agent.pendingOptions'), 'conversation options: state refresh reads pending questions from the requested composite runtime snapshot');
   assert(conversationKernelSource.includes('updateSetting(section: string, key: string, value: unknown)') && mainSource.includes('conversationKernel?.updateSetting(section, key, value)'), 'conversation settings: saved settings propagate to existing isolated runners without destroying their runtime state');
   const mainKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf-8');
@@ -436,7 +444,7 @@ async function main() {
   assert(mainKernelSource.includes('agent?.setConversationFromStorage(id)') && mainKernelSource.includes('agent?.selectWorkspaceFromStorage(value)'), 'kernel: renderer conversation and workspace switches refresh runtime-owned state without saving a stale host snapshot');
   assert(mainKernelSource.includes('electronUtilityRuntimePool.subscribe(event => broadcastAgentWorkEvent(event))') && mainKernelSource.includes('wslAgentRuntimePool.subscribe(event => broadcastAgentWorkEvent(event))') && mainKernelSource.includes('ensureElectronUtilityPool().snapshot(target)') && conversationKernelSource.includes('runtimeKey'), 'kernel: desktop IPC subscribes isolated runtime pools and exposes target-scoped event snapshots');
   assert(!piKernelSource.includes("tokens.push({ type: 'text', text });\n      agent.recordToolResult") && piKernelSource.includes("type: 'tool_result'") && piKernelSource.includes('toolCallId: event.toolCallId') && piKernelSource.includes("content: `Tool ${event.toolName} ${outcome}.`"), 'kernel: tool results stay available to the model while public work events contain only outcome metadata');
-  assert(agentKernelSource.includes('appendWorkflowMessage(content: string, toolName?: string, toolArgs?: string, persist = true)') && piKernelSource.includes("agent.appendWorkflowMessage(`Calling tool ${event.toolName}`, event.toolName, undefined, false)") && piKernelSource.includes("agent.appendWorkflowMessage(`Tool ${event.toolName} ${outcome}.`, event.toolName, undefined, false)") && !piKernelSource.includes('agent.visibleToolArgs(args)'), 'kernel: high-frequency workflow rows expose only tool names and defer conversation-state writes until turn persistence points');
+  assert(agentKernelSource.includes('appendWorkflowMessage(content: string, toolName?: string, toolArgs?: string, persist = true)') && !piKernelSource.includes('agent.appendWorkflowMessage(`Calling tool') && !piKernelSource.includes('agent.appendWorkflowMessage(`Tool ${event.toolName}') && piKernelSource.includes('toolArgs: JSON.stringify(event.args || {})'), 'kernel: tool activity belongs only to the Build run, with sanitized expandable arguments instead of duplicate workflow chat rows');
   assert(piKernelSource.includes('new ToolProvisionSession([], [])')
     && piKernelSource.includes('const catalog = agent.subagentToolDefinitions(agent.tools.definitions(agent.mode))')
     && piKernelSource.includes('toolProvisioning.reconcile(catalog, surface.definitions)')
@@ -604,6 +612,7 @@ async function main() {
   const wslPackageConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
   assert(mainTs.includes('function ensureWslRuntimeBundle()') && mainTs.includes("'app.asar.unpacked', 'dist', 'wsl-agent-host.bundle.cjs'") && !mainTs.includes("path.join(userRuntimeRoot(), 'Runtime', 'wsl'") && wslPackageConfig.build?.asarUnpack?.includes('dist/wsl-agent-host.bundle.cjs'), 'main WSL backend: loads one read-only unpacked Agent bundle without copying runtime code into .Newmark');
   assert(wslClientTs.includes("spawn('wsl.exe'") && wslClientTs.includes('windowsDrivePathToWsl') && wslClientTs.includes("message.event === 'work'") && wslHostTs.includes('return new ConversationKernel(root, agent, null, {') && wslHostTs.includes("backend: 'wsl'"), 'WSL backend bridge: persistent JSONL RPC host runs a lifecycle-configured ConversationKernel in WSL and streams conversation events');
+  assert(wslClientTs.includes("['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy']") && wslClientTs.includes('runtimeEnv.push(`${key}=${value}`)'), 'WSL backend bridge: forwards explicit host proxy variables into the Linux runtime without persisting secrets or network settings');
   assert(wslProtocolTs.includes("method: 'terminal_state'") && wslProtocolTs.includes("method: 'terminal_write'") && wslProtocolTs.includes("method: 'terminal_stop'") && wslProtocolTs.includes("method: 'terminal_detach'") && wslProtocolTs.includes("event: 'terminal'") && wslClientTs.includes('subscribeTerminal') && wslHostTs.includes('onTerminalTakeoverEvent'), 'WSL terminal bridge: state/write/stop/detach requests and terminal events cross the persistent JSONL host');
   assert(wslProtocolTs.includes("event: 'host_tool_request'") && wslProtocolTs.includes("method: 'host_tool_result'") && wslHostToolBridgeTs.includes('requestWindowsHostTool') && wslClientTs.includes('setHostToolHandler') && wslClientTs.includes("'computer_use', 'browser_use', 'automation', 'terminal_takeover'") && toolsTs.includes("requestWindowsHostTool('computer_use'") && toolsTs.includes("requestWindowsHostTool('terminal_takeover'"), 'WSL host-tool bridge: desktop-global browser/computer/automation/terminal requests are allowlisted and settled through Electron main');
   assert(wslProtocolTs.includes("method: 'reset'") && wslClientTs.includes('resetAgent()') && wslHostTs.includes('resetAgentRuntime()') && mainTs.includes('await wslAgentClient.resetAgent()') && mainTs.includes("shutdownTerminalTakeoverSessions('app-exit')"), 'WSL lifecycle: Agent resets preserve the host terminal registry while app exit shuts down terminal sessions');
@@ -640,7 +649,19 @@ async function main() {
   const installUpdateTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'installUpdate.ts'), 'utf-8');
   assert(uiHtml.includes('function scheduleLayoutStateSave()') && uiHtml.includes('layoutState: {') && uiHtml.includes('leftCollapsed: !!state.leftCollapsed') && uiHtml.includes('rightCollapsed: !!state.rightCollapsed') && uiHtml.includes('bottomCollapsed: !!state.bottomCollapsed') && uiHtml.includes('secondaryCollapsed: !!state.secondaryCollapsed') && uiHtml.includes('function applySavedLayoutState(input)') && mainTs.includes('leftPanelCollapsed') && mainTs.includes("case 'layoutState'") && configTs.includes('bottom_panel_collapsed') && configTs.includes('secondary_panel_collapsed'), 'ui layout memory: persists only sidebar collapsed booleans and restores them from config');
   assert(workspaceTs.includes('setPinned(id: string, pinned: boolean)') && agentTs.includes('setConversationPinned(id: string, pinned: boolean)') && preloadTs.includes('setWorkspacePinned') && preloadTs.includes('setConversationPinned') && mainTs.includes("agent:setWorkspacePinned") && mainTs.includes("agent:setConversationPinned") && uiHtml.includes('window.toggleWorkspacePinned') && uiHtml.includes('window.toggleConversationPinned') && uiHtml.includes('conv-pin-btn') && uiHtml.includes('ws-pin-btn'), 'pinning: workspace and conversation pin state is persisted and exposed in the UI');
+  assert(uiHtml.includes('.ws-pin-btn {') && uiHtml.includes('.conv-pin-btn {') && (uiHtml.match(/margin-left: auto;/g) || []).length >= 2, 'pinning layout: workspace and conversation pin actions occupy the rightmost flex slot');
+  assert(uiHtml.includes('#left.collapsed .left-ws-item .ws-pin-btn {') && (uiHtml.match(/margin-left: 0;/g) || []).length >= 2, 'collapsed workspace rail: hidden pin actions release auto margin so thumbnails stay centered');
+  assert(preloadTs.includes('githubOverview') && mainTs.includes("ipcMain.handle('github:overview'") && mainTs.includes("['repo', 'list', login") && uiHtml.includes('window.renderGithubOverview') && uiHtml.includes('window.loadGithubOverview') && !uiHtml.includes("window.runGhUi = function"), 'GitHub CLI panel: account-owned repositories, issues, and PRs are queried as structured data and rendered as UI instead of raw commands');
+  assert(uiHtml.includes('class="newmark-list"') && uiHtml.includes('class="newmark-list-row"') && uiHtml.includes('newmark-list-row newmark-list-empty') && !uiHtml.includes('class="settings-list-row"'), 'GitHub CLI panel: populated and empty issues and PRs use the Newmark native list surface');
+  assert(uiHtml.includes("'plugins.runningGh': 'Communicating'") && uiHtml.includes("'plugins.runningGh': '正在通信'") && uiHtml.includes('githubOverviewHash') && uiHtml.includes('if (signature === state.githubOverviewHash) return') && uiHtml.includes("{ initial: !state.githubOverviewLoaded }"), 'GitHub CLI panel: communication status appears only on first entry and unchanged data does not repaint the page');
+  assert(uiHtml.includes('githubOverviewPendingRepo') && uiHtml.includes('if (state.githubOverviewLoading)') && uiHtml.includes('window.loadGithubOverview(pendingRepo)') && uiHtml.includes("data.repository || (repos[0] && repos[0].nameWithOwner)"), 'GitHub CLI panel: selections made during communication are queued and the details card resolves to the visible repository');
+  assert(uiHtml.includes('.github-repo-select {') && uiHtml.includes('border-radius:var(--radius-md)') && uiHtml.includes('appearance:none') && uiHtml.includes('github-repo-select-icon') && uiHtml.includes("iconSvg('chevron-down'"), 'GitHub CLI panel: repository selector uses a rounded Newmark control with a Lucide dropdown icon');
+  assert(agentKernelRunnerTs.includes("realToolCalls.length ? 'response' : 'final_response'") && agentTs.includes("event.type !== 'text'") && agentTs.includes("'final_response'") && uiHtml.includes("'start', 'text', 'response', 'final_response'") && uiHtml.includes("rawType === 'final_response'") && uiHtml.includes("type === 'final_response' && workRun"), 'Build transcript: public tool-phase replies stay in the Build process while the final response is persisted separately and rendered once below the block');
+  assert(!agentKernelRunnerTs.includes("|| name.startsWith('memory_lab_')"), 'Memory Lab tools: read/update/reindex results continue through the same model turn instead of terminating before the next tool or final response');
+  assert(uiHtml.includes('.conversation-work-run::before') && uiHtml.includes('padding-left: 24px') && uiHtml.includes('border: 0;') && uiHtml.includes('#chat-area:has(> .chat-msg)') && uiHtml.includes('background-size: 1px 100%, 1px 100%;') && uiHtml.includes('.chat-msg.user .meta { justify-content: flex-end') && uiHtml.includes('.chat-msg.user .msg-body { text-align: right; }') && uiHtml.includes('.chat-msg.user::after') && uiHtml.includes('right: 3px;') && uiHtml.includes('.chat-msg.user .msg-actions { margin-left: 4px; }') && uiHtml.includes('.conversation-work-activity-list') && uiHtml.includes('conversation-work-activity-detail') && uiHtml.includes('data-activity-key=') && uiHtml.includes('openActivityKeys') && uiHtml.includes('function updateConversationWorkRunDuration(run)') && uiHtml.includes('updateConversationWorkRunDuration(runs[i])') && uiHtml.includes('function guideWorkEventKey(event)') && uiHtml.includes('function mergeGuideWorkEvent(previous, incoming)') && uiHtml.includes('rank = { accepted: 1, deferred: 2, rejected: 3, applied: 4 }') && uiHtml.includes('event.clientMessageId || (event.guide && event.guide.clientMessageId)') && !uiHtml.includes("addMsg('user', displayText, 'guide'") && uiHtml.includes('if (workRun) return;') && uiHtml.includes("if (String(m.role || '') === 'workflow' && /^tool:/.test"), 'Build transcript layout: continuous rails survive inter-message content, expanded tool activities survive live refresh, one Guide id upgrades accepted to applied without downgrade, and legacy tool chat rows stay hidden');
+  assert(agentTs.includes('expanded: raw.expanded === undefined ? true : !!raw.expanded') && agentTs.includes('activeRun.expanded = true') && uiHtml.includes("run.status = 'completed'; run.endedAt") && !uiHtml.includes("run.status = 'completed'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = false"), 'Build transcript visibility: completed, errored, and interrupted runs remain expanded by default while preserving manual collapse state');
   assert(agentTs.includes("listArchives(scope: 'workspace' | 'all' = 'workspace')") && agentTs.includes('archiveRoots()') && agentTs.includes('resolveArchivePath') && preloadTs.includes('listArchives: (scope?: string)') && mainTs.includes("scope === 'all' ? 'all' : 'workspace'") && uiHtml.includes("api.listArchives('workspace')") && uiHtml.includes("api.listArchives('all')") && uiHtml.includes('state.workspaceArchives') && uiHtml.includes('state.allArchives'), 'archives: right sidebar lists current workspace archives while Settings archive can list all archives');
+  assert(agentTs.includes('restoreArchivedConversation(nameOrId: string)') && agentTs.includes("kind: 'newmark-conversation-archive'") && preloadTs.includes('restoreArchive: (name: string)') && mainTs.includes("ipcMain.handle('agent:restoreArchive'") && uiHtml.includes('window.restoreArchive = function') && uiHtml.includes("t('archive.restore')"), 'archives: structured conversation manifests support conflict-safe restore from workspace and global archive UI');
   const cliCommandsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'cli-commands.ts'), 'utf-8');
   const releaseCliSmokePath = path.join(process.cwd(), 'scripts', 'release-cli-smoke.cjs');
   const releaseCliSmoke = fs.existsSync(releaseCliSmokePath) ? fs.readFileSync(releaseCliSmokePath, 'utf-8') : '';
@@ -710,6 +731,9 @@ async function main() {
   const releaseRealClaudeEnvPreviewSmoke = fs.existsSync(releaseRealClaudeEnvPreviewSmokePath) ? fs.readFileSync(releaseRealClaudeEnvPreviewSmokePath, 'utf-8') : '';
   const releaseLinuxRealProviderSmoke = fs.readFileSync(path.join(process.cwd(), 'scripts', 'release-linux-real-provider-smoke.cjs'), 'utf-8');
   const releaseLinuxGuiSmoke = fs.readFileSync(path.join(process.cwd(), 'scripts', 'release-linux-gui-smoke.cjs'), 'utf-8');
+  const releaseUiWslAgentBackendSmoke = fs.readFileSync(path.join(process.cwd(), 'scripts', 'release-ui-wsl-agent-backend-smoke.cjs'), 'utf-8');
+  assert(releaseLinuxGuiSmoke.includes('NEWMARK_BASH_ROUNDTRIP_OK') && releaseLinuxGuiSmoke.includes('NEWMARK_SH_ISOLATION_OK') && releaseLinuxGuiSmoke.includes('terminalGetBuffer') && releaseLinuxGuiSmoke.includes('terminalKill') && releaseLinuxGuiSmoke.includes('isolated'), 'Linux packaged GUI smoke: bash/sh command round trips, session isolation, buffer reads, and process stops are exercised');
+  assert(releaseUiWslAgentBackendSmoke.includes("'--allow-multiple-instances'") && releaseUiWslAgentBackendSmoke.includes("cdp.call('Page.bringToFront'") && releaseUiWslAgentBackendSmoke.includes('await waitForPromotedMainUi(cdp);') && releaseUiWslAgentBackendSmoke.includes('window.api.selectWorkspace'), 'WSL backend smoke: isolated no-workspace startup checks visible promotion before selecting a target workspace through the backend API');
   const distPortableScript = fs.readFileSync(path.join(process.cwd(), 'scripts', 'dist-portable.cjs'), 'utf-8');
   const distLinuxScript = fs.readFileSync(path.join(process.cwd(), 'scripts', 'dist-linux.cjs'), 'utf-8');
   const releaseLinuxZipSmoke = fs.readFileSync(path.join(process.cwd(), 'scripts', 'release-linux-unpacked-zip-smoke.cjs'), 'utf-8');
@@ -724,6 +748,7 @@ async function main() {
   assert(launcherTs.includes('drainCliNetworkHandles') && mainTs.includes('drainCliNetworkHandles') && launcherTs.includes('stopComputerUsePowerShellHost') && mainTs.includes('stopComputerUsePowerShellHost') && launcherTs.includes('getGlobalDispatcher') && mainTs.includes('getGlobalDispatcher'), 'cli entrypoints: stop persistent Computer Use helpers and drain async network handles before exit');
   assert(cliCommandsTs.includes("process.stdout.on('error'") && cliCommandsTs.includes("process.stderr.on('error'") && cliCommandsTs.includes('stdoutBrokenPipe = true') && cliCommandsTs.includes('stderrBrokenPipe = true'), 'cli entrypoints: suppress asynchronous EPIPE errors from closed stdout/stderr pipes');
   assert(mainTs.includes('function pathArgValue') && mainTs.includes("const prefix = `${key}=`") && mainTs.includes("let best = fs.existsSync(parts[0]) ? parts[0] : ''") && mainTs.includes("if (fs.existsSync(candidate)) best = candidate") && mainTs.includes("return best || parts.join(' ') || undefined") && mainTs.includes("pathArgValue(args, '--root')"), 'main entrypoint: supports --root paths with spaces, --root=path form, and longest existing path matching');
+  assert(mainTs.includes('const singleInstanceLock = allowMultipleInstances || app.requestSingleInstanceLock()'), 'main entrypoint: explicit multi-instance test windows skip Electron single-instance coordination entirely');
   assert(launcherTs.includes('function pathArgValue') && launcherTs.includes('function userRuntimeRoot') && launcherTs.includes("path.join(os.homedir(), '.Newmark')") && launcherTs.includes('function legacyUserDataRoot') && launcherTs.includes('function migrateLegacyRuntimeRoot') && launcherTs.includes('function writableRuntimeRoot') && launcherTs.includes('const installRoot = path.dirname(process.execPath)') && launcherTs.includes('if (isPathInside(installRoot, resolved)) return userRuntimeRoot()') && launcherTs.includes("path.join(userRuntimeRoot(), 'Roots'") && launcherTs.includes("const explicitRoot = pathArgValue(args, '--root')") && launcherTs.includes('const root = explicitRoot ? writableRuntimeRoot(explicitRoot) : userRuntimeRoot()'), 'launcher entrypoint: every install location resolves settings to user home .Newmark while isolated explicit roots remain supported');
   assert(mainTs.includes('function userRuntimeRoot') && mainTs.includes("path.join(os.homedir(), '.Newmark')") && mainTs.includes('function legacyUserDataRoot') && mainTs.includes('function migrateLegacyRuntimeRoot') && mainTs.includes('function canWriteDirectory') && mainTs.includes('function isProtectedInstallRoot') && mainTs.includes('function shadowRootFor') && mainTs.includes('function writableRuntimeRoot') && mainTs.includes('if (isPathInside(exeRoot(), resolved)) return userRuntimeRoot()') && mainTs.includes("process.env.ProgramFiles") && mainTs.includes("path.join(userRuntimeRoot(), 'Roots'") && mainTs.includes('if (explicitRoot) return writableRuntimeRoot(explicitRoot)') && mainTs.includes('return getRoot();') && mainTs.includes('firstRunInit(root);') && mainTs.includes('firstRunInit(fallbackRoot)') && mainTs.includes('logStartupFailure(`firstRunInit:${root}`'), 'main startup: every packaged install location resolves settings to user home .Newmark and never treats its executable directory as mutable state');
   assert(mainTs.includes('existingPcId = fs.existsSync(pcHashPath)') && mainTs.includes('if (existingPcId !== pcId) fs.writeFileSync(pcHashPath, pcId') && memoryLabTs.includes('if (!fs.existsSync(this.indexPath))') && memoryLabTs.includes('this.normalizeIndex(raw);') && !memoryLabTs.includes('else this.saveIndex(this.normalizeIndex(this.loadIndex()))') && configTs.includes('if (fs.existsSync(configPath))') && workspaceTs.includes('if (this.external.length !== before) this.saveExternal();'), 'startup initialization: avoids rewriting config.json, PC_Hash.config, Memory Lab index, and External.json on every launch');
@@ -731,7 +756,7 @@ async function main() {
   assert(mainTs.includes('startupAttempt = 1') && mainTs.includes('startupWindow = createDesktopWindow(true, true, startupAttempt)') && mainTs.includes("ipcMain.handle('startup:waitForBackend'") && mainTs.includes('runStartupPrewarmBarrier') && mainTs.includes('const reusesPreloadedUi = attemptOneNavigationPreloaded') && mainTs.includes('if (!reusesPreloadedUi)') && mainTs.includes('waitForUiReadiness(startupUiWindow)') && mainTs.includes('promoteStartupUi(startupUiWindow)') && uiHtml.includes('id="startup-cover"') && uiHtml.indexOf('startupCover.remove()') > uiHtml.indexOf('readyAck.accepted !== true') && !mainTs.includes('createDesktopWindow!(true, false, attemptId)') && !mainTs.includes('shellWindow.destroy()') && !mainTs.includes('win.webContents.stop();'), 'main startup: keeps the in-window startup cover until readiness acknowledgement and atomically promotes that same hydrated window');
   assert(uiHtml.includes('id="todo-wrap" class="stack-card collapsed" style="display:none"') && uiHtml.includes('id="queue-panel" class="stack-card collapsed" style="display:none"'), 'input stack: task and queue bars stay hidden before state-driven rendering to avoid empty startup flashes');
   assert(mainTs.includes("const APP_NAME = 'Newmark Agent'") && mainTs.includes("const APP_ID = 'ai.newmark.agent'") && mainTs.includes('app.setName(APP_NAME)') && mainTs.includes('app.setAppUserModelId(APP_ID)'), 'main entrypoint: registers Newmark process/app identity instead of Electron');
-  assert(packageJson.includes('"productName": "Newmark Agent"') && packageJson.includes('"executableName": "Newmark Agent"') && packageJson.includes('"signAndEditExecutable": false') && packageJson.includes('"target": "msi"') && packageJson.includes('"msi"') && packageJson.includes('Newmark-Agent-${version}-${arch}.${ext}') && packageJson.includes('"dist:windows-release"') && packageJson.includes('"resedit": "^1.7.2"') && electronBuilderConfigTs.includes("productName: 'Newmark Agent'") && electronBuilderConfigTs.includes("executableName: 'Newmark Agent'") && electronBuilderConfigTs.includes("productName: 'Newmark Agent'"), 'package metadata: product and executable names are fixed to Newmark Agent, Windows releases target MSI, and resource editing is handled by local resedit patching');
+  assert(packageJson.includes('"productName": "Newmark Agent"') && packageJson.includes('"executableName": "Newmark Agent"') && packageJson.includes('"signAndEditExecutable": false') && packageJson.includes('"afterPack": "scripts/after-pack-win-icon.cjs"') && packageJson.includes('"target": "msi"') && packageJson.includes('"msi"') && packageJson.includes('Newmark-Agent-${version}-${arch}.${ext}') && packageJson.includes('"dist:windows-release"') && packageJson.includes('"resedit": "^1.7.2"') && electronBuilderConfigTs.includes("productName: 'Newmark Agent'") && electronBuilderConfigTs.includes("executableName: 'Newmark Agent'") && electronBuilderConfigTs.includes("afterPack: 'scripts/after-pack-win-icon.cjs'"), 'package metadata: product and executable names are fixed to Newmark Agent, every Windows pack patches and verifies executable resources, and releases target MSI');
   assert(fs.existsSync(path.join(process.cwd(), 'assets', 'app-icon-dark.png')) && fs.existsSync(path.join(process.cwd(), 'assets', 'app-icon-light.png')) && appIconIco.length > 6 && appIconIco.readUInt16LE(2) === 1 && appIconIco.readUInt16LE(4) >= 1, 'app icons: themed PNG assets and Windows ICO exist');
   assert(createHash('sha256').update(appIconDark).digest('hex').toUpperCase() === 'D07F670051677EEF1BD4B60EF186E8ADB81A37202BE49F929DA84D38C54E4305' && createHash('sha256').update(appIconLight).digest('hex').toUpperCase() === 'E8482757BC5AB5BD4C9A4589A878170C0D3DAE25A8F27A5461CEC45F2EFCB3CA', 'app icons: source assets exactly match the supplied dark and light finished PNGs');
   assert(packageJson.includes('"icon": "assets/icon.ico"') && electronBuilderConfigTs.includes("icon: 'assets/icon.ico'"), 'app icons: Windows package uses generated ICO');
@@ -1190,7 +1215,7 @@ async function main() {
     await tools.execute('computer_use', JSON.stringify({ action: 'takeover_stop' }), TEST_DIR);
   } else {
     const computerLinuxUnsupported = await tools.execute('computer_use', JSON.stringify({ action: 'move', x: 10, y: 20, dry_run: true }), TEST_DIR);
-    assert(computerLinuxUnsupported.includes('"ok": false') && computerLinuxUnsupported.includes('Windows only'), 'computer_use: Linux reports explicit unsupported native desktop control instead of crashing');
+    assert(computerLinuxUnsupported.includes('[tool unsupported]') && computerLinuxUnsupported.includes('linux'), 'computer_use: Linux reports explicit unsupported native desktop control instead of crashing');
   }
   const disabledToolCfg = new ConfigManager(path.join(TEST_DIR, 'disabled-native-tools'));
   disabledToolCfg.set('tools', 'enabled', { ...disabledToolCfg.nativeToolEnabled(), computer_use: false });
@@ -1398,14 +1423,14 @@ async function main() {
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'git_branch') && tools.definitions().some((tool: any) => tool.function?.name === 'gh_fork') && tools.definitions().some((tool: any) => tool.function?.name === 'gh_pr_create'), 'definitions: exposes branch, fork, and PR GitHub workflows');
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'browser_open'), 'definitions: exposes browser_open');
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'browser_cdp'), 'definitions: exposes browser_cdp');
-  assert(tools.definitions().some((tool: any) => tool.function?.name === 'computer_use'), 'definitions: exposes native computer_use desktop tool');
+  assert(tools.definitions().some((tool: any) => tool.function?.name === 'computer_use') === (process.platform === 'win32'), 'definitions: exposes native computer_use desktop tool only on a Windows-capable host');
   const buildComputerUse = tools.definitions().find((tool: any) => tool.function?.name === 'computer_use') as any;
-  assert(buildComputerUse?.function?.parameters?.properties?.capture_max_width?.maximum === 2048 && buildComputerUse?.function?.parameters?.properties?.capture_max_height?.maximum === 2048 && !buildComputerUse?.function?.parameters?.properties?.allow_ephemeral_vision_image, 'definitions: Computer Use exposes bounded capture dimensions but no model-controlled retention permission');
+  assert(process.platform !== 'win32' || (buildComputerUse?.function?.parameters?.properties?.capture_max_width?.maximum === 2048 && buildComputerUse?.function?.parameters?.properties?.capture_max_height?.maximum === 2048 && !buildComputerUse?.function?.parameters?.properties?.allow_ephemeral_vision_image), 'definitions: Computer Use exposes bounded capture dimensions but no model-controlled retention permission when available');
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'image_inspect') && tools.definitions('plan').some((tool: any) => tool.function?.name === 'image_inspect'), 'definitions: exposes read-only image_inspect in Build and Plan modes');
   assert(tools.definitions('plan').some((tool: any) => tool.function?.name === 'browser_snapshot'), 'definitions: plan exposes browser_snapshot');
   assert(!tools.definitions('plan').some((tool: any) => tool.function?.name === 'browser_click'), 'definitions: plan hides browser_click');
   const planComputerUse = tools.definitions('plan').find((tool: any) => tool.function?.name === 'computer_use') as any;
-  assert(JSON.stringify(planComputerUse?.function?.parameters?.properties?.action?.enum) === JSON.stringify(['observe', 'app_list', 'app_observe']) && !!planComputerUse.function.parameters.properties.capture_max_width && !!planComputerUse.function.parameters.properties.capture_max_height && !planComputerUse.function.parameters.properties.x && !planComputerUse.function.parameters.properties.steps, 'definitions: Plan exposes only observation-class Computer Use schema, including bounded capture dimensions');
+  assert(process.platform !== 'win32' || (JSON.stringify(planComputerUse?.function?.parameters?.properties?.action?.enum) === JSON.stringify(['observe', 'app_list', 'app_observe']) && !!planComputerUse.function.parameters.properties.capture_max_width && !!planComputerUse.function.parameters.properties.capture_max_height && !planComputerUse.function.parameters.properties.x && !planComputerUse.function.parameters.properties.steps), 'definitions: Plan exposes only observation-class Computer Use schema, including bounded capture dimensions when available');
   const canonicalTools = tools.canonicalDefinitions();
   const writeCanonical = canonicalTools.find(t => t.name === 'write');
   assert(!!writeCanonical && writeCanonical.inputSchema.type === 'object' && writeCanonical.sideEffects === 'write', 'compat tools: canonical definitions preserve schema and side effects');
@@ -2660,6 +2685,63 @@ async function main() {
   const memoryToolUpdate = await (memoryModelAgent as unknown as { handleMemoryLabTool: (tool: string, args: string) => Promise<string> })
     .handleMemoryLabTool('memory_lab_update', JSON.stringify({ name: 'raw-memory', description: 'raw', tags: ['#Raw'], content: 'raw content' }));
   assert(memoryModelCalled && memoryToolUpdate.includes('model-organized-memory') && fs.existsSync(path.join(TEST_DIR, 'Memory Lab', 'components', 'model-organized-memory.md')), 'memory_lab_update: uses current working model through MemoryLabIndexAgent');
+  const memoryUpdatePayload = JSON.parse(memoryToolUpdate.slice(memoryToolUpdate.indexOf('{'))) as Record<string, any>;
+  assert(memoryUpdatePayload.rebuildReceipt?.completed === true
+    && memoryUpdatePayload.rebuildReceipt?.operation === 'update'
+    && memoryUpdatePayload.index?.components?.['model-organized-memory'],
+  'memory_lab_update: waits for deterministic index rebuild and returns a verified completion receipt to the Agent');
+  const memoryReindexReceipt = await (memoryModelAgent as unknown as { handleMemoryLabTool: (tool: string, args: string) => Promise<string> })
+    .handleMemoryLabTool('memory_lab_reindex', '{}');
+  const memoryReindexPayload = JSON.parse(memoryReindexReceipt.slice(memoryReindexReceipt.indexOf('{'))) as Record<string, any>;
+  assert(memoryReindexPayload.rebuildReceipt?.completed === true && memoryReindexPayload.rebuildReceipt?.operation === 'reindex', 'memory_lab_reindex: returns an awaited verified rebuild receipt');
+
+  const memoryReceiptAgent = new Agent(TEST_DIR, { agentOnly: true, conversationId: 'memory-receipt-success' });
+  let memoryReceiptRound = 0;
+  const memoryReceiptProvider = {
+    intelligenceConfig: () => ({ temperature: 0, maxTokens: 500 }),
+    async *chatStreamWithTools(): AsyncGenerator<StreamToken> {
+      if (memoryReceiptRound++ === 0) {
+        yield { type: 'tool_call', text: '', toolCall: { id: 'call-memory-receipt', name: 'memory_lab_update', arguments: JSON.stringify({ name: 'receipt-gated-memory', description: 'receipt gate', tags: ['#Receipt-Gate'], content: 'Receipt gated content.' }) } };
+      } else {
+        yield { type: 'text', text: 'MEMORY_RECEIPT_FINAL' };
+      }
+    },
+    async chat(): Promise<string> {
+      return JSON.stringify({ name: 'receipt-gated-memory', description: 'receipt gate', tags: ['#Receipt-Gate'], content: 'Receipt gated content.', kind: 'file' });
+    },
+  };
+  (memoryReceiptAgent as any).forcedProvider = memoryReceiptProvider;
+  memoryReceiptAgent.setMode('build');
+  const memoryReceiptTokens = await memoryReceiptAgent.process('Update Memory Lab and wait for the rebuilt index receipt.');
+  const memoryReceiptRun = memoryReceiptAgent.workRuns.at(-1);
+  assert(memoryReceiptTokens.some(token => token.text.includes('MEMORY_RECEIPT_FINAL'))
+    && memoryReceiptAgent.history.some(message => String(message.name || '') === 'memory_lab_update' && String(message.content || '').includes('"completed": true'))
+    && memoryReceiptRun?.status === 'completed',
+  'memory_lab_update Agent run: provider receives completed rebuild receipt before the run can finish',
+  JSON.stringify({ tokens: memoryReceiptTokens, history: memoryReceiptAgent.history.slice(-4), run: memoryReceiptRun }).slice(0, 2000));
+
+  const memoryFailureAgent = new Agent(TEST_DIR, { agentOnly: true, conversationId: 'memory-receipt-failure' });
+  let memoryFailureRound = 0;
+  const memoryFailureProvider = {
+    intelligenceConfig: () => ({ temperature: 0, maxTokens: 500 }),
+    async *chatStreamWithTools(): AsyncGenerator<StreamToken> {
+      if (memoryFailureRound++ === 0) {
+        yield { type: 'tool_call', text: '', toolCall: { id: 'call-memory-failure', name: 'memory_lab_reindex', arguments: '{}' } };
+      } else {
+        yield { type: 'text', text: 'MUST_NOT_COMPLETE_WITHOUT_RECEIPT' };
+      }
+    },
+    async chat(): Promise<string> { return '{}'; },
+  };
+  (memoryFailureAgent as any).forcedProvider = memoryFailureProvider;
+  (memoryFailureAgent as any).reindexMemoryLab = async () => { throw new Error('simulated rebuild failure'); };
+  let memoryFailureRejected = false;
+  try {
+    await memoryFailureAgent.process('Reindex Memory Lab and do not finish without a rebuild receipt.');
+  } catch (error) {
+    memoryFailureRejected = String(error).includes('Memory Lab index rebuild failed');
+  }
+  assert(memoryFailureRejected && memoryFailureAgent.workRuns.at(-1)?.status === 'error', 'memory_lab_reindex Agent run: missing rebuild receipt blocks completion and leaves the Build run in error state');
 
   // Flow mode prompt
   agent.setMode('flow');
@@ -2750,6 +2832,10 @@ async function main() {
   agent.setMode('build');
 
   const visionAgent = new Agent(TEST_DIR);
+  // This is a host-independent provider/serialization fixture. Declare the
+  // simulated Windows host explicitly so Linux CI still provisions the mocked
+  // Computer Use call while real Linux hosts keep the tool hidden.
+  visionAgent.tools.setHostProfile({ kind: 'cli', platform: 'win32', electronBrowser: false, windowsComputerUse: true });
   visionAgent.config.upsertProvider('VisionMock', 'https://vision.mock/v1', 'sk-vision-test', 'openai');
   visionAgent.config.addModelToProvider('VisionMock', 'vision-computer', 'Vision Computer', 'Vision-capable Computer Use mock');
   visionAgent.config.updateModel('VisionMock', 'vision-computer', { vision: true, max_tokens: 8192 });
@@ -2949,6 +3035,14 @@ async function main() {
   assert(!archiveAgent.listConversationStates().some(c => c.id === 'archive-target-duplicate'), 'archiveConversation: removes exact duplicate registrations with the archived target');
   const archiveAgentReloaded = new Agent(archiveIsolationRoot);
   assert(!archiveAgentReloaded.listConversationStates().some(c => c.id === 'archive-target'), 'archiveConversation: removed target does not return after restart');
+  const restorableArchive = archiveAgentReloaded.listArchives().find(item => item.name === archivedTargetName);
+  assert(restorableArchive?.restorable === true && restorableArchive.conversationId === 'archive-target', 'archiveConversation: new archives advertise restorable structured state');
+  const restoredArchive = archiveAgentReloaded.restoreArchivedConversation(restorableArchive!.id);
+  assert(restoredArchive.ok && restoredArchive.conversationId === 'archive-target', 'restoreArchivedConversation: restores the original conversation id after restart');
+  assert(archiveAgentReloaded.chatMessages.some(message => message.content === 'duplicate response'), 'restoreArchivedConversation: restores the original structured conversation history');
+  assert(!archiveAgentReloaded.listArchives().find(item => item.name === archivedTargetName)?.restorable, 'restoreArchivedConversation: consumes the restore manifest while retaining the readable Markdown archive');
+  const restoreConflict = archiveAgentReloaded.restoreArchivedConversation(restorableArchive!.id);
+  assert(!restoreConflict.ok, 'restoreArchivedConversation: cannot overwrite an existing conversation or reuse a consumed manifest');
   archiveAgentReloaded.deleteArchive(archivedTargetName!);
 
   // ---- 10. Context Compression Tests ----
@@ -2964,14 +3058,60 @@ async function main() {
   // @ts-expect-error accessing private method for testing
   await agent.maybeCompress(msgs, new FakeProvider(['## Preserved State\nWorkspace: test\nGoal: keep state\n## Pending Work\nContinue.']));
   assert(msgs.length < 50, 'maybeCompress: reduces messages');
-  assert(String(msgs[1]?.content || '').includes('Context Compression Model Summary'), 'maybeCompress: uses model-generated summary');
-  assert(String(msgs[1]?.content || '').includes('Preserved State'), 'maybeCompress: preserves structured summary');
+  assert(String(msgs[0]?.content || '').includes('Context Compression Model Summary'), 'maybeCompress: uses model-generated summary');
+  assert(String(msgs[0]?.content || '').includes('Preserved State'), 'maybeCompress: preserves structured summary');
+  assert(msgs.filter(message => String(message.content || '').includes('[Post-Compression Task Continuation]')).length === 1
+    && String(msgs[1]?.content || '').includes('latest retained real user-role message'),
+  'maybeCompress: injects exactly one immediate continuation anchor after the summary');
   assert(agent.lastCompression?.fallback === false, 'maybeCompress: records model compression metadata');
   assert(agent.history.some(m => String(m.content || '').includes('Context Compression Model Summary')), 'maybeCompress: persists compressed history');
+  agent.history = [
+    { role: 'user', content: 'LEGACY_FIRST_TASK_MUST_NOT_STAY_PINNED ' + 'l'.repeat(6000) },
+    ...Array.from({ length: 18 }, (_, index) => ({
+      role: index % 2 === 0 ? 'assistant' : 'user',
+      content: `historical-${index} ` + 'h'.repeat(2000),
+    })),
+    { role: 'user', content: 'CURRENT_TASK_MUST_REMAIN_AUTHORITATIVE' },
+  ];
+  const taskFocusCompressionMessages = agent.history.map(message => ({ ...message }));
+  await agent.maybeCompress(taskFocusCompressionMessages, new FakeProvider(['## Active Or Unfinished Work\nPreserve only evidenced continuity.']) as unknown as LLMProvider);
+  assert(!JSON.stringify(taskFocusCompressionMessages.slice(2)).includes('LEGACY_FIRST_TASK_MUST_NOT_STAY_PINNED')
+    && JSON.stringify(taskFocusCompressionMessages.at(-1)).includes('CURRENT_TASK_MUST_REMAIN_AUTHORITATIVE'),
+  'maybeCompress: the first historical user task is summarized instead of pinned forever while the latest current task remains verbatim');
+  assert(String(taskFocusCompressionMessages[1]?.role || '') === 'system'
+    && !String(taskFocusCompressionMessages[1]?.content || '').includes('CURRENT_TASK_MUST_REMAIN_AUTHORITATIVE')
+    && String(taskFocusCompressionMessages.at(-1)?.role || '') === 'user',
+  'maybeCompress: continuation anchor preserves instruction hierarchy without copying user text into system role');
+  agent.history = Array(50).fill(null).map((_, i) => ({ role: i % 2 === 0 ? 'user' : 'assistant', content: 'z'.repeat(2000) }));
+  const compressionModelMessages = [...agent.history];
+  let requestedCompressionModel = '';
+  let compressionSystemPrompt = '';
+  let compressionUserPrompt = '';
+  const compressionModelProvider = new FakeProvider(['## Active Or Unfinished Work\nUse the request-scoped model.']) as unknown as LLMProvider;
+  compressionModelProvider.chat = async (modelName: string, messages: Array<Record<string, unknown>>, systemPrompt: string) => {
+    requestedCompressionModel = modelName;
+    compressionSystemPrompt = systemPrompt;
+    compressionUserPrompt = String(messages[0]?.content || '');
+    return '## Active Or Unfinished Work\nUse the request-scoped model.';
+  };
+  await agent.maybeCompress(compressionModelMessages, compressionModelProvider, undefined, 'current-session-model');
+  assert(requestedCompressionModel === 'current-session-model' && agent.lastCompression?.model === 'current-session-model', 'maybeCompress: binds provider request and metadata to the current session model snapshot');
+  assert(compressionSystemPrompt.includes('Completed Or Background Work')
+    && compressionSystemPrompt.includes('must not be revived as the current objective')
+    && compressionUserPrompt.includes('Latest retained user instruction'),
+  'maybeCompress: model prompt classifies historical task state relative to the retained current instruction');
+  const oversizedImage = `data:image/png;base64,${'A'.repeat(40000)}`;
+  agent.history = Array.from({ length: 12 }, (_, index) => index === 0
+    ? { role: 'user', content: [{ type: 'text', text: 'old image' }, { type: 'image_url', image_url: { url: oversizedImage } }] }
+    : { role: index % 2 ? 'assistant' : 'user', content: `message-${index}` });
+  const imageCompressionMessages = agent.history.map(message => ({ ...message }));
+  assert(agent.estimateContextTokens(imageCompressionMessages) > 8000, 'maybeCompress images: structured base64 is counted instead of collapsing to object string text');
+  await agent.maybeCompress(imageCompressionMessages, new FakeProvider(['## Preserved State\nThe historical image was inspected.']) as unknown as LLMProvider);
+  assert(!JSON.stringify(imageCompressionMessages).includes(oversizedImage) && JSON.stringify(imageCompressionMessages).includes('Historical image attachment omitted'), 'maybeCompress images: historical image payloads become bounded textual records before the next provider request');
   agent.history = Array(50).fill(null).map((_, i) => ({ role: i % 2 === 0 ? 'user' : 'assistant', content: 'y'.repeat(2000) }));
   const errorCompressionMessages = [...agent.history];
   await agent.maybeCompress(errorCompressionMessages, new FakeProvider(['[LLM Error: 400] unsupported response shape']) as unknown as LLMProvider);
-  assert(agent.lastCompression?.fallback === true && String(errorCompressionMessages[1]?.content || '').includes('Context Compression Fallback'), 'maybeCompress: empty/error provider summaries use local fallback instead of persisting a false model summary');
+  assert(agent.lastCompression?.fallback === true && String(errorCompressionMessages[0]?.content || '').includes('Context Compression Fallback'), 'maybeCompress: empty/error provider summaries use local fallback instead of persisting a false model summary');
   agent.config.upsertProvider('context-prov', 'https://api.context.test/v1', 'test-key-context');
   agent.config.addModelToProvider('context-prov', 'near-limit-context', 'Near Limit Context', 'Near-limit compression model');
   agent.config.updateModel('context-prov', 'near-limit-context', { max_tokens: 1000 });
@@ -2991,7 +3131,7 @@ async function main() {
   await agent.maybeCompress(nearLimitMessages, new FakeProvider(['## Preserved State\nKeep the active implementation and pending verification.']) as unknown as LLMProvider);
   const nearLimitAfter = agent.estimateContextTokens(nearLimitMessages);
   assert(nearLimitMessages.length < 29 && nearLimitAfter < nearLimitBefore && nearLimitAfter <= 484, 'maybeCompress near limit: compacts below the model-driven target budget');
-  assert(String(nearLimitMessages[2]?.role || '') === 'user', 'maybeCompress near limit: retained recent context starts at a complete user turn');
+  assert(String(nearLimitMessages[2]?.role || '') === 'user', 'maybeCompress near limit: retained recent context starts at a complete user turn after the summary and continuation records');
   assert(agent.lastCompression?.originalMessages === 29 && agent.lastCompression?.compressedMessages === nearLimitMessages.length, 'maybeCompress near limit: records exact original and compacted message counts');
   agent.config.addModelToProvider('context-prov', 'tiny-context', 'Tiny Context', 'Small context test model');
   agent.config.updateModel('context-prov', 'tiny-context', { max_tokens: 1000 });
@@ -3446,6 +3586,20 @@ async function main() {
   const toolResultBody = responsesBodies[0] || {};
   assert(Array.isArray(toolResultBody.input) && toolResultBody.input.some((item: any) => item.type === 'function_call' && item.call_id === 'call_prev' && item.name === 'write') && toolResultBody.input.some((item: any) => item.type === 'function_call_output' && item.call_id === 'call_prev'), 'LLMProvider Responses mode: includes prior function_call before function_call_output');
   assert(toolResultBody.input.findIndex((item: any) => item.type === 'function_call' && item.call_id === 'call_prev') < toolResultBody.input.findIndex((item: any) => item.type === 'function_call_output' && item.call_id === 'call_prev'), 'LLMProvider Responses mode: orders function_call before matching function_call_output');
+  responsesBodies.length = 0;
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    responsesBodies.push(JSON.parse(String(init?.body || '{}')));
+    return new Response(JSON.stringify({ output_text: 'memory continuation repaired' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  await responsesToolResultProvider.chatStreamWithTools('gpt-5.4-mini', [
+    { role: 'user', content: 'Read memory' },
+    { role: 'tool', tool_call_id: 'call_memory_read', name: 'memory_lab_read', content: '[memory_lab_read] index' },
+  ], 'system text', 0, 20, []).next();
+  globalThis.fetch = originalFetch;
+  const repairedMemoryBody = responsesBodies[0] || {};
+  const repairedCallIndex = repairedMemoryBody.input.findIndex((item: any) => item.type === 'function_call' && item.call_id === 'call_memory_read' && item.name === 'memory_lab_read');
+  const repairedOutputIndex = repairedMemoryBody.input.findIndex((item: any) => item.type === 'function_call_output' && item.call_id === 'call_memory_read');
+  assert(repairedCallIndex >= 0 && repairedCallIndex < repairedOutputIndex, 'LLMProvider Responses mode: repairs a migrated Memory Lab tool result with its required preceding function_call');
 
   const directResponsesPaths: string[] = [];
   globalThis.fetch = (async (url: string) => {
@@ -3459,6 +3613,34 @@ async function main() {
   globalThis.fetch = originalFetch;
   assert(directResponsesText === 'direct responses ok' && directResponsesTokens.some(t => t.text === 'direct responses ok'), 'LLMProvider Responses mode: parses direct Responses API output');
   assert(directResponsesPaths.length === 2 && directResponsesPaths.every(p => p.endsWith('/responses')), 'LLMProvider Responses mode: uses /responses directly without chat-completions probe');
+
+  let responsesStreamBody: any = null;
+  let responsesStreamAccept = '';
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    responsesStreamBody = JSON.parse(String(init?.body || '{}'));
+    responsesStreamAccept = new Headers(init?.headers).get('accept') || '';
+    const encoder = new TextEncoder();
+    return new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","item_id":"reasoning-1","summary_index":0,"delta":"Checking the "}\n\n'));
+        controller.enqueue(encoder.encode('event: response.reasoning_summary_text.done\ndata: {"type":"response.reasoning_summary_text.done","item_id":"reasoning-1","summary_index":0,"text":"Checking the workspace"}\n\n'));
+        controller.enqueue(encoder.encode('event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"first "}\n\n'));
+        controller.enqueue(encoder.encode('event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":1,"item":{"id":"item_write","type":"function_call","call_id":"call_write","name":"write","arguments":""}}\n\n'));
+        controller.enqueue(encoder.encode('event: response.function_call_arguments.delta\ndata: {"type":"response.function_call_arguments.delta","item_id":"item_write","delta":"{\\"path\\":\\"README.md\\"}"}\n\n'));
+        controller.enqueue(encoder.encode('event: response.output_item.done\ndata: {"type":"response.output_item.done","output_index":1,"item":{"id":"item_write","type":"function_call","call_id":"call_write","name":"write","arguments":"{\\"path\\":\\"README.md\\"}"}}\n\n'));
+        controller.enqueue(encoder.encode('event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n'));
+        controller.close();
+      },
+    }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  }) as typeof fetch;
+  const streamedResponsesTokens: StreamToken[] = [];
+  for await (const tok of directResponsesProvider.chatStreamWithTools('gpt-5.4-mini', [{ role: 'user', content: 'Stream and use tool' }], null, 0, 20, [])) streamedResponsesTokens.push(tok);
+  globalThis.fetch = originalFetch;
+  assert(responsesStreamBody?.stream === true && responsesStreamAccept === 'text/event-stream', 'LLMProvider Responses stream: requests SSE with stream=true and Accept text/event-stream');
+  assert(responsesStreamBody?.reasoning?.summary === 'auto', 'LLMProvider Responses stream: requests a readable reasoning summary when the provider supports it');
+  assert(streamedResponsesTokens.some(token => token.type === 'status' && token.text === 'Checking the workspace'), 'LLMProvider Responses stream: yields provider-authored readable reasoning summaries without exposing encrypted reasoning');
+  assert(streamedResponsesTokens.some(token => token.type === 'text' && token.text === 'first '), 'LLMProvider Responses stream: yields output_text deltas as they arrive');
+  assert(streamedResponsesTokens.some(token => token.type === 'tool_call' && token.toolCall?.id === 'call_write' && token.toolCall.arguments.includes('README.md')), 'LLMProvider Responses stream: assembles and yields function call arguments');
 
   globalThis.fetch = (async () => new Response(JSON.stringify([{
     output: [{ type: 'message', content: [{ type: 'output_text', text: { value: 'nested responses text' } }] }],
@@ -3491,6 +3673,23 @@ async function main() {
   globalThis.fetch = originalFetch;
   assert(directChatPaths.length === 1 && directChatPaths[0].endsWith('/chat/completions'), 'LLMProvider Chat mode: uses chat completions directly');
   assert(directChatBodies[0]?.stream === false && directChatTokens.some(t => t.text === 'direct chat ok'), 'LLMProvider Chat mode: disables streaming and yields text');
+
+  directChatBodies.length = 0;
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    directChatBodies.push(JSON.parse(String(init?.body || '{}')));
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'chat memory continuation repaired' } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  for await (const _tok of directChatProvider.chatStreamWithTools('gpt-5.4-mini', [
+    { role: 'user', content: 'Read memory' },
+    { role: 'tool', tool_call_id: 'call_chat_memory_read', name: 'memory_lab_read', content: '[memory_lab_read] index' },
+  ], null, 0, 20, [])) { /* drain */ }
+  globalThis.fetch = originalFetch;
+  const repairedChatMessages = directChatBodies[0]?.messages || [];
+  const repairedChatCallIndex = repairedChatMessages.findIndex((message: any) => message.role === 'assistant'
+    && message.tool_calls?.some((call: any) => call.id === 'call_chat_memory_read' && call.function?.name === 'memory_lab_read'));
+  const repairedChatResultIndex = repairedChatMessages.findIndex((message: any) => message.role === 'tool'
+    && message.tool_call_id === 'call_chat_memory_read');
+  assert(repairedChatCallIndex >= 0 && repairedChatCallIndex < repairedChatResultIndex, 'LLMProvider Chat mode: repairs a migrated Memory Lab tool result with its required preceding assistant tool_calls message');
 
   let loopbackFetchCalls = 0;
   let loopbackNodePath = '';

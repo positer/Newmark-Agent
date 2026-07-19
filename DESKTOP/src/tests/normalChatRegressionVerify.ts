@@ -74,9 +74,11 @@ async function main(): Promise<void> {
       'empty default resolves a stable provider-qualified deployment when model ids collide');
     assert.equal(agent.modelSelectionValue(), 'deployment:provider-a:shared-model', 'runtime handoff retains qualified deployment identity');
 
+    const successCalls: Array<{ messages: Array<Record<string, unknown>>; system: string }> = [];
     const successProvider = {
       intelligenceConfig: () => ({ temperature: 0, maxTokens: 32 }),
-      async *chatStreamWithTools(): AsyncGenerator<StreamToken> {
+      async *chatStreamWithTools(_model: string, messages: Array<Record<string, unknown>>, system: string): AsyncGenerator<StreamToken> {
+        successCalls.push({ messages: messages.map(message => ({ ...message })), system });
         yield { type: 'text', text: 'NORMAL_CHAT_OK' };
       },
       async chat(): Promise<string> { return 'unused'; },
@@ -84,6 +86,34 @@ async function main(): Promise<void> {
     (agent as unknown as { forcedProvider: typeof successProvider }).forcedProvider = successProvider;
     const success = (await agent.process('你好')).map(token => token.text || '').join('');
     assert.ok(success.includes('NORMAL_CHAT_OK'), 'first normal prompt reaches the provider without a renderer model race');
+    await agent.process('第二轮');
+    assert.deepEqual(successCalls[1]?.messages.map(message => message.role), ['user', 'assistant', 'user'],
+      'the second provider request receives prior user and assistant history before the new prompt');
+    assert.ok(JSON.stringify(successCalls[1]?.messages).includes('你好') && JSON.stringify(successCalls[1]?.messages).includes('NORMAL_CHAT_OK'),
+      'the second provider payload contains the previous turn content');
+    assert.ok(successCalls[1]?.system.includes('## Request-Scoped Task Focus')
+      && successCalls[1]?.system.includes('continue the nearest relevant unfinished task')
+      && successCalls[1]?.system.includes('do not revive completed, superseded, abandoned, or unrelated historical tasks'),
+    'each provider turn receives an ephemeral focus contract that prioritizes the latest instruction without discarding relevant unfinished history');
+    assert.ok(!successCalls[1]?.system.includes('第二轮')
+      && String(successCalls[1]?.messages.at(-1)?.content || '').includes('第二轮'),
+    'request focus preserves the current instruction in its original user role instead of elevating user-authored text into the system prompt');
+    assert.ok(!JSON.stringify(agent.history).includes('Request-Scoped Task Focus'), 'request-scoped focus is never persisted into conversation history');
+
+    agent.conversationPlan = {
+      items: [
+        { id: 'done', text: 'Retired migration', status: 'done' },
+        { id: 'active', text: 'Run the unfinished provider regression', status: 'in_progress' },
+      ],
+    };
+    await agent.process('继续完成还没有完成的工作');
+    const continuationFocus = successCalls.at(-1)?.system || '';
+    assert.ok(!continuationFocus.includes('继续完成还没有完成的工作')
+      && continuationFocus.includes('1 unfinished plan item(s): 1 in progress and 0 pending')
+      && !continuationFocus.includes('Retired migration'),
+    'continuation focus retains explicit unfinished plan state while excluding completed plan items');
+    assert.ok(String(successCalls.at(-1)?.messages.at(-1)?.content || '').includes('继续完成还没有完成的工作'),
+      'continuation instruction remains the final real user message in provider context');
 
     writeConfig(errorRoot, [providers[0]]);
     const errorAgent = new Agent(errorRoot, { agentOnly: true, workspaceRegistryMode: 'detached', conversationId: 'normal-chat-error' });
@@ -115,6 +145,11 @@ async function main(): Promise<void> {
 
     assert.equal(agentKernelRunnerInternals.normalizePublicProviderError(new Error('')), 'Provider request failed without diagnostic details.');
     assert.equal(agentKernelRunnerInternals.normalizePublicProviderError(new Error('<think>hidden</think>')), 'Provider request failed without diagnostic details.');
+    assert.equal(
+      agentKernelRunnerInternals.normalizePublicProviderError(new Error('PowerShell HTTP fallback failed: Invoke-WebRequest: {"error":{"message":"No tool call found for function call output with call_id call_memory"}}')),
+      'Provider rejected the tool-result continuation because its matching tool call was missing. Newmark preserved the run for retry.',
+      'provider diagnostics replace the PowerShell stack with a concise tool-continuation error',
+    );
     const redacted = agentKernelRunnerInternals.normalizePublicProviderError(new Error('Authorization: Bearer secret-token-value'));
     assert.ok(redacted.includes('[redacted]') && !redacted.includes('secret-token-value'), 'provider diagnostics redact credentials');
     const providerSecret = 'literal-provider-secret-20260716';

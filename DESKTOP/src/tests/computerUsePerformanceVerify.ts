@@ -111,6 +111,11 @@ async function verifyWslComputerUseStringTransport(): Promise<void> {
     });
 
     const tools = new ToolExecutor(root, new ConfigManager(root));
+    // The Linux runtime itself does not expose native desktop control, but the
+    // Windows-to-WSL agent host deliberately provisions Computer Use through
+    // the trusted Windows host bridge. Model that production host profile
+    // explicitly so this transport test is platform-independent.
+    tools.setHostProfile({ kind: 'wsl', platform: 'linux', electronBrowser: false, windowsComputerUse: true });
     const context = {
       workspaceId: 'workspace-wsl-transport',
       conversationId: 'vision',

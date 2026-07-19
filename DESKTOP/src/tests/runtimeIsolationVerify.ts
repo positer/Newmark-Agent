@@ -138,6 +138,32 @@ async function verifyCrossHostWorkspaceRegistryIsolation(): Promise<void> {
   }
 }
 
+async function verifyConversationCacheObservesExternalWrites(): Promise<void> {
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-conversation-cache-'));
+  try {
+    const agent = new Agent(cacheRoot);
+    const workspace = agent.createInternalWorkspace('cache-refresh');
+    agent.setConversation('focus');
+    agent.getConversationSnapshot('never-opened');
+    agent.flushWorkspaceConversationState();
+    const statePath = path.join(workspace.path, 'conversations', 'state.json');
+    const disk = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+    const key = (agent as any).workspaceConversationStateKey('never-opened') as string;
+    disk.conversations[key] = {
+      title: 'External refresh',
+      chatMessages: [{ role: 'user', content: 'external refresh', timestamp: '00:00:01' }],
+      history: [{ role: 'user', content: 'external refresh' }],
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(statePath, `${JSON.stringify(disk, null, 2)}\n`, 'utf-8');
+    const refreshed = agent.getConversationSnapshot('never-opened');
+    assert.equal(refreshed.chatMessages[0]?.content, 'external refresh',
+      'conversation cache invalidates when another runtime or migration rewrites the shared state file');
+  } finally {
+    fs.rmSync(cacheRoot, { recursive: true, force: true });
+  }
+}
+
 async function verifyWorkspaceSelectionCoordination(): Promise<void> {
   const calls: string[] = [];
   const releases = new Map<string, () => void>();
@@ -264,7 +290,7 @@ async function verifyColdSnapshotBindsTargetWorkspace(): Promise<void> {
     const reloaded = new ConversationKernel(root, host, null);
     assert.equal(reloaded.snapshot(betaTarget).workRuns.find(run => run.runId === 'beta-cold-fold-run')?.expanded, true,
       'the cold expanded preference survives a kernel/app restart');
-    assert.equal(reloaded.snapshot(target('alpha', alphaPath)).workRuns.find(run => run.runId === 'alpha-cold-fold-run')?.expanded, false,
+    assert.equal(reloaded.snapshot(target('alpha', alphaPath)).workRuns.find(run => run.runId === 'alpha-cold-fold-run')?.expanded, true,
       'updating a cold target never changes another workspace work run');
     assert.equal(reloaded.setWorkRunExpanded(betaTarget, 'beta-cold-fold-run', false), true,
       'the reloaded completed work run can be folded again');
@@ -1133,6 +1159,38 @@ async function verifyWslHostToolIdentityBinding(): Promise<void> {
   assert.match(String(rejected.error || ''), /target mismatch/i);
 }
 
+function verifyCrossPlatformConversationStatePrefix(): void {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-cross-platform-history-'));
+  try {
+    const workspacePath = path.join(root, 'workspace');
+    fs.mkdirSync(path.join(workspacePath, 'conversations'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({
+      workspace: { auto_create_timestamp_workspace: { value: false } },
+      models: { providers: { value: [] } },
+    }));
+    const prefix = 'external-0123456789abcdef';
+    fs.writeFileSync(path.join(workspacePath, 'conversations', 'state.json'), JSON.stringify({
+      version: 3,
+      conversations: {
+        [`${prefix}-history-conversation`]: {
+          chatMessages: [{ role: 'user', content: 'remember this', mode: 'Build', model: '', timestamp: 'now' }],
+          history: [{ role: 'user', content: 'remember this' }, { role: 'assistant', content: 'remembered' }],
+        },
+      },
+    }));
+    const runner = new Agent(root, { agentOnly: true, workspaceRegistryMode: 'detached' });
+    runner.workspace.current = {
+      id: 'stable-workspace-id', name: 'Mapped', path: workspacePath, isInternal: false,
+      hostBinding: '', icon: '', kind: 'local', conversationStatePrefix: prefix,
+    };
+    runner.setConversationFromStorage('history-conversation');
+    assert.equal(runner.history.length, 2,
+      'a mapped WSL/Utility runner restores the Windows conversation history using the trusted state prefix');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 async function verifyRealUbuntuProcessGroupTermination(): Promise<void> {
   if (process.platform !== 'win32') return;
   const distro = 'Ubuntu-24.04';
@@ -1895,9 +1953,11 @@ async function verifyStoppedRootPausesQueuedSubagents(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  verifyCrossPlatformConversationStatePrefix();
   await verifyConversationTargets();
   await verifyStableWorkspaceIds();
   await verifyCrossHostWorkspaceRegistryIsolation();
+  await verifyConversationCacheObservesExternalWrites();
   await verifyWorkspaceSelectionCoordination();
   await verifyWorkspaceSelectionCircuitBreaker();
   await verifyColdSnapshotBindsTargetWorkspace();

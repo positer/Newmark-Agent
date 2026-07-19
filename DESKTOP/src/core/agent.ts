@@ -115,6 +115,18 @@ interface StoredConversationState {
     pinnedAt?: string;
   }>;
 }
+interface ConversationArchiveManifest {
+  version: 1;
+  kind: 'newmark-conversation-archive';
+  archivedAt: string;
+  conversationId: string;
+  workspaceId?: string;
+  workspaceName: string;
+  workspacePath: string;
+  workspaceInternal: boolean;
+  statePrefix: string;
+  entry: StoredConversationEntry;
+}
 export type ConversationPlanItemStatus = 'pending' | 'in_progress' | 'done';
 export interface ConversationPlanItem {
   id: string;
@@ -274,6 +286,8 @@ export class Agent {
   private forcedProvider: LLMProvider | null = null;
   private processingConversationId: string | null = null;
   private processDepth = 0;
+  private memoryLabRebuildState: 'idle' | 'pending' | 'complete' | 'failed' = 'idle';
+  private memoryLabRebuildError = '';
   private activeProcessAbortController: AbortController | null = null;
   private automationManager: AutomationManager | null = null;
   private activeAgentKernelRuntime: {
@@ -305,6 +319,7 @@ export class Agent {
   private routeAttemptStartedAt = 0;
   private readonly explicitlyRatedRoutes = new Map<string, -1 | 1>();
   private conversationStateCache = new Map<string, StoredConversationState>();
+  private conversationStateCacheFingerprint = new Map<string, string>();
   private conversationStateFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private conversationStateDirty = new Map<string, { state: StoredConversationState; ws: WorkspaceInfo | null }>();
   private systemPromptCache: { identity: string; value: string } | null = null;
@@ -677,6 +692,8 @@ export class Agent {
   private workspaceConversationPrefix(): string | null {
     const ws = this.workspace.current;
     if (!ws) return null;
+    const supplied = String(ws.conversationStatePrefix || '').trim();
+    if (/^(?:internal|external)-[a-f0-9]{16}$/i.test(supplied)) return supplied.toLowerCase();
     const kind = ws.isInternal ? 'internal' : 'external';
     const hash = crypto.createHash('sha256').update(path.resolve(ws.path).toLowerCase()).digest('hex').slice(0, 16);
     return `${kind}-${hash}`;
@@ -770,7 +787,7 @@ export class Agent {
 
   private isPersistablePublicWorkEvent(event: { type?: unknown; content?: unknown; toolArgs?: unknown }): boolean {
     const type = String(event.type || '').toLowerCase();
-    const publicTypes = new Set(['start', 'text', 'tool_call', 'tool_result', 'status', 'done', 'error', 'queue_update', 'guide']);
+    const publicTypes = new Set(['start', 'text', 'response', 'final_response', 'tool_call', 'tool_result', 'status', 'done', 'error', 'queue_update', 'guide']);
     if (!publicTypes.has(type)) return false;
     // Tool implementation details are never public. They are dropped before
     // publication/persistence, so private arguments must not suppress the one
@@ -885,6 +902,7 @@ export class Agent {
             model: String(event.model || this.model),
             timestamp: String(event.timestamp || this.nowLabel()),
             toolName,
+            toolArgs: type === 'tool_call' && event.toolArgs ? this.visibleToolArgs(event.toolArgs) : undefined,
             queue: isToolEvent ? undefined : event.queue,
             workspaceId: target.workspaceId,
             workspaceKey: event.workspaceKey,
@@ -905,7 +923,7 @@ export class Agent {
         status,
         startedAt: raw.startedAt || this.nowIso(),
         endedAt: raw.endedAt,
-        expanded: status === 'running' ? true : !!raw.expanded,
+        expanded: raw.expanded === undefined ? true : !!raw.expanded,
         sequence,
         events,
         guides: [...guidesById.values()],
@@ -1076,7 +1094,7 @@ export class Agent {
 
   setConversationWorkRunExpanded(runId: string, expanded: boolean): boolean {
     const run = this.workRuns.find(item => item.runId === String(runId || ''));
-    if (!run || run.status === 'running') return false;
+    if (!run) return false;
     run.expanded = !!expanded;
     this.saveWorkspaceConversationState(true);
     return true;
@@ -1103,7 +1121,7 @@ export class Agent {
       });
       run.status = 'force_interrupted';
       run.endedAt = endedAt;
-      run.expanded = false;
+      run.expanded = true;
       this.activeWorkRunId = '';
       this.finalizingWorkRunId = '';
       this.managedWorkRunIds.delete(run.runId);
@@ -1122,7 +1140,7 @@ export class Agent {
     });
     run.status = status;
     run.endedAt = endedAt;
-    run.expanded = false;
+    run.expanded = true;
     this.activeWorkRunId = '';
     this.finalizingWorkRunId = '';
     this.managedWorkRunIds.delete(run.runId);
@@ -1159,6 +1177,7 @@ export class Agent {
       model: input.model || this.model,
       timestamp: input.timestamp || this.nowLabel(),
       toolName,
+      toolArgs: publishedType === 'tool_call' && input.toolArgs ? this.visibleToolArgs(input.toolArgs) : undefined,
       queue: isToolEvent ? undefined : input.queue,
       workspaceId: input.workspaceId || activeRun?.target.workspaceId || this.currentConversationTarget(input.conversationId).workspaceId,
       workspaceKey: input.workspaceKey,
@@ -1171,11 +1190,14 @@ export class Agent {
     };
     if (activeRun && this.isPersistablePublicWorkEvent(event)) {
       activeRun.sequence = Number(sequence || activeRun.sequence + 1);
-      activeRun.events.push(event);
+      // Streaming text is delivered live, while the complete sanitized API
+      // response is persisted once at message_end. This avoids saving hundreds
+      // of positional deltas and preserves each provider reply boundary.
+      if (event.type !== 'text') activeRun.events.push(event);
       if (event.type === 'done' || event.type === 'error') {
         activeRun.status = event.type === 'done' ? 'completed' : 'error';
         activeRun.endedAt = /^\d{4}-\d{2}-\d{2}T/.test(event.timestamp) ? event.timestamp : this.nowIso();
-        activeRun.expanded = false;
+        activeRun.expanded = true;
         this.activeWorkRunId = '';
       }
     }
@@ -1413,8 +1435,10 @@ export class Agent {
   private readStoredConversationState(ws: WorkspaceInfo | null = this.workspace.current): StoredConversationState {
     const file = this.workspaceConversationStorePath(ws);
     if (!file || !fs.existsSync(file)) return {};
+    const stat = fs.statSync(file, { bigint: true });
+    const fingerprint = `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}`;
     const cached = this.conversationStateCache.get(file);
-    if (cached) return cached;
+    if (cached && this.conversationStateCacheFingerprint.get(file) === fingerprint) return cached;
     try {
       const raw = fs.readFileSync(file, 'utf-8').replace(/^\uFEFF/, '');
       const parsed = JSON.parse(raw);
@@ -1423,6 +1447,7 @@ export class Agent {
         state.version = Math.max(1, Number(state.version || 1));
         state.conversations = state.conversations || {};
         this.conversationStateCache.set(file, state);
+        this.conversationStateCacheFingerprint.set(file, fingerprint);
         return state;
       }
     } catch {
@@ -1521,6 +1546,7 @@ export class Agent {
     // Merge against disk while holding the lock because another isolated
     // conversation process may have committed since this process cached it.
     this.conversationStateCache.delete(file);
+    this.conversationStateCacheFingerprint.delete(file);
     const latest = this.readStoredConversationState(ws);
     const contentState = mutate({
       version: Math.max(1, Number(latest.version || 1)),
@@ -1550,6 +1576,8 @@ export class Agent {
         try {
           fs.renameSync(temp, file);
           this.conversationStateCache.set(file, contentState);
+          const writtenStat = fs.statSync(file, { bigint: true });
+          this.conversationStateCacheFingerprint.set(file, `${writtenStat.mtimeNs}:${writtenStat.ctimeNs}:${writtenStat.size}`);
           return select ? select(contentState) : undefined;
         } catch (error) {
           lastError = error;
@@ -2267,7 +2295,7 @@ export class Agent {
 
   estimateContextTokens(messages: Array<Record<string, unknown>> = this.history): number {
     const chars = messages.reduce((sum, m) => {
-      const content = String(m.content || '');
+      const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
       const toolCalls = Array.isArray(m.tool_calls) ? JSON.stringify(m.tool_calls) : '';
       return sum + content.length + toolCalls.length;
     }, 0);
@@ -2318,13 +2346,38 @@ export class Agent {
     tokenBudget: number
   ): Array<Record<string, unknown>> {
     if (!messages.length) return [];
-    let start = Math.max(1, messages.length - Math.max(1, maxMessages));
-    while (start > 1 && String(messages[start]?.role || '') !== 'user') start--;
+    let start = Math.max(0, messages.length - Math.max(1, maxMessages));
+    while (start > 0 && String(messages[start]?.role || '') !== 'user') start--;
     while (start < messages.length - 1 && this.estimateContextTokens(messages.slice(start)) > tokenBudget) {
       start++;
       while (start < messages.length - 1 && String(messages[start]?.role || '') !== 'user') start++;
     }
     return messages.slice(start);
+  }
+
+  private compactHistoricalImages(messages: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+    const lastParts = Array.isArray(messages.at(-1)?.content) ? messages.at(-1)!.content as Array<Record<string, unknown>> : [];
+    const newestImageMessage = lastParts.some(part => part?.type === 'image_url') ? messages.length - 1 : -1;
+    return messages.map((message, index) => {
+      if (!Array.isArray(message.content) || index === newestImageMessage) return { ...message };
+      const parts = (message.content as Array<Record<string, unknown>>).flatMap(part => {
+        if (part?.type !== 'image_url') return [{ ...part }];
+        return [{ type: 'text', text: '[Historical image attachment omitted after context compression.]' }];
+      });
+      return { ...message, content: parts };
+    });
+  }
+
+  private postCompressionContinuationMessage(): Record<string, unknown> {
+    return {
+      role: 'system',
+      content: [
+        '[Post-Compression Task Continuation]',
+        'Context compression just occurred. Continue the active task immediately instead of treating compression as a stopping point.',
+        'The latest retained real user-role message below is the authoritative pre-compression task instruction.',
+        'If it depends on an older unfinished task, resume only the nearest relevant unfinished work recorded in the compression summary; do not revive completed, superseded, or unrelated history.',
+      ].join('\n'),
+    };
   }
 
   updateGoal(newGoal: string): void {
@@ -2392,6 +2445,30 @@ export class Agent {
       : (memory?.history ?? persisted?.history ?? []);
     const messages = this.normalizeConversationChatMessages(sourceMessages, sourceHistory);
     const filename = this.writeSessionArchive(messages, this.modeName(), this.model);
+    const archiveEntry: StoredConversationEntry = persisted ? JSON.parse(JSON.stringify(persisted)) : {
+      title: this.titleFromMessages(messages, clean),
+      chatMessages: messages,
+      history: sourceHistory,
+      plan: memory?.plan,
+      linkedPlan: memory?.linkedPlan,
+      subagentState: memory?.subagentState,
+      workRuns: memory?.workRuns,
+      continuations: memory?.continuations,
+      updatedAt: new Date().toISOString(),
+    };
+    const manifest: ConversationArchiveManifest = {
+      version: 1,
+      kind: 'newmark-conversation-archive',
+      archivedAt: new Date().toISOString(),
+      conversationId: clean,
+      workspaceId: ws.id,
+      workspaceName: ws.name,
+      workspacePath: ws.path,
+      workspaceInternal: ws.isInternal,
+      statePrefix: this.workspaceConversationPrefix() || '',
+      entry: this.conversationEntryForDisk(archiveEntry),
+    };
+    fs.writeFileSync(this.archiveManifestPath(path.join(this.archiveDir(), filename)), JSON.stringify(manifest, null, 2), 'utf-8');
 
     const targetSignature = this.conversationContentSignature(messages);
     const deletedKeys: string[] = [];
@@ -2429,8 +2506,8 @@ export class Agent {
       .filter(Boolean);
   }
 
-  listArchives(scope: 'workspace' | 'all' = 'workspace'): Array<{ id: string; name: string; firstLine: string; scope: string; workspace?: string; date?: string }> {
-    const results: Array<{ id: string; name: string; firstLine: string; scope: string; workspace?: string; date?: string }> = [];
+  listArchives(scope: 'workspace' | 'all' = 'workspace'): Array<{ id: string; name: string; firstLine: string; scope: string; workspace?: string; date?: string; restorable?: boolean; conversationId?: string }> {
+    const results: Array<{ id: string; name: string; firstLine: string; scope: string; workspace?: string; date?: string; restorable?: boolean; conversationId?: string }> = [];
     const dirs = scope === 'all' ? this.archiveRoots() : [{ dir: this.archiveDir(), scope: 'workspace', workspace: this.workspace.current?.name || '' }];
     for (const archiveRoot of dirs) {
       this.collectArchives(archiveRoot.dir, archiveRoot.scope, archiveRoot.workspace, results);
@@ -2439,7 +2516,7 @@ export class Agent {
     return results;
   }
 
-  private collectArchives(archiveDir: string, scope: string, workspace: string | undefined, results: Array<{ id: string; name: string; firstLine: string; scope: string; workspace?: string; date?: string }>): void {
+  private collectArchives(archiveDir: string, scope: string, workspace: string | undefined, results: Array<{ id: string; name: string; firstLine: string; scope: string; workspace?: string; date?: string; restorable?: boolean; conversationId?: string }>): void {
     try {
       for (const entry of fs.readdirSync(archiveDir)) {
         if (entry.endsWith('.md')) {
@@ -2448,7 +2525,8 @@ export class Agent {
           const firstLine = content.split('\n')[0] || '';
           const id = `archive|${Buffer.from(path.resolve(archiveDir), 'utf-8').toString('base64')}|${Buffer.from(entry, 'utf-8').toString('base64')}`;
           const date = fs.statSync(archivePath).mtime.toISOString();
-          results.push({ id, name: entry, firstLine, scope, workspace, date });
+          const manifest = this.readArchiveManifest(archivePath);
+          results.push({ id, name: entry, firstLine, scope, workspace, date, restorable: !!manifest, conversationId: manifest?.conversationId });
         }
       }
     } catch { /* skip */ }
@@ -2483,8 +2561,58 @@ export class Agent {
     return path.join(this.archiveDir(), raw);
   }
 
+  private archiveManifestPath(archivePath: string): string {
+    return `${archivePath}.conversation.json`;
+  }
+
+  private readArchiveManifest(archivePath: string): ConversationArchiveManifest | null {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.archiveManifestPath(archivePath), 'utf-8')) as ConversationArchiveManifest;
+      if (parsed?.version !== 1 || parsed?.kind !== 'newmark-conversation-archive' || !parsed.entry || !parsed.conversationId) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  restoreArchivedConversation(nameOrId: string): { ok: boolean; conversationId?: string; workspaceId?: string; error?: string } {
+    const archivePath = this.resolveArchivePath(nameOrId);
+    const manifest = this.readArchiveManifest(archivePath);
+    if (!manifest) return { ok: false, error: 'This archive does not contain restorable conversation state.' };
+    const ws = [...this.workspace.internal, ...this.workspace.external].find(item =>
+      (manifest.workspaceId && item.id === manifest.workspaceId) || path.resolve(item.path) === path.resolve(manifest.workspacePath));
+    if (!ws) return { ok: false, error: 'The original workspace is no longer available.' };
+    const conversationId = this.safeConversationId(manifest.conversationId);
+    const prefix = String(manifest.statePrefix || '').trim() || (() => {
+      const kind = ws.isInternal ? 'internal' : 'external';
+      const hash = crypto.createHash('sha256').update(path.resolve(ws.path).toLowerCase()).digest('hex').slice(0, 16);
+      return `${kind}-${hash}`;
+    })();
+    const stateKey = `${prefix}-${conversationId}`;
+    let restored = false;
+    this.mutateStoredConversationState(ws, stored => {
+      stored.conversations = stored.conversations || {};
+      if (stored.conversations[stateKey]) return stored;
+      stored.conversations[stateKey] = { ...manifest.entry, updatedAt: new Date().toISOString() };
+      stored.activeConversationId = conversationId;
+      restored = true;
+      return stored;
+    });
+    if (!restored) return { ok: false, error: 'A conversation with the same ID already exists in the original workspace.' };
+    try { fs.unlinkSync(this.archiveManifestPath(archivePath)); } catch {}
+    if (this.workspace.current?.id === ws.id || path.resolve(this.workspace.current?.path || '') === path.resolve(ws.path)) {
+      this.setConversationFromStorage(conversationId);
+    }
+    return { ok: true, conversationId, workspaceId: ws.id || ws.name };
+  }
+
   deleteArchive(name: string): boolean {
-    try { fs.unlinkSync(this.resolveArchivePath(name)); return true; }
+    try {
+      const archivePath = this.resolveArchivePath(name);
+      fs.unlinkSync(archivePath);
+      try { fs.unlinkSync(this.archiveManifestPath(archivePath)); } catch {}
+      return true;
+    }
     catch { return false; }
   }
 
@@ -2987,10 +3115,11 @@ export class Agent {
     instruction?: string;
     completion?: boolean;
     preferCopilot?: boolean;
-  }): Promise<{ ok: boolean; text: string; model?: string; provider?: string; error?: string }> {
+  }, signal?: AbortSignal): Promise<{ ok: boolean; text: string; model?: string; provider?: string; error?: string }> {
     const models = this.config.allModels().filter(model => (model.evaluation?.status || 'unvalidated') !== 'unavailable' && !String(model.evaluation?.status || '').startsWith('error'));
     const current = this.activeModelConfig();
-    const selected = (current && models.find(model => model.provider_id === current.provider_id && model.name === current.name)) || models.find(model =>
+    const copilot = input.preferCopilot ? models.find(model => model.provider_protocol === 'github_models' && model.enabled !== false) : undefined;
+    const selected = copilot || (current && models.find(model => model.provider_id === current.provider_id && model.name === current.name)) || models.find(model =>
       (model.validation?.level === 'standard' || model.validation?.level === 'extended') &&
       (model.validation.status === 'verified' || model.validation.status === 'degraded')
     ) || models.find(model => model.evaluation?.status === 'available') || models[0];
@@ -3001,10 +3130,10 @@ export class Agent {
       ? 'You are an inline code completion engine. Return only the exact text to insert at the cursor. Do not use Markdown fences or explanations.'
       : 'You are Newmark Editor Agent. Give concise, actionable code guidance grounded in the supplied file and selection. Do not claim changes were applied.';
     const prompt = input.completion
-      ? `Language: ${language}\nFile: ${input.path || ''}\nBefore cursor:\n${String(input.before || '').slice(-12000)}\nAfter cursor:\n${String(input.after || '').slice(0, 4000)}\nComplete the code at the cursor.`
+      ? `Language: ${language}\nFile: ${input.path || ''}\nRecent code before cursor:\n${String(input.before || '').slice(-6000)}\nCode after cursor:\n${String(input.after || '').slice(0, 1600)}\nReturn the shortest syntactically complete continuation.`
       : `File: ${input.path || ''}\nInstruction: ${input.instruction || 'Review the current code and suggest the next useful change.'}\nSelection:\n${String(input.selection || '').slice(0, 8000)}\nFile content:\n${String(input.content || '').slice(0, 18000)}`;
     try {
-      const text = (await provider.chat(selected.name, [{ role: 'user', content: prompt }], system, 0.1, input.completion ? 600 : 1800)).replace(/^```[\w-]*\s*|\s*```$/g, '');
+      const text = (await provider.chat(selected.name, [{ role: 'user', content: prompt }], system, 0.05, input.completion ? 192 : 1800, signal)).replace(/^```[\w-]*\s*|\s*```$/g, '');
       return { ok: !!text, text, model: selected.name, provider: selected.provider };
     } catch (error) {
       return { ok: false, text: '', model: selected.name, provider: selected.provider, error: error instanceof Error ? error.message : String(error) };
@@ -3202,6 +3331,8 @@ export class Agent {
       this.routeSideEffectCommitted = false;
       this.lastRouteTransition = '';
       this.lastRouteRetryDelayMs = 0;
+      this.memoryLabRebuildState = 'idle';
+      this.memoryLabRebuildError = '';
     }
     this.processDepth++;
     const processSignal = this.activeProcessAbortController?.signal;
@@ -3298,6 +3429,9 @@ export class Agent {
       } finally {
         this.awaitingAgentKernelRuntime = false;
         if (!this.activeAgentKernelRuntime) this.pendingAgentKernelQueue = [];
+      }
+      if (this.memoryLabRebuildState === 'pending' || this.memoryLabRebuildState === 'failed') {
+        throw new Error(this.memoryLabRebuildError || 'Memory Lab index rebuild did not return a completed receipt; the work remains unfinished and can be retried.');
       }
       this.emitWorkEvent({ type: 'done', content: 'Response complete.' });
       return result;
@@ -3612,6 +3746,10 @@ export class Agent {
     }
     try {
       const params = JSON.parse(args || '{}') as Record<string, unknown>;
+      if (tool === 'memory_lab_update' || tool === 'memory_lab_reindex') {
+        this.memoryLabRebuildState = 'pending';
+        this.memoryLabRebuildError = '';
+      }
       switch (tool) {
         case 'memory_lab_read': {
           const selector = String(params.component || params.name || params.slug || '');
@@ -3625,16 +3763,24 @@ export class Agent {
             content: String(params.content || ''),
             kind: params.kind === 'folder' ? 'folder' : 'file',
           }, signal);
+          this.acceptMemoryLabRebuildReceipt(result, 'update');
           return this.memoryLab.formatWrite('memory_lab_update', result);
         }
         case 'memory_lab_reindex': {
-          return this.memoryLab.formatWrite('memory_lab_reindex', await this.reindexMemoryLab(signal));
+          const result = await this.reindexMemoryLab(signal);
+          this.acceptMemoryLabRebuildReceipt(result, 'reindex');
+          return this.memoryLab.formatWrite('memory_lab_reindex', result);
         }
         default:
           return `[${tool}] Unknown Memory Lab tool.`;
       }
     } catch (e) {
       throwIfAgentAborted(signal);
+      if (tool === 'memory_lab_update' || tool === 'memory_lab_reindex') {
+        this.memoryLabRebuildState = 'failed';
+        this.memoryLabRebuildError = `Memory Lab index rebuild failed: ${e instanceof Error ? e.message : String(e)}`;
+        throw new Error(this.memoryLabRebuildError);
+      }
       return `[${tool}] ${e instanceof Error ? e.message : String(e)}`;
     }
   }
@@ -3642,13 +3788,54 @@ export class Agent {
   async updateMemoryLab(input: MemoryLabUpdateInput, signal?: AbortSignal): Promise<MemoryLabWriteResult> {
     const update = await this.prepareMemoryLabUpdate(input, signal);
     throwIfAgentAborted(signal);
-    return this.memoryLab.update(update);
+    const written = this.memoryLab.update(update);
+    await this.organizeMemoryLabIndex(signal);
+    throwIfAgentAborted(signal);
+    const rebuilt = this.memoryLab.reindex();
+    const verified = this.memoryLab.read();
+    const component = verified.index.components[written.slug || ''];
+    if (!written.slug || !component || !fs.existsSync(component.coreMd)) {
+      throw new Error(`Memory Lab rebuild did not verify the updated component: ${written.slug || '(missing slug)'}`);
+    }
+    return {
+      ...rebuilt,
+      component,
+      slug: written.slug,
+      index: verified.index,
+      rebuildReceipt: {
+        operation: 'update',
+        completed: true,
+        indexUpdatedAt: verified.index.updatedAt,
+        verifiedAt: new Date().toISOString(),
+        slug: written.slug,
+      },
+    };
   }
 
   async reindexMemoryLab(signal?: AbortSignal): Promise<MemoryLabWriteResult> {
     await this.organizeMemoryLabIndex(signal);
     throwIfAgentAborted(signal);
-    return this.memoryLab.reindex();
+    const rebuilt = this.memoryLab.reindex();
+    const verified = this.memoryLab.read();
+    return {
+      ...rebuilt,
+      index: verified.index,
+      rebuildReceipt: {
+        operation: 'reindex',
+        completed: true,
+        indexUpdatedAt: verified.index.updatedAt,
+        verifiedAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  private acceptMemoryLabRebuildReceipt(result: MemoryLabWriteResult, operation: 'update' | 'reindex'): void {
+    const receipt = result.rebuildReceipt;
+    if (!result.ok || !receipt?.completed || receipt.operation !== operation || !receipt.indexUpdatedAt) {
+      throw new Error(`Memory Lab ${operation} returned without a verified rebuild receipt.`);
+    }
+    this.memoryLabRebuildState = 'complete';
+    this.memoryLabRebuildError = '';
   }
 
   private async prepareMemoryLabUpdate(input: MemoryLabUpdateInput, signal?: AbortSignal): Promise<MemoryLabPreparedUpdate> {
@@ -4056,39 +4243,54 @@ export class Agent {
     }
   }
 
-  async maybeCompress(msgs: Array<Record<string, unknown>>, provider?: LLMProvider | null, signal?: AbortSignal): Promise<void> {
+  async maybeCompress(msgs: Array<Record<string, unknown>>, provider?: LLMProvider | null, signal?: AbortSignal, compressionModel?: string): Promise<void> {
     if (signal?.aborted) return;
     if (!this.config.getBool('context', 'auto_compress')) return;
-    const total = msgs.reduce((sum, m) => sum + (String(m.content || '')).length, 0);
+    const total = msgs.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length), 0);
     const threshold = this.config.getNum('context', 'compress_threshold_chars') || 80000;
     const budget = this.compressionBudget(msgs);
     if (total < threshold && budget.estimatedTokens < budget.triggerTokens) return;
     const originalMessageCount = msgs.length;
-    const keepFirst = 1;
     const configuredKeepLast = this.config.getNum('context', 'keep_recent_messages') || 10;
-    if (msgs.length <= keepFirst + 1) return;
+    if (msgs.length <= 1) return;
 
-    const recentBudget = Math.max(64, budget.targetTokens - budget.summaryTokens);
+    // Reserve room for the one-time post-compression continuation anchor so
+    // adding it cannot push a near-limit request back over the target budget.
+    const continuationAnchorTokens = this.estimateContextTokens([this.postCompressionContinuationMessage()]);
+    const recentBudget = Math.max(64, budget.targetTokens - budget.summaryTokens - continuationAnchorTokens);
     const recent = this.recentContextSuffix(msgs, configuredKeepLast, recentBudget);
-    const recentStart = Math.max(keepFirst, msgs.length - recent.length);
-    if (recentStart <= keepFirst) return;
+    const recentStart = Math.max(0, msgs.length - recent.length);
+    if (recentStart <= 0) return;
 
-    const omitted = recentStart - keepFirst;
-    const middle = msgs.slice(keepFirst, recentStart);
-    const compression = await this.buildCompressionSummary(middle, total, budget, provider, signal);
+    // The first history item is usually the first user task, not foundational
+    // context. Keeping it forever makes an old task more salient after every
+    // compaction. Foundational rules are rebuilt by buildSystemPrompt(); the
+    // historical prefix is therefore summarized as a whole.
+    const middle = msgs.slice(0, recentStart);
+    const currentInstruction = this.latestUserHistoryText(recent);
+    const compression = await this.buildCompressionSummary(
+      middle,
+      total,
+      budget,
+      provider,
+      signal,
+      compressionModel || this.activeModelName(),
+      currentInstruction,
+    );
     if (signal?.aborted) return;
-    const compressed: Array<Record<string, unknown>> = msgs.slice(0, keepFirst);
-    compressed.push({
+    const compressed: Array<Record<string, unknown>> = [{
       role: 'system',
       content: compression.summary,
-    });
+    }];
+    compressed.push(this.postCompressionContinuationMessage());
     compressed.push(...recent);
+    const imageCompacted = this.compactHistoricalImages(compressed);
     msgs.length = 0;
-    msgs.push(...compressed);
+    msgs.push(...imageCompacted);
     this.lastCompression = {
       at: new Date().toISOString(),
       originalMessages: originalMessageCount,
-      compressedMessages: compressed.length,
+      compressedMessages: imageCompacted.length,
       originalChars: total,
       summary: compression.summary,
       model: compression.model,
@@ -4103,6 +4305,8 @@ export class Agent {
     budget: { maxTokens: number; targetTokens: number; summaryTokens: number },
     provider?: LLMProvider | null,
     signal?: AbortSignal,
+    compressionModel?: string,
+    currentInstruction = '',
   ): Promise<{ summary: string; model: string; fallback: boolean }> {
     const workspacePath = this.workspace.current?.path || this.rootPath;
     const meta = [
@@ -4110,32 +4314,39 @@ export class Agent {
       `Mode: ${this.modeName()}`,
       `Model: ${this.model}`,
       `Intelligence: ${this.intelligence}`,
-      this.goal ? `Goal: ${this.goal.objective}` : '',
-      this.goal ? `Goal paused: ${this.goal.paused}` : '',
+      this.goal ? `Explicit goal: ${this.goal.objective}` : '',
+      this.goal ? `Explicit goal status: ${this.goal.paused ? 'paused' : 'active'}` : '',
       this.flow ? `Flow: ${this.flow.name} @ ${this.flowPc}` : '',
-      this.workspaceGoalItems.length ? `Goal items: ${this.workspaceGoalItems.map(i => `${i.done ? '[x]' : '[ ]'} ${i.text}`).join('; ')}` : '',
+      this.workspaceGoalItems.length ? `Tracked goal items: ${this.workspaceGoalItems.map(i => `${i.done ? '[done]' : '[unfinished]'} ${i.text}`).join('; ')}` : '',
+      this.conversationPlan.items.length ? `Tracked conversation plan: ${this.conversationPlan.items.map(i => `[${i.status}] ${i.text}`).join('; ')}` : '',
       this.fileDiffs.length ? `Recent file changes: ${this.fileDiffs.map(d => d.path).join('; ')}` : '',
     ].filter(Boolean).join('\n');
     const transcriptLimit = Math.max(1200, Math.min(60000, (budget.targetTokens - budget.summaryTokens) * 4));
     const transcript = middle.map((m, i) => {
       const role = String(m.role || 'unknown');
       const toolName = m.name ? ` ${String(m.name)}` : '';
-      const content = String(m.content || m.reasoning_content || '');
+      const content = this.compressionHistoryContent(m.content || m.reasoning_content || '');
       const toolCalls = Array.isArray(m.tool_calls) ? ` tool_calls=${JSON.stringify(m.tool_calls).slice(0, 800)}` : '';
       return `#${i + 1} [${role}${toolName}]${toolCalls}\n${content}`;
     }).join('\n\n').slice(0, transcriptLimit);
+    const omittedHistoricalImages = middle.some(message => Array.isArray(message.content)
+      && (message.content as Array<Record<string, unknown>>).some(part => part?.type === 'image_url'));
+    const imageOmissionNotice = omittedHistoricalImages ? '\n\n[Historical image attachment omitted after context compression.]' : '';
 
-    const fallbackSummary = this.localCompressionSummary(meta, transcript, middle.length, totalChars);
+    const fallbackSummary = `${this.localCompressionSummary(meta, transcript, middle.length, totalChars)}${imageOmissionNotice}`;
     if (!provider) return { summary: fallbackSummary, model: 'local-fallback', fallback: true };
 
     try {
       const { temperature } = provider.intelligenceConfig('low');
       const system = [
         'You are Newmark context compression.',
-        'Summarize the omitted conversation for a coding agent that must continue working without losing state.',
-        'Preserve concrete facts, objectives, current workspace, mode, model, tool results, files changed, decisions, errors, pending tasks, and user preferences.',
+        'Summarize an older omitted conversation segment for a coding agent. The latest retained user instruction is outside this segment and remains authoritative.',
+        'Classify task state instead of treating every historical user request as still active.',
+        'Preserve an older task as active or unfinished only when the transcript or explicit tracker shows concrete unfinished work and it remains relevant to the latest instruction or a required dependency.',
+        'Completed, superseded, abandoned, and unrelated tasks belong under Completed Or Background Work and must not be revived as the current objective.',
+        'Preserve concrete facts, current workspace, mode, model, tool results, files changed, decisions, errors, constraints, and user preferences.',
         'Do not invent completion. Mark uncertainty explicitly.',
-        'Return concise Markdown with stable headings.',
+        'Return concise Markdown with these stable headings: Active Or Unfinished Work; Completed Or Background Work; Decisions And Constraints; Tool And Verification Evidence; Relevant Files.',
       ].join('\n');
       const prompt = [
         'Compress the following conversation segment.',
@@ -4146,19 +4357,24 @@ export class Agent {
         `Original message count in omitted segment: ${middle.length}`,
         `Original total message chars before compression: ${totalChars}`,
         '',
+        'Latest retained user instruction (authoritative and not part of the omitted transcript):',
+        currentInstruction || '(No retained user text was available; preserve uncertainty and do not promote old tasks without evidence.)',
+        '',
         'Omitted transcript:',
         transcript,
       ].join('\n');
+      const modelName = String(compressionModel || this.activeModelName()).trim();
+      if (!modelName) return { summary: fallbackSummary, model: 'local-fallback', fallback: true };
       const generated = await this.withTimeout(
-        provider.chat(this.activeModelName(), [{ role: 'user', content: prompt }], system, temperature, budget.summaryTokens, signal),
+        provider.chat(modelName, [{ role: 'user', content: prompt }], system, temperature, budget.summaryTokens, signal),
         120000
       );
       const generatedText = String(generated || '').trim();
       if (!generatedText || /^\[LLM Error(?::|\])/i.test(generatedText) || /^LLM Error:/i.test(generatedText)) {
         return { summary: fallbackSummary, model: 'local-fallback', fallback: true };
       }
-      const summary = this.formatCompressionSummary(this.compactSummaryBody(generatedText, budget.summaryTokens), middle.length, totalChars, false);
-      return { summary, model: this.model, fallback: false };
+      const summary = `${this.formatCompressionSummary(this.compactSummaryBody(generatedText, budget.summaryTokens), middle.length, totalChars, false)}${imageOmissionNotice}`;
+      return { summary, model: modelName, fallback: false };
     } catch {
       return { summary: fallbackSummary, model: 'local-fallback', fallback: true };
     }
@@ -4168,18 +4384,47 @@ export class Agent {
     const toolLines = transcript.split('\n').filter(l => l.includes('[tool') || l.includes('tool_calls=')).slice(-20);
     const recentLines = transcript.split('\n').filter(l => l.trim()).slice(-80).join('\n');
     return this.formatCompressionSummary(this.compactSummaryBody([
-      '## Preserved State',
+      '## Active Or Unfinished Work',
+      'Only explicit active goal/plan items in the preserved state below are continuity anchors. Historical requests are not promoted without completion-state evidence.',
       meta || 'No metadata available.',
       '',
-      '## Tool And Execution Evidence',
+      '## Completed Or Background Work',
+      recentLines || 'No historical transcript content available.',
+      '',
+      '## Decisions And Constraints',
+      'Treat the latest retained user message as authoritative. Continue older unfinished work only when it is relevant or required.',
+      '',
+      '## Tool And Verification Evidence',
       toolLines.length ? toolLines.join('\n') : 'No explicit tool evidence found in omitted segment.',
       '',
-      '## Conversation Summary',
-      recentLines || 'No transcript content available.',
-      '',
-      '## Pending Work',
-      'Continue from the latest visible messages. Treat this local fallback as incomplete if details are missing.',
+      '## Relevant Files',
+      'Use file paths from the preserved state and transcript only when the current task makes them relevant.',
     ].join('\n'), Math.max(96, Math.min(1600, Math.floor(this.contextMaxTokens() * 0.12)))), messageCount, totalChars, true);
+  }
+
+  private latestUserHistoryText(messages: Array<Record<string, unknown>>): string {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index];
+      if (String(message?.role || '') !== 'user') continue;
+      const content = message.content;
+      const text = Array.isArray(content)
+        ? content.filter(part => part && typeof part === 'object' && String((part as Record<string, unknown>).type || '') === 'text')
+          .map(part => String((part as Record<string, unknown>).text || '')).join('\n')
+        : String(content || '');
+      if (text.trim()) return text.trim().slice(0, 2_000);
+    }
+    return '';
+  }
+
+  private compressionHistoryContent(content: unknown): string {
+    if (!Array.isArray(content)) return String(content || '');
+    return content.map(part => {
+      if (!part || typeof part !== 'object') return String(part || '');
+      const record = part as Record<string, unknown>;
+      if (record.type === 'text') return String(record.text || '');
+      if (record.type === 'image_url') return '[Historical image attachment omitted after context compression.]';
+      return JSON.stringify(record).slice(0, 800);
+    }).filter(Boolean).join('\n');
   }
 
   private compactSummaryBody(body: string, tokenBudget: number): string {
@@ -4324,8 +4569,10 @@ export class Agent {
       `- Agent terminal timeout: bash accepts per-call timeout_ms; timeout_ms=0 requests no limit; terminal.interrupt_timeout_ms=${this.config.getNum('terminal', 'interrupt_timeout_ms')} is a nonzero upper cap, and 0 means no cap.`,
       `- Automation: automation_create/list/update/toggle/delete manage persisted schedules through the active Newmark scheduler when available; Plan may only list automations, and subagents cannot manage automation.`,
       '- Memory Lab exists and provides persistent memory.',
+      '- A memory_lab_update or memory_lab_reindex call is unfinished until its awaited tool result contains rebuildReceipt.completed=true. The completion receipt is represented by the tool activity inside the current Build block and should not be repeated as a separate completion message.',
       `- Skills and subagents: skill_download installs offline SKILL.md folders; only enabled skills are disclosed in the system prompt; task creates constrained subagents tracked in agent state.`,
       `- Visible output contract: assistant replies are sanitized before display to remove hidden-reasoning markers. ${visibleOutputContract}`,
+      '- During Build work, before the first tool call and between materially different tool phases, emit a concise public progress explanation of what you are checking or changing and why. This is visible commentary, not hidden chain-of-thought. Do not wait until the final answer to explain the work.',
     ].join('\n');
   }
 

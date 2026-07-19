@@ -288,7 +288,7 @@ function verifyDesktopContracts(): void {
   ok(!languageUiSource.includes('window.loadFileTree(')
     && rightTabSource.includes("if (tab === 'file-tree') window.loadFileTree()")
     && uiHtml.includes("if (opening && state.rightTab === 'file-tree') window.loadFileTree()"), 'file tree does no startup/language-change I/O and loads on explicit tab or sidebar activation');
-  const flowEditorStart = uiHtml.indexOf('window.showFlowEditor = function()');
+  const flowEditorStart = uiHtml.indexOf('window.showFlowEditor = function(');
   const flowEditorEnd = uiHtml.indexOf('function renderFlowItem', flowEditorStart);
   const flowEditorSource = flowEditorStart >= 0 && flowEditorEnd > flowEditorStart
     ? uiHtml.slice(flowEditorStart, flowEditorEnd)

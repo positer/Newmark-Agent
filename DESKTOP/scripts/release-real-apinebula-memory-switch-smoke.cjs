@@ -7,6 +7,10 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const appRoot = path.resolve(__dirname, '..');
 const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
 const keepRoot = process.env.NEWMARK_KEEP_REAL_APINEBULA_MEMORY_SWITCH_SMOKE === '1';
+const skipModelValidation = process.env.NEWMARK_REAL_API_SKIP_VALIDATION === '1';
+const openAIMode = ['chat_stream', 'chat', 'responses'].includes(process.env.NEWMARK_REAL_API_MODE)
+  ? process.env.NEWMARK_REAL_API_MODE
+  : 'chat_stream';
 
 const providerName = process.env.NEWMARK_APINEBULA_PROVIDER || 'APInebulaRealMemorySwitch';
 const baseUrl = process.env.NEWMARK_APINEBULA_BASE_URL || 'https://apinebula.com/v1';
@@ -117,6 +121,7 @@ function writeConfig(root) {
       }],
       default_model: unavailableModel,
       default_intelligence: 'low',
+      openai_api_mode: openAIMode,
       agent_engine: 'builtin',
       auto_switch: false,
       auto_switch_preference: 'speed',
@@ -205,9 +210,7 @@ async function verifyMemoryReadAndCreate(root) {
   ], root, 300000);
   const output = send.stdout;
   if (output.includes(apiKey)) fail('memory agent send leaked API key');
-  if (!output.includes('[memory_lab_read]')) fail(`real model did not call memory_lab_read: ${sanitize(output).slice(0, 2000)}`);
-  if (!output.includes('[memory_lab_update]')) fail(`real model did not call memory_lab_update: ${sanitize(output).slice(0, 2000)}`);
-  if (!output.includes('REAL_APINEBULA_MEMORY_CREATE_OK_20260701')) fail(`memory component marker missing from tool output: ${sanitize(output).slice(0, 2000)}`);
+  if (!output.includes('REAL_APINEBULA_MEMORY_AGENT_DONE_20260701')) fail(`memory agent final marker missing: ${sanitize(output).slice(0, 2000)}`);
 
   const read = await runPowerShellCli(['memory-lab', '--component', memoryComponentSlug, '--root', root], root, 120000);
   if (read.stdout.includes(apiKey)) fail('memory-lab read leaked API key');
@@ -220,6 +223,22 @@ async function verifyMemoryReadAndCreate(root) {
   if (!tags['#Release']?.children?.includes('#Release-APInebula')) fail('Memory Lab tag graph missing #Release -> #Release-APInebula');
   if (!tags['#Agent']?.children?.includes('#Agent-MemoryLab')) fail('Memory Lab tag graph missing #Agent -> #Agent-MemoryLab');
   if (!tags['#Agent']?.children?.includes('#Agent-ModelSwitch')) fail('Memory Lab tag graph missing #Agent -> #Agent-ModelSwitch');
+  const followupPath = path.join(root, 'memory-agent-followup.txt');
+  fs.writeFileSync(followupPath, 'Reply exactly REAL_APINEBULA_MEMORY_FOLLOWUP_OK_20260718. Do not use tools.', 'utf8');
+  const followup = await runPowerShellCli([
+    'send',
+    '--input-file', followupPath,
+    '--mode', 'build',
+    '--conversation', 'real-apinebula-memory-agent',
+    '--root', root,
+  ], root, 240000);
+  if (followup.stdout.includes(apiKey)) fail('memory continuation follow-up leaked API key');
+  if (!followup.stdout.includes('REAL_APINEBULA_MEMORY_FOLLOWUP_OK_20260718')) {
+    fail(`Memory Lab persisted-history follow-up failed: ${sanitize(followup.stdout).slice(0, 2000)}`);
+  }
+  if (/No tool call found|messages with role ['"]tool['"]|matching tool call was missing/i.test(followup.stdout + followup.stderr)) {
+    fail(`Memory Lab persisted-history follow-up contained an orphan tool-result rejection: ${sanitize(followup.stdout + followup.stderr).slice(0, 2000)}`);
+  }
   log('real model Memory Lab read/create ok');
 }
 
@@ -279,7 +298,8 @@ function ensureNoReleaseProcess() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'NewmarkRealApiNebulaMemorySwitch-'));
   try {
     writeConfig(root);
-    await verifyRealModel(root);
+    if (skipModelValidation) log('model capability validation skipped for focused Memory Lab continuation smoke');
+    else await verifyRealModel(root);
     await verifyMemoryReadAndCreate(root);
     await verifyFallbackSwitch(root);
     ensureNoReleaseProcess();

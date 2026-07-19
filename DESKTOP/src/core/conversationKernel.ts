@@ -47,7 +47,7 @@ export interface ConversationKernelRunOptions {
 
 export interface ConversationKernelRunResult {
   tokens: Array<{ type: string; text: string }>;
-  diffs: Array<{ path: string; old: number; new: number }>;
+  diffs: Array<{ path: string; old: number; new: number; oldContent: string; newContent: string }>;
   mode: AgentMode;
   model: string;
   status: string;
@@ -798,6 +798,7 @@ export class ConversationKernel {
         path: target.workspace.path,
         isInternal: target.workspace.isInternal,
         hostBinding: '',
+        conversationStatePrefix: target.workspace.conversationStatePrefix,
         icon: '',
         kind: target.workspace.kind === 'ssh' ? 'ssh' : 'local',
       };
@@ -846,7 +847,13 @@ export class ConversationKernel {
     this.refreshHostIfActive(runtime.target);
     return {
       tokens: tokens.map(t => ({ type: t.type, text: t.text })),
-      diffs: runtime.runner.fileDiffs.map(d => ({ path: d.path, old: changedLineCount(d.oldContent), new: changedLineCount(d.newContent) })),
+      diffs: runtime.runner.fileDiffs.map(d => ({
+        path: d.path,
+        old: changedLineCount(d.oldContent),
+        new: changedLineCount(d.newContent),
+        oldContent: d.oldContent,
+        newContent: d.newContent,
+      })),
       mode: runtime.runner.mode,
       model: runtime.runner.model,
       status: runtime.runner.status,
@@ -1030,6 +1037,7 @@ export class ConversationKernel {
       path: workspace.path,
       isInternal: workspace.isInternal,
       kind: workspace.kind,
+      conversationStatePrefix: workspace.conversationStatePrefix,
     } : null;
   }
 

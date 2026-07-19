@@ -106,6 +106,7 @@
     "dist:windows-release": "npm run build:clean && node scripts/dist-portable.cjs"
   },
   "build": {
+    "afterPack": "scripts/after-pack-win-icon.cjs",
     "msiProjectCreated": "./scripts/patch-msi-project.cjs",
     "appId": "ai.newmark.agent",
     "productName": "Newmark Agent",

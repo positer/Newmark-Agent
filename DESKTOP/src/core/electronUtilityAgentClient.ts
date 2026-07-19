@@ -263,6 +263,7 @@ public static class NewmarkProcessSnapshot {
         if (error == ERROR_INVALID_PARAMETER) return PROCESS_ABSENT;
         throw new System.ComponentModel.Win32Exception(error);
       }
+      if (exit.High != 0 || exit.Low != 0) return PROCESS_ABSENT;
       ulong value = ((ulong)creation.High << 32) | creation.Low;
       return value.ToString(System.Globalization.CultureInfo.InvariantCulture);
     } finally { CloseHandle(process); }

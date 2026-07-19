@@ -68,7 +68,7 @@ async function verifyCliContract(root: string): Promise<void> {
   assert.strictEqual(wrongType.exitCode, 2, 'wrong JSON types are rejected');
   assert.match(String(parseEnvelope(wrongType).error || ''), /content|string/i);
 
-  const unknownEnum = await captureCli(root, ['tool', 'computer_use', JSON.stringify({ action: 'launch_missiles' }), '--root', root]);
+  const unknownEnum = await captureCli(root, ['tool', 'terminal_takeover', JSON.stringify({ action: 'launch_missiles' }), '--root', root]);
   assert.strictEqual(unknownEnum.exitCode, 2, 'unknown enum values are rejected');
   assert.match(String(parseEnvelope(unknownEnum).error || ''), /action|enum/i);
 

@@ -550,21 +550,20 @@ async function stopPackagedRun(child, cdp) {
     })`, 30_000, 'alpha runtime running');
     await waitFor(cdp, `isCurrentConversationRunning() === true`, 15_000, 'alpha runtime visible to Guide UI');
     const guideUiSubmission = await evaluate(cdp, `(async () => {
-      const before = new Set(Array.from(document.querySelectorAll('.chat-msg[data-client-message-id]')).map(node => node.getAttribute('data-client-message-id')));
       const prompt = document.querySelector('#prompt');
       prompt.value = 'DEV009_GUIDE_INSERTED';
       prompt.dispatchEvent(new Event('input', { bubbles: true }));
-      await window.sendMessage('guide');
-      const row = Array.from(document.querySelectorAll('.chat-msg[data-client-message-id]')).find(node => !before.has(node.getAttribute('data-client-message-id')));
-      return row ? {
-        clientMessageId: row.getAttribute('data-client-message-id'),
-        status: row.getAttribute('data-guide-status'),
-        text: row.querySelector('.msg-body')?.textContent || ''
+      const result = await window.sendMessage('guide');
+      const receipt = result && result.guideReceipt;
+      return receipt ? {
+        clientMessageId: receipt.clientMessageId || '',
+        status: receipt.status || '',
+        text: receipt.content || ''
       } : null;
     })()`);
     const guideClientMessageId = String(guideUiSubmission?.clientMessageId || '');
     if (!guideClientMessageId || !String(guideUiSubmission?.text || '').includes('DEV009_GUIDE_INSERTED')) {
-      fail(`Guide UI submission did not create an optimistic row: ${JSON.stringify(guideUiSubmission)}`);
+      fail(`Guide UI submission did not return a target-bound receipt: ${JSON.stringify(guideUiSubmission)}`);
     }
     const guideReceipt = await waitFor(cdp, `window.api.getState(${js(targetA)}).then(s => {
       const guide = (s.workRuns || []).flatMap(run => run.guides || []).find(item => item.clientMessageId === ${js(guideClientMessageId)});
@@ -576,11 +575,14 @@ async function stopPackagedRun(child, cdp) {
       const snapshot = await window.api.getState(${js(targetA)});
       syncWorkRunsSnapshot(snapshot.workRuns || [], ${js(targetA)});
       renderChatMessages(snapshot.chatMessages || []);
+      const events = (snapshot.workRuns || []).flatMap(run => run.events || []).filter(event =>
+        String(event.clientMessageId || event.guide?.clientMessageId || '') === ${js(guideClientMessageId)});
+      const body = document.querySelector('#chat-area')?.innerText || '';
       const rows = Array.from(document.querySelectorAll('.chat-msg[data-client-message-id=${JSON.stringify(guideClientMessageId)}]'));
-      return rows.map(row => ({ status: row.getAttribute('data-guide-status'), text: row.querySelector('.msg-body')?.textContent || '' }));
+      return { events, body, separateRows: rows.length };
     })()`);
-    if (guideAfterRedraw.length !== 1 || !['accepted', 'deferred'].includes(String(guideAfterRedraw[0]?.status || ''))
-      || !String(guideAfterRedraw[0]?.text || '').includes('DEV009_GUIDE_INSERTED')) {
+    if (!guideAfterRedraw.events?.length || !String(guideAfterRedraw.body || '').includes('DEV009_GUIDE_INSERTED')
+      || guideAfterRedraw.separateRows !== 0) {
       fail(`Guide disappeared after snapshot redraw: ${JSON.stringify(guideAfterRedraw)}`);
     }
 
@@ -655,13 +657,17 @@ async function stopPackagedRun(child, cdp) {
       const snapshot = await window.api.getState(${js(targetA)});
       syncWorkRunsSnapshot(snapshot.workRuns || [], ${js(targetA)});
       renderChatMessages(snapshot.chatMessages || []);
-      return Array.from(document.querySelectorAll('.chat-msg[data-client-message-id=${JSON.stringify(guideClientMessageId)}]')).map(row => ({
-        status: row.getAttribute('data-guide-status'),
-        text: row.querySelector('.msg-body')?.textContent || ''
-      }));
+      const events = (snapshot.workRuns || []).flatMap(run => run.events || []).filter(event =>
+        String(event.clientMessageId || event.guide?.clientMessageId || '') === ${js(guideClientMessageId)});
+      return {
+        events,
+        body: document.querySelector('#chat-area')?.innerText || '',
+        separateRows: document.querySelectorAll('.chat-msg[data-client-message-id=${JSON.stringify(guideClientMessageId)}]').length
+      };
     })()`);
-    if (guideAfterAppliedRedraw.length !== 1 || guideAfterAppliedRedraw[0]?.status !== 'applied'
-      || !String(guideAfterAppliedRedraw[0]?.text || '').includes('DEV009_GUIDE_INSERTED')) {
+    if (!guideAfterAppliedRedraw.events?.some(event => String(event.guide?.status || event.status || '').toLowerCase() === 'applied')
+      || !String(guideAfterAppliedRedraw.body || '').includes('DEV009_GUIDE_INSERTED')
+      || guideAfterAppliedRedraw.separateRows !== 0) {
       fail(`Applied Guide was duplicated after snapshot reconciliation: ${JSON.stringify(guideAfterAppliedRedraw)}`);
     }
     if (/reasoning_content|thinking_delta|<think>/i.test(alphaJson)) fail('Hidden reasoning leaked into snapshot/workRuns');
@@ -671,13 +677,35 @@ async function stopPackagedRun(child, cdp) {
       const keys = Object.keys(event || {});
       const expected = event.type === 'tool_call' ? `Using tool ${event.toolName}.` : `Tool ${event.toolName} completed.`;
       return event.content !== expected
-        || keys.some(key => /^(?:toolArgs|toolCallId|args|arguments|command|result)$/i.test(key));
+        || keys.some(key => /^(?:toolCallId|args|arguments|command|result)$/i.test(key))
+        || (event.type === 'tool_result' && keys.includes('toolArgs'));
     })) fail(`Tool work events exposed implementation details: ${JSON.stringify(alphaToolEvents).slice(0, 4000)}`);
+    if (!alphaToolEvents.filter(event => event.type === 'tool_call').every(event => typeof event.toolArgs === 'string' && event.toolArgs.length > 0)) {
+      fail(`Tool call details were not retained for the Build fold: ${JSON.stringify(alphaToolEvents).slice(0, 4000)}`);
+    }
     const completedRun = alpha.workRuns.find(run => run.status === 'completed');
-    if (!completedRun || completedRun.expanded !== false) fail(`Completed work run did not auto-collapse: ${JSON.stringify(alpha.workRuns)}`);
+    if (!completedRun || completedRun.expanded !== true) fail(`Completed work run did not retain its visible Build process: ${JSON.stringify(alpha.workRuns)}`);
+    const completedRunToggle = await evaluate(cdp, `(() => {
+      const node = Array.from(document.querySelectorAll('.conversation-work-run')).find(item => item.getAttribute('data-run-id') === ${js(completedRun.runId)});
+      const button = node && node.querySelector('.conversation-work-run-head');
+      if (!button) return null;
+      const before = node.classList.contains('expanded');
+      button.click();
+      const collapsed = node.classList.contains('collapsed');
+      const refreshedButton = node.querySelector('.conversation-work-run-head');
+      if (!refreshedButton) return { before, collapsed, expandedAgain: false };
+      refreshedButton.click();
+      return { before, collapsed, expandedAgain: node.classList.contains('expanded') };
+    })()`);
+    if (!completedRunToggle?.before || !completedRunToggle?.collapsed || !completedRunToggle?.expandedAgain) {
+      fail(`Completed work run cannot be folded and reopened: ${JSON.stringify(completedRunToggle)}`);
+    }
     const beta = await runtimeState(cdp, targetB);
     if (JSON.stringify(beta).includes('DEV009_BROWSER_USE_DONE')) fail(`Cross-workspace snapshot contamination detected: ${JSON.stringify(beta).slice(0, 6000)}`);
-    if (JSON.stringify(beta.workRuns || []).includes('DEV009_FORCE_STOP_SHOULD_NOT_COMPLETE')) fail('Bash command/result details leaked into the public work run');
+    const betaEvents = (beta.workRuns || []).flatMap(run => run.events || []);
+    const stoppedMarkerOutsideCallArgs = betaEvents.some(event =>
+      event.type !== 'tool_call' && JSON.stringify(event).includes('DEV009_FORCE_STOP_SHOULD_NOT_COMPLETE'));
+    if (stoppedMarkerOutsideCallArgs) fail('A force-stopped Bash command leaked a result or final response into the public work run');
     if (beta.runtime?.running || beta.runtime?.stopRequested) fail(`Beta runtime did not recover idle: ${JSON.stringify(beta.runtime)}`);
 
     const browserSnapshot = await evaluate(cdp, `window.api.browserControl({ action: 'snapshot', maxChars: 5000 })`);
@@ -688,10 +716,10 @@ async function stopPackagedRun(child, cdp) {
     await evaluate(cdp, `window.syncBackendConversation && window.syncBackendConversation()`);
     try {
       await waitFor(cdp, `(() => {
-        const run = document.querySelector('.conversation-work-run.collapsed');
+        const run = document.querySelector('.conversation-work-run');
         const title = run?.querySelector('.conversation-work-run-title')?.textContent || '';
         return run && /Processed|已处理/.test(title) && /\\d+[sm秒分]/.test(title) ? title : '';
-      })()`, 30_000, 'collapsed completed work duration');
+      })()`, 30_000, 'completed work duration');
     } catch (error) {
       const workRunDiagnostic = await evaluate(cdp, `(() => ({
         currentWorkspaceId: state.currentWorkspaceId,
@@ -705,11 +733,18 @@ async function stopPackagedRun(child, cdp) {
       }))()`);
       fail(`${error instanceof Error ? error.message : String(error)}; ui=${JSON.stringify(workRunDiagnostic).slice(0, 8000)}`);
     }
-    await evaluate(cdp, `document.querySelector('.conversation-work-run.collapsed .conversation-work-run-head')?.click(); true`);
-    await waitFor(cdp, `!!document.querySelector('.conversation-work-run.expanded .conversation-work-run-body')`, 15_000, 'work run re-expanded');
-    await waitFor(cdp, `document.querySelector('.conversation-work-run.expanded .conversation-work-run-body')?.textContent?.includes('DEV009_BROWSER_USE_DONE')`, 15_000, 'public streamed natural-language work text');
+    await waitFor(cdp, `!!document.querySelector('.conversation-work-run.expanded .conversation-work-run-body')`, 15_000, 'completed work run remains expanded');
+    await waitFor(cdp, `(() => {
+      const body = document.querySelector('.conversation-work-run.expanded .conversation-work-run-body')?.textContent || '';
+      const chat = document.querySelector('#chat-area')?.textContent || '';
+      return !body.includes('DEV009_BROWSER_USE_DONE') && chat.includes('DEV009_BROWSER_USE_DONE');
+    })()`, 15_000, 'final response rendered once below the Build process');
     await evaluate(cdp, `document.querySelector('.conversation-work-run.expanded .conversation-work-run-head')?.click(); true`);
     await waitFor(cdp, `!!document.querySelector('.conversation-work-run.collapsed')`, 15_000, 'work run re-collapsed');
+    await evaluate(cdp, `document.querySelector('.conversation-work-run.collapsed .conversation-work-run-head')?.click(); true`);
+    await waitFor(cdp, `!!document.querySelector('.conversation-work-run.expanded .conversation-work-run-body')`, 15_000, 'work run re-expanded');
+    await evaluate(cdp, `document.querySelector('.conversation-work-run.expanded .conversation-work-run-head')?.click(); true`);
+    await waitFor(cdp, `!!document.querySelector('.conversation-work-run.collapsed')`, 15_000, 'work run finally collapsed');
     log('work-run folding ready');
     const collapsedWorkRun = await evaluate(cdp, `(() => {
       const run = document.querySelector('.conversation-work-run.collapsed');

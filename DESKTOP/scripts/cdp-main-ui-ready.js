@@ -3,9 +3,21 @@
 const PROMOTED_MAIN_UI_EXPRESSION = `(() => {
   const prompt = document.querySelector('#prompt');
   return document.readyState === 'complete'
+    && document.visibilityState === 'visible'
     && !!window.api
     && !!prompt
+    && !prompt.disabled
     && !prompt.readOnly
+    && !document.documentElement.classList.contains('startup-prewarm')
+    && !document.querySelector('#startup-cover');
+})()`;
+
+const PROMOTED_VISIBLE_UI_EXPRESSION = `(() => {
+  const prompt = document.querySelector('#prompt');
+  return document.readyState === 'complete'
+    && document.visibilityState === 'visible'
+    && !!window.api
+    && !!prompt
     && !document.documentElement.classList.contains('startup-prewarm')
     && !document.querySelector('#startup-cover');
 })()`;
@@ -23,11 +35,14 @@ async function waitForPromotedMainUi(cdp, options = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastValue;
   let lastError = '';
+  const expression = options.allowDisabledPrompt === true
+    ? PROMOTED_VISIBLE_UI_EXPRESSION
+    : PROMOTED_MAIN_UI_EXPRESSION;
   while (Date.now() < deadline) {
     try {
       const remaining = Math.max(1, deadline - Date.now());
       const result = await cdp.call('Runtime.evaluate', {
-        expression: PROMOTED_MAIN_UI_EXPRESSION,
+        expression,
         awaitPromise: true,
         returnByValue: true,
       }, Math.min(5_000, remaining));
@@ -48,5 +63,6 @@ async function waitForPromotedMainUi(cdp, options = {}) {
 
 module.exports = {
   PROMOTED_MAIN_UI_EXPRESSION,
+  PROMOTED_VISIBLE_UI_EXPRESSION,
   waitForPromotedMainUi,
 };

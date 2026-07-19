@@ -521,11 +521,22 @@ function verifyExactlyOnceAndV3Persistence(): void {
 
     agent.recordGuideReceipt(receipt(target, 'accepted'));
     agent.recordGuideReceipt(receipt(target, 'applied'));
+    assert.equal(agent.setConversationWorkRunExpanded('run-guide-test', false), true,
+      'a running work run accepts a persisted collapse preference');
+    assert.equal(agent.workRuns[0].expanded, false,
+      'the running work run remains collapsed until the user expands it');
+    assert.equal(agent.setConversationWorkRunExpanded('run-guide-test', true), true,
+      'a running work run can be expanded again');
     agent.emitWorkEvent({ type: 'status', content: '<think>hidden chain</think>Public progress\nreasoning_content: must-not-persist' });
     agent.emitWorkEvent({ type: 'thinking_delta', content: 'hidden delta must-not-persist' } as never);
     agent.emitWorkEvent({ type: 'status', content: 'Public progress only.' });
     agent.emitWorkEvent({ type: 'done', content: 'Response complete.', timestamp: '2026-07-13T00:01:05.000Z' });
-    agent.setConversationWorkRunExpanded('run-guide-test', true);
+    assert.equal(agent.workRuns[0].expanded, true,
+      'a completed work run remains expanded so its public transcript stays visible');
+    assert.equal(agent.setConversationWorkRunExpanded('run-guide-test', false), true,
+      'a completed work run can still be folded manually');
+    assert.equal(agent.setConversationWorkRunExpanded('run-guide-test', true), true,
+      'a manually folded completed work run can be expanded again');
     agent.workRuns[0].events.push({
       id: 'legacy-hidden-reasoning-event',
       conversationId: 'default',
@@ -587,8 +598,10 @@ function verifyExactlyOnceAndV3Persistence(): void {
     assert.equal(stored.version, 3);
     assert.ok(!/<think>|thinking_delta|reasoning(?:_content)?|hidden delta|legacy hidden/i.test(raw),
       'hidden reasoning event types and marked content never enter state.json');
-    assert.doesNotMatch(raw, /PRIVATE_COMMAND_BODY|PRIVATE_PATH|PRIVATE_TOOL_RESULT_BODY|private-call-id/,
-      'legacy and current work runs retain only the tool name, never tool arguments, call IDs, commands, paths, or result bodies');
+    assert.match(raw, /PRIVATE_COMMAND_BODY/, 'sanitized command arguments persist for the owning Build activity expansion');
+    assert.match(raw, /PRIVATE_PATH/, 'sanitized path arguments persist for the owning Build activity expansion');
+    assert.doesNotMatch(raw, /PRIVATE_TOOL_RESULT_BODY|private-call-id/,
+      'legacy and current work runs never retain raw result bodies or private call IDs');
     assert.match(raw, /example_tool/, 'the public work run still records which tool was used');
     const runs = Object.values(stored.conversations).flatMap(item => item.workRuns || []);
     assert.equal(runs.length, 3);
@@ -597,7 +610,7 @@ function verifyExactlyOnceAndV3Persistence(): void {
     assert.equal((runs[0].guides as GuideReceipt[]).length, 1, 'Guide receipt updates replace by ID instead of appending duplicates');
     assert.equal((runs[0].guides as GuideReceipt[])[0].status, 'applied');
     assert.equal(runs[1].status, 'force_interrupted');
-    assert.equal(runs[1].expanded, false);
+    assert.equal(runs[1].expanded, true);
     assert.equal(runs[2].status, 'completed');
     assert.deepEqual(agent.chatMessages.filter(message => message.clientMessageId).map(message => message.clientMessageId).sort(), [
       'guide-exactly-once',
@@ -666,17 +679,21 @@ function verifyStatefulHiddenReasoningAndLiveToolArgsSanitization(): void {
     const liveToolEvents = live.filter(event => event.type === 'tool_call' || event.type === 'tool_result');
     assert.equal(liveToolEvents.length, 2);
     assert.ok(liveToolEvents.every(event => event.toolName === 'example'), 'live work events expose the tool name');
-    assert.ok(liveToolEvents.every(event => event.toolArgs === undefined && event.toolCallId === undefined),
-      'live public work events drop tool arguments and private call identifiers at the publication boundary');
-    assert.doesNotMatch(JSON.stringify(liveToolEvents), /LIVE_PRIVATE_COMMAND|LIVE_PRIVATE_PATH|LIVE_PRIVATE_RESULT|live-private-call-id/,
-      'live work events never publish command bodies, paths, arguments, results, or private call IDs');
+    assert.equal(liveToolEvents[0].toolArgs, '{"command":"LIVE_PRIVATE_COMMAND","path":"LIVE_PRIVATE_PATH"}',
+      'live tool calls retain sanitized expandable arguments inside their owning Build event');
+    assert.ok(liveToolEvents.every(event => event.toolCallId === undefined),
+      'live public work events still drop private call identifiers at the publication boundary');
+    assert.doesNotMatch(JSON.stringify(liveToolEvents), /LIVE_PRIVATE_RESULT|live-private-call-id/,
+      'live work events never publish raw tool results or private call IDs');
     const liveSnapshot = agent.getConversationSnapshot('default');
     const snapshotToolEvents = liveSnapshot.workRuns.flatMap(run => run.events)
       .filter(event => event.type === 'tool_call' || event.type === 'tool_result');
     assert.equal(snapshotToolEvents.length, 2,
       'active conversation snapshots read the live work-run state instead of a stale persisted start event');
-    assert.doesNotMatch(JSON.stringify(snapshotToolEvents), /LIVE_PRIVATE_COMMAND|LIVE_PRIVATE_PATH|LIVE_PRIVATE_RESULT|live-private-call-id/,
-      'active snapshots preserve the public tool-name-only boundary');
+    assert.match(JSON.stringify(snapshotToolEvents), /LIVE_PRIVATE_COMMAND/,
+      'active snapshots retain the sanitized tool detail used by the inline Build expansion');
+    assert.doesNotMatch(JSON.stringify(snapshotToolEvents), /LIVE_PRIVATE_RESULT|live-private-call-id/,
+      'active snapshots still exclude raw results and private call IDs');
     const visibleArgs = agent.visibleToolArgs(JSON.stringify({
       api_key: 'secret-key',
       reasoning_content: 'TOP_SECRET_REASONING',
@@ -693,13 +710,13 @@ function verifyStatefulHiddenReasoningAndLiveToolArgsSanitization(): void {
     );
     assert.equal(agent.sanitizeAssistantOutput('<think>unfinished final secret'), '', 'unfinished hidden blocks stay hidden at completion');
     const serializedLive = JSON.stringify(live);
-    assert.doesNotMatch(serializedLive, /never expose|unfinished hidden|split reasoning secret|split thinking secret|reasoning_content|LIVE_PRIVATE_COMMAND|LIVE_PRIVATE_PATH|LIVE_PRIVATE_RESULT|live-private-call-id/i,
-      'stateful hidden reasoning and tool implementation details never cross the live public-work boundary');
+    assert.doesNotMatch(serializedLive, /never expose|unfinished hidden|split reasoning secret|split thinking secret|reasoning_content|LIVE_PRIVATE_RESULT|live-private-call-id/i,
+      'stateful hidden reasoning, raw results, and private call IDs never cross the live public-work boundary');
     assert.match(serializedLive, /visible answer/);
     assert.match(serializedLive, /visible tail/);
     agent.finishConversationWorkRun('hidden-stream-run', 'interrupted');
     const stored = fs.readFileSync(path.join(workspace!.path, 'conversations', 'state.json'), 'utf8');
-    assert.doesNotMatch(stored, /never expose|unfinished hidden|split reasoning secret|split thinking secret|reasoning_content|LIVE_PRIVATE_COMMAND|LIVE_PRIVATE_PATH|LIVE_PRIVATE_RESULT|live-private-call-id/i);
+    assert.doesNotMatch(stored, /never expose|unfinished hidden|split reasoning secret|split thinking secret|reasoning_content|LIVE_PRIVATE_RESULT|live-private-call-id/i);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

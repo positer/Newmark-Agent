@@ -313,11 +313,8 @@ function createFileFixtures(workspacePath) {
   fs.writeFileSync(path.join(workspacePath, 'dev008-script.bat'), '@echo off\r\necho DEV008_BAT_EDITOR_ONLY\r\n', 'utf8');
   fs.writeFileSync(path.join(workspacePath, 'dev008-doc.pdf'), Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n', 'ascii'));
   fs.writeFileSync(path.join(workspacePath, 'dev008-page.html'), '<!doctype html><html><body><h1>DEV008_HTML_BROWSER_OK</h1></body></html>', 'utf8');
-  // Use executable magic behind a neutral extension so the packaged smoke
-  // exercises reveal-only routing without launching an arbitrary OS handler.
-  // Ordinary binary -> default-application routing remains covered by the
-  // deterministic workspaceFileRouter unit suite.
-  fs.writeFileSync(path.join(workspacePath, 'dev008-binary.bin'), Buffer.from([0x4d, 0x5a, 0x00, 0x00, 0x01, 0x02, 0x03]));
+  // External/reveal routes are covered by the side-effect-free router suite.
+  // Packaged assertions must not open Explorer or a default application.
 }
 
 function stopProcessTree(child) {
@@ -392,14 +389,13 @@ async function stopPackagedRun(child, cdp) {
     log('workspace and fixtures ready');
 
     const fileRoutes = {};
-    for (const name of ['dev008-text.txt', 'dev008-script.bat', 'dev008-doc.pdf', 'dev008-page.html', 'dev008-binary.bin']) {
+    for (const name of ['dev008-text.txt', 'dev008-script.bat', 'dev008-doc.pdf', 'dev008-page.html']) {
       fileRoutes[name] = await evaluate(cdp, `window.api.openWorkspaceFile(${JSON.stringify(name)})`, 30000);
     }
     if (fileRoutes['dev008-text.txt']?.kind !== 'editor' || !fileRoutes['dev008-text.txt']?.token) fail(`Text route failed: ${JSON.stringify(fileRoutes['dev008-text.txt'])}`);
     if (fileRoutes['dev008-script.bat']?.kind !== 'editor' || !String(fileRoutes['dev008-script.bat']?.content || '').includes('DEV008_BAT_EDITOR_ONLY')) fail(`BAT route failed: ${JSON.stringify(fileRoutes['dev008-script.bat'])}`);
     if (fileRoutes['dev008-doc.pdf']?.kind !== 'browser' || fileRoutes['dev008-doc.pdf']?.mime !== 'application/pdf' || !/^http:\/\/127\.0\.0\.1:\d+\/pdf\//.test(String(fileRoutes['dev008-doc.pdf']?.url || ''))) fail(`PDF loopback route failed: ${JSON.stringify(fileRoutes['dev008-doc.pdf'])}`);
     if (fileRoutes['dev008-page.html']?.kind !== 'browser' || fileRoutes['dev008-page.html']?.mime !== 'text/html' || !String(fileRoutes['dev008-page.html']?.url || '').startsWith('newmark-preview://')) fail(`HTML route failed: ${JSON.stringify(fileRoutes['dev008-page.html'])}`);
-    if (fileRoutes['dev008-binary.bin']?.kind !== 'reveal') fail(`Executable-magic reveal route failed: ${JSON.stringify(fileRoutes['dev008-binary.bin'])}`);
     log(`file routing ok: ${Object.entries(fileRoutes).map(([name, result]) => `${name}=${result.kind}`).join(', ')}`);
 
     await evaluate(cdp, `window.api.ensureConversation(${JSON.stringify(conversationTarget)})`, 45000);

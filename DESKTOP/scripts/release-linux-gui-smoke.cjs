@@ -178,12 +178,45 @@ async function main() {
     if (!Array.isArray(snapshot.terminalShells) || !snapshot.terminalShells.includes('bash') || snapshot.terminalShells.includes('powershell')) {
       fail(`Unexpected Linux terminal shells: ${JSON.stringify(snapshot.terminalShells)}`);
     }
-    if (!String(snapshot.connected).toLowerCase().includes('bash')) {
-      fail(`Expected visible terminal connected text to mention bash, got ${snapshot.connected}`);
+    const terminalRoundTrip = await evaluate(cdp, `(async () => {
+      const first = await window.api.terminalSpawn('bash');
+      const second = await window.api.terminalSpawn('sh');
+      if (!first?.sessionId || !second?.sessionId) return { error: 'spawn failed', first, second };
+      await window.api.terminalWrite(first.sessionId, "printf 'NEWMARK_BASH_ROUNDTRIP_OK\\n'\\n");
+      await window.api.terminalWrite(second.sessionId, "printf 'NEWMARK_SH_ISOLATION_OK\\n'\\n");
+      const deadline = Date.now() + 10000;
+      let firstBuffer = '', secondBuffer = '';
+      while (Date.now() < deadline) {
+        firstBuffer = String((await window.api.terminalGetBuffer(first.sessionId))?.buffer || '');
+        secondBuffer = String((await window.api.terminalGetBuffer(second.sessionId))?.buffer || '');
+        if (firstBuffer.includes('NEWMARK_BASH_ROUNDTRIP_OK') && secondBuffer.includes('NEWMARK_SH_ISOLATION_OK')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      const isolated = !firstBuffer.includes('NEWMARK_SH_ISOLATION_OK') && !secondBuffer.includes('NEWMARK_BASH_ROUNDTRIP_OK');
+      const killedFirst = await window.api.terminalKill(first.sessionId, 250);
+      const killedSecond = await window.api.terminalKill(second.sessionId, 250);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      return {
+        firstShell: first.shell,
+        secondShell: second.shell,
+        firstMarker: firstBuffer.includes('NEWMARK_BASH_ROUNDTRIP_OK'),
+        secondMarker: secondBuffer.includes('NEWMARK_SH_ISOLATION_OK'),
+        isolated,
+        killedFirst: killedFirst?.ok === true,
+        killedSecond: killedSecond?.ok === true,
+        firstTail: firstBuffer.slice(-300),
+        secondTail: secondBuffer.slice(-300)
+      };
+    })()`, 20000);
+    if (terminalRoundTrip.error || terminalRoundTrip.firstShell !== 'bash' || terminalRoundTrip.secondShell !== 'sh'
+      || !terminalRoundTrip.firstMarker || !terminalRoundTrip.secondMarker || !terminalRoundTrip.isolated
+      || !terminalRoundTrip.killedFirst || !terminalRoundTrip.killedSecond) {
+      fail(`Linux terminal command round trip failed: ${JSON.stringify(terminalRoundTrip)}`);
     }
 
     await captureScreenshot(cdp, screenshotPath);
     log(`snapshot ${JSON.stringify(snapshot)}`);
+    log(`terminal ${JSON.stringify(terminalRoundTrip)}`);
     log('PASS');
   } finally {
     if (cdp?.ws) {

@@ -1,6 +1,7 @@
 import type { Configuration } from 'electron-builder';
 
 const config: Configuration = {
+  afterPack: 'scripts/after-pack-win-icon.cjs',
   appId: 'ai.newmark.agent',
   productName: 'Newmark Agent',
   executableName: 'Newmark Agent',

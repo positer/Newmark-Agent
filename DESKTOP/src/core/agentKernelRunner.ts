@@ -326,6 +326,13 @@ function normalizePublicProviderError(error: unknown, secrets: unknown[] = []): 
     .replace(/^\s*\[Error\]\s*/i, '')
     .trim();
   if (!raw) return 'Provider request failed without diagnostic details.';
+  if (/No tool call found for function call output with call_id|messages with role ['"]tool['"] must be a response to a preceding message with ['"]tool_calls['"]/i.test(raw)) {
+    return 'Provider rejected the tool-result continuation because its matching tool call was missing. Newmark preserved the run for retry.';
+  }
+  if (/PowerShell HTTP fallback failed:/i.test(raw)) {
+    const providerMessage = raw.match(/"message"\s*:\s*"([^"\r\n]{1,500})"/i)?.[1];
+    return providerMessage || 'Provider request failed through the Windows HTTP fallback.';
+  }
   return raw.slice(0, 1_200);
 }
 
@@ -490,10 +497,14 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
           if (!currentProvider || !currentModelName) throw new Error('No resolved model deployment is available.');
           const { temperature, maxTokens } = currentProvider.intelligenceConfig(currentAgent.intelligence);
           const newmarkMessages = fromKernelMessages(context.messages);
+          const requestSystemPrompt = [
+            context.systemPrompt || '',
+            buildRequestTaskFocus(currentAgent, context.messages),
+          ].filter(Boolean).join('\n\n');
           for await (const token of currentProvider.chatStreamWithTools(
             currentModelName,
             newmarkMessages,
-            context.systemPrompt || '',
+            requestSystemPrompt,
             temperature,
             maxTokens,
             toProviderToolDefinitions(context.tools || []),
@@ -540,6 +551,10 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
               if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error('[NewmarkKernel] toolcall-pushed');
               contentIndex++;
             }
+            if (token.type === 'status' && token.text) {
+              currentAgent.emitWorkEvent({ type: 'status', content: token.text });
+              continue;
+            }
           }
           if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error('[NewmarkKernel] provider-loop-complete');
           if (options?.signal?.aborted) {
@@ -582,17 +597,48 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
 async function transformContext(agent: Agent, messages: KernelMessage[], signal?: AbortSignal): Promise<KernelMessage[]> {
   if (signal?.aborted) return messages;
   if (!agent.config.getBool('context', 'auto_compress')) return messages;
+  // Bind compaction to one request-scoped deployment snapshot. Re-reading the
+  // active model after an Auto/fallback transition can pair the wrong model
+  // name with the provider captured for this compaction request.
+  const compressionModel = agent.activeModelName();
   const provider: LLMProvider | null = agent.engineModel();
-  if (!provider) return messages;
+  if (!provider || !compressionModel) return messages;
   // Context compression persists Agent history. Feed it only the public
   // projection so the internal broker call/result and its compact catalog can
   // never be written into conversation state or revived after a reload.
   const newmarkMessages = publicHistoryFromKernelMessages(messages);
   const beforeCompression = JSON.stringify(newmarkMessages);
-  await agent.maybeCompress(newmarkMessages, provider, signal);
+  await agent.maybeCompress(newmarkMessages, provider, signal, compressionModel);
   if (signal?.aborted) return messages;
+  if (agent.estimateContextTokens(newmarkMessages) >= Math.floor(agent.contextWindow(compressionModel).maxTokens * 0.82)) {
+    await agent.maybeCompress(newmarkMessages, null, signal, compressionModel);
+  }
   if (JSON.stringify(newmarkMessages) === beforeCompression) return messages;
   return toKernelMessagesFromHistory(newmarkMessages, agent);
+}
+
+function buildRequestTaskFocus(agent: Agent, messages: KernelMessage[]): string {
+  const latestUser = [...messages].reverse().find(message => message.role === 'user');
+  if (!latestUser || latestUser.role !== 'user') return '';
+  const unfinishedPlan = agent.conversationPlan.items
+    .filter(item => item.status !== 'done');
+  const inProgressCount = unfinishedPlan.filter(item => item.status === 'in_progress').length;
+  const pendingCount = unfinishedPlan.filter(item => item.status === 'pending').length;
+  const continuityAnchors = [
+    agent.goal && !agent.goal.paused ? 'An explicit active Goal is tracked by the runtime.' : '',
+    unfinishedPlan.length ? `The runtime tracks ${unfinishedPlan.length} unfinished plan item(s): ${inProgressCount} in progress and ${pendingCount} pending.` : '',
+  ].filter(Boolean);
+  return [
+    '## Request-Scoped Task Focus',
+    'The latest real user-role message in the request is the current instruction and has highest user-level priority for this provider turn.',
+    'Keep the user content in its original user role; this system block never copies or elevates user-authored text.',
+    'Use older conversation history for facts, decisions, constraints, and continuity, not as a flat backlog.',
+    'If the current instruction asks to continue, resume, finish remaining work, or depends on earlier work, continue the nearest relevant unfinished task and its required dependencies.',
+    'If the current instruction is a new independent task, do not revive completed, superseded, abandoned, or unrelated historical tasks.',
+    'Never assume an older task is complete merely because it is old; use explicit completion evidence and tracked state.',
+    continuityAnchors.length ? `Explicit continuity anchors (supporting state; they do not override a new independent instruction):\n${continuityAnchors.join('\n')}` : 'No explicit goal or unfinished plan tracker is active; infer continuity only from the latest instruction and adjacent conversation state.',
+    'This focus block is request-scoped and must not be copied into persisted conversation history.',
+  ].join('\n');
 }
 
 async function shouldStopAfterTurn(agent: Agent, message: KernelMessage): Promise<boolean> {
@@ -670,9 +716,9 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
         content: `Calling tool ${event.toolName}`,
         toolCallId: event.toolCallId,
         toolName: event.toolName,
+        toolArgs: JSON.stringify(event.args || {}),
       });
       if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error('[NewmarkKernel] tool-work-event-emitted');
-      agent.appendWorkflowMessage(`Calling tool ${event.toolName}`, event.toolName, undefined, false);
       if (process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') console.error('[NewmarkKernel] tool-workflow-appended');
       break;
     }
@@ -691,7 +737,6 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
         toolCallId: event.toolCallId,
         toolName: event.toolName,
       });
-      agent.appendWorkflowMessage(`Tool ${event.toolName} ${outcome}.`, event.toolName, undefined, false);
       break;
     }
     case 'message_end':
@@ -710,8 +755,9 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
         const text = agent.sanitizeAssistantOutput(KernelMessageText(publicMessage));
         const failed = event.message.stopReason === 'error' || agent.isLlmErrorText(text);
         if (!failed) emitBufferedAssistantText(agent, tokens);
+        if (text && !failed) agent.emitWorkEvent({ type: realToolCalls.length ? 'response' : 'final_response', content: text });
         if ((text || realToolCalls.length) && event.message.stopReason !== 'aborted' && !failed) {
-          if (text) agent.chatMessages.push({ role: 'assistant', content: text, mode: agent.modeName(), model: agent.model, timestamp: agent.nowLabel() });
+          if (text && !realToolCalls.length) agent.chatMessages.push({ role: 'assistant', content: text, mode: agent.modeName(), model: agent.model, timestamp: agent.nowLabel() });
           const historyMessage = toHistoryMessage(publicMessage);
           // Keep tool-call metadata, but never replay a hidden-reasoning line
           // that was deliberately removed from the public completed message.
@@ -1028,6 +1074,7 @@ function selectTaskToolDefinitions(task: string, definitions: unknown[]): unknow
   const names = definitions.map(toolDefinitionName);
   const selected = new Set<string>();
   const explicit = new Set<string>();
+  const priority = new Set<string>();
   const include = (...wanted: string[]) => wanted.forEach(name => selected.add(name));
   const includePrefix = (...prefixes: string[]) => names.forEach(name => {
     if (prefixes.some(prefix => name.startsWith(prefix))) selected.add(name);
@@ -1071,7 +1118,10 @@ function selectTaskToolDefinitions(task: string, definitions: unknown[]): unknow
   if (githubIntent) includePrefix('gh_');
   if (sshIntent) include('ssh_workspace');
   if (automationIntent) includePrefix('automation_');
-  if (memoryIntent) includePrefix('memory_lab_');
+  if (memoryIntent) {
+    includePrefix('memory_lab_');
+    names.filter(name => name.startsWith('memory_lab_')).forEach(name => priority.add(name));
+  }
   if (skillIntent) include('skill_download');
   if (flowIntent) includePrefix('flow_');
   if (planIntent) include('linked_plan');
@@ -1088,7 +1138,11 @@ function selectTaskToolDefinitions(task: string, definitions: unknown[]): unknow
   return definitions
     .map((definition, index) => ({ definition, name: names[index] || toolDefinitionName(definition), index }))
     .filter(entry => selected.has(entry.name))
-    .sort((a, b) => Number(explicit.has(b.name)) - Number(explicit.has(a.name)) || a.index - b.index)
+    .sort((a, b) => {
+      const aRank = explicit.has(a.name) ? 0 : priority.has(a.name) ? 1 : 2;
+      const bRank = explicit.has(b.name) ? 0 : priority.has(b.name) ? 1 : 2;
+      return aRank - bRank || a.index - b.index;
+    })
     .map(entry => entry.definition);
 }
 
@@ -1317,7 +1371,6 @@ export function toolResultObjectiveOutcome(result: string): boolean | undefined 
 function shouldTerminateAfterToolResult(name: string): boolean {
   return name === 'flow_run'
     || name.startsWith('automation_')
-    || name.startsWith('memory_lab_')
     || name === 'question';
 }
 
@@ -1476,6 +1529,7 @@ function imagePathToOpenAIContentPart(imagePath: string): Record<string, unknown
 }
 
 export const agentKernelRunnerInternals = {
+  buildRequestTaskFocus,
   fromKernelMessages,
   imagePathToOpenAIContentPart,
   imageMimeForPath,

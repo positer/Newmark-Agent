@@ -33,6 +33,7 @@ function createFixture(): {
   syncGuideMessagesFromWorkRuns(runs: unknown[], target?: Record<string, unknown>): void;
   renderChatMessages(messages: unknown[]): void;
   guideMessagesForTarget(target?: Record<string, unknown>): Record<string, Record<string, unknown>>;
+  dedupeGuideWorkEvents(events: unknown[]): unknown[];
   close(): void;
 } {
   const source = uiScriptSource();
@@ -45,6 +46,10 @@ function createFixture(): {
     'findGuideMessageElement',
     'applyGuideMessageMeta',
     'recordGuideUiMessage',
+    'guideWorkEventKey',
+    'guideWorkEventStatus',
+    'mergeGuideWorkEvent',
+    'dedupeGuideWorkEvents',
     'syncGuideMessagesFromWorkRuns',
     'renderPendingGuideMessages',
     'addMsg',
@@ -71,7 +76,7 @@ function createFixture(): {
     function redactSensitiveText(value) { return String(value || ''); }
     function renderMessageContent(value) { return '<span>' + esc(value) + '</span>'; }
     function messageActionsHtml() { return ''; }
-    function workRunsForTarget() { return []; }
+    function workRunsForTarget() { return state.workRunsByTarget[runtimeKeyFor(activeTarget.workspaceId, activeTarget.conversationId)] || []; }
     function conversationWorkUiState() { return workUi; }
     function resetConversationWorkUi() {}
     function isHiddenWorkflowMessage() { return false; }
@@ -91,6 +96,7 @@ function createFixture(): {
       syncGuideMessagesFromWorkRuns: syncGuideMessagesFromWorkRuns,
       renderChatMessages: renderChatMessages,
       guideMessagesForTarget: guideMessagesForTarget
+      ,dedupeGuideWorkEvents: dedupeGuideWorkEvents
     };
   `);
   const fixture = factory(dom.window, dom.window.document) as ReturnType<typeof createFixture>;
@@ -166,6 +172,40 @@ function main(): void {
     assert.equal(fixture.guideMessagesForTarget(fixture.targetA)[acceptedId], undefined, 'applied Guide leaves the optimistic receipt cache');
     fixture.renderChatMessages(persisted);
     assert.equal(guideRows(fixture.document, acceptedId).length, 1, 'repeated applied snapshots remain exactly once');
+
+    const dedupedEvents = fixture.dedupeGuideWorkEvents([
+      { id: 'optimistic', type: 'guide_accepted', clientMessageId: 'guide-nested-id', content: 'summarize' },
+      { id: 'backend', type: 'guide_accepted', guide: { clientMessageId: 'guide-nested-id', status: 'accepted' }, content: 'summarize' },
+    ]) as Array<Record<string, unknown>>;
+    assert.equal(dedupedEvents.length, 1, 'top-level and nested same-id accepted events merge into one Build row');
+    assert.equal(dedupedEvents[0].id, 'backend', 'the authoritative backend acknowledgement replaces the optimistic event in place');
+
+    const buildOwnedId = 'guide-build-owned';
+    fixture.recordGuideUiMessage({
+      clientMessageId: buildOwnedId,
+      target: fixture.targetA,
+      runId: 'run-build-owned',
+      status: 'accepted',
+      content: 'owned by build',
+    }, fixture.targetA);
+    fixture.state.workRunsByTarget['workspace-a::default'] = [{
+      runId: 'run-build-owned',
+      target: fixture.targetA,
+      guides: [{ clientMessageId: buildOwnedId, status: 'accepted', content: 'owned by build' }],
+      events: [{ type: 'guide_accepted', clientMessageId: buildOwnedId, content: 'owned by build' }],
+    }];
+    fixture.renderChatMessages([]);
+    assert.equal(guideRows(fixture.document, buildOwnedId).length, 0,
+      'a Guide already owned by a Build run never renders as a duplicate standalone user row');
+    fixture.state.workRunsByTarget['workspace-a::default'] = [];
+
+    const appliedEvents = fixture.dedupeGuideWorkEvents([
+      { id: 'accepted', type: 'guide_accepted', clientMessageId: 'guide-one-row', content: 'summarize' },
+      { id: 'applied', type: 'guide_applied', guide: { clientMessageId: 'guide-one-row', status: 'applied' }, content: 'summarize' },
+      { id: 'late-accepted', type: 'guide_accepted', clientMessageId: 'guide-one-row', content: 'summarize' },
+    ]) as Array<Record<string, unknown>>;
+    assert.equal(appliedEvents.length, 1, 'accepted and applied share one Build row for the same Guide id');
+    assert.equal(appliedEvents[0].id, 'applied', 'applied upgrades accepted and a late accepted event cannot downgrade it');
 
     const rejectedId = 'guide-rejected';
     fixture.recordGuideUiMessage({

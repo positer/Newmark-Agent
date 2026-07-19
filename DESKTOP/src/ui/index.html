@@ -61,6 +61,12 @@ try {
   --editor-heading: #79b8ff;
   --editor-code: #9ecbff;
   --editor-punct: #a8b0bd;
+  --review-bg: rgba(18,20,28,.94);
+  --review-row-hover: rgba(255,255,255,.035);
+  --review-add-bg: rgba(56,212,160,.13);
+  --review-add-text: #72e6b5;
+  --review-del-bg: rgba(255,68,68,.13);
+  --review-del-text: #ff9aa2;
 
   /* Accent colors */
   --accent: #5b78ff;
@@ -170,6 +176,12 @@ try {
   --editor-heading: #1d4ed8;
   --editor-code: #0f6b66;
   --editor-punct: #596275;
+  --review-bg: rgba(255,255,255,.82);
+  --review-row-hover: rgba(29,48,92,.055);
+  --review-add-bg: rgba(18,139,87,.12);
+  --review-add-text: #087443;
+  --review-del-bg: rgba(190,35,47,.10);
+  --review-del-text: #b4232f;
   --glass-rgb-1: 255 255 255;
   --glass-rgb-2: 255 255 255;
   --glass-rgb-3: 255 255 255;
@@ -575,6 +587,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 #left.collapsing .left-ws-item .ws-label,
 #left.collapsing .left-ws-item .ws-check,
 #left.collapsing .left-ws-item .ws-pin-btn {
+  margin-left: 0;
   max-width: 0;
   opacity: 0;
   transform: translateX(-6px);
@@ -650,6 +663,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 #left.collapsed .left-ws-item .ws-label,
 #left.collapsed .left-ws-item .ws-check,
 #left.collapsed .left-ws-item .ws-pin-btn {
+  margin-left: 0;
   max-width: 0;
   opacity: 0;
   transform: translateX(-6px);
@@ -792,6 +806,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  margin-left: auto;
 }
 
 .ws-pin-btn:hover,
@@ -994,6 +1009,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   justify-content: center;
   transition: background var(--duration-fast) var(--ease-out-expo);
   flex-shrink: 0;
+  margin-left: auto;
 }
 
 .conv-pin-btn:hover,
@@ -1207,7 +1223,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .native-editor-main { flex:1; min-height:0; display:grid; grid-template-columns:44px minmax(0,1fr); position:relative; overflow:hidden; }
 .editor-gutter { margin:0; padding:10px 8px 10px 0; overflow:hidden; text-align:right; color:var(--text-dim); background:var(--editor-gutter-bg); border-right:1px solid var(--glass-border-1); font:12px/1.55 var(--font-mono); user-select:none; }
 .editor-code-wrap { position:relative; min-width:0; min-height:0; overflow:hidden; }
-.editor-highlight, .editor-ghost, .editor-textarea { position:absolute; inset:0; margin:0; padding:10px 12px; border:0; overflow:auto; white-space:pre; tab-size:2; font:12px/1.55 var(--font-mono); }
+.editor-highlight, .editor-ghost, .editor-textarea { position:absolute; inset:0; margin:0; padding:10px 12px; border:0; overflow-y:auto; overflow-x:hidden; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-all; tab-size:2; font:12px/1.55 var(--font-mono); }
 .editor-highlight { pointer-events:none; color:var(--text); background:transparent; }
 .editor-ghost { display:none; pointer-events:none; z-index:1; color:var(--text); background:var(--editor-bg); }
 .editor-ghost.visible { display:block; }
@@ -1900,6 +1916,16 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   -webkit-overflow-scrolling: touch;
 }
 
+#chat-area:has(> .chat-msg) {
+  background-image:
+    linear-gradient(to bottom, var(--glass-border-1), var(--glass-border-1)),
+    linear-gradient(to bottom, var(--glass-border-1), var(--glass-border-1));
+  background-position: left 32px top, right 32px top;
+  background-repeat: no-repeat;
+  background-size: 1px 100%, 1px 100%;
+  background-attachment: local;
+}
+
 /* Welcome message */
 .welcome-msg {
   text-align: center;
@@ -1941,16 +1967,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   position: relative;
 }
 
-.chat-msg::before {
-  content: "";
-  position: absolute;
-  left: 8px;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--glass-border-1);
-}
-
 .chat-msg::after {
   content: "";
   position: absolute;
@@ -1971,6 +1987,12 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 .chat-msg.user {
   color: var(--text);
+  padding: 8px 28px 8px 0;
+}
+
+.chat-msg.user::after {
+  left: auto;
+  right: 3px;
 }
 
 .chat-msg.assistant {
@@ -2036,6 +2058,9 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .chat-msg.assistant .msg-role { color: var(--accent2); }
 .chat-msg.workflow .msg-role { color: var(--accent); }
 .chat-msg.error .msg-role { color: #ff8888; }
+.chat-msg.user .meta { justify-content: flex-end; text-align: right; }
+.chat-msg.user .msg-body { text-align: right; }
+.chat-msg.user .msg-actions { margin-left: 4px; }
 
 .chat-msg .msg-body {
   color: var(--text);
@@ -2146,16 +2171,28 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 .conversation-work-run {
+  position: relative;
   margin: 5px 0 9px;
-  border: 1px solid var(--glass-border-1);
-  border-radius: var(--radius-md);
-  background: linear-gradient(145deg, rgba(255,255,255,.035), rgba(255,255,255,.012));
-  overflow: hidden;
+  padding-left: 24px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
 }
 
-.conversation-work-run.running {
-  border-color: color-mix(in srgb, var(--accent2) 48%, var(--glass-border-1));
-  box-shadow: 0 0 18px color-mix(in srgb, var(--accent-glow) 45%, transparent);
+.conversation-work-run::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 17px;
+  bottom: 7px;
+  width: 1px;
+  background: var(--glass-border-2);
+}
+
+.conversation-work-run.running::before {
+  background: color-mix(in srgb, var(--accent2) 58%, var(--glass-border-2));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent-glow) 42%, transparent);
 }
 
 .conversation-work-run-head {
@@ -2164,7 +2201,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 8px 11px;
+  padding: 8px 0;
   border: 0;
   background: transparent;
   color: var(--text);
@@ -2173,9 +2210,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   font: 600 12px var(--font);
 }
 
-.conversation-work-run.running .conversation-work-run-head { cursor: default; }
-.conversation-work-run-head:hover { background: rgba(255,255,255,.028); }
-.conversation-work-run.running .conversation-work-run-head:hover { background: transparent; }
+.conversation-work-run-head:hover { color: var(--text-bright); }
 
 .conversation-work-run-chevron {
   width: 8px;
@@ -2190,14 +2225,25 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .conversation-work-run.collapsed .conversation-work-run-chevron { transform: rotate(-45deg); }
 .conversation-work-run-title { flex: 1; min-width: 0; }
 .conversation-work-run-status { color: var(--text-dim); font: 10px var(--font-mono); }
-.conversation-work-run-body { border-top: 1px solid var(--glass-border-1); padding: 8px 10px; }
+.conversation-work-run-body { border: 0; padding: 4px 0 8px; }
 .conversation-work-run.collapsed .conversation-work-run-body { display: none; }
 .conversation-work-run-events { display: flex; flex-direction: column; gap: 6px; }
 .conversation-work-event { display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; align-items: start; color: var(--text-dim); font-size: 11px; line-height: 1.5; }
 .conversation-work-event .nm-icon { margin-top: 1px; color: var(--text-dim); }
-.conversation-work-event.guide { color: var(--text); }
+.conversation-work-event.guide { color: var(--text); padding: 3px 0; }
 .conversation-work-event.error { color: #ff8888; }
 .conversation-work-event-content { min-width: 0; white-space: pre-wrap; word-break: break-word; }
+.conversation-work-event.narrative { display: block; color: var(--text); font-size: 13px; line-height: 1.65; padding: 3px 1px 7px; }
+.conversation-work-event.activity-summary { font-size: 12px; font-weight: 600; padding: 2px 0; }
+.conversation-work-activity { margin: 0; padding: 0; }
+.conversation-work-activity > summary { display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; align-items: start; cursor: pointer; list-style: none; }
+.conversation-work-activity > summary::-webkit-details-marker { display: none; }
+.conversation-work-activity-chevron { width: 7px; height: 7px; margin: 5px 0 0 3px; border-right: 1px solid var(--text-dim); border-bottom: 1px solid var(--text-dim); transform: rotate(-45deg); transition: transform 140ms ease; }
+.conversation-work-activity[open] .conversation-work-activity-chevron { transform: rotate(45deg); }
+.conversation-work-activity-list { display: flex; flex-direction: column; gap: 5px; margin: 5px 0 4px 24px; padding: 0; border: 0; }
+.conversation-work-activity-item { display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; color: var(--text-dim); font-size: 11px; font-weight: 400; line-height: 1.5; }
+.conversation-work-activity-item .nm-icon { margin-top: 1px; }
+.conversation-work-activity-detail { margin-top: 2px; color: color-mix(in srgb, var(--text-dim) 88%, transparent); font: 10px/1.45 var(--font-mono); white-space: pre-wrap; word-break: break-word; }
 .conversation-work-empty { color: var(--text-dim); font-size: 11px; }
 
 .ui-notice-stack {
@@ -2648,22 +2694,22 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   border-radius: 6px;
 }
 
-.work-review { margin:10px 0 8px; border:1px solid var(--glass-border-2); border-radius:8px; background:rgba(18,20,28,.94); overflow:hidden; }
+.work-review { margin:10px 0 8px; border:1px solid var(--glass-border-2); border-radius:8px; background:var(--review-bg); color:var(--text); overflow:hidden; box-shadow:var(--shadow-sm); }
 .work-review-head { min-height:54px; display:grid; grid-template-columns:34px minmax(0,1fr) auto; align-items:center; gap:10px; padding:9px 12px; }
-.work-review-mark { width:32px; height:32px; border-radius:7px; background:rgba(255,255,255,.04); display:flex; align-items:center; justify-content:center; color:var(--text); }
+.work-review-mark { width:32px; height:32px; border-radius:7px; background:var(--glass-bg-1); border:1px solid var(--glass-border-1); display:flex; align-items:center; justify-content:center; color:var(--text); }
 .work-review-title { color:var(--text-bright); font-size:13px; font-weight:650; }
 .work-review-stats { margin-top:1px; font:11px/1.4 var(--font-mono); }
-.work-review-add { color:#35d98a; }
-.work-review-del { color:#ff6b75; margin-left:7px; }
+.work-review-add { color:var(--review-add-text); }
+.work-review-del { color:var(--review-del-text); margin-left:7px; }
 .work-review-actions { display:flex; align-items:center; gap:5px; }
 .work-review-btn { height:28px; padding:0 10px; border:1px solid var(--glass-border-2); border-radius:6px; background:transparent; color:var(--text); cursor:pointer; font:600 11px var(--font); }
-.work-review-btn:hover { background:rgba(255,255,255,.06); border-color:var(--border-hover); }
+.work-review-btn:hover { background:var(--control-hover-bg); border-color:var(--border-hover); }
 .work-review-list { border-top:1px solid var(--glass-border-1); }
 .work-review-file { min-height:34px; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; padding:0 12px; color:var(--text); }
-.work-review-file:hover { background:rgba(255,255,255,.025); }
+.work-review-file:hover { background:var(--review-row-hover); }
 .work-review-path { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:11px var(--font-mono); }
-.work-review-more { width:100%; height:30px; border:0; border-top:1px solid var(--glass-border-1); background:rgba(255,255,255,.025); color:var(--text-dim); cursor:pointer; font:11px var(--font); text-align:left; padding:0 12px; }
-.work-review-more:hover { color:var(--text); background:rgba(255,255,255,.045); }
+.work-review-more { width:100%; height:30px; border:0; border-top:1px solid var(--glass-border-1); background:var(--glass-bg-1); color:var(--text-dim); cursor:pointer; font:11px var(--font); text-align:left; padding:0 12px; }
+.work-review-more:hover { color:var(--text); background:var(--control-hover-bg); }
 .work-review-detail { display:flex; flex-direction:column; gap:6px; }
 .work-review-detail .file-row {
   appearance:none;
@@ -2685,6 +2731,13 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 .work-review-detail .file-row:hover { background:var(--control-hover-bg); border-color:var(--border-hover); }
 .work-review-detail .file-row:focus-visible { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-glow); outline:none; }
+
+.editor-review-deletions { display:none; max-height:32%; overflow:auto; border-bottom:1px solid var(--glass-border-2); background:var(--review-del-bg); color:var(--review-del-text); font:12px/1.55 var(--font-mono); }
+.editor-review-deletions.open { display:block; }
+.editor-review-deletions .review-deleted-line { display:grid; grid-template-columns:42px minmax(0,1fr); min-height:19px; }
+.editor-review-deletions .review-deleted-line::before { content:'-'; text-align:center; user-select:none; opacity:.8; }
+.editor-review-deletions code { white-space:pre-wrap; overflow-wrap:anywhere; padding-right:12px; }
+.editor-review-added-line { display:block; margin:0 -12px; padding:0 12px; background:var(--review-add-bg); color:var(--review-add-text); }
 
 #queue-list {
   max-height: 112px;
@@ -3452,6 +3505,18 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 .provider-card h4 { font-size: 12px; font-weight: 600; color: var(--text-bright); margin-bottom: 6px; }
 .provider-meta { font-size: 11px; color: var(--text-dim); word-break: break-all; }
+.newmark-list { display:flex; flex-direction:column; gap:6px; }
+.newmark-list-row { min-height:42px; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; padding:8px 10px; border:1px solid var(--glass-border-1); border-radius:var(--radius-md); background:var(--glass-bg-1); color:var(--text); text-decoration:none; transition:background var(--duration-fast) var(--ease-out-expo),border-color var(--duration-fast) var(--ease-out-expo); }
+.newmark-list-row:hover { background:var(--control-hover-bg); border-color:var(--border-hover); }
+.newmark-list-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:650; }
+.newmark-list-meta { color:var(--text-dim); font:10px var(--font-mono); white-space:nowrap; }
+.newmark-list-empty { grid-template-columns:1fr; color:var(--text-dim); cursor:default; }
+.newmark-list-empty:hover { background:var(--glass-bg-1); border-color:var(--glass-border-1); }
+.github-repo-select-wrap { position:relative; margin-bottom:12px; }
+.github-repo-select { width:100%; height:36px; padding:0 36px 0 11px; appearance:none; -webkit-appearance:none; border:1px solid var(--glass-border-2); border-radius:var(--radius-md); background:var(--control-bg); color:var(--text); font:12px var(--font-ui); cursor:pointer; transition:border-color var(--duration-fast) var(--ease-out-expo),box-shadow var(--duration-fast) var(--ease-out-expo); }
+.github-repo-select:hover { border-color:var(--border-hover); }
+.github-repo-select:focus { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-glow); }
+.github-repo-select-icon { position:absolute; right:11px; top:50%; width:14px; height:14px; transform:translateY(-50%); color:var(--text-dim); pointer-events:none; display:inline-flex; align-items:center; justify-content:center; }
 .model-eval-line { display:block; margin-top:4px; font-size:10px; color:var(--text-dim); }
 .model-eval-ok { color: var(--accent2); }
 .model-eval-bad { color: #ff7777; }
@@ -4459,7 +4524,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
             <span style="flex:1;min-width:0;font-size:11px;color:var(--text-dim);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="editor-filename"></span>
           </div>
           <div class="native-editor" id="native-editor">
-            <div class="native-editor-main" id="native-editor-main"><pre class="editor-gutter" id="editor-gutter">1</pre><div class="editor-code-wrap"><pre class="editor-highlight" id="editor-highlight"></pre><pre class="editor-ghost" id="editor-ghost" aria-hidden="true"></pre><textarea class="editor-textarea" id="editor-textarea" spellcheck="false" placeholder="Open a file to edit..."></textarea><div class="editor-completion" id="editor-completion"></div></div></div>
+            <div class="editor-review-deletions" id="editor-review-deletions" aria-label="Deleted lines are read only"></div>
+            <div class="native-editor-main" id="native-editor-main"><pre class="editor-gutter" id="editor-gutter">1</pre><div class="editor-code-wrap"><pre class="editor-highlight" id="editor-highlight"></pre><pre class="editor-ghost" id="editor-ghost" aria-hidden="true"></pre><textarea class="editor-textarea" id="editor-textarea" wrap="soft" spellcheck="false" placeholder="Open a file to edit..."></textarea><div class="editor-completion" id="editor-completion"></div></div></div>
             <div id="editor-md-preview"></div>
             <div class="editor-assist" id="editor-assist"></div>
             <div class="editor-status"><span class="editor-vim-mode" id="editor-vim-mode">INSERT</span><span id="editor-language">text</span><span id="editor-position">1:1</span><span style="margin-left:auto" id="editor-dirty"></span></div>
@@ -4594,6 +4660,8 @@ var state = {
   editorOpenGeneration: 0,
   editorAssistRequest: 0,
   editorTransitionPromise: null,
+  editorReviewDiff: null,
+  workReviewFiles: {},
   browserPreviewToken: '',
   browserPreviewUrl: '',
   dialogStyle: 'formal',
@@ -4621,11 +4689,17 @@ var state = {
   nextQueueRequests: [],
   nextPrompt: '',
   nextQueueDrainsByTarget: {},
+  activeSendCallsByTarget: {},
   backendQueue: { steering: [], followUp: [] },
   backendQueuesByTarget: {},
   defaultFlow: '',
   settingsActiveTab: 'general',
   pluginActiveTab: 'installed',
+  githubOverviewData: null,
+  githubOverviewHash: '',
+  githubOverviewLoaded: false,
+  githubOverviewLoading: false,
+  githubOverviewPendingRepo: '',
   skillMarketQuery: '',
   memoryLab: null,
   memoryLabSelectedTag: '',
@@ -4665,7 +4739,7 @@ function cacheEls() {
     'todo-list','todo-header-label','scroll-bottom-btn','right','right-content','bottom','left',
     'left-secondary','conversation-list','terminal-shell-select','terminal-tabs','terminal-body','terminal-timeout-input',
     'file-tree-container',
-    'editor-textarea','editor-filename','editor-highlight','editor-ghost','editor-gutter','editor-md-preview','editor-md-toggle','editor-completion','editor-assist','editor-vim-mode','editor-language','editor-position','editor-dirty','subagent-list',
+    'editor-textarea','editor-filename','editor-highlight','editor-ghost','editor-gutter','editor-md-preview','editor-md-toggle','editor-completion','editor-assist','editor-vim-mode','editor-language','editor-position','editor-dirty','editor-review-deletions','subagent-list',
     'browser-frame','browser-webview','browser-url','sub-win-overlay','sub-win','sub-win-title',
     'sub-win-body','sub-win-header','title-text','right-tabs','ws-thumb',
     'mode-toggle','bottom-toggle-btn'
@@ -4927,6 +5001,9 @@ var NEWMARK_I18N = {
     'archive.empty': 'No archives yet.',
     'archive.loading': 'Loading workspace archives...',
     'archive.unavailable': 'Archive list unavailable',
+    'archive.restore': 'Restore',
+    'archive.restored': 'Conversation restored',
+    'archive.restoreFailed': 'Restore failed',
     'archive.workspaceEmpty': 'No archives in the current workspace.',
     'archive.workspace': 'Workspace archive',
     'archive.open': 'Open',
@@ -5016,9 +5093,16 @@ var NEWMARK_I18N = {
     'plugins.repoView': 'Repo view',
     'plugins.issues': 'Issues',
     'plugins.prs': 'PRs',
-    'plugins.runningGh': 'Running gh',
+    'plugins.runningGh': 'Communicating',
     'plugins.ghUnavailable': 'GitHub CLI bridge is unavailable.',
     'plugins.noOutput': 'No output.',
+    'plugins.account': 'Account',
+    'plugins.repositories': 'Repositories',
+    'plugins.selectRepo': 'Select repository',
+    'plugins.noRepos': 'No repositories found for this account.',
+    'plugins.noItems': 'No items found.',
+    'plugins.private': 'Private',
+    'plugins.public': 'Public',
     'workspace.new': 'New workspace',
     'workspace.type': 'Type',
     'workspace.internal': 'Internal workspace',
@@ -5417,6 +5501,9 @@ var NEWMARK_I18N = {
     'archive.empty': '暂无归档。',
     'archive.loading': '正在加载工作区归档...',
     'archive.unavailable': '归档列表不可用',
+    'archive.restore': '恢复',
+    'archive.restored': '对话已恢复',
+    'archive.restoreFailed': '恢复失败',
     'archive.workspaceEmpty': '当前工作区暂无归档。',
     'archive.workspace': '工作区归档',
     'archive.open': '打开',
@@ -5506,9 +5593,16 @@ var NEWMARK_I18N = {
     'plugins.repoView': '仓库信息',
     'plugins.issues': 'Issues',
     'plugins.prs': 'PRs',
-    'plugins.runningGh': '正在运行 gh',
+    'plugins.runningGh': '正在通信',
     'plugins.ghUnavailable': 'GitHub CLI 桥接不可用。',
     'plugins.noOutput': '无输出。',
+    'plugins.account': '账号',
+    'plugins.repositories': '名下仓库',
+    'plugins.selectRepo': '选择仓库',
+    'plugins.noRepos': '该账号名下未查询到仓库。',
+    'plugins.noItems': '暂无内容。',
+    'plugins.private': '私有',
+    'plugins.public': '公开',
     'workspace.new': '新建工作区',
     'workspace.type': '类型',
     'workspace.internal': '内部工作区',
@@ -6626,9 +6720,11 @@ function normalizeWorkReviewDiffs(diffs) {
   (Array.isArray(diffs) ? diffs : []).forEach(function(diff) {
     var filePath = String(diff && diff.path || '').trim();
     if (!filePath) return;
-    if (!byPath[filePath]) byPath[filePath] = { path:filePath, added:0, deleted:0 };
+    if (!byPath[filePath]) byPath[filePath] = { path:filePath, added:0, deleted:0, oldContent:'', newContent:'' };
     byPath[filePath].added += Math.max(0, Number(diff.new || 0));
     byPath[filePath].deleted += Math.max(0, Number(diff.old || 0));
+    if (typeof diff.oldContent === 'string') byPath[filePath].oldContent = diff.oldContent;
+    if (typeof diff.newContent === 'string') byPath[filePath].newContent = diff.newContent;
   });
   return Object.keys(byPath).map(function(key) { return byPath[key]; });
 }
@@ -6647,11 +6743,77 @@ window.openWorkReview = function(button) {
   var review = button && button.closest ? button.closest('.work-review') : null;
   if (!review) return;
   var files = JSON.parse(review.getAttribute('data-files') || '[]');
+  state.workReviewFiles = {};
+  files.forEach(function(file) { state.workReviewFiles[file.path] = file; });
   var html = '<div class="work-review-detail">' + files.map(function(file) {
-    return '<button type="button" class="file-row" onclick="window.closeSubWin();window.openFile(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ')">' +
+    return '<button type="button" class="file-row" onclick="window.closeSubWin();window.openWorkReviewFile(' + JSON.stringify(file.path).replace(/"/g, '&quot;') + ')">' +
       '<span class="work-review-path">' + esc(file.path) + '</span><span><span class="work-review-add">+' + file.added + '</span><span class="work-review-del">-' + file.deleted + '</span></span></button>';
   }).join('') + '</div>';
   window.openSubWin(t('review.title'), html);
+};
+
+window.reviewAddedLineIndexes = function(oldContent, newContent, fullContent) {
+  var oldLines = String(oldContent || '').split('\n');
+  var newLines = String(newContent || '').split('\n');
+  if (oldLines.length * newLines.length > 250000) {
+    var oldSet = {};
+    oldLines.forEach(function(line) { oldSet[line] = (oldSet[line] || 0) + 1; });
+    var simpleAdded = newLines.map(function(line) { if (oldSet[line]) { oldSet[line]--; return false; } return true; });
+    return window.mapReviewAddedLines(simpleAdded, newLines, fullContent);
+  }
+  var rows = oldLines.length + 1;
+  var cols = newLines.length + 1;
+  var table = new Uint32Array(rows * cols);
+  for (var i = oldLines.length - 1; i >= 0; i--) {
+    for (var j = newLines.length - 1; j >= 0; j--) {
+      table[i * cols + j] = oldLines[i] === newLines[j]
+        ? table[(i + 1) * cols + j + 1] + 1
+        : Math.max(table[(i + 1) * cols + j], table[i * cols + j + 1]);
+    }
+  }
+  var added = newLines.map(function() { return true; });
+  var oi = 0, ni = 0;
+  while (oi < oldLines.length && ni < newLines.length) {
+    if (oldLines[oi] === newLines[ni]) { added[ni] = false; oi++; ni++; }
+    else if (table[(oi + 1) * cols + ni] >= table[oi * cols + ni + 1]) oi++;
+    else ni++;
+  }
+  return window.mapReviewAddedLines(added, newLines, fullContent);
+};
+
+window.mapReviewAddedLines = function(added, changedLines, fullContent) {
+  if (fullContent === undefined || String(fullContent) === changedLines.join('\n')) return added;
+  var fullLines = String(fullContent || '').split('\n');
+  var mapped = fullLines.map(function() { return false; });
+  outer: for (var start = 0; start + changedLines.length <= fullLines.length; start++) {
+    for (var index = 0; index < changedLines.length; index++) {
+      if (fullLines[start + index] !== changedLines[index]) continue outer;
+    }
+    for (var mark = 0; mark < added.length; mark++) if (added[mark]) mapped[start + mark] = true;
+    return mapped;
+  }
+  return mapped;
+};
+
+window.openWorkReviewFile = async function(path) {
+  var diff = state.workReviewFiles && state.workReviewFiles[path];
+  if (!diff) return window.openFile(path);
+  var opened = await window.openWorkspacePath(path);
+  if (!opened || !state.editorPath) return opened;
+  state.editorReviewDiff = {
+    path: path,
+    oldContent: String(diff.oldContent || ''),
+    baselineContent: String(diff.newContent || els['editor-textarea'].value || ''),
+  };
+  state.editorReviewDiff.addedLines = window.reviewAddedLineIndexes(state.editorReviewDiff.oldContent, state.editorReviewDiff.baselineContent, els['editor-textarea'].value || '');
+  var deleted = state.editorReviewDiff.oldContent.split('\n');
+  var deletedPanel = els['editor-review-deletions'];
+  if (deletedPanel) {
+    deletedPanel.innerHTML = deleted.map(function(line) { return '<div class="review-deleted-line"><code>' + esc(line) + '</code></div>'; }).join('');
+    deletedPanel.classList.toggle('open', deleted.some(function(line) { return line.length > 0; }));
+  }
+  window.renderNativeEditor();
+  return true;
 };
 
 function addWorkReview(diffs) {
@@ -7072,7 +7234,7 @@ function setConversationRuntimeState(target, status, runId, extra) {
     matchingRun.status = next.status;
     if (['completed', 'interrupted', 'force_interrupted', 'error'].indexOf(next.status) >= 0) {
       if (!matchingRun.endedAt) matchingRun.endedAt = new Date().toISOString();
-      matchingRun.expanded = false;
+      matchingRun.expanded = true;
     }
     if (isActiveConversationTarget(next.target)) updateConversationWorkRunElement(matchingRun);
   }
@@ -7126,12 +7288,52 @@ function publicWorkEvent(event) {
   var content = String(event && event.content || '');
   var toolArgs = String(event && event.toolArgs || '');
   if (/<think(?:\s|>)/i.test(content) || /<\/think>/i.test(content) || /<\/?think\b|(?:reasoning_content|thinking_delta)\s*[:：]/i.test(toolArgs)) return false;
-  return ['start', 'text', 'status', 'tool_call', 'tool_result', 'guide', 'guide_accepted', 'guide_applied', 'guide_deferred', 'guide_rejected', 'done', 'error', 'interrupted', 'force_interrupted'].indexOf(type) >= 0;
+  return ['start', 'text', 'response', 'final_response', 'status', 'tool_call', 'tool_result', 'guide', 'guide_accepted', 'guide_applied', 'guide_deferred', 'guide_rejected', 'done', 'error', 'interrupted', 'force_interrupted'].indexOf(type) >= 0;
 }
 
 function publicToolNameForUi(value) {
   var name = String(value || '').split(/\r?\n/, 1)[0].replace(/<\/?think\b[^>]*>/gi, '').trim().slice(0, 120);
   return name || 'tool';
+}
+
+function guideWorkEventKey(event) {
+  if (!event) return '';
+  return String(event.clientMessageId || (event.guide && event.guide.clientMessageId) || '');
+}
+
+function guideWorkEventStatus(event) {
+  if (!event) return 'accepted';
+  var type = String(event.type || 'guide').toLowerCase();
+  return type.indexOf('guide_') === 0
+    ? type.slice('guide_'.length)
+    : String(event.guideStatus || event.status || (event.guide && event.guide.status) || 'accepted').toLowerCase();
+}
+
+function mergeGuideWorkEvent(previous, incoming) {
+  var rank = { accepted: 1, deferred: 2, rejected: 3, applied: 4 };
+  var previousStatus = guideWorkEventStatus(previous);
+  var incomingStatus = guideWorkEventStatus(incoming);
+  if ((rank[incomingStatus] || 0) < (rank[previousStatus] || 0)) return previous;
+  return Object.assign({}, previous, incoming);
+}
+
+function dedupeGuideWorkEvents(events) {
+  var output = [];
+  var guideIndexes = {};
+  (Array.isArray(events) ? events : []).forEach(function(event) {
+    var key = guideWorkEventKey(event);
+    if (!key) {
+      output.push(event);
+      return;
+    }
+    if (guideIndexes[key] !== undefined) {
+      output[guideIndexes[key]] = mergeGuideWorkEvent(output[guideIndexes[key]], event);
+      return;
+    }
+    guideIndexes[key] = output.length;
+    output.push(event);
+  });
+  return output;
 }
 
 function publicWorkEventForUi(event) {
@@ -7148,6 +7350,7 @@ function publicWorkEventForUi(event) {
     model: String(event.model || ''),
     timestamp: String(event.timestamp || ''),
     toolName: toolName,
+    toolArgs: type === 'tool_call' ? String(event.toolArgs || '') : '',
     workspaceId: String(event.workspaceId || (event.target && event.target.workspaceId) || ''),
     workspaceKey: event.workspaceKey,
     runtimeKey: event.runtimeKey,
@@ -7170,7 +7373,7 @@ function normalizedWorkRun(run, target) {
   var startedAt = run.startedAt || run.createdAt || new Date().toISOString();
   var status = String(run.status || 'running');
   var live = ['running', 'stopping', 'force_restarting'].indexOf(status) >= 0;
-  var expanded = live ? true : !!run.expanded;
+  var expanded = run.expanded === undefined ? live : !!run.expanded;
   return {
     runId: String(run.runId || run.id || ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2))),
     target: boundTarget,
@@ -7178,7 +7381,7 @@ function normalizedWorkRun(run, target) {
     startedAt: startedAt,
     endedAt: run.endedAt || '',
     expanded: expanded,
-    events: (Array.isArray(run.events) ? run.events : []).filter(publicWorkEvent).map(function(event) {
+    events: dedupeGuideWorkEvents((Array.isArray(run.events) ? run.events : []).filter(publicWorkEvent).map(function(event) {
       var item = Object.assign({}, publicWorkEventForUi(event), {
         workspaceId: boundTarget.workspaceId,
         conversationId: boundTarget.conversationId,
@@ -7187,7 +7390,7 @@ function normalizedWorkRun(run, target) {
       });
       if (item.guide) item.guide = Object.assign({}, item.guide, { target: boundTarget, runtimeKey: boundRuntimeKey });
       return item;
-    }),
+    })),
     sequence: Number(run.sequence || 0)
   };
 }
@@ -7209,7 +7412,9 @@ function syncWorkRunsSnapshot(runs, target) {
   for (var i = 0; i < prior.length; i++) expandedById[prior[i].runId] = prior[i].expanded;
   var normalized = (Array.isArray(runs) ? runs : []).map(function(run) {
     var item = normalizedWorkRun(run, target);
-    if (item.status !== 'running' && run.expanded === undefined && expandedById[item.runId] !== undefined) item.expanded = expandedById[item.runId];
+    if (run.expanded === undefined && expandedById[item.runId] !== undefined) item.expanded = expandedById[item.runId];
+    var previous = prior.find(function(priorRun) { return priorRun.runId === item.runId; });
+    if (previous && ['running', 'stopping', 'force_restarting'].indexOf(String(previous.status || '')) >= 0 && ['running', 'stopping', 'force_restarting'].indexOf(item.status) < 0) item.expanded = true;
     return item;
   });
   state.workRunsByTarget[key] = normalized;
@@ -7246,7 +7451,11 @@ function workRunTitle(run) {
 
 function workEventIcon(type) {
   type = String(type || 'status').toLowerCase();
-  if (type === 'partial_text' || type === 'public_text') return 'text-cursor-input';
+  if (type === 'tool_commands') return 'square-terminal';
+  if (type === 'tool_files') return 'pencil';
+  if (type === 'tool_images') return 'images';
+  if (type === 'tool_search') return 'search';
+  if (type === 'partial_text' || type === 'public_text' || type === 'response') return 'text-cursor-input';
   if (type.indexOf('guide') === 0) return 'message-square-more';
   if (type === 'tool_call' || type === 'tool_result') return 'wrench';
   if (type === 'error') return 'triangle-alert';
@@ -7255,11 +7464,34 @@ function workEventIcon(type) {
   return 'activity';
 }
 
+function workToolActivity(event) {
+  var name = publicToolNameForUi(event && event.toolName).toLowerCase();
+  if (name === 'memory_lab_update' || name === 'memory_lab_reindex') return { key: 'memory_lab', type: 'tool_memory_lab' };
+  if (name === 'image_inspect' || name === 'computer_use') return { key: 'images', type: 'tool_images' };
+  if (name === 'write' || name === 'edit') return { key: 'files', type: 'tool_files' };
+  if (name === 'read' || name === 'glob' || name === 'grep' || name === 'web_search' || name === 'web_fetch' || name.indexOf('snapshot') >= 0) return { key: 'search', type: 'tool_search' };
+  if (name === 'bash' || name === 'pwd' || name.indexOf('git_') === 0 || name.indexOf('gh_') === 0 || name.indexOf('terminal') >= 0) return { key: 'commands', type: 'tool_commands' };
+  return { key: name, type: 'tool_call' };
+}
+
+function workToolActivityLabel(activity, count, completed) {
+  var zh = currentLang() === 'zh';
+  if (activity.key === 'memory_lab') return completed
+    ? (zh ? '更新了记忆' : 'Updated memory')
+    : (zh ? '正在更新 Memory Lab' : 'Updating Memory Lab');
+  if (activity.key === 'commands') return zh ? (count > 1 ? '运行了多个命令' : '运行了命令') : (count > 1 ? 'Ran multiple commands' : 'Ran a command');
+  if (activity.key === 'files') return zh ? (count > 1 ? '编辑了多个文件' : '编辑了文件') : (count > 1 ? 'Edited multiple files' : 'Edited a file');
+  if (activity.key === 'images') return zh ? ('已查看 ' + count + ' 张图像') : ('Inspected ' + count + (count === 1 ? ' image' : ' images'));
+  if (activity.key === 'search') return zh ? (count > 1 ? '读取并检索了多项内容' : '读取并检索了内容') : (count > 1 ? 'Read and searched multiple items' : 'Read and searched content');
+  return activity.key + (completed ? (zh ? ' · 已完成' : ' · completed') : '');
+}
+
 function workEventLabel(event) {
   var type = String(event && event.type || 'status').toLowerCase();
   var content = String(event && event.content || '').trim();
   if (type === 'partial_text') return (currentLang() === 'zh' ? '未完成回复片段\n' : 'Incomplete response fragment\n') + content;
   if (type === 'public_text') return content;
+  if (type === 'response' || type === 'final_response') return content;
   if (type === 'tool_call') return publicToolNameForUi(event.toolName);
   if (type === 'tool_result') return publicToolNameForUi(event.toolName) + (currentLang() === 'zh' ? ' · 已完成' : ' · completed');
   if (type.indexOf('guide') === 0) {
@@ -7282,20 +7514,86 @@ function renderWorkRunEvents(run) {
   }
   for (var eventIndex = 0; eventIndex < rawEvents.length; eventIndex++) {
     var rawEvent = rawEvents[eventIndex];
-    if (String(rawEvent && rawEvent.type || '').toLowerCase() === 'text') {
+    var rawType = String(rawEvent && rawEvent.type || '').toLowerCase();
+    if (rawType === 'text') {
       publicText += String(rawEvent.content || '');
       continue;
     }
+    if (rawType === 'response') {
+      // A complete response supersedes the live deltas since the prior tool or
+      // response boundary, while retaining every distinct provider reply.
+      publicText = '';
+      while (events.length && ['public_text', 'partial_text'].indexOf(String(events[events.length - 1].type || '').toLowerCase()) >= 0) events.pop();
+      events.push(rawEvent);
+      continue;
+    }
+    if (rawType === 'final_response') {
+      publicText = '';
+      while (events.length && ['public_text', 'partial_text'].indexOf(String(events[events.length - 1].type || '').toLowerCase()) >= 0) events.pop();
+      continue;
+    }
     flushPublicText();
+    if (rawType === 'tool_result') {
+      var toolName = publicToolNameForUi(rawEvent.toolName);
+      for (var priorEventIndex = events.length - 1; priorEventIndex >= 0; priorEventIndex--) {
+        var priorEvent = events[priorEventIndex];
+        if (String(priorEvent && priorEvent.type || '').toLowerCase() !== 'tool_call') continue;
+        if (publicToolNameForUi(priorEvent.toolName) !== toolName || priorEvent.completed) continue;
+        events[priorEventIndex] = Object.assign({}, priorEvent, { completed: true });
+        rawEvent = null;
+        break;
+      }
+      if (!rawEvent) continue;
+    }
     events.push(rawEvent);
   }
   flushPublicText();
+  var presentedEvents = [];
+  for (var presentedIndex = 0; presentedIndex < events.length; presentedIndex++) {
+    var presented = events[presentedIndex];
+    if (String(presented && presented.type || '').toLowerCase() !== 'tool_call') {
+      presentedEvents.push(presented);
+      continue;
+    }
+    var activity = workToolActivity(presented);
+    var count = 1;
+    var allCompleted = !!presented.completed;
+    var activityItems = [presented];
+    while (presentedIndex + 1 < events.length && String(events[presentedIndex + 1] && events[presentedIndex + 1].type || '').toLowerCase() === 'tool_call' && workToolActivity(events[presentedIndex + 1]).key === activity.key) {
+      presentedIndex++;
+      count++;
+      allCompleted = allCompleted && !!events[presentedIndex].completed;
+      activityItems.push(events[presentedIndex]);
+    }
+    presentedEvents.push({ type: activity.type, activity: activity, count: count, completed: allCompleted, toolName: presented.toolName, items: activityItems });
+  }
+  events = presentedEvents;
   if (!events.length) return '<div class="conversation-work-empty">' + esc(currentLang() === 'zh' ? '等待公开工作进度…' : 'Waiting for public progress…') + '</div>';
-  return '<div class="conversation-work-run-events">' + events.map(function(event) {
+  return '<div class="conversation-work-run-events">' + events.map(function(event, eventIndex) {
     var type = String(event.type || 'status').toLowerCase();
-    var cls = type.indexOf('guide') === 0 ? ' guide' : (type === 'error' ? ' error' : '');
+    if (type === 'public_text' || type === 'partial_text' || type === 'response') {
+      var responseLabel = type === 'response' && terminalInterrupted
+        ? (currentLang() === 'zh' ? '未完成回复片段\n' : 'Incomplete response fragment\n') + workEventLabel(event)
+        : workEventLabel(event);
+      return '<div class="conversation-work-event narrative"><div class="conversation-work-event-content">' + renderMessageContent(responseLabel) + '</div></div>';
+    }
+    var activitySummary = type.indexOf('tool_') === 0 && type !== 'tool_call' && type !== 'tool_result';
+    var cls = type.indexOf('guide') === 0 ? ' guide' : (type === 'error' ? ' error' : (activitySummary ? ' activity-summary' : ''));
+    var label = activitySummary ? workToolActivityLabel(event.activity, Number(event.count || 1), !!event.completed) : workEventLabel(event) + (event.completed ? (currentLang() === 'zh' ? ' · 已完成' : ' · completed') : '');
+    if (activitySummary) {
+      var firstActivityItem = event.items && event.items[0] || {};
+      var activityDomKey = String(firstActivityItem.id || firstActivityItem.toolCallId || ((event.activity && event.activity.key || type) + '-' + eventIndex));
+      var detailRows = (event.items || []).map(function(item) {
+        var detail = String(item.toolArgs || '').trim();
+        return '<div class="conversation-work-activity-item">' + iconSvg(workEventIcon('tool_call'), 'tool_call', 'tiny') +
+          '<div><div>' + esc(publicToolNameForUi(item.toolName)) + (item.completed ? (currentLang() === 'zh' ? ' · 已完成' : ' · completed') : '') + '</div>' +
+          (detail ? '<div class="conversation-work-activity-detail">' + esc(detail) + '</div>' : '') + '</div></div>';
+      }).join('');
+      return '<details class="conversation-work-activity" data-activity-key="' + escAttr(activityDomKey) + '"><summary><span class="conversation-work-activity-chevron" aria-hidden="true"></span><div>' + esc(label) + '</div></summary>' +
+        '<div class="conversation-work-activity-list">' + detailRows + '</div></details>';
+    }
     return '<div class="conversation-work-event' + cls + '">' + iconSvg(workEventIcon(type), type, 'tiny') +
-      '<div class="conversation-work-event-content">' + renderMessageContent(workEventLabel(event)) + '</div></div>';
+      '<div class="conversation-work-event-content">' + renderMessageContent(label) + '</div></div>';
   }).join('') + '</div>';
 }
 
@@ -7311,17 +7609,35 @@ function findWorkRunElement(run) {
 function updateConversationWorkRunElement(run, element) {
   element = element || findWorkRunElement(run);
   if (!element) return null;
+  var openActivityKeys = {};
+  var openActivities = element.querySelectorAll ? element.querySelectorAll('details.conversation-work-activity[open]') : [];
+  for (var activityIndex = 0; activityIndex < openActivities.length; activityIndex++) {
+    var openKey = String(openActivities[activityIndex].getAttribute('data-activity-key') || '');
+    if (openKey) openActivityKeys[openKey] = true;
+  }
   var running = ['running', 'stopping', 'force_restarting'].indexOf(String(run.status || '')) >= 0;
-  var expanded = running || !!run.expanded;
+  var expanded = !!run.expanded;
   element.className = 'conversation-work-run ' + (running ? 'running ' : '') + (expanded ? 'expanded' : 'collapsed');
   element.setAttribute('data-run-id', run.runId);
   element.setAttribute('data-runtime-key', runtimeKeyFor(run.target && run.target.workspaceId, run.target && run.target.conversationId));
-  element.innerHTML = '<button class="conversation-work-run-head" type="button" ' + (running ? 'disabled' : 'onclick="window.toggleConversationWorkRun(this)"') + '>' +
+  element.innerHTML = '<button class="conversation-work-run-head" type="button" onclick="window.toggleConversationWorkRun(this)">' +
     '<span class="conversation-work-run-title">' + esc(workRunTitle(run)) + '</span>' +
     '<span class="conversation-work-run-status">' + esc(String(run.status || '')) + '</span>' +
     '<span class="conversation-work-run-chevron" aria-hidden="true"></span></button>' +
     '<div class="conversation-work-run-body">' + renderWorkRunEvents(run) + '</div>';
+  var refreshedActivities = element.querySelectorAll ? element.querySelectorAll('details.conversation-work-activity[data-activity-key]') : [];
+  for (var refreshedIndex = 0; refreshedIndex < refreshedActivities.length; refreshedIndex++) {
+    var refreshedKey = String(refreshedActivities[refreshedIndex].getAttribute('data-activity-key') || '');
+    if (openActivityKeys[refreshedKey]) refreshedActivities[refreshedIndex].open = true;
+  }
   return element;
+}
+
+function updateConversationWorkRunDuration(run) {
+  var element = findWorkRunElement(run);
+  if (!element) return;
+  var title = element.querySelector('.conversation-work-run-title');
+  if (title) title.textContent = workRunTitle(run);
 }
 
 function renderConversationWorkRun(run, beforeElement) {
@@ -7365,18 +7681,32 @@ function applyAgentWorkEventToRun(event) {
     recordGuideUiMessage(event, target);
   }
   if (publicWorkEvent(event) && type !== 'start') {
+    var incomingGuideKey = guideWorkEventKey(event);
+    if (incomingGuideKey) {
+      for (var guideEventIndex = run.events.length - 1; guideEventIndex >= 0; guideEventIndex--) {
+        var priorGuideEvent = run.events[guideEventIndex];
+        if (guideWorkEventKey(priorGuideEvent) === incomingGuideKey) {
+          run.events[guideEventIndex] = mergeGuideWorkEvent(priorGuideEvent, event);
+          updateConversationWorkRunElement(run);
+          return run;
+        }
+      }
+    }
+    if (type === 'response' || type === 'final_response') {
+      while (run.events.length && String(run.events[run.events.length - 1].type || '').toLowerCase() === 'text') run.events.pop();
+    }
     var eventId = String(event.id || [event.sequence || '', type, event.timestamp || '', event.content || ''].join('|'));
     if (!run.events.some(function(item) { return String(item.id || '') === eventId; })) run.events.push(Object.assign({}, event, { id: eventId }));
   }
-  if (type === 'done') { run.status = 'completed'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = false; }
-  else if (type === 'error') { run.status = 'error'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = false; }
-  else if (type === 'interrupted') { run.status = 'interrupted'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = false; }
-  else if (type === 'force_interrupted') { run.status = 'force_interrupted'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = false; }
+  if (type === 'done') { run.status = 'completed'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = true; }
+  else if (type === 'error') { run.status = 'error'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = true; }
+  else if (type === 'interrupted') { run.status = 'interrupted'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = true; }
+  else if (type === 'force_interrupted') { run.status = 'force_interrupted'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = true; }
   else if (event.status && type.indexOf('guide') !== 0) {
     run.status = String(event.status);
     if (['completed', 'interrupted', 'force_interrupted', 'error'].indexOf(run.status) >= 0) {
       run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString();
-      run.expanded = false;
+      run.expanded = true;
     }
   }
   if (isActiveConversationTarget(target)) renderConversationWorkRun(run);
@@ -7390,7 +7720,7 @@ function isActiveConversationTarget(target) {
 
 window.toggleConversationWorkRun = function(button) {
   var element = button && button.closest ? button.closest('.conversation-work-run') : null;
-  if (!element || element.classList.contains('running')) return;
+  if (!element) return;
   var runtimeKey = String(element.getAttribute('data-runtime-key') || '');
   var runId = String(element.getAttribute('data-run-id') || '');
   var runs = state.workRunsByTarget && state.workRunsByTarget[runtimeKey] || [];
@@ -7417,7 +7747,7 @@ setInterval(function() {
   if (!els['chat-area']) return;
   var runs = workRunsForTarget(currentConversationTarget());
   for (var i = 0; i < runs.length; i++) {
-    if (['running', 'stopping', 'force_restarting'].indexOf(String(runs[i].status || '')) >= 0) updateConversationWorkRunElement(runs[i]);
+    if (['running', 'stopping', 'force_restarting'].indexOf(String(runs[i].status || '')) >= 0) updateConversationWorkRunDuration(runs[i]);
   }
 }, 1000);
 
@@ -7632,6 +7962,16 @@ function renderChatMessages(messages) {
   var guideMessages = guideMessagesForTarget(renderTarget);
   var persistedGuideIds = {};
   var persistedRuns = workRunsForTarget(renderTarget).slice();
+  persistedRuns.forEach(function(run) {
+    (Array.isArray(run && run.guides) ? run.guides : []).forEach(function(guide) {
+      var id = String(guide && guide.clientMessageId || '');
+      if (id) persistedGuideIds[id] = true;
+    });
+    (Array.isArray(run && run.events) ? run.events : []).forEach(function(event) {
+      var id = String(event && (event.clientMessageId || (event.guide && event.guide.clientMessageId)) || '');
+      if (id) persistedGuideIds[id] = true;
+    });
+  });
   var persistedRunIndex = 0;
   var pendingWorkReview = conversationWorkUiState(renderConversationId).pendingWorkReview;
   resetConversationWorkUi(renderConversationId, false);
@@ -7647,16 +7987,19 @@ function renderChatMessages(messages) {
   for (var i = 0; i < messages.length; i++) {
     var m = messages[i] || {};
     if (isHiddenWorkflowMessage(m)) continue;
-    if (String(m.role || '') === 'workflow' && /^tool:/.test(String(m.mode || ''))) {
-      renderPersistedToolMessage(m);
-      continue;
-    }
+    if (String(m.role || '') === 'workflow' && /^tool:/.test(String(m.mode || ''))) continue;
     finishToolBatch(renderConversationId);
+    var associatedRun = null;
     if (String(m.role || '') === 'assistant' && persistedRunIndex < persistedRuns.length) {
-      renderConversationWorkRun(persistedRuns[persistedRunIndex++]);
+      associatedRun = persistedRuns[persistedRunIndex++];
+      renderConversationWorkRun(associatedRun);
     }
     var clientMessageId = String(m.clientMessageId || '');
     if (clientMessageId) persistedGuideIds[clientMessageId] = true;
+    if (clientMessageId && m.runId && persistedRuns.some(function(run) { return String(run.runId || '') === String(m.runId || ''); })) {
+      delete guideMessages[clientMessageId];
+      continue;
+    }
     addMsg(m.role || 'assistant', m.content || '', m.mode || (clientMessageId ? 'guide' : ''), m.model || '', i, {
       clientMessageId: clientMessageId,
       guideStatus: clientMessageId ? 'applied' : '',
@@ -7733,6 +8076,7 @@ function renderAgentWorkEvent(event) {
     ui.lastCompletedWorkflow = null;
   } else if (type === 'text') {
     ui.activeWorkflowText = (ui.activeWorkflowText || '') + content;
+    if (workRun) return;
     var pendingFinalMsg = findPendingFinalResponseMsg(eventConversationId, ui.activeWorkflowText);
     if (pendingFinalMsg) {
       ui.activeWorkflowMsg = pendingFinalMsg;
@@ -7742,6 +8086,16 @@ function renderAgentWorkEvent(event) {
       return;
     }
     updateMsg(ensureActiveAssistantMsg(event.mode || state.mode, event.model || state.model, eventConversationId), ui.activeWorkflowText, 'assistant', event.mode || state.mode, event.model || state.model);
+  } else if (type === 'response' && workRun) {
+    ui.activeWorkflowText = '';
+    ui.activeWorkflowMsg = null;
+  } else if (type === 'final_response' && workRun) {
+    ui.activeWorkflowText = '';
+    ui.activeWorkflowMsg = null;
+    if (content) {
+      var finalMsg = addMsg('assistant', content, event.mode || state.mode, event.model || state.model);
+      markFinalResponseMsg(eventConversationId, content, finalMsg);
+    }
   } else if (type === 'tool_call' && !workRun) {
     upsertToolEvent(event, '');
   } else if (type === 'tool_result' && !workRun) {
@@ -8706,7 +9060,16 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       createdAt: envelope.createdAt,
       allowStatusReset: retryingUnacknowledgedGuide
     }, lockedTarget);
-    addMsg('user', displayText, 'guide', state.model, undefined, optimisticGuide);
+    applyAgentWorkEventToRun({
+      id: 'guide-' + clientMessageId + '-accepted',
+      type: 'guide_accepted',
+      content: displayText,
+      workspaceId: lockedTarget.workspaceId,
+      conversationId: lockedTarget.conversationId,
+      runId: envelope.runId,
+      clientMessageId: clientMessageId,
+      guide: optimisticGuide
+    });
     var enqueue = api.enqueueGuide ? api.enqueueGuide(envelope) : api.sendMessage(requestMessage, lockedConversationId);
     return Promise.resolve(enqueue).then(function(receipt) {
       if (!receipt || typeof receipt !== 'object' || !String(receipt.status || '').trim()) {
@@ -8754,7 +9117,8 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     });
   }
 
-  if (effectiveInputMode === 'next' && !opts.fromQueue) {
+  var idleNextImmediate = effectiveInputMode === 'next' && !opts.fromQueue && !conversationRunning;
+  if (effectiveInputMode === 'next' && !opts.fromQueue && conversationRunning) {
     if (!state.nextQueue) state.nextQueue = [];
     if (!state.nextQueueRequests) state.nextQueueRequests = [];
     state.nextQueue.push(displayText);
@@ -8768,6 +9132,9 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   }
 
   if (conversationRunning) return;
+  if (!state.activeSendCallsByTarget) state.activeSendCallsByTarget = {};
+  state.activeSendCallsByTarget[lockedRuntimeKey] = true;
+  if (typeof opts.onStarted === 'function') opts.onStarted();
   var localRunId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2));
   setConversationRuntimeState(lockedTarget, 'running', localRunId, { provisional: true });
   setWorking(true);
@@ -8775,7 +9142,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   if (usesPromptAttachments) clearPromptAttachments();
   updateSubmitButtonState();
   var previousMode = state.mode;
-  if (opts.forceBuild && state.mode !== 'build') {
+  if ((opts.forceBuild || idleNextImmediate) && state.mode !== 'build') {
     state.mode = 'build';
     if (els['mode-select']) els['mode-select'].value = 'build';
     if (api.setMode) await api.setMode('build').catch(function(){});
@@ -8795,8 +9162,12 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     if (r && r.runId) setConversationRuntimeState(lockedTarget, r.status || 'running', r.runId, { provisional: false, generation: r.generation || 0, runtimeKey: r.runtimeKey || '' });
     var stillActive = isActiveConversationTarget(lockedTarget);
     if (stillActive) applyAutoRouteRatingState(r);
+    if (stillActive && r && Array.isArray(r.workRuns)) syncWorkRunsSnapshot(r.workRuns, lockedTarget);
+    var responseOwnedByRun = !!(r && Array.isArray(r.workRuns) && r.workRuns.some(function(run) {
+      return (run.events || []).some(function(event) { return ['response', 'final_response'].indexOf(String(event.type || '').toLowerCase()) >= 0; });
+    }));
     var lockedUi = conversationWorkUiState(lockedConversationId, lockedTarget.workspaceId);
-    if (stillActive) {
+    if (stillActive && !responseOwnedByRun) {
       responseMsg = lockedUi.activeWorkflowMsg;
       if (r && r.error) {
         if (!responseMsg) responseMsg = addMsg('assistant', '', state.mode, state.model);
@@ -8823,7 +9194,6 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         reviewUi.pendingWorkReview = r.diffs;
       }
     }
-    if (stillActive && r && Array.isArray(r.workRuns)) syncWorkRunsSnapshot(r.workRuns, lockedTarget);
     if (stillActive && r && Array.isArray(r.chatMessages)) renderChatMessages(r.chatMessages);
     else if (stillActive) {
       var completedReviewUi = conversationWorkUiState(lockedConversationId);
@@ -8903,7 +9273,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       }
     }).catch(function(){});
   }
-  if (opts.forceBuild && previousMode !== state.mode) {
+  if ((opts.forceBuild || idleNextImmediate) && previousMode !== state.mode) {
     state.mode = previousMode;
     if (els['mode-select']) els['mode-select'].value = previousMode;
     if (api.setMode) await api.setMode(previousMode).catch(function(){});
@@ -8914,6 +9284,8 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   }
   setWorking(!!runningConversationRecord(activeConversationId()));
   window.renderInputStack();
+  delete state.activeSendCallsByTarget[lockedRuntimeKey];
+  delete state.activeSendCallsByTarget[runtimeKeyFor(lockedTarget.workspaceId, lockedTarget.conversationId)];
   window.drainNextQueue();
 };
 
@@ -8926,10 +9298,14 @@ window.scheduleNextQueueDrain = function(target) {
   if (existing) return;
   var schedule = { target: expectedTarget };
   state.nextQueueSchedulesByTarget[expectedKey] = schedule;
-  setTimeout(function() {
+  queueMicrotask(function() {
     if (state.nextQueueSchedulesByTarget[expectedKey] !== schedule) return;
     var activeTarget = currentConversationTarget();
     if (runtimeKeyFor(activeTarget.workspaceId, activeTarget.conversationId) !== expectedKey) {
+      delete state.nextQueueSchedulesByTarget[expectedKey];
+      return;
+    }
+    if (state.activeSendCallsByTarget && state.activeSendCallsByTarget[expectedKey]) {
       delete state.nextQueueSchedulesByTarget[expectedKey];
       return;
     }
@@ -8939,7 +9315,7 @@ window.scheduleNextQueueDrain = function(target) {
     }
     window.drainNextQueue();
     delete state.nextQueueSchedulesByTarget[expectedKey];
-  }, 250);
+  });
 };
 
 window.drainNextQueue = function() {
@@ -8947,6 +9323,7 @@ window.drainNextQueue = function() {
   if (!state.nextQueue || !state.nextQueue.length) return;
   var target = currentConversationTarget();
   var targetKey = runtimeKeyFor(target.workspaceId, target.conversationId);
+  if (state.activeSendCallsByTarget && state.activeSendCallsByTarget[targetKey]) return;
   if (!state.nextQueueDrainsByTarget) state.nextQueueDrainsByTarget = {};
   if (state.nextQueueDrainsByTarget[targetKey]) return;
   var indexes = queueIndexesForTarget(target).filter(function(index) {
@@ -8958,23 +9335,36 @@ window.drainNextQueue = function() {
   if (!queuedRequestMatchesTarget(nextRequest, target)) return;
   var drainToken = { request: nextRequest, target: target };
   state.nextQueueDrainsByTarget[targetKey] = drainToken;
-  setTimeout(function() {
+  queueMicrotask(function() {
     if (state.nextQueueDrainsByTarget[targetKey] !== drainToken) return;
     delete state.nextQueueDrainsByTarget[targetKey];
     var activeTarget = currentConversationTarget();
     if (runtimeKeyFor(activeTarget.workspaceId, activeTarget.conversationId) !== targetKey) return;
+    if (state.activeSendCallsByTarget && state.activeSendCallsByTarget[targetKey]) return;
     if (isCurrentConversationRunning()) {
-      window.scheduleNextQueueDrain(activeTarget);
       return;
     }
     var currentIndex = state.nextQueueRequests ? state.nextQueueRequests.indexOf(nextRequest) : -1;
     if (currentIndex < 0 || queuedRequestIsBackendManaged(nextRequest) || !queuedRequestMatchesTarget(nextRequest, activeTarget)) return;
-    var next = state.nextQueue.splice(currentIndex, 1)[0];
+    var next = state.nextQueue[currentIndex];
+    var started = false;
+    window.sendMessage('guide', next, {
+      fromQueue: true,
+      forceBuild: true,
+      queuedRequest: nextRequest,
+      onStarted: function() { started = true; }
+    });
+    // sendMessage executes synchronously until its first await. Only consume the
+    // queued item after it confirms that a new Build run was actually claimed;
+    // a runtime snapshot can otherwise race this microtask and reject the send.
+    if (!started) return;
+    currentIndex = state.nextQueueRequests ? state.nextQueueRequests.indexOf(nextRequest) : -1;
+    if (currentIndex < 0) return;
+    state.nextQueue.splice(currentIndex, 1);
     state.nextQueueRequests.splice(currentIndex, 1);
     refreshNextPromptForTarget(activeTarget);
     window.renderInputStack();
-    window.sendMessage('guide', next, { fromQueue: true, forceBuild: true, queuedRequest: nextRequest });
-  }, 80);
+  });
 };
 
 // === Sidebar Controls ===
@@ -9582,7 +9972,7 @@ window.refreshRightArchives = function() {
   }
   api.listArchives('workspace').then(function(items) {
     state.workspaceArchives = (items || []).map(function(a) {
-      return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '' };
+      return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '', restorable: !!a.restorable, conversationId: a.conversationId || '' };
     });
     window.renderRightArchives();
   }).catch(function(err) {
@@ -9605,6 +9995,7 @@ window.renderRightArchives = function() {
     html += '<div class="right-row">' +
       '<div class="right-row-body"><span class="right-row-title">' + esc(a.name || '') + '</span><span class="right-row-meta">' + esc(archiveMeta) + '</span></div>' +
       '<button class="archive-action-btn" onclick="window.loadArchive(' + i + ')">' + esc(t('archive.open')) + '</button>' +
+      (a.restorable ? '<button class="archive-action-btn" onclick="window.restoreArchive(' + i + ')">' + esc(t('archive.restore')) + '</button>' : '') +
       '<button class="archive-action-btn danger" onclick="window.deleteArchive(' + i + ')">' + esc(t('common.delete')) + '</button>' +
       '</div>';
   }
@@ -10502,7 +10893,7 @@ function renderArchiveSettings() {
     state._archiveSettingsLoading = true;
     api.listArchives('all').then(function(items) {
       state.allArchives = (items || []).map(function(a) {
-        return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || '', workspace: a.workspace || '' };
+        return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || '', workspace: a.workspace || '', restorable: !!a.restorable, conversationId: a.conversationId || '' };
       });
       state._archiveSettingsLoading = false;
       var stab = document.getElementById('stab-archive');
@@ -10521,6 +10912,7 @@ function renderArchiveSettings() {
         '<span class="archive-name">' + esc(a.name || a.path || '') + '</span>' +
         '<span class="archive-date">' + esc(a.workspace || a.scope || archiveDate || '') + '</span>' +
         '<button class="archive-action-btn" onclick="window.loadArchive(' + i + ', &quot;all&quot;)">' + esc(t('archive.load')) + '</button>' +
+        (a.restorable ? '<button class="archive-action-btn" onclick="window.restoreArchive(' + i + ', &quot;all&quot;)">' + esc(t('archive.restore')) + '</button>' : '') +
         '<button class="archive-action-btn danger" onclick="window.deleteArchive(' + i + ', &quot;all&quot;)">' + esc(t('common.delete')) + '</button>' +
         '</div>';
     }
@@ -11247,7 +11639,7 @@ renderArchiveSettings = function() {
     state._allArchiveSettingsLoading = true;
     api.listArchives('all').then(function(items) {
       state.allArchives = (items || []).map(function(a) {
-        return { name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || '', workspace: a.workspace || '' };
+        return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || '', workspace: a.workspace || '', restorable: !!a.restorable, conversationId: a.conversationId || '' };
       });
       state._allArchiveSettingsLoading = false;
       var stab = document.getElementById('stab-archive');
@@ -11266,6 +11658,7 @@ renderArchiveSettings = function() {
         '<span class="archive-name">' + esc(a.name || '') + '</span>' +
         '<span class="archive-date">' + esc(a.workspace || a.scope || a.firstLine || archiveDate || '') + '</span>' +
         '<button class="archive-action-btn" onclick="window.loadArchive(' + i + ', &quot;all&quot;)">' + esc(t('archive.open')) + '</button>' +
+        (a.restorable ? '<button class="archive-action-btn" onclick="window.restoreArchive(' + i + ', &quot;all&quot;)">' + esc(t('archive.restore')) + '</button>' : '') +
         '<button class="archive-action-btn danger" onclick="window.deleteArchive(' + i + ', &quot;all&quot;)">' + esc(t('common.delete')) + '</button>' +
         '</div>';
     }
@@ -11285,7 +11678,7 @@ window.archiveCurrent = function() {
     return api.listArchives ? api.listArchives('workspace') : [];
   }).then(function(items) {
     state.workspaceArchives = (items || []).map(function(a) {
-      return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '' };
+      return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '', restorable: !!a.restorable, conversationId: a.conversationId || '' };
     });
     state.allArchives = [];
     window.renderRightArchives();
@@ -11307,6 +11700,34 @@ window.loadArchive = function(idx, scope) {
   });
 };
 
+window.restoreArchive = function(idx, scope) {
+  var listScope = scope === 'all' ? 'all' : 'workspace';
+  var item = (listScope === 'all' ? state.allArchives : state.workspaceArchives)[idx];
+  if (!item || !item.restorable || !api.restoreArchive) return;
+  api.restoreArchive(item.id || item.name).then(function(result) {
+    if (!result || !result.ok) throw new Error(result && result.error ? result.error : t('archive.restoreFailed'));
+    showUiNotice(t('archive.restored'), 'success', 'archive-restored-' + String(result.conversationId || ''));
+    state.workspaceArchives = [];
+    state.allArchives = [];
+    return api.getState ? api.getState({ workspaceId: result.workspaceId, conversationId: result.conversationId }) : result.snapshot;
+  }).then(function(snapshot) {
+    if (snapshot && snapshot.workspaces && snapshot.workspaces.current) {
+      state.currentWorkspace = snapshot.workspaces.current.name || '';
+      state.currentWorkspaceId = workspaceIdentity(snapshot.workspaces.current);
+      state.currentWorkspacePath = snapshot.workspaces.current.path || '';
+      window.renderLeftWsList();
+    }
+    return syncBackendConversation();
+  }).then(function() {
+    renderConversations();
+    window.refreshRightArchives();
+    var stab = document.getElementById('stab-archive');
+    if (stab) stab.innerHTML = renderArchiveSettings();
+  }).catch(function(err) {
+    showUiNotice(t('archive.restoreFailed') + ': ' + (err.message || String(err)), 'error', 'archive-restore-error');
+  });
+};
+
 window.deleteArchive = function(idx, scope) {
   var listScope = scope === 'all' ? 'all' : 'workspace';
   var item = (listScope === 'all' ? state.allArchives : state.workspaceArchives)[idx];
@@ -11316,7 +11737,7 @@ window.deleteArchive = function(idx, scope) {
     return api.listArchives ? api.listArchives(listScope) : [];
   }).then(function(items) {
     var mapped = (items || []).map(function(a) {
-      return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || listScope, workspace: a.workspace || '' };
+      return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || listScope, workspace: a.workspace || '', restorable: !!a.restorable, conversationId: a.conversationId || '' };
     });
     if (listScope === 'all') state.allArchives = mapped;
     else state.workspaceArchives = mapped;
@@ -12002,13 +12423,48 @@ window.highlightEditorCode = function(code, language) {
   return highlightCodeByLanguage(code, normalizeCodeLanguage(language));
 };
 
+window.editorVisualRowsForLine = function(line, contentWidth) {
+  var ta = els['editor-textarea'];
+  if (!ta || !contentWidth) return 1;
+  if (!state.editorMeasureCanvas) state.editorMeasureCanvas = document.createElement('canvas');
+  var context = state.editorMeasureCanvas.getContext('2d');
+  var style = getComputedStyle(ta);
+  context.font = style.font;
+  var charWidth = Math.max(1, context.measureText('M').width);
+  var columns = Math.max(1, Math.floor(contentWidth / charWidth));
+  var expanded = String(line || '').replace(/\t/g, '  ');
+  return Math.max(1, Math.ceil(Math.max(1, expanded.length) / columns));
+};
+
+window.renderEditorGutter = function(code) {
+  var ta = els['editor-textarea'];
+  var gutter = els['editor-gutter'];
+  if (!ta || !gutter) return;
+  var style = getComputedStyle(ta);
+  var contentWidth = Math.max(1, ta.clientWidth - parseFloat(style.paddingLeft || '0') - parseFloat(style.paddingRight || '0'));
+  var lineHeight = parseFloat(style.lineHeight || '18.6') || 18.6;
+  gutter.innerHTML = String(code || '').split('\n').map(function(line, index) {
+    var rows = window.editorVisualRowsForLine(line, contentWidth);
+    return '<span style="display:block;height:' + (rows * lineHeight) + 'px;line-height:' + lineHeight + 'px;">' + (index + 1) + '</span>';
+  }).join('');
+};
+
 window.renderNativeEditor = function() {
   var ta = els['editor-textarea'];
   if (!ta) return;
   var code = ta.value || '';
   var language = window.editorLanguageForPath(state.editorPath);
-  if (els['editor-highlight']) els['editor-highlight'].innerHTML = window.highlightEditorCode(code, language) + '\n';
-  if (els['editor-gutter']) els['editor-gutter'].textContent = Array.from({length: Math.max(1, code.split('\n').length)}, function(_, i) { return i + 1; }).join('\n');
+  if (els['editor-highlight']) {
+    var highlighted = window.highlightEditorCode(code, language).split('\n');
+    if (state.editorReviewDiff && state.editorReviewDiff.path === state.editorPath) {
+      var addedLines = state.editorReviewDiff.addedLines || [];
+      highlighted = highlighted.map(function(line, index) {
+        return addedLines[index] ? '<span class="editor-review-added-line">' + line + '</span>' : line;
+      });
+    }
+    els['editor-highlight'].innerHTML = highlighted.join('\n') + '\n';
+  }
+  window.renderEditorGutter(code);
   if (els['editor-language']) els['editor-language'].textContent = language;
   var before = code.slice(0, ta.selectionStart || 0).split('\n');
   if (els['editor-position']) els['editor-position'].textContent = before.length + ':' + (before[before.length - 1].length + 1);
@@ -12043,8 +12499,8 @@ window.renderEditorGhostText = function() {
 window.syncNativeEditorScroll = function() {
   var ta = els['editor-textarea'];
   if (!ta) return;
-  if (els['editor-highlight']) { els['editor-highlight'].scrollTop = ta.scrollTop; els['editor-highlight'].scrollLeft = ta.scrollLeft; }
-  if (els['editor-ghost']) { els['editor-ghost'].scrollTop = ta.scrollTop; els['editor-ghost'].scrollLeft = ta.scrollLeft; }
+  if (els['editor-highlight']) { els['editor-highlight'].scrollTop = ta.scrollTop; }
+  if (els['editor-ghost']) { els['editor-ghost'].scrollTop = ta.scrollTop; }
   if (els['editor-gutter']) els['editor-gutter'].scrollTop = ta.scrollTop;
 };
 
@@ -12088,7 +12544,9 @@ window.requestEditorCompletion = async function() {
   var anchor = { path: state.editorPath, value: ta.value, start: pos, end: ta.selectionEnd };
   state.editorCompletionAnchor = anchor;
   if (els['editor-completion']) { els['editor-completion'].textContent = 'Predicting...'; els['editor-completion'].classList.add('open'); }
-  var result = await api.editorComplete({ path: state.editorPath, before: ta.value.slice(0, pos), after: ta.value.slice(pos) });
+  var beforeStart = Math.max(0, pos - 6000);
+  var afterEnd = Math.min(ta.value.length, pos + 1600);
+  var result = await api.editorComplete({ path: state.editorPath, before: ta.value.slice(beforeStart, pos), after: ta.value.slice(pos, afterEnd) });
   if (requestId !== state.editorCompletionRequest) return;
   if (!window.editorAnchorMatches(anchor)) { window.dismissEditorCompletion(); window.scheduleEditorCompletion(); return; }
   state.editorCompletionText = result && result.ok ? String(result.text || '') : '';
@@ -12124,7 +12582,7 @@ window.scheduleEditorCompletion = function() {
   state.editorCompletionTimer = setTimeout(function() {
     state.editorCompletionTimer = null;
     window.requestEditorCompletion();
-  }, 500);
+  }, 180);
 };
 
 window.editorCaretSignature = function() {
@@ -12223,6 +12681,7 @@ window.resetEditorSurface = function(options) {
   state.editorRevision = '';
   state.editorEncoding = 'utf8';
   state.editorOriginal = '';
+  state.editorReviewDiff = null;
   state.editorPreview = false;
   state.editorUndo = [];
   state.editorRedo = [];
@@ -12234,6 +12693,7 @@ window.resetEditorSurface = function(options) {
   window.dismissEditorCompletion();
   if (els['editor-filename']) els['editor-filename'].textContent = '';
   if (els['editor-textarea']) els['editor-textarea'].value = '';
+  if (els['editor-review-deletions']) { els['editor-review-deletions'].replaceChildren(); els['editor-review-deletions'].classList.remove('open'); }
   if (els['editor-assist']) { els['editor-assist'].replaceChildren(); els['editor-assist'].classList.remove('open'); }
   var main = document.getElementById('native-editor-main');
   if (main) main.style.display = 'grid';
@@ -12904,8 +13364,8 @@ function renderConversations() {
     var runtimeBadge = runtimeState && runtimeState.status && runtimeState.status !== 'idle'
       ? '<span class="conv-runtime-badge ' + escAttr(String(runtimeState.status)) + '">' + esc(String(runtimeState.status)) + '</span>' : '';
     div.innerHTML = '<span class="conv-summary" title="' + escAttr(String(conv.id || '')) + '">' + esc(displaySummary) + (conv.messageCount ? ' (' + esc(String(conv.messageCount)) + ')' : '') + '</span>' + runtimeBadge +
-      '<button class="conv-pin-btn' + (conv.pinned ? ' active' : '') + '" onclick="event.stopPropagation();window.toggleConversationPinned(' + i + ')" title="' + escAttr(conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '">' + iconOnly('pin', conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '</button>' +
-      '<button class="conv-archive-btn" ' + (runtimeState && ['running', 'stopping', 'force_restarting'].indexOf(String(runtimeState.status || '')) >= 0 ? 'disabled ' : '') + 'onclick="event.stopPropagation();window.archiveConv(' + i + ')" title="' + escAttr(t('conversation.archive')) + '">' + iconOnly('archive', t('conversation.archive')) + '</button>';
+      '<button class="conv-archive-btn" ' + (runtimeState && ['running', 'stopping', 'force_restarting'].indexOf(String(runtimeState.status || '')) >= 0 ? 'disabled ' : '') + 'onclick="event.stopPropagation();window.archiveConv(' + i + ')" title="' + escAttr(t('conversation.archive')) + '">' + iconOnly('archive', t('conversation.archive')) + '</button>' +
+      '<button class="conv-pin-btn' + (conv.pinned ? ' active' : '') + '" onclick="event.stopPropagation();window.toggleConversationPinned(' + i + ')" title="' + escAttr(conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '">' + iconOnly('pin', conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '</button>';
     div.onclick = function(idx) { return function() { window.switchConversation(idx); }; }(i);
     conversationNodes.push(div);
   }
@@ -13058,7 +13518,7 @@ window.archiveConv = function(idx) {
       return [];
     }).then(function(items) {
       state.workspaceArchives = (items || []).map(function(a) {
-        return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '' };
+        return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '', restorable: !!a.restorable, conversationId: a.conversationId || '' };
       });
       state.allArchives = [];
       window.renderRightArchives();
@@ -13765,25 +14225,88 @@ window.removeSkillFromUi = function(name) {
 window.renderGithubCliPanel = function() {
   var panel = document.getElementById('plugin-panel');
   if (!panel) return;
-  panel.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">' +
-    '<button class="sec-btn primary" onclick="window.runGhUi([\'auth\',\'status\'])">' + esc(t('plugins.authStatus')) + '</button>' +
-    '<button class="sec-btn" onclick="window.runGhUi([\'repo\',\'view\',\'--json\',\'nameWithOwner,description,url,isPrivate\'])">' + esc(t('plugins.repoView')) + '</button>' +
-    '<button class="sec-btn" onclick="window.runGhUi([\'issue\',\'list\',\'--limit\',\'10\',\'--json\',\'number,title,state,url\'])">' + esc(t('plugins.issues')) + '</button>' +
-    '<button class="sec-btn" onclick="window.runGhUi([\'pr\',\'list\',\'--limit\',\'10\',\'--json\',\'number,title,state,url\'])">' + esc(t('plugins.prs')) + '</button>' +
-    '</div><pre id="gh-output" style="white-space:pre-wrap;word-break:break-word;min-height:180px;background:var(--glass-bg-1);border:1px solid var(--glass-border-1);border-radius:8px;padding:10px;color:var(--text);font-size:11px;">' + esc(t('common.ready')) + '</pre>';
+  panel.innerHTML = '<div id="gh-overview" class="settings-card" style="min-height:220px;padding:14px;"></div>';
+  if (state.githubOverviewData) window.renderGithubOverview(state.githubOverviewData);
+  else document.getElementById('gh-overview').innerHTML = '<div class="settings-empty">' + esc(t('plugins.runningGh')) + '...</div>';
+  window.loadGithubOverview('', { initial: !state.githubOverviewLoaded });
 };
 
-window.runGhUi = function(argv) {
-  var out = document.getElementById('gh-output');
-  if (out) out.textContent = t('plugins.runningGh') + ' ' + argv.join(' ') + '...';
-  if (!api.gh) {
-    if (out) out.textContent = t('plugins.ghUnavailable');
+window.renderGithubOverview = function(data) {
+  var out = document.getElementById('gh-overview');
+  if (!out) return;
+  if (!data || !data.ok) {
+    out.innerHTML = '<div class="settings-empty">' + esc(data && data.error ? data.error : t('plugins.ghUnavailable')) + '</div>';
     return;
   }
-  api.gh(argv).then(function(r) {
-    if (out) out.textContent = (r.command || 'gh') + '\nstatus=' + r.status + '\n\n' + ((r.stdout || '') + (r.stderr || '') || t('plugins.noOutput'));
+  var account = data.account || {};
+  var repos = Array.isArray(data.repositories) ? data.repositories : [];
+  var repository = String(data.repository || (repos[0] && repos[0].nameWithOwner) || '');
+  var repoOptions = repos.map(function(repo) {
+    var name = String(repo.nameWithOwner || '');
+    return '<option value="' + escAttr(name) + '"' + (name === repository ? ' selected' : '') + '>' + esc(name) + '</option>';
+  }).join('');
+  var selected = data.selected || repos.find(function(repo) { return String(repo.nameWithOwner || '') === repository; }) || {};
+  var renderItems = function(items, kind) {
+    if (!Array.isArray(items) || !items.length) return '<div class="newmark-list"><div class="newmark-list-row newmark-list-empty">' + esc(t('plugins.noItems')) + '</div></div>';
+    return '<div class="newmark-list">' + items.map(function(item) {
+      var author = item.author && item.author.login ? ' · @' + String(item.author.login) : '';
+      var draft = item.isDraft ? ' · Draft' : '';
+      return '<a class="newmark-list-row" href="' + escAttr(String(item.url || '#')) + '" target="_blank" rel="noreferrer">' +
+        '<span class="newmark-list-title">#' + esc(String(item.number || '')) + ' ' + esc(String(item.title || '')) + '</span>' +
+        '<small class="newmark-list-meta">' + esc(String(item.state || '')) + esc(author + draft) + '</small></a>';
+    }).join('') + '</div>';
+  };
+  out.innerHTML = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">' +
+    (account.avatarUrl ? '<img src="' + escAttr(String(account.avatarUrl)) + '" alt="" style="width:38px;height:38px;border-radius:50%;">' : '') +
+    '<div><div style="font-weight:700;">' + esc(String(account.name || account.login || '')) + '</div><div style="color:var(--text-dim);font-size:11px;">@' + esc(String(account.login || '')) + '</div></div></div>' +
+    '<label style="display:block;margin-bottom:6px;color:var(--text-dim);font-size:11px;">' + esc(t('plugins.selectRepo')) + '</label>' +
+    (repos.length ? '<div class="github-repo-select-wrap"><select class="github-repo-select" onchange="window.loadGithubOverview(this.value)">' + repoOptions + '</select><span class="github-repo-select-icon" aria-hidden="true">' + iconSvg('chevron-down', '', 'tiny') + '</span></div>' : '<div class="settings-empty">' + esc(t('plugins.noRepos')) + '</div>') +
+    (repository ? '<div class="settings-card" style="padding:12px;margin-bottom:12px;"><div style="display:flex;justify-content:space-between;gap:12px;"><strong>' + esc(String(selected.nameWithOwner || repository)) + '</strong><span class="settings-badge">' + esc(selected.isPrivate ? t('plugins.private') : t('plugins.public')) + '</span></div><div style="margin-top:6px;color:var(--text-dim);font-size:11px;">' + esc(String(selected.description || '')) + '</div></div>' : '') +
+    '<div class="settings-grid" style="grid-template-columns:1fr 1fr;gap:12px;"><section><h4>' + esc(t('plugins.issues')) + '</h4>' + renderItems(data.issues, 'issue') + '</section><section><h4>' + esc(t('plugins.prs')) + '</h4>' + renderItems(data.prs, 'pr') + '</section></div>';
+};
+
+window.githubOverviewSignature = function(data) {
+  if (!data) return '';
+  return JSON.stringify({ account:data.account, repositories:data.repositories, repository:data.repository, selected:data.selected, issues:data.issues, prs:data.prs, warning:data.warning, error:data.error, ok:data.ok });
+};
+
+window.loadGithubOverview = function(repo, options) {
+  options = options || {};
+  var out = document.getElementById('gh-overview');
+  repo = String(repo || '').trim();
+  if (state.githubOverviewLoading) {
+    if (repo) state.githubOverviewPendingRepo = repo;
+    return;
+  }
+  if (out && options.initial && !state.githubOverviewLoaded) out.innerHTML = '<div class="settings-empty">' + esc(t('plugins.runningGh')) + '...</div>';
+  if (!api.githubOverview) {
+    window.renderGithubOverview({ ok: false, error: t('plugins.ghUnavailable') });
+    return;
+  }
+  state.githubOverviewLoading = true;
+  api.githubOverview(repo).then(function(data) {
+    state.githubOverviewLoading = false;
+    state.githubOverviewLoaded = true;
+    var signature = window.githubOverviewSignature(data);
+    if (signature === state.githubOverviewHash) return;
+    state.githubOverviewHash = signature;
+    state.githubOverviewData = data;
+    window.renderGithubOverview(data);
   }).catch(function(err) {
-    if (out) out.textContent = String(err && err.message ? err.message : err);
+    state.githubOverviewLoading = false;
+    state.githubOverviewLoaded = true;
+    var data = { ok: false, error: String(err && err.message ? err.message : err) };
+    var signature = window.githubOverviewSignature(data);
+    if (signature === state.githubOverviewHash) return;
+    state.githubOverviewHash = signature;
+    state.githubOverviewData = data;
+    window.renderGithubOverview(data);
+  }).finally(function() {
+    var pendingRepo = String(state.githubOverviewPendingRepo || '');
+    state.githubOverviewPendingRepo = '';
+    if (pendingRepo && (!state.githubOverviewData || pendingRepo !== String(state.githubOverviewData.repository || ''))) {
+      window.loadGithubOverview(pendingRepo);
+    }
   });
 };
 
@@ -13828,8 +14351,8 @@ window.renderLeftWsList = function() {
       '<span class="ws-icon">' + esc((ws.name || '?')[0].toUpperCase()) + '</span>' +
       '<span class="ws-label">' + esc(ws.name || t('workspace.untitled')) + '</span>' +
       (runtimeStatus ? '<span class="ws-runtime-dot ' + escAttr(runtimeStatus) + '" title="' + escAttr(runtimeStatus) + '"></span>' : '') +
-      '<button class="ws-pin-btn' + (ws.pinned ? ' active' : '') + '" onclick="event.stopPropagation();window.toggleWorkspacePinned(\'' + escAttr(identity) + '\')" title="' + escAttr(ws.pinned ? t('workspace.unpin') : t('workspace.pin')) + '">' + iconOnly('pin', ws.pinned ? t('workspace.unpin') : t('workspace.pin')) + '</button>' +
       (active ? '<span class="ws-check">*</span>' : '') +
+      '<button class="ws-pin-btn' + (ws.pinned ? ' active' : '') + '" onclick="event.stopPropagation();window.toggleWorkspacePinned(\'' + escAttr(identity) + '\')" title="' + escAttr(ws.pinned ? t('workspace.unpin') : t('workspace.pin')) + '">' + iconOnly('pin', ws.pinned ? t('workspace.unpin') : t('workspace.pin')) + '</button>' +
       '</div>';
   }
   var holder = document.createElement('div');

@@ -68,6 +68,13 @@ export interface MemoryLabWriteResult {
   component?: MemoryLabComponent;
   slug?: string;
   error?: string;
+  rebuildReceipt?: {
+    operation: 'update' | 'reindex';
+    completed: true;
+    indexUpdatedAt: string;
+    verifiedAt: string;
+    slug?: string;
+  };
 }
 
 export class MemoryLabManager {
@@ -228,6 +235,7 @@ export class MemoryLabManager {
       component: result.component,
       index: result.index,
       error: result.error,
+      rebuildReceipt: result.rebuildReceipt,
     };
     return `[${prefix}]\n${JSON.stringify(payload, null, 2)}`;
   }

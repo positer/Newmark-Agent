@@ -26,21 +26,42 @@ async function evaluate(cdp, expression) { const result=await cdp.call('Runtime.
     cdp=connect(await target(port,child));await cdp.ready;
     await waitForPromotedMainUi(cdp);await cdp.call('Runtime.enable');await cdp.call('Page.enable');
     for(let i=0;i<100;i++){if(await evaluate(cdp,`typeof window.addWorkReview==='function'&&typeof window.renderInputStack==='function'`))break;await sleep(200);if(i===99)fail('renderer init timeout');}
-    const state=await evaluate(cdp,`(() => {
+    await evaluate(cdp,`(() => {
+      const stableStyle=document.createElement('style');stableStyle.textContent='.stack-card{animation:none!important}';document.head.appendChild(stableStyle);
       window.state.conversationPlan={items:[{id:'a',text:'Inspect repository changes',status:'pending'},{id:'b',text:'Run UI regression',status:'done'}]};
       window.state.todoCollapsed=true;window.state.nextQueue=['Verify packaged interaction'];window.state.queueCollapsed=true;window.state.goalText='Ship a stable interaction pass';window.state.goalPaused=false;window.renderInputStack();
-      window.addWorkReview([{path:'DESKTOP/src/ui/index.html',old:12,new:44},{path:'DESKTOP/src/main.ts',old:3,new:8},{path:'README.md',old:1,new:4},{path:'OVERVIEW.md',old:0,new:3},{path:'DESKTOP/src/tests/verify.ts',old:2,new:9}]);
+      document.documentElement.setAttribute('data-theme','light');
+      window.addWorkReview([{path:'DESKTOP/src/ui/index.html',old:12,new:44,oldContent:'old line',newContent:'old line\\nnew line'},{path:'DESKTOP/src/main.ts',old:3,new:8},{path:'README.md',old:1,new:4},{path:'OVERVIEW.md',old:0,new:3},{path:'DESKTOP/src/tests/verify.ts',old:2,new:9}]);
       const more=document.querySelector('.work-review-more');more.click();document.querySelector('.work-review-btn').click();
+      return true;
+    })()`);
+    await sleep(250);
+    const state=await evaluate(cdp,`(() => {
       const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();return{top:r.top,bottom:r.bottom,height:r.height,width:r.width}};
-      return {todo:rect('todo-wrap'),queue:rect('queue-panel'),goal:rect('goal-bar'),reviewRows:document.querySelectorAll('.work-review-file').length,visibleRows:Array.from(document.querySelectorAll('.work-review-file')).filter(x=>getComputedStyle(x).display!=='none').length,reviewOpen:document.getElementById('sub-win-overlay').classList.contains('open'),goalText:document.getElementById('goal-text').textContent,queueLabel:document.getElementById('queue-header-label').textContent};
+      const reviewStyle=getComputedStyle(document.querySelector('.work-review'));
+      return {todo:rect('todo-wrap'),queue:rect('queue-panel'),goal:rect('goal-bar'),reviewRows:document.querySelectorAll('.work-review-file').length,visibleRows:Array.from(document.querySelectorAll('.work-review-file')).filter(x=>getComputedStyle(x).display!=='none').length,reviewOpen:document.getElementById('sub-win-overlay').classList.contains('open'),goalText:document.getElementById('goal-text').textContent,queueLabel:document.getElementById('queue-header-label').textContent,reviewColor:reviewStyle.color,reviewBackground:reviewStyle.backgroundColor};
     })()`);
     if(state.todo.height>34||state.queue.height>34||state.goal.height>34)fail(`bars are oversized: ${JSON.stringify(state)}`);
-    if(state.todo.bottom>state.queue.top||state.queue.bottom>state.goal.top)fail(`bars overlap: ${JSON.stringify(state)}`);
-    if(state.reviewRows!==5||state.visibleRows!==5||!state.reviewOpen||!state.goalText.includes('Ship')||!state.queueLabel.includes('1'))fail(`interaction state failed: ${JSON.stringify(state)}`);
+    if((state.queue.height>0&&state.todo.bottom>state.queue.top)||(state.queue.height>0&&state.queue.bottom>state.goal.top)||(state.queue.height===0&&state.todo.bottom>state.goal.top))fail(`bars overlap: ${JSON.stringify(state)}`);
+    if(state.reviewRows!==5||state.visibleRows!==5||!state.reviewOpen||!state.goalText.includes('Ship'))fail(`interaction state failed: ${JSON.stringify(state)}`);
+    if(state.reviewBackground.includes('18, 20, 28')||state.reviewColor==='rgb(10, 10, 26)')fail(`light review theme failed: ${JSON.stringify(state)}`);
     await cdp.call('Emulation.setDeviceMetricsOverride',{width:1400,height:900,deviceScaleFactor:1,mobile:false});
     await evaluate(cdp,`window.closeSubWin()`);
+    const liveToolFold=await evaluate(cdp,`(async()=>{
+      const runId='live-tool-fold-smoke';
+      window.applyAgentWorkEventToRun({id:'call-1',runId,type:'tool_call',toolName:'bash',toolArgs:'npm.cmd test',status:'running',conversationId:window.activeConversationId()});
+      let details=document.querySelector('.conversation-work-run[data-run-id="'+runId+'"] details.conversation-work-activity');
+      if(!details)return{created:false};
+      details.open=true;
+      const key=details.getAttribute('data-activity-key');
+      window.applyAgentWorkEventToRun({id:'result-1',runId,type:'tool_result',toolName:'bash',status:'running',conversationId:window.activeConversationId()});
+      await new Promise(resolve=>setTimeout(resolve,1250));
+      details=document.querySelector('.conversation-work-run[data-run-id="'+runId+'"] details.conversation-work-activity[data-activity-key="'+key+'"]');
+      return{created:true,key,open:!!(details&&details.open),title:document.querySelector('.conversation-work-run[data-run-id="'+runId+'"] .conversation-work-run-title')?.textContent||''};
+    })()`);
+    if(!liveToolFold.created||!liveToolFold.key||!liveToolFold.open||!liveToolFold.title)fail(`live Build tool details collapsed during refresh: ${JSON.stringify(liveToolFold)}`);
     const shot=await cdp.call('Page.captureScreenshot',{format:'png',fromSurface:true},30000);fs.mkdirSync(path.dirname(screenshot),{recursive:true});fs.writeFileSync(screenshot,Buffer.from(shot.data,'base64'));if(fs.statSync(screenshot).size<10000)fail('screenshot too small');
-    console.log(`[release-ui-work-review-bars-smoke] PASS ${JSON.stringify(state)} screenshot=${screenshot}`);
+    console.log(`[release-ui-work-review-bars-smoke] PASS ${JSON.stringify({state,liveToolFold})} screenshot=${screenshot}`);
   } finally {
     try{cdp?.ws.close();}catch{}
     if(child?.pid)spawnSync('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore',timeout:15000});

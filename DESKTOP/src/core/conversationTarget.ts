@@ -11,6 +11,7 @@ export interface ConversationTargetWorkspace {
   isInternal: boolean;
   kind?: string;
   workspaceKey?: string;
+  conversationStatePrefix?: string;
 }
 
 export interface ConversationRuntimeTarget extends ConversationTarget {
@@ -26,6 +27,13 @@ export interface NormalizedConversationTarget extends ConversationRuntimeTarget 
 }
 
 const SAFE_KEY = /^[A-Za-z0-9_.:-]{1,200}$/;
+
+export function conversationStateWorkspacePrefix(workspace: Pick<ConversationTargetWorkspace, 'path' | 'isInternal'>): string {
+  const kind = workspace.isInternal ? 'internal' : 'external';
+  const canonical = path.resolve(workspace.path).toLowerCase();
+  const digest = createHash('sha256').update(canonical).digest('hex').slice(0, 16);
+  return `${kind}-${digest}`;
+}
 
 export function safeConversationId(value: string): string {
   return String(value || 'default').trim().replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 120) || 'default';
@@ -68,6 +76,7 @@ export function normalizeConversationTarget(target: ConversationRuntimeTarget): 
     name: String(target.workspace.name || target.workspace.id || target.workspace.path || 'Workspace'),
     path: String(target.workspace.path || ''),
     isInternal: !!target.workspace.isInternal,
+    conversationStatePrefix: String(target.workspace.conversationStatePrefix || ''),
   } : null;
   const workspaceKey = conversationWorkspaceKey({ ...target, workspace, conversationId });
   return {

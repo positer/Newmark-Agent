@@ -7,7 +7,7 @@ import { spawn, spawnSync, ChildProcess } from 'child_process';
 import { Agent } from './core/agent';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope } from './core/types';
 import { AgentPromptMessage, ConversationKernel, ConversationTargetInput } from './core/conversationKernel';
-import { ConversationRuntimeTarget, normalizeConversationTarget } from './core/conversationTarget';
+import { ConversationRuntimeTarget, conversationStateWorkspacePrefix, normalizeConversationTarget } from './core/conversationTarget';
 import { AutomationManager } from './core/automation';
 import { AutomationWakeScheduler, WakeSyncResult } from './core/automationWake';
 import { BrowserControl, BrowserControlRequest, BrowserControlResult } from './core/browserControl';
@@ -246,6 +246,7 @@ function conversationRuntimeTarget(requested?: ConversationTargetInput | { targe
       path: workspace.path,
       isInternal: workspace.isInternal,
       kind: workspace.kind,
+      conversationStatePrefix: conversationStateWorkspacePrefix(workspace),
     } : undefined,
   };
 }
@@ -931,7 +932,10 @@ if (hasCliCommand) {
   }
 
   const allowMultipleInstances = args.includes('--allow-multiple-instances');
-  const singleInstanceLock = app.requestSingleInstanceLock();
+  // Test and isolated diagnostic windows must not participate in Electron's
+  // global single-instance coordination at all. Requesting the lock and then
+  // ignoring failure still notifies/focuses the production instance.
+  const singleInstanceLock = allowMultipleInstances || app.requestSingleInstanceLock();
   if (!singleInstanceLock && !allowMultipleInstances) {
     app.quit();
   } else {
@@ -2457,6 +2461,15 @@ if (hasCliCommand) {
       return agent?.readArchive(name);
     });
 
+    ipcMain.handle('agent:restoreArchive', async (_event, name: string) => {
+      if (!agent) return { ok: false, error: 'Agent not initialized' };
+      const restored = agent.restoreArchivedConversation(name);
+      if (!restored.ok || !restored.workspaceId || !restored.conversationId) return restored;
+      agent.selectWorkspaceFromStorage(restored.workspaceId);
+      agent.setConversationFromStorage(restored.conversationId);
+      return { ...restored, snapshot: agent.getConversationSnapshot(restored.conversationId) };
+    });
+
     async function listTreeLevel(current: string): Promise<any[]> {
       const entries = await fs.promises.readdir(current, { withFileTypes: true });
       const nodes: any[] = [];
@@ -2991,8 +3004,17 @@ if (hasCliCommand) {
       return await importToken(token);
     });
 
-    ipcMain.handle('agent:editorComplete', async (_event, request: Record<string, unknown>) => {
-      return agent?.editorModelRequest({ ...request, completion: true, preferCopilot: false } as any) || { ok: false, text: '', error: 'Agent not initialized' };
+    const editorCompletionControllers = new Map<number, AbortController>();
+    ipcMain.handle('agent:editorComplete', async (event, request: Record<string, unknown>) => {
+      const ownerId = event.sender.id;
+      editorCompletionControllers.get(ownerId)?.abort(new Error('Superseded editor completion'));
+      const controller = new AbortController();
+      editorCompletionControllers.set(ownerId, controller);
+      try {
+        return await (agent?.editorModelRequest({ ...request, completion: true, preferCopilot: true } as any, controller.signal) || { ok: false, text: '', error: 'Agent not initialized' });
+      } finally {
+        if (editorCompletionControllers.get(ownerId) === controller) editorCompletionControllers.delete(ownerId);
+      }
     });
 
     ipcMain.handle('agent:editorAssist', async (_event, request: Record<string, unknown>) => {
@@ -3195,6 +3217,57 @@ if (hasCliCommand) {
       } else {
         win?.close();
       }
+    });
+
+    ipcMain.handle('github:overview', async (_event, requestedRepo?: string) => {
+      const cwd = agent?.workspace.current?.path || root;
+      const runJson = (args: string[]) => {
+        const result = spawnSync('gh', args, {
+          cwd,
+          encoding: 'utf-8',
+          timeout: 60000,
+          windowsHide: true,
+          env: { ...process.env },
+        });
+        if (result.error || result.status !== 0) {
+          return { ok: false as const, data: null, error: String(result.stderr || result.error?.message || 'GitHub CLI request failed').trim() };
+        }
+        try {
+          return { ok: true as const, data: JSON.parse(String(result.stdout || 'null')), error: '' };
+        } catch {
+          return { ok: false as const, data: null, error: 'GitHub CLI returned invalid JSON.' };
+        }
+      };
+      const userResult = runJson(['api', 'user']);
+      if (!userResult.ok || !userResult.data) return { ok: false, error: userResult.error || 'GitHub authentication is unavailable.' };
+      const user = userResult.data as Record<string, unknown>;
+      const login = String(user.login || '').trim();
+      if (!login) return { ok: false, error: 'GitHub authentication did not return an account.' };
+      const reposResult = runJson(['repo', 'list', login, '--limit', '100', '--json', 'nameWithOwner,description,url,isPrivate,isFork,updatedAt']);
+      const repositories = reposResult.ok && Array.isArray(reposResult.data) ? reposResult.data as Array<Record<string, unknown>> : [];
+      let repository = String(requestedRepo || '').trim();
+      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) repository = '';
+      if (!repository) {
+        const currentResult = runJson(['repo', 'view', '--json', 'nameWithOwner']);
+        const current = currentResult.ok && currentResult.data && typeof currentResult.data === 'object'
+          ? String((currentResult.data as Record<string, unknown>).nameWithOwner || '') : '';
+        repository = repositories.some(item => String(item.nameWithOwner || '') === current) ? current : String(repositories[0]?.nameWithOwner || '');
+      }
+      const selected = repositories.find(item => String(item.nameWithOwner || '') === repository) || null;
+      if (!selected && repositories.length) repository = String(repositories[0]?.nameWithOwner || '');
+      const resolvedSelected = repositories.find(item => String(item.nameWithOwner || '') === repository) || null;
+      const issuesResult = repository ? runJson(['issue', 'list', '--repo', repository, '--limit', '20', '--json', 'number,title,state,url,updatedAt,author']) : null;
+      const prsResult = repository ? runJson(['pr', 'list', '--repo', repository, '--limit', '20', '--json', 'number,title,state,url,updatedAt,author,isDraft']) : null;
+      return {
+        ok: true,
+        account: { login, name: String(user.name || ''), avatarUrl: String(user.avatar_url || ''), url: String(user.html_url || '') },
+        repositories,
+        repository,
+        selected: resolvedSelected,
+        issues: issuesResult?.ok && Array.isArray(issuesResult.data) ? issuesResult.data : [],
+        prs: prsResult?.ok && Array.isArray(prsResult.data) ? prsResult.data : [],
+        warning: reposResult.ok ? '' : reposResult.error,
+      };
     });
     ipcMain.handle('wsl:backendStatus', async () => {
       if (!agent) return { enabled: false, connected: false, distro: '', pid: 0, error: 'Agent not initialized' };

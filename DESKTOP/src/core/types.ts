@@ -72,7 +72,7 @@ export interface ChatMessage {
 export interface AgentWorkEvent {
   id: string;
   conversationId: string;
-  type: 'start' | 'text' | 'tool_call' | 'tool_result' | 'status' | 'done' | 'error' | 'queue_update' | 'guide';
+  type: 'start' | 'text' | 'response' | 'final_response' | 'tool_call' | 'tool_result' | 'status' | 'done' | 'error' | 'queue_update' | 'guide';
   content: string;
   mode: string;
   model: string;

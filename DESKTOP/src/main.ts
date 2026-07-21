@@ -52,6 +52,8 @@ import {
   startupUpdatePromptContent,
 } from './core/startupPrewarm';
 import { runRuntimeShutdownBarrier } from './core/runtimeShutdown';
+import { discoverPluginManifests } from './core/compat';
+import { McpManager } from './core/mcpManager';
 
 const APP_NAME = 'Newmark Agent';
 const APP_ID = 'ai.newmark.agent';
@@ -85,6 +87,7 @@ let activeAgentBackendMode: 'windows' | 'wsl' = 'windows';
 let automation: AutomationManager | null = null;
 let automationWake: AutomationWakeScheduler | null = null;
 let lastWakeSync: WakeSyncResult | null = null;
+let mcpManager: McpManager | null = null;
 let tray: Tray | null = null;
 let _forceQuit = false;
 let electronBrowserUseHost: ElectronBrowserUseHost | null = null;
@@ -132,6 +135,58 @@ function runShellCommand(command: string, shellId: string, cwd: string): { outpu
 function resetConversationKernel(): void {
   if (conversationKernel?.isAnyRunning()) return;
   conversationKernel = null;
+}
+
+interface AsyncCommandResult {
+  status: number;
+  stdout: string;
+  stderr: string;
+  error: string;
+}
+
+function runCommandAsync(command: string, args: string[], cwd: string, timeoutMs = 30000): Promise<AsyncCommandResult> {
+  return new Promise(resolve => {
+    const child = spawn(command, args, {
+      cwd,
+      windowsHide: true,
+      env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let settled = false;
+    const finish = (status: number, error = '') => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        status,
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'),
+        error,
+      });
+    };
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      finish(-1, `${command} timed out after ${timeoutMs} ms`);
+    }, timeoutMs);
+    child.stdout?.on('data', chunk => stdout.push(Buffer.from(chunk)));
+    child.stderr?.on('data', chunk => stderr.push(Buffer.from(chunk)));
+    child.once('error', error => finish(-1, error.message));
+    child.once('close', code => finish(typeof code === 'number' ? code : -1));
+  });
+}
+
+async function runJsonCommand(command: string, args: string[], cwd: string, timeoutMs = 30000): Promise<{ ok: boolean; data: unknown; error: string }> {
+  const result = await runCommandAsync(command, args, cwd, timeoutMs);
+  if (result.error || result.status !== 0) {
+    return { ok: false, data: null, error: String(result.stderr || result.error || `${command} exited ${result.status}`).trim() };
+  }
+  try {
+    return { ok: true, data: JSON.parse(result.stdout || 'null'), error: '' };
+  } catch {
+    return { ok: false, data: null, error: `${command} returned invalid JSON.` };
+  }
 }
 
 let wslDistroCache: { at: number; items: string[] } = { at: 0, items: [] };
@@ -1264,6 +1319,7 @@ if (hasCliCommand) {
       }
       if (!agent) {
         agent = new Agent(root);
+        mcpManager = new McpManager(root);
         activeAgentBackendMode = process.platform === 'win32' && agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows';
         recordStartup('agent-ready');
       }
@@ -2130,6 +2186,23 @@ if (hasCliCommand) {
       if (!agent) return {};
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
       return await runtimeSnapshotForTarget(target);
+    });
+    ipcMain.handle('agent:activateConversation', async (_event, targetInput: ConversationTargetInput) => {
+      if (!agent) return {};
+      const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
+      const snapshot = await runtimeSnapshotForTarget(target);
+      const workspace = target.workspace ? {
+        id: target.workspace.id,
+        name: target.workspace.name,
+        path: target.workspace.path,
+        isInternal: target.workspace.isInternal,
+        hostBinding: '',
+        conversationStatePrefix: target.workspace.conversationStatePrefix,
+        icon: '',
+        kind: target.workspace.kind === 'ssh' ? 'ssh' as const : 'local' as const,
+      } : agent.workspace.current;
+      agent.persistActiveConversationSelection(target.conversationId, workspace);
+      return snapshot;
     });
     ipcMain.handle('agent:updateGoal', async (_event, goal: string) => {
       if (agent) agent.updateGoal(goal);
@@ -3140,6 +3213,41 @@ if (hasCliCommand) {
       return agent.skills.listDetailed();
     });
 
+    ipcMain.handle('mcp:list', async () => {
+      if (!mcpManager) return { servers: [], discovered: [] };
+      const discovered = discoverPluginManifests(root).flatMap(plugin =>
+        (plugin.components.mcpServers || []).map(name => ({
+          id: `${plugin.id}:${name}`,
+          name,
+          plugin: plugin.displayName || plugin.name,
+          ecosystem: plugin.ecosystem,
+          root: plugin.root,
+          enabled: plugin.enabled,
+          readOnly: true,
+        })));
+      return { servers: mcpManager.list(), discovered };
+    });
+
+    ipcMain.handle('mcp:upsert', async (_event, input: Record<string, unknown>) => {
+      if (!mcpManager) return { ok: false, error: 'MCP manager is unavailable.' };
+      try {
+        mcpManager.upsert(input);
+        return { ok: true, servers: mcpManager.list() };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error), servers: mcpManager.list() };
+      }
+    });
+
+    ipcMain.handle('mcp:setEnabled', async (_event, id: string, enabled: boolean) => {
+      if (!mcpManager) return { ok: false, error: 'MCP manager is unavailable.' };
+      return { ok: mcpManager.setEnabled(id, enabled), servers: mcpManager.list() };
+    });
+
+    ipcMain.handle('mcp:remove', async (_event, id: string) => {
+      if (!mcpManager) return { ok: false, error: 'MCP manager is unavailable.' };
+      return { ok: mcpManager.remove(id), servers: mcpManager.list() };
+    });
+
     ipcMain.handle('memoryLab:read', async (_event, selector?: string) => {
       if (!agent) return { ok: false, error: 'Agent not ready' };
       return agent.memoryLab.read(selector || '');
@@ -3262,43 +3370,34 @@ if (hasCliCommand) {
 
     ipcMain.handle('github:overview', async (_event, requestedRepo?: string) => {
       const cwd = agent?.workspace.current?.path || root;
-      const runJson = (args: string[]) => {
-        const result = spawnSync('gh', args, {
-          cwd,
-          encoding: 'utf-8',
-          timeout: 60000,
-          windowsHide: true,
-          env: { ...process.env },
-        });
-        if (result.error || result.status !== 0) {
-          return { ok: false as const, data: null, error: String(result.stderr || result.error?.message || 'GitHub CLI request failed').trim() };
-        }
-        try {
-          return { ok: true as const, data: JSON.parse(String(result.stdout || 'null')), error: '' };
-        } catch {
-          return { ok: false as const, data: null, error: 'GitHub CLI returned invalid JSON.' };
-        }
-      };
-      const userResult = runJson(['api', 'user']);
+      const userResult = await runJsonCommand('gh', ['api', 'user'], cwd, 20000);
       if (!userResult.ok || !userResult.data) return { ok: false, error: userResult.error || 'GitHub authentication is unavailable.' };
       const user = userResult.data as Record<string, unknown>;
       const login = String(user.login || '').trim();
       if (!login) return { ok: false, error: 'GitHub authentication did not return an account.' };
-      const reposResult = runJson(['repo', 'list', login, '--limit', '100', '--json', 'nameWithOwner,description,url,isPrivate,isFork,updatedAt']);
+      const repoFields = 'nameWithOwner,description,url,isPrivate,isFork,updatedAt,viewerHasStarred,stargazerCount,forkCount,parent,viewerPermission,viewerSubscription';
+      const [reposResult, currentResult] = await Promise.all([
+        runJsonCommand('gh', ['repo', 'list', login, '--limit', '100', '--json', repoFields], cwd, 30000),
+        runJsonCommand('gh', ['repo', 'view', '--json', 'nameWithOwner'], cwd, 15000),
+      ]);
       const repositories = reposResult.ok && Array.isArray(reposResult.data) ? reposResult.data as Array<Record<string, unknown>> : [];
       let repository = String(requestedRepo || '').trim();
       if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) repository = '';
       if (!repository) {
-        const currentResult = runJson(['repo', 'view', '--json', 'nameWithOwner']);
         const current = currentResult.ok && currentResult.data && typeof currentResult.data === 'object'
           ? String((currentResult.data as Record<string, unknown>).nameWithOwner || '') : '';
         repository = repositories.some(item => String(item.nameWithOwner || '') === current) ? current : String(repositories[0]?.nameWithOwner || '');
       }
       const selected = repositories.find(item => String(item.nameWithOwner || '') === repository) || null;
       if (!selected && repositories.length) repository = String(repositories[0]?.nameWithOwner || '');
-      const resolvedSelected = repositories.find(item => String(item.nameWithOwner || '') === repository) || null;
-      const issuesResult = repository ? runJson(['issue', 'list', '--repo', repository, '--limit', '20', '--json', 'number,title,state,url,updatedAt,author']) : null;
-      const prsResult = repository ? runJson(['pr', 'list', '--repo', repository, '--limit', '20', '--json', 'number,title,state,url,updatedAt,author,isDraft']) : null;
+      const [detailResult, issuesResult, prsResult] = repository ? await Promise.all([
+        runJsonCommand('gh', ['repo', 'view', repository, '--json', repoFields], cwd, 20000),
+        runJsonCommand('gh', ['issue', 'list', '--repo', repository, '--limit', '20', '--json', 'number,title,state,url,updatedAt,author'], cwd, 20000),
+        runJsonCommand('gh', ['pr', 'list', '--repo', repository, '--limit', '20', '--json', 'number,title,state,url,updatedAt,author,isDraft'], cwd, 20000),
+      ]) : [null, null, null];
+      const resolvedSelected = detailResult?.ok && detailResult.data && typeof detailResult.data === 'object'
+        ? detailResult.data as Record<string, unknown>
+        : repositories.find(item => String(item.nameWithOwner || '') === repository) || null;
       return {
         ok: true,
         account: { login, name: String(user.name || ''), avatarUrl: String(user.avatar_url || ''), url: String(user.html_url || '') },
@@ -3307,7 +3406,7 @@ if (hasCliCommand) {
         selected: resolvedSelected,
         issues: issuesResult?.ok && Array.isArray(issuesResult.data) ? issuesResult.data : [],
         prs: prsResult?.ok && Array.isArray(prsResult.data) ? prsResult.data : [],
-        warning: reposResult.ok ? '' : reposResult.error,
+        warning: [reposResult.ok ? '' : reposResult.error, detailResult && !detailResult.ok ? detailResult.error : ''].filter(Boolean).join(' '),
       };
     });
     ipcMain.handle('wsl:backendStatus', async () => {

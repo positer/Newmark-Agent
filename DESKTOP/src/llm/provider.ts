@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { extractProviderUsage } from '../core/agentKernelDiagnostics';
 
 export interface IntelligenceConfig {
   temperature: number;
@@ -817,6 +818,7 @@ export class LLMProvider {
         return;
       }
       const json = this.normalizeResponsesPayload(await fallback.json());
+      yield { type: 'usage', text: '', usage: extractProviderUsage(json) };
       for (const summary of this.extractResponsesReasoningSummaries(json)) yield { type: 'status', text: summary };
       const text = this.extractResponsesText(json);
       if (text) yield { type: 'text', text };
@@ -836,6 +838,7 @@ export class LLMProvider {
       const contentType = response.headers.get('content-type') || '';
       if (!/text\/event-stream/i.test(contentType)) {
         const json = this.normalizeResponsesPayload(await response.json());
+        yield { type: 'usage', text: '', usage: extractProviderUsage(json) };
         for (const summary of this.extractResponsesReasoningSummaries(json)) yield { type: 'status', text: summary };
         const text = this.extractResponsesText(json);
         let emitted = false;
@@ -915,7 +918,11 @@ export class LLMProvider {
               calls.set(key, call);
               continue;
             }
-            if (eventType === 'response.completed') { completed = true; continue; }
+            if (eventType === 'response.completed') {
+              completed = true;
+              yield { type: 'usage', text: '', usage: extractProviderUsage(payload.response || payload) };
+              continue;
+            }
             if (eventType === 'response.failed' || eventType === 'response.incomplete' || eventType === 'error') {
               streamError = this.extractTextValue(payload.error?.message || payload.response?.error?.message || payload.message) || eventType;
             }
@@ -1138,6 +1145,7 @@ export class LLMProvider {
 
           try {
             const json = JSON.parse(data);
+            if (json.usage) yield { type: 'usage', text: '', usage: extractProviderUsage(json) };
             if (this.contentPolicyBlocked(json)) contentPolicyBlocked = true;
             const delta = json.choices?.[0]?.delta;
             if (!delta) continue;
@@ -1209,6 +1217,7 @@ export class LLMProvider {
       return;
     }
     const json = await response.json();
+    yield { type: 'usage', text: '', usage: extractProviderUsage(json) };
     this.transportDiagnostic('chat-tools:parsed', `tools=${Array.isArray(json?.choices?.[0]?.message?.tool_calls) ? json.choices[0].message.tool_calls.length : 0}`);
     const choice = json.choices?.[0];
     const message = choice?.message || {};
@@ -1270,7 +1279,8 @@ export class LLMProvider {
       return;
     }
 
-    const json = await response.json() as { content?: Array<Record<string, unknown>> };
+    const json = await response.json() as { content?: Array<Record<string, unknown>>; usage?: Record<string, unknown> };
+    yield { type: 'usage', text: '', usage: extractProviderUsage(json) };
     for (const block of json.content || []) {
       const type = String(block.type || '');
       if (type === 'text' && block.text) {

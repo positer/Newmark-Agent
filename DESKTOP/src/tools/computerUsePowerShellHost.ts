@@ -2,7 +2,7 @@ import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import * as crypto from 'crypto';
 import * as readline from 'readline';
 
-type HelperLane = 'action' | 'uia' | 'windows';
+type HelperLane = 'action' | 'uia' | 'windows' | 'uia_advisory' | 'windows_advisory';
 
 interface PendingRequest {
   resolve: (result: PowerShellResult) => void;
@@ -47,14 +47,33 @@ class PowerShellWorker {
   private child: ChildProcessWithoutNullStreams | null = null;
   private pending = new Map<string, PendingRequest>();
   private restarting = false;
+  private unavailableUntil = 0;
 
   constructor(private readonly lane: HelperLane) {}
 
+  ready(): boolean {
+    return Date.now() >= this.unavailableUntil && !!this.child && !this.child.killed && this.child.exitCode === null;
+  }
+
   async run(script: string, timeoutMs: number): Promise<PowerShellResult> {
     const startedAt = Date.now();
+    if (Date.now() < this.unavailableUntil) {
+      return { ok: false, output: `Computer Use ${this.lane} helper is cooling down after a timeout.`, elapsedMs: 0 };
+    }
     try {
-      return await this.send(script, timeoutMs);
+      const result = await this.send(script, timeoutMs);
+      this.unavailableUntil = 0;
+      return result;
     } catch (error) {
+      if (error instanceof Error && /timed out after/i.test(error.message)) {
+        // A timed-out PowerShell script is still occupying the single lane.
+        // Restart the helper, but do not replay the same advisory UIA query and
+        // double its tail latency. The caller can continue with a screenshot or
+        // return the bounded warning result.
+        this.stop();
+        this.unavailableUntil = Date.now() + 60_000;
+        return { ok: false, output: error.message, elapsedMs: Date.now() - startedAt };
+      }
       if (this.restarting) throw error;
       this.restarting = true;
       try {
@@ -122,12 +141,14 @@ class PowerShellWorker {
       stderr = `${stderr}${String(chunk)}`.slice(-8192);
     });
     child.once('error', error => {
-      if (this.child === child) this.child = null;
+      if (this.child !== child) return;
+      this.child = null;
       this.rejectPending(error.message);
     });
     child.once('exit', (code, signal) => {
-      if (this.child === child) this.child = null;
       lines.close();
+      if (this.child !== child) return;
+      this.child = null;
       this.rejectPending(`Computer Use ${this.lane} helper exited (${code ?? signal ?? 'unknown'}).${stderr ? ` ${stderr.trim()}` : ''}`);
     });
     this.child = child;
@@ -166,6 +187,8 @@ const workers: Record<HelperLane, PowerShellWorker> = {
   action: new PowerShellWorker('action'),
   uia: new PowerShellWorker('uia'),
   windows: new PowerShellWorker('windows'),
+  uia_advisory: new PowerShellWorker('uia_advisory'),
+  windows_advisory: new PowerShellWorker('windows_advisory'),
 };
 
 let cleanupRegistered = false;
@@ -177,6 +200,8 @@ function registerCleanup(): void {
     workers.action.stop();
     workers.uia.stop();
     workers.windows.stop();
+    workers.uia_advisory.stop();
+    workers.windows_advisory.stop();
   };
   process.once('exit', stop);
 }
@@ -189,8 +214,14 @@ export async function runPersistentPowerShell(script: string, timeoutMs = 30000,
   return await workers[lane].run(script, timeoutMs);
 }
 
+export function computerUsePowerShellLaneReady(lane: HelperLane): boolean {
+  return process.platform === 'win32' && workers[lane].ready();
+}
+
 export function stopComputerUsePowerShellHost(): void {
   workers.action.stop();
   workers.uia.stop();
   workers.windows.stop();
+  workers.uia_advisory.stop();
+  workers.windows_advisory.stop();
 }

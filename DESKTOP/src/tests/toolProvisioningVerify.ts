@@ -94,6 +94,12 @@ async function main(): Promise<void> {
       'broker compact catalog names exactly match the complete policy-filtered callable catalog');
     assert.ok(JSON.stringify(initial).length < JSON.stringify(catalog).length * 0.55,
       'compact broker catalog is materially smaller than every full tool schema');
+    const initialMetrics = emptySession.metrics();
+    assert.ok(initialMetrics.catalogToolCount === names.length
+      && initialMetrics.initialToolCount === 0
+      && initialMetrics.provisionedToolCount === 0
+      && initialMetrics.activeSurfaceEstimatedTokens < initialMetrics.fullCatalogEstimatedTokens * 0.55,
+    'provision metrics quantify the compact initial surface without exposing catalog content');
 
     for (const definition of catalog) {
       const name = toolName(definition);
@@ -112,6 +118,27 @@ async function main(): Promise<void> {
       'query is search-only and does not silently grant schemas');
     const granted = searchSession.provision({ names: [searched.matches[0]] });
     assert.deepEqual(granted.provisioned, [searched.matches[0]], 'a searched exact name is provisioned in the second phase');
+    const grantedMetrics = searchSession.metrics();
+    assert.ok(grantedMetrics.brokerCalls === 2
+      && grantedMetrics.provisionedToolCount === 1
+      && grantedMetrics.activeSurfaceEstimatedTokens > initialMetrics.activeSurfaceEstimatedTokens
+      && grantedMetrics.activeSurfaceEstimatedTokens < grantedMetrics.fullCatalogEstimatedTokens,
+    'provision metrics track discovery round trips and incremental schema cost');
+
+    const discoveryCases: Array<{ query: string; accept: (name: string) => boolean }> = [
+      { query: 'browser click page', accept: name => name.startsWith('browser_') },
+      { query: 'computer screen desktop', accept: name => name === 'computer_use' },
+      { query: 'terminal command script', accept: name => name === 'bash' || name === 'terminal_takeover' },
+      { query: 'file directory repository code', accept: name => ['glob', 'grep', 'read', 'write', 'edit'].includes(name) },
+      { query: 'web search online', accept: name => name === 'web_search' || name === 'web_fetch' },
+      { query: 'automation schedule reminder', accept: name => name.startsWith('automation_') },
+    ];
+    let discoveryHits = 0;
+    for (const item of discoveryCases) {
+      const result = new Session(catalog, []).provision({ query: item.query });
+      if (result.matches.some(item.accept)) discoveryHits += 1;
+    }
+    assert.equal(discoveryHits, discoveryCases.length, 'representative capability queries retain complete discovery coverage');
 
     const guarded = new Session(catalog, []);
     assert.equal(guarded.provision({ names: ['pwd'], extra: true }).error?.code, 'unexpected_field');
@@ -193,18 +220,20 @@ async function main(): Promise<void> {
     agent.setMode('build');
     agent.tools.setHostProfile({ kind: 'electron-utility', platform: 'win32', electronBrowser: true, windowsComputerUse: true });
     const providerTurns: string[][] = [];
+    const providerSystems: string[] = [];
     let providerTurn = 0;
     const fakeProvider = {
       intelligenceConfig: () => ({ temperature: 0, maxTokens: 64 }),
       async *chatStreamWithTools(
         _model: string,
         _messages: Array<Record<string, unknown>>,
-        _system: string,
+        system: string,
         _temperature: number,
         _maxTokens: number,
         tools: ToolDefinition[],
       ): AsyncGenerator<StreamToken> {
         providerTurns.push(tools.map(toolName));
+        providerSystems.push(system);
         if (providerTurn++ === 0) {
           yield { type: 'text', text: 'INTERNAL_PROVISION_PREFACE' };
           yield { type: 'tool_call', text: '', toolCall: { id: 'provision-pwd', name: 'tool_provision', arguments: JSON.stringify({ names: ['pwd'] }) } };
@@ -226,6 +255,13 @@ async function main(): Promise<void> {
     assert.ok(providerTurns[1].includes('pwd') && providerTurns[1].includes('tool_provision'),
       'broker result refreshes the next provider request in the same user run');
     assert.ok(providerTurns[1].length < catalog.length, 'dynamic refresh does not expand back to the whole catalog');
+    assert.ok(providerSystems[0].includes('## Build Context Bootstrap')
+      && providerSystems[0].includes('## Tool Awareness Bootstrap')
+      && providerSystems[0].includes('pwd:')
+      && providerSystems[0].includes('Necessary full schemas supplied natively for this provider turn: skill'),
+    'the first Build request receives the full brief catalog and identifies schemas supplied through the native tools field');
+    assert.ok(providerSystems.slice(1).every(system => !system.includes('## Build Context Bootstrap') && !system.includes('## Tool Awareness Bootstrap')),
+      'broker and real-tool subturns do not repeat the Build bootstrap');
     assert.ok(output.includes('BROKER_EXECUTION_OK'), 'newly provisioned original tool executes and the run completes');
     assert.ok(!output.includes('INTERNAL_PROVISION_PREFACE'), 'short broker-only prefaces never enter public output');
     assert.ok(publicToolEvents.includes('pwd') && !publicToolEvents.includes('tool_provision'),
@@ -333,10 +369,12 @@ async function main(): Promise<void> {
       compressionAgent.saveWorkspaceConversationState();
       let compressionRound = 0;
       const compressionContexts: string[] = [];
+      const compressionSystems: string[] = [];
       const compressionProvider = {
         intelligenceConfig: () => ({ temperature: 0, maxTokens: 64 }),
-        async *chatStreamWithTools(_model: string, messages: Array<Record<string, unknown>>): AsyncGenerator<StreamToken> {
+        async *chatStreamWithTools(_model: string, messages: Array<Record<string, unknown>>, system: string): AsyncGenerator<StreamToken> {
           compressionContexts.push(JSON.stringify(messages));
+          compressionSystems.push(system);
           if (compressionRound++ === 0) {
             yield { type: 'tool_call', text: '', toolCall: { id: 'compressed-provision', name: 'tool_provision', arguments: JSON.stringify({ names: ['pwd'] }) } };
             return;
@@ -357,6 +395,18 @@ async function main(): Promise<void> {
       assert.ok(compressionAgent.workRuns.at(-1)?.events.some(event => event.type === 'tool_result' && event.toolName === 'context_compression')
         && compressionContexts.some(context => context.includes('Continue Same Build After Context Compression') && context.includes('Build Primary Prompt') && context.includes('Continue after compacting this long public context.')),
       'context compression is a completed Build activity and continuation submits the summary, primary prompt, Guide slot, and current Build snapshot');
+      assert.ok(compressionSystems[0]?.includes('Injection reason: context compression just completed')
+        && compressionSystems[0].includes('PUBLIC_COMPRESSION_SUMMARY')
+        && compressionSystems[0].includes('Historical Build Blocks (newest to oldest; #1 is the previous/last task):')
+        && compressionSystems[0].includes('## Tool Awareness Bootstrap'),
+      'the first provider request after compression rehydrates the mixed Build, recent-history, and tool-awareness bootstrap');
+      assert.ok(compressionSystems.slice(1).every(system => !system.includes('## Build Context Bootstrap')),
+        'post-compression tool subturns do not repeat the bootstrap');
+      assert.ok(compressionSystems.every(system => !system.includes('0:' + 'x'.repeat(500))),
+        'the mixed bootstrap uses the compression summary and never restores the removed original transcript');
+      assert.ok(!JSON.stringify(compressionAgent.history).includes('Build Context Bootstrap')
+        && !JSON.stringify(compressionAgent.chatMessages).includes('Tool Awareness Bootstrap'),
+      'compression bootstrap metadata is not persisted into durable conversation state');
       const reloaded = new Agent(compressionRoot, { conversationId: 'tool-provision-compression' });
       assert.ok(!JSON.stringify(reloaded.history).includes('tool_provision'),
         'reloading compressed conversation state cannot revive the internal broker');

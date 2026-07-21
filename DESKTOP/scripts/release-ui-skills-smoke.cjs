@@ -183,7 +183,7 @@ async function runUiCheck(root) {
   let child;
   let cdp;
   try {
-    child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
+    child = spawn(exePath, [`--remote-debugging-port=${port}`, `--user-data-dir=${path.join(root, 'ElectronData')}`, '--allow-multiple-instances', '--no-sandbox', '--root', root], {
       stdio: 'ignore',
       windowsHide: true,
     });
@@ -197,6 +197,51 @@ async function runUiCheck(root) {
     await cdp.call('Page.bringToFront');
 
     await waitFor(cdp, `(() => document.readyState === 'complete' && !!window.api && !!window.showPluginList && !!document.querySelector('#prompt'))()`, 30000, 'renderer ready');
+
+    await evaluate(cdp, `window.showPluginList()`, 30000);
+    await waitFor(cdp, `(() => {
+      const tabs = Array.from(document.querySelectorAll('.settings-tabs .stab-btn')).map(node => node.textContent.trim());
+      return tabs[0] === 'MCP Management' && tabs[1] === 'Skills Management' && !!document.querySelector('#mcp-name');
+    })()`, 30000, 'MCP management ordered before Skills');
+    const addedMcp = await evaluate(cdp, `window.api.upsertMcpServer({ name:'Release MCP', transport:'stdio', command:'node', args:['server.js'], env:{ MCP_TOKEN:'secret-smoke-value' } })`, 30000);
+    if (!addedMcp?.ok) fail(`MCP add failed: ${JSON.stringify(addedMcp)}`);
+    await evaluate(cdp, `window.renderMcpManager()`, 30000);
+    await waitFor(cdp, `(() => document.querySelector('#plugin-panel')?.innerText.includes('Release MCP'))()`, 30000, 'MCP server visible');
+    const mcpSnapshot = await evaluate(cdp, `window.api.listMcpServers()`, 30000);
+    const mcpServer = mcpSnapshot?.servers?.find(server => server.name === 'Release MCP');
+    if (!mcpServer || JSON.stringify(mcpSnapshot).includes('secret-smoke-value')) fail(`MCP list leaked secret or omitted server: ${JSON.stringify(mcpSnapshot)}`);
+    await evaluate(cdp, `window.api.setMcpServerEnabled(${JSON.stringify(String(mcpServer?.id || ''))}, false)`, 30000);
+    await evaluate(cdp, `window.api.removeMcpServer(${JSON.stringify(String(mcpServer?.id || ''))})`, 30000);
+    log('MCP management CRUD and secret-safe list ok');
+
+    await evaluate(cdp, `(() => {
+      window.__ghOverviewProbe = { ticks: 0, startedAt: Date.now(), done: false, result: null, error: '' };
+      const timer = setInterval(() => { window.__ghOverviewProbe.ticks++; }, 25);
+      window.api.githubOverview().then(result => {
+        window.__ghOverviewProbe.result = result;
+      }).catch(error => {
+        window.__ghOverviewProbe.error = String(error && error.message || error);
+      }).finally(() => {
+        clearInterval(timer);
+        window.__ghOverviewProbe.elapsedMs = Date.now() - window.__ghOverviewProbe.startedAt;
+        window.__ghOverviewProbe.done = true;
+      });
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `window.__ghOverviewProbe && window.__ghOverviewProbe.done`, 90000, 'GitHub overview complete without renderer freeze');
+    const githubProbe = await evaluate(cdp, `window.__ghOverviewProbe`, 30000);
+    if (githubProbe?.error || !githubProbe?.result?.ok) fail(`GitHub overview failed: ${JSON.stringify(githubProbe)}`);
+    if (githubProbe.elapsedMs >= 100 && githubProbe.ticks < 2) fail(`GitHub overview blocked renderer heartbeat: ${JSON.stringify(githubProbe)}`);
+    const selectedRepo = githubProbe.result.selected || {};
+    if (typeof selectedRepo.viewerHasStarred !== 'boolean' || !Number.isFinite(Number(selectedRepo.stargazerCount)) || !Number.isFinite(Number(selectedRepo.forkCount))) {
+      fail(`GitHub overview omitted starred/fork information: ${JSON.stringify(selectedRepo)}`);
+    }
+    await evaluate(cdp, `window.showPluginList('github')`, 30000);
+    await waitFor(cdp, `(() => {
+      const text = document.querySelector('#gh-overview')?.innerText || '';
+      return text.includes('Stars') && text.includes('Forks') && (text.includes('Starred') || text.includes('Not starred'));
+    })()`, 90000, 'GitHub starred and fork badges visible');
+    log(`GitHub async overview heartbeat ok: ${githubProbe.ticks} ticks in ${githubProbe.elapsedMs} ms`);
 
     await evaluate(cdp, `window.showPluginList('market')`, 30000);
     await waitFor(cdp, `(() => !!document.querySelector('#skill-market-search') && document.body.innerText.includes('Skills Market'))()`, 30000, 'skills market visible');

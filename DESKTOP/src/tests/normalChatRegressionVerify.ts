@@ -100,6 +100,15 @@ async function main(): Promise<void> {
       && String(successCalls[1]?.messages.at(-1)?.content || '').includes('第二轮'),
     'request focus preserves the current instruction in its original user role instead of elevating user-authored text into the system prompt');
     assert.ok(!JSON.stringify(agent.history).includes('Request-Scoped Task Focus'), 'request-scoped focus is never persisted into conversation history');
+    assert.ok(successCalls[0]?.system.includes('## Build Context Bootstrap')
+      && successCalls[0]?.system.includes('Injection reason: this is the first provider request of a new Build.')
+      && successCalls[0]?.system.includes('Historical Build Blocks (newest to oldest; #1 is the previous/last task):')
+      && successCalls[0]?.system.includes('## Tool Awareness Bootstrap')
+      && successCalls[0]?.system.includes('Necessary full schemas supplied natively for this provider turn:'),
+    'a new Build receives one request-only context, recent-Build, and tool-awareness bootstrap');
+    assert.ok(!JSON.stringify(agent.history).includes('Build Context Bootstrap')
+      && !JSON.stringify(agent.chatMessages).includes('Tool Awareness Bootstrap'),
+    'Build bootstrap metadata is never persisted into conversation history or visible chat');
 
     agent.conversationPlan = {
       items: [
@@ -115,6 +124,131 @@ async function main(): Promise<void> {
     'continuation focus retains explicit unfinished plan state while excluding completed plan items');
     assert.ok(String(successCalls.at(-1)?.messages.at(-1)?.content || '').includes('继续完成还没有完成的工作'),
       'continuation instruction remains the final real user message in provider context');
+
+    agent.workRuns = [{
+      runId: 'run-old-completed',
+      target: { workspaceId: 'fixture', conversationId: 'normal-chat' },
+      runtimeKey: 'fixture::normal-chat',
+      status: 'completed',
+      startedAt: '2026-07-18T08:00:00.000Z',
+      endedAt: '2026-07-18T08:20:00.000Z',
+      expanded: true,
+      sequence: 1,
+      events: [{ id: 'old-final', conversationId: 'normal-chat', type: 'final_response', content: '旧版发布检查已完成。', mode: 'build', model: 'shared-model', timestamp: '2026-07-18T08:20:00.000Z', runId: 'run-old-completed', sequence: 1 }],
+      guides: [],
+      primaryPrompt: '完成旧版发布检查',
+    }, {
+      runId: 'run-unrelated-interrupted',
+      target: { workspaceId: 'fixture', conversationId: 'normal-chat' },
+      runtimeKey: 'fixture::normal-chat',
+      status: 'interrupted',
+      startedAt: '2026-07-19T08:00:00.000Z',
+      endedAt: '2026-07-19T08:10:00.000Z',
+      expanded: true,
+      sequence: 2,
+      events: [{ id: 'unrelated-tool', conversationId: 'normal-chat', type: 'tool_result', content: '旧错误定位到 legacy.ts。', mode: 'build', model: 'shared-model', timestamp: '2026-07-19T08:05:00.000Z', runId: 'run-unrelated-interrupted', sequence: 1, toolName: 'grep', toolCallId: 'old-call' }],
+      guides: [],
+      primaryPrompt: '修复一个与当前问题无关的旧错误',
+    }, {
+      runId: 'run-previous-completed',
+      target: { workspaceId: 'fixture', conversationId: 'normal-chat' },
+      runtimeKey: 'fixture::normal-chat',
+      status: 'completed',
+      startedAt: '2026-07-20T08:00:00.000Z',
+      endedAt: '2026-07-20T09:00:00.000Z',
+      expanded: true,
+      sequence: 3,
+      events: [{ id: 'previous-tool', conversationId: 'normal-chat', type: 'tool_result', content: '完整测试通过。', mode: 'build', model: 'shared-model', timestamp: '2026-07-20T08:50:00.000Z', runId: 'run-previous-completed', sequence: 1, toolName: 'bash', toolCallId: 'previous-call' }, { id: 'previous-final', conversationId: 'normal-chat', type: 'final_response', content: 'dev-0.1.2 内核优化已完成。', mode: 'build', model: 'shared-model', timestamp: '2026-07-20T09:00:00.000Z', runId: 'run-previous-completed', sequence: 2 }],
+      guides: [],
+      primaryPrompt: '完成 dev-0.1.2 内核优化',
+    }, {
+      runId: 'run-current-status-query',
+      target: { workspaceId: 'fixture', conversationId: 'normal-chat' },
+      runtimeKey: 'fixture::normal-chat',
+      status: 'running',
+      startedAt: '2026-07-20T10:00:00.000Z',
+      expanded: true,
+      sequence: 4,
+      events: [],
+      guides: [],
+      primaryPrompt: '上个任务完成了吗？',
+    }];
+    (agent as unknown as { activeWorkRunId: string }).activeWorkRunId = 'run-current-status-query';
+    const statusFocus = agentKernelRunnerInternals.buildRequestTaskFocus(agent, [{
+      role: 'user',
+      content: '上个任务完成了吗？',
+      timestamp: Date.now(),
+    }]);
+    const previousIndex = statusFocus.indexOf('user_input="完成 dev-0.1.2 内核优化"');
+    const unrelatedIndex = statusFocus.indexOf('user_input="修复一个与当前问题无关的旧错误"');
+    const oldIndex = statusFocus.indexOf('user_input="完成旧版发布检查"');
+    assert.ok(previousIndex >= 0 && unrelatedIndex > previousIndex && oldIndex > unrelatedIndex,
+      'authoritative task ledger lists historical work runs newest-to-oldest regardless of completion state');
+    assert.ok(statusFocus.includes('user_input="完成 dev-0.1.2 内核优化"; final_summary="dev-0.1.2 内核优化已完成。"; completion_status=completed')
+      && !statusFocus.includes('完整测试通过。')
+      && !statusFocus.includes('run-previous-completed')
+      && !statusFocus.includes('startedAt='),
+    'default task ledger exposes only user input, final summary, and completion status');
+    assert.ok(statusFocus.includes('phrases such as "the previous task" or "the last task" refer to Historical Build Block #1')
+      && statusFocus.includes('A status/history question is read-only and does not authorize resuming any task'),
+    'status questions resolve the newest historical run without authorizing unrelated continuation');
+    const queueStart = statusFocus.indexOf('Unfinished Continuation Queue');
+    assert.ok(queueStart >= 0
+      && statusFocus.slice(queueStart).includes('修复一个与当前问题无关的旧错误')
+      && !statusFocus.slice(queueStart).includes('完成 dev-0.1.2 内核优化')
+      && statusFocus.slice(queueStart).includes('newest to oldest'),
+    'unfinished continuation queue excludes completed work and declares newest-to-oldest ordering');
+    assert.ok(!statusFocus.includes('user_input="上个任务完成了吗？"'),
+      'the current status question is excluded from historical task records');
+    const noBootstrapFocus = agentKernelRunnerInternals.buildRequestTaskFocus(agent, [{
+      role: 'user', content: 'tool subturn', timestamp: Date.now(),
+    }], { includeBootstrap: false });
+    assert.ok(!noBootstrapFocus.includes('Build Context Bootstrap')
+      && !noBootstrapFocus.includes('Authoritative Conversation Task Ledger')
+      && noBootstrapFocus.includes('Request-Scoped Task Focus'),
+    'ordinary tool subturns retain instruction priority without repeating the large Build bootstrap');
+    const historyDetail = JSON.parse(agent.handleBuildHistoryQuery(JSON.stringify({ history_index: 1, max_events: 20 }))) as Record<string, any>;
+    assert.equal(historyDetail.ok, true);
+    assert.equal(historyDetail.buildBlock.runId, 'run-previous-completed');
+    assert.equal(historyDetail.buildBlock.completionStatus, 'completed');
+    assert.equal(historyDetail.buildBlock.publicActivities[0].content, '完整测试通过。');
+    assert.ok(!statusFocus.includes(historyDetail.buildBlock.publicActivities[0].content),
+      'concrete Build activity is available only through the history query tool');
+    const historyTool = (agent.tools.definitions('build') as Array<any>).find(tool => tool.function?.name === 'build_history_query');
+    assert.ok(historyTool && historyTool.function.description.includes('read-only tool'),
+      'history detail query is provider-visible as an explicitly read-only Build Block tool');
+    const detailedRoute = agentKernelRunnerInternals.selectTaskToolDefinitions('上个任务具体做了什么？', agent.subagentToolDefinitions(agent.tools.definitions('build')));
+    assert.ok(detailedRoute.some((tool: any) => tool.function?.name === 'build_history_query'),
+      'history-detail intent preloads the Build history query schema');
+    let historyQueryRound = 0;
+    let historyQueryToolResult = '';
+    const historyQueryProvider = {
+      intelligenceConfig: () => ({ temperature: 0, maxTokens: 64 }),
+      async *chatStreamWithTools(
+        _model: string,
+        messages: Array<Record<string, any>>,
+        _system: string,
+        _temperature: number,
+        _maxTokens: number,
+        tools: Array<any>,
+      ): AsyncGenerator<StreamToken> {
+        if (historyQueryRound++ === 0) {
+          assert.ok(tools.some(tool => tool.function?.name === 'build_history_query'),
+            'history-detail request exposes the query schema on the first provider turn');
+          yield { type: 'tool_call', text: '', toolCall: { id: 'history-query-call', name: 'build_history_query', arguments: JSON.stringify({ history_index: 1 }) } };
+          return;
+        }
+        historyQueryToolResult = String(messages.find(message => message.role === 'tool' && message.name === 'build_history_query')?.content || '');
+        yield { type: 'text', text: 'HISTORY_DETAIL_OK' };
+      },
+      async chat(): Promise<string> { return 'unused'; },
+    };
+    (agent as unknown as { forcedProvider: typeof historyQueryProvider }).forcedProvider = historyQueryProvider;
+    const historyQueryOutput = (await agent.process('上个任务具体做了什么？')).map(token => token.text || '').join('');
+    assert.ok(historyQueryOutput.includes('HISTORY_DETAIL_OK')
+      && historyQueryToolResult.includes('完整测试通过。')
+      && historyQueryToolResult.includes('run-previous-completed'),
+    'native Kernel executes build_history_query and returns the selected Build Block details to the next model turn');
 
     writeConfig(errorRoot, [providers[0]]);
     const errorAgent = new Agent(errorRoot, { agentOnly: true, workspaceRegistryMode: 'detached', conversationId: 'normal-chat-error' });

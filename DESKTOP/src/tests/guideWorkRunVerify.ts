@@ -719,6 +719,84 @@ function verifyExactlyOnceAndV3Persistence(): void {
   }
 }
 
+async function verifyCompletedRunCannotBeOverwrittenByDeferredStartSnapshot(): Promise<void> {
+  const root = path.join(process.cwd(), 'test-tmp-completed-run-durability');
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(root, { recursive: true });
+  try {
+    const { target, workspace } = workspaceFixture(root);
+    const agent = new Agent(root, { agentOnly: true });
+    agent.workspace.current = workspace;
+    agent.setConversation('default');
+    agent.beginConversationWorkRun('run-durable-completion', target, '2026-07-20T10:00:00.000Z', true);
+    agent.emitWorkEvent({ type: 'start', content: 'Preparing request.', runId: 'run-durable-completion' });
+    agent.recordWorkRunPrimaryPrompt('persist the newest completed conversation');
+    agent.chatMessages.push({
+      role: 'assistant',
+      content: 'DURABLE_FINAL_RESPONSE',
+      mode: 'build',
+      model: agent.model,
+      timestamp: '10:00:03',
+      runId: 'run-durable-completion',
+    });
+    agent.finishConversationWorkRun('run-durable-completion', 'completed', '2026-07-20T10:00:03.000Z');
+
+    // The old start snapshot used to fire after 80 ms and overwrite the terminal run.
+    await new Promise(resolve => setTimeout(resolve, 160));
+    const restarted = new Agent(root, { agentOnly: true });
+    restarted.workspace.current = workspace;
+    restarted.setConversation('default');
+    const snapshot = restarted.getConversationSnapshot('default');
+    const run = snapshot.workRuns.find(item => item.runId === 'run-durable-completion');
+    assert.equal(run?.status, 'completed', 'a deferred start snapshot cannot downgrade a completed run after disk flush');
+    assert.equal(run?.primaryPrompt, 'persist the newest completed conversation');
+    assert.equal(run?.events.filter(event => event.type === 'final_response').length, 1,
+      'the final response event survives the delayed persistence window and restart');
+    assert.equal(snapshot.chatMessages.filter(message => message.runId === run?.runId && message.role === 'assistant').at(-1)?.content,
+      'DURABLE_FINAL_RESPONSE', 'the newest completed assistant answer survives restart');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+async function verifyStaleRuntimeCannotDowngradeAnotherRuntimeCompletion(): Promise<void> {
+  const root = path.join(process.cwd(), 'test-tmp-cross-runtime-completion');
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(root, { recursive: true });
+  try {
+    const { target, workspace } = workspaceFixture(root);
+    const stale = new Agent(root, { agentOnly: true });
+    stale.workspace.current = workspace;
+    stale.setConversation('default');
+    stale.beginConversationWorkRun('run-cross-runtime', target, '2026-07-20T11:00:00.000Z', true);
+    stale.emitWorkEvent({ type: 'start', content: 'Stale runtime start.', runId: 'run-cross-runtime' });
+
+    const fresh = new Agent(root, { agentOnly: true });
+    fresh.workspace.current = workspace;
+    fresh.setConversation('default');
+    fresh.beginConversationWorkRun('run-cross-runtime', target, '2026-07-20T11:00:00.000Z', true);
+    fresh.recordWorkRunPrimaryPrompt('cross-runtime completion must win');
+    fresh.chatMessages.push({ role: 'assistant', content: 'CROSS_RUNTIME_FINAL', mode: 'build', model: fresh.model, timestamp: '11:00:04', runId: 'run-cross-runtime' });
+    fresh.finishConversationWorkRun('run-cross-runtime', 'completed', '2026-07-20T11:00:04.000Z');
+
+    // A different process can persist its older empty transcript after the
+    // completion write, giving the stale snapshot a newer wall-clock time.
+    stale.saveWorkspaceConversationState(true);
+
+    await new Promise(resolve => setTimeout(resolve, 160));
+    const restarted = new Agent(root, { agentOnly: true });
+    restarted.workspace.current = workspace;
+    restarted.setConversation('default');
+    const snapshot = restarted.getConversationSnapshot('default');
+    const run = snapshot.workRuns.find(item => item.runId === 'run-cross-runtime');
+    assert.equal(run?.status, 'completed', 'a stale runtime cannot downgrade another runtime completion');
+    assert.equal(run?.events.filter(event => event.type === 'final_response').length, 1);
+    assert.equal(snapshot.chatMessages.filter(message => message.runId === 'run-cross-runtime' && message.role === 'assistant').at(-1)?.content, 'CROSS_RUNTIME_FINAL');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function verifyStatefulHiddenReasoningAndLiveToolArgsSanitization(): void {
   const root = path.join(process.cwd(), 'test-tmp-hidden-stream-filter');
   fs.rmSync(root, { recursive: true, force: true });
@@ -819,6 +897,8 @@ async function main(): Promise<void> {
   await verifyGuideFromCompletionEventAutoContinues();
   await verifyImageOnlyDeferredGuideSurvivesCheckpointReloadExactlyOnce();
   verifyExactlyOnceAndV3Persistence();
+  await verifyCompletedRunCannotBeOverwrittenByDeferredStartSnapshot();
+  await verifyStaleRuntimeCannotDowngradeAnotherRuntimeCompletion();
   verifyStatefulHiddenReasoningAndLiveToolArgsSanitization();
   console.log('Guide and work-run verification passed');
 }

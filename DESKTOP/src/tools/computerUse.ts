@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as os from 'os';
-import { runPersistentPowerShell } from './computerUsePowerShellHost';
+import { computerUsePowerShellLaneReady, runPersistentPowerShell } from './computerUsePowerShellHost';
 
 export interface ComputerUseSequenceStep {
   action: 'move' | 'click' | 'scroll' | 'wait' | 'app_activate';
@@ -98,7 +98,9 @@ function psQuote(value: string): string {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-async function runPowerShell(script: string, timeout = 30000, lane: 'action' | 'uia' | 'windows' = 'action'): Promise<{ ok: boolean; output: string; elapsedMs: number }> {
+type ComputerUsePowerShellLane = 'action' | 'uia' | 'windows' | 'uia_advisory' | 'windows_advisory';
+
+async function runPowerShell(script: string, timeout = 30000, lane: ComputerUsePowerShellLane = 'action'): Promise<{ ok: boolean; output: string; elapsedMs: number }> {
   return await runPersistentPowerShell(script, timeout, lane);
 }
 
@@ -491,7 +493,7 @@ function sceneGeneration(apps: AppWindowInfo[], elements: ObservedElement[]): st
   return crypto.createHash('sha256').update(seed).digest('hex').slice(0, 16);
 }
 
-async function observeUiAutomation(maxChars: number, rootHandle?: string): Promise<{ elements: ObservedElement[]; visited: number; error?: string; elapsedMs: number }> {
+async function observeUiAutomation(maxChars: number, rootHandle?: string, timeoutMs = 30000, lane: 'uia' | 'uia_advisory' = 'uia'): Promise<{ elements: ObservedElement[]; visited: number; error?: string; elapsedMs: number }> {
   const limit = Math.min(Math.max(Math.floor(maxChars || 30000), 1000), 200000);
   const handleHex = String(rootHandle || '').trim().replace(/^0x/i, '').replace(/[^0-9a-f]/gi, '');
   const script = [
@@ -541,7 +543,7 @@ async function observeUiAutomation(maxChars: number, rootHandle?: string): Promi
     '}',
     'Write-Output $json',
   ].join('\r\n');
-  const result = await runPowerShell(script, 30000, 'uia');
+  const result = await runPowerShell(script, computerUsePowerShellLaneReady(lane) ? timeoutMs : Math.max(timeoutMs, 5000), lane);
   if (!result.ok) return { elements: [], visited: 0, error: result.output, elapsedMs: result.elapsedMs };
   try {
     const parsed = JSON.parse(result.output) as { visited?: number; items?: ObservedElement[] };
@@ -551,7 +553,7 @@ async function observeUiAutomation(maxChars: number, rootHandle?: string): Promi
   }
 }
 
-async function observeAppWindows(maxChars: number): Promise<{ apps: AppWindowInfo[]; error?: string; elapsedMs: number }> {
+async function observeAppWindows(maxChars: number, timeoutMs = 30000, lane: 'windows' | 'windows_advisory' = 'windows'): Promise<{ apps: AppWindowInfo[]; error?: string; elapsedMs: number }> {
   const limit = Math.min(Math.max(Math.floor(maxChars || 30000), 1000), 200000);
   const script = [
     '$root = [System.Windows.Automation.AutomationElement]::RootElement',
@@ -584,7 +586,7 @@ async function observeAppWindows(maxChars: number): Promise<{ apps: AppWindowInf
     '}',
     'Write-Output $json',
   ].join('\r\n');
-  const result = await runPowerShell(script, 30000, 'windows');
+  const result = await runPowerShell(script, computerUsePowerShellLaneReady(lane) ? timeoutMs : Math.max(timeoutMs, 5000), lane);
   if (!result.ok) return { apps: [], error: result.output, elapsedMs: result.elapsedMs };
   return { apps: parseJsonArray<AppWindowInfo>(result.output), elapsedMs: result.elapsedMs };
 }
@@ -667,7 +669,7 @@ async function cropScreenshot(
     ], captureMaxWidth, captureMaxHeight);
     const [result, ui] = await Promise.all([
       runPowerShell(script, 30000),
-      observeUiAutomation(30000, app.handle),
+      observeUiAutomation(30000, app.handle, 750, 'uia_advisory'),
     ]);
     if (!result.ok) return captureFailure('app_observe', app);
     let parsed: Record<string, unknown> = {};
@@ -957,8 +959,8 @@ async function screenshot(
     const foreground = await foregroundWindowHandle();
     const [result, ui, apps] = await Promise.all([
       runPowerShell(script, 30000),
-      observeUiAutomation(30000, foreground.handle),
-      observeAppWindows(30000),
+      observeUiAutomation(30000, foreground.handle, 750, 'uia_advisory'),
+      observeAppWindows(30000, 750, 'windows_advisory'),
     ]);
     if (!result.ok) return captureFailure('observe');
     let parsed: Record<string, unknown> = {};
@@ -1224,8 +1226,16 @@ export async function runComputerUse(options: ComputerUseOptions): Promise<strin
       options.captureMaxHeight,
     );
   } else if (action === 'app_list') {
-    const apps = await observeAppWindows(Number(options.maxChars || 60000));
-    result = { ok: true, action, applications: apps.apps, count: apps.apps.length, warning: apps.error || undefined, telemetry: { total_ms: apps.elapsedMs } };
+    const first = await observeAppWindows(Number(options.maxChars || 60000));
+    const apps = first.apps.length || first.error ? first : await observeAppWindows(Number(options.maxChars || 60000));
+    result = {
+      ok: true,
+      action,
+      applications: apps.apps,
+      count: apps.apps.length,
+      warning: apps.error || undefined,
+      telemetry: { total_ms: first.elapsedMs + (apps === first ? 0 : apps.elapsedMs), retried_empty_result: apps !== first },
+    };
   } else if (action === 'app_observe') {
     const selected = await selectAppWindow(options.appTarget, options.windowHandle);
     result = selected.app

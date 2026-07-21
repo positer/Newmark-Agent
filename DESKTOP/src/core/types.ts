@@ -37,10 +37,11 @@ export interface GuideReceipt {
 }
 
 export interface StreamToken {
-  type: 'text' | 'tool_call' | 'status';
+  type: 'text' | 'tool_call' | 'status' | 'usage';
   text: string;
   toolCall?: { id: string; name: string; arguments: string };
   reasoningContent?: string;
+  usage?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
 export interface ConversationImageAttachment {

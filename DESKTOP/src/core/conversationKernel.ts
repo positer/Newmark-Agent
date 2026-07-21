@@ -808,10 +808,12 @@ export class ConversationKernel {
       runner.config.clearWorkspaceOverrides();
     }
     // snapshot() can create a cold runner before prompt() has established a
-    // runtime. Bind the target conversation here so the runner never exposes
-    // state inherited from whichever workspace was globally selected when its
-    // Agent constructor ran.
-    runner.setConversation(target.conversationId);
+    // runtime. The constructor may have loaded another conversation from the
+    // globally selected workspace, so binding must be read-only: saving that
+    // transitional state here can erase the previous conversation when a new
+    // Build is started in a sibling conversation.
+    runner.setConversationFromStorage(target.conversationId);
+    runner.ensureConversationSnapshot(target.conversationId);
     return runner;
   }
 

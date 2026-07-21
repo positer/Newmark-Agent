@@ -247,7 +247,7 @@ function writeJson(dir, name, value) {
   return file;
 }
 
-function runPackagedTool(root, tool, toolArgs, timeoutMs = 120000) {
+function runPackagedTool(root, tool, toolArgs, timeoutMs = 120000, expectedExitCodes = [0]) {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-computer-use-tool-'));
   const stdoutPath = path.join(workDir, 'stdout.txt');
   const stderrPath = path.join(workDir, 'stderr.txt');
@@ -282,11 +282,11 @@ function runPackagedTool(root, tool, toolArgs, timeoutMs = 120000) {
       const stdout = fs.existsSync(stdoutPath) ? fs.readFileSync(stdoutPath, 'utf8') : '';
       const stderr = fs.existsSync(stderrPath) ? fs.readFileSync(stderrPath, 'utf8') : '';
       try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
-      if (code !== 0) {
+      if (!expectedExitCodes.includes(code)) {
         reject(new Error(`packaged tool ${tool} exited ${code}. stdout=${stdout} stderr=${stderr}`));
         return;
       }
-      resolve({ stdout, stderr });
+      resolve({ stdout, stderr, exitCode: code });
     });
   });
 }
@@ -310,8 +310,19 @@ function runPackagedTool(root, tool, toolArgs, timeoutMs = 120000) {
     if (!takeoverStop.stdout.includes('"takeover_stop"') || !takeoverStop.stdout.includes('"ok": true')) fail(`takeover_stop failed: ${takeoverStop.stdout}`);
     const appList = await runPackagedTool(root, 'computer_use', { action: 'app_list', max_chars: 12000 });
     if (!appList.stdout.includes('"action": "app_list"') || !appList.stdout.includes('"applications"')) fail(`app_list failed: ${appList.stdout}`);
-    const appObserveMissing = await runPackagedTool(root, 'computer_use', { action: 'app_observe', app_target: 'newmark-nonexistent-app-for-release-smoke' });
-    if (!appObserveMissing.stdout.includes('"app_observe"') || !appObserveMissing.stdout.includes('No visible application window matched')) fail(`app_observe unmatched target failed: ${appObserveMissing.stdout}`);
+    const appObserveMissing = await runPackagedTool(
+      root,
+      'computer_use',
+      { action: 'app_observe', app_target: 'newmark-nonexistent-app-for-release-smoke' },
+      120000,
+      [4],
+    );
+    if (appObserveMissing.exitCode !== 4
+      || !appObserveMissing.stdout.includes('"tool": "computer_use"')
+      || !appObserveMissing.stdout.includes('"route": "direct"')
+      || !appObserveMissing.stdout.includes('No visible application window matched')) {
+      fail(`app_observe unmatched target failed: ${appObserveMissing.stdout}`);
+    }
 
     const visionRequests = server.requests.filter(item => item.body.model === 'mock-computer-vision');
     const textRequests = server.requests.filter(item => item.body.model === 'mock-computer-text');

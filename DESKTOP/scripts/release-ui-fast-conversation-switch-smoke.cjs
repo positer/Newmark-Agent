@@ -15,6 +15,8 @@ const markerAPrompt = 'FAST_SWITCH_CONV_A_PROMPT_20260704';
 const markerAReply = 'FAST_SWITCH_CONV_A_REPLY_20260704';
 const markerBPrompt = 'FAST_SWITCH_CONV_B_PROMPT_20260704';
 const markerBReply = 'FAST_SWITCH_CONV_B_REPLY_20260704';
+const markerErrorPrompt = 'FAST_SWITCH_NEW_CONV_IMMEDIATE_401_20260720';
+const markerErrorReply = 'FAST_SWITCH_INVALID_TOKEN_20260720';
 
 function log(message) {
   console.log(`[release-ui-fast-conversation-switch-smoke] ${message}`);
@@ -26,6 +28,43 @@ function fail(message) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function persistedConversation(workspacePath, conversationId) {
+  const file = path.join(workspacePath, 'conversations', 'state.json');
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const suffix = `-${conversationId}`;
+  const match = Object.entries(state.conversations || {}).find(([key]) => key.endsWith(suffix));
+  return match ? match[1] : null;
+}
+
+async function assertCompletedConversationPersisted(workspacePath, conversationId, prompt, reply, label) {
+  await sleep(200);
+  const record = persistedConversation(workspacePath, conversationId);
+  const run = (record?.workRuns || []).find(item => item.primaryPrompt === prompt);
+  const user = (record?.chatMessages || []).find(item => item.role === 'user' && item.content === prompt);
+  const assistant = (record?.chatMessages || []).find(item => item.role === 'assistant' && item.content === reply);
+  if (!record || run?.status !== 'completed' || !user || !assistant || !user.runId || user.runId !== assistant.runId || user.runId !== run.runId) {
+    fail(`${label} was not durably persisted: ${JSON.stringify({
+      conversationId,
+      runStatus: run?.status || '',
+      runId: run?.runId || '',
+      userRunId: user?.runId || '',
+      assistantRunId: assistant?.runId || '',
+      chatMessages: record?.chatMessages || [],
+    })}`);
+  }
+}
+
+async function assertErroredConversationPersisted(workspacePath, conversationId, prompt, errorMarker, label) {
+  await sleep(200);
+  const record = persistedConversation(workspacePath, conversationId);
+  const run = (record?.workRuns || []).find(item => item.primaryPrompt === prompt);
+  const user = (record?.chatMessages || []).find(item => item.role === 'user' && item.content === prompt);
+  const error = (run?.events || []).find(item => item.type === 'error' && String(item.content || '').includes(errorMarker));
+  if (!record || run?.status !== 'error' || !user || !user.runId || user.runId !== run.runId || !error) {
+    fail(`${label} was not durably persisted: ${JSON.stringify({ conversationId, run, chatMessages: record?.chatMessages || [] })}`);
+  }
 }
 
 function getJson(url) {
@@ -199,6 +238,12 @@ function startMockServer() {
         return;
       }
 
+      if (messagesText.includes(markerErrorPrompt)) {
+        res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: { code: '', message: markerErrorReply, type: 'new_api_error' } }));
+        return;
+      }
+
       const reply = messagesText.includes(markerAPrompt) ? markerAReply
         : messagesText.includes(markerBPrompt) ? markerBReply
           : 'FAST_SWITCH_DEFAULT_REPLY_20260704';
@@ -254,11 +299,22 @@ function activeChatIsolationExpression(expectedId, includePrompt, includeReply, 
     const chat = document.querySelector('#chat-area');
     const body = chat?.innerText || '';
     const activeItems = Array.from(document.querySelectorAll('#conversation-list .conv-item.active'));
+    const messages = (s && s.chatMessages) || [];
+    const userMessage = messages.find(message => message.role === 'user' && String(message.content || '').includes(${jsString(includePrompt)}));
+    const assistantMessage = messages.find(message => message.role === 'assistant' && String(message.content || '').includes(${jsString(includeReply)}));
+    const owningRunId = String(userMessage && userMessage.runId || '');
+    const rows = Array.from(chat?.children || []);
+    const userIndex = rows.findIndex(row => row.classList.contains('user') && String(row.innerText || '').includes(${jsString(includePrompt)}));
+    const buildIndex = rows.findIndex(row => !!owningRunId && row.querySelector('.conversation-work-run')?.getAttribute('data-run-id') === owningRunId);
+    const finalIndexes = rows.map((row, index) => row.classList.contains('run-final-response') && row.getAttribute('data-run-id') === owningRunId && String(row.innerText || '').includes(${jsString(includeReply)}) ? index : -1).filter(index => index >= 0);
+    const ownershipOk = !!owningRunId && String(assistantMessage && assistantMessage.runId || '') === owningRunId
+      && userIndex >= 0 && buildIndex > userIndex && finalIndexes.length === 1 && finalIndexes[0] > buildIndex;
     const ok = s && s.conversationId === ${jsString(expectedId)} &&
       body.includes(${jsString(includePrompt)}) &&
       body.includes(${jsString(includeReply)}) &&
       !body.includes(${jsString(excludePrompt)}) &&
       !body.includes(${jsString(excludeReply)}) &&
+      ownershipOk &&
       activeItems.length === 1;
     if (!ok) {
       window.__fastSwitchDebug = {
@@ -268,6 +324,11 @@ function activeChatIsolationExpression(expectedId, includePrompt, includeReply, 
         hasIncludeReply: body.includes(${jsString(includeReply)}),
         leakedExcludePrompt: body.includes(${jsString(excludePrompt)}),
         leakedExcludeReply: body.includes(${jsString(excludeReply)}),
+        owningRunId,
+        assistantRunId: assistantMessage && assistantMessage.runId,
+        userIndex,
+        buildIndex,
+        finalIndexes,
         activeItems: activeItems.length,
         activeConversationId: typeof activeConversationId === 'function' ? activeConversationId() : '',
         conversationLoadGeneration: window.state && window.state.conversationLoadGeneration,
@@ -281,7 +342,8 @@ function activeChatIsolationExpression(expectedId, includePrompt, includeReply, 
 
 async function selectConversationAndAssert(cdp, expectedId, includePrompt, includeReply, excludePrompt, excludeReply, label) {
   await evaluate(cdp, `(() => {
-    const idx = (window.state?.conversations || []).findIndex(c => c && c.id === ${jsString(expectedId)});
+    const conversations = typeof currentWorkspaceConversations === 'function' ? currentWorkspaceConversations() : (window.state?.conversations || []);
+    const idx = conversations.findIndex(c => c && c.id === ${jsString(expectedId)});
     if (idx < 0) throw new Error('conversation missing before switch: ' + ${jsString(expectedId)});
     window.switchConversation(idx);
     return true;
@@ -323,7 +385,7 @@ async function runUiCheck(root) {
   let child;
   let cdp;
   try {
-    child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
+    child = spawn(exePath, [`--remote-debugging-port=${port}`, `--user-data-dir=${path.join(root, 'ElectronData')}`, '--allow-multiple-instances', '--no-sandbox', '--root', root], {
       stdio: 'ignore',
       windowsHide: true,
     });
@@ -337,11 +399,13 @@ async function runUiCheck(root) {
     await cdp.call('Page.bringToFront');
 
     await waitFor(cdp, `(() => document.readyState === 'complete' && !!window.api && !!window.sendMessage && !!document.querySelector('#prompt'))()`, 30000, 'renderer ready');
-    await evaluate(cdp, `window.api.createWorkspace('fast-switch-isolation-workspace').then(ws => window.api.selectWorkspace(ws.name))`, 30000);
-    await evaluate(cdp, `window.selectWorkspace('fast-switch-isolation-workspace')`, 30000);
-    await waitFor(cdp, `window.api.getState().then(s => s.workspaces && s.workspaces.current && s.workspaces.current.name === 'fast-switch-isolation-workspace')`, 30000, 'workspace selected');
+    const smokeWorkspace = await evaluate(cdp, `window.api.createWorkspace('fast-switch-isolation-workspace')`, 30000);
+    if (!smokeWorkspace?.id) fail(`workspace creation did not return a stable id: ${JSON.stringify(smokeWorkspace)}`);
+    await evaluate(cdp, `window.api.selectWorkspace(${jsString(smokeWorkspace.id)})`, 30000);
+    await evaluate(cdp, `window.selectWorkspace(${jsString(smokeWorkspace.id)})`, 30000);
+    await waitFor(cdp, `window.api.getState().then(s => s.workspaces && s.workspaces.current && s.workspaces.current.id === ${jsString(smokeWorkspace.id)})`, 30000, 'workspace selected');
 
-    await evaluate(cdp, `window.setInputMode && window.setInputMode('guide')`, 30000);
+    await evaluate(cdp, `window.setInputMode && window.setInputMode('build')`, 30000);
     await evaluate(cdp, `(() => {
       const prompt = document.querySelector('#prompt');
       if (!prompt) throw new Error('prompt missing for conversation A');
@@ -349,13 +413,32 @@ async function runUiCheck(root) {
       window.sendMessage();
       return true;
     })()`, 30000);
-    await waitFor(cdp, `(() => (document.querySelector('#chat-area')?.innerText || '').includes(${jsString(markerAReply)}) && !(window.state && window.state._sendInFlight))()`, 45000, 'conversation A reply visible');
+    await waitFor(cdp, `window.api.getState(activeConversationId()).then(s => {
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      const ok = body.includes(${jsString(markerAReply)}) && !(window.state && window.state._sendInFlight);
+      if (!ok) window.__fastSwitchDebug = {
+        status: s && s.status,
+        error: s && s.error,
+        inputMode: window.state && window.state.inputMode,
+        backendMessages: (s && s.chatMessages || []).map(m => ({ role: m.role, content: String(m.content || ''), runId: m.runId || '' })).slice(-6),
+        workRuns: (s && s.workRuns || []).slice(-3).map(run => ({ runId: run.runId, status: run.status, primaryPrompt: run.primaryPrompt, events: (run.events || []).map(event => event.type) })),
+        chatTail: body.slice(-1200),
+      };
+      return ok;
+    })`, 45000, 'conversation A reply visible');
     const convA = await evaluate(cdp, `window.api.getState(activeConversationId()).then(s => s.conversationId)`, 30000);
     log(`conversation A ready: ${convA}`);
+    await assertCompletedConversationPersisted(smokeWorkspace.path, convA, markerAPrompt, markerAReply, 'conversation A completion');
 
     await evaluate(cdp, `window.newConversation()`, 30000);
     await waitFor(cdp, `window.api.getState(activeConversationId()).then(s => s.conversationId !== ${jsString(convA)})`, 30000, 'conversation B created');
     const convB = await evaluate(cdp, `window.api.getState(activeConversationId()).then(s => s.conversationId)`, 30000);
+    await waitFor(cdp, `window.api.getState(${jsString(convB)}).then(() => {
+      const workspacePath = ${jsString(smokeWorkspace.path)};
+      return true;
+    })`, 30000, 'conversation B activation settled');
+    const activeAfterCreate = JSON.parse(fs.readFileSync(path.join(smokeWorkspace.path, 'conversations', 'state.json'), 'utf8')).activeConversationId;
+    if (activeAfterCreate !== convB) fail(`new conversation selection was not persisted: ${activeAfterCreate} !== ${convB}`);
     await evaluate(cdp, `(() => {
       const prompt = document.querySelector('#prompt');
       if (!prompt) throw new Error('prompt missing for conversation B');
@@ -365,6 +448,59 @@ async function runUiCheck(root) {
     })()`, 30000);
     await waitFor(cdp, `(() => (document.querySelector('#chat-area')?.innerText || '').includes(${jsString(markerBReply)}) && !(window.state && window.state._sendInFlight))()`, 45000, 'conversation B reply visible');
     log(`conversation B ready: ${convB}`);
+    await assertCompletedConversationPersisted(smokeWorkspace.path, convB, markerBPrompt, markerBReply, 'conversation B completion');
+    await assertCompletedConversationPersisted(smokeWorkspace.path, convA, markerAPrompt, markerAReply, 'conversation A after conversation B completion');
+
+    const convError = await evaluate(cdp, `(() => {
+      const originalActivate = window.api.activateConversation.bind(window.api);
+      window.api.activateConversation = function(target) {
+        const result = originalActivate(target);
+        return new Promise((resolve, reject) => setTimeout(() => result.then(resolve, reject), 900));
+      };
+      window.newConversation();
+      const createdId = activeConversationId();
+      window.api.activateConversation = originalActivate;
+      const prompt = document.querySelector('#prompt');
+      if (!prompt) throw new Error('prompt missing for immediate error conversation');
+      prompt.value = ${jsString(markerErrorPrompt)};
+      window.sendMessage();
+      return createdId;
+    })()`, 30000);
+    await waitFor(cdp, `(() => {
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      return String(activeConversationId() || '') === ${jsString(convError)}
+        && body.includes(${jsString(markerErrorPrompt)})
+        && body.includes(${jsString(markerErrorReply)});
+    })()`, 45000, 'immediate new conversation 401 remains visible');
+    await assertErroredConversationPersisted(smokeWorkspace.path, convError, markerErrorPrompt, markerErrorReply, 'immediate new conversation 401');
+    const activeAfterError = JSON.parse(fs.readFileSync(path.join(smokeWorkspace.path, 'conversations', 'state.json'), 'utf8')).activeConversationId;
+    if (activeAfterError !== convError) fail(`errored new conversation selection was not persisted: ${activeAfterError} !== ${convError}`);
+    log(`immediate new conversation error persistence ok: ${convError}`);
+
+    await evaluate(cdp, `(() => {
+      const idx = window.state.conversations.findIndex(c => c.id === ${jsString(convB)});
+      window.switchConversation(idx);
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, activeChatIsolationExpression(convB, markerBPrompt, markerBReply, markerAPrompt, markerAReply), 30000, 'conversation B restored after immediate error conversation');
+    await evaluate(cdp, `(() => {
+      const idx = window.state.conversations.findIndex(c => c.id === ${jsString(convError)});
+      window.switchConversation(idx);
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => {
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      return String(activeConversationId() || '') === ${jsString(convError)}
+        && body.includes(${jsString(markerErrorPrompt)})
+        && body.includes(${jsString(markerErrorReply)});
+    })()`, 30000, 'errored conversation restores after switching away and back');
+    log('errored conversation switch-back display persistence ok');
+    await evaluate(cdp, `(() => {
+      const idx = window.state.conversations.findIndex(c => c.id === ${jsString(convB)});
+      window.switchConversation(idx);
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, activeChatIsolationExpression(convB, markerBPrompt, markerBReply, markerAPrompt, markerAReply), 30000, 'conversation B restored after errored conversation display check');
 
     await selectConversationAndAssert(cdp, convA, markerAPrompt, markerAReply, markerBPrompt, markerBReply, 'conversation A isolated before rapid switching');
     await selectConversationAndAssert(cdp, convB, markerBPrompt, markerBReply, markerAPrompt, markerAReply, 'conversation B isolated before rapid switching');
@@ -420,7 +556,7 @@ async function runUiCheck(root) {
     if (child && !child.killed) child.kill();
     child = null;
     await sleep(1200);
-    child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
+    child = spawn(exePath, [`--remote-debugging-port=${port}`, `--user-data-dir=${path.join(root, 'ElectronData')}`, '--allow-multiple-instances', '--no-sandbox', '--root', root], {
       stdio: 'ignore',
       windowsHide: true,
     });
@@ -430,7 +566,20 @@ async function runUiCheck(root) {
     await waitForPromotedMainUi(cdp);
     await cdp.call('Runtime.enable');
     await waitFor(cdp, `window.api.getState(${jsString(convB)}).then(s => !((s && s.conversations) || []).some(c => c.id === ${jsString(convA)}) && ((s && s.conversations) || []).some(c => c.id === ${jsString(convB)}))`, 30000, 'archived conversation remains removed after restart');
+    await waitFor(cdp, `(() => String(activeConversationId() || '') === ${jsString(convB)} && (document.querySelector('#chat-area')?.innerText || '').includes(${jsString(markerBReply)}))()`, 30000, 'new conversation remains active and visible after restart');
     log('archived conversation restart persistence ok');
+    await evaluate(cdp, `(() => {
+      const idx = window.state.conversations.findIndex(c => c.id === ${jsString(convError)});
+      window.switchConversation(idx);
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => {
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      return String(activeConversationId() || '') === ${jsString(convError)}
+        && body.includes(${jsString(markerErrorPrompt)})
+        && body.includes(${jsString(markerErrorReply)});
+    })()`, 30000, 'errored conversation remains visible after restart');
+    log('errored conversation restart display persistence ok');
 
     if (mock.requests.filter(r => r.method === 'POST' && r.url === '/v1/chat/completions').length < 2) {
       fail('mock provider did not receive both conversation requests');

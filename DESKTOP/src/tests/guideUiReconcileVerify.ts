@@ -82,7 +82,14 @@ function createFixture(): {
     function isHiddenWorkflowMessage() { return false; }
     function renderPersistedToolMessage() {}
     function finishToolBatch() {}
-    function renderConversationWorkRun() {}
+    function findWorkRunElement(run) { return document.querySelector('[data-test-run-id="' + String(run && run.runId || '') + '"]'); }
+    function renderConversationWorkRun(run) {
+      var row = document.createElement('div');
+      row.className = 'chat-msg assistant work-run-message';
+      row.setAttribute('data-test-run-id', String(run && run.runId || ''));
+      row.textContent = 'Build ' + String(run && run.runId || '');
+      els['chat-area'].appendChild(row);
+    }
     function addWorkReview() {}
     function renderAutoRouteRatingControls() {}
     ${extracted}
@@ -233,6 +240,82 @@ function main(): void {
     fixture.setActiveTarget(fixture.targetB);
     fixture.renderChatMessages([]);
     assert.equal(guideRows(fixture.document, 'guide-b').length, 1, 'target-scoped optimistic Guide restores when its workspace is foregrounded');
+
+    fixture.setActiveTarget(fixture.targetA);
+    fixture.state.guideMessagesByTarget['workspace-a::default'] = {};
+    fixture.state.workRunsByTarget['workspace-a::default'] = [
+      {
+        runId: 'run-history-one',
+        primaryPrompt: 'first visible user input',
+        startedAt: '2026-07-20T15:58:27.000Z',
+        status: 'completed',
+        events: [{ type: 'final_response', content: 'first visible final answer' }],
+      },
+      {
+        runId: 'run-history-two',
+        primaryPrompt: 'second visible user input',
+        status: 'completed',
+        events: [{ type: 'final_response', content: 'second visible final answer' }],
+      },
+    ];
+    const switchedConversationMessages = [
+      { role: 'user', content: 'first visible user input', runId: 'run-history-one' },
+      { role: 'user', content: 'mid-run Guide', mode: 'guide', clientMessageId: 'guide-history-one', runId: 'run-history-one' },
+      { role: 'assistant', content: 'first visible final answer', runId: 'run-history-one' },
+      { role: 'user', content: 'second visible user input', runId: 'run-history-two' },
+      { role: 'assistant', content: 'second visible final answer', runId: 'run-history-two' },
+    ];
+    fixture.renderChatMessages(switchedConversationMessages);
+    const visibleRows = Array.from(fixture.document.querySelectorAll('#chat-area > .chat-msg'));
+    assert.deepEqual(visibleRows.map(row => row.getAttribute('data-test-run-id') || row.querySelector('.msg-body')?.textContent?.trim()), [
+      'first visible user input',
+      'run-history-one',
+      'first visible final answer',
+      'second visible user input',
+      'run-history-two',
+      'second visible final answer',
+    ], 'conversation reload reconstructs each explicit run as user input, owning Build, then final answer');
+    assert.equal(fixture.document.querySelectorAll('.run-final-response[data-run-id="run-history-one"]').length, 1,
+      'first completed Build keeps exactly one visible final answer after reload');
+    assert.equal(fixture.document.querySelectorAll('.run-final-response[data-run-id="run-history-two"]').length, 1,
+      'second completed Build keeps exactly one visible final answer after reload');
+
+    fixture.state.workRunsByTarget['workspace-a::default'] = [{
+      runId: 'run-recovery',
+      primaryPrompt: 'recovered user input',
+      startedAt: '2026-07-20T15:58:50.000Z',
+      status: 'completed',
+      events: [{ type: 'final_response', content: 'recovered final answer' }],
+    }];
+    fixture.renderChatMessages([]);
+    assert.match(fixture.document.getElementById('chat-area')?.textContent || '', /recovered user input[\s\S]*Build run-recovery[\s\S]*recovered final answer/,
+      'a persisted Build recovers both visible boundaries when legacy chat rows are missing');
+    assert.match(fixture.document.getElementById('chat-area')?.textContent || '', /Historical record/,
+      'synthetic recovery rows are identified as historical instead of appearing newly submitted');
+
+    fixture.state.workRunsByTarget['workspace-a::default'] = [
+      {
+        runId: 'run-orphan-error',
+        primaryPrompt: 'older missing failed input',
+        startedAt: '2026-07-20T15:58:50.000Z',
+        status: 'error',
+        events: [{ type: 'error', content: 'older persisted failure' }],
+      },
+      {
+        runId: 'run-latest-success',
+        primaryPrompt: 'latest visible input',
+        startedAt: '2026-07-20T16:30:00.000Z',
+        status: 'completed',
+        events: [{ type: 'final_response', content: 'latest visible final' }],
+      },
+    ];
+    fixture.renderChatMessages([
+      { role: 'user', content: 'latest visible input', runId: 'run-latest-success', timestamp: '00:30:00' },
+      { role: 'assistant', content: 'latest visible final', runId: 'run-latest-success', timestamp: '00:30:41' },
+    ]);
+    const orphanOrder = Array.from(fixture.document.querySelectorAll('#chat-area > .chat-msg')).map(row => row.textContent || '').join('\n');
+    assert.match(orphanOrder, /older missing failed input[\s\S]*Build run-orphan-error[\s\S]*latest visible input[\s\S]*Build run-latest-success[\s\S]*latest visible final/,
+      'an orphaned historical failure is restored before the newer completed run instead of being appended after its final answer');
 
     console.log('Guide UI reconciliation verification passed');
   } finally {

@@ -335,17 +335,29 @@ function ensureNoReleaseProcess() {
       prompt.focus();
       prompt.value = 'Use write, bash, edit, and read tools to prove the release UI agent tool chain.';
       prompt.dispatchEvent(new Event('input', { bubbles: true }));
-      window.sendMessage();
+      window.__releaseUiAgentRun = { done: false, value: null, error: '' };
+      window.sendMessage().then(value => {
+        window.__releaseUiAgentRun = { done: true, value: value, error: '' };
+      }).catch(error => {
+        window.__releaseUiAgentRun = { done: true, value: null, error: String(error?.stack || error) };
+      });
       return true;
     })()`);
 
     const finalVisible = await waitFor(cdp, `(() => {
       const text = document.body.innerText || '';
-      return text.includes('ACTIVE_TOOLCHAIN_RESULT_OK_20260627_SCRIPT') &&
-        text.includes('Tools') &&
+      const runText = document.querySelector('.conversation-work-run')?.innerText || '';
+      const finalText = Array.from(document.querySelectorAll('.run-final-response')).map(node => node.innerText || '').join(' ');
+      return finalText.includes('ACTIVE_TOOLCHAIN_RESULT_OK_20260627_SCRIPT') &&
         text.includes('TERMINAL_TOOL_USED') &&
-        text.includes('EDIT_REPLACED_OK') ? text : '';
+        text.includes('EDIT_REPLACED_OK') &&
+        runText.includes('Edited a file') &&
+        runText.includes('Ran a command') &&
+        runText.includes('Read and searched content') ? finalText : '';
     })()`, 90000, 'visible toolchain result');
+
+    const completedRun = await waitFor(cdp, `window.__releaseUiAgentRun?.done ? window.__releaseUiAgentRun : null`, 30_000, 'completed toolchain result');
+    if (completedRun.error) fail(`toolchain result failed: ${completedRun.error}`);
 
     const state = await evaluate(cdp, `window.api.getState()`, 30000);
     if (!state || state.status !== 'idle') fail(`agent did not return to idle: ${state && state.status}`);
@@ -371,6 +383,7 @@ function ensureNoReleaseProcess() {
       fail(`timeline hover metadata did not include mode/model: ${metaText}`);
     }
 
+    await waitFor(cdp, `!!document.querySelector('.work-review-btn')`, 30_000, 'work completion review');
     const reviewRowStyle = await evaluate(cdp, `(() => {
       const review = document.querySelector('.work-review-btn');
       if (!review) return null;

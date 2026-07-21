@@ -20,6 +20,7 @@ const REQUIRED_TOOLS = new Set(['pwd', 'read', 'glob', 'grep']);
 const MODE_SCOPED_TOOLS = new Set([
   'image_inspect',
   'linked_plan',
+  'build_history_query',
   'question',
   'task',
   'subagent_list',
@@ -45,6 +46,7 @@ const PLAN_READ_ONLY_TOOLS = new Set([
   'memory_lab_read',
   'skill',
   'linked_plan',
+  'build_history_query',
   'task',
   'subagent_list',
   'subagent_read',

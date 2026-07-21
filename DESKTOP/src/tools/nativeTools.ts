@@ -39,6 +39,7 @@ export const NATIVE_TOOL_CATALOG: NativeToolCatalogEntry[] = [
   { name: 'subagent_result', label: 'Subagent result', description: 'Read peer transcript and result.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'subagent_close', label: 'Subagent close', description: 'Close a same-conversation peer agent.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'linked_plan', label: 'Linked plan', description: 'Read or conservatively update the conversation-linked Markdown plan.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
+  { name: 'build_history_query', label: 'Build history query', description: 'Read concrete public work details for one historical Build Block.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'question', label: 'Ask question', description: 'Ask the user for structured option feedback.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'skill_download', label: 'Skill download', description: 'Download and install a skill.', category: 'agent', defaultEnabled: true },
   { name: 'skill', label: 'Skill', description: 'Search enabled skill metadata or load one skill body on demand.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },

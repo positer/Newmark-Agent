@@ -978,7 +978,7 @@ export class Agent {
         })
         .sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
       const sequence = Math.max(Number(raw.sequence || 0), ...events.map(event => Number(event.sequence || 0)), 0);
-      byRun.set(runId, {
+      const candidate: ConversationWorkRun = {
         runId,
         target,
         runtimeKey: String(raw.runtimeKey || conversationRuntimeKey(target)),
@@ -990,6 +990,39 @@ export class Agent {
         events,
         guides: [...guidesById.values()],
         primaryPrompt: this.sanitizePublicWorkContent(raw.primaryPrompt || ''),
+      };
+      const previous = byRun.get(runId);
+      if (!previous) {
+        byRun.set(runId, candidate);
+        continue;
+      }
+      const previousSequence = Math.max(Number(previous.sequence || 0), ...previous.events.map(event => Number(event.sequence || 0)), 0);
+      const candidateSequence = Math.max(Number(candidate.sequence || 0), ...candidate.events.map(event => Number(event.sequence || 0)), 0);
+      const terminalRank = (value: ConversationWorkRunStatus): number => value === 'force_interrupted' ? 5
+        : value === 'completed' ? 4 : value === 'error' ? 3 : value === 'interrupted' ? 2 : 1;
+      const candidateIsNewer = candidateSequence > previousSequence
+        || (candidateSequence === previousSequence && terminalRank(candidate.status) >= terminalRank(previous.status));
+      const newer = candidateIsNewer ? candidate : previous;
+      const older = candidateIsNewer ? previous : candidate;
+      const mergedEvents = [...older.events, ...newer.events];
+      const seenEvents = new Set<string>();
+      const uniqueEvents = mergedEvents.filter(event => {
+        const key = String(event.id || `${event.type}:${event.sequence || 0}:${event.timestamp || ''}:${event.content || ''}`);
+        if (seenEvents.has(key)) return false;
+        seenEvents.add(key);
+        return true;
+      }).sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
+      const mergedGuides = new Map<string, GuideReceipt>();
+      for (const guide of [...older.guides, ...newer.guides]) mergedGuides.set(guide.clientMessageId, guide);
+      byRun.set(runId, {
+        ...older,
+        ...newer,
+        startedAt: older.startedAt.localeCompare(newer.startedAt) <= 0 ? older.startedAt : newer.startedAt,
+        endedAt: newer.status === 'running' ? undefined : (newer.endedAt || older.endedAt),
+        events: uniqueEvents,
+        guides: [...mergedGuides.values()],
+        sequence: Math.max(previousSequence, candidateSequence, ...uniqueEvents.map(event => Number(event.sequence || 0)), 0),
+        primaryPrompt: newer.primaryPrompt || older.primaryPrompt,
       });
     }
     return [...byRun.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
@@ -1595,6 +1628,13 @@ export class Agent {
   }
 
   private writeStoredConversationStateNow(state: StoredConversationState, ws: WorkspaceInfo | null = this.workspace.current, deletedKeys: Iterable<string> = []): void {
+    const file = this.workspaceConversationStorePath(ws);
+    if (file) {
+      const pendingTimer = this.conversationStateFlushTimers.get(file);
+      if (pendingTimer) clearTimeout(pendingTimer);
+      this.conversationStateFlushTimers.delete(file);
+      this.conversationStateDirty.delete(file);
+    }
     const stopTimer = performanceTimer('persistence', { conversationId: this.activeConversationId });
     this.mutateStoredConversationState(ws, latest => {
       const merged: Record<string, StoredConversationEntry> = { ...(latest.conversations || {}) };
@@ -1608,6 +1648,12 @@ export class Agent {
         const incomingUpdatedAt = Date.parse(incoming.updatedAt || '') || 0;
         const existingUpdatedAt = Date.parse(existing.updatedAt || '') || 0;
         const preferred = incomingUpdatedAt >= existingUpdatedAt ? { ...existing, ...incoming } : { ...incoming, ...existing };
+        const incomingTranscriptEmpty = !(incoming.chatMessages || []).length && !(incoming.history || []).length;
+        const existingTranscriptPresent = !!(existing.chatMessages || []).length || !!(existing.history || []).length;
+        if (incomingTranscriptEmpty && existingTranscriptPresent) {
+          preferred.chatMessages = existing.chatMessages;
+          preferred.history = existing.history;
+        }
         const incomingPlanRevision = Math.max(0, Number(incoming.linkedPlan?.revision || 0));
         const existingPlanRevision = Math.max(0, Number(existing.linkedPlan?.revision || 0));
         preferred.linkedPlan = incomingPlanRevision >= existingPlanRevision ? incoming.linkedPlan : existing.linkedPlan;
@@ -2181,6 +2227,22 @@ export class Agent {
     return this.activeConversationId;
   }
 
+  persistActiveConversationSelection(id: string, ws: WorkspaceInfo | null = this.workspace.current): string {
+    const clean = this.safeConversationId(id || 'default');
+    this.mutateStoredConversationState(ws, latest => ({
+      version: 3,
+      activeConversationId: clean,
+      conversations: { ...(latest.conversations || {}) },
+    }));
+    if (ws && this.workspace.current && path.resolve(ws.path) === path.resolve(this.workspace.current.path)) {
+      this.activeConversationId = clean;
+      const key = this.workspaceConversationKey();
+      if (key) this.workspaceConversations.delete(key);
+      this.loadWorkspaceConversationState();
+    }
+    return clean;
+  }
+
   setInputMode(mode: string): InputMode {
     this.inputMode = mode === 'next' ? 'next' : 'guide';
     this.saveWorkspaceConversationState(true);
@@ -2220,6 +2282,79 @@ export class Agent {
     if (!run || run.primaryPrompt) return;
     run.primaryPrompt = this.sanitizePublicWorkContent(content).slice(0, 50_000);
     this.saveWorkspaceConversationState(false);
+  }
+
+  conversationBuildHistory(limit = 64): Array<{
+    historyIndex: number;
+    runId: string;
+    userInput: string;
+    finalSummary: string;
+    completionStatus: ConversationWorkRunStatus;
+    startedAt: string;
+    endedAt?: string;
+  }> {
+    const currentRunId = this.currentWorkRunId();
+    return [...this.workRuns]
+      .filter(run => run.runId !== currentRunId)
+      .sort((a, b) => String(b.startedAt || '').localeCompare(String(a.startedAt || '')) || Number(b.sequence || 0) - Number(a.sequence || 0))
+      .slice(0, Math.max(1, Math.min(200, Math.floor(limit || 64))))
+      .map((run, index) => {
+        const finalEvent = [...run.events].reverse().find(event => event.type === 'final_response');
+        const finalMessage = [...this.chatMessages].reverse().find(message => message.role === 'assistant' && message.runId === run.runId);
+        return {
+          historyIndex: index + 1,
+          runId: run.runId,
+          userInput: this.sanitizePublicWorkContent(run.primaryPrompt || '(user input unavailable)').slice(0, 50_000),
+          finalSummary: this.sanitizePublicWorkContent(finalEvent?.content || finalMessage?.content || '(no final summary)').slice(0, 50_000),
+          completionStatus: run.status,
+          startedAt: run.startedAt,
+          endedAt: run.endedAt,
+        };
+      });
+  }
+
+  handleBuildHistoryQuery(args: string): string {
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
+    const history = this.conversationBuildHistory(200);
+    const requestedRunId = String(input.run_id || '').trim();
+    const requestedIndex = Math.floor(Number(input.history_index || 0));
+    const record = requestedRunId
+      ? history.find(item => item.runId === requestedRunId)
+      : requestedIndex > 0 ? history[requestedIndex - 1] : undefined;
+    if (!record) {
+      return JSON.stringify({
+        ok: false,
+        error: 'Historical Build Block not found. Pass its newest-to-oldest history_index or a run_id returned by an earlier query.',
+        historyCount: history.length,
+      });
+    }
+    const run = this.workRuns.find(item => item.runId === record.runId);
+    if (!run) return JSON.stringify({ ok: false, error: 'Historical Build Block state is unavailable.' });
+    const maxEvents = Math.max(1, Math.min(200, Math.floor(Number(input.max_events || 80))));
+    const publicEvents = run.events.filter(event => !['text', 'response', 'final_response'].includes(event.type));
+    const activities = publicEvents.slice(-maxEvents).map(event => ({
+      sequence: event.sequence,
+      type: event.type,
+      timestamp: event.timestamp,
+      toolName: event.toolName,
+      status: event.status,
+      content: this.sanitizePublicWorkContent(event.content || ''),
+    }));
+    return JSON.stringify({
+      ok: true,
+      buildBlock: {
+        ...record,
+        publicActivities: activities,
+        guides: run.guides.map(guide => ({
+          status: guide.status,
+          createdAt: guide.createdAt,
+          updatedAt: guide.updatedAt,
+          content: this.sanitizePublicWorkContent(guide.content || ''),
+        })),
+      },
+      truncatedActivities: Math.max(0, publicEvents.length - activities.length),
+    });
   }
 
   recordContextCompressionStep(): void {
@@ -4794,6 +4929,7 @@ export class Agent {
       `- Agent terminal timeout: bash accepts per-call timeout_ms; timeout_ms=0 requests no limit; terminal.interrupt_timeout_ms=${this.config.getNum('terminal', 'interrupt_timeout_ms')} is a nonzero upper cap, and 0 means no cap.`,
       `- Automation: automation_create/list/update/toggle/delete manage persisted schedules through the active Newmark scheduler when available; Plan may only list automations, and subagents cannot manage automation.`,
       '- Memory Lab exists and provides persistent memory.',
+      '- Build history disclosure is two-layered. The request prompt contains only each historical Build Block user input, final summary, and completion status. Use build_history_query only when the current user asks for concrete work details from one Build Block; querying history is read-only and never authorizes resuming that work.',
       '- A memory_lab_update or memory_lab_reindex call is unfinished until its awaited tool result contains rebuildReceipt.completed=true. The completion receipt is represented by the tool activity inside the current Build block and should not be repeated as a separate completion message.',
       `- Skills and subagents: skill searches enabled metadata and loads one SKILL.md body on demand; skill_download installs offline skill folders; task creates constrained subagents tracked in agent state.`,
       `- Visible output contract: assistant replies are sanitized before display to remove hidden-reasoning markers. ${visibleOutputContract}`,

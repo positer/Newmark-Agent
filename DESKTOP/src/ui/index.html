@@ -4707,12 +4707,15 @@ var state = {
   backendQueuesByTarget: {},
   defaultFlow: '',
   settingsActiveTab: 'general',
-  pluginActiveTab: 'installed',
+  pluginActiveTab: 'mcp',
   githubOverviewData: null,
   githubOverviewHash: '',
   githubOverviewLoaded: false,
   githubOverviewLoading: false,
   githubOverviewPendingRepo: '',
+  mcpServers: [],
+  mcpDiscovered: [],
+  mcpEditingId: '',
   skillMarketQuery: '',
   memoryLab: null,
   memoryLabSelectedTag: '',
@@ -5083,6 +5086,7 @@ var NEWMARK_I18N = {
     'flow.emptyRun': 'Flow is empty and cannot run.',
     'flow.started': 'Flow started',
     'plugins.title': 'Plugins',
+    'plugins.mcp': 'MCP Management',
     'plugins.management': 'Skills Management',
     'plugins.market': 'Skills Market',
     'plugins.github': 'GitHub CLI',
@@ -5120,6 +5124,26 @@ var NEWMARK_I18N = {
     'plugins.noItems': 'No items found.',
     'plugins.private': 'Private',
     'plugins.public': 'Public',
+    'plugins.starred': 'Starred',
+    'plugins.notStarred': 'Not starred',
+    'plugins.stars': 'Stars',
+    'plugins.forks': 'Forks',
+    'plugins.forkRepo': 'Fork repository',
+    'plugins.sourceRepo': 'Source repository',
+    'plugins.permission': 'Permission',
+    'plugins.subscription': 'Subscription',
+    'plugins.mcpHelp': 'Register and manage user MCP servers. Plugin-discovered MCP entries are shown as read-only metadata.',
+    'plugins.mcpName': 'Server name',
+    'plugins.mcpTransport': 'Transport',
+    'plugins.mcpCommand': 'Command or URL',
+    'plugins.mcpArgs': 'Arguments JSON array',
+    'plugins.mcpEnv': 'Environment JSON object',
+    'plugins.mcpHeaders': 'Headers JSON object',
+    'plugins.mcpAdd': 'Add MCP server',
+    'plugins.mcpSave': 'Save MCP server',
+    'plugins.mcpNoServers': 'No user MCP servers.',
+    'plugins.mcpDiscovered': 'Discovered from plugins',
+    'plugins.mcpStored': 'User MCP servers',
     'workspace.new': 'New workspace',
     'workspace.type': 'Type',
     'workspace.internal': 'Internal workspace',
@@ -5587,6 +5611,7 @@ var NEWMARK_I18N = {
     'flow.emptyRun': 'Flow 为空，无法运行。',
     'flow.started': 'Flow 已启动',
     'plugins.title': '插件',
+    'plugins.mcp': 'MCP 管理',
     'plugins.management': 'Skills 管理',
     'plugins.market': 'Skills Market',
     'plugins.github': 'GitHub CLI',
@@ -5624,6 +5649,26 @@ var NEWMARK_I18N = {
     'plugins.noItems': '暂无内容。',
     'plugins.private': '私有',
     'plugins.public': '公开',
+    'plugins.starred': '已 Star',
+    'plugins.notStarred': '未 Star',
+    'plugins.stars': 'Stars',
+    'plugins.forks': 'Forks',
+    'plugins.forkRepo': 'Fork 仓库',
+    'plugins.sourceRepo': '上游仓库',
+    'plugins.permission': '权限',
+    'plugins.subscription': '订阅',
+    'plugins.mcpHelp': '注册和管理用户 MCP 服务器。插件中发现的 MCP 项以只读元数据展示。',
+    'plugins.mcpName': '服务器名称',
+    'plugins.mcpTransport': '传输方式',
+    'plugins.mcpCommand': '命令或 URL',
+    'plugins.mcpArgs': '参数 JSON 数组',
+    'plugins.mcpEnv': '环境变量 JSON 对象',
+    'plugins.mcpHeaders': '请求头 JSON 对象',
+    'plugins.mcpAdd': '添加 MCP 服务器',
+    'plugins.mcpSave': '保存 MCP 服务器',
+    'plugins.mcpNoServers': '暂无用户 MCP 服务器。',
+    'plugins.mcpDiscovered': '从插件发现',
+    'plugins.mcpStored': '用户 MCP 服务器',
     'workspace.new': '新建工作区',
     'workspace.type': '类型',
     'workspace.internal': '内部工作区',
@@ -6728,10 +6773,18 @@ function addMsg(role, text, mode, model, messageIndex, messageMeta) {
   var div = document.createElement('div');
   div.className = 'chat-msg ' + role;
   var metaLabel = role === 'user' ? t('message.user') : (role === 'workflow' ? t('message.workflow') : (role === 'system' ? t('message.system') : t('message.agent')));
+  var rawTimestamp = messageMeta && String(messageMeta.timestamp || '').trim();
+  var displayTimestamp = new Date().toLocaleTimeString(uiLocale());
+  if (/^\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?$/i.test(rawTimestamp)) displayTimestamp = rawTimestamp;
+  else if (rawTimestamp) {
+    var parsedTimestamp = new Date(rawTimestamp);
+    if (!isNaN(parsedTimestamp.getTime())) displayTimestamp = parsedTimestamp.toLocaleString(uiLocale());
+  }
   var metaInfo = '';
+  if (messageMeta && messageMeta.recovered) metaInfo += currentLang() === 'zh' ? '历史记录' : 'Historical record';
   if (mode) metaInfo += t('message.mode') + ': ' + mode;
   if (model) metaInfo += (metaInfo ? ' | ' : '') + t('message.model') + ': ' + model;
-  div.innerHTML = '<div class="meta"><span class="msg-role">' + metaLabel + '</span><span> | ' + esc(new Date().toLocaleTimeString(uiLocale())) + '</span>' +
+  div.innerHTML = '<div class="meta"><span class="msg-role">' + metaLabel + '</span><span> | ' + esc(displayTimestamp) + '</span>' +
     (metaInfo ? '<span class="meta-extra"> | ' + esc(metaInfo) + '</span>' : '') + messageActionsHtml(role, text, messageIndex) + '</div><div class="msg-body">' + renderMessageContent(text) + '</div>';
   div._newmarkMessageText = String(text || '');
   div._newmarkMessageAttachments = appendConversationImageAttachments(div.querySelector('.msg-body'), messageMeta && messageMeta.attachments);
@@ -7420,6 +7473,7 @@ function normalizedWorkRun(run, target) {
     status: status,
     startedAt: startedAt,
     endedAt: run.endedAt || '',
+    primaryPrompt: String(run.primaryPrompt || ''),
     expanded: expanded,
     events: dedupeGuideWorkEvents((Array.isArray(run.events) ? run.events : []).filter(publicWorkEvent).map(function(event) {
       var item = Object.assign({}, publicWorkEventForUi(event), {
@@ -7564,8 +7618,10 @@ function workRunGuideEvents(run) {
   });
 }
 
-function renderWorkRunEvents(run) {
-  var rawEvents = (run.events || []).filter(publicWorkEvent);
+function renderWorkRunEvents(run, includeGuides) {
+  var rawEvents = (run.events || []).filter(publicWorkEvent).filter(function(event) {
+    return includeGuides !== false || !(String(event && event.type || '').toLowerCase().indexOf('guide') === 0 || !!(event && event.guide));
+  });
   var terminalInterrupted = ['interrupted', 'force_interrupted'].indexOf(String(run && run.status || '')) >= 0;
   var events = [];
   var publicText = '';
@@ -7687,7 +7743,7 @@ function updateConversationWorkRunElement(run, element) {
     '<span class="conversation-work-run-title">' + esc(workRunTitle(run)) + '</span>' +
     '<span class="conversation-work-run-status">' + esc(String(run.status || '')) + '</span>' +
     '<span class="conversation-work-run-chevron" aria-hidden="true"></span></button>' +
-    '<div class="conversation-work-run-body">' + renderWorkRunEvents(run) + '</div>';
+    '<div class="conversation-work-run-body">' + renderWorkRunEvents(run, expanded) + '</div>';
   var wrapper = element.closest ? element.closest('.work-run-message') : null;
   if (wrapper) {
     var guideStack = wrapper.querySelector(':scope > .work-run-collapsed-guides');
@@ -7696,7 +7752,7 @@ function updateConversationWorkRunElement(run, element) {
       guideStack.className = 'work-run-collapsed-guides';
       wrapper.appendChild(guideStack);
     }
-    guideStack.innerHTML = workRunGuideEvents(run).map(renderWorkRunGuideMessage).join('');
+    guideStack.innerHTML = expanded ? '' : workRunGuideEvents(run).map(renderWorkRunGuideMessage).join('');
   }
   var refreshedActivities = element.querySelectorAll ? element.querySelectorAll('details.conversation-work-activity[data-activity-key]') : [];
   for (var refreshedIndex = 0; refreshedIndex < refreshedActivities.length; refreshedIndex++) {
@@ -8045,12 +8101,62 @@ function renderChatMessages(messages) {
       if (id) persistedGuideIds[id] = true;
     });
   });
-  var persistedRunIndex = 0;
+  var persistedRunsById = {};
+  var persistedRunIndexes = {};
+  var renderedRunIds = {};
+  var messageRunRoles = {};
+  persistedRuns.forEach(function(run, runIndex) {
+    var runId = String(run && run.runId || '');
+    if (runId) {
+      persistedRunsById[runId] = run;
+      persistedRunIndexes[runId] = runIndex;
+    }
+  });
+  (Array.isArray(messages) ? messages : []).forEach(function(message) {
+    var runId = String(message && message.runId || '');
+    var role = String(message && message.role || '');
+    if (!runId || !persistedRunsById[runId] || message.clientMessageId || isHiddenWorkflowMessage(message)) return;
+    if (!messageRunRoles[runId]) messageRunRoles[runId] = {};
+    if (role === 'user' || role === 'assistant') messageRunRoles[runId][role] = true;
+  });
+  function finalResponseForRun(run) {
+    var events = Array.isArray(run && run.events) ? run.events : [];
+    for (var eventIndex = events.length - 1; eventIndex >= 0; eventIndex--) {
+      if (String(events[eventIndex] && events[eventIndex].type || '').toLowerCase() !== 'final_response') continue;
+      var content = String(events[eventIndex] && events[eventIndex].content || '').trim();
+      if (content) return { content: content, timestamp: events[eventIndex].timestamp || run.endedAt || '' };
+    }
+    return null;
+  }
+  function renderOwnedWorkRun(run, includeRecoveredFinal) {
+    var runId = String(run && run.runId || '');
+    if (!runId || renderedRunIds[runId]) return;
+    var roles = messageRunRoles[runId] || {};
+    if (!roles.user && String(run.primaryPrompt || '').trim()) {
+      addMsg('user', run.primaryPrompt, '', '', -1, { runId: runId, target: renderTarget, timestamp: run.startedAt || '', recovered: true });
+    }
+    renderConversationWorkRun(run);
+    renderedRunIds[runId] = true;
+    if (includeRecoveredFinal && !roles.assistant) {
+      var recoveredFinal = finalResponseForRun(run);
+      if (recoveredFinal) addMsg('assistant', recoveredFinal.content, '', '', -1, { runId: runId, target: renderTarget, timestamp: recoveredFinal.timestamp, recovered: true });
+    }
+  }
+  function renderOrphanRunsBefore(runId) {
+    var targetIndex = Number(persistedRunIndexes[String(runId || '')]);
+    if (!isFinite(targetIndex)) return;
+    for (var orphanIndex = 0; orphanIndex < targetIndex; orphanIndex++) {
+      var orphanRun = persistedRuns[orphanIndex];
+      var orphanRunId = String(orphanRun && orphanRun.runId || '');
+      var orphanRoles = messageRunRoles[orphanRunId] || {};
+      if (!orphanRoles.user && !orphanRoles.assistant) renderOwnedWorkRun(orphanRun, true);
+    }
+  }
   var pendingWorkReview = conversationWorkUiState(renderConversationId).pendingWorkReview;
   resetConversationWorkUi(renderConversationId, false);
   conversationWorkUiState(renderConversationId).pendingWorkReview = pendingWorkReview;
   if (!messages || !messages.length) {
-    while (persistedRunIndex < persistedRuns.length) renderConversationWorkRun(persistedRuns[persistedRunIndex++]);
+    persistedRuns.forEach(function(run) { renderOwnedWorkRun(run, true); });
     var pendingGuideCount = renderPendingGuideMessages(renderTarget, persistedGuideIds);
     if (!persistedRuns.length && !pendingGuideCount) {
       els['chat-area'].innerHTML = '<div class="welcome-msg"><div class="brand">Newmark Agent</div><div>' + esc(t('app.ready')) + '</div><div class="subtitle">' + esc(t('app.subtitle')) + '</div></div>';
@@ -8062,28 +8168,31 @@ function renderChatMessages(messages) {
     if (isHiddenWorkflowMessage(m)) continue;
     if (String(m.role || '') === 'workflow' && /^tool:/.test(String(m.mode || ''))) continue;
     finishToolBatch(renderConversationId);
-    var associatedRun = null;
-    if (String(m.role || '') === 'assistant' && persistedRunIndex < persistedRuns.length) {
-      associatedRun = persistedRuns[persistedRunIndex++];
-      renderConversationWorkRun(associatedRun);
-    }
     var clientMessageId = String(m.clientMessageId || '');
     if (clientMessageId) persistedGuideIds[clientMessageId] = true;
     if (clientMessageId && m.runId && persistedRuns.some(function(run) { return String(run.runId || '') === String(m.runId || ''); })) {
       delete guideMessages[clientMessageId];
       continue;
     }
+    var messageRunId = String(m.runId || '');
+    var associatedRun = messageRunId ? persistedRunsById[messageRunId] : null;
+    if (associatedRun) renderOrphanRunsBefore(messageRunId);
+    if (associatedRun && String(m.role || '') === 'assistant' && !renderedRunIds[messageRunId]) {
+      renderOwnedWorkRun(associatedRun, false);
+    }
     addMsg(m.role || 'assistant', m.content || '', m.mode || (clientMessageId ? 'guide' : ''), m.model || '', i, {
       clientMessageId: clientMessageId,
       guideStatus: clientMessageId ? 'applied' : '',
       runId: m.runId || '',
       attachments: m.attachments || [],
-      target: renderTarget
+      target: renderTarget,
+      timestamp: m.timestamp || ''
     });
+    if (associatedRun && String(m.role || '') === 'user') renderOwnedWorkRun(associatedRun, false);
     if (clientMessageId) delete guideMessages[clientMessageId];
   }
   finishToolBatch(renderConversationId);
-  while (persistedRunIndex < persistedRuns.length) renderConversationWorkRun(persistedRuns[persistedRunIndex++]);
+  persistedRuns.forEach(function(run) { renderOwnedWorkRun(run, true); });
   renderPendingGuideMessages(renderTarget, persistedGuideIds);
   if (pendingWorkReview) addWorkReview(pendingWorkReview);
   renderAutoRouteRatingControls();
@@ -9240,6 +9349,9 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       return (run.events || []).some(function(event) { return ['response', 'final_response'].indexOf(String(event.type || '').toLowerCase()) >= 0; });
     }));
     var lockedUi = conversationWorkUiState(lockedConversationId, lockedTarget.workspaceId);
+    if (stillActive && r && Array.isArray(r.diffs) && r.diffs.length) {
+      lockedUi.pendingWorkReview = r.diffs;
+    }
     if (stillActive && !responseOwnedByRun) {
       responseMsg = lockedUi.activeWorkflowMsg;
       if (r && r.error) {
@@ -9262,10 +9374,6 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         if (!responseMsg) responseMsg = addMsg('assistant', '', state.mode, state.model);
         updateMsg(responseMsg, '(empty response)', 'assistant', state.mode, state.model);
       }
-      if (r && Array.isArray(r.diffs) && r.diffs.length) {
-        var reviewUi = conversationWorkUiState(lockedConversationId);
-        reviewUi.pendingWorkReview = r.diffs;
-      }
     }
     if (stillActive && r && Array.isArray(r.chatMessages)) renderChatMessages(r.chatMessages);
     else if (stillActive) {
@@ -9273,7 +9381,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       if (completedReviewUi.pendingWorkReview) addWorkReview(completedReviewUi.pendingWorkReview);
     }
     if (r && r.conversations) {
-      applyBackendConversations(r.conversations || [], lockedConversationId, lockedTarget.workspaceId);
+      applyBackendConversations(r.conversations || [], stillActive ? lockedConversationId : activeConversationId(), lockedTarget.workspaceId);
       if (stillActive) renderConversations();
     }
     if (stillActive && r && r.conversationPlan) {
@@ -9335,7 +9443,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue, lockedTarget);
       }
       if (s && s.conversations) {
-        applyBackendConversations(s.conversations || [], lockedConversationId, lockedTarget.workspaceId);
+        applyBackendConversations(s.conversations || [], stillActiveAfterRefresh ? lockedConversationId : activeConversationId(), lockedTarget.workspaceId);
         if (stillActiveAfterRefresh) renderConversations();
       }
       if (stillActiveAfterRefresh) {
@@ -13332,6 +13440,7 @@ function applyBackendConversations(items, activeId, workspaceId) {
   if (!state.currentWorkspace || !items || !items.length) return;
   var key = currentWorkspaceKey(workspaceId);
   var isForegroundWorkspace = key === currentWorkspaceKey();
+  var existingConversations = state.workspaceConversations[key] || [];
   var convs = [];
   var requestedActiveId = String(activeId || '');
   var holdId = String(state.foregroundConversationHoldId || '');
@@ -13354,6 +13463,18 @@ function applyBackendConversations(items, activeId, workspaceId) {
       pinnedAt: item.pinnedAt || ''
     });
   }
+  // A stale list response can arrive between creating a conversation locally
+  // and the activation write reaching disk. Keep that foreground row so an
+  // immediate send cannot silently fall back to the previous conversation.
+  if (useHold && !seenIds[holdId]) {
+    var heldConversation = existingConversations.find(function(item) {
+      return String(item && item.id || '') === holdId;
+    });
+    if (heldConversation) {
+      convs.push(Object.assign({}, heldConversation, { active: true }));
+      requestedActiveId = holdId;
+    }
+  }
   if (!convs.some(function(c) { return c.active; })) convs[0].active = true;
   state.workspaceConversations[key] = convs;
   state.workspaceActiveConversation[key] = Math.max(0, convs.findIndex(function(c) { return c.active; }));
@@ -13374,7 +13495,8 @@ function syncBackendConversation() {
   }
   if (conv && api.ensureConversation) {
     var requestedTarget = currentConversationTarget(conv.id);
-    return api.ensureConversation(requestedTarget).then(function(s) {
+    var activate = api.activateConversation ? api.activateConversation(requestedTarget) : api.ensureConversation(requestedTarget);
+    return activate.then(function(s) {
       var id = (s && s.conversationId) || conv.id;
       if (!requestIsCurrent() || String(id) !== requestedConversationId) return;
       state.activeBackendConversationId = id;
@@ -13516,16 +13638,34 @@ window.newConversation = function(workspaceReference) {
   }
   if (!window.requireWorkspace('newConversation')) return;
   var convs = currentWorkspaceConversations();
+  var createdWorkspaceKey = currentWorkspaceKey();
   var id = 'conv-' + Date.now();
   var summary = t('workspace.newConversation') + ' ' + (convs.length + 1);
   convs.push({id: id, summary: summary, archived: false, active: false});
   setActiveWorkspaceConversation(convs.length - 1);
+  state.activeBackendConversationId = id;
+  holdForegroundConversation(id, 30000);
+  markConversationTracked(id, state.conversationTrackMs || 300000, runtimeWorkspaceId(''));
   state.conversationPlan = { items: [] };
   renderConversations();
   els['chat-area'].innerHTML = '';
-  syncBackendConversation().then(function() {
+  var target = currentConversationTarget(id);
+  var activation = api.activateConversation ? api.activateConversation(target) : (api.ensureConversation ? api.ensureConversation(target) : Promise.resolve(null));
+  return activation.then(function(s) {
+    if (createdWorkspaceKey !== currentWorkspaceKey() || id !== String(activeConversationId() || 'default')) return;
+    state.activeBackendConversationId = String((s && s.conversationId) || id);
+    return loadActiveConversationMessages(id);
+  }).then(function() {
+    if (createdWorkspaceKey !== currentWorkspaceKey() || id !== String(activeConversationId() || 'default')) return;
+    state.foregroundConversationHoldId = '';
+    state.foregroundConversationHoldUntil = 0;
     renderChatMessages([]);
     addMsg('system', '[System] ' + t('workspace.newConversation') + ': ' + summary, 'system', '');
+  }).catch(function(error) {
+    if (createdWorkspaceKey === currentWorkspaceKey() && id === String(activeConversationId() || 'default')) {
+      showUiNotice((currentLang() === 'zh' ? '新对话持久化失败：' : 'Failed to persist the new conversation: ') + (error && error.message ? error.message : String(error)), 'error', 'new-conversation-activation-' + id);
+    }
+    throw error;
   });
 };
 
@@ -14107,15 +14247,17 @@ window.showPluginList = function() {
 
 // === Plugin / Skills Market ===
 window.showPluginList = function(tab) {
-  state.activeSubWindowView = { name: 'plugins', tab: tab || state.pluginActiveTab || 'installed' };
-  state.pluginActiveTab = tab || state.pluginActiveTab || 'installed';
+  state.activeSubWindowView = { name: 'plugins', tab: tab || state.pluginActiveTab || 'mcp' };
+  state.pluginActiveTab = tab || state.pluginActiveTab || 'mcp';
   var html = '<div class="settings-tabs">' +
+    '<button class="stab-btn' + (state.pluginActiveTab === 'mcp' ? ' active' : '') + '" onclick="window.showPluginList(\'mcp\')">' + esc(t('plugins.mcp')) + '</button>' +
     '<button class="stab-btn' + (state.pluginActiveTab === 'installed' ? ' active' : '') + '" onclick="window.showPluginList(\'installed\')">' + esc(t('plugins.management')) + '</button>' +
     '<button class="stab-btn' + (state.pluginActiveTab === 'market' ? ' active' : '') + '" onclick="window.showPluginList(\'market\')">' + esc(t('plugins.market')) + '</button>' +
     '<button class="stab-btn' + (state.pluginActiveTab === 'github' ? ' active' : '') + '" onclick="window.showPluginList(\'github\')">' + esc(t('plugins.github')) + '</button>' +
     '</div><div id="plugin-panel" style="margin-top:10px;">' + esc(t('common.loading')) + '</div>';
   window.openSubWin(t('plugins.title'), html);
-  if (state.pluginActiveTab === 'market') window.renderSkillsMarket();
+  if (state.pluginActiveTab === 'mcp') window.renderMcpManager();
+  else if (state.pluginActiveTab === 'market') window.renderSkillsMarket();
   else if (state.pluginActiveTab === 'github') window.renderGithubCliPanel();
   else window.renderInstalledSkills();
 };
@@ -14185,6 +14327,89 @@ window.renderSkillsMarket = function() {
   }).catch(function(){ state._skillMarketAll = []; finish(); });
   else finish();
 };
+
+window.renderMcpManager = function() {
+  var panel = document.getElementById('plugin-panel');
+  if (!panel) return;
+  panel.innerHTML = '<div class="provider-card marquee-border">' + esc(t('common.loading')) + '</div>';
+  if (!api.listMcpServers) {
+    panel.innerHTML = '<div class="settings-empty">' + esc(t('plugins.ghUnavailable')) + '</div>';
+    return;
+  }
+  api.listMcpServers().then(function(result) {
+    state.mcpServers = Array.isArray(result && result.servers) ? result.servers : [];
+    state.mcpDiscovered = Array.isArray(result && result.discovered) ? result.discovered : [];
+    window.renderMcpManagerContent();
+  }).catch(function(error) {
+    panel.innerHTML = '<div class="settings-empty">' + esc(String(error && error.message ? error.message : error)) + '</div>';
+  });
+};
+
+window.renderMcpManagerContent = function() {
+  var panel = document.getElementById('plugin-panel');
+  if (!panel) return;
+  var servers = state.mcpServers || [];
+  var discovered = state.mcpDiscovered || [];
+  var editing = servers.find(function(server) { return server.id === state.mcpEditingId; }) || {};
+  var transport = editing.transport === 'http' ? 'http' : 'stdio';
+  var html = '<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;">' + esc(t('plugins.mcpHelp')) + '</div>' +
+    '<div class="provider-card" style="margin-bottom:12px;">' +
+    '<div style="display:grid;grid-template-columns:1fr 120px;gap:8px;margin-bottom:8px;">' +
+    '<input id="mcp-name" value="' + escAttr(editing.name || '') + '" placeholder="' + escAttr(t('plugins.mcpName')) + '" class="github-repo-select">' +
+    '<select id="mcp-transport" class="github-repo-select" onchange="window.updateMcpTransportForm()"><option value="stdio"' + (transport === 'stdio' ? ' selected' : '') + '>stdio</option><option value="http"' + (transport === 'http' ? ' selected' : '') + '>http</option></select></div>' +
+    '<input id="mcp-command" value="' + escAttr(transport === 'http' ? (editing.url || '') : (editing.command || '')) + '" placeholder="' + escAttr(t('plugins.mcpCommand')) + '" class="github-repo-select" style="margin-bottom:8px;">' +
+    '<textarea id="mcp-args" placeholder="' + escAttr(transport === 'http' ? t('plugins.mcpHeaders') : t('plugins.mcpArgs')) + '" style="width:100%;min-height:72px;border:1px solid var(--glass-border-2);border-radius:var(--radius-md);background:var(--control-bg);color:var(--text);padding:9px;font:11px var(--font-mono);resize:vertical;">' + esc(transport === 'http' ? '' : JSON.stringify(editing.args || [], null, 2)) + '</textarea>' +
+    '<textarea id="mcp-env" placeholder="' + escAttr(t('plugins.mcpEnv')) + '" style="display:' + (transport === 'stdio' ? 'block' : 'none') + ';width:100%;min-height:72px;margin-top:8px;border:1px solid var(--glass-border-2);border-radius:var(--radius-md);background:var(--control-bg);color:var(--text);padding:9px;font:11px var(--font-mono);resize:vertical;"></textarea>' +
+    '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px;"><button class="sec-btn" onclick="window.resetMcpForm()">' + esc(t('common.clear')) + '</button><button class="sec-btn primary" onclick="window.saveMcpServer()">' + esc(editing.id ? t('plugins.mcpSave') : t('plugins.mcpAdd')) + '</button></div></div>' +
+    '<h4 style="margin:0 0 8px;">' + esc(t('plugins.mcpStored')) + '</h4>';
+  if (!servers.length) html += '<div class="settings-empty">' + esc(t('plugins.mcpNoServers')) + '</div>';
+  servers.forEach(function(server) {
+    var endpoint = server.transport === 'http' ? server.url : [server.command].concat(server.args || []).join(' ');
+    html += '<div class="provider-card" style="display:flex;align-items:center;gap:8px;"><div style="flex:1;min-width:0;"><div style="font-weight:650;">' + esc(server.name) + ' <span class="settings-badge">' + esc(server.transport) + '</span></div><div class="provider-meta">' + esc(endpoint || '') + '</div></div>' +
+      '<button class="sec-btn" onclick="window.editMcpServer(\'' + escAttr(server.id) + '\')">' + esc(t('common.edit')) + '</button>' +
+      '<button class="sec-btn" onclick="window.toggleMcpServer(\'' + escAttr(server.id) + '\',' + (!server.enabled) + ')">' + esc(server.enabled ? t('common.disable') : t('common.enable')) + '</button>' +
+      '<button class="sec-btn" onclick="window.removeMcpServerFromUi(\'' + escAttr(server.id) + '\')">' + esc(t('common.remove')) + '</button></div>';
+  });
+  html += '<h4 style="margin:14px 0 8px;">' + esc(t('plugins.mcpDiscovered')) + '</h4>';
+  if (!discovered.length) html += '<div class="settings-empty">' + esc(t('plugins.noItems')) + '</div>';
+  discovered.forEach(function(server) {
+    html += '<div class="provider-card"><div style="font-weight:650;">' + esc(server.name) + ' <span class="settings-badge">' + esc(server.ecosystem || '') + '</span></div><div class="provider-meta">' + esc((server.plugin || '') + ' · ' + (server.root || '')) + '</div></div>';
+  });
+  panel.innerHTML = html;
+};
+
+window.updateMcpTransportForm = function() {
+  var transport = document.getElementById('mcp-transport').value;
+  var args = document.getElementById('mcp-args');
+  var env = document.getElementById('mcp-env');
+  if (args) { args.value = ''; args.placeholder = transport === 'http' ? t('plugins.mcpHeaders') : t('plugins.mcpArgs'); }
+  if (env) env.style.display = transport === 'stdio' ? 'block' : 'none';
+};
+window.resetMcpForm = function() { state.mcpEditingId = ''; window.renderMcpManagerContent(); };
+window.editMcpServer = function(id) { state.mcpEditingId = id; window.renderMcpManagerContent(); };
+window.saveMcpServer = function() {
+  if (!api.upsertMcpServer) return;
+  var name = document.getElementById('mcp-name').value.trim();
+  var transport = document.getElementById('mcp-transport').value;
+  var endpoint = document.getElementById('mcp-command').value.trim();
+  var argsText = document.getElementById('mcp-args').value.trim();
+  var envText = document.getElementById('mcp-env').value.trim();
+  var input = { id: state.mcpEditingId || undefined, name: name, transport: transport };
+  try {
+    if (transport === 'http') { input.url = endpoint; if (argsText) input.headers = JSON.parse(argsText); }
+    else { input.command = endpoint; input.args = argsText ? JSON.parse(argsText) : []; if (envText) input.env = JSON.parse(envText); }
+  } catch (error) {
+    showUiNotice(error.message || String(error), 'error', 'mcp-json');
+    return;
+  }
+  api.upsertMcpServer(input).then(function(result) {
+    if (!result || !result.ok) throw new Error(result && result.error || 'MCP update failed');
+    state.mcpEditingId = '';
+    window.renderMcpManager();
+  }).catch(function(error) { showUiNotice(error.message || String(error), 'error', 'mcp-save'); });
+};
+window.toggleMcpServer = function(id, enabled) { if (api.setMcpServerEnabled) api.setMcpServerEnabled(id, enabled).then(window.renderMcpManager); };
+window.removeMcpServerFromUi = function(id) { if (api.removeMcpServer) api.removeMcpServer(id).then(window.renderMcpManager); };
 
 window.filteredSkillMarket = function() {
   var market = state._skillMarketAll || [];
@@ -14370,6 +14595,15 @@ window.renderGithubOverview = function(data) {
     return '<option value="' + escAttr(name) + '"' + (name === repository ? ' selected' : '') + '>' + esc(name) + '</option>';
   }).join('');
   var selected = data.selected || repos.find(function(repo) { return String(repo.nameWithOwner || '') === repository; }) || {};
+  var parentName = selected.parent && selected.parent.nameWithOwner ? String(selected.parent.nameWithOwner) : '';
+  var repoFacts = [
+    '<span class="settings-badge">' + esc(selected.viewerHasStarred ? t('plugins.starred') : t('plugins.notStarred')) + '</span>',
+    '<span class="settings-badge">' + esc(t('plugins.stars')) + ' ' + esc(String(selected.stargazerCount || 0)) + '</span>',
+    '<span class="settings-badge">' + esc(t('plugins.forks')) + ' ' + esc(String(selected.forkCount || 0)) + '</span>',
+    selected.isFork ? '<span class="settings-badge">' + esc(t('plugins.forkRepo')) + '</span>' : '<span class="settings-badge">' + esc(t('plugins.sourceRepo')) + '</span>',
+    selected.viewerPermission ? '<span class="settings-badge">' + esc(t('plugins.permission')) + ' ' + esc(String(selected.viewerPermission)) + '</span>' : '',
+    selected.viewerSubscription ? '<span class="settings-badge">' + esc(t('plugins.subscription')) + ' ' + esc(String(selected.viewerSubscription)) + '</span>' : ''
+  ].filter(Boolean).join(' ');
   var renderItems = function(items, kind) {
     if (!Array.isArray(items) || !items.length) return '<div class="newmark-list"><div class="newmark-list-row newmark-list-empty">' + esc(t('plugins.noItems')) + '</div></div>';
     return '<div class="newmark-list">' + items.map(function(item) {
@@ -14385,7 +14619,7 @@ window.renderGithubOverview = function(data) {
     '<div><div style="font-weight:700;">' + esc(String(account.name || account.login || '')) + '</div><div style="color:var(--text-dim);font-size:11px;">@' + esc(String(account.login || '')) + '</div></div></div>' +
     '<label style="display:block;margin-bottom:6px;color:var(--text-dim);font-size:11px;">' + esc(t('plugins.selectRepo')) + '</label>' +
     (repos.length ? '<div class="github-repo-select-wrap"><select class="github-repo-select" onchange="window.loadGithubOverview(this.value)">' + repoOptions + '</select><span class="github-repo-select-icon" aria-hidden="true">' + iconSvg('chevron-down', '', 'tiny') + '</span></div>' : '<div class="settings-empty">' + esc(t('plugins.noRepos')) + '</div>') +
-    (repository ? '<div class="settings-card" style="padding:12px;margin-bottom:12px;"><div style="display:flex;justify-content:space-between;gap:12px;"><strong>' + esc(String(selected.nameWithOwner || repository)) + '</strong><span class="settings-badge">' + esc(selected.isPrivate ? t('plugins.private') : t('plugins.public')) + '</span></div><div style="margin-top:6px;color:var(--text-dim);font-size:11px;">' + esc(String(selected.description || '')) + '</div></div>' : '') +
+    (repository ? '<div class="settings-card" style="padding:12px;margin-bottom:12px;"><div style="display:flex;justify-content:space-between;gap:12px;"><strong>' + esc(String(selected.nameWithOwner || repository)) + '</strong><span class="settings-badge">' + esc(selected.isPrivate ? t('plugins.private') : t('plugins.public')) + '</span></div><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">' + repoFacts + '</div>' + (parentName ? '<div style="margin-top:7px;color:var(--text-dim);font-size:10px;">' + esc(t('plugins.sourceRepo')) + ': ' + esc(parentName) + '</div>' : '') + '<div style="margin-top:6px;color:var(--text-dim);font-size:11px;">' + esc(String(selected.description || '')) + '</div></div>' : '') +
     '<div class="settings-grid" style="grid-template-columns:1fr 1fr;gap:12px;"><section><h4>' + esc(t('plugins.issues')) + '</h4>' + renderItems(data.issues, 'issue') + '</section><section><h4>' + esc(t('plugins.prs')) + '</h4>' + renderItems(data.prs, 'pr') + '</section></div>';
 };
 

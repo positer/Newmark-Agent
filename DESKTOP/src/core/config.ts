@@ -95,6 +95,11 @@ export class ConfigManager {
     this.config = this.load();
   }
 
+  reload(): void {
+    this.config = this.load();
+    this.workspaceOverrides.clear();
+  }
+
   private load(): Record<string, Record<string, ConfigEntry>> {
     const cp = path.join(this.rootPath, 'config.json');
     if (fs.existsSync(cp)) {

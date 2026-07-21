@@ -321,6 +321,7 @@ function readProviders(root) {
     await evaluate(cdp, `(() => {
       const providerIdx = (window.state.providers || []).findIndex(p => p.name === 'CrudProviderEdited');
       if (providerIdx < 0) throw new Error('CrudProviderEdited not found before provider delete');
+      window.confirm = () => true;
       window.removeProvider(providerIdx);
       return true;
     })()`, 15000);

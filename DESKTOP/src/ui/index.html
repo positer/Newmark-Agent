@@ -1093,6 +1093,10 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   box-shadow: -18px 0 40px rgba(0,0,0,0.16);
 }
 
+[data-theme="light"] #right.open {
+  box-shadow: none;
+}
+
 #right-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -2241,14 +2245,36 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .conversation-work-event.narrative { display: block; color: var(--text); font-size: 13px; line-height: 1.65; padding: 3px 1px 7px; }
 .conversation-work-event.activity-summary { font-size: 12px; font-weight: 600; padding: 2px 0; }
 .conversation-work-activity { margin: 0; padding: 0; }
-.conversation-work-activity > summary { display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; align-items: start; cursor: pointer; list-style: none; }
+.conversation-work-activity > summary { display: grid; grid-template-columns: 17px minmax(0,1fr) 10px; gap: 8px; align-items: center; min-height: 28px; cursor: pointer; list-style: none; color: var(--text); font-size: 12px; font-weight: 600; }
 .conversation-work-activity > summary::-webkit-details-marker { display: none; }
-.conversation-work-activity-chevron { width: 7px; height: 7px; margin: 5px 0 0 3px; border-right: 1px solid var(--text-dim); border-bottom: 1px solid var(--text-dim); transform: rotate(-45deg); transition: transform 140ms ease; }
-.conversation-work-activity[open] .conversation-work-activity-chevron { transform: rotate(45deg); }
-.conversation-work-activity-list { display: flex; flex-direction: column; gap: 5px; margin: 5px 0 4px 24px; padding: 0; border: 0; }
-.conversation-work-activity-item { display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; color: var(--text-dim); font-size: 11px; font-weight: 400; line-height: 1.5; }
-.conversation-work-activity-item .nm-icon { margin-top: 1px; }
+.conversation-work-activity > summary .nm-icon { color: var(--text-dim); }
+.conversation-work-activity-chevron { width: 7px; height: 7px; border-right: 1px solid var(--text-dim); border-bottom: 1px solid var(--text-dim); transform: rotate(-45deg); transition: transform 140ms ease; }
+.conversation-work-activity[open] > summary .conversation-work-activity-chevron,
+.conversation-work-files[open] > summary .conversation-work-activity-chevron,
+.conversation-work-file[open] > summary .conversation-work-activity-chevron { transform: rotate(45deg); }
+.conversation-work-activity-list { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 5px 24px; padding: 0; border: 0; }
+.conversation-work-activity-item { display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; align-items: start; min-height: 24px; color: var(--text-dim); font-size: 11px; font-weight: 400; line-height: 1.5; }
+.conversation-work-activity-item .nm-icon { margin-top: 2px; }
+.conversation-work-command-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-work-activity-detail { margin-top: 2px; color: color-mix(in srgb, var(--text-dim) 88%, transparent); font: 10px/1.45 var(--font-mono); white-space: pre-wrap; word-break: break-word; }
+.conversation-work-files { margin-top: 1px; }
+.conversation-work-files > summary { display: grid; grid-template-columns: 17px minmax(0,1fr) 10px; gap: 7px; align-items: center; min-height: 26px; cursor: pointer; list-style: none; color: var(--text); font-size: 11px; font-weight: 600; }
+.conversation-work-files > summary::-webkit-details-marker,
+.conversation-work-file > summary::-webkit-details-marker { display: none; }
+.conversation-work-file-list { display: flex; flex-direction: column; gap: 7px; margin: 5px 0 3px 24px; }
+.conversation-work-file { overflow: hidden; border: 1px solid var(--glass-border-1); border-radius: var(--radius-md); background: color-mix(in srgb, var(--glass-bg-2) 74%, transparent); }
+.conversation-work-file > summary { display: grid; grid-template-columns: minmax(0,1fr) auto 18px; gap: 9px; align-items: center; min-height: 38px; padding: 0 10px 0 12px; cursor: pointer; list-style: none; color: var(--text); }
+.conversation-work-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--font-mono); }
+.conversation-work-file-stats { display: inline-flex; gap: 7px; font: 11px var(--font-mono); }
+.conversation-work-file-add { color: var(--accent2); }
+.conversation-work-file-del { color: #ff6666; }
+.conversation-work-file-diff { max-height: 340px; overflow: auto; border-top: 1px solid var(--glass-border-1); background: rgba(0,0,0,.14); font: 11px/1.55 var(--font-mono); }
+.conversation-work-file-line { display: grid; grid-template-columns: 42px minmax(0,1fr); min-height: 22px; white-space: pre; }
+.conversation-work-file-line-number { padding: 2px 8px; color: var(--text-dim); text-align: right; user-select: none; border-right: 1px solid var(--glass-border-1); }
+.conversation-work-file-line-code { padding: 2px 10px; overflow-wrap: normal; }
+.conversation-work-file-line.del { color: #ff9a9a; background: rgba(255,68,68,.14); }
+.conversation-work-file-line.add { color: #78e8b8; background: rgba(56,212,160,.13); }
+.conversation-work-file-line.empty { color: var(--text-dim); }
 .conversation-work-empty { color: var(--text-dim); font-size: 11px; }
 
 .ui-notice-stack {
@@ -4707,6 +4733,9 @@ var state = {
   backendQueuesByTarget: {},
   defaultFlow: '',
   settingsActiveTab: 'general',
+  globalAgentPrompt: '',
+  globalAgentPromptLoaded: false,
+  globalAgentPromptSaveTimer: null,
   pluginActiveTab: 'mcp',
   githubOverviewData: null,
   githubOverviewHash: '',
@@ -4855,6 +4884,12 @@ var NEWMARK_I18N = {
     'linkedPlan.revision': 'revision {revision}',
     'settings.title': 'Settings',
     'settings.general': 'General',
+    'settings.configFile': 'Global config.json',
+    'settings.openConfig': 'Open config file',
+    'settings.refreshConfig': 'Refresh config',
+    'settings.configFileDesc': 'Edit the user-level config with the default application, then refresh to apply the saved file.',
+    'settings.configOpened': 'config.json opened',
+    'settings.configReloaded': 'config.json refreshed',
     'settings.runInWsl': 'Agent runtime environment',
     'settings.runInWslDesc': 'Keeps the Windows UI and native desktop tools local while running the persistent Agent kernel, model calls, shell, and file tools inside WSL.',
     'settings.wslDistro': 'WSL distribution',
@@ -5001,6 +5036,11 @@ var NEWMARK_I18N = {
     'model.validating': 'Validating model latency and capabilities...',
     'model.validationFailed': 'Validation failed',
     'model.noValidationModels': 'No models were available for validation.',
+    'model.validationRequiresBaseModel': 'Add and enable a base model before running validation.',
+    'model.globalAgentPrompt': 'Global Agent.md prompt',
+    'model.globalAgentPromptDesc': 'Edits the user-level Agent.md baseline. Changes are saved automatically and apply to subsequent Agent turns.',
+    'model.globalAgentPromptPlaceholder': 'Enter the global Agent prompt...',
+    'model.globalAgentPromptSaved': 'Agent.md saved',
     'model.enableProvider': 'Enable provider',
     'model.disableProvider': 'Disable provider',
     'model.providerDisabled': 'Disabled',
@@ -5013,6 +5053,7 @@ var NEWMARK_I18N = {
     'model.speed': 'speed',
     'model.ok': 'ok',
     'model.available': 'available',
+    'model.degraded': 'available (limited capabilities)',
     'model.unavailable': 'unavailable',
     'model.no': 'no',
     'model.yes': 'yes',
@@ -5380,6 +5421,12 @@ var NEWMARK_I18N = {
     'linkedPlan.revision': '修订 {revision}',
     'settings.title': '设置',
     'settings.general': '通用',
+    'settings.configFile': '通用 config.json',
+    'settings.openConfig': '打开配置文件',
+    'settings.refreshConfig': '刷新配置',
+    'settings.configFileDesc': '使用系统默认软件编辑用户级 config.json，保存后点击刷新即可读取并应用。',
+    'settings.configOpened': '已打开 config.json',
+    'settings.configReloaded': '已刷新 config.json',
     'settings.runInWsl': 'Agent 运行环境',
     'settings.runInWslDesc': 'Windows UI 与桌面原生工具保留在本机，持续 Agent 内核、模型请求、Shell 和文件工具运行在 WSL。',
     'settings.wslDistro': 'WSL 发行版',
@@ -5526,6 +5573,11 @@ var NEWMARK_I18N = {
     'model.validating': '正在校验模型延迟和能力...',
     'model.validationFailed': '校验失败',
     'model.noValidationModels': '没有可校验的模型。',
+    'model.validationRequiresBaseModel': '\u8bf7\u5148\u6dfb\u52a0\u5e76\u542f\u7528\u81f3\u5c11\u4e00\u4e2a\u57fa\u6a21\uff0c\u518d\u8fdb\u884c\u6821\u9a8c\u3002',
+    'model.globalAgentPrompt': '通用提示词 Agent.md',
+    'model.globalAgentPromptDesc': '实时编辑用户级 Agent.md 通用提示词，自动保存并从下一次 Agent 请求开始生效。',
+    'model.globalAgentPromptPlaceholder': '输入通用 Agent 提示词...',
+    'model.globalAgentPromptSaved': 'Agent.md 已保存',
     'model.enableProvider': '启用供应商',
     'model.disableProvider': '停用供应商',
     'model.providerDisabled': '已停用',
@@ -5538,6 +5590,7 @@ var NEWMARK_I18N = {
     'model.speed': '速度',
     'model.ok': '可用',
     'model.available': '可用',
+    'model.degraded': '可用（部分能力受限）',
     'model.unavailable': '不可用',
     'model.no': '否',
     'model.yes': '是',
@@ -6436,6 +6489,19 @@ var api = window.api || {
   saveConfig: async function(cfg) {
     try { await fetch('/api/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)}); } catch(e) {}
   },
+  openGlobalConfig: async function() { return {error:'Opening config.json requires the desktop application.'}; },
+  reloadGlobalConfig: async function() {
+    try { var r = await fetch('/api/config-reload', {method:'POST'}); return r.json(); }
+    catch(e) { return {error:e.message}; }
+  },
+  readGlobalPrompt: async function() {
+    try { var r = await fetch('/api/global-prompt'); return r.json(); }
+    catch(e) { return {content:'',error:e.message}; }
+  },
+  saveGlobalPrompt: async function(content) {
+    try { var r = await fetch('/api/global-prompt', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:content})}); return r.json(); }
+    catch(e) { return {error:e.message}; }
+  },
   listAutomations: async function() {
     try { var r = await fetch('/api/automations'); return r.json(); }
     catch(e) { return []; }
@@ -7129,7 +7195,7 @@ function registerRuntimeKey(target, runtimeKey) {
   if (!state.runtimeKeyAliases) state.runtimeKeyAliases = {};
   state.runtimeKeyAliases[base] = runtimeKey;
   if (previous !== runtimeKey) {
-    ['runningConversations', 'conversationRuntimeStates', 'agentWorkEventsByConversation', 'agentWorkUiByConversation', 'workRunsByTarget', 'guideMessagesByTarget', 'trackedConversationUntil', 'backendQueuesByTarget'].forEach(function(storeName) {
+    ['runningConversations', 'conversationRuntimeStates', 'agentWorkEventsByConversation', 'agentWorkUiByConversation', 'workRunsByTarget', 'guideMessagesByTarget', 'trackedConversationUntil', 'backendQueuesByTarget', 'activeSendCallsByTarget', 'nextQueueSchedulesByTarget', 'nextQueueDrainsByTarget'].forEach(function(storeName) {
       var store = state[storeName];
       if (!store || store[previous] === undefined) return;
       if (store[runtimeKey] === undefined) store[runtimeKey] = store[previous];
@@ -7582,6 +7648,115 @@ function workToolActivityLabel(activity, count, completed) {
   return activity.key + (completed ? (zh ? ' · 已完成' : ' · completed') : '');
 }
 
+function workToolArgsObject(item) {
+  try {
+    var parsed = JSON.parse(String(item && item.toolArgs || '{}'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function workToolCommandLabel(item) {
+  var args = workToolArgsObject(item);
+  var command = String(args.command || args.cmd || '').trim();
+  if (!command) {
+    var name = publicToolNameForUi(item && item.toolName);
+    if (name === 'read' && args.path) command = 'read ' + String(args.path);
+    else if ((name === 'grep' || name === 'glob') && (args.pattern || args.path)) command = name + ' ' + String(args.pattern || args.path);
+    else command = name;
+  }
+  command = command.replace(/\s+/g, ' ').trim();
+  return (currentLang() === 'zh' ? 'Ran ' : 'Ran ') + command;
+}
+
+function workToolEditedFile(item) {
+  if (!isFileEditToolName(item && item.toolName)) return null;
+  var args = workToolArgsObject(item);
+  var path = String(args.path || args.file || args.file_path || '').trim();
+  if (!path) return null;
+  var oldContent = String(args.old_str !== undefined ? args.old_str : (args.oldContent !== undefined ? args.oldContent : ''));
+  var newContent = String(args.new_str !== undefined ? args.new_str : (args.newContent !== undefined ? args.newContent : (args.content !== undefined ? args.content : '')));
+  var oldLines = oldContent ? oldContent.split(/\r?\n/) : [];
+  var newLines = newContent ? newContent.split(/\r?\n/) : [];
+  return {
+    path: path,
+    name: path.split(/[\\/]/).pop() || path,
+    oldLines: oldLines,
+    newLines: newLines,
+    deleted: oldLines.length,
+    added: newLines.length
+  };
+}
+
+function workToolGroupLabel(items, completed) {
+  var files = (items || []).map(workToolEditedFile).filter(Boolean).length;
+  var commands = Math.max(0, (items || []).length - files);
+  var zh = currentLang() === 'zh';
+  var parts = [];
+  if (files) parts.push(zh ? (files > 1 ? '编辑了多个文件' : '编辑了文件') : (files > 1 ? 'Edited multiple files' : 'Edited a file'));
+  if (commands) parts.push(zh ? (commands > 1 ? '运行了多个命令' : '运行了命令') : (commands > 1 ? 'ran multiple commands' : 'ran a command'));
+  if (!parts.length) return completed ? (zh ? '调用了工具' : 'Used tools') : (zh ? '正在调用工具' : 'Using tools');
+  if (!completed) return zh ? parts.join('，正在') : parts.join(' and ');
+  return zh ? parts.join('，') : parts.join(' and ');
+}
+
+function renderWorkFileDiff(file) {
+  var rows = [];
+  for (var oldIndex = 0; oldIndex < file.oldLines.length; oldIndex++) {
+    rows.push('<div class="conversation-work-file-line del"><span class="conversation-work-file-line-number">-' + (oldIndex + 1) + '</span><span class="conversation-work-file-line-code">' + esc(file.oldLines[oldIndex] || ' ') + '</span></div>');
+  }
+  for (var newIndex = 0; newIndex < file.newLines.length; newIndex++) {
+    rows.push('<div class="conversation-work-file-line add"><span class="conversation-work-file-line-number">+' + (newIndex + 1) + '</span><span class="conversation-work-file-line-code">' + esc(file.newLines[newIndex] || ' ') + '</span></div>');
+  }
+  if (!rows.length) rows.push('<div class="conversation-work-file-line empty"><span class="conversation-work-file-line-number">·</span><span class="conversation-work-file-line-code">' + esc(currentLang() === 'zh' ? '无可显示的行级差异' : 'No line-level diff available') + '</span></div>');
+  return rows.join('');
+}
+
+function renderWorkToolGroup(event, eventIndex) {
+  var items = event.items || [];
+  var filesByPath = {};
+  var files = [];
+  items.map(workToolEditedFile).filter(Boolean).forEach(function(file) {
+    if (!filesByPath[file.path]) {
+      filesByPath[file.path] = file;
+      files.push(file);
+      return;
+    }
+    var existing = filesByPath[file.path];
+    existing.oldLines = existing.oldLines.concat(file.oldLines);
+    existing.newLines = existing.newLines.concat(file.newLines);
+    existing.deleted += file.deleted;
+    existing.added += file.added;
+  });
+  var firstItem = items[0] || {};
+  var activityDomKey = String(firstItem.id || firstItem.toolCallId || ('tools-' + eventIndex));
+  var activityRows = items.map(function(item) {
+    var edited = workToolEditedFile(item);
+    if (edited) {
+      return '<div class="conversation-work-activity-item">' + iconSvg('pencil', 'edited', 'tiny') +
+        '<div class="conversation-work-command-label" title="' + escAttr(edited.path) + '">' + esc(currentLang() === 'zh' ? '已编辑 ' : 'Edited ') +
+        '<span class="conversation-work-file-name">' + esc(edited.name) + '</span> <span class="conversation-work-file-add">+' + edited.added + '</span> <span class="conversation-work-file-del">-' + edited.deleted + '</span></div></div>';
+    }
+    return '<div class="conversation-work-activity-item">' + iconSvg('square-terminal', 'command', 'tiny') +
+      '<div class="conversation-work-command-label" title="' + escAttr(workToolCommandLabel(item)) + '">' + esc(workToolCommandLabel(item)) + '</div></div>';
+  }).join('');
+  var fileRows = files.map(function(file) {
+    return '<details class="conversation-work-file" data-work-detail-key="file:' + escAttr(file.path) + '"' + (files.length === 1 ? ' open' : '') + '><summary>' +
+      '<span class="conversation-work-file-name" title="' + escAttr(file.path) + '">' + esc(file.name) + '</span>' +
+      '<span class="conversation-work-file-stats"><span class="conversation-work-file-add">+' + file.added + '</span><span class="conversation-work-file-del">-' + file.deleted + '</span></span>' +
+      '<span class="conversation-work-activity-chevron" aria-hidden="true"></span></summary>' +
+      '<div class="conversation-work-file-diff">' + renderWorkFileDiff(file) + '</div></details>';
+  }).join('');
+  var filesSection = files.length ? '<details class="conversation-work-files" data-work-detail-key="files" open><summary>' + iconSvg('pencil', 'files', 'tiny') +
+    '<span>' + esc(currentLang() === 'zh' ? '已编辑的文件' : 'Edited files') + '</span><span class="conversation-work-activity-chevron" aria-hidden="true"></span></summary>' +
+    '<div class="conversation-work-file-list">' + fileRows + '</div></details>' : '';
+  return '<details class="conversation-work-activity" data-activity-key="' + escAttr(activityDomKey) + '" open><summary>' +
+    iconSvg(files.length ? 'pencil' : 'square-terminal', 'tools', 'tiny') + '<span>' + esc(workToolGroupLabel(items, !!event.completed)) + '</span>' +
+    '<span class="conversation-work-activity-chevron" aria-hidden="true"></span></summary><div class="conversation-work-activity-list">' +
+    activityRows + filesSection + '</div></details>';
+}
+
 function workEventLabel(event) {
   var type = String(event && event.type || 'status').toLowerCase();
   var content = String(event && event.content || '').trim();
@@ -7673,17 +7848,16 @@ function renderWorkRunEvents(run, includeGuides) {
       presentedEvents.push(presented);
       continue;
     }
-    var activity = workToolActivity(presented);
     var count = 1;
     var allCompleted = !!presented.completed;
     var activityItems = [presented];
-    while (presentedIndex + 1 < events.length && String(events[presentedIndex + 1] && events[presentedIndex + 1].type || '').toLowerCase() === 'tool_call' && workToolActivity(events[presentedIndex + 1]).key === activity.key) {
+    while (presentedIndex + 1 < events.length && String(events[presentedIndex + 1] && events[presentedIndex + 1].type || '').toLowerCase() === 'tool_call') {
       presentedIndex++;
       count++;
       allCompleted = allCompleted && !!events[presentedIndex].completed;
       activityItems.push(events[presentedIndex]);
     }
-    presentedEvents.push({ type: activity.type, activity: activity, count: count, completed: allCompleted, toolName: presented.toolName, items: activityItems });
+    presentedEvents.push({ type: 'tool_group', count: count, completed: allCompleted, toolName: presented.toolName, items: activityItems });
   }
   events = presentedEvents;
   if (!events.length) return '<div class="conversation-work-empty">' + esc(currentLang() === 'zh' ? '等待公开工作进度…' : 'Waiting for public progress…') + '</div>';
@@ -7696,6 +7870,7 @@ function renderWorkRunEvents(run, includeGuides) {
       return '<div class="conversation-work-event narrative"><div class="conversation-work-event-content">' + renderMessageContent(responseLabel) + '</div></div>';
     }
     if (type.indexOf('guide') === 0 || event.guide) return renderWorkRunGuideMessage(event);
+    if (type === 'tool_group') return renderWorkToolGroup(event, eventIndex);
     var activitySummary = type.indexOf('tool_') === 0 && type !== 'tool_call' && type !== 'tool_result';
     var cls = type.indexOf('guide') === 0 ? ' guide' : (type === 'error' ? ' error' : (activitySummary ? ' activity-summary' : ''));
     var label = activitySummary ? workToolActivityLabel(event.activity, Number(event.count || 1), !!event.completed) : workEventLabel(event) + (event.completed ? (currentLang() === 'zh' ? ' · 已完成' : ' · completed') : '');
@@ -7728,11 +7903,14 @@ function findWorkRunElement(run) {
 function updateConversationWorkRunElement(run, element) {
   element = element || findWorkRunElement(run);
   if (!element) return null;
-  var openActivityKeys = {};
-  var openActivities = element.querySelectorAll ? element.querySelectorAll('details.conversation-work-activity[open]') : [];
-  for (var activityIndex = 0; activityIndex < openActivities.length; activityIndex++) {
-    var openKey = String(openActivities[activityIndex].getAttribute('data-activity-key') || '');
-    if (openKey) openActivityKeys[openKey] = true;
+  var activityOpenStates = {};
+  var priorActivities = element.querySelectorAll ? element.querySelectorAll('details.conversation-work-activity[data-activity-key], details[data-work-detail-key]') : [];
+  for (var activityIndex = 0; activityIndex < priorActivities.length; activityIndex++) {
+    var parentActivity = priorActivities[activityIndex].closest ? priorActivities[activityIndex].closest('details.conversation-work-activity[data-activity-key]') : null;
+    var parentKey = String(parentActivity && parentActivity.getAttribute('data-activity-key') || '');
+    var detailKey = String(priorActivities[activityIndex].getAttribute('data-work-detail-key') || 'activity');
+    var stateKey = parentKey ? parentKey + '::' + detailKey : '';
+    if (stateKey) activityOpenStates[stateKey] = !!priorActivities[activityIndex].open;
   }
   var running = ['running', 'stopping', 'force_restarting'].indexOf(String(run.status || '')) >= 0;
   var expanded = !!run.expanded;
@@ -7754,10 +7932,13 @@ function updateConversationWorkRunElement(run, element) {
     }
     guideStack.innerHTML = expanded ? '' : workRunGuideEvents(run).map(renderWorkRunGuideMessage).join('');
   }
-  var refreshedActivities = element.querySelectorAll ? element.querySelectorAll('details.conversation-work-activity[data-activity-key]') : [];
+  var refreshedActivities = element.querySelectorAll ? element.querySelectorAll('details.conversation-work-activity[data-activity-key], details[data-work-detail-key]') : [];
   for (var refreshedIndex = 0; refreshedIndex < refreshedActivities.length; refreshedIndex++) {
-    var refreshedKey = String(refreshedActivities[refreshedIndex].getAttribute('data-activity-key') || '');
-    if (openActivityKeys[refreshedKey]) refreshedActivities[refreshedIndex].open = true;
+    var refreshedParent = refreshedActivities[refreshedIndex].closest ? refreshedActivities[refreshedIndex].closest('details.conversation-work-activity[data-activity-key]') : null;
+    var refreshedParentKey = String(refreshedParent && refreshedParent.getAttribute('data-activity-key') || '');
+    var refreshedDetailKey = String(refreshedActivities[refreshedIndex].getAttribute('data-work-detail-key') || 'activity');
+    var refreshedKey = refreshedParentKey ? refreshedParentKey + '::' + refreshedDetailKey : '';
+    if (activityOpenStates[refreshedKey] !== undefined) refreshedActivities[refreshedIndex].open = activityOpenStates[refreshedKey];
   }
   return element;
 }
@@ -9315,6 +9496,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
 
   if (conversationRunning) return;
   if (!state.activeSendCallsByTarget) state.activeSendCallsByTarget = {};
+  if (state.activeSendCallsByTarget[lockedRuntimeKey]) return;
   state.activeSendCallsByTarget[lockedRuntimeKey] = true;
   if (typeof opts.onStarted === 'function') opts.onStarted();
   var localRunId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2));
@@ -9465,8 +9647,17 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   }
   setWorking(!!runningConversationRecord(activeConversationId()));
   window.renderInputStack();
+  var canonicalLockedRuntimeKey = runtimeKeyFor(lockedTarget.workspaceId, lockedTarget.conversationId);
   delete state.activeSendCallsByTarget[lockedRuntimeKey];
-  delete state.activeSendCallsByTarget[runtimeKeyFor(lockedTarget.workspaceId, lockedTarget.conversationId)];
+  delete state.activeSendCallsByTarget[canonicalLockedRuntimeKey];
+  if (state.nextQueueSchedulesByTarget) {
+    delete state.nextQueueSchedulesByTarget[lockedRuntimeKey];
+    delete state.nextQueueSchedulesByTarget[canonicalLockedRuntimeKey];
+  }
+  if (state.nextQueueDrainsByTarget) {
+    delete state.nextQueueDrainsByTarget[lockedRuntimeKey];
+    delete state.nextQueueDrainsByTarget[canonicalLockedRuntimeKey];
+  }
   window.drainNextQueue();
 };
 
@@ -9495,7 +9686,9 @@ window.scheduleNextQueueDrain = function(target) {
       return;
     }
     window.drainNextQueue();
-    delete state.nextQueueSchedulesByTarget[expectedKey];
+    if (state.nextQueueSchedulesByTarget[expectedKey] === schedule) {
+      delete state.nextQueueSchedulesByTarget[expectedKey];
+    }
   });
 };
 
@@ -9522,9 +9715,7 @@ window.drainNextQueue = function() {
     var activeTarget = currentConversationTarget();
     if (runtimeKeyFor(activeTarget.workspaceId, activeTarget.conversationId) !== targetKey) return;
     if (state.activeSendCallsByTarget && state.activeSendCallsByTarget[targetKey]) return;
-    if (isCurrentConversationRunning()) {
-      return;
-    }
+    if (isCurrentConversationRunning()) return;
     var currentIndex = state.nextQueueRequests ? state.nextQueueRequests.indexOf(nextRequest) : -1;
     if (currentIndex < 0 || queuedRequestIsBackendManaged(nextRequest) || !queuedRequestMatchesTarget(nextRequest, activeTarget)) return;
     var next = state.nextQueue[currentIndex];
@@ -10842,7 +11033,8 @@ function rerenderActiveSubWindowForLanguage() {
 
 function formatModelStatus(status) {
   var raw = String(status || 'not checked').toLowerCase();
-  if (raw === 'available') return t('model.available');
+  if (raw === 'available' || raw === 'verified') return t('model.available');
+  if (raw === 'degraded') return t('model.degraded');
   if (raw === 'unavailable' || raw === 'failed' || raw === 'error') return t('model.unavailable');
   if (raw === 'not checked' || raw === 'not_checked' || raw === 'pending') return t('model.notChecked');
   return status || t('model.notChecked');
@@ -10902,6 +11094,13 @@ function renderGeneralSettings() {
     '<div class="setting-control"><select id="agent-wsl-distro" onchange="window.setAgentWslDistro(this.value)"' + (state.wslAvailable ? '' : ' disabled') + '>' + (wslOptions || '<option>Ubuntu-24.04</option>') + '</select>' +
     '<div class="setting-desc" id="agent-wsl-status">' + esc(state.agentBackend && state.agentBackend.connected ? t('settings.wslConnected') : t('settings.wslDisconnected')) + '</div></div></div>' : '';
   return wslHtml + '<div class="setting-row">' +
+    '<span class="setting-label">' + esc(t('settings.configFile')) + '</span>' +
+    '<div class="setting-control"><div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">' +
+    '<button type="button" class="sec-btn" onclick="window.openGlobalConfigFile()">' + esc(t('settings.openConfig')) + '</button>' +
+    '<button type="button" class="sec-btn" onclick="window.refreshGlobalConfigFile()">' + iconSvg('refresh-cw', t('settings.refreshConfig'), 'tiny') + ' ' + esc(t('settings.refreshConfig')) + '</button></div>' +
+    '<div class="setting-desc">' + esc(t('settings.configFileDesc')) + '</div></div>' +
+    '</div>' +
+    '<div class="setting-row">' +
     '<span class="setting-label">' + esc(t('settings.language')) + '</span>' +
     '<div class="setting-control"><select id="language-select" onchange="window.setLanguage(this.value)">' +
     '<option value="auto"' + (state.language === 'auto' ? ' selected' : '') + '>' + esc(t('language.auto')) + '</option>' +
@@ -10991,7 +11190,10 @@ function renderModelSettings() {
       var evaluation = typeof modelEntry === 'string' ? null : modelEntry.evaluation;
       var statusRaw = evaluation ? evaluation.status : 'not checked';
       var status = formatModelStatus(evaluation ? evaluation.status : 'not checked');
-      var statusClass = statusRaw === 'available' ? 'model-eval-ok' : (statusRaw === 'not checked' ? 'model-eval-pending' : 'model-eval-bad');
+      var normalizedStatus = String(statusRaw || '').toLowerCase();
+      var statusClass = normalizedStatus === 'available' || normalizedStatus === 'verified' || normalizedStatus === 'degraded'
+        ? 'model-eval-ok'
+        : (normalizedStatus === 'not checked' ? 'model-eval-pending' : 'model-eval-bad');
       var details = '';
       if (typeof modelEntry !== 'string') {
         details = '<span class="model-eval-line">ctx ' + esc(modelEntry.max_tokens || '') +
@@ -11050,6 +11252,11 @@ function renderModelSettings() {
     '<option value="cost"' + (state.switchTendency === 'cost' ? ' selected' : '') + '>' + esc(t('model.costPolicy')) + '</option>' +
     '<option value="speed"' + (state.switchTendency === 'speed' ? ' selected' : '') + '>' + esc(t('model.speedPolicy')) + '</option></select></div></div>' +
     '<div class="setting-row"><span class="setting-label">' + esc(t('model.learnedPreference')) + '</span><div class="setting-control"><button type="button" class="sec-btn settings-action-btn" onclick="window.clearLearnedAutoPreferences()">' + esc(t('model.clearLearnedPreference')) + '</button></div></div>' +
+    '</div>' +
+    '<div class="provider-card" style="margin-top:12px;">' +
+    '<label for="global-agent-prompt" style="display:block;font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px;">' + esc(t('model.globalAgentPrompt')) + '</label>' +
+    '<textarea id="global-agent-prompt" rows="10" maxlength="262144" placeholder="' + escAttr(t('model.globalAgentPromptPlaceholder')) + '" aria-describedby="global-agent-prompt-desc" oninput="window.scheduleGlobalAgentPromptSave(this.value)">' + esc(state.globalAgentPrompt || '') + '</textarea>' +
+    '<div id="global-agent-prompt-desc" class="setting-desc" style="margin-top:6px;">' + esc(t('model.globalAgentPromptDesc')) + '</div>' +
     '</div>';
 }
 
@@ -11199,6 +11406,59 @@ window.settingsTab = function(name) {
   for (var j = 0; j < panels.length; j++) {
     panels[j].classList.toggle('active', panels[j].id === 'stab-' + name);
   }
+  if (name === 'models') window.loadGlobalAgentPrompt();
+};
+
+window.openGlobalConfigFile = function() {
+  if (!api.openGlobalConfig) return;
+  api.openGlobalConfig().then(function(result) {
+    if (result && result.error) throw new Error(result.error);
+    showUiNotice(t('settings.configOpened'), 'success', 'global-config-open');
+  }).catch(function(error) {
+    showUiNotice(error && error.message ? error.message : String(error), 'error', 'global-config-open');
+  });
+};
+
+window.refreshGlobalConfigFile = function() {
+  if (!api.reloadGlobalConfig) return;
+  api.reloadGlobalConfig().then(function(result) {
+    if (result && result.error) throw new Error(result.error);
+    showUiNotice(t('settings.configReloaded'), 'success', 'global-config-refresh');
+    setTimeout(function() { window.location.reload(); }, 180);
+  }).catch(function(error) {
+    showUiNotice(error && error.message ? error.message : String(error), 'error', 'global-config-refresh');
+  });
+};
+
+window.loadGlobalAgentPrompt = function(force) {
+  if (!api.readGlobalPrompt || (state.globalAgentPromptLoaded && !force)) return Promise.resolve(state.globalAgentPrompt);
+  return api.readGlobalPrompt().then(function(result) {
+    if (result && result.error) throw new Error(result.error);
+    state.globalAgentPrompt = String((result && result.content) || '');
+    state.globalAgentPromptLoaded = true;
+    var input = document.getElementById('global-agent-prompt');
+    if (input && input.value !== state.globalAgentPrompt) input.value = state.globalAgentPrompt;
+    return state.globalAgentPrompt;
+  }).catch(function(error) {
+    showUiNotice(error && error.message ? error.message : String(error), 'error', 'global-agent-prompt-load');
+    return '';
+  });
+};
+
+window.scheduleGlobalAgentPromptSave = function(value) {
+  state.globalAgentPrompt = String(value || '');
+  state.globalAgentPromptLoaded = true;
+  if (state.globalAgentPromptSaveTimer) clearTimeout(state.globalAgentPromptSaveTimer);
+  state.globalAgentPromptSaveTimer = setTimeout(function() {
+    state.globalAgentPromptSaveTimer = null;
+    if (!api.saveGlobalPrompt) return;
+    api.saveGlobalPrompt(state.globalAgentPrompt).then(function(result) {
+      if (result && result.error) throw new Error(result.error);
+      showUiNotice(t('model.globalAgentPromptSaved'), 'success', 'global-agent-prompt-save');
+    }).catch(function(error) {
+      showUiNotice(error && error.message ? error.message : String(error), 'error', 'global-agent-prompt-save');
+    });
+  }, 450);
 };
 
 window.setLanguage = function(value) {
@@ -11801,8 +12061,18 @@ window.parseFuzzyInput = function(text) {
 };
 
 window.validateAllModels = function() {
+  var hasBaseModel = (state.providers || []).some(function(provider) {
+    return provider && provider.enabled !== false && Array.isArray(provider.models) && provider.models.some(function(model) {
+      return typeof model === 'string' ? !!model.trim() : !!(model && String(model.name || '').trim() && model.enabled !== false);
+    });
+  });
+  if (!hasBaseModel) {
+    document.body.classList.remove('model-evaluating');
+    window.openSubWin(t('model.validationTitle'), '<div class="model-eval-row">' + esc(t('model.validationRequiresBaseModel')) + '</div>');
+    return;
+  }
   document.body.classList.add('model-evaluating');
-  window.openSubWin(t('model.validationTitle'), '<div class="provider-card marquee-border">' + esc(t('model.validating')) + '</div>');
+  window.openSubWin(t('model.validationTitle'), '<div class="provider-card marquee-border">' + esc(t('model.validating')) + '</div><div style="margin-top:6px;color:var(--text-dim);font-size:11px;">' + esc(t('model.validationBackgroundNote')) + '</div>');
   api.validateModels().then(function(results) {
     document.body.classList.remove('model-evaluating');
     state.modelValidationResults = results || [];
@@ -14247,15 +14517,19 @@ window.showPluginList = function() {
 
 // === Plugin / Skills Market ===
 window.showPluginList = function(tab) {
-  state.activeSubWindowView = { name: 'plugins', tab: tab || state.pluginActiveTab || 'mcp' };
-  state.pluginActiveTab = tab || state.pluginActiveTab || 'mcp';
+  var activeTab = tab || state.pluginActiveTab || 'mcp';
+  var refreshingPlugins = els['sub-win-overlay'].classList.contains('open') && state.activeSubWindowView && state.activeSubWindowView.name === 'plugins';
+  state.activeSubWindowView = { name: 'plugins', tab: activeTab };
+  state.pluginActiveTab = activeTab;
   var html = '<div class="settings-tabs">' +
     '<button class="stab-btn' + (state.pluginActiveTab === 'mcp' ? ' active' : '') + '" onclick="window.showPluginList(\'mcp\')">' + esc(t('plugins.mcp')) + '</button>' +
     '<button class="stab-btn' + (state.pluginActiveTab === 'installed' ? ' active' : '') + '" onclick="window.showPluginList(\'installed\')">' + esc(t('plugins.management')) + '</button>' +
     '<button class="stab-btn' + (state.pluginActiveTab === 'market' ? ' active' : '') + '" onclick="window.showPluginList(\'market\')">' + esc(t('plugins.market')) + '</button>' +
     '<button class="stab-btn' + (state.pluginActiveTab === 'github' ? ' active' : '') + '" onclick="window.showPluginList(\'github\')">' + esc(t('plugins.github')) + '</button>' +
     '</div><div id="plugin-panel" style="margin-top:10px;">' + esc(t('common.loading')) + '</div>';
+  if (refreshingPlugins) state.restoringSubWindow = true;
   window.openSubWin(t('plugins.title'), html);
+  state.restoringSubWindow = false;
   if (state.pluginActiveTab === 'mcp') window.renderMcpManager();
   else if (state.pluginActiveTab === 'market') window.renderSkillsMarket();
   else if (state.pluginActiveTab === 'github') window.renderGithubCliPanel();

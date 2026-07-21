@@ -74,6 +74,9 @@ function verifyPersistedWorkRunsCannotRewriteRuntimeIdentity(source: string): vo
     workRunsByTarget: {},
     guideMessagesByTarget: {},
     trackedConversationUntil: {},
+    activeSendCallsByTarget: {},
+    nextQueueDrainsByTarget: {},
+    nextQueueSchedulesByTarget: {},
     backendQueuesByTarget: {
       [`${targetA.workspaceId}::${targetA.conversationId}`]: { steering: [], followUp: ['queue-a'] },
       [`${targetB.workspaceId}::${targetB.conversationId}`]: { steering: [], followUp: ['queue-b'] },
@@ -99,6 +102,28 @@ function verifyPersistedWorkRunsCannotRewriteRuntimeIdentity(source: string): vo
   windowObject.registerRuntimeKey(targetB, runtimeB);
   assert.deepEqual(state.backendQueuesByTarget[runtimeA].followUp, ['queue-a']);
   assert.deepEqual(state.backendQueuesByTarget[runtimeB].followUp, ['queue-b']);
+
+  const activeSendLock = { owner: 'send-a' };
+  const drainLock = { owner: 'drain-a' };
+  const scheduleLock = { owner: 'schedule-a' };
+  const priorAlias = state.runtimeKeyAliases[`${targetA.workspaceId}::${targetA.conversationId}`];
+  delete state.runtimeKeyAliases[`${targetA.workspaceId}::${targetA.conversationId}`];
+  state.activeSendCallsByTarget[`${targetA.workspaceId}::${targetA.conversationId}`] = activeSendLock;
+  state.nextQueueDrainsByTarget[`${targetA.workspaceId}::${targetA.conversationId}`] = drainLock;
+  state.nextQueueSchedulesByTarget[`${targetA.workspaceId}::${targetA.conversationId}`] = scheduleLock;
+  windowObject.registerRuntimeKey(targetA, priorAlias || runtimeA);
+  assert.equal(state.activeSendCallsByTarget[runtimeA], activeSendLock,
+    'runtime alias promotion keeps the active-send mutex on the canonical target');
+  assert.equal(state.nextQueueDrainsByTarget[runtimeA], drainLock,
+    'runtime alias promotion keeps an in-flight queue drain mutex on the canonical target');
+  assert.equal(state.nextQueueSchedulesByTarget[runtimeA], scheduleLock,
+    'runtime alias promotion keeps a scheduled queue drain mutex on the canonical target');
+  assert.equal(state.activeSendCallsByTarget[`${targetA.workspaceId}::${targetA.conversationId}`], undefined);
+  assert.equal(state.nextQueueDrainsByTarget[`${targetA.workspaceId}::${targetA.conversationId}`], undefined);
+  assert.equal(state.nextQueueSchedulesByTarget[`${targetA.workspaceId}::${targetA.conversationId}`], undefined);
+  delete state.activeSendCallsByTarget[runtimeA];
+  delete state.nextQueueDrainsByTarget[runtimeA];
+  delete state.nextQueueSchedulesByTarget[runtimeA];
 
   const normalized = windowObject.syncWorkRunsSnapshot([{
     runId: 'persisted-a-run',

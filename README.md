@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.2"><img alt="Release" src="https://img.shields.io/badge/release-dev--0.1.2-blue"></a>
+  <a href="https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.4"><img alt="Release" src="https://img.shields.io/badge/release-dev--0.1.4-blue"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -30,17 +30,17 @@ Newmark Agent brings model routing, persistent workspaces, tools, subagents, wor
 
 ## Download
 
-### dev-0.1.2
+### dev-0.1.4
 
-Download packages from the [dev-0.1.2 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.2).
+Download packages from the [dev-0.1.4 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.4).
 
 | Package | Platform | SHA-256 |
 | --- | --- | --- |
-| `Newmark-Agent-0.1.2-x64.msi` | Windows x64 installer | `FFE6C8528CC1198F989858D88750493C64AE6174835448EF3B2E20C1ACB3986C` |
-| `Newmark-Agent-0.1.2-win-unpacked-x64.zip` | Windows x64 portable | `39FBAD4874E6BC193BE57A73FB4C9C0B6C7E70F6F866380AB8408AF3ADE72A88` |
-| `Newmark-Agent-0.1.2-x86_64.AppImage` | Linux x86_64 AppImage | `E74154B2E812BD1C464FAB55F67201F3EE9853FF98DB513E0BFF562AFFBE28CB` |
-| `Newmark-Agent-0.1.2-amd64.deb` | Debian/Ubuntu amd64 | `92B8476C4EC6EF8FBC3B1007372B9A3DCCC5BC4216063EE140CB9C1D36E1B3AD` |
-| `Newmark-Agent-0.1.2-linux-unpacked-x64.zip` | Linux x64 portable | `ED38E4F2853FF0C1F2F8C390EFFFB5E5FC41ACC0E4BB0C60133C49E561FF8F12` |
+| `Newmark-Agent-0.1.4-x64.msi` | Windows x64 installer | (see release assets) |
+| `Newmark-Agent-0.1.4-win-unpacked-x64.zip` | Windows x64 portable | (see release assets) |
+| `Newmark-Agent-0.1.4-x86_64.AppImage` | Linux x64 AppImage | (see release assets) |
+| `Newmark-Agent-0.1.4-amd64.deb` | Debian/Ubuntu x64 package | (see release assets) |
+| `Newmark-Agent-0.1.4-linux-unpacked-x64.zip` | Linux x64 portable | (see release assets) |
 
 The Windows MSI requests administrator elevation. Windows and Linux may show an unknown-publisher warning because the packages are not code-signed.
 
@@ -174,14 +174,21 @@ Important boundaries:
 
 - One concrete model answer is produced per turn; Newmark does not merge parallel model answers.
 - Tool schemas are validated before policy checks and again at native host boundaries.
+- OpenAI Chat history is repaired at the transport boundary so every persisted tool call has a matching result before continuation.
 - Windows, WSL, and Linux runtimes remain isolated by workspace and conversation.
 - Context compression atomically replaces active and persisted Kernel context while preserving the current task boundary.
 - Build blocks contain process events; the final Agent response appears once outside its owning Build.
+- Build tool activity groups commands and file edits in call order, with expandable per-file change counts and line diffs.
 - Diagnostics are disabled by default and expose fingerprints, counts, estimated tokens, cache metrics, and ratios rather than user content.
 
 See [OVERVIEW.md](OVERVIEW.md) for the source tree, subsystem responsibilities, and architecture details. Release-specific changes and validation evidence belong in [GitHub Releases](https://github.com/positer/Newmark-Agent/releases) and the local `archive/` records rather than this product overview.
 
 ## Development
+
+### Maintenance Log
+
+- 2026-07-21: Prepared the cross-platform `0.1.4` release: General settings can open and refresh the user `config.json`, Models & Providers provides a live user-level `Agent.md` editor, prompt layering normalizes and deduplicates global/workspace prompts, model validation keeps text-usable models available when optional capabilities are unsupported, and explicit Linux tray exit now has a bounded shutdown fallback so it cannot leave a ghost process holding the single-instance lock. Evidence is in `archive/20260721-dev-0.1.4-settings-prompts-validation.md`.
+- 2026-07-21: Recovered a local Windows startup failure caused by an incomplete machine-wide installation missing `resources/app.asar`. The verified `0.1.3` unpacked build now runs from the current-user installation path with existing `~/.Newmark` state preserved; see `archive/20260721-213821-startup-recovery.md`.
 
 Run commands from `DESKTOP/`:
 

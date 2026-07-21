@@ -1,4 +1,4 @@
-﻿import { StreamToken } from '../core/types';
+import { StreamToken } from '../core/types';
 import * as https from 'https';
 import * as http from 'http';
 import * as fs from 'fs';
@@ -528,6 +528,16 @@ export class LLMProvider {
   private openAIChatMessages(messages: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
     const out: Array<Record<string, unknown>> = [];
     const emittedCallIds = new Set<string>();
+    const consumedToolResultIndexes = new Set<number>();
+    const toolResultsByCallId = new Map<string, Array<{ message: Record<string, unknown>; index: number }>>();
+    for (const [index, candidate] of (messages || []).entries()) {
+      if (String(candidate?.role || '') !== 'tool') continue;
+      const callId = String(candidate.tool_call_id || candidate.call_id || '');
+      if (!callId) continue;
+      const entries = toolResultsByCallId.get(callId) || [];
+      entries.push({ message: candidate, index });
+      toolResultsByCallId.set(callId, entries);
+    }
     for (const [index, msg] of (messages || []).entries()) {
       const role = String(msg.role || 'user');
       if (role === 'assistant') {
@@ -555,9 +565,36 @@ export class LLMProvider {
         };
         if (toolCalls.length) assistant.tool_calls = toolCalls;
         out.push(assistant);
+        // Chat Completions requires every declared call to be followed by a
+        // matching tool message before the next non-tool message. Histories
+        // can lose or reorder results during compression, so repair the
+        // complete call group at the transport boundary.
+        for (const toolCall of toolCalls) {
+          const callId = String(toolCall.id || '');
+          const stored = (toolResultsByCallId.get(callId) || [])
+            .find(entry => entry.index > index && !consumedToolResultIndexes.has(entry.index));
+          if (stored) {
+            consumedToolResultIndexes.add(stored.index);
+            const result = stored.message;
+            out.push({
+              role: 'tool',
+              tool_call_id: callId,
+              name: this.openAIToolName(result.name || (toolCall.function as Record<string, unknown>).name),
+              content: this.stringifyContent(result.content),
+            });
+          } else {
+            out.push({
+              role: 'tool',
+              tool_call_id: callId,
+              name: this.openAIToolName((toolCall.function as Record<string, unknown>).name),
+              content: '[Newmark] Tool result unavailable; continue without it.',
+            });
+          }
+        }
         continue;
       }
       if (role === 'tool') {
+        if (consumedToolResultIndexes.has(index)) continue;
         const callId = String(msg.tool_call_id || msg.call_id || `call_newmark_recovered_${index}`);
         const name = this.openAIToolName(msg.name);
         // Imported, compressed, and legacy histories may retain a tool result

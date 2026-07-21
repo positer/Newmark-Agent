@@ -371,7 +371,35 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         const content = String(JSON.parse(body || '{}').content || '');
         if (Buffer.byteLength(content, 'utf8') > 256 * 1024) { jsonResponse(res, { error: 'Workspace prompt exceeds 256 KiB.' }, 400); return; }
         fs.writeFileSync(promptPath, content, 'utf-8');
+        agent.invalidateSystemPrompt();
         jsonResponse(res, { ok: true });
+        return;
+      }
+      case '/api/global-prompt': {
+        const promptPath = path.join(agent.rootPath, 'agent.md');
+        if (req.method === 'GET') {
+          try {
+            const stat = fs.statSync(promptPath);
+            if (stat.size > 256 * 1024) { jsonResponse(res, { error: 'Global Agent.md exceeds 256 KiB.' }, 400); return; }
+            jsonResponse(res, { content: fs.readFileSync(promptPath, 'utf-8').replace(/^\uFEFF/, '') });
+          } catch (error) {
+            const code = error && typeof error === 'object' && 'code' in error ? String((error as NodeJS.ErrnoException).code || '') : '';
+            jsonResponse(res, code === 'ENOENT' ? { content: '' } : { error: String(error) }, code === 'ENOENT' ? 200 : 500);
+          }
+          return;
+        }
+        const content = String(JSON.parse(body || '{}').content || '');
+        if (Buffer.byteLength(content, 'utf8') > 256 * 1024) { jsonResponse(res, { error: 'Global Agent.md exceeds 256 KiB.' }, 400); return; }
+        fs.writeFileSync(promptPath, content, 'utf-8');
+        agent.invalidateSystemPrompt();
+        jsonResponse(res, { ok: true });
+        return;
+      }
+      case '/api/config-reload': {
+        agent.config.reload();
+        if (agent.workspace.current) agent.config.loadWorkspaceConfig(agent.workspace.current.path);
+        agent.invalidateSystemPrompt();
+        jsonResponse(res, { ok: true, path: path.join(agent.rootPath, 'config.json') });
         return;
       }
       case '/api/filetree': {

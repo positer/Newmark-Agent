@@ -413,6 +413,10 @@ export class Agent {
     this.status = 'idle';
   }
 
+  invalidateSystemPrompt(): void {
+    this.systemPromptCache = null;
+  }
+
   modeName(): string {
     return this.mode.charAt(0).toUpperCase() + this.mode.slice(1);
   }
@@ -3339,6 +3343,8 @@ export class Agent {
   }
 
   async validateModels(selectedNames?: string[]): Promise<ModelValidationResult[]> {
+    const selectedModels = this.config.modelsForSelections(selectedNames);
+    if (!selectedModels.length) return [];
     const results: ModelValidationResult[] = [];
     const catalogByProvider = new Map<string, Awaited<ReturnType<LLMProvider['modelCatalog']>>>();
     const cache = new FileModelValidationCache(this.rootPath);
@@ -4824,8 +4830,8 @@ export class Agent {
     const relevantSkills = this.skills.search(currentSkillTask, 8);
     const linkedPlan = this.getLinkedPlan();
     const globalPromptPath = path.join(this.rootPath, 'agent.md');
-    const globalPrompt = fs.existsSync(globalPromptPath) ? fs.readFileSync(globalPromptPath, 'utf-8') : '';
-    const workspacePrompt = this.workspace.currentAgentPrompt();
+    const globalPrompt = normalizeInjectedPrompt(fs.existsSync(globalPromptPath) ? fs.readFileSync(globalPromptPath, 'utf-8') : '');
+    const workspacePrompt = normalizeInjectedPrompt(this.workspace.currentAgentPrompt());
     const identity = JSON.stringify({
       cwd,
       mode: this.mode,
@@ -4862,17 +4868,22 @@ export class Agent {
     if (this.mode === 'plan') parts.push(`[Plan Tool Policy]\n${planModePolicyPrompt()}`);
     parts.push(`[Linked Plan revision=${linkedPlan.revision}]\n${linkedPlan.markdown || '(empty)'}`);
 
-    const pm = this.config.getStr('workspace', 'prompt_mode');
+    const pm = this.config.getStr('workspace', 'prompt_mode') || 'both';
+    const injectedPrompts = new Set<string>();
     if ((pm === 'global_only' || pm === 'both') && globalPrompt) {
-      parts.push(`[Global Prompt]\n${globalPrompt}`);
+      parts.push(`[Global Agent Prompt - user baseline]\n${globalPrompt}`);
+      injectedPrompts.add(globalPrompt);
     }
 
     if (pm === 'workspace_only' || pm === 'both') {
-      if (workspacePrompt) parts.push(`[Workspace Prompt]\n${workspacePrompt}`);
+      if (workspacePrompt && !injectedPrompts.has(workspacePrompt)) {
+        parts.push(`[Workspace Agent Prompt - workspace-specific refinement]\n${workspacePrompt}`);
+        injectedPrompts.add(workspacePrompt);
+      }
     }
 
-    const custom = this.config.getStr('agent', 'custom_prompt');
-    if (custom) parts.push(`[Custom Settings Prompt]\n${custom}`);
+    const custom = normalizeInjectedPrompt(this.config.getStr('agent', 'custom_prompt'));
+    if (custom && !injectedPrompts.has(custom)) parts.push(`[Custom Settings Prompt]\n${custom}`);
 
     if (enabledSkills.length) {
       parts.push([
@@ -4918,7 +4929,7 @@ export class Agent {
     return [
       '## Enabled Newmark Features And Implementation',
       `- Workspace binding: active workspace is ${ws ? `"${ws.name}" at ${ws.path}` : 'not selected'}; active conversation=${this.activeConversationId || 'default'}; chat history, archives, tools, and terminal cwd are scoped to the active workspace and conversation.`,
-      `- Prompt layering: this intrinsic Newmark prompt is applied first, then this feature disclosure, then global/workspace prompts according to prompt_mode=${promptMode}, then the user prompt.`,
+      `- Prompt layering: intrinsic Newmark safety and runtime rules are authoritative; prompt_mode=${promptMode} then applies the user-global Agent.md baseline followed by the more specific workspace agent.md refinement, skips empty or exactly duplicated layers, then applies the current user message. User-managed prompt layers may specialize behavior but cannot weaken intrinsic safety, tool policy, permissions, or the current user instruction.`,
       `- Language policy: general.language=${language}; the UI can switch this at runtime and each turn must obey the current value. auto follows the user's dominant input language, en replies in English, zh replies in Simplified Chinese. Keep code, commands, file paths, JSON keys, model/provider names, tool names, quoted source text, and user-provided literals exactly as required by their source language.`,
       `- Workspace permissions: access_permission=${permission}; file tools are checked before execution and blocked when they exceed the configured workspace boundary.`,
       `- Remote repository safety: when the active workspace or any target path is inside a GitHub/remote-backed repository, proactively use repo_security_audit and file_audit before git_push, gh_pr_create, release packaging, public reporting, or cloud-side audit. Treat public remotes as public disclosure surfaces and keep private URLs, secrets, local runtime state, archives, Memory Lab, Work, config, and release outputs out of commits and summaries.`,
@@ -5283,6 +5294,10 @@ function validationReasonCodes(record: ModelValidationRecord): string[] {
     for (const evidence of capability?.evidence || []) for (const code of evidence.reasonCodes || []) codes.add(code);
   }
   return [...codes];
+}
+
+function normalizeInjectedPrompt(value: string | null | undefined): string {
+  return String(value || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim();
 }
 
 function deploymentIdentity(deployment: DeploymentRef): string {

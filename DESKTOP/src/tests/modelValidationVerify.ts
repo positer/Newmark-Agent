@@ -185,6 +185,57 @@ async function verifyStreamingRequiresTerminalEvidence(): Promise<void> {
   });
   ok(result.capabilities.streaming?.status === 'unavailable', 'streaming is rejected when content arrives without a terminal protocol event');
   ok(result.capabilities.streaming?.evidence[0]?.reasonCodes.includes('stream_terminal_event_missing'), 'missing terminal SSE evidence has a stable reason code');
+  ok(result.status === 'degraded', 'a successful base text probe keeps the model available when optional streaming validation fails');
+}
+
+async function verifyUnsupportedOptionalCapabilityDoesNotBlockAvailability(): Promise<void> {
+  const adapter = successfulAdapter();
+  adapter.strictJson = async () => {
+    throw new ModelValidationProbeError('response_format is unsupported', {
+      status: 'invalid_config',
+      permanent: true,
+      code: 'http_400',
+    });
+  };
+  const result = await new ModelValidationService({ nonceFactory: () => 'NMK-OPTIONAL-1234' }).validate({
+    model: { provider: 'fixture', model: 'text-works-json-unsupported' },
+    level: 'standard',
+    adapter,
+  });
+  ok(result.capabilities.text?.status === 'verified', 'base text availability is independently verified');
+  ok(result.capabilities.strict_json?.status === 'invalid_config', 'unsupported strict JSON remains visible as capability evidence');
+  ok(result.status === 'degraded', 'unsupported optional capability degrades rather than blocks an otherwise usable model');
+}
+
+async function verifyLegacyFalseNegativeCacheRepairsWithoutProviderCalls(): Promise<void> {
+  const cache = new InMemoryModelValidationCache();
+  const now = Date.UTC(2026, 6, 21, 0, 0, 0);
+  cache.set({
+    schemaVersion: 1,
+    model: { provider: 'fixture', model: 'legacy-false-negative' },
+    modelKey: 'fixture/legacy-false-negative',
+    level: 'standard',
+    status: 'invalid_config',
+    checkedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + MODEL_VALIDATION_TTL_MS).toISOString(),
+    cacheHit: false,
+    health: { status: 'verified', checkedAt: new Date(now).toISOString(), expiresAt: new Date(now + MODEL_VALIDATION_TTL_MS).toISOString(), attempts: 2, successes: 2, failures: 0, reasonCodes: [] },
+    capabilities: {
+      text: { capability: 'text', status: 'verified', checkedAt: new Date(now).toISOString(), expiresAt: new Date(now + MODEL_VALIDATION_TTL_MS).toISOString(), evidence: [] },
+      streaming: { capability: 'streaming', status: 'verified', checkedAt: new Date(now).toISOString(), expiresAt: new Date(now + MODEL_VALIDATION_TTL_MS).toISOString(), evidence: [] },
+      strict_json: { capability: 'strict_json', status: 'invalid_config', checkedAt: new Date(now).toISOString(), expiresAt: new Date(now + MODEL_VALIDATION_TTL_MS).toISOString(), evidence: [] },
+      tools: { capability: 'tools', status: 'verified', checkedAt: new Date(now).toISOString(), expiresAt: new Date(now + MODEL_VALIDATION_TTL_MS).toISOString(), evidence: [] },
+    },
+    audit: [],
+  });
+  let calls = 0;
+  const result = await new ModelValidationService({ cache, clock: () => now }).validate({
+    model: { provider: 'fixture', model: 'legacy-false-negative' },
+    level: 'standard',
+    adapter: { health: async () => { calls += 1; return { ok: true }; } },
+  });
+  ok(result.cacheHit && result.status === 'degraded', 'fresh legacy false-negative cache is repaired to usable degraded status');
+  equal(calls, 0, 'legacy availability repair does not issue duplicate provider requests');
 }
 
 async function verifyTtlAndLevelCache(): Promise<void> {
@@ -369,6 +420,8 @@ async function main(): Promise<void> {
   await verifyMajorityAndPermanentErrors();
   await verifyStandardOrchestrationAndConcurrency();
   await verifyStreamingRequiresTerminalEvidence();
+  await verifyUnsupportedOptionalCapabilityDoesNotBlockAvailability();
+  await verifyLegacyFalseNegativeCacheRepairsWithoutProviderCalls();
   await verifyTtlAndLevelCache();
   await verifyTransientHealthDoesNotRefreshCapabilityEvidence();
   await verifyHealthCapabilitySeparation();

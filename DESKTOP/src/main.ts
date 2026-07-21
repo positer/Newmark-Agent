@@ -90,6 +90,7 @@ let lastWakeSync: WakeSyncResult | null = null;
 let mcpManager: McpManager | null = null;
 let tray: Tray | null = null;
 let _forceQuit = false;
+let forcedExitTimer: NodeJS.Timeout | null = null;
 let electronBrowserUseHost: ElectronBrowserUseHost | null = null;
 let browserUseEngine: BrowserUseEngine | null = null;
 const browserGuestContentsByHost = new Map<number, number>();
@@ -1749,7 +1750,22 @@ if (hasCliCommand) {
 
     let appExitCleanupStarted = false;
     let appExitCleanupComplete = false;
+    const armForcedExitDeadline = (reason: string): void => {
+      if (forcedExitTimer) return;
+      forcedExitTimer = setTimeout(() => {
+        console.error(`[Newmark] Forced process exit after graceful shutdown deadline: ${reason}`);
+        app.exit(0);
+      }, 12_000);
+      forcedExitTimer.unref?.();
+    };
+    const requestExplicitExit = (reason: string): void => {
+      _forceQuit = true;
+      armForcedExitDeadline(reason);
+      if (tray) { tray.destroy(); tray = null; }
+      app.quit();
+    };
     app.on('will-quit', event => {
+      if (_forceQuit) armForcedExitDeadline('will-quit');
       startupDeferredTasks?.cancel();
       agent?.flushWorkspaceConversationState();
       conversationKernel?.flushPersistence();
@@ -1800,6 +1816,10 @@ if (hasCliCommand) {
       browserGuestContentsByHost.clear();
       if (sidecarProcess) { sidecarProcess.kill(); sidecarProcess = null; }
       shutdownTerminalTakeoverSessions('app-exit');
+      if (forcedExitTimer) {
+        clearTimeout(forcedExitTimer);
+        forcedExitTimer = null;
+      }
     });
 
     function createTray() {
@@ -1809,7 +1829,7 @@ if (hasCliCommand) {
       const contextMenu = Menu.buildFromTemplate([
         { label: 'Show Window', click: showMainWindow },
         { type: 'separator' },
-        { label: 'Exit', click: () => { _forceQuit = true; tray?.destroy(); tray = null; app.quit(); } },
+        { label: 'Exit', click: () => requestExplicitExit('tray-exit') },
       ]);
       tray.setContextMenu(contextMenu);
       tray.on('click', showMainWindow);
@@ -2433,6 +2453,57 @@ if (hasCliCommand) {
       return false;
     });
 
+    ipcMain.handle('agent:openGlobalConfig', async () => {
+      if (!agent) return { error: 'Agent is not initialized' };
+      const configPath = path.join(agent.rootPath, 'config.json');
+      const error = await shell.openPath(configPath);
+      return error ? { error } : { ok: true, path: configPath };
+    });
+
+    ipcMain.handle('agent:reloadGlobalConfig', async () => {
+      if (!agent) return { error: 'Agent is not initialized' };
+      if (conversationKernel?.isAnyRunning()) return { error: 'Wait for the active Agent turn to finish before refreshing config.json.' };
+      try {
+        agent.config.reload();
+        if (agent.workspace.current) agent.config.loadWorkspaceConfig(agent.workspace.current.path);
+        agent.invalidateSystemPrompt();
+        agent.reconcileConversationModelSelection();
+        await Promise.all([
+          electronUtilityRuntimePool?.stopAll(),
+          wslAgentRuntimePool?.stopAll(),
+        ]);
+        conversationKernel = null;
+        return { ok: true, path: path.join(agent.rootPath, 'config.json') };
+      } catch (error) {
+        return { error: String(error) };
+      }
+    });
+
+    ipcMain.handle('agent:readGlobalPrompt', async () => {
+      if (!agent) return { error: 'Agent is not initialized' };
+      const promptPath = path.join(agent.rootPath, 'agent.md');
+      try {
+        const stat = await fs.promises.stat(promptPath);
+        if (stat.size > 256 * 1024) return { error: 'Global Agent.md exceeds 256 KiB.' };
+        return { content: (await fs.promises.readFile(promptPath, 'utf-8')).replace(/^\uFEFF/, '') };
+      } catch (error) {
+        const code = error && typeof error === 'object' && 'code' in error ? String((error as NodeJS.ErrnoException).code || '') : '';
+        return code === 'ENOENT' ? { content: '' } : { error: String(error) };
+      }
+    });
+
+    ipcMain.handle('agent:saveGlobalPrompt', async (_event, content: string) => {
+      if (!agent) return { error: 'Agent is not initialized' };
+      if (Buffer.byteLength(String(content || ''), 'utf8') > 256 * 1024) return { error: 'Global Agent.md exceeds 256 KiB.' };
+      try {
+        await fs.promises.writeFile(path.join(agent.rootPath, 'agent.md'), String(content || ''), 'utf-8');
+        agent.invalidateSystemPrompt();
+        return { ok: true };
+      } catch (error) {
+        return { error: String(error) };
+      }
+    });
+
     ipcMain.handle('agent:enqueueGuide', async (_event, raw: ConversationInputEnvelope) => {
       if (!agent) throw new Error('Agent not initialized');
       const target = conversationRuntimeTarget({ target: raw?.target });
@@ -2685,6 +2756,7 @@ if (hasCliCommand) {
       const promptPath = path.join(agent.workspace.current.path, 'agent.md');
       try {
         await fs.promises.writeFile(promptPath, String(content || ''), 'utf-8');
+        agent.invalidateSystemPrompt();
         return { ok: true };
       } catch (error) { return { error: String(error) }; }
     });
@@ -3366,6 +3438,10 @@ if (hasCliCommand) {
       } else {
         win?.close();
       }
+    });
+    ipcMain.handle('app:exit', () => {
+      requestExplicitExit('renderer-exit');
+      return { ok: true };
     });
 
     ipcMain.handle('github:overview', async (_event, requestedRepo?: string) => {

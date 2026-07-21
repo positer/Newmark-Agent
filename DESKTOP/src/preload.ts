@@ -35,6 +35,10 @@ contextBridge.exposeInMainWorld('api', {
   browserControl: (request: Record<string, unknown>) => ipcRenderer.invoke('browser:control', request),
   runFlow: (name: string, input?: string, start?: number) => ipcRenderer.invoke('flow:run', name, input, start),
   saveConfig: (cfg: string | Record<string, unknown>) => ipcRenderer.invoke('agent:saveConfig', cfg),
+  openGlobalConfig: () => ipcRenderer.invoke('agent:openGlobalConfig'),
+  reloadGlobalConfig: () => ipcRenderer.invoke('agent:reloadGlobalConfig'),
+  readGlobalPrompt: () => ipcRenderer.invoke('agent:readGlobalPrompt'),
+  saveGlobalPrompt: (content: string) => ipcRenderer.invoke('agent:saveGlobalPrompt', content),
   abortConversation: (target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:abortConversation', target),
   rewindConversation: (target: string | Record<string, unknown>, messageIndex: number) => ipcRenderer.invoke('agent:rewindConversation', target, messageIndex),
   archive: (target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:archive', target),
@@ -113,6 +117,7 @@ contextBridge.exposeInMainWorld('api', {
   maximize: () => ipcRenderer.invoke('app:maximize'),
   close: () => ipcRenderer.invoke('app:close'),
   lifecycleState: () => ipcRenderer.invoke('app:lifecycleState'),
+  exitApplication: () => ipcRenderer.invoke('app:exit'),
   sidecarStatus: () => ipcRenderer.invoke('sidecar:status'),
   sidecarRestart: () => ipcRenderer.invoke('sidecar:restart'),
   // Native PTY Terminal

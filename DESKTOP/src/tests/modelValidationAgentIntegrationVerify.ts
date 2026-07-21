@@ -54,9 +54,11 @@ async function main(): Promise<void> {
       if (Array.isArray(content)) return '{"left":"red_square","right":"blue_circle","bottom":"green_triangle","marker":"NM7"}';
       const prompt = String(content || '');
       if (prompt.includes('NEWMARK_HEALTH_OK')) return 'NEWMARK_HEALTH_OK';
+      if (/^(hello|hi|OK)\s*$/i.test(prompt)) return 'hello';
+      if (prompt.includes('Is this response an error')) return 'ok';
       const nonce = nonceFrom(prompt);
       if (prompt.includes('Schema:')) return JSON.stringify({ nonce });
-      return nonce;
+      return nonce || 'OK';
     };
     LLMProvider.prototype.chatStreamWithTools = async function*(_model, messages, _system, _temperature, _maxTokens, tools) {
       streamCalls += 1;
@@ -117,8 +119,31 @@ async function main(): Promise<void> {
           headers: { 'Content-Type': 'text/event-stream' },
         });
       }
+      // Pipeline health check and non-streaming chat completions
+      if (body.messages || body.model) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'OK' } }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       return new Response('unexpected validation transport', { status: 500 });
     }) as typeof fetch;
+
+    const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-validation-empty-'));
+    try {
+      fs.writeFileSync(path.join(emptyRoot, 'config.json'), JSON.stringify({
+        models: { providers: { value: [] }, default_model: { value: '' } },
+        workspace: { auto_create_timestamp_workspace: { value: false } },
+      }, null, 2));
+      const emptyAgent = new Agent(emptyRoot, { agentOnly: true });
+      const callsBeforeEmptyValidation = chatCalls + streamCalls + protocolBodies.length;
+      const emptyValidation = await emptyAgent.validateModels();
+      ok(emptyValidation.length === 0
+        && chatCalls + streamCalls + protocolBodies.length === callsBeforeEmptyValidation,
+      'Agent validation returns immediately without provider probes when no base model is configured');
+    } finally {
+      fs.rmSync(emptyRoot, { recursive: true, force: true });
+    }
 
     const agent = new Agent(root, { agentOnly: true });
     const first = await agent.validateModels(['Fixture/fixture-model']);

@@ -6,6 +6,7 @@ const root = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(root, '..');
 const releaseDir = path.join(repoRoot, 'release');
 const version = require(path.join(root, 'package.json')).version;
+const latencyArchiveName = `20260721-dev-${version}-linux-agent-latency.json`;
 
 function log(message) {
   console.log(`[dist-linux] ${message}`);
@@ -121,7 +122,7 @@ function runWindowsWslBuild() {
     'npm test',
     'NEWMARK_LATENCY_OUTPUT="$build_root/linux-agent-latency.json" npm run benchmark:linux-agent-latency',
     `mkdir -p ${wslQuote(`${wslRepoRoot}/archive`)}`,
-    `cp "$build_root/linux-agent-latency.json" ${wslQuote(`${wslRepoRoot}/archive/2026-07-18-dev-0.1.0-linux-agent-latency.json`)}`,
+    `cp "$build_root/linux-agent-latency.json" ${wslQuote(`${wslRepoRoot}/archive/${latencyArchiveName}`)}`,
     'node scripts/dist-linux.cjs --native',
     `mkdir -p ${wslQuote(wslReleaseDir)}`,
     `rm -rf ${wslQuote(`${wslReleaseDir}/linux-unpacked`)}`,

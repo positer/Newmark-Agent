@@ -890,11 +890,17 @@ function overallStatus(
   if (level === 'discovered') return 'degraded';
   if (health && health.status !== 'verified' && health.status !== 'degraded') return health.status;
   const capabilityStatuses = Object.values(capabilities).map(record => record.status);
-  if (capabilityStatuses.includes('auth_error')) return 'auth_error';
-  if (capabilityStatuses.includes('invalid_config')) return 'invalid_config';
+  const textStatus = capabilities.text?.status;
+  // Availability is established by the base text path. Optional Standard and
+  // Extended probes describe capability support; an unsupported JSON/stream/
+  // tool parameter must not make an otherwise callable model unavailable.
+  if (textStatus && textStatus !== 'verified' && textStatus !== 'degraded') return textStatus;
   if (capabilityStatuses.length > 0 && capabilityStatuses.every(status => status === 'verified')) {
     return health?.status === 'degraded' ? 'degraded' : 'verified';
   }
+  if (textStatus === 'verified' || textStatus === 'degraded') return 'degraded';
+  if (capabilityStatuses.includes('auth_error')) return 'auth_error';
+  if (capabilityStatuses.includes('invalid_config')) return 'invalid_config';
   if (capabilityStatuses.some(status => status === 'verified' || status === 'degraded')) return 'degraded';
   if (capabilityStatuses.includes('rate_limited')) return 'rate_limited';
   return 'unavailable';
@@ -1000,7 +1006,9 @@ export class ModelValidationService {
   async validate(request: ModelValidationRequest): Promise<ModelValidationRecord> {
     const key = modelKey(request.model);
     const now = this.clock();
-    const cached = this.cache.get(key);
+    const cachedRaw = this.cache.get(key);
+    const cached = repairLegacyAvailabilityStatus(cachedRaw);
+    if (cached && cachedRaw && cached.status !== cachedRaw.status) this.cache.set(cached);
     if (
       !request.force
       && cached
@@ -1347,4 +1355,12 @@ export class ModelValidationService {
     }
     return tasks;
   }
+}
+
+function repairLegacyAvailabilityStatus(record: ModelValidationRecord | undefined): ModelValidationRecord | undefined {
+  if (!record) return undefined;
+  const baseTextUsable = record.capabilities.text?.status === 'verified' || record.capabilities.text?.status === 'degraded';
+  const healthUsable = !record.health || record.health.status === 'verified' || record.health.status === 'degraded';
+  if (!baseTextUsable || !healthUsable || (record.status !== 'invalid_config' && record.status !== 'unavailable')) return record;
+  return { ...record, status: 'degraded' };
 }

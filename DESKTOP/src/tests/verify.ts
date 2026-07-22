@@ -329,14 +329,20 @@ async function main() {
     && uiHtml.includes("var focusId = state.memoryLabOverviewFocus || ''")
     && uiHtml.includes('stage.onpointercancel = finishPan')
     && uiHtml.includes('stage.onlostpointercapture')
-    && uiHtml.includes('event.buttons === 0')
+    && !uiHtml.includes('if (event.buttons === 0) { finishPan(event); return; }')
     && uiHtml.includes('window.requestMemoryLabOverviewFrame')
-    && uiHtml.includes('state.memoryLabOverviewSimulationFrames = 180')
+    && uiHtml.includes('state.memoryLabOverviewRunning = true')
+    && uiHtml.includes('timestamp - last < 30')
+    && uiHtml.includes('performance.now() * 0.00075')
+    && uiHtml.includes('state.memoryLabOverviewManualCamera = true')
+    && uiHtml.includes('!state.memoryLabOverviewManualCamera')
+    && uiHtml.includes('state.memoryLabOverviewPanEdgeX')
+    && uiHtml.includes('event.clientX - pan.x')
     && uiHtml.includes('old * Math.exp(-event.deltaY * 0.0014)')
     && uiHtml.includes("stage.classList.toggle('zoom-dots', camera.scale < 0.28)")
     && uiHtml.includes('.memory-lab-overview-stage.zoom-dots .memory-lab-overview-node')
     && uiHtml.includes('showMemoryLabOverviewTip')
-    && uiHtml.includes('updateMemoryLabOverviewTip'), 'ui html: Memory Lab overview toggles selected tags off, releases fast pointer drags, renders on demand, permits full-range zoom, collapses distant nodes to solid dots, and names dots on hover');
+    && uiHtml.includes('updateMemoryLabOverviewTip'), 'ui html: Memory Lab overview toggles selected tags off, supports long pointer-captured drags, keeps a throttled ambient layout running, permits full-range zoom, collapses distant nodes to solid dots, and names dots on hover');
   assert(uiHtml.includes('animate-from-left') && uiHtml.includes('animate-from-right') && uiHtml.includes('@keyframes memory-lab-enter-left') && uiHtml.includes('memoryLabNavDirection'), 'ui html: Memory Lab tag navigation has smooth directional animation');
   assert(uiHtml.includes("window.openSubWin(t('model.addProvider')") && uiHtml.includes("window.openSubWin(t('model.addModel')") && uiHtml.includes("window.openSubWin(t('model.fuzzy')"), 'ui html: model secondary windows use i18n titles');
   assert(uiHtml.includes('window.setAutoSwitchMode') && uiHtml.includes("t('model.autoSwitchOff')") && uiHtml.includes("t('model.autoSwitchAll')") && uiHtml.includes("t('model.autoSwitchProvider')"), 'ui html: model settings expose off/full/provider Auto switch modes');

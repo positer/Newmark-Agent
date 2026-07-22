@@ -14563,6 +14563,7 @@ window.memoryLabComponentButton = function(slug, meta, selected) {
 
 window.switchMemoryLabView = function(view) {
   state.memoryLabView = view === 'detail' ? 'detail' : 'overview';
+  state.memoryLabOverviewRunning = false;
   if (state.memoryLabOverviewAnimation) {
     cancelAnimationFrame(state.memoryLabOverviewAnimation);
     state.memoryLabOverviewAnimation = null;
@@ -14649,7 +14650,9 @@ window.initMemoryLabOverview = function() {
   state.memoryLabOverviewAnimation = null;
   var rect = stage.getBoundingClientRect();
   if (!state.memoryLabOverviewCamera) state.memoryLabOverviewCamera = { x: rect.width / 2, y: rect.height / 2, scale: 0.88 };
-  state.memoryLabOverviewSimulationFrames = 180;
+  state.memoryLabOverviewRunning = true;
+  state.memoryLabOverviewLastFrame = 0;
+  if (typeof state.memoryLabOverviewManualCamera !== 'boolean') state.memoryLabOverviewManualCamera = false;
   state.memoryLabOverviewPanActive = false;
   state.memoryLabOverviewNodeMap = {};
   for (var i = 0; i < graph.nodes.length; i++) {
@@ -14670,6 +14673,8 @@ window.initMemoryLabOverview = function() {
   function finishPan(event) {
     pan = null;
     state.memoryLabOverviewPanActive = false;
+    state.memoryLabOverviewPanEdgeX = 0;
+    state.memoryLabOverviewPanEdgeY = 0;
     var pointerId = event && Number.isFinite(event.pointerId) ? event.pointerId : activePointerId;
     if (pointerId !== null && stage.hasPointerCapture && stage.hasPointerCapture(pointerId)) {
       try { stage.releasePointerCapture(pointerId); } catch (_) {}
@@ -14679,21 +14684,37 @@ window.initMemoryLabOverview = function() {
   }
   stage.onpointerdown = function(event) {
     if (event.target.closest('.memory-lab-overview-node') || event.target.closest('.memory-lab-overview-actions')) return;
-    pan = { sx: event.clientX, sy: event.clientY, ox: camera.x, oy: camera.y };
+    pan = { x: event.clientX, y: event.clientY };
     activePointerId = event.pointerId;
     state.memoryLabOverviewPanActive = true;
+    state.memoryLabOverviewManualCamera = true;
     stage.setPointerCapture(event.pointerId);
   };
   stage.onpointermove = function(event) {
     if (!pan) return;
-    if (event.buttons === 0) { finishPan(event); return; }
-    camera.x = pan.ox + event.clientX - pan.sx;
-    camera.y = pan.oy + event.clientY - pan.sy;
+    camera.x += event.clientX - pan.x;
+    camera.y += event.clientY - pan.y;
+    pan.x = event.clientX;
+    pan.y = event.clientY;
+    var bounds = stage.getBoundingClientRect();
+    var edge = 42;
+    state.memoryLabOverviewPanEdgeX = event.clientX < bounds.left + edge
+      ? -Math.min(22, bounds.left + edge - event.clientX)
+      : event.clientX > bounds.right - edge ? Math.min(22, event.clientX - bounds.right + edge) : 0;
+    state.memoryLabOverviewPanEdgeY = event.clientY < bounds.top + edge
+      ? -Math.min(22, bounds.top + edge - event.clientY)
+      : event.clientY > bounds.bottom - edge ? Math.min(22, event.clientY - bounds.bottom + edge) : 0;
     window.requestMemoryLabOverviewFrame();
   };
   stage.onpointerup = finishPan;
   stage.onpointercancel = finishPan;
-  stage.onlostpointercapture = function() { pan = null; activePointerId = null; state.memoryLabOverviewPanActive = false; };
+  stage.onlostpointercapture = function() {
+    pan = null;
+    activePointerId = null;
+    state.memoryLabOverviewPanActive = false;
+    state.memoryLabOverviewPanEdgeX = 0;
+    state.memoryLabOverviewPanEdgeY = 0;
+  };
   stage.onwheel = function(event) {
     event.preventDefault();
     var old = camera.scale;
@@ -14711,9 +14732,15 @@ window.initMemoryLabOverview = function() {
 };
 
 window.requestMemoryLabOverviewFrame = function() {
-  if (state.memoryLabOverviewAnimation) return;
-  state.memoryLabOverviewAnimation = requestAnimationFrame(function() {
+  if (state.memoryLabOverviewAnimation || !state.memoryLabOverviewRunning) return;
+  state.memoryLabOverviewAnimation = requestAnimationFrame(function(timestamp) {
     state.memoryLabOverviewAnimation = null;
+    var last = Number(state.memoryLabOverviewLastFrame || 0);
+    if (last && timestamp - last < 30) {
+      window.requestMemoryLabOverviewFrame();
+      return;
+    }
+    state.memoryLabOverviewLastFrame = timestamp;
     window.renderMemoryLabOverviewFrame();
   });
 };
@@ -14796,10 +14823,13 @@ window.renderMemoryLabOverviewFrame = function() {
   var svg = document.getElementById('memory-lab-overview-svg');
   if (!graph || !stage || !svg) return;
   var camera = state.memoryLabOverviewCamera || { x: stage.clientWidth / 2, y: stage.clientHeight / 2, scale: 0.88 };
+  if (state.memoryLabOverviewPanActive) {
+    camera.x += Number(state.memoryLabOverviewPanEdgeX || 0);
+    camera.y += Number(state.memoryLabOverviewPanEdgeY || 0);
+  }
   function screen(node) { return { x: camera.x + node.x * camera.scale, y: camera.y + node.y * camera.scale }; }
-  var simulate = Number(state.memoryLabOverviewSimulationFrames || 0) > 0 && !state.memoryLabOverviewPanActive;
+  var simulate = !state.memoryLabOverviewPanActive;
   if (simulate) {
-    state.memoryLabOverviewSimulationFrames--;
     for (var i = 0; i < graph.nodes.length; i++) { graph.nodes[i].fx = 0; graph.nodes[i].fy = 0; }
     for (var a = 0; a < graph.nodes.length; a++) {
       for (var b = a + 1; b < graph.nodes.length; b++) {
@@ -14819,11 +14849,12 @@ window.renderMemoryLabOverviewFrame = function() {
       if (!source.fixed) { source.fx += edx / dist * spring; source.fy += edy / dist * spring; }
       if (!target.fixed) { target.fx -= edx / dist * spring; target.fy -= edy / dist * spring; }
     }
+    var ambientPhase = performance.now() * 0.00075;
     for (var n = 0; n < graph.nodes.length; n++) {
       var node = graph.nodes[n];
       if (node.fixed) continue;
-      node.fx += -node.x * 0.0007;
-      node.fy += -node.y * 0.0007;
+      node.fx += -node.x * 0.0007 + Math.cos(ambientPhase + n * 1.618) * 0.045;
+      node.fy += -node.y * 0.0007 + Math.sin(ambientPhase + n * 1.618) * 0.045;
       node.vx = ((node.vx || 0) + node.fx) * 0.86;
       node.vy = ((node.vy || 0) + node.fy) * 0.86;
       node.x += node.vx;
@@ -14862,7 +14893,7 @@ window.renderMemoryLabOverviewFrame = function() {
   }
   svg.innerHTML = paths;
   var needsFocusFrame = false;
-  if (focusId && map[focusId] && !state.memoryLabOverviewPanActive) {
+  if (focusId && map[focusId] && !state.memoryLabOverviewPanActive && !state.memoryLabOverviewManualCamera) {
     var f = map[focusId];
     var focusDx = stage.clientWidth / 2 - f.x * camera.scale - camera.x;
     var focusDy = stage.clientHeight / 2 - f.y * camera.scale - camera.y;
@@ -14875,7 +14906,7 @@ window.renderMemoryLabOverviewFrame = function() {
     var selected = focusId && map[focusId] ? map[focusId].name : '';
     status.textContent = selected ? t('memoryLab.selected') + ': ' + selected : t('memoryLab.unselected');
   }
-  if (Number(state.memoryLabOverviewSimulationFrames || 0) > 0 || needsFocusFrame) window.requestMemoryLabOverviewFrame();
+  if (state.memoryLabOverviewRunning && stage.isConnected) window.requestMemoryLabOverviewFrame();
 };
 
 window.selectMemoryLabOverviewNode = function(id) {
@@ -14891,6 +14922,7 @@ window.selectMemoryLabOverviewNode = function(id) {
     return;
   }
   state.memoryLabOverviewFocus = id;
+  state.memoryLabOverviewManualCamera = false;
   if (node.tag) {
     state.memoryLabSelectedTag = node.tag;
     state.memoryLabSelectedComponent = '';
@@ -14916,12 +14948,16 @@ window.clearMemoryLabOverviewFocus = function() {
 window.resetMemoryLabOverview = function() {
   state.memoryLabOverviewCamera = null;
   state.memoryLabOverviewFocus = '';
+  state.memoryLabOverviewManualCamera = false;
   window.renderMemoryLab();
 };
 
 window.selectMemoryLabComponent = function(slug) {
   state.memoryLabSelectedComponent = slug;
-  if ((state.memoryLabView || 'overview') === 'overview') state.memoryLabOverviewFocus = 'component:' + slug;
+  if ((state.memoryLabView || 'overview') === 'overview') {
+    state.memoryLabOverviewFocus = 'component:' + slug;
+    state.memoryLabOverviewManualCamera = false;
+  }
   window.loadMemoryLab(slug);
 };
 

@@ -244,6 +244,42 @@ async function runUiCheck(root) {
       return nodes.some(t => t === '#Release-Smoke') &&
         nodes.some(t => t.includes('release-ui-memory'));
     })()`, 30000, 'Memory Lab overview graph contains real tag and component nodes');
+    await sleep(7000);
+    await evaluate(cdp, `(() => {
+      const node = window.state.memoryLabOverviewNodeMap['tag:#Release-Smoke'];
+      window.__memoryLabSmokePosition = node ? { x: node.x, y: node.y } : null;
+      return !!node && window.state.memoryLabOverviewRunning === true;
+    })()`, 30000);
+    await sleep(1200);
+    const ambientMotion = await evaluate(cdp, `(() => {
+      const node = window.state.memoryLabOverviewNodeMap['tag:#Release-Smoke'];
+      const start = window.__memoryLabSmokePosition;
+      return !!node && !!start && Math.hypot(node.x - start.x, node.y - start.y) > 0.5;
+    })()`, 30000);
+    if (!ambientMotion) fail('Memory Lab ambient overview motion stopped after the former frame budget');
+    await evaluate(cdp, `window.selectMemoryLabOverviewNode('tag:#Release-Smoke')`, 30000);
+    await sleep(700);
+    const dragSurface = await evaluate(cdp, `(() => {
+      const stage = document.querySelector('#memory-lab-overview-stage');
+      if (!stage) return null;
+      const rect = stage.getBoundingClientRect();
+      return { startX: rect.left + rect.width * 0.5, endX: rect.right - 3, y: rect.bottom - 12 };
+    })()`, 30000);
+    if (!dragSurface) fail('Memory Lab drag surface was unavailable');
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: dragSurface.startX, y: dragSurface.y });
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: dragSurface.startX, y: dragSurface.y, button: 'left', buttons: 1, clickCount: 1 });
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: dragSurface.endX, y: dragSurface.y, button: 'left', buttons: 1 });
+    const directDragX = await evaluate(cdp, `window.state.memoryLabOverviewCamera.x`, 30000);
+    await sleep(1200);
+    const edgeDragX = await evaluate(cdp, `window.state.memoryLabOverviewCamera.x`, 30000);
+    if (edgeDragX - directDragX < 250) fail('Memory Lab held edge drag did not continue panning beyond the visible surface');
+    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: dragSurface.endX, y: dragSurface.y, button: 'left', buttons: 0, clickCount: 1 });
+    const longDrag = await evaluate(cdp, `window.state.memoryLabOverviewPanActive === false && window.state.memoryLabOverviewManualCamera === true`, 30000);
+    if (!longDrag) fail('Memory Lab long-distance pointer drag did not release cleanly');
+    await sleep(1200);
+    const dragHeld = await evaluate(cdp, `Math.abs(window.state.memoryLabOverviewCamera.x - ${JSON.stringify(edgeDragX)}) < 50`, 30000);
+    if (!dragHeld) fail('Memory Lab focused overview camera snapped back after a manual long-distance drag');
+    await evaluate(cdp, `window.selectMemoryLabOverviewNode('tag:#Release-Smoke')`, 30000);
     await evaluate(cdp, `(() => {
       window.state.memoryLabOverviewCamera.scale = 0.2;
       window.requestMemoryLabOverviewFrame();

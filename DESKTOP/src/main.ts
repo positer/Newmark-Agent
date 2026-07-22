@@ -3334,6 +3334,9 @@ if (hasCliCommand) {
           name: String(input.name || ''),
           description: String(input.description || ''),
           tags: Array.isArray(input.tags) ? input.tags.map(String) : String(input.tags || '').split(/[,，\n]+/),
+          tagPaths: Array.isArray(input.tagPaths)
+            ? input.tagPaths.filter(Array.isArray).map(pathValue => pathValue.map(String))
+            : [],
           content: String(input.content || ''),
           kind: input.kind === 'folder' ? 'folder' : 'file',
         });
@@ -3420,12 +3423,10 @@ if (hasCliCommand) {
 
     ipcMain.handle('app:minimize', () => {
       const win = BrowserWindow.getFocusedWindow() || mainWindow;
-      const minimizeToTray = agent?.config.getBool('ui', 'minimize_to_tray') ?? true;
-      if (minimizeToTray) {
-        win?.hide();
-      } else {
-        win?.minimize();
-      }
+      // The title-bar minimize action always belongs to the OS taskbar.
+      // Tray hiding remains an explicit close-behavior decision and must not
+      // make an ordinary minimize click disappear from the taskbar.
+      win?.minimize();
     });
     ipcMain.handle('app:maximize', () => {
       const win = BrowserWindow.getFocusedWindow() || mainWindow;

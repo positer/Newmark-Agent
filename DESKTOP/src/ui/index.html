@@ -67,6 +67,10 @@ try {
   --review-add-text: #72e6b5;
   --review-del-bg: rgba(255,68,68,.13);
   --review-del-text: #ff9aa2;
+  --notice-bg: rgba(18,20,28,.96);
+  --notice-shadow: 0 10px 36px rgba(0,0,0,.32);
+  --notice-error-border: rgba(255,105,120,.55);
+  --notice-error-text: #ffb0b8;
 
   /* Accent colors */
   --accent: #5b78ff;
@@ -182,6 +186,10 @@ try {
   --review-add-text: #087443;
   --review-del-bg: rgba(190,35,47,.10);
   --review-del-text: #b4232f;
+  --notice-bg: rgba(255,255,255,.96);
+  --notice-shadow: 0 12px 34px rgba(42,54,88,.16), inset 0 1px 0 rgba(255,255,255,.92);
+  --notice-error-border: rgba(180,35,48,.38);
+  --notice-error-text: #9f1f2d;
   --glass-rgb-1: 255 255 255;
   --glass-rgb-2: 255 255 255;
   --glass-rgb-3: 255 255 255;
@@ -2255,6 +2263,31 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .conversation-work-activity-list { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 5px 24px; padding: 0; border: 0; }
 .conversation-work-activity-item { display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; align-items: start; min-height: 24px; color: var(--text-dim); font-size: 11px; font-weight: 400; line-height: 1.5; }
 .conversation-work-activity-item .nm-icon { margin-top: 2px; }
+.conversation-work-subagent-list { flex-direction: row; flex-wrap: wrap; gap: 7px; margin-top: 6px; }
+.conversation-work-subagent-chip {
+  min-width: 0;
+  max-width: min(100%, 300px);
+  min-height: 34px;
+  display: inline-grid;
+  grid-template-columns: 18px minmax(0,1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border: 1px solid var(--glass-border-2);
+  border-radius: var(--radius-full);
+  background: var(--glass-bg-1);
+  color: var(--text);
+  font: 11px var(--font-ui);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo), transform var(--duration-fast) var(--ease-out-expo);
+}
+.conversation-work-subagent-chip:hover,
+.conversation-work-subagent-chip:focus-visible { background: var(--glass-bg-2); border-color: var(--border-hover); outline: none; }
+.conversation-work-subagent-chip:active { transform: scale(.985); }
+.conversation-work-subagent-chip .nm-icon { color: var(--accent2); }
+.conversation-work-subagent-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-work-subagent-status { color: var(--text-dim); font-size: 10px; }
+.conversation-work-subagent-chip.completed .conversation-work-subagent-status { color: var(--accent2); }
 .conversation-work-command-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-work-activity-detail { margin-top: 2px; color: color-mix(in srgb, var(--text-dim) 88%, transparent); font: 10px/1.45 var(--font-mono); white-space: pre-wrap; word-break: break-word; }
 .conversation-work-files { margin-top: 1px; }
@@ -2263,6 +2296,9 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .conversation-work-file > summary::-webkit-details-marker { display: none; }
 .conversation-work-file-list { display: flex; flex-direction: column; gap: 7px; margin: 5px 0 3px 24px; }
 .conversation-work-file { overflow: hidden; border: 1px solid var(--glass-border-1); border-radius: var(--radius-md); background: color-mix(in srgb, var(--glass-bg-2) 74%, transparent); }
+.conversation-work-file-inline { margin: 1px 0; }
+.conversation-work-file-inline > summary { grid-template-columns: 17px minmax(0,1fr) auto 18px; }
+.conversation-work-file-inline > summary .nm-icon { color: var(--text-dim); }
 .conversation-work-file > summary { display: grid; grid-template-columns: minmax(0,1fr) auto 18px; gap: 9px; align-items: center; min-height: 38px; padding: 0 10px 0 12px; cursor: pointer; list-style: none; color: var(--text); }
 .conversation-work-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--font-mono); }
 .conversation-work-file-stats { display: inline-flex; gap: 7px; font: 11px var(--font-mono); }
@@ -2293,14 +2329,14 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   padding: 9px 12px;
   border: 1px solid var(--glass-border-2);
   border-radius: var(--radius-md);
-  background: rgba(18,20,28,.96);
+  background: var(--notice-bg);
   color: var(--text);
-  box-shadow: 0 10px 36px rgba(0,0,0,.32);
+  box-shadow: var(--notice-shadow);
   font-size: 12px;
   pointer-events: auto;
 }
 
-.ui-notice.error { border-color: rgba(255,105,120,.55); color: #ffb0b8; }
+.ui-notice.error { border-color: var(--notice-error-border); color: var(--notice-error-text); }
 
 .chat-msg .msg-body a {
   color: var(--text-accent);
@@ -2975,6 +3011,74 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.model-select-shell {
+  position: relative;
+  flex: 1 1 160px;
+  width: 0;
+  min-width: 72px;
+  max-width: 100%;
+}
+
+.model-select-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.model-select-button {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0,1fr) 16px;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+
+.model-select-button-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-select-button .nm-icon { color: var(--text-dim); transition: transform var(--duration-fast) var(--ease-out-expo); }
+.model-select-shell.open .model-select-button .nm-icon { transform: rotate(180deg); }
+
+.model-select-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 120;
+  display: none;
+  max-height: min(56vh, 430px);
+  overflow: auto;
+  padding: 7px;
+  border: 1px solid var(--glass-border-2);
+  border-radius: var(--radius-lg);
+  background: var(--modal-surface);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(var(--glass-blur-3)) saturate(1.08);
+}
+
+.model-select-shell.open .model-select-menu { display: block; animation: model-menu-in 150ms var(--ease-out-expo); }
+.model-select-menu-group { padding: 7px 9px 4px; color: var(--text-accent); font: 700 11px var(--font-ui); }
+.model-select-menu-option {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: 12px var(--font-ui);
+  cursor: pointer;
+}
+.model-select-menu-option:hover,
+.model-select-menu-option:focus-visible { background: var(--control-hover-bg); color: var(--text-bright); outline: none; }
+.model-select-menu-option.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text-bright); }
+@keyframes model-menu-in { from { opacity: 0; transform: translateY(5px) scale(.985); } to { opacity: 1; transform: none; } }
 
 #mode-select, #flow-select, #intel-select { max-width: 132px; }
 
@@ -4014,6 +4118,23 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   box-shadow: 0 0 0 5px rgba(91, 120, 255, 0.11), 0 12px 28px rgba(0,0,0,0.24);
 }
 .memory-lab-overview-node.dim { opacity: 0.18; }
+.memory-lab-overview-stage.zoom-dots .memory-lab-overview-node {
+  width: 10px;
+  min-width: 10px;
+  max-width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 0;
+  background: #b7a0ff;
+  box-shadow: 0 0 7px rgba(183,160,255,.38);
+  backdrop-filter: none;
+}
+.memory-lab-overview-stage.zoom-dots .memory-lab-overview-node.root,
+.memory-lab-overview-stage.zoom-dots .memory-lab-overview-node.anchor { background: #f6c96b; box-shadow: 0 0 7px rgba(246,201,107,.4); }
+.memory-lab-overview-stage.zoom-dots .memory-lab-overview-node.leaf { background: #74dfb0; box-shadow: 0 0 7px rgba(116,223,176,.36); }
+.memory-lab-overview-stage.zoom-dots .memory-lab-overview-node.addon { background: #e8eef8; box-shadow: 0 0 6px rgba(232,238,248,.34); }
+.memory-lab-overview-stage.zoom-dots .memory-lab-overview-node .memory-lab-overview-dot,
+.memory-lab-overview-stage.zoom-dots .memory-lab-overview-node .memory-lab-overview-label { display: none; }
 .memory-lab-overview-tip {
   position: absolute;
   z-index: 8;
@@ -4028,6 +4149,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   pointer-events: none;
   opacity: 0;
   transform: translate(14px, -50%);
+  transition: opacity var(--duration-fast) var(--ease-out-expo);
 }
 .memory-lab-overview-tip.show { opacity: 1; }
 .memory-lab-overview-tip-name {
@@ -4506,7 +4628,11 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
               <option value="flow">Flow</option>
             </select>
             <select class="tool-select" id="flow-select" style="display:none;"></select>
-            <select class="tool-select" id="model-select"></select>
+            <div class="model-select-shell" id="model-select-shell">
+              <select class="model-select-native" id="model-select" tabindex="-1" aria-hidden="true"></select>
+              <button type="button" class="tool-select model-select-button" id="model-select-button" aria-haspopup="listbox" aria-expanded="false" onclick="window.toggleModelSelectMenu()" onkeydown="window.handleModelSelectButtonKey(event)"><span class="model-select-button-label" id="model-select-label"></span><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#chevron-down"></use></svg></button>
+              <div class="model-select-menu" id="model-select-menu" role="listbox" aria-label="Model"></div>
+            </div>
             <div class="context-token-wrap">
               <div id="context-token-ring" title="Context tokens" tabindex="0" onmouseenter="window.showContextWindowTooltip()" onmouseleave="window.hideContextWindowTooltip()" onfocus="window.showContextWindowTooltip()" onblur="window.hideContextWindowTooltip()"></div>
               <div id="context-token-tooltip"></div>
@@ -7651,6 +7777,9 @@ function workEventIcon(type) {
 
 function workToolActivity(event) {
   var name = publicToolNameForUi(event && event.toolName).toLowerCase();
+  if (name === 'task' || name.indexOf('subagent_') === 0) return { key: 'subagents', type: 'tool_subagent' };
+  if (name === 'skill' || name === 'skill_download') return { key: 'skills', type: 'tool_skill' };
+  if (name === 'mcp' || /^mcp[:._-]/.test(name) || /[:._-]mcp[:._-]/.test(name)) return { key: 'mcp', type: 'tool_mcp' };
   if (name === 'context_compression') return { key: 'context_compression', type: 'tool_context_compression' };
   if (name === 'memory_lab_update' || name === 'memory_lab_reindex') return { key: 'memory_lab', type: 'tool_memory_lab' };
   if (name === 'image_inspect' || name === 'computer_use') return { key: 'images', type: 'tool_images' };
@@ -7666,6 +7795,9 @@ function workToolActivityLabel(activity, count, completed) {
   if (activity.key === 'memory_lab') return completed
     ? (zh ? '更新了记忆' : 'Updated memory')
     : (zh ? '正在更新 Memory Lab' : 'Updating Memory Lab');
+  if (activity.key === 'skills') return completed ? (zh ? '已加载 Skill' : 'Loaded Skill') : (zh ? '正在加载 Skill' : 'Loading Skill');
+  if (activity.key === 'mcp') return completed ? (zh ? '已调用 MCP' : 'Called MCP') : (zh ? '正在调用 MCP' : 'Calling MCP');
+  if (activity.key === 'subagents') return completed ? (zh ? 'Subagent 已完成' : 'Subagent completed') : (zh ? 'Subagent 正在工作' : 'Subagent working');
   if (activity.key === 'commands') return zh ? (count > 1 ? '运行了多个命令' : '运行了命令') : (count > 1 ? 'Ran multiple commands' : 'Ran a command');
   if (activity.key === 'files') return zh ? (count > 1 ? '编辑了多个文件' : '编辑了文件') : (count > 1 ? 'Edited multiple files' : 'Edited a file');
   if (activity.key === 'images') return zh ? ('已查看 ' + count + ' 张图像') : ('Inspected ' + count + (count === 1 ? ' image' : ' images'));
@@ -7684,15 +7816,60 @@ function workToolArgsObject(item) {
 
 function workToolCommandLabel(item) {
   var args = workToolArgsObject(item);
+  var toolName = publicToolNameForUi(item && item.toolName);
+  var normalizedName = toolName.toLowerCase();
+  if (normalizedName === 'task') {
+    return (currentLang() === 'zh' ? '调用 Subagent · ' : 'Called Subagent · ') + String(args.nature || args.name || args.agent || 'Subagent').trim();
+  }
+  if (normalizedName.indexOf('subagent_') === 0) {
+    return (currentLang() === 'zh' ? 'Subagent 操作 · ' : 'Subagent action · ') + String(args.name || args.id || normalizedName.replace(/^subagent_/, '')).trim();
+  }
+  if (normalizedName === 'skill') {
+    var skillName = String(args.name || '').trim();
+    var skillQuery = String(args.query || '').trim();
+    if (skillName) return (currentLang() === 'zh' ? '加载 Skill · ' : 'Loaded Skill · ') + skillName;
+    return (currentLang() === 'zh' ? '检索 Skills · ' : 'Searched Skills · ') + (skillQuery || '*');
+  }
+  if (normalizedName === 'skill_download') {
+    return (currentLang() === 'zh' ? '安装 Skill · ' : 'Installed Skill · ') + String(args.name || args.source || '').trim();
+  }
+  if (normalizedName === 'mcp' || /^mcp[:._-]/.test(normalizedName) || /[:._-]mcp[:._-]/.test(normalizedName)) {
+    var mcpServer = String(args.server || args.server_name || args.mcp_server || '').trim();
+    var mcpTool = String(args.tool || args.name || normalizedName.replace(/^mcp[:._-]?/, '') || toolName).trim();
+    return (currentLang() === 'zh' ? '调用 MCP · ' : 'Called MCP · ') + [mcpServer, mcpTool].filter(Boolean).join(' / ');
+  }
   var command = String(args.command || args.cmd || '').trim();
   if (!command) {
-    var name = publicToolNameForUi(item && item.toolName);
-    if (name === 'read' && args.path) command = 'read ' + String(args.path);
-    else if ((name === 'grep' || name === 'glob') && (args.pattern || args.path)) command = name + ' ' + String(args.pattern || args.path);
-    else command = name;
+    if (toolName === 'read' && args.path) command = 'read ' + String(args.path);
+    else if ((toolName === 'grep' || toolName === 'glob') && (args.pattern || args.path)) command = toolName + ' ' + String(args.pattern || args.path);
+    else command = toolName;
   }
   command = command.replace(/\s+/g, ' ').trim();
   return (currentLang() === 'zh' ? 'Ran ' : 'Ran ') + command;
+}
+
+function workToolRowIcon(item) {
+  var name = publicToolNameForUi(item && item.toolName).toLowerCase();
+  if (name === 'task' || name.indexOf('subagent_') === 0) return 'bot';
+  if (name === 'skill' || name === 'skill_download') return 'sparkles';
+  if (name === 'mcp' || /^mcp[:._-]/.test(name) || /[:._-]mcp[:._-]/.test(name)) return 'plug';
+  return 'square-terminal';
+}
+
+function findSubagentUiRecord(name) {
+  var normalized = String(name || '').trim().toLowerCase();
+  return (state.subagents || []).find(function(item) {
+    return [item.id, item.name, item.displayName, item.qualifiedName].some(function(value) {
+      var candidate = String(value || '').trim().toLowerCase();
+      return candidate === normalized || candidate.endsWith('/' + normalized);
+    });
+  });
+}
+
+function subagentUiStatusLabel(status) {
+  var value = String(status || 'accepted').toLowerCase();
+  if (currentLang() !== 'zh') return value.charAt(0).toUpperCase() + value.slice(1);
+  return ({ accepted: '已调用', idle: '空闲', queued: '排队中', working: '工作中', completed: '已完成', closed: '已关闭', error: '失败' })[value] || value;
 }
 
 function workToolEditedFile(item) {
@@ -7716,10 +7893,22 @@ function workToolEditedFile(item) {
 
 function workToolGroupLabel(items, completed) {
   var files = (items || []).map(workToolEditedFile).filter(Boolean).length;
-  var commands = Math.max(0, (items || []).length - files);
   var zh = currentLang() === 'zh';
+  var skills = [];
+  var mcps = [];
+  var subagents = [];
+  (items || []).forEach(function(item) {
+    var name = publicToolNameForUi(item && item.toolName).toLowerCase();
+    if (name === 'skill' || name === 'skill_download') skills.push(workToolCommandLabel(item));
+    else if (name === 'mcp' || /^mcp[:._-]/.test(name) || /[:._-]mcp[:._-]/.test(name)) mcps.push(workToolCommandLabel(item));
+    else if (name === 'task' || name.indexOf('subagent_') === 0) subagents.push(workToolCommandLabel(item));
+  });
+  var commands = Math.max(0, (items || []).length - files - skills.length - mcps.length - subagents.length);
   var parts = [];
   if (files) parts.push(zh ? (files > 1 ? '编辑了多个文件' : '编辑了文件') : (files > 1 ? 'Edited multiple files' : 'Edited a file'));
+  if (skills.length) parts.push(skills.join('，'));
+  if (mcps.length) parts.push(mcps.join('，'));
+  if (subagents.length) parts.push(subagents.join('，'));
   if (commands) parts.push(zh ? (commands > 1 ? '运行了多个命令' : '运行了命令') : (commands > 1 ? 'ran multiple commands' : 'ran a command'));
   if (!parts.length) return completed ? (zh ? '调用了工具' : 'Used tools') : (zh ? '正在调用工具' : 'Using tools');
   if (!completed) return zh ? parts.join('，正在') : parts.join(' and ');
@@ -7740,46 +7929,40 @@ function renderWorkFileDiff(file) {
 
 function renderWorkToolGroup(event, eventIndex) {
   var items = event.items || [];
-  var filesByPath = {};
-  var files = [];
-  items.map(workToolEditedFile).filter(Boolean).forEach(function(file) {
-    if (!filesByPath[file.path]) {
-      filesByPath[file.path] = file;
-      files.push(file);
-      return;
-    }
-    var existing = filesByPath[file.path];
-    existing.oldLines = existing.oldLines.concat(file.oldLines);
-    existing.newLines = existing.newLines.concat(file.newLines);
-    existing.deleted += file.deleted;
-    existing.added += file.added;
-  });
   var firstItem = items[0] || {};
   var activityDomKey = String(firstItem.id || firstItem.toolCallId || ('tools-' + eventIndex));
-  var activityRows = items.map(function(item) {
+  var hasFiles = items.some(function(item) { return !!workToolEditedFile(item); });
+  var onlySubagents = items.length > 0 && items.every(function(item) {
+    var name = publicToolNameForUi(item && item.toolName).toLowerCase();
+    return name === 'task';
+  });
+  var activityRows = items.map(function(item, itemIndex) {
     var edited = workToolEditedFile(item);
     if (edited) {
-      return '<div class="conversation-work-activity-item">' + iconSvg('pencil', 'edited', 'tiny') +
-        '<div class="conversation-work-command-label" title="' + escAttr(edited.path) + '">' + esc(currentLang() === 'zh' ? '已编辑 ' : 'Edited ') +
-        '<span class="conversation-work-file-name">' + esc(edited.name) + '</span> <span class="conversation-work-file-add">+' + edited.added + '</span> <span class="conversation-work-file-del">-' + edited.deleted + '</span></div></div>';
+      var editKey = 'edit:' + String(item.id || item.toolCallId || itemIndex) + ':' + edited.path;
+      return '<details class="conversation-work-file conversation-work-file-inline" data-work-detail-key="' + escAttr(editKey) + '"><summary>' +
+        iconSvg('pencil', 'edited', 'tiny') +
+        '<span class="conversation-work-file-name" title="' + escAttr(edited.path) + '">' + esc(currentLang() === 'zh' ? '已编辑 ' : 'Edited ') + esc(edited.name) + '</span>' +
+        '<span class="conversation-work-file-stats"><span class="conversation-work-file-add">+' + edited.added + '</span><span class="conversation-work-file-del">-' + edited.deleted + '</span></span>' +
+        '<span class="conversation-work-activity-chevron" aria-hidden="true"></span></summary>' +
+        '<div class="conversation-work-file-diff">' + renderWorkFileDiff(edited) + '</div></details>';
     }
-    return '<div class="conversation-work-activity-item">' + iconSvg('square-terminal', 'command', 'tiny') +
+    var toolName = publicToolNameForUi(item && item.toolName).toLowerCase();
+    if (toolName === 'task') {
+      var subagentArgs = workToolArgsObject(item);
+      var subagentName = String(subagentArgs.nature || subagentArgs.name || subagentArgs.agent || 'Subagent').trim();
+      var subagentRecord = findSubagentUiRecord(subagentName);
+      var subagentStatus = String(subagentRecord && subagentRecord.status || 'accepted');
+      return '<button type="button" class="conversation-work-subagent-chip' + (subagentStatus === 'completed' ? ' completed' : '') + '" data-subagent-name="' + escAttr(subagentName) + '" onclick="window.openSubagentFromBuild(this.getAttribute(\'data-subagent-name\'))" title="' + escAttr(currentLang() === 'zh' ? '查看 Subagent 工作情况' : 'View Subagent work') + '">' +
+        iconSvg('bot', 'Subagent', 'tiny') + '<span class="conversation-work-subagent-name">' + esc(subagentName) + '</span><span class="conversation-work-subagent-status">' + esc(subagentUiStatusLabel(subagentStatus)) + '</span></button>';
+    }
+    return '<div class="conversation-work-activity-item">' + iconSvg(workToolRowIcon(item), 'tool', 'tiny') +
       '<div class="conversation-work-command-label" title="' + escAttr(workToolCommandLabel(item)) + '">' + esc(workToolCommandLabel(item)) + '</div></div>';
   }).join('');
-  var fileRows = files.map(function(file) {
-    return '<details class="conversation-work-file" data-work-detail-key="file:' + escAttr(file.path) + '"' + (files.length === 1 ? ' open' : '') + '><summary>' +
-      '<span class="conversation-work-file-name" title="' + escAttr(file.path) + '">' + esc(file.name) + '</span>' +
-      '<span class="conversation-work-file-stats"><span class="conversation-work-file-add">+' + file.added + '</span><span class="conversation-work-file-del">-' + file.deleted + '</span></span>' +
-      '<span class="conversation-work-activity-chevron" aria-hidden="true"></span></summary>' +
-      '<div class="conversation-work-file-diff">' + renderWorkFileDiff(file) + '</div></details>';
-  }).join('');
-  var filesSection = files.length ? '<details class="conversation-work-files" data-work-detail-key="files" open><summary>' + iconSvg('pencil', 'files', 'tiny') +
-    '<span>' + esc(currentLang() === 'zh' ? '已编辑的文件' : 'Edited files') + '</span><span class="conversation-work-activity-chevron" aria-hidden="true"></span></summary>' +
-    '<div class="conversation-work-file-list">' + fileRows + '</div></details>' : '';
   return '<details class="conversation-work-activity" data-activity-key="' + escAttr(activityDomKey) + '" open><summary>' +
-    iconSvg(files.length ? 'pencil' : 'square-terminal', 'tools', 'tiny') + '<span>' + esc(workToolGroupLabel(items, !!event.completed)) + '</span>' +
-    '<span class="conversation-work-activity-chevron" aria-hidden="true"></span></summary><div class="conversation-work-activity-list">' +
-    activityRows + filesSection + '</div></details>';
+    iconSvg(hasFiles ? 'pencil' : 'square-terminal', 'tools', 'tiny') + '<span>' + esc(workToolGroupLabel(items, !!event.completed)) + '</span>' +
+    '<span class="conversation-work-activity-chevron" aria-hidden="true"></span></summary><div class="conversation-work-activity-list' + (onlySubagents ? ' conversation-work-subagent-list' : '') + '">' +
+    activityRows + '</div></details>';
 }
 
 function workEventLabel(event) {
@@ -9013,6 +9196,78 @@ window.hideContextWindowTooltip = function() {
   if (tip) tip.style.display = 'none';
 };
 
+window.closeModelSelectMenu = function(options) {
+  var shell = document.getElementById('model-select-shell');
+  var button = document.getElementById('model-select-button');
+  if (shell) shell.classList.remove('open');
+  if (button) button.setAttribute('aria-expanded', 'false');
+  if (options && options.focus && button) button.focus();
+};
+
+window.toggleModelSelectMenu = function(forceOpen) {
+  var shell = document.getElementById('model-select-shell');
+  var button = document.getElementById('model-select-button');
+  if (!shell || !button) return;
+  var open = forceOpen === undefined ? !shell.classList.contains('open') : !!forceOpen;
+  shell.classList.toggle('open', open);
+  button.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) {
+    requestAnimationFrame(function() {
+      var selected = document.querySelector('#model-select-menu .model-select-menu-option.selected');
+      var first = document.querySelector('#model-select-menu .model-select-menu-option');
+      (selected || first)?.focus();
+    });
+  }
+};
+
+window.selectModelFromMenu = function(value) {
+  var sel = els['model-select'] || document.getElementById('model-select');
+  if (!sel || Array.from(sel.options).every(function(option) { return option.value !== value; })) return;
+  sel.value = value;
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+  window.syncModelSelectSurface();
+  window.closeModelSelectMenu({ focus: true });
+};
+
+window.handleModelSelectButtonKey = function(event) {
+  if (!event) return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    window.toggleModelSelectMenu(true);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    window.closeModelSelectMenu();
+  }
+};
+
+window.syncModelSelectSurface = function() {
+  var sel = els['model-select'] || document.getElementById('model-select');
+  var label = document.getElementById('model-select-label');
+  var menu = document.getElementById('model-select-menu');
+  if (!sel || !label || !menu) return;
+  var selected = sel.options[sel.selectedIndex] || sel.options[0];
+  label.textContent = selected ? selected.textContent : (state.modelLabel || state.model || t('language.auto'));
+  var html = '';
+  Array.from(sel.children).forEach(function(child) {
+    if (child.tagName === 'OPTGROUP') {
+      html += '<div class="model-select-menu-group" role="presentation">' + esc(child.label || '') + '</div>';
+      Array.from(child.children).forEach(function(option) {
+        html += '<button type="button" class="model-select-menu-option' + (option.value === sel.value ? ' selected' : '') + '" role="option" aria-selected="' + (option.value === sel.value ? 'true' : 'false') + '" data-value="' + escAttr(option.value) + '" onclick="window.selectModelFromMenu(this.getAttribute(\'data-value\'))">' + esc(option.textContent || option.value) + '</button>';
+      });
+      return;
+    }
+    if (child.tagName === 'OPTION') {
+      html += '<button type="button" class="model-select-menu-option' + (child.value === sel.value ? ' selected' : '') + '" role="option" aria-selected="' + (child.value === sel.value ? 'true' : 'false') + '" data-value="' + escAttr(child.value) + '" onclick="window.selectModelFromMenu(this.getAttribute(\'data-value\'))">' + esc(child.textContent || child.value) + '</button>';
+    }
+  });
+  menu.innerHTML = html;
+};
+
+document.addEventListener('pointerdown', function(event) {
+  var shell = document.getElementById('model-select-shell');
+  if (shell && shell.classList.contains('open') && !shell.contains(event.target)) window.closeModelSelectMenu();
+});
+
 window.refreshModelSelect = function(options) {
   var sel = els['model-select'] || document.getElementById('model-select');
   if (!sel) return;
@@ -9022,6 +9277,7 @@ window.refreshModelSelect = function(options) {
     var minimalLabel = state.modelLabel || (minimalValue === 'auto' ? t('language.auto') : minimalValue) || t('language.auto');
     sel.innerHTML = '<option value="' + esc(minimalValue) + '">' + esc(minimalLabel) + '</option>';
     sel.value = minimalValue;
+    window.syncModelSelectSurface();
     return;
   }
   var modelOpts = '';
@@ -9066,6 +9322,7 @@ window.refreshModelSelect = function(options) {
     if (state.model && api.setModel) api.setModel(state.model).catch(function(){});
   }
   if (state.model) sel.value = state.model;
+  window.syncModelSelectSurface();
 };
 
 // === Send Message ===
@@ -13370,7 +13627,20 @@ window.renderSubagentList = function() {
       '</button>';
   }
   container.innerHTML = html;
+  window.refreshSubagentBuildChips();
   window.scheduleSubagentStateRefresh();
+};
+
+window.refreshSubagentBuildChips = function() {
+  var chips = document.querySelectorAll('.conversation-work-subagent-chip[data-subagent-name]');
+  for (var i = 0; i < chips.length; i++) {
+    var chip = chips[i];
+    var record = findSubagentUiRecord(chip.getAttribute('data-subagent-name'));
+    var status = String(record && record.status || 'accepted');
+    chip.classList.toggle('completed', status === 'completed');
+    var statusEl = chip.querySelector('.conversation-work-subagent-status');
+    if (statusEl) statusEl.textContent = subagentUiStatusLabel(status);
+  }
 };
 
 window.scheduleSubagentStateRefresh = function() {
@@ -13389,6 +13659,26 @@ window.scheduleSubagentStateRefresh = function() {
       window.renderSubagentList();
     }).catch(function(){});
   }, 1200);
+};
+
+window.openSubagentFromBuild = function(name) {
+  var requested = String(name || '').trim();
+  var openLatest = function() {
+    var agent = findSubagentUiRecord(requested);
+    if (!agent) {
+      showUiNotice((currentLang() === 'zh' ? '尚未找到 Subagent：' : 'Subagent is not available yet: ') + requested, 'error', 'subagent-build-' + requested);
+      return false;
+    }
+    window.openSubagentHistory(agent.id || agent.name);
+    return true;
+  };
+  if (!api.getState) return Promise.resolve(openLatest());
+  var target = currentConversationTarget();
+  return api.getState(target).then(function(snapshot) {
+    if (snapshot && Array.isArray(snapshot.subagents)) state.subagents = snapshot.subagents;
+    window.refreshSubagentBuildChips();
+    return openLatest();
+  }).catch(function() { return openLatest(); });
 };
 
 window.openSubagentHistory = function(id) {
@@ -14356,36 +14646,108 @@ window.initMemoryLabOverview = function() {
   var stage = document.getElementById('memory-lab-overview-stage');
   if (!graph || !stage) return;
   if (state.memoryLabOverviewAnimation) cancelAnimationFrame(state.memoryLabOverviewAnimation);
+  state.memoryLabOverviewAnimation = null;
   var rect = stage.getBoundingClientRect();
   if (!state.memoryLabOverviewCamera) state.memoryLabOverviewCamera = { x: rect.width / 2, y: rect.height / 2, scale: 0.88 };
+  state.memoryLabOverviewSimulationFrames = 180;
+  state.memoryLabOverviewPanActive = false;
   state.memoryLabOverviewNodeMap = {};
   for (var i = 0; i < graph.nodes.length; i++) {
     graph.nodes[i].vx = graph.nodes[i].vx || 0;
     graph.nodes[i].vy = graph.nodes[i].vy || 0;
     state.memoryLabOverviewNodeMap[graph.nodes[i].id] = graph.nodes[i];
   }
+  var nodeElements = stage.querySelectorAll('.memory-lab-overview-node');
+  for (var n = 0; n < nodeElements.length; n++) {
+    nodeElements[n].addEventListener('mouseenter', function(event) { window.showMemoryLabOverviewTip(event.currentTarget.dataset.id); });
+    nodeElements[n].addEventListener('mouseleave', window.hideMemoryLabOverviewTip);
+    nodeElements[n].addEventListener('focus', function(event) { window.showMemoryLabOverviewTip(event.currentTarget.dataset.id); });
+    nodeElements[n].addEventListener('blur', window.hideMemoryLabOverviewTip);
+  }
   var camera = state.memoryLabOverviewCamera;
   var pan = null;
+  var activePointerId = null;
+  function finishPan(event) {
+    pan = null;
+    state.memoryLabOverviewPanActive = false;
+    var pointerId = event && Number.isFinite(event.pointerId) ? event.pointerId : activePointerId;
+    if (pointerId !== null && stage.hasPointerCapture && stage.hasPointerCapture(pointerId)) {
+      try { stage.releasePointerCapture(pointerId); } catch (_) {}
+    }
+    activePointerId = null;
+    window.requestMemoryLabOverviewFrame();
+  }
   stage.onpointerdown = function(event) {
     if (event.target.closest('.memory-lab-overview-node') || event.target.closest('.memory-lab-overview-actions')) return;
     pan = { sx: event.clientX, sy: event.clientY, ox: camera.x, oy: camera.y };
+    activePointerId = event.pointerId;
+    state.memoryLabOverviewPanActive = true;
     stage.setPointerCapture(event.pointerId);
   };
   stage.onpointermove = function(event) {
     if (!pan) return;
+    if (event.buttons === 0) { finishPan(event); return; }
     camera.x = pan.ox + event.clientX - pan.sx;
     camera.y = pan.oy + event.clientY - pan.sy;
+    window.requestMemoryLabOverviewFrame();
   };
-  stage.onpointerup = function() { pan = null; };
+  stage.onpointerup = finishPan;
+  stage.onpointercancel = finishPan;
+  stage.onlostpointercapture = function() { pan = null; activePointerId = null; state.memoryLabOverviewPanActive = false; };
   stage.onwheel = function(event) {
     event.preventDefault();
     var old = camera.scale;
-    var next = Math.max(0.36, Math.min(1.65, old * (event.deltaY < 0 ? 1.08 : 0.92)));
+    // No user-facing zoom ceiling or floor: keep only numerical guards that
+    // prevent a zero/Infinity camera matrix after extreme wheel input.
+    var next = old * Math.exp(-event.deltaY * 0.0014);
+    if (!Number.isFinite(next)) next = event.deltaY < 0 ? 10000 : 0.0001;
+    next = Math.max(0.0001, Math.min(10000, next));
     camera.x = event.clientX - (event.clientX - camera.x) * (next / old);
     camera.y = event.clientY - (event.clientY - camera.y) * (next / old);
     camera.scale = next;
+    window.requestMemoryLabOverviewFrame();
   };
-  window.renderMemoryLabOverviewFrame();
+  window.requestMemoryLabOverviewFrame();
+};
+
+window.requestMemoryLabOverviewFrame = function() {
+  if (state.memoryLabOverviewAnimation) return;
+  state.memoryLabOverviewAnimation = requestAnimationFrame(function() {
+    state.memoryLabOverviewAnimation = null;
+    window.renderMemoryLabOverviewFrame();
+  });
+};
+
+window.showMemoryLabOverviewTip = function(id) {
+  state.memoryLabOverviewHover = id || '';
+  window.updateMemoryLabOverviewTip();
+};
+
+window.hideMemoryLabOverviewTip = function() {
+  state.memoryLabOverviewHover = '';
+  var tip = document.getElementById('memory-lab-overview-tip');
+  if (tip) tip.classList.remove('show');
+};
+
+window.updateMemoryLabOverviewTip = function() {
+  var stage = document.getElementById('memory-lab-overview-stage');
+  var tip = document.getElementById('memory-lab-overview-tip');
+  var id = state.memoryLabOverviewHover || '';
+  var node = (state.memoryLabOverviewNodeMap || {})[id];
+  var button = id && stage ? stage.querySelector('.memory-lab-overview-node[data-id="' + CSS.escape(id) + '"]') : null;
+  if (!stage || !tip || !stage.classList.contains('zoom-dots') || !node || !button) {
+    if (tip) tip.classList.remove('show');
+    return;
+  }
+  var name = tip.querySelector('.memory-lab-overview-tip-name');
+  var type = tip.querySelector('.memory-lab-overview-tip-type');
+  if (name) name.textContent = node.name || '';
+  if (type) type.textContent = node.type || '';
+  tip.classList.add('show');
+  var x = Number.parseFloat(button.style.left) || button.offsetLeft;
+  var y = Number.parseFloat(button.style.top) || button.offsetTop;
+  tip.style.left = Math.max(8, Math.min(stage.clientWidth - tip.offsetWidth - 22, x)) + 'px';
+  tip.style.top = Math.max(tip.offsetHeight / 2 + 8, Math.min(stage.clientHeight - tip.offsetHeight / 2 - 8, y)) + 'px';
 };
 
 window.memoryLabOverviewFocusData = function(focusId) {
@@ -14435,36 +14797,41 @@ window.renderMemoryLabOverviewFrame = function() {
   if (!graph || !stage || !svg) return;
   var camera = state.memoryLabOverviewCamera || { x: stage.clientWidth / 2, y: stage.clientHeight / 2, scale: 0.88 };
   function screen(node) { return { x: camera.x + node.x * camera.scale, y: camera.y + node.y * camera.scale }; }
-  for (var i = 0; i < graph.nodes.length; i++) { graph.nodes[i].fx = 0; graph.nodes[i].fy = 0; }
-  for (var a = 0; a < graph.nodes.length; a++) {
-    for (var b = a + 1; b < graph.nodes.length; b++) {
-      var na = graph.nodes[a], nb = graph.nodes[b];
-      var dx = na.x - nb.x, dy = na.y - nb.y, d2 = dx * dx + dy * dy + 700, d = Math.sqrt(d2), force = 52000 / d2;
-      if (!na.fixed) { na.fx += dx / d * force; na.fy += dy / d * force; }
-      if (!nb.fixed) { nb.fx -= dx / d * force; nb.fy -= dy / d * force; }
+  var simulate = Number(state.memoryLabOverviewSimulationFrames || 0) > 0 && !state.memoryLabOverviewPanActive;
+  if (simulate) {
+    state.memoryLabOverviewSimulationFrames--;
+    for (var i = 0; i < graph.nodes.length; i++) { graph.nodes[i].fx = 0; graph.nodes[i].fy = 0; }
+    for (var a = 0; a < graph.nodes.length; a++) {
+      for (var b = a + 1; b < graph.nodes.length; b++) {
+        var na = graph.nodes[a], nb = graph.nodes[b];
+        var dx = na.x - nb.x, dy = na.y - nb.y, d2 = dx * dx + dy * dy + 700, d = Math.sqrt(d2), force = 52000 / d2;
+        if (!na.fixed) { na.fx += dx / d * force; na.fy += dy / d * force; }
+        if (!nb.fixed) { nb.fx -= dx / d * force; nb.fy -= dy / d * force; }
+      }
+    }
+    for (var e = 0; e < graph.edges.length; e++) {
+      var edge = graph.edges[e], source = map[edge[0]], target = map[edge[1]];
+      if (!source || !target) continue;
+      var edx = target.x - source.x, edy = target.y - source.y, dist = Math.hypot(edx, edy) || 1;
+      var wanted = edge[0] === 'anchor' ? 220 : edge[2] === 'component' ? 135 : 165;
+      var maxLen = edge[0] === 'anchor' ? 310 : edge[2] === 'component' ? 220 : 250;
+      var spring = (Math.min(dist, maxLen) - wanted) * 0.018;
+      if (!source.fixed) { source.fx += edx / dist * spring; source.fy += edy / dist * spring; }
+      if (!target.fixed) { target.fx -= edx / dist * spring; target.fy -= edy / dist * spring; }
+    }
+    for (var n = 0; n < graph.nodes.length; n++) {
+      var node = graph.nodes[n];
+      if (node.fixed) continue;
+      node.fx += -node.x * 0.0007;
+      node.fy += -node.y * 0.0007;
+      node.vx = ((node.vx || 0) + node.fx) * 0.86;
+      node.vy = ((node.vy || 0) + node.fy) * 0.86;
+      node.x += node.vx;
+      node.y += node.vy;
     }
   }
-  for (var e = 0; e < graph.edges.length; e++) {
-    var edge = graph.edges[e], source = map[edge[0]], target = map[edge[1]];
-    if (!source || !target) continue;
-    var edx = target.x - source.x, edy = target.y - source.y, dist = Math.hypot(edx, edy) || 1;
-    var wanted = edge[0] === 'anchor' ? 220 : edge[2] === 'component' ? 135 : 165;
-    var maxLen = edge[0] === 'anchor' ? 310 : edge[2] === 'component' ? 220 : 250;
-    var spring = (Math.min(dist, maxLen) - wanted) * 0.018;
-    if (!source.fixed) { source.fx += edx / dist * spring; source.fy += edy / dist * spring; }
-    if (!target.fixed) { target.fx -= edx / dist * spring; target.fy -= edy / dist * spring; }
-  }
-  for (var n = 0; n < graph.nodes.length; n++) {
-    var node = graph.nodes[n];
-    if (node.fixed) continue;
-    node.fx += -node.x * 0.0007;
-    node.fy += -node.y * 0.0007;
-    node.vx = ((node.vx || 0) + node.fx) * 0.86;
-    node.vy = ((node.vy || 0) + node.fy) * 0.86;
-    node.x += node.vx;
-    node.y += node.vy;
-  }
-  var focusId = state.memoryLabOverviewFocus || (state.memoryLabSelectedTag ? 'tag:' + state.memoryLabSelectedTag : '');
+  stage.classList.toggle('zoom-dots', camera.scale < 0.28);
+  var focusId = state.memoryLabOverviewFocus || '';
   var focusData = focusId ? window.memoryLabOverviewFocusData(focusId) : null;
   var nodeEls = stage.querySelectorAll('.memory-lab-overview-node');
   for (var k = 0; k < nodeEls.length; k++) {
@@ -14477,6 +14844,7 @@ window.renderMemoryLabOverviewFrame = function() {
     el.classList.toggle('focus', el.dataset.id === focusId);
     el.classList.toggle('dim', !!focusData && !focusData.nodes.has(el.dataset.id));
   }
+  window.updateMemoryLabOverviewTip();
   var paths = '';
   for (var m = 0; m < graph.edges.length; m++) {
     var ee = graph.edges[m], s = map[ee[0]], tnode = map[ee[1]];
@@ -14493,24 +14861,36 @@ window.renderMemoryLabOverviewFrame = function() {
     }
   }
   svg.innerHTML = paths;
-  if (focusId && map[focusId]) {
+  var needsFocusFrame = false;
+  if (focusId && map[focusId] && !state.memoryLabOverviewPanActive) {
     var f = map[focusId];
-    camera.x += (stage.clientWidth / 2 - f.x * camera.scale - camera.x) * 0.06;
-    camera.y += (stage.clientHeight / 2 - f.y * camera.scale - camera.y) * 0.06;
+    var focusDx = stage.clientWidth / 2 - f.x * camera.scale - camera.x;
+    var focusDy = stage.clientHeight / 2 - f.y * camera.scale - camera.y;
+    camera.x += focusDx * 0.06;
+    camera.y += focusDy * 0.06;
+    needsFocusFrame = Math.abs(focusDx) > 0.35 || Math.abs(focusDy) > 0.35;
   }
   var status = document.getElementById('memory-lab-overview-status');
   if (status) {
     var selected = focusId && map[focusId] ? map[focusId].name : '';
     status.textContent = selected ? t('memoryLab.selected') + ': ' + selected : t('memoryLab.unselected');
   }
-  state.memoryLabOverviewAnimation = requestAnimationFrame(window.renderMemoryLabOverviewFrame);
+  if (Number(state.memoryLabOverviewSimulationFrames || 0) > 0 || needsFocusFrame) window.requestMemoryLabOverviewFrame();
 };
 
 window.selectMemoryLabOverviewNode = function(id) {
   var map = state.memoryLabOverviewNodeMap || {};
   var node = map[id];
   if (!node) return;
-  state.memoryLabOverviewFocus = state.memoryLabOverviewFocus === id ? '' : id;
+  var selected = state.memoryLabOverviewFocus === id;
+  if (selected) {
+    state.memoryLabOverviewFocus = '';
+    if (node.tag && state.memoryLabSelectedTag === node.tag) state.memoryLabSelectedTag = '';
+    if (node.slug && state.memoryLabSelectedComponent === node.slug) state.memoryLabSelectedComponent = '';
+    window.requestMemoryLabOverviewFrame();
+    return;
+  }
+  state.memoryLabOverviewFocus = id;
   if (node.tag) {
     state.memoryLabSelectedTag = node.tag;
     state.memoryLabSelectedComponent = '';
@@ -14519,6 +14899,7 @@ window.selectMemoryLabOverviewNode = function(id) {
     state.memoryLabSelectedComponent = node.slug;
     window.loadMemoryLab(node.slug);
   }
+  window.requestMemoryLabOverviewFrame();
 };
 
 window.setMemoryLabOverviewMode = function(mode) {
@@ -14527,6 +14908,9 @@ window.setMemoryLabOverviewMode = function(mode) {
 
 window.clearMemoryLabOverviewFocus = function() {
   state.memoryLabOverviewFocus = '';
+  state.memoryLabSelectedTag = '';
+  state.memoryLabSelectedComponent = '';
+  window.requestMemoryLabOverviewFrame();
 };
 
 window.resetMemoryLabOverview = function() {
@@ -15956,6 +16340,7 @@ function schedulePostStartupUiRendering() {
   if (els['model-select']) {
     els['model-select'].addEventListener('change', async function() {
       state.model = this.value;
+      window.syncModelSelectSurface();
       await api.setModel(state.model);
     });
   }

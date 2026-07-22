@@ -4406,7 +4406,11 @@ export class Agent {
         `Workspace: ${workspacePath}`,
         prompt,
       ].filter(Boolean).join('\n\n');
-      const tokens = await this.withTimeout(child.process(delegatedPrompt), 120000);
+      // Peer work is intentionally not capped by an independent two-minute
+      // timer. Long tool calls and multi-turn research remain owned by the
+      // parent run's cooperative cancellation boundary, which propagates
+      // through activePeerAgents without orphaning or falsely failing the peer.
+      const tokens = await child.process(delegatedPrompt);
       const result = tokens.map(t => t.text || '').join('').trim();
       return result || '[Subagent] Completed with empty response.';
     } catch (e) {

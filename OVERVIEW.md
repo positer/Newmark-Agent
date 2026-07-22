@@ -1,5 +1,11 @@
 # Newmark Agent Overview
 
+## dev-0.1.4 UI and Runtime Follow-up (2026-07-22)
+
+The latest maintenance follow-up makes title-bar minimize an ordinary operating-system taskbar minimize; only the configured close behavior may hide the application to the tray. Build tool groups now place each edited file directly at its chronological tool row, where the filename itself expands its red/green line diff, and exact Skill or MCP targets are named in the same Build activity stream. Subagent calls render as status-aware Build chips; clicking one refreshes the owning conversation snapshot and opens that peer's work history. Peer agents no longer inherit an independent hard-coded two-minute execution cutoff: they remain under the parent run's cooperative cancellation boundary.
+
+Renderer surfaces now use theme-aware notice tokens in both dark and light modes, while the bottom model selector uses an accessible rounded Newmark listbox rather than the square native Windows popup. Memory Lab overview selection is toggleable, fast drags release pointer capture on every terminal path, graph layout settles instead of running an unbounded all-pairs loop, wheel zoom has no user-facing limit, and sufficiently distant nodes collapse into colored dots whose tag or component name appears in an immediate Newmark tooltip on hover or keyboard focus. The desktop Memory Lab update IPC now also preserves `tagPaths` instead of flattening hierarchy metadata. Verification and release evidence is recorded in `archive/20260722-160639-dev-0.1.4-ui-runtime-followup.md`.
+
 ## Current UI and Validation Maintenance (2026-07-22)
 
 The global `Agent.md` editor now uses Newmark's semantic glass/control, border, radius, typography, placeholder, hover, and focus-glow tokens instead of Chromium's unstyled white textarea. The model-validation progress note is registered in English and Chinese. Validation is a single shared Agent task: repeated UI clicks reopen the progress surface and await the existing promise rather than starting duplicate provider probes. Force-stopped Build blocks retain user-controlled collapse state across runtime and snapshot terminal updates.

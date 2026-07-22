@@ -214,6 +214,7 @@ async function runUiCheck(root) {
       name: 'release-ui-memory',
       description: 'Release UI Memory Lab smoke component.',
       tags: ['#Release-Smoke', '#Agent-Skill'],
+      tagPaths: [['#Release', '#Release-Smoke']],
       content: '# Release UI Memory\\n\\nReleaseMemoryNeedle core markdown.',
       kind: 'folder'
     })`, 30000);
@@ -239,16 +240,37 @@ async function runUiCheck(root) {
         !document.querySelector('.memory-lab-links');
     })()`, 30000, 'Memory Lab overview graph rendered without legacy connector container');
     await waitFor(cdp, `(() => {
-      const nodes = Array.from(document.querySelectorAll('.memory-lab-overview-node')).map(n => n.innerText);
-      return nodes.some(t => t.includes('#Release')) &&
-        nodes.some(t => t.includes('#Release-Smoke')) &&
+      const nodes = Array.from(document.querySelectorAll('.memory-lab-overview-node')).map(n => n.innerText.trim());
+      return nodes.some(t => t === '#Release-Smoke') &&
         nodes.some(t => t.includes('release-ui-memory'));
     })()`, 30000, 'Memory Lab overview graph contains real tag and component nodes');
-    await evaluate(cdp, `window.selectMemoryLabTag('#Release')`, 30000);
+    await evaluate(cdp, `(() => {
+      window.state.memoryLabOverviewCamera.scale = 0.2;
+      window.requestMemoryLabOverviewFrame();
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => document.querySelector('.memory-lab-overview-stage')?.classList.contains('zoom-dots'))()`, 30000, 'Memory Lab distant zoom renders solid dots');
+    await evaluate(cdp, `(() => {
+      const node = document.querySelector('.memory-lab-overview-node[data-id="tag:#Release-Smoke"]');
+      node?.dispatchEvent(new MouseEvent('mouseenter'));
+      return !!node;
+    })()`, 30000);
+    await waitFor(cdp, `(() => {
+      const tip = document.querySelector('#memory-lab-overview-tip');
+      return !!tip && tip.classList.contains('show') && tip.innerText.includes('#Release-Smoke');
+    })()`, 30000, 'Memory Lab solid dot hover shows the tag name');
+    await evaluate(cdp, `window.hideMemoryLabOverviewTip(); window.state.memoryLabOverviewCamera.scale = 0.88; window.requestMemoryLabOverviewFrame()`, 30000);
+    await evaluate(cdp, `window.selectMemoryLabOverviewNode('tag:#Release-Smoke')`, 30000);
     await waitFor(cdp, `(() => {
       const status = document.querySelector('#memory-lab-overview-status');
-      return !!status && status.innerText.includes('#Release');
-    })()`, 30000, 'Memory Lab overview search/tag selection focuses overview node');
+      return !!status && status.innerText.includes('#Release-Smoke');
+    })()`, 30000, 'Memory Lab overview node selection focuses the chosen tag');
+    await evaluate(cdp, `window.selectMemoryLabOverviewNode('tag:#Release-Smoke')`, 30000);
+    await waitFor(cdp, `(() => {
+      const status = document.querySelector('#memory-lab-overview-status');
+      return !!status && !status.innerText.includes('#Release-Smoke') && !window.state.memoryLabSelectedTag;
+    })()`, 30000, 'Memory Lab selected overview tag toggles off');
+    await evaluate(cdp, `window.selectMemoryLabOverviewNode('tag:#Release')`, 30000);
     await evaluate(cdp, `window.switchMemoryLabView('detail')`, 30000);
     await waitFor(cdp, `(() => !!document.querySelector('.memory-lab-graph') && !document.querySelector('.memory-lab-links'))()`, 30000, 'Memory Lab detail graph rendered without connector lines');
     await waitFor(cdp, `(() => {

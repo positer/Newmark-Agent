@@ -324,6 +324,19 @@ async function main() {
   assert(uiHtml.includes('.memory-lab-graph') && uiHtml.includes("t('memoryLab.parents')") && uiHtml.includes("t('memoryLab.children')") && uiHtml.includes("t('memoryLab.rootTags')") && !uiHtml.includes('memoryLabConnectionSvg') && !uiHtml.includes('memory-lab-links'), 'ui html: Memory Lab renders centered parent-child tag graph without connector lines and shows root tags at top-level');
   assert(uiHtml.includes('memory-lab-search-input') && uiHtml.includes('window.updateMemoryLabSearch') && uiHtml.includes("t('memoryLab.search')"), 'ui html: Memory Lab exposes tag search and jump controls');
   assert(uiHtml.includes('memory-lab-view-menu') && uiHtml.includes('window.switchMemoryLabView = function(view)') && uiHtml.includes("t('memoryLab.overview')") && uiHtml.includes("t('memoryLab.detail')") && uiHtml.includes('memory-lab-overview-stage') && uiHtml.includes('window.buildMemoryLabOverviewGraph'), 'ui html: Memory Lab has switchable overview/detail views with overview graph renderer');
+  assert(uiHtml.includes("var selected = state.memoryLabOverviewFocus === id")
+    && uiHtml.includes("if (node.tag && state.memoryLabSelectedTag === node.tag) state.memoryLabSelectedTag = ''")
+    && uiHtml.includes("var focusId = state.memoryLabOverviewFocus || ''")
+    && uiHtml.includes('stage.onpointercancel = finishPan')
+    && uiHtml.includes('stage.onlostpointercapture')
+    && uiHtml.includes('event.buttons === 0')
+    && uiHtml.includes('window.requestMemoryLabOverviewFrame')
+    && uiHtml.includes('state.memoryLabOverviewSimulationFrames = 180')
+    && uiHtml.includes('old * Math.exp(-event.deltaY * 0.0014)')
+    && uiHtml.includes("stage.classList.toggle('zoom-dots', camera.scale < 0.28)")
+    && uiHtml.includes('.memory-lab-overview-stage.zoom-dots .memory-lab-overview-node')
+    && uiHtml.includes('showMemoryLabOverviewTip')
+    && uiHtml.includes('updateMemoryLabOverviewTip'), 'ui html: Memory Lab overview toggles selected tags off, releases fast pointer drags, renders on demand, permits full-range zoom, collapses distant nodes to solid dots, and names dots on hover');
   assert(uiHtml.includes('animate-from-left') && uiHtml.includes('animate-from-right') && uiHtml.includes('@keyframes memory-lab-enter-left') && uiHtml.includes('memoryLabNavDirection'), 'ui html: Memory Lab tag navigation has smooth directional animation');
   assert(uiHtml.includes("window.openSubWin(t('model.addProvider')") && uiHtml.includes("window.openSubWin(t('model.addModel')") && uiHtml.includes("window.openSubWin(t('model.fuzzy')"), 'ui html: model secondary windows use i18n titles');
   assert(uiHtml.includes('window.setAutoSwitchMode') && uiHtml.includes("t('model.autoSwitchOff')") && uiHtml.includes("t('model.autoSwitchAll')") && uiHtml.includes("t('model.autoSwitchProvider')"), 'ui html: model settings expose off/full/provider Auto switch modes');
@@ -412,6 +425,16 @@ async function main() {
   assert(uiHtml.includes('[data-theme="light"] #goal-bar') && uiHtml.includes('rgba(255,255,255,0.82) 36%') && uiHtml.includes('[data-theme="light"] #goal-bar.goal-paused'), 'ui light theme: Goal emphasis fades into a white glass mask instead of the dark stack surface');
   assert(uiHtml.includes('[data-theme="light"] .memory-lab-overview-node') && uiHtml.includes('[data-theme="light"] .memory-lab-overview-title') && uiHtml.includes('[data-theme="light"] .memory-lab-node.selected') && uiHtml.includes('[data-theme="light"] .memory-lab-overview-grid'), 'ui light theme: Memory Lab controls, nodes, status pills, and graph grid use harmonious light surfaces');
   assert(uiHtml.includes("activity.key === 'memory_lab'") && uiHtml.includes('更新了记忆') && uiHtml.includes('Updated memory'), 'ui work run: Memory Lab rebuild receipt is rendered only as an in-block tool activity completion');
+  assert(uiHtml.includes("name === 'skill' || name === 'skill_download'")
+    && uiHtml.includes("'加载 Skill · '")
+    && uiHtml.includes("'调用 MCP · '")
+    && uiHtml.includes('function workToolRowIcon(item)'), 'ui work run: Skill and MCP activity rows expose the exact loaded skill or invoked MCP target inside the Build block');
+  assert(uiHtml.includes('conversation-work-subagent-chip')
+    && uiHtml.includes("if (toolName === 'task')")
+    && uiHtml.includes('window.openSubagentFromBuild')
+    && uiHtml.includes('api.getState(target).then')
+    && uiHtml.includes('window.openSubagentHistory(agent.id || agent.name)')
+    && uiHtml.includes('window.refreshSubagentBuildChips'), 'ui work run: task calls render status-aware Subagent chips inside the Build block and refresh the exact peer snapshot before opening its work history');
   assert(uiHtml.includes('state.subWindowStack.push') && uiHtml.includes('state.subWindowStack && state.subWindowStack.pop') && uiHtml.includes("header.addEventListener('pointerdown'") && uiHtml.includes('Math.min(window.innerWidth - rect.width - padding') && uiHtml.includes('Math.min(window.innerHeight - rect.height - padding'), 'ui sub-windows: nested views restore their parent and pointer dragging is clamped to the visible viewport');
   assert(uiHtml.includes("state.activeSubWindowView.name === 'plugins'") && uiHtml.includes('if (refreshingPlugins) state.restoringSubWindow = true;'), 'ui Skills Market: sibling plugin tabs refresh in place instead of polluting the parent navigation stack');
   assert(uiHtml.includes('window.showFlowEditor = function(expandedIndex)') && uiHtml.includes("renderFlowItem(state.flowWorks[i], i, Number(expandedIndex) === i)") && uiHtml.includes("state.activeSubWindowView = { name: 'flowNew' }") && uiHtml.includes('window.showFlowEditor(workIdx)'), 'ui Flow editor: same-level rerenders do not stack windows and newly added controls remain expanded');
@@ -687,14 +710,26 @@ async function main() {
     && uiHtml.includes("presentedEvents.push({ type: 'tool_group'")
     && uiHtml.includes("if (type === 'tool_group') return renderWorkToolGroup(event, eventIndex)")
     && uiHtml.includes('conversation-work-command-label')
-    && uiHtml.includes('conversation-work-files')
+    && uiHtml.includes('conversation-work-file-inline')
     && uiHtml.includes('conversation-work-file-stats')
     && uiHtml.includes('conversation-work-file-line del')
     && uiHtml.includes('conversation-work-file-line add')
     && uiHtml.includes('data-work-detail-key=')
     && uiHtml.includes('activityOpenStates[refreshedKey]')
-    && uiHtml.includes("'已编辑的文件'")
+    && !uiHtml.includes("'已编辑的文件'")
+    && uiHtml.includes("'edit:' + String(item.id || item.toolCallId || itemIndex) + ':' + edited.path")
     && uiHtml.includes("return (currentLang() === 'zh' ? 'Ran ' : 'Ran ') + command"), 'Build transcript tool group: renders one expandable command/edit summary, chronological command rows, edited-file stats, and nested red/green line diffs');
+  assert(uiHtml.includes('--notice-bg: rgba(18,20,28,.96)')
+    && uiHtml.includes('--notice-bg: rgba(255,255,255,.96)')
+    && uiHtml.includes('background: var(--notice-bg)')
+    && uiHtml.includes('color: var(--notice-error-text)'), 'UI notices: error popups use theme-aware Newmark surface and semantic error tokens in dark and light modes');
+  assert(uiHtml.includes('class="model-select-shell"')
+    && uiHtml.includes('class="model-select-menu"')
+    && uiHtml.includes('border-radius: var(--radius-lg)')
+    && uiHtml.includes('window.syncModelSelectSurface')
+    && uiHtml.includes("role=\"option\" aria-selected=\""), 'Model menu: the bottom selector uses an accessible rounded Newmark popup instead of the square native platform list');
+  assert(agentTs.includes('const tokens = await child.process(delegatedPrompt);')
+    && !agentTs.includes('this.withTimeout(child.process(delegatedPrompt), 120000)'), 'Subagents: peer execution has no independent hard-coded two-minute timeout and remains under cooperative parent cancellation');
   assert(agentTs.includes('expanded: raw.expanded === undefined ? true : !!raw.expanded') && agentTs.includes('activeRun.expanded = true') && uiHtml.includes("run.status = 'completed'; run.endedAt") && !uiHtml.includes("run.status = 'completed'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = false"), 'Build transcript visibility: completed, errored, and interrupted runs remain expanded by default while preserving manual collapse state');
   assert(agentTs.includes("listArchives(scope: 'workspace' | 'all' = 'workspace')") && agentTs.includes('archiveRoots()') && agentTs.includes('resolveArchivePath') && preloadTs.includes('listArchives: (scope?: string)') && mainTs.includes("scope === 'all' ? 'all' : 'workspace'") && uiHtml.includes("api.listArchives('workspace')") && uiHtml.includes("api.listArchives('all')") && uiHtml.includes('state.workspaceArchives') && uiHtml.includes('state.allArchives'), 'archives: right sidebar lists current workspace archives while Settings archive can list all archives');
   assert(agentTs.includes('restoreArchivedConversation(nameOrId: string)') && agentTs.includes("kind: 'newmark-conversation-archive'") && preloadTs.includes('restoreArchive: (name: string)') && mainTs.includes("ipcMain.handle('agent:restoreArchive'") && uiHtml.includes('window.restoreArchive = function') && uiHtml.includes("t('archive.restore')"), 'archives: structured conversation manifests support conflict-safe restore from workspace and global archive UI');
@@ -800,8 +835,11 @@ async function main() {
   assert(mainTs.includes('function refreshNativeThemeIcons(): void') && !mainTs.includes('const refreshNativeThemeIcons ='), 'app icons: theme refresh is hoisted so early tray creation cannot hit a temporal-dead-zone startup failure');
   assert(mainTs.includes('startupWindow = createDesktopWindow(true, true, startupAttempt)') && mainTs.includes('mainWindow = startupWindow') && mainTs.includes('createTray();') && mainTs.includes("tray.on('click', showMainWindow)") && mainTs.includes("tray.on('double-click', showMainWindow)") && mainTs.includes('if (tray) return;'), 'tray lifecycle: creates one tray with the single startup window and reuses it while showing the promoted main window');
   assert(mainTs.includes("path.resolve(agent?.workspace.current?.path || root)") && mainTs.includes("ipcMain.handle('agent:getFileTree'"), 'file tree: defaults to the active workspace instead of exposing the ~/.Newmark runtime root and nested Roots shadows');
-  assert(mainTs.includes("agent?.config.getBool('ui', 'minimize_to_tray') ?? true") && mainTs.includes("agent?.config.getStr('general', 'close_behavior')") && mainTs.includes("ipcMain.handle('app:lifecycleState'"), 'window lifecycle: separates minimize-to-tray from close behavior and exposes a smoke-test state');
+  assert(mainTs.includes("agent?.config.getStr('general', 'close_behavior')") && mainTs.includes('win?.minimize();') && mainTs.includes('win?.hide();') && mainTs.includes("ipcMain.handle('app:lifecycleState'"), 'window lifecycle: separates taskbar minimize from close-to-tray behavior and exposes a smoke-test state');
   assert(preloadTs.includes("lifecycleState: () => ipcRenderer.invoke('app:lifecycleState')") && !uiHtml.includes("if (s.minimizeToTray) state.closeBehavior = 'minimize';"), 'window lifecycle: preload exposes lifecycle state without overwriting close behavior from minimize settings');
+  assert(mainTs.includes("ipcMain.handle('app:minimize', () =>")
+    && mainTs.includes('win?.minimize();')
+    && !mainTs.slice(mainTs.indexOf("ipcMain.handle('app:minimize', () =>"), mainTs.indexOf("ipcMain.handle('app:maximize', () =>")).includes('win?.hide()'), 'window lifecycle: title-bar minimize always enters the taskbar while close-to-tray remains a separate close behavior');
   assert(nativeToolsTs.includes('NATIVE_TOOL_CATALOG') && nativeToolsTs.includes("name: 'computer_use'") && nativeToolsTs.includes("name: 'terminal_takeover'") && nativeToolsTs.includes("name: 'subagent_read'") && nativeToolsTs.includes(".filter(tool => (tool.availability || 'configurable') === 'configurable')") && nativeToolsTs.includes('normalizeNativeToolEnabled') && configTs.includes('defaultNativeToolEnabled()') && configTs.includes("tools:") && toolsTs.includes('isNativeToolEnabled') && mainTs.includes('nativeToolCatalogForState') && mainTs.includes("case 'nativeTools'"), 'native tools settings: configurable catalog is exposed while required/mode-scoped tools stay system-managed and runtime-gated');
   assert(nativeToolsTs.includes("name: 'ssh_workspace'") && toolsTs.includes("t('ssh_workspace'") && toolsTs.includes('new SshManager') && preloadTs.includes('createSshWorkspace') && mainTs.includes("ssh:createWorkspace") && uiHtml.includes('ws-ssh-host') && uiHtml.includes('validateSshWorkspaceForm'), 'OpenSSH workspace: native tool, IPC, preload, and new-workspace UI are wired');
   assert(uiHtml.includes('id="title-app-logo"') && uiHtml.includes('id="title-app-icon"') && uiHtml.includes('src="../assets/app-icon-dark-64.png"') && uiHtml.includes('window.refreshTitlebarThemeIcon') && uiHtml.includes("state.theme === 'system' ? systemColorScheme.matches : state.theme !== 'light'") && uiHtml.includes("useDarkTheme ? '../assets/app-icon-dark-64.png' : '../assets/app-icon-light-64.png'") && uiHtml.includes("if (state.theme === 'system') applyUiAppearance()"), 'app icons: custom titlebar uses compact build-derived dark/light icons and reapplies appearance when the system scheme changes');
@@ -1004,7 +1042,7 @@ async function main() {
   assert(packageJson.includes('"release:linux-exit-lifecycle-smoke"') && fs.existsSync(path.join(process.cwd(), 'scripts', 'release-linux-exit-lifecycle-smoke.cjs')), 'release: Linux exit lifecycle smoke is registered for ghost-process and same-root relaunch verification');
   assert(uiHtml.includes("if (p.enabled === false || !p.models || !p.models.length) continue") && uiHtml.includes("if (!confirm(t('model.deleteProviderConfirm')"), 'provider settings: disabled providers are excluded from model selection and permanent deletion remains confirmed');
   assert(serverTs.includes('sanitizeProvidersForState(agent.config.providers())') && serverTs.includes("cfg.section === 'models' && cfg.key === 'providers'") && serverTs.includes('agent.updateProviders(cfg.value)') && !serverTs.includes('jsonResponse(res, agent.config)') && !serverTs.includes("Access-Control-Allow-Origin', '*'") && serverTs.includes("server.listen(PORT, '127.0.0.1'"), 'server api: redacts provider keys, preserves secrets on provider save, disables raw config export, and binds without wildcard CORS');
-  assert(mainTs.includes("ipcMain.handle('skills:refresh'") && mainTs.includes('agent.refreshSkills();') && mainTs.includes("ipcMain.handle('skills:addMarketSource'") && mainTs.includes("ipcMain.handle('memoryLab:read'") && mainTs.includes('agent.updateMemoryLab') && mainTs.includes('agent.reindexMemoryLab') && mainTs.includes('terminalInterruptTimeoutMs'), 'main ipc: refreshes skills runtime, manages market sources and Memory Lab through Agent organizer, and returns terminal timeout state');
+  assert(mainTs.includes("ipcMain.handle('skills:refresh'") && mainTs.includes('agent.refreshSkills();') && mainTs.includes("ipcMain.handle('skills:addMarketSource'") && mainTs.includes("ipcMain.handle('memoryLab:read'") && mainTs.includes('agent.updateMemoryLab') && mainTs.includes('input.tagPaths') && mainTs.includes('pathValue.map(String)') && mainTs.includes('agent.reindexMemoryLab') && mainTs.includes('terminalInterruptTimeoutMs'), 'main ipc: refreshes skills runtime, manages market sources, preserves Memory Lab tag hierarchy paths, and returns terminal timeout state');
   assert(mainTs.includes("ipcMain.handle('agent:getConversationPlan', async (_event, conversationId?: string)") && mainTs.includes("ipcMain.handle('agent:updateConversationPlan', async (_event, plan: Record<string, unknown>, conversationId?: string)") && mainTs.includes('conversationPlan: agent.getConversationPlan()'), 'main ipc: exposes and returns conversation-bound plan state');
   assert(mainTs.includes("ipcMain.handle('flow:run'") && mainTs.includes('chatMessages: agent.chatMessages') && mainTs.includes('conversations: agent.listConversationStates()'), 'main ipc: Flow run returns rendered conversation state');
   assert(mainTs.includes("ipcMain.handle('pty:kill'") && mainTs.includes('waitMs === 0') && mainTs.includes("session.proc.kill('SIGINT')"), 'main ipc: terminal interrupt timeout supports unlimited mode');

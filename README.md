@@ -54,6 +54,8 @@ The Windows MSI requests administrator elevation. Windows and Linux may show an 
 
 Application upgrades preserve existing user state under `~/.Newmark`.
 
+The current `dev-0.1.4` maintenance update also separates taskbar minimize from close-to-tray, exposes exact Skill/MCP activity, clickable Subagent work chips, and inline file diffs inside Build blocks, removes the fixed Subagent execution timeout, and improves light-theme notices, model menus, and Memory Lab overview navigation. Far-zoom Memory Lab nodes become colored dots with hover/focus name tooltips, while hierarchical `tagPaths` remain intact through desktop updates.
+
 ## Core Capabilities
 
 ### Models and Routing

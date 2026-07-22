@@ -82,6 +82,7 @@ contextBridge.exposeInMainWorld('api', {
   saveSetting: (section: string, key: string, value: unknown) => ipcRenderer.invoke('agent:saveSetting', section, key, value),
   setProviderEnabled: (providerId: string, enabled: boolean) => ipcRenderer.invoke('agent:setProviderEnabled', providerId, enabled),
   validateModels: (selected?: string[]) => ipcRenderer.invoke('agent:validateModels', selected),
+  modelValidationStatus: () => ipcRenderer.invoke('agent:modelValidationStatus'),
   fuzzyInject: (name: string, url: string, key: string, protocol?: string) => ipcRenderer.invoke('agent:fuzzyInject', name, url, key, protocol),
   githubCopilotLogin: () => ipcRenderer.invoke('github:copilotLogin'),
   listSkills: () => ipcRenderer.invoke('skills:list'),

@@ -207,6 +207,19 @@ async function verifyUnsupportedOptionalCapabilityDoesNotBlockAvailability(): Pr
   ok(result.status === 'degraded', 'unsupported optional capability degrades rather than blocks an otherwise usable model');
 }
 
+async function verifyNonExactTextStillEstablishesDegradedAvailability(): Promise<void> {
+  const adapter = successfulAdapter();
+  adapter.health = async () => ({ ok: false, status: 'unavailable', reasonCode: 'health_nonce_mismatch' });
+  adapter.textNonce = async request => ({ output: `Answer: ${request.nonce}` });
+  const result = await new ModelValidationService({ nonceFactory: () => 'NMK-COMPAT-1234' }).validate({
+    model: { provider: 'fixture', model: 'nonce-format-compatible' },
+    level: 'standard',
+    adapter,
+  });
+  ok(result.capabilities.text?.status === 'degraded', 'non-empty text that does not exactly echo the nonce is compatibility evidence');
+  ok(result.status === 'degraded', 'transient health mismatch cannot override degraded base-text availability');
+}
+
 async function verifyLegacyFalseNegativeCacheRepairsWithoutProviderCalls(): Promise<void> {
   const cache = new InMemoryModelValidationCache();
   const now = Date.UTC(2026, 6, 21, 0, 0, 0);
@@ -325,7 +338,7 @@ async function verifyHealthCapabilitySeparation(): Promise<void> {
   });
   ok(result.health?.status === 'unavailable', 'failed health check remains in the health record');
   ok(result.capabilities.text?.status === 'verified', 'health failure does not erase independently verified text capability');
-  ok(result.status === 'unavailable', 'overall usability still reflects current failed health');
+  ok(result.status === 'degraded', 'verified base text keeps the model usable while a format-sensitive health marker fails');
 
   let textCallsAfterPermanentHealthFailure = 0;
   const permanentHealthAdapter = successfulAdapter();
@@ -421,6 +434,7 @@ async function main(): Promise<void> {
   await verifyStandardOrchestrationAndConcurrency();
   await verifyStreamingRequiresTerminalEvidence();
   await verifyUnsupportedOptionalCapabilityDoesNotBlockAvailability();
+  await verifyNonExactTextStillEstablishesDegradedAvailability();
   await verifyLegacyFalseNegativeCacheRepairsWithoutProviderCalls();
   await verifyTtlAndLevelCache();
   await verifyTransientHealthDoesNotRefreshCapabilityEvidence();

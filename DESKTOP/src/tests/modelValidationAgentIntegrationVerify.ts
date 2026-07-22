@@ -146,6 +146,23 @@ async function main(): Promise<void> {
     }
 
     const agent = new Agent(root, { agentOnly: true });
+    let releaseConcurrentValidation!: () => void;
+    const concurrentGate = new Promise<void>(resolve => { releaseConcurrentValidation = resolve; });
+    const originalCatalogForConcurrency = LLMProvider.prototype.modelCatalog;
+    let concurrentCatalogCalls = 0;
+    LLMProvider.prototype.modelCatalog = async function(...args: Parameters<LLMProvider['modelCatalog']>) {
+      concurrentCatalogCalls += 1;
+      await concurrentGate;
+      return originalCatalogForConcurrency.apply(this, args);
+    };
+    const sharedA = agent.validateModels(['Fixture/fixture-model']);
+    const sharedB = agent.validateModels(['Fixture/fixture-model']);
+    ok(agent.isModelValidationRunning(), 'Agent exposes one running validation task while provider probes are pending');
+    releaseConcurrentValidation();
+    const [sharedResultA, sharedResultB] = await Promise.all([sharedA, sharedB]);
+    ok(sharedResultA === sharedResultB && concurrentCatalogCalls === 1, 'concurrent validation callers share one provider workflow and one result object');
+    ok(!agent.isModelValidationRunning(), 'shared validation task clears after settlement');
+    LLMProvider.prototype.modelCatalog = originalCatalogForConcurrency;
     const first = await agent.validateModels(['Fixture/fixture-model']);
     ok(first.length === 1 && first[0].status === 'verified', 'Agent validation maps the complete Standard probe suite to verified');
     const saved = agent.config.findDeployment({ providerId: 'fixture-provider', modelId: 'fixture-model' });

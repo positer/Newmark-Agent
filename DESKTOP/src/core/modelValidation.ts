@@ -170,6 +170,7 @@ function failureStatus(evidence: ProbeAttemptEvidence[], successes: number): Val
   const statuses = evidence.map(entry => entry.status);
   if (statuses.includes('auth_error')) return 'auth_error';
   if (statuses.includes('invalid_config')) return 'invalid_config';
+  if (statuses.includes('degraded')) return 'degraded';
   if (statuses.includes('rate_limited')) return 'rate_limited';
   return 'unavailable';
 }
@@ -888,15 +889,15 @@ function overallStatus(
   capabilities: Partial<Record<ModelCapability, CapabilityValidationRecord>>,
 ): ValidationStatus {
   if (level === 'discovered') return 'degraded';
-  if (health && health.status !== 'verified' && health.status !== 'degraded') return health.status;
   const capabilityStatuses = Object.values(capabilities).map(record => record.status);
   const textStatus = capabilities.text?.status;
   // Availability is established by the base text path. Optional Standard and
   // Extended probes describe capability support; an unsupported JSON/stream/
   // tool parameter must not make an otherwise callable model unavailable.
   if (textStatus && textStatus !== 'verified' && textStatus !== 'degraded') return textStatus;
+  if (health?.status === 'auth_error' || health?.status === 'invalid_config') return health.status;
   if (capabilityStatuses.length > 0 && capabilityStatuses.every(status => status === 'verified')) {
-    return health?.status === 'degraded' ? 'degraded' : 'verified';
+    return health && health.status !== 'verified' ? 'degraded' : 'verified';
   }
   if (textStatus === 'verified' || textStatus === 'degraded') return 'degraded';
   if (capabilityStatuses.includes('auth_error')) return 'auth_error';
@@ -1101,7 +1102,9 @@ export class ModelValidationService {
         model: { ...request.model },
         modelKey: key,
         level: LEVEL_RANK[cached.level] >= LEVEL_RANK[request.level] ? cached.level : request.level,
-        status: health.status,
+        status: health.status === 'rate_limited'
+          ? 'rate_limited'
+          : overallStatus(request.level, health, cached.capabilities),
         checkedAt,
         expiresAt,
         cacheHit: false,
@@ -1236,10 +1239,12 @@ export class ModelValidationService {
           nonce,
           instruction: 'Return exactly the supplied nonce and no other characters.',
         });
+        const output = String(observation.output || '').trim();
         return {
-          ok: String(observation.output || '').trim() === nonce,
+          ok: output === nonce,
+          status: output ? 'degraded' : undefined,
           latencyMs: observation.latencyMs,
-          reasonCode: String(observation.output || '').trim() === nonce ? undefined : 'nonce_mismatch',
+          reasonCode: output === nonce ? undefined : 'nonce_mismatch',
         };
       },
     };
@@ -1360,7 +1365,7 @@ export class ModelValidationService {
 function repairLegacyAvailabilityStatus(record: ModelValidationRecord | undefined): ModelValidationRecord | undefined {
   if (!record) return undefined;
   const baseTextUsable = record.capabilities.text?.status === 'verified' || record.capabilities.text?.status === 'degraded';
-  const healthUsable = !record.health || record.health.status === 'verified' || record.health.status === 'degraded';
-  if (!baseTextUsable || !healthUsable || (record.status !== 'invalid_config' && record.status !== 'unavailable')) return record;
+  const healthIsPermanentFailure = record.health?.status === 'auth_error' || record.health?.status === 'invalid_config';
+  if (!baseTextUsable || healthIsPermanentFailure || (record.status !== 'invalid_config' && record.status !== 'unavailable')) return record;
   return { ...record, status: 'degraded' };
 }

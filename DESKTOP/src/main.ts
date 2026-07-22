@@ -3062,6 +3062,8 @@ if (hasCliCommand) {
       return [];
     });
 
+    ipcMain.handle('agent:modelValidationStatus', () => ({ running: !!agent?.isModelValidationRunning() }));
+
     ipcMain.handle('agent:fuzzyInject', async (_event, name: string, url: string, key: string, protocol?: string) => {
       if (agent) {
         return agent.fuzzyInject(name, url, key, protocol === 'anthropic' ? 'anthropic' : protocol === 'openai' ? 'openai' : undefined);

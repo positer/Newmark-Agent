@@ -335,6 +335,7 @@ export class Agent {
   private conversationStateDirty = new Map<string, { state: StoredConversationState; ws: WorkspaceInfo | null }>();
   private systemPromptCache: { identity: string; value: string } | null = null;
   private toolDefinitionCache = new Map<string, unknown[]>();
+  private modelValidationPromise: Promise<ModelValidationResult[]> | null = null;
   private readonly rootInboxListener = (message: SubagentRootMessage) => this.deliverRootInboxMessage(message);
   public readonly agentOnly: boolean;
   public readonly runtimeActorId: string;
@@ -522,8 +523,8 @@ export class Agent {
     const rejected = new Set(['unavailable', 'auth_error', 'invalid_config']);
     return this.config.allModels()
       .map((model, index) => {
-        const validationStatus = String(model.validation?.status || '').toLowerCase();
-        const evaluationStatus = String(model.evaluation?.status || '').toLowerCase();
+        const validationStatus = effectiveModelValidationStatus(model);
+        const evaluationStatus = validationStatus === 'degraded' ? 'degraded' : String(model.evaluation?.status || '').toLowerCase();
         const level = String(model.validation?.level || '').toLowerCase();
         if (model.enabled === false || rejected.has(validationStatus) || rejected.has(evaluationStatus) || evaluationStatus.startsWith('error')) {
           return null;
@@ -3009,6 +3010,7 @@ export class Agent {
         checked_at: '',
         capabilities: {},
       };
+      const effectiveValidationStatus = effectiveModelValidationStatus(model);
       const hasStandardEvidence = validation.level === 'standard' || validation.level === 'extended';
       const supportsTools = validation.capabilities?.tool_use === true || validation.capabilities?.tools === true;
       const capabilities = new Set<string>();
@@ -3059,7 +3061,7 @@ export class Agent {
         enabled: model.enabled !== false,
         validation: {
           level: validation.level,
-          status: validation.status,
+          status: effectiveValidationStatus,
           checkedAt: validation.checked_at,
         },
         capabilities: [...capabilities],
@@ -3234,13 +3236,13 @@ export class Agent {
       ? this.activeModelConfig()
       : this.config.findModel(modelName);
     if (!model) return true;
-    const validationStatus = model.validation?.status;
+    const validationStatus = effectiveModelValidationStatus(model);
     // `discovered` means unvalidated, not a failed endpoint. Explicit fixed
     // selections remain usable for backwards compatibility; only an executed
     // Basic/Standard/Extended validation may pre-emptively mark them bad.
     if (model.validation?.level !== 'discovered'
       && (validationStatus === 'unavailable' || validationStatus === 'auth_error' || validationStatus === 'invalid_config')) return true;
-    const status = String(model?.evaluation?.status || '').toLowerCase();
+    const status = validationStatus === 'degraded' ? 'degraded' : String(model?.evaluation?.status || '').toLowerCase();
     return status === 'unavailable' || status.startsWith('error');
   }
 
@@ -3343,6 +3345,21 @@ export class Agent {
   }
 
   async validateModels(selectedNames?: string[]): Promise<ModelValidationResult[]> {
+    if (this.modelValidationPromise) return this.modelValidationPromise;
+    const validation = this.runModelValidation(selectedNames);
+    this.modelValidationPromise = validation;
+    try {
+      return await validation;
+    } finally {
+      if (this.modelValidationPromise === validation) this.modelValidationPromise = null;
+    }
+  }
+
+  isModelValidationRunning(): boolean {
+    return !!this.modelValidationPromise;
+  }
+
+  private async runModelValidation(selectedNames?: string[]): Promise<ModelValidationResult[]> {
     const selectedModels = this.config.modelsForSelections(selectedNames);
     if (!selectedModels.length) return [];
     const results: ModelValidationResult[] = [];
@@ -5333,6 +5350,21 @@ function parseDeploymentSelectionValue(value: string): DeploymentRef | null {
   } catch {
     return null;
   }
+}
+
+function effectiveModelValidationStatus(model: ModelConfig): ModelValidationSummary['status'] {
+  const raw = String(model.validation?.status || '').toLowerCase();
+  if (raw === 'auth_error') return raw;
+  const textEvidence = model.validation?.capabilities?.text === true
+    || model.validation?.capabilities?.text_input === true
+    || model.validation?.capabilities?.text_output === true
+    || model.evaluation?.text_input === true
+    || model.evaluation?.text_output === true;
+  if (textEvidence && raw === 'unavailable') return 'degraded';
+  if (!raw && String(model.validation?.level || '').toLowerCase() === 'discovered') return 'degraded';
+  return (['verified', 'degraded', 'unavailable', 'auth_error', 'rate_limited', 'invalid_config'].includes(raw)
+    ? raw
+    : 'unavailable') as ModelValidationSummary['status'];
 }
 
 function routeToolIsReadOnly(name: string, rawArgs: string): boolean {

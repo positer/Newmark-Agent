@@ -104,7 +104,7 @@ export function verifyDev009SourceContracts(): Assertion[] {
     'force_restarting',
     'showUiNotice',
     'clearUiNotice',
-    'previousExpanded',
+    'run.expanded = !run.expanded',
   ]) && hasAll(electronUtilityPool, ['setWorkRunExpanded', 'this.acquire(normalizeConversationTarget(target))'])
     && hasAll(wslPool, ['setWorkRunExpanded', 'this.acquire(normalized)'])
     && !ui.includes('Date.now() - 5000'),

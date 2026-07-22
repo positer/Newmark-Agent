@@ -1,5 +1,11 @@
 # Newmark Agent Overview
 
+## Current UI and Validation Maintenance (2026-07-22)
+
+The global `Agent.md` editor now uses Newmark's semantic glass/control, border, radius, typography, placeholder, hover, and focus-glow tokens instead of Chromium's unstyled white textarea. The model-validation progress note is registered in English and Chinese. Validation is a single shared Agent task: repeated UI clicks reopen the progress surface and await the existing promise rather than starting duplicate provider probes. Force-stopped Build blocks retain user-controlled collapse state across runtime and snapshot terminal updates.
+
+Model availability now treats persisted successful text evidence as authoritative over a transient `unavailable` aggregate, while authentication and explicit invalid-configuration failures remain blocking. Non-exact but non-empty nonce output is degraded compatibility evidence, not proof that the endpoint is unusable. This effective status is shared by fixed selection, default candidate selection, and Auto routing, repairing records such as DeepSeek v4 where `text_input/text_output=true` coexisted with an `unavailable` aggregate. Evidence is in `archive/20260722-agent-prompt-validation-lifecycle.md`.
+
 ## Current dev-0.1.4 Release (2026-07-21)
 
 The `dev-0.1.4` maintenance slice adds user-facing global configuration and prompt editing. General settings now opens `~/.Newmark/config.json` through the OS default application and provides an adjacent refresh action that reparses the file, reapplies the active workspace overrides, stops idle isolated runtimes, and reloads the renderer. The Models & Providers page ends with a debounced live editor for `~/.Newmark/agent.md`; both global and workspace prompt saves invalidate the system-prompt cache immediately. Prompt construction normalizes BOM/line endings, trims empty layers, skips exact global/workspace/custom duplicates, and documents the authoritative order as intrinsic safety/runtime policy, user-global baseline, workspace-specific refinement, custom settings prompt, then the current user message.

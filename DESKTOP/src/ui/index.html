@@ -3537,6 +3537,24 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .provider-card h4 { font-size: 12px; font-weight: 600; color: var(--text-bright); margin-bottom: 6px; }
 .provider-card.is-disabled { opacity: .72; }
 .provider-card-actions { display:flex; align-items:center; gap:5px; }
+.newmark-prompt-textarea {
+  display: block;
+  width: 100%;
+  min-height: 180px;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-border-2);
+  border-radius: var(--radius-md);
+  background: var(--control-bg);
+  color: var(--text);
+  font: 12px/1.65 var(--font-ui);
+  resize: vertical;
+  outline: none;
+  transition: border-color var(--duration-normal) var(--ease-out-expo), box-shadow var(--duration-normal) var(--ease-out-expo), background var(--duration-normal) var(--ease-out-expo);
+}
+.newmark-prompt-textarea:hover { border-color: var(--border-hover); }
+.newmark-prompt-textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+.newmark-prompt-textarea::placeholder { color: var(--text-dim); opacity: .68; }
 .provider-icon-btn { width:26px; height:26px; padding:0; display:inline-flex; align-items:center; justify-content:center; border:1px solid transparent; border-radius:var(--radius-sm); color:var(--text-dim); background:transparent; cursor:pointer; transition:color var(--duration-fast) var(--ease-out-expo),background var(--duration-fast) var(--ease-out-expo),border-color var(--duration-fast) var(--ease-out-expo); }
 .provider-icon-btn:hover { color:var(--text-bright); background:var(--control-hover-bg); border-color:var(--border-hover); }
 .provider-icon-btn:focus-visible { outline:none; color:var(--text-bright); border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-glow); }
@@ -4736,6 +4754,7 @@ var state = {
   globalAgentPrompt: '',
   globalAgentPromptLoaded: false,
   globalAgentPromptSaveTimer: null,
+  modelValidationPromise: null,
   pluginActiveTab: 'mcp',
   githubOverviewData: null,
   githubOverviewHash: '',
@@ -5037,6 +5056,7 @@ var NEWMARK_I18N = {
     'model.validationFailed': 'Validation failed',
     'model.noValidationModels': 'No models were available for validation.',
     'model.validationRequiresBaseModel': 'Add and enable a base model before running validation.',
+    'model.validationBackgroundNote': 'Validation continues in the background. You can close this window and keep using Newmark.',
     'model.globalAgentPrompt': 'Global Agent.md prompt',
     'model.globalAgentPromptDesc': 'Edits the user-level Agent.md baseline. Changes are saved automatically and apply to subsequent Agent turns.',
     'model.globalAgentPromptPlaceholder': 'Enter the global Agent prompt...',
@@ -5574,6 +5594,7 @@ var NEWMARK_I18N = {
     'model.validationFailed': '校验失败',
     'model.noValidationModels': '没有可校验的模型。',
     'model.validationRequiresBaseModel': '\u8bf7\u5148\u6dfb\u52a0\u5e76\u542f\u7528\u81f3\u5c11\u4e00\u4e2a\u57fa\u6a21\uff0c\u518d\u8fdb\u884c\u6821\u9a8c\u3002',
+    'model.validationBackgroundNote': '校验将在后台继续进行，可关闭此窗口并继续使用 Newmark。',
     'model.globalAgentPrompt': '通用提示词 Agent.md',
     'model.globalAgentPromptDesc': '实时编辑用户级 Agent.md 通用提示词，自动保存并从下一次 Agent 请求开始生效。',
     'model.globalAgentPromptPlaceholder': '输入通用 Agent 提示词...',
@@ -6533,6 +6554,9 @@ var api = window.api || {
     try { var r = await fetch('/api/validate-models', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selected:selected || []})}); return r.json(); }
     catch(e) { return []; }
   },
+  modelValidationStatus: async function() {
+    return { running: false };
+  },
   fuzzyInject: async function(name, url, key) {
     try { var r = await fetch('/api/fuzzy-inject', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,url:url,key:key,protocol:arguments[3]})}); return r.json(); }
     catch(e) { return {ok:false, warning:e.message}; }
@@ -6566,6 +6590,7 @@ if (!window.api.toggleAutomation) window.api.toggleAutomation = api.toggleAutoma
 if (!window.api.deleteAutomation) window.api.deleteAutomation = api.deleteAutomation;
 if (!window.api.automationWakeStatus) window.api.automationWakeStatus = api.automationWakeStatus;
 if (!window.api.validateModels) window.api.validateModels = api.validateModels;
+if (!window.api.modelValidationStatus) window.api.modelValidationStatus = api.modelValidationStatus;
 if (!window.api.fuzzyInject) window.api.fuzzyInject = api.fuzzyInject;
 if (!window.api.listSkills) window.api.listSkills = api.listSkills;
 if (!window.api.marketSkills) window.api.marketSkills = api.marketSkills;
@@ -7393,7 +7418,7 @@ function setConversationRuntimeState(target, status, runId, extra) {
     matchingRun.status = next.status;
     if (['completed', 'interrupted', 'force_interrupted', 'error'].indexOf(next.status) >= 0) {
       if (!matchingRun.endedAt) matchingRun.endedAt = new Date().toISOString();
-      matchingRun.expanded = true;
+      if (matchingRun.expanded === undefined) matchingRun.expanded = true;
     }
     if (isActiveConversationTarget(next.target)) updateConversationWorkRunElement(matchingRun);
   }
@@ -7572,9 +7597,9 @@ function syncWorkRunsSnapshot(runs, target) {
   for (var i = 0; i < prior.length; i++) expandedById[prior[i].runId] = prior[i].expanded;
   var normalized = (Array.isArray(runs) ? runs : []).map(function(run) {
     var item = normalizedWorkRun(run, target);
-    if (run.expanded === undefined && expandedById[item.runId] !== undefined) item.expanded = expandedById[item.runId];
+    if (expandedById[item.runId] !== undefined) item.expanded = expandedById[item.runId];
     var previous = prior.find(function(priorRun) { return priorRun.runId === item.runId; });
-    if (previous && ['running', 'stopping', 'force_restarting'].indexOf(String(previous.status || '')) >= 0 && ['running', 'stopping', 'force_restarting'].indexOf(item.status) < 0) item.expanded = true;
+    if (previous && item.expanded === undefined && ['running', 'stopping', 'force_restarting'].indexOf(String(previous.status || '')) >= 0 && ['running', 'stopping', 'force_restarting'].indexOf(item.status) < 0) item.expanded = true;
     return item;
   });
   state.workRunsByTarget[key] = normalized;
@@ -8008,15 +8033,15 @@ function applyAgentWorkEventToRun(event) {
     var eventId = String(event.id || [event.sequence || '', type, event.timestamp || '', event.content || ''].join('|'));
     if (!run.events.some(function(item) { return String(item.id || '') === eventId; })) run.events.push(Object.assign({}, event, { id: eventId }));
   }
-  if (type === 'done') { run.status = 'completed'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = true; }
-  else if (type === 'error') { run.status = 'error'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = true; }
-  else if (type === 'interrupted') { run.status = 'interrupted'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = true; }
-  else if (type === 'force_interrupted') { run.status = 'force_interrupted'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = true; }
+  if (type === 'done') { run.status = 'completed'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.expanded === undefined) run.expanded = true; }
+  else if (type === 'error') { run.status = 'error'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.expanded === undefined) run.expanded = true; }
+  else if (type === 'interrupted') { run.status = 'interrupted'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.expanded === undefined) run.expanded = true; }
+  else if (type === 'force_interrupted') { run.status = 'force_interrupted'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.expanded === undefined) run.expanded = true; }
   else if (event.status && type.indexOf('guide') !== 0) {
     run.status = String(event.status);
     if (['completed', 'interrupted', 'force_interrupted', 'error'].indexOf(run.status) >= 0) {
       run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString();
-      run.expanded = true;
+      if (run.expanded === undefined) run.expanded = true;
     }
   }
   if (isActiveConversationTarget(target)) renderConversationWorkRun(run);
@@ -8036,18 +8061,13 @@ window.toggleConversationWorkRun = function(button) {
   var runs = state.workRunsByTarget && state.workRunsByTarget[runtimeKey] || [];
   var run = runs.find(function(item) { return String(item.runId) === runId; });
   if (!run) return;
-  var previousExpanded = !!run.expanded;
-  run.expanded = !previousExpanded;
+  run.expanded = !run.expanded;
   updateConversationWorkRunElement(run, element);
   if (api.setWorkRunExpanded) {
     Promise.resolve(api.setWorkRunExpanded({ target: run.target, runId: run.runId, expanded: run.expanded })).then(function(saved) {
       if (saved === true) return;
-      run.expanded = previousExpanded;
-      updateConversationWorkRunElement(run, element);
       showUiNotice(currentLang() === 'zh' ? '无法保存工作过程展开状态。' : 'Unable to save the work-run display preference.', 'error', 'work-run-expand-' + run.runId);
     }).catch(function(error) {
-      run.expanded = previousExpanded;
-      updateConversationWorkRunElement(run, element);
       showUiNotice(error && error.message ? error.message : String(error), 'error', 'work-run-expand-' + run.runId);
     });
   }
@@ -9023,9 +9043,8 @@ window.refreshModelSelect = function(options) {
       var providerOpts = '';
       for (var midx = 0; midx < p.models.length; midx++) {
         var modelEntry = p.models[midx];
-        var evaluationStatus = typeof modelEntry === 'string' ? 'unvalidated' : String((modelEntry.evaluation && modelEntry.evaluation.status) || 'unvalidated');
-        var validationStatus = typeof modelEntry === 'string' ? '' : String((modelEntry.validation && modelEntry.validation.status) || '');
-        if (evaluationStatus !== 'available' && evaluationStatus !== 'unvalidated' && validationStatus !== 'verified' && validationStatus !== 'degraded') continue;
+        var effectiveStatus = effectiveUiModelStatus(modelEntry);
+        if (effectiveStatus !== 'available' && effectiveStatus !== 'unvalidated' && effectiveStatus !== 'verified' && effectiveStatus !== 'degraded') continue;
         var modelName = typeof modelEntry === 'string' ? modelEntry : (modelEntry.name || '');
         var modelLabel = typeof modelEntry === 'string' ? modelEntry : (modelEntry.display || modelEntry.name || '');
         var providerId = String(p.id || p.name || '');
@@ -11040,6 +11059,18 @@ function formatModelStatus(status) {
   return status || t('model.notChecked');
 }
 
+function effectiveUiModelStatus(modelEntry) {
+  if (!modelEntry || typeof modelEntry === 'string') return 'unvalidated';
+  var rawValidation = String((modelEntry.validation && modelEntry.validation.status) || '').toLowerCase();
+  var rawEvaluation = String((modelEntry.evaluation && modelEntry.evaluation.status) || 'unvalidated').toLowerCase();
+  var capabilities = modelEntry.validation && modelEntry.validation.capabilities || {};
+  var textEvidence = capabilities.text === true || capabilities.text_input === true || capabilities.text_output === true
+    || !!(modelEntry.evaluation && (modelEntry.evaluation.text_input || modelEntry.evaluation.text_output));
+  if (rawValidation === 'auth_error' || rawValidation === 'invalid_config') return rawValidation;
+  if (textEvidence && rawValidation === 'unavailable') return 'degraded';
+  return rawValidation || rawEvaluation;
+}
+
 // === Settings ===
 window.openSettings = function(tab) {
   var activeTab = tab || state.settingsActiveTab || 'general';
@@ -11188,8 +11219,8 @@ function renderModelSettings() {
       var modelName = typeof modelEntry === 'string' ? modelEntry : (modelEntry.name || '');
       var modelLabel = typeof modelEntry === 'string' ? modelEntry : (modelEntry.display || modelEntry.name || '');
       var evaluation = typeof modelEntry === 'string' ? null : modelEntry.evaluation;
-      var statusRaw = evaluation ? evaluation.status : 'not checked';
-      var status = formatModelStatus(evaluation ? evaluation.status : 'not checked');
+      var statusRaw = typeof modelEntry === 'string' ? 'not checked' : effectiveUiModelStatus(modelEntry);
+      var status = formatModelStatus(statusRaw);
       var normalizedStatus = String(statusRaw || '').toLowerCase();
       var statusClass = normalizedStatus === 'available' || normalizedStatus === 'verified' || normalizedStatus === 'degraded'
         ? 'model-eval-ok'
@@ -11255,7 +11286,7 @@ function renderModelSettings() {
     '</div>' +
     '<div class="provider-card" style="margin-top:12px;">' +
     '<label for="global-agent-prompt" style="display:block;font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px;">' + esc(t('model.globalAgentPrompt')) + '</label>' +
-    '<textarea id="global-agent-prompt" rows="10" maxlength="262144" placeholder="' + escAttr(t('model.globalAgentPromptPlaceholder')) + '" aria-describedby="global-agent-prompt-desc" oninput="window.scheduleGlobalAgentPromptSave(this.value)">' + esc(state.globalAgentPrompt || '') + '</textarea>' +
+    '<textarea id="global-agent-prompt" class="newmark-prompt-textarea" rows="10" maxlength="262144" placeholder="' + escAttr(t('model.globalAgentPromptPlaceholder')) + '" aria-describedby="global-agent-prompt-desc" oninput="window.scheduleGlobalAgentPromptSave(this.value)">' + esc(state.globalAgentPrompt || '') + '</textarea>' +
     '<div id="global-agent-prompt-desc" class="setting-desc" style="margin-top:6px;">' + esc(t('model.globalAgentPromptDesc')) + '</div>' +
     '</div>';
 }
@@ -12071,10 +12102,14 @@ window.validateAllModels = function() {
     window.openSubWin(t('model.validationTitle'), '<div class="model-eval-row">' + esc(t('model.validationRequiresBaseModel')) + '</div>');
     return;
   }
-  document.body.classList.add('model-evaluating');
-  window.openSubWin(t('model.validationTitle'), '<div class="provider-card marquee-border">' + esc(t('model.validating')) + '</div><div style="margin-top:6px;color:var(--text-dim);font-size:11px;">' + esc(t('model.validationBackgroundNote')) + '</div>');
-  api.validateModels().then(function(results) {
-    document.body.classList.remove('model-evaluating');
+  if (state.modelValidationPromise) {
+    window.showModelValidationProgress();
+    return state.modelValidationPromise;
+  }
+  window.showModelValidationProgress();
+  var validation = Promise.resolve(api.validateModels());
+  state.modelValidationPromise = validation;
+  return validation.then(function(results) {
     state.modelValidationResults = results || [];
     window.showModelEvaluationResults(state.modelValidationResults);
     return api.getState();
@@ -12082,13 +12117,23 @@ window.validateAllModels = function() {
     if (s && s.providers) state.providers = s.providers;
     if (s && s.models) state.models = s.models;
     window.refreshModelSelect();
+    return state.modelValidationResults;
   }).catch(function(err) {
     document.body.classList.remove('model-evaluating');
     window.openSubWin(t('model.validationTitle'), '<div style="color:#ff7777;font-size:12px;">' + esc(t('model.validationFailed')) + ': ' + esc(err.message) + '</div>');
+    return [];
+  }).finally(function() {
+    if (state.modelValidationPromise === validation) state.modelValidationPromise = null;
   });
 };
 
+window.showModelValidationProgress = function() {
+  document.body.classList.add('model-evaluating');
+  window.openSubWin(t('model.validationTitle'), '<div class="provider-card marquee-border">' + esc(t('model.validating')) + '</div><div style="margin-top:6px;color:var(--text-dim);font-size:11px;">' + esc(t('model.validationBackgroundNote')) + '</div>');
+};
+
 window.showModelEvaluationResults = function(results) {
+  document.body.classList.remove('model-evaluating');
   var html = '<div class="model-eval-results">';
   if (!results || !results.length) {
     html += '<div class="model-eval-row">' + esc(t('model.noValidationModels')) + '</div>';

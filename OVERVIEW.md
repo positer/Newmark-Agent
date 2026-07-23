@@ -2,7 +2,7 @@
 
 ## dev-0.1.6 Release Candidate (2026-07-24)
 
-The Windows x64 MSI and portable ZIP were rebuilt from the current source and passed the packaged MSI/ZIP smoke checks. The release assets are `release/Newmark-Agent-0.1.6-x64.msi` (SHA-256 `AC008F0BF351F25092CDD215950E3F2973C6396D745AA6DCD54FE3CC96DC8A26`) and `release/Newmark-Agent-0.1.6-win-unpacked-x64.zip` (SHA-256 `7F280D0ED600C79D673AD8B772A241CB80A8648E3224872829972AAE3F226990`). Publication is being completed from the `master` branch as the annotated `dev-0.1.6` tag and GitHub prerelease.
+The Windows x64 MSI and portable ZIP were rebuilt from the current source and passed the packaged MSI/ZIP smoke checks. The release assets are `release/Newmark-Agent-0.1.6-x64.msi` (SHA-256 `AC008F0BF351F25092CDD215950E3F2973C6396D745AA6DCD54FE3CC96DC8A26`) and `release/Newmark-Agent-0.1.6-win-unpacked-x64.zip` (SHA-256 `7F280D0ED600C79D673AD8B772A241CB80A8648E3224872829972AAE3F226990`). Commit `72501e8` was pushed from `master`, and the annotated `dev-0.1.6` tag plus GitHub prerelease is published at https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.6.
 
 ## dev-0.1.6 Goal/Flow/Subagent and UI Performance Follow-up (2026-07-24)
 

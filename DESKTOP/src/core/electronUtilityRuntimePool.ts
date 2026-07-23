@@ -22,6 +22,7 @@ export interface ElectronTargetRuntimeClient {
   checkpoint(): Promise<Record<string, unknown>>;
   rateAutoRoute?(score: number, routeId?: string): Promise<UtilityAutoRouteRatingResult>;
   setWorkRunExpanded(runId: string, expanded: boolean): Promise<boolean>;
+  setInputMode?(mode: string): Promise<'guide' | 'next'>;
   updateSetting(section: string, key: string, value: unknown): Promise<void>;
   forceRestart(): Promise<void>;
   forceStop(): Promise<void>;
@@ -278,6 +279,16 @@ export class ElectronUtilityRuntimePool {
     const entry = await this.acquire(normalizeConversationTarget(target));
     try {
       return await entry.client.setWorkRunExpanded(runId, expanded);
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async setInputMode(target: ConversationRuntimeTarget, mode: string): Promise<'guide' | 'next' | null> {
+    const entry = await this.acquireExisting(normalizeConversationTarget(target));
+    if (!entry?.client.setInputMode) return null;
+    try {
+      return await entry.client.setInputMode(mode);
     } finally {
       this.release(entry, true);
     }

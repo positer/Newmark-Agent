@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld('api', {
   setMode: (mode: string) => ipcRenderer.invoke('agent:setMode', mode),
   setModel: (model: string) => ipcRenderer.invoke('agent:setModel', model),
   setIntelligence: (tier: string) => ipcRenderer.invoke('agent:setIntelligence', tier),
-  setInputMode: (mode: string) => ipcRenderer.invoke('agent:setInputMode', mode),
+  setInputMode: (mode: string, target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:setInputMode', mode, target),
   setConversation: (id: string) => ipcRenderer.invoke('agent:setConversation', id),
   activateConversation: (target: string | Record<string, unknown>) => ipcRenderer.invoke('agent:activateConversation', target),
   updateGoal: (goal: string) => ipcRenderer.invoke('agent:updateGoal', goal),

@@ -2203,7 +2203,8 @@ export class Agent {
     const selected = this.workspace.select(id);
     if (selected) this.config.loadWorkspaceConfig(selected.path);
     else this.config.clearWorkspaceOverrides();
-    this.activeConversationId = this.safeConversationId(this.activeConversationId || 'default');
+    const stored = this.readStoredConversationState(selected);
+    this.activeConversationId = this.safeConversationId(stored.activeConversationId || 'default');
     const key = this.workspaceConversationKey();
     if (key) this.workspaceConversations.delete(key);
     this.loadWorkspaceConversationState();

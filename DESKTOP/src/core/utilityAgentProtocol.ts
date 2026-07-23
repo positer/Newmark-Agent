@@ -67,6 +67,7 @@ export type UtilityAgentRequest =
   | { id: string; method: 'checkpoint'; params: { target: ConversationRuntimeTarget } }
   | { id: string; method: 'rate_auto_route'; params: { target: ConversationRuntimeTarget; score: number; routeId?: string } }
   | { id: string; method: 'set_work_run_expanded'; params: { target: ConversationRuntimeTarget; runId: string; expanded: boolean } }
+  | { id: string; method: 'set_input_mode'; params: { target: ConversationRuntimeTarget; mode: string } }
   | { id: string; method: 'update_setting'; params: { section: string; key: string; value: unknown } }
   | { id: string; method: 'host_tool_result'; params: UtilityHostToolResult }
   | { id: string; method: 'shutdown' };

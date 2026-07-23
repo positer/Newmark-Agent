@@ -180,6 +180,9 @@ async function handle(request: WslAgentRequest): Promise<unknown> {
   if (request.method === 'set_work_run_expanded') {
     return kernel.setWorkRunExpanded(requestTarget(request.params), request.params.runId, request.params.expanded);
   }
+  if (request.method === 'set_input_mode') {
+    return kernel.setInputMode(requestTarget(request.params), request.params.mode);
+  }
   if (request.method === 'update_setting') {
     host.config.set(request.params.section, request.params.key, request.params.value);
     kernel.updateSetting(request.params.section, request.params.key, request.params.value);

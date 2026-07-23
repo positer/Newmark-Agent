@@ -61,6 +61,29 @@ async function main(): Promise<void> {
   assert.equal(state.workspaceSwitchGeneration, 9, 'focused workspace reselect does not invalidate an unrelated switch generation');
   assert.equal(state.activeConversationId, 'focus', 'focused workspace reselect preserves the focused conversation');
 
+  const switchCalls: Array<{ reference: string; snapshot: unknown }> = [];
+  const coldState: Record<string, unknown> = {
+    currentWorkspaceId: 'workspace-old',
+    workspaceSwitchInFlight: '',
+    workspaceSwitchGeneration: 0,
+  };
+  const coldSnapshot = { conversationId: 'conversation-restored', chatMessages: [{ role: 'user', content: 'persisted' }] };
+  const coldWindow: Record<string, unknown> = {
+    requestEditorTransition: async () => true,
+    selectWorkspace: (reference: string, snapshot: unknown) => switchCalls.push({ reference, snapshot }),
+    clearUiNotice: () => undefined,
+    showUiNotice: () => undefined,
+  };
+  const coldApi = {
+    selectWorkspace: async () => ({ id: 'workspace-new', name: 'New', conversationSnapshot: coldSnapshot }),
+  };
+  const coldInstall = new Function('window', 'state', 'api', 'workspaceIdentity', 't', 'clearUiNotice', 'showUiNotice', `window.switchToWorkspace = ${switchWorkspaceSource};`);
+  coldInstall(coldWindow, coldState, coldApi, (workspace: { id?: string }) => workspace?.id || '', (value: string) => value, () => undefined, () => undefined);
+  await (coldWindow.switchToWorkspace as (reference: string) => Promise<unknown>)('workspace-new');
+
+  assert.deepEqual(switchCalls, [{ reference: 'workspace-new', snapshot: coldSnapshot }], 'cold workspace paints the selection response snapshot without a second activation IPC');
+  assert.equal(coldState.currentWorkspaceId, 'workspace-new', 'cold workspace updates its stable identity before painting the snapshot');
+
   console.log('Workspace focus menu verification passed');
 }
 

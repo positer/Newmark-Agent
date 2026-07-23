@@ -77,7 +77,6 @@ function runNativeLinuxBuild() {
   run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:clean']);
   const builder = path.join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'electron-builder.cmd' : 'electron-builder');
   run(builder, ['--linux']);
-  run(builder, ['--linux', 'dir']);
 
   const appImage = path.join(releaseDir, `Newmark-Agent-${version}-x86_64.AppImage`);
   const deb = path.join(releaseDir, `Newmark-Agent-${version}-amd64.deb`);
@@ -118,6 +117,12 @@ function runWindowsWslBuild() {
     `cp ${wslQuote(`${wslRepoRoot}/LICENSE`)} "$build_root/repo/LICENSE"`,
     `cp ${wslQuote(`${wslRepoRoot}/THIRD_PARTY_NOTICES.md`)} "$build_root/repo/THIRD_PARTY_NOTICES.md"`,
     'cd "$build_root/repo/DESKTOP"',
+    process.env.NEWMARK_DIST_LINUX_NPM_REGISTRY
+      ? `npm config set registry ${wslQuote(process.env.NEWMARK_DIST_LINUX_NPM_REGISTRY)}`
+      : '',
+    process.env.ELECTRON_MIRROR
+      ? `export ELECTRON_MIRROR=${wslQuote(process.env.ELECTRON_MIRROR)}`
+      : '',
     'npm ci --include=dev --no-audit --no-fund',
     'npm test',
     'NEWMARK_LATENCY_OUTPUT="$build_root/linux-agent-latency.json" npm run benchmark:linux-agent-latency',
@@ -130,7 +135,7 @@ function runWindowsWslBuild() {
     `cp "$build_root/repo/release/Newmark-Agent-${version}-amd64.deb" ${wslQuote(`${wslReleaseDir}/`)}`,
     `cp "$build_root/repo/release/Newmark-Agent-${version}-linux-unpacked-x64.zip" ${wslQuote(`${wslReleaseDir}/`)}`,
     `rsync -a --delete "$build_root/repo/release/linux-unpacked/" ${wslQuote(`${wslReleaseDir}/linux-unpacked/`)}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
   run('wsl.exe', ['-d', distro, '--', 'bash', '-s'], {
     cwd: root,
     input: `${script}\n`,

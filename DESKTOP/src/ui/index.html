@@ -1189,8 +1189,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .ft-item.selected { background: rgba(91,120,255,0.12); color: var(--text-bright); }
 .ft-item .ft-icon { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; text-align: center; flex-shrink: 0; font-size: 0; }
 .ft-item .ft-name { overflow: hidden; text-overflow: ellipsis; }
-.ft-item .ft-toggle { width: 14px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0; color: var(--text-dim); transition: transform var(--duration-fast) var(--ease-out-expo); }
-.ft-item .ft-toggle.collapsed { transform: rotate(-90deg); }
+.ft-item .ft-toggle { width: 14px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0; color: var(--text-dim); transform: rotate(90deg); transition: transform var(--duration-fast) var(--ease-out-expo); }
+.ft-item .ft-toggle.collapsed { transform: rotate(0deg); }
 .ft-children { overflow: hidden; }
 
 /* Editor panel */
@@ -1798,6 +1798,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 #terminal-shell-select:focus { border-color: var(--accent); }
+#bottom-header > .newmark-select-shell[data-select-id="terminal-shell-select"] { flex: 0 0 auto; }
 
 .terminal-timeout-control {
   display: inline-flex;
@@ -2183,6 +2184,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 .conversation-work-run {
+  --work-run-right-safe: 34px;
   position: relative;
   margin: 5px 0 9px;
   padding-left: 24px;
@@ -2213,7 +2215,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 8px 0;
+  padding: 8px var(--work-run-right-safe) 8px 0;
   border: 0;
   background: transparent;
   color: var(--text);
@@ -2237,7 +2239,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .conversation-work-run.collapsed .conversation-work-run-chevron { transform: rotate(-45deg); }
 .conversation-work-run-title { flex: 1; min-width: 0; }
 .conversation-work-run-status { color: var(--text-dim); font: 10px var(--font-mono); }
-.conversation-work-run-body { border: 0; padding: 4px 0 8px; }
+.conversation-work-run-body { border: 0; padding: 4px var(--work-run-right-safe) 8px 0; }
 .conversation-work-run.collapsed .conversation-work-run-body { display: none; }
 .work-run-collapsed-guides { display: none; }
 .work-run-message:has(.conversation-work-run.collapsed) > .work-run-collapsed-guides { display: flex; flex-direction: column; }
@@ -3043,11 +3045,10 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .model-select-shell.open .model-select-button .nm-icon { transform: rotate(180deg); }
 
 .model-select-menu {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(100% + 8px);
-  z-index: 120;
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  z-index: 520;
   display: none;
   max-height: min(56vh, 430px);
   overflow: auto;
@@ -3058,6 +3059,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   box-shadow: var(--shadow-lg);
   backdrop-filter: blur(var(--glass-blur-3)) saturate(1.08);
 }
+.model-select-menu:popover-open { display: block; animation: model-menu-in 150ms var(--ease-out-expo); }
 
 .model-select-shell.open .model-select-menu { display: block; animation: model-menu-in 150ms var(--ease-out-expo); }
 .model-select-menu-group { padding: 7px 9px 4px; color: var(--text-accent); font: 700 11px var(--font-ui); }
@@ -3072,6 +3074,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   background: transparent;
   color: var(--text);
   text-align: left;
+  white-space: nowrap;
   font: 12px var(--font-ui);
   cursor: pointer;
 }
@@ -3080,18 +3083,91 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .model-select-menu-option.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text-bright); }
 @keyframes model-menu-in { from { opacity: 0; transform: translateY(5px) scale(.985); } to { opacity: 1; transform: none; } }
 
-#mode-select, #flow-select, #intel-select { max-width: 132px; }
+.newmark-select-shell {
+  position: relative;
+  display: inline-grid;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.newmark-select-native {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+.newmark-select-button {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0,1fr) 16px;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+.newmark-select-button-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.newmark-select-button .nm-icon { color: var(--text-dim); transition: transform var(--duration-fast) var(--ease-out-expo); }
+.newmark-select-shell.open .newmark-select-button .nm-icon { transform: rotate(180deg); }
+.newmark-select-menu {
+  position: fixed;
+  z-index: 520;
+  display: none;
+  max-height: min(56vh, 430px);
+  overflow: auto;
+  padding: 7px;
+  border: 1px solid var(--glass-border-2);
+  border-radius: var(--radius-lg);
+  background: var(--modal-surface);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(var(--glass-blur-3)) saturate(1.08);
+}
+.newmark-select-shell.open .newmark-select-menu { display: block; animation: model-menu-in 150ms var(--ease-out-expo); }
+.newmark-select-menu-group { padding: 7px 9px 4px; color: var(--text-accent); font: 700 11px var(--font-ui); }
+.newmark-select-option {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: 12px var(--font-ui);
+  cursor: pointer;
+}
+.newmark-select-option:hover,
+.newmark-select-option:focus-visible { background: var(--control-hover-bg); color: var(--text-bright); outline: none; }
+.newmark-select-option.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text-bright); }
+.newmark-select-option:disabled { opacity: .42; cursor: not-allowed; }
+.setting-control > .newmark-select-shell,
+.auto-input-group > .newmark-select-shell,
+.auto-cond > .newmark-select-shell,
+.github-repo-select-wrap > .newmark-select-shell { width: 100%; }
+#input-tools > .newmark-select-shell { flex: 0 0 auto; }
+.github-repo-select-wrap:has(.newmark-select-shell) > .github-repo-select-icon { display: none; }
+
+#mode-select, #flow-select, #intel-select,
+#input-tools > .newmark-select-shell[data-select-id="mode-select"],
+#input-tools > .newmark-select-shell[data-select-id="flow-select"],
+#input-tools > .newmark-select-shell[data-select-id="intel-select"] { max-width: 132px; }
 
 @container (max-width: 560px) {
   #input-tools { gap: 5px; }
   #model-select { min-width: 88px; }
-  #mode-select, #intel-select { max-width: 92px; padding-left: 7px; padding-right: 7px; }
+  #mode-select, #intel-select,
+  #input-tools > .newmark-select-shell[data-select-id="mode-select"],
+  #input-tools > .newmark-select-shell[data-select-id="intel-select"] { max-width: 92px; }
   .mode-toggle-btn { padding-left: 7px; padding-right: 7px; }
 }
 
 @container (max-width: 430px) {
   #model-select { min-width: 72px; }
-  #mode-select, #intel-select { max-width: 74px; }
+  #mode-select, #intel-select,
+  #input-tools > .newmark-select-shell[data-select-id="mode-select"],
+  #input-tools > .newmark-select-shell[data-select-id="intel-select"] { max-width: 74px; }
   .context-token-wrap { width: 16px; }
   .mode-toggle-btn { padding-left: 5px; padding-right: 5px; }
 }
@@ -3104,7 +3180,9 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 @media (max-width: 460px) {
   #input-tools { gap: 4px; }
   #model-select { min-width: 72px; }
-  #mode-select, #intel-select { max-width: 70px; }
+  #mode-select, #intel-select,
+  #input-tools > .newmark-select-shell[data-select-id="mode-select"],
+  #input-tools > .newmark-select-shell[data-select-id="intel-select"] { max-width: 70px; }
   .context-token-wrap { display: none; }
   .mode-toggle-btn { padding-left: 4px; padding-right: 4px; }
 }
@@ -4031,6 +4109,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   height: 100%;
   overflow: visible;
   pointer-events: none;
+  will-change: transform;
 }
 .memory-lab-overview-link {
   fill: none;
@@ -4059,6 +4138,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .memory-lab-overview-nodes {
   position: absolute;
   inset: 0;
+  will-change: transform;
 }
 .memory-lab-overview-node {
   position: absolute;
@@ -4415,8 +4495,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 .flow-item-header:hover { background: var(--glass-bg-2); }
-.flow-item-header .arrow { transition: transform var(--duration-fast) var(--ease-out-expo); font-size: 9px; color: var(--text-dim); }
-.flow-item-header.collapsed .arrow { transform: rotate(-90deg); }
+.flow-item-header .arrow { transform: rotate(90deg); transition: transform var(--duration-fast) var(--ease-out-expo); font-size: 9px; color: var(--text-dim); }
+.flow-item-header.collapsed .arrow { transform: rotate(0deg); }
 .flow-item-name { flex: 1; font-size: 12px; color: var(--text); }
 .flow-item-type { font-size: 10px; color: var(--text-dim); padding: 2px 6px; border-radius: var(--radius-sm); background: var(--glass-bg-1); }
 
@@ -4631,7 +4711,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
             <div class="model-select-shell" id="model-select-shell">
               <select class="model-select-native" id="model-select" tabindex="-1" aria-hidden="true"></select>
               <button type="button" class="tool-select model-select-button" id="model-select-button" aria-haspopup="listbox" aria-expanded="false" onclick="window.toggleModelSelectMenu()" onkeydown="window.handleModelSelectButtonKey(event)"><span class="model-select-button-label" id="model-select-label"></span><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#chevron-down"></use></svg></button>
-              <div class="model-select-menu" id="model-select-menu" role="listbox" aria-label="Model"></div>
+              <div class="model-select-menu" id="model-select-menu" role="listbox" aria-label="Model" popover="manual"></div>
             </div>
             <div class="context-token-wrap">
               <div id="context-token-ring" title="Context tokens" tabindex="0" onmouseenter="window.showContextWindowTooltip()" onmouseleave="window.hideContextWindowTooltip()" onfocus="window.showContextWindowTooltip()" onblur="window.hideContextWindowTooltip()"></div>
@@ -6545,6 +6625,7 @@ function normalizeTerminalShell(shellId) {
 function syncTerminalShellOptions() {
   var select = document.getElementById('terminal-shell-select');
   if (!select) return;
+  if (window.enhanceNewmarkSelect) window.enhanceNewmarkSelect(select);
   var allowed = state.terminalShells || [];
   var options = select.querySelectorAll('option');
   for (var i = 0; i < options.length; i++) {
@@ -6557,6 +6638,7 @@ function syncTerminalShellOptions() {
   }
   var selected = normalizeTerminalShell(select.value);
   select.value = selected;
+  if (window.syncNewmarkSelect) window.syncNewmarkSelect(select);
   state._terminalShell = selected;
   var prompt = document.querySelector('#terminal-pane-0 .terminal-prompt');
   if (prompt) prompt.textContent = terminalShellLabel(selected) + '>';
@@ -7959,7 +8041,7 @@ function renderWorkToolGroup(event, eventIndex) {
     return '<div class="conversation-work-activity-item">' + iconSvg(workToolRowIcon(item), 'tool', 'tiny') +
       '<div class="conversation-work-command-label" title="' + escAttr(workToolCommandLabel(item)) + '">' + esc(workToolCommandLabel(item)) + '</div></div>';
   }).join('');
-  return '<details class="conversation-work-activity" data-activity-key="' + escAttr(activityDomKey) + '" open><summary>' +
+  return '<details class="conversation-work-activity" data-activity-key="' + escAttr(activityDomKey) + '"><summary>' +
     iconSvg(hasFiles ? 'pencil' : 'square-terminal', 'tools', 'tiny') + '<span>' + esc(workToolGroupLabel(items, !!event.completed)) + '</span>' +
     '<span class="conversation-work-activity-chevron" aria-hidden="true"></span></summary><div class="conversation-work-activity-list' + (onlySubagents ? ' conversation-work-subagent-list' : '') + '">' +
     activityRows + '</div></details>';
@@ -8788,6 +8870,12 @@ function loadActiveConversationMessages(conversationId) {
       requestedConversationId === String(activeConversationId() || 'default') &&
       responseConversationId === requestedConversationId;
     if (!responseIsCurrent) return;
+    applyConversationSnapshot(s, requestedConversationId);
+  }).catch(function(){});
+}
+
+function applyConversationSnapshot(s, requestedConversationId) {
+    if (!s) return;
     var snapshotTarget = {
       workspaceId: String((s && (s.workspaceId || (s.target && s.target.workspaceId))) || runtimeWorkspaceId('')),
       conversationId: String((s && (s.conversationId || (s.target && s.target.conversationId))) || requestedConversationId)
@@ -8833,7 +8921,6 @@ function loadActiveConversationMessages(conversationId) {
     if (s && s.subagents) state.subagents = s.subagents;
     if (s && s.linkedPlan) state.linkedPlan = s.linkedPlan;
     replayActiveAgentWorkEvents();
-  }).catch(function(){});
 }
 
 function addShellBlock(title, content) {
@@ -9199,7 +9286,9 @@ window.hideContextWindowTooltip = function() {
 window.closeModelSelectMenu = function(options) {
   var shell = document.getElementById('model-select-shell');
   var button = document.getElementById('model-select-button');
+  var menu = document.getElementById('model-select-menu');
   if (shell) shell.classList.remove('open');
+  if (menu && typeof menu.hidePopover === 'function' && menu.matches(':popover-open')) menu.hidePopover();
   if (button) button.setAttribute('aria-expanded', 'false');
   if (options && options.focus && button) button.focus();
 };
@@ -9207,15 +9296,24 @@ window.closeModelSelectMenu = function(options) {
 window.toggleModelSelectMenu = function(forceOpen) {
   var shell = document.getElementById('model-select-shell');
   var button = document.getElementById('model-select-button');
+  var menu = document.getElementById('model-select-menu');
   if (!shell || !button) return;
-  var open = forceOpen === undefined ? !shell.classList.contains('open') : !!forceOpen;
-  shell.classList.toggle('open', open);
-  button.setAttribute('aria-expanded', open ? 'true' : 'false');
+  var currentlyOpen = shell.classList.contains('open') || !!(menu && typeof menu.matches === 'function' && menu.matches(':popover-open'));
+  var open = forceOpen === undefined ? !currentlyOpen : !!forceOpen;
+  if (!open) {
+    window.closeModelSelectMenu();
+    return;
+  }
+  if (open) document.querySelectorAll('.newmark-select-shell.open').forEach(function(item) { window.closeNewmarkSelect(item); });
+  shell.classList.add('open');
+  button.setAttribute('aria-expanded', 'true');
   if (open) {
+    if (menu && typeof menu.showPopover === 'function' && !menu.matches(':popover-open')) menu.showPopover();
     requestAnimationFrame(function() {
+      window.positionSelectPopup(button, menu);
       var selected = document.querySelector('#model-select-menu .model-select-menu-option.selected');
       var first = document.querySelector('#model-select-menu .model-select-menu-option');
-      (selected || first)?.focus();
+      (selected || first)?.focus({ preventScroll: true });
     });
   }
 };
@@ -9267,6 +9365,219 @@ document.addEventListener('pointerdown', function(event) {
   var shell = document.getElementById('model-select-shell');
   if (shell && shell.classList.contains('open') && !shell.contains(event.target)) window.closeModelSelectMenu();
 });
+
+window.closeNewmarkSelect = function(shell, options) {
+  shell = shell || document.querySelector('.newmark-select-shell.open');
+  if (!shell) return;
+  shell.classList.remove('open');
+  var menu = shell.querySelector('.newmark-select-menu');
+  if (menu && typeof menu.hidePopover === 'function' && menu.matches(':popover-open')) menu.hidePopover();
+  var button = shell.querySelector('.newmark-select-button');
+  if (button) button.setAttribute('aria-expanded', 'false');
+  if (options && options.focus && button) button.focus();
+};
+
+window.positionSelectPopup = function(button, menu) {
+  if (!button || !menu) return;
+  var rect = button.getBoundingClientRect();
+  var margin = 8;
+  var readableWidth = Number(menu.dataset.popupMinWidth || 0) || 112;
+  var width = Math.min(Math.max(1, rect.width, readableWidth), window.innerWidth - margin * 2);
+  menu.style.width = width + 'px';
+  var left = Math.max(margin, Math.min(window.innerWidth - width - margin, rect.left));
+  var below = Math.max(0, window.innerHeight - rect.bottom - margin);
+  var above = Math.max(0, rect.top - margin);
+  var desiredHeight = Math.min(430, menu.scrollHeight || menu.offsetHeight || 0);
+  var openAbove = below < desiredHeight && above > below;
+  var available = Math.max(80, openAbove ? above : below);
+  var visibleHeight = Math.min(desiredHeight, available);
+  menu.style.maxHeight = Math.min(430, available) + 'px';
+  menu.style.left = left + 'px';
+  menu.style.top = (openAbove ? rect.top - visibleHeight - margin : rect.bottom + margin) + 'px';
+  menu.dataset.popupDirection = openAbove ? 'up' : 'down';
+};
+
+window.positionNewmarkSelectMenu = function(shell) {
+  if (!shell) return;
+  window.positionSelectPopup(shell.querySelector('.newmark-select-button'), shell.querySelector('.newmark-select-menu'));
+};
+
+window.selectReadableControlWidth = function(select) {
+  if (!select) return 80;
+  var style = window.getComputedStyle ? window.getComputedStyle(select) : null;
+  var fontSize = Math.max(10, parseFloat(style && style.fontSize) || 12);
+  var widest = 0;
+  Array.from(select.options || []).forEach(function(option) {
+    var text = String(option.textContent || option.value || '');
+    var textWidth = Array.from(text).reduce(function(total, character) {
+      return total + (character.charCodeAt(0) > 255 ? fontSize : fontSize * 0.62);
+    }, 0);
+    widest = Math.max(widest, textWidth);
+  });
+  return Math.min(240, Math.max(80, Math.ceil(widest + 44)));
+};
+
+window.syncNewmarkSelectWidth = function(select, shell) {
+  if (!select || !shell || shell.dataset.autoReadableWidth !== 'true') return;
+  var nativeWidth = Number(shell.dataset.nativeSelectWidth || 0);
+  var width = Math.max(nativeWidth, window.selectReadableControlWidth(select));
+  shell.style.width = width + 'px';
+  shell.style.minWidth = width + 'px';
+  shell.style.maxWidth = 'none';
+  if (shell.dataset.toolbarSelect === 'true') shell.style.flex = '0 0 ' + width + 'px';
+};
+
+window.syncNewmarkSelect = function(select) {
+  if (!select || !select._newmarkSelectShell) return;
+  var shell = select._newmarkSelectShell;
+  var label = shell.querySelector('.newmark-select-button-label');
+  var menu = shell.querySelector('.newmark-select-menu');
+  var button = shell.querySelector('.newmark-select-button');
+  var selected = select.options[select.selectedIndex] || select.options[0];
+  shell.style.display = select.dataset.newmarkVisible === 'false' || select.style.display === 'none' ? 'none' : '';
+  if (label) label.textContent = selected ? selected.textContent : '';
+  if (button) button.disabled = !!select.disabled;
+  window.syncNewmarkSelectWidth(select, shell);
+  if (!menu) return;
+  var html = '';
+  Array.from(select.children).forEach(function(child) {
+    if (child.tagName === 'OPTGROUP') {
+      html += '<div class="model-select-menu-group newmark-select-menu-group" role="presentation">' + esc(child.label || '') + '</div>';
+      Array.from(child.children).forEach(function(option) {
+        html += '<button type="button" class="model-select-menu-option newmark-select-option' + (option.value === select.value ? ' selected' : '') + '" role="option" aria-selected="' + (option.value === select.value ? 'true' : 'false') + '" data-value="' + escAttr(option.value) + '"' + (option.disabled ? ' disabled' : '') + '>' + esc(option.textContent || option.value) + '</button>';
+      });
+      return;
+    }
+    if (child.tagName === 'OPTION') {
+      html += '<button type="button" class="model-select-menu-option newmark-select-option' + (child.value === select.value ? ' selected' : '') + '" role="option" aria-selected="' + (child.value === select.value ? 'true' : 'false') + '" data-value="' + escAttr(child.value) + '"' + (child.disabled ? ' disabled' : '') + '>' + esc(child.textContent || child.value) + '</button>';
+    }
+  });
+  menu.innerHTML = html;
+};
+
+window.enhanceNewmarkSelect = function(select) {
+  if (!select || select._newmarkSelectShell || select.id === 'model-select' || select.multiple || Number(select.size || 0) > 1) return;
+  var rect = select.getBoundingClientRect();
+  var toolbarSelect = !!(select.parentElement && select.parentElement.id === 'input-tools');
+  var compactSelect = toolbarSelect || !!select.style.flex || !!select.closest('.flow-comp-row, #bottom-header');
+  var shell = document.createElement('span');
+  shell.className = 'newmark-select-shell';
+  shell.setAttribute('data-select-id', select.id || '');
+  shell.dataset.toolbarSelect = toolbarSelect ? 'true' : 'false';
+  shell.dataset.autoReadableWidth = compactSelect ? 'true' : 'false';
+  shell.dataset.nativeSelectWidth = rect.width > 0 ? String(Math.min(rect.width, 520)) : '0';
+  if (rect.width > 0) shell.style.minWidth = Math.min(rect.width, 520) + 'px';
+  if (select.style.width) shell.style.width = select.style.width;
+  if (select.style.minWidth) shell.style.minWidth = select.style.minWidth;
+  if (select.style.maxWidth) shell.style.maxWidth = select.style.maxWidth;
+  if (select.style.flex) shell.style.flex = select.style.flex;
+  if (select.style.margin) shell.style.margin = select.style.margin;
+  if (toolbarSelect && rect.width > 0) {
+    var toolbarWidth = Math.max(rect.width, window.selectReadableControlWidth(select));
+    shell.style.width = toolbarWidth + 'px';
+    shell.style.minWidth = toolbarWidth + 'px';
+    shell.style.maxWidth = 'none';
+    shell.style.flex = '0 0 ' + toolbarWidth + 'px';
+  }
+  var button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'tool-select model-select-button newmark-select-button ' + (select.className || '');
+  button.setAttribute('aria-haspopup', 'listbox');
+  button.setAttribute('aria-expanded', 'false');
+  var accessibleLabel = select.getAttribute('aria-label') || '';
+  var associatedLabel = select.id ? document.querySelector('label[for="' + CSS.escape(select.id) + '"]') : null;
+  var containerLabel = select.closest('.auto-input-group, .auto-cond, .setting-row');
+  if (!accessibleLabel && associatedLabel) accessibleLabel = associatedLabel.textContent || '';
+  if (!accessibleLabel && containerLabel) accessibleLabel = (containerLabel.querySelector('label, .setting-label') || {}).textContent || '';
+  if (!accessibleLabel) accessibleLabel = select.id || 'Select option';
+  button.setAttribute('aria-label', String(accessibleLabel).trim());
+  button.innerHTML = '<span class="newmark-select-button-label"></span>' + iconSvg('chevron-down', '', 'tiny');
+  var menu = document.createElement('div');
+  menu.className = 'model-select-menu newmark-select-menu';
+  menu.setAttribute('role', 'listbox');
+  menu.setAttribute('popover', 'manual');
+  select.parentNode.insertBefore(shell, select);
+  shell.appendChild(select);
+  shell.appendChild(button);
+  shell.appendChild(menu);
+  select.classList.add('newmark-select-native');
+  select.dataset.newmarkVisible = select.style.display === 'none' ? 'false' : 'true';
+  select.style.display = '';
+  select._newmarkSelectShell = shell;
+  button.addEventListener('click', function() {
+    var opening = !(shell.classList.contains('open') || (typeof menu.matches === 'function' && menu.matches(':popover-open')));
+    document.querySelectorAll('.newmark-select-shell.open').forEach(function(item) { if (item !== shell) window.closeNewmarkSelect(item); });
+    window.closeModelSelectMenu();
+    if (!opening) {
+      window.closeNewmarkSelect(shell);
+      return;
+    }
+    window.syncNewmarkSelect(select);
+    shell.classList.add('open');
+    button.setAttribute('aria-expanded', 'true');
+    if (opening) {
+      if (typeof menu.showPopover === 'function' && !menu.matches(':popover-open')) menu.showPopover();
+      requestAnimationFrame(function() {
+      window.positionNewmarkSelectMenu(shell);
+      var option = menu.querySelector('.newmark-select-option.selected') || menu.querySelector('.newmark-select-option:not(:disabled)');
+      if (option) option.focus({ preventScroll: true });
+      });
+    }
+  });
+  button.addEventListener('keydown', function(event) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); button.click(); }
+    else if (event.key === 'Escape') window.closeNewmarkSelect(shell);
+  });
+  menu.addEventListener('click', function(event) {
+    var option = event.target.closest('.newmark-select-option');
+    if (!option || option.disabled) return;
+    select.value = option.getAttribute('data-value');
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    window.syncNewmarkSelect(select);
+    window.closeNewmarkSelect(shell, { focus: true });
+  });
+  menu.addEventListener('keydown', function(event) {
+    var options = Array.from(menu.querySelectorAll('.newmark-select-option:not(:disabled)'));
+    var index = options.indexOf(document.activeElement);
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      var next = event.key === 'ArrowDown' ? index + 1 : index - 1;
+      options[(next + options.length) % options.length]?.focus({ preventScroll: true });
+    } else if (event.key === 'Home') { event.preventDefault(); options[0]?.focus({ preventScroll: true }); }
+    else if (event.key === 'End') { event.preventDefault(); options[options.length - 1]?.focus({ preventScroll: true }); }
+    else if (event.key === 'Escape') { event.preventDefault(); window.closeNewmarkSelect(shell, { focus: true }); }
+  });
+  select.addEventListener('change', function() { window.syncNewmarkSelect(select); });
+  new MutationObserver(function() { window.syncNewmarkSelect(select); }).observe(select, { childList: true, subtree: true, attributes: true });
+  window.syncNewmarkSelect(select);
+};
+
+window.enhanceNewmarkSelects = function(root) {
+  root = root || document;
+  if (root.matches && root.matches('select')) window.enhanceNewmarkSelect(root);
+  if (root.querySelectorAll) root.querySelectorAll('select').forEach(window.enhanceNewmarkSelect);
+};
+
+document.addEventListener('pointerdown', function(event) {
+  document.querySelectorAll('.newmark-select-shell.open').forEach(function(shell) {
+    var trigger = shell.querySelector('.newmark-select-button');
+    var menu = shell.querySelector('.newmark-select-menu');
+    if (trigger && trigger.contains(event.target)) return;
+    if ((!menu || !menu.contains(event.target)) && !shell.contains(event.target)) window.closeNewmarkSelect(shell);
+  });
+});
+window.repositionOpenSelectPopups = function() {
+  document.querySelectorAll('.newmark-select-shell.open').forEach(window.positionNewmarkSelectMenu);
+  var modelShell = document.getElementById('model-select-shell');
+  if (modelShell && modelShell.classList.contains('open')) window.positionSelectPopup(document.getElementById('model-select-button'), document.getElementById('model-select-menu'));
+};
+window.addEventListener('resize', window.repositionOpenSelectPopups);
+window.addEventListener('scroll', window.repositionOpenSelectPopups, true);
+new MutationObserver(function(records) {
+  records.forEach(function(record) { Array.from(record.addedNodes || []).forEach(function(node) { if (node.nodeType === 1) window.enhanceNewmarkSelects(node); }); });
+}).observe(document.documentElement, { childList: true, subtree: true });
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function() { window.enhanceNewmarkSelects(document); }, { once: true });
+else window.enhanceNewmarkSelects(document);
 
 window.refreshModelSelect = function(options) {
   var sel = els['model-select'] || document.getElementById('model-select');
@@ -9784,7 +10095,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   var previousMode = state.mode;
   if ((opts.forceBuild || idleNextImmediate) && state.mode !== 'build') {
     state.mode = 'build';
-    if (els['mode-select']) els['mode-select'].value = 'build';
+    if (els['mode-select']) { els['mode-select'].value = 'build'; window.syncNewmarkSelect(els['mode-select']); }
     if (api.setMode) await api.setMode('build').catch(function(){});
   }
   if (api.setMode) await api.setMode(state.mode).catch(function(){});
@@ -9914,7 +10225,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   }
   if ((opts.forceBuild || idleNextImmediate) && previousMode !== state.mode) {
     state.mode = previousMode;
-    if (els['mode-select']) els['mode-select'].value = previousMode;
+    if (els['mode-select']) { els['mode-select'].value = previousMode; window.syncNewmarkSelect(els['mode-select']); }
     if (api.setMode) await api.setMode(previousMode).catch(function(){});
   }
   var finalRuntime = state.conversationRuntimeStates && state.conversationRuntimeStates[lockedRuntimeKey];
@@ -11250,7 +11561,7 @@ window.setInputMode = function(mode, persist) {
   for (var i = 0; i < btns.length; i++) {
     btns[i].classList.toggle('active', btns[i].getAttribute('data-mode') === state.inputMode);
   }
-  if (persist !== false && api.setInputMode) api.setInputMode(state.inputMode).catch(function(){});
+  if (persist !== false && api.setInputMode) api.setInputMode(state.inputMode, currentConversationTarget(activeConversationId())).catch(function(){});
 };
 
 // === Sub-Window System ===
@@ -14105,7 +14416,8 @@ function syncBackendConversation() {
       var id = (s && s.conversationId) || conv.id;
       if (!requestIsCurrent() || String(id) !== requestedConversationId) return;
       state.activeBackendConversationId = id;
-      return loadActiveConversationMessages(id);
+      applyConversationSnapshot(s, id);
+      if (s && s.runtimeDeferred) return loadActiveConversationMessages(id);
     }).catch(function(){});
   }
   if (conv) {
@@ -14539,7 +14851,7 @@ window.renderMemoryLabOverview = function(_lab, index) {
     '<div id="memory-lab-overview-stage" class="memory-lab-overview-stage">' +
       '<div class="memory-lab-overview-grid"></div>' +
       '<svg id="memory-lab-overview-svg" class="memory-lab-overview-svg"></svg>' +
-      '<div class="memory-lab-overview-nodes">';
+      '<div id="memory-lab-overview-nodes" class="memory-lab-overview-nodes">';
   for (var i = 0; i < graph.nodes.length; i++) {
     var node = graph.nodes[i];
     html += '<button class="memory-lab-overview-node ' + escAttr(node.cls) + '" data-id="' + escAttr(node.id) + '" onclick="window.selectMemoryLabOverviewNode(\'' + escAttr(node.id) + '\')" title="' + escAttr(node.name + ' · ' + node.type) + '">' +
@@ -14639,7 +14951,14 @@ window.buildMemoryLabOverviewGraph = function(index) {
     var a = ((j + 0.35) / Math.max(1, componentSlugsAll.length)) * Math.PI * 2;
     nodes.push({ id: 'component:' + slug, slug: slug, name: meta.name || slug, type: t('memoryLab.componentNode'), cls: 'addon', x: Math.cos(a) * 390, y: Math.sin(a) * 280, vx: 0, vy: 0 });
   }
-  return { nodes: nodes, edges: edges, tags: tagNames, componentCount: componentSlugsAll.length };
+  var incoming = {};
+  var outgoing = {};
+  for (var e = 0; e < edges.length; e++) {
+    var relation = edges[e];
+    (outgoing[relation[0]] || (outgoing[relation[0]] = [])).push(e);
+    (incoming[relation[1]] || (incoming[relation[1]] = [])).push(e);
+  }
+  return { nodes: nodes, edges: edges, incoming: incoming, outgoing: outgoing, focusCache: {}, tags: tagNames, componentCount: componentSlugsAll.length };
 };
 
 window.initMemoryLabOverview = function() {
@@ -14680,7 +14999,7 @@ window.initMemoryLabOverview = function() {
       try { stage.releasePointerCapture(pointerId); } catch (_) {}
     }
     activePointerId = null;
-    window.requestMemoryLabOverviewFrame();
+    window.renderMemoryLabOverviewFrame();
   }
   stage.onpointerdown = function(event) {
     if (event.target.closest('.memory-lab-overview-node') || event.target.closest('.memory-lab-overview-actions')) return;
@@ -14688,6 +15007,8 @@ window.initMemoryLabOverview = function() {
     activePointerId = event.pointerId;
     state.memoryLabOverviewPanActive = true;
     state.memoryLabOverviewManualCamera = true;
+    state.memoryLabOverviewPanRenderX = camera.x;
+    state.memoryLabOverviewPanRenderY = camera.y;
     stage.setPointerCapture(event.pointerId);
   };
   stage.onpointermove = function(event) {
@@ -14736,7 +15057,8 @@ window.requestMemoryLabOverviewFrame = function() {
   state.memoryLabOverviewAnimation = requestAnimationFrame(function(timestamp) {
     state.memoryLabOverviewAnimation = null;
     var last = Number(state.memoryLabOverviewLastFrame || 0);
-    if (last && timestamp - last < 30) {
+    var minimumFrameMs = state.memoryLabOverviewPanActive ? 0 : 30;
+    if (last && timestamp - last < minimumFrameMs) {
       window.requestMemoryLabOverviewFrame();
       return;
     }
@@ -14780,40 +15102,51 @@ window.updateMemoryLabOverviewTip = function() {
 window.memoryLabOverviewFocusData = function(focusId) {
   var graph = state.memoryLabOverviewGraph || { edges: [] };
   var mode = state.memoryLabOverviewMode || 'both';
+  var cacheKey = mode + ':' + focusId;
+  graph.focusCache = graph.focusCache || {};
+  if (graph.focusCache[cacheKey]) return graph.focusCache[cacheKey];
   var nodes = new Set([focusId]);
   var edges = new Set();
   var parents = new Set();
   var children = new Set();
   function up(id) {
-    for (var i = 0; i < graph.edges.length; i++) {
+    var incoming = (graph.incoming || {})[id] || [];
+    for (var cursor = 0; cursor < incoming.length; cursor++) {
+      var i = incoming[cursor];
       var edge = graph.edges[i];
-      if (edge[1] === id && !edges.has(i)) {
+      if (!edges.has(i)) {
         edges.add(i); parents.add(i); nodes.add(edge[0]); up(edge[0]);
       }
     }
   }
   function down(id) {
-    for (var i = 0; i < graph.edges.length; i++) {
+    var outgoing = (graph.outgoing || {})[id] || [];
+    for (var cursor = 0; cursor < outgoing.length; cursor++) {
+      var i = outgoing[cursor];
       var edge = graph.edges[i];
-      if (edge[0] === id && !edges.has(i)) {
+      if (!edges.has(i)) {
         edges.add(i); children.add(i); nodes.add(edge[1]); down(edge[1]);
       }
     }
   }
   function direct(id) {
-    for (var i = 0; i < graph.edges.length; i++) {
-      var edge = graph.edges[i];
-      if (edge[0] === id || edge[1] === id) {
-        edges.add(i); nodes.add(edge[0]); nodes.add(edge[1]);
-        if (edge[1] === id) parents.add(i); else children.add(i);
-      }
+    var incoming = (graph.incoming || {})[id] || [];
+    var outgoing = (graph.outgoing || {})[id] || [];
+    for (var a = 0; a < incoming.length; a++) {
+      var parentIndex = incoming[a], parentEdge = graph.edges[parentIndex];
+      edges.add(parentIndex); parents.add(parentIndex); nodes.add(parentEdge[0]);
+    }
+    for (var b = 0; b < outgoing.length; b++) {
+      var childIndex = outgoing[b], childEdge = graph.edges[childIndex];
+      edges.add(childIndex); children.add(childIndex); nodes.add(childEdge[1]);
     }
   }
   if (mode === 'parents') up(focusId);
   else if (mode === 'children') down(focusId);
   else if (mode === 'direct') direct(focusId);
   else { up(focusId); down(focusId); }
-  return { nodes: nodes, edges: edges, parents: parents, children: children };
+  graph.focusCache[cacheKey] = { nodes: nodes, edges: edges, parents: parents, children: children };
+  return graph.focusCache[cacheKey];
 };
 
 window.renderMemoryLabOverviewFrame = function() {
@@ -14821,12 +15154,24 @@ window.renderMemoryLabOverviewFrame = function() {
   var map = state.memoryLabOverviewNodeMap || {};
   var stage = document.getElementById('memory-lab-overview-stage');
   var svg = document.getElementById('memory-lab-overview-svg');
+  var nodesLayer = document.getElementById('memory-lab-overview-nodes');
   if (!graph || !stage || !svg) return;
   var camera = state.memoryLabOverviewCamera || { x: stage.clientWidth / 2, y: stage.clientHeight / 2, scale: 0.88 };
   if (state.memoryLabOverviewPanActive) {
     camera.x += Number(state.memoryLabOverviewPanEdgeX || 0);
     camera.y += Number(state.memoryLabOverviewPanEdgeY || 0);
+    var panBaseX = Number.isFinite(state.memoryLabOverviewPanRenderX) ? state.memoryLabOverviewPanRenderX : camera.x;
+    var panBaseY = Number.isFinite(state.memoryLabOverviewPanRenderY) ? state.memoryLabOverviewPanRenderY : camera.y;
+    var panX = camera.x - panBaseX;
+    var panY = camera.y - panBaseY;
+    var panTransform = 'translate3d(' + panX + 'px,' + panY + 'px,0)';
+    svg.style.transform = panTransform;
+    if (nodesLayer) nodesLayer.style.transform = panTransform;
+    if (stage.isConnected) window.requestMemoryLabOverviewFrame();
+    return;
   }
+  svg.style.transform = '';
+  if (nodesLayer) nodesLayer.style.transform = '';
   function screen(node) { return { x: camera.x + node.x * camera.scale, y: camera.y + node.y * camera.scale }; }
   var simulate = !state.memoryLabOverviewPanActive;
   if (simulate) {
@@ -15722,7 +16067,7 @@ window.createSshWorkspaceFromForm = function() {
   });
 };
 
-window.selectWorkspace = function(reference) {
+window.selectWorkspace = function(reference, initialSnapshot) {
   var selectedWorkspace = findWorkspaceByIdentity(reference);
   var identity = workspaceIdentity(selectedWorkspace) || String(reference || '');
   var name = selectedWorkspace ? String(selectedWorkspace.name || '') : String(reference || '');
@@ -15740,16 +16085,22 @@ window.selectWorkspace = function(reference) {
   var wsBtn = document.querySelector('#left-secondary .secondary-top .sec-btn');
   if (wsBtn) wsBtn.title = name || 'Workspace';
   ensureWorkspaceConversations(identity);
+  if (initialSnapshot && Array.isArray(initialSnapshot.conversations)) {
+    applyBackendConversations(initialSnapshot.conversations, initialSnapshot.conversationId || 'default', identity);
+  }
   window.renderConversations();
-  renderChatMessages([]);
   state.conversationPlan = { items: [] };
   state.linkedPlan = { markdown: '', revision: 0 };
   state.subagents = [];
+  if (initialSnapshot) applyConversationSnapshot(initialSnapshot, initialSnapshot.conversationId || activeConversationId());
+  else renderChatMessages([]);
   state.backendQueue = backendQueueForTarget(currentConversationTarget());
   refreshNextPromptForTarget(currentConversationTarget());
   if (window.renderInputStack) window.renderInputStack();
   updateWorkspaceGate();
-  syncBackendConversation().then(function() {
+  var activeId = String((initialSnapshot && initialSnapshot.conversationId) || activeConversationId() || 'default');
+  var refresh = initialSnapshot ? loadActiveConversationMessages(activeId) : syncBackendConversation();
+  refresh.then(function() {
     if (state.rightTab === 'plan') window.renderConversationPlan();
     window.refreshTerminalTakeoverPanes();
     refreshNextPromptForTarget(currentConversationTarget());
@@ -15778,7 +16129,7 @@ window.switchToWorkspace = async function(reference) {
     if (ws) {
       state.currentWorkspace = ws.name || state.currentWorkspace;
       state.currentWorkspaceId = workspaceIdentity(ws) || reference;
-      window.selectWorkspace(state.currentWorkspaceId);
+      window.selectWorkspace(state.currentWorkspaceId, ws.conversationSnapshot || null);
     }
     return ws || null;
   }).catch(function(err) {
@@ -16290,6 +16641,8 @@ function schedulePostStartupUiRendering() {
   // Populate selects
   if (els['mode-select']) els['mode-select'].value = state.mode;
   if (els['intel-select']) els['intel-select'].value = state.intelligence;
+  if (els['mode-select']) window.syncNewmarkSelect(els['mode-select']);
+  if (els['intel-select']) window.syncNewmarkSelect(els['intel-select']);
   if (els['terminal-timeout-input']) els['terminal-timeout-input'].value = String(state.terminalInterruptTimeoutMs || 0);
   syncTerminalShellOptions();
 
@@ -16362,7 +16715,8 @@ function schedulePostStartupUiRendering() {
       // Flow mode: show flow selector
       var flowSel = document.getElementById('flow-select');
       if (flowSel) {
-        flowSel.style.display = state.mode === 'flow' ? '' : 'none';
+        flowSel.dataset.newmarkVisible = state.mode === 'flow' ? 'true' : 'false';
+        window.syncNewmarkSelect(flowSel);
         if (state.mode === 'flow') {
           flowSel.innerHTML = '<option value="">' + esc(t('common.loading')) + '</option>';
           await window.ensureFlowsLoaded();

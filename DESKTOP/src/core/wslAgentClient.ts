@@ -330,6 +330,11 @@ export class WslAgentClient {
     return !!await this.request('set_work_run_expanded', { target: await this.mapTarget(target), runId, expanded }, 5_000);
   }
 
+  async setInputMode(target: ConversationRuntimeTarget, mode: string): Promise<'guide' | 'next'> {
+    await this.start();
+    return await this.request('set_input_mode', { target: await this.mapTarget(target), mode }, 5_000) as 'guide' | 'next';
+  }
+
   async updateSetting(section: string, key: string, value: unknown): Promise<void> {
     if (!this.child || this.child.killed) return;
     await this.request('update_setting', { section, key, value }, 5_000);

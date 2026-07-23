@@ -447,6 +447,13 @@ export class ConversationKernel {
     return runner.setConversationWorkRunExpanded(runId, expanded);
   }
 
+  setInputMode(target: ConversationTargetInput, mode: string): 'guide' | 'next' {
+    const normalized = this.normalizeTarget(target);
+    const runtime = this.findRuntime(normalized);
+    const runner = runtime?.runner || this.createRunner(normalized);
+    return runner.setInputMode(mode);
+  }
+
   updateSetting(section: string, key: string, value: unknown): void {
     for (const runtime of this.runtimes.values()) {
       if (section === 'models' && key === 'providers') runtime.runner.updateProviders(value);

@@ -1095,6 +1095,11 @@ export class ElectronUtilityAgentClient {
     return !!await this.request('set_work_run_expanded', { target: this.target, runId, expanded }, 5_000);
   }
 
+  async setInputMode(mode: string): Promise<'guide' | 'next'> {
+    await this.start();
+    return await this.request('set_input_mode', { target: this.target, mode }, 5_000) as 'guide' | 'next';
+  }
+
   async updateSetting(section: string, key: string, value: unknown): Promise<void> {
     if (!this.child?.pid) return;
     await this.request('update_setting', { section, key, value }, 5_000);

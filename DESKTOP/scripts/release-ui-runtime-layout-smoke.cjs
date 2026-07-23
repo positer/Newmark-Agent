@@ -101,6 +101,126 @@ async function evaluate(cdp, expression) {
       fail(`focused workspace did not reopen its conversation menu: ${JSON.stringify(workspaceFocusMenu)}`);
     }
     await cdp.call('Page.enable');
+    const selectPopupLayout = await evaluate(cdp, `(async () => {
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      const toolbar = document.getElementById('input-tools');
+      const modeButton = document.querySelector('.newmark-select-shell[data-select-id="mode-select"] .newmark-select-button');
+      const shell = modeButton?.closest('.newmark-select-shell');
+      const rect = element => { const value = element.getBoundingClientRect(); return { left: value.left, top: value.top, right: value.right, bottom: value.bottom, width: value.width, height: value.height }; };
+      const before = { toolbar: rect(toolbar), button: rect(modeButton) };
+      modeButton.click();
+      await new Promise(resolve => setTimeout(resolve, 220));
+      const menu = shell.querySelector('.newmark-select-menu');
+      const after = { toolbar: rect(toolbar), button: rect(modeButton), menu: rect(menu), direction: menu.dataset.popupDirection, position: getComputedStyle(menu).position };
+      modeButton.click();
+      await new Promise(resolve => setTimeout(resolve, 80));
+      const closedAfterSecondClick = !shell.classList.contains('open') && !menu.matches(':popover-open');
+      const fixture = document.createElement('div');
+      fixture.className = 'flow-comp-row';
+      fixture.style.cssText = 'position:fixed;left:16px;top:100px;width:260px;z-index:9999';
+      fixture.innerHTML = '<select style="flex:0.3"><option>\u5bf9\u8bdd</option><option>\u903b\u8f91</option></select>';
+      document.body.appendChild(fixture);
+      window.enhanceNewmarkSelects(fixture);
+      const fixtureShell = fixture.querySelector('.newmark-select-shell');
+      const fixtureButton = fixture.querySelector('.newmark-select-button');
+      const fixtureLabel = fixture.querySelector('.newmark-select-button-label');
+      const fixtureWidth = rect(fixtureButton).width;
+      const fixtureLabelFits = fixtureLabel.scrollWidth <= fixtureLabel.clientWidth + 0.5;
+      fixtureButton.click();
+      fixtureButton.click();
+      const fixtureClosedAfterSecondClick = !fixtureShell.classList.contains('open');
+      fixture.remove();
+      window.toggleModelSelectMenu(true);
+      await new Promise(resolve => setTimeout(resolve, 80));
+      document.getElementById('model-select-button').click();
+      await new Promise(resolve => setTimeout(resolve, 80));
+      const modelMenu = document.getElementById('model-select-menu');
+      const modelClosedAfterSecondClick = !document.getElementById('model-select-shell').classList.contains('open') && !modelMenu.matches(':popover-open');
+      modeButton.click();
+      await new Promise(resolve => setTimeout(resolve, 80));
+      return { before, after, closedAfterSecondClick, fixtureWidth, fixtureLabelFits, fixtureClosedAfterSecondClick, modelClosedAfterSecondClick };
+    })()`);
+    const popupDelta = (a, b) => Math.max(...['left', 'top', 'right', 'bottom', 'width', 'height'].map(key => Math.abs(a[key] - b[key])));
+    if (popupDelta(selectPopupLayout.before.toolbar, selectPopupLayout.after.toolbar) > 0.5
+      || popupDelta(selectPopupLayout.before.button, selectPopupLayout.after.button) > 0.5
+      || selectPopupLayout.after.menu.width + 0.5 < Math.max(selectPopupLayout.after.button.width, 112)
+      || selectPopupLayout.after.button.width < 80
+      || !selectPopupLayout.closedAfterSecondClick
+      || selectPopupLayout.fixtureWidth < 80
+      || !selectPopupLayout.fixtureLabelFits
+      || !selectPopupLayout.fixtureClosedAfterSecondClick
+      || !selectPopupLayout.modelClosedAfterSecondClick
+      || selectPopupLayout.after.position !== 'fixed'
+      || (selectPopupLayout.after.direction === 'up' && selectPopupLayout.after.menu.bottom > selectPopupLayout.after.button.top + 0.5)
+      || (selectPopupLayout.after.direction === 'down' && selectPopupLayout.after.menu.top < selectPopupLayout.after.button.bottom - 0.5)) {
+      fail(`select popup changed layout or escaped its anchor: ${JSON.stringify(selectPopupLayout)}`);
+    }
+    const terminalSelectSurface = await evaluate(cdp, `(() => {
+      const native = document.getElementById('terminal-shell-select');
+      const shell = native?.closest('.newmark-select-shell');
+      const button = shell?.querySelector('.newmark-select-button');
+      const menu = shell?.querySelector('.newmark-select-menu');
+      const style = button ? getComputedStyle(button) : null;
+      return {
+        enhanced: !!shell,
+        modelButtonClasses: !!button?.classList.contains('tool-select') && !!button?.classList.contains('model-select-button'),
+        menuModelClass: !!menu?.classList.contains('model-select-menu'),
+        borderRadius: style?.borderRadius || '',
+        background: style?.backgroundColor || '',
+      };
+    })()`);
+    if (!terminalSelectSurface.enhanced || !terminalSelectSurface.modelButtonClasses || !terminalSelectSurface.menuModelClass
+      || !terminalSelectSurface.borderRadius || terminalSelectSurface.borderRadius === '0px'
+      || !terminalSelectSurface.background || terminalSelectSurface.background === 'rgba(0, 0, 0, 0)') {
+      fail(`terminal shell select did not reuse the rounded glass model surface: ${JSON.stringify(terminalSelectSurface)}`);
+    }
+    const selectPopupScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(path.join(repoRoot, 'archive', '2026-07-23-select-popup-layout.png'), Buffer.from(selectPopupScreenshot.data, 'base64'));
+    await evaluate(cdp, `window.closeNewmarkSelect(document.querySelector('.newmark-select-shell[data-select-id="mode-select"]'))`);
+    const buildSafeLane = await evaluate(cdp, `(() => {
+      const run = {
+        runId: 'safe-lane-fixture', status: 'completed', expanded: true,
+        target: currentConversationTarget(activeConversationId()),
+        startedAt: new Date(Date.now() - 28000).toISOString(), endedAt: new Date().toISOString(),
+        events: [
+          { id: 'tool-fixture', type: 'tool_call', toolName: 'memory_lab_read', completed: true },
+          { id: 'response-fixture', type: 'response', content: 'A deliberately long response that must wrap before the right-side user timeline lane and never render underneath that vertical guide. '.repeat(8) }
+        ]
+      };
+      const element = renderConversationWorkRun(run);
+      const wrapper = element.closest('.work-run-message');
+      const headChevron = element.querySelector('.conversation-work-run-chevron');
+      const activity = element.querySelector('.conversation-work-activity');
+      const activityChevron = activity.querySelector('.conversation-work-activity-chevron');
+      const narrative = element.querySelector('.conversation-work-event.narrative');
+      const rect = node => { const value = node.getBoundingClientRect(); return { left: value.left, right: value.right, top: value.top, bottom: value.bottom, width: value.width, height: value.height }; };
+      const before = {
+        run: rect(element), headChevron: rect(headChevron), activityChevron: rect(activityChevron), narrative: rect(narrative),
+        activityDefaultOpen: activity.open,
+      };
+      activity.open = true;
+      updateConversationWorkRunElement(run, element);
+      const refreshed = element.querySelector('.conversation-work-activity');
+      const preservedOpenAfterRefresh = refreshed.open;
+      return { ...before, preservedOpenAfterRefresh, wrapperClass: wrapper.className };
+    })()`);
+    if (buildSafeLane.activityDefaultOpen || !buildSafeLane.preservedOpenAfterRefresh
+      || buildSafeLane.run.right - buildSafeLane.headChevron.right < 30
+      || buildSafeLane.run.right - buildSafeLane.activityChevron.right < 30
+      || buildSafeLane.run.right - buildSafeLane.narrative.right < 30) {
+      fail(`Build right-side safety lane or secondary default collapse failed: ${JSON.stringify(buildSafeLane)}`);
+    }
+    const buildSafeLaneScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(path.join(repoRoot, 'archive', '2026-07-23-build-right-safe-lane.png'), Buffer.from(buildSafeLaneScreenshot.data, 'base64'));
+    const inputModePersistence = await evaluate(cdp, `(async () => {
+      const target = currentConversationTarget(activeConversationId());
+      const setResult = await window.api.setInputMode('next', target);
+      const state = await window.api.getState(target);
+      return { setResult, stateMode: state.inputMode, target };
+    })()`);
+    if (inputModePersistence.setResult !== 'next' || inputModePersistence.stateMode !== 'next') {
+      fail(`Guide/Next target persistence failed before restart: ${JSON.stringify(inputModePersistence)}`);
+    }
     const focusMenuScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
     fs.writeFileSync(path.join(repoRoot, 'archive', '2026-07-14-workspace-focus-menu.png'), Buffer.from(focusMenuScreenshot.data, 'base64'));
     const activeState = await evaluate(cdp, `window.api.getState()`);
@@ -453,11 +573,34 @@ async function evaluate(cdp, expression) {
     if (durableImageUi.cards !== 1 || durableImageUi.name !== 'diagram.png' || !durableImageUi.src.startsWith('data:image/png;base64,')) fail(`durable user image UI failed: ${JSON.stringify(durableImageUi)}`);
     const durableImageScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
     fs.writeFileSync(path.join(repoRoot, 'archive', '2026-07-14-durable-user-image-ui.png'), Buffer.from(durableImageScreenshot.data, 'base64'));
-    console.log(`[release-ui-runtime-layout-smoke] PASS workspaceFocusMenu=${JSON.stringify(workspaceFocusMenu)} layout=${JSON.stringify(result)} editor=${JSON.stringify(editor)} editorThemes=${JSON.stringify({ editorDark, editorLight })} icons=${JSON.stringify({ darkAppIcon, lightAppIcon, darkSystemIcon, lightSystemIcon })} controls=${JSON.stringify({ controlDark, controlLight })} appearance=${JSON.stringify(appearance)} durableImageUi=${JSON.stringify(durableImageUi)}`);
+    try { cdp.ws.close(); } catch {}
+    if (child?.pid) spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    child = undefined;
+    cdp = undefined;
+    await sleep(750);
+
+    const restartPort = port + 401;
+    child = spawn(electron, ['.', `--remote-debugging-port=${restartPort}`, `--user-data-dir=${path.join(root, 'ElectronData')}`, '--no-sandbox', '--no-devtools', '--root', root], { cwd: desktopRoot, stdio: 'ignore', windowsHide: true });
+    cdp = connect(await target(restartPort));
+    await cdp.ready;
+    await waitForPromotedMainUi(cdp);
+    await cdp.call('Runtime.enable');
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await evaluate(cdp, `typeof window.currentConversationTarget === 'function' && !!window.api`)) break;
+      await sleep(200);
+      if (attempt === 99) fail('renderer restart initialization timeout');
+    }
+    const restartedInputMode = await evaluate(cdp, `(async () => {
+      const target = currentConversationTarget(activeConversationId());
+      const state = await window.api.getState(target);
+      return { mode: state.inputMode, target };
+    })()`);
+    if (restartedInputMode.mode !== 'next') fail(`Guide/Next mode did not survive a full application restart: ${JSON.stringify(restartedInputMode)}`);
+    console.log(`[release-ui-runtime-layout-smoke] PASS workspaceFocusMenu=${JSON.stringify(workspaceFocusMenu)} selectPopupLayout=${JSON.stringify(selectPopupLayout)} inputModeRestart=${JSON.stringify(restartedInputMode)} layout=${JSON.stringify(result)} editor=${JSON.stringify(editor)} editorThemes=${JSON.stringify({ editorDark, editorLight })} icons=${JSON.stringify({ darkAppIcon, lightAppIcon, darkSystemIcon, lightSystemIcon })} controls=${JSON.stringify({ controlDark, controlLight })} appearance=${JSON.stringify(appearance)} durableImageUi=${JSON.stringify(durableImageUi)}`);
   } finally {
     try { cdp?.ws.close(); } catch {}
     if (child?.pid) spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
     spawnSync('powershell.exe', ['-NoProfile', '-Command', "Get-Process 'Newmark Agent','electron' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*Newmark Agent*DESKTOP*' } | Stop-Process -Force"], { windowsHide: true });
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
   }
 })().catch(error => { console.error(error.stack || error); process.exit(1); });

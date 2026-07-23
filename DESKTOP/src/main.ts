@@ -2196,8 +2196,19 @@ if (hasCliCommand) {
       };
     });
 
-    ipcMain.handle('agent:setInputMode', async (_event, mode: string) => {
-      return agent?.setInputMode(mode);
+    ipcMain.handle('agent:setInputMode', async (_event, mode: string, targetInput?: ConversationTargetInput) => {
+      if (!agent) return mode === 'next' ? 'next' : 'guide';
+      const target = normalizeConversationTarget(conversationRuntimeTarget(targetInput));
+      const current = normalizeConversationTarget(conversationRuntimeTarget({
+        workspaceId: agent.workspace.current?.id || '',
+        conversationId: agent.activeConversationId,
+      }));
+      const persisted = target.runtimeKey === current.runtimeKey
+        ? agent.setInputMode(mode)
+        : isolatedConversationAgent(target).setInputMode(mode);
+      if (wslBackendEnabled()) await ensureWslConversationPool()!.setInputMode(target, persisted);
+      else await ensureElectronUtilityPool().setInputMode(target, persisted);
+      return persisted;
     });
     ipcMain.handle('agent:setConversation', async (_event, id: string) => {
       return agent?.setConversationFromStorage(id);
@@ -2210,7 +2221,6 @@ if (hasCliCommand) {
     ipcMain.handle('agent:activateConversation', async (_event, targetInput: ConversationTargetInput) => {
       if (!agent) return {};
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
-      const snapshot = await runtimeSnapshotForTarget(target);
       const workspace = target.workspace ? {
         id: target.workspace.id,
         name: target.workspace.name,
@@ -2222,7 +2232,17 @@ if (hasCliCommand) {
         kind: target.workspace.kind === 'ssh' ? 'ssh' as const : 'local' as const,
       } : agent.workspace.current;
       agent.persistActiveConversationSelection(target.conversationId, workspace);
-      return snapshot;
+      const resident = peekTargetRuntime(target).resident;
+      if (!resident) {
+        return {
+          ...localConversationSnapshotForStartup(target),
+          runtimeDeferred: true,
+        };
+      }
+      return {
+        ...await runtimeSnapshotForTarget(target),
+        runtimeDeferred: false,
+      };
     });
     ipcMain.handle('agent:updateGoal', async (_event, goal: string) => {
       if (agent) agent.updateGoal(goal);
@@ -2944,7 +2964,19 @@ if (hasCliCommand) {
         if (result.status === 'failed') throw new Error(result.error || `Workspace selection failed: ${requested}`);
         if (result.status === 'circuit_open') throw new Error(`Workspace selection temporarily paused after repeated failures: ${requested}`);
         if (result.status === 'stale') return agent.workspace.current;
-        return result.value || agent.workspace.current;
+        const selected = result.value || agent.workspace.current;
+        if (!selected) return null;
+        // The host already loaded the selected workspace's persisted active
+        // conversation. Return that local snapshot with the selection response
+        // so the renderer can paint immediately while the runtime refreshes.
+        const target = conversationRuntimeTarget({
+          workspaceId: selected.id || selected.path || selected.name,
+          conversationId: agent.activeConversationId || 'default',
+        });
+        return {
+          ...selected,
+          conversationSnapshot: localConversationSnapshotForStartup(target),
+        };
       }
       return null;
     });

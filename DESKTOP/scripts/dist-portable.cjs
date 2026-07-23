@@ -41,7 +41,10 @@ function runBuilder(args, label) {
   const builderCli = path.join(root, 'node_modules', 'electron-builder', 'cli.js');
   fs.mkdirSync(builderCacheDir, { recursive: true });
   const builderEnv = { ...process.env, ELECTRON_BUILDER_CACHE: builderCacheDir };
-  const result = spawnSync(process.execPath, [builderCli, ...args.map(arg => String(arg))], {
+  const builderArgs = args.map(arg => String(arg));
+  const electronDist = String(process.env.NEWMARK_ELECTRON_DIST_DIR || '').trim();
+  if (electronDist && args.includes('dir')) builderArgs.push(`--config.electronDist=${path.resolve(electronDist)}`);
+  const result = spawnSync(process.execPath, [builderCli, ...builderArgs], {
     cwd: root,
     stdio: 'inherit',
     shell: false,

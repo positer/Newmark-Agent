@@ -98,6 +98,9 @@ async function handle(request: UtilityAgentRequest): Promise<unknown> {
   if (request.method === 'set_work_run_expanded') {
     return kernel.setWorkRunExpanded(checkedTarget(request.params.target), request.params.runId, request.params.expanded);
   }
+  if (request.method === 'set_input_mode') {
+    return kernel.setInputMode(checkedTarget(request.params.target), request.params.mode);
+  }
   if (request.method === 'update_setting') {
     host.config.set(request.params.section, request.params.key, request.params.value);
     kernel.updateSetting(request.params.section, request.params.key, request.params.value);

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.4"><img alt="Release" src="https://img.shields.io/badge/release-dev--0.1.4-blue"></a>
+  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.1.5-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -30,17 +30,17 @@ Newmark Agent brings model routing, persistent workspaces, tools, subagents, wor
 
 ## Download
 
-### dev-0.1.4
+### dev-0.1.5
 
-Download packages from the [dev-0.1.4 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.4).
+Download packages from the [dev-0.1.5 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.5).
 
 | Package | Platform | SHA-256 |
 | --- | --- | --- |
-| `Newmark-Agent-0.1.4-x64.msi` | Windows x64 installer | (see release assets) |
-| `Newmark-Agent-0.1.4-win-unpacked-x64.zip` | Windows x64 portable | (see release assets) |
-| `Newmark-Agent-0.1.4-x86_64.AppImage` | Linux x64 AppImage | (see release assets) |
-| `Newmark-Agent-0.1.4-amd64.deb` | Debian/Ubuntu x64 package | (see release assets) |
-| `Newmark-Agent-0.1.4-linux-unpacked-x64.zip` | Linux x64 portable | (see release assets) |
+| `Newmark-Agent-0.1.5-x64.msi` | Windows x64 installer | `906CE38656F809A416E74A5AF4A4F8D4A3212D6D7936C16F9F24F63149340D67` |
+| `Newmark-Agent-0.1.5-win-unpacked-x64.zip` | Windows x64 portable | `C86A5A1AF0AA8B5B7EF8170FAF5D28DB8F1DD5DAA5B9841BF42844DCEBC76A7B` |
+| `Newmark-Agent-0.1.5-x86_64.AppImage` | Linux x64 AppImage | `81C098BF2393813A7FF2B4176C85F201EC0ED389337F87E3AA9D4EF5CFA233D5` |
+| `Newmark-Agent-0.1.5-amd64.deb` | Debian/Ubuntu x64 package | `5B6BF6E9E4E27D07E321199D8D367075021B252CE648C69AE5E831642383AB2F` |
+| `Newmark-Agent-0.1.5-linux-unpacked-x64.zip` | Linux x64 portable | `582DB2E8AB9A7E861612AFD5929EFC774E9F1FC065ED7D3A6767ACB826866968` |
 
 The Windows MSI requests administrator elevation. Windows and Linux may show an unknown-publisher warning because the packages are not code-signed.
 
@@ -54,7 +54,7 @@ The Windows MSI requests administrator elevation. Windows and Linux may show an 
 
 Application upgrades preserve existing user state under `~/.Newmark`.
 
-The current `dev-0.1.4` maintenance update also separates taskbar minimize from close-to-tray, exposes exact Skill/MCP activity, clickable Subagent work chips, and inline file diffs inside Build blocks, removes the fixed Subagent execution timeout, and improves light-theme notices, model menus, and Memory Lab overview navigation. The overview keeps a throttled ambient layout moving, supports long captured drags, turns far-zoom nodes into colored dots with hover/focus name tooltips, and preserves hierarchical `tagPaths` through desktop updates.
+The current source and packaged release version is `dev-0.1.5`. This UI follow-up moves Build status, expansion controls, and wrapped response text away from the right-side user timeline. Secondary command groups start collapsed, while manual expansion survives live refresh. Guide/Next changes are persisted to both the conversation state and its resident isolated runtime so they survive application exit. Memory Lab dragging follows the pointer at display refresh speed while pausing layout simulation and reusing graph relationships indexed when the overview loads.
 
 ## Core Capabilities
 
@@ -189,6 +189,10 @@ See [OVERVIEW.md](OVERVIEW.md) for the source tree, subsystem responsibilities, 
 
 ### Maintenance Log
 
+- 2026-07-23: Corrected the first generic-select build's severe layout regression. Enhanced selects now reuse the model selector's actual button/menu classes and one top-layer directional popup positioner; compact labels reserve readable width, repeated clicks fully close generic and model Popovers, popup opening leaves toolbar geometry unchanged, and the terminal shell selector uses the same rounded glass surface. Right-panel file-tree and Flow indicators point right when collapsed and down when expanded. Real Electron acceptance is recorded in `archive/20260723-dev-0.1.5-select-popup-regression.md`.
+- 2026-07-23: Built and verified the `0.1.5` Windows MSI and portable ZIP. Machine-wide UAC was cancelled, so the matching package is installed and running from the current-user Programs directory with user configuration unchanged; see `archive/20260723-dev-0.1.5-windows-package-install.md`.
+- 2026-07-23: Unified ordinary popup lists with the rounded, scrollable model-selector surface, including mode/intelligence, General settings, GitHub repository, and new-conversation workspace choices. Workspace changes now return the persisted active-conversation snapshot immediately, while cold conversation activation paints disk history before isolated runtime startup; see `archive/20260723-dev-0.1.5-cold-load-select-surfaces.md`.
+- 2026-07-23: Advanced the source version to `dev-0.1.5`, inset Build status/chevron controls from the user timeline, and made Memory Lab dragging a lightweight GPU translation with paused simulation and load-time relationship indexes; see `archive/20260723-dev-0.1.5-build-memory-drag.md`.
 - 2026-07-22: Corrected the global `Agent.md` editor to use Newmark's theme-native input styling, registered the model-validation background note, deduplicated concurrent validation clicks, preserved manual folding after force stop, and repaired text-usable model false negatives such as DeepSeek v4; see `archive/20260722-agent-prompt-validation-lifecycle.md`.
 - 2026-07-21: Prepared the cross-platform `0.1.4` release: General settings can open and refresh the user `config.json`, Models & Providers provides a live user-level `Agent.md` editor, prompt layering normalizes and deduplicates global/workspace prompts, model validation keeps text-usable models available when optional capabilities are unsupported, and explicit Linux tray exit now has a bounded shutdown fallback so it cannot leave a ghost process holding the single-instance lock. Evidence is in `archive/20260721-dev-0.1.4-settings-prompts-validation.md`.
 - 2026-07-21: Recovered a local Windows startup failure caused by an incomplete machine-wide installation missing `resources/app.asar`. The verified `0.1.3` unpacked build now runs from the current-user installation path with existing `~/.Newmark` state preserved; see `archive/20260721-213821-startup-recovery.md`.

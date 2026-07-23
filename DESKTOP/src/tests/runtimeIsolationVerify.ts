@@ -822,6 +822,7 @@ class FakeWslTargetClient implements WslTargetRuntimeClient {
   stopResults: WslAgentStopResult[] = [];
   settings = 0;
   folds = 0;
+  inputModes: string[] = [];
   rewindCalls: Array<{ target: ConversationRuntimeTarget; messageIndex: number }> = [];
   stopCalls = 0;
   hangStops = false;
@@ -883,6 +884,7 @@ class FakeWslTargetClient implements WslTargetRuntimeClient {
   }
   async checkpoint(): Promise<Record<string, unknown>> { return { checkpointed: true }; }
   async setWorkRunExpanded(): Promise<boolean> { this.folds++; return true; }
+  async setInputMode(_target: ConversationRuntimeTarget, mode: string): Promise<'guide' | 'next'> { this.inputModes.push(mode); return mode === 'next' ? 'next' : 'guide'; }
   async updateSetting(): Promise<void> { this.settings++; }
   async requestStop(): Promise<WslAgentStopResult> {
     this.stopCalls++;
@@ -923,6 +925,9 @@ async function verifyWslPerTargetPool(): Promise<void> {
   assert.equal(alphaClient.rewindCalls[0].messageIndex, 2);
   assert.equal(normalizeConversationTarget(alphaClient.rewindCalls[0].target).runtimeKey, conversationRuntimeKey(alpha));
   assert.equal(betaClient.rewindCalls.length, 0, 'WSL rewind must not cross the composite target boundary');
+  assert.equal(await pool.setInputMode(alpha, 'next'), 'next');
+  assert.deepEqual(alphaClient.inputModes, ['next'], 'WSL input-mode changes reach the resident target runtime before its next checkpoint');
+  assert.deepEqual(betaClient.inputModes, [], 'WSL input-mode changes do not leak across target runtimes');
 
   alphaClient.stopResults.push(
     { action: 'graceful', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'wsl', distro: 'Fake' },
@@ -1235,6 +1240,7 @@ class FakeElectronTargetClient implements ElectronTargetRuntimeClient {
   guides = 0;
   checkpoints = 0;
   folds = 0;
+  inputModes: string[] = [];
   rewindIndices: number[] = [];
   restarts = 0;
   forceStops = 0;
@@ -1300,6 +1306,7 @@ class FakeElectronTargetClient implements ElectronTargetRuntimeClient {
   }
   async checkpoint(): Promise<Record<string, unknown>> { this.checkpoints++; return { checkpointed: true }; }
   async setWorkRunExpanded(): Promise<boolean> { this.folds++; return true; }
+  async setInputMode(mode: string): Promise<'guide' | 'next'> { this.inputModes.push(mode); return mode === 'next' ? 'next' : 'guide'; }
   async updateSetting(): Promise<void> { this.settings++; }
   async forceRestart(): Promise<void> {
     this.restarts++;
@@ -1367,6 +1374,9 @@ async function verifyElectronPerTargetPool(): Promise<void> {
   await pool.setWorkRunExpanded(alpha, 'run-a', false);
   assert.equal(alphaClient.checkpoints, 1);
   assert.equal(alphaClient.folds, 1);
+  assert.equal(await pool.setInputMode(alpha, 'next'), 'next');
+  assert.deepEqual(alphaClient.inputModes, ['next'], 'Utility input-mode changes reach the resident target runtime before its next checkpoint');
+  assert.deepEqual(betaClient.inputModes, [], 'Utility input-mode changes do not leak across target runtimes');
 
   alphaClient.stopResults.push(
     { action: 'graceful', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'utility', pid: 123 },

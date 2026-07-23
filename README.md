@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.1.5-blue">
+  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.1.6-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -30,17 +30,17 @@ Newmark Agent brings model routing, persistent workspaces, tools, subagents, wor
 
 ## Download
 
-### dev-0.1.5
+### dev-0.1.6
 
-Download packages from the [dev-0.1.5 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.5).
+Download packages from the [dev-0.1.6 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.6).
 
 | Package | Platform | SHA-256 |
 | --- | --- | --- |
-| `Newmark-Agent-0.1.5-x64.msi` | Windows x64 installer | `906CE38656F809A416E74A5AF4A4F8D4A3212D6D7936C16F9F24F63149340D67` |
-| `Newmark-Agent-0.1.5-win-unpacked-x64.zip` | Windows x64 portable | `C86A5A1AF0AA8B5B7EF8170FAF5D28DB8F1DD5DAA5B9841BF42844DCEBC76A7B` |
-| `Newmark-Agent-0.1.5-x86_64.AppImage` | Linux x64 AppImage | `81C098BF2393813A7FF2B4176C85F201EC0ED389337F87E3AA9D4EF5CFA233D5` |
-| `Newmark-Agent-0.1.5-amd64.deb` | Debian/Ubuntu x64 package | `5B6BF6E9E4E27D07E321199D8D367075021B252CE648C69AE5E831642383AB2F` |
-| `Newmark-Agent-0.1.5-linux-unpacked-x64.zip` | Linux x64 portable | `582DB2E8AB9A7E861612AFD5929EFC774E9F1FC065ED7D3A6767ACB826866968` |
+| `Newmark-Agent-0.1.6-x64.msi` | Windows x64 installer | `AC008F0BF351F25092CDD215950E3F2973C6396D745AA6DCD54FE3CC96DC8A26` |
+| `Newmark-Agent-0.1.6-win-unpacked-x64.zip` | Windows x64 portable | `7F280D0ED600C79D673AD8B772A241CB80A8648E3224872829972AAE3F226990` |
+| `Newmark-Agent-0.1.6-x86_64.AppImage` | Linux x64 AppImage | (pending build) |
+| `Newmark-Agent-0.1.6-amd64.deb` | Debian/Ubuntu x64 package | (pending build) |
+| `Newmark-Agent-0.1.6-linux-unpacked-x64.zip` | Linux x64 portable | (pending build) |
 
 The Windows MSI requests administrator elevation. Windows and Linux may show an unknown-publisher warning because the packages are not code-signed.
 
@@ -54,7 +54,7 @@ The Windows MSI requests administrator elevation. Windows and Linux may show an 
 
 Application upgrades preserve existing user state under `~/.Newmark`.
 
-The current source and packaged release version is `dev-0.1.5`. This UI follow-up moves Build status, expansion controls, and wrapped response text away from the right-side user timeline. Secondary command groups start collapsed, while manual expansion survives live refresh. Guide/Next changes are persisted to both the conversation state and its resident isolated runtime so they survive application exit. Memory Lab dragging follows the pointer at display refresh speed while pausing layout simulation and reusing graph relationships indexed when the overview loads.
+The current source and packaged release version is `dev-0.1.6`. This release adds durable Goal continuation/completion state, queue and Goal editing with image compatibility, non-destructive conversation branching, read-only Flow logic evaluation, explicit Subagent mode/Goal/Flow propagation, and deferred Settings/Memory Lab rendering. No backend process is stopped as a UI performance optimization.
 
 ## Core Capabilities
 
@@ -189,6 +189,7 @@ See [OVERVIEW.md](OVERVIEW.md) for the source tree, subsystem responsibilities, 
 
 ### Maintenance Log
 
+- 2026-07-24: Advanced the source version to `dev-0.1.6`. Added a "Default expand tool usage" toggle in General Settings; build blocks now auto-expand while working, auto-collapse when done, and stop auto-managing after the user manually toggles a block. Settings tabs load lazily for faster first-open, and Memory Lab panels fade in to avoid visual flash. See `OVERVIEW.md` for details.
 - 2026-07-23: Corrected the first generic-select build's severe layout regression. Enhanced selects now reuse the model selector's actual button/menu classes and one top-layer directional popup positioner; compact labels reserve readable width, repeated clicks fully close generic and model Popovers, popup opening leaves toolbar geometry unchanged, and the terminal shell selector uses the same rounded glass surface. Right-panel file-tree and Flow indicators point right when collapsed and down when expanded. Real Electron acceptance is recorded in `archive/20260723-dev-0.1.5-select-popup-regression.md`.
 - 2026-07-23: Built and verified the `0.1.5` Windows MSI and portable ZIP. Machine-wide UAC was cancelled, so the matching package is installed and running from the current-user Programs directory with user configuration unchanged; see `archive/20260723-dev-0.1.5-windows-package-install.md`.
 - 2026-07-23: Unified ordinary popup lists with the rounded, scrollable model-selector surface, including mode/intelligence, General settings, GitHub repository, and new-conversation workspace choices. Workspace changes now return the persisted active-conversation snapshot immediately, while cold conversation activation paints disk history before isolated runtime startup; see `archive/20260723-dev-0.1.5-cold-load-select-surfaces.md`.

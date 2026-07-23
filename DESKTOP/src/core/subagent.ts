@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { NewmarkToolResult } from './compat';
+import type { AgentMode } from './types';
 
 export type SubagentStatus = 'idle' | 'queued' | 'working' | 'completed' | 'closed' | 'error';
 export type SubagentMessageKind = 'directive' | 'question' | 'result' | 'handoff';
@@ -42,7 +43,10 @@ export interface SubagentInstance {
   prompt: string;
   model: string;
   inputMode: string;
-  agentMode: string;
+  agentMode: AgentMode;
+  goalObjective?: string;
+  flowName?: string;
+  flowPc?: number;
   status: SubagentStatus;
   queueSequence?: number;
   messages: Array<{ role: string; content: string }>;
@@ -234,7 +238,7 @@ export class SubagentManager {
       if (record.status === 'queued') {
         const sequence = Number(record.queueSequence || this.nextSequence++);
         record.queueSequence = sequence;
-        this.pending.push({ id: record.id, prompt: record.messages.filter(message => message.role === 'user').at(-1)?.content || record.prompt, flowName: '', sequence, reason: 'resume' });
+        this.pending.push({ id: record.id, prompt: record.messages.filter(message => message.role === 'user').at(-1)?.content || record.prompt, flowName: record.flowName || '', sequence, reason: 'resume' });
       }
     }
     this.mailbox = (state?.mailbox || []).map(message => ({ ...message }));
@@ -263,7 +267,7 @@ export class SubagentManager {
     this.rootInboxListeners.delete(listener);
   }
 
-  create(name: string, prompt: string, model?: string, inputMode?: string, agentMode?: string, createdByAgentId = this.rootAgentId, flowName = ''): string {
+  create(name: string, prompt: string, model?: string, inputMode?: string, agentMode: AgentMode = 'build', createdByAgentId = this.rootAgentId, flowName = '', goalObjective = '', flowPc = 0): string {
     const id = randomUUID();
     const shortId = id.replace(/-/g, '').slice(0, 8);
     const slug = natureSlug(name);
@@ -282,7 +286,10 @@ export class SubagentManager {
       prompt,
       model: model || 'default',
       inputMode: inputMode || 'guide',
-      agentMode: agentMode || 'build',
+      agentMode,
+      goalObjective: goalObjective || undefined,
+      flowName: flowName || undefined,
+      flowPc: Math.max(0, Math.floor(Number(flowPc) || 0)),
       status: 'queued',
       messages: [{ role: 'system', content: `Peer agent '${qualifiedName}': ${prompt}` }, { role: 'user', content: prompt }],
       result: null,
@@ -310,7 +317,7 @@ export class SubagentManager {
     target.error = undefined;
     target.completedAt = undefined;
     target.updatedAt = now();
-    if (this.executor) this.enqueue(target, prompt, '', 'mailbox');
+    if (this.executor) this.enqueue(target, prompt, target.flowName || '', 'mailbox');
     else {
       target.status = 'working';
       this.changed();
@@ -651,14 +658,14 @@ export class SubagentManager {
     record.status = 'queued';
     const sequence = Number(record.queueSequence || unread[0].sequence || this.nextSequence++);
     record.queueSequence = sequence;
-    this.pending.push({ id: record.id, prompt: this.mailboxPrompt(unread), flowName: '', sequence, reason: 'mailbox' });
+    this.pending.push({ id: record.id, prompt: this.mailboxPrompt(unread), flowName: record.flowName || '', sequence, reason: 'mailbox' });
   }
 
   private enqueueUnreadMailbox(record: SubagentInstance): void {
     if (record.status === 'closed' || record.status === 'queued' || this.running.has(record.id)) return;
     const unread = this.unreadMailbox(record.id);
     if (!unread.length) return;
-    this.enqueue(record, this.mailboxPrompt(unread), '', 'mailbox');
+    this.enqueue(record, this.mailboxPrompt(unread), record.flowName || '', 'mailbox');
   }
 
   private markMailboxRead(messages: SubagentMessage[]): void {

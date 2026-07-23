@@ -113,10 +113,39 @@ interface StoredConversationState {
     continuations?: ConversationContinuation[];
     modelSelection?: ConversationModelSelection;
     inputMode?: InputMode;
+    mode?: AgentMode;
+    goal?: StoredGoalState | null;
+    branches?: ConversationBranchState[];
+    activeBranchId?: string;
+    branchReset?: boolean;
     updatedAt?: string;
     pinned?: boolean;
     pinnedAt?: string;
+    order?: number;
   }>;
+}
+export interface StoredGoalState {
+  objective: string;
+  changes: Array<{ old: string; new: string }>;
+  goalRounds: number;
+  verified: boolean;
+  paused: boolean;
+}
+export interface ConversationBranchState {
+  id: string;
+  createdAt: string;
+  sourceMessageIndex: number;
+  sourceText: string;
+  chatMessages: ChatMessage[];
+  history: Array<Record<string, unknown>>;
+  plan: ConversationPlanState;
+  linkedPlan: LinkedPlanState;
+  workRuns: ConversationWorkRun[];
+  continuations: ConversationContinuation[];
+  modelSelection: ConversationModelSelection;
+  inputMode: InputMode;
+  mode: AgentMode;
+  goal: StoredGoalState | null;
 }
 interface ConversationArchiveManifest {
   version: 1;
@@ -160,6 +189,10 @@ export interface ConversationSnapshot {
   continuations: ConversationContinuation[];
   modelSelection: ConversationModelSelection;
   inputMode: InputMode;
+  mode: AgentMode;
+  goal: StoredGoalState | null;
+  branches: Array<Pick<ConversationBranchState, 'id' | 'createdAt' | 'sourceMessageIndex' | 'sourceText'>>;
+  activeBranchId: string;
 }
 export interface ConversationContinuation {
   content: string;
@@ -289,7 +322,7 @@ export class Agent {
     model: string;
     fallback: boolean;
   } | null = null;
-  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; inputMode?: InputMode; updatedAt?: string }>();
+  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; updatedAt?: string }>();
   public isSubagentRuntime = false;
   private subagentName = '';
   private subagentPrompt = '';
@@ -406,12 +439,64 @@ export class Agent {
     if (m === 'goal' && !this.goal) {
       this.goal = new GoalStateImpl('Set your objective');
     }
-    if (m !== 'goal') this.goal = null;
     if (m === 'flow') { this.goal = null; this.flowPc = 0; }
     this.mode = m;
     this.systemPromptCache = null;
     this.toolDefinitionCache.clear();
     this.status = 'idle';
+  }
+
+  private serializeGoal(goal: GoalState | null = this.goal): StoredGoalState | null {
+    if (!goal) return null;
+    return {
+      objective: String(goal.objective || '').trim(),
+      changes: Array.isArray(goal.changes) ? goal.changes.map(change => ({ old: String(change.old || ''), new: String(change.new || '') })) : [],
+      goalRounds: Math.max(0, Math.floor(Number(goal.goalRounds) || 0)),
+      verified: !!goal.verified,
+      paused: !!goal.paused,
+    };
+  }
+
+  private restoreGoal(goal: StoredGoalState | null | undefined): GoalState | null {
+    if (!goal?.objective) return null;
+    const restored = new GoalStateImpl(goal.objective);
+    restored.changes = Array.isArray(goal.changes) ? goal.changes.map(change => ({ old: String(change.old || ''), new: String(change.new || '') })) : [];
+    restored.goalRounds = Math.max(0, Math.floor(Number(goal.goalRounds) || 0));
+    restored.verified = !!goal.verified;
+    restored.paused = !!goal.paused;
+    return restored;
+  }
+
+  private branchFromEntry(id: string, sourceMessageIndex: number, sourceText: string, entry: StoredConversationEntry): ConversationBranchState {
+    return {
+      id,
+      createdAt: new Date().toISOString(),
+      sourceMessageIndex,
+      sourceText,
+      chatMessages: [...(entry.chatMessages || [])],
+      history: [...(entry.history || [])],
+      plan: this.normalizeConversationPlan(entry.plan),
+      linkedPlan: this.normalizeLinkedPlan(entry.linkedPlan),
+      workRuns: this.normalizeWorkRuns(entry.workRuns),
+      continuations: this.normalizeContinuations(entry.continuations),
+      modelSelection: entry.modelSelection || this.currentConversationModelSelection(),
+      inputMode: entry.inputMode || this.defaultInputMode(),
+      mode: entry.mode || 'build',
+      goal: entry.goal || null,
+    };
+  }
+
+  private applyBranchToEntry(entry: StoredConversationEntry, branch: ConversationBranchState): void {
+    entry.chatMessages = [...branch.chatMessages];
+    entry.history = [...branch.history];
+    entry.plan = this.normalizeConversationPlan(branch.plan);
+    entry.linkedPlan = this.normalizeLinkedPlan(branch.linkedPlan);
+    entry.workRuns = this.normalizeWorkRuns(branch.workRuns);
+    entry.continuations = this.normalizeContinuations(branch.continuations);
+    entry.modelSelection = branch.modelSelection;
+    entry.inputMode = branch.inputMode;
+    entry.mode = branch.mode;
+    entry.goal = branch.goal;
   }
 
   invalidateSystemPrompt(): void {
@@ -1655,7 +1740,7 @@ export class Agent {
         const preferred = incomingUpdatedAt >= existingUpdatedAt ? { ...existing, ...incoming } : { ...incoming, ...existing };
         const incomingTranscriptEmpty = !(incoming.chatMessages || []).length && !(incoming.history || []).length;
         const existingTranscriptPresent = !!(existing.chatMessages || []).length || !!(existing.history || []).length;
-        if (incomingTranscriptEmpty && existingTranscriptPresent) {
+        if (incomingTranscriptEmpty && existingTranscriptPresent && !incoming.branchReset) {
           preferred.chatMessages = existing.chatMessages;
           preferred.history = existing.history;
         }
@@ -1752,10 +1837,20 @@ export class Agent {
     }
   }
 
-  public listConversationStates(): Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string }> {
+  public listConversationStates(): Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string; order: number }> {
     const stored = this.readStoredConversationState();
     const prefix = this.workspaceConversationPrefix() || '';
-    const rows: Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string }> = [];
+    const scopedEntries = Object.entries(stored.conversations || {}).filter(([key]) => !prefix || key.startsWith(prefix));
+    if (scopedEntries.some(([, value]) => !Number.isFinite(value.order))) {
+      const legacyOrder = [...scopedEntries].sort(([, a], [, b]) => {
+        if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+        if (a.pinned && b.pinned) return String(b.pinnedAt || '').localeCompare(String(a.pinnedAt || ''));
+        return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+      });
+      legacyOrder.forEach(([, value], index) => { value.order = index; });
+      this.writeStoredConversationState(stored);
+    }
+    const rows: Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string; order: number }> = [];
     for (const [key, value] of Object.entries(stored.conversations || {})) {
       if (prefix && !key.startsWith(prefix)) continue;
       const id = key.slice(prefix.length + 1) || key;
@@ -1768,12 +1863,12 @@ export class Agent {
         updatedAt: value.updatedAt || '',
         pinned: !!value.pinned,
         pinnedAt: value.pinnedAt || '',
+        order: Number(value.order || 0),
       });
     }
     rows.sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-      if (a.pinned && b.pinned) return b.pinnedAt.localeCompare(a.pinnedAt);
-      return b.updatedAt.localeCompare(a.updatedAt);
+      return a.order - b.order;
     });
     const seenContent = new Set<string>();
     return rows.filter(row => {
@@ -1919,6 +2014,15 @@ export class Agent {
         ? this.currentConversationModelSelection()
         : (persisted?.modelSelection || memory?.modelSelection || this.currentConversationModelSelection()),
       inputMode: isActiveConversation ? this.inputMode : (persisted?.inputMode || memory?.inputMode || this.defaultInputMode()),
+      mode: isActiveConversation ? this.mode : (persisted?.mode || memory?.mode || 'build'),
+      goal: isActiveConversation ? this.serializeGoal() : (persisted?.goal || memory?.goal || null),
+      branches: (persisted?.branches || []).map(branch => ({
+        id: branch.id,
+        createdAt: branch.createdAt,
+        sourceMessageIndex: branch.sourceMessageIndex,
+        sourceText: branch.sourceText,
+      })),
+      activeBranchId: String(persisted?.activeBranchId || ''),
     };
   }
 
@@ -1929,6 +2033,9 @@ export class Agent {
       const stored = this.readStoredConversationState();
       stored.conversations = stored.conversations || {};
       if (!stored.conversations[stateKey]) {
+        const existingOrders = Object.values(stored.conversations)
+          .filter(value => !value.pinned && Number.isFinite(value.order))
+          .map(value => Number(value.order));
         stored.conversations[stateKey] = {
           title: this.titleFromMessages([], clean),
           chatMessages: [],
@@ -1939,7 +2046,10 @@ export class Agent {
           continuations: [],
           modelSelection: this.currentConversationModelSelection(),
           inputMode: this.inputMode,
+          mode: 'build',
+          goal: null,
           updatedAt: new Date().toISOString(),
+          order: existingOrders.length ? Math.min(...existingOrders) - 1 : 0,
         };
         this.writeStoredConversationState(stored);
       }
@@ -1986,6 +2096,77 @@ export class Agent {
     return this.getConversationSnapshot(clean);
   }
 
+  public branchConversation(conversationId: string, messageIndex: number, editedText: string): ConversationSnapshot {
+    const clean = this.safeConversationId(conversationId || 'default');
+    const text = String(editedText || '').trim();
+    if (!text) throw new Error('Edited message cannot be empty.');
+    this.saveWorkspaceConversationState(true);
+    const snapshot = this.getConversationSnapshot(clean);
+    const index = Math.floor(Number(messageIndex));
+    const target = snapshot.chatMessages[index];
+    if (!Number.isFinite(index) || index < 0 || !target || target.role !== 'user') {
+      throw new Error('Conversation branch target must be a user message.');
+    }
+    const stateKey = this.workspaceConversationStateKey(clean);
+    if (!stateKey) throw new Error('Conversation workspace is unavailable.');
+    const stored = this.readStoredConversationState();
+    const entry = stored.conversations?.[stateKey];
+    if (!entry) throw new Error('Conversation state is unavailable.');
+    entry.branches = Array.isArray(entry.branches) ? entry.branches : [];
+    if (!entry.activeBranchId) {
+      const originalId = crypto.randomUUID();
+      entry.branches.push(this.branchFromEntry(originalId, index, target.content, entry));
+      entry.activeBranchId = originalId;
+    } else {
+      const active = entry.branches.find(branch => branch.id === entry.activeBranchId);
+      if (active) Object.assign(active, this.branchFromEntry(active.id, active.sourceMessageIndex, active.sourceText, entry));
+    }
+
+    const userOrdinal = snapshot.chatMessages.slice(0, index + 1).filter(message => message.role === 'user').length;
+    let seenUsers = 0;
+    let historyCut = (entry.history || []).length;
+    for (let i = 0; i < (entry.history || []).length; i++) {
+      if (String(entry.history?.[i]?.role || '') !== 'user') continue;
+      seenUsers++;
+      if (seenUsers === userOrdinal) { historyCut = i; break; }
+    }
+    const branchId = crypto.randomUUID();
+    const branch = this.branchFromEntry(branchId, index, text, {
+      ...entry,
+      chatMessages: snapshot.chatMessages.slice(0, index),
+      history: (entry.history || []).slice(0, historyCut),
+      workRuns: snapshot.workRuns.filter(run => run.endedAt ? run.endedAt < target.timestamp : run.startedAt < target.timestamp),
+      continuations: [],
+    });
+    entry.branches.push(branch);
+    entry.activeBranchId = branchId;
+    this.applyBranchToEntry(entry, branch);
+    entry.branchReset = true;
+    entry.updatedAt = new Date().toISOString();
+    this.writeStoredConversationStateNow(stored);
+    if (clean === this.safeConversationId(this.activeConversationId)) this.setConversationFromStorage(clean);
+    return this.getConversationSnapshot(clean);
+  }
+
+  public switchConversationBranch(conversationId: string, branchId: string): ConversationSnapshot {
+    const clean = this.safeConversationId(conversationId || 'default');
+    this.saveWorkspaceConversationState(true);
+    const stateKey = this.workspaceConversationStateKey(clean);
+    const stored = this.readStoredConversationState();
+    const entry = stateKey ? stored.conversations?.[stateKey] : undefined;
+    const branch = entry?.branches?.find(item => item.id === String(branchId || ''));
+    if (!entry || !branch) throw new Error('Conversation branch was not found.');
+    const active = entry.branches?.find(item => item.id === entry.activeBranchId);
+    if (active) Object.assign(active, this.branchFromEntry(active.id, active.sourceMessageIndex, active.sourceText, entry));
+    this.applyBranchToEntry(entry, branch);
+    entry.branchReset = !(branch.chatMessages.length || branch.history.length);
+    entry.activeBranchId = branch.id;
+    entry.updatedAt = new Date().toISOString();
+    this.writeStoredConversationStateNow(stored);
+    if (clean === this.safeConversationId(this.activeConversationId)) this.setConversationFromStorage(clean);
+    return this.getConversationSnapshot(clean);
+  }
+
   public setConversationPinned(id: string, pinned: boolean): boolean {
     const clean = this.safeConversationId(id || 'default');
     this.saveWorkspaceConversationState();
@@ -1997,7 +2178,38 @@ export class Agent {
     if (!existing) return false;
     existing.pinned = !!pinned;
     existing.pinnedAt = existing.pinned ? new Date().toISOString() : '';
+    const siblingOrders = Object.entries(stored.conversations)
+      .filter(([key, value]) => key !== stateKey && !!value.pinned === existing.pinned && Number.isFinite(value.order))
+      .map(([, value]) => Number(value.order));
+    existing.order = siblingOrders.length ? Math.min(...siblingOrders) - 1 : 0;
     existing.updatedAt = existing.updatedAt || new Date().toISOString();
+    this.writeStoredConversationState(stored);
+    return true;
+  }
+
+  public renameConversation(id: string, title: string): boolean {
+    const clean = this.safeConversationId(id || 'default');
+    const nextTitle = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!nextTitle) return false;
+    this.saveWorkspaceConversationState();
+    const stateKey = this.workspaceConversationStateKey(clean);
+    if (!stateKey) return false;
+    const stored = this.readStoredConversationState();
+    const existing = stored.conversations?.[stateKey];
+    if (!existing) return false;
+    existing.title = nextTitle;
+    this.writeStoredConversationState(stored);
+    return true;
+  }
+
+  public reorderConversations(ids: string[]): boolean {
+    const prefix = this.workspaceConversationPrefix() || '';
+    const normalized = Array.from(new Set((Array.isArray(ids) ? ids : []).map(id => this.safeConversationId(id)).filter(Boolean)));
+    const stored = this.readStoredConversationState();
+    const entries = Object.entries(stored.conversations || {}).filter(([key]) => !prefix || key.startsWith(prefix));
+    const entryById = new Map(entries.map(([key, value]) => [key.slice(prefix.length + 1) || key, value]));
+    if (normalized.length !== entryById.size || normalized.some(id => !entryById.has(id))) return false;
+    normalized.forEach((id, index) => { entryById.get(id)!.order = index; });
     this.writeStoredConversationState(stored);
     return true;
   }
@@ -2086,6 +2298,8 @@ export class Agent {
       continuations: this.normalizeContinuations(this.continuations),
       modelSelection: this.currentConversationModelSelection(),
       inputMode: this.inputMode,
+      mode: this.mode,
+      goal: this.serializeGoal(),
       updatedAt,
     });
     const stored = this.readStoredConversationState();
@@ -2111,6 +2325,8 @@ export class Agent {
       continuations: this.normalizeContinuations(this.continuations),
       modelSelection: this.currentConversationModelSelection(),
       inputMode: this.inputMode,
+      mode: this.mode,
+      goal: this.serializeGoal(),
       updatedAt,
     };
     if (flush) this.writeStoredConversationStateNow(stored);
@@ -2128,6 +2344,9 @@ export class Agent {
       this.linkedPlan = { markdown: '', revision: 0 };
       this.workRuns = [];
       this.continuations = [];
+      this.mode = 'build';
+      this.goal = null;
+      this.status = 'idle';
       this.activeWorkRunId = '';
       this.bindConversationSubagents(this.activeConversationId);
       return;
@@ -2143,6 +2362,9 @@ export class Agent {
       this.continuations = this.normalizeContinuations(saved.continuations);
       this.restoreConversationModelSelection(saved.modelSelection);
       this.inputMode = saved.inputMode === 'next' ? 'next' : saved.inputMode === 'guide' ? 'guide' : this.defaultInputMode();
+      this.mode = saved.mode || 'build';
+      this.goal = this.restoreGoal(saved.goal);
+      this.status = this.goal?.paused ? 'goal_paused' : 'idle';
       this.activeWorkRunId = this.workRuns.find(run => run.status === 'running')?.runId || '';
       return;
     }
@@ -2158,6 +2380,9 @@ export class Agent {
     this.continuations = this.normalizeContinuations(persisted?.continuations);
     this.restoreConversationModelSelection(persisted?.modelSelection);
     this.inputMode = persisted?.inputMode === 'next' ? 'next' : persisted?.inputMode === 'guide' ? 'guide' : this.defaultInputMode();
+    this.mode = persisted?.mode || 'build';
+    this.goal = this.restoreGoal(persisted?.goal);
+    this.status = this.goal?.paused ? 'goal_paused' : 'idle';
     this.activeWorkRunId = '';
     this.bindConversationSubagents(this.activeConversationId, persisted?.subagentState);
     this.workspaceConversations.set(key, {
@@ -2170,6 +2395,8 @@ export class Agent {
       continuations: this.normalizeContinuations(this.continuations),
       modelSelection: persisted?.modelSelection || this.currentConversationModelSelection(),
       inputMode: persisted?.inputMode === 'next' ? 'next' : persisted?.inputMode === 'guide' ? 'guide' : this.defaultInputMode(),
+      mode: persisted?.mode || 'build',
+      goal: persisted?.goal || null,
       updatedAt: persisted?.updatedAt,
     });
     if (recoveredWorkRuns.changed && stateKey && persisted) {
@@ -2395,7 +2622,7 @@ export class Agent {
     ].join('\n');
   }
 
-  mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'> & Partial<Pick<Agent, 'linkedPlan' | 'subagents' | 'workRuns' | 'continuations'>> & { modelSelection?: ConversationModelSelection; inputMode?: InputMode }): void {
+  mirrorConversationStateFrom(id: string, source: Pick<Agent, 'chatMessages' | 'history' | 'conversationPlan'> & Partial<Pick<Agent, 'linkedPlan' | 'subagents' | 'workRuns' | 'continuations'>> & { modelSelection?: ConversationModelSelection; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null }): void {
     const clean = this.safeConversationId(id || 'default');
     const ws = this.workspace.current;
     if (!ws) return;
@@ -2418,6 +2645,8 @@ export class Agent {
         continuations,
         modelSelection: source.modelSelection || this.currentConversationModelSelection(),
         inputMode: source.inputMode || this.inputMode,
+        mode: source.mode || this.mode,
+        goal: source.goal === undefined ? this.serializeGoal() : source.goal,
         updatedAt,
       });
     }
@@ -2442,6 +2671,8 @@ export class Agent {
       continuations,
       modelSelection: source.modelSelection || previous?.modelSelection || this.currentConversationModelSelection(),
       inputMode: source.inputMode || previous?.inputMode || this.inputMode,
+      mode: source.mode || previous?.mode || this.mode,
+      goal: source.goal === undefined ? (previous?.goal || this.serializeGoal()) : source.goal,
       updatedAt,
     };
     this.writeStoredConversationState(stored, ws);
@@ -2453,6 +2684,8 @@ export class Agent {
       if (source.subagents) this.subagents = source.subagents;
       this.workRuns = workRuns;
       this.continuations = continuations;
+      this.mode = source.mode || this.mode;
+      if (source.goal !== undefined) this.goal = this.restoreGoal(source.goal);
       this.activeWorkRunId = this.workRuns.find(run => run.status === 'running')?.runId || '';
     }
   }
@@ -2725,13 +2958,29 @@ export class Agent {
       this.goal = new GoalStateImpl(newGoal);
       this.mode = 'goal';
     }
+    if (this.goal) {
+      this.goal.verified = false;
+      this.goal.paused = false;
+      this.status = 'idle';
+    }
+    this.mode = 'goal';
+    this.saveWorkspaceConversationState(true);
   }
 
   toggleGoalPause(): boolean {
     if (!this.goal) return false;
     this.goal.paused = !this.goal.paused;
     this.status = this.goal.paused ? 'goal_paused' : 'idle';
+    this.saveWorkspaceConversationState(true);
     return this.goal.paused;
+  }
+
+  markGoalComplete(): void {
+    if (!this.goal) return;
+    this.goal.verified = true;
+    this.goal.paused = false;
+    this.status = 'idle';
+    this.saveWorkspaceConversationState(true);
   }
 
   isGoalPaused(): boolean {
@@ -3851,7 +4100,10 @@ export class Agent {
       const name = params.nature || params.name || preset?.name || 'subagent';
       const prompt = this.buildSubagentPrompt(String(params.prompt || ''), preset);
       if (!name || !prompt) return { ok: false, output: '[Subagent] Name and prompt required.', error: 'Name and prompt required.' };
-      const peerMode = this.mode === 'plan' ? 'plan' : (params.mode || preset?.mode || this.mode || 'build');
+      const requestedPeerMode = String(this.mode === 'plan' ? 'plan' : (params.mode || preset?.mode || this.mode || 'build')).toLowerCase();
+      const peerMode = (['build', 'plan', 'goal', 'flow'].includes(requestedPeerMode) ? requestedPeerMode : 'build') as AgentMode;
+      const peerGoal = String(params.goal || params.goal_objective || (peerMode === 'goal' ? this.goal?.objective || prompt : '')).trim();
+      const peerFlow = String(params.flow || params.flow_name || (peerMode === 'flow' ? this.flow?.name || '' : '')).trim();
       const id = this.subagents.create(
         name,
         prompt,
@@ -3859,7 +4111,9 @@ export class Agent {
         params.input_mode || params.inputMode || preset?.inputMode || 'guide',
         peerMode,
         this.runtimeActorId,
-        params.flow || ''
+        peerFlow,
+        peerGoal,
+        Number(params.flow_pc ?? params.flowPc ?? (peerMode === 'flow' ? this.flowPc : 0))
       );
       const sa = this.subagents.get(id);
       if (sa && preset) {
@@ -4370,6 +4624,7 @@ export class Agent {
       child.engine = 'builtin';
       child.inputMode = sa.inputMode === 'next' ? 'next' : 'guide';
       child.setMode((['build', 'plan', 'goal', 'flow'].includes(sa.agentMode) ? sa.agentMode : 'build') as AgentMode);
+      if (sa.agentMode === 'goal') child.updateGoal(String(sa.goalObjective || sa.prompt || prompt));
       if (this.workspace.current) {
         child.workspace.current = { ...this.workspace.current };
         child.config.loadWorkspaceConfig(this.workspace.current.path);
@@ -4387,6 +4642,14 @@ export class Agent {
       child.config.set('skills', 'auto_download', 'disabled');
       child.subagents = this.subagents;
       child.subagentContextPersist = (history, compression) => this.subagents.replaceContext(sa.id, history, compression);
+      const requestedFlowName = String(flowName || sa.flowName || '').trim();
+      if (sa.agentMode === 'flow' && requestedFlowName) {
+        const flowDir = path.join(this.rootPath, 'Flow');
+        const foundFlow = FlowEngine.findWorkflow(requestedFlowName, flowDir);
+        child.flow = foundFlow ? FlowEngine.load(flowDir, foundFlow) : null;
+        child.flowPc = Math.max(0, Math.floor(Number(sa.flowPc) || 0));
+        if (!child.flow) throw new Error(`Subagent Flow not found: ${requestedFlowName}`);
+      }
       const persistedMessages = sa.messages
         .filter((message, index) => !(index === 0
           && message.role === 'system'
@@ -4403,7 +4666,8 @@ export class Agent {
       });
       this.activePeerAgents.set(sa.id, child);
       const delegatedPrompt = [
-        flowName ? `[Workflow requested: ${flowName}]` : '',
+        requestedFlowName ? `[Workflow requested: ${requestedFlowName} @ ${child.flowPc}]` : '',
+        child.goal ? `[Goal objective: ${child.goal.objective}]` : '',
         `Workspace: ${workspacePath}`,
         prompt,
       ].filter(Boolean).join('\n\n');
@@ -4980,45 +5244,52 @@ export class Agent {
   }
 
   private buildModePrompt(): string {
+    const language = this.config.getStr('general', 'language') || 'auto';
+    const languageDirective = language === 'zh' ? '以中文思考以及回复。'
+      : language === 'en' ? 'Use English to think and reply.'
+      : '';
+    const withLanguage = (lines: string[]): string[] => {
+      if (languageDirective) lines.unshift(languageDirective);
+      return lines;
+    };
     switch (this.mode) {
       case 'build':
-        return [
+        return withLanguage([
           'BUILD MODE.',
           'Complete the user\'s task fully and autonomously in this turn when feasible.',
           'Use tools to inspect, edit, execute, search, and verify instead of only explaining.',
           'After changes, report concrete outcomes and verification evidence using the visible reply format.',
-        ].join('\n');
+        ]).join('\n');
       case 'plan':
-        return [
+        return withLanguage([
           'PLAN MODE.',
           'You are in fully READ-ONLY exploration mode.',
           'Do NOT modify any files, including README.md, generated files, configs, archives, or workspace files.',
           'Explore the workspace, understand the codebase, research if needed, and produce a plan in the conversation only.',
           'Use read-only tools only: web_search, web_fetch, read, glob, grep, browser_open, browser_snapshot, browser_use (observe/navigate/wait/extract only), pwd, git_status, file_audit, and repo_security_audit.',
-        ].join('\n');
+        ]).join('\n');
       case 'goal': {
         const g = this.goal?.history() || '';
         const paused = this.goal?.paused ? '\n[GOAL PAUSED by user. Wait for resume.]' : '\n[Continue working until the goal is achieved.]';
-        return [
+        return withLanguage([
           'GOAL MODE.',
           'Work toward this objective persistently and use Build-mode tool autonomy unless paused:',
           g,
           paused,
           'If the objective is fully achieved and verified, include the exact phrase "Goal Complete" in the visible reply.',
           'If the objective is not fully achieved, state the remaining concrete gap instead of implying completion.',
-        ].join('\n');
+        ]).join('\n');
       }
       case 'flow':
-        return [
+        return withLanguage([
           'FLOW MODE.',
           'Execute the current workflow component as instructed and preserve workflow state.',
           'For dialog components, obey the component mode and expanded prompt.',
           'For logic components, answer only the required true/false decision for routing when asked.',
           'Do not invent workflow components or skip verification unless the workflow explicitly directs it.',
-        ].join('\n');
+        ]).join('\n');
     }
   }
-
 }
 
 function missingProviderValidationAdapter(): ModelValidationProbeAdapter {

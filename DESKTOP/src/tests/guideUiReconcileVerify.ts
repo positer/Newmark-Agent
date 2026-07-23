@@ -82,6 +82,7 @@ function createFixture(): {
     function isHiddenWorkflowMessage() { return false; }
     function renderPersistedToolMessage() {}
     function finishToolBatch() {}
+    function autoScrollIfAtBottom() {}
     function findWorkRunElement(run) { return document.querySelector('[data-test-run-id="' + String(run && run.runId || '') + '"]'); }
     function renderConversationWorkRun(run) {
       var row = document.createElement('div');

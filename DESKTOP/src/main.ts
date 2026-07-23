@@ -2244,9 +2244,16 @@ if (hasCliCommand) {
         runtimeDeferred: false,
       };
     });
-    ipcMain.handle('agent:updateGoal', async (_event, goal: string) => {
-      if (agent) agent.updateGoal(goal);
-      return agent?.goal;
+    ipcMain.handle('agent:updateGoal', async (_event, goal: string, targetInput?: ConversationTargetInput) => {
+      if (!agent) return null;
+      const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
+      return mutateTargetConversation(target, () => {
+        const isolated = isolatedConversationAgent(target);
+        isolated.updateGoal(goal);
+        isolated.setMode('goal');
+        isolated.saveWorkspaceConversationState(true);
+        return isolated.getConversationSnapshot(target.conversationId).goal;
+      });
     });
 
     ipcMain.handle('agent:toggleGoalPause', async () => {
@@ -2333,6 +2340,7 @@ if (hasCliCommand) {
         nativeToolEnabled: agent.config.nativeToolEnabled(),
         automations: automation?.list() || [],
         closeBehavior: agent.config.getStr('general', 'close_behavior'),
+        expandToolsDefault: agent.config.getBool('general', 'expand_tools') ?? true,
         contextCompression: conversationSnapshot.contextCompression ?? null,
         contextWindow: conversationSnapshot.contextWindow || { estimatedTokens: 0, maxTokens: 1, ratio: 0, warning: 'ok', model: String(conversationSnapshot.model || agent.model) },
         agentBackend: wslBackendEnabled()
@@ -2373,6 +2381,16 @@ if (hasCliCommand) {
     ipcMain.handle('agent:setConversationPinned', async (_event, id: string, pinned: boolean) => {
       if (!agent) return false;
       return agent.setConversationPinned(id, pinned);
+    });
+
+    ipcMain.handle('agent:renameConversation', async (_event, id: string, title: string) => {
+      if (!agent) return false;
+      return agent.renameConversation(id, title);
+    });
+
+    ipcMain.handle('agent:reorderConversations', async (_event, ids: string[]) => {
+      if (!agent) return false;
+      return agent.reorderConversations(ids);
     });
 
     ipcMain.handle('automation:list', async () => {
@@ -2533,6 +2551,7 @@ if (hasCliCommand) {
         runId: String(raw?.runId || '').trim(),
         deliveryMode: raw?.deliveryMode === 'followUp' ? 'followUp' : 'steer',
         text: String(raw?.text || ''),
+        goalObjective: String(raw?.goalObjective || '').trim(),
         images: Array.isArray(raw?.images) ? raw.images : [],
         createdAt: String(raw?.createdAt || new Date().toISOString()),
       };
@@ -2596,6 +2615,32 @@ if (hasCliCommand) {
         const snapshot = await mutateTargetConversation(target, () => wslBackendEnabled()
           ? ensureWslConversationPool()!.rewind(target, messageIndex)
           : ensureElectronUtilityPool().rewind(target, messageIndex));
+        return { ...snapshot, queued: { steering: [], followUp: [] }, workEvents: [] };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+    ipcMain.handle('agent:branchConversation', async (_event, targetInput: ConversationTargetInput, messageIndex: number, text: string) => {
+      if (!agent) return { error: 'Agent not initialized' };
+      const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
+      try {
+        const snapshot = await mutateTargetConversation(target, () => {
+          const isolated = isolatedConversationAgent(target);
+          return isolated.branchConversation(target.conversationId, messageIndex, text);
+        });
+        return { ...snapshot, queued: { steering: [], followUp: [] }, workEvents: [] };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+    ipcMain.handle('agent:switchConversationBranch', async (_event, targetInput: ConversationTargetInput, branchId: string) => {
+      if (!agent) return { error: 'Agent not initialized' };
+      const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
+      try {
+        const snapshot = await mutateTargetConversation(target, () => {
+          const isolated = isolatedConversationAgent(target);
+          return isolated.switchConversationBranch(target.conversationId, branchId);
+        });
         return { ...snapshot, queued: { steering: [], followUp: [] }, workEvents: [] };
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };

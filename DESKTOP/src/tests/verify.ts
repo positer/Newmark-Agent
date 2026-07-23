@@ -339,7 +339,7 @@ async function main() {
     && uiHtml.includes('state.memoryLabOverviewManualCamera = true')
     && uiHtml.includes('!state.memoryLabOverviewManualCamera')
     && uiHtml.includes('state.memoryLabOverviewPanEdgeX')
-    && uiHtml.includes("var minimumFrameMs = state.memoryLabOverviewPanActive ? 0 : 30")
+    && uiHtml.includes("var minimumFrameMs = state.memoryLabOverviewPanActive ? 0 : 50")
     && uiHtml.includes("var panTransform = 'translate3d('")
     && uiHtml.includes("document.getElementById('memory-lab-overview-nodes')")
     && uiHtml.includes('window.renderMemoryLabOverviewFrame();')
@@ -389,7 +389,9 @@ async function main() {
   assert(uiHtml.includes("events[priorEventIndex] = Object.assign({}, priorEvent, { completed: true })")
     && uiHtml.includes("event.completed ? (currentLang() === 'zh' ? ' · 已完成' : ' · completed')")
     && !uiHtml.includes("element.classList.contains('running')")
-    && uiHtml.includes('var expanded = run.expanded === undefined ? live : !!run.expanded'), 'ui html: completed tools update their original row and running Build blocks remain collapsible with a default-expanded state');
+    && uiHtml.includes('var expanded = run.expanded === undefined')
+    && uiHtml.includes('? (live || state.expandToolsDefault !== false)')
+    && uiHtml.includes("if (run.userToggled !== true) run.expanded = false"), 'ui html: completed tools update their original row, live Build blocks expand, and terminal blocks auto-collapse unless manually toggled');
   assert(!uiHtml.includes('state._activeWorkflowMsg') && !uiHtml.includes('state._activeWorkflowText') && !uiHtml.includes('state._toolEventMsgs') && !uiHtml.includes('state._toolEventBatch') && !uiHtml.includes('state._lastCompletedWorkflow'), 'ui html: live workflow feedback state is conversation-scoped, not a global singleton');
   assert(uiHtml.includes('function isHiddenWorkflowMessage(message)') && uiHtml.includes('Preparing model request and available tools') && uiHtml.includes('Executing \\d+ tool call') && uiHtml.includes("if (String(m.role || '') === 'workflow' && /^tool:/.test(String(m.mode || ''))) continue;"), 'ui html: hides internal workflow status rows and suppresses legacy persisted tool chat rows now owned by Build runs');
   assert(uiHtml.includes('background: transparent;') && uiHtml.includes('border-radius: 0;') && uiHtml.includes('#chat-area:has(> .chat-msg)') && uiHtml.includes('background-position: left 32px top, right 32px top;') && uiHtml.includes('background-attachment: local;') && !uiHtml.includes('.chat-msg::before') && uiHtml.includes('.chat-msg::after'), 'ui html: chat messages are not bubble cards and the scrolling conversation owns continuous left/right timeline rails');
@@ -473,7 +475,7 @@ async function main() {
   const agentSourceForEditor = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
   assert(mainSource.includes("completion: true, preferCopilot: true") && mainSource.includes('editorCompletionControllers.get(ownerId)?.abort') && agentSourceForEditor.includes("model.provider_protocol === 'github_models'") && agentSourceForEditor.includes('input.completion ? 192 : 1800'), 'editor prediction: prefers configured Copilot, cancels superseded requests, and uses a bounded low-latency completion budget');
   assert(uiHtml.includes("if (providerOpts) modelOpts += '<optgroup") && uiHtml.includes("if (!state.model || (state.model === 'auto'") && uiHtml.includes("availableValues.indexOf(state.model) < 0"), 'ui model selector: skips empty provider groups and recovers an empty or unavailable saved model to the first usable model');
-  assert(uiHtml.includes('function messageActionsHtml(role, text, messageIndex)') && uiHtml.includes('window.copyMessageText = async function(button)') && uiHtml.includes('window.editUserMessage = async function(button, messageIndex)') && uiHtml.includes('api.rewindConversation(target, Number(messageIndex))') && uiHtml.includes('message._newmarkMessageTarget') && uiHtml.includes('pendingConversationRewinds[rewindKey]') && !uiHtml.includes("addMsg('assistant', '[Error] ' + ((result && result.error) || 'Unable to edit message.')"), 'ui html: user messages retain their rendered composite target, suppress duplicate rewinds, and report failures outside the chat timeline');
+  assert(uiHtml.includes('function messageActionsHtml(role, text, messageIndex)') && uiHtml.includes('window.copyMessageText = async function(button)') && uiHtml.includes('window.editUserMessage = function(button, messageIndex)') && uiHtml.includes('window.submitUserMessageEdit = async function') && uiHtml.includes('api.branchConversation(target, Number(messageIndex), text)') && uiHtml.includes('message._newmarkMessageTarget') && uiHtml.includes('message-inline-editor') && !uiHtml.includes("addMsg('assistant', '[Error] ' + ((result && result.error) || 'Unable to edit message.')"), 'ui html: user messages retain their rendered composite target, edit inline, create a durable branch, and report failures outside the chat timeline');
   assert(preloadSource.includes("rewindConversation: (target: string | Record<string, unknown>, messageIndex: number) => ipcRenderer.invoke('agent:rewindConversation'") && mainSource.includes("ipcMain.handle('agent:rewindConversation'") && mainSource.includes('mutateTargetConversation(target') && mainSource.includes('ensureWslConversationPool()!.rewind(target, messageIndex)') && mainSource.includes('ensureElectronUtilityPool().rewind(target, messageIndex)'), 'main/preload: conversation rewind is target-bound, mutation-guarded, and executes inside the selected WSL or Utility runtime');
   assert(uiHtml.includes('function optionLabel(option)') && uiHtml.includes('function renderPendingOptionsInChat(options)') && uiHtml.includes("state.renderedOptionKeys[key] = true"), 'ui html: pending option feedback renders into chat once');
   assert(uiHtml.includes('if (r && r.options)') && uiHtml.includes('renderPendingOptionsInChat(state.pendingOptions)') && uiHtml.includes("optionDescription(opt)"), 'ui html: send result and right status render structured option labels');
@@ -529,11 +531,11 @@ async function main() {
   assert(uiHtml.includes('function renderOrphanRunsBefore(runId)') && uiHtml.includes('if (associatedRun) renderOrphanRunsBefore(messageRunId);'), 'ui html: orphaned historical Builds are inserted before the next owned message instead of displacing the latest completed reply at the bottom');
   assert(uiHtml.includes('trackedConversationUntil') && uiHtml.includes('conversationTrackMs: 300000') && uiHtml.includes('markConversationTracked(previousId') && uiHtml.includes('markConversationTracked(activeId'), 'ui html: conversations keep a five-minute tracking window after foreground switches without aborting background work');
   assert(conversationKernelSource.includes("getNum('agent', 'process_timeout_ms')") && conversationKernelSource.includes('if (timeoutMs <= 0)') && conversationKernelSource.includes('const tokens = await runtime.runner.process(message)') && conversationKernelSource.includes('if (timeout) clearTimeout(timeout)'), 'kernel: desktop conversation turns have configurable outer timeout disabled by default');
-  assert(conversationKernelSource.includes("options.mode === 'goal' && this.host.goal") && conversationKernelSource.includes('agent.updateGoal(this.host.goal.objective)'), 'kernel: per-conversation Goal runners inherit the active Goal objective');
+  assert(conversationKernelSource.includes("const restoredMode = agent.getConversationSnapshot(agent.activeConversationId).mode") && !conversationKernelSource.includes("options.mode === 'goal' && this.host.goal"), 'kernel: per-conversation Goal runners restore the target Goal mode without borrowing another foreground conversation');
   assert(mainKernelSource.includes('if (conversationKernel?.isAnyRunning()) return;'), 'kernel: desktop settings changes do not discard running conversation kernels');
   assert(mainKernelSource.includes('...conversationSnapshot') && mainKernelSource.includes('ensureElectronUtilityPool().snapshot(target)') && mainKernelSource.includes('ensureWslConversationPool()!.snapshot(target)'), 'kernel: desktop IPC exposes queue state from the requested isolated runtime snapshot');
   assert(uiHtml.includes('window.refreshSkillsRuntime = function(next)') && uiHtml.includes('api.refreshSkills().then(done)') && uiHtml.includes('window.refreshSkillsRuntime(function(){ window.showPluginList'), 'ui html: skills changes refresh runtime without restart');
-  assert(uiHtml.includes('api.updateGoal(state.goalText)') && uiHtml.includes('api.toggleGoalPause().then'), 'ui html: Goal edits and pause are synchronized to Agent backend');
+  assert(uiHtml.includes("state.pendingInputEdit = { kind: 'goal'") && uiHtml.includes('goalRequest.goalDeclaration = true') && uiHtml.includes('goalObjective: editedValue') && uiHtml.includes('api.toggleGoalPause().then'), 'ui html: Goal edits return to the input box, Next targets the next Build, Guide targets the active Build, and pause stays synchronized');
   assert(uiHtml.includes('window.setRightWidthPx = function(px)') && uiHtml.includes("document.documentElement.style.setProperty('--right-width', rightSize + 'px')") && uiHtml.includes('if (els.right) els.right.style.width = \'\';'), 'ui html: right resize stores width in CSS variable and clears inline width');
   assert(uiHtml.includes('window.setRightCollapsed = function(collapsed)') && uiHtml.includes('els.right.style.width = \'\';') && uiHtml.includes("els.right.classList.toggle('open', !state.rightCollapsed);"), 'ui html: right collapse releases inline width and open class');
   assert(uiHtml.includes('window.toggleRight = function()') && uiHtml.includes('window.setRightCollapsed(!state.rightCollapsed);'), 'ui html: right toggle uses unified collapse state');
@@ -714,6 +716,16 @@ async function main() {
   const installUpdateTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'installUpdate.ts'), 'utf-8');
   assert(uiHtml.includes('function scheduleLayoutStateSave()') && uiHtml.includes('layoutState: {') && uiHtml.includes('leftCollapsed: !!state.leftCollapsed') && uiHtml.includes('rightCollapsed: !!state.rightCollapsed') && uiHtml.includes('bottomCollapsed: !!state.bottomCollapsed') && uiHtml.includes('secondaryCollapsed: !!state.secondaryCollapsed') && uiHtml.includes('function applySavedLayoutState(input)') && mainTs.includes('leftPanelCollapsed') && mainTs.includes("case 'layoutState'") && configTs.includes('bottom_panel_collapsed') && configTs.includes('secondary_panel_collapsed'), 'ui layout memory: persists only sidebar collapsed booleans and restores them from config');
   assert(workspaceTs.includes('setPinned(id: string, pinned: boolean)') && agentTs.includes('setConversationPinned(id: string, pinned: boolean)') && preloadTs.includes('setWorkspacePinned') && preloadTs.includes('setConversationPinned') && mainTs.includes("agent:setWorkspacePinned") && mainTs.includes("agent:setConversationPinned") && uiHtml.includes('window.toggleWorkspacePinned') && uiHtml.includes('window.toggleConversationPinned') && uiHtml.includes('conv-pin-btn') && uiHtml.includes('ws-pin-btn'), 'pinning: workspace and conversation pin state is persisted and exposed in the UI');
+  assert(agentTs.includes('renameConversation(id: string, title: string)')
+    && agentTs.includes('reorderConversations(ids: string[])')
+    && preloadTs.includes('renameConversation:')
+    && preloadTs.includes('reorderConversations:')
+    && mainTs.includes("agent:renameConversation")
+    && mainTs.includes("agent:reorderConversations")
+    && uiHtml.includes('window.editConversationName')
+    && uiHtml.includes('window.reorderConversationBefore')
+    && uiHtml.includes('conv-rename-btn')
+    && uiHtml.includes("setAttribute('draggable', 'true')"), 'conversation organization: matching icon controls expose rename and persistent drag ordering across renderer and IPC boundaries');
   assert(uiHtml.includes('.ws-pin-btn {') && uiHtml.includes('.conv-pin-btn {') && (uiHtml.match(/margin-left: auto;/g) || []).length >= 2, 'pinning layout: workspace and conversation pin actions occupy the rightmost flex slot');
   assert(uiHtml.includes('#left.collapsed .left-ws-item .ws-pin-btn {') && (uiHtml.match(/margin-left: 0;/g) || []).length >= 2, 'collapsed workspace rail: hidden pin actions release auto margin so thumbnails stay centered');
   assert(preloadTs.includes('githubOverview') && mainTs.includes("ipcMain.handle('github:overview'") && mainTs.includes("['repo', 'list', login") && uiHtml.includes('window.renderGithubOverview') && uiHtml.includes('window.loadGithubOverview') && !uiHtml.includes("window.runGhUi = function"), 'GitHub CLI panel: account-owned repositories, issues, and PRs are queried as structured data and rendered as UI instead of raw commands');
@@ -751,7 +763,21 @@ async function main() {
     && uiHtml.includes("role=\"option\" aria-selected=\""), 'Model menu: the bottom selector uses an accessible rounded Newmark popup instead of the square native platform list');
   assert(agentTs.includes('const tokens = await child.process(delegatedPrompt);')
     && !agentTs.includes('this.withTimeout(child.process(delegatedPrompt), 120000)'), 'Subagents: peer execution has no independent hard-coded two-minute timeout and remains under cooperative parent cancellation');
-  assert(agentTs.includes('expanded: raw.expanded === undefined ? true : !!raw.expanded') && agentTs.includes('activeRun.expanded = true') && uiHtml.includes("run.status = 'completed'; run.endedAt") && !uiHtml.includes("run.status = 'completed'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = false"), 'Build transcript visibility: completed, errored, and interrupted runs remain expanded by default while preserving manual collapse state');
+  assert(agentTs.includes('expanded: raw.expanded === undefined ? true : !!raw.expanded')
+    && agentTs.includes('activeRun.expanded = true')
+    && uiHtml.includes("if (run.userToggled !== true) run.expanded = false")
+    && uiHtml.includes('previous.userToggled === true')
+    && uiHtml.includes('item.expanded = previous.expanded')
+    && uiHtml.includes('item.expanded = isLive ? true : (wasLive ? false : item.expanded)'), 'Build transcript visibility: active runs expand, terminal runs auto-collapse, and manual toggles survive snapshot refreshes');
+  assert(uiHtml.includes('var _chatShouldAutoScroll = true')
+    && uiHtml.includes("addEventListener('scroll'")
+    && uiHtml.includes('if (_chatShouldAutoScroll) el.scrollTop = el.scrollHeight')
+    && uiHtml.includes('_chatShouldAutoScroll = true;'), 'Chat scrolling: live updates follow only when the user was already near the bottom, while the explicit bottom action restores following');
+  assert(uiHtml.includes("'settings.expandTools': 'Default expand tool usage'")
+    && uiHtml.includes("api.saveSetting('general', 'expand_tools', state.expandToolsDefault)")
+    && uiHtml.includes('data-lazy="1"')
+    && uiHtml.includes("role=\"alert\"")
+    && !uiHtml.includes("esc(String(e))"), 'Settings UI: expand-tools preference persists, heavy tabs render lazily, and lazy-render failures expose a safe accessible message');
   assert(agentTs.includes("listArchives(scope: 'workspace' | 'all' = 'workspace')") && agentTs.includes('archiveRoots()') && agentTs.includes('resolveArchivePath') && preloadTs.includes('listArchives: (scope?: string)') && mainTs.includes("scope === 'all' ? 'all' : 'workspace'") && uiHtml.includes("api.listArchives('workspace')") && uiHtml.includes("api.listArchives('all')") && uiHtml.includes('state.workspaceArchives') && uiHtml.includes('state.allArchives'), 'archives: right sidebar lists current workspace archives while Settings archive can list all archives');
   assert(agentTs.includes('restoreArchivedConversation(nameOrId: string)') && agentTs.includes("kind: 'newmark-conversation-archive'") && preloadTs.includes('restoreArchive: (name: string)') && mainTs.includes("ipcMain.handle('agent:restoreArchive'") && uiHtml.includes('window.restoreArchive = function') && uiHtml.includes("t('archive.restore')"), 'archives: structured conversation manifests support conflict-safe restore from workspace and global archive UI');
   const cliCommandsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'cli-commands.ts'), 'utf-8');
@@ -1053,7 +1079,12 @@ async function main() {
   assert(uiHtml.includes('window.openGlobalConfigFile') && uiHtml.includes('window.refreshGlobalConfigFile') && uiHtml.includes('id="global-agent-prompt" class="newmark-prompt-textarea"') && uiHtml.includes('.newmark-prompt-textarea:focus') && uiHtml.includes('window.scheduleGlobalAgentPromptSave'), 'settings UI: provides adjacent config controls and a theme-native live global Agent.md editor');
   assert(uiHtml.includes("'model.validationBackgroundNote': 'Validation continues in the background.") && uiHtml.includes("'model.validationBackgroundNote': '校验将在后台继续进行"), 'model validation UI: background-operation note is registered in English and Chinese');
   assert(agentKernelSource.includes('private modelValidationPromise: Promise<ModelValidationResult[]> | null = null') && agentKernelSource.includes('if (this.modelValidationPromise) return this.modelValidationPromise') && mainTs.includes("ipcMain.handle('agent:modelValidationStatus'") && preloadTs.includes('modelValidationStatus:') && uiHtml.includes('if (state.modelValidationPromise)') && uiHtml.includes('window.showModelValidationProgress()'), 'model validation lifecycle: repeated clicks reveal and await one shared background validation instead of starting duplicate probes');
-  assert(uiHtml.includes('if (matchingRun.expanded === undefined) matchingRun.expanded = true') && uiHtml.includes("if (run.expanded === undefined) run.expanded = true") && uiHtml.includes('if (expandedById[item.runId] !== undefined) item.expanded = expandedById[item.runId]') && !uiHtml.includes("run.status = 'force_interrupted'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); run.expanded = true"), 'Build transcript: force-stopped runs preserve a manual collapsed state across terminal events and snapshots');
+  assert(uiHtml.includes('if (matchingRun.userToggled !== true) matchingRun.expanded = false')
+    && uiHtml.includes('if (previous && previous.userToggled === true)')
+    && uiHtml.includes('item.expanded = previous.expanded')
+    && uiHtml.includes('item.userToggled = true')
+    && uiHtml.includes("else if (type === 'force_interrupted')")
+    && uiHtml.includes('if (run.userToggled !== true) run.expanded = false'), 'Build transcript: force-stopped runs auto-collapse while preserving a manual expanded or collapsed state across terminal events and snapshots');
   assert(agentKernelSource.includes('function effectiveModelValidationStatus(model: ModelConfig)') && agentKernelSource.includes("if (textEvidence && raw === 'unavailable') return 'degraded'") && agentKernelSource.includes('status: effectiveValidationStatus') && uiHtml.includes('function effectiveUiModelStatus(modelEntry)') && uiHtml.includes("if (textEvidence && rawValidation === 'unavailable') return 'degraded'"), 'model availability: persisted text-success evidence repairs unavailable false negatives consistently for fixed, default, Auto, selector, and settings-card presentation');
   assert(uiHtml.includes("raw === 'available' || raw === 'verified'") && uiHtml.includes("raw === 'degraded'") && uiHtml.includes("normalizedStatus === 'degraded'"), 'model settings: verified and degraded validation results remain visibly available instead of rendering as failures');
   assert(preloadTs.includes("getConversationPlan: (conversationId?: string) => ipcRenderer.invoke('agent:getConversationPlan', conversationId)") && preloadTs.includes("updateConversationPlan: (plan: Record<string, unknown>, conversationId?: string) => ipcRenderer.invoke('agent:updateConversationPlan', plan, conversationId)"), 'preload: exposes conversation-bound plan IPC');
@@ -2108,9 +2139,14 @@ async function main() {
   // Second subagent - different mode
   subMgr.create('plan-sub', 'Plan something', 'gpt-4', 'next', 'plan');
   assert(subMgr.listAll().length === 2, 'multiple subagents coexist');
+  const goalSubId = subMgr.create('goal-sub', 'Reach a goal', 'gpt-4', 'guide', 'goal', undefined, '', 'Verified peer goal');
+  const flowSubId = subMgr.create('flow-sub', 'Run a flow', 'gpt-4', 'guide', 'flow', undefined, 'peer-flow', '', 2);
+  const subMgrReloaded = new SubagentManager({ state: subMgr.serialize() });
+  assert(subMgrReloaded.get(goalSubId)?.agentMode === 'goal' && subMgrReloaded.get(goalSubId)?.goalObjective === 'Verified peer goal', 'subagent Goal: explicit mode and objective survive coordinator restart');
+  assert(subMgrReloaded.get(flowSubId)?.agentMode === 'flow' && subMgrReloaded.get(flowSubId)?.flowName === 'peer-flow' && subMgrReloaded.get(flowSubId)?.flowPc === 2, 'subagent Flow: workflow name and program counter survive coordinator restart');
 
   subMgr.remove(subId);
-  assert(subMgr.listAll().length === 1, 'remove: deletes subagent');
+  assert(subMgr.listAll().length === 3, 'remove: deletes only the selected subagent while Goal and Flow peers remain');
 
   const taskAgent = new Agent(TEST_DIR);
   taskAgent.subagents.reset();
@@ -2562,6 +2598,21 @@ async function main() {
   assert(continuationPrompts[0] === 'Step one resume input', 'runFlow: resumed step expands start input');
   assert(!continuationPrompts.some(p => p.includes('Step zero')), 'runFlow: resumed flow skips earlier steps');
   assert(continuationModes[0] === 'plan' && continuationModes[1] === 'build', 'runFlow: resumed flow preserves modes');
+  const logicPrompts: string[] = [];
+  const logicModes: AgentMode[] = [];
+  const logicAgent = {
+    mode: 'flow' as AgentMode,
+    setMode: (mode: AgentMode) => { logicModes.push(mode); },
+    recordWorkStatus: () => {},
+    process: async (prompt: string): Promise<StreamToken[]> => {
+      logicPrompts.push(prompt);
+      return [{ type: 'text', text: 'Evidence reviewed.\nFLOW_DECISION=true' }];
+    },
+  } as unknown as Agent;
+  const logicFlow: FlowWorkflow = { name: 'logic-readonly', components: [{ type: 'logic', id: 0, prompt: 'Is implementation complete?', goto_true: 1, goto_false: 0 }] };
+  await runFlow(logicAgent, logicFlow, { quiet: true });
+  assert(logicModes[0] === 'plan' && logicModes.at(-1) === 'flow', 'runFlow logic: evaluates in a read-only Build boundary and restores Flow mode');
+  assert(logicPrompts[0].includes('Read-only Build Logic Evaluation') && logicPrompts[0].includes('FLOW_DECISION=true'), 'runFlow logic: requires an explicit parseable decision instead of fuzzy true text');
 
   const retryFlow: FlowWorkflow = {
     name: 'goal-retry-flow',
@@ -2576,9 +2627,9 @@ async function main() {
     setMode: (_mode: AgentMode) => {},
     process: async (prompt: string): Promise<StreamToken[]> => {
       retryPrompts.push(prompt);
-      if (prompt.includes('## Goal Verification')) {
+      if (prompt.includes('## Read-only Build Logic Evaluation')) {
         verificationCalls++;
-        return [{ type: 'text', text: verificationCalls === 1 ? 'false' : 'true' }];
+        return [{ type: 'text', text: `FLOW_DECISION=${verificationCalls === 1 ? 'false' : 'true'}` }];
       }
       return [{ type: 'text', text: prompt.includes('Finish important goal') ? 'goal work' : 'after goal' }];
     },
@@ -3255,6 +3306,16 @@ async function main() {
   const inputModeReloaded = new Agent(TEST_DIR);
   inputModeReloaded.setConversationFromStorage(inputModeConversation);
   assert(inputModeReloaded.inputMode === 'next', 'inputMode: restores the selected conversation mode after application restart');
+  inputModeReloaded.updateGoal('Persist and finish this scoped goal');
+  inputModeReloaded.setMode('goal');
+  inputModeReloaded.flushConversationState();
+  const goalStateReloaded = new Agent(TEST_DIR);
+  goalStateReloaded.setConversationFromStorage(inputModeConversation);
+  assert(goalStateReloaded.mode === 'goal' && goalStateReloaded.goal?.objective === 'Persist and finish this scoped goal', 'goal mode: unfinished objective resumes in its owning conversation after restart');
+  goalStateReloaded.markGoalComplete();
+  const goalCompleteReloaded = new Agent(TEST_DIR);
+  goalCompleteReloaded.setConversationFromStorage(inputModeConversation);
+  assert(goalCompleteReloaded.goal?.verified === true && goalCompleteReloaded.goal?.paused === false, 'goal mode: Goal Complete state is durable after restart');
   agent.nextPrompt = 'Queued task';
   assert(agent.nextPrompt === 'Queued task', 'nextPrompt: stores queued prompt');
 
@@ -3316,6 +3377,47 @@ async function main() {
   const restoreConflict = archiveAgentReloaded.restoreArchivedConversation(restorableArchive!.id);
   assert(!restoreConflict.ok, 'restoreArchivedConversation: cannot overwrite an existing conversation or reuse a consumed manifest');
   archiveAgentReloaded.deleteArchive(archivedTargetName!);
+
+  const conversationOrderRoot = path.join(TEST_DIR, 'conversation-order');
+  const conversationOrderAgent = new Agent(conversationOrderRoot);
+  conversationOrderAgent.createInternalWorkspace('conversation-order-workspace');
+  conversationOrderAgent.ensureConversationSnapshot('first');
+  conversationOrderAgent.ensureConversationSnapshot('second');
+  conversationOrderAgent.ensureConversationSnapshot('third');
+  assert(conversationOrderAgent.renameConversation('second', 'Renamed second'), 'conversation rename: persists a custom display name');
+  const initialConversationOrder = conversationOrderAgent.listConversationStates().map(item => item.id);
+  const requestedConversationOrder = ['second', 'first', 'third', ...initialConversationOrder.filter(id => !['second', 'first', 'third'].includes(id))];
+  assert(conversationOrderAgent.reorderConversations(requestedConversationOrder), 'conversation ordering: accepts one complete workspace order');
+  conversationOrderAgent.setConversation('first');
+  conversationOrderAgent.chatMessages = [{ role: 'user', content: 'updated without moving', mode: 'Build', model: conversationOrderAgent.model, timestamp: 'order-1' }];
+  conversationOrderAgent.flushConversationState();
+  const orderedBeforeReload = conversationOrderAgent.listConversationStates();
+  assert(orderedBeforeReload.slice(0, 3).map(item => item.id).join(',') === 'second,first,third', 'conversation ordering: ordinary conversation updates do not move a saved row');
+  assert(orderedBeforeReload[0].title === 'Renamed second', 'conversation rename: custom name survives unrelated updates');
+  conversationOrderAgent.ensureConversationSnapshot('newest');
+  assert(conversationOrderAgent.listConversationStates().filter(item => !item.pinned)[0].id === 'newest', 'conversation ordering: a newly created conversation starts at the top of the unpinned group');
+  const conversationOrderReloaded = new Agent(conversationOrderRoot);
+  const orderedAfterReload = conversationOrderReloaded.listConversationStates();
+  assert(orderedAfterReload.filter(item => !item.pinned)[0].id === 'newest' && orderedAfterReload.find(item => item.id === 'second')?.title === 'Renamed second', 'conversation ordering: order and custom title survive application restart');
+
+  conversationOrderAgent.setConversation('branch-source');
+  conversationOrderAgent.chatMessages = [
+    { role: 'user', content: 'original request', mode: 'Build', model: conversationOrderAgent.model, timestamp: 'branch-1' },
+    { role: 'assistant', content: 'original answer', mode: 'Build', model: conversationOrderAgent.model, timestamp: 'branch-2' },
+  ];
+  conversationOrderAgent.history = [
+    { role: 'user', content: 'original request' },
+    { role: 'assistant', content: 'original answer' },
+  ];
+  conversationOrderAgent.flushConversationState();
+  const branched = conversationOrderAgent.branchConversation('branch-source', 0, 'edited request');
+  assert(branched.branches.length === 2 && branched.chatMessages.length === 0, 'conversation branching: editing a user message preserves the original page and opens a new continuation page');
+  const originalBranch = branched.branches.find(branch => branch.id !== branched.activeBranchId)!;
+  const restoredOriginalBranch = conversationOrderAgent.switchConversationBranch('branch-source', originalBranch.id);
+  assert(restoredOriginalBranch.chatMessages[0]?.content === 'original request' && restoredOriginalBranch.chatMessages[1]?.content === 'original answer', 'conversation branching: page switching restores the complete original conversation');
+  const branchReloaded = new Agent(conversationOrderRoot);
+  branchReloaded.setConversationFromStorage('branch-source');
+  assert(branchReloaded.getConversationSnapshot().branches.length === 2 && branchReloaded.chatMessages[0]?.content === 'original request', 'conversation branching: pages and active selection survive restart');
 
   // ---- 10. Context Compression Tests ----
   console.log('\n📐 Context Compression');

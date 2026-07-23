@@ -11,6 +11,30 @@ export interface FlowRunnerOptions {
 
 const MAX_VISITS = 300;
 
+async function evaluateReadOnlyBuild(agent: Agent, title: string, condition: string, signal?: AbortSignal): Promise<boolean> {
+  const previousMode = agent.mode;
+  try {
+    // Logic evaluation is rendered inside the owning Build, but Plan policy
+    // makes the evaluator strictly read-only and blocks side effects.
+    agent.setMode('plan');
+    agent.recordWorkStatus?.(`[Flow logic] ${title}`);
+    const tokens = await agent.process([
+      '## Read-only Build Logic Evaluation',
+      'Inspect the current workspace, conversation evidence, and completed Build results only as needed.',
+      'Do not modify files, applications, services, workflows, memory, or external state.',
+      condition,
+      'Return one final line exactly: FLOW_DECISION=true or FLOW_DECISION=false.',
+    ].join('\n\n'));
+    throwIfFlowAborted(signal);
+    const text = tokens.map(token => token.text || '').join('');
+    const matches = Array.from(text.matchAll(/FLOW_DECISION\s*=\s*(true|false)/gi));
+    if (!matches.length) throw new Error(`Flow logic component did not return a valid decision: ${text.slice(-240)}`);
+    return String(matches.at(-1)?.[1]).toLowerCase() === 'true';
+  } finally {
+    agent.setMode(previousMode);
+  }
+}
+
 function throwIfFlowAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
   throw signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason || 'Flow run aborted'));
@@ -64,12 +88,8 @@ export async function runFlow(
     for (const step of seq) {
       if (step.isLogic) {
         if (!quiet) console.log(`\n[Logic #${step.id}] ${step.prompt}`);
-        const resultTokens = await agent.process(
-          `## Conditional Evaluation\n\n${step.prompt}\n\nRespond with ONLY "true" or "false" (lowercase).`
-        );
-        throwIfFlowAborted(options.signal);
-        const resultText = resultTokens.map(t => t.text).join('').toLowerCase().trim();
-        const cond = resultText === 'true';
+        const cond = await evaluateReadOnlyBuild(agent, `Logic #${step.id}`, step.prompt, options.signal);
+        const resultText = cond ? 'FLOW_DECISION=true' : 'FLOW_DECISION=false';
         const nextGoto = FlowEngine.resolveGoto(workflow, step.id, cond);
         if (!quiet) console.log(`  \u2192 ${resultText} (${cond ? 'goto ' + step.gotoTrue : 'goto ' + step.gotoFalse})`);
         cur = nextGoto;
@@ -98,12 +118,7 @@ export async function runFlow(
         if (step.mode?.toLowerCase() === 'goal') {
           const checkPrompt = `Is the following goal achieved?\nGoal: ${step.prompt.slice(0, 200)}\nCompleted: ${resultText.slice(0, 200)}`;
           if (!quiet) console.log(`\n[Goal Verify] Checking if goal achieved...`);
-          const checkTokens = await agent.process(
-            `## Goal Verification\n\n${checkPrompt}\n\nRespond with ONLY "true" or "false" (lowercase).`
-          );
-          throwIfFlowAborted(options.signal);
-          const checkText = checkTokens.map(t => t.text).join('').toLowerCase().trim();
-          const achieved = checkText === 'true';
+          const achieved = await evaluateReadOnlyBuild(agent, `Goal verification #${step.id}`, checkPrompt, options.signal);
           if (!quiet) console.log(`  \u2192 Goal ${achieved ? 'ACHIEVED' : 'NOT achieved'}, ${achieved ? 'advancing' : 're-executing component ' + step.id}`);
           if (!achieved) {
             cur = step.id;

@@ -1,5 +1,21 @@
 # Newmark Agent Overview
 
+## dev-0.1.6 Release Candidate (2026-07-24)
+
+The Windows x64 MSI and portable ZIP were rebuilt from the current source and passed the packaged MSI/ZIP smoke checks. The release assets are `release/Newmark-Agent-0.1.6-x64.msi` (SHA-256 `AC008F0BF351F25092CDD215950E3F2973C6396D745AA6DCD54FE3CC96DC8A26`) and `release/Newmark-Agent-0.1.6-win-unpacked-x64.zip` (SHA-256 `7F280D0ED600C79D673AD8B772A241CB80A8648E3224872829972AAE3F226990`). Publication is being completed from the `master` branch as the annotated `dev-0.1.6` tag and GitHub prerelease.
+
+## dev-0.1.6 Goal/Flow/Subagent and UI Performance Follow-up (2026-07-24)
+
+Goal state is persisted per conversation, including unfinished/paused/verified status; the Goal bar appears only when a real objective is active. Queue rows are read-only until Edit returns text and image attachments to the input. Next Goal declarations are retained for the next Build, while Guide Goal declarations target the active Build. User-message edits create durable conversation branches with page navigation instead of destroying the original transcript.
+
+Flow logic components now run through a read-only Build boundary (Plan tool policy) and accept only an explicit `FLOW_DECISION=true|false` result. Subagents preserve validated `build/plan/goal/flow` mode, Goal objective, Flow name, and Flow program counter across queueing, mailbox wakeups, and restart. Settings and Memory Lab initial rendering is deferred to later frames; hidden Memory Lab animation and timer work is skipped without stopping any backend process.
+
+## dev-0.1.6 Default Expand Tools and Lazy Settings (2026-07-24)
+
+The source version is now `0.1.6`. General Settings includes a new "Default expand tool usage" toggle. When enabled (default), tool calls in build blocks are expanded by default. When disabled, they start collapsed. Build blocks auto-expand while the agent works and auto-collapse when work completes — but after the user manually toggles a block, the run records a `userToggled` flag, and auto-management stops for that run. The `expand_tools` setting persists through the standard `agent:saveSetting` IPC and loads from `config.json` on startup.
+
+Settings tabs (Models, Tools, Archive, Updates) now render lazily: only the active General tab renders on first open; other tabs render on first click. This cuts the initial settings-window paint time when providers or tools are large. Memory Lab panels also receive a brief fade-in animation to mask the loading-to-content transition. Evidence is pending the packaged acceptance smoke.
+
 ## dev-0.1.5 Machine-wide Windows Upgrade (2026-07-23)
 
 The verified `0.1.5` MSI was accepted through UAC and upgraded the sole installation at `C:\Program Files\Newmark Agent`. The previously created current-user fallback directory remains absent, the installed `app.asar` matches the release payload, one responsive machine-install main window was launched, and mutable user state under `~/.Newmark` remains present. Exact verification evidence is recorded in `archive/20260723-dev-0.1.5-machine-upgrade.md`.

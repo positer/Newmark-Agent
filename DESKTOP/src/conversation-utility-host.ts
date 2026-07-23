@@ -104,6 +104,7 @@ async function handle(request: UtilityAgentRequest): Promise<unknown> {
   if (request.method === 'update_setting') {
     host.config.set(request.params.section, request.params.key, request.params.value);
     kernel.updateSetting(request.params.section, request.params.key, request.params.value);
+    host.invalidateSystemPrompt();
     return true;
   }
   throw new Error(`Unsupported utility Agent method: ${(request as { method?: string }).method || 'unknown'}`);

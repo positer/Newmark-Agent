@@ -25,7 +25,14 @@ async function removeTemporaryRoot(root: string): Promise<void> {
       return;
     } catch (error) {
       const code = String((error as NodeJS.ErrnoException)?.code || '');
-      if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(code) || attempt === 39) throw error;
+      if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(code)) throw error;
+      if (attempt === 39) {
+        if (process.platform === 'win32') {
+          console.warn(`TOOL_PROCESS_VERIFY_CLEANUP_DEFERRED root=${root} code=${code}`);
+          return;
+        }
+        throw error;
+      }
       // A just-exited Windows image (the deliberate fake taskkill fixture) can
       // retain its executable section briefly after the child result settles.
       await delay(250);

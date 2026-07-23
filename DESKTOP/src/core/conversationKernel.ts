@@ -201,7 +201,7 @@ export class ConversationKernel {
     model: string;
     intelligence: string;
     status: string;
-    goal: { objective: string; paused: boolean } | null;
+    goal: ReturnType<Agent['getConversationSnapshot']>['goal'];
     fileDiffs: Array<{ path: string; oldLength: number; newLength: number }>;
     pendingOptions: OptionQuestion[];
     contextCompression: Agent['lastCompression'];
@@ -226,7 +226,7 @@ export class ConversationKernel {
       model: runner.model,
       intelligence: runner.intelligence,
       status: runner.status,
-      goal: runner.goal ? { objective: runner.goal.objective, paused: runner.goal.paused } : null,
+      goal: conversationSnapshot.goal,
       fileDiffs: runner.fileDiffs.map(diff => ({
         path: diff.path,
         oldLength: diff.oldContent.length,
@@ -280,6 +280,13 @@ export class ConversationKernel {
       const rejected = { ...base, runId: runtime.runId, reason: 'Guide runId does not match the active run' };
       runtime.guideReceipts.set(clientMessageId, rejected);
       return runtime.runner.recordGuideReceipt(rejected);
+    }
+    const goalObjective = String(envelope.goalObjective || '').trim();
+    if (goalObjective) {
+      runtime.runner.updateGoal(goalObjective);
+      runtime.runner.setMode('goal');
+      runtime.options.mode = 'goal';
+      runtime.runner.saveWorkspaceConversationState(true);
     }
 
     let safeImages: AgentPromptMessage['images'] = [];
@@ -458,6 +465,7 @@ export class ConversationKernel {
     for (const runtime of this.runtimes.values()) {
       if (section === 'models' && key === 'providers') runtime.runner.updateProviders(value);
       else runtime.runner.config.set(section, key, value);
+      runtime.runner.invalidateSystemPrompt();
     }
   }
 
@@ -719,6 +727,7 @@ export class ConversationKernel {
     const existing = this.findRuntime(target);
     if (existing) {
       this.ensureRuntimeMetadata(existing, target);
+      this.applyOptions(existing.runner, options);
       return existing;
     }
     const id = target.conversationId;
@@ -841,11 +850,10 @@ export class ConversationKernel {
   }
 
   private applyOptions(agent: Agent, options: ConversationKernelRunOptions): void {
-    agent.setMode(options.mode);
-    if (options.mode === 'goal' && this.host.goal) {
-      agent.updateGoal(this.host.goal.objective);
-      if (this.host.goal.paused && agent.goal) agent.goal.paused = true;
-    }
+    // The isolated runner owns the target conversation's restored mode/goal.
+    // Host-global state can belong to a different foreground conversation.
+    const restoredMode = agent.getConversationSnapshot(agent.activeConversationId).mode;
+    agent.setMode(restoredMode || options.mode);
     agent.setModel(options.model);
     agent.setIntelligence(options.intelligence);
     agent.inputMode = options.inputMode;

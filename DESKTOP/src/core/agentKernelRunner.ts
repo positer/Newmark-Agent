@@ -492,8 +492,15 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       }
       lastAssistant = lastTurn.text;
       if (agent.goal.checkComplete(lastAssistant)) {
+        agent.markGoalComplete();
         tokens.push({ type: 'text', text: '\n[Goal Complete]' });
         break;
+      }
+    }
+    if (agent.mode === 'goal' && agent.goal && agent.goal.checkComplete(lastAssistant)) {
+      agent.markGoalComplete();
+      if (!tokens.some(token => token.type === 'text' && /goal complete/i.test(token.text || ''))) {
+        tokens.push({ type: 'text', text: '\n[Goal Complete]' });
       }
     }
   } finally {

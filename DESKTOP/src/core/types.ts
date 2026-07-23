@@ -18,6 +18,7 @@ export interface ConversationInputEnvelope {
   runId?: string;
   deliveryMode: ConversationInputDeliveryMode;
   text: string;
+  goalObjective?: string;
   images?: Array<{ dataUrl: string; name?: string; type?: string }>;
   createdAt: string;
 }

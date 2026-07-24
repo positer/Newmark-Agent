@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.1.6-blue">
+  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.1.7-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -54,7 +54,7 @@ The Windows MSI requests administrator elevation. Windows and Linux may show an 
 
 Application upgrades preserve existing user state under `~/.Newmark`.
 
-The current source and packaged release version is `dev-0.1.6`. This release adds durable Goal continuation/completion state, queue and Goal editing with image compatibility, non-destructive conversation branching, read-only Flow logic evaluation, explicit Subagent mode/Goal/Flow propagation, and deferred Settings/Memory Lab rendering. No backend process is stopped as a UI performance optimization.
+The current source and packaged release version is `dev-0.1.7`. This release refines non-destructive conversation branching with a durable tree format, independent pagination at every edited node, target-only stop-and-rerun behavior, editable/copyable Guide rows, branch-owned Build truncation, archive/restore support for complete trees, and aligned edited-file activity rows.
 
 ## Core Capabilities
 
@@ -189,6 +189,8 @@ See [OVERVIEW.md](OVERVIEW.md) for the source tree, subsystem responsibilities, 
 
 ### Maintenance Log
 
+- 2026-07-24: Repaired and locally installed the final `dev-0.1.7` Windows build. Real packaged Electron validation now proves `<1/2>`-style navigation stays under the edited node, Guide exposes Copy/Edit, branch switching replaces old Build runs, and edited-file icon/text geometry matches terminal activity rows. See `archive/20260724-dev-0.1.7-local-install.md`.
+- 2026-07-24: Advanced the source version to `dev-0.1.7`. Refined branch pagination, active Build restoration, global Guide/Next preference, queue/Goal editing, context-compression feedback, and Build/file disclosure defaults. See `OVERVIEW.md` for details.
 - 2026-07-24: Advanced the source version to `dev-0.1.6`. Added a "Default expand tool usage" toggle in General Settings; build blocks now auto-expand while working, auto-collapse when done, and stop auto-managing after the user manually toggles a block. Settings tabs load lazily for faster first-open, and Memory Lab panels fade in to avoid visual flash. See `OVERVIEW.md` for details.
 - 2026-07-23: Corrected the first generic-select build's severe layout regression. Enhanced selects now reuse the model selector's actual button/menu classes and one top-layer directional popup positioner; compact labels reserve readable width, repeated clicks fully close generic and model Popovers, popup opening leaves toolbar geometry unchanged, and the terminal shell selector uses the same rounded glass surface. Right-panel file-tree and Flow indicators point right when collapsed and down when expanded. Real Electron acceptance is recorded in `archive/20260723-dev-0.1.5-select-popup-regression.md`.
 - 2026-07-23: Built and verified the `0.1.5` Windows MSI and portable ZIP. Machine-wide UAC was cancelled, so the matching package is installed and running from the current-user Programs directory with user configuration unchanged; see `archive/20260723-dev-0.1.5-windows-package-install.md`.
@@ -212,6 +214,8 @@ Run commands from `DESKTOP/`:
 Generated directories such as `DESKTOP/dist/` and `release/` are not source files and should not be edited by hand.
 
 ## Platform Notes
+
+- 2026-07-24: Fixed nested edit pagination so a Guide edit preserves an existing Build-start page group and all earlier path information. Packaged UI validation confirms independent start and Guide pagers; see `archive/20260724-nested-start-guide-branch-pagination.md`.
 
 - **Windows:** primary desktop and Computer Use platform; native and WSL Agent backends are available.
 - **Linux:** GUI, CLI, terminal, packaging, and normal Agent tools are supported; Windows desktop Computer Use is unavailable.

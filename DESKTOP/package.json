@@ -1,7 +1,7 @@
 {
   "name": "newmark-agent",
   "productName": "Newmark Agent",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "homepage": "https://github.com/positer/Newmark-Agent",
   "author": {
@@ -96,6 +96,7 @@
     "release:real-wsl-provider-responses-smoke": "set NEWMARK_REAL_API_MODE=responses&& node scripts/release-real-wsl-provider-smoke.cjs",
     "release:real-vision-attachment-smoke": "node scripts/release-real-vision-attachment-smoke.cjs",
     "release:ui-goal-continuation-smoke": "node scripts/release-ui-goal-continuation-smoke.cjs",
+    "release:ui-dev017-branch-smoke": "node scripts/release-ui-dev017-branch-smoke.cjs",
     "release:ui-workspace-lifecycle-smoke": "node scripts/release-ui-workspace-lifecycle-smoke.cjs",
     "release:real-claude-env-preview-smoke": "node scripts/release-real-claude-env-preview-smoke.cjs",
     "release:real-provider-smoke": "node scripts/release-real-provider-smoke.cjs",

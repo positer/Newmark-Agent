@@ -2633,13 +2633,29 @@ if (hasCliCommand) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
     });
-    ipcMain.handle('agent:switchConversationBranch', async (_event, targetInput: ConversationTargetInput, branchId: string) => {
+    ipcMain.handle('agent:inspectConversationBranch', async (_event, targetInput: ConversationTargetInput, branchId: string, branchGroupId?: string) => {
       if (!agent) return { error: 'Agent not initialized' };
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
       try {
+        const isolated = isolatedConversationAgent(target);
+        const snapshot = isolated.inspectConversationBranch(target.conversationId, branchId, branchGroupId);
+        if (snapshot.runtimeBranchId === snapshot.activeBranchId && peekTargetRuntime(target).resident) {
+          const live = await runtimeSnapshotForTarget(target);
+          return { ...live, activeBranchId: snapshot.activeBranchId, runtimeBranchId: snapshot.runtimeBranchId };
+        }
+        return { ...snapshot, target, workspaceId: target.workspaceId, queued: { steering: [], followUp: [] }, workEvents: [] };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+    ipcMain.handle('agent:activateConversationBranch', async (_event, targetInput: ConversationTargetInput, branchId: string, branchGroupId?: string) => {
+      if (!agent) return { error: 'Agent not initialized' };
+      const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
+      try {
+        if (peekTargetRuntime(target).running) await stopTargetRuntime(target);
         const snapshot = await mutateTargetConversation(target, () => {
           const isolated = isolatedConversationAgent(target);
-          return isolated.switchConversationBranch(target.conversationId, branchId);
+          return isolated.switchConversationBranch(target.conversationId, branchId, branchGroupId);
         });
         return { ...snapshot, queued: { steering: [], followUp: [] }, workEvents: [] };
       } catch (error) {

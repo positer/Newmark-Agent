@@ -117,6 +117,8 @@ interface StoredConversationState {
     goal?: StoredGoalState | null;
     branches?: ConversationBranchState[];
     activeBranchId?: string;
+    activeBranchGroupId?: string;
+    tree?: ConversationTreeState;
     branchReset?: boolean;
     updatedAt?: string;
     pinned?: boolean;
@@ -146,6 +148,24 @@ export interface ConversationBranchState {
   inputMode: InputMode;
   mode: AgentMode;
   goal: StoredGoalState | null;
+}
+export interface ConversationTreeNode extends ConversationBranchState {
+  parentId: string | null;
+}
+export interface ConversationBranchGroupState {
+  id: string;
+  sourceNodeId: string;
+  sourceMessageIndex: number;
+  createdAt: string;
+  nodeIds: string[];
+}
+export interface ConversationTreeState {
+  version: 1;
+  rootNodeId: string;
+  activeNodeId: string;
+  activeGroupId: string;
+  nodes: Record<string, ConversationTreeNode>;
+  branchGroups: Record<string, ConversationBranchGroupState>;
 }
 interface ConversationArchiveManifest {
   version: 1;
@@ -193,6 +213,15 @@ export interface ConversationSnapshot {
   goal: StoredGoalState | null;
   branches: Array<Pick<ConversationBranchState, 'id' | 'createdAt' | 'sourceMessageIndex' | 'sourceText'>>;
   activeBranchId: string;
+  runtimeBranchId: string;
+  branchGroupId: string;
+  branchGroups: ConversationBranchGroupSnapshot[];
+}
+export interface ConversationBranchGroupSnapshot {
+  id: string;
+  sourceMessageIndex: number;
+  activeBranchId: string;
+  branches: Array<Pick<ConversationBranchState, 'id' | 'createdAt' | 'sourceMessageIndex' | 'sourceText'>>;
 }
 export interface ConversationContinuation {
   content: string;
@@ -457,6 +486,13 @@ export class Agent {
     };
   }
 
+  private restoreStatusFromWorkRuns(goal?: StoredGoalState | null): AgentStatus {
+    const hasRunning = this.workRuns.some(run => run.status === 'running');
+    if (hasRunning) return 'working';
+    if (goal?.paused) return 'goal_paused';
+    return 'idle';
+  }
+
   private restoreGoal(goal: StoredGoalState | null | undefined): GoalState | null {
     if (!goal?.objective) return null;
     const restored = new GoalStateImpl(goal.objective);
@@ -467,10 +503,10 @@ export class Agent {
     return restored;
   }
 
-  private branchFromEntry(id: string, sourceMessageIndex: number, sourceText: string, entry: StoredConversationEntry): ConversationBranchState {
+  private branchFromEntry(id: string, sourceMessageIndex: number, sourceText: string, entry: StoredConversationEntry, createdAt?: string): ConversationBranchState {
     return {
       id,
-      createdAt: new Date().toISOString(),
+      createdAt: createdAt || new Date().toISOString(),
       sourceMessageIndex,
       sourceText,
       chatMessages: [...(entry.chatMessages || [])],
@@ -486,6 +522,13 @@ export class Agent {
     };
   }
 
+  private syncActiveBranchSnapshot(entry: StoredConversationEntry): void {
+    if (!entry.activeBranchId || !Array.isArray(entry.branches)) return;
+    const active = entry.branches.find(branch => branch.id === entry.activeBranchId);
+    if (!active) return;
+    Object.assign(active, this.branchFromEntry(active.id, active.sourceMessageIndex, active.sourceText, entry, active.createdAt));
+  }
+
   private applyBranchToEntry(entry: StoredConversationEntry, branch: ConversationBranchState): void {
     entry.chatMessages = [...branch.chatMessages];
     entry.history = [...branch.history];
@@ -497,6 +540,97 @@ export class Agent {
     entry.inputMode = branch.inputMode;
     entry.mode = branch.mode;
     entry.goal = branch.goal;
+  }
+
+  private normalizeConversationTree(entry: StoredConversationEntry): ConversationTreeState | null {
+    const raw = entry.tree;
+    if (raw?.version === 1 && raw.nodes && raw.nodes[raw.activeNodeId]) {
+      entry.activeBranchId = raw.activeNodeId;
+      entry.activeBranchGroupId = raw.activeGroupId;
+      return raw;
+    }
+    const legacy = Array.isArray(entry.branches) ? entry.branches : [];
+    if (!legacy.length) return null;
+    const nodes: Record<string, ConversationTreeNode> = {};
+    for (const branch of legacy) nodes[branch.id] = { ...branch, parentId: null };
+    const activeNodeId = nodes[String(entry.activeBranchId || '')] ? String(entry.activeBranchId) : legacy[legacy.length - 1].id;
+    const source = legacy[0];
+    const groupId = crypto.randomUUID();
+    const tree: ConversationTreeState = {
+      version: 1,
+      rootNodeId: source.id,
+      activeNodeId,
+      activeGroupId: groupId,
+      nodes,
+      branchGroups: {
+        [groupId]: {
+          id: groupId,
+          sourceNodeId: source.id,
+          sourceMessageIndex: source.sourceMessageIndex,
+          createdAt: source.createdAt,
+          nodeIds: legacy.map(branch => branch.id),
+        },
+      },
+    };
+    entry.tree = tree;
+    entry.activeBranchId = activeNodeId;
+    entry.activeBranchGroupId = groupId;
+    return tree;
+  }
+
+  private treeNodeFromEntry(id: string, parentId: string | null, sourceMessageIndex: number, sourceText: string, entry: StoredConversationEntry, createdAt?: string): ConversationTreeNode {
+    return { ...this.branchFromEntry(id, sourceMessageIndex, sourceText, entry, createdAt), parentId };
+  }
+
+  private branchGroupMetadata(tree: ConversationTreeState | null, groupId = tree?.activeGroupId || ''): Array<Pick<ConversationBranchState, 'id' | 'createdAt' | 'sourceMessageIndex' | 'sourceText'>> {
+    if (!tree) return [];
+    const group = tree.branchGroups[groupId];
+    return (group?.nodeIds || []).flatMap(id => {
+      const node = tree.nodes[id];
+      return node ? [{ id: node.id, createdAt: node.createdAt, sourceMessageIndex: node.sourceMessageIndex, sourceText: node.sourceText }] : [];
+    });
+  }
+
+  private treeAncestry(tree: ConversationTreeState, nodeId: string): string[] {
+    const ancestry: string[] = [];
+    const seen = new Set<string>();
+    let current: ConversationTreeNode | undefined = tree.nodes[nodeId];
+    while (current && !seen.has(current.id)) {
+      ancestry.push(current.id);
+      seen.add(current.id);
+      current = current.parentId ? tree.nodes[current.parentId] : undefined;
+    }
+    return ancestry;
+  }
+
+  private branchGroupsForNode(tree: ConversationTreeState | null, nodeId = tree?.activeNodeId || ''): ConversationBranchGroupSnapshot[] {
+    if (!tree || !tree.nodes[nodeId]) return [];
+    const ancestry = this.treeAncestry(tree, nodeId);
+    const ancestryRank = new Map(ancestry.map((id, index) => [id, index]));
+    return Object.values(tree.branchGroups)
+      .flatMap(group => {
+        const selected = group.nodeIds
+          .filter(id => ancestryRank.has(id))
+          .sort((a, b) => Number(ancestryRank.get(a)) - Number(ancestryRank.get(b)))[0];
+        if (!selected) return [];
+        return [{
+          id: group.id,
+          sourceMessageIndex: group.sourceMessageIndex,
+          activeBranchId: selected,
+          branches: this.branchGroupMetadata(tree, group.id),
+        }];
+      })
+      .sort((a, b) => a.sourceMessageIndex - b.sourceMessageIndex);
+  }
+
+  private syncActiveTreeNode(entry: StoredConversationEntry): void {
+    const tree = this.normalizeConversationTree(entry);
+    if (!tree) return;
+    const active = tree.nodes[tree.activeNodeId];
+    if (!active) return;
+    tree.nodes[active.id] = this.treeNodeFromEntry(active.id, active.parentId, active.sourceMessageIndex, active.sourceText, entry, active.createdAt);
+    entry.activeBranchId = active.id;
+    entry.activeBranchGroupId = tree.activeGroupId;
   }
 
   invalidateSystemPrompt(): void {
@@ -1005,6 +1139,18 @@ export class Agent {
         attachments,
       };
     });
+    const tree = entry.tree ? {
+      ...entry.tree,
+      nodes: Object.fromEntries(Object.entries(entry.tree.nodes).map(([id, node]) => {
+        const serialized = this.conversationEntryForDisk(node as StoredConversationEntry);
+        return [id, {
+          ...node,
+          chatMessages: serialized.chatMessages || [],
+          workRuns: serialized.workRuns || [],
+          continuations: serialized.continuations || [],
+        }];
+      })) as Record<string, ConversationTreeNode>,
+    } : undefined;
     return {
       ...entry,
       chatMessages: (entry.chatMessages || []).map(message => ({
@@ -1013,6 +1159,7 @@ export class Agent {
       })),
       workRuns,
       continuations,
+      tree,
     };
   }
 
@@ -1124,6 +1271,13 @@ export class Agent {
   ): { runs: ConversationWorkRun[]; changed: boolean } {
     const normalized = this.normalizeWorkRuns(runs);
     let changed = false;
+    // Only convert 'running' to 'interrupted' when the persisted state is
+    // stale enough to indicate a cold start. If the state was persisted
+    // recently the conversation may still be running in a background kernel
+    // runtime, so preserve the running status for the UI.
+    const isRecentPersist = !!persistedUpdatedAt
+      && (Date.now() - new Date(persistedUpdatedAt).getTime()) < 120_000;
+    if (isRecentPersist) return { runs: normalized, changed: false };
     for (const run of normalized) {
       if (run.status !== 'running') continue;
       run.status = 'interrupted';
@@ -1676,6 +1830,16 @@ export class Agent {
         const state = parsed as StoredConversationState;
         state.version = Math.max(1, Number(state.version || 1));
         state.conversations = state.conversations || {};
+        let migrated = false;
+        for (const entry of Object.values(state.conversations)) {
+          if (!entry.tree && entry.branches?.length) {
+            this.normalizeConversationTree(entry);
+            entry.branches = undefined;
+            entry.branchReset = true;
+            migrated = true;
+          }
+        }
+        if (migrated) state.version = 4;
         this.conversationStateCache.set(file, state);
         this.conversationStateCacheFingerprint.set(file, fingerprint);
         return state;
@@ -1738,9 +1902,10 @@ export class Agent {
         const incomingUpdatedAt = Date.parse(incoming.updatedAt || '') || 0;
         const existingUpdatedAt = Date.parse(existing.updatedAt || '') || 0;
         const preferred = incomingUpdatedAt >= existingUpdatedAt ? { ...existing, ...incoming } : { ...incoming, ...existing };
+        const branchPageReplacement = !!incoming.branchReset || !!incoming.tree || !!incoming.branches?.length;
         const incomingTranscriptEmpty = !(incoming.chatMessages || []).length && !(incoming.history || []).length;
         const existingTranscriptPresent = !!(existing.chatMessages || []).length || !!(existing.history || []).length;
-        if (incomingTranscriptEmpty && existingTranscriptPresent && !incoming.branchReset) {
+        if (incomingTranscriptEmpty && existingTranscriptPresent && !branchPageReplacement) {
           preferred.chatMessages = existing.chatMessages;
           preferred.history = existing.history;
         }
@@ -1750,11 +1915,21 @@ export class Agent {
         const incomingSequence = Math.max(0, Number(incoming.subagentState?.nextSequence || 0));
         const existingSequence = Math.max(0, Number(existing.subagentState?.nextSequence || 0));
         preferred.subagentState = incomingSequence >= existingSequence ? incoming.subagentState : existing.subagentState;
-        preferred.workRuns = this.normalizeWorkRuns([...(existing.workRuns || []), ...(incoming.workRuns || [])]);
+        preferred.chatMessages = branchPageReplacement ? [...(incoming.chatMessages || [])] : preferred.chatMessages;
+        preferred.history = branchPageReplacement ? [...(incoming.history || [])] : preferred.history;
+        preferred.workRuns = branchPageReplacement
+          ? this.normalizeWorkRuns(incoming.workRuns)
+          : this.normalizeWorkRuns([...(existing.workRuns || []), ...(incoming.workRuns || [])]);
+        preferred.continuations = branchPageReplacement ? this.normalizeContinuations(incoming.continuations) : preferred.continuations;
+        preferred.branches = branchPageReplacement ? [...(incoming.branches || [])] : preferred.branches;
+        preferred.activeBranchId = branchPageReplacement ? String(incoming.activeBranchId || '') : preferred.activeBranchId;
+        preferred.activeBranchGroupId = branchPageReplacement ? String(incoming.activeBranchGroupId || '') : preferred.activeBranchGroupId;
+        preferred.tree = branchPageReplacement ? incoming.tree : preferred.tree;
+        preferred.branchReset = branchPageReplacement;
         merged[key] = preferred;
       }
       return {
-        version: 3,
+        version: 4,
         activeConversationId: state.activeConversationId || latest.activeConversationId,
         conversations: merged,
       };
@@ -1985,6 +2160,7 @@ export class Agent {
     const memory = memoryKey ? this.workspaceConversations.get(memoryKey) : undefined;
     const stored = this.readStoredConversationState();
     const persisted = stateKey && stored.conversations ? stored.conversations[stateKey] : undefined;
+    const tree = persisted ? this.normalizeConversationTree(persisted) : null;
     // A live run intentionally does not flush every text/tool delta to disk.
     // Snapshot callers must therefore observe the active in-memory state; an
     // older persisted start event must never mask newer public work events.
@@ -2013,16 +2189,47 @@ export class Agent {
       modelSelection: isActiveConversation
         ? this.currentConversationModelSelection()
         : (persisted?.modelSelection || memory?.modelSelection || this.currentConversationModelSelection()),
-      inputMode: isActiveConversation ? this.inputMode : (persisted?.inputMode || memory?.inputMode || this.defaultInputMode()),
+      inputMode: this.inputMode,
       mode: isActiveConversation ? this.mode : (persisted?.mode || memory?.mode || 'build'),
       goal: isActiveConversation ? this.serializeGoal() : (persisted?.goal || memory?.goal || null),
-      branches: (persisted?.branches || []).map(branch => ({
-        id: branch.id,
-        createdAt: branch.createdAt,
-        sourceMessageIndex: branch.sourceMessageIndex,
-        sourceText: branch.sourceText,
-      })),
-      activeBranchId: String(persisted?.activeBranchId || ''),
+      branches: this.branchGroupMetadata(tree),
+      activeBranchId: String(tree?.activeNodeId || ''),
+      runtimeBranchId: String(tree?.activeNodeId || ''),
+      branchGroupId: String(tree?.activeGroupId || ''),
+      branchGroups: this.branchGroupsForNode(tree),
+    };
+  }
+
+  public inspectConversationBranch(conversationId: string, branchId: string, branchGroupId = ''): ConversationSnapshot {
+    const clean = this.safeConversationId(conversationId || 'default');
+    const stateKey = this.workspaceConversationStateKey(clean);
+    const stored = this.readStoredConversationState();
+    const entry = stateKey ? stored.conversations?.[stateKey] : undefined;
+    const tree = entry ? this.normalizeConversationTree(entry) : null;
+    const branch = tree?.nodes[String(branchId || '')];
+    if (!entry || !tree || !branch) throw new Error('Conversation branch was not found.');
+    const base = this.getConversationSnapshot(clean);
+    const requestedGroup = tree.branchGroups[String(branchGroupId || '')];
+    const group = requestedGroup?.nodeIds.includes(branch.id)
+      ? requestedGroup
+      : Object.values(tree.branchGroups).find(item => item.nodeIds.includes(branch.id));
+    return {
+      ...base,
+      conversationPlan: this.normalizeConversationPlan(branch.plan),
+      linkedPlan: this.normalizeLinkedPlan(branch.linkedPlan),
+      chatMessages: [...branch.chatMessages],
+      historyMessages: branch.history.length,
+      workRuns: this.normalizeWorkRuns(branch.workRuns),
+      continuations: this.normalizeContinuations(branch.continuations),
+      modelSelection: branch.modelSelection,
+      inputMode: branch.inputMode,
+      mode: branch.mode,
+      goal: branch.goal,
+      branches: this.branchGroupMetadata(tree, group?.id),
+      activeBranchId: branch.id,
+      runtimeBranchId: String(tree.activeNodeId || ''),
+      branchGroupId: String(group?.id || tree.activeGroupId || ''),
+      branchGroups: this.branchGroupsForNode(tree, branch.id),
     };
   }
 
@@ -2045,7 +2252,7 @@ export class Agent {
           workRuns: [],
           continuations: [],
           modelSelection: this.currentConversationModelSelection(),
-          inputMode: this.inputMode,
+          inputMode: this.defaultInputMode(),
           mode: 'build',
           goal: null,
           updatedAt: new Date().toISOString(),
@@ -2112,15 +2319,16 @@ export class Agent {
     const stored = this.readStoredConversationState();
     const entry = stored.conversations?.[stateKey];
     if (!entry) throw new Error('Conversation state is unavailable.');
-    entry.branches = Array.isArray(entry.branches) ? entry.branches : [];
-    if (!entry.activeBranchId) {
+    let tree = this.normalizeConversationTree(entry);
+    if (!tree) {
       const originalId = crypto.randomUUID();
-      entry.branches.push(this.branchFromEntry(originalId, index, target.content, entry));
-      entry.activeBranchId = originalId;
+      const original = this.treeNodeFromEntry(originalId, null, index, target.content, entry);
+      tree = { version: 1, rootNodeId: originalId, activeNodeId: originalId, activeGroupId: '', nodes: { [originalId]: original }, branchGroups: {} };
+      entry.tree = tree;
     } else {
-      const active = entry.branches.find(branch => branch.id === entry.activeBranchId);
-      if (active) Object.assign(active, this.branchFromEntry(active.id, active.sourceMessageIndex, active.sourceText, entry));
+      this.syncActiveTreeNode(entry);
     }
+    const parentNodeId = tree.activeNodeId;
 
     const userOrdinal = snapshot.chatMessages.slice(0, index + 1).filter(message => message.role === 'user').length;
     let seenUsers = 0;
@@ -2130,16 +2338,54 @@ export class Agent {
       seenUsers++;
       if (seenUsers === userOrdinal) { historyCut = i; break; }
     }
+    const targetGuideId = String(target.clientMessageId || '');
+    const targetRunId = String(target.runId || '');
+    const workRunsBeforeTarget = snapshot.workRuns.flatMap(run => {
+      if (targetGuideId && targetRunId && run.runId === targetRunId) {
+        const eventCut = run.events.findIndex(event => String(event.guide?.clientMessageId || '') === targetGuideId);
+        const guideCut = run.guides.findIndex(guide => guide.clientMessageId === targetGuideId);
+        const events = eventCut >= 0
+          ? run.events.slice(0, eventCut)
+          : run.events.filter(event => String(event.timestamp || '') < String(target.timestamp || ''));
+        const guides = guideCut >= 0
+          ? run.guides.slice(0, guideCut)
+          : run.guides.filter(guide => String(guide.createdAt || '') < String(target.timestamp || ''));
+        return [{
+          ...run,
+          status: 'interrupted' as const,
+          endedAt: target.timestamp || new Date().toISOString(),
+          expanded: true,
+          sequence: Math.max(0, ...events.map(event => Number(event.sequence || 0))),
+          events,
+          guides,
+        }];
+      }
+      const boundary = String(run.endedAt || run.startedAt || '');
+      return boundary && boundary < String(target.timestamp || '') ? [run] : [];
+    });
     const branchId = crypto.randomUUID();
-    const branch = this.branchFromEntry(branchId, index, text, {
+    const branch = this.treeNodeFromEntry(branchId, parentNodeId, index, text, {
       ...entry,
       chatMessages: snapshot.chatMessages.slice(0, index),
       history: (entry.history || []).slice(0, historyCut),
-      workRuns: snapshot.workRuns.filter(run => run.endedAt ? run.endedAt < target.timestamp : run.startedAt < target.timestamp),
+      workRuns: workRunsBeforeTarget,
       continuations: [],
     });
-    entry.branches.push(branch);
+    tree.nodes[branchId] = branch;
+    const groupId = crypto.randomUUID();
+    tree.branchGroups[groupId] = {
+      id: groupId,
+      sourceNodeId: parentNodeId,
+      sourceMessageIndex: index,
+      createdAt: new Date().toISOString(),
+      nodeIds: [parentNodeId, branchId],
+    };
+    tree.activeNodeId = branchId;
+    tree.activeGroupId = groupId;
+    entry.tree = tree;
+    entry.branches = undefined;
     entry.activeBranchId = branchId;
+    entry.activeBranchGroupId = groupId;
     this.applyBranchToEntry(entry, branch);
     entry.branchReset = true;
     entry.updatedAt = new Date().toISOString();
@@ -2148,19 +2394,27 @@ export class Agent {
     return this.getConversationSnapshot(clean);
   }
 
-  public switchConversationBranch(conversationId: string, branchId: string): ConversationSnapshot {
+  public switchConversationBranch(conversationId: string, branchId: string, branchGroupId = ''): ConversationSnapshot {
     const clean = this.safeConversationId(conversationId || 'default');
     this.saveWorkspaceConversationState(true);
     const stateKey = this.workspaceConversationStateKey(clean);
     const stored = this.readStoredConversationState();
     const entry = stateKey ? stored.conversations?.[stateKey] : undefined;
-    const branch = entry?.branches?.find(item => item.id === String(branchId || ''));
-    if (!entry || !branch) throw new Error('Conversation branch was not found.');
-    const active = entry.branches?.find(item => item.id === entry.activeBranchId);
-    if (active) Object.assign(active, this.branchFromEntry(active.id, active.sourceMessageIndex, active.sourceText, entry));
+    const tree = entry ? this.normalizeConversationTree(entry) : null;
+    const branch = tree?.nodes[String(branchId || '')];
+    if (!entry || !tree || !branch) throw new Error('Conversation branch was not found.');
+    const priorActiveNodeId = tree.activeNodeId;
+    this.syncActiveTreeNode(entry);
     this.applyBranchToEntry(entry, branch);
-    entry.branchReset = !(branch.chatMessages.length || branch.history.length);
+    entry.branchReset = true;
+    const requestedGroup = tree.branchGroups[String(branchGroupId || '')];
+    const group = requestedGroup?.nodeIds.includes(branch.id)
+      ? requestedGroup
+      : Object.values(tree.branchGroups).find(item => item.nodeIds.includes(branch.id) && item.nodeIds.includes(priorActiveNodeId));
+    tree.activeNodeId = branch.id;
+    if (group) tree.activeGroupId = group.id;
     entry.activeBranchId = branch.id;
+    entry.activeBranchGroupId = tree.activeGroupId;
     entry.updatedAt = new Date().toISOString();
     this.writeStoredConversationStateNow(stored);
     if (clean === this.safeConversationId(this.activeConversationId)) this.setConversationFromStorage(clean);
@@ -2313,7 +2567,7 @@ export class Agent {
     const title = this.hasUserConversationTitle(this.chatMessages) && this.isGeneratedConversationTitle(priorTitle, conversationId, stored.conversations[stateKey]?.chatMessages || [])
       ? derivedTitle
       : (priorTitle || derivedTitle);
-    stored.conversations[stateKey] = {
+    const nextEntry: StoredConversationEntry = {
       ...(stored.conversations[stateKey] || {}),
       title,
       chatMessages: [...this.chatMessages],
@@ -2329,6 +2583,11 @@ export class Agent {
       goal: this.serializeGoal(),
       updatedAt,
     };
+    if (nextEntry.tree || nextEntry.branches?.length) {
+      nextEntry.branchReset = true;
+      this.syncActiveTreeNode(nextEntry);
+    }
+    stored.conversations[stateKey] = nextEntry;
     if (flush) this.writeStoredConversationStateNow(stored);
     else this.scheduleStoredConversationState(stored);
   }
@@ -2361,10 +2620,10 @@ export class Agent {
       this.workRuns = this.normalizeWorkRuns(saved.workRuns);
       this.continuations = this.normalizeContinuations(saved.continuations);
       this.restoreConversationModelSelection(saved.modelSelection);
-      this.inputMode = saved.inputMode === 'next' ? 'next' : saved.inputMode === 'guide' ? 'guide' : this.defaultInputMode();
+      this.inputMode = this.defaultInputMode();
       this.mode = saved.mode || 'build';
       this.goal = this.restoreGoal(saved.goal);
-      this.status = this.goal?.paused ? 'goal_paused' : 'idle';
+      this.status = this.restoreStatusFromWorkRuns(saved.goal);
       this.activeWorkRunId = this.workRuns.find(run => run.status === 'running')?.runId || '';
       return;
     }
@@ -2379,11 +2638,11 @@ export class Agent {
     this.workRuns = recoveredWorkRuns.runs;
     this.continuations = this.normalizeContinuations(persisted?.continuations);
     this.restoreConversationModelSelection(persisted?.modelSelection);
-    this.inputMode = persisted?.inputMode === 'next' ? 'next' : persisted?.inputMode === 'guide' ? 'guide' : this.defaultInputMode();
+    this.inputMode = this.defaultInputMode();
     this.mode = persisted?.mode || 'build';
     this.goal = this.restoreGoal(persisted?.goal);
-    this.status = this.goal?.paused ? 'goal_paused' : 'idle';
-    this.activeWorkRunId = '';
+    this.status = this.restoreStatusFromWorkRuns(persisted?.goal);
+    this.activeWorkRunId = this.workRuns.find(run => run.status === 'running')?.runId || '';
     this.bindConversationSubagents(this.activeConversationId, persisted?.subagentState);
     this.workspaceConversations.set(key, {
       chatMessages: [...this.chatMessages],
@@ -2394,7 +2653,7 @@ export class Agent {
       workRuns: this.normalizeWorkRuns(this.workRuns),
       continuations: this.normalizeContinuations(this.continuations),
       modelSelection: persisted?.modelSelection || this.currentConversationModelSelection(),
-      inputMode: persisted?.inputMode === 'next' ? 'next' : persisted?.inputMode === 'guide' ? 'guide' : this.defaultInputMode(),
+      inputMode: this.defaultInputMode(),
       mode: persisted?.mode || 'build',
       goal: persisted?.goal || null,
       updatedAt: persisted?.updatedAt,
@@ -2478,7 +2737,8 @@ export class Agent {
 
   setInputMode(mode: string): InputMode {
     this.inputMode = mode === 'next' ? 'next' : 'guide';
-    this.saveWorkspaceConversationState(true);
+    this.config.set('general', 'default_input', this.inputMode);
+    this.config.save();
     return this.inputMode;
   }
 
@@ -2644,7 +2904,7 @@ export class Agent {
         workRuns,
         continuations,
         modelSelection: source.modelSelection || this.currentConversationModelSelection(),
-        inputMode: source.inputMode || this.inputMode,
+        inputMode: this.inputMode,
         mode: source.mode || this.mode,
         goal: source.goal === undefined ? this.serializeGoal() : source.goal,
         updatedAt,
@@ -2659,7 +2919,7 @@ export class Agent {
     const title = this.hasUserConversationTitle(normalizedChatMessages) && this.isGeneratedConversationTitle(previous?.title, clean, previous?.chatMessages || [])
       ? derivedTitle
       : (previous?.title || derivedTitle);
-    stored.conversations[stateKey] = {
+    const nextEntry: StoredConversationEntry = {
       ...(previous || {}),
       title,
       chatMessages: normalizedChatMessages,
@@ -2670,11 +2930,16 @@ export class Agent {
       workRuns,
       continuations,
       modelSelection: source.modelSelection || previous?.modelSelection || this.currentConversationModelSelection(),
-      inputMode: source.inputMode || previous?.inputMode || this.inputMode,
+      inputMode: this.inputMode,
       mode: source.mode || previous?.mode || this.mode,
       goal: source.goal === undefined ? (previous?.goal || this.serializeGoal()) : source.goal,
       updatedAt,
     };
+    if (nextEntry.tree || nextEntry.branches?.length) {
+      nextEntry.branchReset = true;
+      this.syncActiveTreeNode(nextEntry);
+    }
+    stored.conversations[stateKey] = nextEntry;
     this.writeStoredConversationState(stored, ws);
     if (this.safeConversationId(this.activeConversationId || 'default') === clean) {
       this.chatMessages = normalizedChatMessages;
@@ -3024,6 +3289,7 @@ export class Agent {
     const memoryKey = `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${clean}`;
     const stored = this.readStoredConversationState(ws);
     const persisted = stored.conversations?.[stateKey];
+    if (persisted) this.normalizeConversationTree(persisted);
     const memory = this.workspaceConversations.get(memoryKey);
     const persistedMessagesAvailable = persisted?.chatMessages !== undefined;
     const sourceMessages = persisted?.chatMessages ?? memory?.chatMessages ?? [];
@@ -3180,7 +3446,10 @@ export class Agent {
     this.mutateStoredConversationState(ws, stored => {
       stored.conversations = stored.conversations || {};
       if (stored.conversations[stateKey]) return stored;
-      stored.conversations[stateKey] = { ...manifest.entry, updatedAt: new Date().toISOString() };
+      const restoredEntry = { ...manifest.entry, updatedAt: new Date().toISOString(), branchReset: true };
+      this.normalizeConversationTree(restoredEntry);
+      stored.version = 4;
+      stored.conversations[stateKey] = restoredEntry;
       stored.activeConversationId = conversationId;
       restored = true;
       return stored;

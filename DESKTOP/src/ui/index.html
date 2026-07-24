@@ -2140,13 +2140,15 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 .message-inline-editor textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
 .message-inline-actions { display: flex; justify-content: flex-end; gap: 7px; }
-.message-edit-submit, .message-edit-cancel, .branch-page-btn {
+.message-edit-submit, .message-edit-cancel {
   border: 1px solid var(--glass-border-2); border-radius: var(--radius-sm);
   background: var(--glass-bg-2); color: var(--text); padding: 5px 11px; cursor: pointer;
 }
 .message-edit-submit { border-color: color-mix(in srgb, var(--accent) 55%, var(--glass-border-2)); color: var(--accent); }
-.conversation-branch-pager { display:flex; justify-content:flex-end; align-items:center; gap:6px; margin-top:7px; color:var(--text-dim); font-size:11px; }
-.branch-page-btn { width:25px; height:23px; padding:0; }
+.conversation-branch-pager { display:flex; justify-content:flex-end; align-items:center; gap:0; margin-top:7px; color:var(--text-dim); font-size:11px; }
+.branch-page-arrow { cursor:pointer; color:var(--text-dim); padding:1px 3px; transition:color var(--duration-fast) var(--ease-out-expo), background var(--duration-fast) var(--ease-out-expo); border-radius:var(--radius-sm); }
+.branch-page-arrow:hover { color:var(--text-bright); background:rgba(255,255,255,0.06); }
+.branch-page-arrow:active { transform:scale(0.92) translateZ(0); }
 
 .chat-msg .msg-body .md-rendered {
   padding: 0;
@@ -2298,7 +2300,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .conversation-work-files[open] > summary .conversation-work-activity-chevron,
 .conversation-work-file[open] > summary .conversation-work-activity-chevron { transform: rotate(45deg); }
 .conversation-work-activity-list { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 5px 24px; padding: 0; border: 0; }
-.conversation-work-activity-item { display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; align-items: start; min-height: 24px; color: var(--text-dim); font-size: 11px; font-weight: 400; line-height: 1.5; }
+.conversation-work-activity-item { display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; align-items: start; min-height: 24px; color: var(--text-dim); font: 400 11px/1.5 var(--font-ui); }
 .conversation-work-activity-item .nm-icon { margin-top: 2px; }
 .conversation-work-subagent-list { flex-direction: row; flex-wrap: wrap; gap: 7px; margin-top: 6px; }
 .conversation-work-subagent-chip {
@@ -2334,9 +2336,12 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .conversation-work-file-list { display: flex; flex-direction: column; gap: 7px; margin: 5px 0 3px 24px; }
 .conversation-work-file { overflow: hidden; border: 1px solid var(--glass-border-1); border-radius: var(--radius-md); background: color-mix(in srgb, var(--glass-bg-2) 74%, transparent); }
 .conversation-work-file-inline { margin: 1px 0; border: none; border-radius: 0; background: transparent; }
-.conversation-work-file-inline > summary { grid-template-columns: 17px minmax(0,1fr) auto 18px; min-height: 26px; padding: 2px 4px; border-radius: var(--radius-sm); transition: background var(--duration-fast) var(--ease-out-expo); }
+.conversation-work-file.conversation-work-file-inline > summary { display: grid; grid-template-columns: 17px minmax(0,max-content) auto 10px; gap: 7px; align-items: center; justify-content: start; width: fit-content; max-width: 100%; min-height: 24px; padding: 0; border-radius: var(--radius-sm); color: var(--text-dim); font: 400 11px/1.5 var(--font-ui); transition: background var(--duration-fast) var(--ease-out-expo); list-style: none; cursor: pointer; }
+.conversation-work-file-inline > summary::-webkit-details-marker { display: none; }
 .conversation-work-file-inline > summary:hover { background: rgba(255,255,255,0.04); }
-.conversation-work-file-inline > summary .nm-icon { color: var(--text-dim); }
+.conversation-work-file-inline > summary .nm-icon { margin-top: 2px; color: var(--text-dim); }
+.conversation-work-file-inline .conversation-work-file-name { font: inherit; }
+.conversation-work-file-inline .conversation-work-file-stats { font: 10px/1.5 var(--font-mono); }
 .conversation-work-file-inline .conversation-work-file-diff { border-top: 1px solid var(--glass-border-1); margin-left: 21px; }
 .conversation-work-file > summary { display: grid; grid-template-columns: minmax(0,1fr) auto 18px; gap: 9px; align-items: center; min-height: 38px; padding: 0 10px 0 12px; cursor: pointer; list-style: none; color: var(--text); }
 .conversation-work-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--font-mono); }
@@ -4700,7 +4705,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
         </div>
 
         <div id="input-stack">
-          <div id="context-compression-pill" style="display:none;margin:0 28px 8px;padding:7px 10px;border-radius:8px;border:1px solid var(--glass-border-1);background:var(--glass-bg-1);font-size:11px;color:var(--text-dim);"></div>
+
 
           <!-- Scroll to bottom -->
           <button id="scroll-bottom-btn" onclick="window.scrollToBottom()" title="Scroll to bottom"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#arrow-down"></use></svg><span class="icon-only-label">Scroll to bottom</span></button>
@@ -4937,8 +4942,14 @@ var state = {
   goalText: '',
   goalPaused: false,
   conversationBranches: [],
+  conversationBranchGroups: [],
   activeConversationBranchId: '',
+  runtimeConversationBranchId: '',
+  activeConversationBranchGroupId: '',
+  guideMessageIndexByClientId: {},
   pendingInputEdit: null,
+  _editingQueueIndex: -1,
+  _editingGoalText: '',
   goalDraftAttachments: [],
   providers: [],
   archives: [],
@@ -5053,7 +5064,7 @@ var els = {};
 function cacheEls() {
   var ids = [
     'chat-area','prompt','prompt-attachments','mode-select','model-select','intel-select','submit-btn',
-    'input-area','goal-bar','goal-text','goal-pause-btn','context-compression-pill','context-token-ring','context-token-tooltip','todo-wrap','todo-header',
+    'input-area','goal-bar','goal-text','goal-pause-btn','context-token-ring','context-token-tooltip','todo-wrap','todo-header',
     'todo-list','todo-header-label','scroll-bottom-btn','right','right-content','bottom','left',
     'left-secondary','conversation-list','terminal-shell-select','terminal-tabs','terminal-body','terminal-timeout-input',
     'file-tree-container',
@@ -6307,7 +6318,6 @@ function applyLanguageToUi() {
   var goalText = document.getElementById('goal-text');
   if (goalText && (!state.goalText || goalText.textContent === 'Set goal' || goalText.textContent === '设置目标')) goalText.textContent = t('goal.set');
   if (state.rightTab === 'plan') window.renderConversationPlan();
-  if (window.renderContextCompression) window.renderContextCompression();
   if (window.renderContextWindow) window.renderContextWindow();
   if (window.renderInputStack) window.renderInputStack();
   if (window.refreshModelSelect) window.refreshModelSelect();
@@ -6910,6 +6920,8 @@ window.copyMessageText = async function(button) {
     if (button) { button.title = t('common.copied'); setTimeout(function() { button.title = t('common.copy'); }, 1200); }
   } catch(e) {}
 };
+var branchApiOverride = null;
+window.__setBranchApiForTest = function(nextApi) { branchApiOverride = nextApi || null; };
 
 function applyAutoRouteRatingState(snapshot) {
   snapshot = snapshot || {};
@@ -7009,21 +7021,50 @@ window.editUserMessage = function(button, messageIndex) {
   editor.focus(); editor.setSelectionRange(editor.value.length, editor.value.length);
 };
 
+async function stopTargetConversationForMessageEdit(target) {
+  var runtime = runningConversationRecord(target.conversationId, target.workspaceId);
+  if (!runtime) return true;
+  var runId = String(runtime.runId || '');
+  setConversationRuntimeState(target, 'stopping', runId);
+  try {
+    if (api.stopConversation) {
+      var first = await api.stopConversation({ target: target, runId: runId, force: false });
+      var firstStatus = String(first && first.status || '');
+      var firstAction = String(first && first.action || '');
+      if (['idle', 'interrupted', 'force_interrupted'].indexOf(firstStatus) < 0 && ['not_running', 'stale'].indexOf(firstAction) < 0) {
+        setConversationRuntimeState(target, 'force_restarting', runId);
+        await api.stopConversation({ target: target, runId: runId, force: true });
+        setConversationRuntimeState(target, 'force_interrupted', runId);
+      } else {
+        setConversationRuntimeState(target, 'interrupted', runId);
+      }
+    } else if (api.abortConversation) {
+      await api.abortConversation(target);
+      setConversationRuntimeState(target, 'interrupted', runId);
+    }
+    var runtimeKey = runtimeKeyFor(target.workspaceId, target.conversationId);
+    if (state.activeSendCallsByTarget) delete state.activeSendCallsByTarget[runtimeKey];
+    return true;
+  } catch (error) {
+    setConversationRuntimeState(target, 'running', runId);
+    showUiNotice(error && error.message ? error.message : String(error), 'error', 'conversation-edit-stop-' + runtimeKeyFor(target.workspaceId, target.conversationId));
+    return false;
+  }
+}
+
 window.submitUserMessageEdit = async function(message, messageIndex, editedText, target) {
   var text = String(editedText || '').trim();
   if (!text || !api.branchConversation) return;
   var conversationId = String(target.conversationId || activeConversationId() || 'default');
   try {
-    if (runningConversationRecord(conversationId, target.workspaceId) && api.abortConversation) {
-      await api.abortConversation(target);
-    }
+    if (!await stopTargetConversationForMessageEdit(target)) return;
     var result = await api.branchConversation(target, Number(messageIndex), text);
     if (!result || result.error) {
       var reason = (result && result.error) || 'Unable to edit message.';
       showUiNotice(
         currentLang() === 'zh' ? '无法编辑历史消息：' + reason : 'Unable to edit message: ' + reason,
         'error',
-        'conversation-rewind-' + rewindKey
+        'conversation-branch-' + conversationId
       );
       return;
     }
@@ -7033,7 +7074,11 @@ window.submitUserMessageEdit = async function(message, messageIndex, editedText,
     state.backendQueue = setBackendQueueForTarget({ steering: [], followUp: [] }, target);
     if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue, target);
     state.conversationBranches = Array.isArray(result.branches) ? result.branches : [];
+    state.conversationBranchGroups = Array.isArray(result.branchGroups) ? result.branchGroups : [];
     state.activeConversationBranchId = String(result.activeBranchId || '');
+    state.runtimeConversationBranchId = String(result.runtimeBranchId || result.activeBranchId || '');
+    state.activeConversationBranchGroupId = String(result.branchGroupId || '');
+    syncWorkRunsSnapshot(Array.isArray(result.workRuns) ? result.workRuns : [], target);
     renderChatMessages(result.chatMessages || []);
     els.prompt.value = String(text || '');
     els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
@@ -7045,23 +7090,62 @@ window.submitUserMessageEdit = async function(message, messageIndex, editedText,
     showUiNotice(
       currentLang() === 'zh' ? '无法编辑历史消息：' + errorText : 'Unable to edit message: ' + errorText,
       'error',
-      'conversation-rewind-' + rewindKey
+      'conversation-branch-' + conversationId
     );
   }
 };
 
-window.switchConversationBranch = async function(offset) {
-  var branches = state.conversationBranches || [];
-  if (branches.length < 2 || !api.switchConversationBranch) return;
-  var current = branches.findIndex(function(branch) { return branch.id === state.activeConversationBranchId; });
+window.switchConversationBranch = async function(offset, branchGroupId) {
+  var group = (state.conversationBranchGroups || []).find(function(item) { return item.id === String(branchGroupId || state.activeConversationBranchGroupId || ''); });
+  var branches = group ? (group.branches || []) : (state.conversationBranches || []);
+  var branchApi = branchApiOverride || api;
+  if (branches.length < 2 || !branchApi.inspectConversationBranch) return;
+  var currentBranchId = group ? group.activeBranchId : state.activeConversationBranchId;
+  var current = branches.findIndex(function(branch) { return branch.id === currentBranchId; });
   var next = Math.max(0, Math.min(branches.length - 1, (current < 0 ? branches.length - 1 : current) + Number(offset || 0)));
   if (next === current) return;
-  var result = await api.switchConversationBranch(currentConversationTarget(), branches[next].id);
+  var result = await branchApi.inspectConversationBranch(currentConversationTarget(), branches[next].id, group ? group.id : (state.activeConversationBranchGroupId || ''));
   if (!result || result.error) return showUiNotice((result && result.error) || 'Unable to switch branch.', 'error', 'conversation-branch');
+  var target = currentConversationTarget();
+  clearAgentWorkEvents(target.conversationId);
+  resetConversationWorkUi(target.conversationId, false, target.workspaceId);
   state.conversationBranches = result.branches || [];
+  state.conversationBranchGroups = Array.isArray(result.branchGroups) ? result.branchGroups : [];
   state.activeConversationBranchId = result.activeBranchId || '';
+  state.runtimeConversationBranchId = result.runtimeBranchId || state.runtimeConversationBranchId || '';
+  state.activeConversationBranchGroupId = String(result.branchGroupId || state.activeConversationBranchGroupId || '');
+  syncWorkRunsSnapshot(Array.isArray(result.workRuns) ? result.workRuns : [], target);
   renderChatMessages(result.chatMessages || []);
 };
+
+function isViewingRuntimeConversationBranch(target) {
+  if (!isActiveConversationTarget(target)) return true;
+  var viewed = String(state.activeConversationBranchId || '');
+  var runtime = String(state.runtimeConversationBranchId || '');
+  return !viewed || !runtime || viewed === runtime;
+}
+
+async function activateViewedConversationBranchForSend(target) {
+  var viewed = String(state.activeConversationBranchId || '');
+  var runtime = String(state.runtimeConversationBranchId || '');
+  if (!viewed || !runtime || viewed === runtime) return true;
+  var branchApi = branchApiOverride || api;
+  if (!branchApi.activateConversationBranch) return true;
+  if (!await stopTargetConversationForMessageEdit(target)) return false;
+  var result = await branchApi.activateConversationBranch(target, viewed, state.activeConversationBranchGroupId || '');
+  if (!result || result.error) {
+    showUiNotice((result && result.error) || 'Unable to activate branch.', 'error', 'conversation-branch-activate');
+    return false;
+  }
+  state.conversationBranches = Array.isArray(result.branches) ? result.branches : [];
+  state.conversationBranchGroups = Array.isArray(result.branchGroups) ? result.branchGroups : [];
+  state.activeConversationBranchId = String(result.activeBranchId || viewed);
+  state.runtimeConversationBranchId = String(result.runtimeBranchId || result.activeBranchId || viewed);
+  state.activeConversationBranchGroupId = String(result.branchGroupId || state.activeConversationBranchGroupId || '');
+  syncWorkRunsSnapshot(Array.isArray(result.workRuns) ? result.workRuns : [], target);
+  renderChatMessages(result.chatMessages || []);
+  return true;
+}
 
 function normalizeConversationImageAttachments(input) {
   return (Array.isArray(input) ? input : []).slice(0, 6).flatMap(function(item) {
@@ -7171,6 +7255,7 @@ function addMsg(role, text, mode, model, messageIndex, messageMeta) {
     workspaceId: String(messageMeta.target.workspaceId || ''),
     conversationId: String(messageMeta.target.conversationId || 'default')
   } : null;
+  if (Number.isFinite(Number(messageIndex)) && Number(messageIndex) >= 0) div.setAttribute('data-message-index', String(Number(messageIndex)));
   if (messageMeta && messageMeta.clientMessageId) applyGuideMessageMeta(div, messageMeta);
   if (owningRunId && role === 'assistant') {
     div.setAttribute('data-run-id', owningRunId);
@@ -7846,7 +7931,7 @@ function normalizedWorkRun(run, target) {
   var status = String(run.status || 'running');
   var live = ['running', 'stopping', 'force_restarting'].indexOf(status) >= 0;
   var expanded = run.expanded === undefined
-    ? (live || state.expandToolsDefault !== false)
+    ? live && state.expandToolsDefault !== false
     : !!run.expanded;
   return {
     runId: String(run.runId || run.id || ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2))),
@@ -7960,7 +8045,7 @@ function workToolActivity(event) {
 
 function workToolActivityLabel(activity, count, completed) {
   var zh = currentLang() === 'zh';
-  if (activity.key === 'context_compression') return completed ? (zh ? '已完成上下文压缩' : 'Completed context compression') : (zh ? '正在压缩上下文' : 'Compressing context');
+  if (activity.key === 'context_compression') return completed ? (zh ? '上下文已压缩' : 'Context compressed') : (zh ? '正在压缩上下文' : 'Compressing context');
   if (activity.key === 'memory_lab') return completed
     ? (zh ? '更新了记忆' : 'Updated memory')
     : (zh ? '正在更新 Memory Lab' : 'Updating Memory Lab');
@@ -8109,7 +8194,7 @@ function renderWorkToolGroup(event, eventIndex) {
     var edited = workToolEditedFile(item);
     if (edited) {
       var editKey = 'edit:' + String(item.id || item.toolCallId || itemIndex) + ':' + edited.path;
-      return '<details class="conversation-work-file conversation-work-file-inline" data-work-detail-key="' + escAttr(editKey) + '"><summary>' +
+      return '<details class="conversation-work-file conversation-work-file-inline" open data-work-detail-key="' + escAttr(editKey) + '"><summary>' +
         iconSvg('pencil', 'edited', 'tiny') +
         '<span class="conversation-work-file-name" title="' + escAttr(edited.path) + '">' + esc(currentLang() === 'zh' ? '已编辑 ' : 'Edited ') + esc(edited.name) + '</span>' +
         '<span class="conversation-work-file-stats"><span class="conversation-work-file-add">+' + edited.added + '</span><span class="conversation-work-file-del">-' + edited.deleted + '</span></span>' +
@@ -8156,10 +8241,30 @@ function renderWorkRunGuideMessage(event) {
   var content = String(guide.content !== undefined ? guide.content : event.content || '');
   var timestamp = String(guide.createdAt || event.timestamp || '');
   var time = timestamp ? new Date(timestamp).toLocaleTimeString(uiLocale()) : '';
-  return '<div class="chat-msg user work-run-guide-message" data-client-message-id="' + escAttr(String(guide.clientMessageId || event.clientMessageId || '')) + '">' +
+  var clientMessageId = String(guide.clientMessageId || event.clientMessageId || '');
+  var messageIndex = Number(state.guideMessageIndexByClientId && state.guideMessageIndexByClientId[clientMessageId]);
+  var indexed = Number.isFinite(messageIndex) && messageIndex >= 0;
+  return '<div class="chat-msg user work-run-guide-message" data-client-message-id="' + escAttr(clientMessageId) + '"' + (indexed ? ' data-message-index="' + messageIndex + '"' : '') + '>' +
     '<div class="meta"><span class="msg-role">' + esc(t('message.user')) + '</span>' + (time ? '<span> | ' + esc(time) + '</span>' : '') +
-    '<span class="guide-receipt-status ' + escAttr(status) + '">Guide · ' + esc(guideUiStatusLabel(status)) + '</span></div>' +
+    '<span class="guide-receipt-status ' + escAttr(status) + '">Guide · ' + esc(guideUiStatusLabel(status)) + '</span>' + messageActionsHtml('user', content, indexed ? messageIndex : -1) + '</div>' +
     '<div class="msg-body">' + renderMessageContent(content) + '</div></div>';
+}
+
+function hydrateWorkRunGuideMessages(root, run) {
+  if (!root || !root.querySelectorAll) return;
+  var byId = {};
+  workRunGuideEvents(run).forEach(function(event) {
+    var guide = event && event.guide || event || {};
+    var id = String(guide.clientMessageId || event.clientMessageId || '');
+    if (id) byId[id] = { content: String(guide.content !== undefined ? guide.content : event.content || ''), target: run.target };
+  });
+  var nodes = root.querySelectorAll('.work-run-guide-message[data-client-message-id]');
+  for (var i = 0; i < nodes.length; i++) {
+    var record = byId[String(nodes[i].getAttribute('data-client-message-id') || '')];
+    if (!record) continue;
+    nodes[i]._newmarkMessageText = record.content;
+    nodes[i]._newmarkMessageTarget = record.target;
+  }
 }
 
 function workRunGuideEvents(run) {
@@ -8309,6 +8414,7 @@ function updateConversationWorkRunElement(run, element) {
     }
     guideStack.innerHTML = expanded ? '' : workRunGuideEvents(run).map(renderWorkRunGuideMessage).join('');
   }
+  hydrateWorkRunGuideMessages(wrapper || element, run);
   var refreshedActivities = element.querySelectorAll ? element.querySelectorAll('details.conversation-work-activity[data-activity-key], details[data-work-detail-key]') : [];
   for (var refreshedIndex = 0; refreshedIndex < refreshedActivities.length; refreshedIndex++) {
     var refreshedParent = refreshedActivities[refreshedIndex].closest ? refreshedActivities[refreshedIndex].closest('details.conversation-work-activity[data-activity-key]') : null;
@@ -8362,6 +8468,10 @@ function applyAgentWorkEventToRun(event) {
   if (!run) {
     run = normalizedWorkRun({ runId: event.runId, status: 'running', startedAt: event.startedAt || event.timestampIso || new Date().toISOString(), events: [] }, target);
     runs.push(run);
+    if (isActiveConversationTarget(target) && els['chat-area']) {
+      var rejectedGuides = els['chat-area'].querySelectorAll('.chat-msg.guide-rejected');
+      for (var rg = 0; rg < rejectedGuides.length; rg++) rejectedGuides[rg].style.display = 'none';
+    }
   }
   var type = String(event.type || 'status');
   if ((type.indexOf('guide') === 0 || event.guide) && (event.clientMessageId || (event.guide && event.guide.clientMessageId))) {
@@ -8659,6 +8769,7 @@ function renderChatMessages(messages) {
   var persistedRunIndexes = {};
   var renderedRunIds = {};
   var messageRunRoles = {};
+  state.guideMessageIndexByClientId = {};
   persistedRuns.forEach(function(run, runIndex) {
     var runId = String(run && run.runId || '');
     if (runId) {
@@ -8666,9 +8777,11 @@ function renderChatMessages(messages) {
       persistedRunIndexes[runId] = runIndex;
     }
   });
-  (Array.isArray(messages) ? messages : []).forEach(function(message) {
+  (Array.isArray(messages) ? messages : []).forEach(function(message, messageIndex) {
     var runId = String(message && message.runId || '');
     var role = String(message && message.role || '');
+    var indexedGuideId = String(message && message.clientMessageId || '');
+    if (indexedGuideId) state.guideMessageIndexByClientId[indexedGuideId] = messageIndex;
     if (!runId || !persistedRunsById[runId] || message.clientMessageId || isHiddenWorkflowMessage(message)) return;
     if (!messageRunRoles[runId]) messageRunRoles[runId] = {};
     if (role === 'user' || role === 'assistant') messageRunRoles[runId][role] = true;
@@ -8749,16 +8862,32 @@ function renderChatMessages(messages) {
   persistedRuns.forEach(function(run) { renderOwnedWorkRun(run, true); });
   renderPendingGuideMessages(renderTarget, persistedGuideIds);
   if (pendingWorkReview) addWorkReview(pendingWorkReview);
-  var branches = state.conversationBranches || [];
-  if (branches.length > 1) {
-    var activeBranchIndex = branches.findIndex(function(branch) { return branch.id === state.activeConversationBranchId; });
-    var anchor = els['chat-area'].querySelector('.chat-msg.user:last-of-type') || els['chat-area'].lastElementChild;
+  var branchGroups = state.conversationBranchGroups || [];
+  if (!branchGroups.length && (state.conversationBranches || []).length > 1) {
+    branchGroups = [{ id: state.activeConversationBranchGroupId || '', activeBranchId: state.activeConversationBranchId, branches: state.conversationBranches }];
+  }
+  for (var branchGroupIndex = 0; branchGroupIndex < branchGroups.length; branchGroupIndex++) {
+    var branchGroup = branchGroups[branchGroupIndex];
+    var branches = branchGroup.branches || [];
+    if (branches.length < 2) continue;
+    var activeBranchIndex = branches.findIndex(function(branch) { return branch.id === branchGroup.activeBranchId; });
+    var activeBranch = branches[activeBranchIndex < 0 ? branches.length - 1 : activeBranchIndex] || {};
+    var sourceMessageIndex = Math.max(0, Number(branchGroup.sourceMessageIndex === undefined ? activeBranch.sourceMessageIndex : branchGroup.sourceMessageIndex));
+    var anchor = els['chat-area'].querySelector('.chat-msg.user[data-message-index="' + sourceMessageIndex + '"]');
     if (anchor) {
       var pager = document.createElement('div');
       pager.className = 'conversation-branch-pager';
-      pager.innerHTML = '<button class="branch-page-btn" onclick="window.switchConversationBranch(-1)" aria-label="Previous branch">&lt;</button>' +
-        '<span>&lt;' + ((activeBranchIndex < 0 ? branches.length - 1 : activeBranchIndex) + 1) + '/' + branches.length + '&gt;</span>' +
-        '<button class="branch-page-btn" onclick="window.switchConversationBranch(1)" aria-label="Next branch">&gt;</button>';
+      pager.setAttribute('data-branch-group-id', String(branchGroup.id || ''));
+      pager.innerHTML = '<span class="branch-page-arrow" onclick="window.switchConversationBranch(-1,\'' + escAttr(String(branchGroup.id || '')) + '\')" role="button" tabindex="0" aria-label="Previous branch">&lt;</span>' +
+        ((activeBranchIndex < 0 ? branches.length - 1 : activeBranchIndex) + 1) + '/' + branches.length +
+        '<span class="branch-page-arrow" onclick="window.switchConversationBranch(1,\'' + escAttr(String(branchGroup.id || '')) + '\')" role="button" tabindex="0" aria-label="Next branch">&gt;</span>';
+      Array.prototype.forEach.call(pager.querySelectorAll('.branch-page-arrow'), function(arrow, arrowIndex) {
+        arrow.onkeydown = function(event) {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          window.switchConversationBranch(arrowIndex === 0 ? -1 : 1, pager.getAttribute('data-branch-group-id'));
+        };
+      });
       anchor.appendChild(pager);
     }
   }
@@ -8900,7 +9029,7 @@ function replayActiveAgentWorkEvents() {
   var conversationId = String(activeConversationId() || 'default');
   var id = currentRuntimeKey(conversationId);
   var events = (state.agentWorkEventsByConversation && state.agentWorkEventsByConversation[id]) || [];
-  if (!events.length || !runningConversationRecord(conversationId)) return;
+  if (!events.length || !runningConversationRecord(conversationId) || !isViewingRuntimeConversationBranch(currentConversationTarget(conversationId))) return;
   resetConversationWorkUi(conversationId, true);
   for (var i = 0; i < events.length; i++) renderAgentWorkEvent(events[i]);
 }
@@ -8913,6 +9042,7 @@ function appendAgentWorkEvent(event) {
   var target = { workspaceId: workspaceId, conversationId: id };
   eventRuntimeKey(event);
   var active = isActiveConversationTarget(target);
+  var visibleRuntimeBranch = active && isViewingRuntimeConversationBranch(target);
   if (active) markConversationTracked(id, state.conversationTrackMs || 300000, workspaceId);
   if (active || isConversationTracked(id, workspaceId)) cacheAgentWorkEvent(event);
   if (event.type === 'start') setConversationRuntimeState(target, event.status || 'running', event.runId || '', { provisional: false, generation: event.generation || 0, runtimeKey: event.runtimeKey || '' });
@@ -8926,8 +9056,8 @@ function appendAgentWorkEvent(event) {
   var terminalEvent = (event.status && ['completed', 'interrupted', 'force_interrupted', 'error'].indexOf(String(event.status)) >= 0)
     || ['done', 'error', 'interrupted', 'force_interrupted'].indexOf(String(event.type || '')) >= 0;
   if (event.type === 'done' || event.type === 'error') {
-    if (active) renderAgentWorkEvent(event);
-  } else if (active) {
+    if (visibleRuntimeBranch) renderAgentWorkEvent(event);
+  } else if (visibleRuntimeBranch) {
     renderAgentWorkEvent(event);
   }
   if (active && event.type === 'tool_result' && ['linked_plan', 'task', 'subagent_send', 'subagent_read', 'subagent_close'].indexOf(String(event.toolName || '')) >= 0 && api.getState) {
@@ -8988,7 +9118,10 @@ function applyConversationSnapshot(s, requestedConversationId) {
     if (s && Array.isArray(s.workRuns)) syncWorkRunsSnapshot(s.workRuns, snapshotTarget);
     applyAutoRouteRatingState(s);
     state.conversationBranches = s && Array.isArray(s.branches) ? s.branches : [];
+    state.conversationBranchGroups = s && Array.isArray(s.branchGroups) ? s.branchGroups : [];
     state.activeConversationBranchId = String(s && s.activeBranchId || '');
+    state.runtimeConversationBranchId = String(s && (s.runtimeBranchId || s.activeBranchId) || '');
+    state.activeConversationBranchGroupId = String(s && s.branchGroupId || '');
     if (s && s.chatMessages) renderChatMessages(s.chatMessages);
     if (s && s.conversationId) {
       state.activeBackendConversationId = s.conversationId;
@@ -9027,6 +9160,15 @@ function applyConversationSnapshot(s, requestedConversationId) {
     if (s && s.subagents) state.subagents = s.subagents;
     if (s && s.linkedPlan) state.linkedPlan = s.linkedPlan;
     replayActiveAgentWorkEvents();
+    // Ensure running state reflects work runs from snapshot for freshly loaded conversations
+    var runs = state.workRunsByTarget && state.workRunsByTarget[runtimeKeyFor(snapshotTarget.workspaceId, snapshotTarget.conversationId)] || [];
+    for (var ri = 0; ri < runs.length; ri++) {
+      if (runs[ri].status === 'running') {
+        setConversationRuntimeState(snapshotTarget, 'running', runs[ri].runId);
+      }
+    }
+    var isRunning = !!runningConversationRecord(snapshotTarget.conversationId, snapshotTarget.workspaceId);
+    setWorking(isRunning);
 }
 
 function addShellBlock(title, content) {
@@ -9896,6 +10038,7 @@ window.renderQueuePanel = function() {
   var html = '';
   for (var i = 0; i < count; i++) {
     var queueIndex = visibleIndexes[i];
+    if (queueIndex === state._editingQueueIndex) continue;
     var request = state.nextQueueRequests[queueIndex];
     var backendManaged = queuedRequestIsBackendManaged(request);
     var dragAttributes = backendManaged
@@ -9944,6 +10087,7 @@ window.editQueueItem = function(idx, value) {
 window.focusQueueItem = function(idx) {
   var request = state.nextQueueRequests && state.nextQueueRequests[idx];
   if (queuedRequestIsBackendManaged(request) || !queuedRequestMatchesTarget(request, currentConversationTarget())) return;
+  state._editingQueueIndex = idx;
   state.pendingInputEdit = { kind: 'queue', index: idx, request: request, target: currentConversationTarget() };
   els.prompt.value = String(state.nextQueue[idx] || '');
   state.promptAttachments = (request.images || []).map(function(image, imageIndex) {
@@ -9952,6 +10096,7 @@ window.focusQueueItem = function(idx) {
   renderPromptAttachments();
   els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
   els.prompt.focus(); els.prompt.select();
+  window.renderInputStack();
 };
 
 window.deleteQueueItem = function(idx) {
@@ -10062,6 +10207,8 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     var editedImages = (state.promptAttachments || []).map(function(image) { return { dataUrl: image.dataUrl, name: image.name, type: image.type }; });
     if (!editedValue && !editedImages.length) return;
     state.pendingInputEdit = null;
+    state._editingQueueIndex = -1;
+    state._editingGoalText = '';
     els.prompt.value = '';
     clearPromptAttachments();
     els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
@@ -10128,6 +10275,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   var lockedConversationId = activeConversationId();
   var lockedTarget = currentConversationTarget(lockedConversationId);
   var lockedRuntimeKey = runtimeKeyFor(lockedTarget.workspaceId, lockedTarget.conversationId);
+  if (typeof activateViewedConversationBranchForSend === 'function' && !await activateViewedConversationBranchForSend(lockedTarget)) return;
   var activeRuntime = runningConversationRecord(lockedConversationId, lockedTarget.workspaceId);
   var conversationRunning = !!activeRuntime;
   markConversationTracked(lockedConversationId, state.conversationTrackMs || 300000, lockedTarget.workspaceId);
@@ -10272,7 +10420,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     var r = await api.sendMessage(requestMessage, lockedTarget);
     if (r && r.runtimeKey) registerRuntimeKey(lockedTarget, r.runtimeKey);
     if (r && r.runId) setConversationRuntimeState(lockedTarget, r.status || 'running', r.runId, { provisional: false, generation: r.generation || 0, runtimeKey: r.runtimeKey || '' });
-    var stillActive = isActiveConversationTarget(lockedTarget);
+    var stillActive = isActiveConversationTarget(lockedTarget) && isViewingRuntimeConversationBranch(lockedTarget);
     if (stillActive) applyAutoRouteRatingState(r);
     if (stillActive && r && Array.isArray(r.workRuns)) syncWorkRunsSnapshot(r.workRuns, lockedTarget);
     var responseOwnedByRun = !!(r && Array.isArray(r.workRuns) && r.workRuns.some(function(run) {
@@ -10346,10 +10494,9 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   if (api.getState) {
     api.getState(lockedTarget).then(function(s) {
       if (s && s.runtimeKey) registerRuntimeKey(lockedTarget, s.runtimeKey);
-      var stillActiveAfterRefresh = isActiveConversationTarget(lockedTarget);
+      var stillActiveAfterRefresh = isActiveConversationTarget(lockedTarget) && isViewingRuntimeConversationBranch(lockedTarget);
       if (stillActiveAfterRefresh && s && s.contextCompression !== undefined) {
         state.contextCompression = s.contextCompression;
-        window.renderContextCompression();
       }
       if (stillActiveAfterRefresh && s && s.contextWindow !== undefined) {
         state.contextWindow = s.contextWindow;
@@ -11015,7 +11162,6 @@ window.refreshRightStatus = function(options) {
     if (s && s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
     if (s && s.contextCompression !== undefined) {
       state.contextCompression = s.contextCompression;
-      window.renderContextCompression();
     }
     if (s && s.contextWindow !== undefined) {
       state.contextWindow = s.contextWindow;
@@ -11592,8 +11738,11 @@ window.setGoal = function() {
 window.editGoal = function() {
   var textEl = els['goal-text'];
   if (!textEl) return;
+  state._editingGoalText = state.goalText;
+  state.goalText = '';
+  window.renderInputStack();
   state.pendingInputEdit = { kind: 'goal', target: currentConversationTarget() };
-  els.prompt.value = String(state.goalText || textEl.textContent || '').trim();
+  els.prompt.value = String(state._editingGoalText || textEl.textContent || '').trim();
   state.promptAttachments = (state.goalDraftAttachments || []).map(function(image, imageIndex) {
     return { id: 'goal-edit-' + imageIndex + '-' + Date.now(), name: image.name || 'goal image', type: image.type || 'image/png', dataUrl: image.dataUrl };
   });
@@ -11936,7 +12085,7 @@ function renderGeneralSettings() {
     '<div class="setting-control"><select onchange="window.setCloseBehavior(this.value)">' +
     '<option value="close"' + (state.closeBehavior === 'close' ? ' selected' : '') + '>' + esc(t('settings.closeApp')) + '</option>' +
     '<option value="minimize"' + (state.closeBehavior === 'minimize' ? ' selected' : '') + '>' + esc(t('settings.minimizeTray')) + '</option>' +
-    '</select><div class="setting-desc">' + esc(t('settings.trayDesc')) + '</div></div>' +
+    '</select><div class="setting-desc">' + esc(t('settings.trayDesc')) + '</div></div></div>' +
     '<div class="setting-row">' +
     '<span class="setting-label">' + esc(t('settings.expandTools')) + '</span>' +
     '<div class="setting-control"><select onchange="window.setExpandToolsDefault(this.value)">' +
@@ -14199,7 +14348,7 @@ window.openSubagentHistory = function(id) {
   lines.push('<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;">' + esc((agent.status || t('common.idle')) + ' / ' + (agent.agentMode || agent.mode || 'build') + ' / ' + (agent.model || t('common.default')) + (agent.mailbox && agent.mailbox.unread ? (' / ' + agent.mailbox.unread + ' unread') : '')) + '</div>');
   var compression = agent.metadata && agent.metadata.contextCompression;
   if (compression) {
-    lines.push('<div style="font-size:10px;color:var(--accent2);margin-bottom:8px;">Context compressed ' + esc(String(compression.originalMessages || 0)) + ' -> ' + esc(String(compression.compressedMessages || 0)) + ' messages / ' + esc(compression.model || '') + '</div>');
+    lines.push('<div style="font-size:10px;color:var(--accent2);margin-bottom:8px;">' + esc(t('status.contextCompressed')) + ' ' + esc(String(compression.originalMessages || 0)) + ' -> ' + esc(String(compression.compressedMessages || 0)) + ' ' + esc(t('status.messages')) + ' / ' + esc(compression.model || '') + '</div>');
   }
   if (agent.result) {
     lines.push('<div style="font-size:11px;color:var(--accent2);margin:10px 0 4px;">' + esc(t('subagent.result')) + '</div>');
@@ -16918,7 +17067,6 @@ function schedulePostStartupUiRendering() {
     startupHydrationError = e;
   }
   applyUiAppearance();
-  window.renderContextCompression();
   window.renderContextWindow();
   if (api.onAutomationUpdated) {
     api.onAutomationUpdated(function() {

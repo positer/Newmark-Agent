@@ -317,11 +317,11 @@ async function main() {
   assert(uiHtml.includes('function rerenderActiveSubWindowForLanguage()') && uiHtml.includes("state.activeSubWindowView = { name: 'workspaceRequired' }") && uiHtml.includes("state.activeSubWindowView = { name: 'plugins'"), 'ui html: language switch rerenders active secondary windows');
   assert(uiHtml.includes('window.showMemoryLab = function()') && uiHtml.includes("state.activeSubWindowView = { name: 'memoryLab'") && uiHtml.includes("t('memoryLab.title')"), 'ui html: Memory Lab left toolbar entry and panel renderer exist');
   assert(uiHtml.includes('api.memoryLabRead') && uiHtml.includes('memoryLabReindex') && uiHtml.includes("lucide-sprite.svg#brain"), 'ui html: Memory Lab preload API and icon are wired');
-  assert(uiHtml.includes('window.setInputMode = function(mode, persist)') && uiHtml.includes('api.setInputMode(state.inputMode, currentConversationTarget(activeConversationId()))') && uiHtml.includes('window.setInputMode(s.inputMode, false)') && preloadSource.includes("ipcRenderer.invoke('agent:setInputMode', mode, target)"), 'ui html: Guide/Next mode persists for the explicit workspace/conversation target and restores without write-back on state hydration');
+  assert(uiHtml.includes('window.setInputMode = function(mode, persist)') && uiHtml.includes('api.setInputMode(state.inputMode, currentConversationTarget(activeConversationId()))') && uiHtml.includes('window.setInputMode(s.inputMode, false)') && preloadSource.includes("ipcRenderer.invoke('agent:setInputMode', mode, target)"), 'ui html: Guide/Next mode persists as a global setting and restores without write-back on state hydration');
   assert(uiHtml.includes('--work-run-right-safe: 34px') && uiHtml.includes('padding: 8px var(--work-run-right-safe) 8px 0') && uiHtml.includes('padding: 4px var(--work-run-right-safe) 8px 0'), 'Build header arrows, activity arrows, and wrapped response text reserve one right-side safety lane away from the user-input timeline');
   assert(uiHtml.includes("return '<details class=\"conversation-work-activity\" data-activity-key=\"' + escAttr(activityDomKey) + '\"><summary>'") && !uiHtml.includes("data-activity-key=\"' + escAttr(activityDomKey) + '\" open><summary>"), 'Build tool activity groups default collapsed while refresh reconciliation preserves explicit user-opened states');
   assert(uiHtml.includes('function renderWorkRunGuideMessage(event)') && uiHtml.includes('function workRunGuideEvents(run)') && uiHtml.includes('work-run-collapsed-guides') && uiHtml.includes('work-run-guide-message chat-msg') === false && uiHtml.includes('chat-msg user work-run-guide-message'), 'ui html: Guide renders as a right-aligned user message, interleaves by work-event sequence when expanded, and lists below the Build header when collapsed');
-  assert(uiHtml.includes("name === 'context_compression'") && uiHtml.includes("'已完成上下文压缩'") && uiHtml.includes("'Completed context compression'"), 'ui html: completed context compression renders as a Build activity alongside tool work');
+  assert(uiHtml.includes("name === 'context_compression'") && uiHtml.includes("'上下文已压缩'") && uiHtml.includes("'Context compressed'"), 'ui html: completed context compression renders as a Build activity alongside tool work');
   assert(uiHtml.includes('window.setMemoryLabReindexing = function(running)') && uiHtml.includes("panel.classList.toggle('marquee-border', state.memoryLabReindexing)") && uiHtml.includes('window.setMemoryLabReindexing(true);') && uiHtml.includes('.finally(function()') && uiHtml.includes('window.setMemoryLabReindexing(false);') && !uiHtml.includes('id="memory-lab-panel" class="provider-card marquee-border"'), 'ui html: Memory Lab animated border is shown only while reindex is pending and always clears afterward');
   assert(uiHtml.includes('.memory-lab-graph') && uiHtml.includes("t('memoryLab.parents')") && uiHtml.includes("t('memoryLab.children')") && uiHtml.includes("t('memoryLab.rootTags')") && !uiHtml.includes('memoryLabConnectionSvg') && !uiHtml.includes('memory-lab-links'), 'ui html: Memory Lab renders centered parent-child tag graph without connector lines and shows root tags at top-level');
   assert(uiHtml.includes('memory-lab-search-input') && uiHtml.includes('window.updateMemoryLabSearch') && uiHtml.includes("t('memoryLab.search')"), 'ui html: Memory Lab exposes tag search and jump controls');
@@ -390,7 +390,7 @@ async function main() {
     && uiHtml.includes("event.completed ? (currentLang() === 'zh' ? ' · 已完成' : ' · completed')")
     && !uiHtml.includes("element.classList.contains('running')")
     && uiHtml.includes('var expanded = run.expanded === undefined')
-    && uiHtml.includes('? (live || state.expandToolsDefault !== false)')
+    && uiHtml.includes('? live && state.expandToolsDefault !== false')
     && uiHtml.includes("if (run.userToggled !== true) run.expanded = false"), 'ui html: completed tools update their original row, live Build blocks expand, and terminal blocks auto-collapse unless manually toggled');
   assert(!uiHtml.includes('state._activeWorkflowMsg') && !uiHtml.includes('state._activeWorkflowText') && !uiHtml.includes('state._toolEventMsgs') && !uiHtml.includes('state._toolEventBatch') && !uiHtml.includes('state._lastCompletedWorkflow'), 'ui html: live workflow feedback state is conversation-scoped, not a global singleton');
   assert(uiHtml.includes('function isHiddenWorkflowMessage(message)') && uiHtml.includes('Preparing model request and available tools') && uiHtml.includes('Executing \\d+ tool call') && uiHtml.includes("if (String(m.role || '') === 'workflow' && /^tool:/.test(String(m.mode || ''))) continue;"), 'ui html: hides internal workflow status rows and suppresses legacy persisted tool chat rows now owned by Build runs');
@@ -476,6 +476,12 @@ async function main() {
   assert(mainSource.includes("completion: true, preferCopilot: true") && mainSource.includes('editorCompletionControllers.get(ownerId)?.abort') && agentSourceForEditor.includes("model.provider_protocol === 'github_models'") && agentSourceForEditor.includes('input.completion ? 192 : 1800'), 'editor prediction: prefers configured Copilot, cancels superseded requests, and uses a bounded low-latency completion budget');
   assert(uiHtml.includes("if (providerOpts) modelOpts += '<optgroup") && uiHtml.includes("if (!state.model || (state.model === 'auto'") && uiHtml.includes("availableValues.indexOf(state.model) < 0"), 'ui model selector: skips empty provider groups and recovers an empty or unavailable saved model to the first usable model');
   assert(uiHtml.includes('function messageActionsHtml(role, text, messageIndex)') && uiHtml.includes('window.copyMessageText = async function(button)') && uiHtml.includes('window.editUserMessage = function(button, messageIndex)') && uiHtml.includes('window.submitUserMessageEdit = async function') && uiHtml.includes('api.branchConversation(target, Number(messageIndex), text)') && uiHtml.includes('message._newmarkMessageTarget') && uiHtml.includes('message-inline-editor') && !uiHtml.includes("addMsg('assistant', '[Error] ' + ((result && result.error) || 'Unable to edit message.')"), 'ui html: user messages retain their rendered composite target, edit inline, create a durable branch, and report failures outside the chat timeline');
+  assert(uiHtml.includes("syncWorkRunsSnapshot(Array.isArray(result.workRuns) ? result.workRuns : [], target)") && uiHtml.includes("div.setAttribute('data-message-index'") && uiHtml.includes(".chat-msg.user[data-message-index=\"") && !uiHtml.includes("querySelector('.chat-msg.user:last-of-type')"), 'ui html: branch switching replaces the cached Build list and anchors inline page navigation at the edited user node instead of the conversation tail');
+  assert(preloadSource.includes('inspectConversationBranch:') && preloadSource.includes('activateConversationBranch:') && mainSource.includes("ipcMain.handle('agent:inspectConversationBranch'") && mainSource.includes("ipcMain.handle('agent:activateConversationBranch'") && uiHtml.includes('branchApi.inspectConversationBranch(currentConversationTarget(), branches[next].id, group ? group.id') && uiHtml.includes('async function activateViewedConversationBranchForSend(target)') && uiHtml.includes('!await activateViewedConversationBranchForSend(lockedTarget)'), 'branch paging: arrow navigation is read-only, while sending explicitly activates the viewed branch');
+  assert(uiHtml.includes('var visibleRuntimeBranch = active && isViewingRuntimeConversationBranch(target);') && uiHtml.includes('if (visibleRuntimeBranch) renderAgentWorkEvent(event);') && uiHtml.includes('isActiveConversationTarget(lockedTarget) && isViewingRuntimeConversationBranch(lockedTarget)'), 'branch paging: background runtime events and completed send results cannot render into an inspected sibling branch');
+  assert(uiHtml.includes('async function stopTargetConversationForMessageEdit(target)') && uiHtml.includes("api.stopConversation({ target: target, runId: runId, force: false })") && uiHtml.includes("api.stopConversation({ target: target, runId: runId, force: true })") && uiHtml.includes('if (!await stopTargetConversationForMessageEdit(target)) return;') && uiHtml.includes("delete state.activeSendCallsByTarget[runtimeKey]") && uiHtml.includes("await window.sendMessage(state.inputMode || 'guide')"), 'ui html: editing stops only the selected conversation runtime, enters the new page, and starts the edited continuation immediately');
+  assert(uiHtml.includes('guideMessageIndexByClientId: {}') && uiHtml.includes("messageActionsHtml('user', content, indexed ? messageIndex : -1)") && uiHtml.includes('function hydrateWorkRunGuideMessages(root, run)') && agentSourceForEditor.includes("status: 'interrupted' as const") && agentSourceForEditor.includes('run.events.slice(0, eventCut)') && agentSourceForEditor.includes('run.guides.slice(0, guideCut)') && agentSourceForEditor.includes('const branchPageReplacement = !!incoming.branchReset || !!incoming.tree || !!incoming.branches?.length;') && agentSourceForEditor.includes('preferred.workRuns = branchPageReplacement'), 'ui/core: every Guide has one-click copy, persisted Guides are editable, and every branch page replaces rather than merges its transcript and Build tree');
+  assert(uiHtml.includes('.conversation-work-file-inline > summary { display: grid; grid-template-columns: 17px minmax(0,max-content) auto 10px;') && uiHtml.includes('.conversation-work-file-inline .conversation-work-file-name { font: inherit; }'), 'ui html: edited-file rows share the terminal tool icon/text columns without a flexible blank spacer or mismatched font');
   assert(preloadSource.includes("rewindConversation: (target: string | Record<string, unknown>, messageIndex: number) => ipcRenderer.invoke('agent:rewindConversation'") && mainSource.includes("ipcMain.handle('agent:rewindConversation'") && mainSource.includes('mutateTargetConversation(target') && mainSource.includes('ensureWslConversationPool()!.rewind(target, messageIndex)') && mainSource.includes('ensureElectronUtilityPool().rewind(target, messageIndex)'), 'main/preload: conversation rewind is target-bound, mutation-guarded, and executes inside the selected WSL or Utility runtime');
   assert(uiHtml.includes('function optionLabel(option)') && uiHtml.includes('function renderPendingOptionsInChat(options)') && uiHtml.includes("state.renderedOptionKeys[key] = true"), 'ui html: pending option feedback renders into chat once');
   assert(uiHtml.includes('if (r && r.options)') && uiHtml.includes('renderPendingOptionsInChat(state.pendingOptions)') && uiHtml.includes("optionDescription(opt)"), 'ui html: send result and right status render structured option labels');
@@ -813,7 +819,7 @@ async function main() {
   const releaseUiRuntimeLayoutSmoke = fs.existsSync(releaseUiRuntimeLayoutSmokePath) ? fs.readFileSync(releaseUiRuntimeLayoutSmokePath, 'utf-8') : '';
   assert(releaseUiRuntimeLayoutSmoke.includes('Guide/Next mode did not survive a full application restart')
     && releaseUiRuntimeLayoutSmoke.includes('const restartPort = port + 401')
-    && releaseUiRuntimeLayoutSmoke.includes("if (restartedInputMode.mode !== 'next')"), 'release ui runtime layout smoke: verifies target-bound Guide/Next mode after a real Electron exit and restart');
+    && releaseUiRuntimeLayoutSmoke.includes("if (restartedInputMode.mode !== 'next')"), 'release ui runtime layout smoke: verifies global Guide/Next mode survives a real Electron exit and restart');
   const releaseUiSkillsSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-skills-smoke.cjs');
   const releaseUiSkillsSmoke = fs.existsSync(releaseUiSkillsSmokePath) ? fs.readFileSync(releaseUiSkillsSmokePath, 'utf-8') : '';
   const releaseUiMemoryLabSmokePath = path.join(process.cwd(), 'scripts', 'release-ui-memory-lab-smoke.cjs');
@@ -3299,13 +3305,15 @@ async function main() {
   const inputModeConversation = `input-mode-${Date.now()}`;
   agent.setConversation(inputModeConversation);
   agent.setInputMode('next');
+  // Switching conversations should not change the global input mode
   agent.setConversation('default');
+  assert(agent.inputMode === 'next', 'inputMode: global setting survives conversation switch');
   agent.setInputMode('guide');
   agent.setConversation(inputModeConversation);
-  assert(agent.inputMode === 'next' && agent.getConversationSnapshot(inputModeConversation).inputMode === 'next', 'inputMode: persists Guide/Next selection per conversation');
+  assert((agent.inputMode as string) === 'guide', 'inputMode: global setting applies across all conversations');
   const inputModeReloaded = new Agent(TEST_DIR);
   inputModeReloaded.setConversationFromStorage(inputModeConversation);
-  assert(inputModeReloaded.inputMode === 'next', 'inputMode: restores the selected conversation mode after application restart');
+  assert(inputModeReloaded.inputMode === 'guide', 'inputMode: restores global mode from config after application restart');
   inputModeReloaded.updateGoal('Persist and finish this scoped goal');
   inputModeReloaded.setMode('goal');
   inputModeReloaded.flushConversationState();
@@ -3378,6 +3386,35 @@ async function main() {
   assert(!restoreConflict.ok, 'restoreArchivedConversation: cannot overwrite an existing conversation or reuse a consumed manifest');
   archiveAgentReloaded.deleteArchive(archivedTargetName!);
 
+  archiveAgentReloaded.setConversation('archive-tree');
+  archiveAgentReloaded.chatMessages = [
+    { role: 'user', content: 'archive tree root', mode: 'Build', model: archiveAgentReloaded.model, timestamp: 'tree-a' },
+    { role: 'assistant', content: 'archive tree root answer', mode: 'Build', model: archiveAgentReloaded.model, timestamp: 'tree-b' },
+  ];
+  archiveAgentReloaded.flushConversationState();
+  const archivedTreeBranch = archiveAgentReloaded.branchConversation('archive-tree', 0, 'archive tree leaf');
+  archiveAgentReloaded.chatMessages = [
+    { role: 'user', content: 'archive tree leaf', mode: 'Build', model: archiveAgentReloaded.model, timestamp: 'tree-c' },
+    { role: 'assistant', content: 'archive tree leaf answer', mode: 'Build', model: archiveAgentReloaded.model, timestamp: 'tree-d' },
+  ];
+  archiveAgentReloaded.flushConversationState();
+  const archivedTreeName = archiveAgentReloaded.archiveConversation('archive-tree');
+  assert(!!archivedTreeName && !archiveAgentReloaded.listConversationStates().some(item => item.id === 'archive-tree'), 'conversation tree archive: removes the live tree after writing its structured manifest');
+  const treeRestoreItem = archiveAgentReloaded.listArchives().find(item => item.name === archivedTreeName)!;
+  const treeRestore = archiveAgentReloaded.restoreArchivedConversation(treeRestoreItem.id);
+  assert(treeRestore.ok, 'conversation tree archive: restores the structured tree manifest');
+  const restoredTreeSnapshot = archiveAgentReloaded.getConversationSnapshot('archive-tree');
+  assert(restoredTreeSnapshot.branchGroupId === archivedTreeBranch.branchGroupId && restoredTreeSnapshot.branches.length === 2
+    && restoredTreeSnapshot.chatMessages.some(message => message.content === 'archive tree leaf answer'), 'conversation tree archive: restores active group, active leaf, and leaf-local transcript');
+  const restoredTreeRoot = restoredTreeSnapshot.branches.find(branch => branch.id !== restoredTreeSnapshot.activeBranchId)!;
+  const restoredTreeRootSnapshot = archiveAgentReloaded.inspectConversationBranch('archive-tree', restoredTreeRoot.id, restoredTreeSnapshot.branchGroupId);
+  assert(restoredTreeRootSnapshot.chatMessages.some(message => message.content === 'archive tree root answer')
+    && !restoredTreeRootSnapshot.chatMessages.some(message => message.content === 'archive tree leaf answer'), 'conversation tree archive: restores sibling page isolation');
+  const treeArchiveReloaded = new Agent(archiveIsolationRoot);
+  treeArchiveReloaded.setConversationFromStorage('archive-tree');
+  assert(treeArchiveReloaded.getConversationSnapshot().branchGroupId === archivedTreeBranch.branchGroupId && treeArchiveReloaded.getConversationSnapshot().branches.length === 2, 'conversation tree archive: restored tree survives application restart');
+  treeArchiveReloaded.deleteArchive(archivedTreeName!);
+
   const conversationOrderRoot = path.join(TEST_DIR, 'conversation-order');
   const conversationOrderAgent = new Agent(conversationOrderRoot);
   conversationOrderAgent.createInternalWorkspace('conversation-order-workspace');
@@ -3415,9 +3452,87 @@ async function main() {
   const originalBranch = branched.branches.find(branch => branch.id !== branched.activeBranchId)!;
   const restoredOriginalBranch = conversationOrderAgent.switchConversationBranch('branch-source', originalBranch.id);
   assert(restoredOriginalBranch.chatMessages[0]?.content === 'original request' && restoredOriginalBranch.chatMessages[1]?.content === 'original answer', 'conversation branching: page switching restores the complete original conversation');
+  conversationOrderAgent.workRuns = [{
+    runId: 'original-page-only', target: { workspaceId: 'branch-workspace', conversationId: 'branch-source' }, runtimeKey: 'branch-original-runtime', status: 'completed',
+    startedAt: '2026-07-24T02:00:00.000Z', endedAt: '2026-07-24T02:00:01.000Z', expanded: false, sequence: 1, events: [], guides: [], primaryPrompt: 'original request',
+  }];
+  conversationOrderAgent.flushConversationState();
+  const editedBranch = restoredOriginalBranch.branches.find(branch => branch.id === branched.activeBranchId)!;
+  const inspectedEditedBranch = conversationOrderAgent.inspectConversationBranch('branch-source', editedBranch.id);
+  assert(inspectedEditedBranch.activeBranchId === editedBranch.id && inspectedEditedBranch.runtimeBranchId === originalBranch.id && inspectedEditedBranch.chatMessages.length === 0
+    && conversationOrderAgent.getConversationSnapshot('branch-source').activeBranchId === originalBranch.id, 'conversation branching: inspecting a sibling page is read-only and preserves the running branch selection');
+  const restoredEditedBranch = conversationOrderAgent.switchConversationBranch('branch-source', editedBranch.id);
+  assert(restoredEditedBranch.chatMessages.length === 0 && restoredEditedBranch.workRuns.length === 0, 'conversation branching: switching pages replaces the entire transcript and Build tree instead of merging the prior page');
+  const restoredOriginalAgain = conversationOrderAgent.switchConversationBranch('branch-source', originalBranch.id);
+  assert(restoredOriginalAgain.workRuns.length === 1 && restoredOriginalAgain.workRuns[0]?.runId === 'original-page-only', 'conversation branching: each page saves and restores only its own Build tree');
+  const nestedBranch = conversationOrderAgent.branchConversation('branch-source', 0, 'nested edited request');
+  assert(nestedBranch.branches.length === 2 && !!nestedBranch.branchGroupId && nestedBranch.activeBranchId !== originalBranch.id, 'conversation tree: editing from a branch creates a distinct nested sibling group');
+  const nestedParent = nestedBranch.branches.find(branch => branch.id === originalBranch.id)!;
+  const nestedLeaf = nestedBranch.branches.find(branch => branch.id === nestedBranch.activeBranchId)!;
+  const inspectedNestedParent = conversationOrderAgent.inspectConversationBranch('branch-source', nestedParent.id, nestedBranch.branchGroupId);
+  assert(inspectedNestedParent.branchGroupId === nestedBranch.branchGroupId && inspectedNestedParent.branches.some(branch => branch.id === nestedLeaf.id), 'conversation tree: inspection returns the exact nested pagination group rather than an unrelated group containing the same node');
+  const restoredNestedParent = conversationOrderAgent.switchConversationBranch('branch-source', nestedParent.id, nestedBranch.branchGroupId);
+  assert(restoredNestedParent.branchGroupId === nestedBranch.branchGroupId && restoredNestedParent.activeBranchId === nestedParent.id, 'conversation tree: branch activation is addressed by group plus node identity');
   const branchReloaded = new Agent(conversationOrderRoot);
   branchReloaded.setConversationFromStorage('branch-source');
-  assert(branchReloaded.getConversationSnapshot().branches.length === 2 && branchReloaded.chatMessages[0]?.content === 'original request', 'conversation branching: pages and active selection survive restart');
+  assert(branchReloaded.getConversationSnapshot().branches.length === 2 && branchReloaded.chatMessages[0]?.content === 'original request'
+    && branchReloaded.workRuns.length === 1 && branchReloaded.workRuns[0]?.runId === 'original-page-only', 'conversation branching: pages, active selection, and the page-local Build tree survive restart');
+
+  conversationOrderAgent.setConversation('guide-branch-source');
+  const guideTarget = { workspaceId: 'guide-branch-workspace', conversationId: 'guide-branch-source' };
+  const guideReceipt = {
+    clientMessageId: 'guide-edit-target', target: guideTarget, runId: 'guide-edit-run', status: 'applied' as const,
+    content: 'original guide', createdAt: '2026-07-24T01:00:02.000Z', updatedAt: '2026-07-24T01:00:03.000Z', appliedAt: '2026-07-24T01:00:03.000Z',
+  };
+  conversationOrderAgent.chatMessages = [
+    { role: 'user', content: 'build start', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T01:00:00.000Z', runId: 'guide-edit-run' },
+    { role: 'assistant', content: 'before guide', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T01:00:01.000Z', runId: 'guide-edit-run' },
+    { role: 'user', content: 'original guide', mode: 'Guide', model: conversationOrderAgent.model, timestamp: '2026-07-24T01:00:02.000Z', runId: 'guide-edit-run', clientMessageId: 'guide-edit-target' },
+    { role: 'assistant', content: 'after guide', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T01:00:04.000Z', runId: 'guide-edit-run' },
+  ];
+  conversationOrderAgent.history = conversationOrderAgent.chatMessages.map(message => ({ role: message.role, content: message.content }));
+  conversationOrderAgent.workRuns = [{
+    runId: 'guide-edit-run', target: guideTarget, runtimeKey: 'guide-edit-runtime', status: 'completed', startedAt: '2026-07-24T01:00:00.000Z', endedAt: '2026-07-24T01:00:05.000Z', expanded: false, sequence: 4,
+    primaryPrompt: 'build start', guides: [guideReceipt], events: [
+      { id: 'before-guide', conversationId: 'guide-branch-source', type: 'status', content: 'before guide', mode: 'build', model: '', timestamp: '2026-07-24T01:00:01.000Z', runId: 'guide-edit-run', sequence: 1 },
+      { id: 'target-guide', conversationId: 'guide-branch-source', type: 'guide', content: 'original guide', mode: 'build', model: '', timestamp: '2026-07-24T01:00:02.000Z', runId: 'guide-edit-run', sequence: 2, guide: guideReceipt },
+      { id: 'after-guide', conversationId: 'guide-branch-source', type: 'tool_call', content: 'after guide', mode: 'build', model: '', timestamp: '2026-07-24T01:00:04.000Z', runId: 'guide-edit-run', sequence: 3, toolName: 'bash' },
+    ],
+  }];
+  conversationOrderAgent.flushConversationState();
+  const guideBranched = conversationOrderAgent.branchConversation('guide-branch-source', 2, 'edited guide');
+  assert(guideBranched.chatMessages.length === 2 && guideBranched.workRuns.length === 1, 'Guide branching: the new page keeps only conversation and Build content before the edited Guide');
+  const copiedGuideRun = guideBranched.workRuns[0];
+  assert(copiedGuideRun.status === 'interrupted'
+    && !copiedGuideRun.events.some(event => ['target-guide', 'after-guide'].includes(event.id))
+    && !copiedGuideRun.guides.some(guide => guide.clientMessageId === 'guide-edit-target'), 'Guide branching: the copied Build is truncated immediately before the edited Guide and ready for a new continuation');
+
+  conversationOrderAgent.setConversation('paged-guide-source');
+  conversationOrderAgent.chatMessages = [
+    { role: 'user', content: 'paged build start', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T01:10:00.000Z' },
+    { role: 'assistant', content: 'paged original answer', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T01:10:01.000Z' },
+  ];
+  conversationOrderAgent.history = conversationOrderAgent.chatMessages.map(message => ({ role: message.role, content: message.content }));
+  conversationOrderAgent.flushConversationState();
+  const startPaged = conversationOrderAgent.branchConversation('paged-guide-source', 0, 'paged edited start');
+  conversationOrderAgent.chatMessages = [
+    { role: 'user', content: 'paged edited start', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T01:11:00.000Z', runId: 'paged-guide-run' },
+    { role: 'assistant', content: 'before paged guide', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T01:11:01.000Z', runId: 'paged-guide-run' },
+    { role: 'user', content: 'paged guide', mode: 'Guide', model: conversationOrderAgent.model, timestamp: '2026-07-24T01:11:02.000Z', runId: 'paged-guide-run', clientMessageId: 'paged-guide-id' },
+    { role: 'assistant', content: 'after paged guide', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T01:11:03.000Z', runId: 'paged-guide-run' },
+  ];
+  conversationOrderAgent.history = conversationOrderAgent.chatMessages.map(message => ({ role: message.role, content: message.content }));
+  conversationOrderAgent.flushConversationState();
+  const guidePaged = conversationOrderAgent.branchConversation('paged-guide-source', 2, 'paged edited guide');
+  assert(guidePaged.branchGroups.length === 2 && guidePaged.branchGroups.some(group => group.id === startPaged.branchGroupId)
+    && guidePaged.branchGroups.some(group => group.id === guidePaged.branchGroupId), 'Guide branching after a paged start: snapshot retains both the start-input pager and Guide pager');
+  const startGroupAfterGuideEdit = guidePaged.branchGroups.find(group => group.id === startPaged.branchGroupId)!;
+  assert(startGroupAfterGuideEdit.activeBranchId === startPaged.activeBranchId && startGroupAfterGuideEdit.sourceMessageIndex === 0,
+    'Guide branching after a paged start: the selected start branch and its edit-node anchor are preserved');
+  const originalStartPage = startGroupAfterGuideEdit.branches.find(branch => branch.id !== startPaged.activeBranchId)!;
+  const inspectedOriginalStart = conversationOrderAgent.inspectConversationBranch('paged-guide-source', originalStartPage.id, startPaged.branchGroupId);
+  assert(inspectedOriginalStart.chatMessages.some(message => message.content === 'paged original answer') && inspectedOriginalStart.branchGroups.length === 1,
+    'Guide branching after a paged start: the original start page remains independently inspectable without Guide descendants');
 
   // ---- 10. Context Compression Tests ----
   console.log('\n📐 Context Compression');

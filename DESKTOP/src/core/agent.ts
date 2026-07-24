@@ -1326,7 +1326,7 @@ export class Agent {
 
   resumeConversationWorkRun(runId: string): boolean {
     const run = this.workRuns.find(item => item.runId === String(runId || ''));
-    if (!run || run.status !== 'completed') return false;
+    if (!run || (run.status !== 'completed' && run.status !== 'interrupted' && run.status !== 'force_interrupted')) return false;
     run.status = 'running';
     delete run.endedAt;
     run.expanded = true;
@@ -4265,6 +4265,18 @@ export class Agent {
         : text;
       if (clientMessageId) {
         this.persistGuideMessage(clientMessageId, displayText, inputRunId, historyContent, attachments);
+        if (inputRunId) {
+          this.recordGuideReceipt({
+            clientMessageId,
+            target: this.currentConversationTarget(),
+            runId: inputRunId,
+            status: 'applied',
+            content: displayText,
+            createdAt: this.nowIso(),
+            updatedAt: this.nowIso(),
+            appliedAt: this.nowIso(),
+          });
+        }
       } else {
         this.chatMessages.push({
           role: 'user',

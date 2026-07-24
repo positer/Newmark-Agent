@@ -53,6 +53,7 @@ function createFixture(): {
     'syncGuideMessagesFromWorkRuns',
     'renderPendingGuideMessages',
     'addMsg',
+    'renderConversationBranchPagers',
     'renderChatMessages',
   ];
   const extracted = names.map(name => functionSource(source, name)).join('\n\n');

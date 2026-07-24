@@ -7055,6 +7055,7 @@ async function stopTargetConversationForMessageEdit(target) {
 window.submitUserMessageEdit = async function(message, messageIndex, editedText, target) {
   var text = String(editedText || '').trim();
   if (!text || !api.branchConversation) return;
+  var editingGuide = !!String(message && message.getAttribute && message.getAttribute('data-client-message-id') || '');
   var conversationId = String(target.conversationId || activeConversationId() || 'default');
   try {
     if (!await stopTargetConversationForMessageEdit(target)) return;
@@ -7084,7 +7085,11 @@ window.submitUserMessageEdit = async function(message, messageIndex, editedText,
     els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
     els.prompt.focus();
     els.prompt.setSelectionRange(els.prompt.value.length, els.prompt.value.length);
-    await window.sendMessage(state.inputMode || 'guide');
+    var copiedGuideRun = editingGuide && Array.isArray(result.workRuns) ? result.workRuns[result.workRuns.length - 1] : null;
+    await window.sendMessage(state.inputMode || 'guide', undefined, {
+      optimisticMessageIndex: Number(messageIndex),
+      resumeGuideRunId: copiedGuideRun && copiedGuideRun.runId || ''
+    });
   } catch (error) {
     var errorText = error && error.message ? error.message : String(error || 'Unable to edit message.');
     showUiNotice(
@@ -7646,6 +7651,7 @@ function applyGuideMessageMeta(element, input) {
   var status = normalizeGuideUiStatus(input.guideStatus || input.status);
   element.setAttribute('data-client-message-id', clientMessageId);
   element.setAttribute('data-guide-status', status);
+  if (input.runId) element.setAttribute('data-run-id', String(input.runId));
   element.classList.toggle('guide-rejected', status === 'rejected');
   var meta = element.querySelector('.meta');
   if (!meta) return element;
@@ -8086,6 +8092,12 @@ function workToolCommandLabel(item) {
   }
   if (normalizedName === 'skill_download') {
     return (currentLang() === 'zh' ? '安装 Skill · ' : 'Installed Skill · ') + String(args.name || args.source || '').trim();
+  }
+  if (normalizedName === 'web_fetch') {
+    return 'web_fetch · ' + String(args.url || args.uri || '').trim();
+  }
+  if (normalizedName === 'web_search') {
+    return 'web_search · ' + String(args.url || args.query || args.q || '').trim();
   }
   if (normalizedName === 'mcp' || /^mcp[:._-]/.test(normalizedName) || /[:._-]mcp[:._-]/.test(normalizedName)) {
     var mcpServer = String(args.server || args.server_name || args.mcp_server || '').trim();
@@ -8862,6 +8874,13 @@ function renderChatMessages(messages) {
   persistedRuns.forEach(function(run) { renderOwnedWorkRun(run, true); });
   renderPendingGuideMessages(renderTarget, persistedGuideIds);
   if (pendingWorkReview) addWorkReview(pendingWorkReview);
+  renderConversationBranchPagers();
+  renderAutoRouteRatingControls();
+}
+
+function renderConversationBranchPagers() {
+  if (!els['chat-area']) return;
+  Array.prototype.forEach.call(els['chat-area'].querySelectorAll('.conversation-branch-pager'), function(pager) { pager.remove(); });
   var branchGroups = state.conversationBranchGroups || [];
   if (!branchGroups.length && (state.conversationBranches || []).length > 1) {
     branchGroups = [{ id: state.activeConversationBranchGroupId || '', activeBranchId: state.activeConversationBranchId, branches: state.conversationBranches }];
@@ -8891,7 +8910,6 @@ function renderChatMessages(messages) {
       anchor.appendChild(pager);
     }
   }
-  renderAutoRouteRatingControls();
 }
 
 function activeConversationId() {
@@ -10269,6 +10287,11 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   var usesPromptAttachments = !queuedRequest && typeof queuedText !== 'string' && !opts.fromQueue;
   var text = usesPromptAttachments ? composePromptTextForSend(rawText) : rawText;
   var requestMessage = queuedRequest || (usesPromptAttachments ? composePromptRequestForSend(rawText) : rawText);
+  if (opts.resumeGuideRunId) {
+    requestMessage = typeof requestMessage === 'object' ? Object.assign({}, requestMessage) : { text: String(requestMessage || '') };
+    requestMessage.runId = String(opts.resumeGuideRunId);
+    requestMessage.clientMessageId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('guide-edit-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+  }
   var optimisticAttachments = queuedRequest
     ? normalizeConversationImageAttachments((queuedRequest.images || []).map(function(item) { return Object.assign({}, item, { origin: 'user', mimeType: item.type || '' }); }))
     : (usesPromptAttachments ? promptAttachmentsForConversation() : []);
@@ -10416,7 +10439,29 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   if (api.setModel && state.model) await api.setModel(state.model).catch(function(){});
   if (api.setInputMode) await api.setInputMode(effectiveInputMode).catch(function(){});
   if (isActiveConversationTarget(lockedTarget)) {
-    addMsg('user', displayText, opts.fromQueue ? 'next-build' : state.mode, state.model, undefined, { attachments: optimisticAttachments });
+    if (opts.resumeGuideRunId && requestMessage.clientMessageId) {
+      state.guideMessageIndexByClientId[requestMessage.clientMessageId] = Number(opts.optimisticMessageIndex);
+      applyAgentWorkEventToRun({
+        id: 'edited-guide-' + requestMessage.clientMessageId,
+        type: 'guide_applied',
+        content: displayText,
+        workspaceId: lockedTarget.workspaceId,
+        conversationId: lockedTarget.conversationId,
+        runId: String(opts.resumeGuideRunId),
+        clientMessageId: requestMessage.clientMessageId,
+        guide: {
+          clientMessageId: requestMessage.clientMessageId,
+          target: lockedTarget,
+          runId: String(opts.resumeGuideRunId),
+          status: 'applied',
+          content: displayText,
+          createdAt: new Date().toISOString()
+        }
+      });
+    } else {
+      addMsg('user', displayText, opts.fromQueue ? 'next-build' : state.mode, state.model, opts.optimisticMessageIndex, { attachments: optimisticAttachments });
+    }
+    renderConversationBranchPagers();
     applyAutoRouteRatingState(null);
     renderAutoRouteRatingControls();
   }

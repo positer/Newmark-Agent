@@ -174,6 +174,8 @@ async function evaluate(cdp, expression) {
       const fileText = fileSummary && fileSummary.querySelector('.conversation-work-file-name');
       const terminalIcon = terminalRow && terminalRow.querySelector('.nm-icon');
       const terminalText = terminalRow && terminalRow.querySelector('.conversation-work-command-label');
+      const webFetchLabel = workToolCommandLabel({ toolName: 'web_fetch', toolArgs: JSON.stringify({ url: 'https://example.com/fetch-target' }) });
+      const webSearchLabel = workToolCommandLabel({ toolName: 'web_search', toolArgs: JSON.stringify({ query: 'https://example.com/search-target' }) });
       const rect = element => {
         if (!element) return null;
         const value = element.getBoundingClientRect();
@@ -199,6 +201,8 @@ async function evaluate(cdp, expression) {
         terminalText: rect(terminalText),
         fileFont: fileText && getComputedStyle(fileText).fontFamily,
         terminalFont: terminalText && getComputedStyle(terminalText).fontFamily,
+        webFetchLabel,
+        webSearchLabel,
         fileDisplay: fileSummary && getComputedStyle(fileSummary).display,
         fileColumns: fileSummary && getComputedStyle(fileSummary).gridTemplateColumns,
       };
@@ -212,6 +216,45 @@ async function evaluate(cdp, expression) {
     if (Math.abs(result.fileIcon.left - result.terminalIcon.left) > 1 || Math.abs(result.fileText.left - result.terminalText.left) > 1) fail(`file and terminal icon/text columns are not aligned: ${JSON.stringify(result)}`);
     if (result.fileFont !== result.terminalFont || result.fileDisplay !== 'grid' || !String(result.fileColumns || '').startsWith('17px ')) fail(`file and terminal typography/grid mismatch: ${JSON.stringify(result)}`);
     if (result.fileSummary.width > 700) fail(`edited-file row retained an oversized flexible blank area: ${JSON.stringify(result)}`);
+    if (result.webFetchLabel !== 'web_fetch · https://example.com/fetch-target' || result.webSearchLabel !== 'web_search · https://example.com/search-target') fail(`web tool target URL is not visible beside the tool name: ${JSON.stringify(result)}`);
+
+    const immediateFirstEdit = await evaluate(cdp, `(() => {
+      const original = { id: 'first-original', sourceMessageIndex: 0 };
+      const edited = { id: 'first-edited', sourceMessageIndex: 0 };
+      hydrateConversationBranchState({
+        activeBranchId: 'first-edited', runtimeBranchId: 'first-edited', branchGroupId: 'first-group',
+        branchGroups: [{ id: 'first-group', sourceMessageIndex: 0, activeBranchId: 'first-edited', branches: [original, edited] }],
+      });
+      renderChatMessages([]);
+      addMsg('user', 'Edited first message', 'build', state.model, 0, {});
+      renderConversationBranchPagers();
+      const pager = document.querySelector('.conversation-branch-pager[data-branch-group-id="first-group"]');
+      return { text: pager && pager.textContent, parentIndex: pager && pager.closest('.chat-msg.user').getAttribute('data-message-index'), body: document.getElementById('chat-area').innerText };
+    })()`);
+    if (immediateFirstEdit.text !== '<2/2>' || immediateFirstEdit.parentIndex !== '0' || !immediateFirstEdit.body.includes('Edited first message')) fail(`first-message edit did not paginate immediately before Build completion: ${JSON.stringify(immediateFirstEdit)}`);
+
+    const guidePrefixResult = await evaluate(cdp, `(() => {
+      const target = currentConversationTarget();
+      const run = {
+        runId: 'guide-prefix-run', target, status: 'interrupted', expanded: true,
+        startedAt: '2026-07-24T06:00:00.000Z', endedAt: '2026-07-24T06:00:02.000Z', primaryPrompt: 'BUILD_PREFIX_PROMPT',
+        events: [{ id: 'guide-prefix-event', sequence: 1, type: 'status', content: 'BUILD_PREFIX_ACTIVITY', timestamp: '2026-07-24T06:00:01.000Z' }], guides: [],
+      };
+      hydrateConversationBranchState({ activeBranchId: 'guide-new', runtimeBranchId: 'guide-new', branchGroupId: 'guide-prefix-group', branchGroups: [{ id: 'guide-prefix-group', sourceMessageIndex: 2, activeBranchId: 'guide-new', branches: [{ id: 'guide-old' }, { id: 'guide-new' }] }] });
+      syncWorkRunsSnapshot([run], target);
+      renderChatMessages([
+        { role: 'user', content: 'BUILD_PREFIX_PROMPT', runId: 'guide-prefix-run' },
+        { role: 'assistant', content: 'BUILD_PREFIX_REPLY', runId: 'guide-prefix-run' },
+      ]);
+      state.guideMessageIndexByClientId['guide-new-client'] = 2;
+      applyAgentWorkEventToRun({ id: 'guide-new-event', type: 'guide_applied', content: 'EDITED_GUIDE_NODE', workspaceId: target.workspaceId, conversationId: target.conversationId, runId: 'guide-prefix-run', clientMessageId: 'guide-new-client', guide: { clientMessageId: 'guide-new-client', target, runId: 'guide-prefix-run', status: 'applied', content: 'EDITED_GUIDE_NODE', createdAt: new Date().toISOString() } });
+      renderConversationBranchPagers();
+      const runElement = document.querySelector('.conversation-work-run[data-run-id="guide-prefix-run"]');
+      const guide = document.querySelector('.work-run-guide-message[data-client-message-id="guide-new-client"]');
+      const pager = guide && guide.querySelector('.conversation-branch-pager[data-branch-group-id="guide-prefix-group"]');
+      return { body: document.getElementById('chat-area').innerText, sameWrapper: !!(runElement && guide && runElement.closest('.work-run-message') === guide.closest('.work-run-message')), pagerText: pager && pager.textContent };
+    })()`);
+    if (!guidePrefixResult.body.includes('BUILD_PREFIX_PROMPT') || !guidePrefixResult.body.includes('BUILD_PREFIX_ACTIVITY') || !guidePrefixResult.body.includes('EDITED_GUIDE_NODE') || !guidePrefixResult.sameWrapper || guidePrefixResult.pagerText !== '<2/2>') fail(`Guide edit did not preserve its owning Build prefix at the Guide pagination node: ${JSON.stringify(guidePrefixResult)}`);
 
     const pageSwitchResult = await evaluate(cdp, `(async () => {
       const target = currentConversationTarget();
@@ -261,6 +304,28 @@ async function evaluate(cdp, expression) {
     if (!pageSwitchResult.edited.includes('EDITED_PAGE_ONLY') || pageSwitchResult.edited.includes('ORIGINAL_PAGE_ONLY') || pageSwitchResult.editedRuns.join(',') !== 'edited-tree-run' || pageSwitchResult.activeBranchId !== 'tree-edited') fail(`edited branch was not restored as an exclusive page tree: ${JSON.stringify(pageSwitchResult)}`);
     if (pageSwitchResult.pagerStopCalls !== 0 || pageSwitchResult.pagerActivationCalls !== 0) fail(`page inspection stopped or activated a runtime branch: ${JSON.stringify(pageSwitchResult)}`);
     if (!pageSwitchResult.activated || pageSwitchResult.stopCalls !== 0 || pageSwitchResult.activationCalls !== 1 || pageSwitchResult.runtimeBranchId !== 'tree-edited') fail(`sending from the inspected page did not activate exactly that branch: ${JSON.stringify(pageSwitchResult)}`);
+
+    const guideTailIsolation = await evaluate(cdp, `(() => {
+      const target = currentConversationTarget();
+      const prefixEvent = { id: 'shared-prefix', sequence: 1, type: 'status', content: 'SHARED_GUIDE_PREFIX' };
+      const originalTail = { id: 'original-tail', sequence: 3, type: 'tool_call', toolName: 'bash', content: 'ORIGINAL_GUIDE_TAIL' };
+      const editedTail = { id: 'edited-tail', sequence: 3, type: 'tool_call', toolName: 'read', content: 'EDITED_GUIDE_TAIL' };
+      const runFor = events => ({ runId: 'guide-tail-run', target, status: 'completed', expanded: true, startedAt: '2026-07-24T07:00:00.000Z', endedAt: '2026-07-24T07:00:04.000Z', primaryPrompt: 'SHARED_BUILD_START', events, guides: [] });
+      const pages = {
+        old: { activeBranchId: 'guide-old', runtimeBranchId: 'guide-new', branchGroupId: 'guide-tail-group', branchGroups: [{ id: 'guide-tail-group', sourceMessageIndex: 2, activeBranchId: 'guide-old', branches: [{ id: 'guide-old' }, { id: 'guide-new' }] }], chatMessages: [{ role: 'user', content: 'SHARED_BUILD_START', runId: 'guide-tail-run' }, { role: 'assistant', content: 'SHARED_GUIDE_PREFIX', runId: 'guide-tail-run' }, { role: 'user', content: 'ORIGINAL_GUIDE_NODE', runId: 'guide-tail-run', clientMessageId: 'old-guide' }, { role: 'assistant', content: 'ORIGINAL_AFTER_GUIDE' }], workRuns: [runFor([prefixEvent, originalTail])] },
+        new: { activeBranchId: 'guide-new', runtimeBranchId: 'guide-new', branchGroupId: 'guide-tail-group', branchGroups: [{ id: 'guide-tail-group', sourceMessageIndex: 2, activeBranchId: 'guide-new', branches: [{ id: 'guide-old' }, { id: 'guide-new' }] }], chatMessages: [{ role: 'user', content: 'SHARED_BUILD_START', runId: 'guide-tail-run' }, { role: 'assistant', content: 'SHARED_GUIDE_PREFIX', runId: 'guide-tail-run' }, { role: 'user', content: 'EDITED_GUIDE_NODE', runId: 'guide-tail-run', clientMessageId: 'new-guide' }, { role: 'assistant', content: 'EDITED_AFTER_GUIDE' }], workRuns: [runFor([prefixEvent, editedTail])] },
+      };
+      hydrateConversationBranchState(pages.new);
+      syncWorkRunsSnapshot(pages.new.workRuns, target);
+      renderChatMessages(pages.new.chatMessages);
+      const edited = document.getElementById('chat-area').innerText;
+      hydrateConversationBranchState(pages.old);
+      syncWorkRunsSnapshot(pages.old.workRuns, target);
+      renderChatMessages(pages.old.chatMessages);
+      const original = document.getElementById('chat-area').innerText;
+      return { edited, original };
+    })()`);
+    if (!guideTailIsolation.edited.includes('SHARED_GUIDE_PREFIX') || !guideTailIsolation.original.includes('SHARED_GUIDE_PREFIX') || guideTailIsolation.edited.includes('ORIGINAL_GUIDE_TAIL') || guideTailIsolation.edited.includes('ORIGINAL_AFTER_GUIDE') || guideTailIsolation.original.includes('EDITED_GUIDE_TAIL') || guideTailIsolation.original.includes('EDITED_AFTER_GUIDE')) fail(`Guide page tails leaked across the edit node: ${JSON.stringify(guideTailIsolation)}`);
 
     const shot = await cdp.call('Page.captureScreenshot', { format: 'png', fromSurface: true }, 30000);
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });

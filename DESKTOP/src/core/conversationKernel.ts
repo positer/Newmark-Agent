@@ -567,7 +567,8 @@ export class ConversationKernel {
 
     runtime.generation = (this.generations.get(runtime.runtimeKey) || runtime.generation || 0) + 1;
     this.generations.set(runtime.runtimeKey, runtime.generation);
-    runtime.runId = randomUUID();
+    const requestedRunId = typeof message === 'string' ? '' : String(message.runId || '').trim().slice(0, 200);
+    runtime.runId = requestedRunId || randomUUID();
     runtime.stopRequestedRunId = '';
     runtime.forceStopArmedRunId = '';
     runtime.stopCheckpointed = false;
@@ -576,10 +577,12 @@ export class ConversationKernel {
     // this only inside run() records non-default conversations under whatever
     // conversation the fresh runner happened to load first.
     runtime.runner.setConversation(runtime.id);
-    runtime.runner.beginConversationWorkRun(runtime.runId, {
-      workspaceId: runtime.target.workspaceId,
-      conversationId: runtime.target.conversationId,
-    }, undefined, true, runtime.runtimeKey);
+    if (!requestedRunId || !runtime.runner.resumeConversationWorkRun(requestedRunId)) {
+      runtime.runner.beginConversationWorkRun(runtime.runId, {
+        workspaceId: runtime.target.workspaceId,
+        conversationId: runtime.target.conversationId,
+      }, undefined, true, runtime.runtimeKey);
+    }
     const runId = runtime.runId;
     let activePromise!: Promise<ConversationKernelRunResult>;
     activePromise = (async (): Promise<ConversationKernelRunResult> => {

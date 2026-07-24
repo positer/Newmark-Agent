@@ -38,9 +38,9 @@ Download packages from the [dev-0.1.6 release](https://github.com/positer/Newmar
 | --- | --- | --- |
 | `Newmark-Agent-0.1.6-x64.msi` | Windows x64 installer | `AC008F0BF351F25092CDD215950E3F2973C6396D745AA6DCD54FE3CC96DC8A26` |
 | `Newmark-Agent-0.1.6-win-unpacked-x64.zip` | Windows x64 portable | `7F280D0ED600C79D673AD8B772A241CB80A8648E3224872829972AAE3F226990` |
-| `Newmark-Agent-0.1.6-x86_64.AppImage` | Linux x64 AppImage | (pending build) |
-| `Newmark-Agent-0.1.6-amd64.deb` | Debian/Ubuntu x64 package | (pending build) |
-| `Newmark-Agent-0.1.6-linux-unpacked-x64.zip` | Linux x64 portable | (pending build) |
+| `Newmark-Agent-0.1.6-x86_64.AppImage` | Linux x64 AppImage | `AC8A5E2033D66DCDA97F1949DF2AB6C2806E1FA6614883E0AC95CE1F6FDFEB6F` |
+| `Newmark-Agent-0.1.6-amd64.deb` | Debian/Ubuntu x64 package | `35FE64695906F95CA6CE86C933EF624477896DFA1BA6AFDF1FE09DBB8BFA6BA9` |
+| `Newmark-Agent-0.1.6-linux-unpacked-x64.zip` | Linux x64 portable | `B7CA1150F995F0CF51E586857550893238EDD33BFA572BA35501C041D3CF54E1` |
 
 The Windows MSI requests administrator elevation. Windows and Linux may show an unknown-publisher warning because the packages are not code-signed.
 

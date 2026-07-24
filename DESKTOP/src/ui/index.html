@@ -9105,6 +9105,15 @@ function loadActiveConversationMessages(conversationId) {
   }).catch(function(){});
 }
 
+function hydrateConversationBranchState(snapshot) {
+  var s = snapshot || {};
+  state.conversationBranches = Array.isArray(s.branches) ? s.branches : [];
+  state.conversationBranchGroups = Array.isArray(s.branchGroups) ? s.branchGroups : [];
+  state.activeConversationBranchId = String(s.activeBranchId || '');
+  state.runtimeConversationBranchId = String(s.runtimeBranchId || s.activeBranchId || '');
+  state.activeConversationBranchGroupId = String(s.branchGroupId || '');
+}
+
 function applyConversationSnapshot(s, requestedConversationId) {
     if (!s) return;
     state.goalText = s.goal && s.goal.objective ? String(s.goal.objective) : '';
@@ -9117,11 +9126,7 @@ function applyConversationSnapshot(s, requestedConversationId) {
     if (s && s.runtimeKey) registerRuntimeKey(snapshotTarget, s.runtimeKey);
     if (s && Array.isArray(s.workRuns)) syncWorkRunsSnapshot(s.workRuns, snapshotTarget);
     applyAutoRouteRatingState(s);
-    state.conversationBranches = s && Array.isArray(s.branches) ? s.branches : [];
-    state.conversationBranchGroups = s && Array.isArray(s.branchGroups) ? s.branchGroups : [];
-    state.activeConversationBranchId = String(s && s.activeBranchId || '');
-    state.runtimeConversationBranchId = String(s && (s.runtimeBranchId || s.activeBranchId) || '');
-    state.activeConversationBranchGroupId = String(s && s.branchGroupId || '');
+    hydrateConversationBranchState(s);
     if (s && s.chatMessages) renderChatMessages(s.chatMessages);
     if (s && s.conversationId) {
       state.activeBackendConversationId = s.conversationId;
@@ -17029,7 +17034,10 @@ function schedulePostStartupUiRendering() {
       if (s.conversationId) state.activeBackendConversationId = s.conversationId;
       if (s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
       applyAutoRouteRatingState(s);
-      if (s.chatMessages) renderChatMessages(s.chatMessages);
+      if (s.chatMessages) {
+        hydrateConversationBranchState(s);
+        renderChatMessages(s.chatMessages);
+      }
       if (s.defaultFlow) state.defaultFlow = s.defaultFlow;
       if (s.autoSwitch !== undefined) state.autoSwitch = s.autoSwitch ? 'on' : 'off';
       if (s.autoSwitchScope) state.autoSwitchScope = s.autoSwitchScope === 'provider' ? 'provider' : 'all';
@@ -17058,7 +17066,10 @@ function schedulePostStartupUiRendering() {
           };
           if (s.runtimeKey) registerRuntimeKey(initialSnapshotTarget, s.runtimeKey);
           if (Array.isArray(s.workRuns)) syncWorkRunsSnapshot(s.workRuns, initialSnapshotTarget);
-          if (s.chatMessages) renderChatMessages(s.chatMessages);
+          if (s.chatMessages) {
+            hydrateConversationBranchState(s);
+            renderChatMessages(s.chatMessages);
+          }
         }
       }
     }

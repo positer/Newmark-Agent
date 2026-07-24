@@ -257,6 +257,11 @@ async function main() {
     }
   }
   assert(!scriptParseError, 'ui html: inline script parses', scriptParseError);
+  assert(
+    uiHtml.includes('function hydrateConversationBranchState(snapshot)') &&
+      /hydrateConversationBranchState\(s\);\s*renderChatMessages\(s\.chatMessages\);/.test(uiHtml),
+    'conversation branches: cold-start snapshots hydrate branch groups before the first message render',
+  );
   assert(Buffer.from(uiHtml, 'utf8').toString('utf8') === uiHtml, 'ui html: UTF-8 source is readable');
   assert(preloadSource.includes("ipcRenderer.invoke('agent:openWorkspaceFile'") && preloadSource.includes("ipcRenderer.invoke('agent:saveWorkspaceFile'")
     && preloadSource.includes("ipcRenderer.invoke('agent:closeWorkspaceFile'") && preloadSource.includes("ipcRenderer.invoke('agent:confirmEditorClose'")

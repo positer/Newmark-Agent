@@ -117,7 +117,13 @@ async function evaluate(cdp, expression) {
 
     const result = await evaluate(cdp, `(() => {
       const target = currentConversationTarget();
-      state.conversationBranchGroups = [
+      state.conversationBranchGroups = [];
+      hydrateConversationBranchState({
+        branches: [],
+        activeBranchId: 'edited-guide',
+        runtimeBranchId: 'edited-guide',
+        branchGroupId: 'guide-group',
+        branchGroups: [
         {
           id: 'start-group', sourceMessageIndex: 0, activeBranchId: 'edited-page', branches: [
             { id: 'original-page', sourceMessageIndex: 0 },
@@ -130,7 +136,8 @@ async function evaluate(cdp, expression) {
             { id: 'edited-guide', sourceMessageIndex: 1 },
           ],
         },
-      ];
+        ],
+      });
       state.activeConversationBranchId = 'edited-page';
       state.guideMessageIndexByClientId = { 'guide-dev017': 1 };
       renderChatMessages([
@@ -210,14 +217,15 @@ async function evaluate(cdp, expression) {
       const target = currentConversationTarget();
       const originalBranch = { id: 'tree-original', createdAt: '2026-07-24T05:00:00.000Z', sourceMessageIndex: 0, sourceText: 'Original instruction' };
       const editedBranch = { id: 'tree-edited', createdAt: '2026-07-24T05:00:01.000Z', sourceMessageIndex: 0, sourceText: 'Edited instruction' };
+      const groupFor = activeBranchId => ({ id: 'tree-group', sourceMessageIndex: 0, activeBranchId, branches: [originalBranch, editedBranch] });
       const pages = {
         'tree-original': {
-          branches: [originalBranch, editedBranch], activeBranchId: 'tree-original', runtimeBranchId: 'tree-original',
+          branches: [originalBranch, editedBranch], branchGroups: [groupFor('tree-original')], branchGroupId: 'tree-group', activeBranchId: 'tree-original', runtimeBranchId: 'tree-original',
           chatMessages: [{ role: 'user', content: 'Original instruction' }, { role: 'assistant', content: 'ORIGINAL_PAGE_ONLY' }],
           workRuns: [{ runId: 'original-tree-run', target, status: 'completed', expanded: false, startedAt: '2026-07-24T05:00:00.000Z', endedAt: '2026-07-24T05:00:01.000Z', events: [], guides: [], primaryPrompt: 'Original instruction' }],
         },
         'tree-edited': {
-          branches: [originalBranch, editedBranch], activeBranchId: 'tree-edited', runtimeBranchId: 'tree-original',
+          branches: [originalBranch, editedBranch], branchGroups: [groupFor('tree-edited')], branchGroupId: 'tree-group', activeBranchId: 'tree-edited', runtimeBranchId: 'tree-original',
           chatMessages: [{ role: 'user', content: 'Edited instruction' }, { role: 'assistant', content: 'EDITED_PAGE_ONLY' }],
           workRuns: [{ runId: 'edited-tree-run', target, status: 'completed', expanded: false, startedAt: '2026-07-24T05:00:02.000Z', endedAt: '2026-07-24T05:00:03.000Z', events: [], guides: [], primaryPrompt: 'Edited instruction' }],
         },
@@ -233,16 +241,14 @@ async function evaluate(cdp, expression) {
         },
       });
       window.__setBranchApiForTest(testApi);
-      state.conversationBranches = pages['tree-edited'].branches;
-      state.activeConversationBranchId = 'tree-edited';
-      state.runtimeConversationBranchId = 'tree-original';
+      hydrateConversationBranchState(pages['tree-edited']);
       syncWorkRunsSnapshot(pages['tree-edited'].workRuns, target);
       renderChatMessages(pages['tree-edited'].chatMessages);
       const before = document.getElementById('chat-area').innerText;
-      await window.switchConversationBranch(-1);
+      await window.switchConversationBranch(-1, 'tree-group');
       const original = document.getElementById('chat-area').innerText;
       const originalRuns = workRunsForTarget(target).map(run => run.runId);
-      await window.switchConversationBranch(1);
+      await window.switchConversationBranch(1, 'tree-group');
       const edited = document.getElementById('chat-area').innerText;
       const editedRuns = workRunsForTarget(target).map(run => run.runId);
       const pagerStopCalls = stopCalls;

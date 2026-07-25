@@ -485,6 +485,16 @@ async function main() {
   assert(uiHtml.includes("syncWorkRunsSnapshot(Array.isArray(result.workRuns) ? result.workRuns : [], target)") && uiHtml.includes("div.setAttribute('data-message-index'") && uiHtml.includes(".chat-msg.user[data-message-index=\"") && !uiHtml.includes("querySelector('.chat-msg.user:last-of-type')"), 'ui html: branch switching replaces the cached Build list and anchors inline page navigation at the edited user node instead of the conversation tail');
   assert(preloadSource.includes('inspectConversationBranch:') && preloadSource.includes('activateConversationBranch:') && mainSource.includes("ipcMain.handle('agent:inspectConversationBranch'") && mainSource.includes("ipcMain.handle('agent:activateConversationBranch'") && uiHtml.includes('branchApi.inspectConversationBranch(currentConversationTarget(), branches[next].id, group ? group.id') && uiHtml.includes('async function activateViewedConversationBranchForSend(target)') && uiHtml.includes('!await activateViewedConversationBranchForSend(lockedTarget)'), 'branch paging: arrow navigation is read-only, while sending explicitly activates the viewed branch');
   assert(uiHtml.includes('var visibleRuntimeBranch = active && isViewingRuntimeConversationBranch(target);') && uiHtml.includes('if (visibleRuntimeBranch) renderAgentWorkEvent(event);') && uiHtml.includes('isActiveConversationTarget(lockedTarget) && isViewingRuntimeConversationBranch(lockedTarget)'), 'branch paging: background runtime events and completed send results cannot render into an inspected sibling branch');
+  assert(uiHtml.includes("queueBranchPathForTarget(lockedTarget, 'runtime')")
+    && uiHtml.indexOf("if (effectiveInputMode === 'next' && !opts.fromQueue && conversationRunning)") < uiHtml.indexOf("activateViewedConversationBranchForSend(lockedTarget)")
+    && uiHtml.includes('var queuedRuntimeBranch = !!(queuedRequestRecord')
+    && uiHtml.includes('var renderOnViewedBranch = !queuedRuntimeBranch'),
+  'branch queue state machine: Next and Goal bind to the runtime branch while ordinary sends activate the viewed branch, and hidden runtime continuations do not render into the inspected page');
+  assert(uiHtml.includes("if (stillActive && r && Array.isArray(r.chatMessages)) {\n      hydrateConversationBranchState(r);\n      renderChatMessages(r.chatMessages);")
+    && uiHtml.includes("if (stillActiveAfterRefresh && s && Array.isArray(s.workRuns)) {\n        applyAutoRouteRatingState(s);\n        hydrateConversationBranchState(s);"),
+  'branch paging: completed sends and post-run state refresh hydrate the latest page anchor ids before destructive transcript redraw');
+  assert(uiHtml.includes("Object.prototype.hasOwnProperty.call(s, 'branchGroups')") && uiHtml.includes("Object.prototype.hasOwnProperty.call(s, 'runtimeBranchNodePath')"),
+    'branch paging: partial send responses preserve existing branch state instead of clearing the pager');
   assert(uiHtml.includes('workRunsByBranch') && uiHtml.includes('function workRunBranchKey(target, branchId)') && uiHtml.includes('function workRunsForBranch(target, branchId)') && uiHtml.includes('var eventBranchId = branchIds.runtime || branchIds.viewed;') && uiHtml.includes('run.sequence = Math.max(Number(run.sequence || 0), Number(event.sequence || 0));') && uiHtml.includes('if (isViewingRuntimeConversationBranch(target)) replayActiveAgentWorkEvents();'), 'branch paging: live WorkRuns remain owned and versioned by the runtime branch while sibling pages are inspected, then replay only after returning');
   assert(uiHtml.includes('function conversationBranchPathKey(groups, fallbackBranchId)') && uiHtml.includes('runtimeConversationBranchNodePath') && uiHtml.includes('viewedConversationBranchNodePath') && uiHtml.includes('function workRunBeforeElement(run)') && uiHtml.includes('data-message-id') && agentSourceForEditor.includes('rootBranchNodeId') && agentSourceForEditor.includes('viewedBranchNodePath') && agentSourceForEditor.includes('runtimeBranchNodePath') && agentSourceForEditor.includes('anchorMessageId') && agentSourceForEditor.includes('guideId'), 'conversation identity: persisted unique message, Guide, branch-node path, and WorkRun anchor identities drive rendering instead of mutable list indexes');
   assert(uiHtml.includes("normalizedName === 'skill_load'") && uiHtml.includes("normalizedName.indexOf('mcp__') === 0") && uiHtml.includes("'加载 Skill · '") && uiHtml.includes("'调用 MCP · '"), 'tool activity: explicitly identifies the selected Skill and encoded MCP server/tool in public work rows');
@@ -502,7 +512,7 @@ async function main() {
   assert(uiHtml.includes('#input-tools {') && uiHtml.includes('overflow: visible;'), 'input toolbar: permits submit hover and running marquee pixels outside the fixed button box without clipping');
   assert(uiHtml.includes('window.runFlowWork = async function(workIdx)') && uiHtml.includes('await api.saveFlow(normalized)') && uiHtml.includes('api.runFlow(normalized.name, flowInput, 0)') && uiHtml.includes('renderChatMessages(r.chatMessages)'), 'ui html: Flow Run uses the constrained Flow API and backend core runner');
   assert(uiHtml.includes('function stopFlowRunInternal()') && uiHtml.includes('window.stopFlowRun = function()') && uiHtml.includes('stopFlowRunInternal();') && !uiHtml.includes('window.stopFlowRun = function() {\n  stopFlowRun();'), 'ui html: Flow stop handler avoids global recursive self-call');
-  assert(uiHtml.includes("conversationRunning && effectiveInputMode === 'guide'") && uiHtml.includes("effectiveInputMode === 'next' && !opts.fromQueue && conversationRunning") && uiHtml.includes("idleNextImmediate = effectiveInputMode === 'next' && !opts.fromQueue && !conversationRunning") && uiHtml.includes('state.nextQueue.push(displayText)') && uiHtml.includes('bindQueuedRequestToTarget(requestMessage, rawText, lockedTarget)') && uiHtml.includes('queuedRequestMatchesTarget') && uiHtml.includes('queueMicrotask(function()') && !uiHtml.includes('}, 250);') && !uiHtml.includes('}, 80);') && uiHtml.includes('state.queueCollapsed = false'), 'ui html: idle Next starts immediately while active-run Next stays target-bound and terminal events drain without fixed timer latency');
+  assert(uiHtml.includes("conversationRunning && effectiveInputMode === 'guide'") && uiHtml.includes("effectiveInputMode === 'next' && !opts.fromQueue && conversationRunning") && uiHtml.includes("idleNextImmediate = effectiveInputMode === 'next' && !opts.fromQueue && !conversationRunning") && uiHtml.includes('state.nextQueue.push(displayText)') && uiHtml.includes('bindQueuedRequestToTarget(requestMessage, rawText, lockedTarget') && uiHtml.includes('queuedRequestMatchesTarget') && uiHtml.includes('queueMicrotask(function()') && !uiHtml.includes('}, 250);') && !uiHtml.includes('}, 80);') && uiHtml.includes('state.queueCollapsed = false') && uiHtml.includes('queuePausedByTarget') && uiHtml.includes('rebindQueueToRuntimeBranch'), 'ui html: idle Next starts immediately while active-run Next stays runtime-bound, supports pausing injection, and terminal events drain without fixed timer latency');
   assert(uiHtml.includes('id="terminal-timeout-input"') && uiHtml.includes('Max ms') && uiHtml.includes('Terminal timeout cap') && uiHtml.includes('window.setTerminalInterruptTimeout = function(value)') && uiHtml.includes("api.saveSetting('terminal', 'interrupt_timeout_ms', n)"), 'ui html: terminal timeout cap is editable and persisted');
   const agentKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
   const piKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
@@ -722,7 +732,7 @@ async function main() {
   }
   const nativeToolsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'nativeTools.ts'), 'utf-8');
   const agentTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
-  assert(!agentTs.includes('public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && !agentTs.includes('public ensureConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && agentTs.includes('const isActiveConversation = clean === this.safeConversationId') && agentTs.includes('const sourceChatMessages = isActiveConversation') && agentTs.includes('? this.chatMessages') && agentTs.includes(': (persisted?.chatMessages ?? memory?.chatMessages ?? [])') && agentTs.includes('const chatMessages = isActiveConversation') && agentTs.includes(': this.normalizeConversationChatMessages(sourceChatMessages, history)') && agentTs.includes('isActiveConversation ? this.workRuns : (persisted?.workRuns || memory?.workRuns)') && agentTs.includes('mirrorConversationStateFrom(id: string') && agentTs.includes('const stateKey = this.workspaceConversationStateKey(clean);') && agentTs.includes("this.safeConversationId(this.activeConversationId || 'default') === clean"), 'agent conversation snapshots are read-only, active target state is live, cold target state is persisted and attachment-normalized, and runner mirrors synchronize active host memory');
+  assert(!agentTs.includes('public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && !agentTs.includes('public ensureConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && agentTs.includes('const isActiveConversation = clean === this.safeConversationId') && agentTs.includes('const sourceChatMessages = isActiveConversation && viewingRuntimeNode') && agentTs.includes('? this.chatMessages') && agentTs.includes('viewedNode?.chatMessages ?? persisted?.chatMessages ?? memory?.chatMessages ?? []') && agentTs.includes('const chatMessages = isActiveConversation && viewingRuntimeNode') && agentTs.includes(': this.normalizeConversationChatMessages(sourceChatMessages, history)') && agentTs.includes('isActiveConversation && viewingRuntimeNode ? this.workRuns') && agentTs.includes('mirrorConversationStateFrom(id: string') && agentTs.includes('const stateKey = this.workspaceConversationStateKey(clean);') && agentTs.includes("this.safeConversationId(this.activeConversationId || 'default') === clean"), 'agent conversation snapshots are read-only, runtime and viewed branch state remain separate, cold state is attachment-normalized, and runner mirrors synchronize active host memory');
   const configTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'config.ts'), 'utf-8');
   const getStateHandler = mainTs.slice(mainTs.indexOf("ipcMain.handle('agent:getState'"), mainTs.indexOf("ipcMain.handle('agent:getConversationPlan'"));
   assert(getStateHandler.includes('...conversationSnapshot') && !getStateHandler.includes('chatMessages: agent.chatMessages'), 'main process: conversation-scoped getState does not overwrite target messages with shared host messages');
@@ -2996,15 +3006,24 @@ async function main() {
   agent.setMode('build');
   const memoryModelAgent = new Agent(TEST_DIR);
   let memoryModelCalled = false;
+  let memoryModelPrompt = '';
+  memoryModelAgent.memoryLab.update(memoryModelAgent.memoryLab.prepareUpdate({
+    name: 'existing-memory-parent',
+    tags: ['#Existing-Child'],
+    tagPaths: [['#Existing-Root', '#Existing-Child']],
+    content: 'existing',
+  }));
   const memoryModelProvider = {
     intelligenceConfig: () => ({ temperature: 0, maxTokens: 100 }),
     async *chatStreamWithTools(): AsyncGenerator<StreamToken> { yield { type: 'text', text: 'unused' }; },
-    async chat(): Promise<string> {
+    async chat(_model: string, messages: Array<{ content: string }>, system = ''): Promise<string> {
       memoryModelCalled = true;
+      memoryModelPrompt += '\n' + [system, ...messages.map(message => message.content)].join('\n');
       return JSON.stringify({
         name: 'model-organized-memory',
         description: 'Organized by MemoryLabIndexAgent',
-        tags: ['#模型整理-测试'],
+        tags: ['#Existing-Child'],
+        tagPaths: [['#Existing-Child']],
         content: '# Organized Memory\n\nModel organized content.',
         kind: 'file',
       });
@@ -3020,6 +3039,11 @@ async function main() {
     && memoryUpdatePayload.rebuildReceipt?.operation === 'update'
     && memoryUpdatePayload.index?.components?.['model-organized-memory'],
   'memory_lab_update: waits for deterministic index rebuild and returns a verified completion receipt to the Agent');
+  const memoryDagPromptOk = memoryModelPrompt.includes('existingTagGraph') && memoryModelPrompt.includes('#Existing-Root');
+  const memoryDagPathOk = memoryUpdatePayload.index?.components?.['model-organized-memory']?.tagPaths?.some((pathValue: string[]) => pathValue.join('>') === '#Existing-Root>#Existing-Child');
+  const memoryDagParentOk = memoryUpdatePayload.index?.tags?.['#Existing-Child']?.parents?.includes('#Existing-Root');
+  assert(memoryDagPromptOk && memoryDagPathOk && memoryDagParentOk,
+  'memory_lab_update: supplies the existing tag DAG to MemoryLabIndexAgent and deterministically restores an established parent path when the model returns a bare child tag');
   const memoryReindexReceipt = await (memoryModelAgent as unknown as { handleMemoryLabTool: (tool: string, args: string) => Promise<string> })
     .handleMemoryLabTool('memory_lab_reindex', '{}');
   const memoryReindexPayload = JSON.parse(memoryReindexReceipt.slice(memoryReindexReceipt.indexOf('{'))) as Record<string, any>;

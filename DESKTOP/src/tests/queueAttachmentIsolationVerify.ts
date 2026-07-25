@@ -240,7 +240,7 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
     'markConversationTracked', 'composePromptTextForSend', 'clearPromptAttachments',
     'updateSubmitButtonState', 'recordGuideUiMessage', 'addMsg', 'normalizeGuideUiStatus',
     'applyAgentWorkEventToRun', 'showUiNotice', 'currentLang',
-    `${helpers}\n${normalizeAttachmentsSource}\n${restoreQueueSource}\nwindow.bindQueuedRequestToTarget = bindQueuedRequestToTarget;\nwindow.sendMessage = ${sendMessageSource};\nwindow.guideQueueItem = ${guideQueueSource};`,
+    `${helpers}\nfunction queueBranchPathForTarget(){ return ''; }\n${normalizeAttachmentsSource}\n${restoreQueueSource}\nwindow.bindQueuedRequestToTarget = bindQueuedRequestToTarget;\nwindow.sendMessage = ${sendMessageSource};\nwindow.guideQueueItem = ${guideQueueSource};`,
   );
   install(
     windowObject,
@@ -346,11 +346,17 @@ async function main(): Promise<void> {
   const helpers = [
     'normalizeQueueItemText',
     'normalizeQueuedConversationTarget',
+    'conversationBranchIdsForTarget',
+    'queueBranchPathForTarget',
     'bindQueuedRequestToTarget',
     'bindBackendQueuedRequestToTarget',
     'queuedRequestIsBackendManaged',
     'queuedRequestMatchesTarget',
     'queueIndexesForTarget',
+    'queueIndexesForRuntimeTarget',
+    'queueRuntimeKey',
+    'rebindQueueToRuntimeBranch',
+    'pauseQueueForTarget',
     'refreshNextPromptForTarget',
     'queueHiddenItemKey',
     'normalizeBackendQueue',
@@ -376,11 +382,18 @@ async function main(): Promise<void> {
     nextQueue: [],
     nextQueueRequests: [],
     nextQueueDrainsByTarget: {},
+    queuePausedByTarget: {},
     activeSendCallsByTarget: {},
     nextPrompt: '',
     backendQueue: { steering: [], followUp: [] },
     backendQueuesByTarget: {},
     queueHiddenItems: {},
+    activeConversationBranchId: 'branch-runtime-a',
+    runtimeConversationBranchId: 'branch-runtime-a',
+    viewedConversationBranchNodePath: ['root-a', 'branch-runtime-a'],
+    runtimeConversationBranchNodePath: ['root-a', 'branch-runtime-a'],
+    runtimeBranchPathsByTarget: {},
+    conversationBranchGroups: [],
   };
   const windowObject: Record<string, any> = {
     renderInputStack: () => undefined,
@@ -391,10 +404,13 @@ async function main(): Promise<void> {
       running = true;
     },
   };
-  const install = new Function('window', 'state', 'currentConversationTarget', 'runtimeKeyFor', 'isCurrentConversationRunning', 'queueMicrotask', `
+  const install = new Function('window', 'state', 'currentConversationTarget', 'runtimeKeyFor', 'isCurrentConversationRunning', 'isActiveConversationTarget', 'conversationBranchIdsForTarget', 'queueMicrotask', `
     ${helpers}
     window.bindQueuedRequestToTarget = bindQueuedRequestToTarget;
     window.queueIndexesForTarget = queueIndexesForTarget;
+    window.queueIndexesForRuntimeTarget = queueIndexesForRuntimeTarget;
+    window.rebindQueueToRuntimeBranch = rebindQueueToRuntimeBranch;
+    window.pauseQueueForTarget = pauseQueueForTarget;
     window.setBackendQueueForTarget = setBackendQueueForTarget;
     window.backendQueueForTarget = backendQueueForTarget;
     window.syncNextQueueFromBackend = ${syncSource};
@@ -412,6 +428,8 @@ async function main(): Promise<void> {
     () => ({ ...activeTarget }),
     (workspaceId: string, conversationId: string) => `${workspaceId}::${conversationId}`,
     () => running,
+    (target: { workspaceId: string; conversationId: string }) => `${target.workspaceId}::${target.conversationId}` === `${activeTarget.workspaceId}::${activeTarget.conversationId}`,
+    () => ({ viewed: (state.viewedConversationBranchNodePath || []).join('>'), runtime: (state.runtimeConversationBranchNodePath || []).join('>') }),
     (callback: () => void) => { scheduled.push(callback); return scheduled.length; },
   );
 
@@ -439,6 +457,28 @@ async function main(): Promise<void> {
   assert.equal(state.queueDragIndex, -1, 'a backend-managed mirror cannot begin a drag transaction');
   assert.equal(state.nextQueue[backendBIndex], 'fresh B', 'backend-managed mirrors reject edit, delete, and Guide actions');
   assert.equal(sent.length, 0, 'read-only mirror actions never invoke sendMessage');
+
+  const pausedRequest = windowObject.bindQueuedRequestToTarget({ text: 'paused work', images: [] }, 'paused work', targetB);
+  state.nextQueue.push('paused work');
+  state.nextQueueRequests.push(pausedRequest);
+  state.queuePausedByTarget['workspace-b::default'] = true;
+  windowObject.drainNextQueue();
+  assert.equal(scheduled.length, 0, 'pausing the queue blocks injection without scheduling a hidden send');
+  assert.ok(state.nextQueue.includes('paused work'), 'pausing preserves the complete queue payload');
+  state.nextQueueSchedulesByTarget = { 'workspace-b::default': { pending: true } };
+  state.nextQueueDrainsByTarget = { 'workspace-b::default': { pending: true } };
+  windowObject.pauseQueueForTarget(targetB);
+  assert.equal(state.queuePausedByTarget['workspace-b::default'], true, 'an explicit stop pauses the target queue');
+  assert.equal(state.nextQueueSchedulesByTarget['workspace-b::default'], undefined, 'an explicit stop cancels pending queue injection scheduling');
+  assert.equal(state.nextQueueDrainsByTarget['workspace-b::default'], undefined, 'an explicit stop cancels a pending queue drain transaction');
+  state.runtimeConversationBranchNodePath = ['root-b', 'new-runtime-b'];
+  windowObject.rebindQueueToRuntimeBranch(targetB);
+  assert.ok(state.nextQueueRequests.filter((request: any) => request?.target?.workspaceId === 'workspace-b').every((request: any) => request.branchPath === 'root-b>new-runtime-b'), 'changing the running branch atomically rebinds every queued item for that conversation');
+  state.queuePausedByTarget['workspace-b::default'] = false;
+  state.runtimeConversationBranchNodePath = ['root-a', 'branch-runtime-a'];
+  windowObject.rebindQueueToRuntimeBranch(targetB);
+  state.nextQueue = state.nextQueue.filter((text: string) => text !== 'paused work');
+  state.nextQueueRequests = state.nextQueueRequests.filter((request: any) => request !== pausedRequest);
 
   const localDuplicate = windowObject.bindQueuedRequestToTarget({ text: 'duplicate', images: [] }, 'duplicate', targetA);
   state.nextQueue.push('duplicate');

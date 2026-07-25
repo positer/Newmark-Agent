@@ -125,12 +125,34 @@ export class MemoryLabManager {
       'Use memory_lab_read to inspect index.json before deciding what memory is relevant.',
       'Use memory_lab_read with component/name/slug to read a component core markdown file.',
       'Use memory_lab_update only when the user asks to create or update durable memory, passing name, description, tags, optional tagPaths, content, and optional kind=file|folder.',
+      'The memory_lab_read result includes the complete existing tag set, parent/child DAG, aliases, component memberships, and component tagPaths. Supply that structure when deciding an update.',
+      'When reusing an existing tag that already has parents, preserve at least one established full parent path ending at that tag. Never submit that child as a new bare root unless the user explicitly changes its hierarchy.',
       'Tag names are independent labels. Express hierarchy with tagPaths, for example [["#物理", "#理论物理"], ["#数学", "#理论物理"]]. A tag may have multiple parents and children.',
       'Legacy path tags use slash separators: #A/B/C is migrated to #A -> #B -> #C during every rebuild. Hyphens remain part of one tag name and commonly replace spaces.',
       'Cross-language synonyms share one tag node. The current user language selects the primary tag name and other high-confidence synonyms remain in aliases.',
       'Every rebuild also migrates legacy tag names that contain parent/child direction wording or embedded path arrows into independent nodes and edges.',
       'Do not inject index content or memory component content into the system prompt; retrieve it through this tool only when needed.',
     ].join('\n');
+  }
+
+  tagPathsEndingAt(index: MemoryLabIndex, tag: string): string[][] {
+    const target = String(tag || '');
+    if (!target || !index.tags[target]) return [];
+    const paths: string[][] = [];
+    const visit = (current: string, suffix: string[], seen: Set<string>): void => {
+      if (seen.has(current)) return;
+      const nextSeen = new Set(seen);
+      nextSeen.add(current);
+      const parents = index.tags[current]?.parents || [];
+      const nextSuffix = [current, ...suffix];
+      if (!parents.length) {
+        paths.push(nextSuffix);
+        return;
+      }
+      for (const parent of parents) visit(parent, nextSuffix, nextSeen);
+    };
+    visit(target, [], new Set());
+    return Array.from(new Map(paths.map(pathValue => [pathValue.join('>'), pathValue])).values());
   }
 
   read(componentSelector = ''): MemoryLabReadResult {

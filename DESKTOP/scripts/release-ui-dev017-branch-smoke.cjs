@@ -387,6 +387,35 @@ async function evaluate(cdp, expression) {
     if (pageSwitchResult.pagerStopCalls !== 0 || pageSwitchResult.pagerActivationCalls !== 0) fail(`page inspection stopped or activated a runtime branch: ${JSON.stringify(pageSwitchResult)}`);
     if (!pageSwitchResult.activated || pageSwitchResult.stopCalls !== 0 || pageSwitchResult.activationCalls !== 0 || pageSwitchResult.runtimeBranchId !== 'tree-edited') fail(`returning to the running page unexpectedly stopped or reactivated its branch: ${JSON.stringify(pageSwitchResult)}`);
 
+    const completedBranchPagerResult = await evaluate(cdp, `(() => {
+      const original = { id: 'completed-original', sourceMessageIndex: 0, sourceMessageId: 'completed-original-message' };
+      const edited = { id: 'completed-edited', sourceMessageIndex: 0, sourceMessageId: 'completed-edited-message' };
+      const before = {
+        activeBranchId: edited.id,
+        runtimeBranchId: edited.id,
+        branchGroupId: 'completed-group',
+        branchGroups: [{ id: 'completed-group', sourceMessageIndex: 0, sourceMessageId: original.sourceMessageId, activeBranchId: edited.id, branches: [original, edited] }],
+      };
+      hydrateConversationBranchState(before);
+      renderChatMessages([{ role: 'user', content: 'EDITED_RUNNING', messageId: edited.sourceMessageId }]);
+      const runningPager = document.querySelector('.conversation-branch-pager')?.textContent || '';
+      const completed = Object.assign({}, before, {
+        branchGroups: [{ id: 'completed-group', sourceMessageIndex: 0, sourceMessageId: original.sourceMessageId, activeBranchId: edited.id, branches: [original, edited] }],
+        chatMessages: [{ role: 'user', content: 'EDITED_COMPLETED', messageId: edited.sourceMessageId }, { role: 'assistant', content: 'COMPLETED_REPLY' }],
+      });
+      completed.branchGroups[0].branches[1].sourceMessageId = edited.sourceMessageId;
+      hydrateConversationBranchState(completed);
+      renderChatMessages(completed.chatMessages);
+      const completedPager = document.querySelector('.conversation-branch-pager');
+      const completedText = completedPager?.textContent || '';
+      const completedAnchor = completedPager?.closest('.chat-msg.user')?.getAttribute('data-message-id') || '';
+      hydrateConversationBranchState({ chatMessages: completed.chatMessages });
+      renderChatMessages(completed.chatMessages);
+      const partialRefreshText = document.querySelector('.conversation-branch-pager')?.textContent || '';
+      return { runningPager, completedText, completedAnchor, partialRefreshText };
+    })()`);
+    if (completedBranchPagerResult.runningPager !== '<2/2>' || completedBranchPagerResult.completedText !== '<2/2>' || completedBranchPagerResult.completedAnchor !== 'completed-edited-message' || completedBranchPagerResult.partialRefreshText !== '<2/2>') fail(`branch pager disappeared after completion redraw or partial refresh: ${JSON.stringify(completedBranchPagerResult)}`);
+
     const guideTailIsolation = await evaluate(cdp, `(() => {
       const target = currentConversationTarget();
       const prefixEvent = { id: 'shared-prefix', sequence: 1, type: 'status', content: 'SHARED_GUIDE_PREFIX' };

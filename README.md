@@ -30,17 +30,17 @@ Newmark Agent brings model routing, persistent workspaces, tools, subagents, wor
 
 ## Download
 
-### dev-0.1.6
+### dev-0.1.7
 
-Download packages from the [dev-0.1.6 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.6).
+Download packages from the [dev-0.1.7 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.7).
 
 | Package | Platform | SHA-256 |
 | --- | --- | --- |
-| `Newmark-Agent-0.1.6-x64.msi` | Windows x64 installer | `AC008F0BF351F25092CDD215950E3F2973C6396D745AA6DCD54FE3CC96DC8A26` |
-| `Newmark-Agent-0.1.6-win-unpacked-x64.zip` | Windows x64 portable | `7F280D0ED600C79D673AD8B772A241CB80A8648E3224872829972AAE3F226990` |
-| `Newmark-Agent-0.1.6-x86_64.AppImage` | Linux x64 AppImage | `AC8A5E2033D66DCDA97F1949DF2AB6C2806E1FA6614883E0AC95CE1F6FDFEB6F` |
-| `Newmark-Agent-0.1.6-amd64.deb` | Debian/Ubuntu x64 package | `35FE64695906F95CA6CE86C933EF624477896DFA1BA6AFDF1FE09DBB8BFA6BA9` |
-| `Newmark-Agent-0.1.6-linux-unpacked-x64.zip` | Linux x64 portable | `B7CA1150F995F0CF51E586857550893238EDD33BFA572BA35501C041D3CF54E1` |
+| `Newmark-Agent-0.1.7-x64.msi` | Windows x64 installer | `DDACFC5005FA0EFAE2496E56F88975A2EDDB640540235F7F2009B3D1A905F098` |
+| `Newmark-Agent-0.1.7-win-unpacked-x64.zip` | Windows x64 portable | `0564B7BC182589630549523303356EFA76ED92AE86525226931C21D94582B06F` |
+| `Newmark-Agent-0.1.7-x86_64.AppImage` | Linux x64 AppImage | `AC90395F1ED35F6FAAF4B2873D992A26C9F15049E15F571ADEBD00B9AC5D776F` |
+| `Newmark-Agent-0.1.7-amd64.deb` | Debian/Ubuntu x64 package | `A826F2EB1C961C54D58BF7DFA4C88109398A909A40E6E048CFC3074216808A75` |
+| `Newmark-Agent-0.1.7-linux-unpacked-x64.zip` | Linux x64 portable | `75DC6C60AD8520986A6CF85A10452D41454F34711A6E16E388A6873B941F3863` |
 
 The Windows MSI requests administrator elevation. Windows and Linux may show an unknown-publisher warning because the packages are not code-signed.
 
@@ -189,6 +189,7 @@ See [OVERVIEW.md](OVERVIEW.md) for the source tree, subsystem responsibilities, 
 
 ### Maintenance Log
 
+- 2026-07-25: Fixed the dev-0.1.7 inline branch pager disappearing after Build completion or a partial state refresh. Branch metadata now hydrates before destructive transcript redraw and partial responses preserve fields they do not contain; packaged Electron, ZIP, and MSI smoke tests passed. See `archive/20260725-dev-0.1.7-branch-pager-completion-fix.md`.
 - 2026-07-25: Rebuilt conversation persistence as a validated tree with a full node index directory, stable viewed-path editing, per-page anchors, cloned Guide Builds, runtime completion isolation, old-version failure canary, and deep/wide branch stress coverage. See `archive/20260725-dev-0.1.7-branch-tree-stability.md`.
 - 2026-07-25: Repaired consumer startup and config-refresh reliability for `dev-0.1.7`. The installed payload is now hash-verified, stale temporary shortcuts are removed, one-shot startup state cannot survive a normal reload, runtime cleanup is bounded, renderer/second-instance recovery is explicit, and running Builds show compact changed-file totals. See `archive/20260725-dev-0.1.7-desktop-stability.md`.
 - 2026-07-24: Repaired and locally installed the final `dev-0.1.7` Windows build. Real packaged Electron validation now proves `<1/2>`-style navigation stays under the edited node, Guide exposes Copy/Edit, branch switching replaces old Build runs, and edited-file icon/text geometry matches terminal activity rows. See `archive/20260724-dev-0.1.7-local-install.md`.
@@ -218,6 +219,7 @@ Generated directories such as `DESKTOP/dist/` and `release/` are not source file
 ## Platform Notes
 
 - 2026-07-24: Fixed nested edit pagination so a Guide edit preserves an existing Build-start page group and all earlier path information. Packaged UI validation confirms independent start and Guide pagers; see `archive/20260724-nested-start-guide-branch-pagination.md`.
+- 2026-07-25: Queue, Next, and Goal stay bound to the running branch even while a sibling is viewed. The Queue header now has pause/resume beside expand; pausing preserves the queue, activating another running branch atomically rebinds the whole queue, and an explicit Stop/Force Stop pauses injection automatically.
 
 - **Windows:** primary desktop and Computer Use platform; native and WSL Agent backends are available.
 - **Linux:** GUI, CLI, terminal, packaging, and normal Agent tools are supported; Windows desktop Computer Use is unavailable.

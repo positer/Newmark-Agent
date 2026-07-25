@@ -2393,21 +2393,27 @@ export class Agent {
     const stored = this.readStoredConversationState();
     const persisted = stateKey && stored.conversations ? stored.conversations[stateKey] : undefined;
     const tree = persisted ? this.normalizeConversationTree(persisted) : null;
+    const runtimeNodeId = String(tree?.activeNodeId || '');
+    const viewedNodeId = tree
+      ? this.resolveConversationTreePath(tree, this.storedConversationTreePath(tree, persisted?.viewedBranchNodePath, runtimeNodeId))
+      : '';
+    const viewedNode = tree?.nodes[viewedNodeId];
+    const viewingRuntimeNode = !viewedNode || viewedNodeId === runtimeNodeId;
     // A live run intentionally does not flush every text/tool delta to disk.
     // Snapshot callers must therefore observe the active in-memory state; an
     // older persisted start event must never mask newer public work events.
     const persistedMessagesAvailable = persisted?.chatMessages !== undefined;
-    const sourceChatMessages = isActiveConversation
+    const sourceChatMessages = isActiveConversation && viewingRuntimeNode
       ? this.chatMessages
-      : (persisted?.chatMessages ?? memory?.chatMessages ?? []);
-    const history = isActiveConversation
+      : (viewedNode?.chatMessages ?? persisted?.chatMessages ?? memory?.chatMessages ?? []);
+    const history = isActiveConversation && viewingRuntimeNode
       ? this.history
-      : (persistedMessagesAvailable ? (persisted?.history ?? []) : (memory?.history ?? persisted?.history ?? []));
-    const chatMessages = isActiveConversation
+      : (viewedNode?.history ?? (persistedMessagesAvailable ? (persisted?.history ?? []) : (memory?.history ?? persisted?.history ?? [])));
+    const chatMessages = isActiveConversation && viewingRuntimeNode
       ? sourceChatMessages
       : this.normalizeConversationChatMessages(sourceChatMessages, history);
-    const workRuns = this.normalizeWorkRuns(isActiveConversation ? this.workRuns : (persisted?.workRuns || memory?.workRuns));
-    const continuations = this.normalizeContinuations(isActiveConversation ? this.continuations : (persisted?.continuations || memory?.continuations));
+    const workRuns = this.normalizeWorkRuns(isActiveConversation && viewingRuntimeNode ? this.workRuns : (viewedNode?.workRuns || persisted?.workRuns || memory?.workRuns));
+    const continuations = this.normalizeContinuations(isActiveConversation && viewingRuntimeNode ? this.continuations : (viewedNode?.continuations || persisted?.continuations || memory?.continuations));
     return {
       conversationId: clean,
       conversations: this.listConversationStates(),
@@ -2425,12 +2431,15 @@ export class Agent {
       mode: isActiveConversation ? this.mode : (persisted?.mode || memory?.mode || 'build'),
       goal: isActiveConversation ? this.serializeGoal() : (persisted?.goal || memory?.goal || null),
       branches: this.branchGroupMetadata(tree),
-      activeBranchId: String(tree?.activeNodeId || ''),
-      runtimeBranchId: String(tree?.activeNodeId || ''),
-      viewedBranchNodePath: this.storedConversationTreePath(tree, persisted?.viewedBranchNodePath, String(tree?.activeNodeId || '')),
-      runtimeBranchNodePath: this.treePath(tree, String(tree?.activeNodeId || '')),
+      // The snapshot's active identity is the runtime branch.  A viewed
+      // sibling is carried separately so queue/goal/run routing can never
+      // accidentally bind to the page being inspected.
+      activeBranchId: runtimeNodeId || viewedNodeId,
+      runtimeBranchId: runtimeNodeId,
+      viewedBranchNodePath: this.treePath(tree, viewedNodeId || runtimeNodeId),
+      runtimeBranchNodePath: this.treePath(tree, runtimeNodeId),
       branchGroupId: String(tree?.activeGroupId || ''),
-      branchGroups: this.branchGroupsForNode(tree),
+      branchGroups: this.branchGroupsForNode(tree, runtimeNodeId || viewedNodeId),
       branchIndexDirectory: { ...(tree?.nodeIndex || {}) },
     };
   }
@@ -5037,6 +5046,7 @@ export class Agent {
   private async prepareMemoryLabUpdate(input: MemoryLabUpdateInput, signal?: AbortSignal): Promise<MemoryLabPreparedUpdate> {
     throwIfAgentAborted(signal);
     const deterministic = this.memoryLab.prepareUpdate(input);
+    const existing = this.memoryLab.read().index;
     const provider = this.engineModel();
     if (!provider) return deterministic;
     const system = [
@@ -5044,15 +5054,29 @@ export class Agent {
       'Clean and organize one persistent memory component for Newmark Memory Lab.',
       'Return only JSON with keys: name, description, tags, tagPaths, content, kind.',
       'Keep tag names independent and prefixed with #. Express hierarchy only through tagPaths. A tag may have multiple parents and children. Preserve technical facts. Do not invent facts.',
+      'You are given the complete existing tag DAG and component membership. Reuse an existing tag node and its established parent paths whenever it fits. Never return an existing non-root tag as a bare root-only path.',
       'The content must be Markdown for the core memory component.',
     ].join('\n');
     const prompt = JSON.stringify({
       request: 'Organize this Memory Lab update.',
       input: deterministic,
+      existingTagGraph: Object.fromEntries(Object.entries(existing.tags).map(([tag, node]) => [tag, {
+        parents: node.parents,
+        children: node.children,
+        components: node.components,
+        aliases: node.aliases,
+      }])),
+      existingComponents: Object.fromEntries(Object.entries(existing.components).map(([slug, component]) => [slug, {
+        name: component.name,
+        description: component.description,
+        tags: component.tags,
+        tagPaths: component.tagPaths,
+      }])),
       tagRules: [
         'Use ["#物理", "#理论物理"] rather than a legacy path node such as #物理/理论物理.',
         'A hyphen is part of a tag name and may replace a space; never interpret #Theoretical-Physics as a hierarchy.',
         'Multiple paths may share a child, for example ["#数学", "#理论物理"].',
+        'If an output tag already exists and has parents, include at least one complete established parent path ending at that tag.',
         'Use concise descriptions.',
       ],
     }, null, 2);
@@ -5064,7 +5088,7 @@ export class Agent {
       );
       const parsed = this.extractMemoryLabJson(response);
       if (!parsed) return deterministic;
-      return this.memoryLab.prepareUpdate({
+      const prepared = this.memoryLab.prepareUpdate({
         name: String(parsed.name || deterministic.name),
         description: String(parsed.description || deterministic.description),
         tags: Array.isArray(parsed.tags) ? parsed.tags.map(String) : deterministic.tags,
@@ -5072,6 +5096,21 @@ export class Agent {
         content: String(parsed.content || deterministic.content),
         kind: parsed.kind === 'folder' ? 'folder' : deterministic.kind,
       });
+      const pathKeys = new Set(prepared.tagPaths.map(pathValue => pathValue.join('>')));
+      for (const tag of prepared.tags) {
+        const node = existing.tags[tag];
+        if (!node?.parents?.length) continue;
+        const existingPaths = this.memoryLab.tagPathsEndingAt(existing, tag);
+        if (prepared.tagPaths.some(pathValue => pathValue.at(-1) === tag && pathValue.length > 1)) continue;
+        for (const pathValue of existingPaths) {
+          const key = pathValue.join('>');
+          if (!pathKeys.has(key)) {
+            prepared.tagPaths.push(pathValue);
+            pathKeys.add(key);
+          }
+        }
+      }
+      return this.memoryLab.prepareUpdate(prepared);
     } catch {
       throwIfAgentAborted(signal);
       return deterministic;
@@ -5804,6 +5843,7 @@ export class Agent {
       `- Agent terminal timeout: bash accepts per-call timeout_ms; timeout_ms=0 requests no limit; terminal.interrupt_timeout_ms=${this.config.getNum('terminal', 'interrupt_timeout_ms')} is a nonzero upper cap, and 0 means no cap.`,
       `- Automation: automation_create/list/update/toggle/delete manage persisted schedules through the active Newmark scheduler when available; Plan may only list automations, and subagents cannot manage automation.`,
       '- Memory Lab exists and provides persistent memory.',
+      '- Before memory_lab_update, call memory_lab_read and use its complete existing tag DAG and component tagPaths. Reuse established parent paths for existing tags; do not register an existing child tag by itself as a new root.',
       '- Build history disclosure is two-layered. The request prompt contains only each historical Build Block user input, final summary, and completion status. Use build_history_query only when the current user asks for concrete work details from one Build Block; querying history is read-only and never authorizes resuming that work.',
       '- A memory_lab_update or memory_lab_reindex call is unfinished until its awaited tool result contains rebuildReceipt.completed=true. The completion receipt is represented by the tool activity inside the current Build block and should not be repeated as a separate completion message.',
       `- Skills and subagents: skill searches enabled metadata and loads one SKILL.md body on demand; skill_download installs offline skill folders; task creates constrained subagents tracked in agent state.`,

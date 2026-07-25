@@ -2276,6 +2276,9 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .conversation-work-run.collapsed .conversation-work-run-chevron { transform: rotate(-45deg); }
 .conversation-work-run-title { flex: 1; min-width: 0; }
 .conversation-work-run-status { color: var(--text-dim); font: 10px var(--font-mono); }
+.conversation-work-change-badge { display:inline-flex; align-items:center; gap:8px; margin-left:auto; padding:5px 10px; border:1px solid var(--border); border-radius:999px; background:var(--panel); color:var(--text-dim); font-size:11px; white-space:nowrap; }
+.conversation-work-change-badge .add { color:#2fd67b; }
+.conversation-work-change-badge .del { color:#ff5e67; }
 .conversation-work-run-body { border: 0; padding: 4px var(--work-run-right-safe) 8px 0; }
 .conversation-work-run.collapsed .conversation-work-run-body { display: none; }
 .work-run-collapsed-guides { display: none; }
@@ -8150,6 +8153,28 @@ function workRunTitle(run) {
   return 'Processed ' + duration;
 }
 
+function workRunChangedFiles(run) {
+  var files = {};
+  (run && run.events || []).forEach(function(event) {
+    if (String(event && event.type || '').toLowerCase() !== 'tool_call') return;
+    var edited = workToolEditedFile(event);
+    if (edited) files[edited.path] = edited;
+  });
+  var list = Object.keys(files).map(function(path) { return files[path]; });
+  return {
+    count: list.length,
+    added: list.reduce(function(total, file) { return total + Number(file.added || 0); }, 0),
+    deleted: list.reduce(function(total, file) { return total + Number(file.deleted || 0); }, 0)
+  };
+}
+
+function workRunChangeBadge(run) {
+  var changes = workRunChangedFiles(run);
+  if (!changes.count) return '';
+  var label = currentLang() === 'zh' ? changes.count + ' 个文件已更改' : changes.count + (changes.count === 1 ? ' file changed' : ' files changed');
+  return '<span class="conversation-work-change-badge"><span>' + esc(label) + '</span><span class="add">+' + changes.added + '</span><span class="del">-' + changes.deleted + '</span></span>';
+}
+
 function workEventIcon(type) {
   type = String(type || 'status').toLowerCase();
   if (type === 'tool_commands') return 'square-terminal';
@@ -8543,6 +8568,7 @@ function updateConversationWorkRunElement(run, element) {
   element.setAttribute('data-runtime-key', runtimeKeyFor(run.target && run.target.workspaceId, run.target && run.target.conversationId));
   element.innerHTML = '<button class="conversation-work-run-head" type="button" onclick="window.toggleConversationWorkRun(this)">' +
     '<span class="conversation-work-run-title">' + esc(workRunTitle(run)) + '</span>' +
+    workRunChangeBadge(run) +
     '<span class="conversation-work-run-status">' + esc(String(run.status || '')) + '</span>' +
     '<span class="conversation-work-run-chevron" aria-hidden="true"></span></button>' +
     '<div class="conversation-work-run-body">' + renderWorkRunEvents(run, expanded) + '</div>';
@@ -17421,6 +17447,9 @@ function schedulePostStartupUiRendering() {
         }
       });
       if (!readyAck || readyAck.accepted !== true) throw new Error('Main process rejected the UI readiness handshake');
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, document.title, window.location.pathname + window.location.hash);
+      }
       var startupCover = document.getElementById('startup-cover');
       if (startupCover) startupCover.remove();
       document.documentElement.classList.remove('startup-prewarm');

@@ -262,6 +262,20 @@ async function runUiCheck(root) {
     const browserOpenMs = Date.now() - browserStartedAt;
     if (browserOpenMs > 2500) fail(`first Browser open exceeded the 2.5s single-run smoke tolerance: ${browserOpenMs}ms`);
     if (browserState.count !== 1 || browserState.partition !== 'persist:newmark-browser') fail(`Browser guest lifecycle mismatch: ${JSON.stringify(browserState)}`);
+    const cleanStartupUrl = await evaluate(cdp, `({ href: location.href, prewarm: new URLSearchParams(location.search).has('startupPrewarm') })`);
+    if (cleanStartupUrl.prewarm) fail(`one-shot startup query survived UI promotion: ${JSON.stringify(cleanStartupUrl)}`);
+    const reloadResult = await evaluate(cdp, `window.api.reloadGlobalConfig()`);
+    if (!reloadResult || reloadResult.error) fail(`config refresh failed: ${JSON.stringify(reloadResult)}`);
+    await evaluate(cdp, `location.reload(); true`);
+    await waitFor(cdp, `(() => {
+      const cover = document.querySelector('#startup-cover');
+      return document.readyState === 'complete'
+        && !!window.api
+        && !!document.querySelector('#prompt')
+        && !document.documentElement.classList.contains('startup-prewarm')
+        && (!cover || getComputedStyle(cover).display === 'none');
+    })()`, 15000, 'config refresh reload without startup deadlock');
+    log('config refresh returned and reloaded without restoring the startup barrier');
     log(`companion files and default internal workspace recovered ok; startupMs=${startupMs}; browserOpenMs=${browserOpenMs}; window=${windowText}`);
     await captureScreenshot(cdp, screenshotPath);
   } finally {

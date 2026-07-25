@@ -57,6 +57,7 @@ import { McpManager } from './core/mcpManager';
 
 const APP_NAME = 'Newmark Agent';
 const APP_ID = 'ai.newmark.agent';
+const CONFIG_RELOAD_RUNTIME_TIMEOUT_MS = 6_000;
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'newmark-preview',
@@ -653,6 +654,21 @@ function registeredBrowserGuest(hostContentsId?: number): Electron.WebContents |
   return null;
 }
 
+async function boundedOperation<T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function registerBrowserGuest(host: Electron.WebContents, guest: Electron.WebContents): boolean {
   if (host.isDestroyed() || guest.isDestroyed() || guest.getType() !== 'webview' || guest.hostWebContents?.id !== host.id) return false;
   browserGuestContentsByHost.set(host.id, guest.id);
@@ -939,6 +955,7 @@ if (hasCliCommand) {
   let startupAttempt = 0;
   let startupAttemptPromise: Promise<{ ok: boolean; error?: string }> | null = null;
   let createDesktopWindow: ((loadUi?: boolean, showWindow?: boolean, attemptId?: number) => BrowserWindow | null) | null = null;
+  let showDesktopWindow: (() => void) | null = null;
 
   async function startSidecar(root: string): Promise<number> {
     if (sidecarProcess && sidecarPort > 0) return sidecarPort;
@@ -1003,6 +1020,12 @@ if (hasCliCommand) {
       if (win.isMinimized()) win.restore();
       win.show();
       win.focus();
+      if (win.webContents.isCrashed()) win.reload();
+      return;
+    }
+    showDesktopWindow?.();
+    if (!showDesktopWindow) {
+      app.whenReady().then(() => showDesktopWindow?.()).catch(error => logStartupFailure('second-instance-window-recovery', error));
     }
   });
 
@@ -1124,6 +1147,7 @@ if (hasCliCommand) {
       win.show();
       win.focus();
     };
+    showDesktopWindow = showMainWindow;
 
     const registerUiReadiness = (win: BrowserWindow, attemptId: number): void => {
       const webContentsId = win.webContents.id;
@@ -1241,6 +1265,17 @@ if (hasCliCommand) {
       win.webContents.on('did-attach-webview', (_event, contents) => {
         contents.on('will-prevent-unload', event => event.preventDefault());
         if (contents.session === session.fromPartition('persist:newmark-browser')) registerBrowserGuest(win.webContents, contents);
+      });
+      win.webContents.on('render-process-gone', (_event, details) => {
+        if (_forceQuit || win.isDestroyed()) return;
+        logStartupFailure('renderer-process-gone', new Error(`${details.reason} (exit ${details.exitCode})`));
+        setTimeout(() => {
+          if (win.isDestroyed()) return;
+          if (startupComplete) win.reload();
+          else void runStartupAttempt();
+          win.show();
+          win.focus();
+        }, 150);
       });
       if (!automationWakeMode) win.maximize();
       if (!automationWakeMode && showWindow) {
@@ -2506,10 +2541,19 @@ if (hasCliCommand) {
         if (agent.workspace.current) agent.config.loadWorkspaceConfig(agent.workspace.current.path);
         agent.invalidateSystemPrompt();
         agent.reconcileConversationModelSelection();
-        await Promise.all([
-          electronUtilityRuntimePool?.stopAll(),
-          wslAgentRuntimePool?.stopAll(),
-        ]);
+        const pools = [electronUtilityRuntimePool?.stopAll(), wslAgentRuntimePool?.stopAll()].filter(
+          (operation): operation is Promise<void> => !!operation,
+        );
+        if (pools.length) {
+          await boundedOperation(
+            Promise.allSettled(pools).then(results => {
+              const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+              if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Runtime cleanup failed');
+            }),
+            CONFIG_RELOAD_RUNTIME_TIMEOUT_MS,
+            'Config refresh runtime cleanup',
+          );
+        }
         conversationKernel = null;
         return { ok: true, path: path.join(agent.rootPath, 'config.json') };
       } catch (error) {

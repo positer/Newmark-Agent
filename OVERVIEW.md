@@ -1,5 +1,11 @@
 # Newmark Agent Overview
 
+## dev-0.1.7 Consumer Stability Follow-up (2026-07-25)
+
+Windows launch failures were traced to a missing installed `resources/app.asar`, stale Start menu shortcuts that targeted removed temporary builds, and a config-refresh reload that retained the one-shot startup-prewarm query. The repaired desktop removes that query after promotion, bounds runtime cleanup during config reload, recovers a crashed renderer, and routes second-instance recovery through the existing window lifecycle. Running Build headers also expose a compact unique-file and line-change badge.
+
+The rebuilt machine-wide package is installed at `C:\Program Files\Newmark Agent`. Five packaged cold-start/config-refresh cycles and five installed desktop-shortcut launches passed, with installed shortcut visibility in 0.997-1.605 seconds. The installed `app.asar` matches the packaged SHA-256 `D36089BE1323632B6AEE3DF6C9813BE2A39FBBDC7411DBA9E379E7559A35B2BE`. Full evidence is in `archive/20260725-dev-0.1.7-desktop-stability.md`.
+
 ## dev-0.1.7 Branch Pagination and UI Fix (2026-07-24)
 
 Source version advanced to `dev-0.1.7`. Conversation branch navigation now uses compact inline arrow text with mouse and keyboard activation, and edited historical messages hide the original Build behind page navigation instead of appending it below the active branch. Submitting an edit stops only the targeted conversation/run, enters the new page, and runs the edited instruction. Guide rows expose Copy/Edit; Guide edits copy their owning Build only through the events before that Guide. Branch switching replaces cached WorkRuns, while persistence treats `branchReset` as replacement rather than merge. Guide/Next is a user-wide preference rather than a conversation-local value. Recently persisted running Builds are restored across conversation switches, queue and Goal rows are hidden while their content is edited in the main input, context-compression completion is represented inside the owning Build, and completed Builds plus inline file details use corrected disclosure defaults.

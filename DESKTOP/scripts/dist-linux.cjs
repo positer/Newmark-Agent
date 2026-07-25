@@ -76,7 +76,9 @@ function runNativeLinuxBuild() {
   log('running native Linux electron-builder path');
   run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:clean']);
   const builder = path.join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'electron-builder.cmd' : 'electron-builder');
-  run(builder, ['--linux']);
+  // Packaging must remain a local, deterministic step. Release upload is a
+  // separate explicit workflow and must never be inferred from CI/GH env vars.
+  run(builder, ['--linux', '--publish', 'never']);
 
   const appImage = path.join(releaseDir, `Newmark-Agent-${version}-x86_64.AppImage`);
   const deb = path.join(releaseDir, `Newmark-Agent-${version}-amd64.deb`);

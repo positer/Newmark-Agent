@@ -545,6 +545,7 @@ export class Agent {
   private normalizeConversationTree(entry: StoredConversationEntry): ConversationTreeState | null {
     const raw = entry.tree;
     if (raw?.version === 1 && raw.nodes && raw.nodes[raw.activeNodeId]) {
+      this.coalesceConversationBranchGroups(raw);
       entry.activeBranchId = raw.activeNodeId;
       entry.activeBranchGroupId = raw.activeGroupId;
       return raw;
@@ -576,6 +577,26 @@ export class Agent {
     entry.activeBranchId = activeNodeId;
     entry.activeBranchGroupId = groupId;
     return tree;
+  }
+
+  private coalesceConversationBranchGroups(tree: ConversationTreeState): void {
+    let merged = true;
+    while (merged) {
+      merged = false;
+      const groups = Object.values(tree.branchGroups);
+      for (let leftIndex = 0; leftIndex < groups.length && !merged; leftIndex++) {
+        const left = groups[leftIndex];
+        for (let rightIndex = leftIndex + 1; rightIndex < groups.length; rightIndex++) {
+          const right = groups[rightIndex];
+          if (left.sourceMessageIndex !== right.sourceMessageIndex || !right.nodeIds.some(id => left.nodeIds.includes(id))) continue;
+          left.nodeIds = [...new Set([...left.nodeIds, ...right.nodeIds])];
+          if (tree.activeGroupId === right.id) tree.activeGroupId = left.id;
+          delete tree.branchGroups[right.id];
+          merged = true;
+          break;
+        }
+      }
+    }
   }
 
   private treeNodeFromEntry(id: string, parentId: string | null, sourceMessageIndex: number, sourceText: string, entry: StoredConversationEntry, createdAt?: string): ConversationTreeNode {
@@ -2303,13 +2324,18 @@ export class Agent {
     return this.getConversationSnapshot(clean);
   }
 
-  public branchConversation(conversationId: string, messageIndex: number, editedText: string): ConversationSnapshot {
+  public branchConversation(conversationId: string, messageIndex: number, editedText: string, locator?: { clientMessageId?: string; runId?: string }): ConversationSnapshot {
     const clean = this.safeConversationId(conversationId || 'default');
     const text = String(editedText || '').trim();
     if (!text) throw new Error('Edited message cannot be empty.');
     this.saveWorkspaceConversationState(true);
     const snapshot = this.getConversationSnapshot(clean);
-    const index = Math.floor(Number(messageIndex));
+    const requestedIndex = Math.floor(Number(messageIndex));
+    const clientMessageId = String(locator?.clientMessageId || '');
+    const runId = String(locator?.runId || '');
+    const stableIndex = clientMessageId ? snapshot.chatMessages.findIndex(message =>
+      String(message.clientMessageId || '') === clientMessageId && (!runId || String(message.runId || '') === runId)) : -1;
+    const index = stableIndex >= 0 ? stableIndex : requestedIndex;
     const target = snapshot.chatMessages[index];
     if (!Number.isFinite(index) || index < 0 || !target || target.role !== 'user') {
       throw new Error('Conversation branch target must be a user message.');
@@ -2360,9 +2386,12 @@ export class Agent {
           guides,
         }];
       }
+      if (targetRunId && run.runId === targetRunId) return [];
       const boundary = String(run.endedAt || run.startedAt || '');
       return boundary && boundary < String(target.timestamp || '') ? [run] : [];
     });
+    const reusableGroup = Object.values(tree.branchGroups).find(group =>
+      group.sourceMessageIndex === index && group.nodeIds.includes(parentNodeId));
     const branchId = crypto.randomUUID();
     const branch = this.treeNodeFromEntry(branchId, parentNodeId, index, text, {
       ...entry,
@@ -2372,14 +2401,17 @@ export class Agent {
       continuations: [],
     });
     tree.nodes[branchId] = branch;
-    const groupId = crypto.randomUUID();
-    tree.branchGroups[groupId] = {
-      id: groupId,
-      sourceNodeId: parentNodeId,
-      sourceMessageIndex: index,
-      createdAt: new Date().toISOString(),
-      nodeIds: [parentNodeId, branchId],
-    };
+    const groupId = reusableGroup?.id || crypto.randomUUID();
+    if (reusableGroup) reusableGroup.nodeIds.push(branchId);
+    else {
+      tree.branchGroups[groupId] = {
+        id: groupId,
+        sourceNodeId: parentNodeId,
+        sourceMessageIndex: index,
+        createdAt: new Date().toISOString(),
+        nodeIds: [parentNodeId, branchId],
+      };
+    }
     tree.activeNodeId = branchId;
     tree.activeGroupId = groupId;
     entry.tree = tree;

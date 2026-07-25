@@ -43,7 +43,7 @@ contextBridge.exposeInMainWorld('api', {
   saveGlobalPrompt: (content: string) => ipcRenderer.invoke('agent:saveGlobalPrompt', content),
   abortConversation: (target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:abortConversation', target),
   rewindConversation: (target: string | Record<string, unknown>, messageIndex: number) => ipcRenderer.invoke('agent:rewindConversation', target, messageIndex),
-  branchConversation: (target: string | Record<string, unknown>, messageIndex: number, text: string) => ipcRenderer.invoke('agent:branchConversation', target, messageIndex, text),
+  branchConversation: (target: string | Record<string, unknown>, messageIndex: number, text: string, locator?: Record<string, unknown>) => ipcRenderer.invoke('agent:branchConversation', target, messageIndex, text, locator),
   inspectConversationBranch: (target: string | Record<string, unknown>, branchId: string, branchGroupId?: string) => ipcRenderer.invoke('agent:inspectConversationBranch', target, branchId, branchGroupId),
   activateConversationBranch: (target: string | Record<string, unknown>, branchId: string, branchGroupId?: string) => ipcRenderer.invoke('agent:activateConversationBranch', target, branchId, branchGroupId),
   archive: (target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:archive', target),

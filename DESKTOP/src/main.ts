@@ -2620,13 +2620,13 @@ if (hasCliCommand) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
     });
-    ipcMain.handle('agent:branchConversation', async (_event, targetInput: ConversationTargetInput, messageIndex: number, text: string) => {
+    ipcMain.handle('agent:branchConversation', async (_event, targetInput: ConversationTargetInput, messageIndex: number, text: string, locator?: { clientMessageId?: string; runId?: string }) => {
       if (!agent) return { error: 'Agent not initialized' };
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
       try {
         const snapshot = await mutateTargetConversation(target, () => {
           const isolated = isolatedConversationAgent(target);
-          return isolated.branchConversation(target.conversationId, messageIndex, text);
+          return isolated.branchConversation(target.conversationId, messageIndex, text, locator);
         });
         return { ...snapshot, queued: { steering: [], followUp: [] }, workEvents: [] };
       } catch (error) {

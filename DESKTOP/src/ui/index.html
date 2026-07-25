@@ -7052,15 +7052,143 @@ async function stopTargetConversationForMessageEdit(target) {
   }
 }
 
+function cloneConversationRenderValue(value) {
+  return JSON.parse(JSON.stringify(value === undefined ? null : value));
+}
+
+function restoreProvisionalEditedBranch(snapshot, target) {
+  if (!snapshot || !isActiveConversationTarget(target)) return;
+  state.conversationBranches = snapshot.branches;
+  state.conversationBranchGroups = snapshot.branchGroups;
+  state.activeConversationBranchId = snapshot.activeBranchId;
+  state.runtimeConversationBranchId = snapshot.runtimeBranchId;
+  state.activeConversationBranchGroupId = snapshot.activeBranchGroupId;
+  syncWorkRunsSnapshot(snapshot.workRuns, target);
+  renderChatMessages(snapshot.messages);
+}
+
+function renderProvisionalEditedBranch(message, messageIndex, editedText, target, editingGuide) {
+  var currentMessages = cloneConversationRenderValue(Array.isArray(state.renderedChatMessages) ? state.renderedChatMessages : []) || [];
+  var currentRuns = cloneConversationRenderValue(workRunsForTarget(target)) || [];
+  var snapshot = {
+    messages: currentMessages,
+    workRuns: currentRuns,
+    branches: cloneConversationRenderValue(state.conversationBranches || []) || [],
+    branchGroups: cloneConversationRenderValue(state.conversationBranchGroups || []) || [],
+    activeBranchId: String(state.activeConversationBranchId || ''),
+    runtimeBranchId: String(state.runtimeConversationBranchId || ''),
+    activeBranchGroupId: String(state.activeConversationBranchGroupId || '')
+  };
+  var original = currentMessages[messageIndex] || {};
+  var targetRunElement = message && message.closest ? message.closest('.conversation-work-run') : null;
+  var targetRunId = String(
+    message && message.getAttribute && message.getAttribute('data-run-id') ||
+    targetRunElement && targetRunElement.getAttribute('data-run-id') ||
+    original.runId || ''
+  );
+  var targetGuideId = editingGuide ? String(message && message.getAttribute && message.getAttribute('data-client-message-id') || original.clientMessageId || '') : '';
+  var provisionalGuideId = editingGuide ? 'provisional-guide-' + Date.now() + '-' + Math.random().toString(16).slice(2) : '';
+  var provisionalMessages = currentMessages.slice(0, Math.max(0, messageIndex));
+  var editedMessage = Object.assign({}, original, {
+    role: 'user',
+    content: String(editedText || ''),
+    runId: targetRunId,
+    timestamp: new Date().toISOString()
+  });
+  if (editingGuide) editedMessage.clientMessageId = provisionalGuideId;
+  else delete editedMessage.clientMessageId;
+  provisionalMessages.push(editedMessage);
+
+  var provisionalRuns = currentRuns.flatMap(function(run) {
+    if (!targetRunId || String(run && run.runId || '') !== targetRunId) return [run];
+    if (!editingGuide) return [];
+    var copiedRun = cloneConversationRenderValue(run);
+    var events = Array.isArray(copiedRun.events) ? copiedRun.events : [];
+    var guideIndex = events.findIndex(function(event) {
+      var guide = event && event.guide || {};
+      return String(event && event.clientMessageId || guide.clientMessageId || '') === targetGuideId;
+    });
+    copiedRun.events = guideIndex >= 0 ? events.slice(0, guideIndex) : events.filter(function(event) {
+      var guide = event && event.guide || {};
+      return String(event && event.clientMessageId || guide.clientMessageId || '') !== targetGuideId;
+    });
+    var lastSequence = copiedRun.events.reduce(function(max, event) { return Math.max(max, Number(event && event.sequence || 0)); }, 0);
+    var createdAt = new Date().toISOString();
+    copiedRun.events.push({
+      id: 'provisional-edited-guide-' + provisionalGuideId,
+      type: 'guide_applied',
+      content: String(editedText || ''),
+      workspaceId: target.workspaceId,
+      conversationId: target.conversationId,
+      runId: targetRunId,
+      sequence: lastSequence + 1,
+      timestamp: createdAt,
+      clientMessageId: provisionalGuideId,
+      guide: {
+        clientMessageId: provisionalGuideId,
+        runId: targetRunId,
+        status: 'applied',
+        content: String(editedText || ''),
+        createdAt: createdAt
+      }
+    });
+    copiedRun.status = 'interrupted';
+    copiedRun.endedAt = createdAt;
+    return [copiedRun];
+  });
+
+  var provisionalGroupId = 'provisional-branch-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+  var originalBranchId = provisionalGroupId + '-original';
+  var editedBranchId = provisionalGroupId + '-edited';
+  state.conversationBranchGroups = cloneConversationRenderValue(snapshot.branchGroups) || [];
+  var reusableGroup = state.conversationBranchGroups.slice().reverse().find(function(group) {
+    return Number(group && group.sourceMessageIndex) === Number(messageIndex) && (group.branches || []).some(function(branch) {
+      return String(branch && branch.id || '') === String(group.activeBranchId || state.activeConversationBranchId || '');
+    });
+  });
+  if (reusableGroup) {
+    provisionalGroupId = String(reusableGroup.id || provisionalGroupId);
+    reusableGroup.branches.push({ id: editedBranchId, sourceMessageIndex: messageIndex });
+    reusableGroup.activeBranchId = editedBranchId;
+  } else {
+    reusableGroup = {
+      id: provisionalGroupId,
+      sourceMessageIndex: messageIndex,
+      activeBranchId: editedBranchId,
+      branches: [
+        { id: originalBranchId, sourceMessageIndex: messageIndex },
+        { id: editedBranchId, sourceMessageIndex: messageIndex }
+      ]
+    };
+    state.conversationBranchGroups.push(reusableGroup);
+  }
+  state.conversationBranches = reusableGroup.branches;
+  state.activeConversationBranchId = editedBranchId;
+  state.activeConversationBranchGroupId = provisionalGroupId;
+  syncWorkRunsSnapshot(provisionalRuns, target);
+  renderChatMessages(provisionalMessages);
+  return snapshot;
+}
+
 window.submitUserMessageEdit = async function(message, messageIndex, editedText, target) {
   var text = String(editedText || '').trim();
-  if (!text || !api.branchConversation) return;
+  var editBranchApi = branchApiOverride || api;
+  if (!text || !editBranchApi.branchConversation) return;
   var editingGuide = !!String(message && message.getAttribute && message.getAttribute('data-client-message-id') || '');
   var conversationId = String(target.conversationId || activeConversationId() || 'default');
+  var provisionalSnapshot = null;
   try {
-    if (!await stopTargetConversationForMessageEdit(target)) return;
-    var result = await api.branchConversation(target, Number(messageIndex), text);
+    provisionalSnapshot = renderProvisionalEditedBranch(message, Number(messageIndex), text, target, editingGuide);
+    if (!await stopTargetConversationForMessageEdit(target)) {
+      restoreProvisionalEditedBranch(provisionalSnapshot, target);
+      return;
+    }
+    var result = await editBranchApi.branchConversation(target, Number(messageIndex), text, {
+      clientMessageId: String(message && message.getAttribute && message.getAttribute('data-client-message-id') || ''),
+      runId: String(message && message.getAttribute && message.getAttribute('data-run-id') || message && message.closest && message.closest('.conversation-work-run') && message.closest('.conversation-work-run').getAttribute('data-run-id') || '')
+    });
     if (!result || result.error) {
+      restoreProvisionalEditedBranch(provisionalSnapshot, target);
       var reason = (result && result.error) || 'Unable to edit message.';
       showUiNotice(
         currentLang() === 'zh' ? '无法编辑历史消息：' + reason : 'Unable to edit message: ' + reason,
@@ -7091,6 +7219,7 @@ window.submitUserMessageEdit = async function(message, messageIndex, editedText,
       resumeGuideRunId: copiedGuideRun && copiedGuideRun.runId || ''
     });
   } catch (error) {
+    restoreProvisionalEditedBranch(provisionalSnapshot, target);
     var errorText = error && error.message ? error.message : String(error || 'Unable to edit message.');
     showUiNotice(
       currentLang() === 'zh' ? '无法编辑历史消息：' + errorText : 'Unable to edit message: ' + errorText,
@@ -7261,6 +7390,7 @@ function addMsg(role, text, mode, model, messageIndex, messageMeta) {
     conversationId: String(messageMeta.target.conversationId || 'default')
   } : null;
   if (Number.isFinite(Number(messageIndex)) && Number(messageIndex) >= 0) div.setAttribute('data-message-index', String(Number(messageIndex)));
+  if (messageMeta && messageMeta.runId) div.setAttribute('data-run-id', String(messageMeta.runId));
   if (messageMeta && messageMeta.clientMessageId) applyGuideMessageMeta(div, messageMeta);
   if (owningRunId && role === 'assistant') {
     div.setAttribute('data-run-id', owningRunId);
@@ -8256,7 +8386,7 @@ function renderWorkRunGuideMessage(event) {
   var clientMessageId = String(guide.clientMessageId || event.clientMessageId || '');
   var messageIndex = Number(state.guideMessageIndexByClientId && state.guideMessageIndexByClientId[clientMessageId]);
   var indexed = Number.isFinite(messageIndex) && messageIndex >= 0;
-  return '<div class="chat-msg user work-run-guide-message" data-client-message-id="' + escAttr(clientMessageId) + '"' + (indexed ? ' data-message-index="' + messageIndex + '"' : '') + '>' +
+  return '<div class="chat-msg user work-run-guide-message" data-client-message-id="' + escAttr(clientMessageId) + '" data-run-id="' + escAttr(String(guide.runId || event.runId || '')) + '"' + (indexed ? ' data-message-index="' + messageIndex + '"' : '') + '>' +
     '<div class="meta"><span class="msg-role">' + esc(t('message.user')) + '</span>' + (time ? '<span> | ' + esc(time) + '</span>' : '') +
     '<span class="guide-receipt-status ' + escAttr(status) + '">Guide · ' + esc(guideUiStatusLabel(status)) + '</span>' + messageActionsHtml('user', content, indexed ? messageIndex : -1) + '</div>' +
     '<div class="msg-body">' + renderMessageContent(content) + '</div></div>';
@@ -8760,6 +8890,7 @@ function renderPersistedToolMessage(message) {
 }
 
 function renderChatMessages(messages) {
+  state.renderedChatMessages = Array.isArray(messages) ? messages.map(function(message) { return Object.assign({}, message); }) : [];
   if (!els['chat-area']) return;
   els['chat-area'].innerHTML = '';
   var renderConversationId = activeConversationId();

@@ -256,6 +256,69 @@ async function evaluate(cdp, expression) {
     })()`);
     if (!guidePrefixResult.body.includes('BUILD_PREFIX_PROMPT') || !guidePrefixResult.body.includes('BUILD_PREFIX_ACTIVITY') || !guidePrefixResult.body.includes('EDITED_GUIDE_NODE') || !guidePrefixResult.sameWrapper || guidePrefixResult.pagerText !== '<2/2>') fail(`Guide edit did not preserve its owning Build prefix at the Guide pagination node: ${JSON.stringify(guidePrefixResult)}`);
 
+    const atomicEditResult = await evaluate(cdp, `(() => {
+      const target = currentConversationTarget();
+      const ordinaryRun = { runId: 'atomic-message-run', target, status: 'completed', expanded: true, startedAt: '2026-07-24T06:30:00.000Z', endedAt: '2026-07-24T06:30:03.000Z', primaryPrompt: 'ATOMIC_ORIGINAL_MESSAGE', events: [{ id: 'atomic-old-tail', sequence: 1, type: 'status', content: 'ATOMIC_OLD_BUILD_TAIL' }], guides: [] };
+      hydrateConversationBranchState({ activeBranchId: 'atomic-second', runtimeBranchId: 'atomic-second', branchGroupId: 'atomic-existing-group', branchGroups: [{ id: 'atomic-existing-group', sourceMessageIndex: 0, activeBranchId: 'atomic-second', branches: [{ id: 'atomic-first', sourceMessageIndex: 0 }, { id: 'atomic-second', sourceMessageIndex: 0 }] }] });
+      syncWorkRunsSnapshot([ordinaryRun], target);
+      renderChatMessages([{ role: 'user', content: 'ATOMIC_ORIGINAL_MESSAGE', runId: 'atomic-message-run' }, { role: 'assistant', content: 'ATOMIC_OLD_ANSWER', runId: 'atomic-message-run' }]);
+      const originalMessage = document.querySelector('.chat-msg.user[data-message-index="0"]');
+      const ordinarySnapshot = renderProvisionalEditedBranch(originalMessage, 0, 'ATOMIC_EDITED_MESSAGE', target, false);
+      const ordinaryBody = document.getElementById('chat-area').innerText;
+      const ordinaryPager = document.querySelector('.conversation-branch-pager');
+      restoreProvisionalEditedBranch(ordinarySnapshot, target);
+
+      const guideId = 'atomic-old-guide';
+      const guideRun = { runId: 'atomic-guide-run', target, status: 'completed', expanded: true, startedAt: '2026-07-24T06:40:00.000Z', endedAt: '2026-07-24T06:40:04.000Z', primaryPrompt: 'ATOMIC_GUIDE_BUILD_START', events: [
+        { id: 'atomic-guide-prefix', sequence: 1, type: 'status', content: 'ATOMIC_GUIDE_PREFIX' },
+        { id: 'atomic-guide-node', sequence: 2, type: 'guide_applied', content: 'ATOMIC_ORIGINAL_GUIDE', clientMessageId: guideId, guide: { clientMessageId: guideId, content: 'ATOMIC_ORIGINAL_GUIDE', status: 'applied' } },
+        { id: 'atomic-guide-tail', sequence: 3, type: 'status', content: 'ATOMIC_GUIDE_OLD_TAIL' },
+      ], guides: [] };
+      syncWorkRunsSnapshot([guideRun], target);
+      renderChatMessages([
+        { role: 'user', content: 'ATOMIC_GUIDE_BUILD_START', runId: 'atomic-guide-run' },
+        { role: 'assistant', content: 'ATOMIC_GUIDE_PREFIX_REPLY', runId: 'atomic-guide-run' },
+        { role: 'user', content: 'ATOMIC_ORIGINAL_GUIDE', runId: 'atomic-guide-run', clientMessageId: guideId },
+        { role: 'assistant', content: 'ATOMIC_GUIDE_OLD_ANSWER', runId: 'atomic-guide-run' },
+      ]);
+      const guideMessage = document.querySelector('.work-run-guide-message[data-client-message-id="' + guideId + '"]');
+      const guideSnapshot = renderProvisionalEditedBranch(guideMessage, 2, 'ATOMIC_EDITED_GUIDE', target, true);
+      const guideBody = document.getElementById('chat-area').innerText;
+      const editedGuide = Array.from(document.querySelectorAll('.work-run-guide-message')).find(node => node.innerText.includes('ATOMIC_EDITED_GUIDE'));
+      const guidePager = editedGuide && editedGuide.querySelector('.conversation-branch-pager');
+      const guideRunElement = document.querySelector('.conversation-work-run[data-run-id="atomic-guide-run"]');
+      const sameGuideBuild = !!(editedGuide && guideRunElement && editedGuide.closest('.work-run-message') === guideRunElement.closest('.work-run-message'));
+      restoreProvisionalEditedBranch(guideSnapshot, target);
+      return {
+        ordinaryBody, ordinaryPager: ordinaryPager && ordinaryPager.textContent,
+        guideBody, guidePager: guidePager && guidePager.textContent, sameGuideBuild,
+      };
+    })()`);
+    if (!atomicEditResult.ordinaryBody.includes('ATOMIC_EDITED_MESSAGE') || atomicEditResult.ordinaryBody.includes('ATOMIC_ORIGINAL_MESSAGE') || atomicEditResult.ordinaryBody.includes('ATOMIC_OLD_BUILD_TAIL') || atomicEditResult.ordinaryBody.includes('ATOMIC_OLD_ANSWER') || atomicEditResult.ordinaryPager !== '<3/3>') fail(`ordinary repeated edit did not reuse the existing pager or hide the original branch before persistence: ${JSON.stringify(atomicEditResult)}`);
+    if (!atomicEditResult.guideBody.includes('ATOMIC_GUIDE_BUILD_START') || !atomicEditResult.guideBody.includes('ATOMIC_GUIDE_PREFIX') || !atomicEditResult.guideBody.includes('ATOMIC_EDITED_GUIDE') || atomicEditResult.guideBody.includes('ATOMIC_ORIGINAL_GUIDE') || atomicEditResult.guideBody.includes('ATOMIC_GUIDE_OLD_TAIL') || atomicEditResult.guideBody.includes('ATOMIC_GUIDE_OLD_ANSWER') || atomicEditResult.guidePager !== '<2/2>' || !atomicEditResult.sameGuideBuild) fail(`Guide edit did not split exactly at the Guide node before persistence: ${JSON.stringify(atomicEditResult)}`);
+
+    const guideLocatorResult = await evaluate(cdp, `(async () => {
+      const target = currentConversationTarget();
+      const locatorCalls = [];
+      const testApi = Object.assign({}, api, {
+        branchConversation: async (_target, index, text, locator) => {
+          locatorCalls.push({ index, text, locator });
+          return { error: 'locator-smoke-stop' };
+        },
+      });
+      window.__setBranchApiForTest(testApi);
+      const clientMessageId = 'locator-guide-id';
+      const runId = 'locator-guide-run';
+      const run = { runId, target, status: 'completed', expanded: true, startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), primaryPrompt: 'LOCATOR_BUILD', events: [{ id: 'locator-guide-event', sequence: 1, type: 'guide_applied', content: 'LOCATOR_GUIDE', clientMessageId, runId, guide: { clientMessageId, runId, content: 'LOCATOR_GUIDE', status: 'applied' } }], guides: [] };
+      syncWorkRunsSnapshot([run], target);
+      renderChatMessages([{ role: 'user', content: 'LOCATOR_BUILD', runId }, { role: 'user', content: 'LOCATOR_GUIDE', runId, clientMessageId }]);
+      const guide = document.querySelector('.work-run-guide-message[data-client-message-id="' + clientMessageId + '"]');
+      await window.submitUserMessageEdit(guide, 0, 'LOCATOR_EDITED_GUIDE', target);
+      window.__setBranchApiForTest(null);
+      return { calls: locatorCalls, runAttr: guide && guide.getAttribute('data-run-id') };
+    })()`);
+    if (guideLocatorResult.calls.length !== 1 || guideLocatorResult.calls[0].index !== 0 || guideLocatorResult.calls[0].locator.clientMessageId !== 'locator-guide-id' || guideLocatorResult.calls[0].locator.runId !== 'locator-guide-run' || guideLocatorResult.runAttr !== 'locator-guide-run') fail(`Guide edit did not send stable identity when the rendered index drifted: ${JSON.stringify(guideLocatorResult)}`);
+
     const pageSwitchResult = await evaluate(cdp, `(async () => {
       const target = currentConversationTarget();
       const originalBranch = { id: 'tree-original', createdAt: '2026-07-24T05:00:00.000Z', sourceMessageIndex: 0, sourceText: 'Original instruction' };

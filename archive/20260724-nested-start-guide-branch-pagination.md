@@ -17,11 +17,13 @@ A release-blocking follow-up found that a persisted branch tree could also rende
 - Editing a Guide resumes the copied prefix of its owning Build under the same run identity. The Guide itself is the page node: everything before it is identical across pages, while the original/edited Guide and every later message, tool event, and Build tail are page-local and cannot leak across siblings.
 - The edited first message receives its message index and pager immediately when the new Build starts, rather than only after the Build completes.
 - `web_fetch` and `web_search` activity rows show the concrete URL or query target beside the tool name.
+- Repeated edits of one node are siblings in the same pagination group, so the third version is `<3/3>` rather than a second nested `<2/2>`.
+- Guide edit requests carry stable `clientMessageId + runId` identity through renderer, preload, main, and core. The backend resolves that identity before using the rendered index, preventing index-drift failures.
 
 ## Validation
 
 - `npm.cmd run build` passed.
-- Core verification passed with 1291 assertions and 0 failures, including cold-start hydration, immediate first-message pagination, Guide-prefix preservation, and Guide-tail isolation locks.
+- Core verification passed with 1293 assertions and 0 failures, including cold-start hydration, immediate first-message pagination, same-node `<3/3>`, Guide-prefix preservation, Guide-tail isolation, and drifted Guide-index identity locks.
 - Final Windows packaging completed for MSI, portable ZIP, and `win-unpacked`.
 - Packaged Electron smoke rendered two independent `<2/2>` pagers: `start-group` at message index 0 and `guide-group` at Guide message index 1.
 - Packaged ZIP and MSI smoke suites passed.
@@ -30,16 +32,16 @@ A release-blocking follow-up found that a persisted branch tree could also rende
 
 ## Final Artifacts
 
-- MSI: `release/Newmark-Agent-0.1.7-x64.msi`, 128938679 bytes, SHA256 `CE630DFB2AD8BF9A1A3B0FE6FC39B8C5568A45B23A1C2DF3A8E77403EF955459`.
-- ZIP: `release/Newmark-Agent-0.1.7-win-unpacked-x64.zip`, 167286357 bytes, SHA256 `455B6E6227CA9832F8677C0827786C242A2E8903422EE0F24DF31AB5CC6CA6E6`.
-- Packaged executable: SHA256 `823D58F41652C23BEB7E5FBF15C6D8258BC288323CA5727CC30454547E032D04`.
-- Packaged and installed `app.asar`: SHA256 `1CE2861CB723EBD8524955513DCFB38A8BB23A82E70D334545F6030B5D1EC604`.
+- MSI: `release/Newmark-Agent-0.1.7-x64.msi`, 128938679 bytes, SHA256 `14F3D1393B6B3714AAC9F7E3DFB3F78F38B32E50C0AF616832958FDB45320376`.
+- ZIP: `release/Newmark-Agent-0.1.7-win-unpacked-x64.zip`, 167289702 bytes, SHA256 `4B84434374CA6536A29A45608769C53F91AE26EBF26A2A516775FBFA070DD5D4`.
+- Packaged executable: SHA256 `91A3CC2AA89E8E5E44B5465CF70D74456089902FA54BC98790875D9DD7B840E4`.
+- Packaged and installed `app.asar`: SHA256 `2C391F277C4FF89C0B2D6335195B87C9780D06CC6C31006A041A980A8F32C9D0`.
 - Local installation: `C:\Program Files\Newmark Agent`, file/product version `0.1.7.0`. The temporary current-user installation was removed after formal MSI verification.
 - Packaged UI evidence: `archive/20260724-dev-0.1.7-branch-guide-ui-smoke.png`.
 
 ## Cross-platform Release Assets
 
-- AppImage: `release/Newmark-Agent-0.1.7-x86_64.AppImage`, 148141897 bytes, SHA256 `EF190D01003FCB529DB68FF1575624B2AAF549F2697CA174D77829180815ECC7`.
-- Debian package: `release/Newmark-Agent-0.1.7-amd64.deb`, 115185744 bytes, SHA256 `6E63447942B3632415D281691A370845DF8A124DA88AFBF39408A37757C27BED`.
-- Linux unpacked ZIP: `release/Newmark-Agent-0.1.7-linux-unpacked-x64.zip`, 144441168 bytes, SHA256 `9E762F2E0083E632C2271F5551A4798BF74A4620AF369FCB4DCE2FF6C310B789`.
+- AppImage: `release/Newmark-Agent-0.1.7-x86_64.AppImage`, 148146033 bytes, SHA256 `D88BDC5076651650CD744A9FF7CCEC794D1DC1970D3A09A3A61855C61EF6F5AE`.
+- Debian package: `release/Newmark-Agent-0.1.7-amd64.deb`, 115191520 bytes, SHA256 `F3CB4535D2C4516EBAAEFA77D16FD0E33FF4ACF62402F1FEF8D6EEA878AE273E`.
+- Linux unpacked ZIP: `release/Newmark-Agent-0.1.7-linux-unpacked-x64.zip`, 144444431 bytes, SHA256 `9643254131E76AC0D6F132A601F36C27BBD002494A8B876C9FB4732452643916`.
 - AppImage, extracted Debian package, and unpacked ZIP each passed real Linux GUI startup plus isolated Bash/sh terminal round-trip smoke tests under Ubuntu 24.04 WSL.

@@ -140,6 +140,8 @@ export interface ConversationBranchState {
   id: string;
   createdAt: string;
   sourceMessageIndex: number;
+  sourceMessageId?: string;
+  sourceGuideId?: string;
   sourceText: string;
   chatMessages: ChatMessage[];
   history: Array<Record<string, unknown>>;
@@ -159,19 +161,45 @@ export interface ConversationBranchGroupState {
   id: string;
   sourceNodeId: string;
   sourceMessageIndex: number;
+  sourceMessageId?: string;
+  sourceGuideId?: string;
   createdAt: string;
   nodeIds: string[];
+  pageMessageIds?: Record<string, string>;
+  pageGuideIds?: Record<string, string>;
+}
+export interface ConversationTreeNodeIndexEntry {
+  nodeId: string;
+  parentId: string | null;
+  childIds: string[];
+  path: string[];
+  sourceMessageId?: string;
+  sourceGuideId?: string;
+  branchGroupIds: string[];
+  messageIds: string[];
+  guideIds: string[];
+  workRunIds: string[];
+  runningWorkRunIds: string[];
 }
 export interface ConversationTreeState {
-  version: 1;
+  version: 2;
   rootNodeId: string;
   activeNodeId: string;
   activeGroupId: string;
   nodes: Record<string, ConversationTreeNode>;
   branchGroups: Record<string, ConversationBranchGroupState>;
+  nodeIndex: Record<string, ConversationTreeNodeIndexEntry>;
+  pathIndex: Record<string, string>;
+}
+export interface ConversationBranchLocator {
+  messageId?: string;
+  guideId?: string;
+  clientMessageId?: string;
+  runId?: string;
+  branchNodePath?: string[];
 }
 interface ConversationArchiveManifest {
-  version: 1;
+  version: 1 | 2;
   kind: 'newmark-conversation-archive';
   archivedAt: string;
   conversationId: string;
@@ -214,19 +242,22 @@ export interface ConversationSnapshot {
   inputMode: InputMode;
   mode: AgentMode;
   goal: StoredGoalState | null;
-  branches: Array<Pick<ConversationBranchState, 'id' | 'createdAt' | 'sourceMessageIndex' | 'sourceText'>>;
+  branches: Array<Pick<ConversationBranchState, 'id' | 'createdAt' | 'sourceMessageIndex' | 'sourceMessageId' | 'sourceGuideId' | 'sourceText'>>;
   activeBranchId: string;
   runtimeBranchId: string;
   viewedBranchNodePath: string[];
   runtimeBranchNodePath: string[];
   branchGroupId: string;
   branchGroups: ConversationBranchGroupSnapshot[];
+  branchIndexDirectory: Record<string, ConversationTreeNodeIndexEntry>;
 }
 export interface ConversationBranchGroupSnapshot {
   id: string;
   sourceMessageIndex: number;
+  sourceMessageId?: string;
+  sourceGuideId?: string;
   activeBranchId: string;
-  branches: Array<Pick<ConversationBranchState, 'id' | 'createdAt' | 'sourceMessageIndex' | 'sourceText'>>;
+  branches: Array<Pick<ConversationBranchState, 'id' | 'createdAt' | 'sourceMessageIndex' | 'sourceMessageId' | 'sourceGuideId' | 'sourceText'>>;
 }
 export interface ConversationContinuation {
   content: string;
@@ -508,11 +539,21 @@ export class Agent {
     return restored;
   }
 
-  private branchFromEntry(id: string, sourceMessageIndex: number, sourceText: string, entry: StoredConversationEntry, createdAt?: string): ConversationBranchState {
+  private branchFromEntry(
+    id: string,
+    sourceMessageIndex: number,
+    sourceText: string,
+    entry: StoredConversationEntry,
+    createdAt?: string,
+    sourceMessageId?: string,
+    sourceGuideId?: string,
+  ): ConversationBranchState {
     return {
       id,
       createdAt: createdAt || new Date().toISOString(),
       sourceMessageIndex,
+      sourceMessageId: String(sourceMessageId || '') || undefined,
+      sourceGuideId: String(sourceGuideId || '') || undefined,
       sourceText,
       chatMessages: [...(entry.chatMessages || [])],
       history: [...(entry.history || [])],
@@ -531,7 +572,7 @@ export class Agent {
     if (!entry.activeBranchId || !Array.isArray(entry.branches)) return;
     const active = entry.branches.find(branch => branch.id === entry.activeBranchId);
     if (!active) return;
-    Object.assign(active, this.branchFromEntry(active.id, active.sourceMessageIndex, active.sourceText, entry, active.createdAt));
+    Object.assign(active, this.branchFromEntry(active.id, active.sourceMessageIndex, active.sourceText, entry, active.createdAt, active.sourceMessageId, active.sourceGuideId));
   }
 
   private applyBranchToEntry(entry: StoredConversationEntry, branch: ConversationBranchState): void {
@@ -549,8 +590,10 @@ export class Agent {
 
   private normalizeConversationTree(entry: StoredConversationEntry): ConversationTreeState | null {
     const raw = entry.tree;
-    if (raw?.version === 1 && raw.nodes && raw.nodes[raw.activeNodeId]) {
+    if (raw && [1, 2].includes(Number(raw.version)) && raw.nodes && raw.nodes[raw.activeNodeId]) {
+      raw.version = 2;
       this.coalesceConversationBranchGroups(raw);
+      this.rebuildConversationTreeIndex(raw);
       entry.activeBranchId = raw.activeNodeId;
       entry.activeBranchGroupId = raw.activeGroupId;
       return raw;
@@ -563,7 +606,7 @@ export class Agent {
     const source = legacy[0];
     const groupId = crypto.randomUUID();
     const tree: ConversationTreeState = {
-      version: 1,
+      version: 2,
       rootNodeId: source.id,
       activeNodeId,
       activeGroupId: groupId,
@@ -573,11 +616,16 @@ export class Agent {
           id: groupId,
           sourceNodeId: source.id,
           sourceMessageIndex: source.sourceMessageIndex,
+          sourceMessageId: source.sourceMessageId,
+          sourceGuideId: source.sourceGuideId,
           createdAt: source.createdAt,
           nodeIds: legacy.map(branch => branch.id),
         },
       },
+      nodeIndex: {},
+      pathIndex: {},
     };
+    this.rebuildConversationTreeIndex(tree);
     entry.tree = tree;
     entry.activeBranchId = activeNodeId;
     entry.activeBranchGroupId = groupId;
@@ -593,7 +641,12 @@ export class Agent {
         const left = groups[leftIndex];
         for (let rightIndex = leftIndex + 1; rightIndex < groups.length; rightIndex++) {
           const right = groups[rightIndex];
-          if (left.sourceMessageIndex !== right.sourceMessageIndex || !right.nodeIds.some(id => left.nodeIds.includes(id))) continue;
+          const sameStableTarget = left.sourceNodeId === right.sourceNodeId
+            && ((left.sourceGuideId && left.sourceGuideId === right.sourceGuideId)
+              || (!left.sourceGuideId && !right.sourceGuideId && left.sourceMessageId && left.sourceMessageId === right.sourceMessageId));
+          const legacySameTarget = !left.sourceMessageId && !right.sourceMessageId && !left.sourceGuideId && !right.sourceGuideId
+            && left.sourceNodeId === right.sourceNodeId && left.sourceMessageIndex === right.sourceMessageIndex;
+          if ((!sameStableTarget && !legacySameTarget) || !right.nodeIds.some(id => left.nodeIds.includes(id))) continue;
           left.nodeIds = [...new Set([...left.nodeIds, ...right.nodeIds])];
           if (tree.activeGroupId === right.id) tree.activeGroupId = left.id;
           delete tree.branchGroups[right.id];
@@ -604,16 +657,33 @@ export class Agent {
     }
   }
 
-  private treeNodeFromEntry(id: string, parentId: string | null, sourceMessageIndex: number, sourceText: string, entry: StoredConversationEntry, createdAt?: string): ConversationTreeNode {
-    return { ...this.branchFromEntry(id, sourceMessageIndex, sourceText, entry, createdAt), parentId };
+  private treeNodeFromEntry(
+    id: string,
+    parentId: string | null,
+    sourceMessageIndex: number,
+    sourceText: string,
+    entry: StoredConversationEntry,
+    createdAt?: string,
+    sourceMessageId?: string,
+    sourceGuideId?: string,
+  ): ConversationTreeNode {
+    return { ...this.branchFromEntry(id, sourceMessageIndex, sourceText, entry, createdAt, sourceMessageId, sourceGuideId), parentId };
   }
 
-  private branchGroupMetadata(tree: ConversationTreeState | null, groupId = tree?.activeGroupId || ''): Array<Pick<ConversationBranchState, 'id' | 'createdAt' | 'sourceMessageIndex' | 'sourceText'>> {
+  private branchGroupMetadata(tree: ConversationTreeState | null, groupId = tree?.activeGroupId || ''): Array<Pick<ConversationBranchState, 'id' | 'createdAt' | 'sourceMessageIndex' | 'sourceMessageId' | 'sourceGuideId' | 'sourceText'>> {
     if (!tree) return [];
     const group = tree.branchGroups[groupId];
     return (group?.nodeIds || []).flatMap(id => {
       const node = tree.nodes[id];
-      return node ? [{ id: node.id, createdAt: node.createdAt, sourceMessageIndex: node.sourceMessageIndex, sourceText: node.sourceText }] : [];
+      const anchor = node?.chatMessages?.[group.sourceMessageIndex];
+      return node ? [{
+        id: node.id,
+        createdAt: node.createdAt,
+        sourceMessageIndex: group.sourceMessageIndex,
+        sourceMessageId: String(anchor?.messageId || node.sourceMessageId || '') || undefined,
+        sourceGuideId: String(anchor?.guideId || node.sourceGuideId || '') || undefined,
+        sourceText: anchor?.content || node.sourceText,
+      }] : [];
     });
   }
 
@@ -633,6 +703,105 @@ export class Agent {
     return tree && tree.nodes[nodeId] ? this.treeAncestry(tree, nodeId).reverse() : [];
   }
 
+  private rebuildConversationTreeIndex(tree: ConversationTreeState): void {
+    const childIds = new Map<string, string[]>();
+    for (const node of Object.values(tree.nodes)) {
+      node.chatMessages = (node.chatMessages || []).map(message => ({
+        ...message,
+        messageId: String(message.messageId || '') || crypto.randomUUID(),
+        guideId: message.clientMessageId ? (String(message.guideId || '') || crypto.randomUUID()) : undefined,
+        branchNodeId: node.id,
+      }));
+      node.workRuns = this.normalizeWorkRuns(node.workRuns).map(run => ({
+        ...run,
+        branchNodeId: node.id,
+      }));
+      if (!node.parentId || !tree.nodes[node.parentId]) continue;
+      const children = childIds.get(node.parentId) || [];
+      children.push(node.id);
+      childIds.set(node.parentId, children);
+    }
+    const nodeIndex: Record<string, ConversationTreeNodeIndexEntry> = {};
+    const pathIndex: Record<string, string> = {};
+    for (const node of Object.values(tree.nodes)) {
+      const path = this.treePath(tree, node.id);
+      const branchGroupIds = Object.values(tree.branchGroups).filter(group => group.nodeIds.includes(node.id)).map(group => group.id);
+      const messageIds = node.chatMessages.map(message => String(message.messageId || '')).filter(Boolean);
+      const guideIds = node.chatMessages.map(message => String(message.guideId || '')).filter(Boolean);
+      const workRunIds = node.workRuns.map(run => String(run.runId || '')).filter(Boolean);
+      const runningWorkRunIds = node.workRuns.filter(run => run.status === 'running').map(run => String(run.runId || '')).filter(Boolean);
+      nodeIndex[node.id] = {
+        nodeId: node.id,
+        parentId: node.parentId,
+        childIds: [...(childIds.get(node.id) || [])],
+        path,
+        sourceMessageId: node.sourceMessageId,
+        sourceGuideId: node.sourceGuideId,
+        branchGroupIds,
+        messageIds,
+        guideIds,
+        workRunIds,
+        runningWorkRunIds,
+      };
+      pathIndex[path.join('>')] = node.id;
+    }
+    tree.nodeIndex = nodeIndex;
+    tree.pathIndex = pathIndex;
+    for (const group of Object.values(tree.branchGroups)) {
+      group.pageMessageIds = {};
+      group.pageGuideIds = {};
+      for (const nodeId of group.nodeIds) {
+        const anchor = tree.nodes[nodeId]?.chatMessages?.[group.sourceMessageIndex];
+        if (anchor?.messageId) group.pageMessageIds[nodeId] = anchor.messageId;
+        if (anchor?.guideId) group.pageGuideIds[nodeId] = anchor.guideId;
+      }
+    }
+    this.validateConversationTree(tree);
+  }
+
+  private validateConversationTree(tree: ConversationTreeState): void {
+    if (!tree.nodes[tree.rootNodeId] || tree.nodes[tree.rootNodeId].parentId !== null) throw new Error('Conversation tree root is invalid.');
+    if (!tree.nodes[tree.activeNodeId]) throw new Error('Conversation tree active node is missing.');
+    const pathOwners = new Set<string>();
+    for (const [nodeId, node] of Object.entries(tree.nodes)) {
+      if (node.id !== nodeId) throw new Error('Conversation tree node key does not match nodeId.');
+      if (node.parentId && !tree.nodes[node.parentId]) throw new Error('Conversation tree contains an orphan node.');
+      const index = tree.nodeIndex[nodeId];
+      if (!index || index.nodeId !== nodeId || index.path[index.path.length - 1] !== nodeId) throw new Error('Conversation tree index directory is incomplete.');
+      const pathKey = index.path.join('>');
+      if (pathOwners.has(pathKey) || tree.pathIndex[pathKey] !== nodeId) throw new Error('Conversation tree contains a duplicate or inconsistent path.');
+      pathOwners.add(pathKey);
+      if (new Set(index.messageIds).size !== index.messageIds.length) throw new Error('Conversation branch contains duplicate messageId values.');
+      if (new Set(index.guideIds).size !== index.guideIds.length) throw new Error('Conversation branch contains duplicate guideId values.');
+      if (new Set(index.workRunIds).size !== index.workRunIds.length) throw new Error('Conversation branch contains duplicate Build ids.');
+    }
+    for (const group of Object.values(tree.branchGroups)) {
+      if (!tree.nodes[group.sourceNodeId]) throw new Error('Conversation branch group source node is missing.');
+      if (new Set(group.nodeIds).size !== group.nodeIds.length || group.nodeIds.some(nodeId => !tree.nodes[nodeId])) throw new Error('Conversation branch group contains invalid page nodes.');
+      if (!group.nodeIds.includes(group.sourceNodeId)) throw new Error('Conversation branch group does not contain its source page.');
+    }
+  }
+
+  private resolveConversationTreePath(tree: ConversationTreeState, requestedPath?: string[]): string {
+    const path = (Array.isArray(requestedPath) ? requestedPath : []).map(String).filter(Boolean);
+    if (!path.length) return tree.activeNodeId;
+    if (path[0] !== tree.rootNodeId) throw new Error('Conversation branch path does not start at the tree root.');
+    for (let index = 0; index < path.length; index++) {
+      const node = tree.nodes[path[index]];
+      if (!node || (index > 0 && node.parentId !== path[index - 1])) throw new Error('Conversation branch path is stale or invalid.');
+    }
+    return path[path.length - 1];
+  }
+
+  private storedConversationTreePath(tree: ConversationTreeState | null, requestedPath: string[] | undefined, fallbackNodeId: string): string[] {
+    if (!tree) return [];
+    try {
+      return this.treePath(tree, this.resolveConversationTreePath(tree, requestedPath));
+    } catch {
+      return this.treePath(tree, fallbackNodeId);
+    }
+  }
+
   private branchGroupsForNode(tree: ConversationTreeState | null, nodeId = tree?.activeNodeId || ''): ConversationBranchGroupSnapshot[] {
     if (!tree || !tree.nodes[nodeId]) return [];
     const ancestry = this.treeAncestry(tree, nodeId);
@@ -646,6 +815,8 @@ export class Agent {
         return [{
           id: group.id,
           sourceMessageIndex: group.sourceMessageIndex,
+          sourceMessageId: group.sourceMessageId,
+          sourceGuideId: group.sourceGuideId,
           activeBranchId: selected,
           branches: this.branchGroupMetadata(tree, group.id),
         }];
@@ -658,7 +829,8 @@ export class Agent {
     if (!tree) return;
     const active = tree.nodes[tree.activeNodeId];
     if (!active) return;
-    tree.nodes[active.id] = this.treeNodeFromEntry(active.id, active.parentId, active.sourceMessageIndex, active.sourceText, entry, active.createdAt);
+    tree.nodes[active.id] = this.treeNodeFromEntry(active.id, active.parentId, active.sourceMessageIndex, active.sourceText, entry, active.createdAt, active.sourceMessageId, active.sourceGuideId);
+    this.rebuildConversationTreeIndex(tree);
     entry.activeBranchId = active.id;
     entry.activeBranchGroupId = tree.activeGroupId;
   }
@@ -2255,10 +2427,11 @@ export class Agent {
       branches: this.branchGroupMetadata(tree),
       activeBranchId: String(tree?.activeNodeId || ''),
       runtimeBranchId: String(tree?.activeNodeId || ''),
-      viewedBranchNodePath: this.treePath(tree, String(tree?.activeNodeId || '')),
+      viewedBranchNodePath: this.storedConversationTreePath(tree, persisted?.viewedBranchNodePath, String(tree?.activeNodeId || '')),
       runtimeBranchNodePath: this.treePath(tree, String(tree?.activeNodeId || '')),
       branchGroupId: String(tree?.activeGroupId || ''),
       branchGroups: this.branchGroupsForNode(tree),
+      branchIndexDirectory: { ...(tree?.nodeIndex || {}) },
     };
   }
 
@@ -2275,6 +2448,10 @@ export class Agent {
     const group = requestedGroup?.nodeIds.includes(branch.id)
       ? requestedGroup
       : Object.values(tree.branchGroups).find(item => item.nodeIds.includes(branch.id));
+    entry.viewedBranchNodePath = this.treePath(tree, branch.id);
+    entry.runtimeBranchNodePath = this.treePath(tree, tree.activeNodeId);
+    entry.updatedAt = new Date().toISOString();
+    this.writeStoredConversationStateNow(stored);
     return {
       ...base,
       conversationPlan: this.normalizeConversationPlan(branch.plan),
@@ -2294,6 +2471,7 @@ export class Agent {
       runtimeBranchNodePath: this.treePath(tree, String(tree.activeNodeId || '')),
       branchGroupId: String(group?.id || tree.activeGroupId || ''),
       branchGroups: this.branchGroupsForNode(tree, branch.id),
+      branchIndexDirectory: { ...(tree.nodeIndex || {}) },
     };
   }
 
@@ -2367,22 +2545,16 @@ export class Agent {
     return this.getConversationSnapshot(clean);
   }
 
-  public branchConversation(conversationId: string, messageIndex: number, editedText: string, locator?: { clientMessageId?: string; runId?: string }): ConversationSnapshot {
+  public branchConversation(conversationId: string, messageIndex: number, editedText: string, locator?: ConversationBranchLocator): ConversationSnapshot {
     const clean = this.safeConversationId(conversationId || 'default');
     const text = String(editedText || '').trim();
     if (!text) throw new Error('Edited message cannot be empty.');
     this.saveWorkspaceConversationState(true);
-    const snapshot = this.getConversationSnapshot(clean);
     const requestedIndex = Math.floor(Number(messageIndex));
+    const messageId = String(locator?.messageId || '');
+    const guideId = String(locator?.guideId || '');
     const clientMessageId = String(locator?.clientMessageId || '');
     const runId = String(locator?.runId || '');
-    const stableIndex = clientMessageId ? snapshot.chatMessages.findIndex(message =>
-      String(message.clientMessageId || '') === clientMessageId && (!runId || String(message.runId || '') === runId)) : -1;
-    const index = stableIndex >= 0 ? stableIndex : requestedIndex;
-    const target = snapshot.chatMessages[index];
-    if (!Number.isFinite(index) || index < 0 || !target || target.role !== 'user') {
-      throw new Error('Conversation branch target must be a user message.');
-    }
     const stateKey = this.workspaceConversationStateKey(clean);
     if (!stateKey) throw new Error('Conversation workspace is unavailable.');
     const stored = this.readStoredConversationState();
@@ -2391,29 +2563,48 @@ export class Agent {
     let tree = this.normalizeConversationTree(entry);
     if (!tree) {
       const originalId = String(entry.rootBranchNodeId || '') || crypto.randomUUID();
-      const original = this.treeNodeFromEntry(originalId, null, index, target.content, entry);
-      tree = { version: 1, rootNodeId: originalId, activeNodeId: originalId, activeGroupId: '', nodes: { [originalId]: original }, branchGroups: {} };
+      const original = this.treeNodeFromEntry(originalId, null, requestedIndex, '', entry);
+      tree = { version: 2, rootNodeId: originalId, activeNodeId: originalId, activeGroupId: '', nodes: { [originalId]: original }, branchGroups: {}, nodeIndex: {}, pathIndex: {} };
       entry.tree = tree;
       entry.rootBranchNodeId = originalId;
     } else {
       this.syncActiveTreeNode(entry);
     }
-    const parentNodeId = tree.activeNodeId;
+    const parentNodeId = this.resolveConversationTreePath(tree, locator?.branchNodePath);
+    const sourceNode = tree.nodes[parentNodeId];
+    if (!sourceNode) throw new Error('Conversation branch source node was not found.');
+    const stableIndex = guideId
+      ? sourceNode.chatMessages.findIndex(message => String(message.guideId || '') === guideId)
+      : messageId
+        ? sourceNode.chatMessages.findIndex(message => String(message.messageId || '') === messageId)
+        : clientMessageId
+          ? sourceNode.chatMessages.findIndex(message => String(message.clientMessageId || '') === clientMessageId && (!runId || String(message.runId || '') === runId))
+          : -1;
+    const index = stableIndex >= 0 ? stableIndex : requestedIndex;
+    const target = sourceNode.chatMessages[index];
+    if (!Number.isFinite(index) || index < 0 || !target || target.role !== 'user') {
+      throw new Error('Conversation branch target must be a user message on the selected branch path.');
+    }
+    if (messageId && String(target.messageId || '') !== messageId) throw new Error('Conversation branch messageId does not match the selected branch.');
+    if (guideId && String(target.guideId || '') !== guideId) throw new Error('Conversation branch guideId does not match the selected branch.');
+    const targetMessageId = String(target.messageId || '') || undefined;
+    const targetGuideNodeId = String(target.guideId || '') || undefined;
 
-    const userOrdinal = snapshot.chatMessages.slice(0, index + 1).filter(message => message.role === 'user').length;
+    const userOrdinal = sourceNode.chatMessages.slice(0, index + 1).filter(message => message.role === 'user').length;
     let seenUsers = 0;
-    let historyCut = (entry.history || []).length;
-    for (let i = 0; i < (entry.history || []).length; i++) {
-      if (String(entry.history?.[i]?.role || '') !== 'user') continue;
+    let historyCut = sourceNode.history.length;
+    for (let i = 0; i < sourceNode.history.length; i++) {
+      if (String(sourceNode.history[i]?.role || '') !== 'user') continue;
       seenUsers++;
       if (seenUsers === userOrdinal) { historyCut = i; break; }
     }
     const targetGuideId = String(target.clientMessageId || '');
     const targetRunId = String(target.runId || '');
-    const workRunsBeforeTarget = snapshot.workRuns.flatMap(run => {
+    const copiedGuideRunId = targetGuideId && targetRunId ? crypto.randomUUID() : '';
+    const workRunsBeforeTarget = sourceNode.workRuns.flatMap(run => {
       if (targetGuideId && targetRunId && run.runId === targetRunId) {
-        const eventCut = run.events.findIndex(event => String(event.guide?.clientMessageId || '') === targetGuideId);
-        const guideCut = run.guides.findIndex(guide => guide.clientMessageId === targetGuideId);
+        const eventCut = run.events.findIndex(event => (targetGuideNodeId && String(event.guide?.guideId || '') === targetGuideNodeId) || String(event.guide?.clientMessageId || '') === targetGuideId);
+        const guideCut = run.guides.findIndex(item => (targetGuideNodeId && String(item.guideId || '') === targetGuideNodeId) || item.clientMessageId === targetGuideId);
         const events = eventCut >= 0
           ? run.events.slice(0, eventCut)
           : run.events.filter(event => String(event.timestamp || '') < String(target.timestamp || ''));
@@ -2422,12 +2613,19 @@ export class Agent {
           : run.guides.filter(guide => String(guide.createdAt || '') < String(target.timestamp || ''));
         return [{
           ...run,
+          runId: copiedGuideRunId,
+          runtimeKey: conversationRuntimeKey(run.target),
+          branchNodeId: '',
           status: 'interrupted' as const,
           endedAt: target.timestamp || new Date().toISOString(),
           expanded: true,
           sequence: Math.max(0, ...events.map(event => Number(event.sequence || 0))),
-          events,
-          guides,
+          events: events.map(event => ({
+            ...event,
+            id: crypto.randomUUID(),
+            runId: copiedGuideRunId,
+          })),
+          guides: guides.map(item => ({ ...item, runId: copiedGuideRunId })),
         }];
       }
       if (targetRunId && run.runId === targetRunId) return [];
@@ -2435,15 +2633,23 @@ export class Agent {
       return boundary && boundary < String(target.timestamp || '') ? [run] : [];
     });
     const reusableGroup = Object.values(tree.branchGroups).find(group =>
-      group.sourceMessageIndex === index && group.nodeIds.includes(parentNodeId));
+      (group.sourceNodeId === parentNodeId
+        && ((targetGuideNodeId && group.sourceGuideId === targetGuideNodeId)
+          || (!targetGuideNodeId && targetMessageId && group.sourceMessageId === targetMessageId)
+          || (!group.sourceGuideId && !group.sourceMessageId && group.sourceMessageIndex === index)))
+      || (group.nodeIds.includes(parentNodeId)
+        && group.sourceMessageIndex === index
+        && ((targetGuideNodeId && group.pageGuideIds?.[parentNodeId] === targetGuideNodeId)
+          || (!targetGuideNodeId && targetMessageId && group.pageMessageIds?.[parentNodeId] === targetMessageId))));
     const branchId = crypto.randomUUID();
     const branch = this.treeNodeFromEntry(branchId, parentNodeId, index, text, {
       ...entry,
-      chatMessages: snapshot.chatMessages.slice(0, index),
-      history: (entry.history || []).slice(0, historyCut),
+      chatMessages: sourceNode.chatMessages.slice(0, index),
+      history: sourceNode.history.slice(0, historyCut),
       workRuns: workRunsBeforeTarget,
       continuations: [],
-    });
+    }, undefined, targetMessageId, targetGuideNodeId);
+    branch.workRuns = branch.workRuns.map(run => ({ ...run, branchNodeId: branchId }));
     tree.nodes[branchId] = branch;
     const groupId = reusableGroup?.id || crypto.randomUUID();
     if (reusableGroup) reusableGroup.nodeIds.push(branchId);
@@ -2452,16 +2658,21 @@ export class Agent {
         id: groupId,
         sourceNodeId: parentNodeId,
         sourceMessageIndex: index,
+        sourceMessageId: targetMessageId,
+        sourceGuideId: targetGuideNodeId,
         createdAt: new Date().toISOString(),
         nodeIds: [parentNodeId, branchId],
       };
     }
     tree.activeNodeId = branchId;
     tree.activeGroupId = groupId;
+    this.rebuildConversationTreeIndex(tree);
     entry.tree = tree;
     entry.branches = undefined;
     entry.activeBranchId = branchId;
     entry.activeBranchGroupId = groupId;
+    entry.viewedBranchNodePath = this.treePath(tree, branchId);
+    entry.runtimeBranchNodePath = this.treePath(tree, branchId);
     this.applyBranchToEntry(entry, branch);
     entry.branchReset = true;
     entry.updatedAt = new Date().toISOString();
@@ -2491,6 +2702,8 @@ export class Agent {
     if (group) tree.activeGroupId = group.id;
     entry.activeBranchId = branch.id;
     entry.activeBranchGroupId = tree.activeGroupId;
+    entry.viewedBranchNodePath = this.treePath(tree, branch.id);
+    entry.runtimeBranchNodePath = this.treePath(tree, branch.id);
     entry.updatedAt = new Date().toISOString();
     this.writeStoredConversationStateNow(stored);
     if (clean === this.safeConversationId(this.activeConversationId)) this.setConversationFromStorage(clean);
@@ -3391,7 +3604,7 @@ export class Agent {
       updatedAt: new Date().toISOString(),
     };
     const manifest: ConversationArchiveManifest = {
-      version: 1,
+      version: 2,
       kind: 'newmark-conversation-archive',
       archivedAt: new Date().toISOString(),
       conversationId: clean,
@@ -3502,7 +3715,7 @@ export class Agent {
   private readArchiveManifest(archivePath: string): ConversationArchiveManifest | null {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.archiveManifestPath(archivePath), 'utf-8')) as ConversationArchiveManifest;
-      if (parsed?.version !== 1 || parsed?.kind !== 'newmark-conversation-archive' || !parsed.entry || !parsed.conversationId) return null;
+      if (![1, 2].includes(Number(parsed?.version)) || parsed?.kind !== 'newmark-conversation-archive' || !parsed.entry || !parsed.conversationId) return null;
       return parsed;
     } catch {
       return null;

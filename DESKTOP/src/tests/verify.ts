@@ -3520,10 +3520,14 @@ async function main() {
   assert(guideBranched.chatMessages.length === 2 && guideBranched.workRuns.length === 1, 'Guide branching: the new page keeps only conversation and Build content before the edited Guide');
   const copiedGuideRun = guideBranched.workRuns[0];
   assert(copiedGuideRun.status === 'interrupted'
+    && copiedGuideRun.runId !== 'guide-edit-run'
     && copiedGuideRun.primaryPrompt === 'build start'
-    && copiedGuideRun.events.some(event => event.id === 'before-guide')
-    && !copiedGuideRun.events.some(event => ['target-guide', 'after-guide'].includes(event.id))
-    && !copiedGuideRun.guides.some(guide => guide.clientMessageId === 'guide-edit-target'), 'Guide branching: the copied page preserves the complete owning Build prefix and truncates only the edited Guide and later content');
+    && copiedGuideRun.events.some(event => event.content === 'before guide')
+    && !copiedGuideRun.events.some(event => ['original guide', 'after guide'].includes(event.content))
+    && !copiedGuideRun.guides.some(guide => guide.clientMessageId === 'guide-edit-target'), 'Guide branching: the copied page gets a new Build id, preserves the complete owning Build prefix, and truncates only the edited Guide and later content');
+  assert(copiedGuideRun.events.every(event => event.runId === copiedGuideRun.runId)
+    && copiedGuideRun.guides.every(guide => guide.runId === copiedGuideRun.runId),
+  'Guide branching: copied events and earlier Guides are reparented to the new Build id instead of referencing the original Build');
   const originalGuidePage = guideBranched.branches.find(branch => branch.id !== guideBranched.activeBranchId)!;
   const inspectedOriginalGuide = conversationOrderAgent.inspectConversationBranch('guide-branch-source', originalGuidePage.id, guideBranched.branchGroupId);
   assert(inspectedOriginalGuide.chatMessages.some(message => message.content === 'original guide')
@@ -3536,8 +3540,8 @@ async function main() {
   const driftedGuideBranch = conversationOrderAgent.branchConversation('guide-branch-source', 0, 'edited guide by identity', {
     clientMessageId: 'guide-edit-target', runId: 'guide-edit-run',
   });
-  assert(driftedGuideBranch.chatMessages.length === 2 && driftedGuideBranch.workRuns[0]?.events.some(event => event.id === 'before-guide')
-    && !driftedGuideBranch.workRuns[0]?.events.some(event => event.id === 'after-guide'),
+  assert(driftedGuideBranch.chatMessages.length === 2 && driftedGuideBranch.workRuns[0]?.events.some(event => event.content === 'before guide')
+    && !driftedGuideBranch.workRuns[0]?.events.some(event => event.content === 'after guide'),
   'Guide branching: stable clientMessageId plus runId resolves the Guide even when its rendered message index has drifted');
 
   conversationOrderAgent.setConversation('paged-guide-source');
@@ -3566,6 +3570,52 @@ async function main() {
   const inspectedOriginalStart = conversationOrderAgent.inspectConversationBranch('paged-guide-source', originalStartPage.id, startPaged.branchGroupId);
   assert(inspectedOriginalStart.chatMessages.some(message => message.content === 'paged original answer') && inspectedOriginalStart.branchGroups.length === 1,
     'Guide branching after a paged start: the original start page remains independently inspectable without Guide descendants');
+
+  conversationOrderAgent.setConversation('path-addressed-branch-source');
+  conversationOrderAgent.chatMessages = [
+    { role: 'user', content: 'root first', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T02:10:00.000Z' },
+    { role: 'assistant', content: 'root first answer', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T02:10:01.000Z' },
+    { role: 'user', content: 'root later', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T02:10:02.000Z' },
+    { role: 'assistant', content: 'root later answer', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T02:10:03.000Z' },
+  ];
+  conversationOrderAgent.history = conversationOrderAgent.chatMessages.map(message => ({ role: message.role, content: message.content }));
+  conversationOrderAgent.flushConversationState();
+  const rootBeforeBranch = conversationOrderAgent.getConversationSnapshot('path-addressed-branch-source');
+  const firstPathBranch = conversationOrderAgent.branchConversation('path-addressed-branch-source', 0, 'edited root first', {
+    messageId: rootBeforeBranch.chatMessages[0]?.messageId,
+  });
+  const rootNodeId = firstPathBranch.viewedBranchNodePath[0];
+  const firstLeafNodeId = firstPathBranch.activeBranchId;
+  conversationOrderAgent.chatMessages = [
+    { role: 'user', content: 'edited root first', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T02:11:00.000Z' },
+    { role: 'assistant', content: 'edited first answer', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T02:11:01.000Z' },
+    { role: 'user', content: 'leaf later', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T02:11:02.000Z' },
+    { role: 'assistant', content: 'leaf later answer', mode: 'Build', model: conversationOrderAgent.model, timestamp: '2026-07-24T02:11:03.000Z' },
+  ];
+  conversationOrderAgent.history = conversationOrderAgent.chatMessages.map(message => ({ role: message.role, content: message.content }));
+  conversationOrderAgent.flushConversationState();
+  const firstLeafSnapshot = conversationOrderAgent.getConversationSnapshot('path-addressed-branch-source');
+  const laterPathBranch = conversationOrderAgent.branchConversation('path-addressed-branch-source', 2, 'edited leaf later', {
+    messageId: firstLeafSnapshot.chatMessages[2]?.messageId,
+    branchNodePath: firstLeafSnapshot.viewedBranchNodePath,
+  });
+  assert(laterPathBranch.branchGroups.length === 2
+    && laterPathBranch.branchGroups.some(group => group.id === firstPathBranch.branchGroupId)
+    && laterPathBranch.branchIndexDirectory[laterPathBranch.activeBranchId]?.parentId === firstLeafNodeId,
+  'conversation tree path addressing: editing a later node under an existing pager creates a child of the exact viewed leaf and preserves the earlier pager');
+  assert(laterPathBranch.branchIndexDirectory[firstLeafNodeId]?.childIds.includes(laterPathBranch.activeBranchId)
+    && laterPathBranch.branchIndexDirectory[laterPathBranch.activeBranchId]?.path.join('>') === laterPathBranch.viewedBranchNodePath.join('>'),
+  'conversation tree index directory: parent/child links and the complete root-to-node path are persisted for each new branch');
+  const inspectedRootForEdit = conversationOrderAgent.inspectConversationBranch('path-addressed-branch-source', rootNodeId, firstPathBranch.branchGroupId);
+  const rootLaterBranch = conversationOrderAgent.branchConversation('path-addressed-branch-source', 2, 'edited root later while leaf is runtime', {
+    messageId: inspectedRootForEdit.chatMessages[2]?.messageId,
+    branchNodePath: inspectedRootForEdit.viewedBranchNodePath,
+  });
+  assert(rootLaterBranch.branchIndexDirectory[rootLaterBranch.activeBranchId]?.parentId === rootNodeId
+    && rootLaterBranch.branchIndexDirectory[rootLaterBranch.activeBranchId]?.parentId !== laterPathBranch.activeBranchId,
+  'conversation tree path addressing: editing a read-only viewed page uses its full path, never the different runtime activeNodeId');
+  assert(Object.values(rootLaterBranch.branchIndexDirectory).every(index => index.nodeId && index.path.length && index.path[index.path.length - 1] === index.nodeId),
+  'conversation history branch directory: every node has a unique id and a complete root-to-node index path');
 
   // ---- 10. Context Compression Tests ----
   console.log('\n📐 Context Compression');

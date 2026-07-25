@@ -266,6 +266,8 @@ async function evaluate(cdp, expression) {
       const ordinarySnapshot = renderProvisionalEditedBranch(originalMessage, 0, 'ATOMIC_EDITED_MESSAGE', target, false);
       const ordinaryBody = document.getElementById('chat-area').innerText;
       const ordinaryPager = document.querySelector('.conversation-branch-pager');
+      const ordinaryPagerTexts = Array.from(document.querySelectorAll('.conversation-branch-pager')).map(node => node.textContent);
+      const ordinaryGroupSizes = state.conversationBranchGroups.map(group => (group.branches || []).length);
       restoreProvisionalEditedBranch(ordinarySnapshot, target);
 
       const guideId = 'atomic-old-guide';
@@ -286,16 +288,16 @@ async function evaluate(cdp, expression) {
       const guideBody = document.getElementById('chat-area').innerText;
       const editedGuide = Array.from(document.querySelectorAll('.work-run-guide-message')).find(node => node.innerText.includes('ATOMIC_EDITED_GUIDE'));
       const guidePager = editedGuide && editedGuide.querySelector('.conversation-branch-pager');
-      const guideRunElement = document.querySelector('.conversation-work-run[data-run-id="atomic-guide-run"]');
-      const sameGuideBuild = !!(editedGuide && guideRunElement && editedGuide.closest('.work-run-message') === guideRunElement.closest('.work-run-message'));
+      const guideRunElement = editedGuide && editedGuide.closest('.work-run-message') && editedGuide.closest('.work-run-message').querySelector('.conversation-work-run');
+      const copiedGuideBuild = !!(guideRunElement && guideRunElement.getAttribute('data-run-id') !== 'atomic-guide-run');
       restoreProvisionalEditedBranch(guideSnapshot, target);
       return {
-        ordinaryBody, ordinaryPager: ordinaryPager && ordinaryPager.textContent,
-        guideBody, guidePager: guidePager && guidePager.textContent, sameGuideBuild,
+        ordinaryBody, ordinaryPager: ordinaryPager && ordinaryPager.textContent, ordinaryPagerTexts, ordinaryGroupSizes,
+        guideBody, guidePager: guidePager && guidePager.textContent, copiedGuideBuild,
       };
     })()`);
-    if (!atomicEditResult.ordinaryBody.includes('ATOMIC_EDITED_MESSAGE') || atomicEditResult.ordinaryBody.includes('ATOMIC_ORIGINAL_MESSAGE') || atomicEditResult.ordinaryBody.includes('ATOMIC_OLD_BUILD_TAIL') || atomicEditResult.ordinaryBody.includes('ATOMIC_OLD_ANSWER') || atomicEditResult.ordinaryPager !== '<3/3>') fail(`ordinary repeated edit did not reuse the existing pager or hide the original branch before persistence: ${JSON.stringify(atomicEditResult)}`);
-    if (!atomicEditResult.guideBody.includes('ATOMIC_GUIDE_BUILD_START') || !atomicEditResult.guideBody.includes('ATOMIC_GUIDE_PREFIX') || !atomicEditResult.guideBody.includes('ATOMIC_EDITED_GUIDE') || atomicEditResult.guideBody.includes('ATOMIC_ORIGINAL_GUIDE') || atomicEditResult.guideBody.includes('ATOMIC_GUIDE_OLD_TAIL') || atomicEditResult.guideBody.includes('ATOMIC_GUIDE_OLD_ANSWER') || atomicEditResult.guidePager !== '<2/2>' || !atomicEditResult.sameGuideBuild) fail(`Guide edit did not split exactly at the Guide node before persistence: ${JSON.stringify(atomicEditResult)}`);
+    if (!atomicEditResult.ordinaryBody.includes('ATOMIC_EDITED_MESSAGE') || atomicEditResult.ordinaryBody.includes('ATOMIC_ORIGINAL_MESSAGE') || atomicEditResult.ordinaryBody.includes('ATOMIC_OLD_BUILD_TAIL') || atomicEditResult.ordinaryBody.includes('ATOMIC_OLD_ANSWER') || !atomicEditResult.ordinaryPagerTexts.includes('<3/3>') || atomicEditResult.ordinaryGroupSizes[0] !== 3) fail(`ordinary repeated edit did not reuse the existing pager or hide the original branch before persistence: ${JSON.stringify(atomicEditResult)}`);
+    if (!atomicEditResult.guideBody.includes('ATOMIC_GUIDE_BUILD_START') || !atomicEditResult.guideBody.includes('ATOMIC_GUIDE_PREFIX') || !atomicEditResult.guideBody.includes('ATOMIC_EDITED_GUIDE') || atomicEditResult.guideBody.includes('ATOMIC_ORIGINAL_GUIDE') || atomicEditResult.guideBody.includes('ATOMIC_GUIDE_OLD_TAIL') || atomicEditResult.guideBody.includes('ATOMIC_GUIDE_OLD_ANSWER') || atomicEditResult.guidePager !== '<2/2>' || !atomicEditResult.copiedGuideBuild) fail(`Guide edit did not split exactly at the Guide node into a copied Build before persistence: ${JSON.stringify(atomicEditResult)}`);
 
     const guideLocatorResult = await evaluate(cdp, `(async () => {
       const target = currentConversationTarget();

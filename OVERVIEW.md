@@ -1,5 +1,11 @@
 # Newmark Agent Overview
 
+## dev-0.1.7 Branch Tree Stability Hardening (2026-07-25)
+
+Conversation persistence now treats branching as a validated version 2 tree rather than a linear transcript with page metadata. Stable message/Guide/Build/node IDs, complete viewed paths, per-page anchors, and a full node index directory drive edits, rendering, runtime event routing, cold reload, archive, and restore. Guide edits clone their owning Build prefix to a new `runId`; read-only branch inspection persists the viewed path without switching the runtime branch.
+
+The final gate includes a regression canary that fails against historical commit `b85b6d2`, a 76-node branch stress run with a 31-page sibling group and 45 nested levels, random inspection/reload/archive cycles, and cloned-Guide-Build completion persistence. Full source tests, packaged Electron branch UI smoke, Windows ZIP smoke, and MSI smoke pass. Final artifact hashes and detailed evidence are in `archive/20260725-dev-0.1.7-branch-tree-stability.md`.
+
 ## dev-0.1.7 Consumer Stability Follow-up (2026-07-25)
 
 Windows launch failures were traced to a missing installed `resources/app.asar`, stale Start menu shortcuts that targeted removed temporary builds, and a config-refresh reload that retained the one-shot startup-prewarm query. The repaired desktop removes that query after promotion, bounds runtime cleanup during config reload, recovers a crashed renderer, and routes second-instance recovery through the existing window lifecycle. Running Build headers also expose a compact unique-file and line-change badge.

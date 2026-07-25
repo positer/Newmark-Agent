@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { createHash, randomUUID } from 'crypto';
 import { spawn, spawnSync, ChildProcess } from 'child_process';
-import { Agent } from './core/agent';
+import { Agent, ConversationBranchLocator } from './core/agent';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope } from './core/types';
 import { AgentPromptMessage, ConversationKernel, ConversationTargetInput } from './core/conversationKernel';
 import { ConversationRuntimeTarget, conversationStateWorkspacePrefix, normalizeConversationTarget } from './core/conversationTarget';
@@ -2664,7 +2664,7 @@ if (hasCliCommand) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
     });
-    ipcMain.handle('agent:branchConversation', async (_event, targetInput: ConversationTargetInput, messageIndex: number, text: string, locator?: { clientMessageId?: string; runId?: string }) => {
+    ipcMain.handle('agent:branchConversation', async (_event, targetInput: ConversationTargetInput, messageIndex: number, text: string, locator?: ConversationBranchLocator) => {
       if (!agent) return { error: 'Agent not initialized' };
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
       try {

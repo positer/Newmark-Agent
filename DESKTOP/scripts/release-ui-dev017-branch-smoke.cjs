@@ -326,12 +326,12 @@ async function evaluate(cdp, expression) {
       const groupFor = activeBranchId => ({ id: 'tree-group', sourceMessageIndex: 0, activeBranchId, branches: [originalBranch, editedBranch] });
       const pages = {
         'tree-original': {
-          branches: [originalBranch, editedBranch], branchGroups: [groupFor('tree-original')], branchGroupId: 'tree-group', activeBranchId: 'tree-original', runtimeBranchId: 'tree-original',
+          branches: [originalBranch, editedBranch], branchGroups: [groupFor('tree-original')], branchGroupId: 'tree-group', activeBranchId: 'tree-original', runtimeBranchId: 'tree-edited',
           chatMessages: [{ role: 'user', content: 'Original instruction' }, { role: 'assistant', content: 'ORIGINAL_PAGE_ONLY' }],
           workRuns: [{ runId: 'original-tree-run', target, status: 'completed', expanded: false, startedAt: '2026-07-24T05:00:00.000Z', endedAt: '2026-07-24T05:00:01.000Z', events: [], guides: [], primaryPrompt: 'Original instruction' }],
         },
         'tree-edited': {
-          branches: [originalBranch, editedBranch], branchGroups: [groupFor('tree-edited')], branchGroupId: 'tree-group', activeBranchId: 'tree-edited', runtimeBranchId: 'tree-original',
+          branches: [originalBranch, editedBranch], branchGroups: [groupFor('tree-edited')], branchGroupId: 'tree-group', activeBranchId: 'tree-edited', runtimeBranchId: 'tree-edited',
           chatMessages: [{ role: 'user', content: 'Edited instruction' }, { role: 'assistant', content: 'EDITED_PAGE_ONLY' }],
           workRuns: [{ runId: 'edited-tree-run', target, status: 'completed', expanded: false, startedAt: '2026-07-24T05:00:02.000Z', endedAt: '2026-07-24T05:00:03.000Z', events: [], guides: [], primaryPrompt: 'Edited instruction' }],
         },
@@ -350,23 +350,35 @@ async function evaluate(cdp, expression) {
       hydrateConversationBranchState(pages['tree-edited']);
       syncWorkRunsSnapshot(pages['tree-edited'].workRuns, target);
       renderChatMessages(pages['tree-edited'].chatMessages);
+      setConversationRuntimeState(target, 'running', 'edited-tree-run');
+      appendAgentWorkEvent({
+        id: 'runtime-before-inspection', type: 'tool_call', toolName: 'runtime_before_inspection', content: 'RUNTIME_BRANCH_BEFORE_INSPECTION',
+        workspaceId: target.workspaceId, conversationId: target.conversationId, runId: 'edited-tree-run', sequence: 102,
+      });
+      const runtimeCacheAfterEvent = Object.values(state.workRunsByBranch || {}).flat().filter(run => run.runId === 'edited-tree-run').map(run => ({ runId: run.runId, sequence: run.sequence, events: (run.events || []).map(event => ({ id: event.id, type: event.type, content: event.content, sequence: event.sequence })) }));
       const before = document.getElementById('chat-area').innerText;
       await window.switchConversationBranch(-1, 'tree-group');
+      appendAgentWorkEvent({
+        id: 'runtime-during-inspection', type: 'tool_call', toolName: 'runtime_during_inspection', content: 'RUNTIME_BRANCH_DURING_INSPECTION',
+        workspaceId: target.workspaceId, conversationId: target.conversationId, runId: 'edited-tree-run', sequence: 103,
+      });
       const original = document.getElementById('chat-area').innerText;
       const originalRuns = workRunsForTarget(target).map(run => run.runId);
       await window.switchConversationBranch(1, 'tree-group');
       const edited = document.getElementById('chat-area').innerText;
       const editedRuns = workRunsForTarget(target).map(run => run.runId);
+      const editedEventContents = workRunsForTarget(target).flatMap(run => (run.events || []).map(event => String(event.toolName || '') + ' ' + String(event.content || '')));
+      const runtimeEventParents = Array.from(document.querySelectorAll('.conversation-work-run[data-run-id="edited-tree-run"]')).map(node => node.closest('.work-run-message') && node.closest('.work-run-message').parentElement && node.closest('.work-run-message').parentElement.id);
       const pagerStopCalls = stopCalls;
       const pagerActivationCalls = activationCalls;
       const activated = await activateViewedConversationBranchForSend(target);
-      return { before, original, originalRuns, edited, editedRuns, activeBranchId: state.activeConversationBranchId, runtimeBranchId: state.runtimeConversationBranchId, pagerStopCalls, pagerActivationCalls, activated, stopCalls, activationCalls };
+      return { before, original, originalRuns, runtimeCacheAfterEvent, edited, editedRuns, editedEventContents, runtimeEventParents, activeBranchId: state.activeConversationBranchId, runtimeBranchId: state.runtimeConversationBranchId, pagerStopCalls, pagerActivationCalls, activated, stopCalls, activationCalls };
     })()`);
     if (!pageSwitchResult.before.includes('EDITED_PAGE_ONLY') || pageSwitchResult.before.includes('ORIGINAL_PAGE_ONLY')) fail(`edited branch leaked another page before switching: ${JSON.stringify(pageSwitchResult)}`);
-    if (!pageSwitchResult.original.includes('ORIGINAL_PAGE_ONLY') || pageSwitchResult.original.includes('EDITED_PAGE_ONLY') || pageSwitchResult.originalRuns.join(',') !== 'original-tree-run') fail(`original branch was not an exclusive page tree: ${JSON.stringify(pageSwitchResult)}`);
-    if (!pageSwitchResult.edited.includes('EDITED_PAGE_ONLY') || pageSwitchResult.edited.includes('ORIGINAL_PAGE_ONLY') || pageSwitchResult.editedRuns.join(',') !== 'edited-tree-run' || pageSwitchResult.activeBranchId !== 'tree-edited') fail(`edited branch was not restored as an exclusive page tree: ${JSON.stringify(pageSwitchResult)}`);
+    if (!pageSwitchResult.original.includes('ORIGINAL_PAGE_ONLY') || pageSwitchResult.original.includes('EDITED_PAGE_ONLY') || pageSwitchResult.original.includes('runtime_during_inspection') || pageSwitchResult.originalRuns.join(',') !== 'original-tree-run') fail(`original branch was not an exclusive page tree: ${JSON.stringify(pageSwitchResult)}`);
+    if (!pageSwitchResult.edited.includes('EDITED_PAGE_ONLY') || pageSwitchResult.edited.includes('ORIGINAL_PAGE_ONLY') || !pageSwitchResult.editedEventContents.some(content => content.includes('runtime_during_inspection')) || pageSwitchResult.editedRuns.join(',') !== 'edited-tree-run' || pageSwitchResult.runtimeEventParents.length !== 1 || pageSwitchResult.runtimeEventParents[0] !== 'chat-area' || pageSwitchResult.activeBranchId !== 'tree-edited') fail(`running branch was not restored at its exclusive page position: ${JSON.stringify(pageSwitchResult)}`);
     if (pageSwitchResult.pagerStopCalls !== 0 || pageSwitchResult.pagerActivationCalls !== 0) fail(`page inspection stopped or activated a runtime branch: ${JSON.stringify(pageSwitchResult)}`);
-    if (!pageSwitchResult.activated || pageSwitchResult.stopCalls !== 0 || pageSwitchResult.activationCalls !== 1 || pageSwitchResult.runtimeBranchId !== 'tree-edited') fail(`sending from the inspected page did not activate exactly that branch: ${JSON.stringify(pageSwitchResult)}`);
+    if (!pageSwitchResult.activated || pageSwitchResult.stopCalls !== 0 || pageSwitchResult.activationCalls !== 0 || pageSwitchResult.runtimeBranchId !== 'tree-edited') fail(`returning to the running page unexpectedly stopped or reactivated its branch: ${JSON.stringify(pageSwitchResult)}`);
 
     const guideTailIsolation = await evaluate(cdp, `(() => {
       const target = currentConversationTarget();

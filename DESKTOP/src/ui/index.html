@@ -4903,6 +4903,7 @@ var state = {
   agentWorkEventsByConversation: {},
   agentWorkUiByConversation: {},
   workRunsByTarget: {},
+  workRunsByBranch: {},
   guideMessagesByTarget: {},
   agentWorkEventLimit: 240,
   foregroundConversationHoldId: '',
@@ -7244,7 +7245,6 @@ window.switchConversationBranch = async function(offset, branchGroupId) {
   var result = await branchApi.inspectConversationBranch(currentConversationTarget(), branches[next].id, group ? group.id : (state.activeConversationBranchGroupId || ''));
   if (!result || result.error) return showUiNotice((result && result.error) || 'Unable to switch branch.', 'error', 'conversation-branch');
   var target = currentConversationTarget();
-  clearAgentWorkEvents(target.conversationId);
   resetConversationWorkUi(target.conversationId, false, target.workspaceId);
   state.conversationBranches = result.branches || [];
   state.conversationBranchGroups = Array.isArray(result.branchGroups) ? result.branchGroups : [];
@@ -7253,6 +7253,7 @@ window.switchConversationBranch = async function(offset, branchGroupId) {
   state.activeConversationBranchGroupId = String(result.branchGroupId || state.activeConversationBranchGroupId || '');
   syncWorkRunsSnapshot(Array.isArray(result.workRuns) ? result.workRuns : [], target);
   renderChatMessages(result.chatMessages || []);
+  if (isViewingRuntimeConversationBranch(target)) replayActiveAgentWorkEvents();
 };
 
 function isViewingRuntimeConversationBranch(target) {
@@ -7731,7 +7732,7 @@ function registerRuntimeKey(target, runtimeKey) {
   if (!state.runtimeKeyAliases) state.runtimeKeyAliases = {};
   state.runtimeKeyAliases[base] = runtimeKey;
   if (previous !== runtimeKey) {
-    ['runningConversations', 'conversationRuntimeStates', 'agentWorkEventsByConversation', 'agentWorkUiByConversation', 'workRunsByTarget', 'guideMessagesByTarget', 'trackedConversationUntil', 'backendQueuesByTarget', 'activeSendCallsByTarget', 'nextQueueSchedulesByTarget', 'nextQueueDrainsByTarget'].forEach(function(storeName) {
+    ['runningConversations', 'conversationRuntimeStates', 'agentWorkEventsByConversation', 'agentWorkUiByConversation', 'workRunsByTarget', 'workRunsByBranch', 'guideMessagesByTarget', 'trackedConversationUntil', 'backendQueuesByTarget', 'activeSendCallsByTarget', 'nextQueueSchedulesByTarget', 'nextQueueDrainsByTarget'].forEach(function(storeName) {
       var store = state[storeName];
       if (!store || store[previous] === undefined) return;
       if (store[runtimeKey] === undefined) store[runtimeKey] = store[previous];
@@ -7924,7 +7925,8 @@ function setConversationRuntimeState(target, status, runId, extra) {
   if (!state.runningConversations) state.runningConversations = {};
   if (['running', 'stopping', 'force_restarting'].indexOf(next.status) >= 0) state.runningConversations[key] = next;
   else delete state.runningConversations[key];
-  var runs = state.workRunsByTarget && state.workRunsByTarget[key] || [];
+  var branchIds = conversationBranchIdsForTarget(target);
+  var runs = workRunsForBranch(target, branchIds.runtime || branchIds.viewed);
   var matchingRun = next.runId && runs.find(function(item) { return String(item.runId || '') === next.runId; });
   if (matchingRun) {
     matchingRun.status = next.status;
@@ -7932,7 +7934,10 @@ function setConversationRuntimeState(target, status, runId, extra) {
       if (!matchingRun.endedAt) matchingRun.endedAt = new Date().toISOString();
       if (matchingRun.userToggled !== true) matchingRun.expanded = false;
     }
-    if (isActiveConversationTarget(next.target)) updateConversationWorkRunElement(matchingRun);
+    if (isActiveConversationTarget(next.target) && (!branchIds.viewed || !branchIds.runtime || branchIds.viewed === branchIds.runtime)) {
+      state.workRunsByTarget[key] = runs;
+      updateConversationWorkRunElement(matchingRun);
+    }
   }
   state._sendInFlight = Object.keys(state.runningConversations).length > 0;
   return next;
@@ -8095,19 +8100,46 @@ function normalizedWorkRun(run, target) {
   };
 }
 
+function conversationBranchIdsForTarget(target) {
+  target = target || currentConversationTarget();
+  if (!isActiveConversationTarget(target)) return { viewed: '', runtime: '' };
+  return {
+    viewed: String(state.activeConversationBranchId || ''),
+    runtime: String(state.runtimeConversationBranchId || state.activeConversationBranchId || '')
+  };
+}
+
+function workRunBranchKey(target, branchId) {
+  var runtimeKey = runtimeKeyFor(target.workspaceId, target.conversationId);
+  return runtimeKey + '::branch::' + String(branchId || 'linear');
+}
+
+function workRunsForBranch(target, branchId) {
+  target = target || currentConversationTarget();
+  if (!state.workRunsByBranch) state.workRunsByBranch = {};
+  var key = workRunBranchKey(target, branchId);
+  if (!state.workRunsByBranch[key]) state.workRunsByBranch[key] = [];
+  return state.workRunsByBranch[key];
+}
+
 function workRunsForTarget(target) {
   target = target || currentConversationTarget();
   var key = runtimeKeyFor(target.workspaceId, target.conversationId);
   if (!state.workRunsByTarget) state.workRunsByTarget = {};
-  if (!state.workRunsByTarget[key]) state.workRunsByTarget[key] = [];
+  if (!state.workRunsByTarget[key]) {
+    var branchIds = conversationBranchIdsForTarget(target);
+    state.workRunsByTarget[key] = workRunsForBranch(target, branchIds.viewed);
+  }
   return state.workRunsByTarget[key];
 }
 
-function syncWorkRunsSnapshot(runs, target) {
+function syncWorkRunsSnapshot(runs, target, branchId) {
   target = target || currentConversationTarget();
   syncGuideMessagesFromWorkRuns(runs, target);
   var key = runtimeKeyFor(target.workspaceId, target.conversationId);
-  var prior = workRunsForTarget(target);
+  var branchIds = conversationBranchIdsForTarget(target);
+  var selectedBranchId = branchId === undefined ? branchIds.viewed : String(branchId || '');
+  var prior = workRunsForBranch(target, selectedBranchId);
   var normalized = (Array.isArray(runs) ? runs : []).map(function(run) {
     var item = normalizedWorkRun(run, target);
     var previous = prior.find(function(priorRun) { return priorRun.runId === item.runId; });
@@ -8119,8 +8151,24 @@ function syncWorkRunsSnapshot(runs, target) {
       var isLive = ['running', 'stopping', 'force_restarting'].indexOf(item.status) >= 0;
       item.expanded = isLive ? true : (wasLive ? false : item.expanded);
     }
+    if (previous) {
+      var snapshotEventIds = {};
+      item.events.forEach(function(event) { snapshotEventIds[String(event.id || '')] = true; });
+      var liveOnlyEvents = previous.events.filter(function(event) {
+        return !snapshotEventIds[String(event.id || '')] && Number(event.sequence || 0) > Number(item.sequence || 0);
+      });
+      if (liveOnlyEvents.length) {
+        item.events = dedupeGuideWorkEvents(item.events.concat(liveOnlyEvents)).sort(function(a, b) { return Number(a.sequence || 0) - Number(b.sequence || 0); });
+        item.sequence = Math.max(Number(item.sequence || 0), Number(previous.sequence || 0));
+        if (['running', 'stopping', 'force_restarting'].indexOf(String(previous.status || '')) >= 0) {
+          item.status = previous.status;
+          item.endedAt = previous.endedAt;
+        }
+      }
+    }
     return item;
   });
+  state.workRunsByBranch[workRunBranchKey(target, selectedBranchId)] = normalized;
   state.workRunsByTarget[key] = normalized;
   return normalized;
 }
@@ -8631,7 +8679,9 @@ function applyAgentWorkEventToRun(event) {
     workspaceId: String(event.workspaceId || (event.target && event.target.workspaceId) || runtimeWorkspaceId('')),
     conversationId: String(event.conversationId || (event.target && event.target.conversationId) || 'default')
   };
-  var runs = workRunsForTarget(target);
+  var branchIds = conversationBranchIdsForTarget(target);
+  var eventBranchId = branchIds.runtime || branchIds.viewed;
+  var runs = workRunsForBranch(target, eventBranchId);
   var run = runs.find(function(item) { return item.runId === String(event.runId); });
   if (!run) {
     run = normalizedWorkRun({ runId: event.runId, status: 'running', startedAt: event.startedAt || event.timestampIso || new Date().toISOString(), events: [] }, target);
@@ -8663,6 +8713,7 @@ function applyAgentWorkEventToRun(event) {
     var eventId = String(event.id || [event.sequence || '', type, event.timestamp || '', event.content || ''].join('|'));
     if (!run.events.some(function(item) { return String(item.id || '') === eventId; })) run.events.push(Object.assign({}, event, { id: eventId }));
   }
+  run.sequence = Math.max(Number(run.sequence || 0), Number(event.sequence || 0));
   if (type === 'done') { run.status = 'completed'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.userToggled !== true) run.expanded = false; }
   else if (type === 'error') { run.status = 'error'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.userToggled !== true) run.expanded = false; }
   else if (type === 'interrupted') { run.status = 'interrupted'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.userToggled !== true) run.expanded = false; }
@@ -8674,7 +8725,10 @@ function applyAgentWorkEventToRun(event) {
       if (run.userToggled !== true) run.expanded = false;
     }
   }
-  if (isActiveConversationTarget(target)) renderConversationWorkRun(run);
+  if (isActiveConversationTarget(target) && (!branchIds.viewed || !eventBranchId || branchIds.viewed === eventBranchId)) {
+    state.workRunsByTarget[runtimeKeyFor(target.workspaceId, target.conversationId)] = runs;
+    renderConversationWorkRun(run);
+  }
   return run;
 }
 
@@ -9299,9 +9353,9 @@ function applyConversationSnapshot(s, requestedConversationId) {
       conversationId: String((s && (s.conversationId || (s.target && s.target.conversationId))) || requestedConversationId)
     };
     if (s && s.runtimeKey) registerRuntimeKey(snapshotTarget, s.runtimeKey);
-    if (s && Array.isArray(s.workRuns)) syncWorkRunsSnapshot(s.workRuns, snapshotTarget);
-    applyAutoRouteRatingState(s);
     hydrateConversationBranchState(s);
+    if (s && Array.isArray(s.workRuns)) syncWorkRunsSnapshot(s.workRuns, snapshotTarget, String(s.activeBranchId || ''));
+    applyAutoRouteRatingState(s);
     if (s && s.chatMessages) renderChatMessages(s.chatMessages);
     if (s && s.conversationId) {
       state.activeBackendConversationId = s.conversationId;

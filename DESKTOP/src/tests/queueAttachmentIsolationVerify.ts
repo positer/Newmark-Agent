@@ -55,6 +55,9 @@ function verifyPersistedWorkRunsCannotRewriteRuntimeIdentity(source: string): vo
     'dedupeGuideWorkEvents',
     'publicWorkEventForUi',
     'normalizedWorkRun',
+    'conversationBranchIdsForTarget',
+    'workRunBranchKey',
+    'workRunsForBranch',
     'workRunsForTarget',
     'syncWorkRunsSnapshot',
   ].map(name => functionSource(source, name)).join('\n\n');
@@ -72,6 +75,7 @@ function verifyPersistedWorkRunsCannotRewriteRuntimeIdentity(source: string): vo
     agentWorkEventsByConversation: {},
     agentWorkUiByConversation: {},
     workRunsByTarget: {},
+    workRunsByBranch: {},
     guideMessagesByTarget: {},
     trackedConversationUntil: {},
     activeSendCallsByTarget: {},
@@ -84,7 +88,7 @@ function verifyPersistedWorkRunsCannotRewriteRuntimeIdentity(source: string): vo
   };
   const guideTargets: Array<{ workspaceId: string; conversationId: string }> = [];
   const windowObject: Record<string, any> = {};
-  const install = new Function('window', 'state', 'currentConversationTarget', 'recordGuideUiMessage', `
+  const install = new Function('window', 'state', 'currentConversationTarget', 'recordGuideUiMessage', 'isActiveConversationTarget', `
     ${helpers}
     window.runtimeKeyFor = runtimeKeyFor;
     window.registerRuntimeKey = registerRuntimeKey;
@@ -96,6 +100,7 @@ function verifyPersistedWorkRunsCannotRewriteRuntimeIdentity(source: string): vo
     state,
     () => ({ ...targetA }),
     (_input: Record<string, any>, target: typeof targetA) => { guideTargets.push({ ...target }); },
+    () => false,
   );
 
   windowObject.registerRuntimeKey(targetA, runtimeA);

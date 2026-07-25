@@ -23,6 +23,7 @@ export interface AgentPromptMessage {
   images?: Array<{ dataUrl: string; name?: string; type?: string }>;
   attachments?: ConversationImageAttachment[];
   clientMessageId?: string;
+  guideId?: string;
   runId?: string;
   routePolicy?: {
     mode?: 'quality' | 'balanced' | 'cost' | 'speed';

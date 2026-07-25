@@ -118,6 +118,9 @@ interface StoredConversationState {
     branches?: ConversationBranchState[];
     activeBranchId?: string;
     activeBranchGroupId?: string;
+    rootBranchNodeId?: string;
+    viewedBranchNodePath?: string[];
+    runtimeBranchNodePath?: string[];
     tree?: ConversationTreeState;
     branchReset?: boolean;
     updatedAt?: string;
@@ -214,6 +217,8 @@ export interface ConversationSnapshot {
   branches: Array<Pick<ConversationBranchState, 'id' | 'createdAt' | 'sourceMessageIndex' | 'sourceText'>>;
   activeBranchId: string;
   runtimeBranchId: string;
+  viewedBranchNodePath: string[];
+  runtimeBranchNodePath: string[];
   branchGroupId: string;
   branchGroups: ConversationBranchGroupSnapshot[];
 }
@@ -622,6 +627,10 @@ export class Agent {
       current = current.parentId ? tree.nodes[current.parentId] : undefined;
     }
     return ancestry;
+  }
+
+  private treePath(tree: ConversationTreeState | null, nodeId: string): string[] {
+    return tree && tree.nodes[nodeId] ? this.treeAncestry(tree, nodeId).reverse() : [];
   }
 
   private branchGroupsForNode(tree: ConversationTreeState | null, nodeId = tree?.activeNodeId || ''): ConversationBranchGroupSnapshot[] {
@@ -1072,6 +1081,19 @@ export class Agent {
     };
   }
 
+  private currentBranchNodeId(conversationId = this.activeConversationId): string {
+    const stateKey = this.workspaceConversationStateKey(this.safeConversationId(conversationId || 'default'));
+    if (!stateKey) return '';
+    const stored = this.readStoredConversationState();
+    const entry = stored.conversations?.[stateKey];
+    if (!entry) return '';
+    const existing = String(entry.tree?.activeNodeId || entry.activeBranchId || entry.rootBranchNodeId || '');
+    if (existing) return existing;
+    entry.rootBranchNodeId = crypto.randomUUID();
+    this.writeStoredConversationStateNow(stored);
+    return entry.rootBranchNodeId;
+  }
+
   private sanitizePublicWorkContent(value: string): string {
     return this.sanitizeAssistantOutput(String(value || ''))
       .split(/\r?\n/)
@@ -1112,6 +1134,7 @@ export class Agent {
     const attachments = hydrateConversationImageAttachments(this.rootPath, input.attachments);
     return {
       clientMessageId: String(input.clientMessageId || '').trim().slice(0, 200),
+      guideId: String(input.guideId || '').trim() || crypto.randomUUID(),
       target,
       runId: String(input.runId || '').trim().slice(0, 200),
       status: input.status,
@@ -1248,6 +1271,8 @@ export class Agent {
         events,
         guides: [...guidesById.values()],
         primaryPrompt: this.sanitizePublicWorkContent(raw.primaryPrompt || ''),
+        branchNodeId: String(raw.branchNodeId || ''),
+        anchorMessageId: String(raw.anchorMessageId || ''),
       };
       const previous = byRun.get(runId);
       if (!previous) {
@@ -1338,6 +1363,8 @@ export class Agent {
       events: [],
       guides: [],
       primaryPrompt: '',
+      branchNodeId: this.currentBranchNodeId(normalizedTarget.conversationId),
+      anchorMessageId: '',
     };
     this.workRuns.push(run);
     if (managed) this.managedWorkRunIds.add(run.runId);
@@ -1406,7 +1433,10 @@ export class Agent {
     const consumedUserHistory = new Set<number>();
     let nextUserHistoryIndex = 0;
     return (Array.isArray(messages) ? messages : []).map(message => {
-      if (!message || message.role !== 'user') return { ...message };
+      const messageId = String(message?.messageId || '').trim() || crypto.randomUUID();
+      const guideId = message?.clientMessageId ? (String(message.guideId || '').trim() || crypto.randomUUID()) : undefined;
+      const identified = { ...message, messageId, guideId, branchNodeId: String(message?.branchNodeId || '') || this.currentBranchNodeId() } as ChatMessage;
+      if (!message || message.role !== 'user') return identified;
       let matchingHistoryIndex = -1;
       if (message.clientMessageId) {
         matchingHistoryIndex = userHistory.findIndex((item, index) => (
@@ -1426,7 +1456,7 @@ export class Agent {
       }
       const existing = hydrateConversationImageAttachments(this.rootPath, message.attachments);
       const migrated = existing.length ? existing : this.durableAttachmentsFromHistoryContent(matchingHistory?.content);
-      return migrated.length ? { ...message, attachments: migrated } : { ...message, attachments: undefined };
+      return migrated.length ? { ...identified, attachments: migrated } : { ...identified, attachments: undefined };
     });
   }
 
@@ -1436,6 +1466,7 @@ export class Agent {
     runId = this.activeWorkRunId,
     historyContent?: unknown,
     attachments?: ConversationImageAttachment[],
+    guideId?: string,
   ): boolean {
     const id = String(clientMessageId || '').trim().slice(0, 200);
     if (!id) return false;
@@ -1446,6 +1477,9 @@ export class Agent {
     let attachmentChanged = false;
     if (!inChat) {
       this.chatMessages.push({
+        messageId: crypto.randomUUID(),
+        guideId: String(guideId || '').trim() || crypto.randomUUID(),
+        branchNodeId: this.currentBranchNodeId(),
         role: 'user',
         content: String(content || ''),
         mode: 'guide',
@@ -1457,6 +1491,7 @@ export class Agent {
       });
     } else if (resolvedAttachments.length) {
       const message = this.chatMessages.find(item => item.clientMessageId === id);
+      if (message && !message.guideId) message.guideId = String(guideId || '').trim() || crypto.randomUUID();
       if (message && !(message.attachments || []).length) {
         message.attachments = resolvedAttachments;
         attachmentChanged = true;
@@ -1537,6 +1572,8 @@ export class Agent {
       : 'Build completed; this run returned no additional result summary.');
     if (!persisted) {
       this.chatMessages.push({
+        messageId: crypto.randomUUID(),
+        branchNodeId: run.branchNodeId || this.currentBranchNodeId(run.target.conversationId),
         role: 'assistant',
         content,
         mode: this.modeName(),
@@ -1630,6 +1667,8 @@ export class Agent {
       : this.sanitizeAssistantOutput(content);
     void toolArgs;
     this.chatMessages.push({
+      messageId: crypto.randomUUID(),
+      branchNodeId: this.currentBranchNodeId(),
       role: 'workflow',
       content: safe,
       mode: toolName ? `tool:${toolName}` : this.modeName(),
@@ -2216,6 +2255,8 @@ export class Agent {
       branches: this.branchGroupMetadata(tree),
       activeBranchId: String(tree?.activeNodeId || ''),
       runtimeBranchId: String(tree?.activeNodeId || ''),
+      viewedBranchNodePath: this.treePath(tree, String(tree?.activeNodeId || '')),
+      runtimeBranchNodePath: this.treePath(tree, String(tree?.activeNodeId || '')),
       branchGroupId: String(tree?.activeGroupId || ''),
       branchGroups: this.branchGroupsForNode(tree),
     };
@@ -2249,6 +2290,8 @@ export class Agent {
       branches: this.branchGroupMetadata(tree, group?.id),
       activeBranchId: branch.id,
       runtimeBranchId: String(tree.activeNodeId || ''),
+      viewedBranchNodePath: this.treePath(tree, branch.id),
+      runtimeBranchNodePath: this.treePath(tree, String(tree.activeNodeId || '')),
       branchGroupId: String(group?.id || tree.activeGroupId || ''),
       branchGroups: this.branchGroupsForNode(tree, branch.id),
     };
@@ -2347,10 +2390,11 @@ export class Agent {
     if (!entry) throw new Error('Conversation state is unavailable.');
     let tree = this.normalizeConversationTree(entry);
     if (!tree) {
-      const originalId = crypto.randomUUID();
+      const originalId = String(entry.rootBranchNodeId || '') || crypto.randomUUID();
       const original = this.treeNodeFromEntry(originalId, null, index, target.content, entry);
       tree = { version: 1, rootNodeId: originalId, activeNodeId: originalId, activeGroupId: '', nodes: { [originalId]: original }, branchGroups: {} };
       entry.tree = tree;
+      entry.rootBranchNodeId = originalId;
     } else {
       this.syncActiveTreeNode(entry);
     }
@@ -2806,6 +2850,11 @@ export class Agent {
     const run = this.workRuns.find(item => item.runId === this.currentWorkRunId());
     if (!run || run.primaryPrompt) return;
     run.primaryPrompt = this.sanitizePublicWorkContent(content).slice(0, 50_000);
+    const anchor = [...this.chatMessages].reverse().find(message => message.role === 'user' && message.runId === run.runId);
+    run.anchorMessageId = String(anchor?.messageId || '');
+    const stateKey = this.workspaceConversationStateKey();
+    const entry = stateKey ? this.readStoredConversationState().conversations?.[stateKey] : undefined;
+    run.branchNodeId = String(entry?.tree?.activeNodeId || entry?.activeBranchId || '');
     this.saveWorkspaceConversationState(false);
   }
 
@@ -4296,10 +4345,11 @@ export class Agent {
         ? [{ type: 'text', text }, ...images.map(image => ({ type: 'image_url', image_url: { url: image.dataUrl } }))]
         : text;
       if (clientMessageId) {
-        this.persistGuideMessage(clientMessageId, displayText, inputRunId, historyContent, attachments);
+        this.persistGuideMessage(clientMessageId, displayText, inputRunId, historyContent, attachments, String(inputEnvelope?.guideId || ''));
         if (inputRunId) {
           this.recordGuideReceipt({
             clientMessageId,
+            guideId: String(inputEnvelope?.guideId || '') || undefined,
             target: this.currentConversationTarget(),
             runId: inputRunId,
             status: 'applied',
@@ -4311,6 +4361,8 @@ export class Agent {
         }
       } else {
         this.chatMessages.push({
+          messageId: crypto.randomUUID(),
+          branchNodeId: this.currentBranchNodeId(),
           role: 'user',
           content: displayText,
           mode: this.modeName(),

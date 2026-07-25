@@ -92,6 +92,8 @@ function createFixture(): {
       row.textContent = 'Build ' + String(run && run.runId || '');
       els['chat-area'].appendChild(row);
     }
+    function workRunBeforeElement() { return null; }
+    function bindWorkRunAnchorIndex() {}
     function addWorkReview() {}
     function renderAutoRouteRatingControls() {}
     ${extracted}

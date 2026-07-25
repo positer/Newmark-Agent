@@ -2685,7 +2685,16 @@ if (hasCliCommand) {
         const snapshot = isolated.inspectConversationBranch(target.conversationId, branchId, branchGroupId);
         if (snapshot.runtimeBranchId === snapshot.activeBranchId && peekTargetRuntime(target).resident) {
           const live = await runtimeSnapshotForTarget(target);
-          return { ...live, activeBranchId: snapshot.activeBranchId, runtimeBranchId: snapshot.runtimeBranchId };
+          return {
+            ...live,
+            activeBranchId: snapshot.activeBranchId,
+            runtimeBranchId: snapshot.runtimeBranchId,
+            viewedBranchNodePath: snapshot.viewedBranchNodePath,
+            runtimeBranchNodePath: snapshot.runtimeBranchNodePath,
+            branchGroupId: snapshot.branchGroupId,
+            branchGroups: snapshot.branchGroups,
+            branches: snapshot.branches,
+          };
         }
         return { ...snapshot, target, workspaceId: target.workspaceId, queued: { steering: [], followUp: [] }, workEvents: [] };
       } catch (error) {

@@ -4904,6 +4904,8 @@ var state = {
   agentWorkUiByConversation: {},
   workRunsByTarget: {},
   workRunsByBranch: {},
+  runtimeBranchPathsByTarget: {},
+  workRunAnchorIndexesByTarget: {},
   guideMessagesByTarget: {},
   agentWorkEventLimit: 240,
   foregroundConversationHoldId: '',
@@ -7211,6 +7213,7 @@ window.submitUserMessageEdit = async function(message, messageIndex, editedText,
     state.activeConversationBranchId = String(result.activeBranchId || '');
     state.runtimeConversationBranchId = String(result.runtimeBranchId || result.activeBranchId || '');
     state.activeConversationBranchGroupId = String(result.branchGroupId || '');
+    hydrateConversationBranchState(result);
     syncWorkRunsSnapshot(Array.isArray(result.workRuns) ? result.workRuns : [], target);
     renderChatMessages(result.chatMessages || []);
     els.prompt.value = String(text || '');
@@ -7242,6 +7245,7 @@ window.switchConversationBranch = async function(offset, branchGroupId) {
   var current = branches.findIndex(function(branch) { return branch.id === currentBranchId; });
   var next = Math.max(0, Math.min(branches.length - 1, (current < 0 ? branches.length - 1 : current) + Number(offset || 0)));
   if (next === current) return;
+  rememberRuntimeConversationBranchPath(currentConversationTarget());
   var result = await branchApi.inspectConversationBranch(currentConversationTarget(), branches[next].id, group ? group.id : (state.activeConversationBranchGroupId || ''));
   if (!result || result.error) return showUiNotice((result && result.error) || 'Unable to switch branch.', 'error', 'conversation-branch');
   var target = currentConversationTarget();
@@ -7251,6 +7255,7 @@ window.switchConversationBranch = async function(offset, branchGroupId) {
   state.activeConversationBranchId = result.activeBranchId || '';
   state.runtimeConversationBranchId = result.runtimeBranchId || state.runtimeConversationBranchId || '';
   state.activeConversationBranchGroupId = String(result.branchGroupId || state.activeConversationBranchGroupId || '');
+  hydrateConversationBranchState(result);
   syncWorkRunsSnapshot(Array.isArray(result.workRuns) ? result.workRuns : [], target);
   renderChatMessages(result.chatMessages || []);
   if (isViewingRuntimeConversationBranch(target)) replayActiveAgentWorkEvents();
@@ -7258,8 +7263,9 @@ window.switchConversationBranch = async function(offset, branchGroupId) {
 
 function isViewingRuntimeConversationBranch(target) {
   if (!isActiveConversationTarget(target)) return true;
-  var viewed = String(state.activeConversationBranchId || '');
-  var runtime = String(state.runtimeConversationBranchId || '');
+  var branchIds = conversationBranchIdsForTarget(target);
+  var viewed = branchIds.viewed;
+  var runtime = branchIds.runtime;
   return !viewed || !runtime || viewed === runtime;
 }
 
@@ -7280,6 +7286,7 @@ async function activateViewedConversationBranchForSend(target) {
   state.activeConversationBranchId = String(result.activeBranchId || viewed);
   state.runtimeConversationBranchId = String(result.runtimeBranchId || result.activeBranchId || viewed);
   state.activeConversationBranchGroupId = String(result.branchGroupId || state.activeConversationBranchGroupId || '');
+  hydrateConversationBranchState(result);
   syncWorkRunsSnapshot(Array.isArray(result.workRuns) ? result.workRuns : [], target);
   renderChatMessages(result.chatMessages || []);
   return true;
@@ -7394,6 +7401,8 @@ function addMsg(role, text, mode, model, messageIndex, messageMeta) {
     conversationId: String(messageMeta.target.conversationId || 'default')
   } : null;
   if (Number.isFinite(Number(messageIndex)) && Number(messageIndex) >= 0) div.setAttribute('data-message-index', String(Number(messageIndex)));
+  if (messageMeta && messageMeta.messageId) div.setAttribute('data-message-id', String(messageMeta.messageId));
+  if (messageMeta && messageMeta.guideId) div.setAttribute('data-guide-id', String(messageMeta.guideId));
   if (messageMeta && messageMeta.runId) div.setAttribute('data-run-id', String(messageMeta.runId));
   if (messageMeta && messageMeta.clientMessageId) applyGuideMessageMeta(div, messageMeta);
   if (owningRunId && role === 'assistant') {
@@ -7732,7 +7741,7 @@ function registerRuntimeKey(target, runtimeKey) {
   if (!state.runtimeKeyAliases) state.runtimeKeyAliases = {};
   state.runtimeKeyAliases[base] = runtimeKey;
   if (previous !== runtimeKey) {
-    ['runningConversations', 'conversationRuntimeStates', 'agentWorkEventsByConversation', 'agentWorkUiByConversation', 'workRunsByTarget', 'workRunsByBranch', 'guideMessagesByTarget', 'trackedConversationUntil', 'backendQueuesByTarget', 'activeSendCallsByTarget', 'nextQueueSchedulesByTarget', 'nextQueueDrainsByTarget'].forEach(function(storeName) {
+    ['runningConversations', 'conversationRuntimeStates', 'agentWorkEventsByConversation', 'agentWorkUiByConversation', 'workRunsByTarget', 'workRunsByBranch', 'runtimeBranchPathsByTarget', 'guideMessagesByTarget', 'trackedConversationUntil', 'backendQueuesByTarget', 'activeSendCallsByTarget', 'nextQueueSchedulesByTarget', 'nextQueueDrainsByTarget'].forEach(function(storeName) {
       var store = state[storeName];
       if (!store || store[previous] === undefined) return;
       if (store[runtimeKey] === undefined) store[runtimeKey] = store[previous];
@@ -7784,6 +7793,7 @@ function applyGuideMessageMeta(element, input) {
   if (!clientMessageId) return element;
   var status = normalizeGuideUiStatus(input.guideStatus || input.status);
   element.setAttribute('data-client-message-id', clientMessageId);
+  if (input.guideId) element.setAttribute('data-guide-id', String(input.guideId));
   element.setAttribute('data-guide-status', status);
   if (input.runId) element.setAttribute('data-run-id', String(input.runId));
   element.classList.toggle('guide-rejected', status === 'rejected');
@@ -8084,6 +8094,8 @@ function normalizedWorkRun(run, target) {
     startedAt: startedAt,
     endedAt: run.endedAt || '',
     primaryPrompt: String(run.primaryPrompt || ''),
+    branchNodeId: String(run.branchNodeId || ''),
+    anchorMessageId: String(run.anchorMessageId || ''),
     expanded: expanded,
     userToggled: run.userToggled === true,
     events: dedupeGuideWorkEvents((Array.isArray(run.events) ? run.events : []).filter(publicWorkEvent).map(function(event) {
@@ -8100,12 +8112,40 @@ function normalizedWorkRun(run, target) {
   };
 }
 
+function conversationBranchPathKey(groups, fallbackBranchId) {
+  var path = (Array.isArray(groups) ? groups : []).map(function(group) {
+    return String(group && group.id || '') + '=' + String(group && group.activeBranchId || '');
+  }).filter(function(item) { return item !== '='; });
+  return path.length ? path.join('>') : String(fallbackBranchId || '');
+}
+
+function rememberRuntimeConversationBranchPath(target) {
+  target = target || currentConversationTarget();
+  if (!isActiveConversationTarget(target)) return;
+  var viewedPath = conversationBranchPathKey(state.conversationBranchGroups, state.activeConversationBranchId);
+  var runtimeLeaf = String(state.runtimeConversationBranchId || '');
+  var viewedLeaf = String(state.activeConversationBranchId || '');
+  if (!viewedPath || (runtimeLeaf && viewedLeaf && runtimeLeaf !== viewedLeaf)) return;
+  if (!state.runtimeBranchPathsByTarget) state.runtimeBranchPathsByTarget = {};
+  state.runtimeBranchPathsByTarget[runtimeKeyFor(target.workspaceId, target.conversationId)] = viewedPath;
+}
+
 function conversationBranchIdsForTarget(target) {
   target = target || currentConversationTarget();
   if (!isActiveConversationTarget(target)) return { viewed: '', runtime: '' };
+  var key = runtimeKeyFor(target.workspaceId, target.conversationId);
+  var viewedNodePath = Array.isArray(state.viewedConversationBranchNodePath) ? state.viewedConversationBranchNodePath.join('>') : '';
+  var runtimeNodePath = Array.isArray(state.runtimeConversationBranchNodePath) ? state.runtimeConversationBranchNodePath.join('>') : '';
+  var viewedPath = viewedNodePath || conversationBranchPathKey(state.conversationBranchGroups, state.activeConversationBranchId);
+  var runtimePath = runtimeNodePath || String(state.runtimeBranchPathsByTarget && state.runtimeBranchPathsByTarget[key] || '');
+  if (!runtimePath && String(state.runtimeConversationBranchId || '') === String(state.activeConversationBranchId || '')) {
+    runtimePath = viewedPath;
+    if (!state.runtimeBranchPathsByTarget) state.runtimeBranchPathsByTarget = {};
+    state.runtimeBranchPathsByTarget[key] = runtimePath;
+  }
   return {
-    viewed: String(state.activeConversationBranchId || ''),
-    runtime: String(state.runtimeConversationBranchId || state.activeConversationBranchId || '')
+    viewed: viewedPath,
+    runtime: runtimePath || String(state.runtimeConversationBranchId || state.activeConversationBranchId || '')
   };
 }
 
@@ -8120,6 +8160,31 @@ function workRunsForBranch(target, branchId) {
   var key = workRunBranchKey(target, branchId);
   if (!state.workRunsByBranch[key]) state.workRunsByBranch[key] = [];
   return state.workRunsByBranch[key];
+}
+
+function workRunAnchorIndexStore(target) {
+  target = target || currentConversationTarget();
+  var key = runtimeKeyFor(target.workspaceId, target.conversationId);
+  if (!state.workRunAnchorIndexesByTarget) state.workRunAnchorIndexesByTarget = {};
+  if (!state.workRunAnchorIndexesByTarget[key]) state.workRunAnchorIndexesByTarget[key] = {};
+  return state.workRunAnchorIndexesByTarget[key];
+}
+
+function bindWorkRunAnchorIndex(target, runId, messageIndex) {
+  if (!runId || !Number.isFinite(Number(messageIndex)) || Number(messageIndex) < 0) return;
+  workRunAnchorIndexStore(target)[String(runId)] = Number(messageIndex);
+}
+
+function workRunBeforeElement(run) {
+  if (!els['chat-area'] || !run || !run.runId) return null;
+  var anchor = run.anchorMessageId ? els['chat-area'].querySelector('.chat-msg[data-message-id="' + escAttr(String(run.anchorMessageId)) + '"]') : null;
+  var anchorIndex = workRunAnchorIndexStore(run.target)[String(run.runId)];
+  if (!anchor && !Number.isFinite(Number(anchorIndex))) return null;
+  if (!anchor) anchor = els['chat-area'].querySelector('.chat-msg.user[data-message-index="' + Number(anchorIndex) + '"]');
+  if (!anchor) return null;
+  var cursor = anchor.nextElementSibling;
+  while (cursor && cursor.classList && cursor.classList.contains('conversation-branch-pager')) cursor = cursor.nextElementSibling;
+  return cursor;
 }
 
 function workRunsForTarget(target) {
@@ -8241,8 +8306,8 @@ function workEventIcon(type) {
 function workToolActivity(event) {
   var name = publicToolNameForUi(event && event.toolName).toLowerCase();
   if (name === 'task' || name.indexOf('subagent_') === 0) return { key: 'subagents', type: 'tool_subagent' };
-  if (name === 'skill' || name === 'skill_download') return { key: 'skills', type: 'tool_skill' };
-  if (name === 'mcp' || /^mcp[:._-]/.test(name) || /[:._-]mcp[:._-]/.test(name)) return { key: 'mcp', type: 'tool_mcp' };
+  if (name === 'skill' || name === 'skill_load' || name === 'skill_read' || name === 'skill_download') return { key: 'skills', type: 'tool_skill' };
+  if (name === 'mcp' || name.indexOf('mcp__') === 0 || /^mcp[:._-]/.test(name) || /[:._-]mcp[:._-]/.test(name)) return { key: 'mcp', type: 'tool_mcp' };
   if (name === 'context_compression') return { key: 'context_compression', type: 'tool_context_compression' };
   if (name === 'memory_lab_update' || name === 'memory_lab_reindex') return { key: 'memory_lab', type: 'tool_memory_lab' };
   if (name === 'image_inspect' || name === 'computer_use') return { key: 'images', type: 'tool_images' };
@@ -8287,7 +8352,7 @@ function workToolCommandLabel(item) {
   if (normalizedName.indexOf('subagent_') === 0) {
     return (currentLang() === 'zh' ? 'Subagent 操作 · ' : 'Subagent action · ') + String(args.name || args.id || normalizedName.replace(/^subagent_/, '')).trim();
   }
-  if (normalizedName === 'skill') {
+  if (normalizedName === 'skill' || normalizedName === 'skill_load' || normalizedName === 'skill_read') {
     var skillName = String(args.name || '').trim();
     var skillQuery = String(args.query || '').trim();
     if (skillName) return (currentLang() === 'zh' ? '加载 Skill · ' : 'Loaded Skill · ') + skillName;
@@ -8302,9 +8367,11 @@ function workToolCommandLabel(item) {
   if (normalizedName === 'web_search') {
     return 'web_search · ' + String(args.url || args.query || args.q || '').trim();
   }
-  if (normalizedName === 'mcp' || /^mcp[:._-]/.test(normalizedName) || /[:._-]mcp[:._-]/.test(normalizedName)) {
+  if (normalizedName === 'mcp' || normalizedName.indexOf('mcp__') === 0 || /^mcp[:._-]/.test(normalizedName) || /[:._-]mcp[:._-]/.test(normalizedName)) {
     var mcpServer = String(args.server || args.server_name || args.mcp_server || '').trim();
-    var mcpTool = String(args.tool || args.name || normalizedName.replace(/^mcp[:._-]?/, '') || toolName).trim();
+    var encodedMcp = normalizedName.indexOf('mcp__') === 0 ? normalizedName.split('__').filter(Boolean) : [];
+    if (!mcpServer && encodedMcp.length > 1) mcpServer = encodedMcp[1];
+    var mcpTool = String(args.tool || args.name || (encodedMcp.length > 2 ? encodedMcp.slice(2).join('/') : normalizedName.replace(/^mcp[:._-]?/, '')) || toolName).trim();
     return (currentLang() === 'zh' ? '调用 MCP · ' : 'Called MCP · ') + [mcpServer, mcpTool].filter(Boolean).join(' / ');
   }
   var command = String(args.command || args.cmd || '').trim();
@@ -8368,8 +8435,8 @@ function workToolGroupLabel(items, completed) {
   var subagents = [];
   (items || []).forEach(function(item) {
     var name = publicToolNameForUi(item && item.toolName).toLowerCase();
-    if (name === 'skill' || name === 'skill_download') skills.push(workToolCommandLabel(item));
-    else if (name === 'mcp' || /^mcp[:._-]/.test(name) || /[:._-]mcp[:._-]/.test(name)) mcps.push(workToolCommandLabel(item));
+    if (name === 'skill' || name === 'skill_load' || name === 'skill_read' || name === 'skill_download') skills.push(workToolCommandLabel(item));
+    else if (name === 'mcp' || name.indexOf('mcp__') === 0 || /^mcp[:._-]/.test(name) || /[:._-]mcp[:._-]/.test(name)) mcps.push(workToolCommandLabel(item));
     else if (name === 'task' || name.indexOf('subagent_') === 0) subagents.push(workToolCommandLabel(item));
   });
   var commands = Math.max(0, (items || []).length - files - skills.length - mcps.length - subagents.length);
@@ -8658,6 +8725,7 @@ function renderConversationWorkRun(run, beforeElement) {
   wrapper.className = 'chat-msg assistant work-run-message';
   var element = document.createElement('div');
   wrapper.appendChild(element);
+  beforeElement = beforeElement || workRunBeforeElement(run);
   if (beforeElement && beforeElement.parentNode === els['chat-area']) els['chat-area'].insertBefore(wrapper, beforeElement);
   else els['chat-area'].appendChild(wrapper);
   updateConversationWorkRunElement(run, element);
@@ -9025,7 +9093,7 @@ function renderChatMessages(messages) {
     if (!roles.user && String(run.primaryPrompt || '').trim()) {
       addMsg('user', run.primaryPrompt, '', '', -1, { runId: runId, target: renderTarget, timestamp: run.startedAt || '', recovered: true });
     }
-    renderConversationWorkRun(run);
+    renderConversationWorkRun(run, workRunBeforeElement(run));
     renderedRunIds[runId] = true;
     if (includeRecoveredFinal && !roles.assistant) {
       var recoveredFinal = finalResponseForRun(run);
@@ -9066,6 +9134,7 @@ function renderChatMessages(messages) {
     }
     var messageRunId = String(m.runId || '');
     var associatedRun = messageRunId ? persistedRunsById[messageRunId] : null;
+    if (associatedRun && String(m.role || '') === 'user') bindWorkRunAnchorIndex(renderTarget, messageRunId, i);
     if (associatedRun) renderOrphanRunsBefore(messageRunId);
     if (associatedRun && String(m.role || '') === 'assistant' && !renderedRunIds[messageRunId]) {
       renderOwnedWorkRun(associatedRun, false);
@@ -9074,6 +9143,8 @@ function renderChatMessages(messages) {
       clientMessageId: clientMessageId,
       guideStatus: clientMessageId ? 'applied' : '',
       runId: m.runId || '',
+      messageId: m.messageId || '',
+      guideId: m.guideId || '',
       attachments: m.attachments || [],
       target: renderTarget,
       timestamp: m.timestamp || ''
@@ -9341,6 +9412,9 @@ function hydrateConversationBranchState(snapshot) {
   state.activeConversationBranchId = String(s.activeBranchId || '');
   state.runtimeConversationBranchId = String(s.runtimeBranchId || s.activeBranchId || '');
   state.activeConversationBranchGroupId = String(s.branchGroupId || '');
+  state.viewedConversationBranchNodePath = Array.isArray(s.viewedBranchNodePath) ? s.viewedBranchNodePath.map(String) : [];
+  state.runtimeConversationBranchNodePath = Array.isArray(s.runtimeBranchNodePath) ? s.runtimeBranchNodePath.map(String) : [];
+  rememberRuntimeConversationBranchPath(currentConversationTarget(s.conversationId || activeConversationId()));
 }
 
 function applyConversationSnapshot(s, requestedConversationId) {
@@ -10502,6 +10576,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     requestMessage = typeof requestMessage === 'object' ? Object.assign({}, requestMessage) : { text: String(requestMessage || '') };
     requestMessage.runId = String(opts.resumeGuideRunId);
     requestMessage.clientMessageId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('guide-edit-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+    requestMessage.guideId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('guide-node-' + Date.now() + '-' + Math.random().toString(16).slice(2));
   }
   var optimisticAttachments = queuedRequest
     ? normalizeConversationImageAttachments((queuedRequest.images || []).map(function(item) { return Object.assign({}, item, { origin: 'user', mimeType: item.type || '' }); }))
@@ -10537,6 +10612,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     }
     var envelope = {
       clientMessageId: clientMessageId,
+      guideId: (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('guide-node-' + Date.now() + '-' + Math.random().toString(16).slice(2)),
       target: lockedTarget,
       runId: String(activeRuntime && !activeRuntime.provisional && activeRuntime.runId || ''),
       deliveryMode: 'steer',
@@ -10633,6 +10709,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   state.activeSendCallsByTarget[lockedRuntimeKey] = true;
   if (typeof opts.onStarted === 'function') opts.onStarted();
   var localRunId = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+  bindWorkRunAnchorIndex(lockedTarget, localRunId, Number(opts.optimisticMessageIndex));
   setConversationRuntimeState(lockedTarget, 'running', localRunId, { provisional: true });
   setWorking(true);
   if (!opts.fromQueue) els.prompt.value = '';
@@ -10679,6 +10756,13 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   var responseMsg = null;
   try {
     var r = await api.sendMessage(requestMessage, lockedTarget);
+    if (r && r.runId) {
+      var anchorStore = workRunAnchorIndexStore(lockedTarget);
+      if (anchorStore[localRunId] !== undefined) {
+        anchorStore[String(r.runId)] = anchorStore[localRunId];
+        delete anchorStore[localRunId];
+      }
+    }
     if (r && r.runtimeKey) registerRuntimeKey(lockedTarget, r.runtimeKey);
     if (r && r.runId) setConversationRuntimeState(lockedTarget, r.status || 'running', r.runId, { provisional: false, generation: r.generation || 0, runtimeKey: r.runtimeKey || '' });
     var stillActive = isActiveConversationTarget(lockedTarget) && isViewingRuntimeConversationBranch(lockedTarget);

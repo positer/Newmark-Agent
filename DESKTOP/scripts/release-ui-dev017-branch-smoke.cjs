@@ -336,6 +336,8 @@ async function evaluate(cdp, expression) {
           workRuns: [{ runId: 'edited-tree-run', target, status: 'completed', expanded: false, startedAt: '2026-07-24T05:00:02.000Z', endedAt: '2026-07-24T05:00:03.000Z', events: [], guides: [], primaryPrompt: 'Edited instruction' }],
         },
       };
+      pages['tree-edited'].chatMessages[0].messageId = 'edited-anchor-message';
+      pages['tree-edited'].workRuns[0].anchorMessageId = 'edited-anchor-message';
       let stopCalls = 0;
       let activationCalls = 0;
       const testApi = Object.assign({}, api, {
@@ -369,14 +371,17 @@ async function evaluate(cdp, expression) {
       const editedRuns = workRunsForTarget(target).map(run => run.runId);
       const editedEventContents = workRunsForTarget(target).flatMap(run => (run.events || []).map(event => String(event.toolName || '') + ' ' + String(event.content || '')));
       const runtimeEventParents = Array.from(document.querySelectorAll('.conversation-work-run[data-run-id="edited-tree-run"]')).map(node => node.closest('.work-run-message') && node.closest('.work-run-message').parentElement && node.closest('.work-run-message').parentElement.id);
+      const editedAnchor = document.querySelector('.chat-msg[data-message-id="edited-anchor-message"]');
+      const editedRunWrapper = document.querySelector('.conversation-work-run[data-run-id="edited-tree-run"]')?.closest('.work-run-message');
+      const anchoredImmediatelyAfterMessage = !!(editedAnchor && editedRunWrapper && editedAnchor.nextElementSibling === editedRunWrapper);
       const pagerStopCalls = stopCalls;
       const pagerActivationCalls = activationCalls;
       const activated = await activateViewedConversationBranchForSend(target);
-      return { before, original, originalRuns, runtimeCacheAfterEvent, edited, editedRuns, editedEventContents, runtimeEventParents, activeBranchId: state.activeConversationBranchId, runtimeBranchId: state.runtimeConversationBranchId, pagerStopCalls, pagerActivationCalls, activated, stopCalls, activationCalls };
+      return { before, original, originalRuns, runtimeCacheAfterEvent, edited, editedRuns, editedEventContents, runtimeEventParents, anchoredImmediatelyAfterMessage, activeBranchId: state.activeConversationBranchId, runtimeBranchId: state.runtimeConversationBranchId, pagerStopCalls, pagerActivationCalls, activated, stopCalls, activationCalls };
     })()`);
     if (!pageSwitchResult.before.includes('EDITED_PAGE_ONLY') || pageSwitchResult.before.includes('ORIGINAL_PAGE_ONLY')) fail(`edited branch leaked another page before switching: ${JSON.stringify(pageSwitchResult)}`);
     if (!pageSwitchResult.original.includes('ORIGINAL_PAGE_ONLY') || pageSwitchResult.original.includes('EDITED_PAGE_ONLY') || pageSwitchResult.original.includes('runtime_during_inspection') || pageSwitchResult.originalRuns.join(',') !== 'original-tree-run') fail(`original branch was not an exclusive page tree: ${JSON.stringify(pageSwitchResult)}`);
-    if (!pageSwitchResult.edited.includes('EDITED_PAGE_ONLY') || pageSwitchResult.edited.includes('ORIGINAL_PAGE_ONLY') || !pageSwitchResult.editedEventContents.some(content => content.includes('runtime_during_inspection')) || pageSwitchResult.editedRuns.join(',') !== 'edited-tree-run' || pageSwitchResult.runtimeEventParents.length !== 1 || pageSwitchResult.runtimeEventParents[0] !== 'chat-area' || pageSwitchResult.activeBranchId !== 'tree-edited') fail(`running branch was not restored at its exclusive page position: ${JSON.stringify(pageSwitchResult)}`);
+    if (!pageSwitchResult.edited.includes('EDITED_PAGE_ONLY') || pageSwitchResult.edited.includes('ORIGINAL_PAGE_ONLY') || !pageSwitchResult.editedEventContents.some(content => content.includes('runtime_during_inspection')) || pageSwitchResult.editedRuns.join(',') !== 'edited-tree-run' || pageSwitchResult.runtimeEventParents.length !== 1 || pageSwitchResult.runtimeEventParents[0] !== 'chat-area' || !pageSwitchResult.anchoredImmediatelyAfterMessage || pageSwitchResult.activeBranchId !== 'tree-edited') fail(`running branch was not restored at its exclusive page position: ${JSON.stringify(pageSwitchResult)}`);
     if (pageSwitchResult.pagerStopCalls !== 0 || pageSwitchResult.pagerActivationCalls !== 0) fail(`page inspection stopped or activated a runtime branch: ${JSON.stringify(pageSwitchResult)}`);
     if (!pageSwitchResult.activated || pageSwitchResult.stopCalls !== 0 || pageSwitchResult.activationCalls !== 0 || pageSwitchResult.runtimeBranchId !== 'tree-edited') fail(`returning to the running page unexpectedly stopped or reactivated its branch: ${JSON.stringify(pageSwitchResult)}`);
 

@@ -14,6 +14,7 @@ export type ConversationWorkRunStatus = 'running' | 'completed' | 'interrupted' 
 
 export interface ConversationInputEnvelope {
   clientMessageId: string;
+  guideId?: string;
   target: ConversationTarget;
   runId?: string;
   deliveryMode: ConversationInputDeliveryMode;
@@ -25,6 +26,7 @@ export interface ConversationInputEnvelope {
 
 export interface GuideReceipt {
   clientMessageId: string;
+  guideId?: string;
   target: ConversationTarget;
   runId: string;
   status: GuideReceiptStatus;
@@ -61,6 +63,9 @@ export interface ConversationImageAttachment {
 }
 
 export interface ChatMessage {
+  messageId?: string;
+  guideId?: string;
+  branchNodeId?: string;
   role: 'user' | 'assistant' | 'system' | 'workflow';
   content: string;
   mode: string;
@@ -87,6 +92,8 @@ export interface AgentWorkEvent {
   workspaceKey?: string;
   runtimeKey?: string;
   runId?: string;
+  branchNodeId?: string;
+  anchorMessageId?: string;
   generation?: number;
   sequence?: number;
   status?: GuideReceiptStatus | ConversationWorkRunStatus | 'stopping' | 'force_restarting';
@@ -105,6 +112,8 @@ export interface ConversationWorkRun {
   events: AgentWorkEvent[];
   guides: GuideReceipt[];
   primaryPrompt?: string;
+  branchNodeId?: string;
+  anchorMessageId?: string;
 }
 
 export interface GoalState {

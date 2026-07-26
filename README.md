@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.1.7-blue">
+  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.1.8-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -54,7 +54,7 @@ The Windows MSI requests administrator elevation. Windows and Linux may show an 
 
 Application upgrades preserve existing user state under `~/.Newmark`.
 
-The current source and packaged release version is `dev-0.1.7`. This release refines non-destructive conversation branching with a durable tree format, independent pagination at every edited node, target-only stop-and-rerun behavior, editable/copyable Guide rows, branch-owned Build truncation, archive/restore support for complete trees, and aligned edited-file activity rows.
+The current source and packaged prerelease version is `dev-0.1.8`. The release separates the visible input mode from per-turn execution, keeps Plan selected while using a proactive read-only planning boundary, makes Goal continuation yield to queued user work, and routes selected Flow input through the workflow structure with Guide-only takeover. SubAgent dispatch remains recoverably queued until an executor is available, binds in headless runtimes, preserves exact provider deployments, releases stale providers during fallback, and aborts active children on close. The input's floating stack keeps the scroll-to-bottom control above the Flow takeover bubble and the Todo/Queue/Goal bars without changing input height; leaving Flow restores Next.
 
 ## Core Capabilities
 
@@ -188,6 +188,10 @@ See [OVERVIEW.md](OVERVIEW.md) for the source tree, subsystem responsibilities, 
 ## Development
 
 ### Maintenance Log
+
+- 2026-07-26: Built and validated the `dev-0.1.8` Windows/Linux prerelease. Source tests passed on Windows and isolated Ubuntu-24.04, packaged CLI/ZIP/MSI and Flow/SubAgent UI smokes passed, Linux GUI/AppImage/deb/ZIP and exit-lifecycle smokes passed, and production dependency audit reports zero vulnerabilities after upgrading the directly used `glob` runtime to the supported v13 line. See `archive/20260726-dev-0.1.8-release.md`.
+- 2026-07-26: Hardened `dev-0.1.8` SubAgent execution and input overlays. Late executor binding no longer loses accepted work, agent-only runtimes execute children inside their explicit root, duplicate model names preserve provider identity, fallback releases stale providers, active close aborts the child, and settlement waiters are cleaned up. The shared floating stack orders scroll-to-bottom above the Flow takeover bubble and persistent input bars with measured 8 px separation; exiting Flow re-enables Next. See `archive/20260726-dev-0.1.8-subagent-reliability-input-float-stack.md`.
+- 2026-07-26: Advanced source development to `dev-0.1.8`. Build/Plan/Goal/Flow no longer overwrite the selected input mode during send; Plan maintains the linked plan and offers execute-or-supplement feedback, Goal Guide/Next updates the Goal bar and yields hidden continuation to queued input, and Flow enforces Guide-only structure-driven Builds with a floating Newmark UI takeover bubble and explicit interruption.
 
 - 2026-07-25: Fixed the dev-0.1.7 inline branch pager disappearing after Build completion or a partial state refresh. Branch metadata now hydrates before destructive transcript redraw and partial responses preserve fields they do not contain; packaged Electron, ZIP, and MSI smoke tests passed. See `archive/20260725-dev-0.1.7-branch-pager-completion-fix.md`.
 - 2026-07-25: Rebuilt conversation persistence as a validated tree with a full node index directory, stable viewed-path editing, per-page anchors, cloned Guide Builds, runtime completion isolation, old-version failure canary, and deep/wide branch stress coverage. See `archive/20260725-dev-0.1.7-branch-tree-stability.md`.

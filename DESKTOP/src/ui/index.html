@@ -1957,6 +1957,52 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   background-attachment: local;
 }
 
+.input-float-stack {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 16px;
+  right: 16px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.input-float-stack > * {
+  flex: 0 0 auto;
+}
+
+.input-float-stack #scroll-bottom-btn {
+  margin: 0;
+  pointer-events: auto;
+  animation: input-float-fade 180ms var(--ease-out-expo);
+}
+
+@keyframes input-float-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.flow-takeover {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  max-width: min(720px, calc(100% - 48px));
+  padding: 8px 14px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--bg-panel) 88%, transparent);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--accent) 18%, transparent);
+  backdrop-filter: blur(var(--glass-blur-3)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur-3)) saturate(140%);
+  pointer-events: none;
+}
+.flow-takeover.active { display: flex; }
+.flow-takeover .nm-icon { color: var(--accent); }
+
 /* Welcome message */
 .welcome-msg {
   text-align: center;
@@ -2562,6 +2608,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
    ============================================================ */
 #input-stack {
   flex-shrink: 0;
+  position: relative;
+  overflow: visible;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -2948,6 +2996,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
    ============================================================ */
 #input-area {
   flex-shrink: 0;
+  position: relative;
+  overflow: visible;
   container-type: inline-size;
   padding: 12px 16px;
   border-top: 1px solid var(--glass-border-2);
@@ -3387,7 +3437,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   color: var(--text-dim);
   cursor: pointer;
   font-size: 14px;
-  z-index: 5;
+  z-index: 41;
   align-items: center;
   justify-content: center;
   transition: opacity var(--duration-fast) var(--ease-out-expo), background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo), box-shadow var(--duration-fast) var(--ease-out-expo);
@@ -4708,10 +4758,11 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
         </div>
 
         <div id="input-stack">
-
-
-          <!-- Scroll to bottom -->
-          <button id="scroll-bottom-btn" onclick="window.scrollToBottom()" title="Scroll to bottom"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#arrow-down"></use></svg><span class="icon-only-label">Scroll to bottom</span></button>
+          <div id="input-float-stack" class="input-float-stack">
+            <!-- Floating input affordances stack top-to-bottom and never consume input layout space. -->
+            <button id="scroll-bottom-btn" onclick="window.scrollToBottom()" title="Scroll to bottom"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#arrow-down"></use></svg><span class="icon-only-label">Scroll to bottom</span></button>
+            <div id="flow-takeover" class="flow-takeover" role="status" aria-live="polite"></div>
+          </div>
 
           <!-- Goal checklist -->
           <div id="todo-wrap" class="stack-card collapsed" style="display:none">
@@ -5421,6 +5472,8 @@ var NEWMARK_I18N = {
     'flow.workflowName': 'Workflow name',
     'flow.enterName': 'Enter name...',
     'flow.runningPlaceholder': 'Flow is running. Type "stop" to stop.',
+    'flow.takeover': 'Flow is controlling this conversation',
+    'flow.nextDisabled': 'Flow only accepts Guide input; Next is disabled.',
     'flow.saved': 'Flow saved',
     'flow.emptyRun': 'Flow is empty and cannot run.',
     'flow.started': 'Flow started',
@@ -5967,6 +6020,8 @@ var NEWMARK_I18N = {
     'flow.workflowName': '工作流名称',
     'flow.enterName': '输入名称...',
     'flow.runningPlaceholder': 'Flow 正在运行。输入 stop 可停止。',
+    'flow.takeover': '当前对话正由 Flow 接管',
+    'flow.nextDisabled': 'Flow 仅允许 Guide 输入，已禁用 Next。',
     'flow.saved': 'Flow 已保存',
     'flow.emptyRun': 'Flow 为空，无法运行。',
     'flow.started': 'Flow 已启动',
@@ -9617,8 +9672,60 @@ function renderPendingOptionsInChat(options) {
   }
 }
 
+function setVisibleMode(mode) {
+  var nextMode = ['build', 'plan', 'goal', 'flow'].indexOf(String(mode || '').toLowerCase()) >= 0
+    ? String(mode).toLowerCase()
+    : 'build';
+  state.mode = nextMode;
+  if (els['mode-select']) {
+    els['mode-select'].value = nextMode;
+    window.syncNewmarkSelect(els['mode-select']);
+  }
+  if (nextMode === 'flow') window.setInputMode('guide');
+  if (api.setMode) return Promise.resolve(api.setMode(nextMode)).catch(function(){});
+  return Promise.resolve(nextMode);
+}
+
+function handlePlanExecutionChoice(questionKey, opt) {
+  var questionContract = String(questionKey || '');
+  if (!(/立即执行|execute now|start execution/i.test(questionContract)
+    && /请补充|supplement|add detail/i.test(questionContract))) return false;
+  var label = String(opt || '').trim();
+  var executeNow = /立即执行|execute now|start execution|yes/i.test(label);
+  var supplement = /请补充|supplement|add detail|no/i.test(label);
+  if (!executeNow && !supplement) return false;
+  state.pendingOptions = [];
+  state.pendingOptionAnswers = {};
+  state.pendingOptionBatchKey = '';
+  if (executeNow) {
+    return setVisibleMode('build').then(function() {
+      if (els.prompt) {
+        els.prompt.value = currentLang() === 'zh' ? '是，立即执行上述 Plan。' : 'Yes, execute the plan now.';
+        els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      return window.sendMessage('guide', undefined, { requestedMode: 'build' });
+    });
+  }
+  setVisibleMode('plan');
+  if (els.prompt) {
+    els.prompt.value = currentLang() === 'zh' ? '请补充：' : 'Please supplement: ';
+    els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
+    els.prompt.focus();
+    els.prompt.setSelectionRange(els.prompt.value.length, els.prompt.value.length);
+  }
+  return true;
+}
+
 window.optionSelected = function(questionKey, opt, button) {
   if (!questionKey || state.pendingOptionAnswers[questionKey] !== undefined) return;
+  if (state.mode === 'plan' && handlePlanExecutionChoice(questionKey, opt)) {
+    var planBlock = button && button.closest ? button.closest('[data-option-question]') : null;
+    if (planBlock) Array.from(planBlock.querySelectorAll('.option-btn')).forEach(function(candidate) {
+      candidate.disabled = true;
+      candidate.classList.toggle('selected', candidate === button);
+    });
+    return;
+  }
   state.pendingOptionAnswers[questionKey] = opt;
   var block = button && button.closest ? button.closest('[data-option-question]') : null;
   if (block) {
@@ -9837,6 +9944,27 @@ window.stopCurrentConversation = async function() {
 };
 
 window.submitCurrentAction = function() {
+  if (state._flowRunning) {
+    if (!promptHasText()) {
+      window.stopFlowRun();
+      return;
+    }
+    var guideText = String(els.prompt.value || '').trim();
+    els.prompt.value = '';
+    els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
+    if (api.guideFlow) {
+      api.guideFlow(guideText).then(function(result) {
+        if (!result || result.ok === false) throw new Error((result && result.error) || 'Flow Guide was rejected.');
+      }).catch(function(error) {
+        showUiNotice(error && error.message ? error.message : String(error), 'error', 'flow-guide');
+      });
+    }
+    return;
+  }
+  if (state.mode === 'flow') {
+    window.submitSelectedFlow();
+    return;
+  }
   if (isCurrentConversationRunning() && !promptHasText()) {
     window.stopCurrentConversation();
     return;
@@ -10649,7 +10777,9 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   console.log('[UI] sendMessage called');
   if (!window.requireWorkspace('send')) return;
   opts = opts || {};
+  var requestedMode = opts.requestedMode || state.mode || 'build';
   var effectiveInputMode = modeOverride || state.inputMode || 'guide';
+  if (requestedMode === 'flow') effectiveInputMode = 'guide';
   if (state.pendingInputEdit && typeof queuedText !== 'string' && !opts.fromQueue) {
     var pendingEdit = state.pendingInputEdit;
     var editedValue = String(els.prompt.value || '').trim();
@@ -10713,6 +10843,8 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   var usesPromptAttachments = !queuedRequest && typeof queuedText !== 'string' && !opts.fromQueue;
   var text = usesPromptAttachments ? composePromptTextForSend(rawText) : rawText;
   var requestMessage = queuedRequest || (usesPromptAttachments ? composePromptRequestForSend(rawText) : rawText);
+  if (requestedMode === 'goal' && !opts.goalObjective) opts.goalObjective = rawText;
+  if (typeof requestMessage === 'object' && requestMessage) requestMessage.displayMode = requestedMode;
   if (opts.resumeGuideRunId) {
     requestMessage = typeof requestMessage === 'object' ? Object.assign({}, requestMessage) : { text: String(requestMessage || '') };
     requestMessage.runId = String(opts.resumeGuideRunId);
@@ -10738,7 +10870,13 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     if (!state.nextQueue) state.nextQueue = [];
     if (!state.nextQueueRequests) state.nextQueueRequests = [];
     state.nextQueue.push(displayText);
-    state.nextQueueRequests.push(bindQueuedRequestToTarget(requestMessage, rawText, lockedTarget, queueBranchPathForTarget(lockedTarget, 'runtime')));
+    var queuedModeRequest = bindQueuedRequestToTarget(requestMessage, rawText, lockedTarget, queueBranchPathForTarget(lockedTarget, 'runtime'));
+    queuedModeRequest.requestedMode = requestedMode;
+    if (requestedMode === 'goal') {
+      queuedModeRequest.goalDeclaration = true;
+      queuedModeRequest.goalObjective = rawText;
+    }
+    state.nextQueueRequests.push(queuedModeRequest);
     els.prompt.value = '';
     if (usesPromptAttachments) clearPromptAttachments();
     refreshNextPromptForTarget(lockedTarget);
@@ -10760,6 +10898,9 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   }
 
   if (conversationRunning && effectiveInputMode === 'guide' && (!opts.fromQueue || opts.deliverAsGuide)) {
+    if (requestedMode === 'goal' && api.updateGoal) {
+      await api.updateGoal(String(opts.goalObjective || rawText || '').trim(), lockedTarget).catch(function(){});
+    }
     if (!opts.fromQueue) els.prompt.value = '';
     if (usesPromptAttachments) clearPromptAttachments();
     updateSubmitButtonState();
@@ -10776,7 +10917,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       runId: String(activeRuntime && !activeRuntime.provisional && activeRuntime.runId || ''),
       deliveryMode: 'steer',
       text: typeof requestMessage === 'string' ? requestMessage : String(requestMessage.text || ''),
-      goalObjective: String(opts.goalObjective || ''),
+      goalObjective: requestedMode === 'goal' ? String(opts.goalObjective || rawText || '') : String(opts.goalObjective || ''),
       images: typeof requestMessage === 'object' && Array.isArray(requestMessage.images) ? requestMessage.images : [],
       createdAt: new Date().toISOString()
     };
@@ -10848,7 +10989,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     });
   }
 
-  var idleNextImmediate = effectiveInputMode === 'next' && !opts.fromQueue && !conversationRunning;
+  var idleBuildNextImmediate = requestedMode === 'build' && effectiveInputMode === 'next' && !opts.fromQueue && !conversationRunning;
   if (conversationRunning) return;
   if (!state.activeSendCallsByTarget) state.activeSendCallsByTarget = {};
   if (state.activeSendCallsByTarget[lockedRuntimeKey]) return;
@@ -10861,15 +11002,10 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   if (!opts.fromQueue) els.prompt.value = '';
   if (usesPromptAttachments) clearPromptAttachments();
   updateSubmitButtonState();
-  var previousMode = state.mode;
-  if (opts.goalDeclaration) state.mode = 'goal';
-  if ((opts.forceBuild || idleNextImmediate) && !opts.goalDeclaration && state.mode !== 'build') {
-    state.mode = 'build';
-    if (els['mode-select']) { els['mode-select'].value = 'build'; window.syncNewmarkSelect(els['mode-select']); }
-    if (api.setMode) await api.setMode('build').catch(function(){});
-  }
-  if (state.mode === 'goal' && api.updateGoal) await api.updateGoal(String(opts.goalObjective || rawText || '').trim(), lockedTarget).catch(function(){});
-  if (api.setMode) await api.setMode(state.mode).catch(function(){});
+  var executionMode = opts.goalDeclaration || requestedMode === 'goal' ? 'goal'
+    : ((opts.forceBuild || idleBuildNextImmediate) && requestedMode === 'build' ? 'build' : requestedMode);
+  if (executionMode === 'goal' && api.updateGoal) await api.updateGoal(String(opts.goalObjective || rawText || '').trim(), lockedTarget).catch(function(){});
+  if (api.setMode) await api.setMode(executionMode).catch(function(){});
   if (api.setModel && state.model) await api.setModel(state.model).catch(function(){});
   if (api.setInputMode) await api.setInputMode(effectiveInputMode).catch(function(){});
   var renderOnViewedBranch = !queuedRuntimeBranch || queueBranchPathForTarget(lockedTarget, 'viewed') === queueBranchPathForTarget(lockedTarget, 'runtime');
@@ -10894,7 +11030,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         }
       });
     } else {
-      addMsg('user', displayText, opts.fromQueue ? 'next-build' : state.mode, state.model, opts.optimisticMessageIndex, { attachments: optimisticAttachments });
+      addMsg('user', displayText, opts.fromQueue ? 'next-build' : requestedMode, state.model, opts.optimisticMessageIndex, { attachments: optimisticAttachments });
     }
     renderConversationBranchPagers();
     applyAutoRouteRatingState(null);
@@ -11029,11 +11165,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       }
     }).catch(function(){});
   }
-  if ((opts.forceBuild || idleNextImmediate || opts.goalDeclaration) && previousMode !== state.mode) {
-    state.mode = previousMode;
-    if (els['mode-select']) { els['mode-select'].value = previousMode; window.syncNewmarkSelect(els['mode-select']); }
-    if (api.setMode) await api.setMode(previousMode).catch(function(){});
-  }
+  if (api.setMode && executionMode !== state.mode) await api.setMode(state.mode).catch(function(){});
   var finalRuntime = state.conversationRuntimeStates && state.conversationRuntimeStates[lockedRuntimeKey];
   if (!finalRuntime || !finalRuntime.runId || finalRuntime.runId === localRunId || (r && finalRuntime.runId === r.runId)) {
     setConversationRuntimeState(lockedTarget, 'completed', (r && r.runId) || localRunId);
@@ -11124,6 +11256,7 @@ window.drainNextQueue = function() {
       forceBuild: !nextRequest.goalDeclaration,
       goalDeclaration: !!nextRequest.goalDeclaration,
       goalObjective: next,
+      requestedMode: nextRequest.requestedMode || (nextRequest.goalDeclaration ? 'goal' : state.mode),
       queuedRequest: nextRequest,
       onStarted: function() { started = true; }
     });
@@ -12368,6 +12501,10 @@ window.renderInputStack = function() {
 
 // === Mode Selectors ===
 window.setInputMode = function(mode, persist) {
+  if (state.mode === 'flow' && mode === 'next') {
+    mode = 'guide';
+    showUiNotice(t('flow.nextDisabled'), 'error', 'flow-next-disabled');
+  }
   state.inputMode = mode === 'next' ? 'next' : 'guide';
   var btns = els['mode-toggle'].querySelectorAll('.mode-toggle-btn');
   for (var i = 0; i < btns.length; i++) {
@@ -14089,8 +14226,18 @@ function processNextFlowComp() {
   }
 }
 
+window.renderFlowTakeover = function(active, name) {
+  var takeover = document.getElementById('flow-takeover');
+  if (!takeover) return;
+  takeover.classList.toggle('active', !!active);
+  takeover.innerHTML = active
+    ? iconSvg('workflow', t('flow.takeover'), 'small') + '<span>' + esc(t('flow.takeover')) + (name ? ': ' + esc(name) : '') + '</span>'
+    : '';
+};
+
 function stopFlowRunInternal() {
   state._flowRunning = false;
+  window.renderFlowTakeover(false);
   var prompt = els.prompt;
   if (prompt) {
     prompt.placeholder = t('input.placeholder');
@@ -14099,8 +14246,10 @@ function stopFlowRunInternal() {
   }
 }
 
-window.stopFlowRun = function() {
+window.stopFlowRun = async function() {
+  if (api.stopFlow) await api.stopFlow().catch(function(){});
   stopFlowRunInternal();
+  await setVisibleMode('build');
   addMsg('assistant', '[System] Flow stopped manually.', 'flow', '');
 };
 window.normalizeFlowWork = function(work) {
@@ -14164,9 +14313,11 @@ window.runFlowWork = async function(workIdx) {
   if (els.prompt) {
     els.prompt.value = '';
     els.prompt.placeholder = t('flow.runningPlaceholder');
-    els.prompt.disabled = true;
+    els.prompt.disabled = false;
   }
   state._flowRunning = true;
+  window.setInputMode('guide');
+  window.renderFlowTakeover(true, normalized.name);
   addMsg('assistant', '[System] ' + t('flow.started') + ': ' + normalized.name, 'flow', state.model);
   window.closeSubWin();
   try {
@@ -14277,6 +14428,16 @@ window.loadFileTree = async function(options) {
     container.innerHTML = '<div style="font-size:11px;color:var(--text-dim);padding:8px;">' + esc(t('fileTree.unavailable')) + '</div>';
     if (options.required === true) throw e;
   }
+};
+
+window.submitSelectedFlow = function() {
+  var selected = String(state.defaultFlow || (document.getElementById('flow-select') && document.getElementById('flow-select').value) || '');
+  var workIdx = state.flowWorks.findIndex(function(work) { return String(work && work.name || '') === selected; });
+  if (workIdx < 0) {
+    showUiNotice(currentLang() === 'zh' ? '请先选择一个 Flow。' : 'Select a Flow first.', 'error', 'flow-select-required');
+    return;
+  }
+  return window.runFlowWork(workIdx);
 };
 
 function renderTreeNodes(nodes, parent, depth) {
@@ -17658,6 +17819,7 @@ function schedulePostStartupUiRendering() {
   if (els['mode-select']) {
     els['mode-select'].addEventListener('change', async function() {
       state.mode = this.value;
+      if (state.mode === 'flow') window.setInputMode('guide');
       if (window.renderInputStack) window.renderInputStack();
       // Flow mode: show flow selector
       var flowSel = document.getElementById('flow-select');

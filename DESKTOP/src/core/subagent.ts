@@ -297,12 +297,10 @@ export class SubagentManager {
       updatedAt: stamp,
     };
     this.subs.set(id, record);
-    if (this.executor) this.enqueue(record, prompt, flowName, 'spawn');
-    else {
-      record.status = 'working';
-      record.startedAt = stamp;
-      this.changed();
-    }
+    // Runtimes may hydrate before their executor is bound. Always persist the
+    // job in the durable FIFO; pump() starts it now or after a later bind().
+    // A "working" record without an executor is a silently lost SubAgent.
+    this.enqueue(record, prompt, flowName, 'spawn');
     return id;
   }
 
@@ -317,11 +315,7 @@ export class SubagentManager {
     target.error = undefined;
     target.completedAt = undefined;
     target.updatedAt = now();
-    if (this.executor) this.enqueue(target, prompt, target.flowName || '', 'mailbox');
-    else {
-      target.status = 'working';
-      this.changed();
-    }
+    this.enqueue(target, prompt, target.flowName || '', 'mailbox');
     return true;
   }
 
@@ -409,14 +403,22 @@ export class SubagentManager {
     return new Promise(resolve => {
       const waiters = this.settledWaiters.get(record.id) || [];
       let done = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const finish = (value: SubagentInstance | undefined) => {
         if (done) return;
         done = true;
+        if (timer) clearTimeout(timer);
         resolve(value ? cloneRecord(value) : undefined);
       };
       waiters.push(finish);
       this.settledWaiters.set(record.id, waiters);
-      setTimeout(() => finish(this.get(record.id)), Math.max(100, timeoutMs));
+      timer = setTimeout(() => {
+        const current = this.settledWaiters.get(record.id) || [];
+        const remaining = current.filter(waiter => waiter !== finish);
+        if (remaining.length) this.settledWaiters.set(record.id, remaining);
+        else this.settledWaiters.delete(record.id);
+        finish(this.get(record.id));
+      }, Math.max(100, timeoutMs));
     });
   }
 
@@ -513,6 +515,7 @@ export class SubagentManager {
   complete(id: string, result: string): void {
     const record = this.get(id);
     if (!record || record.status === 'closed') return;
+    this.pending = this.pending.filter(job => job.id !== record.id);
     record.result = result;
     record.status = 'completed';
     record.error = undefined;
@@ -528,6 +531,7 @@ export class SubagentManager {
   fail(id: string, error: string): void {
     const record = this.get(id);
     if (!record || record.status === 'closed') return;
+    this.pending = this.pending.filter(job => job.id !== record.id);
     record.result = `[Subagent Error] ${error}`;
     record.status = 'error';
     record.error = error;
@@ -628,6 +632,15 @@ export class SubagentManager {
   }
 
   private enqueue(record: SubagentInstance, prompt: string, flowName: string, reason: PendingJob['reason']): void {
+    const existing = this.pending.find(job => job.id === record.id);
+    if (existing) {
+      if (prompt && !existing.prompt.includes(prompt)) existing.prompt = `${existing.prompt}\n\n${prompt}`;
+      record.status = 'queued';
+      record.updatedAt = now();
+      this.changed();
+      this.pump();
+      return;
+    }
     const sequence = this.nextSequence++;
     record.status = 'queued';
     record.queueSequence = sequence;
@@ -650,9 +663,10 @@ export class SubagentManager {
     if (!unread.length) return;
     if (record.status === 'queued') {
       const existing = this.pending.find(job => job.id === record.id);
-      if (existing) {
-        existing.prompt = `${existing.prompt}\n\n${this.mailboxPrompt(unread)}`;
-      }
+      // The queued job consumes every unread mailbox item in pump(). Keeping
+      // the messages unread here is intentional: pre-appending them would
+      // deliver the same restored directive twice when pump() consumes them.
+      if (existing) return;
       return;
     }
     record.status = 'queued';

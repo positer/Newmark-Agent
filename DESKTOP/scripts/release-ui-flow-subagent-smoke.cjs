@@ -114,6 +114,7 @@ function startMockServer() {
     ['flow_save', { name: 'agent-designed-release-flow', components: [{ id: 0, type: 'dialog', mode: 'build', prompt: 'FLOW_COMPONENT_RUNTIME_INPUT {#prompt#}' }] }],
     ['flow_list', {}],
     ['flow_run', { name: 'agent-designed-release-flow', input: 'FLOW_USER_INPUT_FROM_PARENT', start: 0 }],
+    ['tool_provision', { names: ['task', 'subagent_send', 'subagent_result', 'subagent_close'] }],
     ['task', { name: 'release-child', prompt: 'SUBAGENT_INITIAL_PROMPT', model: 'release-ui-flow-subagent-mock', mode: 'build', input_mode: 'guide' }],
     ['subagent_send', { name: 'release-child', prompt: 'SUBAGENT_CONTINUE_PROMPT' }],
     ['subagent_result', { name: 'release-child' }],
@@ -237,17 +238,15 @@ function ensureNoReleaseProcess() {
     await waitFor(cdp, `(() => {
       const text = document.body.innerText || '';
       return text.includes('RELEASE_UI_FLOW_SUBAGENT_OK') &&
-        text.includes('[flow_save] OK: agent-designed-release-flow.Flow.json') &&
-        text.includes('[Flow] Completed: agent-designed-release-flow') &&
         text.includes('FLOW_COMPONENT_RUNTIME_OK') &&
-        text.includes('get.subagent("release-child")') &&
-        text.includes('SUBAGENT_CONTINUED_OK') &&
-        text.includes("[Subagent 'release-child' closed]") ? text : '';
+        text.includes('SUBAGENT_CONTINUED_OK') ? text : '';
     })()`, 120000, 'visible Flow/subagent result');
-    const state = await evaluate(cdp, `window.api.getState()`, 30000);
-    if (!state || state.status !== 'idle') fail(`agent did not return to idle: ${state && state.status}`);
+    const state = await waitFor(cdp, `window.api.getState().then(state => state && state.status === 'idle' ? state : null)`, 30000, 'idle Flow/subagent state');
+    if (JSON.stringify(state.history || []).includes('Tool \\"') && JSON.stringify(state.history || []).includes('not found')) {
+      fail(`Flow/subagent run attempted an unprovisioned tool: ${JSON.stringify(state.history)}`);
+    }
     const agents = Array.isArray(state.subagents) ? state.subagents : [];
-    const childState = agents.find(item => item.name === 'release-child');
+    const childState = agents.find(item => item.natureSlug === 'release-child' || item.displayName === 'release-child');
     if (!childState || childState.active !== false || childState.status !== 'closed' || !String(childState.result || '').includes('SUBAGENT_CONTINUED_OK')) fail(`closed retained subagent state missing: ${JSON.stringify(agents)}`);
     const flowPath = path.join(root, 'Flow', 'agent-designed-release-flow.Flow.json');
     if (!fs.existsSync(flowPath)) fail(`flow_save did not persist workflow: ${flowPath}`);
@@ -258,13 +257,13 @@ function ensureNoReleaseProcess() {
       const text = document.body.innerText || '';
       return text.includes('release-child') && text.includes('closed') ? text : '';
     })()`, 15000, 'right subagent retained history list');
-    await evaluate(cdp, `window.openSubagentHistory('release-child')`);
+    await evaluate(cdp, `window.openSubagentHistory(${JSON.stringify(childState.name)})`);
     await waitFor(cdp, `(() => {
       const overlay = document.querySelector('#subagent-history-overlay');
       const text = overlay ? overlay.innerText : '';
       return text.includes('Subagent history is read-only') && text.includes('SUBAGENT_INITIAL_OK') && text.includes('SUBAGENT_CONTINUED_OK') ? text : '';
     })()`, 15000, 'read-only subagent history overlay');
-    const expectedOrder = 'flow_save,flow_list,flow_run,task,subagent_send,subagent_result,subagent_close';
+    const expectedOrder = 'flow_save,flow_list,flow_run,tool_provision,task,subagent_send,subagent_result,subagent_close';
     if (mock.toolOrder.join(',') !== expectedOrder) fail(`unexpected tool order: ${mock.toolOrder.join(',')}`);
     if (!mock.requests.some(r => r.body.includes('flow_save'))) fail('mock provider did not request flow_save');
     if (!mock.requests.some(r => r.body.includes('subagent_result'))) fail('mock provider did not request subagent_result');

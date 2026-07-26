@@ -824,7 +824,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     }
     if (target === 'all' || target === 'subagents') {
       payload.subagent_schema = {
-        status: ['idle', 'working', 'completed', 'closed', 'error'],
+        status: ['idle', 'queued', 'working', 'completed', 'closed', 'error'],
         record_fields: ['id', 'name', 'status', 'active', 'model', 'mode', 'inputMode', 'prompt', 'result', 'messages', 'error', 'startedAt', 'completedAt', 'closedAt', 'metadata'],
         tool_result_fields: ['ok', 'output', 'data', 'error', 'metadata'],
       };

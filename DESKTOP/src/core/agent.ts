@@ -392,8 +392,10 @@ export class Agent {
   private subagentName = '';
   private subagentPrompt = '';
   private forcedProvider: LLMProvider | null = null;
+  private forcedProviderDeployment = '';
   private processingConversationId: string | null = null;
   private processDepth = 0;
+  private goalContinuationGate: (() => boolean) | null = null;
   private memoryLabRebuildState: 'idle' | 'pending' | 'complete' | 'failed' = 'idle';
   private memoryLabRebuildError = '';
   private activeProcessAbortController: AbortController | null = null;
@@ -497,7 +499,10 @@ export class Agent {
       const stored = this.readStoredConversationState(this.workspace.current);
       if (!options.conversationId && stored.activeConversationId) this.activeConversationId = stored.activeConversationId;
     }
-    if (!this.isSubagentRuntime && !this.agentOnly) this.loadWorkspaceConversationState();
+    if (!this.isSubagentRuntime) {
+      if (this.agentOnly) this.bindConversationSubagents(this.activeConversationId);
+      else this.loadWorkspaceConversationState();
+    }
   }
 
   setMode(m: AgentMode): void {
@@ -3555,6 +3560,14 @@ export class Agent {
     return this.goal?.paused || false;
   }
 
+  setGoalContinuationGate(gate: (() => boolean) | null): void {
+    this.goalContinuationGate = gate;
+  }
+
+  canAutoContinueGoal(): boolean {
+    return this.goalContinuationGate ? this.goalContinuationGate() : true;
+  }
+
   private writeSessionArchive(messages: ChatMessage[], mode: string, model: string): string {
     const stamp = new Date().toISOString().replace(/[:.]/g, '').replace('T', '_').replace('Z', '');
     const archiveDir = this.archiveDir();
@@ -4280,7 +4293,11 @@ export class Agent {
   }
 
   engineModel(): LLMProvider | null {
-    if (this.forcedProvider) return this.forcedProvider;
+    if (this.forcedProvider) {
+      const active = this.activeDeployment();
+      if (!this.forcedProviderDeployment
+        || (active && deploymentIdentity(active) === this.forcedProviderDeployment)) return this.forcedProvider;
+    }
     const m = this.activeModelConfig();
     if (!m) return null;
     return new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode());
@@ -4495,7 +4512,7 @@ export class Agent {
 
   async process(input: string | AgentPromptMessage): Promise<StreamToken[]> {
     const stopTotalTimer = performanceTimer('total', { conversationId: this.activeConversationId });
-    if (!this.workspace.current && !this.agentOnly) {
+    if (!this.workspace.current && !this.agentOnly && !this.isSubagentRuntime) {
       this.status = 'idle';
       stopTotalTimer();
       return [{ type: 'text', text: '[Workspace required] Select or create a workspace before starting a conversation.' }];
@@ -4691,10 +4708,19 @@ export class Agent {
       const peerMode = (['build', 'plan', 'goal', 'flow'].includes(requestedPeerMode) ? requestedPeerMode : 'build') as AgentMode;
       const peerGoal = String(params.goal || params.goal_objective || (peerMode === 'goal' ? this.goal?.objective || prompt : '')).trim();
       const peerFlow = String(params.flow || params.flow_name || (peerMode === 'flow' ? this.flow?.name || '' : '')).trim();
+      const inheritedModel = this.model === 'auto' ? 'auto' : this.modelSelectionValue();
+      const requestedModel = String(params.model || preset?.model || inheritedModel).trim();
+      const activeDeployment = this.activeDeployment();
+      const peerModel = requestedModel !== 'auto'
+        && !parseDeploymentSelectionValue(requestedModel)
+        && activeDeployment
+        && requestedModel === activeDeployment.modelId
+        ? `deployment:${encodeURIComponent(activeDeployment.providerId)}:${encodeURIComponent(activeDeployment.modelId)}`
+        : requestedModel;
       const id = this.subagents.create(
         name,
         prompt,
-        params.model || preset?.model || this.model,
+        peerModel,
         params.input_mode || params.inputMode || preset?.inputMode || 'guide',
         peerMode,
         this.runtimeActorId,
@@ -4820,6 +4846,7 @@ export class Agent {
       const sa = this.subagents.get(name);
       if (!sa) return { ok: false, output: `[Subagent] Not found: ${name}`, error: `Not found: ${name}` };
       const actorId = this.isSubagentRuntime ? this.runtimeActorId : this.subagents.rootAgentId;
+      if (actorId === this.subagents.rootAgentId) this.activePeerAgents.get(sa.id)?.abortActiveKernelRun();
       const closed = this.subagents.close(sa.id, actorId);
       return this.subagents.toToolResult(sa.id, closed ? `[Subagent '${sa.name}' closed]` : '[Subagent] Close denied.', closed);
     } catch { return { ok: false, output: '[Subagent] Invalid close arguments.', error: 'Invalid close arguments.' }; }
@@ -5213,7 +5240,10 @@ export class Agent {
     const sa = this.subagents.get(id);
     if (!sa) return '[Subagent] Not found.';
     const requestedModel = sa.model && sa.model !== 'default' ? sa.model : this.model;
-    const assignedModel = requestedModel === 'auto' ? this.activeModelConfig() : this.config.findModel(requestedModel);
+    const requestedDeployment = parseDeploymentSelectionValue(requestedModel);
+    const assignedModel = requestedModel === 'auto'
+      ? this.activeModelConfig()
+      : (requestedDeployment ? this.config.findDeployment(requestedDeployment) : this.config.findModel(requestedModel));
     const model = assignedModel?.name || (requestedModel === 'auto' ? this.activeModelName() : requestedModel);
     const activeModel = this.activeModelConfig();
     const activeProvider = this.engineModel();
@@ -5252,6 +5282,9 @@ export class Agent {
       // default cannot silently replace the assigned model or provider.
       child.config.set('models', 'providers', this.config.providers());
       child.forcedProvider = assignedProvider;
+      child.forcedProviderDeployment = assignedModel
+        ? deploymentIdentity(this.deploymentRef(assignedModel))
+        : '';
       child.setModel(assignedModel
         ? `deployment:${encodeURIComponent(assignedModel.provider_id)}:${encodeURIComponent(assignedModel.name)}`
         : model);
@@ -5294,6 +5327,9 @@ export class Agent {
       // through activePeerAgents without orphaning or falsely failing the peer.
       const tokens = await child.process(delegatedPrompt);
       const result = tokens.map(t => t.text || '').join('').trim();
+      if (child.status === 'error' || /^\s*\[Error\]/i.test(result)) {
+        throw new Error(result.replace(/^\s*\[Error\]\s*/i, '') || 'Subagent model run failed.');
+      }
       return result || '[Subagent] Completed with empty response.';
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -5838,7 +5874,7 @@ export class Agent {
       `- Remote repository safety: when the active workspace or any target path is inside a GitHub/remote-backed repository, proactively use repo_security_audit and file_audit before git_push, gh_pr_create, release packaging, public reporting, or cloud-side audit. Treat public remotes as public disclosure surfaces and keep private URLs, secrets, local runtime state, archives, Memory Lab, Work, config, and release outputs out of commits and summaries.`,
       `- Mode engine: current mode=${this.modeName()}; Build works autonomously, Plan is fully read-only with no file modifications, Goal continues until completion unless paused, Flow follows saved workflow components.`,
       `- Input mode: ${input}; Guide injects immediately, Next queues user intent for the following build turn.`,
-      `- Option feedback: ${optionFeedback}; fully_autonomous disables the question tool.`,
+      `- Option feedback: ${optionFeedback}; fully_autonomous disables the question tool except for Plan's final execute-or-supplement handoff.`,
       `- Model policy: current model=${this.model || '(unset)'}, intelligence=${this.intelligence}, auto-switch=${modelSwitch}.`,
       `- Agent terminal timeout: bash accepts per-call timeout_ms; timeout_ms=0 requests no limit; terminal.interrupt_timeout_ms=${this.config.getNum('terminal', 'interrupt_timeout_ms')} is a nonzero upper cap, and 0 means no cap.`,
       `- Automation: automation_create/list/update/toggle/delete manage persisted schedules through the active Newmark scheduler when available; Plan may only list automations, and subagents cannot manage automation.`,
@@ -5883,8 +5919,10 @@ export class Agent {
           'PLAN MODE.',
           'You are in fully READ-ONLY exploration mode.',
           'Do NOT modify any files, including README.md, generated files, configs, archives, or workspace files.',
-          'Explore the workspace, understand the codebase, research if needed, and produce a plan in the conversation only.',
-          'Use read-only tools only: web_search, web_fetch, read, glob, grep, browser_open, browser_snapshot, browser_use (observe/navigate/wait/extract only), pwd, git_status, file_audit, and repo_security_audit.',
+          'Work with Build-mode initiative while preserving the Plan sandbox: explore the workspace, understand the codebase, research as needed, and actively create or revise the linked plan with the linked_plan tool.',
+          'Use read-only inspection tools plus linked_plan maintenance and the question tool; never mutate workspace, host, application, service, or network state.',
+          'After the plan is complete, use the question tool to ask whether execution should begin. Offer exactly these two choices in the user language: "是，立即执行" / "否，请补充_____" (or "Yes, execute now" / "No, please supplement _____").',
+          'A positive choice starts a new Build-mode input. A negative choice remains in Plan mode so the user can supply the missing details.',
         ]).join('\n');
       case 'goal': {
         const g = this.goal?.history() || '';

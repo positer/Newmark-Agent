@@ -81,6 +81,8 @@ if (process.platform === 'win32') {
 let mainWindow: BrowserWindow | null = null;
 let agent: Agent | null = null;
 let conversationKernel: ConversationKernel | null = null;
+let activeFlowAbortController: AbortController | null = null;
+let activeFlowName = '';
 let wslAgentClient: WslAgentClient | null = null;
 let electronUtilityRuntimePool: ElectronUtilityRuntimePool | null = null;
 let wslAgentRuntimePool: WslAgentRuntimePool | null = null;
@@ -2153,6 +2155,7 @@ if (hasCliCommand) {
     ipcMain.handle('flow:run', async (_event, name: string, input = '', start = 0) => {
       if (!agent) return { ok: false, error: 'Agent not initialized' };
       if (agent.mode === 'plan') return { ok: false, error: 'Plan mode is fully read-only; Flow execution is blocked.' };
+      if (activeFlowAbortController) return { ok: false, error: `Flow is already running: ${activeFlowName || '(unnamed)'}` };
       const flowDir = path.join(agent.rootPath, 'Flow');
       const found = FlowEngine.findWorkflow(String(name || ''), flowDir);
       if (!found) return { ok: false, error: `Workflow not found: ${name}` };
@@ -2161,6 +2164,9 @@ if (hasCliCommand) {
       const previousMode = agent.mode;
       const previousFlow = agent.flow;
       const previousPc = agent.flowPc;
+      const flowAbortController = new AbortController();
+      activeFlowAbortController = flowAbortController;
+      activeFlowName = workflow.name;
       try {
         agent.flow = workflow;
         agent.flowPc = Number.isFinite(Number(start)) ? Number(start) : 0;
@@ -2168,6 +2174,7 @@ if (hasCliCommand) {
           startInput: String(input || ''),
           startPc: agent.flowPc,
           quiet: true,
+          signal: flowAbortController.signal,
         });
         return {
           ok: true,
@@ -2185,6 +2192,10 @@ if (hasCliCommand) {
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       } finally {
+        if (activeFlowAbortController === flowAbortController) {
+          activeFlowAbortController = null;
+          activeFlowName = '';
+        }
         agent.flow = previousFlow;
         agent.flowPc = previousPc;
         agent.setMode(previousMode);
@@ -2559,6 +2570,21 @@ if (hasCliCommand) {
       } catch (error) {
         return { error: String(error) };
       }
+    });
+    ipcMain.handle('flow:guide', async (_event, message: string) => {
+      if (!agent || !activeFlowAbortController) return { ok: false, error: 'No active Flow accepts Guide input.' };
+      const text = String(message || '').trim();
+      if (!text) return { ok: false, error: 'Flow Guide input is empty.' };
+      const accepted = agent.queueActiveKernelMessage(text, 'steer');
+      return accepted ? { ok: true, accepted: true, flow: activeFlowName } : { ok: false, error: 'The current Flow Build is not accepting Guide input.' };
+    });
+    ipcMain.handle('flow:stop', async () => {
+      if (!agent || !activeFlowAbortController) return { ok: true, action: 'not_running' };
+      const controller = activeFlowAbortController;
+      const flowName = activeFlowName;
+      controller.abort(new Error(`Flow interrupted by user: ${flowName}`));
+      agent.abortActiveKernelRun();
+      return { ok: true, action: 'stopping', flow: flowName };
     });
 
     ipcMain.handle('agent:readGlobalPrompt', async () => {

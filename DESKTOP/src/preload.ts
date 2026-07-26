@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('api', {
   },
   browserControl: (request: Record<string, unknown>) => ipcRenderer.invoke('browser:control', request),
   runFlow: (name: string, input?: string, start?: number) => ipcRenderer.invoke('flow:run', name, input, start),
+  guideFlow: (message: string) => ipcRenderer.invoke('flow:guide', message),
+  stopFlow: () => ipcRenderer.invoke('flow:stop'),
   saveConfig: (cfg: string | Record<string, unknown>) => ipcRenderer.invoke('agent:saveConfig', cfg),
   openGlobalConfig: () => ipcRenderer.invoke('agent:openGlobalConfig'),
   reloadGlobalConfig: () => ipcRenderer.invoke('agent:reloadGlobalConfig'),

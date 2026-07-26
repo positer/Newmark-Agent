@@ -386,7 +386,7 @@ export class ToolExecutor {
     ];
     let visibleTools = tools.filter((tool: any) => isNativeToolEnabled(tool.function?.name || '', this.config.nativeToolEnabled()));
     visibleTools = visibleTools.filter((tool: any) => this.hostSupportsTool(String(tool.function?.name || '')));
-    if (this.config.getStr('agent', 'option_feedback') === 'fully_autonomous') {
+    if (this.config.getStr('agent', 'option_feedback') === 'fully_autonomous' && mode !== 'plan') {
       visibleTools = visibleTools.filter((tool: any) => tool.function?.name !== 'question');
     }
     const policyFiltered = filterToolDefinitions(visibleTools, { mode });
@@ -470,7 +470,8 @@ export class ToolExecutor {
     const args = parsed as Record<string, unknown>;
     if (inputSchema === undefined
       && tool === 'question'
-      && this.config.getStr('agent', 'option_feedback') === 'fully_autonomous') {
+      && this.config.getStr('agent', 'option_feedback') === 'fully_autonomous'
+      && _mode !== 'plan') {
       const validation = this.argumentValidators.validate(tool, {
         type: 'object',
         properties: { questions: { type: 'array' } },
@@ -730,7 +731,7 @@ export class ToolExecutor {
         case 'subagent_result': return `[subagent_result] Routed to Agent runtime: ${g('name')}`;
         case 'subagent_close': return `[subagent_close] Routed to Agent runtime: ${g('name')}`;
         case 'question':
-          if (this.config.getStr('agent', 'option_feedback') === 'fully_autonomous') {
+          if (this.config.getStr('agent', 'option_feedback') === 'fully_autonomous' && context.mode !== 'plan') {
             return '[question] Disabled by fully_autonomous option feedback.';
           }
           return '[question] Options sent to user.';

@@ -476,7 +476,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
     let lastAssistant = lastTurn.text;
     const maxGoalContinuations = Math.max(0, Math.floor(agent.config.getNum('agent', 'goal_max_continuations') || 0));
     let goalContinuations = 0;
-    while (agent.mode === 'goal' && agent.goal && !agent.goal.paused && !agent.goal.checkComplete(lastAssistant)) {
+    while (agent.mode === 'goal' && agent.goal && !agent.goal.paused && !agent.goal.checkComplete(lastAssistant) && agent.canAutoContinueGoal()) {
       if (maxGoalContinuations > 0 && goalContinuations >= maxGoalContinuations) {
         const warning = `[Goal paused] Reached automatic continuation limit (${maxGoalContinuations}) without completion.`;
         agent.goal.paused = true;
@@ -1489,7 +1489,7 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
   if (name === 'linked_plan') return agent.handleLinkedPlanTool(args);
   if (name === 'build_history_query') return agent.handleBuildHistoryQuery(args);
   if (name === 'question') {
-    if (agent.config.getStr('agent', 'option_feedback') === 'fully_autonomous') return '[question] Disabled by fully_autonomous option feedback.';
+    if (agent.config.getStr('agent', 'option_feedback') === 'fully_autonomous' && agent.mode !== 'plan') return '[question] Disabled by fully_autonomous option feedback.';
     agent.handleQuestion(args);
     return '[Options sent]';
   }

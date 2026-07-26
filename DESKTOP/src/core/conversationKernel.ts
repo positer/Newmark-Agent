@@ -757,6 +757,13 @@ export class ConversationKernel {
       guideReceipts: new Map(),
       guideEnvelopes: new Map(),
     };
+    runner.setGoalContinuationGate(() => {
+      this.queueState(runtime);
+      return runtime.pendingNextTurn.length === 0
+        && runtime.queued.steering.length === 0
+        && runtime.queued.followUp.length === 0
+        && runner.subagents.readRootInbox().length === 0;
+    });
     for (const continuation of runner.conversationContinuations()) {
       runtime.pendingNextTurn.push({
         message: continuation.clientMessageId || continuation.images?.length

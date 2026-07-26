@@ -1,6 +1,7 @@
 import { Agent } from './agent';
 import { FlowEngine, FlowWorkflow } from './flow';
 import { AgentMode } from './types';
+import { randomUUID } from 'crypto';
 
 export interface FlowRunnerOptions {
   startInput?: string;
@@ -11,6 +12,23 @@ export interface FlowRunnerOptions {
 
 const MAX_VISITS = 300;
 
+async function runFlowBuild(agent: Agent, prompt: string, signal?: AbortSignal) {
+  const ownsWorkRun = Array.isArray(agent.workRuns)
+    && typeof agent.beginConversationWorkRun === 'function'
+    && typeof agent.finishConversationWorkRun === 'function'
+    && !agent.workRuns.some(run => run.status === 'running');
+  const runId = ownsWorkRun ? randomUUID() : '';
+  if (ownsWorkRun) agent.beginConversationWorkRun(runId, undefined, undefined, true);
+  try {
+    const tokens = await agent.process(prompt);
+    if (ownsWorkRun) agent.finishConversationWorkRun(runId, 'completed');
+    return tokens;
+  } catch (error) {
+    if (ownsWorkRun) agent.finishConversationWorkRun(runId, signal?.aborted ? 'interrupted' : 'error');
+    throw error;
+  }
+}
+
 async function evaluateReadOnlyBuild(agent: Agent, title: string, condition: string, signal?: AbortSignal): Promise<boolean> {
   const previousMode = agent.mode;
   try {
@@ -18,13 +36,13 @@ async function evaluateReadOnlyBuild(agent: Agent, title: string, condition: str
     // makes the evaluator strictly read-only and blocks side effects.
     agent.setMode('plan');
     agent.recordWorkStatus?.(`[Flow logic] ${title}`);
-    const tokens = await agent.process([
+    const tokens = await runFlowBuild(agent, [
       '## Read-only Build Logic Evaluation',
       'Inspect the current workspace, conversation evidence, and completed Build results only as needed.',
       'Do not modify files, applications, services, workflows, memory, or external state.',
       condition,
       'Return one final line exactly: FLOW_DECISION=true or FLOW_DECISION=false.',
-    ].join('\n\n'));
+    ].join('\n\n'), signal);
     throwIfFlowAborted(signal);
     const text = tokens.map(token => token.text || '').join('');
     const matches = Array.from(text.matchAll(/FLOW_DECISION\s*=\s*(true|false)/gi));
@@ -99,7 +117,7 @@ export async function runFlow(
         if (!quiet) console.log(`  Prompt: ${step.prompt.slice(0, 200)}${step.prompt.length > 200 ? '...' : ''}`);
         const targetMode = (step.mode?.toLowerCase() === 'plan' ? 'plan' : step.mode?.toLowerCase() === 'goal' ? 'goal' : 'build') as AgentMode;
         agent.setMode(targetMode);
-        const resultTokens = await agent.process(step.prompt);
+        const resultTokens = await runFlowBuild(agent, step.prompt, options.signal);
         throwIfFlowAborted(options.signal);
         const resultText = resultTokens.map(t => t.text).join('');
         totalChars += resultText.length;

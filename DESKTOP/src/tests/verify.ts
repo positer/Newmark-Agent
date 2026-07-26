@@ -408,9 +408,36 @@ async function main() {
   assert(uiHtml.includes("runWrapper.insertAdjacentElement('afterend', div)") && uiHtml.includes("addMsg('assistant', content, event.mode || state.mode") && uiHtml.includes("{ runId: event.runId || ''"), 'Build transcript: live and restored final replies remain immediately adjacent to their owning runId block');
   assert(uiHtml.includes('function activeConversationId()') && uiHtml.includes('api.sendMessage(requestMessage, lockedTarget)') && uiHtml.includes('composePromptRequestForSend(rawText)'), 'ui html: sends the initiating composite target with structured text and image attachments');
   assert(uiHtml.includes('window.submitCurrentAction = function()') && uiHtml.includes('window.stopCurrentConversation = async function()') && uiHtml.includes('api.stopConversation({ target: target, runId: runId, force: force })') && uiHtml.includes("e.key === 'Escape' && isCurrentConversationRunning() && !promptHasText()"), 'ui html: current running conversation with empty prompt shows target-bound graceful/force Stop bound to Esc');
+  assert(uiHtml.includes("var requestedMode = opts.requestedMode || state.mode || 'build';")
+    && uiHtml.includes("var idleBuildNextImmediate = requestedMode === 'build'")
+    && !uiHtml.includes("els['mode-select'].value = 'build'; window.syncNewmarkSelect"),
+  'ui mode contract: sending does not rewrite Plan, Goal, or Flow selection to Build');
+  assert(uiHtml.includes('function handlePlanExecutionChoice')
+    && uiHtml.includes("setVisibleMode('build')")
+    && uiHtml.includes("setVisibleMode('plan')")
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('After the plan is complete, use the question tool'),
+  'Plan mode: keeps the Plan label, maintains the linked plan, and offers explicit Build execution or Plan supplementation');
+  assert(uiHtml.includes('goalRequest.goalDeclaration = true')
+    && uiHtml.includes('goalObjective: requestedMode === \'goal\'')
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8').includes('agent.canAutoContinueGoal()'),
+  'Goal mode: Goal Guide/Next updates the Goal objective and autonomous hidden continuation yields to queued user work');
+  assert(uiHtml.includes("if (state.mode === 'flow') window.setInputMode('guide')")
+    && uiHtml.includes('window.submitSelectedFlow = function()')
+    && uiHtml.includes('window.renderFlowTakeover = function(active, name)')
+    && uiHtml.includes('api.guideFlow')
+    && uiHtml.includes('api.stopFlow')
+    && uiHtml.includes("await setVisibleMode('build')")
+    && fs.readFileSync(path.join(process.cwd(), 'scripts', 'dev018-mode-ui-smoke.cjs'), 'utf-8').includes('nextAfterFlowExit')
+    && uiHtml.includes('class="input-float-stack"')
+    && uiHtml.includes('bottom: calc(100% + 8px);')
+    && uiHtml.indexOf('id="scroll-bottom-btn"') < uiHtml.indexOf('id="flow-takeover"')
+    && fs.readFileSync(path.join(process.cwd(), 'scripts', 'dev018-mode-ui-smoke.cjs'), 'utf-8').includes('Scroll-to-bottom button overlaps the Flow takeover bubble')
+    && preloadSource.includes("ipcRenderer.invoke('flow:guide'")
+    && preloadSource.includes("ipcRenderer.invoke('flow:stop'"),
+  'Flow mode: disables Next, expands the selected workflow input, allows Guide only, shows takeover, and supports explicit stop');
   assert(uiHtml.includes('function updateSubmitButtonState()') && uiHtml.includes("setSubmitButtonVisual(escalating ? 'octagon-x' : 'square', label, true, true)") && uiHtml.includes("setSubmitButtonVisual('send', t('input.send'), running, false)") && uiHtml.includes("els.prompt.addEventListener('input'") && uiHtml.includes("['stopping', 'force_restarting']"), 'ui html: submit button switches between Send, Stop, and Force stop from the target runtime state');
   assert(uiHtml.includes("window.setAgentBackendMode = async function(mode)") && uiHtml.includes('id="agent-runtime-environment"') && uiHtml.includes("state.wslAvailable ? '' : ' disabled'") && uiHtml.includes("t('settings.restartRequired')") && !uiHtml.includes('window.setAgentWslBackend'), 'ui html: Windows native/WSL backend is a restart-required list choice and WSL mode is disabled when unavailable');
-  assert(uiHtml.includes('if (api.setMode) await api.setMode(state.mode)') && uiHtml.includes('if (api.setModel && state.model) await api.setModel(state.model)'), 'ui html: send synchronizes current mode and model before backend turn');
+  assert(uiHtml.includes('if (api.setMode) await api.setMode(executionMode)') && uiHtml.includes('if (api.setModel && state.model) await api.setModel(state.model)'), 'ui html: send synchronizes the per-turn execution mode and model without rewriting the visible input mode');
   assert(uiHtml.includes('renderConversations();') && uiHtml.includes('r.conversations') && uiHtml.includes('applyBackendConversations(r.conversations || [], stillActive ? lockedConversationId : activeConversationId(), lockedTarget.workspaceId)'), 'ui html: refreshes the initiating workspace conversation cache without changing the foreground target');
   assert(uiHtml.includes('runningConversations') && uiHtml.includes('setupAgentWorkEvents()') && uiHtml.includes('appendAgentWorkEvent(payload)') && uiHtml.includes('var id = String(event.conversationId ||') && uiHtml.includes('renderAgentWorkEvent(event)') && uiHtml.includes('summary: item.title ||'), 'ui html: supports per-conversation running state, conversation-bound live work events, and backend titles');
   assert(uiHtml.includes("type === 'queue_update'") && uiHtml.includes('backendQueuesByTarget') && uiHtml.includes('setBackendQueueForTarget(event.queue || { steering: [], followUp: [] }, eventQueueTarget)') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue, eventQueueTarget)') && uiHtml.includes('setBackendQueueForTarget(s.queued, snapshotTarget)') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue, snapshotTarget)'), 'ui html: caches backend queue_update events by composite target for foreground/background conversation debugging');
@@ -511,8 +538,11 @@ async function main() {
   assert(uiHtml.includes("'settings.runInWsl': 'Agent runtime environment'") && uiHtml.includes("'settings.runInWsl': 'Agent 运行环境'") && uiHtml.includes('id="agent-runtime-environment"') && uiHtml.includes('<option value="windows"') && uiHtml.includes('<option value="wsl"'), 'settings: Agent runtime environment uses a Windows native/WSL select list with localized title');
   assert(uiHtml.includes('#input-tools {') && uiHtml.includes('overflow: visible;'), 'input toolbar: permits submit hover and running marquee pixels outside the fixed button box without clipping');
   assert(uiHtml.includes('window.runFlowWork = async function(workIdx)') && uiHtml.includes('await api.saveFlow(normalized)') && uiHtml.includes('api.runFlow(normalized.name, flowInput, 0)') && uiHtml.includes('renderChatMessages(r.chatMessages)'), 'ui html: Flow Run uses the constrained Flow API and backend core runner');
-  assert(uiHtml.includes('function stopFlowRunInternal()') && uiHtml.includes('window.stopFlowRun = function()') && uiHtml.includes('stopFlowRunInternal();') && !uiHtml.includes('window.stopFlowRun = function() {\n  stopFlowRun();'), 'ui html: Flow stop handler avoids global recursive self-call');
-  assert(uiHtml.includes("conversationRunning && effectiveInputMode === 'guide'") && uiHtml.includes("effectiveInputMode === 'next' && !opts.fromQueue && conversationRunning") && uiHtml.includes("idleNextImmediate = effectiveInputMode === 'next' && !opts.fromQueue && !conversationRunning") && uiHtml.includes('state.nextQueue.push(displayText)') && uiHtml.includes('bindQueuedRequestToTarget(requestMessage, rawText, lockedTarget') && uiHtml.includes('queuedRequestMatchesTarget') && uiHtml.includes('queueMicrotask(function()') && !uiHtml.includes('}, 250);') && !uiHtml.includes('}, 80);') && uiHtml.includes('state.queueCollapsed = false') && uiHtml.includes('queuePausedByTarget') && uiHtml.includes('rebindQueueToRuntimeBranch'), 'ui html: idle Next starts immediately while active-run Next stays runtime-bound, supports pausing injection, and terminal events drain without fixed timer latency');
+  assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'flow-runner.ts'), 'utf-8').includes('agent.beginConversationWorkRun')
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'flow-runner.ts'), 'utf-8').includes("agent.finishConversationWorkRun(runId, 'completed')"),
+  'Flow runner: each structure-driven component owns a persisted Build block when no parent Build already exists');
+  assert(uiHtml.includes('function stopFlowRunInternal()') && uiHtml.includes('window.stopFlowRun = async function()') && uiHtml.includes('stopFlowRunInternal();') && !uiHtml.includes('window.stopFlowRun = function() {\n  stopFlowRun();'), 'ui html: Flow stop handler avoids global recursive self-call');
+  assert(uiHtml.includes("conversationRunning && effectiveInputMode === 'guide'") && uiHtml.includes("effectiveInputMode === 'next' && !opts.fromQueue && conversationRunning") && uiHtml.includes("idleBuildNextImmediate = requestedMode === 'build' && effectiveInputMode === 'next' && !opts.fromQueue && !conversationRunning") && uiHtml.includes('state.nextQueue.push(displayText)') && uiHtml.includes('bindQueuedRequestToTarget(requestMessage, rawText, lockedTarget') && uiHtml.includes('queuedRequestMatchesTarget') && uiHtml.includes('queueMicrotask(function()') && !uiHtml.includes('}, 250);') && !uiHtml.includes('}, 80);') && uiHtml.includes('state.queueCollapsed = false') && uiHtml.includes('queuePausedByTarget') && uiHtml.includes('rebindQueueToRuntimeBranch'), 'ui html: idle Build-Next starts immediately while Plan/Goal preserve their requested mode and active-run Next stays runtime-bound');
   assert(uiHtml.includes('id="terminal-timeout-input"') && uiHtml.includes('Max ms') && uiHtml.includes('Terminal timeout cap') && uiHtml.includes('window.setTerminalInterruptTimeout = function(value)') && uiHtml.includes("api.saveSetting('terminal', 'interrupt_timeout_ms', n)"), 'ui html: terminal timeout cap is editable and persisted');
   const agentKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
   const piKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
@@ -2142,7 +2172,7 @@ async function main() {
 
   const sub = subMgr.get(subId);
   assert(sub?.natureSlug === 'test-sub' && /^test-sub-[0-9a-f]{8}--[0-9a-f-]{36}$/.test(sub.name), 'get: nature plus short and full UUID name');
-  assert(sub?.status === 'working', 'get: status working');
+  assert(sub?.status === 'queued', 'get: stays durably queued until an executor is bound');
 
   const sent = subMgr.send(subId, 'Continue work');
   assert(sent === true && sub?.messages.length === 3, 'send: adds message');
@@ -2151,12 +2181,12 @@ async function main() {
   assert(sub?.status === 'completed', 'complete: marks completed');
   assert(subMgr.getResult(subId).includes('completed result'), 'complete: stores result');
   const subRecord = subMgr.toRecord(subId);
-  assert(subRecord?.active === true && subRecord.mode === 'build' && !!subRecord.startedAt && !!subRecord.completedAt && subRecord.conversationId === 'default', 'subagent compat: record exposes stable structured fields');
+  assert(subRecord?.active === true && subRecord.mode === 'build' && !!subRecord.completedAt && subRecord.conversationId === 'default', 'subagent compat: record exposes stable structured fields');
   const subEnvelope = subMgr.toToolResult(subId, 'subagent envelope output');
   assert(subEnvelope.ok === true && subEnvelope.data?.id === subId && subEnvelope.output.includes('envelope'), 'subagent compat: tool result envelope carries record data');
 
   const resent = subMgr.send(subId, 'Continue after result');
-  assert(resent === true && sub?.status === 'working', 'send: can continue completed subagent');
+  assert(resent === true && sub?.status === 'queued', 'send: durably queues a completed subagent until execution is available');
 
   subMgr.close(subId);
   assert(subMgr.listActive().length === 0, 'close: becomes inactive');
@@ -2182,12 +2212,52 @@ async function main() {
   taskAgent.subagents.reset();
   const subProvider = new FakeProvider(['subagent first result', 'subagent continued result']);
   (taskAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => subProvider;
+  taskAgent.config.upsertProvider('subagent-binding-a', 'https://subagent-a.invalid/v1', 'binding-a-key');
+  taskAgent.config.upsertProvider('subagent-binding-b', 'https://subagent-b.invalid/v1', 'binding-b-key');
+  taskAgent.config.addModelToProvider('subagent-binding-a', 'shared-child-model', 'Shared child A', 'Duplicate-name binding fixture A');
+  taskAgent.config.addModelToProvider('subagent-binding-b', 'shared-child-model', 'Shared child B', 'Duplicate-name binding fixture B');
+  const bindingA = taskAgent.config.providers().find(provider => provider.name === 'subagent-binding-a')!;
+  const bindingB = taskAgent.config.providers().find(provider => provider.name === 'subagent-binding-b')!;
+  taskAgent.setModel(`deployment:${encodeURIComponent(bindingB.id)}:${encodeURIComponent('shared-child-model')}`);
+  taskAgent.subagents.pauseScheduling();
+  const inheritedSub = await taskAgent.handleSubagentEnvelope(JSON.stringify({ name: 'bound-worker', prompt: 'Preserve the parent deployment.' }));
+  assert(inheritedSub.data?.model === `deployment:${encodeURIComponent(bindingB.id)}:${encodeURIComponent('shared-child-model')}`, 'Agent task model binding: inherited duplicate-name models retain the exact parent provider deployment');
+  taskAgent.handleSubagentCloseEnvelope(JSON.stringify({ id: inheritedSub.data?.id }));
+  taskAgent.subagents.resumeScheduling();
+  const forcedProbeRoot = path.join(TEST_DIR, 'forced-provider-subagent-probe');
+  fs.rmSync(forcedProbeRoot, { recursive: true, force: true });
+  const forcedProbe = new Agent(forcedProbeRoot, { agentOnly: true });
+  forcedProbe.config.upsertProvider('forced-binding-a', 'https://forced-binding-a.invalid/v1', 'forced-binding-a-key');
+  forcedProbe.config.upsertProvider('forced-binding-b', 'https://forced-binding-b.invalid/v1', 'forced-binding-b-key');
+  forcedProbe.config.addModelToProvider('forced-binding-a', 'shared-child-model', 'Shared child A', 'Forced-provider fixture A');
+  forcedProbe.config.addModelToProvider('forced-binding-b', 'shared-child-model', 'Shared child B', 'Forced-provider fixture B');
+  const forcedBindingA = forcedProbe.config.providers().find(provider => provider.name === 'forced-binding-a')!;
+  const forcedBindingB = forcedProbe.config.providers().find(provider => provider.name === 'forced-binding-b')!;
+  const forcedProviderProbe = { marker: 'initial-provider' };
+  forcedProbe.setModel(`deployment:${encodeURIComponent(forcedBindingA.id)}:${encodeURIComponent('shared-child-model')}`);
+  (forcedProbe as any).forcedProvider = forcedProviderProbe;
+  (forcedProbe as any).forcedProviderDeployment = `${forcedBindingA.id}\u0000shared-child-model`;
+  assert(forcedProbe.engineModel() === forcedProviderProbe as any, 'Agent task fallback: initial child deployment uses the parent-bound provider instance');
+  forcedProbe.setModel(`deployment:${encodeURIComponent(forcedBindingB.id)}:${encodeURIComponent('shared-child-model')}`);
+  assert(forcedProbe.engineModel() !== forcedProviderProbe as any, 'Agent task fallback: switching deployment releases the stale forced provider so fallback reaches the new provider');
+  fs.rmSync(forcedProbeRoot, { recursive: true, force: true });
+  taskAgent.setModel('test-model');
   const createdSub = await (taskAgent as unknown as { handleSubagent: (args: string) => Promise<string> })
     .handleSubagent(JSON.stringify({ name: 'worker', prompt: 'Do delegated work', model: 'test-model', input_mode: 'next', mode: 'plan' }));
   const worker = taskAgent.subagents.get('worker');
   assert(createdSub.includes('subagent first result') && createdSub.includes('[Subagent accepted]'), 'Agent task compatibility: accepts immediately then awaits peer result for direct API callers');
   assert(worker?.status === 'completed', 'Agent task: completed status recorded');
   assert(worker?.model === 'test-model' && worker?.inputMode === 'next' && worker?.agentMode === 'plan', 'Agent task: preserves requested model/input/mode');
+  const agentOnlySubagentRoot = path.join(TEST_DIR, 'agent-only-subagent-runtime');
+  fs.rmSync(agentOnlySubagentRoot, { recursive: true, force: true });
+  const agentOnlyTask = new Agent(agentOnlySubagentRoot, { agentOnly: true });
+  const agentOnlyProvider = new FakeProvider(['agent-only subagent result']);
+  (agentOnlyTask as unknown as { engineModel: () => FakeProvider }).engineModel = () => agentOnlyProvider;
+  const agentOnlyResult = await agentOnlyTask.handleSubagent(JSON.stringify({ name: 'agent-only-worker', prompt: 'Execute from a headless runtime.', model: 'agent-only-model' }));
+  assert(agentOnlyResult.includes('agent-only subagent result')
+    && agentOnlyTask.subagents.get('agent-only-worker')?.status === 'completed',
+  'Agent task runtime binding: agentOnly/headless runtimes bind an executor and cannot leave accepted peers permanently queued');
+  fs.rmSync(agentOnlySubagentRoot, { recursive: true, force: true });
   const continuedSub = await (taskAgent as unknown as { handleSubagentContinue: (args: string) => Promise<string> })
     .handleSubagentContinue(JSON.stringify({ name: 'worker', prompt: 'Continue delegated work' }));
   assert(continuedSub.includes('subagent continued result'), 'Agent subagent_send: continues existing subagent');
@@ -2899,6 +2969,15 @@ async function main() {
   const continuingText = continuingTokens.map(t => t.text).join('');
   assert(continuingProvider.calls === 2, 'goal process: continues without max-depth guard until complete');
   assert(!continuingText.includes('max depth'), 'goal process: no max-depth warning');
+
+  const queuedGoalAgent = new Agent(path.join(TEST_DIR, 'queued-goal-runtime'), { agentOnly: true });
+  queuedGoalAgent.setModel('queued-goal-test-model');
+  const queuedGoalProvider = new FakeProvider(['Goal still incomplete.']);
+  (queuedGoalAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => queuedGoalProvider;
+  queuedGoalAgent.updateGoal('Yield autonomous continuation to queued user work');
+  queuedGoalAgent.setGoalContinuationGate(() => false);
+  await queuedGoalAgent.process('Start queued goal');
+  assert(queuedGoalProvider.calls === 1, 'goal process: pending queue gate prevents a hidden autonomous continuation from overtaking user input');
 
   // Model management
   agent.setModel('test-model');

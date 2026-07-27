@@ -1,4 +1,4 @@
-import { AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
+import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, conversationRuntimeKey, normalizeConversationTarget } from './conversationTarget';
 import { WslAgentClient, WslHostToolHandler } from './wslAgentClient';
 import {
@@ -21,7 +21,10 @@ export interface WslTargetRuntimeClient {
   checkpoint(target: ConversationRuntimeTarget): Promise<Record<string, unknown>>;
   rateAutoRoute?(target: ConversationRuntimeTarget, score: number, routeId?: string): Promise<WslAutoRouteRatingResult>;
   setWorkRunExpanded(target: ConversationRuntimeTarget, runId: string, expanded: boolean): Promise<boolean>;
+  setMode?(target: ConversationRuntimeTarget, mode: AgentMode): Promise<AgentMode>;
   setInputMode?(target: ConversationRuntimeTarget, mode: string): Promise<'guide' | 'next'>;
+  toggleGoalPause?(target: ConversationRuntimeTarget): Promise<boolean>;
+  clearGoal?(target: ConversationRuntimeTarget): Promise<boolean>;
   updateSetting(section: string, key: string, value: unknown): Promise<void>;
   forceRestartRuntimeGroup(): Promise<void>;
   stop(): Promise<void>;
@@ -289,6 +292,39 @@ export class WslAgentRuntimePool {
     if (!entry?.client.setInputMode) return null;
     try {
       return await entry.client.setInputMode(normalized, mode);
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async setMode(target: ConversationRuntimeTarget, mode: AgentMode): Promise<AgentMode | null> {
+    const normalized = normalizeConversationTarget(target);
+    const entry = await this.acquireExisting(normalized);
+    if (!entry?.client.setMode) return null;
+    try {
+      return await entry.client.setMode(normalized, mode);
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async toggleGoalPause(target: ConversationRuntimeTarget): Promise<boolean | null> {
+    const normalized = normalizeConversationTarget(target);
+    const entry = await this.acquireExisting(normalized);
+    if (!entry?.client.toggleGoalPause) return null;
+    try {
+      return await entry.client.toggleGoalPause(normalized);
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async clearGoal(target: ConversationRuntimeTarget): Promise<boolean | null> {
+    const normalized = normalizeConversationTarget(target);
+    const entry = await this.acquireExisting(normalized);
+    if (!entry?.client.clearGoal) return null;
+    try {
+      return await entry.client.clearGoal(normalized);
     } finally {
       this.release(entry, true);
     }

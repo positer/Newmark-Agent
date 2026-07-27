@@ -90,7 +90,8 @@ async function runLoop(
 
       const toolCalls = assistant.content.filter((content): content is AgentToolCall => content.type === 'toolCall');
       const toolResults = toolCalls.length ? await executeToolCalls(toolCalls, context, config, signal) : [];
-      hasMoreToolCalls = toolResults.some(result => result.role === 'toolResult' && result.details && typeof result.details === 'object' && (result.details as Record<string, unknown>).terminate === true) ? false : toolResults.length > 0;
+      const terminatedByTool = toolResults.some(result => result.role === 'toolResult' && result.details && typeof result.details === 'object' && (result.details as Record<string, unknown>).terminate === true);
+      hasMoreToolCalls = terminatedByTool ? false : toolResults.length > 0;
       for (const result of toolResults) {
         await emit(config, { type: 'message_start', message: result });
         context.messages.push(result);
@@ -108,7 +109,10 @@ async function runLoop(
       }
 
       if (config.shouldStopAfterTurn) {
-        const shouldStop = await config.shouldStopAfterTurn({ message: assistant, toolResults, context, newMessages });
+        // A terminating tool (notably question) owns this boundary. A generic
+        // assistant/tool-call heuristic must never resume the provider before
+        // the real user supplies the pending answer.
+        const shouldStop = terminatedByTool || await config.shouldStopAfterTurn({ message: assistant, toolResults, context, newMessages });
         if (!shouldStop) {
           hasMoreToolCalls = true;
           continue;

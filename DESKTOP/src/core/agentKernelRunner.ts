@@ -449,6 +449,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   };
 
   try {
+    const linkedPlanRevisionBeforeRun = agent.getLinkedPlan().revision;
     const modelBeforeKernelRun = agent.model;
     let lastTurn = await runWithCompressionResume([], false);
     if (modelBeforeKernelRun && modelBeforeKernelRun !== agent.model && !tokens.some(t => t.text?.includes('[Model fallback]'))) {
@@ -473,35 +474,17 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
     if (kernelTurnFailed(agent, lastTurn)) {
       throw new ProviderRunError(normalizePublicProviderError(lastTurn.errorMessage || lastTurn.text, [agent.activeModelConfig()?.api_key]));
     }
-    let lastAssistant = lastTurn.text;
-    const maxGoalContinuations = Math.max(0, Math.floor(agent.config.getNum('agent', 'goal_max_continuations') || 0));
-    let goalContinuations = 0;
-    while (agent.mode === 'goal' && agent.goal && !agent.goal.paused && !agent.goal.checkComplete(lastAssistant) && agent.canAutoContinueGoal()) {
-      if (maxGoalContinuations > 0 && goalContinuations >= maxGoalContinuations) {
-        const warning = `[Goal paused] Reached automatic continuation limit (${maxGoalContinuations}) without completion.`;
-        agent.goal.paused = true;
-        tokens.push({ type: 'text', text: `\n${warning}` });
-        agent.recordWorkStatus(warning);
-        break;
-      }
-      goalContinuations += 1;
-      const goalPrompt = `Continue working toward this goal:\n${agent.goal.objective}\n\nProgress made. What remains?`;
-      lastTurn = await runWithCompressionResume([{ role: 'user', content: goalPrompt, timestamp: Date.now() }], true);
-      if (kernelTurnFailed(agent, lastTurn)) {
-        throw new ProviderRunError(normalizePublicProviderError(lastTurn.errorMessage || lastTurn.text, [agent.activeModelConfig()?.api_key]));
-      }
-      lastAssistant = lastTurn.text;
-      if (agent.goal.checkComplete(lastAssistant)) {
-        agent.markGoalComplete();
-        tokens.push({ type: 'text', text: '\n[Goal Complete]' });
-        break;
-      }
-    }
+    const lastAssistant = lastTurn.text;
     if (agent.mode === 'goal' && agent.goal && agent.goal.checkComplete(lastAssistant)) {
       agent.markGoalComplete();
       if (!tokens.some(token => token.type === 'text' && /goal complete/i.test(token.text || ''))) {
         tokens.push({ type: 'text', text: '\n[Goal Complete]' });
       }
+    }
+    if (agent.mode === 'plan' && agent.workspace.current) {
+      const linkedPlan = agent.getLinkedPlan();
+      if (linkedPlan.revision !== linkedPlanRevisionBeforeRun) agent.ensurePlanExecutionQuestion();
+      else agent.pendingOptions = agent.pendingOptions.filter(question => !isPlanExecutionQuestion(question));
     }
   } finally {
     agent.attachAgentKernelRuntime(null);
@@ -1364,14 +1347,15 @@ function toKernelTools(agent: Agent, definitions?: unknown[], provisioning?: Too
           discardComputerUseVisionImage(name, rawText);
           throw new Error(rawText);
         }
-        const visionImage = computerUseVisionImageInput(agent, name, rawText);
+        const visionImage = visualFallbackImageInput(agent, name, rawText);
         const directImage = imageInspectDataUrl(name, rawText);
         const text = sanitizeVisualToolText(name, rawText);
         const content: Array<KernelTextContent | KernelImageContent> = [{ type: 'text', text }];
         if (visionImage.imagePath) content.push({ type: 'image', imagePath: visionImage.imagePath, mimeType: imageMimeForPath(visionImage.imagePath) });
         else if (visionImage.image) content.push({ type: 'image', image: visionImage.image, mimeType: visionImage.mimeType });
         if (directImage) content.push({ type: 'image', image: directImage, mimeType: 'image/png' });
-        const terminate = shouldTerminateAfterToolResult(name);
+        const terminate = shouldTerminateAfterToolResult(name)
+          && (name !== 'question' || agent.pendingOptions.length > 0);
         const launchReceipt = continuationToolLaunchReceipt(name, params, text);
         return { content, details: { tool: name, ok: true, terminate, ...(launchReceipt ? { launchReceipt } : {}), visionImagePath: visionImage.imagePath || undefined, ephemeralVisionImage: !!visionImage.image }, terminate };
       },
@@ -1397,12 +1381,17 @@ function toolResultIndicatesFailure(text: string): boolean {
 }
 
 function sanitizeVisualToolText(name: string, text: string): string {
-  if (name !== 'computer_use' && name !== 'image_inspect') return text;
+  if (name !== 'computer_use' && name !== 'browser_use' && name !== 'pdf_read' && name !== 'image_inspect') return text;
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
-    if (name === 'computer_use') {
+    if (name === 'computer_use' || name === 'browser_use' || name === 'pdf_read') {
       delete parsed.vision_image_path;
       delete parsed.vision_image_data_url;
+      if (name === 'pdf_read' && parsed.result && typeof parsed.result === 'object') {
+        const nested = parsed.result as Record<string, unknown>;
+        delete nested.vision_image_path;
+        delete nested.vision_image_data_url;
+      }
     }
     if (name === 'image_inspect') delete parsed.image_data_url;
     return JSON.stringify(parsed, null, 2);
@@ -1431,18 +1420,21 @@ function imageInspectDataUrl(name: string, text: string): string {
   }
 }
 
-function computerUseVisionImageInput(agent: Agent, name: string, text: string): { imagePath?: string; image?: string; mimeType?: string } {
-  if (name !== 'computer_use') return {};
+function visualFallbackImageInput(agent: Agent, name: string, text: string): { imagePath?: string; image?: string; mimeType?: string } {
+  if (name !== 'computer_use' && name !== 'browser_use' && name !== 'pdf_read') return {};
   const model = agent.activeModelConfig();
   if (!model?.vision) return {};
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
-    if (parsed.action !== 'observe' && parsed.action !== 'app_observe') return {};
-    const directImage = String(parsed.vision_image_data_url || '');
+    const nested = name === 'pdf_read' && parsed.result && typeof parsed.result === 'object'
+      ? parsed.result as Record<string, unknown>
+      : parsed;
+    if (name !== 'pdf_read' && nested.action !== 'observe' && nested.action !== 'app_observe') return {};
+    const directImage = String(nested.vision_image_data_url || '');
     if (/^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/i.test(directImage) && directImage.length <= 2 * 1024 * 1024) {
       return { image: directImage, mimeType: directImage.slice(5, directImage.indexOf(';')).toLowerCase() };
     }
-    const screenshotPath = String(parsed.vision_image_path || '');
+    const screenshotPath = String(nested.vision_image_path || '');
     if (!screenshotPath) return {};
     const image = imagePathToDataUrl(screenshotPath);
     return image ? { image, mimeType: image.slice(5, image.indexOf(';')).toLowerCase() } : {};
@@ -1489,9 +1481,9 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
   if (name === 'linked_plan') return agent.handleLinkedPlanTool(args);
   if (name === 'build_history_query') return agent.handleBuildHistoryQuery(args);
   if (name === 'question') {
-    if (agent.config.getStr('agent', 'option_feedback') === 'fully_autonomous' && agent.mode !== 'plan') return '[question] Disabled by fully_autonomous option feedback.';
-    agent.handleQuestion(args);
-    return '[Options sent]';
+    if (agent.config.getStr('agent', 'option_feedback') === 'fully_autonomous') return '[question] Disabled by fully_autonomous option feedback.';
+    if (!agent.handleQuestion(args)) return '[Question rejected: at least one question with two labeled options is required.]';
+    return '[Waiting for actual user selection. No option has been selected.]';
   }
   if (name === 'skill_download') {
     const result = await agent.tools.execute(name, args, wsDir, {
@@ -1541,7 +1533,8 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
     actorId: agent.runtimeActorId,
     workspaceId: terminalTakeoverWorkspaceId(wsDir),
     backend: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
-    allowEphemeralVisionImage: name === 'computer_use' && !!agent.activeModelConfig()?.vision,
+    allowEphemeralVisionImage: (name === 'computer_use' || name === 'browser_use' || name === 'pdf_read' || name === 'ocr_read')
+      && !!agent.activeModelConfig()?.vision,
     signal,
   });
   if (signal?.aborted) throw abortError();
@@ -1574,6 +1567,15 @@ function shouldTerminateAfterToolResult(name: string): boolean {
   return name === 'flow_run'
     || name.startsWith('automation_')
     || name === 'question';
+}
+
+function isPlanExecutionQuestion(question: { question?: string; options?: Array<{ label?: string }> }): boolean {
+  const contract = [
+    String(question?.question || ''),
+    ...(question?.options || []).map(option => String(option?.label || '')),
+  ].join('\n');
+  return /立即执行|执行此计划|execute (?:now|this plan)|start execution/i.test(contract)
+    && /请补充|supplement|add detail/i.test(contract);
 }
 
 function continuationToolLaunchReceipt(name: string, params: Record<string, unknown>, text: string): { phase: 'started'; continueBuild: true } | null {
@@ -1766,7 +1768,8 @@ export const agentKernelRunnerInternals = {
   imagePathToOpenAIContentPart,
   imageMimeForPath,
   toKernelMessagesFromHistory,
-  computerUseVisionImageInput,
+  visualFallbackImageInput,
+  computerUseVisionImageInput: visualFallbackImageInput,
   sanitizeVisualToolText,
   routeToolSurface,
   selectTaskToolDefinitions,

@@ -146,13 +146,69 @@ async function waitForUi(cdp) {
           await window.setVisibleMode(mode);
           window.setInputMode(mode === 'flow' ? 'guide' : (cycle % 2 ? 'guide' : 'next'), false);
           if (state.mode !== mode) throw new Error('Mode transition drifted at ' + cycle + ':' + mode);
-          if (mode === 'flow' && state.inputMode !== 'guide') throw new Error('Flow accepted Next at cycle ' + cycle);
+          if (mode === 'flow' && state.inputMode !== 'guide') throw new Error('Flow Guide selection drifted at ' + cycle);
         }
       }
+      const goalQueueLength = (state.nextQueue || []).length;
+      const goalRequestQueueLength = (state.nextQueueRequests || []).length;
+      const goalTarget = currentConversationTarget();
+      let queuedGoalObjective = '';
+      try {
+        state.mode = 'goal';
+        window.setInputMode('next', false);
+        state.goalText = '';
+        state.goalVisible = false;
+        setConversationRuntimeState(goalTarget, 'running', 'dev018-goal-bar-run');
+        document.getElementById('prompt').value = 'activate the dev-0.1.8 Goal bar';
+        await window.sendMessage('next');
+        queuedGoalObjective = String((state.nextQueueRequests[state.nextQueueRequests.length - 1] || {}).goalObjective || '');
+      } finally {
+        state.nextQueue.splice(goalQueueLength);
+        state.nextQueueRequests.splice(goalRequestQueueLength);
+        setConversationRuntimeState(goalTarget, 'idle', 'dev018-goal-bar-run');
+      }
+      const goalBar = document.getElementById('goal-bar');
+      const goalText = document.getElementById('goal-text');
+      const submittedGoalBarActive = !!(
+        state.goalVisible
+        && state.goalText === 'activate the dev-0.1.8 Goal bar'
+        && queuedGoalObjective === state.goalText
+        && goalBar
+        && goalBar.style.display !== 'none'
+        && goalText
+        && goalText.textContent === state.goalText
+      );
+      const flowFixtureName = 'dev018-keyboard-flow';
+      state.flowWorks.push({
+        name: flowFixtureName,
+        components: [{ id: 0, type: 'dialog', mode: 'build', prompt: 'FLOW_SETTING::{#prompt#}::END' }]
+      });
+      state.defaultFlow = flowFixtureName;
+      const flowTarget = currentConversationTarget();
+      const queuedBeforeFlow = bindQueuedRequestToTarget(
+        { text: 'PREEXISTING_QUEUE_ITEM', images: [] },
+        'PREEXISTING_QUEUE_ITEM',
+        flowTarget,
+        queueBranchPathForTarget(flowTarget, 'runtime')
+      );
+      state.nextQueue.push('PREEXISTING_QUEUE_ITEM');
+      state.nextQueueRequests.push(queuedBeforeFlow);
       state.mode = 'flow';
-      window.setInputMode('guide', false);
+      window.setInputMode('next', false);
+      window.renderFlowTakeover(false);
+      document.getElementById('prompt').value = 'FLOW_USER_INPUT';
+      document.getElementById('prompt').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      const keyboardFlowTakeover = bubble.classList.contains('active');
+      const flowSubmission = state._lastFlowSubmission || {};
+      const injectedFlowPrompt = String(((flowSubmission.components || [])[0] || {}).injectedPrompt || '');
+      const flowQueuePaused = window.isQueuePausedForTarget(currentConversationTarget());
+      const flowOwnedQueueEntry = (state.nextQueueRequests || []).some(request => request && request.flowOwned === true);
+      const preexistingQueuePreserved = (state.nextQueueRequests || []).indexOf(queuedBeforeFlow) >= 0;
+      const flowPromptBar = document.getElementById('flow-prompt-bar');
+      const flowPromptText = document.getElementById('flow-prompt-text');
+      const flowPromptVisible = !!(flowPromptBar && flowPromptBar.style.display !== 'none');
       return {
-        active: bubble.classList.contains('active'),
+        active: keyboardFlowTakeover,
         floatStackPosition: floatStackStyle.position,
         pointerEvents: style.pointerEvents,
         inputHeightBefore: before.height,
@@ -167,6 +223,16 @@ async function waitForUi(cdp) {
         nextButtonDisabledAfterFlowExit,
         modeTransitionCycles,
         finalModeAfterStress: state.mode,
+        submittedGoalBarActive,
+        queuedGoalObjective,
+        keyboardFlowTakeover,
+        flowSubmissionInput: flowSubmission.input || '',
+        injectedFlowPrompt,
+        flowQueuePaused,
+        flowOwnedQueueEntry,
+        preexistingQueuePreserved,
+        flowPromptVisible,
+        flowPromptText: flowPromptText && flowPromptText.textContent || '',
         text: bubble.textContent,
       };
     })()`);
@@ -174,18 +240,151 @@ async function waitForUi(cdp) {
     if (Math.abs(result.inputHeightBefore - result.inputHeightAfter) > 0.5) fail(`Takeover changed input height: ${JSON.stringify(result)}`);
     if (result.bubbleBottom > result.inputStackTop - 5) fail(`Takeover is not floating above the complete input-bar stack: ${JSON.stringify(result)}`);
     if (result.scrollButtonBottom > result.bubbleTop - 5) fail(`Scroll-to-bottom button overlaps the Flow takeover bubble: ${JSON.stringify(result)}`);
-    if (result.inputMode !== 'guide') fail(`Flow allowed Next input: ${JSON.stringify(result)}`);
+    if (result.inputMode !== 'next') fail(`Flow did not allow Next input: ${JSON.stringify(result)}`);
     if (result.nextAfterFlowExit !== 'next' || result.nextButtonDisabledAfterFlowExit) {
       fail(`Next did not reactivate after Flow exit: ${JSON.stringify(result)}`);
     }
     if (result.modeTransitionCycles !== 40 || result.finalModeAfterStress !== 'flow') {
       fail(`Mode transition stress did not complete: ${JSON.stringify(result)}`);
     }
+    if (!result.submittedGoalBarActive || result.queuedGoalObjective !== 'activate the dev-0.1.8 Goal bar') {
+      fail(`Goal submission did not activate and persist the Goal bar: ${JSON.stringify(result)}`);
+    }
+    if (!result.keyboardFlowTakeover
+      || result.flowSubmissionInput !== 'FLOW_USER_INPUT'
+      || result.injectedFlowPrompt !== 'FLOW_SETTING::FLOW_USER_INPUT::END'
+      || !result.flowQueuePaused
+      || result.flowOwnedQueueEntry
+      || !result.preexistingQueuePreserved
+      || !result.flowPromptVisible
+      || result.flowPromptText !== 'FLOW_USER_INPUT') {
+      fail(`Flow keyboard submission did not take over and inject its configured prompt: ${JSON.stringify(result)}`);
+    }
     await cdp.call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
     const screenshot = await cdp.call('Page.captureScreenshot', { format: 'png', fromSurface: true }, 30000);
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
     fs.writeFileSync(screenshotPath, Buffer.from(screenshot.data, 'base64'));
-    console.log(JSON.stringify({ ok: true, result, screenshotPath }));
+    const exitResult = await evaluate(cdp, `(async () => {
+      stopFlowRunInternal();
+      await window.setVisibleMode('build');
+      const flowSelect = document.getElementById('flow-select');
+      const flowPromptBar = document.getElementById('flow-prompt-bar');
+      return {
+        mode: state.mode,
+        flowSelectVisible: flowSelect && flowSelect.dataset.newmarkVisible,
+        flowPromptVisible: flowPromptBar && flowPromptBar.style.display !== 'none'
+      };
+    })()`);
+    if (exitResult.mode !== 'build' || exitResult.flowSelectVisible !== 'false' || exitResult.flowPromptVisible) {
+      fail(`Flow exit left Flow-only input surfaces visible: ${JSON.stringify(exitResult)}`);
+    }
+    const queueClaimResult = await evaluate(cdp, `(async () => {
+      const target = currentConversationTarget();
+      const key = runtimeKeyFor(target.workspaceId, target.conversationId);
+      state.queuePausedByTarget[key] = false;
+      state.nextQueue = [];
+      state.nextQueueRequests = [];
+      state.nextQueueDrainsByTarget = {};
+      state.activeSendCallsByTarget = {};
+      setConversationRuntimeState(target, 'idle', '');
+      const request = bindQueuedRequestToTarget(
+        { text: 'QUEUE_CLAIM_ONCE', images: [] },
+        'QUEUE_CLAIM_ONCE',
+        target,
+        queueBranchPathForTarget(target, 'runtime')
+      );
+      request.requestedMode = 'build';
+      state.nextQueue.push('QUEUE_CLAIM_ONCE');
+      state.nextQueueRequests.push(request);
+      const originalSendMessage = window.sendMessage;
+      let sends = 0;
+      window.sendMessage = function(_mode, _text, options) {
+        sends += 1;
+        if (options && options.onStarted) options.onStarted();
+        return new Promise(resolve => setTimeout(() => resolve({ ok: true }), 25));
+      };
+      window.drainNextQueue();
+      window.drainNextQueue();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      window.drainNextQueue();
+      await Promise.resolve();
+      window.sendMessage = originalSendMessage;
+      return {
+        sends,
+        queueLength: state.nextQueue.length,
+        requestLength: state.nextQueueRequests.length
+      };
+    })()`);
+    if (queueClaimResult.sends !== 1 || queueClaimResult.queueLength !== 0 || queueClaimResult.requestLength !== 0) {
+      fail(`Queue head was not claimed exactly once: ${JSON.stringify(queueClaimResult)}`);
+    }
+    const questionRedrawResult = await evaluate(cdp, `(() => {
+      state.pendingOptions = [{
+        header: '执行计划',
+        question: '计划已完成。是否开始执行？',
+        options: [
+          { label: '是，执行此计划', description: '切换到 Build' },
+          { label: '否，请补充____', description: '保持 Plan' }
+        ],
+        multiple: false
+      }];
+      state.pendingOptionAnswers = {};
+      state.pendingOptionBatchKey = '';
+      window.setVisibleMode('plan');
+      const transcript = Array.isArray(state.renderedChatMessages) ? state.renderedChatMessages.slice() : [];
+      renderChatMessages(transcript);
+      renderChatMessages(transcript);
+      const blocks = document.querySelectorAll('#chat-area [data-option-question]');
+      const buttons = document.querySelectorAll('#chat-area [data-option-question] .option-btn');
+      return {
+        blocks: blocks.length,
+        buttons: buttons.length,
+        selected: document.querySelectorAll('#chat-area [data-option-question] .option-btn.selected').length,
+        answers: Object.keys(state.pendingOptionAnswers || {}).length,
+        labels: Array.from(buttons).map(button => String(button.textContent || '').trim())
+      };
+    })()`);
+    if (questionRedrawResult.blocks !== 1
+      || questionRedrawResult.buttons !== 2
+      || questionRedrawResult.selected !== 0
+      || questionRedrawResult.answers !== 0
+      || !questionRedrawResult.labels.some(label => label.includes('是，执行此计划'))
+      || !questionRedrawResult.labels.some(label => label.includes('否，请补充'))) {
+      fail(`Pending question was lost, duplicated, or auto-selected after transcript redraw: ${JSON.stringify(questionRedrawResult)}`);
+    }
+    const lightThemeResult = await evaluate(cdp, `(async () => {
+      document.documentElement.setAttribute('data-theme', 'light');
+      state._flowRunning = true;
+      state.flowPromptText = 'LIGHT_FLOW_PROMPT';
+      state.goalText = 'LIGHT_GOAL';
+      window.renderFlowTakeover(true, 'light-flow');
+      window.renderInputStack();
+      await new Promise(resolve => setTimeout(resolve, 240));
+      const optionBlock = Array.from(document.querySelectorAll('.option-block')).at(-1);
+      const optionButton = optionBlock && optionBlock.querySelector('.option-btn');
+      const nodes = {
+        '#flow-takeover': document.querySelector('#flow-takeover'),
+        '#flow-prompt-bar': document.querySelector('#flow-prompt-bar'),
+        '#goal-bar': document.querySelector('#goal-bar'),
+        '.option-block': optionBlock,
+        '.option-btn': optionButton
+      };
+      const styles = {};
+      Object.keys(nodes).forEach(selector => {
+        const node = nodes[selector];
+        if (!node) return;
+        const style = getComputedStyle(node);
+        styles[selector] = { background: style.backgroundColor, backgroundImage: style.backgroundImage, color: style.color, border: style.borderColor, boxShadow: style.boxShadow };
+      });
+      return styles;
+    })()`);
+    const lightSelectors = ['#flow-takeover', '#flow-prompt-bar', '#goal-bar', '.option-block', '.option-btn'];
+    if (lightSelectors.some(selector => !lightThemeResult[selector]
+      || (lightThemeResult[selector].background === 'rgba(0, 0, 0, 0)' && lightThemeResult[selector].backgroundImage === 'none')
+      || lightThemeResult[selector].color === 'rgba(0, 0, 0, 0)')) {
+      fail(`Light theme did not provide visible surfaces for the new input UI: ${JSON.stringify(lightThemeResult)}`);
+    }
+    console.log(JSON.stringify({ ok: true, result, exitResult, queueClaimResult, questionRedrawResult, lightThemeResult, screenshotPath }));
   } finally {
     if (cdp?.ws?.readyState === WebSocket.OPEN) cdp.ws.close();
     if (child.pid) spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });

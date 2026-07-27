@@ -27,6 +27,7 @@ export interface BrowserUseHostPage {
   pressKey(key: string, signal?: AbortSignal): Promise<void>;
   navigate(url: string, signal?: AbortSignal): Promise<void>;
   waitForReady(signal?: AbortSignal): Promise<void>;
+  captureVisibleScreenshot?(signal?: AbortSignal): Promise<string>;
   /** Serializes a complete observe/action transaction with every scope sharing this physical page. */
   serialized?<T>(action: string, run: () => Promise<T>, signal?: AbortSignal): Promise<T>;
   /** Optional main-process guard used to deny/record downloads, popups, and unsafe navigation. */
@@ -288,13 +289,24 @@ export class NativeBrowserUsePageAdapter implements BrowserUsePageAdapter {
       const dom = await page.evaluateFixed<DomObservation>(browserUseObservationScript(options.maxChars, options.maxRefs), signal);
       const after = await page.identity(signal);
       if (!before.pageToken || before.pageToken !== after.pageToken) throw new Error('Page changed during observation; observe again.');
+      const elements = Array.isArray(dom.elements) ? dom.elements : [];
+      const needsVisualFallback = /\.pdf(?:#|$)/i.test(String(dom.url || after.url || ''))
+        || String(dom.text || '').trim().length < 24
+        || elements.some(element => !String(element.name || element.text || '').trim());
+      const visionImageDataUrl = needsVisualFallback && page.captureVisibleScreenshot
+        ? await page.captureVisibleScreenshot(signal)
+        : '';
       return {
         pageToken: after.pageToken,
         url: dom.url || after.url,
         title: dom.title || after.title,
         viewport: dom.viewport,
         text: dom.text,
-        elements: Array.isArray(dom.elements) ? dom.elements : [],
+        elements,
+        ...(visionImageDataUrl ? {
+          visionImageDataUrl,
+          visualFallbackReason: 'text_unavailable' as const,
+        } : {}),
       };
     };
     return page.serialized ? await page.serialized('observe', observe, signal) : await observe();

@@ -279,14 +279,16 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - grep: Search file contents with regex
 - web_search: Search the web via DuckDuckGo
 - web_fetch: Fetch and extract content from URLs
-- browser_use: Preferred native built-in-browser workflow. Observe first, then use the returned page generation, observation id, and opaque refs for click/type/select/scroll/key/navigation/wait/extraction. A successful action receipt is enough to continue the Build; do not wait for the browser session or window to close. Every receipt is bound to the current workspace/conversation runtime and actor. Stale page capabilities are rejected; observe again to recover.
+- browser_use: Preferred native built-in-browser workflow. Observe first, then use the returned page generation, observation id, and opaque refs for click/type/select/scroll/key/navigation/wait/extraction. Recognition order is enforced as rendered DOM text first, then an ephemeral screenshot sent to a validated vision model when text is unavailable, and only then local OCR. A successful action receipt is enough to continue the Build; do not wait for the browser session or window to close. Every receipt is bound to the current workspace/conversation runtime and actor. Stale page capabilities are rejected; observe again to recover.
 - browser_open/browser_snapshot/browser_click/browser_type/browser_eval/browser_back/browser_forward/browser_reload/browser_cdp: Legacy and expert Chromium controls. Prefer browser_use for normal interactive work; raw eval/CDP remain advanced escape hatches.
 - computer_use: Native desktop Computer Use control for full desktop or app-scoped observe/move/click/scroll/type/key/wait against Windows desktop applications. A successful takeover_start receipt means the persistent control surface started and the Build may continue immediately; do not wait for takeover_stop or closure before taking the next step. Use takeover_stop when control is no longer needed. Use app_list/app_observe/app_activate/app_click/app_scroll/app_type/app_key when the task can be scoped to a visible taskbar application by title, process name, PID, or window handle; this narrows screenshots and actions to that application. Use observe/app_observe first, reason over returned screenshot plus UI Automation objects. If the model supports vision, Newmark sends the screenshot image and UI object tree together in the same tool-result context; use both for stable decisions. Prefer target_id from perception.scene_summary.high_priority_objects or perception.objects for move/click/scroll when available; fall back to exact coordinates only when necessary.
 - image_inspect: For durable user-submitted visual attachments, query source_info by stable attachment_id (or latest-message image_index) and actively crop/magnify a precise pixel region when text or geometry is too small to inspect reliably. Original user images remain revisitable; derived crops are current-turn-only and never saved to disk.
+- ocr_read: LAST-RESORT, approximate Simplified-Chinese/English OCR only. Never call it before normal text extraction and validated vision input. When it returns text, use its Agent repair prompt to conservatively correct likely substitutions, spacing, and line breaks from surrounding context; never invent unsupported content.
 - task: Create a subagent for parallel work
 - subagent_list/subagent_read/subagent_send/subagent_result/subagent_close: List, read bounded peer feedback, message, inspect, and close same-conversation peer agents
 - linked_plan: Read or conservatively update the conversation-linked Markdown plan in every mode
 - question: Ask the user a multiple-choice question
+- A question tool call only opens a pending user-choice surface. No choice exists until a later real user message contains the submitted answer; never claim, infer, or fabricate that the user selected an option.
 - skill: Search enabled skill metadata or load one selected SKILL.md body on demand
 - skill_download: Download a skill/plugin
 - git_status: Show git working tree status
@@ -322,6 +324,7 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - Be thorough and precise. Verify your work.
 - Use tools appropriately - don't just describe, do it.
 - For desktop Computer Use requests, follow observe -> decide -> act -> observe. Start visible takeover with computer_use takeover_start before multi-step desktop control and stop it when finished. Prefer app-scoped actions through app_list/app_observe/app_* when controlling one taskbar application, because this preserves human collaboration around other windows. Prefer target_id from the latest high-priority semantic UI objects, otherwise precise coordinates from the latest observation. Use vision plus UI controls together when the selected model has vision input. Avoid destructive UI actions unless the user asked for them, and do not claim YOLO/OCR perception unless an actual detector/OCR result is present.
+- For browser buttons and scanned document pages, the strict recognition sequence is text layer/DOM -> screenshot to a validated vision model -> local OCR. Do not skip directly to OCR. If OCR is used, treat it as approximate evidence and repair only what surrounding context supports.
 - Multiple tool calls emitted in one provider turn run concurrently. Treat their returned records as one barrier: continue reasoning only after every call in that batch has returned either a successful receipt or a failure receipt.
 - terminal_takeover start creates or reuses a persistent session. Its successful start receipt completes that Build step immediately; continue with write/read or other work without waiting for detach, stop, shell exit, or terminal closure.
 - When editing files, show exactly what changed.
@@ -1450,6 +1453,14 @@ export class Agent {
         primaryPrompt: this.sanitizePublicWorkContent(raw.primaryPrompt || ''),
         branchNodeId: String(raw.branchNodeId || ''),
         anchorMessageId: String(raw.anchorMessageId || ''),
+        flow: raw.flow && ['dialog', 'logic', 'goal-verification'].includes(raw.flow.componentType)
+          ? {
+              name: String(raw.flow.name || '').slice(0, 200),
+              componentId: Number(raw.flow.componentId),
+              componentType: raw.flow.componentType,
+              activityVisibility: raw.flow.activityVisibility === 'result-only' ? 'result-only' : 'full',
+            }
+          : undefined,
       };
       const previous = byRun.get(runId);
       if (!previous) {
@@ -1547,6 +1558,45 @@ export class Agent {
     if (managed) this.managedWorkRunIds.add(run.runId);
     this.activeWorkRunId = run.runId;
     return run;
+  }
+
+  setConversationWorkRunFlowMetadata(
+    runId: string,
+    flow: NonNullable<ConversationWorkRun['flow']>,
+  ): boolean {
+    const run = this.workRuns.find(item => item.runId === String(runId || ''));
+    if (!run) return false;
+    run.flow = {
+      name: String(flow.name || '').slice(0, 200),
+      componentId: Number(flow.componentId),
+      componentType: flow.componentType,
+      activityVisibility: flow.activityVisibility === 'result-only' ? 'result-only' : 'full',
+    };
+    this.saveWorkspaceConversationState(false);
+    return true;
+  }
+
+  replaceConversationWorkRunFinalResponse(runId: string, content: string): boolean {
+    const run = this.workRuns.find(item => item.runId === String(runId || ''));
+    if (!run) return false;
+    const safe = this.sanitizeAssistantOutput(content).slice(0, 50_000);
+    const message = [...this.chatMessages].reverse().find(item => item.role === 'assistant' && item.runId === run.runId);
+    if (message) message.content = safe;
+    else {
+      this.chatMessages.push({
+        messageId: crypto.randomUUID(),
+        branchNodeId: run.branchNodeId || this.currentBranchNodeId(run.target.conversationId),
+        role: 'assistant',
+        content: safe,
+        mode: this.modeName(),
+        model: this.model,
+        timestamp: this.nowLabel(),
+        runId: run.runId,
+      });
+    }
+    run.events = run.events.filter(event => event.type !== 'final_response');
+    this.saveWorkspaceConversationState(false);
+    return true;
   }
 
   resumeConversationWorkRun(runId: string): boolean {
@@ -3534,6 +3584,7 @@ export class Agent {
     if (this.goal) {
       this.goal.verified = false;
       this.goal.paused = false;
+      this.goal.goalRounds = 0;
       this.status = 'idle';
     }
     this.mode = 'goal';
@@ -3548,12 +3599,18 @@ export class Agent {
     return this.goal.paused;
   }
 
+  clearGoal(): void {
+    this.goal = null;
+    if (this.mode === 'goal') this.mode = 'build';
+    if (this.status === 'goal_paused') this.status = 'idle';
+    this.saveWorkspaceConversationState(true);
+  }
+
   markGoalComplete(): void {
     if (!this.goal) return;
     this.goal.verified = true;
     this.goal.paused = false;
-    this.status = 'idle';
-    this.saveWorkspaceConversationState(true);
+    this.clearGoal();
   }
 
   isGoalPaused(): boolean {
@@ -3566,6 +3623,28 @@ export class Agent {
 
   canAutoContinueGoal(): boolean {
     return this.goalContinuationGate ? this.goalContinuationGate() : true;
+  }
+
+  claimGoalContinuationMessage(): AgentPromptMessage | null {
+    if (this.mode !== 'goal' || !this.goal || this.goal.paused || !this.canAutoContinueGoal()) return null;
+    const maxGoalContinuations = Math.max(0, Math.floor(this.config.getNum('agent', 'goal_max_continuations') || 0));
+    if (maxGoalContinuations > 0 && this.goal.goalRounds >= maxGoalContinuations) {
+      this.goal.paused = true;
+      this.status = 'goal_paused';
+      this.saveWorkspaceConversationState(true);
+      return null;
+    }
+    this.goal.goalRounds += 1;
+    const text = [
+      'Continue working exclusively toward the current Goal bar objective:',
+      this.goal.objective,
+      '',
+      'Judge completion only against this objective and its directly required evidence.',
+      'Do not revive, resume, execute, or independently evaluate any historical unfinished task. Historical task completion is outside this Goal continuation.',
+      'Progress made. What remains for this Goal alone?',
+    ].join('\n');
+    this.saveWorkspaceConversationState(true);
+    return { text, hiddenUserInput: true, goalContinuation: true };
   }
 
   private writeSessionArchive(messages: ChatMessage[], mode: string, model: string): string {
@@ -4540,6 +4619,7 @@ export class Agent {
     try {
       const text = typeof input === 'string' ? input : String(input.text || '');
       const inputEnvelope = typeof input === 'string' ? null : input as AgentPromptMessage & { clientMessageId?: string; runId?: string };
+      const hiddenUserInput = inputEnvelope?.hiddenUserInput === true;
       this.ensureUsableModelSelection();
       const clientMessageId = String(inputEnvelope?.clientMessageId || '').trim();
       const inputRunId = String(inputEnvelope?.runId || this.activeWorkRunId || '').trim();
@@ -4579,7 +4659,10 @@ export class Agent {
         return [{ type: 'text', text: `[Vision unavailable] ${this.activeModelName() || this.model} has not passed image-input validation. Select a validated vision model before asking about attachments.` }];
       }
       const now = this.nowLabel();
-      const displayText = images.length ? `${text}${text ? '\n\n' : ''}[${images.length} image attachment${images.length === 1 ? '' : 's'}]` : text;
+      const visibleUserInput = inputEnvelope?.visibleUserInput === undefined
+        ? text
+        : String(inputEnvelope.visibleUserInput || '');
+      const displayText = images.length ? `${visibleUserInput}${visibleUserInput ? '\n\n' : ''}[${images.length} image attachment${images.length === 1 ? '' : 's'}]` : visibleUserInput;
       const historyContent = images.length
         ? [{ type: 'text', text }, ...images.map(image => ({ type: 'image_url', image_url: { url: image.dataUrl } }))]
         : text;
@@ -4598,24 +4681,32 @@ export class Agent {
             appliedAt: this.nowIso(),
           });
         }
-      } else {
+      } else if (!hiddenUserInput) {
         this.chatMessages.push({
           messageId: crypto.randomUUID(),
           branchNodeId: this.currentBranchNodeId(),
           role: 'user',
           content: displayText,
-          mode: this.modeName(),
+          mode: String(inputEnvelope?.visibleMode || this.modeName()),
           model: this.model,
           timestamp: now,
           attachments: attachments.length ? attachments : undefined,
           runId: this.currentWorkRunId() || undefined,
         });
         this.history.push({ role: 'user', content: historyContent });
+      } else {
+        this.history.push({
+          role: 'user',
+          content: historyContent,
+          hidden_user_input: true,
+          goal_continuation: inputEnvelope?.goalContinuation === true,
+          run_id: inputRunId || undefined,
+        });
       }
       // Agent.process seeds the kernel from history, so its initial prompt does
       // not otherwise emit a kernel message_start event.
       this.notifyAgentKernelUserMessageStart(text, clientMessageId || undefined);
-      this.recordWorkRunPrimaryPrompt(displayText);
+      if (!hiddenUserInput) this.recordWorkRunPrimaryPrompt(displayText);
       this.saveWorkspaceConversationState(true);
       this.emitWorkEvent({ type: 'start', content: 'Preparing request.' });
 
@@ -4858,6 +4949,9 @@ export class Agent {
       const params = JSON.parse(args);
       const name = String(params.name || '').trim();
       if (!name) return '[Flow] name is required.';
+      if (this.currentWorkRunId()) {
+        return '[Flow] Deferred: start this workflow from Flow mode after the current Build block has completed; Flow components may not be nested inside a parent Build.';
+      }
       const flowDir = path.join(this.rootPath, 'Flow');
       const found = FlowEngine.findWorkflow(name, flowDir);
       if (!found) return `[Flow] Workflow not found: ${name}`;
@@ -5459,19 +5553,57 @@ export class Agent {
     return !evaluateToolPolicy({ name, mode: this.mode, isSubagent: this.isSubagentRuntime }).allowed;
   }
 
-  handleQuestion(args: string): void {
+  handleQuestion(args: string): number {
     try {
       const params = JSON.parse(args);
       const questions = params.questions;
       if (Array.isArray(questions)) {
-        this.pendingOptions = questions.map((q: Record<string, unknown>) => ({
-          header: String(q.header || ''),
-          question: String(q.question || ''),
-          options: Array.isArray(q.options) ? q.options as Array<{ label: string; description: string }> : [],
-          multiple: !!q.multiple,
-        }));
+        this.pendingOptions = questions.flatMap((q: Record<string, unknown>) => {
+          const question = String(q.question || '').trim();
+          const options = Array.isArray(q.options)
+            ? q.options.flatMap(option => {
+              if (!option || typeof option !== 'object') return [];
+              const value = option as Record<string, unknown>;
+              const label = String(value.label || '').trim();
+              return label ? [{ label, description: String(value.description || '') }] : [];
+            })
+            : [];
+          if (!question || options.length < 2) return [];
+          return [{
+            header: String(q.header || ''),
+            question,
+            options,
+            multiple: !!q.multiple,
+          }];
+        });
       }
     } catch { /* ignore */ }
+    return this.pendingOptions.length;
+  }
+
+  ensurePlanExecutionQuestion(): void {
+    if (this.pendingOptions.length) return;
+    const configuredLanguage = this.config.getStr('general', 'language') || 'auto';
+    const latestVisibleUser = [...this.history].reverse().find(message =>
+      message?.role === 'user' && message?.hidden_user_input !== true
+    );
+    const latestUserText = latestVisibleUser
+      ? (typeof latestVisibleUser.content === 'string' ? latestVisibleUser.content : JSON.stringify(latestVisibleUser.content || ''))
+      : '';
+    const useChinese = configuredLanguage === 'zh'
+      || (configuredLanguage !== 'en' && /[\u3400-\u9fff]/.test(latestUserText));
+    this.pendingOptions = [{
+      header: useChinese ? '执行计划' : 'Execute plan',
+      question: useChinese ? '计划已完成。是否开始执行？' : 'The plan is complete. Start execution?',
+      options: useChinese ? [
+        { label: '是，执行此计划', description: '切换到 Build 模式并立即执行已计划内容' },
+        { label: '否，请补充____', description: '保持 Plan 模式并在输入框中补充' },
+      ] : [
+        { label: 'Yes, execute this plan', description: 'Switch to Build mode and execute the linked plan now' },
+        { label: 'No, please supplement _____', description: 'Stay in Plan mode and add the missing details' },
+      ],
+      multiple: false,
+    }];
   }
 
   async handleSkillDownload(args: string): Promise<void> {
@@ -5874,7 +6006,7 @@ export class Agent {
       `- Remote repository safety: when the active workspace or any target path is inside a GitHub/remote-backed repository, proactively use repo_security_audit and file_audit before git_push, gh_pr_create, release packaging, public reporting, or cloud-side audit. Treat public remotes as public disclosure surfaces and keep private URLs, secrets, local runtime state, archives, Memory Lab, Work, config, and release outputs out of commits and summaries.`,
       `- Mode engine: current mode=${this.modeName()}; Build works autonomously, Plan is fully read-only with no file modifications, Goal continues until completion unless paused, Flow follows saved workflow components.`,
       `- Input mode: ${input}; Guide injects immediately, Next queues user intent for the following build turn.`,
-      `- Option feedback: ${optionFeedback}; fully_autonomous disables the question tool except for Plan's final execute-or-supplement handoff.`,
+      `- Option feedback: ${this.buildQuestionPolicyPrompt(optionFeedback)}`,
       `- Model policy: current model=${this.model || '(unset)'}, intelligence=${this.intelligence}, auto-switch=${modelSwitch}.`,
       `- Agent terminal timeout: bash accepts per-call timeout_ms; timeout_ms=0 requests no limit; terminal.interrupt_timeout_ms=${this.config.getNum('terminal', 'interrupt_timeout_ms')} is a nonzero upper cap, and 0 means no cap.`,
       `- Automation: automation_create/list/update/toggle/delete manage persisted schedules through the active Newmark scheduler when available; Plan may only list automations, and subagents cannot manage automation.`,
@@ -5895,6 +6027,20 @@ export class Agent {
     if (normalized === 'zh') return zh;
     if (normalized === 'en') return en;
     return `For auto language mode, choose the section-header language from the user's dominant input language. ${zh} ${en}`;
+  }
+
+  private buildQuestionPolicyPrompt(level: string): string {
+    const common = 'This policy applies uniformly in Build, Plan, Goal, Flow, and subagent work. A question ends only the current Build block and waits for a real user selection; preserve the active mode and its Goal/Flow state, and never invent a selection.';
+    if (level === 'fully_autonomous') {
+      return `fully_autonomous. Do not call the question tool; make the safest reasonable assumption and continue autonomously. Plan's fixed execute-or-supplement handoff is generated after a durable plan update, not by discretionary questioning. ${common}`;
+    }
+    if (level === 'ask_less') {
+      return `ask_less. Ask only when a missing user choice would materially change the result and no safe, reversible assumption is available; otherwise proceed. ${common}`;
+    }
+    if (level === 'ask_more') {
+      return `ask_more. Proactively ask before material product, behavior, scope, or irreversible choices, but do not repeat questions already answered by the user or available evidence. ${common}`;
+    }
+    return `default. Ask when a material ambiguity cannot be resolved safely from the request, workspace, or prior conversation; otherwise proceed with a stated reasonable assumption. ${common}`;
   }
 
   private buildModePrompt(): string {
@@ -5920,8 +6066,11 @@ export class Agent {
           'You are in fully READ-ONLY exploration mode.',
           'Do NOT modify any files, including README.md, generated files, configs, archives, or workspace files.',
           'Work with Build-mode initiative while preserving the Plan sandbox: explore the workspace, understand the codebase, research as needed, and actively create or revise the linked plan with the linked_plan tool.',
-          'Use read-only inspection tools plus linked_plan maintenance and the question tool; never mutate workspace, host, application, service, or network state.',
-          'After the plan is complete, use the question tool to ask whether execution should begin. Offer exactly these two choices in the user language: "是，立即执行" / "否，请补充_____" (or "Yes, execute now" / "No, please supplement _____").',
+          'The linked plan is one durable, conversation-scoped, user-editable Markdown document with revision control. Read its current revision and conservatively edit that document; never replace it with a one-turn chat summary or treat it as the summary of this Plan run.',
+          'HARD REQUIREMENT: proactively call linked_plan get near the start of every planning turn, then call linked_plan update with the expected revision after exploration to persist the concrete Markdown plan. Describing a plan only in chat is not completion.',
+          'If linked_plan update has not succeeded and produced a new revision in this turn, do not claim that planning is complete and do not ask the user to start execution.',
+          'Use read-only inspection tools plus linked_plan maintenance and, when allowed by the global option-feedback policy, the question tool; never mutate workspace, host, application, service, or network state.',
+          'Only after the durable linked plan has actually been updated and the plan is complete, expose the fixed mode handoff asking whether execution should begin. Offer exactly these two choices in the user language: "是，执行此计划" / "否，请补充____" (or "Yes, execute this plan" / "No, please supplement _____"). This fixed handoff remains required when discretionary questions are disabled.',
           'A positive choice starts a new Build-mode input. A negative choice remains in Plan mode so the user can supply the missing details.',
         ]).join('\n');
       case 'goal': {

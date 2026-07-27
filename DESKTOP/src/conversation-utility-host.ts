@@ -98,8 +98,17 @@ async function handle(request: UtilityAgentRequest): Promise<unknown> {
   if (request.method === 'set_work_run_expanded') {
     return kernel.setWorkRunExpanded(checkedTarget(request.params.target), request.params.runId, request.params.expanded);
   }
+  if (request.method === 'set_mode') {
+    return kernel.setMode(checkedTarget(request.params.target), request.params.mode);
+  }
   if (request.method === 'set_input_mode') {
     return kernel.setInputMode(checkedTarget(request.params.target), request.params.mode);
+  }
+  if (request.method === 'toggle_goal_pause') {
+    return kernel.toggleGoalPause(checkedTarget(request.params.target));
+  }
+  if (request.method === 'clear_goal') {
+    return kernel.clearGoal(checkedTarget(request.params.target));
   }
   if (request.method === 'update_setting') {
     host.config.set(request.params.section, request.params.key, request.params.value);

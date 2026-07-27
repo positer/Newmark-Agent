@@ -1,6 +1,6 @@
 import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import * as readline from 'readline';
-import { AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
+import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
 import { TerminalTakeoverEvent, TerminalTakeoverOwnerFilter, TerminalTakeoverState } from '../tools/terminalTakeover';
 import {
   WslAgentPromptRequest,
@@ -330,9 +330,24 @@ export class WslAgentClient {
     return !!await this.request('set_work_run_expanded', { target: await this.mapTarget(target), runId, expanded }, 5_000);
   }
 
+  async setMode(target: ConversationRuntimeTarget, mode: AgentMode): Promise<AgentMode> {
+    await this.start();
+    return await this.request('set_mode', { target: await this.mapTarget(target), mode }, 5_000) as AgentMode;
+  }
+
   async setInputMode(target: ConversationRuntimeTarget, mode: string): Promise<'guide' | 'next'> {
     await this.start();
     return await this.request('set_input_mode', { target: await this.mapTarget(target), mode }, 5_000) as 'guide' | 'next';
+  }
+
+  async toggleGoalPause(target: ConversationRuntimeTarget): Promise<boolean> {
+    await this.start();
+    return !!await this.request('toggle_goal_pause', { target: await this.mapTarget(target) }, 5_000);
+  }
+
+  async clearGoal(target: ConversationRuntimeTarget): Promise<boolean> {
+    await this.start();
+    return !!await this.request('clear_goal', { target: await this.mapTarget(target) }, 5_000);
   }
 
   async updateSetting(section: string, key: string, value: unknown): Promise<void> {

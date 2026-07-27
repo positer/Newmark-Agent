@@ -140,6 +140,17 @@ export class ElectronBrowserUseHost {
         await abortableDelay(20, signal);
         await waitForPageReady(contents, 15_000, signal);
       },
+      captureVisibleScreenshot: async (signal?: AbortSignal) => {
+        throwIfAborted(signal);
+        const captured = await raceWithAbort(contents.capturePage(), signal);
+        const size = captured.getSize();
+        const normalized = size.width > 1200
+          ? captured.resize({ width: 1200, quality: 'good' })
+          : captured;
+        const jpeg = normalized.toJPEG(82);
+        if (!jpeg.length || jpeg.length > 1_400_000) return '';
+        return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+      },
       serialized: async <T>(_action: string, run: () => Promise<T>, signal?: AbortSignal) => {
         const task = state.actionTail.then(async () => {
           throwIfAborted(signal);

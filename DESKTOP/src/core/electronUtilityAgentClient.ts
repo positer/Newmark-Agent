@@ -3,7 +3,7 @@ import * as path from 'path';
 import { app, utilityProcess } from 'electron';
 import { spawn } from 'child_process';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, normalizeConversationTarget } from './conversationTarget';
-import { AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
+import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
 import {
   UtilityAgentPromptResult,
   UtilityAutoRouteRatingResult,
@@ -1095,9 +1095,24 @@ export class ElectronUtilityAgentClient {
     return !!await this.request('set_work_run_expanded', { target: this.target, runId, expanded }, 5_000);
   }
 
+  async setMode(mode: AgentMode): Promise<AgentMode> {
+    await this.start();
+    return await this.request('set_mode', { target: this.target, mode }, 5_000) as AgentMode;
+  }
+
   async setInputMode(mode: string): Promise<'guide' | 'next'> {
     await this.start();
     return await this.request('set_input_mode', { target: this.target, mode }, 5_000) as 'guide' | 'next';
+  }
+
+  async toggleGoalPause(): Promise<boolean> {
+    await this.start();
+    return !!await this.request('toggle_goal_pause', { target: this.target }, 5_000);
+  }
+
+  async clearGoal(): Promise<boolean> {
+    await this.start();
+    return !!await this.request('clear_goal', { target: this.target }, 5_000);
   }
 
   async updateSetting(section: string, key: string, value: unknown): Promise<void> {

@@ -32,6 +32,9 @@ The Electron desktop package directly depends on these npm packages:
 | `jpeg-js` | 0.4.4 | BSD-3-Clause |
 | `lucide-static` | 1.21.0 | ISC |
 | `pngjs` | 7.0.0 | MIT |
+| `tesseract.js` | 6.0.1 | Apache-2.0 |
+| `@tesseract.js-data/eng` | 1.0.0 | Apache-2.0 |
+| `@tesseract.js-data/chi_sim` | 1.0.0 | Apache-2.0 |
 | `@types/jsdom` | 28.0.3 | MIT |
 | `@types/node` | 22.19.21 | MIT |
 | `@types/pngjs` | 6.0.5 | MIT |
@@ -70,6 +73,7 @@ same thing as bundled runtime dependencies.
 | Apple Liquid Glass documentation/concept | `skills/design-taste-frontend/SKILL.md` and Flow planning prompts | Documentation/design concept reference, not a local source package | Any web implementation must be described as a glassmorphism-style approximation, not official Apple Liquid Glass or Apple-provided code. |
 | Codex CLI and OpenCode CLI external tools | `DESKTOP/src/core/config.ts`, `DESKTOP/src/core/agent.ts` | External optional tools installed or detected from user environment; not bundled by the current desktop package | Users and maintainers must follow the upstream tool license when installing or redistributing those tools. |
 | Alibaba page-agent (`alibaba/page-agent`), commit `fa4664dfa5379e6e91deaf85bc1db2ae14d8e1d7` | Architecture links and attribution comments in `DESKTOP/src/core/browserUse.ts`; implementation record in `archive/2026-07-13-dev-0.0.9-native-browser-use.md` | MIT; reviewed license at `https://github.com/alibaba/page-agent/blob/fa4664dfa5379e6e91deaf85bc1db2ae14d8e1d7/LICENSE`, copyright 2026 SimonLuvRamen and Alibaba Group Holding Limited | Architectural reference only for observe/action separation and explicit action results. No page-agent source, runtime, package, or vendored copy is bundled; Newmark's Browser-Use implementation is original TypeScript. Preserve this reference record and re-review upstream obligations before any future code reuse or redistribution. |
+| Tesseract.js, Tesseract core, and compact English/Simplified-Chinese trained data | `DESKTOP/src/core/localOcr.ts`, npm packages `tesseract.js`, `tesseract.js-core`, `@tesseract.js-data/eng`, and `@tesseract.js-data/chi_sim` | Apache-2.0; upstream projects at `https://github.com/naptha/tesseract.js`, `https://github.com/naptha/tesseract.js-core`, and `https://github.com/naptha/tessdata` | Bundled only as the final offline OCR fallback. The package keeps the SIMD LSTM runtime and compact `best_int` English/Simplified-Chinese data; the release budget verifier rejects an OCR payload above 10 MiB. |
 
 ## Internal And Reference Material
 

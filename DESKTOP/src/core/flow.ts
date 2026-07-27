@@ -114,10 +114,6 @@ export class FlowEngine {
       }
     }
 
-    if (wf.components.length > 0 && wf.components[0].id !== 0) {
-      errors.push({ message: `First component should ideally be ID 0 (found ${wf.components[0].id})` });
-    }
-
     return errors;
   }
 
@@ -129,11 +125,12 @@ export class FlowEngine {
     comps.forEach((c, i) => idToIdx.set(c.id, i));
 
     const graph = new Map<number, number[]>();
-    for (const c of comps) {
+    for (let index = 0; index < comps.length; index++) {
+      const c = comps[index];
       graph.set(c.id, []);
       if (c.type === 'dialog') {
-        const nxt = c.id + 1;
-        if (idToIdx.has(nxt)) graph.get(c.id)!.push(nxt);
+        const next = comps[index + 1];
+        if (next) graph.get(c.id)!.push(next.id);
       } else if (c.type === 'logic') {
         if (idToIdx.has(c.goto_true)) graph.get(c.id)!.push(c.goto_true);
         if (idToIdx.has(c.goto_false)) graph.get(c.id)!.push(c.goto_false);
@@ -244,6 +241,7 @@ export class FlowEngine {
   }
 
   static generateSequence(workflow: FlowWorkflow, start: number, input: string): FlowStep[] {
+    const orderedComponents = [...workflow.components];
     const seq: FlowStep[] = [];
     let cur = start;
     let count = 0;
@@ -257,7 +255,9 @@ export class FlowEngine {
       if (comp.type === 'dialog') {
         const expanded = FlowEngine.buildDialogPrompt(comp, input);
         seq.push({ id: comp.id, mode: comp.mode, prompt: expanded, isLogic: false });
-        cur++;
+        const index = orderedComponents.findIndex(item => item.id === comp.id);
+        if (index < 0 || index + 1 >= orderedComponents.length) break;
+        cur = orderedComponents[index + 1].id;
       } else {
         seq.push({
           id: comp.id,
@@ -277,6 +277,9 @@ export class FlowEngine {
     if (comp?.type === 'logic') {
       return cond ? comp.goto_true : comp.goto_false;
     }
-    return cur + 1;
+    const index = workflow.components.findIndex(component => component.id === cur);
+    return index >= 0 && index + 1 < workflow.components.length
+      ? workflow.components[index + 1].id
+      : -1;
   }
 }

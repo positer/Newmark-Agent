@@ -286,8 +286,8 @@ function startMockServer() {
         }
         sendSse(res, [
           delayedTextChunk('LONG_PARALLEL_CONV_A_STREAM_START_20260701 ', 1000),
-          delayedTextChunk('LONG_PARALLEL_CONV_A_STREAM_MID_20260701 ', 2000),
-          { delay: 3000, payload: toolCallChunk('call-long-a', 'bash', { command: 'Write-Output LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701', timeout_ms: 30000 }) },
+          delayedTextChunk('LONG_PARALLEL_CONV_A_STREAM_MID_20260701 ', 6000),
+          { delay: 12000, payload: toolCallChunk('call-long-a', 'bash', { command: 'Write-Output LONG_PARALLEL_CONV_A_TOOL_RESULT_20260701', timeout_ms: 30000 }) },
         ]);
         return;
       }
@@ -298,8 +298,8 @@ function startMockServer() {
         }
         sendSse(res, [
           delayedTextChunk('LONG_PARALLEL_CONV_B_STREAM_START_20260701 ', 1000),
-          delayedTextChunk('LONG_PARALLEL_CONV_B_STREAM_MID_20260701 ', 2000),
-          { delay: 3000, payload: toolCallChunk('call-long-b', 'bash', { command: 'Write-Output LONG_PARALLEL_CONV_B_TOOL_RESULT_20260701', timeout_ms: 30000 }) },
+          delayedTextChunk('LONG_PARALLEL_CONV_B_STREAM_MID_20260701 ', 6000),
+          { delay: 12000, payload: toolCallChunk('call-long-b', 'bash', { command: 'Write-Output LONG_PARALLEL_CONV_B_TOOL_RESULT_20260701', timeout_ms: 30000 }) },
         ]);
         return;
       }
@@ -488,7 +488,10 @@ async function runUiCheck(root) {
       return true;
     })()`, 30000);
     await waitFor(cdp, `(() => !!window.runningConversationRecord(${JSON.stringify(convA)}))()`, 10000, 'long conversation A running');
-    await waitFor(cdp, `(() => (document.querySelector('#chat-area')?.innerText || '').includes('LONG_PARALLEL_CONV_A_STREAM_START_20260701'))()`, 20000, 'long conversation A stream visible in foreground');
+    await waitFor(cdp, `(() => {
+      const events = window.getAgentWorkEvents(${JSON.stringify(convA)});
+      return events.some(e => String(e.content || '').includes('LONG_PARALLEL_CONV_A_STREAM_START_20260701'));
+    })()`, 30000, 'long conversation A stream persisted in its target-scoped event cache');
     await evaluate(cdp, `(() => {
       const idx = (window.state.conversations || []).findIndex(c => c.id === ${JSON.stringify(convB)});
       if (idx < 0) throw new Error('conversation B missing before long parallel run');

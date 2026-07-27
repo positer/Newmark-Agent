@@ -122,6 +122,8 @@ export interface BrowserUseAdapterObservation {
   viewport?: BrowserUseViewport;
   text?: string;
   elements: BrowserUseAdapterElement[];
+  visionImageDataUrl?: string;
+  visualFallbackReason?: 'text_unavailable';
 }
 
 export interface BrowserUseObservation {
@@ -193,6 +195,11 @@ export interface BrowserUseReceipt extends BrowserUseScope {
   error?: string;
   retryable?: boolean;
   nextAction?: 'observe' | 'retry' | 'request_permission';
+  vision_image_data_url?: string;
+  visual_fallback?: {
+    reason: 'text_unavailable';
+    recognition_order: 'text>vision>local_ocr';
+  };
 }
 
 export interface BrowserUseBackend {
@@ -521,6 +528,13 @@ export class BrowserUseEngine implements BrowserUseBackend {
           url: observation.url,
           title: observation.title,
           observation,
+          ...(raw.visionImageDataUrl ? { vision_image_data_url: raw.visionImageDataUrl } : {}),
+          ...(raw.visualFallbackReason ? {
+            visual_fallback: {
+              reason: raw.visualFallbackReason,
+              recognition_order: 'text>vision>local_ocr' as const,
+            },
+          } : {}),
         }));
       } catch (error) {
         throwIfBrowserUseAborted(signal);

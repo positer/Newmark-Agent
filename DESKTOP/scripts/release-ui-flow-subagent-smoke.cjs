@@ -110,16 +110,19 @@ function textChunk(text) { return { choices: [{ delta: { content: text } }] }; }
 function startMockServer() {
   const requests = [];
   const toolOrder = [];
-  const steps = [
+  const flowDesignSteps = [
     ['flow_save', { name: 'agent-designed-release-flow', components: [{ id: 0, type: 'dialog', mode: 'build', prompt: 'FLOW_COMPONENT_RUNTIME_INPUT {#prompt#}' }] }],
     ['flow_list', {}],
-    ['flow_run', { name: 'agent-designed-release-flow', input: 'FLOW_USER_INPUT_FROM_PARENT', start: 0 }],
+  ];
+  const subagentSteps = [
     ['tool_provision', { names: ['task', 'subagent_send', 'subagent_result', 'subagent_close'] }],
     ['task', { name: 'release-child', prompt: 'SUBAGENT_INITIAL_PROMPT', model: 'release-ui-flow-subagent-mock', mode: 'build', input_mode: 'guide' }],
     ['subagent_send', { name: 'release-child', prompt: 'SUBAGENT_CONTINUE_PROMPT' }],
     ['subagent_result', { name: 'release-child' }],
     ['subagent_close', { name: 'release-child' }],
   ];
+  let flowDesignIndex = 0;
+  let subagentIndex = 0;
 
   const server = http.createServer((req, res) => {
     let body = '';
@@ -153,14 +156,17 @@ function startMockServer() {
         sendSse(res, [textChunk(messagesText.includes('SUBAGENT_CONTINUE_PROMPT') ? 'SUBAGENT_CONTINUED_OK' : 'SUBAGENT_INITIAL_OK')]);
         return;
       }
-      const next = steps[toolOrder.length];
+      const isSubagentParent = messagesText.includes('SUBAGENT_PARENT_START') || subagentIndex > 0;
+      const next = isSubagentParent ? subagentSteps[subagentIndex++] : flowDesignSteps[flowDesignIndex++];
       if (next) {
         const [name, args] = next;
         toolOrder.push(name);
         sendSse(res, [toolCallChunk(`call_${toolOrder.length}_${name}`, name, args)]);
         return;
       }
-      sendSse(res, [textChunk('RELEASE_UI_FLOW_SUBAGENT_OK FLOW_COMPONENT_RUNTIME_OK SUBAGENT_CONTINUED_OK')]);
+      sendSse(res, [textChunk(isSubagentParent
+        ? 'RELEASE_UI_FLOW_SUBAGENT_OK SUBAGENT_CONTINUED_OK'
+        : 'FLOW_DEFINITION_OK')]);
     });
   });
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port, requests, toolOrder })));
@@ -230,7 +236,17 @@ function ensureNoReleaseProcess() {
     await waitFor(cdp, `(() => document.readyState === 'complete' && !!document.querySelector('#prompt'))()`, 30000, 'prompt input');
     await evaluate(cdp, `(() => {
       const prompt = document.querySelector('#prompt');
-      prompt.value = 'Design a Flow, trigger it, create and close a subagent, then report get.subagent result.';
+      prompt.value = 'Design and save the requested Flow definition.';
+      prompt.dispatchEvent(new Event('input', { bubbles: true }));
+      window.sendMessage();
+      return true;
+    })()`);
+    await waitFor(cdp, `(() => (document.body.innerText || '').includes('FLOW_DEFINITION_OK'))()`, 90000, 'visible Flow definition result');
+    const flowResult = await evaluate(cdp, `window.api.runFlow('agent-designed-release-flow', 'FLOW_USER_INPUT_FROM_PARENT', 0)`, 90000);
+    if (!JSON.stringify(flowResult || {}).includes('FLOW_COMPONENT_RUNTIME_OK')) fail(`Flow component result missing: ${JSON.stringify(flowResult)}`);
+    await evaluate(cdp, `(() => {
+      const prompt = document.querySelector('#prompt');
+      prompt.value = 'SUBAGENT_PARENT_START create, continue, inspect, and close the subagent.';
       prompt.dispatchEvent(new Event('input', { bubbles: true }));
       window.sendMessage();
       return true;
@@ -238,7 +254,6 @@ function ensureNoReleaseProcess() {
     await waitFor(cdp, `(() => {
       const text = document.body.innerText || '';
       return text.includes('RELEASE_UI_FLOW_SUBAGENT_OK') &&
-        text.includes('FLOW_COMPONENT_RUNTIME_OK') &&
         text.includes('SUBAGENT_CONTINUED_OK') ? text : '';
     })()`, 120000, 'visible Flow/subagent result');
     const state = await waitFor(cdp, `window.api.getState().then(state => state && state.status === 'idle' ? state : null)`, 30000, 'idle Flow/subagent state');
@@ -263,7 +278,7 @@ function ensureNoReleaseProcess() {
       const text = overlay ? overlay.innerText : '';
       return text.includes('Subagent history is read-only') && text.includes('SUBAGENT_INITIAL_OK') && text.includes('SUBAGENT_CONTINUED_OK') ? text : '';
     })()`, 15000, 'read-only subagent history overlay');
-    const expectedOrder = 'flow_save,flow_list,flow_run,tool_provision,task,subagent_send,subagent_result,subagent_close';
+    const expectedOrder = 'flow_save,flow_list,tool_provision,task,subagent_send,subagent_result,subagent_close';
     if (mock.toolOrder.join(',') !== expectedOrder) fail(`unexpected tool order: ${mock.toolOrder.join(',')}`);
     if (!mock.requests.some(r => r.body.includes('flow_save'))) fail('mock provider did not request flow_save');
     if (!mock.requests.some(r => r.body.includes('subagent_result'))) fail('mock provider did not request subagent_result');

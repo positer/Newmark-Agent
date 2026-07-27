@@ -180,8 +180,17 @@ async function handle(request: WslAgentRequest): Promise<unknown> {
   if (request.method === 'set_work_run_expanded') {
     return kernel.setWorkRunExpanded(requestTarget(request.params), request.params.runId, request.params.expanded);
   }
+  if (request.method === 'set_mode') {
+    return kernel.setMode(requestTarget(request.params), request.params.mode);
+  }
   if (request.method === 'set_input_mode') {
     return kernel.setInputMode(requestTarget(request.params), request.params.mode);
+  }
+  if (request.method === 'toggle_goal_pause') {
+    return kernel.toggleGoalPause(requestTarget(request.params));
+  }
+  if (request.method === 'clear_goal') {
+    return kernel.clearGoal(requestTarget(request.params));
   }
   if (request.method === 'update_setting') {
     host.config.set(request.params.section, request.params.key, request.params.value);

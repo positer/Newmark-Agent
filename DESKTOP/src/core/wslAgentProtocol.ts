@@ -1,4 +1,4 @@
-import { AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
+import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
 import { AgentPromptMessage, ConversationKernelRunOptions, ConversationKernelRunResult, ConversationQueueMode, ConversationStopResult } from './conversationKernel';
 import { ConversationRuntimeTarget } from './conversationTarget';
 import { TerminalTakeoverEvent, TerminalTakeoverOwnerFilter, TerminalTakeoverState } from '../tools/terminalTakeover';
@@ -70,7 +70,10 @@ export type WslAgentRequest =
   | { id: string; method: 'checkpoint'; params: { target: ConversationRuntimeTarget } }
   | { id: string; method: 'rate_auto_route'; params: { target: ConversationRuntimeTarget; score: number; routeId?: string } }
   | { id: string; method: 'set_work_run_expanded'; params: { target: ConversationRuntimeTarget; runId: string; expanded: boolean } }
+  | { id: string; method: 'set_mode'; params: { target: ConversationRuntimeTarget; mode: AgentMode } }
   | { id: string; method: 'set_input_mode'; params: { target: ConversationRuntimeTarget; mode: string } }
+  | { id: string; method: 'toggle_goal_pause'; params: { target: ConversationRuntimeTarget } }
+  | { id: string; method: 'clear_goal'; params: { target: ConversationRuntimeTarget } }
   | { id: string; method: 'update_setting'; params: { section: string; key: string; value: unknown } }
   | { id: string; method: 'terminal_state'; params: WslTerminalRequestBase }
   | { id: string; method: 'terminal_write'; params: WslTerminalRequestBase & { sessionId: string; data: string } }

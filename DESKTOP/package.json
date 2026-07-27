@@ -20,7 +20,7 @@
     "start:cli": "node dist/launcher.js --cli",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src",
-    "test": "npm run build && node dist/tests/verify.js && node dist/tests/dev018ModeSubagentStressVerify.js && node dist/tests/conversationBranchStressVerify.js && node dist/tests/newmarkSelectVerify.js && node dist/tests/mcpManagerVerify.js && node dist/tests/performanceOptimizationVerify.js && node dist/tests/compressionFidelityVerify.js && node dist/tests/responseTrajectoryVerify.js && node dist/tests/normalChatRegressionVerify.js && node dist/tests/dev008-subagent.js && node dist/tests/dev009Verify.js && node dist/tests/runtimeIsolationVerify.js && node dist/tests/runtimePoolCapacityVerify.js && node dist/tests/guideWorkRunVerify.js && node dist/tests/guideUiReconcileVerify.js && node dist/tests/queueAttachmentIsolationVerify.js && node dist/tests/workspaceMenuVerify.js && node dist/tests/userImagePersistenceVerify.js && node dist/tests/visualPreferencesVerify.js && node dist/tests/browserUseVerify.js && node dist/tests/toolProcessVerify.js && node dist/tests/toolProvisioningVerify.js && node dist/tests/startupPrewarmVerify.js && node dist/tests/pdfPreviewServerVerify.js && node dist/tests/editorLifecycleVerify.js && node dist/tests/terminalTakeoverVerify.js && node dist/tests/workspaceFileRouterVerify.js && node dist/tests/computerUsePerformanceVerify.js && node dist/tests/autoRouterVerify.js && node dist/tests/autoAgentIntegrationVerify.js && node dist/tests/autoRouteRatingVerify.js && node dist/tests/providerIdentityVerify.js && node dist/tests/modelValidationVerify.js && node dist/tests/modelValidationAgentIntegrationVerify.js && node dist/tests/cliToolContractVerify.js && node dist/tests/openAIHubAnthropicSmokeContractVerify.js && node dist/tests/cliComputerUseAccuracyVerify.js",
+    "test": "npm run build && node dist/tests/verify.js && node dist/tests/localOcrFallbackVerify.js && node dist/tests/dev018ModeSubagentStressVerify.js && node dist/tests/conversationBranchStressVerify.js && node dist/tests/newmarkSelectVerify.js && node dist/tests/mcpManagerVerify.js && node dist/tests/performanceOptimizationVerify.js && node dist/tests/compressionFidelityVerify.js && node dist/tests/responseTrajectoryVerify.js && node dist/tests/normalChatRegressionVerify.js && node dist/tests/dev008-subagent.js && node dist/tests/dev009Verify.js && node dist/tests/runtimeIsolationVerify.js && node dist/tests/runtimePoolCapacityVerify.js && node dist/tests/guideWorkRunVerify.js && node dist/tests/guideUiReconcileVerify.js && node dist/tests/queueAttachmentIsolationVerify.js && node dist/tests/workspaceMenuVerify.js && node dist/tests/userImagePersistenceVerify.js && node dist/tests/visualPreferencesVerify.js && node dist/tests/browserUseVerify.js && node dist/tests/toolProcessVerify.js && node dist/tests/toolProvisioningVerify.js && node dist/tests/startupPrewarmVerify.js && node dist/tests/pdfPreviewServerVerify.js && node dist/tests/editorLifecycleVerify.js && node dist/tests/terminalTakeoverVerify.js && node dist/tests/workspaceFileRouterVerify.js && node dist/tests/computerUsePerformanceVerify.js && node dist/tests/autoRouterVerify.js && node dist/tests/autoAgentIntegrationVerify.js && node dist/tests/autoRouteRatingVerify.js && node dist/tests/providerIdentityVerify.js && node dist/tests/modelValidationVerify.js && node dist/tests/modelValidationAgentIntegrationVerify.js && node dist/tests/cliToolContractVerify.js && node dist/tests/openAIHubAnthropicSmokeContractVerify.js && node dist/tests/cliComputerUseAccuracyVerify.js",
     "test:conversation-branch-stress": "npm run build && node dist/tests/conversationBranchStressVerify.js",
     "test:conversation-branch-canary": "npm run build && node scripts/conversation-branch-regression-canary.cjs dist/core/agent.js",
     "test:runtime-isolation": "npm run build && node dist/tests/runtimeIsolationVerify.js",
@@ -111,7 +111,9 @@
     "dist:linux": "node scripts/dist-linux.cjs",
     "dist:linux:native": "npm run build:clean && electron-builder --linux",
     "dist:mac": "npm run build:clean && electron-builder --mac",
-    "dist:windows-release": "npm run build:clean && node scripts/dist-portable.cjs"
+    "dist:windows-release": "npm run build:clean && node scripts/dist-portable.cjs",
+    "release:ocr-budget-smoke": "node scripts/verify-ocr-package-budget.cjs",
+    "release:packaged-ocr-smoke": "node scripts/release-packaged-ocr-smoke.cjs"
   },
   "build": {
     "npmRebuild": false,
@@ -129,7 +131,22 @@
       "dist/**/*",
       "assets/**/*",
       "config.example.json",
-      "package.json"
+      "package.json",
+      "!node_modules/tesseract.js-core/tesseract-core.wasm*",
+      "!node_modules/tesseract.js-core/tesseract-core.js",
+      "!node_modules/tesseract.js-core/tesseract-core-lstm.wasm*",
+      "!node_modules/tesseract.js-core/tesseract-core-lstm.js",
+      "!node_modules/tesseract.js-core/tesseract-core-simd.wasm.js",
+      "!node_modules/tesseract.js-core/tesseract-core-simd-lstm.wasm*",
+      "!node_modules/tesseract.js-core/tesseract-core-simd-lstm.js",
+      "!node_modules/tesseract.js/docs/**/*",
+      "!node_modules/tesseract.js/examples/**/*",
+      "!node_modules/tesseract.js/dist/*.map",
+      "!node_modules/bmp-js/test/**/*",
+      "!node_modules/idb-keyval/**/*",
+      "!node_modules/zlibjs/**/*",
+      "!node_modules/@tesseract.js-data/eng/4.0.0/**/*",
+      "!node_modules/@tesseract.js-data/chi_sim/4.0.0/**/*"
     ],
     "asarUnpack": [
       "dist/windows-process-tree-helper.dll",
@@ -196,6 +213,8 @@
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
+    "@tesseract.js-data/chi_sim": "1.0.0",
+    "@tesseract.js-data/eng": "1.0.0",
     "cross-fetch": "^4.0.0",
     "glob": "^13.0.6",
     "https-proxy-agent": "^9.1.0",
@@ -205,6 +224,7 @@
     "node-pty": "^1.1.0",
     "pngjs": "^7.0.0",
     "resedit": "^1.7.2",
+    "tesseract.js": "6.0.1",
     "typebox": "^1.1.38"
   },
   "devDependencies": {

@@ -20,6 +20,13 @@ import {
 export type ConversationQueueMode = 'steer' | 'followUp';
 export interface AgentPromptMessage {
   text: string;
+  /** Public transcript text when the execution prompt contains hidden orchestration instructions. */
+  visibleUserInput?: string;
+  /** Public semantic mode label; execution policy still follows the runner mode. */
+  visibleMode?: string;
+  goalObjective?: string;
+  hiddenUserInput?: boolean;
+  goalContinuation?: boolean;
   images?: Array<{ dataUrl: string; name?: string; type?: string }>;
   attachments?: ConversationImageAttachment[];
   clientMessageId?: string;
@@ -120,6 +127,7 @@ interface ConversationRuntime {
   guideAcceptanceClosedRunId: string;
   guideReceipts: Map<string, GuideReceipt>;
   guideEnvelopes: Map<string, ConversationInputEnvelope>;
+  goalContinuationTimer?: ReturnType<typeof setTimeout>;
 }
 
 type WorkListener = (event: AgentWorkEvent) => void;
@@ -282,14 +290,6 @@ export class ConversationKernel {
       runtime.guideReceipts.set(clientMessageId, rejected);
       return runtime.runner.recordGuideReceipt(rejected);
     }
-    const goalObjective = String(envelope.goalObjective || '').trim();
-    if (goalObjective) {
-      runtime.runner.updateGoal(goalObjective);
-      runtime.runner.setMode('goal');
-      runtime.options.mode = 'goal';
-      runtime.runner.saveWorkspaceConversationState(true);
-    }
-
     let safeImages: AgentPromptMessage['images'] = [];
     let safeAttachments: ConversationImageAttachment[] = [];
     try {
@@ -357,6 +357,7 @@ export class ConversationKernel {
       this.trackQueuedMessage(runtime, safeEnvelope.text, 'steer');
       runtime.runner.recordGuideReceipt(deferred);
       this.emitQueueUpdate(runtime);
+      this.activateAcceptedGoal(runtime, envelope.goalObjective);
       return deferred;
     }
     if (runtime.guideAcceptanceClosedRunId === runtime.runId) {
@@ -387,10 +388,14 @@ export class ConversationKernel {
         attachments: safeAttachments.map(attachment => ({ ...attachment })),
         createdAt: deferred.createdAt,
       }]);
+      this.activateAcceptedGoal(runtime, envelope.goalObjective);
       return deferred;
     }
     const queued = runtime.runner.queueActiveKernelMessage(safeEnvelope.text, 'steer', clientMessageId, runtime.runId, safeEnvelope.images);
-    if (queued) return accepted;
+    if (queued) {
+      this.activateAcceptedGoal(runtime, envelope.goalObjective);
+      return accepted;
+    }
 
     const deferred: GuideReceipt = { ...accepted, status: 'deferred', updatedAt: new Date().toISOString() };
     runtime.guideReceipts.set(clientMessageId, deferred);
@@ -414,6 +419,7 @@ export class ConversationKernel {
       attachments: safeAttachments.map(attachment => ({ ...attachment })),
       createdAt: deferred.createdAt,
     }]);
+    this.activateAcceptedGoal(runtime, envelope.goalObjective);
     return deferred;
   }
 
@@ -460,6 +466,32 @@ export class ConversationKernel {
     const runtime = this.findRuntime(normalized);
     const runner = runtime?.runner || this.createRunner(normalized);
     return runner.setInputMode(mode);
+  }
+
+  setMode(target: ConversationTargetInput, mode: AgentMode): AgentMode {
+    const normalized = this.normalizeTarget(target);
+    const runtime = this.findRuntime(normalized);
+    const runner = runtime?.runner || this.createRunner(normalized);
+    runner.setMode(mode);
+    runner.saveWorkspaceConversationState(true);
+    if (runtime) runtime.options.mode = mode;
+    return runner.mode;
+  }
+
+  toggleGoalPause(target: ConversationTargetInput): boolean {
+    const normalized = this.normalizeTarget(target);
+    const runtime = this.findRuntime(normalized);
+    const runner = runtime?.runner || this.createRunner(normalized);
+    return runner.toggleGoalPause();
+  }
+
+  clearGoal(target: ConversationTargetInput): boolean {
+    const normalized = this.normalizeTarget(target);
+    const runtime = this.findRuntime(normalized);
+    const runner = runtime?.runner || this.createRunner(normalized);
+    runner.clearGoal();
+    if (runtime) runtime.options.mode = 'build';
+    return true;
   }
 
   updateSetting(section: string, key: string, value: unknown): void {
@@ -563,6 +595,7 @@ export class ConversationKernel {
 
     if (runtime.activePromise) {
       this.enqueueSameSession(runtime, message, queueMode);
+      this.activateAcceptedGoal(runtime, typeof message === 'string' ? '' : message.goalObjective);
       return runtime.activePromise;
     }
 
@@ -577,7 +610,8 @@ export class ConversationKernel {
     // Work-run ownership must be bound before beginConversationWorkRun; doing
     // this only inside run() records non-default conversations under whatever
     // conversation the fresh runner happened to load first.
-    runtime.runner.setConversation(runtime.id);
+    if (runtime.runner.activeConversationId !== runtime.id) runtime.runner.setConversation(runtime.id);
+    this.activateAcceptedGoal(runtime, typeof message === 'string' ? '' : message.goalObjective);
     if (!requestedRunId || !runtime.runner.resumeConversationWorkRun(requestedRunId)) {
       runtime.runner.beginConversationWorkRun(runtime.runId, {
         workspaceId: runtime.target.workspaceId,
@@ -608,6 +642,7 @@ export class ConversationKernel {
           }
         }
       }
+      if (!stopped && runtime.runId === runId) this.scheduleGoalContinuation(runtime, runId);
       if (stopped) {
         const settled = this.result(runtime, []);
         if (result?.tokens) settled.tokens = result.tokens;
@@ -639,7 +674,6 @@ export class ConversationKernel {
     options: ConversationKernelRunOptions,
   ): Promise<ConversationKernelRunResult> {
     this.applyOptions(runtime.runner, options);
-    runtime.runner.setConversation(runtime.id);
     let lastTokens = await this.runSingle(runtime, message);
     if (runtime.stopRequestedRunId === runtime.runId) {
       this.mirrorHostIfTargetActive(runtime);
@@ -756,6 +790,7 @@ export class ConversationKernel {
       guideAcceptanceClosedRunId: '',
       guideReceipts: new Map(),
       guideEnvelopes: new Map(),
+      goalContinuationTimer: undefined,
     };
     runner.setGoalContinuationGate(() => {
       this.queueState(runtime);
@@ -816,6 +851,25 @@ export class ConversationKernel {
     return runtime;
   }
 
+  private scheduleGoalContinuation(runtime: ConversationRuntime, completedRunId: string): void {
+    if (runtime.goalContinuationTimer) clearTimeout(runtime.goalContinuationTimer);
+    runtime.runner.flushWorkspaceConversationState();
+    runtime.goalContinuationTimer = setTimeout(() => {
+      runtime.goalContinuationTimer = undefined;
+      if (runtime.runId !== completedRunId || runtime.activePromise) return;
+      this.queueState(runtime);
+      if (runtime.pendingNextTurn.length > 0
+        || runtime.queued.steering.length > 0
+        || runtime.queued.followUp.length > 0
+        || runtime.runner.subagents.readRootInbox().length > 0) return;
+      const message = runtime.runner.claimGoalContinuationMessage();
+      if (!message) return;
+      void this.prompt(message, runtime.target, runtime.options, 'followUp').catch(() => {
+        // Agent.process already records and publishes the run error.
+      });
+    }, 250);
+  }
+
   private createRunner(target: NormalizedConversationTarget): Agent {
     const runner = this.lifecycle.createRunner?.(target) || new Agent(this.root, { actorId: this.host.runtimeActorId });
     if (target.workspace) {
@@ -869,6 +923,15 @@ export class ConversationKernel {
     agent.setIntelligence(options.intelligence);
     agent.inputMode = options.inputMode;
     agent.engine = options.engine;
+  }
+
+  private activateAcceptedGoal(runtime: ConversationRuntime, rawObjective: unknown): void {
+    const objective = String(rawObjective || '').trim();
+    if (!objective) return;
+    runtime.runner.updateGoal(objective);
+    runtime.runner.setMode('goal');
+    runtime.options.mode = 'goal';
+    runtime.runner.saveWorkspaceConversationState(true);
   }
 
   private result(runtime: ConversationRuntime, tokens: StreamToken[]): ConversationKernelRunResult {

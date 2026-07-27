@@ -244,6 +244,29 @@ async function runUiCheck(root) {
       return nodes.some(t => t === '#Release-Smoke') &&
         nodes.some(t => t.includes('release-ui-memory'));
     })()`, 30000, 'Memory Lab overview graph contains real tag and component nodes');
+    const componentFocusNoReload = await evaluate(cdp, `(async () => {
+      const stage = document.getElementById('memory-lab-overview-stage');
+      const panel = document.getElementById('memory-lab-panel');
+      window.selectMemoryLabOverviewNode('component:release-ui-memory');
+      await new Promise(resolve => setTimeout(resolve, 250));
+      return {
+        sameStage: stage === document.getElementById('memory-lab-overview-stage'),
+        samePanel: panel === document.getElementById('memory-lab-panel'),
+        focus: window.state.memoryLabOverviewFocus,
+        selected: window.state.memoryLabSelectedComponent,
+        hasInstructions: /Memory Lab stores persistent|Instructions|说明/.test(String(panel && panel.innerText || '')),
+        leaksRoot: String(panel && panel.innerText || '').includes(${JSON.stringify(root)})
+      };
+    })()`, 30000);
+    if (!componentFocusNoReload.sameStage
+      || !componentFocusNoReload.samePanel
+      || componentFocusNoReload.focus !== 'component:release-ui-memory'
+      || componentFocusNoReload.selected !== 'release-ui-memory'
+      || componentFocusNoReload.hasInstructions
+      || componentFocusNoReload.leaksRoot) {
+      fail(`Memory Lab overview component click reloaded the panel or exposed private instructions: ${JSON.stringify(componentFocusNoReload)}`);
+    }
+    await evaluate(cdp, `window.selectMemoryLabOverviewNode('component:release-ui-memory')`, 30000);
     await sleep(7000);
     await evaluate(cdp, `(() => {
       const node = window.state.memoryLabOverviewNodeMap['tag:#Release-Smoke'];

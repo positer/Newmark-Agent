@@ -1,4 +1,4 @@
-import { AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
+import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, normalizeConversationTarget } from './conversationTarget';
 import { drainWindowsProcessHelpers, ElectronUtilityAgentClient, UtilityHostToolHandler } from './electronUtilityAgentClient';
 import {
@@ -22,7 +22,10 @@ export interface ElectronTargetRuntimeClient {
   checkpoint(): Promise<Record<string, unknown>>;
   rateAutoRoute?(score: number, routeId?: string): Promise<UtilityAutoRouteRatingResult>;
   setWorkRunExpanded(runId: string, expanded: boolean): Promise<boolean>;
+  setMode?(mode: AgentMode): Promise<AgentMode>;
   setInputMode?(mode: string): Promise<'guide' | 'next'>;
+  toggleGoalPause?(): Promise<boolean>;
+  clearGoal?(): Promise<boolean>;
   updateSetting(section: string, key: string, value: unknown): Promise<void>;
   forceRestart(): Promise<void>;
   forceStop(): Promise<void>;
@@ -289,6 +292,36 @@ export class ElectronUtilityRuntimePool {
     if (!entry?.client.setInputMode) return null;
     try {
       return await entry.client.setInputMode(mode);
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async setMode(target: ConversationRuntimeTarget, mode: AgentMode): Promise<AgentMode | null> {
+    const entry = await this.acquireExisting(normalizeConversationTarget(target));
+    if (!entry?.client.setMode) return null;
+    try {
+      return await entry.client.setMode(mode);
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async toggleGoalPause(target: ConversationRuntimeTarget): Promise<boolean | null> {
+    const entry = await this.acquireExisting(normalizeConversationTarget(target));
+    if (!entry?.client.toggleGoalPause) return null;
+    try {
+      return await entry.client.toggleGoalPause();
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async clearGoal(target: ConversationRuntimeTarget): Promise<boolean | null> {
+    const entry = await this.acquireExisting(normalizeConversationTarget(target));
+    if (!entry?.client.clearGoal) return null;
+    try {
+      return await entry.client.clearGoal();
     } finally {
       this.release(entry, true);
     }

@@ -507,6 +507,9 @@ async function main(): Promise<void> {
   scheduled.shift()!();
   assert.equal(sent.length, 1, 'only the local Next is sent after the backend has consumed its own follow-up');
   assert.equal(sent[0].text, 'duplicate');
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(scheduled.length, 1, 'a settled drain schedules one guarded follow-up queue check');
+  scheduled.shift()!();
   running = false;
   windowObject.drainNextQueue();
   assert.equal(scheduled.length, 0, 'the consumed backend mirror cannot be resurrected and resent');
@@ -532,6 +535,9 @@ async function main(): Promise<void> {
   scheduled.shift()!();
   assert.equal(sent.length, 1, 'the retained item enters Build immediately after send finalization');
   assert.equal(sent[0].text, 'after terminal event');
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(scheduled.length, 1, 'the completed retained item schedules one guarded follow-up queue check');
+  scheduled.shift()!();
 
   acceptSend = false;
   running = false;
@@ -540,8 +546,11 @@ async function main(): Promise<void> {
   windowObject.drainNextQueue();
   assert.equal(scheduled.length, 1, 'the handoff reaches sendMessage before the runtime snapshot rejection');
   scheduled.shift()!();
+  await new Promise<void>(resolve => setImmediate(resolve));
   assert.deepEqual(state.nextQueue, ['runtime snapshot race'], 'a send rejected by a racing runtime snapshot remains queued');
   assert.equal(sent.length, 1, 'a rejected queue handoff does not create another send');
+  assert.equal(scheduled.length, 1, 'a rejected handoff schedules a guarded retry after rolling the item back');
+  scheduled.length = 0;
   acceptSend = true;
   running = false;
   state.nextQueue = [];
@@ -585,6 +594,10 @@ async function main(): Promise<void> {
   assert.equal(sent[0].request.target.conversationId, 'default', 'the queued request remains bound to its original conversation');
   assert.equal(sent[0].request.images.length, 1, 'the structured user image survives the target-bound queue');
   assert.equal(state.nextQueue.length, 1, 'only the delivered queue entry is removed');
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(state.nextQueueDrainsByTarget['workspace-a::default'], undefined,
+    'the first successful target-bound delivery releases its atomic drain claim');
+  while (scheduled.length) scheduled.shift()!();
 
   running = false;
   windowObject.drainNextQueue();
@@ -602,6 +615,10 @@ async function main(): Promise<void> {
   assert.equal(sent.length, 2, 'the second A item is eventually sent exactly once');
   assert.equal(sent[1].text, 'second');
   assert.equal(state.nextQueue.length, 0, 'all delivered queue entries are removed once');
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(state.nextQueueDrainsByTarget['workspace-a::default'], undefined,
+    'the second successful target-bound delivery releases its atomic drain claim');
+  while (scheduled.length) scheduled.shift()!();
   running = false;
   windowObject.drainNextQueue();
   assert.equal(scheduled.length, 0, 'an empty queue cannot schedule another delivery');

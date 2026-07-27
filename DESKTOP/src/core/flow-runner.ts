@@ -6,48 +6,147 @@ import { randomUUID } from 'crypto';
 export interface FlowRunnerOptions {
   startInput?: string;
   startPc?: number;
+  resumePrompt?: string;
+  completedResults?: FlowCompletedResult[];
   quiet?: boolean;
   signal?: AbortSignal;
 }
 
+export interface FlowCompletedResult {
+  componentId: number;
+  result: string;
+}
+
+export class FlowQuestionPendingError extends Error {
+  public completedResults: FlowCompletedResult[] = [];
+  constructor(public readonly componentId: number) {
+    super(`Flow component #${componentId} is waiting for explicit user input.`);
+    this.name = 'FlowQuestionPendingError';
+  }
+}
+
 const MAX_VISITS = 300;
 
-async function runFlowBuild(agent: Agent, prompt: string, signal?: AbortSignal) {
-  const ownsWorkRun = Array.isArray(agent.workRuns)
+interface FlowBuildOptions {
+  workflowName: string;
+  componentId: number;
+  componentType: 'dialog' | 'logic' | 'goal-verification';
+  visibleUserInput: string;
+  activityVisibility: 'full' | 'result-only';
+  finalize?: (tokens: Awaited<ReturnType<Agent['process']>>, runId: string) => string | undefined;
+  signal?: AbortSignal;
+}
+
+function isAutomaticPlanExecutionQuestion(question: Agent['pendingOptions'][number]): boolean {
+  const contract = `${question.question || ''}\n${(question.options || []).map(option => option.label || '').join('\n')}`;
+  return /计划已完成|plan is complete/i.test(contract)
+    && /执行此计划|execute this plan/i.test(contract)
+    && /请补充|supplement/i.test(contract);
+}
+
+async function runFlowBuild(agent: Agent, prompt: string, options: FlowBuildOptions) {
+  const supportsWorkRuns = Array.isArray(agent.workRuns)
     && typeof agent.beginConversationWorkRun === 'function'
-    && typeof agent.finishConversationWorkRun === 'function'
-    && !agent.workRuns.some(run => run.status === 'running');
-  const runId = ownsWorkRun ? randomUUID() : '';
-  if (ownsWorkRun) agent.beginConversationWorkRun(runId, undefined, undefined, true);
+    && typeof agent.finishConversationWorkRun === 'function';
+  if (supportsWorkRuns && agent.workRuns.some(run => run.status === 'running')) {
+    throw new Error(`Flow component #${options.componentId} cannot start before the previous Build block has terminated.`);
+  }
+  const runId = supportsWorkRuns ? randomUUID() : '';
+  if (supportsWorkRuns) {
+    agent.beginConversationWorkRun(runId, undefined, undefined, true);
+    agent.setConversationWorkRunFlowMetadata(runId, {
+      name: options.workflowName,
+      componentId: options.componentId,
+      componentType: options.componentType,
+      activityVisibility: options.activityVisibility,
+    });
+  }
+  let workRunFinished = false;
   try {
-    const tokens = await agent.process(prompt);
-    if (ownsWorkRun) agent.finishConversationWorkRun(runId, 'completed');
+    throwIfFlowAborted(options.signal);
+    const tokens = await agent.process(supportsWorkRuns ? {
+      text: prompt,
+      visibleUserInput: options.visibleUserInput,
+      visibleMode: 'flow-user-input',
+      runId,
+    } : prompt);
+    throwIfFlowAborted(options.signal);
+    const text = tokens.map(token => token.text || '').join('');
+    if (typeof agent.isLlmErrorText === 'function' && agent.isLlmErrorText(text)) {
+      throw new Error(`Flow component #${options.componentId} returned an abnormal model response.`);
+    }
+    const finalResponse = options.finalize?.(tokens, runId);
+    if (supportsWorkRuns && finalResponse !== undefined) {
+      agent.replaceConversationWorkRunFinalResponse(runId, finalResponse);
+    }
+    if (supportsWorkRuns) {
+      agent.finishConversationWorkRun(runId, 'completed');
+      agent.flushWorkspaceConversationState();
+      workRunFinished = true;
+    }
+    if (Array.isArray(agent.pendingOptions)) {
+      agent.pendingOptions = agent.pendingOptions.filter(question => !isAutomaticPlanExecutionQuestion(question));
+    }
+    if (Array.isArray(agent.pendingOptions) && agent.pendingOptions.length > 0) {
+      throw new FlowQuestionPendingError(options.componentId);
+    }
     return tokens;
   } catch (error) {
-    if (ownsWorkRun) agent.finishConversationWorkRun(runId, signal?.aborted ? 'interrupted' : 'error');
+    if (supportsWorkRuns && !workRunFinished) {
+      agent.finishConversationWorkRun(runId, options.signal?.aborted ? 'interrupted' : 'error');
+      agent.flushWorkspaceConversationState();
+    }
     throw error;
   }
 }
 
-async function evaluateReadOnlyBuild(agent: Agent, title: string, condition: string, signal?: AbortSignal): Promise<boolean> {
+async function evaluateReadOnlyBuild(
+  agent: Agent,
+  workflowName: string,
+  componentId: number,
+  componentType: 'logic' | 'goal-verification',
+  title: string,
+  condition: string,
+  completedResults: Array<{ componentId: number; result: string }>,
+  gotoTrue: number,
+  gotoFalse: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
   const previousMode = agent.mode;
+  let decision: boolean | undefined;
   try {
-    // Logic evaluation is rendered inside the owning Build, but Plan policy
-    // makes the evaluator strictly read-only and blocks side effects.
+    // Plan policy makes the evaluator strictly read-only. The orchestration
+    // wrapper is internal; the transcript shows only the actual basis and the
+    // deterministic decision/jump receipt.
     agent.setMode('plan');
     agent.recordWorkStatus?.(`[Flow logic] ${title}`);
-    const tokens = await runFlowBuild(agent, [
+    await runFlowBuild(agent, [
       '## Read-only Build Logic Evaluation',
       'Inspect the current workspace, conversation evidence, and completed Build results only as needed.',
       'Do not modify files, applications, services, workflows, memory, or external state.',
+      completedResults.length
+        ? `Completed Flow component results:\n${completedResults.map(item => `- #${item.componentId}: ${item.result.slice(0, 1200)}`).join('\n')}`
+        : 'No earlier Flow component result is available.',
       condition,
       'Return one final line exactly: FLOW_DECISION=true or FLOW_DECISION=false.',
-    ].join('\n\n'), signal);
-    throwIfFlowAborted(signal);
-    const text = tokens.map(token => token.text || '').join('');
-    const matches = Array.from(text.matchAll(/FLOW_DECISION\s*=\s*(true|false)/gi));
-    if (!matches.length) throw new Error(`Flow logic component did not return a valid decision: ${text.slice(-240)}`);
-    return String(matches.at(-1)?.[1]).toLowerCase() === 'true';
+    ].join('\n\n'), {
+      workflowName,
+      componentId,
+      componentType,
+      visibleUserInput: condition,
+      activityVisibility: 'result-only',
+      signal,
+      finalize: tokens => {
+        const text = tokens.map(token => token.text || '').join('');
+        const matches = Array.from(text.matchAll(/FLOW_DECISION\s*=\s*(true|false)/gi));
+        if (!matches.length) throw new Error(`Flow logic component did not return a valid decision: ${text.slice(-240)}`);
+        decision = String(matches.at(-1)?.[1]).toLowerCase() === 'true';
+        const next = decision ? gotoTrue : gotoFalse;
+        return `Flow 判定：${decision ? 'true' : 'false'}\nFlow 跳转：${next < 0 ? '完成 Flow' : `#${next}`}`;
+      },
+    });
+    if (decision === undefined) throw new Error(`Flow logic component #${componentId} did not settle a decision.`);
+    return decision;
   } finally {
     agent.setMode(previousMode);
   }
@@ -64,13 +163,22 @@ export async function runFlow(
   options: FlowRunnerOptions = {}
 ): Promise<void> {
   const startInput = options.startInput || '';
-  let cur = options.startPc ?? 0;
-  let input = startInput;
+  const orderedComponents = [...workflow.components];
+  const firstComponentId = orderedComponents[0]?.id;
+  let cur: number | null = options.startPc === undefined
+    ? (firstComponentId ?? null)
+    : (workflow.components.some(component => component.id === options.startPc) ? options.startPc : null);
   const quiet = options.quiet ?? false;
 
   let totalChars = 0;
   const startTime = Date.now();
   const visitCounts = new Map<number, number>();
+  const completedResults = options.completedResults || [];
+  let resumePending = String(options.resumePrompt || '').trim();
+  const nextComponentId = (componentId: number): number | null => {
+    const index = orderedComponents.findIndex(component => component.id === componentId);
+    return index >= 0 && index + 1 < orderedComponents.length ? orderedComponents[index + 1].id : null;
+  };
 
   if (!quiet) {
     console.log(`\n=== Flow: ${workflow.name} ===`);
@@ -86,7 +194,7 @@ export async function runFlow(
     }
   }
 
-  while (true) {
+  while (cur !== null) {
     throwIfFlowAborted(options.signal);
     const cid = cur;
     const visits = (visitCounts.get(cid) || 0) + 1;
@@ -97,63 +205,82 @@ export async function runFlow(
       break;
     }
 
-    const seq = FlowEngine.generateSequence(workflow, cur, input);
-    if (seq.length === 0) {
+    const component = workflow.components.find(item => item.id === cur);
+    if (!component) {
       if (!quiet) console.log('[Flow] No more steps \u2014 complete.');
       break;
     }
 
-    for (const step of seq) {
-      if (step.isLogic) {
-        if (!quiet) console.log(`\n[Logic #${step.id}] ${step.prompt}`);
-        const cond = await evaluateReadOnlyBuild(agent, `Logic #${step.id}`, step.prompt, options.signal);
-        const resultText = cond ? 'FLOW_DECISION=true' : 'FLOW_DECISION=false';
-        const nextGoto = FlowEngine.resolveGoto(workflow, step.id, cond);
-        if (!quiet) console.log(`  \u2192 ${resultText} (${cond ? 'goto ' + step.gotoTrue : 'goto ' + step.gotoFalse})`);
-        cur = nextGoto;
-        break;
-      } else {
-        if (!quiet) console.log(`\n[Dialog #${step.id}] Mode: ${step.mode}`);
-        if (!quiet) console.log(`  Prompt: ${step.prompt.slice(0, 200)}${step.prompt.length > 200 ? '...' : ''}`);
-        const targetMode = (step.mode?.toLowerCase() === 'plan' ? 'plan' : step.mode?.toLowerCase() === 'goal' ? 'goal' : 'build') as AgentMode;
-        agent.setMode(targetMode);
-        const resultTokens = await runFlowBuild(agent, step.prompt, options.signal);
-        throwIfFlowAborted(options.signal);
-        const resultText = resultTokens.map(t => t.text).join('');
-        totalChars += resultText.length;
-
-        if (!quiet) {
-          if (resultText.includes('[LLM Error')) {
-            console.log(`  \u26a0 ${resultText.slice(0, 300)}`);
-          } else {
-            const lines = resultText.trim().split('\n');
-            const preview = lines.slice(0, 5).join('\n');
-            console.log(`  \u2192 ${preview.slice(0, 300)}`);
-            if (lines.length > 5 || preview.length > 300) console.log(`  ... (${resultText.length} chars)`);
-          }
-        }
-
-        if (step.mode?.toLowerCase() === 'goal') {
-          const checkPrompt = `Is the following goal achieved?\nGoal: ${step.prompt.slice(0, 200)}\nCompleted: ${resultText.slice(0, 200)}`;
-          if (!quiet) console.log(`\n[Goal Verify] Checking if goal achieved...`);
-          const achieved = await evaluateReadOnlyBuild(agent, `Goal verification #${step.id}`, checkPrompt, options.signal);
-          if (!quiet) console.log(`  \u2192 Goal ${achieved ? 'ACHIEVED' : 'NOT achieved'}, ${achieved ? 'advancing' : 're-executing component ' + step.id}`);
-          if (!achieved) {
-            cur = step.id;
-            break;
-          }
-        }
-
-        cur = step.id + 1;
-      }
+    if (component.type === 'logic') {
+      const basis = component.prompt.replace(/\{#prompt#\}/g, startInput);
+      if (!quiet) console.log(`\n[Logic #${component.id}] ${basis}`);
+      const cond = await evaluateReadOnlyBuild(
+        agent,
+        workflow.name,
+        component.id,
+        'logic',
+        `Logic #${component.id}`,
+        basis,
+        completedResults,
+        component.goto_true,
+        component.goto_false,
+        options.signal,
+      );
+      const nextGoto = FlowEngine.resolveGoto(workflow, component.id, cond);
+      completedResults.push({ componentId: component.id, result: `FLOW_DECISION=${cond}; goto #${nextGoto}` });
+      if (!quiet) console.log(`  \u2192 FLOW_DECISION=${cond} (goto ${nextGoto})`);
+      cur = nextGoto;
+      continue;
     }
 
-    if (cur >= workflow.components.length) {
-      if (!quiet) {
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        console.log(`\n=== Flow Complete (${elapsed}s, ${totalChars} chars) ===`);
-      }
-      break;
+    const prompt = resumePending || FlowEngine.buildDialogPrompt(component, startInput);
+    resumePending = '';
+    if (!quiet) console.log(`\n[Dialog #${component.id}] Mode: ${component.mode}`);
+    const targetMode = (component.mode.toLowerCase() === 'plan' ? 'plan' : component.mode.toLowerCase() === 'goal' ? 'goal' : 'build') as AgentMode;
+    agent.setMode(targetMode);
+    let resultTokens;
+    try {
+      resultTokens = await runFlowBuild(agent, prompt, {
+        workflowName: workflow.name,
+        componentId: component.id,
+        componentType: 'dialog',
+        visibleUserInput: prompt,
+        activityVisibility: 'full',
+        signal: options.signal,
+      });
+    } catch (error) {
+      if (error instanceof FlowQuestionPendingError) error.completedResults = [...completedResults];
+      throw error;
     }
+    const resultText = resultTokens.map(token => token.text || '').join('');
+    totalChars += resultText.length;
+    completedResults.push({ componentId: component.id, result: resultText });
+    const sequentialNext = nextComponentId(component.id);
+
+    if (component.mode.toLowerCase() === 'goal') {
+      const checkPrompt = `Is the following goal achieved?\nGoal: ${prompt.slice(0, 1200)}\nCompleted result: ${resultText.slice(0, 2400)}`;
+      const achieved = await evaluateReadOnlyBuild(
+        agent,
+        workflow.name,
+        component.id,
+        'goal-verification',
+        `Goal verification #${component.id}`,
+        checkPrompt,
+        completedResults,
+        sequentialNext ?? -1,
+        component.id,
+        options.signal,
+      );
+      if (!achieved) {
+        cur = component.id;
+        continue;
+      }
+    }
+    cur = sequentialNext;
+  }
+
+  if (!quiet) {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`\n=== Flow Complete (${elapsed}s, ${totalChars} chars) ===`);
   }
 }

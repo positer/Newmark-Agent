@@ -173,7 +173,10 @@ function startMockServer() {
       requests.push({ method: req.method, url: req.url, body });
       let parsed = {};
       try { parsed = JSON.parse(body || '{}'); } catch {}
-      const messagesText = JSON.stringify(parsed.messages || []);
+      const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
+      const messagesText = JSON.stringify(messages);
+      const latestUser = [...messages].reverse().find(message => message && message.role === 'user');
+      const latestUserText = typeof latestUser?.content === 'string' ? latestUser.content : JSON.stringify(latestUser?.content || '');
 
       if (req.method === 'GET' && req.url === '/v1/models') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -193,9 +196,12 @@ function startMockServer() {
         return;
       }
 
-      const marker = messagesText.includes('ACCEPTANCE_FLOW_RUN') ? 'flow'
-        : messagesText.includes('ACCEPTANCE_PLAN_BLOCK') ? 'plan'
-        : messagesText.includes('ACCEPTANCE_BUILD_WRITE') ? 'build'
+      const marker = latestUserText.includes('ACCEPTANCE_FLOW_DECISION') ? 'flow-decision'
+        : latestUserText.includes('ACCEPTANCE_FLOW_FALSE_BRANCH') ? 'flow-false'
+        : latestUserText.includes('ACCEPTANCE_FLOW_TRUE_BRANCH') ? 'flow-true'
+        : latestUserText.includes('ACCEPTANCE_FLOW_DIALOG') ? 'flow-dialog'
+        : latestUserText.includes('ACCEPTANCE_PLAN_BLOCK') ? 'plan'
+        : latestUserText.includes('ACCEPTANCE_BUILD_WRITE') ? 'build'
         : 'default';
       const count = markerCounts.get(marker) || 0;
       markerCounts.set(marker, count + 1);
@@ -216,8 +222,23 @@ function startMockServer() {
         return;
       }
 
-      if (marker === 'flow') {
+      if (marker === 'flow-decision') {
+        sendSse(res, [textChunk('INTERNAL_FLOW_ARCHITECTURE_MUST_STAY_HIDDEN\nFLOW_DECISION=true')]);
+        return;
+      }
+
+      if (marker === 'flow-dialog') {
+        sendSse(res, [textChunk('ACCEPTANCE_FLOW_DIALOG_OK')]);
+        return;
+      }
+
+      if (marker === 'flow-true') {
         sendSse(res, [textChunk('ACCEPTANCE_FLOW_RESULT_OK')]);
+        return;
+      }
+
+      if (marker === 'flow-false') {
+        sendSse(res, [textChunk('ACCEPTANCE_FLOW_FALSE_BRANCH_SHOULD_NOT_RUN')]);
         return;
       }
 
@@ -344,6 +365,7 @@ function ensureNoReleaseProcess() {
 
     const workspace = await evaluate(cdp, `window.api.createWorkspace('acceptance-workspace')`, 30000);
     if (!workspace || !workspace.path) fail('workspace creation did not return a workspace path');
+    await evaluate(cdp, `window.refreshWorkspaceState()`, 30000);
     log(`workspace ok: ${workspace.name}`);
 
     await evaluate(cdp, `window.api.setModel('release-ui-acceptance-mock')`);
@@ -358,6 +380,8 @@ function ensureNoReleaseProcess() {
     log('build write ok');
 
     await evaluate(cdp, `window.api.setMode('plan')`);
+    const planModeConfirmed = await evaluate(cdp, `window.api.getState().then(s => s && s.mode === 'plan')`, 30000);
+    if (!planModeConfirmed) fail('Plan mode was not active immediately before the permission probe');
     const planResult = await evaluate(cdp, `window.api.sendMessage('ACCEPTANCE_PLAN_BLOCK attempt a forbidden file write')`, 90000);
     const planText = JSON.stringify(planResult || {});
     if (!planText.includes('ACCEPTANCE_PLAN_BLOCK_OK')) fail(`plan result marker missing: ${planText}`);
@@ -372,19 +396,57 @@ function ensureNoReleaseProcess() {
     if (!goalResumed) fail('Goal resume state was not persisted in real UI');
     log('goal pause/resume ok');
 
+    await evaluate(cdp, `window.api.setMode('build')`, 30000);
     const flowJson = {
       name: 'acceptance-flow',
       description: 'Release UI acceptance flow',
       components: [
-        { type: 'dialog', id: 0, mode: 'build', prompt: 'ACCEPTANCE_FLOW_RUN {#prompt#}' },
+        { type: 'dialog', id: 10, mode: 'build', prompt: 'ACCEPTANCE_FLOW_DIALOG {#prompt#}' },
+        { type: 'logic', id: 30, prompt: 'ACCEPTANCE_FLOW_DECISION {#prompt#}', goto_true: 50, goto_false: 40 },
+        { type: 'dialog', id: 40, mode: 'build', prompt: 'ACCEPTANCE_FLOW_FALSE_BRANCH' },
+        { type: 'dialog', id: 50, mode: 'build', prompt: 'ACCEPTANCE_FLOW_TRUE_BRANCH' },
       ],
     };
     await evaluate(cdp, `window.api.saveFlow(${JSON.stringify(flowJson)})`, 30000);
-    const flowResult = await evaluate(cdp, `window.api.runFlow('acceptance-flow', 'from release UI', 0)`, 90000);
-    if (!JSON.stringify(flowResult || {}).includes('ACCEPTANCE_FLOW_RESULT_OK')) fail(`flow result marker missing: ${JSON.stringify(flowResult || {})}`);
-    log('flow run ok');
+    const flowResult = await evaluate(cdp, `window.api.runFlow('acceptance-flow', 'from release UI', 10)`, 90000);
+    const flowResultText = JSON.stringify(flowResult || {});
+    if (!flowResultText.includes('ACCEPTANCE_FLOW_RESULT_OK')) fail(`flow result marker missing: ${flowResultText}`);
+    const flowRuns = (flowResult.workRuns || []).filter(run => run.flow && run.flow.name === 'acceptance-flow');
+    const flowRunIds = flowRuns.map(run => run.flow.componentId);
+    if (JSON.stringify(flowRunIds) !== JSON.stringify([10, 30, 50])) {
+      fail(`Flow did not persist one completed Build block per executed component or jumped incorrectly: ${JSON.stringify(flowRuns)}`);
+    }
+    if (!flowRuns.every(run => run.status === 'completed')) fail(`Flow advanced before every component Build completed: ${JSON.stringify(flowRuns)}`);
+    const logicRun = flowRuns.find(run => run.flow.componentId === 30);
+    if (!logicRun || logicRun.flow.activityVisibility !== 'result-only') fail(`logic Build activity is not result-only: ${JSON.stringify(logicRun)}`);
+    const flowMessages = (flowResult.chatMessages || []).filter(message => flowRuns.some(run => run.runId === message.runId));
+    const visibleLogicInput = flowMessages.find(message => message.role === 'user' && message.runId === logicRun.runId);
+    const visibleLogicReply = flowMessages.find(message => message.role === 'assistant' && message.runId === logicRun.runId);
+    if (!visibleLogicInput || visibleLogicInput.mode !== 'flow-user-input' || visibleLogicInput.content !== 'ACCEPTANCE_FLOW_DECISION from release UI') {
+      fail(`logic visible user input does not match the Flow decision statement: ${JSON.stringify(visibleLogicInput)}`);
+    }
+    if (!visibleLogicReply || visibleLogicReply.content !== 'Flow 判定：true\nFlow 跳转：#50') {
+      fail(`logic visible reply is not the deterministic decision and jump target: ${JSON.stringify(visibleLogicReply)}`);
+    }
+    if (flowResultText.includes('INTERNAL_FLOW_ARCHITECTURE_MUST_STAY_HIDDEN')) {
+      fail('logic internal architecture/reasoning leaked into public Flow state');
+    }
+    await evaluate(cdp, `(() => {
+      const result = ${JSON.stringify(flowResult)};
+      if (Array.isArray(result.workRuns)) window.renderConversationWorkRuns(result.workRuns, window.currentConversationTarget());
+      if (Array.isArray(result.chatMessages)) window.renderChatMessages(result.chatMessages);
+      return true;
+    })()`, 30000);
+    const flowDom = await evaluate(cdp, `(() => ({
+      text: document.body.innerText || '',
+      hiddenLogicRuns: document.querySelectorAll('.work-run-message.flow-result-only').length
+    }))()`, 30000);
+    if (flowDom.text.includes('INTERNAL_FLOW_ARCHITECTURE_MUST_STAY_HIDDEN')) fail('logic internal architecture/reasoning leaked into the rendered UI');
+    if (flowDom.hiddenLogicRuns < 1) fail(`logic Build work activity was not hidden in the rendered UI: ${JSON.stringify(flowDom)}`);
+    log('flow component boundaries, read-only logic visibility, and conditional jump ok');
 
-    const archiveName = await evaluate(cdp, `window.api.archive()`, 30000);
+    const archiveResult = await evaluate(cdp, `window.api.archive()`, 30000);
+    const archiveName = typeof archiveResult === 'string' ? archiveResult : String(archiveResult?.fileName || '');
     if (!archiveName || !String(archiveName).endsWith('.md')) fail(`archive did not return a md name: ${archiveName}`);
     const archiveFile = path.join(workspace.path, 'archive', archiveName);
     if (!fs.existsSync(archiveFile)) fail(`archive was not stored under workspace: ${archiveFile}`);
@@ -411,7 +473,10 @@ function ensureNoReleaseProcess() {
 
     if (!mock.requests.some(r => r.body.includes('ACCEPTANCE_BUILD_WRITE'))) fail('mock provider did not receive Build prompt');
     if (!mock.requests.some(r => r.body.includes('ACCEPTANCE_PLAN_BLOCK'))) fail('mock provider did not receive Plan prompt');
-    if (!mock.requests.some(r => r.body.includes('ACCEPTANCE_FLOW_RUN'))) fail('mock provider did not receive Flow prompt');
+    if (!mock.requests.some(r => r.body.includes('ACCEPTANCE_FLOW_DIALOG'))) fail('mock provider did not receive Flow dialog prompt');
+    if (!mock.requests.some(r => r.body.includes('ACCEPTANCE_FLOW_DECISION'))) fail('mock provider did not receive Flow logic prompt');
+    if (!mock.requests.some(r => r.body.includes('ACCEPTANCE_FLOW_TRUE_BRANCH'))) fail('mock provider did not receive Flow true-branch prompt');
+    if (mock.requests.some(r => r.body.includes('ACCEPTANCE_FLOW_FALSE_BRANCH'))) fail('mock provider incorrectly executed the Flow false branch');
     log('all release UI acceptance checks passed');
   } finally {
     if (cdp?.ws && cdp.ws.readyState === WebSocket.OPEN) cdp.ws.close();

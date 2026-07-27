@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { pathToFileURL } from 'url';
 // glob v7 - imported via require for CommonJS compatibility
 const globSync: (pattern: string, opts?: { cwd?: string; ignore?: string | string[] }) => string[]
   = require('glob').sync;
@@ -33,6 +34,8 @@ import {
 } from '../core/toolPolicy';
 import { runAsyncProcess } from '../core/asyncProcess';
 import { closeToolArgumentSchema, ToolArgumentValidatorRegistry } from '../core/toolArgumentValidator';
+import { LocalOcrEngine } from '../core/localOcr';
+import { browserVisualFallback, registerBrowserVisualFallback } from '../core/visualTextFallback';
 
 export interface ToolExecutionContext {
   mode?: string;
@@ -111,6 +114,56 @@ function abortGuard(parent: AbortSignal | undefined, timeoutMs: number): { signa
   };
 }
 
+function decodePdfLiteral(input: string): string {
+  return String(input || '')
+    .replace(/\\([\\()])/g, '$1')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t')
+    .replace(/\\([0-7]{1,3})/g, (_match, octal: string) => String.fromCharCode(parseInt(octal, 8)));
+}
+
+function extractPdfTextLayer(buffer: Buffer): string {
+  const binary = buffer.toString('latin1');
+  const chunks: string[] = [];
+  for (const match of binary.matchAll(/\((?:\\.|[^\\)]){1,4000}\)\s*Tj/g)) {
+    chunks.push(decodePdfLiteral(match[0].replace(/\)\s*Tj$/, '').slice(1)));
+  }
+  for (const match of binary.matchAll(/\[((?:\((?:\\.|[^\\)])*\)|[^\]]){1,8000})\]\s*TJ/g)) {
+    for (const literal of match[1].matchAll(/\((?:\\.|[^\\)])*\)/g)) {
+      chunks.push(decodePdfLiteral(literal[0].slice(1, -1)));
+    }
+  }
+  for (const match of binary.matchAll(/<FEFF([0-9A-Fa-f]{4,16000})>\s*Tj/g)) {
+    const bytes = Buffer.from(match[1], 'hex');
+    const swapped = Buffer.alloc(bytes.length);
+    for (let index = 0; index + 1 < bytes.length; index += 2) {
+      swapped[index] = bytes[index + 1];
+      swapped[index + 1] = bytes[index];
+    }
+    chunks.push(swapped.toString('utf16le'));
+  }
+  return chunks.join(' ').replace(/\s+/g, ' ').trim().slice(0, 100_000);
+}
+
+async function abortableToolDelay(durationMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw abortReason(signal);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(finish, Math.max(0, durationMs));
+    function finish() {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }
+    function abort() {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      reject(abortReason(signal));
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+  });
+}
+
 function clearStaleComputerUseLock(now = Date.now()): void {
   if (computerUseLock && now - computerUseLock.updatedAt > COMPUTER_USE_LOCK_TTL_MS) {
     computerUseLock = null;
@@ -161,6 +214,7 @@ function assertComputerUseLockOwner(action: string, owner: string): string | nul
 
 export class ToolExecutor {
   private root: string;
+  private readonly localOcr: LocalOcrEngine;
   private readonly argumentValidators = new ToolArgumentValidatorRegistry();
   private hostProfile: ToolHostProfile = {
     kind: 'desktop',
@@ -171,6 +225,7 @@ export class ToolExecutor {
 
   constructor(root: string, private config: ConfigManager, private ssh?: SshManager, private workspace?: WorkspaceManager) {
     this.root = root;
+    this.localOcr = new LocalOcrEngine(root);
   }
 
   async webSearch(query: string): Promise<string> {
@@ -288,6 +343,17 @@ export class ToolExecutor {
         height: { type: 'number', description: 'Crop height in source-image pixels.' },
         scale: { type: 'number', description: 'Magnification from 1 to 4. Output is capped at 2048 pixels per side.' },
       }, ['action']),
+      t('ocr_read', 'LAST-RESORT approximate Chinese/English OCR. Use only after normal text extraction failed and either no validated vision model exists or a vision screenshot was already presented and failed. Browser observations are capability-bound; image files remain workspace-scoped. The result includes an Agent repair prompt for conservative context-based correction.', {
+        source: { type: 'string', enum: ['browser', 'image'] },
+        observation_id: { type: 'string', description: 'For source=browser, the latest Browser-Use observation capability that already exhausted text and vision.' },
+        path: { type: 'string', description: 'For source=image, a workspace PNG/JPEG/BMP path.' },
+        fallback_reason: { type: 'string', enum: ['vision_unavailable', 'vision_failed'] },
+      }, ['source', 'fallback_reason']),
+      t('pdf_read', 'Read a PDF with enforced fallback order: embedded text layer first; if unreadable, render the requested page in Newmark Browser and send a screenshot to a validated vision model; use bundled Chinese/English OCR only when vision is unavailable, or later through ocr_read after vision failed. Designed for scanned PDFs, not layout/table reconstruction.', {
+        path: { type: 'string', description: 'Workspace PDF path.' },
+        page: { type: 'number', minimum: 1, maximum: 100, description: 'Page to render when no usable text layer exists. Defaults to 1.' },
+        max_chars: { type: 'number', minimum: 500, maximum: 100000 },
+      }, ['path']),
       t('terminal_takeover', 'Take over a persistent owner-scoped PTY session that is independent from the one-shot bash tool. Actions: start creates/reuses a named PTY, write sends a command to the same session, read returns its output buffer, resize updates PTY geometry, detach releases the UI attachment without stopping the shell, stop interrupts it, list shows sessions. Use this when the user wants continuous terminal state such as cd/env/process context or interactive TTY programs.', {
         action: { type: 'string', enum: ['start', 'write', 'read', 'resize', 'detach', 'stop', 'list'] },
         name: { type: 'string', description: 'Stable takeover session name. Defaults to agent.' },
@@ -386,7 +452,7 @@ export class ToolExecutor {
     ];
     let visibleTools = tools.filter((tool: any) => isNativeToolEnabled(tool.function?.name || '', this.config.nativeToolEnabled()));
     visibleTools = visibleTools.filter((tool: any) => this.hostSupportsTool(String(tool.function?.name || '')));
-    if (this.config.getStr('agent', 'option_feedback') === 'fully_autonomous' && mode !== 'plan') {
+    if (this.config.getStr('agent', 'option_feedback') === 'fully_autonomous') {
       visibleTools = visibleTools.filter((tool: any) => tool.function?.name !== 'question');
     }
     const policyFiltered = filterToolDefinitions(visibleTools, { mode });
@@ -470,8 +536,7 @@ export class ToolExecutor {
     const args = parsed as Record<string, unknown>;
     if (inputSchema === undefined
       && tool === 'question'
-      && this.config.getStr('agent', 'option_feedback') === 'fully_autonomous'
-      && _mode !== 'plan') {
+      && this.config.getStr('agent', 'option_feedback') === 'fully_autonomous') {
       const validation = this.argumentValidators.validate(tool, {
         type: 'object',
         properties: { questions: { type: 'array' } },
@@ -518,6 +583,7 @@ export class ToolExecutor {
         case 'edit':
         case 'grep':
         case 'file_audit':
+        case 'pdf_read':
           return resolve(g('path'));
         case 'git_clone':
           return resolve(g('path'));
@@ -582,8 +648,9 @@ export class ToolExecutor {
               actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
               runtimeKey: scope.runtimeKey,
               mode: context.mode || 'build',
+              allowEphemeralVisionImage: context.allowEphemeralVisionImage === true,
             }, 30_000, context.signal);
-            return JSON.stringify(result, null, 2);
+            return JSON.stringify(await this.decorateBrowserUseReceipt(result, context, scope.runtimeKey), null, 2);
           }
           if (process.env.NEWMARK_ISOLATED_RUNTIME === '1') {
             const result = await requestUtilityHostTool('browser_use', request, {
@@ -594,10 +661,82 @@ export class ToolExecutor {
               backend: 'utility',
               mode: context.mode || 'build',
               runtimeKey: scope.runtimeKey,
+              allowEphemeralVisionImage: context.allowEphemeralVisionImage === true,
             }, 30_000, context.signal);
-            return JSON.stringify(result, null, 2);
+            return JSON.stringify(await this.decorateBrowserUseReceipt(result, context, scope.runtimeKey), null, 2);
           }
-          return JSON.stringify(await BrowserUse.run(request, context.signal), null, 2);
+          return JSON.stringify(await this.decorateBrowserUseReceipt(
+            await BrowserUse.run(request, context.signal),
+            context,
+            scope.runtimeKey,
+          ), null, 2);
+        }
+        case 'ocr_read': {
+          const source = g('source');
+          const fallbackReason = g('fallback_reason');
+          const visionAvailable = context.allowEphemeralVisionImage === true;
+          if (visionAvailable && fallbackReason !== 'vision_failed') {
+            return '[ocr fallback blocked] A validated vision model is available. Present the screenshot to that model before local OCR.';
+          }
+          if (!visionAvailable && fallbackReason !== 'vision_unavailable') {
+            return '[ocr fallback blocked] No validated vision model is active; fallback_reason must be vision_unavailable.';
+          }
+          if (source === 'browser') {
+            const scope = browserUseScope(context, wsPath);
+            const observationId = g('observation_id');
+            const fallback = browserVisualFallback(scope.runtimeKey, observationId);
+            if (!fallback) return '[ocr fallback blocked] Browser observation is missing, stale, or did not require visual fallback. Observe again.';
+            if (fallback.visionPresented && fallbackReason !== 'vision_failed') {
+              return '[ocr fallback blocked] The screenshot was presented to a validated vision model; local OCR requires vision_failed.';
+            }
+            return JSON.stringify(await this.localOcr.recognizeDataUrl(fallback.dataUrl, context.signal), null, 2);
+          }
+          if (source === 'image') {
+            return JSON.stringify(await this.localOcr.recognizeFile(resolve(g('path')), context.signal), null, 2);
+          }
+          return '[ocr fallback blocked] source must be browser or image.';
+        }
+        case 'pdf_read': {
+          const pdfPath = resolve(g('path'));
+          if (path.extname(pdfPath).toLowerCase() !== '.pdf') return '[pdf_read error] path must end in .pdf.';
+          const stat = fs.statSync(pdfPath);
+          if (!stat.isFile() || stat.size <= 0 || stat.size > 250 * 1024 * 1024) {
+            return '[pdf_read error] PDF must be a regular file no larger than 250 MB.';
+          }
+          const maxChars = Math.max(500, Math.min(100_000, Number(args.max_chars || 50_000)));
+          const textLayer = extractPdfTextLayer(fs.readFileSync(pdfPath)).slice(0, maxChars);
+          const readableCount = (textLayer.match(/[A-Za-z0-9\u3400-\u9fff]/g) || []).length;
+          if (readableCount >= 20) {
+            return JSON.stringify({
+              ok: true,
+              source: 'pdf_text_layer',
+              recognition_order: 'text>vision>local_ocr',
+              text: textLayer,
+              truncated: textLayer.length >= maxChars,
+            }, null, 2);
+          }
+          const page = Math.max(1, Math.min(100, Math.floor(Number(args.page || 1))));
+          const url = `${pathToFileURL(pdfPath).toString()}#page=${page}&zoom=page-fit`;
+          const opened = await this.browserRun({ action: 'open', url }, context.signal, context, wsPath);
+          if (!opened.includes('[browser:open] OK')) {
+            return JSON.stringify({ ok: false, source: 'pdf_render', error: opened || 'Unable to open PDF.' }, null, 2);
+          }
+          await abortableToolDelay(900, context.signal);
+          const observed = await this.execute('browser_use', JSON.stringify({
+            action: 'observe',
+            action_id: `pdf-read-${crypto.randomUUID()}`,
+            max_chars: maxChars,
+            max_refs: 80,
+          }), wsPath, context);
+          let parsed: unknown = observed;
+          try { parsed = JSON.parse(observed); } catch {}
+          return JSON.stringify({
+            ok: true,
+            source: 'pdf_rendered_page',
+            page,
+            recognition_order: 'text>vision>local_ocr',
+            result: parsed,
+          }, null, 2);
         }
         case 'computer_use': {
           const action = normalizeComputerUseAction(g('action'));
@@ -731,7 +870,7 @@ export class ToolExecutor {
         case 'subagent_result': return `[subagent_result] Routed to Agent runtime: ${g('name')}`;
         case 'subagent_close': return `[subagent_close] Routed to Agent runtime: ${g('name')}`;
         case 'question':
-          if (this.config.getStr('agent', 'option_feedback') === 'fully_autonomous' && context.mode !== 'plan') {
+          if (this.config.getStr('agent', 'option_feedback') === 'fully_autonomous') {
             return '[question] Disabled by fully_autonomous option feedback.';
           }
           return '[question] Options sent to user.';
@@ -777,6 +916,31 @@ export class ToolExecutor {
     if (name.startsWith('browser_') && !this.hostProfile.electronBrowser) return false;
     if (name === 'computer_use' && !this.hostProfile.windowsComputerUse) return false;
     return true;
+  }
+
+  private async decorateBrowserUseReceipt(
+    input: unknown,
+    context: ToolExecutionContext,
+    runtimeKey: string,
+  ): Promise<unknown> {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+    const receipt = input as Record<string, unknown>;
+    const dataUrl = String(receipt.vision_image_data_url || '');
+    const observationId = String(receipt.observationId || '');
+    if (!dataUrl || !observationId) return receipt;
+    const visionPresented = context.allowEphemeralVisionImage === true;
+    registerBrowserVisualFallback(runtimeKey, observationId, dataUrl, visionPresented);
+    if (visionPresented) return receipt;
+    const observation = receipt.observation && typeof receipt.observation === 'object'
+      ? receipt.observation as Record<string, unknown>
+      : {};
+    const profile = /\.pdf(?:#|$)/i.test(String(observation.url || ''))
+      ? 'academic-document'
+      : 'sparse-ui';
+    const localOcr = await this.localOcr.recognizeDataUrl(dataUrl, context.signal, profile);
+    const decorated: Record<string, unknown> = { ...receipt, local_ocr: localOcr };
+    delete decorated.vision_image_data_url;
+    return decorated;
   }
 
   private async sshWorkspace(args: Record<string, unknown>, wsPath: string, signal?: AbortSignal): Promise<string> {
@@ -1163,6 +1327,10 @@ export class ToolExecutor {
         runtimeKey: scope.runtimeKey,
         mode: context.mode || 'build',
       }, 30_000, signal) as BrowserControlResult;
+      return this.formatBrowserResult(result);
+    }
+    if (process.env.NEWMARK_ISOLATED_RUNTIME === '1') {
+      const result = await requestUtilityHostTool('browser_control', request, undefined, 30_000, signal) as BrowserControlResult;
       return this.formatBrowserResult(result);
     }
     const result = await BrowserControl.run(request, signal);

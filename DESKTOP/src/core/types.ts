@@ -114,6 +114,12 @@ export interface ConversationWorkRun {
   primaryPrompt?: string;
   branchNodeId?: string;
   anchorMessageId?: string;
+  flow?: {
+    name: string;
+    componentId: number;
+    componentType: 'dialog' | 'logic' | 'goal-verification';
+    activityVisibility: 'full' | 'result-only';
+  };
 }
 
 export interface GoalState {

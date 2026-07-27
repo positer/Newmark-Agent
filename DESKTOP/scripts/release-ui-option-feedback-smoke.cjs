@@ -137,7 +137,7 @@ function textChunk(text) {
 }
 
 function markerFromMessages(messages) {
-  const markers = ['OPTION_SMOKE_DEFAULT', 'OPTION_SMOKE_ASK_MORE', 'OPTION_SMOKE_ASK_LESS', 'OPTION_SMOKE_FULLY_AUTONOMOUS', 'OPTION_SMOKE_PERMISSION_ASK'];
+  const markers = ['OPTION_MODE_BUILD', 'OPTION_MODE_PLAN', 'OPTION_MODE_GOAL', 'OPTION_MODE_FLOW', 'OPTION_SMOKE_DEFAULT', 'OPTION_SMOKE_ASK_MORE', 'OPTION_SMOKE_ASK_LESS', 'OPTION_SMOKE_FULLY_AUTONOMOUS', 'OPTION_SMOKE_PERMISSION_ASK'];
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]?.role !== 'user') continue;
     const content = typeof messages[i].content === 'string' ? messages[i].content : JSON.stringify(messages[i].content || '');
@@ -425,6 +425,33 @@ async function sendPrompt(cdp, prompt) {
     await evaluate(cdp, `window.switchRightTab('status')`, 15000);
     await waitFor(cdp, `(() => document.getElementById('right-status-content')?.innerText.includes('Pending options') && document.getElementById('right-status-content')?.innerText.includes('OPTION_SMOKE_ASK_LESS_ALLOW'))()`, 30000, 'right status pending options');
     log('right status pending options ok');
+
+    const modeCases = [
+      ['build', 'OPTION_MODE_BUILD'],
+      ['plan', 'OPTION_MODE_PLAN'],
+      ['goal', 'OPTION_MODE_GOAL'],
+    ];
+    for (const [mode, marker] of modeCases) {
+      if (mode === 'goal') await evaluate(cdp, `window.api.updateGoal('OPTION_MODE_GOAL objective remains active')`, 15000);
+      await evaluate(cdp, `window.api.setMode(${JSON.stringify(mode)})`, 15000);
+      await evaluate(cdp, `window.api.sendMessage(${JSON.stringify(marker + ' trigger state-preserving question')})`, 45000);
+      const preserved = await waitFor(cdp, `window.api.getState().then(s => (s.pendingOptions || []).some(q => String(q.question || '').includes(${JSON.stringify(marker)})) ? ({ mode: s.mode, goal: s.goal || null }) : null)`, 45000, `${mode} state-preserving pending question`);
+      if (preserved.mode !== mode || (mode === 'goal' && (!preserved.goal || !String(preserved.goal.objective || '').includes('OPTION_MODE_GOAL')))) {
+        fail(`${mode} question changed or cleared its pre-question mode state: ${JSON.stringify(preserved)}`);
+      }
+      log(`${mode} pending question preserves pre-question state`);
+    }
+
+    await evaluate(cdp, `window.api.setMode('build')`, 15000);
+    await evaluate(cdp, `window.api.saveFlow({name:'option-question-flow',components:[{id:10,type:'dialog',mode:'build',prompt:'OPTION_MODE_FLOW trigger state-preserving question'}]})`, 15000);
+    const flowPending = await evaluate(cdp, `window.api.runFlow('option-question-flow', '', 10)`, 45000);
+    if (!flowPending || !flowPending.pending || flowPending.mode !== 'flow' || !(flowPending.options || []).some(q => String(q.question || '').includes('OPTION_MODE_FLOW'))) {
+      fail(`Flow question did not suspend with Flow state intact: ${JSON.stringify(flowPending)}`);
+    }
+    const flowState = await evaluate(cdp, `window.api.getState()`, 15000);
+    if (flowState.mode !== 'flow') fail(`Flow question changed backend mode before user input: ${JSON.stringify(flowState)}`);
+    await evaluate(cdp, `window.api.stopFlow()`, 15000);
+    log('flow pending question preserves workflow state until explicit stop or selection');
 
     await setFeedback(cdp, 'fully_autonomous');
     await sendPrompt(cdp, 'OPTION_SMOKE_FULLY_AUTONOMOUS trigger disabled question');

@@ -308,8 +308,13 @@ function ensureNoReleaseProcess() {
     await evaluate(cdp, `window.api.updateGoal('RELEASE_UI_GOAL_CONTINUATION must continue until the completion marker appears')`, 30000);
     const result = await evaluate(cdp, `window.api.sendMessage('RELEASE_UI_GOAL_CONTINUATION start repeated goal loop')`, 120000);
     const resultText = JSON.stringify(result || {});
-    if (!resultText.includes('RELEASE_UI_GOAL_CONTINUATION_COMPLETE')) fail(`goal completion marker missing: ${resultText}`);
+    if (!resultText.includes('GOAL_CONTINUATION_STEP_1')) fail(`initial Goal block result missing: ${resultText}`);
     if (/max[- ]?depth/i.test(resultText)) fail(`goal result contains max-depth warning: ${resultText}`);
+
+    await waitFor(cdp, `(async () => {
+      const state = await window.api.getState();
+      return JSON.stringify(state || {}).includes('RELEASE_UI_GOAL_CONTINUATION_COMPLETE');
+    })()`, 120000, 'separate persisted Goal continuation blocks');
 
     const goalRequestCount = mock.requests.filter(r => r.body.includes('RELEASE_UI_GOAL_CONTINUATION')).length;
     if (mock.getGoalCalls() < 3 || goalRequestCount < 3) {
@@ -320,9 +325,25 @@ function ensureNoReleaseProcess() {
     const stateText = JSON.stringify(state || {});
     if (!stateText.includes('RELEASE_UI_GOAL_CONTINUATION_COMPLETE')) fail('completed Goal text was not retained in renderer state');
     if (/max[- ]?depth/i.test(stateText)) fail(`renderer state contains max-depth warning: ${stateText}`);
+    const goalUi = await evaluate(cdp, `(async () => {
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline) {
+        const bar = document.getElementById('goal-bar');
+        const mode = document.getElementById('mode-select');
+        if (bar && bar.style.display === 'none' && mode && mode.value === 'build') {
+          return { cleared: true, mode: mode.value, display: bar.style.display };
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      const bar = document.getElementById('goal-bar');
+      const mode = document.getElementById('mode-select');
+      return { cleared: false, mode: mode && mode.value, display: bar && bar.style.display };
+    })()`, 15000);
+    if (!goalUi?.cleared) fail(`completed Goal did not clear its visible bar and restore Build: ${JSON.stringify(goalUi)}`);
 
     await captureScreenshot(cdp, screenshotPath);
     log(`goal autonomous continuation ok: calls=${mock.getGoalCalls()} requests=${goalRequestCount}`);
+    log('completed Goal clears its visible bar and restores Build');
     log('all release UI goal continuation checks passed');
   } finally {
     if (cdp?.ws && cdp.ws.readyState === WebSocket.OPEN) cdp.ws.close();

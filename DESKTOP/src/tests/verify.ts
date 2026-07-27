@@ -17,7 +17,7 @@ import { SkillsManager } from '../core/skills';
 import { AutomationManager } from '../core/automation';
 import { AutomationWakeScheduler } from '../core/automationWake';
 import { FlowEngine, FlowWorkflow } from '../core/flow';
-import { runFlow } from '../core/flow-runner';
+import { FlowQuestionPendingError, runFlow } from '../core/flow-runner';
 import { LLMProvider } from '../llm/provider';
 import { BrowserControl } from '../core/browserControl';
 import { runCliCommand } from '../cli-commands';
@@ -238,6 +238,7 @@ async function main() {
   const uiHtmlPath = path.join(process.cwd(), 'src', 'ui', 'index.html');
   assert(fs.existsSync(uiHtmlPath), 'ui html: index.html exists');
   const uiHtml = fs.readFileSync(uiHtmlPath, 'utf-8');
+  const agentLoopTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernel', 'agent-loop.ts'), 'utf-8');
   await verifyEditorLifecycle(uiHtml, assert);
   const mainSource = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf-8');
   const preloadSource = fs.readFileSync(path.join(process.cwd(), 'src', 'preload.ts'), 'utf-8');
@@ -358,6 +359,17 @@ async function main() {
     && uiHtml.includes('showMemoryLabOverviewTip')
     && uiHtml.includes('updateMemoryLabOverviewTip'), 'ui html: Memory Lab overview toggles selected tags off, supports long pointer-captured drags, keeps a throttled ambient layout running, permits full-range zoom, collapses distant nodes to solid dots, and names dots on hover');
   assert(uiHtml.includes('animate-from-left') && uiHtml.includes('animate-from-right') && uiHtml.includes('@keyframes memory-lab-enter-left') && uiHtml.includes('memoryLabNavDirection'), 'ui html: Memory Lab tag navigation has smooth directional animation');
+  const overviewSelectSource = uiHtml.match(/window\.selectMemoryLabOverviewNode = function[\s\S]*?\n\};/)?.[0] || '';
+  const componentSelectSource = uiHtml.match(/window\.selectMemoryLabComponent = function[\s\S]*?\n\};/)?.[0] || '';
+  assert(!overviewSelectSource.includes('loadMemoryLab')
+    && componentSelectSource.includes("window.requestMemoryLabOverviewFrame();\n    return;")
+    && componentSelectSource.includes("window.loadMemoryLab(slug, { preservePanel: true });"),
+  'ui html: selecting a Memory Lab overview component focuses the live graph without reloading the panel, while detail fetches content without a loading flash');
+  assert(!uiHtml.includes("t('memoryLab.instructions')")
+    && !uiHtml.includes("'memoryLab.instructions': 'Instructions'")
+    && !uiHtml.includes("'memoryLab.instructions': '说明'")
+    && !uiHtml.includes("esc(lab.indexPath || '')"),
+  'ui html: Memory Lab removes the path-bearing instructions disclosure from the user surface');
   assert(uiHtml.includes("window.openSubWin(t('model.addProvider')") && uiHtml.includes("window.openSubWin(t('model.addModel')") && uiHtml.includes("window.openSubWin(t('model.fuzzy')"), 'ui html: model secondary windows use i18n titles');
   assert(uiHtml.includes('window.setAutoSwitchMode') && uiHtml.includes("t('model.autoSwitchOff')") && uiHtml.includes("t('model.autoSwitchAll')") && uiHtml.includes("t('model.autoSwitchProvider')"), 'ui html: model settings expose off/full/provider Auto switch modes');
   assert(uiHtml.includes('window.setOpenAIApiMode') && uiHtml.includes("t('model.openAIApiMode')") && uiHtml.includes('value="chat_stream"') && uiHtml.includes('value="responses"'), 'ui html: model settings expose OpenAI-compatible Chat streaming and Responses API modes');
@@ -369,6 +381,8 @@ async function main() {
   assert(uiHtml.includes("window.openSubWin(t('model.validationTitle')") && uiHtml.includes("window.openSubWin(t('archive.titlePrefix') + ': '") && uiHtml.includes("window.openSubWin(t('workspace.requiredTitle')") && uiHtml.includes("window.openSubWin(t('workspace.newConversation')"), 'ui html: legacy secondary windows use i18n titles');
   assert(uiHtml.includes("t('workspace.selectOrCreate')") && uiHtml.includes("t('conversation.archive')") && uiHtml.includes("t('flow.runningPlaceholder')") && uiHtml.includes("t('subagent.empty')") && uiHtml.includes("t('fileTree.unavailable')"), 'ui html: workspace gate, conversation, Flow, subagent, and file-tree labels use i18n');
   assert(uiHtml.includes("label.textContent = t('queue.title')") && uiHtml.includes("t('status.contextCompressed')") && uiHtml.includes("t('model.noValidationModels')") && uiHtml.includes("prompt(t('todo.addPrompt'))"), 'ui html: runtime dynamic text uses i18n helpers');
+  assert(uiHtml.includes("'todo.tasks': 'Task'") && uiHtml.includes("'todo.tasks': '任务'") && !uiHtml.includes("'todo.tasks': 'Tasks'"), 'task bar: localized title is singular Task / 任务');
+  assert(agentLoopTs.includes('const shouldStop = terminatedByTool || await config.shouldStopAfterTurn'), 'agent loop: terminating question/tool boundary cannot be overridden by generic turn continuation');
   const modelValidationGuard = uiHtml.indexOf('if (!hasBaseModel) {');
   const modelValidationStart = uiHtml.indexOf('window.showModelValidationProgress();', modelValidationGuard);
   assert(modelValidationGuard >= 0
@@ -415,17 +429,48 @@ async function main() {
   assert(uiHtml.includes('function handlePlanExecutionChoice')
     && uiHtml.includes("setVisibleMode('build')")
     && uiHtml.includes("setVisibleMode('plan')")
-    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('After the plan is complete, use the question tool'),
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('Only after the durable linked plan has actually been updated')
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('HARD REQUIREMENT: proactively call linked_plan get')
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('never replace it with a one-turn chat summary')
+    && !fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8').includes('updateLinkedPlan(lastAssistant'),
   'Plan mode: keeps the Plan label, maintains the linked plan, and offers explicit Build execution or Plan supplementation');
   assert(uiHtml.includes('goalRequest.goalDeclaration = true')
     && uiHtml.includes('goalObjective: requestedMode === \'goal\'')
-    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8').includes('agent.canAutoContinueGoal()'),
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8').includes('scheduleGoalContinuation(runtime, runId)'),
   'Goal mode: Goal Guide/Next updates the Goal objective and autonomous hidden continuation yields to queued user work');
-  assert(uiHtml.includes("if (state.mode === 'flow') window.setInputMode('guide')")
-    && uiHtml.includes('window.submitSelectedFlow = function()')
+  assert(uiHtml.includes('function activateSubmittedGoal(goalObjective)')
+    && uiHtml.includes('state.goalVisible = true')
+    && uiHtml.includes('requestMessage.goalObjective = String(opts.goalObjective || rawText || \'\').trim()')
+    && uiHtml.includes("if (requestedMode === 'goal' && status !== 'rejected') activateSubmittedGoal")
+    && uiHtml.includes("if (requestedMode === 'goal') activateSubmittedGoal(opts.goalObjective || rawText)"),
+  'Goal mode: accepted Guide, queued Next, and idle Build submissions activate the Goal bar while carrying the objective atomically to Build execution');
+  assert(uiHtml.indexOf('id="goal-pause-btn"') < uiHtml.indexOf('id="goal-delete-btn"')
+    && uiHtml.includes('window.deleteGoal = function()')
+    && uiHtml.includes('api.clearGoal(target)')
+    && uiHtml.includes("if (state.mode === 'goal') restoreModeAfterGoalEdit('build')"),
+  'Goal bar: equal-size edit/pause/delete actions place delete on the right and clearing Goal does not stop the active Build');
+  assert(uiHtml.includes("state.pendingInputEdit = { kind: 'goal', target: currentConversationTarget(), previousMode: previousMode }")
+    && uiHtml.includes("els['mode-select'].value = 'goal'")
+    && uiHtml.includes('restoreModeAfterGoalEdit(previousGoalEditMode)'),
+  'Goal edit: editing from another mode temporarily selects Goal and restores the prior mode after submission');
+  assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('Continue working exclusively toward the current Goal bar objective')
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('Do not revive, resume, execute, or independently evaluate any historical unfinished task')
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('hiddenUserInput: true')
+    && !fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('unless they are strictly necessary to complete this exact Goal'),
+  'Goal continuation: hidden automatic Build instructions focus only on the current Goal and never revive historical unfinished tasks');
+  assert(uiHtml.includes('window.submitSelectedFlow = function()')
     && uiHtml.includes('window.renderFlowTakeover = function(active, name)')
+    && uiHtml.includes("if (state.mode === 'flow' || state._flowRunning)")
+    && uiHtml.includes('window.submitCurrentAction();')
     && uiHtml.includes('api.guideFlow')
     && uiHtml.includes('api.stopFlow')
+    && uiHtml.includes('state._flowQueueLease')
+    && uiHtml.includes('window.stopFlowRun({ resumeQueue: true })')
+    && uiHtml.includes('id="flow-prompt-bar"')
+    && uiHtml.includes('state.flowPromptText = flowInput')
+    && uiHtml.includes("flowSel.dataset.newmarkVisible = nextMode === 'flow' ? 'true' : 'false'")
+    && !uiHtml.includes('flowQueueRequest.flowOwned = true')
+    && !uiHtml.includes("'flow-queue-active'")
     && uiHtml.includes("await setVisibleMode('build')")
     && fs.readFileSync(path.join(process.cwd(), 'scripts', 'dev018-mode-ui-smoke.cjs'), 'utf-8').includes('nextAfterFlowExit')
     && uiHtml.includes('class="input-float-stack"')
@@ -434,7 +479,15 @@ async function main() {
     && fs.readFileSync(path.join(process.cwd(), 'scripts', 'dev018-mode-ui-smoke.cjs'), 'utf-8').includes('Scroll-to-bottom button overlaps the Flow takeover bubble')
     && preloadSource.includes("ipcRenderer.invoke('flow:guide'")
     && preloadSource.includes("ipcRenderer.invoke('flow:stop'"),
-  'Flow mode: disables Next, expands the selected workflow input, allows Guide only, shows takeover, and supports explicit stop');
+  'Flow mode: uses a paused queue lease, expands the selected workflow input, permits Next and idle Guide, shows takeover, restores the prior pause state, and exits when the user resumes the queue');
+  const modePersistenceMainTs = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf-8');
+  const modePersistenceKernelTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8');
+  assert(modePersistenceMainTs.includes("ipcMain.handle('agent:setMode'")
+    && modePersistenceMainTs.includes('ensureConversationKernel(root)?.setMode(target, nextMode);')
+    && modePersistenceKernelTs.includes('setMode(target: ConversationTargetInput, mode: AgentMode)')
+    && modePersistenceKernelTs.includes('runner.saveWorkspaceConversationState(true);')
+    && modePersistenceKernelTs.includes('if (runtime) runtime.options.mode = mode;'),
+  'mode persistence: Plan, Goal, and Flow update the target-bound runner, persisted snapshot, and resident runtime options together');
   assert(uiHtml.includes('function updateSubmitButtonState()') && uiHtml.includes("setSubmitButtonVisual(escalating ? 'octagon-x' : 'square', label, true, true)") && uiHtml.includes("setSubmitButtonVisual('send', t('input.send'), running, false)") && uiHtml.includes("els.prompt.addEventListener('input'") && uiHtml.includes("['stopping', 'force_restarting']"), 'ui html: submit button switches between Send, Stop, and Force stop from the target runtime state');
   assert(uiHtml.includes("window.setAgentBackendMode = async function(mode)") && uiHtml.includes('id="agent-runtime-environment"') && uiHtml.includes("state.wslAvailable ? '' : ' disabled'") && uiHtml.includes("t('settings.restartRequired')") && !uiHtml.includes('window.setAgentWslBackend'), 'ui html: Windows native/WSL backend is a restart-required list choice and WSL mode is disabled when unavailable');
   assert(uiHtml.includes('if (api.setMode) await api.setMode(executionMode)') && uiHtml.includes('if (api.setModel && state.model) await api.setModel(state.model)'), 'ui html: send synchronizes the per-turn execution mode and model without rewriting the visible input mode');
@@ -478,6 +531,12 @@ async function main() {
   assert(uiHtml.includes('[data-theme="light"] #right.open') && /\[data-theme="light"\] #right\.open\s*\{\s*box-shadow:\s*none;\s*\}/.test(uiHtml), 'ui light theme: right sidebar removes the dark left-edge shadow');
   assert(uiHtml.includes('[data-theme="light"] .stack-card') && uiHtml.includes('[data-theme="light"] #queue-panel') && uiHtml.includes('[data-theme="light"] .queue-item:hover') && uiHtml.includes('[data-theme="light"] .queue-edit'), 'ui light theme: queue stack, rows, controls, and editable text use readable light surfaces');
   assert(uiHtml.includes('[data-theme="light"] #goal-bar') && uiHtml.includes('rgba(255,255,255,0.82) 36%') && uiHtml.includes('[data-theme="light"] #goal-bar.goal-paused'), 'ui light theme: Goal emphasis fades into a white glass mask instead of the dark stack surface');
+  assert(uiHtml.includes('[data-theme="light"] .flow-takeover')
+    && uiHtml.includes('[data-theme="light"] #flow-prompt-bar')
+    && uiHtml.includes('[data-theme="light"] .option-block')
+    && uiHtml.includes('[data-theme="light"] .option-block .option-btn.selected')
+    && fs.readFileSync(path.join(process.cwd(), 'scripts', 'dev018-mode-ui-smoke.cjs'), 'utf-8').includes('lightThemeResult'),
+  'ui light theme: Flow takeover bubble, Flow prompt, Goal/queue stack, and question choice cards have explicit readable light surfaces with packaged runtime coverage');
   assert(uiHtml.includes('[data-theme="light"] .memory-lab-overview-node') && uiHtml.includes('[data-theme="light"] .memory-lab-overview-title') && uiHtml.includes('[data-theme="light"] .memory-lab-node.selected') && uiHtml.includes('[data-theme="light"] .memory-lab-overview-grid'), 'ui light theme: Memory Lab controls, nodes, status pills, and graph grid use harmonious light surfaces');
   assert(uiHtml.includes("activity.key === 'memory_lab'") && uiHtml.includes('更新了记忆') && uiHtml.includes('Updated memory'), 'ui work run: Memory Lab rebuild receipt is rendered only as an in-block tool activity completion');
   assert(uiHtml.includes("name === 'skill' || name === 'skill_download'")
@@ -532,17 +591,41 @@ async function main() {
   assert(uiHtml.includes('guideMessageIndexByClientId: {}') && uiHtml.includes("messageActionsHtml('user', content, indexed ? messageIndex : -1)") && uiHtml.includes('function hydrateWorkRunGuideMessages(root, run)') && agentSourceForEditor.includes("status: 'interrupted' as const") && agentSourceForEditor.includes('run.events.slice(0, eventCut)') && agentSourceForEditor.includes('run.guides.slice(0, guideCut)') && agentSourceForEditor.includes('const branchPageReplacement = !!incoming.branchReset || !!incoming.tree || !!incoming.branches?.length;') && agentSourceForEditor.includes('preferred.workRuns = branchPageReplacement'), 'ui/core: every Guide has one-click copy, persisted Guides are editable, and every branch page replaces rather than merges its transcript and Build tree');
   assert(uiHtml.includes('.conversation-work-file-inline > summary { display: grid; grid-template-columns: 17px minmax(0,max-content) auto 10px;') && uiHtml.includes('.conversation-work-file-inline .conversation-work-file-name { font: inherit; }'), 'ui html: edited-file rows share the terminal tool icon/text columns without a flexible blank spacer or mismatched font');
   assert(preloadSource.includes("rewindConversation: (target: string | Record<string, unknown>, messageIndex: number) => ipcRenderer.invoke('agent:rewindConversation'") && mainSource.includes("ipcMain.handle('agent:rewindConversation'") && mainSource.includes('mutateTargetConversation(target') && mainSource.includes('ensureWslConversationPool()!.rewind(target, messageIndex)') && mainSource.includes('ensureElectronUtilityPool().rewind(target, messageIndex)'), 'main/preload: conversation rewind is target-bound, mutation-guarded, and executes inside the selected WSL or Utility runtime');
-  assert(uiHtml.includes('function optionLabel(option)') && uiHtml.includes('function renderPendingOptionsInChat(options)') && uiHtml.includes("state.renderedOptionKeys[key] = true"), 'ui html: pending option feedback renders into chat once');
+  assert(uiHtml.includes('function optionLabel(option)')
+    && uiHtml.includes('function renderPendingOptionsInChat(options)')
+    && uiHtml.includes("state.renderedOptionKeys[key] = true")
+    && uiHtml.includes("querySelector('[data-option-question=\"' + encodedKey + '\"]')")
+    && uiHtml.includes('renderPendingOptionsInChat(state.pendingOptions || []);'),
+  'ui html: pending option feedback is deduplicated by live DOM presence and restored after every transcript redraw');
   assert(uiHtml.includes('if (r && r.options)') && uiHtml.includes('renderPendingOptionsInChat(state.pendingOptions)') && uiHtml.includes("optionDescription(opt)"), 'ui html: send result and right status render structured option labels');
   assert(uiHtml.includes('pendingOptionAnswers: {}') && uiHtml.includes('window.optionSelected = function(questionKey, opt, button)') && uiHtml.includes("answered.some(function(item) { return item.answer === undefined; })") && uiHtml.includes("window.sendMessage();"), 'ui option feedback: records each question selection and resumes only after every simultaneous question is answered');
   assert(uiHtml.includes("'settings.runInWsl': 'Agent runtime environment'") && uiHtml.includes("'settings.runInWsl': 'Agent 运行环境'") && uiHtml.includes('id="agent-runtime-environment"') && uiHtml.includes('<option value="windows"') && uiHtml.includes('<option value="wsl"'), 'settings: Agent runtime environment uses a Windows native/WSL select list with localized title');
   assert(uiHtml.includes('#input-tools {') && uiHtml.includes('overflow: visible;'), 'input toolbar: permits submit hover and running marquee pixels outside the fixed button box without clipping');
-  assert(uiHtml.includes('window.runFlowWork = async function(workIdx)') && uiHtml.includes('await api.saveFlow(normalized)') && uiHtml.includes('api.runFlow(normalized.name, flowInput, 0)') && uiHtml.includes('renderChatMessages(r.chatMessages)'), 'ui html: Flow Run uses the constrained Flow API and backend core runner');
-  assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'flow-runner.ts'), 'utf-8').includes('agent.beginConversationWorkRun')
-    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'flow-runner.ts'), 'utf-8').includes("agent.finishConversationWorkRun(runId, 'completed')"),
-  'Flow runner: each structure-driven component owns a persisted Build block when no parent Build already exists');
-  assert(uiHtml.includes('function stopFlowRunInternal()') && uiHtml.includes('window.stopFlowRun = async function()') && uiHtml.includes('stopFlowRunInternal();') && !uiHtml.includes('window.stopFlowRun = function() {\n  stopFlowRun();'), 'ui html: Flow stop handler avoids global recursive self-call');
-  assert(uiHtml.includes("conversationRunning && effectiveInputMode === 'guide'") && uiHtml.includes("effectiveInputMode === 'next' && !opts.fromQueue && conversationRunning") && uiHtml.includes("idleBuildNextImmediate = requestedMode === 'build' && effectiveInputMode === 'next' && !opts.fromQueue && !conversationRunning") && uiHtml.includes('state.nextQueue.push(displayText)') && uiHtml.includes('bindQueuedRequestToTarget(requestMessage, rawText, lockedTarget') && uiHtml.includes('queuedRequestMatchesTarget') && uiHtml.includes('queueMicrotask(function()') && !uiHtml.includes('}, 250);') && !uiHtml.includes('}, 80);') && uiHtml.includes('state.queueCollapsed = false') && uiHtml.includes('queuePausedByTarget') && uiHtml.includes('rebindQueueToRuntimeBranch'), 'ui html: idle Build-Next starts immediately while Plan/Goal preserve their requested mode and active-run Next stays runtime-bound');
+  assert(uiHtml.includes('window.runFlowWork = async function(workIdx)') && uiHtml.includes('await api.saveFlow(normalized)') && uiHtml.includes('api.runFlow(normalized.name, flowInput, 0)') && uiHtml.includes('renderChatMessages(r.chatMessages)') && uiHtml.includes('renderConversationWorkRuns(r.workRuns, flowTarget)'), 'ui html: Flow Run uses the constrained Flow API and returns every component-owned Build block');
+  const flowRunnerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'flow-runner.ts'), 'utf-8');
+  assert(flowRunnerSource.includes('agent.beginConversationWorkRun')
+    && flowRunnerSource.includes("agent.finishConversationWorkRun(runId, 'completed')")
+    && flowRunnerSource.includes('agent.flushWorkspaceConversationState()')
+    && flowRunnerSource.includes('cannot start before the previous Build block has terminated'),
+  'Flow runner: every structure-driven component owns and flushes a distinct Build block before the planner advances');
+  assert(flowRunnerSource.includes("visibleMode: 'flow-user-input'")
+    && flowRunnerSource.includes("activityVisibility: 'result-only'")
+    && flowRunnerSource.includes('Flow 判定：')
+    && flowRunnerSource.includes('Flow 跳转：')
+    && uiHtml.includes("'flow.userInput': 'Flow-用户输入'")
+    && uiHtml.includes("wrapper.classList.toggle('flow-result-only'"),
+  'Flow logic UI: shows only the configured decision statement and deterministic Agent decision/jump while hiding orchestration and internal activity');
+  assert(uiHtml.includes("flowCompletedNormally ? {} : { keepPaused: true }")
+    && uiHtml.includes("options.keepPaused === true")
+    && uiHtml.includes("if (flowCompletedNormally && settlement && settlement.shouldDrain)"),
+  'Flow failure: abnormal or interrupted blocks exit takeover while keeping the queue paused and never draining it');
+  assert(uiHtml.includes('function stopFlowRunInternal(options)') && uiHtml.includes('window.stopFlowRun = async function(options)') && uiHtml.includes('var settlement = stopFlowRunInternal(options)') && !uiHtml.includes('window.stopFlowRun = function() {\n  stopFlowRun();'), 'ui html: Flow stop handler avoids global recursive self-call');
+  assert(uiHtml.includes("conversationRunning && effectiveInputMode === 'guide'") && uiHtml.includes("effectiveInputMode === 'next' && !opts.fromQueue && conversationRunning") && uiHtml.includes("idleBuildNextImmediate = requestedMode === 'build' && effectiveInputMode === 'next' && !opts.fromQueue && !conversationRunning") && uiHtml.includes('state.nextQueue.push(displayText)') && uiHtml.includes('bindQueuedRequestToTarget(requestMessage, rawText, lockedTarget') && uiHtml.includes('queuedRequestMatchesTarget') && uiHtml.includes('queueMicrotask(function()') && !uiHtml.includes('}, 80);') && uiHtml.includes('state.queueCollapsed = false') && uiHtml.includes('queuePausedByTarget') && uiHtml.includes('rebindQueueToRuntimeBranch'), 'ui html: idle Build-Next starts immediately while Plan/Goal preserve their requested mode and active-run Next stays runtime-bound');
+  assert(uiHtml.includes('state.nextQueue.splice(currentIndex, 1);')
+    && uiHtml.indexOf('state.nextQueue.splice(currentIndex, 1);') < uiHtml.indexOf("var sendAttempt = window.sendMessage('guide', next")
+    && uiHtml.includes('state.nextQueue.splice(rollbackIndex, 0, next);')
+    && uiHtml.includes('state.nextQueueDrainsByTarget[targetKey] === drainToken'),
+  'queue drain: claims and removes the head before send, rolls back failed starts, and keeps one drain owner until settlement');
   assert(uiHtml.includes('id="terminal-timeout-input"') && uiHtml.includes('Max ms') && uiHtml.includes('Terminal timeout cap') && uiHtml.includes('window.setTerminalInterruptTimeout = function(value)') && uiHtml.includes("api.saveSetting('terminal', 'interrupt_timeout_ms', n)"), 'ui html: terminal timeout cap is editable and persisted');
   const agentKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
   const piKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
@@ -593,7 +676,7 @@ async function main() {
   assert(mainKernelSource.includes('if (conversationKernel?.isAnyRunning()) return;'), 'kernel: desktop settings changes do not discard running conversation kernels');
   assert(mainKernelSource.includes('...conversationSnapshot') && mainKernelSource.includes('ensureElectronUtilityPool().snapshot(target)') && mainKernelSource.includes('ensureWslConversationPool()!.snapshot(target)'), 'kernel: desktop IPC exposes queue state from the requested isolated runtime snapshot');
   assert(uiHtml.includes('window.refreshSkillsRuntime = function(next)') && uiHtml.includes('api.refreshSkills().then(done)') && uiHtml.includes('window.refreshSkillsRuntime(function(){ window.showPluginList'), 'ui html: skills changes refresh runtime without restart');
-  assert(uiHtml.includes("state.pendingInputEdit = { kind: 'goal'") && uiHtml.includes('goalRequest.goalDeclaration = true') && uiHtml.includes('goalObjective: editedValue') && uiHtml.includes('api.toggleGoalPause().then'), 'ui html: Goal edits return to the input box, Next targets the next Build, Guide targets the active Build, and pause stays synchronized');
+  assert(uiHtml.includes("state.pendingInputEdit = { kind: 'goal'") && uiHtml.includes('goalRequest.goalDeclaration = true') && uiHtml.includes('goalObjective: editedValue') && uiHtml.includes('api.toggleGoalPause(currentConversationTarget()).then'), 'ui html: Goal edits return to the input box, Next targets the next Build, Guide targets the active Build, and pause stays synchronized');
   assert(uiHtml.includes('window.setRightWidthPx = function(px)') && uiHtml.includes("document.documentElement.style.setProperty('--right-width', rightSize + 'px')") && uiHtml.includes('if (els.right) els.right.style.width = \'\';'), 'ui html: right resize stores width in CSS variable and clears inline width');
   assert(uiHtml.includes('window.setRightCollapsed = function(collapsed)') && uiHtml.includes('els.right.style.width = \'\';') && uiHtml.includes("els.right.classList.toggle('open', !state.rightCollapsed);"), 'ui html: right collapse releases inline width and open class');
   assert(uiHtml.includes('window.toggleRight = function()') && uiHtml.includes('window.setRightCollapsed(!state.rightCollapsed);'), 'ui html: right toggle uses unified collapse state');
@@ -984,8 +1067,15 @@ async function main() {
   assert(packageJson.includes('"release:ui-agent-smoke"') && releaseUiAgentSmoke.includes('window.sendMessage()') && releaseUiAgentSmoke.includes('release-ui-agent-mock') && releaseUiAgentSmoke.includes('ACTIVE_TOOLCHAIN_RESULT_OK_20260627_SCRIPT'), 'release ui agent smoke: drives real packaged renderer send path with mock model');
   assert(packageJson.includes('"msi"') && packageJson.includes('"perMachine": true') && packageJson.includes('"runAfterFinish": false') && packageJson.includes('patch-msi-project.cjs'), 'windows MSI: installs per-machine, does not auto-launch, and cleans running Newmark processes before file replacement');
   assert(releaseUiAgentSmoke.includes("'write,bash,edit,read'") && releaseUiAgentSmoke.includes('"timeout_ms":10000') && releaseUiAgentSmoke.includes('terminal timeout cap ok') && releaseUiAgentSmoke.includes("document.querySelector('.conversation-work-run')") && releaseUiAgentSmoke.includes("document.querySelectorAll('.run-final-response')") && releaseUiAgentSmoke.includes("waitFor(cdp, `!!document.querySelector('.work-review-btn')"), 'release ui agent smoke: validates write bash edit read tools, Build-owned final output, completion review, and terminal timeout cap without depending on sidebar casing or raw tool receipts');
-  assert(packageJson.includes('"release:ui-acceptance-smoke"') && releaseUiAcceptanceSmoke.includes("window.api.createWorkspace('acceptance-workspace')") && releaseUiAcceptanceSmoke.includes("window.api.sendMessage('ACCEPTANCE_BUILD_WRITE") && releaseUiAcceptanceSmoke.includes("window.api.sendMessage('ACCEPTANCE_PLAN_BLOCK"), 'release ui acceptance smoke: covers workspace creation, Build send, and Plan send in packaged UI');
-  assert(releaseUiAcceptanceSmoke.includes("window.api.updateGoal('ACCEPTANCE_GOAL") && releaseUiAcceptanceSmoke.includes('window.api.toggleGoalPause()') && releaseUiAcceptanceSmoke.includes("window.api.runFlow('acceptance-flow'") && releaseUiAcceptanceSmoke.includes('window.api.archive()'), 'release ui acceptance smoke: covers Goal pause/resume, Flow run, and workspace archive');
+  assert(packageJson.includes('"release:ui-acceptance-smoke"') && releaseUiAcceptanceSmoke.includes("window.api.createWorkspace('acceptance-workspace')") && releaseUiAcceptanceSmoke.includes("window.api.sendMessage('ACCEPTANCE_BUILD_WRITE") && releaseUiAcceptanceSmoke.includes("window.api.sendMessage('ACCEPTANCE_PLAN_BLOCK") && releaseUiAcceptanceSmoke.includes("s && s.mode === 'plan'"), 'release ui acceptance smoke: covers workspace creation, Build send, and a state-confirmed Plan permission probe in packaged UI');
+  assert(releaseUiAcceptanceSmoke.includes("window.api.updateGoal('ACCEPTANCE_GOAL")
+    && releaseUiAcceptanceSmoke.includes('window.api.toggleGoalPause()')
+    && releaseUiAcceptanceSmoke.includes("window.api.runFlow('acceptance-flow'")
+    && releaseUiAcceptanceSmoke.includes('ACCEPTANCE_FLOW_DECISION')
+    && releaseUiAcceptanceSmoke.includes("visibleLogicReply.content !== 'Flow 判定：true\\nFlow 跳转：#50'")
+    && releaseUiAcceptanceSmoke.includes('INTERNAL_FLOW_ARCHITECTURE_MUST_STAY_HIDDEN')
+    && releaseUiAcceptanceSmoke.includes('window.api.archive()'),
+  'release ui acceptance smoke: covers Goal pause/resume, per-component Flow completion, hidden logic activity, conditional jump, and workspace archive');
   assert(releaseUiAcceptanceSmoke.includes('restart restore ok') && releaseUiAcceptanceSmoke.includes("s.workspaces.current.name === 'acceptance-workspace'") && releaseUiAcceptanceSmoke.includes('conversationId') && releaseUiAcceptanceSmoke.includes('release-ui-acceptance-mock'), 'release ui acceptance smoke: covers restart restore and mock model path');
   assert(packageJson.includes('"release:ui-integration-smoke"') && releaseUiIntegrationSmoke.includes('--remote-debugging-port=') && releaseUiIntegrationSmoke.includes('window.sendMessage()') && releaseUiIntegrationSmoke.includes('release-ui-integration-mock'), 'release ui integration smoke: drives real packaged renderer send path through CDP mock provider');
   assert(releaseUiIntegrationSmoke.includes('browser_open') && releaseUiIntegrationSmoke.includes('browser_snapshot') && releaseUiIntegrationSmoke.includes('browser_type') && releaseUiIntegrationSmoke.includes('browser_click') && releaseUiIntegrationSmoke.includes('browser_eval'), 'release ui integration smoke: covers browser open snapshot type click eval tools');
@@ -1022,9 +1112,9 @@ async function main() {
   assert(releaseUiGemmaRemovalSmoke.includes('LocalRuntimeCheck') && releaseUiGemmaRemovalSmoke.includes('http://127.0.0.1:11434/v1') && releaseUiGemmaRemovalSmoke.includes('local-runtime-manual-model'), 'release ui Gemma removal smoke: verifies manual local OpenAI-compatible provider/model path');
   assert(releaseUiGemmaRemovalSmoke.includes('2026-06-29-release-gemma-removal-visual.png') && releaseUiGemmaRemovalSmoke.includes('Page.captureScreenshot'), 'release ui Gemma removal smoke: captures visual evidence');
   assert(packageJson.includes('"release:ui-flow-subagent-smoke"') && releaseUiFlowSubagentSmoke.includes('--remote-debugging-port=') && releaseUiFlowSubagentSmoke.includes('window.sendMessage()') && releaseUiFlowSubagentSmoke.includes('release-ui-flow-subagent-mock'), 'release ui Flow/subagent smoke: drives real packaged renderer send path through CDP mock provider');
-  assert(releaseUiFlowSubagentSmoke.includes('flow_save') && releaseUiFlowSubagentSmoke.includes('flow_list') && releaseUiFlowSubagentSmoke.includes('flow_run') && releaseUiFlowSubagentSmoke.includes('FLOW_COMPONENT_RUNTIME_INPUT'), 'release ui Flow/subagent smoke: covers agent-designed Flow save, list, and trigger');
+  assert(releaseUiFlowSubagentSmoke.includes('flow_save') && releaseUiFlowSubagentSmoke.includes('flow_list') && releaseUiFlowSubagentSmoke.includes("window.api.runFlow('agent-designed-release-flow'") && releaseUiFlowSubagentSmoke.includes('FLOW_COMPONENT_RUNTIME_INPUT'), 'release ui Flow/subagent smoke: covers agent-designed Flow save, list, and trigger');
   assert(releaseUiFlowSubagentSmoke.includes('task') && releaseUiFlowSubagentSmoke.includes('subagent_send') && releaseUiFlowSubagentSmoke.includes('subagent_result') && releaseUiFlowSubagentSmoke.includes('subagent_close'), 'release ui Flow/subagent smoke: covers subagent create, continue, result, and close');
-  assert(releaseUiFlowSubagentSmoke.includes("window.switchRightTab('subagent')") && releaseUiFlowSubagentSmoke.includes("window.openSubagentHistory('release-child')") && releaseUiFlowSubagentSmoke.includes('Subagent history is read-only'), 'release ui Flow/subagent smoke: validates retained read-only subagent history UI');
+  assert(releaseUiFlowSubagentSmoke.includes("window.switchRightTab('subagent')") && releaseUiFlowSubagentSmoke.includes('window.openSubagentHistory(${JSON.stringify(childState.name)})') && releaseUiFlowSubagentSmoke.includes('Subagent history is read-only'), 'release ui Flow/subagent smoke: validates retained read-only subagent history UI');
   assert(packageJson.includes('"release:ui-media-md-smoke"') && releaseUiMediaMdSmoke.includes('--remote-debugging-port=') && releaseUiMediaMdSmoke.includes('window.api.createWorkspace') && releaseUiMediaMdSmoke.includes('addMsg('), 'release ui media/md smoke: drives real packaged renderer without model spend');
   assert(releaseUiMediaMdSmoke.includes('data:image/gif;base64') && releaseUiMediaMdSmoke.includes('.msg-image') && releaseUiMediaMdSmoke.includes('.msg-file-link') && releaseUiMediaMdSmoke.includes('.md-table') && releaseUiMediaMdSmoke.includes('.md-math-inline') && releaseUiMediaMdSmoke.includes('.md-math-block'), 'release ui media/md smoke: validates conversation markdown image, file-link, table, and math rendering');
   assert(releaseUiMediaMdSmoke.includes("window.openFile('media-doc.md')") && releaseUiMediaMdSmoke.includes("window.openFile('media-link-target.txt')")
@@ -1076,6 +1166,8 @@ async function main() {
   assert(releaseUiMultiWindowSharedBackendSmoke.includes("activeSummaryExpression('default')") && releaseUiMultiWindowSharedBackendSmoke.includes('activeSummaryExpression(convA)') && releaseUiMultiWindowSharedBackendSmoke.includes('activeSummaryExpression(convB)'), 'release ui multi-window shared-backend smoke: verifies window A and B active conversations do not overwrite each other');
   assert(packageJson.includes('"release:ui-goal-continuation-smoke"') && releaseUiGoalContinuationSmoke.includes('RELEASE_UI_GOAL_CONTINUATION') && releaseUiGoalContinuationSmoke.includes('mock.getGoalCalls() < 3'), 'release ui goal continuation smoke: covers repeated autonomous Goal model calls');
   assert(releaseUiGoalContinuationSmoke.includes('max[- ]?depth') && releaseUiGoalContinuationSmoke.includes('2026-06-28-release-ui-goal-continuation-smoke.png'), 'release ui goal continuation smoke: rejects max-depth warnings and captures visual evidence');
+  assert(uiHtml.includes('active && terminalEvent && api.getState') && uiHtml.includes('applyReturnedGoalState(snapshot)') && releaseUiGoalContinuationSmoke.includes('completed Goal did not clear its visible bar'), 'goal completion ui: terminal backend continuation refresh clears the Goal bar and restores Build');
+  assert(uiHtml.includes('id="new-model-ctx" type="number" value="128000"') && uiHtml.includes("parseInt(ctxEl.value || '128000') : 128000"), 'model settings: newly added models default to a 128000-token context window');
   assert(packageJson.includes('"release:ui-workspace-lifecycle-smoke"') && releaseUiWorkspaceLifecycleSmoke.includes("window.api.createWorkspace('lifecycle-alpha')") && releaseUiWorkspaceLifecycleSmoke.includes("window.api.selectWorkspace('lifecycle-beta')"), 'release ui workspace lifecycle smoke: covers internal workspace create and switch');
   assert(releaseUiWorkspaceLifecycleSmoke.includes("window.api.deleteWorkspace('lifecycle-alpha')") && releaseUiWorkspaceLifecycleSmoke.includes('Local.json still contains deleted workspace') && releaseUiWorkspaceLifecycleSmoke.includes('deleted internal workspace directory still exists'), 'release ui workspace lifecycle smoke: covers internal workspace deletion registry and directory');
   assert(releaseUiWorkspaceLifecycleSmoke.includes('clearTimeout(callbacks.timer)') && releaseUiWorkspaceLifecycleSmoke.includes('Promise.resolve(window.openWorkspaceManager()).then(() => true)'), 'release ui workspace lifecycle smoke: cleans CDP timers and awaits async workspace manager refresh');
@@ -1177,7 +1269,18 @@ async function main() {
   assert(toolsTs.includes('capture_max_width') && toolsTs.includes('capture_max_height') && toolsTs.includes('minimum: 320') && toolsTs.includes('minimum: 240') && toolsTs.includes('maximum: 2048') && computerUseTs.includes('DEFAULT_CAPTURE_MAX_WIDTH = 1280') && computerUseTs.includes('DEFAULT_CAPTURE_MAX_HEIGHT = 960') && computerUseTs.includes('MAX_CAPTURE_DIMENSION = 2048') && computerUseTs.includes('[Math]::Min(1.0') && computerUseTs.includes('removeEphemeralScreenshot(outPath)'), 'computer_use: observe and app_observe support bounded variable-size, aspect-preserving, no-upscale ephemeral captures');
   assert(toolsTs.includes('trustedComputerUseContext') && toolsTs.includes('allowEphemeralVisionImage: context.allowEphemeralVisionImage === true') && utilityHostToolRouterTs.includes('trustedComputerUseContext.allowEphemeralVisionImage === true') && !utilityHostToolRouterTs.includes('allowEphemeralVisionImage: args.allow_ephemeral_vision_image === true'), 'computer_use: utility host screenshot retention is granted by trusted runtime context rather than model-authored arguments');
   assert(computerUseTs.includes('System.Windows.Forms') && computerUseTs.includes('CopyFromScreen') && computerUseHostTs.includes('SetCursorPos') && computerUseHostTs.includes('UIAutomationClient') && computerUseTs.includes('CacheRequest') && computerUseTs.includes('BoundingRectangle') && computerUseTs.includes('vision_assist') && computerUseTs.includes('target_id') && computerUseTs.includes('stable_key') && computerUseTs.includes('high_priority_objects') && computerUseTs.includes('intersectionOverUnion') && computerUseTs.includes('normalized_bbox') && computerUseTs.includes('allowed_actions') && computerUseTs.includes('compactSemanticObjects') && computerUseTs.includes('scrollAt') && computerUseTs.includes('executeSequence') && computerUseTs.includes('requires_observe') && computerUseTs.includes('startTakeoverOverlay') && computerUseTs.includes('lastTakeoverOverlayStyle') && computerUseTs.includes('colors: options.gradientColors || options.gradient_colors') && computerUseTs.includes('speed: options.gradientSpeed ?? options.gradient_speed') && computerUseTs.includes('width: options.gradientWidth ?? options.gradient_width') && computerUseTs.includes("options.invocation === 'cli' && durationMs > 0 ? 0 : process.pid") && computerUseTs.includes("const lifecycle = ownerPid > 0 ? 'owner-process-bound' : 'duration-bound'") && computerUseTs.includes('desktop-edge-dynamic-gradient') && computerUseTs.includes('single-click-through-virtual-screen-overlay') && computerUseTs.includes('WS_EX_TRANSPARENT') && !computerUseTs.includes('WS_EX_LAYERED') && !computerUseTs.includes('TransparencyKey') && computerUseTs.includes('public class NewmarkOverlayForm : Form') && computerUseTs.includes('this.DoubleBuffered = true') && computerUseTs.includes('ControlStyles.Opaque') && computerUseTs.includes('OnPaintBackground(PaintEventArgs e)') && computerUseTs.includes('Add-Type -ReferencedAssemblies @("System.Windows.Forms", "System.Drawing") -TypeDefinition') && computerUseTs.includes('$script:brushes') && computerUseTs.includes('$timer.Interval = 33') && computerUseTs.includes('New-Object System.Drawing.Drawing2D.GraphicsPath') && computerUseTs.includes('$regionPath.FillMode = [System.Drawing.Drawing2D.FillMode]::Winding') && computerUseTs.includes('[System.Drawing.Rectangle]::new($bounds.Left, $bounds.Top, $bounds.Width, $bounds.Height)') && computerUseTs.includes('$regionPath.AddRectangle([System.Drawing.Rectangle]::new') && computerUseTs.includes('$script:form.Region = New-Object System.Drawing.Region($regionPath)') && computerUseTs.includes('$perimeter = [Math]::Max(1.0, (2.0 * $w) + (2.0 * $h))') && computerUseTs.includes('$clockwiseOffset = (($script:stopwatch.Elapsed.TotalSeconds / $speedSeconds) * $perimeter) % $perimeter') && computerUseTs.includes('$wrappedDistance = (($distance + ($segment / 2.0)) - $clockwiseOffset) % $perimeter') && computerUseTs.includes('$segment = [Math]::Min($step, $perimeter - $distance)') && computerUseTs.includes('for ($distance = 0.0; $distance -lt $perimeter; $distance += $step)') && computerUseTs.includes('if ($distance -lt $w)') && computerUseTs.includes('elseif ($distance -lt ($w + $h))') && computerUseTs.includes('elseif ($distance -lt ((2.0 * $w) + $h))') && computerUseTs.includes('$ownerTimer = New-Object System.Windows.Forms.Timer') && computerUseTs.includes('Get-Process -Id $script:ownerPid') && computerUseTs.includes('Overlay exited during startup') && computerUseTs.includes('lifecycle') && computerUseTs.includes('$overlayPattern =') && computerUseTs.includes('takeover-overlay-') && computerUseTs.includes('$_.CommandLine -match $overlayPattern') && computerUseTs.includes('$_.ProcessId -ne $selfPid') && computerUseTs.includes('$target.FillRectangle($brush') && !computerUseTs.includes('$script:phase = ($script:phase + 1)') && computerUseTs.includes('[System.Drawing.Color]::FromArgb') && computerUseTs.includes('SetWindowPos($script:form.Handle') && computerUseTs.includes("([wmiclass]'Win32_Process').Create") && computerUseHostTs.includes("spawn('powershell.exe'") && !computerUseTs.includes('spawnSync') && !computerUseTs.includes('Atomics.wait') && computerUseTs.includes('observeAppWindows') && computerUseTs.includes('app_observe') && computerUseTs.includes('app_click') && computerUseTs.includes('NewmarkComputerUseNative') && computerUseTs.includes('tempScreenshotDir') && computerUseTs.includes('screenshot_retention') && computerUseTs.includes('ephemeral-deleted-before-tool-return') && computerUseTs.includes('fs.unlinkSync(outPath)') && toolsTs.includes('gradient_colors) ?') && toolsTs.includes("this.config.get<string[]>('ui', 'gradient_colors')") && toolsTs.includes('gradient_width !== undefined') && toolsTs.includes("this.config.getNum('ui', 'gradient_width')") && !computerUseTs.includes("archive', 'computer-use") && !computerUseTs.includes('github.com/gtt116/enikk') && !computerUseTs.includes('RapidOCR') && !computerUseTs.includes('ultralytics'), 'computer_use: uses persistent async PowerShell lanes, cached UIA, compact semantic results, adaptive sequences, ephemeral screenshots, and a cached 30fps click-through takeover border');
-  assert(agentKernelRunnerTs.includes('computerUseVisionImageInput') && agentKernelRunnerTs.includes('sanitizeVisualToolText') && agentKernelRunnerTs.includes('delete parsed.vision_image_path') && agentKernelRunnerTs.includes('delete parsed.vision_image_data_url') && agentKernelRunnerTs.includes('imagePathToOpenAIContentPart') && agentKernelRunnerTs.includes('fs.unlinkSync(imagePath)') && agentKernelRunnerTs.includes('allowEphemeralVisionImage: name === \'computer_use\'') && providerTs.includes('normalizeOpenAIContent') && providerTs.includes('normalizeAnthropicContent') && providerTs.includes('input_image'), 'computer_use: vision-capable direct, utility, and WSL runtimes receive one-use screenshot input synchronized with UI Automation text, strip it from public tool output, and delete filesystem captures after preparation');
+  assert(agentKernelRunnerTs.includes('computerUseVisionImageInput: visualFallbackImageInput') && agentKernelRunnerTs.includes('sanitizeVisualToolText') && agentKernelRunnerTs.includes('delete parsed.vision_image_path') && agentKernelRunnerTs.includes('delete parsed.vision_image_data_url') && agentKernelRunnerTs.includes('imagePathToOpenAIContentPart') && agentKernelRunnerTs.includes('fs.unlinkSync(imagePath)') && agentKernelRunnerTs.includes("name === 'computer_use' || name === 'browser_use' || name === 'pdf_read'") && providerTs.includes('normalizeOpenAIContent') && providerTs.includes('normalizeAnthropicContent') && providerTs.includes('input_image'), 'computer_use: vision-capable direct, utility, and WSL runtimes receive one-use screenshot input synchronized with UI Automation text, strip it from public tool output, and delete filesystem captures after preparation');
+  const localOcrTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'localOcr.ts'), 'utf-8');
+  const ocrBudgetSmoke = fs.readFileSync(path.join(process.cwd(), 'scripts', 'verify-ocr-package-budget.cjs'), 'utf-8');
+  assert(toolsTs.includes("t('pdf_read'") && toolsTs.includes("t('ocr_read'")
+    && toolsTs.includes("recognition_order: 'text>vision>local_ocr'")
+    && toolsTs.includes("fallbackReason !== 'vision_failed'")
+    && localOcrTs.includes("'chi_sim+eng'")
+    && localOcrTs.includes("'academic-document'")
+    && localOcrTs.includes('For formulas, conservatively restore operators')
+    && ocrBudgetSmoke.includes('10 * 1024 * 1024')
+    && ocrBudgetSmoke.includes("core: 'tesseract-core-simd'"),
+  'OCR/PDF: enforces text then validated vision then sub-10MiB Chinese/English OCR with academic-formula Agent repair guidance');
   assert(agentTs.includes('Agent terminal timeout: bash accepts per-call timeout_ms') && agentTs.includes('is a nonzero upper cap'), 'agent prompt: discloses bash timeout_ms and settings cap semantics');
   assert(agentTs.includes('repo_security_audit') && agentTs.includes('Remote repository safety') && agentTs.includes('public/private visibility') && agentTs.includes('private URLs, secrets, local runtime state'), 'agent prompt: proactively drives remote repository security and privacy review');
   assert(agentTs.includes('GitHub Copilot') && agentTs.includes('https://models.github.ai'), 'agent core: GitHub Copilot/Models provider is inferred to the official GitHub Models endpoint');
@@ -1568,6 +1671,7 @@ async function main() {
   const qDisabled = await tools.execute('question', '{"questions":[]}', TEST_DIR);
   assert(qDisabled.includes('[permission]') && qDisabled.includes('disabled'), 'question: fully autonomous disables options');
   assert(!tools.definitions().some((tool: any) => tool.function?.name === 'question'), 'definitions: fully autonomous hides question tool');
+  assert(!tools.definitions('plan').some((tool: any) => tool.function?.name === 'question'), 'definitions: fully autonomous also hides discretionary Plan questions');
   cfg.set('agent', 'option_feedback', 'default');
 
   // permissions
@@ -2670,6 +2774,23 @@ async function main() {
   const uiFlowErrors = FlowEngine.validate(uiSavedFlow);
   assert(uiFlowErrors.length === 0, 'validate: UI saved Flow schema is accepted');
   assert(FlowEngine.generateSequence(uiSavedFlow, 0, 'task')[0].prompt === 'Build task', 'generateSequence: UI schema placeholder works');
+  const sparseIdFlow: FlowWorkflow = {
+    name: 'sparse-id-flow',
+    components: [
+      { id: 10, type: 'dialog', mode: 'build', prompt: 'First' },
+      { id: 30, type: 'dialog', mode: 'build', prompt: 'Second' },
+      { id: 50, type: 'logic', prompt: 'Done?', goto_true: 10, goto_false: 30 },
+    ],
+  };
+  assert(FlowEngine.validate(sparseIdFlow).length === 0, 'validate: non-zero and non-contiguous component IDs are accepted');
+  assert(
+    FlowEngine.generateSequence(sparseIdFlow, 10, 'task').map(step => step.id).join(',') === '10,30,50',
+    'generateSequence: sparse dialog IDs advance by configured component order',
+  );
+  assert(
+    FlowEngine.detectCycles(sparseIdFlow).some(cycle => cycle.includes(10) && cycle.includes(30) && cycle.includes(50)),
+    'detectCycles: sparse dialog IDs use configured component order',
+  );
   fs.writeFileSync(path.join(flowDir, 'bom-flow.Flow.json'), '\uFEFF' + JSON.stringify(uiSavedFlow), 'utf-8');
   assert(FlowEngine.load(flowDir, 'bom-flow') !== null, 'load: tolerates UTF-8 BOM Flow files');
 
@@ -2698,6 +2819,39 @@ async function main() {
   assert(continuationPrompts[0] === 'Step one resume input', 'runFlow: resumed step expands start input');
   assert(!continuationPrompts.some(p => p.includes('Step zero')), 'runFlow: resumed flow skips earlier steps');
   assert(continuationModes[0] === 'plan' && continuationModes[1] === 'build', 'runFlow: resumed flow preserves modes');
+  const questionRuns: Array<Record<string, any>> = [];
+  const questionAgent = {
+    mode: 'flow' as AgentMode,
+    pendingOptions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }],
+    workRuns: questionRuns,
+    setMode: (_mode: AgentMode) => {},
+    beginConversationWorkRun(runId: string) {
+      const run = { runId, status: 'running' };
+      questionRuns.push(run);
+      return run;
+    },
+    setConversationWorkRunFlowMetadata: () => true,
+    process: async (): Promise<StreamToken[]> => [{ type: 'text', text: '' }],
+    finishConversationWorkRun(runId: string, status: string) {
+      const run = questionRuns.find(item => item.runId === runId);
+      if (run) run.status = status;
+    },
+    flushWorkspaceConversationState: () => {},
+  } as unknown as Agent;
+  let flowQuestionError: unknown;
+  try {
+    await runFlow(questionAgent, {
+      name: 'question-flow',
+      components: [
+        { type: 'dialog', id: 10, mode: 'build', prompt: 'Ask a question' },
+        { type: 'dialog', id: 30, mode: 'build', prompt: 'Must wait' },
+      ],
+    }, { quiet: true });
+  } catch (error) {
+    flowQuestionError = error;
+  }
+  assert(flowQuestionError instanceof FlowQuestionPendingError && flowQuestionError.componentId === 10, 'runFlow question: suspends at the current component for explicit user input');
+  assert(questionRuns.length === 1 && questionRuns[0].status === 'completed', 'runFlow question: persists and terminates the current Build block before suspension');
   const logicPrompts: string[] = [];
   const logicModes: AgentMode[] = [];
   const logicAgent = {
@@ -2738,6 +2892,63 @@ async function main() {
   assert(retryPrompts.filter(p => p === 'Finish important goal').length === 2, 'runFlow: goal verification failure re-executes component');
   assert(verificationCalls === 2, 'runFlow: verifies retried goal again');
   assert(retryPrompts.includes('Continue after goal'), 'runFlow: advances after goal verification succeeds');
+
+  const boundaryRuns: Array<Record<string, any>> = [];
+  const boundaryInputs: Array<any> = [];
+  const boundaryFinals: Array<{ runId: string; content: string }> = [];
+  let boundaryFlushes = 0;
+  let boundaryMode: AgentMode = 'flow';
+  const boundaryAgent = {
+    get mode() { return boundaryMode; },
+    workRuns: boundaryRuns,
+    setMode(mode: AgentMode) { boundaryMode = mode; },
+    recordWorkStatus: () => {},
+    beginConversationWorkRun(runId: string) {
+      assert(!boundaryRuns.some(run => run.status === 'running'), 'runFlow boundary: planner never starts a component before the previous Build terminates');
+      const run = { runId, status: 'running' };
+      boundaryRuns.push(run);
+      return run;
+    },
+    setConversationWorkRunFlowMetadata(runId: string, flow: Record<string, unknown>) {
+      const run = boundaryRuns.find(item => item.runId === runId);
+      if (run) run.flow = flow;
+      return !!run;
+    },
+    async process(input: any): Promise<StreamToken[]> {
+      boundaryInputs.push(input);
+      const text = String(input && input.text || input);
+      if (text.includes('Read-only Build Logic Evaluation')) return [{ type: 'text', text: 'internal reasoning that must not be displayed\nFLOW_DECISION=true' }];
+      return [{ type: 'text', text: `completed:${text}` }];
+    },
+    isLlmErrorText: () => false,
+    replaceConversationWorkRunFinalResponse(runId: string, content: string) {
+      boundaryFinals.push({ runId, content });
+      return true;
+    },
+    finishConversationWorkRun(runId: string, status: string) {
+      const run = boundaryRuns.find(item => item.runId === runId);
+      if (run) run.status = status;
+      return !!run;
+    },
+    flushWorkspaceConversationState() { boundaryFlushes++; },
+  } as unknown as Agent;
+  const boundaryFlow: FlowWorkflow = {
+    name: 'component-boundary-flow',
+    components: [
+      { type: 'dialog', id: 10, mode: 'build', prompt: 'Dialog {#prompt#}' },
+      { type: 'logic', id: 30, prompt: 'Is dialog complete for {#prompt#}?', goto_true: 50, goto_false: 40 },
+      { type: 'dialog', id: 40, mode: 'build', prompt: 'False branch' },
+      { type: 'dialog', id: 50, mode: 'build', prompt: 'True branch' },
+    ],
+  };
+  await runFlow(boundaryAgent, boundaryFlow, { startPc: 10, startInput: 'FLOW_INPUT', quiet: true });
+  assert(boundaryRuns.length === 3 && boundaryRuns.every(run => run.status === 'completed'), 'runFlow boundary: dialog, logic, and jumped dialog persist as three complete Build blocks');
+  assert(boundaryFlushes === 3, 'runFlow boundary: each completed component flushes before planner continuation');
+  assert(boundaryInputs[0].visibleUserInput === 'Dialog FLOW_INPUT' && boundaryInputs[0].visibleMode === 'flow-user-input', 'runFlow dialog: visible Flow user input is bound to its owning Build');
+  assert(boundaryInputs[1].visibleUserInput === 'Is dialog complete for FLOW_INPUT?' && !boundaryInputs[1].visibleUserInput.includes('Read-only Build Logic Evaluation'), 'runFlow logic: visible user input excludes the internal architecture prompt');
+  assert(boundaryRuns[0].flow.activityVisibility === 'full' && boundaryRuns[1].flow.activityVisibility === 'result-only', 'runFlow visibility: dialog exposes work activity while logic is result-only');
+  assert(boundaryFinals.length === 1 && boundaryFinals[0].content.includes('Flow 判定：true') && boundaryFinals[0].content.includes('Flow 跳转：#50'), 'runFlow logic: Agent reply contains only the decision and jump target');
+  assert(!boundaryInputs.some(input => String(input && input.visibleUserInput || '').includes('False branch')) && boundaryInputs.some(input => String(input && input.visibleUserInput || '').includes('True branch')), 'runFlow planner: waits for the logic result, skips the false branch, and jumps to the configured target');
 
   const agentFlow: FlowWorkflow = {
     name: 'agent-trigger-flow',
@@ -2949,35 +3160,78 @@ async function main() {
   assert(formatText.includes('visible result') && !formatText.includes('<think>') && !formatText.includes('</think>') && !formatText.includes('hidden reasoning'), 'agent output: strips think tags and hidden reasoning from visible tokens');
   assert(!formatAgent.chatMessages.some(m => m.content.includes('</think>') || m.content.includes('hidden reasoning')), 'agent output: stores sanitized assistant messages');
 
-  const reactivatingAgent = new Agent(path.join(TEST_DIR, 'reactivating-agent-runtime'), { agentOnly: true });
+  const linkedPlanAgent = new Agent(path.join(TEST_DIR, 'linked-plan-agent-runtime'));
+  linkedPlanAgent.createInternalWorkspace('linked-plan-auto-write');
+  linkedPlanAgent.setModel('linked-plan-test-model');
+  linkedPlanAgent.setMode('plan');
+  const linkedPlanProvider = new FakeProvider(['# Implementation plan\n\n1. Inspect the target.\n2. Apply and verify the change.']);
+  (linkedPlanAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => linkedPlanProvider;
+  await linkedPlanAgent.process('Create the implementation plan');
+  assert(linkedPlanAgent.getLinkedPlan().markdown === '' && linkedPlanAgent.getLinkedPlan().revision === 0,
+    'Plan mode: a chat response never overwrites the durable conversation linked plan as a one-turn summary');
+  linkedPlanAgent.updateLinkedPlan('# Durable implementation plan\n\n- Inspect\n- Implement\n- Verify', 0);
+  linkedPlanAgent.ensurePlanExecutionQuestion();
+  assert(linkedPlanAgent.getLinkedPlan().revision === 1
+    && linkedPlanAgent.getLinkedPlan().markdown.includes('# Durable implementation plan')
+    && linkedPlanAgent.pendingOptions[0]?.options[0]?.label === 'Yes, execute this plan'
+    && linkedPlanAgent.pendingOptions[0]?.options[1]?.label === 'No, please supplement _____',
+  'Plan mode: revisioned linked_plan edits remain durable and produce an explicit execute-or-supplement choice without selecting for the user');
+  assert(uiHtml.includes("'linkedPlan.title': '已计划'"), 'Plan mode: the linked plan heading is localized as 已计划 in Chinese');
+
+  const reactivatingRoot = path.join(TEST_DIR, 'reactivating-agent-runtime');
+  const reactivatingAgent = new Agent(reactivatingRoot, { agentOnly: true });
+  const reactivatingWorkspace = reactivatingAgent.createInternalWorkspace('goal-sequence-workspace');
   reactivatingAgent.setModel('reactivating-agent-test-model');
   const reactivatingProvider = new FakeProvider(['Not done yet.', 'Goal Complete!']);
   (reactivatingAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => reactivatingProvider;
+  reactivatingAgent.setConversation('goal-sequence');
+  reactivatingAgent.history.push({ role: 'user', content: 'LEGACY_UNFINISHED_TASK must remain dormant' });
   reactivatingAgent.updateGoal('Finish the deterministic goal test');
-  const reactivationTokens = await reactivatingAgent.process('Start goal test');
-  const reactivationText = reactivationTokens.map(t => t.text).join('');
-  assert(reactivatingProvider.calls === 2, 'goal process: unfinished response triggers reactivation');
-  assert(reactivationText.includes('[Goal Complete]'), 'goal process: retried response completes goal');
-  assert(reactivatingAgent.history.some(m => String(m.content).includes('Continue working toward this goal')), 'goal process: continuation prompt recorded');
+  const reactivatingHost = new Agent(path.join(TEST_DIR, 'reactivating-kernel-host'), { agentOnly: true });
+  const reactivatingKernel = new ConversationKernel(reactivatingRoot, reactivatingHost, null, {
+    createRunner: () => reactivatingAgent,
+  });
+  const reactivatingTarget = { workspaceId: String(reactivatingWorkspace.id || 'goal-sequence-workspace'), conversationId: 'goal-sequence' };
+  await reactivatingKernel.prompt(
+    { text: 'Start goal test', goalObjective: 'Finish the deterministic goal test' },
+    reactivatingTarget,
+    { mode: 'goal', model: 'reactivating-agent-test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin' },
+    'followUp',
+  );
+  reactivatingAgent.history.unshift({ role: 'user', content: 'LEGACY_UNFINISHED_TASK must remain dormant' });
+  const reactivationDeadline = Date.now() + 3000;
+  while ((reactivatingProvider.calls < 2 || reactivatingKernel.isRunning(reactivatingTarget)) && Date.now() < reactivationDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  const goalRuns = reactivatingAgent.workRuns.filter(run => run.target.conversationId === 'goal-sequence');
+  assert(reactivatingProvider.calls === 2 && goalRuns.length === 2, 'goal process: unfinished response starts exactly one new Build block');
+  assert(goalRuns[0].runId !== goalRuns[1].runId
+    && goalRuns[0].status === 'completed'
+    && goalRuns[1].status === 'completed'
+    && !!goalRuns[0].endedAt
+    && goalRuns[0].endedAt! <= goalRuns[1].startedAt,
+  'goal process: the previous Build is completed and persisted before the continuation Build starts');
+  assert(!reactivatingAgent.chatMessages.some(m => String(m.content).includes('Continue working exclusively toward the current Goal bar objective'))
+    && !goalRuns[1].primaryPrompt,
+  'goal process: automatic continuation trigger is hidden from chat and Build primary prompt');
+  assert(reactivatingAgent.goal === null && reactivatingAgent.mode === 'build', 'goal process: continuation Build completes and clears Goal mode');
+  const hiddenGoalContinuation = reactivatingAgent.history.find(m => String(m.content).includes('Continue working exclusively toward the current Goal bar objective'));
+  assert(String(hiddenGoalContinuation?.content || '').includes('Finish the deterministic goal test')
+    && String(hiddenGoalContinuation?.content || '').includes('Historical task completion is outside this Goal continuation')
+    && !String(hiddenGoalContinuation?.content || '').includes('LEGACY_UNFINISHED_TASK')
+    && hiddenGoalContinuation?.hidden_user_input === true
+    && hiddenGoalContinuation?.goal_continuation === true,
+  'goal process: hidden continuation contains only the active Goal and never injects historical unfinished work');
 
   const continuingAgent = new Agent(path.join(TEST_DIR, 'continuing-agent-runtime'), { agentOnly: true });
-  continuingAgent.setModel('continuing-agent-test-model');
-  const continuingProvider = new FakeProvider(['Still incomplete.', 'Goal Complete!']);
-  (continuingAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => continuingProvider;
   continuingAgent.updateGoal('Exercise unlimited goal continuation');
-  const continuingTokens = await continuingAgent.process('Start continuing goal');
-  const continuingText = continuingTokens.map(t => t.text).join('');
-  assert(continuingProvider.calls === 2, 'goal process: continues without max-depth guard until complete');
-  assert(!continuingText.includes('max depth'), 'goal process: no max-depth warning');
+  const claimedContinuation = continuingAgent.claimGoalContinuationMessage();
+  assert(claimedContinuation?.hiddenUserInput === true && claimedContinuation.goalContinuation === true, 'goal process: continuation claim produces an internal hidden Build instruction');
 
   const queuedGoalAgent = new Agent(path.join(TEST_DIR, 'queued-goal-runtime'), { agentOnly: true });
-  queuedGoalAgent.setModel('queued-goal-test-model');
-  const queuedGoalProvider = new FakeProvider(['Goal still incomplete.']);
-  (queuedGoalAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => queuedGoalProvider;
   queuedGoalAgent.updateGoal('Yield autonomous continuation to queued user work');
   queuedGoalAgent.setGoalContinuationGate(() => false);
-  await queuedGoalAgent.process('Start queued goal');
-  assert(queuedGoalProvider.calls === 1, 'goal process: pending queue gate prevents a hidden autonomous continuation from overtaking user input');
+  assert(queuedGoalAgent.claimGoalContinuationMessage() === null, 'goal process: pending queue gate prevents a hidden autonomous continuation from overtaking user input');
 
   // Model management
   agent.setModel('test-model');
@@ -3020,6 +3274,14 @@ async function main() {
   assert(sysPrompt.includes('no <think>, </think>') && sysPrompt.includes('hidden-reasoning markers'), 'buildSystemPrompt: forbids hidden reasoning markers in visible replies');
   assert(sysPrompt.includes('Visible output contract') && sysPrompt.includes('sanitized before display'), 'buildSystemPrompt: discloses output sanitization implementation');
   assert(sysPrompt.includes('BUILD MODE'), 'buildSystemPrompt: includes mode instructions');
+  assert(sysPrompt.includes('applies uniformly in Build, Plan, Goal, Flow, and subagent work') && sysPrompt.includes('never invent a selection'), 'question policy: Build and every specialized mode share the global option-feedback contract');
+  agent.config.set('agent', 'option_feedback', 'ask_less');
+  assert(agent.buildSystemPrompt().includes('ask_less. Ask only when a missing user choice would materially change the result'), 'question policy: ask_less prompt is restrictive in ordinary Build mode');
+  agent.config.set('agent', 'option_feedback', 'ask_more');
+  assert(agent.buildSystemPrompt().includes('ask_more. Proactively ask before material product, behavior, scope, or irreversible choices'), 'question policy: ask_more prompt is proactive in ordinary Build mode');
+  agent.config.set('agent', 'option_feedback', 'fully_autonomous');
+  assert(agent.buildSystemPrompt().includes('fully_autonomous. Do not call the question tool'), 'question policy: fully autonomous prompt disables discretionary questions in ordinary Build mode');
+  agent.config.set('agent', 'option_feedback', 'default');
   assert(sysPrompt.includes('bash:'), 'buildSystemPrompt: lists tools');
   assert(sysPrompt.includes('Memory Lab exists and provides persistent memory.'), 'buildSystemPrompt: includes only Memory Lab existence signal');
   assert(!sysPrompt.includes('Memory Lab/index.json') && !sysPrompt.includes('Memory Lab stores persistent local memory') && !sysPrompt.includes('CliMemoryNeedle'), 'buildSystemPrompt: does not include Memory Lab paths, instructions, index, or component content');
@@ -3210,8 +3472,8 @@ async function main() {
   agent.setMode('build');
   const flowToolTokens = await agent.process('Trigger saved workflow');
   const flowToolText = flowToolTokens.map(t => t.text || '').join('');
-  assert(flowToolText.includes('[Flow] Completed: agent-trigger-flow'), 'agent flow_run: executes saved workflow through Agent runtime');
-  assert(flowTriggerCalls.includes('Flow component runtime input'), 'agent flow_run: expands and runs Flow dialog component');
+  assert(flowToolText.includes('[Flow] Deferred: start this workflow from Flow mode after the current Build block has completed'), 'agent flow_run: refuses to nest Flow component Builds inside a parent Build');
+  assert(!flowTriggerCalls.includes('Flow component runtime input'), 'agent flow_run: nested tool invocation cannot bypass the Flow planner boundary');
   assert(agent.mode === 'build', 'agent flow_run: restores parent mode after workflow');
   (agent as any).forcedProvider = null;
 
@@ -3440,7 +3702,7 @@ async function main() {
   goalStateReloaded.markGoalComplete();
   const goalCompleteReloaded = new Agent(TEST_DIR);
   goalCompleteReloaded.setConversationFromStorage(inputModeConversation);
-  assert(goalCompleteReloaded.goal?.verified === true && goalCompleteReloaded.goal?.paused === false, 'goal mode: Goal Complete state is durable after restart');
+  assert(goalCompleteReloaded.goal === null && goalCompleteReloaded.mode === 'build', 'goal mode: Goal Complete clears the Goal bar state and durably returns the conversation to Build');
   agent.nextPrompt = 'Queued task';
   assert(agent.nextPrompt === 'Queued task', 'nextPrompt: stores queued prompt');
 

@@ -294,17 +294,109 @@ async function stressBash(root: string): Promise<Record<string, unknown>> {
   };
 }
 
+async function stressContextModelSwitches(root: string): Promise<Record<string, unknown>> {
+  const runtimeRoot = path.join(root, 'context-switch-runtime');
+  const workspacePath = path.join(root, 'context-switch-workspace');
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  fs.mkdirSync(workspacePath, { recursive: true });
+  const agent = new Agent(runtimeRoot, { agentOnly: true, workspaceRegistryMode: 'detached' });
+  agent.workspace.current = {
+    id: 'context-switch-workspace', name: 'context-switch-workspace', path: workspacePath,
+    isInternal: false, kind: 'local', hostBinding: '', icon: '',
+  };
+  agent.setConversation('context-switch-stress');
+  agent.config.set('context', 'auto_compress', true);
+  agent.config.set('context', 'keep_recent_messages', 10);
+  agent.config.upsertProvider('context-switch-provider', 'https://context-switch.invalid/v1', 'stress-key');
+  const windows = [64_000, 8_000, 4_000, 2_000, 1_200];
+  windows.forEach(size => {
+    const name = `context-${size}`;
+    agent.config.addModelToProvider('context-switch-provider', name, name, `Stress context ${size}`);
+    agent.config.updateModel('context-switch-provider', name, { max_tokens: size });
+  });
+  agent.config.save();
+
+  let providerCalls = 0;
+  const stressProvider = {
+    intelligenceConfig: () => ({ temperature: 0, maxTokens: 256 }),
+    chat: async () => {
+      providerCalls += 1;
+      if (providerCalls % 7 === 0) return '[LLM Error: 503] injected segmented compression failure';
+      return `## Active Or Unfinished Work\nContext switch segment ${providerCalls}; preserve the latest task.\n${'c'.repeat(700)}`;
+    },
+  };
+  (agent as unknown as { forcedProvider: unknown }).forcedProvider = stressProvider;
+
+  let totalRounds = 0;
+  let totalSegments = 0;
+  let totalDropped = 0;
+  let compressedSwitches = 0;
+  let concurrentRequests = 0;
+  let finalTargetWindow = 0;
+  for (let cycle = 0; cycle < 18; cycle += 1) {
+    agent.setModel('context-64000');
+    const marker = `LATEST_CONTEXT_SWITCH_TASK_${cycle}`;
+    agent.history = Array.from({ length: 36 + (cycle % 5) * 6 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `${index === 34 ? marker : `cycle-${cycle}-history-${index}`} ${'h'.repeat(900 + (index % 4) * 230)}`,
+    }));
+    agent.history.push({ role: 'user', content: `${marker} final authoritative instruction` });
+    const targetWindow = windows[1 + (cycle % (windows.length - 1))];
+    finalTargetWindow = targetWindow;
+    agent.setModel(`context-${targetWindow}`);
+    const parallel = Array.from({ length: 6 }, () => agent.compressForModelSwitch());
+    concurrentRequests += parallel.length;
+    const results = await Promise.all(parallel);
+    const result = results[0];
+    assert.ok(results.every(item => JSON.stringify(item) === JSON.stringify(result)), 'concurrent switch requests share one compression result');
+    assert.ok(result.estimatedTokens <= Math.floor(targetWindow * 0.7), 'short-model history converges below the safe target budget');
+    assert.ok(JSON.stringify(agent.history).includes(marker), 'latest user instruction survives every long-to-short switch');
+    assert.ok(result.rounds <= 8, 'segmented compression terminates within the bounded merge rounds');
+    if (result.compressed) compressedSwitches += 1;
+    totalRounds += result.rounds;
+    totalSegments += result.segments;
+    totalDropped += result.droppedMessages;
+    agent.flushConversationState();
+  }
+
+  const statePath = path.join(workspacePath, 'conversations', 'state.json');
+  const persisted = JSON.parse(fs.readFileSync(statePath, 'utf-8')) as {
+    conversations?: Record<string, { history?: Array<Record<string, unknown>> }>;
+  };
+  const entry = Object.values(persisted.conversations || {}).find(item => Array.isArray(item.history) && item.history.length > 0);
+  const persistedTokens = agent.estimateContextTokens(entry?.history || []);
+  assert.ok(entry, 'context-switch stress persists the compressed conversation');
+  assert.ok(persistedTokens > 0 && persistedTokens <= Math.floor(finalTargetWindow * 0.7), 'persisted final short-model history remains inside its 70% budget');
+  assert.ok(JSON.stringify(entry?.history || []).includes('LATEST_CONTEXT_SWITCH_TASK_17'), 'persisted recovery state retains the latest authoritative instruction');
+
+  return {
+    cycles: 18,
+    windowSizes: windows,
+    concurrentRequests,
+    compressedSwitches,
+    providerCalls,
+    injectedFailures: Math.floor(providerCalls / 7),
+    totalRounds,
+    totalSegments,
+    droppedMessages: totalDropped,
+    finalTargetWindow,
+    persistedTokens,
+  };
+}
+
 async function main(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-automation-bash-stress-'));
   const startedAt = Date.now();
   try {
     const automation = await stressAutomations(root);
+    const contextSwitch = await stressContextModelSwitches(root);
     const bash = await stressBash(root);
     const report = {
       ok: true,
       tempRoot: root,
       durationMs: Date.now() - startedAt,
       automation,
+      contextSwitch,
       bash,
     };
     fs.writeFileSync(path.join(root, 'stress-report.json'), JSON.stringify(report, null, 2), 'utf-8');

@@ -36,11 +36,11 @@ Download packages from the [dev-0.1.9 release](https://github.com/positer/Newmar
 
 | Package | Platform | SHA-256 |
 | --- | --- | --- |
-| `Newmark-Agent-0.1.9-x64.msi` | Windows x64 installer | `8AB5C16A9A1B90606445A35B8A41C742B852BA5EE91F6EB100B0F6F7DE96398E` |
-| `Newmark-Agent-0.1.9-win-unpacked-x64.zip` | Windows x64 portable | `B4360AB8A4C8774FB805CF72D8D18AE19709EE69CA048D06CDFBF5E3D6B4E5A6` |
-| `Newmark-Agent-0.1.9-x86_64.AppImage` | Linux x64 AppImage | `A911F7743E81D90AD0E0E32A49BDBF062523448EF92F6A2C41A22C6FF0FE11E6` |
-| `Newmark-Agent-0.1.9-amd64.deb` | Debian/Ubuntu x64 package | `B032E49A9CADC8650A2C38D8730769DCDFE4B24D9F21BB0F00A117F686C5FC6B` |
-| `Newmark-Agent-0.1.9-linux-unpacked-x64.zip` | Linux x64 portable | `F43453A7E0C0E66A4F1FF840B0EC555B7018967A0A0328441839EA5DB2509B3D` |
+| `Newmark-Agent-0.1.9-x64.msi` | Windows x64 installer | `764888B1BBB355B815F1AB884BE8FC113E7C2A5219BCB001B5296BC2739F87D4` |
+| `Newmark-Agent-0.1.9-win-unpacked-x64.zip` | Windows x64 portable | `7CA768692A5F83756241DEF72438B7A6276D0BD5CBBF3912E3D7ADDBED7BD002` |
+| `Newmark-Agent-0.1.9-x86_64.AppImage` | Linux x64 AppImage | `6936D12F49AD5610B9A00985DA491DDAABFB6F0F855028844D0483E5CF45BDFA` |
+| `Newmark-Agent-0.1.9-amd64.deb` | Debian/Ubuntu x64 package | `944747A26C157B9ED5E16ED9A41129D6C4E41369FF1BC5302D209018883E85C1` |
+| `Newmark-Agent-0.1.9-linux-unpacked-x64.zip` | Linux x64 portable | `0D06BFAD38F0928BB6C3B2F04CECCC41C39A6FFB989C7C460D65C08ED1AEC778` |
 
 The Windows MSI requests administrator elevation. Windows and Linux may show an unknown-publisher warning because the packages are not code-signed.
 

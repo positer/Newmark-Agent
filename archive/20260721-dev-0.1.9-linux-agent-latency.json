@@ -1,139 +1,139 @@
 {
-  "generatedAt": "2026-07-27T09:59:27.900Z",
+  "generatedAt": "2026-07-27T12:02:56.322Z",
   "platform": "linux",
   "summary": {
     "runs": 20,
-    "hotFirstEventP95Ms": 17.05674300000004,
-    "hotFirstTokenP95Ms": 15,
-    "coldLocalBeforeProviderMs": 41.23425599999996,
+    "hotFirstEventP95Ms": 15.547284999999988,
+    "hotFirstTokenP95Ms": 16,
+    "coldLocalBeforeProviderMs": 33.53450499999997,
     "toolProviderRequests": 2,
     "maxHotPersistenceWrites": 0,
     "passed": true
   },
   "samples": [
     {
-      "localBeforeProviderMs": 185.917601,
-      "firstTokenMs": 81,
-      "totalMs": 204.780264,
+      "localBeforeProviderMs": 175.578635,
+      "firstTokenMs": 65,
+      "totalMs": 194.737377,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 17.05674300000004,
+      "localBeforeProviderMs": 15.547284999999988,
+      "firstTokenMs": 10,
+      "totalMs": 18.309357999999975,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 11.536583000000007,
+      "firstTokenMs": 11,
+      "totalMs": 13.936147000000005,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 6.640227999999979,
+      "firstTokenMs": 5,
+      "totalMs": 9.189670999999976,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 6.581682000000001,
+      "firstTokenMs": 5,
+      "totalMs": 9.175604999999962,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 9.723734999999976,
+      "firstTokenMs": 10,
+      "totalMs": 12.686065999999983,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 10.943541000000039,
+      "firstTokenMs": 16,
+      "totalMs": 20.387321000000043,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 6.081443999999976,
+      "firstTokenMs": 5,
+      "totalMs": 7.926420000000007,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 9.306346000000019,
       "firstTokenMs": 9,
-      "totalMs": 20.920442000000037,
+      "totalMs": 13.278783000000033,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 12.693554000000006,
-      "firstTokenMs": 12,
-      "totalMs": 15.449538000000018,
+      "localBeforeProviderMs": 6.556163000000026,
+      "firstTokenMs": 5,
+      "totalMs": 8.903136000000075,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 7.95047900000003,
-      "firstTokenMs": 6,
-      "totalMs": 10.906274999999994,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 9.647970999999984,
-      "firstTokenMs": 8,
-      "totalMs": 12.000043000000005,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 12.22065600000002,
-      "firstTokenMs": 12,
-      "totalMs": 16.405151999999987,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 9.583051999999952,
-      "firstTokenMs": 15,
-      "totalMs": 18.531747999999993,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 6.55305199999998,
-      "firstTokenMs": 6,
-      "totalMs": 8.490224000000012,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 9.820169999999962,
-      "firstTokenMs": 8,
-      "totalMs": 14.840524999999957,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 7.6393620000000055,
+      "localBeforeProviderMs": 6.882401999999956,
       "firstTokenMs": 7,
-      "totalMs": 9.762793999999985,
+      "totalMs": 8.742776999999933,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 7.508168999999953,
-      "firstTokenMs": 7,
-      "totalMs": 9.24885699999993,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 7.1506409999999505,
+      "localBeforeProviderMs": 6.60480199999995,
       "firstTokenMs": 8,
-      "totalMs": 11.118626999999947,
+      "totalMs": 9.954224999999951,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 5.468048999999951,
+      "localBeforeProviderMs": 5.69850299999996,
       "firstTokenMs": 5,
-      "totalMs": 7.174717999999984,
+      "totalMs": 6.96142999999995,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 5.835599000000002,
+      "localBeforeProviderMs": 3.943128999999999,
+      "firstTokenMs": 3,
+      "totalMs": 5.1934459999999945,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 6.608801999999969,
       "firstTokenMs": 6,
-      "totalMs": 7.935799999999972,
+      "totalMs": 7.958558999999923,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 6.733414999999923,
+      "localBeforeProviderMs": 6.628221000000053,
       "firstTokenMs": 5,
-      "totalMs": 8.579443999999967,
+      "totalMs": 7.994438000000059,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 5.107096999999953,
+      "localBeforeProviderMs": 7.554680000000076,
       "firstTokenMs": 6,
-      "totalMs": 8.55584399999998,
+      "totalMs": 8.761417000000051,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 8.007851999999957,
-      "firstTokenMs": 7,
-      "totalMs": 9.676649999999995,
+      "localBeforeProviderMs": 5.325874999999996,
+      "firstTokenMs": 4,
+      "totalMs": 6.342192999999952,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 5.448199000000045,
+      "localBeforeProviderMs": 4.59389699999997,
+      "firstTokenMs": 4,
+      "totalMs": 5.637613999999985,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 4.908796999999936,
       "firstTokenMs": 5,
-      "totalMs": 6.998896999999943,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 6.3829580000000306,
-      "firstTokenMs": 6,
-      "totalMs": 7.747704999999996,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 6.165847000000099,
-      "firstTokenMs": 5,
-      "totalMs": 7.422664000000054,
+      "totalMs": 6.112463999999932,
       "persistenceWrites": 0
     }
   ],
   "cold": {
-    "localBeforeProviderMs": 41.23425599999996
+    "localBeforeProviderMs": 33.53450499999997
   },
   "tool": {
     "providerRequests": 2,

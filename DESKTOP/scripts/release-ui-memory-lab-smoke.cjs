@@ -239,6 +239,19 @@ async function runUiCheck(root) {
         document.body.innerText.includes('Detail') &&
         !document.querySelector('.memory-lab-links');
     })()`, 30000, 'Memory Lab overview graph rendered without legacy connector container');
+    const overviewWindowGeometry = await evaluate(cdp, `(() => {
+      const win = document.getElementById('sub-win');
+      if (!win) return null;
+      const rect = win.getBoundingClientRect();
+      return { width: rect.width, height: rect.height, ratio: rect.width / rect.height, memoryClass: win.classList.contains('memory-lab-window') };
+    })()`, 30000);
+    if (!overviewWindowGeometry
+      || !overviewWindowGeometry.memoryClass
+      || overviewWindowGeometry.width <= overviewWindowGeometry.height
+      || Math.abs(overviewWindowGeometry.ratio - (4 / 3)) > 0.02) {
+      fail(`Memory Lab overview window is not landscape 4:3: ${JSON.stringify(overviewWindowGeometry)}`);
+    }
+    log(`Memory Lab overview window geometry ok (${overviewWindowGeometry.width}x${overviewWindowGeometry.height})`);
     await waitFor(cdp, `(() => {
       const nodes = Array.from(document.querySelectorAll('.memory-lab-overview-node')).map(n => n.innerText.trim());
       return nodes.some(t => t === '#Release-Smoke') &&

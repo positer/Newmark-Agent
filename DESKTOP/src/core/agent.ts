@@ -399,6 +399,14 @@ export class Agent {
     abort?(): void;
     drainQueuedMessages?(): Array<{ message: unknown; queueMode: 'steer' | 'followUp' }>;
   } | null = null;
+  private modelSwitchCompressionPromise: Promise<{
+    compressed: boolean;
+    rounds: number;
+    segments: number;
+    droppedMessages: number;
+    estimatedTokens: number;
+    maxTokens: number;
+  }> | null = null;
   private activePeerAgents = new Map<string, Agent>();
   private awaitingAgentKernelRuntime = false;
   private pendingAgentKernelQueue: Array<{ content: string; queueMode: 'steer' | 'followUp'; clientMessageId?: string; runId?: string; images?: Array<{ dataUrl: string; name?: string; type?: string }> }> = [];
@@ -3537,6 +3545,156 @@ export class Agent {
     }
     if (latestUserIndex >= 0 && String(messages[start]?.role || '') !== 'user') start = latestUserIndex;
     return messages.slice(start);
+  }
+
+  private compressionSegments(
+    messages: Array<Record<string, unknown>>,
+    tokenBudget: number,
+  ): Array<Array<Record<string, unknown>>> {
+    const segments: Array<Array<Record<string, unknown>>> = [];
+    let current: Array<Record<string, unknown>> = [];
+    for (const message of messages) {
+      const next = [...current, message];
+      if (current.length && this.estimateContextTokens(next) > tokenBudget) {
+        segments.push(current);
+        current = [message];
+      } else {
+        current = next;
+      }
+    }
+    if (current.length) segments.push(current);
+    return segments;
+  }
+
+  async compressForModelSwitch(signal?: AbortSignal): Promise<{
+    compressed: boolean;
+    rounds: number;
+    segments: number;
+    droppedMessages: number;
+    estimatedTokens: number;
+    maxTokens: number;
+  }> {
+    if (this.modelSwitchCompressionPromise) return this.modelSwitchCompressionPromise;
+    const operation = this.compressForModelSwitchNow(signal);
+    this.modelSwitchCompressionPromise = operation;
+    try {
+      return await operation;
+    } finally {
+      if (this.modelSwitchCompressionPromise === operation) this.modelSwitchCompressionPromise = null;
+    }
+  }
+
+  private async compressForModelSwitchNow(signal?: AbortSignal): Promise<{
+    compressed: boolean;
+    rounds: number;
+    segments: number;
+    droppedMessages: number;
+    estimatedTokens: number;
+    maxTokens: number;
+  }> {
+    const maxTokens = this.contextMaxTokens();
+    const safeTokens = Math.max(128, Math.floor(maxTokens * 0.7));
+    const beforeTokens = this.estimateContextTokens(this.history);
+    if (!this.config.getBool('context', 'auto_compress') || beforeTokens <= safeTokens || this.history.length <= 1) {
+      return { compressed: false, rounds: 0, segments: 0, droppedMessages: 0, estimatedTokens: beforeTokens, maxTokens };
+    }
+
+    const originalMessages = this.history.map(message => ({ ...message }));
+    const originalChars = originalMessages.reduce((sum, message) => sum + this.compressionHistoryContent(message.content || message.reasoning_content || '').length, 0);
+    const continuation = this.postCompressionContinuationMessage();
+    const continuationTokens = this.estimateContextTokens([continuation]);
+    const recentBudget = Math.max(64, Math.floor(maxTokens * 0.28) - continuationTokens);
+    let recent = this.recentContextSuffix(originalMessages, this.config.getNum('context', 'keep_recent_messages') || 10, recentBudget);
+    const recentStart = Math.max(0, originalMessages.length - recent.length);
+    let working = originalMessages.slice(0, recentStart);
+    const provider = this.engineModel();
+    const modelName = this.activeModelName();
+    const segmentBudget = Math.max(128, Math.floor(maxTokens * 0.45));
+    const summaryBudget = {
+      maxTokens,
+      targetTokens: safeTokens,
+      summaryTokens: Math.max(96, Math.min(1600, Math.floor(maxTokens * 0.12))),
+    };
+    const currentInstruction = this.latestUserHistoryText(recent);
+    let rounds = 0;
+    let segments = 0;
+    let fallbackUsed = false;
+    let summaries: Array<Record<string, unknown>> = [];
+
+    while (working.length && rounds < 8 && !signal?.aborted) {
+      rounds += 1;
+      summaries = [];
+      for (const segment of this.compressionSegments(working, segmentBudget)) {
+        if (signal?.aborted) break;
+        segments += 1;
+        const segmentChars = segment.reduce((sum, message) => sum + this.compressionHistoryContent(message.content || message.reasoning_content || '').length, 0);
+        const result = await this.buildCompressionSummary(
+          segment,
+          segmentChars,
+          summaryBudget,
+          provider,
+          signal,
+          modelName,
+          currentInstruction,
+        );
+        fallbackUsed ||= result.fallback;
+        summaries.push({ role: 'system', content: result.summary });
+      }
+      const candidate = this.compactHistoricalImages([...summaries, continuation, ...recent]);
+      if (this.estimateContextTokens(candidate) <= safeTokens) {
+        this.history = candidate.map(message => ({ ...message }));
+        const summary = summaries.map(message => String(message.content || '')).join('\n\n');
+        this.lastCompression = {
+          at: new Date().toISOString(),
+          originalMessages: originalMessages.length,
+          compressedMessages: candidate.length,
+          originalChars,
+          compressedChars: candidate.reduce((sum, message) => sum + this.compressionHistoryContent(message.content || '').length, 0),
+          compressedTokens: this.estimateContextTokens(candidate),
+          summary,
+          model: fallbackUsed ? 'model-switch-segmented-with-fallback' : modelName,
+          fallback: fallbackUsed,
+        };
+        this.persistCompressedHistory(summary, recent.length, candidate);
+        this.saveWorkspaceConversationState(true);
+        return { compressed: true, rounds, segments, droppedMessages: 0, estimatedTokens: this.estimateContextTokens(candidate), maxTokens };
+      }
+      working = summaries;
+    }
+
+    // A pathological provider response or an individually oversized record can
+    // still exceed the target. Discard only the oldest retained turns until the
+    // short model can accept the request, preserving the latest user turn.
+    let droppedMessages = 0;
+    let candidate = this.compactHistoricalImages([...summaries, continuation, ...recent]);
+    while (this.estimateContextTokens(candidate) > safeTokens && recent.length > 1) {
+      const firstUserAfterZero = recent.findIndex((message, index) => index > 0 && String(message.role || '') === 'user');
+      const removeCount = firstUserAfterZero > 0 ? firstUserAfterZero : 1;
+      recent = recent.slice(removeCount);
+      droppedMessages += removeCount;
+      candidate = this.compactHistoricalImages([...summaries, continuation, ...recent]);
+    }
+    while (this.estimateContextTokens(candidate) > safeTokens && summaries.length > 1) {
+      summaries.shift();
+      droppedMessages += 1;
+      candidate = this.compactHistoricalImages([...summaries, continuation, ...recent]);
+    }
+    this.history = candidate.map(message => ({ ...message }));
+    const summary = summaries.map(message => String(message.content || '')).join('\n\n');
+    this.lastCompression = {
+      at: new Date().toISOString(),
+      originalMessages: originalMessages.length,
+      compressedMessages: candidate.length,
+      originalChars,
+      compressedChars: candidate.reduce((sum, message) => sum + this.compressionHistoryContent(message.content || '').length, 0),
+      compressedTokens: this.estimateContextTokens(candidate),
+      summary,
+      model: fallbackUsed ? 'model-switch-segmented-with-fallback' : modelName,
+      fallback: fallbackUsed || droppedMessages > 0,
+    };
+    this.persistCompressedHistory(summary, recent.length, candidate);
+    this.saveWorkspaceConversationState(true);
+    return { compressed: true, rounds, segments, droppedMessages, estimatedTokens: this.estimateContextTokens(candidate), maxTokens };
   }
 
   private compactHistoricalImages(messages: Array<Record<string, unknown>>): Array<Record<string, unknown>> {

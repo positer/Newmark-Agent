@@ -2354,6 +2354,7 @@ if (hasCliCommand) {
     ipcMain.handle('agent:setModel', async (_event, model: string) => {
       if (agent) {
         agent.setModel(model, true);
+        await agent.compressForModelSwitch();
         resetConversationKernel();
       }
       return agent?.model;

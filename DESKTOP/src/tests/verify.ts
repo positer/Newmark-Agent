@@ -4116,6 +4116,34 @@ async function main() {
   const contextOverLimit = agent.contextWindow();
   assert(contextOverLimit.warning === 'over_limit', 'context window: warns when estimated tokens exceed model limit');
 
+  agent.config.addModelToProvider('context-prov', 'long-context-switch-source', 'Long Context Switch Source', 'Large context source model');
+  agent.config.updateModel('context-prov', 'long-context-switch-source', { max_tokens: 64_000 });
+  agent.config.addModelToProvider('context-prov', 'short-context-switch-target', 'Short Context Switch Target', 'Short context target model');
+  agent.config.updateModel('context-prov', 'short-context-switch-target', { max_tokens: 2_000 });
+  agent.setModel('long-context-switch-source');
+  agent.history = Array.from({ length: 48 }, (_, index) => ({
+    role: index % 2 === 0 ? 'user' : 'assistant',
+    content: `${index === 46 ? 'LATEST_SWITCH_TASK_MUST_REMAIN ' : `switch-history-${index} `}${'s'.repeat(1100)}`,
+  }));
+  agent.setModel('short-context-switch-target');
+  let switchCompressionCalls = 0;
+  const switchProvider = new FakeProvider(['## Active Or Unfinished Work\nRetain the active short-model switch task.']) as unknown as LLMProvider;
+  switchProvider.chat = async () => {
+    switchCompressionCalls += 1;
+    return `## Active Or Unfinished Work\nSegment ${switchCompressionCalls} retains the active short-model switch task.\n${'m'.repeat(850)}`;
+  };
+  (agent as any).forcedProvider = switchProvider;
+  (agent as any).forcedProviderDeployment = undefined;
+  const switchResult = await agent.compressForModelSwitch();
+  assert(switchResult.compressed && switchResult.rounds >= 2 && switchCompressionCalls > 1,
+    'model switch compression: long-to-short immediately compresses the history in multiple sequential segments and merge rounds');
+  assert(agent.estimateContextTokens() <= 1400 && JSON.stringify(agent.history).includes('LATEST_SWITCH_TASK_MUST_REMAIN'),
+    'model switch compression: converges below 70% of the target window while preserving the latest user turn verbatim');
+  assert(agent.lastCompression?.compressedMessages === agent.history.length && agent.lastCompression.originalMessages === 48,
+    'model switch compression: persists exact segmented compression metadata for the shortened conversation');
+  (agent as any).forcedProvider = null;
+  (agent as any).forcedProviderDeployment = undefined;
+
   // ---- 11. Model Validation Tests ----
   console.log('\n🔍 Model Validation');
   const modelAgent = new Agent(path.join(TEST_DIR, 'model-validation-agent'));

@@ -3602,6 +3602,19 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 .sub-win.dragging { transition: none; }
 
+.sub-win.memory-lab-window {
+  width: min(960px, calc(100vw - 48px), calc((100vh - 48px) * 1.333333));
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+  aspect-ratio: 4 / 3;
+  box-sizing: border-box;
+}
+
+.sub-win.memory-lab-window .sub-win-body {
+  min-height: 0;
+}
+
 @keyframes sub-win-in {
   from { opacity: 0; transform: scale(0.95) translateY(10px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
@@ -12770,6 +12783,7 @@ window.openSubWin = function(title, html) {
   }
   els['sub-win-title'].textContent = title;
   els['sub-win-body'].innerHTML = html;
+  els['sub-win'].classList.toggle('memory-lab-window', !!(state.activeSubWindowView && state.activeSubWindowView.name === 'memoryLab'));
   els['sub-win-overlay'].classList.add('open');
 };
 
@@ -12780,6 +12794,7 @@ window.closeSubWin = function() {
     state.activeSubWindowView = previous.view;
     els['sub-win-title'].textContent = previous.title;
     els['sub-win-body'].innerHTML = previous.html;
+    els['sub-win'].classList.toggle('memory-lab-window', !!(previous.view && previous.view.name === 'memoryLab'));
     requestAnimationFrame(function() {
       els['sub-win-body'].scrollTop = previous.scrollTop || 0;
       state.restoringSubWindow = false;
@@ -12789,7 +12804,7 @@ window.closeSubWin = function() {
   els['sub-win-overlay'].classList.remove('open');
   state.activeSubWindowView = null;
   var win = els['sub-win'];
-  if (win) { win.style.left = ''; win.style.top = ''; win.style.margin = ''; }
+  if (win) { win.classList.remove('memory-lab-window'); win.style.left = ''; win.style.top = ''; win.style.margin = ''; }
 };
 
 function rerenderActiveSubWindowForLanguage() {

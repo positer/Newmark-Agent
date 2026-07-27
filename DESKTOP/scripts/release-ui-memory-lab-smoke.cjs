@@ -294,13 +294,13 @@ async function runUiCheck(root) {
     await cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: dragSurface.endX, y: dragSurface.y, button: 'left', buttons: 1 });
     const directDragX = await evaluate(cdp, `window.state.memoryLabOverviewCamera.x`, 30000);
     await sleep(1200);
-    const edgeDragX = await evaluate(cdp, `window.state.memoryLabOverviewCamera.x`, 30000);
-    if (edgeDragX - directDragX < 250) fail('Memory Lab held edge drag did not continue panning beyond the visible surface');
+    const heldDragX = await evaluate(cdp, `window.state.memoryLabOverviewCamera.x`, 30000);
+    if (Math.abs(heldDragX - directDragX) > 2) fail('Memory Lab held drag drifted after pointer movement stopped');
     await cdp.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: dragSurface.endX, y: dragSurface.y, button: 'left', buttons: 0, clickCount: 1 });
     const longDrag = await evaluate(cdp, `window.state.memoryLabOverviewPanActive === false && window.state.memoryLabOverviewManualCamera === true`, 30000);
     if (!longDrag) fail('Memory Lab long-distance pointer drag did not release cleanly');
     await sleep(1200);
-    const dragHeld = await evaluate(cdp, `Math.abs(window.state.memoryLabOverviewCamera.x - ${JSON.stringify(edgeDragX)}) < 50`, 30000);
+    const dragHeld = await evaluate(cdp, `Math.abs(window.state.memoryLabOverviewCamera.x - ${JSON.stringify(heldDragX)}) < 50`, 30000);
     if (!dragHeld) fail('Memory Lab focused overview camera snapped back after a manual long-distance drag');
     await evaluate(cdp, `window.selectMemoryLabOverviewNode('tag:#Release-Smoke')`, 30000);
     await evaluate(cdp, `(() => {

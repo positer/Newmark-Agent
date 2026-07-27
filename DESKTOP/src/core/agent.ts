@@ -334,19 +334,9 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
   - English: "What changed", "Verification", "Files", "Issues/Next".
   Omit empty sections. Do not dump long logs, broad history, or unrelated diffs unless the user asks.
 - IMPORTANT: Always use \`pwd\` first to verify current directory.
-- Shell syntax rule: on Windows, the bash tool runs PowerShell; on Linux/macOS, it runs bash. Match commands to the current platform.
-- On Windows, NEVER use cmd/bash syntax:
-  \`\`\`
-  # WRONG (cmd syntax)                # RIGHT (PowerShell syntax)
-  dir /s /b path\\*.txt                Get-ChildItem -Recurse -Filter *.txt path
-  type file.txt                        Get-Content file.txt
-  echo hello > file.txt                Set-Content -Path file.txt -Value "hello"
-  2>&1                                 2>&1
-  2>nul                                2>$null
-  command && command2                  command; if ($?) { command2 }
-  cd dir && command                    Set-Location dir; command
-  \`\`\`
-- Use \`pwd\` (Get-Location) and \`ls\` (Get-ChildItem) are fine - PowerShell aliases support them.`;
+- The bash tool uses workspace-scoped Bash syntax on every platform through Newmark's native TypeScript Bash runtime. Use POSIX paths relative to the workspace root.
+- Built-in Bash commands, pipes, redirects, variables, loops, globbing, and text utilities run in the native interpreter. External host commands such as \`git\`, \`npm\`, and \`cmake\` are detected before execution and use the platform host shell compatibility path.
+- For a persistent interactive host shell, use \`terminal_takeover\`; the one-shot bash tool does not preserve shell variables between calls.`;
 
 export class Agent {
   public config: ConfigManager;
@@ -5028,6 +5018,10 @@ export class Agent {
           const created = this.automationManager.create({
             prompt,
             model: String(params.model || this.model || ''),
+            workspaceId: String(params.workspace_id || params.workspaceId || this.workspace.current?.id || this.workspace.current?.path || '').trim(),
+            workspaceName: String(params.workspace_name || params.workspaceName || this.workspace.current?.name || '').trim(),
+            conversationMode: String(params.conversation_mode || params.conversationMode || 'new') === 'existing' ? 'existing' : 'new',
+            conversationId: String(params.conversation_id || params.conversationId || '').trim(),
             condition: this.normalizeAutomationCondition(params.condition),
             intervalSec: this.automationInterval(params),
             startAt: this.automationDateParam(params, 'start_at', 'startAt'),
@@ -5277,6 +5271,10 @@ export class Agent {
     const patch: Partial<AutomationSchedule> = {};
     if (params.prompt !== undefined) patch.prompt = String(params.prompt || '').trim();
     if (params.model !== undefined) patch.model = String(params.model || '');
+    if (params.workspace_id !== undefined || params.workspaceId !== undefined) patch.workspaceId = String(params.workspace_id ?? params.workspaceId ?? '').trim();
+    if (params.workspace_name !== undefined || params.workspaceName !== undefined) patch.workspaceName = String(params.workspace_name ?? params.workspaceName ?? '').trim();
+    if (params.conversation_mode !== undefined || params.conversationMode !== undefined) patch.conversationMode = String(params.conversation_mode ?? params.conversationMode) === 'existing' ? 'existing' : 'new';
+    if (params.conversation_id !== undefined || params.conversationId !== undefined) patch.conversationId = String(params.conversation_id ?? params.conversationId ?? '').trim();
     if (params.condition !== undefined) patch.condition = this.normalizeAutomationCondition(params.condition);
     if (params.interval_sec !== undefined || params.intervalSec !== undefined || params.interval !== undefined) patch.intervalSec = this.automationInterval(params);
     if (params.start_at !== undefined || params.startAt !== undefined) {
@@ -5321,6 +5319,8 @@ export class Agent {
       `- id=${item.id}`,
       `prompt=${item.prompt}`,
       `model=${item.model || '(default)'}`,
+      `workspace=${item.workspaceName || item.workspaceId}`,
+      `conversation=${item.conversationMode === 'existing' ? item.conversationId : 'new each run'}`,
       `condition=${item.condition}`,
       `active=${item.active}`,
       `status=${item.status}`,

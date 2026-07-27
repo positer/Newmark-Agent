@@ -2,11 +2,17 @@ import { ConfigManager } from './config';
 
 export type AutomationCondition = 'once' | 'loop' | 'schedule';
 export type AutomationStatus = 'idle' | 'scheduled' | 'running' | 'completed' | 'paused' | 'error';
+export type AutomationConversationMode = 'new' | 'existing';
 
 export interface AutomationSchedule {
   id: string;
   prompt: string;
   model: string;
+  workspaceId: string;
+  workspaceName: string;
+  conversationMode: AutomationConversationMode;
+  conversationId: string;
+  lastConversationId: string;
   condition: AutomationCondition;
   intervalSec: number;
   startAt: string;
@@ -56,6 +62,10 @@ export class AutomationManager {
   create(input: {
     prompt: string;
     model?: string;
+    workspaceId: string;
+    workspaceName?: string;
+    conversationMode?: AutomationConversationMode;
+    conversationId?: string;
     condition?: AutomationCondition;
     intervalSec?: number;
     startAt?: string;
@@ -65,10 +75,20 @@ export class AutomationManager {
     const now = new Date();
     const startAt = isoFromLocal(input.startAt || '');
     const condition = input.condition || 'once';
+    const workspaceId = String(input.workspaceId || '').trim();
+    const conversationMode = input.conversationMode === 'existing' ? 'existing' : 'new';
+    const conversationId = String(input.conversationId || '').trim();
+    if (!workspaceId) throw new Error('Automation workspace is required.');
+    if (conversationMode === 'existing' && !conversationId) throw new Error('Existing conversation is required.');
     const item: AutomationSchedule = {
       id: makeId(),
       prompt: input.prompt.trim(),
       model: input.model || '',
+      workspaceId,
+      workspaceName: String(input.workspaceName || '').trim(),
+      conversationMode,
+      conversationId: conversationMode === 'existing' ? conversationId : '',
+      lastConversationId: '',
       condition,
       intervalSec: Math.max(0, Number(input.intervalSec || 0)),
       startAt,
@@ -108,7 +128,13 @@ export class AutomationManager {
     const items = this.list();
     const item = items.find(x => x.id === id);
     if (!item) return null;
-    Object.assign(item, patch);
+    const next = { ...item, ...patch };
+    next.workspaceId = String(next.workspaceId || '').trim();
+    next.conversationMode = next.conversationMode === 'existing' ? 'existing' : 'new';
+    next.conversationId = String(next.conversationId || '').trim();
+    if (!next.workspaceId) throw new Error('Automation workspace is required.');
+    if (next.conversationMode === 'existing' && !next.conversationId) throw new Error('Existing conversation is required.');
+    Object.assign(item, next);
     this.save(items);
     return item;
   }
@@ -132,6 +158,8 @@ export class AutomationManager {
 
   private shouldRun(item: AutomationSchedule, now: Date): boolean {
     if (!item.active || this.runningIds.has(item.id)) return false;
+    if (!String(item.workspaceId || '').trim()) return false;
+    if (item.conversationMode === 'existing' && !String(item.conversationId || '').trim()) return false;
     if (item.status === 'completed' && item.condition === 'once') return false;
     if (item.endAt && now.getTime() > new Date(item.endAt).getTime()) return false;
     const next = item.nextRunAt ? new Date(item.nextRunAt).getTime() : now.getTime();

@@ -344,16 +344,16 @@ async function main() {
     && uiHtml.includes('performance.now() * 0.00075')
     && uiHtml.includes('state.memoryLabOverviewManualCamera = true')
     && uiHtml.includes('!state.memoryLabOverviewManualCamera')
-    && uiHtml.includes('state.memoryLabOverviewPanEdgeX')
+    && !uiHtml.includes('state.memoryLabOverviewPanEdgeX')
     && uiHtml.includes("var minimumFrameMs = state.memoryLabOverviewPanActive ? 0 : 50")
-    && uiHtml.includes("var panTransform = 'translate3d('")
+    && uiHtml.includes("var transform = 'translate3d('")
     && uiHtml.includes("document.getElementById('memory-lab-overview-nodes')")
     && uiHtml.includes('window.renderMemoryLabOverviewFrame();')
     && uiHtml.includes('focusCache: {}')
     && uiHtml.includes('graph.focusCache[cacheKey]')
     && uiHtml.includes('(graph.incoming || {})[id]')
     && uiHtml.includes('event.clientX - pan.x')
-    && uiHtml.includes('old * Math.exp(-event.deltaY * 0.0014)')
+    && uiHtml.includes('old * Math.exp(-event.deltaY * 0.0009)')
     && uiHtml.includes("stage.classList.toggle('zoom-dots', camera.scale < 0.28)")
     && uiHtml.includes('.memory-lab-overview-stage.zoom-dots .memory-lab-overview-node')
     && uiHtml.includes('showMemoryLabOverviewTip')
@@ -1148,6 +1148,18 @@ async function main() {
   assert(releaseUiSkillsSmoke.includes('No matching skills.') && releaseUiSkillsSmoke.includes('Page.captureScreenshot') && releaseUiSkillsSmoke.includes('2026-06-28-release-ui-skills-smoke.png'), 'release ui skills smoke: covers market search empty state and screenshot evidence');
   assert(packageJson.includes('"release:ui-memory-lab-smoke"') && releaseUiMemoryLabSmoke.includes('--remote-debugging-port=') && releaseUiMemoryLabSmoke.includes('window.api.memoryLabUpdate') && releaseUiMemoryLabSmoke.includes('window.showMemoryLab()'), 'release ui Memory Lab smoke: drives real packaged Memory Lab UI through CDP');
   assert(releaseUiMemoryLabSmoke.includes('ReleaseMemoryNeedle') && releaseUiMemoryLabSmoke.includes('Memory Lab') && releaseUiMemoryLabSmoke.includes('.memory-lab-graph') && releaseUiMemoryLabSmoke.includes('memory-lab-search-input') && releaseUiMemoryLabSmoke.includes('Root tags') && releaseUiMemoryLabSmoke.includes('!document.querySelector(\'.memory-lab-links\')') && releaseUiMemoryLabSmoke.includes('animate-from-right') && releaseUiMemoryLabSmoke.includes('Page.captureScreenshot') && releaseUiMemoryLabSmoke.includes('captureOsScreenshot'), 'release ui Memory Lab smoke: validates animated no-line tag graph, root tag overview, tag search, component markdown, and hardened screenshot evidence');
+  const memoryLabVelocityRetention = Number(uiHtml.match(/var memoryLabVelocityRetention = ([0-9.]+);/)?.[1]);
+  assert(memoryLabVelocityRetention === 0.72
+    && uiHtml.includes('node.vx = ((node.vx || 0) + node.fx) * memoryLabVelocityRetention;')
+    && uiHtml.includes('node.vy = ((node.vy || 0) + node.fy) * memoryLabVelocityRetention;'),
+  'ui Memory Lab overview: tag motion applies stronger velocity damping');
+  assert(uiHtml.includes('window.memoryLabOverviewGraphSignature = function(index)')
+    && uiHtml.includes('state.memoryLabOverviewGraphSignature !== graphSignature')
+    && uiHtml.includes("window.selectMemoryLabOverviewNode('tag:' + tag);")
+    && uiHtml.includes('state.memoryLabOverviewInteractionOnly = true;')
+    && uiHtml.includes('renderPanTransform();')
+    && !uiHtml.includes('memoryLabOverviewPanEdgeX'),
+  'ui Memory Lab overview: stable graph identity avoids incidental reloads while zoom and drag update immediately without edge drift');
   assert(packageJson.includes('"release:ui-conversation-queue-plan-smoke"') && releaseUiConversationQueuePlanSmoke.includes('--remote-debugging-port=') && releaseUiConversationQueuePlanSmoke.includes('QUEUE_FIRST_LOCK_TEST') && releaseUiConversationQueuePlanSmoke.includes('QUEUE_SECOND_AUTO_BUILD'), 'release ui conversation queue/plan smoke: drives real packaged queued conversation path through CDP');
   assert(releaseUiConversationQueuePlanSmoke.includes("window.switchRightTab('plan')") && releaseUiConversationQueuePlanSmoke.includes('PLAN_ITEM_CONV1_20260628') && releaseUiConversationQueuePlanSmoke.includes('PLAN_ITEM_CONV2_20260628'), 'release ui conversation queue/plan smoke: covers right sidebar plan isolation');
   assert(releaseUiConversationQueuePlanSmoke.includes('PARALLEL_CONV_A_20260701') && releaseUiConversationQueuePlanSmoke.includes('PARALLEL_CONV_B_20260701') && releaseUiConversationQueuePlanSmoke.includes('#queue-panel') && releaseUiConversationQueuePlanSmoke.includes('#queue-header-label') && releaseUiConversationQueuePlanSmoke.includes('QUEUE_SECOND_DONE_20260628'), 'release ui conversation queue/plan smoke: covers parallel conversation execution and same-conversation queue drain');
@@ -1252,10 +1264,10 @@ async function main() {
   assert(mainTs.includes("ipcMain.handle('skills:refresh'") && mainTs.includes('agent.refreshSkills();') && mainTs.includes("ipcMain.handle('skills:addMarketSource'") && mainTs.includes("ipcMain.handle('memoryLab:read'") && mainTs.includes('agent.updateMemoryLab') && mainTs.includes('input.tagPaths') && mainTs.includes('pathValue.map(String)') && mainTs.includes('agent.reindexMemoryLab') && mainTs.includes('terminalInterruptTimeoutMs'), 'main ipc: refreshes skills runtime, manages market sources, preserves Memory Lab tag hierarchy paths, and returns terminal timeout state');
   assert(mainTs.includes("ipcMain.handle('agent:getConversationPlan', async (_event, conversationId?: string)") && mainTs.includes("ipcMain.handle('agent:updateConversationPlan', async (_event, plan: Record<string, unknown>, conversationId?: string)") && mainTs.includes('conversationPlan: agent.getConversationPlan()'), 'main ipc: exposes and returns conversation-bound plan state');
   assert(mainTs.includes("ipcMain.handle('flow:run'") && mainTs.includes('chatMessages: agent.chatMessages') && mainTs.includes('conversations: agent.listConversationStates()'), 'main ipc: Flow run returns rendered conversation state');
-  assert(mainTs.includes("ipcMain.handle('pty:kill'") && mainTs.includes('waitMs === 0') && mainTs.includes("session.proc.kill('SIGINT')"), 'main ipc: terminal interrupt timeout supports unlimited mode');
+  assert(mainTs.includes("ipcMain.handle('pty:kill'") && mainTs.includes('waitMs === 0') && mainTs.includes("session.proc.kill('SIGINT')") && mainTs.includes("kind: 'native-bash'") && mainTs.includes('spawnTakeoverPty(shell'), 'main ipc: bottom terminal uses native Bash sessions and real host PTYs with interrupt support');
   assert(mainTs.includes("ipcMain.handle('agentTerminal:takeoverState'") && mainTs.includes("ipcMain.handle('agentTerminal:takeoverWrite'") && mainTs.includes("ipcMain.handle('agentTerminal:takeoverStop'") && mainTs.includes("ipcMain.handle('agentTerminal:takeoverDetach'") && mainTs.includes("webContents.send('agentTerminal:takeover'"), 'main ipc: routes owner-scoped Agent terminal controls and broadcasts takeover events to every desktop window');
-  assert(mainTs.includes('function defaultTerminalShell()') && mainTs.includes("process.platform === 'win32' ? 'powershell' : 'bash'") && mainTs.includes('function resolveTerminalShell') && mainTs.includes('commandArgs: command => [\'-lc\', command]') && mainTs.includes('function availableTerminalShells()') && mainTs.includes('terminalShells: availableTerminalShells()') && mainTs.includes('runShellCommand(String(cmd || \'\')') && !mainTs.includes('const SHELL_MAP: Record<string, string>'), 'main ipc: built-in terminal and executeBash use platform-aware shell defaults instead of hard-coded Windows shells');
-  assert(serverTs.includes('function runShellCommand') && serverTs.includes("process.platform === 'win32' ? 'powershell' : 'bash'") && serverTs.includes("String(command || cmd || '')") && serverTs.includes('terminalShells: availableTerminalShells()') && serverTs.includes("requested === 'sh' ? ['-c', command]") && !serverTs.includes('powershell.exe -Command "${(cmd||\'\')'), 'server api: bash endpoint is platform-aware and accepts command/cmd payloads');
+  assert(mainTs.includes('function defaultTerminalShell()') && mainTs.includes("process.platform === 'win32' ? 'powershell' : 'bash'") && mainTs.includes('function resolveTerminalShell') && mainTs.includes('executeWorkspaceBash(command, cwd') && mainTs.includes('terminalShells: availableTerminalShells()') && mainTs.includes('await runShellCommand(String(cmd || \'\')') && !mainTs.includes('const SHELL_MAP: Record<string, string>'), 'main ipc: executeBash routes Bash through the native workspace runtime while retaining platform shell choices');
+  assert(serverTs.includes('async function runShellCommand') && serverTs.includes('executeWorkspaceBash(command, cwd') && serverTs.includes("String(command || cmd || '')") && serverTs.includes('terminalShells: availableTerminalShells()') && serverTs.includes("requested === 'sh' ? ['-c', command]") && !serverTs.includes('powershell.exe -Command "${(cmd||\'\')'), 'server api: bash endpoint uses the native workspace runtime and accepts command/cmd payloads');
   assert(uiHtml.includes('function normalizeTerminalShell(shellId)') && uiHtml.includes('function syncTerminalShellOptions()') && uiHtml.includes("spawnTerminal(normalizeTerminalShell(state._terminalShell))") && !uiHtml.includes("spawnTerminal('powershell')") && uiHtml.includes('data-platform-shell="win32"'), 'ui html: bottom terminal defaults to backend platform shell instead of hard-coded PowerShell');
   assert(mainTs.includes("ipcMain.handle('github:copilotLogin'") && mainTs.includes("'auth', 'status'") && mainTs.includes("const tokenFromGh = () =>") && mainTs.includes("const importToken = async (token: string") && mainTs.includes("new LLMProvider('GitHub Copilot', 'https://models.github.ai', token, 'github_models'") && mainTs.includes('.listModels()') && mainTs.includes('catalogModels = listed.length') && mainTs.includes('modelsImported: savedModels') && mainTs.includes('fallbackAdded') && mainTs.includes("'auth', 'refresh', '--scopes', 'models:read'") && !mainTs.includes("'auth', 'refresh', '--web', '--scopes', 'models:read'") && mainTs.includes("'auth', 'login', '--web', '--scopes', 'models:read'") && mainTs.includes("shell.openExternal('https://github.com/login/device')") && mainTs.includes("currentAgent.config.upsertProvider('GitHub Copilot', 'https://models.github.ai'") && mainTs.includes("protocol === 'openai' ? 'openai' : undefined"), 'main ipc: GitHub Copilot login imports GitHub CLI token, reports real catalog models separately from fallback, uses refresh without unsupported --web, falls back to browser login, and fuzzy injection remains openai/anthropic only');
   assert(uiHtml.includes("var modelCount = Number(result.catalogModels || result.modelsImported || 0)") && uiHtml.includes("modelsPanel.innerHTML = renderModelSettings()"), 'ui html: GitHub login reports the real catalog count and redraws the models panel after backend refresh');
@@ -2652,15 +2664,21 @@ async function main() {
     if (prompt === 'Fail task') throw new Error('planned automation failure');
     return `ran ${prompt}`;
   }, 50);
-  const onceAuto = autoMgr.create({ prompt: 'Run once', model: 'm1', condition: 'once', active: true });
-  assert(onceAuto.active === true && onceAuto.status === 'scheduled', 'automation: create active schedule');
+  let missingAutomationWorkspaceBlocked = false;
+  try { autoMgr.create({ prompt: 'Missing workspace', conversationMode: 'new' } as any); } catch { missingAutomationWorkspaceBlocked = true; }
+  assert(missingAutomationWorkspaceBlocked, 'automation: workspace is mandatory');
+  let missingAutomationConversationBlocked = false;
+  try { autoMgr.create({ prompt: 'Missing conversation', workspaceId: 'workspace-a', conversationMode: 'existing' }); } catch { missingAutomationConversationBlocked = true; }
+  assert(missingAutomationConversationBlocked, 'automation: existing-conversation strategy requires a conversation id');
+  const onceAuto = autoMgr.create({ prompt: 'Run once', model: 'm1', workspaceId: 'workspace-a', workspaceName: 'Workspace A', conversationMode: 'new', condition: 'once', active: true });
+  assert(onceAuto.active === true && onceAuto.status === 'scheduled' && onceAuto.workspaceId === 'workspace-a' && onceAuto.conversationMode === 'new', 'automation: create active workspace-bound schedule');
   await autoMgr.tick(new Date(Date.now() + 1000));
   const onceAfter = autoMgr.list().find(a => a.id === onceAuto.id);
   assert(autoRuns.includes('m1:Run once'), 'automation: once executes runner');
   assert(onceAfter?.status === 'completed' && onceAfter.active === false, 'automation: once completes and deactivates');
   assert(onceAfter?.lastResult.includes('ran Run once'), 'automation: stores last result');
 
-  const loopAuto = autoMgr.create({ prompt: 'Loop task', model: 'm2', condition: 'loop', intervalSec: 10, active: true });
+  const loopAuto = autoMgr.create({ prompt: 'Loop task', model: 'm2', workspaceId: 'workspace-a', conversationMode: 'existing', conversationId: 'conversation-a', condition: 'loop', intervalSec: 10, active: true });
   await autoMgr.tick(new Date(Date.now() + 2000));
   const loopAfter = autoMgr.list().find(a => a.id === loopAuto.id);
   assert(loopAfter?.active === true && loopAfter?.status === 'scheduled', 'automation: loop remains scheduled');
@@ -2671,7 +2689,7 @@ async function main() {
   const persistedAuto = new ConfigManager(TEST_DIR).get<any[]>('automation', 'schedules') || [];
   assert(persistedAuto.length === 1 && persistedAuto[0].id === onceAuto.id, 'automation: persists schedules to config');
 
-  const failAuto = autoMgr.create({ prompt: 'Fail task', model: 'm-fail', condition: 'once', active: true });
+  const failAuto = autoMgr.create({ prompt: 'Fail task', model: 'm-fail', workspaceId: 'workspace-a', conversationMode: 'new', condition: 'once', active: true });
   await autoMgr.tick(new Date(Date.now() + 3000));
   const failAfter = autoMgr.list().find(a => a.id === failAuto.id);
   assert(failAfter?.status === 'error' && failAfter?.active === false, 'automation: runner failure deactivates schedule');
@@ -2689,7 +2707,7 @@ async function main() {
     await new Promise<void>(resolve => { releaseSlowRun = resolve; });
     return 'slow complete';
   }, 50);
-  const slowAuto = slowMgr.create({ prompt: 'Slow task', model: 'm-slow', condition: 'once', active: true });
+  const slowAuto = slowMgr.create({ prompt: 'Slow task', model: 'm-slow', workspaceId: 'workspace-a', conversationMode: 'new', condition: 'once', active: true });
   const firstSlowTick = slowMgr.tick(new Date(Date.now() + 4000));
   await new Promise(resolve => setTimeout(resolve, 20));
   await slowMgr.tick(new Date(Date.now() + 5000));
@@ -2704,8 +2722,8 @@ async function main() {
     wakeCalls.push({ command, args });
     return { ok: true, command, args };
   });
-  const futureA = autoMgr.create({ prompt: 'Wake later', model: 'm3', condition: 'loop', intervalSec: 60, startAt: '2030-01-01T12:00', active: true });
-  const futureB = autoMgr.create({ prompt: 'Wake sooner', model: 'm4', condition: 'loop', intervalSec: 60, startAt: '2030-01-01T11:00', active: true });
+  const futureA = autoMgr.create({ prompt: 'Wake later', model: 'm3', workspaceId: 'workspace-a', conversationMode: 'new', condition: 'loop', intervalSec: 60, startAt: '2030-01-01T12:00', active: true });
+  const futureB = autoMgr.create({ prompt: 'Wake sooner', model: 'm4', workspaceId: 'workspace-a', conversationMode: 'new', condition: 'loop', intervalSec: 60, startAt: '2030-01-01T11:00', active: true });
   const nextWake = wake.nextActiveRun(autoMgr.list(), new Date('2029-01-01T00:00:00Z'));
   assert(nextWake?.id === futureB.id, 'automation wake: chooses earliest active next run');
   const xmlPath = wake.writeWindowsTaskXml(wake.taskName(), futureA.nextRunAt);
@@ -3497,6 +3515,9 @@ async function main() {
             arguments: JSON.stringify({
               prompt: 'agent scheduled prompt',
               model: 'agent-auto-model',
+              workspace_id: agent.workspace.current?.id || agent.workspace.current?.path,
+              workspace_name: agent.workspace.current?.name,
+              conversation_mode: 'new',
               condition: 'loop',
               interval_sec: 30,
               active: true,
@@ -3516,7 +3537,7 @@ async function main() {
   const createdAutomation = agentAutoMgr.list()[0];
   assert(autoToolText.includes('[automation_create] Created'), 'agent automation_create: returns created schedule');
   assert(createdAutomation?.prompt === 'agent scheduled prompt' && createdAutomation?.condition === 'loop', 'agent automation_create: persists schedule through manager');
-  assert(createdAutomation?.model === 'agent-auto-model' && createdAutomation?.intervalSec === 30, 'agent automation_create: stores model and interval');
+  assert(createdAutomation?.model === 'agent-auto-model' && createdAutomation?.intervalSec === 30 && !!createdAutomation?.workspaceId && createdAutomation?.conversationMode === 'new', 'agent automation_create: stores model, interval, workspace, and conversation strategy');
   (agent as any).forcedProvider = null;
   agent.setMode('plan');
   const planBlockedAutomation = (agent as any).handleAutomationTool('automation_create', JSON.stringify({ prompt: 'blocked' }));

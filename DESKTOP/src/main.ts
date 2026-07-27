@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { spawn, spawnSync, ChildProcess } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { Agent, ConversationBranchLocator } from './core/agent';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope } from './core/types';
 import { AgentPromptMessage, ConversationKernel, ConversationTargetInput } from './core/conversationKernel';
@@ -27,11 +27,14 @@ import {
   resizeTerminalTakeoverSession,
   ROOT_TERMINAL_ACTOR_ID,
   shutdownTerminalTakeoverSessions,
+  spawnTakeoverPty,
   stopTerminalTakeoverSession,
+  TakeoverPty,
   terminalTakeoverState,
   terminalTakeoverWorkspaceId,
   writeTerminalTakeoverSession,
 } from './tools/terminalTakeover';
+import { executeWorkspaceBash, NativeBashSession } from './core/nativeBash';
 import { isNativeToolEnabled, nativeToolCatalogForState, normalizeNativeToolEnabled } from './tools/nativeTools';
 import { LLMProvider } from './llm/provider';
 import { WslAgentClient, WslHostToolHandler } from './core/wslAgentClient';
@@ -131,8 +134,12 @@ function resolveTerminalShell(shellId: string): { id: string; exe: string; args:
   return { id: 'bash', exe: userShell || '/bin/bash', args: [], commandArgs: command => ['-lc', command] };
 }
 
-function runShellCommand(command: string, shellId: string, cwd: string): { output?: string; error?: string } {
+async function runShellCommand(command: string, shellId: string, cwd: string): Promise<{ output?: string; error?: string; engine?: string }> {
   const shellInfo = resolveTerminalShell(shellId || defaultTerminalShell());
+  if (shellInfo.id === 'bash') {
+    const result = await executeWorkspaceBash(command, cwd, { cwd, allowHostFallback: true });
+    return { output: result.output, error: result.error, engine: result.engine };
+  }
   const result = spawnSync(shellInfo.exe, shellInfo.commandArgs(command), {
     cwd,
     encoding: 'utf-8',
@@ -1424,17 +1431,27 @@ if (hasCliCommand) {
       if (!startupAgent) throw new Error('Agent is unavailable for deferred automation startup');
       if (!automationWake) automationWake = new AutomationWakeScheduler(root, process.execPath);
       if (!automation) {
-        automation = new AutomationManager(startupAgent.config, async (prompt, model) => {
-          const previousModel = startupAgent.model;
-          if (model) startupAgent.setModel(model);
-          try {
-            const tokens = await startupAgent.process(prompt);
-            const text = tokens.map(t => t.text).join('');
-            mainWindow?.webContents.send('automation:updated');
-            return text;
-          } finally {
-            if (model) startupAgent.setModel(previousModel);
-          }
+        automation = new AutomationManager(startupAgent.config, async (prompt, model, item) => {
+          const targetConversationId = item.conversationMode === 'existing'
+            ? item.conversationId
+            : `automation-${item.id}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+          const target = conversationRuntimeTarget({ workspaceId: item.workspaceId, conversationId: targetConversationId });
+          const kernel = ensureConversationKernel(root);
+          if (!kernel) throw new Error('Conversation runtime is unavailable for automation.');
+          await kernel.waitForIdle(target);
+          automation?.update(item.id, { lastConversationId: targetConversationId });
+          const result = await kernel.prompt({
+            text: prompt,
+            visibleMode: 'build',
+          }, target, {
+            mode: 'build',
+            model: model || startupAgent.modelSelectionValue(),
+            intelligence: startupAgent.intelligence,
+            inputMode: 'next',
+            engine: startupAgent.engine,
+          });
+          mainWindow?.webContents.send('automation:updated');
+          return result.tokens.map(token => token.text).join('');
         });
         startupAgent.setAutomationManager(automation);
         automation.onChange(items => {
@@ -2596,6 +2613,10 @@ if (hasCliCommand) {
       const created = automation.create({
         prompt: String(item.prompt || ''),
         model: String(item.model || ''),
+        workspaceId: String(item.workspaceId || ''),
+        workspaceName: String(item.workspaceName || ''),
+        conversationMode: item.conversationMode === 'existing' ? 'existing' : 'new',
+        conversationId: String(item.conversationId || ''),
         condition: (['once', 'loop', 'schedule'].includes(String(item.condition)) ? String(item.condition) : 'once') as 'once' | 'loop' | 'schedule',
         intervalSec: Number(item.intervalSec || item.interval || 0),
         startAt: String(item.startAt || ''),
@@ -3096,46 +3117,44 @@ if (hasCliCommand) {
 
     ipcMain.handle('agent:executeBash', async (_event, cmd: string, shell: string, cwd: string) => {
       try {
-        return runShellCommand(String(cmd || ''), shell, cwd || agent?.workspace.current?.path || root);
+        return await runShellCommand(String(cmd || ''), shell, cwd || agent?.workspace.current?.path || root);
       } catch (e) { return { error: String(e) }; }
     });
 
     // === Native PTY Terminal ===
-    const ptySessions = new Map<string, { proc: ChildProcess; shell: string; buffer: string }>();
+    type BottomTerminalSession =
+      | { kind: 'pty'; proc: TakeoverPty; shell: string; buffer: string }
+      | { kind: 'native-bash'; proc: NativeBashSession; shell: 'bash'; buffer: string; queue: Promise<void> };
+    const ptySessions = new Map<string, BottomTerminalSession>();
+    const sendTerminalData = (sessionId: string, session: BottomTerminalSession, text: string): void => {
+      session.buffer = `${session.buffer}${text}`.slice(-256 * 1024);
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('pty:data', sessionId, text);
+    };
 
     ipcMain.handle('pty:spawn', async (_event, shellId: string) => {
       const sessionId = randomUUID().slice(0, 8);
       const shell = resolveTerminalShell(shellId || agent?.config.getStr('terminal', 'default_shell') || defaultTerminalShell());
       const cwd = agent?.workspace.current?.path || root;
-      const proc = spawn(shell.exe, shell.args, {
-        cwd,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, TERM: 'xterm-256color' },
-        windowsHide: true,
-      });
-      const session = { proc, shell: shell.id, buffer: '' };
+      if (shell.id === 'bash') {
+        const session: BottomTerminalSession = {
+          kind: 'native-bash',
+          proc: new NativeBashSession(cwd, 30_000),
+          shell: 'bash',
+          buffer: '',
+          queue: Promise.resolve(),
+        };
+        ptySessions.set(sessionId, session);
+        return { sessionId, shell: shell.id, engine: 'native-bash' };
+      }
+      const proc = spawnTakeoverPty(shell, cwd, { ...process.env, TERM: 'xterm-256color' }, 120, 30);
+      const session: BottomTerminalSession = { kind: 'pty', proc, shell: shell.id, buffer: '' };
       ptySessions.set(sessionId, session);
 
-      // Wake the PTY without injecting a Windows carriage return into POSIX shells.
-      proc.stdin?.write(process.platform === 'win32' && ['powershell', 'pwsh', 'cmd'].includes(shell.id) ? '\r\n' : '\n');
-
-      proc.stdout?.on('data', (chunk: Buffer) => {
-        const text = chunk.toString('utf-8');
-        session.buffer += text;
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('pty:data', sessionId, text);
-        }
-      });
-      proc.stderr?.on('data', (chunk: Buffer) => {
-        const text = chunk.toString('utf-8');
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('pty:data', sessionId, text);
-        }
-      });
-      proc.on('exit', (code) => {
+      proc.onData(text => sendTerminalData(sessionId, session, text));
+      proc.onExit(event => {
         ptySessions.delete(sessionId);
         if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('pty:exit', sessionId, code);
+          mainWindow.webContents.send('pty:exit', sessionId, event.exitCode);
         }
       });
 
@@ -3144,8 +3163,21 @@ if (hasCliCommand) {
 
     ipcMain.handle('pty:write', async (_event, sessionId: string, data: string) => {
       const session = ptySessions.get(sessionId);
-      if (!session || !session.proc.stdin) return { error: 'Session not found' };
-      session.proc.stdin.write(data);
+      if (!session) return { error: 'Session not found' };
+      if (session.kind === 'pty') {
+        session.proc.write(data);
+        return { ok: true };
+      }
+      const command = String(data || '').replace(/[\r\n]+$/, '');
+      if (!command.trim()) return { ok: true };
+      session.queue = session.queue.then(async () => {
+        sendTerminalData(sessionId, session, `$ ${command}\r\n`);
+        const result = await session.proc.execute(command);
+        if (result.output) sendTerminalData(sessionId, session, result.output.replace(/(?<!\r)\n/g, '\r\n'));
+        if (result.error && !result.output.includes(result.error)) {
+          sendTerminalData(sessionId, session, `[native-bash] ${result.error}\r\n`);
+        }
+      }).catch(error => sendTerminalData(sessionId, session, `[native-bash] ${error instanceof Error ? error.message : String(error)}\r\n`));
       return { ok: true };
     });
 
@@ -3153,13 +3185,18 @@ if (hasCliCommand) {
       const session = ptySessions.get(sessionId);
       if (session) {
         const waitMs = Math.max(0, Number(timeoutMs ?? agent?.config.getNum('terminal', 'interrupt_timeout_ms') ?? 0));
+        if (session.kind === 'native-bash') {
+          session.proc.interrupt();
+          if (waitMs > 0) setTimeout(() => ptySessions.delete(sessionId), waitMs);
+          return { ok: true };
+        }
         if (waitMs === 0) {
           session.proc.kill('SIGINT');
         } else {
           session.proc.kill('SIGINT');
           setTimeout(() => {
             const stillRunning = ptySessions.get(sessionId);
-            if (stillRunning && !stillRunning.proc.killed) stillRunning.proc.kill();
+            if (stillRunning?.kind === 'pty') stillRunning.proc.kill();
             ptySessions.delete(sessionId);
           }, waitMs);
         }

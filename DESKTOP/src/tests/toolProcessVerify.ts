@@ -46,8 +46,9 @@ function shellPath(value: string): string {
 }
 
 function nodeScriptCommand(scriptPath: string): string {
-  if (process.platform === 'win32') return `& ${shellPath(process.execPath)} ${shellPath(scriptPath)}`;
-  return `${shellPath(process.execPath)} ${shellPath(scriptPath)}`;
+  // `node` is intentionally an external command so the Bash tool exercises
+  // its host-shell compatibility path on every platform.
+  return `node ${shellPath(scriptPath)}`;
 }
 
 async function main(): Promise<void> {

@@ -4238,6 +4238,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   position: absolute;
   inset: 0;
   cursor: grab;
+  touch-action: none;
+  overscroll-behavior: contain;
 }
 .memory-lab-overview-stage:active { cursor: grabbing; }
 .memory-lab-overview-grid {
@@ -5486,6 +5488,12 @@ var NEWMARK_I18N = {
     'automation.promptPlaceholder': 'Input automation task...',
     'automation.model': 'LLM model',
     'automation.currentModel': 'Current model',
+    'automation.workspace': 'Workspace',
+    'automation.workspaceRequired': 'Select a workspace',
+    'automation.conversationStrategy': 'Conversation strategy',
+    'automation.newConversation': 'Create a new conversation each run',
+    'automation.existingConversation': 'Continue an existing conversation',
+    'automation.conversation': 'Conversation',
     'automation.condition': 'Condition',
     'automation.conditionType': 'Condition type',
     'automation.once': 'Once',
@@ -6035,6 +6043,12 @@ var NEWMARK_I18N = {
     'automation.promptPlaceholder': '输入自动化任务...',
     'automation.model': 'LLM 模型',
     'automation.currentModel': '当前模型',
+    'automation.workspace': '工作区',
+    'automation.workspaceRequired': '请选择工作区',
+    'automation.conversationStrategy': '对话策略',
+    'automation.newConversation': '每次新建对话',
+    'automation.existingConversation': '继续已有对话',
+    'automation.conversation': '对话',
     'automation.condition': '条件',
     'automation.conditionType': '条件类型',
     'automation.once': '单次',
@@ -12496,7 +12510,13 @@ if (api.onTerminalData) {
     if (!pane) return;
     var output = pane.querySelector('.terminal-output');
     if (!output) return;
-    var text = data.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // The bottom bar uses a real PTY for host shells; remove control sequences
+    // that the lightweight transcript view cannot render while preserving text.
+    var clean = String(data || '')
+      .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+      .replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '')
+      .replace(/\r(?!\n)/g, '');
+    var text = clean.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     output.innerHTML += text;
     output.scrollTop = output.scrollHeight;
   });
@@ -14192,6 +14212,7 @@ window.showAutomationWindow = async function() {
         '<button class="sec-btn" style="font-size:9px;padding:2px 8px;' + (a.active ? 'Active' : 'Paused') + '" onclick="window.toggleAutomationById(' + JSON.stringify(a.id).replace(/"/g, '&quot;') + ')">' + (a.active ? esc(t('automation.active')) : esc(t('automation.paused'))) + '</button>' +
         '<button class="sec-btn" style="font-size:9px;padding:2px 8px;color:#ff6666;" onclick="window.deleteAutomationById(' + JSON.stringify(a.id).replace(/"/g, '&quot;') + ')">' + esc(t('common.delete')) + '</button>' +
         '</div>' +
+        '<div style="font-size:10px;color:var(--text-dim);">' + esc(t('automation.workspace')) + ': ' + esc(a.workspaceName || a.workspaceId || '-') + ' | ' + esc(t('automation.conversation')) + ': ' + esc(a.conversationMode === 'existing' ? (a.conversationId || '-') : t('automation.newConversation')) + '</div>' +
         '<div style="font-size:10px;color:var(--text-dim);">' + esc(t('message.model')) + ': ' + esc(a.model || t('common.current')) + ' | ' + esc(t('automation.type')) + ': ' + esc(a.condition || 'once') + ' | ' + esc(t('automation.status')) + ': ' + status + ' | ' + esc(t('automation.runs')) + ': ' + (a.runCount || 0) + '</div>' +
         '<div style="font-size:10px;color:var(--text-dim);">' + esc(t('automation.next')) + ': ' + esc(next) + ' | ' + esc(t('automation.last')) + ': ' + esc(last) + '</div>' +
         (lastLine ? '<div style="font-size:10px;color:' + (a.lastError ? '#ff7777' : 'var(--text-dim)') + ';margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(lastLine) + '</div>' : '') +
@@ -14207,10 +14228,19 @@ window.showAutomationWindow = async function() {
 
 window.showNewAutomationForm = function() {
   state.activeSubWindowView = { name: 'newAutomation' };
+  var workspaces = state.workspaces || [];
+  var selectedWorkspace = String(state.currentWorkspaceId || workspaceIdentity(workspaces[0]) || '');
+  var workspaceOptions = workspaces.map(function(ws) {
+    var identity = workspaceIdentity(ws);
+    return '<option value="' + escAttr(identity) + '"' + (identity === selectedWorkspace ? ' selected' : '') + '>' + esc(ws.name || identity) + '</option>';
+  }).join('');
   var html = '<div class="auto-input-group"><label>' + esc(t('automation.prompt')) + '</label><textarea id="auto-prompt" rows="4" placeholder="' + escAttr(t('automation.promptPlaceholder')) + '"></textarea></div>' +
     '<div class="auto-input-group"><label>' + esc(t('automation.model')) + '</label><select id="auto-model"><option value="">' + esc(t('automation.currentModel')) + '</option>' +
     state.models.map(function(m){return '<option value="' + esc(m) + '">' + esc(m) + '</option>';}).join('') +
     '</select></div>' +
+    '<div class="auto-input-group"><label>' + esc(t('automation.workspace')) + '</label><select id="auto-workspace" onchange="window.refreshAutomationConversationOptions()"><option value="">' + esc(t('automation.workspaceRequired')) + '</option>' + workspaceOptions + '</select></div>' +
+    '<div class="auto-input-group"><label>' + esc(t('automation.conversationStrategy')) + '</label><select id="auto-conversation-mode" onchange="window.refreshAutomationConversationOptions()"><option value="new">' + esc(t('automation.newConversation')) + '</option><option value="existing">' + esc(t('automation.existingConversation')) + '</option></select></div>' +
+    '<div id="auto-conversation-group" class="auto-input-group" hidden><label>' + esc(t('automation.conversation')) + '</label><select id="auto-conversation"></select></div>' +
     '<div class="auto-conditions">' +
     '<div class="auto-cond"><label>' + esc(t('automation.condition')) + '</label><select id="auto-cond-type"><option value="once">' + esc(t('automation.once')) + '</option><option value="loop">' + esc(t('automation.loop')) + '</option><option value="schedule">' + esc(t('automation.schedule')) + '</option></select></div>' +
     '<div class="auto-cond"><label>' + esc(t('automation.interval')) + '</label><select id="auto-interval"><option value="0">--</option><option value="10">10 sec</option><option value="60">1 min</option><option value="3600">1 hour</option></select></div>' +
@@ -14221,6 +14251,22 @@ window.showNewAutomationForm = function() {
     '<button class="sec-btn primary" onclick="window.createAutomation()">' + esc(t('automation.create')) + '</button>' +
     '<button class="sec-btn" onclick="window.showAutomationWindow()">' + esc(t('common.back')) + '</button></div>';
   window.openSubWin(t('automation.newTitle'), html);
+  window.refreshAutomationConversationOptions();
+};
+
+window.refreshAutomationConversationOptions = function() {
+  var workspaceSelect = document.getElementById('auto-workspace');
+  var modeSelect = document.getElementById('auto-conversation-mode');
+  var group = document.getElementById('auto-conversation-group');
+  var conversationSelect = document.getElementById('auto-conversation');
+  if (!workspaceSelect || !modeSelect || !group || !conversationSelect) return;
+  var existing = modeSelect.value === 'existing';
+  group.hidden = !existing;
+  var workspaceKey = String(workspaceSelect.value || '');
+  var conversations = state.workspaceConversations[workspaceKey] || [];
+  conversationSelect.innerHTML = conversations.map(function(conversation) {
+    return '<option value="' + escAttr(conversation.id || '') + '">' + esc(conversation.summary || conversation.id || '') + '</option>';
+  }).join('');
 };
 
 window.toggleAutomationById = async function(id) {
@@ -14236,14 +14282,22 @@ window.deleteAutomationById = async function(id) {
 window.createAutomation = async function() {
   var prompt = document.getElementById('auto-prompt');
   var model = document.getElementById('auto-model');
+  var workspace = document.getElementById('auto-workspace');
+  var conversationMode = document.getElementById('auto-conversation-mode');
+  var conversation = document.getElementById('auto-conversation');
   var condType = document.getElementById('auto-cond-type');
   var interval = document.getElementById('auto-interval');
   var start = document.getElementById('auto-start');
   var end = document.getElementById('auto-end');
-  if (prompt && prompt.value.trim()) {
+  if (prompt && prompt.value.trim() && workspace && workspace.value && (conversationMode.value !== 'existing' || (conversation && conversation.value))) {
+    var workspaceMeta = findWorkspaceByIdentity(workspace.value);
     var item = {
       prompt: prompt.value.trim(),
       model: model ? model.value : '',
+      workspaceId: workspace.value,
+      workspaceName: workspaceMeta ? workspaceMeta.name : '',
+      conversationMode: conversationMode ? conversationMode.value : 'new',
+      conversationId: conversationMode && conversationMode.value === 'existing' && conversation ? conversation.value : '',
       condition: condType ? condType.value : 'once',
       intervalSec: interval ? Number(interval.value || 0) : 0,
       startAt: start ? start.value : '',
@@ -16261,8 +16315,13 @@ window.renderMemoryLabDetail = function(lab, index) {
 };
 
 window.renderMemoryLabOverview = function(_lab, index) {
-  var graph = window.buildMemoryLabOverviewGraph(index);
-  state.memoryLabOverviewGraph = graph;
+  var graphSignature = window.memoryLabOverviewGraphSignature(index);
+  var graph = state.memoryLabOverviewGraph;
+  if (!graph || state.memoryLabOverviewGraphSignature !== graphSignature) {
+    graph = window.buildMemoryLabOverviewGraph(index);
+    state.memoryLabOverviewGraph = graph;
+    state.memoryLabOverviewGraphSignature = graphSignature;
+  }
   var mode = state.memoryLabOverviewMode || 'both';
   var html = '<div class="memory-lab-overview">' +
     '<div class="memory-lab-overview-toolbar">' +
@@ -16324,7 +16383,12 @@ window.selectMemoryLabTag = function(tag) {
   state.memoryLabSelectedComponent = '';
   state.memoryLabSearchQuery = '';
   if ((state.memoryLabView || 'overview') === 'overview') {
-    state.memoryLabOverviewFocus = 'tag:' + tag;
+    var searchInput = document.getElementById('memory-lab-search-input');
+    var searchResults = document.getElementById('memory-lab-search-results');
+    if (searchInput) searchInput.value = '';
+    if (searchResults) { searchResults.hidden = true; searchResults.innerHTML = ''; }
+    window.selectMemoryLabOverviewNode('tag:' + tag);
+    return;
   }
   window.renderMemoryLab();
 };
@@ -16392,6 +16456,18 @@ window.buildMemoryLabOverviewGraph = function(index) {
   return { nodes: nodes, edges: edges, incoming: incoming, outgoing: outgoing, focusCache: {}, tags: tagNames, componentCount: componentSlugsAll.length };
 };
 
+window.memoryLabOverviewGraphSignature = function(index) {
+  var tags = index.tags || {};
+  var components = index.components || {};
+  return JSON.stringify({
+    tags: Object.keys(tags).sort().map(function(tag) {
+      var node = tags[tag] || {};
+      return [tag, (node.parents || []).slice().sort(), (node.children || []).slice().sort(), (node.components || []).slice().sort()];
+    }),
+    components: Object.keys(components).sort().map(function(slug) { return [slug, (components[slug] || {}).name || slug]; })
+  });
+};
+
 window.initMemoryLabOverview = function() {
   var graph = state.memoryLabOverviewGraph;
   var stage = document.getElementById('memory-lab-overview-stage');
@@ -16420,11 +16496,20 @@ window.initMemoryLabOverview = function() {
   var camera = state.memoryLabOverviewCamera;
   var pan = null;
   var activePointerId = null;
+  function renderPanTransform() {
+    var svg = document.getElementById('memory-lab-overview-svg');
+    var nodesLayer = document.getElementById('memory-lab-overview-nodes');
+    var renderX = Number.isFinite(state.memoryLabOverviewPanRenderX) ? state.memoryLabOverviewPanRenderX : camera.x;
+    var renderY = Number.isFinite(state.memoryLabOverviewPanRenderY) ? state.memoryLabOverviewPanRenderY : camera.y;
+    var panX = camera.x - renderX;
+    var panY = camera.y - renderY;
+    var transform = 'translate3d(' + panX + 'px,' + panY + 'px,0)';
+    if (svg) svg.style.transform = transform;
+    if (nodesLayer) nodesLayer.style.transform = transform;
+  }
   function finishPan(event) {
     pan = null;
     state.memoryLabOverviewPanActive = false;
-    state.memoryLabOverviewPanEdgeX = 0;
-    state.memoryLabOverviewPanEdgeY = 0;
     var pointerId = event && Number.isFinite(event.pointerId) ? event.pointerId : activePointerId;
     if (pointerId !== null && stage.hasPointerCapture && stage.hasPointerCapture(pointerId)) {
       try { stage.releasePointerCapture(pointerId); } catch (_) {}
@@ -16448,15 +16533,7 @@ window.initMemoryLabOverview = function() {
     camera.y += event.clientY - pan.y;
     pan.x = event.clientX;
     pan.y = event.clientY;
-    var bounds = stage.getBoundingClientRect();
-    var edge = 42;
-    state.memoryLabOverviewPanEdgeX = event.clientX < bounds.left + edge
-      ? -Math.min(22, bounds.left + edge - event.clientX)
-      : event.clientX > bounds.right - edge ? Math.min(22, event.clientX - bounds.right + edge) : 0;
-    state.memoryLabOverviewPanEdgeY = event.clientY < bounds.top + edge
-      ? -Math.min(22, bounds.top + edge - event.clientY)
-      : event.clientY > bounds.bottom - edge ? Math.min(22, event.clientY - bounds.bottom + edge) : 0;
-    window.requestMemoryLabOverviewFrame();
+    renderPanTransform();
   };
   stage.onpointerup = finishPan;
   stage.onpointercancel = finishPan;
@@ -16464,20 +16541,22 @@ window.initMemoryLabOverview = function() {
     pan = null;
     activePointerId = null;
     state.memoryLabOverviewPanActive = false;
-    state.memoryLabOverviewPanEdgeX = 0;
-    state.memoryLabOverviewPanEdgeY = 0;
   };
   stage.onwheel = function(event) {
     event.preventDefault();
     var old = camera.scale;
     // No user-facing zoom ceiling or floor: keep only numerical guards that
     // prevent a zero/Infinity camera matrix after extreme wheel input.
-    var next = old * Math.exp(-event.deltaY * 0.0014);
+    var next = old * Math.exp(-event.deltaY * 0.0009);
     if (!Number.isFinite(next)) next = event.deltaY < 0 ? 10000 : 0.0001;
     next = Math.max(0.0001, Math.min(10000, next));
     camera.x = event.clientX - (event.clientX - camera.x) * (next / old);
     camera.y = event.clientY - (event.clientY - camera.y) * (next / old);
     camera.scale = next;
+    state.memoryLabOverviewManualCamera = true;
+    state.memoryLabOverviewInteractionOnly = true;
+    window.renderMemoryLabOverviewFrame();
+    state.memoryLabOverviewInteractionOnly = false;
     window.requestMemoryLabOverviewFrame();
   };
   window.requestMemoryLabOverviewFrame();
@@ -16589,8 +16668,6 @@ window.renderMemoryLabOverviewFrame = function() {
   if (!graph || !stage || !svg) return;
   var camera = state.memoryLabOverviewCamera || { x: stage.clientWidth / 2, y: stage.clientHeight / 2, scale: 0.88 };
   if (state.memoryLabOverviewPanActive) {
-    camera.x += Number(state.memoryLabOverviewPanEdgeX || 0);
-    camera.y += Number(state.memoryLabOverviewPanEdgeY || 0);
     var panBaseX = Number.isFinite(state.memoryLabOverviewPanRenderX) ? state.memoryLabOverviewPanRenderX : camera.x;
     var panBaseY = Number.isFinite(state.memoryLabOverviewPanRenderY) ? state.memoryLabOverviewPanRenderY : camera.y;
     var panX = camera.x - panBaseX;
@@ -16604,7 +16681,8 @@ window.renderMemoryLabOverviewFrame = function() {
   svg.style.transform = '';
   if (nodesLayer) nodesLayer.style.transform = '';
   function screen(node) { return { x: camera.x + node.x * camera.scale, y: camera.y + node.y * camera.scale }; }
-  var simulate = !state.memoryLabOverviewPanActive;
+  var simulate = !state.memoryLabOverviewPanActive && !state.memoryLabOverviewInteractionOnly;
+  var memoryLabVelocityRetention = 0.72;
   if (simulate) {
     for (var i = 0; i < graph.nodes.length; i++) { graph.nodes[i].fx = 0; graph.nodes[i].fy = 0; }
     for (var a = 0; a < graph.nodes.length; a++) {
@@ -16631,8 +16709,8 @@ window.renderMemoryLabOverviewFrame = function() {
       if (node.fixed) continue;
       node.fx += -node.x * 0.0007 + Math.cos(ambientPhase + n * 1.618) * 0.045;
       node.fy += -node.y * 0.0007 + Math.sin(ambientPhase + n * 1.618) * 0.045;
-      node.vx = ((node.vx || 0) + node.fx) * 0.86;
-      node.vy = ((node.vy || 0) + node.fy) * 0.86;
+      node.vx = ((node.vx || 0) + node.fx) * memoryLabVelocityRetention;
+      node.vy = ((node.vy || 0) + node.fy) * memoryLabVelocityRetention;
       node.x += node.vx;
       node.y += node.vy;
     }
@@ -16711,6 +16789,7 @@ window.selectMemoryLabOverviewNode = function(id) {
 
 window.setMemoryLabOverviewMode = function(mode) {
   state.memoryLabOverviewMode = ['both', 'parents', 'children', 'direct'].indexOf(mode) >= 0 ? mode : 'both';
+  window.requestMemoryLabOverviewFrame();
 };
 
 window.clearMemoryLabOverviewFocus = function() {
@@ -16721,10 +16800,15 @@ window.clearMemoryLabOverviewFocus = function() {
 };
 
 window.resetMemoryLabOverview = function() {
-  state.memoryLabOverviewCamera = null;
+  var stage = document.getElementById('memory-lab-overview-stage');
+  state.memoryLabOverviewCamera = {
+    x: stage ? stage.clientWidth / 2 : 0,
+    y: stage ? stage.clientHeight / 2 : 0,
+    scale: 0.88
+  };
   state.memoryLabOverviewFocus = '';
   state.memoryLabOverviewManualCamera = false;
-  window.renderMemoryLab();
+  window.requestMemoryLabOverviewFrame();
 };
 
 window.selectMemoryLabComponent = function(slug) {

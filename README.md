@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.1.8-blue">
+  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.1.9-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -30,17 +30,17 @@ Newmark Agent brings model routing, persistent workspaces, tools, subagents, wor
 
 ## Download
 
-### dev-0.1.8
+### dev-0.1.9
 
-Download packages from the [dev-0.1.8 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.8).
+Download packages from the [dev-0.1.9 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.9).
 
 | Package | Platform | SHA-256 |
 | --- | --- | --- |
-| `Newmark-Agent-0.1.7-x64.msi` | Windows x64 installer | `DDACFC5005FA0EFAE2496E56F88975A2EDDB640540235F7F2009B3D1A905F098` |
-| `Newmark-Agent-0.1.7-win-unpacked-x64.zip` | Windows x64 portable | `0564B7BC182589630549523303356EFA76ED92AE86525226931C21D94582B06F` |
-| `Newmark-Agent-0.1.7-x86_64.AppImage` | Linux x64 AppImage | `AC90395F1ED35F6FAAF4B2873D992A26C9F15049E15F571ADEBD00B9AC5D776F` |
-| `Newmark-Agent-0.1.7-amd64.deb` | Debian/Ubuntu x64 package | `A826F2EB1C961C54D58BF7DFA4C88109398A909A40E6E048CFC3074216808A75` |
-| `Newmark-Agent-0.1.7-linux-unpacked-x64.zip` | Linux x64 portable | `75DC6C60AD8520986A6CF85A10452D41454F34711A6E16E388A6873B941F3863` |
+| `Newmark-Agent-0.1.9-x64.msi` | Windows x64 installer | `8AB5C16A9A1B90606445A35B8A41C742B852BA5EE91F6EB100B0F6F7DE96398E` |
+| `Newmark-Agent-0.1.9-win-unpacked-x64.zip` | Windows x64 portable | `B4360AB8A4C8774FB805CF72D8D18AE19709EE69CA048D06CDFBF5E3D6B4E5A6` |
+| `Newmark-Agent-0.1.9-x86_64.AppImage` | Linux x64 AppImage | `A911F7743E81D90AD0E0E32A49BDBF062523448EF92F6A2C41A22C6FF0FE11E6` |
+| `Newmark-Agent-0.1.9-amd64.deb` | Debian/Ubuntu x64 package | `B032E49A9CADC8650A2C38D8730769DCDFE4B24D9F21BB0F00A117F686C5FC6B` |
+| `Newmark-Agent-0.1.9-linux-unpacked-x64.zip` | Linux x64 portable | `F43453A7E0C0E66A4F1FF840B0EC555B7018967A0A0328441839EA5DB2509B3D` |
 
 The Windows MSI requests administrator elevation. Windows and Linux may show an unknown-publisher warning because the packages are not code-signed.
 
@@ -54,7 +54,11 @@ The Windows MSI requests administrator elevation. Windows and Linux may show an 
 
 Application upgrades preserve existing user state under `~/.Newmark`.
 
-The current source and packaged prerelease version is `dev-0.1.8`. The release separates the visible input mode from per-turn execution and keeps Plan selected while using a proactive read-only planning boundary. 已计划 is one durable, revisioned, conversation-scoped, user-editable Markdown document: Plan is required to read and update it through `linked_plan`, and a one-turn chat summary can never overwrite it. Only a successful revision update unlocks the explicit “execute this plan / supplement it” choice. Pending question cards survive transcript redraws and remain unselected until a real user click. Goal continuation yields to queued user work while judging only the current Goal bar objective. Each hidden Goal continuation starts a distinct Build only after the preceding Build has completed and persisted, and its synthetic user instruction stays out of the visible transcript and primary prompt. Backend-owned Goal completion refreshes the terminal snapshot so the Goal bar clears and Build mode is restored immediately. Flow Next automatically leases and pauses the queue even when it was actively running, injects user input into the selected workflow structure, and restores the exact pre-Flow pause state on normal completion; idle Guide is treated as Next, and manually resuming the queue exits Flow takeover. The Flow-launching Next is displayed in a dedicated Flow-prompt bar instead of the queue, while subsequent Next input remains paused in the queue; leaving Flow hides both the prompt bar and Flow configuration selector. Local queue delivery atomically removes the claimed head before Build handoff, rolls it back on rejection, and cannot send the same head twice. SubAgent dispatch remains recoverably queued until an executor is available, binds in headless runtimes, preserves exact provider deployments, releases stale providers during fallback, and aborts active children on close. The input's floating stack keeps the scroll-to-bottom control above the Flow takeover bubble and the Todo/Queue/Goal bars without changing input height; leaving Flow restores Next. Newly added models default to a `128000`-token context window.
+The current source and packaged prerelease is `dev-0.1.9`. Memory Lab overview tag motion now retains 72% rather than 86% of velocity per simulation step. Unchanged graph data reuses the live layout, overview selection no longer redraws the panel, wheel zoom renders immediately around the pointer, and drag follows the pointer without delayed edge drift. Automations are workspace-bound and choose either a fresh conversation per trigger or a specific existing conversation; every due trigger starts a distinct Build block in that target.
+
+The Agent `bash` tool and the bottom-bar Bash terminal now share a workspace-scoped TypeScript Bash runtime derived from the Apache-2.0 `just-bash` package. Bash built-ins, pipes, redirects, variables, loops, globbing, and text utilities run without depending on a separately installed Bash executable. Agent one-shot calls preflight unsupported commands and retain host-shell compatibility for tools such as Git and npm; bottom-bar Bash sessions preserve `cwd`, reject unsupported host commands with an explicit handoff message, and keep filesystem access inside the active workspace. PowerShell, CMD, pwsh, and POSIX host tabs now use `node-pty` instead of redirected child-process pipes, while the lightweight transcript strips terminal control sequences it cannot render.
+
+A repeatable isolated stress gate is available as `cd DESKTOP && npm.cmd run test:automation-bash-stress`. Its accepted run used a real `%TEMP%` root, 34 automation schedules and 56 triggered Builds, including eight wall-clock timer triggers and 40 overlapping tick attempts. All 56 Builds had unique run IDs and persisted completed records in the configured workspace conversations. The same run exercised 16 persistent native Bash sessions, 320 session commands, 64 parallel one-shot commands, 12 cancellations, host-command fallback, and four real ConPTY PowerShell sessions.
 
 Memory Lab overview component selection now focuses the existing live graph without reloading the panel or issuing a component read. Detail selection fetches core Markdown without replacing the panel with a loading state. The user-facing Instructions/说明 disclosure, including local root/index/component paths, has been removed.
 
@@ -193,6 +197,7 @@ See [OVERVIEW.md](OVERVIEW.md) for the source tree, subsystem responsibilities, 
 
 ### Maintenance Log
 
+- 2026-07-27: Advanced source development to `dev-0.1.9`, increased Memory Lab overview tag-motion damping, stopped incidental graph reloads, made zoom/drag immediate, and bound automations to explicit workspace/conversation Build targets. See `archive/20260727-dev-0.1.9-memory-lab-tag-damping.md` and `archive/20260727-dev-0.1.9-workspace-automation-builds.md`.
 - 2026-07-26: Removed Memory Lab's path-bearing Instructions/说明 disclosure and stopped overview component clicks from reloading the panel. The live graph, camera, and DOM stay in place; only Detail performs a non-flashing component-content read. See `archive/20260726-dev-0.1.8-memory-lab-overview-privacy.md`.
 - 2026-07-26: Added a hard-budget Chinese/English scanned-PDF and Browser-button fallback: text first, validated vision second, compact offline OCR last. The release rejects more than 10 MiB of OCR payload and verifies formula-aware conservative Agent repair.
 - 2026-07-26: Completed the Goal terminal-state UI handoff so an autonomously completed Goal clears its visible bar and returns the selector to Build, and changed newly added models from a 4096-token default context window to 128000.

@@ -193,6 +193,12 @@ export class ConversationKernel {
     return this.findRuntime(target)?.events.slice() || [];
   }
 
+  async waitForIdle(target: ConversationTargetInput): Promise<void> {
+    const active = this.findRuntime(target)?.activePromise;
+    if (!active) return;
+    try { await active; } catch { /* a scheduled Build still starts after the prior run settles */ }
+  }
+
   pendingOptions(target: ConversationTargetInput): OptionQuestion[] | undefined {
     const runtime = this.findRuntime(target);
     return runtime ? runtime.runner.pendingOptions.map(question => ({

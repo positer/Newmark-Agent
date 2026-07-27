@@ -9,6 +9,7 @@ import { AutomationManager } from './core/automation';
 import { sanitizeProvidersForState } from './core/config';
 import { FlowEngine, FlowWorkflow } from './core/flow';
 import { WorkspaceFileRouter } from './core/workspaceFileRouter';
+import { executeWorkspaceBash } from './core/nativeBash';
 
 const PORT = 47890;
 let agent: Agent | null = null;
@@ -36,8 +37,12 @@ function normalizeTerminalShell(shellId: string): string {
   return availableTerminalShells().includes(requested) ? requested : 'bash';
 }
 
-function runShellCommand(command: string, shellId: string, cwd: string): { output: string; error?: string } {
+async function runShellCommand(command: string, shellId: string, cwd: string): Promise<{ output: string; error?: string; engine?: string }> {
   const requested = normalizeTerminalShell(shellId || defaultTerminalShell());
+  if (requested === 'bash') {
+    const result = await executeWorkspaceBash(command, cwd, { cwd, allowHostFallback: true });
+    return { output: result.output, error: result.error, engine: result.engine };
+  }
   const linuxShell = process.env.SHELL || '/bin/bash';
   const exe =
     requested === 'cmd' ? 'cmd.exe' :
@@ -282,6 +287,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         const created = automation?.create({
           prompt: params.prompt || '',
           model: params.model || '',
+          workspaceId: params.workspaceId || params.workspace_id || agent.workspace.current?.id || agent.workspace.current?.path || '',
+          workspaceName: params.workspaceName || params.workspace_name || agent.workspace.current?.name || '',
+          conversationMode: params.conversationMode === 'existing' || params.conversation_mode === 'existing' ? 'existing' : 'new',
+          conversationId: params.conversationId || params.conversation_id || '',
           condition: params.condition || 'once',
           intervalSec: Number(params.intervalSec || params.interval || 0),
           startAt: params.startAt || '',
@@ -322,7 +331,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
       case '/api/bash': {
         const { cmd, command, shell, cwd } = JSON.parse(body || '{}');
         try {
-          jsonResponse(res, runShellCommand(String(command || cmd || ''), String(shell || ''), cwd || agent.rootPath));
+          jsonResponse(res, await runShellCommand(String(command || cmd || ''), String(shell || ''), cwd || agent.rootPath));
         } catch(e: any) { jsonResponse(res, { output: e.stdout || '', error: e.stderr || String(e) }); }
         return;
       }
@@ -484,15 +493,25 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
 function startServer(root: string): void {
   agent = new Agent(root);
   workspaceFileRouter = new WorkspaceFileRouter(() => path.resolve(agent?.workspace.current?.path || root));
-  automation = new AutomationManager(agent.config, async (prompt, model) => {
+  automation = new AutomationManager(agent.config, async (prompt, model, item) => {
     if (!agent) return '';
     const previousModel = agent.model;
+    const previousWorkspace = agent.workspace.current?.id || agent.workspace.current?.path || '';
+    const previousConversation = agent.activeConversationId;
+    agent.selectWorkspaceFromStorage(item.workspaceId);
+    const conversationId = item.conversationMode === 'existing'
+      ? item.conversationId
+      : `automation-${item.id}-${Date.now().toString(36)}`;
+    agent.setConversationFromStorage(conversationId);
+    automation?.update(item.id, { lastConversationId: conversationId });
     if (model) agent.setModel(model);
     try {
       const tokens = await agent.process(prompt);
       return tokens.map(t => t.text).join('');
     } finally {
       if (model) agent.setModel(previousModel);
+      if (previousWorkspace) agent.selectWorkspaceFromStorage(previousWorkspace);
+      agent.setConversationFromStorage(previousConversation);
     }
   });
   agent.setAutomationManager(automation);

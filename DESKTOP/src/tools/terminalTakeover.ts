@@ -52,7 +52,7 @@ interface Disposable {
   dispose(): void;
 }
 
-interface TakeoverPty {
+export interface TakeoverPty {
   readonly pid: number;
   readonly cols: number;
   readonly rows: number;
@@ -373,7 +373,7 @@ function spawnWslPty(shell: { exe: string; args: string[] }, cwd: string, env: N
   };
 }
 
-function spawnTakeoverPty(shell: { exe: string; args: string[] }, cwd: string, env: NodeJS.ProcessEnv, cols: number, rows: number): TakeoverPty {
+export function spawnTakeoverPty(shell: { exe: string; args: string[] }, cwd: string, env: NodeJS.ProcessEnv, cols: number, rows: number): TakeoverPty {
   if (process.platform !== 'win32' && process.env.NEWMARK_WSL_DISTRO) return spawnWslPty(shell, cwd, env, cols, rows);
   const nodePty = requireNodePty();
   const options: import('node-pty').IPtyForkOptions | import('node-pty').IWindowsPtyForkOptions = {

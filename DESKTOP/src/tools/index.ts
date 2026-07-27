@@ -33,6 +33,7 @@ import {
   PLAN_COMPUTER_USE_ACTIONS,
 } from '../core/toolPolicy';
 import { runAsyncProcess } from '../core/asyncProcess';
+import { executeWorkspaceBash } from '../core/nativeBash';
 import { closeToolArgumentSchema, ToolArgumentValidatorRegistry } from '../core/toolArgumentValidator';
 import { LocalOcrEngine } from '../core/localOcr';
 import { browserVisualFallback, registerBrowserVisualFallback } from '../core/visualTextFallback';
@@ -392,19 +393,27 @@ export class ToolExecutor {
       t('memory_lab_update', 'Create or update a Memory Lab persistent memory component. Tag names are independent; optional tagPaths expresses a multi-parent DAG. Legacy slash paths such as #A/B/C migrate to separate nodes on rebuild; hyphens stay inside one tag name.', { name: { type: 'string' }, description: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, tagPaths: { type: 'array', items: { type: 'array', items: { type: 'string' } } }, content: { type: 'string' }, kind: { type: 'string', enum: ['file', 'folder'] } }, ['name', 'tags', 'content']),
       t('memory_lab_reindex', 'Rebuild and organize Memory Lab index links. Routed through Agent runtime when invoked by the model.', {}, []),
       t('automation_list', 'List persisted Newmark automations so the agent can inspect scheduled work.', {}, []),
-      t('automation_create', 'Create a persisted Newmark automation. Supports once, loop, and schedule conditions. The prompt is what the agent will run later.', {
+      t('automation_create', 'Create a persisted Newmark automation bound to one workspace. At trigger time it starts a Build in either a new conversation or a specified existing conversation.', {
         prompt: { type: 'string' },
         model: { type: 'string' },
+        workspace_id: { type: 'string' },
+        workspace_name: { type: 'string' },
+        conversation_mode: { type: 'string', enum: ['new', 'existing'] },
+        conversation_id: { type: 'string' },
         condition: { type: 'string', enum: ['once', 'loop', 'schedule'] },
         interval_sec: { type: 'number' },
         start_at: { type: 'string' },
         end_at: { type: 'string' },
         active: { type: 'boolean' },
-      }, ['prompt']),
+      }, ['prompt', 'workspace_id', 'conversation_mode']),
       t('automation_update', 'Update an existing persisted Newmark automation by id.', {
         id: { type: 'string' },
         prompt: { type: 'string' },
         model: { type: 'string' },
+        workspace_id: { type: 'string' },
+        workspace_name: { type: 'string' },
+        conversation_mode: { type: 'string', enum: ['new', 'existing'] },
+        conversation_id: { type: 'string' },
         condition: { type: 'string', enum: ['once', 'loop', 'schedule'] },
         interval_sec: { type: 'number' },
         start_at: { type: 'string' },
@@ -1076,22 +1085,18 @@ export class ToolExecutor {
     if (!cmd.trim()) return '[bash] No command.';
     const timeout = this.resolveBashTimeout(timeoutMs);
     try {
-      const command = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
-      const args = process.platform === 'win32'
-        ? ['-NoProfile', '-NonInteractive', '-Command', cmd]
-        : ['-c', cmd];
-      const result = await runAsyncProcess(command, args, {
+      const result = await executeWorkspaceBash(cmd, ws, {
         cwd: ws,
         timeoutMs: timeout,
-        maxBuffer: 1024 * 1024,
         signal,
+        allowHostFallback: true,
       });
-      const out = `${result.stdout || ''}${result.stderr || ''}`.trim();
+      const out = result.output.trim();
       if (result.error) {
-        const kind = result.aborted ? 'Aborted' : result.timedOut ? 'Timed out' : result.overflowed ? 'Output limit' : 'Error';
+        const kind = result.aborted ? 'Aborted' : result.timedOut ? 'Timed out' : 'Error';
         return `${out ? `${out}\n` : ''}[bash] ${kind}: ${result.error}`;
       }
-      return out || `[bash] Exit: ${result.status ?? -1}`;
+      return out || `[bash:${result.engine}] Exit: ${result.exitCode}`;
     } catch (e: unknown) {
       return `[bash] ${e instanceof Error ? e.message : String(e)}`;
     }

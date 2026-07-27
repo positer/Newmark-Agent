@@ -9,7 +9,7 @@ export interface NativeToolCatalogEntry {
 }
 
 export const NATIVE_TOOL_CATALOG: NativeToolCatalogEntry[] = [
-  { name: 'bash', label: 'Shell command', description: 'Run one-shot PowerShell or bash commands inside the workspace.', category: 'core', defaultEnabled: true },
+  { name: 'bash', label: 'Native Bash', description: 'Run workspace-scoped Bash with a native TypeScript interpreter and host fallback for external commands.', category: 'core', defaultEnabled: true },
   { name: 'pwd', label: 'Working directory', description: 'Report the active workspace path.', category: 'core', defaultEnabled: true, protected: true, availability: 'required' },
   { name: 'read', label: 'Read file', description: 'Read workspace file contents.', category: 'core', defaultEnabled: true, protected: true, availability: 'required' },
   { name: 'write', label: 'Write file', description: 'Create or overwrite workspace files.', category: 'core', defaultEnabled: true },

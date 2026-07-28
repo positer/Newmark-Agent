@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.1.9-blue">
+  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.1.12-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -30,17 +30,17 @@ Newmark Agent brings model routing, persistent workspaces, tools, subagents, wor
 
 ## Download
 
-### dev-0.1.9
+### dev-0.1.12
 
-Download packages from the [dev-0.1.9 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.9).
+Download packages from the [dev-0.1.12 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.1.12).
 
 | Package | Platform | SHA-256 |
 | --- | --- | --- |
-| `Newmark-Agent-0.1.9-x64.msi` | Windows x64 installer | `764888B1BBB355B815F1AB884BE8FC113E7C2A5219BCB001B5296BC2739F87D4` |
-| `Newmark-Agent-0.1.9-win-unpacked-x64.zip` | Windows x64 portable | `7CA768692A5F83756241DEF72438B7A6276D0BD5CBBF3912E3D7ADDBED7BD002` |
-| `Newmark-Agent-0.1.9-x86_64.AppImage` | Linux x64 AppImage | `6936D12F49AD5610B9A00985DA491DDAABFB6F0F855028844D0483E5CF45BDFA` |
-| `Newmark-Agent-0.1.9-amd64.deb` | Debian/Ubuntu x64 package | `944747A26C157B9ED5E16ED9A41129D6C4E41369FF1BC5302D209018883E85C1` |
-| `Newmark-Agent-0.1.9-linux-unpacked-x64.zip` | Linux x64 portable | `0D06BFAD38F0928BB6C3B2F04CECCC41C39A6FFB989C7C460D65C08ED1AEC778` |
+| `Newmark-Agent-0.1.12-x64.msi` | Windows x64 installer | `8E242AE760B439D443AA772B3BCD0695698ACEEC5D72FDFF2520D5E2295CF9EB` |
+| `Newmark-Agent-0.1.12-win-unpacked-x64.zip` | Windows x64 portable | `F8C03B985BB5CD2B5426D5485436B065F211B615F159925631A8FAAA69DF7CF8` |
+| `Newmark-Agent-0.1.12-x86_64.AppImage` | Linux x64 AppImage | `280C46C47ED9CD098EBB2BBCD651F73971CE6A56596F8B6B9FC8D8EAC16F24D8` |
+| `Newmark-Agent-0.1.12-amd64.deb` | Debian/Ubuntu x64 package | `D94D21FE0F427F0C42C477C48526A6686D1723439F82658F4BB8A6579CEC4214` |
+| `Newmark-Agent-0.1.12-linux-unpacked-x64.zip` | Linux x64 portable | `D32AA71E7A47F584BB421F45D9254B5615A6E99B9F29CECA439C1CB367CBA5D1` |
 
 The Windows MSI requests administrator elevation. Windows and Linux may show an unknown-publisher warning because the packages are not code-signed.
 
@@ -54,13 +54,15 @@ The Windows MSI requests administrator elevation. Windows and Linux may show an 
 
 Application upgrades preserve existing user state under `~/.Newmark`.
 
-The current source and packaged prerelease is `dev-0.1.9`. Memory Lab overview tag motion now retains 72% rather than 86% of velocity per simulation step. Unchanged graph data reuses the live layout, overview selection no longer redraws the panel, wheel zoom renders immediately around the pointer, and drag follows the pointer without delayed edge drift. Automations are workspace-bound and choose either a fresh conversation per trigger or a specific existing conversation; every due trigger starts a distinct Build block in that target.
+The current source, packaged prerelease, and validated current-user installation are `dev-0.1.12`; the local executable is under `%LOCALAPPDATA%\Programs\Newmark Agent 0.1.12`. Memory Lab now loads one complete visualization snapshot only when the visualization window opens, Reset is requested, or reindex finishes. Component clicks, Detail navigation, tag search, dragging, and zooming reuse that in-memory snapshot without issuing another relationship or component read. A bounded content/index cache removes repeated disk scans from sustained queries, while explicit reads and visualization refreshes still force one current disk read.
+
+Conversation creation and archiving update the list immediately without waiting for runtime startup, a quiet window, or the slowest archive request. Each archive request settles independently, failed rows roll back independently, and runtime shutdown for different conversations proceeds outside the pool-wide capacity lock. Archive deletion is keyed only by conversation ID, so distinct empty conversations are never collapsed merely because their content matches.
 
 The Agent `bash` tool and the bottom-bar Bash terminal now share a workspace-scoped TypeScript Bash runtime derived from the Apache-2.0 `just-bash` package. Bash built-ins, pipes, redirects, variables, loops, globbing, and text utilities run without depending on a separately installed Bash executable. Agent one-shot calls preflight unsupported commands and retain host-shell compatibility for tools such as Git and npm; bottom-bar Bash sessions preserve `cwd`, reject unsupported host commands with an explicit handoff message, and keep filesystem access inside the active workspace. PowerShell, CMD, pwsh, and POSIX host tabs now use `node-pty` instead of redirected child-process pipes, while the lightweight transcript strips terminal control sequences it cannot render.
 
 A repeatable isolated stress gate is available as `cd DESKTOP && npm.cmd run test:automation-bash-stress`. Its accepted run used a real `%TEMP%` root, 34 automation schedules and 56 triggered Builds, including eight wall-clock timer triggers and 40 overlapping tick attempts. All 56 Builds had unique run IDs and persisted completed records in the configured workspace conversations. The same run exercised 16 persistent native Bash sessions, 320 session commands, 64 parallel one-shot commands, 12 cancellations, host-command fallback, and four real ConPTY PowerShell sessions.
 
-Memory Lab overview component selection now focuses the existing live graph without reloading the panel or issuing a component read. Detail selection fetches core Markdown without replacing the panel with a loading state. The user-facing Instructions/说明 disclosure, including local root/index/component paths, has been removed.
+Memory Lab's overview uses one retained node/edge DOM, a single dirty-frame scheduler, and separate physics/paint phases. Bounded sampled repulsion replaces all-pairs work, so large graphs do not rebuild SVG or overlap animation frames while the user drags or clicks. The user-facing Instructions/说明 disclosure, including local root/index/component paths, remains removed.
 
 Scanned-document fallback now follows one enforced order: usable PDF/DOM text, then a screenshot sent to a validated vision model when the selected provider supports vision, and only then bundled offline OCR. The offline fallback uses Tesseract.js 6 with the SIMD core selected by its Node worker and compact Simplified-Chinese/English `best_int` data; a release gate rejects a total OCR payload above 10 MiB. `pdf_read` checks the embedded text layer before rendering a requested scanned page in the built-in Browser. OCR results are explicitly approximate and include a conservative Agent repair instruction for Chinese/English prose and mathematical operators, variables, superscripts, subscripts, and grouping without inventing unsupported text.
 
@@ -197,6 +199,10 @@ See [OVERVIEW.md](OVERVIEW.md) for the source tree, subsystem responsibilities, 
 
 ### Maintenance Log
 
+- 2026-07-28: Released `dev-0.1.12`. Memory Lab now performs one visualization retrieval only on open, Reset, or successful reindex; click/drag/zoom/Detail interactions reuse the loaded relationship/content snapshot. Index and component caches cut the accepted 300-component × 600-query P95 to `10.857 ms` (maximum `14.827 ms`), while a complete 300-component visualization refresh took `426.6 ms`. The same disposable-root gate created and archived 120 conversations at zero interval with no loss and P95 interaction latency of `11.8/13.5 ms`. The retained-DOM, non-overlapping frame pipeline and all Windows/Linux release assets passed packaged smoke. See `archive/20260728-dev-0.1.12-memory-lab-snapshot-release.md`.
+- 2026-07-28: Advanced source development to `dev-0.1.11` after studying Bilibili `BV15L3F6pEFN`, “记错了比忘了更危险.” Memory Lab now exposes bounded `memory_lab_query`, explicit versioned ADD/UPDATE/DELETE actions, optimistic concurrency guards, recoverable cold archives, and an append-only Policy log. An 18-assertion gate covers relevance filtering, budgets, stale mutation rejection, revision history, deletion recovery, replay order, and Plan read-only enforcement. See `archive/20260728-dev-0.1.11-memory-policy.md`.
+- 2026-07-28: Ran packaged Electron and core context stress under disposable `%TEMP%` roots. A zero-interval burst created and archived 120 conversations with zero loss and P95 synchronous interaction latency of `14.7/14.2 ms`; 18 long-context switch cycles with 108 concurrent compression requests lost zero messages. Memory Policy correctness passed at 300 components, but sustained 300-component × 600-query throughput exceeded three minutes because each query rereads every component file. See `archive/20260728-dev-0.1.11-temp-context-conversation-stress.md`.
+- 2026-07-28: Advanced source development to `dev-0.1.10` and removed the latency regression from the initial archive-batching design. New conversations paint from the activation snapshot without a redundant runtime state read; archive clicks remove their exact rows immediately, execute independently, coalesce replacement activation and archive-list refresh in the background, and roll back only the failed target in original order. Electron Utility and WSL runtime shutdowns no longer hold the pool-wide capacity lock. Focused gates cover 16 renderer assertions and 20 runtime-pool assertions. See `archive/20260728-dev-0.1.10-parallel-conversation-archive.md`.
 - 2026-07-27: Advanced source development to `dev-0.1.9`, increased Memory Lab overview tag-motion damping, stopped incidental graph reloads, made zoom/drag immediate, and bound automations to explicit workspace/conversation Build targets. See `archive/20260727-dev-0.1.9-memory-lab-tag-damping.md` and `archive/20260727-dev-0.1.9-workspace-automation-builds.md`.
 - 2026-07-26: Removed Memory Lab's path-bearing Instructions/说明 disclosure and stopped overview component clicks from reloading the panel. The live graph, camera, and DOM stay in place; only Detail performs a non-flashing component-content read. See `archive/20260726-dev-0.1.8-memory-lab-overview-privacy.md`.
 - 2026-07-26: Added a hard-budget Chinese/English scanned-PDF and Browser-button fallback: text first, validated vision second, compact offline OCR last. The release rejects more than 10 MiB of OCR payload and verifies formula-aware conservative Agent repair.

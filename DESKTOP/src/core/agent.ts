@@ -300,7 +300,7 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - flow_list: List saved workflows
 - flow_save: Design or update a saved workflow
 - flow_run: Trigger a saved workflow
-- memory_lab_read / memory_lab_update / memory_lab_reindex: access and update Memory Lab persistent memory through the dedicated Memory Lab tool interface
+- memory_lab_read / memory_lab_query / memory_lab_update / memory_lab_delete / memory_lab_reindex: retrieve, version, archive, and rebuild Memory Lab persistent memory through the dedicated Policy-controlled interface
 - automation_list / automation_create / automation_update / automation_toggle / automation_delete: inspect and manage persisted Newmark automations through the active scheduler
 - gh_auth_status / gh_repo_view / gh_issue_list / gh_pr_list / gh_fork / gh_pr_create: communicate with GitHub CLI
 - git_clone: Clone a git repository
@@ -3866,13 +3866,10 @@ export class Agent {
     };
     fs.writeFileSync(this.archiveManifestPath(path.join(this.archiveDir(), filename)), JSON.stringify(manifest, null, 2), 'utf-8');
 
-    const targetSignature = this.conversationContentSignature(messages);
     const deletedKeys: string[] = [];
     if (stored.conversations) {
-      for (const [key, value] of Object.entries(stored.conversations)) {
-        const isTarget = key === stateKey;
-        const isExactDuplicate = !!targetSignature && this.conversationContentSignature(value.chatMessages || []) === targetSignature;
-        if (!isTarget && !isExactDuplicate) continue;
+      for (const key of Object.keys(stored.conversations)) {
+        if (key !== stateKey) continue;
         deletedKeys.push(key);
         delete stored.conversations[key];
         const duplicateId = key.slice(`${this.workspaceConversationPrefix() || ''}-`.length);
@@ -5216,12 +5213,12 @@ export class Agent {
 
   async handleMemoryLabTool(tool: string, args: string, signal?: AbortSignal): Promise<string> {
     throwIfAgentAborted(signal);
-    if (this.mode === 'plan' && tool !== 'memory_lab_read') {
+    if (this.mode === 'plan' && tool !== 'memory_lab_read' && tool !== 'memory_lab_query') {
       return `[permission] Plan mode is fully read-only. Blocked: ${tool}`;
     }
     try {
       const params = JSON.parse(args || '{}') as Record<string, unknown>;
-      if (tool === 'memory_lab_update' || tool === 'memory_lab_reindex') {
+      if (tool === 'memory_lab_update' || tool === 'memory_lab_delete' || tool === 'memory_lab_reindex') {
         this.memoryLabRebuildState = 'pending';
         this.memoryLabRebuildError = '';
       }
@@ -5229,6 +5226,13 @@ export class Agent {
         case 'memory_lab_read': {
           const selector = String(params.component || params.name || params.slug || '');
           return this.memoryLab.formatRead(this.memoryLab.read(selector));
+        }
+        case 'memory_lab_query': {
+          return this.memoryLab.formatQuery(this.memoryLab.query({
+            query: String(params.query || ''),
+            limit: Number(params.limit || 5),
+            maxChars: Number(params.max_chars || params.maxChars || 12000),
+          }));
         }
         case 'memory_lab_update': {
           const result = await this.updateMemoryLab({
@@ -5238,9 +5242,22 @@ export class Agent {
             tagPaths: Array.isArray(params.tagPaths) ? params.tagPaths.filter(Array.isArray).map(pathValue => pathValue.map(String)) : [],
             content: String(params.content || ''),
             kind: params.kind === 'folder' ? 'folder' : 'file',
+            expectedUpdatedAt: String(params.expectedUpdatedAt || params.expected_updated_at || ''),
+            reason: String(params.reason || ''),
+            source: String(params.source || ''),
           }, signal);
           this.acceptMemoryLabRebuildReceipt(result, 'update');
           return this.memoryLab.formatWrite('memory_lab_update', result);
+        }
+        case 'memory_lab_delete': {
+          const selector = String(params.component || params.name || params.slug || '');
+          const result = this.memoryLab.delete(selector, {
+            expectedUpdatedAt: String(params.expectedUpdatedAt || params.expected_updated_at || ''),
+            reason: String(params.reason || ''),
+            source: String(params.source || ''),
+          });
+          this.acceptMemoryLabRebuildReceipt(result, 'delete');
+          return this.memoryLab.formatWrite('memory_lab_delete', result);
         }
         case 'memory_lab_reindex': {
           const result = await this.reindexMemoryLab(signal);
@@ -5252,7 +5269,7 @@ export class Agent {
       }
     } catch (e) {
       throwIfAgentAborted(signal);
-      if (tool === 'memory_lab_update' || tool === 'memory_lab_reindex') {
+      if (tool === 'memory_lab_update' || tool === 'memory_lab_delete' || tool === 'memory_lab_reindex') {
         this.memoryLabRebuildState = 'failed';
         this.memoryLabRebuildError = `Memory Lab index rebuild failed: ${e instanceof Error ? e.message : String(e)}`;
         throw new Error(this.memoryLabRebuildError);
@@ -5307,7 +5324,7 @@ export class Agent {
     };
   }
 
-  private acceptMemoryLabRebuildReceipt(result: MemoryLabWriteResult, operation: 'update' | 'reindex'): void {
+  private acceptMemoryLabRebuildReceipt(result: MemoryLabWriteResult, operation: 'update' | 'delete' | 'reindex'): void {
     const receipt = result.rebuildReceipt;
     if (!result.ok || !receipt?.completed || receipt.operation !== operation || !receipt.indexUpdatedAt) {
       throw new Error(`Memory Lab ${operation} returned without a verified rebuild receipt.`);
@@ -6168,10 +6185,11 @@ export class Agent {
       `- Model policy: current model=${this.model || '(unset)'}, intelligence=${this.intelligence}, auto-switch=${modelSwitch}.`,
       `- Agent terminal timeout: bash accepts per-call timeout_ms; timeout_ms=0 requests no limit; terminal.interrupt_timeout_ms=${this.config.getNum('terminal', 'interrupt_timeout_ms')} is a nonzero upper cap, and 0 means no cap.`,
       `- Automation: automation_create/list/update/toggle/delete manage persisted schedules through the active Newmark scheduler when available; Plan may only list automations, and subagents cannot manage automation.`,
-      '- Memory Lab exists and provides persistent memory.',
-      '- Before memory_lab_update, call memory_lab_read and use its complete existing tag DAG and component tagPaths. Reuse established parent paths for existing tags; do not register an existing child tag by itself as a new root.',
-      '- Build history disclosure is two-layered. The request prompt contains only each historical Build Block user input, final summary, and completion status. Use build_history_query only when the current user asks for concrete work details from one Build Block; querying history is read-only and never authorizes resuming that work.',
-      '- A memory_lab_update or memory_lab_reindex call is unfinished until its awaited tool result contains rebuildReceipt.completed=true. The completion receipt is represented by the tool activity inside the current Build block and should not be repeated as a separate completion message.',
+      '- Memory Lab is governed by an explicit Policy chain: pre-think whether memory is needed; prefer bounded memory_lab_query retrieval; then choose ADD/UPDATE/DELETE only when the user authorizes durable memory mutation.',
+      '- Before memory_lab_update, inspect the target with memory_lab_query or memory_lab_read. For an existing component pass expectedUpdatedAt so concurrent/stale writes fail closed; preserve established tag parent paths.',
+      '- Use memory_lab_delete only for an explicit user request to forget/remove memory. Prior revisions are retained under Memory Lab/archive and mutation decisions are appended to policy.jsonl for replay.',
+      '- Build history disclosure is two-layered. The request prompt contains only each historical Build Block user input, final summary, and completion status. Use build_history_query only when the current user asks what specifically happened in one Build Block; querying history is read-only and never authorizes resuming that work.',
+      '- A memory_lab_update, memory_lab_delete, or memory_lab_reindex call is unfinished until its awaited tool result contains rebuildReceipt.completed=true. The completion receipt is represented by the tool activity inside the current Build block and should not be repeated as a separate completion message.',
       `- Skills and subagents: skill searches enabled metadata and loads one SKILL.md body on demand; skill_download installs offline skill folders; task creates constrained subagents tracked in agent state.`,
       `- Visible output contract: assistant replies are sanitized before display to remove hidden-reasoning markers. ${visibleOutputContract}`,
       '- During Build work, before the first tool call and between materially different tool phases, emit a concise public progress explanation of what you are checking or changing and why. This is visible commentary, not hidden chain-of-thought. Do not wait until the final answer to explain the work.',

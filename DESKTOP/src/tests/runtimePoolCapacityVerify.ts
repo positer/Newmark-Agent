@@ -207,7 +207,20 @@ async function verifyElectronCapacity(): Promise<number> {
   await Promise.all([pool.snapshot(d), pool.snapshot(e)]);
   assert.equal(pool.runtimeKeys().length, 2, 'concurrent Electron acquisitions remain within the two-runtime capacity'); assertions++;
   assert.equal(tracker.maxResident, 2, 'serialized Electron acquisitions never transiently create a third utility process'); assertions++;
+  let electronStopsInFlight = 0;
+  let maxElectronStopsInFlight = 0;
+  for (const client of clients.values()) {
+    const stop = client.stop.bind(client);
+    client.stop = async () => {
+      electronStopsInFlight += 1;
+      maxElectronStopsInFlight = Math.max(maxElectronStopsInFlight, electronStopsInFlight);
+      await new Promise(resolve => setTimeout(resolve, 30));
+      await stop();
+      electronStopsInFlight -= 1;
+    };
+  }
   await pool.stopAll();
+  assert.equal(maxElectronStopsInFlight, 2, 'Electron idle runtimes stop concurrently instead of holding the global capacity lock'); assertions++;
 
   const busyTracker = new CapacityTracker();
   const busyClients = new Map<string, CapacityElectronClient>();
@@ -261,7 +274,20 @@ async function verifyWslCapacity(): Promise<number> {
   await Promise.all([pool.snapshot(d), pool.snapshot(e)]);
   assert.equal(pool.runtimeKeys().length, 2, 'concurrent WSL acquisitions remain within the two-runtime capacity'); assertions++;
   assert.equal(tracker.maxResident, 2, 'serialized WSL acquisitions never transiently create a third process group'); assertions++;
+  let wslStopsInFlight = 0;
+  let maxWslStopsInFlight = 0;
+  for (const client of clients.values()) {
+    const stop = client.stop.bind(client);
+    client.stop = async () => {
+      wslStopsInFlight += 1;
+      maxWslStopsInFlight = Math.max(maxWslStopsInFlight, wslStopsInFlight);
+      await new Promise(resolve => setTimeout(resolve, 30));
+      await stop();
+      wslStopsInFlight -= 1;
+    };
+  }
   await pool.stopAll();
+  assert.equal(maxWslStopsInFlight, 2, 'WSL idle runtimes stop concurrently instead of holding the global capacity lock'); assertions++;
 
   const busyTracker = new CapacityTracker();
   const busyClients = new Map<string, CapacityWslClient>();

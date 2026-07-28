@@ -393,10 +393,13 @@ export class ElectronUtilityRuntimePool {
 
   async stopTarget(target: ConversationRuntimeTarget): Promise<void> {
     const normalized = normalizeConversationTarget(target);
+    let entry: RuntimeEntry | undefined;
     await this.serializeCapacity(async () => {
-      const entry = this.entries.get(normalized.runtimeKey);
-      if (entry) await this.stopEntry(entry);
+      if (this.disposing.has(normalized.runtimeKey)) return;
+      entry = this.entries.get(normalized.runtimeKey);
+      if (entry) this.disposing.add(normalized.runtimeKey);
     });
+    if (entry) await this.stopEntry(entry);
   }
 
   async stopAll(): Promise<void> {
@@ -465,6 +468,9 @@ export class ElectronUtilityRuntimePool {
       }
       const existing = this.entries.get(target.runtimeKey);
       if (existing) {
+        if (this.disposing.has(target.runtimeKey)) {
+          throw new Error(`Electron utility runtime ${target.runtimeKey} is stopping`);
+        }
         if (this.rememberClientQuarantine(existing)) {
           throw new Error(`Electron utility runtime is quarantined until the app backend is restarted: ${this.quarantined.get(target.runtimeKey)}`);
         }

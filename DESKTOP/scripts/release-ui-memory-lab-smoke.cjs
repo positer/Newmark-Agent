@@ -209,7 +209,9 @@ async function runUiCheck(root) {
     await cdp.call('Page.enable');
     await cdp.call('Page.bringToFront');
 
-    await waitFor(cdp, `(() => document.readyState === 'complete' && !!window.api && !!window.showMemoryLab && !!window.api.memoryLabUpdate)()`, 30000, 'renderer ready with Memory Lab');
+    await waitFor(cdp, `(() => document.readyState === 'complete' && !!window.api && !!window.showMemoryLab && !!window.api.memoryLabUpdate && !!window.api.memoryLabVisualization)()`, 30000, 'renderer ready with Memory Lab');
+    const initialVisualizationLoads = await evaluate(cdp, `window.state.memoryLabVisualizationLoads`, 30000);
+    if (initialVisualizationLoads !== 0) fail(`Memory Lab visualization load counter was not clean: ${initialVisualizationLoads}`);
     const update = await evaluate(cdp, `window.api.memoryLabUpdate({
       name: 'release-ui-memory',
       description: 'Release UI Memory Lab smoke component.',
@@ -239,6 +241,8 @@ async function runUiCheck(root) {
         document.body.innerText.includes('Detail') &&
         !document.querySelector('.memory-lab-links');
     })()`, 30000, 'Memory Lab overview graph rendered without legacy connector container');
+    const initialVisualizationCount = await evaluate(cdp, `window.state.memoryLabVisualizationLoads`, 30000);
+    if (initialVisualizationCount !== 1) fail(`Memory Lab open did not perform exactly one visualization load: ${initialVisualizationCount}`);
     const overviewWindowGeometry = await evaluate(cdp, `(() => {
       const win = document.getElementById('sub-win');
       if (!win) return null;
@@ -267,6 +271,7 @@ async function runUiCheck(root) {
         samePanel: panel === document.getElementById('memory-lab-panel'),
         focus: window.state.memoryLabOverviewFocus,
         selected: window.state.memoryLabSelectedComponent,
+        visualizationLoads: window.state.memoryLabVisualizationLoads,
         hasInstructions: /Memory Lab stores persistent|Instructions|说明/.test(String(panel && panel.innerText || '')),
         leaksRoot: String(panel && panel.innerText || '').includes(${JSON.stringify(root)})
       };
@@ -275,6 +280,7 @@ async function runUiCheck(root) {
       || !componentFocusNoReload.samePanel
       || componentFocusNoReload.focus !== 'component:release-ui-memory'
       || componentFocusNoReload.selected !== 'release-ui-memory'
+      || componentFocusNoReload.visualizationLoads !== 1
       || componentFocusNoReload.hasInstructions
       || componentFocusNoReload.leaksRoot) {
       fail(`Memory Lab overview component click reloaded the panel or exposed private instructions: ${JSON.stringify(componentFocusNoReload)}`);
@@ -374,6 +380,12 @@ async function runUiCheck(root) {
     })()`, 30000, 'Memory Lab child navigation animation visible');
     await evaluate(cdp, `window.selectMemoryLabComponent('release-ui-memory')`, 30000);
     await waitFor(cdp, `(() => document.body.innerText.includes('ReleaseMemoryNeedle core markdown.'))()`, 30000, 'Memory Lab component markdown visible');
+    const interactionVisualizationLoads = await evaluate(cdp, `window.state.memoryLabVisualizationLoads`, 30000);
+    if (interactionVisualizationLoads !== 1) fail(`Memory Lab click/drag/detail interaction triggered retrieval: ${interactionVisualizationLoads}`);
+    await evaluate(cdp, `window.switchMemoryLabView('overview'); window.resetMemoryLabOverview()`, 30000);
+    await waitFor(cdp, `(() => window.state.memoryLabVisualizationLoads === 2 && window.state.memoryLabVisualizationLoading === false && !!document.querySelector('.memory-lab-overview-stage'))()`, 30000, 'Memory Lab reset completed one visualization reload');
+    await evaluate(cdp, `window.reindexMemoryLab()`, 30000);
+    await waitFor(cdp, `(() => window.state.memoryLabVisualizationLoads === 3 && window.state.memoryLabReindexing === false && window.state.memoryLabVisualizationLoading === false)()`, 30000, 'Memory Lab reindex completed one visualization reload');
     await captureScreenshot(cdp);
     log('all Memory Lab UI checks passed');
   } finally {

@@ -110,6 +110,7 @@ contextBridge.exposeInMainWorld('api', {
   setMcpServerEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke('mcp:setEnabled', id, enabled),
   removeMcpServer: (id: string) => ipcRenderer.invoke('mcp:remove', id),
   memoryLabRead: (selector?: string) => ipcRenderer.invoke('memoryLab:read', selector),
+  memoryLabVisualization: () => ipcRenderer.invoke('memoryLab:visualization'),
   memoryLabUpdate: (input: Record<string, unknown>) => ipcRenderer.invoke('memoryLab:update', input),
   memoryLabReindex: () => ipcRenderer.invoke('memoryLab:reindex'),
   updateVersion: () => ipcRenderer.invoke('update:version'),

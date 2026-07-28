@@ -394,10 +394,13 @@ export class WslAgentRuntimePool {
 
   async stopTarget(target: ConversationRuntimeTarget): Promise<void> {
     const key = conversationRuntimeKey(target);
+    let entry: RuntimeEntry | undefined;
     await this.serializeCapacity(async () => {
-      const entry = this.entries.get(key);
-      if (entry) await this.stopEntry(entry);
+      if (this.disposing.has(key)) return;
+      entry = this.entries.get(key);
+      if (entry) this.disposing.add(key);
     });
+    if (entry) await this.stopEntry(entry);
   }
 
   async stopAll(): Promise<void> {
@@ -435,6 +438,9 @@ export class WslAgentRuntimePool {
     return await this.serializeCapacity(async () => {
       const existing = this.entries.get(target.runtimeKey);
       if (existing) {
+        if (this.disposing.has(target.runtimeKey)) {
+          throw new Error(`WSL runtime ${target.runtimeKey} is stopping`);
+        }
         this.touch(existing);
         existing.activeOperations += 1;
         return existing;

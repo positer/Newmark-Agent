@@ -973,7 +973,6 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 
 .conv-item:hover { background: var(--glass-bg-2); border-color: var(--border-hover); }
 .conv-item.active { border-color: var(--accent); background: rgba(91,120,255,0.1); }
-
 .conv-item.marquee-border::before {
   border-radius: var(--radius-md);
 }
@@ -4250,6 +4249,9 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .memory-lab-overview-stage {
   position: absolute;
   inset: 0;
+  overflow: hidden;
+  contain: strict;
+  isolation: isolate;
   cursor: grab;
   touch-action: none;
   overscroll-behavior: contain;
@@ -4300,6 +4302,7 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .memory-lab-overview-nodes {
   position: absolute;
   inset: 0;
+  contain: layout paint;
   will-change: transform;
 }
 .memory-lab-overview-node {
@@ -5044,6 +5047,10 @@ var state = {
   activeConversation: 0,
   workspaceConversations: {},
   workspaceActiveConversation: {},
+  conversationArchivePending: {},
+  conversationArchiveRefreshTimer: null,
+  conversationArchiveActiveSyncTimer: null,
+  nextConversationSequence: 0,
   configGradientColors: ['#00ff88', '#00ccff', '#aa44ff', '#ff4488'],
   configGradientSpeed: 3,
   configGradientWidth: 2,
@@ -5160,6 +5167,11 @@ var state = {
   mcpEditingId: '',
   skillMarketQuery: '',
   memoryLab: null,
+  memoryLabComponentContents: {},
+  memoryLabRelationVersion: '',
+  memoryLabVisualizationGeneration: 0,
+  memoryLabVisualizationLoads: 0,
+  memoryLabVisualizationLoading: false,
   memoryLabSelectedTag: '',
   memoryLabSelectedComponent: '',
   memoryLabNavDirection: 'fade',
@@ -7001,6 +7013,7 @@ var api = window.api || {
   removeSkillMarketSource: async function() { return {ok:false}; },
   setSkillMarketSourceEnabled: async function() { return {ok:false}; },
   memoryLabRead: async function() { return {ok:false,index:{tags:{},components:{}}}; },
+  memoryLabVisualization: async function() { return {ok:false,index:{tags:{},components:{}},componentContents:{}}; },
   memoryLabUpdate: async function() { return {ok:false}; },
   memoryLabReindex: async function() { return {ok:false}; },
   refreshSkills: async function() { return []; },
@@ -7028,6 +7041,7 @@ if (!window.api.addSkillMarketSource) window.api.addSkillMarketSource = api.addS
 if (!window.api.removeSkillMarketSource) window.api.removeSkillMarketSource = api.removeSkillMarketSource;
 if (!window.api.setSkillMarketSourceEnabled) window.api.setSkillMarketSourceEnabled = api.setSkillMarketSourceEnabled;
 if (!window.api.memoryLabRead) window.api.memoryLabRead = api.memoryLabRead;
+if (!window.api.memoryLabVisualization) window.api.memoryLabVisualization = api.memoryLabVisualization;
 if (!window.api.memoryLabUpdate) window.api.memoryLabUpdate = api.memoryLabUpdate;
 if (!window.api.memoryLabReindex) window.api.memoryLabReindex = api.memoryLabReindex;
 if (!window.api.refreshSkills) window.api.refreshSkills = api.refreshSkills;
@@ -15922,7 +15936,7 @@ function renderConversations() {
       ? '<span class="conv-runtime-badge ' + escAttr(String(runtimeState.status)) + '">' + esc(String(runtimeState.status)) + '</span>' : '';
     div.innerHTML = '<span class="conv-summary" title="' + escAttr(String(conv.id || '')) + '">' + esc(displaySummary) + (conv.messageCount ? ' (' + esc(String(conv.messageCount)) + ')' : '') + '</span>' + runtimeBadge +
       '<button class="conv-rename-btn" onclick="event.stopPropagation();window.editConversationName(' + i + ')" title="' + escAttr(t('conversation.rename')) + '">' + iconOnly('pencil', t('conversation.rename')) + '</button>' +
-      '<button class="conv-archive-btn" ' + (runtimeState && ['running', 'stopping', 'force_restarting'].indexOf(String(runtimeState.status || '')) >= 0 ? 'disabled ' : '') + 'onclick="event.stopPropagation();window.archiveConv(' + i + ')" title="' + escAttr(t('conversation.archive')) + '">' + iconOnly('archive', t('conversation.archive')) + '</button>' +
+      '<button class="conv-archive-btn" ' + (runtimeState && ['running', 'stopping', 'force_restarting'].indexOf(String(runtimeState.status || '')) >= 0 ? 'disabled ' : '') + 'onclick="event.stopPropagation();window.archiveConv(this.closest(&quot;.conv-item&quot;).getAttribute(&quot;data-conversation-id&quot;))" title="' + escAttr(t('conversation.archive')) + '">' + iconOnly('archive', t('conversation.archive')) + '</button>' +
       '<button class="conv-pin-btn' + (conv.pinned ? ' active' : '') + '" onclick="event.stopPropagation();window.toggleConversationPinned(' + i + ')" title="' + escAttr(conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '">' + iconOnly('pin', conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '</button>';
     div.onclick = function(idx) { return function() { window.switchConversation(idx); }; }(i);
     div.addEventListener('dragstart', function(event) {
@@ -15994,7 +16008,8 @@ window.newConversation = function(workspaceReference) {
   if (!window.requireWorkspace('newConversation')) return;
   var convs = currentWorkspaceConversations();
   var createdWorkspaceKey = currentWorkspaceKey();
-  var id = 'conv-' + Date.now();
+  state.nextConversationSequence = Number(state.nextConversationSequence || 0) + 1;
+  var id = 'conv-' + Date.now() + '-' + state.nextConversationSequence;
   var summary = t('workspace.newConversation') + ' ' + (convs.length + 1);
   var firstUnpinned = convs.findIndex(function(item) { return !item.pinned; });
   var insertAt = firstUnpinned >= 0 ? firstUnpinned : convs.length;
@@ -16011,7 +16026,7 @@ window.newConversation = function(workspaceReference) {
   return activation.then(function(s) {
     if (createdWorkspaceKey !== currentWorkspaceKey() || id !== String(activeConversationId() || 'default')) return;
     state.activeBackendConversationId = String((s && s.conversationId) || id);
-    return loadActiveConversationMessages(id);
+    if (s) applyConversationSnapshot(s, id);
   }).then(function() {
     if (createdWorkspaceKey !== currentWorkspaceKey() || id !== String(activeConversationId() || 'default')) return;
     state.foregroundConversationHoldId = '';
@@ -16088,43 +16103,125 @@ window.switchConversation = function(idx) {
   });
 };
 
-window.archiveConv = function(idx) {
+function refreshConversationArchivesAfterBatch() {
+  if (!api.listArchives) return Promise.resolve([]);
+  return api.listArchives('workspace').then(function(items) {
+    state.workspaceArchives = (items || []).map(function(a) {
+      return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '', restorable: !!a.restorable, conversationId: a.conversationId || '' };
+    });
+    state.allArchives = [];
+    window.renderRightArchives();
+    return items || [];
+  });
+}
+
+function scheduleConversationArchiveRefresh(workspaceKey) {
+  if (workspaceKey !== currentWorkspaceKey()) return;
+  if (state.conversationArchiveRefreshTimer) clearTimeout(state.conversationArchiveRefreshTimer);
+  state.conversationArchiveRefreshTimer = setTimeout(function() {
+    state.conversationArchiveRefreshTimer = null;
+    if (workspaceKey !== currentWorkspaceKey()) return;
+    refreshConversationArchivesAfterBatch().catch(function(){});
+  }, 40);
+}
+
+function scheduleConversationArchiveActiveSync(workspaceKey) {
+  if (workspaceKey !== currentWorkspaceKey()) return;
+  if (state.conversationArchiveActiveSyncTimer) clearTimeout(state.conversationArchiveActiveSyncTimer);
+  state.conversationArchiveActiveSyncTimer = setTimeout(function() {
+    state.conversationArchiveActiveSyncTimer = null;
+    if (workspaceKey !== currentWorkspaceKey()) return;
+    syncBackendConversation().catch(function(){});
+  }, 0);
+}
+
+window.archiveConv = function(conversationId) {
   if (!window.requireWorkspace('archiveConversation')) return;
   var convs = currentWorkspaceConversations();
+  var targetId = String(conversationId || 'default');
+  var idx = convs.findIndex(function(item) { return String(item && item.id || 'default') === targetId; });
   var target = convs[idx];
   if (target) {
-    var targetId = target.id || 'default';
     var targetRuntime = currentConversationTarget(targetId);
+    var workspaceKey = currentWorkspaceKey();
+    var pendingKey = workspaceKey + '::' + targetId;
     if (runningConversationRecord(targetId)) {
       showUiNotice(currentLang() === 'zh' ? '运行中的对话不能归档。' : 'A running conversation cannot be archived.', 'error', 'archive-running-' + currentRuntimeKey(targetId));
       return;
     }
-    target.archived = true;
-    convs.splice(idx, 1);
-    if (convs.length === 0) {
-      convs.push({id: 'default', summary: t('workspace.defaultConversation'), archived: false, active: true});
+    if (state.conversationArchivePending[pendingKey]) return;
+    var priorActiveId = String(((convs.find(function(item) { return item && item.active; }) || {}).id) || '');
+    var rollbackOrder = convs.map(function(item) { return String(item && item.id || 'default'); });
+    var pendingPrefix = workspaceKey + '::';
+    var pendingKeys = Object.keys(state.conversationArchivePending);
+    for (var pendingIndex = 0; pendingIndex < pendingKeys.length; pendingIndex++) {
+      var earlierPending = state.conversationArchivePending[pendingKeys[pendingIndex]];
+      if (pendingKeys[pendingIndex].indexOf(pendingPrefix) === 0 && earlierPending && Array.isArray(earlierPending.orderIds) && earlierPending.orderIds.indexOf(targetId) >= 0) {
+        rollbackOrder = earlierPending.orderIds.slice();
+        break;
+      }
     }
-    setActiveWorkspaceConversation(Math.min(idx, convs.length - 1));
+    state.conversationArchivePending[pendingKey] = {
+      target: Object.assign({}, target),
+      index: idx,
+      wasActive: priorActiveId === targetId,
+      orderIds: rollbackOrder,
+      chatHtml: priorActiveId === targetId && els['chat-area'] ? els['chat-area'].innerHTML : ''
+    };
+    convs.splice(idx, 1);
+    if (!convs.length) convs.push({ id: 'default', summary: t('workspace.defaultConversation'), archived: false, active: true });
+    var nextActiveId = priorActiveId && priorActiveId !== targetId ? priorActiveId : String(convs[Math.min(idx, convs.length - 1)].id || 'default');
+    var nextActiveIndex = Math.max(0, convs.findIndex(function(item) { return String(item && item.id || '') === nextActiveId; }));
+    for (var i = 0; i < convs.length; i++) convs[i].active = i === nextActiveIndex;
+    state.workspaceActiveConversation[workspaceKey] = nextActiveIndex;
+    state.activeConversation = nextActiveIndex;
+    state.conversations = convs;
+    if (priorActiveId === targetId) {
+      state.activeBackendConversationId = nextActiveId;
+      if (els['chat-area']) els['chat-area'].innerHTML = '';
+    }
     setConversationRuntimeState(targetRuntime, 'idle', '');
     setWorking(!!runningConversationRecord(activeConversationId()));
     renderConversations();
-    els['chat-area'].innerHTML = '';
-    var archivePromise = api.archive ? api.archive(targetRuntime) : Promise.resolve(null);
-    archivePromise.then(function(filePath) {
-      if (filePath) addMsg('assistant', '[Archive] ' + t('archive.saved') + ': ' + filePath, 'archive', '');
-      return syncBackendConversation();
-    }).then(function() {
-      renderConversations();
-      if (api.listArchives) return api.listArchives('workspace');
-      return [];
-    }).then(function(items) {
-      state.workspaceArchives = (items || []).map(function(a) {
-        return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '', restorable: !!a.restorable, conversationId: a.conversationId || '' };
-      });
-      state.allArchives = [];
-      window.renderRightArchives();
+    if (priorActiveId === targetId) scheduleConversationArchiveActiveSync(workspaceKey);
+    var archivePromise = api.archive ? api.archive(targetRuntime) : Promise.reject(new Error('Archive API unavailable'));
+    archivePromise.then(function(receipt) {
+      if (!receipt || receipt.ok !== true) throw new Error((receipt && receipt.error) || 'Archive failed');
+      delete state.conversationArchivePending[pendingKey];
+      showUiNotice('[Archive] ' + t('archive.saved') + ': ' + receipt.fileName, 'success', 'archive-saved-' + targetId);
+      scheduleConversationArchiveRefresh(workspaceKey);
     }).catch(function(err) {
-      addMsg('assistant', '[Archive] ' + t('workspace.saveFailed') + ': ' + (err.message || String(err)), 'error', '');
+      var pending = state.conversationArchivePending[pendingKey];
+      delete state.conversationArchivePending[pendingKey];
+      var workspaceConversations = state.workspaceConversations[workspaceKey] || [];
+      if (pending && !workspaceConversations.some(function(item) { return String(item && item.id || '') === targetId; })) {
+        var restoreAt = -1;
+        var orderIds = Array.isArray(pending.orderIds) ? pending.orderIds : [];
+        var targetOrderIndex = orderIds.indexOf(targetId);
+        for (var beforeIndex = targetOrderIndex - 1; beforeIndex >= 0 && restoreAt < 0; beforeIndex--) {
+          var precedingIndex = workspaceConversations.findIndex(function(item) { return String(item && item.id || '') === orderIds[beforeIndex]; });
+          if (precedingIndex >= 0) restoreAt = precedingIndex + 1;
+        }
+        for (var afterIndex = targetOrderIndex + 1; afterIndex < orderIds.length && restoreAt < 0; afterIndex++) {
+          var followingIndex = workspaceConversations.findIndex(function(item) { return String(item && item.id || '') === orderIds[afterIndex]; });
+          if (followingIndex >= 0) restoreAt = followingIndex;
+        }
+        if (restoreAt < 0) restoreAt = Math.min(Number(pending.index || 0), workspaceConversations.length);
+        workspaceConversations.splice(restoreAt, 0, pending.target);
+        if (pending.wasActive) {
+          for (var j = 0; j < workspaceConversations.length; j++) workspaceConversations[j].active = String(workspaceConversations[j].id || '') === targetId;
+        }
+      }
+      if (workspaceKey === currentWorkspaceKey()) {
+        state.conversations = workspaceConversations;
+        state.activeConversation = Math.max(0, workspaceConversations.findIndex(function(item) { return item && item.active; }));
+        if (pending && pending.wasActive) {
+          state.activeBackendConversationId = targetId;
+          if (els['chat-area']) els['chat-area'].innerHTML = pending.chatHtml || '';
+        }
+        renderConversations();
+      }
+      showUiNotice('[Archive] ' + t('workspace.saveFailed') + ': ' + (err.message || String(err)), 'error', 'archive-failed-' + targetId);
     });
   }
 };
@@ -16208,28 +16305,64 @@ window.reorderConversationBefore = function(sourceId, targetId) {
 };
 
 // === Memory Lab ===
-window.showMemoryLab = function() {
-  state.activeSubWindowView = { name: 'memoryLab' };
+window.stopMemoryLabOverviewPipeline = function() {
+  state.memoryLabOverviewRunning = false;
+  state.memoryLabOverviewFrameDirty = false;
+  state.memoryLabOverviewFrameRunning = false;
   if (state.memoryLabOverviewAnimation) {
     cancelAnimationFrame(state.memoryLabOverviewAnimation);
     state.memoryLabOverviewAnimation = null;
   }
-  window.openSubWin(t('memoryLab.title'), '<div id="memory-lab-panel" class="provider-card' + (state.memoryLabReindexing ? ' marquee-border' : '') + '" aria-busy="' + (state.memoryLabReindexing ? 'true' : 'false') + '">' + esc(t('memoryLab.loading')) + '</div>');
-  requestAnimationFrame(function() { window.loadMemoryLab(); });
 };
 
-window.loadMemoryLab = function(selector, options) {
+window.showMemoryLab = function() {
+  state.activeSubWindowView = { name: 'memoryLab' };
+  window.stopMemoryLabOverviewPipeline();
+  window.openSubWin(t('memoryLab.title'), '<div id="memory-lab-panel" class="provider-card' + (state.memoryLabReindexing ? ' marquee-border' : '') + '" aria-busy="' + (state.memoryLabReindexing ? 'true' : 'false') + '">' + esc(t('memoryLab.loading')) + '</div>');
+  requestAnimationFrame(function() { window.loadMemoryLabVisualization('open', { resetLayout: true }); });
+};
+
+window.loadMemoryLabVisualization = function(reason, options) {
   var panel = document.getElementById('memory-lab-panel');
   if (panel && !(options && options.preservePanel)) panel.innerHTML = esc(t('memoryLab.loading'));
-  if (!api.memoryLabRead) return;
-  api.memoryLabRead(selector || '').then(function(result) {
+  var generation = Number(state.memoryLabVisualizationGeneration || 0) + 1;
+  state.memoryLabVisualizationGeneration = generation;
+  state.memoryLabVisualizationLoading = true;
+  var loader = api.memoryLabVisualization
+    ? api.memoryLabVisualization()
+    : api.memoryLabRead
+      ? api.memoryLabRead('')
+      : Promise.resolve({ ok: false, index: { tags: {}, components: {} }, componentContents: {} });
+  return Promise.resolve(loader).then(function(result) {
+    if (generation !== state.memoryLabVisualizationGeneration) return result;
     state.memoryLab = result || null;
-    if (result && result.component) state.memoryLabSelectedComponent = result.component.slug;
+    state.memoryLabComponentContents = Object.assign({}, (result && result.componentContents) || {});
+    state.memoryLabRelationVersion = String((result && result.relationVersion) || '');
+    state.memoryLabVisualizationLoads = Number(state.memoryLabVisualizationLoads || 0) + 1;
+    var index = (result && result.index) || { tags: {}, components: {} };
+    state.memoryLabOverviewGraph = window.buildMemoryLabOverviewGraph(index);
+    state.memoryLabOverviewGraphSignature = state.memoryLabRelationVersion || window.memoryLabOverviewGraphSignature(index);
+    if (options && options.resetLayout) {
+      state.memoryLabOverviewCamera = null;
+      state.memoryLabOverviewFocus = '';
+      state.memoryLabOverviewManualCamera = false;
+    }
     requestAnimationFrame(function() { window.renderMemoryLab(); });
+    return result;
   }).catch(function(err) {
     var target = document.getElementById('memory-lab-panel');
     if (target) target.innerHTML = '<div style="color:#ff7777;font-size:12px;">' + esc(err.message || String(err)) + '</div>';
+    throw err;
+  }).finally(function() {
+    if (generation === state.memoryLabVisualizationGeneration) state.memoryLabVisualizationLoading = false;
   });
+};
+
+window.cachedMemoryLabComponent = function(slug) {
+  var lab = state.memoryLab || {};
+  var meta = lab.index && lab.index.components ? lab.index.components[slug] : null;
+  if (!meta || !Object.prototype.hasOwnProperty.call(state.memoryLabComponentContents || {}, slug)) return null;
+  return { slug: slug, meta: meta, content: state.memoryLabComponentContents[slug] || '' };
 };
 
 window.renderMemoryLab = function() {
@@ -16297,7 +16430,7 @@ window.renderMemoryLabDetail = function(lab, index) {
   var selectedComponent = state.memoryLabSelectedComponent || selectedComponents[0] || Object.keys(components)[0] || '';
   if (selectedComponent && !components[selectedComponent]) selectedComponent = selectedComponents[0] || Object.keys(components)[0] || '';
   state.memoryLabSelectedComponent = selectedComponent || '';
-  var component = lab.component && lab.component.slug === selectedComponent ? lab.component : null;
+  var component = window.cachedMemoryLabComponent(selectedComponent);
   var html = '';
   var navDirection = state.memoryLabNavDirection || 'fade';
   var graphClass = navDirection === 'left' ? ' animate-from-left' : navDirection === 'right' ? ' animate-from-right' : ' animate-fade';
@@ -16330,12 +16463,11 @@ window.renderMemoryLabDetail = function(lab, index) {
 };
 
 window.renderMemoryLabOverview = function(_lab, index) {
-  var graphSignature = window.memoryLabOverviewGraphSignature(index);
   var graph = state.memoryLabOverviewGraph;
-  if (!graph || state.memoryLabOverviewGraphSignature !== graphSignature) {
+  if (!graph) {
     graph = window.buildMemoryLabOverviewGraph(index);
     state.memoryLabOverviewGraph = graph;
-    state.memoryLabOverviewGraphSignature = graphSignature;
+    state.memoryLabOverviewGraphSignature = state.memoryLabRelationVersion || window.memoryLabOverviewGraphSignature(index);
   }
   var mode = state.memoryLabOverviewMode || 'both';
   var html = '<div class="memory-lab-overview">' +
@@ -16380,11 +16512,7 @@ window.memoryLabComponentButton = function(slug, meta, selected) {
 
 window.switchMemoryLabView = function(view) {
   state.memoryLabView = view === 'detail' ? 'detail' : 'overview';
-  state.memoryLabOverviewRunning = false;
-  if (state.memoryLabOverviewAnimation) {
-    cancelAnimationFrame(state.memoryLabOverviewAnimation);
-    state.memoryLabOverviewAnimation = null;
-  }
+  window.stopMemoryLabOverviewPipeline();
   window.renderMemoryLab();
 };
 
@@ -16493,6 +16621,9 @@ window.initMemoryLabOverview = function() {
   if (!state.memoryLabOverviewCamera) state.memoryLabOverviewCamera = { x: rect.width / 2, y: rect.height / 2, scale: 0.88 };
   state.memoryLabOverviewRunning = true;
   state.memoryLabOverviewLastFrame = 0;
+  state.memoryLabOverviewFrameDirty = true;
+  state.memoryLabOverviewFrameRunning = false;
+  state.memoryLabOverviewRepulsionOffset = 1;
   if (typeof state.memoryLabOverviewManualCamera !== 'boolean') state.memoryLabOverviewManualCamera = false;
   state.memoryLabOverviewPanActive = false;
   state.memoryLabOverviewNodeMap = {};
@@ -16502,11 +16633,28 @@ window.initMemoryLabOverview = function() {
     state.memoryLabOverviewNodeMap[graph.nodes[i].id] = graph.nodes[i];
   }
   var nodeElements = stage.querySelectorAll('.memory-lab-overview-node');
+  state.memoryLabOverviewNodeElements = {};
   for (var n = 0; n < nodeElements.length; n++) {
+    state.memoryLabOverviewNodeElements[nodeElements[n].dataset.id] = nodeElements[n];
     nodeElements[n].addEventListener('mouseenter', function(event) { window.showMemoryLabOverviewTip(event.currentTarget.dataset.id); });
     nodeElements[n].addEventListener('mouseleave', window.hideMemoryLabOverviewTip);
     nodeElements[n].addEventListener('focus', function(event) { window.showMemoryLabOverviewTip(event.currentTarget.dataset.id); });
     nodeElements[n].addEventListener('blur', window.hideMemoryLabOverviewTip);
+  }
+  var svg = document.getElementById('memory-lab-overview-svg');
+  state.memoryLabOverviewEdgeElements = [];
+  if (svg) {
+    svg.replaceChildren();
+    for (var edgeIndex = 0; edgeIndex < graph.edges.length; edgeIndex++) {
+      var basePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      basePath.setAttribute('class', 'memory-lab-overview-link');
+      var flowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      flowPath.setAttribute('class', 'memory-lab-overview-flow');
+      flowPath.style.display = 'none';
+      svg.appendChild(basePath);
+      svg.appendChild(flowPath);
+      state.memoryLabOverviewEdgeElements.push({ base: basePath, flow: flowPath });
+    }
   }
   var camera = state.memoryLabOverviewCamera;
   var pan = null;
@@ -16530,7 +16678,7 @@ window.initMemoryLabOverview = function() {
       try { stage.releasePointerCapture(pointerId); } catch (_) {}
     }
     activePointerId = null;
-    window.renderMemoryLabOverviewFrame();
+    window.requestMemoryLabOverviewFrame();
   }
   stage.onpointerdown = function(event) {
     if (event.target.closest('.memory-lab-overview-node') || event.target.closest('.memory-lab-overview-actions')) return;
@@ -16569,16 +16717,14 @@ window.initMemoryLabOverview = function() {
     camera.y = event.clientY - (event.clientY - camera.y) * (next / old);
     camera.scale = next;
     state.memoryLabOverviewManualCamera = true;
-    state.memoryLabOverviewInteractionOnly = true;
-    window.renderMemoryLabOverviewFrame();
-    state.memoryLabOverviewInteractionOnly = false;
     window.requestMemoryLabOverviewFrame();
   };
   window.requestMemoryLabOverviewFrame();
 };
 
 window.requestMemoryLabOverviewFrame = function() {
-  if (state.memoryLabOverviewAnimation || !state.memoryLabOverviewRunning || document.hidden) return;
+  state.memoryLabOverviewFrameDirty = true;
+  if (state.memoryLabOverviewAnimation || state.memoryLabOverviewFrameRunning || !state.memoryLabOverviewRunning || document.hidden) return;
   state.memoryLabOverviewAnimation = requestAnimationFrame(function(timestamp) {
     state.memoryLabOverviewAnimation = null;
     var last = Number(state.memoryLabOverviewLastFrame || 0);
@@ -16587,8 +16733,21 @@ window.requestMemoryLabOverviewFrame = function() {
       window.requestMemoryLabOverviewFrame();
       return;
     }
+    if (state.memoryLabOverviewFrameRunning) {
+      window.requestMemoryLabOverviewFrame();
+      return;
+    }
+    state.memoryLabOverviewFrameRunning = true;
+    state.memoryLabOverviewFrameDirty = false;
     state.memoryLabOverviewLastFrame = timestamp;
-    window.renderMemoryLabOverviewFrame();
+    try {
+      window.stepMemoryLabOverviewPhysics(timestamp);
+      window.paintMemoryLabOverviewFrame();
+    } finally {
+      state.memoryLabOverviewFrameRunning = false;
+    }
+    var stage = document.getElementById('memory-lab-overview-stage');
+    if (state.memoryLabOverviewRunning && stage && stage.isConnected) window.requestMemoryLabOverviewFrame();
   });
 };
 
@@ -16674,7 +16833,61 @@ window.memoryLabOverviewFocusData = function(focusId) {
   return graph.focusCache[cacheKey];
 };
 
-window.renderMemoryLabOverviewFrame = function() {
+window.stepMemoryLabOverviewPhysics = function(timestamp) {
+  var graph = state.memoryLabOverviewGraph;
+  var map = state.memoryLabOverviewNodeMap || {};
+  if (!graph || state.memoryLabOverviewPanActive) return;
+  var nodes = graph.nodes || [];
+  for (var resetIndex = 0; resetIndex < nodes.length; resetIndex++) {
+    nodes[resetIndex].fx = 0;
+    nodes[resetIndex].fy = 0;
+  }
+  var fanout = Math.min(24, Math.max(0, nodes.length - 1));
+  var offset = Math.max(1, Number(state.memoryLabOverviewRepulsionOffset || 1));
+  for (var a = 0; a < nodes.length; a++) {
+    var na = nodes[a];
+    for (var sample = 0; sample < fanout; sample++) {
+      var b = (a + offset + sample) % nodes.length;
+      if (b === a) continue;
+      var nb = nodes[b];
+      var dx = na.x - nb.x;
+      var dy = na.y - nb.y;
+      var d2 = dx * dx + dy * dy + 700;
+      var d = Math.sqrt(d2);
+      var force = 52000 / d2;
+      if (!na.fixed) { na.fx += dx / d * force; na.fy += dy / d * force; }
+      if (!nb.fixed) { nb.fx -= dx / d * force; nb.fy -= dy / d * force; }
+    }
+  }
+  state.memoryLabOverviewRepulsionOffset = nodes.length > 1 ? ((offset + fanout) % (nodes.length - 1)) + 1 : 1;
+  for (var edgeIndex = 0; edgeIndex < graph.edges.length; edgeIndex++) {
+    var edge = graph.edges[edgeIndex];
+    var source = map[edge[0]];
+    var target = map[edge[1]];
+    if (!source || !target) continue;
+    var edx = target.x - source.x;
+    var edy = target.y - source.y;
+    var dist = Math.hypot(edx, edy) || 1;
+    var wanted = edge[0] === 'anchor' ? 220 : edge[2] === 'component' ? 135 : 165;
+    var maxLen = edge[0] === 'anchor' ? 310 : edge[2] === 'component' ? 220 : 250;
+    var spring = (Math.min(dist, maxLen) - wanted) * 0.018;
+    if (!source.fixed) { source.fx += edx / dist * spring; source.fy += edy / dist * spring; }
+    if (!target.fixed) { target.fx -= edx / dist * spring; target.fy -= edy / dist * spring; }
+  }
+  var ambientPhase = Number(timestamp || performance.now()) * 0.00075;
+  for (var nodeIndex = 0; nodeIndex < nodes.length; nodeIndex++) {
+    var node = nodes[nodeIndex];
+    if (node.fixed) continue;
+    node.fx += -node.x * 0.0007 + Math.cos(ambientPhase + nodeIndex * 1.618) * 0.045;
+    node.fy += -node.y * 0.0007 + Math.sin(ambientPhase + nodeIndex * 1.618) * 0.045;
+    node.vx = ((node.vx || 0) + node.fx) * 0.72;
+    node.vy = ((node.vy || 0) + node.fy) * 0.72;
+    node.x += node.vx;
+    node.y += node.vy;
+  }
+};
+
+window.paintMemoryLabOverviewFrame = function() {
   var graph = state.memoryLabOverviewGraph;
   var map = state.memoryLabOverviewNodeMap || {};
   var stage = document.getElementById('memory-lab-overview-stage');
@@ -16690,53 +16903,19 @@ window.renderMemoryLabOverviewFrame = function() {
     var panTransform = 'translate3d(' + panX + 'px,' + panY + 'px,0)';
     svg.style.transform = panTransform;
     if (nodesLayer) nodesLayer.style.transform = panTransform;
-    if (stage.isConnected) window.requestMemoryLabOverviewFrame();
     return;
   }
   svg.style.transform = '';
   if (nodesLayer) nodesLayer.style.transform = '';
   function screen(node) { return { x: camera.x + node.x * camera.scale, y: camera.y + node.y * camera.scale }; }
-  var simulate = !state.memoryLabOverviewPanActive && !state.memoryLabOverviewInteractionOnly;
-  var memoryLabVelocityRetention = 0.72;
-  if (simulate) {
-    for (var i = 0; i < graph.nodes.length; i++) { graph.nodes[i].fx = 0; graph.nodes[i].fy = 0; }
-    for (var a = 0; a < graph.nodes.length; a++) {
-      for (var b = a + 1; b < graph.nodes.length; b++) {
-        var na = graph.nodes[a], nb = graph.nodes[b];
-        var dx = na.x - nb.x, dy = na.y - nb.y, d2 = dx * dx + dy * dy + 700, d = Math.sqrt(d2), force = 52000 / d2;
-        if (!na.fixed) { na.fx += dx / d * force; na.fy += dy / d * force; }
-        if (!nb.fixed) { nb.fx -= dx / d * force; nb.fy -= dy / d * force; }
-      }
-    }
-    for (var e = 0; e < graph.edges.length; e++) {
-      var edge = graph.edges[e], source = map[edge[0]], target = map[edge[1]];
-      if (!source || !target) continue;
-      var edx = target.x - source.x, edy = target.y - source.y, dist = Math.hypot(edx, edy) || 1;
-      var wanted = edge[0] === 'anchor' ? 220 : edge[2] === 'component' ? 135 : 165;
-      var maxLen = edge[0] === 'anchor' ? 310 : edge[2] === 'component' ? 220 : 250;
-      var spring = (Math.min(dist, maxLen) - wanted) * 0.018;
-      if (!source.fixed) { source.fx += edx / dist * spring; source.fy += edy / dist * spring; }
-      if (!target.fixed) { target.fx -= edx / dist * spring; target.fy -= edy / dist * spring; }
-    }
-    var ambientPhase = performance.now() * 0.00075;
-    for (var n = 0; n < graph.nodes.length; n++) {
-      var node = graph.nodes[n];
-      if (node.fixed) continue;
-      node.fx += -node.x * 0.0007 + Math.cos(ambientPhase + n * 1.618) * 0.045;
-      node.fy += -node.y * 0.0007 + Math.sin(ambientPhase + n * 1.618) * 0.045;
-      node.vx = ((node.vx || 0) + node.fx) * memoryLabVelocityRetention;
-      node.vy = ((node.vy || 0) + node.fy) * memoryLabVelocityRetention;
-      node.x += node.vx;
-      node.y += node.vy;
-    }
-  }
   stage.classList.toggle('zoom-dots', camera.scale < 0.28);
   var focusId = state.memoryLabOverviewFocus || '';
   var focusData = focusId ? window.memoryLabOverviewFocusData(focusId) : null;
-  var nodeEls = stage.querySelectorAll('.memory-lab-overview-node');
-  for (var k = 0; k < nodeEls.length; k++) {
-    var el = nodeEls[k];
-    var current = map[el.dataset.id];
+  var nodeEls = state.memoryLabOverviewNodeElements || {};
+  for (var k = 0; k < graph.nodes.length; k++) {
+    var current = graph.nodes[k];
+    var el = nodeEls[current.id];
+    if (!el) continue;
     if (!current) continue;
     var p = screen(current);
     el.style.left = p.x + 'px';
@@ -16745,37 +16924,38 @@ window.renderMemoryLabOverviewFrame = function() {
     el.classList.toggle('dim', !!focusData && !focusData.nodes.has(el.dataset.id));
   }
   window.updateMemoryLabOverviewTip();
-  var paths = '';
+  var edgeElements = state.memoryLabOverviewEdgeElements || [];
   for (var m = 0; m < graph.edges.length; m++) {
     var ee = graph.edges[m], s = map[ee[0]], tnode = map[ee[1]];
-    if (!s || !tnode) continue;
+    var edgeElement = edgeElements[m];
+    if (!s || !tnode || !edgeElement) continue;
     var sp = screen(s), tp = screen(tnode);
+    var d = 'M ' + sp.x.toFixed(1) + ' ' + sp.y.toFixed(1) + ' L ' + tp.x.toFixed(1) + ' ' + tp.y.toFixed(1);
     var cls = 'memory-lab-overview-link';
     if (focusData) {
       if (focusData.edges.has(m)) cls += ' hot' + (focusData.parents.has(m) ? ' parent' : '') + (focusData.children.has(m) ? ' child' : '');
       else cls += ' dim';
     }
-    paths += '<path class="' + cls + '" d="M ' + sp.x.toFixed(1) + ' ' + sp.y.toFixed(1) + ' L ' + tp.x.toFixed(1) + ' ' + tp.y.toFixed(1) + '"></path>';
+    edgeElement.base.setAttribute('class', cls);
+    edgeElement.base.setAttribute('d', d);
     if (focusData && focusData.edges.has(m)) {
-      paths += '<path class="memory-lab-overview-flow' + (focusData.parents.has(m) ? ' parent' : '') + (focusData.children.has(m) ? ' child' : '') + '" d="M ' + sp.x.toFixed(1) + ' ' + sp.y.toFixed(1) + ' L ' + tp.x.toFixed(1) + ' ' + tp.y.toFixed(1) + '"></path>';
-    }
+      edgeElement.flow.style.display = '';
+      edgeElement.flow.setAttribute('class', 'memory-lab-overview-flow' + (focusData.parents.has(m) ? ' parent' : '') + (focusData.children.has(m) ? ' child' : ''));
+      edgeElement.flow.setAttribute('d', d);
+    } else edgeElement.flow.style.display = 'none';
   }
-  svg.innerHTML = paths;
-  var needsFocusFrame = false;
   if (focusId && map[focusId] && !state.memoryLabOverviewPanActive && !state.memoryLabOverviewManualCamera) {
     var f = map[focusId];
     var focusDx = stage.clientWidth / 2 - f.x * camera.scale - camera.x;
     var focusDy = stage.clientHeight / 2 - f.y * camera.scale - camera.y;
     camera.x += focusDx * 0.06;
     camera.y += focusDy * 0.06;
-    needsFocusFrame = Math.abs(focusDx) > 0.35 || Math.abs(focusDy) > 0.35;
   }
   var status = document.getElementById('memory-lab-overview-status');
   if (status) {
     var selected = focusId && map[focusId] ? map[focusId].name : '';
     status.textContent = selected ? t('memoryLab.selected') + ': ' + selected : t('memoryLab.unselected');
   }
-  if (state.memoryLabOverviewRunning && stage.isConnected) window.requestMemoryLabOverviewFrame();
 };
 
 window.selectMemoryLabOverviewNode = function(id) {
@@ -16815,15 +16995,8 @@ window.clearMemoryLabOverviewFocus = function() {
 };
 
 window.resetMemoryLabOverview = function() {
-  var stage = document.getElementById('memory-lab-overview-stage');
-  state.memoryLabOverviewCamera = {
-    x: stage ? stage.clientWidth / 2 : 0,
-    y: stage ? stage.clientHeight / 2 : 0,
-    scale: 0.88
-  };
-  state.memoryLabOverviewFocus = '';
-  state.memoryLabOverviewManualCamera = false;
-  window.requestMemoryLabOverviewFrame();
+  if (state.memoryLabVisualizationLoading) return Promise.resolve(null);
+  return window.loadMemoryLabVisualization('reset', { preservePanel: true, resetLayout: true });
 };
 
 window.selectMemoryLabComponent = function(slug) {
@@ -16834,7 +17007,9 @@ window.selectMemoryLabComponent = function(slug) {
     window.requestMemoryLabOverviewFrame();
     return;
   }
-  window.loadMemoryLab(slug, { preservePanel: true });
+  var component = window.cachedMemoryLabComponent(slug);
+  if (state.memoryLab) state.memoryLab.component = component;
+  window.renderMemoryLab();
 };
 
 window.reindexMemoryLab = function() {
@@ -16843,7 +17018,9 @@ window.reindexMemoryLab = function() {
   return api.memoryLabReindex().then(function(result) {
     state.memoryLab = result || state.memoryLab;
     addMsg('assistant', '[Memory Lab] ' + (result && result.ok ? t('memoryLab.updated') : t('memoryLab.updateFailed')), result && result.ok ? 'success' : 'error', '');
+    if (result && result.ok) return window.loadMemoryLabVisualization('reindex', { preservePanel: true, resetLayout: true });
     window.renderMemoryLab();
+    return result;
   }).catch(function(err) {
     addMsg('assistant', '[Memory Lab] ' + t('memoryLab.updateFailed') + ': ' + (err && err.message ? err.message : String(err)), 'error', '');
   }).finally(function() {

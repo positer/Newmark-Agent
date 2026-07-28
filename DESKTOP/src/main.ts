@@ -3696,6 +3696,11 @@ if (hasCliCommand) {
       return agent.memoryLab.read(selector || '');
     });
 
+    ipcMain.handle('memoryLab:visualization', async () => {
+      if (!agent) return { ok: false, error: 'Agent not ready' };
+      return agent.memoryLab.visualizationSnapshot();
+    });
+
     ipcMain.handle('memoryLab:update', async (_event, input: Record<string, unknown>) => {
       if (!agent) return { ok: false, error: 'Agent not ready' };
       try {

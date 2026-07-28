@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.1.12-blue">
+  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.2.0-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -18,6 +18,12 @@
 Newmark Agent brings model routing, persistent workspaces, tools, subagents, workflows, and local state into one desktop application. Connect your own model providers and keep workspace prompts, credentials, conversations, and mutable state under your control.
 
 > Newmark Agent is under active development. Current packages are unsigned prerelease builds.
+
+The `dev-0.2.0` source adds the terminal interface launched with `Newmark --TUI`. It uses the invoking folder as the Workspace, shares Newmark's normal `~/.Newmark` configuration and Conversation store, and retains per-Conversation Plan, Goal, Subagents, Model, and Flow tracking. The TUI supports background Conversation runs, target-bound two-stage stopping, conditional workspace children, Conversation pinning, complete light/dark palettes, Memory Lab Detail, provider/model settings, and a direct Help operation.
+
+The release gate covers DESKTOP, native TUI, CLI, GUI/TUI/CLI shared-backend stress, a real local OpenSSH PTY session, and a WSL 2 Ubuntu 24.04 Linux PTY session.
+
+The locally validated dev-0.2.0 MSI installs a console `Newmark.exe` and registers it in the user PATH, so `Newmark --TUI` can start from any folder while the desktop GUI continues to use `Newmark Agent.exe`.
 
 ## Highlights
 
@@ -29,6 +35,17 @@ Newmark Agent brings model routing, persistent workspaces, tools, subagents, wor
 - **Local-first state.** Store mutable data and credentials under `~/.Newmark`, independently of the installation directory.
 
 ## Download
+
+The latest prerelease is `dev-0.2.0`, including the shared-backend TUI and the global `Newmark --TUI` launcher.
+
+### dev-0.2.0
+
+Download packages from the [dev-0.2.0 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.2.0).
+
+| Package | Platform | SHA-256 |
+| --- | --- | --- |
+| `Newmark-Agent-0.2.0-x64.msi` | Windows x64 installer with GUI and global TUI launcher | `103C4D509F04F0963B4E01B6FA4C141D160F8C0AE7DA22DF78E9EE775ADE2E88` |
+| `Newmark-Agent-0.2.0-win-unpacked-x64.zip` | Windows x64 portable with GUI and TUI | `66A730E108071632FFCED3DC73D8340B23A1A2FCE506E765BD861794A235CE4D` |
 
 ### dev-0.1.12
 
@@ -54,7 +71,7 @@ The Windows MSI requests administrator elevation. Windows and Linux may show an 
 
 Application upgrades preserve existing user state under `~/.Newmark`.
 
-The current source, packaged prerelease, and validated current-user installation are `dev-0.1.12`; the local executable is under `%LOCALAPPDATA%\Programs\Newmark Agent 0.1.12`. Memory Lab now loads one complete visualization snapshot only when the visualization window opens, Reset is requested, or reindex finishes. Component clicks, Detail navigation, tag search, dragging, and zooming reuse that in-memory snapshot without issuing another relationship or component read. A bounded content/index cache removes repeated disk scans from sustained queries, while explicit reads and visualization refreshes still force one current disk read.
+The current source, packaged prerelease, and validated current-user installation are `dev-0.2.0`; the installed GUI and console launcher are under `%LOCALAPPDATA%\Programs\Newmark Agent`. The preceding `dev-0.1.12` Memory Lab optimization remains included: it loads one complete visualization snapshot only when the visualization window opens, Reset is requested, or reindex finishes. Component clicks, Detail navigation, tag search, dragging, and zooming reuse that in-memory snapshot without issuing another relationship or component read. A bounded content/index cache removes repeated disk scans from sustained queries, while explicit reads and visualization refreshes still force one current disk read.
 
 Conversation creation and archiving update the list immediately without waiting for runtime startup, a quiet window, or the slowest archive request. Each archive request settles independently, failed rows roll back independently, and runtime shutdown for different conversations proceeds outside the pool-wide capacity lock. Archive deletion is keyed only by conversation ID, so distinct empty conversations are never collapsed merely because their content matches.
 
@@ -199,6 +216,7 @@ See [OVERVIEW.md](OVERVIEW.md) for the source tree, subsystem responsibilities, 
 
 ### Maintenance Log
 
+- 2026-07-29: Released `dev-0.2.0` with the real terminal UI entry `Newmark --TUI`. The MSI installs a console-subsystem launcher on the user PATH; it preserves the caller cwd, registers or restores it through the existing WorkspaceManager, and shares `~/.Newmark` persistence with GUI/CLI. TUI message wrapping uses terminal display width for CJK/full-width/emoji text and complete light/dark canvases. TUI tests pass 38/38, launcher checks pass 17/17, the full DESKTOP suite passes 1365/1365 plus specialized gates, and shared-backend stress passes five consecutive runs. Real loopback SSH and Ubuntu 24.04 WSL 2 PTY regressions cover the complete interaction flow. See `archive/20260729-tui-cjk-partition-global-launcher.md` and `archive/20260729-dev-0.2.0-tui-shared-backend.md`.
 - 2026-07-28: Released `dev-0.1.12`. Memory Lab now performs one visualization retrieval only on open, Reset, or successful reindex; click/drag/zoom/Detail interactions reuse the loaded relationship/content snapshot. Index and component caches cut the accepted 300-component × 600-query P95 to `10.857 ms` (maximum `14.827 ms`), while a complete 300-component visualization refresh took `426.6 ms`. The same disposable-root gate created and archived 120 conversations at zero interval with no loss and P95 interaction latency of `11.8/13.5 ms`. The retained-DOM, non-overlapping frame pipeline and all Windows/Linux release assets passed packaged smoke. See `archive/20260728-dev-0.1.12-memory-lab-snapshot-release.md`.
 - 2026-07-28: Advanced source development to `dev-0.1.11` after studying Bilibili `BV15L3F6pEFN`, “记错了比忘了更危险.” Memory Lab now exposes bounded `memory_lab_query`, explicit versioned ADD/UPDATE/DELETE actions, optimistic concurrency guards, recoverable cold archives, and an append-only Policy log. An 18-assertion gate covers relevance filtering, budgets, stale mutation rejection, revision history, deletion recovery, replay order, and Plan read-only enforcement. See `archive/20260728-dev-0.1.11-memory-policy.md`.
 - 2026-07-28: Ran packaged Electron and core context stress under disposable `%TEMP%` roots. A zero-interval burst created and archived 120 conversations with zero loss and P95 synchronous interaction latency of `14.7/14.2 ms`; 18 long-context switch cycles with 108 concurrent compression requests lost zero messages. Memory Policy correctness passed at 300 components, but sustained 300-component × 600-query throughput exceeded three minutes because each query rereads every component file. See `archive/20260728-dev-0.1.11-temp-context-conversation-stress.md`.

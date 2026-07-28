@@ -23,6 +23,20 @@ echo %CMDCMDLINE% | findstr /i "cmd.exe" >nul && set "IS_CLI=1"
 if "%1"=="--cli" set "IS_CLI=1"
 if "%1"=="--gui" set "IS_CLI=0"
 
+if /i "%1"=="--TUI" (
+    echo [Newmark] TUI Mode
+    if exist "%NEWMARK_ROOT%\Newmark.exe" (
+        set "ELECTRON_RUN_AS_NODE=1"
+        "%NEWMARK_ROOT%\Newmark.exe" "%NEWMARK_ROOT%\resources\app.asar\dist\launcher.js" %*
+    ) else if exist "%NEWMARK_ROOT%\Newmark Agent.exe" (
+        set "ELECTRON_RUN_AS_NODE=1"
+        "%NEWMARK_ROOT%\Newmark Agent.exe" "%NEWMARK_ROOT%\resources\app.asar\dist\launcher.js" %*
+    ) else (
+        node "%NEWMARK_ROOT%\dist\launcher.js" %*
+    )
+    exit /b %ERRORLEVEL%
+)
+
 if "%IS_CLI%"=="1" (
     echo [Newmark] CLI Mode
     if exist "%NEWMARK_ROOT%\Newmark Agent.exe" (

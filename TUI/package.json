@@ -1,0 +1,18 @@
+{
+  "name": "newmark-tui",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Terminal UI runtime for Newmark Agent",
+  "type": "commonjs",
+  "bin": {
+    "newmark-tui": "bin/newmark-tui.js"
+  },
+  "scripts": {
+    "start": "node bin/newmark-tui.js",
+    "demo": "node bin/newmark-tui.js --demo",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -8,6 +10,7 @@ import { runFlow } from './core/flow-runner';
 import { CLI_COMMANDS, runCliCommand } from './cli-commands';
 
 const args = process.argv.slice(2);
+const isTui = args.some(arg => arg.toLowerCase() === '--tui');
 const isCli = args.includes('--cli');
 const isServer = args.includes('--server');
 const isEdit = args[0] === 'edit';
@@ -176,7 +179,10 @@ function exitCli(code: number): void {
 
 firstRunInit(root);
 
-if (hasCliCommand) {
+if (isTui) {
+  const { start } = require('./tui/src/app');
+  start({ root, workspacePath: process.cwd(), desktopDist: __dirname });
+} else if (hasCliCommand) {
   runCliCommand(root, args).then(handled => {
     const code = typeof process.exitCode === 'number' ? process.exitCode : 0;
     exitCli(handled ? code : 1);

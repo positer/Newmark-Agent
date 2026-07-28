@@ -634,6 +634,29 @@ function isTerminal(): boolean {
   return !!process.stdin.isTTY;
 }
 
+function setWindowsConsoleMode(mode?: number): number | null {
+  if (process.platform !== 'win32') return null;
+  const setMode = Number.isInteger(mode);
+  const script = [
+    'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; public static class NewmarkConsoleMode { [DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int n); [DllImport("kernel32.dll")] public static extern bool GetConsoleMode(IntPtr h, out uint mode); [DllImport("kernel32.dll")] public static extern bool SetConsoleMode(IntPtr h, uint mode); }\'',
+    '$handle = [NewmarkConsoleMode]::GetStdHandle(-10)',
+    '$current = [uint32]0',
+    'if (-not [NewmarkConsoleMode]::GetConsoleMode($handle, [ref]$current)) { exit 2 }',
+    setMode
+      ? `$target = [uint32]${mode}; if (-not [NewmarkConsoleMode]::SetConsoleMode($handle, $target)) { exit 3 }`
+      : '$target = [uint32](($current -band (-bnot 7)) -bor 512); if (-not [NewmarkConsoleMode]::SetConsoleMode($handle, $target)) { exit 3 }; Write-Output $current',
+  ].join('; ');
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    stdio: ['inherit', 'pipe', 'inherit'],
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.status !== 0) return null;
+  if (setMode) return mode ?? null;
+  const parsed = Number.parseInt(String(result.stdout || '').trim(), 10);
+  return Number.isInteger(parsed) ? parsed : null;
+}
+
 
 async function waitForWebContentsLoad(contents: Electron.WebContents, timeoutMs = 15000): Promise<void> {
   if (!contents.isLoadingMainFrame()) return;
@@ -868,6 +891,7 @@ function installBrowserControlBackend(): void {
 }
 const args = userArgs();
 const command = args.find(a => a === 'flow' || a === 'edit');
+const isTuiArg = args.some(arg => arg.toLowerCase() === '--tui');
 const isCliArg = args.includes('--cli');
 const isServerArg = args.includes('--server');
 const isFlowArg = command === 'flow';
@@ -900,7 +924,37 @@ function exitCli(code: number): void {
 }
 
 // CLI/utility mode entry. These paths must work in the packaged exe too.
-if (hasCliCommand) {
+if (isTuiArg) {
+  const isConsoleLauncher = app.isPackaged && path.basename(process.execPath).toLowerCase() === 'newmark.exe';
+  if (isConsoleLauncher && process.env.NEWMARK_TUI_SIDECAR !== '1') {
+    const tuiProcess = spawnSync(process.execPath, [path.join(__dirname, 'launcher.js'), ...args], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        NEWMARK_TUI_SIDECAR: '1',
+      },
+      stdio: 'inherit',
+      windowsHide: false,
+    });
+    if (tuiProcess.error) {
+      console.error(`Unable to start packaged Newmark TUI: ${tuiProcess.error.message}`);
+      process.exit(1);
+    }
+    process.exit(tuiProcess.status ?? 1);
+  }
+  const originalConsoleMode = app.isPackaged ? setWindowsConsoleMode() : null;
+  if (originalConsoleMode !== null) {
+    process.env.NEWMARK_FORCE_TTY = '1';
+    process.once('exit', () => {
+      setWindowsConsoleMode(originalConsoleMode);
+    });
+  }
+  const root = resolveRoot(args);
+  firstRunInit(root);
+  const { start } = require('./tui/src/app');
+  start({ root, workspacePath: process.cwd(), desktopDist: __dirname });
+} else if (hasCliCommand) {
   (async () => {
     const root = resolveRoot(args);
     firstRunInit(root);

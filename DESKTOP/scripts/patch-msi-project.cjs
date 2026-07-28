@@ -21,5 +21,19 @@ module.exports = async function msiProjectCreated(projectPath) {
     </InstallExecuteSequence>
 `;
   source = source.slice(0, insertAt) + customActions + source.slice(insertAt);
+  const componentPattern = /(<Component(?:\s[^>]*)?>[\s\S]*?<File Name="Newmark\.exe"[\s\S]*?\/>)([\s\S]*?<\/Component>)/;
+  if (!componentPattern.test(source)) {
+    throw new Error('MSI project does not contain the console Newmark.exe component');
+  }
+  const environment = [
+    '      <Environment Id="NewmarkGlobalPath"',
+    '        Name="PATH"',
+    '        Value="[APPLICATIONFOLDER]"',
+    '        Action="set"',
+    '        Part="last"',
+    '        Permanent="no"',
+    '        System="no"/>',
+  ].join('\n');
+  source = source.replace(componentPattern, `$1\n${environment}$2`);
   fs.writeFileSync(projectPath, source, 'utf8');
 };

@@ -99,6 +99,7 @@ function throwIfAgentAborted(signal?: AbortSignal): void {
 }
 type StoredConversationEntry = NonNullable<StoredConversationState['conversations']>[string];
 type ConversationModelSelection = { kind: 'auto' } | { kind: 'deployment'; providerId: string; modelId: string };
+export type ConversationFlowSelection = { name: string; pc: number };
 interface StoredConversationState {
   version?: number;
   activeConversationId?: string;
@@ -112,6 +113,7 @@ interface StoredConversationState {
     workRuns?: ConversationWorkRun[];
     continuations?: ConversationContinuation[];
     modelSelection?: ConversationModelSelection;
+    flowSelection?: ConversationFlowSelection | null;
     inputMode?: InputMode;
     mode?: AgentMode;
     goal?: StoredGoalState | null;
@@ -150,6 +152,7 @@ export interface ConversationBranchState {
   workRuns: ConversationWorkRun[];
   continuations: ConversationContinuation[];
   modelSelection: ConversationModelSelection;
+  flowSelection?: ConversationFlowSelection | null;
   inputMode: InputMode;
   mode: AgentMode;
   goal: StoredGoalState | null;
@@ -239,6 +242,7 @@ export interface ConversationSnapshot {
   workRuns: ConversationWorkRun[];
   continuations: ConversationContinuation[];
   modelSelection: ConversationModelSelection;
+  flowSelection: ConversationFlowSelection | null;
   inputMode: InputMode;
   mode: AgentMode;
   goal: StoredGoalState | null;
@@ -380,7 +384,7 @@ export class Agent {
     model: string;
     fallback: boolean;
   } | null = null;
-  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; updatedAt?: string }>();
+  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; flowSelection?: ConversationFlowSelection | null; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; updatedAt?: string }>();
   public isSubagentRuntime = false;
   private subagentName = '';
   private subagentPrompt = '';
@@ -517,6 +521,37 @@ export class Agent {
     this.status = 'idle';
   }
 
+  private currentConversationFlowSelection(): ConversationFlowSelection | null {
+    return this.flow?.name
+      ? { name: this.flow.name, pc: Math.max(0, Math.floor(Number(this.flowPc) || 0)) }
+      : null;
+  }
+
+  private restoreConversationFlowSelection(selection?: ConversationFlowSelection | null): void {
+    this.flow = null;
+    this.flowPc = 0;
+    const name = String(selection?.name || '').trim();
+    if (!name) return;
+    const found = FlowEngine.findWorkflow(name, path.join(this.rootPath, 'Flow'));
+    const workflow = found ? FlowEngine.load(path.join(this.rootPath, 'Flow'), found) : null;
+    if (!workflow) return;
+    this.flow = workflow;
+    this.flowPc = Math.max(0, Math.min(workflow.components.length, Math.floor(Number(selection?.pc) || 0)));
+  }
+
+  setConversationFlow(name: string): ConversationFlowSelection {
+    const clean = String(name || '').trim();
+    const flowDir = path.join(this.rootPath, 'Flow');
+    const found = FlowEngine.findWorkflow(clean, flowDir);
+    const workflow = found ? FlowEngine.load(flowDir, found) : null;
+    if (!workflow) throw new Error(`Flow workflow not found: ${clean}`);
+    this.setMode('flow');
+    this.flow = workflow;
+    this.flowPc = 0;
+    this.saveWorkspaceConversationState(true);
+    return { name: workflow.name, pc: 0 };
+  }
+
   private serializeGoal(goal: GoalState | null = this.goal): StoredGoalState | null {
     if (!goal) return null;
     return {
@@ -568,6 +603,7 @@ export class Agent {
       workRuns: this.normalizeWorkRuns(entry.workRuns),
       continuations: this.normalizeContinuations(entry.continuations),
       modelSelection: entry.modelSelection || this.currentConversationModelSelection(),
+      flowSelection: entry.flowSelection || null,
       inputMode: entry.inputMode || this.defaultInputMode(),
       mode: entry.mode || 'build',
       goal: entry.goal || null,
@@ -589,6 +625,7 @@ export class Agent {
     entry.workRuns = this.normalizeWorkRuns(branch.workRuns);
     entry.continuations = this.normalizeContinuations(branch.continuations);
     entry.modelSelection = branch.modelSelection;
+    entry.flowSelection = branch.flowSelection || null;
     entry.inputMode = branch.inputMode;
     entry.mode = branch.mode;
     entry.goal = branch.goal;
@@ -2238,10 +2275,12 @@ export class Agent {
         break;
       } catch (error) {
         const code = error && typeof error === 'object' && 'code' in error ? String((error as NodeJS.ErrnoException).code || '') : '';
-        if (code !== 'EEXIST') throw error;
-        try {
-          if (Date.now() - fs.statSync(lock).mtimeMs > 30000) fs.unlinkSync(lock);
-        } catch {}
+        if (!['EEXIST', 'EPERM', 'EACCES', 'EBUSY'].includes(code)) throw error;
+        if (code === 'EEXIST') {
+          try {
+            if (Date.now() - fs.statSync(lock).mtimeMs > 30000) fs.unlinkSync(lock);
+          } catch {}
+        }
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 + attempt);
       }
     }
@@ -2480,6 +2519,9 @@ export class Agent {
       modelSelection: isActiveConversation
         ? this.currentConversationModelSelection()
         : (persisted?.modelSelection || memory?.modelSelection || this.currentConversationModelSelection()),
+      flowSelection: isActiveConversation
+        ? this.currentConversationFlowSelection()
+        : (persisted?.flowSelection || memory?.flowSelection || null),
       inputMode: this.inputMode,
       mode: isActiveConversation ? this.mode : (persisted?.mode || memory?.mode || 'build'),
       goal: isActiveConversation ? this.serializeGoal() : (persisted?.goal || memory?.goal || null),
@@ -2523,6 +2565,7 @@ export class Agent {
       workRuns: this.normalizeWorkRuns(branch.workRuns),
       continuations: this.normalizeContinuations(branch.continuations),
       modelSelection: branch.modelSelection,
+      flowSelection: branch.flowSelection || null,
       inputMode: branch.inputMode,
       mode: branch.mode,
       goal: branch.goal,
@@ -2556,6 +2599,7 @@ export class Agent {
           workRuns: [],
           continuations: [],
           modelSelection: this.currentConversationModelSelection(),
+          flowSelection: null,
           inputMode: this.defaultInputMode(),
           mode: 'build',
           goal: null,
@@ -2902,6 +2946,7 @@ export class Agent {
       workRuns: this.normalizeWorkRuns(this.workRuns),
       continuations: this.normalizeContinuations(this.continuations),
       modelSelection: this.currentConversationModelSelection(),
+      flowSelection: this.currentConversationFlowSelection(),
       inputMode: this.inputMode,
       mode: this.mode,
       goal: this.serializeGoal(),
@@ -2929,6 +2974,7 @@ export class Agent {
       workRuns: this.normalizeWorkRuns(this.workRuns),
       continuations: this.normalizeContinuations(this.continuations),
       modelSelection: this.currentConversationModelSelection(),
+      flowSelection: this.currentConversationFlowSelection(),
       inputMode: this.inputMode,
       mode: this.mode,
       goal: this.serializeGoal(),
@@ -2956,6 +3002,8 @@ export class Agent {
       this.continuations = [];
       this.mode = 'build';
       this.goal = null;
+      this.flow = null;
+      this.flowPc = 0;
       this.status = 'idle';
       this.activeWorkRunId = '';
       this.bindConversationSubagents(this.activeConversationId);
@@ -2971,6 +3019,7 @@ export class Agent {
       this.workRuns = this.normalizeWorkRuns(saved.workRuns);
       this.continuations = this.normalizeContinuations(saved.continuations);
       this.restoreConversationModelSelection(saved.modelSelection);
+      this.restoreConversationFlowSelection(saved.flowSelection);
       this.inputMode = this.defaultInputMode();
       this.mode = saved.mode || 'build';
       this.goal = this.restoreGoal(saved.goal);
@@ -2989,6 +3038,7 @@ export class Agent {
     this.workRuns = recoveredWorkRuns.runs;
     this.continuations = this.normalizeContinuations(persisted?.continuations);
     this.restoreConversationModelSelection(persisted?.modelSelection);
+    this.restoreConversationFlowSelection(persisted?.flowSelection);
     this.inputMode = this.defaultInputMode();
     this.mode = persisted?.mode || 'build';
     this.goal = this.restoreGoal(persisted?.goal);
@@ -3004,6 +3054,7 @@ export class Agent {
       workRuns: this.normalizeWorkRuns(this.workRuns),
       continuations: this.normalizeContinuations(this.continuations),
       modelSelection: persisted?.modelSelection || this.currentConversationModelSelection(),
+      flowSelection: persisted?.flowSelection || null,
       inputMode: this.defaultInputMode(),
       mode: persisted?.mode || 'build',
       goal: persisted?.goal || null,

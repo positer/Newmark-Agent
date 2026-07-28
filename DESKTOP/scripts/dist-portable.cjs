@@ -3,6 +3,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const asar = require('@electron/asar');
 const { patchAndVerify, patchExeIdentity, verifyExeIcon } = require('./patch-win-exe-icon.cjs');
+const { createConsoleLauncher } = require('./create-console-launcher.cjs');
 
 const root = path.resolve(__dirname, '..');
 const outputDir = path.resolve(root, '..', 'release');
@@ -10,6 +11,8 @@ const appPackage = require(path.join(root, 'package.json'));
 const installerPath = path.join(outputDir, `Newmark-Agent-${appPackage.version}-x64.msi`);
 const unpackedDir = path.join(outputDir, 'win-unpacked');
 const unpackedExe = path.join(unpackedDir, 'Newmark Agent.exe');
+const consoleExe = path.join(unpackedDir, 'Newmark.exe');
+const portableLauncher = path.join(unpackedDir, 'Newmark.bat');
 const appAsar = path.join(unpackedDir, 'resources', 'app.asar');
 const packageIcon = path.join(root, 'assets', 'icon.ico');
 const zipPath = path.join(outputDir, `Newmark-Agent-${appPackage.version}-win-unpacked-x64.zip`);
@@ -70,6 +73,8 @@ function verifyUnpackedOutput() {
   const unpackedRuntimeDist = path.join(unpackedDir, 'resources', 'app.asar.unpacked', 'dist');
   const checks = [
     [unpackedExe, 'win-unpacked exe'],
+    [path.join(unpackedDir, 'Newmark.exe'), 'console CLI/TUI launcher'],
+    [portableLauncher, 'portable CLI/TUI batch launcher'],
     [appAsar, 'app.asar'],
     [path.join(unpackedRuntimeDist, 'windows-process-tree-helper.dll'), 'precompiled Windows process-tree helper'],
     [path.join(unpackedRuntimeDist, 'typebox-compile.bundle.cjs'), 'Electron Node 20 TypeBox compiler bundle'],
@@ -170,6 +175,15 @@ try {
   ensureNodePtyConptyAssets(nodePtyRoot);
   ensureNodePtyConptyAssets(path.join(unpackedDir, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty'));
   patchPackagedOutput();
+  createConsoleLauncher(unpackedDir);
+  fs.copyFileSync(path.join(root, 'newmark.bat'), portableLauncher);
+  const sshStress = spawnSync(process.execPath, [path.join(root, 'scripts', 'release-ssh-tui-stress.cjs')], {
+    cwd: root,
+    stdio: 'inherit',
+    windowsHide: true,
+    env: { ...process.env, NEWMARK_SSH_TUI_EXE: consoleExe },
+  });
+  if (sshStress.status !== 0) throw new Error(`packaged SSH TUI stress failed with exit ${sshStress.status}`);
   verifyUnpackedOutput();
   runBuilder(['--win', 'msi', '--prepackaged', unpackedDir], 'electron-builder msi --prepackaged');
   verifyMsiInstaller();

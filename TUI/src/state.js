@@ -10,6 +10,11 @@ function applySnapshot(state, snapshot) {
   state.snapshot = valid;
   state.target = { ...valid.target };
   state.messages = valid.chatMessages.map((item) => ({ ...item }));
+  state.expandedBuildRuns = new Set(
+    (valid.workRuns || []).filter((run) => run.expanded).map((run) => run.runId)
+  );
+  if (typeof state.conversationScroll === "number") state.conversationScroll = 0;
+  if (typeof state.conversationHistoryFocus === "boolean") state.conversationHistoryFocus = false;
   const row = valid.conversations.find((item) => item.id === valid.target.conversationId);
   state.lastConversation = row?.title || valid.target.conversationId;
   if (state.lastConversationByWorkspace) {
@@ -88,6 +93,13 @@ function createState(options = {}) {
   const initialFlow = initialWorkflow
     ? { ...initialWorkflow, pc: snapshot.flowSelection.pc || 0 }
     : (snapshot.flowSelection || null);
+  const workflowDetails = Object.fromEntries(flows.map((name) => {
+    const workflow = typeof adapter.readFlow === "function" ? adapter.readFlow(name) : null;
+    if (workflow && typeof workflow.then === "function") {
+      throw new TypeError("The standalone TUI requires synchronous workflow inventory reads");
+    }
+    return [name, workflow || { name, components: [] }];
+  }));
   return {
     adapter,
     adapterKind: adapter.kind,
@@ -102,6 +114,7 @@ function createState(options = {}) {
     menuLevel: "root",
     menuRootIndex: 0,
     menuChildIndex: {},
+    menuScroll: 0,
     expandedWorkspaceIds: new Set(),
     lastConversationByWorkspace: { [target.workspaceId]: target.conversationId },
     trackingByWorkspace: {
@@ -113,15 +126,32 @@ function createState(options = {}) {
       }
     },
     flows: [...flows],
+    workflowDetails,
+    workflowExpandedName: "",
+    workflowDraft: { name: "", mode: "build", prompt: "" },
+    workflowFormIndex: 0,
     flowSelectionIndex: 0,
     flowByConversation: initialFlow ? { [`${target.workspaceId}::${target.conversationId}`]: initialFlow } : {},
     currentFlow: initialFlow,
     theme: String(snapshot.darkMode || "dark").toLowerCase() === "light" ? "light" : "dark",
     overlay: null,
+    settingChoiceTab: "",
+    settingChoiceKey: "",
+    settingChoiceIndex: 0,
     paletteQuery: "",
     paletteIndex: 0,
     inputMode: false,
     input: "",
+    inputCursor: 0,
+    conversationScroll: 0,
+    conversationMaxScroll: 0,
+    conversationHistoryFocus: false,
+    historySelectedIndex: -1,
+    historyVisibleRunIds: [],
+    historyCursorDirection: 0,
+    expandedBuildRuns: new Set(
+      (snapshot.workRuns || []).filter((run) => run.expanded).map((run) => run.runId)
+    ),
     lastConversation: snapshot.conversations.find((item) => item.id === target.conversationId)?.title || target.conversationId,
     notice: adapter.kind === "mock"
       ? "Demo mode · no real services connected"
@@ -150,6 +180,8 @@ function createState(options = {}) {
     automations: Array.isArray(snapshot.automations)
       ? snapshot.automations.map((item) => ({ ...item, name: item.name || item.prompt || item.id, schedule: item.condition || item.startAt || "Configured", enabled: item.active !== false, last: item.lastStatus || "—" }))
       : data.automations.map((item) => ({ ...item })),
+    automationDraft: { prompt: "", condition: "once", intervalSec: "60", conversationMode: "existing" },
+    automationFormIndex: 0,
     settings: {
       general: {
         language: { auto: "Auto", en: "English", zh: "中文" }[snapshot.language] || "Auto",
@@ -202,7 +234,8 @@ function itemCount(state) {
     flowtask: state.currentFlow?.components?.length || 0,
     tools: state.tools.length,
     memory: memoryColumnItems(state, state.contentColumn).length,
-    automation: state.automations.length,
+    automation: state.automations.length + 1,
+    workflow: state.flows.length + 1,
     settings: state.contentColumn === 0
       ? SETTINGS_CATEGORIES.length
       : state.settingsTab === "providers"
@@ -452,6 +485,108 @@ function switchView(state, id) {
   state.contentColumn = 0;
   state.inputMode = false;
   state.input = "";
+  state.inputCursor = 0;
+  if (id === "chat") state.conversationScroll = 0;
+}
+
+function normalizedAutomation(item) {
+  return {
+    ...item,
+    name: item.name || item.prompt || item.id,
+    schedule: item.condition || item.startAt || "Configured",
+    enabled: item.active !== false,
+    last: item.lastStatus || item.lastRunAt || "—"
+  };
+}
+
+function beginAutomationCreate(state) {
+  state.automationDraft = {
+    prompt: "",
+    condition: "once",
+    intervalSec: "60",
+    conversationMode: "existing"
+  };
+  state.automationFormIndex = 0;
+  state.overlay = "automation-create";
+  state.notice = "New automation · complete the form and choose Create";
+  return true;
+}
+
+function createAutomationFromDraft(state) {
+  const prompt = String(state.automationDraft?.prompt || "").trim();
+  if (!prompt) throw new Error("Automation prompt is required");
+  const condition = ["once", "loop", "schedule"].includes(state.automationDraft.condition)
+    ? state.automationDraft.condition
+    : "once";
+  const conversationMode = state.automationDraft.conversationMode === "new" ? "new" : "existing";
+  const workspace = state.workspaces.find((item) => item.id === state.target.workspaceId);
+  const payload = {
+    prompt,
+    model: "",
+    workspaceId: state.target.workspaceId,
+    workspaceName: workspace?.name || state.target.workspaceId,
+    conversationMode,
+    conversationId: conversationMode === "existing" ? state.target.conversationId : "",
+    condition,
+    intervalSec: condition === "once" ? 0 : Math.max(1, Number(state.automationDraft.intervalSec) || 60),
+    active: true
+  };
+  const result = state.adapter.createAutomation(payload);
+  const apply = (created) => {
+    if (!created || created.error) throw new Error(created?.error || "Automation creation failed");
+    const row = normalizedAutomation(created);
+    state.automations = [row, ...state.automations.filter((item) => item.id !== row.id)];
+    state.selected = 1;
+    state.overlay = null;
+    state.notice = `Automation created: ${row.name} · ${state.adapterKind === "mock" ? "demo" : "persisted"}`;
+    return created;
+  };
+  return result && typeof result.then === "function" ? result.then(apply) : apply(result);
+}
+
+function beginWorkflowCreate(state) {
+  state.workflowDraft = { name: "", mode: "build", prompt: "" };
+  state.workflowFormIndex = 0;
+  state.overlay = "workflow-create";
+  state.notice = "New workflow · define its first dialog component";
+  return true;
+}
+
+function saveWorkflowFromDraft(state) {
+  const name = String(state.workflowDraft?.name || "").trim();
+  const prompt = String(state.workflowDraft?.prompt || "").trim();
+  if (!name || name !== name.replace(/[<>:"/\\|?*]/g, "") || name === "." || name === "..") {
+    throw new Error("A valid workflow name is required");
+  }
+  if (!prompt) throw new Error("The first workflow prompt is required");
+  const mode = ["build", "plan", "goal"].includes(state.workflowDraft.mode)
+    ? state.workflowDraft.mode
+    : "build";
+  const workflow = {
+    name,
+    components: [{ type: "dialog", id: 0, mode, prompt }]
+  };
+  const result = state.adapter.saveFlow(workflow);
+  const apply = (savedResult) => {
+    const saved = savedResult?.workflow || savedResult || workflow;
+    if (savedResult?.error) throw new Error(savedResult.error);
+    state.workflowDetails[name] = JSON.parse(JSON.stringify(saved));
+    state.flows = [...new Set([...state.flows, name])].sort();
+    state.selected = state.flows.indexOf(name) + 1;
+    state.workflowExpandedName = name;
+    state.overlay = null;
+    state.notice = `WorkFlow created: ${name} · ${state.adapterKind === "mock" ? "demo" : "persisted"}`;
+    return saved;
+  };
+  return result && typeof result.then === "function" ? result.then(apply) : apply(result);
+}
+
+function toggleWorkflowDetails(state) {
+  const name = state.flows[state.selected - 1];
+  if (!name) return false;
+  state.workflowExpandedName = state.workflowExpandedName === name ? "" : name;
+  state.notice = state.workflowExpandedName ? `WorkFlow details: ${name}` : `WorkFlow details collapsed: ${name}`;
+  return true;
 }
 
 function enterConversation(state, index = state.selected) {
@@ -465,6 +600,8 @@ function enterConversation(state, index = state.selected) {
   applySnapshot(state, snapshot);
   state.selected = index;
   state.inputMode = true;
+  state.inputCursor = [...state.input].length;
+  state.conversationScroll = 0;
   state.notice = `Entered conversation: ${conversation.title}`;
   return true;
 }
@@ -474,6 +611,156 @@ function returnToConversationSelection(state) {
   state.inputMode = false;
   state.notice = "Conversation selection · draft preserved";
   return true;
+}
+
+function scrollConversation(state, direction) {
+  const maximum = Math.max(0, Number(state.conversationMaxScroll) || 0);
+  state.conversationScroll = Math.max(0, Math.min(maximum, (Number(state.conversationScroll) || 0) + direction));
+  state.notice = state.conversationScroll > 0
+    ? `Conversation history · ${state.conversationScroll} row(s) above latest`
+    : "Conversation history · latest messages";
+  return state.conversationScroll;
+}
+
+function inputCharacterWidth(character) {
+  const code = character.codePointAt(0) || 0;
+  if (code === 0 || code < 0x20 || (code >= 0x7f && code < 0xa0) || /\p{Mark}|\u200d|\ufe0e|\ufe0f/u.test(character)) return 0;
+  return code >= 0x1100 && (
+    code <= 0x115f ||
+    code === 0x2329 ||
+    code === 0x232a ||
+    (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe10 && code <= 0xfe19) ||
+    (code >= 0xfe30 && code <= 0xfe6f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1faff) ||
+    (code >= 0x20000 && code <= 0x3fffd)
+  ) ? 2 : 1;
+}
+
+function inputVisualLines(value, width) {
+  const characters = [...String(value || "")];
+  const limit = Math.max(1, Number(width) || 1);
+  const rows = [];
+  let start = 0;
+  let columns = 0;
+  for (let index = 0; index < characters.length; index += 1) {
+    const character = characters[index];
+    if (character === "\n") {
+      rows.push({ start, end: index });
+      start = index + 1;
+      columns = 0;
+      continue;
+    }
+    const nextWidth = inputCharacterWidth(character);
+    if (index > start && columns + nextWidth > limit) {
+      rows.push({ start, end: index });
+      start = index;
+      columns = 0;
+    }
+    columns += nextWidth;
+  }
+  rows.push({ start, end: characters.length });
+  return { characters, rows };
+}
+
+function moveInputCursorVertical(state, direction) {
+  const layout = inputVisualLines(state.input, state.inputWrapWidth || 72);
+  const { characters, rows } = layout;
+  const cursor = Math.max(0, Math.min(characters.length, Number(state.inputCursor) || 0));
+  let rowIndex = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    if (cursor >= rows[index].start && cursor <= rows[index].end) rowIndex = index;
+  }
+  const row = rows[rowIndex];
+  const column = characters.slice(row.start, cursor).reduce((total, character) => total + inputCharacterWidth(character), 0);
+  const targetIndex = rowIndex + (direction < 0 ? -1 : 1);
+  if (targetIndex >= 0 && targetIndex < rows.length) {
+    const target = rows[targetIndex];
+    let nextCursor = target.start;
+    let nextColumn = 0;
+    while (nextCursor < target.end) {
+      const nextWidth = inputCharacterWidth(characters[nextCursor]);
+      if (nextColumn + nextWidth > column) break;
+      nextColumn += nextWidth;
+      nextCursor += 1;
+    }
+    state.inputCursor = nextCursor;
+    return "cursor";
+  }
+  if (direction < 0) {
+    const runs = [...(state.snapshot.workRuns || [])].sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+    if (runs.length) {
+      state.conversationHistoryFocus = true;
+      state.historySelectedIndex = runs.length - 1;
+      state.historyCursorDirection = -1;
+      state.notice = `History focus · Build Block ${runs.length} · Enter expands`;
+      return "history-focus";
+    }
+  }
+  scrollConversation(state, direction < 0 ? 1 : -1);
+  return "history";
+}
+
+function moveConversationHistoryCursor(state, direction) {
+  const runs = [...(state.snapshot.workRuns || [])].sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+  if (!state.conversationHistoryFocus || !runs.length) return "input";
+  const current = Math.max(0, Math.min(runs.length - 1, Number(state.historySelectedIndex) || 0));
+  if (direction < 0) {
+    state.historySelectedIndex = Math.max(0, current - 1);
+    state.historyCursorDirection = -1;
+    state.notice = `History focus · Build Block ${state.historySelectedIndex + 1} · Enter expands`;
+    return "history";
+  }
+  if (current < runs.length - 1) {
+    const next = current + 1;
+    const nextRunId = runs[next]?.runId;
+    if (state.historyVisibleRunIds.includes(nextRunId)) {
+      state.historySelectedIndex = next;
+      state.historyCursorDirection = 1;
+      state.notice = `History focus · Build Block ${next + 1} · Enter expands`;
+      return "history";
+    }
+  }
+  state.conversationHistoryFocus = false;
+  state.historyCursorDirection = 0;
+  state.inputCursor = [...state.input].length;
+  state.notice = "Input focus · Down at the final input row scrolls toward newer history";
+  return "input";
+}
+
+function toggleSelectedBuildBlock(state) {
+  if (!state.conversationHistoryFocus) return false;
+  const runs = [...(state.snapshot.workRuns || [])].sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+  const run = runs[state.historySelectedIndex];
+  if (!run) return false;
+  const prior = state.expandedBuildRuns.has(run.runId);
+  const expanded = !prior;
+  if (expanded) state.expandedBuildRuns.add(run.runId);
+  else state.expandedBuildRuns.delete(run.runId);
+  run.expanded = expanded;
+  state.notice = `${expanded ? "Expanded" : "Collapsed"} Build Block ${state.historySelectedIndex + 1}`;
+  if (typeof state.adapter?.setWorkRunExpanded !== "function") return true;
+  const rollback = (error) => {
+    if (prior) state.expandedBuildRuns.add(run.runId);
+    else state.expandedBuildRuns.delete(run.runId);
+    run.expanded = prior;
+    state.notice = `Build Block display update failed${error?.message ? `: ${error.message}` : ""}`;
+    if (error) throw error;
+    return false;
+  };
+  try {
+    const result = state.adapter.setWorkRunExpanded(run.runId, expanded, state.target);
+    if (result && typeof result.then === "function") {
+      return result.then((saved) => saved === false ? rollback() : true).catch(rollback);
+    }
+    return result === false ? rollback() : true;
+  } catch (error) {
+    return rollback(error);
+  }
 }
 
 function markConversationRunning(state, target, running) {
@@ -621,7 +908,7 @@ function toggleSelected(state) {
     }
     state.notice = `${tool.name} ${tool.enabled ? "enabled" : "disabled"} · ${state.adapterKind === "mock" ? "demo only" : "persisted"}`;
   } else if (state.view === "automation") {
-    const job = state.automations[state.selected];
+    const job = state.automations[state.selected - 1];
     if (!job) return;
     if (state.adapterKind !== "mock" && typeof state.adapter.toggleAutomation === "function") {
       const result = state.adapter.toggleAutomation(job.id);
@@ -666,6 +953,15 @@ function toggleSelected(state) {
     }
     const row = settingsRows(state)[state.selected];
     if (!row) return;
+    if (state.settingsTab === "general" && row.key === "inputBehavior") {
+      const current = row.choices.findIndex((value) => value === row.value);
+      state.settingChoiceTab = state.settingsTab;
+      state.settingChoiceKey = row.key;
+      state.settingChoiceIndex = current >= 0 ? current : 0;
+      state.overlay = "settings-choice";
+      state.notice = "Choose the default Enter mode · Guide or Next";
+      return true;
+    }
     const current = row.choices.findIndex((value) => value === row.value);
     const next = row.choices[(current + 1 + row.choices.length) % row.choices.length];
     state.settings[state.settingsTab][row.key] = next;
@@ -675,6 +971,52 @@ function toggleSelected(state) {
       state.adapter.saveConfig(appearance);
     }
     state.notice = `${row.label}: ${formatSettingNotice(next)} · ${state.adapterKind === "mock" ? "mock" : "persisted"}`;
+  }
+}
+
+function selectedSettingChoiceRow(state) {
+  if (state.overlay !== "settings-choice" || !state.settingChoiceKey) return null;
+  return settingsRows(state, state.settingChoiceTab)
+    .find((row) => row.key === state.settingChoiceKey) || null;
+}
+
+function moveSettingChoiceSelection(state, delta) {
+  const row = selectedSettingChoiceRow(state);
+  if (!row?.choices?.length) return false;
+  state.settingChoiceIndex = (
+    Number(state.settingChoiceIndex || 0) + delta + row.choices.length
+  ) % row.choices.length;
+  return true;
+}
+
+function confirmSettingChoiceSelection(state) {
+  const row = selectedSettingChoiceRow(state);
+  if (!row?.choices?.length) return false;
+  const index = Math.max(0, Math.min(row.choices.length - 1, Number(state.settingChoiceIndex) || 0));
+  const value = row.choices[index];
+  const apply = () => {
+    state.settings[state.settingChoiceTab][row.key] = value;
+    if (row.key === "inputBehavior") {
+      state.snapshot.inputMode = serializedSettingValue(row, value);
+    }
+    state.overlay = null;
+    state.settingChoiceTab = "";
+    state.settingChoiceKey = "";
+    state.settingChoiceIndex = 0;
+    state.notice = `${row.label}: ${formatSettingNotice(value)} · ${state.adapterKind === "mock" ? "mock persisted" : "persisted"}`;
+    return true;
+  };
+  const fail = (error) => {
+    state.notice = `${row.label} update failed: ${error.message}`;
+    throw error;
+  };
+  try {
+    const result = persistSetting(state, row, value);
+    if (result && typeof result.then === "function") return result.then(apply).catch(fail);
+    if (result === false) throw new Error("Newmark rejected the setting");
+    return apply();
+  } catch (error) {
+    return fail(error);
   }
 }
 
@@ -720,7 +1062,6 @@ function persistSetting(state, row, value) {
     result = state.adapter.saveSetting("agent", "run_in_wsl", serialized);
     state.notice = `Runtime backend change requires restart · ${state.adapterKind === "mock" ? "mock" : "persisted"}`;
   }
-  if (result && typeof result.then === "function") throw new TypeError("Demo settings adapter must be synchronous");
   return result;
 }
 
@@ -848,8 +1189,12 @@ module.exports = {
   applyThemeAppearance,
   applySnapshot,
   applyConversationResult,
+  beginAutomationCreate,
+  beginWorkflowCreate,
   conversationModelOptions,
+  createAutomationFromDraft,
   createState,
+  confirmSettingChoiceSelection,
   cycleConversationMode,
   cycleMemoryComponent,
   cycleSettingsTab,
@@ -861,17 +1206,24 @@ module.exports = {
   moveMenuLevel,
   moveMenuSelection,
   moveFocusHorizontal,
+  moveConversationHistoryCursor,
+  moveInputCursorVertical,
+  moveSettingChoiceSelection,
   moveSelection,
   rootMenuItems,
   returnToConversationSelection,
   requestConversationStop,
   runSettingsAction,
+  saveWorkflowFromDraft,
+  scrollConversation,
   selectedMemoryDetail,
   selectConversationModel,
   selectFlowWorkflow,
   switchView,
+  toggleWorkflowDetails,
   toggleSelected,
   toggleConversationPinned,
+  toggleSelectedBuildBlock,
   validateSelectedModel,
   workspaceMenuChildren
 };

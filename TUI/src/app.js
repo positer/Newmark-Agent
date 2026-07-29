@@ -10,22 +10,32 @@ const {
   applyConversationResult,
   applyThemeAppearance,
   applySnapshot,
+  beginAutomationCreate,
+  beginWorkflowCreate,
+  confirmSettingChoiceSelection,
+  createAutomationFromDraft,
   createState,
   cycleConversationMode,
   enterConversation,
   filteredCommands,
   moveFocusHorizontal,
+  moveConversationHistoryCursor,
+  moveInputCursorVertical,
   moveMenuSelection,
+  moveSettingChoiceSelection,
   moveSelection,
   markConversationRunning,
   returnToConversationSelection,
   requestConversationStop,
   runSettingsAction,
+  saveWorkflowFromDraft,
   selectConversationModel,
   selectFlowWorkflow,
   switchView,
   toggleConversationPinned,
+  toggleSelectedBuildBlock,
   toggleSelected,
+  toggleWorkflowDetails,
   validateSelectedModel
 } = require("./state");
 
@@ -47,6 +57,7 @@ function executeAction(state, action) {
     }
     state.inputMode = true;
     state.input = "";
+    state.inputCursor = 0;
   } else if (action === "theme") {
     const appearance = applyThemeAppearance(state, state.theme === "dark" ? "Light" : "Dark");
     state.adapter.saveConfig(appearance);
@@ -122,6 +133,7 @@ function start(options = {}) {
       timestamp: new Date().toISOString()
     });
     state.input = "";
+    state.inputCursor = 0;
     state.inputMode = false;
     state.busy = true;
     state.notice = "Simulating model route and tool handoff…";
@@ -152,6 +164,7 @@ function start(options = {}) {
   async function sendRealMessage(text) {
     const target = { ...state.target };
     state.input = "";
+    state.inputCursor = 0;
     state.inputMode = false;
     markConversationRunning(state, target, true);
     state.notice = "Running Newmark Agent…";
@@ -190,12 +203,23 @@ function start(options = {}) {
       selectFlowWorkflow(state);
     } else if (state.view === "memory") {
       activateMemorySelection(state);
-    } else if (state.view === "tools" || state.view === "automation" || state.view === "settings") {
+    } else if (state.view === "automation") {
+      if (state.selected === 0) beginAutomationCreate(state);
+      else toggleSelected(state);
+    } else if (state.view === "workflow") {
+      if (state.selected === 0) beginWorkflowCreate(state);
+      else toggleWorkflowDetails(state);
+    } else if (state.view === "tools" || state.view === "settings") {
       if (state.view === "settings" && state.contentColumn === 0) {
         moveFocusHorizontal(state, 1);
         return;
       }
-      toggleSelected(state);
+      const result = toggleSelected(state);
+      if (result && typeof result.then === "function") {
+        result.catch((error) => {
+          state.notice = `Setting update failed: ${error.message}`;
+        }).finally(paint);
+      }
     } else if (state.view === "plan") {
       const step = state.snapshot.conversationPlan.items[state.selected];
       state.notice = step
@@ -232,6 +256,22 @@ function start(options = {}) {
   }
 
   function handleInput(str, key) {
+    if (state.conversationHistoryFocus) {
+      if (key.name === "escape") {
+        Promise.resolve(requestConversationStop(state)).finally(paint);
+      } else if (key.name === "tab") {
+        state.conversationHistoryFocus = false;
+        returnToConversationSelection(state);
+      } else if (key.name === "up") {
+        moveConversationHistoryCursor(state, -1);
+      } else if (key.name === "down") {
+        moveConversationHistoryCursor(state, 1);
+      } else if (key.name === "return" || key.name === "space") {
+        const toggled = toggleSelectedBuildBlock(state);
+        if (toggled && typeof toggled.then === "function") toggled.catch(() => {}).finally(paint);
+      }
+      return;
+    }
     if (key.name === "tab" && key.shift) {
       cycleConversationMode(state);
     } else if (key.name === "escape") {
@@ -240,6 +280,20 @@ function start(options = {}) {
       returnToConversationSelection(state);
     } else if (key.name === "escape") {
       state.notice = "Esc is reserved for stopping an active run · Tab returns to conversation selection";
+    } else if (key.name === "up") {
+      moveInputCursorVertical(state, -1);
+    } else if (key.name === "down") {
+      moveInputCursorVertical(state, 1);
+    } else if (key.name === "left") {
+      state.inputCursor = Math.max(0, (Number(state.inputCursor) || 0) - 1);
+    } else if (key.name === "right") {
+      state.inputCursor = Math.min([...state.input].length, (Number(state.inputCursor) || 0) + 1);
+    } else if (key.name === "return" && key.shift) {
+      const characters = [...state.input];
+      const cursor = Math.max(0, Math.min(characters.length, Number(state.inputCursor) || 0));
+      characters.splice(cursor, 0, "\n");
+      state.input = characters.join("");
+      state.inputCursor = cursor + 1;
     } else if (key.name === "return") {
       const text = state.input.trim();
       if (text) {
@@ -247,9 +301,19 @@ function start(options = {}) {
         else void sendRealMessage(text);
       }
     } else if (key.name === "backspace") {
-      state.input = [...state.input].slice(0, -1).join("");
+      const characters = [...state.input];
+      const cursor = Math.max(0, Math.min(characters.length, Number(state.inputCursor) || 0));
+      if (cursor > 0) {
+        characters.splice(cursor - 1, 1);
+        state.input = characters.join("");
+        state.inputCursor = cursor - 1;
+      }
     } else if (str && !key.ctrl && !key.meta && str >= " ") {
-      state.input += str;
+      const characters = [...state.input];
+      const cursor = Math.max(0, Math.min(characters.length, Number(state.inputCursor) || 0));
+      characters.splice(cursor, 0, str);
+      state.input = characters.join("");
+      state.inputCursor = cursor + [...str].length;
     }
   }
 
@@ -265,10 +329,76 @@ function start(options = {}) {
     }
   }
 
+  function handleSettingChoice(key) {
+    if (key.name === "up") {
+      moveSettingChoiceSelection(state, -1);
+    } else if (key.name === "down") {
+      moveSettingChoiceSelection(state, 1);
+    } else if (key.name === "return") {
+      const result = confirmSettingChoiceSelection(state);
+      if (result && typeof result.then === "function") {
+        result.catch(() => {}).finally(paint);
+      }
+    } else if (key.name === "escape") {
+      state.overlay = null;
+      state.settingChoiceTab = "";
+      state.settingChoiceKey = "";
+      state.settingChoiceIndex = 0;
+      state.notice = "Input mode selection cancelled";
+    }
+  }
+
+  function handleCreateForm(str, key) {
+    const isAutomation = state.overlay === "automation-create";
+    const draft = isAutomation ? state.automationDraft : state.workflowDraft;
+    const fieldKey = isAutomation ? "automationFormIndex" : "workflowFormIndex";
+    const maxIndex = isAutomation ? 4 : 3;
+    const textFields = isAutomation ? { 0: "prompt", 2: "intervalSec" } : { 0: "name", 2: "prompt" };
+    const cycles = isAutomation
+      ? {
+          1: ["once", "loop", "schedule"],
+          3: ["existing", "new"]
+        }
+      : { 1: ["build", "plan", "goal"] };
+    const index = state[fieldKey];
+    const submit = () => {
+      const action = isAutomation ? createAutomationFromDraft(state) : saveWorkflowFromDraft(state);
+      Promise.resolve(action).catch((error) => {
+        state.notice = `${isAutomation ? "Automation" : "WorkFlow"} creation failed: ${error.message}`;
+      }).finally(paint);
+    };
+    if (key.name === "escape") {
+      state.overlay = null;
+      state.notice = `${isAutomation ? "Automation" : "WorkFlow"} creation cancelled`;
+    } else if (key.name === "up") {
+      state[fieldKey] = (index - 1 + maxIndex + 1) % (maxIndex + 1);
+    } else if (key.name === "down" || key.name === "tab") {
+      state[fieldKey] = (index + 1) % (maxIndex + 1);
+    } else if ((key.name === "left" || key.name === "right") && cycles[index]) {
+      const values = cycles[index];
+      const current = values.indexOf(draft[isAutomation && index === 3 ? "conversationMode" : isAutomation ? "condition" : "mode"]);
+      const next = (current + (key.name === "right" ? 1 : -1) + values.length) % values.length;
+      if (isAutomation && index === 3) draft.conversationMode = values[next];
+      else if (isAutomation) draft.condition = values[next];
+      else draft.mode = values[next];
+    } else if (key.name === "return") {
+      if (index === maxIndex) submit();
+      else state[fieldKey] = index + 1;
+    } else if (key.name === "backspace" && textFields[index]) {
+      const name = textFields[index];
+      draft[name] = [...String(draft[name] || "")].slice(0, -1).join("");
+    } else if (str && !key.ctrl && !key.meta && str >= " " && textFields[index]) {
+      const name = textFields[index];
+      draft[name] = `${draft[name] || ""}${str}`;
+    }
+  }
+
   function handleKey(str, key) {
     if (key.ctrl && key.name === "c") return quit();
     if (state.overlay === "palette") handlePalette(str, key);
     else if (state.overlay === "flow-select") handleFlowSelection(key);
+    else if (state.overlay === "settings-choice") handleSettingChoice(key);
+    else if (state.overlay === "automation-create" || state.overlay === "workflow-create") handleCreateForm(str, key);
     else if (state.inputMode) handleInput(str, key);
     else if (state.overlay) {
       if (key.name === "escape" || key.name === "return" || str === "?") state.overlay = null;

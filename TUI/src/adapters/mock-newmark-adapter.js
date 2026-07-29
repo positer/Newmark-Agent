@@ -54,23 +54,29 @@ function createSnapshot(target) {
   const snapshotTarget = { workspaceId: selectedWorkspace.id, conversationId: conversation.id };
   const plan = scenarioPlan(scenario, conversation.id);
   const subagents = scenarioAgents(scenario, conversation.id);
+  const runId = `${conversation.id}-build-1`;
+  const primaryContent = `Continue work on: ${scenario.goal}`;
+  const summaryContent = `The current focus is “${plan[1]?.text || plan[0].text}”. I will keep all work bound to this conversation target.`;
+  const guideContent = `Keep this Build focused on ${plan[1]?.text || plan[0].text}.`;
   const chatMessages = [
     {
       messageId: `${conversation.id}-user-1`,
       role: "user",
-      content: `Continue work on: ${scenario.goal}`,
+      content: primaryContent,
       mode: "build",
       model: "auto",
-      timestamp: "2026-07-28T17:15:00+08:00"
+      timestamp: "2026-07-28T17:15:00+08:00",
+      runId
     },
     {
       messageId: `${conversation.id}-assistant-1`,
       role: "assistant",
-      content: `The current focus is “${plan[1]?.text || plan[0].text}”. I will keep all work bound to this conversation target.`,
+      content: summaryContent,
       mode: "build",
       model: "auto",
       timestamp: "2026-07-28T17:15:02+08:00",
-      meta: "Balanced · demo snapshot"
+      meta: "Balanced · demo snapshot",
+      runId
     }
   ];
   return validateSnapshot({
@@ -90,9 +96,45 @@ function createSnapshot(target) {
     historyMessages: conversation.historyCount,
     workRuns: clone(data.workRuns).map((run) => ({
       ...run,
+      runId,
       target: { ...snapshotTarget },
       runtimeKey: `${snapshotTarget.workspaceId}::${snapshotTarget.conversationId}`,
-      events: run.events.map((event) => ({ ...event, conversationId: snapshotTarget.conversationId }))
+      primaryPrompt: primaryContent,
+      events: [
+        ...run.events.map((event, index) => ({
+          ...event,
+          runId,
+          sequence: (index + 1) * 10,
+          conversationId: snapshotTarget.conversationId
+        })),
+        {
+          id: `${runId}-guide`,
+          runId,
+          conversationId: snapshotTarget.conversationId,
+          type: "guide",
+          content: guideContent,
+          sequence: 15,
+          timestamp: "2026-07-28T17:25:01+08:00",
+          guide: {
+            clientMessageId: `${runId}-guide-message`,
+            guideId: `${runId}-guide`,
+            runId,
+            status: "applied",
+            content: guideContent,
+            createdAt: "2026-07-28T17:25:01+08:00",
+            updatedAt: "2026-07-28T17:25:01+08:00"
+          }
+        },
+        {
+          id: `${runId}-final`,
+          runId,
+          conversationId: snapshotTarget.conversationId,
+          type: "final_response",
+          content: summaryContent,
+          sequence: 30,
+          timestamp: "2026-07-28T17:25:02+08:00"
+        }
+      ]
     })),
     continuations: [],
     modelSelection: { kind: "auto" },
@@ -116,16 +158,20 @@ function createMockNewmarkAdapter() {
   let target = { workspaceId: data.workspace.id, conversationId: data.conversations[0].id };
   let providers = clone(data.providers);
   let memoryLab = clone(data.memoryLab);
+  let workflows = clone(data.flows);
+  let defaultInputMode = "guide";
   const activeConversationByWorkspace = new Map([[target.workspaceId, target.conversationId]]);
   const modelSelections = new Map();
   const modes = new Map();
   const selectedFlows = new Map();
   const pinOverrides = new Map();
+  const workRunExpanded = new Map();
   const stateFor = (requested) => {
     const snapshot = createSnapshot(requested);
     const key = `${requested.workspaceId}::${requested.conversationId}`;
     snapshot.modelSelection = clone(modelSelections.get(key) || snapshot.modelSelection);
     snapshot.mode = modes.get(key) || snapshot.mode;
+    snapshot.inputMode = defaultInputMode;
     snapshot.flowSelection = clone(selectedFlows.get(key) || null);
     snapshot.conversations = snapshot.conversations
       .map((item) => ({ ...item, ...(pinOverrides.get(`${requested.workspaceId}::${item.id}`) || {}) }))
@@ -134,6 +180,10 @@ function createMockNewmarkAdapter() {
         if (left.pinned && right.pinned) return String(right.pinnedAt || "").localeCompare(String(left.pinnedAt || ""));
         return Number(left.order || 0) - Number(right.order || 0);
       });
+    snapshot.workRuns = snapshot.workRuns.map((run) => ({
+      ...run,
+      expanded: workRunExpanded.get(`${key}::${run.runId}`) ?? !!run.expanded
+    }));
     snapshot.providers = clone(providers);
     snapshot.models = providers.flatMap((provider) => provider.models.map((model) => model.name));
     return snapshot;
@@ -176,21 +226,30 @@ function createMockNewmarkAdapter() {
       });
       return stateFor(requested);
     },
+    setWorkRunExpanded(runId, expanded, requested = target) {
+      workRunExpanded.set(`${requested.workspaceId}::${requested.conversationId}::${runId}`, !!expanded);
+      return true;
+    },
     setConversationMode(mode, requested = target) {
       target = { ...assertTarget(requested) };
       modes.set(`${target.workspaceId}::${target.conversationId}`, mode);
       return stateFor(target);
     },
     listFlows() {
-      return data.flows.map((workflow) => workflow.name);
+      return workflows.map((workflow) => workflow.name).sort();
     },
     readFlow(name) {
-      const workflow = data.flows.find((item) => item.name === name);
+      const workflow = workflows.find((item) => item.name === name);
       return workflow ? clone(workflow) : null;
+    },
+    saveFlow(workflow) {
+      const saved = clone(workflow);
+      workflows = [...workflows.filter((item) => item.name !== saved.name), saved];
+      return clone(saved);
     },
     selectConversationFlow(name, requested = target) {
       target = { ...assertTarget(requested) };
-      const workflow = data.flows.find((item) => item.name === name);
+      const workflow = workflows.find((item) => item.name === name);
       if (!workflow) throw new Error(`Unknown demo Flow: ${name}`);
       const key = `${target.workspaceId}::${target.conversationId}`;
       modes.set(key, "flow");
@@ -203,8 +262,10 @@ function createMockNewmarkAdapter() {
     stopConversation(_target, force = false) {
       return { action: force ? "force" : "graceful", demo: true };
     },
-    setInputMode(mode) {
-      return { ok: true, demo: true, mode };
+    setInputMode(mode, requested = target) {
+      assertTarget(requested);
+      defaultInputMode = mode === "next" ? "next" : "guide";
+      return defaultInputMode;
     },
     getConversationPlan(requested = target) {
       return createSnapshot(requested).conversationPlan;

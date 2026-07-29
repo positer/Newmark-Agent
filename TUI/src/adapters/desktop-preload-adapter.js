@@ -42,6 +42,10 @@ function createDesktopPreloadAdapter(api) {
       await api.setConversationPinned(conversationId, !!pinned);
       return validateSnapshot(await api.getState(target));
     },
+    async setWorkRunExpanded(runId, expanded, target) {
+      assertTarget(target);
+      return api.setWorkRunExpanded({ target, runId, expanded: !!expanded });
+    },
     async setConversationMode(mode, target) {
       assertTarget(target);
       await api.activateConversation(target);
@@ -54,6 +58,11 @@ function createDesktopPreloadAdapter(api) {
     async readFlow(name) {
       const result = await api.readFlow(name);
       return result?.workflow || null;
+    },
+    async saveFlow(workflow) {
+      const result = await api.saveFlow(workflow);
+      if (result?.error) throw new Error(result.error);
+      return result?.workflow || workflow;
     },
     async selectConversationFlow(name, target) {
       assertTarget(target);

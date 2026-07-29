@@ -13,6 +13,7 @@ const navigation = [
   { id: "tools", icon: "[T]", label: "Tools", section: "operations" },
   { id: "memory", icon: "[M]", label: "Memory Lab", section: "operations" },
   { id: "automation", icon: "[R]", label: "Automations", section: "operations" },
+  { id: "workflow", icon: "[F]", label: "WorkFlow", section: "operations" },
   { id: "settings", icon: "[S]", label: "Settings", section: "operations" },
   { id: "help", icon: "[H]", label: "Help", section: "operations" }
 ];
@@ -286,6 +287,7 @@ const commands = [
   { label: "Open Tools", hint: "5", action: "view:tools" },
   { label: "Open Memory Lab", hint: "6", action: "view:memory" },
   { label: "Open Automations", hint: "7", action: "view:automation" },
+  { label: "Open WorkFlow", hint: "", action: "view:workflow" },
   { label: "Open Settings", hint: "8", action: "view:settings" },
   { label: "New conversation", hint: "N", action: "new-chat" },
   { label: "Toggle theme", hint: "T", action: "theme" },

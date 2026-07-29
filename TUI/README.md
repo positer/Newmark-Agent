@@ -59,8 +59,10 @@ npm.cmd run demo
 - Memory Lab 的读取、详细关系视图和重建入口。
 - Provider 启停、Model 启停与真实 Provider 验证。
 - General、Personalization、Runtime、Tools 设置写回共享 `config.json`。
+- General / Input mode 以真正的 Guide/Next 列表选择默认回车行为；确认后绑定当前 Conversation runtime，并写回共享 `general.default_input`。
 - 字体、字体颜色、背景颜色与主题的 TUI 应用；实际字体族仍由终端宿主决定。
-- Automation 清单与暂停/恢复。
+- Automation 内容区首项可新建绑定当前 Workspace/Conversation 的真实自动化，并支持清单与暂停/恢复。
+- Operation 保持单层；同级 `WorkFlow` 内容区列出、展开并新建由现有 FlowEngine 持久化的工作流。
 - Archive 清单、版本信息与 GitHub 更新检查。
 - `--demo` 隔离模式，保留多个 Workspace 和各不相同的 Conversation/Goal/Plan/Subagent 场景。
 
@@ -74,11 +76,13 @@ TUI 使用和现有 GUI/CLI 相同的 Newmark Core 与 `~/.Newmark` 持久化格
 
 | 键位 | 操作 |
 | --- | --- |
-| `↑` / `↓` | 菜单内连续遍历展开树；内容区移动选择 |
-| `Enter` | 展开/折叠 Workspace、进入子项；选中 Conversation 时直接进入编辑 |
+| `↑` / `↓` | 菜单内连续遍历并自动滚动长菜单；输入首行 ↑ 进入 Build Block 历史，历史顶部继续 ↑ 跟随光标上滚；仅输入末行继续 ↓ 向较新历史滚动 |
+| `Enter` | 展开/折叠 Workspace、进入子项；选中 Conversation 时直接进入编辑；General / Input mode 中打开 Guide/Next 列表并确认 |
 | `←` / `→` | 移动内容列；仅从内容最左列返回菜单 |
 | `Tab` | 编辑态返回 Conversation 选择并保留草稿；普通内容返回菜单 |
 | `Shift+Tab` | 编辑态循环 Build → Plan → Goal → Flow；Flow 强制选择工作流 |
+| `Shift+Enter` | 编辑输入区插入换行；Enter 仍发送 |
+| 历史区 `Enter` | 展开/收起选中 Build Block 的公开进度、工具调用和工具结果；执行时间、启动输入、Guide 和最终总结始终显示 |
 | `Esc` | 当前运行 Conversation 的第一段停止；再次按下强制停止 |
 | `N` | 在当前 Workspace 新建 Conversation |
 | `T` | Conversation 选择态置顶/取消置顶并跟随 ID；其他位置切换主题 |
@@ -92,7 +96,7 @@ TUI 使用和现有 GUI/CLI 相同的 Newmark Core 与 `~/.Newmark` 持久化格
 
 ## 终端分区与换行
 
-渲染器按终端显示列宽处理 ASCII、中文、全角字符、组合字符和 Emoji。Conversation 消息在内容栏宽度内主动分行，续行保持角色列缩进；终端不会再把超长中文从屏幕第 1 列续写到 Workspace 区域。侧栏内容不足整屏时也会补齐固定宽度，保证纵向分隔线贯穿全部正文行。
+渲染器按终端显示列宽处理 ASCII、中文、全角字符、组合字符和 Emoji。Conversation 消息在内容栏宽度内主动分行，续行保持角色列缩进；终端不会再把超长中文从屏幕第 1 列续写到 Workspace 区域。侧栏使用固定头尾与可滚动菜单视口，光标始终留在可见范围。对话历史使用扣除标题、状态和输入区后的动态高度，并始终为编辑输入框保留两行；多行输入视口跟随光标。输入首行继续向上会进入基于 `snapshot.workRuns` 的 Build Block 光标。每个 `runId` 严格按 GUI 时间线组成“启动输入 → 可折叠 Build Block（常显执行时间）→ 常显最终总结”；展开时 Guide 按事件顺序位于 Block 内，折叠时 Guide 仍留在标题之后、总结之前。折叠只隐藏已持久化的公开进度与工具事件，展开状态通过现有 `setWorkRunExpanded` 后端持久化。
 
 ## 验证
 
@@ -100,4 +104,4 @@ TUI 使用和现有 GUI/CLI 相同的 Newmark Core 与 `~/.Newmark` 持久化格
 npm.cmd test
 ```
 
-38 项测试同时覆盖 Mock 全交互回归与隔离真实 Core 冒烟：后者会在 `TUI/test` 下创建临时 runtime/workspace，验证当前目录登记、真实快照、Flow 持久化、Automation、Memory Lab 和 Provider 密钥保留边界，然后安全删除临时目录，不发送模型请求。
+48 项测试同时覆盖 Mock 全交互回归与隔离真实 Core 冒烟：后者会在 `TUI/test` 下创建临时 runtime/workspace，验证当前目录登记、真实快照、Flow 选择/创建持久化、Guide/Next 默认回车模式的共享配置重启恢复、Automation 创建、Memory Lab 和 Provider 密钥保留边界，然后安全删除临时目录，不发送模型请求。

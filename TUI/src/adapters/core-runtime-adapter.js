@@ -244,6 +244,11 @@ function createCoreRuntimeAdapter(options = {}) {
       agent.setConversationPinned(conversationId, !!pinned);
       return snapshotFor(currentTarget());
     },
+    setWorkRunExpanded(runId, expanded, requested = currentTarget()) {
+      assertTarget(requested);
+      const runner = runnerFor(requested);
+      return runner.setConversationWorkRunExpanded(String(runId || ""), !!expanded);
+    },
     setConversationMode(mode, requested = currentTarget()) {
       this.activateConversation(requested);
       agent.setMode(mode);
@@ -255,6 +260,19 @@ function createCoreRuntimeAdapter(options = {}) {
     },
     readFlow(name) {
       return FlowEngine.load(path.join(root, "Flow"), String(name || ""));
+    },
+    saveFlow(workflow) {
+      const candidate = {
+        name: String(workflow?.name || "").trim(),
+        components: Array.isArray(workflow?.components) ? workflow.components : []
+      };
+      if (!candidate.name || candidate.name !== path.basename(candidate.name) || /[<>:"/\\|?*]/.test(candidate.name)) {
+        throw new Error("Invalid workflow name");
+      }
+      const errors = FlowEngine.validate(candidate);
+      if (errors.length) throw new Error(errors.map((item) => item.message).join("; "));
+      FlowEngine.save(path.join(root, "Flow"), candidate);
+      return candidate;
     },
     selectConversationFlow(name, requested = currentTarget()) {
       this.activateConversation(requested);
@@ -289,8 +307,12 @@ function createCoreRuntimeAdapter(options = {}) {
         target: { ...requested }
       };
     },
-    setInputMode(mode) {
-      return agent.setInputMode(mode);
+    setInputMode(mode, requested = currentTarget()) {
+      assertTarget(requested);
+      const persisted = agent.setInputMode(mode);
+      const runner = conversationRuntimes.get(runtimeKey(requested));
+      if (runner) runner.setInputMode(persisted);
+      return persisted;
     },
     getConversationPlan(requested = currentTarget()) {
       return agent.getConversationPlan(requested.conversationId);

@@ -25,6 +25,7 @@ AutomationManager(agent.config, hostOwnedRunner)
 | Provider / Model | `ConfigManager.providers()`、`updateProviders()`、`validateModels()` |
 | Tools | `nativeToolEnabled()` 与 `tools.enabled` |
 | Automation | `AutomationManager.list/create/toggle/delete` |
+| WorkFlow 管理 | `FlowEngine.listAll/load/save/validate` 与 preload `listFlows/readFlow/saveFlow` |
 | General / Personalization / Runtime | `ConfigManager.set/save/reload` |
 | Archive | `Agent.listArchives()` |
 | Update | `core/installUpdate.ts` |
@@ -39,8 +40,8 @@ AutomationManager(agent.config, hostOwnedRunner)
 2. `DESKTOP/scripts/build-tui.cjs` 在正常 build 中把 `TUI/bin`、`TUI/src` 和 package metadata 复制到 `DESKTOP/dist/tui`。
 3. `DESKTOP/newmark.bat` 保持 TUI 附着当前终端并转发参数。
 4. `DESKTOP/package.json` 的 `newmark` bin 指向带 Node hashbang 的 `dist/launcher.js`。
-5. 当前用户已经执行 `npm.cmd link`；PowerShell 中的 `Newmark` 解析到 npm 全局目录。
-6. 系统临时项目目录中的字面 `Newmark --TUI` 已通过 ConPTY：cwd 可见、Workspace 已登记、退出码为 0。
+5. 当前 MSI 已安装到 `C:\Program Files\Newmark Agent`；PowerShell 中的 `Newmark` 解析到该目录下的 `Newmark.exe`，旧的 npm link 和用户级安装路径均已移除。
+6. 仓库外目录中的字面 `Newmark --TUI` 已通过安装版启动验证：cwd 可见、Workspace 已登记、退出码为 0。
 
 ## 共享后端的准确边界
 
@@ -50,6 +51,7 @@ AutomationManager(agent.config, hostOwnedRunner)
 - 共用 `~/.Newmark`、Workspace、Conversation、Memory Lab、Config、Automation 和 Archive 格式；
 - 能在进程重启后读取彼此的持久化结果。
 - TUI 内部为每个运行中的 Conversation 保留独立 Core runner，切换前台专注不会终止另一个 TUI Conversation。
+- General / Input mode 的 Guide/Next 选择列表调用现有 `setInputMode(mode, target)`；独立 Core 路径同步全局默认值与已创建的目标 runner，Desktop preload 路径保持现有 target-aware IPC 形状。
 
 `test:gui-tui-cli-stress` 已验证 18 个并行隔离 Conversation、GUI 后端/TUI/CLI 对同一 Conversation 的顺序 roundtrip、逐会话模型隔离和 21 次本地 Provider 请求。该门验证共享 Core 与原子持久化，不把 Electron 内部 Utility Runtime 误描述为外部公共 IPC。
 
@@ -78,6 +80,7 @@ UI 层不直接读取 `~/.Newmark` 文件，也不重新实现 Workspace/Convers
 - Tool approval、停止、steering/follow-up。
 - Subagent mailbox 与运行控制。
 - Archive read/restore/delete 的完整 UI。
-- Automation 创建/删除编辑表单。
+- Automation 删除和完整时间范围编辑。
+- WorkFlow 多组件编辑与删除；当前内容区支持列表、组件详情和带首个 dialog 组件的新建。
 - Update apply/install 的确认与进度 UI。
 - 公共 Runtime IPC 与多客户端冲突处理。

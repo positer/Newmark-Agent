@@ -132,7 +132,9 @@ function card(lines, width, p, title) {
 }
 
 function renderSidebar(state, height, width, p) {
-  const lines = [`${p.brand}${p.bold}  NEWMARK${p.reset}`, `${p.muted}  Agent TUI · concept${p.reset}`, ""];
+  const header = [`${p.brand}${p.bold}  NEWMARK${p.reset}`, `${p.muted}  Agent TUI · concept${p.reset}`, ""];
+  const menuLines = [];
+  let focusedLine = 0;
   const isFocused = (level, index) => state.focusRegion === "menu"
     && state.menuLevel === level
     && (level === "root" ? state.menuRootIndex : state.menuChildIndex[level]) === index;
@@ -141,20 +143,22 @@ function renderSidebar(state, height, width, p) {
     const marker = active ? `${p.cyan}▌${p.reset}` : " ";
     const style = isFocused(level, index) ? `${p.selected}${p.bold}` : active ? p.bold : "";
     const prefix = " ".repeat(indent);
-    lines.push(`${marker}${style} ${prefix}${item.icon}  ${pad(item.label, width - 7 - indent)}${p.reset}`);
+    if (isFocused(level, index)) focusedLine = menuLines.length;
+    menuLines.push(`${marker}${style} ${prefix}${item.icon}  ${pad(item.label, width - 7 - indent)}${p.reset}`);
   };
   const addGroup = (label, level, rootIndex, expanded, active, icon = "") => {
     const focused = isFocused("root", rootIndex);
     const marker = active ? `${p.cyan}▌${p.reset}` : " ";
     const style = focused ? `${p.selected}${p.bold}` : active ? p.bold : "";
     const chevron = expanded ? "▾" : "▸";
-    lines.push(`${marker}${style} ${chevron} ${icon ? `${icon} ` : ""}${pad(label, width - 6 - (icon ? 2 : 0))}${p.reset}`);
+    if (focused) focusedLine = menuLines.length;
+    menuLines.push(`${marker}${style} ${chevron} ${icon ? `${icon} ` : ""}${pad(label, width - 6 - (icon ? 2 : 0))}${p.reset}`);
   };
   const rootItems = rootMenuItems(state);
-  lines.push(`${p.muted}  ROOT${p.reset}`);
+  menuLines.push(`${p.muted}  ROOT${p.reset}`);
   addItem(data.navigation[0], 0, "root", 0);
-  lines.push("");
-  lines.push(`${p.muted}  WORKSPACES${p.reset}`);
+  menuLines.push("");
+  menuLines.push(`${p.muted}  WORKSPACES${p.reset}`);
   state.workspaces.forEach((workspace, workspaceIndex) => {
     const rootIndex = workspaceIndex + 1;
     const level = `workspace:${workspace.id}`;
@@ -166,21 +170,30 @@ function renderSidebar(state, height, width, p) {
         .forEach((item, index) => addItem(item, 2, level, index, active && state.view === item.id));
     }
   });
-  lines.push("");
-  lines.push(`${p.muted}  OPERATIONS${p.reset}`);
+  menuLines.push("");
+  menuLines.push(`${p.muted}  OPERATIONS${p.reset}`);
   const operations = data.navigation.filter((item) => item.section === "operations");
   operations.forEach((item, index) => {
     const rootIndex = 1 + state.workspaces.length + index;
     addItem(item, 0, "root", rootIndex);
   });
-  while (lines.length < height - 6) lines.push("");
   const activeWorkspace = state.workspaces.find((item) => item.id === state.target.workspaceId);
-  lines.push(`${p.muted}  ACTIVE TARGET${p.reset}`);
-  lines.push(`  ${p.brand}${activeWorkspace?.icon || "◆"}${p.reset} ${truncate(activeWorkspace?.name || state.target.workspaceId, width - 5)}`);
-  lines.push(`${p.muted}  ACTIVE CONVERSATION${p.reset}`);
-  lines.push(`  ${p.cyan}↳${p.reset} ${truncate(state.lastConversation, width - 5)}`);
-  lines.push(`${p.green}  ● local · ${state.adapterKind === "mock" ? "demo" : "Newmark core"}${p.reset}`);
-  return lines.slice(0, height).map((line) => pad(line, width));
+  const footer = [
+    `${p.muted}  ACTIVE TARGET${p.reset}`,
+    `  ${p.brand}${activeWorkspace?.icon || "◆"}${p.reset} ${truncate(activeWorkspace?.name || state.target.workspaceId, width - 5)}`,
+    `${p.muted}  ACTIVE CONVERSATION${p.reset}`,
+    `  ${p.cyan}↳${p.reset} ${truncate(state.lastConversation, width - 5)}`,
+    `${p.green}  ● local · ${state.adapterKind === "mock" ? "demo" : "Newmark core"}${p.reset}`
+  ];
+  const viewportHeight = Math.max(1, height - header.length - footer.length);
+  const maximumScroll = Math.max(0, menuLines.length - viewportHeight);
+  let scroll = Math.max(0, Math.min(maximumScroll, Number(state.menuScroll) || 0));
+  if (focusedLine < scroll) scroll = focusedLine;
+  if (focusedLine >= scroll + viewportHeight) scroll = focusedLine - viewportHeight + 1;
+  state.menuScroll = Math.max(0, Math.min(maximumScroll, scroll));
+  const viewport = menuLines.slice(state.menuScroll, state.menuScroll + viewportHeight);
+  while (viewport.length < viewportHeight) viewport.push("");
+  return [...header, ...viewport, ...footer].slice(0, height).map((line) => pad(line, width));
 }
 
 function conversationContext(state, p, scope) {
@@ -225,6 +238,155 @@ function homeView(state, width, p) {
   return [...headline, ...stats, "", `${p.bold}Quick actions${p.reset}`, ...actions, "", ...joined];
 }
 
+function buildDuration(run) {
+  const start = new Date(run.startedAt || "").getTime();
+  const end = new Date(run.endedAt || Date.now()).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return "—";
+  const milliseconds = end - start;
+  if (milliseconds < 1000) return `${milliseconds}ms`;
+  if (milliseconds < 60000) return `${(milliseconds / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(milliseconds / 60000);
+  const seconds = Math.floor((milliseconds % 60000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
+
+function workEventOrder(event, index) {
+  const sequence = Number(event?.sequence);
+  const timestamp = new Date(event?.timestamp || event?.createdAt || event?.guide?.createdAt || "").getTime();
+  return {
+    sequence: Number.isFinite(sequence) ? sequence : Number.MAX_SAFE_INTEGER,
+    timestamp: Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER,
+    index
+  };
+}
+
+function isGuideEvent(event) {
+  return String(event?.type || "").toLowerCase().startsWith("guide") || !!event?.guide;
+}
+
+function guideIdentity(event, index) {
+  const guide = event?.guide || event || {};
+  return String(
+    guide.clientMessageId
+      || guide.guideId
+      || event?.clientMessageId
+      || event?.guideId
+      || event?.id
+      || `guide:${event?.content || guide.content || ""}:${index}`
+  );
+}
+
+function orderedWorkEvents(run, extraGuides = []) {
+  const raw = [
+    ...(run.events || []),
+    ...(run.guides || []).map((guide) => ({
+      type: "guide",
+      content: guide.content || "",
+      timestamp: guide.createdAt || guide.updatedAt || "",
+      sequence: guide.sequence,
+      guide
+    })),
+    ...extraGuides
+  ].map((event, index) => ({ event, order: workEventOrder(event, index), index }));
+  raw.sort((left, right) => (
+    left.order.sequence - right.order.sequence
+      || left.order.timestamp - right.order.timestamp
+      || left.order.index - right.order.index
+  ));
+  const deduplicatedGuides = new Map();
+  for (const entry of raw) {
+    if (isGuideEvent(entry.event)) deduplicatedGuides.set(guideIdentity(entry.event, entry.index), entry);
+  }
+  return raw
+    .filter((entry) => !isGuideEvent(entry.event) || deduplicatedGuides.get(guideIdentity(entry.event, entry.index)) === entry)
+    .map((entry) => entry.event);
+}
+
+function guideEventRows(event, width, p) {
+  const guide = event?.guide || event || {};
+  const content = String(guide.content ?? event?.content ?? "").trim();
+  if (!content) return [];
+  const status = String(guide.status || event?.guideStatus || event?.status || "accepted");
+  const prefix = `    YOU  Guide · ${status} · `;
+  return wrapText(content, Math.max(1, width - visibleLength(prefix)))
+    .map((row, index) => `${p.cyan}${index === 0 ? prefix : " ".repeat(visibleLength(prefix))}${row}${p.reset}`);
+}
+
+function buildEventRows(run, width, p, extraGuides = []) {
+  const rows = [];
+  const append = (prefix, content) => {
+    const prefixWidth = visibleLength(prefix);
+    wrapText(content, Math.max(1, width - prefixWidth)).forEach((row, index) => {
+      rows.push(`${index === 0 ? prefix : " ".repeat(prefixWidth)}${row}`);
+    });
+  };
+  for (const event of orderedWorkEvents(run, extraGuides)) {
+    if (isGuideEvent(event)) {
+      rows.push(...guideEventRows(event, width, p));
+      continue;
+    }
+    if (event.type === "final_response") continue;
+    const content = String(event.content || event.toolArgs || "").trim();
+    if (!content) continue;
+    if (event.type === "tool_call") {
+      append(`    TOOL ${event.toolName || "tool"}  `, content);
+    } else if (event.type === "tool_result") {
+      append(`    RESULT ${event.toolName || "tool"}  `, content);
+    } else if (["text", "status", "response"].includes(event.type)) {
+      append("    PROGRESS ", content);
+    }
+  }
+  return rows.map((row) => `${p.muted}${row}${p.reset}`);
+}
+
+function collapsedGuideRows(run, width, p, extraGuides = []) {
+  return orderedWorkEvents(run, extraGuides)
+    .filter(isGuideEvent)
+    .flatMap((event) => guideEventRows(event, width, p));
+}
+
+function finalSummaryMessage(run) {
+  const event = [...(run.events || [])].reverse().find((item) => (
+    String(item?.type || "").toLowerCase() === "final_response"
+      && String(item?.content || "").trim()
+  ));
+  if (event) {
+    return {
+      role: "assistant",
+      content: String(event.content).trim(),
+      runId: run.runId,
+      timestamp: event.timestamp || run.endedAt || ""
+    };
+  }
+  const status = String(run.status || "running");
+  return {
+    role: "assistant",
+    content: ["running", "stopping", "force_restarting"].includes(status)
+      ? "Build is running · final summary pending."
+      : `Build ${status} · no final summary was persisted.`,
+    runId: run.runId,
+    timestamp: run.endedAt || ""
+  };
+}
+
+function appendChatMessage(historyRows, message, messageWidth, roleColumnWidth, p) {
+  const roleName = message.role === "user" ? "YOU" : message.role === "assistant" ? "NEWMARK" : String(message.role || "system").toUpperCase();
+  const roleColor = message.role === "user" ? p.cyan : message.role === "assistant" ? p.brand : p.amber;
+  const messageRows = wrapText(message.content, messageWidth);
+  messageRows.forEach((row, index) => {
+    const prefix = index === 0
+      ? `${roleColor}${pad(roleName, roleColumnWidth - 2)}${p.reset}  `
+      : " ".repeat(roleColumnWidth);
+    historyRows.push(`${prefix}${row}`);
+  });
+  if (message.meta) {
+    wrapText(message.meta, messageWidth).forEach((row) => {
+      historyRows.push(`${" ".repeat(roleColumnWidth)}${p.muted}${row}${p.reset}`);
+    });
+  }
+  historyRows.push("");
+}
+
 function chatView(state, width, height, p) {
   const narrow = width < 82;
   const listWidth = narrow ? 0 : 27;
@@ -256,33 +418,118 @@ function chatView(state, width, height, p) {
   const right = [
     `${p.muted}${workspace?.name || "Workspace"} / Conversations / ${isActive ? "Current" : "Preview"}${p.reset}`,
     `${p.bold}${preview.title}${p.reset}`,
-    `${p.muted}${isActive ? "Current conversation" : "Enter to open this conversation"} · Enter edit · Tab conversations · Build${p.reset}`,
+    `${p.muted}${isActive ? "Current conversation" : "Enter to open this conversation"} · Enter ${state.snapshot.inputMode === "next" ? "Next" : "Guide"} · Tab conversations · Build${p.reset}`,
     `${p.muted}${"─".repeat(Math.max(8, detailWidth - 1))}${p.reset}`
   ];
-  const available = Math.max(4, height - 10);
-  state.messages.slice(-available).forEach((message) => {
-    const roleName = message.role === "user" ? "YOU" : message.role === "assistant" ? "NEWMARK" : message.role.toUpperCase();
-    const roleColor = message.role === "user" ? p.cyan : message.role === "assistant" ? p.brand : p.amber;
-    const roleColumnWidth = 9;
-    const messageWidth = Math.max(8, detailWidth - roleColumnWidth);
-    const messageRows = wrapText(message.content, messageWidth);
-    messageRows.forEach((row, index) => {
-      const prefix = index === 0
-        ? `${roleColor}${pad(roleName, roleColumnWidth - 2)}${p.reset}  `
-        : " ".repeat(roleColumnWidth);
-      right.push(`${prefix}${row}`);
-    });
-    if (message.meta) {
-      wrapText(message.meta, messageWidth).forEach((row) => {
-        right.push(`${" ".repeat(roleColumnWidth)}${p.muted}${row}${p.reset}`);
-      });
+  const roleColumnWidth = 9;
+  const messageWidth = Math.max(8, detailWidth - roleColumnWidth);
+  const historyRows = [];
+  const historyBlockRanges = [];
+  const workRuns = [...(state.snapshot.workRuns || [])]
+    .sort((leftRun, rightRun) => Number(leftRun.sequence || 0) - Number(rightRun.sequence || 0));
+  const workRunById = new Map(workRuns.map((run, index) => [String(run.runId || ""), { run, index }]));
+  const messagesByRun = new Map();
+  for (const message of state.messages) {
+    const runId = String(message?.runId || "");
+    if (!runId || !workRunById.has(runId)) continue;
+    if (!messagesByRun.has(runId)) messagesByRun.set(runId, []);
+    messagesByRun.get(runId).push(message);
+  }
+  const renderedRunIds = new Set();
+  const appendRunGroup = (run, index) => {
+    const runId = String(run.runId || "");
+    if (!runId || renderedRunIds.has(runId)) return;
+    const ownedMessages = messagesByRun.get(runId) || [];
+    const primaryMessages = ownedMessages.filter((message) => message.role === "user" && !message.clientMessageId);
+    if (primaryMessages.length) {
+      primaryMessages.forEach((message) => appendChatMessage(historyRows, message, messageWidth, roleColumnWidth, p));
+    } else if (String(run.primaryPrompt || "").trim()) {
+      appendChatMessage(historyRows, {
+        role: "user",
+        content: String(run.primaryPrompt).trim(),
+        runId
+      }, messageWidth, roleColumnWidth, p);
     }
-    right.push("");
-  });
+    const messageGuides = ownedMessages
+      .filter((message) => message.role === "user" && message.clientMessageId)
+      .map((message, messageIndex) => ({
+        type: "guide",
+        content: message.content || "",
+        timestamp: message.timestamp || "",
+        sequence: message.sequence,
+        guide: {
+          clientMessageId: message.clientMessageId,
+          guideId: message.guideId,
+          content: message.content || "",
+          status: message.guideStatus || "applied",
+          createdAt: message.timestamp || ""
+        },
+        _messageIndex: messageIndex
+      }));
+    const start = historyRows.length;
+    const selected = state.conversationHistoryFocus && state.historySelectedIndex === index;
+    const expanded = state.expandedBuildRuns?.has(run.runId);
+    const style = selected ? `${p.selected}${p.bold}` : "";
+    historyRows.push(
+      `${style}${selected ? "›" : " "} ${expanded ? "▾" : "▸"} Build Block ${index + 1}  ${p.muted}${run.status || "unknown"} · ${buildDuration(run)}${p.reset}`
+    );
+    if (expanded) historyRows.push(...buildEventRows(run, Math.max(12, detailWidth - 5), p, messageGuides));
+    else historyRows.push(...collapsedGuideRows(run, Math.max(12, detailWidth - 5), p, messageGuides));
+    const end = Math.max(start, historyRows.length - 1);
+    const assistantSummary = [...ownedMessages].reverse().find((message) => (
+      message.role === "assistant" && String(message.content || "").trim()
+    )) || finalSummaryMessage(run);
+    appendChatMessage(historyRows, assistantSummary, messageWidth, roleColumnWidth, p);
+    historyBlockRanges[index] = { runId: run.runId, start, end };
+    renderedRunIds.add(runId);
+  };
+  for (const message of state.messages) {
+    const runId = String(message?.runId || "");
+    const owned = workRunById.get(runId);
+    if (owned) appendRunGroup(owned.run, owned.index);
+    else appendChatMessage(historyRows, message, messageWidth, roleColumnWidth, p);
+  }
+  workRuns.forEach((run, index) => appendRunGroup(run, index));
+  const inputWidth = Math.max(8, detailWidth - 3);
+  state.inputWrapWidth = inputWidth;
+  const cursor = Math.max(0, Math.min([...state.input].length, Number(state.inputCursor) || 0));
+  const inputCharacters = [...state.input];
+  inputCharacters.splice(cursor, 0, "▏");
+  const allInputRows = wrapText(inputCharacters.join(""), inputWidth);
+  const cursorRow = Math.max(0, allInputRows.findIndex((row) => row.includes("▏")));
+  const inputViewportStart = Math.max(0, Math.min(Math.max(0, allInputRows.length - 2), cursorRow - 1));
+  const inputRows = allInputRows.slice(inputViewportStart, inputViewportStart + 2);
+  while (inputRows.length < 2) inputRows.push("");
+  const fixedRows = 4 + (state.busy ? 1 : 0) + 1 + 2;
+  const historyHeight = Math.max(1, height - fixedRows);
+  state.conversationMaxScroll = Math.max(0, historyRows.length - historyHeight);
+  state.conversationScroll = Math.max(0, Math.min(state.conversationMaxScroll, Number(state.conversationScroll) || 0));
+  let historyEnd = historyRows.length - state.conversationScroll;
+  let historyStart = Math.max(0, historyEnd - historyHeight);
+  if (state.conversationHistoryFocus && state.historyCursorDirection < 0) {
+    const selectedRange = historyBlockRanges[state.historySelectedIndex];
+    if (selectedRange && selectedRange.start < historyStart) {
+      historyStart = selectedRange.start;
+      historyEnd = Math.min(historyRows.length, historyStart + historyHeight);
+      state.conversationScroll = Math.max(0, historyRows.length - historyEnd);
+    }
+  }
+  state.historyVisibleRunIds = historyBlockRanges
+    .filter(Boolean)
+    .filter((range) => range.end >= historyStart && range.start < historyEnd)
+    .map((range) => range.runId);
+  state.historyCursorDirection = 0;
+  const visibleHistory = historyRows.slice(historyStart, historyEnd);
+  while (visibleHistory.length < historyHeight) visibleHistory.unshift("");
+  right.push(...visibleHistory);
   if (state.busy) right.push(`${p.cyan}${["◐", "◓", "◑", "◒"][state.tick % 4]} Newmark is working…${p.reset}`);
   right.push(`${p.muted}${"─".repeat(Math.max(8, detailWidth - 1))}${p.reset}`);
-  const cursor = state.inputMode ? `${p.cyan}▏${p.reset}` : "";
-  right.push(`${state.inputMode ? p.selected : ""}${p.bold}>${p.reset} ${state.input || `${p.muted}${state.inputMode ? "Type a message · Enter to send · Tab back" : "Select a conversation · Enter to edit"}${p.reset}`}${cursor}`);
+  inputRows.forEach((row, index) => {
+    const placeholder = !state.input && index === 0
+      ? `${p.muted}${state.inputMode ? "Type a message · Shift+Enter newline · Enter send" : "Select a conversation · Enter to edit"}${p.reset}`
+      : row.replace("▏", state.inputMode ? `${p.cyan}▏${p.reset}` : "");
+    right.push(`${state.inputMode ? p.selected : ""}${index === 0 ? `${p.bold}>${p.reset}` : " "} ${placeholder}${p.reset}`);
+  });
   if (!listWidth) return right;
   const count = Math.max(left.length, right.length);
   return Array.from({ length: count }, (_, i) => `${pad(left[i] || "", listWidth)}  ${right[i] || ""}`);
@@ -434,16 +681,44 @@ function automationView(state, width, p) {
   return [
     `${p.bold}Automations${p.reset}   ${p.muted}Schedules bound to explicit workspaces${p.reset}`,
     "",
+    `${state.focusRegion === "content" && state.selected === 0 ? `${p.selected}${p.bold}` : ""} ${p.cyan}[+] New automation${p.reset}  ${p.muted}Create a schedule for this workspace${p.reset}`,
+    "",
     ...state.automations.flatMap((job, i) => {
-      const style = state.focusRegion === "content" && i === state.selected ? `${p.selected}${p.bold}` : "";
+      const style = state.focusRegion === "content" && i + 1 === state.selected ? `${p.selected}${p.bold}` : "";
       return [
         `${style} ${job.enabled ? `${p.green}● ACTIVE${p.reset}` : `${p.muted}○ PAUSED${p.reset}`}  ${pad(job.name, 24)} ${p.muted}${job.schedule}${p.reset}`,
         `           Last run: ${job.last}`
       ];
     }),
     "",
-    `${p.muted}Enter pauses/resumes · ${state.adapterKind === "mock" ? "simulated" : "Newmark-backed"} automation${p.reset}`
+    `${p.muted}Enter creates or pauses/resumes · ${state.adapterKind === "mock" ? "simulated" : "Newmark-backed"} automation${p.reset}`
   ];
+}
+
+function workflowView(state, width, p) {
+  const rows = [
+    `${p.bold}WorkFlow${p.reset}   ${p.muted}Manage Flow definitions stored under ~/.Newmark/Flow${p.reset}`,
+    "",
+    `${state.focusRegion === "content" && state.selected === 0 ? `${p.selected}${p.bold}` : ""} ${p.cyan}[+] New workflow${p.reset}  ${p.muted}Create a valid first dialog component${p.reset}`,
+    ""
+  ];
+  if (!state.flows.length) {
+    rows.push(`${p.muted}No workflows configured.${p.reset}`);
+  }
+  state.flows.forEach((name, index) => {
+    const selected = state.focusRegion === "content" && state.selected === index + 1;
+    const workflow = state.workflowDetails[name] || { components: [] };
+    const expanded = state.workflowExpandedName === name;
+    rows.push(`${selected ? `${p.selected}${p.bold}` : ""} ${expanded ? "▾" : "▸"} ${pad(name, Math.max(18, width - 28))} ${p.muted}${workflow.components.length} component(s)${p.reset}`);
+    if (expanded) {
+      workflow.components.forEach((component) => {
+        const mode = component.type === "dialog" ? component.mode : "logic";
+        rows.push(`     ${p.cyan}${String(component.id).padStart(2, "0")}${p.reset}  ${pad(mode, 8)} ${p.muted}${truncate(component.prompt || "", Math.max(12, width - 24))}${p.reset}`);
+      });
+    }
+  });
+  rows.push("", `${p.muted}Enter creates or expands details · definitions use Newmark FlowEngine persistence${p.reset}`);
+  return rows;
 }
 
 function memoryView(state, width, p) {
@@ -590,7 +865,9 @@ function settingsView(state, width, p) {
       "",
       ...(state.settingsTab === "personalization" ? personalizationPreview(state, p) : []),
       `${p.muted}${settingsActionHint(state.settingsTab)}${p.reset}`,
-      `${p.amber}SIMULATED${p.reset}  Changes remain in process memory; adapter payloads match integration targets.`
+      state.adapterKind === "mock"
+        ? `${p.amber}SIMULATED${p.reset}  Changes remain in isolated demo state.`
+        : `${p.green}CONNECTED${p.reset}  Changes persist through the shared Newmark settings backend.`
     ];
   }
   const count = Math.max(categoryRows.length, detailRows.length);
@@ -663,7 +940,7 @@ function personalizationPreview(state, p) {
 }
 
 function settingsActionHint(tab) {
-  if (tab === "general") return "O open global config · R refresh config";
+  if (tab === "general") return "Enter opens Guide/Next list for Input mode · O open config · R refresh";
   if (tab === "archive") return "L list archive inventory";
   if (tab === "updates") return "U check version and GitHub update";
   return "Enter cycles or toggles the selected setting";
@@ -675,13 +952,18 @@ function helpView(state, width, p) {
     `${p.muted}${"─".repeat(Math.max(20, width - 1))}${p.reset}`,
     "",
     `${p.bold}Navigation${p.reset}`,
-    "  ↑ / ↓       Move within the current menu level or list",
+    "  ↑ / ↓       Move within lists; long menus auto-scroll with the cursor",
     "  ← / →       Move between menu levels and content columns",
     "  Enter       Expand workspace, open view, select conversation, or confirm",
     "  Tab         From editor: conversation selection; from content: left menu",
     "",
     `${p.bold}Conversation editing${p.reset}`,
     "  Enter       Edit selected conversation / send current draft",
+    "  Enter mode  Settings → General → Input mode chooses default Guide or Next",
+    "  Shift+Enter Insert a newline; the input viewport always reserves two rows",
+    "  ↑           From input top enters Build history; top Block continues older",
+    "  ↓           Newer-history scrolling only beyond the final input row",
+    "  History Enter folds Build details; input, Guides, duration, and summary stay visible",
     "  Shift+Tab   Cycle Build → Plan → Goal → Flow",
     "  Flow        Requires ↑ / ↓ + Enter workflow selection before editing",
     "  T           Pin / unpin selected conversation; cursor follows its ID",
@@ -691,6 +973,10 @@ function helpView(state, width, p) {
     "  Esc         Request graceful stop for the focused running conversation",
     "  Esc again   Force-stop that same conversation",
     "  Switching focus never interrupts background conversations",
+    "",
+    `${p.bold}Operation content${p.reset}`,
+    "  Automations First row creates a persisted workspace-bound automation",
+    "  WorkFlow    Flat Operation item; content manages and creates Flow files",
     "",
     `${p.bold}Global${p.reset}`,
     "  Ctrl+K      Command palette",
@@ -715,6 +1001,7 @@ function renderContent(state, width, height, p) {
     tools: toolsView,
     memory: memoryView,
     automation: automationView,
+    workflow: workflowView,
     settings: settingsView,
     help: helpView
   };
@@ -728,6 +1015,8 @@ function overlayLines(state, width, p) {
       `${p.bold}Focus${p.reset}       ←/→ move columns; only leftmost content returns to menu`,
       `${p.bold}Actions${p.reset}     ↑↓ select   Enter open/toggle/follow   V validate`,
       `${p.bold}Compose${p.reset}     Enter on a conversation edits   Tab returns to conversation selection`,
+      `${p.bold}Editor${p.reset}      Input-top ↑ enters Build history; input-bottom ↓ scrolls newer`,
+      `${p.bold}Operation${p.reset}   Automations and WorkFlow create/manage in content; menu stays flat`,
       `${p.bold}Global${p.reset}      Ctrl+K commands   T theme   ? help   Q quit`,
       `${p.bold}Editing${p.reset}     Enter send   Backspace delete   Esc stop / Esc again force-stops`,
       "",
@@ -763,6 +1052,59 @@ function overlayLines(state, width, p) {
       "",
       `${p.cyan}↑↓ select · Enter confirm${p.reset}`
     ], Math.min(72, width - 4), p, "Select workflow");
+  }
+  if (state.overlay === "settings-choice") {
+    const row = settingsRows(state, state.settingChoiceTab)
+      .find((item) => item.key === state.settingChoiceKey);
+    if (!row) return [];
+    return card([
+      `${p.bold}${row.label}${p.reset}`,
+      `${p.muted}Choose what Enter does by default for the active Newmark conversation.${p.reset}`,
+      "",
+      ...row.choices.map((value, index) => {
+        const selected = index === state.settingChoiceIndex;
+        const style = selected ? `${p.selected}${p.bold}` : "";
+        const detail = value === "Guide"
+          ? "send into the current Build"
+          : value === "Next"
+            ? "queue after the current Build"
+            : "";
+        return `${style} ${selected ? "›" : " "} ${pad(displaySettingValue(value), 12)} ${p.muted}${detail}${p.reset}`;
+      }),
+      "",
+      `${p.cyan}↑↓ select · Enter persist · Esc cancel${p.reset}`
+    ], Math.min(72, width - 4), p, "Default Enter mode");
+  }
+  if (state.overlay === "automation-create") {
+    const draft = state.automationDraft;
+    const field = (index, label, value, hint = "") => {
+      const style = state.automationFormIndex === index ? `${p.selected}${p.bold}` : "";
+      return `${style} ${pad(label, 20)} ${value}${hint ? `  ${p.muted}${hint}` : ""}${p.reset}`;
+    };
+    return card([
+      field(0, "Prompt", draft.prompt || "Type the automation instruction…"),
+      field(1, "Condition", draft.condition, "←/→ once · loop · schedule"),
+      field(2, "Interval seconds", draft.intervalSec, "used by loop/schedule"),
+      field(3, "Conversation", draft.conversationMode, "←/→ existing · new"),
+      field(4, "Create", "Save automation"),
+      "",
+      `${p.cyan}↑↓ fields · type to edit · ←/→ choices · Enter next/create · Esc cancel${p.reset}`
+    ], Math.min(78, width - 4), p, "New automation");
+  }
+  if (state.overlay === "workflow-create") {
+    const draft = state.workflowDraft;
+    const field = (index, label, value, hint = "") => {
+      const style = state.workflowFormIndex === index ? `${p.selected}${p.bold}` : "";
+      return `${style} ${pad(label, 20)} ${value}${hint ? `  ${p.muted}${hint}` : ""}${p.reset}`;
+    };
+    return card([
+      field(0, "Name", draft.name || "workflow-name"),
+      field(1, "First mode", draft.mode, "←/→ build · plan · goal"),
+      field(2, "First prompt", draft.prompt || "Type the first component prompt…"),
+      field(3, "Create", "Save .Flow.json"),
+      "",
+      `${p.cyan}↑↓ fields · type to edit · ←/→ mode · Enter next/create · Esc cancel${p.reset}`
+    ], Math.min(78, width - 4), p, "New WorkFlow");
   }
   if (state.overlay === "details") {
     return card([

@@ -4900,9 +4900,11 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
               <div id="context-token-tooltip"></div>
             </div>
             <select class="tool-select" id="intel-select">
-              <option value="low">Quick</option>
-              <option value="medium" selected>Balanced</option>
-              <option value="high">Deep</option>
+              <option value="low">low</option>
+              <option value="medium" selected>medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
+              <option value="max">max</option>
             </select>
             <div class="mode-toggle" id="mode-toggle">
               <button class="mode-toggle-btn active" data-mode="guide" onclick="window.setInputMode('guide')">Guide</button>
@@ -5163,6 +5165,7 @@ var state = {
   globalAgentPromptLoaded: false,
   globalAgentPromptSaveTimer: null,
   modelValidationPromise: null,
+  modelValidationProgressTimer: null,
   pluginActiveTab: 'mcp',
   githubOverviewData: null,
   githubOverviewHash: '',
@@ -5262,9 +5265,11 @@ var NEWMARK_I18N = {
     'mode.plan': 'Plan',
     'mode.goal': 'Goal',
     'mode.flow': 'Flow',
-    'intel.low': 'Quick',
-    'intel.medium': 'Balanced',
-    'intel.high': 'Deep',
+    'intel.low': 'low',
+    'intel.medium': 'medium',
+    'intel.high': 'high',
+    'intel.xhigh': 'xhigh',
+    'intel.max': 'max',
     'message.user': 'User input',
     'message.workflow': 'Workflow',
     'message.system': 'System',
@@ -5472,6 +5477,10 @@ var NEWMARK_I18N = {
     'model.clearLearnedPreference': 'Clear learned preference',
     'model.validationTitle': 'Model validation',
     'model.validating': 'Validating model latency and capabilities...',
+    'model.validationProgress': 'Validation progress',
+    'model.validationChecks': 'checks',
+    'model.validationModels': 'models',
+    'model.validationCurrent': 'Current',
     'model.validationFailed': 'Validation failed',
     'model.noValidationModels': 'No models were available for validation.',
     'model.validationRequiresBaseModel': 'Add and enable a base model before running validation.',
@@ -5817,9 +5826,11 @@ var NEWMARK_I18N = {
     'mode.plan': 'Plan',
     'mode.goal': 'Goal',
     'mode.flow': 'Flow',
-    'intel.low': '快速',
-    'intel.medium': '均衡',
-    'intel.high': '深度',
+    'intel.low': 'low',
+    'intel.medium': 'medium',
+    'intel.high': 'high',
+    'intel.xhigh': 'xhigh',
+    'intel.max': 'max',
     'message.user': '用户输入',
     'message.workflow': '工作流',
     'message.system': '系统',
@@ -6027,6 +6038,10 @@ var NEWMARK_I18N = {
     'model.clearLearnedPreference': '清空学习偏好',
     'model.validationTitle': '模型校验',
     'model.validating': '正在校验模型延迟和能力...',
+    'model.validationProgress': '校验进度',
+    'model.validationChecks': '项检查',
+    'model.validationModels': '个模型',
+    'model.validationCurrent': '当前',
     'model.validationFailed': '校验失败',
     'model.noValidationModels': '没有可校验的模型。',
     'model.validationRequiresBaseModel': '\u8bf7\u5148\u6dfb\u52a0\u5e76\u542f\u7528\u81f3\u5c11\u4e00\u4e2a\u57fa\u6a21\uff0c\u518d\u8fdb\u884c\u6821\u9a8c\u3002',
@@ -6415,7 +6430,7 @@ function applyLanguageToUi() {
   updateSubmitButtonState();
   setTitleAndLabel('#left-collapse-btn', t('left.collapse'));
   setSelectOptionText('mode-select', { build: t('mode.build'), plan: t('mode.plan'), goal: t('mode.goal'), flow: t('mode.flow') });
-  setSelectOptionText('intel-select', { low: t('intel.low'), medium: t('intel.medium'), high: t('intel.high') });
+  setSelectOptionText('intel-select', { low: t('intel.low'), medium: t('intel.medium'), high: t('intel.high'), xhigh: t('intel.xhigh'), max: t('intel.max') });
   var guideBtn = document.querySelector('.mode-toggle-btn[data-mode="guide"]');
   var nextBtn = document.querySelector('.mode-toggle-btn[data-mode="next"]');
   if (guideBtn) guideBtn.textContent = t('input.guide');
@@ -6488,6 +6503,7 @@ function applyLanguageToUi() {
   var goalText = document.getElementById('goal-text');
   if (goalText && (!state.goalText || goalText.textContent === 'Set goal' || goalText.textContent === '设置目标')) goalText.textContent = t('goal.set');
   if (state.rightTab === 'plan') window.renderConversationPlan();
+  if (window.renderContextCompression) window.renderContextCompression();
   if (window.renderContextWindow) window.renderContextWindow();
   if (window.renderInputStack) window.renderInputStack();
   if (window.refreshModelSelect) window.refreshModelSelect();
@@ -7003,7 +7019,8 @@ var api = window.api || {
     catch(e) { return []; }
   },
   modelValidationStatus: async function() {
-    return { running: false };
+    try { var r = await fetch('/api/model-validation-status'); return r.json(); }
+    catch(e) { return { running: false, completedChecks: 0, totalChecks: 0, percent: 0 }; }
   },
   fuzzyInject: async function(name, url, key) {
     try { var r = await fetch('/api/fuzzy-inject', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,url:url,key:key,protocol:arguments[3]})}); return r.json(); }
@@ -13824,9 +13841,11 @@ window.saveNewModel = function() {
       speed_rating: 'unknown',
       capability_rating: 'unknown',
       intelligence_tiers: {
-        low: { description: 'Quick' },
-        medium: { description: 'Balanced' },
-        high: { description: 'Deep' }
+        low: { description: 'low' },
+        medium: { description: 'medium' },
+        high: { description: 'high' },
+        xhigh: { description: 'xhigh' },
+        max: { description: 'max' }
       }
     });
     api.saveConfig({providers: state.providers});
@@ -14017,12 +14036,15 @@ window.validateAllModels = function() {
   }
   if (state.modelValidationPromise) {
     window.showModelValidationProgress();
+    window.startModelValidationProgressPolling();
     return state.modelValidationPromise;
   }
   window.showModelValidationProgress();
   var validation = Promise.resolve(api.validateModels());
   state.modelValidationPromise = validation;
+  window.startModelValidationProgressPolling();
   return validation.then(function(results) {
+    window.stopModelValidationProgressPolling();
     state.modelValidationResults = results || [];
     window.showModelEvaluationResults(state.modelValidationResults);
     return api.getState();
@@ -14036,13 +14058,51 @@ window.validateAllModels = function() {
     window.openSubWin(t('model.validationTitle'), '<div style="color:#ff7777;font-size:12px;">' + esc(t('model.validationFailed')) + ': ' + esc(err.message) + '</div>');
     return [];
   }).finally(function() {
+    window.stopModelValidationProgressPolling();
     if (state.modelValidationPromise === validation) state.modelValidationPromise = null;
   });
 };
 
-window.showModelValidationProgress = function() {
+window.renderModelValidationProgress = function(progress) {
+  progress = progress || {};
+  var percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  var completedChecks = Math.max(0, Number(progress.completedChecks || 0));
+  var totalChecks = Math.max(0, Number(progress.totalChecks || 0));
+  var completedModels = Math.max(0, Number(progress.completedModels || 0));
+  var totalModels = Math.max(0, Number(progress.totalModels || 0));
+  var current = [String(progress.currentModel || ''), String(progress.currentCheck || '')].filter(Boolean).join(' · ');
+  return '<div class="provider-card marquee-border">' +
+    '<div style="display:flex;justify-content:space-between;gap:10px;"><span>' + esc(t('model.validating')) + '</span><strong>' + esc(String(percent)) + '%</strong></div>' +
+    '<div role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + esc(String(percent)) + '" style="height:7px;margin-top:10px;border-radius:999px;background:var(--surface-strong);overflow:hidden;"><div style="height:100%;width:' + esc(String(percent)) + '%;background:var(--accent);transition:width .18s ease;"></div></div>' +
+    '<div style="margin-top:8px;color:var(--text-dim);font-size:11px;display:flex;justify-content:space-between;gap:8px;"><span>' + esc(String(completedChecks)) + '/' + esc(String(totalChecks)) + ' ' + esc(t('model.validationChecks')) + '</span><span>' + esc(String(completedModels)) + '/' + esc(String(totalModels)) + ' ' + esc(t('model.validationModels')) + '</span></div>' +
+    (current ? '<div style="margin-top:6px;color:var(--text-dim);font-size:11px;overflow-wrap:anywhere;">' + esc(t('model.validationCurrent')) + ': ' + esc(current) + '</div>' : '') +
+    '</div><div style="margin-top:6px;color:var(--text-dim);font-size:11px;">' + esc(t('model.validationBackgroundNote')) + '</div>';
+};
+
+window.showModelValidationProgress = function(progress) {
   document.body.classList.add('model-evaluating');
-  window.openSubWin(t('model.validationTitle'), '<div class="provider-card marquee-border">' + esc(t('model.validating')) + '</div><div style="margin-top:6px;color:var(--text-dim);font-size:11px;">' + esc(t('model.validationBackgroundNote')) + '</div>');
+  window.openSubWin(t('model.validationTitle'), window.renderModelValidationProgress(progress));
+};
+
+window.stopModelValidationProgressPolling = function() {
+  if (state.modelValidationProgressTimer) clearTimeout(state.modelValidationProgressTimer);
+  state.modelValidationProgressTimer = null;
+};
+
+window.startModelValidationProgressPolling = function() {
+  if (state.modelValidationProgressTimer || !api.modelValidationStatus) return;
+  var poll = function() {
+    state.modelValidationProgressTimer = null;
+    Promise.resolve(api.modelValidationStatus()).then(function(progress) {
+      if (!state.modelValidationPromise) return;
+      var body = document.getElementById('sub-win-body');
+      if (body && els['sub-win-overlay'].classList.contains('open')) body.innerHTML = window.renderModelValidationProgress(progress);
+      state.modelValidationProgressTimer = setTimeout(poll, 150);
+    }).catch(function() {
+      if (state.modelValidationPromise) state.modelValidationProgressTimer = setTimeout(poll, 300);
+    });
+  };
+  state.modelValidationProgressTimer = setTimeout(poll, 0);
 };
 
 window.showModelEvaluationResults = function(results) {

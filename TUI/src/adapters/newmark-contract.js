@@ -15,6 +15,7 @@ const PLAN_STATUSES = new Set(["pending", "in_progress", "done"]);
 const SUBAGENT_STATUSES = new Set(["idle", "queued", "working", "completed", "closed", "error"]);
 const AGENT_MODES = new Set(["build", "plan", "goal", "flow"]);
 const INPUT_MODES = new Set(["guide", "next"]);
+const INTELLIGENCE_TIERS = new Set(["low", "medium", "high", "xhigh", "max"]);
 
 function targetKey(target) {
   return `${String(target?.workspaceId || "")}::${String(target?.conversationId || "")}`;
@@ -40,6 +41,7 @@ function validateSnapshot(snapshot) {
   if (!Array.isArray(snapshot.chatMessages)) throw new TypeError("snapshot.chatMessages must be an array");
   if (!AGENT_MODES.has(snapshot.mode)) throw new TypeError(`unsupported AgentMode: ${snapshot.mode}`);
   if (!INPUT_MODES.has(snapshot.inputMode)) throw new TypeError(`unsupported InputMode: ${snapshot.inputMode}`);
+  snapshot.intelligence = INTELLIGENCE_TIERS.has(snapshot.intelligence) ? snapshot.intelligence : "medium";
   for (const item of snapshot.conversationPlan.items) {
     if (!PLAN_STATUSES.has(item.status)) throw new TypeError(`unsupported ConversationPlanItemStatus: ${item.status}`);
   }
@@ -57,6 +59,7 @@ const INTEGRATION_METHODS = Object.freeze([
   "selectWorkspace",
   "activateConversation",
   "setModel",
+  "setIntelligence",
   "setConversationPinned",
   "setWorkRunExpanded",
   "setMode",

@@ -161,6 +161,7 @@ function createMockNewmarkAdapter() {
   let memoryLab = clone(data.memoryLab);
   let workflows = clone(data.flows);
   let defaultInputMode = "guide";
+  let intelligence = "medium";
   const activeConversationByWorkspace = new Map([[target.workspaceId, target.conversationId]]);
   const modelSelections = new Map();
   const modes = new Map();
@@ -173,6 +174,7 @@ function createMockNewmarkAdapter() {
     snapshot.modelSelection = clone(modelSelections.get(key) || snapshot.modelSelection);
     snapshot.mode = modes.get(key) || snapshot.mode;
     snapshot.inputMode = defaultInputMode;
+    snapshot.intelligence = intelligence;
     snapshot.flowSelection = clone(selectedFlows.get(key) || null);
     snapshot.conversations = snapshot.conversations
       .map((item) => ({ ...item, ...(pinOverrides.get(`${requested.workspaceId}::${item.id}`) || {}) }))
@@ -217,6 +219,11 @@ function createMockNewmarkAdapter() {
       target = { ...assertTarget(requested) };
       activeConversationByWorkspace.set(target.workspaceId, target.conversationId);
       modelSelections.set(`${target.workspaceId}::${target.conversationId}`, clone(selection));
+      return stateFor(target);
+    },
+    setIntelligence(tier, requested = target) {
+      target = { ...assertTarget(requested) };
+      intelligence = ["low", "medium", "high", "xhigh", "max"].includes(tier) ? tier : "medium";
       return stateFor(target);
     },
     setConversationPinned(conversationId, pinned, requested = target) {

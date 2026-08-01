@@ -10,7 +10,9 @@ import { extractProviderUsage } from '../core/agentKernelDiagnostics';
 export interface IntelligenceConfig {
   temperature: number;
   maxTokens: number;
+  reasoningEffort: IntelligenceTier;
 }
+export type IntelligenceTier = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type ProviderProtocol = 'openai' | 'anthropic' | 'github_models';
 export type OpenAITransportMode = 'chat_stream' | 'chat' | 'responses';
 
@@ -95,10 +97,27 @@ export class LLMProvider {
 
   intelligenceConfig(tier: string): IntelligenceConfig {
     switch (tier) {
-      case 'low': return { temperature: 0.3, maxTokens: 2048 };
-      case 'high': return { temperature: 0.8, maxTokens: 16384 };
-      default: return { temperature: 0.7, maxTokens: 8192 };
+      case 'low': return { temperature: 0.3, maxTokens: 2048, reasoningEffort: 'low' };
+      case 'high': return { temperature: 0.8, maxTokens: 16384, reasoningEffort: 'high' };
+      case 'xhigh': return { temperature: 0.8, maxTokens: 32768, reasoningEffort: 'xhigh' };
+      case 'max': return { temperature: 0.8, maxTokens: 65536, reasoningEffort: 'max' };
+      default: return { temperature: 0.7, maxTokens: 8192, reasoningEffort: 'medium' };
     }
+  }
+
+  private reasoningEffort(model: string, tier?: string): IntelligenceTier | undefined {
+    if (!/^(?:gpt-5|o[134](?:-|$)|codex)|(?:reasoner|reasoning|deepseek-r1|deepseek-reasoner|\br1\b)/i.test(model)) return undefined;
+    const effort: IntelligenceTier = tier === 'low' || tier === 'high' || tier === 'xhigh' || tier === 'max'
+      ? tier
+      : 'medium';
+    // OpenAI currently accepts xhigh as its highest public API effort. Custom
+    // OpenAI-compatible/Codex gateways may expose the user-facing max tier.
+    return effort === 'max' && /^https:\/\/(?:api\.)?openai\.com(?:\/|$)/i.test(this.cleanBaseUrl()) ? 'xhigh' : effort;
+  }
+
+  private applyChatReasoningEffort(body: Record<string, unknown>, model: string, tier?: string): void {
+    const effort = this.reasoningEffort(model, tier);
+    if (effort) body.reasoning_effort = effort;
   }
 
   private protocol(): ProviderProtocol {
@@ -751,7 +770,8 @@ export class LLMProvider {
     systemPrompt: string | null,
     temperature: number,
     maxTokens: number,
-    tools: unknown[] = []
+    tools: unknown[] = [],
+    reasoningTier?: string,
   ): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model,
@@ -759,7 +779,8 @@ export class LLMProvider {
       temperature,
       max_output_tokens: maxTokens,
     };
-    if (/^(?:gpt-5|o[134](?:-|$))|codex/i.test(model)) body.reasoning = { summary: 'auto' };
+    const effort = this.reasoningEffort(model, reasoningTier);
+    if (effort) body.reasoning = { effort, summary: 'auto' };
     if (systemPrompt) body.instructions = systemPrompt;
     const convertedTools = this.responsesTools(tools);
     if (convertedTools.length) {
@@ -822,13 +843,14 @@ export class LLMProvider {
     maxTokens: number,
     tools: unknown[],
     signal?: AbortSignal,
+    reasoningTier?: string,
   ): AsyncGenerator<StreamToken> {
     const abort = new AbortController();
     const forwardAbort = () => abort.abort(signal?.reason);
     if (signal?.aborted) forwardAbort();
     else signal?.addEventListener('abort', forwardAbort, { once: true });
     const timeout = setTimeout(() => abort.abort(), 120000);
-    const body = { ...this.responsesBody(model, messages, systemPrompt, temperature, maxTokens, tools), stream: true };
+    const body = { ...this.responsesBody(model, messages, systemPrompt, temperature, maxTokens, tools, reasoningTier), stream: true };
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     let response: Response;
     try {
@@ -983,11 +1005,12 @@ export class LLMProvider {
     temperature: number,
     maxTokens: number,
     signal?: AbortSignal,
+    reasoningTier?: string,
   ): Promise<string> {
     const response = await this.postJsonWithFetchFallback(
       `${this.cleanBaseUrl()}/responses`,
       this.openAIHeaders(),
-      this.responsesBody(model, messages, systemPrompt, temperature, maxTokens),
+      this.responsesBody(model, messages, systemPrompt, temperature, maxTokens, [], reasoningTier),
       120000,
       signal,
     );
@@ -1079,6 +1102,7 @@ export class LLMProvider {
     maxTokens: number,
     tools: unknown[],
     signal?: AbortSignal,
+    reasoningTier?: string,
   ): AsyncGenerator<StreamToken> {
     if (signal?.aborted) throw abortFailure(signal);
     if (this.protocol() === 'anthropic') {
@@ -1105,7 +1129,7 @@ export class LLMProvider {
 
     const mode = this.openAITransportMode();
     if (!isGitHubModels && mode === 'responses') {
-      yield* this.openAIResponsesWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal);
+      yield* this.openAIResponsesWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal, reasoningTier);
       return;
     }
 
@@ -1142,7 +1166,7 @@ export class LLMProvider {
         const err = await response.text();
         if (this.shouldUseResponsesFallback(response.status, err)) {
           clearTimeout(timeout);
-          yield* this.openAIResponsesWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal);
+          yield* this.openAIResponsesWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal, reasoningTier);
           return;
         }
         yield { type: 'text', text: this.llmErrorText(response, err) };
@@ -1247,6 +1271,7 @@ export class LLMProvider {
           Number(body.max_tokens || 0),
           Array.isArray(body.tools) ? body.tools : [],
           signal,
+          String(body.reasoning_effort || ''),
         );
         return;
       }
@@ -1389,7 +1414,7 @@ export class LLMProvider {
     const url = isGitHubModels
       ? this.githubModelsUrl('/inference/chat/completions')
       : `${this.cleanBaseUrl()}/chat/completions`;
-    const body = {
+    const body: Record<string, unknown> = {
       model,
       messages: [
         ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
@@ -1521,6 +1546,7 @@ export class LLMProvider {
     temperature: number,
     maxTokens: number,
     signal?: AbortSignal,
+    reasoningTier?: string,
   ): Promise<string> {
     if (this.protocol() === 'anthropic') {
       const { system, messages: anthropicMessages } = this.anthropicMessages(messages, systemPrompt);
@@ -1549,7 +1575,7 @@ export class LLMProvider {
     const url = isGitHubModels
       ? this.githubModelsUrl('/inference/chat/completions')
       : `${this.cleanBaseUrl()}/chat/completions`;
-    const body = {
+    const body: Record<string, unknown> = {
       model,
       messages: [
         ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
@@ -1558,9 +1584,10 @@ export class LLMProvider {
       temperature,
       max_tokens: maxTokens,
     };
+    if (!isGitHubModels) this.applyChatReasoningEffort(body, model, reasoningTier);
 
     if (!isGitHubModels && this.openAITransportMode() === 'responses') {
-      return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens, signal);
+      return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens, signal, reasoningTier);
     }
 
     const response = await this.postJsonWithFetchFallback(url, this.openAIHeaders(), body, 120000, signal);
@@ -1568,7 +1595,7 @@ export class LLMProvider {
     if (!response.ok) {
       const err = await response.text();
       if (!isGitHubModels && this.shouldUseResponsesFallback(response.status, err)) {
-        return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens, signal);
+        return await this.openAIResponsesChat(model, messages, systemPrompt, temperature, maxTokens, signal, reasoningTier);
       }
       throw new Error(this.llmErrorText(response, err));
     }

@@ -2485,7 +2485,7 @@ if (isViewerArg) {
 
     ipcMain.handle('agent:setIntelligence', async (_event, tier: string) => {
       if (agent) {
-        agent.setIntelligence(tier);
+        agent.setIntelligence(tier, true);
         resetConversationKernel();
       }
       return agent?.intelligence;
@@ -3554,7 +3554,17 @@ if (isViewerArg) {
       return [];
     });
 
-    ipcMain.handle('agent:modelValidationStatus', () => ({ running: !!agent?.isModelValidationRunning() }));
+    ipcMain.handle('agent:modelValidationStatus', () => agent?.modelValidationStatus() || ({
+      running: false,
+      completedChecks: 0,
+      totalChecks: 0,
+      percent: 0,
+      completedModels: 0,
+      totalModels: 0,
+      currentModel: '',
+      currentCheck: '',
+      recentChecks: [],
+    }));
 
     ipcMain.handle('agent:fuzzyInject', async (_event, name: string, url: string, key: string, protocol?: string) => {
       if (agent) {

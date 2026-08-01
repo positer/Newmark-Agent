@@ -512,7 +512,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
           const currentProvider = currentAgent.engineModel();
           const currentModelName = currentAgent.activeModelName();
           if (!currentProvider || !currentModelName) throw new Error('No resolved model deployment is available.');
-          const { temperature, maxTokens } = currentProvider.intelligenceConfig(currentAgent.intelligence);
+          const { temperature, maxTokens, reasoningEffort } = currentProvider.intelligenceConfig(currentAgent.intelligence);
           const newmarkMessages = fromKernelMessages(context.messages);
           const currentCompressionAt = currentAgent.lastCompression?.at || '';
           const compressionCompleted = !!currentCompressionAt && currentCompressionAt !== bootstrappedCompressionAt;
@@ -542,6 +542,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
             maxTokens,
             toProviderToolDefinitions(context.tools || []),
             options?.signal,
+            reasoningEffort,
           )) {
             if (!firstTokenRecorded && ((token.type === 'text' && token.text) || (token.type === 'tool_call' && token.toolCall))) {
               firstTokenRecorded = true;

@@ -18,6 +18,11 @@ import {
  * https://www.electronjs.org/docs/latest/api/web-contents
  * Download cancellation is a Session will-download responsibility:
  * https://www.electronjs.org/docs/latest/api/session#event-will-download
+ *
+ * Crawl4AI reference (7e801521428ee12509994d39151006f64055ebe3): its crawler
+ * separates DOM readiness, conditional waiting, and content extraction while reusing a
+ * session-owned page. Newmark applies those boundaries with fixed host scripts only:
+ * https://github.com/unclecode/crawl4ai/blob/7e801521428ee12509994d39151006f64055ebe3/crawl4ai/async_crawler_strategy.py
  */
 export interface BrowserUseHostPage {
   identity(signal?: AbortSignal): Promise<{ pageToken: string; url: string; title: string }>;
@@ -27,6 +32,7 @@ export interface BrowserUseHostPage {
   pressKey(key: string, signal?: AbortSignal): Promise<void>;
   navigate(url: string, signal?: AbortSignal): Promise<void>;
   waitForReady(signal?: AbortSignal): Promise<void>;
+  waitForStable?(maxWaitMs: number, signal?: AbortSignal): Promise<{ waitedMs: number; stable: boolean; polls: number; readyState?: string }>;
   captureVisibleScreenshot?(signal?: AbortSignal): Promise<string>;
   /** Serializes a complete observe/action transaction with every scope sharing this physical page. */
   serialized?<T>(action: string, run: () => Promise<T>, signal?: AbortSignal): Promise<T>;
@@ -75,6 +81,7 @@ interface DomObservation {
   title: string;
   viewport: BrowserUseAdapterObservation['viewport'];
   text: string;
+  contentSource?: 'main' | 'body';
   elements: BrowserUseAdapterElement[];
 }
 
@@ -90,28 +97,33 @@ function json(value: unknown): string {
 function browserUsePublicTextHelpers(): string {
   return `
     const privateEditableSelector = 'textarea,[contenteditable]:not([contenteditable="false"])';
-    const publicRenderedText = (root) => {
+    const excludedPublicTextSelector = 'script,style,noscript,template,svg';
+    const renderedVisibilityCache = new WeakMap();
+    const isRenderedElement = (element) => {
+      if (!element) return false;
+      if (renderedVisibilityCache.has(element)) return renderedVisibilityCache.get(element);
+      const parentRendered = !element.parentElement || isRenderedElement(element.parentElement);
+      const style = parentRendered ? getComputedStyle(element) : null;
+      const rendered = !!parentRendered && !element.hidden && !element.matches(excludedPublicTextSelector)
+        && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || 1) !== 0;
+      renderedVisibilityCache.set(element, rendered);
+      return rendered;
+    };
+    const publicRenderedText = (root, limit = 50000) => {
       if (!root) return '';
       const rootElement = root.nodeType === 1 ? root : root.parentElement;
       if (rootElement && rootElement.matches && rootElement.matches(privateEditableSelector)) return '';
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       const chunks = [];
+      let length = 0;
       let node = null;
-      while ((node = walker.nextNode())) {
+      while (length < limit && (node = walker.nextNode())) {
         const parent = node.parentElement;
-        if (!parent || parent.closest(privateEditableSelector)) continue;
-        let current = parent;
-        let rendered = true;
-        while (current) {
-          const style = getComputedStyle(current);
-          if (current.hidden || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) {
-            rendered = false;
-            break;
-          }
-          if (current === rootElement) break;
-          current = current.parentElement;
-        }
-        if (rendered) chunks.push(String(node.nodeValue || ''));
+        if (!parent || parent.closest(privateEditableSelector) || parent.closest(excludedPublicTextSelector) || !isRenderedElement(parent)) continue;
+        const value = String(node.nodeValue || '');
+        if (!value) continue;
+        chunks.push(value);
+        length += value.length + 1;
       }
       return chunks.join(' ');
     };
@@ -186,7 +198,10 @@ export function browserUseObservationScript(maxChars: number, maxRefs: number): 
       };
       elements.push(record);
     }
-    const bodyText = compact(publicRenderedText(document.body || document.documentElement), maxChars);
+    const mainRoot = document.querySelector('main,article,[role="main"]');
+    const mainText = mainRoot ? compact(publicRenderedText(mainRoot, maxChars), maxChars) : '';
+    const useMain = mainText.length >= 160;
+    const bodyText = useMain ? mainText : compact(publicRenderedText(document.body || document.documentElement, maxChars), maxChars);
     return {
       url: location.href,
       title: document.title || '',
@@ -196,6 +211,7 @@ export function browserUseObservationScript(maxChars: number, maxRefs: number): 
         pageHeight: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0)
       },
       text: bodyText,
+      contentSource: useMain ? 'main' : 'body',
       elements
     };
   })()`;
@@ -302,6 +318,7 @@ export class NativeBrowserUsePageAdapter implements BrowserUsePageAdapter {
         title: dom.title || after.title,
         viewport: dom.viewport,
         text: dom.text,
+        contentSource: dom.contentSource,
         elements,
         ...(visionImageDataUrl ? {
           visionImageDataUrl,
@@ -370,9 +387,10 @@ export class NativeBrowserUsePageAdapter implements BrowserUsePageAdapter {
           return { pressed: request.key };
         }
         if (request.action === 'wait') {
-          await abortableDelay(request.durationMs || 0, signal);
           await page.waitForReady(signal);
-          return { waitedMs: request.durationMs || 0 };
+          if (page.waitForStable) return await page.waitForStable(request.durationMs || 0, signal);
+          await abortableDelay(request.durationMs || 0, signal);
+          return { waitedMs: request.durationMs || 0, stable: true, polls: 1 };
         }
         if (request.action === 'extract') {
           return await page.evaluateFixed(browserUseExtractScript(request.element?.token, request.attribute, request.maxChars || 12_000), signal);

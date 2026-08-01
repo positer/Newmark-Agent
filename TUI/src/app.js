@@ -30,6 +30,7 @@ const {
   saveWorkflowFromDraft,
   setMemorySearchQuery,
   selectConversationModel,
+  selectIntelligenceTier,
   selectFlowWorkflow,
   switchView,
   toggleConversationPinned,
@@ -217,7 +218,8 @@ function start(options = {}) {
     } else if (state.view === "chat") {
       enterConversation(state);
     } else if (state.view === "model") {
-      selectConversationModel(state);
+      if (state.contentColumn === 0) selectIntelligenceTier(state);
+      else selectConversationModel(state);
     } else if (state.view === "flowlist") {
       state.flowSelectionIndex = state.selected;
       selectFlowWorkflow(state);

@@ -4,6 +4,7 @@ const data = require("./data");
 const { createMockNewmarkAdapter } = require("./adapters/mock-newmark-adapter");
 const { targetKey, validateSnapshot } = require("./adapters/newmark-contract");
 const { SETTINGS_CATEGORIES, settingsRows } = require("./settings-schema");
+const INTELLIGENCE_TIERS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 
 function applySnapshot(state, snapshot) {
   const valid = validateSnapshot(snapshot);
@@ -231,7 +232,7 @@ function itemCount(state) {
     plan: state.snapshot.conversationPlan.items.length,
     goal: state.snapshot.goal ? 1 : 0,
     agents: state.snapshot.subagents.length,
-    model: conversationModelOptions(state).length,
+    model: state.contentColumn === 0 ? INTELLIGENCE_TIERS.length : conversationModelOptions(state).length,
     flowbar: state.currentFlow ? 1 : 0,
     flowlist: state.flows.length,
     flowtask: state.currentFlow?.components?.length || 0,
@@ -274,6 +275,7 @@ function moveSelection(state, delta) {
 function contentColumnCount(state) {
   if (state.view === "memory") return 4;
   if (state.view === "settings") return 2;
+  if (state.view === "model") return 2;
   return 1;
 }
 
@@ -289,6 +291,7 @@ function moveFocusHorizontal(state, direction) {
   if (direction < 0) {
     if (state.contentColumn > 0) {
       state.contentColumn -= 1;
+      if (state.view === "model") state.selected = Math.max(0, INTELLIGENCE_TIERS.indexOf(state.snapshot.intelligence || "medium"));
       state.notice = `Content focus · column ${state.contentColumn + 1}`;
     } else {
       state.focusRegion = "menu";
@@ -299,6 +302,11 @@ function moveFocusHorizontal(state, direction) {
   const lastColumn = contentColumnCount(state) - 1;
   if (state.contentColumn < lastColumn) {
     state.contentColumn += 1;
+    if (state.view === "model") {
+      const current = state.snapshot.modelSelection || { kind: "auto" };
+      state.selected = Math.max(0, conversationModelOptions(state).findIndex((option) => option.selection.kind === current.kind
+        && (current.kind === "auto" || (option.selection.providerId === current.providerId && option.selection.modelId === current.modelId))));
+    }
     state.notice = `Content focus · column ${state.contentColumn + 1}`;
   }
 }
@@ -907,6 +915,19 @@ function selectConversationModel(state, index = state.selected) {
   return true;
 }
 
+function selectIntelligenceTier(state, index = state.selected) {
+  const tier = INTELLIGENCE_TIERS[index];
+  if (!tier || typeof state.adapter.setIntelligence !== "function") return false;
+  const snapshot = state.adapter.setIntelligence(tier, state.target);
+  if (snapshot && typeof snapshot.then === "function") {
+    throw new TypeError("Async adapters must await setIntelligence() before applySnapshot()");
+  }
+  applySnapshot(state, snapshot);
+  state.selected = index;
+  state.notice = `Reasoning effort ${tier} · shared with GUI and future model requests`;
+  return true;
+}
+
 function toggleConversationPinned(state, index = state.selected) {
   if (state.view !== "chat" || state.inputMode) return false;
   const conversation = state.snapshot.conversations[index];
@@ -1247,6 +1268,7 @@ function filteredCommands(state) {
 
 module.exports = {
   activeConversationModelLabel,
+  INTELLIGENCE_TIERS,
   activateMenu,
   activateMemorySelection,
   applyThemeAppearance,
@@ -1283,6 +1305,7 @@ module.exports = {
   selectedMemoryDetail,
   setMemorySearchQuery,
   selectConversationModel,
+  selectIntelligenceTier,
   selectFlowWorkflow,
   switchView,
   toggleWorkflowDetails,

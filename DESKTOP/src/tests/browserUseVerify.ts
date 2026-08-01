@@ -225,13 +225,14 @@ async function main(): Promise<void> {
   assert(observation.owner === scopeA.owner && observation.runtimeKey === scopeA.runtimeKey, 'receipts retain their explicit scope');
 
   const dom = new JSDOM(`<!doctype html><html><body>
+    <nav>NAVIGATION_NOISE_SHOULD_NOT_DOMINATE</nav>
     <label for="native-name">Name</label><input id="native-name" aria-label="Name" placeholder="Name" data-secret="DATA_ATTRIBUTE_SECRET" onclick="window.__secret = true" style="color:red">
     <select id="native-country"><option value="OPTION_VALUE_SECRET_CN">China</option><option value="OPTION_VALUE_SECRET_US">United States</option></select>
     <button id="native-submit" aria-label="Submit" data-secret="DATA_ATTRIBUTE_SECRET" onclick="window.__secret = true" style="color:red">Submit<span style="display:none">HIDDEN_CHILD_SECRET</span></button>
     <input id="native-password" type="password" aria-label="Password" value="PASSWORD_VALUE_SECRET">
     <textarea id="native-private-notes" aria-label="Private notes">TEXTAREA_VALUE_SECRET</textarea>
     <div id="native-private-editor" contenteditable="true" aria-label="Private editor">CONTENTEDITABLE_VALUE_SECRET</div>
-    <p id="native-result">Public DOM result<span hidden>HIDDEN_RESULT_SECRET</span></p>
+    <main><p id="native-result">Public DOM result ${'main article content '.repeat(12)}<span hidden>HIDDEN_RESULT_SECRET</span></p></main>
     <div hidden>HIDDEN_BODY_SECRET</div>
     <script>globalThis.__pageSecret = 'SCRIPT_BODY_SECRET'</script>
   </body></html>`, { url: 'https://native.test/form', runScripts: 'outside-only', pretendToBeVisual: true });
@@ -266,6 +267,7 @@ async function main(): Promise<void> {
   assert(nativeObservation.pageToken === 'native:1' && nativeObservation.elements.length === 6, 'native fixed-script adapter observes visible interactive DOM elements without dropping private editable controls');
   const publicObservationJson = JSON.stringify(nativeObservation);
   assert(!/OPTION_VALUE_SECRET|DATA_ATTRIBUTE_SECRET|PASSWORD_VALUE_SECRET|TEXTAREA_VALUE_SECRET|CONTENTEDITABLE_VALUE_SECRET|HIDDEN_(?:CHILD|RESULT|BODY)_SECRET|SCRIPT_BODY_SECRET/.test(publicObservationJson), 'native observation exposes only rendered text and visible select labels, never hidden DOM text or editable/form values');
+  assert(nativeObservation.contentSource === 'main' && !String(nativeObservation.text || '').includes('NAVIGATION_NOISE_SHOULD_NOT_DOMINATE'), 'native observation prefers substantial main content over surrounding navigation noise');
   assert(nativeSerializedTransactions === 1, 'native adapter serializes the complete observation transaction at the physical-page boundary');
   assert(nativeObservation.elements.every(element => element.token.includes(':nth-of-type(')), 'native adapter uses private deterministic DOM paths as internal tokens');
   const nativeClick = await nativeAdapter.act(scopeA, { action: 'click', expectedPageToken: 'native:1', element: nativeObservation.elements[2] });

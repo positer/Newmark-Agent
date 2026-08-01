@@ -36,6 +36,7 @@ const {
   returnToConversationSelection,
   requestConversationStop,
   selectConversationModel,
+  selectIntelligenceTier,
   selectFlowWorkflow,
   saveWorkflowFromDraft,
   selectedMemoryDetail,
@@ -419,6 +420,26 @@ test("conversation model selection is persisted only for the focused conversatio
     providerId: "provider-openai-hub",
     modelId: "gpt-5.6-mini"
   });
+});
+
+test("TUI Model exposes and stress-switches the five shared reasoning effort tiers", () => {
+  const state = createState();
+  switchView(state, "model");
+  state.focusRegion = "content";
+  const tiers = ["low", "medium", "high", "xhigh", "max"];
+  for (let round = 0; round < 50; round++) {
+    for (let index = 0; index < tiers.length; index++) {
+      assert.equal(selectIntelligenceTier(state, index), true);
+      assert.equal(state.snapshot.intelligence, tiers[index]);
+    }
+  }
+  const output = stripAnsi(render(state, 120, 40));
+  assert.match(output, /Reasoning effort/);
+  assert.match(output, /low[\s\S]*medium[\s\S]*high[\s\S]*xhigh[\s\S]*max/);
+  assert.match(output, /Deployment/);
+  moveFocusHorizontal(state, 1);
+  assert.equal(state.contentColumn, 1);
+  assert.equal(selectConversationModel(state, 0), true);
 });
 
 test("workspace child views preserve the last entered conversation", () => {
@@ -959,6 +980,7 @@ test("prepared desktop adapter preserves existing preload call signatures", asyn
     selectWorkspace: async (id) => (calls.push(["selectWorkspace", id]), { ok: true }),
     activateConversation: async (value) => (calls.push(["activateConversation", value]), snapshot),
     setModel: async (value) => (calls.push(["setModel", value]), value),
+    setIntelligence: async (value) => (calls.push(["setIntelligence", value]), value),
     setConversationPinned: async (id, pinned) => (calls.push(["setConversationPinned", id, pinned]), pinned),
     setWorkRunExpanded: async (request) => (calls.push(["setWorkRunExpanded", request]), true),
     setMode: async (value) => (calls.push(["setMode", value]), value),
@@ -1004,6 +1026,7 @@ test("prepared desktop adapter preserves existing preload call signatures", asyn
     providerId: "provider-openai-hub",
     modelId: "gpt-5.6"
   }, target);
+  await adapter.setIntelligence("xhigh", target);
   await adapter.getConversationPlan(target);
   await adapter.sendMessage("hello", target);
   await adapter.setInputMode("next", target);
@@ -1015,6 +1038,9 @@ test("prepared desktop adapter preserves existing preload call signatures", asyn
     ["setWorkRunExpanded", { target, runId: "run-release-review", expanded: false }],
     ["activateConversation", target],
     ["setModel", "deployment:provider-openai-hub:gpt-5.6"],
+    ["getState", target],
+    ["activateConversation", target],
+    ["setIntelligence", "xhigh"],
     ["getState", target],
     ["getConversationPlan", target.conversationId],
     ["sendMessage", "hello", target],

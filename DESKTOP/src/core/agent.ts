@@ -39,6 +39,7 @@ import {
   ModelValidationProbeError,
   ModelValidationRecord,
   ModelValidationService,
+  ValidationAuditEvent,
   ToolProbeObservation,
   ToolProbeScenario,
   VisionChallenge,
@@ -83,6 +84,18 @@ export interface AgentRuntimeOptions {
   };
 }
 
+export interface ModelValidationProgress {
+  running: boolean;
+  completedChecks: number;
+  totalChecks: number;
+  percent: number;
+  completedModels: number;
+  totalModels: number;
+  currentModel: string;
+  currentCheck: string;
+  recentChecks: Array<{ model: string; check: string }>;
+}
+
 export interface AutoRouteRatingResult {
   ok: boolean;
   score?: -1 | 1;
@@ -90,6 +103,10 @@ export interface AutoRouteRatingResult {
   reason?: 'invalid_score' | 'no_active_auto_route' | 'stale_route' | 'already_rated';
 }
 export const ROOT_AGENT_ACTOR_ID = '00000000-0000-4000-8000-000000000001';
+export function normalizeIntelligenceTier(value: unknown): 'low' | 'medium' | 'high' | 'xhigh' | 'max' {
+  const tier = String(value || '').trim().toLowerCase();
+  return tier === 'low' || tier === 'high' || tier === 'xhigh' || tier === 'max' ? tier : 'medium';
+}
 function throwIfAgentAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
   const reason = signal.reason;
@@ -444,6 +461,17 @@ export class Agent {
   private systemPromptCache: { identity: string; value: string } | null = null;
   private toolDefinitionCache = new Map<string, unknown[]>();
   private modelValidationPromise: Promise<ModelValidationResult[]> | null = null;
+  private modelValidationProgress: ModelValidationProgress = {
+    running: false,
+    completedChecks: 0,
+    totalChecks: 0,
+    percent: 0,
+    completedModels: 0,
+    totalModels: 0,
+    currentModel: '',
+    currentCheck: '',
+    recentChecks: [],
+  };
   private readonly rootInboxListener = (message: SubagentRootMessage) => this.deliverRootInboxMessage(message);
   public readonly agentOnly: boolean;
   public readonly runtimeActorId: string;
@@ -486,7 +514,7 @@ export class Agent {
     // deferred renderer catalog: otherwise the first prompt after startup can
     // race the UI and reach the kernel with an empty model.
     this.ensureUsableModelSelection();
-    this.intelligence = this.config.getStr('models', 'default_intelligence') || 'medium';
+    this.intelligence = normalizeIntelligenceTier(this.config.getStr('models', 'default_intelligence'));
     this.engine = this.config.getStr('models', 'agent_engine') || 'builtin';
 
     this.workspace = new WorkspaceManager(rootPath, this.config, {
@@ -1008,7 +1036,13 @@ export class Agent {
       .filter((entry): entry is { model: ReturnType<ConfigManager['allModels']>[number]; index: number; score: number } => !!entry)
       .sort((a, b) => b.score - a.score || a.index - b.index)[0]?.model;
   }
-  setIntelligence(tier: string): void { this.intelligence = tier; }
+  setIntelligence(tier: string, persist = false): void {
+    this.intelligence = normalizeIntelligenceTier(tier);
+    if (persist) {
+      this.config.set('models', 'default_intelligence', this.intelligence);
+      this.config.save();
+    }
+  }
   setAutomationManager(manager: AutomationManager | null): void { this.automationManager = manager; }
 
   activeDeployment(): DeploymentRef | null {
@@ -4405,7 +4439,10 @@ export class Agent {
       affinityKey: `${this.workspace.current?.path || this.rootPath}\u0000${this.activeConversationId || 'default'}`,
       taskText: task,
       estimatedInputTokens: this.estimateContextTokens(),
-      expectedOutputTokens: this.intelligence === 'high' ? 8192 : this.intelligence === 'low' ? 2048 : 4096,
+      expectedOutputTokens: this.intelligence === 'max' ? 32768
+        : this.intelligence === 'xhigh' ? 16384
+          : this.intelligence === 'high' ? 8192
+            : this.intelligence === 'low' ? 2048 : 4096,
       requiredCapabilities: [...requiredCapabilities],
       batch: override?.batch === true,
     });
@@ -4558,14 +4595,66 @@ export class Agent {
     return !!this.modelValidationPromise;
   }
 
+  modelValidationStatus(): ModelValidationProgress {
+    return {
+      ...this.modelValidationProgress,
+      running: !!this.modelValidationPromise,
+      recentChecks: this.modelValidationProgress.recentChecks.map(item => ({ ...item })),
+    };
+  }
+
   private async runModelValidation(selectedNames?: string[]): Promise<ModelValidationResult[]> {
     const selectedModels = this.config.modelsForSelections(selectedNames);
-    if (!selectedModels.length) return [];
+    if (!selectedModels.length) {
+      this.modelValidationProgress = {
+        running: false, completedChecks: 0, totalChecks: 0, percent: 0,
+        completedModels: 0, totalModels: 0, currentModel: '', currentCheck: '', recentChecks: [],
+      };
+      return [];
+    }
     const results: ModelValidationResult[] = [];
     const catalogByProvider = new Map<string, Awaited<ReturnType<LLMProvider['modelCatalog']>>>();
     const cache = new FileModelValidationCache(this.rootPath);
-    const service = new ModelValidationService({ cache });
-    for (const m of this.config.modelsForSelections(selectedNames)) {
+    const checksPerModel = 11;
+    let currentModel = '';
+    let currentModelChecks = 0;
+    this.modelValidationProgress = {
+      running: true,
+      completedChecks: 0,
+      totalChecks: selectedModels.length * checksPerModel,
+      percent: 0,
+      completedModels: 0,
+      totalModels: selectedModels.length,
+      currentModel: '',
+      currentCheck: 'catalog',
+      recentChecks: [],
+    };
+    const markCheck = (check: string): void => {
+      if (!currentModel || currentModelChecks >= checksPerModel) return;
+      currentModelChecks += 1;
+      const completedChecks = Math.min(this.modelValidationProgress.totalChecks, this.modelValidationProgress.completedChecks + 1);
+      const recentChecks = [...this.modelValidationProgress.recentChecks, { model: currentModel, check }].slice(-24);
+      this.modelValidationProgress = {
+        ...this.modelValidationProgress,
+        running: true,
+        completedChecks,
+        percent: Math.floor((completedChecks / Math.max(1, this.modelValidationProgress.totalChecks)) * 100),
+        currentModel,
+        currentCheck: check,
+        recentChecks,
+      };
+    };
+    const service = new ModelValidationService({
+      cache,
+      auditSink: (event: ValidationAuditEvent) => {
+        if (event.event === 'health_completed') markCheck('health');
+        else if (event.event === 'probe_completed') markCheck(String(event.probe || event.capability || 'capability'));
+      },
+    });
+    for (const m of selectedModels) {
+      currentModel = `${m.provider}/${m.name}`;
+      currentModelChecks = 0;
+      this.modelValidationProgress = { ...this.modelValidationProgress, currentModel, currentCheck: 'catalog' };
       const inferredVision = !!m.vision || inferModelVisionCapability(m.name, m.display, m.description, m.provider, m.provider_protocol);
       const inferredImageOutput = !!m.image_output || /(?:^|[-_.])(gpt-image|dall-e|imagen|imagegen|image-generation)(?:$|[-_.])/i.test(m.name);
       const p = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode());
@@ -4575,6 +4664,7 @@ export class Agent {
         catalogByProvider.set(m.provider_id, catalog);
       }
       catalog ||= [];
+      markCheck('catalog');
       const catalogEntry = catalog.find(entry => entry.id === m.name || entry.id.endsWith(`/${m.name}`));
       const responseMaxContextTokens = modelResponseMaxContextTokens(catalogEntry?.raw);
       const catalogText = JSON.stringify(catalogEntry?.raw || {}).toLowerCase();
@@ -4595,6 +4685,7 @@ export class Agent {
       });
       record = preserveVerifiedCapabilitiesAcrossTransientHealth(previous, record);
       cache.set(record);
+      while (currentModelChecks < checksPerModel) markCheck(`cached_or_skipped_${currentModelChecks + 1}`);
 
       const textOk = validationCapabilityOk(record, 'text');
       const visionOk = validationCapabilityOk(record, 'vision');
@@ -4651,8 +4742,19 @@ export class Agent {
         capability_rating: performanceRating,
         description: this.modelCapabilityDescription({ ...m, vision: visionOk, image_output: imageOk }, performanceRating, speedRating, costRating, record.status === 'verified'),
       });
+      this.modelValidationProgress = {
+        ...this.modelValidationProgress,
+        completedModels: this.modelValidationProgress.completedModels + 1,
+      };
     }
     this.config.save();
+    this.modelValidationProgress = {
+      ...this.modelValidationProgress,
+      running: false,
+      completedChecks: this.modelValidationProgress.totalChecks,
+      percent: 100,
+      currentCheck: 'completed',
+    };
     return results;
   }
 

@@ -121,6 +121,7 @@ export interface BrowserUseAdapterObservation {
   title: string;
   viewport?: BrowserUseViewport;
   text?: string;
+  contentSource?: 'main' | 'body';
   elements: BrowserUseAdapterElement[];
   visionImageDataUrl?: string;
   visualFallbackReason?: 'text_unavailable';
@@ -131,6 +132,7 @@ export interface BrowserUseObservation {
   title: string;
   viewport?: BrowserUseViewport;
   text: string;
+  contentSource?: 'main' | 'body';
   refs: BrowserUseRef[];
   truncated: boolean;
 }
@@ -520,6 +522,7 @@ export class BrowserUseEngine implements BrowserUseBackend {
           title: publicString(raw.title, 1000),
           viewport: raw.viewport ? sanitizeBrowserUsePublicData(raw.viewport) as BrowserUseViewport : undefined,
           text: publicString(raw.text, maxChars),
+          ...(raw.contentSource ? { contentSource: raw.contentSource } : {}),
           refs,
           truncated: (Array.isArray(raw.elements) && raw.elements.length > elements.length) || String(raw.text || '').length > maxChars,
         };

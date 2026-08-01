@@ -263,7 +263,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         return;
       }
       case '/api/intelligence': {
-        agent.setIntelligence(JSON.parse(body || '{}').tier || 'medium');
+        agent.setIntelligence(JSON.parse(body || '{}').tier || 'medium', true);
         jsonResponse(res, { intelligence: agent.intelligence });
         return;
       }
@@ -451,6 +451,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         const parsed = body ? JSON.parse(body || '{}') : {};
         const results = await agent.validateModels(parsed.selected || undefined);
         jsonResponse(res, results);
+        return;
+      }
+      case '/api/model-validation-status': {
+        jsonResponse(res, agent.modelValidationStatus());
         return;
       }
       case '/api/fuzzy-inject': {

@@ -217,6 +217,9 @@ async function main(): Promise<void> {
     const callsAfterFirst = chatCalls + streamCalls + protocolBodies.length;
     const second = await agent.validateModels(['Fixture/fixture-model']);
     ok(second[0].status === 'verified' && chatCalls + streamCalls + protocolBodies.length === callsAfterFirst, 'fresh seven-day validation evidence is reused without provider calls');
+    const validationProgress = agent.modelValidationStatus();
+    ok(validationProgress.running === false && validationProgress.percent === 100 && validationProgress.completedChecks === validationProgress.totalChecks, 'model validation progress reaches an exact completed state');
+    ok(validationProgress.totalModels === 1 && validationProgress.completedModels === 1 && validationProgress.recentChecks.length === 11, 'each cached or executed model check advances the per-model progress ledger');
 
     agent.setModel('auto');
     ok(await agent.evaluateAndSwitch('Use a tool to inspect this screenshot'), 'a model joins Auto only after Standard validation succeeds');

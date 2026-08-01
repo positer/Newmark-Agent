@@ -36,6 +36,12 @@ function createDesktopPreloadAdapter(api) {
       await api.setModel(value);
       return validateSnapshot(await api.getState(target));
     },
+    async setIntelligence(tier, target) {
+      assertTarget(target);
+      await api.activateConversation(target);
+      await api.setIntelligence(tier);
+      return validateSnapshot(await api.getState(target));
+    },
     async setConversationPinned(conversationId, pinned, target) {
       assertTarget(target);
       await api.activateConversation(target);

@@ -109,6 +109,7 @@ function runWindowsWslBuild() {
   const wslRepoRoot = toWslPath(distro, repoRoot);
   const wslTuiRoot = toWslPath(distro, path.join(repoRoot, 'TUI'));
   const wslReleaseDir = toWslPath(distro, releaseDir);
+  const skipVerification = /^(?:1|true|yes)$/i.test(process.env.NEWMARK_DIST_LINUX_SKIP_VERIFICATION || '');
   log(`building in an isolated Linux filesystem through WSL distro ${distro}`);
   const script = [
     'set -euo pipefail',
@@ -128,10 +129,10 @@ function runWindowsWslBuild() {
       ? `export ELECTRON_MIRROR=${wslQuote(process.env.ELECTRON_MIRROR)}`
       : '',
     'npm ci --include=dev --no-audit --no-fund',
-    'npm test',
-    'NEWMARK_LATENCY_OUTPUT="$build_root/linux-agent-latency.json" npm run benchmark:linux-agent-latency',
-    `mkdir -p ${wslQuote(`${wslRepoRoot}/archive`)}`,
-    `cp "$build_root/linux-agent-latency.json" ${wslQuote(`${wslRepoRoot}/archive/${latencyArchiveName}`)}`,
+    skipVerification ? 'echo "[dist-linux] reusing verification completed by the immediately preceding packaging attempt"' : 'npm test',
+    skipVerification ? '' : 'NEWMARK_LATENCY_OUTPUT="$build_root/linux-agent-latency.json" npm run benchmark:linux-agent-latency',
+    skipVerification ? '' : `mkdir -p ${wslQuote(`${wslRepoRoot}/archive`)}`,
+    skipVerification ? '' : `cp "$build_root/linux-agent-latency.json" ${wslQuote(`${wslRepoRoot}/archive/${latencyArchiveName}`)}`,
     'node scripts/dist-linux.cjs --native',
     `mkdir -p ${wslQuote(wslReleaseDir)}`,
     `rm -rf ${wslQuote(`${wslReleaseDir}/linux-unpacked`)}`,

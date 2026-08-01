@@ -140,6 +140,7 @@ export class ElectronBrowserUseHost {
         await abortableDelay(20, signal);
         await waitForPageReady(contents, 15_000, signal);
       },
+      waitForStable: async (maxWaitMs: number, signal?: AbortSignal) => await waitForDomStable(contents, maxWaitMs, signal),
       captureVisibleScreenshot: async (signal?: AbortSignal) => {
         throwIfAborted(signal);
         const captured = await raceWithAbort(contents.capturePage(), signal);
@@ -287,4 +288,31 @@ async function waitForPageReady(contents: WebContents, timeoutMs = 15_000, signa
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort();
   });
+}
+
+async function waitForDomStable(contents: WebContents, maxWaitMs: number, signal?: AbortSignal): Promise<{ waitedMs: number; stable: boolean; polls: number; readyState?: string }> {
+  const startedAt = Date.now();
+  const budget = Math.max(0, Math.min(10_000, Math.floor(maxWaitMs)));
+  let previous = '';
+  let stablePolls = 0;
+  let polls = 0;
+  let readyState = '';
+  do {
+    throwIfAborted(signal);
+    const snapshot = await raceWithAbort(contents.executeJavaScriptInIsolatedWorld(BROWSER_USE_WORLD_ID, [{ code: `(() => ({
+      readyState: document.readyState,
+      bodyChildren: document.body ? document.body.childElementCount : 0,
+      textLength: document.body ? String(document.body.innerText || '').length : 0,
+      pageWidth: Math.max(document.documentElement?.scrollWidth || 0, document.body?.scrollWidth || 0),
+      pageHeight: Math.max(document.documentElement?.scrollHeight || 0, document.body?.scrollHeight || 0)
+    }))()` }], true) as Promise<Record<string, unknown>>, signal);
+    polls += 1;
+    readyState = String(snapshot?.readyState || '');
+    const fingerprint = JSON.stringify(snapshot);
+    stablePolls = fingerprint === previous && (readyState === 'interactive' || readyState === 'complete') ? stablePolls + 1 : 0;
+    previous = fingerprint;
+    if (stablePolls >= 2 || Date.now() - startedAt >= budget) break;
+    await abortableDelay(Math.min(100, Math.max(20, budget - (Date.now() - startedAt))), signal);
+  } while (Date.now() - startedAt < budget);
+  return { waitedMs: Date.now() - startedAt, stable: stablePolls >= 2, polls, readyState };
 }

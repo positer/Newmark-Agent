@@ -578,18 +578,25 @@ function agentsView(state, width, p) {
 }
 
 function modelView(state, width, p) {
-  const { conversationModelOptions } = require("./state");
+  const { conversationModelOptions, INTELLIGENCE_TIERS } = require("./state");
   const options = conversationModelOptions(state);
   const current = state.snapshot.modelSelection || { kind: "auto" };
+  const currentTier = state.snapshot.intelligence || "medium";
   const isCurrent = (selection) => selection.kind === current.kind
     && (selection.kind === "auto"
       || (selection.providerId === current.providerId && selection.modelId === current.modelId));
   return [
-    ...conversationContext(state, p, "Conversation model"),
-    `${p.bold}Model${p.reset}   ${p.muted}Used by this conversation, including its Plan and Subagents${p.reset}`,
+    ...conversationContext(state, p, "Model and reasoning effort"),
+    `${p.bold}Reasoning effort${p.reset}   ${p.muted}Shared GUI/TUI request tier · ←/→ changes section${p.reset}`,
+    ...INTELLIGENCE_TIERS.map((tier, index) => {
+      const style = state.focusRegion === "content" && state.contentColumn === 0 && index === state.selected ? `${p.selected}${p.bold}` : "";
+      return `${style} ${tier === currentTier ? `${p.cyan}●${p.reset}` : "○"} ${tier}${p.reset}`;
+    }),
+    "",
+    `${p.bold}Deployment${p.reset}   ${p.muted}Used by this conversation, including its Plan and Subagents${p.reset}`,
     "",
     ...options.flatMap((option, index) => {
-      const style = state.focusRegion === "content" && index === state.selected ? `${p.selected}${p.bold}` : "";
+      const style = state.focusRegion === "content" && state.contentColumn === 1 && index === state.selected ? `${p.selected}${p.bold}` : "";
       const marker = isCurrent(option.selection) ? `${p.cyan}●${p.reset}` : "○";
       return [
         `${style} ${marker} ${pad(option.label, Math.max(18, Math.min(32, width - 24)))} ${p.muted}${option.provider}${p.reset}`,
@@ -597,7 +604,7 @@ function modelView(state, width, p) {
       ];
     }),
     "",
-    `${p.muted}Enter selects for ${state.lastConversation}. Other conversations keep their own model selection.${p.reset}`
+    `${p.muted}Enter applies the focused tier or deployment. Effort persists globally; deployments remain per conversation.${p.reset}`
   ];
 }
 

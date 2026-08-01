@@ -156,6 +156,7 @@ function createCoreRuntimeAdapter(options = {}) {
   const stateFields = () => ({
     providers: sanitizeProviders(agent.config.providers()),
     models: agent.allModelNames(),
+    intelligence: agent.intelligence,
     nativeTools: agent.config.nativeToolEnabled(),
     automations: automation.list(),
     darkMode: agent.config.getStr("ui", "dark_mode") || "dark",
@@ -265,6 +266,12 @@ function createCoreRuntimeAdapter(options = {}) {
         ? `deployment:${encodeURIComponent(selection.providerId)}:${encodeURIComponent(selection.modelId)}`
         : "auto";
       agent.setModel(value, true);
+      return snapshotFor(currentTarget());
+    },
+    setIntelligence(tier, requested = currentTarget()) {
+      this.activateConversation(requested);
+      agent.setIntelligence(tier, true);
+      for (const runner of conversationRuntimes.values()) runner.setIntelligence(tier, false);
       return snapshotFor(currentTarget());
     },
     setConversationPinned(conversationId, pinned, requested = currentTarget()) {

@@ -1049,6 +1049,17 @@ async function run(): Promise<void> {
 
   const extracted = await engine.run(request(observed, 'extract', ref('Name'), { attribute: 'aria-label' }));
   ok(extracted.ok && (extracted.data as { text?: string })?.text === 'Name', 'bounded extraction works on a real page');
+  const stableWait = await engine.run({
+    ...bound,
+    action: 'wait',
+    actionId: 'stable-real-wait',
+    pageGeneration: observed.pageGeneration,
+    observationId: observed.observationId,
+    durationMs: 1_000,
+  });
+  const stableWaitData = stableWait.data as { stable?: boolean; polls?: number; waitedMs?: number } | undefined;
+  ok(stableWait.ok && stableWaitData?.stable === true && Number(stableWaitData.polls) >= 3, 'wait adaptively returns after a real DOM reaches repeated stable snapshots');
+  ok(Number(stableWaitData?.waitedMs) < 1_000, 'stable DOM wait avoids consuming its full timeout budget');
 
   const survivorBound = bindBrowserUseRequest({ action: 'observe' }, {
     runtimeKey: 'workspace:survivor::conversation:default',

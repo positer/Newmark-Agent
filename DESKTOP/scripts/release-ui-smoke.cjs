@@ -283,7 +283,7 @@ function ensureNoReleaseProcess() {
   let child;
   let cdp;
   try {
-    child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
+    child = spawn(exePath, [`--remote-debugging-port=${port}`, '--allow-multiple-instances', '--no-sandbox', '--root', root], {
       stdio: 'ignore',
       windowsHide: true,
     });
@@ -345,7 +345,7 @@ function ensureNoReleaseProcess() {
       editorCloseText: 'Close',
       subWinCloseTitle: 'Close',
       terminalConnected: 'Terminal connected (powershell)',
-      contextCompression: 'Context compressed | model | 8 -> 2 messages',
+      contextCompression: '',
       nextQueue: 'Queue 1',
       modelAuto: 'Auto',
     }, 'english-before');
@@ -403,7 +403,7 @@ function ensureNoReleaseProcess() {
       editorCloseText: '关闭',
       subWinCloseTitle: '关闭',
       terminalConnected: '终端已连接 (powershell)',
-      contextCompression: '上下文已压缩 | 模型 | 8 -> 2 条消息',
+      contextCompression: '',
       nextQueue: '队列 1',
       modelAuto: '自动',
     }, 'chinese');
@@ -449,7 +449,7 @@ function ensureNoReleaseProcess() {
       editorCloseText: 'Close',
       subWinCloseTitle: 'Close',
       terminalConnected: 'Terminal connected (powershell)',
-      contextCompression: 'Context compressed | model | 8 -> 2 messages',
+      contextCompression: '',
       nextQueue: 'Queue 1',
       modelAuto: 'Auto',
     }, 'english-after');

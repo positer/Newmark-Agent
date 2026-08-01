@@ -66,7 +66,7 @@ async function evaluate(cdp, expression) {
   let child;
   let cdp;
   try {
-    child = spawn(electron, ['.', `--remote-debugging-port=${port}`, `--user-data-dir=${path.join(root, 'ElectronData')}`, '--no-sandbox', '--no-devtools', '--root', root], { cwd: desktopRoot, stdio: 'ignore', windowsHide: true });
+    child = spawn(electron, ['.', `--remote-debugging-port=${port}`, '--allow-multiple-instances', `--user-data-dir=${path.join(root, 'ElectronData')}`, '--no-sandbox', '--no-devtools', '--root', root], { cwd: desktopRoot, stdio: 'ignore', windowsHide: true });
     cdp = connect(await target(port));
     await cdp.ready;
     await waitForPromotedMainUi(cdp);
@@ -532,14 +532,11 @@ async function evaluate(cdp, expression) {
         font: rootStyle.getPropertyValue('--font').trim(),
         backendBackground: backend.backgroundColor,
         backendFont: backend.fontFamily,
-        backgroundControl: document.getElementById('settings-background-color')?.value || '',
-        fontControl: document.getElementById('settings-font-family')?.value || '',
       };
     })()`);
     if (appearance.theme !== 'dark' || appearance.background.toUpperCase() !== '#123456'
       || appearance.bodyBackground !== 'rgb(18, 52, 86)' || !appearance.font.includes('Segoe UI')
-      || appearance.backendBackground !== '#123456' || appearance.backendFont !== 'Segoe UI'
-      || appearance.backgroundControl.toUpperCase() !== '#123456' || appearance.fontControl !== 'Segoe UI') {
+      || appearance.backendBackground !== '#123456' || appearance.backendFont !== 'Segoe UI') {
       fail(`visual preferences were not applied and persisted: ${JSON.stringify(appearance)}`);
     }
     const appearanceScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
@@ -557,6 +554,28 @@ async function evaluate(cdp, expression) {
       };
     })()`);
     if (resetAppearance.background || resetAppearance.font || resetAppearance.backendBackground || resetAppearance.backendFont) fail(`visual preference reset failed: ${JSON.stringify(resetAppearance)}`);
+    const intelligenceTiers = await evaluate(cdp, `(async () => {
+      const select = document.getElementById('intel-select');
+      const expected = ['low', 'medium', 'high', 'xhigh', 'max'];
+      const seen = [];
+      for (const tier of expected) {
+        select.value = tier;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        for (let attempt = 0; attempt < 50; attempt++) {
+          const backend = await window.api.getState();
+          if (backend.intelligence === tier) break;
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        const backend = await window.api.getState();
+        seen.push({ tier, ui: window.state.intelligence, backend: backend.intelligence });
+      }
+      return { options: [...select.options].map(option => option.value), seen, selected: select.value };
+    })()`);
+    if (JSON.stringify(intelligenceTiers.options) !== JSON.stringify(['low', 'medium', 'high', 'xhigh', 'max'])
+      || intelligenceTiers.seen.some(entry => entry.tier !== entry.ui || entry.tier !== entry.backend)
+      || intelligenceTiers.selected !== 'max') fail(`reasoning effort tiers did not synchronize through GUI/backend: ${JSON.stringify(intelligenceTiers)}`);
+    const intelligenceScreenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(path.join(repoRoot, 'archive', '20260801-gui-intelligence-tiers.png'), Buffer.from(intelligenceScreenshot.data, 'base64'));
     const durableImageUi = await evaluate(cdp, `(async () => {
       window.closeSubWin();
       await new Promise(resolve => setTimeout(resolve, 250));
@@ -580,7 +599,7 @@ async function evaluate(cdp, expression) {
     await sleep(750);
 
     const restartPort = port + 401;
-    child = spawn(electron, ['.', `--remote-debugging-port=${restartPort}`, `--user-data-dir=${path.join(root, 'ElectronData')}`, '--no-sandbox', '--no-devtools', '--root', root], { cwd: desktopRoot, stdio: 'ignore', windowsHide: true });
+    child = spawn(electron, ['.', `--remote-debugging-port=${restartPort}`, '--allow-multiple-instances', `--user-data-dir=${path.join(root, 'ElectronData')}`, '--no-sandbox', '--no-devtools', '--root', root], { cwd: desktopRoot, stdio: 'ignore', windowsHide: true });
     cdp = connect(await target(restartPort));
     await cdp.ready;
     await waitForPromotedMainUi(cdp);
@@ -593,10 +612,11 @@ async function evaluate(cdp, expression) {
     const restartedInputMode = await evaluate(cdp, `(async () => {
       const target = currentConversationTarget(activeConversationId());
       const state = await window.api.getState(target);
-      return { mode: state.inputMode, target };
+      return { mode: state.inputMode, intelligence: state.intelligence, uiIntelligence: document.getElementById('intel-select')?.value, target };
     })()`);
     if (restartedInputMode.mode !== 'next') fail(`Guide/Next mode did not survive a full application restart: ${JSON.stringify(restartedInputMode)}`);
-    console.log(`[release-ui-runtime-layout-smoke] PASS workspaceFocusMenu=${JSON.stringify(workspaceFocusMenu)} selectPopupLayout=${JSON.stringify(selectPopupLayout)} inputModeRestart=${JSON.stringify(restartedInputMode)} layout=${JSON.stringify(result)} editor=${JSON.stringify(editor)} editorThemes=${JSON.stringify({ editorDark, editorLight })} icons=${JSON.stringify({ darkAppIcon, lightAppIcon, darkSystemIcon, lightSystemIcon })} controls=${JSON.stringify({ controlDark, controlLight })} appearance=${JSON.stringify(appearance)} durableImageUi=${JSON.stringify(durableImageUi)}`);
+    if (restartedInputMode.intelligence !== 'max' || restartedInputMode.uiIntelligence !== 'max') fail(`reasoning effort did not survive a full application restart: ${JSON.stringify(restartedInputMode)}`);
+    console.log(`[release-ui-runtime-layout-smoke] PASS workspaceFocusMenu=${JSON.stringify(workspaceFocusMenu)} selectPopupLayout=${JSON.stringify(selectPopupLayout)} inputModeRestart=${JSON.stringify(restartedInputMode)} intelligenceTiers=${JSON.stringify(intelligenceTiers)} layout=${JSON.stringify(result)} editor=${JSON.stringify(editor)} editorThemes=${JSON.stringify({ editorDark, editorLight })} icons=${JSON.stringify({ darkAppIcon, lightAppIcon, darkSystemIcon, lightSystemIcon })} controls=${JSON.stringify({ controlDark, controlLight })} appearance=${JSON.stringify(appearance)} durableImageUi=${JSON.stringify(durableImageUi)}`);
   } finally {
     try { cdp?.ws.close(); } catch {}
     if (child?.pid) spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });

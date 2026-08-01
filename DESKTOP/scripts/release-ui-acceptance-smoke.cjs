@@ -295,7 +295,7 @@ function writeConfig(root, mockPort) {
 }
 
 async function launch(root, port) {
-  const child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
+  const child = spawn(exePath, [`--remote-debugging-port=${port}`, '--allow-multiple-instances', '--no-sandbox', '--root', root], {
     stdio: 'ignore',
     windowsHide: true,
   });

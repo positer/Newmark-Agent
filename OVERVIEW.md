@@ -20,6 +20,8 @@ Guide/Next is now explicitly a user-level preference. `general.default_input` jo
 
 ## dev-0.2.1 Agent image display and TUI viewer (2026-08-01)
 
+The 2026-08-02 follow-up removes the standalone Memory Lab SVG implementation from `main.ts`. A TUI-opened Overview now loads the GUI `index.html` in an isolated viewer mode, removes the application shell before display, and invokes the exact GUI `buildMemoryLabOverviewGraph`, `renderMemoryLabOverview`, and `initMemoryLabOverview` pipeline. Anchor, root tags, components, edges, physics, camera, focus modes, drag, zoom, reset, accessibility attributes, and styling consequently have one owner. The real Electron stress asserts the Anchor and every fixture root/component node while continuing to reject Detail, Editor, Conversations, Settings, and main-shell DOM.
+
 `image_display` is a protected, mode-scoped Agent tool accepting a workspace-contained PNG/JPEG path and optional caption. `core/displayImages.ts` validates real paths, decoded MIME, 10 MiB bounds and workspace containment, then writes a content-addressed asset below `~/.Newmark/conversation-media/display-images`. Work events persist only the reference and hydrate bytes for live/restarted GUI and TUI snapshots; model-visible results never contain base64 image bytes.
 
 When the active deployment has passed vision-input validation, `handleImageDisplayWithDescription` sends the hydrated image through that same provider to generate a short content-grounded title before the public tool result is emitted. The optional caption is a prompt hint and failure/non-vision fallback. Successful descriptions are cached by provider, model, and image SHA-256, bounded to 128 entries; timeouts or provider failures preserve normal image display with the fallback title.

@@ -54,7 +54,10 @@ async function discoverTarget(port, child) {
     if (child.exitCode !== null) fail(`viewer exited before CDP discovery: ${child.exitCode}`);
     try {
       const pages = await getJson(`http://127.0.0.1:${port}/json/list`);
-      const page = pages.find(item => item.webSocketDebuggerUrl && String(item.url || '').startsWith('data:text/html'));
+      const page = pages.find(item => {
+        const url = String(item.url || '');
+        return item.webSocketDebuggerUrl && (url.startsWith('data:text/html') || (url.startsWith('file:') && url.includes('newmarkViewer=memory-overview')));
+      });
       if (page) return page;
     } catch {}
     await sleep(125);
@@ -116,7 +119,9 @@ function memorySnapshot(wave, index) {
 (async () => {
   const repoRoot = path.resolve(__dirname, '..', '..');
   const desktopRoot = path.join(repoRoot, 'DESKTOP');
-  const electron = path.join(desktopRoot, 'node_modules', 'electron', 'dist', 'electron.exe');
+  const packagedExecutable = String(process.env.NEWMARK_VIEWER_EXECUTABLE || '').trim();
+  const electron = packagedExecutable || path.join(desktopRoot, 'node_modules', 'electron', 'dist', 'electron.exe');
+  const applicationArgs = packagedExecutable ? [] : ['.'];
   const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'NewmarkTuiViewerStress-'));
   const requestRoot = path.join(testRoot, 'viewer-requests');
   const archiveRoot = path.join(repoRoot, 'archive');
@@ -141,7 +146,7 @@ function memorySnapshot(wave, index) {
           fs.writeFileSync(requestPath, JSON.stringify(request), { encoding: 'utf8', flag: 'wx' });
           const port = await freeTcpPort();
           const startedAt = performance.now();
-          const child = spawn(electron, ['.', '--newmark-viewer', `--viewer-request=${requestPath}`, `--root=${testRoot}`, `--remote-debugging-port=${port}`, `--user-data-dir=${path.join(testRoot, `profile-${wave}-${type}-${index}`)}`, '--no-sandbox'], { cwd: desktopRoot, stdio: 'ignore', windowsHide: true });
+          const child = spawn(electron, [...applicationArgs, '--newmark-viewer', `--viewer-request=${requestPath}`, `--root=${testRoot}`, `--remote-debugging-port=${port}`, `--user-data-dir=${path.join(testRoot, `profile-${wave}-${type}-${index}`)}`, '--no-sandbox'], { cwd: desktopRoot, stdio: 'ignore', windowsHide: true });
           launches.push({ wave, index, type, title, requestPath, port, child, startedAt, cdp: null });
           activeLaunches.push(launches.at(-1));
         }
@@ -161,8 +166,11 @@ function memorySnapshot(wave, index) {
           title: document.title,
           header: document.querySelector('header')?.textContent || '',
           imageCount: document.querySelectorAll('img').length,
-          svgCount: document.querySelectorAll('svg[aria-label="Memory Lab Overview"]').length,
-          circleCount: document.querySelectorAll('svg circle').length,
+          svgCount: document.querySelectorAll('svg.memory-lab-overview-svg[aria-label="Memory Lab Overview"]').length,
+          overviewNodeCount: document.querySelectorAll('.memory-lab-overview-node').length,
+          anchorCount: document.querySelectorAll('.memory-lab-overview-node.anchor[data-id="anchor"]').length,
+          rootCount: document.querySelectorAll('.memory-lab-overview-node.root').length,
+          componentCount: document.querySelectorAll('.memory-lab-overview-node.addon').length,
           mainCount: document.querySelectorAll('main').length,
           sectionCount: document.querySelectorAll('section').length,
           forbiddenShell: !!document.querySelector('#app,#center-stack,#left-nav,#editor-grid,.memory-detail'),
@@ -171,7 +179,7 @@ function memorySnapshot(wave, index) {
         const isImage = launch.type === 'image';
         const valid = observed.title === launch.title && observed.header === launch.title
           && observed.mainCount === 1 && observed.sectionCount === 1 && !observed.forbiddenShell
-          && (isImage ? observed.imageCount === 1 && observed.svgCount === 0 : observed.imageCount === 0 && observed.svgCount === 1 && observed.circleCount === 36)
+          && (isImage ? observed.imageCount === 1 && observed.svgCount === 0 : observed.imageCount === 0 && observed.svgCount === 1 && observed.overviewNodeCount === 37 && observed.anchorCount === 1 && observed.rootCount === 1 && observed.componentCount === 18)
           && !/Detail|Editor|Conversations|Settings/.test(observed.bodyText.replace(launch.title, ''));
         if (!valid) fail(`viewer isolation mismatch: ${JSON.stringify({ launch: { type: launch.type, title: launch.title }, observed })}`);
         if (fs.existsSync(launch.requestPath)) fail(`one-use viewer request was not consumed: ${launch.requestPath}`);

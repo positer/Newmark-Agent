@@ -4416,6 +4416,35 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   font-size: 11px;
   color: var(--text-dim);
 }
+html.newmark-memory-overview-viewer,
+html.newmark-memory-overview-viewer body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--app-bg);
+}
+.newmark-memory-overview-viewer #memory-overview-viewer-shell {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px;
+}
+.newmark-memory-overview-viewer #memory-overview-viewer-shell > header {
+  min-width: 0;
+  color: var(--text-bright);
+  font: 650 12px var(--font-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.newmark-memory-overview-viewer #memory-overview-viewer-shell > section,
+.newmark-memory-overview-viewer #memory-lab-panel,
+.newmark-memory-overview-viewer .memory-lab-overview {
+  min-height: 0;
+  height: 100%;
+}
 [data-theme="light"] .memory-lab-view-menu,
 [data-theme="light"] .memory-lab-overview-actions,
 [data-theme="light"] .memory-lab-search input,
@@ -16617,7 +16646,7 @@ window.renderMemoryLabOverview = function(_lab, index) {
     '</div>' +
     '<div id="memory-lab-overview-stage" class="memory-lab-overview-stage">' +
       '<div class="memory-lab-overview-grid"></div>' +
-      '<svg id="memory-lab-overview-svg" class="memory-lab-overview-svg"></svg>' +
+      '<svg id="memory-lab-overview-svg" class="memory-lab-overview-svg" role="img" aria-label="Memory Lab Overview"></svg>' +
       '<div id="memory-lab-overview-nodes" class="memory-lab-overview-nodes">';
   for (var i = 0; i < graph.nodes.length; i++) {
     var node = graph.nodes[i];
@@ -18357,6 +18386,36 @@ function schedulePostStartupUiRendering() {
 (async function init() {
   console.log('[UI] init started');
   var startupParams = new URLSearchParams(window.location.search || '');
+  if (startupParams.get('newmarkViewer') === 'memory-overview') {
+    var memoryOverviewViewerTitle = String(startupParams.get('viewerTitle') || 'Memory Lab Overview').slice(0, 160);
+    document.documentElement.classList.add('newmark-memory-overview-viewer');
+    document.title = memoryOverviewViewerTitle;
+    document.body.innerHTML = '<main id="memory-overview-viewer-shell"><header>' + esc(memoryOverviewViewerTitle) + '</header><section><div id="memory-lab-panel" aria-live="polite"></div></section></main>';
+    var renderMemoryOverviewViewer = function(request) {
+      var snapshot = request && request.snapshot && typeof request.snapshot === 'object' ? request.snapshot : { index: { tags: {}, components: {} }, componentContents: {} };
+      if (request && request.language) state.language = normalizeLanguage(request.language);
+      state.memoryLab = snapshot;
+      state.memoryLabView = 'overview';
+      state.memoryLabComponentContents = Object.assign({}, snapshot.componentContents || {});
+      state.memoryLabRelationVersion = String(snapshot.relationVersion || '');
+      state.memoryLabOverviewFocus = '';
+      state.memoryLabOverviewCamera = null;
+      state.memoryLabOverviewManualCamera = false;
+      var index = snapshot.index || { tags: {}, components: {} };
+      state.memoryLabOverviewGraph = window.buildMemoryLabOverviewGraph(index);
+      state.memoryLabOverviewGraphSignature = state.memoryLabRelationVersion || window.memoryLabOverviewGraphSignature(index);
+      var panel = document.getElementById('memory-lab-panel');
+      if (panel) panel.innerHTML = window.renderMemoryLabOverview(snapshot, index);
+      requestAnimationFrame(function() { window.initMemoryLabOverview(); });
+      return { nodes: state.memoryLabOverviewGraph.nodes.length, edges: state.memoryLabOverviewGraph.edges.length };
+    };
+    window.openMemoryLabOverviewViewer = renderMemoryOverviewViewer;
+    window.resetMemoryLabOverview = function() {
+      return Promise.resolve(renderMemoryOverviewViewer({ snapshot: state.memoryLab, language: state.language }));
+    };
+    window.addEventListener('beforeunload', window.stopMemoryLabOverviewPipeline, { once: true });
+    return;
+  }
   var startupAttemptId = Number(startupParams.get('startupAttempt') || 0);
   var startupPrewarmRequired = startupParams.get('startupPrewarm') === '1' && startupAttemptId > 0;
   var startupHydrationError = null;

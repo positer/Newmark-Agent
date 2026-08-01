@@ -324,6 +324,15 @@ async function main() {
   assert(uiHtml.includes('function rerenderActiveSubWindowForLanguage()') && uiHtml.includes("state.activeSubWindowView = { name: 'workspaceRequired' }") && uiHtml.includes("state.activeSubWindowView = { name: 'plugins'"), 'ui html: language switch rerenders active secondary windows');
   assert(uiHtml.includes('window.showMemoryLab = function()') && uiHtml.includes("state.activeSubWindowView = { name: 'memoryLab'") && uiHtml.includes("t('memoryLab.title')"), 'ui html: Memory Lab left toolbar entry and panel renderer exist');
   assert(uiHtml.includes('api.memoryLabRead') && uiHtml.includes('memoryLabReindex') && uiHtml.includes("lucide-sprite.svg#brain"), 'ui html: Memory Lab preload API and icon are wired');
+  assert(mainSource.includes("query: { newmarkViewer: 'memory-overview', viewerTitle: windowTitle }")
+    && mainSource.includes("path.join(__dirname, 'ui', 'index.html')")
+    && !mainSource.includes('function viewerOverviewSvg(')
+    && uiHtml.includes("startupParams.get('newmarkViewer') === 'memory-overview'")
+    && uiHtml.includes('window.openMemoryLabOverviewViewer = renderMemoryOverviewViewer')
+    && uiHtml.includes('state.memoryLabOverviewGraph = window.buildMemoryLabOverviewGraph(index)')
+    && uiHtml.includes('panel.innerHTML = window.renderMemoryLabOverview(snapshot, index)')
+    && uiHtml.includes('window.initMemoryLabOverview();'),
+  'Memory Lab viewer: TUI and GUI use one graph builder, renderer, physics initializer, and index.html runtime instead of a copied SVG');
   assert(uiHtml.includes('window.setInputMode = function(mode, persist)') && uiHtml.includes('api.setInputMode(state.inputMode, currentConversationTarget(activeConversationId()))') && uiHtml.includes('window.setInputMode(s.inputMode, false)') && preloadSource.includes("ipcRenderer.invoke('agent:setInputMode', mode, target)") && configSource.includes("'general.default_input'") , 'ui html: Guide/Next mode persists as a user-level setting, rejects stale workspace overrides, and restores without write-back on state hydration');
   assert(uiHtml.includes('--work-run-right-safe: 34px') && uiHtml.includes('padding: 8px var(--work-run-right-safe) 8px 0') && uiHtml.includes('padding: 4px var(--work-run-right-safe) 8px 0'), 'Build header arrows, activity arrows, and wrapped response text reserve one right-side safety lane away from the user-input timeline');
   assert(uiHtml.includes("return '<details class=\"conversation-work-activity\" data-activity-key=\"' + escAttr(activityDomKey) + '\"><summary>'") && !uiHtml.includes("data-activity-key=\"' + escAttr(activityDomKey) + '\" open><summary>"), 'Build tool activity groups default collapsed while refresh reconciliation preserves explicit user-opened states');

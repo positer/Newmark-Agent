@@ -67,7 +67,7 @@ def main():
 
     try:
         wait_for(r"NEWMARK.*WORKSPACES", "Linux PTY startup")
-        send(b"\x1b[B\r")
+        send(b"\r")
         wait_for(r"Conversations.*Plan.*Goal.*Subagents.*Model", "workspace expansion")
         send(b"\x1b[B\r")
         wait_for(r"Conversations.*Select a conversation", "conversation list")

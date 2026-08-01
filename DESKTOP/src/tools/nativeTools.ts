@@ -30,6 +30,7 @@ export const NATIVE_TOOL_CATALOG: NativeToolCatalogEntry[] = [
   { name: 'browser_use', label: 'Browser Use', description: 'Observe and control the built-in browser through scoped opaque element refs and structured receipts.', category: 'browser', defaultEnabled: true },
   { name: 'computer_use', label: 'Computer Use', description: 'Observe and control Windows desktop UI with screenshots and semantic objects.', category: 'desktop', defaultEnabled: true },
   { name: 'image_inspect', label: 'Image inspect', description: 'Crop and magnify images submitted in the current conversation for closer visual inspection.', category: 'core', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
+  { name: 'image_display', label: 'Image display', description: 'Present a workspace PNG/JPEG inside the current Build Block.', category: 'core', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'ocr_read', label: 'Local OCR fallback', description: 'Approximate Chinese/English OCR after text and validated vision recognition fail.', category: 'core', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'pdf_read', label: 'PDF read', description: 'Read PDF text and render scanned pages through vision before local OCR fallback.', category: 'core', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'terminal_takeover', label: 'Terminal takeover', description: 'Maintain a persistent Agent-controlled shell session.', category: 'desktop', defaultEnabled: true },

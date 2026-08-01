@@ -8,6 +8,7 @@ import {
   persistAttachmentsFromHistoryContent,
   persistSubmittedConversationImages,
 } from './conversationAttachments';
+import { durableDisplayImage, hydrateDisplayImage, persistWorkspaceDisplayImage } from './displayImages';
 import { ConfigManager, ModelConfig, ModelEvaluation, ModelValidationSummary, ProviderProtocol, inferModelVisionCapability, inferProviderProtocol, mergeProviderSecrets } from './config';
 import { LLMProvider } from '../llm/provider';
 import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, tokenizeFuzzyProviderInput } from './fuzzy';
@@ -26,7 +27,7 @@ import type { AgentPromptMessage } from './conversationKernel';
 import {
   AgentMode, InputMode, AgentStatus, StreamToken,
   ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent,
-  ConversationTarget, ConversationWorkRun, ConversationWorkRunStatus, GuideReceipt, ConversationImageAttachment,
+  ConversationTarget, ConversationWorkRun, ConversationWorkRunStatus, GuideReceipt, ConversationImageAttachment, DisplayImageAttachment,
 } from './types';
 import { conversationRuntimeKey } from './conversationTarget';
 import { requestUtilityHostTool } from './utilityHostToolBridge';
@@ -58,7 +59,7 @@ import {
 } from './autoRouter';
 import { performanceTimer } from './performanceDiagnostics';
 
-export { AgentMode, InputMode, AgentStatus, StreamToken, ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent, ConversationTarget, ConversationWorkRun, GuideReceipt, ConversationImageAttachment };
+export { AgentMode, InputMode, AgentStatus, StreamToken, ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent, ConversationTarget, ConversationWorkRun, GuideReceipt, ConversationImageAttachment, DisplayImageAttachment };
 
 export interface ModelValidationResult extends ModelEvaluation {
   name: string;
@@ -287,6 +288,7 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - browser_open/browser_snapshot/browser_click/browser_type/browser_eval/browser_back/browser_forward/browser_reload/browser_cdp: Legacy and expert Chromium controls. Prefer browser_use for normal interactive work; raw eval/CDP remain advanced escape hatches.
 - computer_use: Native desktop Computer Use control for full desktop or app-scoped observe/move/click/scroll/type/key/wait against Windows desktop applications. A successful takeover_start receipt means the persistent control surface started and the Build may continue immediately; do not wait for takeover_stop or closure before taking the next step. Use takeover_stop when control is no longer needed. Use app_list/app_observe/app_activate/app_click/app_scroll/app_type/app_key when the task can be scoped to a visible taskbar application by title, process name, PID, or window handle; this narrows screenshots and actions to that application. Use observe/app_observe first, reason over returned screenshot plus UI Automation objects. If the model supports vision, Newmark sends the screenshot image and UI object tree together in the same tool-result context; use both for stable decisions. Prefer target_id from perception.scene_summary.high_priority_objects or perception.objects for move/click/scroll when available; fall back to exact coordinates only when necessary.
 - image_inspect: For durable user-submitted visual attachments, query source_info by stable attachment_id (or latest-message image_index) and actively crop/magnify a precise pixel region when text or geometry is too small to inspect reliably. Original user images remain revisitable; derived crops are current-turn-only and never saved to disk.
+- image_display: Present one workspace PNG/JPEG to the user. Use it for diagrams or other visual evidence that materially helps explain the current Build; pass a workspace-relative path and optional caption hint. When validated vision is active, Newmark inspects the actual image and generates the displayed descriptive title; otherwise the caption or filename is used as fallback.
 - ocr_read: LAST-RESORT, approximate Simplified-Chinese/English OCR only. Never call it before normal text extraction and validated vision input. When it returns text, use its Agent repair prompt to conservatively correct likely substitutions, spacing, and line breaks from surrounding context; never invent unsupported content.
 - task: Create a subagent for parallel work
 - subagent_list/subagent_read/subagent_send/subagent_result/subagent_close: List, read bounded peer feedback, message, inspect, and close same-conversation peer agents
@@ -395,6 +397,7 @@ export class Agent {
   private goalContinuationGate: (() => boolean) | null = null;
   private memoryLabRebuildState: 'idle' | 'pending' | 'complete' | 'failed' = 'idle';
   private memoryLabRebuildError = '';
+  private displayImageDescriptionCache = new Map<string, Promise<string>>();
   private activeProcessAbortController: AbortController | null = null;
   private automationManager: AutomationManager | null = null;
   private activeAgentKernelRuntime: {
@@ -1372,6 +1375,89 @@ export class Agent {
     return references.length ? references : undefined;
   }
 
+  hydrateDisplayImage(input: unknown): DisplayImageAttachment | undefined {
+    return hydrateDisplayImage(this.rootPath, input);
+  }
+
+  handleImageDisplay(args: string): string {
+    try {
+      const params = JSON.parse(args || '{}') as Record<string, unknown>;
+      const workspacePath = this.workspace.current?.path || this.rootPath;
+      const image = persistWorkspaceDisplayImage(
+        this.rootPath,
+        workspacePath,
+        String(params.path || ''),
+        String(params.caption || ''),
+      );
+      return JSON.stringify({ ok: true, image: durableDisplayImage(image) });
+    } catch (error) {
+      return `[error] image_display: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  async handleImageDisplayWithDescription(args: string, signal?: AbortSignal): Promise<string> {
+    const raw = this.handleImageDisplay(args);
+    if (raw.startsWith('[error]')) return raw;
+    let parsed: Record<string, unknown>;
+    let params: Record<string, unknown> = {};
+    try {
+      parsed = JSON.parse(raw) as Record<string, unknown>;
+      params = JSON.parse(args || '{}') as Record<string, unknown>;
+    } catch {
+      return raw;
+    }
+    const reference = parsed.image as DisplayImageAttachment | undefined;
+    const hydrated = this.hydrateDisplayImage(reference);
+    const model = this.activeModelConfig();
+    const provider = model?.vision ? this.engineModel() : null;
+    if (!provider || !model?.vision || !hydrated?.dataUrl || !hydrated.sha256) return raw;
+    throwIfAgentAborted(signal);
+    const deployment = this.activeDeployment();
+    const cacheKey = `${deployment?.providerId || ''}:${this.activeModelName()}:${hydrated.sha256}`;
+    let descriptionPromise = this.displayImageDescriptionCache.get(cacheKey);
+    if (!descriptionPromise) {
+      const recentUser = [...this.history].reverse().find(message => message?.role === 'user');
+      const recentText = recentUser ? (typeof recentUser.content === 'string' ? recentUser.content : JSON.stringify(recentUser.content || '')) : '';
+      const configuredLanguage = this.config.getStr('general', 'language') || 'auto';
+      const useChinese = configuredLanguage === 'zh' || (configuredLanguage !== 'en' && /[\u3400-\u9fff]/.test(recentText));
+      const captionHint = String(params.caption || '').trim();
+      const instruction = useChinese
+        ? `请观察图片并生成一个准确、具体的中文短标题，描述图片实际内容。只输出标题，不要加“图片”“示意图”“标题”等前缀，不要使用 Markdown，最多60个汉字。${captionHint ? `调用方提示：${captionHint}` : ''}`
+        : `Inspect the image and return one accurate, concrete short title describing its actual visual content. Output only the title, with no "image", "diagram", or "title" prefix, no Markdown, and at most 100 characters.${captionHint ? ` Caller hint: ${captionHint}` : ''}`;
+      descriptionPromise = this.withTimeout(provider.chat(this.activeModelName(), [{ role: 'user', content: [
+        { type: 'text', text: instruction },
+        { type: 'image_url', image_url: { url: hydrated.dataUrl } },
+      ] }], useChinese ? '你是视觉图片标题生成器，只返回忠实、简洁的标题。' : 'You generate faithful concise titles for visual images. Return only the title.', 0, 120, signal), 30000)
+        .then(value => String(value || '')
+          .replace(/^```(?:text)?\s*|\s*```$/gi, '')
+          .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+          .replace(/^(?:图片|图像|示意图|标题|image|diagram|title)\s*[:：-]\s*/i, '')
+          .replace(/[\u0000-\u001f\u007f]/g, '')
+          .replace(/[\r\n]+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 160))
+        .catch(() => {
+          this.displayImageDescriptionCache.delete(cacheKey);
+          return '';
+        });
+      this.displayImageDescriptionCache.set(cacheKey, descriptionPromise);
+      if (this.displayImageDescriptionCache.size > 128) {
+        const oldest = this.displayImageDescriptionCache.keys().next().value;
+        if (oldest) this.displayImageDescriptionCache.delete(oldest);
+      }
+    }
+    const description = await descriptionPromise;
+    throwIfAgentAborted(signal);
+    if (!description) {
+      this.displayImageDescriptionCache.delete(cacheKey);
+      return raw;
+    }
+    parsed.image = { ...reference, caption: description };
+    parsed.caption_source = 'vision';
+    return JSON.stringify(parsed);
+  }
+
   /** Keep media bytes in one content-addressed asset and state.json as refs. */
   private conversationEntryForDisk(entry: StoredConversationEntry): StoredConversationEntry {
     const workRuns = (entry.workRuns || []).map(run => ({
@@ -1382,6 +1468,7 @@ export class Agent {
       })),
       events: (run.events || []).map(event => ({
         ...event,
+        displayImage: durableDisplayImage(event.displayImage),
         guide: event.guide ? {
           ...event.guide,
           attachments: this.durableAttachmentReferences(event.guide.attachments),
@@ -1470,6 +1557,7 @@ export class Agent {
             sequence: Math.max(1, Number(event.sequence || index + 1)),
             status: event.status,
             guide: !isToolEvent && event.guide ? this.normalizeGuideReceipt({ ...event.guide, target, runId }) : undefined,
+            displayImage: isToolEvent ? this.hydrateDisplayImage(event.displayImage) : undefined,
           };
         })
         .sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
@@ -1891,6 +1979,7 @@ export class Agent {
       sequence,
       status: input.status,
       guide: !isToolEvent && input.guide ? this.normalizeGuideReceipt(input.guide) : undefined,
+      displayImage: isToolEvent ? this.hydrateDisplayImage(input.displayImage) : undefined,
     };
     if (activeRun && this.isPersistablePublicWorkEvent(event)) {
       activeRun.sequence = Number(sequence || activeRun.sequence + 1);

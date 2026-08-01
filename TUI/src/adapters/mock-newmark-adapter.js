@@ -138,6 +138,7 @@ function createSnapshot(target) {
     })),
     continuations: [],
     modelSelection: { kind: "auto" },
+    activeModelName: "gpt-5.6",
     inputMode: "guide",
     mode: "build",
     goal: {
@@ -310,6 +311,12 @@ function createMockNewmarkAdapter() {
     memoryLabReindex() {
       memoryLab.loadedAt = new Date().toISOString();
       return { ...clone(memoryLab), rebuildReceipt: { operation: "reindex", completed: true, indexUpdatedAt: memoryLab.index.updatedAt, verifiedAt: memoryLab.loadedAt } };
+    },
+    openImageViewer(image) {
+      return { ok: true, type: "image", id: image?.id || "" };
+    },
+    openMemoryOverview() {
+      return { ok: true, type: "memory-overview" };
     },
     setProviderEnabled(providerId, enabled) {
       const provider = providers.find((item) => item.id === providerId);

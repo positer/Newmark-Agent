@@ -150,7 +150,6 @@ async function exerciseFullTui(wrapperPath) {
     await waitFor(/NEWMARK[\s\S]*WORKSPACES/, 'initial full-screen TUI');
     log('initial full-screen TUI');
 
-    terminal.write('\u001b[B');
     terminal.write('\r');
     await waitFor(/Conversations[\s\S]*Plan[\s\S]*Goal[\s\S]*Subagents[\s\S]*Model/, 'expanded workspace tracking menu');
     log('expanded workspace tracking menu');
@@ -233,6 +232,10 @@ async function runRestartStress(wrapperPath, rounds = 4) {
 }
 
 async function main() {
+  if (process.platform !== 'win32') {
+    process.stdout.write('SSH TUI stress: skipped Windows-only OpenSSH loopback gate on non-Windows host; the Windows release gate runs it before cross-platform packaging\n');
+    return;
+  }
   for (const file of [sshPath, sshdPath, sshKeygenPath, privateKeyPath, publicKeyPath]) {
     assert(fs.existsSync(file), `required SSH asset is missing: ${file}`);
   }

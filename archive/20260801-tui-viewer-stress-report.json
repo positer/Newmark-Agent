@@ -1,0 +1,292 @@
+{
+  "verdict": "PASS",
+  "waves": 5,
+  "perTypePerWave": 3,
+  "totalWindows": 30,
+  "imageWindows": 15,
+  "memoryOverviewWindows": 15,
+  "peakConcurrent": 6,
+  "failures": 0,
+  "startupMs": {
+    "p50": 1943.5,
+    "p95": 2118.7,
+    "max": 2138.7
+  },
+  "allRequestsConsumed": true,
+  "screenshots": {
+    "imageScreenshot": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\archive\\20260801-tui-image-viewer-stress.png",
+    "memoryScreenshot": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\archive\\20260801-tui-memory-overview-viewer-stress.png"
+  },
+  "records": [
+    {
+      "wave": 0,
+      "index": 1,
+      "type": "image",
+      "title": "TUI 图片弹窗 02",
+      "startupMs": 1843,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 0,
+      "index": 2,
+      "type": "image",
+      "title": "TUI 图片弹窗 03",
+      "startupMs": 1943.5,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 0,
+      "index": 1,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 02",
+      "startupMs": 1970.7,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 0,
+      "index": 2,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 03",
+      "startupMs": 1946.6,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 0,
+      "index": 0,
+      "type": "image",
+      "title": "TUI 图片弹窗 01",
+      "startupMs": 2118.2,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 0,
+      "index": 0,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 01",
+      "startupMs": 2138.7,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 1,
+      "index": 0,
+      "type": "image",
+      "title": "TUI 图片弹窗 04",
+      "startupMs": 1817.9,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 1,
+      "index": 2,
+      "type": "image",
+      "title": "TUI 图片弹窗 06",
+      "startupMs": 1896.4,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 1,
+      "index": 1,
+      "type": "image",
+      "title": "TUI 图片弹窗 05",
+      "startupMs": 1934.6,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 1,
+      "index": 0,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 04",
+      "startupMs": 1943.3,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 1,
+      "index": 1,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 05",
+      "startupMs": 1950.9,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 1,
+      "index": 2,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 06",
+      "startupMs": 1965.1,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 2,
+      "index": 0,
+      "type": "image",
+      "title": "TUI 图片弹窗 07",
+      "startupMs": 1870.3,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 2,
+      "index": 2,
+      "type": "image",
+      "title": "TUI 图片弹窗 09",
+      "startupMs": 1902.9,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 2,
+      "index": 1,
+      "type": "image",
+      "title": "TUI 图片弹窗 08",
+      "startupMs": 1951,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 2,
+      "index": 0,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 07",
+      "startupMs": 1935.1,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 2,
+      "index": 1,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 08",
+      "startupMs": 1938.1,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 2,
+      "index": 2,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 09",
+      "startupMs": 1918.5,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 3,
+      "index": 0,
+      "type": "image",
+      "title": "TUI 图片弹窗 10",
+      "startupMs": 1768.3,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 3,
+      "index": 1,
+      "type": "image",
+      "title": "TUI 图片弹窗 11",
+      "startupMs": 1796.8,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 3,
+      "index": 2,
+      "type": "image",
+      "title": "TUI 图片弹窗 12",
+      "startupMs": 2026.6,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 3,
+      "index": 0,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 10",
+      "startupMs": 1971.1,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 3,
+      "index": 2,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 12",
+      "startupMs": 1923.2,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 3,
+      "index": 1,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 11",
+      "startupMs": 1953.3,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 4,
+      "index": 0,
+      "type": "image",
+      "title": "TUI 图片弹窗 13",
+      "startupMs": 1793.7,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 4,
+      "index": 1,
+      "type": "image",
+      "title": "TUI 图片弹窗 14",
+      "startupMs": 1884.3,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 4,
+      "index": 2,
+      "type": "image",
+      "title": "TUI 图片弹窗 15",
+      "startupMs": 2032.4,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 4,
+      "index": 1,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 14",
+      "startupMs": 2070.3,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 4,
+      "index": 0,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 13",
+      "startupMs": 2118.7,
+      "valid": true,
+      "requestConsumed": true
+    },
+    {
+      "wave": 4,
+      "index": 2,
+      "type": "memory-overview",
+      "title": "Memory Lab Overview 15",
+      "startupMs": 2071.8,
+      "valid": true,
+      "requestConsumed": true
+    }
+  ]
+}

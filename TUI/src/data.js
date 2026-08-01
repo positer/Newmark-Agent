@@ -1,7 +1,6 @@
 "use strict";
 
 const navigation = [
-  { id: "home", icon: "[O]", label: "Overview", section: "root" },
   { id: "chat", icon: "[C]", label: "Conversations", section: "workspace" },
   { id: "plan", icon: "[P]", label: "Plan", section: "workspace" },
   { id: "goal", icon: "[G]", label: "Goal", section: "workspace" },
@@ -280,15 +279,14 @@ const automations = [
 ];
 
 const commands = [
-  { label: "Go to Overview", hint: "1", action: "view:home" },
-  { label: "Open Conversations", hint: "2", action: "view:chat" },
-  { label: "Open Plans & goals", hint: "3", action: "view:plan" },
-  { label: "Open Subagents", hint: "4", action: "view:agents" },
-  { label: "Open Tools", hint: "5", action: "view:tools" },
-  { label: "Open Memory Lab", hint: "6", action: "view:memory" },
-  { label: "Open Automations", hint: "7", action: "view:automation" },
+  { label: "Open Conversations", hint: "", action: "view:chat" },
+  { label: "Open Plans & goals", hint: "", action: "view:plan" },
+  { label: "Open Subagents", hint: "", action: "view:agents" },
+  { label: "Open Tools", hint: "", action: "view:tools" },
+  { label: "Open Memory Lab", hint: "", action: "view:memory" },
+  { label: "Open Automations", hint: "", action: "view:automation" },
   { label: "Open WorkFlow", hint: "", action: "view:workflow" },
-  { label: "Open Settings", hint: "8", action: "view:settings" },
+  { label: "Open Settings", hint: "", action: "view:settings" },
   { label: "New conversation", hint: "N", action: "new-chat" },
   { label: "Toggle theme", hint: "T", action: "theme" },
   { label: "Keyboard shortcuts", hint: "?", action: "help" }

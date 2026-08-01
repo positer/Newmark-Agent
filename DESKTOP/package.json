@@ -1,7 +1,7 @@
 {
   "name": "newmark-agent",
   "productName": "Newmark Agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "homepage": "https://github.com/positer/Newmark-Agent",
   "author": {
@@ -12,6 +12,14 @@
   "bin": {
     "newmark": "dist/launcher.js"
   },
+  "files": [
+    "dist/**/*",
+    "!dist/tests/**/*",
+    "!dist/**/*.map",
+    "assets/**/*",
+    "Flow/**/*",
+    "config.example.json"
+  ],
   "scripts": {
     "clean": "tsc --build --clean && node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsc && node scripts/build-windows-process-tree-helper.cjs && node scripts/build-typebox-compile.cjs && node scripts/build-ui-icons.cjs && node scripts/build-wsl-agent-host.cjs && node scripts/build-conversation-utility-host.cjs && node scripts/build-tui.cjs",
@@ -35,7 +43,7 @@
     "test": "npm run test:full-release",
     "test:full-release": "npm run build && npm run test:desktop:built && npm run test:tui:built && npm run test:ssh-tui-stress:built && npm run test:wsl-tui-stress:built && npm run test:cli:built && npm run test:gui-tui-cli-stress:built",
     "test:desktop": "npm run build && npm run test:desktop:built",
-    "test:desktop:built": "node dist/tests/verify.js && node dist/tests/localOcrFallbackVerify.js && node dist/tests/dev018ModeSubagentStressVerify.js && node dist/tests/conversationBranchStressVerify.js && node dist/tests/conversationArchiveConcurrencyVerify.js && node dist/tests/memoryPolicyVerify.js && node dist/tests/newmarkSelectVerify.js && node dist/tests/mcpManagerVerify.js && node dist/tests/performanceOptimizationVerify.js && node dist/tests/compressionFidelityVerify.js && node dist/tests/responseTrajectoryVerify.js && node dist/tests/normalChatRegressionVerify.js && node dist/tests/dev008-subagent.js && node dist/tests/dev009Verify.js && node dist/tests/runtimeIsolationVerify.js && node dist/tests/runtimePoolCapacityVerify.js && node dist/tests/guideWorkRunVerify.js && node dist/tests/guideUiReconcileVerify.js && node dist/tests/queueAttachmentIsolationVerify.js && node dist/tests/workspaceMenuVerify.js && node dist/tests/userImagePersistenceVerify.js && node dist/tests/visualPreferencesVerify.js && node dist/tests/browserUseVerify.js && node dist/tests/toolProcessVerify.js && node dist/tests/toolProvisioningVerify.js && node dist/tests/startupPrewarmVerify.js && node dist/tests/pdfPreviewServerVerify.js && node dist/tests/editorLifecycleVerify.js && node dist/tests/terminalTakeoverVerify.js && node dist/tests/workspaceFileRouterVerify.js && node dist/tests/computerUsePerformanceVerify.js && node dist/tests/autoRouterVerify.js && node dist/tests/autoAgentIntegrationVerify.js && node dist/tests/autoRouteRatingVerify.js && node dist/tests/providerIdentityVerify.js && node dist/tests/modelValidationVerify.js && node dist/tests/modelValidationAgentIntegrationVerify.js",
+    "test:desktop:built": "node dist/tests/verify.js && node dist/tests/localOcrFallbackVerify.js && node dist/tests/dev018ModeSubagentStressVerify.js && node dist/tests/conversationBranchStressVerify.js && node dist/tests/conversationArchiveConcurrencyVerify.js && node dist/tests/memoryPolicyVerify.js && node dist/tests/newmarkSelectVerify.js && node dist/tests/mcpManagerVerify.js && node dist/tests/performanceOptimizationVerify.js && node dist/tests/compressionFidelityVerify.js && node dist/tests/responseTrajectoryVerify.js && node dist/tests/normalChatRegressionVerify.js && node dist/tests/dev008-subagent.js && node dist/tests/dev009Verify.js && node dist/tests/runtimeIsolationVerify.js && node dist/tests/runtimePoolCapacityVerify.js && node dist/tests/guideWorkRunVerify.js && node dist/tests/guideUiReconcileVerify.js && node dist/tests/queueAttachmentIsolationVerify.js && node dist/tests/workspaceMenuVerify.js && node dist/tests/userImagePersistenceVerify.js && node dist/tests/displayImageVerify.js && node dist/tests/visualPreferencesVerify.js && node dist/tests/browserUseVerify.js && node dist/tests/toolProcessVerify.js && node dist/tests/toolProvisioningVerify.js && node dist/tests/startupPrewarmVerify.js && node dist/tests/pdfPreviewServerVerify.js && node dist/tests/editorLifecycleVerify.js && node dist/tests/terminalTakeoverVerify.js && node dist/tests/workspaceFileRouterVerify.js && node dist/tests/computerUsePerformanceVerify.js && node dist/tests/autoRouterVerify.js && node dist/tests/autoAgentIntegrationVerify.js && node dist/tests/autoRouteRatingVerify.js && node dist/tests/providerIdentityVerify.js && node dist/tests/modelValidationVerify.js && node dist/tests/modelValidationAgentIntegrationVerify.js",
     "test:conversation-branch-stress": "npm run build && node dist/tests/conversationBranchStressVerify.js",
     "test:conversation-archive-concurrency": "npm run build && node dist/tests/conversationArchiveConcurrencyVerify.js",
     "test:memory-policy": "npm run build && node dist/tests/memoryPolicyVerify.js",
@@ -89,6 +97,9 @@
     "release:ui-native-editor-smoke": "node scripts/release-ui-native-editor-smoke.cjs",
     "release:ui-runtime-layout-smoke": "node scripts/release-ui-runtime-layout-smoke.cjs",
     "release:ui-work-review-bars-smoke": "node scripts/release-ui-work-review-bars-smoke.cjs",
+    "release:ui-image-display-stress": "node scripts/release-ui-image-display-stress.cjs",
+    "release:image-insertion-position-stress": "node scripts/release-image-insertion-position-stress.cjs",
+    "release:tui-viewer-stress": "node scripts/release-tui-viewer-stress.cjs",
     "release:real-editor-copilot-smoke": "node scripts/release-real-editor-copilot-smoke.cjs",
     "release:ui-skills-smoke": "node scripts/release-ui-skills-smoke.cjs",
     "release:ui-memory-lab-smoke": "node scripts/release-ui-memory-lab-smoke.cjs",
@@ -257,6 +268,9 @@
     "esbuild": "^0.28.1",
     "oxlint": "^0.9.0",
     "typescript": "^5.6.0"
+  },
+  "optionalDependencies": {
+    "electron": "^43.1.1"
   },
   "overrides": {
     "fast-uri": "3.1.4"

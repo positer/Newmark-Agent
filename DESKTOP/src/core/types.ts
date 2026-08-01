@@ -62,6 +62,23 @@ export interface ConversationImageAttachment {
   dataUrl?: string;
 }
 
+/** A workspace image explicitly presented by the Agent inside a Build Block. */
+export interface DisplayImageAttachment {
+  id: string;
+  origin: 'agent';
+  name: string;
+  caption: string;
+  mimeType: 'image/png' | 'image/jpeg';
+  byteLength: number;
+  width: number;
+  height: number;
+  sha256: string;
+  assetPath: string;
+  createdAt: string;
+  /** Hydrated from the validated content-addressed runtime asset only. */
+  dataUrl?: string;
+}
+
 export interface ChatMessage {
   messageId?: string;
   guideId?: string;
@@ -98,6 +115,7 @@ export interface AgentWorkEvent {
   sequence?: number;
   status?: GuideReceiptStatus | ConversationWorkRunStatus | 'stopping' | 'force_restarting';
   guide?: GuideReceipt;
+  displayImage?: DisplayImageAttachment;
 }
 
 export interface ConversationWorkRun {

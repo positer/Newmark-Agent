@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.2.0-blue">
+  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.2.1-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -19,11 +19,11 @@ Newmark Agent brings model routing, persistent workspaces, tools, subagents, wor
 
 > Newmark Agent is under active development. Current packages are unsigned prerelease builds.
 
-The `dev-0.2.0` source adds the terminal interface launched with `Newmark --TUI`. It uses the invoking folder as the Workspace, shares Newmark's normal `~/.Newmark` configuration and Conversation store, and retains per-Conversation Plan, Goal, Subagents, Model, and Flow tracking. The TUI supports background Conversation runs, target-bound two-stage stopping, conditional workspace children, Conversation pinning, complete light/dark palettes, Memory Lab Detail, provider/model settings, a persisted Guide/Next default-Enter picker, flat Operations with Automation creation and WorkFlow management, cursor-following long-menu/history scrolling, and a direct Help operation.
+The `dev-0.2.1` source refines the terminal interface launched with `Newmark --TUI`. It opens directly on the active Conversation instead of a synthetic Overview, shows the resolved current model beside the Conversation title, adds live `/` tag search to Memory Lab, removes non-functional labels and detail placeholders, and coalesces render requests while suppressing identical terminal frames. It continues to share Newmark's normal `~/.Newmark` configuration and Conversation store with the GUI and CLI.
 
-The release gate covers DESKTOP, native TUI, CLI, GUI/TUI/CLI shared-backend stress, a real local OpenSSH PTY session, and a WSL 2 Ubuntu 24.04 Linux PTY session.
+The same source now adds the Agent-callable `image_display` tool for workspace PNG/JPEG evidence. Displayed images are stored once as content-addressed runtime assets: the GUI embeds each image directly after its tool call and keeps the ordered image gallery visible at the beginning of a collapsed Build Block, while the TUI renders an interactive `[示意图]` row at the corresponding position. A validated vision model generates its description from the actual image content, with caption/filename fallback when vision is unavailable. Unfocused rows show only `[示意图]`; the description and `Enter 打开` hint appear only while that row owns the cursor. Enter opens a dedicated lightweight viewer. Memory Lab exposes a real `Overview · 示意图` row through that viewer contract; its window contains only the overview graph, not the main application shell or unrelated components.
 
-The locally validated dev-0.2.0 MSI installs a console `Newmark.exe` and registers it in the user PATH, so `Newmark --TUI` can start from any folder while the desktop GUI continues to use `Newmark Agent.exe`.
+The release gate covers DESKTOP, native TUI, CLI, GUI/TUI/CLI shared-backend stress, a real local OpenSSH PTY session, and a WSL 2 Ubuntu 24.04 Linux PTY session. The global/npm launcher accepts `Newmark --GUI` for the desktop surface and `Newmark --TUI` for the terminal surface.
 
 ## Highlights
 
@@ -36,7 +36,19 @@ The locally validated dev-0.2.0 MSI installs a console `Newmark.exe` and registe
 
 ## Download
 
-The latest prerelease is `dev-0.2.0`, including the shared-backend TUI and the global `Newmark --TUI` launcher.
+The latest prerelease is `dev-0.2.1`, including the image display/viewer pipeline, Memory Lab tag search, the optimized shared-backend TUI, and global `Newmark --GUI` / `Newmark --TUI` launchers.
+
+### dev-0.2.1
+
+Download packages from the [dev-0.2.1 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.2.1).
+
+| Package | Platform | SHA-256 |
+| --- | --- | --- |
+| `Newmark-Agent-0.2.1-x64.msi` | Windows x64 installer with GUI and global GUI/TUI launcher | `81E2D197BD4F9740F9988CB2622C8C941EEC2FDE76B5A4AAA81BE9ADB3A25124` |
+| `Newmark-Agent-0.2.1-win-unpacked-x64.zip` | Windows x64 portable | `83C865662775965770320396313C1913EC8874EF8D2B3D470EE53CC1C6DE4E61` |
+| `Newmark-Agent-0.2.1-x86_64.AppImage` | Linux x64 AppImage | `EEAD25142AB7A2002D826FDD7354195D21C7A02C97D3D0226CEDDB50B5268F3E` |
+| `Newmark-Agent-0.2.1-amd64.deb` | Debian/Ubuntu x64 package | `819EB0DFEAB2D508F2AAFC8802BD40292D37805F2B078DDE757B57F7062AFB69` |
+| `Newmark-Agent-0.2.1-linux-unpacked-x64.zip` | Linux x64 portable | `4383B3ABC8631D9EEE0B1DB95B9C809E3E517E954C740C4F90C01E4D40F6571A` |
 
 ### dev-0.2.0
 
@@ -71,7 +83,15 @@ The Windows MSI requests administrator elevation. Windows and Linux may show an 
 
 Application upgrades preserve existing user state under `~/.Newmark`.
 
-The validated `dev-0.2.0` TUI build is installed machine-wide under `C:\Program Files\Newmark Agent`; both the GUI and repository-external global `Newmark.exe --TUI` launcher were smoke-tested there. The installed package includes the GUI-aligned Build timeline and persisted Guide/Next default-Enter picker. Mutable state remains under `~/.Newmark`, and its configuration is byte-identical to the pre-update baseline. The preceding `dev-0.1.12` Memory Lab optimization remains included: it loads one complete visualization snapshot only when the visualization window opens, Reset is requested, or reindex finishes. Component clicks, Detail navigation, tag search, dragging, and zooming reuse that in-memory snapshot without issuing another relationship or component read. A bounded content/index cache removes repeated disk scans from sustained queries, while explicit reads and visualization refreshes still force one current disk read.
+The command package can also be installed from npm. `Newmark --GUI` starts the native desktop surface (using an installed desktop package when available, with the npm Electron runtime as fallback), while `Newmark --TUI` starts the terminal surface:
+
+```powershell
+npm.cmd install --global newmark-agent@0.2.1
+Newmark --GUI
+Newmark --TUI
+```
+
+The validated `dev-0.2.1` build is installed machine-wide under `C:\Program Files\Newmark Agent`; both repository-external global `Newmark.exe --GUI` and `Newmark.exe --TUI` launchers were smoke-tested there. Mutable state remains under `~/.Newmark`, and `config.json`, `agent.md`, and `PC_Hash.config` remained byte-identical across the MSI upgrade. The preceding `dev-0.1.12` Memory Lab optimization remains included: it loads one complete visualization snapshot only when the visualization window opens, Reset is requested, or reindex finishes. Component clicks, tag search, dragging, and zooming reuse that in-memory snapshot without issuing another relationship or component read. A bounded content/index cache removes repeated disk scans from sustained queries, while explicit reads and visualization refreshes still force one current disk read.
 
 Conversation creation and archiving update the list immediately without waiting for runtime startup, a quiet window, or the slowest archive request. Each archive request settles independently, failed rows roll back independently, and runtime shutdown for different conversations proceeds outside the pool-wide capacity lock. Archive deletion is keyed only by conversation ID, so distinct empty conversations are never collapsed merely because their content matches.
 
@@ -216,6 +236,13 @@ See [OVERVIEW.md](OVERVIEW.md) for the source tree, subsystem responsibilities, 
 
 ### Maintenance Log
 
+- 2026-08-01: Added a real standalone-viewer stress gate for TUI image and Memory Lab Overview popups. Five waves launched 30 isolated Electron viewers with peak concurrency six: 15 image windows and 15 graph-only Memory Lab windows. Every one-use request was consumed, titles/content stayed isolated, no main GUI/Detail/editor component leaked into viewer DOM, all processes were cleaned up, and final startup P95 was 2.12 s. See `archive/20260801-tui-viewer-stress.md`.
+- 2026-08-01: Refined TUI image rows with focus-only progressive disclosure: ordinary rows show only `[示意图]`, while the cursor-owned row reserves terminal width and extends with the content description plus `Enter 打开`. Validated vision deployments generate that description from the actual hydrated image before publishing the tool result, with provider/model/SHA-256 caching and caption/filename fallback. Build, display-image verification, TUI 52/52, main 1365/1365, and the 24-image insertion-position stress pass. See `archive/20260801-tui-image-focus-action-hint.md`.
+- 2026-08-01: Added a focused GUI/TUI `image_display` insertion-position stress gate. It interleaves 24 images with 24 Bash calls and progress boundaries, verifies every expanded GUI image stays on its own `image_display` row immediately after the paired Bash row, verifies the collapsed gallery is immediately after the Build surface, repeats 20 expand/collapse cycles, and checks exact image order and uniqueness. The TUI gate proves `TOOL image_display → 示意图 → RESULT image_display → progress` ordering, collapsed Build-header-first gallery placement, and exact terminal geometry at 80×24 through 160×50. See `archive/20260801-image-insertion-position-stress.md`.
+- 2026-08-01: Added a repeatable 120-image real-Electron return/display stress gate and removed the large Build Block base64 `innerHTML` amplification found by its first run. Agent-displayed image sources are now hydrated onto DOM image nodes after structural rendering, while large runs coalesce consecutive tool updates per animation frame. The final 120-image / 240-update run rendered 120 unique images in exact `001..120` order in both expanded and collapsed surfaces; end-to-end renderer time was 11.43 s with 3.10 ms P95 update time. Three screenshots and the machine-readable report are recorded in `archive/20260801-image-display-stress.md`.
+- 2026-08-01: Advanced the source version to `dev-0.2.1` and refined the native TUI after reviewing current Claude Code, Codex CLI, and OpenCode terminal patterns. The TUI now opens directly on Conversations, removes the synthetic Overview/ROOT and non-functional detail labels, shows the current resolved model beside the Conversation title, and provides live `/` Memory Lab tag filtering with Enter follow and Esc clear. Render requests are event-loop coalesced, identical frames are not written twice, and animation cadence is capped at 4 FPS. TUI verification passes 51/51; the final unified DESKTOP, TUI, SSH, WSL, CLI, and GUI/TUI/CLI shared-backend gate exits 0. See `archive/20260801-dev-0.2.1-tui-search-rendering.md`.
+- 2026-08-01: Added the durable `image_display` Agent tool, GUI inline/collapsed Build image presentation, interactive TUI `示意图` rows, and a dedicated image/Memory Lab Overview viewer window. The viewer mode loads no main GUI components; Memory Lab Overview opens as a graph-only surface. Focused persistence/tool/UI verification, TUI 52/52, launcher 19/19, and the unified DESKTOP/SSH/WSL/CLI/shared-backend gates pass. See `archive/20260801-dev-0.2.1-image-display-viewer.md`.
+- 2026-08-01: Packaged and installed `dev-0.2.1` for Windows and built all three Linux formats. The TUI image viewer uses the image title as its native window title; `Newmark --GUI` is available from the installed and npm launchers. A 30-window viewer stress (15 image + 15 Memory Lab overview) had zero failures, and all Windows/Linux asset smokes passed. See `archive/20260801-dev-0.2.1-release.md`.
 - 2026-07-29: Extended the post-release TUI source with a flat `WorkFlow` Operation whose content area lists, expands, and creates FlowEngine workflows, plus a real Automation creation form bound to the active Workspace/Conversation. Long side menus now scroll with their cursor. Conversation history receives the terminal-height remainder while a two-row input viewport stays reserved. Input-top Up enters a Build Block cursor; continued Up scrolls older history only after crossing the visible top, while newer-history scrolling remains input-bottom Down. The Conversation timeline now matches the GUI's run ownership: primary input, collapsible Build Block with persistent duration/fold state, deduplicated Guides, and the owning always-visible final summary remain one strictly ordered `runId` group. Settings / General now opens a real Guide/Next list for the default Enter behavior and persists it through the shared input-mode backend. TUI verification passes 48/48.
 - 2026-07-29: Released `dev-0.2.0` with the real terminal UI entry `Newmark --TUI`. The MSI installs a console-subsystem launcher on the user PATH; it preserves the caller cwd, registers or restores it through the existing WorkspaceManager, and shares `~/.Newmark` persistence with GUI/CLI. TUI message wrapping uses terminal display width for CJK/full-width/emoji text and complete light/dark canvases. TUI tests pass 38/38, launcher checks pass 17/17, the full DESKTOP suite passes 1365/1365 plus specialized gates, and shared-backend stress passes five consecutive runs. Real loopback SSH and Ubuntu 24.04 WSL 2 PTY regressions cover the complete interaction flow. See `archive/20260729-tui-cjk-partition-global-launcher.md` and `archive/20260729-dev-0.2.0-tui-shared-backend.md`.
 - 2026-07-28: Released `dev-0.1.12`. Memory Lab now performs one visualization retrieval only on open, Reset, or successful reindex; click/drag/zoom/Detail interactions reuse the loaded relationship/content snapshot. Index and component caches cut the accepted 300-component × 600-query P95 to `10.857 ms` (maximum `14.827 ms`), while a complete 300-component visualization refresh took `426.6 ms`. The same disposable-root gate created and archived 120 conversations at zero interval with no loss and P95 interaction latency of `11.8/13.5 ms`. The retained-DOM, non-overlapping frame pipeline and all Windows/Linux release assets passed packaged smoke. See `archive/20260728-dev-0.1.12-memory-lab-snapshot-release.md`.

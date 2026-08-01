@@ -1,0 +1,45 @@
+{
+  "imageCount": 120,
+  "runId": "image-display-stress-1785559099824",
+  "elapsedMs": 11425.9,
+  "updates": 240,
+  "meanUpdateMs": 2.16,
+  "p95UpdateMs": 3.1,
+  "maxUpdateMs": 46.3,
+  "renderedFrames": 19,
+  "longTaskCount": 17,
+  "maxLongTaskMs": 1022,
+  "encodedBytes": 14608923,
+  "meanEncodedBytes": 121741,
+  "heapBefore": 10000000,
+  "heapAfter": 10000000,
+  "heapDelta": 0,
+  "domNodeCount": 2198,
+  "collapsedImageCount": 120,
+  "uniqueImageCount": 120,
+  "collapsedOrderMatches": true,
+  "startedAt": "2026-08-01T04:38:19.824Z",
+  "finishedAt": "2026-08-01T04:38:31.254Z",
+  "expandedState": {
+    "count": 120,
+    "first": "stress-image-001",
+    "last": "stress-image-120",
+    "detailsOpen": true
+  },
+  "screenshots": {
+    "expanded": {
+      "path": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\archive\\20260801-image-display-stress-expanded.png",
+      "bytes": 295672
+    },
+    "collapsed": {
+      "path": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\archive\\20260801-image-display-stress-collapsed.png",
+      "bytes": 309695
+    },
+    "overview": {
+      "path": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\archive\\20260801-image-display-stress-overview.png",
+      "bytes": 95340,
+      "zoom": 0.34
+    }
+  },
+  "verdict": "PASS"
+}

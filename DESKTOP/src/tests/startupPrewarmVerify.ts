@@ -476,7 +476,10 @@ function verifyDesktopContracts(): void {
   const cdpScripts = fs.readdirSync(scriptsDir)
     .filter(name => name.endsWith('.cjs'))
     .map(name => ({ name, text: fs.readFileSync(path.join(scriptsDir, name), 'utf8') }))
-    .filter(entry => entry.text.includes('/json/list'));
+    .filter(entry => entry.text.includes('/json/list'))
+    // The standalone viewer deliberately loads a sandboxed data: document and
+    // must never hydrate or wait for the main index.html application shell.
+    .filter(entry => !entry.text.includes("'--newmark-viewer'"));
   ok(cdpScripts.length >= 38, 'startup contract audits every current CDP release script');
   const unsafeCdpTargets = cdpScripts.filter(entry => !entry.text.includes('index.html')
     || /\|\|\s*(?:targets|list|pages|lastTargets)\.find/.test(entry.text)

@@ -106,7 +106,7 @@ function createState(options = {}) {
     workspaces,
     target,
     snapshot,
-    view: "home",
+    view: "chat",
     selected: 0,
     sidebar: 0,
     focusRegion: "menu",
@@ -147,6 +147,7 @@ function createState(options = {}) {
     conversationMaxScroll: 0,
     conversationHistoryFocus: false,
     historySelectedIndex: -1,
+    historySelectedImageIndex: -1,
     historyVisibleRunIds: [],
     historyCursorDirection: 0,
     expandedBuildRuns: new Set(
@@ -162,6 +163,8 @@ function createState(options = {}) {
     tick: 0,
     messages: snapshot.chatMessages.map((item) => ({ ...item })),
     memoryLab,
+    memorySearchActive: false,
+    memorySearchQuery: "",
     memorySelectedTag: Object.keys(memoryLab.index.tags || {}).sort().find(
       (tag) => (memoryLab.index.tags[tag].components || []).length > 0
     ) || Object.keys(memoryLab.index.tags || {}).sort()[0] || "",
@@ -302,7 +305,6 @@ function moveFocusHorizontal(state, direction) {
 
 function rootMenuItems(state) {
   return [
-    { type: "view", id: "home", label: "Overview" },
     ...state.workspaces.map((workspace) => ({ type: "workspace", id: workspace.id, label: workspace.name })),
     ...data.navigation
       .filter((item) => item.section === "operations")
@@ -696,6 +698,7 @@ function moveInputCursorVertical(state, direction) {
     if (runs.length) {
       state.conversationHistoryFocus = true;
       state.historySelectedIndex = runs.length - 1;
+      state.historySelectedImageIndex = -1;
       state.historyCursorDirection = -1;
       state.notice = `History focus · Build Block ${runs.length} · Enter expands`;
       return "history-focus";
@@ -709,10 +712,23 @@ function moveConversationHistoryCursor(state, direction) {
   const runs = [...(state.snapshot.workRuns || [])].sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
   if (!state.conversationHistoryFocus || !runs.length) return "input";
   const current = Math.max(0, Math.min(runs.length - 1, Number(state.historySelectedIndex) || 0));
+  const images = displayImagesForRun(runs[current]);
+  const imageIndex = Number.isInteger(state.historySelectedImageIndex) ? state.historySelectedImageIndex : -1;
   if (direction < 0) {
+    if (imageIndex >= 0) {
+      state.historySelectedImageIndex = imageIndex - 1;
+      state.notice = state.historySelectedImageIndex >= 0 ? `History focus · 示意图 ${state.historySelectedImageIndex + 1} · Enter opens` : `History focus · Build Block ${current + 1} · Enter expands`;
+      return "history";
+    }
     state.historySelectedIndex = Math.max(0, current - 1);
+    state.historySelectedImageIndex = current > 0 ? displayImagesForRun(runs[current - 1]).length - 1 : -1;
     state.historyCursorDirection = -1;
     state.notice = `History focus · Build Block ${state.historySelectedIndex + 1} · Enter expands`;
+    return "history";
+  }
+  if (imageIndex < images.length - 1) {
+    state.historySelectedImageIndex = imageIndex + 1;
+    state.notice = `History focus · 示意图 ${state.historySelectedImageIndex + 1} · Enter opens`;
     return "history";
   }
   if (current < runs.length - 1) {
@@ -720,12 +736,14 @@ function moveConversationHistoryCursor(state, direction) {
     const nextRunId = runs[next]?.runId;
     if (state.historyVisibleRunIds.includes(nextRunId)) {
       state.historySelectedIndex = next;
+      state.historySelectedImageIndex = -1;
       state.historyCursorDirection = 1;
       state.notice = `History focus · Build Block ${next + 1} · Enter expands`;
       return "history";
     }
   }
   state.conversationHistoryFocus = false;
+  state.historySelectedImageIndex = -1;
   state.historyCursorDirection = 0;
   state.inputCursor = [...state.input].length;
   state.notice = "Input focus · Down at the final input row scrolls toward newer history";
@@ -737,6 +755,11 @@ function toggleSelectedBuildBlock(state) {
   const runs = [...(state.snapshot.workRuns || [])].sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
   const run = runs[state.historySelectedIndex];
   if (!run) return false;
+  const selectedImage = displayImagesForRun(run)[state.historySelectedImageIndex];
+  if (selectedImage) {
+    state.notice = `Opening 示意图 · ${selectedImage.caption || selectedImage.name || ''}`;
+    return state.adapter.openImageViewer(selectedImage);
+  }
   const prior = state.expandedBuildRuns.has(run.runId);
   const expanded = !prior;
   if (expanded) state.expandedBuildRuns.add(run.runId);
@@ -1119,14 +1142,43 @@ function selectedMemoryDetail(state) {
   };
 }
 
+function memoryTagOptions(state) {
+  const tags = Object.keys(state.memoryLab?.index?.tags || {}).sort();
+  const query = String(state.memorySearchQuery || "").trim().toLocaleLowerCase();
+  return query ? tags.filter((tag) => tag.toLocaleLowerCase().includes(query)) : tags;
+}
+
+function setMemorySearchQuery(state, query) {
+  state.memorySearchQuery = String(query || "");
+  const [first] = memoryTagOptions(state);
+  state.memoryColumnIndices[0] = first ? 1 : 0;
+  if (first) {
+    state.memorySelectedTag = first;
+    state.memoryColumnIndices[1] = 0;
+    state.memoryColumnIndices[2] = 0;
+    state.memoryColumnIndices[3] = 0;
+    state.memoryComponentIndex = 0;
+  }
+  return first || "";
+}
+
 function memoryColumnItems(state, column) {
   const detail = selectedMemoryDetail(state);
-  const tags = Object.keys(state.memoryLab?.index?.tags || {}).sort();
-  const roots = tags.filter((tag) => !(state.memoryLab.index.tags[tag].parents || []).length);
-  if (column === 0) return detail.node.parents.length ? [...detail.node.parents].sort() : roots;
+  if (column === 0) return ["__overview__", ...memoryTagOptions(state)];
   if (column === 1) return detail.tag ? [detail.tag] : [];
   if (column === 2) return [...detail.node.children].sort();
   return detail.componentSlugs;
+}
+
+function activeConversationModelLabel(state) {
+  const selection = state.snapshot?.modelSelection || { kind: "auto" };
+  if (selection.kind === "deployment") {
+    const provider = state.providers.find((item) => item.id === selection.providerId);
+    const model = provider?.models?.find((item) => item.name === selection.modelId);
+    return model?.display || model?.name || selection.modelId || "Model";
+  }
+  const resolved = String(state.snapshot?.activeModelName || "").trim();
+  return resolved && resolved.toLowerCase() !== "auto" ? `Auto · ${resolved}` : "Auto";
 }
 
 function activateMemorySelection(state) {
@@ -1138,6 +1190,10 @@ function activateMemorySelection(state) {
     state.notice = column === 2 ? "No child tags" : "No item in this column";
     return false;
   }
+  if (column === 0 && value === "__overview__") {
+    state.notice = "Opening Memory Lab Overview";
+    return state.adapter.openMemoryOverview();
+  }
   if (column < 3) {
     state.memorySelectedTag = value;
     state.memoryColumnIndices = [0, 0, 0, 0];
@@ -1148,6 +1204,12 @@ function activateMemorySelection(state) {
     state.notice = `Memory component: ${selectedMemoryDetail(state).component?.name || value}`;
   }
   return true;
+}
+
+function displayImagesForRun(run) {
+  return (run?.events || []).map((event) => event?.displayImage).filter((image) => (
+    image?.origin === "agent" && /^data:image\/(?:png|jpeg);base64,/i.test(String(image.dataUrl || ""))
+  ));
 }
 
 function cycleMemoryComponent(state, delta) {
@@ -1184,6 +1246,7 @@ function filteredCommands(state) {
 }
 
 module.exports = {
+  activeConversationModelLabel,
   activateMenu,
   activateMemorySelection,
   applyThemeAppearance,
@@ -1202,6 +1265,7 @@ module.exports = {
   filteredCommands,
   itemCount,
   memoryColumnItems,
+  memoryTagOptions,
   markConversationRunning,
   moveMenuLevel,
   moveMenuSelection,
@@ -1217,6 +1281,7 @@ module.exports = {
   saveWorkflowFromDraft,
   scrollConversation,
   selectedMemoryDetail,
+  setMemorySearchQuery,
   selectConversationModel,
   selectFlowWorkflow,
   switchView,

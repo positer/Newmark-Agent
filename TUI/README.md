@@ -56,7 +56,9 @@ npm.cmd run demo
 - 每个 Conversation 自身的 Goal、Plan、Linked Plan、Subagents、Messages、Work Runs、Model 和 Flow 选择。
 - 每个运行中的 Conversation 使用目标绑定 Core runner；切换专注不打断后台工作，后台完成不抢回前台。
 - 动态 Workspace 子菜单，仅在最后进入的 Conversation 存在相应内容时显示 Plan、Goal、Subagents、Flow Bar、Flow List 和 Flow Task。
-- Memory Lab 的读取、详细关系视图和重建入口。
+- Memory Lab 的读取、详细关系视图，以及 `/` 启动、Esc 清除的实时 tag 搜索。
+- Build Block 中按工具调用位置显示可选择的 `示意图`；折叠后仍在 Block 开头按调用顺序保留。未选中时只显示 `[示意图]`，光标停在图片行时才延伸显示图片描述与 `Enter 打开`，回车打开独立图片窗口。
+- Memory Lab 第一列的 `Overview · 示意图` 是真实入口；Enter 打开仅含总览关系图的小窗口，不加载主 GUI 或其他组件。
 - Provider 启停、Model 启停与真实 Provider 验证。
 - General、Personalization、Runtime、Tools 设置写回共享 `config.json`。
 - General / Input mode 以真正的 Guide/Next 列表选择默认回车行为；确认后绑定当前 Conversation runtime，并写回共享 `general.default_input`。
@@ -76,13 +78,14 @@ TUI 使用和现有 GUI/CLI 相同的 Newmark Core 与 `~/.Newmark` 持久化格
 
 | 键位 | 操作 |
 | --- | --- |
-| `↑` / `↓` | 菜单内连续遍历并自动滚动长菜单；输入首行 ↑ 进入 Build Block 历史，历史顶部继续 ↑ 跟随光标上滚；仅输入末行继续 ↓ 向较新历史滚动 |
+| `↑` / `↓` | 菜单内连续遍历并自动滚动长菜单；Memory Lab 搜索结果内移动；输入首行 ↑ 进入 Build Block 历史，历史顶部继续 ↑ 跟随光标上滚；仅输入末行继续 ↓ 向较新历史滚动 |
+| `/` | 在 Memory Lab 启动 tag 搜索；输入实时过滤，Enter 跟随，Esc 清除 |
 | `Enter` | 展开/折叠 Workspace、进入子项；选中 Conversation 时直接进入编辑；General / Input mode 中打开 Guide/Next 列表并确认 |
 | `←` / `→` | 移动内容列；仅从内容最左列返回菜单 |
 | `Tab` | 编辑态返回 Conversation 选择并保留草稿；普通内容返回菜单 |
 | `Shift+Tab` | 编辑态循环 Build → Plan → Goal → Flow；Flow 强制选择工作流 |
 | `Shift+Enter` | 编辑输入区插入换行；Enter 仍发送 |
-| 历史区 `Enter` | 展开/收起选中 Build Block 的公开进度、工具调用和工具结果；执行时间、启动输入、Guide 和最终总结始终显示 |
+| 历史区 `Enter` | Build 标题上展开/收起公开进度；`示意图` 行上打开独立图片窗口。执行时间、启动输入、Guide、折叠态图片和最终总结始终显示 |
 | `Esc` | 当前运行 Conversation 的第一段停止；再次按下强制停止 |
 | `N` | 在当前 Workspace 新建 Conversation |
 | `T` | Conversation 选择态置顶/取消置顶并跟随 ID；其他位置切换主题 |
@@ -104,4 +107,4 @@ TUI 使用和现有 GUI/CLI 相同的 Newmark Core 与 `~/.Newmark` 持久化格
 npm.cmd test
 ```
 
-48 项测试同时覆盖 Mock 全交互回归与隔离真实 Core 冒烟：后者会在 `TUI/test` 下创建临时 runtime/workspace，验证当前目录登记、真实快照、Flow 选择/创建持久化、Guide/Next 默认回车模式的共享配置重启恢复、Automation 创建、Memory Lab 和 Provider 密钥保留边界，然后安全删除临时目录，不发送模型请求。
+52 项测试同时覆盖 Mock 全交互回归、Build `示意图` 折叠/展开位置与 Enter viewer、Memory Lab Overview viewer/tag 搜索、逐 Conversation 模型标题、绘制请求合并/同帧抑制与隔离真实 Core冒烟：后者会在 `TUI/test` 下创建临时 runtime/workspace，验证当前目录登记、真实快照、Flow 选择/创建持久化、Guide/Next 默认回车模式的共享配置重启恢复、Automation 创建、Memory Lab 和 Provider 密钥保留边界，然后安全删除临时目录，不发送模型请求。

@@ -1,0 +1,59 @@
+{
+  "verdict": "PASS",
+  "imageCount": 24,
+  "gui": {
+    "collapsed": {
+      "count": 24,
+      "unique": 24,
+      "orderMatches": true,
+      "galleryImmediatelyAfterBuild": true
+    },
+    "expanded": {
+      "count": 24,
+      "rowsCorrect": true,
+      "groups": 24,
+      "toggleStable": true,
+      "placementFailures": []
+    }
+  },
+  "tui": {
+    "expandedOrderMatches": true,
+    "collapsedOrderMatches": true,
+    "focusHintExclusive": true,
+    "sizeReports": [
+      {
+        "columns": 80,
+        "rows": 24,
+        "outputRows": 24,
+        "validWidth": true,
+        "maxScroll": 15
+      },
+      {
+        "columns": 100,
+        "rows": 30,
+        "outputRows": 30,
+        "validWidth": true,
+        "maxScroll": 9
+      },
+      {
+        "columns": 120,
+        "rows": 40,
+        "outputRows": 40,
+        "validWidth": true,
+        "maxScroll": 0
+      },
+      {
+        "columns": 160,
+        "rows": 50,
+        "outputRows": 50,
+        "validWidth": true,
+        "maxScroll": 0
+      }
+    ]
+  },
+  "screenshots": {
+    "guiExpandedPath": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\archive\\20260801-image-position-gui-expanded.png",
+    "guiCollapsedPath": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\archive\\20260801-image-position-gui-collapsed.png",
+    "tuiPath": "C:\\Users\\12252\\Desktop\\Files\\Code\\Newmark Agent\\archive\\20260801-image-position-tui-expanded-collapsed.png"
+  }
+}

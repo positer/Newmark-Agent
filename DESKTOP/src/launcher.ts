@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { createHash } from 'crypto';
+import { spawn } from 'child_process';
 import { Agent } from './core/agent';
 import { FlowEngine } from './core/flow';
 import { runFlow } from './core/flow-runner';
@@ -11,6 +12,7 @@ import { CLI_COMMANDS, runCliCommand } from './cli-commands';
 
 const args = process.argv.slice(2);
 const isTui = args.some(arg => arg.toLowerCase() === '--tui');
+const isGui = args.some(arg => arg.toLowerCase() === '--gui');
 const isCli = args.includes('--cli');
 const isServer = args.includes('--server');
 const isEdit = args[0] === 'edit';
@@ -177,9 +179,49 @@ function exitCli(code: number): void {
     .finally(() => process.exit(code));
 }
 
+function nativeGuiCandidates(): string[] {
+  const configured = String(process.env.NEWMARK_GUI_EXECUTABLE || '').trim();
+  if (process.platform === 'win32') {
+    return [
+      configured,
+      process.env.ProgramFiles ? path.join(process.env.ProgramFiles, 'Newmark Agent', 'Newmark Agent.exe') : '',
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Newmark Agent', 'Newmark Agent.exe') : '',
+    ].filter(Boolean);
+  }
+  if (process.platform === 'darwin') {
+    return [configured, '/Applications/Newmark Agent.app/Contents/MacOS/Newmark Agent'].filter(Boolean);
+  }
+  return [configured, '/opt/Newmark Agent/newmark-agent', '/usr/bin/newmark-agent', '/usr/local/bin/newmark-agent'].filter(Boolean);
+}
+
+function launchGui(): never {
+  const forwarded = args.filter(arg => arg.toLowerCase() !== '--gui');
+  const nativeExecutable = nativeGuiCandidates().find(candidate => fs.existsSync(candidate));
+  if (nativeExecutable) {
+    const child = spawn(nativeExecutable, forwarded, { cwd: process.cwd(), detached: true, stdio: 'ignore', windowsHide: false });
+    child.once('error', error => console.error(`Unable to start Newmark GUI: ${error.message}`));
+    child.unref();
+    process.exit(0);
+  }
+  try {
+    const electronExecutable = require('electron') as string;
+    if (typeof electronExecutable === 'string' && fs.existsSync(electronExecutable)) {
+      const applicationRoot = path.resolve(__dirname, '..');
+      const child = spawn(electronExecutable, [applicationRoot, ...forwarded], { cwd: process.cwd(), detached: true, stdio: 'ignore', windowsHide: false });
+      child.once('error', error => console.error(`Unable to start Newmark GUI: ${error.message}`));
+      child.unref();
+      process.exit(0);
+    }
+  } catch {}
+  console.error('Unable to locate the Newmark GUI runtime. Reinstall newmark-agent with optional dependencies enabled, or install a Newmark desktop package.');
+  process.exit(1);
+}
+
 firstRunInit(root);
 
-if (isTui) {
+if (isGui) {
+  launchGui();
+} else if (isTui) {
   const { start } = require('./tui/src/app');
   start({ root, workspacePath: process.cwd(), desktopDist: __dirname });
 } else if (hasCliCommand) {

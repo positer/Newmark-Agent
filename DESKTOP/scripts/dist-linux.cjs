@@ -107,6 +107,7 @@ function runWindowsWslBuild() {
   }
   const wslSourceRoot = toWslPath(distro, root);
   const wslRepoRoot = toWslPath(distro, repoRoot);
+  const wslTuiRoot = toWslPath(distro, path.join(repoRoot, 'TUI'));
   const wslReleaseDir = toWslPath(distro, releaseDir);
   log(`building in an isolated Linux filesystem through WSL distro ${distro}`);
   const script = [
@@ -114,8 +115,9 @@ function runWindowsWslBuild() {
     "build_root=$(mktemp -d /tmp/newmark-linux-build.XXXXXX)",
     "cleanup() { rm -rf \"$build_root\"; }",
     'trap cleanup EXIT',
-    'mkdir -p "$build_root/repo/DESKTOP" "$build_root/repo/release"',
+    'mkdir -p "$build_root/repo/DESKTOP" "$build_root/repo/TUI" "$build_root/repo/release"',
     `rsync -a --delete --exclude='node_modules/' --exclude='dist/' --exclude='test-tmp*/' ${wslQuote(`${wslSourceRoot}/`)} "$build_root/repo/DESKTOP/"`,
+    `rsync -a --delete --exclude='node_modules/' ${wslQuote(`${wslTuiRoot}/`)} "$build_root/repo/TUI/"`,
     `cp ${wslQuote(`${wslRepoRoot}/LICENSE`)} "$build_root/repo/LICENSE"`,
     `cp ${wslQuote(`${wslRepoRoot}/THIRD_PARTY_NOTICES.md`)} "$build_root/repo/THIRD_PARTY_NOTICES.md"`,
     'cd "$build_root/repo/DESKTOP"',

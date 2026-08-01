@@ -2,7 +2,6 @@
 
 const readline = require("node:readline");
 const path = require("node:path");
-const data = require("./data");
 const { render } = require("./render");
 const {
   activateMenu,
@@ -29,6 +28,7 @@ const {
   requestConversationStop,
   runSettingsAction,
   saveWorkflowFromDraft,
+  setMemorySearchQuery,
   selectConversationModel,
   selectFlowWorkflow,
   switchView,
@@ -40,6 +40,26 @@ const {
 } = require("./state");
 
 const ESC = "\u001b[";
+
+function createPaintScheduler(state, output = process.stdout, renderFrame = render) {
+  let pending = false;
+  let lastFrame = "";
+  const flush = () => {
+    pending = false;
+    const frame = renderFrame(state);
+    if (frame === lastFrame) return false;
+    lastFrame = frame;
+    output.write(frame);
+    return true;
+  };
+  const paint = () => {
+    if (pending) return;
+    pending = true;
+    setImmediate(flush);
+  };
+  paint.flush = flush;
+  return paint;
+}
 
 function executeAction(state, action) {
   if (action.startsWith("view:")) {
@@ -95,7 +115,7 @@ function start(options = {}) {
     }
   } catch (error) {
     process.stderr.write(`Unable to start Newmark TUI runtime: ${error.message}\n`);
-    process.stderr.write("Run DESKTOP build first, or use --demo for the isolated prototype.\n");
+    process.stderr.write("Run DESKTOP build first, or use --demo for isolated sample data.\n");
     process.exitCode = 1;
     return;
   }
@@ -103,7 +123,7 @@ function start(options = {}) {
   let timer = null;
   let animationTimer = null;
   let closing = false;
-  const paint = () => process.stdout.write(render(state));
+  const paint = createPaintScheduler(state);
   const cleanup = () => {
     if (timer) clearInterval(timer);
     if (animationTimer) clearInterval(animationTimer);
@@ -158,7 +178,7 @@ function start(options = {}) {
         state.notice = "Mock response complete · no network request made";
       }
       paint();
-    }, 130);
+    }, 250);
   }
 
   async function sendRealMessage(text) {
@@ -176,7 +196,7 @@ function start(options = {}) {
           animationTimer = null;
         }
         paint();
-      }, 160);
+      }, 250);
     }
     paint();
     try {
@@ -202,7 +222,8 @@ function start(options = {}) {
       state.flowSelectionIndex = state.selected;
       selectFlowWorkflow(state);
     } else if (state.view === "memory") {
-      activateMemorySelection(state);
+      const result = activateMemorySelection(state);
+      if (result && typeof result.then === "function") result.catch((error) => { state.notice = `Viewer failed: ${error.message}`; }).finally(paint);
     } else if (state.view === "automation") {
       if (state.selected === 0) beginAutomationCreate(state);
       else toggleSelected(state);
@@ -225,9 +246,27 @@ function start(options = {}) {
       state.notice = step
         ? `Plan step selected: ${step.text} · ${state.adapterKind === "mock" ? "demo" : "persisted conversation"}`
         : "No plan step in the active conversation";
-      state.overlay = "details";
     } else {
-      state.overlay = "details";
+      state.notice = "No additional action for this item";
+    }
+  }
+
+  function handleMemorySearch(str, key) {
+    if (key.name === "escape") {
+      state.memorySearchActive = false;
+      setMemorySearchQuery(state, "");
+      state.notice = "Memory tag search cleared";
+    } else if (key.name === "return") {
+      state.memorySearchActive = false;
+      activateMemorySelection(state);
+    } else if (key.name === "up") {
+      moveSelection(state, -1);
+    } else if (key.name === "down") {
+      moveSelection(state, 1);
+    } else if (key.name === "backspace") {
+      setMemorySearchQuery(state, [...state.memorySearchQuery].slice(0, -1).join(""));
+    } else if (str && !key.ctrl && !key.meta && str >= " ") {
+      setMemorySearchQuery(state, `${state.memorySearchQuery}${str}`);
     }
   }
 
@@ -400,12 +439,18 @@ function start(options = {}) {
     else if (state.overlay === "settings-choice") handleSettingChoice(key);
     else if (state.overlay === "automation-create" || state.overlay === "workflow-create") handleCreateForm(str, key);
     else if (state.inputMode) handleInput(str, key);
+    else if (state.memorySearchActive) handleMemorySearch(str, key);
     else if (state.overlay) {
       if (key.name === "escape" || key.name === "return" || str === "?") state.overlay = null;
     } else if (key.ctrl && key.name === "k") {
       state.overlay = "palette";
       state.paletteQuery = "";
       state.paletteIndex = 0;
+    } else if (state.view === "memory" && str === "/") {
+      state.memorySearchActive = true;
+      state.focusRegion = "content";
+      state.contentColumn = 0;
+      state.notice = "Search Memory Lab tags";
     } else if (key.name === "tab") {
       state.focusRegion = "menu";
       state.contentColumn = 0;
@@ -433,17 +478,11 @@ function start(options = {}) {
       Promise.resolve(runSettingsAction(state, "check-updates")).finally(paint);
     }
     else if (state.focusRegion === "content" && (key.name === "return" || key.name === "space")) activate();
-    else if (/^[1-9]$/.test(str)) {
-      switchView(state, data.navigation[Number(str) - 1].id);
-      state.focusRegion = "content";
-    }
     else if (str === "q" || str === "Q") return quit();
     else if (str === "?") state.overlay = "help";
     else if ((str === "t" || str === "T") && state.view === "chat" && state.focusRegion === "content" && !state.inputMode) toggleConversationPinned(state);
     else if (str === "t" || str === "T") executeAction(state, "theme");
     else if (str === "n" || str === "N") executeAction(state, "new-chat");
-    else if ((str === "p" || str === "P") && state.view === "home") switchView(state, "plan");
-    else if ((str === "a" || str === "A") && state.view === "home") switchView(state, "automation");
     paint();
   }
 
@@ -457,4 +496,4 @@ function start(options = {}) {
   paint();
 }
 
-module.exports = { executeAction, start };
+module.exports = { createPaintScheduler, executeAction, start };

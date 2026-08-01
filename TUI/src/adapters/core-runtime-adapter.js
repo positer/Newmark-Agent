@@ -37,6 +37,32 @@ function ensureRuntimeRoot(root, configModule) {
   }
 }
 
+function openViewerRequest(root, desktopDist, request) {
+  const requestDirectory = path.join(root, "viewer-requests");
+  fs.mkdirSync(requestDirectory, { recursive: true });
+  const requestPath = path.join(requestDirectory, `viewer-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+  fs.writeFileSync(requestPath, JSON.stringify(request), { encoding: "utf8", flag: "wx" });
+  const forwarded = ["--newmark-viewer", `--viewer-request=${requestPath}`, `--root=${root}`];
+  let executable = process.execPath;
+  let viewerArgs = forwarded;
+  if (!process.versions.electron) {
+    const desktopRoot = path.dirname(desktopDist);
+    const electronName = process.platform === "win32" ? "electron.exe" : "electron";
+    executable = path.join(desktopRoot, "node_modules", "electron", "dist", electronName);
+    viewerArgs = [desktopRoot, ...forwarded];
+  }
+  if (!fs.existsSync(executable)) {
+    try { fs.unlinkSync(requestPath); } catch {}
+    throw new Error(`Newmark image viewer runtime was not found: ${executable}`);
+  }
+  const environment = { ...process.env };
+  delete environment.ELECTRON_RUN_AS_NODE;
+  delete environment.NEWMARK_TUI_SIDECAR;
+  const child = spawn(executable, viewerArgs, { cwd: process.cwd(), env: environment, detached: true, stdio: "ignore", windowsHide: false });
+  child.unref();
+  return { ok: true, requestPath };
+}
+
 function workspaceIdentity(workspace, root) {
   if (!workspace) {
     return {
@@ -161,7 +187,8 @@ function createCoreRuntimeAdapter(options = {}) {
         conversationId: raw.conversationId
       },
       workspaceId: workspaceIdentity(agent.workspace.current, root).id,
-      ...stateFields()
+      ...stateFields(),
+      activeModelName: agent.activeModelName()
     });
   };
 
@@ -184,7 +211,8 @@ function createCoreRuntimeAdapter(options = {}) {
       ...raw,
       target: { ...requested },
       workspaceId: requested.workspaceId,
-      ...stateFields()
+      ...stateFields(),
+      activeModelName: runner.activeModelName()
     });
   };
 
@@ -351,6 +379,12 @@ function createCoreRuntimeAdapter(options = {}) {
     },
     memoryLabReindex() {
       return memoryLab.reindex();
+    },
+    openImageViewer(image) {
+      return openViewerRequest(root, desktopDist, { type: "image", title: image?.caption || image?.name || "示意图", dataUrl: image?.dataUrl || "" });
+    },
+    openMemoryOverview() {
+      return openViewerRequest(root, desktopDist, { type: "memory-overview", title: "Memory Lab Overview", snapshot: memoryLab.visualizationSnapshot() });
     },
     setProviderEnabled(providerId, enabled) {
       const providers = agent.config.providers();

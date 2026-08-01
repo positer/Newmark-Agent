@@ -125,6 +125,12 @@ function createDesktopPreloadAdapter(api) {
     async memoryLabReindex() {
       return api.memoryLabReindex();
     },
+    async openImageViewer(image) {
+      return api.openImageViewer({ type: "image", title: image?.caption || image?.name || "示意图", dataUrl: image?.dataUrl || "" });
+    },
+    async openMemoryOverview() {
+      return api.openMemoryOverview();
+    },
     async setProviderEnabled(providerId, enabled) {
       return api.setProviderEnabled(providerId, enabled);
     },

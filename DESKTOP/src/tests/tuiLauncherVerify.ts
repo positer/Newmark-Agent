@@ -19,8 +19,14 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(desktopRoot, 'package.j
 const copiedTuiRoot = path.join(desktopRoot, 'dist', 'tui');
 
 assert(launcherSource.includes("arg.toLowerCase() === '--tui'"), 'Node launcher must recognize case-insensitive --TUI');
+assert(launcherSource.includes("arg.toLowerCase() === '--gui'")
+  && launcherSource.includes('function launchGui()')
+  && launcherSource.includes("require('electron')")
+  && launcherSource.includes('NEWMARK_GUI_EXECUTABLE'),
+  'npm global command must expose a case-insensitive Newmark --GUI native/Electron launcher');
 assert(launcherSource.includes("workspacePath: process.cwd()"), 'Node launcher must preserve the caller working directory');
 assert(mainSource.includes("arg.toLowerCase() === '--tui'"), 'packaged Electron entry must recognize case-insensitive --TUI');
+assert(mainSource.includes("!args.includes('--gui')"), 'source Electron entry must preserve explicit --GUI startup');
 assert(mainSource.includes("require('./tui/src/app')"), 'packaged Electron entry must load the bundled TUI');
 assert(mainSource.includes('setWindowsConsoleMode()') && mainSource.includes('process.env.NEWMARK_FORCE_TTY'),
   'packaged Electron entry must enable and later restore Windows console Raw Mode');
@@ -50,4 +56,4 @@ assert(packageJson.scripts?.['dist:portable']?.startsWith('npm run test:full-rel
 assert(fs.existsSync(path.join(copiedTuiRoot, 'src', 'app.js')), 'compiled distribution must contain the TUI runtime');
 assert(fs.existsSync(path.join(copiedTuiRoot, 'src', 'adapters', 'core-runtime-adapter.js')), 'compiled distribution must contain the real Core adapter');
 
-process.stdout.write('TUI launcher verification: 17/17 checks passed\n');
+process.stdout.write('TUI/GUI launcher verification: 19/19 checks passed\n');

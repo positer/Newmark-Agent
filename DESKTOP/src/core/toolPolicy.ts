@@ -19,6 +19,7 @@ export interface ToolPolicyDecision {
 const REQUIRED_TOOLS = new Set(['pwd', 'read', 'glob', 'grep']);
 const MODE_SCOPED_TOOLS = new Set([
   'image_inspect',
+  'image_display',
   'ocr_read',
   'pdf_read',
   'linked_plan',

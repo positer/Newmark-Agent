@@ -78,6 +78,8 @@ const INTEGRATION_METHODS = Object.freeze([
   "memoryLabRead",
   "memoryLabVisualization",
   "memoryLabReindex",
+  "openImageViewer",
+  "openMemoryOverview",
   "setProviderEnabled",
   "validateModels",
   "modelValidationStatus",

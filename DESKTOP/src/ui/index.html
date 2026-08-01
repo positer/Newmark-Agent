@@ -2357,6 +2357,13 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .conversation-work-activity-list { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 5px 24px; padding: 0; border: 0; }
 .conversation-work-activity-item { display: grid; grid-template-columns: 17px minmax(0,1fr); gap: 7px; align-items: start; min-height: 24px; color: var(--text-dim); font: 400 11px/1.5 var(--font-ui); }
 .conversation-work-activity-item .nm-icon { margin-top: 2px; }
+.conversation-work-display-image { display:grid; gap:6px; width:min(100%, 640px); margin:7px 0 3px 24px; padding:0; border:0; background:transparent; color:var(--text-dim); text-align:left; cursor:pointer; }
+.conversation-work-display-image img { display:block; width:100%; max-height:420px; object-fit:contain; object-position:left center; border:1px solid var(--glass-border-2); border-radius:var(--radius-md); background:rgba(0,0,0,.18); }
+.conversation-work-display-image span { font:10px/1.4 var(--font-ui); }
+.conversation-work-display-image:hover span, .conversation-work-display-image:focus-visible span { color:var(--accent); }
+.work-run-collapsed-images { display:none; flex-direction:column; gap:8px; margin:0 34px 8px 0; }
+.work-run-message:has(.conversation-work-run.collapsed) > .work-run-collapsed-images { display:flex; }
+.work-run-collapsed-images .conversation-work-display-image { margin-left:0; }
 .conversation-work-subagent-list { flex-direction: row; flex-wrap: wrap; gap: 7px; margin-top: 6px; }
 .conversation-work-subagent-chip {
   min-width: 0;
@@ -7514,6 +7521,40 @@ function normalizeConversationImageAttachments(input) {
   });
 }
 
+function normalizeWorkDisplayImage(input) {
+  var item = input && typeof input === 'object' ? input : {};
+  if (String(item.origin || '') !== 'agent') return null;
+  var mimeType = String(item.mimeType || '').toLowerCase().replace('image/jpg', 'image/jpeg');
+  if (mimeType !== 'image/png' && mimeType !== 'image/jpeg') return null;
+  var dataUrl = String(item.dataUrl || '');
+  if (!new RegExp('^data:' + mimeType.replace('/', '\\/') + ';base64,[A-Za-z0-9+/]+={0,2}$', 'i').test(dataUrl) || dataUrl.length > 14 * 1024 * 1024) return null;
+  return {
+    id: String(item.id || ''), origin: 'agent', name: String(item.name || '示意图').slice(0, 160),
+    caption: String(item.caption || item.name || '示意图').slice(0, 160), mimeType: mimeType, dataUrl: dataUrl,
+    width: Math.max(0, Number(item.width || 0)), height: Math.max(0, Number(item.height || 0))
+  };
+}
+
+function renderWorkDisplayImage(input) {
+  var image = normalizeWorkDisplayImage(input);
+  if (!image) return '';
+  return '<button type="button" class="conversation-work-display-image" data-display-image-id="' + escAttr(image.id) + '" onclick="window.openConversationImage(this._newmarkDisplayImage)" title="' + escAttr(image.caption) + '">' +
+    '<img alt="' + escAttr(image.caption) + '"><span>' + esc(image.caption) + '</span></button>';
+}
+
+function hydrateWorkDisplayImages(root, images) {
+  if (!root || !root.querySelectorAll) return;
+  var byId = {};
+  (images || []).forEach(function(input) { var image = normalizeWorkDisplayImage(input); if (image) byId[image.id] = image; });
+  var nodes = root.querySelectorAll('.conversation-work-display-image[data-display-image-id]');
+  for (var i = 0; i < nodes.length; i++) {
+    var image = byId[String(nodes[i].getAttribute('data-display-image-id') || '')] || null;
+    nodes[i]._newmarkDisplayImage = image;
+    var preview = nodes[i].querySelector('img');
+    if (preview && image && preview.src !== image.dataUrl) preview.src = image.dataUrl;
+  }
+}
+
 function promptAttachmentsForConversation() {
   return normalizeConversationImageAttachments((state.promptAttachments || []).map(function(item) {
     return Object.assign({}, item, { origin: 'user', mimeType: item.type || '' });
@@ -7521,7 +7562,7 @@ function promptAttachmentsForConversation() {
 }
 
 window.openConversationImage = function(attachment) {
-  var safe = normalizeConversationImageAttachments([attachment])[0];
+  var safe = normalizeConversationImageAttachments([attachment])[0] || normalizeWorkDisplayImage(attachment);
   if (!safe) return;
   window.openSubWin(safe.name, '<div style="display:flex;align-items:center;justify-content:center;min-height:220px;"><img src="' + escAttr(safe.dataUrl) + '" alt="' + escAttr(safe.name) + '" style="display:block;max-width:100%;max-height:72vh;object-fit:contain;border-radius:8px;"></div>');
 };
@@ -8275,6 +8316,7 @@ function publicWorkEventForUi(event) {
     generation: event.generation,
     sequence: event.sequence,
     status: event.status,
+    displayImage: normalizeWorkDisplayImage(event.displayImage),
     target: event.target
   };
 }
@@ -8705,7 +8747,7 @@ function renderWorkToolGroup(event, eventIndex) {
         iconSvg('bot', 'Subagent', 'tiny') + '<span class="conversation-work-subagent-name">' + esc(subagentName) + '</span><span class="conversation-work-subagent-status">' + esc(subagentUiStatusLabel(subagentStatus)) + '</span></button>';
     }
     return '<div class="conversation-work-activity-item">' + iconSvg(workToolRowIcon(item), 'tool', 'tiny') +
-      '<div class="conversation-work-command-label" title="' + escAttr(workToolCommandLabel(item)) + '">' + esc(workToolCommandLabel(item)) + '</div></div>';
+      '<div><div class="conversation-work-command-label" title="' + escAttr(workToolCommandLabel(item)) + '">' + esc(workToolCommandLabel(item)) + '</div>' + renderWorkDisplayImage(item.displayImage) + '</div></div>';
   }).join('');
   return '<details class="conversation-work-activity" data-activity-key="' + escAttr(activityDomKey) + '"><summary>' +
     iconSvg(hasFiles ? 'pencil' : 'square-terminal', 'tools', 'tiny') + '<span>' + esc(workToolGroupLabel(items, !!event.completed)) + '</span>' +
@@ -8809,7 +8851,9 @@ function renderWorkRunEvents(run, includeGuides) {
         var priorEvent = events[priorEventIndex];
         if (String(priorEvent && priorEvent.type || '').toLowerCase() !== 'tool_call') continue;
         if (publicToolNameForUi(priorEvent.toolName) !== toolName || priorEvent.completed) continue;
-        events[priorEventIndex] = Object.assign({}, priorEvent, { completed: true });
+        var sameCall = rawEvent.toolCallId && priorEvent.toolCallId ? String(rawEvent.toolCallId) === String(priorEvent.toolCallId) : publicToolNameForUi(priorEvent.toolName) === toolName;
+        if (!sameCall) continue;
+        events[priorEventIndex] = Object.assign({}, priorEvent, { completed: true, displayImage: rawEvent.displayImage || priorEvent.displayImage });
         rawEvent = null;
         break;
       }
@@ -8903,6 +8947,14 @@ function updateConversationWorkRunElement(run, element) {
   var wrapper = element.closest ? element.closest('.work-run-message') : null;
   if (wrapper) {
     wrapper.classList.toggle('flow-result-only', !!(run.flow && run.flow.activityVisibility === 'result-only'));
+    var displayImages = (run.events || []).map(function(event) { return normalizeWorkDisplayImage(event && event.displayImage); }).filter(Boolean);
+    var imageStack = wrapper.querySelector(':scope > .work-run-collapsed-images');
+    if (!imageStack) {
+      imageStack = document.createElement('div');
+      imageStack.className = 'work-run-collapsed-images';
+    }
+    if (imageStack.previousElementSibling !== element) wrapper.insertBefore(imageStack, element.nextSibling);
+    imageStack.innerHTML = expanded ? '' : displayImages.map(renderWorkDisplayImage).join('');
     var guideStack = wrapper.querySelector(':scope > .work-run-collapsed-guides');
     if (!guideStack) {
       guideStack = document.createElement('div');
@@ -8911,6 +8963,7 @@ function updateConversationWorkRunElement(run, element) {
     }
     guideStack.innerHTML = expanded ? '' : workRunGuideEvents(run).map(renderWorkRunGuideMessage).join('');
   }
+  hydrateWorkDisplayImages(wrapper || element, (run.events || []).map(function(event) { return event && event.displayImage; }).filter(Boolean));
   hydrateWorkRunGuideMessages(wrapper || element, run);
   var refreshedActivities = element.querySelectorAll ? element.querySelectorAll('details.conversation-work-activity[data-activity-key], details[data-work-detail-key]') : [];
   for (var refreshedIndex = 0; refreshedIndex < refreshedActivities.length; refreshedIndex++) {
@@ -8952,6 +9005,21 @@ function renderConversationWorkRuns(runs, target) {
   var normalized = syncWorkRunsSnapshot(runs, target);
   for (var i = 0; i < normalized.length; i++) renderConversationWorkRun(normalized[i]);
   return normalized;
+}
+
+var pendingLargeWorkRunRenders = {};
+var scheduledLargeWorkRunRenders = {};
+function scheduleLargeConversationWorkRunRender(run) {
+  var key = runtimeKeyFor(run.target && run.target.workspaceId, run.target && run.target.conversationId) + '::' + String(run.runId || '');
+  pendingLargeWorkRunRenders[key] = run;
+  if (scheduledLargeWorkRunRenders[key]) return;
+  scheduledLargeWorkRunRenders[key] = true;
+  requestAnimationFrame(function() {
+    var latest = pendingLargeWorkRunRenders[key];
+    delete pendingLargeWorkRunRenders[key];
+    delete scheduledLargeWorkRunRenders[key];
+    if (latest && isActiveConversationTarget(latest.target)) renderConversationWorkRun(latest);
+  });
 }
 
 function applyAgentWorkEventToRun(event) {
@@ -9009,7 +9077,9 @@ function applyAgentWorkEventToRun(event) {
   }
   if (isActiveConversationTarget(target) && (!branchIds.viewed || !eventBranchId || branchIds.viewed === eventBranchId)) {
     state.workRunsByTarget[runtimeKeyFor(target.workspaceId, target.conversationId)] = runs;
-    renderConversationWorkRun(run);
+    var existingElement = findWorkRunElement(run);
+    if (existingElement && run.events.length >= 12 && (type === 'tool_call' || type === 'tool_result')) scheduleLargeConversationWorkRunRender(run);
+    else renderConversationWorkRun(run);
   }
   return run;
 }

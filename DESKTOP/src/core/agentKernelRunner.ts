@@ -861,11 +861,14 @@ async function handleKernelEvent(agent: Agent, event: KernelAgentEvent, tokens: 
         tokens.push({ type: 'text', text });
       }
       const outcome = event.isError ? 'failed' : 'completed';
+      const resultRecord = event.result && typeof event.result === 'object' ? event.result as Record<string, unknown> : {};
+      const resultDetails = resultRecord.details && typeof resultRecord.details === 'object' ? resultRecord.details as Record<string, unknown> : {};
       agent.emitWorkEvent({
         type: 'tool_result',
         content: `Tool ${event.toolName} ${outcome}.`,
         toolCallId: event.toolCallId,
         toolName: event.toolName,
+        displayImage: event.toolName === 'image_display' ? agent.hydrateDisplayImage(resultDetails.displayImage) : undefined,
       });
       break;
     }
@@ -1262,6 +1265,8 @@ function selectTaskToolDefinitions(task: string, definitions: unknown[]): unknow
   const planIntent = /\b(?:linked plan|project plan)\b/i.test(text) || /(?:关联计划|项目计划)/.test(text);
   const historyDetailIntent = /\b(?:(?:build|task|work) history|previous (?:build|task|work) details?|history details?)\b/i.test(text)
     || /(?:历史(?:任务|工作|构建).*(?:详情|细节|具体)|上个任务.*(?:具体|做了什么|改了什么)|之前.*(?:具体做了什么|工作内容)|查询.*Build Block)/i.test(text);
+  const imageDisplayIntent = /\b(?:display|show|present|embed)\b.{0,24}\b(?:image|diagram|illustration)\b|\b(?:image|diagram|illustration)\b.{0,24}\b(?:display|show|present|embed)\b/i.test(text)
+    || /(?:显示|展示|嵌入|呈现).{0,16}(?:图片|图像|示意图|架构图)|(?:图片|图像|示意图|架构图).{0,16}(?:显示|展示|嵌入|呈现)/.test(text);
 
   if (codingIntent) {
     include('pwd', 'glob', 'grep', 'read', 'write', 'edit', 'bash', 'git_status', 'git_pull', 'git_push', 'git_branch', 'file_audit', 'repo_security_audit', 'task');
@@ -1286,6 +1291,7 @@ function selectTaskToolDefinitions(task: string, definitions: unknown[]): unknow
   if (flowIntent) includePrefix('flow_');
   if (planIntent) include('linked_plan');
   if (historyDetailIntent) include('build_history_query');
+  if (imageDisplayIntent) include('image_display');
 
   // An explicitly named tool is always retained, even when the surrounding
   // wording does not match a task class.
@@ -1357,7 +1363,14 @@ function toKernelTools(agent: Agent, definitions?: unknown[], provisioning?: Too
         const terminate = shouldTerminateAfterToolResult(name)
           && (name !== 'question' || agent.pendingOptions.length > 0);
         const launchReceipt = continuationToolLaunchReceipt(name, params, text);
-        return { content, details: { tool: name, ok: true, terminate, ...(launchReceipt ? { launchReceipt } : {}), visionImagePath: visionImage.imagePath || undefined, ephemeralVisionImage: !!visionImage.image }, terminate };
+        let displayImage;
+        if (name === 'image_display') {
+          try {
+            const parsed = JSON.parse(rawText) as Record<string, unknown>;
+            displayImage = agent.hydrateDisplayImage(parsed.image);
+          } catch {}
+        }
+        return { content, details: { tool: name, ok: true, terminate, ...(launchReceipt ? { launchReceipt } : {}), visionImagePath: visionImage.imagePath || undefined, ephemeralVisionImage: !!visionImage.image, displayImage }, terminate };
       },
     };
   }).filter((tool: KernelTool) => !!tool.name);
@@ -1523,6 +1536,7 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
   }
   if (name === 'image_generate') return await checked(agent.handleImageGeneration(args, signal));
   if (name === 'image_inspect') return await checked(agent.handleImageInspect(args));
+  if (name === 'image_display') return await agent.handleImageDisplayWithDescription(args, signal);
   if (name === 'flow_run') return await checked(agent.handleFlowRun(args, signal));
   if (name.startsWith('memory_lab_')) return await checked(agent.handleMemoryLabTool(name, args, signal));
   if (name.startsWith('automation_')) return await checked(agent.handleAutomationTool(name, args, signal));

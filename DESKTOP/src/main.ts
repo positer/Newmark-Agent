@@ -892,11 +892,68 @@ function installBrowserControlBackend(): void {
 const args = userArgs();
 const command = args.find(a => a === 'flow' || a === 'edit');
 const isTuiArg = args.some(arg => arg.toLowerCase() === '--tui');
+const isViewerArg = args.some(arg => arg.toLowerCase() === '--newmark-viewer');
 const isCliArg = args.includes('--cli');
 const isServerArg = args.includes('--server');
 const isFlowArg = command === 'flow';
 const isEditArg = command === 'edit';
 const hasCliCommand = args.some(a => (CLI_COMMANDS as readonly string[]).includes(a));
+
+function viewerEscape(value: unknown): string {
+  return String(value || '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] || character);
+}
+
+function viewerOverviewSvg(snapshot: any): string {
+  const tags = Object.keys(snapshot?.index?.tags || {}).sort().slice(0, 120);
+  const components = Object.entries(snapshot?.index?.components || {}).slice(0, 120) as Array<[string, any]>;
+  const nodes = [
+    ...tags.map((id, index) => ({ id: `tag:${id}`, label: id, kind: 'tag', index, total: Math.max(1, tags.length) })),
+    ...components.map(([id, value], index) => ({ id: `component:${id}`, label: String(value?.name || id), kind: 'component', index, total: Math.max(1, components.length) })),
+  ];
+  const position = new Map<string, { x: number; y: number }>();
+  for (const node of nodes) {
+    const radius = node.kind === 'tag' ? 190 : 305;
+    const angle = (Math.PI * 2 * node.index / node.total) - Math.PI / 2;
+    position.set(node.id, { x: 400 + Math.cos(angle) * radius, y: 300 + Math.sin(angle) * radius * .72 });
+  }
+  const lines: string[] = [];
+  for (const tag of tags) {
+    const from = position.get(`tag:${tag}`);
+    for (const child of (snapshot?.index?.tags?.[tag]?.children || [])) {
+      const to = position.get(`tag:${child}`);
+      if (from && to) lines.push(`<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}"/>`);
+    }
+    for (const slug of (snapshot?.index?.tags?.[tag]?.components || [])) {
+      const to = position.get(`component:${slug}`);
+      if (from && to) lines.push(`<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}"/>`);
+    }
+  }
+  const circles = nodes.map(node => {
+    const point = position.get(node.id)!;
+    const fill = node.kind === 'tag' ? '#72d7ff' : '#b59cff';
+    return `<g><circle cx="${point.x}" cy="${point.y}" r="${node.kind === 'tag' ? 6 : 5}" fill="${fill}"/><title>${viewerEscape(node.label)}</title><text x="${point.x + 9}" y="${point.y + 4}">${viewerEscape(node.label.slice(0, 28))}</text></g>`;
+  }).join('');
+  return `<svg viewBox="0 0 800 600" role="img" aria-label="Memory Lab Overview"><g class="edges">${lines.join('')}</g>${circles}</svg>`;
+}
+
+function viewerDocument(request: any): string {
+  const title = viewerEscape(request?.title || request?.caption || (request?.type === 'memory-overview' ? 'Memory Lab Overview' : '示意图'));
+  const image = request?.type === 'image' && /^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/i.test(String(request?.dataUrl || ''))
+    ? `<img src="${viewerEscape(request.dataUrl)}" alt="${title}">`
+    : request?.type === 'memory-overview' ? viewerOverviewSvg(request.snapshot) : '<div class="empty">Image unavailable</div>';
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'"><title>${title}</title><style>
+  :root{color-scheme:dark}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#090d16;color:#dce8f7;font:12px system-ui,sans-serif}main{height:100%;display:grid;grid-template-rows:auto 1fr;padding:14px;gap:10px}header{font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#a8bdd4}section{min-height:0;display:flex;align-items:center;justify-content:center;border:1px solid #233044;border-radius:10px;background:#0d1420}img{display:block;max-width:100%;max-height:100%;object-fit:contain}svg{width:100%;height:100%}.edges line{stroke:#30435b;stroke-width:1;opacity:.62}text{fill:#9fb2c7;font-size:9px}.empty{color:#6f8196}</style></head><body><main><header>${title}</header><section>${image}</section></main></body></html>`;
+}
+
+async function createViewerWindow(request: unknown): Promise<BrowserWindow> {
+  const viewerRequest = request && typeof request === 'object' ? request as Record<string, unknown> : {};
+  const windowTitle = String(viewerRequest.title || viewerRequest.caption || (viewerRequest.type === 'memory-overview' ? 'Memory Lab Overview' : '示意图')).trim().slice(0, 160) || '示意图';
+  const win = new BrowserWindow({ width: 760, height: 600, minWidth: 420, minHeight: 320, show: false, autoHideMenuBar: true, title: windowTitle, backgroundColor: '#090d16', webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(viewerDocument(request))}`);
+  win.setTitle(windowTitle);
+  win.show();
+  return win;
+}
 
 async function drainCliNetworkHandles(): Promise<void> {
   try {
@@ -924,7 +981,19 @@ function exitCli(code: number): void {
 }
 
 // CLI/utility mode entry. These paths must work in the packaged exe too.
-if (isTuiArg) {
+if (isViewerArg) {
+  app.whenReady().then(async () => {
+    const root = resolveRoot(args);
+    const requestPath = path.resolve(String(pathArgValue(args, '--viewer-request') || ''));
+    const relative = path.relative(path.resolve(root), requestPath);
+    if (!requestPath || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Viewer request must stay inside the Newmark runtime root.');
+    const stat = fs.statSync(requestPath);
+    if (!stat.isFile() || stat.size > 16 * 1024 * 1024) throw new Error('Viewer request is invalid or too large.');
+    const request = JSON.parse(fs.readFileSync(requestPath, 'utf8'));
+    try { fs.unlinkSync(requestPath); } catch {}
+    await createViewerWindow(request);
+  }).catch(error => { console.error(`Unable to open Newmark viewer: ${error instanceof Error ? error.message : String(error)}`); app.quit(); });
+} else if (isTuiArg) {
   const isConsoleLauncher = app.isPackaged && path.basename(process.execPath).toLowerCase() === 'newmark.exe';
   if (isConsoleLauncher && process.env.NEWMARK_TUI_SIDECAR !== '1') {
     const tuiProcess = spawnSync(process.execPath, [path.join(__dirname, 'launcher.js'), ...args], {
@@ -3753,6 +3822,17 @@ if (isTuiArg) {
     ipcMain.handle('memoryLab:visualization', async () => {
       if (!agent) return { ok: false, error: 'Agent not ready' };
       return agent.memoryLab.visualizationSnapshot();
+    });
+
+    ipcMain.handle('viewer:open', async (_event, request: Record<string, unknown>) => {
+      await createViewerWindow(request);
+      return { ok: true };
+    });
+
+    ipcMain.handle('viewer:openMemoryOverview', async () => {
+      if (!agent) return { ok: false, error: 'Agent not ready' };
+      await createViewerWindow({ type: 'memory-overview', title: 'Memory Lab Overview', snapshot: agent.memoryLab.visualizationSnapshot() });
+      return { ok: true };
     });
 
     ipcMain.handle('memoryLab:update', async (_event, input: Record<string, unknown>) => {

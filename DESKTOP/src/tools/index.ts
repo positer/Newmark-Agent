@@ -344,6 +344,10 @@ export class ToolExecutor {
         height: { type: 'number', description: 'Crop height in source-image pixels.' },
         scale: { type: 'number', description: 'Magnification from 1 to 4. Output is capped at 2048 pixels per side.' },
       }, ['action']),
+      t('image_display', 'Display one PNG or JPEG from the active workspace to the user as durable visual evidence in the current Build Block. The GUI embeds it after this tool call; the TUI exposes an interactive 示意图 placeholder. When the selected model has validated vision input, Newmark generates a concise visual-content description for the displayed title.', {
+        path: { type: 'string', description: 'Workspace-relative PNG/JPEG path. Absolute paths are accepted only when they remain inside the active workspace.' },
+        caption: { type: 'string', maxLength: 160, description: 'Optional caption hint and non-vision fallback. A validated vision model replaces it with a concise description grounded in the actual image.' },
+      }, ['path']),
       t('ocr_read', 'LAST-RESORT approximate Chinese/English OCR. Use only after normal text extraction failed and either no validated vision model exists or a vision screenshot was already presented and failed. Browser observations are capability-bound; image files remain workspace-scoped. The result includes an Agent repair prompt for conservative context-based correction.', {
         source: { type: 'string', enum: ['browser', 'image'] },
         observation_id: { type: 'string', description: 'For source=browser, the latest Browser-Use observation capability that already exhausted text and vision.' },

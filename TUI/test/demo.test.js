@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { executeAction } = require("../src/app");
+const { createPaintScheduler, executeAction } = require("../src/app");
 const { createCoreRuntimeAdapter, mergeProviderConfig } = require("../src/adapters/core-runtime-adapter");
 const { createDesktopPreloadAdapter } = require("../src/adapters/desktop-preload-adapter");
 const { createMockNewmarkAdapter, createSnapshot } = require("../src/adapters/mock-newmark-adapter");
@@ -13,6 +13,7 @@ const { render, stripAnsi, visibleLength, wrapText } = require("../src/render");
 const {
   activateMenu,
   activateMemorySelection,
+  activeConversationModelLabel,
   applyConversationResult,
   beginAutomationCreate,
   beginWorkflowCreate,
@@ -30,6 +31,7 @@ const {
   moveSettingChoiceSelection,
   moveSelection,
   markConversationRunning,
+  memoryTagOptions,
   rootMenuItems,
   returnToConversationSelection,
   requestConversationStop,
@@ -37,6 +39,7 @@ const {
   selectFlowWorkflow,
   saveWorkflowFromDraft,
   selectedMemoryDetail,
+  setMemorySearchQuery,
   switchView,
   toggleConversationPinned,
   toggleSelectedBuildBlock,
@@ -45,9 +48,10 @@ const {
   workspaceMenuChildren
 } = require("../src/state");
 
-test("initial state is an isolated overview demo", () => {
+test("initial state opens the real conversation surface without an overview placeholder", () => {
   const state = createState();
-  assert.equal(state.view, "home");
+  assert.equal(state.view, "chat");
+  assert.equal(rootMenuItems(state).some((item) => item.id === "home" || item.label === "Overview"), false);
   assert.match(state.notice, /Demo mode/);
   assert.equal(state.messages.length, 2);
   assert.equal(state.adapterKind, "mock");
@@ -176,7 +180,7 @@ test("sanitized provider edits preserve existing API keys", () => {
 test("selection wraps in both directions", () => {
   const state = createState();
   moveSelection(state, -1);
-  assert.equal(state.selected, 2);
+  assert.equal(state.selected, state.snapshot.conversations.length - 1);
   moveSelection(state, 1);
   assert.equal(state.selected, 0);
 });
@@ -439,8 +443,7 @@ test("workspaces start collapsed and Enter toggles expansion", () => {
   const state = createState();
   assert.equal(state.workspaces.length, 3);
   assert.equal(state.expandedWorkspaceIds.size, 0);
-  moveMenuSelection(state, 1);
-  assert.equal(state.menuRootIndex, 1);
+  assert.equal(state.menuRootIndex, 0);
   assert.equal(activateMenu(state), "workspace-newmark-agent-demo");
   assert.equal(state.expandedWorkspaceIds.has("workspace-newmark-agent-demo"), true);
   moveMenuLevel(state, 1);
@@ -453,7 +456,6 @@ test("workspaces start collapsed and Enter toggles expansion", () => {
 
 test("up and down traverse directly through expanded workspace children", () => {
   const state = createState();
-  moveMenuSelection(state, 1);
   activateMenu(state);
   moveMenuSelection(state, 1);
   assert.equal(state.menuLevel, "workspace:workspace-newmark-agent-demo");
@@ -494,7 +496,7 @@ test("left and right cross menu boundary only at the leftmost content column", (
 
 test("workspace child activation switches target and snapshot", () => {
   const state = createState();
-  moveMenuSelection(state, 2);
+  state.menuRootIndex = rootMenuItems(state).findIndex((item) => item.id === "workspace-condensed-lab-demo");
   assert.equal(activateMenu(state), "workspace-condensed-lab-demo");
   moveMenuLevel(state, 1);
   assert.equal(state.menuLevel, "workspace:workspace-condensed-lab-demo");
@@ -696,6 +698,41 @@ test("conversation timeline keeps each collapsible Build Block immediately befor
       && expandedBetaBlock < expandedBetaSummary,
     "expansion may reveal run details but must keep each summary outside and directly after its owning Build Block"
   );
+});
+
+test("Build image display stays visible when collapsed and Enter opens its dedicated viewer", () => {
+  const state = createState();
+  switchView(state, "chat");
+  state.inputMode = true;
+  const image = {
+    id: "display-image-fixture", origin: "agent", name: "diagram.png", caption: "Release architecture",
+    mimeType: "image/png", dataUrl: "data:image/png;base64,aW1hZ2U="
+  };
+  state.snapshot.workRuns = [{
+    runId: "image-run", status: "completed", sequence: 1,
+    startedAt: "2026-08-01T10:00:00.000Z", endedAt: "2026-08-01T10:00:01.000Z",
+    events: [
+      { type: "tool_call", toolName: "image_display", toolCallId: "image-call", content: "Using tool image_display." },
+      { type: "tool_result", toolName: "image_display", toolCallId: "image-call", content: "Tool image_display completed.", displayImage: image }
+    ], guides: []
+  }];
+  let opened = null;
+  state.adapter.openImageViewer = (value) => { opened = value; return { ok: true }; };
+  let output = stripAnsi(render(state, 120, 30));
+  assert.match(output, /\[示意图\]/);
+  assert.doesNotMatch(output, /Release architecture|Enter 打开/);
+  state.conversationHistoryFocus = true;
+  state.historySelectedIndex = 0;
+  state.historySelectedImageIndex = 0;
+  output = stripAnsi(render(state, 120, 30));
+  assert.match(output, /\[示意图\].*Release architecture.*Enter 打开/);
+  assert.deepEqual(toggleSelectedBuildBlock(state), { ok: true });
+  assert.equal(opened.id, image.id);
+  state.historySelectedImageIndex = -1;
+  assert.equal(toggleSelectedBuildBlock(state), true);
+  output = stripAnsi(render(state, 120, 30));
+  assert.match(output, /TOOL image_display[\s\S]*\[示意图\]/);
+  assert.doesNotMatch(output, /Release architecture|Enter 打开/);
 });
 
 test("Build input and Guide placement follows the GUI run timeline in collapsed and expanded states", () => {
@@ -943,6 +980,8 @@ test("prepared desktop adapter preserves existing preload call signatures", asyn
     memoryLabRead: async (selector) => (calls.push(["memoryLabRead", selector]), { ok: true }),
     memoryLabVisualization: async () => (calls.push(["memoryLabVisualization"]), { ok: true }),
     memoryLabReindex: async () => (calls.push(["memoryLabReindex"]), { ok: true }),
+    openImageViewer: async (input) => (calls.push(["openImageViewer", input]), { ok: true }),
+    openMemoryOverview: async () => (calls.push(["openMemoryOverview"]), { ok: true }),
     setProviderEnabled: async (id, enabled) => (calls.push(["setProviderEnabled", id, enabled]), { ok: true }),
     validateModels: async (models) => (calls.push(["validateModels", models]), []),
     modelValidationStatus: async () => (calls.push(["modelValidationStatus"]), { running: false }),
@@ -997,10 +1036,12 @@ test("Memory Lab detail uses the existing visualization result shape", () => {
   assert.equal(detail.component.name, "ARC literature boundary");
   assert.match(detail.content, /Literature review blocks duplicate simulation/);
   const output = stripAnsi(render(state, 110, 34));
-  assert.match(output, /Memory Lab.*Overview.*Detail/);
-  assert.match(output, /Parent tags.*Selected tag.*Child tags/);
+  assert.match(output, /Memory Lab.*search tags/);
+  assert.match(output, /Overview · 示意图/);
+  assert.doesNotMatch(output, /Reindex|Rindex/);
+  assert.match(output, /Tags.*Selected tag.*Child tags/);
   assert.match(output, /Memory components.*Core memory/);
-  assert.match(output, /SIMULATED.*no disk read/);
+  assert.doesNotMatch(output, /SIMULATED|no disk read/);
   moveFocusHorizontal(state, 1);
   moveFocusHorizontal(state, 1);
   moveFocusHorizontal(state, 1);
@@ -1012,8 +1053,54 @@ test("Memory Lab detail uses the existing visualization result shape", () => {
   moveFocusHorizontal(state, -1);
   assert.equal(state.focusRegion, "content");
   assert.equal(state.contentColumn, 0);
+  assert.equal(activateMemorySelection(state).type, "memory-overview");
+  state.memoryColumnIndices[0] = 1;
   assert.equal(activateMemorySelection(state), true);
-  assert.equal(selectedMemoryDetail(state).tag, "research");
+  assert.equal(selectedMemoryDetail(state).tag, "arc");
+});
+
+test("Memory Lab tag search filters live tags and follows the first result", () => {
+  const state = createState();
+  switchView(state, "memory");
+  state.memorySearchActive = true;
+  assert.equal(setMemorySearchQuery(state, "wsl"), "wsl");
+  assert.deepEqual(memoryTagOptions(state), ["wsl"]);
+  assert.equal(selectedMemoryDetail(state).tag, "wsl");
+  const output = stripAnsi(render(state, 100, 32));
+  assert.match(output, /\/ wsl/);
+  assert.doesNotMatch(output, /> arc|> research/);
+  setMemorySearchQuery(state, "missing-tag");
+  assert.deepEqual(memoryTagOptions(state), []);
+  assert.match(stripAnsi(render(state, 100, 32)), /— none —/);
+});
+
+test("conversation title shows its current model selection", () => {
+  const state = createState();
+  assert.equal(activeConversationModelLabel(state), "Auto · gpt-5.6");
+  let output = stripAnsi(render(state, 100, 32));
+  assert.match(output, /Release readiness review\s+Auto · gpt-5\.6/);
+  selectConversationModel(state, 2);
+  assert.equal(activeConversationModelLabel(state), "GPT-5.6 Mini");
+  switchView(state, "chat");
+  output = stripAnsi(render(state, 100, 32));
+  assert.match(output, /Release readiness review\s+GPT-5\.6 Mini/);
+});
+
+test("paint scheduler coalesces bursts and suppresses identical frames", async () => {
+  const state = createState();
+  const writes = [];
+  const paint = createPaintScheduler(state, { write: (frame) => writes.push(frame) }, (value) => `${value.view}:${value.notice}`);
+  paint();
+  paint();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(writes.length, 1);
+  paint();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(writes.length, 1);
+  state.notice = "changed";
+  paint();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(writes.length, 2);
 });
 
 test("General Input mode opens a Guide or Next picker and persists the confirmed target mode", () => {
@@ -1202,7 +1289,7 @@ test("sidebar distinguishes workspace children from operations", () => {
   assert.match(output, /▸ \[W\] Newmark Agent/);
   assert.match(output, /▸ \[W\] Condensed Lab/);
   assert.match(output, /▸ \[R\] push-lite/);
-  assert.doesNotMatch(output, /Conversations/);
+  assert.doesNotMatch(output, /ROOT/);
   assert.match(output, /OPERATIONS/);
   assert.match(output, /Tools/);
   assert.match(output, /Memory Lab/);
@@ -1211,14 +1298,14 @@ test("sidebar distinguishes workspace children from operations", () => {
   assert.match(output, /Settings/);
   assert.doesNotMatch(output, /Runtime & services/);
   assert.match(output, /ACTIVE CONVERSATION/);
-  state.menuRootIndex = 1;
+  state.menuRootIndex = 0;
   activateMenu(state);
   assert.match(stripAnsi(render(state, 100, 34)), /Conversations/);
 });
 
 test("all primary views render without undefined output", () => {
   const state = createState();
-  for (const view of ["home", "chat", "plan", "goal", "agents", "model", "flowbar", "flowlist", "flowtask", "tools", "memory", "automation", "workflow", "settings", "help"]) {
+  for (const view of ["chat", "plan", "goal", "agents", "model", "flowbar", "flowlist", "flowtask", "tools", "memory", "automation", "workflow", "settings", "help"]) {
     switchView(state, view);
     const output = stripAnsi(render(state, 100, 32));
     assert.doesNotMatch(output, /undefined|null/);
@@ -1229,7 +1316,7 @@ test("all primary views render without undefined output", () => {
 test("ANSI sequences remain valid across view and terminal size matrix", () => {
   const state = createState();
   for (const [columns, rows] of [[52, 20], [60, 24], [78, 28], [100, 32], [140, 40]]) {
-    for (const view of ["home", "chat", "plan", "goal", "agents", "model", "flowbar", "flowlist", "flowtask", "tools", "memory", "automation", "workflow", "settings", "help"]) {
+    for (const view of ["chat", "plan", "goal", "agents", "model", "flowbar", "flowlist", "flowtask", "tools", "memory", "automation", "workflow", "settings", "help"]) {
       switchView(state, view);
       const output = render(state, columns, rows);
       assert.equal(stripAnsi(output).includes("\u001b"), false, `${view} at ${columns}x${rows}`);

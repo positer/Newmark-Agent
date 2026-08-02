@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.2.1-blue">
+  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.2.3-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -18,6 +18,10 @@
 Newmark Agent brings model routing, persistent workspaces, tools, subagents, workflows, and local state into one desktop application. Connect your own model providers and keep workspace prompts, credentials, conversations, and mutable state under your control.
 
 > Newmark Agent is under active development. Current packages are unsigned prerelease builds.
+
+The `dev-0.2.3` source binds the input area to the selected Conversation, so an unsent draft survives switching away and back. Transcript rerenders preserve the user's scroll position and keep following the bottom only when the view was already there. Ultra is a real highest-tier request setting: it maps to `max` reasoning effort at the provider boundary and instructs the primary Agent to orchestrate specialized SubAgents. Provider 402/insufficient-balance responses remain actionable errors instead of being streamed as ordinary Agent prose, and a balance failure pauses only the failed provider deployment for a bounded cooldown while other providers stay usable, so switching provider or model continues immediately. Tool provisioning keeps its broker available even when no task-specific schema is preloaded.
+
+The `dev-0.2.2` source makes Flow-owned Build Blocks use the same live work surface as direct user Builds. Every Flow dialog/logic component now appears when it begins, stays expanded while running, updates its elapsed time, streams public reasoning/progress and tool activity, and drives the owning Conversation plus send/stop control through the normal running-state contract. Provider failures remain attached to the owning Block; structured provider JSON is reduced to the useful HTTP status and message, and an already-reported Block failure no longer creates a duplicate `[Flow error]` Agent bubble. Hidden provider chain-of-thought remains private; only provider-authored public reasoning summaries and Newmark's public work events are rendered.
 
 The `dev-0.2.1` source refines the terminal interface launched with `Newmark --TUI`. It opens directly on the active Conversation instead of a synthetic Overview, shows the resolved current model beside the Conversation title, adds live `/` tag search to Memory Lab, removes non-functional labels and detail placeholders, and coalesces render requests while suppressing identical terminal frames. It continues to share Newmark's normal `~/.Newmark` configuration and Conversation store with the GUI and CLI.
 
@@ -42,7 +46,33 @@ The release gate covers DESKTOP, native TUI, CLI, GUI/TUI/CLI shared-backend str
 
 ## Download
 
-The latest prerelease is `dev-0.2.1`, including the image display/viewer pipeline, Memory Lab tag search, Crawl4AI-informed Browser Use optimization, per-check model-validation progress, shared five-tier intelligence control, durable Guide/Next mode, the optimized shared-backend TUI, and global `Newmark --GUI` / `Newmark --TUI` launchers.
+The latest prerelease is `dev-0.2.3`, including conversation-bound input drafts, live transcript scroll anchoring, the Ultra orchestrator tier, safe provider-balance failures, and the dev-0.2.2 Flow/UI/runtime improvements.
+
+### dev-0.2.3
+
+Download packages from the [dev-0.2.3 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.2.3).
+
+| Package | Platform | SHA-256 |
+| --- | --- | --- |
+| `Newmark-Agent-0.2.3-x64.msi` | Windows x64 installer with GUI and global GUI/TUI launcher | `1A3610F1491A0A3E1082B7AB37A422B941DC72CA88CAC7D38805FBB0EF955451` |
+| `Newmark-Agent-0.2.3-win-unpacked-x64.zip` | Windows x64 portable | `BCE5B2C4F30F9CFD9782BE1C02ECFF9F21A62C04A80E71FD5D015A3AB2663132` |
+| `Newmark-Agent-0.2.3-x86_64.AppImage` | Linux x64 AppImage | `E39419FBE17D023A3129F111E1177ABA4FDEC26E18355736C1C2D4ED20F4F16D` |
+| `Newmark-Agent-0.2.3-amd64.deb` | Debian/Ubuntu x64 package | `C7910D70621A147DB69FA488DA3B5CDD930AE0DB0257BEDC3ACD1BAFFFAD42E0` |
+| `Newmark-Agent-0.2.3-linux-unpacked-x64.zip` | Linux x64 portable | `8FF4F04F0054343A26A089447EEECD8C1F0F4F70511FDC0898D0BC771B868DD3` |
+
+The `dev-0.2.3` source binds the input area to the selected Conversation, preserving an unsent draft across conversation switches. Transcript rerenders retain the user's scroll position and continue following only when the view was already at the bottom. Ultra is a real highest-tier request setting: it maps to `max` reasoning effort at the provider boundary and tells the primary Agent to orchestrate specialized SubAgents. Provider 402/insufficient-balance responses remain actionable errors instead of being streamed as ordinary Agent prose, and the balance cooldown applies per provider deployment, so switching provider or model resumes immediately; tool provisioning keeps its broker available even when no task-specific schema is preloaded.
+
+### dev-0.2.2
+
+Download packages from the [dev-0.2.2 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.2.2).
+
+| Package | Platform | SHA-256 |
+| --- | --- | --- |
+| `Newmark-Agent-0.2.2-x64.msi` | Windows x64 installer with GUI and global GUI/TUI launcher | `7604023FB3C3B01F2453D808175B3ECE9EB2E8E070AB8899D8359CFD39D9DF3D` |
+| `Newmark-Agent-0.2.2-win-unpacked-x64.zip` | Windows x64 portable | `C7D2A51DC42FE8356EE1188FB09AA47AA2DE9167DCC6075E4D55C66EB12E1462` |
+| `Newmark-Agent-0.2.2-x86_64.AppImage` | Linux x64 AppImage | `58540221CFEB73A6FEBEA5102E715CBB56E9C6770563D47F00D6A069D9755B8F` |
+| `Newmark-Agent-0.2.2-amd64.deb` | Debian/Ubuntu x64 package | `18D4066C4BC8602777710349E025D3B837AB2682633B969C47166454756C3F08` |
+| `Newmark-Agent-0.2.2-linux-unpacked-x64.zip` | Linux x64 portable | `BAFD78C0E769BF3A14B7F17CEB2FC0192686134684319DFE1893E4DADEDD7A3F` |
 
 ### dev-0.2.1
 
@@ -92,7 +122,7 @@ Application upgrades preserve existing user state under `~/.Newmark`.
 The command package is prepared for npm. After registry publication, `Newmark --GUI` starts the native desktop surface (using an installed desktop package when available, with the npm Electron runtime as fallback), while `Newmark --TUI` starts the terminal surface:
 
 ```powershell
-npm.cmd install --global newmark-agent@0.2.1
+npm.cmd install --global newmark-agent@0.2.3
 Newmark --GUI
 Newmark --TUI
 ```
@@ -251,6 +281,9 @@ See [OVERVIEW.md](OVERVIEW.md) for the source tree, subsystem responsibilities, 
 - 2026-08-01: Advanced the source version to `dev-0.2.1` and refined the native TUI after reviewing current Claude Code, Codex CLI, and OpenCode terminal patterns. The TUI now opens directly on Conversations, removes the synthetic Overview/ROOT and non-functional detail labels, shows the current resolved model beside the Conversation title, and provides live `/` Memory Lab tag filtering with Enter follow and Esc clear. Render requests are event-loop coalesced, identical frames are not written twice, and animation cadence is capped at 4 FPS. TUI verification passes 52/52; the final unified DESKTOP, TUI, SSH, WSL, CLI, and GUI/TUI/CLI shared-backend gate exits 0. See `archive/20260801-dev-0.2.1-tui-search-rendering.md`.
 - 2026-08-01: Added the durable `image_display` Agent tool, GUI inline/collapsed Build image presentation, interactive TUI `示意图` rows, and a dedicated image/Memory Lab Overview viewer window. The viewer mode loads no main GUI components; Memory Lab Overview opens as a graph-only surface. Focused persistence/tool/UI verification, TUI 52/52, launcher 19/19, and the unified DESKTOP/SSH/WSL/CLI/shared-backend gates pass. See `archive/20260801-dev-0.2.1-image-display-viewer.md`.
 - 2026-08-02: Updated the `dev-0.2.1` packages so the TUI-opened Memory Lab Overview executes the exact GUI graph builder and renderer. A packaged-executable 30-window viewer stress (15 image + 15 Memory Lab overview) had zero failures; all Windows/Linux asset smokes passed. See `archive/20260802-memorylab-shared-overview-renderer.md` and `archive/20260801-dev-0.2.1-release.md`.
+- 2026-08-02: Advanced source development to `dev-0.2.2` and connected Flow-owned component Builds to the normal live Conversation event channel. Flow takeover now shows immediate running state, an expanded per-component Block with a live timer, public reasoning/progress and tool activity, plus the correct send/stop button state. Provider JSON errors are condensed and no longer create duplicate Flow Agent bubbles. Build/typecheck, 1375/1375 source assertions, a real Electron takeover smoke, and the 337-second unified DESKTOP/TUI/SSH/WSL/CLI/shared-backend gate pass; see `archive/20260802-dev-0.2.2-flow-live-build-state.md`.
+- 2026-08-02: Built the final `dev-0.2.2` Windows x64 MSI and unpacked ZIP through the complete release gate, installed the MSI machine-wide at `C:\Program Files\Newmark Agent`, and verified the installed EXE/app.asar hashes plus the complete installed CLI smoke. The temporary current-user fallback was removed, the machine Start Menu shortcut is active, and audited `~/.Newmark` configuration hashes are unchanged; see `archive/20260802-dev-0.2.2-local-package-install.md`.
+- 2026-08-02: Advanced source development to `dev-0.2.3`: input drafts are conversation-bound, transcript rerenders preserve user scroll position, Ultra maps to provider `max` reasoning, provider-balance errors no longer leak into live prose, and the tool-provision broker remains callable for tool discovery. Verification and package evidence are recorded in `archive/20260802-dev-0.2.3-update.md`.
 - 2026-07-29: Extended the post-release TUI source with a flat `WorkFlow` Operation whose content area lists, expands, and creates FlowEngine workflows, plus a real Automation creation form bound to the active Workspace/Conversation. Long side menus now scroll with their cursor. Conversation history receives the terminal-height remainder while a two-row input viewport stays reserved. Input-top Up enters a Build Block cursor; continued Up scrolls older history only after crossing the visible top, while newer-history scrolling remains input-bottom Down. The Conversation timeline now matches the GUI's run ownership: primary input, collapsible Build Block with persistent duration/fold state, deduplicated Guides, and the owning always-visible final summary remain one strictly ordered `runId` group. Settings / General now opens a real Guide/Next list for the default Enter behavior and persists it through the shared input-mode backend. TUI verification passes 48/48.
 - 2026-07-29: Released `dev-0.2.0` with the real terminal UI entry `Newmark --TUI`. The MSI installs a console-subsystem launcher on the user PATH; it preserves the caller cwd, registers or restores it through the existing WorkspaceManager, and shares `~/.Newmark` persistence with GUI/CLI. TUI message wrapping uses terminal display width for CJK/full-width/emoji text and complete light/dark canvases. TUI tests pass 38/38, launcher checks pass 17/17, the full DESKTOP suite passes 1365/1365 plus specialized gates, and shared-backend stress passes five consecutive runs. Real loopback SSH and Ubuntu 24.04 WSL 2 PTY regressions cover the complete interaction flow. See `archive/20260729-tui-cjk-partition-global-launcher.md` and `archive/20260729-dev-0.2.0-tui-shared-backend.md`.
 - 2026-07-28: Released `dev-0.1.12`. Memory Lab now performs one visualization retrieval only on open, Reset, or successful reindex; click/drag/zoom/Detail interactions reuse the loaded relationship/content snapshot. Index and component caches cut the accepted 300-component × 600-query P95 to `10.857 ms` (maximum `14.827 ms`), while a complete 300-component visualization refresh took `426.6 ms`. The same disposable-root gate created and archived 120 conversations at zero interval with no loss and P95 interaction latency of `11.8/13.5 ms`. The retained-DOM, non-overlapping frame pipeline and all Windows/Linux release assets passed packaged smoke. See `archive/20260728-dev-0.1.12-memory-lab-snapshot-release.md`.

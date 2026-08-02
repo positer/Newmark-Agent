@@ -4934,6 +4934,7 @@ html.newmark-memory-overview-viewer body {
               <option value="high">high</option>
               <option value="xhigh">xhigh</option>
               <option value="max">max</option>
+              <option value="ultra">ultra</option>
             </select>
             <div class="mode-toggle" id="mode-toggle">
               <button class="mode-toggle-btn active" data-mode="guide" onclick="window.setInputMode('guide')">Guide</button>
@@ -5121,6 +5122,7 @@ var state = {
   activeConversationBranchGroupId: '',
   guideMessageIndexByClientId: {},
   pendingInputEdit: null,
+  conversationDrafts: {},
   _editingQueueIndex: -1,
   _editingGoalText: '',
   goalDraftAttachments: [],
@@ -5299,6 +5301,7 @@ var NEWMARK_I18N = {
     'intel.high': 'high',
     'intel.xhigh': 'xhigh',
     'intel.max': 'max',
+    'intel.ultra': 'ultra',
     'message.user': 'User input',
     'message.workflow': 'Workflow',
     'message.system': 'System',
@@ -5860,6 +5863,7 @@ var NEWMARK_I18N = {
     'intel.high': 'high',
     'intel.xhigh': 'xhigh',
     'intel.max': 'max',
+    'intel.ultra': 'ultra',
     'message.user': '用户输入',
     'message.workflow': '工作流',
     'message.system': '系统',
@@ -6459,7 +6463,7 @@ function applyLanguageToUi() {
   updateSubmitButtonState();
   setTitleAndLabel('#left-collapse-btn', t('left.collapse'));
   setSelectOptionText('mode-select', { build: t('mode.build'), plan: t('mode.plan'), goal: t('mode.goal'), flow: t('mode.flow') });
-  setSelectOptionText('intel-select', { low: t('intel.low'), medium: t('intel.medium'), high: t('intel.high'), xhigh: t('intel.xhigh'), max: t('intel.max') });
+  setSelectOptionText('intel-select', { low: t('intel.low'), medium: t('intel.medium'), high: t('intel.high'), xhigh: t('intel.xhigh'), max: t('intel.max'), ultra: t('intel.ultra') });
   var guideBtn = document.querySelector('.mode-toggle-btn[data-mode="guide"]');
   var nextBtn = document.querySelector('.mode-toggle-btn[data-mode="next"]');
   if (guideBtn) guideBtn.textContent = t('input.guide');
@@ -7111,7 +7115,31 @@ function redactSensitiveText(value) {
 
 function formatChatError(value, fallback) {
   var detail = redactSensitiveText(String(value || '').trim() || fallback || 'Agent run failed.');
+  var status = (detail.match(/\[(?:LLM Error|Error)(?::\s*(\d{3}))?[^\]]*\]/i) || [])[1] || '';
+  var jsonStart = detail.indexOf('{');
+  if (jsonStart >= 0) {
+    try {
+      var parsed = JSON.parse(detail.slice(jsonStart));
+      var cursor = parsed;
+      for (var depth = 0; cursor && typeof cursor === 'object' && depth < 4; depth++) {
+        if (typeof cursor.message === 'string' && cursor.message.trim()) {
+          detail = (currentLang() === 'zh' ? '模型服务请求失败' : 'Model provider request failed') +
+            (status ? ' (HTTP ' + status + ')' : '') + ': ' + cursor.message.trim();
+          break;
+        }
+        cursor = cursor.error || cursor.detail || cursor.response;
+      }
+    } catch (_) { /* retain the redacted non-JSON error */ }
+  }
   return /^\s*\[Error\]/i.test(detail) ? detail : '[Error] ' + detail;
+}
+
+function flowRelayedErrorWasShown(target) {
+  target = target || currentConversationTarget();
+  var relayed = state._lastFlowRelayedError;
+  return !!(relayed
+    && relayed.runtimeKey === runtimeKeyFor(target.workspaceId, target.conversationId)
+    && Date.now() - Number(relayed.at || 0) < 10000);
 }
 
 function messageActionsHtml(role, text, messageIndex) {
@@ -7640,6 +7668,7 @@ function appendConversationImageAttachments(container, input) {
 }
 
 function addMsg(role, text, mode, model, messageIndex, messageMeta) {
+  var chatWasAtBottom = !!(els['chat-area'] && shouldAutoScroll(els['chat-area']));
   text = redactSensitiveText(text);
   var owningRunId = messageMeta && String(messageMeta.runId || '');
   if (owningRunId && role === 'assistant' && els['chat-area']) {
@@ -7704,6 +7733,7 @@ function addMsg(role, text, mode, model, messageIndex, messageMeta) {
     if (runWrapper && runWrapper.parentNode === els['chat-area']) runWrapper.insertAdjacentElement('afterend', div);
     else els['chat-area'].appendChild(div);
   } else els['chat-area'].appendChild(div);
+  if (chatWasAtBottom) _chatShouldAutoScroll = true;
   autoScrollIfAtBottom();
   return div;
 }
@@ -9019,6 +9049,7 @@ function updateConversationWorkRunElement(run, element) {
     var refreshedKey = refreshedParentKey ? refreshedParentKey + '::' + refreshedDetailKey : '';
     if (activityOpenStates[refreshedKey] !== undefined) refreshedActivities[refreshedIndex].open = activityOpenStates[refreshedKey];
   }
+  autoScrollIfAtBottom();
   return element;
 }
 
@@ -9080,7 +9111,7 @@ function applyAgentWorkEventToRun(event) {
   var runs = workRunsForBranch(target, eventBranchId);
   var run = runs.find(function(item) { return item.runId === String(event.runId); });
   if (!run) {
-    run = normalizedWorkRun({ runId: event.runId, status: 'running', startedAt: event.startedAt || event.timestampIso || new Date().toISOString(), events: [] }, target);
+    run = normalizedWorkRun({ runId: event.runId, status: 'running', expanded: true, startedAt: event.startedAt || event.timestampIso || new Date().toISOString(), events: [] }, target);
     runs.push(run);
     if (isActiveConversationTarget(target) && els['chat-area']) {
       var rejectedGuides = els['chat-area'].querySelectorAll('.chat-msg.guide-rejected');
@@ -9088,6 +9119,7 @@ function applyAgentWorkEventToRun(event) {
     }
   }
   var type = String(event.type || 'status');
+  if (type === 'start' && run.userToggled !== true) run.expanded = true;
   if ((type.indexOf('guide') === 0 || event.guide) && (event.clientMessageId || (event.guide && event.guide.clientMessageId))) {
     recordGuideUiMessage(event, target);
   }
@@ -9370,7 +9402,9 @@ function renderPersistedToolMessage(message) {
 function renderChatMessages(messages) {
   state.renderedChatMessages = Array.isArray(messages) ? messages.map(function(message) { return Object.assign({}, message); }) : [];
   if (!els['chat-area']) return;
+  var chatWasAtBottom = shouldAutoScroll(els['chat-area']);
   els['chat-area'].innerHTML = '';
+  if (chatWasAtBottom) _chatShouldAutoScroll = true;
   var renderConversationId = activeConversationId();
   var renderTarget = currentConversationTarget(renderConversationId);
   var guideMessages = guideMessagesForTarget(renderTarget);
@@ -9699,10 +9733,24 @@ function appendAgentWorkEvent(event) {
   }
   var terminalEvent = (event.status && ['completed', 'interrupted', 'force_interrupted', 'error'].indexOf(String(event.status)) >= 0)
     || ['done', 'error', 'interrupted', 'force_interrupted'].indexOf(String(event.type || '')) >= 0;
+  if (active && String(event.type || '') === 'error' && state._flowRunning) {
+    state._lastFlowRelayedError = {
+      runtimeKey: runtimeKeyFor(target.workspaceId, target.conversationId),
+      at: Date.now()
+    };
+  }
+  if (active && terminalEvent && state._flowRunning && state._flowRuntimeLease
+    && runtimeKeyFor(state._flowRuntimeLease.target.workspaceId, state._flowRuntimeLease.target.conversationId) === runtimeKeyFor(target.workspaceId, target.conversationId)) {
+    setConversationRuntimeState(target, 'running', state._flowRuntimeLease.runId, { provisional: true, flow: true });
+  }
   if (event.type === 'done' || event.type === 'error') {
     if (visibleRuntimeBranch) renderAgentWorkEvent(event);
   } else if (visibleRuntimeBranch) {
     renderAgentWorkEvent(event);
+  }
+  if (active) {
+    setWorking(!!runningConversationRecord(activeConversationId()) || !!state._flowRunning);
+    updateSubmitButtonState();
   }
   if (active && event.type === 'tool_result' && ['linked_plan', 'task', 'subagent_send', 'subagent_read', 'subagent_close'].indexOf(String(event.toolName || '')) >= 0 && api.getState) {
     var eventWorkspaceKey = currentWorkspaceKey();
@@ -9988,6 +10036,7 @@ window.optionSelected = function(questionKey, opt, button) {
   state.pendingOptionAnswers = {};
   state.pendingOptionBatchKey = '';
   if (state._flowRunning && state.mode === 'flow' && api.resumeFlow) {
+    state._lastFlowRelayedError = null;
     return Promise.resolve(api.resumeFlow(feedback)).then(async function(result) {
       if (result && Array.isArray(result.chatMessages)) {
         if (Array.isArray(result.workRuns)) renderConversationWorkRuns(result.workRuns, currentConversationTarget());
@@ -9999,14 +10048,14 @@ window.optionSelected = function(questionKey, opt, button) {
         return result;
       }
       var completed = !!(result && result.ok);
-      if (!completed) addMsg('assistant', '[Flow error] ' + ((result && result.error) || 'Flow resume failed'), 'error', state.model);
+      if (!completed && !flowRelayedErrorWasShown(currentConversationTarget())) showUiNotice(formatChatError((result && result.error) || 'Flow resume failed'), 'error', 'flow-resume-error');
       else addMsg('assistant', '[System] Flow complete.', 'flow', state.model);
       var settlement = stopFlowRunInternal(completed ? {} : { keepPaused: true });
       await setVisibleMode('build');
       if (completed && settlement && settlement.shouldDrain) window.scheduleNextQueueDrain(settlement.target);
       return result;
     }).catch(async function(error) {
-      addMsg('assistant', '[Flow error] ' + (error && error.message ? error.message : String(error)), 'error', state.model);
+      if (!flowRelayedErrorWasShown(currentConversationTarget())) showUiNotice(formatChatError(error && error.message ? error.message : String(error), 'Flow resume failed.'), 'error', 'flow-resume-error');
       stopFlowRunInternal({ keepPaused: true });
       await setVisibleMode('build');
       return { ok: false, error: error && error.message ? error.message : String(error) };
@@ -10046,6 +10095,23 @@ function promptHasText() {
   return !!(els.prompt && /\S/.test(String(els.prompt.value || '')));
 }
 
+function conversationDraftKey(target) {
+  target = target || currentConversationTarget();
+  return runtimeKeyFor(target && target.workspaceId, target && target.conversationId || 'default');
+}
+function saveActiveConversationDraft() {
+  if (els.prompt) state.conversationDrafts[conversationDraftKey()] = String(els.prompt.value || '');
+}
+function restoreConversationDraft(target) {
+  if (!els.prompt) return;
+  var key = conversationDraftKey(target);
+  els.prompt.value = Object.prototype.hasOwnProperty.call(state.conversationDrafts, key) ? state.conversationDrafts[key] : '';
+  schedulePromptInputRefresh();
+}
+function clearActiveConversationDraft() {
+  delete state.conversationDrafts[conversationDraftKey()];
+}
+
 function isCurrentConversationRunning() {
   var id = activeConversationId();
   return !!(id && runningConversationRecord(id));
@@ -10068,7 +10134,7 @@ function setSubmitButtonVisual(icon, label, running, stopMode) {
 
 function updateSubmitButtonState() {
   var runtime = runningConversationRecord(activeConversationId());
-  var running = !!runtime;
+  var running = !!runtime || !!state._flowRunning;
   var hasText = promptHasText();
   if (running && !hasText) {
     var escalating = runtime && ['stopping', 'force_restarting'].indexOf(String(runtime.status || '')) >= 0;
@@ -11185,6 +11251,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     }
     state.nextQueueRequests.push(queuedModeRequest);
     els.prompt.value = '';
+    clearActiveConversationDraft();
     if (usesPromptAttachments) clearPromptAttachments();
     refreshNextPromptForTarget(lockedTarget);
     state.queueCollapsed = false;
@@ -11206,7 +11273,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   }
 
   if (conversationRunning && effectiveInputMode === 'guide' && (!opts.fromQueue || opts.deliverAsGuide)) {
-    if (!opts.fromQueue) els.prompt.value = '';
+    if (!opts.fromQueue) { els.prompt.value = ''; clearActiveConversationDraft(); }
     if (usesPromptAttachments) clearPromptAttachments();
     updateSubmitButtonState();
     var clientMessageId = queuedRequestRecord && String(queuedRequestRecord.clientMessageId || '').trim().slice(0, 200);
@@ -11305,7 +11372,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   bindWorkRunAnchorIndex(lockedTarget, localRunId, Number(opts.optimisticMessageIndex));
   setConversationRuntimeState(lockedTarget, 'running', localRunId, { provisional: true });
   setWorking(true);
-  if (!opts.fromQueue) els.prompt.value = '';
+  if (!opts.fromQueue) { els.prompt.value = ''; clearActiveConversationDraft(); }
   if (usesPromptAttachments) clearPromptAttachments();
   updateSubmitButtonState();
   var executionMode = opts.goalDeclaration || requestedMode === 'goal' ? 'build'
@@ -14764,6 +14831,14 @@ function stopFlowRunInternal(options) {
   state._flowRunning = false;
   state.flowPromptText = '';
   window.renderFlowTakeover(false);
+  var runtimeLease = state._flowRuntimeLease || null;
+  state._flowRuntimeLease = null;
+  if (runtimeLease) {
+    var leasedRuntime = runningConversationRecord(runtimeLease.target.conversationId, runtimeLease.target.workspaceId);
+    if (leasedRuntime && String(leasedRuntime.runId || '') === String(runtimeLease.runId || '')) {
+      setConversationRuntimeState(runtimeLease.target, 'completed', runtimeLease.runId, { provisional: false });
+    }
+  }
   var settlement = settleFlowQueueTakeover(options);
   var prompt = els.prompt;
   if (prompt) {
@@ -14771,6 +14846,9 @@ function stopFlowRunInternal(options) {
     prompt.disabled = false;
     prompt.focus();
   }
+  setWorking(!!runningConversationRecord(activeConversationId()));
+  updateSubmitButtonState();
+  renderConversations();
   window.renderInputStack();
   return settlement;
 }
@@ -14873,7 +14951,17 @@ window.runFlowWork = async function(workIdx) {
     els.prompt.placeholder = t('flow.runningPlaceholder');
     els.prompt.disabled = false;
   }
+  var flowWaitingForPriorBuild = isCurrentConversationRunning();
   state._flowRunning = true;
+  state._lastFlowRelayedError = null;
+  if (!flowWaitingForPriorBuild) {
+    var provisionalFlowRunId = 'flow-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+    state._flowRuntimeLease = { target: flowTarget, runId: provisionalFlowRunId };
+    setConversationRuntimeState(flowTarget, 'running', provisionalFlowRunId, { provisional: true, flow: true });
+  }
+  setWorking(true);
+  updateSubmitButtonState();
+  renderConversations();
   window.renderFlowTakeover(true, normalized.name);
   window.renderInputStack();
   addMsg('assistant', '[System] ' + t('flow.started') + ': ' + normalized.name, 'flow', state.model);
@@ -14884,10 +14972,17 @@ window.runFlowWork = async function(workIdx) {
     if (api.saveFlow) {
       await api.saveFlow(normalized);
     }
-    while (state._flowRunning && isCurrentConversationRunning()) {
+    while (state._flowRunning && flowWaitingForPriorBuild && isCurrentConversationRunning()) {
       await new Promise(function(resolve) { setTimeout(resolve, 100); });
     }
     if (!state._flowRunning) return;
+    if (!state._flowRuntimeLease) {
+      var resumedFlowRunId = 'flow-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+      state._flowRuntimeLease = { target: flowTarget, runId: resumedFlowRunId };
+      setConversationRuntimeState(flowTarget, 'running', resumedFlowRunId, { provisional: true, flow: true });
+      updateSubmitButtonState();
+      renderConversations();
+    }
     if (api.setMode) await api.setMode('flow');
     state.mode = 'flow';
     var r = await api.runFlow(normalized.name, flowInput, 0);
@@ -14915,7 +15010,10 @@ window.runFlowWork = async function(workIdx) {
       throw new Error((r && r.error) || 'Flow failed');
     }
   } catch(err) {
-    addMsg('assistant', '[Flow error] ' + (err && err.message ? err.message : String(err)), 'error', state.model);
+    var flowErrorWasAlreadyShown = flowRelayedErrorWasShown(flowTarget);
+    if (!flowErrorWasAlreadyShown) {
+      showUiNotice(formatChatError(err && err.message ? err.message : String(err), 'Flow failed.'), 'error', 'flow-run-error');
+    }
   } finally {
     if (flowSuspended) return;
     var settlement = stopFlowRunInternal(flowCompletedNormally ? {} : { keepPaused: true });
@@ -16165,6 +16263,7 @@ window.newConversation = function(workspaceReference) {
     window.selectWorkspace(workspaceReference);
   }
   if (!window.requireWorkspace('newConversation')) return;
+  saveActiveConversationDraft();
   var convs = currentWorkspaceConversations();
   var createdWorkspaceKey = currentWorkspaceKey();
   state.nextConversationSequence = Number(state.nextConversationSequence || 0) + 1;
@@ -16178,6 +16277,8 @@ window.newConversation = function(workspaceReference) {
   holdForegroundConversation(id, 30000);
   markConversationTracked(id, state.conversationTrackMs || 300000, runtimeWorkspaceId(''));
   state.conversationPlan = { items: [] };
+  if (els.prompt) els.prompt.value = '';
+  clearActiveConversationDraft();
   renderConversations();
   els['chat-area'].innerHTML = '';
   var target = currentConversationTarget(id);
@@ -16241,6 +16342,7 @@ window.doNewConversationFromPage = function() {
 window.switchConversation = function(idx) {
   if (!window.requireWorkspace('switchConversation')) return;
   var previousId = activeConversationId();
+  saveActiveConversationDraft();
   if (previousId) markConversationTracked(previousId, state.conversationTrackMs || 300000);
   setActiveWorkspaceConversation(idx);
   var activeId = activeConversationId();
@@ -16255,6 +16357,7 @@ window.switchConversation = function(idx) {
   els['chat-area'].innerHTML = '';
   addMsg('workflow running', t('conversation.loadingIsolated'), 'system', state.model);
   syncBackendConversation().then(function() {
+    restoreConversationDraft(currentConversationTarget());
     renderConversations();
     refreshNextPromptForTarget(currentConversationTarget());
     window.renderInputStack();
@@ -17968,6 +18071,7 @@ window.selectWorkspace = function(reference, initialSnapshot) {
   var activeId = String((initialSnapshot && initialSnapshot.conversationId) || activeConversationId() || 'default');
   var refresh = initialSnapshot ? loadActiveConversationMessages(activeId) : syncBackendConversation();
   refresh.then(function() {
+    restoreConversationDraft(currentConversationTarget());
     if (state.rightTab === 'plan') window.renderConversationPlan();
     window.refreshTerminalTakeoverPanes();
     refreshNextPromptForTarget(currentConversationTarget());
@@ -17989,6 +18093,7 @@ window.switchToWorkspace = async function(reference) {
   var generation = ++state.workspaceSwitchGeneration;
   if (window.requestEditorTransition && !await window.requestEditorTransition()) return null;
   if (generation !== state.workspaceSwitchGeneration) return null;
+  saveActiveConversationDraft();
   state.workspaceSwitchInFlight = reference;
   return api.selectWorkspace(reference).then(function(ws) {
     if (generation !== state.workspaceSwitchGeneration) return null;
@@ -18579,6 +18684,7 @@ function schedulePostStartupUiRendering() {
       }
     });
     els.prompt.addEventListener('input', function() {
+      saveActiveConversationDraft();
       schedulePromptInputRefresh();
     });
     els.prompt.addEventListener('paste', function(e) {

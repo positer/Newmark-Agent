@@ -867,7 +867,7 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
     models: {
       providers: { _description: "LLM providers", _type: "array", value: [] },
       default_model: { _description: "Default model", _type: "string", value: "" },
-      default_intelligence: { _description: "Default reasoning effort", _type: "choice", _values: ["low","medium","high","xhigh","max"], value: "medium" },
+      default_intelligence: { _description: "Default reasoning effort", _type: "choice", _values: ["low","medium","high","xhigh","max","ultra"], value: "medium" },
       agent_engine: { _description: "Agent engine", _type: "choice", _values: ["builtin","codex","opencode"], value: "builtin" },
       auto_switch: { _description: "Auto-switch models", _type: "boolean", value: false },
       auto_switch_preference: { _description: "Auto route policy", _type: "choice", _values: ["quality","balanced","cost","speed"], value: "balanced" },

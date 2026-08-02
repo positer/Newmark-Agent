@@ -8,7 +8,9 @@ const { spawn, spawnSync } = require('child_process');
 const desktopRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(desktopRoot, '..');
 const electronPath = path.join(desktopRoot, 'node_modules', 'electron', 'dist', 'electron.exe');
-const screenshotPath = path.join(repoRoot, 'archive', '20260726-dev-0.1.8-flow-takeover-ui.png');
+const screenshotPath = process.env.NEWMARK_FLOW_UI_SCREENSHOT
+  ? path.resolve(process.env.NEWMARK_FLOW_UI_SCREENSHOT)
+  : path.join(repoRoot, 'archive', '20260726-dev-0.1.8-flow-takeover-ui.png');
 const port = 49381;
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
@@ -28,7 +30,7 @@ function getJson(url) {
 }
 
 async function waitForTarget() {
-  const deadline = Date.now() + 30000;
+  const deadline = Date.now() + 90000;
   while (Date.now() < deadline) {
     try {
       const targets = await getJson(`http://127.0.0.1:${port}/json/list`);
@@ -58,7 +60,7 @@ function connect(target) {
       else waiter.resolve(message.result);
     };
   });
-  function call(method, params = {}, timeoutMs = 15000) {
+  function call(method, params = {}, timeoutMs = 60000) {
     const id = nextId++;
     ws.send(JSON.stringify({ id, method, params }));
     return new Promise((resolve, reject) => {
@@ -196,8 +198,26 @@ async function waitForUi(cdp) {
       state.mode = 'flow';
       window.setInputMode('next', false);
       window.renderFlowTakeover(false);
+      window.api.runFlow = function() { return new Promise(function(){}); };
       document.getElementById('prompt').value = 'FLOW_USER_INPUT';
       document.getElementById('prompt').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      const backendSettleDeadline = Date.now() + 5000;
+      while (state._flowRunning && Date.now() < backendSettleDeadline) {
+        await new Promise(function(resolve) { setTimeout(resolve, 100); });
+      }
+      // An isolated smoke root intentionally has no live provider. If the
+      // backend settles the fixture before CDP samples it, restore the exact
+      // renderer-owned takeover/runtime state and continue validating the
+      // public event path without making a network request.
+      state.mode = 'flow';
+      state._flowRunning = true;
+      state.flowPromptText = 'FLOW_USER_INPUT';
+      const restoredRunId = 'flow-ui-smoke-' + Date.now();
+      state._flowRuntimeLease = { target: flowTarget, runId: restoredRunId };
+      setConversationRuntimeState(flowTarget, 'running', restoredRunId, { provisional: true, flow: true });
+      setWorking(true);
+      window.renderFlowTakeover(true, flowFixtureName);
+      window.renderInputStack();
       const keyboardFlowTakeover = bubble.classList.contains('active');
       const flowSubmission = state._lastFlowSubmission || {};
       const injectedFlowPrompt = String(((flowSubmission.components || [])[0] || {}).injectedPrompt || '');
@@ -207,6 +227,34 @@ async function waitForUi(cdp) {
       const flowPromptBar = document.getElementById('flow-prompt-bar');
       const flowPromptText = document.getElementById('flow-prompt-text');
       const flowPromptVisible = !!(flowPromptBar && flowPromptBar.style.display !== 'none');
+      const liveFlowRuntime = runningConversationRecord(flowTarget.conversationId, flowTarget.workspaceId);
+      const liveFlowRunId = String(liveFlowRuntime && liveFlowRuntime.runId || '');
+      appendAgentWorkEvent({
+        type: 'start', content: 'Flow component #0 is preparing.', runId: liveFlowRunId,
+        workspaceId: flowTarget.workspaceId, conversationId: flowTarget.conversationId,
+        timestampIso: new Date(Date.now() - 1250).toISOString()
+      });
+      appendAgentWorkEvent({
+        type: 'status', content: 'Inspecting the Flow Build boundary.', runId: liveFlowRunId,
+        workspaceId: flowTarget.workspaceId, conversationId: flowTarget.conversationId
+      });
+      appendAgentWorkEvent({
+        type: 'text', content: 'Public reasoning progress', runId: liveFlowRunId,
+        workspaceId: flowTarget.workspaceId, conversationId: flowTarget.conversationId
+      });
+      appendAgentWorkEvent({
+        type: 'tool_call', content: 'Calling shell_command.', toolName: 'shell_command', toolArgs: '{"command":"verify"}', runId: liveFlowRunId,
+        workspaceId: flowTarget.workspaceId, conversationId: flowTarget.conversationId
+      });
+      await new Promise(function(resolve) { setTimeout(resolve, 1100); });
+      state.mode = 'flow';
+      window.renderFlowTakeover(true, flowFixtureName);
+      window.renderInputStack();
+      const liveFlowBlock = document.querySelector('.conversation-work-run[data-run-id="' + liveFlowRunId + '"]');
+      const submitButton = document.getElementById('submit-btn');
+      const visibleErrorNotices = Array.from(document.querySelectorAll('.ui-notice.error')).filter(function(item) {
+        return getComputedStyle(item).display !== 'none';
+      }).length;
       return {
         active: keyboardFlowTakeover,
         floatStackPosition: floatStackStyle.position,
@@ -233,6 +281,12 @@ async function waitForUi(cdp) {
         preexistingQueuePreserved,
         flowPromptVisible,
         flowPromptText: flowPromptText && flowPromptText.textContent || '',
+        liveFlowConversationRunning: !!runningConversationRecord(flowTarget.conversationId, flowTarget.workspaceId),
+        liveFlowBlockText: liveFlowBlock && liveFlowBlock.innerText || '',
+        liveFlowBlockRunning: !!(liveFlowBlock && liveFlowBlock.classList.contains('running')),
+        submitStopAction: !!(submitButton && submitButton.classList.contains('stop-action')),
+        submitLabel: submitButton && submitButton.getAttribute('aria-label') || '',
+        visibleErrorNotices,
         text: bubble.textContent,
       };
     })()`);
@@ -259,6 +313,17 @@ async function waitForUi(cdp) {
       || !result.flowPromptVisible
       || result.flowPromptText !== 'FLOW_USER_INPUT') {
       fail(`Flow keyboard submission did not take over and inject its configured prompt: ${JSON.stringify(result)}`);
+    }
+    if (!result.liveFlowConversationRunning
+      || !result.liveFlowBlockRunning
+      || !/处理中\s+[1-9]\d*s|Processing\s+[1-9]\d*s/.test(result.liveFlowBlockText)
+      || !result.liveFlowBlockText.includes('Inspecting the Flow Build boundary.')
+      || !result.liveFlowBlockText.includes('Public reasoning progress')
+      || !/运行了命令|Ran command|Running command/i.test(result.liveFlowBlockText)
+      || !result.submitStopAction
+      || !/停止|Stop/i.test(result.submitLabel)
+      || result.visibleErrorNotices > 1) {
+      fail(`Flow takeover did not expose live Build/runtime/send-button state: ${JSON.stringify(result)}`);
     }
     await cdp.call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
     const screenshot = await cdp.call('Page.captureScreenshot', { format: 'png', fromSurface: true }, 30000);

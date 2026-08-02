@@ -84,6 +84,7 @@ function createFixture(): {
     function renderPersistedToolMessage() {}
     function finishToolBatch() {}
     function autoScrollIfAtBottom() {}
+    function shouldAutoScroll() { return true; }
     function findWorkRunElement(run) { return document.querySelector('[data-test-run-id="' + String(run && run.runId || '') + '"]'); }
     function renderConversationWorkRun(run) {
       var row = document.createElement('div');

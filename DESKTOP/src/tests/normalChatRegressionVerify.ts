@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Agent } from '../core/agent';
+import { classifyRouteFailure } from '../core/autoRouter';
 import { agentKernelRunnerInternals } from '../core/agentKernelRunner';
 import type { StreamToken } from '../core/types';
 
@@ -44,6 +45,8 @@ function writeConfig(root: string, providers: Array<Record<string, unknown>>): v
 }
 
 async function main(): Promise<void> {
+  assert.equal(classifyRouteFailure('HTTP 402 Insufficient Balance').type, 'balance_exhausted');
+  assert.equal(classifyRouteFailure('HTTP 402 Insufficient Balance').retryable, false);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-normal-chat-'));
   const errorRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-normal-chat-error-'));
   const fallbackRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-normal-chat-fallback-'));

@@ -342,6 +342,18 @@ function isStartupShellUrl(value: string): boolean {
   }
 }
 
+function relayFlowAgentWorkEvents(flowAgent: Agent, target: ConversationRuntimeTarget): () => void {
+  return flowAgent.subscribeWorkEvents(event => {
+    broadcastAgentWorkEvent({
+      ...event,
+      conversationId: target.conversationId,
+      workspaceId: target.workspaceId,
+      workspaceKey: target.workspaceKey,
+      runtimeKey: target.runtimeKey,
+    });
+  });
+}
+
 function themedAppIconPath(): string {
   const themeName = nativeTheme.shouldUseDarkColors ? 'light' : 'dark';
   const compactPath = path.join(__dirname, 'assets', `app-icon-${themeName}-64.png`);
@@ -2292,6 +2304,8 @@ if (isViewerArg) {
       const flowAbortController = new AbortController();
       activeFlowAbortController = flowAbortController;
       activeFlowName = workflow.name;
+      const flowTarget = conversationRuntimeTarget(agent.activeConversationId || 'default');
+      const stopRelayingFlowEvents = relayFlowAgentWorkEvents(agent, flowTarget);
       let suspended = false;
       try {
         agent.flow = workflow;
@@ -2349,6 +2363,7 @@ if (isViewerArg) {
         }
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       } finally {
+        stopRelayingFlowEvents();
         if (activeFlowAbortController === flowAbortController) {
           activeFlowAbortController = null;
           if (!suspended) activeFlowName = '';
@@ -2368,6 +2383,8 @@ if (isViewerArg) {
       activeFlowAbortController = flowAbortController;
       activeFlowName = suspension.workflow.name;
       activeFlowSuspension = null;
+      const flowTarget = conversationRuntimeTarget(agent.activeConversationId || 'default');
+      const stopRelayingFlowEvents = relayFlowAgentWorkEvents(agent, flowTarget);
       let suspendedAgain = false;
       try {
         agent.flow = suspension.workflow;
@@ -2421,6 +2438,7 @@ if (isViewerArg) {
         }
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       } finally {
+        stopRelayingFlowEvents();
         if (activeFlowAbortController === flowAbortController) activeFlowAbortController = null;
         if (!suspendedAgain) {
           activeFlowName = '';

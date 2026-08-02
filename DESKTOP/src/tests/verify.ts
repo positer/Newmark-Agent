@@ -527,7 +527,7 @@ async function main() {
   assert(mainSource.includes('conversationSnapshot: localConversationSnapshotForStartup(target)') && mainSource.includes("conversationId: agent.activeConversationId || 'default'"), 'workspace selection: response includes the already-loaded persisted active conversation snapshot');
   assert(mainSource.includes('const resident = peekTargetRuntime(target).resident') && mainSource.includes('runtimeDeferred: true') && mainSource.includes('runtimeDeferred: false') && uiHtml.includes('applyConversationSnapshot(s, id)') && uiHtml.includes('if (s && s.runtimeDeferred) return loadActiveConversationMessages(id);'), 'cold conversation activation: paints persisted history before runtime startup while warm activation consumes one live snapshot without a duplicate state request');
   assert(uiHtml.includes('window.enhanceNewmarkSelect = function(select)') && uiHtml.includes("root.querySelectorAll('select').forEach(window.enhanceNewmarkSelect)") && uiHtml.includes("menu.className = 'model-select-menu newmark-select-menu'") && uiHtml.includes('window.positionSelectPopup = function(button, menu)') && uiHtml.includes("class=\"model-select-menu-option newmark-select-option' + (child.value === select.value ? ' selected' : '')") && uiHtml.includes("select.dispatchEvent(new Event('change', { bubbles: true }))") && uiHtml.includes("flowSel.dataset.newmarkVisible = state.mode === 'flow' ? 'true' : 'false'"), 'ui selects: mode, intelligence, settings, GitHub repository, workspace, and dynamic dialog selects reuse the accessible model-menu classes and shared directional floating positioner while retaining native change handlers');
-  assert(['low', 'medium', 'high', 'xhigh', 'max'].every(tier => uiHtml.includes(`<option value="${tier}">${tier}</option>`) || uiHtml.includes(`<option value="${tier}" selected>${tier}</option>`))
+  assert(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].every(tier => uiHtml.includes(`<option value="${tier}">${tier}</option>`) || uiHtml.includes(`<option value="${tier}" selected>${tier}</option>`))
     && uiHtml.includes("xhigh: t('intel.xhigh')") && uiHtml.includes("max: t('intel.max')"),
   'ui intelligence: GUI exposes the standard low/medium/high/xhigh/max reasoning effort tiers');
   assert(uiHtml.includes('window.selectReadableControlWidth = function(select)') && uiHtml.includes("shell.dataset.autoReadableWidth = compactSelect ? 'true' : 'false'") && uiHtml.includes("menu.matches(':popover-open')") && uiHtml.includes('window.closeModelSelectMenu();\n    return;'), 'ui selects: compact controls reserve readable option width and both model and generic popovers close through their full top-layer lifecycle on a repeated trigger click');
@@ -627,11 +627,33 @@ async function main() {
   assert(uiHtml.includes('#input-tools {') && uiHtml.includes('overflow: visible;'), 'input toolbar: permits submit hover and running marquee pixels outside the fixed button box without clipping');
   assert(uiHtml.includes('window.runFlowWork = async function(workIdx)') && uiHtml.includes('await api.saveFlow(normalized)') && uiHtml.includes('api.runFlow(normalized.name, flowInput, 0)') && uiHtml.includes('renderChatMessages(r.chatMessages)') && uiHtml.includes('renderConversationWorkRuns(r.workRuns, flowTarget)'), 'ui html: Flow Run uses the constrained Flow API and returns every component-owned Build block');
   const flowRunnerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'flow-runner.ts'), 'utf-8');
+  const flowMainSource = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf-8');
+  const agentKernelRunnerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
   assert(flowRunnerSource.includes('agent.beginConversationWorkRun')
     && flowRunnerSource.includes("agent.finishConversationWorkRun(runId, 'completed')")
     && flowRunnerSource.includes('agent.flushWorkspaceConversationState()')
     && flowRunnerSource.includes('cannot start before the previous Build block has terminated'),
   'Flow runner: every structure-driven component owns and flushes a distinct Build block before the planner advances');
+  assert(flowRunnerSource.includes("type: 'start'")
+    && flowRunnerSource.includes('Flow component #${options.componentId} is preparing.')
+    && flowMainSource.includes('relayFlowAgentWorkEvents')
+    && flowMainSource.includes('stopRelayingFlowEvents()')
+    && uiHtml.includes("setConversationRuntimeState(flowTarget, 'running', provisionalFlowRunId")
+    && uiHtml.includes("status: 'running', expanded: true")
+    && uiHtml.includes('var running = !!runtime || !!state._flowRunning;'),
+  'Flow live UI: relays every component event and immediately exposes Build timing, conversation-running state, and the send/stop action');
+  assert(flowRunnerSource.includes('nestedProviderMessage')
+    && flowRunnerSource.includes('FlowBuildExecutionError')
+    && uiHtml.includes('Model provider request failed')
+    && uiHtml.includes("showUiNotice(formatChatError(err && err.message")
+    && uiHtml.includes('flowErrorWasAlreadyShown')
+    && uiHtml.includes('flowRelayedErrorWasShown')
+    && uiHtml.includes('state._lastFlowRelayedError')
+    && !uiHtml.includes("addMsg('assistant', '[Flow error] ' + (err && err.message ? err.message : String(err)), 'error', state.model);"),
+    'Flow errors: provider JSON is condensed and a failed component does not add a duplicate raw Agent bubble');
+  assert(uiHtml.includes('conversationDrafts') && uiHtml.includes('saveActiveConversationDraft') && uiHtml.includes('restoreConversationDraft') && uiHtml.includes('clearActiveConversationDraft'), 'UI input: drafts are isolated and restored per conversation');
+  assert(uiHtml.includes('var chatWasAtBottom = !!(els[\'chat-area\'] && shouldAutoScroll(els[\'chat-area\']))') && uiHtml.includes('var chatWasAtBottom = shouldAutoScroll(els[\'chat-area\']);'), 'UI scroll: rerenders preserve user position and only follow when already at bottom');
+  assert(agentKernelRunnerSource.includes('if (currentAgent.isLlmErrorText(token.text))') && agentKernelRunnerSource.includes('surface.definitions.length === 0'), 'Provider/UI error boundary: provider error text is withheld from live prose and broker remains available for tool provisioning');
   assert(flowRunnerSource.includes("visibleMode: 'flow-user-input'")
     && flowRunnerSource.includes("activityVisibility: 'result-only'")
     && flowRunnerSource.includes('Flow 判定：')
@@ -3005,6 +3027,39 @@ async function main() {
   assert(boundaryRuns[0].flow.activityVisibility === 'full' && boundaryRuns[1].flow.activityVisibility === 'result-only', 'runFlow visibility: dialog exposes work activity while logic is result-only');
   assert(boundaryFinals.length === 1 && boundaryFinals[0].content.includes('Flow 判定：true') && boundaryFinals[0].content.includes('Flow 跳转：#50'), 'runFlow logic: Agent reply contains only the decision and jump target');
   assert(!boundaryInputs.some(input => String(input && input.visibleUserInput || '').includes('False branch')) && boundaryInputs.some(input => String(input && input.visibleUserInput || '').includes('True branch')), 'runFlow planner: waits for the logic result, skips the false branch, and jumps to the configured target');
+
+  const failedFlowRuns: Array<Record<string, any>> = [];
+  const failedFlowEvents: Array<Record<string, any>> = [];
+  const failedFlowAgent = {
+    mode: 'flow' as AgentMode,
+    workRuns: failedFlowRuns,
+    setMode() {},
+    beginConversationWorkRun(runId: string) {
+      const run = { runId, status: 'running', events: [] };
+      failedFlowRuns.push(run);
+      return run;
+    },
+    setConversationWorkRunFlowMetadata() { return true; },
+    emitWorkEvent(event: Record<string, any>) {
+      failedFlowEvents.push(event);
+      if (event.type === 'error') failedFlowRuns[0].status = 'error';
+      return event;
+    },
+    async process() {
+      return [{ type: 'text', text: '[LLM Error: 402] {"error":{"message":"Insufficient Balance","code":"invalid_request_error"}}' }];
+    },
+    isLlmErrorText: () => true,
+    finishConversationWorkRun(_runId: string, status: string) { failedFlowRuns[0].status = status; return true; },
+    flushWorkspaceConversationState() {},
+  } as unknown as Agent;
+  let failedFlowMessage = '';
+  try {
+    await runFlow(failedFlowAgent, { name: 'provider-failure', components: [{ type: 'dialog', id: 7, mode: 'build', prompt: 'fail' }] }, { quiet: true });
+  } catch (error) {
+    failedFlowMessage = error instanceof Error ? error.message : String(error);
+  }
+  assert(failedFlowEvents[0]?.type === 'start' && failedFlowEvents.some(event => event.type === 'error'), 'runFlow live failure: publishes start before the provider error on the owning Build block');
+  assert(failedFlowMessage === 'Flow component #7 model request failed (HTTP 402): Insufficient Balance', 'runFlow provider failure: preserves the useful status/message without leaking raw JSON');
 
   const agentFlow: FlowWorkflow = {
     name: 'agent-trigger-flow',

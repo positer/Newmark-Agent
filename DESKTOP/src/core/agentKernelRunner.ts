@@ -365,6 +365,10 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       toolProvisioning.reconcile(catalog, surface.definitions);
       activeToolSurfaceNotice = surface.systemPromptNotice;
       activeToolSurfaceIdentity = identity;
+      if (agent.shouldExposeToolInterface() && surface.definitions.length === 0) {
+        const broker = toolProvisioning.currentDefinitions().find(definition => toolDefinitionName(definition) === TOOL_PROVISION_NAME);
+        if (broker) surface.definitions = [broker];
+      }
     }
     return {
       definitions: agent.shouldExposeToolInterface() ? toolProvisioning.currentDefinitions() : [],
@@ -568,6 +572,11 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
               }
             }
             if (token.type === 'text' && token.text) {
+              if (currentAgent.isLlmErrorText(token.text)) {
+                text += token.text;
+                finalContent.push({ type: 'text', text: token.text });
+                continue;
+              }
               if (!brokerOnlySurface && !/^\s*\[(?:LLM Error|Error)(?::|\])/i.test(token.text)) currentAgent.markRouteStreamCommitted();
               if (!textStarted) {
                 textStarted = true;
@@ -628,6 +637,9 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
             return;
           }
           const publicError = normalizePublicProviderError(error, [currentAgent.activeModelConfig()?.api_key]);
+          if (/\b402\b|insufficient balance|insufficient funds|payment required|余额不足/i.test(publicError)) {
+            currentAgent.noteProviderBalanceFailure();
+          }
           const final = assistantMessage(model, [{ type: 'text', text: `[Error] ${publicError}` }], 'error');
           final.errorMessage = publicError;
           stream.push({ type: 'error', reason: 'error', error: final } as KernelProviderEventStreamEvent);

@@ -1,139 +1,139 @@
 {
-  "generatedAt": "2026-08-01T14:18:40.944Z",
+  "generatedAt": "2026-08-01T17:10:44.580Z",
   "platform": "linux",
   "summary": {
     "runs": 20,
-    "hotFirstEventP95Ms": 25.433888000000024,
-    "hotFirstTokenP95Ms": 21,
-    "coldLocalBeforeProviderMs": 67.58539000000007,
+    "hotFirstEventP95Ms": 24.186049000000025,
+    "hotFirstTokenP95Ms": 19,
+    "coldLocalBeforeProviderMs": 44.33955900000001,
     "toolProviderRequests": 2,
     "maxHotPersistenceWrites": 0,
     "passed": true
   },
   "samples": [
     {
-      "localBeforeProviderMs": 234.43640200000004,
+      "localBeforeProviderMs": 214.15882499999998,
       "firstTokenMs": 83,
-      "totalMs": 252.61724100000004,
+      "totalMs": 231.12325700000002,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 25.433888000000024,
-      "firstTokenMs": 21,
-      "totalMs": 32.09736399999997,
+      "localBeforeProviderMs": 24.186049000000025,
+      "firstTokenMs": 19,
+      "totalMs": 29.78604000000007,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 16.95504500000004,
-      "firstTokenMs": 16,
-      "totalMs": 22.99616500000002,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 10.624746999999957,
-      "firstTokenMs": 11,
-      "totalMs": 16.963932999999997,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 21.003867000000014,
-      "firstTokenMs": 16,
-      "totalMs": 24.56206499999996,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 10.30002300000001,
+      "localBeforeProviderMs": 10.22030600000005,
       "firstTokenMs": 10,
-      "totalMs": 15.042932999999948,
+      "totalMs": 13.939464000000044,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 11.320095999999921,
-      "firstTokenMs": 12,
-      "totalMs": 15.861557999999945,
+      "localBeforeProviderMs": 8.846914999999967,
+      "firstTokenMs": 8,
+      "totalMs": 12.444846999999982,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 14.013006000000019,
-      "firstTokenMs": 13,
-      "totalMs": 18.868552000000022,
+      "localBeforeProviderMs": 9.827476000000047,
+      "firstTokenMs": 8,
+      "totalMs": 13.701520999999957,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 22.27028000000007,
-      "firstTokenMs": 16,
-      "totalMs": 29.00811800000008,
+      "localBeforeProviderMs": 11.14948400000003,
+      "firstTokenMs": 10,
+      "totalMs": 14.632511000000022,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 13.65010200000006,
+      "localBeforeProviderMs": 10.173786000000064,
       "firstTokenMs": 11,
-      "totalMs": 16.445292999999992,
+      "totalMs": 14.256826000000046,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 6.962113000000045,
+      "localBeforeProviderMs": 8.921302000000082,
       "firstTokenMs": 7,
-      "totalMs": 10.301234000000022,
+      "totalMs": 11.181110999999987,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 11.51451099999997,
-      "firstTokenMs": 11,
-      "totalMs": 14.816152999999986,
+      "localBeforeProviderMs": 17.245227999999997,
+      "firstTokenMs": 16,
+      "totalMs": 22.64793700000007,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 13.501451000000088,
-      "firstTokenMs": 10,
-      "totalMs": 16.294783000000052,
+      "localBeforeProviderMs": 8.123648000000003,
+      "firstTokenMs": 8,
+      "totalMs": 10.822436999999923,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 10.644490000000019,
-      "firstTokenMs": 11,
-      "totalMs": 15.125121000000036,
+      "localBeforeProviderMs": 7.213647999999921,
+      "firstTokenMs": 7,
+      "totalMs": 9.298812999999996,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 6.191161999999963,
-      "firstTokenMs": 5,
-      "totalMs": 8.589624999999955,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 4.989139000000023,
+      "localBeforeProviderMs": 5.253915000000006,
       "firstTokenMs": 4,
-      "totalMs": 6.237276999999949,
+      "totalMs": 7.088595000000055,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 7.089739000000009,
+      "localBeforeProviderMs": 6.851269000000002,
+      "firstTokenMs": 6,
+      "totalMs": 9.604581000000053,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 6.478692000000024,
+      "firstTokenMs": 6,
+      "totalMs": 7.966045000000008,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 4.928657999999928,
+      "firstTokenMs": 4,
+      "totalMs": 6.572243999999955,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 7.333110999999917,
+      "firstTokenMs": 6,
+      "totalMs": 9.536388999999986,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 8.74605100000008,
       "firstTokenMs": 7,
-      "totalMs": 9.59949800000004,
+      "totalMs": 10.557631000000015,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 7.308362999999986,
+      "localBeforeProviderMs": 8.64478900000006,
+      "firstTokenMs": 7,
+      "totalMs": 10.446889000000056,
+      "persistenceWrites": 0
+    },
+    {
+      "localBeforeProviderMs": 5.413688999999977,
       "firstTokenMs": 5,
-      "totalMs": 8.84026700000004,
+      "totalMs": 6.97483299999999,
       "persistenceWrites": 0
     },
     {
-      "localBeforeProviderMs": 10.23253699999998,
-      "firstTokenMs": 10,
-      "totalMs": 13.221042000000011,
-      "persistenceWrites": 0
-    },
-    {
-      "localBeforeProviderMs": 7.690255000000093,
-      "firstTokenMs": 7,
-      "totalMs": 10.109958000000006,
+      "localBeforeProviderMs": 4.1437310000000025,
+      "firstTokenMs": 3,
+      "totalMs": 5.328086999999982,
       "persistenceWrites": 0
     }
   ],
   "cold": {
-    "localBeforeProviderMs": 67.58539000000007
+    "localBeforeProviderMs": 44.33955900000001
   },
   "tool": {
     "providerRequests": 2,

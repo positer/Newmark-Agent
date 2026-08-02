@@ -6,7 +6,7 @@ import { Agent } from '../core/agent';
 import { defaultConfig } from '../core/config';
 import { IntelligenceTier, LLMProvider } from '../llm/provider';
 
-const tiers: IntelligenceTier[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+const tiers: IntelligenceTier[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const originalFetch = globalThis.fetch;
 const captured: Array<{ url: string; body: Record<string, any> }> = [];
 
@@ -27,14 +27,14 @@ async function run(): Promise<void> {
     for (let round = 0; round < 50; round++) {
       for (const tier of tiers) {
         const cfg = chat.intelligenceConfig(tier);
-        assert.equal(cfg.reasoningEffort, tier);
+        assert.equal(cfg.reasoningEffort, tier === 'ultra' ? 'max' : tier);
         assert.equal(await chat.chat('gpt-5.6-codex', [{ role: 'user', content: 'ping' }], null, cfg.temperature, cfg.maxTokens, undefined, cfg.reasoningEffort), 'ok');
-        assert.equal(captured.at(-1)?.body.reasoning_effort, tier);
+        assert.equal(captured.at(-1)?.body.reasoning_effort, tier === 'ultra' ? 'max' : tier);
         assert.equal(await responses.chat('gpt-5.6-codex', [{ role: 'user', content: 'ping' }], null, cfg.temperature, cfg.maxTokens, undefined, cfg.reasoningEffort), 'ok');
-        assert.equal(captured.at(-1)?.body.reasoning?.effort, tier);
+        assert.equal(captured.at(-1)?.body.reasoning?.effort, tier === 'ultra' ? 'max' : tier);
       }
     }
-    assert.equal(captured.length, 500);
+    assert.equal(captured.length, 600);
 
     await chat.chat('plain-text-model', [{ role: 'user', content: 'ping' }], null, 0, 32, undefined, 'max');
     assert.equal('reasoning_effort' in (captured.at(-1)?.body || {}), false);
@@ -58,7 +58,7 @@ async function run(): Promise<void> {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
-    console.log(JSON.stringify({ ok: true, tiers, capturedRequests: 502, perProtocolStressRequests: 250 }));
+    console.log(JSON.stringify({ ok: true, tiers, capturedRequests: 602, perProtocolStressRequests: 300 }));
   } finally {
     globalThis.fetch = originalFetch;
   }

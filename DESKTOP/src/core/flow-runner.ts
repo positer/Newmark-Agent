@@ -37,6 +37,41 @@ interface FlowBuildOptions {
   signal?: AbortSignal;
 }
 
+function nestedProviderMessage(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const record = value as Record<string, unknown>;
+  if (typeof record.message === 'string' && record.message.trim()) return record.message.trim();
+  for (const key of ['error', 'detail', 'response']) {
+    const nested = nestedProviderMessage(record[key]);
+    if (nested) return nested;
+  }
+  return '';
+}
+
+class FlowBuildExecutionError extends Error {}
+
+function flowBuildFailure(error: unknown, componentId: number): Error {
+  if (error instanceof FlowBuildExecutionError) return error;
+  const raw = error instanceof Error ? error.message : String(error || 'Flow component failed.');
+  const status = raw.match(/\[(?:LLM Error|Error)(?::\s*(\d{3}))?[^\]]*\]/i)?.[1]
+    || raw.match(/\bHTTP\s+(\d{3})\b/i)?.[1]
+    || '';
+  let providerMessage = '';
+  const jsonStart = raw.indexOf('{');
+  if (jsonStart >= 0) {
+    try { providerMessage = nestedProviderMessage(JSON.parse(raw.slice(jsonStart))); } catch { /* use bounded fallback */ }
+  }
+  if (!providerMessage) {
+    providerMessage = raw
+      .replace(/^\s*\[(?:LLM Error|Error)(?::[^\]]*)?\]\s*/i, '')
+      .replace(/^\s*Flow component #\d+ returned an abnormal model response\.?\s*$/i, 'Model provider returned an unsuccessful response.')
+      .trim();
+  }
+  const concise = providerMessage.replace(/\s+/g, ' ').slice(0, 320) || 'Model provider returned an unsuccessful response.';
+  const providerFailure = /^\s*\[(?:LLM Error|Error)(?::|\])/i.test(raw) || !!status || jsonStart >= 0;
+  return new FlowBuildExecutionError(`Flow component #${componentId} ${providerFailure ? 'model request failed' : 'failed'}${status ? ` (HTTP ${status})` : ''}: ${concise}`);
+}
+
 function isAutomaticPlanExecutionQuestion(question: Agent['pendingOptions'][number]): boolean {
   const contract = `${question.question || ''}\n${(question.options || []).map(option => option.label || '').join('\n')}`;
   return /计划已完成|plan is complete/i.test(contract)
@@ -60,6 +95,15 @@ async function runFlowBuild(agent: Agent, prompt: string, options: FlowBuildOpti
       componentType: options.componentType,
       activityVisibility: options.activityVisibility,
     });
+    // Flow bypasses ConversationKernel.prompt(), so publish the component
+    // boundary before provider setup to make its live Build state visible.
+    if (typeof agent.emitWorkEvent === 'function') {
+      agent.emitWorkEvent({
+        type: 'start',
+        content: `Flow component #${options.componentId} is preparing.`,
+        runId,
+      });
+    }
   }
   let workRunFinished = false;
   try {
@@ -73,7 +117,7 @@ async function runFlowBuild(agent: Agent, prompt: string, options: FlowBuildOpti
     throwIfFlowAborted(options.signal);
     const text = tokens.map(token => token.text || '').join('');
     if (typeof agent.isLlmErrorText === 'function' && agent.isLlmErrorText(text)) {
-      throw new Error(`Flow component #${options.componentId} returned an abnormal model response.`);
+      throw flowBuildFailure(text, options.componentId);
     }
     const finalResponse = options.finalize?.(tokens, runId);
     if (supportsWorkRuns && finalResponse !== undefined) {
@@ -92,11 +136,18 @@ async function runFlowBuild(agent: Agent, prompt: string, options: FlowBuildOpti
     }
     return tokens;
   } catch (error) {
+    if (error instanceof FlowQuestionPendingError) throw error;
+    const reportedError = options.signal?.aborted
+      ? (error instanceof Error ? error : new Error(String(error || 'Flow run aborted')))
+      : flowBuildFailure(error, options.componentId);
     if (supportsWorkRuns && !workRunFinished) {
+      if (!options.signal?.aborted && typeof agent.emitWorkEvent === 'function') {
+        agent.emitWorkEvent({ type: 'error', content: reportedError.message, runId });
+      }
       agent.finishConversationWorkRun(runId, options.signal?.aborted ? 'interrupted' : 'error');
       agent.flushWorkspaceConversationState();
     }
-    throw error;
+    throw reportedError;
   }
 }
 

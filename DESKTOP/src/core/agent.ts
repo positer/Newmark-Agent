@@ -103,9 +103,9 @@ export interface AutoRouteRatingResult {
   reason?: 'invalid_score' | 'no_active_auto_route' | 'stale_route' | 'already_rated';
 }
 export const ROOT_AGENT_ACTOR_ID = '00000000-0000-4000-8000-000000000001';
-export function normalizeIntelligenceTier(value: unknown): 'low' | 'medium' | 'high' | 'xhigh' | 'max' {
+export function normalizeIntelligenceTier(value: unknown): 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' {
   const tier = String(value || '').trim().toLowerCase();
-  return tier === 'low' || tier === 'high' || tier === 'xhigh' || tier === 'max' ? tier : 'medium';
+  return tier === 'low' || tier === 'high' || tier === 'xhigh' || tier === 'max' || tier === 'ultra' ? tier : 'medium';
 }
 function throwIfAgentAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
@@ -453,6 +453,7 @@ export class Agent {
   private lastRouteTransition: PlannedRouteAttempt['kind'] | '' = '';
   private lastRouteRetryDelayMs = 0;
   private routeAttemptStartedAt = 0;
+  private readonly providerBalanceBlockedUntilByDeployment = new Map<string, number>();
   private readonly explicitlyRatedRoutes = new Map<string, -1 | 1>();
   private conversationStateCache = new Map<string, StoredConversationState>();
   private conversationStateCacheFingerprint = new Map<string, string>();
@@ -1050,6 +1051,29 @@ export class Agent {
     if (this.fixedDeployment) return { ...this.fixedDeployment };
     const model = this.config.findModel(this.model);
     return model ? this.deploymentRef(model) : null;
+  }
+
+  balanceBlockedDeploymentKey(): string | null {
+    const deployment = this.activeDeployment();
+    if (!deployment || !deployment.providerId || !deployment.modelId) return null;
+    return deploymentIdentity(deployment);
+  }
+
+  isBalanceBlockedDeployment(deployment: DeploymentRef | null | undefined): boolean {
+    if (!deployment || !deployment.providerId || !deployment.modelId) return false;
+    return this.balanceBlockedMs(deployment) > 0;
+  }
+
+  balanceBlockedMs(deployment?: DeploymentRef | null): number {
+    const key = deployment ? deploymentIdentity(deployment) : this.balanceBlockedDeploymentKey();
+    if (!key) return 0;
+    const until = this.providerBalanceBlockedUntilByDeployment.get(key) || 0;
+    return until > Date.now() ? until - Date.now() : 0;
+  }
+
+  noteProviderBalanceFailure(): void {
+    const key = this.balanceBlockedDeploymentKey();
+    if (key) this.providerBalanceBlockedUntilByDeployment.set(key, Date.now() + 5 * 60_000);
   }
 
   activeModelName(): string {
@@ -4235,7 +4259,7 @@ export class Agent {
   }
 
   private autoRouteCandidates(): AutoRouteCandidate[] {
-    return this.config.allModels().map(model => {
+    return this.config.allModels().map((model): AutoRouteCandidate => {
       const routeMetadata = model as ModelConfig & { data_regions?: string[]; supported_parameters?: string[]; route_preference?: number };
       const validation = model.validation || {
         level: 'discovered' as const,
@@ -4317,7 +4341,7 @@ export class Agent {
         preference: Number.isFinite(Number(routeMetadata.route_preference)) ? Number(routeMetadata.route_preference) : undefined,
         fallbackOnly: !!model.fallback_only,
       };
-    });
+    }).filter(candidate => !this.isBalanceBlockedDeployment(candidate.deployment));
   }
 
   private persistRouteDecision(decision: RouteDecision): void {
@@ -4439,7 +4463,7 @@ export class Agent {
       affinityKey: `${this.workspace.current?.path || this.rootPath}\u0000${this.activeConversationId || 'default'}`,
       taskText: task,
       estimatedInputTokens: this.estimateContextTokens(),
-      expectedOutputTokens: this.intelligence === 'max' ? 32768
+      expectedOutputTokens: this.intelligence === 'ultra' || this.intelligence === 'max' ? 32768
         : this.intelligence === 'xhigh' ? 16384
           : this.intelligence === 'high' ? 8192
             : this.intelligence === 'low' ? 2048 : 4096,
@@ -5004,6 +5028,26 @@ export class Agent {
     this.pendingOptions = [];
 
     try {
+      if (this.model === 'auto') {
+        // Auto routing re-resolves each turn; drop a stale blocked deployment
+        // so the router can pick an unblocked candidate instead of failing here.
+        if (this.resolvedDeployment && this.isBalanceBlockedDeployment(this.resolvedDeployment)) {
+          this.resolvedDeployment = null;
+          this.lastRouteDecision = null;
+          this.pendingAutoAttempts = [];
+        }
+      } else {
+        const blockedMs = this.balanceBlockedMs();
+        if (blockedMs > 0) {
+          const waitSeconds = Math.max(1, Math.ceil(blockedMs / 1000));
+          const deployment = this.activeDeployment();
+          const label = deployment ? `${deployment.providerId}/${deployment.modelId}` : this.model;
+          const message = `Provider balance exhausted (HTTP 402) for ${label}. Requests on this deployment are paused for ${waitSeconds}s; switch provider or model to continue immediately.`;
+          this.status = 'error';
+          this.emitWorkEvent({ type: 'error', content: message });
+          throw new Error(message);
+        }
+      }
       const text = typeof input === 'string' ? input : String(input.text || '');
       const inputEnvelope = typeof input === 'string' ? null : input as AgentPromptMessage & { clientMessageId?: string; runId?: string };
       const hiddenUserInput = inputEnvelope?.hiddenUserInput === true;
@@ -5141,6 +5185,9 @@ export class Agent {
         throw e;
       }
       const msg = e instanceof Error ? e.message : String(e);
+      if (/\b402\b|insufficient balance|insufficient funds|payment required|余额不足/i.test(msg)) {
+        this.noteProviderBalanceFailure();
+      }
       this.status = 'error';
       this.emitWorkEvent({ type: 'error', content: msg });
       throw e;
@@ -5162,6 +5209,16 @@ export class Agent {
       timer = setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms);
     });
     try {
+      const blockedMs = this.balanceBlockedMs();
+      if (blockedMs > 0) {
+        const waitSeconds = Math.max(1, Math.ceil(blockedMs / 1000));
+        const deployment = this.activeDeployment();
+        const label = deployment ? `${deployment.providerId}/${deployment.modelId}` : this.model;
+        const message = `Provider balance exhausted (HTTP 402) for ${label}. Requests on this deployment are paused for ${waitSeconds}s; switch provider or model to continue immediately.`;
+        this.status = 'error';
+        this.emitWorkEvent({ type: 'error', content: message });
+        throw new Error(message);
+      }
       return await Promise.race([promise, timeout]);
     } finally {
       if (timer) clearTimeout(timer);
@@ -5843,8 +5900,9 @@ export class Agent {
       }
       return result || '[Subagent] Completed with empty response.';
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(msg);
+      // The peer's own run marks its deployment's balance cooldown. Marking
+      // the parent's deployment here could wrongly pause a healthy provider.
+      throw new Error(e instanceof Error ? e.message : String(e));
     } finally {
       this.activePeerAgents.delete(sa.id);
     }
@@ -6378,6 +6436,14 @@ export class Agent {
         '[Enabled Skills]',
         ...(!currentSkillTask ? enabledSkills.slice(0, 8) : relevantSkills).map(s => `- ${s.name}: ${s.description || 'No description'}`),
         'Use the skill tool with query when the matching skill is uncertain, then load exactly one skill by name. Skill bodies and paths are intentionally omitted until loaded. Disabled skills are intentionally omitted.',
+      ].join('\n'));
+    }
+
+    if (this.intelligence === 'ultra') {
+      parts.push([
+        '[Ultra Intelligence – Orchestrator Role]',
+        'You are the lead orchestrator. Actively decompose complex tasks into parallel sub-tasks. Use the `task` tool to create specialized SubAgents for each distinct sub-task. Coordinate the SubAgent team: assign clear responsibilities, merge results, resolve conflicts, and produce a unified final output. SubAgents are your team; delegate aggressively and manage them as a manager, not just a tool caller.',
+        'Do not attempt to do all the work yourself. Use SubAgents for parallel investigation, verification, implementation, and review.',
       ].join('\n'));
     }
 

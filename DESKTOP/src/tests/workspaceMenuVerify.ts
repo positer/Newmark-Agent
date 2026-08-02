@@ -77,8 +77,8 @@ async function main(): Promise<void> {
   const coldApi = {
     selectWorkspace: async () => ({ id: 'workspace-new', name: 'New', conversationSnapshot: coldSnapshot }),
   };
-  const coldInstall = new Function('window', 'state', 'api', 'workspaceIdentity', 't', 'clearUiNotice', 'showUiNotice', `window.switchToWorkspace = ${switchWorkspaceSource};`);
-  coldInstall(coldWindow, coldState, coldApi, (workspace: { id?: string }) => workspace?.id || '', (value: string) => value, () => undefined, () => undefined);
+  const coldInstall = new Function('window', 'state', 'api', 'workspaceIdentity', 't', 'clearUiNotice', 'showUiNotice', 'saveActiveConversationDraft', `window.switchToWorkspace = ${switchWorkspaceSource};`);
+  coldInstall(coldWindow, coldState, coldApi, (workspace: { id?: string }) => workspace?.id || '', (value: string) => value, () => undefined, () => undefined, () => undefined);
   await (coldWindow.switchToWorkspace as (reference: string) => Promise<unknown>)('workspace-new');
 
   assert.deepEqual(switchCalls, [{ reference: 'workspace-new', snapshot: coldSnapshot }], 'cold workspace paints the selection response snapshot without a second activation IPC');

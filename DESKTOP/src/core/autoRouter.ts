@@ -115,6 +115,7 @@ export type RouteFailureType =
   | 'auth'
   | 'content_policy'
   | 'policy_denied'
+  | 'balance_exhausted'
   | 'execution_error';
 
 export interface RouteFailure {
@@ -269,6 +270,9 @@ export function classifyRouteFailure(error: unknown): RouteFailure {
   }
   if (statusCode === 400 || /bad request|invalid parameter|invalid request/i.test(text)) {
     return { type: 'invalid_request', retryable: false, switchAllowed: false, statusCode };
+  }
+  if (statusCode === 402 || /insufficient balance|insufficient funds|payment required|余额不足/i.test(text)) {
+    return { type: 'balance_exhausted', retryable: false, switchAllowed: false, statusCode: 402 };
   }
   if (statusCode === 429 || /rate limit|too many requests/i.test(text)) {
     return { type: 'rate_limited', retryable: true, switchAllowed: true, statusCode: 429, retryAfterMs };

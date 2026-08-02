@@ -12,7 +12,7 @@ export interface IntelligenceConfig {
   maxTokens: number;
   reasoningEffort: IntelligenceTier;
 }
-export type IntelligenceTier = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type IntelligenceTier = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 export type ProviderProtocol = 'openai' | 'anthropic' | 'github_models';
 export type OpenAITransportMode = 'chat_stream' | 'chat' | 'responses';
 
@@ -101,6 +101,7 @@ export class LLMProvider {
       case 'high': return { temperature: 0.8, maxTokens: 16384, reasoningEffort: 'high' };
       case 'xhigh': return { temperature: 0.8, maxTokens: 32768, reasoningEffort: 'xhigh' };
       case 'max': return { temperature: 0.8, maxTokens: 65536, reasoningEffort: 'max' };
+      case 'ultra': return { temperature: 0.8, maxTokens: 131072, reasoningEffort: 'max' };
       default: return { temperature: 0.7, maxTokens: 8192, reasoningEffort: 'medium' };
     }
   }
@@ -109,6 +110,7 @@ export class LLMProvider {
     if (!/^(?:gpt-5|o[134](?:-|$)|codex)|(?:reasoner|reasoning|deepseek-r1|deepseek-reasoner|\br1\b)/i.test(model)) return undefined;
     const effort: IntelligenceTier = tier === 'low' || tier === 'high' || tier === 'xhigh' || tier === 'max'
       ? tier
+      : tier === 'ultra' ? 'max'
       : 'medium';
     // OpenAI currently accepts xhigh as its highest public API effort. Custom
     // OpenAI-compatible/Codex gateways may expose the user-facing max tier.

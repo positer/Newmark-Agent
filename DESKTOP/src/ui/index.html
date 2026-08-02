@@ -2001,6 +2001,8 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 .flow-takeover.active { display: flex; }
 .flow-takeover .nm-icon { color: var(--accent); }
+.flow-takeover.interactive { pointer-events: auto; }
+.flow-takeover .flow-resume-btn { flex-shrink: 0; cursor: pointer; }
 [data-theme="light"] .flow-takeover {
   color: #22304f;
   background: rgba(255,255,255,0.9);
@@ -5611,6 +5613,8 @@ var NEWMARK_I18N = {
     'flow.enterName': 'Enter name...',
     'flow.runningPlaceholder': 'Flow is running. Type "stop" to stop.',
     'flow.takeover': 'Flow is controlling this conversation',
+    'flow.pausedTakeover': 'Flow paused; click Resume to continue',
+    'flow.resume': 'Resume',
     'flow.nextDisabled': 'Flow only accepts Guide input; Next is disabled.',
     'flow.saved': 'Flow saved',
     'flow.emptyRun': 'Flow is empty and cannot run.',
@@ -6173,6 +6177,8 @@ var NEWMARK_I18N = {
     'flow.enterName': '输入名称...',
     'flow.runningPlaceholder': 'Flow 正在运行。输入 stop 可停止。',
     'flow.takeover': '当前对话正由 Flow 接管',
+    'flow.pausedTakeover': 'Flow 已暂停接管，点击继续',
+    'flow.resume': '继续',
     'flow.nextDisabled': 'Flow 仅允许 Guide 输入，已禁用 Next。',
     'flow.saved': 'Flow 已保存',
     'flow.emptyRun': 'Flow 为空，无法运行。',
@@ -10036,30 +10042,7 @@ window.optionSelected = function(questionKey, opt, button) {
   state.pendingOptionAnswers = {};
   state.pendingOptionBatchKey = '';
   if (state._flowRunning && state.mode === 'flow' && api.resumeFlow) {
-    state._lastFlowRelayedError = null;
-    return Promise.resolve(api.resumeFlow(feedback)).then(async function(result) {
-      if (result && Array.isArray(result.chatMessages)) {
-        if (Array.isArray(result.workRuns)) renderConversationWorkRuns(result.workRuns, currentConversationTarget());
-        renderChatMessages(result.chatMessages);
-      }
-      if (result && result.pending) {
-        state.pendingOptions = result.options || [];
-        renderPendingOptionsInChat(state.pendingOptions);
-        return result;
-      }
-      var completed = !!(result && result.ok);
-      if (!completed && !flowRelayedErrorWasShown(currentConversationTarget())) showUiNotice(formatChatError((result && result.error) || 'Flow resume failed'), 'error', 'flow-resume-error');
-      else addMsg('assistant', '[System] Flow complete.', 'flow', state.model);
-      var settlement = stopFlowRunInternal(completed ? {} : { keepPaused: true });
-      await setVisibleMode('build');
-      if (completed && settlement && settlement.shouldDrain) window.scheduleNextQueueDrain(settlement.target);
-      return result;
-    }).catch(async function(error) {
-      if (!flowRelayedErrorWasShown(currentConversationTarget())) showUiNotice(formatChatError(error && error.message ? error.message : String(error), 'Flow resume failed.'), 'error', 'flow-resume-error');
-      stopFlowRunInternal({ keepPaused: true });
-      await setVisibleMode('build');
-      return { ok: false, error: error && error.message ? error.message : String(error) };
-    });
+    return window.resumeFlowWith(feedback);
   }
   if (els.prompt) {
     els.prompt.value = feedback;
@@ -12184,6 +12167,24 @@ window.refreshRightStatus = function(options) {
     if (s && s.subagents) state.subagents = s.subagents;
     if (s && s.fileDiffs) state.fileDiffs = s.fileDiffs;
     if (s && s.pendingOptions) state.pendingOptions = s.pendingOptions;
+    if (s && s.flowSuspension) {
+      state._flowRunning = true;
+      state._lastFlowSubmission = {
+        name: String(s.flowSuspension.workflowName || ''),
+        input: String(s.flowSuspension.input || ''),
+        components: [],
+      };
+      renderFlowTakeover(true, String(s.flowSuspension.workflowName || ''), {
+        interrupted: s.flowSuspension.reason === 'interrupted',
+        message: s.flowSuspension.message,
+      });
+      if (Array.isArray(s.flowSuspension.options) && s.flowSuspension.options.length) {
+        state.pendingOptions = s.flowSuspension.options;
+        renderPendingOptionsInChat(state.pendingOptions);
+      }
+    } else if (!state._flowRunning) {
+      renderFlowTakeover(false);
+    }
     if (s && s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
     if (s && s.contextCompression !== undefined) {
       state.contextCompression = s.contextCompression;
@@ -14774,13 +14775,72 @@ function processNextFlowComp() {
   }
 }
 
-window.renderFlowTakeover = function(active, name) {
+window.renderFlowTakeover = function(active, name, options) {
   var takeover = document.getElementById('flow-takeover');
   if (!takeover) return;
   takeover.classList.toggle('active', !!active);
-  takeover.innerHTML = active
-    ? iconSvg('workflow', t('flow.takeover'), 'small') + '<span>' + esc(t('flow.takeover')) + (name ? ': ' + esc(name) : '') + '</span>'
-    : '';
+  if (!active) {
+    takeover.classList.remove('interactive');
+    takeover.innerHTML = '';
+    return;
+  }
+  options = options || {};
+  var interrupted = !!options.interrupted;
+  var label = interrupted ? t('flow.pausedTakeover') : t('flow.takeover');
+  var html = iconSvg('workflow', label, 'small') + '<span>' + esc(label) + (name ? ': ' + esc(name) : '');
+  if (interrupted && options.message) {
+    html += '<span style="opacity:0.72;">' + esc(String(options.message).slice(0, 200)) + '</span>';
+  }
+  html += '</span>';
+  if (interrupted) {
+    html += '<button class="archive-action-btn flow-resume-btn" onclick="window.resumeInterruptedFlow()">' + esc(t('flow.resume')) + '</button>';
+  }
+  takeover.classList.toggle('interactive', interrupted);
+  takeover.innerHTML = html;
+};
+
+window.resumeInterruptedFlow = async function() {
+  if (!api.resumeFlow) return;
+  if (!state._flowRunning) {
+    state._flowRunning = true;
+    state._lastFlowRelayedError = null;
+    var suspendedFlowTarget = currentConversationTarget();
+    var resumedFlowRunId = 'flow-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+    state._flowRuntimeLease = { target: suspendedFlowTarget, runId: resumedFlowRunId };
+    setConversationRuntimeState(suspendedFlowTarget, 'running', resumedFlowRunId, { provisional: true, flow: true });
+  }
+  return window.resumeFlowWith('', true);
+};
+
+window.resumeFlowWith = async function(feedback, isInterruptedResume) {
+  state._lastFlowRelayedError = null;
+  try {
+    var result = await api.resumeFlow(feedback);
+    if (result && Array.isArray(result.chatMessages)) {
+      if (Array.isArray(result.workRuns)) renderConversationWorkRuns(result.workRuns, currentConversationTarget());
+      renderChatMessages(result.chatMessages);
+    }
+    if (result && result.pending) {
+      state.pendingOptions = result.options || [];
+      renderPendingOptionsInChat(state.pendingOptions);
+      if (result.interrupted) {
+        renderFlowTakeover(true, result.name || (state._lastFlowSubmission && state._lastFlowSubmission.name), { interrupted: true, message: result.error });
+      }
+      return result;
+    }
+    var completed = !!(result && result.ok);
+    if (!completed && !flowRelayedErrorWasShown(currentConversationTarget())) showUiNotice(formatChatError((result && result.error) || 'Flow resume failed'), 'error', 'flow-resume-error');
+    else if (completed) addMsg('assistant', '[System] Flow complete.', 'flow', state.model);
+    var settlement = stopFlowRunInternal(completed ? {} : { keepPaused: true });
+    await setVisibleMode('build');
+    if (completed && settlement && settlement.shouldDrain) window.scheduleNextQueueDrain(settlement.target);
+    return result;
+  } catch (error) {
+    if (!flowRelayedErrorWasShown(currentConversationTarget())) showUiNotice(formatChatError(error && error.message ? error.message : String(error), 'Flow resume failed.'), 'error', 'flow-resume-error');
+    stopFlowRunInternal({ keepPaused: true });
+    await setVisibleMode('build');
+    return { ok: false, error: error && error.message ? error.message : String(error) };
+  }
 };
 
 function removeFlowOwnedQueueRequest(lease) {
@@ -15003,6 +15063,9 @@ window.runFlowWork = async function(workIdx) {
       flowSuspended = true;
       state.pendingOptions = r.options || [];
       renderPendingOptionsInChat(state.pendingOptions);
+      if (r.interrupted) {
+        renderFlowTakeover(true, normalized.name, { interrupted: true, message: r.error });
+      }
     } else if (r && r.ok) {
       flowCompletedNormally = true;
       addMsg('assistant', '[System] Flow complete: ' + normalized.name, 'flow', r.model || state.model);

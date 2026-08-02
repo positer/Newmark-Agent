@@ -480,7 +480,7 @@ async function main() {
     && !fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('unless they are strictly necessary to complete this exact Goal'),
   'Goal continuation: hidden automatic Build instructions focus only on the current Goal and never revive historical unfinished tasks');
   assert(uiHtml.includes('window.submitSelectedFlow = function()')
-    && uiHtml.includes('window.renderFlowTakeover = function(active, name)')
+    && uiHtml.includes('window.renderFlowTakeover = function(active, name, options)')
     && uiHtml.includes("if (state.mode === 'flow' || state._flowRunning)")
     && uiHtml.includes('window.submitCurrentAction();')
     && uiHtml.includes('api.guideFlow')
@@ -672,6 +672,31 @@ async function main() {
     && uiHtml.includes('state.nextQueue.splice(rollbackIndex, 0, next);')
     && uiHtml.includes('state.nextQueueDrainsByTarget[targetKey] === drainToken'),
   'queue drain: claims and removes the head before send, rolls back failed starts, and keeps one drain owner until settlement');
+  assert(!flowRunnerSource.includes('isAutomaticPlanExecutionQuestion')
+    && flowRunnerSource.includes("throw new FlowQuestionPendingError(options.componentId)"),
+  'Flow plan confirm: the plan completion question is no longer filtered and suspends the flow for user input');
+  assert(flowMainSource.includes('const restoreStoredFlowSuspension = (): void => {')
+    && flowMainSource.includes('const discardFlowSuspension = async (): Promise<void> => {')
+    && flowMainSource.includes('function persistedFlowSuspensionRecord(')
+    && flowMainSource.includes('agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(activeFlowSuspension))')
+    && flowMainSource.includes('const isUserFlowAbort = ')
+    && flowMainSource.includes('if (activeFlowSuspension) await discardFlowSuspension();')
+    && flowMainSource.includes("return { ok: true, action: 'stopped_pending', flow: flowName };")
+    && flowMainSource.includes('flowSuspension: agent.getStoredFlowSuspension()'),
+  'Flow pause/resume: system-level interruptions persist a paused takeover, user aborts keep exiting, and every exit path discards the pause');
+  assert(agentSourceForEditor.includes('getStoredFlowSuspension(): FlowSuspensionRecord | null')
+    && agentSourceForEditor.includes('saveStoredFlowSuspension(suspension: FlowSuspensionRecord | null): void')
+    && agentSourceForEditor.includes('clearStoredFlowSuspension(): void')
+    && agentSourceForEditor.includes('flowSuspension?: FlowSuspensionRecord | null'),
+  'Agent persistence: Flow suspension is stored in workspace conversation state and survives restarts');
+  assert(uiHtml.includes('window.renderFlowTakeover = function(active, name, options)')
+    && uiHtml.includes('window.resumeInterruptedFlow = async function()')
+    && uiHtml.includes('window.resumeFlowWith = async function(feedback, isInterruptedResume)')
+    && uiHtml.includes("return window.resumeFlowWith('', true);")
+    && uiHtml.includes('t(\'flow.pausedTakeover\')')
+    && uiHtml.includes('window.resumeFlowWith(feedback)')
+    && uiHtml.includes("if (s && s.flowSuspension) {"),
+  'UI Flow takeover: interrupted flow shows a paused takeover bubble with a Resume action and restores after restart');
   assert(uiHtml.includes('id="terminal-timeout-input"') && uiHtml.includes('Max ms') && uiHtml.includes('Terminal timeout cap') && uiHtml.includes('window.setTerminalInterruptTimeout = function(value)') && uiHtml.includes("api.saveSetting('terminal', 'interrupt_timeout_ms', n)"), 'ui html: terminal timeout cap is editable and persisted');
   const agentKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
   const piKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
@@ -3060,6 +3085,90 @@ async function main() {
   }
   assert(failedFlowEvents[0]?.type === 'start' && failedFlowEvents.some(event => event.type === 'error'), 'runFlow live failure: publishes start before the provider error on the owning Build block');
   assert(failedFlowMessage === 'Flow component #7 model request failed (HTTP 402): Insufficient Balance', 'runFlow provider failure: preserves the useful status/message without leaking raw JSON');
+
+  const planConfirmRuns: Array<Record<string, any>> = [];
+  const planConfirmAgent = {
+    mode: 'flow' as AgentMode,
+    pendingOptions: [{ header: '', question: '计划已完成，是否执行此计划？', options: [{ label: '立即执行此计划', description: 'Start executing now' }, { label: '请补充', description: 'Request additions' }], multiple: false }],
+    workRuns: planConfirmRuns,
+    setMode(_mode: AgentMode) {},
+    beginConversationWorkRun(runId: string) {
+      const run = { runId, status: 'running' };
+      planConfirmRuns.push(run);
+      return run;
+    },
+    setConversationWorkRunFlowMetadata() { return true; },
+    async process(): Promise<StreamToken[]> {
+      return [{ type: 'text', text: 'plan ready' }];
+    },
+    isLlmErrorText: () => false,
+    finishConversationWorkRun(runId: string, status: string) {
+      const run = planConfirmRuns.find(item => item.runId === runId);
+      if (run) run.status = status;
+    },
+    flushWorkspaceConversationState() {},
+  } as unknown as Agent;
+  let planConfirmError: unknown;
+  try {
+    await runFlow(planConfirmAgent, {
+      name: 'plan-confirm-flow',
+      components: [
+        { type: 'dialog', id: 5, mode: 'plan', prompt: 'Plan the work' },
+        { type: 'dialog', id: 6, mode: 'build', prompt: 'Must wait for confirmation' },
+      ],
+    }, { quiet: true });
+  } catch (error) {
+    planConfirmError = error;
+  }
+  assert(planConfirmError instanceof FlowQuestionPendingError && planConfirmError.componentId === 5, 'runFlow plan confirm: plan completion question suspends the flow at the plan component instead of being filtered');
+  assert(planConfirmRuns.length === 1 && planConfirmRuns[0].status === 'completed', 'runFlow plan confirm: the plan block completes before suspension and later components wait');
+  assert(Array.isArray(planConfirmAgent.pendingOptions) && planConfirmAgent.pendingOptions.some(q => /计划已完成/.test(String(q.question))), 'runFlow plan confirm: the plan completion question remains pending for user input');
+
+  const interruptionPrompts: string[] = [];
+  const interruptionRuns: Array<Record<string, any>> = [];
+  const interruptionAgent = {
+    mode: 'flow' as AgentMode,
+    workRuns: interruptionRuns,
+    setMode(_mode: AgentMode) {},
+    beginConversationWorkRun(runId: string) {
+      const run = { runId, status: 'running' };
+      interruptionRuns.push(run);
+      return run;
+    },
+    setConversationWorkRunFlowMetadata() { return true; },
+    async process(prompt: string | Record<string, unknown>): Promise<StreamToken[]> {
+      const text = typeof prompt === 'string' ? prompt : String((prompt as { text?: unknown })?.text || '');
+      interruptionPrompts.push(text);
+      if (text.includes('second')) {
+        return [{ type: 'text', text: '[LLM Error: 500] {"error":{"message":"Internal Server Error"}}' }];
+      }
+      return [{ type: 'text', text: 'done' }];
+    },
+    isLlmErrorText(text: string) { return /LLM Error/.test(String(text || '')); },
+    finishConversationWorkRun(runId: string, status: string) {
+      const run = interruptionRuns.find(item => item.runId === runId);
+      if (run) run.status = status;
+      return true;
+    },
+    flushWorkspaceConversationState() {},
+  } as unknown as Agent;
+  let interruptionError: unknown;
+  try {
+    await runFlow(interruptionAgent, {
+      name: 'interruption-flow',
+      components: [
+        { type: 'dialog', id: 7, mode: 'build', prompt: 'first' },
+        { type: 'dialog', id: 9, mode: 'build', prompt: 'second' },
+      ],
+    }, { quiet: true });
+  } catch (error) {
+    interruptionError = error;
+  }
+  const interruptionFailure = interruptionError as { name?: string; componentId?: number; completedResults?: Array<{ componentId: number; result: string }>; message?: string } | null;
+  assert(interruptionFailure !== null && interruptionFailure.name === 'FlowBuildExecutionError' && interruptionFailure.componentId === 9, 'runFlow interruption: system-level provider failure surfaces as FlowBuildExecutionError carrying the failing component');
+  assert(interruptionFailure !== null && Array.isArray(interruptionFailure.completedResults) && interruptionFailure.completedResults.length === 1 && interruptionFailure.completedResults[0].componentId === 7, 'runFlow interruption: completed components are attached for resume context');
+  assert(interruptionPrompts.length === 2 && interruptionRuns[0].status === 'completed' && interruptionRuns[1].status === 'error', 'runFlow interruption: prior component completed and failing block terminates as error');
+
 
   const agentFlow: FlowWorkflow = {
     name: 'agent-trigger-flow',

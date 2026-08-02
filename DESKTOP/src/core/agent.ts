@@ -118,9 +118,21 @@ function throwIfAgentAborted(signal?: AbortSignal): void {
 type StoredConversationEntry = NonNullable<StoredConversationState['conversations']>[string];
 type ConversationModelSelection = { kind: 'auto' } | { kind: 'deployment'; providerId: string; modelId: string };
 export type ConversationFlowSelection = { name: string; pc: number };
+export interface FlowSuspensionRecord {
+  workflowName: string;
+  componentId: number;
+  input: string;
+  completedResults: Array<{ componentId: number; result: string }>;
+  previousMode: AgentMode;
+  reason: 'question' | 'interrupted';
+  message?: string;
+  options?: Array<{ question: string; options: Array<{ label: string; description?: string }> }>;
+  updatedAt: string;
+}
 interface StoredConversationState {
   version?: number;
   activeConversationId?: string;
+  flowSuspension?: FlowSuspensionRecord | null;
   conversations?: Record<string, {
     title?: string;
     chatMessages?: ChatMessage[];
@@ -2350,6 +2362,22 @@ export class Agent {
     this.writeStoredConversationStateNow(pending.state, pending.ws);
   }
 
+  getStoredFlowSuspension(): FlowSuspensionRecord | null {
+    return this.readStoredConversationState().flowSuspension || null;
+  }
+
+  saveStoredFlowSuspension(suspension: FlowSuspensionRecord | null): void {
+    const key = this.workspaceConversationKey();
+    if (!key) return;
+    const stored = this.readStoredConversationState();
+    stored.flowSuspension = suspension;
+    this.writeStoredConversationStateNow(stored);
+  }
+
+  clearStoredFlowSuspension(): void {
+    this.saveStoredFlowSuspension(null);
+  }
+
   private writeStoredConversationStateNow(state: StoredConversationState, ws: WorkspaceInfo | null = this.workspace.current, deletedKeys: Iterable<string> = []): void {
     const file = this.workspaceConversationStorePath(ws);
     if (file) {
@@ -2400,6 +2428,7 @@ export class Agent {
       return {
         version: 4,
         activeConversationId: state.activeConversationId || latest.activeConversationId,
+        flowSuspension: state.flowSuspension === undefined ? latest.flowSuspension : state.flowSuspension,
         conversations: merged,
       };
     });
@@ -2440,6 +2469,7 @@ export class Agent {
     const contentState = mutate({
       version: Math.max(1, Number(latest.version || 1)),
       activeConversationId: latest.activeConversationId,
+      flowSuspension: latest.flowSuspension === undefined ? null : latest.flowSuspension,
       conversations: { ...(latest.conversations || {}) },
     });
     contentState.version = 3;
@@ -2450,6 +2480,7 @@ export class Agent {
     const content = JSON.stringify({
       version: 3,
       activeConversationId: contentState.activeConversationId || this.activeConversationId || 'default',
+      flowSuspension: contentState.flowSuspension === undefined ? undefined : contentState.flowSuspension,
       conversations: diskConversations,
     }, null, 2);
     try {

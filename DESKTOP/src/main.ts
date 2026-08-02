@@ -94,6 +94,8 @@ let activeFlowSuspension: {
   previousMode: AgentMode;
   previousFlow: Agent['flow'];
   previousPc: number;
+  reason: 'question' | 'interrupted';
+  message?: string;
 } | null = null;
 let wslAgentClient: WslAgentClient | null = null;
 let electronUtilityRuntimePool: ElectronUtilityRuntimePool | null = null;
@@ -273,6 +275,25 @@ function ensureConversationKernel(root: string): ConversationKernel | null {
     conversationKernel.subscribe(event => broadcastAgentWorkEvent(event));
   }
   return conversationKernel;
+}
+
+function persistedFlowSuspensionRecord(suspension: NonNullable<typeof activeFlowSuspension>, message = ''): ReturnType<Agent['getStoredFlowSuspension']> {
+  return {
+    workflowName: suspension.workflow.name,
+    componentId: suspension.componentId,
+    input: String(suspension.input || ''),
+    completedResults: Array.isArray(suspension.completedResults) ? suspension.completedResults : [],
+    previousMode: suspension.previousMode,
+    reason: suspension.reason,
+    message: String(message || suspension.message || ''),
+    options: suspension.reason === 'question'
+      ? (agent?.pendingOptions || []).map(question => ({
+          question: String(question.question || ''),
+          options: (question.options || []).map(option => ({ label: String(option.label || ''), description: option.description })),
+        }))
+      : undefined,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 function ensureWorkspaceSelectionCoordinator(): WorkspaceSelectionCoordinator<string, ReturnType<Agent['selectWorkspaceFromStorage']>> | null {
@@ -1466,6 +1487,50 @@ if (isViewerArg) {
         ? `正在预热：${progress.label}`
         : `Prewarming: ${progress.label}`;
     };
+    const isUserFlowAbort = (error: unknown): boolean => {
+      return error instanceof Error && /Flow interrupted by user/i.test(error.message);
+    };
+
+    const restoreStoredFlowSuspension = (): void => {
+      if (!agent || activeFlowSuspension) return;
+      const stored = agent.getStoredFlowSuspension();
+      if (!stored) return;
+      const flowDir = path.join(agent.rootPath, 'Flow');
+      const found = FlowEngine.findWorkflow(stored.workflowName, flowDir);
+      const workflow = found ? FlowEngine.load(flowDir, found) : null;
+      if (!workflow) {
+        agent.clearStoredFlowSuspension();
+        return;
+      }
+      const reason = stored.reason === 'interrupted' ? 'interrupted' : 'question';
+      activeFlowSuspension = {
+        workflow,
+        input: String(stored.input || ''),
+        componentId: Math.max(0, Math.floor(Number(stored.componentId) || 0)),
+        completedResults: Array.isArray(stored.completedResults) ? stored.completedResults : [],
+        previousMode: stored.previousMode === 'plan' || stored.previousMode === 'goal' ? stored.previousMode : 'build',
+        previousFlow: null,
+        previousPc: 0,
+        reason,
+        message: String(stored.message || ''),
+      };
+      agent.flow = workflow;
+      agent.flowPc = activeFlowSuspension.componentId;
+      agent.mode = 'flow';
+      agent.status = 'idle';
+      agent.pendingOptions = reason === 'question' && Array.isArray(stored.options)
+        ? stored.options.map(question => ({
+            header: '',
+            question: String(question.question || ''),
+            options: (question.options || []).map(option => ({
+              label: String(option.label || ''),
+              description: String(option.description || ''),
+            })),
+            multiple: false,
+          }))
+        : [];
+    };
+
     const ensureStartupAgent = async (): Promise<void> => {
       if (!firstRunInitialized) {
         try {
@@ -1485,6 +1550,7 @@ if (isViewerArg) {
         agent = new Agent(root);
         mcpManager = new McpManager(root);
         activeAgentBackendMode = process.platform === 'win32' && agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows';
+        restoreStoredFlowSuspension();
         recordStartup('agent-ready');
       }
     };
@@ -2011,6 +2077,23 @@ if (isViewerArg) {
     }
 
     const wslBackendEnabled = (): boolean => process.platform === 'win32' && activeAgentBackendMode === 'wsl';
+
+    const discardFlowSuspension = async (): Promise<void> => {
+      const suspension = activeFlowSuspension;
+      if (!agent || !suspension) return;
+      activeFlowSuspension = null;
+      activeFlowName = '';
+      agent.pendingOptions = [];
+      agent.flow = suspension.previousFlow;
+      agent.flowPc = suspension.previousPc;
+      agent.setMode(suspension.previousMode);
+      agent.clearStoredFlowSuspension();
+      const target = conversationRuntimeTarget(agent.activeConversationId || 'default');
+      conversationKernel?.setMode(target, suspension.previousMode);
+      if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, suspension.previousMode);
+      else await ensureElectronUtilityPool().setMode(target, suspension.previousMode);
+    };
+
     const utilityHostToolHandler = createUtilityHostToolHandler({
       persistenceRoot: root,
       isToolEnabled: toolName => !!agent && isNativeToolEnabled(toolName, agent.config.nativeToolEnabled()),
@@ -2291,7 +2374,7 @@ if (isViewerArg) {
     ipcMain.handle('flow:run', async (_event, name: string, input = '', start = 0) => {
       if (!agent) return { ok: false, error: 'Agent not initialized' };
       if (agent.mode === 'plan') return { ok: false, error: 'Plan mode is fully read-only; Flow execution is blocked.' };
-      if (activeFlowSuspension) return { ok: false, error: `Flow is waiting for user input: ${activeFlowSuspension.workflow.name}` };
+      if (activeFlowSuspension) await discardFlowSuspension();
       if (activeFlowAbortController) return { ok: false, error: `Flow is already running: ${activeFlowName || '(unnamed)'}` };
       const flowDir = path.join(agent.rootPath, 'Flow');
       const found = FlowEngine.findWorkflow(String(name || ''), flowDir);
@@ -2350,7 +2433,9 @@ if (isViewerArg) {
             previousMode,
             previousFlow,
             previousPc,
+            reason: 'question',
           };
+          agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(activeFlowSuspension));
           return {
             ok: true,
             pending: true,
@@ -2361,7 +2446,51 @@ if (isViewerArg) {
             workRuns: agent.getConversationSnapshot(agent.activeConversationId).workRuns,
           };
         }
-        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        if (isUserFlowAbort(e)) {
+          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+        suspended = true;
+        const buildFailure = e as { componentId?: unknown; completedResults?: FlowCompletedResult[]; message?: unknown };
+        const interruptedComponentId = typeof buildFailure.componentId === 'number'
+          ? Math.max(0, Math.floor(buildFailure.componentId))
+          : Math.max(0, agent.flowPc);
+        const interruptedMessage = String(
+          typeof buildFailure.message === 'string' && buildFailure.message
+            ? buildFailure.message
+            : e instanceof Error
+              ? e.message
+              : String(e || 'Flow interrupted.')
+        ).slice(0, 320);
+        agent.flowPc = interruptedComponentId;
+        agent.setMode('flow');
+        const target = conversationRuntimeTarget(agent.activeConversationId || 'default');
+        conversationKernel?.setMode(target, 'flow');
+        if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, 'flow');
+        else await ensureElectronUtilityPool().setMode(target, 'flow');
+        activeFlowSuspension = {
+          workflow,
+          input: String(input || ''),
+          componentId: interruptedComponentId,
+          completedResults: Array.isArray(buildFailure.completedResults) ? buildFailure.completedResults : [],
+          previousMode,
+          previousFlow,
+          previousPc,
+          reason: 'interrupted',
+          message: interruptedMessage,
+        };
+        agent.pendingOptions = [];
+        agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(activeFlowSuspension));
+        return {
+          ok: true,
+          pending: true,
+          interrupted: true,
+          error: interruptedMessage,
+          name: workflow.name,
+          mode: 'flow',
+          options: [],
+          chatMessages: agent.chatMessages,
+          workRuns: agent.getConversationSnapshot(agent.activeConversationId).workRuns,
+        };
       } finally {
         stopRelayingFlowEvents();
         if (activeFlowAbortController === flowAbortController) {
@@ -2383,6 +2512,7 @@ if (isViewerArg) {
       activeFlowAbortController = flowAbortController;
       activeFlowName = suspension.workflow.name;
       activeFlowSuspension = null;
+      agent.clearStoredFlowSuspension();
       const flowTarget = conversationRuntimeTarget(agent.activeConversationId || 'default');
       const stopRelayingFlowEvents = relayFlowAgentWorkEvents(agent, flowTarget);
       let suspendedAgain = false;
@@ -2393,7 +2523,7 @@ if (isViewerArg) {
         await runFlow(agent, suspension.workflow, {
           startInput: suspension.input,
           startPc: suspension.componentId,
-          resumePrompt: String(response || ''),
+          resumePrompt: suspension.reason === 'interrupted' ? '' : String(response || ''),
           completedResults: suspension.completedResults,
           quiet: true,
           signal: flowAbortController.signal,
@@ -2425,7 +2555,10 @@ if (isViewerArg) {
             ...suspension,
             componentId: error.componentId,
             completedResults: error.completedResults,
+            reason: 'question',
+            message: '',
           };
+          agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(activeFlowSuspension));
           return {
             ok: true,
             pending: true,
@@ -2436,7 +2569,47 @@ if (isViewerArg) {
             workRuns: agent.getConversationSnapshot(agent.activeConversationId).workRuns,
           };
         }
-        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        if (isUserFlowAbort(error)) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+        suspendedAgain = true;
+        const resumeFailure = error as { componentId?: unknown; completedResults?: FlowCompletedResult[]; message?: unknown };
+        const interruptedComponentId = typeof resumeFailure.componentId === 'number'
+          ? Math.max(0, Math.floor(resumeFailure.componentId))
+          : Math.max(0, suspension.componentId);
+        const interruptedMessage = String(
+          typeof resumeFailure.message === 'string' && resumeFailure.message
+            ? resumeFailure.message
+            : error instanceof Error
+              ? error.message
+              : String(error || 'Flow interrupted.')
+        ).slice(0, 320);
+        agent.flowPc = interruptedComponentId;
+        agent.setMode('flow');
+        const target = conversationRuntimeTarget(agent.activeConversationId || 'default');
+        conversationKernel?.setMode(target, 'flow');
+        if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, 'flow');
+        else await ensureElectronUtilityPool().setMode(target, 'flow');
+        activeFlowSuspension = {
+          ...suspension,
+          componentId: interruptedComponentId,
+          completedResults: Array.isArray(resumeFailure.completedResults) ? resumeFailure.completedResults : suspension.completedResults,
+          reason: 'interrupted',
+          message: interruptedMessage,
+        };
+        agent.pendingOptions = [];
+        agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(activeFlowSuspension));
+        return {
+          ok: true,
+          pending: true,
+          interrupted: true,
+          error: interruptedMessage,
+          name: suspension.workflow.name,
+          mode: 'flow',
+          options: [],
+          chatMessages: agent.chatMessages,
+          workRuns: agent.getConversationSnapshot(agent.activeConversationId).workRuns,
+        };
       } finally {
         stopRelayingFlowEvents();
         if (activeFlowAbortController === flowAbortController) activeFlowAbortController = null;
@@ -2626,6 +2799,7 @@ if (isViewerArg) {
         subagents: conversationSnapshot.subagents,
         fileDiffs: conversationSnapshot.fileDiffs || [],
         pendingOptions: conversationSnapshot.pendingOptions || agent.pendingOptions,
+        flowSuspension: agent.getStoredFlowSuspension(),
         proxyEnabled: agent.config.getBool('proxy', 'enabled'),
         proxyUrl: agent.config.getStr('proxy', 'url'),
         proxyAuth: agent.config.getStr('proxy', 'auth'),
@@ -2862,19 +3036,9 @@ if (isViewerArg) {
     ipcMain.handle('flow:stop', async () => {
       if (!agent) return { ok: true, action: 'not_running' };
       if (activeFlowSuspension) {
-        const suspension = activeFlowSuspension;
-        activeFlowSuspension = null;
-        activeFlowName = '';
-        agent.pendingOptions = [];
-        agent.flow = suspension.previousFlow;
-        agent.flowPc = suspension.previousPc;
-        agent.setMode(suspension.previousMode);
-        const target = conversationRuntimeTarget(agent.activeConversationId || 'default');
-        conversationKernel?.setMode(target, suspension.previousMode);
-        if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, suspension.previousMode);
-        else await ensureElectronUtilityPool().setMode(target, suspension.previousMode);
-        agent.flushWorkspaceConversationState();
-        return { ok: true, action: 'stopped_pending', flow: suspension.workflow.name };
+        const flowName = activeFlowSuspension.workflow.name;
+        await discardFlowSuspension();
+        return { ok: true, action: 'stopped_pending', flow: flowName };
       }
       if (!activeFlowAbortController) return { ok: true, action: 'not_running' };
       const controller = activeFlowAbortController;
@@ -2911,6 +3075,7 @@ if (isViewerArg) {
 
     ipcMain.handle('agent:enqueueGuide', async (_event, raw: ConversationInputEnvelope) => {
       if (!agent) throw new Error('Agent not initialized');
+      if (activeFlowSuspension) await discardFlowSuspension();
       const target = conversationRuntimeTarget({ target: raw?.target });
       const envelope: ConversationInputEnvelope = {
         clientMessageId: String(raw?.clientMessageId || '').trim().slice(0, 200),

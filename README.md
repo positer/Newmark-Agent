@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.2.3-blue">
+  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.2.4-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -18,6 +18,8 @@
 Newmark Agent brings model routing, persistent workspaces, tools, subagents, workflows, and local state into one desktop application. Connect your own model providers and keep workspace prompts, credentials, conversations, and mutable state under your control.
 
 > Newmark Agent is under active development. Current packages are unsigned prerelease builds.
+
+The `dev-0.2.4` source fixes Flow plan confirmation: when the planner finishes a Plan component and asks "计划已完成，是否执行此计划？", the Flow genuinely pauses and waits for the user's choice instead of silently continuing. A Flow that suffers a system-level interruption — a network blip, a provider error, or an app restart — now enters a persistent paused takeover: the state is saved to the conversation store, the takeover bubble shows "Flow 已暂停接管" with the failure reason and a Resume button, and clicking Resume re-runs the interrupted component with its completed results. The pause survives restarts, conversation switches, and workspace switches; it is discarded only when you start a new Flow, send a new message, or stop the run. User-initiated aborts still exit the Flow directly as before.
 
 The `dev-0.2.3` source binds the input area to the selected Conversation, so an unsent draft survives switching away and back. Transcript rerenders preserve the user's scroll position and keep following the bottom only when the view was already there. Ultra is a real highest-tier request setting: it maps to `max` reasoning effort at the provider boundary and instructs the primary Agent to orchestrate specialized SubAgents. Provider 402/insufficient-balance responses remain actionable errors instead of being streamed as ordinary Agent prose, and a balance failure pauses only the failed provider deployment for a bounded cooldown while other providers stay usable, so switching provider or model continues immediately. Tool provisioning keeps its broker available even when no task-specific schema is preloaded.
 
@@ -46,7 +48,21 @@ The release gate covers DESKTOP, native TUI, CLI, GUI/TUI/CLI shared-backend str
 
 ## Download
 
-The latest prerelease is `dev-0.2.3`, including conversation-bound input drafts, live transcript scroll anchoring, the Ultra orchestrator tier, safe provider-balance failures, and the dev-0.2.2 Flow/UI/runtime improvements.
+The latest prerelease is `dev-0.2.4`, with Flow plan confirmation pausing for the user, persistent Flow pause/resume across interruptions and restarts, and the dev-0.2.3 drafts/scrolling/Ultra/provider-balance improvements.
+
+### dev-0.2.4
+
+Download packages from the [dev-0.2.4 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.2.4).
+
+| Package | Platform | SHA-256 |
+| --- | --- | --- |
+| `Newmark-Agent-0.2.4-x64.msi` | Windows x64 installer with GUI and global GUI/TUI launcher | `27C970B45DCAC962397E961DF89A8FD1AADE9BE08722E0196541365C80EFE220` |
+| `Newmark-Agent-0.2.4-win-unpacked-x64.zip` | Windows x64 portable | `56096B160B0E65FCA347F4492E37BF048987C36698866C64257DEED495004147` |
+| `Newmark-Agent-0.2.4-x86_64.AppImage` | Linux x64 AppImage | `C5B3E3E6ED29F75FA8D528888B54FD833494D4DEFE7236785CEAEADF161A2558` |
+| `Newmark-Agent-0.2.4-amd64.deb` | Debian/Ubuntu x64 package | `7A7285F094E09EDF0C1B23DD94054E459BD0029B951EFA95B454D489249EDEC0` |
+| `Newmark-Agent-0.2.4-linux-unpacked-x64.zip` | Linux x64 portable | `4604BA9E0B1DECACBE88FD6E7DEFD35617E31DAB5CDBD19F04E96C1F56AC30A6` |
+
+The `dev-0.2.4` source fixes Flow plan confirmation: when the planner finishes a Plan component and asks "计划已完成，是否执行此计划？", the Flow genuinely pauses and waits for the user's choice instead of silently continuing. A Flow that suffers a system-level interruption — a network blip, a provider error, or an app restart — now enters a persistent paused takeover: the state is saved to the conversation store, the takeover bubble shows "Flow 已暂停接管" with the failure reason and a Resume button, and clicking Resume re-runs the interrupted component with its completed results. The pause survives restarts, conversation switches, and workspace switches; it is discarded only when you start a new Flow, send a new message, or stop the run. User-initiated aborts still exit the Flow directly as before.
 
 ### dev-0.2.3
 
@@ -122,7 +138,7 @@ Application upgrades preserve existing user state under `~/.Newmark`.
 The command package is prepared for npm. After registry publication, `Newmark --GUI` starts the native desktop surface (using an installed desktop package when available, with the npm Electron runtime as fallback), while `Newmark --TUI` starts the terminal surface:
 
 ```powershell
-npm.cmd install --global newmark-agent@0.2.3
+npm.cmd install --global newmark-agent@0.2.4
 Newmark --GUI
 Newmark --TUI
 ```
@@ -283,6 +299,7 @@ See [OVERVIEW.md](OVERVIEW.md) for the source tree, subsystem responsibilities, 
 - 2026-08-02: Updated the `dev-0.2.1` packages so the TUI-opened Memory Lab Overview executes the exact GUI graph builder and renderer. A packaged-executable 30-window viewer stress (15 image + 15 Memory Lab overview) had zero failures; all Windows/Linux asset smokes passed. See `archive/20260802-memorylab-shared-overview-renderer.md` and `archive/20260801-dev-0.2.1-release.md`.
 - 2026-08-02: Advanced source development to `dev-0.2.2` and connected Flow-owned component Builds to the normal live Conversation event channel. Flow takeover now shows immediate running state, an expanded per-component Block with a live timer, public reasoning/progress and tool activity, plus the correct send/stop button state. Provider JSON errors are condensed and no longer create duplicate Flow Agent bubbles. Build/typecheck, 1375/1375 source assertions, a real Electron takeover smoke, and the 337-second unified DESKTOP/TUI/SSH/WSL/CLI/shared-backend gate pass; see `archive/20260802-dev-0.2.2-flow-live-build-state.md`.
 - 2026-08-02: Built the final `dev-0.2.2` Windows x64 MSI and unpacked ZIP through the complete release gate, installed the MSI machine-wide at `C:\Program Files\Newmark Agent`, and verified the installed EXE/app.asar hashes plus the complete installed CLI smoke. The temporary current-user fallback was removed, the machine Start Menu shortcut is active, and audited `~/.Newmark` configuration hashes are unchanged; see `archive/20260802-dev-0.2.2-local-package-install.md`.
+- 2026-08-02: Advanced source development to `dev-0.2.4`: Flow plan completion ("计划已完成，是否执行此计划？") now genuinely pauses and waits for the user instead of being filtered. A system-level Flow interruption — provider error, network blip, or app restart — enters a persistent paused takeover saved to the conversation store: the takeover bubble shows the failure reason with a Resume button, Resume re-runs the interrupted component with completed results, and the pause survives restarts and conversation/workspace switches until a new Flow, a new message, or a stop discards it. User-initiated aborts still exit directly. Windows and Linux release gates pass; see `archive/20260802-dev-0.2.4-release.md`.
 - 2026-08-02: Advanced source development to `dev-0.2.3`: input drafts are conversation-bound, transcript rerenders preserve user scroll position, Ultra maps to provider `max` reasoning, provider-balance errors no longer leak into live prose, and the tool-provision broker remains callable for tool discovery. Verification and package evidence are recorded in `archive/20260802-dev-0.2.3-update.md`.
 - 2026-07-29: Extended the post-release TUI source with a flat `WorkFlow` Operation whose content area lists, expands, and creates FlowEngine workflows, plus a real Automation creation form bound to the active Workspace/Conversation. Long side menus now scroll with their cursor. Conversation history receives the terminal-height remainder while a two-row input viewport stays reserved. Input-top Up enters a Build Block cursor; continued Up scrolls older history only after crossing the visible top, while newer-history scrolling remains input-bottom Down. The Conversation timeline now matches the GUI's run ownership: primary input, collapsible Build Block with persistent duration/fold state, deduplicated Guides, and the owning always-visible final summary remain one strictly ordered `runId` group. Settings / General now opens a real Guide/Next list for the default Enter behavior and persists it through the shared input-mode backend. TUI verification passes 48/48.
 - 2026-07-29: Released `dev-0.2.0` with the real terminal UI entry `Newmark --TUI`. The MSI installs a console-subsystem launcher on the user PATH; it preserves the caller cwd, registers or restores it through the existing WorkspaceManager, and shares `~/.Newmark` persistence with GUI/CLI. TUI message wrapping uses terminal display width for CJK/full-width/emoji text and complete light/dark canvases. TUI tests pass 38/38, launcher checks pass 17/17, the full DESKTOP suite passes 1365/1365 plus specialized gates, and shared-backend stress passes five consecutive runs. Real loopback SSH and Ubuntu 24.04 WSL 2 PTY regressions cover the complete interaction flow. See `archive/20260729-tui-cjk-partition-global-launcher.md` and `archive/20260729-dev-0.2.0-tui-shared-backend.md`.

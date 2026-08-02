@@ -48,7 +48,13 @@ function nestedProviderMessage(value: unknown): string {
   return '';
 }
 
-class FlowBuildExecutionError extends Error {}
+class FlowBuildExecutionError extends Error {
+  public completedResults: FlowCompletedResult[] = [];
+  constructor(message: string, public readonly componentId: number) {
+    super(message);
+    this.name = 'FlowBuildExecutionError';
+  }
+}
 
 function flowBuildFailure(error: unknown, componentId: number): Error {
   if (error instanceof FlowBuildExecutionError) return error;
@@ -69,14 +75,7 @@ function flowBuildFailure(error: unknown, componentId: number): Error {
   }
   const concise = providerMessage.replace(/\s+/g, ' ').slice(0, 320) || 'Model provider returned an unsuccessful response.';
   const providerFailure = /^\s*\[(?:LLM Error|Error)(?::|\])/i.test(raw) || !!status || jsonStart >= 0;
-  return new FlowBuildExecutionError(`Flow component #${componentId} ${providerFailure ? 'model request failed' : 'failed'}${status ? ` (HTTP ${status})` : ''}: ${concise}`);
-}
-
-function isAutomaticPlanExecutionQuestion(question: Agent['pendingOptions'][number]): boolean {
-  const contract = `${question.question || ''}\n${(question.options || []).map(option => option.label || '').join('\n')}`;
-  return /计划已完成|plan is complete/i.test(contract)
-    && /执行此计划|execute this plan/i.test(contract)
-    && /请补充|supplement/i.test(contract);
+  return new FlowBuildExecutionError(`Flow component #${componentId} ${providerFailure ? 'model request failed' : 'failed'}${status ? ` (HTTP ${status})` : ''}: ${concise}`, componentId);
 }
 
 async function runFlowBuild(agent: Agent, prompt: string, options: FlowBuildOptions) {
@@ -127,9 +126,6 @@ async function runFlowBuild(agent: Agent, prompt: string, options: FlowBuildOpti
       agent.finishConversationWorkRun(runId, 'completed');
       agent.flushWorkspaceConversationState();
       workRunFinished = true;
-    }
-    if (Array.isArray(agent.pendingOptions)) {
-      agent.pendingOptions = agent.pendingOptions.filter(question => !isAutomaticPlanExecutionQuestion(question));
     }
     if (Array.isArray(agent.pendingOptions) && agent.pendingOptions.length > 0) {
       throw new FlowQuestionPendingError(options.componentId);
@@ -301,6 +297,7 @@ export async function runFlow(
       });
     } catch (error) {
       if (error instanceof FlowQuestionPendingError) error.completedResults = [...completedResults];
+      if (error instanceof FlowBuildExecutionError) error.completedResults = [...completedResults];
       throw error;
     }
     const resultText = resultTokens.map(token => token.text || '').join('');

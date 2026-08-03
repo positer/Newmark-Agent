@@ -5786,6 +5786,7 @@ var NEWMARK_I18N = {
     'subagent.openHistory': 'Open subagent history',
     'subagent.historyTitle': 'Subagent history',
     'subagent.readOnly': 'Subagent history is read-only.',
+    'subagent.liveHistory': 'Live history — updates while the subagent works.',
     'subagent.result': 'Result',
     'subagent.history': 'History',
     'subagent.noMessages': 'No messages recorded.',
@@ -6350,6 +6351,7 @@ var NEWMARK_I18N = {
     'subagent.openHistory': '打开 subagent 历史',
     'subagent.historyTitle': 'Subagent 历史',
     'subagent.readOnly': 'Subagent 历史仅可查看。',
+    'subagent.liveHistory': '实时历史 — 运行期间自动更新。',
     'subagent.result': '结果',
     'subagent.history': '历史',
     'subagent.noMessages': '没有记录消息。',
@@ -9625,6 +9627,35 @@ function isConversationTracked(id, workspaceId) {
   return !!(state.trackedConversationUntil && Number(state.trackedConversationUntil[key] || 0) >= Date.now());
 }
 
+function applyStreamingWorkflowText(ui, eventConversationId, mode, model) {
+  if (!ui || !ui.activeWorkflowText) return;
+  var pendingFinalMsg = findPendingFinalResponseMsg(eventConversationId, ui.activeWorkflowText);
+  if (pendingFinalMsg) {
+    ui.activeWorkflowMsg = pendingFinalMsg;
+    if (responseTextsLikelySame(ui.activeWorkflowText, ui.finalResponseText)) {
+      updateMsg(pendingFinalMsg, ui.finalResponseText || ui.activeWorkflowText, 'assistant', mode, model);
+    }
+    return;
+  }
+  updateMsg(ensureActiveAssistantMsg(mode, model, eventConversationId), ui.activeWorkflowText, 'assistant', mode, model);
+}
+
+function scheduleStreamingWorkflowTextFlush(ui, eventConversationId, eventWorkspaceId) {
+  if (ui && ui._streamFlushPending) return;
+  if (ui) ui._streamFlushPending = true;
+  requestAnimationFrame(function() {
+    var current = conversationWorkUiState(eventConversationId, eventWorkspaceId);
+    current._streamFlushPending = false;
+    applyStreamingWorkflowText(current, eventConversationId, current._streamMode || state.mode, current._streamModel || state.model);
+  });
+}
+
+function flushStreamingWorkflowTextNow(ui, eventConversationId, mode, model) {
+  if (!ui) return;
+  ui._streamFlushPending = false;
+  applyStreamingWorkflowText(ui, eventConversationId, mode, model);
+}
+
 function renderAgentWorkEvent(event) {
   if (!event) return;
   var type = event.type || 'status';
@@ -9636,24 +9667,21 @@ function renderAgentWorkEvent(event) {
   if (type === 'start') {
     ui.activeWorkflowText = '';
     ui.lastCompletedWorkflow = null;
+    ui._streamFlushPending = false;
   } else if (type === 'text') {
     ui.activeWorkflowText = (ui.activeWorkflowText || '') + content;
     if (workRun) return;
-    var pendingFinalMsg = findPendingFinalResponseMsg(eventConversationId, ui.activeWorkflowText);
-    if (pendingFinalMsg) {
-      ui.activeWorkflowMsg = pendingFinalMsg;
-      if (responseTextsLikelySame(ui.activeWorkflowText, ui.finalResponseText)) {
-        updateMsg(pendingFinalMsg, ui.finalResponseText || ui.activeWorkflowText, 'assistant', event.mode || state.mode, event.model || state.model);
-      }
-      return;
-    }
-    updateMsg(ensureActiveAssistantMsg(event.mode || state.mode, event.model || state.model, eventConversationId), ui.activeWorkflowText, 'assistant', event.mode || state.mode, event.model || state.model);
+    ui._streamMode = event.mode || state.mode;
+    ui._streamModel = event.model || state.model;
+    scheduleStreamingWorkflowTextFlush(ui, eventConversationId, eventWorkspaceId);
   } else if (type === 'response' && workRun) {
     ui.activeWorkflowText = '';
     ui.activeWorkflowMsg = null;
+    ui._streamFlushPending = false;
   } else if (type === 'final_response' && workRun) {
     ui.activeWorkflowText = '';
     ui.activeWorkflowMsg = null;
+    ui._streamFlushPending = false;
     if (content) {
       var finalMsg = addMsg('assistant', content, event.mode || state.mode, event.model || state.model, undefined, { runId: event.runId || '', target: workRun.target || currentConversationTarget(eventConversationId) });
       markFinalResponseMsg(eventConversationId, content, finalMsg);
@@ -9663,6 +9691,12 @@ function renderAgentWorkEvent(event) {
   } else if (type === 'tool_result' && !workRun) {
     upsertToolEvent(event, content || 'Tool result received.');
   } else if (type === 'done') {
+    if (ui._streamFlushPending) {
+      ui._streamFlushPending = false;
+      if (ui.activeWorkflowText && !ui.activeWorkflowMsg) {
+        ui.activeWorkflowMsg = ensureActiveAssistantMsg(event.mode || state.mode, event.model || state.model, eventConversationId);
+      }
+    }
     if (ui.activeWorkflowMsg && ui.activeWorkflowText) {
       updateMsg(ui.activeWorkflowMsg, ui.activeWorkflowText, 'assistant', event.mode || state.mode, event.model || state.model);
       ui.lastCompletedWorkflow = {
@@ -9679,6 +9713,7 @@ function renderAgentWorkEvent(event) {
     ui.activeWorkflowText = '';
     finishToolBatch(eventConversationId);
   } else if (type === 'error') {
+    flushStreamingWorkflowTextNow(ui, eventConversationId, event.mode || state.mode, event.model || state.model);
     finishToolBatch(eventConversationId);
     if (workRun) showUiNotice(content || 'Agent run failed.', 'error', 'agent-run-' + String(event.runId || event.id || 'error'));
     else addMsg('assistant', formatChatError(content, 'Agent run failed.'), 'error', event.model || state.model);
@@ -9718,8 +9753,24 @@ function replayActiveAgentWorkEvents() {
   for (var i = 0; i < events.length; i++) renderAgentWorkEvent(events[i]);
 }
 
+var _conversationsRenderPending = false;
+function scheduleConversationsRender() {
+  if (_conversationsRenderPending) return;
+  _conversationsRenderPending = true;
+  requestAnimationFrame(function() {
+    _conversationsRenderPending = false;
+    if (typeof renderConversations === 'function') renderConversations();
+  });
+}
+
 function appendAgentWorkEvent(event) {
   if (!event) return;
+  // Subagent (peer) work events are streamed to their own live history overlay
+  // and never touch the main conversation's chat/runtime state.
+  if (String(event.actorId || '')) {
+    appendSubagentPeerEvent(event);
+    return;
+  }
   event = publicWorkEventForUi(event);
   var id = String(event.conversationId || (event.target && event.target.conversationId) || 'default');
   var workspaceId = String(event.workspaceId || (event.target && event.target.workspaceId) || runtimeWorkspaceId(''));
@@ -9779,7 +9830,7 @@ function appendAgentWorkEvent(event) {
     }).catch(function(){});
   }
   if (active && terminalEvent && window.scheduleNextQueueDrain) window.scheduleNextQueueDrain(target);
-  if (typeof renderConversations === 'function') renderConversations();
+  if (typeof scheduleConversationsRender === 'function') scheduleConversationsRender();
 }
 
 window.getAgentWorkEvents = function(conversationId) {
@@ -15737,14 +15788,158 @@ window.openSubagentFromBuild = function(name) {
   }).catch(function() { return openLatest(); });
 };
 
+var _subagentLive = null;
+
+function autoScrollSubagentHistory(body) {
+  if (!body) return;
+  if (shouldAutoScroll(body)) body.scrollTop = body.scrollHeight;
+}
+
+function renderSubagentBaseMessages(body, agent) {
+  if (!body) return;
+  var messages = (agent && agent.messages) || [];
+  if (messages.length === 0) {
+    var empty = document.createElement('div');
+    empty.style.cssText = 'font-size:12px;color:var(--text-dim);';
+    empty.textContent = t('subagent.noMessages');
+    body.appendChild(empty);
+    return;
+  }
+  for (var i = 0; i < messages.length; i++) {
+    var m = messages[i] || {};
+    var messageRole = m.role || m.kind || '';
+    var messageContent = m.content || m.body || '';
+    var row = document.createElement('div');
+    row.style.cssText = 'margin:8px 0;';
+    row.innerHTML = '<div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;">' + esc(messageRole) + '</div><pre style="white-space:pre-wrap;word-break:break-word;background:var(--glass-bg-1);border:1px solid var(--glass-border-1);border-radius:8px;padding:8px;">' + esc(messageContent) + '</pre>';
+    body.appendChild(row);
+  }
+}
+
+function beginSubagentLiveBlock(body) {
+  var block = document.createElement('div');
+  block.style.cssText = 'margin:8px 0;';
+  block.innerHTML = '<div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;">' + esc(currentLang() === 'zh' ? '助手' : 'Assistant') + '</div><pre class="subagent-live-text" style="white-space:pre-wrap;word-break:break-word;background:var(--glass-bg-1);border:1px solid var(--glass-border-1);border-radius:8px;padding:8px;"></pre>';
+  body.appendChild(block);
+  _subagentLive = { text: '', textEl: block.querySelector('.subagent-live-text'), blockEl: block, toolRow: null, toolResultEl: null };
+  return _subagentLive;
+}
+
+function finalizeSubagentLiveText() {
+  if (!_subagentLive) return;
+  if (!String(_subagentLive.text || '').trim() && _subagentLive.blockEl && _subagentLive.blockEl.parentNode) {
+    _subagentLive.blockEl.parentNode.removeChild(_subagentLive.blockEl);
+  }
+  _subagentLive.text = '';
+  _subagentLive.textEl = null;
+  _subagentLive.blockEl = null;
+}
+
+function appendSubagentStatusLine(body, text, error) {
+  if (!body || !text) return;
+  var line = document.createElement('div');
+  line.style.cssText = 'margin:6px 0 2px;font-size:11px;color:' + (error ? 'var(--danger)' : 'var(--text-dim)') + ';';
+  line.textContent = text;
+  body.appendChild(line);
+}
+
+function renderSubagentPeerEvent(event) {
+  var body = document.getElementById('subagent-history-body');
+  if (!body || !event) return;
+  var type = event.type || 'status';
+  var content = String(event.content || '');
+  if (type === 'start') {
+    beginSubagentLiveBlock(body);
+  } else if (type === 'text') {
+    if (!_subagentLive || !_subagentLive.textEl) beginSubagentLiveBlock(body);
+    _subagentLive.text += content;
+    _subagentLive.textEl.textContent = _subagentLive.text;
+  } else if (type === 'tool_call') {
+    finalizeSubagentLiveText();
+    var row = document.createElement('div');
+    row.style.cssText = 'margin:8px 0 0;';
+    row.innerHTML = '<div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;">' + esc(currentLang() === 'zh' ? '工具调用' : 'Tool call') + '</div><div style="font-size:11px;color:var(--accent2);margin:2px 0 0;">' + esc(publicToolNameForUi(event.toolName) || 'tool') + '</div>';
+    body.appendChild(row);
+    _subagentLive = { text: '', textEl: null, blockEl: null, toolRow: row, toolResultEl: null };
+  } else if (type === 'tool_result') {
+    if (_subagentLive && _subagentLive.toolRow && !_subagentLive.toolResultEl) {
+      var result = document.createElement('pre');
+      result.style.cssText = 'white-space:pre-wrap;word-break:break-word;background:var(--glass-bg-2);border:1px solid var(--glass-border-1);border-radius:8px;padding:8px;font-size:11px;margin:4px 0 0;';
+      result.textContent = content || (currentLang() === 'zh' ? '工具已执行完成。' : 'Tool result received.');
+      _subagentLive.toolRow.appendChild(result);
+      _subagentLive.toolResultEl = result;
+    }
+  } else if (type === 'status') {
+    finalizeSubagentLiveText();
+    appendSubagentStatusLine(body, content, false);
+  } else if (type === 'response' || type === 'final_response') {
+    if (content) {
+      if (!_subagentLive || !_subagentLive.textEl) beginSubagentLiveBlock(body);
+      _subagentLive.text += content;
+      _subagentLive.textEl.textContent = _subagentLive.text;
+    }
+    finalizeSubagentLiveText();
+  } else if (type === 'done' || type === 'error') {
+    finalizeSubagentLiveText();
+    appendSubagentStatusLine(body, type === 'error'
+      ? ((currentLang() === 'zh' ? '[失败] ' : '[Error] ') + content)
+      : (currentLang() === 'zh' ? '—— 已完成 ——' : '— Completed —'), type === 'error');
+    _subagentLive = null;
+    window.refreshSubagentsAfterPeerTerminal();
+  }
+  autoScrollSubagentHistory(body);
+}
+
+function appendSubagentPeerEvent(event) {
+  if (!event || !String(event.actorId || '')) return;
+  var actorId = String(event.actorId);
+  state.subagentPeerEventsByActor = state.subagentPeerEventsByActor || {};
+  var cached = state.subagentPeerEventsByActor[actorId] || [];
+  cached.push(event);
+  if (cached.length > 500) cached = cached.slice(-500);
+  state.subagentPeerEventsByActor[actorId] = cached;
+  if (state.subagentHistoryActorId === actorId) renderSubagentPeerEvent(event);
+}
+
+window.refreshSubagentsAfterPeerTerminal = function() {
+  if (!api.getState) return;
+  var eventWorkspaceKey = currentWorkspaceKey();
+  var target = currentConversationTarget();
+  api.getState(target).then(function(snapshot) {
+    if (eventWorkspaceKey !== currentWorkspaceKey()) return;
+    if (snapshot && snapshot.subagents) state.subagents = snapshot.subagents;
+    if (snapshot && snapshot.linkedPlan) state.linkedPlan = snapshot.linkedPlan;
+    if (state.rightTab === 'subagent') window.renderSubagentList();
+    if (state.subagentHistoryActorId) {
+      var record = (state.subagents || []).find(function(a) { return a.id === state.subagentHistoryActorId || a.name === state.subagentHistoryActorId; });
+      if (record) updateSubagentHistoryMeta(record);
+    }
+  }).catch(function(){});
+};
+
+function updateSubagentHistoryMeta(record) {
+  var meta = document.getElementById('subagent-history-meta');
+  if (!meta || !record) return;
+  meta.textContent = (record.status || t('common.idle')) + ' / ' + (record.agentMode || record.mode || 'build') + ' / ' + (record.model || t('common.default'));
+}
+
+window.closeSubagentHistory = function() {
+  var overlay = document.getElementById('subagent-history-overlay');
+  if (overlay) overlay.remove();
+  state.subagentHistoryActorId = '';
+  _subagentLive = null;
+};
+
 window.openSubagentHistory = function(id) {
   var agents = state.subagents || [];
-  var agent = agents.find(function(a) { return a.id === id || a.name === id; });
-  if (!agent) return;
+  var agent = agents.find(function(a) { return a.id === id || a.name === id; }) || {};
+  state.subagentHistoryActorId = agent.id || id || '';
+  var existing = document.getElementById('subagent-history-overlay');
+  if (existing) existing.remove();
   var lines = [];
   lines.push('<div style="font-size:13px;color:var(--text);font-weight:600;margin-bottom:4px;">' + esc(agent.displayName || agent.name || t('subagent.historyTitle')) + '</div>');
   lines.push('<div style="font-size:10px;color:var(--text-dim);word-break:break-all;margin-bottom:8px;">' + esc(agent.qualifiedName || agent.name || agent.id || '') + '</div>');
-  lines.push('<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px;">' + esc((agent.status || t('common.idle')) + ' / ' + (agent.agentMode || agent.mode || 'build') + ' / ' + (agent.model || t('common.default')) + (agent.mailbox && agent.mailbox.unread ? (' / ' + agent.mailbox.unread + ' unread') : '')) + '</div>');
+  lines.push('<div id="subagent-history-meta" style="font-size:11px;color:var(--text-dim);margin-bottom:10px;">' + esc((agent.status || t('common.idle')) + ' / ' + (agent.agentMode || agent.mode || 'build') + ' / ' + (agent.model || t('common.default')) + (agent.mailbox && agent.mailbox.unread ? (' / ' + agent.mailbox.unread + ' unread') : '')) + '</div>');
   var compression = agent.metadata && agent.metadata.contextCompression;
   if (compression) {
     lines.push('<div style="font-size:10px;color:var(--accent2);margin-bottom:8px;">' + esc(t('status.contextCompressed')) + ' ' + esc(String(compression.originalMessages || 0)) + ' -> ' + esc(String(compression.compressedMessages || 0)) + ' ' + esc(t('status.messages')) + ' / ' + esc(compression.model || '') + '</div>');
@@ -15754,27 +15949,25 @@ window.openSubagentHistory = function(id) {
     lines.push('<pre style="white-space:pre-wrap;word-break:break-word;background:var(--glass-bg-2);border:1px solid var(--glass-border-1);border-radius:8px;padding:10px;max-height:180px;overflow:auto;">' + esc(agent.result) + '</pre>');
   }
   lines.push('<div style="font-size:11px;color:var(--accent2);margin:10px 0 4px;">' + esc(t('subagent.history')) + '</div>');
-  var messages = agent.messages || [];
-  if (messages.length === 0) {
-    lines.push('<div style="font-size:12px;color:var(--text-dim);">' + esc(t('subagent.noMessages')) + '</div>');
-  } else {
-    for (var i = 0; i < messages.length; i++) {
-      var m = messages[i];
-      var messageRole = m.role || m.kind || '';
-      var messageContent = m.content || m.body || '';
-      lines.push('<div style="margin:8px 0;"><div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;">' + esc(messageRole) + '</div><pre style="white-space:pre-wrap;word-break:break-word;background:var(--glass-bg-1);border:1px solid var(--glass-border-1);border-radius:8px;padding:8px;">' + esc(messageContent) + '</pre></div>');
-    }
-  }
   var overlay = document.createElement('div');
   overlay.id = 'subagent-history-overlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px;';
-  overlay.innerHTML = '<div style="width:min(680px, calc(100vw - 48px));max-height:80vh;overflow:auto;background:var(--bg);border:1px solid var(--glass-border-2);border-radius:12px;padding:16px;box-shadow:0 20px 60px rgba(0,0,0,.35);">' +
-    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;"><div style="flex:1;font-size:12px;color:var(--text-dim);">' + esc(t('subagent.readOnly')) + '</div><button type="button" style="border:1px solid var(--glass-border-1);border-radius:8px;background:var(--glass-bg-1);color:var(--text);padding:6px 10px;cursor:pointer;">' + esc(t('common.close')) + '</button></div>' +
-    lines.join('') + '</div>';
+  overlay.innerHTML = '<div style="width:min(680px, calc(100vw - 48px));max-height:80vh;display:flex;flex-direction:column;background:var(--bg);border:1px solid var(--glass-border-2);border-radius:12px;padding:16px;box-shadow:0 20px 60px rgba(0,0,0,.35);">' +
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex:0 0 auto;"><div style="flex:1;font-size:12px;color:var(--text-dim);">' + esc(t('subagent.liveHistory')) + '</div><button type="button" style="border:1px solid var(--glass-border-1);border-radius:8px;background:var(--glass-bg-1);color:var(--text);padding:6px 10px;cursor:pointer;">' + esc(t('common.close')) + '</button></div>' +
+    '<div style="flex:0 0 auto;">' + lines.join('') + '</div>' +
+    '<div id="subagent-history-body" style="flex:1 1 auto;overflow:auto;margin-top:8px;min-height:80px;"></div>' +
+    '</div>';
   overlay.addEventListener('click', function(e) {
-    if (e.target === overlay || e.target.tagName === 'BUTTON') overlay.remove();
+    if (e.target === overlay || e.target.tagName === 'BUTTON') window.closeSubagentHistory();
   });
   document.body.appendChild(overlay);
+  var body = document.getElementById('subagent-history-body');
+  renderSubagentBaseMessages(body, agent);
+  _subagentLive = null;
+  var cached = (state.subagentPeerEventsByActor && state.subagentPeerEventsByActor[state.subagentHistoryActorId]) || [];
+  for (var i = 0; i < cached.length; i++) renderSubagentPeerEvent(cached[i]);
+  autoScrollSubagentHistory(body);
+  window.scheduleSubagentStateRefresh();
 };
 
 // === Browser ===

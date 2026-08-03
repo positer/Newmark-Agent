@@ -1,4 +1,4 @@
-﻿import { LLMProvider } from '../llm/provider';
+import { LLMProvider } from '../llm/provider';
 import { Agent } from './agent';
 import { ProviderProtocol } from './config';
 import { StreamToken } from './types';
@@ -143,7 +143,8 @@ export function resetPublicAssistantDeltaFilter(agent: Agent): void {
 function prepareAssistantToolVisibility(agent: Agent, definitions: unknown[]): void {
   const names = definitions.map(toolDefinitionName);
   brokerOnlyAssistantBuffers.set(agent, {
-    brokerOnly: names.includes(TOOL_PROVISION_NAME) && names.every(name => name === TOOL_PROVISION_NAME || name === 'skill'),
+    brokerOnly: names.includes(TOOL_PROVISION_NAME)
+      && names.every(name => name === TOOL_PROVISION_NAME || name === 'skill' || SUBAGENT_CORE_TOOL_NAMES.has(name)),
     pending: [],
     released: false,
   });
@@ -510,7 +511,11 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
         let textStarted = false;
         const requestStartedAt = Date.now();
         let firstTokenRecorded = false;
-        const brokerOnlySurface = (context.tools || []).length === 1 && context.tools?.[0]?.name === TOOL_PROVISION_NAME;
+        // A broker-equivalent surface exposes no real task tool beyond the
+        // always-available skill discovery and subagent orchestration core, so
+        // any text prefacing a broker call is treated as an internal preface.
+        const tools = context.tools || [];
+        const brokerOnlySurface = tools.length > 0 && tools.every(tool => tool.name === TOOL_PROVISION_NAME || tool.name === 'skill' || SUBAGENT_CORE_TOOL_NAMES.has(tool.name));
         currentAgent.beginRouteAttempt();
         try {
           const currentProvider = currentAgent.engineModel();
@@ -961,6 +966,11 @@ function routeTransitionNotice(agent: Agent, previous: string): string {
 const TOOL_PROVISION_NAME = 'tool_provision';
 const INITIAL_TOOL_SCHEMA_LIMIT = 8;
 const TOOL_PROVISION_BATCH_LIMIT = 8;
+// Subagent orchestration is mode-policy gated (read-only in Plan, sandbox
+// restricted for peers) and always available: the orchestrator role prompt and
+// the peer sandbox prompt both promise `task`/subagent_* to the model, so the
+// core must survive preload truncation and never be dropped by intent gating.
+const SUBAGENT_CORE_TOOL_NAMES = new Set(['task', 'subagent_list', 'subagent_read', 'subagent_send', 'subagent_result', 'subagent_close']);
 
 interface ToolProvisionResult {
   ok: boolean;
@@ -1005,6 +1015,11 @@ class ToolProvisionSession {
     this.initialNames.clear();
     for (const definition of initial.slice(0, INITIAL_TOOL_SCHEMA_LIMIT)) {
       const name = toolDefinitionName(definition);
+      if (this.definitionsByName.has(name)) this.initialNames.add(name);
+    }
+    // Keep the always-available subagent orchestration core in the preloaded
+    // surface even when the 8-schema intent slice did not cover it.
+    for (const name of SUBAGENT_CORE_TOOL_NAMES) {
       if (this.definitionsByName.has(name)) this.initialNames.add(name);
     }
     for (const name of this.provisionedNames) {
@@ -1200,10 +1215,22 @@ function routeToolSurface(agent: Agent, definitions: unknown[]): { definitions: 
   }
   const task = latestUserTaskText(agent);
   const selected = selectTaskToolDefinitions(task, definitions).slice(0, INITIAL_TOOL_SCHEMA_LIMIT);
-  if (selected.length === definitions.length) return { definitions, systemPromptNotice: '' };
+  const selectedNames = new Set(selected.map(toolDefinitionName));
+  // Append the always-available subagent orchestration core after the intent
+  // slice instead of selecting it inside selectTaskToolDefinitions: the core
+  // must not consume preload slots that deterministic intent tools need (e.g.
+  // automation_*/flow_* would otherwise be truncated out of reach), while
+  // ToolProvisionSession.reconcile keeps every core tool in the preloaded
+  // surface unconditionally.
+  const core = definitions.filter(definition => {
+    const name = toolDefinitionName(definition);
+    return SUBAGENT_CORE_TOOL_NAMES.has(name) && !selectedNames.has(name);
+  });
+  const surface = core.length ? selected.concat(core) : selected;
+  if (surface.length === definitions.length) return { definitions, systemPromptNotice: '' };
   if (!selected.length) {
     return {
-      definitions: [],
+      definitions: surface,
       systemPromptNotice: [
         '## Tool Interface Availability',
         'This turn was classified as conversational, so no task-specific tool schema was preloaded.',
@@ -1212,10 +1239,10 @@ function routeToolSurface(agent: Agent, definitions: unknown[]): { definitions: 
     };
   }
   return {
-    definitions: selected,
+    definitions: surface,
     systemPromptNotice: [
       '## Tool Interface Availability',
-      `At most ${INITIAL_TOOL_SCHEMA_LIMIT} deterministic task-relevant schemas are preloaded for this turn.`,
+      `At most ${INITIAL_TOOL_SCHEMA_LIMIT} deterministic task-relevant schemas are preloaded for this turn; the always-available subagent orchestration tools are appended separately.`,
       `Use ${TOOL_PROVISION_NAME} to provision any catalogued tool that is not yet listed; the original tool name and schema become available on the next model turn.`,
     ].join('\n'),
   };
@@ -1282,9 +1309,11 @@ function selectTaskToolDefinitions(task: string, definitions: unknown[]): unknow
     || /(?:显示|展示|嵌入|呈现).{0,16}(?:图片|图像|示意图|架构图)|(?:图片|图像|示意图|架构图).{0,16}(?:显示|展示|嵌入|呈现)/.test(text);
 
   if (codingIntent) {
-    include('pwd', 'glob', 'grep', 'read', 'write', 'edit', 'bash', 'git_status', 'git_pull', 'git_push', 'git_branch', 'file_audit', 'repo_security_audit', 'task');
-    includePrefix('subagent_');
+    include('pwd', 'glob', 'grep', 'read', 'write', 'edit', 'bash', 'git_status', 'git_pull', 'git_push', 'git_branch', 'file_audit', 'repo_security_audit');
   }
+  // The subagent orchestration core (task/subagent_*) is appended by
+  // routeToolSurface after the intent slice and always retained by
+  // ToolProvisionSession.reconcile, so it is intentionally not selected here.
   if (webIntent) include('web_search', 'web_fetch');
   if (browserIntent) {
     include('browser_use');
@@ -1805,6 +1834,7 @@ export const agentKernelRunnerInternals = {
   toProviderToolDefinitions,
   TOOL_PROVISION_NAME,
   INITIAL_TOOL_SCHEMA_LIMIT,
+  SUBAGENT_CORE_TOOL_NAMES,
 };
 
 function imagePathToDataUrl(imagePath: string): string {

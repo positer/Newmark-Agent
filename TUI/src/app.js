@@ -33,6 +33,7 @@ const {
   selectIntelligenceTier,
   selectFlowWorkflow,
   switchView,
+  toggleAgentHistory,
   toggleConversationPinned,
   toggleSelectedBuildBlock,
   toggleSelected,
@@ -243,6 +244,8 @@ function start(options = {}) {
           state.notice = `Setting update failed: ${error.message}`;
         }).finally(paint);
       }
+    } else if (state.view === "agents") {
+      toggleAgentHistory(state);
     } else if (state.view === "plan") {
       const step = state.snapshot.conversationPlan.items[state.selected];
       state.notice = step

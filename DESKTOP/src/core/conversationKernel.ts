@@ -118,6 +118,7 @@ interface ConversationRuntime {
   pendingNextTurn: Array<{ message: string | AgentPromptMessage; queueMode: ConversationQueueMode }>;
   queued: { steering: string[]; followUp: string[] };
   unsubscribe?: () => void;
+  unsubscribePeer?: () => void;
   unsubscribeRootInboxWake?: () => void;
   runId: string;
   generation: number;
@@ -582,6 +583,7 @@ export class ConversationKernel {
     if (this.isRunning(normalized)) throw new Error('Cannot edit a message while this conversation is running.');
     const runtime = this.findRuntime(normalized);
     if (runtime?.unsubscribe) runtime.unsubscribe();
+    if (runtime?.unsubscribePeer) runtime.unsubscribePeer();
     if (runtime?.unsubscribeRootInboxWake) runtime.unsubscribeRootInboxWake();
     if (runtime) this.runtimes.delete(runtime.runtimeKey);
     const runner = runtime?.runner || this.createRunner(normalized);
@@ -833,6 +835,12 @@ export class ConversationKernel {
       runtime.events.push(routedEvent);
       if (runtime.events.length > this.eventLimit) runtime.events = runtime.events.slice(-this.eventLimit);
       for (const listener of this.listeners) listener(routedEvent);
+    });
+    // Subagent work events are relayed to broadcast listeners only; they are
+    // never folded into this conversation's persisted runtime.events, so the
+    // main conversation history stays untouched by peer streaming.
+    runtime.unsubscribePeer = runner.subscribePeerWorkEvents(event => {
+      for (const listener of this.listeners) listener(event);
     });
     runner.subscribeAgentKernelUserMessageStart((content, clientMessageId) => {
       this.consumeQueuedMessage(runtime, content);

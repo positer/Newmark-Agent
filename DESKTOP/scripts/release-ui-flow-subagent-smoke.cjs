@@ -276,8 +276,8 @@ function ensureNoReleaseProcess() {
     await waitFor(cdp, `(() => {
       const overlay = document.querySelector('#subagent-history-overlay');
       const text = overlay ? overlay.innerText : '';
-      return text.includes('Subagent history is read-only') && text.includes('SUBAGENT_INITIAL_OK') && text.includes('SUBAGENT_CONTINUED_OK') ? text : '';
-    })()`, 15000, 'read-only subagent history overlay');
+      return text.includes('Live history') && text.includes('SUBAGENT_INITIAL_OK') && text.includes('SUBAGENT_CONTINUED_OK') ? text : '';
+    })()`, 15000, 'live subagent history overlay');
     const expectedOrder = 'flow_save,flow_list,tool_provision,task,subagent_send,subagent_result,subagent_close';
     if (mock.toolOrder.join(',') !== expectedOrder) fail(`unexpected tool order: ${mock.toolOrder.join(',')}`);
     if (!mock.requests.some(r => r.body.includes('flow_save'))) fail('mock provider did not request flow_save');

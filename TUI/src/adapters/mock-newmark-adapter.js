@@ -32,7 +32,15 @@ function scenarioAgents(scenario, conversationId) {
     agentMode: "build",
     status,
     queueSequence: status === "queued" ? index + 1 : undefined,
-    messages: [],
+    messages: status === "completed" || status === "working"
+      ? [
+          { role: "user", content: task },
+          { role: "assistant", content: `Understood. Working on ${task} with isolated context.` },
+          { role: "assistant", content: status === "completed"
+            ? `${task} — analysis finished, reporting the final result back to the root agent.`
+            : `${task} — midway through the audit; first findings are being collected.` }
+        ]
+      : [],
     result: status === "completed" ? `${task} completed.` : null,
     createdAt: "2026-07-28T17:05:00+08:00",
     updatedAt: "2026-07-28T17:20:00+08:00",

@@ -111,6 +111,7 @@ export interface AgentWorkEvent {
   runId?: string;
   branchNodeId?: string;
   anchorMessageId?: string;
+  actorId?: string;
   generation?: number;
   sequence?: number;
   status?: GuideReceiptStatus | ConversationWorkRunStatus | 'stopping' | 'force_restarting';

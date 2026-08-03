@@ -401,6 +401,7 @@ export class Agent {
   public workspaceGoalItems: GoalItem[] = [];
   public subscribers: Array<(msg: string) => void> = [];
   public workEventSubscribers: Array<(event: AgentWorkEvent) => void> = [];
+  public peerWorkEventSubscribers: Array<(event: AgentWorkEvent) => void> = [];
   public workRuns: ConversationWorkRun[] = [];
   public continuations: ConversationContinuation[] = [];
   public activeConversationId = 'default';
@@ -1312,6 +1313,29 @@ export class Agent {
     return () => {
       this.workEventSubscribers = this.workEventSubscribers.filter(sub => sub !== fn);
     };
+  }
+
+  subscribePeerWorkEvents(fn: (event: AgentWorkEvent) => void): () => void {
+    this.peerWorkEventSubscribers.push(fn);
+    return () => {
+      this.peerWorkEventSubscribers = this.peerWorkEventSubscribers.filter(sub => sub !== fn);
+    };
+  }
+
+  // Relays a subagent's work events to the parent's peer subscribers so the UI
+  // can stream a child's live history. runtimeKey/workspaceKey are stripped so a
+  // child's completion can never clear the parent runtime's browser leases or be
+  // mistaken for main-conversation state; actorId marks it as a peer event.
+  emitPeerWorkEvent(actorId: string, event: AgentWorkEvent): void {
+    const relayed: AgentWorkEvent = {
+      ...event,
+      actorId,
+      runtimeKey: undefined,
+      workspaceKey: undefined,
+    };
+    for (const sub of this.peerWorkEventSubscribers) {
+      try { sub(relayed); } catch { /* ignore subscriber errors */ }
+    }
   }
 
   nowLabel(): string {
@@ -3719,7 +3743,12 @@ export class Agent {
 
   contextWindow(modelName = this.model): { estimatedTokens: number; maxTokens: number; ratio: number; warning: 'ok' | 'near_limit' | 'over_limit'; model: string } {
     const estimatedTokens = this.estimateContextTokens();
-    const model = modelName === 'auto' ? this.config.findModel(this.config.getStr('models', 'default_model')) : this.config.findModel(modelName);
+    // Display and compression must share one window resolution. Both resolve
+    // the auto branch through the active (routed) deployment so the UI ring and
+    // the compaction trigger stay on the same maxTokens even after an Auto
+    // transition; without a resolved deployment they both fall back to the
+    // default model window rather than diverging to 128000.
+    const model = this.resolveWindowModel(modelName);
     const maxTokens = Math.max(1, Number(model?.max_tokens || 0) || 128000);
     const ratio = estimatedTokens / maxTokens;
     return {
@@ -3731,8 +3760,13 @@ export class Agent {
     };
   }
 
+  private resolveWindowModel(modelName: string): ReturnType<ConfigManager['allModels']>[number] | undefined {
+    if (modelName !== 'auto') return this.config.findModel(modelName);
+    return this.activeModelConfig() || this.config.findModel(this.config.getStr('models', 'default_model'));
+  }
+
   private contextMaxTokens(modelName = this.model): number {
-    const model = modelName === 'auto' ? this.activeModelConfig() : this.config.findModel(modelName);
+    const model = this.resolveWindowModel(modelName);
     return Math.max(1, Number(model?.max_tokens || 0) || 128000);
   }
 
@@ -5853,9 +5887,11 @@ export class Agent {
       throw new Error('No LLM configured. Add provider in Settings > Models.');
     }
 
+    let child: Agent | undefined;
+    let unrelayPeerEvents: (() => void) | undefined;
     try {
       const workspacePath = this.workspace.current?.path || this.rootPath;
-      const child = new Agent(this.rootPath, {
+      child = new Agent(this.rootPath, {
         subagent: true,
         subagentName: sa.name,
         subagentPrompt: sa.prompt,
@@ -5908,13 +5944,38 @@ export class Agent {
         && (reason === 'spawn' || reason === 'resume' || prompt.includes(latestPersisted.content))) {
         persistedMessages.pop();
       }
-      child.history = persistedMessages.map(message => ({ role: message.role, content: message.content }));
+      // Reconstruct the full persisted transcript, keeping the metadata the
+      // kernel needs to rebuild tool-call/tool-result turns, so a mailbox or
+      // resume job continues the same working context instead of replaying
+      // from a bare prompt.
+      child.history = persistedMessages.map(message => {
+        const entry: Record<string, unknown> = { role: message.role, content: message.content };
+        if (message.tool_call_id) entry.tool_call_id = message.tool_call_id;
+        if (message.name) entry.name = message.name;
+        if (message.tool_calls) entry.tool_calls = message.tool_calls;
+        if (message.hidden_user_input) entry.hidden_user_input = true;
+        if (message.goal_continuation) entry.goal_continuation = true;
+        if (message.client_message_id) entry.client_message_id = message.client_message_id;
+        if (message.run_id) entry.run_id = message.run_id;
+        if (message.vision_image_path) entry.vision_image_path = message.vision_image_path;
+        return entry;
+      });
       child.subscribeAgentKernelUserMessageStart(content => {
         const match = String(content || '').match(/^\[Peer mailbox id=([0-9a-f-]{36})\b/i);
         if (match) this.subagents.acknowledgeMailbox(sa.id, match[1]);
       });
       this.activePeerAgents.set(sa.id, child);
+      // Relay the child's live work events to the parent's peer subscribers so
+      // the GUI/TUI can stream this subagent's history downward while it runs.
+      unrelayPeerEvents = child.subscribeWorkEvents(event => this.emitPeerWorkEvent(sa.id, event));
+      // A mailbox or resume job reuses the peer's persisted transcript. Frame
+      // it as a continuation of the same run so the peer keeps working instead
+      // of re-reading its history as a completed task.
+      const continuation = (reason === 'mailbox' || reason === 'resume') && persistedMessages.length
+        ? '[Peer Job Continuation]\nYou are continuing the same peer run from the transcript below. The preceding turns are your working history, not a task to redo. Continue the active task, honoring the newest instruction at the bottom. Do not restart, restate, or summarize what was already done; only produce the next step.'
+        : '';
       const delegatedPrompt = [
+        continuation,
         requestedFlowName ? `[Workflow requested: ${requestedFlowName} @ ${child.flowPc}]` : '',
         child.goal ? `[Goal objective: ${child.goal.objective}]` : '',
         `Workspace: ${workspacePath}`,
@@ -5926,17 +5987,36 @@ export class Agent {
       // through activePeerAgents without orphaning or falsely failing the peer.
       const tokens = await child.process(delegatedPrompt);
       const result = tokens.map(t => t.text || '').join('').trim();
+      // Sync the peer's working transcript back into its durable record before
+      // the manager re-appends the final result, so the next mailbox/resume job
+      // continues the same context the peer built up over this run.
+      this.persistPeerTranscript(sa.id, child);
       if (child.status === 'error' || /^\s*\[Error\]/i.test(result)) {
         throw new Error(result.replace(/^\s*\[Error\]\s*/i, '') || 'Subagent model run failed.');
       }
       return result || '[Subagent] Completed with empty response.';
     } catch (e) {
+      // Persist whatever the peer produced before failing so a retried or
+      // resumed job restarts from the same working context rather than the
+      // bare prompt.
+      this.persistPeerTranscript(sa.id, child);
       // The peer's own run marks its deployment's balance cooldown. Marking
       // the parent's deployment here could wrongly pause a healthy provider.
       throw new Error(e instanceof Error ? e.message : String(e));
     } finally {
+      if (unrelayPeerEvents) unrelayPeerEvents();
       this.activePeerAgents.delete(sa.id);
     }
+  }
+
+  private persistPeerTranscript(peerId: string, child?: Agent): void {
+    if (!child || !this.subagents.get(peerId)) return;
+    const transcript = child.history.slice();
+    // complete()/fail() re-append the final assistant result; drop any trailing
+    // assistant response here so the durable transcript does not duplicate it.
+    while (transcript.length && transcript.at(-1)?.role === 'assistant') transcript.pop();
+    if (!transcript.length) return;
+    this.subagents.replaceContext(peerId, transcript, child.lastCompression || null);
   }
 
   subagentToolDefinitions(defs: unknown[]): unknown[] {

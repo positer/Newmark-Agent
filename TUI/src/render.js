@@ -561,20 +561,48 @@ function goalView(state, width, p) {
 }
 
 function agentsView(state, width, p) {
-  return [
+  const roleColumnWidth = 9;
+  const messageWidth = Math.max(8, width - roleColumnWidth - 4);
+  const rows = [
     ...conversationContext(state, p, "Conversation subagents"),
     `${p.bold}Subagents${p.reset}   ${p.muted}Parallel work with isolated context${p.reset}`,
-    "",
-    ...state.snapshot.subagents.flatMap((agent, i) => {
-      const style = state.focusRegion === "content" && i === state.selected ? `${p.selected}` : "";
-      return [
-        `${style} ${statusIcon(agent.status, p)} ${p.bold}${pad(agent.displayName, 18)}${p.reset} ${pad(agent.task, Math.max(12, width - 47))} ${p.muted}${agent.status}${p.reset}`,
-        `   ${p.cyan}${progress(agent.progress, Math.min(24, Math.max(8, width - 30)))}${p.reset} ${String(agent.progress).padStart(3)}%`
-      ];
-    }),
-    "",
-      `${p.muted}${state.adapterKind === "mock" ? "Demo records" : "Records come from the active Newmark conversation"}${p.reset}`
+    ""
   ];
+  state.snapshot.subagents.forEach((agent, i) => {
+    const style = state.focusRegion === "content" && i === state.selected ? `${p.selected}` : "";
+    const expanded = state.agentHistoryExpandedId === String(agent.id || agent.displayName || "");
+    rows.push(
+      `${style} ${expanded ? "▾" : "▸"} ${statusIcon(agent.status, p)} ${p.bold}${pad(agent.displayName, 18)}${p.reset} ${pad(agent.task, Math.max(12, width - 49))} ${p.muted}${agent.status}${p.reset}`,
+      `   ${p.cyan}${progress(agent.progress, Math.min(24, Math.max(8, width - 30)))}${p.reset} ${String(agent.progress).padStart(3)}%`
+    );
+    if (!expanded) return;
+    const historyRows = [];
+    const messages = Array.isArray(agent.messages) ? agent.messages : [];
+    messages.forEach((message) => {
+      appendChatMessage(historyRows, {
+        role: message.role,
+        content: String(message.content || ""),
+        meta: message.role === "assistant" && message.meta ? String(message.meta) : ""
+      }, messageWidth, roleColumnWidth, p);
+    });
+    if (!messages.length) {
+      historyRows.push(`${" ".repeat(roleColumnWidth)}${p.muted}No messages recorded yet.${p.reset}`);
+      historyRows.push("");
+    }
+    if (agent.result) {
+      historyRows.push(`${p.brand}${p.bold}RESULT${p.reset}`);
+      wrapText(String(agent.result), messageWidth).forEach((row) => {
+        historyRows.push(`${" ".repeat(roleColumnWidth)}${row}`);
+      });
+      historyRows.push("");
+    }
+    rows.push(...historyRows.map((row) => `   ${row}`));
+  });
+  rows.push(
+    "",
+    `${p.muted}${state.adapterKind === "mock" ? "Demo records" : "Records come from the active Newmark conversation"} · Enter expands the latest history${p.reset}`
+  );
+  return rows;
 }
 
 function modelView(state, width, p) {

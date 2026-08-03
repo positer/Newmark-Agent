@@ -129,6 +129,7 @@ function createState(options = {}) {
     flows: [...flows],
     workflowDetails,
     workflowExpandedName: "",
+    agentHistoryExpandedId: "",
     workflowDraft: { name: "", mode: "build", prompt: "" },
     workflowFormIndex: 0,
     flowSelectionIndex: 0,
@@ -596,6 +597,18 @@ function toggleWorkflowDetails(state) {
   if (!name) return false;
   state.workflowExpandedName = state.workflowExpandedName === name ? "" : name;
   state.notice = state.workflowExpandedName ? `WorkFlow details: ${name}` : `WorkFlow details collapsed: ${name}`;
+  return true;
+}
+
+function toggleAgentHistory(state) {
+  const agent = state.snapshot.subagents[state.selected];
+  if (!agent) return false;
+  const id = String(agent.id || agent.displayName || "");
+  if (!id) return false;
+  state.agentHistoryExpandedId = state.agentHistoryExpandedId === id ? "" : id;
+  state.notice = state.agentHistoryExpandedId
+    ? `${agent.displayName} history · latest at the bottom`
+    : `${agent.displayName} history collapsed`;
   return true;
 }
 
@@ -1308,6 +1321,7 @@ module.exports = {
   selectIntelligenceTier,
   selectFlowWorkflow,
   switchView,
+  toggleAgentHistory,
   toggleWorkflowDetails,
   toggleSelected,
   toggleConversationPinned,

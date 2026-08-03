@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.2.4-blue">
+  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.2.5-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -48,7 +48,21 @@ The release gate covers DESKTOP, native TUI, CLI, GUI/TUI/CLI shared-backend str
 
 ## Download
 
-The latest prerelease is `dev-0.2.4`, with Flow plan confirmation pausing for the user, persistent Flow pause/resume across interruptions and restarts, and the dev-0.2.3 drafts/scrolling/Ultra/provider-balance improvements.
+The latest prerelease is `dev-0.2.5`, with live SubAgent work streaming in the GUI overlay and TUI Agents view, plus the dev-0.2.4 Flow pause/resume and dev-0.2.3 drafts/scrolling/Ultra/provider-balance improvements.
+
+### dev-0.2.5
+
+Download packages from the [dev-0.2.5 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.2.5).
+
+| Package | Platform | SHA-256 |
+| --- | --- | --- |
+| `Newmark-Agent-0.2.5-x64.msi` | Windows x64 installer with GUI and global GUI/TUI launcher | `E974BBBF463EECCC2A23D59B3269CD747A41BCE0E5C4A6990523D6EBFAA1F03F` |
+| `Newmark-Agent-0.2.5-win-unpacked-x64.zip` | Windows x64 portable | `DD56C86D3EF987071C4092733526ED4E76AA3311139956D8674D3129E0DDAC0A` |
+| `Newmark-Agent-0.2.5-x86_64.AppImage` | Linux x64 AppImage | `C54767C6D6D13290DA60B5BB4113901788766EC7C04411D88430ACC468318E8D` |
+| `Newmark-Agent-0.2.5-amd64.deb` | Debian/Ubuntu x64 package | `E35852FCDB1D57FE609CA3D783D3B4FD77AF7163437EC7213F5C8E12F8328F4D` |
+| `Newmark-Agent-0.2.5-linux-unpacked-x64.zip` | Linux x64 portable | `BA87310DD995DA8799BEEDFC207D42027FBB172CBC69707F10CE63F09F01623D` |
+
+The `dev-0.2.5` source streams SubAgent background work live into both the GUI and the TUI. In the desktop app, a compact overlay tracks every active peer — task lifecycle, streamed text, tool calls and results, and completion — and caches the last 500 events per actor, so reopening a finished SubAgent instantly replays its work. In the terminal, the Agents view expands each SubAgent row into its conversation history and final result. The subagent orchestration core (the `task` and `subagent_*` tool family) is now always available in the model surface alongside the provisioning broker, and the release gate adds dedicated streaming-relay and overlay stress suites.
 
 ### dev-0.2.4
 

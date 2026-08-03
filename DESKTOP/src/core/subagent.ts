@@ -31,6 +31,19 @@ export interface SubagentRootMessage {
   readAt?: string;
 }
 
+export interface SubagentMessageRecord {
+  role: string;
+  content: string;
+  tool_call_id?: string;
+  name?: string;
+  tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
+  hidden_user_input?: boolean;
+  goal_continuation?: boolean;
+  client_message_id?: string;
+  run_id?: string;
+  vision_image_path?: string;
+}
+
 export interface SubagentInstance {
   id: string;
   shortId: string;
@@ -49,7 +62,7 @@ export interface SubagentInstance {
   flowPc?: number;
   status: SubagentStatus;
   queueSequence?: number;
-  messages: Array<{ role: string; content: string }>;
+  messages: Array<SubagentMessageRecord>;
   result: string | null;
   error?: string;
   createdAt: string;
@@ -500,10 +513,24 @@ export class SubagentManager {
   replaceContext(id: string, history: Array<Record<string, unknown>>, compression: SubagentCompressionState | null): void {
     const record = this.get(id);
     if (!record) return;
-    record.messages = history.map(message => ({
-      role: String(message.role || 'system'),
-      content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? ''),
-    }));
+    record.messages = history.map(message => {
+      const stored: SubagentMessageRecord = {
+        role: String(message.role || 'system'),
+        content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? ''),
+      };
+      // Preserve the metadata the kernel needs to rebuild assistant tool calls
+      // and tool-result turns, so a continued peer resumes the same working
+      // context instead of replaying from a bare prompt or summary.
+      if (message.tool_call_id) stored.tool_call_id = String(message.tool_call_id);
+      if (message.name) stored.name = String(message.name);
+      if (Array.isArray(message.tool_calls)) stored.tool_calls = message.tool_calls as SubagentMessageRecord['tool_calls'];
+      if (message.hidden_user_input) stored.hidden_user_input = true;
+      if (message.goal_continuation) stored.goal_continuation = true;
+      if (message.client_message_id) stored.client_message_id = String(message.client_message_id);
+      if (message.run_id) stored.run_id = String(message.run_id);
+      if (message.vision_image_path) stored.vision_image_path = String(message.vision_image_path);
+      return stored;
+    });
     record.metadata = {
       ...(record.metadata || {}),
       contextCompression: compression ? { ...compression } : null,

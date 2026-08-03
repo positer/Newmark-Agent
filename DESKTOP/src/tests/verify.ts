@@ -1185,7 +1185,7 @@ async function main() {
   assert(packageJson.includes('"release:ui-flow-subagent-smoke"') && releaseUiFlowSubagentSmoke.includes('--remote-debugging-port=') && releaseUiFlowSubagentSmoke.includes('window.sendMessage()') && releaseUiFlowSubagentSmoke.includes('release-ui-flow-subagent-mock'), 'release ui Flow/subagent smoke: drives real packaged renderer send path through CDP mock provider');
   assert(releaseUiFlowSubagentSmoke.includes('flow_save') && releaseUiFlowSubagentSmoke.includes('flow_list') && releaseUiFlowSubagentSmoke.includes("window.api.runFlow('agent-designed-release-flow'") && releaseUiFlowSubagentSmoke.includes('FLOW_COMPONENT_RUNTIME_INPUT'), 'release ui Flow/subagent smoke: covers agent-designed Flow save, list, and trigger');
   assert(releaseUiFlowSubagentSmoke.includes('task') && releaseUiFlowSubagentSmoke.includes('subagent_send') && releaseUiFlowSubagentSmoke.includes('subagent_result') && releaseUiFlowSubagentSmoke.includes('subagent_close'), 'release ui Flow/subagent smoke: covers subagent create, continue, result, and close');
-  assert(releaseUiFlowSubagentSmoke.includes("window.switchRightTab('subagent')") && releaseUiFlowSubagentSmoke.includes('window.openSubagentHistory(${JSON.stringify(childState.name)})') && releaseUiFlowSubagentSmoke.includes('Subagent history is read-only'), 'release ui Flow/subagent smoke: validates retained read-only subagent history UI');
+  assert(releaseUiFlowSubagentSmoke.includes("window.switchRightTab('subagent')") && releaseUiFlowSubagentSmoke.includes('window.openSubagentHistory(${JSON.stringify(childState.name)})') && releaseUiFlowSubagentSmoke.includes('Live history'), 'release ui Flow/subagent smoke: validates the streaming subagent history overlay');
   assert(packageJson.includes('"release:ui-media-md-smoke"') && releaseUiMediaMdSmoke.includes('--remote-debugging-port=') && releaseUiMediaMdSmoke.includes('window.api.createWorkspace') && releaseUiMediaMdSmoke.includes('addMsg('), 'release ui media/md smoke: drives real packaged renderer without model spend');
   assert(releaseUiMediaMdSmoke.includes('data:image/gif;base64') && releaseUiMediaMdSmoke.includes('.msg-image') && releaseUiMediaMdSmoke.includes('.msg-file-link') && releaseUiMediaMdSmoke.includes('.md-table') && releaseUiMediaMdSmoke.includes('.md-math-inline') && releaseUiMediaMdSmoke.includes('.md-math-block'), 'release ui media/md smoke: validates conversation markdown image, file-link, table, and math rendering');
   assert(releaseUiMediaMdSmoke.includes("window.openFile('media-doc.md')") && releaseUiMediaMdSmoke.includes("window.openFile('media-link-target.txt')")
@@ -2466,6 +2466,20 @@ async function main() {
   assert(subRead.ok === true && subRead.output.includes('subagent continued result') && subRead.output.includes('mailbox'), 'Agent subagent_read: returns bounded status, feedback, result, and mailbox summary');
   assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'subagent.ts'), 'utf-8').includes('replaceContext') && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('subagentContextPersist'), 'Agent subagent context: compressed history and metadata persist back to the peer record');
   assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('this.notifyAgentKernelUserMessageStart(text, clientMessageId || undefined);') && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes("return this.queueActiveKernelMessage(prompt, 'followUp')") && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8').includes("runtime.pendingNextTurn.push({ message, queueMode: 'followUp' });"), 'Agent subagent result delivery: initial process boundaries acknowledge persisted inbox messages and conversation-owned routing appends one next turn without feedback loops');
+  const kernelRunnerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8').replace(/\r\n/g, '\n');
+  assert(kernelRunnerSource.includes("include('pwd', 'glob', 'grep', 'read', 'write', 'edit', 'bash', 'git_status', 'git_pull', 'git_push', 'git_branch', 'file_audit', 'repo_security_audit');")
+    && kernelRunnerSource.includes("const SUBAGENT_CORE_TOOL_NAMES = new Set(['task', 'subagent_list', 'subagent_read', 'subagent_send', 'subagent_result', 'subagent_close']);")
+    && kernelRunnerSource.includes('for (const name of SUBAGENT_CORE_TOOL_NAMES) {'),
+  'Agent subagent tool surface: task/subagent_* stay in the preloaded surface unconditionally (mode-policy gated) without stealing intent-tool slots');
+  const agentSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
+  const subagentSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'subagent.ts'), 'utf-8');
+  assert(subagentSource.includes('tool_call_id?: string') && subagentSource.includes('tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>'),
+    'Agent subagent context: peer transcript records preserve kernel tool-call metadata');
+  assert(agentSource.includes('if (message.tool_call_id) entry.tool_call_id = message.tool_call_id;')
+    && agentSource.includes('if (message.tool_calls) entry.tool_calls = message.tool_calls;'),
+    'Agent subagent context: job seeding rebuilds tool-call/tool-result turns from the persisted peer transcript');
+  assert(agentSource.includes('[Peer Job Continuation]'),
+    'Agent subagent context: mailbox/resume jobs inject a peer continuation prompt over the persisted transcript');
   const subResult = (taskAgent as unknown as { handleSubagentResult: (args: string) => string })
     .handleSubagentResult(JSON.stringify({ name: 'worker' }));
   assert(subResult.includes('get.subagent("') && subResult.includes('subagent continued result'), 'Agent subagent_result: returns result and transcript');
@@ -2474,6 +2488,33 @@ async function main() {
   assert(closeSub.includes('closed') && taskAgent.subagents.get('worker')?.status === 'closed', 'Agent subagent_close: closes subagent');
   const workerRecord = taskAgent.subagents.toRecord('worker');
   assert(workerRecord?.active === false && !!workerRecord.closedAt && !!workerRecord.result?.includes('subagent continued result'), 'Agent subagent compat: retained closed record has result and closedAt');
+
+  // Subagent live-streaming pipeline: child work events relay to the parent with
+  // actorId, the conversation kernel broadcasts them without persisting, and the
+  // GUI/TUI route them to their own downward-extending history views.
+  const agentTsStreaming = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').replace(/\r\n/g, '\n');
+  const kernelTsStreaming = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8').replace(/\r\n/g, '\n');
+  const typesTsStreaming = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'types.ts'), 'utf-8').replace(/\r\n/g, '\n');
+  assert(typesTsStreaming.includes('actorId?: string;'), 'subagent streaming: AgentWorkEvent carries an optional actorId marker');
+  assert(agentTsStreaming.includes('peerWorkEventSubscribers: Array<(event: AgentWorkEvent) => void> = [];')
+    && agentTsStreaming.includes('subscribePeerWorkEvents(fn: (event: AgentWorkEvent) => void): () => void {')
+    && agentTsStreaming.includes('emitPeerWorkEvent(actorId: string, event: AgentWorkEvent): void {')
+    && agentTsStreaming.includes('unrelayPeerEvents = child.subscribeWorkEvents(event => this.emitPeerWorkEvent(sa.id, event));')
+    && agentTsStreaming.includes('if (unrelayPeerEvents) unrelayPeerEvents();'), 'subagent streaming: runSubagentJob relays child work events to parent peer subscribers and cleans up');
+  assert(agentTsStreaming.includes('runtimeKey: undefined,') && agentTsStreaming.includes('workspaceKey: undefined,'), 'subagent streaming: relayed peer events strip runtime identity so they cannot disturb the parent runtime');
+  assert(kernelTsStreaming.includes('runtime.unsubscribePeer = runner.subscribePeerWorkEvents(event => {') && kernelTsStreaming.includes('if (runtime?.unsubscribePeer) runtime.unsubscribePeer();'), 'subagent streaming: conversation kernel broadcasts peer events to listeners without persisting them');
+  const uiHtmlStreaming = uiHtml.replace(/\r\n/g, '\n');
+  assert(uiHtmlStreaming.includes("if (String(event.actorId || '')) {")
+    && uiHtmlStreaming.includes('appendSubagentPeerEvent(event);')
+    && uiHtmlStreaming.includes('subagent-history-body')
+    && uiHtmlStreaming.includes('function renderSubagentPeerEvent(event)')
+    && uiHtmlStreaming.includes('state.subagentPeerEventsByActor')
+    && uiHtmlStreaming.includes("'subagent.liveHistory': 'Live history"), 'subagent streaming GUI: work events with actorId route to a live streaming history overlay');
+  const tuiRenderStreaming = fs.readFileSync(path.join(process.cwd(), '..', 'TUI', 'src', 'render.js'), 'utf-8').replace(/\r\n/g, '\n');
+  const tuiStateStreaming = fs.readFileSync(path.join(process.cwd(), '..', 'TUI', 'src', 'state.js'), 'utf-8').replace(/\r\n/g, '\n');
+  assert(tuiRenderStreaming.includes('state.agentHistoryExpandedId === String(agent.id || agent.displayName || "")')
+    && tuiRenderStreaming.includes('appendChatMessage(historyRows, {')
+    && tuiStateStreaming.includes('function toggleAgentHistory(state)'), 'subagent streaming TUI: agents view expands into the chat-style downward history');
 
   const subagentToolFile = path.join(taskAgent.workspace.current?.path || TEST_DIR, 'subagent-tool.txt');
   taskAgent.config.addModelToProvider('test-prov', 'fixed-child-model', 'Fixed Child Model', 'Registered deterministic subagent fixture model');
@@ -4328,6 +4369,39 @@ async function main() {
   agent.history = [{ role: 'user', content: 'x'.repeat(5000) }];
   const contextOverLimit = agent.contextWindow();
   assert(contextOverLimit.warning === 'over_limit', 'context window: warns when estimated tokens exceed model limit');
+
+  // Display and compression must share one window resolution under Auto: the
+  // UI ring (contextWindow) and the compaction trigger (contextMaxTokens) both
+  // resolve the auto branch through the active routed deployment, never the
+  // default model, so a user never sees an "over limit" ring that the engine
+  // refuses to compress. With no resolved deployment they both fall back to
+  // the default model window rather than diverging to 128000.
+  agent.config.addModelToProvider('context-prov', 'auto-window-big', 'Auto Window Big', 'Routed auto deployment window');
+  agent.config.updateModel('context-prov', 'auto-window-big', { max_tokens: 128000 });
+  agent.config.addModelToProvider('context-prov', 'auto-window-default', 'Auto Window Default', 'Fallback default window');
+  agent.config.updateModel('context-prov', 'auto-window-default', { max_tokens: 2000 });
+  agent.config.set('models', 'default_model', 'auto-window-default');
+  const autoWindowBigDeployment = (() => {
+    const model = agent.config.findModel('auto-window-big');
+    assert(!!(model && model.provider_id), 'context window: auto-window-big fixture resolves a provider id');
+    return { providerId: model!.provider_id, modelId: model!.name };
+  })();
+  (agent as any).model = 'auto';
+  (agent as any).resolvedDeployment = autoWindowBigDeployment;
+  agent.history = [{ role: 'user', content: 'x'.repeat(5000) }];
+  const autoWindow = agent.contextWindow();
+  assert(autoWindow.maxTokens === 128000 && autoWindow.warning === 'ok',
+    'context window: auto display window resolves to the active routed deployment, not the default model');
+  assert((agent as any).contextMaxTokens() === 128000,
+    'context window: auto compression threshold shares the same maxTokens as the display window');
+  (agent as any).resolvedDeployment = null;
+  const autoWindowFallback = agent.contextWindow();
+  assert(autoWindowFallback.maxTokens === 2000,
+    'context window: auto without a resolved deployment falls back to the default model window for both display and compression');
+  agent.config.set('models', 'default_model', '');
+  (agent as any).model = 'near-limit-context';
+
+
 
   agent.config.addModelToProvider('context-prov', 'long-context-switch-source', 'Long Context Switch Source', 'Large context source model');
   agent.config.updateModel('context-prov', 'long-context-switch-source', { max_tokens: 64_000 });

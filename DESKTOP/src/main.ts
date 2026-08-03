@@ -2091,7 +2091,20 @@ if (isViewerArg) {
       const target = conversationRuntimeTarget(agent.activeConversationId || 'default');
       conversationKernel?.setMode(target, suspension.previousMode);
       if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, suspension.previousMode);
-      else await ensureElectronUtilityPool().setMode(target, suspension.previousMode);
+      else await ensureElectronUtilityPool()!.setMode(target, suspension.previousMode);
+    };
+
+    // Drops a paused Flow without restoring the previous mode so a user's new
+    // Build/Plan/Goal/Flow instruction owns the current mode. The renderer keeps
+    // the mode in sync through agent:setMode before the send lands.
+    const clearFlowSuspensionForNewWork = (): void => {
+      if (!agent || !activeFlowSuspension) return;
+      activeFlowSuspension = null;
+      activeFlowName = '';
+      agent.pendingOptions = [];
+      agent.flow = null;
+      agent.flowPc = 0;
+      agent.clearStoredFlowSuspension();
     };
 
     const utilityHostToolHandler = createUtilityHostToolHandler({
@@ -2300,6 +2313,10 @@ if (isViewerArg) {
       try {
         const target = conversationRuntimeTarget(targetInput);
         assertTargetNotMutating(target, true);
+        // A new Build/Plan/Goal instruction exits any paused Flow into the user's
+        // new process (Flow pause state exit rule). flow:run already discards the
+        // suspension for a new Flow workflow.
+        if (activeFlowSuspension) clearFlowSuspensionForNewWork();
         const normalizedPromptTarget = normalizeConversationTarget(target);
         promptLeaseKey = normalizedPromptTarget.runtimeKey;
         promptLeaseWorkspaceKey = normalizedPromptTarget.workspaceKey;
@@ -2447,7 +2464,10 @@ if (isViewerArg) {
           };
         }
         if (isUserFlowAbort(e)) {
-          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+          // First Stop/Esc or a system interruption: do not exit. Fall through
+          // to the interrupted-suspension path so the renderer enters the Flow
+          // pause state ("Flow 接管已暂停") instead of leaving the Flow takeover.
+          // A second Stop/Esc force-stops and exits later.
         }
         suspended = true;
         const buildFailure = e as { componentId?: unknown; completedResults?: FlowCompletedResult[]; message?: unknown };
@@ -2800,6 +2820,7 @@ if (isViewerArg) {
         fileDiffs: conversationSnapshot.fileDiffs || [],
         pendingOptions: conversationSnapshot.pendingOptions || agent.pendingOptions,
         flowSuspension: agent.getStoredFlowSuspension(),
+        draft: agent.getStoredConversationDraft(target.conversationId) || '',
         proxyEnabled: agent.config.getBool('proxy', 'enabled'),
         proxyUrl: agent.config.getStr('proxy', 'url'),
         proxyAuth: agent.config.getStr('proxy', 'auth'),
@@ -2863,6 +2884,17 @@ if (isViewerArg) {
       };
     });
     resolveStartupBackendReady();
+
+    ipcMain.handle('conversation:saveDraft', async (_event, conversationId: string, draft: string | null) => {
+      if (!agent) return false;
+      agent.saveStoredConversationDraft(draft ?? null, String(conversationId || '') || agent.activeConversationId || 'default');
+      return true;
+    });
+
+    ipcMain.handle('conversation:getDraft', async (_event, conversationId?: string) => {
+      if (!agent) return '';
+      return agent.getStoredConversationDraft(String(conversationId || '') || agent.activeConversationId || 'default') || '';
+    });
 
     ipcMain.handle('agent:getConversationPlan', async (_event, conversationId?: string) => {
       if (!agent) return { items: [] };
@@ -3036,11 +3068,25 @@ if (isViewerArg) {
     ipcMain.handle('flow:stop', async () => {
       if (!agent) return { ok: true, action: 'not_running' };
       if (activeFlowSuspension) {
+        // A suspension exists: this is the second consecutive Stop/Esc (the Flow
+        // is already paused from the first stop). Force stop: discard the
+        // suspension, abort any hung kernel run, restart the kernel and exit the
+        // Flow takeover state.
         const flowName = activeFlowSuspension.workflow.name;
         await discardFlowSuspension();
-        return { ok: true, action: 'stopped_pending', flow: flowName };
+        agent.abortActiveKernelRun();
+        const forceTarget = conversationRuntimeTarget(agent.activeConversationId || 'default');
+        try {
+          if (wslBackendEnabled()) await ensureWslConversationPool()!.requestStop(forceTarget);
+          else await ensureElectronUtilityPool()!.requestStop(forceTarget);
+        } catch {
+          // The runtime supervisor owns hard-restart semantics; ignore failures.
+        }
+        return { ok: true, action: 'force_stopped_pending', flow: flowName };
       }
       if (!activeFlowAbortController) return { ok: true, action: 'not_running' };
+      // First Stop/Esc while running: cooperative abort. The flow:run handler
+      // converts this abort into an interrupted suspension (Flow pause state).
       const controller = activeFlowAbortController;
       const flowName = activeFlowName;
       controller.abort(new Error(`Flow interrupted by user: ${flowName}`));

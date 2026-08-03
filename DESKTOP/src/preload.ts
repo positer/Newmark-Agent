@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('api', {
   clearGoal: (target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:clearGoal', target),
   ensureConversation: (target: string | Record<string, unknown>) => ipcRenderer.invoke('agent:ensureConversation', target),
   getState: (target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:getState', target),
+  getConversationDraft: (conversationId?: string) => ipcRenderer.invoke('conversation:getDraft', conversationId),
+  saveConversationDraft: (conversationId: string, draft: string | null) => ipcRenderer.invoke('conversation:saveDraft', conversationId, draft),
   getConversationPlan: (conversationId?: string) => ipcRenderer.invoke('agent:getConversationPlan', conversationId),
   updateConversationPlan: (plan: Record<string, unknown>, conversationId?: string) => ipcRenderer.invoke('agent:updateConversationPlan', plan, conversationId),
   setConversationPinned: (id: string, pinned: boolean) => ipcRenderer.invoke('agent:setConversationPinned', id, pinned),

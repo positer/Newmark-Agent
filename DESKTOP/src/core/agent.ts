@@ -159,6 +159,7 @@ interface StoredConversationState {
     pinned?: boolean;
     pinnedAt?: string;
     order?: number;
+    draft?: string;
   }>;
 }
 export interface StoredGoalState {
@@ -2388,6 +2389,31 @@ export class Agent {
 
   getStoredFlowSuspension(): FlowSuspensionRecord | null {
     return this.readStoredConversationState().flowSuspension || null;
+  }
+
+  getStoredConversationDraft(conversationId = this.activeConversationId): string | undefined {
+    const key = this.workspaceConversationStateKey(conversationId);
+    if (!key) return undefined;
+    const entry = this.readStoredConversationState().conversations?.[key];
+    if (!entry || typeof entry.draft !== 'string' || !entry.draft) return undefined;
+    return entry.draft;
+  }
+
+  saveStoredConversationDraft(draft: string | null, conversationId = this.activeConversationId): void {
+    const key = this.workspaceConversationStateKey(conversationId);
+    if (!key) return;
+    const stored = this.readStoredConversationState();
+    const conversations: Record<string, StoredConversationEntry> = { ...(stored.conversations || {}) };
+    const existing = conversations[key];
+    const hasDraft = !!existing && typeof existing.draft === 'string' && existing.draft.length > 0;
+    const incomingDraft = draft === null || draft === undefined ? '' : String(draft);
+    if (!incomingDraft.trim() && !hasDraft) return;
+    if (incomingDraft.trim()) {
+      conversations[key] = { ...(existing || {}), draft: incomingDraft, updatedAt: new Date().toISOString() };
+    } else if (existing) {
+      conversations[key] = { draft: '', updatedAt: new Date().toISOString() };
+    }
+    this.writeStoredConversationStateNow({ ...stored, conversations });
   }
 
   saveStoredFlowSuspension(suspension: FlowSuspensionRecord | null): void {

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.2.5-blue">
+  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.2.6-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -19,7 +19,7 @@ Newmark Agent brings model routing, persistent workspaces, tools, subagents, wor
 
 > Newmark Agent is under active development. Current packages are unsigned prerelease builds.
 
-The `dev-0.2.4` source fixes Flow plan confirmation: when the planner finishes a Plan component and asks "计划已完成，是否执行此计划？", the Flow genuinely pauses and waits for the user's choice instead of silently continuing. A Flow that suffers a system-level interruption — a network blip, a provider error, or an app restart — now enters a persistent paused takeover: the state is saved to the conversation store, the takeover bubble shows "Flow 已暂停接管" with the failure reason and a Resume button, and clicking Resume re-runs the interrupted component with its completed results. The pause survives restarts, conversation switches, and workspace switches; it is discarded only when you start a new Flow, send a new message, or stop the run. User-initiated aborts still exit the Flow directly as before.
+The `dev-0.2.4` source fixes Flow plan confirmation: when the planner finishes a Plan component and asks "计划已完成，是否执行此计划？", the Flow genuinely pauses and waits for the user's choice instead of silently continuing. A Flow that suffers a system-level interruption — a network blip, a provider error, or an app restart — now enters a persistent paused takeover: the state is saved to the conversation store, the takeover bubble shows "Flow 已暂停接管" with the failure reason and a Resume button, and clicking Resume re-runs the interrupted component with its completed results. The pause survives restarts, conversation switches, and workspace switches; it is discarded only when you start a new Flow, send a new message, or stop the run. In the current source, Stop/Esc is also pause-aware: the first Stop/Esc while a Flow is running cooperatively pauses it into the same takeover, a second Stop/Esc force-stops and exits, and sending a new Build/Plan/Goal/Flow instruction while paused exits into that new process without restoring the previous mode.
 
 The `dev-0.2.3` source binds the input area to the selected Conversation, so an unsent draft survives switching away and back. Transcript rerenders preserve the user's scroll position and keep following the bottom only when the view was already there. Ultra is a real highest-tier request setting: it maps to `max` reasoning effort at the provider boundary and instructs the primary Agent to orchestrate specialized SubAgents. Provider 402/insufficient-balance responses remain actionable errors instead of being streamed as ordinary Agent prose, and a balance failure pauses only the failed provider deployment for a bounded cooldown while other providers stay usable, so switching provider or model continues immediately. Tool provisioning keeps its broker available even when no task-specific schema is preloaded.
 
@@ -48,7 +48,21 @@ The release gate covers DESKTOP, native TUI, CLI, GUI/TUI/CLI shared-backend str
 
 ## Download
 
-The latest prerelease is `dev-0.2.5`, with live SubAgent work streaming in the GUI overlay and TUI Agents view, plus the dev-0.2.4 Flow pause/resume and dev-0.2.3 drafts/scrolling/Ultra/provider-balance improvements.
+The latest prerelease is `dev-0.2.6`, with pause-aware Flow Stop/Esc (cooperative first stop into the paused takeover, force-stop on the second), draft persistence for unsent input, and the dev-0.2.5 SubAgent live-work overlay and TUI Agents view.
+
+### dev-0.2.6
+
+Download packages from the [dev-0.2.6 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.2.6).
+
+| Package | Platform | SHA-256 |
+| --- | --- | --- |
+| `Newmark-Agent-0.2.6-x64.msi` | Windows x64 installer with GUI and global GUI/TUI launcher | `_PENDING_` |
+| `Newmark-Agent-0.2.6-win-unpacked-x64.zip` | Windows x64 portable | `_PENDING_` |
+| `Newmark-Agent-0.2.6-x86_64.AppImage` | Linux x64 AppImage | `_PENDING_` |
+| `Newmark-Agent-0.2.6-amd64.deb` | Debian/Ubuntu x64 package | `_PENDING_` |
+| `Newmark-Agent-0.2.6-linux-unpacked-x64.zip` | Linux x64 portable | `_PENDING_` |
+
+The `dev-0.2.6` source makes Flow Stop/Esc pause-aware. While a Flow is running, the first Stop/Esc cooperatively aborts into the same persistent paused takeover used by system-level interruptions — the suspension is saved to the conversation store, the takeover bubble shows the failure reason with a Resume button, and nothing is torn down. A second Stop/Esc force-stops the run, exits the takeover, and returns to Build. Sending a new Build/Plan/Goal/Flow instruction while paused exits the pause into that new process without restoring the previous mode. Unsent input is now persisted per conversation: a draft you type survives switching conversations, workspaces, and app restarts, and is restored when you return. Dedicated backend (Flow pause/stop + draft persistence under abort/restart/concurrency/churn) and UI stress suites were added to the release gate, and the draft-clear path they caught is regression-locked in the source suite.
 
 ### dev-0.2.5
 
@@ -304,6 +318,7 @@ See [OVERVIEW.md](OVERVIEW.md) for the source tree, subsystem responsibilities, 
 
 ### Maintenance Log
 
+- 2026-08-03: Advanced source development to `dev-0.2.6`: Flow Stop/Esc is now pause-aware — while a Flow runs, the first Stop/Esc cooperatively aborts into the persistent paused takeover (nothing torn down), a second Stop/Esc force-stops and returns to Build, and a new Build/Plan/Goal/Flow instruction sent while paused exits into that new process without restoring the previous mode. Unsent input drafts are persisted per conversation across switches and restarts. Added the `flow-pause-stop-draft-stress.cjs` (backend: abort→suspension persistence, restart survival, 8-agent draft concurrency, churn) and `flow-pause-stop-ui-stress.cjs` (jsdom UI state-machine) gates, plus a draft-clear regression locked into the source suite; see `archive/20260803-flow-pause-stop-hardening.md`.
 - 2026-08-01: Added a real standalone-viewer stress gate for TUI image and Memory Lab Overview popups. Five waves launched 30 isolated Electron viewers with peak concurrency six: 15 image windows and 15 graph-only Memory Lab windows. Every one-use request was consumed, titles/content stayed isolated, no main GUI/Detail/editor component leaked into viewer DOM, all processes were cleaned up, and final startup P95 was 2.12 s. See `archive/20260801-tui-viewer-stress.md`.
 - 2026-08-01: Refined TUI image rows with focus-only progressive disclosure: ordinary rows show only `[示意图]`, while the cursor-owned row reserves terminal width and extends with the content description plus `Enter 打开`. Validated vision deployments generate that description from the actual hydrated image before publishing the tool result, with provider/model/SHA-256 caching and caption/filename fallback. Build, display-image verification, TUI 52/52, main 1365/1365, and the 24-image insertion-position stress pass. See `archive/20260801-tui-image-focus-action-hint.md`.
 - 2026-08-01: Added a focused GUI/TUI `image_display` insertion-position stress gate. It interleaves 24 images with 24 Bash calls and progress boundaries, verifies every expanded GUI image stays on its own `image_display` row immediately after the paired Bash row, verifies the collapsed gallery is immediately after the Build surface, repeats 20 expand/collapse cycles, and checks exact image order and uniqueness. The TUI gate proves `TOOL image_display → 示意图 → RESULT image_display → progress` ordering, collapsed Build-header-first gallery placement, and exact terminal geometry at 80×24 through 160×50. See `archive/20260801-image-insertion-position-stress.md`.

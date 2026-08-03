@@ -681,9 +681,13 @@ async function main() {
     && flowMainSource.includes('agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(activeFlowSuspension))')
     && flowMainSource.includes('const isUserFlowAbort = ')
     && flowMainSource.includes('if (activeFlowSuspension) await discardFlowSuspension();')
-    && flowMainSource.includes("return { ok: true, action: 'stopped_pending', flow: flowName };")
+    && flowMainSource.includes("return { ok: true, action: 'force_stopped_pending', flow: flowName };")
     && flowMainSource.includes('flowSuspension: agent.getStoredFlowSuspension()'),
   'Flow pause/resume: system-level interruptions persist a paused takeover, user aborts keep exiting, and every exit path discards the pause');
+  assert(flowMainSource.includes("return { ok: true, action: 'stopping', flow: flowName };")
+    && flowMainSource.includes('controller.abort(new Error(`Flow interrupted by user: ${flowName}`))')
+    && flowMainSource.includes('if (activeFlowSuspension) clearFlowSuspensionForNewWork();'),
+  'Flow pause: first Stop/Esc cooperatively aborts into a paused suspension, while a new Build/Plan/Goal instruction exits the pause without restoring the old mode');
   assert(agentSourceForEditor.includes('getStoredFlowSuspension(): FlowSuspensionRecord | null')
     && agentSourceForEditor.includes('saveStoredFlowSuspension(suspension: FlowSuspensionRecord | null): void')
     && agentSourceForEditor.includes('clearStoredFlowSuspension(): void')
@@ -697,6 +701,11 @@ async function main() {
     && uiHtml.includes('window.resumeFlowWith(feedback)')
     && uiHtml.includes("if (s && s.flowSuspension) {"),
   'UI Flow takeover: interrupted flow shows a paused takeover bubble with a Resume action and restores after restart');
+  assert(uiHtml.includes("if (action === 'stopping') return stopResult;")
+    && uiHtml.includes('window.exitPausedFlowForNewInstruction = function()')
+    && uiHtml.includes('state._flowPaused = false;')
+    && uiHtml.includes("return window.sendMessage('guide', guideText, { requestedMode: state.mode || 'build' });"),
+  'UI Flow pause: first Stop keeps the paused takeover (cooperative), a force stop tears down, and a new instruction sent while paused exits into a fresh process');
   assert(uiHtml.includes('id="terminal-timeout-input"') && uiHtml.includes('Max ms') && uiHtml.includes('Terminal timeout cap') && uiHtml.includes('window.setTerminalInterruptTimeout = function(value)') && uiHtml.includes("api.saveSetting('terminal', 'interrupt_timeout_ms', n)"), 'ui html: terminal timeout cap is editable and persisted');
   const agentKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
   const piKernelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
@@ -3344,6 +3353,24 @@ async function main() {
     && emptyConversationReloaded.chatMessages.length === 0
     && emptyConversationReloaded.listConversationStates().some(c => c.id === 'empty-new-conversation'),
   'conversation activation: a newly created empty conversation remains selected and visible after restart');
+  const draftPersistenceRoot = path.join(TEST_DIR, 'draft-persistence');
+  const draftAgent = new Agent(draftPersistenceRoot);
+  const draftWs = draftAgent.createInternalWorkspace('draft-scope');
+  draftAgent.saveStoredConversationDraft('draft-7', 'conv-draft-7');
+  assert(draftAgent.getStoredConversationDraft('conv-draft-7') === 'draft-7', 'conversation draft: saves a draft');
+  const draftAgentReloaded = new Agent(draftPersistenceRoot);
+  draftAgentReloaded.selectWorkspace(draftWs.name);
+  assert(draftAgentReloaded.getStoredConversationDraft('conv-draft-7') === 'draft-7', 'conversation draft: draft survives an Agent restart');
+  draftAgentReloaded.saveStoredConversationDraft(null, 'conv-draft-7');
+  assert(draftAgentReloaded.getStoredConversationDraft('conv-draft-7') === undefined, 'conversation draft: clearing a draft removes it');
+  const draftClearedReloaded = new Agent(draftPersistenceRoot);
+  draftClearedReloaded.selectWorkspace(draftWs.name);
+  assert(draftClearedReloaded.getStoredConversationDraft('conv-draft-7') === undefined, 'conversation draft: a cleared draft stays cleared across an Agent restart');
+  draftClearedReloaded.saveStoredConversationDraft('draft-8', 'conv-draft-7');
+  assert(draftClearedReloaded.getStoredConversationDraft('conv-draft-7') === 'draft-8', 'conversation draft: can write a new draft after clearing');
+  const draftRewrittenReloaded = new Agent(draftPersistenceRoot);
+  draftRewrittenReloaded.selectWorkspace(draftWs.name);
+  assert(draftRewrittenReloaded.getStoredConversationDraft('conv-draft-7') === 'draft-8', 'conversation draft: a rewritten draft persists across an Agent restart');
   emptyConversationReloaded.persistActiveConversationSelection('conv-two');
   scopedAgentReloaded.setConversationFromStorage('conv-two');
   scopedAgentReloaded.chatMessages = [

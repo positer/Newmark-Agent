@@ -2003,11 +2003,20 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .flow-takeover .nm-icon { color: var(--accent); }
 .flow-takeover.interactive { pointer-events: auto; }
 .flow-takeover .flow-resume-btn { flex-shrink: 0; cursor: pointer; }
+.flow-takeover.paused {
+  border-color: color-mix(in srgb, #e05a5a 55%, var(--accent-border));
+  box-shadow: 0 8px 28px color-mix(in srgb, #d64a4a 22%, transparent);
+}
+.flow-takeover.paused .nm-icon { color: #e06a6a; }
 [data-theme="light"] .flow-takeover {
   color: #22304f;
   background: rgba(255,255,255,0.9);
   border-color: rgba(74,104,223,0.24);
   box-shadow: 0 8px 24px rgba(42,61,112,0.14);
+}
+[data-theme="light"] .flow-takeover.paused {
+  border-color: rgba(200,80,80,0.35);
+  box-shadow: 0 8px 24px rgba(190,60,60,0.16);
 }
 
 /* Welcome message */
@@ -2795,6 +2804,18 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   border-radius:50%;
   background:#4cc4a0;
   box-shadow:0 0 0 3px rgba(76,196,160,.13);
+}
+#flow-prompt-bar.paused {
+  border-color: rgba(226,183,74,0.34);
+  background: linear-gradient(90deg, rgba(226,183,74,0.14), rgba(18,20,34,0.94) 34%);
+}
+#flow-prompt-bar.paused .stack-row::before {
+  background:#e2b74a;
+  box-shadow:0 0 0 3px rgba(226,183,74,.15);
+}
+[data-theme="light"] #flow-prompt-bar.paused {
+  background: linear-gradient(90deg, rgba(210,166,58,0.16), rgba(255,255,255,0.82) 36%, rgba(255,255,255,0.72) 100%);
+  border-color: rgba(198,152,50,0.3);
 }
 
 #todo-wrap {
@@ -6960,6 +6981,13 @@ var api = window.api || {
     try { var r = await fetch('/api/state'); return r.json(); }
     catch(e) { return {}; }
   },
+  getConversationDraft: async function(conversationId) {
+    try { var r = await fetch('/api/conversation-draft?conversationId=' + encodeURIComponent(String(conversationId || ''))); return r.json(); }
+    catch(e) { return ''; }
+  },
+  saveConversationDraft: async function(conversationId, draft) {
+    try { await fetch('/api/conversation-draft', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:conversationId || '', draft:draft === null || draft === undefined ? '' : String(draft)})}); } catch(e) {}
+  },
   setMode: async function(m) {
     try { await fetch('/api/mode', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:m})}); } catch(e) {}
   },
@@ -9616,8 +9644,14 @@ function markConversationTracked(id, ms, workspaceId) {
 function pruneConversationTracking() {
   if (!state.trackedConversationUntil) return;
   var now = Date.now();
+  var activeKey = conversationDraftKey();
   Object.keys(state.trackedConversationUntil).forEach(function(id) {
-    if (Number(state.trackedConversationUntil[id] || 0) < now) delete state.trackedConversationUntil[id];
+    if (Number(state.trackedConversationUntil[id] || 0) >= now) return;
+    delete state.trackedConversationUntil[id];
+    // A conversation whose 5-minute activation window expired goes to the
+    // background: persist its input draft to disk. Only exit the window, never
+    // the running state.
+    if (id !== activeKey) persistConversationDraftForKey(id);
   });
 }
 
@@ -10133,9 +10167,43 @@ function conversationDraftKey(target) {
   target = target || currentConversationTarget();
   return runtimeKeyFor(target && target.workspaceId, target && target.conversationId || 'default');
 }
+
+// Each conversation owns an independent draft window (hard binding). The key is
+// workspaceId::conversationId (possibly aliased); resolve back so a backgrounded
+// conversation's draft can be persisted to the backend conversation store.
+function conversationDraftParts(key) {
+  key = String(key || '');
+  var resolved = key;
+  if (state.runtimeKeyAliases) {
+    for (var base in state.runtimeKeyAliases) {
+      if (Object.prototype.hasOwnProperty.call(state.runtimeKeyAliases, base) && state.runtimeKeyAliases[base] === key) {
+        resolved = base;
+        break;
+      }
+    }
+  }
+  var sep = resolved.indexOf('::');
+  return {
+    workspaceId: sep >= 0 ? resolved.slice(0, sep) : '',
+    conversationId: sep >= 0 ? resolved.slice(sep + 2) : 'default'
+  };
+}
+
 function saveActiveConversationDraft() {
   if (els.prompt) state.conversationDrafts[conversationDraftKey()] = String(els.prompt.value || '');
 }
+
+// Persist a conversation's draft to the backend store. Only conversations of the
+// current workspace are persisted; cross-workspace drafts stay in the session
+// window. The in-memory window is never dropped, so switching back stays instant.
+function persistConversationDraftForKey(key) {
+  if (!api.saveConversationDraft) return;
+  var parts = conversationDraftParts(key);
+  if (parts.workspaceId && parts.workspaceId !== String(state.currentWorkspaceId || '')) return;
+  var draft = Object.prototype.hasOwnProperty.call(state.conversationDrafts, key) ? state.conversationDrafts[key] : '';
+  api.saveConversationDraft(parts.conversationId, draft).catch(function(){});
+}
+
 function restoreConversationDraft(target) {
   if (!els.prompt) return;
   var key = conversationDraftKey(target);
@@ -10143,7 +10211,11 @@ function restoreConversationDraft(target) {
   schedulePromptInputRefresh();
 }
 function clearActiveConversationDraft() {
-  delete state.conversationDrafts[conversationDraftKey()];
+  var key = conversationDraftKey();
+  delete state.conversationDrafts[key];
+  if (api.saveConversationDraft) {
+    api.saveConversationDraft(conversationDraftParts(key).conversationId, null).catch(function(){});
+  }
 }
 
 function isCurrentConversationRunning() {
@@ -10171,7 +10243,7 @@ function updateSubmitButtonState() {
   var running = !!runtime || !!state._flowRunning;
   var hasText = promptHasText();
   if (running && !hasText) {
-    var escalating = runtime && ['stopping', 'force_restarting'].indexOf(String(runtime.status || '')) >= 0;
+    var escalating = (runtime && ['stopping', 'force_restarting'].indexOf(String(runtime.status || '')) >= 0) || !!(state._flowRunning && state._flowPaused);
     var label = escalating ? (currentLang() === 'zh' ? '强制停止' : 'Force stop') : t('input.stop');
     setSubmitButtonVisual(escalating ? 'octagon-x' : 'square', label, true, true);
   } else {
@@ -10320,6 +10392,14 @@ window.submitCurrentAction = function() {
     var guideText = String(els.prompt.value || '').trim();
     els.prompt.value = '';
     els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
+    if (state._flowPaused) {
+      // Entry #5: a new Build/Plan/Goal/Flow instruction sent while paused
+      // exits the pause and starts a fresh process. The backend agent:send /
+      // flow:run handlers clear the suspension (without restoring mode).
+      window.exitPausedFlowForNewInstruction();
+      if (state.mode === 'flow') return window.submitSelectedFlow();
+      return window.sendMessage('guide', guideText, { requestedMode: state.mode || 'build' });
+    }
     if (state.inputMode === 'next') {
       window.queueFlowNextInput(guideText);
       return;
@@ -12237,6 +12317,12 @@ window.refreshRightStatus = function(options) {
       renderFlowTakeover(false);
     }
     if (s && s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
+    if (s && s.draft !== undefined) {
+      var restoredDraftKey = conversationDraftKey();
+      if (!Object.prototype.hasOwnProperty.call(state.conversationDrafts, restoredDraftKey)) {
+        state.conversationDrafts[restoredDraftKey] = String(s.draft || '');
+      }
+    }
     if (s && s.contextCompression !== undefined) {
       state.contextCompression = s.contextCompression;
     }
@@ -12959,6 +13045,7 @@ function renderFlowPromptBar() {
   if (!bar || !text) return;
   var prompt = state._flowRunning ? String(state.flowPromptText || '').trim() : '';
   bar.style.display = prompt ? '' : 'none';
+  bar.classList.toggle('paused', !!(state._flowRunning && state._flowPaused));
   text.textContent = prompt;
   text.title = prompt;
 }
@@ -14830,24 +14917,35 @@ window.renderFlowTakeover = function(active, name, options) {
   var takeover = document.getElementById('flow-takeover');
   if (!takeover) return;
   takeover.classList.toggle('active', !!active);
+  takeover.onclick = null;
   if (!active) {
     takeover.classList.remove('interactive');
+    takeover.classList.remove('paused');
     takeover.innerHTML = '';
+    state._flowPaused = false;
     return;
   }
   options = options || {};
   var interrupted = !!options.interrupted;
+  state._flowPaused = interrupted;
+  takeover.classList.toggle('paused', interrupted);
   var label = interrupted ? t('flow.pausedTakeover') : t('flow.takeover');
   var html = iconSvg('workflow', label, 'small') + '<span>' + esc(label) + (name ? ': ' + esc(name) : '');
   if (interrupted && options.message) {
     html += '<span style="opacity:0.72;">' + esc(String(options.message).slice(0, 200)) + '</span>';
   }
   html += '</span>';
+  // Clicking the bubble toggles the pause state (entry #4 / exit resume).
   if (interrupted) {
-    html += '<button class="archive-action-btn flow-resume-btn" onclick="window.resumeInterruptedFlow()">' + esc(t('flow.resume')) + '</button>';
+    takeover.onclick = function(event) { event.stopPropagation(); window.resumeInterruptedFlow(); };
+    html += '<button class="archive-action-btn flow-resume-btn" onclick="event.stopPropagation();window.resumeInterruptedFlow()">' + esc(t('flow.resume')) + '</button>';
+  } else {
+    takeover.onclick = function() { window.stopFlowRun(); };
   }
-  takeover.classList.toggle('interactive', interrupted);
+  takeover.classList.toggle('interactive', true);
   takeover.innerHTML = html;
+  updateSubmitButtonState();
+  renderFlowPromptBar();
 };
 
 window.resumeInterruptedFlow = async function() {
@@ -14940,6 +15038,7 @@ window.queueFlowNextInput = function(text) {
 
 function stopFlowRunInternal(options) {
   state._flowRunning = false;
+  state._flowPaused = false;
   state.flowPromptText = '';
   window.renderFlowTakeover(false);
   var runtimeLease = state._flowRuntimeLease || null;
@@ -14967,11 +15066,26 @@ function stopFlowRunInternal(options) {
 window.stopFlowRun = async function(options) {
   options = options || {};
   if (options.resumeQueue !== true) options.keepPaused = true;
-  if (api.stopFlow) await api.stopFlow().catch(function(){});
+  if (api.stopFlow) {
+    var stopResult = await api.stopFlow().catch(function() { return null; });
+    var action = String(stopResult && stopResult.action || '');
+    // First Stop/Esc while a Flow is RUNNING: cooperative abort. The flow:run
+    // handler turns this into an interrupted suspension (renders the paused
+    // takeover via the runFlow promise). Do NOT tear down the Flow UI yet.
+    if (action === 'stopping') return stopResult;
+  }
+  // Paused flow (or already force-stopped): tear down immediately.
   var settlement = stopFlowRunInternal(options);
   await setVisibleMode('build');
   if (settlement && settlement.shouldDrain) window.scheduleNextQueueDrain(settlement.target);
   addMsg('assistant', '[System] Flow stopped manually.', 'flow', '');
+};
+
+// Entry #5: a paused Flow hands the conversation over to a new process
+// (Build/Plan/Goal instruction or a fresh Flow run). Tear down the Flow UI
+// state exactly like a stop, but leave the mode/queue for the new process.
+window.exitPausedFlowForNewInstruction = function() {
+  stopFlowRunInternal({ keepPaused: true });
 };
 window.normalizeFlowWork = function(work) {
   work = work || { name: 'UntitledFlow', components: [] };
@@ -18919,6 +19033,11 @@ function schedulePostStartupUiRendering() {
   // === Event Listeners ===
   if (els.prompt) {
     els.prompt.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && state._flowRunning && !promptHasText()) {
+        e.preventDefault();
+        window.stopFlowRun();
+        return;
+      }
       if (e.key === 'Escape' && isCurrentConversationRunning() && !promptHasText()) {
         e.preventDefault();
         window.stopCurrentConversation();

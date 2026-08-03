@@ -56,11 +56,11 @@ Download packages from the [dev-0.2.6 release](https://github.com/positer/Newmar
 
 | Package | Platform | SHA-256 |
 | --- | --- | --- |
-| `Newmark-Agent-0.2.6-x64.msi` | Windows x64 installer with GUI and global GUI/TUI launcher | `_PENDING_` |
-| `Newmark-Agent-0.2.6-win-unpacked-x64.zip` | Windows x64 portable | `_PENDING_` |
-| `Newmark-Agent-0.2.6-x86_64.AppImage` | Linux x64 AppImage | `_PENDING_` |
-| `Newmark-Agent-0.2.6-amd64.deb` | Debian/Ubuntu x64 package | `_PENDING_` |
-| `Newmark-Agent-0.2.6-linux-unpacked-x64.zip` | Linux x64 portable | `_PENDING_` |
+| `Newmark-Agent-0.2.6-x64.msi` | Windows x64 installer with GUI and global GUI/TUI launcher | `8EE2385127326AFC4663B2D255D3A78C241F770D4AE56ABEC3E7BA1095C2159B` |
+| `Newmark-Agent-0.2.6-win-unpacked-x64.zip` | Windows x64 portable | `CAEBDFDD572C49BBEF05E7F99D09A2E59A863D7EC132C8C75841E2895CF33638` |
+| `Newmark-Agent-0.2.6-x86_64.AppImage` | Linux x64 AppImage | `ABAC8A64D441C3E39195435B8EA9D9378A8C59A55360A81067FA2760EC66F7B9` |
+| `Newmark-Agent-0.2.6-amd64.deb` | Debian/Ubuntu x64 package | `8E15AF7E4EEED18741E4D0C7357F6179E1AE8CA31DCC5E01881079B5575F9CA2` |
+| `Newmark-Agent-0.2.6-linux-unpacked-x64.zip` | Linux x64 portable | `1CE717403586E2303043F2EF21AABD3E77B337868ACE171EE0AADD97EB15E529` |
 
 The `dev-0.2.6` source makes Flow Stop/Esc pause-aware. While a Flow is running, the first Stop/Esc cooperatively aborts into the same persistent paused takeover used by system-level interruptions — the suspension is saved to the conversation store, the takeover bubble shows the failure reason with a Resume button, and nothing is torn down. A second Stop/Esc force-stops the run, exits the takeover, and returns to Build. Sending a new Build/Plan/Goal/Flow instruction while paused exits the pause into that new process without restoring the previous mode. Unsent input is now persisted per conversation: a draft you type survives switching conversations, workspaces, and app restarts, and is restored when you return. Dedicated backend (Flow pause/stop + draft persistence under abort/restart/concurrency/churn) and UI stress suites were added to the release gate, and the draft-clear path they caught is regression-locked in the source suite.
 

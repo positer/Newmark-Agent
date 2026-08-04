@@ -312,7 +312,8 @@ async function main(): Promise<void> {
     // AgentContextManager facade
     // -----------------------------------------------------------------------
     const manager = new AgentContextManager(root);
-    check(manager.flags.structuredContextV2 === false, 'all context flags default to disabled');
+    check(manager.flags.structuredContextV2 === true && manager.flags.agentRuntimeV2 === true, 'context flags default to enabled (dev-0.3.0)');
+    check(manager.flags.providerAdaptersV2 === true && manager.flags.adaptiveToolExposureV1 === true, 'provider + toolchain flags default to enabled');
     check(manager.orchestrator instanceof ContextOrchestrator, 'orchestrator facade available');
     const managerSnapshot = manager.snapshot({
       conversationId: 'conv-1',

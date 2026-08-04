@@ -232,9 +232,10 @@ async function main(): Promise<void> {
       cleanup(dualRoot);
     }
 
-    // flag disabled -> AgentRunService is never initialized
+    // flag disabled (explicit override) -> AgentRunService is never initialized
     const legacyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-agent-legacy-'));
     try {
+      fs.writeFileSync(path.join(legacyRoot, 'config.json'), JSON.stringify({ models: {}, context: { agent_runtime_v2: { value: false } } }), 'utf-8');
       const legacyAgent = new Agent(legacyRoot);
       legacyAgent.beginConversationWorkRun('legacy-run', { workspaceId: 'ws', conversationId: 'conv-legacy' });
       check(fs.existsSync(path.join(legacyRoot, '.newmark-context-v2', 'agent-runs')) === false, 'flag off leaves AgentRunService untouched');

@@ -87,7 +87,7 @@ async function main(): Promise<void> {
     const Session = agentKernelRunnerInternals.ToolProvisionSession;
     const coreNames = [...agentKernelRunnerInternals.SUBAGENT_CORE_TOOL_NAMES].filter(name => names.includes(name));
     const initialCoreOnly = [...names.filter(name => coreNames.includes(name)), agentKernelRunnerInternals.TOOL_PROVISION_NAME];
-    const firstTurnSurface = [...names.filter(name => name === 'skill' || coreNames.includes(name)), agentKernelRunnerInternals.TOOL_PROVISION_NAME];
+    const firstTurnSurface = [...names.filter(name => coreNames.includes(name)), agentKernelRunnerInternals.TOOL_PROVISION_NAME];
     const emptySession = new Session(catalog, []);
     const initial = emptySession.currentDefinitions() as ToolDefinition[];
     assert.deepEqual(initial.map(toolName), initialCoreOnly,
@@ -262,7 +262,7 @@ async function main(): Promise<void> {
       if (event.toolName) publicToolEvents.push(event.toolName);
     });
     const output = (await agent.process('Complete the request without assuming unavailable interfaces.')).map(token => token.text || '').join('');
-    assert.deepEqual(providerTurns[0], firstTurnSurface, 'first provider request carries the always-available subagent core plus the compact broker and bounded skill discovery for ordinary chat');
+    assert.deepEqual(providerTurns[0], firstTurnSurface, 'first provider request carries the always-available subagent core plus the compact broker for ordinary chat');
     assert.ok(providerTurns[1].includes('pwd') && providerTurns[1].includes('tool_provision'),
       'broker result refreshes the next provider request in the same user run');
     assert.ok(providerTurns[1].length < catalog.length, 'dynamic refresh does not expand back to the whole catalog');
@@ -327,7 +327,7 @@ async function main(): Promise<void> {
       const reachOutput = (await probe.process('Continue using the available capability boundary.'))
         .map(token => token.text || '')
         .join('');
-      assert.deepEqual(reachTurns[0].map(toolName), firstTurnSurface, `${targetName} starts behind the compact broker plus bounded skill discovery and subagent core boundary`);
+      assert.deepEqual(reachTurns[0].map(toolName), firstTurnSurface, `${targetName} starts behind the compact broker and subagent core boundary`);
       const reachedDefinition = reachTurns[1]?.find(definition => toolName(definition) === targetName);
       assert.deepEqual(reachedDefinition, catalog.find(definition => toolName(definition) === targetName),
         `${targetName} original schema reaches the next provider subturn without drift`);

@@ -55,16 +55,38 @@ export class ToolExposurePlanner {
     // Task-relevant additions: match capability domains present in user input.
     const suggestedCapabilityIds: string[] = [];
     const intent = String(input.userInput || '').toLowerCase();
-    const domainSignals: Array<[RegExp, string]> = [
-      [/\b(git|commit|push|pull|pr|branch|diff)\b/, 'vcs.inspect'],
-      [/\b(search|find|symbol|reference)\b/, 'code.search'],
-      [/\b(build|compile|test|run)\b/, 'test.run'],
-      [/\b(web|browse|internet|online)\b/, 'web.search'],
-      [/\b(automation|schedule)\b/, 'automation.manage'],
-      [/\b(workflow|flow)\b/, 'flow.manage'],
+    // Mirrors the legacy selectTaskToolDefinitions intent semantics:
+    // file/code context wins bare search to the web domain, and web wording
+    // never pulls the code-search (core) domain in by itself.
+    const fileContext = /\b(?:code|repo(?:sitory)?|workspace|files?|director(?:y|ies)|project)\b/i.test(intent)
+      || /(?:代码|仓库|工作区|文件|目录|项目)/.test(intent);
+    const webContext = /\b(?:web|internet|online|website|url|news)\b|https?:\/\//i.test(intent)
+      || /(?:联网|网页|网站|新闻|网址|链接)/.test(intent);
+    const bareSearch = /\b(?:search|lookup)\b/i.test(intent) || /(?:搜索|查找|搜一下)/.test(intent);
+    const codeSearch = /\b(?:search|find|symbol|reference)\b/i.test(intent) || /(?:搜索|查找|搜一下)/.test(intent);
+    const codingVerbs = /\b(?:implement|fix|debug|refactor|change|update|patch|error|bug)\b/i.test(intent)
+      || /(?:实现|修复|调试|重构|改动|更新|排查|报错|错误|故障)/.test(intent);
+    const domainSignals: Array<[boolean, string]> = [
+      [/\b(git|commit|push|pull|pr|branch|diff)\b/.test(intent), 'vcs.inspect'],
+      [/\b(?:build|compile|test|run)\b/.test(intent), 'test.run'],
+      [codingVerbs || (fileContext && codeSearch), 'code.search'],
+      [webContext || (!fileContext && bareSearch), 'web.search'],
+      [/\b(?:automation|schedule|reminder|recurring)\b/.test(intent) || /(?:自动化|定时|提醒|周期任务)/.test(intent), 'automation.manage'],
+      [/\b(?:workflow|flow)\b/.test(intent) || /(?:工作流|流程文件)/.test(intent), 'flow.manage'],
+      [/\bmemory(?: lab)?\b/.test(intent) || /(?:记忆实验室|记忆库)/.test(intent), 'memory.manage'],
+      [/\b(?:computer[ _-]?use|desktop|screen|mouse|keyboard|window|application)\b/.test(intent) || /(?:电脑操作|桌面|屏幕|鼠标|键盘|窗口|应用程序)/.test(intent), 'computer.manage'],
+      [/\b(?:browser|webpage|click|login|form|chrome|edge)\b/.test(intent) || /(?:浏览器|页面|点击|登录|表单)/.test(intent), 'browser.manage'],
+      [/\b(?:terminal takeover|interactive shell|interactive terminal)\b/.test(intent) || /(?:终端接管|交互式终端|交互式 shell)/.test(intent), 'terminal.manage'],
+      [/\b(?:github|pull request|issue|fork)\b|\bpr\b/.test(intent) || /(?:拉取请求|议题)/.test(intent), 'github.manage'],
+      [/\bssh\b/.test(intent) || /(?:远程主机|远程工作区)/.test(intent), 'ssh.manage'],
+      [/\bskills?\b/.test(intent) || /(?:技能市场|安装技能)/.test(intent), 'skill.manage'],
+      [/\b(?:linked plan|project plan)\b/.test(intent) || /(?:关联计划|项目计划)/.test(intent), 'plan.manage'],
+      [/\b(?:(?:build|task|work) history|previous (?:build|task|work) details?|history details?)\b/.test(intent) || /(?:历史(?:任务|工作|构建).*(?:详情|细节|具体)|上个任务.*(?:具体|做了什么|改了什么)|之前.*(?:具体做了什么|工作内容)|查询.*Build Block)/.test(intent), 'history.query'],
+      [/\b(?:display|show|present|embed)\b.{0,24}\b(?:image|diagram|illustration)\b|\b(?:image|diagram|illustration)\b.{0,24}\b(?:display|show|present|embed)\b/.test(intent) || /(?:显示|展示|嵌入|呈现).{0,16}(?:图片|图像|示意图|架构图)|(?:图片|图像|示意图|架构图).{0,16}(?:显示|展示|嵌入|呈现)/.test(intent), 'media.display'],
+      [/\b(?:ask|question|clarify|confirm|multiple choice)\b/.test(intent) || /(?:询问|提问|确认|澄清|选择题|让我选择)/.test(intent), 'interaction.manage'],
     ];
-    for (const [regex, capabilityId] of domainSignals) {
-      if (regex.test(intent)) suggestedCapabilityIds.push(capabilityId);
+    for (const [signal, capabilityId] of domainSignals) {
+      if (signal) suggestedCapabilityIds.push(capabilityId);
     }
     // Add the implementation tools for suggested capabilities.
     for (const capabilityId of suggestedCapabilityIds) {

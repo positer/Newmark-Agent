@@ -38,21 +38,21 @@ export interface ContextFeatureFlags {
 }
 
 export const DEFAULT_CONTEXT_FEATURE_FLAGS: ContextFeatureFlags = {
-  structuredContextV2: false,
-  buildHistoryPersistence: false,
-  branchLogV2: false,
-  structuredTasks: false,
-  structuredPlans: false,
-  contextCompressionV2: false,
-  scopedToolResults: false,
-  providerAdaptersV2: false,
-  agentRuntimeV2: false,
-  subagentRuntimeV2: false,
+  structuredContextV2: true,
+  buildHistoryPersistence: true,
+  branchLogV2: true,
+  structuredTasks: true,
+  structuredPlans: true,
+  contextCompressionV2: true,
+  scopedToolResults: true,
+  providerAdaptersV2: true,
+  agentRuntimeV2: true,
+  subagentRuntimeV2: true,
 
-  capabilityCatalogV1: false,
-  adaptiveToolExposureV1: false,
-  toolSchemaOnDemandV1: false,
-  capabilityBoundaryPromptV1: false,
+  capabilityCatalogV1: true,
+  adaptiveToolExposureV1: true,
+  toolSchemaOnDemandV1: true,
+  capabilityBoundaryPromptV1: true,
 };
 
 export const CONTEXT_FEATURE_FLAG_KEYS = Object.keys(DEFAULT_CONTEXT_FEATURE_FLAGS) as Array<keyof ContextFeatureFlags>;

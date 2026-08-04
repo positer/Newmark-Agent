@@ -1274,6 +1274,27 @@ const CAPABILITY_TO_DOMAIN: Record<string, string[]> = {
   'web.search': ['web'],
   'automation.manage': ['automation'],
   'flow.manage': ['flow'],
+  'memory.manage': ['memory'],
+  'computer.manage': ['computer'],
+  'browser.manage': ['browser'],
+  'terminal.manage': ['general', 'core'],
+  'github.manage': ['general'],
+  'ssh.manage': ['general'],
+  'skill.manage': ['skills', 'general'],
+  'plan.manage': ['plan'],
+  'history.query': ['plan'],
+  'media.display': ['media'],
+  'interaction.manage': ['interaction'],
+};
+
+/**
+ * Explicit tool names additionally granted by a suggested capability, used to
+ * keep domain-specific tools ahead of catch-all 'general' tools inside the
+ * 8-schema preload cap (legacy always preloaded skill/skill_download).
+ */
+const CAPABILITY_TOOL_HINTS: Record<string, string[]> = {
+  'skill.manage': ['skill', 'skill_download'],
+  'memory.manage': ['memory_lab_read', 'memory_lab_query', 'memory_lab_update', 'memory_lab_reindex'],
 };
 
 export function routeToolSurfaceV2(agent: Agent, definitions: unknown[], toolchain: ToolchainCore | null, task: string): { definitions: unknown[]; systemPromptNotice: string } {
@@ -1294,16 +1315,34 @@ export function routeToolSurfaceV2(agent: Agent, definitions: unknown[], toolcha
     providerToolLimit: 0,
   });
   const domains = new Set<string>();
+  const toolHints = new Set<string>();
   for (const capabilityId of plan.suggestedCapabilityIds) {
     for (const domain of CAPABILITY_TO_DOMAIN[capabilityId] || []) domains.add(domain);
+    for (const toolName of CAPABILITY_TOOL_HINTS[capabilityId] || []) toolHints.add(toolName);
   }
-  const selected = definitions.filter(definition => {
-    const name = toolDefinitionName(definition);
-    const descriptor = toolchain.registry.get(name);
-    if (!descriptor || descriptor.riskLevel === 'destructive') return false;
-    if (!domains.has(descriptor.capabilityId.slice(4))) return false;
-    return true;
-  }).slice(0, INITIAL_TOOL_SCHEMA_LIMIT);
+  const names = definitions.map(toolDefinitionName);
+  // An explicitly named tool is always retained (legacy parity), still
+  // subject to the risk gate so destructive tools stay provision-only.
+  for (const name of names) {
+    if (name && new RegExp(`(?:^|[^A-Za-z0-9_])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[^A-Za-z0-9_])`, 'i').test(task)) {
+      toolHints.add(name);
+    }
+  }
+  const selected = definitions
+    .filter(definition => {
+      const name = toolDefinitionName(definition);
+      const descriptor = toolchain.registry.get(name);
+      if (!descriptor || descriptor.riskLevel === 'destructive') return false;
+      if (toolHints.has(name)) return true;
+      if (!domains.has(descriptor.capabilityId.slice(4))) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      const aHint = toolHints.has(toolDefinitionName(a)) ? 0 : 1;
+      const bHint = toolHints.has(toolDefinitionName(b)) ? 0 : 1;
+      return aHint - bHint || names.indexOf(toolDefinitionName(a)) - names.indexOf(toolDefinitionName(b));
+    })
+    .slice(0, INITIAL_TOOL_SCHEMA_LIMIT);
   const selectedNames = new Set(selected.map(toolDefinitionName));
   const core = definitions.filter(definition => {
     const name = toolDefinitionName(definition);

@@ -59,7 +59,13 @@ const DOMAIN_PREFIXES: ReadonlyArray<[RegExp, string]> = [
 
 const READ_TOOL_PATTERN = /^(pwd|read|glob|grep|git_status|git_log|git_diff|git_branch|git_show|memory_lab_read|memory_lab_query|skill|linked_plan|build_history_query|subagent_read|subagent_result|subagent_list|subagent_progress|question|image_inspect|image_display|ocr_read|pdf_read|automation_list|automation_status)$/;
 
-const DESTRUCTIVE_PATTERN = /destroy|delete|erase|remove|rm\s|force|shutdown|kill|terminate|drop\s|prune/;
+/**
+ * Destructive verbs describing irreversible actions the tool performs on user
+ * data. Passive-voice cleanup phrasing ("screenshots are deleted immediately")
+ * describes the system discarding its own ephemeral state and is not treated
+ * as a destructive capability.
+ */
+const DESTRUCTIVE_PATTERN = /(?<!\b(?:are|is|be|being|was|were|will be|would be|gets?|become)\s)\b(?:destroy|delete|erase|remove|rm\s|force|shutdown|kill|terminate|drop\s|prune)\b/;
 
 /** Best-effort domain classification used to derive capability ids. */
 export function inferDomain(name: string): string {

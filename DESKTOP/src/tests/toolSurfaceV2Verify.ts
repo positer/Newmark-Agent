@@ -5,7 +5,7 @@
  * The v2 surface must keep the legacy contract (8-schema preload cap,
  * always-available subagent core, provision notice) while sourcing the
  * intent slice from the ToolExposurePlanner. Destructive tools are never
- * auto-exposed. Only active under the adaptiveToolExposureV1 flag.
+ * auto-exposed. A null toolchain preloads the full catalog without a notice.
  */
 import * as assert from 'assert';
 import { seedToolchainFromDefinitions } from '../toolchain';
@@ -92,10 +92,11 @@ function main(): void {
   check(none.systemPromptNotice.includes('No tool interface'), 'no tool interface notice preserved');
 
   // -------------------------------------------------------------------------
-  // Null toolchain falls back to the legacy route
+  // Null toolchain: full-surface fallback without the planner
   // -------------------------------------------------------------------------
   const fallback = routeToolSurfaceV2(agent, DEFINITIONS, null, 'fix the git commit message');
-  check(namesOf(fallback.definitions).length > 0, 'null toolchain falls back to the legacy selector');
+  check(namesOf(fallback.definitions).length === DEFINITIONS.length && !fallback.systemPromptNotice,
+    'null toolchain preloads the full catalog without the exposure notice');
 
   // -------------------------------------------------------------------------
   // Determinism

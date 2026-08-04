@@ -364,11 +364,9 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       // Agent.cachedToolDefinitions keeps that catalog stable across provider subturns.
       const catalog = agent.cachedToolDefinitions();
       // dev-0.3.0: seed the v2 toolchain from the same policy-filtered
-      // catalog (inert registration; the legacy surface below is unchanged).
+      // catalog (inert registration; the unified surface below consumes it).
       agent.ensureToolchain(catalog);
-      const surface = agent.contextV2.flags.adaptiveToolExposureV1
-        ? routeToolSurfaceV2(agent, catalog, agent.toolchain, latestUserTaskText(agent))
-        : routeToolSurface(agent, catalog);
+      const surface = routeToolSurfaceV2(agent, catalog, agent.toolchain, latestUserTaskText(agent));
       toolProvisioning.reconcile(catalog, surface.definitions);
       activeToolSurfaceNotice = surface.systemPromptNotice;
       activeToolSurfaceIdentity = identity;
@@ -1209,63 +1207,20 @@ function toolSurfaceIdentityForAgent(agent: Agent): string {
   });
 }
 
-function routeToolSurface(agent: Agent, definitions: unknown[]): { definitions: unknown[]; systemPromptNotice: string } {
-  if (!agent.shouldExposeToolInterface()) {
-    return {
-      definitions: [],
-      systemPromptNotice: [
-        '## Tool Interface Availability',
-        'No tool interface is available for this turn because the selected Auto model has not verified tool-use capability.',
-        'Answer using the conversation context only. Do not claim to call, inspect, or modify external resources.',
-      ].join('\n'),
-    };
-  }
-  const task = latestUserTaskText(agent);
-  const selected = selectTaskToolDefinitions(task, definitions).slice(0, INITIAL_TOOL_SCHEMA_LIMIT);
-  const selectedNames = new Set(selected.map(toolDefinitionName));
-  // Append the always-available subagent orchestration core after the intent
-  // slice instead of selecting it inside selectTaskToolDefinitions: the core
-  // must not consume preload slots that deterministic intent tools need (e.g.
-  // automation_*/flow_* would otherwise be truncated out of reach), while
-  // ToolProvisionSession.reconcile keeps every core tool in the preloaded
-  // surface unconditionally.
-  const core = definitions.filter(definition => {
-    const name = toolDefinitionName(definition);
-    return SUBAGENT_CORE_TOOL_NAMES.has(name) && !selectedNames.has(name);
-  });
-  const surface = core.length ? selected.concat(core) : selected;
-  if (surface.length === definitions.length) return { definitions, systemPromptNotice: '' };
-  if (!selected.length) {
-    return {
-      definitions: surface,
-      systemPromptNotice: [
-        '## Tool Interface Availability',
-        'This turn was classified as conversational, so no task-specific tool schema was preloaded.',
-        `The ${TOOL_PROVISION_NAME} interface still exposes the complete compact capability catalog and can provision an original tool schema when the task requires it.`,
-      ].join('\n'),
-    };
-  }
-  return {
-    definitions: surface,
-    systemPromptNotice: [
-      '## Tool Interface Availability',
-      `At most ${INITIAL_TOOL_SCHEMA_LIMIT} deterministic task-relevant schemas are preloaded for this turn; the always-available subagent orchestration tools are appended separately.`,
-      `Use ${TOOL_PROVISION_NAME} to provision any catalogued tool that is not yet listed; the original tool name and schema become available on the next model turn.`,
-    ].join('\n'),
-  };
-}
-
 /**
- * dev-0.3.0 adaptive tool exposure surface. Equivalent to routeToolSurface
- * (same preload cap, same always-available core, same provision notice) but
- * the intent slice is chosen by the v2 ToolExposurePlanner instead of the
- * legacy deterministic selector. Only active when adaptiveToolExposureV1 is
- * enabled; otherwise the legacy route remains authoritative.
+ * dev-0.3.0 adaptive tool exposure surface. The intent slice is chosen by the
+ * v2 ToolExposurePlanner (same preload cap, same always-available core, same
+ * provision notice as the pre-migration deterministic selector).
  *
  * The planner reasons in capability ids (vcs.inspect, code.search, ...); this
  * adapter translates suggested capabilities into the legacy tool domains
  * seeded by the registry seeder (cap.<domain>) and applies the planner's risk
  * discipline (destructive tools are never auto-exposed).
+ *
+ * A null toolchain (no registry available) falls back to the full catalog
+ * surface without an exposure notice, matching the terminal case of the
+ * planner path; a suppressed tool interface yields an empty surface with the
+ * no-interface notice.
  */
 const CAPABILITY_TO_DOMAIN: Record<string, string[]> = {
   'vcs.inspect': ['git'],
@@ -1299,9 +1254,16 @@ const CAPABILITY_TOOL_HINTS: Record<string, string[]> = {
 
 export function routeToolSurfaceV2(agent: Agent, definitions: unknown[], toolchain: ToolchainCore | null, task: string): { definitions: unknown[]; systemPromptNotice: string } {
   if (!agent.shouldExposeToolInterface()) {
-    return routeToolSurface(agent, definitions);
+    return {
+      definitions: [],
+      systemPromptNotice: [
+        '## Tool Interface Availability',
+        'No tool interface is available for this turn because the selected Auto model has not verified tool-use capability.',
+        'Answer using the conversation context only. Do not claim to call, inspect, or modify external resources.',
+      ].join('\n'),
+    };
   }
-  if (!toolchain) return routeToolSurface(agent, definitions);
+  if (!toolchain) return { definitions, systemPromptNotice: '' };
   const planner = new ToolExposurePlanner(toolchain.registry, toolchain.catalog);
   const plan = planner.plan({
     agentRunId: agent.runtimeActorId,
@@ -1389,93 +1351,6 @@ function latestUserTaskText(agent: Agent): string {
 function toolDefinitionName(definition: unknown): string {
   const record = definition && typeof definition === 'object' ? definition as Record<string, any> : {};
   return String(record.function?.name || record.name || '').trim();
-}
-
-function selectTaskToolDefinitions(task: string, definitions: unknown[]): unknown[] {
-  const text = String(task || '');
-  const lower = text.toLowerCase();
-  const names = definitions.map(toolDefinitionName);
-  const selected = new Set<string>();
-  const explicit = new Set<string>();
-  const priority = new Set<string>();
-  const include = (...wanted: string[]) => wanted.forEach(name => selected.add(name));
-  const includePrefix = (...prefixes: string[]) => names.forEach(name => {
-    if (prefixes.some(prefix => name.startsWith(prefix))) selected.add(name);
-  });
-
-  const fileIntent = /\b(?:code|repo(?:sitory)?|workspace|files?|director(?:y|ies)|project)\b/i.test(text)
-    || /(?:代码|仓库|工作区|文件|目录|项目)/.test(text);
-  const codingIntent = fileIntent
-    || /\b(?:implement|fix|debug|refactor|build|test|change|update|patch|error|bug)\b/i.test(text)
-    || /(?:实现|修复|调试|重构|构建|测试|改动|更新|排查|报错|错误|故障)/.test(text);
-  const webIntent = /\b(?:web|internet|online|website|url|news)\b|https?:\/\//i.test(text)
-    || /(?:联网|网页|网站|新闻|网址|链接)/.test(text)
-    || (!fileIntent && (/\b(?:search|lookup|find online)\b/i.test(text) || /(?:搜索|查找|搜一下)/.test(text)));
-  const browserIntent = /\b(?:browser|webpage|click|login|form|chrome|edge)\b/i.test(text)
-    || /(?:浏览器|页面|点击|登录|表单)/.test(text);
-  const computerIntent = /\b(?:computer[ _-]?use|desktop|screen|mouse|keyboard|window|application)\b/i.test(text)
-    || /(?:电脑操作|桌面|屏幕|鼠标|键盘|窗口|应用程序)/.test(text);
-  const terminalIntent = /\b(?:terminal takeover|interactive shell|interactive terminal)\b/i.test(text)
-    || /(?:终端接管|交互式终端|交互式 shell)/i.test(text);
-  const githubIntent = /\b(?:github|pull request|issue|fork)\b|\bpr\b/i.test(text)
-    || /(?:拉取请求|议题)/.test(text);
-  const sshIntent = /\bssh\b|(?:远程主机|远程工作区)/i.test(text);
-  const automationIntent = /\b(?:automation|schedule|reminder|recurring)\b/i.test(text)
-    || /(?:自动化|定时|提醒|周期任务)/.test(text);
-  const memoryIntent = /\bmemory(?: lab)?\b/i.test(text) || /(?:记忆实验室|记忆库)/.test(text);
-  const skillIntent = /\bskills?\b/i.test(text) || /(?:技能市场|安装技能)/.test(text);
-  const flowIntent = /\b(?:flow|workflow)\b/i.test(text) || /(?:工作流|流程文件)/.test(text);
-  const planIntent = /\b(?:linked plan|project plan)\b/i.test(text) || /(?:关联计划|项目计划)/.test(text);
-  const historyDetailIntent = /\b(?:(?:build|task|work) history|previous (?:build|task|work) details?|history details?)\b/i.test(text)
-    || /(?:历史(?:任务|工作|构建).*(?:详情|细节|具体)|上个任务.*(?:具体|做了什么|改了什么)|之前.*(?:具体做了什么|工作内容)|查询.*Build Block)/i.test(text);
-  const imageDisplayIntent = /\b(?:display|show|present|embed)\b.{0,24}\b(?:image|diagram|illustration)\b|\b(?:image|diagram|illustration)\b.{0,24}\b(?:display|show|present|embed)\b/i.test(text)
-    || /(?:显示|展示|嵌入|呈现).{0,16}(?:图片|图像|示意图|架构图)|(?:图片|图像|示意图|架构图).{0,16}(?:显示|展示|嵌入|呈现)/.test(text);
-
-  if (codingIntent) {
-    include('pwd', 'glob', 'grep', 'read', 'write', 'edit', 'bash', 'git_status', 'git_pull', 'git_push', 'git_branch', 'file_audit', 'repo_security_audit');
-  }
-  // The subagent orchestration core (task/subagent_*) is appended by
-  // routeToolSurface after the intent slice and always retained by
-  // ToolProvisionSession.reconcile, so it is intentionally not selected here.
-  if (webIntent) include('web_search', 'web_fetch');
-  if (browserIntent) {
-    include('browser_use');
-    includePrefix('browser_');
-  }
-  if (computerIntent) include('computer_use');
-  if (terminalIntent) include('terminal_takeover', 'bash');
-  if (githubIntent) includePrefix('gh_');
-  if (sshIntent) include('ssh_workspace');
-  if (automationIntent) includePrefix('automation_');
-  if (memoryIntent) {
-    includePrefix('memory_lab_');
-    names.filter(name => name.startsWith('memory_lab_')).forEach(name => priority.add(name));
-  }
-  if (skillIntent) include('skill', 'skill_download');
-  else include('skill');
-  if (flowIntent) includePrefix('flow_');
-  if (planIntent) include('linked_plan');
-  if (historyDetailIntent) include('build_history_query');
-  if (imageDisplayIntent) include('image_display');
-
-  // An explicitly named tool is always retained, even when the surrounding
-  // wording does not match a task class.
-  for (const name of names) {
-    if (name && new RegExp(`(?:^|[^A-Za-z0-9_])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[^A-Za-z0-9_])`, 'i').test(lower)) {
-      explicit.add(name);
-      selected.add(name);
-    }
-  }
-  if (selected.size && !(selected.size === 1 && selected.has('skill'))) include('question');
-  return definitions
-    .map((definition, index) => ({ definition, name: names[index] || toolDefinitionName(definition), index }))
-    .filter(entry => selected.has(entry.name))
-    .sort((a, b) => {
-      const aRank = explicit.has(a.name) ? 0 : priority.has(a.name) ? 1 : 2;
-      const bRank = explicit.has(b.name) ? 0 : priority.has(b.name) ? 1 : 2;
-      return aRank - bRank || a.index - b.index;
-    })
-    .map(entry => entry.definition);
 }
 
 function toKernelTools(agent: Agent, definitions?: unknown[], provisioning?: ToolProvisionSession | null): KernelTool[] {
@@ -1950,8 +1825,7 @@ export const agentKernelRunnerInternals = {
   visualFallbackImageInput,
   computerUseVisionImageInput: visualFallbackImageInput,
   sanitizeVisualToolText,
-  routeToolSurface,
-  selectTaskToolDefinitions,
+  routeToolSurfaceV2,
   normalizePublicProviderError,
   ToolProvisionSession,
   toProviderToolDefinitions,

@@ -2477,7 +2477,8 @@ async function main() {
   assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'subagent.ts'), 'utf-8').includes('replaceContext') && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('subagentContextPersist'), 'Agent subagent context: compressed history and metadata persist back to the peer record');
   assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('this.notifyAgentKernelUserMessageStart(text, clientMessageId || undefined);') && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes("return this.queueActiveKernelMessage(prompt, 'followUp')") && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8').includes("runtime.pendingNextTurn.push({ message, queueMode: 'followUp' });"), 'Agent subagent result delivery: initial process boundaries acknowledge persisted inbox messages and conversation-owned routing appends one next turn without feedback loops');
   const kernelRunnerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8').replace(/\r\n/g, '\n');
-  assert(kernelRunnerSource.includes("include('pwd', 'glob', 'grep', 'read', 'write', 'edit', 'bash', 'git_status', 'git_pull', 'git_push', 'git_branch', 'file_audit', 'repo_security_audit');")
+  assert(kernelRunnerSource.includes('const selected = definitions')
+    && kernelRunnerSource.includes('SUBAGENT_CORE_TOOL_NAMES.has(name) && !selectedNames.has(name)')
     && kernelRunnerSource.includes("const SUBAGENT_CORE_TOOL_NAMES = new Set(['task', 'subagent_list', 'subagent_read', 'subagent_send', 'subagent_result', 'subagent_close']);")
     && kernelRunnerSource.includes('for (const name of SUBAGENT_CORE_TOOL_NAMES) {'),
   'Agent subagent tool surface: task/subagent_* stay in the preloaded surface unconditionally (mode-policy gated) without stealing intent-tool slots');
@@ -4833,7 +4834,7 @@ async function main() {
     };
   };
   globalThis.fetch = (async () => { throw new TypeError('fetch failed'); }) as typeof fetch;
-  const fallbackProvider = new LLMProvider('api-nebula', 'https://apinebula.com/v1', 'test-key', 'openai');
+  const fallbackProvider = new LLMProvider('api-nebula', 'https://apinebula.com/v1', 'test-key', 'openai', 'chat_stream', true);
   const fallbackText = await fallbackProvider.chat('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20);
   const fallbackTokens: StreamToken[] = [];
   for await (const tok of fallbackProvider.chatStreamWithTools('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20, [])) {
@@ -4863,7 +4864,7 @@ async function main() {
       ],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
-  const responsesProvider = new LLMProvider('api-nebula', 'https://apinebula.example/v1', 'test-key', 'openai');
+  const responsesProvider = new LLMProvider('api-nebula', 'https://apinebula.example/v1', 'test-key', 'openai', 'chat_stream', true);
   const responsesText = await responsesProvider.chat('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], 'system text', 0, 20);
   const responsesTokens: StreamToken[] = [];
   for await (const tok of responsesProvider.chatStreamWithTools(
@@ -4892,7 +4893,7 @@ async function main() {
     responsesBodies.push(JSON.parse(String(init?.body || '{}')));
     return new Response(JSON.stringify({ output_text: 'responses tool result ok' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
-  const responsesToolResultProvider = new LLMProvider('direct-responses-tool-result', 'https://responses.example/v1', 'test-key', 'openai', 'responses');
+  const responsesToolResultProvider = new LLMProvider('direct-responses-tool-result', 'https://responses.example/v1', 'test-key', 'openai', 'responses', true);
   await responsesToolResultProvider.chatStreamWithTools('gpt-5.4-mini', [
     { role: 'user', content: 'Use a tool' },
     { role: 'assistant', content: '', tool_calls: [{ id: 'call_prev', type: 'function', function: { name: 'write', arguments: '{"path":"README.md"}' } }] },
@@ -4922,7 +4923,7 @@ async function main() {
     directResponsesPaths.push(new URL(String(url)).pathname);
     return new Response(JSON.stringify({ output_text: 'direct responses ok' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
-  const directResponsesProvider = new LLMProvider('direct-responses', 'https://responses.example/v1', 'test-key', 'openai', 'responses');
+  const directResponsesProvider = new LLMProvider('direct-responses', 'https://responses.example/v1', 'test-key', 'openai', 'responses', true);
   const directResponsesText = await directResponsesProvider.chat('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20);
   const directResponsesTokens: StreamToken[] = [];
   for await (const tok of directResponsesProvider.chatStreamWithTools('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20, [])) directResponsesTokens.push(tok);
@@ -4983,7 +4984,7 @@ async function main() {
     directChatBodies.push(JSON.parse(String(init?.body || '{}')));
     return new Response(JSON.stringify({ choices: [{ message: { content: 'direct chat ok' } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }) as typeof fetch;
-  const directChatProvider = new LLMProvider('direct-chat', 'https://chat.example/v1', 'test-key', 'openai', 'chat');
+  const directChatProvider = new LLMProvider('direct-chat', 'https://chat.example/v1', 'test-key', 'openai', 'chat', true);
   const directChatTokens: StreamToken[] = [];
   for await (const tok of directChatProvider.chatStreamWithTools('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20, [])) directChatTokens.push(tok);
   globalThis.fetch = originalFetch;
@@ -5046,7 +5047,7 @@ async function main() {
     loopbackNodePath = new URL(url).pathname;
     return { status: 200, body: JSON.stringify({ choices: [{ message: { content: 'loopback chat ok' } }] }) };
   };
-  const loopbackProvider = new LLMProvider('loopback-chat', 'http://127.0.0.1:45678/v1', 'test-key', 'openai', 'chat');
+  const loopbackProvider = new LLMProvider('loopback-chat', 'http://127.0.0.1:45678/v1', 'test-key', 'openai', 'chat', true);
   const loopbackTokens: StreamToken[] = [];
   for await (const tok of loopbackProvider.chatStreamWithTools('local-model', [{ role: 'user', content: 'Hi' }], null, 0, 20, [])) loopbackTokens.push(tok);
   LLMProvider.nodeHttpTransport = null;
@@ -5085,7 +5086,7 @@ async function main() {
   assert(arrayChatText === 'array chat text' && legacyChatText === 'legacy completion text', 'LLMProvider Chat mode: parses content-part arrays and legacy choices text responses');
 
   globalThis.fetch = (async () => new Response('data: {"choices":[{"delta":{"content":[{"type":"text","text":"stream array text"}]}}]}\n\ndata: [DONE]\n\n', { status: 200, headers: { 'Content-Type': 'text/event-stream' } })) as typeof fetch;
-  const arrayStreamProvider = new LLMProvider('stream-array', 'https://chat.example/v1', 'test-key', 'openai', 'chat_stream');
+  const arrayStreamProvider = new LLMProvider('stream-array', 'https://chat.example/v1', 'test-key', 'openai', 'chat_stream', true);
   const arrayStreamTokens: StreamToken[] = [];
   for await (const tok of arrayStreamProvider.chatStreamWithTools('gpt-5.4-mini', [{ role: 'user', content: 'Hi' }], null, 0, 20, [])) arrayStreamTokens.push(tok);
   globalThis.fetch = originalFetch;

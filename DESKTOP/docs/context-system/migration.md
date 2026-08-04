@@ -84,10 +84,12 @@
 
 | 文件 | 删除内容 | 替代 |
 |---|---|---|
-| llm/provider.ts | openAIChatMessages/openAIHeaders/responsesBody/responsesInput/responsesTools/SSE 循环/extractChatCompletionText/extractResponsesText/normalizeOpenAIContent(移共享) | providers/* |
-| agentKernelRunner.ts | ToolProvisionSession/routeToolSurface/selectTaskToolDefinitions/refreshToolSurface 内联逻辑 | toolchain/* |
-| agent.ts | buildSystemPrompt 内联拼接(改走 orchestrator) | context/* |
-| 临时调试文件 | .tmp-*、debug-autowin*.cjs、temp-build-and-package.cmd 等 untracked 残留 | — |
+| llm/provider.ts | ✅ 已删 openAIResponsesWithTools/openAIChatWithToolsNodeFallback/extractResponsesReasoningSummaries + chatStreamWithTools 内联 SSE 分支(新 dispatch 全走 anthropicChatWithTools/githubModelsChatStreamWithTools/chatStreamWithToolsV2,其余 throw);保留项:openAIChatMessages(verify.ts:1369 双钉 + github 路径共用)/openAIHeaders/extractChatCompletionText/extractResponsesText/responsesBody/responsesInput/responsesTools(openAIResponsesChat 消费)/openAIResponsesChat/normalizeOpenAIContent(verify.ts:1369 钉)/normalizeAnthropicContent/extractTextValue(多处共用) | providers/* |
+| agentKernelRunner.ts | ✅ 已删 routeToolSurface/selectTaskToolDefinitions/ToolProvisionSession 残留;routeToolSurfaceV2 内联分支 | toolchain/* |
+| agent.ts | ✅ buildSystemPrompt 内联拼接改走 orchestrator(字节等价;base_tool_definitions 槽跳过) | context/* |
+| 临时调试文件 | ✅ 已删 .tmp-*、debug-autowin*.cjs、temp-build-and-package.cmd 等 untracked 残留 | — |
+
+> 注:llm/provider.ts 保留符号大多被生产路径(chat/chatStrictJson/probeStreamCompletion/generateImage/openAIResponsesChat/githubModelsChatStreamWithTools)共用,删除会破坏保留项;实际删除面以上表 ✅ 行为准。
 
 ## 3. 已知缺口与决策
 
@@ -123,10 +125,10 @@ node dist/tests/toolchainExposureV2Verify.js
 |---|---|---|
 | A 上下文组装 | ✅ | 等价接入,text 逐字节一致;verify.js 全绿 |
 | B 工具暴露链 | ✅ | B1 registry-seeder + B2 adaptiveToolExposureV1 flag 门控;toolSurfaceV2Verify/registrySeederV2Verify 全绿 |
-| C Provider | ✅ | chat-messages 共享提取;bridge 字节等价门禁(providerBridgeV2Verify 13 断言)全绿 |
+| C Provider | ✅ | chat-messages 共享提取;bridge 纯 V2 门禁(providerBridgeV2Verify 25 断言:请求序列化 + 精确 StreamToken 流 + 4xx 降级)全绿 |
 | D AgentRun | ✅ | 双写接入 begin/finish/resume/emitWorkEvent;agentRuntimeV2Verify(45)+guideWorkRunVerify+verify 全绿 |
-| E flags 翻转 | ⬜ | 各层完成后逐 flag 翻转 |
-| F 删除旧组件 | ⬜ | 每层迁移后删除该层被替代实现 |
+| E flags 翻转 | ✅ | 各层 flag 默认全 true;新测试全部显式置 true(verify.ts 7 处 + autoAgentIntegrationVerify 1 处);flags=false 走保留生产路径或显式 throw |
+| F 删除旧组件 | ✅ | provider.ts 旧 OpenAI 序列化 3 方法 + 内联 SSE 分支已删;agentKernelRunner 旧路由已删;agent.ts buildSystemPrompt 改走 orchestrator;全量门禁绿(见 §7) |
 
 ## 7. 压力测试(连续工作反馈)
 

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.2.6-blue">
+  <img alt="Development version" src="https://img.shields.io/badge/development-dev--0.3.0-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey">
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-Electron%20%2B%20TypeScript-2ea44f">
   <img alt="Status" src="https://img.shields.io/badge/status-development%20preview-orange">
@@ -48,7 +48,11 @@ The release gate covers DESKTOP, native TUI, CLI, GUI/TUI/CLI shared-backend str
 
 ## Download
 
-The latest prerelease is `dev-0.2.6`, with pause-aware Flow Stop/Esc (cooperative first stop into the paused takeover, force-stop on the second), draft persistence for unsent input, and the dev-0.2.5 SubAgent live-work overlay and TUI Agents view.
+The latest prerelease is `dev-0.3.0`, the context-system/Provider rework: every model request assembles its system prompt through the Context Orchestrator (fixed 18-section order, layered content hashes, byte-identical output), OpenAI-protocol streaming routes exclusively through the V2 provider adapters (the legacy inlined serialization was removed), and the removed-architecture cleanup landed across the Provider, toolchain, and Agent layers with the full release gate green.
+
+### dev-0.3.0
+
+Download packages from the [dev-0.3.0 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.3.0).
 
 ### dev-0.2.6
 

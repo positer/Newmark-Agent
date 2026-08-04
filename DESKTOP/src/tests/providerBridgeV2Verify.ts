@@ -1,10 +1,11 @@
 /**
- * dev-0.3.0 Layer C provider bridge verification.
+ * dev-0.3.0 Layer F provider bridge verification (pure V2).
  *
- * Proves the adapter-backed path (useProviderAdaptersV2) is byte-equivalent to
- * the legacy inlined chatStreamWithTools: the same request body hits the
- * server and the emitted StreamToken stream is identical, across chat_stream,
- * chat (non-streaming), responses, and the 4xx Chat -> Responses downgrade.
+ * The legacy inlined OpenAI streaming path was removed in dev-0.3.0: every
+ * OpenAI-protocol provider now routes through chatStreamWithToolsV2
+ * (useProviderAdaptersV2). This suite pins the V2 contract end-to-end:
+ * request serialization (URL, body shape, stream flag), the exact emitted
+ * StreamToken stream, and the 4xx Chat -> Responses downgrade.
  *
  * Run: npm run build && node dist/tests/providerBridgeV2Verify.js
  */
@@ -71,7 +72,7 @@ async function main(): Promise<void> {
   // chat_stream: reasoning_content + text + usage + tool call
   // -------------------------------------------------------------------------
   {
-    const chatServer = await startCaptureServer((_req, res, _body) => {
+    const chatServer = await startCaptureServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write('data: {"choices":[{"delta":{"reasoning_content":" step"}}]}\n\n');
       res.write('data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n');
@@ -83,14 +84,24 @@ async function main(): Promise<void> {
     });
     try {
       const base = `http://127.0.0.1:${chatServer.port}/v1`;
-      const legacy = new LLMProvider('eq-chat-stream', base, 'sk', 'openai', 'chat_stream', false);
-      const v2 = new LLMProvider('eq-chat-stream', base, 'sk', 'openai', 'chat_stream', true);
-      const legacyTokens = await collectTokens(legacy.chatStreamWithTools('gpt-5-mini', MESSAGES, SYSTEM, 0.2, 1024, [TOOL], new AbortController().signal, 'high'));
-      const v2Tokens = await collectTokens(v2.chatStreamWithTools('gpt-5-mini', MESSAGES, SYSTEM, 0.2, 1024, [TOOL], new AbortController().signal, 'high'));
-      check(chatServer.requests.length === 2, 'chat_stream: both paths hit the server');
-      check(chatServer.requests[0].body === chatServer.requests[1].body, 'chat_stream: request bodies byte-identical');
-      assert.deepStrictEqual(v2Tokens, legacyTokens, 'chat_stream: token streams identical');
-      check(true, 'chat_stream: token streams byte-identical');
+      const provider = new LLMProvider('eq-chat-stream', base, 'sk', 'openai', 'chat_stream', true);
+      const tokens = await collectTokens(provider.chatStreamWithTools('gpt-5-mini', MESSAGES, SYSTEM, 0.2, 1024, [TOOL], new AbortController().signal, 'high'));
+      check(chatServer.requests.length === 1, 'chat_stream: single request through V2 adapter');
+      check(chatServer.requests[0].url.endsWith('/v1/chat/completions'), 'chat_stream: hits /chat/completions');
+      const body = JSON.parse(chatServer.requests[0].body);
+      check(body.stream === true, 'chat_stream: body.stream === true');
+      check(body.model === 'gpt-5-mini', 'chat_stream: body.model');
+      check(body.max_tokens === 1024 && body.temperature === 0.2, 'chat_stream: max_tokens + temperature');
+      check(body.tool_choice === 'auto', 'chat_stream: tool_choice auto');
+      check(body.tools?.[0]?.function?.name === 'bash', 'chat_stream: tools serialized');
+      check(body.messages?.[0]?.role === 'system' && body.messages?.[0]?.content === SYSTEM, 'chat_stream: system message');
+      assert.deepStrictEqual(tokens, [
+        { type: 'text', text: 'Hello', reasoningContent: ' step' },
+        { type: 'text', text: ' world', reasoningContent: ' step' },
+        { type: 'usage', text: '', usage: { input: 5, output: 2, cacheRead: 0, cacheWrite: 0 } },
+        { type: 'tool_call', text: '', toolCall: { id: 'call-x', name: 'bash', arguments: '{"cmd":"pwd"}' }, reasoningContent: ' step' },
+      ]);
+      check(true, 'chat_stream: exact StreamToken stream');
     } finally {
       await chatServer.stop();
     }
@@ -100,7 +111,7 @@ async function main(): Promise<void> {
   // chat (non-streaming): usage + reasoning status + text + tool call
   // -------------------------------------------------------------------------
   {
-    const chatServer = await startCaptureServer((_req, res, _body) => {
+    const chatServer = await startCaptureServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         choices: [{
@@ -115,14 +126,19 @@ async function main(): Promise<void> {
     });
     try {
       const base = `http://127.0.0.1:${chatServer.port}/v1`;
-      const legacy = new LLMProvider('eq-chat', base, 'sk', 'openai', 'chat', false);
-      const v2 = new LLMProvider('eq-chat', base, 'sk', 'openai', 'chat', true);
-      const legacyTokens = await collectTokens(legacy.chatStreamWithTools('gpt-5-mini', MESSAGES, SYSTEM, 0.2, 1024, [TOOL], new AbortController().signal, 'high'));
-      const v2Tokens = await collectTokens(v2.chatStreamWithTools('gpt-5-mini', MESSAGES, SYSTEM, 0.2, 1024, [TOOL], new AbortController().signal, 'high'));
-      check(chatServer.requests.length === 2, 'chat: both paths hit the server');
-      check(chatServer.requests[0].body === chatServer.requests[1].body, 'chat: request bodies byte-identical');
-      assert.deepStrictEqual(v2Tokens, legacyTokens, 'chat: token streams identical');
-      check(true, 'chat: token streams byte-identical');
+      const provider = new LLMProvider('eq-chat', base, 'sk', 'openai', 'chat', true);
+      const tokens = await collectTokens(provider.chatStreamWithTools('gpt-5-mini', MESSAGES, SYSTEM, 0.2, 1024, [TOOL], new AbortController().signal, 'high'));
+      check(chatServer.requests.length === 1, 'chat: single request through V2 adapter');
+      check(chatServer.requests[0].url.endsWith('/v1/chat/completions'), 'chat: hits /chat/completions');
+      const body = JSON.parse(chatServer.requests[0].body);
+      check(body.stream === false, 'chat: body.stream === false (non-streaming)');
+      assert.deepStrictEqual(tokens, [
+        { type: 'usage', text: '', usage: { input: 5, output: 2, cacheRead: 0, cacheWrite: 0 } },
+        { type: 'status', text: '', reasoningContent: 'rc' },
+        { type: 'text', text: 'Hello', reasoningContent: 'rc' },
+        { type: 'tool_call', text: '', toolCall: { id: 'call-x', name: 'bash', arguments: '{"cmd":"pwd"}' } },
+      ]);
+      check(true, 'chat: exact StreamToken stream');
     } finally {
       await chatServer.stop();
     }
@@ -132,7 +148,7 @@ async function main(): Promise<void> {
   // responses: reasoning effort (default medium) + text + tool call + usage
   // -------------------------------------------------------------------------
   {
-    const responsesServer = await startCaptureServer((_req, res, _body) => {
+    const responsesServer = await startCaptureServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write('event: response.output_text.delta\ndata: {"delta":"World"}\n\n');
       res.write('event: response.output_item.added\ndata: {"item":{"id":"fc-1","type":"function_call","name":"bash","arguments":""}}\n\n');
@@ -143,14 +159,22 @@ async function main(): Promise<void> {
     });
     try {
       const base = `http://127.0.0.1:${responsesServer.port}/v1`;
-      const legacy = new LLMProvider('eq-responses', base, 'sk', 'openai', 'responses', false);
-      const v2 = new LLMProvider('eq-responses', base, 'sk', 'openai', 'responses', true);
-      const legacyTokens = await collectTokens(legacy.chatStreamWithTools('gpt-5-mini', MESSAGES, SYSTEM, 0.2, 1024, [TOOL], new AbortController().signal));
-      const v2Tokens = await collectTokens(v2.chatStreamWithTools('gpt-5-mini', MESSAGES, SYSTEM, 0.2, 1024, [TOOL], new AbortController().signal));
-      check(responsesServer.requests.length === 2, 'responses: both paths hit the server');
-      check(responsesServer.requests[0].body === responsesServer.requests[1].body, 'responses: request bodies byte-identical');
-      assert.deepStrictEqual(v2Tokens, legacyTokens, 'responses: token streams identical');
-      check(true, 'responses: token streams byte-identical');
+      const provider = new LLMProvider('eq-responses', base, 'sk', 'openai', 'responses', true);
+      const tokens = await collectTokens(provider.chatStreamWithTools('gpt-5-mini', MESSAGES, SYSTEM, 0.2, 1024, [TOOL], new AbortController().signal));
+      check(responsesServer.requests.length === 1, 'responses: single request through V2 adapter');
+      check(responsesServer.requests[0].url.endsWith('/v1/responses'), 'responses: hits /responses');
+      const body = JSON.parse(responsesServer.requests[0].body);
+      check(body.stream === true, 'responses: body.stream === true');
+      check(body.reasoning?.effort === 'medium' && body.reasoning?.summary === 'auto', 'responses: default reasoning effort medium');
+      check(body.instructions === SYSTEM, 'responses: system prompt as instructions');
+      check(body.input?.[0]?.role === 'user' && body.input?.[0]?.content === 'run pwd', 'responses: input messages');
+      check(body.tools?.[0]?.type === 'function' && body.tools?.[0]?.name === 'bash', 'responses: tools serialized');
+      assert.deepStrictEqual(tokens, [
+        { type: 'text', text: 'World' },
+        { type: 'tool_call', text: '', toolCall: { id: 'fc-1', name: 'bash', arguments: '{"cmd":"ls"}' } },
+        { type: 'usage', text: '', usage: { input: 8, output: 3, cacheRead: 0, cacheWrite: 0 } },
+      ]);
+      check(true, 'responses: exact StreamToken stream');
     } finally {
       await responsesServer.stop();
     }
@@ -160,7 +184,7 @@ async function main(): Promise<void> {
   // 4xx Chat -> Responses downgrade from chat_stream
   // -------------------------------------------------------------------------
   {
-    const downgradeServer = await startCaptureServer((req, res, _body) => {
+    const downgradeServer = await startCaptureServer((req, res) => {
       if ((req.url || '').includes('/chat/completions')) {
         res.writeHead(400, { 'Content-Type': 'text/plain' });
         res.end('Error: Chat Completions is not supported for this model, please use the Responses API.');
@@ -173,17 +197,20 @@ async function main(): Promise<void> {
     });
     try {
       const base = `http://127.0.0.1:${downgradeServer.port}/v1`;
-      const legacy = new LLMProvider('eq-downgrade', base, 'sk', 'openai', 'chat_stream', false);
-      const v2 = new LLMProvider('eq-downgrade', base, 'sk', 'openai', 'chat_stream', true);
-      const legacyTokens = await collectTokens(legacy.chatStreamWithTools('gpt-5-mini', MESSAGES, SYSTEM, 0.2, 1024, [TOOL], new AbortController().signal, 'high'));
-      const v2Tokens = await collectTokens(v2.chatStreamWithTools('gpt-5-mini', MESSAGES, SYSTEM, 0.2, 1024, [TOOL], new AbortController().signal, 'high'));
-      const chatBodies = downgradeServer.requests.filter(r => r.url.includes('/chat/completions'));
-      const responsesBodies = downgradeServer.requests.filter(r => r.url.includes('/responses'));
-      check(chatBodies.length === 2 && responsesBodies.length === 2 && downgradeServer.requests.length === 4, 'downgrade: chat + responses requests from both paths');
-      check(chatBodies[0].body === chatBodies[1].body, 'downgrade: /chat/completions bodies byte-identical');
-      check(responsesBodies[0].body === responsesBodies[1].body, 'downgrade: /responses bodies byte-identical');
-      assert.deepStrictEqual(v2Tokens, legacyTokens, 'downgrade: token streams identical');
-      check(true, 'downgrade: token streams byte-identical');
+      const provider = new LLMProvider('eq-downgrade', base, 'sk', 'openai', 'chat_stream', true);
+      const tokens = await collectTokens(provider.chatStreamWithTools('gpt-5-mini', MESSAGES, SYSTEM, 0.2, 1024, [TOOL], new AbortController().signal, 'high'));
+      const chatRequests = downgradeServer.requests.filter(r => r.url.includes('/chat/completions'));
+      const responsesRequests = downgradeServer.requests.filter(r => r.url.includes('/responses'));
+      check(chatRequests.length === 1 && responsesRequests.length === 1, 'downgrade: chat 400 then responses retry');
+      check(JSON.parse(chatRequests[0].body).stream === true, 'downgrade: chat request streaming');
+      const responsesBody = JSON.parse(responsesRequests[0].body);
+      check(responsesBody.stream === true, 'downgrade: responses retry streaming');
+      check(responsesBody.reasoning?.effort === 'high', 'downgrade: reasoning tier propagated on downgrade');
+      assert.deepStrictEqual(tokens, [
+        { type: 'text', text: 'Downgraded' },
+        { type: 'usage', text: '', usage: { input: 4, output: 1, cacheRead: 0, cacheWrite: 0 } },
+      ]);
+      check(true, 'downgrade: exact StreamToken stream');
     } finally {
       await downgradeServer.stop();
     }

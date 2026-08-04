@@ -6677,18 +6677,39 @@ export class Agent {
     }
 
     parts.push(this.buildModePrompt());
-    const value = parts.join('\n\n');
+    const value = this.contextV2.orchestrator.assemble({
+      generalPrompt: parts[0] ?? '',
+      responseProtocol: parts[1] ?? '',
+      baseToolDefinitions: undefined,
+      workspaceAgentProfile: parts[2] ?? '',
+      agentRoleAndPermissions: parts[3] ?? '',
+      capabilityBoundarySummary: parts[4] ?? '',
+      activeToolsetManifest: parts[5] ?? '',
+      buildBlockStartupInput: parts[6] ?? '',
+      buildBlockMetadata: parts[7] ?? '',
+      linkedPlan: parts[8] ?? '',
+      activeTasks: parts[9] ?? '',
+      currentWorkSet: parts[10] ?? '',
+      branchLogSummary: '',
+      retrievedOldBlockSummary: '',
+      buildHistoryCheckpoint: '',
+      checkpointDelta: '',
+      currentToolResults: '',
+      currentUserInput: '',
+    }).text;
     this.systemPromptCache = { identity, value };
     return value;
   }
 
   /**
    * dev-0.3.0: assemble the model-request system prompt through the Context
-   * Orchestrator, the single assembly point for every model request. The
-   * current output is byte-identical to the legacy join of buildSystemPrompt()
-   * plus the tool surface notice; later iterations split content into the
-   * fixed 18 sections. Stable sections (general_prompt .. active_toolset_manifest)
-   * form the cacheable prefix; empty sections are skipped.
+   * Orchestrator, the single assembly point for every model request. No inline
+   * prompt concatenation remains in agent.ts: buildSystemPrompt() itself
+   * routes its section content through the orchestrator (byte-identical to the
+   * legacy parts.join), and this method appends the tool surface notice.
+   * Later iterations split content into the fixed 18 sections with exact
+   * semantics; for now the legacy sections occupy the first string slots in
+   * their original order and empty sections are skipped.
    */
   assembleContextV2(toolSurfaceNotice: string): AssembledContext {
     return this.contextV2.orchestrator.assemble({

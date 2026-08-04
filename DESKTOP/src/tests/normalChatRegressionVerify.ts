@@ -5,6 +5,7 @@ import * as path from 'path';
 import { Agent } from '../core/agent';
 import { classifyRouteFailure } from '../core/autoRouter';
 import { agentKernelRunnerInternals } from '../core/agentKernelRunner';
+import { seedToolchainFromDefinitions } from '../toolchain';
 import type { StreamToken } from '../core/types';
 
 function fixtureModel(name: string, options: { vision?: boolean; imageOutput?: boolean } = {}) {
@@ -220,8 +221,12 @@ async function main(): Promise<void> {
     const historyTool = (agent.tools.definitions('build') as Array<any>).find(tool => tool.function?.name === 'build_history_query');
     assert.ok(historyTool && historyTool.function.description.includes('read-only tool'),
       'history detail query is provider-visible as an explicitly read-only Build Block tool');
-    const detailedRoute = agentKernelRunnerInternals.selectTaskToolDefinitions('上个任务具体做了什么？', agent.subagentToolDefinitions(agent.tools.definitions('build')));
-    assert.ok(detailedRoute.some((tool: any) => tool.function?.name === 'build_history_query'),
+    const buildCatalog = agent.subagentToolDefinitions(agent.tools.definitions('build'));
+    const buildToolchain = seedToolchainFromDefinitions(buildCatalog, { namespace: 'newmark', version: '1.0.0' }).core;
+    const detailedRoute = agentKernelRunnerInternals.routeToolSurfaceV2(
+      { shouldExposeToolInterface: () => true, runtimeActorId: 'regression-actor', activeConversationId: 'build', history: [] } as unknown as Agent,
+      buildCatalog, buildToolchain, '上个任务具体做了什么？');
+    assert.ok(detailedRoute.definitions.some((tool: any) => tool.function?.name === 'build_history_query'),
       'history-detail intent preloads the Build history query schema');
     let historyQueryRound = 0;
     let historyQueryToolResult = '';

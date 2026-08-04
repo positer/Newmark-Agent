@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { Agent } from '../core/agent';
 import { agentKernelRunnerInternals } from '../core/agentKernelRunner';
+import { seedToolchainFromDefinitions } from '../toolchain';
 import type { StreamToken } from '../core/types';
 
 type ToolDefinition = {
@@ -164,13 +165,20 @@ async function main(): Promise<void> {
     assert.deepEqual(capacitySession.provision({ names: [names[16]] }).deferred, [names[16]],
       'one run can expose at most sixteen additional full schemas');
 
-    agent.history.push({ role: 'user', content: 'Fix the repository and then use git_push.' });
-    const routedSurface = agentKernelRunnerInternals.routeToolSurface(agent, catalog);
+    agent.history.push({ role: 'user', content: 'Fix the repository and then use git_status.' });
+    const toolchainCore = seedToolchainFromDefinitions(catalog, { namespace: 'newmark', version: '1.0.0' }).core;
+    const routedSurface = agentKernelRunnerInternals.routeToolSurfaceV2(agent, catalog, toolchainCore, 'Fix the repository and then use git_status.');
     agent.history.pop();
     assert.ok(routedSurface.definitions.length <= agentKernelRunnerInternals.INITIAL_TOOL_SCHEMA_LIMIT + coreNames.length
-      && routedSurface.definitions.some(definition => toolName(definition) === 'git_push')
-      && toolName(routedSurface.definitions[0]) === 'git_push',
+      && routedSurface.definitions.some(definition => toolName(definition) === 'git_status')
+      && toolName(routedSurface.definitions[0]) === 'git_status',
     'initial preload is capped (intent slice plus the always-available subagent core) and prioritizes an explicitly named tool');
+
+    agent.history.push({ role: 'user', content: 'Fix the repository and then use git_push.' });
+    const destructiveSurface = agentKernelRunnerInternals.routeToolSurfaceV2(agent, catalog, toolchainCore, 'Fix the repository and then use git_push.');
+    agent.history.pop();
+    assert.ok(!destructiveSurface.definitions.some(definition => toolName(definition) === 'git_push'),
+      'destructive tools stay provision-only under the v2 risk gate even when explicitly named');
 
     agent.setMode('plan');
     const planCatalog = agent.subagentToolDefinitions(agent.tools.definitions('plan')) as ToolDefinition[];

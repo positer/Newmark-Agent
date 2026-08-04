@@ -709,20 +709,6 @@ export class LLMProvider {
     return chunks.join('') || this.extractChatCompletionText(json);
   }
 
-  private extractResponsesReasoningSummaries(json: Record<string, unknown>): string[] {
-    const summaries: string[] = [];
-    for (const itemRaw of Array.isArray(json.output) ? json.output : []) {
-      const item = itemRaw as Record<string, unknown>;
-      if (item.type !== 'reasoning') continue;
-      for (const partRaw of Array.isArray(item.summary) ? item.summary : []) {
-        const part = partRaw as Record<string, unknown>;
-        const text = this.extractTextValue(part.text || part.summary_text || part.content);
-        if (text && !summaries.includes(text)) summaries.push(text);
-      }
-    }
-    return summaries;
-  }
-
   private normalizeResponsesPayload(payload: unknown): Record<string, unknown> {
     // Some OpenAI-compatible gateways wrap the standard Responses object in a
     // single-element array. Normalize that transport quirk once so plain chat
@@ -732,169 +718,6 @@ export class LLMProvider {
     return current && typeof current === 'object' && !Array.isArray(current)
       ? current as Record<string, unknown>
       : {};
-  }
-
-  private async *openAIResponsesWithTools(
-    model: string,
-    messages: Array<Record<string, unknown>>,
-    systemPrompt: string | null,
-    temperature: number,
-    maxTokens: number,
-    tools: unknown[],
-    signal?: AbortSignal,
-    reasoningTier?: string,
-  ): AsyncGenerator<StreamToken> {
-    const abort = new AbortController();
-    const forwardAbort = () => abort.abort(signal?.reason);
-    if (signal?.aborted) forwardAbort();
-    else signal?.addEventListener('abort', forwardAbort, { once: true });
-    const timeout = setTimeout(() => abort.abort(), 120000);
-    const body = { ...this.responsesBody(model, messages, systemPrompt, temperature, maxTokens, tools, reasoningTier), stream: true };
-    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-    let response: Response;
-    try {
-      response = await fetch(`${this.cleanBaseUrl()}/responses`, {
-        method: 'POST',
-        headers: { ...this.openAIHeaders(), Accept: 'text/event-stream' },
-        body: JSON.stringify(body),
-        signal: abort.signal,
-      });
-    } catch (error) {
-      clearTimeout(timeout);
-      signal?.removeEventListener('abort', forwardAbort);
-      if (signal?.aborted) throw abortFailure(signal);
-      if (!this.shouldUseNodeHttpFallback(error)) throw error;
-      const fallback = await this.postJsonWithFetchFallback(
-        `${this.cleanBaseUrl()}/responses`,
-        this.openAIHeaders(),
-        { ...body, stream: false },
-        120000,
-        signal,
-      );
-      if (!fallback.ok) {
-        yield { type: 'text', text: this.llmErrorText(fallback, await fallback.text()) };
-        return;
-      }
-      const json = this.normalizeResponsesPayload(await fallback.json());
-      yield { type: 'usage', text: '', usage: extractProviderUsage(json) };
-      for (const summary of this.extractResponsesReasoningSummaries(json)) yield { type: 'status', text: summary };
-      const text = this.extractResponsesText(json);
-      if (text) yield { type: 'text', text };
-      for (const itemRaw of Array.isArray(json.output) ? json.output : []) {
-        const item = itemRaw as Record<string, unknown>;
-        if (item.type === 'function_call') yield { type: 'tool_call', text: '', toolCall: { id: String(item.call_id || item.id || ''), name: String(item.name || ''), arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments || {}) } };
-      }
-      return;
-    }
-
-    try {
-    if (!response.ok) {
-      const err = await response.text();
-      yield { type: 'text', text: this.llmErrorText(response, err) };
-      return;
-    }
-      const contentType = response.headers.get('content-type') || '';
-      if (!/text\/event-stream/i.test(contentType)) {
-        const json = this.normalizeResponsesPayload(await response.json());
-        yield { type: 'usage', text: '', usage: extractProviderUsage(json) };
-        for (const summary of this.extractResponsesReasoningSummaries(json)) yield { type: 'status', text: summary };
-        const text = this.extractResponsesText(json);
-        let emitted = false;
-        if (text) { emitted = true; yield { type: 'text', text }; }
-        for (const itemRaw of Array.isArray(json.output) ? json.output : []) {
-          const item = itemRaw as Record<string, unknown>;
-          if (item.type !== 'function_call') continue;
-          emitted = true;
-          yield { type: 'tool_call', text: '', toolCall: { id: String(item.call_id || item.id || ''), name: String(item.name || ''), arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments || {}) } };
-        }
-        if (!emitted && this.contentPolicyBlocked(json)) yield { type: 'text', text: '[Error] Content policy refusal (content_filter).' };
-        return;
-      }
-
-      reader = response.body?.getReader() ?? null;
-      if (!reader) {
-        yield { type: 'text', text: '[Error] No response body' };
-        return;
-      }
-      const decoder = new TextDecoder();
-      const calls = new Map<string, { id: string; name: string; arguments: string; emitted: boolean }>();
-      const reasoningSummaries = new Map<string, string>();
-      let buffer = '';
-      let emittedContent = false;
-      let completed = false;
-      let streamError = '';
-
-      while (true) {
-        if (signal?.aborted) throw abortFailure(signal);
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
-        const blocks = buffer.split(/\n\n+/);
-        buffer = blocks.pop() || '';
-        for (const block of blocks) {
-          for (const event of parseProviderSse(block + '\n\n')) {
-            if (event.data === '[DONE]') continue;
-            let payload: Record<string, any>;
-            try { payload = JSON.parse(event.data) as Record<string, any>; } catch { continue; }
-            const eventType = String(event.event || payload.type || '');
-            if (eventType === 'response.reasoning_summary_text.delta') {
-              const key = `${String(payload.item_id || '')}:${String(payload.summary_index || 0)}`;
-              reasoningSummaries.set(key, (reasoningSummaries.get(key) || '') + this.extractTextValue(payload.delta));
-              continue;
-            }
-            if (eventType === 'response.reasoning_summary_text.done') {
-              const key = `${String(payload.item_id || '')}:${String(payload.summary_index || 0)}`;
-              const summary = this.extractTextValue(payload.text) || reasoningSummaries.get(key) || '';
-              reasoningSummaries.delete(key);
-              if (summary) { emittedContent = true; yield { type: 'status', text: summary }; }
-              continue;
-            }
-            if (eventType === 'response.output_text.delta') {
-              const delta = this.extractTextValue(payload.delta);
-              if (delta) { emittedContent = true; yield { type: 'text', text: delta }; }
-              continue;
-            }
-            if (eventType === 'response.output_item.added' && payload.item?.type === 'function_call') {
-              const key = String(payload.item.id || payload.item.call_id || payload.output_index || calls.size);
-              calls.set(key, { id: String(payload.item.call_id || payload.item.id || key), name: String(payload.item.name || ''), arguments: String(payload.item.arguments || ''), emitted: false });
-              continue;
-            }
-            if (eventType === 'response.function_call_arguments.delta') {
-              const key = String(payload.item_id || payload.call_id || payload.output_index || '');
-              const call = calls.get(key) || { id: String(payload.call_id || key), name: String(payload.name || ''), arguments: '', emitted: false };
-              call.arguments += String(payload.delta || '');
-              calls.set(key, call);
-              continue;
-            }
-            if (eventType === 'response.output_item.done' && payload.item?.type === 'function_call') {
-              const key = String(payload.item.id || payload.item.call_id || payload.output_index || '');
-              const call = calls.get(key) || { id: String(payload.item.call_id || payload.item.id || key), name: String(payload.item.name || ''), arguments: '', emitted: false };
-              call.id = String(payload.item.call_id || call.id);
-              call.name = String(payload.item.name || call.name);
-              call.arguments = typeof payload.item.arguments === 'string' ? payload.item.arguments : call.arguments;
-              if (!call.emitted) { call.emitted = true; yield { type: 'tool_call', text: '', toolCall: { id: call.id, name: call.name, arguments: call.arguments } }; }
-              calls.set(key, call);
-              continue;
-            }
-            if (eventType === 'response.completed') {
-              completed = true;
-              yield { type: 'usage', text: '', usage: extractProviderUsage(payload.response || payload) };
-              continue;
-            }
-            if (eventType === 'response.failed' || eventType === 'response.incomplete' || eventType === 'error') {
-              streamError = this.extractTextValue(payload.error?.message || payload.response?.error?.message || payload.message) || eventType;
-            }
-          }
-        }
-      }
-      if (streamError) yield { type: 'text', text: `[LLM Error] ${streamError}` };
-      else if (!completed) yield { type: 'text', text: '[LLM Error] Responses stream ended before response.completed.' };
-      else if (!emittedContent && calls.size === 0) yield { type: 'text', text: '[Error] Empty Responses stream.' };
-    } finally {
-      reader?.releaseLock();
-      clearTimeout(timeout);
-      signal?.removeEventListener('abort', forwardAbort);
-    }
   }
 
   private async openAIResponsesChat(
@@ -1274,16 +1097,34 @@ export class LLMProvider {
       yield* this.anthropicChatWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal);
       return;
     }
-    if (this.useProviderAdaptersV2 && this.protocol() === 'openai') {
+    if (this.protocol() === 'github_models') {
+      yield* this.githubModelsChatStreamWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal);
+      return;
+    }
+    if (this.useProviderAdaptersV2) {
       yield* this.chatStreamWithToolsV2(model, messages, systemPrompt, temperature, maxTokens, tools, signal, reasoningTier);
       return;
     }
+    throw new Error('LLMProvider legacy OpenAI streaming was removed in dev-0.3.0: enable provider_adapters_v2 (useProviderAdaptersV2).');
+  }
 
-    const isGitHubModels = this.protocol() === 'github_models';
-    const url = isGitHubModels
-      ? this.githubModelsUrl('/inference/chat/completions')
-      : `${this.cleanBaseUrl()}/chat/completions`;
-    const body = {
+  /**
+   * GitHub Models streaming path. Preserved as a dedicated implementation
+   * because the provider adapters (V2) do not serialize the GitHub Models
+   * inference URL or its X-GitHub-Api-Version headers. OpenAI protocol
+   * providers route exclusively through chatStreamWithToolsV2.
+   */
+  private async *githubModelsChatStreamWithTools(
+    model: string,
+    messages: Array<Record<string, unknown>>,
+    systemPrompt: string | null,
+    temperature: number,
+    maxTokens: number,
+    tools: unknown[],
+    signal?: AbortSignal,
+  ): AsyncGenerator<StreamToken> {
+    const url = this.githubModelsUrl('/inference/chat/completions');
+    const body: Record<string, unknown> = {
       model,
       messages: [
         ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
@@ -1295,17 +1136,6 @@ export class LLMProvider {
       tool_choice: 'auto',
       stream: true,
     };
-
-    const mode = this.openAITransportMode();
-    if (!isGitHubModels && mode === 'responses') {
-      yield* this.openAIResponsesWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal, reasoningTier);
-      return;
-    }
-
-    if (mode === 'chat') {
-      yield* this.openAIChatWithToolsNodeFallback(url, body, signal);
-      return;
-    }
 
     const abort = new AbortController();
     const forwardAbort = () => abort.abort(signal?.reason);
@@ -1327,17 +1157,12 @@ export class LLMProvider {
         if (!this.shouldUseNodeHttpFallback(e)) throw e;
         clearTimeout(timeout);
         if (signal?.aborted) throw abortFailure(signal);
-        yield* this.openAIChatWithToolsNodeFallback(url, body, signal);
+        yield* this.githubModelsChatNonStreaming(url, body, signal);
         return;
       }
 
       if (!response.ok) {
         const err = await response.text();
-        if (this.shouldUseResponsesFallback(response.status, err)) {
-          clearTimeout(timeout);
-          yield* this.openAIResponsesWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal, reasoningTier);
-          return;
-        }
         yield { type: 'text', text: this.llmErrorText(response, err) };
         return;
       }
@@ -1418,39 +1243,27 @@ export class LLMProvider {
     }
   }
 
-  private async *openAIChatWithToolsNodeFallback(
+  /**
+   * GitHub Models non-streaming fallback used when the streaming fetch fails
+   * and the node-http transport is available. Mirrors the legacy chat-tools
+   * node fallback; the responses downgrade is intentionally not applied for
+   * GitHub Models (its inference endpoint is chat-completions only).
+   */
+  private async *githubModelsChatNonStreaming(
     url: string,
     streamingBody: Record<string, unknown>,
     signal?: AbortSignal,
   ): AsyncGenerator<StreamToken> {
     const body: Record<string, unknown> = { ...streamingBody, stream: false };
-    this.transportDiagnostic('chat-tools:start');
     const response = await this.postJsonWithFetchFallback(url, this.openAIHeaders(), body, 120000, signal);
-    this.transportDiagnostic('chat-tools:headers', `status=${response.status}`);
     if (!response.ok) {
       const err = await response.text();
-      if (this.shouldUseResponsesFallback(response.status, err)) {
-        const bodyMessages = Array.isArray(body.messages) ? body.messages as Array<Record<string, unknown>> : [];
-        const systemMessage = bodyMessages[0]?.role === 'system' ? bodyMessages[0] : null;
-        yield* this.openAIResponsesWithTools(
-          String(body.model || ''),
-          bodyMessages.filter(m => m.role !== 'system'),
-          systemMessage ? String(systemMessage.content || '') : null,
-          Number(body.temperature || 0),
-          Number(body.max_tokens || 0),
-          Array.isArray(body.tools) ? body.tools : [],
-          signal,
-          String(body.reasoning_effort || ''),
-        );
-        return;
-      }
       yield { type: 'text', text: this.llmErrorText(response, err) };
       return;
     }
     const json = await response.json();
     yield { type: 'usage', text: '', usage: extractProviderUsage(json) };
-    this.transportDiagnostic('chat-tools:parsed', `tools=${Array.isArray(json?.choices?.[0]?.message?.tool_calls) ? json.choices[0].message.tool_calls.length : 0}`);
-    const choice = json.choices?.[0];
+    const choice = json?.choices?.[0];
     const message = choice?.message || {};
     if (message.reasoning_content) {
       yield { type: 'status', text: '', reasoningContent: String(message.reasoning_content) };
@@ -1460,7 +1273,6 @@ export class LLMProvider {
       yield { type: 'text', text: messageText, reasoningContent: message.reasoning_content ? String(message.reasoning_content) : undefined };
     }
     for (const tc of message.tool_calls || []) {
-      this.transportDiagnostic('chat-tools:yield', `name=${String(tc.function?.name || '').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80) || 'tool'}`);
       yield {
         type: 'tool_call',
         text: '',
@@ -1470,7 +1282,6 @@ export class LLMProvider {
           arguments: String(tc.function?.arguments || '{}'),
         },
       };
-      this.transportDiagnostic('chat-tools:yield-returned');
     }
     if (!messageText && !(message.tool_calls || []).length && this.contentPolicyBlocked(json)) {
       yield { type: 'text', text: '[Error] Content policy refusal (content_filter).' };

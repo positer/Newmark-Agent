@@ -5,6 +5,7 @@ import * as path from 'path';
 import { Agent } from '../core/agent';
 import { agentKernelRunnerInternals, toolResultObjectiveOutcome } from '../core/agentKernelRunner';
 import { LLMProvider } from '../llm/provider';
+import { seedToolchainFromDefinitions } from '../toolchain';
 
 let assertions = 0;
 function ok(value: unknown, message: string): void {
@@ -64,7 +65,7 @@ async function main(): Promise<void> {
       && splitAgent.lastRouteDecision?.taskClasses.length === 1
       && splitAgent.lastRouteDecision.taskClasses[0] === 'chat',
     'ordinary chat remains taskClass=chat and can select a Standard model without verified tool_use');
-    const noToolSurface = agentKernelRunnerInternals.routeToolSurface(splitAgent, [{ name: 'read', parameters: { type: 'object' } }]);
+    const noToolSurface = agentKernelRunnerInternals.routeToolSurfaceV2(splitAgent, [{ name: 'read', parameters: { type: 'object' } }], null, '');
     ok(noToolSurface.definitions.length === 0
       && noToolSurface.systemPromptNotice.includes('No tool interface is available for this turn'),
     'Auto chat routes without verified tool_use send no tool schemas and explicitly disclose the no-tool turn');
@@ -77,9 +78,9 @@ async function main(): Promise<void> {
         && candidate.reasons.some(reason => reason.includes('capability:tool_use'))),
     'an explicit tool request hard-filters candidates without verified tool_use');
     splitAgent.history.push({ role: 'user', content: 'Call a tool to inspect the workspace' });
-    const toolSurface = agentKernelRunnerInternals.routeToolSurface(splitAgent, [{ name: 'read', parameters: { type: 'object' } }]);
+    const toolSurface = agentKernelRunnerInternals.routeToolSurfaceV2(splitAgent, [{ name: 'read', parameters: { type: 'object' } }], null, 'Call a tool to inspect the workspace');
     ok(toolSurface.definitions.length === 1 && !toolSurface.systemPromptNotice,
-      'a tool-capable Auto route preloads the task-relevant schema');
+      'a tool-capable Auto route preloads the full available surface without a planner registry');
     splitAgent.history.pop();
 
     splitAgent.resetAutoRoute();
@@ -89,7 +90,8 @@ async function main(): Promise<void> {
     'actionable coding tasks require a verified tool interface while retaining coding-domain quality');
 
     splitAgent.setModel('chat-only');
-    const fixedCompatibilitySurface = agentKernelRunnerInternals.routeToolSurface(splitAgent, [{ name: 'read', parameters: { type: 'object' } }]);
+    const readToolchain = seedToolchainFromDefinitions([{ name: 'read', parameters: { type: 'object' } }], { namespace: 'newmark', version: '1.0.0' }).core;
+    const fixedCompatibilitySurface = agentKernelRunnerInternals.routeToolSurfaceV2(splitAgent, [{ name: 'read', parameters: { type: 'object' } }], readToolchain, '');
     ok(fixedCompatibilitySurface.definitions.length === 0
       && fixedCompatibilitySurface.systemPromptNotice.includes('tool_provision'),
     'fixed model selections also start from the on-demand broker instead of the legacy full schema surface');
@@ -256,7 +258,7 @@ async function main(): Promise<void> {
     globalThis.fetch = (async () => new Response(JSON.stringify({
       choices: [{ finish_reason: 'content_filter', message: { role: 'assistant', content: '' } }],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
-    const provider = new LLMProvider('Policy Provider', 'https://policy-provider.invalid/v1', 'test-key', 'openai', 'chat');
+    const provider = new LLMProvider('Policy Provider', 'https://policy-provider.invalid/v1', 'test-key', 'openai', 'chat', true);
     const tokens: string[] = [];
     for await (const token of provider.chatStreamWithTools('policy-model', [{ role: 'user', content: 'test' }], '', 0, 16, [])) {
       if (token.text) tokens.push(token.text);

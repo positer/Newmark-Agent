@@ -54,6 +54,13 @@ The latest prerelease is `dev-0.3.0`, the context-system/Provider rework: every 
 
 Download packages from the [dev-0.3.0 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.3.0).
 
+| Package | Platform | SHA-256 |
+| --- | --- | --- |
+| `Newmark-Agent-0.3.0-x64.msi` | Windows x64 installer with GUI and global GUI/TUI launcher | `7F2ED159B4877830F20FA58A1E86308BF44C71E1EDC801DB6FB60233C2A10CC2` |
+| `Newmark-Agent-0.3.0-win-unpacked-x64.zip` | Windows x64 portable | `5F35463BF3B31E8BA41B42146E42C81D5C004B7F4B9C3269450E9A87BA7F9DCB` |
+
+The `dev-0.3.0` source is the context-system/Provider rework. Every model request now assembles its system prompt through the Context Orchestrator — a fixed 18-section order with layered content hashes, byte-identical output, and no inline prompt concatenation left in the Agent layer. OpenAI-protocol streaming routes exclusively through the V2 provider adapters: the legacy inlined serialization (`openAIResponsesWithTools`, node fallback, responses-summary extraction, and the inline SSE branch) was removed, replaced by an explicit dispatch (Anthropic / GitHub Models / adapters-V2 / hard error) with a dedicated GitHub Models SSE path retained for the GitHub inference URL. The removed-architecture cleanup also deleted the legacy tool-surface router and moved `buildSystemPrompt` onto the orchestrator. Full release gate green: verify 1410 assertions, context-system stress 1461, provider bridge 25, tool provisioning 64/64, guide insertion stress 40, TUI 53, SSH/WSL PTY stress, CLI contract 32+30, and GUI/TUI/CLI shared-backend stress.
+
 ### dev-0.2.6
 
 Download packages from the [dev-0.2.6 release](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.2.6).

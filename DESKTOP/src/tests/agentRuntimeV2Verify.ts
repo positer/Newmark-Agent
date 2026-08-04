@@ -8,6 +8,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { AgentRunService, recoverRunningAgentRuns } from '../agent-runtime';
 import { SubAgentContextService, SubAgentCeiling } from '../subagent-runtime';
+import { Agent } from '../core/agent';
 
 function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-agent-runtime-v2-'));
@@ -187,6 +188,59 @@ async function main(): Promise<void> {
     check(subAgent.verifyImmutable('sub-1') === true, 'appending deltas does not mutate the immutable package');
     const contextText = subAgent.buildContextText('sub-1');
     check(contextText.includes('SubAgent Context Package') && contextText.includes('second observation'), 'context text combines package + deltas');
+
+    // -----------------------------------------------------------------------
+    // Layer D dual-write: Agent begin/finish/resume sync AgentRunService
+    // -----------------------------------------------------------------------
+    const dualRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-agent-dual-write-'));
+    try {
+      fs.writeFileSync(path.join(dualRoot, 'config.json'), JSON.stringify({ models: {}, context: { agent_runtime_v2: { value: true } } }), 'utf-8');
+      const dualAgent = new Agent(dualRoot);
+      const dualService = new AgentRunService(path.join(dualRoot, '.newmark-context-v2'));
+      const target = { workspaceId: 'ws-dual', conversationId: 'conv-dual' };
+
+      dualAgent.beginConversationWorkRun('dual-run-1', target);
+      const persisted1 = dualService.listByConversation('conv-dual').find(r => r.payload?.workRunId === 'dual-run-1');
+      check(!!persisted1, 'beginConversationWorkRun creates a persisted AgentRun');
+      check(persisted1?.status === 'preparing_context', 'persisted run starts in preparing_context');
+      check(persisted1?.conversationId === 'conv-dual' && persisted1?.agentId === dualAgent['runtimeActorId'], 'persisted run carries conversation + agent identity');
+
+      dualAgent.emitWorkEvent({ type: 'tool_call', content: 'Reading file', toolName: 'file.read', toolCallId: 'tc-dual', runId: 'dual-run-1' });
+      check(dualService.read(persisted1!.id)?.status === 'executing_tools', 'tool_call event syncs persisted status to executing_tools');
+
+      dualAgent.finishConversationWorkRun('dual-run-1', 'completed');
+      check(dualService.read(persisted1!.id)?.status === 'completed', 'finish completed syncs persisted run to completed');
+
+      dualAgent.beginConversationWorkRun('dual-run-2', target);
+      dualAgent.finishConversationWorkRun('dual-run-2', 'error');
+      const errRun = dualService.listByConversation('conv-dual').find(r => r.payload?.workRunId === 'dual-run-2');
+      check(errRun?.status === 'failed', 'finish error syncs persisted run to failed');
+
+      dualAgent.beginConversationWorkRun('dual-run-3', target);
+      dualAgent.finishConversationWorkRun('dual-run-3', 'interrupted');
+      const intRun = dualService.listByConversation('conv-dual').find(r => r.payload?.workRunId === 'dual-run-3');
+      check(intRun?.status === 'paused' && intRun.pauseReason === 'interrupted', 'interrupted syncs persisted run to paused');
+      check(dualAgent.resumeConversationWorkRun('dual-run-3') === true, 'interrupted run is resumable in the in-memory view');
+      check(dualService.read(intRun!.id)?.status === 'preparing_context', 'resume syncs persisted run back to preparing_context');
+      dualAgent.finishConversationWorkRun('dual-run-3', 'completed');
+
+      dualAgent.beginConversationWorkRun('dual-run-4', target);
+      dualAgent.finishConversationWorkRun('dual-run-4', 'force_interrupted');
+      const fiRun = dualService.listByConversation('conv-dual').find(r => r.payload?.workRunId === 'dual-run-4');
+      check(fiRun?.status === 'cancelled', 'force_interrupted syncs persisted run to cancelled');
+    } finally {
+      cleanup(dualRoot);
+    }
+
+    // flag disabled -> AgentRunService is never initialized
+    const legacyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-agent-legacy-'));
+    try {
+      const legacyAgent = new Agent(legacyRoot);
+      legacyAgent.beginConversationWorkRun('legacy-run', { workspaceId: 'ws', conversationId: 'conv-legacy' });
+      check(fs.existsSync(path.join(legacyRoot, '.newmark-context-v2', 'agent-runs')) === false, 'flag off leaves AgentRunService untouched');
+    } finally {
+      cleanup(legacyRoot);
+    }
 
     console.log('agentRuntimeV2Verify: all assertions passed');
   } finally {

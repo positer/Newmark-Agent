@@ -67,11 +67,12 @@
 ### 层 D:AgentRunService 接入主循环(agent.ts)
 
 **接线**:
-- `beginConversationWorkRun` 内:若 flag 开启,同步 `AgentRunService.create(...)` 并持有 runId 映射;`finishConversationWorkRun` 调 `complete/fail/cancel`。
-- `emitWorkEvent` 的 status 变化同步 `transition`;中断/崩溃恢复走 `recoverRunningAgentRuns`。
+- `beginConversationWorkRun` 内:若 flag 开启,同步 `AgentRunService.create(...)` 并持有 runId 映射(workRunId → agentRunId);`finishConversationWorkRun` 映射 complete/fail/pause(interrupted)/cancel(force_interrupted)。
+- `resumeConversationWorkRun` 同步 `AgentRunService.resume`;`emitWorkEvent` 的 tool_call/tool_result 事件同步 executing_tools/waiting_model。
+- 中断/崩溃恢复走 `recoverRunningAgentRuns`(构造期,main runtime)。
 - 内存 ConversationWorkRun 保留为视图(与 AgentRun 双写),避免破坏 UI 契约。
 
-**验收**:agentRuntimeV2Verify + guideWorkRunVerify + verify 全过。
+**验收**:agentRuntimeV2Verify(含双写 12 断言) + guideWorkRunVerify + verify 全过。
 
 ### 层 E:flags 默认翻转
 
@@ -122,8 +123,8 @@ node dist/tests/toolchainExposureV2Verify.js
 |---|---|---|
 | A 上下文组装 | ✅ | 等价接入,text 逐字节一致;verify.js 全绿 |
 | B 工具暴露链 | ✅ | B1 registry-seeder + B2 adaptiveToolExposureV1 flag 门控;toolSurfaceV2Verify/registrySeederV2Verify 全绿 |
-| C Provider | ⬜ | 前置:chat-messages 共享提取 |
-| D AgentRun | ⬜ | 双写,保留内存视图 |
+| C Provider | ✅ | chat-messages 共享提取;bridge 字节等价门禁(providerBridgeV2Verify 13 断言)全绿 |
+| D AgentRun | ✅ | 双写接入 begin/finish/resume/emitWorkEvent;agentRuntimeV2Verify(45)+guideWorkRunVerify+verify 全绿 |
 | E flags 翻转 | ⬜ | 各层完成后逐 flag 翻转 |
 | F 删除旧组件 | ⬜ | 每层迁移后删除该层被替代实现 |
 

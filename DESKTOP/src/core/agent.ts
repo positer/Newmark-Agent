@@ -61,6 +61,8 @@ import {
 import { AgentContextManager } from '../context/services/agent-context-manager';
 import type { AssembledContext } from '../context/services/context-orchestrator';
 import { seedToolchainFromDefinitions, type ToolchainCore } from '../toolchain';
+import { AgentRunService, recoverRunningAgentRuns } from '../agent-runtime';
+import type { AgentRun } from '../context/domain/types';
 import { performanceTimer } from './performanceDiagnostics';
 
 export { AgentMode, InputMode, AgentStatus, StreamToken, ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent, ConversationTarget, ConversationWorkRun, GuideReceipt, ConversationImageAttachment, DisplayImageAttachment };
@@ -459,6 +461,8 @@ export class Agent {
   private loadedWorkspaceConversationKey = '';
   private managedWorkRunIds = new Set<string>();
   private finalizingWorkRunId = '';
+  private agentRunService: AgentRunService | null = null;
+  private agentRunByWorkRunId = new Map<string, string>();
   private readonly autoRouter: AutoRouter;
   private resolvedDeployment: DeploymentRef | null = null;
   private fixedDeployment: DeploymentRef | null = null;
@@ -525,6 +529,17 @@ export class Agent {
     this.linkedPlanAccess = options.linkedPlanAccess;
     this.config = new ConfigManager(rootPath);
     this.contextV2 = new AgentContextManager(rootPath, this.config);
+    this.agentRunService = this.config.contextFlag('agent_runtime_v2')
+      ? new AgentRunService(path.join(rootPath, '.newmark-context-v2'))
+      : null;
+    this.agentRunByWorkRunId = new Map<string, string>();
+    if (this.agentRunService && !this.isSubagentRuntime) {
+      try {
+        recoverRunningAgentRuns(this.agentRunService, { owner: this.runtimeActorId });
+      } catch {
+        /* crash recovery is best-effort at startup */
+      }
+    }
     this.autoRouter = new AutoRouter({ policyVersion: 'newmark-auto-v1' });
     this.loadLearnedRouteFeedback();
     if (this.isSubagentRuntime || this.agentOnly) {
@@ -1800,7 +1815,53 @@ export class Agent {
     this.workRuns.push(run);
     if (managed) this.managedWorkRunIds.add(run.runId);
     this.activeWorkRunId = run.runId;
+    if (this.agentRunService) this.createAgentRunForWorkRun(run, normalizedTarget);
     return run;
+  }
+
+  private createAgentRunForWorkRun(run: ConversationWorkRun, target: ConversationTarget): void {
+    if (!this.agentRunService) return;
+    const created = this.agentRunService.create({
+      conversationId: target.conversationId,
+      buildBlockId: target.conversationId,
+      agentId: this.runtimeActorId,
+      agentType: this.isSubagentRuntime ? 'subagent' : 'main',
+      payload: { workRunId: run.runId, runtimeKey: run.runtimeKey },
+    });
+    this.agentRunByWorkRunId.set(run.runId, created.id);
+    this.agentRunService.transition(created.id, { status: 'preparing_context' });
+  }
+
+  private syncAgentRunTerminal(
+    runId: string,
+    status: Exclude<ConversationWorkRunStatus, 'running'>,
+    _endedAt: string,
+  ): void {
+    if (!this.agentRunService) return;
+    const agentRunId = this.agentRunByWorkRunId.get(runId);
+    if (!agentRunId) return;
+    if (status === 'completed') this.agentRunService.complete(agentRunId);
+    else if (status === 'error') this.agentRunService.fail(agentRunId, `work run ${runId} ended with error`);
+    else if (status === 'force_interrupted') this.agentRunService.cancel(agentRunId);
+    else this.agentRunService.pause(agentRunId, 'interrupted');
+  }
+
+  private syncAgentRunFromEvent(event: AgentWorkEvent, runId: string): void {
+    if (!this.agentRunService) return;
+    const agentRunId = this.agentRunByWorkRunId.get(runId);
+    if (!agentRunId) return;
+    let next: Partial<AgentRun> | null = null;
+    switch (event.type) {
+      case 'tool_call': next = { status: 'executing_tools' }; break;
+      case 'tool_result': next = { status: 'waiting_model' }; break;
+      case 'status':
+        if (event.status === 'interrupted') next = { status: 'paused', pauseReason: 'interrupted' };
+        break;
+      case 'done': next = { status: 'completed' }; break;
+      case 'error': next = { status: 'failed' }; break;
+      default: break;
+    }
+    if (next) this.agentRunService.transition(agentRunId, next);
   }
 
   setConversationWorkRunFlowMetadata(
@@ -1851,6 +1912,8 @@ export class Agent {
     this.activeWorkRunId = run.runId;
     this.finalizingWorkRunId = '';
     this.managedWorkRunIds.add(run.runId);
+    const agentRunId = this.agentRunByWorkRunId.get(run.runId);
+    if (this.agentRunService && agentRunId) this.agentRunService.resume(agentRunId);
     this.emitWorkEvent({
       type: 'status',
       content: 'Guide received; continuing the current work run.',
@@ -1990,6 +2053,7 @@ export class Agent {
   ): boolean {
     const run = this.workRuns.find(item => item.runId === String(runId || ''));
     if (!run) return false;
+    this.syncAgentRunTerminal(run.runId, status, endedAt);
     if (run.status !== 'running') {
       if (run.status !== 'interrupted' || status !== 'force_interrupted') return run.status === status;
       this.activeWorkRunId = run.runId;
@@ -2107,6 +2171,9 @@ export class Agent {
       // response is persisted once at message_end. This avoids saving hundreds
       // of positional deltas and preserves each provider reply boundary.
       if (event.type !== 'text') activeRun.events.push(event);
+      if (this.agentRunService && event.type !== 'text') {
+        this.syncAgentRunFromEvent(event, activeRun.runId);
+      }
       if (event.type === 'done' || event.type === 'error') {
         activeRun.status = event.type === 'done' ? 'completed' : 'error';
         activeRun.endedAt = /^\d{4}-\d{2}-\d{2}T/.test(event.timestamp) ? event.timestamp : this.nowIso();

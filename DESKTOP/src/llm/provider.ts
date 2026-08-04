@@ -6,6 +6,24 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { extractProviderUsage } from '../core/agentKernelDiagnostics';
+import {
+  openAIToolName as normalizeOpenAIToolName,
+  stringifyContent as serializeContentValue,
+  normalizeOpenAIContent as serializeOpenAIContent,
+  normalizeResponsesContent as serializeResponsesContent,
+  openAIChatMessages as buildOpenAIChatMessages,
+} from '../providers/chat-messages';
+import {
+  ActualApiUsage,
+  createProviderAdapter,
+  ModelProviderAdapter,
+  NormalizedAgentRequest,
+  NormalizedMessage,
+  NormalizedTool,
+  ProviderTransport,
+  SerializedProviderRequest,
+  TransportResponse,
+} from '../providers';
 
 export interface IntelligenceConfig {
   temperature: number;
@@ -92,7 +110,8 @@ export class LLMProvider {
     public baseUrl: string,
     public apiKey: string,
     public explicitProtocol?: ProviderProtocol,
-    public openAIMode: OpenAITransportMode | boolean = 'chat_stream'
+    public openAIMode: OpenAITransportMode | boolean = 'chat_stream',
+    public useProviderAdaptersV2 = false
   ) {}
 
   intelligenceConfig(tier: string): IntelligenceConfig {
@@ -481,9 +500,7 @@ export class LLMProvider {
   }
 
   private stringifyContent(value: unknown): string {
-    if (typeof value === 'string') return value;
-    if (value === undefined || value === null) return '';
-    return typeof value === 'object' ? JSON.stringify(value) : String(value);
+    return serializeContentValue(value);
   }
 
   private extractTextValue(value: unknown): string {
@@ -527,139 +544,19 @@ export class LLMProvider {
   }
 
   private normalizeOpenAIContent(value: unknown): string | MessageContentPart[] {
-    if (!Array.isArray(value)) return this.stringifyContent(value);
-    const parts: MessageContentPart[] = [];
-    for (const partRaw of value) {
-      const part = partRaw as Record<string, unknown>;
-      if (!part || typeof part !== 'object') continue;
-      if (part.type === 'text') {
-        parts.push({ type: 'text', text: String(part.text || '') });
-      } else if (part.type === 'image_url') {
-        parts.push({ type: 'image_url', image_url: part.image_url });
-      }
-    }
-    return parts.length ? parts : '';
+    return serializeOpenAIContent(value);
   }
 
   private openAIToolName(value: unknown): string {
-    const normalized = String(value || '').trim().replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 64);
-    return normalized || 'newmark_tool';
+    return normalizeOpenAIToolName(value);
   }
 
   private openAIChatMessages(messages: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
-    const out: Array<Record<string, unknown>> = [];
-    const emittedCallIds = new Set<string>();
-    const consumedToolResultIndexes = new Set<number>();
-    const toolResultsByCallId = new Map<string, Array<{ message: Record<string, unknown>; index: number }>>();
-    for (const [index, candidate] of (messages || []).entries()) {
-      if (String(candidate?.role || '') !== 'tool') continue;
-      const callId = String(candidate.tool_call_id || candidate.call_id || '');
-      if (!callId) continue;
-      const entries = toolResultsByCallId.get(callId) || [];
-      entries.push({ message: candidate, index });
-      toolResultsByCallId.set(callId, entries);
-    }
-    for (const [index, msg] of (messages || []).entries()) {
-      const role = String(msg.role || 'user');
-      if (role === 'assistant') {
-        const toolCalls: Array<Record<string, unknown>> = [];
-        for (const [toolIndex, rawToolCall] of (Array.isArray(msg.tool_calls) ? msg.tool_calls : []).entries()) {
-          const toolCall = rawToolCall as Record<string, unknown>;
-          const fn = toolCall.function && typeof toolCall.function === 'object'
-            ? toolCall.function as Record<string, unknown>
-            : {};
-          const name = this.openAIToolName(fn.name);
-          const callId = String(toolCall.id || toolCall.call_id || `call_newmark_${index}_${toolIndex}`);
-          toolCalls.push({
-            id: callId,
-            type: 'function',
-            function: {
-              name,
-              arguments: typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments || {}),
-            },
-          });
-          emittedCallIds.add(callId);
-        }
-        const assistant: Record<string, unknown> = {
-          role: 'assistant',
-          content: this.normalizeOpenAIContent(msg.content),
-        };
-        if (toolCalls.length) assistant.tool_calls = toolCalls;
-        out.push(assistant);
-        // Chat Completions requires every declared call to be followed by a
-        // matching tool message before the next non-tool message. Histories
-        // can lose or reorder results during compression, so repair the
-        // complete call group at the transport boundary.
-        for (const toolCall of toolCalls) {
-          const callId = String(toolCall.id || '');
-          const stored = (toolResultsByCallId.get(callId) || [])
-            .find(entry => entry.index > index && !consumedToolResultIndexes.has(entry.index));
-          if (stored) {
-            consumedToolResultIndexes.add(stored.index);
-            const result = stored.message;
-            out.push({
-              role: 'tool',
-              tool_call_id: callId,
-              name: this.openAIToolName(result.name || (toolCall.function as Record<string, unknown>).name),
-              content: this.stringifyContent(result.content),
-            });
-          } else {
-            out.push({
-              role: 'tool',
-              tool_call_id: callId,
-              name: this.openAIToolName((toolCall.function as Record<string, unknown>).name),
-              content: '[Newmark] Tool result unavailable; continue without it.',
-            });
-          }
-        }
-        continue;
-      }
-      if (role === 'tool') {
-        if (consumedToolResultIndexes.has(index)) continue;
-        const callId = String(msg.tool_call_id || msg.call_id || `call_newmark_recovered_${index}`);
-        const name = this.openAIToolName(msg.name);
-        // Imported, compressed, and legacy histories may retain a tool result
-        // after losing the assistant tool_calls envelope. Chat Completions
-        // rejects that orphan result, so reconstruct the minimum valid pair.
-        if (!emittedCallIds.has(callId)) {
-          out.push({
-            role: 'assistant',
-            content: '',
-            tool_calls: [{ id: callId, type: 'function', function: { name, arguments: '{}' } }],
-          });
-          emittedCallIds.add(callId);
-        }
-        out.push({
-          role: 'tool',
-          tool_call_id: callId,
-          name,
-          content: this.stringifyContent(msg.content),
-        });
-        continue;
-      }
-      out.push({
-        role: role === 'system' ? 'system' : 'user',
-        content: this.normalizeOpenAIContent(msg.content),
-      });
-    }
-    return out.length ? out : [{ role: 'user', content: '' }];
+    return buildOpenAIChatMessages(messages);
   }
 
   private normalizeResponsesContent(value: unknown): string | MessageContentPart[] {
-    if (!Array.isArray(value)) return this.stringifyContent(value);
-    const parts: MessageContentPart[] = [];
-    for (const partRaw of value) {
-      const part = partRaw as Record<string, unknown>;
-      if (!part || typeof part !== 'object') continue;
-      if (part.type === 'text') {
-        parts.push({ type: 'input_text', text: String(part.text || '') });
-      } else if (part.type === 'image_url') {
-        const image = part.image_url as Record<string, unknown> | undefined;
-        const url = image && typeof image === 'object' ? String(image.url || '') : '';
-        if (url) parts.push({ type: 'input_image', image_url: url });
-      }
-    }
-    return parts.length ? parts : '';
+    return serializeResponsesContent(value);
   }
 
   private normalizeAnthropicContent(value: unknown): string | MessageContentPart[] {
@@ -1096,6 +993,272 @@ export class LLMProvider {
     };
   }
 
+  /**
+   * dev-0.3.0 Layer C adapter-backed chat path, gated by the
+   * `provider_adapters_v2` context flag. Request serialization and SSE
+   * normalization are delegated to the shared provider adapters while the
+   * transport orchestration (loopback node-http, fetch -> node-http fallback,
+   * 120s/30s timeouts) and the 4xx Chat -> Responses downgrade stay here.
+   * The emitted request body and StreamToken stream are byte-equivalent to
+   * the legacy inlined path.
+   */
+  private async *chatStreamWithToolsV2(
+    model: string,
+    messages: Array<Record<string, unknown>>,
+    systemPrompt: string | null,
+    temperature: number,
+    maxTokens: number,
+    tools: unknown[],
+    signal?: AbortSignal,
+    reasoningTier?: string,
+  ): AsyncGenerator<StreamToken> {
+    const mode = this.openAITransportMode();
+    if (mode === 'responses') {
+      yield* this.adapterResponsesBridge(model, messages, systemPrompt, temperature, maxTokens, tools, signal, reasoningTier);
+      return;
+    }
+
+    const adapter = createProviderAdapter(this.name, 'chat_completions');
+    const request: NormalizedAgentRequest = {
+      providerId: this.name,
+      model,
+      apiMode: 'chat_completions',
+      systemPrompt,
+      messages: this.toNormalizedMessages(messages),
+      tools: this.toNormalizedTools(tools),
+      temperature,
+      maxOutputTokens: maxTokens,
+      apiKey: this.apiKey,
+      baseUrl: this.cleanBaseUrl(),
+    };
+    const serialized = await adapter.serializeRequest(request);
+    serialized.body.stream = mode === 'chat' ? false : true;
+
+    const execSignal = signal ?? new AbortController().signal;
+    const transport = this.buildProviderAdapterTransport();
+    const streaming = mode === 'chat_stream';
+    const reasoningState = { current: '' };
+    let reasoningStatusEmitted = false;
+
+    for await (const event of adapter.execute(serialized, execSignal, transport)) {
+      if (event.type === 'response.started' || event.type === 'response.completed') continue;
+      if (event.type === 'tool_call.started' || event.type === 'tool_call.arguments.delta') continue;
+      if (event.type === 'reasoning.summary.delta') {
+        reasoningState.current += event.delta;
+        if (!streaming && !reasoningStatusEmitted) {
+          reasoningStatusEmitted = true;
+          yield { type: 'status', text: '', reasoningContent: reasoningState.current };
+        }
+        continue;
+      }
+      if (event.type === 'text.delta') {
+        yield { type: 'text', text: event.delta, reasoningContent: reasoningState.current || undefined };
+        continue;
+      }
+      if (event.type === 'tool_call.completed') {
+        const token: StreamToken = {
+          type: 'tool_call',
+          text: '',
+          toolCall: { id: event.id, name: event.name, arguments: event.arguments },
+        };
+        if (streaming) token.reasoningContent = reasoningState.current || undefined;
+        yield token;
+        continue;
+      }
+      if (event.type === 'usage.updated') {
+        yield { type: 'usage', text: '', usage: this.toStreamUsage(event.usage) };
+        continue;
+      }
+      if (event.type === 'response.failed') {
+        if (this.shouldDowngradeToResponses(event.error)) {
+          const downgradeTier = streaming ? reasoningTier : '';
+          yield* this.adapterResponsesBridge(model, messages, systemPrompt, temperature, maxTokens, tools, signal, downgradeTier);
+          return;
+        }
+        yield { type: 'text', text: event.error };
+        return;
+      }
+    }
+  }
+
+  private async *adapterResponsesBridge(
+    model: string,
+    messages: Array<Record<string, unknown>>,
+    systemPrompt: string | null,
+    temperature: number,
+    maxTokens: number,
+    tools: unknown[],
+    signal?: AbortSignal,
+    reasoningTier?: string,
+  ): AsyncGenerator<StreamToken> {
+    const adapter = createProviderAdapter(this.name, 'responses');
+    const request: NormalizedAgentRequest = {
+      providerId: this.name,
+      model,
+      apiMode: 'responses',
+      systemPrompt,
+      messages: this.toNormalizedMessages(messages),
+      tools: this.toNormalizedTools(tools),
+      temperature,
+      maxOutputTokens: maxTokens,
+      reasoningEffort: this.reasoningEffort(model, reasoningTier) as NormalizedAgentRequest['reasoningEffort'],
+      apiKey: this.apiKey,
+      baseUrl: this.cleanBaseUrl(),
+    };
+    const serialized = await adapter.serializeRequest(request);
+    serialized.body.stream = true;
+    serialized.headers['Accept'] = 'text/event-stream';
+
+    const execSignal = signal ?? new AbortController().signal;
+    const transport = this.buildProviderAdapterTransport();
+    for await (const event of adapter.execute(serialized, execSignal, transport)) {
+      if (event.type === 'response.started' || event.type === 'response.completed') continue;
+      if (event.type === 'tool_call.started' || event.type === 'tool_call.arguments.delta') continue;
+      if (event.type === 'reasoning.summary.done') {
+        if (event.summary) yield { type: 'status', text: event.summary };
+        continue;
+      }
+      if (event.type === 'text.delta') {
+        yield { type: 'text', text: event.delta };
+        continue;
+      }
+      if (event.type === 'tool_call.completed') {
+        yield { type: 'tool_call', text: '', toolCall: { id: event.id, name: event.name, arguments: event.arguments } };
+        continue;
+      }
+      if (event.type === 'usage.updated') {
+        yield { type: 'usage', text: '', usage: this.toStreamUsage(event.usage) };
+        continue;
+      }
+      if (event.type === 'response.failed') {
+        yield { type: 'text', text: event.error };
+        return;
+      }
+    }
+  }
+
+  private toStreamUsage(usage: ActualApiUsage): StreamToken['usage'] {
+    return {
+      input: usage.inputTokens,
+      output: usage.outputTokens,
+      cacheRead: usage.cacheReadTokens,
+      cacheWrite: usage.cacheWriteTokens,
+    };
+  }
+
+  private shouldDowngradeToResponses(errorText: string): boolean {
+    const match = /\[LLM Error: (\d+)\]/.exec(errorText || '');
+    if (!match) return false;
+    return this.shouldUseResponsesFallback(Number(match[1]), errorText);
+  }
+
+  /**
+   * Loopback-aware transport injected into adapter `execute`. Mirrors the
+   * legacy orchestration exactly: streaming requests go through fetch with a
+   * 120s timeout and degrade to a non-streaming node-http request on fetch
+   * failure; non-streaming requests reuse postJsonWithFetchFallback.
+   */
+  private buildProviderAdapterTransport(): ProviderTransport {
+    return async (request: SerializedProviderRequest, signal: AbortSignal): Promise<TransportResponse> => {
+      if (request.body?.stream === true) {
+        const abort = new AbortController();
+        const forwardAbort = () => abort.abort(signal?.reason);
+        if (signal?.aborted) forwardAbort();
+        else signal?.addEventListener('abort', forwardAbort, { once: true });
+        const timer = setTimeout(() => abort.abort(), 120000);
+        try {
+          try {
+            return await fetch(request.url, {
+              method: 'POST',
+              headers: request.headers,
+              body: JSON.stringify(request.body),
+              signal: abort.signal,
+            });
+          } catch (error) {
+            if (signal?.aborted) throw abortFailure(signal);
+            if (!this.shouldUseNodeHttpFallback(error)) throw error;
+            const fallbackHeaders = { ...request.headers };
+            delete fallbackHeaders['Accept'];
+            const fallback = await this.postJsonWithFetchFallback(
+              request.url,
+              fallbackHeaders,
+              { ...request.body, stream: false },
+              120000,
+              signal,
+            );
+            return this.toTransportResponse(fallback);
+          }
+        } finally {
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', forwardAbort);
+        }
+      }
+      const response = await this.postJsonWithFetchFallback(request.url, request.headers, request.body, 120000, signal);
+      return this.toTransportResponse(response);
+    };
+  }
+
+  private toTransportResponse(response: ProviderHttpResponse): TransportResponse {
+    if ((response as Response).body !== undefined) {
+      return response as unknown as TransportResponse;
+    }
+    return {
+      ok: response.ok,
+      status: response.status,
+      headers: { get: (name) => response.headers?.get(name) ?? null },
+      text: () => response.text(),
+      json: () => response.json(),
+      body: null,
+    };
+  }
+
+  private toNormalizedMessages(messages: Array<Record<string, unknown>>): NormalizedMessage[] {
+    return (messages || []).map((msg, index) => {
+      const role = String(msg.role || 'user');
+      if (role === 'tool') {
+        return {
+          role: 'tool',
+          content: msg.content as NormalizedMessage['content'],
+          toolCallId: String(msg.tool_call_id || msg.call_id || `call_newmark_recovered_${index}`),
+          name: String(msg.name || ''),
+        };
+      }
+      if (role === 'assistant') {
+        const rawToolCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+        return {
+          role: 'assistant',
+          content: msg.content as NormalizedMessage['content'],
+          toolCalls: rawToolCalls.map((rawCall) => {
+            const tc = rawCall as Record<string, unknown>;
+            const fn = tc.function && typeof tc.function === 'object' ? tc.function as Record<string, unknown> : {};
+            return {
+              id: String(tc.id || tc.call_id || ''),
+              name: String(fn.name || ''),
+              arguments: typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments || {}),
+            };
+          }),
+        };
+      }
+      return { role: role === 'system' ? 'system' : 'user', content: msg.content as NormalizedMessage['content'] };
+    });
+  }
+
+  private toNormalizedTools(tools: unknown[]): NormalizedTool[] {
+    return (tools || []).map((tool) => {
+      const fn = (tool as { function?: Record<string, unknown> }).function || {};
+      return {
+        type: 'function',
+        function: {
+          name: String(fn.name || ''),
+          description: String(fn.description || ''),
+          parameters: fn.parameters && typeof fn.parameters === 'object'
+            ? fn.parameters as Record<string, unknown>
+            : { type: 'object', properties: {} },
+        },
+      };
+    });
+  }
+
   async *chatStreamWithTools(
     model: string,
     messages: Array<Record<string, unknown>>,
@@ -1109,6 +1272,10 @@ export class LLMProvider {
     if (signal?.aborted) throw abortFailure(signal);
     if (this.protocol() === 'anthropic') {
       yield* this.anthropicChatWithTools(model, messages, systemPrompt, temperature, maxTokens, tools, signal);
+      return;
+    }
+    if (this.useProviderAdaptersV2 && this.protocol() === 'openai') {
+      yield* this.chatStreamWithToolsV2(model, messages, systemPrompt, temperature, maxTokens, tools, signal, reasoningTier);
       return;
     }
 

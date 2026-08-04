@@ -58,6 +58,9 @@ import {
   defaultRoutePolicy,
   normalizeAutoPreference,
 } from './autoRouter';
+import { AgentContextManager } from '../context/services/agent-context-manager';
+import type { AssembledContext } from '../context/services/context-orchestrator';
+import { seedToolchainFromDefinitions, type ToolchainCore } from '../toolchain';
 import { performanceTimer } from './performanceDiagnostics';
 
 export { AgentMode, InputMode, AgentStatus, StreamToken, ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent, ConversationTarget, ConversationWorkRun, GuideReceipt, ConversationImageAttachment, DisplayImageAttachment };
@@ -490,6 +493,27 @@ export class Agent {
   private readonly rootInboxListener = (message: SubagentRootMessage) => this.deliverRootInboxMessage(message);
   public readonly agentOnly: boolean;
   public readonly runtimeActorId: string;
+  /** dev-0.3.0 context system facade (feature-flagged, default off). */
+  public readonly contextV2: AgentContextManager;
+  /** dev-0.3.0 toolchain core (registry + capability catalog). Seeded lazily from cachedToolDefinitions; not consumed by the legacy path. */
+  private toolchainCore: ToolchainCore | null = null;
+
+  /**
+   * Lazy-seed the v2 toolchain from the policy-filtered tool catalog.
+   * Registration is inert with respect to the legacy execution path, so this
+   * is safe to call before the exposure planner takes over the tool surface.
+   */
+  ensureToolchain(definitions: unknown[]): ToolchainCore {
+    if (!this.toolchainCore) {
+      this.toolchainCore = seedToolchainFromDefinitions(definitions, { namespace: 'newmark', version: '1.0.0' }).core;
+    }
+    return this.toolchainCore;
+  }
+
+  /** Seeded v2 toolchain (registry + capability catalog); null until first tool surface refresh. */
+  get toolchain(): ToolchainCore | null {
+    return this.toolchainCore;
+  }
 
   constructor(public rootPath: string, options: AgentRuntimeOptions = {}) {
     this.isSubagentRuntime = !!options.subagent;
@@ -500,6 +524,7 @@ export class Agent {
     this.subagentPrompt = options.subagentPrompt || '';
     this.linkedPlanAccess = options.linkedPlanAccess;
     this.config = new ConfigManager(rootPath);
+    this.contextV2 = new AgentContextManager(rootPath, this.config);
     this.autoRouter = new AutoRouter({ policyVersion: 'newmark-auto-v1' });
     this.loadLearnedRouteFeedback();
     if (this.isSubagentRuntime || this.agentOnly) {
@@ -4772,7 +4797,7 @@ export class Agent {
       this.modelValidationProgress = { ...this.modelValidationProgress, currentModel, currentCheck: 'catalog' };
       const inferredVision = !!m.vision || inferModelVisionCapability(m.name, m.display, m.description, m.provider, m.provider_protocol);
       const inferredImageOutput = !!m.image_output || /(?:^|[-_.])(gpt-image|dall-e|imagen|imagegen|image-generation)(?:$|[-_.])/i.test(m.name);
-      const p = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode());
+      const p = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'));
       let catalog = catalogByProvider.get(m.provider_id);
       if (!catalog && m.provider_url && m.api_key) {
         try { catalog = await p.modelCatalog(); } catch { catalog = []; }
@@ -4881,7 +4906,7 @@ export class Agent {
     }
     const m = this.activeModelConfig();
     if (!m) return null;
-    return new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode());
+    return new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'));
   }
 
   async editorModelRequest(input: {
@@ -4902,7 +4927,7 @@ export class Agent {
       (model.validation.status === 'verified' || model.validation.status === 'degraded')
     ) || models.find(model => model.evaluation?.status === 'available') || models[0];
     if (!selected?.api_key || !selected.provider_url) return { ok: false, text: '', error: 'No available editor prediction model.' };
-    const provider = new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, this.config.openAIApiMode());
+    const provider = new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'));
     const language = path.extname(String(input.path || '')).replace(/^\./, '') || 'text';
     const system = input.completion
       ? 'You are an inline code completion engine. Return only the exact text to insert at the cursor. Do not use Markdown fences or explanations.'
@@ -5907,7 +5932,7 @@ export class Agent {
     const activeModel = this.activeModelConfig();
     const activeProvider = this.engineModel();
     const assignedProvider = assignedModel && assignedModel.provider_id !== activeModel?.provider_id
-      ? new LLMProvider(assignedModel.provider, assignedModel.provider_url, assignedModel.api_key, assignedModel.provider_protocol, this.config.openAIApiMode())
+      ? new LLMProvider(assignedModel.provider, assignedModel.provider_url, assignedModel.api_key, assignedModel.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'))
       : activeProvider;
     if (!assignedProvider || !model) {
       throw new Error('No LLM configured. Add provider in Settings > Models.');
@@ -6588,6 +6613,37 @@ export class Agent {
     const value = parts.join('\n\n');
     this.systemPromptCache = { identity, value };
     return value;
+  }
+
+  /**
+   * dev-0.3.0: assemble the model-request system prompt through the Context
+   * Orchestrator, the single assembly point for every model request. The
+   * current output is byte-identical to the legacy join of buildSystemPrompt()
+   * plus the tool surface notice; later iterations split content into the
+   * fixed 18 sections. Stable sections (general_prompt .. active_toolset_manifest)
+   * form the cacheable prefix; empty sections are skipped.
+   */
+  assembleContextV2(toolSurfaceNotice: string): AssembledContext {
+    return this.contextV2.orchestrator.assemble({
+      generalPrompt: this.buildSystemPrompt(),
+      responseProtocol: '',
+      baseToolDefinitions: undefined,
+      workspaceAgentProfile: '',
+      agentRoleAndPermissions: '',
+      capabilityBoundarySummary: '',
+      activeToolsetManifest: toolSurfaceNotice,
+      buildBlockStartupInput: '',
+      buildBlockMetadata: '',
+      linkedPlan: '',
+      activeTasks: '',
+      currentWorkSet: '',
+      branchLogSummary: '',
+      retrievedOldBlockSummary: '',
+      buildHistoryCheckpoint: '',
+      checkpointDelta: '',
+      currentToolResults: '',
+      currentUserInput: '',
+    });
   }
 
   cachedToolDefinitions(): unknown[] {

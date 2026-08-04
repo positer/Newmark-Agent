@@ -162,6 +162,14 @@ export class ConfigManager {
     return (this.get<number>(section, key)) || 0;
   }
 
+  /**
+   * dev-0.3.0 context feature flags. Each flag maps to a config value in the
+   * `context` section; all default to disabled for safe rollback.
+   */
+  contextFlag(flag: 'structured_context_v2' | 'build_history_persistence' | 'structured_tasks' | 'structured_plans' | 'scoped_tool_results' | 'provider_adapters_v2' | 'agent_runtime_v2' | 'subagent_runtime_v2' | 'capability_catalog_v1' | 'adaptive_tool_exposure_v1' | 'tool_schema_on_demand_v1' | 'capability_boundary_prompt_v1'): boolean {
+    return !!this.get<boolean>('context', flag);
+  }
+
   set(section: string, key: string, value: unknown): void {
     if (!this.config[section]) {
       this.config[section] = {};
@@ -944,6 +952,18 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
       auto_compress: { _description: "Auto-compress history", _type: "boolean", value: true },
       compress_threshold_chars: { _description: "Compression threshold", _type: "integer", value: 80000 },
       keep_recent_messages: { _description: "Keep recent messages", _type: "integer", value: 10 },
+      structured_context_v2: { _description: "dev-0.3.0 structured context v2 (orchestrator + fixed order + snapshot)", _type: "boolean", value: false },
+      build_history_persistence: { _description: "dev-0.3.0 append-only Build History persistence", _type: "boolean", value: false },
+      structured_tasks: { _description: "dev-0.3.0 structured Task list with expectedVersion", _type: "boolean", value: false },
+      structured_plans: { _description: "dev-0.3.0 structured Linked Plan object", _type: "boolean", value: false },
+      scoped_tool_results: { _description: "dev-0.3.0 tool result lifecycle", _type: "boolean", value: false },
+      provider_adapters_v2: { _description: "dev-0.3.0 unified provider adapter layer", _type: "boolean", value: false },
+      agent_runtime_v2: { _description: "dev-0.3.0 Agent Run persisted state machine", _type: "boolean", value: false },
+      subagent_runtime_v2: { _description: "dev-0.3.0 SubAgent persisted runs + context packages", _type: "boolean", value: false },
+      capability_catalog_v1: { _description: "dev-0.3.0 capability catalog v1", _type: "boolean", value: false },
+      adaptive_tool_exposure_v1: { _description: "dev-0.3.0 adaptive tool exposure planner", _type: "boolean", value: false },
+      tool_schema_on_demand_v1: { _description: "dev-0.3.0 on-demand tool schema loading", _type: "boolean", value: false },
+      capability_boundary_prompt_v1: { _description: "dev-0.3.0 capability boundary prompt injection", _type: "boolean", value: false },
     },
     automation: {
       schedules: { _description: "Automation schedules", _type: "array", value: [] },

@@ -8,6 +8,7 @@ import { terminalTakeoverWorkspaceId } from '../tools/terminalTakeover';
 import { evaluateToolPolicy } from './toolPolicy';
 import { emitPerformanceEvent, performanceTimer } from './performanceDiagnostics';
 import { emitProviderUsageDiagnostic, emitRequestContextDiagnostic } from './agentKernelDiagnostics';
+import { ToolExposurePlanner, type ToolchainCore } from '../toolchain';
 
 type NativeAgentConstructor = new (options?: Record<string, unknown>) => NativeAgentInstance;
 
@@ -362,7 +363,12 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       // const catalog = agent.subagentToolDefinitions(agent.tools.definitions(agent.mode));
       // Agent.cachedToolDefinitions keeps that catalog stable across provider subturns.
       const catalog = agent.cachedToolDefinitions();
-      const surface = routeToolSurface(agent, catalog);
+      // dev-0.3.0: seed the v2 toolchain from the same policy-filtered
+      // catalog (inert registration; the legacy surface below is unchanged).
+      agent.ensureToolchain(catalog);
+      const surface = agent.contextV2.flags.adaptiveToolExposureV1
+        ? routeToolSurfaceV2(agent, catalog, agent.toolchain, latestUserTaskText(agent))
+        : routeToolSurface(agent, catalog);
       toolProvisioning.reconcile(catalog, surface.definitions);
       activeToolSurfaceNotice = surface.systemPromptNotice;
       activeToolSurfaceIdentity = identity;
@@ -377,7 +383,8 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
     };
   };
   const initialToolSurface = refreshToolSurface(true);
-  const systemPrompt = [agent.buildSystemPrompt(), initialToolSurface.systemPromptNotice].filter(Boolean).join('\n\n');
+  const assembledContext = agent.assembleContextV2(initialToolSurface.systemPromptNotice);
+  const systemPrompt = assembledContext.text;
   let providerRequestCount = 0;
   let bootstrappedCompressionAt = agent.lastCompression?.at || '';
   stopContextTimer();
@@ -1244,6 +1251,83 @@ function routeToolSurface(agent: Agent, definitions: unknown[]): { definitions: 
       '## Tool Interface Availability',
       `At most ${INITIAL_TOOL_SCHEMA_LIMIT} deterministic task-relevant schemas are preloaded for this turn; the always-available subagent orchestration tools are appended separately.`,
       `Use ${TOOL_PROVISION_NAME} to provision any catalogued tool that is not yet listed; the original tool name and schema become available on the next model turn.`,
+    ].join('\n'),
+  };
+}
+
+/**
+ * dev-0.3.0 adaptive tool exposure surface. Equivalent to routeToolSurface
+ * (same preload cap, same always-available core, same provision notice) but
+ * the intent slice is chosen by the v2 ToolExposurePlanner instead of the
+ * legacy deterministic selector. Only active when adaptiveToolExposureV1 is
+ * enabled; otherwise the legacy route remains authoritative.
+ *
+ * The planner reasons in capability ids (vcs.inspect, code.search, ...); this
+ * adapter translates suggested capabilities into the legacy tool domains
+ * seeded by the registry seeder (cap.<domain>) and applies the planner's risk
+ * discipline (destructive tools are never auto-exposed).
+ */
+const CAPABILITY_TO_DOMAIN: Record<string, string[]> = {
+  'vcs.inspect': ['git'],
+  'code.search': ['core'],
+  'test.run': ['core'],
+  'web.search': ['web'],
+  'automation.manage': ['automation'],
+  'flow.manage': ['flow'],
+};
+
+export function routeToolSurfaceV2(agent: Agent, definitions: unknown[], toolchain: ToolchainCore | null, task: string): { definitions: unknown[]; systemPromptNotice: string } {
+  if (!agent.shouldExposeToolInterface()) {
+    return routeToolSurface(agent, definitions);
+  }
+  if (!toolchain) return routeToolSurface(agent, definitions);
+  const planner = new ToolExposurePlanner(toolchain.registry, toolchain.catalog);
+  const plan = planner.plan({
+    agentRunId: agent.runtimeActorId,
+    buildBlockId: agent.activeConversationId || 'build',
+    userInput: task,
+    objective: '',
+    previousToolCalls: [],
+    toolUsageFrequency: new Map<string, number>(),
+    permissionScope: ['workspace'],
+    tokenBudget: 20_000,
+    providerToolLimit: 0,
+  });
+  const domains = new Set<string>();
+  for (const capabilityId of plan.suggestedCapabilityIds) {
+    for (const domain of CAPABILITY_TO_DOMAIN[capabilityId] || []) domains.add(domain);
+  }
+  const selected = definitions.filter(definition => {
+    const name = toolDefinitionName(definition);
+    const descriptor = toolchain.registry.get(name);
+    if (!descriptor || descriptor.riskLevel === 'destructive') return false;
+    if (!domains.has(descriptor.capabilityId.slice(4))) return false;
+    return true;
+  }).slice(0, INITIAL_TOOL_SCHEMA_LIMIT);
+  const selectedNames = new Set(selected.map(toolDefinitionName));
+  const core = definitions.filter(definition => {
+    const name = toolDefinitionName(definition);
+    return SUBAGENT_CORE_TOOL_NAMES.has(name) && !selectedNames.has(name);
+  });
+  const surface = core.length ? selected.concat(core) : selected;
+  if (surface.length === definitions.length) return { definitions, systemPromptNotice: '' };
+  if (!selected.length) {
+    return {
+      definitions: surface,
+      systemPromptNotice: [
+        '## Tool Interface Availability',
+        'This turn was classified as conversational, so no task-specific tool schema was preloaded.',
+        `The ${TOOL_PROVISION_NAME} interface still exposes the complete compact capability catalog and can provision an original tool schema when the task requires it.`,
+      ].join('\n'),
+    };
+  }
+  return {
+    definitions: surface,
+    systemPromptNotice: [
+      '## Tool Interface Availability',
+      `At most ${INITIAL_TOOL_SCHEMA_LIMIT} deterministic task-relevant schemas are preloaded for this turn; the always-available subagent orchestration tools are appended separately.`,
+      `Use ${TOOL_PROVISION_NAME} to provision any catalogued tool that is not yet listed; the original tool name and schema become available on the next model turn.`,
+      `Adaptive exposure plan ${plan.plan.stableToolsetHash.slice(0, 8)}: ${plan.activeToolIds.length} planned tools, ${plan.plan.suggestedCapabilityIds.join(',')}.`,
     ].join('\n'),
   };
 }

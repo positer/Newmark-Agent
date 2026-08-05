@@ -1945,6 +1945,23 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   padding: 20px 24px;
   -webkit-overflow-scrolling: touch;
 }
+.conversation-load-earlier {
+  display: block;
+  width: max-content;
+  margin: 0 auto 12px;
+  padding: 6px 14px;
+  border: 1px solid var(--glass-border-2);
+  border-radius: var(--radius-full);
+  background: var(--glass-bg-1);
+  color: var(--accent);
+  font: 11px var(--font-ui);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo);
+}
+.conversation-load-earlier:hover,
+.conversation-load-earlier:focus-visible { background: var(--glass-bg-2); border-color: var(--border-hover); outline: none; }
+.conversation-load-earlier:disabled { opacity: 0.6; cursor: default; }
+}
 
 #chat-area:has(> .chat-msg) {
   background-image:
@@ -5101,6 +5118,7 @@ var state = {
   workspaceSwitchInFlight: '',
   trackedConversationUntil: {},
   conversationTrackMs: 300000,
+  conversationLoadedBefore: {},
   conversations: [
     {id: 'conv-1', summary: 'New chat 1', archived: false, active: true}
   ],
@@ -9609,6 +9627,44 @@ function renderChatMessages(messages) {
   if (typeof renderPendingOptionsInChat === 'function') renderPendingOptionsInChat(state.pendingOptions || []);
 }
 
+// Renders a "load earlier messages" affordance at the top of the chat when the
+// backend holds more messages than the renderer has loaded. Clicking it fetches
+// the preceding window via conversation:loadEarlier and prepends it, so a
+// long-running conversation can be browsed without ever transferring the whole
+// transcript in one snapshot.
+function renderLoadEarlierButton() {
+  if (!els['chat-area']) return;
+  Array.prototype.forEach.call(els['chat-area'].querySelectorAll('.conversation-load-earlier'), function(button) { button.remove(); });
+  var target = currentConversationTarget();
+  var key = runtimeKeyFor(target.workspaceId, target.conversationId);
+  var before = state.conversationLoadedBefore && state.conversationLoadedBefore[key];
+  if (!Number.isFinite(Number(before)) || Number(before) <= 0) return;
+  var button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'conversation-load-earlier';
+  button.textContent = currentLang() === 'zh' ? ('加载更早的 ' + Number(before) + ' 条消息') : ('Load ' + Number(before) + ' earlier messages');
+  button.addEventListener('click', function() {
+    var loadTarget = currentConversationTarget();
+    var loadKey = runtimeKeyFor(loadTarget.workspaceId, loadTarget.conversationId);
+    var loadBefore = state.conversationLoadedBefore && state.conversationLoadedBefore[loadKey];
+    if (!Number.isFinite(Number(loadBefore)) || Number(loadBefore) <= 0) return;
+    button.disabled = true;
+    api.loadEarlierConversationMessages({ workspaceId: loadTarget.workspaceId, conversationId: loadTarget.conversationId, window: 200, before: loadBefore }).then(function(result) {
+      button.disabled = false;
+      if (!result || !Array.isArray(result.chatMessages) || !result.chatMessages.length) return;
+      var newer = state.renderedChatMessages || [];
+      state.renderedChatMessages = (result.chatMessages || []).concat(newer);
+      state.conversationLoadedBefore[loadKey] = Math.max(0, Number(result.windowStart) || 0);
+      var chatWasAtBottom = shouldAutoScroll(els['chat-area']);
+      els['chat-area'].innerHTML = '';
+      renderChatMessages(state.renderedChatMessages);
+      if (!chatWasAtBottom && els['chat-area']) els['chat-area'].scrollTop = 0;
+      renderLoadEarlierButton();
+    }).catch(function() { button.disabled = false; });
+  });
+  els['chat-area'].insertBefore(button, els['chat-area'].firstChild);
+}
+
 function renderConversationBranchPagers() {
   if (!els['chat-area']) return;
   Array.prototype.forEach.call(els['chat-area'].querySelectorAll('.conversation-branch-pager'), function(pager) { pager.remove(); });
@@ -9976,12 +10032,20 @@ function applyConversationSnapshot(s, requestedConversationId) {
     rebindQueueToRuntimeBranch(snapshotTarget);
     if (s && Array.isArray(s.workRuns)) syncWorkRunsSnapshot(s.workRuns, snapshotTarget, String(s.activeBranchId || ''));
     applyAutoRouteRatingState(s);
-    if (s && s.chatMessages) renderChatMessages(s.chatMessages);
+    if (s && s.chatMessages) {
+      renderChatMessages(s.chatMessages);
+      renderLoadEarlierButton();
+    }
     if (s && s.conversationId) {
       state.activeBackendConversationId = s.conversationId;
       applyBackendConversations(s.conversations || [], s.conversationId || requestedConversationId);
     }
     markConversationTracked(s && s.conversationId ? s.conversationId : requestedConversationId, state.conversationTrackMs || 300000, snapshotTarget.workspaceId);
+    if (s && Number.isFinite(Number(s.totalMessages))) {
+      if (!state.conversationLoadedBefore) state.conversationLoadedBefore = {};
+      var windowKey = runtimeKeyFor(snapshotTarget.workspaceId, s.conversationId || requestedConversationId || 'default');
+      state.conversationLoadedBefore[windowKey] = Math.max(0, Number(s.totalMessages) - (Array.isArray(s.chatMessages) ? s.chatMessages.length : 0));
+    }
     if (s && s.queued) {
       state.backendQueue = setBackendQueueForTarget(s.queued, snapshotTarget);
       if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue, snapshotTarget);

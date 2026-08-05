@@ -289,6 +289,10 @@ export interface ConversationSnapshot {
   linkedPlan: LinkedPlanState;
   subagents: Array<NonNullable<ReturnType<SubagentManager['toRecord']>>>;
   chatMessages: ChatMessage[];
+  /** Total persisted chat messages for the conversation (window metadata). */
+  totalMessages?: number;
+  /** Index of the first message included in this window. */
+  windowStart?: number;
   historyMessages: number;
   workRuns: ConversationWorkRun[];
   continuations: ConversationContinuation[];
@@ -2832,7 +2836,10 @@ export class Agent {
     })));
   }
 
-  public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {
+  public getConversationSnapshot(
+    conversationId = this.activeConversationId,
+    options: { window?: number; before?: number } = {},
+  ): ConversationSnapshot {
     const clean = this.safeConversationId(conversationId || 'default');
     const isActiveConversation = clean === this.safeConversationId(this.activeConversationId || 'default');
     const stateKey = this.workspaceConversationStateKey(clean);
@@ -2861,9 +2868,18 @@ export class Agent {
     const history = isActiveConversation && viewingRuntimeNode
       ? this.history
       : (viewedNode?.history ?? (persistedMessagesAvailable ? (persisted?.history ?? []) : (memory?.history ?? persisted?.history ?? [])));
-    const chatMessages = isActiveConversation && viewingRuntimeNode
+    const fullChatMessages = isActiveConversation && viewingRuntimeNode
       ? sourceChatMessages
       : this.normalizeConversationChatMessages(sourceChatMessages, history);
+    // Bound the renderer snapshot to a window of the most recent messages so a
+    // long-running conversation never forces the whole transcript across IPC in
+    // one call. Full history stays persisted; the renderer fetches older
+    // windows on demand ("load earlier messages").
+    const windowSize = Math.max(1, Math.floor(Number(options.window) || 0) || 200);
+    const totalMessages = fullChatMessages.length;
+    const before = Math.max(0, Math.floor(Number(options.before) || 0) || totalMessages);
+    const windowStart = Math.max(0, before - windowSize);
+    const chatMessages = fullChatMessages.slice(windowStart, before);
     const workRuns = this.normalizeWorkRuns(isActiveConversation && viewingRuntimeNode ? this.workRuns : (viewedNode?.workRuns || persisted?.workRuns || memory?.workRuns));
     const continuations = this.normalizeContinuations(isActiveConversation && viewingRuntimeNode ? this.continuations : (viewedNode?.continuations || persisted?.continuations || memory?.continuations));
     return {
@@ -2873,6 +2889,8 @@ export class Agent {
       linkedPlan: this.normalizeLinkedPlan(isActiveConversation ? this.linkedPlan : (persisted?.linkedPlan || memory?.linkedPlan)),
       subagents: this.recordsForState(isActiveConversation ? this.subagents.serialize() : (persisted?.subagentState || memory?.subagentState)),
       chatMessages: [...chatMessages],
+      totalMessages,
+      windowStart,
       historyMessages: history.length,
       workRuns,
       continuations,
@@ -3898,10 +3916,14 @@ export class Agent {
       const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
       const toolCalls = Array.isArray(m.tool_calls) ? JSON.stringify(m.tool_calls) : '';
       const text = `${content}${toolCalls}`;
-      for (let index = 0; index < text.length; index++) {
-        if (text.charCodeAt(index) > 0x7f) nonAsciiChars += 1;
-        else asciiChars += 1;
-      }
+      // Count non-ASCII with a native regex replace (fast O(n), no per-char JS
+      // loop and no giant match array). CJK and other non-ASCII scripts
+      // tokenize at roughly 1 token per char, so a flat chars/4 undercounts
+      // them by up to 4x and lets an oversized request reach the provider
+      // without compression.
+      const nonAscii = text.length - text.replace(/[\u0080-\uFFFF]/g, '').length;
+      nonAsciiChars += nonAscii;
+      asciiChars += Math.max(0, text.length - nonAscii);
       // JSON/escaped structure and tool-call metadata tokenize far denser than
       // plain prose (~4 chars/token). Charge structural bytes separately so
       // large SubAgent transcripts, tool catalogs, and escaped payloads cannot
@@ -3909,11 +3931,8 @@ export class Agent {
       if (typeof m.content === 'object' && m.content) structuralChars += Math.max(0, content.length);
       if (toolCalls) structuralChars += Math.max(0, toolCalls.length);
     }
-    // Prose: ~4 ASCII chars/token. CJK and other non-ASCII scripts tokenize at
-    // roughly 1 token per character, so a flat chars/4 undercounts them by up
-    // to 4x and lets an oversized request reach the provider without
-    // compression. Count non-ASCII chars at 1 token each and fold structural
-    // overhead in on top.
+    // Prose: ~4 ASCII chars/token. Count non-ASCII chars at 1 token each and
+    // fold structural overhead in on top.
     return Math.max(1, Math.ceil(asciiChars / 4 + nonAsciiChars + structuralChars / 6));
   }
 

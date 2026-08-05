@@ -2870,6 +2870,15 @@ if (isViewerArg) {
       if (!agent) return {};
       const wslDistros = availableWslDistros();
       const target = conversationRuntimeTarget(targetInput);
+      // Renderer-side message windowing: a long-running conversation is never
+      // transferred wholesale across IPC. The snapshot returns a window of the
+      // most recent messages plus total count; the renderer fetches older
+      // windows on demand. Full history remains persisted and intact.
+      const windowInput = (targetInput && typeof targetInput === 'object' && !Array.isArray(targetInput)
+        ? targetInput as { window?: number; before?: number }
+        : {});
+      const requestedWindow = Math.max(1, Math.floor(Number(windowInput.window) || 0) || 200);
+      const requestedBefore = Math.max(0, Math.floor(Number(windowInput.before) || 0));
       let conversationSnapshot: Record<string, unknown>;
       try {
         conversationSnapshot = startupPrewarmRequest
@@ -2889,6 +2898,11 @@ if (isViewerArg) {
           workRuns: [],
         };
       }
+      const fullMessages = Array.isArray(conversationSnapshot.chatMessages) ? conversationSnapshot.chatMessages as Array<unknown> : [];
+      const totalMessages = fullMessages.length;
+      const before = requestedBefore > 0 ? Math.min(totalMessages, requestedBefore) : totalMessages;
+      const windowStart = Math.max(0, before - requestedWindow);
+      const windowedMessages = fullMessages.slice(windowStart, before);
       return {
         mode: agent.mode,
         model: agent.modelSelectionValue(),
@@ -2897,6 +2911,9 @@ if (isViewerArg) {
         routeDecision: agent.lastRouteDecision,
         intelligence: agent.intelligence,
         ...conversationSnapshot,
+        chatMessages: windowedMessages,
+        totalMessages,
+        windowStart,
         conversationLocked: conversationSnapshot.conversationLocked ?? false,
         status: conversationSnapshot.status ?? 'idle',
         goal: conversationSnapshot.goal ?? null,
@@ -2983,6 +3000,31 @@ if (isViewerArg) {
     ipcMain.handle('conversation:getDraft', async (_event, conversationId?: string) => {
       if (!agent) return '';
       return agent.getStoredConversationDraft(String(conversationId || '') || agent.activeConversationId || 'default') || '';
+    });
+
+    // Renderer pagination: fetch an earlier window of a conversation's chat
+    // messages. Only the requested slice crosses IPC; full history stays
+    // persisted and untouched.
+    ipcMain.handle('conversation:loadEarlier', async (_event, targetInput: ConversationTargetInput & { window?: number; before?: number }) => {
+      if (!agent) return { chatMessages: [], totalMessages: 0, windowStart: 0 };
+      const target = conversationRuntimeTarget(targetInput);
+      const windowInput = targetInput && typeof targetInput === 'object' ? targetInput as { window?: number; before?: number } : {};
+      const requestedWindow = Math.max(1, Math.floor(Number(windowInput.window) || 0) || 200);
+      const requestedBefore = Math.max(0, Math.floor(Number(windowInput.before) || 0));
+      const snapshot = wslBackendEnabled()
+        ? await ensureWslConversationPool()!.snapshot(target)
+        : await ensureElectronUtilityPool().snapshot(target);
+      const fullMessages = Array.isArray(snapshot.chatMessages) ? snapshot.chatMessages as Array<unknown> : [];
+      const totalMessages = fullMessages.length;
+      const before = Math.min(totalMessages, requestedBefore);
+      const windowStart = Math.max(0, before - requestedWindow);
+      return {
+        chatMessages: fullMessages.slice(windowStart, before),
+        totalMessages,
+        windowStart,
+        conversationId: target.conversationId,
+        workspaceId: target.workspaceId,
+      };
     });
 
     ipcMain.handle('agent:getConversationPlan', async (_event, conversationId?: string) => {

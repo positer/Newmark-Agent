@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('api', {
   closeWorkspaceFile: (token: string) => ipcRenderer.invoke('agent:closeWorkspaceFile', token),
   closeWorkspacePreview: (token: string) => ipcRenderer.invoke('agent:closeWorkspacePreview', token),
   confirmEditorClose: (language: string, filePath: string) => ipcRenderer.invoke('agent:confirmEditorClose', language, filePath),
+  loadEarlierConversationMessages: (target: string | Record<string, unknown>) => ipcRenderer.invoke('conversation:loadEarlier', target),
   listFlows: () => ipcRenderer.invoke('flow:list'),
   readFlow: (name: string) => ipcRenderer.invoke('flow:read', name),
   saveFlow: (workflow: Record<string, unknown>) => ipcRenderer.invoke('flow:save', workflow),

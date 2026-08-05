@@ -151,6 +151,25 @@ function flowRecordFor(target) {
   assert(!sendMessages.some(m => String(m).includes('Flow stopped manually')), 'first Stop does not print a manual-stop bubble');
   assert(visibleModes.length === 0, 'first Stop does not switch visible mode');
 
+  // 1b. The running takeover bubble itself is the pause affordance: clicking the
+  // whole bubble invokes stopFlowRun, which must reach the cooperative path and
+  // leave a resumable paused takeover (never a rejected "already running").
+  var takeoverBubble = window.document.getElementById('flow-takeover');
+  flowRecordFor(currentTarget).running = true;
+  flowRecordFor(currentTarget).paused = false;
+  window.renderFlowTakeover(true, 'pause-stop-flow', { target: { ...currentTarget } });
+  stopFlowResults = [{ action: 'stopping' }];
+  resumeCalls = 0;
+  takeoverBubble.onclick();
+  await tick();
+  assert(flowRecordFor(currentTarget).running === true, 'clicking the running bubble keeps the Flow running (cooperative)');
+  window.renderFlowTakeover(true, 'pause-stop-flow', { interrupted: true, message: 'interrupted by user', target: { ...currentTarget } });
+  assert(flowRecordFor(currentTarget).paused === true, 'clicking the running bubble yields a paused takeover');
+  resumeCalls = 0;
+  await window.resumeInterruptedFlow();
+  await tick();
+  assert(resumeCalls === 1, 'click-to-pause takeover can be resumed without an already-running rejection');
+
   // 2. The interrupted suspension renders the paused takeover.
   window.renderFlowTakeover(true, 'pause-stop-flow', { interrupted: true, message: 'interrupted by user', target: { ...currentTarget } });
   const takeover = window.document.getElementById('flow-takeover');

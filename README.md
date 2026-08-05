@@ -45,14 +45,14 @@ Download packages from the [GitHub releases page](https://github.com/positer/New
 
 ### Windows
 
-- `Newmark-Agent-0.3.2-x64.msi`: per-machine Windows installer.
-- `Newmark-Agent-0.3.2-win-unpacked-x64.zip`: portable Windows directory with GUI, TUI, CLI, and launcher files.
+- `Newmark-Agent-0.3.3-x64.msi`: per-machine Windows installer.
+- `Newmark-Agent-0.3.3-win-unpacked-x64.zip`: portable Windows directory with GUI, TUI, CLI, and launcher files.
 
 ### Linux
 
-- `Newmark-Agent-0.3.2-x86_64.AppImage`: portable Linux desktop package.
-- `Newmark-Agent-0.3.2-amd64.deb`: Debian/Ubuntu package.
-- `Newmark-Agent-0.3.2-linux-unpacked-x64.zip`: unpacked Linux distribution.
+- `Newmark-Agent-0.3.3-x86_64.AppImage`: portable Linux desktop package.
+- `Newmark-Agent-0.3.3-amd64.deb`: Debian/Ubuntu package.
+- `Newmark-Agent-0.3.3-linux-unpacked-x64.zip`: unpacked Linux distribution.
 
 Packages are unsigned prerelease builds. Verify downloaded artifacts with the SHA-256 values published in the release notes.
 

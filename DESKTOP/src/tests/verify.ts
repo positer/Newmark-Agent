@@ -697,6 +697,12 @@ async function main() {
     && flowMainSource.includes('controller.abort(new Error(`Flow interrupted by user: ${flowName}`))')
     && flowMainSource.includes('if (activeFlowStateFor(target)) clearFlowSuspensionForNewWork(target);'),
   'Flow pause: first Stop/Esc cooperatively aborts into a paused suspension, while a new Build/Plan/Goal instruction exits the pause without restoring the old mode');
+  assert(flowMainSource.includes("reason: ''")
+    && flowMainSource.includes("reason: '' | 'question' | 'interrupted'")
+    && flowMainSource.includes('flowState.abortController = null;')
+    && flowMainSource.includes('suspension.abortController = null;')
+    && flowMainSource.includes("if (suspension.abortController) return { ok: false, error: `Flow is already running: ${suspension.name || '(unnamed)'}` };"),
+  'Flow resume: a running Flow is marked running (reason empty, abortController set), every suspension clears abortController, so clicking the takeover bubble to pause then clicking again to resume is never rejected as already-running');
   assert(agentSourceForEditor.includes('getStoredFlowSuspension(conversationId = this.activeConversationId): FlowSuspensionRecord | null')
     && agentSourceForEditor.includes('saveStoredFlowSuspension(suspension: FlowSuspensionRecord | null, conversationId = this.activeConversationId): void')
     && agentSourceForEditor.includes('clearStoredFlowSuspension(conversationId = this.activeConversationId): void')

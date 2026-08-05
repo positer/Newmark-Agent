@@ -97,9 +97,11 @@ interface ActiveFlowState {
   previousMode: AgentMode;
   previousFlow: Agent['flow'];
   previousPc: number;
-  reason: 'question' | 'interrupted';
+  /** '' while running; 'question' or 'interrupted' only while suspended. */
+  reason: '' | 'question' | 'interrupted';
   message?: string;
   target: ConversationRuntimeTarget;
+  /** Non-null only while actively running; null while suspended. */
   abortController: AbortController | null;
   name: string;
   flowAgent: Agent | null;
@@ -300,7 +302,7 @@ function persistedFlowSuspensionRecord(suspension: ActiveFlowState, message = ''
     input: String(suspension.input || ''),
     completedResults: Array.isArray(suspension.completedResults) ? suspension.completedResults : [],
     previousMode: suspension.previousMode,
-    reason: suspension.reason,
+    reason: suspension.reason === '' ? 'interrupted' : suspension.reason,
     message: String(message || suspension.message || ''),
     target: suspension.target ? {
       workspaceId: suspension.target.workspaceId,
@@ -2494,7 +2496,7 @@ if (isViewerArg) {
         previousMode,
         previousFlow,
         previousPc,
-        reason: 'interrupted',
+        reason: '',
         target: flowTarget,
         abortController: flowAbortController,
         name: workflow.name,
@@ -2539,6 +2541,7 @@ if (isViewerArg) {
           flowState.completedResults = e.completedResults;
           flowState.reason = 'question';
           flowState.message = '';
+          flowState.abortController = null;
           agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(flowState), flowTarget.conversationId);
           return {
             ok: true,
@@ -2575,6 +2578,7 @@ if (isViewerArg) {
         flowState.completedResults = Array.isArray(buildFailure.completedResults) ? buildFailure.completedResults : [];
         flowState.reason = 'interrupted';
         flowState.message = interruptedMessage;
+        flowState.abortController = null;
         agent.pendingOptions = [];
         agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(flowState), flowTarget.conversationId);
         return {
@@ -2652,6 +2656,7 @@ if (isViewerArg) {
           suspension.completedResults = error.completedResults;
           suspension.reason = 'question';
           suspension.message = '';
+          suspension.abortController = null;
           agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(suspension), flowTarget.conversationId);
           return {
             ok: true,
@@ -2685,6 +2690,7 @@ if (isViewerArg) {
         suspension.completedResults = Array.isArray(resumeFailure.completedResults) ? resumeFailure.completedResults : suspension.completedResults;
         suspension.reason = 'interrupted';
         suspension.message = interruptedMessage;
+        suspension.abortController = null;
         flowAgent.pendingOptions = [];
         agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(suspension), flowTarget.conversationId);
         return {

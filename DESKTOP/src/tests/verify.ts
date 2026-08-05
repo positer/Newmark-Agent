@@ -433,6 +433,10 @@ async function main() {
     && uiHtml.includes('var expanded = run.expanded === undefined')
     && uiHtml.includes('? live && state.expandToolsDefault !== false')
     && uiHtml.includes("if (run.userToggled !== true) run.expanded = false"), 'ui html: completed tools update their original row, live Build blocks expand, and terminal blocks auto-collapse unless manually toggled');
+  assert(uiHtml.includes('function compareConversationWorkEvents')
+    && uiHtml.includes('.sort(compareConversationWorkEvents)')
+    && uiHtml.includes('var messageRole = m.hidden_user_input')
+    && uiHtml.includes("currentLang() === 'zh' ? '内部指令' : 'Directive'"), 'ui Build history: long-lived work events render oldest-to-newest and internal peer context is not labeled as user input');
   assert(!uiHtml.includes('state._activeWorkflowMsg') && !uiHtml.includes('state._activeWorkflowText') && !uiHtml.includes('state._toolEventMsgs') && !uiHtml.includes('state._toolEventBatch') && !uiHtml.includes('state._lastCompletedWorkflow'), 'ui html: live workflow feedback state is conversation-scoped, not a global singleton');
   assert(uiHtml.includes('function isHiddenWorkflowMessage(message)') && uiHtml.includes('Preparing model request and available tools') && uiHtml.includes('Executing \\d+ tool call') && uiHtml.includes("if (String(m.role || '') === 'workflow' && /^tool:/.test(String(m.mode || ''))) continue;"), 'ui html: hides internal workflow status rows and suppresses legacy persisted tool chat rows now owned by Build runs');
   assert(uiHtml.includes('background: transparent;') && uiHtml.includes('border-radius: 0;') && uiHtml.includes('#chat-area:has(> .chat-msg)') && uiHtml.includes('background-position: left 32px top, right 32px top;') && uiHtml.includes('background-attachment: local;') && !uiHtml.includes('.chat-msg::before') && uiHtml.includes('.chat-msg::after'), 'ui html: chat messages are not bubble cards and the scrolling conversation owns continuous left/right timeline rails');
@@ -481,14 +485,14 @@ async function main() {
   'Goal continuation: hidden automatic Build instructions focus only on the current Goal and never revive historical unfinished tasks');
   assert(uiHtml.includes('window.submitSelectedFlow = function()')
     && uiHtml.includes('window.renderFlowTakeover = function(active, name, options)')
-    && uiHtml.includes("if (state.mode === 'flow' || state._flowRunning)")
+     && uiHtml.includes("if (state.mode === 'flow' || (currentFlowRunning() && flowTakeoverMatchesCurrent()))")
     && uiHtml.includes('window.submitCurrentAction();')
     && uiHtml.includes('api.guideFlow')
     && uiHtml.includes('api.stopFlow')
-    && uiHtml.includes('state._flowQueueLease')
+    && uiHtml.includes('flowRecord.queueLease')
     && uiHtml.includes('window.stopFlowRun({ resumeQueue: true })')
     && uiHtml.includes('id="flow-prompt-bar"')
-    && uiHtml.includes('state.flowPromptText = flowInput')
+    && uiHtml.includes('flowRecord.promptText = flowInput')
     && uiHtml.includes("flowSel.dataset.newmarkVisible = nextMode === 'flow' ? 'true' : 'false'")
     && !uiHtml.includes('flowQueueRequest.flowOwned = true')
     && !uiHtml.includes("'flow-queue-active'")
@@ -511,7 +515,7 @@ async function main() {
   'mode persistence: Plan, Goal, and Flow update the target-bound runner, persisted snapshot, and resident runtime options together');
   assert(uiHtml.includes('function updateSubmitButtonState()') && uiHtml.includes("setSubmitButtonVisual(escalating ? 'octagon-x' : 'square', label, true, true)") && uiHtml.includes("setSubmitButtonVisual('send', t('input.send'), running, false)") && uiHtml.includes("els.prompt.addEventListener('input'") && uiHtml.includes("['stopping', 'force_restarting']"), 'ui html: submit button switches between Send, Stop, and Force stop from the target runtime state');
   assert(uiHtml.includes("window.setAgentBackendMode = async function(mode)") && uiHtml.includes('id="agent-runtime-environment"') && uiHtml.includes("state.wslAvailable ? '' : ' disabled'") && uiHtml.includes("t('settings.restartRequired')") && !uiHtml.includes('window.setAgentWslBackend'), 'ui html: Windows native/WSL backend is a restart-required list choice and WSL mode is disabled when unavailable');
-  assert(uiHtml.includes('if (api.setMode) await api.setMode(executionMode)') && uiHtml.includes('if (api.setModel && state.model) await api.setModel(state.model)'), 'ui html: send synchronizes the per-turn execution mode and model without rewriting the visible input mode');
+  assert(uiHtml.includes('await syncConversationExecutionState(executionMode, effectiveInputMode)') && uiHtml.includes('executionMode !== state._syncedMode') && uiHtml.includes('state.model !== state._syncedModel') && uiHtml.includes('if (result != null) state._syncedModel = state.model;'), 'ui html: send synchronizes the per-turn execution mode and model without rewriting the visible input mode');
   assert(uiHtml.includes('renderConversations();') && uiHtml.includes('r.conversations') && uiHtml.includes('applyBackendConversations(r.conversations || [], stillActive ? lockedConversationId : activeConversationId(), lockedTarget.workspaceId)'), 'ui html: refreshes the initiating workspace conversation cache without changing the foreground target');
   assert(uiHtml.includes('runningConversations') && uiHtml.includes('setupAgentWorkEvents()') && uiHtml.includes('appendAgentWorkEvent(payload)') && uiHtml.includes('var id = String(event.conversationId ||') && uiHtml.includes('renderAgentWorkEvent(event)') && uiHtml.includes('summary: item.title ||'), 'ui html: supports per-conversation running state, conversation-bound live work events, and backend titles');
   assert(uiHtml.includes("type === 'queue_update'") && uiHtml.includes('backendQueuesByTarget') && uiHtml.includes('setBackendQueueForTarget(event.queue || { steering: [], followUp: [] }, eventQueueTarget)') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue, eventQueueTarget)') && uiHtml.includes('setBackendQueueForTarget(s.queued, snapshotTarget)') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue, snapshotTarget)'), 'ui html: caches backend queue_update events by composite target for foreground/background conversation debugging');
@@ -529,7 +533,7 @@ async function main() {
   assert(uiHtml.includes('window.enhanceNewmarkSelect = function(select)') && uiHtml.includes("root.querySelectorAll('select').forEach(window.enhanceNewmarkSelect)") && uiHtml.includes("menu.className = 'model-select-menu newmark-select-menu'") && uiHtml.includes('window.positionSelectPopup = function(button, menu)') && uiHtml.includes("class=\"model-select-menu-option newmark-select-option' + (child.value === select.value ? ' selected' : '')") && uiHtml.includes("select.dispatchEvent(new Event('change', { bubbles: true }))") && uiHtml.includes("flowSel.dataset.newmarkVisible = state.mode === 'flow' ? 'true' : 'false'"), 'ui selects: mode, intelligence, settings, GitHub repository, workspace, and dynamic dialog selects reuse the accessible model-menu classes and shared directional floating positioner while retaining native change handlers');
   assert(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].every(tier => uiHtml.includes(`<option value="${tier}">${tier}</option>`) || uiHtml.includes(`<option value="${tier}" selected>${tier}</option>`))
     && uiHtml.includes("xhigh: t('intel.xhigh')") && uiHtml.includes("max: t('intel.max')"),
-  'ui intelligence: GUI exposes the standard low/medium/high/xhigh/max reasoning effort tiers');
+   'ui intelligence: GUI exposes the standard low/medium/high/xhigh/max/ultra reasoning effort tiers');
   assert(uiHtml.includes('window.selectReadableControlWidth = function(select)') && uiHtml.includes("shell.dataset.autoReadableWidth = compactSelect ? 'true' : 'false'") && uiHtml.includes("menu.matches(':popover-open')") && uiHtml.includes('window.closeModelSelectMenu();\n    return;'), 'ui selects: compact controls reserve readable option width and both model and generic popovers close through their full top-layer lifecycle on a repeated trigger click');
   assert(uiHtml.includes('.ft-item .ft-toggle {') && uiHtml.includes('transform: rotate(90deg)') && uiHtml.includes('.ft-item .ft-toggle.collapsed { transform: rotate(0deg); }') && uiHtml.includes('.flow-item-header.collapsed .arrow { transform: rotate(0deg); }'), 'right panel disclosure indicators point right while collapsed and down while expanded');
   assert(uiHtml.includes('function canonicalUiWorkspaceKey(ws)') && uiHtml.includes('window.upsertWorkspaceState = function(ws)') && !uiHtml.includes('state.workspaces.push(ws);'), 'ui html: workspace creation upserts exact folder bindings instead of showing temporary duplicates');
@@ -640,7 +644,7 @@ async function main() {
     && flowMainSource.includes('stopRelayingFlowEvents()')
     && uiHtml.includes("setConversationRuntimeState(flowTarget, 'running', provisionalFlowRunId")
     && uiHtml.includes("status: 'running', expanded: true")
-    && uiHtml.includes('var running = !!runtime || !!state._flowRunning;'),
+    && uiHtml.includes('var running = !!runtime || currentFlowRunning();'),
   'Flow live UI: relays every component event and immediately exposes Build timing, conversation-running state, and the send/stop action');
   assert(flowRunnerSource.includes('nestedProviderMessage')
     && flowRunnerSource.includes('FlowBuildExecutionError')
@@ -648,10 +652,15 @@ async function main() {
     && uiHtml.includes("showUiNotice(formatChatError(err && err.message")
     && uiHtml.includes('flowErrorWasAlreadyShown')
     && uiHtml.includes('flowRelayedErrorWasShown')
-    && uiHtml.includes('state._lastFlowRelayedError')
+    && uiHtml.includes('lastRelayedError')
     && !uiHtml.includes("addMsg('assistant', '[Flow error] ' + (err && err.message ? err.message : String(err)), 'error', state.model);"),
     'Flow errors: provider JSON is condensed and a failed component does not add a duplicate raw Agent bubble');
   assert(uiHtml.includes('conversationDrafts') && uiHtml.includes('saveActiveConversationDraft') && uiHtml.includes('restoreConversationDraft') && uiHtml.includes('clearActiveConversationDraft'), 'UI input: drafts are isolated and restored per conversation');
+  assert(uiHtml.includes("state.conversationDrafts[state._promptBoundKey || conversationDraftKey()]")
+    && uiHtml.includes("state._promptBoundKey = key;")
+    && uiHtml.includes("if (state._conversationSwitchSeq !== switchSeq) return;")
+    && uiHtml.includes("persistConversationDraftForKey(previousDraftKey)"),
+  'UI input: draft writes bind to the restored conversation, debounced persists flush on exit, and stale fast-switch sync results are dropped');
   assert(uiHtml.includes('var chatWasAtBottom = !!(els[\'chat-area\'] && shouldAutoScroll(els[\'chat-area\']))') && uiHtml.includes('var chatWasAtBottom = shouldAutoScroll(els[\'chat-area\']);'), 'UI scroll: rerenders preserve user position and only follow when already at bottom');
   assert(agentKernelRunnerSource.includes('if (currentAgent.isLlmErrorText(token.text))') && agentKernelRunnerSource.includes('surface.definitions.length === 0'), 'Provider/UI error boundary: provider error text is withheld from live prose and broker remains available for tool provisioning');
   assert(flowRunnerSource.includes("visibleMode: 'flow-user-input'")
@@ -676,34 +685,40 @@ async function main() {
     && flowRunnerSource.includes("throw new FlowQuestionPendingError(options.componentId)"),
   'Flow plan confirm: the plan completion question is no longer filtered and suspends the flow for user input');
   assert(flowMainSource.includes('const restoreStoredFlowSuspension = (): void => {')
-    && flowMainSource.includes('const discardFlowSuspension = async (): Promise<void> => {')
+    && flowMainSource.includes('const discardFlowSuspensionForTarget = async (target: ConversationRuntimeTarget): Promise<void> => {')
     && flowMainSource.includes('function persistedFlowSuspensionRecord(')
-    && flowMainSource.includes('agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(activeFlowSuspension))')
+    && flowMainSource.includes('agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(flowState), flowTarget.conversationId)')
     && flowMainSource.includes('const isUserFlowAbort = ')
-    && flowMainSource.includes('if (activeFlowSuspension) await discardFlowSuspension();')
+    && flowMainSource.includes('const activeFlowsByRuntimeKey = new Map<string, ActiveFlowState>()')
     && flowMainSource.includes("return { ok: true, action: 'force_stopped_pending', flow: flowName };")
-    && flowMainSource.includes('flowSuspension: agent.getStoredFlowSuspension()'),
-  'Flow pause/resume: system-level interruptions persist a paused takeover, user aborts keep exiting, and every exit path discards the pause');
+     && flowMainSource.includes('flowSuspension: flowSuspensionForTarget(target)'),
+  'Flow pause/resume: system-level interruptions persist a paused takeover per conversation, user aborts keep exiting, and every exit path discards the pause for the owning conversation only');
   assert(flowMainSource.includes("return { ok: true, action: 'stopping', flow: flowName };")
     && flowMainSource.includes('controller.abort(new Error(`Flow interrupted by user: ${flowName}`))')
-    && flowMainSource.includes('if (activeFlowSuspension) clearFlowSuspensionForNewWork();'),
+    && flowMainSource.includes('if (activeFlowStateFor(target)) clearFlowSuspensionForNewWork(target);'),
   'Flow pause: first Stop/Esc cooperatively aborts into a paused suspension, while a new Build/Plan/Goal instruction exits the pause without restoring the old mode');
-  assert(agentSourceForEditor.includes('getStoredFlowSuspension(): FlowSuspensionRecord | null')
-    && agentSourceForEditor.includes('saveStoredFlowSuspension(suspension: FlowSuspensionRecord | null): void')
-    && agentSourceForEditor.includes('clearStoredFlowSuspension(): void')
-    && agentSourceForEditor.includes('flowSuspension?: FlowSuspensionRecord | null'),
-  'Agent persistence: Flow suspension is stored in workspace conversation state and survives restarts');
+  assert(agentSourceForEditor.includes('getStoredFlowSuspension(conversationId = this.activeConversationId): FlowSuspensionRecord | null')
+    && agentSourceForEditor.includes('saveStoredFlowSuspension(suspension: FlowSuspensionRecord | null, conversationId = this.activeConversationId): void')
+    && agentSourceForEditor.includes('clearStoredFlowSuspension(conversationId = this.activeConversationId): void')
+    && agentSourceForEditor.includes('flowSuspensions?: Record<string, FlowSuspensionRecord>'),
+  'Agent persistence: Flow suspension is stored per conversation in workspace conversation state and survives restarts');
   assert(uiHtml.includes('window.renderFlowTakeover = function(active, name, options)')
     && uiHtml.includes('window.resumeInterruptedFlow = async function()')
     && uiHtml.includes('window.resumeFlowWith = async function(feedback, isInterruptedResume)')
     && uiHtml.includes("return window.resumeFlowWith('', true);")
     && uiHtml.includes('t(\'flow.pausedTakeover\')')
     && uiHtml.includes('window.resumeFlowWith(feedback)')
-    && uiHtml.includes("if (s && s.flowSuspension) {"),
-  'UI Flow takeover: interrupted flow shows a paused takeover bubble with a Resume action and restores after restart');
+     && uiHtml.includes("if (s && s.flowSuspension) {"),
+   'UI Flow takeover: interrupted flow shows a paused takeover bubble with a whole-bubble Resume affordance and restores after restart');
+  assert(flowMainSource.includes('const flowSuspensionForTarget = (target: ConversationRuntimeTarget)')
+    && flowMainSource.includes('flowSuspension: flowSuspensionForTarget(target)')
+    && flowMainSource.includes("ipcMain.handle('flow:resume', async (_event, response: string, targetInput?: ConversationTargetInput)")
+    && flowMainSource.includes('const activeFlowsByRuntimeKey = new Map<string, ActiveFlowState>()')
+    && uiHtml.includes('flowTakeoverRecordFor')
+    && uiHtml.includes('api.resumeFlow(feedback, currentConversationTarget())'), 'Flow takeover: persisted display, resume execution, and cancellation stay bound to the owning conversation target on both backend and frontend');
   assert(uiHtml.includes("if (action === 'stopping') return stopResult;")
     && uiHtml.includes('window.exitPausedFlowForNewInstruction = function()')
-    && uiHtml.includes('state._flowPaused = false;')
+    && uiHtml.includes('renderFlowTakeover(false, \'\', { target: statusTarget });')
     && uiHtml.includes("return window.sendMessage('guide', guideText, { requestedMode: state.mode || 'build' });"),
   'UI Flow pause: first Stop keeps the paused takeover (cooperative), a force stop tears down, and a new instruction sent while paused exits into a fresh process');
   assert(uiHtml.includes('id="terminal-timeout-input"') && uiHtml.includes('Max ms') && uiHtml.includes('Terminal timeout cap') && uiHtml.includes('window.setTerminalInterruptTimeout = function(value)') && uiHtml.includes("api.saveSetting('terminal', 'interrupt_timeout_ms', n)"), 'ui html: terminal timeout cap is editable and persisted');
@@ -983,8 +998,8 @@ async function main() {
     && uiHtml.includes('border-radius: var(--radius-lg)')
     && uiHtml.includes('window.syncModelSelectSurface')
     && uiHtml.includes("role=\"option\" aria-selected=\""), 'Model menu: the bottom selector uses an accessible rounded Newmark popup instead of the square native platform list');
-  assert(agentTs.includes('const tokens = await child.process(delegatedPrompt);')
-    && !agentTs.includes('this.withTimeout(child.process(delegatedPrompt), 120000)'), 'Subagents: peer execution has no independent hard-coded two-minute timeout and remains under cooperative parent cancellation');
+   assert(!agentTs.includes('this.withTimeout(child.process(delegatedPrompt), 120000)')
+      && agentTs.includes('child.process({ text: delegatedPrompt, hiddenUserInput: true })'), 'Subagents: peer execution has no independent hard-coded two-minute timeout and remains under cooperative parent cancellation');
   assert(agentTs.includes('expanded: raw.expanded === undefined ? true : !!raw.expanded')
     && agentTs.includes('activeRun.expanded = true')
     && uiHtml.includes("if (run.userToggled !== true) run.expanded = false")
@@ -2459,6 +2474,9 @@ async function main() {
   assert(createdSub.includes('subagent first result') && createdSub.includes('[Subagent accepted]'), 'Agent task compatibility: accepts immediately then awaits peer result for direct API callers');
   assert(worker?.status === 'completed', 'Agent task: completed status recorded');
   assert(worker?.model === 'test-model' && worker?.inputMode === 'next' && worker?.agentMode === 'plan', 'Agent task: preserves requested model/input/mode');
+  assert(fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'index.ts'), 'utf-8').includes("model: { type: 'string', description:")
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('const inheritedModel = this.activeDeployment()')
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('normalizeSubagentModelSelection'), 'Agent task model: exposes an explicit model contract and defaults to the parent resolved deployment');
   const agentOnlySubagentRoot = path.join(TEST_DIR, 'agent-only-subagent-runtime');
   fs.rmSync(agentOnlySubagentRoot, { recursive: true, force: true });
   const agentOnlyTask = new Agent(agentOnlySubagentRoot, { agentOnly: true });
@@ -2475,7 +2493,7 @@ async function main() {
   const subRead = taskAgent.handleSubagentReadEnvelope(JSON.stringify({ name: 'worker', max_chars: 8000 }));
   assert(subRead.ok === true && subRead.output.includes('subagent continued result') && subRead.output.includes('mailbox'), 'Agent subagent_read: returns bounded status, feedback, result, and mailbox summary');
   assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'subagent.ts'), 'utf-8').includes('replaceContext') && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('subagentContextPersist'), 'Agent subagent context: compressed history and metadata persist back to the peer record');
-  assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('this.notifyAgentKernelUserMessageStart(text, clientMessageId || undefined);') && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes("return this.queueActiveKernelMessage(prompt, 'followUp')") && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8').includes("runtime.pendingNextTurn.push({ message, queueMode: 'followUp' });"), 'Agent subagent result delivery: initial process boundaries acknowledge persisted inbox messages and conversation-owned routing appends one next turn without feedback loops');
+   assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('this.notifyAgentKernelUserMessageStart(text, clientMessageId || undefined);') && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes("return this.queueActiveKernelMessage(prompt, 'followUp', undefined, undefined, undefined, true)") && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8').includes('message: { text: prompt, hiddenUserInput: true }'), 'Agent subagent result delivery: initial process boundaries acknowledge persisted inbox messages and conversation-owned routing appends one next turn without feedback loops');
   const kernelRunnerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8').replace(/\r\n/g, '\n');
   assert(kernelRunnerSource.includes('const selected = definitions')
     && kernelRunnerSource.includes('SUBAGENT_CORE_TOOL_NAMES.has(name) && !selectedNames.has(name)')
@@ -2491,6 +2509,9 @@ async function main() {
     'Agent subagent context: job seeding rebuilds tool-call/tool-result turns from the persisted peer transcript');
   assert(agentSource.includes('[Peer Job Continuation]'),
     'Agent subagent context: mailbox/resume jobs inject a peer continuation prompt over the persisted transcript');
+  assert(subagentSource.includes('hidden_user_input: true')
+    && kernelRunnerSource.includes('hiddenUserInput?: boolean')
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8').includes('hiddenUserInput: true'), 'Agent subagent context: internal peer directives and root wakeups never become visible user messages');
   const subResult = (taskAgent as unknown as { handleSubagentResult: (args: string) => string })
     .handleSubagentResult(JSON.stringify({ name: 'worker' }));
   assert(subResult.includes('get.subagent("') && subResult.includes('subagent continued result'), 'Agent subagent_result: returns result and transcript');
@@ -3561,6 +3582,8 @@ async function main() {
   assert(sysPrompt.includes('做了什么') && sysPrompt.includes('验证') && sysPrompt.includes('文件') && sysPrompt.includes('问题/下一步'), 'buildSystemPrompt: enforces Chinese structured reply format');
   assert(sysPrompt.includes('What changed') && sysPrompt.includes('Verification') && sysPrompt.includes('Files') && sysPrompt.includes('Issues/Next'), 'buildSystemPrompt: enforces English structured reply format');
   assert(sysPrompt.includes('non-overridable') && sysPrompt.includes('must not weaken these rules'), 'buildSystemPrompt: protects intrinsic rules from user prompts');
+  assert(sysPrompt.includes('The latest explicit user instruction is authoritative and has the highest task priority')
+    && sysPrompt.includes('Do not proactively resume, revive, continue, or execute a prior task merely because it appears unfinished in history'), 'buildSystemPrompt: prioritizes the latest user instruction and blocks unsolicited historical task continuation');
   assert(sysPrompt.includes('no <think>, </think>') && sysPrompt.includes('hidden-reasoning markers'), 'buildSystemPrompt: forbids hidden reasoning markers in visible replies');
   assert(sysPrompt.includes('Visible output contract') && sysPrompt.includes('sanitized before display'), 'buildSystemPrompt: discloses output sanitization implementation');
   assert(sysPrompt.includes('BUILD MODE'), 'buildSystemPrompt: includes mode instructions');
@@ -4459,6 +4482,33 @@ async function main() {
     'model switch compression: persists exact segmented compression metadata for the shortened conversation');
   (agent as any).forcedProvider = null;
   (agent as any).forcedProviderDeployment = undefined;
+  const isolatedCompressionRoots = [
+    path.join(TEST_DIR, 'compression-isolated-a'),
+    path.join(TEST_DIR, 'compression-isolated-b'),
+  ];
+  isolatedCompressionRoots.forEach(root => fs.rmSync(root, { recursive: true, force: true }));
+  const isolatedCompressionAgents = isolatedCompressionRoots.map((root, index) => {
+    const isolated = new Agent(root, { agentOnly: true });
+    isolated.config.upsertProvider(`compression-isolated-provider-${index}`, `https://compression-isolated-${index}.invalid/v1`, `compression-isolated-key-${index}`);
+    isolated.config.addModelToProvider(`compression-isolated-provider-${index}`, 'isolated-short-model', 'Isolated Short Model', 'Per-runtime compression fixture');
+    isolated.config.updateModel(`compression-isolated-provider-${index}`, 'isolated-short-model', { max_tokens: 2_000 });
+    isolated.setModel('isolated-short-model');
+    isolated.history = Array.from({ length: 32 }, (_, messageIndex) => ({
+      role: messageIndex % 2 === 0 ? 'user' : 'assistant',
+      content: `${index === 0 ? 'ISOLATED_A' : 'ISOLATED_B'}-${messageIndex} ` + 'q'.repeat(1200),
+    }));
+    (isolated as any).forcedProvider = new FakeProvider([`## Active Or Unfinished Work\nKeep isolated runtime ${index}.`]);
+    (isolated as any).forcedProviderDeployment = undefined;
+    return isolated;
+  });
+  const isolatedBefore = isolatedCompressionAgents[1].history.map(message => ({ ...message }));
+  await isolatedCompressionAgents[0].compressForModelSwitch();
+  assert(isolatedCompressionAgents[0].history.length < 32
+    && isolatedCompressionAgents[0].lastCompression?.compressedMessages === isolatedCompressionAgents[0].history.length
+    && JSON.stringify(isolatedCompressionAgents[0].history).includes('ISOLATED_A')
+    && JSON.stringify(isolatedCompressionAgents[1].history) === JSON.stringify(isolatedBefore),
+  'model switch compression: compresses one runtime target without changing a sibling runtime history');
+  isolatedCompressionRoots.forEach(root => fs.rmSync(root, { recursive: true, force: true }));
 
   // ---- 11. Model Validation Tests ----
   console.log('\n🔍 Model Validation');

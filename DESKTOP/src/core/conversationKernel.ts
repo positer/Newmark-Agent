@@ -545,7 +545,7 @@ export class ConversationKernel {
     if (runtime.stopRequestedRunId === runtime.runId && runtime.forceStopArmedRunId === runtime.runId) {
       runtime.runner.emitWorkEvent({
         type: 'status',
-        content: 'Force restarting this conversation runtime.',
+        content: 'Force stopping this conversation run.',
         status: 'force_restarting',
         runId: runtime.runId,
       });
@@ -723,8 +723,8 @@ export class ConversationKernel {
       }
       const marker = `[Root subagent inbox id=${rootMessage.id} ${rootMessage.kind} from ${rootMessage.fromAgentId}]`;
       const prompt = `${marker}\n${rootMessage.body}\n\nReview this persisted peer result and summarize or continue the parent task as needed.`;
-      if (!runtime.pendingNextTurn.some(item => item.message === prompt)) {
-        runtime.pendingNextTurn.push({ message: prompt, queueMode: 'followUp' });
+      if (!runtime.pendingNextTurn.some(item => typeof item.message === 'string' ? item.message === prompt : item.message.text === prompt)) {
+        runtime.pendingNextTurn.push({ message: { text: prompt, hiddenUserInput: true }, queueMode: 'followUp' });
       }
     }
     this.mirrorHostIfTargetActive(runtime);
@@ -917,12 +917,12 @@ export class ConversationKernel {
       const rootInboxId = message.match(/^\[Root subagent inbox id=([0-9a-f-]{36})\b/i)?.[1];
       if (rootInboxId && !runtime.runner.subagents.readRootInbox().some(item => item.id === rootInboxId)) return;
       if (runtime.activePromise) {
-        if (!runtime.pendingNextTurn.some(item => item.message === message)) {
-          runtime.pendingNextTurn.push({ message, queueMode: 'followUp' });
+        if (!runtime.pendingNextTurn.some(item => typeof item.message === 'string' ? item.message === message : item.message.text === message)) {
+          runtime.pendingNextTurn.push({ message: { text: message, hiddenUserInput: true }, queueMode: 'followUp' });
         }
         return;
       }
-      void this.prompt(message, runtime.target, runtime.options, 'followUp').catch(error => {
+      void this.prompt({ text: message, hiddenUserInput: true }, runtime.target, runtime.options, 'followUp').catch(error => {
         runtime.runner.recordWorkStatus(`Subagent result follow-up failed: ${error instanceof Error ? error.message : String(error)}`);
       });
     });
@@ -1265,13 +1265,14 @@ export class ConversationKernel {
       });
       if (duplicate) continue;
       runtime.pendingNextTurn.push({
-        message: item.clientMessageId || item.images?.length || item.attachments?.length
+        message: item.clientMessageId || item.images?.length || item.attachments?.length || item.hiddenUserInput
           ? {
               text: item.content,
               images: item.images,
               attachments: item.attachments,
               clientMessageId: item.clientMessageId,
               runId: item.runId,
+              hiddenUserInput: item.hiddenUserInput,
             }
           : item.content,
         queueMode: item.queueMode,

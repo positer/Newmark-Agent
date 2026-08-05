@@ -70,6 +70,7 @@ interface RuntimeEntry {
 export interface ElectronUtilityRuntimePoolOptions {
   idleTtlMs?: number;
   stopRequestTimeoutMs?: number;
+  forceStopAckTimeoutMs?: number;
   maxResidentRuntimes?: number;
 }
 
@@ -171,7 +172,7 @@ export class ElectronUtilityRuntimePool {
           pid: entry.client.status().pid,
         };
       }
-      return await this.forceRestartEntry(entry, existing);
+      return await this.forceTerminateEntry(entry, existing);
     }
 
     const intent: SupervisorStopIntent = {
@@ -181,7 +182,7 @@ export class ElectronUtilityRuntimePool {
       forcePromise: null,
     };
     entry.stopIntent = intent;
-    this.emitSupervisorStatus(entry, 'stopping', 'Stopping conversation runtime. Press stop again to force restart it.');
+    this.emitSupervisorStatus(entry, 'stopping', 'Stopping conversation runtime. Press stop again to force stop this run.');
     let timer: ReturnType<typeof setTimeout> | null = null;
     try {
       const timeoutMs = Math.max(10, Number(this.options.stopRequestTimeoutMs ?? 5_250));
@@ -196,7 +197,7 @@ export class ElectronUtilityRuntimePool {
         intent.runId = result.runId || intent.runId;
         intent.generation = result.generation || intent.generation;
         intent.checkpointed = result.checkpointed || intent.checkpointed;
-        return await this.forceRestartEntry(entry, intent);
+        return await this.forceTerminateEntry(entry, intent);
       }
       if (result.action === 'graceful') {
         intent.runId = result.runId || intent.runId;
@@ -656,32 +657,52 @@ export class ElectronUtilityRuntimePool {
     };
   }
 
-  private forceRestartEntry(entry: RuntimeEntry, intent: SupervisorStopIntent): Promise<ElectronPoolStopResult> {
+  private forceTerminateEntry(entry: RuntimeEntry, intent: SupervisorStopIntent): Promise<ElectronPoolStopResult> {
     if (intent.forcePromise) return intent.forcePromise;
     this.restarting.add(entry.target.runtimeKey);
-    this.emitSupervisorStatus(entry, 'force_restarting', 'Force restarting this conversation runtime.');
+    this.emitSupervisorStatus(entry, 'force_restarting', 'Force stopping this conversation run. The runtime stays down until the next prompt.');
     const promise = (async (): Promise<ElectronPoolStopResult> => {
       try {
-        await entry.client.forceRestart();
-        const recovered = await entry.client.snapshot();
-        if (recovered.target?.runtimeKey !== entry.target.runtimeKey) throw new Error('Electron runtime recovery snapshot target mismatch');
-        entry.lastSnapshot = recovered;
+        // The first click already asked the worker kernel to checkpoint. Give it
+        // a short acknowledgement budget to finalize the armed force stop
+        // (force_interrupted + checkpoint) before escalating to a hard kill.
+        let kernelForce: UtilityAgentStopResult | null = null;
+        try {
+          kernelForce = await Promise.race([
+            entry.client.requestStop(intent.runId || undefined),
+            new Promise<never>((_, reject) => {
+              setTimeout(() => reject(new Error('Electron force-stop acknowledgement timed out')), Math.max(10, Number(this.options.forceStopAckTimeoutMs ?? 750)));
+            }),
+          ]);
+        } catch {
+          kernelForce = null;
+        }
+        const finalized = !!kernelForce && kernelForce.action === 'force';
+        const checkpointed = finalized ? (kernelForce!.checkpointed || intent.checkpointed) : intent.checkpointed;
+        if (!finalized) {
+          // The worker event loop is wedged: hard-kill the process tree without
+          // starting a replacement. The first-stop checkpoint preserves the
+          // conversation; only the latest run is discarded.
+          await entry.client.forceStop();
+        }
+        entry.lastSnapshot = null;
+        entry.workEvents = [];
+        entry.lastRunId = '';
         if (entry.stopIntent === intent) entry.stopIntent = null;
-        if (!recovered.runtime?.running && !recovered.runtime?.stopRequested) this.scheduleIdle(entry);
         return {
           action: 'force',
           runtimeKey: entry.target.runtimeKey,
           runId: intent.runId,
           generation: intent.generation,
-          checkpointed: intent.checkpointed,
+          checkpointed,
           backend: 'utility',
           pid: entry.client.status().pid,
-          restarted: true,
+          restarted: false,
         };
       } catch (error) {
         this.rememberClientQuarantine(entry);
         intent.forcePromise = null;
-        throw new Error(`Electron conversation runtime restart recovery failed: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`Electron conversation runtime force stop failed: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         this.restarting.delete(entry.target.runtimeKey);
       }

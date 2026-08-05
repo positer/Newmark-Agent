@@ -231,7 +231,7 @@ function createMockNewmarkAdapter() {
     },
     setIntelligence(tier, requested = target) {
       target = { ...assertTarget(requested) };
-      intelligence = ["low", "medium", "high", "xhigh", "max"].includes(tier) ? tier : "medium";
+      intelligence = ["low", "medium", "high", "xhigh", "max", "ultra"].includes(tier) ? tier : "medium";
       return stateFor(target);
     },
     setConversationPinned(conversationId, pinned, requested = target) {

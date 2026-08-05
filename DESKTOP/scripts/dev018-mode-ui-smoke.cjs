@@ -202,7 +202,7 @@ async function waitForUi(cdp) {
       document.getElementById('prompt').value = 'FLOW_USER_INPUT';
       document.getElementById('prompt').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       const backendSettleDeadline = Date.now() + 5000;
-      while (state._flowRunning && Date.now() < backendSettleDeadline) {
+      while ((window.currentFlowRunning ? window.currentFlowRunning() : state._flowRunning) && Date.now() < backendSettleDeadline) {
         await new Promise(function(resolve) { setTimeout(resolve, 100); });
       }
       // An isolated smoke root intentionally has no live provider. If the
@@ -219,7 +219,7 @@ async function waitForUi(cdp) {
       window.renderFlowTakeover(true, flowFixtureName);
       window.renderInputStack();
       const keyboardFlowTakeover = bubble.classList.contains('active');
-      const flowSubmission = state._lastFlowSubmission || {};
+      const flowSubmission = (window.currentFlowTakeoverRecord ? window.currentFlowTakeoverRecord().lastSubmission : state._lastFlowSubmission) || {};
       const injectedFlowPrompt = String(((flowSubmission.components || [])[0] || {}).injectedPrompt || '');
       const flowQueuePaused = window.isQueuePausedForTarget(currentConversationTarget());
       const flowOwnedQueueEntry = (state.nextQueueRequests || []).some(request => request && request.flowOwned === true);
@@ -290,7 +290,7 @@ async function waitForUi(cdp) {
         text: bubble.textContent,
       };
     })()`);
-    if (!result.active || result.floatStackPosition !== 'absolute' || result.pointerEvents !== 'none') fail(`Invalid takeover surface: ${JSON.stringify(result)}`);
+    if (!result.active || result.floatStackPosition !== 'absolute' || result.pointerEvents !== 'auto') fail(`Invalid takeover surface: ${JSON.stringify(result)}`);
     if (Math.abs(result.inputHeightBefore - result.inputHeightAfter) > 0.5) fail(`Takeover changed input height: ${JSON.stringify(result)}`);
     if (result.bubbleBottom > result.inputStackTop - 5) fail(`Takeover is not floating above the complete input-bar stack: ${JSON.stringify(result)}`);
     if (result.scrollButtonBottom > result.bubbleTop - 5) fail(`Scroll-to-bottom button overlaps the Flow takeover bubble: ${JSON.stringify(result)}`);
@@ -419,7 +419,7 @@ async function waitForUi(cdp) {
     }
     const lightThemeResult = await evaluate(cdp, `(async () => {
       document.documentElement.setAttribute('data-theme', 'light');
-      state._flowRunning = true;
+      if (window.currentFlowTakeoverRecord) window.currentFlowTakeoverRecord().running = true;
       state.flowPromptText = 'LIGHT_FLOW_PROMPT';
       state.goalText = 'LIGHT_GOAL';
       window.renderFlowTakeover(true, 'light-flow');

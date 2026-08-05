@@ -580,7 +580,7 @@ function agentsView(state, width, p) {
     const messages = Array.isArray(agent.messages) ? agent.messages : [];
     messages.forEach((message) => {
       appendChatMessage(historyRows, {
-        role: message.role,
+        role: message.hidden_user_input ? "directive" : message.role,
         content: String(message.content || ""),
         meta: message.role === "assistant" && message.meta ? String(message.meta) : ""
       }, messageWidth, roleColumnWidth, p);

@@ -54,6 +54,7 @@ function verifyPersistedWorkRunsCannotRewriteRuntimeIdentity(source: string): vo
     'mergeGuideWorkEvent',
     'dedupeGuideWorkEvents',
     'publicWorkEventForUi',
+    'compareConversationWorkEvents',
     'normalizedWorkRun',
     'conversationBranchIdsForTarget',
     'workRunBranchKey',

@@ -215,7 +215,7 @@ interface KernelToolCall {
 type KernelContent = KernelTextContent | KernelImageContent | KernelToolCall | { type: string; [key: string]: unknown };
 
 type KernelMessage =
-  | { role: 'user'; content: string | Array<KernelTextContent | KernelImageContent>; timestamp: number; clientMessageId?: string; runId?: string }
+  | { role: 'user'; content: string | Array<KernelTextContent | KernelImageContent>; timestamp: number; clientMessageId?: string; runId?: string; hiddenUserInput?: boolean }
   | { role: 'assistant'; content: KernelContent[]; api: string; provider: string; model: string; usage: KernelUsage; stopReason: string; errorMessage?: string; timestamp: number }
   | { role: 'toolResult'; toolCallId: string; toolName: string; content: Array<KernelTextContent | KernelImageContent>; details?: unknown; isError: boolean; timestamp: number };
 

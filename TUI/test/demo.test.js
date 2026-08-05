@@ -422,11 +422,11 @@ test("conversation model selection is persisted only for the focused conversatio
   });
 });
 
-test("TUI Model exposes and stress-switches the five shared reasoning effort tiers", () => {
+test("TUI Model exposes and stress-switches the six shared reasoning effort tiers", () => {
   const state = createState();
   switchView(state, "model");
   state.focusRegion = "content";
-  const tiers = ["low", "medium", "high", "xhigh", "max"];
+  const tiers = ["low", "medium", "high", "xhigh", "max", "ultra"];
   for (let round = 0; round < 50; round++) {
     for (let index = 0; index < tiers.length; index++) {
       assert.equal(selectIntelligenceTier(state, index), true);
@@ -435,7 +435,7 @@ test("TUI Model exposes and stress-switches the five shared reasoning effort tie
   }
   const output = stripAnsi(render(state, 120, 40));
   assert.match(output, /Reasoning effort/);
-  assert.match(output, /low[\s\S]*medium[\s\S]*high[\s\S]*xhigh[\s\S]*max/);
+  assert.match(output, /low[\s\S]*medium[\s\S]*high[\s\S]*xhigh[\s\S]*max[\s\S]*ultra/);
   assert.match(output, /Deployment/);
   moveFocusHorizontal(state, 1);
   assert.equal(state.contentColumn, 1);

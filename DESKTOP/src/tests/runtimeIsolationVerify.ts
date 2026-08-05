@@ -831,6 +831,7 @@ class FakeWslTargetClient implements WslTargetRuntimeClient {
   error = '';
   restartFailure = '';
   stopFailure = '';
+  forceStopFailure = '';
 
   constructor(private readonly targetInfo: ConversationRuntimeTarget) {}
 
@@ -892,6 +893,16 @@ class FakeWslTargetClient implements WslTargetRuntimeClient {
     return this.stopResults.shift() || { action: 'not_running', runtimeKey: '', checkpointed: false, backend: 'wsl', distro: 'Fake' };
   }
   async forceRestartRuntimeGroup(): Promise<void> { this.restarts++; }
+  async forceStopRuntimeGroup(): Promise<'terminated' | 'stale'> {
+    this.forceStops++;
+    if (this.forceStopFailure) {
+      this.quarantined = true;
+      this.error = this.forceStopFailure;
+      throw new Error(this.forceStopFailure);
+    }
+    this.connected = false;
+    return 'terminated';
+  }
   async start(): Promise<void> { this.starts++; }
   async stop(): Promise<void> { this.stops++; }
   status(): { enabled: true; connected: boolean; distro: string; pid: number; error: string } {
@@ -950,8 +961,9 @@ async function verifyWslPerTargetPool(): Promise<void> {
   assert.equal(alphaClient.stopCalls, 2);
   const forced = await pool.requestStop(alpha, 'run-a');
   assert.equal(forced.action, 'force');
-  assert.equal(forced.restarted, true);
-  assert.equal(alphaClient.restarts, 1);
+  assert.equal(forced.restarted, false, 'a force-stopped WSL run terminates without restarting the runtime');
+  assert.equal(alphaClient.restarts, 0);
+  assert.equal(alphaClient.forceStops, 1, 'a force-stopped WSL run hard-terminates the process group');
   assert.equal(betaClient.restarts, 0, 'forcing alpha must never restart beta');
   alphaClient.stopResults.push(
     { action: 'graceful', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'wsl', distro: 'Fake' },
@@ -974,7 +986,7 @@ async function verifyWslPerTargetPool(): Promise<void> {
     const client = new FakeWslTargetClient(normalized);
     hungClients.set(normalized.runtimeKey, client);
     return client;
-  }, { stopRequestTimeoutMs: 15 });
+  }, { stopRequestTimeoutMs: 15, forceStopAckTimeoutMs: 15 });
   await hungPool.prompt({ message: 'hung', target: alpha, conversationId: 'same', options, queueMode: 'steer', workspace: null });
   const hungClient = hungClients.get(conversationRuntimeKey(alpha))!;
   hungClient.hangStops = true;
@@ -989,9 +1001,10 @@ async function verifyWslPerTargetPool(): Promise<void> {
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error('hung WSL force stop waited on child IPC')), 250)),
   ]);
   assert.equal(forcedHung.action, 'force');
-  assert.equal(forcedHung.restarted, true);
-  assert.equal(hungClient.stopCalls, 1, 'second WSL stop force-restarts directly without another child stop RPC');
-  assert.equal(hungClient.restarts, 1);
+  assert.equal(forcedHung.restarted, false, 'a hung WSL force stop terminates without restarting the process group');
+  assert.equal(hungClient.stopCalls, 2, 'second WSL stop retries the child stop once with a short budget then hard-terminates');
+  assert.equal(hungClient.restarts, 0);
+  assert.equal(hungClient.forceStops, 1);
   assert.equal(hungPool.isStopping(alpha), false);
   await hungPool.stopAll();
 }
@@ -1254,6 +1267,7 @@ class FakeElectronTargetClient implements ElectronTargetRuntimeClient {
   error = '';
   restartFailure = '';
   stopFailure = '';
+  forceStopFailure = '';
 
   constructor(private readonly targetInfo: ConversationRuntimeTarget) {}
 
@@ -1316,7 +1330,15 @@ class FakeElectronTargetClient implements ElectronTargetRuntimeClient {
       throw new Error(this.restartFailure);
     }
   }
-  async forceStop(): Promise<void> { this.forceStops++; this.connected = false; }
+  async forceStop(): Promise<void> {
+    this.forceStops++;
+    if (this.forceStopFailure) {
+      this.quarantined = true;
+      this.error = this.forceStopFailure;
+      throw new Error(this.forceStopFailure);
+    }
+    this.connected = false;
+  }
   async stop(): Promise<void> {
     this.stops++;
     if (this.stopFailure) {
@@ -1398,8 +1420,9 @@ async function verifyElectronPerTargetPool(): Promise<void> {
   assert.equal(alphaClient.stopCalls, 2);
   const forced = await pool.requestStop(alpha, 'run-a');
   assert.equal(forced.action, 'force');
-  assert.equal(forced.restarted, true);
-  assert.equal(alphaClient.restarts, 1);
+  assert.equal(forced.restarted, false, 'a force-stopped utility run terminates without restarting the runtime');
+  assert.equal(alphaClient.restarts, 0);
+  assert.equal(alphaClient.forceStops, 1, 'a force-stopped utility run hard-terminates the worker');
   assert.equal(betaClient.restarts, 0, 'forcing one utility runtime must not restart another target');
   alphaClient.stopResults.push(
     { action: 'graceful', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'utility', pid: 123 },
@@ -1422,7 +1445,7 @@ async function verifyElectronPerTargetPool(): Promise<void> {
     const client = new FakeElectronTargetClient(normalized);
     hungClients.set(normalized.runtimeKey, client);
     return client;
-  }, { stopRequestTimeoutMs: 15 });
+  }, { stopRequestTimeoutMs: 15, forceStopAckTimeoutMs: 15 });
   await hungPool.prompt({ message: 'hung', target: alpha, options, queueMode: 'steer' });
   const hungClient = hungClients.get(conversationRuntimeKey(alpha))!;
   hungClient.hangStops = true;
@@ -1437,9 +1460,10 @@ async function verifyElectronPerTargetPool(): Promise<void> {
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error('hung Electron force stop waited on child IPC')), 250)),
   ]);
   assert.equal(forcedHung.action, 'force');
-  assert.equal(forcedHung.restarted, true);
-  assert.equal(hungClient.stopCalls, 1, 'second Electron stop force-restarts directly without another child stop RPC');
-  assert.equal(hungClient.restarts, 1);
+  assert.equal(forcedHung.restarted, false, 'a hung Electron force stop terminates without restarting the runtime');
+  assert.equal(hungClient.stopCalls, 2, 'second Electron stop retries the child stop once with a short budget then hard-terminates');
+  assert.equal(hungClient.restarts, 0);
+  assert.equal(hungClient.forceStops, 1);
   assert.equal(hungPool.isStopping(alpha), false);
   await hungPool.stopAll();
 
@@ -1456,18 +1480,18 @@ async function verifyElectronPerTargetPool(): Promise<void> {
     checkpointed: true, backend: 'utility', pid: 123,
   });
   assert.equal((await quarantinePool.requestStop(alpha, 'run-quarantine')).action, 'graceful');
-  quarantineClient.restartFailure = 'injected retained-handle restart failure';
+  quarantineClient.forceStopFailure = 'injected retained-handle termination failure';
   await assert.rejects(
     quarantinePool.requestStop(alpha, 'run-quarantine'),
-    /restart recovery failed.*retained-handle/i,
+    /force stop failed.*retained-handle/i,
   );
   assert.equal(quarantinePool.status(alpha).quarantined, true);
-  quarantineClient.restartFailure = '';
+  quarantineClient.forceStopFailure = '';
   const cleanupOnly = await quarantinePool.requestStop(alpha, 'run-quarantine');
   assert.equal(cleanupOnly.action, 'force');
   assert.equal(cleanupOnly.restarted, false, 'quarantined retained handles are cleanup-only and never authorize replacement');
-  assert.equal(quarantineClient.forceStops, 1);
-  assert.equal(quarantineClient.restarts, 1, 'cleanup retry must not invoke forceRestart a second time');
+  assert.equal(quarantineClient.forceStops, 2);
+  assert.equal(quarantineClient.restarts, 0, 'cleanup retry must not invoke forceRestart');
   await quarantinePool.stopTarget(alpha);
   assert.deepEqual(quarantinePool.runtimeKeys(), [], 'confirmed cleanup permits entry eviction');
   await assert.rejects(

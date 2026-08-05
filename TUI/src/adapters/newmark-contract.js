@@ -15,7 +15,7 @@ const PLAN_STATUSES = new Set(["pending", "in_progress", "done"]);
 const SUBAGENT_STATUSES = new Set(["idle", "queued", "working", "completed", "closed", "error"]);
 const AGENT_MODES = new Set(["build", "plan", "goal", "flow"]);
 const INPUT_MODES = new Set(["guide", "next"]);
-const INTELLIGENCE_TIERS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const INTELLIGENCE_TIERS = new Set(["low", "medium", "high", "xhigh", "max", "ultra"]);
 
 function targetKey(target) {
   return `${String(target?.workspaceId || "")}::${String(target?.conversationId || "")}`;

@@ -246,6 +246,9 @@ export class SubagentManager {
     this.schedulingPaused = state?.schedulingPaused === true;
     for (const raw of state?.records || []) {
       const record = cloneRecord(raw);
+      record.messages = record.messages.map(message => message.role === 'user'
+        ? { ...message, hidden_user_input: true }
+        : message);
       if (record.status === 'working') record.status = 'queued';
       this.subs.set(record.id, record);
       if (record.status === 'queued') {
@@ -304,7 +307,7 @@ export class SubagentManager {
       flowName: flowName || undefined,
       flowPc: Math.max(0, Math.floor(Number(flowPc) || 0)),
       status: 'queued',
-      messages: [{ role: 'system', content: `Peer agent '${qualifiedName}': ${prompt}` }, { role: 'user', content: prompt }],
+       messages: [{ role: 'system', content: `Peer agent '${qualifiedName}': ${prompt}` }, { role: 'user', content: prompt, hidden_user_input: true }],
       result: null,
       createdAt: stamp,
       updatedAt: stamp,
@@ -324,7 +327,7 @@ export class SubagentManager {
   send(id: string, prompt: string): boolean {
     const target = this.get(id);
     if (!target || target.status === 'closed') return false;
-    target.messages.push({ role: 'user', content: prompt });
+    target.messages.push({ role: 'user', content: prompt, hidden_user_input: true });
     target.error = undefined;
     target.completedAt = undefined;
     target.updatedAt = now();

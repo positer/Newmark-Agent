@@ -406,6 +406,7 @@ async function runUiCheck(root) {
     await waitFor(cdp, `window.api.getState().then(s => s.workspaces && s.workspaces.current && s.workspaces.current.id === ${jsString(smokeWorkspace.id)})`, 30000, 'workspace selected');
 
     await evaluate(cdp, `window.setInputMode && window.setInputMode('build')`, 30000);
+    const conversationAResponseStartedAt = Date.now();
     await evaluate(cdp, `(() => {
       const prompt = document.querySelector('#prompt');
       if (!prompt) throw new Error('prompt missing for conversation A');
@@ -426,13 +427,52 @@ async function runUiCheck(root) {
       };
       return ok;
     })`, 45000, 'conversation A reply visible');
+    const conversationAResponseMs = Date.now() - conversationAResponseStartedAt;
+    if (conversationAResponseMs > 5000) fail(`active conversation A response exceeded 5s: ${conversationAResponseMs}ms`);
+    log(`active conversation A response speed ok: ${conversationAResponseMs}ms`);
     const convA = await evaluate(cdp, `window.api.getState(activeConversationId()).then(s => s.conversationId)`, 30000);
     log(`conversation A ready: ${convA}`);
     await assertCompletedConversationPersisted(smokeWorkspace.path, convA, markerAPrompt, markerAReply, 'conversation A completion');
 
+    await evaluate(cdp, `(() => {
+      const prompt = document.querySelector('#prompt');
+      if (!prompt) throw new Error('prompt missing for conversation A draft');
+      prompt.value = 'FAST_SWITCH_DRAFT_A_20260704';
+      prompt.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()`, 30000);
+    await sleep(180);
     await evaluate(cdp, `window.newConversation()`, 30000);
     await waitFor(cdp, `window.api.getState(activeConversationId()).then(s => s.conversationId !== ${jsString(convA)})`, 30000, 'conversation B created');
     const convB = await evaluate(cdp, `window.api.getState(activeConversationId()).then(s => s.conversationId)`, 30000);
+    await waitFor(cdp, `(() => String(activeConversationId() || '') === ${jsString(convB)} && (document.querySelector('#prompt')?.value || '') === '')()`, 30000, 'conversation B starts without conversation A draft');
+    const conversationBResponseStartedAt = Date.now();
+    await evaluate(cdp, `(() => {
+      const prompt = document.querySelector('#prompt');
+      if (!prompt) throw new Error('prompt missing for conversation B draft');
+      prompt.value = 'FAST_SWITCH_DRAFT_B_20260704';
+      prompt.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()`, 30000);
+    await sleep(180);
+    await evaluate(cdp, `(() => { const idx = currentWorkspaceConversations().findIndex(c => c.id === ${jsString(convA)}); window.switchConversation(idx); return true; })()`, 30000);
+    await waitFor(cdp, `(() => String(activeConversationId() || '') === ${jsString(convA)} && (document.querySelector('#prompt')?.value || '') === 'FAST_SWITCH_DRAFT_A_20260704')()`, 30000, 'conversation A draft restored independently');
+    await evaluate(cdp, `(() => { const idx = currentWorkspaceConversations().findIndex(c => c.id === ${jsString(convB)}); window.switchConversation(idx); return true; })()`, 30000);
+    await waitFor(cdp, `(() => {
+      const match = String(activeConversationId() || '') === ${jsString(convB)} && (document.querySelector('#prompt')?.value || '') === 'FAST_SWITCH_DRAFT_B_20260704';
+      if (!match) {
+        window.__fastSwitchDebug = {
+          activeId: String(activeConversationId() || ''),
+          expectedId: ${jsString(convB)},
+          promptValue: document.querySelector('#prompt')?.value || '',
+          draftKeys: Object.keys(window.state.conversationDrafts || {}),
+          boundKey: window.state._promptBoundKey,
+          aliases: window.state.runtimeKeyAliases,
+        };
+      }
+      return match;
+    })()`, 30000, 'conversation B draft restored independently');
+    log('conversation draft isolation ok: A and B retain separate unsent drafts');
     await waitFor(cdp, `window.api.getState(${jsString(convB)}).then(() => {
       const workspacePath = ${jsString(smokeWorkspace.path)};
       return true;
@@ -447,6 +487,9 @@ async function runUiCheck(root) {
       return true;
     })()`, 30000);
     await waitFor(cdp, `(() => (document.querySelector('#chat-area')?.innerText || '').includes(${jsString(markerBReply)}) && !(window.state && window.state._sendInFlight))()`, 45000, 'conversation B reply visible');
+    const conversationBResponseMs = Date.now() - conversationBResponseStartedAt;
+    if (conversationBResponseMs > 5000) fail(`active conversation B response exceeded 5s: ${conversationBResponseMs}ms`);
+    log(`active conversation B response speed ok: ${conversationBResponseMs}ms`);
     log(`conversation B ready: ${convB}`);
     await assertCompletedConversationPersisted(smokeWorkspace.path, convB, markerBPrompt, markerBReply, 'conversation B completion');
     await assertCompletedConversationPersisted(smokeWorkspace.path, convA, markerAPrompt, markerAReply, 'conversation A after conversation B completion');
@@ -535,6 +578,32 @@ async function runUiCheck(root) {
       await sleep(60);
     }
     log('rapid switch-back visual isolation ok');
+
+    const flowTargetCheck = await evaluate(cdp, `(() => {
+      const targetA = { workspaceId: ${jsString(smokeWorkspace.id)}, conversationId: ${jsString(convA)} };
+      window.renderFlowTakeover(true, 'FAST_SWITCH_FLOW_A', { interrupted: true, target: targetA, message: 'switch isolation' });
+      return { activeOnB: document.querySelector('#flow-takeover')?.classList.contains('active') === true, target: (window.state.flowTakeovers && window.state.flowTakeovers[window.runtimeKeyFor(targetA.workspaceId, targetA.conversationId)] || {}).target || null };
+    })()`, 30000);
+    if (flowTargetCheck.activeOnB) fail(`Flow takeover leaked into conversation B: ${JSON.stringify(flowTargetCheck)}`);
+    await evaluate(cdp, `(() => { const idx = currentWorkspaceConversations().findIndex(c => c.id === ${jsString(convA)}); window.switchConversation(idx); return true; })()`, 30000);
+    await waitFor(cdp, `String(activeConversationId() || '') === ${jsString(convA)}`, 30000, 'Flow target conversation A activation');
+    const flowActiveOnA = await evaluate(cdp, `(() => {
+      const targetA = { workspaceId: ${jsString(smokeWorkspace.id)}, conversationId: ${jsString(convA)} };
+      window.reconcileFlowTakeoverForActive && window.reconcileFlowTakeoverForActive();
+      window.renderFlowTakeover(true, 'FAST_SWITCH_FLOW_A', { interrupted: true, target: targetA });
+      return document.querySelector('#flow-takeover')?.classList.contains('active') === true;
+    })()`, 30000);
+    if (!flowActiveOnA) fail('Flow takeover did not activate on its owning conversation A');
+    await evaluate(cdp, `(() => { const idx = currentWorkspaceConversations().findIndex(c => c.id === ${jsString(convB)}); window.switchConversation(idx); return true; })()`, 30000);
+    await waitFor(cdp, `String(activeConversationId() || '') === ${jsString(convB)}`, 30000, 'Flow non-owner conversation B activation');
+    const flowHiddenOnB = await evaluate(cdp, `(() => {
+      window.reconcileFlowTakeoverForActive && window.reconcileFlowTakeoverForActive();
+      window.renderFlowTakeover(true, 'FAST_SWITCH_FLOW_A', { interrupted: true, target: { workspaceId: ${jsString(smokeWorkspace.id)}, conversationId: ${jsString(convA)} } });
+      return document.querySelector('#flow-takeover')?.classList.contains('active') !== true;
+    })()`, 30000);
+    if (!flowHiddenOnB) fail('Flow takeover remained visible after switching to non-owner conversation B');
+    await evaluate(cdp, `(() => { window.renderFlowTakeover(false, '', { target: currentConversationTarget() }); return true; })()`, 30000);
+    log('Flow takeover target isolation ok: owner A only, no cross-conversation display');
 
     await selectConversationAndAssert(cdp, convA, markerAPrompt, markerAReply, markerBPrompt, markerBReply, 'final conversation A visual isolation');
     await captureScreenshot(cdp, screenshotAPath);

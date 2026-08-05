@@ -4,7 +4,7 @@ const data = require("./data");
 const { createMockNewmarkAdapter } = require("./adapters/mock-newmark-adapter");
 const { targetKey, validateSnapshot } = require("./adapters/newmark-contract");
 const { SETTINGS_CATEGORIES, settingsRows } = require("./settings-schema");
-const INTELLIGENCE_TIERS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
+const INTELLIGENCE_TIERS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
 
 function applySnapshot(state, snapshot) {
   const valid = validateSnapshot(snapshot);

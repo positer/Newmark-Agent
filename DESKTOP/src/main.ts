@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { createHash, randomUUID } from 'crypto';
 import { spawn, spawnSync } from 'child_process';
-import { Agent, ConversationBranchLocator } from './core/agent';
+import { Agent, ConversationBranchLocator, FlowSuspensionRecord } from './core/agent';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope } from './core/types';
 import { AgentPromptMessage, ConversationKernel, ConversationTargetInput } from './core/conversationKernel';
 import { ConversationRuntimeTarget, conversationStateWorkspacePrefix, normalizeConversationTarget } from './core/conversationTarget';
@@ -84,9 +84,12 @@ if (process.platform === 'win32') {
 let mainWindow: BrowserWindow | null = null;
 let agent: Agent | null = null;
 let conversationKernel: ConversationKernel | null = null;
-let activeFlowAbortController: AbortController | null = null;
-let activeFlowName = '';
-let activeFlowSuspension: {
+
+// Flow takeover is strictly conversation-local state. Every conversation owns
+// its own running flow / suspension / abort controller, keyed by runtimeKey.
+// Nothing about a Flow is global: switching conversations never surfaces or
+// mutates another conversation's Flow state.
+interface ActiveFlowState {
   workflow: NonNullable<Agent['flow']>;
   input: string;
   componentId: number;
@@ -96,7 +99,20 @@ let activeFlowSuspension: {
   previousPc: number;
   reason: 'question' | 'interrupted';
   message?: string;
-} | null = null;
+  target: ConversationRuntimeTarget;
+  abortController: AbortController | null;
+  name: string;
+  flowAgent: Agent | null;
+}
+const activeFlowsByRuntimeKey = new Map<string, ActiveFlowState>();
+
+function activeFlowStateKey(target: ConversationRuntimeTarget): string {
+  return normalizeConversationTarget(target).runtimeKey;
+}
+
+function activeFlowStateFor(target: ConversationRuntimeTarget): ActiveFlowState | null {
+  return activeFlowsByRuntimeKey.get(activeFlowStateKey(target)) || null;
+}
 let wslAgentClient: WslAgentClient | null = null;
 let electronUtilityRuntimePool: ElectronUtilityRuntimePool | null = null;
 let wslAgentRuntimePool: WslAgentRuntimePool | null = null;
@@ -277,7 +293,7 @@ function ensureConversationKernel(root: string): ConversationKernel | null {
   return conversationKernel;
 }
 
-function persistedFlowSuspensionRecord(suspension: NonNullable<typeof activeFlowSuspension>, message = ''): ReturnType<Agent['getStoredFlowSuspension']> {
+function persistedFlowSuspensionRecord(suspension: ActiveFlowState, message = ''): ReturnType<Agent['getStoredFlowSuspension']> {
   return {
     workflowName: suspension.workflow.name,
     componentId: suspension.componentId,
@@ -286,8 +302,20 @@ function persistedFlowSuspensionRecord(suspension: NonNullable<typeof activeFlow
     previousMode: suspension.previousMode,
     reason: suspension.reason,
     message: String(message || suspension.message || ''),
+    target: suspension.target ? {
+      workspaceId: suspension.target.workspaceId,
+      conversationId: suspension.target.conversationId,
+      workspace: suspension.target.workspace ? {
+        id: suspension.target.workspace.id,
+        name: suspension.target.workspace.name,
+        path: suspension.target.workspace.path,
+        isInternal: suspension.target.workspace.isInternal,
+        kind: suspension.target.workspace.kind,
+        conversationStatePrefix: suspension.target.workspace.conversationStatePrefix,
+      } : null,
+    } : undefined,
     options: suspension.reason === 'question'
-      ? (agent?.pendingOptions || []).map(question => ({
+      ? (suspension.flowAgent?.pendingOptions || agent?.pendingOptions || []).map(question => ({
           question: String(question.question || ''),
           options: (question.options || []).map(option => ({ label: String(option.label || ''), description: option.description })),
         }))
@@ -1492,18 +1520,29 @@ if (isViewerArg) {
     };
 
     const restoreStoredFlowSuspension = (): void => {
-      if (!agent || activeFlowSuspension) return;
-      const stored = agent.getStoredFlowSuspension();
+      if (!agent) return;
+      const stored = agent.getStoredFlowSuspension(agent.activeConversationId);
       if (!stored) return;
       const flowDir = path.join(agent.rootPath, 'Flow');
       const found = FlowEngine.findWorkflow(stored.workflowName, flowDir);
       const workflow = found ? FlowEngine.load(flowDir, found) : null;
       if (!workflow) {
-        agent.clearStoredFlowSuspension();
+        agent.clearStoredFlowSuspension(agent.activeConversationId);
         return;
       }
       const reason = stored.reason === 'interrupted' ? 'interrupted' : 'question';
-      activeFlowSuspension = {
+      let suspensionTarget: ConversationRuntimeTarget;
+      if (stored.target) {
+        try {
+          suspensionTarget = conversationRuntimeTarget(stored.target);
+        } catch {
+          suspensionTarget = conversationRuntimeTarget(agent.activeConversationId || 'default');
+        }
+      } else {
+        suspensionTarget = conversationRuntimeTarget(agent.activeConversationId || 'default');
+      }
+      const flowKey = activeFlowStateKey(suspensionTarget);
+      const restored: ActiveFlowState = {
         workflow,
         input: String(stored.input || ''),
         componentId: Math.max(0, Math.floor(Number(stored.componentId) || 0)),
@@ -1513,9 +1552,14 @@ if (isViewerArg) {
         previousPc: 0,
         reason,
         message: String(stored.message || ''),
+        target: suspensionTarget,
+        abortController: null,
+        name: workflow.name,
+        flowAgent: null,
       };
+      activeFlowsByRuntimeKey.set(flowKey, restored);
       agent.flow = workflow;
-      agent.flowPc = activeFlowSuspension.componentId;
+      agent.flowPc = restored.componentId;
       agent.mode = 'flow';
       agent.status = 'idle';
       agent.pendingOptions = reason === 'question' && Array.isArray(stored.options)
@@ -2078,33 +2122,66 @@ if (isViewerArg) {
 
     const wslBackendEnabled = (): boolean => process.platform === 'win32' && activeAgentBackendMode === 'wsl';
 
-    const discardFlowSuspension = async (): Promise<void> => {
-      const suspension = activeFlowSuspension;
-      if (!agent || !suspension) return;
-      activeFlowSuspension = null;
-      activeFlowName = '';
-      agent.pendingOptions = [];
-      agent.flow = suspension.previousFlow;
-      agent.flowPc = suspension.previousPc;
-      agent.setMode(suspension.previousMode);
-      agent.clearStoredFlowSuspension();
-      const target = conversationRuntimeTarget(agent.activeConversationId || 'default');
-      conversationKernel?.setMode(target, suspension.previousMode);
-      if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, suspension.previousMode);
-      else await ensureElectronUtilityPool()!.setMode(target, suspension.previousMode);
+    const flowSuspensionForTarget = (target: ConversationRuntimeTarget): FlowSuspensionRecord | null => {
+      const state = activeFlowStateFor(target);
+      if (state && (state.reason === 'question' || state.reason === 'interrupted')) {
+        return persistedFlowSuspensionRecord(state, state.message || '');
+      }
+      const stored = agent?.getStoredFlowSuspension(target.conversationId);
+      if (!stored) return null;
+      if (!stored.target) return target.conversationId === agent?.activeConversationId ? stored : null;
+      return stored.target.workspaceId === target.workspaceId && stored.target.conversationId === target.conversationId
+        ? stored
+        : null;
     };
 
-    // Drops a paused Flow without restoring the previous mode so a user's new
-    // Build/Plan/Goal/Flow instruction owns the current mode. The renderer keeps
-    // the mode in sync through agent:setMode before the send lands.
-    const clearFlowSuspensionForNewWork = (): void => {
-      if (!agent || !activeFlowSuspension) return;
-      activeFlowSuspension = null;
-      activeFlowName = '';
-      agent.pendingOptions = [];
-      agent.flow = null;
-      agent.flowPc = 0;
-      agent.clearStoredFlowSuspension();
+    const flowRunningForTarget = (target: ConversationRuntimeTarget): { name: string } | null => {
+      const state = activeFlowStateFor(target);
+      if (!state || state.reason === 'question' || state.reason === 'interrupted') return null;
+      return { name: state.name || state.workflow.name || '' };
+    };
+
+    const flowAgentTarget = (owner: Agent): { workspaceId: string; conversationId: string } => ({
+      workspaceId: owner.workspace.current?.id || 'none',
+      conversationId: owner.activeConversationId || 'default',
+    });
+
+    const setTargetFlowMode = async (target: ConversationRuntimeTarget, mode: AgentMode): Promise<void> => {
+      conversationKernel?.setMode(target, mode);
+      if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, mode);
+      else await ensureElectronUtilityPool()!.setMode(target, mode);
+    };
+
+    // Discards a paused Flow for exactly one conversation, restoring that
+    // conversation's previous mode. Other conversations' Flow state is untouched.
+    const discardFlowSuspensionForTarget = async (target: ConversationRuntimeTarget): Promise<void> => {
+      const key = activeFlowStateKey(target);
+      const suspension = activeFlowsByRuntimeKey.get(key) || null;
+      if (!agent || !suspension) return;
+      activeFlowsByRuntimeKey.delete(key);
+      const owner = suspension.flowAgent;
+      const ownerTarget = owner ? flowAgentTarget(owner) : null;
+      if (owner && ownerTarget && ownerTarget.workspaceId === suspension.target.workspaceId && ownerTarget.conversationId === suspension.target.conversationId) {
+        owner.pendingOptions = [];
+        owner.flow = suspension.previousFlow;
+        owner.flowPc = suspension.previousPc;
+        owner.setMode(suspension.previousMode);
+      }
+      agent.clearStoredFlowSuspension(suspension.target.conversationId);
+      await setTargetFlowMode(suspension.target, suspension.previousMode);
+    };
+
+    // Drops a paused Flow for exactly one conversation without restoring the
+    // previous mode so a user's new Build/Plan/Goal/Flow instruction owns the
+    // current mode. The renderer keeps the mode in sync through agent:setMode
+    // before the send lands. Other conversations' Flow state is untouched.
+    const clearFlowSuspensionForNewWork = (target: ConversationRuntimeTarget): void => {
+      if (!agent) return;
+      const key = activeFlowStateKey(target);
+      const state = activeFlowsByRuntimeKey.get(key) || null;
+      if (!state) return;
+      activeFlowsByRuntimeKey.delete(key);
+      agent.clearStoredFlowSuspension(state.target.conversationId);
     };
 
     const utilityHostToolHandler = createUtilityHostToolHandler({
@@ -2313,10 +2390,11 @@ if (isViewerArg) {
       try {
         const target = conversationRuntimeTarget(targetInput);
         assertTargetNotMutating(target, true);
-        // A new Build/Plan/Goal instruction exits any paused Flow into the user's
-        // new process (Flow pause state exit rule). flow:run already discards the
-        // suspension for a new Flow workflow.
-        if (activeFlowSuspension) clearFlowSuspensionForNewWork();
+        // A new Build/Plan/Goal instruction exits any paused Flow owned by THIS
+        // conversation into the user's new process (Flow pause state exit rule).
+        // flow:run already discards the suspension for a new Flow workflow.
+        // Other conversations' paused Flows are never touched by this send.
+        if (activeFlowStateFor(target)) clearFlowSuspensionForNewWork(target);
         const normalizedPromptTarget = normalizeConversationTarget(target);
         promptLeaseKey = normalizedPromptTarget.runtimeKey;
         promptLeaseWorkspaceKey = normalizedPromptTarget.workspaceKey;
@@ -2391,8 +2469,14 @@ if (isViewerArg) {
     ipcMain.handle('flow:run', async (_event, name: string, input = '', start = 0) => {
       if (!agent) return { ok: false, error: 'Agent not initialized' };
       if (agent.mode === 'plan') return { ok: false, error: 'Plan mode is fully read-only; Flow execution is blocked.' };
-      if (activeFlowSuspension) await discardFlowSuspension();
-      if (activeFlowAbortController) return { ok: false, error: `Flow is already running: ${activeFlowName || '(unnamed)'}` };
+      const flowTarget = conversationRuntimeTarget(agent.activeConversationId || 'default');
+      const flowKey = activeFlowStateKey(flowTarget);
+      const existing = activeFlowsByRuntimeKey.get(flowKey) || null;
+      if (existing && (existing.reason === 'question' || existing.reason === 'interrupted')) {
+        await discardFlowSuspensionForTarget(flowTarget);
+      } else if (existing?.abortController) {
+        return { ok: false, error: `Flow is already running: ${existing.name || '(unnamed)'}` };
+      }
       const flowDir = path.join(agent.rootPath, 'Flow');
       const found = FlowEngine.findWorkflow(String(name || ''), flowDir);
       if (!found) return { ok: false, error: `Workflow not found: ${name}` };
@@ -2402,9 +2486,21 @@ if (isViewerArg) {
       const previousFlow = agent.flow;
       const previousPc = agent.flowPc;
       const flowAbortController = new AbortController();
-      activeFlowAbortController = flowAbortController;
-      activeFlowName = workflow.name;
-      const flowTarget = conversationRuntimeTarget(agent.activeConversationId || 'default');
+      const flowState: ActiveFlowState = {
+        workflow,
+        input: String(input || ''),
+        componentId: 0,
+        completedResults: [],
+        previousMode,
+        previousFlow,
+        previousPc,
+        reason: 'interrupted',
+        target: flowTarget,
+        abortController: flowAbortController,
+        name: workflow.name,
+        flowAgent: agent,
+      };
+      activeFlowsByRuntimeKey.set(flowKey, flowState);
       const stopRelayingFlowEvents = relayFlowAgentWorkEvents(agent, flowTarget);
       let suspended = false;
       try {
@@ -2438,21 +2534,12 @@ if (isViewerArg) {
           suspended = true;
           agent.flowPc = e.componentId;
           agent.setMode('flow');
-          const target = conversationRuntimeTarget(agent.activeConversationId || 'default');
-          conversationKernel?.setMode(target, 'flow');
-          if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, 'flow');
-          else await ensureElectronUtilityPool().setMode(target, 'flow');
-          activeFlowSuspension = {
-            workflow,
-            input: String(input || ''),
-            componentId: e.componentId,
-            completedResults: e.completedResults,
-            previousMode,
-            previousFlow,
-            previousPc,
-            reason: 'question',
-          };
-          agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(activeFlowSuspension));
+          await setTargetFlowMode(flowTarget, 'flow');
+          flowState.componentId = e.componentId;
+          flowState.completedResults = e.completedResults;
+          flowState.reason = 'question';
+          flowState.message = '';
+          agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(flowState), flowTarget.conversationId);
           return {
             ok: true,
             pending: true,
@@ -2483,23 +2570,13 @@ if (isViewerArg) {
         ).slice(0, 320);
         agent.flowPc = interruptedComponentId;
         agent.setMode('flow');
-        const target = conversationRuntimeTarget(agent.activeConversationId || 'default');
-        conversationKernel?.setMode(target, 'flow');
-        if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, 'flow');
-        else await ensureElectronUtilityPool().setMode(target, 'flow');
-        activeFlowSuspension = {
-          workflow,
-          input: String(input || ''),
-          componentId: interruptedComponentId,
-          completedResults: Array.isArray(buildFailure.completedResults) ? buildFailure.completedResults : [],
-          previousMode,
-          previousFlow,
-          previousPc,
-          reason: 'interrupted',
-          message: interruptedMessage,
-        };
+        await setTargetFlowMode(flowTarget, 'flow');
+        flowState.componentId = interruptedComponentId;
+        flowState.completedResults = Array.isArray(buildFailure.completedResults) ? buildFailure.completedResults : [];
+        flowState.reason = 'interrupted';
+        flowState.message = interruptedMessage;
         agent.pendingOptions = [];
-        agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(activeFlowSuspension));
+        agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(flowState), flowTarget.conversationId);
         return {
           ok: true,
           pending: true,
@@ -2513,34 +2590,37 @@ if (isViewerArg) {
         };
       } finally {
         stopRelayingFlowEvents();
-        if (activeFlowAbortController === flowAbortController) {
-          activeFlowAbortController = null;
-          if (!suspended) activeFlowName = '';
-        }
         if (!suspended) {
           agent.flow = previousFlow;
           agent.flowPc = previousPc;
           agent.setMode(previousMode);
+          activeFlowsByRuntimeKey.delete(flowKey);
         }
       }
     });
-    ipcMain.handle('flow:resume', async (_event, response: string) => {
-      if (!agent || !activeFlowSuspension) return { ok: false, error: 'No suspended Flow is waiting for user input.' };
-      if (activeFlowAbortController) return { ok: false, error: `Flow is already running: ${activeFlowName || '(unnamed)'}` };
-      const suspension = activeFlowSuspension;
+    ipcMain.handle('flow:resume', async (_event, response: string, targetInput?: ConversationTargetInput) => {
+      if (!agent) return { ok: false, error: 'No suspended Flow is waiting for user input.' };
+      const requestedTarget = targetInput ? conversationRuntimeTarget(targetInput) : null;
+      const suspension = requestedTarget ? activeFlowStateFor(requestedTarget) : null;
+      if (!suspension || (suspension.reason !== 'question' && suspension.reason !== 'interrupted')) {
+        return { ok: false, error: 'No suspended Flow is waiting for user input.' };
+      }
+      if (suspension.abortController) return { ok: false, error: `Flow is already running: ${suspension.name || '(unnamed)'}` };
+      const flowTarget = suspension.target;
+      const flowKey = activeFlowStateKey(flowTarget);
+      const flowAgent = isolatedConversationAgent(flowTarget);
+      suspension.flowAgent = flowAgent;
       const flowAbortController = new AbortController();
-      activeFlowAbortController = flowAbortController;
-      activeFlowName = suspension.workflow.name;
-      activeFlowSuspension = null;
-      agent.clearStoredFlowSuspension();
-      const flowTarget = conversationRuntimeTarget(agent.activeConversationId || 'default');
-      const stopRelayingFlowEvents = relayFlowAgentWorkEvents(agent, flowTarget);
+      suspension.abortController = flowAbortController;
+      activeFlowsByRuntimeKey.set(flowKey, suspension);
+      agent.clearStoredFlowSuspension(flowTarget.conversationId);
+      const stopRelayingFlowEvents = relayFlowAgentWorkEvents(flowAgent, flowTarget);
       let suspendedAgain = false;
       try {
-        agent.flow = suspension.workflow;
-        agent.flowPc = suspension.componentId;
-        agent.setMode('flow');
-        await runFlow(agent, suspension.workflow, {
+        flowAgent.flow = suspension.workflow;
+        flowAgent.flowPc = suspension.componentId;
+        flowAgent.setMode('flow');
+        await runFlow(flowAgent, suspension.workflow, {
           startInput: suspension.input,
           startPc: suspension.componentId,
           resumePrompt: suspension.reason === 'interrupted' ? '' : String(response || ''),
@@ -2551,42 +2631,36 @@ if (isViewerArg) {
         return {
           ok: true,
           name: suspension.workflow.name,
-          mode: agent.mode,
-          status: agent.status,
-          chatMessages: agent.chatMessages,
-          workRuns: agent.getConversationSnapshot(agent.activeConversationId).workRuns,
-          conversations: agent.listConversationStates(),
-          conversationId: agent.activeConversationId,
-          conversationPlan: agent.getConversationPlan(),
-          linkedPlan: agent.getLinkedPlan(),
-          subagents: agent.subagents.listAll().map(record => agent!.subagents.toRecord(record.id)).filter(Boolean),
-          diffs: agent.fileDiffs.map(d => ({ path: d.path, old: d.oldContent ? d.oldContent.split(/\r?\n/).length : 0, new: d.newContent ? d.newContent.split(/\r?\n/).length : 0 })),
+          mode: flowAgent.mode,
+          status: flowAgent.status,
+          chatMessages: flowAgent.chatMessages,
+          workRuns: flowAgent.getConversationSnapshot(flowAgent.activeConversationId).workRuns,
+          conversations: flowAgent.listConversationStates(),
+          conversationId: flowAgent.activeConversationId,
+          conversationPlan: flowAgent.getConversationPlan(),
+          linkedPlan: flowAgent.getLinkedPlan(),
+          subagents: flowAgent.subagents.listAll().map(record => flowAgent.subagents.toRecord(record.id)).filter(Boolean),
+          diffs: flowAgent.fileDiffs.map(d => ({ path: d.path, old: d.oldContent ? d.oldContent.split(/\r?\n/).length : 0, new: d.newContent ? d.newContent.split(/\r?\n/).length : 0 })),
         };
       } catch (error) {
         if (error instanceof FlowQuestionPendingError) {
           suspendedAgain = true;
-          agent.flowPc = error.componentId;
-          agent.setMode('flow');
-          const target = conversationRuntimeTarget(agent.activeConversationId || 'default');
-          conversationKernel?.setMode(target, 'flow');
-          if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, 'flow');
-          else await ensureElectronUtilityPool().setMode(target, 'flow');
-          activeFlowSuspension = {
-            ...suspension,
-            componentId: error.componentId,
-            completedResults: error.completedResults,
-            reason: 'question',
-            message: '',
-          };
-          agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(activeFlowSuspension));
+          flowAgent.flowPc = error.componentId;
+          flowAgent.setMode('flow');
+          await setTargetFlowMode(flowTarget, 'flow');
+          suspension.componentId = error.componentId;
+          suspension.completedResults = error.completedResults;
+          suspension.reason = 'question';
+          suspension.message = '';
+          agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(suspension), flowTarget.conversationId);
           return {
             ok: true,
             pending: true,
             name: suspension.workflow.name,
             mode: 'flow',
-            options: agent.pendingOptions,
-            chatMessages: agent.chatMessages,
-            workRuns: agent.getConversationSnapshot(agent.activeConversationId).workRuns,
+            options: flowAgent.pendingOptions,
+            chatMessages: flowAgent.chatMessages,
+            workRuns: flowAgent.getConversationSnapshot(flowAgent.activeConversationId).workRuns,
           };
         }
         if (isUserFlowAbort(error)) {
@@ -2604,21 +2678,15 @@ if (isViewerArg) {
               ? error.message
               : String(error || 'Flow interrupted.')
         ).slice(0, 320);
-        agent.flowPc = interruptedComponentId;
-        agent.setMode('flow');
-        const target = conversationRuntimeTarget(agent.activeConversationId || 'default');
-        conversationKernel?.setMode(target, 'flow');
-        if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, 'flow');
-        else await ensureElectronUtilityPool().setMode(target, 'flow');
-        activeFlowSuspension = {
-          ...suspension,
-          componentId: interruptedComponentId,
-          completedResults: Array.isArray(resumeFailure.completedResults) ? resumeFailure.completedResults : suspension.completedResults,
-          reason: 'interrupted',
-          message: interruptedMessage,
-        };
-        agent.pendingOptions = [];
-        agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(activeFlowSuspension));
+        flowAgent.flowPc = interruptedComponentId;
+        flowAgent.setMode('flow');
+        await setTargetFlowMode(flowTarget, 'flow');
+        suspension.componentId = interruptedComponentId;
+        suspension.completedResults = Array.isArray(resumeFailure.completedResults) ? resumeFailure.completedResults : suspension.completedResults;
+        suspension.reason = 'interrupted';
+        suspension.message = interruptedMessage;
+        flowAgent.pendingOptions = [];
+        agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(suspension), flowTarget.conversationId);
         return {
           ok: true,
           pending: true,
@@ -2627,21 +2695,17 @@ if (isViewerArg) {
           name: suspension.workflow.name,
           mode: 'flow',
           options: [],
-          chatMessages: agent.chatMessages,
-          workRuns: agent.getConversationSnapshot(agent.activeConversationId).workRuns,
+          chatMessages: flowAgent.chatMessages,
+          workRuns: flowAgent.getConversationSnapshot(flowAgent.activeConversationId).workRuns,
         };
       } finally {
         stopRelayingFlowEvents();
-        if (activeFlowAbortController === flowAbortController) activeFlowAbortController = null;
         if (!suspendedAgain) {
-          activeFlowName = '';
-          agent.flow = suspension.previousFlow;
-          agent.flowPc = suspension.previousPc;
-          agent.setMode(suspension.previousMode);
-          const target = conversationRuntimeTarget(agent.activeConversationId || 'default');
-          conversationKernel?.setMode(target, suspension.previousMode);
-          if (wslBackendEnabled()) await ensureWslConversationPool()!.setMode(target, suspension.previousMode);
-          else await ensureElectronUtilityPool().setMode(target, suspension.previousMode);
+          flowAgent.flow = suspension.previousFlow;
+          flowAgent.flowPc = suspension.previousPc;
+          flowAgent.setMode(suspension.previousMode);
+          activeFlowsByRuntimeKey.delete(flowKey);
+          await setTargetFlowMode(flowTarget, suspension.previousMode);
         }
       }
     });
@@ -2662,9 +2726,16 @@ if (isViewerArg) {
 
     ipcMain.handle('agent:setModel', async (_event, model: string) => {
       if (agent) {
+        const before = agent.model;
         agent.setModel(model, true);
-        await agent.compressForModelSwitch();
-        resetConversationKernel();
+        // Compression and kernel reset only make sense when the model actually
+        // changed. The renderer sends this on every prompt, so an unchanged
+        // selection must not trigger a context compression round (which can
+        // run an extra model call on large histories).
+        if (agent.model !== before) {
+          await agent.compressForModelSwitch();
+          resetConversationKernel();
+        }
       }
       return agent?.model;
     });
@@ -2819,7 +2890,8 @@ if (isViewerArg) {
         subagents: conversationSnapshot.subagents,
         fileDiffs: conversationSnapshot.fileDiffs || [],
         pendingOptions: conversationSnapshot.pendingOptions || agent.pendingOptions,
-        flowSuspension: agent.getStoredFlowSuspension(),
+        flowSuspension: flowSuspensionForTarget(target),
+        flowRunning: flowRunningForTarget(target),
         draft: agent.getStoredConversationDraft(target.conversationId) || '',
         proxyEnabled: agent.config.getBool('proxy', 'enabled'),
         proxyUrl: agent.config.getStr('proxy', 'url'),
@@ -3058,24 +3130,32 @@ if (isViewerArg) {
         return { error: String(error) };
       }
     });
-    ipcMain.handle('flow:guide', async (_event, message: string) => {
-      if (!agent || !activeFlowAbortController) return { ok: false, error: 'No active Flow accepts Guide input.' };
+    ipcMain.handle('flow:guide', async (_event, message: string, targetInput?: ConversationTargetInput) => {
+      if (!agent) return { ok: false, error: 'No active Flow accepts Guide input.' };
+      const target = targetInput ? conversationRuntimeTarget(targetInput) : conversationRuntimeTarget(agent.activeConversationId || 'default');
+      const state = activeFlowStateFor(target);
+      if (!state?.abortController || !state.flowAgent) return { ok: false, error: 'No active Flow accepts Guide input.' };
       const text = String(message || '').trim();
       if (!text) return { ok: false, error: 'Flow Guide input is empty.' };
-      const accepted = agent.queueActiveKernelMessage(text, 'steer');
-      return accepted ? { ok: true, accepted: true, flow: activeFlowName } : { ok: false, error: 'The current Flow Build is not accepting Guide input.' };
+      const accepted = state.flowAgent.queueActiveKernelMessage(text, 'steer') || false;
+      return accepted ? { ok: true, accepted: true, flow: state.name } : { ok: false, error: 'The current Flow Build is not accepting Guide input.' };
     });
-    ipcMain.handle('flow:stop', async () => {
+    ipcMain.handle('flow:stop', async (_event, targetInput?: ConversationTargetInput) => {
       if (!agent) return { ok: true, action: 'not_running' };
-      if (activeFlowSuspension) {
+      const target = targetInput
+        ? conversationRuntimeTarget(targetInput)
+        : conversationRuntimeTarget(agent.activeConversationId || 'default');
+      const state = activeFlowStateFor(target);
+      if (!state) return { ok: true, action: 'not_running' };
+      if (state.reason === 'question' || state.reason === 'interrupted') {
         // A suspension exists: this is the second consecutive Stop/Esc (the Flow
         // is already paused from the first stop). Force stop: discard the
-        // suspension, abort any hung kernel run, restart the kernel and exit the
-        // Flow takeover state.
-        const flowName = activeFlowSuspension.workflow.name;
-        await discardFlowSuspension();
-        agent.abortActiveKernelRun();
-        const forceTarget = conversationRuntimeTarget(agent.activeConversationId || 'default');
+        // suspension, abort any hung kernel run, force-stop the run without
+        // restarting the runtime, and exit the Flow takeover state.
+        const flowName = state.name || state.workflow.name;
+        const forceTarget = state.target;
+        await discardFlowSuspensionForTarget(forceTarget);
+        state.flowAgent?.abortActiveKernelRun();
         try {
           if (wslBackendEnabled()) await ensureWslConversationPool()!.requestStop(forceTarget);
           else await ensureElectronUtilityPool()!.requestStop(forceTarget);
@@ -3084,13 +3164,13 @@ if (isViewerArg) {
         }
         return { ok: true, action: 'force_stopped_pending', flow: flowName };
       }
-      if (!activeFlowAbortController) return { ok: true, action: 'not_running' };
+      if (!state.abortController) return { ok: true, action: 'not_running' };
       // First Stop/Esc while running: cooperative abort. The flow:run handler
       // converts this abort into an interrupted suspension (Flow pause state).
-      const controller = activeFlowAbortController;
-      const flowName = activeFlowName;
+      const controller = state.abortController;
+      const flowName = state.name || state.workflow.name;
       controller.abort(new Error(`Flow interrupted by user: ${flowName}`));
-      agent.abortActiveKernelRun();
+      state.flowAgent?.abortActiveKernelRun();
       return { ok: true, action: 'stopping', flow: flowName };
     });
 
@@ -3121,8 +3201,8 @@ if (isViewerArg) {
 
     ipcMain.handle('agent:enqueueGuide', async (_event, raw: ConversationInputEnvelope) => {
       if (!agent) throw new Error('Agent not initialized');
-      if (activeFlowSuspension) await discardFlowSuspension();
       const target = conversationRuntimeTarget({ target: raw?.target });
+      if (activeFlowStateFor(target)) clearFlowSuspensionForNewWork(target);
       const envelope: ConversationInputEnvelope = {
         clientMessageId: String(raw?.clientMessageId || '').trim().slice(0, 200),
         target: { workspaceId: target.workspaceId, conversationId: target.conversationId },

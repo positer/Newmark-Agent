@@ -5138,6 +5138,7 @@ var state = {
   goalText: '',
   goalPaused: false,
   flowPromptText: '',
+  flowTakeovers: {},
   conversationBranches: [],
   conversationBranchGroups: [],
   activeConversationBranchId: '',
@@ -5146,6 +5147,13 @@ var state = {
   guideMessageIndexByClientId: {},
   pendingInputEdit: null,
   conversationDrafts: {},
+  _promptBoundKey: null,
+  _conversationSwitchSeq: 0,
+  _draftPersistTimers: {},
+  _conversationLoadingMsgEl: null,
+  _syncedMode: null,
+  _syncedModel: null,
+  _syncedInputMode: null,
   _editingQueueIndex: -1,
   _editingGoalText: '',
   goalDraftAttachments: [],
@@ -7172,9 +7180,11 @@ function formatChatError(value, fallback) {
 
 function flowRelayedErrorWasShown(target) {
   target = target || currentConversationTarget();
-  var relayed = state._lastFlowRelayedError;
+  if (!state.flowTakeovers) return false;
+  var key = runtimeKeyFor(target.workspaceId, target.conversationId);
+  var relayed = state.flowTakeovers[key] && state.flowTakeovers[key].lastRelayedError;
   return !!(relayed
-    && relayed.runtimeKey === runtimeKeyFor(target.workspaceId, target.conversationId)
+    && relayed.runtimeKey === key
     && Date.now() - Number(relayed.at || 0) < 10000);
 }
 
@@ -8100,13 +8110,14 @@ function registerRuntimeKey(target, runtimeKey) {
   if (!state.runtimeKeyAliases) state.runtimeKeyAliases = {};
   state.runtimeKeyAliases[base] = runtimeKey;
   if (previous !== runtimeKey) {
-    ['runningConversations', 'conversationRuntimeStates', 'agentWorkEventsByConversation', 'agentWorkUiByConversation', 'workRunsByTarget', 'workRunsByBranch', 'runtimeBranchPathsByTarget', 'guideMessagesByTarget', 'trackedConversationUntil', 'backendQueuesByTarget', 'activeSendCallsByTarget', 'nextQueueSchedulesByTarget', 'nextQueueDrainsByTarget', 'queuePausedByTarget'].forEach(function(storeName) {
+    ['runningConversations', 'conversationRuntimeStates', 'agentWorkEventsByConversation', 'agentWorkUiByConversation', 'workRunsByTarget', 'workRunsByBranch', 'runtimeBranchPathsByTarget', 'guideMessagesByTarget', 'trackedConversationUntil', 'backendQueuesByTarget', 'activeSendCallsByTarget', 'nextQueueSchedulesByTarget', 'nextQueueDrainsByTarget', 'queuePausedByTarget', 'conversationDrafts'].forEach(function(storeName) {
       var store = state[storeName];
       if (!store || store[previous] === undefined) return;
       if (store[runtimeKey] === undefined) store[runtimeKey] = store[previous];
       else if (Array.isArray(store[runtimeKey]) && Array.isArray(store[previous])) store[runtimeKey] = store[runtimeKey].concat(store[previous]);
       delete store[previous];
     });
+    if (state._promptBoundKey === previous) state._promptBoundKey = runtimeKey;
   }
   return runtimeKey;
 }
@@ -8433,6 +8444,16 @@ function publicWorkEventForUi(event) {
   };
 }
 
+function compareConversationWorkEvents(left, right) {
+  var leftSequence = Number(left && left.sequence || 0);
+  var rightSequence = Number(right && right.sequence || 0);
+  if (leftSequence !== rightSequence) return leftSequence - rightSequence;
+  var leftTime = Date.parse(String(left && left.timestamp || '')) || 0;
+  var rightTime = Date.parse(String(right && right.timestamp || '')) || 0;
+  if (leftTime !== rightTime) return leftTime - rightTime;
+  return String(left && left.id || '').localeCompare(String(right && right.id || ''));
+}
+
 function normalizedWorkRun(run, target) {
   run = run || {};
   target = target || run.target || currentConversationTarget(run.conversationId);
@@ -8473,7 +8494,7 @@ function normalizedWorkRun(run, target) {
       });
       if (item.guide) item.guide = Object.assign({}, item.guide, { target: boundTarget, runtimeKey: boundRuntimeKey });
       return item;
-    })),
+     })).sort(compareConversationWorkEvents),
     sequence: Number(run.sequence || 0)
   };
 }
@@ -8589,7 +8610,7 @@ function syncWorkRunsSnapshot(runs, target, branchId) {
         return !snapshotEventIds[String(event.id || '')] && Number(event.sequence || 0) > Number(item.sequence || 0);
       });
       if (liveOnlyEvents.length) {
-        item.events = dedupeGuideWorkEvents(item.events.concat(liveOnlyEvents)).sort(function(a, b) { return Number(a.sequence || 0) - Number(b.sequence || 0); });
+         item.events = dedupeGuideWorkEvents(item.events.concat(liveOnlyEvents)).sort(compareConversationWorkEvents);
         item.sequence = Math.max(Number(item.sequence || 0), Number(previous.sequence || 0));
         if (['running', 'stopping', 'force_restarting'].indexOf(String(previous.status || '')) >= 0) {
           item.status = previous.status;
@@ -8617,7 +8638,7 @@ function workRunTitle(run) {
   if (currentLang() === 'zh') {
     if (status === 'running') return '处理中 ' + duration;
     if (status === 'stopping') return '正在停止 ' + duration;
-    if (status === 'force_restarting') return '正在强制重启 ' + duration;
+    if (status === 'force_restarting') return '正在强制停止 ' + duration;
     if (status === 'interrupted') return '已停止 ' + duration;
     if (status === 'force_interrupted') return '已强制停止 ' + duration;
     if (status === 'error') return '处理失败 ' + duration;
@@ -8625,7 +8646,7 @@ function workRunTitle(run) {
   }
   if (status === 'running') return 'Processing ' + duration;
   if (status === 'stopping') return 'Stopping ' + duration;
-  if (status === 'force_restarting') return 'Force restarting ' + duration;
+  if (status === 'force_restarting') return 'Force stopping ' + duration;
   if (status === 'interrupted') return 'Stopped after ' + duration;
   if (status === 'force_interrupted') return 'Force stopped after ' + duration;
   if (status === 'error') return 'Failed after ' + duration;
@@ -8927,7 +8948,7 @@ function workRunGuideEvents(run) {
 function renderWorkRunEvents(run, includeGuides) {
   var rawEvents = (run.events || []).filter(publicWorkEvent).filter(function(event) {
     return includeGuides !== false || !(String(event && event.type || '').toLowerCase().indexOf('guide') === 0 || !!(event && event.guide));
-  });
+  }).sort(compareConversationWorkEvents);
   var terminalInterrupted = ['interrupted', 'force_interrupted'].indexOf(String(run && run.status || '')) >= 0;
   var events = [];
   var publicText = '';
@@ -9175,7 +9196,8 @@ function applyAgentWorkEventToRun(event) {
       while (run.events.length && String(run.events[run.events.length - 1].type || '').toLowerCase() === 'text') run.events.pop();
     }
     var eventId = String(event.id || [event.sequence || '', type, event.timestamp || '', event.content || ''].join('|'));
-    if (!run.events.some(function(item) { return String(item.id || '') === eventId; })) run.events.push(Object.assign({}, event, { id: eventId }));
+     if (!run.events.some(function(item) { return String(item.id || '') === eventId; })) run.events.push(Object.assign({}, event, { id: eventId }));
+     run.events.sort(compareConversationWorkEvents);
   }
   run.sequence = Math.max(Number(run.sequence || 0), Number(event.sequence || 0));
   if (type === 'done') { run.status = 'completed'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.userToggled !== true) run.expanded = false; }
@@ -9824,15 +9846,18 @@ function appendAgentWorkEvent(event) {
   }
   var terminalEvent = (event.status && ['completed', 'interrupted', 'force_interrupted', 'error'].indexOf(String(event.status)) >= 0)
     || ['done', 'error', 'interrupted', 'force_interrupted'].indexOf(String(event.type || '')) >= 0;
-  if (active && String(event.type || '') === 'error' && state._flowRunning) {
-    state._lastFlowRelayedError = {
+  var eventFlowRunning = flowRunningForTarget(target);
+  var eventFlowRecord = eventFlowRunning ? flowTakeoverRecordFor(target) : null;
+  if (active && String(event.type || '') === 'error' && eventFlowRecord) {
+    eventFlowRecord.lastRelayedError = {
       runtimeKey: runtimeKeyFor(target.workspaceId, target.conversationId),
       at: Date.now()
     };
   }
-  if (active && terminalEvent && state._flowRunning && state._flowRuntimeLease
-    && runtimeKeyFor(state._flowRuntimeLease.target.workspaceId, state._flowRuntimeLease.target.conversationId) === runtimeKeyFor(target.workspaceId, target.conversationId)) {
-    setConversationRuntimeState(target, 'running', state._flowRuntimeLease.runId, { provisional: true, flow: true });
+  if (active && terminalEvent && eventFlowRecord
+    && eventFlowRecord.runtimeLease
+    && runtimeKeyFor(eventFlowRecord.runtimeLease.target.workspaceId, eventFlowRecord.runtimeLease.target.conversationId) === runtimeKeyFor(target.workspaceId, target.conversationId)) {
+    setConversationRuntimeState(target, 'running', eventFlowRecord.runtimeLease.runId, { provisional: true, flow: true });
   }
   if (event.type === 'done' || event.type === 'error') {
     if (visibleRuntimeBranch) renderAgentWorkEvent(event);
@@ -9840,7 +9865,7 @@ function appendAgentWorkEvent(event) {
     renderAgentWorkEvent(event);
   }
   if (active) {
-    setWorking(!!runningConversationRecord(activeConversationId()) || !!state._flowRunning);
+    setWorking(!!runningConversationRecord(activeConversationId()) || currentFlowRunning());
     updateSubmitButtonState();
   }
   if (active && event.type === 'tool_result' && ['linked_plan', 'task', 'subagent_send', 'subagent_read', 'subagent_close'].indexOf(String(event.toolName || '')) >= 0 && api.getState) {
@@ -10064,7 +10089,11 @@ function setVisibleMode(mode) {
     window.syncNewmarkSelect(flowSel);
   }
   if (nextMode === 'flow') window.setInputMode('guide');
-  if (api.setMode) return Promise.resolve(api.setMode(nextMode)).catch(function(){});
+  if (api.setMode) {
+    return Promise.resolve(api.setMode(nextMode)).then(function(result) {
+      if (result != null) state._syncedMode = nextMode;
+    }).catch(function(){});
+  }
   return Promise.resolve(nextMode);
 }
 
@@ -10126,7 +10155,7 @@ window.optionSelected = function(questionKey, opt, button) {
   state.pendingOptions = [];
   state.pendingOptionAnswers = {};
   state.pendingOptionBatchKey = '';
-  if (state._flowRunning && state.mode === 'flow' && api.resumeFlow) {
+  if (currentFlowRunning() && flowTakeoverMatchesCurrent() && state.mode === 'flow' && api.resumeFlow) {
     return window.resumeFlowWith(feedback);
   }
   if (els.prompt) {
@@ -10190,29 +10219,61 @@ function conversationDraftParts(key) {
 }
 
 function saveActiveConversationDraft() {
-  if (els.prompt) state.conversationDrafts[conversationDraftKey()] = String(els.prompt.value || '');
+  if (!els.prompt) return;
+  // The prompt content belongs to the conversation it was last restored for.
+  // While a conversation switch is still resolving (sync not yet complete),
+  // the bound key stays on the previous conversation so fast switching cannot
+  // write one conversation's draft into another conversation's slot.
+  state.conversationDrafts[state._promptBoundKey || conversationDraftKey()] = String(els.prompt.value || '');
 }
 
 // Persist a conversation's draft to the backend store. Only conversations of the
 // current workspace are persisted; cross-workspace drafts stay in the session
 // window. The in-memory window is never dropped, so switching back stays instant.
+// Writes are debounced per key (100ms) so rapid conversation switching coalesces
+// into a single request per conversation.
 function persistConversationDraftForKey(key) {
   if (!api.saveConversationDraft) return;
   var parts = conversationDraftParts(key);
   if (parts.workspaceId && parts.workspaceId !== String(state.currentWorkspaceId || '')) return;
-  var draft = Object.prototype.hasOwnProperty.call(state.conversationDrafts, key) ? state.conversationDrafts[key] : '';
-  api.saveConversationDraft(parts.conversationId, draft).catch(function(){});
+  if (!state._draftPersistTimers) state._draftPersistTimers = {};
+  if (state._draftPersistTimers[key]) clearTimeout(state._draftPersistTimers[key]);
+  state._draftPersistTimers[key] = setTimeout(function() {
+    delete state._draftPersistTimers[key];
+    var draft = Object.prototype.hasOwnProperty.call(state.conversationDrafts, key) ? state.conversationDrafts[key] : '';
+    api.saveConversationDraft(parts.conversationId, draft).catch(function(){});
+  }, 100);
 }
 
 function restoreConversationDraft(target) {
   if (!els.prompt) return;
   var key = conversationDraftKey(target);
   els.prompt.value = Object.prototype.hasOwnProperty.call(state.conversationDrafts, key) ? state.conversationDrafts[key] : '';
+  state._promptBoundKey = key;
   schedulePromptInputRefresh();
+}
+
+// Fire every pending debounced draft persist immediately. Used when the window
+// is about to close so debounced drafts still reach the backend store.
+function flushPendingConversationDraftPersists() {
+  if (!state._draftPersistTimers) return;
+  Object.keys(state._draftPersistTimers).forEach(function(key) {
+    var timer = state._draftPersistTimers[key];
+    clearTimeout(timer);
+    delete state._draftPersistTimers[key];
+    var parts = conversationDraftParts(key);
+    if (parts.workspaceId && parts.workspaceId !== String(state.currentWorkspaceId || '')) return;
+    var draft = Object.prototype.hasOwnProperty.call(state.conversationDrafts, key) ? state.conversationDrafts[key] : '';
+    if (api.saveConversationDraft) api.saveConversationDraft(parts.conversationId, draft).catch(function(){});
+  });
 }
 function clearActiveConversationDraft() {
   var key = conversationDraftKey();
   delete state.conversationDrafts[key];
+  if (state._draftPersistTimers && state._draftPersistTimers[key]) {
+    clearTimeout(state._draftPersistTimers[key]);
+    delete state._draftPersistTimers[key];
+  }
   if (api.saveConversationDraft) {
     api.saveConversationDraft(conversationDraftParts(key).conversationId, null).catch(function(){});
   }
@@ -10240,10 +10301,10 @@ function setSubmitButtonVisual(icon, label, running, stopMode) {
 
 function updateSubmitButtonState() {
   var runtime = runningConversationRecord(activeConversationId());
-  var running = !!runtime || !!state._flowRunning;
+  var running = !!runtime || currentFlowRunning();
   var hasText = promptHasText();
   if (running && !hasText) {
-    var escalating = (runtime && ['stopping', 'force_restarting'].indexOf(String(runtime.status || '')) >= 0) || !!(state._flowRunning && state._flowPaused);
+    var escalating = (runtime && ['stopping', 'force_restarting'].indexOf(String(runtime.status || '')) >= 0) || !!(currentFlowRunning() && currentFlowPaused());
     var label = escalating ? (currentLang() === 'zh' ? '强制停止' : 'Force stop') : t('input.stop');
     setSubmitButtonVisual(escalating ? 'octagon-x' : 'square', label, true, true);
   } else {
@@ -10384,7 +10445,7 @@ window.stopCurrentConversation = async function() {
 };
 
 window.submitCurrentAction = function() {
-  if (state._flowRunning) {
+  if (currentFlowRunning() && flowTakeoverMatchesCurrent()) {
     if (!promptHasText()) {
       window.stopFlowRun();
       return;
@@ -10392,7 +10453,7 @@ window.submitCurrentAction = function() {
     var guideText = String(els.prompt.value || '').trim();
     els.prompt.value = '';
     els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
-    if (state._flowPaused) {
+    if (currentFlowPaused()) {
       // Entry #5: a new Build/Plan/Goal/Flow instruction sent while paused
       // exits the pause and starts a fresh process. The backend agent:send /
       // flow:run handlers clear the suspension (without restoring mode).
@@ -10832,13 +10893,31 @@ window.refreshModelSelect = function(options) {
   var availableValues = Array.from(sel.options).map(function(option) { return option.value; });
   if (!state.model || (state.model === 'auto' && state.autoSwitch !== 'on') || availableValues.indexOf(state.model) < 0) {
     state.model = firstConcreteModel || (state.models && state.models[0]) || '';
-    if (state.model && api.setModel) api.setModel(state.model).catch(function(){});
+    if (state.model && api.setModel) {
+      Promise.resolve(api.setModel(state.model)).then(function(result) {
+        if (result != null) state._syncedModel = state.model;
+      }).catch(function(){});
+    }
   }
   if (state.model) sel.value = state.model;
   window.syncModelSelectSurface();
 };
 
 // === Send Message ===
+async function syncConversationExecutionState(executionMode, effectiveInputMode) {
+  if (api.setMode && executionMode !== state._syncedMode) {
+    var modeResult = await api.setMode(executionMode).catch(function() { return null; });
+    if (modeResult != null) state._syncedMode = executionMode;
+  }
+  if (api.setModel && state.model && state.model !== state._syncedModel) {
+    var modelResult = await api.setModel(state.model).catch(function() { return null; });
+    if (modelResult != null) state._syncedModel = state.model;
+  }
+  if (api.setInputMode && effectiveInputMode !== state._syncedInputMode) {
+    var inputModeResult = await api.setInputMode(effectiveInputMode).catch(function() { return null; });
+    if (inputModeResult != null) state._syncedInputMode = effectiveInputMode;
+  }
+}
 function normalizeQueueItemText(text) {
   text = String(text || '').trim();
   return text
@@ -10959,7 +11038,7 @@ window.toggleQueuePause = function() {
   var key = queueRuntimeKey(target);
   if (!key) return;
   if (!state.queuePausedByTarget) state.queuePausedByTarget = {};
-  if (state._flowRunning && state.queuePausedByTarget[key]) {
+  if (currentFlowRunning() && state.queuePausedByTarget[key]) {
     window.stopFlowRun({ resumeQueue: true });
     return;
   }
@@ -11230,7 +11309,6 @@ window.endQueueDrag = function(event) {
 };
 
 window.sendMessage = async function(modeOverride, queuedText, opts) {
-  console.log('[UI] sendMessage called');
   if (!window.requireWorkspace('send')) return;
   opts = opts || {};
   var requestedMode = opts.requestedMode || state.mode || 'build';
@@ -11239,7 +11317,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   if (requestedMode === 'flow') {
     effectiveInputMode = 'guide';
     if (!opts.fromQueue) {
-      if (state._flowRunning) {
+      if (currentFlowRunning()) {
         var activeFlowGuide = typeof queuedText === 'string' ? queuedText : String(els.prompt.value || '').trim();
         if (!activeFlowGuide) return window.stopFlowRun();
         if (els.prompt) {
@@ -11247,7 +11325,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
           els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
         }
         if (state.inputMode === 'next') return window.queueFlowNextInput(activeFlowGuide);
-        return api.guideFlow ? api.guideFlow(activeFlowGuide) : { ok: false, error: 'Flow Guide API unavailable' };
+        return api.guideFlow ? api.guideFlow(activeFlowGuide, currentConversationTarget()) : { ok: false, error: 'Flow Guide API unavailable' };
       }
       return window.submitSelectedFlow();
     }
@@ -11491,9 +11569,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   updateSubmitButtonState();
   var executionMode = opts.goalDeclaration || requestedMode === 'goal' ? 'build'
     : ((opts.forceBuild || idleBuildNextImmediate) && requestedMode === 'build' ? 'build' : requestedMode);
-  if (api.setMode) await api.setMode(executionMode).catch(function(){});
-  if (api.setModel && state.model) await api.setModel(state.model).catch(function(){});
-  if (api.setInputMode) await api.setInputMode(effectiveInputMode).catch(function(){});
+  await syncConversationExecutionState(executionMode, effectiveInputMode);
   var renderOnViewedBranch = !queuedRuntimeBranch || queueBranchPathForTarget(lockedTarget, 'viewed') === queueBranchPathForTarget(lockedTarget, 'runtime');
   if (isActiveConversationTarget(lockedTarget) && renderOnViewedBranch) {
     if (opts.resumeGuideRunId && requestMessage.clientMessageId) {
@@ -11655,7 +11731,10 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       }
     }).catch(function(){});
   }
-  if (api.setMode && executionMode !== state.mode) await api.setMode(state.mode).catch(function(){});
+  if (api.setMode && executionMode !== state.mode) {
+    var resumedModeResult = await api.setMode(state.mode).catch(function() { return null; });
+    if (resumedModeResult != null) state._syncedMode = state.mode;
+  }
   var finalRuntime = state.conversationRuntimeStates && state.conversationRuntimeStates[lockedRuntimeKey];
   if (!finalRuntime || !finalRuntime.runId || finalRuntime.runId === localRunId || (r && finalRuntime.runId === r.runId)) {
     setConversationRuntimeState(lockedTarget, 'completed', (r && r.runId) || localRunId);
@@ -12278,7 +12357,8 @@ window.refreshRightStatus = function(options) {
     if (options.required === true) return Promise.reject(new Error('Right status API is unavailable'));
     return Promise.resolve(null);
   }
-  return api.getState(currentConversationTarget()).then(function(s) {
+  var statusTarget = currentConversationTarget();
+  return api.getState(statusTarget).then(function(s) {
     applyAutoRouteRatingState(s);
     renderAutoRouteRatingControls();
     if (s && s.mode) state.mode = s.mode;
@@ -12298,9 +12378,16 @@ window.refreshRightStatus = function(options) {
     if (s && s.subagents) state.subagents = s.subagents;
     if (s && s.fileDiffs) state.fileDiffs = s.fileDiffs;
     if (s && s.pendingOptions) state.pendingOptions = s.pendingOptions;
+    // Bind the Flow takeover to backend per-conversation state. The takeover
+    // for the requested target reflects exactly what the backend holds for that
+    // conversation: a suspension (paused) or an active running Flow. It is
+    // never a global flag, so switching conversations shows each conversation's
+    // own Flow state and nothing leaks across.
+    var statusFlowRecord = flowTakeoverRecordFor(statusTarget);
     if (s && s.flowSuspension) {
-      state._flowRunning = true;
-      state._lastFlowSubmission = {
+      statusFlowRecord.running = true;
+      statusFlowRecord.paused = s.flowSuspension.reason === 'interrupted';
+      statusFlowRecord.lastSubmission = {
         name: String(s.flowSuspension.workflowName || ''),
         input: String(s.flowSuspension.input || ''),
         components: [],
@@ -12308,13 +12395,22 @@ window.refreshRightStatus = function(options) {
       renderFlowTakeover(true, String(s.flowSuspension.workflowName || ''), {
         interrupted: s.flowSuspension.reason === 'interrupted',
         message: s.flowSuspension.message,
+        target: statusTarget,
       });
       if (Array.isArray(s.flowSuspension.options) && s.flowSuspension.options.length) {
         state.pendingOptions = s.flowSuspension.options;
         renderPendingOptionsInChat(state.pendingOptions);
       }
-    } else if (!state._flowRunning) {
-      renderFlowTakeover(false);
+    } else if (s && s.flowRunning) {
+      statusFlowRecord.running = true;
+      statusFlowRecord.paused = false;
+      if (!statusFlowRecord.lastSubmission || !statusFlowRecord.lastSubmission.name) {
+        statusFlowRecord.lastSubmission = { name: String(s.flowRunning.name || ''), input: '', components: [] };
+      }
+      renderFlowTakeover(true, String(s.flowRunning.name || statusFlowRecord.name || ''), { target: statusTarget });
+    } else if (flowTargetMatchesCurrent(statusTarget) && s && s.flowSuspension === null && !s.flowRunning) {
+      // The backend authoritatively reports no Flow for this conversation.
+      renderFlowTakeover(false, '', { target: statusTarget });
     }
     if (s && s.conversationPlan) state.conversationPlan = normalizeConversationPlan(s.conversationPlan);
     if (s && s.draft !== undefined) {
@@ -13043,9 +13139,11 @@ function renderFlowPromptBar() {
   var bar = document.getElementById('flow-prompt-bar');
   var text = document.getElementById('flow-prompt-text');
   if (!bar || !text) return;
-  var prompt = state._flowRunning ? String(state.flowPromptText || '').trim() : '';
+  var flowRunning = currentFlowRunning();
+  var flowMatches = flowTakeoverMatchesCurrent();
+  var prompt = flowRunning && flowMatches ? String(currentFlowTakeoverRecord().promptText || '').trim() : '';
   bar.style.display = prompt ? '' : 'none';
-  bar.classList.toggle('paused', !!(state._flowRunning && state._flowPaused));
+  bar.classList.toggle('paused', !!(flowRunning && flowMatches && currentFlowPaused()));
   text.textContent = prompt;
   text.title = prompt;
 }
@@ -14865,7 +14963,7 @@ window.runFlowWork = function(workIdx) {
   }
   addMsg('assistant', '[System] ' + t('flow.started') + ': ' + work.name, 'flow', '');
   window.closeSubWin();
-  state._flowRunning = true;
+  currentFlowTakeoverRecord().running = true;
   state._flowWorkIdx = workIdx;
   state._flowCompIdx = 0;
   var prompt = els.prompt;
@@ -14878,7 +14976,7 @@ window.runFlowWork = function(workIdx) {
 
 function processNextFlowComp() {
   var work = state.flowWorks[state._flowWorkIdx];
-  if (!work || !state._flowRunning) return stopFlowRunInternal();
+  if (!work || !currentFlowRunning()) return stopFlowRunInternal();
   var comps = work.components;
   if (state._flowCompIdx >= comps.length) {
     addMsg('assistant', '[Flow] Completed: ' + work.name, 'flow', '');
@@ -14916,29 +15014,50 @@ function processNextFlowComp() {
 window.renderFlowTakeover = function(active, name, options) {
   var takeover = document.getElementById('flow-takeover');
   if (!takeover) return;
-  takeover.classList.toggle('active', !!active);
+  options = options || {};
+  var takeoverTarget = options.target || currentConversationTarget();
+  var record = flowTakeoverRecordFor(takeoverTarget);
+  if (active) {
+    record.running = true;
+    record.target = { workspaceId: takeoverTarget.workspaceId, conversationId: takeoverTarget.conversationId };
+    record.name = String(name || record.name || '');
+    record.paused = !!options.interrupted;
+    if (options.message) record.message = String(options.message);
+  } else {
+    record.running = false;
+    record.paused = false;
+    record.name = '';
+  }
+  // The DOM bubble only ever reflects the active conversation. A takeover for
+  // another conversation stays in its own record and never leaks into the
+  // current view.
+  var matchesCurrent = flowTargetMatchesCurrent(takeoverTarget);
+  var showBubble = active && matchesCurrent;
+  takeover.classList.toggle('active', showBubble);
   takeover.onclick = null;
-  if (!active) {
+  if (!showBubble) {
     takeover.classList.remove('interactive');
     takeover.classList.remove('paused');
     takeover.innerHTML = '';
-    state._flowPaused = false;
+    if (matchesCurrent) {
+      updateSubmitButtonState();
+      renderFlowPromptBar();
+    }
     return;
   }
-  options = options || {};
   var interrupted = !!options.interrupted;
-  state._flowPaused = interrupted;
   takeover.classList.toggle('paused', interrupted);
   var label = interrupted ? t('flow.pausedTakeover') : t('flow.takeover');
-  var html = iconSvg('workflow', label, 'small') + '<span>' + esc(label) + (name ? ': ' + esc(name) : '');
+  var html = iconSvg('workflow', label, 'small') + '<span>' + esc(label) + (record.name ? ': ' + esc(record.name) : '');
   if (interrupted && options.message) {
     html += '<span style="opacity:0.72;">' + esc(String(options.message).slice(0, 200)) + '</span>';
   }
   html += '</span>';
-  // Clicking the bubble toggles the pause state (entry #4 / exit resume).
+  // The whole bubble is interactive. While running, clicking it pauses the
+  // Flow; while paused, clicking it resumes. There is no separate resume
+  // button — the entire bubble is the single interactive affordance.
   if (interrupted) {
     takeover.onclick = function(event) { event.stopPropagation(); window.resumeInterruptedFlow(); };
-    html += '<button class="archive-action-btn flow-resume-btn" onclick="event.stopPropagation();window.resumeInterruptedFlow()">' + esc(t('flow.resume')) + '</button>';
   } else {
     takeover.onclick = function() { window.stopFlowRun(); };
   }
@@ -14948,23 +15067,101 @@ window.renderFlowTakeover = function(active, name, options) {
   renderFlowPromptBar();
 };
 
+function flowTargetMatchesCurrent(target) {
+  if (!target) return true;
+  return runtimeKeyFor(target.workspaceId, target.conversationId) === currentRuntimeKey(activeConversationId());
+}
+
+// Flow takeover is conversation-local state, never global. Each conversation
+// owns its own running/paused record keyed by runtimeKey; the renderer only
+// reflects the active conversation's record. This makes the takeover fully
+// bound to its owning conversation on the frontend, mirroring the backend's
+// per-conversation Flow state.
+function flowTakeoverRecordFor(target) {
+  target = target || currentConversationTarget();
+  if (!state.flowTakeovers) state.flowTakeovers = {};
+  var key = runtimeKeyFor(target.workspaceId, target.conversationId);
+  if (!state.flowTakeovers[key]) {
+    state.flowTakeovers[key] = {
+      running: false,
+      paused: false,
+      target: { workspaceId: target.workspaceId, conversationId: target.conversationId },
+      name: '',
+      runtimeLease: null,
+      queueLease: null,
+      lastSubmission: null,
+      lastRelayedError: null,
+      promptText: '',
+    };
+  }
+  return state.flowTakeovers[key];
+}
+
+function currentFlowTakeoverRecord() {
+  return flowTakeoverRecordFor(currentConversationTarget());
+}
+
+function flowRunningForTarget(target) {
+  if (!state.flowTakeovers) return false;
+  var key = runtimeKeyFor(target.workspaceId, target.conversationId);
+  return !!(state.flowTakeovers[key] && state.flowTakeovers[key].running);
+}
+
+function flowPausedForTarget(target) {
+  if (!state.flowTakeovers) return false;
+  var key = runtimeKeyFor(target.workspaceId, target.conversationId);
+  return !!(state.flowTakeovers[key] && state.flowTakeovers[key].paused);
+}
+
+function currentFlowRunning() {
+  return flowRunningForTarget(currentConversationTarget());
+}
+
+function currentFlowPaused() {
+  return flowPausedForTarget(currentConversationTarget());
+}
+
+function flowTakeoverMatchesCurrent() {
+  if (!currentFlowRunning()) return false;
+  var record = currentFlowTakeoverRecord();
+  return flowTargetMatchesCurrent(record.target);
+}
+
+// Re-renders the takeover bubble from the ACTIVE conversation's own record.
+// Used on conversation switch so the bubble follows its owner immediately and
+// never lingers on a different conversation.
+function reconcileFlowTakeoverForActive() {
+  var target = currentConversationTarget();
+  var record = state.flowTakeovers && state.flowTakeovers[runtimeKeyFor(target.workspaceId, target.conversationId)];
+  if (record && record.running) {
+    window.renderFlowTakeover(true, record.name || '', { interrupted: record.paused, target: target });
+  } else {
+    window.renderFlowTakeover(false, '', { target: target });
+  }
+  updateSubmitButtonState();
+  setWorking(!!runningConversationRecord(activeConversationId()) || currentFlowRunning());
+}
+
 window.resumeInterruptedFlow = async function() {
   if (!api.resumeFlow) return;
-  if (!state._flowRunning) {
-    state._flowRunning = true;
-    state._lastFlowRelayedError = null;
+  if (!flowTakeoverMatchesCurrent()) return { ok: false, error: 'The suspended Flow belongs to another conversation.' };
+  var resumeRecord = currentFlowTakeoverRecord();
+  if (!resumeRecord.running) {
+    resumeRecord.running = true;
+    resumeRecord.lastRelayedError = null;
     var suspendedFlowTarget = currentConversationTarget();
     var resumedFlowRunId = 'flow-' + Date.now() + '-' + Math.random().toString(16).slice(2);
-    state._flowRuntimeLease = { target: suspendedFlowTarget, runId: resumedFlowRunId };
+    resumeRecord.runtimeLease = { target: suspendedFlowTarget, runId: resumedFlowRunId };
     setConversationRuntimeState(suspendedFlowTarget, 'running', resumedFlowRunId, { provisional: true, flow: true });
   }
   return window.resumeFlowWith('', true);
 };
 
 window.resumeFlowWith = async function(feedback, isInterruptedResume) {
-  state._lastFlowRelayedError = null;
+  var resumeRecord = currentFlowTakeoverRecord();
+  resumeRecord.lastRelayedError = null;
   try {
-    var result = await api.resumeFlow(feedback);
+    var result = await api.resumeFlow(feedback, currentConversationTarget());
     if (result && Array.isArray(result.chatMessages)) {
       if (Array.isArray(result.workRuns)) renderConversationWorkRuns(result.workRuns, currentConversationTarget());
       renderChatMessages(result.chatMessages);
@@ -14973,7 +15170,7 @@ window.resumeFlowWith = async function(feedback, isInterruptedResume) {
       state.pendingOptions = result.options || [];
       renderPendingOptionsInChat(state.pendingOptions);
       if (result.interrupted) {
-        renderFlowTakeover(true, result.name || (state._lastFlowSubmission && state._lastFlowSubmission.name), { interrupted: true, message: result.error });
+        renderFlowTakeover(true, result.name || (resumeRecord.lastSubmission && resumeRecord.lastSubmission.name), { interrupted: true, message: result.error, target: currentConversationTarget() });
       }
       return result;
     }
@@ -15001,10 +15198,12 @@ function removeFlowOwnedQueueRequest(lease) {
   refreshNextPromptForTarget(lease.target);
 }
 
-function settleFlowQueueTakeover(options) {
+function settleFlowQueueTakeover(options, target) {
   options = options || {};
-  var lease = state._flowQueueLease || null;
-  state._flowQueueLease = null;
+  target = target || currentConversationTarget();
+  var record = flowTakeoverRecordFor(target);
+  var lease = record.queueLease || null;
+  record.queueLease = null;
   if (!lease) return null;
   removeFlowOwnedQueueRequest(lease);
   var key = queueRuntimeKey(lease.target);
@@ -15037,12 +15236,14 @@ window.queueFlowNextInput = function(text) {
 };
 
 function stopFlowRunInternal(options) {
-  state._flowRunning = false;
-  state._flowPaused = false;
-  state.flowPromptText = '';
+  var record = currentFlowTakeoverRecord();
+  record.running = false;
+  record.paused = false;
+  record.promptText = '';
+  record.lastSubmission = null;
   window.renderFlowTakeover(false);
-  var runtimeLease = state._flowRuntimeLease || null;
-  state._flowRuntimeLease = null;
+  var runtimeLease = record.runtimeLease || null;
+  record.runtimeLease = null;
   if (runtimeLease) {
     var leasedRuntime = runningConversationRecord(runtimeLease.target.conversationId, runtimeLease.target.workspaceId);
     if (leasedRuntime && String(leasedRuntime.runId || '') === String(runtimeLease.runId || '')) {
@@ -15065,9 +15266,10 @@ function stopFlowRunInternal(options) {
 
 window.stopFlowRun = async function(options) {
   options = options || {};
+  if (!flowTakeoverMatchesCurrent()) return { ok: false, action: 'not_running', error: 'The active Flow belongs to another conversation.' };
   if (options.resumeQueue !== true) options.keepPaused = true;
   if (api.stopFlow) {
-    var stopResult = await api.stopFlow().catch(function() { return null; });
+    var stopResult = await api.stopFlow(currentConversationTarget()).catch(function() { return null; });
     var action = String(stopResult && stopResult.action || '');
     // First Stop/Esc while a Flow is RUNNING: cooperative abort. The flow:run
     // handler turns this into an interrupted suspension (renders the paused
@@ -15153,16 +15355,12 @@ window.runFlowWork = async function(workIdx) {
     showUiNotice(currentLang() === 'zh' ? '正在运行 Build 时，Flow 必须以 Next 提交。' : 'While a Build is running, Flow must be submitted as Next.', 'error', 'flow-guide-running');
     return;
   }
-  state._flowQueueLease = {
-    target: flowTarget,
-    wasPaused: flowWasPaused,
-    request: null
-  };
   pauseQueueForTarget(flowTarget);
   state.queueCollapsed = false;
   refreshNextPromptForTarget(flowTarget);
-  state.flowPromptText = flowInput;
-  state._lastFlowSubmission = {
+  var flowRecord = flowTakeoverRecordFor(flowTarget);
+  flowRecord.promptText = flowInput;
+  flowRecord.lastSubmission = {
     name: normalized.name,
     input: flowInput,
     components: normalized.components.map(function(component) {
@@ -15171,23 +15369,29 @@ window.runFlowWork = async function(workIdx) {
       });
     })
   };
+  flowRecord.queueLease = {
+    target: flowTarget,
+    wasPaused: flowWasPaused,
+    request: null
+  };
   if (els.prompt) {
     els.prompt.value = '';
     els.prompt.placeholder = t('flow.runningPlaceholder');
     els.prompt.disabled = false;
   }
   var flowWaitingForPriorBuild = isCurrentConversationRunning();
-  state._flowRunning = true;
-  state._lastFlowRelayedError = null;
+  flowRecord.running = true;
+  flowRecord.paused = false;
+  flowRecord.lastRelayedError = null;
   if (!flowWaitingForPriorBuild) {
     var provisionalFlowRunId = 'flow-' + Date.now() + '-' + Math.random().toString(16).slice(2);
-    state._flowRuntimeLease = { target: flowTarget, runId: provisionalFlowRunId };
+    flowRecord.runtimeLease = { target: flowTarget, runId: provisionalFlowRunId };
     setConversationRuntimeState(flowTarget, 'running', provisionalFlowRunId, { provisional: true, flow: true });
   }
   setWorking(true);
   updateSubmitButtonState();
   renderConversations();
-  window.renderFlowTakeover(true, normalized.name);
+  window.renderFlowTakeover(true, normalized.name, { target: flowTarget });
   window.renderInputStack();
   addMsg('assistant', '[System] ' + t('flow.started') + ': ' + normalized.name, 'flow', state.model);
   window.closeSubWin();
@@ -15197,18 +15401,21 @@ window.runFlowWork = async function(workIdx) {
     if (api.saveFlow) {
       await api.saveFlow(normalized);
     }
-    while (state._flowRunning && flowWaitingForPriorBuild && isCurrentConversationRunning()) {
+    while (flowRecord.running && flowWaitingForPriorBuild && isCurrentConversationRunning()) {
       await new Promise(function(resolve) { setTimeout(resolve, 100); });
     }
-    if (!state._flowRunning) return;
-    if (!state._flowRuntimeLease) {
+    if (!flowRecord.running) return;
+    if (!flowRecord.runtimeLease) {
       var resumedFlowRunId = 'flow-' + Date.now() + '-' + Math.random().toString(16).slice(2);
-      state._flowRuntimeLease = { target: flowTarget, runId: resumedFlowRunId };
+      flowRecord.runtimeLease = { target: flowTarget, runId: resumedFlowRunId };
       setConversationRuntimeState(flowTarget, 'running', resumedFlowRunId, { provisional: true, flow: true });
       updateSubmitButtonState();
       renderConversations();
     }
-    if (api.setMode) await api.setMode('flow');
+    if (api.setMode) {
+      await api.setMode('flow');
+      state._syncedMode = 'flow';
+    }
     state.mode = 'flow';
     var r = await api.runFlow(normalized.name, flowInput, 0);
     if (r && r.chatMessages) {
@@ -15229,7 +15436,7 @@ window.runFlowWork = async function(workIdx) {
       state.pendingOptions = r.options || [];
       renderPendingOptionsInChat(state.pendingOptions);
       if (r.interrupted) {
-        renderFlowTakeover(true, normalized.name, { interrupted: true, message: r.error });
+        renderFlowTakeover(true, normalized.name, { interrupted: true, message: r.error, target: flowTarget });
       }
     } else if (r && r.ok) {
       flowCompletedNormally = true;
@@ -15261,6 +15468,7 @@ async function runFlowDialogComponent(work, comp) {
   addMsg('user', finalPrompt, mode, state.model);
   await api.setMode(mode);
   state.mode = mode;
+  state._syncedMode = mode;
   var resp = await api.sendPrompt(finalPrompt, state.model || '');
   addMsg('assistant', resp || '(empty response)', mode, state.model);
   return resp || '';
@@ -15272,6 +15480,7 @@ async function runFlowLogicComponent(work, comp) {
   addMsg('assistant', '[Flow-Logic] ' + work.name + ' #' + comp.id + ': ' + logicPrompt, 'flow', '');
   await api.setMode('build');
   state.mode = 'build';
+  state._syncedMode = 'build';
   var resp = await api.sendPrompt('## Conditional Evaluation\n\n' + logicPrompt + '\n\nRespond with ONLY "true" or "false" (lowercase).', state.model || '');
   var text = String(resp || '').trim().toLowerCase();
   var cond = text === 'true';
@@ -15921,7 +16130,9 @@ function renderSubagentBaseMessages(body, agent) {
   }
   for (var i = 0; i < messages.length; i++) {
     var m = messages[i] || {};
-    var messageRole = m.role || m.kind || '';
+    var messageRole = m.hidden_user_input
+      ? (currentLang() === 'zh' ? '内部指令' : 'Directive')
+      : (m.role || m.kind || '');
     var messageContent = m.content || m.body || '';
     var row = document.createElement('div');
     row.style.cssText = 'margin:8px 0;';
@@ -16649,6 +16860,7 @@ window.newConversation = function(workspaceReference) {
   state.conversationPlan = { items: [] };
   if (els.prompt) els.prompt.value = '';
   clearActiveConversationDraft();
+  state._promptBoundKey = conversationDraftKey();
   renderConversations();
   els['chat-area'].innerHTML = '';
   var target = currentConversationTarget(id);
@@ -16712,7 +16924,9 @@ window.doNewConversationFromPage = function() {
 window.switchConversation = function(idx) {
   if (!window.requireWorkspace('switchConversation')) return;
   var previousId = activeConversationId();
+  var previousDraftKey = state._promptBoundKey || conversationDraftKey();
   saveActiveConversationDraft();
+  persistConversationDraftForKey(previousDraftKey);
   if (previousId) markConversationTracked(previousId, state.conversationTrackMs || 300000);
   setActiveWorkspaceConversation(idx);
   var activeId = activeConversationId();
@@ -16724,9 +16938,23 @@ window.switchConversation = function(idx) {
   state.subagents = [];
   window.refreshTerminalTakeoverPanes();
   renderConversations();
+  var switchSeq = (state._conversationSwitchSeq || 0) + 1;
+  state._conversationSwitchSeq = switchSeq;
   els['chat-area'].innerHTML = '';
-  addMsg('workflow running', t('conversation.loadingIsolated'), 'system', state.model);
+  // The Flow takeover bubble is conversation-local. Immediately reconcile it to
+  // the newly active conversation: if the incoming conversation owns a Flow,
+  // show it; otherwise hide the bubble instantly so no takeover ever leaks
+  // across a switch while the backend sync is still in flight.
+  reconcileFlowTakeoverForActive();
+  if (state._conversationLoadingMsgEl && state._conversationLoadingMsgEl.parentNode) {
+    state._conversationLoadingMsgEl.parentNode.removeChild(state._conversationLoadingMsgEl);
+  }
+  state._conversationLoadingMsgEl = addMsg('workflow running', t('conversation.loadingIsolated'), 'system', state.model);
   syncBackendConversation().then(function() {
+    // Only the latest switch may touch the UI: an earlier switch's sync
+    // resolution must not restore drafts into or re-render the now-current
+    // conversation (that would clobber a draft the user is actively editing).
+    if (state._conversationSwitchSeq !== switchSeq) return;
     restoreConversationDraft(currentConversationTarget());
     renderConversations();
     refreshNextPromptForTarget(currentConversationTarget());
@@ -19033,7 +19261,7 @@ function schedulePostStartupUiRendering() {
   // === Event Listeners ===
   if (els.prompt) {
     els.prompt.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape' && state._flowRunning && !promptHasText()) {
+      if (e.key === 'Escape' && currentFlowRunning() && flowTakeoverMatchesCurrent() && !promptHasText()) {
         e.preventDefault();
         window.stopFlowRun();
         return;
@@ -19045,7 +19273,7 @@ function schedulePostStartupUiRendering() {
       }
       if (e.key === 'Enter' && e.ctrlKey) {
         e.preventDefault();
-        if (state.mode === 'flow' || state._flowRunning) {
+        if (state.mode === 'flow' || (currentFlowRunning() && flowTakeoverMatchesCurrent())) {
           window.submitCurrentAction();
           return;
         }
@@ -19111,7 +19339,10 @@ function schedulePostStartupUiRendering() {
         }
       }
       // Goal becomes active only when a Goal instruction is actually sent.
-      if (state.mode !== 'goal') await api.setMode(state.mode);
+      if (state.mode !== 'goal' && state.mode !== state._syncedMode) {
+        var modeResult = await api.setMode(state.mode);
+        if (modeResult != null) state._syncedMode = state.mode;
+      }
     });
   }
 
@@ -19119,7 +19350,10 @@ function schedulePostStartupUiRendering() {
     els['model-select'].addEventListener('change', async function() {
       state.model = this.value;
       window.syncModelSelectSurface();
-      await api.setModel(state.model);
+      if (state.model !== state._syncedModel) {
+        var modelResult = await api.setModel(state.model);
+        if (modelResult != null) state._syncedModel = state.model;
+      }
     });
   }
 
@@ -19207,6 +19441,7 @@ function schedulePostStartupUiRendering() {
   window.addEventListener('beforeunload', function() {
     if (state._postStartupUiRendering && state._postStartupUiRendering.cancel) state._postStartupUiRendering.cancel();
     cancelBrowserGuestIdleDestroy();
+    flushPendingConversationDraftPersists();
   }, { once: true });
 
   console.log('[UI] init complete');

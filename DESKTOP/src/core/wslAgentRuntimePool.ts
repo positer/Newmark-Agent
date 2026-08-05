@@ -27,6 +27,7 @@ export interface WslTargetRuntimeClient {
   clearGoal?(target: ConversationRuntimeTarget): Promise<boolean>;
   updateSetting(section: string, key: string, value: unknown): Promise<void>;
   forceRestartRuntimeGroup(): Promise<void>;
+  forceStopRuntimeGroup?(signal?: AbortSignal): Promise<'terminated' | 'stale'>;
   stop(): Promise<void>;
   status(): { enabled: true; connected: boolean; distro: string; pid: number; error: string };
   start?(): Promise<void>;
@@ -59,6 +60,7 @@ interface RuntimeEntry {
 export interface WslAgentRuntimePoolOptions {
   idleTtlMs?: number;
   stopRequestTimeoutMs?: number;
+  forceStopAckTimeoutMs?: number;
   maxResidentRuntimes?: number;
 }
 
@@ -174,7 +176,7 @@ export class WslAgentRuntimePool {
           distro: this.distro,
         };
       }
-      return await this.forceRestartEntry(entry, existing);
+      return await this.forceTerminateEntry(entry, existing);
     }
 
     const intent: SupervisorStopIntent = {
@@ -184,7 +186,7 @@ export class WslAgentRuntimePool {
       forcePromise: null,
     };
     entry.stopIntent = intent;
-    this.emitSupervisorStatus(entry, 'stopping', 'Stopping conversation runtime. Press stop again to force restart it.');
+    this.emitSupervisorStatus(entry, 'stopping', 'Stopping conversation runtime. Press stop again to force stop this run.');
     let timer: ReturnType<typeof setTimeout> | null = null;
     try {
       const timeoutMs = Math.max(10, Number(this.options.stopRequestTimeoutMs ?? 5_250));
@@ -199,7 +201,7 @@ export class WslAgentRuntimePool {
         intent.runId = result.runId || intent.runId;
         intent.generation = result.generation || intent.generation;
         intent.checkpointed = result.checkpointed || intent.checkpointed;
-        return await this.forceRestartEntry(entry, intent);
+        return await this.forceTerminateEntry(entry, intent);
       }
       if (result.action === 'graceful') {
         intent.runId = result.runId || intent.runId;
@@ -633,33 +635,52 @@ export class WslAgentRuntimePool {
     };
   }
 
-  private forceRestartEntry(entry: RuntimeEntry, intent: SupervisorStopIntent): Promise<WslPoolStopResult> {
+  private forceTerminateEntry(entry: RuntimeEntry, intent: SupervisorStopIntent): Promise<WslPoolStopResult> {
     if (intent.forcePromise) return intent.forcePromise;
     this.restarting.add(entry.target.runtimeKey);
-    this.emitSupervisorStatus(entry, 'force_restarting', 'Force restarting this conversation runtime.');
+    this.emitSupervisorStatus(entry, 'force_restarting', 'Force stopping this conversation run. The runtime stays down until the next prompt.');
     const promise = (async (): Promise<WslPoolStopResult> => {
       try {
-        await entry.client.forceRestartRuntimeGroup();
-        const recovered = await entry.client.snapshotTarget(entry.target);
-        const recoveredTarget = recovered.target as { runtimeKey?: string } | undefined;
-        if (recoveredTarget?.runtimeKey !== entry.target.runtimeKey) throw new Error('WSL runtime recovery snapshot target mismatch');
-        entry.lastSnapshot = recovered;
+        // The first click already asked the worker kernel to checkpoint. Give it
+        // a short acknowledgement budget to finalize the armed force stop
+        // (force_interrupted + checkpoint) before escalating to a hard kill.
+        let kernelForce: WslAgentStopResult | null = null;
+        try {
+          kernelForce = await Promise.race([
+            entry.client.requestStop(entry.target, intent.runId || undefined),
+            new Promise<never>((_, reject) => {
+              setTimeout(() => reject(new Error('WSL force-stop acknowledgement timed out')), Math.max(10, Number(this.options.forceStopAckTimeoutMs ?? 750)));
+            }),
+          ]);
+        } catch {
+          kernelForce = null;
+        }
+        const finalized = !!kernelForce && kernelForce.action === 'force';
+        const checkpointed = finalized ? (kernelForce!.checkpointed || intent.checkpointed) : intent.checkpointed;
+        if (!finalized) {
+          // The worker event loop is wedged: hard-kill the process group without
+          // starting a replacement. The first-stop checkpoint preserves the
+          // conversation; only the latest run is discarded.
+          if (entry.client.forceStopRuntimeGroup) await entry.client.forceStopRuntimeGroup();
+          else await entry.client.forceRestartRuntimeGroup();
+        }
+        entry.lastSnapshot = null;
+        entry.workEvents = [];
+        entry.lastRunId = '';
         if (entry.stopIntent === intent) entry.stopIntent = null;
-        const runtime = recovered.runtime as { running?: boolean; stopRequested?: boolean } | null | undefined;
-        if (!runtime?.running && !runtime?.stopRequested) this.scheduleIdle(entry);
         return {
           action: 'force',
           runtimeKey: entry.target.runtimeKey,
           runId: intent.runId,
           generation: intent.generation,
-          checkpointed: intent.checkpointed,
+          checkpointed,
           backend: 'wsl',
           distro: this.distro,
-          restarted: true,
+          restarted: false,
         };
       } catch (error) {
         intent.forcePromise = null;
-        throw new Error(`WSL conversation runtime restart recovery failed: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(`WSL conversation runtime force stop failed: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         this.restarting.delete(entry.target.runtimeKey);
       }

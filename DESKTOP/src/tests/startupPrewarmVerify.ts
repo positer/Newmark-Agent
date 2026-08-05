@@ -212,7 +212,8 @@ function verifyDesktopContracts(): void {
     && promotedMainUiProbe.includes('!prompt.disabled')
     && promotedMainUiProbe.includes('!prompt.readOnly'), 'packaged readiness waits for the same-window cover to be removed and the prompt to be writable after acknowledgement');
   ok(uiHtml.includes('window.refreshRightStatus = function(options)')
-    && uiHtml.includes('return api.getState(currentConversationTarget()).then'), 'right status hydration exposes its completion as an awaitable promise');
+    && uiHtml.includes('var statusTarget = currentConversationTarget()')
+    && uiHtml.includes('return api.getState(statusTarget).then'), 'right status hydration exposes its completion as an awaitable promise');
   ok(uiHtml.includes('window.loadFlows = function(options)')
     && uiHtml.includes('return api.listFlows().then')
     && uiHtml.includes('return Promise.all(flowNames.map'), 'Flow hydration resolves only after every initial Flow has been read');

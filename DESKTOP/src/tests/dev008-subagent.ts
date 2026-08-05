@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Agent } from '../core/agent';
-import { ConversationKernel } from '../core/conversationKernel';
+import { AgentPromptMessage, ConversationKernel } from '../core/conversationKernel';
 import { normalizeConversationTarget } from '../core/conversationTarget';
 import { agentKernelRunnerInternals } from '../core/agentKernelRunner';
 import { SubagentManager, SubagentState } from '../core/subagent';
@@ -184,9 +184,10 @@ async function main(): Promise<void> {
   class RootWakeProbeAgent extends Agent {
     public processCalls: string[] = [];
     override setConversation(id: string): string { this.activeConversationId = id; return id; }
-    override async process(input: string): Promise<Array<{ type: 'text'; text: string }>> {
-      this.processCalls.push(input);
-      this.notifyAgentKernelUserMessageStart(input);
+    override async process(input: string | AgentPromptMessage): Promise<Array<{ type: 'text'; text: string }>> {
+      const text = typeof input === 'string' ? input : input.text;
+      this.processCalls.push(text);
+      this.notifyAgentKernelUserMessageStart(text);
       return [{ type: 'text', text: 'root follow-up complete' }];
     }
   }
@@ -231,11 +232,11 @@ async function main(): Promise<void> {
     ...wakeRuntime,
     id: 'root-active-wake-conversation',
     activePromise: Promise.resolve({} as never),
-    pendingNextTurn: [] as Array<{ message: string; queueMode: 'steer' | 'followUp' }>,
+    pendingNextTurn: [] as Array<{ message: string | AgentPromptMessage; queueMode: 'steer' | 'followUp' }>,
   };
   (kernel as unknown as { enqueueRootInboxWake(runtime: typeof activeWakeRuntime, prompt: string): void }).enqueueRootInboxWake(activeWakeRuntime, 'active peer result prompt');
   await tick();
-  assert.deepStrictEqual(activeWakeRuntime.pendingNextTurn, [{ message: 'active peer result prompt', queueMode: 'followUp' }], 'active root result wake is appended once to the conversation-owned next-turn queue');
+  assert.deepStrictEqual(activeWakeRuntime.pendingNextTurn, [{ message: { text: 'active peer result prompt', hiddenUserInput: true }, queueMode: 'followUp' }], 'active root result wake is appended once to the conversation-owned hidden next-turn queue');
   fs.rmSync(kernelRoot, { recursive: true, force: true });
 
   assert.strictEqual(evaluateToolPolicy({ name: 'write', mode: 'plan' }).allowed, false);

@@ -15,6 +15,8 @@ const uiRounds = numberEnv('NEWMARK_REAL_STRESS_UI_ROUNDS', 6);
 const goalRounds = numberEnv('NEWMARK_REAL_STRESS_GOAL_ROUNDS', 3);
 const timeoutMs = numberEnv('NEWMARK_REAL_STRESS_TIMEOUT_MS', 180000);
 const port = numberEnv('NEWMARK_REAL_STRESS_PORT', 49373);
+const contextMaxTokens = numberEnv('NEWMARK_REAL_STRESS_CONTEXT_MAX_TOKENS', 128000);
+const longContextPayloadRepeats = numberEnv('NEWMARK_REAL_STRESS_LONG_CONTEXT_REPEATS', 600);
 
 const results = [];
 let activeSecretValues = [];
@@ -117,7 +119,8 @@ function classifyFailure(error) {
   if (/conversation|leak|串/i.test(text)) return 'conversation-leak';
   if (/UTF-8|UTF8|encoding|中文|真实/i.test(text)) return 'encoding-error';
   if (/process|running|left a packaged/i.test(text)) return 'process-leak';
-  if (/api key|secret|token|leaked/i.test(text)) return 'secret-leak';
+  if (activeSecretValues.some(secret => secret && text.includes(secret))
+    || /\b(?:api[ _-]?key|secret(?:[ _-]?(?:key|value))?|access[ _-]?token|bearer|token[ _-]?leak(?:ed)?|key[ _-]?leak(?:ed)?)\b/i.test(text)) return 'secret-leak';
   return 'app-or-provider-error';
 }
 
@@ -138,7 +141,7 @@ async function recordScenario(name, fn) {
       rootCause,
       detail: redact(error && (error.stack || error.message) || error),
     });
-    log(`${name} failed (${rootCause}, ${elapsedMs} ms)`);
+    log(`${name} failed (${rootCause}, ${elapsedMs} ms): ${redact(error && (error.stack || error.message) || error).replace(/\r?\n/g, ' ').slice(0, 3000)}`);
   }
 }
 
@@ -155,7 +158,8 @@ function writeConfig(root, provider) {
           name: provider.model,
           display: provider.model,
           description: 'Opt-in real provider stress model',
-          evaluation: { status: 'available', latency: 0 },
+           max_tokens: contextMaxTokens,
+           evaluation: { status: 'available', latency: 0 },
         }],
       }],
       default_model: provider.model,
@@ -363,7 +367,9 @@ function assistantMarkerExpression(marker, conversationId = '') {
       s = await window.api.getState();
     }
     const messages = (s && Array.isArray(s.chatMessages)) ? s.chatMessages : [];
-    return messages.some(m => m && m.role === 'assistant' && String(m.content || '').includes(${jsString(marker)})) ? s : null;
+    const persisted = messages.some(m => m && m.role === 'assistant' && String(m.content || '').includes(${jsString(marker)}));
+    const rendered = Array.from(document.querySelectorAll('.run-final-response, .conversation-work-run')).some(node => String(node.innerText || '').includes(${jsString(marker)}));
+    return persisted || rendered ? s : null;
   })`;
 }
 
@@ -408,7 +414,29 @@ async function sendUiPrompt(cdp, prompt, marker, waitTimeoutMs = timeoutMs, conv
     window.sendMessage();
     return true;
   })()`, 30000);
-  await waitFor(cdp, assistantMarkerExpression(marker, conversationId), waitTimeoutMs, `assistant marker ${marker}`);
+  try {
+    await waitFor(cdp, assistantMarkerExpression(marker, conversationId), waitTimeoutMs, `assistant marker ${marker}`);
+  } catch (error) {
+    const debug = await evaluate(cdp, `(() => {
+      const state = window.state || {};
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      const run = document.querySelector('.conversation-work-run')?.innerText || '';
+      const finals = Array.from(document.querySelectorAll('.run-final-response')).map(node => node.innerText || '').join(' ');
+      return {
+        status: state.status,
+        model: state.model,
+        mode: state.mode,
+        sendInFlight: state._sendInFlight,
+        currentWorkspace: !!state.currentWorkspace,
+        bodyTail: body.slice(-1600),
+        runTail: run.slice(-1600),
+        finalText: finals.slice(-1600),
+        chatMessages: (state.chatMessages || []).slice(-4).map(message => ({ role: message.role, content: String(message.content || '').slice(-600) })),
+        workRuns: (state.workRuns || []).slice(-2).map(item => ({ runId: item.runId, status: item.status, events: (item.events || []).slice(-4).map(event => ({ type: event.type, content: String(event.content || '').slice(-300) })) })),
+      };
+    })()`, 30000).catch(debugError => ({ debugError: debugError.message }));
+    throw new Error(`${error.message}; uiDebug=${redact(JSON.stringify(debug)).slice(0, 5000)}`);
+  }
   const state = await waitFor(cdp, stateIdleExpression(conversationId), 60000, `idle after ${marker}`);
   const stateText = JSON.stringify(state || {});
   if (stateText.includes(activeSecretValues[0])) throw new Error('renderer state leaked API key');
@@ -466,14 +494,16 @@ async function runQueueStress(cdp) {
   await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
   await waitFor(cdp, stateIdleExpression(), 60000, 'queue stress initial idle');
   await evaluate(cdp, `(() => {
-    if (window.state && Array.isArray(window.state.conversations) && !window.state.conversations.some(c => c && c.id === ${jsString(conversationId)})) {
-      window.state.conversations.push({ id: ${jsString(conversationId)}, summary: 'Stress queue', messages: [] });
-    }
-    if (window.state) window.state.conversationId = ${jsString(conversationId)};
-    if (window.renderConversations) window.renderConversations();
-    if (window.renderChatMessages) window.renderChatMessages([]);
-    return window.api.setConversation(${jsString(conversationId)});
+     const conversations = typeof currentWorkspaceConversations === 'function' ? currentWorkspaceConversations() : [];
+     if (!conversations.some(c => c && c.id === ${jsString(conversationId)})) {
+       conversations.push({ id: ${jsString(conversationId)}, summary: 'Stress queue', messages: [], archived: false, active: false });
+     }
+     const index = conversations.findIndex(c => c && c.id === ${jsString(conversationId)});
+     if (typeof window.switchConversation === 'function') window.switchConversation(index);
+     else if (typeof setActiveWorkspaceConversationById === 'function') setActiveWorkspaceConversationById(${jsString(conversationId)});
+     return activeConversationId();
   })()`, 30000);
+  await waitFor(cdp, `(() => typeof activeConversationId === 'function' && activeConversationId() === ${jsString(conversationId)})()`, 30000, 'queue conversation activation');
   await evaluate(cdp, `window.setInputMode ? window.setInputMode('guide') : undefined`, 30000);
   const firstMarker = 'NM_STRESS_QUEUE_FIRST_OK';
   const secondMarker = 'NM_STRESS_QUEUE_SECOND_OK';
@@ -493,31 +523,51 @@ async function runQueueStress(cdp) {
     window.sendMessage();
     return true;
   })()`, 30000);
-  await waitFor(cdp, `(() => {
-    const body = document.querySelector('#chat-area')?.innerText || '';
-    const label = document.querySelector('#queue-header-label');
-    return body.includes('[Next queued]') && body.includes(${jsString(secondMarker)}) && label && /1/.test(label.textContent || '');
-  })()`, 15000, 'queued prompt visible');
-  await waitFor(cdp, `(() => {
-    const body = document.querySelector('#chat-area')?.innerText || '';
-    const panel = document.querySelector('#queue-panel');
-    const label = document.querySelector('#queue-header-label');
-    const state = window.state || {};
-    const queueVisible = panel && panel.style.display !== 'none' && label && /1/.test(label.textContent || '');
-    const ok = body.includes(${jsString(firstMarker)}) && body.includes(${jsString(secondMarker)}) && !queueVisible && state._sendInFlight === false;
-    if (!ok) {
-      window.__realProviderQueueStressDebug = {
-        hasFirst: body.includes(${jsString(firstMarker)}),
-        hasSecond: body.includes(${jsString(secondMarker)}),
-        queueLabel: label ? label.textContent : '',
-        sendInFlight: state._sendInFlight,
-        runningKeys: Object.keys(state.runningConversations || {}),
-        backendQueue: state.backendQueue || null,
-        bodyTail: body.slice(-1400),
-      };
-    }
-    return ok;
-  })()`, timeoutMs, 'queued prompt drained through UI');
+  try {
+    await waitFor(cdp, `(() => {
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      const label = document.querySelector('#queue-header-label');
+      const queue = window.state && (window.state.nextQueue || []);
+      const backendQueue = window.state && window.state.backendQueue && window.state.backendQueue.followUp || [];
+      return (queue.some(item => String(item || '').includes(${jsString(secondMarker)})) || backendQueue.some(item => String(item || '').includes(${jsString(secondMarker)})))
+        && label && /1/.test(label.textContent || '');
+    })()`, 15000, 'queued prompt visible');
+  } catch (error) {
+    const debug = await evaluate(cdp, `(() => ({
+      nextQueue: (window.state && window.state.nextQueue) || [],
+      nextQueueRequests: (window.state && window.state.nextQueueRequests || []).map(item => item && { text: String(item.text || '').slice(-600), target: item.target }),
+      backendQueue: (window.state && window.state.backendQueue) || null,
+      queueLabel: document.querySelector('#queue-header-label')?.textContent || '',
+      bodyTail: (document.querySelector('#chat-area')?.innerText || '').slice(-1200),
+    }))()`, 30000).catch(debugError => ({ debugError: debugError.message }));
+    throw new Error(`${error.message}; queueDebug=${redact(JSON.stringify(debug)).slice(0, 4000)}`);
+  }
+  try {
+    await waitFor(cdp, `(() => {
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      const panel = document.querySelector('#queue-panel');
+      const label = document.querySelector('#queue-header-label');
+      const state = window.state || {};
+      const queueVisible = panel && panel.style.display !== 'none' && label && /1/.test(label.textContent || '');
+      const ok = body.includes(${jsString(firstMarker)}) && body.includes(${jsString(secondMarker)}) && !queueVisible && state._sendInFlight === false;
+      if (!ok) {
+        window.__realProviderQueueStressDebug = {
+          hasFirst: body.includes(${jsString(firstMarker)}),
+          hasSecond: body.includes(${jsString(secondMarker)}),
+          queueLabel: label ? label.textContent : '',
+          sendInFlight: state._sendInFlight,
+          runningKeys: Object.keys(state.runningConversations || {}),
+          backendQueue: state.backendQueue || null,
+          nextQueue: state.nextQueue || [],
+          bodyTail: body.slice(-1400),
+        };
+      }
+      return ok;
+    })()`, timeoutMs, 'queued prompt drained through UI');
+  } catch (error) {
+    const debug = await evaluate(cdp, 'window.__realProviderQueueStressDebug || null', 30000).catch(debugError => ({ debugError: debugError.message }));
+    throw new Error(`${error.message}; queueDebug=${redact(JSON.stringify(debug)).slice(0, 4000)}`);
+  }
   await waitFor(cdp, stateIdleExpression(conversationId), 60000, 'queue idle');
   return 'queued prompt drained';
 }
@@ -558,12 +608,15 @@ async function runConversationIsolationStress(cdp) {
 
 async function runLongContextStress(cdp) {
   const conversationId = 'stress-long-context';
+  const seedMarker = 'NM_STRESS_LONG_CONTEXT_SEED_OK';
   const marker = 'NM_STRESS_LONG_CONTEXT_OK';
-  const payload = 'Long context stress payload. '.repeat(600);
+  const payload = 'Long context stress payload. '.repeat(longContextPayloadRepeats);
   await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
   await waitFor(cdp, stateIdleExpression(), 60000, 'long-context initial idle');
-  await sendBackendPrompt(cdp, `Reply with this exact marker as the first line: ${marker}\nDo not use tools. Do not summarize the payload.\n\n${payload}`, marker, conversationId, timeoutMs);
-  const compression = await evaluate(cdp, `window.api.getState().then(s => s.contextCompression || s.compression || null)`, 30000).catch(() => null);
+  await sendBackendPrompt(cdp, `Reply with this exact marker as the first line: ${seedMarker}\nDo not use tools.\n\n${payload}`, seedMarker, conversationId, timeoutMs);
+  const result = await sendBackendPrompt(cdp, `Reply with this exact marker as the first line: ${marker}\nDo not use tools.`, marker, conversationId, timeoutMs);
+  const compression = result && (result.contextCompression || result.compression || null);
+  if (contextMaxTokens < 128000 && !compression) throw new Error(`long-context compression did not trigger at configured max_tokens=${contextMaxTokens}`);
   return `longPayloadChars=${payload.length}; compressionState=${redact(JSON.stringify(compression || {})).slice(0, 500)}`;
 }
 
@@ -601,7 +654,7 @@ function writeReport(provider, root, skippedReason = '') {
       ? 'not-release-ready'
       : 'release-usable';
   const scenarioRows = results.length
-    ? results.map(r => `| ${r.name} | ${r.status} | ${r.rootCause || ''} | ${r.elapsedMs} | ${String(r.detail || '').replace(/\r?\n/g, ' ').slice(0, 700)} |`).join('\n')
+    ? results.map(r => `| ${r.name} | ${r.status} | ${r.rootCause || ''} | ${r.elapsedMs} | ${String(r.detail || '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|').slice(0, 700)} |`).join('\n')
     : '| real-provider-stress | skip | missing-credentials | 0 | 未执行真实重压：缺少凭据 |';
   const providerLine = provider
     ? `source=${provider.source}; protocol=${provider.protocol}; model=${provider.model}`
@@ -624,8 +677,10 @@ Implemented and/or ran the opt-in real-provider stress harness for the packaged 
 - cliRounds=${cliRounds}
 - uiRounds=${uiRounds}
 - goalRounds=${goalRounds}
-- timeoutMs=${timeoutMs}
-- skipped=${skipped}
+  - timeoutMs=${timeoutMs}
+  - contextMaxTokens=${contextMaxTokens}
+  - longContextPayloadRepeats=${longContextPayloadRepeats}
+  - skipped=${skipped}
 - tempRoot=${keepRoot ? root : '<removed>'}
 
 ## Scenario Results

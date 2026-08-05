@@ -8564,6 +8564,13 @@ function workRunsForBranch(target, branchId) {
   if (!state.workRunsByBranch) state.workRunsByBranch = {};
   var key = workRunBranchKey(target, branchId);
   if (!state.workRunsByBranch[key]) state.workRunsByBranch[key] = [];
+  // Bound the live ledger so a very long conversation cannot grow the
+  // in-memory run list without limit between backend snapshots. The backend
+  // snapshot re-caps authoritative state; this only guards the live push path.
+  var RUN_WINDOW = 120;
+  if (state.workRunsByBranch[key].length > RUN_WINDOW) {
+    state.workRunsByBranch[key] = state.workRunsByBranch[key].slice(-RUN_WINDOW);
+  }
   return state.workRunsByBranch[key];
 }
 
@@ -15282,15 +15289,17 @@ window.resumeFlowWith = async function(feedback, isInterruptedResume) {
       return result;
     }
     var completed = !!(result && result.ok);
-    if (!completed && !flowRelayedErrorWasShown(currentConversationTarget())) showUiNotice(formatChatError((result && result.error) || 'Flow resume failed'), 'error', 'flow-resume-error');
+    var resumeTarget = currentConversationTarget();
+    if (!completed && !flowRelayedErrorWasShown(resumeTarget)) showUiNotice(formatChatError((result && result.error) || 'Flow resume failed'), 'error', 'flow-resume-error');
     else if (completed) addMsg('assistant', '[System] Flow complete.', 'flow', state.model);
-    var settlement = stopFlowRunInternal(completed ? {} : { keepPaused: true });
+    var settlement = stopFlowRunInternal(completed ? {} : { keepPaused: true }, resumeTarget);
     await setVisibleMode('build');
     if (completed && settlement && settlement.shouldDrain) window.scheduleNextQueueDrain(settlement.target);
     return result;
   } catch (error) {
-    if (!flowRelayedErrorWasShown(currentConversationTarget())) showUiNotice(formatChatError(error && error.message ? error.message : String(error), 'Flow resume failed.'), 'error', 'flow-resume-error');
-    stopFlowRunInternal({ keepPaused: true });
+    var catchTarget = currentConversationTarget();
+    if (!flowRelayedErrorWasShown(catchTarget)) showUiNotice(formatChatError(error && error.message ? error.message : String(error), 'Flow resume failed.'), 'error', 'flow-resume-error');
+    stopFlowRunInternal({ keepPaused: true }, catchTarget);
     await setVisibleMode('build');
     return { ok: false, error: error && error.message ? error.message : String(error) };
   }
@@ -15342,13 +15351,14 @@ window.queueFlowNextInput = function(text) {
   return true;
 };
 
-function stopFlowRunInternal(options) {
-  var record = currentFlowTakeoverRecord();
+function stopFlowRunInternal(options, target) {
+  target = target || currentConversationTarget();
+  var record = flowTakeoverRecordFor(target);
   record.running = false;
   record.paused = false;
   record.promptText = '';
   record.lastSubmission = null;
-  window.renderFlowTakeover(false);
+  window.renderFlowTakeover(false, '', { target: target });
   var runtimeLease = record.runtimeLease || null;
   record.runtimeLease = null;
   if (runtimeLease) {
@@ -15357,14 +15367,14 @@ function stopFlowRunInternal(options) {
       setConversationRuntimeState(runtimeLease.target, 'completed', runtimeLease.runId, { provisional: false });
     }
   }
-  var settlement = settleFlowQueueTakeover(options);
+  var settlement = settleFlowQueueTakeover(options, target);
   var prompt = els.prompt;
   if (prompt) {
     prompt.placeholder = t('input.placeholder');
     prompt.disabled = false;
     prompt.focus();
   }
-  setWorking(!!runningConversationRecord(activeConversationId()));
+  setWorking(!!runningConversationRecord(activeConversationId()) || currentFlowRunning());
   updateSubmitButtonState();
   renderConversations();
   window.renderInputStack();
@@ -15558,7 +15568,7 @@ window.runFlowWork = async function(workIdx) {
     }
   } finally {
     if (flowSuspended) return;
-    var settlement = stopFlowRunInternal(flowCompletedNormally ? {} : { keepPaused: true });
+    var settlement = stopFlowRunInternal(flowCompletedNormally ? {} : { keepPaused: true }, flowTarget);
     await setVisibleMode('build');
     if (flowCompletedNormally && settlement && settlement.shouldDrain) window.scheduleNextQueueDrain(settlement.target);
   }

@@ -276,6 +276,23 @@ function flowRecordFor(target) {
   assert(flowRecordFor(currentTarget).paused === true, 'round-trip: switching back restores conversation A paused Flow');
   assert(window.document.getElementById('flow-takeover').classList.contains('active'), 'round-trip: takeover visible again in conversation A');
 
+  // 8. A Flow that COMPLETES in conversation A while the user is viewing
+  // conversation B must clear conversation A's running flag. stopFlowRunInternal
+  // must tear down the owning conversation's record, not the currently viewed
+  // one, so a completed background Flow never lingers as "running".
+  currentTarget = { conversationId: 'conv-a', workspaceId: 'ws-a' };
+  flowRecordFor(currentTarget).running = true;
+  flowRecordFor(currentTarget).paused = false;
+  flowRecordFor(currentTarget).runtimeLease = { target: { conversationId: 'conv-a', workspaceId: 'ws-a' }, runId: 'flow-completed-a' };
+  window.renderFlowTakeover(true, 'pause-stop-flow', { target: { ...currentTarget } });
+  currentTarget = { conversationId: 'conv-b', workspaceId: 'ws-b' };
+  window.reconcileFlowTakeoverForActive();
+  // The Flow in conversation A completes while the user is on B.
+  window.stopFlowRunInternal({}, { conversationId: 'conv-a', workspaceId: 'ws-a' });
+  assert(flowRecordFor(currentTarget).running !== true, 'completed Flow on another conversation does not mark the viewed conversation running');
+  assert(flowRecordFor({ conversationId: 'conv-a', workspaceId: 'ws-a' }).running !== true, 'completed Flow clears its owning conversation running flag even when viewed from another conversation');
+  assert(flowRecordFor({ conversationId: 'conv-a', workspaceId: 'ws-a' }).runtimeLease === null, 'completed Flow clears its owning conversation runtime lease');
+
   if (failures.length) {
     console.error('flow-pause-stop UI stress FAILED (' + failures.length + ')');
     process.exit(1);

@@ -1722,7 +1722,14 @@ export class Agent {
           };
         })
         .sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
-      const sequence = Math.max(Number(raw.sequence || 0), ...events.map(event => Number(event.sequence || 0)), 0);
+      // Bound retained events per run so an extremely long-lived Build block
+      // cannot grow without limit in memory (and on disk). The full transcript
+      // survives; only the work-event ledger is windowed. Terminal status
+      // events and the final response remain intact because they sit at the end
+      // of the sequence.
+      const EVENT_WINDOW = 250;
+      const boundedEvents = events.length > EVENT_WINDOW ? events.slice(-EVENT_WINDOW) : events;
+      const sequence = Math.max(Number(raw.sequence || 0), ...boundedEvents.map(event => Number(event.sequence || 0)), 0);
       const candidate: ConversationWorkRun = {
         runId,
         target,
@@ -1732,7 +1739,7 @@ export class Agent {
         endedAt: raw.endedAt,
         expanded: raw.expanded === undefined ? true : !!raw.expanded,
         sequence,
-        events,
+        events: boundedEvents,
         guides: [...guidesById.values()],
         primaryPrompt: this.sanitizePublicWorkContent(raw.primaryPrompt || ''),
         branchNodeId: String(raw.branchNodeId || ''),
@@ -1769,18 +1776,26 @@ export class Agent {
       }).sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
       const mergedGuides = new Map<string, GuideReceipt>();
       for (const guide of [...older.guides, ...newer.guides]) mergedGuides.set(guide.clientMessageId, guide);
+      const mergedEventWindow = 250;
+      const boundedMergedEvents = uniqueEvents.length > mergedEventWindow ? uniqueEvents.slice(-mergedEventWindow) : uniqueEvents;
       byRun.set(runId, {
         ...older,
         ...newer,
         startedAt: older.startedAt.localeCompare(newer.startedAt) <= 0 ? older.startedAt : newer.startedAt,
         endedAt: newer.status === 'running' ? undefined : (newer.endedAt || older.endedAt),
-        events: uniqueEvents,
+        events: boundedMergedEvents,
         guides: [...mergedGuides.values()],
-        sequence: Math.max(previousSequence, candidateSequence, ...uniqueEvents.map(event => Number(event.sequence || 0)), 0),
+        sequence: Math.max(previousSequence, candidateSequence, ...boundedMergedEvents.map(event => Number(event.sequence || 0)), 0),
         primaryPrompt: newer.primaryPrompt || older.primaryPrompt,
       });
     }
-    return [...byRun.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    // Bound the total retained runs so a very long conversation (hundreds of
+    // Build blocks) cannot grow the in-memory and persisted ledger without
+    // limit. Older completed runs remain recoverable from persisted archive
+    // history; only the active working set is retained.
+    const RUN_WINDOW = 120;
+    const sorted = [...byRun.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    return sorted.length > RUN_WINDOW ? sorted.slice(-RUN_WINDOW) : sorted;
   }
 
   private recoverPersistedWorkRuns(

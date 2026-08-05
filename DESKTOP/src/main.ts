@@ -2607,9 +2607,20 @@ if (isViewerArg) {
       const requestedTarget = targetInput ? conversationRuntimeTarget(targetInput) : null;
       const suspension = requestedTarget ? activeFlowStateFor(requestedTarget) : null;
       if (!suspension || (suspension.reason !== 'question' && suspension.reason !== 'interrupted')) {
+        // No paused Flow exists for this conversation. If the Flow is already
+        // running, tell the renderer so it keeps the running takeover instead
+        // of tearing it down or showing a spurious error.
+        if (suspension?.abortController) {
+          return { ok: true, alreadyRunning: true, flow: suspension.name || suspension.workflow.name };
+        }
         return { ok: false, error: 'No suspended Flow is waiting for user input.' };
       }
-      if (suspension.abortController) return { ok: false, error: `Flow is already running: ${suspension.name || '(unnamed)'}` };
+      if (suspension.abortController) {
+        // The Flow is already running (a stale resume click from a bubble that
+        // has not yet refreshed to the running takeover). Report the actual
+        // state instead of an error so the renderer reconciles to "running".
+        return { ok: true, alreadyRunning: true, flow: suspension.name || suspension.workflow.name };
+      }
       const flowTarget = suspension.target;
       const flowKey = activeFlowStateKey(flowTarget);
       const flowAgent = isolatedConversationAgent(flowTarget);

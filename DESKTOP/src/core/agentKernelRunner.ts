@@ -682,6 +682,16 @@ async function transformContext(agent: Agent, messages: KernelMessage[], signal?
   if (primaryCompressed && agent.estimateContextTokens(newmarkMessages) >= Math.floor(agent.contextWindow(compressionModel).maxTokens * 0.82)) {
     await agent.maybeCompress(newmarkMessages, null, processSignal, compressionModel, true);
   }
+  // Hard safety net: even a conservative worst-case token estimate must never
+  // leave a request that could exceed the model's context window. The improved
+  // estimateContextTokens already prices CJK and JSON structure, but hold an
+  // explicit ceiling so a pathological SubAgent transcript merge cannot reach
+  // the provider oversized even if the estimator undercounts.
+  const windowMax = agent.contextWindow(compressionModel).maxTokens;
+  const conservativeTokens = agent.estimateContextTokens(newmarkMessages);
+  if (conservativeTokens >= Math.floor(windowMax * 0.9) && !processSignal?.aborted) {
+    await agent.maybeCompress(newmarkMessages, null, processSignal, compressionModel, true);
+  }
   if (JSON.stringify(newmarkMessages) === beforeCompression) return messages;
   const durableMessages = toKernelMessagesFromHistory(newmarkMessages, agent);
   if (agent.lastCompression?.at && agent.lastCompression.at !== compressionAt) {

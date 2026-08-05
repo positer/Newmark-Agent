@@ -577,6 +577,11 @@ async function main() {
     && uiHtml.includes('api.getState(target).then')
     && uiHtml.includes('window.openSubagentHistory(agent.id || agent.name)')
     && uiHtml.includes('window.refreshSubagentBuildChips'), 'ui work run: task calls render status-aware Subagent chips inside the Build block and refresh the exact peer snapshot before opening its work history');
+  assert(uiHtml.includes('var collapseSubagents = subagentTasks.length > 1')
+    && uiHtml.includes("操作了 ' + subagentTasks.length + ' 个 SubAgent'")
+    && uiHtml.includes("'Operated ' + subagentTasks.length + ' SubAgents'")
+    && uiHtml.includes('conversation-work-subagent-chip-multi')
+    && uiHtml.includes('names.join('), 'ui work run: a Build Block that spawns several SubAgents collapses to a single summary chip instead of one chip per SubAgent');
   assert(uiHtml.includes('state.subWindowStack.push') && uiHtml.includes('state.subWindowStack && state.subWindowStack.pop') && uiHtml.includes("header.addEventListener('pointerdown'") && uiHtml.includes('Math.min(window.innerWidth - rect.width - padding') && uiHtml.includes('Math.min(window.innerHeight - rect.height - padding'), 'ui sub-windows: nested views restore their parent and pointer dragging is clamped to the visible viewport');
   assert(uiHtml.includes("state.activeSubWindowView.name === 'plugins'") && uiHtml.includes('if (refreshingPlugins) state.restoringSubWindow = true;'), 'ui Skills Market: sibling plugin tabs refresh in place instead of polluting the parent navigation stack');
   assert(uiHtml.includes('window.showFlowEditor = function(expandedIndex)') && uiHtml.includes("renderFlowItem(state.flowWorks[i], i, Number(expandedIndex) === i)") && uiHtml.includes("state.activeSubWindowView = { name: 'flowNew' }") && uiHtml.includes('window.showFlowEditor(workIdx)'), 'ui Flow editor: same-level rerenders do not stack windows and newly added controls remain expanded');
@@ -701,8 +706,8 @@ async function main() {
     && flowMainSource.includes("reason: '' | 'question' | 'interrupted'")
     && flowMainSource.includes('flowState.abortController = null;')
     && flowMainSource.includes('suspension.abortController = null;')
-    && flowMainSource.includes("if (suspension.abortController) return { ok: false, error: `Flow is already running: ${suspension.name || '(unnamed)'}` };"),
-  'Flow resume: a running Flow is marked running (reason empty, abortController set), every suspension clears abortController, so clicking the takeover bubble to pause then clicking again to resume is never rejected as already-running');
+    && flowMainSource.includes('alreadyRunning: true, flow: suspension.name || suspension.workflow.name'),
+  'Flow resume: a running Flow is marked running (reason empty, abortController set), every suspension clears abortController, and a stale resume click on a still-running Flow returns alreadyRunning instead of an error so the takeover is never torn down');
   assert(agentSourceForEditor.includes('getStoredFlowSuspension(conversationId = this.activeConversationId): FlowSuspensionRecord | null')
     && agentSourceForEditor.includes('saveStoredFlowSuspension(suspension: FlowSuspensionRecord | null, conversationId = this.activeConversationId): void')
     && agentSourceForEditor.includes('clearStoredFlowSuspension(conversationId = this.activeConversationId): void')

@@ -3891,12 +3891,30 @@ export class Agent {
   }
 
   estimateContextTokens(messages: Array<Record<string, unknown>> = this.history): number {
-    const chars = messages.reduce((sum, m) => {
+    let asciiChars = 0;
+    let nonAsciiChars = 0;
+    let structuralChars = 0;
+    for (const m of messages) {
       const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
       const toolCalls = Array.isArray(m.tool_calls) ? JSON.stringify(m.tool_calls) : '';
-      return sum + content.length + toolCalls.length;
-    }, 0);
-    return Math.max(1, Math.ceil(chars / 4));
+      const text = `${content}${toolCalls}`;
+      for (let index = 0; index < text.length; index++) {
+        if (text.charCodeAt(index) > 0x7f) nonAsciiChars += 1;
+        else asciiChars += 1;
+      }
+      // JSON/escaped structure and tool-call metadata tokenize far denser than
+      // plain prose (~4 chars/token). Charge structural bytes separately so
+      // large SubAgent transcripts, tool catalogs, and escaped payloads cannot
+      // hide behind the prose heuristic and slip past the compression trigger.
+      if (typeof m.content === 'object' && m.content) structuralChars += Math.max(0, content.length);
+      if (toolCalls) structuralChars += Math.max(0, toolCalls.length);
+    }
+    // Prose: ~4 ASCII chars/token. CJK and other non-ASCII scripts tokenize at
+    // roughly 1 token per character, so a flat chars/4 undercounts them by up
+    // to 4x and lets an oversized request reach the provider without
+    // compression. Count non-ASCII chars at 1 token each and fold structural
+    // overhead in on top.
+    return Math.max(1, Math.ceil(asciiChars / 4 + nonAsciiChars + structuralChars / 6));
   }
 
   contextWindow(modelName = this.model): { estimatedTokens: number; maxTokens: number; ratio: number; warning: 'ok' | 'near_limit' | 'over_limit'; model: string } {

@@ -8859,6 +8859,22 @@ function renderWorkToolGroup(event, eventIndex) {
     var name = publicToolNameForUi(item && item.toolName).toLowerCase();
     return name === 'task';
   });
+  // A Build Block that spawns several SubAgents is summarized as one chip
+  // ("operated N SubAgents") instead of flooding the block with one chip per
+  // SubAgent. Each name stays available in the tooltip.
+  var subagentTasks = items.map(function(item, itemIndex) {
+    var name = publicToolNameForUi(item && item.toolName).toLowerCase();
+    if (name !== 'task') return null;
+    var subagentArgs = workToolArgsObject(item);
+    var subagentName = String(subagentArgs.nature || subagentArgs.name || subagentArgs.agent || 'Subagent').trim();
+    var subagentRecord = findSubagentUiRecord(subagentName);
+    return {
+      key: String(item.id || item.toolCallId || ('task-' + itemIndex)),
+      subagentName: subagentName || 'Subagent',
+      status: String(subagentRecord && subagentRecord.status || 'accepted'),
+    };
+  }).filter(Boolean);
+  var collapseSubagents = subagentTasks.length > 1;
   var activityRows = items.map(function(item, itemIndex) {
     var edited = workToolEditedFile(item);
     if (edited) {
@@ -8872,6 +8888,7 @@ function renderWorkToolGroup(event, eventIndex) {
     }
     var toolName = publicToolNameForUi(item && item.toolName).toLowerCase();
     if (toolName === 'task') {
+      if (collapseSubagents) return '';
       var subagentArgs = workToolArgsObject(item);
       var subagentName = String(subagentArgs.nature || subagentArgs.name || subagentArgs.agent || 'Subagent').trim();
       var subagentRecord = findSubagentUiRecord(subagentName);
@@ -8882,6 +8899,14 @@ function renderWorkToolGroup(event, eventIndex) {
     return '<div class="conversation-work-activity-item">' + iconSvg(workToolRowIcon(item), 'tool', 'tiny') +
       '<div><div class="conversation-work-command-label" title="' + escAttr(workToolCommandLabel(item)) + '">' + esc(workToolCommandLabel(item)) + '</div>' + renderWorkDisplayImage(item.displayImage) + '</div></div>';
   }).join('');
+  if (collapseSubagents) {
+    var allCompleted = subagentTasks.every(function(task) { return task.status === 'completed'; });
+    var names = subagentTasks.map(function(task) { return task.subagentName; });
+    activityRows += '<button type="button" class="conversation-work-subagent-chip conversation-work-subagent-chip-multi' + (allCompleted ? ' completed' : '') + '" title="' + escAttr(names.join('，')) + '">' +
+      iconSvg('bot', 'Subagent', 'tiny') + '<span class="conversation-work-subagent-name">' +
+      esc(currentLang() === 'zh' ? '操作了 ' + subagentTasks.length + ' 个 SubAgent' : 'Operated ' + subagentTasks.length + ' SubAgents') +
+      '</span><span class="conversation-work-subagent-status">' + esc(subagentUiStatusLabel(allCompleted ? 'completed' : subagentTasks[0].status)) + '</span></button>';
+  }
   return '<details class="conversation-work-activity" data-activity-key="' + escAttr(activityDomKey) + '"><summary>' +
     iconSvg(hasFiles ? 'pencil' : 'square-terminal', 'tools', 'tiny') + '<span>' + esc(workToolGroupLabel(items, !!event.completed)) + '</span>' +
     '<span class="conversation-work-activity-chevron" aria-hidden="true"></span></summary><div class="conversation-work-activity-list' + (onlySubagents ? ' conversation-work-subagent-list' : '') + '">' +
@@ -15146,14 +15171,22 @@ window.resumeInterruptedFlow = async function() {
   if (!api.resumeFlow) return;
   if (!flowTakeoverMatchesCurrent()) return { ok: false, error: 'The suspended Flow belongs to another conversation.' };
   var resumeRecord = currentFlowTakeoverRecord();
-  if (!resumeRecord.running) {
-    resumeRecord.running = true;
+  var resumeTarget = currentConversationTarget();
+  // Optimistically flip the takeover from "paused" back to "running" before the
+  // backend resumes, so the bubble never lingers in the paused state while the
+  // Flow is already working again. This keeps the frontend and backend in sync
+  // and prevents a stale click on the paused bubble from being misread as an
+  // error.
+  resumeRecord.running = true;
+  resumeRecord.paused = false;
+  window.renderFlowTakeover(true, resumeRecord.name || (resumeRecord.lastSubmission && resumeRecord.lastSubmission.name) || '', { target: resumeTarget });
+  if (!resumeRecord.runtimeLease) {
     resumeRecord.lastRelayedError = null;
-    var suspendedFlowTarget = currentConversationTarget();
     var resumedFlowRunId = 'flow-' + Date.now() + '-' + Math.random().toString(16).slice(2);
-    resumeRecord.runtimeLease = { target: suspendedFlowTarget, runId: resumedFlowRunId };
-    setConversationRuntimeState(suspendedFlowTarget, 'running', resumedFlowRunId, { provisional: true, flow: true });
+    resumeRecord.runtimeLease = { target: resumeTarget, runId: resumedFlowRunId };
+    setConversationRuntimeState(resumeTarget, 'running', resumedFlowRunId, { provisional: true, flow: true });
   }
+  updateSubmitButtonState();
   return window.resumeFlowWith('', true);
 };
 
@@ -15165,6 +15198,16 @@ window.resumeFlowWith = async function(feedback, isInterruptedResume) {
     if (result && Array.isArray(result.chatMessages)) {
       if (Array.isArray(result.workRuns)) renderConversationWorkRuns(result.workRuns, currentConversationTarget());
       renderChatMessages(result.chatMessages);
+    }
+    if (result && result.alreadyRunning) {
+      // The backend reports the Flow is already running (a stale resume click
+      // raced the optimistic refresh). Keep the running takeover and do not
+      // tear it down or surface an error: the frontend and backend are now in
+      // sync.
+      resumeRecord.running = true;
+      resumeRecord.paused = false;
+      window.renderFlowTakeover(true, result.flow || resumeRecord.name || (resumeRecord.lastSubmission && resumeRecord.lastSubmission.name) || '', { target: currentConversationTarget() });
+      return result;
     }
     if (result && result.pending) {
       state.pendingOptions = result.options || [];

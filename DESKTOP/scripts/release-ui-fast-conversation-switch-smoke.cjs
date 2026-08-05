@@ -605,6 +605,56 @@ async function runUiCheck(root) {
     await evaluate(cdp, `(() => { window.renderFlowTakeover(false, '', { target: currentConversationTarget() }); return true; })()`, 30000);
     log('Flow takeover target isolation ok: owner A only, no cross-conversation display');
 
+    // Workspace-switch-induced conversation switching must reconcile the Flow
+    // takeover exactly like an in-workspace conversation switch: the takeover
+    // for workspace A / conversation A never surfaces in workspace B, and
+    // switching back to workspace A restores the owning conversation's bubble.
+    const secondWorkspace = await evaluate(cdp, `window.api.createWorkspace('fast-switch-isolation-workspace-b')`, 30000);
+    if (!secondWorkspace?.id) fail(`second workspace creation did not return a stable id: ${JSON.stringify(secondWorkspace)}`);
+    const workspaceAOwned = await evaluate(cdp, `(async () => {
+      await window.switchToWorkspace(${jsString(smokeWorkspace.id)});
+      const idx = currentWorkspaceConversations().findIndex(c => c.id === ${jsString(convA)});
+      if (idx < 0) return { missing: true, active: false, activeId: activeConversationId() };
+      window.switchConversation(idx);
+      await new Promise(resolve => setTimeout(resolve, 600));
+      const targetA = { workspaceId: ${jsString(smokeWorkspace.id)}, conversationId: ${jsString(convA)} };
+      window.renderFlowTakeover(true, 'FAST_SWITCH_FLOW_A', { interrupted: true, target: targetA, message: 'workspace switch isolation' });
+      return { missing: false, active: document.querySelector('#flow-takeover')?.classList.contains('active') === true, activeId: activeConversationId() };
+    })()`, 30000);
+    if (workspaceAOwned.missing || workspaceAOwned.active !== true || workspaceAOwned.activeId !== convA) {
+      fail(`workspace A did not show its owning conversation A takeover: ${JSON.stringify(workspaceAOwned)}`);
+    }
+    const flowHiddenAfterWorkspaceSwitch = await evaluate(cdp, `(async () => {
+      await window.switchToWorkspace(${jsString(secondWorkspace.id)});
+      await new Promise(resolve => setTimeout(resolve, 600));
+      return {
+        activeOnB: document.querySelector('#flow-takeover')?.classList.contains('active') === true,
+        activeId: activeConversationId(),
+        workspaceId: state.currentWorkspaceId,
+      };
+    })()`, 30000);
+    if (flowHiddenAfterWorkspaceSwitch.activeOnB) {
+      fail(`Flow takeover leaked into workspace B after workspace switch: ${JSON.stringify(flowHiddenAfterWorkspaceSwitch)}`);
+    }
+    if (flowHiddenAfterWorkspaceSwitch.workspaceId !== secondWorkspace.id) {
+      fail(`workspace switch did not land in workspace B: ${JSON.stringify(flowHiddenAfterWorkspaceSwitch)}`);
+    }
+    const flowRestoredAfterWorkspaceReturn = await evaluate(cdp, `(async () => {
+      await window.switchToWorkspace(${jsString(smokeWorkspace.id)});
+      await new Promise(resolve => setTimeout(resolve, 600));
+      const idx = currentWorkspaceConversations().findIndex(c => c.id === ${jsString(convA)});
+      if (idx < 0) return { missing: true, active: false };
+      window.switchConversation(idx);
+      await new Promise(resolve => setTimeout(resolve, 600));
+      return { missing: false, active: document.querySelector('#flow-takeover')?.classList.contains('active') === true, activeId: activeConversationId() };
+    })()`, 30000);
+    if (flowRestoredAfterWorkspaceReturn.missing || flowRestoredAfterWorkspaceReturn.active !== true || flowRestoredAfterWorkspaceReturn.activeId !== convA) {
+      fail(`workspace A takeover did not restore after switching back: ${JSON.stringify(flowRestoredAfterWorkspaceReturn)}`);
+    }
+    log('Flow takeover workspace-switch isolation ok: owner workspace A only, restored on return');
+    await evaluate(cdp, `(() => { window.renderFlowTakeover(false, '', { target: currentConversationTarget() }); return true; })()`, 30000);
+
+
     await selectConversationAndAssert(cdp, convA, markerAPrompt, markerAReply, markerBPrompt, markerBReply, 'final conversation A visual isolation');
     await captureScreenshot(cdp, screenshotAPath);
     await selectConversationAndAssert(cdp, convB, markerBPrompt, markerBReply, markerAPrompt, markerAReply, 'final conversation B visual isolation');

@@ -18666,10 +18666,16 @@ window.selectWorkspace = function(reference, initialSnapshot) {
   refreshNextPromptForTarget(currentConversationTarget());
   if (window.renderInputStack) window.renderInputStack();
   updateWorkspaceGate();
+  // The active conversation changed with the workspace. Reconcile the Flow
+  // takeover bubble to the new workspace's conversation: if that conversation
+  // owns a Flow, show it; otherwise hide the bubble instantly so no takeover
+  // leaks across the workspace switch.
+  reconcileFlowTakeoverForActive();
   var activeId = String((initialSnapshot && initialSnapshot.conversationId) || activeConversationId() || 'default');
   var refresh = initialSnapshot ? loadActiveConversationMessages(activeId) : syncBackendConversation();
   refresh.then(function() {
     restoreConversationDraft(currentConversationTarget());
+    reconcileFlowTakeoverForActive();
     if (state.rightTab === 'plan') window.renderConversationPlan();
     window.refreshTerminalTakeoverPanes();
     refreshNextPromptForTarget(currentConversationTarget());

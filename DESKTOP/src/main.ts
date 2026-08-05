@@ -2470,7 +2470,11 @@ if (isViewerArg) {
     });
     ipcMain.handle('flow:run', async (_event, name: string, input = '', start = 0) => {
       if (!agent) return { ok: false, error: 'Agent not initialized' };
-      if (agent.mode === 'plan') return { ok: false, error: 'Plan mode is fully read-only; Flow execution is blocked.' };
+      // Bind the Flow to the conversation that started it, exactly like resume.
+      // Running on an isolated conversation agent keeps the Flow's builds pinned
+      // to its owning conversation id and branch, so switching conversations
+      // mid-run can never make the next component write into another
+      // conversation or strand the running flag.
       const flowTarget = conversationRuntimeTarget(agent.activeConversationId || 'default');
       const flowKey = activeFlowStateKey(flowTarget);
       const existing = activeFlowsByRuntimeKey.get(flowKey) || null;
@@ -2484,9 +2488,11 @@ if (isViewerArg) {
       if (!found) return { ok: false, error: `Workflow not found: ${name}` };
       const workflow = FlowEngine.load(flowDir, found);
       if (!workflow) return { ok: false, error: `Workflow failed to load: ${found}` };
-      const previousMode = agent.mode;
-      const previousFlow = agent.flow;
-      const previousPc = agent.flowPc;
+      const flowAgent = isolatedConversationAgent(flowTarget);
+      const previousMode = flowAgent.mode;
+      const previousFlow = flowAgent.flow;
+      const previousPc = flowAgent.flowPc;
+      if (previousMode === 'plan') return { ok: false, error: 'Plan mode is fully read-only; Flow execution is blocked.' };
       const flowAbortController = new AbortController();
       const flowState: ActiveFlowState = {
         workflow,
@@ -2500,42 +2506,42 @@ if (isViewerArg) {
         target: flowTarget,
         abortController: flowAbortController,
         name: workflow.name,
-        flowAgent: agent,
+        flowAgent,
       };
       activeFlowsByRuntimeKey.set(flowKey, flowState);
-      const stopRelayingFlowEvents = relayFlowAgentWorkEvents(agent, flowTarget);
+      const stopRelayingFlowEvents = relayFlowAgentWorkEvents(flowAgent, flowTarget);
       let suspended = false;
       try {
-        agent.flow = workflow;
+        flowAgent.flow = workflow;
         const requestedStart = Number(start);
-        agent.flowPc = Number.isFinite(requestedStart) && workflow.components.some(component => component.id === requestedStart)
+        flowAgent.flowPc = Number.isFinite(requestedStart) && workflow.components.some(component => component.id === requestedStart)
           ? requestedStart
           : (workflow.components[0]?.id ?? 0);
-        await runFlow(agent, workflow, {
+        await runFlow(flowAgent, workflow, {
           startInput: String(input || ''),
-          startPc: agent.flowPc,
+          startPc: flowAgent.flowPc,
           quiet: true,
           signal: flowAbortController.signal,
         });
         return {
           ok: true,
           name: workflow.name,
-          mode: agent.mode,
-          status: agent.status,
-          chatMessages: agent.chatMessages,
-          workRuns: agent.getConversationSnapshot(agent.activeConversationId).workRuns,
-          conversations: agent.listConversationStates(),
-          conversationId: agent.activeConversationId,
-          conversationPlan: agent.getConversationPlan(),
-          linkedPlan: agent.getLinkedPlan(),
-          subagents: agent.subagents.listAll().map(record => agent!.subagents.toRecord(record.id)).filter(Boolean),
-          diffs: agent.fileDiffs.map(d => ({ path: d.path, old: d.oldContent ? d.oldContent.split(/\r?\n/).length : 0, new: d.newContent ? d.newContent.split(/\r?\n/).length : 0 })),
+          mode: flowAgent.mode,
+          status: flowAgent.status,
+          chatMessages: flowAgent.chatMessages,
+          workRuns: flowAgent.getConversationSnapshot(flowAgent.activeConversationId).workRuns,
+          conversations: flowAgent.listConversationStates(),
+          conversationId: flowAgent.activeConversationId,
+          conversationPlan: flowAgent.getConversationPlan(),
+          linkedPlan: flowAgent.getLinkedPlan(),
+          subagents: flowAgent.subagents.listAll().map(record => flowAgent.subagents.toRecord(record.id)).filter(Boolean),
+          diffs: flowAgent.fileDiffs.map(d => ({ path: d.path, old: d.oldContent ? d.oldContent.split(/\r?\n/).length : 0, new: d.newContent ? d.newContent.split(/\r?\n/).length : 0 })),
         };
       } catch (e) {
         if (e instanceof FlowQuestionPendingError) {
           suspended = true;
-          agent.flowPc = e.componentId;
-          agent.setMode('flow');
+          flowAgent.flowPc = e.componentId;
+          flowAgent.setMode('flow');
           await setTargetFlowMode(flowTarget, 'flow');
           flowState.componentId = e.componentId;
           flowState.completedResults = e.completedResults;
@@ -2548,9 +2554,9 @@ if (isViewerArg) {
             pending: true,
             name: workflow.name,
             mode: 'flow',
-            options: agent.pendingOptions,
-            chatMessages: agent.chatMessages,
-            workRuns: agent.getConversationSnapshot(agent.activeConversationId).workRuns,
+            options: flowAgent.pendingOptions,
+            chatMessages: flowAgent.chatMessages,
+            workRuns: flowAgent.getConversationSnapshot(flowAgent.activeConversationId).workRuns,
           };
         }
         if (isUserFlowAbort(e)) {
@@ -2563,7 +2569,7 @@ if (isViewerArg) {
         const buildFailure = e as { componentId?: unknown; completedResults?: FlowCompletedResult[]; message?: unknown };
         const interruptedComponentId = typeof buildFailure.componentId === 'number'
           ? Math.max(0, Math.floor(buildFailure.componentId))
-          : Math.max(0, agent.flowPc);
+          : Math.max(0, flowAgent.flowPc);
         const interruptedMessage = String(
           typeof buildFailure.message === 'string' && buildFailure.message
             ? buildFailure.message
@@ -2571,15 +2577,15 @@ if (isViewerArg) {
               ? e.message
               : String(e || 'Flow interrupted.')
         ).slice(0, 320);
-        agent.flowPc = interruptedComponentId;
-        agent.setMode('flow');
+        flowAgent.flowPc = interruptedComponentId;
+        flowAgent.setMode('flow');
         await setTargetFlowMode(flowTarget, 'flow');
         flowState.componentId = interruptedComponentId;
         flowState.completedResults = Array.isArray(buildFailure.completedResults) ? buildFailure.completedResults : [];
         flowState.reason = 'interrupted';
         flowState.message = interruptedMessage;
         flowState.abortController = null;
-        agent.pendingOptions = [];
+        flowAgent.pendingOptions = [];
         agent.saveStoredFlowSuspension(persistedFlowSuspensionRecord(flowState), flowTarget.conversationId);
         return {
           ok: true,
@@ -2589,15 +2595,15 @@ if (isViewerArg) {
           name: workflow.name,
           mode: 'flow',
           options: [],
-          chatMessages: agent.chatMessages,
-          workRuns: agent.getConversationSnapshot(agent.activeConversationId).workRuns,
+          chatMessages: flowAgent.chatMessages,
+          workRuns: flowAgent.getConversationSnapshot(flowAgent.activeConversationId).workRuns,
         };
       } finally {
         stopRelayingFlowEvents();
         if (!suspended) {
-          agent.flow = previousFlow;
-          agent.flowPc = previousPc;
-          agent.setMode(previousMode);
+          flowAgent.flow = previousFlow;
+          flowAgent.flowPc = previousPc;
+          flowAgent.setMode(previousMode);
           activeFlowsByRuntimeKey.delete(flowKey);
         }
       }

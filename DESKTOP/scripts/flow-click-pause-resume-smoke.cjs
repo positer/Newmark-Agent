@@ -18,6 +18,9 @@ const port = Number(process.env.NEWMARK_FLOW_CLICK_PAUSE_RESUME_PORT || '49391')
 const flowName = 'ClickPauseResume';
 const flowMarker = 'CLICK_PAUSE_RESUME_FLOW_PROMPT_20260805';
 const flowReply = 'CLICK_PAUSE_RESUME_FLOW_REPLY_20260805';
+const switchFlowName = 'SwitchMidRunFlow';
+const switchFlowMarker = 'SWITCH_MID_RUN_FLOW_PROMPT_20260805';
+const switchFlowReply = 'SWITCH_MID_RUN_FLOW_REPLY_20260805';
 
 function log(message) {
   console.log(`[flow-click-pause-resume-smoke] ${message}`);
@@ -154,6 +157,18 @@ function startMockServer() {
         }, 1500);
         return;
       }
+      if (messagesText.includes(switchFlowMarker)) {
+        // Two-component Flow: each component request is held long enough for the
+        // test to switch conversations mid-run.
+        setTimeout(() => {
+          if (parsed.stream) sendSse(res, switchFlowReply);
+          else {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ choices: [{ message: { content: switchFlowReply } }] }));
+          }
+        }, 2500);
+        return;
+      }
       const reply = 'FLOW_DEFAULT_REPLY_20260805';
       if (parsed.stream) sendSse(res, reply);
       else {
@@ -211,6 +226,14 @@ function writeFlowWorkflow(root) {
     ],
   };
   fs.writeFileSync(path.join(flowDir, `${flowName}.Flow.json`), JSON.stringify(workflow, null, 2), 'utf8');
+  const switchWorkflow = {
+    name: switchFlowName,
+    components: [
+      { id: 0, type: 'dialog', mode: 'build', prompt: switchFlowMarker },
+      { id: 1, type: 'dialog', mode: 'build', prompt: switchFlowMarker + ':step2' },
+    ],
+  };
+  fs.writeFileSync(path.join(flowDir, `${switchFlowName}.Flow.json`), JSON.stringify(switchWorkflow, null, 2), 'utf8');
 }
 
 async function runSmoke(root) {
@@ -314,6 +337,96 @@ async function runSmoke(root) {
       fail(`Flow did not make a resumed component request after pause: ${mock.requests.length}`);
     }
     log('all flow click-pause-resume checks passed');
+
+    // A Flow that is still RUNNING when the user switches conversations must
+    // stay bound to its owning conversation: the next build component keeps
+    // writing to the owning conversation, the other conversation never shows a
+    // takeover, and on completion the owning conversation's running flag clears.
+    const ownerConversationId = await evaluate(cdp, `window.api.getState(activeConversationId()).then(s => s.conversationId)`, 30000);
+    log(`switch-flow owner conversation: ${ownerConversationId}`);
+    await evaluate(cdp, `window.newConversation()`, 30000);
+    const otherConversationId = await evaluate(cdp, `window.api.getState(activeConversationId()).then(s => s.conversationId)`, 30000);
+    log(`switch-flow other conversation: ${otherConversationId}`);
+    await evaluate(cdp, `(async () => {
+      const ownerIdx = currentWorkspaceConversations().findIndex(c => c.id === ${jsString(ownerConversationId)});
+      window.switchConversation(ownerIdx);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      return activeConversationId();
+    })()`, 30000);
+
+    const switchRunPromise = evaluate(cdp, `(async () => {
+      await api.setMode('flow');
+      state.mode = 'flow';
+      const target = currentConversationTarget();
+      if (window.currentFlowTakeoverRecord) {
+        const rec = window.currentFlowTakeoverRecord();
+        rec.running = true;
+        rec.paused = false;
+        const runId = 'flow-switch-mid-run-' + Date.now();
+        rec.runtimeLease = { target: target, runId: runId };
+        if (window.setConversationRuntimeState) setConversationRuntimeState(target, 'running', runId, { provisional: true, flow: true });
+      }
+      window.renderFlowTakeover(true, ${jsString(switchFlowName)}, { target: target });
+      const r = await api.runFlow(${jsString(switchFlowName)}, '', 0);
+      return { ok: r && r.ok, pending: r && r.pending, interrupted: r && r.interrupted, error: r && r.error, name: r && r.name, conversationId: r && r.conversationId };
+    })()`, 90000);
+    await sleep(600);
+    await waitFor(cdp, `(() => {
+      const b = document.getElementById('flow-takeover');
+      return b && b.classList.contains('active') && !b.classList.contains('paused');
+    })()`, 30000, 'switch-flow running takeover visible');
+
+    // Switch to a different conversation while the Flow is running.
+    await evaluate(cdp, `(async () => {
+      const otherIdx = currentWorkspaceConversations().findIndex(c => c.id === ${jsString(otherConversationId)});
+      window.switchConversation(otherIdx);
+      await new Promise(resolve => setTimeout(resolve, 600));
+      return activeConversationId();
+    })()`, 30000);
+    const switchedAway = await evaluate(cdp, `(() => {
+      const active = activeConversationId();
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      return {
+        activeId: active,
+        switched: active !== ${jsString(ownerConversationId)},
+        takeoverOnOther: document.getElementById('flow-takeover')?.classList.contains('active') === true,
+        leakedOwnerReply: body.includes(${jsString(switchFlowReply)}),
+      };
+    })()`, 30000);
+    if (switchedAway.switched !== true) fail(`mid-run switch did not leave the owning conversation: ${JSON.stringify(switchedAway)}`);
+    if (switchedAway.takeoverOnOther) fail(`Flow takeover leaked into the other conversation mid-run: ${JSON.stringify(switchedAway)}`);
+    if (switchedAway.leakedOwnerReply) fail(`Flow build output leaked into the other conversation mid-run: ${JSON.stringify(switchedAway)}`);
+    log('mid-run switch isolation ok: takeover and build output stay on the owning conversation');
+
+    // Wait for the Flow to complete in the background, then switch back and
+    // verify the owning conversation is not stuck running.
+    const switchRunResult = await switchRunPromise;
+    log(`switch-flow run settled: ${JSON.stringify(switchRunResult)}`);
+    if (!switchRunResult || switchRunResult.ok !== true) fail(`switch-flow did not complete normally: ${JSON.stringify(switchRunResult)}`);
+    await evaluate(cdp, `(async () => {
+      const ownerIdx = currentWorkspaceConversations().findIndex(c => c.id === ${jsString(ownerConversationId)});
+      window.switchConversation(ownerIdx);
+      await new Promise(resolve => setTimeout(resolve, 600));
+      return activeConversationId();
+    })()`, 30000);
+    await waitFor(cdp, `(async () => {
+      const s = await api.getState(${jsString(ownerConversationId)});
+      const body = document.querySelector('#chat-area')?.innerText || '';
+      const flowTakeoverActive = document.getElementById('flow-takeover')?.classList.contains('active') === true;
+      const record = state.flowTakeovers && state.flowTakeovers[window.runtimeKeyFor(${jsString(smokeWorkspace.id)}, ${jsString(ownerConversationId)})];
+      const ok = !!record && record.running !== true && !flowTakeoverActive && body.includes(${jsString(switchFlowReply)});
+      if (ok) return true;
+      return {
+        activeId: activeConversationId(),
+        backendHasReply: ((s && s.chatMessages) || []).some(function(m) { return String(m && m.content || '').includes(${jsString(switchFlowReply)}); }),
+        bodyHasReply: body.includes(${jsString(switchFlowReply)}),
+        recordRunning: record && record.running,
+        takeoverActive: flowTakeoverActive,
+        chatTail: body.slice(-600),
+        backendTail: (s && s.chatMessages || []).map(function(m) { return String(m && m.content || ''); }).slice(-4),
+      };
+    })()`, 45000, 'owning conversation Flow completed, running flag cleared, reply visible');
+    log('mid-run switch completion ok: owning conversation Flow completed and cleared its running flag');
   } finally {
     try { if (cdp?.ws) cdp.ws.close(); } catch {}
     try { if (child && !child.killed) child.kill(); } catch {}

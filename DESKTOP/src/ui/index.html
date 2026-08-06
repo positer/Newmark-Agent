@@ -9300,9 +9300,39 @@ setInterval(function() {
   if (!els['chat-area'] || document.hidden) return;
   var runs = workRunsForTarget(currentConversationTarget());
   for (var i = 0; i < runs.length; i++) {
-    if (['running', 'stopping', 'force_restarting'].indexOf(String(runs[i].status || '')) >= 0) updateConversationWorkRunDuration(runs[i]);
+    if (['running', 'stopping', 'force_restarting'].indexOf(String(runs[i].status || '')) >= 0) scheduleConversationWorkRunDurationUpdate(runs[i]);
   }
 }, 1000);
+
+// Coalesce per-second duration DOM writes to a single animation frame so a
+// long-running conversation with many active Build blocks does not force a
+// layout on every tick. Identical text is skipped entirely.
+var pendingWorkRunDurationUpdates = new Set();
+var workRunDurationUpdateFrame = 0;
+function scheduleConversationWorkRunDurationUpdate(run) {
+  if (!run || !run.runId) return;
+  pendingWorkRunDurationUpdates.add(run.runId);
+  if (workRunDurationUpdateFrame) return;
+  workRunDurationUpdateFrame = requestAnimationFrame(function() {
+    workRunDurationUpdateFrame = 0;
+    var ids = Array.from(pendingWorkRunDurationUpdates);
+    pendingWorkRunDurationUpdates.clear();
+    var runs = workRunsForTarget(currentConversationTarget());
+    var byId = {};
+    for (var i = 0; i < runs.length; i++) byId[String(runs[i].runId || '')] = runs[i];
+    for (var j = 0; j < ids.length; j++) {
+      var run = byId[ids[j]];
+      if (!run) continue;
+      var element = findWorkRunElement(run);
+      if (!element) continue;
+      var title = element.querySelector('.conversation-work-run-title');
+      if (!title) continue;
+      var nextTitle = workRunTitle(run);
+      if (title.textContent === nextTitle) continue;
+      title.textContent = nextTitle;
+    }
+  });
+}
 
 function isHiddenWorkflowMessage(message) {
   var role = String(message && message.role || '');

@@ -4490,6 +4490,89 @@ export class Agent {
     catch { return null; }
   }
 
+  // Async archive listing: the archive directory can hold many files and some
+  // can be large. Reading each fully with readFileSync in the main-process IPC
+  // handler blocks the event loop and marks the renderer window unresponsive.
+  // This async variant reads only the first line of each archive (enough for
+  // the title row), reads manifests via fs.promises, and yields between files
+  // so the main process stays responsive during the scan.
+  async listArchivesAsync(scope: 'workspace' | 'all' = 'workspace'): Promise<Array<{ id: string; name: string; firstLine: string; scope: string; workspace?: string; date?: string; restorable?: boolean; conversationId?: string }>> {
+    const results: Array<{ id: string; name: string; firstLine: string; scope: string; workspace?: string; date?: string; restorable?: boolean; conversationId?: string }> = [];
+    const dirs = scope === 'all' ? this.archiveRoots() : [{ dir: this.archiveDir(), scope: 'workspace', workspace: this.workspace.current?.name || '' }];
+    for (const archiveRoot of dirs) {
+      await this.collectArchivesAsync(archiveRoot.dir, archiveRoot.scope, archiveRoot.workspace, results);
+    }
+    results.sort((a, b) => b.name.localeCompare(a.name));
+    return results;
+  }
+
+  private async collectArchivesAsync(
+    archiveDir: string,
+    scope: string,
+    workspace: string | undefined,
+    results: Array<{ id: string; name: string; firstLine: string; scope: string; workspace?: string; date?: string; restorable?: boolean; conversationId?: string }>,
+  ): Promise<void> {
+    let entries: string[] = [];
+    try {
+      entries = await fs.promises.readdir(archiveDir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith('.md')) continue;
+      // Yield to the event loop between files so a large archive directory
+      // never blocks the main process for the whole scan.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const archivePath = path.join(archiveDir, entry);
+      const firstLine = await this.readArchiveFirstLine(archivePath);
+      const id = `archive|${Buffer.from(path.resolve(archiveDir), 'utf-8').toString('base64')}|${Buffer.from(entry, 'utf-8').toString('base64')}`;
+      let date = '';
+      let manifest: ConversationArchiveManifest | null = null;
+      try {
+        const stat = await fs.promises.stat(archivePath);
+        date = stat.mtime.toISOString();
+      } catch {
+        // keep date empty if stat fails
+      }
+      try {
+        const manifestContent = await fs.promises.readFile(this.archiveManifestPath(archivePath), 'utf-8');
+        const parsed = JSON.parse(manifestContent) as ConversationArchiveManifest;
+        if ([1, 2].includes(Number(parsed?.version)) && parsed?.kind === 'newmark-conversation-archive' && parsed.entry && parsed.conversationId) {
+          manifest = parsed;
+        }
+      } catch {
+        manifest = null;
+      }
+      results.push({ id, name: entry, firstLine, scope, workspace, date, restorable: !!manifest, conversationId: manifest?.conversationId });
+    }
+  }
+
+  private async readArchiveFirstLine(archivePath: string): Promise<string> {
+    try {
+      const handle = await fs.promises.open(archivePath, 'r');
+      try {
+        const buffer = Buffer.alloc(4096);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        const head = buffer.toString('utf-8', 0, bytesRead);
+        return head.split('\n')[0] || '';
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      return '';
+    }
+  }
+
+  // Async archive read: large archives are read without blocking the main
+  // process event loop.
+  async readArchiveAsync(name: string): Promise<string | null> {
+    try {
+      return await fs.promises.readFile(this.resolveArchivePath(name), 'utf-8');
+    } catch {
+      return null;
+    }
+  }
+
   private archiveDir(): string {
     return path.join(this.workspace.current?.path || this.rootPath, 'archive');
   }

@@ -230,6 +230,17 @@ async function main(): Promise<void> {
       dispatchSamples.push(result.elapsedMs);
     }
 
+    // Native screen capture is an optional GUI capability. On sessions without
+    // an interactive desktop (remote, service, locked, or driver-restricted)
+    // observe returns ok:false. Skip the performance sampling in that case —
+    // the transport/cleanup checks above still run — rather than failing the
+    // whole release gate on an environment capability we do not control.
+    const capabilityProbe = JSON.parse(await runComputerUse({ action: 'observe', workspacePath: process.cwd(), ownerId, allowEphemeralVisionImage: false })) as Record<string, any>;
+    if (capabilityProbe.ok !== true) {
+      console.log('computer_use performance checks skipped: native screenshot capture unavailable (' + String(capabilityProbe.error || 'unknown') + ')');
+      return;
+    }
+
     await runComputerUse({ action: 'app_list', workspacePath: process.cwd(), ownerId });
     await runComputerUse({ action: 'observe', workspacePath: process.cwd(), ownerId, allowEphemeralVisionImage: false });
     const screenshotsBeforeBoundedCapture = currentComputerUseScreenshots();

@@ -3448,7 +3448,10 @@ if (isViewerArg) {
     });
 
     ipcMain.handle('agent:listArchives', async (_event, scope?: string) => {
-      return agent?.listArchives(scope === 'all' ? 'all' : 'workspace');
+      if (!agent) return [];
+      // Async scan so a large archive directory never blocks the main process
+      // and the renderer window stays responsive while archives load.
+      return agent.listArchivesAsync(scope === 'all' ? 'all' : 'workspace');
     });
 
     ipcMain.handle('agent:deleteArchive', async (_event, name: string) => {
@@ -3456,7 +3459,8 @@ if (isViewerArg) {
     });
 
     ipcMain.handle('agent:readArchive', async (_event, name: string) => {
-      return agent?.readArchive(name);
+      if (!agent) return null;
+      return agent.readArchiveAsync(name);
     });
 
     ipcMain.handle('agent:restoreArchive', async (_event, name: string) => {

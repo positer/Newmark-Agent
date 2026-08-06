@@ -121,6 +121,9 @@ function runWindowsWslBuild() {
     `rsync -a --delete --exclude='node_modules/' ${wslQuote(`${wslTuiRoot}/`)} "$build_root/repo/TUI/"`,
     `cp ${wslQuote(`${wslRepoRoot}/LICENSE`)} "$build_root/repo/LICENSE"`,
     `cp ${wslQuote(`${wslRepoRoot}/THIRD_PARTY_NOTICES.md`)} "$build_root/repo/THIRD_PARTY_NOTICES.md"`,
+    `cp ${wslQuote(`${wslRepoRoot}/HARMONYOS_INTEGRATION.md`)} "$build_root/repo/HARMONYOS_INTEGRATION.md" 2>/dev/null || true`,
+    `mkdir -p "$build_root/repo/docs"`,
+    `cp ${wslQuote(`${wslRepoRoot}/docs/macos-build.md`)} "$build_root/repo/docs/macos-build.md" 2>/dev/null || true`,
     'cd "$build_root/repo/DESKTOP"',
     process.env.NEWMARK_DIST_LINUX_NPM_REGISTRY
       ? `npm config set registry ${wslQuote(process.env.NEWMARK_DIST_LINUX_NPM_REGISTRY)}`
@@ -128,6 +131,7 @@ function runWindowsWslBuild() {
     process.env.ELECTRON_MIRROR
       ? `export ELECTRON_MIRROR=${wslQuote(process.env.ELECTRON_MIRROR)}`
       : '',
+    'export ELECTRON_SKIP_BINARY_DOWNLOAD=1',
     'npm ci --include=dev --no-audit --no-fund',
     skipVerification ? 'echo "[dist-linux] reusing verification completed by the immediately preceding packaging attempt"' : 'npm test',
     skipVerification ? '' : 'NEWMARK_LATENCY_OUTPUT="$build_root/linux-agent-latency.json" npm run benchmark:linux-agent-latency',

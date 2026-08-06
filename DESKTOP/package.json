@@ -4,6 +4,10 @@
   "version": "0.3.5",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "homepage": "https://github.com/positer/Newmark-Agent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/positer/Newmark-Agent.git"
+  },
   "author": {
     "name": "Newmark AI",
     "email": "support@newmark.ai"

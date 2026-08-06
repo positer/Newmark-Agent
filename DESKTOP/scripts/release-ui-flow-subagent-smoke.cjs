@@ -148,7 +148,11 @@ function startMockServer() {
         res.end(JSON.stringify({ choices: [{ message: { content: 'RELEASE_UI_FLOW_SUBAGENT_VALIDATE_OK' } }] }));
         return;
       }
-      if (messagesText.includes('FLOW_COMPONENT_RUNTIME_INPUT') && messagesText.includes('FLOW_USER_INPUT_FROM_PARENT') && !messagesText.includes('"flow_save"')) {
+      const isFlowComponentRun = Array.isArray(parsed.messages) && parsed.messages.some(m => {
+        if (!m || typeof m.content !== 'string') return false;
+        return m.content.includes('FLOW_COMPONENT_RUNTIME_INPUT') && m.content.includes('FLOW_USER_INPUT_FROM_PARENT');
+      });
+      if (isFlowComponentRun) {
         sendSse(res, [textChunk('FLOW_COMPONENT_RUNTIME_OK FLOW_USER_INPUT_FROM_PARENT')]);
         return;
       }

@@ -237,7 +237,8 @@ async function main() {
   console.log('\nUI HTML');
   const uiHtmlPath = path.join(process.cwd(), 'src', 'ui', 'index.html');
   assert(fs.existsSync(uiHtmlPath), 'ui html: index.html exists');
-  const uiHtml = fs.readFileSync(uiHtmlPath, 'utf-8');
+  const uiHtml = fs.readFileSync(uiHtmlPath, 'utf-8').replace(/\r\n/g, '\n');
+  const uiHtmlLf = uiHtml.replace(/\r\n/g, '\n');
   const agentLoopTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernel', 'agent-loop.ts'), 'utf-8');
   await verifyEditorLifecycle(uiHtml, assert);
   const mainSource = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf-8');
@@ -376,9 +377,9 @@ async function main() {
     && uiHtml.includes('showMemoryLabOverviewTip')
     && uiHtml.includes('updateMemoryLabOverviewTip'), 'ui html: Memory Lab overview toggles selected tags off, supports long pointer-captured drags, keeps a throttled ambient layout running, permits full-range zoom, collapses distant nodes to solid dots, and names dots on hover');
   assert(uiHtml.includes('animate-from-left') && uiHtml.includes('animate-from-right') && uiHtml.includes('@keyframes memory-lab-enter-left') && uiHtml.includes('memoryLabNavDirection'), 'ui html: Memory Lab tag navigation has smooth directional animation');
-  const overviewSelectSource = uiHtml.match(/window\.selectMemoryLabOverviewNode = function[\s\S]*?\n\};/)?.[0] || '';
-  const componentSelectSource = uiHtml.match(/window\.selectMemoryLabComponent = function[\s\S]*?\n\};/)?.[0] || '';
-  const visualizationLoadReasons = Array.from(uiHtml.matchAll(/window\.loadMemoryLabVisualization\('([^']+)'/g), match => match[1]).sort();
+  const overviewSelectSource = uiHtmlLf.match(/window\.selectMemoryLabOverviewNode = function[\s\S]*?\n\};/)?.[0] || '';
+  const componentSelectSource = uiHtmlLf.match(/window\.selectMemoryLabComponent = function[\s\S]*?\n\};/)?.[0] || '';
+  const visualizationLoadReasons = Array.from(uiHtmlLf.matchAll(/window\.loadMemoryLabVisualization\('([^']+)'/g), match => match[1]).sort();
   assert(!overviewSelectSource.includes('loadMemoryLab')
     && componentSelectSource.includes("window.requestMemoryLabOverviewFrame();\n    return;")
     && componentSelectSource.includes('window.cachedMemoryLabComponent(slug)')
@@ -534,7 +535,7 @@ async function main() {
   assert(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].every(tier => uiHtml.includes(`<option value="${tier}">${tier}</option>`) || uiHtml.includes(`<option value="${tier}" selected>${tier}</option>`))
     && uiHtml.includes("xhigh: t('intel.xhigh')") && uiHtml.includes("max: t('intel.max')"),
    'ui intelligence: GUI exposes the standard low/medium/high/xhigh/max/ultra reasoning effort tiers');
-  assert(uiHtml.includes('window.selectReadableControlWidth = function(select)') && uiHtml.includes("shell.dataset.autoReadableWidth = compactSelect ? 'true' : 'false'") && uiHtml.includes("menu.matches(':popover-open')") && uiHtml.includes('window.closeModelSelectMenu();\n    return;'), 'ui selects: compact controls reserve readable option width and both model and generic popovers close through their full top-layer lifecycle on a repeated trigger click');
+  assert(uiHtmlLf.includes('window.selectReadableControlWidth = function(select)') && uiHtmlLf.includes("shell.dataset.autoReadableWidth = compactSelect ? 'true' : 'false'") && uiHtmlLf.includes("menu.matches(':popover-open')") && uiHtmlLf.includes('window.closeModelSelectMenu();\n    return;'), 'ui selects: compact controls reserve readable option width and both model and generic popovers close through their full top-layer lifecycle on a repeated trigger click');
   assert(uiHtml.includes('.ft-item .ft-toggle {') && uiHtml.includes('transform: rotate(90deg)') && uiHtml.includes('.ft-item .ft-toggle.collapsed { transform: rotate(0deg); }') && uiHtml.includes('.flow-item-header.collapsed .arrow { transform: rotate(0deg); }'), 'right panel disclosure indicators point right while collapsed and down while expanded');
   assert(uiHtml.includes('function canonicalUiWorkspaceKey(ws)') && uiHtml.includes('window.upsertWorkspaceState = function(ws)') && !uiHtml.includes('state.workspaces.push(ws);'), 'ui html: workspace creation upserts exact folder bindings instead of showing temporary duplicates');
   assert(uiHtml.includes('id="skill-market-search"') && uiHtml.includes('window.updateSkillMarketSearch') && uiHtml.includes('window.filteredSkillMarket') && uiHtml.includes('window.renderSkillsMarketList'), 'ui html: Skills Market has searchable filtered list');
@@ -617,8 +618,8 @@ async function main() {
     && uiHtml.includes('var queuedRuntimeBranch = !!(queuedRequestRecord')
     && uiHtml.includes('var renderOnViewedBranch = !queuedRuntimeBranch'),
   'branch queue state machine: Next and Goal bind to the runtime branch while ordinary sends activate the viewed branch, and hidden runtime continuations do not render into the inspected page');
-  assert(uiHtml.includes("if (stillActive && r && Array.isArray(r.chatMessages)) {\n      hydrateConversationBranchState(r);\n      renderChatMessages(r.chatMessages);")
-    && uiHtml.includes("if (stillActiveAfterRefresh && s && Array.isArray(s.workRuns)) {\n        applyAutoRouteRatingState(s);\n        hydrateConversationBranchState(s);"),
+  assert(uiHtmlLf.includes("if (stillActive && r && Array.isArray(r.chatMessages)) {\n      hydrateConversationBranchState(r);\n      renderChatMessages(r.chatMessages);")
+    && uiHtmlLf.includes("if (stillActiveAfterRefresh && s && Array.isArray(s.workRuns)) {\n        applyAutoRouteRatingState(s);\n        hydrateConversationBranchState(s);"),
   'branch paging: completed sends and post-run state refresh hydrate the latest page anchor ids before destructive transcript redraw');
   assert(uiHtml.includes("Object.prototype.hasOwnProperty.call(s, 'branchGroups')") && uiHtml.includes("Object.prototype.hasOwnProperty.call(s, 'runtimeBranchNodePath')"),
     'branch paging: partial send responses preserve existing branch state instead of clearing the pager');
@@ -2429,7 +2430,7 @@ async function main() {
   assert(subMgr.listActive().length === 1, 'listActive: 1 active');
 
   const sub = subMgr.get(subId);
-  assert(sub?.natureSlug === 'test-sub' && /^test-sub-[0-9a-f]{8}--[0-9a-f-]{36}$/.test(sub.name), 'get: nature plus short and full UUID name');
+  assert(sub?.natureSlug === 'test-sub' && sub.name === 'test-sub' && /^test-sub-[0-9a-f]{8}$/.test(sub.displayName) && /^test-sub-[0-9a-f]{8}--[0-9a-f-]{36}$/.test(sub.qualifiedName), 'get: nature slug decoupled from identity; name is caller-supplied while display/qualified names carry short and full UUID ids');
   assert(sub?.status === 'queued', 'get: stays durably queued until an executor is bound');
 
   const sent = subMgr.send(subId, 'Continue work');
@@ -2465,6 +2466,20 @@ async function main() {
 
   subMgr.remove(subId);
   assert(subMgr.listAll().length === 3, 'remove: deletes only the selected subagent while Goal and Flow peers remain');
+
+  // name/id decoupling: name is caller-supplied, identity lives in id/shortId/displayName/qualifiedName
+  const peerLookup = new SubagentManager();
+  const peerId = peerLookup.create('research-peer', 'Research the landscape');
+  const peer = peerLookup.get(peerId)!;
+  assert(peer.name === 'research-peer', 'decoupled identity: peer name is the caller-supplied label and never contains the id');
+  assert(!peer.name.includes(peerId) && !peer.name.includes(peer.shortId), 'decoupled identity: peer name never embeds the full or short id');
+  assert(peerLookup.get(peerId)?.id === peerId, 'decoupled identity: resolves by exact id');
+  assert(peerLookup.get(peer.shortId)?.id === peerId, 'decoupled identity: resolves by shortId');
+  assert(peerLookup.get(peer.displayName)?.id === peerId, 'decoupled identity: resolves by displayName');
+  assert(peerLookup.get(peer.qualifiedName)?.id === peerId, 'decoupled identity: resolves by qualifiedName');
+  assert(peerLookup.get(peer.name)?.id === peerId, 'decoupled identity: resolves by caller-supplied name');
+  const peerSnapshot = peerLookup.read('root', peerId);
+  assert(peerSnapshot.ok && peerSnapshot.snapshot?.peer.name === 'research-peer' && peerSnapshot.snapshot.peer.id === peerId, 'decoupled identity: read snapshot exposes both the stable name and the exact id');
 
   const taskAgent = new Agent(TEST_DIR);
   taskAgent.subagents.reset();
@@ -4541,6 +4556,61 @@ async function main() {
     && JSON.stringify(isolatedCompressionAgents[1].history) === JSON.stringify(isolatedBefore),
   'model switch compression: compresses one runtime target without changing a sibling runtime history');
   isolatedCompressionRoots.forEach(root => fs.rmSync(root, { recursive: true, force: true }));
+
+  // Agent-invoked context management tools: context_compress and
+  // context_history_manage alter only the LLM context (history), never the
+  // displayed conversation history (chatMessages).
+  const contextManagerAgent = new Agent(path.join(TEST_DIR, 'context-manager-agent'));
+  contextManagerAgent.config.upsertProvider('context-mgr-prov', 'https://api.context-mgr.test/v1', 'context-mgr-key');
+  contextManagerAgent.config.addModelToProvider('context-mgr-prov', 'context-mgr-model', 'Context Manager Model', 'Context manager tool fixture');
+  contextManagerAgent.config.updateModel('context-mgr-prov', 'context-mgr-model', { max_tokens: 20_000 });
+  contextManagerAgent.setModel('context-mgr-model');
+  contextManagerAgent.history = Array.from({ length: 20 }, (_, index) => ({
+    role: index % 2 === 0 ? 'user' : 'assistant',
+    content: `history-entry-${index} ` + 'h'.repeat(300),
+  }));
+  contextManagerAgent.chatMessages = Array.from({ length: 6 }, (_, index) => ({
+    role: (index % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+    content: `display-message-${index}`,
+    mode: 'build',
+    model: 'context-mgr-model',
+    timestamp: new Date().toISOString(),
+  }));
+  const displaySnapshotBefore = JSON.stringify(contextManagerAgent.chatMessages);
+  const listResult = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'list', limit: 10 })).output) as Record<string, any>;
+  assert(listResult.ok === true && listResult.action === 'list' && listResult.entryCount === 20 && listResult.entries.length === 10 && listResult.displayHistory.untouched === true, 'context_history_manage list: indexes the LLM context entries while leaving the displayed history untouched');
+  const removeResult = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'remove', position: 2 })).output) as Record<string, any>;
+  assert(removeResult.ok === true && removeResult.action === 'remove' && removeResult.removedPosition === 2 && contextManagerAgent.history.length === 19 && removeResult.displayHistory.untouched === true, 'context_history_manage remove: deletes one context entry only');
+  const summarizeResult = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'summarize', position: 0, to: 4 })).output) as Record<string, any>;
+  assert(summarizeResult.ok === true && summarizeResult.action === 'summarize' && summarizeResult.foldedEntries === 5 && summarizeResult.summary && contextManagerAgent.history[0]?.role === 'system' && String(contextManagerAgent.history[0]?.content || '').includes('[Context History Summary]'), 'context_history_manage summarize: folds a contiguous context range into one bounded summary entry');
+  assert(contextManagerAgent.chatMessages.length === 6 && JSON.stringify(contextManagerAgent.chatMessages) === displaySnapshotBefore, 'context management: displayed conversation history is byte-identical after list/remove/summarize');
+  const badRemove = contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'remove', position: 9999 }));
+  assert(badRemove.ok === false && String(badRemove.output || '').includes('out of range'), 'context_history_manage remove: rejects an out-of-range position');
+  const badAction = contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'wipe' }));
+  assert(badAction.ok === false, 'context_history_manage: rejects an unknown action');
+
+  const compressToolAgent = new Agent(path.join(TEST_DIR, 'context-compress-tool-agent'));
+  compressToolAgent.config.upsertProvider('context-compress-prov', 'https://api.context-compress-tool.test/v1', 'context-compress-tool-key');
+  compressToolAgent.config.addModelToProvider('context-compress-prov', 'context-compress-tool-model', 'Context Compress Tool Model', 'Context compress tool fixture');
+  compressToolAgent.config.updateModel('context-compress-prov', 'context-compress-tool-model', { max_tokens: 5_000 });
+  compressToolAgent.setModel('context-compress-tool-model');
+  compressToolAgent.config.set('context', 'keep_recent_messages', 4);
+  compressToolAgent.history = Array.from({ length: 30 }, (_, index) => ({
+    role: index % 2 === 0 ? 'user' : 'assistant',
+    content: `compress-history-${index} ` + 'c'.repeat(500),
+  }));
+  compressToolAgent.chatMessages = Array.from({ length: 4 }, (_, index) => ({
+    role: (index % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+    content: `compress-display-${index}`,
+    mode: 'build',
+    model: 'context-compress-tool-model',
+    timestamp: new Date().toISOString(),
+  }));
+  const compressDisplayBefore = JSON.stringify(compressToolAgent.chatMessages);
+  const historyBeforeCompress = compressToolAgent.history.length;
+  const compressResult = JSON.parse((await compressToolAgent.handleContextCompress(JSON.stringify({ force: true, keep_recent: 4 }))).output) as Record<string, any>;
+  assert(compressResult.ok === true && compressResult.compressed === true && compressResult.originalMessages === historyBeforeCompress && compressToolAgent.history.length < historyBeforeCompress, 'context_compress: actively compresses the LLM context history');
+  assert(compressToolAgent.chatMessages.length === 4 && JSON.stringify(compressToolAgent.chatMessages) === compressDisplayBefore, 'context_compress: displayed conversation history is byte-identical after active compression');
 
   // ---- 11. Model Validation Tests ----
   console.log('\n🔍 Model Validation');

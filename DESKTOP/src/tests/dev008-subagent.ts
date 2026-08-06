@@ -26,7 +26,9 @@ async function main(): Promise<void> {
   await tick();
   assert.strictEqual(manager.listAll().filter(item => item.status === 'working').length, 4);
   assert.strictEqual(manager.get(ids[4])?.status, 'queued');
-  assert.match(manager.get(ids[0])?.name || '', /^review-1-[0-9a-f]{8}--[0-9a-f-]{36}$/);
+  assert.strictEqual(manager.get(ids[0])?.name, 'review-1');
+  assert.match(manager.get(ids[0])?.displayName || '', /^review-1-[0-9a-f]{8}$/);
+  assert.match(manager.get(ids[0])?.qualifiedName || '', /^review-1-[0-9a-f]{8}--[0-9a-f-]{36}$/);
   releases.get(ids[0])?.();
   await tick();
   await tick();

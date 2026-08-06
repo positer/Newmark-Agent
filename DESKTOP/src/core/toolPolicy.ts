@@ -24,6 +24,8 @@ const MODE_SCOPED_TOOLS = new Set([
   'pdf_read',
   'linked_plan',
   'build_history_query',
+  'context_compress',
+  'context_history_manage',
   'question',
   'task',
   'subagent_list',

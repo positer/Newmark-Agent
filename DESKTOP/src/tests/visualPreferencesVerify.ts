@@ -57,7 +57,7 @@ function main(): void {
     assert.equal(reloaded.getStr('ui', 'font_family'), '思源黑体', 'workspace config cannot override the user font');
     assert.equal(reloaded.getNum('ui', 'glass_alpha'), 0, 'a legitimate fully transparent glass value survives reload');
 
-    const ui = fs.readFileSync(path.join(__dirname, '..', 'ui', 'index.html'), 'utf-8');
+    const ui = fs.readFileSync(path.join(__dirname, '..', 'ui', 'index.html'), 'utf-8').replace(/\r\n/g, '\n');
     const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf-8');
     const mainSource = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf-8');
     const serverSource = fs.readFileSync(path.join(process.cwd(), 'src', 'server.ts'), 'utf-8');

@@ -8720,7 +8720,7 @@ function workToolActivity(event) {
   if (name === 'task' || name.indexOf('subagent_') === 0) return { key: 'subagents', type: 'tool_subagent' };
   if (name === 'skill' || name === 'skill_load' || name === 'skill_read' || name === 'skill_download') return { key: 'skills', type: 'tool_skill' };
   if (name === 'mcp' || name.indexOf('mcp__') === 0 || /^mcp[:._-]/.test(name) || /[:._-]mcp[:._-]/.test(name)) return { key: 'mcp', type: 'tool_mcp' };
-  if (name === 'context_compression') return { key: 'context_compression', type: 'tool_context_compression' };
+  if (name === 'context_compression' || name === 'context_compress' || name === 'context_history_manage') return { key: 'context_compression', type: 'tool_context_compression' };
   if (name === 'memory_lab_update' || name === 'memory_lab_reindex') return { key: 'memory_lab', type: 'tool_memory_lab' };
   if (name === 'image_inspect' || name === 'computer_use') return { key: 'images', type: 'tool_images' };
   if (name === 'write' || name === 'edit') return { key: 'files', type: 'tool_files' };

@@ -1543,6 +1543,8 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
   if (name === 'subagent_close') return agent.handleSubagentCloseEnvelope(args).output;
   if (name === 'linked_plan') return agent.handleLinkedPlanTool(args);
   if (name === 'build_history_query') return agent.handleBuildHistoryQuery(args);
+  if (name === 'context_compress') return (await agent.handleContextCompress(args, signal)).output;
+  if (name === 'context_history_manage') return agent.handleContextHistoryManage(args).output;
   if (name === 'question') {
     if (agent.config.getStr('agent', 'option_feedback') === 'fully_autonomous') return '[question] Disabled by fully_autonomous option feedback.';
     if (!agent.handleQuestion(args)) return '[Question rejected: at least one question with two labeled options is required.]';

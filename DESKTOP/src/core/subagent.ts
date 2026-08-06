@@ -111,6 +111,7 @@ export interface SubagentReadSnapshot {
     natureSlug: string;
     displayName: string;
     qualifiedName: string;
+    name: string;
     createdByAgentId: string;
     status: SubagentStatus;
     active: boolean;
@@ -287,6 +288,10 @@ export class SubagentManager {
     const id = randomUUID();
     const shortId = id.replace(/-/g, '').slice(0, 8);
     const slug = natureSlug(name);
+    // The Agent-facing name is the caller's stable, human-readable label and is
+    // deliberately decoupled from the identity. The UUID and its short form are
+    // the only identity-bearing fields; the UI renders the short-id-qualified
+    // display name while Agent tool interactions accept both name and id.
     const displayName = `${slug}-${shortId}`;
     const qualifiedName = `${displayName}--${id}`;
     const stamp = now();
@@ -296,7 +301,7 @@ export class SubagentManager {
       natureSlug: slug,
       displayName,
       qualifiedName,
-      name: qualifiedName,
+      name: slug,
       conversationId: this.conversationId,
       createdByAgentId,
       prompt,
@@ -307,7 +312,7 @@ export class SubagentManager {
       flowName: flowName || undefined,
       flowPc: Math.max(0, Math.floor(Number(flowPc) || 0)),
       status: 'queued',
-       messages: [{ role: 'system', content: `Peer agent '${qualifiedName}': ${prompt}` }, { role: 'user', content: prompt, hidden_user_input: true }],
+       messages: [{ role: 'system', content: `Peer agent '${slug}' (${id}): ${prompt}` }, { role: 'user', content: prompt, hidden_user_input: true }],
       result: null,
       createdAt: stamp,
       updatedAt: stamp,
@@ -321,7 +326,12 @@ export class SubagentManager {
   }
 
   get(id: string): SubagentInstance | undefined {
-    return this.subs.get(id) || [...this.subs.values()].find(item => item.name === id || item.qualifiedName === id || item.displayName === id || item.shortId === id || item.natureSlug === natureSlug(id));
+    if (this.subs.has(id)) return this.subs.get(id);
+    const exact = [...this.subs.values()].find(item => item.id === id || item.qualifiedName === id);
+    if (exact) return exact;
+    // name is now caller-supplied and not identity-bearing, so it is a
+    // convenience lookup only; the id/shortId/displayName paths stay exact.
+    return [...this.subs.values()].find(item => item.name === id || item.displayName === id || item.shortId === id || item.natureSlug === natureSlug(id));
   }
 
   send(id: string, prompt: string): boolean {
@@ -478,6 +488,7 @@ export class SubagentManager {
           natureSlug: record.natureSlug,
           displayName: record.displayName,
           qualifiedName: record.qualifiedName,
+          name: record.name,
           createdByAgentId: record.createdByAgentId,
           status: record.status,
           active: record.status !== 'closed',

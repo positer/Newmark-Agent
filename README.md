@@ -13,6 +13,7 @@ The application connects to user-selected model providers through OpenAI-compati
 - **Controlled tools:** terminal, files, browser use, GitHub, SSH, MCP, automation, image display, OCR, and Windows computer use are exposed through policy and approval boundaries.
 - **Long-running work:** context compression, durable work runs, public progress events, queue control, graceful interruption, and force-stop without replacing the runtime.
 - **Local memory and archives:** Memory Lab, conversation archives, and workspace history provide inspectable continuity without requiring a hosted application backend.
+- **Agent-driven context management:** The Agent can actively compress its LLM context or list, remove, and summarize context-history entries through `context_compress` and `context_history_manage` tools. These affect only the LLM context; the displayed conversation history is never altered.
 - **Cross-platform packaging:** Windows MSI and portable packages, plus Linux AppImage, Debian, and unpacked distributions.
 
 ## Interfaces
@@ -45,14 +46,14 @@ Download packages from the [GitHub releases page](https://github.com/positer/New
 
 ### Windows
 
-- `Newmark-Agent-0.3.5-x64.msi`: per-machine Windows installer.
-- `Newmark-Agent-0.3.5-win-unpacked-x64.zip`: portable Windows directory with GUI, TUI, CLI, and launcher files.
+- `Newmark-Agent-0.3.7-x64.msi`: per-machine Windows installer.
+- `Newmark-Agent-0.3.7-win-unpacked-x64.zip`: portable Windows directory with GUI, TUI, CLI, and launcher files.
 
 ### Linux
 
-- `Newmark-Agent-0.3.5-x86_64.AppImage`: portable Linux desktop package.
-- `Newmark-Agent-0.3.5-amd64.deb`: Debian/Ubuntu package.
-- `Newmark-Agent-0.3.5-linux-unpacked-x64.zip`: unpacked Linux distribution.
+- `Newmark-Agent-0.3.7-x86_64.AppImage`: portable Linux desktop package.
+- `Newmark-Agent-0.3.7-amd64.deb`: Debian/Ubuntu package.
+- `Newmark-Agent-0.3.7-linux-unpacked-x64.zip`: unpacked Linux distribution.
 
 Packages are unsigned prerelease builds. Verify downloaded artifacts with the SHA-256 values published in the release notes.
 
@@ -91,6 +92,8 @@ Local workspace, conversation, archive, and runtime stores
 Conversation and workspace identity are composite target identities. Runtime events, queues, drafts, work runs, Flow suspensions, and snapshots are routed by target rather than by a mutable foreground selection.
 
 Flow takeover is strictly conversation-local on both the backend and the GUI. A running or paused Flow belongs to the conversation that started it: `flow:run`, `flow:resume`, `flow:guide`, and `flow:stop` all resolve the owning conversation target first, the persisted suspension is stored per conversation, and the takeover bubble only reflects the active conversation's own Flow state. Switching conversations never surfaces, mutates, or clears another conversation's Flow, and the whole takeover bubble is the single interactive affordance (click to pause while running, click to resume while paused).
+
+Subagent identity is decoupled: the caller-supplied `name` is a stable human-readable label that never contains the id, while `id`/`shortId`/`displayName`/`qualifiedName` carry identity. The frontend renders only the display name, and Agent tool interactions accept both the name and the exact id (`subagent_list` returns both for precise targeting).
 
 ## Development
 

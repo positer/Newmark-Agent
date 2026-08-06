@@ -3650,6 +3650,125 @@ export class Agent {
     });
   }
 
+  async handleContextCompress(args: string, signal?: AbortSignal): Promise<NewmarkToolResult> {
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
+    if (this.history.length <= 1) return { ok: false, output: '[context_compress] No context to compress.', error: 'No context to compress.' };
+    const previousKeepLast = this.config.getNum('context', 'keep_recent_messages');
+    const keepRecent = Math.max(2, Math.min(60, Math.floor(Number(input.keep_recent) || previousKeepLast || 10)));
+    const force = Boolean(input.force);
+    try {
+      this.config.set('context', 'keep_recent_messages', keepRecent);
+      const msgs = this.history.map(message => ({ ...message }));
+      const provider = this.engineModel();
+      await this.maybeCompress(msgs, provider, signal, this.activeModelName(), force);
+      if (this.history.length <= 1) return { ok: false, output: '[context_compress] Compression skipped: context unchanged.', error: 'Compression skipped.' };
+      return {
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          compressed: true,
+          at: this.lastCompression?.at,
+          originalMessages: this.lastCompression?.originalMessages,
+          compressedMessages: this.lastCompression?.compressedMessages,
+          originalChars: this.lastCompression?.originalChars,
+          compressedChars: this.lastCompression?.compressedChars,
+          estimatedTokens: this.lastCompression?.compressedTokens,
+          summary: this.lastCompression?.summary?.slice(0, 2000),
+          model: this.lastCompression?.model,
+          fallback: this.lastCompression?.fallback,
+          displayHistory: { untouched: true, messageCount: this.chatMessages.length },
+        }, null, 2),
+        metadata: { kind: 'context-compress' },
+      };
+    } finally {
+      this.config.set('context', 'keep_recent_messages', previousKeepLast);
+    }
+  }
+
+  handleContextHistoryManage(args: string): NewmarkToolResult {
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
+    const action = String(input.action || '').trim();
+    if (!action) return { ok: false, output: '[context_history_manage] action is required (list|remove|summarize).', error: 'action is required.' };
+    if (action === 'list') {
+      const limit = Math.max(5, Math.min(400, Math.floor(Number(input.limit || 200))));
+      const entries = this.history.slice(0, limit).map((message, index) => ({
+        position: index,
+        role: String(message.role || ''),
+        name: String(message.name || ''),
+        chars: typeof message.content === 'string' ? message.content.length : JSON.stringify(message.content || '').length,
+        preview: this.compressionHistoryContent(message.content || '').slice(0, 160),
+      }));
+      return {
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          action: 'list',
+          entryCount: this.history.length,
+          listed: entries.length,
+          entries,
+          displayHistory: { untouched: true, messageCount: this.chatMessages.length },
+        }, null, 2),
+        metadata: { kind: 'context-history-list' },
+      };
+    }
+    if (action === 'remove') {
+      const position = Math.floor(Number(input.position));
+      if (!Number.isFinite(position) || position < 0 || position >= this.history.length) {
+        return { ok: false, output: `[context_history_manage] remove position ${position} out of range (0..${this.history.length - 1}).`, error: 'remove position out of range.' };
+      }
+      const removed = this.history.splice(position, 1)[0];
+      this.saveWorkspaceConversationState(true);
+      return {
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          action: 'remove',
+          removedPosition: position,
+          removedRole: String(removed?.role || ''),
+          remaining: this.history.length,
+          displayHistory: { untouched: true, messageCount: this.chatMessages.length },
+        }, null, 2),
+        metadata: { kind: 'context-history-remove' },
+      };
+    }
+    if (action === 'summarize') {
+      const from = Math.max(0, Math.floor(Number(input.position || 0)));
+      const toRaw = Math.floor(Number(input.to ?? input.position));
+      const to = Number.isFinite(toRaw) ? Math.min(this.history.length - 1, Math.max(from, toRaw)) : from;
+      if (from >= this.history.length) return { ok: false, output: `[context_history_manage] summarize position ${from} out of range (0..${this.history.length - 1}).`, error: 'summarize position out of range.' };
+      if (to - from < 1) return { ok: false, output: '[context_history_manage] summarize requires at least two entries in range.', error: 'summarize requires a range of at least two entries.' };
+      const segment = this.history.slice(from, to + 1);
+      const chars = segment.reduce((sum, message) => sum + (typeof message.content === 'string' ? message.content.length : JSON.stringify(message.content || '').length), 0);
+      const summary = this.localCompressionSummary(
+        `Workspace: ${this.workspace.current?.path || this.rootPath}\nMode: ${this.modeName()}`,
+        segment.map((message, i) => `#${i + 1} [${String(message.role || 'unknown')}${message.name ? ` ${String(message.name)}` : ''}]\n${this.compressionHistoryContent(message.content || '')}`).join('\n\n').slice(0, 20000),
+        segment.length,
+        chars,
+      );
+      const replacement: Record<string, unknown> = { role: 'system', content: `[Context History Summary]\n${summary}` };
+      this.history.splice(from, to - from + 1, replacement);
+      this.saveWorkspaceConversationState(true);
+      return {
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          action: 'summarize',
+          foldedFrom: from,
+          foldedTo: to,
+          foldedEntries: to - from + 1,
+          foldedChars: chars,
+          remaining: this.history.length,
+          summary: summary.slice(0, 2000),
+          displayHistory: { untouched: true, messageCount: this.chatMessages.length },
+        }, null, 2),
+        metadata: { kind: 'context-history-summarize' },
+      };
+    }
+    return { ok: false, output: `[context_history_manage] Unknown action: ${action}`, error: `Unknown action: ${action}` };
+  }
+
   recordContextCompressionStep(): void {
     const runId = this.currentWorkRunId();
     if (!runId) return;
@@ -5724,7 +5843,7 @@ export class Agent {
       const transcript = sa.messages.map(m => `[${m.role}] ${m.content}`).join('\n');
       return this.subagents.toToolResult(
         sa.id,
-        `get.subagent("${sa.name}")\nStatus: ${sa.status}\nModel: ${sa.model}\nMode: ${sa.agentMode}\n\nResult:\n${sa.result || ''}\n\nConversation:\n${transcript}`,
+        `get.subagent("${sa.name}", id="${sa.id}")\nStatus: ${sa.status}\nModel: ${sa.model}\nMode: ${sa.agentMode}\n\nResult:\n${sa.result || ''}\n\nConversation:\n${transcript}`,
         true
       );
     } catch { return { ok: false, output: '[Subagent] Invalid result arguments.', error: 'Invalid result arguments.' }; }
@@ -6568,7 +6687,7 @@ export class Agent {
     if (!this.config.getBool('context', 'auto_compress')) return;
     const total = msgs.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length), 0);
     const budget = this.compressionBudget(msgs);
-    if (budget.estimatedTokens < budget.triggerTokens) return;
+    if (budget.estimatedTokens < budget.triggerTokens && !force) return;
     if (!force && this.lastCompression && String(msgs[0]?.content || '').includes(this.lastCompression.summary)) {
       const baselineChars = Math.max(0, Number(this.lastCompression.compressedChars || 0));
       const baselineTokens = Math.max(0, Number(this.lastCompression.compressedTokens || 0));

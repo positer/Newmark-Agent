@@ -147,7 +147,7 @@ async function verifyReleaseSelection(): Promise<void> {
 function verifyDesktopContracts(): void {
   const mainTs = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf8');
   const preloadTs = fs.readFileSync(path.join(process.cwd(), 'src', 'preload.ts'), 'utf8');
-  const uiHtml = fs.readFileSync(path.join(process.cwd(), 'src', 'ui', 'index.html'), 'utf8');
+  const uiHtml = fs.readFileSync(path.join(process.cwd(), 'src', 'ui', 'index.html'), 'utf8').replace(/\r\n/g, '\n');
   const startupHtmlPath = path.join(process.cwd(), 'src', 'ui', 'startup.html');
   const startupHtml = fs.existsSync(startupHtmlPath) ? fs.readFileSync(startupHtmlPath, 'utf8') : '';
   const buildUiIcons = fs.readFileSync(path.join(process.cwd(), 'scripts', 'build-ui-icons.cjs'), 'utf8');

@@ -2595,6 +2595,20 @@ async function main() {
     && tuiRenderStreaming.includes('appendChatMessage(historyRows, {')
     && tuiStateStreaming.includes('function toggleAgentHistory(state)'), 'subagent streaming TUI: agents view expands into the chat-style downward history');
 
+  const tuiMockAdapterSource = fs.readFileSync(path.join(process.cwd(), '..', 'TUI', 'src', 'adapters', 'mock-newmark-adapter.js'), 'utf-8').replace(/\r\n/g, '\n');
+  const tuiStateSource = tuiStateStreaming;
+  assert(tuiStateSource.includes("state.flowByConversation[`${state.target.workspaceId}::${state.target.conversationId}`]")
+    && tuiStateSource.includes('const storedFlow = state.flowByConversation[`${valid.target.workspaceId}::${valid.target.conversationId}`]')
+    && tuiStateSource.includes('state.currentFlow = storedFlow'),
+  'TUI Flow isolation: the current Flow is read and written per workspace::conversation key, so switching conversations never surfaces another conversation\'s Flow');
+  assert(tuiMockAdapterSource.includes('const selectedFlows = new Map();')
+    && tuiMockAdapterSource.includes('snapshot.flowSelection = clone(selectedFlows.get(key) || null);')
+    && tuiMockAdapterSource.includes('selectedFlows.set(key, clone(workflow));'),
+  'TUI Flow isolation: the TUI adapter stores flowSelection per conversation target key');
+  const cliSourceForFlow = fs.readFileSync(path.join(process.cwd(), 'src', 'cli.ts'), 'utf-8').replace(/\r\n/g, '\n');
+  assert(cliSourceForFlow.includes("runFlow(agent, wf)") && cliSourceForFlow.includes("runFlow(agent, workflow)"),
+  'CLI Flow isolation: the CLI runs Flow on the single active Agent instance, binding it to that conversation only');
+
   const subagentToolFile = path.join(taskAgent.workspace.current?.path || TEST_DIR, 'subagent-tool.txt');
   taskAgent.config.addModelToProvider('test-prov', 'fixed-child-model', 'Fixed Child Model', 'Registered deterministic subagent fixture model');
   taskAgent.setModel('fixed-child-model');

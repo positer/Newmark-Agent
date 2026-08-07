@@ -414,6 +414,7 @@ async function main() {
   assert(uiHtml.includes('window.renderModelValidationProgress = function(progress)') && uiHtml.includes('role="progressbar"') && uiHtml.includes('completedChecks') && uiHtml.includes('window.startModelValidationProgressPolling') && mainSource.includes('agent?.modelValidationStatus()'), 'ui model validation: every completed check updates a polled determinate progress bar with model and check identity');
   assert(uiHtml.includes('id="input-stack"') && uiHtml.includes('id="queue-panel"') && uiHtml.includes('window.renderQueuePanel = function()') && uiHtml.includes('window.editQueueItem = function(idx, value)') && uiHtml.includes('window.dropQueueDrag = function(event, idx)') && uiHtml.includes('window.renderScrollBottomAffordance = renderScrollBottomAffordance') && uiHtml.includes('state.conversationPlan.items.push') && uiHtml.includes('state.todoCollapsed = false'), 'ui html: bottom input stack exposes editable queue, draggable ordering, scroll affordance, Goal bar, and Plan-backed checklist');
   assert(uiHtml.includes('.work-review-head') && uiHtml.includes('function addWorkReview(diffs)') && uiHtml.includes('window.openWorkReview') && uiHtml.includes('window.toggleWorkReviewFiles') && uiHtml.includes('lockedUi.pendingWorkReview = r.diffs') && uiHtml.indexOf('lockedUi.pendingWorkReview = r.diffs') < uiHtml.indexOf('if (stillActive && !responseOwnedByRun)'), 'work completion review: Build-owned and legacy final responses both retain conversation-bound changed files with expandable rows and a review action');
+  assert(uiHtml.includes("review.className = 'work-review collapsed'") && uiHtml.includes('window.toggleWorkReview') && uiHtml.includes('.work-review.collapsed .work-review-list { display: none; }') && uiHtml.includes('.work-review-chevron') && uiHtml.includes('onclick="window.toggleWorkReview(this)'), 'work completion review: file-change review collapses by default with a chevron toggled header');
   assert(uiHtml.includes('function workRunChangedFiles(run)') && uiHtml.includes('conversation-work-change-badge') && uiHtml.includes("changes.count + ' 个文件已更改'"), 'running Build: compact changed-file badge aggregates unique files and added/deleted lines');
   assert(uiHtml.includes('.work-review-detail .file-row {') && uiHtml.includes('.work-review-detail .file-row:hover') && uiHtml.includes('.work-review-detail .file-row:focus-visible') && uiHtml.includes('<button type="button" class="file-row"'), 'work completion review: detail rows use themed button, hover, and keyboard-focus states');
   assert(uiHtml.includes('--review-bg: rgba(255,255,255,.82)') && uiHtml.includes('background:var(--review-bg)') && uiHtml.includes('background:var(--review-row-hover)'), 'work completion review: uses explicit light-theme surfaces instead of hard-coded dark cards');
@@ -4602,6 +4603,39 @@ async function main() {
   assert(badRemove.ok === false && String(badRemove.output || '').includes('out of range'), 'context_history_manage remove: rejects an out-of-range position');
   const badAction = contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'wipe' }));
   assert(badAction.ok === false, 'context_history_manage: rejects an unknown action');
+
+  // dev-0.3.8: compression cache + restore/search + protected recent zone + status.
+  const statusResult = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'status' })).output) as Record<string, any>;
+  assert(statusResult.ok === true && statusResult.action === 'status' && statusResult.usagePercent >= 0 && statusResult.triggerTokens > 0 && statusResult.targetTokens > 0 && statusResult.cache?.entries === 1 && statusResult.protectedZone?.protectedStartIndex > 0 && statusResult.protectedZone?.lastUserMessageIndex > 0 && statusResult.displayHistory.untouched === true, 'context_history_manage status: reports budgets, usage, cache, and protected zone without touching display history');
+  const protectedRemove = contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'remove', position: statusResult.protectedZone.protectedStartIndex }));
+  assert(protectedRemove.ok === false && String(protectedRemove.output || '').includes('protected'), 'context_history_manage remove: refuses to delete an entry in the protected recent zone');
+  const dangerousRemove = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'remove', position: statusResult.protectedZone.protectedStartIndex, dangerous: true })).output) as Record<string, any>;
+  assert(dangerousRemove.ok === true && dangerousRemove.removedPosition === statusResult.protectedZone.protectedStartIndex && contextManagerAgent.history.length === 14, 'context_history_manage remove: dangerous:true escapes the protected zone');
+  const protectedSummarize = contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'summarize', position: 10, to: 12 }));
+  const protectedSummarizeBody = String(protectedSummarize.output || '');
+  assert(protectedSummarize.ok === false && protectedSummarizeBody.includes('protected'), 'context_history_manage summarize: refuses to fold a range overlapping the protected recent zone');
+  const searchHit = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'search', query: 'history-entry-4' })).output) as Record<string, any>;
+  assert(searchHit.ok === true && searchHit.matches?.length >= 1 && searchHit.matches[0].cacheId === statusResult.cache.ids[0] && searchHit.matches[0].matches?.some((m: Record<string, any>) => m.index >= 0 && String(m.snippet || '').includes('history-entry-4')), 'context_history_manage search: finds the folded cache entry containing the query with a snippet');
+  const searchMiss = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'search', query: 'zzz-nonexistent-query-xyz' })).output) as Record<string, any>;
+  assert(searchMiss.ok === true && searchMiss.matches?.length === 0, 'context_history_manage search: returns no matches for an absent query');
+  const badRestore = contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'restore', restore_id: 'ctx-cache-missing-999' }));
+  assert(badRestore.ok === false, 'context_history_manage restore: rejects an unknown restore_id');
+  const restoreResult = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'restore', restore_id: statusResult.cache.ids[0] })).output) as Record<string, any>;
+  assert(restoreResult.ok === true && restoreResult.restoredEntries === 5 && restoreResult.cacheRemaining === 0 && contextManagerAgent.history.length === 18 && contextManagerAgent.history.some(message => String(message.content || '').startsWith('history-entry-0')), 'context_history_manage restore: reinserts the cached original messages and removes the cache entry');
+  const cacheStatusAfter = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'status' })).output) as Record<string, any>;
+  assert(cacheStatusAfter.ok === true && cacheStatusAfter.cache?.entries === 0, 'context_history_manage restore: cache is emptied after restore');
+  assert(contextManagerAgent.chatMessages.length === 6 && JSON.stringify(contextManagerAgent.chatMessages) === displaySnapshotBefore, 'context management: displayed conversation history stays byte-identical through status/restore/search/protection');
+  (contextManagerAgent as any).config.set('context', 'compression_cache_max', 2);
+  (contextManagerAgent as any).pushCompressionCacheEntry('bounded-1', [{ role: 'user', content: 'bounded-message-1' }], 'test', false);
+  (contextManagerAgent as any).pushCompressionCacheEntry('bounded-2', [{ role: 'user', content: 'bounded-message-2' }], 'test', false);
+  const boundedFirst = (contextManagerAgent as any).compressionCache.map((entry: Record<string, any>) => entry.summary);
+  (contextManagerAgent as any).pushCompressionCacheEntry('bounded-3', [{ role: 'user', content: 'bounded-message-3' }], 'test', false);
+  const boundedAfter = (contextManagerAgent as any).compressionCache.map((entry: Record<string, any>) => entry.summary);
+  assert((contextManagerAgent as any).compressionCache.length === 2 && boundedAfter.join(',') === 'bounded-2,bounded-3' && !boundedAfter.includes('bounded-1') && boundedFirst.join(',') === 'bounded-1,bounded-2', 'compression cache: drops the oldest entry when exceeding compression_cache_max');
+  const cacheReloadedAgent = new Agent(path.join(TEST_DIR, 'context-manager-agent'));
+  const reloadedSummaries = (cacheReloadedAgent as any).compressionCache.map((entry: Record<string, any>) => entry.summary);
+  assert((cacheReloadedAgent as any).compressionCache.length === 2 && reloadedSummaries.join(',') === 'bounded-2,bounded-3', 'compression cache: survives an Agent restart via stored conversation state');
+  (contextManagerAgent as any).config.set('context', 'compression_cache_max', 8);
 
   const compressToolAgent = new Agent(path.join(TEST_DIR, 'context-compress-tool-agent'));
   compressToolAgent.config.upsertProvider('context-compress-prov', 'https://api.context-compress-tool.test/v1', 'context-compress-tool-key');

@@ -2959,6 +2959,10 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 .work-review-btn { height:28px; padding:0 10px; border:1px solid var(--glass-border-2); border-radius:6px; background:transparent; color:var(--text); cursor:pointer; font:600 11px var(--font); }
 .work-review-btn:hover { background:var(--control-hover-bg); border-color:var(--border-hover); }
 .work-review-list { border-top:1px solid var(--glass-border-1); }
+.work-review.collapsed .work-review-list { display: none; }
+.work-review-head { cursor: pointer; }
+.work-review-chevron { width:8px; height:8px; flex:0 0 auto; border-right:1px solid var(--text-dim); border-bottom:1px solid var(--text-dim); transform:rotate(-45deg); transition:transform 150ms ease; }
+.work-review.collapsed .work-review-chevron { transform:rotate(45deg); }
 .work-review-file { min-height:34px; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; padding:0 12px; color:var(--text); }
 .work-review-file:hover { background:var(--review-row-hover); }
 .work-review-path { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:11px var(--font-mono); }
@@ -7816,6 +7820,12 @@ function normalizeWorkReviewDiffs(diffs) {
   return Object.keys(byPath).map(function(key) { return byPath[key]; });
 }
 
+window.toggleWorkReview = function(head) {
+  var review = head && head.closest ? head.closest('.work-review') : null;
+  if (!review) return;
+  review.classList.toggle('collapsed');
+};
+
 window.toggleWorkReviewFiles = function(button) {
   var review = button && button.closest ? button.closest('.work-review') : null;
   if (!review) return;
@@ -7909,15 +7919,16 @@ function addWorkReview(diffs) {
   var added = files.reduce(function(total, file) { return total + file.added; }, 0);
   var deleted = files.reduce(function(total, file) { return total + file.deleted; }, 0);
   var review = document.createElement('div');
-  review.className = 'work-review';
+  review.className = 'work-review collapsed';
   review.setAttribute('data-files', JSON.stringify(files));
   var rows = files.map(function(file, index) {
     return '<div class="work-review-file"' + (index >= 3 ? ' style="display:none"' : '') + '><span class="work-review-path">' + esc(file.path) + '</span><span><span class="work-review-add">+' + file.added + '</span><span class="work-review-del">-' + file.deleted + '</span></span></div>';
   }).join('');
   var editedLabel = files.length === 1 ? t('review.editedOne') : t('review.editedMany').replace('{count}', files.length);
-  review.innerHTML = '<div class="work-review-head"><div class="work-review-mark">' + iconSvg('file-diff', t('review.fileChanges'), 'small') + '</div>' +
+  review.innerHTML = '<div class="work-review-head" onclick="window.toggleWorkReview(this)"><div class="work-review-mark">' + iconSvg('file-diff', t('review.fileChanges'), 'small') + '</div>' +
     '<div><div class="work-review-title">' + esc(editedLabel) + '</div><div class="work-review-stats"><span class="work-review-add">+' + added + '</span><span class="work-review-del">-' + deleted + '</span></div></div>' +
-    '<div class="work-review-actions"><button class="work-review-btn" onclick="window.openWorkReview(this)">' + esc(t('review.open')) + '</button></div></div>' +
+    '<div class="work-review-actions"><button class="work-review-btn" onclick="window.openWorkReview(this);event.stopPropagation()">' + esc(t('review.open')) + '</button>' +
+    '<span class="work-review-chevron" aria-hidden="true"></span></div></div>' +
     '<div class="work-review-list">' + rows + (files.length > 3 ? '<button class="work-review-more" onclick="window.toggleWorkReviewFiles(this)">' + esc(t('review.showMore').replace('{count}', files.length - 3)) + '</button>' : '') + '</div>';
   els['chat-area'].appendChild(review);
   autoScrollIfAtBottom();

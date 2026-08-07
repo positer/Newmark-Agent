@@ -121,6 +121,16 @@ function throwIfAgentAborted(signal?: AbortSignal): void {
   throw error;
 }
 type StoredConversationEntry = NonNullable<StoredConversationState['conversations']>[string];
+export interface CompressionCacheEntry {
+  id: string;
+  at: string;
+  summary: string;
+  messages: Array<Record<string, unknown>>;
+  foldedEntries: number;
+  foldedChars: number;
+  model: string;
+  fallback: boolean;
+}
 type ConversationModelSelection = { kind: 'auto' } | { kind: 'deployment'; providerId: string; modelId: string };
 export type ConversationFlowSelection = { name: string; pc: number };
 export interface FlowSuspensionRecord {
@@ -157,6 +167,7 @@ interface StoredConversationState {
     title?: string;
     chatMessages?: ChatMessage[];
     history?: Array<Record<string, unknown>>;
+    compressionCache?: CompressionCacheEntry[];
     plan?: ConversationPlanState;
     linkedPlan?: LinkedPlanState;
     subagentState?: SubagentState;
@@ -448,7 +459,9 @@ export class Agent {
     model: string;
     fallback: boolean;
   } | null = null;
-  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; flowSelection?: ConversationFlowSelection | null; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; updatedAt?: string }>();
+  private compressionCache: CompressionCacheEntry[] = [];
+  private nextCompressionCacheId = 1;
+  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; compressionCache?: CompressionCacheEntry[]; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; flowSelection?: ConversationFlowSelection | null; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; updatedAt?: string }>();
   public isSubagentRuntime = false;
   private subagentName = '';
   private subagentPrompt = '';
@@ -3333,6 +3346,7 @@ export class Agent {
     this.workspaceConversations.set(key, {
       chatMessages: [...this.chatMessages],
       history: [...this.history],
+      compressionCache: [...this.compressionCache],
       plan: this.normalizeConversationPlan(this.conversationPlan),
       linkedPlan: this.normalizeLinkedPlan(this.linkedPlan),
       subagentState: this.subagents.serialize(),
@@ -3361,6 +3375,7 @@ export class Agent {
       title,
       chatMessages: [...this.chatMessages],
       history: [...this.history],
+      compressionCache: [...this.compressionCache],
       plan: this.normalizeConversationPlan(this.conversationPlan),
       linkedPlan: this.normalizeLinkedPlan(this.linkedPlan),
       subagentState: this.subagents.serialize(),
@@ -3389,6 +3404,8 @@ export class Agent {
     if (!key) {
       this.chatMessages = [];
       this.history = [];
+      this.compressionCache = [];
+      this.nextCompressionCacheId = 1;
       this.conversationPlan = { items: [] };
       this.linkedPlan = { markdown: '', revision: 0 };
       this.workRuns = [];
@@ -3405,6 +3422,8 @@ export class Agent {
     const saved = this.workspaceConversations.get(key);
     if (saved) {
       this.history = [...saved.history];
+      this.compressionCache = saved.compressionCache ? saved.compressionCache.map(entry => ({ ...entry, messages: [...entry.messages] })) : [];
+      this.nextCompressionCacheId = Math.max(1, ...this.compressionCache.map(entry => Number(entry.id.replace(/^ctx-cache-/, '')) || 0)) + 1;
       this.chatMessages = this.normalizeConversationChatMessages(saved.chatMessages, this.history);
       this.conversationPlan = this.normalizeConversationPlan(saved.plan);
       this.linkedPlan = this.normalizeLinkedPlan(saved.linkedPlan);
@@ -3424,6 +3443,8 @@ export class Agent {
     const stateKey = this.workspaceConversationStateKey();
     const persisted = stateKey && stored.conversations ? stored.conversations[stateKey] : null;
     this.history = persisted?.history ? [...persisted.history] : [];
+    this.compressionCache = persisted?.compressionCache ? persisted.compressionCache.map(entry => ({ ...entry, messages: [...entry.messages] })) : [];
+    this.nextCompressionCacheId = Math.max(1, ...this.compressionCache.map(entry => Number(entry.id.replace(/^ctx-cache-/, '')) || 0)) + 1;
     this.chatMessages = this.normalizeConversationChatMessages(persisted?.chatMessages || [], this.history);
     this.conversationPlan = this.normalizeConversationPlan(persisted?.plan);
     this.linkedPlan = this.normalizeLinkedPlan(persisted?.linkedPlan);
@@ -3441,6 +3462,7 @@ export class Agent {
     this.workspaceConversations.set(key, {
       chatMessages: [...this.chatMessages],
       history: [...this.history],
+      compressionCache: [...this.compressionCache],
       plan: this.normalizeConversationPlan(this.conversationPlan),
       linkedPlan: this.normalizeLinkedPlan(this.linkedPlan),
       subagentState: this.subagents.serialize(),
@@ -3690,7 +3712,7 @@ export class Agent {
     let input: Record<string, unknown> = {};
     try { input = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
     const action = String(input.action || '').trim();
-    if (!action) return { ok: false, output: '[context_history_manage] action is required (list|remove|summarize).', error: 'action is required.' };
+    if (!action) return { ok: false, output: '[context_history_manage] action is required (list|remove|summarize|restore|search|status).', error: 'action is required.' };
     if (action === 'list') {
       const limit = Math.max(5, Math.min(400, Math.floor(Number(input.limit || 200))));
       const entries = this.history.slice(0, limit).map((message, index) => ({
@@ -3713,10 +3735,18 @@ export class Agent {
         metadata: { kind: 'context-history-list' },
       };
     }
+    const protectedZone = this.contextHistoryProtectedZone();
     if (action === 'remove') {
       const position = Math.floor(Number(input.position));
       if (!Number.isFinite(position) || position < 0 || position >= this.history.length) {
         return { ok: false, output: `[context_history_manage] remove position ${position} out of range (0..${this.history.length - 1}).`, error: 'remove position out of range.' };
+      }
+      if (protectedZone.has(position) && !Boolean(input.dangerous)) {
+        return {
+          ok: false,
+          output: `[context_history_manage] remove position ${position} is protected (recent context tail or the last user message). Pass dangerous: true to override.`,
+          error: 'remove position is in the protected context zone.',
+        };
       }
       const removed = this.history.splice(position, 1)[0];
       this.saveWorkspaceConversationState(true);
@@ -3739,6 +3769,14 @@ export class Agent {
       const to = Number.isFinite(toRaw) ? Math.min(this.history.length - 1, Math.max(from, toRaw)) : from;
       if (from >= this.history.length) return { ok: false, output: `[context_history_manage] summarize position ${from} out of range (0..${this.history.length - 1}).`, error: 'summarize position out of range.' };
       if (to - from < 1) return { ok: false, output: '[context_history_manage] summarize requires at least two entries in range.', error: 'summarize requires a range of at least two entries.' };
+      const protectedHit = this.history.slice(from, to + 1).some((_, index) => protectedZone.has(from + index));
+      if (protectedHit && !Boolean(input.dangerous)) {
+        return {
+          ok: false,
+          output: '[context_history_manage] summarize range includes protected entries (recent context tail or the last user message). Pass dangerous: true to override.',
+          error: 'summarize range overlaps the protected context zone.',
+        };
+      }
       const segment = this.history.slice(from, to + 1);
       const chars = segment.reduce((sum, message) => sum + (typeof message.content === 'string' ? message.content.length : JSON.stringify(message.content || '').length), 0);
       const summary = this.localCompressionSummary(
@@ -3749,6 +3787,7 @@ export class Agent {
       );
       const replacement: Record<string, unknown> = { role: 'system', content: `[Context History Summary]\n${summary}` };
       this.history.splice(from, to - from + 1, replacement);
+      this.pushCompressionCacheEntry(`[Context History Summary]\n${summary}`, segment, 'local-summarize', true);
       this.saveWorkspaceConversationState(true);
       return {
         ok: true,
@@ -3764,6 +3803,111 @@ export class Agent {
           displayHistory: { untouched: true, messageCount: this.chatMessages.length },
         }, null, 2),
         metadata: { kind: 'context-history-summarize' },
+      };
+    }
+    if (action === 'restore') {
+      const restoreId = String(input.restore_id || '').trim();
+      const entry = this.compressionCache.find(item => item.id === restoreId);
+      if (!entry) return { ok: false, output: `[context_history_manage] restore unknown restore_id: ${restoreId}.`, error: 'restore_id not found.' };
+      const summaryHeader = entry.summary.startsWith('[Context Compression') ? '[Context Compression' : '[Context History Summary]';
+      const markerIndex = this.history.findIndex(message => String(message.role || '') === 'system' && String(message.content || '').includes(summaryHeader) && String(message.content || '').includes(entry.summary.slice(0, 200)));
+      if (markerIndex < 0) {
+        return { ok: false, output: '[context_history_manage] restore failed: the folded summary is no longer present in context history (already re-folded or removed).', error: 'restore target summary not found in history.' };
+      }
+      this.history.splice(markerIndex, 1, ...entry.messages.map(message => ({ ...message })));
+      this.compressionCache = this.compressionCache.filter(item => item.id !== entry.id);
+      this.saveWorkspaceConversationState(true);
+      return {
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          action: 'restore',
+          restoreId: entry.id,
+          restoredEntries: entry.messages.length,
+          restoredChars: entry.foldedChars,
+          cacheRemaining: this.compressionCache.length,
+          displayHistory: { untouched: true, messageCount: this.chatMessages.length },
+        }, null, 2),
+        metadata: { kind: 'context-history-restore' },
+      };
+    }
+    if (action === 'search') {
+      const query = String(input.query || '').trim().toLowerCase();
+      const limit = Math.max(1, Math.min(200, Math.floor(Number(input.limit || 20))));
+      if (!query) return { ok: false, output: '[context_history_manage] search requires query.', error: 'search requires query.' };
+      const matches: Array<Record<string, unknown>> = [];
+      for (const entry of this.compressionCache) {
+        if (matches.length >= limit) break;
+        const hit = { cacheId: entry.id, at: entry.at, summary: entry.summary.slice(0, 500), matches: [] as Array<{ index: number; snippet: string }> };
+        if (entry.summary.toLowerCase().includes(query)) {
+          hit.matches.push({ index: -1, snippet: this.snippetAround(entry.summary, query) });
+        }
+        entry.messages.forEach((message, index) => {
+          if (matches.length >= limit || hit.matches.length >= 40) return;
+          const content = this.compressionHistoryContent(message.content || message.reasoning_content || '');
+          if (content.toLowerCase().includes(query)) {
+            hit.matches.push({ index, snippet: this.snippetAround(content, query) });
+          }
+        });
+        if (hit.matches.length) matches.push(hit);
+      }
+      return {
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          action: 'search',
+          query: String(input.query || ''),
+          cacheEntries: this.compressionCache.length,
+          matches,
+          displayHistory: { untouched: true, messageCount: this.chatMessages.length },
+        }, null, 2),
+        metadata: { kind: 'context-history-search' },
+      };
+    }
+    if (action === 'status') {
+      const budget = this.compressionBudget(this.history);
+      const estimatedTokens = this.estimateContextTokens(this.history);
+      const maxTokens = this.contextMaxTokens();
+      const protectedStartIndex = this.contextHistoryProtectedStartIndex();
+      const lastUserIndex = this.history.map(message => String(message.role || '')).lastIndexOf('user');
+      return {
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          action: 'status',
+          historyLength: this.history.length,
+          chatMessages: this.chatMessages.length,
+          estimatedTokens,
+          maxTokens,
+          triggerTokens: budget.triggerTokens,
+          targetTokens: budget.targetTokens,
+          summaryTokens: budget.summaryTokens,
+          usagePercent: maxTokens > 0 ? Math.round((estimatedTokens / maxTokens) * 1000) / 10 : 0,
+          thresholdReached: budget.triggerTokens > 0 && estimatedTokens >= budget.triggerTokens,
+          keepRecentMessages: this.config.getNum('context', 'keep_recent_messages') || 10,
+          lastCompression: this.lastCompression ? {
+            at: this.lastCompression.at,
+            originalMessages: this.lastCompression.originalMessages,
+            compressedMessages: this.lastCompression.compressedMessages,
+            compressedTokens: this.lastCompression.compressedTokens,
+            model: this.lastCompression.model,
+            fallback: this.lastCompression.fallback,
+          } : null,
+          cache: {
+            entries: this.compressionCache.length,
+            totalFoldedEntries: this.compressionCache.reduce((sum, item) => sum + item.foldedEntries, 0),
+            totalFoldedChars: this.compressionCache.reduce((sum, item) => sum + item.foldedChars, 0),
+            ids: this.compressionCache.map(item => item.id),
+          },
+          protectedZone: {
+            preserveRecentMessages: this.config.getNum('context', 'preserve_recent_messages') || 5,
+            protectedStartIndex,
+            lastUserMessageIndex: lastUserIndex,
+            protectedCount: protectedStartIndex >= 0 ? this.history.length - protectedStartIndex : 0,
+          },
+          displayHistory: { untouched: true, messageCount: this.chatMessages.length },
+        }, null, 2),
+        metadata: { kind: 'context-history-status' },
       };
     }
     return { ok: false, output: `[context_history_manage] Unknown action: ${action}`, error: `Unknown action: ${action}` };
@@ -4247,6 +4391,7 @@ export class Agent {
           model: fallbackUsed ? 'model-switch-segmented-with-fallback' : modelName,
           fallback: fallbackUsed,
         };
+        this.pushCompressionCacheEntry(summary, originalMessages.slice(0, recentStart), 'model-switch', fallbackUsed);
         this.persistCompressedHistory(summary, recent.length, candidate);
         this.saveWorkspaceConversationState(true);
         return { compressed: true, rounds, segments, droppedMessages: 0, estimatedTokens: this.estimateContextTokens(candidate), maxTokens };
@@ -4284,6 +4429,7 @@ export class Agent {
       model: fallbackUsed ? 'model-switch-segmented-with-fallback' : modelName,
       fallback: fallbackUsed || droppedMessages > 0,
     };
+    this.pushCompressionCacheEntry(summary, originalMessages.slice(0, recentStart), 'model-switch', fallbackUsed || droppedMessages > 0);
     this.persistCompressedHistory(summary, recent.length, candidate);
     this.saveWorkspaceConversationState(true);
     return { compressed: true, rounds, segments, droppedMessages, estimatedTokens: this.estimateContextTokens(candidate), maxTokens };
@@ -6749,6 +6895,7 @@ export class Agent {
       model: compression.model,
       fallback: compression.fallback,
     };
+    this.pushCompressionCacheEntry(compression.summary, middle, compression.model, compression.fallback);
     this.persistCompressedHistory(compression.summary, recent.length, msgs);
   }
 
@@ -6912,6 +7059,59 @@ export class Agent {
       ];
     }
     if (this.isSubagentRuntime) this.subagentContextPersist?.(this.history.map(message => ({ ...message })), this.lastCompression);
+  }
+
+  private pushCompressionCacheEntry(
+    summary: string,
+    messages: Array<Record<string, unknown>>,
+    model: string,
+    fallback: boolean,
+  ): void {
+    if (!messages.length) return;
+    const foldedChars = messages.reduce((sum, message) => sum + (typeof message.content === 'string'
+      ? message.content.length
+      : JSON.stringify(message.content || '').length), 0);
+    this.compressionCache.push({
+      id: `ctx-cache-${this.nextCompressionCacheId}`,
+      at: new Date().toISOString(),
+      summary,
+      messages: messages.map(message => ({ ...message })),
+      foldedEntries: messages.length,
+      foldedChars,
+      model,
+      fallback,
+    });
+    this.nextCompressionCacheId += 1;
+    const maxEntries = Math.max(0, Math.floor(this.config.getNum('context', 'compression_cache_max') || 8));
+    if (this.compressionCache.length > maxEntries) {
+      this.compressionCache = this.compressionCache.slice(this.compressionCache.length - maxEntries);
+    }
+    this.saveWorkspaceConversationState(true);
+  }
+
+  private contextHistoryProtectedStartIndex(): number {
+    const preserve = Math.max(0, Math.floor(this.config.getNum('context', 'preserve_recent_messages') || 5));
+    const lastUserIndex = this.history.map(message => String(message.role || '')).lastIndexOf('user');
+    const candidates: number[] = [];
+    if (preserve > 0 && this.history.length > 0) candidates.push(Math.max(0, this.history.length - preserve));
+    if (lastUserIndex >= 0) candidates.push(lastUserIndex);
+    return candidates.length ? Math.min(...candidates) : -1;
+  }
+
+  private contextHistoryProtectedZone(): Set<number> {
+    const start = this.contextHistoryProtectedStartIndex();
+    const zone = new Set<number>();
+    if (start >= 0) for (let i = start; i < this.history.length; i += 1) zone.add(i);
+    return zone;
+  }
+
+  private snippetAround(content: string, query: string, radius = 150): string {
+    const text = String(content || '');
+    const index = text.toLowerCase().indexOf(query.toLowerCase());
+    if (index < 0) return text.slice(0, radius * 2);
+    const from = Math.max(0, index - radius);
+    const to = Math.min(text.length, index + query.length + radius);
+    return `${from > 0 ? '…' : ''}${text.slice(from, to).trim()}${to < text.length ? '…' : ''}`;
   }
 
   buildSystemPrompt(): string {

@@ -62,8 +62,10 @@ import { AgentContextManager } from '../context/services/agent-context-manager';
 import type { AssembledContext } from '../context/services/context-orchestrator';
 import { seedToolchainFromDefinitions, type ToolchainCore } from '../toolchain';
 import { AgentRunService, recoverRunningAgentRuns } from '../agent-runtime';
-import type { AgentRun } from '../context/domain/types';
+import type { AgentRun, BuildBlock, BuildBlockStatus } from '../context/domain/types';
 import { performanceTimer } from './performanceDiagnostics';
+import { CompressionHistoryArchive } from './compressionHistoryArchive';
+import { beginRuntimeLifecycle, isRuntimeProcessAlive, type RuntimeLifecycleRole, type RuntimeLifecycleState } from './runtimeLifecycle';
 
 export { AgentMode, InputMode, AgentStatus, StreamToken, ChatMessage, GoalState, GoalItem, OptionQuestion, FileDiff, AgentWorkEvent, ConversationTarget, ConversationWorkRun, GuideReceipt, ConversationImageAttachment, DisplayImageAttachment };
 
@@ -83,6 +85,7 @@ export interface AgentRuntimeOptions {
   workspaceRegistryMode?: 'managed' | 'detached';
   actorId?: string;
   conversationId?: string;
+  runtimeLifecycleRole?: RuntimeLifecycleRole;
   linkedPlanAccess?: {
     get(conversationId?: string): LinkedPlanState;
     update(markdown: string, expectedRevision: number, actorId: string, conversationId?: string): LinkedPlanState;
@@ -191,6 +194,9 @@ interface StoredConversationState {
     pinnedAt?: string;
     order?: number;
     draft?: string;
+    runtimeOwnerId?: string;
+    runtimeOwnerPid?: number;
+    runtimeLifecycleRole?: RuntimeLifecycleRole;
   }>;
 }
 export interface StoredGoalState {
@@ -461,7 +467,8 @@ export class Agent {
   } | null = null;
   private compressionCache: CompressionCacheEntry[] = [];
   private nextCompressionCacheId = 1;
-  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; compressionCache?: CompressionCacheEntry[]; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; flowSelection?: ConversationFlowSelection | null; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; updatedAt?: string }>();
+  private readonly compressionHistoryArchive: CompressionHistoryArchive;
+  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; compressionCache?: CompressionCacheEntry[]; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; flowSelection?: ConversationFlowSelection | null; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; runtimeOwnerId?: string; runtimeOwnerPid?: number; runtimeLifecycleRole?: RuntimeLifecycleRole; updatedAt?: string }>();
   public isSubagentRuntime = false;
   private subagentName = '';
   private subagentPrompt = '';
@@ -536,8 +543,10 @@ export class Agent {
   private readonly rootInboxListener = (message: SubagentRootMessage) => this.deliverRootInboxMessage(message);
   public readonly agentOnly: boolean;
   public readonly runtimeActorId: string;
+  public readonly runtimeLifecycleRole: RuntimeLifecycleRole;
   /** dev-0.3.0 context system facade (feature-flagged, default off). */
   public readonly contextV2: AgentContextManager;
+  private readonly runtimeLifecycle: RuntimeLifecycleState;
   /** dev-0.3.0 toolchain core (registry + capability catalog). Seeded lazily from cachedToolDefinitions; not consumed by the legacy path. */
   private toolchainCore: ToolchainCore | null = null;
 
@@ -559,14 +568,17 @@ export class Agent {
   }
 
   constructor(public rootPath: string, options: AgentRuntimeOptions = {}) {
+    this.runtimeLifecycle = beginRuntimeLifecycle(rootPath, options.runtimeLifecycleRole || 'main');
     this.isSubagentRuntime = !!options.subagent;
     this.agentOnly = !!options.agentOnly;
     this.runtimeActorId = options.actorId || ROOT_AGENT_ACTOR_ID;
+    this.runtimeLifecycleRole = options.runtimeLifecycleRole || 'main';
     if (options.conversationId) this.activeConversationId = this.safeConversationId(options.conversationId);
     this.subagentName = options.subagentName || '';
     this.subagentPrompt = options.subagentPrompt || '';
     this.linkedPlanAccess = options.linkedPlanAccess;
     this.config = new ConfigManager(rootPath);
+    this.compressionHistoryArchive = new CompressionHistoryArchive(rootPath);
     this.contextV2 = new AgentContextManager(rootPath, this.config);
     this.agentRunService = this.config.contextFlag('agent_runtime_v2')
       ? new AgentRunService(path.join(rootPath, '.newmark-context-v2'))
@@ -1747,6 +1759,11 @@ export class Agent {
         runId,
         target,
         runtimeKey: String(raw.runtimeKey || conversationRuntimeKey(target)),
+        runtimeOwnerId: String(raw.runtimeOwnerId || '') || undefined,
+        runtimeOwnerPid: Number.isFinite(Number(raw.runtimeOwnerPid)) && Number(raw.runtimeOwnerPid) > 0
+          ? Math.floor(Number(raw.runtimeOwnerPid)) : undefined,
+        runtimeLifecycleRole: ['main', 'utility', 'wsl'].includes(String(raw.runtimeLifecycleRole || ''))
+          ? String(raw.runtimeLifecycleRole) as ConversationWorkRun['runtimeLifecycleRole'] : undefined,
         status,
         startedAt: raw.startedAt || this.nowIso(),
         endedAt: raw.endedAt,
@@ -1814,24 +1831,74 @@ export class Agent {
   private recoverPersistedWorkRuns(
     runs: ConversationWorkRun[] | null | undefined,
     persistedUpdatedAt?: string,
+    unexpectedExit = false,
   ): { runs: ConversationWorkRun[]; changed: boolean } {
     const normalized = this.normalizeWorkRuns(runs);
     let changed = false;
-    // Only convert 'running' to 'interrupted' when the persisted state is
-    // stale enough to indicate a cold start. If the state was persisted
-    // recently the conversation may still be running in a background kernel
-    // runtime, so preserve the running status for the UI.
+    // A frontend tracking window can expire while the backend process keeps
+    // running. Owner PID evidence is stronger than the persistence timestamp:
+    // never rewrite a live backend run merely because a cold snapshot is old.
     const isRecentPersist = !!persistedUpdatedAt
       && (Date.now() - new Date(persistedUpdatedAt).getTime()) < 120_000;
-    if (isRecentPersist) return { runs: normalized, changed: false };
+    let preservedLiveRun = false;
     for (const run of normalized) {
       if (run.status !== 'running') continue;
+      const ownerAlive = !!run.runtimeOwnerPid && isRuntimeProcessAlive(run.runtimeOwnerPid);
+      if (!unexpectedExit && (ownerAlive || (!run.runtimeOwnerPid && this.runtimeLifecycle.previousOwnerAlive))) {
+        preservedLiveRun = true;
+        continue;
+      }
+      if (!unexpectedExit && isRecentPersist) {
+        preservedLiveRun = true;
+        continue;
+      }
       run.status = 'interrupted';
-      run.endedAt = persistedUpdatedAt || run.startedAt || this.nowIso();
+      run.endedAt = unexpectedExit ? this.nowIso() : (persistedUpdatedAt || run.startedAt || this.nowIso());
       run.expanded = true;
+      const sequence = Math.max(0, Number(run.sequence || 0)) + 1;
+      run.sequence = sequence;
+      run.events.push({
+        id: `${run.runId}-unexpected-exit-${sequence}`,
+        conversationId: run.target.conversationId,
+        type: 'status',
+        content: unexpectedExit
+          ? 'Runtime exited unexpectedly; this Build was paused for recovery.'
+          : 'Persisted running Build was recovered as interrupted.',
+        mode: 'build',
+        model: this.model,
+        timestamp: run.endedAt,
+        workspaceId: run.target.workspaceId,
+        runtimeKey: run.runtimeKey,
+        runId: run.runId,
+        sequence,
+        status: 'interrupted',
+      });
       changed = true;
     }
+    if (preservedLiveRun && !changed) return { runs: normalized, changed: false };
     return { runs: normalized, changed };
+  }
+
+  private pauseFlowAfterUnexpectedExit(): boolean {
+    if (this.mode !== 'flow' || !this.flow?.name) return false;
+    if (this.getStoredFlowSuspension(this.activeConversationId)) {
+      this.status = 'idle';
+      return true;
+    }
+    const target = this.currentConversationTarget();
+    this.saveStoredFlowSuspension({
+      workflowName: this.flow.name,
+      componentId: Math.max(0, Math.floor(Number(this.flowPc) || 0)),
+      input: String([...this.chatMessages].reverse().find(message => message.role === 'user')?.content || ''),
+      completedResults: [],
+      previousMode: 'build',
+      reason: 'interrupted',
+      message: 'Flow paused after an unexpected runtime exit. Resume it explicitly.',
+      target,
+      updatedAt: this.nowIso(),
+    }, this.activeConversationId);
+    this.status = 'idle';
+    return true;
   }
 
   beginConversationWorkRun(
@@ -1856,6 +1923,9 @@ export class Agent {
       runId: cleanRunId,
       target: normalizedTarget,
       runtimeKey: String(runtimeKey || conversationRuntimeKey(normalizedTarget)),
+      runtimeOwnerId: this.runtimeLifecycle.ownerId,
+      runtimeOwnerPid: this.runtimeLifecycle.pid,
+      runtimeLifecycleRole: this.runtimeLifecycleRole,
       status: 'running',
       startedAt,
       expanded: true,
@@ -1869,8 +1939,184 @@ export class Agent {
     this.workRuns.push(run);
     if (managed) this.managedWorkRunIds.add(run.runId);
     this.activeWorkRunId = run.runId;
+    this.ensureBuildHistoryBlock(run);
     if (this.agentRunService) this.createAgentRunForWorkRun(run, normalizedTarget);
     return run;
+  }
+
+  private buildHistoryStatus(status: Exclude<ConversationWorkRunStatus, 'running'>): BuildBlockStatus {
+    if (status === 'completed') return 'completed';
+    if (status === 'error') return 'failed';
+    if (status === 'force_interrupted') return 'cancelled';
+    return 'paused';
+  }
+
+  private ensureBuildHistoryBlock(run: ConversationWorkRun): BuildBlock | null {
+    if (!this.contextV2.flags.buildHistoryPersistence) return null;
+    try {
+      const repository = this.contextV2.buildHistory;
+      const existing = repository.readBlock(run.runId);
+      if (existing) return existing;
+      const block: BuildBlock = {
+        id: run.runId,
+        conversationId: run.target.conversationId,
+        branchId: run.branchNodeId || `conversation:${run.target.conversationId}`,
+        parentBuildBlockId: null,
+        startupInput: this.sanitizePublicWorkContent(run.primaryPrompt || '(user input unavailable)').slice(0, 50_000),
+        status: 'active',
+        createdAt: run.startedAt,
+        startedAt: run.startedAt,
+        completedAt: null,
+        revision: 1,
+        activeCheckpointId: null,
+        tokenBudgetPolicyId: 'default',
+        metadata: {
+          runtimeKey: run.runtimeKey,
+          conversationWorkRunId: run.runId,
+        },
+      };
+      repository.saveBlock(block);
+      return block;
+    } catch (error) {
+      console.error(`[NewmarkBuildHistory] unable to create Build Block ${run.runId}: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
+  private finalWorkRunSummary(run: ConversationWorkRun): string {
+    const finalEvent = [...run.events].reverse().find(event => event.type === 'final_response' || event.type === 'response');
+    if (finalEvent?.content) return this.sanitizePublicWorkContent(finalEvent.content).slice(0, 4_000);
+    const finalMessage = [...this.chatMessages].reverse().find(message => message.role === 'assistant' && message.runId === run.runId);
+    return this.sanitizePublicWorkContent(finalMessage?.content || '(no final summary)').slice(0, 4_000);
+  }
+
+  private auditGoalAtWorkRunEnd(
+    run: ConversationWorkRun,
+    status: Exclude<ConversationWorkRunStatus, 'running'>,
+    endedAt: string,
+  ): { tracked: boolean; checked: boolean; matched: boolean; completed: boolean; objective?: string; paused?: boolean; checkedAt: string } {
+    if (!this.goal) return { tracked: false, checked: false, matched: false, completed: false, checkedAt: endedAt };
+    const objective = this.goal.objective;
+    const pausedBeforeSync = this.goal.paused;
+    const matched = this.goal.checkComplete(this.finalWorkRunSummary(run));
+    const completed = status === 'completed' && matched && !pausedBeforeSync;
+    if (completed) this.markGoalComplete();
+    return {
+      tracked: true,
+      checked: true,
+      matched,
+      completed,
+      objective,
+      paused: completed ? false : pausedBeforeSync,
+      checkedAt: endedAt,
+    };
+  }
+
+  private enforceGoalTerminalInvariant(
+    status: Exclude<ConversationWorkRunStatus, 'running'>,
+    goalAudit: ReturnType<Agent['auditGoalAtWorkRunEnd']>,
+  ): void {
+    if (!this.goal) return;
+    const continuationIsOwned = status === 'completed' && !goalAudit.completed && !!this.goalContinuationGate;
+    if (continuationIsOwned) return;
+    if (!this.goal.paused) {
+      this.goal.paused = true;
+      this.status = 'goal_paused';
+      this.saveWorkspaceConversationState(true);
+    }
+    goalAudit.paused = this.goal.paused;
+  }
+
+  private persistBuildBlockWorkOverview(
+    run: ConversationWorkRun,
+    status: Exclude<ConversationWorkRunStatus, 'running'>,
+    endedAt: string,
+    goalAudit: ReturnType<Agent['auditGoalAtWorkRunEnd']>,
+  ): void {
+    if (!this.contextV2.flags.buildHistoryPersistence) return;
+    try {
+      const repository = this.contextV2.buildHistory;
+      let block = this.ensureBuildHistoryBlock(run);
+      if (!block) return;
+      const nextStatus = this.buildHistoryStatus(status);
+      const nextCompletedAt = nextStatus === 'active' ? null : endedAt;
+      const startupInput = this.sanitizePublicWorkContent(run.primaryPrompt || block.startupInput || '(user input unavailable)').slice(0, 50_000);
+      if (block.status !== nextStatus || block.completedAt !== nextCompletedAt || block.startupInput !== startupInput) {
+        const transitioned = repository.transitionBlock(block, {
+          startupInput,
+          status: nextStatus,
+          completedAt: nextCompletedAt,
+          metadata: {
+            ...block.metadata,
+            terminalWorkRunStatus: status,
+            terminalAt: endedAt,
+          },
+        }, {
+          expectedRevision: block.revision,
+          operationId: `work-run-terminal:${run.runId}:${status}:${endedAt}`,
+        });
+        block = transitioned.applied ? transitioned.block : (repository.readBlock(run.runId) || block);
+      }
+      const eventCounts = run.events.reduce<Record<string, number>>((counts, event) => {
+        counts[event.type] = (counts[event.type] || 0) + 1;
+        return counts;
+      }, {});
+      const guides = run.guides.slice(-8).map(guide => `${guide.status}: ${this.sanitizePublicWorkContent(String(guide.content || '')).slice(0, 500)}`);
+      const finalSummary = this.finalWorkRunSummary(run);
+      const goalLine = goalAudit.tracked
+        ? `Goal: checked=${goalAudit.checked}; matched=${goalAudit.matched}; completed=${goalAudit.completed}; paused=${goalAudit.paused}; objective=${goalAudit.objective}`
+        : 'Goal: not tracked for this Build Block.';
+      const content = [
+        'Build Block Work Overview',
+        `Run: ${run.runId}`,
+        `Status: ${status}`,
+        `Conversation: ${run.target.conversationId}`,
+        `Startup input: ${this.sanitizePublicWorkContent(run.primaryPrompt || block.startupInput || '(user input unavailable)').slice(0, 2_000)}`,
+        `Final summary: ${finalSummary}`,
+        `Events: ${JSON.stringify(eventCounts)}`,
+        guides.length ? `Guides: ${guides.join(' | ')}` : 'Guides: none',
+        goalLine,
+      ].join('\n');
+      repository.appendEntry({
+        buildBlockId: run.runId,
+        type: 'work_overview',
+        content: content.slice(0, 50_000),
+        source: 'agent',
+        importance: status === 'completed' ? 'normal' : 'high',
+        structuredData: {
+          conversationId: run.target.conversationId,
+          branchId: block.branchId,
+          status,
+          endedAt,
+          finalSummary,
+          eventCounts,
+          guideCount: run.guides.length,
+          goal: goalAudit,
+        },
+        operationId: `work-run-overview:${run.runId}`,
+        revision: block.revision,
+      });
+    } catch (error) {
+      console.error(`[NewmarkBuildHistory] unable to write Build Block overview ${run.runId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private recoverMissingTerminalBuildOverviews(): void {
+    if (!this.contextV2.flags.buildHistoryPersistence) return;
+    const repository = this.contextV2.buildHistory;
+    for (const run of this.workRuns) {
+      if (run.status === 'running') continue;
+      try {
+        if (repository.readEntries(run.runId).some(entry => entry.type === 'work_overview')) continue;
+      } catch {
+        continue;
+      }
+      const endedAt = run.endedAt || this.nowIso();
+      if (run.status === 'completed') this.ensureCompletedWorkRunFinalResult(run);
+      const goalAudit = this.auditGoalAtWorkRunEnd(run, run.status, endedAt);
+      this.enforceGoalTerminalInvariant(run.status, goalAudit);
+      this.persistBuildBlockWorkOverview(run, run.status, endedAt, goalAudit);
+    }
   }
 
   private createAgentRunForWorkRun(run: ConversationWorkRun, target: ConversationTarget): void {
@@ -2109,9 +2355,20 @@ export class Agent {
     if (!run) return false;
     this.syncAgentRunTerminal(run.runId, status, endedAt);
     if (run.status !== 'running') {
-      if (run.status !== 'interrupted' || status !== 'force_interrupted') return run.status === status;
+      if (run.status !== 'interrupted' || status !== 'force_interrupted') {
+        if (run.status !== status) return false;
+        const terminalAt = run.endedAt || endedAt;
+        if (status === 'completed') this.ensureCompletedWorkRunFinalResult(run);
+        const goalAudit = this.auditGoalAtWorkRunEnd(run, status, terminalAt);
+        this.enforceGoalTerminalInvariant(status, goalAudit);
+        this.persistBuildBlockWorkOverview(run, status, terminalAt, goalAudit);
+        this.saveWorkspaceConversationState();
+        return true;
+      }
       this.activeWorkRunId = run.runId;
       this.finalizingWorkRunId = run.runId;
+      const goalAudit = this.auditGoalAtWorkRunEnd(run, status, endedAt);
+      this.enforceGoalTerminalInvariant(status, goalAudit);
       this.emitWorkEvent({
         type: 'status',
         content: 'Force interrupted.',
@@ -2126,12 +2383,15 @@ export class Agent {
       this.activeWorkRunId = '';
       this.finalizingWorkRunId = '';
       this.managedWorkRunIds.delete(run.runId);
+      this.persistBuildBlockWorkOverview(run, status, endedAt, goalAudit);
       this.saveWorkspaceConversationState();
       return true;
     }
     this.activeWorkRunId = run.runId;
     this.finalizingWorkRunId = run.runId;
     if (status === 'completed') this.ensureCompletedWorkRunFinalResult(run);
+    const goalAudit = this.auditGoalAtWorkRunEnd(run, status, endedAt);
+    this.enforceGoalTerminalInvariant(status, goalAudit);
     this.emitWorkEvent({
       type: status === 'completed' ? 'done' : status === 'error' ? 'error' : 'status',
       content: status === 'force_interrupted' ? 'Force interrupted.' : status === 'interrupted' ? 'Interrupted.' : 'Response complete.',
@@ -2146,6 +2406,7 @@ export class Agent {
     this.activeWorkRunId = '';
     this.finalizingWorkRunId = '';
     this.managedWorkRunIds.delete(run.runId);
+    this.persistBuildBlockWorkOverview(run, status, endedAt, goalAudit);
     this.saveWorkspaceConversationState();
     return true;
   }
@@ -2246,6 +2507,14 @@ export class Agent {
     }
     if (event.type === 'start') this.saveWorkspaceConversationState(false);
     if (event.type === 'done' || event.type === 'error') this.saveWorkspaceConversationState(true);
+    if (activeRun && this.finalizingWorkRunId !== activeRun.runId
+      && (event.type === 'done' || event.type === 'error') && activeRun.status !== 'running') {
+      const terminalStatus = activeRun.status;
+      const terminalAt = activeRun.endedAt || this.nowIso();
+      const goalAudit = this.auditGoalAtWorkRunEnd(activeRun, terminalStatus, terminalAt);
+      this.enforceGoalTerminalInvariant(terminalStatus, goalAudit);
+      this.persistBuildBlockWorkOverview(activeRun, terminalStatus, terminalAt, goalAudit);
+    }
     return event;
   }
 
@@ -3338,11 +3607,23 @@ export class Agent {
     return cleaned;
   }
 
+  private activeConversationRuntimeOwner(): { runtimeOwnerId?: string; runtimeOwnerPid?: number; runtimeLifecycleRole?: RuntimeLifecycleRole } {
+    const activeGoal = !!this.goal && !this.goal.paused;
+    const activeFlow = this.mode === 'flow' && !!this.flow?.name && !this.getStoredFlowSuspension(this.activeConversationId);
+    if (!activeGoal && !activeFlow) return {};
+    return {
+      runtimeOwnerId: this.runtimeLifecycle.ownerId,
+      runtimeOwnerPid: this.runtimeLifecycle.pid,
+      runtimeLifecycleRole: this.runtimeLifecycleRole,
+    };
+  }
+
   saveWorkspaceConversationState(flush = true): void {
     if (this.isSubagentRuntime) return;
     const key = this.workspaceConversationKey();
     if (!key) return;
     const updatedAt = new Date().toISOString();
+    const runtimeOwner = this.activeConversationRuntimeOwner();
     this.workspaceConversations.set(key, {
       chatMessages: [...this.chatMessages],
       history: [...this.history],
@@ -3357,6 +3638,9 @@ export class Agent {
       inputMode: this.inputMode,
       mode: this.mode,
       goal: this.serializeGoal(),
+      runtimeOwnerId: runtimeOwner.runtimeOwnerId,
+      runtimeOwnerPid: runtimeOwner.runtimeOwnerPid,
+      runtimeLifecycleRole: runtimeOwner.runtimeLifecycleRole,
       updatedAt,
     });
     const stored = this.readStoredConversationState();
@@ -3386,6 +3670,9 @@ export class Agent {
       inputMode: this.inputMode,
       mode: this.mode,
       goal: this.serializeGoal(),
+      runtimeOwnerId: runtimeOwner.runtimeOwnerId,
+      runtimeOwnerPid: runtimeOwner.runtimeOwnerPid,
+      runtimeLifecycleRole: runtimeOwner.runtimeLifecycleRole,
       updatedAt,
     };
     if (nextEntry.tree || nextEntry.branches?.length) {
@@ -3436,6 +3723,7 @@ export class Agent {
       this.mode = saved.mode || 'build';
       this.goal = this.restoreGoal(saved.goal);
       this.status = this.restoreStatusFromWorkRuns(saved.goal);
+      this.recoverMissingTerminalBuildOverviews();
       this.activeWorkRunId = this.workRuns.find(run => run.status === 'running')?.runId || '';
       return;
     }
@@ -3448,7 +3736,11 @@ export class Agent {
     this.chatMessages = this.normalizeConversationChatMessages(persisted?.chatMessages || [], this.history);
     this.conversationPlan = this.normalizeConversationPlan(persisted?.plan);
     this.linkedPlan = this.normalizeLinkedPlan(persisted?.linkedPlan);
-    const recoveredWorkRuns = this.recoverPersistedWorkRuns(persisted?.workRuns, persisted?.updatedAt);
+    const recoveredWorkRuns = this.recoverPersistedWorkRuns(
+      persisted?.workRuns,
+      persisted?.updatedAt,
+      this.runtimeLifecycle.unexpectedExit,
+    );
     this.workRuns = recoveredWorkRuns.runs;
     this.continuations = this.normalizeContinuations(persisted?.continuations);
     this.restoreConversationModelSelection(persisted?.modelSelection);
@@ -3456,9 +3748,29 @@ export class Agent {
     this.inputMode = this.defaultInputMode();
     this.mode = persisted?.mode || 'build';
     this.goal = this.restoreGoal(persisted?.goal);
-    this.status = this.restoreStatusFromWorkRuns(persisted?.goal);
+    const persistedRuntimeOwnerPid = Math.floor(Number(persisted?.runtimeOwnerPid) || 0);
+    const persistedRuntimeOwnerKnown = persistedRuntimeOwnerPid > 0;
+    const persistedRuntimeOwnerAlive = persistedRuntimeOwnerKnown && isRuntimeProcessAlive(persistedRuntimeOwnerPid);
+    const runtimeOwnerLost = persistedRuntimeOwnerKnown ? !persistedRuntimeOwnerAlive : this.runtimeLifecycle.unexpectedExit;
+    const shouldPauseRecoveredState = recoveredWorkRuns.changed || runtimeOwnerLost;
+    let goalPausedByRecovery = false;
+    if (shouldPauseRecoveredState && this.goal && !this.goal.paused) {
+      this.goal.paused = true;
+      goalPausedByRecovery = true;
+    }
+    this.status = this.restoreStatusFromWorkRuns(this.serializeGoal());
+    const flowPausedByRecovery = shouldPauseRecoveredState && this.pauseFlowAfterUnexpectedExit();
     this.activeWorkRunId = this.workRuns.find(run => run.status === 'running')?.runId || '';
     this.bindConversationSubagents(this.activeConversationId, persisted?.subagentState);
+    if (recoveredWorkRuns.changed) {
+      for (const run of recoveredWorkRuns.runs.filter(item => item.status === 'interrupted')) {
+        const audit = this.auditGoalAtWorkRunEnd(run, 'interrupted', run.endedAt || this.nowIso());
+        this.persistBuildBlockWorkOverview(run, 'interrupted', run.endedAt || this.nowIso(), audit);
+      }
+    }
+    this.recoverMissingTerminalBuildOverviews();
+    const recoveryApplied = recoveredWorkRuns.changed || runtimeOwnerLost || goalPausedByRecovery || flowPausedByRecovery;
+    const recoveryAt = recoveryApplied ? this.nowIso() : persisted?.updatedAt;
     this.workspaceConversations.set(key, {
       chatMessages: [...this.chatMessages],
       history: [...this.history],
@@ -3469,21 +3781,31 @@ export class Agent {
       workRuns: this.normalizeWorkRuns(this.workRuns),
       continuations: this.normalizeContinuations(this.continuations),
       modelSelection: persisted?.modelSelection || this.currentConversationModelSelection(),
-      flowSelection: persisted?.flowSelection || null,
+      flowSelection: this.currentConversationFlowSelection(),
       inputMode: this.defaultInputMode(),
-      mode: persisted?.mode || 'build',
-      goal: persisted?.goal || null,
-      updatedAt: persisted?.updatedAt,
+      mode: this.mode,
+      goal: this.serializeGoal(),
+      runtimeOwnerId: this.activeConversationRuntimeOwner().runtimeOwnerId,
+      runtimeOwnerPid: this.activeConversationRuntimeOwner().runtimeOwnerPid,
+      runtimeLifecycleRole: this.activeConversationRuntimeOwner().runtimeLifecycleRole,
+      updatedAt: recoveryAt,
     });
-    if (recoveredWorkRuns.changed && stateKey && persisted) {
-      const recoveredAt = this.nowIso();
-      stored.conversations![stateKey] = {
-        ...persisted,
+    if (recoveryApplied && stateKey && persisted) {
+      const recoveredStored = this.readStoredConversationState();
+      recoveredStored.conversations = recoveredStored.conversations || {};
+      recoveredStored.conversations[stateKey] = {
+        ...(recoveredStored.conversations[stateKey] || persisted),
         workRuns: this.normalizeWorkRuns(this.workRuns),
-        updatedAt: recoveredAt,
+        flowSelection: this.currentConversationFlowSelection(),
+        mode: this.mode,
+        goal: this.serializeGoal(),
+        runtimeOwnerId: this.activeConversationRuntimeOwner().runtimeOwnerId,
+        runtimeOwnerPid: this.activeConversationRuntimeOwner().runtimeOwnerPid,
+        runtimeLifecycleRole: this.activeConversationRuntimeOwner().runtimeLifecycleRole,
+        updatedAt: recoveryAt,
       };
-      this.workspaceConversations.get(key)!.updatedAt = recoveredAt;
-      this.writeStoredConversationStateNow(stored);
+      this.workspaceConversations.get(key)!.updatedAt = recoveryAt;
+      this.writeStoredConversationStateNow(recoveredStored);
     }
   }
 
@@ -3712,7 +4034,7 @@ export class Agent {
     let input: Record<string, unknown> = {};
     try { input = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
     const action = String(input.action || '').trim();
-    if (!action) return { ok: false, output: '[context_history_manage] action is required (list|remove|summarize|restore|search|status).', error: 'action is required.' };
+    if (!action) return { ok: false, output: '[context_history_manage] action is required (list|remove|summarize|restore|search|read|status).', error: 'action is required.' };
     if (action === 'list') {
       const limit = Math.max(5, Math.min(400, Math.floor(Number(input.limit || 200))));
       const entries = this.history.slice(0, limit).map((message, index) => ({
@@ -3807,7 +4129,9 @@ export class Agent {
     }
     if (action === 'restore') {
       const restoreId = String(input.restore_id || '').trim();
-      const entry = this.compressionCache.find(item => item.id === restoreId);
+      const hotEntry = this.compressionCache.find(item => item.id === restoreId);
+      const coldEntry = hotEntry ? undefined : this.coldCompressionEntries().find(item => item.id === restoreId);
+      const entry = hotEntry || coldEntry;
       if (!entry) return { ok: false, output: `[context_history_manage] restore unknown restore_id: ${restoreId}.`, error: 'restore_id not found.' };
       const summaryHeader = entry.summary.startsWith('[Context Compression') ? '[Context Compression' : '[Context History Summary]';
       const markerIndex = this.history.findIndex(message => String(message.role || '') === 'system' && String(message.content || '').includes(summaryHeader) && String(message.content || '').includes(entry.summary.slice(0, 200)));
@@ -3815,7 +4139,8 @@ export class Agent {
         return { ok: false, output: '[context_history_manage] restore failed: the folded summary is no longer present in context history (already re-folded or removed).', error: 'restore target summary not found in history.' };
       }
       this.history.splice(markerIndex, 1, ...entry.messages.map(message => ({ ...message })));
-      this.compressionCache = this.compressionCache.filter(item => item.id !== entry.id);
+      if (hotEntry) this.compressionCache = this.compressionCache.filter(item => item.id !== entry.id);
+      if (coldEntry) this.markColdCompressionRestored(entry.id);
       this.saveWorkspaceConversationState(true);
       return {
         ok: true,
@@ -3825,7 +4150,9 @@ export class Agent {
           restoreId: entry.id,
           restoredEntries: entry.messages.length,
           restoredChars: entry.foldedChars,
+          source: hotEntry ? 'hot-cache' : 'cold-archive',
           cacheRemaining: this.compressionCache.length,
+          archiveRemaining: this.coldCompressionEntries().length,
           displayHistory: { untouched: true, messageCount: this.chatMessages.length },
         }, null, 2),
         metadata: { kind: 'context-history-restore' },
@@ -3836,9 +4163,15 @@ export class Agent {
       const limit = Math.max(1, Math.min(200, Math.floor(Number(input.limit || 20))));
       if (!query) return { ok: false, output: '[context_history_manage] search requires query.', error: 'search requires query.' };
       const matches: Array<Record<string, unknown>> = [];
-      for (const entry of this.compressionCache) {
+      const coldEntries = this.coldCompressionEntries();
+      const searchable = [
+        ...this.compressionCache.map(entry => ({ entry, source: 'hot-cache' as const })),
+        ...coldEntries.map(entry => ({ entry, source: 'cold-archive' as const })),
+      ];
+      for (const item of searchable) {
         if (matches.length >= limit) break;
-        const hit = { cacheId: entry.id, at: entry.at, summary: entry.summary.slice(0, 500), matches: [] as Array<{ index: number; snippet: string }> };
+        const { entry } = item;
+        const hit = { cacheId: entry.id, source: item.source, at: entry.at, summary: entry.summary.slice(0, 500), matches: [] as Array<{ index: number; snippet: string }> };
         if (entry.summary.toLowerCase().includes(query)) {
           hit.matches.push({ index: -1, snippet: this.snippetAround(entry.summary, query) });
         }
@@ -3858,10 +4191,65 @@ export class Agent {
           action: 'search',
           query: String(input.query || ''),
           cacheEntries: this.compressionCache.length,
+          archiveEntries: coldEntries.length,
           matches,
           displayHistory: { untouched: true, messageCount: this.chatMessages.length },
         }, null, 2),
         metadata: { kind: 'context-history-search' },
+      };
+    }
+    if (action === 'read') {
+      const restoreId = String(input.restore_id || '').trim();
+      if (!restoreId) return { ok: false, output: '[context_history_manage] read requires restore_id.', error: 'read requires restore_id.' };
+      const hotEntry = this.compressionCache.find(item => item.id === restoreId);
+      const coldEntry = hotEntry ? undefined : this.coldCompressionEntries().find(item => item.id === restoreId);
+      const entry = hotEntry || coldEntry;
+      if (!entry) return { ok: false, output: `[context_history_manage] read unknown restore_id: ${restoreId}.`, error: 'restore_id not found.' };
+      const offset = Math.max(0, Math.floor(Number(input.offset || 0)));
+      const contentOffset = Math.max(0, Math.floor(Number(input.content_offset || 0)));
+      const limit = Math.max(1, Math.min(100, Math.floor(Number(input.limit || 20))));
+      const maxChars = Math.max(1_000, Math.min(60_000, Math.floor(Number(input.max_chars || 12_000))));
+      const messages: Array<{ index: number; role: string; name: string; contentOffset: number; content: string; truncated: boolean }> = [];
+      let emittedChars = 0;
+      let nextOffset: number | null = null;
+      let nextContentOffset = 0;
+      for (let index = offset; index < entry.messages.length && messages.length < limit; index += 1) {
+        const message = entry.messages[index];
+        const remaining = maxChars - emittedChars;
+        if (remaining <= 0) break;
+        const fullContent = this.compressionHistoryContent(message.content || message.reasoning_content || '');
+        const start = index === offset ? Math.min(contentOffset, fullContent.length) : 0;
+        const content = fullContent.slice(start, start + remaining);
+        const truncated = start + content.length < fullContent.length;
+        messages.push({ index, role: String(message.role || ''), name: String(message.name || ''), contentOffset: start, content, truncated });
+        emittedChars += content.length;
+        if (truncated) {
+          nextOffset = index;
+          nextContentOffset = start + content.length;
+          break;
+        }
+      }
+      if (nextOffset === null && offset + messages.length < entry.messages.length) nextOffset = offset + messages.length;
+      return {
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          action: 'read',
+          restoreId: entry.id,
+          source: hotEntry ? 'hot-cache' : 'cold-archive',
+          at: entry.at,
+          foldedEntries: entry.foldedEntries,
+          foldedChars: entry.foldedChars,
+          offset,
+          contentOffset,
+          returned: messages.length,
+          nextOffset,
+          nextContentOffset: nextOffset === null ? null : nextContentOffset,
+          summary: entry.summary.slice(0, 2_000),
+          messages,
+          displayHistory: { untouched: true, messageCount: this.chatMessages.length },
+        }, null, 2),
+        metadata: { kind: 'context-history-read' },
       };
     }
     if (action === 'status') {
@@ -3870,6 +4258,7 @@ export class Agent {
       const maxTokens = this.contextMaxTokens();
       const protectedStartIndex = this.contextHistoryProtectedStartIndex();
       const lastUserIndex = this.history.map(message => String(message.role || '')).lastIndexOf('user');
+      const coldEntries = this.coldCompressionEntries();
       return {
         ok: true,
         output: JSON.stringify({
@@ -3898,6 +4287,13 @@ export class Agent {
             totalFoldedEntries: this.compressionCache.reduce((sum, item) => sum + item.foldedEntries, 0),
             totalFoldedChars: this.compressionCache.reduce((sum, item) => sum + item.foldedChars, 0),
             ids: this.compressionCache.map(item => item.id),
+          },
+          archive: {
+            enabled: this.config.getBool('context', 'compression_archive_enabled'),
+            entries: coldEntries.length,
+            totalFoldedEntries: coldEntries.reduce((sum, item) => sum + item.foldedEntries, 0),
+            totalFoldedChars: coldEntries.reduce((sum, item) => sum + item.foldedChars, 0),
+            recentIds: coldEntries.slice(-50).map(item => item.id),
           },
           protectedZone: {
             preserveRecentMessages: this.config.getNum('context', 'preserve_recent_messages') || 5,
@@ -4461,6 +4857,7 @@ export class Agent {
   }
 
   updateGoal(newGoal: string): void {
+    const existingGoalPaused = this.goal?.paused || false;
     if (this.goal) {
       this.goal.update(newGoal);
     } else {
@@ -4469,9 +4866,10 @@ export class Agent {
     }
     if (this.goal) {
       this.goal.verified = false;
-      this.goal.paused = false;
+      // Replacing the objective must not implicitly resume an explicitly paused Goal.
+      this.goal.paused = existingGoalPaused;
       this.goal.goalRounds = 0;
-      this.status = 'idle';
+      this.status = this.goal.paused ? 'goal_paused' : 'idle';
     }
     this.mode = 'goal';
     this.saveWorkspaceConversationState(true);
@@ -4483,6 +4881,17 @@ export class Agent {
     this.status = this.goal.paused ? 'goal_paused' : 'idle';
     this.saveWorkspaceConversationState(true);
     return this.goal.paused;
+  }
+
+  /** Pause only in response to the user's explicit Stop action. */
+  pauseGoalForUserInterrupt(): boolean {
+    if (!this.goal) return false;
+    if (!this.goal.paused) {
+      this.goal.paused = true;
+      this.status = 'goal_paused';
+      this.saveWorkspaceConversationState(true);
+    }
+    return true;
   }
 
   clearGoal(): void {
@@ -4511,8 +4920,8 @@ export class Agent {
     return this.goalContinuationGate ? this.goalContinuationGate() : true;
   }
 
-  claimGoalContinuationMessage(): AgentPromptMessage | null {
-    if (this.mode !== 'goal' || !this.goal || this.goal.paused || !this.canAutoContinueGoal()) return null;
+  claimGoalContinuationMessage(options?: { force?: boolean }): AgentPromptMessage | null {
+    if (this.mode !== 'goal' || !this.goal || this.goal.paused || (!options?.force && !this.canAutoContinueGoal())) return null;
     const maxGoalContinuations = Math.max(0, Math.floor(this.config.getNum('agent', 'goal_max_continuations') || 0));
     if (maxGoalContinuations > 0 && this.goal.goalRounds >= maxGoalContinuations) {
       this.goal.paused = true;
@@ -7061,6 +7470,47 @@ export class Agent {
     if (this.isSubagentRuntime) this.subagentContextPersist?.(this.history.map(message => ({ ...message })), this.lastCompression);
   }
 
+  private compressionArchiveScopeKey(): string | null {
+    if (this.isSubagentRuntime || !this.config.getBool('context', 'compression_archive_enabled')) return null;
+    return this.workspaceConversationKey();
+  }
+
+  private coldCompressionEntries(): CompressionCacheEntry[] {
+    const scopeKey = this.compressionArchiveScopeKey();
+    if (!scopeKey) return [];
+    try {
+      const hotIds = new Set(this.compressionCache.map(entry => entry.id));
+      return this.compressionHistoryArchive.activeEntries(scopeKey).filter(entry => !hotIds.has(entry.id));
+    } catch {
+      return [];
+    }
+  }
+
+  private archiveColdCompressionEntries(entries: CompressionCacheEntry[]): CompressionCacheEntry[] {
+    const scopeKey = this.compressionArchiveScopeKey();
+    if (!scopeKey) return [];
+    const failed: CompressionCacheEntry[] = [];
+    for (const entry of entries) {
+      try {
+        this.compressionHistoryArchive.archive(scopeKey, entry);
+      } catch {
+        // Prefer a temporarily oversized hot cache over irreversible history loss.
+        failed.push(entry);
+      }
+    }
+    return failed;
+  }
+
+  private markColdCompressionRestored(id: string): void {
+    const scopeKey = this.compressionArchiveScopeKey();
+    if (!scopeKey) return;
+    try {
+      this.compressionHistoryArchive.markRestored(scopeKey, id);
+    } catch {
+      // The restored context is already authoritative; archive bookkeeping is best-effort.
+    }
+  }
+
   private pushCompressionCacheEntry(
     summary: string,
     messages: Array<Record<string, unknown>>,
@@ -7068,6 +7518,12 @@ export class Agent {
     fallback: boolean,
   ): void {
     if (!messages.length) return;
+    const scopeKey = this.compressionArchiveScopeKey();
+    let archivedMaxId = 0;
+    if (scopeKey) {
+      try { archivedMaxId = this.compressionHistoryArchive.maxNumericId(scopeKey); } catch {}
+    }
+    this.nextCompressionCacheId = Math.max(this.nextCompressionCacheId, archivedMaxId + 1);
     const foldedChars = messages.reduce((sum, message) => sum + (typeof message.content === 'string'
       ? message.content.length
       : JSON.stringify(message.content || '').length), 0);
@@ -7084,7 +7540,9 @@ export class Agent {
     this.nextCompressionCacheId += 1;
     const maxEntries = Math.max(0, Math.floor(this.config.getNum('context', 'compression_cache_max') || 8));
     if (this.compressionCache.length > maxEntries) {
-      this.compressionCache = this.compressionCache.slice(this.compressionCache.length - maxEntries);
+      const evicted = this.compressionCache.slice(0, this.compressionCache.length - maxEntries);
+      const failed = this.archiveColdCompressionEntries(evicted);
+      this.compressionCache = [...failed, ...this.compressionCache.slice(this.compressionCache.length - maxEntries)];
     }
     this.saveWorkspaceConversationState(true);
   }

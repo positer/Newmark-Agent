@@ -52,6 +52,7 @@ export type BuildHistoryEntryType =
   | 'warning'
   | 'unresolved_item'
   | 'compression_summary'
+  | 'work_overview'
   | 'amendment';
 
 export type BuildHistorySource = 'user' | 'agent' | 'tool' | 'system' | 'subagent' | 'migration';

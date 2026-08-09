@@ -55,6 +55,7 @@ import {
   startupUpdatePromptContent,
 } from './core/startupPrewarm';
 import { runRuntimeShutdownBarrier } from './core/runtimeShutdown';
+import { markRuntimeLifecycleClean } from './core/runtimeLifecycle';
 import { discoverPluginManifests } from './core/compat';
 import { McpManager } from './core/mcpManager';
 
@@ -2049,6 +2050,14 @@ if (isViewerArg) {
       if (tray) { tray.destroy(); tray = null; }
       app.quit();
     };
+    const hasUnsettledGoalOrFlow = (): boolean => {
+      const goalRunning = !!agent?.goal && !agent.goal.paused;
+      const flowRunning = Array.from(activeFlowsByRuntimeKey.values()).some(state => !!state.abortController);
+      return goalRunning || flowRunning;
+    };
+    const markMainLifecycleCleanIfSafe = (): void => {
+      if (!hasUnsettledGoalOrFlow()) markRuntimeLifecycleClean(root, 'main');
+    };
     app.on('will-quit', event => {
       if (_forceQuit) armForcedExitDeadline('will-quit');
       startupDeferredTasks?.cancel();
@@ -2070,6 +2079,7 @@ if (isViewerArg) {
               throw error;
             })
             : undefined;
+          let shutdownFailed = false;
           void runRuntimeShutdownBarrier({
             operations: [
               legacyStop,
@@ -2078,9 +2088,11 @@ if (isViewerArg) {
             ],
             shutdownHelpers: async () => await shutdownWindowsProcessHelpers(2_000),
           }).catch(error => {
+            shutdownFailed = true;
             console.error('[Newmark] Runtime shutdown cleanup failed:', error instanceof Error ? error.message : String(error));
           }).finally(() => {
             appExitCleanupComplete = true;
+            if (!shutdownFailed) markMainLifecycleCleanIfSafe();
             app.quit();
           });
         }
@@ -2101,6 +2113,7 @@ if (isViewerArg) {
       browserGuestContentsByHost.clear();
       if (sidecarProcess) { sidecarProcess.kill(); sidecarProcess = null; }
       shutdownTerminalTakeoverSessions('app-exit');
+      markMainLifecycleCleanIfSafe();
       if (forcedExitTimer) {
         clearTimeout(forcedExitTimer);
         forcedExitTimer = null;

@@ -309,7 +309,7 @@ export class ElectronUtilityRuntimePool {
   }
 
   async toggleGoalPause(target: ConversationRuntimeTarget): Promise<boolean | null> {
-    const entry = await this.acquireExisting(normalizeConversationTarget(target));
+    const entry = await this.acquire(normalizeConversationTarget(target));
     if (!entry?.client.toggleGoalPause) return null;
     try {
       return await entry.client.toggleGoalPause();
@@ -679,12 +679,11 @@ export class ElectronUtilityRuntimePool {
         }
         const finalized = !!kernelForce && kernelForce.action === 'force';
         const checkpointed = finalized ? (kernelForce!.checkpointed || intent.checkpointed) : intent.checkpointed;
-        if (!finalized) {
-          // The worker event loop is wedged: hard-kill the process tree without
-          // starting a replacement. The first-stop checkpoint preserves the
-          // conversation; only the latest run is discarded.
-          await entry.client.forceStop();
-        }
+        // The acknowledgement only gives the kernel a chance to persist its
+        // force_interrupted settlement. A second Stop still owns a process-level
+        // termination boundary and must leave the target runtime down until the
+        // next prompt, even when the worker acknowledged the force request.
+        await entry.client.forceStop();
         entry.lastSnapshot = null;
         entry.workEvents = [];
         entry.lastRunId = '';

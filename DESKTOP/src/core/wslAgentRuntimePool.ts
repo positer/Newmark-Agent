@@ -312,7 +312,7 @@ export class WslAgentRuntimePool {
 
   async toggleGoalPause(target: ConversationRuntimeTarget): Promise<boolean | null> {
     const normalized = normalizeConversationTarget(target);
-    const entry = await this.acquireExisting(normalized);
+    const entry = await this.acquire(normalized);
     if (!entry?.client.toggleGoalPause) return null;
     try {
       return await entry.client.toggleGoalPause(normalized);
@@ -657,13 +657,12 @@ export class WslAgentRuntimePool {
         }
         const finalized = !!kernelForce && kernelForce.action === 'force';
         const checkpointed = finalized ? (kernelForce!.checkpointed || intent.checkpointed) : intent.checkpointed;
-        if (!finalized) {
-          // The worker event loop is wedged: hard-kill the process group without
-          // starting a replacement. The first-stop checkpoint preserves the
-          // conversation; only the latest run is discarded.
-          if (entry.client.forceStopRuntimeGroup) await entry.client.forceStopRuntimeGroup();
-          else await entry.client.forceRestartRuntimeGroup();
-        }
+        // The acknowledgement only gives the kernel a chance to persist its
+        // force_interrupted settlement. A second Stop still owns a process-group
+        // termination boundary and must leave the target runtime down until the
+        // next prompt, even when the worker acknowledged the force request.
+        if (entry.client.forceStopRuntimeGroup) await entry.client.forceStopRuntimeGroup();
+        else await entry.client.forceRestartRuntimeGroup();
         entry.lastSnapshot = null;
         entry.workEvents = [];
         entry.lastRunId = '';

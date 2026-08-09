@@ -200,9 +200,9 @@ function peerIdentity(messages) {
     .filter(message => message?.role === 'system')
     .map(messageText)
     .join('\n');
-  const name = systemText.match(/You are subagent "([^"]+)"/i)?.[1] || '';
-  const actorId = name.match(/--([0-9a-f-]{36})$/i)?.[1] || '';
-  return { name, actorId, systemText };
+  const match = systemText.match(/You are subagent "([^"]+)"/i);
+  const name = match?.[1] || '';
+  return { name, isSubagent: Boolean(match), systemText };
 }
 
 function startMockProvider() {
@@ -242,11 +242,11 @@ function startMockProvider() {
       const peer = peerIdentity(messages);
       const toolText = lastToolResult(messages);
       let payload;
-      if (peer.name.includes('alpha-review') && peer.actorId) {
+      if (peer.isSubagent && peer.name.includes('alpha-review')) {
         payload = textResponse(latestUser.includes('DEV008_REACTIVATE_ALPHA')
           ? 'DEV008_ALPHA_REACTIVATED_RESULT'
           : 'DEV008_ALPHA_INITIAL_RESULT');
-      } else if (peer.name.includes('beta-review') && peer.actorId) {
+      } else if (peer.isSubagent && peer.name.includes('beta-review')) {
         payload = textResponse('DEV008_BETA_INITIAL_RESULT');
       } else if (latestUser.includes('[Root subagent inbox id=')) {
         const inboxId = latestUser.match(/\[Root subagent inbox id=([0-9a-f-]{36})/i)?.[1] || `unknown-${rootInboxReplies.size}`;

@@ -954,6 +954,7 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
       keep_recent_messages: { _description: "Keep recent messages", _type: "integer", value: 10 },
       preserve_recent_messages: { _description: "dev-0.3.8 protected recent-message zone for context_history_manage (0 disables)", _type: "integer", value: 5 },
       compression_cache_max: { _description: "dev-0.3.8 max folded-segment cache entries retained for restore/search", _type: "integer", value: 8 },
+      compression_archive_enabled: { _description: "dev-0.3.9 append-only cold archive for folded segments evicted from the hot cache", _type: "boolean", value: true },
       structured_context_v2: { _description: "dev-0.3.0 structured context v2 (orchestrator + fixed order + snapshot)", _type: "boolean", value: true },
       build_history_persistence: { _description: "dev-0.3.0 append-only Build History persistence", _type: "boolean", value: true },
       branch_log_v2: { _description: "dev-0.3.0 branch long-log v2 (epoch summaries)", _type: "boolean", value: true },

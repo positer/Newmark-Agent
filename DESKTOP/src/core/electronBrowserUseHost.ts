@@ -108,11 +108,20 @@ export class ElectronBrowserUseHost {
       ),
       clickAt: async (x: number, y: number, signal?: AbortSignal) => {
         throwIfAborted(signal);
+        // A webview guest can retain the DOM focus while its embedder is still
+        // committing a workspace/tab transition. Focus both sides and yield
+        // between native input events so Chromium receives a real click rather
+        // than a synchronously queued sequence that can be dropped by the guest.
+        contents.hostWebContents?.focus();
         contents.focus();
+        await abortableDelay(10, signal);
         const point = { x: Math.max(0, Math.round(x)), y: Math.max(0, Math.round(y)) };
         contents.sendInputEvent({ type: 'mouseMove', ...point });
+        await abortableDelay(10, signal);
         contents.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, ...point });
+        await abortableDelay(10, signal);
         contents.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, ...point });
+        await abortableDelay(10, signal);
       },
       replaceFocusedText: async (text: string, signal?: AbortSignal) => {
         throwIfAborted(signal);

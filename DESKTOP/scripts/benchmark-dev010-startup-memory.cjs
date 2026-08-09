@@ -524,7 +524,7 @@ async function oneRun(index, root, profile) {
         fixtureBytes: new TextEncoder().encode(prompt.value).byteLength,
         fixtureLines,
       })));
-    })`);
+    })`, 45_000);
     assert(Number(inputFixture?.fixtureBytes) >= 64 * 1024,
       `run ${index} large-input fixture is smaller than 64KiB: ${inputFixture?.fixtureBytes || 0} bytes`);
     let inputLatencyMs;

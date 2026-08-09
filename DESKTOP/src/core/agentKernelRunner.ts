@@ -485,7 +485,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       throw new ProviderRunError(normalizePublicProviderError(lastTurn.errorMessage || lastTurn.text, [agent.activeModelConfig()?.api_key]));
     }
     const lastAssistant = lastTurn.text;
-    if (agent.mode === 'goal' && agent.goal && agent.goal.checkComplete(lastAssistant)) {
+    if (agent.mode === 'goal' && agent.goal && !agent.goal.paused && agent.goal.checkComplete(lastAssistant)) {
       agent.markGoalComplete();
       if (!tokens.some(token => token.type === 'text' && /goal complete/i.test(token.text || ''))) {
         tokens.push({ type: 'text', text: '\n[Goal Complete]' });

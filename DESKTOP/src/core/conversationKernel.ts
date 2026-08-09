@@ -485,11 +485,25 @@ export class ConversationKernel {
     return runner.mode;
   }
 
-  toggleGoalPause(target: ConversationTargetInput): boolean {
+  async toggleGoalPause(target: ConversationTargetInput): Promise<boolean> {
     const normalized = this.normalizeTarget(target);
-    const runtime = this.findRuntime(normalized);
-    const runner = runtime?.runner || this.createRunner(normalized);
-    return runner.toggleGoalPause();
+    let runtime = this.findRuntime(normalized);
+    if (!runtime) {
+      const runner = this.createRunner(normalized);
+      runtime = this.runtime(normalized, {
+        mode: runner.mode,
+        model: runner.model,
+        intelligence: runner.intelligence,
+        inputMode: runner.inputMode,
+        engine: runner.engine,
+      }, runner);
+    }
+    const wasPaused = runtime.runner.isGoalPaused();
+    const hadGoal = !!runtime.runner.goal;
+    const paused = runtime.runner.toggleGoalPause();
+    if (hadGoal && wasPaused && !paused) this.startGoalDrivenBuild(runtime);
+    this.mirrorHostIfTargetActive(runtime);
+    return paused;
   }
 
   clearGoal(target: ConversationTargetInput): boolean {
@@ -557,6 +571,7 @@ export class ConversationKernel {
 
     runtime.stopRequestedRunId = runtime.runId;
     runtime.forceStopArmedRunId = runtime.runId;
+    runtime.runner.pauseGoalForUserInterrupt();
     this.retainUnconsumedKernelMessages(runtime);
     this.deferOutstandingGuides(runtime);
     const checkpointed = this.checkpoint(runtime.target).checkpointed;
@@ -769,7 +784,7 @@ export class ConversationKernel {
     return Math.max(1000, Math.floor(raw));
   }
 
-  private runtime(target: NormalizedConversationTarget, options: ConversationKernelRunOptions): ConversationRuntime {
+  private runtime(target: NormalizedConversationTarget, options: ConversationKernelRunOptions, runnerOverride?: Agent): ConversationRuntime {
     const existing = this.findRuntime(target);
     if (existing) {
       this.ensureRuntimeMetadata(existing, target);
@@ -777,7 +792,7 @@ export class ConversationKernel {
       return existing;
     }
     const id = target.conversationId;
-    const runner = this.createRunner(target);
+    const runner = runnerOverride || this.createRunner(target);
     runner.setAutomationManager(this.automation);
     this.applyOptions(runner, options);
     const runtime: ConversationRuntime = {
@@ -884,8 +899,23 @@ export class ConversationKernel {
     }, 250);
   }
 
+  private startGoalDrivenBuild(runtime: ConversationRuntime): void {
+    if (runtime.goalContinuationTimer) {
+      clearTimeout(runtime.goalContinuationTimer);
+      runtime.goalContinuationTimer = undefined;
+    }
+    const message = runtime.runner.claimGoalContinuationMessage({ force: true });
+    if (!message) return;
+    void this.prompt(message, runtime.target, { ...runtime.options, mode: 'goal' }, 'followUp').catch(() => {
+      // Agent.process records and publishes the Build error.
+    });
+  }
+
   private createRunner(target: NormalizedConversationTarget): Agent {
-    const runner = this.lifecycle.createRunner?.(target) || new Agent(this.root, { actorId: this.host.runtimeActorId });
+    const runner = this.lifecycle.createRunner?.(target) || new Agent(this.root, {
+      actorId: this.host.runtimeActorId,
+      runtimeLifecycleRole: this.host.runtimeLifecycleRole,
+    });
     if (target.workspace) {
       runner.workspace.current = {
         id: target.workspace.id,

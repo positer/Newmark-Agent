@@ -943,6 +943,7 @@ async function verifyWslPerTargetPool(): Promise<void> {
   alphaClient.stopResults.push(
     { action: 'graceful', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'wsl', distro: 'Fake' },
     { action: 'graceful', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'wsl', distro: 'Fake' },
+    { action: 'force', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'wsl', distro: 'Fake' },
   );
   assert.equal((await pool.requestStop(alpha, 'run-a')).action, 'graceful');
   assert.equal(alphaClient.restarts, 0);
@@ -1403,6 +1404,7 @@ async function verifyElectronPerTargetPool(): Promise<void> {
   alphaClient.stopResults.push(
     { action: 'graceful', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'utility', pid: 123 },
     { action: 'graceful', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'utility', pid: 123 },
+    { action: 'force', runtimeKey: conversationRuntimeKey(alpha), runId: 'run-a', generation: 1, checkpointed: true, backend: 'utility', pid: 123 },
   );
   assert.equal((await pool.requestStop(alpha, 'run-a')).action, 'graceful');
   for (const listener of alphaClient.listeners) listener({

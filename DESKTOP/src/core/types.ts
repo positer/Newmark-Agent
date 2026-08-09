@@ -123,6 +123,9 @@ export interface ConversationWorkRun {
   runId: string;
   target: ConversationTarget;
   runtimeKey: string;
+  runtimeOwnerId?: string;
+  runtimeOwnerPid?: number;
+  runtimeLifecycleRole?: 'main' | 'utility' | 'wsl';
   status: ConversationWorkRunStatus;
   startedAt: string;
   endedAt?: string;

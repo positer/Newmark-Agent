@@ -12,6 +12,7 @@ import {
   settleUtilityHostToolResult,
 } from './core/utilityHostToolBridge';
 import { shutdownTerminalTakeoverSessions } from './tools/terminalTakeover';
+import { markRuntimeLifecycleClean } from './core/runtimeLifecycle';
 
 const root = String(process.env.NEWMARK_RUNTIME_ROOT || '');
 const expectedRuntimeKey = String(process.env.NEWMARK_RUNTIME_KEY || '');
@@ -20,7 +21,7 @@ if (!expectedRuntimeKey) throw new Error('NEWMARK_RUNTIME_KEY is required');
 const parentPort = process.parentPort;
 if (!parentPort) throw new Error('Electron utility parentPort is unavailable');
 
-const host = new Agent(root);
+const host = new Agent(root, { runtimeLifecycleRole: 'utility' });
 host.tools.setHostProfile({
   kind: 'electron-utility',
   platform: process.platform,
@@ -64,6 +65,7 @@ async function handle(request: UtilityAgentRequest): Promise<unknown> {
   if (request.method === 'ping') return { backend: 'utility', pid: process.pid, runtimeKey: expectedRuntimeKey };
   if (request.method === 'shutdown') {
     shutdownTerminalTakeoverSessions('utility-runtime-shutdown');
+    if (!host.goal || host.goal.paused) markRuntimeLifecycleClean(root, 'utility');
     setTimeout(() => process.exit(0), 10);
     return true;
   }

@@ -663,11 +663,11 @@ async function stopPackagedRun(child, cdp) {
       return { first, second, stillStopping };
     })()`, 45_000);
     // Cancellable tools may finish cooperative shutdown between the two IPC
-    // calls. Treat that terminal race as success here; the focused runtime
-    // suite uses a deliberately hung worker to require the hard-restart path.
-    const forceRestarted = stopResult.second?.action === 'force' && stopResult.second?.restarted === true;
+    // calls. A forced utility stop intentionally leaves the target runtime
+    // down until the next prompt instead of eagerly starting a replacement.
+    const forceStopped = stopResult.second?.action === 'force' && stopResult.second?.restarted === false;
     const racedToTerminal = ['already_settled', 'not_running', 'stale'].includes(String(stopResult.second?.action || ''));
-    if (stopResult.first?.action !== 'graceful' || stopResult.first?.checkpointed !== true || (!forceRestarted && !racedToTerminal)) {
+    if (stopResult.first?.action !== 'graceful' || stopResult.first?.checkpointed !== true || (!forceStopped && !racedToTerminal)) {
       fail(`Two-stage target stop failed: ${JSON.stringify(stopResult)}`);
     }
     log(`two-stage stop settled ${JSON.stringify(stopResult)}`);

@@ -7,7 +7,8 @@ const { spawn, spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const appRoot = path.resolve(__dirname, '..');
-const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
+const exePath = path.resolve(process.env.NEWMARK_TEST_EXE
+  || path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe'));
 const keepRoot = process.env.NEWMARK_KEEP_REAL_PROVIDER_STRESS === '1';
 
 const cliRounds = numberEnv('NEWMARK_REAL_STRESS_CLI_ROUNDS', 8);
@@ -17,6 +18,10 @@ const timeoutMs = numberEnv('NEWMARK_REAL_STRESS_TIMEOUT_MS', 180000);
 const port = numberEnv('NEWMARK_REAL_STRESS_PORT', 49373);
 const contextMaxTokens = numberEnv('NEWMARK_REAL_STRESS_CONTEXT_MAX_TOKENS', 128000);
 const longContextPayloadRepeats = numberEnv('NEWMARK_REAL_STRESS_LONG_CONTEXT_REPEATS', 600);
+const selectedScenarios = new Set(String(process.env.NEWMARK_REAL_STRESS_SCENARIOS || '')
+  .split(',')
+  .map(value => value.trim())
+  .filter(Boolean));
 
 const results = [];
 let activeSecretValues = [];
@@ -477,16 +482,23 @@ async function runGoalStress(cdp) {
   await evaluate(cdp, `window.api.updateGoal(${jsString(objective)})`, 30000);
   await evaluate(cdp, `window.api.setMode ? window.api.setMode('goal') : Promise.resolve()`, 30000);
   const result = await evaluate(cdp, `window.api.sendMessage(${jsString(`Start real Goal stress. Target final marker: ${marker}`)})`, timeoutMs * Math.max(1, goalRounds + 2));
-  const resultText = JSON.stringify({
+  const initialResultText = JSON.stringify({
     tokens: result && result.tokens,
     chatMessages: (result && result.chatMessages || []).filter(m => m && m.role === 'assistant'),
   });
-  if (!resultText.includes(marker)) throw new Error(`Goal stress missing completion marker: ${redact(resultText).slice(0, 1200)}`);
-  if (/max[- ]?depth/i.test(resultText)) throw new Error(`Goal stress exposed max-depth warning: ${redact(resultText).slice(0, 1200)}`);
-  await waitFor(cdp, stateIdleExpression(), 60000, 'idle after Goal stress');
+  if (/max[- ]?depth/i.test(initialResultText)) throw new Error(`Goal stress exposed max-depth warning: ${redact(initialResultText).slice(0, 1200)}`);
+  const finalState = await waitFor(cdp, `window.api.getState().then(s => {
+    const assistants = (s && Array.isArray(s.chatMessages) ? s.chatMessages : []).filter(m => m && m.role === 'assistant');
+    const text = JSON.stringify(assistants);
+    return s && s.status === 'idle' && text.includes(${jsString(marker)}) ? s : null;
+  })`, timeoutMs * Math.max(1, goalRounds + 2), 'Goal continuation completion marker');
+  const finalText = JSON.stringify((finalState && finalState.chatMessages || []).filter(m => m && m.role === 'assistant'));
+  if (/max[- ]?depth/i.test(finalText)) throw new Error(`Goal stress exposed max-depth warning: ${redact(finalText).slice(0, 1200)}`);
+  const assistantCalls = (finalState && finalState.chatMessages || []).filter(m => m && m.role === 'assistant').length;
+  if (assistantCalls < goalRounds) throw new Error(`Goal stress stopped early: assistantCalls=${assistantCalls}; expected>=${goalRounds}`);
   await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
   await waitFor(cdp, stateIdleExpression(), 60000, 'build mode restored after Goal stress');
-  return `goalRounds=${goalRounds}`;
+  return `goalRounds=${goalRounds}; assistantCalls=${assistantCalls}`;
 }
 
 async function runQueueStress(cdp) {
@@ -620,30 +632,40 @@ async function runLongContextStress(cdp) {
   return `longPayloadChars=${payload.length}; compressionState=${redact(JSON.stringify(compression || {})).slice(0, 500)}`;
 }
 
+function shouldRunScenario(name) {
+  return selectedScenarios.size === 0 || selectedScenarios.has(name);
+}
+
 function stopReleaseProcesses() {
+  const command = `$target = ${psQuote(exePath)}; Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $target } | Stop-Process -Force; Write-Output 'STOP_REAL_STRESS_PROCESSES_OK'`;
   spawnSync('powershell.exe', [
     '-NoProfile',
     '-ExecutionPolicy',
     'Bypass',
     '-Command',
-    "Get-Process | Where-Object { $_.Path -like '*Newmark Agent*release*' } | Stop-Process -Force; Write-Output 'STOP_RELEASE_PROCESSES_OK'",
+    command,
   ], { windowsHide: true, encoding: 'utf8' });
 }
 
 function releaseProcessCount() {
+  const command = `$target = ${psQuote(exePath)}; (@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $target })).Count`;
   const running = spawnSync('powershell.exe', [
     '-NoProfile',
     '-ExecutionPolicy',
     'Bypass',
     '-Command',
-    "(@(Get-Process | Where-Object { $_.Path -like '*Newmark Agent*release*' })).Count",
+    command,
   ], { encoding: 'utf8', windowsHide: true });
   return Number(String(running.stdout || '').trim() || '0');
 }
 
 function writeReport(provider, root, skippedReason = '') {
   const date = new Date().toISOString().slice(0, 10);
-  const reportPath = path.join(repoRoot, 'archive', `${date}-real-provider-stress-debug.md`);
+  const reportTag = String(process.env.NEWMARK_REAL_STRESS_REPORT_TAG || 'debug')
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .slice(0, 80) || 'debug';
+  const reportPath = path.join(repoRoot, 'archive', `${date}-real-provider-stress-${reportTag}.md`);
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   const failCount = results.filter(r => r.status === 'fail').length;
   const passCount = results.filter(r => r.status === 'pass').length;
@@ -674,6 +696,7 @@ Implemented and/or ran the opt-in real-provider stress harness for the packaged 
 ## Stress Parameters
 
 - ${providerLine}
+- scenarios=${selectedScenarios.size ? [...selectedScenarios].join(',') : 'all'}
 - cliRounds=${cliRounds}
 - uiRounds=${uiRounds}
 - goalRounds=${goalRounds}
@@ -729,16 +752,16 @@ Failures are classified as provider-limit, app-timeout-or-provider-timeout, conv
   let cdp;
   try {
     writeConfig(root, provider);
-    await recordScenario('cli-rounds', () => runCliStress(root, provider));
+    if (shouldRunScenario('cli-rounds')) await recordScenario('cli-rounds', () => runCliStress(root, provider));
 
     const launched = await launchUi(root);
     child = launched.child;
     cdp = launched.cdp;
-    await recordScenario('ui-rounds', () => runUiStress(cdp));
-    await recordScenario('goal-continuation', () => runGoalStress(cdp));
-    await recordScenario('queue-drain', () => runQueueStress(cdp));
-    await recordScenario('conversation-isolation', () => runConversationIsolationStress(cdp));
-    await recordScenario('long-context', () => runLongContextStress(cdp));
+    if (shouldRunScenario('ui-rounds')) await recordScenario('ui-rounds', () => runUiStress(cdp));
+    if (shouldRunScenario('goal-continuation')) await recordScenario('goal-continuation', () => runGoalStress(cdp));
+    if (shouldRunScenario('queue-drain')) await recordScenario('queue-drain', () => runQueueStress(cdp));
+    if (shouldRunScenario('conversation-isolation')) await recordScenario('conversation-isolation', () => runConversationIsolationStress(cdp));
+    if (shouldRunScenario('long-context')) await recordScenario('long-context', () => runLongContextStress(cdp));
   } finally {
     try { if (cdp?.ws) cdp.ws.close(); } catch {}
     try { if (child && !child.killed) child.kill(); } catch {}

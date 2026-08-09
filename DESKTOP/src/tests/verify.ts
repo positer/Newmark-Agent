@@ -1341,7 +1341,7 @@ async function main() {
   assert(releaseRealProviderStress.includes('conversation-isolation') && releaseRealProviderStress.includes('conversation histories isolated') && releaseRealProviderStress.includes('state leaked B marker') && releaseRealProviderStress.includes('state leaked A marker'), 'release real provider stress: verifies conversation histories do not leak across real-provider conversations');
   assert(releaseRealProviderStress.includes('tokens: sendA && sendA.tokens') && releaseRealProviderStress.includes('chatMessages: sendB && sendB.chatMessages'), 'release real provider stress: conversation response leak checks ignore cross-conversation title lists');
   assert(releaseRealProviderStress.includes('assistantMarkerExpression') && !releaseRealProviderStress.includes("document.body.innerText || '').includes"), 'release real provider stress: UI marker checks use assistant backend messages instead of echoed prompts');
-  assert(releaseRealProviderStress.includes('release-process-cleanup') && releaseRealProviderStress.includes('renderer state leaked API key') && releaseRealProviderStress.includes('未执行真实重压：缺少凭据') && releaseRealProviderStress.includes('real-provider-stress-debug.md'), 'release real provider stress: records cleanup, secret guards, skip path, and archive report');
+  assert(releaseRealProviderStress.includes('release-process-cleanup') && releaseRealProviderStress.includes('renderer state leaked API key') && releaseRealProviderStress.includes('未执行真实重压：缺少凭据') && releaseRealProviderStress.includes('real-provider-stress-${reportTag}.md') && releaseRealProviderStress.includes('NEWMARK_REAL_STRESS_REPORT_TAG'), 'release real provider stress: records cleanup, secret guards, skip path, and independently tagged archive reports');
   assert(!releaseRealProviderStress.includes('baseUrlHost'), 'release real provider stress: report omits provider host/private URL');
   assert(releaseRealProviderStress.includes('clearTimeout(callbacks.timer)'), 'release real provider stress: clears CDP timeout handles after responses');
   assert(cliCommandsTs.includes("args.includes('--preview-only')") && cliCommandsTs.includes('preview: true') && cliCommandsTs.includes('has_api_key') && cliCommandsTs.includes('redactUrlSecret'), 'cli commands: fuzzy-inject preview-only redacts and avoids provider calls');
@@ -3355,8 +3355,11 @@ async function main() {
     && !agent.chatMessages.some(message => message.role === 'assistant' && message.runId === interruptedSummaryRun.runId),
   'Build completion: interrupted runs do not synthesize a final result summary');
   const crashedRun = agent.beginConversationWorkRun('crashed-reload-run', { workspaceId: 'summary-workspace', conversationId: 'default' }, '2026-07-19T10:00:00.000Z');
+  // Exercise the legacy/stale recovery branch without owner-PID evidence;
+  // current WorkRuns with a live owner must survive frontend tracking expiry.
+  const stalePersistedRun = { ...crashedRun, runtimeOwnerId: undefined, runtimeOwnerPid: undefined };
   // @ts-expect-error exercising the persisted-state recovery boundary
-  const recoveredRuns = agent.recoverPersistedWorkRuns([crashedRun], '2026-07-19T10:05:00.000Z');
+  const recoveredRuns = agent.recoverPersistedWorkRuns([stalePersistedRun], '2026-07-19T10:05:00.000Z');
   assert(recoveredRuns.changed && recoveredRuns.runs[0]?.status === 'interrupted'
     && recoveredRuns.runs[0]?.endedAt === '2026-07-19T10:05:00.000Z',
   'Build recovery: a persisted running run becomes interrupted at the last persisted update so its timer cannot grow after restart');
@@ -4626,15 +4629,31 @@ async function main() {
   assert(cacheStatusAfter.ok === true && cacheStatusAfter.cache?.entries === 0, 'context_history_manage restore: cache is emptied after restore');
   assert(contextManagerAgent.chatMessages.length === 6 && JSON.stringify(contextManagerAgent.chatMessages) === displaySnapshotBefore, 'context management: displayed conversation history stays byte-identical through status/restore/search/protection');
   (contextManagerAgent as any).config.set('context', 'compression_cache_max', 2);
-  (contextManagerAgent as any).pushCompressionCacheEntry('bounded-1', [{ role: 'user', content: 'bounded-message-1' }], 'test', false);
+  const boundedLongMessage = `bounded-message-1 ${'x'.repeat(2500)}`;
+  (contextManagerAgent as any).pushCompressionCacheEntry('bounded-1', [{ role: 'user', content: boundedLongMessage }], 'test', false);
   (contextManagerAgent as any).pushCompressionCacheEntry('bounded-2', [{ role: 'user', content: 'bounded-message-2' }], 'test', false);
   const boundedFirst = (contextManagerAgent as any).compressionCache.map((entry: Record<string, any>) => entry.summary);
   (contextManagerAgent as any).pushCompressionCacheEntry('bounded-3', [{ role: 'user', content: 'bounded-message-3' }], 'test', false);
   const boundedAfter = (contextManagerAgent as any).compressionCache.map((entry: Record<string, any>) => entry.summary);
   assert((contextManagerAgent as any).compressionCache.length === 2 && boundedAfter.join(',') === 'bounded-2,bounded-3' && !boundedAfter.includes('bounded-1') && boundedFirst.join(',') === 'bounded-1,bounded-2', 'compression cache: drops the oldest entry when exceeding compression_cache_max');
+  const coldSearch = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'search', query: 'bounded-message-1' })).output) as Record<string, any>;
+  const coldId = String(coldSearch.matches?.[0]?.cacheId || '');
+  assert(coldSearch.ok === true && coldSearch.archiveEntries === 1 && coldSearch.matches?.[0]?.source === 'cold-archive' && coldId.startsWith('ctx-cache-'), 'compression cold archive: evicted hot-cache entries remain searchable without entering active context');
+  const historyBeforeColdRead = JSON.stringify(contextManagerAgent.history);
+  const coldRead = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'read', restore_id: coldId, limit: 5, max_chars: 1000 })).output) as Record<string, any>;
+  const coldReadRemainder = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'read', restore_id: coldId, offset: coldRead.nextOffset, content_offset: coldRead.nextContentOffset, limit: 5, max_chars: 4000 })).output) as Record<string, any>;
+  assert(coldRead.ok === true && coldRead.source === 'cold-archive' && coldRead.returned === 1 && coldRead.messages?.[0]?.truncated === true && coldRead.nextOffset === 0 && coldRead.nextContentOffset === 1000 && `${coldRead.messages?.[0]?.content || ''}${coldReadRemainder.messages?.[0]?.content || ''}` === boundedLongMessage && JSON.stringify(contextManagerAgent.history) === historyBeforeColdRead, 'context_history_manage read: retrieves a character-paged cold segment without injecting it into active history');
+  const coldStatus = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'status' })).output) as Record<string, any>;
+  assert(coldStatus.archive?.enabled === true && coldStatus.archive?.entries === 1 && coldStatus.archive?.totalFoldedEntries === 1, 'context_history_manage status: reports the append-only cold archive separately from the bounded hot cache');
   const cacheReloadedAgent = new Agent(path.join(TEST_DIR, 'context-manager-agent'));
   const reloadedSummaries = (cacheReloadedAgent as any).compressionCache.map((entry: Record<string, any>) => entry.summary);
   assert((cacheReloadedAgent as any).compressionCache.length === 2 && reloadedSummaries.join(',') === 'bounded-2,bounded-3', 'compression cache: survives an Agent restart via stored conversation state');
+  const coldSearchReloaded = JSON.parse(cacheReloadedAgent.handleContextHistoryManage(JSON.stringify({ action: 'search', query: 'bounded-message-1' })).output) as Record<string, any>;
+  assert(coldSearchReloaded.matches?.[0]?.cacheId === coldId && coldSearchReloaded.matches?.[0]?.source === 'cold-archive', 'compression cold archive: append-only folded history survives an Agent restart');
+  cacheReloadedAgent.history.unshift({ role: 'system', content: '[Context History Summary]\nbounded-1' });
+  const coldRestore = JSON.parse(cacheReloadedAgent.handleContextHistoryManage(JSON.stringify({ action: 'restore', restore_id: coldId })).output) as Record<string, any>;
+  const coldStatusAfterRestore = JSON.parse(cacheReloadedAgent.handleContextHistoryManage(JSON.stringify({ action: 'status' })).output) as Record<string, any>;
+  assert(coldRestore.ok === true && coldRestore.source === 'cold-archive' && coldRestore.restoredEntries === 1 && cacheReloadedAgent.history[0]?.content === boundedLongMessage && coldStatusAfterRestore.archive?.entries === 0, 'context_history_manage restore: restores a cold segment and appends a restore tombstone without altering display history');
   (contextManagerAgent as any).config.set('context', 'compression_cache_max', 8);
 
   const compressToolAgent = new Agent(path.join(TEST_DIR, 'context-compress-tool-agent'));

@@ -14,6 +14,7 @@ import {
   terminalTakeoverState,
   writeTerminalTakeoverSession,
 } from './tools/terminalTakeover';
+import { markRuntimeLifecycleClean } from './core/runtimeLifecycle';
 
 const root = process.env.NEWMARK_WSL_ROOT || '';
 const distro = process.env.NEWMARK_WSL_DISTRO || 'WSL';
@@ -43,6 +44,7 @@ function createWslAgent(actorId?: string): Agent {
     agentOnly: true,
     workspaceRegistryMode: 'detached',
     actorId,
+    runtimeLifecycleRole: 'wsl',
   });
   configureWslToolHost(agent);
   return agent;
@@ -126,6 +128,7 @@ async function handle(request: WslAgentRequest): Promise<unknown> {
   if (request.method === 'ping') return { backend: 'wsl', distro, ...runtimeIdentity(), platform: process.platform, root };
   if (request.method === 'shutdown') {
     shutdownTerminalTakeoverSessions('wsl-host-shutdown');
+    if (!host.goal || host.goal.paused) markRuntimeLifecycleClean(root, 'wsl');
     setTimeout(() => process.exit(0), 10);
     return true;
   }

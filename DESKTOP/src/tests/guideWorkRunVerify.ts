@@ -1,11 +1,13 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { Agent as KernelAgent } from '../core/agentKernel/agent';
 import { createAssistantMessageEventStream } from '../core/agentKernel/stream-types';
 import type { AgentMessage, AssistantMessage, Model } from '../core/agentKernel/types';
 import { Agent } from '../core/agent';
 import { ConversationKernel, type AgentPromptMessage } from '../core/conversationKernel';
+import { FlowEngine } from '../core/flow';
 import { filterPublicAssistantDelta, resetPublicAssistantDeltaFilter } from '../core/agentKernelRunner';
 import type { AgentWorkEvent, ConversationTarget, GuideReceipt, StreamToken } from '../core/types';
 
@@ -447,6 +449,199 @@ class ReloadedImageGuideRunner extends Agent {
       this.notifyAgentKernelUserMessageStart(input.text, input.clientMessageId);
     }
     return [{ type: 'text', text: 'reloaded-reply' }];
+  }
+}
+
+class GoalInterruptRunner extends Agent {
+  readonly inputs: Array<string | AgentPromptMessage> = [];
+  readonly enteredFirstProcess: Promise<void>;
+  private signalEntered!: () => void;
+  private releaseFirst!: () => void;
+  private readonly firstRelease: Promise<void>;
+
+  constructor(root: string) {
+    super(root, { agentOnly: true });
+    this.enteredFirstProcess = new Promise(resolve => { this.signalEntered = resolve; });
+    this.firstRelease = new Promise(resolve => { this.releaseFirst = resolve; });
+  }
+
+  release(): void { this.releaseFirst(); }
+
+  override async process(input: string | AgentPromptMessage): Promise<StreamToken[]> {
+    this.inputs.push(input);
+    if (this.inputs.length === 1) {
+      this.signalEntered();
+      await this.firstRelease;
+    }
+    if (typeof input !== 'string' && input.goalContinuation) {
+      this.emitWorkEvent({ type: 'final_response', content: 'Goal complete.', runId: this.currentWorkRunId() });
+    }
+    return [{ type: 'text', text: `reply-${this.inputs.length}` }];
+  }
+}
+
+async function verifyBuildBlockOverviewAndGoalInterruptResume(): Promise<void> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-dev010-build-goal-'));
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(root, { recursive: true });
+  let runner: GoalInterruptRunner | undefined;
+  try {
+    const { target, workspace } = workspaceFixture(root);
+    const agent = new Agent(root, { agentOnly: true });
+    agent.workspace.current = workspace;
+    agent.setConversation('default');
+    agent.updateGoal('complete the short Build Block');
+    agent.beginConversationWorkRun('short-build-block', target, '2026-08-09T01:00:00.000Z', true);
+    agent.recordWorkRunPrimaryPrompt('short user input');
+    agent.emitWorkEvent({ type: 'final_response', content: 'Goal complete.', runId: 'short-build-block' });
+    assert.equal(agent.finishConversationWorkRun('short-build-block', 'completed', '2026-08-09T01:00:01.000Z'), true);
+    const block = agent.contextV2.buildHistory.readBlock('short-build-block');
+    const overviews = agent.contextV2.buildHistory.readEntries('short-build-block').filter(entry => entry.type === 'work_overview');
+    assert.equal(block?.status, 'completed', 'every completed Build Block persists its terminal state');
+    assert.equal(overviews.length, 1, 'a short reply still writes exactly one Build Block work overview');
+    assert.match(overviews[0].content, /short user input/);
+    assert.match(overviews[0].content, /Goal: checked=true; matched=true; completed=true/);
+    assert.equal(agent.goal, null, 'the terminal Build Block Goal check synchronizes completion');
+    agent.finishConversationWorkRun('short-build-block', 'completed', '2026-08-09T01:00:02.000Z');
+    assert.equal(agent.contextV2.buildHistory.readEntries('short-build-block').filter(entry => entry.type === 'work_overview').length, 1,
+      'repeating the same terminal declaration is idempotent');
+
+    runner = new GoalInterruptRunner(root);
+    runner.workspace.current = workspace;
+    runner.setConversation('default');
+    runner.updateGoal('finish the interrupted Goal');
+    const host = new Agent(root, { agentOnly: true });
+    host.workspace.current = workspace;
+    host.setConversation('default');
+    const conversations = new ConversationKernel(root, host, null, { createRunner: () => runner! });
+    const options = {
+      mode: 'goal' as const,
+      model: runner.model,
+      intelligence: runner.intelligence,
+      inputMode: 'next' as const,
+      engine: runner.engine,
+    };
+    const running = conversations.prompt('first Goal Build', target, options);
+    await runner.enteredFirstProcess;
+    const runningState = conversations.runtimeState(target);
+    assert.ok(runningState?.runId);
+    const stop = conversations.requestStop(target, runningState!.runId);
+    assert.equal(stop.action, 'graceful', 'the first user Stop remains cooperative');
+    assert.equal(runner.goal?.paused, true, 'a user Stop immediately pauses the active Goal');
+    runner.release();
+    const stopped = await running;
+    assert.equal(stopped.goal?.paused, true, 'the paused Goal survives cooperative settlement');
+
+    await conversations.prompt('ordinary input while paused', target, options);
+    assert.equal(runner.goal?.paused, true, 'ordinary user input cannot resume a paused Goal');
+    const pausedInputCount = runner.inputs.length;
+    assert.equal(await conversations.toggleGoalPause(target), false, 'manual Goal resume returns the running state');
+    for (let i = 0; i < 50 && (runner.inputs.length <= pausedInputCount || runner.goal); i += 1) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(runner.inputs.length, pausedInputCount + 1, 'manual Goal resume immediately starts one Goal-driven Build');
+    const resumedInput = runner.inputs.at(-1);
+    if (!resumedInput) throw new Error('Goal resume did not provide a continuation input');
+    assert.equal(typeof resumedInput === 'string' ? false : resumedInput.hiddenUserInput, true);
+    assert.equal(typeof resumedInput === 'string' ? false : resumedInput.goalContinuation, true);
+    assert.equal(runner.goal, null, 'the resumed Goal can complete through the Goal-driven Build');
+  } finally {
+    runner?.release();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function writeUnexpectedExitMarker(root: string): void {
+  const dir = path.join(root, '.newmark-runtime');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'lifecycle-main.json'), JSON.stringify({
+    role: 'main',
+    ownerId: 'previous-process-owner',
+    pid: 1,
+    startedAt: '2026-08-09T00:00:00.000Z',
+    active: true,
+  }), 'utf8');
+}
+
+async function verifyColdStartRecoveryDistinguishesTrackingLossFromUnexpectedExit(): Promise<void> {
+  const liveRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-dev010-live-cold-start-'));
+  fs.rmSync(liveRoot, { recursive: true, force: true });
+  fs.mkdirSync(liveRoot, { recursive: true });
+  try {
+    const { target, workspace } = workspaceFixture(liveRoot);
+    const backend = new Agent(liveRoot, { agentOnly: true, runtimeLifecycleRole: 'utility' });
+    backend.workspace.current = workspace;
+    backend.setConversation('default');
+    backend.updateGoal('backend remains active during frontend tracking loss');
+    backend.beginConversationWorkRun('backend-live-run', target, new Date().toISOString(), true);
+    backend.recordWorkRunPrimaryPrompt('backend still running');
+    backend.saveWorkspaceConversationState(true);
+    const statePath = path.join(workspace!.path, 'conversations', 'state.json');
+    const persisted = JSON.parse(fs.readFileSync(statePath, 'utf8')) as { conversations?: Record<string, { updatedAt?: string }> };
+    const stateKey = Object.keys(persisted.conversations || {})[0];
+    if (!stateKey || !persisted.conversations) throw new Error('live cold-start fixture did not persist a conversation');
+    persisted.conversations[stateKey].updatedAt = new Date(Date.now() - 300_000).toISOString();
+    fs.writeFileSync(statePath, JSON.stringify(persisted, null, 2), 'utf8');
+    const stateBeforeFrontendColdLoad = fs.readFileSync(statePath, 'utf8');
+
+    const frontendColdRunner = new Agent(liveRoot, { agentOnly: true, runtimeLifecycleRole: 'utility' });
+    frontendColdRunner.workspace.current = workspace;
+    frontendColdRunner.setConversationFromStorage('default');
+    assert.equal(frontendColdRunner.workRuns.find(run => run.runId === 'backend-live-run')?.status, 'running',
+      'frontend tracking timeout cold-start preserves the backend running WorkRun');
+    assert.equal(frontendColdRunner.goal?.paused, false,
+      'frontend tracking timeout cold-start cannot pause or otherwise mutate the backend Goal');
+    assert.equal(fs.readFileSync(statePath, 'utf8'), stateBeforeFrontendColdLoad,
+      'frontend tracking timeout cold-start does not rewrite backend persisted state');
+  } finally {
+    fs.rmSync(liveRoot, { recursive: true, force: true });
+  }
+
+  const crashRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-dev010-crash-cold-start-'));
+  fs.rmSync(crashRoot, { recursive: true, force: true });
+  fs.mkdirSync(crashRoot, { recursive: true });
+  try {
+    const { target, workspace } = workspaceFixture(crashRoot);
+    const backend = new Agent(crashRoot, { agentOnly: true, runtimeLifecycleRole: 'utility' });
+    backend.workspace.current = workspace;
+    backend.setConversation('default');
+    backend.updateGoal('pause after an unexpected process exit');
+    backend.beginConversationWorkRun('crashed-goal-run', target, '2026-08-09T00:10:00.000Z', true);
+    backend.recordWorkRunPrimaryPrompt('crash before terminal response');
+    backend.saveWorkspaceConversationState(true);
+    writeUnexpectedExitMarker(crashRoot);
+
+    const restarted = new Agent(crashRoot, { agentOnly: true, runtimeLifecycleRole: 'main' });
+    restarted.workspace.current = workspace;
+    restarted.setConversationFromStorage('default');
+    assert.equal(restarted.goal?.paused, true, 'unexpected-exit cold-start actively pauses an unfinished Goal');
+    assert.equal(restarted.workRuns.find(run => run.runId === 'crashed-goal-run')?.status, 'interrupted',
+      'unexpected-exit cold-start closes the orphaned running WorkRun as interrupted');
+
+    const flowDir = path.join(crashRoot, 'Flow');
+    fs.mkdirSync(flowDir, { recursive: true });
+    FlowEngine.save(flowDir, {
+      name: 'RecoveryFlow',
+      components: [{ type: 'dialog', id: 1, mode: 'build', prompt: 'recover flow' }],
+    });
+    const flowBackend = new Agent(crashRoot, { agentOnly: true, runtimeLifecycleRole: 'utility' });
+    flowBackend.workspace.current = workspace;
+    flowBackend.setConversation('flow-conversation');
+    flowBackend.setConversationFlow('RecoveryFlow');
+    flowBackend.beginConversationWorkRun('crashed-flow-run', {
+      ...target,
+      conversationId: 'flow-conversation',
+    }, '2026-08-09T00:11:00.000Z', true);
+    flowBackend.saveWorkspaceConversationState(true);
+    writeUnexpectedExitMarker(crashRoot);
+    const restartedFlow = new Agent(crashRoot, { agentOnly: true, runtimeLifecycleRole: 'main', conversationId: 'flow-conversation' });
+    restartedFlow.workspace.current = workspace;
+    restartedFlow.setConversationFromStorage('flow-conversation');
+    assert.equal(restartedFlow.mode, 'flow', 'unexpected-exit recovery retains the Flow takeover context');
+    assert.equal(restartedFlow.getStoredFlowSuspension('flow-conversation')?.reason, 'interrupted',
+      'unexpected-exit cold-start persists the Flow as explicitly paused for resume');
+  } finally {
+    fs.rmSync(crashRoot, { recursive: true, force: true });
   }
 }
 
@@ -895,6 +1090,8 @@ async function main(): Promise<void> {
   await verifyTaskBoundaryGuideIsDeferredAndContinued();
   await verifyGuideInPendingEmptyFinalizeWindowIsApplied();
   await verifyGuideFromCompletionEventAutoContinues();
+  await verifyBuildBlockOverviewAndGoalInterruptResume();
+  await verifyColdStartRecoveryDistinguishesTrackingLossFromUnexpectedExit();
   await verifyImageOnlyDeferredGuideSurvivesCheckpointReloadExactlyOnce();
   verifyExactlyOnceAndV3Persistence();
   await verifyCompletedRunCannotBeOverwrittenByDeferredStartSnapshot();

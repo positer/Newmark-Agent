@@ -50,7 +50,7 @@ jobs:
           set -euo pipefail
           binary="../release/linux-unpacked/Newmark Agent"
           test -x "$binary"
-          "$binary" --help > /tmp/newmark-linux-help.txt
+          "$binary" --no-sandbox --help > /tmp/newmark-linux-help.txt
           grep -q -- '--root' /tmp/newmark-linux-help.txt
           grep -q -- 'install-update' /tmp/newmark-linux-help.txt
 

@@ -121,6 +121,13 @@ function guideRows(document: Document, clientMessageId: string): Element[] {
 }
 
 function main(): void {
+  const source = uiScriptSource();
+  assert.match(source, /function recoverableGuideRejection\(receipt\)/,
+    'a stale renderer runtime has an explicit recoverable Guide rejection classifier');
+  assert.match(source, /Guide runId does not match the active run/,
+    'run-id races are recognized as safe-to-replay Guide failures');
+  assert.match(source, /recoveredAsBuild: true/,
+    'a rejected stale Guide is replayed as the same payload in a fresh Build');
   const fixture = createFixture();
   try {
     const acceptedId = 'guide-accepted';

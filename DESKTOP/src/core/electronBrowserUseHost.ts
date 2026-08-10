@@ -1,6 +1,6 @@
 import type { Event as ElectronEvent, KeyboardInputEvent, Session, WebContents } from 'electron';
 import { BrowserUseEffects, BrowserUseScope } from './browserUse';
-import { BrowserUseHostPage } from './browserUsePageAdapter';
+import { browserUseClickScript, BrowserUseHostPage } from './browserUsePageAdapter';
 
 interface PageState {
   contents: WebContents;
@@ -123,6 +123,14 @@ export class ElectronBrowserUseHost {
         contents.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, ...point });
         await abortableDelay(10, signal);
       },
+      clickElement: contents.getType() === 'webview' ? async (token: string, signal?: AbortSignal) => {
+        throwIfAborted(signal);
+        const result = await raceWithAbort(
+          contents.executeJavaScriptInIsolatedWorld(BROWSER_USE_WORLD_ID, [{ code: browserUseClickScript(token) }], true) as Promise<{ clicked?: boolean; error?: string }>,
+          signal,
+        );
+        if (!result?.clicked) throw new Error(result?.error || 'Unable to click the observed Browser-Use element.');
+      } : undefined,
       replaceFocusedText: async (text: string, signal?: AbortSignal) => {
         throwIfAborted(signal);
         contents.focus();

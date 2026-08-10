@@ -8236,9 +8236,25 @@ class GoalStateImpl implements GoalState {
   }
 
   checkComplete(response: string): boolean {
-    const lower = response.toLowerCase();
-    return lower.includes('goal complete') || lower.includes('objective achieved')
-      || lower.includes('task finished') || lower.includes('all done')
-      || lower.includes('goal accomplished');
+    const lines = String(response || '').replace(/\r\n?/g, '\n').split('\n');
+    const completionMarkers = '(?:goal\\s+complete|objective\\s+achieved|task\\s+finished|all\\s+done|goal\\s+accomplished)';
+    const explicitLinePatterns = [
+      new RegExp(`^\\s*(?:[*#_~\\-]+\\s*)*(?:\\[\\s*)?${completionMarkers}(?:\\s*\\])?(?=\\s|[!.,:;]|$)`, 'i'),
+      /^\s*(?:[*#_~\-]+\s*)*(?:i|we)\s+(?:have\s+)?(?:now\s+)?(?:fully\s+)?(?:completed|finished|achieved|accomplished)\s+(?:the\s+)?(?:goal|objective|task)\b/i,
+      /^\s*(?:[*#_~\-]+\s*)*(?:the\s+)?(?:goal|objective|task)\s+(?:is|was)\s+(?:now\s+)?(?:complete|achieved|finished|accomplished)\b/i,
+    ];
+    const completionContext = new RegExp(completionMarkers, 'i');
+    const deferredBefore = new RegExp(`\\b(?:must|will|should|would|can|could)\\s+(?:still\\s+)?(?:contain(?:s|ed)?|include(?:s|d)?|say|state|use|write|appear)\\b.{0,180}${completionMarkers}`, 'i');
+    const negatedBefore = new RegExp(`\\b(?:not|isn't|is not|never|don't|do not|won't|will not)\\b.{0,180}${completionMarkers}`, 'i');
+    const pendingBefore = new RegExp(`\\b(?:one\\s+step\\s+remains|still\\s+required|one\\s+more\\s+(?:step|call|turn)|not\\s+(?:the\\s+)?final)\\b.{0,180}${completionMarkers}`, 'i');
+    const deferredAfter = new RegExp(`${completionMarkers}.{0,180}\\b(?:not\\s+(?:the\\s+)?final|not\\s+yet|one\\s+more\\s+model\\s+call|next\\s+(?:call|step)|not\\s+done)\\b`, 'i');
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (!explicitLinePatterns.some(pattern => pattern.test(line))) continue;
+      const context = lines.slice(Math.max(0, index - 2), Math.min(lines.length, index + 3)).join(' ');
+      if (completionContext.test(context) && (deferredBefore.test(context) || negatedBefore.test(context) || pendingBefore.test(context) || deferredAfter.test(context))) continue;
+      return true;
+    }
+    return false;
   }
 }

@@ -5069,6 +5069,7 @@ html.newmark-memory-overview-viewer body {
             <button class="shell-btn browser-action-btn" onclick="window.browserReload()" title="Reload"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#refresh-cw"></use></svg><span class="icon-only-label">Reload</span></button>
             <input class="browser-url-input" id="browser-url" placeholder="Enter URL..." onkeydown="if(event.key==='Enter')window.navigateBrowser(this.value)">
             <button class="shell-btn" onclick="window.navigateBrowser(document.getElementById('browser-url').value)" title="Go"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#send"></use></svg><span class="icon-only-label">Go</span></button>
+            <button class="shell-btn" id="computer-use-toggle" onclick="window.toggleComputerUse()" title="ComputerUse: enabled for this conversation" aria-pressed="true">CU</button>
           </div>
           <div class="browser-frame" id="browser-frame">
             <div class="browser-guest-placeholder" id="browser-guest-placeholder">Browser loads on first use</div>
@@ -5289,6 +5290,7 @@ var state = {
   terminalInterruptTimeoutMs: 0,
   nativeTools: [],
   nativeToolEnabled: {},
+  computerUseByTarget: {},
   sshConnections: [],
   _layoutSaveTimer: null,
   _sendInFlight: false
@@ -9202,17 +9204,22 @@ function renderConversationWorkRuns(runs, target) {
   return normalized;
 }
 
-var pendingLargeWorkRunRenders = {};
-var scheduledLargeWorkRunRenders = {};
-function scheduleLargeConversationWorkRunRender(run) {
+// Work events can arrive much faster than the browser can paint them (text
+// deltas are especially noisy). Keep the authoritative run in memory for
+// every event, but coalesce its DOM replacement to one animation frame. This
+// is important for long real-model runs: replacing the whole work block for
+// every delta can starve Chromium's renderer/CDP event loop.
+var pendingConversationWorkRunRenders = {};
+var scheduledConversationWorkRunRenders = {};
+function scheduleConversationWorkRunRender(run) {
   var key = runtimeKeyFor(run.target && run.target.workspaceId, run.target && run.target.conversationId) + '::' + String(run.runId || '');
-  pendingLargeWorkRunRenders[key] = run;
-  if (scheduledLargeWorkRunRenders[key]) return;
-  scheduledLargeWorkRunRenders[key] = true;
+  pendingConversationWorkRunRenders[key] = run;
+  if (scheduledConversationWorkRunRenders[key]) return;
+  scheduledConversationWorkRunRenders[key] = true;
   requestAnimationFrame(function() {
-    var latest = pendingLargeWorkRunRenders[key];
-    delete pendingLargeWorkRunRenders[key];
-    delete scheduledLargeWorkRunRenders[key];
+    var latest = pendingConversationWorkRunRenders[key];
+    delete pendingConversationWorkRunRenders[key];
+    delete scheduledConversationWorkRunRenders[key];
     if (latest && isActiveConversationTarget(latest.target)) renderConversationWorkRun(latest);
   });
 }
@@ -9248,7 +9255,9 @@ function applyAgentWorkEventToRun(event) {
         var priorGuideEvent = run.events[guideEventIndex];
         if (guideWorkEventKey(priorGuideEvent) === incomingGuideKey) {
           run.events[guideEventIndex] = mergeGuideWorkEvent(priorGuideEvent, event);
-          updateConversationWorkRunElement(run);
+          if (isActiveConversationTarget(target) && (!branchIds.viewed || !eventBranchId || branchIds.viewed === eventBranchId)) {
+            scheduleConversationWorkRunRender(run);
+          }
           return run;
         }
       }
@@ -9275,8 +9284,8 @@ function applyAgentWorkEventToRun(event) {
   if (isActiveConversationTarget(target) && (!branchIds.viewed || !eventBranchId || branchIds.viewed === eventBranchId)) {
     state.workRunsByTarget[runtimeKeyFor(target.workspaceId, target.conversationId)] = runs;
     var existingElement = findWorkRunElement(run);
-    if (existingElement && run.events.length >= 12 && (type === 'tool_call' || type === 'tool_result')) scheduleLargeConversationWorkRunRender(run);
-    else renderConversationWorkRun(run);
+    if (!existingElement || type === 'start') renderConversationWorkRun(run);
+    else scheduleConversationWorkRunRender(run);
   }
   return run;
 }
@@ -10067,7 +10076,14 @@ function hydrateConversationBranchState(snapshot) {
 }
 
 function applyConversationSnapshot(s, requestedConversationId) {
-    if (!s) return;
+  if (!s) return;
+  if (s.computerUse) {
+    var computerTarget = currentConversationTarget(s.conversationId || requestedConversationId || activeConversationId());
+    var computerKey = computerUseTargetKey(computerTarget);
+    if (!state.computerUseByTarget) state.computerUseByTarget = {};
+    state.computerUseByTarget[computerKey] = s.computerUse;
+    if (isActiveConversationTarget(computerTarget)) renderComputerUseToggle(s.computerUse, computerTarget);
+  }
     state.goalText = s.goal && s.goal.objective ? String(s.goal.objective) : '';
     state.goalVisible = !!state.goalText;
     state.goalPaused = !!(s.goal && s.goal.paused);
@@ -10419,6 +10435,44 @@ function clearActiveConversationDraft() {
 function isCurrentConversationRunning() {
   var id = activeConversationId();
   return !!(id && runningConversationRecord(id));
+}
+
+// A terminal final_response event can reach the renderer before the awaited
+// send promise performs its final local cleanup. If a user submits in that
+// small window, trusting the stale local running/active-send flags silently
+// drops the new message. Reconcile only when a send is already considered
+// active; a backend-confirmed running snapshot still keeps the guard intact.
+async function reconcileStaleLocalRuntimeBeforeSend(target) {
+  if (!target || !api.getState) return false;
+  var snapshot;
+  try {
+    snapshot = await api.getState(target);
+  } catch (_) {
+    return false;
+  }
+  var runtimeSnapshot = snapshot && snapshot.runtime || null;
+  var snapshotStatus = String(snapshot && snapshot.status || '').toLowerCase();
+  var backendStillRunning = !!(runtimeSnapshot && (runtimeSnapshot.running || runtimeSnapshot.stopRequested))
+    || ['running', 'stopping', 'force_restarting'].indexOf(snapshotStatus) >= 0;
+  if (backendStillRunning) return false;
+  if (['idle', 'completed', 'interrupted', 'force_interrupted', 'error'].indexOf(snapshotStatus) < 0) return false;
+  var runId = String((runtimeSnapshot && runtimeSnapshot.runId) || snapshot.runId || '');
+  var generation = Number((runtimeSnapshot && runtimeSnapshot.generation) || snapshot.generation || 0);
+  setConversationRuntimeState(target, snapshotStatus, runId, { provisional: false, generation: generation });
+  var targetKey = runtimeKeyFor(target.workspaceId, target.conversationId);
+  if (state.activeSendCallsByTarget) {
+    delete state.activeSendCallsByTarget[targetKey];
+    delete state.activeSendCallsByTarget[runtimeKeyFor('', target.conversationId)];
+  }
+  if (state.nextQueueSchedulesByTarget) {
+    delete state.nextQueueSchedulesByTarget[targetKey];
+    delete state.nextQueueSchedulesByTarget[runtimeKeyFor('', target.conversationId)];
+  }
+  state._sendInFlight = Object.keys(state.runningConversations || {}).length > 0;
+  setWorking(state._sendInFlight);
+  updateSubmitButtonState();
+  if (window.renderInputStack) window.renderInputStack();
+  return true;
 }
 
 function setSubmitButtonVisual(icon, label, running, stopMode) {
@@ -11445,6 +11499,13 @@ window.endQueueDrag = function(event) {
   if (event.currentTarget) event.currentTarget.classList.remove('dragging');
 };
 
+function recoverableGuideRejection(receipt) {
+  if (!receipt || String(receipt.status || '').toLowerCase() !== 'rejected') return false;
+  var reason = String(receipt.reason || receipt.error || '').trim();
+  return reason === 'Target conversation is not running'
+    || reason === 'Guide runId does not match the active run';
+}
+
 window.sendMessage = async function(modeOverride, queuedText, opts) {
   if (!window.requireWorkspace('send')) return;
   opts = opts || {};
@@ -11568,6 +11629,28 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   var conversationRunning = !!activeRuntime;
   markConversationTracked(lockedConversationId, state.conversationTrackMs || 300000, lockedTarget.workspaceId);
 
+  var activeSendCall = !!(state.activeSendCallsByTarget && state.activeSendCallsByTarget[lockedRuntimeKey]);
+  if ((conversationRunning || activeSendCall) && api.getState) {
+    var reconciledLocalRuntime = await reconcileStaleLocalRuntimeBeforeSend(lockedTarget);
+    if (reconciledLocalRuntime) {
+      activeRuntime = runningConversationRecord(lockedConversationId, lockedTarget.workspaceId);
+      conversationRunning = !!activeRuntime;
+      if (!conversationRunning && effectiveInputMode === 'guide') effectiveInputMode = 'next';
+    }
+  }
+
+  if (opts.retryAfterGuideRejection && conversationRunning && api.getState) {
+    try {
+      var freshRuntimeState = await api.getState(lockedTarget);
+      var freshStatus = String(freshRuntimeState && freshRuntimeState.status || '').toLowerCase();
+      if (['idle', 'completed', 'interrupted', 'force_interrupted', 'error'].indexOf(freshStatus) >= 0) {
+        setConversationRuntimeState(lockedTarget, 'idle', '');
+        activeRuntime = null;
+        conversationRunning = false;
+      }
+    } catch (_) {}
+  }
+
   if (effectiveInputMode === 'next' && !opts.fromQueue && conversationRunning) {
     if (!state.nextQueue) state.nextQueue = [];
     if (!state.nextQueueRequests) state.nextQueueRequests = [];
@@ -11649,6 +11732,57 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
         throw new Error(currentLang() === 'zh' ? '未收到有效的 Guide 回执' : 'A valid Guide acknowledgement was not received');
       }
       var status = normalizeGuideUiStatus(receipt.status);
+      if (recoverableGuideRejection(receipt)) {
+        // Renderer runtime state can lag the backend's finalization event by
+        // one IPC turn. The Guide was explicitly rejected, so replaying the
+        // exact payload as a fresh Build is safe and prevents a normal user
+        // send from disappearing behind a stale Guide route.
+        var fallbackRequest = {
+          text: typeof requestMessage === 'string' ? requestMessage : String(requestMessage.text || ''),
+          images: typeof requestMessage === 'object' && Array.isArray(requestMessage.images)
+            ? requestMessage.images.map(function(image) { return Object.assign({}, image); })
+            : []
+        };
+        recordGuideUiMessage({
+          clientMessageId: clientMessageId,
+          target: receipt.target || lockedTarget,
+          runId: receipt.runId || envelope.runId,
+          status: 'deferred',
+          content: displayText,
+          attachments: optimisticAttachments,
+          createdAt: receipt.createdAt || envelope.createdAt,
+          updatedAt: receipt.updatedAt,
+          reason: currentLang() === 'zh'
+            ? '运行已结束，输入已作为新的 Build 继续。'
+            : 'The run ended before Guide delivery; the input continued as a new Build.'
+        }, lockedTarget);
+        applyAgentWorkEventToRun({
+          id: 'guide-' + clientMessageId + '-deferred',
+          type: 'guide_deferred',
+          content: displayText,
+          workspaceId: lockedTarget.workspaceId,
+          conversationId: lockedTarget.conversationId,
+          runId: receipt.runId || envelope.runId,
+          sequence: receipt.sequence || 0,
+          guideStatus: 'deferred',
+          clientMessageId: clientMessageId,
+          guide: guideMessagesForTarget(lockedTarget)[clientMessageId]
+        });
+        return Promise.resolve(window.sendMessage('next', undefined, {
+          requestedMode: requestedMode,
+          goalObjective: opts.goalObjective,
+          forceBuild: true,
+          retryAfterGuideRejection: true,
+          queuedRequest: fallbackRequest
+        })).then(function(fallbackResult) {
+          return {
+            ok: !(fallbackResult && fallbackResult.ok === false),
+            guideReceipt: receipt,
+            recoveredAsBuild: true,
+            fallback: fallbackResult
+          };
+        });
+      }
       var guideRecord = recordGuideUiMessage({
         clientMessageId: clientMessageId,
         target: receipt.target || lockedTarget,
@@ -12291,6 +12425,7 @@ window.switchRightTab = function(tab) {
   if (tab === 'subagent') window.renderSubagentList();
   if (tab === 'browser') {
     cancelBrowserGuestIdleDestroy();
+    window.refreshComputerUseState(currentConversationTarget());
     window.ensureBrowserPanel({ activate: true }).catch(function(error) {
       console.error('[Browser] guest initialization failed:', error && error.message ? error.message : String(error));
     });
@@ -16457,10 +16592,62 @@ var NEWMARK_BROWSER_PARTITION = 'persist:newmark-browser';
 var NEWMARK_BROWSER_MIN_CREATE_DELAY_MS = 5000;
 var NEWMARK_BROWSER_IDLE_DESTROY_MS = 60000;
 var browserGuestCreatePromise = null;
+var browserGuestCreatePromises = {};
 var browserGuestIdleTimer = null;
 var browserRetainedUrl = 'about:blank';
+var browserRetainedUrls = {};
 var browserGuestCreateCount = 0;
 var browserGuestFirstCreatedAtMs = null;
+
+function computerUseTargetKey(target) {
+  target = target || currentConversationTarget();
+  return runtimeKeyFor(target.workspaceId, target.conversationId);
+}
+
+function renderComputerUseToggle(value, target) {
+  var button = document.getElementById('computer-use-toggle');
+  if (!button) return;
+  var enabled = value && value.enabled !== false;
+  var occupied = !!(value && value.occupied);
+  var owner = value && value.ownerLabel ? ' · ' + String(value.ownerLabel) : '';
+  button.classList.toggle('active', enabled);
+  button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+  button.title = (enabled ? 'ComputerUse enabled for this conversation' : 'ComputerUse disabled for this conversation') + owner;
+  button.textContent = enabled ? (occupied ? 'CU●' : 'CU') : 'CU×';
+  button.dataset.computerUseRuntimeKey = computerUseTargetKey(target);
+}
+
+window.refreshComputerUseState = function(target) {
+  target = target || currentConversationTarget();
+  var key = computerUseTargetKey(target);
+  var cached = state.computerUseByTarget && state.computerUseByTarget[key];
+  if (cached) renderComputerUseToggle(cached, target);
+  if (!api.computerUseState) return Promise.resolve(cached || { enabled: true, occupied: false, runtimeKey: key });
+  return api.computerUseState(target).then(function(value) {
+    if (!state.computerUseByTarget) state.computerUseByTarget = {};
+    state.computerUseByTarget[key] = value || { enabled: true, occupied: false, runtimeKey: key };
+    if (isActiveConversationTarget(target)) renderComputerUseToggle(state.computerUseByTarget[key], target);
+    return state.computerUseByTarget[key];
+  }).catch(function() { return cached || { enabled: true, occupied: false, runtimeKey: key }; });
+};
+
+window.toggleComputerUse = function() {
+  var target = currentConversationTarget();
+  var key = computerUseTargetKey(target);
+  var current = state.computerUseByTarget && state.computerUseByTarget[key];
+  var enabled = !(current && current.enabled !== false);
+  if (!api.setComputerUseEnabled) return Promise.resolve(null);
+  return api.setComputerUseEnabled(target, enabled).then(function(result) {
+    if (result && result.ok === false) {
+      showUiNotice(String(result.error || 'ComputerUse occupied'), 'error', 'computer-use-toggle-' + key);
+      return result;
+    }
+    if (!state.computerUseByTarget) state.computerUseByTarget = {};
+    state.computerUseByTarget[key] = result && result.state ? result.state : { enabled: enabled, occupied: false, runtimeKey: key };
+    renderComputerUseToggle(state.computerUseByTarget[key], target);
+    return result;
+  });
+};
 
 window.browserGuestLifecycleSnapshot = function() {
   return {
@@ -16478,15 +16665,60 @@ function browserUrlsEquivalent(left, right) {
   return !!a && a === b;
 }
 
-function currentBrowserGuest() {
-  var view = document.getElementById('browser-webview');
-  return view && view.isConnected ? view : null;
+function browserTargetKey(target) {
+  target = target || currentConversationTarget();
+  return runtimeKeyFor(target.workspaceId, target.conversationId);
 }
 
-function rememberBrowserUrl(url, force) {
+function browserPartitionForTarget(target) {
+  var key = browserTargetKey(target).replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 150) || 'default';
+  return NEWMARK_BROWSER_PARTITION + '-' + key;
+}
+
+function browserGuestForTarget(target) {
+  var key = browserTargetKey(target);
+  var frame = els['browser-frame'] || document.getElementById('browser-frame');
+  if (!frame) return null;
+  var views = frame.querySelectorAll('webview[data-newmark-browser-runtime-key]');
+  for (var i = 0; i < views.length; i++) {
+    if (String(views[i].getAttribute('data-newmark-browser-runtime-key') || '') === key && views[i].isConnected) return views[i];
+  }
+  return null;
+}
+
+function setActiveBrowserGuest(view, target) {
+  var key = browserTargetKey(target);
+  var frame = els['browser-frame'] || document.getElementById('browser-frame');
+  if (frame) {
+    var views = frame.querySelectorAll('webview[data-newmark-browser-runtime-key]');
+    for (var i = 0; i < views.length; i++) {
+      var same = views[i] === view || String(views[i].getAttribute('data-newmark-browser-runtime-key') || '') === key;
+      views[i].style.display = same ? '' : 'none';
+      if (same) views[i].id = 'browser-webview';
+      else if (views[i].id === 'browser-webview') views[i].id = 'browser-webview-' + String(views[i].getAttribute('data-newmark-browser-runtime-key') || 'guest').replace(/[^A-Za-z0-9_.-]/g, '_').slice(-80);
+    }
+  }
+  els['browser-webview'] = view || null;
+  if (view) view._newmarkBrowserTargetKey = key;
+}
+
+function currentBrowserGuest(target) {
+  var view = browserGuestForTarget(target || currentConversationTarget());
+  if (view) return view;
+  var active = document.getElementById('browser-webview');
+  return active && active.isConnected ? active : null;
+}
+
+function rememberBrowserUrl(url, force, target) {
+  target = target || currentConversationTarget();
+  var targetKey = browserTargetKey(target);
   url = String(url || '').trim();
-  if (!force && url === 'about:blank' && browserRetainedUrl !== 'about:blank') return;
-  if (url) browserRetainedUrl = url;
+  var prior = browserRetainedUrls[targetKey] || 'about:blank';
+  if (!force && url === 'about:blank' && prior !== 'about:blank') return;
+  if (url) {
+    browserRetainedUrls[targetKey] = url;
+    if (isActiveConversationTarget(target)) browserRetainedUrl = url;
+  }
 }
 
 function waitForBrowserCreationFloor() {
@@ -16495,8 +16727,9 @@ function waitForBrowserCreationFloor() {
   return new Promise(function(resolve) { setTimeout(resolve, remaining); });
 }
 
-function createBrowserGuestElement() {
-  var existing = currentBrowserGuest();
+function createBrowserGuestElement(target) {
+  target = target || currentConversationTarget();
+  var existing = browserGuestForTarget(target);
   if (existing) return existing;
   var frame = els['browser-frame'] || document.getElementById('browser-frame');
   if (!frame) throw new Error('Built-in Browser frame is unavailable');
@@ -16506,8 +16739,14 @@ function createBrowserGuestElement() {
   browserGuestCreateCount += 1;
   if (browserGuestFirstCreatedAtMs === null) browserGuestFirstCreatedAtMs = Date.now() - newmarkRendererStartedAt;
   view.id = 'browser-webview';
-  view.setAttribute('partition', NEWMARK_BROWSER_PARTITION);
+  view.setAttribute('data-newmark-browser-runtime-key', browserTargetKey(target));
+  view.setAttribute('partition', browserPartitionForTarget(target));
   frame.appendChild(view);
+  if (isActiveConversationTarget(target)) setActiveBrowserGuest(view, target);
+  else {
+    view.style.display = 'none';
+    view.id = 'browser-webview-' + browserTargetKey(target).replace(/[^A-Za-z0-9_.-]/g, '_').slice(-80);
+  }
   els['browser-webview'] = view;
   return view;
 }
@@ -16530,11 +16769,14 @@ function cancelBrowserGuestIdleDestroy() {
 function destroyIdleBrowserGuest() {
   browserGuestIdleTimer = null;
   if (state.rightTab === 'browser') return;
-  var view = currentBrowserGuest();
+  var view = currentBrowserGuest(currentConversationTarget());
   if (!view) return;
-  try { rememberBrowserUrl(view.getURL ? view.getURL() : ''); } catch {}
+  var target = { workspaceId: state.currentWorkspaceId || state.currentWorkspacePath || state.currentWorkspace || 'none', conversationId: activeConversationId() || 'default' };
+  try { rememberBrowserUrl(view.getURL ? view.getURL() : '', false, target); } catch {}
   if (view.parentNode) view.parentNode.removeChild(view);
   if (els['browser-webview'] === view) els['browser-webview'] = null;
+  var key = browserTargetKey(target);
+  delete browserGuestCreatePromises[key];
   browserGuestCreatePromise = null;
   restoreBrowserPlaceholder();
 }
@@ -16566,16 +16808,17 @@ function navigateBrowserView(view, url) {
 }
 
 window.navigateBrowser = function(url) {
+  var target = currentConversationTarget();
   url = String(url || '').trim();
   if (!/^(?:https?:\/\/|about:blank$|newmark-preview:\/\/)/i.test(url)) {
     url = 'https://' + url;
   }
   if (state.browserPreviewToken && url !== state.browserPreviewUrl) window.revokeBrowserPreviewCapability();
-  rememberBrowserUrl(url, true);
+  rememberBrowserUrl(url, true, target);
   var input = els['browser-url'];
   if (input) input.value = url;
   cancelBrowserGuestIdleDestroy();
-  return window.ensureBrowserPanel({ activate: false }).then(function(view) {
+  return window.ensureBrowserPanel({ activate: false, target: target }).then(function(view) {
     navigateBrowserView(view, url);
     if (state.rightTab !== 'browser') scheduleBrowserGuestIdleDestroy();
     return view;
@@ -16604,6 +16847,8 @@ window.browserReload = function() {
 };
 
 function initializeBrowserGuest(view) {
+  var target = arguments.length > 1 && arguments[1] ? arguments[1] : currentConversationTarget();
+  var targetKey = browserTargetKey(target);
   if (!view._newmarkReadyPromise) {
     view._newmarkDomReady = false;
     view._newmarkReadySettled = false;
@@ -16619,12 +16864,12 @@ function initializeBrowserGuest(view) {
         currentUrl = view.getURL ? view.getURL() : '';
         if (input && currentUrl && currentUrl !== 'about:blank') input.value = currentUrl;
       } catch {}
-      rememberBrowserUrl(currentUrl);
+      rememberBrowserUrl(currentUrl, false, target);
       if (view._newmarkReadySettled) return;
       var registration = Promise.resolve({ accepted: true });
       try {
         if (!api.browserRegisterGuest || !view.getWebContentsId) throw new Error('Built-in Browser registration API is unavailable');
-        registration = api.browserRegisterGuest(view.getWebContentsId());
+        registration = api.browserRegisterGuest(view.getWebContentsId(), target);
       } catch (registrationError) {
         registration = Promise.reject(registrationError);
       }
@@ -16664,13 +16909,13 @@ function initializeBrowserGuest(view) {
     view.addEventListener('did-navigate', function(e) {
       var input = els['browser-url'];
       if (input && e.url && e.url !== 'about:blank') input.value = e.url;
-      rememberBrowserUrl(e.url);
+      rememberBrowserUrl(e.url, false, target);
       if (browserUrlsEquivalent(e.url, view._newmarkPendingUrl)) view._newmarkPendingUrl = '';
     });
     view.addEventListener('did-navigate-in-page', function(e) {
       var input = els['browser-url'];
       if (input && e.url && e.url !== 'about:blank') input.value = e.url;
-      rememberBrowserUrl(e.url);
+      rememberBrowserUrl(e.url, false, target);
       if (browserUrlsEquivalent(e.url, view._newmarkPendingUrl)) view._newmarkPendingUrl = '';
     });
     view.addEventListener('did-fail-load', function(e) {
@@ -16684,27 +16929,31 @@ function initializeBrowserGuest(view) {
     });
     var current = '';
     try { current = view.getURL ? view.getURL() : ''; } catch { current = ''; }
-    if (!current && !view.getAttribute('src')) view.setAttribute('src', 'about:blank');
+    if (!current && !view.getAttribute('src')) view.setAttribute('src', browserRetainedUrls[targetKey] || 'about:blank');
   }
   return view._newmarkReadyPromise;
 }
 
 window.ensureBrowserPanel = function(options) {
   options = options || {};
+  var target = options.target || currentConversationTarget();
+  var targetKey = browserTargetKey(target);
   cancelBrowserGuestIdleDestroy();
-  if (!browserGuestCreatePromise) {
-    browserGuestCreatePromise = waitForBrowserCreationFloor().then(function() {
-      return initializeBrowserGuest(createBrowserGuestElement());
+  if (!browserGuestCreatePromises[targetKey]) {
+    browserGuestCreatePromises[targetKey] = waitForBrowserCreationFloor().then(function() {
+      return initializeBrowserGuest(createBrowserGuestElement(target), target);
     }).catch(function(error) {
-      browserGuestCreatePromise = null;
+      delete browserGuestCreatePromises[targetKey];
       throw error;
     });
   }
-  return browserGuestCreatePromise.then(function(view) {
+  browserGuestCreatePromise = browserGuestCreatePromises[targetKey];
+  return browserGuestCreatePromises[targetKey].then(function(view) {
+    if (isActiveConversationTarget(target)) setActiveBrowserGuest(view, target);
     if (options.activate === true) {
       var current = '';
       try { current = view.getURL ? view.getURL() : ''; } catch { current = ''; }
-      var targetUrl = browserRetainedUrl || 'about:blank';
+      var targetUrl = browserRetainedUrls[targetKey] || 'about:blank';
       if (targetUrl !== 'about:blank' && (!current || current === 'about:blank') && !view._newmarkPendingUrl) {
         navigateBrowserView(view, targetUrl);
       }
@@ -17087,6 +17336,13 @@ window.switchConversation = function(idx) {
   if (previousId) markConversationTracked(previousId, state.conversationTrackMs || 300000);
   setActiveWorkspaceConversation(idx);
   var activeId = activeConversationId();
+  var activeBrowserTarget = currentConversationTarget(activeId);
+  var activeBrowserView = browserGuestForTarget(activeBrowserTarget);
+  if (activeBrowserView) setActiveBrowserGuest(activeBrowserView, activeBrowserTarget);
+  else if (state.rightTab === 'browser') window.ensureBrowserPanel({ target: activeBrowserTarget, activate: true }).catch(function(error) {
+    console.error('[Browser] conversation-bound guest initialization failed:', error && error.message ? error.message : String(error));
+  });
+  window.refreshComputerUseState(activeBrowserTarget);
   state.backendQueue = backendQueueForTarget(currentConversationTarget(activeId));
   holdForegroundConversation(activeId, 4500);
   markConversationTracked(activeId, state.conversationTrackMs || 300000);
@@ -19288,9 +19544,10 @@ function schedulePostStartupUiRendering() {
   cacheEls();
   setupAgentWorkEvents();
   if (api.onBrowserEnsureGuest) {
-    api.onBrowserEnsureGuest(function() {
+    api.onBrowserEnsureGuest(function(target) {
       cancelBrowserGuestIdleDestroy();
-      window.ensureBrowserPanel({ activate: false }).catch(function(error) {
+      var requestedTarget = target || currentConversationTarget();
+      window.ensureBrowserPanel({ target: requestedTarget, activate: isActiveConversationTarget(requestedTarget) }).catch(function(error) {
         console.error('[Browser] guest initialization failed:', error && error.message ? error.message : String(error));
       });
     });

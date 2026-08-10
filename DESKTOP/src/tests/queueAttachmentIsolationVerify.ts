@@ -187,6 +187,7 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
   ].map(name => functionSource(source, name)).join('\n\n');
   const normalizeAttachmentsSource = functionSource(source, 'normalizeConversationImageAttachments');
   const restoreQueueSource = functionSource(source, 'restoreQueueItemAfterGuideFailure');
+  const recoverableGuideRejectionSource = functionSource(source, 'recoverableGuideRejection');
   const sendMessageSource = assignedFunctionSource(source, 'sendMessage');
   const guideQueueSource = assignedFunctionSource(source, 'guideQueueItem');
   const target = { workspaceId: 'workspace-running-guide', conversationId: 'default' };
@@ -241,7 +242,7 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
     'markConversationTracked', 'composePromptTextForSend', 'clearPromptAttachments',
     'updateSubmitButtonState', 'recordGuideUiMessage', 'addMsg', 'normalizeGuideUiStatus',
     'applyAgentWorkEventToRun', 'showUiNotice', 'currentLang',
-    `${helpers}\nfunction queueBranchPathForTarget(){ return ''; }\n${normalizeAttachmentsSource}\n${restoreQueueSource}\nwindow.bindQueuedRequestToTarget = bindQueuedRequestToTarget;\nwindow.sendMessage = ${sendMessageSource};\nwindow.guideQueueItem = ${guideQueueSource};`,
+    `${helpers}\nfunction queueBranchPathForTarget(){ return ''; }\n${normalizeAttachmentsSource}\n${restoreQueueSource}\n${recoverableGuideRejectionSource}\nwindow.bindQueuedRequestToTarget = bindQueuedRequestToTarget;\nwindow.sendMessage = ${sendMessageSource};\nwindow.guideQueueItem = ${guideQueueSource};`,
   );
   install(
     windowObject,

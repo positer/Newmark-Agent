@@ -33,11 +33,13 @@ contextBridge.exposeInMainWorld('api', {
   setConversationPinned: (id: string, pinned: boolean) => ipcRenderer.invoke('agent:setConversationPinned', id, pinned),
   renameConversation: (id: string, title: string) => ipcRenderer.invoke('agent:renameConversation', id, title),
   reorderConversations: (ids: string[]) => ipcRenderer.invoke('agent:reorderConversations', ids),
-  browserRegisterGuest: (guestContentsId: number) => ipcRenderer.invoke('browser:registerGuest', guestContentsId),
-  onBrowserEnsureGuest: (callback: () => void) => {
-    ipcRenderer.on('browser:ensureGuest', () => callback());
+  browserRegisterGuest: (guestContentsId: number, target?: Record<string, unknown>) => ipcRenderer.invoke('browser:registerGuest', guestContentsId, target),
+  onBrowserEnsureGuest: (callback: (target?: Record<string, unknown>) => void) => {
+    ipcRenderer.on('browser:ensureGuest', (_event: unknown, target?: Record<string, unknown>) => callback(target));
   },
   browserControl: (request: Record<string, unknown>) => ipcRenderer.invoke('browser:control', request),
+  computerUseState: (target?: Record<string, unknown>) => ipcRenderer.invoke('agent:computerUseState', target),
+  setComputerUseEnabled: (target: Record<string, unknown>, enabled: boolean) => ipcRenderer.invoke('agent:setComputerUseEnabled', target, enabled),
   runFlow: (name: string, input?: string, start?: number) => ipcRenderer.invoke('flow:run', name, input, start),
   resumeFlow: (response: string, target?: string | Record<string, unknown>) => ipcRenderer.invoke('flow:resume', response, target),
   guideFlow: (message: string, target?: string | Record<string, unknown>) => ipcRenderer.invoke('flow:guide', message, target),

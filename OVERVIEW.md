@@ -1,5 +1,23 @@
 # Newmark Agent Overview
 
+## dev-0.3.11 real-model pressure fixes and release (2026-08-10)
+
+`DESKTOP/package.json` and `DESKTOP/package-lock.json` declare version `0.3.11`. This cycle repeated isolated temporary-root release testing against the packaged executable and repaired the tester-facing failures instead of treating them as provider noise. The full deterministic gate now passes `1465/1465` assertions. The final APInebula `gpt-5.4-mini` matrix passes 20 CLI rounds, 20 GUI rounds, three Goal continuations, queue drain, conversation isolation, and a 600-fragment long-context run; the packaged process cleanup result is `remaining=0`. Evidence: [`archive/2026-08-10-real-provider-stress-dev-0.3.11-real-provider-final.md`](archive/2026-08-10-real-provider-stress-dev-0.3.11-real-provider-final.md).
+
+The release fixes have four groups:
+
+- `DESKTOP/src/cli-help.ts`, `launcher.ts`, and `main.ts` share a terminating help/version contract, so first-time users can discover GUI, TUI, CLI, Flow, editor, and non-interactive commands without starting a runtime.
+- `DESKTOP/src/core/electronUtilityAgentClient.ts` validates Windows process-tree identity and quarantines uncertain descendants; BrowserUse and utility shutdown regressions are covered by source and packaged Electron gates.
+- `DESKTOP/src/core/conversationKernel.ts`, `agentKernelRunner.ts`, and `ui/index.html` close deferred Guide/Goal continuation, provider-empty-response retry, stale renderer-send-lock, and long-running work-block repaint gaps. A backend-idle authoritative snapshot clears only a stale local send lock; a genuinely running backend remains protected.
+- BrowserUse is target-bound to the conversation's built-in browser/sidebar. ComputerUse is a conversation-bound toggle independent of Build lifetime, with a single process-wide lease and an explicit `computerUse occupied` response for competing conversations. Work-block rendering now frame-coalesces high-frequency public events without dropping durable events.
+
+The final local Windows assets are:
+
+- `release/Newmark-Agent-0.3.11-x64.msi`: 225,868,085 bytes, SHA-256 `E9BFB514B583556BFB64E8B35815EE8CD916CAC4FACC43EE0AC1FFD87D305817`.
+- `release/Newmark-Agent-0.3.11-win-unpacked-x64.zip`: 291,695,654 bytes, SHA-256 `B8E287CDB393482EF1B3CEB9A91AB4BF86328C06AF8A13A80239DD4778ECFDFB`.
+
+`.github/workflows/release-linux.yml` builds and smoke-tests Linux AppImage, Debian, and unpacked ZIP artifacts on Ubuntu, then emits a SHA-256 manifest. Linux artifact hashes and the GitHub release URL are appended here after the remote workflow and re-download audit complete.
+
 ## dev-0.3.10 Windows/Linux packaged prerelease (2026-08-09)
 
 `DESKTOP/package.json` and `DESKTOP/package-lock.json` now declare version `0.3.10`. The Windows `npm.cmd run dist:windows-release` gate and the WSL/Linux `npm.cmd run dist:linux` gate both completed successfully, including the complete 1461-assertion desktop verification. The final package smokes passed for the Windows portable ZIP and MSI, and for Linux AppImage, Debian, and unpacked ZIP assets. The unsigned public prerelease is [dev-0.3.10](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.3.10), created from commit `2ba14cc`.
@@ -15,6 +33,12 @@ Final artifacts:
 - `release/Newmark-Agent-0.3.10-linux-unpacked-x64.zip`: 171,911,069 bytes, SHA-256 `5A92E4BC8EB428CCE335FE50D81B4E51C7308842BA53BD6C63E232E73D2A6160`.
 
 The Linux 20-run latency benchmark passed with hot first-event p95 `13.548 ms`, hot first-token p95 `10 ms`, cold local-before-provider `52.681 ms`, two tool-provider requests, and zero hot persistence writes. Package-only warnings were limited to the existing jsdom optional `xhr-sync-worker.js` resolution warning and electron-builder's Linux `desktopName` metadata warning; no real provider API was called by the deterministic smokes. The post-publication `npm.cmd run release:github-assets-verify -- --repo positer/Newmark-Agent --tag dev-0.3.10` audit re-downloaded all five assets, matched every local size and SHA-256, and reran the Windows and WSL/Linux package smokes. Full evidence is in `archive/2026-08-09-dev-0.3.10-win-linux-release.md` and `archive/20260721-dev-0.3.10-linux-agent-latency.json`.
+
+## dev-0.3.10 black-box real-model release stress (2026-08-09)
+
+The packaged executable was tested as a new user would approach it: help was attempted first, then real-model pressure was applied through isolated packaged CLI/UI sessions. APInebula `gpt-5.4-mini` passed 20 cross-process CLI rounds, independent queue drain, conversation isolation, and a 600-fragment long-context run. The default model shown by CLI help, DeepSeek `deepseek-v4-flash`, passed six CLI and six UI rounds. All packaged process-cleanup checks returned zero remaining processes.
+
+The release is not ready for real-model acceptance. Goal activation failed on a fresh process before the first provider call with `Electron utility runtime stop could not confirm child exit`; the same failure recurred after normal UI pressure and quarantined later runtime restarts. A 20-round same-window UI run also hit an intermittent round-5 `Guide · Rejected` state and timed out after 240 seconds, although two six-round APInebula runs and one six-round DeepSeek run passed. Direct `--help` and `--TUI --help` entered a desktop process tree instead of returning usage, while `--cli --help` returned only an interactive banner. Goal/Flow pause/resume, crash recovery, and live-backend timeout boundaries were therefore not claimed as passed. Full matrix and redacted evidence are in [`archive/2026-08-09-blackbox-real-model-release-test.md`](archive/2026-08-09-blackbox-real-model-release-test.md) and the linked `archive/2026-08-09-real-provider-stress-blackbox-*.md` reports.
 
 ## dev-0.3.9 local Windows package and installation (2026-08-09)
 

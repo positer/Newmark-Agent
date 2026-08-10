@@ -7,10 +7,10 @@ import { spawn, spawnSync } from 'child_process';
 import { Agent, ConversationBranchLocator, FlowSuspensionRecord } from './core/agent';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope } from './core/types';
 import { AgentPromptMessage, ConversationKernel, ConversationTargetInput } from './core/conversationKernel';
-import { ConversationRuntimeTarget, conversationStateWorkspacePrefix, normalizeConversationTarget } from './core/conversationTarget';
+import { ConversationRuntimeTarget, NormalizedConversationTarget, conversationStateWorkspacePrefix, normalizeConversationTarget } from './core/conversationTarget';
 import { AutomationManager } from './core/automation';
 import { AutomationWakeScheduler, WakeSyncResult } from './core/automationWake';
-import { BrowserControl, BrowserControlRequest, BrowserControlResult } from './core/browserControl';
+import { BrowserControl, BrowserControlRequest, BrowserControlResult, BrowserControlTarget } from './core/browserControl';
 import { bindBrowserUseRequest, BrowserUse, BrowserUseEngine, BrowserUseReceipt } from './core/browserUse';
 import { NativeBrowserUsePageAdapter } from './core/browserUsePageAdapter';
 import { ElectronBrowserUseHost } from './core/electronBrowserUseHost';
@@ -58,6 +58,7 @@ import { runRuntimeShutdownBarrier } from './core/runtimeShutdown';
 import { markRuntimeLifecycleClean } from './core/runtimeLifecycle';
 import { discoverPluginManifests } from './core/compat';
 import { McpManager } from './core/mcpManager';
+import { newmarkHelpText } from './cli-help';
 
 const APP_NAME = 'Newmark Agent';
 const APP_ID = 'ai.newmark.agent';
@@ -129,7 +130,27 @@ let _forceQuit = false;
 let forcedExitTimer: NodeJS.Timeout | null = null;
 let electronBrowserUseHost: ElectronBrowserUseHost | null = null;
 let browserUseEngine: BrowserUseEngine | null = null;
+// A single renderer can host several hidden conversation-bound guests. The
+// legacy host map is retained for focused-window discovery, while this map is
+// the authoritative Browser-Use/right-sidebar binding.
 const browserGuestContentsByHost = new Map<number, number>();
+const browserGuestBindingsByRuntime = new Map<string, { hostId: number; guestId: number; workspaceId: string; conversationId: string }>();
+
+function browserGuestRuntimeKey(target: ConversationRuntimeTarget): string {
+  return normalizeConversationTarget(target).runtimeKey;
+}
+
+function browserGuestBindingFor(runtimeKey: string): { hostId: number; guestId: number; workspaceId: string; conversationId: string } | null {
+  const binding = browserGuestBindingsByRuntime.get(String(runtimeKey || ''));
+  if (!binding) return null;
+  const guest = webContents.fromId(binding.guestId);
+  if (!guest || guest.isDestroyed() || guest.getType() !== 'webview' || guest.hostWebContents?.id !== binding.hostId) {
+    browserGuestBindingsByRuntime.delete(String(runtimeKey || ''));
+    if (browserGuestContentsByHost.get(binding.hostId) === binding.guestId) browserGuestContentsByHost.delete(binding.hostId);
+    return null;
+  }
+  return binding;
+}
 let workspaceSwitchGeneration = 0;
 let workspaceSelectionCoordinator: WorkspaceSelectionCoordinator<string, ReturnType<Agent['selectWorkspace']>> | null = null;
 
@@ -740,7 +761,14 @@ async function waitForWebContentsLoad(contents: Electron.WebContents, timeoutMs 
   });
 }
 
-function registeredBrowserGuest(hostContentsId?: number): Electron.WebContents | null {
+function registeredBrowserGuest(hostContentsId?: number, runtimeKey?: string): Electron.WebContents | null {
+  if (runtimeKey) {
+    const binding = browserGuestBindingFor(runtimeKey);
+    if (binding && (!hostContentsId || binding.hostId === hostContentsId)) {
+      const guest = webContents.fromId(binding.guestId);
+      if (guest && !guest.isDestroyed()) return guest;
+    }
+  }
   const hostIds = hostContentsId
     ? [hostContentsId]
     : [
@@ -753,7 +781,13 @@ function registeredBrowserGuest(hostContentsId?: number): Electron.WebContents |
     const guestId = browserGuestContentsByHost.get(hostId);
     if (!guestId) continue;
     const guest = webContents.fromId(guestId);
-    if (guest && !guest.isDestroyed() && guest.getType() === 'webview' && guest.hostWebContents?.id === hostId) return guest;
+    if (guest && !guest.isDestroyed() && guest.getType() === 'webview' && guest.hostWebContents?.id === hostId) {
+      if (runtimeKey) {
+        const bound = browserGuestBindingsByRuntime.get(runtimeKey);
+        if (!bound || bound.hostId !== hostId || bound.guestId !== guest.id) continue;
+      }
+      return guest;
+    }
     browserGuestContentsByHost.delete(hostId);
   }
   return null;
@@ -774,36 +808,59 @@ async function boundedOperation<T>(operation: Promise<T>, timeoutMs: number, lab
   }
 }
 
-function registerBrowserGuest(host: Electron.WebContents, guest: Electron.WebContents): boolean {
+function registerBrowserGuest(host: Electron.WebContents, guest: Electron.WebContents, requestedTarget?: ConversationTargetInput): boolean {
   if (host.isDestroyed() || guest.isDestroyed() || guest.getType() !== 'webview' || guest.hostWebContents?.id !== host.id) return false;
+  let target: NormalizedConversationTarget;
+  try {
+    target = normalizeConversationTarget(conversationRuntimeTarget(requestedTarget));
+  } catch {
+    return false;
+  }
+  const prior = browserGuestBindingsByRuntime.get(target.runtimeKey);
+  if (prior && prior.guestId !== guest.id) {
+    const priorGuest = webContents.fromId(prior.guestId);
+    if (priorGuest && !priorGuest.isDestroyed()) priorGuest.hostWebContents?.send('browser:guestVisibility', { runtimeKey: target.runtimeKey, visible: false });
+  }
+  browserGuestBindingsByRuntime.set(target.runtimeKey, {
+    hostId: host.id,
+    guestId: guest.id,
+    workspaceId: target.workspaceId,
+    conversationId: target.conversationId,
+  });
   browserGuestContentsByHost.set(host.id, guest.id);
   guest.once('destroyed', () => {
     if (browserGuestContentsByHost.get(host.id) === guest.id) browserGuestContentsByHost.delete(host.id);
+    const binding = browserGuestBindingsByRuntime.get(target.runtimeKey);
+    if (binding?.guestId === guest.id) browserGuestBindingsByRuntime.delete(target.runtimeKey);
   });
   ensureElectronBrowserUseHost().attach(guest);
   return true;
 }
 
-async function waitForRegisteredBrowserGuest(host: Electron.WebContents, timeoutMs = 12_000): Promise<Electron.WebContents> {
+async function waitForRegisteredBrowserGuest(host: Electron.WebContents, runtimeKey?: string, timeoutMs = 12_000): Promise<Electron.WebContents> {
   const deadline = Date.now() + Math.max(250, timeoutMs);
   while (!host.isDestroyed() && Date.now() < deadline) {
-    const guest = registeredBrowserGuest(host.id);
+    const guest = registeredBrowserGuest(host.id, runtimeKey);
     if (guest) return guest;
     await new Promise<void>(resolve => setTimeout(resolve, 25));
   }
   throw new Error('Built-in Browser guest did not become ready before the Browser-Use timeout');
 }
 
-async function ensureBrowserWebContents(boundContentsId?: number): Promise<Electron.WebContents> {
+async function ensureBrowserWebContents(boundContentsId?: number, runtimeKey?: string): Promise<Electron.WebContents> {
   if (boundContentsId) {
     const bound = webContents.fromId(boundContentsId);
     if (bound && !bound.isDestroyed() && bound.getType() === 'webview'
       && browserGuestContentsByHost.get(bound.hostWebContents?.id || 0) === bound.id) {
+      if (runtimeKey) {
+        const binding = browserGuestBindingsByRuntime.get(runtimeKey);
+        if (!binding || binding.guestId !== bound.id) return await ensureBrowserWebContents(undefined, runtimeKey);
+      }
       bound.hostWebContents?.send('browser:ensureGuest');
       return bound;
     }
   }
-  const registered = registeredBrowserGuest();
+  const registered = registeredBrowserGuest(undefined, runtimeKey);
   if (registered) {
     registered.hostWebContents?.send('browser:ensureGuest');
     return registered;
@@ -813,14 +870,14 @@ async function ensureBrowserWebContents(boundContentsId?: number): Promise<Elect
     || (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
   const host = hostWindow?.webContents;
   if (!host || host.isDestroyed()) throw new Error('Built-in Browser UI is unavailable');
-  host.send('browser:ensureGuest');
-  return await waitForRegisteredBrowserGuest(host);
+  host.send('browser:ensureGuest', runtimeKey ? { runtimeKey } : undefined);
+  return await waitForRegisteredBrowserGuest(host, runtimeKey, 12_000);
 }
 
 function ensureElectronBrowserUseHost(): ElectronBrowserUseHost {
   if (!electronBrowserUseHost) {
     electronBrowserUseHost = new ElectronBrowserUseHost({
-      resolveContents: async (_scope, boundContentsId) => await ensureBrowserWebContents(boundContentsId),
+      resolveContents: async (scope, boundContentsId) => await ensureBrowserWebContents(boundContentsId, scope.runtimeKey),
       openExternal: async url => { await shell.openExternal(url); },
     });
   }
@@ -835,9 +892,17 @@ function ensureBrowserUseEngine(): BrowserUseEngine {
   return browserUseEngine;
 }
 
-function currentBrowserUseContext(): { runtimeKey: string; actorId: string } {
-  const target = normalizeConversationTarget(conversationRuntimeTarget());
+function currentBrowserUseContext(requestedTarget?: ConversationTargetInput): { runtimeKey: string; actorId: string } {
+  const target = normalizeConversationTarget(conversationRuntimeTarget(requestedTarget));
   return { runtimeKey: target.runtimeKey, actorId: agent?.runtimeActorId || ROOT_TERMINAL_ACTOR_ID };
+}
+
+function browserControlTargetInput(input?: BrowserControlTarget): ConversationTargetInput | undefined {
+  if (!input) return undefined;
+  return {
+    workspaceId: String(input.workspaceId || ''),
+    conversationId: String(input.conversationId || 'default'),
+  } as ConversationRuntimeTarget;
 }
 
 async function runBoundBrowserUse(input: unknown, context: { runtimeKey: string; actorId: string }, signal?: AbortSignal): Promise<BrowserUseReceipt> {
@@ -862,8 +927,10 @@ function browserSnapshotScript(maxChars: number): string {
 
 async function runBrowserControl(request: BrowserControlRequest): Promise<BrowserControlResult> {
   const action = request.action;
+  const requestedTarget = browserControlTargetInput(request.target);
+  const target = normalizeConversationTarget(conversationRuntimeTarget(requestedTarget));
   if (action === 'use') {
-    const receipt = await runBoundBrowserUse(request.browserUse, currentBrowserUseContext());
+    const receipt = await runBoundBrowserUse(request.browserUse, currentBrowserUseContext(requestedTarget));
     return {
       ok: receipt.ok,
       action,
@@ -874,7 +941,7 @@ async function runBrowserControl(request: BrowserControlRequest): Promise<Browse
       error: receipt.error,
     };
   }
-  const contents = await ensureBrowserWebContents();
+  const contents = await ensureBrowserWebContents(undefined, target.runtimeKey);
   try {
     if (action === 'open') {
       await contents.loadURL(request.url || 'about:blank');
@@ -956,12 +1023,26 @@ function installBrowserControlBackend(): void {
 const args = userArgs();
 const command = args.find(a => a === 'flow' || a === 'edit');
 const isTuiArg = args.some(arg => arg.toLowerCase() === '--tui');
+const hasCliCommand = args.some(a => (CLI_COMMANDS as readonly string[]).includes(a));
+const isHelpArg = !hasCliCommand && (args.some(arg => ['--help', '-h'].includes(arg.toLowerCase())) || args[0]?.toLowerCase() === 'help');
+const isVersionArg = !hasCliCommand && args.some(arg => ['--version', '-v'].includes(arg.toLowerCase()));
 const isViewerArg = args.some(arg => arg.toLowerCase() === '--newmark-viewer');
 const isCliArg = args.includes('--cli');
 const isServerArg = args.includes('--server');
 const isFlowArg = command === 'flow';
 const isEditArg = command === 'edit';
-const hasCliCommand = args.some(a => (CLI_COMMANDS as readonly string[]).includes(a));
+
+// Help/version are terminating discovery commands. They must be handled
+// before Electron's GUI/TUI/server branches can initialize runtime state or
+// spawn a window, so a product-new tester can use them safely in any surface.
+if (isHelpArg) {
+  console.log(newmarkHelpText(currentAppVersion()));
+  process.exit(0);
+}
+if (isVersionArg) {
+  console.log(currentAppVersion());
+  process.exit(0);
+}
 
 function viewerEscape(value: unknown): string {
   return String(value || '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] || character);
@@ -1485,7 +1566,11 @@ if (isViewerArg) {
         rejectUiReadinessById(Number(fileRouterOwnerId), new Error('Startup window closed before UI readiness'));
         fileRouter.revokeOwner(fileRouterOwnerId);
         pdfPreviewServer.revokeOwner(fileRouterOwnerId);
-        browserGuestContentsByHost.delete(Number(fileRouterOwnerId));
+        const closedHostId = Number(fileRouterOwnerId);
+        browserGuestContentsByHost.delete(closedHostId);
+        for (const [runtimeKey, binding] of browserGuestBindingsByRuntime) {
+          if (binding.hostId === closedHostId) browserGuestBindingsByRuntime.delete(runtimeKey);
+        }
         const remaining = BrowserWindow.getAllWindows().filter(candidate => !candidate.isDestroyed() && candidate !== win);
         if (mainWindow === win) mainWindow = remaining[0] || null;
         if (!remaining.length && sidecarProcess) {
@@ -2111,6 +2196,7 @@ if (isViewerArg) {
       electronBrowserUseHost = null;
       BrowserControl.setBackend(null);
       browserGuestContentsByHost.clear();
+      browserGuestBindingsByRuntime.clear();
       if (sidecarProcess) { sidecarProcess.kill(); sidecarProcess = null; }
       shutdownTerminalTakeoverSessions('app-exit');
       markMainLifecycleCleanIfSafe();
@@ -2474,9 +2560,9 @@ if (isViewerArg) {
       }
     });
 
-    ipcMain.handle('browser:registerGuest', (event, guestContentsId: number) => {
+    ipcMain.handle('browser:registerGuest', (event, guestContentsId: number, target?: ConversationTargetInput) => {
       const guest = webContents.fromId(Number(guestContentsId || 0));
-      return { accepted: !!guest && registerBrowserGuest(event.sender, guest) };
+      return { accepted: !!guest && registerBrowserGuest(event.sender, guest, target) };
     });
     ipcMain.handle('browser:control', async (_event, request: BrowserControlRequest) => {
       return await BrowserControl.run(request);
@@ -2849,6 +2935,24 @@ if (isViewerArg) {
         runtimeDeferred: false,
       };
     });
+    ipcMain.handle('agent:computerUseState', async (_event, targetInput?: ConversationTargetInput) => {
+      if (!agent) return { enabled: false, occupied: false, runtimeKey: '' };
+      const target = normalizeConversationTarget(conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default'));
+      return utilityHostToolHandler.computerUseState(target.runtimeKey);
+    });
+    ipcMain.handle('agent:setComputerUseEnabled', async (_event, targetInput: ConversationTargetInput, enabled: boolean) => {
+      if (!agent) return { ok: false, error: 'Agent not initialized' };
+      const target = normalizeConversationTarget(conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default'));
+      const result = utilityHostToolHandler.setComputerUseEnabled(target.runtimeKey, enabled !== false, `conversation:${target.conversationId}`);
+      if (!result.ok) return result;
+      if (enabled === false) {
+        try {
+          const { runComputerUse } = require('./tools/computerUse') as typeof import('./tools/computerUse');
+          await runComputerUse({ action: 'takeover_stop', workspacePath: target.workspace?.path || root, ownerId: target.runtimeKey, invocation: 'agent' });
+        } catch {}
+      }
+      return result;
+    });
     ipcMain.handle('agent:updateGoal', async (_event, goal: string, targetInput?: ConversationTargetInput) => {
       if (!agent) return null;
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
@@ -2945,6 +3049,7 @@ if (isViewerArg) {
         pendingOptions: conversationSnapshot.pendingOptions || agent.pendingOptions,
         flowSuspension: flowSuspensionForTarget(target),
         flowRunning: flowRunningForTarget(target),
+        computerUse: utilityHostToolHandler.computerUseState(normalizeConversationTarget(target).runtimeKey),
         draft: agent.getStoredConversationDraft(target.conversationId) || '',
         proxyEnabled: agent.config.getBool('proxy', 'enabled'),
         proxyUrl: agent.config.getStr('proxy', 'url'),

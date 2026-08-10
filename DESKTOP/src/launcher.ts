@@ -9,8 +9,13 @@ import { Agent } from './core/agent';
 import { FlowEngine } from './core/flow';
 import { runFlow } from './core/flow-runner';
 import { CLI_COMMANDS, runCliCommand } from './cli-commands';
+import { currentAppVersion } from './core/installUpdate';
+import { newmarkHelpText } from './cli-help';
 
 const args = process.argv.slice(2);
+const hasCliCommand = args.some(a => (CLI_COMMANDS as readonly string[]).includes(a));
+const isHelpArg = !hasCliCommand && (args.some(arg => ['--help', '-h'].includes(arg.toLowerCase())) || args[0]?.toLowerCase() === 'help');
+const isVersionArg = !hasCliCommand && args.some(arg => ['--version', '-v'].includes(arg.toLowerCase()));
 const isTui = args.some(arg => arg.toLowerCase() === '--tui');
 const isGui = args.some(arg => arg.toLowerCase() === '--gui');
 const isCli = args.includes('--cli');
@@ -18,7 +23,6 @@ const isServer = args.includes('--server');
 const isEdit = args[0] === 'edit';
 const editFile = isEdit ? args[1] : '';
 const isFlow = args[0] === 'flow';
-const hasCliCommand = args.some(a => (CLI_COMMANDS as readonly string[]).includes(a));
 
 function pathArgValue(values: string[], key: string): string | undefined {
   const prefix = `${key}=`;
@@ -126,6 +130,15 @@ function writableRuntimeRoot(candidate: string): string {
 
 const explicitRoot = pathArgValue(args, '--root');
 const root = explicitRoot ? writableRuntimeRoot(explicitRoot) : userRuntimeRoot();
+
+if (isHelpArg) {
+  console.log(newmarkHelpText(currentAppVersion()));
+  process.exit(0);
+}
+if (isVersionArg) {
+  console.log(currentAppVersion());
+  process.exit(0);
+}
 
 function firstRunInit(r: string): void {
   fs.mkdirSync(r, { recursive: true });

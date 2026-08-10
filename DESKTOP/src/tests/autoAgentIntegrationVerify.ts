@@ -184,6 +184,10 @@ async function main(): Promise<void> {
     const runnerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
     ok(runnerSource.includes('if (!finalContent.length)') && runnerSource.includes('[Error] Provider returned an empty response.'),
       'empty provider responses enter retry/fallback classification instead of recording route success');
+    ok(runnerSource.includes('const emptyResponse = !assistant')
+      && runnerSource.includes('let emptyResponseRetries = 0')
+      && runnerSource.includes('retrying the same deployment'),
+    'empty provider responses never complete a Build silently and receive bounded same-deployment retries');
     const providerStreamSource = runnerSource.slice(
       runnerSource.indexOf('function streamWithNewmarkProvider'),
       runnerSource.indexOf('async function transformContext'),

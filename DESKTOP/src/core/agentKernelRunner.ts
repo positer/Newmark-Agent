@@ -295,6 +295,10 @@ function kernelTurnFailed(agent: Agent, turn: KernelTurnOutcome): boolean {
   return turn.stopReason === 'error' || agent.isLlmErrorText(turn.text);
 }
 
+function providerTurnIsEmpty(turn: KernelTurnOutcome): boolean {
+  return /provider returned an empty response/i.test(`${turn.errorMessage}\n${turn.text}`);
+}
+
 function removeTrailingFailedAssistant(agent: Agent, messages: KernelMessage[]): void {
   const last = messages[messages.length - 1];
   if (last?.role !== 'assistant') return;
@@ -425,10 +429,14 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       }
       await kernel.prompt(promptMessages);
       const assistant = lastAssistant as Extract<KernelMessage, { role: 'assistant' }> | null;
+      const text = assistant ? KernelMessageText(assistant) : '';
+      const hasToolCall = !!assistant?.content?.some(content => content.type === 'toolCall');
+      const emptyResponse = !assistant
+        || (!text.trim() && !hasToolCall && String(assistant?.stopReason || '') !== 'aborted');
       return {
-        text: assistant ? KernelMessageText(assistant) : '',
+        text: emptyResponse ? '[Error] Provider returned an empty response.' : text,
         stopReason: String(assistant?.stopReason || ''),
-        errorMessage: String(assistant?.errorMessage || ''),
+        errorMessage: String(assistant?.errorMessage || (emptyResponse ? 'Provider returned an empty response.' : '')),
       };
     } finally {
       unsubscribe();
@@ -464,6 +472,16 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
     let lastTurn = await runWithCompressionResume([], false);
     if (modelBeforeKernelRun && modelBeforeKernelRun !== agent.model && !tokens.some(t => t.text?.includes('[Model fallback]'))) {
       tokens.unshift({ type: 'text', text: `[Model fallback] ${modelBeforeKernelRun} unavailable; switched to ${agent.model}.` });
+    }
+    let emptyResponseRetries = 0;
+    while (providerTurnIsEmpty(lastTurn) && emptyResponseRetries < 2) {
+      removeTrailingFailedAssistant(agent, kernel.state.messages);
+      emptyResponseRetries += 1;
+      const notice = `[Model retry] Provider returned an empty response; retrying the same deployment (${emptyResponseRetries}/2).`;
+      tokens.push({ type: 'text', text: notice });
+      agent.recordWorkStatus(notice);
+      await agent.waitForPlannedRouteRetry();
+      lastTurn = await runWithCompressionResume([], false);
     }
     let routeRetries = 0;
     while (kernelTurnFailed(agent, lastTurn) && routeRetries < 2) {

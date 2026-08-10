@@ -448,6 +448,26 @@ async function run(): Promise<void> {
       && !!concurrentStartClient.status().rootCreationIdentity,
     'all concurrent cold-start callers proceed only after one shared identity-and-ping readiness transaction');
 
+    const gracefulStopTarget = target('GracefulStopDelayedExit');
+    fs.mkdirSync(gracefulStopTarget.workspace!.path, { recursive: true });
+    const gracefulStopClient = new ElectronUtilityAgentClient(
+      gracefulStopTarget.workspace!.path,
+      utilityScript,
+      gracefulStopTarget,
+      // A graceful Electron shutdown may already have consumed the child
+      // handle before its exit event reaches the main process. This seam
+      // forces the production identity-proof fallback instead of allowing a
+      // false child-kill result to quarantine a cleanly stopped runtime.
+      { killChild: () => false },
+    );
+    utilityClients.push(gracefulStopClient);
+    await gracefulStopClient.start();
+    await gracefulStopClient.stop();
+    ok(!gracefulStopClient.status().connected
+      && !gracefulStopClient.status().quarantined
+      && gracefulStopClient.status().pid === 0,
+    'a clean graceful shutdown with a delayed/false child handle kill proves identity-bound quiescence instead of quarantining the runtime');
+
     const forceStopSingleFlightTarget = target('ForceStopSingleFlight');
     fs.mkdirSync(forceStopSingleFlightTarget.workspace!.path, { recursive: true });
     let singleFlightPrimaryCalls = 0;

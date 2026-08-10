@@ -159,6 +159,7 @@ export function verifyDev009SourceContracts(): Assertion[] {
   'dev009 stop UI: first stop reaches the supervisor directly and stale cooperative results cannot overwrite force restart', results);
 
   const forceStopImplementation = (electronUtilityClient.match(/async forceStop\(\): Promise<void>[\s\S]*?\n  async forceRestart\(\): Promise<void>/) || [''])[0];
+  const stopImplementation = (electronUtilityClient.match(/async stop\(\): Promise<void>[\s\S]*?\n  async forceStop\(\): Promise<void>/) || [''])[0];
   const snapshotTimeoutMatch = electronUtilityClient.match(/const WINDOWS_TREE_SNAPSHOT_TIMEOUT_MS\s*=\s*([\d_]+);/);
   const snapshotTimeoutMs = Number(String(snapshotTimeoutMatch?.[1] || '0').replace(/_/g, ''));
   check(hasAll(`${electronUtilityClient}\n${windowsProcessTreeHelper}`, [
@@ -191,6 +192,7 @@ export function verifyDev009SourceContracts(): Assertion[] {
     'throwIfRestartQuarantined()',
     'await this.requestTargetSnapshot()',
     'killChildHandleAndAwaitExit',
+    'confirmWindowsUtilityProcessTreeStopped',
     'invalidateGeneration',
     'activeWindowsProcessHelperPidsForTest',
     'activeWindowsProcessHelpers = new Map',
@@ -215,8 +217,10 @@ export function verifyDev009SourceContracts(): Assertion[] {
     && electronUtilityClient.includes('async forceRestart(): Promise<void> {\n    this.throwIfRestartQuarantined();\n    await this.forceStop();')
     && electronUtilityClient.includes('this.enterRestartQuarantine(failure);')
     && forceStopImplementation.includes('killing through it is identity-safe')
-    && forceStopImplementation.includes('killChildHandleAndAwaitExit(child, 1_000)')
-    && forceStopImplementation.indexOf('await terminateWindowsUtilityProcessTree(') < forceStopImplementation.indexOf('killChildHandleAndAwaitExit(child, 1_000)'),
+    && /killChildHandleAndAwaitExit\(child, (?:1_000|5_000)\)/.test(forceStopImplementation)
+    && stopImplementation.includes('confirmWindowsUtilityProcessTreeStopped')
+    && stopImplementation.includes('rootIdentity.creationIdentity')
+    && forceStopImplementation.indexOf('await terminateWindowsUtilityProcessTree(') < forceStopImplementation.search(/killChildHandleAndAwaitExit\(child, (?:1_000|5_000)\)/),
   'dev009 utility force-stop: Windows uses creation identity, bounded quiescence, sticky quarantine, and transactional restart snapshot validation', results);
 
   const embeddedWindowsHelpers = [...electronUtilityClient.matchAll(/\$source = @'\r?\n([\s\S]*?)\r?\n'@/g)]

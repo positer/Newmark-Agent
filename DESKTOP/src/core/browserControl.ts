@@ -10,8 +10,17 @@ export type BrowserControlAction =
   | 'cdp'
   | 'use';
 
+/** Renderer/host routing identity. Browser controls must never fall back to the
+ * currently focused conversation when a caller has a concrete target. */
+export interface BrowserControlTarget {
+  workspaceId?: string;
+  conversationId?: string;
+  runtimeKey?: string;
+}
+
 export interface BrowserControlRequest {
   action: BrowserControlAction;
+  target?: BrowserControlTarget;
   url?: string;
   selector?: string;
   text?: string;

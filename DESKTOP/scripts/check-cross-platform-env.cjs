@@ -35,6 +35,14 @@ const hasPlatformGuards = mainSource.includes("process.platform === 'win32'");
 assert(hasPlatformGuards, 'main.ts branches platform-specific behavior via process.platform');
 const serverSource = fs.readFileSync(path.join(root, 'src', 'server.ts'), 'utf8');
 assert(serverSource.includes("process.platform === 'win32'"), 'server.ts branches platform-specific shells');
+const wslStressSource = fs.readFileSync(path.join(root, 'scripts', 'release-wsl-tui-stress.cjs'), 'utf8');
+assert(wslStressSource.includes('timeout: WSL_PATH_TIMEOUT_MS') && wslStressSource.includes('timeout: WSL_STRESS_TIMEOUT_MS'),
+  'WSL TUI stress launcher bounds both path conversion and PTY execution');
+assert(wslStressSource.includes('NEWMARK_WSL_TUI_REQUIRED') && wslStressSource.includes('WSL TUI stress skipped: Ubuntu-24.04 is unavailable'),
+  'WSL TUI stress distinguishes an unavailable local distro from a required CI failure');
+const linuxDistSource = fs.readFileSync(path.join(root, 'scripts', 'dist-linux.cjs'), 'utf8');
+assert(linuxDistSource.includes('timeout: WSL_DISCOVERY_TIMEOUT_MS') && linuxDistSource.includes('timeout: WSL_BUILD_TIMEOUT_MS'),
+  'Linux WSL packaging bounds discovery, path conversion, and build execution');
 
 // 4. Headless server / CLI are present for a HarmonyOS/WebView headless host.
 assert(fs.existsSync(path.join(root, 'src', 'server.ts')), 'headless HTTP server source exists (HarmonyOS ArkWeb headless integration)');

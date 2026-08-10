@@ -25,6 +25,7 @@ const selectedScenarios = new Set(String(process.env.NEWMARK_REAL_STRESS_SCENARI
 
 const results = [];
 let activeSecretValues = [];
+let childDiagnostics = '';
 
 function numberEnv(name, fallback) {
   const raw = Number(process.env[name] || '');
@@ -392,9 +393,14 @@ function stateIdleExpression(conversationId = '') {
 
 async function launchUi(root) {
   const child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  const capture = chunk => {
+    childDiagnostics = `${childDiagnostics}${String(chunk || '')}`.slice(-24000);
+  };
+  child.stdout?.on('data', capture);
+  child.stderr?.on('data', capture);
   const target = await waitForTarget();
   log(`connected target: ${target.title || '(untitled)'} ${target.url || ''}`);
   const cdp = connectCdp(target);
@@ -422,12 +428,27 @@ async function sendUiPrompt(cdp, prompt, marker, waitTimeoutMs = timeoutMs, conv
   try {
     await waitFor(cdp, assistantMarkerExpression(marker, conversationId), waitTimeoutMs, `assistant marker ${marker}`);
   } catch (error) {
-    const debug = await evaluate(cdp, `(() => {
+    const debug = await evaluate(cdp, `(async () => {
       const state = window.state || {};
+      const target = typeof currentConversationTarget === 'function' ? currentConversationTarget() : null;
+      const backend = window.api && window.api.getState ? await window.api.getState(target || undefined) : null;
       const body = document.querySelector('#chat-area')?.innerText || '';
       const run = document.querySelector('.conversation-work-run')?.innerText || '';
       const finals = Array.from(document.querySelectorAll('.run-final-response')).map(node => node.innerText || '').join(' ');
+      const backendSummary = backend ? {
+        status: backend.status,
+        mode: backend.mode,
+        target,
+        conversationId: backend.conversationId,
+        chatMessages: (backend.chatMessages || []).slice(-4).map(message => ({ role: message.role, runId: message.runId, content: String(message.content || '').slice(-1600) })),
+        workRuns: (backend.workRuns || []).slice(-3).map(item => ({ runId: item.runId, status: item.status, primaryPrompt: String(item.primaryPrompt || '').slice(-800), finalResponse: String(item.finalResponse || '').slice(-1800), events: (item.events || []).slice(-24).map(event => ({ type: event.type, toolName: event.toolName, content: String(event.content || '').slice(-700) })) })),
+        pendingOptions: backend.pendingOptions || [],
+        queued: backend.queued,
+        runtime: backend.runtime ? { running: backend.runtime.running, stopRequested: backend.runtime.stopRequested, runId: backend.runtime.runId } : null,
+      } : null;
       return {
+        backend: backendSummary,
+        promptValue: document.querySelector('#prompt')?.value || '',
         status: state.status,
         model: state.model,
         mode: state.mode,
@@ -438,6 +459,8 @@ async function sendUiPrompt(cdp, prompt, marker, waitTimeoutMs = timeoutMs, conv
         finalText: finals.slice(-1600),
         chatMessages: (state.chatMessages || []).slice(-4).map(message => ({ role: message.role, content: String(message.content || '').slice(-600) })),
         workRuns: (state.workRuns || []).slice(-2).map(item => ({ runId: item.runId, status: item.status, events: (item.events || []).slice(-4).map(event => ({ type: event.type, content: String(event.content || '').slice(-300) })) })),
+        pendingOptions: state.pendingOptions || [],
+        childDiagnostics: ${jsString(childDiagnostics.slice(-8000))},
       };
     })()`, 30000).catch(debugError => ({ debugError: debugError.message }));
     throw new Error(`${error.message}; uiDebug=${redact(JSON.stringify(debug)).slice(0, 5000)}`);
@@ -490,12 +513,30 @@ async function runGoalStress(cdp) {
   const finalState = await waitFor(cdp, `window.api.getState().then(s => {
     const assistants = (s && Array.isArray(s.chatMessages) ? s.chatMessages : []).filter(m => m && m.role === 'assistant');
     const text = JSON.stringify(assistants);
-    return s && s.status === 'idle' && text.includes(${jsString(marker)}) ? s : null;
+    return s && s.status === 'idle' && !s.goal && text.includes(${jsString(marker)}) ? s : null;
   })`, timeoutMs * Math.max(1, goalRounds + 2), 'Goal continuation completion marker');
   const finalText = JSON.stringify((finalState && finalState.chatMessages || []).filter(m => m && m.role === 'assistant'));
   if (/max[- ]?depth/i.test(finalText)) throw new Error(`Goal stress exposed max-depth warning: ${redact(finalText).slice(0, 1200)}`);
   const assistantCalls = (finalState && finalState.chatMessages || []).filter(m => m && m.role === 'assistant').length;
-  if (assistantCalls < goalRounds) throw new Error(`Goal stress stopped early: assistantCalls=${assistantCalls}; expected>=${goalRounds}`);
+  if (assistantCalls < goalRounds) {
+    const debug = {
+      status: finalState && finalState.status,
+      mode: finalState && finalState.mode,
+      goal: finalState && finalState.goal,
+      conversationId: finalState && finalState.conversationId,
+      assistants: (finalState && finalState.chatMessages || [])
+        .filter(m => m && m.role === 'assistant')
+        .map(m => ({ runId: m.runId, content: String(m.content || '').slice(-1200) })),
+      workRuns: (finalState && finalState.workRuns || []).map(run => ({
+        runId: run.runId,
+        status: run.status,
+        primaryPrompt: String(run.primaryPrompt || '').slice(-500),
+        finalResponse: String(run.finalResponse || '').slice(-1200),
+        events: (run.events || []).slice(-6).map(event => ({ type: event.type, content: String(event.content || '').slice(-400) })),
+      })),
+    };
+    throw new Error(`Goal stress stopped early: assistantCalls=${assistantCalls}; expected>=${goalRounds}; debug=${redact(JSON.stringify(debug)).slice(0, 7000)}`);
+  }
   await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
   await waitFor(cdp, stateIdleExpression(), 60000, 'build mode restored after Goal stress');
   return `goalRounds=${goalRounds}; assistantCalls=${assistantCalls}`;

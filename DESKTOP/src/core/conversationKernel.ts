@@ -129,6 +129,7 @@ interface ConversationRuntime {
   guideReceipts: Map<string, GuideReceipt>;
   guideEnvelopes: Map<string, ConversationInputEnvelope>;
   goalContinuationTimer?: ReturnType<typeof setTimeout>;
+  pendingContinuationRunId?: string;
 }
 
 type WorkListener = (event: AgentWorkEvent) => void;
@@ -365,6 +366,7 @@ export class ConversationKernel {
       runtime.runner.recordGuideReceipt(deferred);
       this.emitQueueUpdate(runtime);
       this.activateAcceptedGoal(runtime, envelope.goalObjective);
+      this.schedulePendingRuntimeContinuation(runtime, runtime.runId);
       return deferred;
     }
     if (runtime.guideAcceptanceClosedRunId === runtime.runId) {
@@ -396,6 +398,7 @@ export class ConversationKernel {
         createdAt: deferred.createdAt,
       }]);
       this.activateAcceptedGoal(runtime, envelope.goalObjective);
+      this.schedulePendingRuntimeContinuation(runtime, runtime.runId);
       return deferred;
     }
     const queued = runtime.runner.queueActiveKernelMessage(safeEnvelope.text, 'steer', clientMessageId, runtime.runId, safeEnvelope.images);
@@ -427,6 +430,7 @@ export class ConversationKernel {
       createdAt: deferred.createdAt,
     }]);
     this.activateAcceptedGoal(runtime, envelope.goalObjective);
+    this.schedulePendingRuntimeContinuation(runtime, runtime.runId);
     return deferred;
   }
 
@@ -662,6 +666,11 @@ export class ConversationKernel {
           if (runtime.stopRequestedRunId === runId) {
             stopped = true;
             this.settleCooperativeStop(runtime, runId);
+          } else if (runtime.pendingNextTurn.length > 0) {
+            // A renderer/IPC Guide can arrive after the final-drain barrier's
+            // last check but before this promise settles. Do not leave the
+            // deferred continuation queued on an idle runtime.
+            this.schedulePendingRuntimeContinuation(runtime, runId);
           }
         }
       }
@@ -814,6 +823,7 @@ export class ConversationKernel {
       guideReceipts: new Map(),
       guideEnvelopes: new Map(),
       goalContinuationTimer: undefined,
+      pendingContinuationRunId: undefined,
     };
     runner.setGoalContinuationGate(() => {
       this.queueState(runtime);
@@ -897,6 +907,32 @@ export class ConversationKernel {
         // Agent.process already records and publishes the run error.
       });
     }, 250);
+  }
+
+  private schedulePendingRuntimeContinuation(runtime: ConversationRuntime, runId: string): void {
+    if (runtime.pendingContinuationRunId === runId) return;
+    runtime.pendingContinuationRunId = runId;
+    const active = runtime.activePromise;
+    if (active) {
+      const continueAfterSettlement = () => {
+        runtime.pendingContinuationRunId = undefined;
+        this.schedulePendingRuntimeContinuation(runtime, runId);
+      };
+      void active.then(continueAfterSettlement, continueAfterSettlement);
+      return;
+    }
+    setImmediate(() => {
+      runtime.pendingContinuationRunId = undefined;
+      if (runtime.runId !== runId || runtime.activePromise || runtime.stopRequestedRunId === runId) return;
+      const next = runtime.pendingNextTurn.shift();
+      if (!next) return;
+      const message = typeof next.message === 'string'
+        ? { text: next.message, runId }
+        : { ...next.message, runId: next.message.runId || runId };
+      void this.prompt(message, runtime.target, runtime.options, next.queueMode).catch(() => {
+        // Agent.process and the work-run finalizer already publish the error.
+      });
+    });
   }
 
   private startGoalDrivenBuild(runtime: ConversationRuntime): void {

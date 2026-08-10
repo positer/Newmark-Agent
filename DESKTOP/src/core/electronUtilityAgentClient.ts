@@ -495,6 +495,91 @@ function delay(ms: number): Promise<void> {
   return new Promise<void>(resolve => setTimeout(resolve, Math.max(0, ms)));
 }
 
+function processRootIsAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A graceful utility shutdown can make Electron's UtilityProcess.kill() return
+ * false before the child exit event is delivered.  On Windows the captured
+ * root creation identity lets us prove that the root and every owned
+ * descendant are gone without falling back to an unscoped PID kill.
+ */
+async function confirmWindowsUtilityProcessTreeStopped(
+  pid: number,
+  expectedRootCreationIdentity: string,
+  options: WindowsUtilityProcessTreeOptions,
+  ownerKey: string,
+): Promise<boolean> {
+  if (process.platform !== 'win32' || !Number.isInteger(pid) || pid <= 0 || !/^\d+$/.test(expectedRootCreationIdentity)) return false;
+  const snapshotter = options.snapshot || snapshotWindowsProcessTree;
+  const deadline = Date.now() + Math.min(
+    WINDOWS_TREE_FORCE_STOP_DEADLINE_MS,
+    Math.max(1, Math.floor(options.forceStopDeadlineMs ?? WINDOWS_TREE_FORCE_STOP_DEADLINE_MS)),
+  );
+  const maxRescans = Math.max(2, Math.floor(options.maxRescans ?? WINDOWS_TREE_MAX_RESCANS));
+  const stableRequired = Math.max(2, Math.min(maxRescans, Math.floor(options.stableEmptyRescans ?? WINDOWS_TREE_STABLE_EMPTY_RESCANS)));
+  const syntheticRoot: WindowsProcessTreeEntry = {
+    pid,
+    parentPid: 0,
+    depth: 0,
+    creationIdentity: expectedRootCreationIdentity,
+  };
+  let stableEmpty = 0;
+  for (let scan = 0; scan < maxRescans; scan++) {
+    try {
+      if (scan > 0) await withinWindowsTreeDeadline(
+        delay(options.rescanDelayMs ?? WINDOWS_TREE_RESCAN_DELAY_MS),
+        deadline,
+        'graceful-stop rescan delay',
+      );
+      const snapshot = await withinWindowsTreeDeadline(
+        snapshotter(
+          pid,
+          remainingWindowsTreeBudget(
+            deadline,
+            options.rescanTimeoutMs ?? WINDOWS_TREE_RESCAN_TIMEOUT_MS,
+            'graceful-stop rescan',
+            !options.snapshot,
+          ),
+          [pid],
+          ownerKey,
+        ),
+        deadline,
+        'graceful-stop rescan',
+      );
+      const root = snapshot.entries.find(entry => entry.pid === pid);
+      if (root && root.creationIdentity !== expectedRootCreationIdentity) return false;
+      if (!snapshot.entries.length) {
+        stableEmpty += 1;
+        if (stableEmpty >= stableRequired) return true;
+        continue;
+      }
+      // The root may have exited while a child was still observable through
+      // its parent PID. Add only the already-captured root identity so the
+      // normal identity/quiescence gate can safely terminate the survivor.
+      const captured: WindowsProcessTreeSnapshot = root
+        ? snapshot
+        : { rootPid: pid, entries: [syntheticRoot, ...snapshot.entries] };
+      await terminateCapturedWindowsProcessTree(captured, {
+        ...options,
+        helperOwnerKey: ownerKey,
+        forceStopDeadlineMs: Math.max(1, deadline - Date.now()),
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 function remainingWindowsTreeBudget(deadline: number, capMs: number, label: string, reserveHelperClose = false): number {
   const remaining = deadline - Date.now() - (reserveHelperClose ? WINDOWS_HELPER_CLOSE_GRACE_MS + 75 : 0);
   if (remaining < 100) throw new Error(`Windows utility process-tree ${label} has no helper close budget before the force-stop deadline`);
@@ -1132,6 +1217,24 @@ export class ElectronUtilityAgentClient {
       const exited = await this.killChildHandleAndAwaitExit(child, 1_000);
       if (exited && this.child === child) this.detachChild(child, new Error('Electron utility runtime stopped'));
       else if (!exited) {
+        const rootIdentity = this.childRootIdentity;
+        if (!this.restartQuarantine
+          && rootIdentity
+          && rootIdentity.generation === this.childGeneration
+          && rootIdentity.pid === Number(child.pid || 0)
+          && rootIdentity.creationIdentity) {
+          const helperOwnerKey = this.windowsHelperOwnerKey(rootIdentity.generation);
+          const quiescent = await confirmWindowsUtilityProcessTreeStopped(
+            rootIdentity.pid,
+            rootIdentity.creationIdentity,
+            { ...this.options.windowsProcessTree, helperOwnerKey },
+            helperOwnerKey,
+          );
+          if (quiescent) {
+            if (this.child === child) this.detachChild(child, new Error('Electron utility runtime stopped'));
+            return;
+          }
+        }
         this.enterRestartQuarantine(failure);
         // Retain the UtilityProcess object and surface the failure.  The pool
         // must not evict the only identity-safe handle to a still-live child.
@@ -1186,8 +1289,12 @@ export class ElectronUtilityAgentClient {
       // killing through it is identity-safe even when PID-tree discovery is
       // uncertain. Descendants remain unknown, hence quarantine is still
       // permanent and replacement remains forbidden.
-      const exited = await this.killChildHandleAndAwaitExit(child, 1_000);
-      if (exited && this.child === child) this.detachChild(child, failure);
+      const rootAlreadyGone = process.platform === 'win32' && !processRootIsAlive(pid);
+      const exited = await this.killChildHandleAndAwaitExit(child, 5_000);
+      // The root handle can outlive the OS process after a tree proof fails.
+      // Detach that dead root handle, but keep the sticky quarantine because
+      // the failed tree proof still leaves descendant ownership unknown.
+      if ((exited || rootAlreadyGone) && this.child === child) this.detachChild(child, failure);
       throw failure;
     }
     this.detachChild(child, new Error('Electron conversation runtime was force-restarted'));

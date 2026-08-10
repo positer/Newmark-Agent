@@ -7,6 +7,8 @@ function assert(condition: unknown, message: string): asserts condition {
 
 const desktopRoot = path.resolve(__dirname, '..', '..');
 const launcherSource = fs.readFileSync(path.join(desktopRoot, 'src', 'launcher.ts'), 'utf8');
+const helpSource = fs.readFileSync(path.join(desktopRoot, 'src', 'cli-help.ts'), 'utf8');
+const cliCommandsSource = fs.readFileSync(path.join(desktopRoot, 'src', 'cli-commands.ts'), 'utf8');
 const mainSource = fs.readFileSync(path.join(desktopRoot, 'src', 'main.ts'), 'utf8');
 const batchSource = fs.readFileSync(path.join(desktopRoot, 'newmark.bat'), 'utf8');
 const tuiAppSource = fs.readFileSync(path.join(desktopRoot, '..', 'TUI', 'src', 'app.js'), 'utf8');
@@ -50,10 +52,26 @@ assert(packageJson.scripts?.['test:full-release']?.includes('test:desktop:built'
   && packageJson.scripts?.['test:full-release']?.includes('test:wsl-tui-stress:built')
   && packageJson.scripts?.['test:full-release']?.includes('test:cli:built')
   && packageJson.scripts?.['test:full-release']?.includes('test:gui-tui-cli-stress:built'),
-'full release regression must run DESKTOP, TUI, SSH, WSL/Linux, CLI, and cross-surface stress');
+  'full release regression must run DESKTOP, TUI, SSH, WSL/Linux, CLI, and cross-surface stress');
+assert(launcherSource.includes('const isHelpArg')
+  && launcherSource.includes('const hasCliCommand')
+  && launcherSource.includes('!hasCliCommand')
+  && launcherSource.includes('newmarkHelpText(currentAppVersion())')
+  && launcherSource.includes('process.exit(0)'),
+  'console launcher must terminate top-level --help/--version before first-run initialization without swallowing CLI command flags');
+assert(mainSource.includes('const isHelpArg')
+  && mainSource.includes('const hasCliCommand')
+  && mainSource.includes('!hasCliCommand')
+  && mainSource.includes('if (isHelpArg)')
+  && mainSource.includes("newmarkHelpText(currentAppVersion())"),
+  'packaged Electron entry must terminate top-level --help before GUI/TUI/server startup without swallowing CLI command flags');
+assert(helpSource.includes('cliCommandUsage()')
+  && cliCommandsSource.includes('Newmark CLI non-interactive commands:')
+  && helpSource.includes('Newmark Agent.exe [--gui|--TUI|--cli]'),
+  'shared help text must expose the product command surface to a new tester');
 assert(packageJson.scripts?.['dist:portable']?.startsWith('npm run test:full-release'),
   'Windows portable/MSI packaging must be gated by the full surface regression');
 assert(fs.existsSync(path.join(copiedTuiRoot, 'src', 'app.js')), 'compiled distribution must contain the TUI runtime');
 assert(fs.existsSync(path.join(copiedTuiRoot, 'src', 'adapters', 'core-runtime-adapter.js')), 'compiled distribution must contain the real Core adapter');
 
-process.stdout.write('TUI/GUI launcher verification: 19/19 checks passed\n');
+process.stdout.write('TUI/GUI launcher verification: 22/22 checks passed\n');

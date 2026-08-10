@@ -7,6 +7,8 @@ const repoRoot = path.resolve(root, '..');
 const releaseDir = path.join(repoRoot, 'release');
 const version = require(path.join(root, 'package.json')).version;
 const latencyArchiveName = `20260721-dev-${version}-linux-agent-latency.json`;
+const WSL_DISCOVERY_TIMEOUT_MS = Math.max(1_000, Number(process.env.NEWMARK_DIST_LINUX_DISCOVERY_TIMEOUT_MS) || 15_000);
+const WSL_BUILD_TIMEOUT_MS = Math.max(60_000, Number(process.env.NEWMARK_DIST_LINUX_TIMEOUT_MS) || 45 * 60 * 1000);
 
 function log(message) {
   console.log(`[dist-linux] ${message}`);
@@ -46,6 +48,7 @@ function listWslDistros() {
     cwd: root,
     encoding: 'buffer',
     windowsHide: true,
+    timeout: WSL_DISCOVERY_TIMEOUT_MS,
   });
   if (result.error || result.status !== 0) return [];
   const text = decodeWslOutput(result.stdout || Buffer.alloc(0));
@@ -65,6 +68,7 @@ function toWslPath(distro, windowsPath) {
     cwd: root,
     encoding: 'utf8',
     windowsHide: true,
+    timeout: WSL_DISCOVERY_TIMEOUT_MS,
   });
   if (result.error || result.status !== 0) {
     throw new Error(`failed to convert path through WSL distro ${distro}: ${result.stderr || result.error?.message || ''}`);
@@ -149,6 +153,7 @@ function runWindowsWslBuild() {
     cwd: root,
     input: `${script}\n`,
     stdio: ['pipe', 'inherit', 'inherit'],
+    timeout: WSL_BUILD_TIMEOUT_MS,
   });
 
   const appImage = path.join(releaseDir, `Newmark-Agent-${version}-x86_64.AppImage`);

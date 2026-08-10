@@ -1,0 +1,75 @@
+name: release-linux
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version to build (empty = package.json version)'
+        required: false
+        type: string
+  push:
+    tags:
+      - 'dev-[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: DESKTOP
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: DESKTOP/package-lock.json
+
+      - name: Apply requested version
+        if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+        run: npm version "${{ inputs.version }}" --no-git-tag-version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Build Linux AppImage, deb, and unpacked directory
+        run: npx electron-builder --linux AppImage deb dir --publish never
+
+      - name: Smoke-test the Linux CLI help surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="../release/linux-unpacked/Newmark Agent"
+          test -x "$binary"
+          "$binary" --help > /tmp/newmark-linux-help.txt
+          grep -q -- '--root' /tmp/newmark-linux-help.txt
+          grep -q -- 'install-update' /tmp/newmark-linux-help.txt
+
+      - name: Package unpacked Linux runtime and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          cd ../release
+          zip -qr "Newmark-Agent-${version}-linux-unpacked-x64.zip" linux-unpacked
+          sha256sum "Newmark-Agent-${version}-x64.AppImage" "Newmark-Agent-${version}-x64.deb" "Newmark-Agent-${version}-linux-unpacked-x64.zip" > SHA256SUMS
+
+      - name: Upload Linux release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: newmark-agent-linux-${{ github.run_id }}
+          if-no-files-found: error
+          path: |
+            release/Newmark-Agent-*.AppImage
+            release/Newmark-Agent-*.deb
+            release/Newmark-Agent-*-linux-unpacked-x64.zip
+            release/SHA256SUMS

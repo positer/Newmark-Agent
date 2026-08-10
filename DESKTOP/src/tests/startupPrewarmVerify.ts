@@ -222,11 +222,11 @@ function verifyDesktopContracts(): void {
     && uiHtml.includes('return terminalReadyPromise'), 'terminal spawning exposes PTY connection completion as an awaitable promise');
   ok(!uiHtml.includes('<webview id="browser-webview"')
     && uiHtml.includes("document.createElement('webview')")
-    && uiHtml.includes("view.setAttribute('partition', NEWMARK_BROWSER_PARTITION)")
-    && uiHtml.includes('api.browserRegisterGuest(view.getWebContentsId())'), 'Browser guest is absent from first-frame DOM and is created dynamically with the retained partition');
+    && uiHtml.includes("view.setAttribute('partition', browserPartitionForTarget(target))")
+    && uiHtml.includes('api.browserRegisterGuest(view.getWebContentsId(), target)'), 'Browser guest is absent from first-frame DOM and is created dynamically with a conversation-bound retained partition');
   ok(uiHtml.includes('NEWMARK_BROWSER_MIN_CREATE_DELAY_MS = 5000')
     && uiHtml.includes('NEWMARK_BROWSER_IDLE_DESTROY_MS = 60000')
-    && uiHtml.includes('browserGuestCreatePromise')
+    && uiHtml.includes('browserGuestCreatePromises')
     && uiHtml.includes('destroyIdleBrowserGuest'), 'Browser creation has a five-second floor, a single-flight guest, and a sixty-second idle-destroy path');
   ok(uiHtml.includes('window.browserGuestLifecycleSnapshot = function()')
     && uiHtml.includes('browserGuestCreateCount += 1')
@@ -234,7 +234,7 @@ function verifyDesktopContracts(): void {
   ok(uiHtml.includes("if (tab === 'browser')")
     && uiHtml.includes('window.ensureBrowserPanel({ activate: true })')
     && uiHtml.includes('api.onBrowserEnsureGuest'), 'the first visible Browser activation or Browser tool demand is the only guest creation trigger');
-  ok(uiHtml.includes("var targetUrl = browserRetainedUrl || 'about:blank'")
+  ok(uiHtml.includes("var targetUrl = browserRetainedUrls[targetKey] || 'about:blank'")
     && uiHtml.includes("if (targetUrl !== 'about:blank'")
     && !uiHtml.includes("browserRetainedUrl !== 'about:blank' ? browserRetainedUrl : 'https://github.com'"), 'first Browser activation creates only a blank guest and never loads a remote default page');
   const startupBarrierIndex = uiHtml.lastIndexOf('if (startupPrewarmRequired)');
@@ -443,9 +443,10 @@ function verifyDesktopContracts(): void {
   const ensureBrowserSource = ensureBrowserStart >= 0 && ensureBrowserEnd > ensureBrowserStart
     ? mainTs.slice(ensureBrowserStart, ensureBrowserEnd)
     : '';
-  ok(ensureBrowserSource.includes("host.send('browser:ensureGuest')")
+  ok(ensureBrowserSource.includes("host.send('browser:ensureGuest'")
     && ensureBrowserSource.includes('waitForRegisteredBrowserGuest')
     && ensureBrowserSource.includes("registered.hostWebContents?.send('browser:ensureGuest')")
+    && ensureBrowserSource.includes('runtimeKey ? { runtimeKey } : undefined')
     && !ensureBrowserSource.includes('new BrowserWindow'), 'cold Browser-Use requests the registered built-in guest with a bounded wait and has no invisible BrowserWindow fallback');
   const coldBrowserUseIndex = packagedDev009Smoke.indexOf("action_id: 'dev009-cold-navigate'");
   const firstVisibleBrowserIndex = packagedDev009Smoke.indexOf("window.switchRightTab('browser')", coldBrowserUseIndex);

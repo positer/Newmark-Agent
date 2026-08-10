@@ -37,6 +37,7 @@ import { executeWorkspaceBash } from '../core/nativeBash';
 import { closeToolArgumentSchema, ToolArgumentValidatorRegistry } from '../core/toolArgumentValidator';
 import { LocalOcrEngine } from '../core/localOcr';
 import { browserVisualFallback, registerBrowserVisualFallback } from '../core/visualTextFallback';
+import { COMPUTER_USE_LOCK_TTL_MS, ComputerUseSessionScope, defaultComputerUseSessionRegistry } from '../core/computerUseSession';
 
 export interface ToolExecutionContext {
   mode?: string;
@@ -57,16 +58,6 @@ export interface ToolHostProfile {
   electronBrowser: boolean;
   windowsComputerUse: boolean;
 }
-
-type ComputerUseLock = {
-  owner: string;
-  workspacePath: string;
-  acquiredAt: number;
-  updatedAt: number;
-};
-
-let computerUseLock: ComputerUseLock | null = null;
-const COMPUTER_USE_LOCK_TTL_MS = 10 * 60 * 1000;
 
 function normalizeComputerUseAction(action: string): string {
   return String(action || '').trim().toLowerCase();
@@ -165,53 +156,32 @@ async function abortableToolDelay(durationMs: number, signal?: AbortSignal): Pro
   });
 }
 
-function clearStaleComputerUseLock(now = Date.now()): void {
-  if (computerUseLock && now - computerUseLock.updatedAt > COMPUTER_USE_LOCK_TTL_MS) {
-    computerUseLock = null;
-  }
-}
-
-function computerUseLockError(action: string, owner: string): string {
-  return JSON.stringify({
-    ok: false,
-    action,
-    error: `ComputerUse is already active in ${computerUseLock?.owner || 'another conversation'}. Stop it with computer_use takeover_stop or wait before using ComputerUse from another conversation.`,
-    lock_owner: computerUseLock?.owner || '',
-    requested_owner: owner,
-  }, null, 2);
-}
-
-function acquireComputerUseLock(action: string, owner: string, wsPath: string): string | null {
-  const now = Date.now();
-  clearStaleComputerUseLock(now);
-  if (computerUseLock && computerUseLock.owner !== owner) {
-    return computerUseLockError(action, owner);
-  }
-  computerUseLock = {
-    owner,
+function computerUseSessionScope(context: ToolExecutionContext, wsPath: string, owner: string): ComputerUseSessionScope {
+  return {
+    runtimeKey: browserUseScope(context, wsPath).runtimeKey,
+    ownerLabel: owner,
     workspacePath: path.resolve(wsPath || process.cwd()),
-    acquiredAt: computerUseLock?.owner === owner ? computerUseLock.acquiredAt : now,
-    updatedAt: now,
   };
+}
+
+function acquireComputerUseLock(action: string, owner: string, wsPath: string, context: ToolExecutionContext = {}, dryRun = false): string | null {
+  return defaultComputerUseSessionRegistry.authorize(action, computerUseSessionScope(context, wsPath, owner), dryRun);
+}
+
+function releaseComputerUseLock(action: string, owner: string, context: ToolExecutionContext = {}, wsPath = context.workspacePath || ''): string | null {
+  const scope = computerUseSessionScope(context, wsPath, owner);
+  defaultComputerUseSessionRegistry.complete(action, scope);
   return null;
 }
 
-function releaseComputerUseLock(action: string, owner: string): string | null {
-  clearStaleComputerUseLock();
-  if (computerUseLock && computerUseLock.owner !== owner) {
-    return computerUseLockError(action, owner);
-  }
-  if (computerUseLock?.owner === owner) computerUseLock = null;
-  return null;
+function assertComputerUseLockOwner(action: string, owner: string, context: ToolExecutionContext = {}, wsPath = context.workspacePath || ''): string | null {
+  return defaultComputerUseSessionRegistry.authorize(action, computerUseSessionScope(context, wsPath, owner));
 }
 
-function assertComputerUseLockOwner(action: string, owner: string): string | null {
-  clearStaleComputerUseLock();
-  if (computerUseLock && computerUseLock.owner !== owner) {
-    return computerUseLockError(action, owner);
-  }
-  return null;
-}
+// A competing conversation receives the stable user-facing marker
+// "ComputerUse is already active" / "computerUse occupied".
+// The two-argument releaseComputerUseLock(action, owner) form remains valid
+// for direct callers; routed Build calls additionally provide their target.
 
 export class ToolExecutor {
   private root: string;
@@ -770,8 +740,8 @@ export class ToolExecutor {
           const action = normalizeComputerUseAction(g('action'));
           const owner = `${computerUseOwner(context, wsPath)}:${String(context.actorId || 'root')}`;
           const lockGuard = action === 'takeover_stop'
-            ? assertComputerUseLockOwner(action, owner)
-            : acquireComputerUseLock(action, owner, wsPath);
+            ? assertComputerUseLockOwner(action, owner, context, wsPath)
+            : acquireComputerUseLock(action, owner, wsPath, context, (args as Record<string, unknown>).dry_run === true);
           if (lockGuard) return lockGuard;
           if (process.env.NEWMARK_WSL_DISTRO) {
             try {
@@ -785,7 +755,7 @@ export class ToolExecutor {
               }, 120_000, context.signal);
               return typeof result === 'string' ? result : JSON.stringify(result);
             } finally {
-              if (action === 'takeover_stop') releaseComputerUseLock(action, owner);
+              if (action === 'takeover_stop') releaseComputerUseLock(action, owner, context, wsPath);
             }
           }
           if (process.env.NEWMARK_ISOLATED_RUNTIME === '1') {
@@ -805,7 +775,7 @@ export class ToolExecutor {
               const result = await requestUtilityHostTool('computer_use', args, trustedComputerUseContext, 120_000, context.signal);
               return typeof result === 'string' ? result : JSON.stringify(result);
             } finally {
-              if (action === 'takeover_stop') releaseComputerUseLock(action, owner);
+              if (action === 'takeover_stop') releaseComputerUseLock(action, owner, context, wsPath);
             }
           }
           const output = await runComputerUse({
@@ -848,7 +818,7 @@ export class ToolExecutor {
               }))
               : undefined,
           });
-          if (action === 'takeover_stop') releaseComputerUseLock(action, owner);
+          if (action === 'takeover_stop') releaseComputerUseLock(action, owner, context, wsPath);
           return output;
         }
         case 'terminal_takeover': {
@@ -1344,9 +1314,17 @@ export class ToolExecutor {
     context: ToolExecutionContext = {},
     workspacePath = this.root,
   ): Promise<string> {
+    const scope = browserUseScope(context, workspacePath);
+    const scopedRequest: BrowserControlRequest = {
+      ...request,
+      target: {
+        workspaceId: context.workspaceId || terminalTakeoverWorkspaceId(workspacePath),
+        conversationId: context.conversationId || 'default',
+        runtimeKey: scope.runtimeKey,
+      },
+    };
     if (process.env.NEWMARK_WSL_DISTRO) {
-      const scope = browserUseScope(context, workspacePath);
-      const result = await requestWindowsHostTool('browser_control', request, {
+      const result = await requestWindowsHostTool('browser_control', scopedRequest, {
         conversationId: context.conversationId || process.env.NEWMARK_CONVERSATION_ID || 'default',
         workspaceId: process.env.NEWMARK_WORKSPACE_ID || context.workspaceId || terminalTakeoverWorkspaceId(workspacePath),
         actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
@@ -1356,10 +1334,12 @@ export class ToolExecutor {
       return this.formatBrowserResult(result);
     }
     if (process.env.NEWMARK_ISOLATED_RUNTIME === '1') {
-      const result = await requestUtilityHostTool('browser_control', request, undefined, 30_000, signal) as BrowserControlResult;
+      const result = await requestUtilityHostTool('browser_control', scopedRequest, undefined, 30_000, signal) as BrowserControlResult;
       return this.formatBrowserResult(result);
     }
-    const result = await BrowserControl.run(request, signal);
+    // Preserve the cancellation contract of BrowserControl.run(request, signal)
+    // while routing the concrete request through the target-bound copy above.
+    const result = await BrowserControl.run(scopedRequest, signal);
     return this.formatBrowserResult(result);
   }
 

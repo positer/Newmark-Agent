@@ -4,6 +4,7 @@ import { bindBrowserUseRequest, BrowserUse, BrowserUseReceipt, BrowserUseRequest
 import { evaluateToolPolicy } from './toolPolicy';
 import { UtilityHostToolRequest } from './utilityAgentProtocol';
 import { runComputerUse } from '../tools/computerUse';
+import { ComputerUseSessionScope, ComputerUseSessionState, defaultComputerUseSessionRegistry } from './computerUseSession';
 import {
   ROOT_TERMINAL_ACTOR_ID,
   runTerminalTakeover,
@@ -32,15 +33,10 @@ export interface UtilityHostToolRouterOptions {
   runTerminal?: typeof runTerminalTakeover;
 }
 
-interface ComputerUseLease {
-  owner: string;
-  runtimeKey: string;
-  workspacePath: string;
-  updatedAt: number;
-}
-
 export type RoutedUtilityHostToolHandler = ((request: UtilityHostToolRequest, signal?: AbortSignal) => Promise<unknown>) & {
   cancelTarget(runtimeKey: string): void;
+  computerUseState(runtimeKey: string): ComputerUseSessionState;
+  setComputerUseEnabled(runtimeKey: string, enabled: boolean, ownerLabel?: string): { ok: boolean; state: ComputerUseSessionState; error?: string };
 };
 
 /**
@@ -49,14 +45,12 @@ export type RoutedUtilityHostToolHandler = ((request: UtilityHostToolRequest, si
  * one authoritative owner lock rather than one lock per child process.
  */
 export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptions): RoutedUtilityHostToolHandler {
-  let computerUseLease: ComputerUseLease | null = null;
   const terminalOwners = new Map<string, {
     backend: string;
     workspaceId: string;
     conversationId: string;
   }>();
   const ephemeralScreenshots = new Map<string, Set<string>>();
-  const lockTtlMs = 10 * 60 * 1000;
 
   const handler = async (request: UtilityHostToolRequest, signal?: AbortSignal): Promise<unknown> => {
     throwIfAborted(signal);
@@ -71,7 +65,14 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
     }
     if (request.tool === 'browser_control') {
       if (request.args.action === 'use') throw new Error('Isolated Browser-Use must use the target-bound browser_use host RPC');
-      const result = await (options.runBrowser || BrowserControl.run.bind(BrowserControl))(request.args, signal);
+      const result = await (options.runBrowser || BrowserControl.run.bind(BrowserControl))({
+        ...request.args,
+        target: {
+          workspaceId: request.target.workspaceId,
+          conversationId: request.target.conversationId,
+          runtimeKey: request.target.runtimeKey,
+        },
+      }, signal);
       throwIfAborted(signal);
       return result;
     }
@@ -126,17 +127,13 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
       allowEphemeralVisionImage?: boolean;
     };
     const owner = `${request.target.runtimeKey}:${String(request.context.actorId || ROOT_TERMINAL_ACTOR_ID)}`;
-    const now = Date.now();
-    if (computerUseLease && now - computerUseLease.updatedAt > lockTtlMs) computerUseLease = null;
-    if (action === 'takeover_stop') {
-      if (computerUseLease && computerUseLease.owner !== owner) {
-        return computerUseLockError(action, owner, computerUseLease.owner);
-      }
-    } else if (computerUseLease && computerUseLease.owner !== owner) {
-      return computerUseLockError(action, owner, computerUseLease.owner);
-    } else {
-      computerUseLease = { owner, runtimeKey: request.target.runtimeKey, workspacePath: request.target.workspacePath, updatedAt: now };
-    }
+    const sessionScope: ComputerUseSessionScope = {
+      runtimeKey: request.target.runtimeKey,
+      ownerLabel: owner,
+      workspacePath: request.target.workspacePath,
+    };
+    const lockGuard = defaultComputerUseSessionRegistry.authorize(action, sessionScope, args.dry_run === true || args.dryRun === true);
+    if (lockGuard) return lockGuard;
 
     let retainedScreenshotPath = '';
     try {
@@ -204,8 +201,7 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
       if (signal?.aborted && retainedScreenshotPath) {
         try { fs.unlinkSync(retainedScreenshotPath); } catch {}
       }
-      if (action === 'takeover_stop' && (!computerUseLease || computerUseLease.owner === owner)) computerUseLease = null;
-      else if (computerUseLease?.owner === owner) computerUseLease.updatedAt = Date.now();
+      defaultComputerUseSessionRegistry.complete(action, sessionScope);
     }
   };
 
@@ -223,9 +219,9 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
         if (session.active) stopTerminalTakeoverSession(session.id, terminalOwner, 'runtime-force-restart');
       }
     }
-    if (computerUseLease?.runtimeKey === runtimeKey) {
-      const lease = computerUseLease;
-      computerUseLease = null;
+    const hadComputerUseLease = defaultComputerUseSessionRegistry.cancelTarget(runtimeKey);
+    if (hadComputerUseLease) {
+      const lease = { workspacePath: options.persistenceRoot, owner: runtimeKey };
       void (options.runComputer || runComputerUse)({
         action: 'takeover_stop',
         workspacePath: lease.workspacePath,
@@ -233,6 +229,11 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
         ownerId: lease.owner,
       }).catch(() => undefined);
     }
+  };
+
+  handler.computerUseState = (runtimeKey: string) => defaultComputerUseSessionRegistry.state(runtimeKey);
+  handler.setComputerUseEnabled = (runtimeKey: string, enabled: boolean, ownerLabel = `conversation:${runtimeKey}`) => {
+    return defaultComputerUseSessionRegistry.setEnabled({ runtimeKey, ownerLabel, workspacePath: options.persistenceRoot }, enabled);
   };
 
   return handler;
@@ -290,14 +291,4 @@ function evaluateUtilityHostToolPolicy(request: UtilityHostToolRequest) {
     isSubagent: !!context && context.actorId !== ROOT_AGENT_ACTOR_ID,
     args,
   });
-}
-
-function computerUseLockError(action: string, requestedOwner: string, activeOwner: string): string {
-  return JSON.stringify({
-    ok: false,
-    action,
-    error: `Computer Use is already active in ${activeOwner}. Stop it with computer_use takeover_stop or wait before another conversation takes control.`,
-    lock_owner: activeOwner,
-    requested_owner: requestedOwner,
-  }, null, 2);
 }

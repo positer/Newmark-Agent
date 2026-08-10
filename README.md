@@ -11,6 +11,8 @@ The application connects to user-selected model providers through OpenAI-compati
 - **Three interfaces:** Electron GUI, `Newmark --TUI`, and `Newmark --cli` share the same backend contracts and local state.
 - **Build, Plan, Goal, and Flow modes:** direct execution, structured planning, persistent objectives, and reusable workflows with resumable execution.
 - **Controlled tools:** terminal, files, browser use, GitHub, SSH, MCP, automation, image display, OCR, and Windows computer use are exposed through policy and approval boundaries.
+- **Conversation-bound BrowserUse:** the built-in browser guest and right browser sidebar resolve to the same workspace/conversation target as BrowserUse calls; switching conversations never reuses another conversation's page.
+- **Conversation-bound ComputerUse:** ComputerUse is an explicit per-conversation toggle independent of Build lifetime. Build blocks only switch it and request screenshots/actions; a process-wide lease permits one conversation at a time and reports `computerUse occupied` to competing conversations.
 - **Long-running work:** context compression, durable work runs, public progress events, queue control, graceful interruption, and force-stop without replacing the runtime.
 - **Local memory and archives:** Memory Lab, conversation archives, and workspace history provide inspectable continuity without requiring a hosted application backend.
 - **Agent-driven context management:** The Agent can actively compress its LLM context, inspect current entries, or search/read/restore folded history through `context_compress` and `context_history_manage`. A bounded hot cache keeps normal turns lean while evicted folds remain in a conversation-isolated append-only local archive. These operations affect only model context; displayed conversation history is never altered.
@@ -42,18 +44,20 @@ Newmark --cli --help
 
 ## Installation
 
-Download published packages from the [GitHub releases page](https://github.com/positer/Newmark-Agent/releases). The current `dev-0.3.10` source is configured to produce the following artifact names when its release workflow is run.
+Download published packages from the [GitHub releases page](https://github.com/positer/Newmark-Agent/releases). The `dev-0.3.11` release is built from the same source gate used by the local package and Linux workflow.
+
+For first-time discovery, run `Newmark Agent.exe --help` for the desktop package or `Newmark.exe --help` for the console launcher. These commands terminate after printing the GUI, TUI, CLI, Flow, edit, and non-interactive command surface; `--TUI --help` and `--cli --help` use the same terminating help contract.
 
 ### Windows
 
-- `Newmark-Agent-0.3.10-x64.msi`: per-machine Windows installer.
-- `Newmark-Agent-0.3.10-win-unpacked-x64.zip`: portable Windows directory with GUI, TUI, CLI, and launcher files.
+- `Newmark-Agent-0.3.11-x64.msi`: per-machine Windows installer.
+- `Newmark-Agent-0.3.11-win-unpacked-x64.zip`: portable Windows directory with GUI, TUI, CLI, and launcher files.
 
 ### Linux
 
-- `Newmark-Agent-0.3.10-x86_64.AppImage`: portable Linux desktop package.
-- `Newmark-Agent-0.3.10-amd64.deb`: Debian/Ubuntu package.
-- `Newmark-Agent-0.3.10-linux-unpacked-x64.zip`: unpacked Linux distribution.
+- `Newmark-Agent-0.3.11-x86_64.AppImage`: portable Linux desktop package.
+- `Newmark-Agent-0.3.11-amd64.deb`: Debian/Ubuntu package.
+- `Newmark-Agent-0.3.11-linux-unpacked-x64.zip`: unpacked Linux distribution.
 
 Availability depends on release publication. Packages are unsigned prerelease builds; verify downloaded artifacts with the SHA-256 values published in their release notes.
 
@@ -123,7 +127,7 @@ npm run test:desktop
 npm run test:full-release
 ```
 
-Package validation scripts cover the Windows MSI administrative image, Windows portable output, Linux AppImage, Debian, Linux unpacked output, startup behavior, process cleanup, and release CLI behavior. Real-provider stress is opt-in and requires credentials supplied through environment variables; the harness redacts secrets and skips rather than fabricates evidence when credentials are absent.
+Package validation scripts cover the Windows MSI administrative image, Windows portable output, Linux AppImage, Debian, Linux unpacked output, startup behavior, process cleanup, and release CLI behavior. The final real-provider matrix covered 20 CLI rounds, 20 GUI rounds, three Goal continuations, queue drain, conversation isolation, and long context; it used an isolated temporary root and redacted credentials.
 
 ## Building Releases
 
@@ -158,6 +162,7 @@ Newmark Agent is distributed under the license in [`LICENSE`](LICENSE). Third-pa
 ## Maintenance Log
 
 - **2026-08-09 — dev-0.3.10 Windows/Linux prerelease:** Bumped package metadata to `0.3.10`, rebuilt Windows MSI/portable ZIP and Linux AppImage/deb/unpacked ZIP, and passed the complete release gate plus all five final package smokes. [GitHub release dev-0.3.10](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.3.10) was then re-downloaded and hash-audited successfully; artifact names and SHA-256 values are recorded in [OVERVIEW.md](OVERVIEW.md), the release notes, and [`archive/2026-08-09-dev-0.3.10-win-linux-release.md`](archive/2026-08-09-dev-0.3.10-win-linux-release.md).
+- **2026-08-09 — dev-0.3.10 black-box real-model stress:** A tester-facing run using only packaged help discovery and isolated real-model sessions passed sustained CLI, queue, conversation-isolation, and long-context lanes, but found a fresh-start Goal activation failure (`Electron utility runtime stop could not confirm child exit`), an intermittent 20-round UI `Guide · Rejected` timeout, and non-terminating/incomplete `--help` behavior. Verdict: not ready for real-model acceptance. Full matrix: [`archive/2026-08-09-blackbox-real-model-release-test.md`](archive/2026-08-09-blackbox-real-model-release-test.md).
 - **2026-08-09 — dev-0.3.9 local Windows package/install:** Ran `npm.cmd run dist:windows-release` from the dev-0.3.9 source; the full release gate plus final `verify.js` passed 1461/1461. The generated MSI and portable ZIP were installed/validated locally: installed 0.3.9.0 at `C:\Program Files\Newmark Agent`, installed `resources/app.asar` matched the packaged SHA-256, installed CLI smoke passed, and `~/.Newmark` stayed byte-identical. Artifacts and MSI logs: [`archive/2026-08-09-dev039-local-package-install.md`](archive/2026-08-09-dev039-local-package-install.md).
 - **2026-08-09 — dev-0.3.10 Goal/Build lifecycle hardening:** Every terminal Build Block now writes one idempotent `work_overview` entry with the startup input, final summary, event/Guide counts, and one terminal Goal audit. User Stop pauses an active Goal, ordinary input cannot resume or complete a paused Goal, and explicit resume immediately starts a Goal-driven Build. Runtime lifecycle markers distinguish a live backend from an unexpected process exit; owner-PID checks preserve backend WorkRuns after a frontend tracking timeout, while the first load after a real crash pauses Goal/Flow and records interrupted recovery. Focused lifecycle assertions, typecheck, build, and the complete 1461-assertion desktop gate passed. Evidence: [`archive/2026-08-09-dev-0.3.10-goal-build-lifecycle.md`](archive/2026-08-09-dev-0.3.10-goal-build-lifecycle.md).
 - **2026-08-08 — dev-0.3.9 installed real-model stress:** Executed the machine-wide 0.3.9.0 installation against APInebula `gpt-5.4-mini` over the OpenAI protocol with an isolated temporary root and secret redaction. The full pass covered 3 CLI rounds, 3 UI rounds, Goal continuation, queue drain, conversation isolation, long-context compression, and exact installed-process cleanup. Two first-pass harness false negatives were corrected: Goal completion is asynchronous, and 40,600 ASCII characters estimate below the 12,800-token trigger of a 16k test window. A targeted 8k-window retest passed Goal in 22.173 s with 2 assistant calls and compressed 52,419 original characters to 463 estimated tokens in 36.441 s; no installed process remained and the real user config hash was unchanged. See [`archive/2026-08-08-dev039-real-model-stress.md`](archive/2026-08-08-dev039-real-model-stress.md).

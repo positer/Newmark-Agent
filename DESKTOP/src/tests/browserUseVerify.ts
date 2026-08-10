@@ -430,6 +430,7 @@ async function main(): Promise<void> {
   const routedBrowserSignals: Array<AbortSignal | undefined> = [];
   const cancelledBrowserTargets: string[] = [];
   const toolEnableChecks: string[] = [];
+  let computerUseStops = 0;
   let browserUseEnabled = false;
   const utilityHandler = createUtilityHostToolHandler({
     persistenceRoot: toolRoot,
@@ -456,6 +457,10 @@ async function main(): Promise<void> {
       };
     },
     cancelBrowserUseTarget: runtimeKey => { cancelledBrowserTargets.push(runtimeKey); },
+    runComputer: async options => {
+      if (String(options.action || '').toLowerCase() === 'takeover_stop') computerUseStops += 1;
+      return JSON.stringify({ ok: true, action: options.action });
+    },
   });
   const alphaTarget = { workspaceId: 'Alpha', conversationId: 'default', runtimeKey: 'workspace:alpha::conversation:default', workspaceKey: 'workspace:alpha', workspacePath: 'C:\\alpha' };
   const betaTarget = { workspaceId: 'Beta', conversationId: 'default', runtimeKey: 'workspace:beta::conversation:default', workspaceKey: 'workspace:beta', workspacePath: 'C:\\beta' };
@@ -495,6 +500,7 @@ async function main(): Promise<void> {
   assert(rejectedUtilityMismatch && Number(routedBrowserUse.length) === 3, 'utility router rejects a runtime context mismatch before the Browser-Use engine');
   utilityHandler.cancelTarget(alphaTarget.runtimeKey);
   assert(cancelledBrowserTargets[0] === alphaTarget.runtimeKey, 'utility force-restart cleanup clears only the target Browser-Use runtime');
+  assert(computerUseStops === 0, 'Browser-Use target cleanup does not start a Computer-Use stop process when that conversation never held the global lease');
 
   let utilityEnvelope: any = null;
   const utilityCancelIds: string[] = [];

@@ -28,6 +28,8 @@ export interface BrowserUseHostPage {
   identity(signal?: AbortSignal): Promise<{ pageToken: string; url: string; title: string }>;
   evaluateFixed<T>(script: string, signal?: AbortSignal): Promise<T>;
   clickAt(x: number, y: number, signal?: AbortSignal): Promise<void>;
+  /** Optional deterministic DOM click for embedded guests where native input can be dropped while the host tab is settling. */
+  clickElement?(token: string, signal?: AbortSignal): Promise<void>;
   replaceFocusedText(text: string, signal?: AbortSignal): Promise<void>;
   pressKey(key: string, signal?: AbortSignal): Promise<void>;
   navigate(url: string, signal?: AbortSignal): Promise<void>;
@@ -245,6 +247,18 @@ export function browserUseFocusScript(token: string): string {
   return `(() => { const el = document.querySelector(${json(token)}); if (!el) return false; if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' }); el.focus({ preventScroll: true }); return document.activeElement === el || el.contains(document.activeElement); })()`;
 }
 
+export function browserUseClickScript(token: string): string {
+  return `(() => {
+    const el = document.querySelector(${json(token)});
+    if (!el) return { clicked: false, error: 'ref_not_found' };
+    if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
+    if (typeof el.focus === 'function') el.focus({ preventScroll: true });
+    if (typeof el.click !== 'function') return { clicked: false, error: 'not_clickable' };
+    el.click();
+    return { clicked: true, tag: String(el.localName || 'element').toLowerCase() };
+  })()`;
+}
+
 export function browserUseSelectScript(token: string, value: string): string {
   return `(() => {
     const el = document.querySelector(${json(token)});
@@ -357,8 +371,12 @@ export class NativeBrowserUsePageAdapter implements BrowserUsePageAdapter {
             throw error;
           }
           if (request.action === 'click') {
-            const rect = probe.rect!;
-            await page.clickAt(rect.x + rect.width / 2, rect.y + rect.height / 2, signal);
+            if (page.clickElement) {
+              await page.clickElement(request.element.token, signal);
+            } else {
+              const rect = probe.rect!;
+              await page.clickAt(rect.x + rect.width / 2, rect.y + rect.height / 2, signal);
+            }
             await page.waitForReady(signal);
             return { clicked: true };
           }

@@ -23,6 +23,8 @@ Packages are unsigned prerelease builds. Verify the SHA-256 values below before 
 | --- | --- |
 | `Newmark-Agent-0.3.11-x64.msi` | `E9BFB514B583556BFB64E8B35815EE8CD916CAC4FACC43EE0AC1FFD87D305817` |
 | `Newmark-Agent-0.3.11-win-unpacked-x64.zip` | `B8E287CDB393482EF1B3CEB9A91AB4BF86328C06AF8A13A80239DD4778ECFDFB` |
-| `Newmark-Agent-0.3.11-x86_64.AppImage` | _filled after packaging_ |
-| `Newmark-Agent-0.3.11-amd64.deb` | _filled after packaging_ |
-| `Newmark-Agent-0.3.11-linux-unpacked-x64.zip` | _filled after packaging_ |
+| `Newmark-Agent-0.3.11-x86_64.AppImage` | `CC3CB39D4F011E81330E4F097A5A1029E13CC00026E8799FCB7379AD8B008E0D` |
+| `Newmark-Agent-0.3.11-amd64.deb` | `F4FE914FE8DA3BE65CF055C0F2E86DC44D4D078771D94009D4E6AB81496A2767` |
+| `Newmark-Agent-0.3.11-linux-unpacked-x64.zip` | `3CDE1AAEFFBACA2E6B9F3E5AAB9FFE0C2899308716DDA83B6DD5C32868E3DAB2` |
+
+The checksum manifest is attached to the GitHub release as `SHA256SUMS`; the tagged release URL is https://github.com/positer/Newmark-Agent/releases/tag/dev-0.3.11.

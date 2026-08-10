@@ -16,7 +16,13 @@ The final local Windows assets are:
 - `release/Newmark-Agent-0.3.11-x64.msi`: 225,868,085 bytes, SHA-256 `E9BFB514B583556BFB64E8B35815EE8CD916CAC4FACC43EE0AC1FFD87D305817`.
 - `release/Newmark-Agent-0.3.11-win-unpacked-x64.zip`: 291,695,654 bytes, SHA-256 `B8E287CDB393482EF1B3CEB9A91AB4BF86328C06AF8A13A80239DD4778ECFDFB`.
 
-`.github/workflows/release-linux.yml` builds and smoke-tests Linux AppImage, Debian, and unpacked ZIP artifacts on Ubuntu, then emits a SHA-256 manifest. Linux artifact hashes and the GitHub release URL are appended here after the remote workflow and re-download audit complete.
+`.github/workflows/release-linux.yml` builds and smoke-tests Linux AppImage, Debian, and unpacked ZIP artifacts on Ubuntu, then emits a SHA-256 manifest. The remote workflow and re-download audit passed. The release is [dev-0.3.11](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.3.11).
+
+Remote Linux assets:
+
+- `Newmark-Agent-0.3.11-x86_64.AppImage`: SHA-256 `CC3CB39D4F011E81330E4F097A5A1029E13CC00026E8799FCB7379AD8B008E0D`.
+- `Newmark-Agent-0.3.11-amd64.deb`: SHA-256 `F4FE914FE8DA3BE65CF055C0F2E86DC44D4D078771D94009D4E6AB81496A2767`.
+- `Newmark-Agent-0.3.11-linux-unpacked-x64.zip`: SHA-256 `3CDE1AAEFFBACA2E6B9F3E5AAB9FFE0C2899308716DDA83B6DD5C32868E3DAB2`.
 
 ## dev-0.3.10 Windows/Linux packaged prerelease (2026-08-09)
 

@@ -12,7 +12,7 @@ import {
   ConversationStopResult,
 } from '../core/conversationKernel';
 import { Agent } from '../core/agent';
-import { normalizeHostWorkspacePath } from '../core/workspace';
+import { isProtectedInstallWorkspacePath, normalizeHostWorkspacePath } from '../core/workspace';
 import { AgentWorkEvent, ConversationInputEnvelope, GuideReceipt, StreamToken } from '../core/types';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -135,6 +135,58 @@ async function verifyCrossHostWorkspaceRegistryIsolation(): Promise<void> {
       'a detached WSL/utility worker never normalizes or rewrites the main-process workspace registry');
   } finally {
     fs.rmSync(detachedRoot, { recursive: true, force: true });
+  }
+}
+
+async function verifyProtectedInstallWorkspaceRecovery(): Promise<void> {
+  if (process.platform !== 'win32') return;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-protected-install-workspace-'));
+  try {
+    const installWorkspace = path.join(
+      process.env.ProgramFiles || path.dirname(process.execPath),
+      'Newmark Agent',
+      `stale-workspace-${process.pid}-${Date.now()}`,
+    );
+    assert.equal(isProtectedInstallWorkspacePath(installWorkspace), true, 'the installed package directory must be treated as protected');
+    const work = path.join(root, 'Work');
+    fs.mkdirSync(work, { recursive: true });
+    fs.writeFileSync(path.join(work, 'Local.json'), '[]\n', 'utf8');
+    fs.writeFileSync(path.join(work, 'External.json'), `${JSON.stringify([{
+      id: 'workspace-stale-install',
+      name: 'stale-workspace',
+      path: installWorkspace,
+      isInternal: false,
+      hostBinding: '',
+      icon: 'S',
+    }], null, 2)}\n`, 'utf8');
+    fs.writeFileSync(path.join(work, 'State.json'), `${JSON.stringify({
+      current: {
+        id: 'workspace-stale-install',
+        name: 'stale-workspace',
+        path: installWorkspace,
+        isInternal: false,
+      },
+    }, null, 2)}\n`, 'utf8');
+
+    const agent = new Agent(root);
+    assert.equal(agent.workspace.external.some(item => isProtectedInstallWorkspacePath(item.path)), false,
+      'restored external workspaces cannot point into the installed package');
+    assert.ok(!agent.workspace.current || !isProtectedInstallWorkspacePath(agent.workspace.current.path),
+      'the current workspace cannot remain inside the installed package');
+    assert.ok(agent.workspace.current,
+      'a normal startup recovers to a user-root workspace after filtering the stale pointer');
+    agent.ensureConversationSnapshot('default');
+    agent.flushWorkspaceConversationState();
+    assert.equal(fs.existsSync(path.join(installWorkspace, 'conversations')), false,
+      'startup conversation hydration never creates a conversations directory under the installation');
+    const persistedExternal = JSON.parse(fs.readFileSync(path.join(work, 'External.json'), 'utf8')) as Array<{ path?: string }>;
+    assert.equal(persistedExternal.some(item => isProtectedInstallWorkspacePath(String(item.path || ''))), false,
+      'the protected workspace migration is persisted without the stale install entry');
+    const persistedCurrent = JSON.parse(fs.readFileSync(path.join(work, 'State.json'), 'utf8')) as { current?: { path?: string } | null };
+    assert.equal(!!persistedCurrent.current?.path && isProtectedInstallWorkspacePath(persistedCurrent.current.path), false,
+      'the persisted current-workspace pointer is cleared or replaced with a user-root workspace');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -2015,6 +2067,7 @@ async function main(): Promise<void> {
   await verifyConversationTargets();
   await verifyStableWorkspaceIds();
   await verifyCrossHostWorkspaceRegistryIsolation();
+  await verifyProtectedInstallWorkspaceRecovery();
   await verifyConversationCacheObservesExternalWrites();
   await verifyWorkspaceRegistryReloadsExternalChanges();
   await verifyWorkspaceSelectionCoordination();

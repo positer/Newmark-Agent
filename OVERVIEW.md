@@ -1,5 +1,13 @@
 # Newmark Agent Overview
 
+## Installed workspace recovery repair (2026-08-13) — pass; release payload rebuilt
+
+The real `C:\Program Files\Newmark Agent` MSI installation reproduced a startup failure from the user screenshot: an older persisted external/current workspace pointed at the installation directory, and conversation prewarming attempted to create `C:\Program Files\Newmark Agent\conversations`, producing `EPERM` and preventing the main UI from opening. The workspace layer now treats package/install paths as protected, filters stale external entries, clears a stale current pointer before hydration, and lets normal configuration recover to a user-root internal workspace. A Windows regression test verifies that no protected `conversations` directory is created and that the cleaned registries are persisted.
+
+After rebuilding and repairing the MSI in place, the real no-`--root` GUI promoted its CDP UI in about `2.1 s`; the new log contained `conversation-state-ready` and `prewarmed-ui-shown` with no new EPERM or startup-attempt failure. `Work/State.json` and `Work/External.json` no longer contained the Program Files path, and no installed-directory process remained after cleanup. The installed GUI↔CLI/TUI gate, real APInebula model CLI/TUI roundtrip with Esc stop/recovery/restart, protected-root redirection, and ZIP unpacked smoke all passed. Detailed evidence: [`archive/20260813-dev-0.3.12-installed-workspace-recovery.md`](archive/20260813-dev-0.3.12-installed-workspace-recovery.md).
+
+Rebuilt artifact fingerprints are MSI `4D42B3AD865765A3944C349FAB638A1835E97FCB76DC1315588A9088DF7B62FE`, portable ZIP `A56B37A7173BB69441BBCDCAEBF5DC7D77C7F6D0C45FA799E6BF82FCCA4BDF8E`, and packaged `app.asar` `84D65F79E82FE5CCB47BD01CAFADDDDA3B1EEE5E7173EEDECA5D0F005B7C0433`. The existing `dev-0.3.12` prerelease assets are pending replacement with this repaired payload after the source commit and remote tag audit.
+
 ## Final dev-0.3.12 release audit (2026-08-13) — published prerelease; three Luna canaries and installed gates pass
 
 The post-repair release gate now has three consecutive complete no-context black-box canary reports using only `gpt-5.6-luna` with `max` reasoning: the first covered the real CLI version/help/unknown-command/state boundary, the second covered the packaged Console Runtime and GUI help/version entrypoints, and the third covered `context_history_manage list` plus Console Runtime state in a fresh path-with-spaces root. All three explicitly reported that they could not find a new product problem; every canary cleaned its temporary root and left no Newmark/Electron process.

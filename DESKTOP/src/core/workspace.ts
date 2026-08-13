@@ -62,6 +62,38 @@ export function normalizeHostWorkspacePath(input: string, platform: NodeJS.Platf
   return path.posix.resolve(raw || '.');
 }
 
+function isPathInside(parent: string, child: string): boolean {
+  try {
+    const relative = path.relative(path.resolve(parent), path.resolve(child));
+    return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * An installed package is never a writable user workspace. Older builds could
+ * persist the install directory as an external workspace when the GUI was
+ * started from its shortcut working directory; restoring that entry then
+ * tried to create `<install>\\conversations` under Program Files. Keep this
+ * policy in the workspace layer so GUI, TUI, CLI, and detached runtimes all
+ * recover the same way.
+ */
+export function isProtectedInstallWorkspacePath(candidate: string): boolean {
+  const value = String(candidate || '').trim();
+  if (!value) return false;
+  const roots = [path.dirname(process.execPath)];
+  if (process.platform === 'win32') {
+    roots.push(
+      process.env.ProgramFiles || '',
+      process.env['ProgramFiles(x86)'] || '',
+      process.env.ProgramW6432 || '',
+    );
+  }
+  const resolved = path.resolve(value);
+  return roots.filter(Boolean).some(root => isPathInside(root, resolved));
+}
+
 export class WorkspaceManager {
   public current: WorkspaceInfo | null = null;
   public internal: WorkspaceInfo[] = [];
@@ -123,9 +155,17 @@ export class WorkspaceManager {
     } catch { /* empty */ }
     try {
       const ext = JSON.parse(fs.readFileSync(path.join(w, 'External.json'), 'utf-8'));
-      this.external = Array.isArray(ext)
+      const normalized = Array.isArray(ext)
         ? ext.map(item => this.normalizeExternalWorkspace(item, changed => { externalChanged = externalChanged || changed; }))
         : [];
+      this.external = normalized.filter(workspace => {
+        if (!isProtectedInstallWorkspacePath(workspace.path)) return true;
+        // Never restore or persist the installation directory as a user
+        // workspace. It is a migration boundary for registries written by
+        // older versions and by package-level pressure tests.
+        externalChanged = true;
+        return false;
+      });
     } catch { /* empty */ }
     // Scan for directories not in Local.json
     for (const entry of fs.readdirSync(w, { withFileTypes: true })) {
@@ -326,6 +366,15 @@ export class WorkspaceManager {
 
   private restoreCurrent(): void {
     const stateCurrent = this.readState().current || null;
+    if (stateCurrent?.path && isProtectedInstallWorkspacePath(stateCurrent.path)) {
+      // The previous current workspace may have been filtered from
+      // External.json above. Clear the pointer instead of falling back to an
+      // arbitrary external directory; Agent can create/reuse a user-root
+      // internal workspace according to its normal configuration.
+      this.current = null;
+      this.saveState();
+      return;
+    }
     const stored = this.findWorkspace(stateCurrent);
     if (stored) {
       this.current = stored;

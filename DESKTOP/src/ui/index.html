@@ -5204,6 +5204,9 @@ var state = {
   editorCompletionText: '',
   editorCompletionRequest: 0,
   editorCompletionAnchor: null,
+  editorCompletionCache: [],
+  editorCompletionInFlight: false,
+  editorCompletionStreamText: '',
   editorCaretSignature: '',
   editorPredictionEnabled: true,
   editorCompletionTimer: null,
@@ -16082,8 +16085,7 @@ window.renderNativeEditor = function() {
   }
   window.renderEditorGutter(code);
   if (els['editor-language']) els['editor-language'].textContent = language;
-  var before = code.slice(0, ta.selectionStart || 0).split('\n');
-  if (els['editor-position']) els['editor-position'].textContent = before.length + ':' + (before[before.length - 1].length + 1);
+  window.renderEditorCaretStatus();
   if (els['editor-dirty']) els['editor-dirty'].textContent = code !== state.editorOriginal ? 'modified' : '';
   if (els['editor-vim-mode']) els['editor-vim-mode'].textContent = state.editorVimEnabled ? state.editorVimMode.toUpperCase() : 'INSERT';
   if (state.editorPreview && els['editor-md-preview']) els['editor-md-preview'].innerHTML = renderMessageContent(code);
@@ -16125,6 +16127,7 @@ window.editorSetValue = function(value, preserveUndo) {
   if (!ta) return;
   if (!preserveUndo && ta.value !== value) { state.editorUndo.push(ta.value); if (state.editorUndo.length > 100) state.editorUndo.shift(); state.editorRedo = []; }
   ta.value = value;
+  state.editorCompletionCache = [];
   window.renderNativeEditor();
 };
 
@@ -16153,23 +16156,100 @@ window.editorReplaceSelection = function(text) {
   window.renderNativeEditor();
 };
 
-window.requestEditorCompletion = async function() {
+window.applyEditorCompletionDelta = function(payload) {
+  payload = payload || {};
+  if (String(payload.requestId || '') !== String(state.editorCompletionRequest || '')) return;
+  var delta = String(payload.text || '');
+  if (!delta || !state.editorCompletionAnchor) return;
+  state.editorCompletionStreamText = (state.editorCompletionStreamText || '') + delta;
+  state.editorCompletionText = state.editorCompletionStreamText.slice(0, 1200);
+  window.renderEditorGhostText();
+  if (els['editor-completion']) { els['editor-completion'].textContent = ''; els['editor-completion'].classList.remove('open'); }
+};
+
+function editorCompletionValueKey(value) {
+  var text = String(value || '');
+  var hash = 2166136261;
+  for (var i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
+  return text.length + ':' + (hash >>> 0);
+}
+
+function editorCompletionAnchorKey(anchor) {
+  return [anchor.path, anchor.start, anchor.end, editorCompletionValueKey(anchor.value)].join('\u0000');
+}
+
+function editorCompletionCacheFind(anchor) {
+  var cache = Array.isArray(state.editorCompletionCache) ? state.editorCompletionCache : [];
+  state.editorCompletionCache = cache;
+  var now = Date.now();
+  var key = editorCompletionAnchorKey(anchor);
+  for (var i = cache.length - 1; i >= 0; i--) {
+    var item = cache[i];
+    if (!item || item.expiresAt <= now) { cache.splice(i, 1); continue; }
+    if (item.key === key) {
+      cache.splice(i, 1);
+      cache.unshift(item);
+      return item;
+    }
+  }
+  return null;
+}
+
+function editorCompletionCachePut(anchor, text, ttl) {
+  var cache = Array.isArray(state.editorCompletionCache) ? state.editorCompletionCache : [];
+  var key = editorCompletionAnchorKey(anchor);
+  state.editorCompletionCache = cache.filter(function(item) { return !item || item.key !== key; });
+  state.editorCompletionCache.unshift({ key: key, text: text, expiresAt: Date.now() + ttl });
+  if (state.editorCompletionCache.length > 16) state.editorCompletionCache.length = 16;
+}
+
+window.requestEditorCompletion = async function(options) {
+  options = options || {};
+  var force = options.force === true;
   var ta = els['editor-textarea']; if (!ta || !state.editorPath || !api.editorComplete) return;
   var requestId = ++state.editorCompletionRequest;
   var pos = ta.selectionStart;
   var anchor = { path: state.editorPath, value: ta.value, start: pos, end: ta.selectionEnd };
   state.editorCompletionAnchor = anchor;
+  var cached = force ? null : editorCompletionCacheFind(anchor);
+  if (cached) {
+    state.editorCompletionInFlight = false;
+    state.editorCompletionStreamText = '';
+    state.editorCompletionText = cached.text || '';
+    state.editorCompletionAnchor = state.editorCompletionText ? anchor : null;
+    window.renderEditorGhostText();
+    if (els['editor-completion']) { els['editor-completion'].textContent = ''; els['editor-completion'].classList.remove('open'); }
+    return;
+  }
   if (els['editor-completion']) { els['editor-completion'].textContent = 'Predicting...'; els['editor-completion'].classList.add('open'); }
-  var beforeStart = Math.max(0, pos - 6000);
-  var afterEnd = Math.min(ta.value.length, pos + 1600);
-  var result = await api.editorComplete({ path: state.editorPath, before: ta.value.slice(beforeStart, pos), after: ta.value.slice(pos, afterEnd) });
+  state.editorCompletionInFlight = true;
+  state.editorCompletionStreamText = '';
+  var beforeStart = Math.max(0, pos - 3200);
+  var afterEnd = Math.min(ta.value.length, pos + 800);
+  var result;
+  try {
+    result = await api.editorComplete({ requestId: String(requestId), path: state.editorPath, before: ta.value.slice(beforeStart, pos), after: ta.value.slice(pos, afterEnd) });
+  } catch (error) {
+    result = { ok: false, text: '', error: error && error.message ? error.message : String(error) };
+  } finally {
+    if (requestId === state.editorCompletionRequest) state.editorCompletionInFlight = false;
+  }
   if (requestId !== state.editorCompletionRequest) return;
-  if (!window.editorAnchorMatches(anchor)) { window.dismissEditorCompletion(); window.scheduleEditorCompletion(); return; }
-  state.editorCompletionText = result && result.ok ? String(result.text || '') : '';
+  // Input/caret handlers already schedule the replacement request. Do not
+  // recursively schedule here: that doubled provider traffic on fast edits.
+  if (!window.editorAnchorMatches(anchor)) return;
+  var suggestion = result && result.ok ? String(result.text || '').slice(0, 1200) : '';
+  if (!suggestion.trim()) suggestion = '';
+  state.editorCompletionText = suggestion;
+  state.editorCompletionStreamText = '';
+  state.editorCompletionAnchor = suggestion ? anchor : null;
+  editorCompletionCachePut(anchor, suggestion, suggestion ? 15000 : 2000);
   window.renderEditorGhostText();
   if (els['editor-completion']) {
-    els['editor-completion'].textContent = state.editorCompletionText ? '' : (result.error || 'No completion');
-    els['editor-completion'].classList.toggle('open', !state.editorCompletionText);
+    // Empty/aborted/timeout responses are normal for an inline predictor. The
+    // editor should stay quiet instead of flashing an error on every keystroke.
+    els['editor-completion'].textContent = '';
+    els['editor-completion'].classList.remove('open');
   }
 };
 
@@ -16198,7 +16278,7 @@ window.scheduleEditorCompletion = function() {
   state.editorCompletionTimer = setTimeout(function() {
     state.editorCompletionTimer = null;
     window.requestEditorCompletion();
-  }, 180);
+  }, 300);
 };
 
 window.editorCaretSignature = function() {
@@ -16217,7 +16297,8 @@ window.handleEditorCaretChange = function() {
   var signature = window.editorCaretSignature();
   if (signature === state.editorCaretSignature) return;
   state.editorCaretSignature = signature;
-  window.renderNativeEditor();
+  window.renderEditorCaretStatus();
+  window.renderEditorGhostText();
   window.scheduleEditorCompletion();
 };
 
@@ -16225,7 +16306,24 @@ window.acceptEditorCompletion = function() {
   if (state.editorCompletionText && window.editorCompletionAnchorIsCurrent()) window.editorReplaceSelection(state.editorCompletionText);
   window.dismissEditorCompletion();
 };
-window.dismissEditorCompletion = function() { state.editorCompletionText = ''; state.editorCompletionAnchor = null; state.editorCompletionRequest++; if (els['editor-completion']) els['editor-completion'].classList.remove('open'); window.renderEditorGhostText(); };
+window.dismissEditorCompletion = function() {
+  state.editorCompletionText = '';
+  state.editorCompletionStreamText = '';
+  state.editorCompletionAnchor = null;
+  state.editorCompletionRequest++;
+  if (state.editorCompletionInFlight && api.editorCompleteCancel) {
+    try { Promise.resolve(api.editorCompleteCancel()).catch(function() {}); } catch (_) {}
+  }
+  if (els['editor-completion']) { els['editor-completion'].textContent = ''; els['editor-completion'].classList.remove('open'); }
+  window.renderEditorGhostText();
+};
+
+window.renderEditorCaretStatus = function() {
+  var ta = els['editor-textarea'];
+  if (!ta) return;
+  var before = String(ta.value || '').slice(0, ta.selectionStart || 0).split('\n');
+  if (els['editor-position']) els['editor-position'].textContent = before.length + ':' + (before[before.length - 1].length + 1);
+};
 
 window.requestEditorAssist = async function() {
   var ta = els['editor-textarea']; if (!ta || !state.editorPath || !api.editorAssist) return;
@@ -19686,6 +19784,10 @@ function schedulePostStartupUiRendering() {
   var startupHydrationError = null;
   cacheEls();
   setupAgentWorkEvents();
+  if (api.onEditorCompletionDelta && !state._editorCompletionDeltaReady) {
+    state._editorCompletionDeltaReady = true;
+    api.onEditorCompletionDelta(function(payload) { window.applyEditorCompletionDelta(payload); });
+  }
   if (api.onBrowserEnsureGuest) {
     api.onBrowserEnsureGuest(function(target) {
       cancelBrowserGuestIdleDestroy();
@@ -19986,7 +20088,7 @@ function schedulePostStartupUiRendering() {
       if (state.editorCompletionText && e.key === 'Tab') { e.preventDefault(); window.acceptEditorCompletion(); return; }
       if (e.key === 'Escape' && (state.editorCompletionText || (els['editor-completion'] && els['editor-completion'].classList.contains('open')))) { e.preventDefault(); window.dismissEditorCompletion(); return; }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); window.saveEditor(); return; }
-      if ((e.ctrlKey && e.key === ' ') || (e.altKey && e.key === '\\')) { e.preventDefault(); window.requestEditorCompletion(); return; }
+      if ((e.ctrlKey && e.key === ' ') || (e.altKey && e.key === '\\')) { e.preventDefault(); window.requestEditorCompletion({ force: true }); return; }
       if (state.editorVimEnabled && e.key === 'Escape') { state.editorVimMode = 'normal'; state.editorVimPending = ''; e.preventDefault(); window.renderNativeEditor(); return; }
       if (window.handleEditorVimKey(e)) return;
     });

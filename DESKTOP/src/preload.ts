@@ -71,6 +71,10 @@ contextBridge.exposeInMainWorld('api', {
   readWorkspacePrompt: () => ipcRenderer.invoke('workspace:readPrompt'),
   saveWorkspacePrompt: (content: string) => ipcRenderer.invoke('workspace:savePrompt', content),
   editorComplete: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:editorComplete', request),
+  editorCompleteCancel: () => ipcRenderer.invoke('agent:editorCompleteCancel'),
+  onEditorCompletionDelta: (callback: (payload: Record<string, unknown>) => void) => {
+    ipcRenderer.on('agent:editorCompletionDelta', (_event: unknown, payload: Record<string, unknown>) => callback(payload));
+  },
   editorAssist: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:editorAssist', request),
   filePathForFile: (file: File) => {
     try {

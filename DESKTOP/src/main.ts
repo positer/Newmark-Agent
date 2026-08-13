@@ -4347,10 +4347,22 @@ if (isViewerArg) {
       const controller = new AbortController();
       editorCompletionControllers.set(ownerId, controller);
       try {
-        return await (agent?.editorModelRequest({ ...request, completion: true, preferCopilot: true } as any, controller.signal) || { ok: false, text: '', error: 'Agent not initialized' });
+        const requestId = String(request.requestId || '');
+        const onTextDelta = requestId
+          ? (text: string) => {
+            if (!controller.signal.aborted && !event.sender.isDestroyed()) event.sender.send('agent:editorCompletionDelta', { requestId, text });
+          }
+          : undefined;
+        return await (agent?.editorModelRequest({ ...request, completion: true, preferCopilot: true, onTextDelta } as any, controller.signal) || { ok: false, text: '', error: 'Agent not initialized' });
       } finally {
         if (editorCompletionControllers.get(ownerId) === controller) editorCompletionControllers.delete(ownerId);
       }
+    });
+
+    ipcMain.handle('agent:editorCompleteCancel', async (event) => {
+      const ownerId = event.sender.id;
+      editorCompletionControllers.get(ownerId)?.abort(new Error('Editor completion cancelled'));
+      return { ok: true };
     });
 
     ipcMain.handle('agent:editorAssist', async (_event, request: Record<string, unknown>) => {

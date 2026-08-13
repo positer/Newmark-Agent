@@ -112,6 +112,17 @@ export interface AutoRouteRatingResult {
   reason?: 'invalid_score' | 'no_active_auto_route' | 'stale_route' | 'already_rated';
 }
 export const ROOT_AGENT_ACTOR_ID = '00000000-0000-4000-8000-000000000001';
+
+// Inline completion is an interactive surface: a stale suggestion is worse
+// than no suggestion, and a request that occupies the provider for tens of
+// seconds makes every subsequent keystroke feel broken. Keep its budget
+// separate from normal conversation requests.
+const EDITOR_COMPLETION_BEFORE_CONTEXT_CHARS = 3200;
+const EDITOR_COMPLETION_AFTER_CONTEXT_CHARS = 800;
+const EDITOR_COMPLETION_MAX_TOKENS = 96;
+const EDITOR_COMPLETION_MAX_TEXT_CHARS = 1200;
+const EDITOR_COMPLETION_TIMEOUT_MS = 6500;
+
 export function normalizeIntelligenceTier(value: unknown): 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' {
   const tier = String(value || '').trim().toLowerCase();
   return tier === 'low' || tier === 'high' || tier === 'xhigh' || tier === 'max' || tier === 'ultra' ? tier : 'medium';
@@ -6037,25 +6048,89 @@ export class Agent {
     instruction?: string;
     completion?: boolean;
     preferCopilot?: boolean;
+    onTextDelta?: (text: string) => void;
   }, signal?: AbortSignal): Promise<{ ok: boolean; text: string; model?: string; provider?: string; error?: string }> {
-    const models = this.config.allModels().filter(model => (model.evaluation?.status || 'unvalidated') !== 'unavailable' && !String(model.evaluation?.status || '').startsWith('error'));
+    const models = this.config.allModels().filter(model => {
+      if (model.enabled === false) return false;
+      if (!String(model.api_key || '').trim() || !String(model.provider_url || '').trim()) return false;
+      const statuses = [model.evaluation?.status, model.validation?.status]
+        .map(status => String(status || '').trim().toLowerCase())
+        .filter(Boolean);
+      if (statuses.some(status => status === 'auth_error' || status === 'invalid_config' || status.startsWith('error'))) return false;
+      const hasPositiveEvidence = statuses.some(status => status === 'available'
+        || status === 'verified'
+        || status === 'degraded'
+        || status === 'rate_limited');
+      return !statuses.length || hasPositiveEvidence;
+    });
     const current = this.activeModelConfig();
     const copilot = input.preferCopilot ? models.find(model => model.provider_protocol === 'github_models' && model.enabled !== false) : undefined;
     const selected = copilot || (current && models.find(model => model.provider_id === current.provider_id && model.name === current.name)) || models.find(model =>
       (model.validation?.level === 'standard' || model.validation?.level === 'extended') &&
-      (model.validation.status === 'verified' || model.validation.status === 'degraded')
+      (model.validation?.status === 'verified' || model.validation?.status === 'degraded')
     ) || models.find(model => model.evaluation?.status === 'available') || models[0];
     if (!selected?.api_key || !selected.provider_url) return { ok: false, text: '', error: 'No available editor prediction model.' };
-    const provider = new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'));
+    const provider = input.completion
+      ? new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, 'chat_stream', this.config.contextFlag('provider_adapters_v2'), EDITOR_COMPLETION_TIMEOUT_MS)
+      : new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'));
     const language = path.extname(String(input.path || '')).replace(/^\./, '') || 'text';
     const system = input.completion
       ? 'You are an inline code completion engine. Return only the exact text to insert at the cursor. Do not use Markdown fences or explanations.'
       : 'You are Newmark Editor Agent. Give concise, actionable code guidance grounded in the supplied file and selection. Do not claim changes were applied.';
+    const before = String(input.before || '').slice(-EDITOR_COMPLETION_BEFORE_CONTEXT_CHARS);
+    const after = String(input.after || '').slice(0, EDITOR_COMPLETION_AFTER_CONTEXT_CHARS);
     const prompt = input.completion
-      ? `Language: ${language}\nFile: ${input.path || ''}\nRecent code before cursor:\n${String(input.before || '').slice(-6000)}\nCode after cursor:\n${String(input.after || '').slice(0, 1600)}\nReturn the shortest syntactically complete continuation.`
+      ? `Language: ${language}\nFile: ${input.path || ''}\nCode before cursor:\n${before}\nCode after cursor:\n${after}\nReturn only the shortest useful continuation.`
       : `File: ${input.path || ''}\nInstruction: ${input.instruction || 'Review the current code and suggest the next useful change.'}\nSelection:\n${String(input.selection || '').slice(0, 8000)}\nFile content:\n${String(input.content || '').slice(0, 18000)}`;
     try {
-      const text = (await provider.chat(selected.name, [{ role: 'user', content: prompt }], system, 0.05, input.completion ? 192 : 1800, signal)).replace(/^```[\w-]*\s*|\s*```$/g, '');
+      const messages = [{ role: 'user', content: prompt }];
+      let rawText = '';
+      const canStreamCompletion = !!input.completion
+        && typeof input.onTextDelta === 'function'
+        && (selected.provider_protocol !== 'openai' || this.config.contextFlag('provider_adapters_v2'));
+      if (canStreamCompletion) {
+        const streamed: string[] = [];
+        let streamFailure: Error | null = null;
+        try {
+          for await (const token of provider.chatStreamWithTools(
+            selected.name,
+            messages,
+            system,
+            0.05,
+            EDITOR_COMPLETION_MAX_TOKENS,
+            [],
+            signal,
+          )) {
+            if (token.type !== 'text' || !token.text) continue;
+            const delta = String(token.text);
+            if (/^\[(?:LLM )?Error\b/i.test(delta)) {
+              streamFailure = new Error(delta);
+              continue;
+            }
+            streamed.push(delta);
+            input.onTextDelta?.(delta);
+          }
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          streamFailure = error instanceof Error ? error : new Error(String(error));
+        }
+        if (streamFailure) {
+          // A provider may accept the streaming request but reject its SSE
+          // mode. Retry once through the already-supported bounded chat path;
+          // this keeps older gateways working without hiding a partial stream
+          // behind a false success.
+          rawText = await provider.chat(selected.name, messages, system, 0.05, EDITOR_COMPLETION_MAX_TOKENS, signal);
+        } else {
+          rawText = streamed.join('');
+        }
+      } else {
+        rawText = await provider.chat(selected.name, messages, system, 0.05, input.completion ? EDITOR_COMPLETION_MAX_TOKENS : 1800, signal);
+      }
+      rawText = rawText
+        .replace(/^```[\w-]*\s*|\s*```$/g, '');
+      // Preserve indentation for real code, but treat whitespace-only model
+      // responses as an actual empty suggestion instead of a visible ghost.
+      const text = rawText.trim() ? rawText.slice(0, input.completion ? EDITOR_COMPLETION_MAX_TEXT_CHARS : rawText.length) : '';
       return { ok: !!text, text, model: selected.name, provider: selected.provider };
     } catch (error) {
       return { ok: false, text: '', model: selected.name, provider: selected.provider, error: error instanceof Error ? error.message : String(error) };

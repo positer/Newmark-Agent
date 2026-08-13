@@ -562,7 +562,8 @@ async function oneRun(index, root, profile) {
     while (Date.now() - browserStartedAt <= 5000) {
       browserReady = await evaluate(cdp, `(() => {
         const views = Array.from(document.querySelectorAll('#browser-webview'));
-        if (views.length !== 1 || views[0].getAttribute('partition') !== 'persist:newmark-browser') return false;
+        const partition = String(views[0].getAttribute('partition') || '');
+        if (views.length !== 1 || !/^persist:newmark-browser(?:-|$)/.test(partition)) return false;
         return views[0].dataset?.newmarkBrowserReady === 'true';
       })()`);
       if (browserReady) break;

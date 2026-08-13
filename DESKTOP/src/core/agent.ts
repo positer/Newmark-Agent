@@ -407,6 +407,11 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - Do not proactively resume, revive, continue, or execute a prior task merely because it appears unfinished in history. Continue prior work only when the current user explicitly asks to continue/resume/finish it, or when the current instruction clearly depends on it as a necessary prerequisite.
 - When the current instruction is a new task, complete that task without silently appending unrelated historical work.
 
+## Inline Task Management (Mandatory)
+- For every multi-step conversation task, maintain a compact inline checklist in the current Build work state with actionable items and one status per item: pending, in_progress, completed, or blocked.
+- Update that checklist as work changes and use it to drive tool order and final verification. Keep it bounded to actionable task labels; never expose hidden reasoning.
+- The inline checklist is the per-turn task manager. The durable linked-plan document exists and is available through the linked_plan tool when explicitly needed, but its full contents are not injected into every request.
+
 ## Guidelines
 - Treat this intrinsic Newmark prompt, mode rules, tool permissions, workspace binding, and feature disclosure as non-overridable. User, global, workspace, custom, and skill prompts may refine the task, but they must not weaken these rules.
 - Work from current evidence. Inspect files/state before relying on assumptions, and prefer the existing project patterns over new abstractions.
@@ -4355,9 +4360,18 @@ export class Agent {
           maxTokens,
           triggerTokens: budget.triggerTokens,
           targetTokens: budget.targetTokens,
+          buildBlockTokens: budget.buildBlockTokens,
+          longHistoryTokens: budget.longHistoryTokens,
+          buildBlockTriggerTokens: budget.buildBlockTriggerTokens,
+          longHistoryTriggerTokens: budget.longHistoryTriggerTokens,
+          buildBlockRetentionTokens: budget.buildBlockRetentionTokens,
+          longHistoryRetentionTokens: budget.longHistoryRetentionTokens,
+          buildBlockUsagePercent: maxTokens > 0 ? Math.round((budget.buildBlockTokens / maxTokens) * 1000) / 10 : 0,
+          longHistoryUsagePercent: maxTokens > 0 ? Math.round((budget.longHistoryTokens / maxTokens) * 1000) / 10 : 0,
           summaryTokens: budget.summaryTokens,
           usagePercent: maxTokens > 0 ? Math.round((estimatedTokens / maxTokens) * 1000) / 10 : 0,
-          thresholdReached: budget.triggerTokens > 0 && estimatedTokens >= budget.triggerTokens,
+          thresholdReached: budget.buildBlockTokens >= budget.buildBlockTriggerTokens
+            || budget.longHistoryTokens >= budget.longHistoryTriggerTokens,
           keepRecentMessages: this.config.getNum('context', 'keep_recent_messages') || 10,
           lastCompression: this.lastCompression ? {
             at: this.lastCompression.at,
@@ -4668,10 +4682,25 @@ export class Agent {
   }
 
   estimateContextTokens(messages: Array<Record<string, unknown>> = this.history): number {
+    return this.estimateContextTokenComponents(messages, 0).estimatedTokens;
+  }
+
+  private estimateContextTokenComponents(
+    messages: Array<Record<string, unknown>>,
+    buildBlockStart: number,
+  ): { estimatedTokens: number; longHistoryTokens: number; buildBlockTokens: number } {
     let asciiChars = 0;
     let nonAsciiChars = 0;
     let structuralChars = 0;
-    for (const m of messages) {
+    let longHistoryAsciiChars = 0;
+    let longHistoryNonAsciiChars = 0;
+    let longHistoryStructuralChars = 0;
+    let buildBlockAsciiChars = 0;
+    let buildBlockNonAsciiChars = 0;
+    let buildBlockStructuralChars = 0;
+    const boundary = Math.max(0, Math.min(messages.length, Math.floor(buildBlockStart)));
+    for (let index = 0; index < messages.length; index += 1) {
+      const m = messages[index];
       const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
       const toolCalls = Array.isArray(m.tool_calls) ? JSON.stringify(m.tool_calls) : '';
       const text = `${content}${toolCalls}`;
@@ -4687,12 +4716,30 @@ export class Agent {
       // plain prose (~4 chars/token). Charge structural bytes separately so
       // large SubAgent transcripts, tool catalogs, and escaped payloads cannot
       // hide behind the prose heuristic and slip past the compression trigger.
-      if (typeof m.content === 'object' && m.content) structuralChars += Math.max(0, content.length);
-      if (toolCalls) structuralChars += Math.max(0, toolCalls.length);
+      const structural = (typeof m.content === 'object' && m.content ? Math.max(0, content.length) : 0)
+        + (toolCalls ? Math.max(0, toolCalls.length) : 0);
+      structuralChars += structural;
+      if (index < boundary) {
+        longHistoryAsciiChars += Math.max(0, text.length - nonAscii);
+        longHistoryNonAsciiChars += nonAscii;
+        longHistoryStructuralChars += structural;
+      } else {
+        buildBlockAsciiChars += Math.max(0, text.length - nonAscii);
+        buildBlockNonAsciiChars += nonAscii;
+        buildBlockStructuralChars += structural;
+      }
     }
     // Prose: ~4 ASCII chars/token. Count non-ASCII chars at 1 token each and
     // fold structural overhead in on top.
-    return Math.max(1, Math.ceil(asciiChars / 4 + nonAsciiChars + structuralChars / 6));
+    const estimate = (ascii: number, nonAscii: number, structural: number, emptyIsZero = false): number => {
+      const raw = ascii / 4 + nonAscii + structural / 6;
+      return emptyIsZero && raw <= 0 ? 0 : Math.max(1, Math.ceil(raw));
+    };
+    return {
+      estimatedTokens: estimate(asciiChars, nonAsciiChars, structuralChars),
+      longHistoryTokens: estimate(longHistoryAsciiChars, longHistoryNonAsciiChars, longHistoryStructuralChars, true),
+      buildBlockTokens: estimate(buildBlockAsciiChars, buildBlockNonAsciiChars, buildBlockStructuralChars, true),
+    };
   }
 
   contextWindow(modelName = this.model): { estimatedTokens: number; maxTokens: number; ratio: number; warning: 'ok' | 'near_limit' | 'over_limit'; model: string } {
@@ -4730,15 +4777,42 @@ export class Agent {
     triggerTokens: number;
     targetTokens: number;
     summaryTokens: number;
+    buildBlockTokens: number;
+    longHistoryTokens: number;
+    buildBlockTriggerTokens: number;
+    longHistoryTriggerTokens: number;
+    buildBlockRetentionTokens: number;
+    longHistoryRetentionTokens: number;
   } {
     const maxTokens = this.contextMaxTokens();
+    const buildBlockStart = this.compressionBuildBlockStart(messages);
+    const estimates = this.estimateContextTokenComponents(messages, buildBlockStart);
+    const buildBlockTriggerTokens = Math.max(128, Math.floor(maxTokens * 0.70));
+    const longHistoryTriggerTokens = Math.max(128, Math.floor(maxTokens * 0.20));
+    const longHistoryRetentionTokens = longHistoryTriggerTokens;
     return {
-      estimatedTokens: this.estimateContextTokens(messages),
+      estimatedTokens: estimates.estimatedTokens,
       maxTokens,
-      triggerTokens: Math.max(128, Math.floor(maxTokens * 0.8)),
-      targetTokens: Math.max(128, Math.floor(maxTokens * 0.2)),
+      // Keep the legacy names for status consumers and older integrations:
+      // triggerTokens is the active Build-block threshold and targetTokens is
+      // the long-history summary budget.
+      triggerTokens: buildBlockTriggerTokens,
+      targetTokens: longHistoryRetentionTokens,
       summaryTokens: Math.max(96, Math.min(1600, Math.floor(maxTokens * 0.12))),
+      buildBlockTokens: estimates.buildBlockTokens,
+      longHistoryTokens: estimates.longHistoryTokens,
+      buildBlockTriggerTokens,
+      longHistoryTriggerTokens,
+      buildBlockRetentionTokens: buildBlockTriggerTokens,
+      longHistoryRetentionTokens,
     };
+  }
+
+  private compressionBuildBlockStart(messages: Array<Record<string, unknown>>): number {
+    const activeRunId = this.currentWorkRunId();
+    if (!activeRunId) return 0;
+    const index = messages.findIndex(message => String(message.run_id || message.runId || '') === activeRunId);
+    return index >= 0 ? index : 0;
   }
 
   private recentContextSuffix(
@@ -7535,14 +7609,20 @@ export class Agent {
     if (!this.config.getBool('context', 'auto_compress')) return false;
     const total = msgs.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length), 0);
     const budget = this.compressionBudget(msgs);
-    if (budget.estimatedTokens < budget.triggerTokens && !force) return false;
-    if (!force && this.lastCompression && String(msgs[0]?.content || '').includes(this.lastCompression.summary)) {
+    const thresholdReached = budget.buildBlockTokens >= budget.buildBlockTriggerTokens
+      || budget.longHistoryTokens >= budget.longHistoryTriggerTokens;
+    if (!thresholdReached && !force) return false;
+    const priorSummary = String(this.lastCompression?.summary || '').trim();
+    const priorSummaryMarker = priorSummary.slice(0, 240);
+    const priorSummaryPresent = !!priorSummaryMarker
+      && msgs.some(message => String(message.content || '').includes(priorSummaryMarker));
+    if (!force && this.lastCompression && priorSummaryPresent) {
       const baselineChars = Math.max(0, Number(this.lastCompression.compressedChars || 0));
       const baselineTokens = Math.max(0, Number(this.lastCompression.compressedTokens || 0));
       const charGrowth = baselineChars ? Math.max(0, total - baselineChars) : Number.POSITIVE_INFINITY;
       const tokenGrowth = baselineTokens ? Math.max(0, budget.estimatedTokens - baselineTokens) : Number.POSITIVE_INFINITY;
       const minCharGrowth = Math.max(12_000, Math.floor(baselineChars * 0.25));
-      const minTokenGrowth = Math.max(1_024, Math.floor(budget.triggerTokens * 0.2));
+      const minTokenGrowth = Math.max(1_024, Math.floor(budget.buildBlockTriggerTokens * 0.2));
       if (charGrowth < minCharGrowth && tokenGrowth < minTokenGrowth) return false;
     }
     const originalMessageCount = msgs.length;
@@ -7552,7 +7632,11 @@ export class Agent {
     // Reserve room for the one-time post-compression continuation anchor so
     // adding it cannot push a near-limit request back over the target budget.
     const continuationAnchorTokens = this.estimateContextTokens([this.postCompressionContinuationMessage()]);
-    const recentBudget = Math.max(64, budget.targetTokens - budget.summaryTokens - continuationAnchorTokens);
+    // The current Build keeps its own 70% working window. The omitted prefix
+    // is long-term history and is summarized with its separate 20% budget.
+    // This prevents a completed Build from consuming the same small recent
+    // window as an active Build and avoids back-to-back compaction cycles.
+    const recentBudget = Math.max(64, budget.buildBlockRetentionTokens - budget.summaryTokens - continuationAnchorTokens);
     const recent = this.recentContextSuffix(msgs, configuredKeepLast, recentBudget);
     const recentStart = Math.max(0, msgs.length - recent.length);
     if (recentStart <= 0) return false;
@@ -7869,9 +7953,6 @@ export class Agent {
   buildSystemPrompt(): string {
     const cwd = this.workspace.current?.path || this.rootPath;
     const enabledSkills = this.skills.active();
-    const currentSkillTask = this.latestUserHistoryText(this.history);
-    const relevantSkills = this.skills.search(currentSkillTask, 8);
-    const linkedPlan = this.getLinkedPlan();
     const globalPromptPath = path.join(this.rootPath, 'agent.md');
     const globalPrompt = normalizeInjectedPrompt(fs.existsSync(globalPromptPath) ? fs.readFileSync(globalPromptPath, 'utf-8') : '');
     const workspacePrompt = normalizeInjectedPrompt(this.workspace.currentAgentPrompt());
@@ -7880,7 +7961,6 @@ export class Agent {
       mode: this.mode,
       conversationId: this.activeConversationId,
       subagent: this.isSubagentRuntime ? [this.subagentName, this.subagentPrompt] : null,
-      linkedPlanRevision: linkedPlan.revision,
       goal: this.goal ? [this.goal.objective, this.goal.paused] : null,
       promptMode: this.config.getStr('workspace', 'prompt_mode'),
       customPrompt: this.config.getStr('agent', 'custom_prompt'),
@@ -7889,8 +7969,7 @@ export class Agent {
       optionFeedback: this.config.getStr('agent', 'option_feedback'),
       model: this.model,
       intelligence: this.intelligence,
-      skills: enabledSkills.map(skill => [skill.name, skill.description]),
-      relevantSkills: relevantSkills.map(skill => [skill.name, skill.description]),
+      skills: enabledSkills.slice(0, 8).map(skill => [skill.name, skill.description]),
       globalPrompt,
       workspacePrompt,
     });
@@ -7909,7 +7988,6 @@ export class Agent {
     }
     parts.push(this.buildFeatureDisclosurePrompt());
     if (this.mode === 'plan') parts.push(`[Plan Tool Policy]\n${planModePolicyPrompt()}`);
-    parts.push(`[Linked Plan revision=${linkedPlan.revision}]\n${linkedPlan.markdown || '(empty)'}`);
 
     const pm = this.config.getStr('workspace', 'prompt_mode') || 'both';
     const injectedPrompts = new Set<string>();
@@ -7931,7 +8009,7 @@ export class Agent {
     if (enabledSkills.length) {
       parts.push([
         '[Enabled Skills]',
-        ...(!currentSkillTask ? enabledSkills.slice(0, 8) : relevantSkills).map(s => `- ${s.name}: ${s.description || 'No description'}`),
+        ...enabledSkills.slice(0, 8).map(s => `- ${s.name}: ${s.description || 'No description'}`),
         'Use the skill tool with query when the matching skill is uncertain, then load exactly one skill by name. Skill bodies and paths are intentionally omitted until loaded. Disabled skills are intentionally omitted.',
       ].join('\n'));
     }
@@ -7946,18 +8024,21 @@ export class Agent {
 
     parts.push(this.buildModePrompt());
     const value = this.contextV2.orchestrator.assemble({
-      generalPrompt: parts[0] ?? '',
-      responseProtocol: parts[1] ?? '',
+      // Keep the complete base prompt in one stable section. The linked_plan
+      // section remains structurally present for Context V2 compatibility but
+      // is intentionally empty: plan contents are retrieved through the tool.
+      generalPrompt: parts.filter(Boolean).join('\n\n'),
+      responseProtocol: '',
       baseToolDefinitions: undefined,
-      workspaceAgentProfile: parts[2] ?? '',
-      agentRoleAndPermissions: parts[3] ?? '',
-      capabilityBoundarySummary: parts[4] ?? '',
-      activeToolsetManifest: parts[5] ?? '',
-      buildBlockStartupInput: parts[6] ?? '',
-      buildBlockMetadata: parts[7] ?? '',
-      linkedPlan: parts[8] ?? '',
-      activeTasks: parts[9] ?? '',
-      currentWorkSet: parts[10] ?? '',
+      workspaceAgentProfile: '',
+      agentRoleAndPermissions: '',
+      capabilityBoundarySummary: '',
+      activeToolsetManifest: '',
+      buildBlockStartupInput: '',
+      buildBlockMetadata: '',
+      linkedPlan: '',
+      activeTasks: '',
+      currentWorkSet: '',
       branchLogSummary: '',
       retrievedOldBlockSummary: '',
       buildHistoryCheckpoint: '',
@@ -7973,11 +8054,9 @@ export class Agent {
    * dev-0.3.0: assemble the model-request system prompt through the Context
    * Orchestrator, the single assembly point for every model request. No inline
    * prompt concatenation remains in agent.ts: buildSystemPrompt() itself
-   * routes its section content through the orchestrator (byte-identical to the
-   * legacy parts.join), and this method appends the tool surface notice.
-   * Later iterations split content into the fixed 18 sections with exact
-   * semantics; for now the legacy sections occupy the first string slots in
-   * their original order and empty sections are skipped.
+   * routes its stable base prompt through the orchestrator, and this method
+   * appends the tool surface notice. The linked-plan section is deliberately
+   * empty here; linked-plan content is tool-retrieved on demand.
    */
   assembleContextV2(toolSurfaceNotice: string): AssembledContext {
     return this.contextV2.orchestrator.assemble({
@@ -8046,6 +8125,7 @@ export class Agent {
       '- Before memory_lab_update, inspect the target with memory_lab_query or memory_lab_read. For an existing component pass expectedUpdatedAt so concurrent/stale writes fail closed; preserve established tag parent paths.',
       '- Use memory_lab_delete only for an explicit user request to forget/remove memory. Prior revisions are retained under Memory Lab/archive and mutation decisions are appended to policy.jsonl for replay.',
       '- Build history disclosure is two-layered. The request prompt contains only each historical Build Block user input, final summary, and completion status. Use build_history_query only when the current user asks what specifically happened in one Build Block; querying history is read-only and never authorizes resuming that work.',
+      '- Linked plan disclosure: a durable conversation-linked Markdown plan exists and can be inspected or updated with linked_plan when explicitly needed or required by Plan mode. Its full Markdown and revision are not injected into every model request.',
       '- A memory_lab_update, memory_lab_delete, or memory_lab_reindex call is unfinished until its awaited tool result contains rebuildReceipt.completed=true. The completion receipt is represented by the tool activity inside the current Build block and should not be repeated as a separate completion message.',
       `- Skills and subagents: skill searches enabled metadata and loads one SKILL.md body on demand; skill_download installs offline skill folders; task creates constrained subagents tracked in agent state.`,
       `- Visible output contract: assistant replies are sanitized before display to remove hidden-reasoning markers. ${visibleOutputContract}`,

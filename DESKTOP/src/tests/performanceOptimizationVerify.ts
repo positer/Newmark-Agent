@@ -18,6 +18,10 @@ function main(): void {
     const agent = new Agent(root, { agentOnly: true });
     const firstPrompt = agent.buildSystemPrompt();
     assert.strictEqual(agent.buildSystemPrompt(), firstPrompt, 'stable system prompt is cached');
+    agent.linkedPlan = { markdown: 'linked-plan-cache-probe', revision: 42 };
+    agent.history.push({ role: 'user', content: 'history-cache-probe changes the latest task text' });
+    assert.strictEqual(agent.buildSystemPrompt(), firstPrompt, 'history and linked-plan changes do not invalidate the stable base prompt cache');
+    assert.ok(!firstPrompt.includes('linked-plan-cache-probe') && firstPrompt.includes('durable conversation-linked Markdown plan exists'), 'linked-plan body is not injected while its tool availability remains disclosed');
     const firstTools = agent.cachedToolDefinitions();
     assert.strictEqual(agent.cachedToolDefinitions(), firstTools, 'stable tool catalog is cached');
     agent.setMode('plan');
@@ -61,10 +65,13 @@ function main(): void {
     assert.ok(
       agentSource.includes('Promise<boolean>')
         && kernelRunnerSource.includes('let compressed = await agent.maybeCompress')
+        && agentSource.includes('Inline Task Management (Mandatory)')
+        && !agentSource.includes('[Linked Plan revision=')
+        && kernelRunnerSource.includes('includeBootstrap || compressionCompleted')
         && !kernelRunnerSource.includes('JSON.stringify(newmarkMessages) === beforeCompression'),
-      'context compression reports mutation directly instead of serializing the full context repeatedly',
+      'context compression and prompt assembly keep stable base content without repeatedly serializing or injecting dynamic context',
     );
-    console.log(JSON.stringify({ ok: true, assertions: 12 }));
+    console.log(JSON.stringify({ ok: true, assertions: 17 }));
   } finally {
     setAgentKernelDiagnosticSink(null);
     fs.rmSync(root, { recursive: true, force: true });

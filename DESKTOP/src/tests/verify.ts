@@ -3762,6 +3762,15 @@ async function main() {
   assert(sysPrompt.includes('做了什么') && sysPrompt.includes('验证') && sysPrompt.includes('文件') && sysPrompt.includes('问题/下一步'), 'buildSystemPrompt: enforces Chinese structured reply format');
   assert(sysPrompt.includes('What changed') && sysPrompt.includes('Verification') && sysPrompt.includes('Files') && sysPrompt.includes('Issues/Next'), 'buildSystemPrompt: enforces English structured reply format');
   assert(sysPrompt.includes('non-overridable') && sysPrompt.includes('must not weaken these rules'), 'buildSystemPrompt: protects intrinsic rules from user prompts');
+  assert(sysPrompt.includes('Inline Task Management (Mandatory)')
+    && sysPrompt.includes('pending, in_progress, completed, or blocked'), 'buildSystemPrompt: requires bounded inline task management for multi-step work');
+  assert(sysPrompt.includes('durable conversation-linked Markdown plan exists')
+    && !sysPrompt.includes('[Linked Plan revision=') && !sysPrompt.includes('linkedPlan.markdown'), 'buildSystemPrompt: discloses linked-plan availability without injecting linked-plan contents');
+  agent.linkedPlan = { markdown: 'LINKED_PLAN_SHOULD_NOT_ENTER_EVERY_PROMPT', revision: 99 };
+  agent.history.push({ role: 'user', content: 'cache stability probe with a different task' });
+  assert(agent.buildSystemPrompt() === sysPrompt, 'buildSystemPrompt: history and linked-plan mutations do not invalidate the stable prompt cache');
+  assert(!agent.buildSystemPrompt().includes('LINKED_PLAN_SHOULD_NOT_ENTER_EVERY_PROMPT'), 'buildSystemPrompt: linked-plan body remains absent after linked-plan mutation');
+  agent.linkedPlan = { markdown: '', revision: 0 };
   assert(sysPrompt.includes('The latest explicit user instruction is authoritative and has the highest task priority')
     && sysPrompt.includes('Do not proactively resume, revive, continue, or execute a prior task merely because it appears unfinished in history'), 'buildSystemPrompt: prioritizes the latest user instruction and blocks unsolicited historical task continuation');
   assert(sysPrompt.includes('no <think>, </think>') && sysPrompt.includes('hidden-reasoning markers'), 'buildSystemPrompt: forbids hidden reasoning markers in visible replies');
@@ -3782,7 +3791,7 @@ async function main() {
   fs.writeFileSync(path.join(TEST_DIR, 'skills', 'prompt-skill', 'SKILL.md'), '---\nname: prompt-skill\ndescription: Prompt visible skill\n---\n# Prompt Skill');
   assert(agent.skills.setEnabled('prompt-skill', true), 'buildSystemPrompt: test skill enabled');
   agent.history.push({ role: 'user', content: 'Use prompt-skill for this task.' });
-  assert(agent.buildSystemPrompt().includes('prompt-skill'), 'buildSystemPrompt: includes enabled skills');
+  assert(agent.buildSystemPrompt().includes('[Enabled Skills]') && agent.skills.search('prompt-skill', 8).some(skill => skill.name === 'prompt-skill'), 'buildSystemPrompt: keeps a bounded stable skill manifest while on-demand skill search finds the selected skill');
   assert((agent.buildSystemPrompt().match(/bulk-skill-/g) || []).length <= 8 && !agent.buildSystemPrompt().includes(path.join(TEST_DIR, 'skills')), 'buildSystemPrompt: large skill catalogs stay bounded and omit filesystem paths');
   assert(agent.skills.setEnabled('prompt-skill', false), 'buildSystemPrompt: test skill disabled');
   assert(!agent.buildSystemPrompt().includes('prompt-skill'), 'buildSystemPrompt: excludes disabled skills');
@@ -4586,12 +4595,34 @@ async function main() {
   ];
   const nearLimitMessages = [...agent.history];
   const nearLimitBefore = agent.estimateContextTokens(nearLimitMessages);
-  assert(nearLimitBefore < 20000 && nearLimitBefore >= 800, 'maybeCompress near limit: fixture crosses 80% of the current model context window');
+  assert(nearLimitBefore < 20000 && nearLimitBefore >= 700, 'maybeCompress near limit: fixture crosses the 70% Build-block trigger of the current model context window');
   await agent.maybeCompress(nearLimitMessages, new FakeProvider(['## Preserved State\nKeep the active implementation and pending verification.']) as unknown as LLMProvider);
   const nearLimitAfter = agent.estimateContextTokens(nearLimitMessages);
-  assert(nearLimitMessages.length < 29 && nearLimitAfter < nearLimitBefore && nearLimitAfter <= 300, 'maybeCompress near limit: compacts toward 20% of the model context window');
+  assert(nearLimitMessages.length < 29 && nearLimitAfter < nearLimitBefore && nearLimitAfter <= 800, 'maybeCompress near limit: keeps a bounded 70% Build-block working window instead of collapsing every block toward 20%');
   assert(String(nearLimitMessages[2]?.role || '') === 'user', 'maybeCompress near limit: retained recent context starts at a complete user turn after the summary and continuation records');
   assert(agent.lastCompression?.originalMessages === 29 && agent.lastCompression?.compressedMessages === nearLimitMessages.length, 'maybeCompress near limit: records exact original and compacted message counts');
+  const twoTierRunId = 'compression-current-build';
+  agent.beginConversationWorkRun(twoTierRunId);
+  agent.history = [
+    ...Array.from({ length: 6 }, (_, index) => [
+      { role: 'user', content: `old-build-user-${index} ` + 'o'.repeat(260), run_id: 'older-build' },
+      { role: 'assistant', content: `old-build-assistant-${index} ` + 'a'.repeat(260), run_id: 'older-build' },
+    ]).flat(),
+    ...Array.from({ length: 4 }, (_, index) => [
+      { role: 'user', content: `current-build-user-${index} ` + 'c'.repeat(120), run_id: twoTierRunId },
+      { role: 'assistant', content: `current-build-assistant-${index} ` + 'd'.repeat(120), run_id: twoTierRunId },
+    ]).flat(),
+  ];
+  const twoTierStatusBefore = JSON.parse(agent.handleContextHistoryManage(JSON.stringify({ action: 'status' })).output) as Record<string, any>;
+  assert(twoTierStatusBefore.buildBlockTokens < twoTierStatusBefore.buildBlockTriggerTokens
+    && twoTierStatusBefore.longHistoryTokens >= twoTierStatusBefore.longHistoryTriggerTokens
+    && twoTierStatusBefore.buildBlockTriggerTokens === 700
+    && twoTierStatusBefore.longHistoryTriggerTokens === 200, 'maybeCompress two-tier policy: long history can trigger at 20% while the active Build remains below its 70% trigger');
+  const twoTierMessages = [...agent.history];
+  await agent.maybeCompress(twoTierMessages, new FakeProvider(['## Preserved State\nRetain the current Build state and its pending verification.']) as unknown as LLMProvider);
+  assert(twoTierMessages.length < 20
+    && twoTierMessages.some(message => String(message.content || '').includes('current-build-user-3'))
+    && String(twoTierMessages[0]?.content || '').includes('Preserved State'), 'maybeCompress two-tier policy: compacts long history while retaining the active Build tail');
   agent.config.addModelToProvider('context-prov', 'tiny-context', 'Tiny Context', 'Small context test model');
   agent.config.updateModel('context-prov', 'tiny-context', { max_tokens: 1000 });
   agent.setModel('tiny-context');
@@ -4724,7 +4755,12 @@ async function main() {
 
   // dev-0.3.8: compression cache + restore/search + protected recent zone + status.
   const statusResult = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'status' })).output) as Record<string, any>;
-  assert(statusResult.ok === true && statusResult.action === 'status' && statusResult.usagePercent >= 0 && statusResult.triggerTokens > 0 && statusResult.targetTokens > 0 && statusResult.cache?.entries === 1 && statusResult.protectedZone?.protectedStartIndex > 0 && statusResult.protectedZone?.lastUserMessageIndex > 0 && statusResult.displayHistory.untouched === true, 'context_history_manage status: reports budgets, usage, cache, and protected zone without touching display history');
+  assert(statusResult.ok === true && statusResult.action === 'status' && statusResult.usagePercent >= 0
+    && statusResult.triggerTokens > 0 && statusResult.targetTokens > 0
+    && statusResult.buildBlockTriggerTokens > 0 && statusResult.longHistoryTriggerTokens > 0
+    && statusResult.buildBlockRetentionTokens > 0 && statusResult.longHistoryRetentionTokens > 0
+    && statusResult.cache?.entries === 1 && statusResult.protectedZone?.protectedStartIndex > 0
+    && statusResult.protectedZone?.lastUserMessageIndex > 0 && statusResult.displayHistory.untouched === true, 'context_history_manage status: reports two-tier budgets, usage, cache, and protected zone without touching display history');
   const protectedRemove = contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'remove', position: statusResult.protectedZone.protectedStartIndex }));
   assert(protectedRemove.ok === false && String(protectedRemove.output || '').includes('protected'), 'context_history_manage remove: refuses to delete an entry in the protected recent zone');
   const dangerousRemove = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'remove', position: statusResult.protectedZone.protectedStartIndex, dangerous: true })).output) as Record<string, any>;

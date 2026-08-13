@@ -594,14 +594,20 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
           const currentCompressionAt = currentAgent.lastCompression?.at || '';
           const compressionCompleted = !!currentCompressionAt && currentCompressionAt !== bootstrappedCompressionAt;
           const includeBootstrap = providerRequestCount === 0 || compressionCompleted;
+          // Keep the stable base prompt identical across tool sub-turns. The
+          // request-scoped ledger/bootstrap is needed on the first request
+          // (and once after compression), but re-injecting it on every round
+          // makes otherwise cacheable prompt prefixes look like new prompts.
           const requestSystemPrompt = [
             context.systemPrompt || '',
-            buildRequestTaskFocus(currentAgent, context.messages, {
-              includeBootstrap,
-              compressionCompleted,
-              activeTools: context.tools || [],
-              toolCatalog: currentAgent.cachedToolDefinitions(),
-            }),
+            includeBootstrap || compressionCompleted
+              ? buildRequestTaskFocus(currentAgent, context.messages, {
+                includeBootstrap,
+                compressionCompleted,
+                activeTools: context.tools || [],
+                toolCatalog: currentAgent.cachedToolDefinitions(),
+              })
+              : '',
           ].filter(Boolean).join('\n\n');
           providerRequestCount += 1;
           if (compressionCompleted) bootstrappedCompressionAt = currentCompressionAt;

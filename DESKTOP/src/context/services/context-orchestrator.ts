@@ -18,6 +18,8 @@ export const CONTEXT_SECTION_ORDER = [
   'active_toolset_manifest',
   'build_block_startup_input',
   'build_block_metadata',
+  // Compatibility slot: linked-plan content is tool-retrieved on demand and
+  // should remain empty for ordinary model requests.
   'linked_plan',
   'active_tasks',
   'current_work_set',

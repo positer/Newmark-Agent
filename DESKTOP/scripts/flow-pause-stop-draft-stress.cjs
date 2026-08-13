@@ -103,7 +103,10 @@ async function main() {
     const stateFile = path.join(agent.workspace.current.path, 'conversations', 'state.json');
     assert(fs.existsSync(stateFile), 'first Stop: state.json written to workspace');
     const onDisk = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
-    assert(onDisk.flowSuspension && onDisk.flowSuspension.workflowName === WORKFLOW.name, 'first Stop: suspension visible on disk');
+    const scopedSuspensions = onDisk.flowSuspensions && typeof onDisk.flowSuspensions === 'object' ? onDisk.flowSuspensions : {};
+    const persistedSuspension = Object.values(scopedSuspensions).find(item => item && item.workflowName === WORKFLOW.name);
+    assert(persistedSuspension, 'first Stop: scoped suspension visible on disk');
+    assert.equal(persistedSuspension.componentId, 20, 'first Stop: scoped suspension targets the interrupted component');
     iterations++;
 
     // ---- Scenario B: second Stop force-stops and restores the previous mode ----
@@ -128,7 +131,31 @@ async function main() {
     assert.equal(agent.mode, 'flow', 'new-work: mode is NOT restored (new instruction owns the mode)');
     iterations++;
 
-    // ---- Scenario D: conversation draft persistence round-trips ----
+    // ---- Scenario D: an interrupted Flow may resume after a same-process
+    // cold Agent reload preserved the old running ledger entry. The explicit
+    // lifecycle reconciler must close that stale entry; the normal runner
+    // concurrency guard must not reject the resumed component.
+    const staleAgent = await makeAgent(root, 'resume-stale');
+    const staleTarget = {
+      workspaceId: staleAgent.workspace.current.id,
+      conversationId: staleAgent.activeConversationId,
+    };
+    staleAgent.beginConversationWorkRun('stale-flow-run', staleTarget);
+    staleAgent.saveWorkspaceConversationState();
+    const resumeAgent = await makeAgent(root, 'resume-stale');
+    assert(resumeAgent.workRuns.some(run => run.status === 'running'), 'resume: cold reload exposes the preserved stale running ledger');
+    assert.equal(resumeAgent.interruptRunningConversationWorkRuns(staleTarget, 'interrupted'), 1, 'resume: explicit paused target reconciles the stale running ledger');
+    assert(!resumeAgent.workRuns.some(run => run.status === 'running'), 'resume: no running ledger remains before the next Flow component');
+    resumeAgent.forcedProvider = streamingProvider(releases, 'resume');
+    const resumedRun = runFlow(resumeAgent, WORKFLOW, { startPc: 20, startInput: 'resume', quiet: true }).catch(error => error);
+    while (!releases.resume?.release) await new Promise(resolve => setTimeout(resolve, 5));
+    releases.resume.release();
+    const resumedOutcome = await resumedRun;
+    assert(!(resumedOutcome instanceof Error && /cannot start before the previous Build block has terminated/i.test(resumedOutcome.message)), 'resume: component starts after stale-run reconciliation');
+    assert(!resumeAgent.workRuns.some(run => run.status === 'running'), 'resume: resumed component terminates its Build ledger');
+    iterations++;
+
+    // ---- Scenario E: conversation draft persistence round-trips ----
     const drafts = 40;
     for (let i = 0; i < drafts; i++) {
       agent.saveStoredConversationDraft(`draft-${i}`, `conv-${i}`);
@@ -141,7 +168,7 @@ async function main() {
     assert.equal(agent.getStoredConversationDraft('conv-8'), 'draft-8', 'draft: sibling drafts survive');
     iterations++;
 
-    // ---- Scenario E: drafts and suspension survive an Agent restart ----
+    // ---- Scenario F: drafts and suspension survive an Agent restart ----
     const agent2 = await makeAgent(root);
     assert.equal(agent2.getStoredConversationDraft('conv-12'), 'draft-12', 'restart: draft survives new Agent on same root');
     assert.equal(agent2.getStoredConversationDraft('conv-7'), undefined, 'restart: cleared draft stays gone');
@@ -149,7 +176,7 @@ async function main() {
     assert(agent2.getStoredFlowSuspension() === null, 'restart: cleared suspension stays gone');
     iterations++;
 
-    // ---- Scenario F: concurrent persistence across many agents on one root ----
+    // ---- Scenario G: concurrent persistence across many agents on one root ----
     const agents = [];
     for (let a = 0; a < 8; a++) agents.push(await makeAgent(root, `conv-agent-${a}`));
     await Promise.all(agents.map((item, a) => Promise.resolve().then(() => {
@@ -165,7 +192,7 @@ async function main() {
     assert(concurrencyState && typeof concurrencyState === 'object', 'concurrency: state.json remains valid JSON after parallel writes');
     iterations++;
 
-    // ---- Scenario G: rapid pause/stop toggle churn keeps persistence coherent ----
+    // ---- Scenario H: rapid pause/stop toggle churn keeps persistence coherent ----
     for (let i = 0; i < 12; i++) {
       const churnAgent = await makeAgent(root);
       churnAgent.saveStoredFlowSuspension({ workflowName: 'churn', componentId: i, input: '', completedResults: [], previousMode: 'build', reason: 'interrupted', message: 'churn', updatedAt: new Date().toISOString() });

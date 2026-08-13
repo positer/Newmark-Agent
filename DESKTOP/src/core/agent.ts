@@ -2233,6 +2233,37 @@ export class Agent {
     return true;
   }
 
+  /**
+   * Close any running Build ledger entries owned by an explicitly interrupted
+   * lifecycle before a Flow is resumed or a conversation is archived.
+   *
+   * The normal Flow runner guard must continue to reject a genuinely
+   * concurrent Build. This method is deliberately explicit and target-scoped:
+   * callers use it only after the owning Flow has been stopped/paused or when
+   * archive has won the lifecycle race. Without this boundary, an isolated
+   * Agent created during resume can legitimately reload the previous snapshot
+   * while its runtime owner is still this Electron process and the guard would
+   * mistake that stale ledger entry for an active Build.
+   */
+  interruptRunningConversationWorkRuns(
+    target = this.currentConversationTarget(),
+    status: Extract<ConversationWorkRunStatus, 'interrupted' | 'force_interrupted'> = 'interrupted',
+  ): number {
+    const workspaceId = String(target.workspaceId || '');
+    const conversationId = this.safeConversationId(target.conversationId || this.activeConversationId || 'default');
+    const running = this.workRuns
+      .filter(run => run.status === 'running'
+        && String(run.target.workspaceId || '') === workspaceId
+        && this.safeConversationId(run.target.conversationId || 'default') === conversationId)
+      .map(run => run.runId);
+    let changed = 0;
+    for (const runId of running) {
+      if (this.finishConversationWorkRun(runId, status)) changed += 1;
+    }
+    if (changed) this.flushWorkspaceConversationState();
+    return changed;
+  }
+
   recordGuideReceipt(input: GuideReceipt): GuideReceipt {
     const receipt = this.normalizeGuideReceipt(input);
     let run = this.workRuns.find(item => item.runId === receipt.runId);
@@ -2834,15 +2865,22 @@ export class Agent {
   saveStoredFlowSuspension(suspension: FlowSuspensionRecord | null, conversationId = this.activeConversationId): void {
     const stateKey = this.workspaceConversationStateKey(conversationId);
     if (!stateKey) return;
-    const stored = this.readStoredConversationState();
-    const flowSuspensions = { ...(stored.flowSuspensions || {}) };
-    if (suspension) {
-      flowSuspensions[stateKey] = { ...suspension, updatedAt: suspension.updatedAt || new Date().toISOString() };
-      delete stored.flowSuspension;
-    } else {
-      delete flowSuspensions[stateKey];
-    }
-    this.writeStoredConversationStateNow({ ...stored, flowSuspensions });
+    // Use the lock-aware latest-state mutator directly. Passing a partial
+    // flowSuspensions object through writeStoredConversationStateNow() would
+    // merge the deleted key back from the latest disk snapshot, making Stop,
+    // archive, and new-work handoff appear to clear a suspension in memory
+    // while it immediately reappears after reload.
+    this.mutateStoredConversationState(this.workspace.current, latest => {
+      const flowSuspensions = { ...(latest.flowSuspensions || {}) };
+      if (suspension) {
+        flowSuspensions[stateKey] = { ...suspension, updatedAt: suspension.updatedAt || new Date().toISOString() };
+      } else {
+        delete flowSuspensions[stateKey];
+      }
+      const next = { ...latest, flowSuspensions };
+      delete next.flowSuspension;
+      return next;
+    });
   }
 
   clearStoredFlowSuspension(conversationId = this.activeConversationId): void {

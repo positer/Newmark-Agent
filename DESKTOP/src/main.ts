@@ -108,6 +108,8 @@ interface ActiveFlowState {
   abortController: AbortController | null;
   name: string;
   flowAgent: Agent | null;
+  /** Archive won the lifecycle race; the settling Flow must not recreate state. */
+  archiveRequested?: boolean;
 }
 const activeFlowsByRuntimeKey = new Map<string, ActiveFlowState>();
 
@@ -1625,6 +1627,12 @@ if (isViewerArg) {
           win.focus();
         }, 150);
       });
+      win.webContents.on('unresponsive', () => {
+        logStartupFailure('renderer-unresponsive', new Error(`Window renderer became unresponsive (webContents ${win.webContents.id})`));
+      });
+      win.webContents.on('responsive', () => {
+        recordStartup(`renderer-responsive-${win.webContents.id}`);
+      });
       if (!automationWakeMode) win.maximize();
       if (!automationWakeMode && showWindow) {
         win.show();
@@ -1637,15 +1645,18 @@ if (isViewerArg) {
         if (!startupComplete) return;
         if (agent) {
           const closeBehavior = agent.config.getStr('general', 'close_behavior');
+          recordStartup(`window-close-requested-${closeBehavior || 'exit'}`);
           if (closeBehavior === 'minimize') {
             e.preventDefault();
             win.hide();
             createTray();
+            recordStartup('window-hidden-to-tray');
             return;
           }
           if (agent.config.getBool('general', 'auto_archive_on_close')) {
             agent.archiveSession();
           }
+          recordStartup('window-close-exit');
         }
       });
 
@@ -2232,6 +2243,7 @@ if (isViewerArg) {
       if (!hasUnsettledGoalOrFlow()) markRuntimeLifecycleClean(root, 'main');
     };
     app.on('will-quit', event => {
+      recordStartup('will-quit');
       // Window-close and tray-exit both enter this path. The runtime pools
       // must get a bounded graceful-shutdown window regardless of which
       // surface initiated the close; otherwise a stuck child can keep the
@@ -2379,6 +2391,31 @@ if (isViewerArg) {
       if (!state) return;
       activeFlowsByRuntimeKey.delete(key);
       agent.clearStoredFlowSuspension(state.target.conversationId);
+    };
+
+    // Archive is a destructive lifecycle boundary. It must cancel the Flow
+    // owner itself before touching the runtime pool; Flow runs bypass the
+    // ConversationKernel and therefore cannot be stopped by the pool alone.
+    // Marking the state before aborting is important: the provider may reject
+    // on the same turn, and its late catch/finally must not recreate a paused
+    // conversation after archive has removed it.
+    const interruptActiveFlowForArchive = (target: ConversationRuntimeTarget): void => {
+      const key = activeFlowStateKey(target);
+      const state = activeFlowsByRuntimeKey.get(key) || null;
+      if (!state) return;
+      state.archiveRequested = true;
+      try {
+        state.abortController?.abort(new Error(`Flow discarded because conversation was archived: ${state.name || state.workflow.name}`));
+      } catch {}
+      state.flowAgent?.abortActiveKernelRun();
+      state.flowAgent?.interruptRunningConversationWorkRuns(state.target, 'force_interrupted');
+      state.flowAgent?.clearStoredFlowSuspension(state.target.conversationId);
+      if (agent?.workspace.current
+        && target.workspace
+        && path.resolve(agent.workspace.current.path) === path.resolve(target.workspace.path)) {
+        agent.clearStoredFlowSuspension(target.conversationId);
+      }
+      activeFlowsByRuntimeKey.delete(key);
     };
 
     const utilityHostToolHandler = createUtilityHostToolHandler({
@@ -2738,6 +2775,14 @@ if (isViewerArg) {
           diffs: flowAgent.fileDiffs.map(d => ({ path: d.path, old: d.oldContent ? d.oldContent.split(/\r?\n/).length : 0, new: d.newContent ? d.newContent.split(/\r?\n/).length : 0 })),
         };
       } catch (e) {
+        if (flowState.archiveRequested) {
+          // Archive already force-finalized the current Build ledger. Do not
+          // persist an interrupted Flow suspension or return Flow ownership
+          // to the renderer after the target has been removed.
+          flowAgent.pendingOptions = [];
+          suspended = false;
+          return { ok: false, archived: true, error: 'Flow discarded because the conversation was archived.' };
+        }
         if (e instanceof FlowQuestionPendingError) {
           suspended = true;
           flowAgent.flowPc = e.componentId;
@@ -2831,6 +2876,11 @@ if (isViewerArg) {
       const flowKey = activeFlowStateKey(flowTarget);
       const flowAgent = isolatedConversationAgent(flowTarget);
       suspension.flowAgent = flowAgent;
+      // A previous Flow may have been interrupted just before its isolated
+      // Agent flushed the work ledger. Reconcile only this explicitly paused
+      // target before starting the next component; the normal runner guard
+      // remains intact for genuine concurrent Builds.
+      flowAgent.interruptRunningConversationWorkRuns(flowTarget, 'interrupted');
       const flowAbortController = new AbortController();
       suspension.abortController = flowAbortController;
       activeFlowsByRuntimeKey.set(flowKey, suspension);
@@ -2864,6 +2914,11 @@ if (isViewerArg) {
           diffs: flowAgent.fileDiffs.map(d => ({ path: d.path, old: d.oldContent ? d.oldContent.split(/\r?\n/).length : 0, new: d.newContent ? d.newContent.split(/\r?\n/).length : 0 })),
         };
       } catch (error) {
+        if (suspension.archiveRequested) {
+          flowAgent.pendingOptions = [];
+          suspendedAgain = false;
+          return { ok: false, archived: true, error: 'Flow discarded because the conversation was archived.' };
+        }
         if (error instanceof FlowQuestionPendingError) {
           suspendedAgain = true;
           flowAgent.flowPc = error.componentId;
@@ -2885,9 +2940,9 @@ if (isViewerArg) {
             workRuns: flowAgent.getConversationSnapshot(flowAgent.activeConversationId).workRuns,
           };
         }
-        if (isUserFlowAbort(error)) {
-          return { ok: false, error: error instanceof Error ? error.message : String(error) };
-        }
+        // A Stop/Esc during a resumed Flow is another pause, not a terminal
+        // IPC failure. Fall through to the same interrupted-suspension path as
+        // the initial Flow run so repeated pause/resume clicks remain valid.
         suspendedAgain = true;
         const resumeFailure = error as { componentId?: unknown; completedResults?: FlowCompletedResult[]; message?: unknown };
         const interruptedComponentId = typeof resumeFailure.componentId === 'number'
@@ -3648,9 +3703,14 @@ if (isViewerArg) {
         mutatingRuntimeKeys.add(normalized.runtimeKey);
         try {
           // Archive is a destructive lifecycle command. It intentionally
-          // bypasses the normal mutation/active-prompt guard and hard-stops
-          // any resident runtime before touching conversation persistence.
-          await forceStopTargetRuntime(normalized);
+          // bypasses the normal mutation/active-prompt guard. Cancel the
+          // conversation-local Flow synchronously, then start the resident
+          // runtime hard-stop in the background so a stuck child cannot hold
+          // the archive click hostage.
+          interruptActiveFlowForArchive(normalized);
+          void forceStopTargetRuntime(normalized).catch(error => {
+            console.error('[Newmark] archive runtime force-stop failed:', error instanceof Error ? error.message : String(error));
+          });
           const currentWorkspacePath = path.resolve(agent!.workspace.current?.path || '');
           const targetWorkspacePath = path.resolve(normalized.workspace?.path || '');
           const ownsTargetWorkspace = !!normalized.workspace
@@ -3662,6 +3722,7 @@ if (isViewerArg) {
           // latest locked state snapshot, so rapid clicks do not serialize on
           // large Markdown bodies or lose a sibling deletion.
           const archiveOwner = ownsTargetWorkspace ? agent! : isolatedConversationAgent(normalized);
+          archiveOwner.clearStoredFlowSuspension(normalized.conversationId);
           const archived = await archiveOwner.archiveConversationAsync(normalized.conversationId);
           if (!archived) return { ok: false, error: 'Conversation archive could not be written.' };
           return { ok: true, fileName: archived, conversationId: normalized.conversationId, workspaceId: normalized.workspaceId };

@@ -589,7 +589,13 @@ async function main() {
   assert(uiHtml.includes('if (s && Array.isArray(s.workEvents))') && uiHtml.includes('var mergedEvents = existingEvents.concat(s.workEvents || [])') && uiHtml.includes('dedupedEvents.slice(-Number(state.agentWorkEventLimit || 240))'), 'ui html: merges backend work-event snapshots when foregrounding a conversation');
   assert(mainSource.includes('function broadcastAgentWorkEvent(event: unknown)') && mainSource.includes('BrowserWindow.getAllWindows()') && mainSource.includes("win.webContents.send('agent:workEvent', event)") && mainSource.includes("ipcMain.handle('agent:getState', async (event, targetInput?: ConversationTargetInput)") && mainSource.includes('const startupPrewarmRequest = isStartupPrewarmSender(event)') && mainSource.includes("ipcMain.handle('agent:ensureConversation'") && mainSource.includes("ipcMain.handle('agent:activateConversation'") && mainSource.includes('persistActiveConversationSelection(target.conversationId, workspace)') && mainSource.includes('ensureWslConversationPool()!.snapshot(target)') && mainSource.includes('ensureElectronUtilityPool().snapshot(target)') && preloadSource.includes('ensureConversation: (target: string | Record<string, unknown>)') && preloadSource.includes('activateConversation: (target: string | Record<string, unknown>)') && preloadSource.includes('getState: (target?: string | Record<string, unknown>)'), 'backend sharing: all desktop windows receive one composite-target event stream, request read-only isolated snapshots, and explicitly persist foreground conversation activation');
   assert(mainSource.includes('const forceStopTargetRuntime = async')
-    && mainSource.includes('await forceStopTargetRuntime(normalized)')
+    && mainSource.includes('interruptActiveFlowForArchive(normalized)')
+    && mainSource.includes('void forceStopTargetRuntime(normalized)')
+    && mainSource.includes('archiveOwner.clearStoredFlowSuspension(normalized.conversationId)')
+    && mainSource.includes('archiveRequested')
+    && mainSource.includes("win.webContents.on('unresponsive'")
+    && mainSource.includes("win.webContents.on('responsive'")
+    && mainSource.includes("recordStartup('will-quit')")
     && mainSource.includes('const archiveInFlight = new Map')
     && !mainSource.includes('Cannot archive a conversation while its runtime is running or stopping.'),
   'archive IPC: running, stopping, and active-prompt targets are force-interrupted without a rejection gate');
@@ -803,7 +809,9 @@ async function main() {
     && uiHtml.includes("return window.resumeFlowWith('', true);")
     && uiHtml.includes('t(\'flow.pausedTakeover\')')
     && uiHtml.includes('window.resumeFlowWith(feedback)')
-     && uiHtml.includes("if (s && s.flowSuspension) {"),
+     && uiHtml.includes("if (s && s.flowSuspension) {")
+    && uiHtml.includes('var archivedFlowKey = runtimeKeyFor(targetRuntime.workspaceId, targetRuntime.conversationId)')
+    && uiHtml.includes('delete state.flowTakeovers[archivedFlowKey]'),
    'UI Flow takeover: interrupted flow shows a paused takeover bubble with a whole-bubble Resume affordance and restores after restart');
   assert(flowMainSource.includes('const flowSuspensionForTarget = (target: ConversationRuntimeTarget)')
     && flowMainSource.includes('flowSuspension: flowSuspensionForTarget(target)')

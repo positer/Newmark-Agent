@@ -338,6 +338,65 @@ async function runSmoke(root) {
     }
     log('all flow click-pause-resume checks passed');
 
+    // A running Flow is a separate main-process lifecycle from the utility
+    // runtime. Archive must cancel both boundaries, remove the takeover on the
+    // first click, and never let a late Flow catch recreate a suspension.
+    await evaluate(cdp, `window.newConversation()`, 30000);
+    const archiveTarget = await evaluate(cdp, `currentConversationTarget()`, 30000);
+    const archiveRunPromise = evaluate(cdp, `(async () => {
+      await api.setMode('flow');
+      state.mode = 'flow';
+      const target = currentConversationTarget();
+      if (window.currentFlowTakeoverRecord) {
+        const rec = window.currentFlowTakeoverRecord();
+        rec.running = true;
+        rec.paused = false;
+        rec.runtimeLease = { target: target, runId: 'flow-archive-' + Date.now() };
+        if (window.setConversationRuntimeState) setConversationRuntimeState(target, 'running', rec.runtimeLease.runId, { provisional: true, flow: true });
+      }
+      window.renderFlowTakeover(true, ${jsString(flowName)}, { target: target });
+      const r = await api.runFlow(${jsString(flowName)}, '', 0);
+      return { ok: r && r.ok, pending: r && r.pending, archived: r && r.archived, error: r && r.error };
+    })()`, 60000);
+    await sleep(650);
+    await waitFor(cdp, `(() => {
+      const b = document.getElementById('flow-takeover');
+      return b && b.classList.contains('active') && !b.classList.contains('paused');
+    })()`, 30000, 'running takeover before archive');
+    const archiveClickStartedAt = Date.now();
+    const archiveUiState = await evaluate(cdp, `(() => {
+      const id = activeConversationId();
+      window.archiveConv(id);
+      return {
+        removedImmediately: !currentWorkspaceConversations().some(item => String(item && item.id || '') === String(id)),
+        takeoverHiddenImmediately: !document.getElementById('flow-takeover')?.classList.contains('active')
+      };
+    })()`, 30000);
+    if (!archiveUiState.removedImmediately || !archiveUiState.takeoverHiddenImmediately) {
+      fail(`archive did not remove the running target immediately: ${JSON.stringify(archiveUiState)}`);
+    }
+    const archiveReceipts = await evaluate(cdp, `(async () => {
+      const target = ${JSON.stringify(archiveTarget)};
+      return await Promise.all([api.archive(target), api.archive(target), api.archive(target)]);
+    })()`, 30000);
+    const archiveElapsedMs = Date.now() - archiveClickStartedAt;
+    if (!Array.isArray(archiveReceipts) || archiveReceipts.some(receipt => !receipt || receipt.ok !== true)) {
+      fail(`running Flow archive returned a failure: ${JSON.stringify(archiveReceipts)}`);
+    }
+    if (archiveElapsedMs > 5000) fail(`running Flow archive remained blocked for ${archiveElapsedMs}ms`);
+    const archiveRunResult = await archiveRunPromise;
+    if (!archiveRunResult || archiveRunResult.archived !== true) {
+      fail(`settling Flow was not discarded by archive: ${JSON.stringify(archiveRunResult)}`);
+    }
+    const archivedState = await evaluate(cdp, `window.api.getState(${JSON.stringify(archiveTarget)})`, 30000);
+    if (archivedState && (archivedState.flowSuspension || archivedState.flowRunning)) {
+      fail(`archived target retained Flow lifecycle state: ${JSON.stringify({ flowSuspension: archivedState.flowSuspension, flowRunning: archivedState.flowRunning })}`);
+    }
+    const archiveList = await evaluate(cdp, `window.api.listArchives('workspace')`, 30000);
+    const archivedConversation = Array.isArray(archiveList) && archiveList.some(item => String(item && item.conversationId || '') === String(archiveTarget.conversationId || ''));
+    if (!archivedConversation) fail(`running Flow archive did not produce a restorable archive: ${JSON.stringify(archiveList)}`);
+    log(`running Flow archive passed: immediate-ui=${archiveElapsedMs}ms receipts=${archiveReceipts.length}`);
+
     // A Flow that is still RUNNING when the user switches conversations must
     // stay bound to its owning conversation: the next build component keeps
     // writing to the owning conversation, the other conversation never shows a

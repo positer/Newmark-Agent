@@ -17571,6 +17571,25 @@ window.archiveConv = function(conversationId) {
       state.activeBackendConversationId = nextActiveId;
       if (els['chat-area']) els['chat-area'].innerHTML = '';
     }
+    // Archiving is a destructive handoff: remove the target's Flow takeover
+    // locally at click time as well as removing its conversation row. The
+    // backend cancellation/manifest write is asynchronous; a late Flow
+    // promise must not leave a visible running bubble over the replacement
+    // conversation while the archive is already in flight.
+    if (state.flowTakeovers) {
+      var archivedFlowKey = runtimeKeyFor(targetRuntime.workspaceId, targetRuntime.conversationId);
+      var archivedFlowRecord = state.flowTakeovers[archivedFlowKey];
+      if (archivedFlowRecord) {
+        archivedFlowRecord.running = false;
+        archivedFlowRecord.paused = false;
+        archivedFlowRecord.runtimeLease = null;
+        archivedFlowRecord.queueLease = null;
+        delete state.flowTakeovers[archivedFlowKey];
+      }
+      if (priorActiveId === targetId && window.renderFlowTakeover) {
+        window.renderFlowTakeover(false, '', { target: targetRuntime });
+      }
+    }
     setConversationRuntimeState(targetRuntime, 'idle', '');
     setWorking(!!runningConversationRecord(activeConversationId()));
     renderConversations();

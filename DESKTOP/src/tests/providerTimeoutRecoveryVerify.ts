@@ -1,5 +1,5 @@
 /**
- * dev-0.3.12 provider timeout/recovery regression gate.
+ * dev-0.3.13 provider timeout/recovery regression gate.
  *
  * The test intentionally exercises the transport at the boundary where the
  * installed Windows build previously chained fetch -> node-http -> PowerShell

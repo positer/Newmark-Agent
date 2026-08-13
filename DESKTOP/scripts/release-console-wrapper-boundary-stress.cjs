@@ -59,7 +59,7 @@ async function main() {
     assert(state.result.status === 0, `state exit=${state.result.status}; output=${state.output}`);
     const parsed = JSON.parse(String(state.result.stdout || '').trim());
     assert(String(parsed.root || '').toLowerCase() === path.resolve(root).toLowerCase(), `state root mismatch: ${JSON.stringify(parsed)}`);
-    console.log('CONSOLE_WRAPPER_BOUNDARY_STRESS_PASS version=0.3.12 helpWord=true colonPromptExit=1 rootWithSpaces=true electronArgBoundary=true');
+    console.log('CONSOLE_WRAPPER_BOUNDARY_STRESS_PASS version=0.3.13 helpWord=true colonPromptExit=1 rootWithSpaces=true electronArgBoundary=true');
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
   }

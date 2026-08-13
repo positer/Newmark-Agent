@@ -140,7 +140,12 @@ async function runFlowBuild(agent: Agent, prompt: string, options: FlowBuildOpti
       if (!options.signal?.aborted && typeof agent.emitWorkEvent === 'function') {
         agent.emitWorkEvent({ type: 'error', content: reportedError.message, runId });
       }
-      agent.finishConversationWorkRun(runId, options.signal?.aborted ? 'interrupted' : 'error');
+      agent.finishConversationWorkRun(
+        runId,
+        options.signal?.aborted ? 'interrupted' : 'error',
+        undefined,
+        options.signal?.aborted ? '' : reportedError.message,
+      );
       agent.flushWorkspaceConversationState();
     }
     throw reportedError;

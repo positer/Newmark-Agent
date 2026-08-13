@@ -227,7 +227,9 @@ function verifyDesktopContracts(): void {
   ok(uiHtml.includes('NEWMARK_BROWSER_MIN_CREATE_DELAY_MS = 5000')
     && uiHtml.includes('NEWMARK_BROWSER_IDLE_DESTROY_MS = 60000')
     && uiHtml.includes('browserGuestCreatePromises')
-    && uiHtml.includes('destroyIdleBrowserGuest'), 'Browser creation has a five-second floor, a single-flight guest, and a sixty-second idle-destroy path');
+    && uiHtml.includes('destroyIdleBrowserGuest')
+    && uiHtml.includes('options.activate === true')
+    && uiHtml.includes('var creationWait = options.activate === true'), 'Browser creation keeps a five-second background floor but active tab clicks bypass it, with single-flight and sixty-second idle-destroy paths');
   ok(uiHtml.includes('window.browserGuestLifecycleSnapshot = function()')
     && uiHtml.includes('browserGuestCreateCount += 1')
     && uiHtml.includes('browserGuestFirstCreatedAtMs = Date.now() - newmarkRendererStartedAt'), 'Browser lifecycle exposes auditable creation count and first-create timing without creating a guest');
@@ -310,7 +312,9 @@ function verifyDesktopContracts(): void {
     && uiHtml.includes('sourceInput.value && !targetInput.value')
     && uiHtml.includes("if (inp) inp.focus();\n  }, 0);")
     && terminalSendSource.includes('return window.ensureTerminalStarted().then')
-    && terminalSendSource.includes("api.terminalWrite(resp.sessionId, cmd + '\\r\\n')"), 'PTY starts only on terminal demand and a command entered before connection is forwarded exactly after the lazy session resolves');
+    && terminalSendSource.includes("api.terminalWrite(resp.sessionId, cmd + '\\r')")
+    && terminalSendSource.includes("api.terminalWrite(sessionId, cmd + '\\r')")
+    && !terminalSendSource.includes("cmd + '\\r\\n'"), 'PTY starts only on terminal demand and a command entered before connection is forwarded with one shell Enter after the lazy session resolves');
   const bottomClosedCssStart = uiHtml.indexOf('#bottom {');
   const bottomOpenCssStart = uiHtml.indexOf('#bottom.open {', bottomClosedCssStart);
   const bottomHeaderCssStart = uiHtml.indexOf('#bottom-header {', bottomOpenCssStart);
@@ -495,7 +499,10 @@ function verifyDesktopContracts(): void {
     if (mainReadyMatches.length === 0) return true;
     return mainReadyMatches.some(match => {
       const following = entry.text.slice((match.index || 0) + match[0].length);
-      return !new RegExp(`^\\s*await\\s+waitForPromotedMainUi\\(${match[1]}\\)\\s*;`).test(following);
+      // Some fixtures intentionally start without a workspace, so they use
+      // the helper's allowDisabledPrompt option while still gating the first
+      // CDP observation immediately after socket readiness.
+      return !new RegExp(`^\\s*await\\s+waitForPromotedMainUi\\(${match[1]}(?:\\s*,\\s*\\{[^}]*\\})?\\)\\s*;`).test(following);
     });
   });
   ok(ungatedCdpTargets.length === 0, `all CDP release connections gate on visible promoted UI immediately after socket readiness: ${ungatedCdpTargets.map(entry => entry.name).join(', ')}`);

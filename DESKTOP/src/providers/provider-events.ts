@@ -31,6 +31,46 @@ export function providerAbortError(signal?: AbortSignal): Error {
   return error;
 }
 
+export function providerStreamTimeoutError(timeoutMs: number): Error {
+  const error = new Error('Stream read timeout');
+  error.name = 'TimeoutError';
+  error.message = `Stream read timeout after ${timeoutMs}ms`;
+  return error;
+}
+
+/**
+ * Read one SSE chunk with both user cancellation and an inactivity deadline.
+ * Cancelling the reader is important: rejecting the race alone leaves the
+ * provider socket alive and lets later requests accumulate behind it.
+ */
+export async function readProviderStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal,
+  timeoutMs = 30_000,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (signal.aborted) throw providerAbortError(signal);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    onAbort = () => reject(providerAbortError(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(providerStreamTimeoutError(timeoutMs)), timeoutMs);
+  });
+  try {
+    return await Promise.race([reader.read(), abortPromise, timeoutPromise]);
+  } catch (error) {
+    if (signal.aborted || (error instanceof Error && error.name === 'TimeoutError')) {
+      try { await reader.cancel(error); } catch {}
+    }
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
 export function parseProviderSse(raw: string): Array<{ event?: string; data: string }> {
   const events: Array<{ event?: string; data: string }> = [];
   for (const block of String(raw || '').replace(/\r\n/g, '\n').split(/\n\n+/)) {

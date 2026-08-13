@@ -341,6 +341,20 @@ export class WorkspaceManager {
     }
   }
 
+  /**
+   * Re-read the registry and persisted current-workspace pointer after another
+   * Newmark entrypoint updates Work/*.json. This intentionally does not create
+   * a workspace: a refresh must reflect the shared on-disk state exactly.
+   */
+  reloadFromStorage(): WorkspaceInfo | null {
+    if (this.detached) return this.current;
+    this.scan();
+    this.validate();
+    this.current = null;
+    this.restoreCurrent();
+    return this.current;
+  }
+
   private saveInternal(): void {
     if (this.detached) return;
     const p = path.join(this.rootPath, 'Work', 'Local.json');

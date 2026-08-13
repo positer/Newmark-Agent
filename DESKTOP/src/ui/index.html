@@ -5671,6 +5671,7 @@ var NEWMARK_I18N = {
     'flow.nextDisabled': 'Flow only accepts Guide input; Next is disabled.',
     'flow.saved': 'Flow saved',
     'flow.emptyRun': 'Flow is empty and cannot run.',
+    'flow.noAvailable': 'No workflows are available to run.',
     'flow.started': 'Flow started',
     'plugins.title': 'Plugins',
     'plugins.mcp': 'MCP Management',
@@ -6236,6 +6237,7 @@ var NEWMARK_I18N = {
     'flow.nextDisabled': 'Flow 仅允许 Guide 输入，已禁用 Next。',
     'flow.saved': 'Flow 已保存',
     'flow.emptyRun': 'Flow 为空，无法运行。',
+    'flow.noAvailable': '当前没有可运行的工作流。',
     'flow.started': 'Flow 已启动',
     'plugins.title': '插件',
     'plugins.mcp': 'MCP 管理',
@@ -7937,15 +7939,26 @@ function addWorkReview(diffs) {
   return review;
 }
 
-function updateMsg(div, text, role, mode, model) {
+var STREAMING_PLAIN_TEXT_THRESHOLD = 12000;
+var STREAMING_LARGE_TEXT_INTERVAL_MS = 100;
+
+function updateMsg(div, text, role, mode, model, options) {
   if (!div) return;
   if (role) div.className = 'chat-msg ' + role;
   text = redactSensitiveText(text);
   div._newmarkMessageText = String(text || '');
   var body = div.querySelector('.msg-body');
-  if (body) body.innerHTML = renderMessageContent(text);
+  var streaming = !!(options && options.streaming);
+  if (body) {
+    // Re-running the full Markdown parser and rebuilding the entire message
+    // DOM for every streamed token makes long responses monopolize the
+    // renderer event loop. Keep large in-flight responses as one safe text
+    // node; the terminal `done`/`final_response` path renders Markdown once.
+    if (streaming && String(text || '').length >= STREAMING_PLAIN_TEXT_THRESHOLD) body.textContent = text;
+    else body.innerHTML = renderMessageContent(text);
+  }
   var meta = div.querySelector('.meta');
-  if (meta && (mode || model)) {
+  if (meta && (mode || model) && !streaming) {
     var roleLabel = div.classList.contains('user')
       ? (String(mode || '').toLowerCase() === 'flow-user-input' ? t('flow.userInput') : t('message.user'))
       : (div.classList.contains('workflow') ? t('message.workflow') : (div.classList.contains('system') ? t('message.system') : t('message.agent')));
@@ -8352,6 +8365,60 @@ function setConversationRuntimeState(target, status, runId, extra) {
   }
   state._sendInFlight = Object.keys(state.runningConversations).length > 0;
   return next;
+}
+
+// A renderer send marks its target as provisionally running before the IPC
+// request reaches the target runtime. Escape/Stop can therefore arrive in
+// that handoff window while the backend still reports `not_running`. Remember
+// the exact provisional run so the pending send can be cancelled before it
+// allocates a provider request; once the backend has a real run, the normal
+// target-scoped stop path takes over.
+function markProvisionalStop(target, runId) {
+  if (!state.pendingProvisionalStops) state.pendingProvisionalStops = {};
+  state.pendingProvisionalStops[runtimeKeyFor(target.workspaceId, target.conversationId)] = String(runId || '');
+}
+
+function pendingProvisionalStopRunId(target) {
+  var key = runtimeKeyFor(target.workspaceId, target.conversationId);
+  if (!state.pendingProvisionalStops || !Object.prototype.hasOwnProperty.call(state.pendingProvisionalStops, key)) return undefined;
+  return state.pendingProvisionalStops[key];
+}
+
+function clearProvisionalStop(target) {
+  if (state.pendingProvisionalStops) delete state.pendingProvisionalStops[runtimeKeyFor(target.workspaceId, target.conversationId)];
+}
+
+function consumeProvisionalStop(target, runId) {
+  var pending = pendingProvisionalStopRunId(target);
+  if (pending === undefined || String(pending) !== String(runId || '')) return false;
+  clearProvisionalStop(target);
+  return true;
+}
+
+function requestBackendStopForProvisionalStart(target, runId) {
+  var stopPromise = api.stopConversation
+    ? api.stopConversation({ target: target, runId: String(runId || ''), force: false })
+    : (api.abortConversation ? api.abortConversation(target) : Promise.resolve({ action: 'not_running' }));
+  Promise.resolve(stopPromise).then(function(result) {
+    var action = String(result && result.action || '');
+    if (action === 'not_running' || action === 'stale') {
+      return refreshConversationRuntimeAfterStopRace(target, runId, result);
+    }
+    if (action === 'force' || String(result && result.status || '') === 'force_interrupted') {
+      setConversationRuntimeState(target, 'force_interrupted', runId, { provisional: false });
+      return;
+    }
+    if (action === 'graceful') {
+      setConversationRuntimeState(target, 'stopping', runId, { provisional: false });
+      return;
+    }
+    if (result === true || ['idle', 'interrupted'].indexOf(String(result && result.status || '')) >= 0) {
+      setConversationRuntimeState(target, 'interrupted', runId, { provisional: false });
+    }
+  }).catch(function(error) {
+    setConversationRuntimeState(target, 'running', runId, { provisional: false });
+    showUiNotice(error && error.message ? error.message : String(error), 'error', 'stop-provisional-' + runtimeKeyFor(target.workspaceId, target.conversationId) + '-' + String(runId || ''));
+  });
 }
 
 function formatWorkDuration(milliseconds) {
@@ -9084,7 +9151,14 @@ function renderWorkRunEvents(run, includeGuides) {
       var responseLabel = type === 'response' && terminalInterrupted
         ? (currentLang() === 'zh' ? '未完成回复片段\n' : 'Incomplete response fragment\n') + workEventLabel(event)
         : workEventLabel(event);
-      return '<div class="conversation-work-event narrative"><div class="conversation-work-event-content">' + renderMessageContent(responseLabel) + '</div></div>';
+      // While a run is still receiving text, this view can be rebuilt once per
+      // event. Avoid invoking the full Markdown parser for a large live
+      // narrative; the final response path still gets the normal rich render.
+      var liveNarrative = ['running', 'stopping', 'force_restarting'].indexOf(String(run && run.status || '').toLowerCase()) >= 0;
+      var narrativeHtml = liveNarrative && String(responseLabel || '').length >= STREAMING_PLAIN_TEXT_THRESHOLD
+        ? esc(responseLabel)
+        : renderMessageContent(responseLabel);
+      return '<div class="conversation-work-event narrative"><div class="conversation-work-event-content">' + narrativeHtml + '</div></div>';
     }
     if (type.indexOf('guide') === 0 || event.guide) return renderWorkRunGuideMessage(event);
     if (type === 'tool_group') return renderWorkToolGroup(event, eventIndex);
@@ -9831,7 +9905,13 @@ function applyStreamingWorkflowText(ui, eventConversationId, mode, model) {
     }
     return;
   }
-  updateMsg(ensureActiveAssistantMsg(mode, model, eventConversationId), ui.activeWorkflowText, 'assistant', mode, model);
+  var largeText = ui.activeWorkflowText.length >= STREAMING_PLAIN_TEXT_THRESHOLD;
+  if (largeText) {
+    var now = Date.now();
+    if (ui._lastLargeStreamRenderAt && now - ui._lastLargeStreamRenderAt < STREAMING_LARGE_TEXT_INTERVAL_MS) return;
+    ui._lastLargeStreamRenderAt = now;
+  }
+  updateMsg(ensureActiveAssistantMsg(mode, model, eventConversationId), ui.activeWorkflowText, 'assistant', mode, model, { streaming: true });
 }
 
 function scheduleStreamingWorkflowTextFlush(ui, eventConversationId, eventWorkspaceId) {
@@ -9862,6 +9942,7 @@ function renderAgentWorkEvent(event) {
     ui.activeWorkflowText = '';
     ui.lastCompletedWorkflow = null;
     ui._streamFlushPending = false;
+    ui._lastLargeStreamRenderAt = 0;
   } else if (type === 'text') {
     ui.activeWorkflowText = (ui.activeWorkflowText || '') + content;
     if (workRun) return;
@@ -9872,6 +9953,7 @@ function renderAgentWorkEvent(event) {
     ui.activeWorkflowText = '';
     ui.activeWorkflowMsg = null;
     ui._streamFlushPending = false;
+    ui._lastLargeStreamRenderAt = 0;
   } else if (type === 'final_response' && workRun) {
     ui.activeWorkflowText = '';
     ui.activeWorkflowMsg = null;
@@ -9905,6 +9987,7 @@ function renderAgentWorkEvent(event) {
     }
     ui.activeWorkflowMsg = null;
     ui.activeWorkflowText = '';
+    ui._lastLargeStreamRenderAt = 0;
     finishToolBatch(eventConversationId);
   } else if (type === 'error') {
     flushStreamingWorkflowTextNow(ui, eventConversationId, event.mode || state.mode, event.model || state.model);
@@ -9974,7 +10057,14 @@ function appendAgentWorkEvent(event) {
   var visibleRuntimeBranch = active && isViewingRuntimeConversationBranch(target);
   if (active) markConversationTracked(id, state.conversationTrackMs || 300000, workspaceId);
   if (active || isConversationTracked(id, workspaceId)) cacheAgentWorkEvent(event);
-  if (event.type === 'start') setConversationRuntimeState(target, event.status || 'running', event.runId || '', { provisional: false, generation: event.generation || 0, runtimeKey: event.runtimeKey || '' });
+  var pendingProvisionalStop = (event.type === 'start' || event.status === 'running')
+    ? pendingProvisionalStopRunId(target)
+    : undefined;
+  if (pendingProvisionalStop !== undefined && event.runId) {
+    clearProvisionalStop(target);
+    setConversationRuntimeState(target, 'stopping', event.runId, { provisional: false, generation: event.generation || 0, runtimeKey: event.runtimeKey || '' });
+    requestBackendStopForProvisionalStart(target, event.runId);
+  } else if (event.type === 'start') setConversationRuntimeState(target, event.status || 'running', event.runId || '', { provisional: false, generation: event.generation || 0, runtimeKey: event.runtimeKey || '' });
   else if (event.status && ['running', 'stopping', 'force_restarting'].indexOf(String(event.status)) >= 0) setConversationRuntimeState(target, event.status, event.runId || '');
   else if (event.status && ['completed', 'interrupted', 'force_interrupted', 'error'].indexOf(String(event.status)) >= 0) {
     setConversationRuntimeState(target, event.status, event.runId || '');
@@ -10585,18 +10675,33 @@ window.stopCurrentConversation = async function() {
   if (!conversationId || !runtime) return false;
   var target = runtime.target || currentConversationTarget(conversationId);
   var runId = String(runtime.runId || '');
+  var provisional = runtime.provisional === true;
   if (String(runtime.status || '') === 'force_restarting') return false;
+  if (provisional) markProvisionalStop(target, runId);
   var force = String(runtime.status || '') === 'stopping';
   if (typeof pauseQueueForTarget === 'function') pauseQueueForTarget(target);
   setConversationRuntimeState(target, force ? 'force_restarting' : 'stopping', runId);
   updateSubmitButtonState();
   renderConversations();
+  if (provisional) {
+    // The backend may not have allocated a utility runtime yet. Keep the
+    // exact local cancellation marker and let sendMessage consume it, or let
+    // the first backend start event issue a stop with the real run id. An
+    // empty-run stop request here races runtime allocation and can return
+    // not_running before the prompt reaches the worker.
+    if (window.renderInputStack) window.renderInputStack();
+    return true;
+  }
   try {
     var result;
     // The target runtime supervisor owns the checkpoint + cooperative-stop
     // transaction. A separate awaited checkpoint can itself be starved by a
     // blocked worker and would prevent the supervisor from recording the first
     // stop, making a second-click hard restart impossible.
+    // A provisional renderer run has no backend run id yet. Omitting the
+    // expected id lets a concurrently-created backend run be stopped, while
+    // the pending marker above cancels a request that has not reached the
+    // runtime at all.
     if (api.stopConversation) result = await api.stopConversation({ target: target, runId: runId, force: force });
     else if (api.abortConversation) result = await api.abortConversation(currentConversationTarget(conversationId));
     var resultAction = String(result && result.action || '');
@@ -10606,6 +10711,9 @@ window.stopCurrentConversation = async function() {
       // optimistic `stopping` state and Force-stop button behind.
       await refreshConversationRuntimeAfterStopRace(target, runId, result);
       return true;
+    }
+    if (provisional && state.pendingProvisionalStops) {
+      delete state.pendingProvisionalStops[runtimeKeyFor(target.workspaceId, target.conversationId)];
     }
     var latestAfterStop = state.conversationRuntimeStates && state.conversationRuntimeStates[runtimeKeyFor(target.workspaceId, target.conversationId)];
     if (!force && latestAfterStop && String(latestAfterStop.runId || '') === runId && String(latestAfterStop.status || '') !== 'stopping') {
@@ -11841,6 +11949,15 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   var executionMode = opts.goalDeclaration || requestedMode === 'goal' ? 'build'
     : ((opts.forceBuild || idleBuildNextImmediate) && requestedMode === 'build' ? 'build' : requestedMode);
   await syncConversationExecutionState(executionMode, effectiveInputMode);
+  if (consumeProvisionalStop(lockedTarget, localRunId)) {
+    // Stop/Escape won before the backend accepted the prompt. Do not send the
+    // provider request after the user has already cancelled it.
+    delete state.activeSendCallsByTarget[lockedRuntimeKey];
+    setConversationRuntimeState(lockedTarget, 'interrupted', localRunId, { provisional: false });
+    setWorking(!!runningConversationRecord(activeConversationId()));
+    window.renderInputStack();
+    return { status: 'interrupted', runId: localRunId, target: lockedTarget, cancelledBeforeStart: true };
+  }
   var renderOnViewedBranch = !queuedRuntimeBranch || queueBranchPathForTarget(lockedTarget, 'viewed') === queueBranchPathForTarget(lockedTarget, 'runtime');
   if (isActiveConversationTarget(lockedTarget) && renderOnViewedBranch) {
     if (opts.resumeGuideRunId && requestMessage.clientMessageId) {
@@ -11870,10 +11987,12 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     renderAutoRouteRatingControls();
   }
   var responseMsg = null;
+  var sendFailure = '';
   try {
     var sendPromise = api.sendMessage(requestMessage, lockedTarget);
     if (requestedMode === 'goal') activateSubmittedGoal(opts.goalObjective || rawText);
     var r = await sendPromise;
+    if (r && r.error) sendFailure = String(r.error);
     if (isActiveConversationTarget(lockedTarget)) applyReturnedGoalState(r);
     if (r && r.runId) {
       var anchorStore = workRunAnchorIndexStore(lockedTarget);
@@ -11954,9 +12073,10 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       }
     }
   } catch(e) {
+    sendFailure = e && e.message ? String(e.message) : String(e || 'Agent run failed.');
     if (isActiveConversationTarget(lockedTarget)) {
       responseMsg = conversationWorkUiState(lockedConversationId, lockedTarget.workspaceId).activeWorkflowMsg || addMsg('assistant', '', state.mode, state.model);
-      updateMsg(responseMsg, formatChatError(e && e.message, 'Agent run failed.'), 'error', state.mode, state.model);
+      updateMsg(responseMsg, formatChatError(sendFailure, 'Agent run failed.'), 'error', state.mode, state.model);
     }
   }
   if (api.getState) {
@@ -12007,7 +12127,15 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     if (resumedModeResult != null) state._syncedMode = state.mode;
   }
   var finalRuntime = state.conversationRuntimeStates && state.conversationRuntimeStates[lockedRuntimeKey];
-  if (!finalRuntime || !finalRuntime.runId || finalRuntime.runId === localRunId || (r && finalRuntime.runId === r.runId)) {
+  var finalRunMatches = !finalRuntime || !finalRuntime.runId || finalRuntime.runId === localRunId || (r && finalRuntime.runId === r.runId);
+  if (sendFailure) {
+    // The IPC contract returns terminal failures as { error } while the
+    // target-scoped error work event may arrive on the next task. Never let
+    // the renderer's provisional run fall through to completed in that gap.
+    if (finalRunMatches) {
+      setConversationRuntimeState(lockedTarget, 'error', (r && r.runId) || (finalRuntime && finalRuntime.runId) || localRunId, { provisional: false });
+    }
+  } else if (finalRunMatches) {
     setConversationRuntimeState(lockedTarget, 'completed', (r && r.runId) || localRunId);
   }
   setWorking(!!runningConversationRecord(activeConversationId()));
@@ -12910,7 +13038,7 @@ window.terminalSend = function() {
       var startedPane = document.querySelector('.terminal-pane[data-session="' + resp.sessionId + '"]');
       var startedInput = startedPane && startedPane.querySelector('.terminal-input');
       if (startedInput && startedInput.value === cmd) startedInput.value = '';
-      return api.terminalWrite(resp.sessionId, cmd + '\r\n');
+      return api.terminalWrite(resp.sessionId, cmd + '\r');
     }).catch(function(err) {
       input.disabled = false;
       var currentPane = window.getActiveTerminalPane();
@@ -12919,7 +13047,7 @@ window.terminalSend = function() {
     });
   }
   input.value = '';
-  api.terminalWrite(sessionId, cmd + '\r\n').catch(function(err) {
+  api.terminalWrite(sessionId, cmd + '\r').catch(function(err) {
     if (output) output.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('common.error')) + '] ' + esc(err.message) + '</span>';
   });
 };
@@ -14762,36 +14890,12 @@ renderArchiveSettings = function() {
 };
 
 window.archiveCurrent = function() {
-  if (!api.archive) return;
   var currentId = activeConversationId();
-  if (currentId && runningConversationRecord(currentId)) {
-    showUiNotice(currentLang() === 'zh' ? '请先停止当前对话再归档。' : 'Stop the active conversation before archiving it.', 'error', 'archive-running-' + currentRuntimeKey(currentId));
-    return;
-  }
-  api.archive(currentConversationTarget(currentId)).then(function(receipt) {
-    if (!receipt || !receipt.ok) throw new Error((receipt && receipt.error) || 'Archive failed');
-    showUiNotice('[Archive] ' + t('archive.saved') + ': ' + receipt.fileName, 'success', 'archive-saved-' + receipt.conversationId);
-    return Promise.all([api.listArchives ? api.listArchives('workspace') : [], api.getState ? api.getState() : null]);
-  }).then(function(result) {
-    var items = result[0] || [];
-    var refreshed = result[1];
-    state.workspaceArchives = (items || []).map(function(a) {
-      return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '', restorable: !!a.restorable, conversationId: a.conversationId || '' };
-    });
-    state.allArchives = [];
-    if (refreshed && refreshed.conversations) {
-      state.activeBackendConversationId = refreshed.conversationId || state.activeBackendConversationId;
-      applyBackendConversations(refreshed.conversations, state.activeBackendConversationId, refreshed.workspaceId || runtimeWorkspaceId(''));
-      if (refreshed.chatMessages) renderChatMessages(refreshed.chatMessages);
-      renderConversations();
-    }
-    window.renderRightArchives();
-    var stab = document.getElementById('stab-archive');
-    if (stab) stab.innerHTML = renderArchiveSettings();
-    if (state.settingsActiveTab === 'archive') window.settingsTab('archive');
-  }).catch(function(err) {
-    addMsg('assistant', '[Archive] ' + t('workspace.saveFailed') + ': ' + (err.message || String(err)), 'error', '');
-  });
+  if (!currentId || !window.archiveConv) return;
+  // Use the same optimistic path as the conversation-row action. This keeps
+  // the active conversation immediately gone even while a running/queued
+  // runtime is being hard-stopped by the main process.
+  return window.archiveConv(currentId);
 };
 
 window.loadArchive = function(idx, scope) {
@@ -15831,11 +15935,17 @@ window.loadFileTree = async function(options) {
 };
 
 window.submitSelectedFlow = function() {
+  if (!state._flowsLoaded && window.ensureFlowsLoaded) {
+    return window.ensureFlowsLoaded().then(function() { return window.submitSelectedFlow(); });
+  }
   var selected = String(state.defaultFlow || (document.getElementById('flow-select') && document.getElementById('flow-select').value) || '');
   var workIdx = state.flowWorks.findIndex(function(work) { return String(work && work.name || '') === selected; });
   if (workIdx < 0) {
-    showUiNotice(currentLang() === 'zh' ? '请先选择一个 Flow。' : 'Select a Flow first.', 'error', 'flow-select-required');
-    return;
+    var message = state.flowWorks.length
+      ? (currentLang() === 'zh' ? '请先选择一个 Flow。' : 'Select a Flow first.')
+      : t('flow.noAvailable');
+    showUiNotice(message, 'error', 'flow-select-required');
+    return { ok: false, error: message };
   }
   return window.runFlowWork(workIdx);
 };
@@ -16940,7 +17050,14 @@ window.ensureBrowserPanel = function(options) {
   var targetKey = browserTargetKey(target);
   cancelBrowserGuestIdleDestroy();
   if (!browserGuestCreatePromises[targetKey]) {
-    browserGuestCreatePromises[targetKey] = waitForBrowserCreationFloor().then(function() {
+    // Keep background Browser-Use demand off the startup hot path, but never
+    // make a deliberate visible-tab click wait behind that memory guard. A
+    // user explicitly opening Browser is an interaction deadline, not a
+    // background prewarm request.
+    var creationWait = options.activate === true
+      ? Promise.resolve()
+      : waitForBrowserCreationFloor();
+    browserGuestCreatePromises[targetKey] = creationWait.then(function() {
       return initializeBrowserGuest(createBrowserGuestElement(target), target);
     }).catch(function(error) {
       delete browserGuestCreatePromises[targetKey];
@@ -17180,7 +17297,7 @@ function renderConversations() {
       ? '<span class="conv-runtime-badge ' + escAttr(String(runtimeState.status)) + '">' + esc(String(runtimeState.status)) + '</span>' : '';
     div.innerHTML = '<span class="conv-summary" title="' + escAttr(String(conv.id || '')) + '">' + esc(displaySummary) + (conv.messageCount ? ' (' + esc(String(conv.messageCount)) + ')' : '') + '</span>' + runtimeBadge +
       '<button class="conv-rename-btn" onclick="event.stopPropagation();window.editConversationName(' + i + ')" title="' + escAttr(t('conversation.rename')) + '">' + iconOnly('pencil', t('conversation.rename')) + '</button>' +
-      '<button class="conv-archive-btn" ' + (runtimeState && ['running', 'stopping', 'force_restarting'].indexOf(String(runtimeState.status || '')) >= 0 ? 'disabled ' : '') + 'onclick="event.stopPropagation();window.archiveConv(this.closest(&quot;.conv-item&quot;).getAttribute(&quot;data-conversation-id&quot;))" title="' + escAttr(t('conversation.archive')) + '">' + iconOnly('archive', t('conversation.archive')) + '</button>' +
+      '<button class="conv-archive-btn" onclick="event.stopPropagation();window.archiveConv(this.closest(&quot;.conv-item&quot;).getAttribute(&quot;data-conversation-id&quot;))" title="' + escAttr(t('conversation.archive')) + '">' + iconOnly('archive', t('conversation.archive')) + '</button>' +
       '<button class="conv-pin-btn' + (conv.pinned ? ' active' : '') + '" onclick="event.stopPropagation();window.toggleConversationPinned(' + i + ')" title="' + escAttr(conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '">' + iconOnly('pin', conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '</button>';
     div.onclick = function(idx) { return function() { window.switchConversation(idx); }; }(i);
     div.addEventListener('dragstart', function(event) {
@@ -17382,8 +17499,13 @@ function refreshConversationArchivesAfterBatch() {
     state.workspaceArchives = (items || []).map(function(a) {
       return { id: a.id || a.name || String(a), name: a.name || String(a), firstLine: a.firstLine || '', date: a.date || '', scope: a.scope || 'workspace', workspace: a.workspace || state.currentWorkspace || '', restorable: !!a.restorable, conversationId: a.conversationId || '' };
     });
-    state.allArchives = [];
+    var archiveSettingsOpen = typeof document !== 'undefined'
+      && state.settingsActiveTab === 'archive'
+      && !!document.getElementById('stab-archive');
+    if (!archiveSettingsOpen) state.allArchives = [];
     window.renderRightArchives();
+    var stab = typeof document !== 'undefined' ? document.getElementById('stab-archive') : null;
+    if (stab && archiveSettingsOpen) stab.innerHTML = renderArchiveSettings();
     return items || [];
   });
 }
@@ -17418,10 +17540,6 @@ window.archiveConv = function(conversationId) {
     var targetRuntime = currentConversationTarget(targetId);
     var workspaceKey = currentWorkspaceKey();
     var pendingKey = workspaceKey + '::' + targetId;
-    if (runningConversationRecord(targetId)) {
-      showUiNotice(currentLang() === 'zh' ? '运行中的对话不能归档。' : 'A running conversation cannot be archived.', 'error', 'archive-running-' + currentRuntimeKey(targetId));
-      return;
-    }
     if (state.conversationArchivePending[pendingKey]) return;
     var priorActiveId = String(((convs.find(function(item) { return item && item.active; }) || {}).id) || '');
     var rollbackOrder = convs.map(function(item) { return String(item && item.id || 'default'); });
@@ -17461,39 +17579,37 @@ window.archiveConv = function(conversationId) {
     archivePromise.then(function(receipt) {
       if (!receipt || receipt.ok !== true) throw new Error((receipt && receipt.error) || 'Archive failed');
       delete state.conversationArchivePending[pendingKey];
+      var optimisticArchive = {
+        id: receipt.fileName,
+        name: receipt.fileName,
+        firstLine: target.summary || '',
+        date: new Date().toISOString(),
+        scope: 'workspace',
+        workspace: state.currentWorkspace || '',
+        restorable: true,
+        conversationId: receipt.conversationId || targetId,
+      };
+      state.workspaceArchives = (state.workspaceArchives || []).filter(function(item) {
+        return String(item && item.id || item && item.name || '') !== String(optimisticArchive.id);
+      });
+      state.workspaceArchives.unshift(optimisticArchive);
+      if (Array.isArray(state.allArchives) && state.allArchives.length) {
+        state.allArchives = state.allArchives.filter(function(item) {
+          return String(item && item.id || item && item.name || '') !== String(optimisticArchive.id);
+        });
+        state.allArchives.unshift(optimisticArchive);
+      }
+      window.renderRightArchives();
+      var archiveSettings = typeof document !== 'undefined' ? document.getElementById('stab-archive') : null;
+      if (archiveSettings && state.settingsActiveTab === 'archive') archiveSettings.innerHTML = renderArchiveSettings();
       showUiNotice('[Archive] ' + t('archive.saved') + ': ' + receipt.fileName, 'success', 'archive-saved-' + targetId);
       scheduleConversationArchiveRefresh(workspaceKey);
     }).catch(function(err) {
-      var pending = state.conversationArchivePending[pendingKey];
       delete state.conversationArchivePending[pendingKey];
-      var workspaceConversations = state.workspaceConversations[workspaceKey] || [];
-      if (pending && !workspaceConversations.some(function(item) { return String(item && item.id || '') === targetId; })) {
-        var restoreAt = -1;
-        var orderIds = Array.isArray(pending.orderIds) ? pending.orderIds : [];
-        var targetOrderIndex = orderIds.indexOf(targetId);
-        for (var beforeIndex = targetOrderIndex - 1; beforeIndex >= 0 && restoreAt < 0; beforeIndex--) {
-          var precedingIndex = workspaceConversations.findIndex(function(item) { return String(item && item.id || '') === orderIds[beforeIndex]; });
-          if (precedingIndex >= 0) restoreAt = precedingIndex + 1;
-        }
-        for (var afterIndex = targetOrderIndex + 1; afterIndex < orderIds.length && restoreAt < 0; afterIndex++) {
-          var followingIndex = workspaceConversations.findIndex(function(item) { return String(item && item.id || '') === orderIds[afterIndex]; });
-          if (followingIndex >= 0) restoreAt = followingIndex;
-        }
-        if (restoreAt < 0) restoreAt = Math.min(Number(pending.index || 0), workspaceConversations.length);
-        workspaceConversations.splice(restoreAt, 0, pending.target);
-        if (pending.wasActive) {
-          for (var j = 0; j < workspaceConversations.length; j++) workspaceConversations[j].active = String(workspaceConversations[j].id || '') === targetId;
-        }
-      }
-      if (workspaceKey === currentWorkspaceKey()) {
-        state.conversations = workspaceConversations;
-        state.activeConversation = Math.max(0, workspaceConversations.findIndex(function(item) { return item && item.active; }));
-        if (pending && pending.wasActive) {
-          state.activeBackendConversationId = targetId;
-          if (els['chat-area']) els['chat-area'].innerHTML = pending.chatHtml || '';
-        }
-        renderConversations();
-      }
+      // Keep the optimistic removal authoritative for this renderer session.
+      // A failed IPC receipt is surfaced, but never resurrects the row under
+      // the user's pointer; the next explicit workspace refresh is the only
+      // path allowed to reconcile a failed destructive operation.
       showUiNotice('[Archive] ' + t('workspace.saveFailed') + ': ' + (err.message || String(err)), 'error', 'archive-failed-' + targetId);
     });
   }
@@ -19268,18 +19384,26 @@ window.saveWsSetting = function(key, value) {
 window.renderFlowSelector = function() {
   var flowSel = document.getElementById('flow-select');
   if (!flowSel) return;
+  var flows = Array.isArray(state.flowWorks) ? state.flowWorks : [];
   var defaultFlow = state.defaultFlow || '';
+  if (flows.length === 0) {
+    state.defaultFlow = '';
+    flowSel.disabled = true;
+    flowSel.innerHTML = '<option value="">' + esc(t('flow.noAvailable')) + '</option>';
+    if (window.syncNewmarkSelect) window.syncNewmarkSelect(flowSel);
+    return;
+  }
+  flowSel.disabled = false;
   var html = '';
-  for (var fi = 0; fi < state.flowWorks.length; fi++) {
-    var selected = state.flowWorks[fi].name === defaultFlow ? ' selected' : '';
-    html += '<option value="' + esc(state.flowWorks[fi].name) + '"' + selected + '>' + esc(state.flowWorks[fi].name) + '</option>';
+  for (var fi = 0; fi < flows.length; fi++) {
+    var selected = flows[fi].name === defaultFlow ? ' selected' : '';
+    html += '<option value="' + esc(flows[fi].name) + '"' + selected + '>' + esc(flows[fi].name) + '</option>';
   }
   flowSel.innerHTML = html;
-  if (state.flowWorks.length > 0) {
-    if (defaultFlow) flowSel.value = defaultFlow;
-    state.defaultFlow = flowSel.value;
-  }
+  if (defaultFlow) flowSel.value = defaultFlow;
+  state.defaultFlow = flowSel.value;
   flowSel.onchange = function() { state.defaultFlow = this.value; api.saveConfig({defaultFlow: state.defaultFlow}); };
+  if (window.syncNewmarkSelect) window.syncNewmarkSelect(flowSel);
 };
 
 window.loadFlows = function(options) {
@@ -19679,6 +19803,48 @@ function schedulePostStartupUiRendering() {
   updateWorkspaceGate();
 
   // === Event Listeners ===
+  function escapeBelongsToFocusedControl(event) {
+    var target = event && event.target;
+    if (!target || target === document || target === document.body || target === document.documentElement) return false;
+    if (els.prompt && (target === els.prompt || (els.prompt.contains && els.prompt.contains(target)))) return false;
+    if (target.closest && target.closest('.modal.active, .sub-win.open, .newmark-select-shell.open')) return true;
+    return !!(target.matches && target.matches('input, textarea, select, [contenteditable="true"]'));
+  }
+  if (api.onWorkspaceChanged) {
+    var workspaceRefreshTimer = null;
+    api.onWorkspaceChanged(function() {
+      if (workspaceRefreshTimer) clearTimeout(workspaceRefreshTimer);
+      workspaceRefreshTimer = setTimeout(function() {
+        workspaceRefreshTimer = null;
+        if (window.refreshWorkspaceState) window.refreshWorkspaceState().catch(function(){});
+        if (document.getElementById('right-archive-list')) window.refreshRightArchives();
+      }, 120);
+    });
+  }
+
+  function stopRunningFromEscape(event) {
+    if (!event || event.key !== 'Escape' || event.defaultPrevented || escapeBelongsToFocusedControl(event)) return false;
+    if (currentFlowRunning() && flowTakeoverMatchesCurrent() && !promptHasText()) {
+      event.preventDefault();
+      window.stopFlowRun();
+      return true;
+    }
+    if (isCurrentConversationRunning() && !promptHasText()) {
+      event.preventDefault();
+      window.stopCurrentConversation();
+      return true;
+    }
+    return false;
+  }
+
+  // The prompt handler below covers the normal focused-input path. Keep a
+  // document-level fallback so a physical Escape still stops a running target
+  // after focus moved to the chat, title bar, button, or another non-editor
+  // surface. Modal/editor/select Escape behavior remains owned by that UI.
+  document.addEventListener('keydown', function(event) {
+    if (stopRunningFromEscape(event)) event.stopPropagation();
+  });
+
   if (els.prompt) {
     els.prompt.addEventListener('keydown', function(e) {
       if (e.key === 'Escape' && currentFlowRunning() && flowTakeoverMatchesCurrent() && !promptHasText()) {

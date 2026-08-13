@@ -274,9 +274,10 @@ function ensureNoReleaseProcess() {
       fail(`State.json did not select external workspace: ${JSON.stringify(stateJson)}`);
     }
 
-    const archiveName = await evaluate(cdp, `window.api.archive()`, 30000);
-    const archiveFile = path.join(externalDir, 'archive', archiveName || '');
-    if (!archiveName || !fs.existsSync(archiveFile)) fail(`external workspace archive missing: ${archiveFile}`);
+    const archiveReceipt = await evaluate(cdp, `window.api.archive()`, 30000);
+    const archiveName = archiveReceipt && archiveReceipt.ok === true ? String(archiveReceipt.fileName || '') : '';
+    const archiveFile = path.join(externalDir, 'archive', archiveName);
+    if (!archiveName || !fs.existsSync(archiveFile)) fail(`external workspace archive missing: ${archiveFile}; receipt=${JSON.stringify(archiveReceipt)}`);
     log('external workspace archive ok');
 
     await captureScreenshot(cdp);

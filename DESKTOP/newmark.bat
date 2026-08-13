@@ -1,20 +1,11 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 REM Newmark Agent Launcher - Portable Edition
 REM Sets up root environment and launches Electron app
 
 set "NEWMARK_ROOT=%~dp0"
 set "NEWMARK_ROOT=%NEWMARK_ROOT:~0,-1%"
-
-REM First-run initialization
-if not exist "%NEWMARK_ROOT%\config.json" (
-    echo [Newmark] First run - initializing...
-    mkdir "%NEWMARK_ROOT%\skills" 2>nul
-    mkdir "%NEWMARK_ROOT%\Work" 2>nul
-    mkdir "%NEWMARK_ROOT%\Flow" 2>nul
-    mkdir "%NEWMARK_ROOT%\archive" 2>nul
-    copy /y ".\dist\ui\index.html" "%NEWMARK_ROOT%\dist\ui\index.html" >nul 2>nul
-)
+set "NEWMARK_EXIT=0"
 
 REM Determine if running in terminal (CLI mode)
 set "IS_CLI=0"
@@ -26,24 +17,27 @@ if "%1"=="--gui" set "IS_CLI=0"
 if /i "%1"=="--TUI" (
     echo [Newmark] TUI Mode
     if exist "%NEWMARK_ROOT%\Newmark.exe" (
-        set "ELECTRON_RUN_AS_NODE=1"
-        "%NEWMARK_ROOT%\Newmark.exe" "%NEWMARK_ROOT%\resources\app.asar\dist\launcher.js" %*
+        "%NEWMARK_ROOT%\Newmark.exe" %*
     ) else if exist "%NEWMARK_ROOT%\Newmark Agent.exe" (
-        set "ELECTRON_RUN_AS_NODE=1"
-        "%NEWMARK_ROOT%\Newmark Agent.exe" "%NEWMARK_ROOT%\resources\app.asar\dist\launcher.js" %*
+        "%NEWMARK_ROOT%\Newmark Agent.exe" -- %*
     ) else (
         node "%NEWMARK_ROOT%\dist\launcher.js" %*
     )
-    exit /b %ERRORLEVEL%
+    call :capture_exit
+    goto :newmark_return
 )
 
 if "%IS_CLI%"=="1" (
     echo [Newmark] CLI Mode
-    if exist "%NEWMARK_ROOT%\Newmark Agent.exe" (
-        "%NEWMARK_ROOT%\Newmark Agent.exe" --cli --root "%NEWMARK_ROOT%"
+    if exist "%NEWMARK_ROOT%\Newmark.exe" (
+        "%NEWMARK_ROOT%\Newmark.exe" %*
+    ) else if exist "%NEWMARK_ROOT%\Newmark Agent.exe" (
+        "%NEWMARK_ROOT%\Newmark Agent.exe" -- %*
     ) else (
-        node "%NEWMARK_ROOT%\dist\launcher.js" --cli --root "%NEWMARK_ROOT%"
+        node "%NEWMARK_ROOT%\dist\launcher.js" %*
     )
+    call :capture_exit
+    goto :newmark_return
 ) else (
     echo [Newmark] GUI Mode
     if exist "%NEWMARK_ROOT%\Newmark Agent.exe" (
@@ -53,4 +47,9 @@ if "%IS_CLI%"=="1" (
     )
 )
 
-endlocal
+:newmark_return
+endlocal & exit /b %NEWMARK_EXIT%
+
+:capture_exit
+set "NEWMARK_EXIT=%ERRORLEVEL%"
+exit /b 0

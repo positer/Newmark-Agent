@@ -18,6 +18,7 @@ const timeoutMs = numberEnv('NEWMARK_REAL_STRESS_TIMEOUT_MS', 180000);
 const port = numberEnv('NEWMARK_REAL_STRESS_PORT', 49373);
 const contextMaxTokens = numberEnv('NEWMARK_REAL_STRESS_CONTEXT_MAX_TOKENS', 128000);
 const longContextPayloadRepeats = numberEnv('NEWMARK_REAL_STRESS_LONG_CONTEXT_REPEATS', 600);
+const escapeLineCount = numberEnv('NEWMARK_REAL_STRESS_ESCAPE_LINES', 20000);
 const selectedScenarios = new Set(String(process.env.NEWMARK_REAL_STRESS_SCENARIOS || '')
   .split(',')
   .map(value => value.trim())
@@ -266,9 +267,16 @@ async function runCliStress(root, provider) {
     fs.writeFileSync(promptFile, markerPrompt(marker, i), 'utf8');
     const args = ['send', '--input-file', promptFile, '--mode', 'build', '--model', provider.model, '--conversation', `stress-cli-${i}`, '--root', root];
     if (i % 3 === 2) args.splice(args.length - 2, 0, '--language', 'zh');
-    const send = await runPowerShellCli(args, root, {}, timeoutMs);
+    log(`cli-round ${i}/${cliRounds} start`);
+    let send;
+    try {
+      send = await runPowerShellCli(args, root, {}, timeoutMs);
+    } catch (error) {
+      throw new Error(`CLI round ${i}/${cliRounds} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     if (send.stdout.includes(provider.apiKey)) throw new Error(`CLI round ${i} leaked API key`);
     if (!send.stdout.includes(marker)) throw new Error(`CLI round ${i} missing marker ${marker}: ${redact(send.stdout).slice(0, 1000)}`);
+    log(`cli-round ${i}/${cliRounds} ok`);
   }
   return `rounds=${cliRounds}`;
 }
@@ -345,7 +353,7 @@ async function evaluate(cdp, expression, callTimeoutMs = 15000) {
   return result.result ? result.result.value : undefined;
 }
 
-async function waitFor(cdp, expression, waitTimeoutMs, label) {
+async function waitFor(cdp, expression, waitTimeoutMs, label, pollIntervalMs = 500) {
   const deadline = Date.now() + waitTimeoutMs;
   let lastValue;
   while (Date.now() < deadline) {
@@ -355,7 +363,7 @@ async function waitFor(cdp, expression, waitTimeoutMs, label) {
     } catch (error) {
       lastValue = error.message;
     }
-    await sleep(500);
+    await sleep(Math.max(10, Number(pollIntervalMs) || 500));
   }
   throw new Error(`Timed out waiting for ${label}; last=${redact(JSON.stringify(lastValue)).slice(0, 1000)}`);
 }
@@ -492,6 +500,141 @@ async function runUiStress(cdp) {
     await sendUiPrompt(cdp, markerPrompt(marker, i), marker);
   }
   return `rounds=${uiRounds}`;
+}
+
+async function runUiEscapeStopStress(cdp) {
+  const recoveryMarker = 'NM_STRESS_ESCAPE_RECOVERY_OK';
+  await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
+  await waitFor(cdp, `window.api.getState().then(s => s && s.status === 'idle' ? true : false)`, 60000, 'Escape stress initial idle');
+  await evaluate(cdp, `(() => {
+    if (window.__newmarkStressStopTraceInstalled) return true;
+    window.__newmarkStressStopTraceInstalled = true;
+    window.__newmarkStressStopTrace = [];
+    const trace = window.__newmarkStressStopTrace;
+    if (window.api && window.api.stopConversation) {
+      const originalApiStop = window.api.stopConversation.bind(window.api);
+      window.api.stopConversation = async function(request) {
+        trace.push({ phase: 'api-call', request: request || null, at: Date.now() });
+        try {
+          const result = await originalApiStop(request);
+          trace.push({ phase: 'api-result', result: result || null, at: Date.now() });
+          return result;
+        } catch (error) {
+          trace.push({ phase: 'api-error', error: String(error && error.message || error), at: Date.now() });
+          throw error;
+        }
+      };
+    }
+    if (window.stopCurrentConversation) {
+      const originalUiStop = window.stopCurrentConversation;
+      window.stopCurrentConversation = async function() {
+        trace.push({ phase: 'ui-call', at: Date.now() });
+        try {
+          const result = await originalUiStop.apply(this, arguments);
+          trace.push({ phase: 'ui-result', result: result || null, at: Date.now() });
+          return result;
+        } catch (error) {
+          trace.push({ phase: 'ui-error', error: String(error && error.message || error), at: Date.now() });
+          throw error;
+        }
+      };
+    }
+    return true;
+  })()`, 30000);
+  await evaluate(cdp, `(() => {
+    const prompt = document.querySelector('#prompt');
+    if (!prompt) throw new Error('missing #prompt');
+    prompt.focus();
+    prompt.value = ${jsString(`Generate ${escapeLineCount} numbered lines. Begin with NM_STRESS_ESCAPE_LONG_START. Do not use tools.`)};
+    prompt.dispatchEvent(new Event('input', { bubbles: true }));
+    void window.sendMessage();
+    return true;
+  })()`, 30000);
+  const runningObservation = await waitFor(cdp, `(async () => {
+    const uiState = window.state || {};
+    const uiRunning = typeof isCurrentConversationRunning === 'function' && isCurrentConversationRunning();
+    const sendInFlight = uiState._sendInFlight === true;
+    // Do not request a full work-run snapshot while the renderer is streaming
+    // thousands of events: that observation can itself delay the Escape event.
+    if (uiRunning || sendInFlight) return { backendStatus: 'pending', uiRunning, sendInFlight };
+    const s = await window.api.getState();
+    const backendRunning = s && ['working', 'stopping'].includes(String(s.status || ''));
+    return backendRunning ? { backendStatus: s.status, uiRunning, sendInFlight } : null;
+  })()`, 30000, 'GUI running state before global Escape', 50);
+  const escapeResult = await evaluate(cdp, `(() => {
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    const dispatched = document.body.dispatchEvent(event);
+    return { dispatched, defaultPrevented: event.defaultPrevented };
+  })()`, 30000);
+  if (!escapeResult || escapeResult.defaultPrevented !== true) {
+    throw new Error(`global Escape was not consumed: ${JSON.stringify(escapeResult)}`);
+  }
+  let stopped;
+  try {
+    stopped = await waitFor(cdp, `(async () => {
+    const uiState = window.state || {};
+    const target = typeof currentConversationTarget === 'function' ? currentConversationTarget() : null;
+    const key = target && typeof runtimeKeyFor === 'function' ? runtimeKeyFor(target.workspaceId, target.conversationId) : '';
+    const localRuntime = key && uiState.conversationRuntimeStates ? uiState.conversationRuntimeStates[key] : null;
+    const localTerminal = localRuntime
+      && ['interrupted', 'force_interrupted'].includes(String(localRuntime.status || ''))
+      && uiState._sendInFlight !== true;
+    if (localTerminal) {
+      return { backendStatus: 'deferred', localStatus: localRuntime.status, backendStopped: false, provisionalCancelled: true };
+    }
+    const s = await window.api.getState();
+    const runs = Array.isArray(s && s.workRuns) ? s.workRuns : [];
+    const interrupted = runs.some(run => ['interrupted', 'force_interrupted'].includes(String(run && run.status || '')));
+    const backendIdle = !s || !s.runtime || (s.runtime.running !== true && s.runtime.stopRequested !== true);
+    const provisionalCancelled = localRuntime
+      && String(localRuntime.status || '') === 'interrupted'
+      && uiState._sendInFlight !== true
+      && backendIdle;
+    const backendStopped = s
+      && ['idle', 'interrupted', 'force_interrupted'].includes(String(s.status || ''))
+      && interrupted;
+    return backendStopped || provisionalCancelled
+      ? { backendStatus: s && s.status, localStatus: localRuntime && localRuntime.status, backendStopped: !!backendStopped, provisionalCancelled: !!provisionalCancelled }
+      : null;
+    })()`, 60000, 'GUI global Escape interruption');
+  } catch (error) {
+    const postEscape = await evaluate(cdp, `(() => {
+      const uiState = window.state || {};
+      const target = typeof currentConversationTarget === 'function' ? currentConversationTarget() : null;
+      const key = target && typeof runtimeKeyFor === 'function' ? runtimeKeyFor(target.workspaceId, target.conversationId) : '';
+      return {
+        target,
+        localRuntime: key && uiState.conversationRuntimeStates ? uiState.conversationRuntimeStates[key] : null,
+        sendInFlight: uiState._sendInFlight,
+        pendingProvisionalStops: uiState.pendingProvisionalStops || {},
+        activeSendCalls: uiState.activeSendCallsByTarget || {},
+        stopTrace: window.__newmarkStressStopTrace || []
+      };
+    })()`, 30000).catch(debugError => ({ debugError: debugError.message }));
+    const debug = await evaluate(cdp, `(async () => {
+      const uiState = window.state || {};
+      const target = typeof currentConversationTarget === 'function' ? currentConversationTarget() : null;
+      const key = target && typeof runtimeKeyFor === 'function' ? runtimeKeyFor(target.workspaceId, target.conversationId) : '';
+      const snapshot = window.api && window.api.getState ? await window.api.getState(target || undefined) : null;
+      return {
+        target,
+        key,
+        snapshot: snapshot ? {
+          status: snapshot.status,
+          runtime: snapshot.runtime,
+          workRuns: (snapshot.workRuns || []).slice(-4).map(run => ({ runId: run.runId, status: run.status, events: (run.events || []).slice(-6).map(event => ({ type: event.type, status: event.status, content: String(event.content || '').slice(-300) })) }))
+        } : null,
+        localRuntime: key && uiState.conversationRuntimeStates ? uiState.conversationRuntimeStates[key] : null,
+        sendInFlight: uiState._sendInFlight,
+        activeSendCalls: uiState.activeSendCallsByTarget || {},
+        runningConversations: uiState.runningConversations || {},
+        uiWorkRuns: key && uiState.workRunsByTarget ? (uiState.workRunsByTarget[key] || []).slice(-4).map(run => ({ runId: run.runId, status: run.status })) : []
+      };
+    })()`, 30000).catch(debugError => ({ debugError: debugError.message }));
+    throw new Error(`${error.message}; observed=${redact(JSON.stringify(runningObservation))}; escape=${redact(JSON.stringify(escapeResult))}; postEscape=${redact(JSON.stringify(postEscape))}; stopDebug=${redact(JSON.stringify(debug)).slice(0, 5000)}`);
+  }
+  await sendUiPrompt(cdp, markerPrompt(recoveryMarker, 1), recoveryMarker);
+  return `defaultPrevented=${escapeResult.defaultPrevented}; observed=${JSON.stringify(runningObservation)}; stop=${JSON.stringify(stopped)}`;
 }
 
 async function runGoalStress(cdp) {
@@ -677,8 +820,16 @@ function shouldRunScenario(name) {
   return selectedScenarios.size === 0 || selectedScenarios.has(name);
 }
 
-function stopReleaseProcesses() {
-  const command = `$target = ${psQuote(exePath)}; Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $target } | Stop-Process -Force; Write-Output 'STOP_REAL_STRESS_PROCESSES_OK'`;
+function stopReleaseProcesses(root = '') {
+  const target = path.resolve(exePath);
+  const rootPath = String(root || '').trim();
+  // Electron's main process owns child GPU/renderer/utility processes whose
+  // executable is the console runtime, not exePath.  Kill the exact process
+  // tree by root first; only fall back to the exact packaged GUI executable
+  // when no isolated root was supplied.  Never sweep unrelated Newmark roots.
+  const command = rootPath
+    ? `$root = ${psQuote(rootPath)}; $ids = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { [string]$_.CommandLine -like "*$root*" } | Select-Object -ExpandProperty ProcessId); foreach ($id in $ids) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }; Write-Output 'STOP_REAL_STRESS_ROOT_PROCESSES_OK'`
+    : `$target = ${psQuote(target)}; Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $target } | Stop-Process -Force; Write-Output 'STOP_REAL_STRESS_PROCESSES_OK'`;
   spawnSync('powershell.exe', [
     '-NoProfile',
     '-ExecutionPolicy',
@@ -799,6 +950,7 @@ Failures are classified as provider-limit, app-timeout-or-provider-timeout, conv
     child = launched.child;
     cdp = launched.cdp;
     if (shouldRunScenario('ui-rounds')) await recordScenario('ui-rounds', () => runUiStress(cdp));
+    if (shouldRunScenario('ui-escape-stop')) await recordScenario('ui-escape-stop', () => runUiEscapeStopStress(cdp));
     if (shouldRunScenario('goal-continuation')) await recordScenario('goal-continuation', () => runGoalStress(cdp));
     if (shouldRunScenario('queue-drain')) await recordScenario('queue-drain', () => runQueueStress(cdp));
     if (shouldRunScenario('conversation-isolation')) await recordScenario('conversation-isolation', () => runConversationIsolationStress(cdp));
@@ -807,7 +959,7 @@ Failures are classified as provider-limit, app-timeout-or-provider-timeout, conv
     try { if (cdp?.ws) cdp.ws.close(); } catch {}
     try { if (child && !child.killed) child.kill(); } catch {}
     await sleep(1000);
-    stopReleaseProcesses();
+    stopReleaseProcesses(root);
     const remaining = releaseProcessCount();
     results.push({
       name: 'release-process-cleanup',
@@ -817,7 +969,10 @@ Failures are classified as provider-limit, app-timeout-or-provider-timeout, conv
       detail: `remaining=${remaining}`,
     });
     if (keepRoot) log(`kept root: ${root}`);
-    else fs.rmSync(root, { recursive: true, force: true });
+    else {
+      try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 }); }
+      catch (error) { log(`warning: could not remove isolated stress root after process cleanup: ${error.message}`); }
+    }
     const report = writeReport(provider, root);
     if (report.failCount > 0) process.exitCode = 1;
   }

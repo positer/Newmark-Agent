@@ -9,10 +9,12 @@ function key(model: ModelIdentity): string {
 /** Durable validation evidence. The file contains probe metadata only, never prompts, tool arguments or credentials. */
 export class FileModelValidationCache implements ModelValidationCache {
   private readonly filePath: string;
+  private readonly readOnly: boolean;
   private readonly records = new Map<string, ModelValidationRecord>();
 
-  constructor(rootPath: string) {
+  constructor(rootPath: string, options: { readOnly?: boolean } = {}) {
     this.filePath = path.join(rootPath, 'model-validation', 'records.json');
+    this.readOnly = options.readOnly === true;
     this.load();
   }
 
@@ -23,11 +25,13 @@ export class FileModelValidationCache implements ModelValidationCache {
 
   set(record: ModelValidationRecord): void {
     this.records.set(record.modelKey || key(record.model), JSON.parse(JSON.stringify(record)) as ModelValidationRecord);
+    if (this.readOnly) return;
     this.save();
   }
 
   delete(modelKey: string): void {
     if (!this.records.delete(modelKey)) return;
+    if (this.readOnly) return;
     this.save();
   }
 

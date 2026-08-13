@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { runCliCommand } from '../cli-commands';
+import { redactCliSecrets, runCliCommand } from '../cli-commands';
 import { ConfigManager } from '../core/config';
 import { createUtilityHostToolHandler } from '../core/utilityHostToolRouter';
 import {
@@ -42,6 +42,22 @@ async function captureCli(root: string, args: string[]): Promise<CliCapture> {
   }
 }
 
+async function verifyCommandHelp(root: string): Promise<void> {
+  const commands = ['state', 'tool', 'send', 'validate-models', 'fuzzy-inject', 'skills-market', 'memory-lab', 'install-update', 'compat', 'compat-tool'];
+  const configBefore = fs.readFileSync(path.join(root, 'config.json'), 'utf8');
+  for (const command of commands) {
+    const started = performance.now();
+    const capture = await captureCli(root, [command, '--help', '--root', root]);
+    const elapsedMs = performance.now() - started;
+    assert.strictEqual(capture.exitCode, 0, `${command} --help exits successfully`);
+    assert.strictEqual(capture.stderr, '', `${command} --help is silent on stderr`);
+    assert.match(capture.stdout, new RegExp(`Usage: Newmark\\.exe ${command.replace('-', '\\-')}`), `${command} --help prints command usage`);
+    assert.match(capture.stdout, /--help, -h/, `${command} --help documents its terminating help flag`);
+    assert.ok(elapsedMs < 250, `${command} --help is local and fast (${Math.round(elapsedMs)}ms)`);
+  }
+  assert.strictEqual(fs.readFileSync(path.join(root, 'config.json'), 'utf8'), configBefore, 'command help does not mutate the runtime config');
+}
+
 function parseEnvelope(capture: CliCapture): Record<string, any> {
   assert.strictEqual(capture.stderr, '', `tool command must keep stderr empty: ${capture.stderr}`);
   return JSON.parse(capture.stdout) as Record<string, any>;
@@ -52,6 +68,14 @@ function toolNames(definitions: unknown[]): string[] {
 }
 
 async function verifyCliContract(root: string): Promise<void> {
+  const unknownArgument = await captureCli(root, ['state', '--definitely-unknown', '--root', root]);
+  assert.strictEqual(unknownArgument.exitCode, 2, 'unknown CLI flags fail closed instead of starting a long-lived surface');
+  assert.match(unknownArgument.stderr, /Invalid Newmark argument|definitely-unknown/i);
+
+  const missingValue = await captureCli(root, ['state', '--root']);
+  assert.strictEqual(missingValue.exitCode, 2, 'missing CLI option values fail closed instead of falling back to the user root');
+  assert.match(missingValue.stderr, /requires a value|--root/i);
+
   const invalidJson = await captureCli(root, ['tool', 'write', '{bad-json', '--root', root]);
   assert.strictEqual(invalidJson.exitCode, 2, 'malformed JSON is a validation error');
   assert.deepStrictEqual(
@@ -89,9 +113,58 @@ async function verifyCliContract(root: string): Promise<void> {
   assert.strictEqual(successEnvelope.tool, 'pwd');
   assert.ok(successEnvelope.result, 'successful direct tool returns result in the common envelope');
 
+  const contextStatus = await captureCli(root, ['tool', 'context_history_manage', JSON.stringify({ action: 'status' }), '--root', root]);
+  const contextStatusEnvelope = parseEnvelope(contextStatus);
+  assert.strictEqual(contextStatus.exitCode, 0, 'direct context_history_manage status uses the Agent-owned context handler');
+  assert.strictEqual(contextStatusEnvelope.ok, true);
+  assert.strictEqual(contextStatusEnvelope.result?.action, 'status');
+
+  const emptyCompression = await captureCli(root, ['tool', 'context_compress', JSON.stringify({ force: true }), '--root', root]);
+  const emptyCompressionEnvelope = parseEnvelope(emptyCompression);
+  assert.strictEqual(emptyCompression.exitCode, 4, 'direct context_compress reports an Agent context failure instead of Unknown tool');
+  assert.strictEqual(emptyCompressionEnvelope.ok, false);
+  assert.match(String(emptyCompressionEnvelope.error || ''), /context_compress|No context/i);
+
   const unknown = await captureCli(root, ['tool', 'not_a_tool', '{}', '--root', root]);
   assert.strictEqual(unknown.exitCode, 2, 'unknown tools are unsupported, not successful execution');
   assert.match(String(parseEnvelope(unknown).error || ''), /unknown|unsupported|available/i);
+
+  const emptyProviderSend = await captureCli(root, ['send', 'send must fail without a configured provider', '--agent-only', '--root', root]);
+  assert.strictEqual(emptyProviderSend.exitCode, 1, 'send reports an Agent error as a non-zero CLI exit');
+  assert.match(emptyProviderSend.stdout, /No LLM configured/i, 'send keeps the actionable missing-provider diagnostic in stdout');
+
+  const invalidModelConfig = new ConfigManager(root);
+  const invalidModelProvider = invalidModelConfig.upsertProvider(
+    'CLI invalid-model fixture',
+    'http://127.0.0.1:9/v1',
+    'fixture-key-not-a-secret',
+    'openai',
+  );
+  assert.ok(
+    invalidModelConfig.addModelToProvider(
+      invalidModelProvider,
+      'valid-fixture-model',
+      'Valid Fixture Model',
+      'Deterministic CLI contract model',
+    ),
+    'invalid-model fixture registers a configured fallback model',
+  );
+  invalidModelConfig.set('models', 'fallback_on_unavailable', false);
+  const invalidModelSend = await captureCli(root, [
+    'send',
+    'invalid model must fail closed',
+    '--agent-only',
+    '--model',
+    'MissingProvider/missing-model',
+    '--root',
+    root,
+  ]);
+  assert.strictEqual(invalidModelSend.exitCode, 1, 'an explicitly unavailable model returns a non-zero CLI exit');
+  assert.match(
+    invalidModelSend.stdout,
+    /unavailable|not configured|MissingProvider\/missing-model/i,
+    'invalid model keeps a machine-visible diagnostic',
+  );
 
   const browserUnavailable = await captureCli(root, ['tool', 'browser_open', JSON.stringify({ url: 'https://example.com' }), '--root', root]);
   assert.strictEqual(browserUnavailable.exitCode, 3, 'CLI-only Electron Browser capability is unavailable, not an unknown tool');
@@ -132,6 +205,29 @@ async function verifyCatalogFiltering(root: string): Promise<void> {
   const listedNames = (listEnvelope.result?.tools || []).map((tool: any) => String(tool.name || ''));
   assert.ok(!listedNames.some((name: string) => name.startsWith('browser_')));
   if (process.platform !== 'win32') assert.ok(!listedNames.includes('computer_use'));
+
+  const compatAll = await captureCli(root, ['compat', '--target', 'all', '--root', root]);
+  assert.strictEqual(compatAll.exitCode, 0, 'compatibility discovery succeeds from an isolated root');
+  assert.ok(
+    !/\bsk-[A-Za-z0-9_.-]{8,}\b/i.test(compatAll.stdout)
+      && !/\bBearer\s+[A-Za-z0-9_.=:/+_-]{8,}/i.test(compatAll.stdout),
+    'compatibility discovery redacts provider credentials from third-party metadata',
+  );
+  const compatTools = await captureCli(root, ['compat-tool', '--list', '--root', root]);
+  assert.ok(
+    !/\bsk-[A-Za-z0-9_.-]{8,}\b/i.test(compatTools.stdout)
+      && !/\bBearer\s+[A-Za-z0-9_.=:/+_-]{8,}/i.test(compatTools.stdout),
+    'compatibility tool listing redacts provider credentials',
+  );
+
+  const nestedCredential = redactCliSecrets({
+    plugins: [{ rawManifest: { provider: { deepseek: { options: { apiKey: 'sk-test-secret-12345678' } } } } }],
+    authorization: 'Bearer test-token-12345678',
+    endpoint: 'https://example.test/v1?api_key=test-token-12345678',
+  }) as any;
+  assert.strictEqual(nestedCredential.plugins[0].rawManifest.provider.deepseek.options.apiKey, '[REDACTED]');
+  assert.strictEqual(nestedCredential.authorization, '[REDACTED]');
+  assert.strictEqual(nestedCredential.endpoint, 'https://example.test/v1?api_key=<redacted>');
 }
 
 async function verifyToolExecutorValidation(root: string): Promise<void> {
@@ -213,11 +309,12 @@ async function main(): Promise<void> {
       },
       models: { providers: [], default_model: '' },
     }, null, 2));
+    await verifyCommandHelp(root);
     await verifyCliContract(root);
     await verifyCatalogFiltering(root);
     await verifyToolExecutorValidation(root);
     await verifyHostPolicy(root);
-    console.log(JSON.stringify({ ok: true, assertions: 32 }));
+    console.log(JSON.stringify({ ok: true, assertions: 46 }));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

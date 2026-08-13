@@ -23,6 +23,7 @@ import {
   ProviderTransport,
   SerializedProviderRequest,
   TransportResponse,
+  readProviderStreamChunk,
 } from '../providers';
 
 export interface IntelligenceConfig {
@@ -70,6 +71,22 @@ interface NodeHttpResult {
   headers?: Record<string, string | string[] | undefined>;
 }
 
+// Keep provider requests below the release-harness/user-visible command
+// deadline. A provider that does not answer must produce one bounded error;
+// it must not restart the same request through every Windows transport.
+const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS = 90_000;
+const MIN_PROVIDER_REQUEST_TIMEOUT_MS = 50;
+
+function providerTimeoutError(timeoutMs: number): Error {
+  const error = new Error(`Provider request timed out after ${timeoutMs}ms`);
+  error.name = 'TimeoutError';
+  return error;
+}
+
+function isProviderTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TimeoutError';
+}
+
 function abortFailure(signal?: AbortSignal): Error {
   const reason = signal?.reason;
   const error = reason instanceof Error ? reason : new Error(reason ? String(reason) : 'LLM request aborted');
@@ -111,8 +128,29 @@ export class LLMProvider {
     public apiKey: string,
     public explicitProtocol?: ProviderProtocol,
     public openAIMode: OpenAITransportMode | boolean = 'chat_stream',
-    public useProviderAdaptersV2 = false
+    public useProviderAdaptersV2 = false,
+    public requestTimeoutMs = DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,
   ) {}
+
+  private effectiveRequestTimeout(timeoutMs: number): number {
+    const requested = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS;
+    const configured = Number.isFinite(this.requestTimeoutMs) && this.requestTimeoutMs > 0
+      ? this.requestTimeoutMs
+      : DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS;
+    return Math.max(MIN_PROVIDER_REQUEST_TIMEOUT_MS, Math.min(requested, configured));
+  }
+
+  private async withRequestTimeout<T>(promise: Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(providerTimeoutError(timeoutMs)), timeoutMs);
+    });
+    try {
+      return await abortable(Promise.race([promise, timeoutPromise]), signal);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
 
   intelligenceConfig(tier: string): IntelligenceConfig {
     switch (tier) {
@@ -235,6 +273,7 @@ export class LLMProvider {
     timeoutMs = 120000,
     signal?: AbortSignal,
   ): Promise<ProviderHttpResponse> {
+    const effectiveTimeout = this.effectiveRequestTimeout(timeoutMs);
     // Electron utility processes can leave an undici response body pending when
     // several isolated workers concurrently call a plain-HTTP local provider.
     // Node's HTTP client owns the full body lifecycle and is deterministic for
@@ -242,7 +281,7 @@ export class LLMProvider {
     if (this.isPlainHttpLoopback(url)) {
       const pathname = (() => { try { return new URL(url).pathname; } catch { return ''; } })();
       this.transportDiagnostic('loopback:start', pathname);
-      const local = await this.nodeHttpJson('POST', url, headers, JSON.stringify(body), signal);
+      const local = await this.nodeHttpJson('POST', url, headers, JSON.stringify(body), signal, effectiveTimeout);
       this.transportDiagnostic('loopback:complete', `status=${local.status} bytes=${Buffer.byteLength(local.body || '')}`);
       return {
         ok: local.status >= 200 && local.status < 300,
@@ -256,7 +295,7 @@ export class LLMProvider {
     const forwardAbort = () => abort.abort(signal?.reason);
     if (signal?.aborted) forwardAbort();
     else signal?.addEventListener('abort', forwardAbort, { once: true });
-    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    const timer = setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout);
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -267,8 +306,9 @@ export class LLMProvider {
       return response;
     } catch (e) {
       if (signal?.aborted) throw abortFailure(signal);
+      if (abort.signal.aborted) throw abortFailure(abort.signal);
       if (!this.shouldUseNodeHttpFallback(e)) throw e;
-      const fallback = await this.nodeHttpJson('POST', url, headers, JSON.stringify(body), signal);
+      const fallback = await this.nodeHttpJson('POST', url, headers, JSON.stringify(body), signal, effectiveTimeout);
       return {
         ok: fallback.status >= 200 && fallback.status < 300,
         status: fallback.status,
@@ -287,14 +327,16 @@ export class LLMProvider {
     headers: Record<string, string>,
     timeoutMs = 30000
   ): Promise<ProviderHttpResponse> {
+    const effectiveTimeout = this.effectiveRequestTimeout(timeoutMs);
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    const timer = setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout);
     try {
       const response = await fetch(url, { method: 'GET', headers, signal: abort.signal });
       return response;
     } catch (e) {
+      if (abort.signal.aborted) throw abortFailure(abort.signal);
       if (!this.shouldUseNodeHttpFallback(e)) throw e;
-      const fallback = await this.nodeHttpJson('GET', url, headers);
+      const fallback = await this.nodeHttpJson('GET', url, headers, '', undefined, effectiveTimeout);
       return {
         ok: fallback.status >= 200 && fallback.status < 300,
         status: fallback.status,
@@ -308,10 +350,10 @@ export class LLMProvider {
   }
 
   private shouldUseNodeHttpFallback(error: unknown): boolean {
-    return (
-      (error instanceof TypeError && /fetch failed/i.test(error.message)) ||
-      (error instanceof Error && /abort/i.test(error.name || error.message))
-    );
+    // Abort is a completed control decision (user cancellation or our own
+    // deadline), not evidence that a second transport can succeed. Retrying it
+    // on Windows used to create a second 120s request after the first timeout.
+    return error instanceof TypeError && /fetch failed/i.test(error.message);
   }
 
   private nodeHttpJson(
@@ -320,12 +362,15 @@ export class LLMProvider {
     headers: Record<string, string>,
     body = '',
     signal?: AbortSignal,
+    timeoutMs = DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,
   ): Promise<NodeHttpResult> {
+    const effectiveTimeout = this.effectiveRequestTimeout(timeoutMs);
     if (LLMProvider.nodeHttpTransport) {
-      return abortable(LLMProvider.nodeHttpTransport(method, urlValue, headers, body), signal).catch(error => {
+      return this.withRequestTimeout(LLMProvider.nodeHttpTransport(method, urlValue, headers, body), effectiveTimeout, signal).catch(error => {
         if (signal?.aborted) throw abortFailure(signal);
+        if (isProviderTimeoutError(error)) throw error;
         if (process.platform === 'win32') {
-          return this.powershellJson(method, urlValue, headers, body, signal);
+          return this.powershellJson(method, urlValue, headers, body, signal, effectiveTimeout);
         }
         throw error;
       });
@@ -368,8 +413,8 @@ export class LLMProvider {
           else fail(new Error('Node HTTP response closed before completion'));
         });
       });
-      req.setTimeout(120000, () => {
-        req.destroy(new Error('Node HTTP fallback timeout'));
+      req.setTimeout(effectiveTimeout, () => {
+        req.destroy(providerTimeoutError(effectiveTimeout));
       });
       req.on('error', reject);
       const onAbort = () => req.destroy(abortFailure(signal));
@@ -380,8 +425,9 @@ export class LLMProvider {
       req.end();
     }).catch(error => {
       if (signal?.aborted) throw abortFailure(signal);
+      if (isProviderTimeoutError(error)) throw error;
       if (process.platform === 'win32') {
-        return this.powershellJson(method, urlValue, headers, body, signal);
+        return this.powershellJson(method, urlValue, headers, body, signal, effectiveTimeout);
       }
       throw error;
     });
@@ -393,9 +439,11 @@ export class LLMProvider {
     headers: Record<string, string>,
     body = '',
     signal?: AbortSignal,
+    timeoutMs = DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,
   ): Promise<NodeHttpResult> {
+    const effectiveTimeout = this.effectiveRequestTimeout(timeoutMs);
     if (LLMProvider.powershellTransport) {
-      return LLMProvider.powershellTransport(method, urlValue, headers, body);
+      return this.withRequestTimeout(LLMProvider.powershellTransport(method, urlValue, headers, body), effectiveTimeout, signal);
     }
     return new Promise<NodeHttpResult>((resolve, reject) => {
       const headerJson = JSON.stringify(headers);
@@ -421,7 +469,7 @@ export class LLMProvider {
         '  $raw = $headerJson | ConvertFrom-Json',
         '  foreach ($p in $raw.PSObject.Properties) { $headers[$p.Name] = [string]$p.Value }',
         '}',
-        '$params = @{ Uri = $uri; Method = $method; Headers = $headers; UseBasicParsing = $true; TimeoutSec = 120 }',
+        `'$params = @{ Uri = $uri; Method = $method; Headers = $headers; UseBasicParsing = $true; TimeoutSec = ${Math.max(1, Math.ceil(effectiveTimeout / 1000))} }`,
         'if ($method -eq "POST") { $params["Body"] = $bodyJson }',
         'if ($method -eq "POST") { $params["ContentType"] = "application/json; charset=utf-8" }',
         '$resp = Invoke-WebRequest @params',
@@ -450,8 +498,8 @@ export class LLMProvider {
       const timer = setTimeout(() => {
         child.kill();
         cleanup();
-        reject(new Error('PowerShell HTTP fallback timeout'));
-      }, 130000);
+        reject(providerTimeoutError(effectiveTimeout));
+      }, effectiveTimeout + 5000);
       child.stdout.setEncoding('utf8');
       child.stderr.setEncoding('utf8');
       child.stdout.on('data', chunk => { stdout += chunk; });
@@ -976,10 +1024,10 @@ export class LLMProvider {
   }
 
   /**
-   * Loopback-aware transport injected into adapter `execute`. Mirrors the
-   * legacy orchestration exactly: streaming requests go through fetch with a
-   * 120s timeout and degrade to a non-streaming node-http request on fetch
-   * failure; non-streaming requests reuse postJsonWithFetchFallback.
+   * Loopback-aware transport injected into adapter `execute`. Streaming
+   * requests retain the fetch-to-node fallback for transport failures, while
+   * a local deadline is returned directly so one request cannot become a
+   * second Windows fallback request.
    */
   private buildProviderAdapterTransport(): ProviderTransport {
     return async (request: SerializedProviderRequest, signal: AbortSignal): Promise<TransportResponse> => {
@@ -988,7 +1036,8 @@ export class LLMProvider {
         const forwardAbort = () => abort.abort(signal?.reason);
         if (signal?.aborted) forwardAbort();
         else signal?.addEventListener('abort', forwardAbort, { once: true });
-        const timer = setTimeout(() => abort.abort(), 120000);
+        const effectiveTimeout = this.effectiveRequestTimeout(120000);
+        const timer = setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout);
         try {
           try {
             return await fetch(request.url, {
@@ -999,6 +1048,7 @@ export class LLMProvider {
             });
           } catch (error) {
             if (signal?.aborted) throw abortFailure(signal);
+            if (abort.signal.aborted) throw abortFailure(abort.signal);
             if (!this.shouldUseNodeHttpFallback(error)) throw error;
             const fallbackHeaders = { ...request.headers };
             delete fallbackHeaders['Accept'];
@@ -1006,7 +1056,7 @@ export class LLMProvider {
               request.url,
               fallbackHeaders,
               { ...request.body, stream: false },
-              120000,
+              effectiveTimeout,
               signal,
             );
             return this.toTransportResponse(fallback);
@@ -1141,7 +1191,8 @@ export class LLMProvider {
     const forwardAbort = () => abort.abort(signal?.reason);
     if (signal?.aborted) forwardAbort();
     else signal?.addEventListener('abort', forwardAbort, { once: true });
-    const timeout = setTimeout(() => abort.abort(), 120000);
+    const effectiveTimeout = this.effectiveRequestTimeout(120000);
+    const timeout = setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout);
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
     try {
@@ -1154,9 +1205,10 @@ export class LLMProvider {
           signal: abort.signal,
         });
       } catch (e) {
+        if (signal?.aborted) throw abortFailure(signal);
+        if (abort.signal.aborted) throw abortFailure(abort.signal);
         if (!this.shouldUseNodeHttpFallback(e)) throw e;
         clearTimeout(timeout);
-        if (signal?.aborted) throw abortFailure(signal);
         yield* this.githubModelsChatNonStreaming(url, body, signal);
         return;
       }
@@ -1179,14 +1231,10 @@ export class LLMProvider {
       let currentReasoningContent = '';
       let contentPolicyBlocked = false;
       let emittedContent = false;
+      const streamSignal = signal || new AbortController().signal;
 
       while (true) {
-        if (signal?.aborted) throw abortFailure(signal);
-        const readPromise = reader.read();
-        const timeoutPromise = new Promise<{ done: boolean; value?: Uint8Array }>((_, reject) =>
-          setTimeout(() => reject(new Error('Stream read timeout')), 30000)
-        );
-        const { done, value } = await Promise.race([readPromise, timeoutPromise]);
+        const { done, value } = await readProviderStreamChunk(reader, streamSignal);
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');

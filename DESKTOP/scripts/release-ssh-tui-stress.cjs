@@ -14,6 +14,7 @@ const sshKeygenPath = path.join(openSshRoot, 'ssh-keygen.exe');
 const privateKeyPath = path.join(os.homedir(), '.ssh', 'id_ed25519');
 const publicKeyPath = `${privateKeyPath}.pub`;
 const keepRoot = process.env.NEWMARK_KEEP_SSH_TUI_STRESS === '1';
+let transientPtyWriteError = null;
 
 function assert(condition, message) {
   if (!condition) throw new Error(`SSH TUI stress failed: ${message}`);
@@ -26,6 +27,12 @@ const stripAnsi = value => String(value || '')
   .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
   .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
   .replace(/\r/g, '');
+
+function isTransientPtyWriteError(error) {
+  return !!error && typeof error === 'object'
+    && error.code === 'EAGAIN'
+    && error.syscall === 'write';
+}
 
 async function reservePort() {
   const server = net.createServer();
@@ -63,10 +70,12 @@ async function waitForPort(port, child, stderr) {
 
 function createRemoteTuiWrapper(base) {
   const packagedExe = String(process.env.NEWMARK_SSH_TUI_EXE || '').trim();
+  const isolatedRoot = String(process.env.NEWMARK_SSH_TUI_ROOT || '').trim();
+  const rootArg = isolatedRoot ? ` --root ${cmdQuote(path.resolve(isolatedRoot))}` : '';
   const wrapperPath = path.join(base, 'remote-tui.cmd');
   const command = packagedExe
-    ? `${cmdQuote(path.resolve(packagedExe))} --TUI --demo`
-    : `${cmdQuote(process.execPath)} ${cmdQuote(path.join(desktopRoot, 'dist', 'launcher.js'))} --TUI --demo`;
+    ? `${cmdQuote(path.resolve(packagedExe))} --TUI --demo${rootArg}`
+    : `${cmdQuote(process.execPath)} ${cmdQuote(path.join(desktopRoot, 'dist', 'launcher.js'))} --TUI --demo${rootArg}`;
   fs.writeFileSync(wrapperPath, `@echo off\r\n${command}\r\n`, 'utf8');
   return wrapperPath.replace(/\\/g, '/');
 }
@@ -231,6 +240,47 @@ async function runRestartStress(wrapperPath, rounds = 4) {
   }
 }
 
+function createLocalTuiRootWrapper(base, packagedExe, isolatedRoot) {
+  const wrapperPath = path.join(base, 'local-tui-root.cmd');
+  // Exercise the direct console-runtime executable as well as Newmark.exe.
+  // Both are shipped console entrypoints and must take the same sidecar path;
+  // otherwise the runtime copy starts Electron's GUI host without inheriting
+  // the ConPTY streams.
+  fs.writeFileSync(wrapperPath, `@echo off\r\n${cmdQuote(path.resolve(packagedExe))} --TUI --root ${cmdQuote(path.resolve(isolatedRoot))}\r\n`, 'utf8');
+  return wrapperPath;
+}
+
+async function runIsolatedRootStress(packagedExe, label = 'console wrapper') {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-console-tui-root-stress-'));
+  const root = path.join(base, 'isolated root');
+  fs.mkdirSync(root, { recursive: true });
+  const wrapperPath = createLocalTuiRootWrapper(base, packagedExe, root);
+  const session = runInteractiveSession(wrapperPath);
+  try {
+    await session.waitFor(/NEWMARK[\s\S]*WORKSPACES/, 'isolated root startup');
+    session.terminal.write('q');
+    const event = await Promise.race([session.exit, sleep(10_000).then(() => ({ exitCode: -999 }))]);
+    assert(event.exitCode === 0, `isolated root TUI exited ${event.exitCode}`);
+    const state = spawnSync(packagedExe, ['state', '--root', root], {
+      cwd: root,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 30_000,
+    });
+    assert(state.status === 0, `isolated root state exit=${state.status}; output=${state.stdout}\n${state.stderr}`);
+    const parsed = JSON.parse(String(state.stdout || '').trim());
+    assert(String(parsed.root || '').toLowerCase() === path.resolve(root).toLowerCase(), `isolated root state root mismatch: ${JSON.stringify(parsed)}`);
+    assert(Array.isArray(parsed.providers) && parsed.providers.length === 0, `isolated root inherited providers: ${JSON.stringify(parsed.providers)}`);
+    assert(Array.isArray(parsed.conversations) && parsed.conversations.length === 0, `isolated root inherited conversations: ${JSON.stringify(parsed.conversations)}`);
+    assert(Number(parsed.workspaces?.external || 0) === 0, `isolated root inherited external workspaces: ${JSON.stringify(parsed.workspaces)}`);
+    assert(String(parsed.workspace?.path || '').toLowerCase().startsWith(path.resolve(root).toLowerCase()), `isolated root workspace escaped: ${JSON.stringify(parsed.workspace)}`);
+    log(`${label}: explicit --root TUI remains isolated from legacy user data`);
+  } finally {
+    await stopSession(session);
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   if (process.platform !== 'win32') {
     process.stdout.write('SSH TUI stress: skipped Windows-only OpenSSH loopback gate on non-Windows host; the Windows release gate runs it before cross-platform packaging\n');
@@ -284,6 +334,14 @@ async function main() {
     log(`temporary loopback sshd listening on ${port}`);
     await exerciseFullTui(wrapperPath);
     await runRestartStress(wrapperPath);
+    const packagedExe = String(process.env.NEWMARK_SSH_TUI_EXE || '').trim();
+    if (packagedExe) {
+      await runIsolatedRootStress(packagedExe, 'Newmark.exe');
+      const runtimeExe = path.join(path.dirname(packagedExe), 'Newmark Console Runtime.exe');
+      assert(fs.existsSync(runtimeExe), `missing direct console runtime: ${runtimeExe}`);
+      await runIsolatedRootStress(runtimeExe, 'Newmark Console Runtime.exe');
+    }
+    if (transientPtyWriteError) throw transientPtyWriteError;
     process.stdout.write('SSH TUI stress: real loopback sshd + PTY interaction + resize + light theme + 4 restart rounds passed\n');
   } finally {
     if (sshd.exitCode === null) sshd.kill('SIGTERM');
@@ -298,7 +356,33 @@ async function main() {
   }
 }
 
-void main().then(
+process.on('uncaughtException', error => {
+  if (isTransientPtyWriteError(error)) {
+    transientPtyWriteError = error;
+    log(`transient PTY write EAGAIN observed; the stress run will be retried (${error.message})`);
+    return;
+  }
+  process.stderr.write(`${error.stack || error.message || String(error)}\n`);
+  process.exit(1);
+});
+
+async function runWithTransientRetry() {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    transientPtyWriteError = null;
+    try {
+      await main();
+      if (!transientPtyWriteError) return;
+      throw transientPtyWriteError;
+    } catch (error) {
+      if (!isTransientPtyWriteError(error) || attempt === maxAttempts) throw error;
+      log(`restarting the complete SSH/PTTY fixture after transient write pressure (${attempt}/${maxAttempts - 1})`);
+      await sleep(500);
+    }
+  }
+}
+
+void runWithTransientRetry().then(
   () => process.exit(0),
   error => {
     process.stderr.write(`${error.stack || error.message || String(error)}\n`);

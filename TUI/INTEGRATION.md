@@ -10,7 +10,7 @@ MemoryLabManager(root, language)
 AutomationManager(agent.config, hostOwnedRunner)
 ```
 
-默认 `root = ~/.Newmark`，默认 `workspacePath = process.cwd()`。adapter 先按规范化绝对路径查找现有内部/外部 Workspace；命中后调用 `selectWorkspaceFromStorage(id)`，未命中则调用 `addExternalWorkspace(workspacePath)`。由现有 WorkspaceManager 负责稳定 ID、`External.json`、`State.json` 和 Workspace Conversation 状态。
+默认 `root = ~/.Newmark`，默认 `workspacePath = process.cwd()`；但在显式给出 `--root` 且未给出 `--workspace` 的隔离启动中，workspace 会绑定到该 root，避免把调用目录意外登记成外部 Workspace。显式 `--workspace` 仍可选择外部目录。adapter 先按规范化绝对路径查找现有内部/外部 Workspace；命中后调用 `selectWorkspaceFromStorage(id)`，未命中则调用 `addExternalWorkspace(workspacePath)`。由现有 WorkspaceManager 负责稳定 ID、`External.json`、`State.json` 和 Workspace Conversation 状态。
 
 ## 已映射的现有实现
 

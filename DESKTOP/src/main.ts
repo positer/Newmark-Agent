@@ -17,6 +17,7 @@ import { ElectronBrowserUseHost } from './core/electronBrowserUseHost';
 import { FlowEngine } from './core/flow';
 import { FlowCompletedResult, FlowQuestionPendingError, runFlow } from './core/flow-runner';
 import { CLI_COMMANDS, runCliCommand } from './cli-commands';
+import { invalidTopLevelArgument, isVersionArgument, unknownTopLevelCommand } from './cli-discovery';
 import { sanitizeProvidersForState } from './core/config';
 import { MemoryLabManager } from './core/memoryLab';
 import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, installUpdate } from './core/installUpdate';
@@ -58,7 +59,7 @@ import { runRuntimeShutdownBarrier } from './core/runtimeShutdown';
 import { markRuntimeLifecycleClean } from './core/runtimeLifecycle';
 import { discoverPluginManifests } from './core/compat';
 import { McpManager } from './core/mcpManager';
-import { newmarkHelpText } from './cli-help';
+import { newmarkEditHelpText, newmarkFlowHelpText, newmarkHelpText } from './cli-help';
 
 const APP_NAME = 'Newmark Agent';
 const APP_ID = 'ai.newmark.agent';
@@ -440,7 +441,11 @@ function createAppIconImage(size?: number) {
 }
 
 function userArgs(): string[] {
-  return process.argv.slice(1);
+  const args = process.argv.slice(1);
+  // The native Windows console wrapper inserts Electron's `--` boundary before
+  // user arguments. Electron leaves that boundary in process.argv; normalize it
+  // before command discovery so the literal `Newmark.exe help` path terminates.
+  return args[0] === '--' ? args.slice(1) : args;
 }
 
 function argValue(args: string[], key: string): string | undefined {
@@ -493,7 +498,7 @@ function positionalAfter(args: string[], commandName: string): string[] {
 }
 
 // First-run initialization
-function firstRunInit(root: string): void {
+function firstRunInit(root: string, options: { readOnly?: boolean } = {}): void {
   fs.mkdirSync(root, { recursive: true });
   for (const d of ['skills', 'Work', 'Flow', 'archive', 'Memory Lab']) {
     fs.mkdirSync(path.join(root, d), { recursive: true });
@@ -501,7 +506,7 @@ function firstRunInit(root: string): void {
   new MemoryLabManager(root);
 
   const configModule = require('./core/config');
-  configModule.ensureRootConfig(root);
+  configModule.ensureRootConfig(root, options);
   if (!fs.existsSync(path.join(root, 'agent.md'))) {
     fs.writeFileSync(path.join(root, 'agent.md'), '# Newmark Agent\n\nYou are a powerful coding assistant.\n', 'utf-8');
   }
@@ -594,16 +599,12 @@ function ensureElectronUtilityRuntimeHost(): string {
 }
 
 function legacyUserDataRoot(): string {
-  try {
-    return app.getPath('userData');
-  } catch {
-    if (process.platform === 'win32') {
-      const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-      return path.join(appData, 'Newmark Agent');
-    }
-    if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'Newmark Agent');
-    return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'Newmark Agent');
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(appData, 'Newmark Agent');
   }
+  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'Newmark Agent');
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'Newmark Agent');
 }
 
 function migrateLegacyRuntimeRoot(root: string): void {
@@ -680,6 +681,15 @@ function resolveRoot(args: string[]): string {
   const explicitRoot = pathArgValue(args, '--root');
   if (explicitRoot) return writableRuntimeRoot(explicitRoot);
   return getRoot();
+}
+
+function resolveTuiWorkspacePath(args: string[], root: string): string {
+  const explicitWorkspace = pathArgValue(args, '--workspace');
+  if (explicitWorkspace) return explicitWorkspace;
+  // An explicitly isolated runtime must not silently register the caller's
+  // cwd as an external workspace. Keep the opt-in --workspace escape hatch,
+  // while making the safe one-argument form fully self-contained.
+  return pathArgValue(args, '--root') ? root : process.cwd();
 }
 
 function startupLogPath(): string {
@@ -1024,24 +1034,55 @@ const args = userArgs();
 const command = args.find(a => a === 'flow' || a === 'edit');
 const isTuiArg = args.some(arg => arg.toLowerCase() === '--tui');
 const hasCliCommand = args.some(a => (CLI_COMMANDS as readonly string[]).includes(a));
+const isFlowArg = command === 'flow';
+const isEditArg = command === 'edit';
 const isHelpArg = !hasCliCommand && (args.some(arg => ['--help', '-h'].includes(arg.toLowerCase())) || args[0]?.toLowerCase() === 'help');
-const isVersionArg = !hasCliCommand && args.some(arg => ['--version', '-v'].includes(arg.toLowerCase()));
+const isVersionArg = !hasCliCommand && isVersionArgument(args);
+const isReadOnlyValidation = hasCliCommand && args.includes('validate-models') && !args.includes('--persist');
 const isViewerArg = args.some(arg => arg.toLowerCase() === '--newmark-viewer');
 const isCliArg = args.includes('--cli');
 const isServerArg = args.includes('--server');
-const isFlowArg = command === 'flow';
-const isEditArg = command === 'edit';
+
+const invalidArgument = invalidTopLevelArgument(args);
+if (invalidArgument) {
+  console.error(`Invalid Newmark argument: ${invalidArgument}`);
+  process.exit(2);
+}
+
+// Electron's Chromium profile is a separate state boundary from Newmark's
+// business root. Bind both before any ready event so --root cannot leave
+// Preferences, DIPS, DevTools ports, cookies, or session storage in the real
+// default AppData directory. The dedicated subdirectories keep Chromium's
+// files separate from the durable Newmark config/workspace files.
+const runtimeRoot = resolveRoot(args);
+const electronUserDataRoot = path.join(runtimeRoot, 'Electron');
+const electronSessionDataRoot = path.join(electronUserDataRoot, 'session-data');
+try {
+  fs.mkdirSync(electronSessionDataRoot, { recursive: true });
+  app.setPath('userData', electronUserDataRoot);
+  app.setPath('sessionData', electronSessionDataRoot);
+} catch (error) {
+  console.error(`Unable to isolate Electron user-data directory: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
 
 // Help/version are terminating discovery commands. They must be handled
 // before Electron's GUI/TUI/server branches can initialize runtime state or
 // spawn a window, so a product-new tester can use them safely in any surface.
 if (isHelpArg) {
-  console.log(newmarkHelpText(currentAppVersion()));
+  console.log(isFlowArg ? newmarkFlowHelpText() : isEditArg ? newmarkEditHelpText() : newmarkHelpText(currentAppVersion()));
   process.exit(0);
 }
 if (isVersionArg) {
   console.log(currentAppVersion());
   process.exit(0);
+}
+const unknownCommand = app.isPackaged && !hasCliCommand && !isTuiArg && !isCliArg && !isServerArg && !isViewerArg
+  ? unknownTopLevelCommand(args)
+  : undefined;
+if (unknownCommand) {
+  console.error(`Unknown Newmark command or argument: ${unknownCommand}. Run --help to see the supported entrypoints.`);
+  process.exit(2);
 }
 
 function viewerEscape(value: unknown): string {
@@ -1114,7 +1155,11 @@ if (isViewerArg) {
     await createViewerWindow(request);
   }).catch(error => { console.error(`Unable to open Newmark viewer: ${error instanceof Error ? error.message : String(error)}`); app.quit(); });
 } else if (isTuiArg) {
-  const isConsoleLauncher = app.isPackaged && path.basename(process.execPath).toLowerCase() === 'newmark.exe';
+  const isConsoleLauncher = app.isPackaged && (
+    path.basename(process.execPath).toLowerCase() === 'newmark.exe'
+    || path.basename(process.execPath).toLowerCase() === 'newmark console runtime.exe'
+    || process.env.NEWMARK_CONSOLE_WRAPPER === '1'
+  );
   if (isConsoleLauncher && process.env.NEWMARK_TUI_SIDECAR !== '1') {
     const tuiProcess = spawnSync(process.execPath, [path.join(__dirname, 'launcher.js'), ...args], {
       cwd: process.cwd(),
@@ -1122,6 +1167,11 @@ if (isViewerArg) {
         ...process.env,
         ELECTRON_RUN_AS_NODE: '1',
         NEWMARK_TUI_SIDECAR: '1',
+        // The GUI Electron host does not expose the inherited ConPTY handles
+        // as Node TTY streams. The console wrapper has already established
+        // that this is the terminal entrypoint, so preserve the terminal
+        // contract for the sidecar without weakening ordinary GUI launches.
+        NEWMARK_FORCE_TTY: isConsoleLauncher ? '1' : process.env.NEWMARK_FORCE_TTY,
       },
       stdio: 'inherit',
       windowsHide: false,
@@ -1142,11 +1192,11 @@ if (isViewerArg) {
   const root = resolveRoot(args);
   firstRunInit(root);
   const { start } = require('./tui/src/app');
-  start({ root, workspacePath: process.cwd(), desktopDist: __dirname });
+  start({ root, workspacePath: resolveTuiWorkspacePath(args, root), desktopDist: __dirname });
 } else if (hasCliCommand) {
   (async () => {
     const root = resolveRoot(args);
-    firstRunInit(root);
+    firstRunInit(root, { readOnly: isReadOnlyValidation });
     const handled = await runCliCommand(root, args);
     const code = typeof process.exitCode === 'number' ? process.exitCode : 0;
     exitCli(handled ? code : 1);
@@ -1292,6 +1342,43 @@ if (isViewerArg) {
 
   app.whenReady().then(async () => {
     let root = resolveRoot(args);
+    let workspaceRegistryWatcher: fs.FSWatcher | null = null;
+    let workspaceRegistryWatchTimer: NodeJS.Timeout | null = null;
+    const workspaceRegistryFiles = new Set(['Local.json', 'External.json', 'State.json']);
+    const broadcastWorkspaceChanged = (files: string[]): void => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (win.isDestroyed()) continue;
+        win.webContents.send('workspace:changed', { files, root });
+      }
+    };
+    const refreshWorkspaceRegistryFromDisk = (files: string[]): void => {
+      if (!agent) return;
+      agent.refreshWorkspaceRegistryFromStorage();
+      const current = agent.workspace.current;
+      if (current) workspaceSelectionCoordinator?.setCurrent(current.id || current.path || current.name);
+      broadcastWorkspaceChanged(files);
+    };
+    const ensureWorkspaceRegistryWatcher = (): void => {
+      if (workspaceRegistryWatcher) return;
+      const workDir = path.join(root, 'Work');
+      try {
+        workspaceRegistryWatcher = fs.watch(workDir, { persistent: false }, (_eventType, filename) => {
+          const changed = String(filename || '');
+          if (changed && !workspaceRegistryFiles.has(path.basename(changed))) return;
+          if (workspaceRegistryWatchTimer) clearTimeout(workspaceRegistryWatchTimer);
+          workspaceRegistryWatchTimer = setTimeout(() => {
+            workspaceRegistryWatchTimer = null;
+            try {
+              refreshWorkspaceRegistryFromDisk(changed ? [path.basename(changed)] : ['Work']);
+            } catch (error) {
+              logStartupFailure('workspace-registry-refresh', error);
+            }
+          }, 90);
+        });
+      } catch (error) {
+        logStartupFailure('workspace-registry-watch', error);
+      }
+    };
     const fileRouter = new WorkspaceFileRouter(() => path.resolve(agent?.workspace.current?.path || root));
     const pdfPreviewServer = new PdfPreviewServer((token, ownerId) => fileRouter.resolvePdfCapability(token, ownerId));
     await pdfPreviewServer.start();
@@ -1682,6 +1769,7 @@ if (isViewerArg) {
         agent = new Agent(root);
         mcpManager = new McpManager(root);
         activeAgentBackendMode = process.platform === 'win32' && agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows';
+        ensureWorkspaceRegistryWatcher();
         restoreStoredFlowSuspension();
         recordStartup('agent-ready');
       }
@@ -2144,7 +2232,15 @@ if (isViewerArg) {
       if (!hasUnsettledGoalOrFlow()) markRuntimeLifecycleClean(root, 'main');
     };
     app.on('will-quit', event => {
-      if (_forceQuit) armForcedExitDeadline('will-quit');
+      // Window-close and tray-exit both enter this path. The runtime pools
+      // must get a bounded graceful-shutdown window regardless of which
+      // surface initiated the close; otherwise a stuck child can keep the
+      // Electron parent and its renderer tree alive indefinitely.
+      if (_forceQuit || !appExitCleanupComplete) armForcedExitDeadline('will-quit');
+      if (workspaceRegistryWatchTimer) clearTimeout(workspaceRegistryWatchTimer);
+      workspaceRegistryWatchTimer = null;
+      workspaceRegistryWatcher?.close();
+      workspaceRegistryWatcher = null;
       startupDeferredTasks?.cancel();
       agent?.flushWorkspaceConversationState();
       conversationKernel?.flushPersistence();
@@ -2449,6 +2545,11 @@ if (isViewerArg) {
       if (wslBackendEnabled()) await wslAgentRuntimePool?.stopTarget(target);
       else await electronUtilityRuntimePool?.stopTarget(target);
     };
+    const forceStopTargetRuntime = async (target: ConversationRuntimeTarget): Promise<void> => {
+      if (wslBackendEnabled()) await wslAgentRuntimePool?.forceStopTarget(target);
+      else await electronUtilityRuntimePool?.forceStopTarget(target);
+    };
+    const archiveInFlight = new Map<string, Promise<{ ok: boolean; error?: string; fileName?: string; conversationId?: string; workspaceId?: string }>>();
     const isolatedConversationAgent = (target: ConversationRuntimeTarget): Agent => {
       const normalized = normalizeConversationTarget(target);
       const isolated = new Agent(root, { agentOnly: true });
@@ -3541,27 +3642,40 @@ if (isViewerArg) {
       if (!agent) return { ok: false, error: 'Agent not initialized' };
       const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
       const normalized = normalizeConversationTarget(target);
-      assertTargetNotMutating(normalized);
-      mutatingRuntimeKeys.add(normalized.runtimeKey);
+      const existing = archiveInFlight.get(normalized.runtimeKey);
+      if (existing) return existing;
+      const operation = (async () => {
+        mutatingRuntimeKeys.add(normalized.runtimeKey);
+        try {
+          // Archive is a destructive lifecycle command. It intentionally
+          // bypasses the normal mutation/active-prompt guard and hard-stops
+          // any resident runtime before touching conversation persistence.
+          await forceStopTargetRuntime(normalized);
+          const currentWorkspacePath = path.resolve(agent!.workspace.current?.path || '');
+          const targetWorkspacePath = path.resolve(normalized.workspace?.path || '');
+          const ownsTargetWorkspace = !!normalized.workspace
+            && !!agent!.workspace.current
+            && currentWorkspacePath === targetWorkspacePath;
+          // The host Agent owns the current workspace persistence cache. An
+          // isolated owner is used for another workspace. The archive writer
+          // starts payload I/O in parallel and finalizes deletion against the
+          // latest locked state snapshot, so rapid clicks do not serialize on
+          // large Markdown bodies or lose a sibling deletion.
+          const archiveOwner = ownsTargetWorkspace ? agent! : isolatedConversationAgent(normalized);
+          const archived = await archiveOwner.archiveConversationAsync(normalized.conversationId);
+          if (!archived) return { ok: false, error: 'Conversation archive could not be written.' };
+          return { ok: true, fileName: archived, conversationId: normalized.conversationId, workspaceId: normalized.workspaceId };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        } finally {
+          mutatingRuntimeKeys.delete(normalized.runtimeKey);
+        }
+      })();
+      archiveInFlight.set(normalized.runtimeKey, operation);
       try {
-        const peek = peekTargetRuntime(normalized);
-        if (peek.running || peek.stopping) return { ok: false, error: 'Cannot archive a conversation while its runtime is running or stopping.' };
-        if (peek.resident) await stopTargetRuntime(normalized);
-        const currentWorkspacePath = path.resolve(agent.workspace.current?.path || '');
-        const targetWorkspacePath = path.resolve(normalized.workspace?.path || '');
-        const ownsTargetWorkspace = !!normalized.workspace
-          && !!agent.workspace.current
-          && currentWorkspacePath === targetWorkspacePath;
-        // The host Agent owns the current workspace persistence cache. Archiving
-        // through it prevents a delayed host flush from resurrecting the target.
-        const archiveOwner = ownsTargetWorkspace ? agent : isolatedConversationAgent(normalized);
-        const archived = archiveOwner.archiveConversation(normalized.conversationId);
-        if (!archived) return { ok: false, error: 'Conversation archive could not be written.' };
-        return { ok: true, fileName: archived, conversationId: normalized.conversationId, workspaceId: normalized.workspaceId };
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        return await operation;
       } finally {
-        mutatingRuntimeKeys.delete(normalized.runtimeKey);
+        if (archiveInFlight.get(normalized.runtimeKey) === operation) archiveInFlight.delete(normalized.runtimeKey);
       }
     });
 

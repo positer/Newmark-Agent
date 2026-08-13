@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Agent } from '../core/agent';
+import { ConversationKernel } from '../core/conversationKernel';
 import { classifyRouteFailure } from '../core/autoRouter';
 import { agentKernelRunnerInternals } from '../core/agentKernelRunner';
 import { seedToolchainFromDefinitions } from '../toolchain';
@@ -51,6 +52,8 @@ async function main(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-normal-chat-'));
   const errorRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-normal-chat-error-'));
   const fallbackRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-normal-chat-fallback-'));
+  const noProviderRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-normal-chat-no-provider-'));
+  const unavailableRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-normal-chat-unavailable-'));
   try {
     const providers = [{
       id: 'provider-a',
@@ -286,6 +289,86 @@ async function main(): Promise<void> {
     assert.ok(!errorAgent.chatMessages.some(message => message.role === 'assistant' && message.content.trim() === '[Error]'),
       'bare provider errors are never persisted as successful assistant messages');
 
+    writeConfig(noProviderRoot, []);
+    const noProviderHost = new Agent(noProviderRoot, { agentOnly: true, workspaceRegistryMode: 'detached', conversationId: 'no-provider' });
+    noProviderHost.workspace.current = null;
+    noProviderHost.config.clearWorkspaceOverrides();
+    const noProviderKernel = new ConversationKernel(noProviderRoot, noProviderHost, null, {
+      createRunner: target => {
+        const runner = new Agent(noProviderRoot, { agentOnly: true, workspaceRegistryMode: 'detached', conversationId: target.conversationId });
+        runner.workspace.current = null;
+        runner.config.clearWorkspaceOverrides();
+        return runner;
+      },
+    });
+    const noProviderTarget = { workspaceId: '', conversationId: 'no-provider' };
+    await assert.rejects(
+      () => noProviderKernel.prompt('missing provider', noProviderTarget, { mode: 'build', model: '', intelligence: 'medium', inputMode: 'next', engine: 'native' }),
+      /No LLM configured/i,
+      'shared conversation backend rejects a missing provider instead of returning an error token as a successful turn',
+    );
+    const noProviderEvents = noProviderKernel.events(noProviderTarget);
+    const noProviderSnapshot = noProviderKernel.snapshot(noProviderTarget);
+    assert.ok(noProviderEvents.some(event => event.type === 'error')
+      && !noProviderEvents.some(event => event.type === 'done' || event.type === 'final_response'),
+    'missing-provider GUI/TUI events have one real error terminal and no synthetic completion');
+    assert.equal(noProviderSnapshot.workRuns.at(-1)?.status, 'error', 'missing-provider work run persists as failed');
+
+    writeConfig(unavailableRoot, [{
+      id: 'configured-provider',
+      name: 'Configured Provider',
+      base_url: 'https://configured-provider.invalid/v1',
+      api_key: 'fixture-unavailable',
+      protocol: 'openai',
+      enabled: true,
+      models: [fixtureModel('configured-model')],
+    }]);
+    const unavailableHost = new Agent(unavailableRoot, { agentOnly: true, workspaceRegistryMode: 'detached', conversationId: 'unavailable-model' });
+    unavailableHost.workspace.current = null;
+    unavailableHost.config.clearWorkspaceOverrides();
+    const unavailableKernel = new ConversationKernel(unavailableRoot, unavailableHost, null, {
+      createRunner: target => {
+        const runner = new Agent(unavailableRoot, { agentOnly: true, workspaceRegistryMode: 'detached', conversationId: target.conversationId });
+        runner.workspace.current = null;
+        runner.config.clearWorkspaceOverrides();
+        return runner;
+      },
+    });
+    const unavailableTarget = { workspaceId: '', conversationId: 'unavailable-model' };
+    await assert.rejects(
+      () => unavailableKernel.prompt('missing model', unavailableTarget, { mode: 'build', model: 'provider-that-does-not-exist/missing-model', intelligence: 'medium', inputMode: 'next', engine: 'native' }),
+      /unavailable or not configured/i,
+      'shared conversation backend rejects an explicitly unavailable model instead of silently routing to a fixture/default');
+    const unavailableEvents = unavailableKernel.events(unavailableTarget);
+    const unavailableSnapshot = unavailableKernel.snapshot(unavailableTarget);
+    assert.ok(unavailableEvents.some(event => event.type === 'error')
+      && !unavailableEvents.some(event => event.type === 'done' || event.type === 'final_response'),
+    'unavailable-model GUI/TUI events have one real error terminal and no synthetic completion');
+    assert.equal(unavailableSnapshot.workRuns.at(-1)?.status, 'error', 'unavailable-model work run persists as failed');
+
+    let invalidModelProviderCalls = 0;
+    const invalidModelAgent = new Agent(unavailableRoot, { agentOnly: true, workspaceRegistryMode: 'detached', conversationId: 'invalid-model-direct' });
+    invalidModelAgent.workspace.current = null;
+    invalidModelAgent.config.clearWorkspaceOverrides();
+    (invalidModelAgent as unknown as { forcedProvider: unknown }).forcedProvider = {
+      intelligenceConfig: () => ({ temperature: 0, maxTokens: 32 }),
+      async *chatStreamWithTools(): AsyncGenerator<StreamToken> {
+        invalidModelProviderCalls += 1;
+        yield { type: 'text', text: 'MUST_NOT_REACH_PROVIDER' };
+      },
+      async chat(): Promise<string> {
+        invalidModelProviderCalls += 1;
+        return 'MUST_NOT_REACH_PROVIDER';
+      },
+    };
+    invalidModelAgent.setModel('provider-that-does-not-exist/missing-model');
+    await assert.rejects(
+      () => invalidModelAgent.process('invalid model must fail before transport'),
+      /unavailable or not configured/i,
+      'an explicitly invalid fixed model fails before the shared provider transport',
+    );
+    assert.equal(invalidModelProviderCalls, 0, 'invalid fixed model never reaches a provider request');
+
     assert.equal(agentKernelRunnerInternals.normalizePublicProviderError(new Error('')), 'Provider request failed without diagnostic details.');
     assert.equal(agentKernelRunnerInternals.normalizePublicProviderError(new Error('<think>hidden</think>')), 'Provider request failed without diagnostic details.');
     assert.equal(
@@ -406,6 +489,8 @@ async function main(): Promise<void> {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(errorRoot, { recursive: true, force: true });
     fs.rmSync(fallbackRoot, { recursive: true, force: true });
+    fs.rmSync(noProviderRoot, { recursive: true, force: true });
+    fs.rmSync(unavailableRoot, { recursive: true, force: true });
   }
 }
 

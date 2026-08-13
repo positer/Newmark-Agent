@@ -14,10 +14,10 @@ import {
   normalizeProviderUsage,
   parseProviderSse,
   defaultProviderTransport,
-  providerAbortError,
   providerErrorText,
   isContentPolicyBlocked,
   normalizeResponsesPayload,
+  readProviderStreamChunk,
 } from './provider-events';
 import { normalizeProviderHeaders } from './provider-headers';
 import { openAIToolName, stringifyContent, normalizeResponsesContent } from './chat-messages';
@@ -163,8 +163,7 @@ export class ResponsesAdapter implements ModelProviderAdapter {
 
     try {
       while (true) {
-        if (signal.aborted) throw providerAbortError(signal);
-        const { done, value } = await reader.read();
+        const { done, value } = await readProviderStreamChunk(reader, signal);
         if (done) break;
         buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
         const blocks = buffer.split(/\n\n+/);

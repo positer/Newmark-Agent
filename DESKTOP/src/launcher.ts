@@ -9,20 +9,29 @@ import { Agent } from './core/agent';
 import { FlowEngine } from './core/flow';
 import { runFlow } from './core/flow-runner';
 import { CLI_COMMANDS, runCliCommand } from './cli-commands';
+import { invalidTopLevelArgument, isVersionArgument, unknownTopLevelCommand } from './cli-discovery';
 import { currentAppVersion } from './core/installUpdate';
-import { newmarkHelpText } from './cli-help';
+import { newmarkEditHelpText, newmarkFlowHelpText, newmarkHelpText } from './cli-help';
 
-const args = process.argv.slice(2);
+const rawArgs = process.argv.slice(2);
+const args = rawArgs[0] === '--' ? rawArgs.slice(1) : rawArgs;
 const hasCliCommand = args.some(a => (CLI_COMMANDS as readonly string[]).includes(a));
+const isEdit = args[0] === 'edit';
+const editFile = isEdit ? args[1] : '';
+const isFlow = args[0] === 'flow';
 const isHelpArg = !hasCliCommand && (args.some(arg => ['--help', '-h'].includes(arg.toLowerCase())) || args[0]?.toLowerCase() === 'help');
-const isVersionArg = !hasCliCommand && args.some(arg => ['--version', '-v'].includes(arg.toLowerCase()));
+const isVersionArg = !hasCliCommand && isVersionArgument(args);
+const isReadOnlyValidation = hasCliCommand && args.includes('validate-models') && !args.includes('--persist');
 const isTui = args.some(arg => arg.toLowerCase() === '--tui');
 const isGui = args.some(arg => arg.toLowerCase() === '--gui');
 const isCli = args.includes('--cli');
 const isServer = args.includes('--server');
-const isEdit = args[0] === 'edit';
-const editFile = isEdit ? args[1] : '';
-const isFlow = args[0] === 'flow';
+
+const invalidArgument = invalidTopLevelArgument(args);
+if (invalidArgument) {
+  console.error(`Invalid Newmark argument: ${invalidArgument}`);
+  process.exit(2);
+}
 
 function pathArgValue(values: string[], key: string): string | undefined {
   const prefix = `${key}=`;
@@ -51,6 +60,15 @@ function pathArgValue(values: string[], key: string): string | undefined {
     if (fs.existsSync(candidate)) best = candidate;
   }
   return best || parts.join(' ') || undefined;
+}
+
+function resolveTuiWorkspacePath(values: string[], root: string): string {
+  const explicitWorkspace = pathArgValue(values, '--workspace');
+  if (explicitWorkspace) return explicitWorkspace;
+  // An explicitly isolated runtime must not silently register the caller's
+  // cwd as an external workspace. Keep the opt-in --workspace escape hatch,
+  // while making the safe one-argument form fully self-contained.
+  return pathArgValue(values, '--root') ? root : process.cwd();
 }
 
 function userRuntimeRoot(): string {
@@ -132,19 +150,30 @@ const explicitRoot = pathArgValue(args, '--root');
 const root = explicitRoot ? writableRuntimeRoot(explicitRoot) : userRuntimeRoot();
 
 if (isHelpArg) {
-  console.log(newmarkHelpText(currentAppVersion()));
+  console.log(isFlow ? newmarkFlowHelpText() : isEdit ? newmarkEditHelpText() : newmarkHelpText(currentAppVersion()));
   process.exit(0);
 }
 if (isVersionArg) {
   console.log(currentAppVersion());
   process.exit(0);
 }
+const unknownCommand = !hasCliCommand && !isTui && !isGui && !isCli && !isServer && !isFlow && !isEdit
+  ? unknownTopLevelCommand(args)
+  : undefined;
+if (unknownCommand) {
+  console.error(`Unknown Newmark command or argument: ${unknownCommand}. Run --help to see the supported entrypoints.`);
+  process.exit(2);
+}
 
-function firstRunInit(r: string): void {
+function firstRunInit(r: string, options: { readOnly?: boolean } = {}): void {
   fs.mkdirSync(r, { recursive: true });
-  migrateLegacyRuntimeRoot(r);
+  // Legacy AppData migration is only valid for the canonical user runtime.
+  // An explicit --root is an isolation boundary (tests, portable roots, and
+  // caller-selected workspaces) and must never inherit the user's sessions,
+  // archives, providers, or workspaces.
+  if (path.resolve(r) === path.resolve(userRuntimeRoot())) migrateLegacyRuntimeRoot(r);
   const { ensureRootConfig } = require('./core/config');
-  ensureRootConfig(r);
+  ensureRootConfig(r, options);
   if (!fs.existsSync(path.join(r, 'agent.md'))) {
     fs.writeFileSync(path.join(r, 'agent.md'), '# Newmark Agent\n\nYou are a powerful coding assistant.\n', 'utf-8');
   }
@@ -230,13 +259,13 @@ function launchGui(): never {
   process.exit(1);
 }
 
-firstRunInit(root);
+firstRunInit(root, { readOnly: isReadOnlyValidation });
 
 if (isGui) {
   launchGui();
 } else if (isTui) {
   const { start } = require('./tui/src/app');
-  start({ root, workspacePath: process.cwd(), desktopDist: __dirname });
+  start({ root, workspacePath: resolveTuiWorkspacePath(args, root), desktopDist: __dirname });
 } else if (hasCliCommand) {
   runCliCommand(root, args).then(handled => {
     const code = typeof process.exitCode === 'number' ? process.exitCode : 0;

@@ -11,6 +11,12 @@
       "_type": "choice",
       "_values": ["en", "zh", "auto"],
       "value": "auto"
+    },
+    "close_behavior": {
+      "_description": "Close behavior",
+      "_type": "choice",
+      "_values": ["minimize", "exit"],
+      "value": "exit"
     }
   },
   "ui": {

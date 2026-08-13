@@ -344,18 +344,41 @@ function normalizePublicProviderError(error: unknown, secrets: unknown[] = []): 
   return raw.slice(0, 1_200);
 }
 
+function throwIfKernelAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    reason.name = 'AbortError';
+    throw reason;
+  }
+  const error = new Error(reason ? String(reason) : 'Agent run aborted');
+  error.name = 'AbortError';
+  throw error;
+}
+
 export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   const stopContextTimer = performanceTimer('context_prepare', { conversationId: agent.activeConversationId });
+  const processSignal = agent.activeProcessSignal();
+  if (processSignal?.aborted) {
+    stopContextTimer();
+    throwIfKernelAborted(processSignal);
+  }
   if (!agent.engineModel()) {
+    const message = 'No LLM configured. Add provider in Settings > Models.';
     agent.status = 'error';
     agent.saveWorkspaceConversationState();
-    return [{ type: 'text', text: '[Error] No LLM configured. Add provider in Settings > Models.' }];
+    // A missing provider is a terminal run failure, not a visible assistant
+    // response. Throwing here lets Agent.process and ConversationKernel share
+    // the normal error finalization path, so GUI/TUI/CLI cannot turn this into
+    // a synthetic successful Build with an empty final summary.
+    throw new Error(message);
   }
 
   const [{ Agent: NativeAgent }, KernelStreamCompat] = await Promise.all([
     import('./agentKernel/index.js') as Promise<{ Agent: NativeAgentConstructor }>,
     import('./agentKernel/stream-types.js') as Promise<KernelStreamCompat>,
   ]);
+  throwIfKernelAborted(processSignal);
 
   const toolProvisioning = new ToolProvisionSession([], []);
   let activeToolSurfaceIdentity = '';
@@ -387,6 +410,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   const initialToolSurface = refreshToolSurface(true);
   const assembledContext = agent.assembleContextV2(initialToolSurface.systemPromptNotice);
   const systemPrompt = assembledContext.text;
+  throwIfKernelAborted(processSignal);
   let providerRequestCount = 0;
   let bootstrappedCompressionAt = agent.lastCompression?.at || '';
   stopContextTimer();
@@ -408,6 +432,26 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   kernel.state.tools = toKernelTools(agent, initialToolSurface.definitions, toolProvisioning);
   kernel.state.messages = toKernelMessages(agent);
   agent.attachAgentKernelRuntime(kernel);
+  let detachProcessAbort = () => {};
+  if (processSignal) {
+    const abortKernel = () => kernel.abort();
+    if (processSignal.aborted) {
+      kernel.abort();
+    } else {
+      processSignal.addEventListener('abort', abortKernel, { once: true });
+      detachProcessAbort = () => processSignal.removeEventListener('abort', abortKernel);
+    }
+  }
+  try {
+    // abort() cannot cancel a NativeAgent before its internal run exists. The
+    // explicit check closes the remaining handoff window between attaching the
+    // kernel and entering kernel.prompt().
+    throwIfKernelAborted(processSignal);
+  } catch (error) {
+    detachProcessAbort();
+    agent.attachAgentKernelRuntime(null);
+    throw error;
+  }
 
   const tokens: StreamToken[] = [];
   const runOnce = async (promptMessages: KernelMessage[], appendPromptToAgentHistory: boolean) => {
@@ -515,6 +559,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       else agent.pendingOptions = agent.pendingOptions.filter(question => !isPlanExecutionQuestion(question));
     }
   } finally {
+    detachProcessAbort();
     agent.attachAgentKernelRuntime(null);
   }
   agent.status = 'idle';
@@ -692,13 +737,11 @@ async function transformContext(agent: Agent, messages: KernelMessage[], signal?
   // projection so the internal broker call/result and its compact catalog can
   // never be written into conversation state or revived after a reload.
   const newmarkMessages = publicHistoryFromKernelMessages(messages);
-  const beforeCompression = JSON.stringify(newmarkMessages);
   const compressionAt = agent.lastCompression?.at || '';
-  await agent.maybeCompress(newmarkMessages, provider, processSignal, compressionModel);
+  let compressed = await agent.maybeCompress(newmarkMessages, provider, processSignal, compressionModel);
   if (processSignal?.aborted) return messages;
-  const primaryCompressed = JSON.stringify(newmarkMessages) !== beforeCompression;
-  if (primaryCompressed && agent.estimateContextTokens(newmarkMessages) >= Math.floor(agent.contextWindow(compressionModel).maxTokens * 0.82)) {
-    await agent.maybeCompress(newmarkMessages, null, processSignal, compressionModel, true);
+  if (compressed && agent.estimateContextTokens(newmarkMessages) >= Math.floor(agent.contextWindow(compressionModel).maxTokens * 0.82)) {
+    compressed = (await agent.maybeCompress(newmarkMessages, null, processSignal, compressionModel, true)) || compressed;
   }
   // Hard safety net: even a conservative worst-case token estimate must never
   // leave a request that could exceed the model's context window. The improved
@@ -708,9 +751,9 @@ async function transformContext(agent: Agent, messages: KernelMessage[], signal?
   const windowMax = agent.contextWindow(compressionModel).maxTokens;
   const conservativeTokens = agent.estimateContextTokens(newmarkMessages);
   if (conservativeTokens >= Math.floor(windowMax * 0.9) && !processSignal?.aborted) {
-    await agent.maybeCompress(newmarkMessages, null, processSignal, compressionModel, true);
+    compressed = (await agent.maybeCompress(newmarkMessages, null, processSignal, compressionModel, true)) || compressed;
   }
-  if (JSON.stringify(newmarkMessages) === beforeCompression) return messages;
+  if (!compressed) return messages;
   const durableMessages = toKernelMessagesFromHistory(newmarkMessages, agent);
   if (agent.lastCompression?.at && agent.lastCompression.at !== compressionAt) {
     agent.recordContextCompressionStep();

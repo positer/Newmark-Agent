@@ -9,7 +9,7 @@ import {
   SerializedProviderRequest,
   TokenEstimate,
 } from './provider-adapter';
-import { estimateRequestTokens, normalizeProviderUsage, defaultProviderTransport, providerAbortError, providerErrorText, isContentPolicyBlocked } from './provider-events';
+import { estimateRequestTokens, normalizeProviderUsage, defaultProviderTransport, providerErrorText, isContentPolicyBlocked, readProviderStreamChunk } from './provider-events';
 import { normalizeProviderHeaders } from './provider-headers';
 import { openAIToolName, openAIChatMessages } from './chat-messages';
 
@@ -121,12 +121,7 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
     let emittedTool = false;
     try {
       while (true) {
-        if (signal.aborted) throw providerAbortError(signal);
-        const readPromise = reader.read();
-        const timeoutPromise = new Promise<{ done: boolean; value?: Uint8Array }>((_, reject) =>
-          setTimeout(() => reject(new Error('Stream read timeout')), 30000)
-        );
-        const { done, value } = await Promise.race([readPromise, timeoutPromise]);
+        const { done, value } = await readProviderStreamChunk(reader, signal);
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');

@@ -7,8 +7,10 @@ const { spawn, spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const appRoot = path.resolve(__dirname, '..');
-const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
-const screenshotPath = path.join(repoRoot, 'archive', '2026-07-01-release-cli-ui-conversation-sync-smoke.png');
+const exePath = path.resolve(process.env.NEWMARK_TEST_EXE || path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe'));
+const cliExePath = path.resolve(process.env.NEWMARK_TEST_CLI_EXE || path.join(path.dirname(exePath), 'Newmark.exe'));
+const screenshotPath = path.resolve(process.env.NEWMARK_CLI_UI_CONVERSATION_SYNC_SCREENSHOT
+  || path.join(repoRoot, 'archive', '2026-07-01-release-cli-ui-conversation-sync-smoke.png'));
 const keepRoot = process.env.NEWMARK_KEEP_CLI_UI_CONVERSATION_SYNC_SMOKE === '1';
 
 function log(message) {
@@ -35,7 +37,7 @@ function runPowerShellCli(args, root, extraEnv = {}) {
   const argList = args.map(psQuote).join(', ');
   fs.writeFileSync(scriptPath, [
     '$ErrorActionPreference = "Stop"',
-    `$exe = ${psQuote(exePath)}`,
+    `$exe = ${psQuote(cliExePath)}`,
     `$argList = @(${argList})`,
     `$stdout = ${psQuote(stdoutPath)}`,
     `$stderr = ${psQuote(stderrPath)}`,
@@ -274,12 +276,15 @@ async function captureScreenshot(cdp) {
 }
 
 function stopReleaseProcesses() {
+  const targets = [exePath, cliExePath, path.join(path.dirname(exePath), 'Newmark Console Runtime.exe')]
+    .map(psQuote)
+    .join(', ');
   spawnSync('powershell.exe', [
     '-NoProfile',
     '-ExecutionPolicy',
     'Bypass',
     '-Command',
-    "Get-Process | Where-Object { $_.Path -like '*Newmark Agent*release*' } | Stop-Process -Force; Write-Output 'STOP_RELEASE_PROCESSES_OK'",
+    `$targets=@(${targets}); @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -in $targets }) | Stop-Process -Force -ErrorAction SilentlyContinue; Write-Output 'STOP_NEW_MARK_PROCESSES_OK'`,
   ], { windowsHide: true, encoding: 'utf8' });
 }
 

@@ -645,9 +645,13 @@ async function stopPackagedRun(child, cdp) {
       window.api.rewindConversation(${js(targetB)}, 0).then(value => ({ value })).catch(error => ({ error: String(error) })),
       window.api.deleteWorkspace(${js(workspaceB.id || workspaceB.name)}).then(value => ({ value })).catch(error => ({ error: String(error) }))
     ])`);
-    if (!mutationGuards.every(item => /running|stopping|active|being mutated|operation completes/i.test(JSON.stringify(item)))) {
+    const archiveAccepted = mutationGuards[0]?.value?.ok === true
+      && !!String(mutationGuards[0]?.value?.fileName || '').trim();
+    const competingMutationsBlocked = mutationGuards.slice(1).every(item => /running|stopping|active|being mutated|operation completes/i.test(JSON.stringify(item)));
+    if (!archiveAccepted || !competingMutationsBlocked) {
       fail(`Running-target mutation guard failed: ${JSON.stringify(mutationGuards)}`);
     }
+    log('running-target archive is accepted immediately while rewind/workspace deletion remain guarded');
 
     await selectWorkspace(cdp, workspaceA);
     const repeated = await evaluate(cdp, `Promise.all(Array.from({length: 8}, () => window.api.selectWorkspace(${js(workspaceA.id || workspaceA.name)})))`);
@@ -667,7 +671,14 @@ async function stopPackagedRun(child, cdp) {
     // down until the next prompt instead of eagerly starting a replacement.
     const forceStopped = stopResult.second?.action === 'force' && stopResult.second?.restarted === false;
     const racedToTerminal = ['already_settled', 'not_running', 'stale'].includes(String(stopResult.second?.action || ''));
-    if (stopResult.first?.action !== 'graceful' || stopResult.first?.checkpointed !== true || (!forceStopped && !racedToTerminal)) {
+    // The archive probe above intentionally hard-stops the same running
+    // target. In that valid ordering the later Stop observes not_running;
+    // source/TUI stop-race gates cover the ordinary graceful->force sequence.
+    const archiveAlreadyStopped = archiveAccepted
+      && stopResult.first?.action === 'not_running'
+      && stopResult.second?.action === 'already_settled';
+    if ((!archiveAlreadyStopped && (stopResult.first?.action !== 'graceful' || stopResult.first?.checkpointed !== true))
+      || (!archiveAlreadyStopped && !forceStopped && !racedToTerminal)) {
       fail(`Two-stage target stop failed: ${JSON.stringify(stopResult)}`);
     }
     log(`two-stage stop settled ${JSON.stringify(stopResult)}`);

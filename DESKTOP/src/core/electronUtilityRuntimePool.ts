@@ -82,6 +82,7 @@ export class ElectronUtilityRuntimePool {
   private restarting = new Set<string>();
   private quarantined = new Map<string, string>();
   private disposing = new Set<string>();
+  private forceStopPromises = new Map<string, Promise<void>>();
   private capacityTail: Promise<void> = Promise.resolve();
   private accessSequence = 0;
 
@@ -401,6 +402,62 @@ export class ElectronUtilityRuntimePool {
       if (entry) this.disposing.add(normalized.runtimeKey);
     });
     if (entry) await this.stopEntry(entry);
+  }
+
+  /**
+   * Immediately terminate a target runtime for destructive lifecycle actions.
+   * Archive is deliberately stronger than the user-facing two-click Stop
+   * contract: the target may be running, already stopping, or holding an
+   * active prompt lease. Give the kernel only the short checkpoint window
+   * owned by forceTerminateEntry, then hard-stop and evict the client so no
+   * delayed runtime event can keep the archived target resident.
+   */
+  async forceStopTarget(target: ConversationRuntimeTarget): Promise<void> {
+    const normalized = normalizeConversationTarget(target);
+    const existing = this.forceStopPromises.get(normalized.runtimeKey);
+    if (existing) return existing;
+    const operation = this.forceStopTargetInternal(normalized);
+    this.forceStopPromises.set(normalized.runtimeKey, operation);
+    try {
+      await operation;
+    } finally {
+      if (this.forceStopPromises.get(normalized.runtimeKey) === operation) {
+        this.forceStopPromises.delete(normalized.runtimeKey);
+      }
+    }
+  }
+
+  private async forceStopTargetInternal(target: NormalizedConversationTarget): Promise<void> {
+    let entry: RuntimeEntry | undefined;
+    await this.serializeCapacity(async () => {
+      entry = this.entries.get(target.runtimeKey);
+      if (entry) this.disposing.add(target.runtimeKey);
+    });
+    if (!entry) return;
+    const intent = entry.stopIntent || {
+      runId: entry.lastRunId,
+      generation: entry.lastGeneration,
+      checkpointed: false,
+      forcePromise: null,
+    };
+    if (!entry.stopIntent) entry.stopIntent = intent;
+    try {
+      await this.forceTerminateEntry(entry, intent);
+      // forceStop is expected to disconnect the utility child. If a client
+      // reports a stale connected flag, retry the hard boundary once before
+      // declaring archive unsafe.
+      if (entry.client.status().connected) await entry.client.forceStop();
+      if (entry.client.status().connected) {
+        throw new Error(`Electron utility runtime ${target.runtimeKey} remained connected after force stop`);
+      }
+      if (this.entries.get(target.runtimeKey) === entry) {
+        this.entries.delete(target.runtimeKey);
+        entry.unsubscribe();
+        entry.client.setHostToolHandler(null);
+      }
+    } finally {
+      this.disposing.delete(target.runtimeKey);
+    }
   }
 
   async stopAll(): Promise<void> {

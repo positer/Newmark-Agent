@@ -261,7 +261,9 @@ async function runUiCheck(root) {
     })()`, 5000, 'single demand-created Browser guest');
     const browserOpenMs = Date.now() - browserStartedAt;
     if (browserOpenMs > 2500) fail(`first Browser open exceeded the 2.5s single-run smoke tolerance: ${browserOpenMs}ms`);
-    if (browserState.count !== 1 || browserState.partition !== 'persist:newmark-browser') fail(`Browser guest lifecycle mismatch: ${JSON.stringify(browserState)}`);
+    if (browserState.count !== 1 || !/^persist:newmark-browser(?:-|$)/.test(String(browserState.partition || ''))) {
+      fail(`Browser guest lifecycle mismatch: ${JSON.stringify(browserState)}`);
+    }
     const cleanStartupUrl = await evaluate(cdp, `({ href: location.href, prewarm: new URLSearchParams(location.search).has('startupPrewarm') })`);
     if (cleanStartupUrl.prewarm) fail(`one-shot startup query survived UI promotion: ${JSON.stringify(cleanStartupUrl)}`);
     const reloadResult = await evaluate(cdp, `window.api.reloadGlobalConfig()`);

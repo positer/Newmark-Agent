@@ -1,4 +1,5 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const asar = require('@electron/asar');
@@ -12,6 +13,7 @@ const installerPath = path.join(outputDir, `Newmark-Agent-${appPackage.version}-
 const unpackedDir = path.join(outputDir, 'win-unpacked');
 const unpackedExe = path.join(unpackedDir, 'Newmark Agent.exe');
 const consoleExe = path.join(unpackedDir, 'Newmark.exe');
+const consoleRuntimeExe = path.join(unpackedDir, 'Newmark Console Runtime.exe');
 const portableLauncher = path.join(unpackedDir, 'Newmark.bat');
 const appAsar = path.join(unpackedDir, 'resources', 'app.asar');
 const packageIcon = path.join(root, 'assets', 'icon.ico');
@@ -19,6 +21,19 @@ const zipPath = path.join(outputDir, `Newmark-Agent-${appPackage.version}-win-un
 const expectedProductName = 'Newmark Agent';
 const builderCacheDir = path.join(root, '.electron-builder-cache');
 const nodePtyRoot = path.join(root, 'node_modules', 'node-pty');
+const forbiddenRuntimeEntries = new Set([
+  '.newmark-runtime',
+  'Electron',
+  'Memory Lab',
+  'Roots',
+  'Work',
+  'archive',
+  'config.json',
+  'conversations',
+  'agent.md',
+  'PC_Hash.config',
+  'skills',
+]);
 
 function log(message) {
   console.log(`[dist-windows-release] ${message}`);
@@ -74,6 +89,7 @@ function verifyUnpackedOutput() {
   const checks = [
     [unpackedExe, 'win-unpacked exe'],
     [path.join(unpackedDir, 'Newmark.exe'), 'console CLI/TUI launcher'],
+    [consoleRuntimeExe, 'console Electron runtime'],
     [portableLauncher, 'portable CLI/TUI batch launcher'],
     [appAsar, 'app.asar'],
     [path.join(unpackedRuntimeDist, 'windows-process-tree-helper.dll'), 'precompiled Windows process-tree helper'],
@@ -167,6 +183,40 @@ function verifyReleaseCliSmoke() {
   if (result.status !== 0) throw new Error(`release CLI smoke failed with exit ${result.status}`);
 }
 
+function assertCleanUnpackedBoundary(stage) {
+  if (!fs.existsSync(unpackedDir)) throw new Error(`missing win-unpacked directory at ${stage}`);
+  const leaked = fs.readdirSync(unpackedDir, { withFileTypes: true })
+    .map(entry => entry.name)
+    .filter(name => forbiddenRuntimeEntries.has(name));
+  if (leaked.length) {
+    throw new Error(`win-unpacked contains runtime state after ${stage}: ${leaked.join(', ')}`);
+  }
+}
+
+function verifyPackagedContextCompressionCliStress() {
+  const stressPath = path.join(root, 'scripts', 'release-context-compress-cli-stress.cjs');
+  if (!fs.existsSync(stressPath)) throw new Error(`missing packaged context compression CLI stress script: ${stressPath}`);
+  const result = spawnSync(process.execPath, [stressPath], {
+    cwd: root,
+    stdio: 'inherit',
+    env: { ...process.env, NEWMARK_CONTEXT_COMPRESS_EXE: consoleExe },
+  });
+  if (result.error) throw new Error(`packaged context compression CLI stress spawn failed: ${result.error.message}`);
+  if (result.status !== 0) throw new Error(`packaged context compression CLI stress failed with exit ${result.status}`);
+}
+
+function verifyPackagedConsoleWrapperBoundaryStress() {
+  const stressPath = path.join(root, 'scripts', 'release-console-wrapper-boundary-stress.cjs');
+  if (!fs.existsSync(stressPath)) throw new Error(`missing packaged console wrapper stress script: ${stressPath}`);
+  const result = spawnSync(process.execPath, [stressPath], {
+    cwd: root,
+    stdio: 'inherit',
+    env: { ...process.env, NEWMARK_CONSOLE_STRESS_EXE: consoleExe },
+  });
+  if (result.error) throw new Error(`packaged console wrapper stress spawn failed: ${result.error.message}`);
+  if (result.status !== 0) throw new Error(`packaged console wrapper stress failed with exit ${result.status}`);
+}
+
 try {
   if (!tryRm(outputDir)) {
     throw new Error(`Refusing to build into a partially locked release directory: ${outputDir}`);
@@ -177,19 +227,33 @@ try {
   patchPackagedOutput();
   createConsoleLauncher(unpackedDir);
   fs.copyFileSync(path.join(root, 'newmark.bat'), portableLauncher);
-  const sshStress = spawnSync(process.execPath, [path.join(root, 'scripts', 'release-ssh-tui-stress.cjs')], {
-    cwd: root,
-    stdio: 'inherit',
-    windowsHide: true,
-    env: { ...process.env, NEWMARK_SSH_TUI_EXE: consoleExe },
-  });
-  if (sshStress.status !== 0) throw new Error(`packaged SSH TUI stress failed with exit ${sshStress.status}`);
+  const packagedSmokeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-release-package-smoke-'));
+  try {
+    const sshStress = spawnSync(process.execPath, [path.join(root, 'scripts', 'release-ssh-tui-stress.cjs')], {
+      cwd: root,
+      stdio: 'inherit',
+      windowsHide: true,
+      env: {
+        ...process.env,
+        NEWMARK_SSH_TUI_EXE: consoleExe,
+        NEWMARK_SSH_TUI_ROOT: packagedSmokeRoot,
+      },
+    });
+    if (sshStress.error) throw new Error(`packaged SSH TUI stress spawn failed: ${sshStress.error.message}`);
+    if (sshStress.status !== 0) throw new Error(`packaged SSH TUI stress failed with exit ${sshStress.status}`);
+  } finally {
+    if (!tryRm(packagedSmokeRoot)) log(`warning: could not remove packaged smoke root ${packagedSmokeRoot}`);
+  }
   verifyUnpackedOutput();
   runBuilder(['--win', 'msi', '--prepackaged', unpackedDir], 'electron-builder msi --prepackaged');
   verifyMsiInstaller();
+  verifyReleaseCliSmoke();
+  verifyPackagedContextCompressionCliStress();
+  verifyPackagedConsoleWrapperBoundaryStress();
+  assertCleanUnpackedBoundary('all packaged smoke tests');
   createZipPack();
   verifyZipPack();
-  verifyReleaseCliSmoke();
+  assertCleanUnpackedBoundary('zip creation');
   log('MSI installer and win-unpacked zip pack verified');
 } catch (err) {
   console.error(`[dist-windows-release] ${err.stack || err.message}`);

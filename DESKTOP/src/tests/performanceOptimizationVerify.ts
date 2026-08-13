@@ -56,7 +56,15 @@ function main(): void {
       { input: 80, output: 15, cacheRead: 50, cacheWrite: 10 }, 'Anthropic usage normalizes cache read and creation tokens');
     const usageDiagnostic = emitProviderUsageDiagnostic({ conversationId: 'diagnostic-test', inputTokens: 100, outputTokens: 20, cacheReadTokens: 75, cacheWriteTokens: 5 });
     assert.ok(usageDiagnostic.type === 'provider_usage' && usageDiagnostic.cacheReadRatio === 0.75, 'provider usage diagnostics expose a bounded cache-read ratio');
-    console.log(JSON.stringify({ ok: true, assertions: 11 }));
+    const agentSource = fs.readFileSync(path.join(process.cwd(), 'src/core/agent.ts'), 'utf8');
+    const kernelRunnerSource = fs.readFileSync(path.join(process.cwd(), 'src/core/agentKernelRunner.ts'), 'utf8');
+    assert.ok(
+      agentSource.includes('Promise<boolean>')
+        && kernelRunnerSource.includes('let compressed = await agent.maybeCompress')
+        && !kernelRunnerSource.includes('JSON.stringify(newmarkMessages) === beforeCompression'),
+      'context compression reports mutation directly instead of serializing the full context repeatedly',
+    );
+    console.log(JSON.stringify({ ok: true, assertions: 12 }));
   } finally {
     setAgentKernelDiagnosticSink(null);
     fs.rmSync(root, { recursive: true, force: true });

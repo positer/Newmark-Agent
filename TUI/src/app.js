@@ -3,6 +3,7 @@
 const readline = require("node:readline");
 const path = require("node:path");
 const { render } = require("./render");
+const { targetKey } = require("./adapters/newmark-contract");
 const {
   activateMenu,
   activateMemorySelection,
@@ -89,6 +90,20 @@ function executeAction(state, action) {
   }
 }
 
+function argumentValue(args, name) {
+  const inline = args.find((arg) => String(arg).startsWith(`${name}=`));
+  if (inline) return String(inline).slice(name.length + 1);
+  const index = args.indexOf(name);
+  return index >= 0 ? args[index + 1] || "" : "";
+}
+
+function resolveTuiWorkspacePath(args, options = {}) {
+  const explicitWorkspace = options.workspacePath || argumentValue(args, "--workspace");
+  if (explicitWorkspace) return explicitWorkspace;
+  const explicitRoot = options.root || argumentValue(args, "--root");
+  return explicitRoot || process.cwd();
+}
+
 function start(options = {}) {
   const forcedTerminal = process.env.NEWMARK_FORCE_TTY === "1";
   if ((!process.stdin.isTTY || !process.stdout.isTTY) && !forcedTerminal) {
@@ -98,20 +113,16 @@ function start(options = {}) {
   }
 
   const args = process.argv.slice(2);
-  const optionValue = (name) => {
-    const index = args.indexOf(name);
-    return index >= 0 ? args[index + 1] : "";
-  };
   let adapter;
   try {
     if (args.includes("--demo") || process.env.NEWMARK_TUI_DEMO === "1") {
       adapter = require("./adapters/mock-newmark-adapter").createMockNewmarkAdapter();
     } else {
-      const root = options.root || optionValue("--root");
-      const workspacePath = options.workspacePath || optionValue("--workspace");
+      const root = options.root || argumentValue(args, "--root");
+      const workspacePath = resolveTuiWorkspacePath(args, { root, workspacePath: options.workspacePath });
       adapter = require("./adapters/core-runtime-adapter").createCoreRuntimeAdapter({
         root: root ? path.resolve(root) : undefined,
-        workspacePath: workspacePath ? path.resolve(workspacePath) : process.cwd(),
+        workspacePath: path.resolve(workspacePath),
         desktopDist: options.desktopDist
       });
     }
@@ -185,6 +196,7 @@ function start(options = {}) {
 
   async function sendRealMessage(text) {
     const target = { ...state.target };
+    const key = targetKey(target);
     state.input = "";
     state.inputCursor = 0;
     state.inputMode = false;
@@ -201,13 +213,26 @@ function start(options = {}) {
       }, 250);
     }
     paint();
+    const previous = state.sendQueueByConversation?.get(key) || Promise.resolve();
+    const current = previous
+      .catch(() => {})
+      .then(() => state.adapter.sendMessage(text, target));
+    state.sendQueueByConversation?.set(key, current);
     try {
-      const snapshot = await state.adapter.sendMessage(text, target);
-      applyConversationResult(state, target, snapshot);
+      const snapshot = await current;
+      if (state.sendQueueByConversation?.get(key) === current) {
+        applyConversationResult(state, target, snapshot);
+      }
     } catch (error) {
-      markConversationRunning(state, target, false);
-      state.notice = `Agent error: ${error.message}`;
-      paint();
+      if (state.sendQueueByConversation?.get(key) === current) {
+        markConversationRunning(state, target, false);
+        state.notice = `Agent error: ${error.message}`;
+        paint();
+      }
+    } finally {
+      if (state.sendQueueByConversation?.get(key) === current) {
+        state.sendQueueByConversation.delete(key);
+      }
     }
   }
 
@@ -439,6 +464,15 @@ function start(options = {}) {
 
   function handleKey(str, key) {
     if (key.ctrl && key.name === "c") return quit();
+    // A real run leaves input mode immediately after Enter. Keep Esc target-bound
+    // at the app boundary so users can stop that run from the content view too.
+    if (key.name === "escape"
+      && !state.overlay
+      && !state.memorySearchActive
+      && state.runningConversationKeys?.size) {
+      Promise.resolve(requestConversationStop(state)).finally(paint);
+      return;
+    }
     if (state.overlay === "palette") handlePalette(str, key);
     else if (state.overlay === "flow-select") handleFlowSelection(key);
     else if (state.overlay === "settings-choice") handleSettingChoice(key);
@@ -501,4 +535,4 @@ function start(options = {}) {
   paint();
 }
 
-module.exports = { createPaintScheduler, executeAction, start };
+module.exports = { createPaintScheduler, executeAction, resolveTuiWorkspacePath, start };

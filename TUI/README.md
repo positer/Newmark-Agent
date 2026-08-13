@@ -107,4 +107,4 @@ TUI 使用和现有 GUI/CLI 相同的 Newmark Core 与 `~/.Newmark` 持久化格
 npm.cmd test
 ```
 
-52 项测试同时覆盖 Mock 全交互回归、Build `示意图` 折叠/展开位置与 Enter viewer、Memory Lab Overview viewer/tag 搜索、逐 Conversation 模型标题、绘制请求合并/同帧抑制与隔离真实 Core冒烟：后者会在 `TUI/test` 下创建临时 runtime/workspace，验证当前目录登记、真实快照、Flow 选择/创建持久化、Guide/Next 默认回车模式的共享配置重启恢复、Automation 创建、Memory Lab 和 Provider 密钥保留边界，然后安全删除临时目录，不发送模型请求。
+55 项测试同时覆盖 Mock 全交互回归、Build `示意图` 折叠/展开位置与 Enter viewer、Memory Lab Overview viewer/tag 搜索、逐 Conversation 模型标题、绘制请求合并/同帧抑制、缺色/低对比度亮色回归与隔离真实 Core 冒烟：后者会在 `TUI/test` 下创建临时 runtime/workspace，验证当前目录登记、真实快照、Flow 选择/创建持久化、Guide/Next 默认回车模式的共享配置重启恢复、Automation 创建、Memory Lab 和 Provider 密钥保留边界，然后安全删除临时目录，不发送模型请求。

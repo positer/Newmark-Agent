@@ -93,6 +93,41 @@ function samePath(left, right) {
   return normalize(left) === normalize(right);
 }
 
+function isPathInside(parent, child) {
+  try {
+    const relative = path.relative(path.resolve(parent), path.resolve(child));
+    return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+  } catch {
+    return false;
+  }
+}
+
+function isProtectedInstallPath(candidate) {
+  if (process.platform !== "win32") return false;
+  const protectedRoots = [
+    process.env.ProgramFiles,
+    process.env["ProgramFiles(x86)"],
+    process.env.ProgramW6432
+  ].filter(Boolean);
+  return protectedRoots.some((root) => isPathInside(root, candidate));
+}
+
+function safeWorkspacePath(root, candidate) {
+  const resolvedRoot = path.resolve(root);
+  const resolvedCandidate = path.resolve(candidate || resolvedRoot);
+  const executableRoot = path.dirname(process.execPath);
+  // A packaged TUI launched from its installation directory must never turn
+  // that directory into an external workspace. The runtime root owns the
+  // default internal workspace in this case.
+  if (
+    samePath(resolvedCandidate, resolvedRoot)
+    || isPathInside(resolvedRoot, resolvedCandidate)
+    || isPathInside(executableRoot, resolvedCandidate)
+    || isProtectedInstallPath(resolvedCandidate)
+  ) return resolvedRoot;
+  return resolvedCandidate;
+}
+
 function mergeProviderConfig(currentProviders, incomingProviders) {
   return (incomingProviders || []).map((incoming) => {
     const current = (currentProviders || []).find((provider) => provider.id === incoming.id);
@@ -120,7 +155,7 @@ function createCoreRuntimeAdapter(options = {}) {
   const { FlowEngine } = require(path.join(desktopDist, "core", "flow.js"));
   const installUpdate = require(path.join(desktopDist, "core", "installUpdate.js"));
   const root = path.resolve(options.root || path.join(os.homedir(), ".Newmark"));
-  const workspacePath = path.resolve(options.workspacePath || process.cwd());
+  const workspacePath = safeWorkspacePath(root, options.workspacePath || process.cwd());
   ensureRuntimeRoot(root, configModule);
 
   const agent = new Agent(root);
@@ -128,7 +163,9 @@ function createCoreRuntimeAdapter(options = {}) {
     .find((workspace) => samePath(workspace.path, workspacePath));
   const selectedWorkspace = knownWorkspace
     ? agent.selectWorkspaceFromStorage(knownWorkspace.id)
-    : agent.addExternalWorkspace(workspacePath);
+    : samePath(workspacePath, root)
+      ? (agent.workspace.current || agent.createInternalWorkspace())
+      : agent.addExternalWorkspace(workspacePath);
   if (!selectedWorkspace) {
     throw new Error(
       `The current folder cannot be registered as a Newmark workspace: ${workspacePath}. ` +
@@ -454,4 +491,4 @@ function createCoreRuntimeAdapter(options = {}) {
   };
 }
 
-module.exports = { createCoreRuntimeAdapter, mergeProviderConfig, resolveDesktopDist, samePath, sanitizeProviders };
+module.exports = { createCoreRuntimeAdapter, mergeProviderConfig, resolveDesktopDist, samePath, safeWorkspacePath, sanitizeProviders };

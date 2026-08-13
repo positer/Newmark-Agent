@@ -169,20 +169,24 @@ async function runUiCheck(root) {
     const firstTargetId = targets[0].id;
     cdpA = connectCdp(targets[0]);
     await cdpA.ready;
-    await waitForPromotedMainUi(cdpA);
+    await waitForPromotedMainUi(cdpA, { allowDisabledPrompt: true });
+    // This fixture deliberately starts without a workspace.  The main UI is
+    // promoted and visible, but the composer is correctly disabled until the
+    // fixture creates its workspace below.
     await prepareWindow(cdpA, 'window A');
 
+    // Production launches use Electron's single-instance lock.  A second
+    // launch request is forwarded to the existing window/backend; it must not
+    // create a second renderer target or a second persistence owner.
     second = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
       stdio: 'ignore',
       windowsHide: true,
     });
-    targets = await waitForTargets(port, 2);
-    const secondTarget = targets.find(t => t.id !== firstTargetId) || targets[1];
-    if (!secondTarget || secondTarget.id === firstTargetId) fail(`second launch did not expose a distinct CDP target; targets=${JSON.stringify(targets.map(t => ({ id: t.id, title: t.title, url: t.url })))}`);
-    cdpB = connectCdp(secondTarget);
-    await cdpB.ready;
-    await waitForPromotedMainUi(cdpB);
-    await prepareWindow(cdpB, 'window B');
+    targets = await waitForTargets(port, 1);
+    if (!targets.some(target => target.id === firstTargetId)) {
+      fail(`second launch replaced the original CDP target; targets=${JSON.stringify(targets.map(t => ({ id: t.id, title: t.title, url: t.url })))}`);
+    }
+    await sleep(1_000);
 
     await evaluate(cdpA, `window.api.getState('default').then(s => {
       window.__multiWindowMainPid = s && s.pid;
@@ -190,8 +194,7 @@ async function runUiCheck(root) {
     })`, 10000).catch(() => undefined);
 
     const defaultA = await evaluate(cdpA, `activeConversationId()`);
-    const defaultB = await evaluate(cdpB, `activeConversationId()`);
-    if (defaultA !== 'default' || defaultB !== 'default') fail(`expected both windows to start on default: A=${defaultA} B=${defaultB}`);
+    if (defaultA !== 'default') fail(`expected the shared window to start on default: A=${defaultA}`);
 
     const convA = await evaluate(cdpA, `new Promise(resolve => {
       window.newConversation();
@@ -200,18 +203,8 @@ async function runUiCheck(root) {
     if (!String(convA).startsWith('conv-')) fail(`window A did not create a new conversation: ${convA}`);
     await waitFor(cdpA, activeSummaryExpression(convA), 10000, 'window A active conversation after create');
 
-    await evaluate(cdpB, `window.refreshWorkspaceState().then(() => { window.renderConversations(); return true; })`, 30000);
-    await waitFor(cdpB, activeSummaryExpression('default'), 10000, 'window B remains default after A creates conversation');
-
-    const convB = await evaluate(cdpB, `new Promise(resolve => {
-      window.newConversation();
-      setTimeout(() => resolve(activeConversationId()), 900);
-    })`, 10000);
-    if (!String(convB).startsWith('conv-') || convB === convA) fail(`window B did not create a distinct new conversation: A=${convA} B=${convB}`);
-    await waitFor(cdpB, activeSummaryExpression(convB), 10000, 'window B active conversation after create');
-
     await evaluate(cdpA, `window.refreshWorkspaceState().then(() => { window.renderConversations(); return true; })`, 30000);
-    await waitFor(cdpA, activeSummaryExpression(convA), 10000, 'window A remains on its own conversation after B creates conversation');
+    await waitFor(cdpA, activeSummaryExpression(convA), 10000, 'shared window remains on its conversation after forwarded launch');
 
     const processSummary = spawnSync('powershell.exe', [
       '-NoProfile',
@@ -222,8 +215,8 @@ async function runUiCheck(root) {
     ], { encoding: 'utf8', windowsHide: true });
     const processJson = JSON.parse(String(processSummary.stdout || '{}'));
     if (processJson.main !== 1) fail(`expected one Electron main/backend process after second launch, got ${JSON.stringify(processJson)}`);
-    if (targets.length < 2) fail(`expected at least two CDP page targets after second launch, got ${targets.length}`);
-    log(`single shared backend verified: ${JSON.stringify(processJson)}; cdpTargets=${targets.length}; windowA=${convA}; windowB=${convB}`);
+    if (targets.length !== 1) fail(`expected one CDP page target after forwarded second launch, got ${targets.length}`);
+    log(`single shared backend verified: ${JSON.stringify(processJson)}; forwardedLaunch=true; cdpTargets=${targets.length}; conversation=${convA}`);
   } finally {
     try { if (cdpA?.ws) cdpA.ws.close(); } catch {}
     try { if (cdpB?.ws) cdpB.ws.close(); } catch {}

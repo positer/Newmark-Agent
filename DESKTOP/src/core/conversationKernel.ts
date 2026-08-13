@@ -657,7 +657,12 @@ export class ConversationKernel {
         if (runtime.runId === runId && runtime.stopRequestedRunId === runId) {
           stopped = true;
         } else {
-          runtime.runner.finishConversationWorkRun(runId, 'error');
+          runtime.runner.finishConversationWorkRun(
+            runId,
+            'error',
+            undefined,
+            error instanceof Error ? error.message : String(error),
+          );
           throw error;
         }
       } finally {

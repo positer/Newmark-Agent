@@ -171,6 +171,12 @@ contextBridge.exposeInMainWorld('api', {
   onAgentWorkEvent: (callback: (event: unknown, payload: unknown) => void) => {
     ipcRenderer.on('agent:workEvent', callback);
   },
+  onWorkspaceChanged: (callback: (payload: Record<string, unknown>) => void) => {
+    ipcRenderer.on('workspace:changed', (_event: unknown, payload: Record<string, unknown>) => callback(payload));
+  },
+  removeWorkspaceChangedListener: () => {
+    ipcRenderer.removeAllListeners('workspace:changed');
+  },
   removeAgentWorkEventListener: () => {
     ipcRenderer.removeAllListeners('agent:workEvent');
   },

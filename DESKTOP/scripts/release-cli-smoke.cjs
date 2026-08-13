@@ -1,4 +1,5 @@
 const fs = require('fs');
+const crypto = require('crypto');
 const http = require('http');
 const os = require('os');
 const path = require('path');
@@ -18,21 +19,12 @@ function log(message) {
   console.log(`[release-cli-smoke] ${message}`);
 }
 
+function hashFile(file) {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
 function fail(message) {
   throw new Error(message);
-}
-
-function psQuote(value) {
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-function readProcessId(pidPath) {
-  try {
-    const pid = Number(fs.readFileSync(pidPath, 'utf8').trim());
-    return Number.isSafeInteger(pid) && pid > 0 ? pid : 0;
-  } catch {
-    return 0;
-  }
 }
 
 function processIsRunning(pid) {
@@ -57,29 +49,10 @@ function terminateProcessTree(pid) {
   });
 }
 
-function runPowerShellCli(args, root, extraEnv = {}) {
-  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-cli-run-'));
-  const stdoutPath = path.join(workDir, 'stdout.txt');
-  const stderrPath = path.join(workDir, 'stderr.txt');
-  const pidPath = path.join(workDir, 'pid.txt');
-  const scriptPath = path.join(workDir, 'run.ps1');
-  const argList = args.map(psQuote).join(', ');
-  fs.writeFileSync(scriptPath, [
-    '$ErrorActionPreference = "Stop"',
-    `$exe = ${psQuote(exePath)}`,
-    `$argList = @(${argList})`,
-    `$stdout = ${psQuote(stdoutPath)}`,
-    `$stderr = ${psQuote(stderrPath)}`,
-    `$pidFile = ${psQuote(pidPath)}`,
-    '$p = Start-Process -FilePath $exe -ArgumentList $argList -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr',
-    '$p.Id | Set-Content -LiteralPath $pidFile -Encoding ascii -NoNewline',
-    '$p.WaitForExit()',
-    'exit $p.ExitCode',
-  ].join('\r\n'), 'utf8');
-
+function runPackagedCli(args, root, extraEnv = {}, expectedExitCode = 0) {
   return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
-      cwd: appRoot,
+    const child = spawn(exePath, args, {
+      cwd: root,
       env: { ...process.env, ...extraEnv },
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -93,40 +66,31 @@ function runPowerShellCli(args, root, extraEnv = {}) {
     let timedOut = false;
     const timeout = setTimeout(() => {
       timedOut = true;
-      const cliPid = readProcessId(pidPath);
-      // Kill the Electron tree before its PowerShell parent. Killing only the
-      // wrapper reparents Chromium GPU/network children and leaks them into the
-      // release build that invoked this smoke.
-      terminateProcessTree(cliPid);
+      // Kill the Electron tree before the wrapper is forcibly closed. Killing
+      // only the wrapper can reparent Chromium GPU/network children and leak
+      // them into the release build that invoked this smoke.
+      terminateProcessTree(child.pid);
       child.kill('SIGKILL');
-      reject(new Error(`PowerShell timed out after ${cliTimeoutMs}ms for ${args[0]} (pid=${cliPid || 'unknown'}). stdout=${psStdout} stderr=${psStderr}`));
+      reject(new Error(`packaged CLI timed out after ${cliTimeoutMs}ms for ${args[0]} (pid=${child.pid || 'unknown'}). stdout=${psStdout} stderr=${psStderr}`));
     }, cliTimeoutMs);
     child.on('error', error => {
       clearTimeout(timeout);
-      terminateProcessTree(readProcessId(pidPath));
-      reject(new Error(`PowerShell failed for ${args[0]}: ${error.message}`));
+      terminateProcessTree(child.pid);
+      reject(new Error(`packaged CLI failed for ${args[0]}: ${error.message}`));
     });
     child.on('close', code => {
       clearTimeout(timeout);
-      const cliPid = readProcessId(pidPath);
-      const stdout = fs.existsSync(stdoutPath) ? fs.readFileSync(stdoutPath, 'utf8') : '';
-      const stderr = fs.existsSync(stderrPath) ? fs.readFileSync(stderrPath, 'utf8') : '';
-      try {
-        fs.rmSync(workDir, { recursive: true, force: true });
-      } catch (error) {
-        log(`warning: could not remove temp CLI run dir ${workDir}: ${error.message}`);
-      }
       if (timedOut) return;
-      if (code !== 0) {
-        reject(new Error(`CLI ${args[0]} exited ${code}. stdout=${stdout || psStdout} stderr=${stderr || psStderr}`));
+      if (code !== expectedExitCode) {
+        reject(new Error(`CLI ${args[0]} exited ${code}; expected ${expectedExitCode}. stdout=${psStdout} stderr=${psStderr}`));
         return;
       }
-      if (processIsRunning(cliPid)) {
-        terminateProcessTree(cliPid);
-        reject(new Error(`CLI ${args[0]} left its packaged process tree running (pid=${cliPid})`));
+      if (processIsRunning(child.pid)) {
+        terminateProcessTree(child.pid);
+        reject(new Error(`CLI ${args[0]} left its packaged process tree running (pid=${child.pid})`));
         return;
       }
-      resolve({ stdout, stderr, root });
+      resolve({ stdout: psStdout, stderr: psStderr, root, status: code });
     });
   });
 }
@@ -276,7 +240,7 @@ function startMockServer() {
   try {
     writeConfig(root, mock.port);
 
-    const state = await runPowerShellCli(['state', '--root', root], root);
+    const state = await runPackagedCli(['state', '--root', root], root);
     const parsedState = JSON.parse(state.stdout);
     if (parsedState.root !== root) fail('state did not use requested root');
     if (parsedState.model !== 'release-cli-mock') fail('state did not load mock model');
@@ -284,7 +248,7 @@ function startMockServer() {
     if (parsedState.autoSwitch !== false || parsedState.autoSwitchScope !== 'all') fail(`state did not expose default Auto switch fields: ${state.stdout}`);
     if (parsedState.openAIApiMode !== 'chat_stream') fail(`state did not expose OpenAI API mode: ${state.stdout}`);
     if (!parsedState.contextWindow || parsedState.contextWindow.model !== 'release-cli-mock' || parsedState.contextWindow.maxTokens < 1) fail(`state did not expose context window: ${state.stdout}`);
-    const zhState = await runPowerShellCli(['state', '--language', 'zh', '--root', root], root);
+    const zhState = await runPackagedCli(['state', '--language', 'zh', '--root', root], root);
     const parsedZhState = JSON.parse(zhState.stdout);
     if (parsedZhState.language !== 'zh') fail(`state --language zh did not override language: ${zhState.stdout}`);
     log('state ok');
@@ -292,7 +256,7 @@ function startMockServer() {
     const toolFile = path.join(root, 'cli-tool.txt');
     const toolArgsFile = path.join(root, 'tool-args.json');
     fs.writeFileSync(toolArgsFile, JSON.stringify({ path: toolFile, content: 'RELEASE_CLI_TOOL_OK' }), 'utf8');
-    const tool = await runPowerShellCli(['tool', 'write', '--args-file', toolArgsFile, '--root', root], root);
+    const tool = await runPackagedCli(['tool', 'write', '--args-file', toolArgsFile, '--root', root], root);
     const toolResult = JSON.parse(tool.stdout);
     if (toolResult.ok !== true || toolResult.tool !== 'write' || !Object.prototype.hasOwnProperty.call(toolResult, 'result')) fail(`tool write did not return the unified JSON envelope: ${tool.stdout}`);
     if (fs.readFileSync(toolFile, 'utf8') !== 'RELEASE_CLI_TOOL_OK') fail('tool write did not create expected file');
@@ -300,17 +264,19 @@ function startMockServer() {
 
     const promptFile = path.join(root, 'prompt.txt');
     fs.writeFileSync(promptFile, '请通过 release CLI 返回中文 UTF-8', 'utf8');
-    const send = await runPowerShellCli(['send', '--input-file', promptFile, '--mode', 'build', '--model', 'release-cli-mock', '--conversation', 'release-cli-smoke', '--root', root], root);
+    const send = await runPackagedCli(['send', '--input-file', promptFile, '--mode', 'build', '--model', 'release-cli-mock', '--conversation', 'release-cli-smoke', '--root', root], root);
     if (!send.stdout.includes(mock.responseText)) fail(`send output missing UTF-8 response: ${send.stdout}`);
     if (/[åæçäè]/.test(send.stdout)) fail(`send output contains mojibake markers: ${send.stdout}`);
     if (!mock.requests.some(r => r.url === '/v1/chat/completions' && r.body.includes('"stream":true'))) fail('send did not call streaming chat completions');
-    const englishSend = await runPowerShellCli(['send', 'release cli language override', '--language', 'en', '--mode', 'build', '--model', 'release-cli-mock', '--conversation', 'release-cli-language', '--root', root], root);
+    const englishSend = await runPackagedCli(['send', 'release cli language override', '--language', 'en', '--mode', 'build', '--model', 'release-cli-mock', '--conversation', 'release-cli-language', '--root', root], root);
     if (!englishSend.stdout.includes(mock.responseText)) fail(`send --language en output missing response: ${englishSend.stdout}`);
     const languageRequest = mock.requests.find(r => r.body.includes('release cli language override'));
     if (!languageRequest || !languageRequest.body.includes('general.language=en')) fail('send --language en did not inject English language policy');
     log('send ok');
 
-    const validation = await runPowerShellCli(['validate-models', '--selected', 'ReleaseCliMock/release-cli-mock', '--root', root], root);
+    const validationConfigPath = path.join(root, 'config.json');
+    const validationConfigBefore = hashFile(validationConfigPath);
+    const validation = await runPackagedCli(['validate-models', '--selected', 'ReleaseCliMock/release-cli-mock', '--root', root], root);
     const parsedValidation = JSON.parse(validation.stdout);
     if (!Array.isArray(parsedValidation)) fail(`validate-models did not return an array: ${validation.stdout}`);
     const releaseModelValidation = parsedValidation.find(r => r.name === 'ReleaseCliMock/release-cli-mock');
@@ -324,7 +290,19 @@ function startMockServer() {
       || !selectedProbeRequests.some(r => r.body.includes('strict JSON object'))) {
       fail('validate-models did not execute the Standard health, strict-JSON, and tool probe families');
     }
-    const visionValidation = await runPowerShellCli(['validate-models', '--selected', 'ReleaseCliMock/gpt-5.5', '--root', root], root);
+    if (hashFile(validationConfigPath) !== validationConfigBefore) fail('read-only validate-models unexpectedly changed config.json');
+    log('validate-models read-only config boundary ok');
+    const invalidValidation = await runPackagedCli([
+      'validate-models',
+      '--selected', 'invalid/provider,invalid/model',
+      '--root', root,
+    ], root, {}, 1);
+    if (invalidValidation.stdout.trim() !== '[]') fail(`invalid selected model did not preserve empty JSON result: ${invalidValidation.stdout}`);
+    if (!/No configured model deployments matched --selected/i.test(invalidValidation.stderr)) {
+      fail(`invalid selected model did not explain the non-zero exit: ${invalidValidation.stderr}`);
+    }
+    log('validate-models invalid selection fails explicitly');
+    const visionValidation = await runPackagedCli(['validate-models', '--selected', 'ReleaseCliMock/gpt-5.5', '--persist', '--root', root], root);
     const parsedVisionValidation = JSON.parse(visionValidation.stdout);
     const releaseVisionValidation = parsedVisionValidation.find(r => r.name === 'ReleaseCliMock/gpt-5.5');
     if (!releaseVisionValidation || !['verified', 'degraded'].includes(releaseVisionValidation.status) || releaseVisionValidation.vision_input !== true || !String(releaseVisionValidation.notes || '').includes('level=standard')) {
@@ -338,7 +316,7 @@ function startMockServer() {
     }
     log('validate-models ok');
 
-    const market = await runPowerShellCli(['skills-market', '--query', 'frontend', '--root', root], root);
+    const market = await runPackagedCli(['skills-market', '--query', 'frontend', '--root', root], root);
     JSON.parse(market.stdout);
     log('skills-market ok');
 
@@ -348,7 +326,7 @@ function startMockServer() {
       '',
       'ReleaseCliMemoryNeedle proves packaged memory-lab update/read.',
     ].join('\n'), 'utf8');
-    const memoryUpdate = await runPowerShellCli([
+    const memoryUpdate = await runPackagedCli([
       'memory-lab',
       '--update',
       '--name', 'release-cli-memory',
@@ -369,7 +347,7 @@ function startMockServer() {
     if (!parsedMemoryUpdate.index?.tags?.['#Agent-Skill']?.components?.includes('release-cli-memory')) {
       fail(`memory-lab update did not preserve the hyphenated Agent-Skill tag: ${memoryUpdate.stdout}`);
     }
-    const memoryRead = await runPowerShellCli(['memory-lab', '--component', 'release-cli-memory', '--root', root], root);
+    const memoryRead = await runPackagedCli(['memory-lab', '--component', 'release-cli-memory', '--root', root], root);
     const parsedMemoryRead = JSON.parse(memoryRead.stdout);
     if (parsedMemoryRead.ok !== true || !parsedMemoryRead.component?.content?.includes('ReleaseCliMemoryNeedle')) {
       fail(`memory-lab read did not return component core markdown: ${memoryRead.stdout}`);
@@ -380,7 +358,7 @@ function startMockServer() {
     if (!String(parsedMemoryRead.instructions || '').includes('Memory Lab')) {
       fail(`memory-lab read did not return usage instructions: ${memoryRead.stdout}`);
     }
-    const memoryReindex = await runPowerShellCli(['memory-lab', '--reindex', '--root', root], root);
+    const memoryReindex = await runPackagedCli(['memory-lab', '--reindex', '--root', root], root);
     const parsedMemoryReindex = JSON.parse(memoryReindex.stdout);
     if (parsedMemoryReindex.ok !== true
       || !parsedMemoryReindex.index?.tags?.['#CLI']?.components?.includes('release-cli-memory')
@@ -398,15 +376,15 @@ function startMockServer() {
     fs.writeFileSync(path.join(updateSource, 'config.json'), 'source config should be preserved away', 'utf8');
     fs.writeFileSync(path.join(updateTarget, 'config.json'), 'target config must survive', 'utf8');
     fs.writeFileSync(path.join(updateTarget, 'Work', 'state.txt'), 'target workspace state must survive', 'utf8');
-    const installVersion = await runPowerShellCli(['install-update', '--version', '--root', root], root);
+    const installVersion = await runPackagedCli(['install-update', '--version', '--root', root], root);
     const parsedInstallVersion = JSON.parse(installVersion.stdout);
     if (parsedInstallVersion.ok !== true || parsedInstallVersion.version !== appVersion) fail(`install-update version failed: ${installVersion.stdout}`);
-    const installDryRun = await runPowerShellCli(['install-update', '--source', updateSource, '--target', updateTarget, '--expected-version', appVersion, '--dry-run', '--root', root], root);
+    const installDryRun = await runPackagedCli(['install-update', '--source', updateSource, '--target', updateTarget, '--expected-version', appVersion, '--dry-run', '--root', root], root);
     const parsedInstallDryRun = JSON.parse(installDryRun.stdout);
     if (parsedInstallDryRun.ok !== true || parsedInstallDryRun.dryRun !== true || !parsedInstallDryRun.preserved.includes('config.json')) {
       fail(`install-update dry-run did not report preserved local data: ${installDryRun.stdout}`);
     }
-    const installRun = await runPowerShellCli(['install-update', '--source', updateSource, '--target', updateTarget, '--expected-version', appVersion, '--root', root], root);
+    const installRun = await runPackagedCli(['install-update', '--source', updateSource, '--target', updateTarget, '--expected-version', appVersion, '--root', root], root);
     const parsedInstallRun = JSON.parse(installRun.stdout);
     if (parsedInstallRun.ok !== true || !parsedInstallRun.copied.includes('Newmark Agent.exe')) fail(`install-update run failed: ${installRun.stdout}`);
     if (fs.readFileSync(path.join(updateTarget, 'config.json'), 'utf8') !== 'target config must survive') fail('install-update overwrote config.json');
@@ -415,7 +393,7 @@ function startMockServer() {
     log('install-update ok');
 
     const anthropicKey = 'test-key-release-cli';
-    const fuzzy = await runPowerShellCli([
+    const fuzzy = await runPackagedCli([
       'fuzzy-inject',
       '--name', 'ReleaseAnthropic',
       '--endpoint-env', 'NEWMARK_RELEASE_ANTHROPIC_ENDPOINT',
@@ -448,7 +426,7 @@ function startMockServer() {
       `$env:ANTHROPIC_MODEL="claude-release-env"`,
       `$env:ANTHROPIC_DEFAULT_HAIKU_MODEL="claude-release-env"`,
     ].join('\r\n'), 'utf8');
-    const envFuzzy = await runPowerShellCli([
+    const envFuzzy = await runPackagedCli([
       'fuzzy-inject',
       '--env-file-env', 'NEWMARK_RELEASE_CLAUDE_ENV_FILE',
       '--root', root,
@@ -478,7 +456,7 @@ function startMockServer() {
       `$env:ANTHROPIC_AUTH_TOKEN="${badEnvFileKey}"`,
       `$env:ANTHROPIC_MODEL="claude-release-bad-env"`,
     ].join('\r\n'), 'utf8');
-    const badEnvFuzzy = await runPowerShellCli([
+    const badEnvFuzzy = await runPackagedCli([
       'fuzzy-inject',
       '--env-file-env', 'NEWMARK_RELEASE_BAD_CLAUDE_ENV_FILE',
       '--root', root,

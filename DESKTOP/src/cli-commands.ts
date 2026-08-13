@@ -18,6 +18,97 @@ type FuzzyEnvDefaults = {
 };
 
 export const CLI_COMMANDS = ['state', 'tool', 'send', 'validate-models', 'fuzzy-inject', 'skills-market', 'memory-lab', 'install-update', 'compat', 'compat-tool'] as const;
+type CliCommand = typeof CLI_COMMANDS[number];
+
+const CLI_COMMAND_HELP: Record<CliCommand, string[]> = {
+  state: [
+    'Usage: Newmark.exe state [--root <dir>]',
+    'Read the current local state as JSON and exit without a model request.',
+  ],
+  tool: [
+    'Usage: Newmark.exe tool <tool-name> [json-args | key=value ... | --args-file path] [--mode build|plan|goal|flow] [--root <dir>]',
+    'Execute one policy-checked tool and return its JSON envelope.',
+  ],
+  send: [
+    'Usage: Newmark.exe send <prompt> [--input-env ENV|--input-file path] [--mode build|plan|goal|flow] [--model <model>] [--language auto|en|zh] [--conversation <id>] [--agent-only] [--root <dir>]',
+    'Send one non-interactive prompt through the selected local model.',
+  ],
+  'validate-models': [
+    'Usage: Newmark.exe validate-models [--selected provider/model,model] [--persist] [--root <dir>]',
+    'Validate configured model deployments without changing config by default; --persist writes validation metadata intentionally.',
+    'An explicit selection with no configured matches prints [] and exits with status 1.',
+  ],
+  'fuzzy-inject': [
+    'Usage: Newmark.exe fuzzy-inject [--name <provider>] [--env-file <file>|--env-file-env <ENV>] [--endpoint-env <ENV>] [--key-env <ENV>] [--protocol openai|anthropic] [--preview-only] [--root <dir>]',
+    'Discover or import a provider; --preview-only keeps the operation local and read-only.',
+  ],
+  'skills-market': [
+    'Usage: Newmark.exe skills-market [--query <text>|--sources|--add-source --name <name> (--url <url>|--path <path>)|--remove-source <id>|--enable-source <id>|--disable-source <id>] [--root <dir>]',
+    'Search or manage local skill-market sources.',
+  ],
+  'memory-lab': [
+    'Usage: Newmark.exe memory-lab [--read|--component <name>|--update ...|--reindex] [--root <dir>]',
+    'Read or update the local Memory Lab index and components.',
+  ],
+  'install-update': [
+    'Usage: Newmark.exe install-update (--source <path>|--check-github|--from-github) [options] [--root <dir>]',
+    'Inspect or apply a local/GitHub update using the selected install target.',
+  ],
+  compat: [
+    'Usage: Newmark.exe compat [--target all|tools|plugins|marketplaces|skills|agents|subagents] [--root <dir>]',
+    'Discover compatible local agent, plugin, marketplace, and skill metadata.',
+  ],
+  'compat-tool': [
+    'Usage: Newmark.exe compat-tool --list | --name <opencode-tool> [json-args | --args-file path] [--root <dir>]',
+    'List or run one compatible OpenCode tool.',
+  ],
+};
+
+function cliHelpRequested(args: string[]): boolean {
+  return args.some(arg => ['--help', '-h'].includes(String(arg).toLowerCase()));
+}
+
+const CLI_VALUE_FLAGS = new Set<string>([
+  '--root', '--input', '--input-env', '--input-file', '--mode', '--model', '--language', '--conversation',
+  '--args', '--args-file', '--selected', '--models', '--name', '--url', '--key', '--api-key', '--endpoint',
+  '--endpoint-env', '--url-env', '--key-env', '--api-key-env', '--env-file', '--env-file-env',
+  '--claude-env-file', '--claude-env-file-env', '--anthropic-env-file', '--anthropic-env-file-env',
+  '--candidate-models', '--protocol', '--query', '--type', '--path', '--component', '--source-id',
+  '--remove-source', '--enable-source', '--disable-source', '--source', '--target', '--target-file',
+  '--expected-version', '--preserve', '--repo', '--tag', '--asset', '--version', '--content-file',
+  '--content', '--description', '--tags',
+]);
+const CLI_BOOLEAN_FLAGS = new Set<string>([
+  '--persist', '--agent-only', '--list', '--preview-only', '--sources', '--add-source', '--check-github',
+  '--from-github', '--dry-run', '--read', '--index', '--reindex', '--update', '--version', '--folder', '--help', '-h',
+]);
+
+function invalidCliCommandArgument(args: string[]): string | undefined {
+  let skipNext = false;
+  for (let index = 0; index < args.length; index++) {
+    const arg = String(args[index] || '');
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (!arg || arg === '--' || !arg.startsWith('-')) continue;
+    const name = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg;
+    const hasInlineValue = arg.includes('=');
+    if (CLI_BOOLEAN_FLAGS.has(name)) continue;
+    if (CLI_VALUE_FLAGS.has(name)) {
+      if (hasInlineValue) {
+        if (!arg.slice(name.length + 1)) return `${name} requires a value`;
+      } else {
+        const next = args[index + 1];
+        if (!next || String(next).startsWith('-')) return `${name} requires a value`;
+        skipNext = true;
+      }
+      continue;
+    }
+    return arg;
+  }
+  return undefined;
+}
 
 function argValue(args: string[], key: string): string | undefined {
   const idx = args.indexOf(key);
@@ -195,6 +286,9 @@ function classifyCliToolOutput(tool: string, output: string): { envelope: CliToo
     const unavailableHostCapability = tool === 'computer_use' || tool.startsWith('browser_');
     return { envelope: { ok: false, tool, error: firstLine, route: 'direct' }, exitCode: unavailableHostCapability ? 3 : 2 };
   }
+  if (/^\[(?:context_compress|context_history_manage)]/i.test(firstLine)) {
+    return { envelope: { ok: false, tool, error: firstLine, route: 'direct' }, exitCode: 4 };
+  }
   if (/^\[(?:tool disabled|permission|Subagent sandbox)]/i.test(firstLine)) {
     return { envelope: { ok: false, tool, error: firstLine, route: 'direct' }, exitCode: 3 };
   }
@@ -342,6 +436,34 @@ function parseFuzzyEnvFile(filePath: string | undefined): FuzzyEnvDefaults {
 
 function redactUrlSecret(value: string): string {
   return value.replace(/([?&](?:key|token|api_key|auth)=)[^&]+/gi, '$1<redacted>');
+}
+
+const CLI_SENSITIVE_FIELD = /(?:api.?key|authorization|access.?token|refresh.?token|secret|password|credential|cookie)/i;
+
+/**
+ * Compatibility discovery reads third-party metadata outside the selected
+ * Newmark root. Those manifests can contain provider options, so structured
+ * compatibility output must not become a credential exfiltration path.
+ */
+export function redactCliSecrets<T>(value: T, seen = new WeakSet<object>()): T {
+  const walk = (current: unknown): unknown => {
+    if (typeof current === 'string') {
+      return current
+        .replace(/\bsk-[A-Za-z0-9_.-]{8,}\b/gi, 'sk-***REDACTED***')
+        .replace(/\bBearer\s+[A-Za-z0-9_.=:/+_-]{8,}/gi, 'Bearer <redacted>')
+        .replace(/([?&](?:key|token|api_key|auth)=)[^&\s]+/gi, '$1<redacted>');
+    }
+    if (current === null || typeof current !== 'object') return current;
+    if (seen.has(current)) return '[CIRCULAR]';
+    seen.add(current);
+    if (Array.isArray(current)) return current.map(item => walk(item));
+    const output: JsonObject = {};
+    for (const [key, nested] of Object.entries(current as JsonObject)) {
+      output[key] = CLI_SENSITIVE_FIELD.test(key) ? '[REDACTED]' : walk(nested);
+    }
+    return output;
+  };
+  return walk(value) as T;
 }
 
 function filterSkillMarket(items: ReturnType<Agent['skills']['discoverMarket']>, query: string | undefined): ReturnType<Agent['skills']['discoverMarket']> {
@@ -524,11 +646,22 @@ async function runCliFuzzyInject(
 }
 
 export async function runCliCommand(root: string, args: string[]): Promise<boolean> {
-  installCliPipeGuards();
   const command = args.find(a => (CLI_COMMANDS as readonly string[]).includes(a));
   if (!command) return false;
+  installCliPipeGuards();
+  const invalidArgument = invalidCliCommandArgument(args);
+  if (invalidArgument) {
+    safeStderr(`Invalid Newmark argument: ${invalidArgument}\n`);
+    process.exitCode = 2;
+    return true;
+  }
+  if (cliHelpRequested(args)) {
+    safeStdout(cliCommandHelp(command as CliCommand));
+    return true;
+  }
 
-  const agent = new Agent(root, { agentOnly: args.includes('--agent-only') });
+  const readOnlyValidation = command === 'validate-models' && !args.includes('--persist');
+  const agent = new Agent(root, { agentOnly: args.includes('--agent-only'), readOnlyConfig: readOnlyValidation });
   agent.tools.setHostProfile({
     kind: 'cli',
     platform: process.platform,
@@ -585,11 +718,19 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     const toolArgs = parsedArgs.value;
     const wsDir = agent.workspace.current?.path || root;
     try {
-      const result = await agent.tools.execute(toolName, JSON.stringify(toolArgs), wsDir, {
-        mode: agent.mode,
-        workspacePath: wsDir,
-        invocation: 'cli',
-      });
+      // Context management is an Agent-owned capability. Keep the direct CLI
+      // route on the same handler as model-dispatched calls instead of sending
+      // it through the generic filesystem/native ToolExecutor switch, which
+      // intentionally has no access to conversation history.
+      const result = toolName === 'context_compress'
+        ? (await agent.handleContextCompress(JSON.stringify(toolArgs))).output
+        : toolName === 'context_history_manage'
+          ? agent.handleContextHistoryManage(JSON.stringify(toolArgs)).output
+          : await agent.tools.execute(toolName, JSON.stringify(toolArgs), wsDir, {
+              mode: agent.mode,
+              workspacePath: wsDir,
+              invocation: 'cli',
+            });
       const classified = classifyCliToolOutput(toolName, result);
       emitCliToolEnvelope(classified.envelope, classified.exitCode);
     } catch (error) {
@@ -609,17 +750,49 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
       return true;
     }
     const model = argValue(args, '--model');
-    if (model) agent.setModel(model);
-    const tokens = await agent.process(prompt);
-    safeStdout(tokens.map(t => t.text || '').join(''));
-    safeStdout('\n');
+    if (model) {
+      agent.setModel(model);
+      // Reject a bad explicit selection before Agent.process creates a user
+      // message/work-run or reaches the provider transport. Qualified
+      // provider/model values are normalized by Agent.setModel first.
+      if (model !== 'auto' && !agent.activeModelConfig()) {
+        safeStdout(`[Error] Model '${model}' is unavailable or not configured. Select a configured model or enable a valid provider before sending.`);
+        safeStdout('\n');
+        process.exitCode = 1;
+        return true;
+      }
+    }
+    try {
+      const tokens = await agent.process(prompt);
+      const output = tokens.map(t => t.text || '').join('');
+      safeStdout(output);
+      safeStdout('\n');
+      // Keep the diagnostic in stdout for pipes, but make the non-interactive
+      // command fail when Agent returned a structured error token.
+      if (tokens.some(token => {
+        const text = String(token.text || '');
+        return agent.isLlmErrorText(text) || /^\s*\[(?:Workspace required|Attachment rejected)\]/i.test(text);
+      })) process.exitCode = 1;
+    } catch (error) {
+      // The shared GUI/TUI kernel must throw real terminal failures so it
+      // cannot synthesize a completed WorkRun. Preserve the CLI's stable
+      // stdout diagnostic and non-zero exit contract at this boundary.
+      const message = error instanceof Error ? error.message : String(error);
+      safeStdout(message.startsWith('[') ? message : `[Error] ${message}`);
+      safeStdout('\n');
+      process.exitCode = 1;
+    }
     return true;
   }
 
   if (command === 'validate-models') {
     const selected = splitList(pathArgValue(args, '--selected') || pathArgValue(args, '--models'));
-    const result = await agent.validateModels(selected.length ? selected : undefined);
+    const result = await agent.validateModels(selected.length ? selected : undefined, { persist: args.includes('--persist') });
     printJson(result);
+    if (selected.length && result.length === 0) {
+      safeStderr(`No configured model deployments matched --selected: ${selected.join(', ')}\n`);
+      process.exitCode = 1;
+    }
     return true;
   }
 
@@ -830,13 +1003,13 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
       };
       payload.subagents = agent.subagents.listAll().map(s => agent.subagents.toRecord(s.id));
     }
-    printJson(payload);
+    printJson(redactCliSecrets(payload));
     return true;
   }
 
   if (command === 'compat-tool') {
     if (args.includes('--list')) {
-      printJson({ ok: true, tools: discoverOpenCodeTools(root) });
+      printJson(redactCliSecrets({ ok: true, tools: discoverOpenCodeTools(root) }));
       return true;
     }
     const positional = positionalAfter(args, 'compat-tool');
@@ -855,11 +1028,25 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
       process.exitCode = 1;
       return true;
     }
-    printJson(await runOpenCodeTool(root, name, parsedArgs.value));
+    printJson(redactCliSecrets(await runOpenCodeTool(root, name, parsedArgs.value)));
     return true;
   }
 
   return false;
+}
+
+export function cliCommandHelp(command: string): string {
+  const key = command as CliCommand;
+  const lines = CLI_COMMAND_HELP[key];
+  if (!lines) return `${cliCommandUsage()}\n`;
+  return [
+    `Newmark CLI command: ${command}`,
+    '',
+    ...lines,
+    '',
+    'Flags:',
+    '  --help, -h     Show this command help and exit without network or model work.',
+  ].join('\n') + '\n';
 }
 
 export function cliCommandUsage(): string {

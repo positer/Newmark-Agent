@@ -1,5 +1,6 @@
 const path = require('path');
 const { patchAndVerify, patchExeIdentity } = require('./patch-win-exe-icon.cjs');
+const { createConsoleLauncher } = require('./create-console-launcher.cjs');
 
 module.exports = async function afterPack(context) {
   if (context.electronPlatformName !== 'win32') return;
@@ -10,4 +11,5 @@ module.exports = async function afterPack(context) {
   patchExeIdentity(exePath);
   const verified = patchAndVerify(exePath, iconPath);
   console.log(`[after-pack-win-icon] verified ${exePath} ${JSON.stringify(verified)}`);
+  createConsoleLauncher(context.appOutDir);
 };

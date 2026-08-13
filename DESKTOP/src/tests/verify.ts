@@ -68,6 +68,19 @@ class FakeProvider {
   }
 }
 
+function registerOfflineFixtureModel(agent: Agent, modelName: string): void {
+  const providerId = agent.config.upsertProvider(
+    'Offline deterministic fixture',
+    'http://127.0.0.1:9/v1',
+    'fixture-key-not-a-secret',
+    'openai',
+  );
+  assert(
+    agent.config.addModelToProvider(providerId, modelName, modelName, 'Deterministic offline test model'),
+    `offline fixture: registers ${modelName}`,
+  );
+}
+
 // ===== Setup test environment =====
 function setup() {
   fs.mkdirSync(TEST_DIR, { recursive: true });
@@ -242,6 +255,8 @@ async function main() {
   const agentLoopTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernel', 'agent-loop.ts'), 'utf-8');
   await verifyEditorLifecycle(uiHtml, assert);
   const mainSource = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf-8');
+  const cliDiscoverySource = fs.readFileSync(path.join(process.cwd(), 'src', 'cli-discovery.ts'), 'utf-8');
+  const agentFailClosedSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
   const preloadSource = fs.readFileSync(path.join(process.cwd(), 'src', 'preload.ts'), 'utf-8');
   const configSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'config.ts'), 'utf-8');
   const fileRouterSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'workspaceFileRouter.ts'), 'utf-8');
@@ -249,6 +264,30 @@ async function main() {
   const uiPreferencesSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'uiPreferences.ts'), 'utf-8');
   const inlineScripts = Array.from(uiHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g), match => match[1])
     .filter(source => source.trim().length > 0);
+  assert(
+    cliDiscoverySource.includes("'-version'")
+      && cliDiscoverySource.includes('unknownTopLevelCommand')
+      && cliDiscoverySource.includes("'--root'")
+      && cliDiscoverySource.includes("'--model'"),
+    'CLI discovery: documented version aliases and value flags are shared by every entrypoint before command dispatch',
+  );
+  const electronUserDataBind = mainSource.indexOf("app.setPath('userData', electronUserDataRoot)");
+  const electronSessionDataBind = mainSource.indexOf("app.setPath('sessionData', electronSessionDataRoot)");
+  const electronReady = mainSource.indexOf('app.whenReady()');
+  assert(
+    electronUserDataBind >= 0
+      && electronSessionDataBind > electronUserDataBind
+      && mainSource.includes("const electronUserDataRoot = path.join(runtimeRoot, 'Electron')")
+      && electronReady > electronSessionDataBind
+      && !mainSource.includes('return app.getPath(\'userData\')'),
+    'runtime root: Electron userData/sessionData are bound inside the resolved Newmark root before ready, and legacy migration is independent of the mutable Electron default',
+  );
+  assert(
+    agentFailClosedSource.includes("const requestedModel = this.model")
+      && agentFailClosedSource.includes("is unavailable or not configured")
+      && agentFailClosedSource.includes("this.emitWorkEvent({ type: 'error', content: message })"),
+    'model selection: an explicitly unavailable model fails closed with an actionable Agent error',
+  );
   assert(inlineScripts.length > 0, 'ui html: inline script exists');
   let scriptParseError = '';
   for (const source of inlineScripts) {
@@ -453,7 +492,25 @@ async function main() {
     && uiHtml.includes('var reconciledLocalRuntime = await reconcileStaleLocalRuntimeBeforeSend(lockedTarget)')
     && uiHtml.includes("delete state.activeSendCallsByTarget[targetKey]")
     && uiHtml.includes("if (!conversationRunning && effectiveInputMode === 'guide') effectiveInputMode = 'next';"), 'ui send race: a backend-idle terminal snapshot clears stale local send locks so the next user prompt is not silently dropped');
-  assert(uiHtml.includes('window.submitCurrentAction = function()') && uiHtml.includes('window.stopCurrentConversation = async function()') && uiHtml.includes('api.stopConversation({ target: target, runId: runId, force: force })') && uiHtml.includes("e.key === 'Escape' && isCurrentConversationRunning() && !promptHasText()"), 'ui html: current running conversation with empty prompt shows target-bound graceful/force Stop bound to Esc');
+  assert(uiHtml.includes("var sendFailure = ''")
+    && uiHtml.includes("if (r && r.error) sendFailure = String(r.error);")
+    && uiHtml.includes("setConversationRuntimeState(lockedTarget, 'error'")
+    && uiHtml.includes("the renderer's provisional run fall through to completed"), 'ui no-model failure: IPC errors cannot race the terminal work event and falsely complete the provisional GUI run');
+  assert(uiHtml.includes('window.submitCurrentAction = function()')
+    && uiHtml.includes('window.stopCurrentConversation = async function()')
+    && uiHtml.includes('function markProvisionalStop(target, runId)')
+    && uiHtml.includes('function pendingProvisionalStopRunId(target)')
+    && uiHtml.includes('function requestBackendStopForProvisionalStart(target, runId)')
+    && uiHtml.includes('function consumeProvisionalStop(target, runId)')
+    && uiHtml.includes('if (provisional) {')
+    && uiHtml.includes("api.stopConversation({ target: target, runId: runId, force: force })")
+    && uiHtml.includes('requestBackendStopForProvisionalStart(target, event.runId)')
+    && uiHtml.includes('cancelledBeforeStart: true')
+    && uiHtml.includes("e.key === 'Escape' && isCurrentConversationRunning() && !promptHasText()")
+    && uiHtml.includes('function stopRunningFromEscape(event)')
+    && uiHtml.includes("document.addEventListener('keydown', function(event)")
+    && uiHtml.includes('var STREAMING_PLAIN_TEXT_THRESHOLD = 12000')
+    && uiHtml.includes('var narrativeHtml = liveNarrative'), 'ui html: current running conversation with empty prompt shows target-bound graceful/force Stop, global Esc, provisional-send cancellation, and bounded large-stream rendering');
   assert(uiHtml.includes("var requestedMode = opts.requestedMode || state.mode || 'build';")
     && uiHtml.includes("var idleBuildNextImmediate = requestedMode === 'build'")
     && !uiHtml.includes("els['mode-select'].value = 'build'; window.syncNewmarkSelect"),
@@ -491,6 +548,9 @@ async function main() {
     && !fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('unless they are strictly necessary to complete this exact Goal'),
   'Goal continuation: hidden automatic Build instructions focus only on the current Goal and never revive historical unfinished tasks');
   assert(uiHtml.includes('window.submitSelectedFlow = function()')
+    && uiHtml.includes("'flow.noAvailable': 'No workflows are available to run.'")
+    && uiHtml.includes("flowSel.disabled = true")
+    && uiHtml.includes("return { ok: false, error: message }")
     && uiHtml.includes('window.renderFlowTakeover = function(active, name, options)')
      && uiHtml.includes("if (state.mode === 'flow' || (currentFlowRunning() && flowTakeoverMatchesCurrent()))")
     && uiHtml.includes('window.submitCurrentAction();')
@@ -528,8 +588,16 @@ async function main() {
   assert(uiHtml.includes("type === 'queue_update'") && uiHtml.includes('backendQueuesByTarget') && uiHtml.includes('setBackendQueueForTarget(event.queue || { steering: [], followUp: [] }, eventQueueTarget)') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue, eventQueueTarget)') && uiHtml.includes('setBackendQueueForTarget(s.queued, snapshotTarget)') && uiHtml.includes('window.syncNextQueueFromBackend(state.backendQueue, snapshotTarget)'), 'ui html: caches backend queue_update events by composite target for foreground/background conversation debugging');
   assert(uiHtml.includes('if (s && Array.isArray(s.workEvents))') && uiHtml.includes('var mergedEvents = existingEvents.concat(s.workEvents || [])') && uiHtml.includes('dedupedEvents.slice(-Number(state.agentWorkEventLimit || 240))'), 'ui html: merges backend work-event snapshots when foregrounding a conversation');
   assert(mainSource.includes('function broadcastAgentWorkEvent(event: unknown)') && mainSource.includes('BrowserWindow.getAllWindows()') && mainSource.includes("win.webContents.send('agent:workEvent', event)") && mainSource.includes("ipcMain.handle('agent:getState', async (event, targetInput?: ConversationTargetInput)") && mainSource.includes('const startupPrewarmRequest = isStartupPrewarmSender(event)') && mainSource.includes("ipcMain.handle('agent:ensureConversation'") && mainSource.includes("ipcMain.handle('agent:activateConversation'") && mainSource.includes('persistActiveConversationSelection(target.conversationId, workspace)') && mainSource.includes('ensureWslConversationPool()!.snapshot(target)') && mainSource.includes('ensureElectronUtilityPool().snapshot(target)') && preloadSource.includes('ensureConversation: (target: string | Record<string, unknown>)') && preloadSource.includes('activateConversation: (target: string | Record<string, unknown>)') && preloadSource.includes('getState: (target?: string | Record<string, unknown>)'), 'backend sharing: all desktop windows receive one composite-target event stream, request read-only isolated snapshots, and explicitly persist foreground conversation activation');
-  assert(mainSource.includes('const peek = peekTargetRuntime(normalized)') && mainSource.includes('if (peek.resident) await stopTargetRuntime(normalized)') && mainSource.indexOf('if (peek.resident) await stopTargetRuntime(normalized)') < mainSource.indexOf('const archiveOwner = ownsTargetWorkspace ? agent : isolatedConversationAgent(normalized)'), 'archive IPC: observes cold targets without allocation and stops resident writers before deleting persisted state');
-  assert(mainSource.includes('const archiveOwner = ownsTargetWorkspace ? agent : isolatedConversationAgent(normalized)') && mainSource.includes('archiveOwner.archiveConversation(normalized.conversationId)'), 'archive IPC: current workspace uses the host persistence owner so delayed cache flushes cannot resurrect deleted conversations');
+  assert(mainSource.includes('const forceStopTargetRuntime = async')
+    && mainSource.includes('await forceStopTargetRuntime(normalized)')
+    && mainSource.includes('const archiveInFlight = new Map')
+    && !mainSource.includes('Cannot archive a conversation while its runtime is running or stopping.'),
+  'archive IPC: running, stopping, and active-prompt targets are force-interrupted without a rejection gate');
+  assert(mainSource.includes('const archiveOwner = ownsTargetWorkspace ? agent! : isolatedConversationAgent(normalized)')
+    && mainSource.includes('archiveOwner.archiveConversationAsync(normalized.conversationId)')
+    && mainSource.includes('finalizes deletion against the')
+    && mainSource.includes('latest locked state snapshot'),
+  'archive IPC: host persistence ownership, async payload writes, and latest-state finalization prevent resurrection and lost sibling deletes');
   assert(mainSource.includes('const singleInstanceLock = allowMultipleInstances || app.requestSingleInstanceLock()') && mainSource.includes("app.on('second-instance'") && mainSource.includes('const win = mainWindow && !mainWindow.isDestroyed()') && !mainSource.includes('const win = createDesktopWindow ? createDesktopWindow(!!agent) : mainWindow'), 'main process: production launches focus the existing window while explicitly isolated test instances skip lock coordination');
   assert(uiHtml.includes('function loadActiveConversationMessages(conversationId)') && uiHtml.includes('var requestedConversationId = String(conversationId || activeConversationId() ||') && uiHtml.includes('var requestedTarget = currentConversationTarget(requestedConversationId)') && uiHtml.includes('api.getState(lockedTarget)') && !uiHtml.includes('api.getState().then(function(s) {\n      if (s && s.contextCompression'), 'ui html: active window refreshes are bound to the owning workspace and conversation target');
   assert(uiHtml.includes('function setActiveWorkspaceConversationById(id)') && uiHtml.includes('var activeBeforeRender = (conversations.find(function(c)') && uiHtml.includes('if (activeBeforeRender) setActiveWorkspaceConversationById(activeBeforeRender);'), 'ui html: conversation list rerender preserves active conversation by id instead of stale cross-window index');
@@ -1144,6 +1212,8 @@ async function main() {
   const appIconLight = fs.readFileSync(path.join(process.cwd(), 'assets', 'app-icon-light.png'));
   assert(launcherTs.includes('drainCliNetworkHandles') && mainTs.includes('drainCliNetworkHandles') && launcherTs.includes('stopComputerUsePowerShellHost') && mainTs.includes('stopComputerUsePowerShellHost') && launcherTs.includes('getGlobalDispatcher') && mainTs.includes('getGlobalDispatcher'), 'cli entrypoints: stop persistent Computer Use helpers and drain async network handles before exit');
   assert(cliCommandsTs.includes("process.stdout.on('error'") && cliCommandsTs.includes("process.stderr.on('error'") && cliCommandsTs.includes('stdoutBrokenPipe = true') && cliCommandsTs.includes('stderrBrokenPipe = true'), 'cli entrypoints: suppress asynchronous EPIPE errors from closed stdout/stderr pipes');
+  assert(cliCommandsTs.includes("const readOnlyValidation = command === 'validate-models' && !args.includes('--persist')") && cliCommandsTs.includes("persist: args.includes('--persist')") && cliCommandsTs.includes('[--persist]') && cliCommandsTs.includes("toolName === 'context_compress'") && cliCommandsTs.includes('agent.handleContextHistoryManage') && configTs.includes('private readonly readOnly') && configTs.includes('if (this.readOnly) return'), 'cli validation: default model probes use an in-memory/read-only config boundary and --persist is explicit; direct context tools reuse Agent-owned handlers');
+  assert(mainTs.includes("return args[0] === '--' ? args.slice(1) : args;") && launcherTs.includes("const args = rawArgs[0] === '--' ? rawArgs.slice(1) : rawArgs;"), 'console wrapper boundary: strips the native Electron -- separator before command discovery');
   assert(mainTs.includes('function pathArgValue') && mainTs.includes("const prefix = `${key}=`") && mainTs.includes("let best = fs.existsSync(parts[0]) ? parts[0] : ''") && mainTs.includes("if (fs.existsSync(candidate)) best = candidate") && mainTs.includes("return best || parts.join(' ') || undefined") && mainTs.includes("pathArgValue(args, '--root')"), 'main entrypoint: supports --root paths with spaces, --root=path form, and longest existing path matching');
   assert(mainTs.includes('const singleInstanceLock = allowMultipleInstances || app.requestSingleInstanceLock()'), 'main entrypoint: explicit multi-instance test windows skip Electron single-instance coordination entirely');
   assert(launcherTs.includes('function pathArgValue') && launcherTs.includes('function userRuntimeRoot') && launcherTs.includes("path.join(os.homedir(), '.Newmark')") && launcherTs.includes('function legacyUserDataRoot') && launcherTs.includes('function migrateLegacyRuntimeRoot') && launcherTs.includes('function writableRuntimeRoot') && launcherTs.includes('const installRoot = path.dirname(process.execPath)') && launcherTs.includes('if (isPathInside(installRoot, resolved)) return userRuntimeRoot()') && launcherTs.includes("path.join(userRuntimeRoot(), 'Roots'") && launcherTs.includes("const explicitRoot = pathArgValue(args, '--root')") && launcherTs.includes('const root = explicitRoot ? writableRuntimeRoot(explicitRoot) : userRuntimeRoot()'), 'launcher entrypoint: every install location resolves settings to user home .Newmark while isolated explicit roots remain supported');
@@ -1164,6 +1234,7 @@ async function main() {
   assert(mainTs.includes('startupWindow = createDesktopWindow(true, true, startupAttempt)') && mainTs.includes('mainWindow = startupWindow') && mainTs.includes('createTray();') && mainTs.includes("tray.on('click', showMainWindow)") && mainTs.includes("tray.on('double-click', showMainWindow)") && mainTs.includes('if (tray) return;'), 'tray lifecycle: creates one tray with the single startup window and reuses it while showing the promoted main window');
   assert(mainTs.includes("path.resolve(agent?.workspace.current?.path || root)") && mainTs.includes("ipcMain.handle('agent:getFileTree'"), 'file tree: defaults to the active workspace instead of exposing the ~/.Newmark runtime root and nested Roots shadows');
   assert(mainTs.includes("agent?.config.getStr('general', 'close_behavior')") && mainTs.includes('win?.minimize();') && mainTs.includes('win?.hide();') && mainTs.includes("ipcMain.handle('app:lifecycleState'"), 'window lifecycle: separates taskbar minimize from close-to-tray behavior and exposes a smoke-test state');
+  assert(configTs.includes('close_behavior:') && configTs.includes('value: "exit"') && mainTs.includes('armForcedExitDeadline'), 'window lifecycle: fresh roots exit on close and runtime shutdown has a bounded deadline');
   assert(preloadTs.includes("lifecycleState: () => ipcRenderer.invoke('app:lifecycleState')") && !uiHtml.includes("if (s.minimizeToTray) state.closeBehavior = 'minimize';"), 'window lifecycle: preload exposes lifecycle state without overwriting close behavior from minimize settings');
   assert(mainTs.includes("ipcMain.handle('app:minimize', () =>")
     && mainTs.includes('win?.minimize();')
@@ -1173,7 +1244,11 @@ async function main() {
   assert(uiHtml.includes('id="title-app-logo"') && uiHtml.includes('id="title-app-icon"') && uiHtml.includes('src="../assets/app-icon-dark-64.png"') && uiHtml.includes('window.refreshTitlebarThemeIcon') && uiHtml.includes("state.theme === 'system' ? systemColorScheme.matches : state.theme !== 'light'") && uiHtml.includes("useDarkTheme ? '../assets/app-icon-dark-64.png' : '../assets/app-icon-light-64.png'") && uiHtml.includes("if (state.theme === 'system') applyUiAppearance()"), 'app icons: custom titlebar uses compact build-derived dark/light icons and reapplies appearance when the system scheme changes');
   assert(uiHtml.includes('#topbar .logo::before') && uiHtml.includes('animation: marquee-rotate var(--marquee-speed) linear infinite') && uiHtml.includes('var(--g1), var(--g2), var(--g3), var(--g4), var(--g1)') && uiHtml.includes('calc(-2 * var(--marquee-width))'), 'app icons: custom titlebar border uses shared adjustable marquee settings');
   assert(fs.existsSync(path.join(process.cwd(), 'scripts', 'patch-win-exe-icon.cjs')) && distPortableScript.includes("require('./patch-win-exe-icon.cjs')") && distPortableScript.includes('patchExeIdentity(unpackedExe)') && distPortableScript.includes('patchAndVerify(unpackedExe, packageIcon)') && distPortableScript.includes('verifyExeIcon(unpackedExe, packageIcon)') && distPortableScript.includes('verifyExeIdentity(unpackedExe)') && distPortableScript.includes('ProductName') && distPortableScript.includes('FileDescription') && distPortableScript.includes('electron.exe'), 'app icons: dist-portable patches/verifies win-unpacked exe associated icon and Newmark Windows resource identity before zipping');
-  assert(packageJson.includes('"release:cli-smoke"') && releaseCliSmoke.includes('Start-Process') && releaseCliSmoke.includes('-RedirectStandardOutput'), 'release cli smoke: uses stable redirected packaged exe invocation');
+  assert(packageJson.includes('"release:cli-smoke"')
+    && releaseCliSmoke.includes('spawn(exePath, args')
+    && releaseCliSmoke.includes('processIsRunning(child.pid)')
+    && releaseCliSmoke.includes('terminateProcessTree(child.pid)')
+    && releaseCliSmoke.includes('expectedExitCode'), 'release cli smoke: owns the packaged process directly so wrapper exit codes and timeout cleanup cannot be lost through PowerShell');
   assert(distLinuxScript.includes('mktemp -d /tmp/newmark-linux-build.XXXXXX') && distLinuxScript.includes("--exclude='node_modules/'") && distLinuxScript.includes('npm ci --include=dev --no-audit --no-fund') && distLinuxScript.includes('node scripts/dist-linux.cjs --native') && distLinuxScript.includes("['-d', distro, '--', 'bash', '-s']") && distLinuxScript.includes('input: `${script}\\n`') && distLinuxScript.includes("stdio: ['pipe', 'inherit', 'inherit']") && distLinuxScript.includes('rsync -a --delete "$build_root/repo/release/linux-unpacked/"'), 'Linux release build: Windows streams an isolated WSL build script over stdin and uses Linux-native dependencies instead of reusing Windows node_modules');
   assert(releaseLinuxZipSmoke.includes("require(path.join(repoRoot, 'DESKTOP', 'package.json')).version") && releaseLinuxZipSmoke.includes('Newmark-Agent-${version}-linux-unpacked-x64.zip') && releaseLinuxDebSmoke.includes("require(path.join(repoRoot, 'DESKTOP', 'package.json')).version") && releaseLinuxDebSmoke.includes('Newmark-Agent-${version}-amd64.deb'), 'Linux release smokes: derive artifact names from the current package version');
   assert(releaseLinuxGuiSmoke.includes("String(t.url || '').includes('index.html')") && !releaseLinuxGuiSmoke.includes("|| targets.find(t => t.webSocketDebuggerUrl"), 'Linux GUI smoke: waits for the final index renderer instead of attaching to a transient AppImage startup target');
@@ -1312,9 +1387,9 @@ async function main() {
   assert(packageJson.includes('"release:ui-workspace-conversation-isolation-smoke"') && releaseUiWorkspaceConversationIsolationSmoke.includes('--remote-debugging-port=') && releaseUiWorkspaceConversationIsolationSmoke.includes('WS_ALPHA_CONV_PROMPT_20260705') && releaseUiWorkspaceConversationIsolationSmoke.includes('WS_BETA_CONV_REPLY_20260705'), 'release ui workspace/conversation isolation smoke: drives real packaged workspace A/B markers through CDP');
   assert(releaseUiWorkspaceConversationIsolationSmoke.includes('window.api.getState(${js(conversationId)})') && releaseUiWorkspaceConversationIsolationSmoke.includes('#conversation-list .conv-item.active') && releaseUiWorkspaceConversationIsolationSmoke.includes('rapid workspace switch') && releaseUiWorkspaceConversationIsolationSmoke.includes('!body.includes'), 'release ui workspace/conversation isolation smoke: repeatedly switches workspaces and verifies scoped conversation snapshots without visible leakage');
   assert(releaseUiWorkspaceConversationIsolationSmoke.includes('2026-07-05-release-ui-workspace-conversation-isolation-alpha.png') && releaseUiWorkspaceConversationIsolationSmoke.includes('2026-07-05-release-ui-workspace-conversation-isolation-beta.png') && releaseUiWorkspaceConversationIsolationSmoke.includes('screenshot appears blank or truncated'), 'release ui workspace/conversation isolation smoke: captures nonblank visual evidence for both final workspaces');
-  assert(packageJson.includes('"release:ui-multi-window-shared-backend-smoke"') && releaseUiMultiWindowSharedBackendSmoke.includes('waitForTargets(port, 2)') && releaseUiMultiWindowSharedBackendSmoke.includes('const firstTargetId = targets[0].id') && releaseUiMultiWindowSharedBackendSmoke.includes('secondTarget.id === firstTargetId') && releaseUiMultiWindowSharedBackendSmoke.includes('multi-window-shared-backend'), 'release ui multi-window shared-backend smoke: launches a second packaged window through single-instance routing and targets a distinct renderer');
-  assert(releaseUiMultiWindowSharedBackendSmoke.includes("processJson.main !== 1") && releaseUiMultiWindowSharedBackendSmoke.includes('cdpTargets=') && releaseUiMultiWindowSharedBackendSmoke.includes('expected one Electron main/backend process'), 'release ui multi-window shared-backend smoke: verifies one backend main process and multiple CDP renderer targets');
-  assert(releaseUiMultiWindowSharedBackendSmoke.includes("activeSummaryExpression('default')") && releaseUiMultiWindowSharedBackendSmoke.includes('activeSummaryExpression(convA)') && releaseUiMultiWindowSharedBackendSmoke.includes('activeSummaryExpression(convB)'), 'release ui multi-window shared-backend smoke: verifies window A and B active conversations do not overwrite each other');
+  assert(packageJson.includes('"release:ui-multi-window-shared-backend-smoke"') && releaseUiMultiWindowSharedBackendSmoke.includes('waitForTargets(port, 1)') && releaseUiMultiWindowSharedBackendSmoke.includes('const firstTargetId = targets[0].id') && releaseUiMultiWindowSharedBackendSmoke.includes('forwardedLaunch=true') && releaseUiMultiWindowSharedBackendSmoke.includes('multi-window-shared-backend'), 'release ui shared-backend smoke: forwards a second packaged launch through the single-instance boundary without replacing the original renderer');
+  assert(releaseUiMultiWindowSharedBackendSmoke.includes("processJson.main !== 1") && releaseUiMultiWindowSharedBackendSmoke.includes('cdpTargets=') && releaseUiMultiWindowSharedBackendSmoke.includes('expected one Electron main/backend process'), 'release ui shared-backend smoke: verifies one backend main process and one shared CDP renderer target after forwarded launch');
+  assert(releaseUiMultiWindowSharedBackendSmoke.includes("defaultA !== 'default'") && releaseUiMultiWindowSharedBackendSmoke.includes('activeSummaryExpression(convA)') && releaseUiMultiWindowSharedBackendSmoke.includes('shared window remains on its conversation'), 'release ui shared-backend smoke: verifies the forwarded launch does not overwrite the active conversation');
   assert(packageJson.includes('"release:ui-goal-continuation-smoke"') && releaseUiGoalContinuationSmoke.includes('RELEASE_UI_GOAL_CONTINUATION') && releaseUiGoalContinuationSmoke.includes('mock.getGoalCalls() < 3'), 'release ui goal continuation smoke: covers repeated autonomous Goal model calls');
   assert(releaseUiGoalContinuationSmoke.includes('max[- ]?depth') && releaseUiGoalContinuationSmoke.includes('2026-06-28-release-ui-goal-continuation-smoke.png'), 'release ui goal continuation smoke: rejects max-depth warnings and captures visual evidence');
   assert(uiHtml.includes('active && terminalEvent && api.getState') && uiHtml.includes('applyReturnedGoalState(snapshot)') && releaseUiGoalContinuationSmoke.includes('completed Goal did not clear its visible bar'), 'goal completion ui: terminal backend continuation refresh clears the Goal bar and restores Build');
@@ -1989,6 +2064,10 @@ async function main() {
   assert(!fs.existsSync(path.join(agentOnlyRoot, 'Work')) || !fs.existsSync(path.join(agentOnlyRoot, 'Work', 'Local.json')) || JSON.parse(fs.readFileSync(path.join(agentOnlyRoot, 'Work', 'Local.json'), 'utf-8')).length === 0, 'cli send: --agent-only does not create an internal workspace');
   const cliAgentOnlyValidateOut = await captureStdout(() => runCliCommand(agentOnlyRoot, ['validate-models', '--agent-only', '--root', agentOnlyRoot]));
   assert(Array.isArray(JSON.parse(cliAgentOnlyValidateOut)), 'cli validate-models: --agent-only can run as pure Agent validation base');
+  process.exitCode = 0;
+  const cliInvalidValidateOut = await captureStdout(() => runCliCommand(agentOnlyRoot, ['validate-models', '--selected', 'invalid/provider,invalid/model', '--agent-only', '--root', agentOnlyRoot]));
+  assert(Array.isArray(JSON.parse(cliInvalidValidateOut)) && process.exitCode === 1, 'cli validate-models: explicit unknown selection prints [] and exits non-zero');
+  process.exitCode = 0;
   const cliAgentOnlyPreviewOut = await captureStdout(() => runCliCommand(agentOnlyRoot, ['fuzzy-inject', '--agent-only', '--name', 'PreviewOnly', '--endpoint', 'https://preview-only.test/v1', '--key', 'sk-preview-only', '--preview-only', '--root', agentOnlyRoot]));
   assert(JSON.parse(cliAgentOnlyPreviewOut).preview === true, 'cli fuzzy-inject: --agent-only can run as pure Agent fuzzy base');
   const cliZhStateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['state', '--language', 'zh', '--root', TEST_DIR]));
@@ -2056,12 +2135,15 @@ async function main() {
     },
   });
   try {
+    const cliValidationConfigPath = path.join(TEST_DIR, 'config.json');
+    const cliValidationConfigBefore = createHash('sha256').update(fs.readFileSync(cliValidationConfigPath)).digest('hex');
     const cliValidateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['validate-models', '--selected', 'test-prov/gpt-test', '--root', TEST_DIR]));
     const cliValidate = JSON.parse(cliValidateOut);
     assert(Array.isArray(cliValidate) && cliValidate.some((r: any) => r.name === 'test-prov/gpt-test' && r.status === 'verified'), 'cli validate-models: records selected model only after Standard probes pass');
     assert(!cliValidateOut.includes('test-key-123') && !cliValidateOut.includes('test-key-456'), 'cli validate-models: redacts provider API keys');
+    assert(createHash('sha256').update(fs.readFileSync(cliValidationConfigPath)).digest('hex') === cliValidationConfigBefore, 'cli validate-models: default read-only validation does not rewrite config.json');
     new ConfigManager(TEST_DIR).updateModel('test-prov', 'gpt-5.5', { vision: false, description: 'CLI stale text-only validation metadata' });
-    const cliVisionValidateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['validate-models', '--selected', 'test-prov/gpt-5.5', '--root', TEST_DIR]));
+    const cliVisionValidateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['validate-models', '--selected', 'test-prov/gpt-5.5', '--persist', '--root', TEST_DIR]));
     const cliVisionValidate = JSON.parse(cliVisionValidateOut);
     const cliVisionModel = new ConfigManager(TEST_DIR).findModel('gpt-5.5');
     assert(Array.isArray(cliVisionValidate) && cliVisionValidate.some((r: any) => r.name === 'test-prov/gpt-5.5' && r.vision_input === true), 'cli validate-models: confirms GPT-5.5 vision input through a vision task probe');
@@ -2498,6 +2580,7 @@ async function main() {
   taskAgent.config.upsertProvider('subagent-binding-b', 'https://subagent-b.invalid/v1', 'binding-b-key');
   taskAgent.config.addModelToProvider('subagent-binding-a', 'shared-child-model', 'Shared child A', 'Duplicate-name binding fixture A');
   taskAgent.config.addModelToProvider('subagent-binding-b', 'shared-child-model', 'Shared child B', 'Duplicate-name binding fixture B');
+  registerOfflineFixtureModel(taskAgent, 'test-model');
   const bindingA = taskAgent.config.providers().find(provider => provider.name === 'subagent-binding-a')!;
   const bindingB = taskAgent.config.providers().find(provider => provider.name === 'subagent-binding-b')!;
   taskAgent.setModel(`deployment:${encodeURIComponent(bindingB.id)}:${encodeURIComponent('shared-child-model')}`);
@@ -2529,13 +2612,20 @@ async function main() {
   const worker = taskAgent.subagents.get('worker');
   assert(createdSub.includes('subagent first result') && createdSub.includes('[Subagent accepted]'), 'Agent task compatibility: accepts immediately then awaits peer result for direct API callers');
   assert(worker?.status === 'completed', 'Agent task: completed status recorded');
-  assert(worker?.model === 'test-model' && worker?.inputMode === 'next' && worker?.agentMode === 'plan', 'Agent task: preserves requested model/input/mode');
+  assert(
+    (worker?.model === 'test-model' || worker?.model?.includes('test-model'))
+      && worker?.inputMode === 'next'
+      && worker?.agentMode === 'plan',
+    'Agent task: preserves requested model/input/mode',
+  );
   assert(fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'index.ts'), 'utf-8').includes("model: { type: 'string', description:")
     && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('const inheritedModel = this.activeDeployment()')
     && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('normalizeSubagentModelSelection'), 'Agent task model: exposes an explicit model contract and defaults to the parent resolved deployment');
   const agentOnlySubagentRoot = path.join(TEST_DIR, 'agent-only-subagent-runtime');
   fs.rmSync(agentOnlySubagentRoot, { recursive: true, force: true });
   const agentOnlyTask = new Agent(agentOnlySubagentRoot, { agentOnly: true });
+  registerOfflineFixtureModel(agentOnlyTask, 'agent-only-model');
+  agentOnlyTask.setModel('agent-only-model');
   const agentOnlyProvider = new FakeProvider(['agent-only subagent result']);
   (agentOnlyTask as unknown as { engineModel: () => FakeProvider }).engineModel = () => agentOnlyProvider;
   const agentOnlyResult = await agentOnlyTask.handleSubagent(JSON.stringify({ name: 'agent-only-worker', prompt: 'Execute from a headless runtime.', model: 'agent-only-model' }));
@@ -3532,6 +3622,7 @@ async function main() {
   const noWorkspaceTokens = await scopedAgent.process('should be blocked');
   assert(noWorkspaceTokens.map(t => t.text).join('').includes('Workspace required'), 'workspace chat: process requires selected workspace');
   const pureAgent = new Agent(path.join(TEST_DIR, 'pure-agent-runtime'), { agentOnly: true });
+  registerOfflineFixtureModel(pureAgent, 'pure-agent-test-model');
   pureAgent.setModel('pure-agent-test-model');
   const pureProvider = new FakeProvider(['PURE_AGENT_NO_WORKSPACE_OK']);
   (pureAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => pureProvider;
@@ -3539,6 +3630,7 @@ async function main() {
   assert(pureTokens.map(t => t.text).join('').includes('PURE_AGENT_NO_WORKSPACE_OK') && pureAgent.workspace.current === null, 'pure Agent mode: process runs without workspace dependency');
 
   const formatAgent = new Agent(path.join(TEST_DIR, 'format-agent-runtime'), { agentOnly: true });
+  registerOfflineFixtureModel(formatAgent, 'format-agent-test-model');
   formatAgent.setModel('format-agent-test-model');
   const formatProvider = new FakeProvider(['<think>hidden reasoning</think>\n做了什么\n- visible result\n</think>\nfinal']);
   (formatAgent as unknown as { engineModel: () => FakeProvider }).engineModel = () => formatProvider;
@@ -3548,6 +3640,7 @@ async function main() {
   assert(!formatAgent.chatMessages.some(m => m.content.includes('</think>') || m.content.includes('hidden reasoning')), 'agent output: stores sanitized assistant messages');
 
   const linkedPlanAgent = new Agent(path.join(TEST_DIR, 'linked-plan-agent-runtime'));
+  registerOfflineFixtureModel(linkedPlanAgent, 'linked-plan-test-model');
   linkedPlanAgent.createInternalWorkspace('linked-plan-auto-write');
   linkedPlanAgent.setModel('linked-plan-test-model');
   linkedPlanAgent.setMode('plan');
@@ -3567,6 +3660,7 @@ async function main() {
 
   const reactivatingRoot = path.join(TEST_DIR, 'reactivating-agent-runtime');
   const reactivatingAgent = new Agent(reactivatingRoot, { agentOnly: true });
+  registerOfflineFixtureModel(reactivatingAgent, 'reactivating-agent-test-model');
   const reactivatingWorkspace = reactivatingAgent.createInternalWorkspace('goal-sequence-workspace');
   reactivatingAgent.setModel('reactivating-agent-test-model');
   const reactivatingProvider = new FakeProvider(['Not done yet.', 'Goal Complete!']);

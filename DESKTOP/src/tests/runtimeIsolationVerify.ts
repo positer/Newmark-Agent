@@ -164,6 +164,24 @@ async function verifyConversationCacheObservesExternalWrites(): Promise<void> {
   }
 }
 
+async function verifyWorkspaceRegistryReloadsExternalChanges(): Promise<void> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-workspace-registry-refresh-'));
+  const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-workspace-registry-external-'));
+  try {
+    const host = new Agent(root);
+    const peer = new Agent(root);
+    const added = peer.addExternalWorkspace(externalRoot);
+    assert.ok(added, 'peer entrypoint registers the external workspace');
+    const refreshed = host.refreshWorkspaceRegistryFromStorage();
+    assert.equal(refreshed?.path, path.resolve(externalRoot), 'host reload follows the shared persisted current workspace');
+    assert.ok(host.workspace.external.some(item => path.resolve(item.path) === path.resolve(externalRoot)),
+      'host reload sees a workspace created by another entrypoint without restart');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(externalRoot, { recursive: true, force: true });
+  }
+}
+
 async function verifyWorkspaceSelectionCoordination(): Promise<void> {
   const calls: string[] = [];
   const releases = new Map<string, () => void>();
@@ -580,7 +598,11 @@ async function verifyCooperativeStopSettlesInterrupted(): Promise<void> {
     const events: AgentWorkEvent[] = [];
     kernel.subscribe(event => events.push(event));
     const options: ConversationKernelRunOptions = {
-      mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'guide', engine: 'opencode',
+      // This fixture exercises cooperative cancellation through the stubbed
+      // OpenCode transport, not model selection. Keep the model empty so the
+      // fail-closed invalid-model contract does not mask the cancellation
+      // signal under test.
+      mode: 'build', model: '', intelligence: 'medium', inputMode: 'guide', engine: 'opencode',
     };
 
     const running = kernel.prompt('abort me cooperatively', stopTarget, options, 'steer');
@@ -605,7 +627,7 @@ async function verifyCooperativeStopSettlesInterrupted(): Promise<void> {
 
     const unrelatedAbort = new Agent(root, { agentOnly: true });
     unrelatedAbort.engine = 'opencode';
-    unrelatedAbort.setModel('test-model');
+    unrelatedAbort.setModel('');
     (unrelatedAbort as unknown as {
       processOpencode(prompt: string, signal?: AbortSignal): Promise<StreamToken[]>;
     }).processOpencode = async (): Promise<StreamToken[]> => {
@@ -1994,6 +2016,7 @@ async function main(): Promise<void> {
   await verifyStableWorkspaceIds();
   await verifyCrossHostWorkspaceRegistryIsolation();
   await verifyConversationCacheObservesExternalWrites();
+  await verifyWorkspaceRegistryReloadsExternalChanges();
   await verifyWorkspaceSelectionCoordination();
   await verifyWorkspaceSelectionCircuitBreaker();
   await verifyColdSnapshotBindsTargetWorkspace();

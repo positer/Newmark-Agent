@@ -141,6 +141,7 @@ class CapacityWslClient implements WslTargetRuntimeClient {
   async setWorkRunExpanded(): Promise<boolean> { return true; }
   async updateSetting(): Promise<void> {}
   async forceRestartRuntimeGroup(): Promise<void> {}
+  async forceStopRuntimeGroup(): Promise<'terminated'> { await this.stop(); return 'terminated'; }
 
   async snapshotTarget(): Promise<Record<string, unknown>> {
     return {
@@ -243,6 +244,11 @@ async function verifyElectronCapacity(): Promise<number> {
   assert.equal(busyPool.runtimeKeys().length, 2, 'Electron capacity rejection does not create a third entry'); assertions++;
   assert.equal(Array.from(busyClients.values()).reduce((sum, client) => sum + client.stops, 0), 0, 'Electron never kills an active runtime to make capacity'); assertions++;
   await busyPool.stopAll();
+  const forceTarget = target('electron-archive-force');
+  await busyPool.snapshot(forceTarget);
+  await busyPool.forceStopTarget(forceTarget);
+  assert.equal(busyPool.runtimeKeys().includes(normalizeConversationTarget(forceTarget).runtimeKey), false, 'Electron archive force-stop evicts a running target without a graceful-stop click'); assertions++;
+  assert.equal(busyClients.get(normalizeConversationTarget(forceTarget).runtimeKey)?.stops, 1, 'Electron archive force-stop terminates the target exactly once'); assertions++;
   return assertions;
 }
 
@@ -310,6 +316,11 @@ async function verifyWslCapacity(): Promise<number> {
   assert.equal(busyPool.runtimeKeys().length, 2, 'WSL capacity rejection does not create a third entry'); assertions++;
   assert.equal(Array.from(busyClients.values()).reduce((sum, client) => sum + client.stops, 0), 0, 'WSL never kills an active process group to make capacity'); assertions++;
   await busyPool.stopAll();
+  const forceTarget = target('wsl-archive-force');
+  await busyPool.snapshot(forceTarget);
+  await busyPool.forceStopTarget(forceTarget);
+  assert.equal(busyPool.runtimeKeys().includes(normalizeConversationTarget(forceTarget).runtimeKey), false, 'WSL archive force-stop evicts a running target without a graceful-stop click'); assertions++;
+  assert.equal(busyClients.get(normalizeConversationTarget(forceTarget).runtimeKey)?.stops, 1, 'WSL archive force-stop terminates the target exactly once'); assertions++;
   return assertions;
 }
 

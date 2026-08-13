@@ -92,9 +92,11 @@ export class ConfigManager {
   public rootPath: string;
   private config: Record<string, Record<string, ConfigEntry>>;
   private workspaceOverrides: Map<string, unknown>;
+  private readonly readOnly: boolean;
 
-  constructor(rootPath: string) {
+  constructor(rootPath: string, options: { readOnly?: boolean } = {}) {
     this.rootPath = rootPath;
+    this.readOnly = options.readOnly === true;
     this.workspaceOverrides = new Map();
     this.config = this.load();
   }
@@ -111,6 +113,7 @@ export class ConfigManager {
         const raw = JSON.parse(readJsonText(cp));
         const normalized = normalizeConfigShape(raw, true);
         if (isCorruptConfig(raw, normalized)) {
+          if (this.readOnly) return defaultConfig();
           this.backupConfig(cp, 'invalid-shape');
           return this.writeRecoveredConfig(cp);
         }
@@ -118,7 +121,7 @@ export class ConfigManager {
           // Provider ids are routing identities, so legacy/malformed catalogs must
           // not wait for an unrelated settings save before becoming collision-safe.
           try {
-            fs.writeFileSync(cp, JSON.stringify(normalized, null, 2), 'utf-8');
+            if (!this.readOnly) fs.writeFileSync(cp, JSON.stringify(normalized, null, 2), 'utf-8');
           } catch {
             // A read-only root may still be used for this process. The normalized
             // in-memory catalog remains safe even when the migration cannot persist.
@@ -126,6 +129,7 @@ export class ConfigManager {
         }
         return normalized;
       } catch {
+        if (this.readOnly) return defaultConfig();
         this.backupConfig(cp, 'invalid-json');
         return this.writeRecoveredConfig(cp);
       }
@@ -181,11 +185,13 @@ export class ConfigManager {
   }
 
   save(): void {
+    if (this.readOnly) return;
     const j = JSON.stringify(this.config, null, 2);
     fs.writeFileSync(path.join(this.rootPath, 'config.json'), j, 'utf-8');
   }
 
   saveTo(targetPath: string): void {
+    if (this.readOnly) return;
     const j = JSON.stringify(this.config, null, 2);
     fs.writeFileSync(targetPath, j, 'utf-8');
   }
@@ -421,6 +427,7 @@ export class ConfigManager {
   }
 
   private writeRecoveredConfig(configPath: string): Record<string, Record<string, ConfigEntry>> {
+    if (this.readOnly) return defaultConfig();
     const config = loadExampleConfig();
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
@@ -428,6 +435,7 @@ export class ConfigManager {
   }
 
   private backupConfig(configPath: string, reason: string): void {
+    if (this.readOnly) return;
     try {
       if (!fs.existsSync(configPath)) return;
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -448,13 +456,13 @@ export interface ModelValidationSummary {
   error?: { code: string; message: string };
 }
 
-export function ensureRootConfig(rootPath: string): void {
+export function ensureRootConfig(rootPath: string, options: { readOnly?: boolean } = {}): void {
   const configPath = path.join(rootPath, 'config.json');
   if (fs.existsSync(configPath)) {
-    new ConfigManager(rootPath);
+    new ConfigManager(rootPath, options);
     return;
   }
-  new ConfigManager(rootPath).save();
+  new ConfigManager(rootPath, options).save();
 }
 
 function normalizeConfigShape(raw: unknown, withDefaults: boolean): Record<string, Record<string, ConfigEntry>> {
@@ -868,7 +876,10 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
     general: {
       tone: { _description: "Conversation style", _type: "choice", _values: ["strict_simple","casual_friendly"], value: "strict_simple" },
       language: { _description: "Default language", _type: "choice", _values: ["en","zh","auto"], value: "auto" },
-      close_behavior: { _description: "Close behavior", _type: "choice", _values: ["minimize","exit"], value: "minimize" },
+      // A first-run desktop window must have a deterministic close/exit
+      // contract. Users who explicitly choose minimize-to-tray keep that
+      // choice, but a fresh install must not hide the process on OS close.
+      close_behavior: { _description: "Close behavior", _type: "choice", _values: ["minimize","exit"], value: "exit" },
       default_input: { _description: "Default input mode", _type: "choice", _values: ["guide","next"], value: "guide" },
       auto_archive_on_close: { _description: "Auto archive on close", _type: "boolean", value: true },
     },

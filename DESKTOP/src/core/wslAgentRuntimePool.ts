@@ -75,6 +75,7 @@ export class WslAgentRuntimePool {
   private hostToolHandler: WslHostToolHandler | null = null;
   private restarting = new Set<string>();
   private disposing = new Set<string>();
+  private forceStopPromises = new Map<string, Promise<void>>();
   private capacityTail: Promise<void> = Promise.resolve();
   private accessSequence = 0;
 
@@ -403,6 +404,55 @@ export class WslAgentRuntimePool {
       if (entry) this.disposing.add(key);
     });
     if (entry) await this.stopEntry(entry);
+  }
+
+  /** Hard-stop a target for destructive lifecycle actions such as archive. */
+  async forceStopTarget(target: ConversationRuntimeTarget): Promise<void> {
+    const normalized = normalizeConversationTarget(target);
+    const existing = this.forceStopPromises.get(normalized.runtimeKey);
+    if (existing) return existing;
+    const operation = this.forceStopTargetInternal(normalized);
+    this.forceStopPromises.set(normalized.runtimeKey, operation);
+    try {
+      await operation;
+    } finally {
+      if (this.forceStopPromises.get(normalized.runtimeKey) === operation) {
+        this.forceStopPromises.delete(normalized.runtimeKey);
+      }
+    }
+  }
+
+  private async forceStopTargetInternal(target: NormalizedConversationTarget): Promise<void> {
+    let entry: RuntimeEntry | undefined;
+    await this.serializeCapacity(async () => {
+      entry = this.entries.get(target.runtimeKey);
+      if (entry) this.disposing.add(target.runtimeKey);
+    });
+    if (!entry) return;
+    const intent = entry.stopIntent || {
+      runId: entry.lastRunId,
+      generation: entry.lastGeneration,
+      checkpointed: false,
+      forcePromise: null,
+    };
+    if (!entry.stopIntent) entry.stopIntent = intent;
+    try {
+      await this.forceTerminateEntry(entry, intent);
+      if (entry.client.status().connected) {
+        if (entry.client.forceStopRuntimeGroup) await entry.client.forceStopRuntimeGroup();
+        else await entry.client.forceRestartRuntimeGroup();
+      }
+      if (entry.client.status().connected) {
+        throw new Error(`WSL runtime ${target.runtimeKey} remained connected after force stop`);
+      }
+      if (this.entries.get(target.runtimeKey) === entry) {
+        this.entries.delete(target.runtimeKey);
+        entry.unsubscribe();
+        entry.client.setHostToolHandler(null);
+      }
+    } finally {
+      this.disposing.delete(target.runtimeKey);
+    }
   }
 
   async stopAll(): Promise<void> {

@@ -86,6 +86,7 @@ export interface AgentRuntimeOptions {
   actorId?: string;
   conversationId?: string;
   runtimeLifecycleRole?: RuntimeLifecycleRole;
+  readOnlyConfig?: boolean;
   linkedPlanAccess?: {
     get(conversationId?: string): LinkedPlanState;
     update(markdown: string, expectedRevision: number, actorId: string, conversationId?: string): LinkedPlanState;
@@ -577,7 +578,7 @@ export class Agent {
     this.subagentName = options.subagentName || '';
     this.subagentPrompt = options.subagentPrompt || '';
     this.linkedPlanAccess = options.linkedPlanAccess;
-    this.config = new ConfigManager(rootPath);
+    this.config = new ConfigManager(rootPath, { readOnly: options.readOnlyConfig === true });
     this.compressionHistoryArchive = new CompressionHistoryArchive(rootPath);
     this.contextV2 = new AgentContextManager(rootPath, this.config);
     this.agentRunService = this.config.contextFlag('agent_runtime_v2')
@@ -1049,7 +1050,14 @@ export class Agent {
     }
     const previousAuto = this.model === 'auto' ? this.resolvedDeployment : null;
     const qualified = parseDeploymentSelectionValue(requested);
-    const current = qualified ? this.config.findDeployment(qualified) : (requested ? this.config.findModel(requested) : undefined);
+    const legacyQualified = requested.includes('/')
+      ? this.config.allModels().filter(model =>
+        `${model.provider_id}/${model.name}` === requested || `${model.provider}/${model.name}` === requested,
+      )
+      : [];
+    const current = qualified
+      ? this.config.findDeployment(qualified)
+      : (legacyQualified.length === 1 ? legacyQualified[0] : (requested ? this.config.findModel(requested) : undefined));
     this.model = current?.name || requested;
     this.fixedDeployment = current ? this.deploymentRef(current) : qualified;
     this.resolvedDeployment = null;
@@ -2350,6 +2358,7 @@ export class Agent {
     runId: string,
     status: Exclude<ConversationWorkRunStatus, 'running'>,
     endedAt = this.nowIso(),
+    errorMessage = '',
   ): boolean {
     const run = this.workRuns.find(item => item.runId === String(runId || ''));
     if (!run) return false;
@@ -2394,7 +2403,9 @@ export class Agent {
     this.enforceGoalTerminalInvariant(status, goalAudit);
     this.emitWorkEvent({
       type: status === 'completed' ? 'done' : status === 'error' ? 'error' : 'status',
-      content: status === 'force_interrupted' ? 'Force interrupted.' : status === 'interrupted' ? 'Interrupted.' : 'Response complete.',
+      content: status === 'error'
+        ? (String(errorMessage || '').trim() || 'Agent run failed.')
+        : status === 'force_interrupted' ? 'Force interrupted.' : status === 'interrupted' ? 'Interrupted.' : 'Response complete.',
       status,
       runId: run.runId,
       conversationId: run.target.conversationId,
@@ -2559,6 +2570,11 @@ export class Agent {
     this.activeAgentKernelRuntime = runtime;
     this.awaitingAgentKernelRuntime = false;
     if (!runtime) return;
+    // A user stop can arrive while the Native Kernel is still being loaded or
+    // assembling its first context. In that handoff window
+    // abortActiveKernelRun() can only abort the outer process signal; make a
+    // runtime that attaches afterwards observe the already-aborted state too.
+    if (this.activeProcessAbortController?.signal.aborted) runtime.abort?.();
     const queued = this.pendingAgentKernelQueue.splice(0);
     for (const item of queued) {
        const accepted = this.forwardAgentKernelQueueMessage(item.content, item.queueMode, item.clientMessageId, item.runId, item.images, item.hiddenUserInput);
@@ -3836,6 +3852,26 @@ export class Agent {
     return selected;
   }
 
+  refreshWorkspaceRegistryFromStorage(): WorkspaceInfo | null {
+    const before = JSON.stringify({
+      internal: this.workspace.internal,
+      external: this.workspace.external,
+      current: this.workspace.current,
+    });
+    const selected = this.workspace.reloadFromStorage();
+    const after = JSON.stringify({
+      internal: this.workspace.internal,
+      external: this.workspace.external,
+      current: this.workspace.current,
+    });
+    if (before === after) return selected;
+    if (selected) this.config.loadWorkspaceConfig(selected.path);
+    else this.config.clearWorkspaceOverrides();
+    this.workspaceConversations.clear();
+    this.loadWorkspaceConversationState();
+    return selected;
+  }
+
   setConversation(id: string): string {
     const clean = this.safeConversationId(id || 'default');
     // Conversation runners may bind a target workspace directly before their
@@ -4942,28 +4978,48 @@ export class Agent {
     return { text, hiddenUserInput: true, goalContinuation: true };
   }
 
-  private writeSessionArchive(messages: ChatMessage[], mode: string, model: string): string {
+  private buildSessionArchive(messages: ChatMessage[], mode: string, model: string, archiveDir: string): { filename: string; markdown: string } {
     const stamp = new Date().toISOString().replace(/[:.]/g, '').replace('T', '_').replace('Z', '');
-    const archiveDir = this.archiveDir();
-    fs.mkdirSync(archiveDir, { recursive: true });
-    const filename = `session_${stamp}.md`;
-    const outPath = path.join(archiveDir, filename);
-
-    let md = `# Newmark Session — ${stamp}\n\n`;
-    md += `**Mode**: ${mode}\n**Model**: ${model}\n`;
-    md += `**Messages**: ${messages.length}\n\n---\n\n`;
-    if (this.goal) md += `**Goal**: ${this.goal.objective}\n\n`;
+    // Millisecond-only names collide when a user clicks several archive
+    // buttons in one event-loop turn. Keep the readable timestamp and add a
+    // cryptographic suffix so every request owns an independent file.
+    const filename = `session_${stamp}_${crypto.randomUUID().slice(0, 8)}.md`;
+    let markdown = `# Newmark Session — ${stamp}\n\n`;
+    markdown += `**Mode**: ${mode}\n**Model**: ${model}\n`;
+    markdown += `**Messages**: ${messages.length}\n\n---\n\n`;
+    if (this.goal) markdown += `**Goal**: ${this.goal.objective}\n\n`;
     for (const msg of messages) {
-      md += `**[${msg.role}] ${msg.timestamp}**\n\n${msg.content}\n\n`;
+      markdown += `**[${msg.role}] ${msg.timestamp}**\n\n${msg.content}\n\n`;
       for (const attachment of hydrateConversationImageAttachments(this.rootPath, msg.attachments)) {
         const archived = archiveConversationImageAttachment(this.rootPath, archiveDir, attachment);
         if (!archived) continue;
         const alt = archived.name.replace(/[\]\r\n]/g, ' ').trim() || 'Submitted image';
-        md += `![${alt}](${archived.relativePath})\n\n`;
+        markdown += `![${alt}](${archived.relativePath})\n\n`;
       }
     }
-    fs.writeFileSync(outPath, md, 'utf-8');
-    return filename;
+    return { filename, markdown };
+  }
+
+  private writeSessionArchive(messages: ChatMessage[], mode: string, model: string): string {
+    const archiveDir = this.archiveDir();
+    fs.mkdirSync(archiveDir, { recursive: true });
+    const archive = this.buildSessionArchive(messages, mode, model, archiveDir);
+    fs.writeFileSync(path.join(archiveDir, archive.filename), archive.markdown, 'utf-8');
+    return archive.filename;
+  }
+
+  private async writeSessionArchiveAsync(messages: ChatMessage[], mode: string, model: string, archiveDir = this.archiveDir()): Promise<string> {
+    const archive = this.buildSessionArchive(messages, mode, model, archiveDir);
+    await fs.promises.mkdir(archiveDir, { recursive: true });
+    const outPath = path.join(archiveDir, archive.filename);
+    const tempPath = `${outPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    try {
+      await fs.promises.writeFile(tempPath, archive.markdown, 'utf-8');
+      await fs.promises.rename(tempPath, outPath);
+    } finally {
+      try { await fs.promises.unlink(tempPath); } catch {}
+    }
+    return archive.filename;
   }
 
   archiveSession(): string {
@@ -5036,6 +5092,112 @@ export class Agent {
       this.loadWorkspaceConversationState();
     }
     return filename;
+  }
+
+  /**
+   * Non-blocking archive writer used by the desktop IPC path. The conversation
+   * state merge remains synchronous and lock-protected, but the potentially
+   * large markdown payload and manifest use promise-based filesystem I/O so
+   * independent workspaces can archive in parallel without freezing Electron.
+   */
+  async archiveConversationAsync(conversationId: string): Promise<string | null> {
+    // Archive payloads intentionally start in parallel. The final state
+    // mutation below operates on the latest locked disk snapshot, so no
+    // JavaScript queue is needed for independent targets in one workspace.
+    return await this.archiveConversationAsyncUnlocked(conversationId);
+  }
+
+  private async archiveConversationAsyncUnlocked(conversationId: string): Promise<string | null> {
+    const ws = this.workspace.current;
+    if (!ws) return null;
+    const clean = this.safeConversationId(conversationId || 'default');
+    const stateKey = this.workspaceConversationStateKey(clean);
+    if (!stateKey) return null;
+    const memoryKey = `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${clean}`;
+    const archiveDir = path.join(ws.path, 'archive');
+    const workspacePrefix = this.workspaceConversationPrefix() || '';
+    const archiveMode = this.modeName();
+    const archiveModel = this.model;
+    // readStoredConversationState returns a cache object. Clone it before any
+    // asynchronous gap so concurrent archive requests cannot mutate one
+    // another's source snapshot.
+    const cachedStored = this.readStoredConversationState(ws);
+    const stored: StoredConversationState = JSON.parse(JSON.stringify(cachedStored || {}));
+    const persisted = stored.conversations?.[stateKey];
+    if (persisted) this.normalizeConversationTree(persisted);
+    const memory = this.workspaceConversations.get(memoryKey);
+    const persistedMessagesAvailable = persisted?.chatMessages !== undefined;
+    const sourceMessages = persisted?.chatMessages ?? memory?.chatMessages ?? [];
+    const sourceHistory = persistedMessagesAvailable
+      ? (persisted?.history ?? [])
+      : (memory?.history ?? persisted?.history ?? []);
+    const messages = this.normalizeConversationChatMessages(sourceMessages, sourceHistory);
+    const filename = await this.writeSessionArchiveAsync(messages, archiveMode, archiveModel, archiveDir);
+    const archiveEntry: StoredConversationEntry = persisted ? JSON.parse(JSON.stringify(persisted)) : {
+      title: this.titleFromMessages(messages, clean),
+      chatMessages: messages,
+      history: sourceHistory,
+      plan: memory?.plan,
+      linkedPlan: memory?.linkedPlan,
+      subagentState: memory?.subagentState,
+      workRuns: memory?.workRuns,
+      continuations: memory?.continuations,
+      updatedAt: new Date().toISOString(),
+    };
+    const manifest: ConversationArchiveManifest = {
+      version: 2,
+      kind: 'newmark-conversation-archive',
+      archivedAt: new Date().toISOString(),
+      conversationId: clean,
+      workspaceId: ws.id,
+      workspaceName: ws.name,
+      workspacePath: ws.path,
+      workspaceInternal: ws.isInternal,
+      statePrefix: workspacePrefix,
+      entry: this.conversationEntryForDisk(archiveEntry),
+    };
+    const manifestPath = this.archiveManifestPath(path.join(archiveDir, filename));
+    const manifestTempPath = `${manifestPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    try {
+      await fs.promises.writeFile(manifestTempPath, JSON.stringify(manifest, null, 2), 'utf-8');
+      await fs.promises.rename(manifestTempPath, manifestPath);
+    } finally {
+      try { await fs.promises.unlink(manifestTempPath); } catch {}
+    }
+
+    this.finalizeAsyncConversationArchive(clean, stateKey, memoryKey, ws);
+    return filename;
+  }
+
+  private finalizeAsyncConversationArchive(
+    clean: string,
+    stateKey: string,
+    memoryKey: string,
+    ws: WorkspaceInfo,
+  ): void {
+    let nextActiveId = '';
+    this.mutateStoredConversationState(ws, latest => {
+      latest.conversations = latest.conversations || {};
+      delete latest.conversations[stateKey];
+      // Derive the target prefix from the captured state key rather than the
+      // Agent's possibly changed foreground workspace.
+      const prefix = stateKey.slice(0, Math.max(0, stateKey.length - clean.length - 1)) + '-';
+      const remaining = Object.keys(latest.conversations)
+        .filter(key => !prefix || key.startsWith(prefix))
+        .map(key => key.slice(prefix.length))
+        .filter(Boolean);
+      const currentActiveId = this.safeConversationId(latest.activeConversationId || this.activeConversationId || 'default');
+      if (clean === currentActiveId) latest.activeConversationId = remaining[0] || 'default';
+      nextActiveId = latest.activeConversationId || remaining[0] || 'default';
+      return latest;
+    });
+    this.workspaceConversations.delete(memoryKey);
+    const duplicateMemoryKey = `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${clean}`;
+    this.workspaceConversations.delete(duplicateMemoryKey);
+    if (clean === this.safeConversationId(this.activeConversationId || 'default')) {
+      this.activeConversationId = nextActiveId || 'default';
+      this.loadWorkspaceConversationState();
+    }
   }
 
   private listStoredConversationIds(stored: StoredConversationState): string[] {
@@ -5636,9 +5798,9 @@ export class Agent {
     return all.filter(m => m.provider_id === (provider?.id || providerId));
   }
 
-  async validateModels(selectedNames?: string[]): Promise<ModelValidationResult[]> {
+  async validateModels(selectedNames?: string[], options: { persist?: boolean } = {}): Promise<ModelValidationResult[]> {
     if (this.modelValidationPromise) return this.modelValidationPromise;
-    const validation = this.runModelValidation(selectedNames);
+    const validation = this.runModelValidation(selectedNames, options.persist !== false);
     this.modelValidationPromise = validation;
     try {
       return await validation;
@@ -5659,7 +5821,7 @@ export class Agent {
     };
   }
 
-  private async runModelValidation(selectedNames?: string[]): Promise<ModelValidationResult[]> {
+  private async runModelValidation(selectedNames?: string[], persist = true): Promise<ModelValidationResult[]> {
     const selectedModels = this.config.modelsForSelections(selectedNames);
     if (!selectedModels.length) {
       this.modelValidationProgress = {
@@ -5670,7 +5832,10 @@ export class Agent {
     }
     const results: ModelValidationResult[] = [];
     const catalogByProvider = new Map<string, Awaited<ReturnType<LLMProvider['modelCatalog']>>>();
-    const cache = new FileModelValidationCache(this.rootPath);
+    // Read-only CLI validation may reuse already persisted, redacted evidence
+    // without rewriting it. This keeps the no-mutation contract while making
+    // repeated release/user checks local when the seven-day record is fresh.
+    const cache = new FileModelValidationCache(this.rootPath, { readOnly: !persist });
     const checksPerModel = 11;
     let currentModel = '';
     let currentModelChecks = 0;
@@ -5803,7 +5968,7 @@ export class Agent {
         completedModels: this.modelValidationProgress.completedModels + 1,
       };
     }
-    this.config.save();
+    if (persist) this.config.save();
     this.modelValidationProgress = {
       ...this.modelValidationProgress,
       running: false,
@@ -6083,7 +6248,13 @@ export class Agent {
       const text = typeof input === 'string' ? input : String(input.text || '');
       const inputEnvelope = typeof input === 'string' ? null : input as AgentPromptMessage & { clientMessageId?: string; runId?: string };
       const hiddenUserInput = inputEnvelope?.hiddenUserInput === true;
-      this.ensureUsableModelSelection();
+      // An empty selection may be repaired to the configured default, but an
+      // explicitly requested fixed model must remain visible to the
+      // fail-closed availability check below. Otherwise a typo such as
+      // provider-that-does-not-exist/missing-model silently becomes the first
+      // configured fixture/default deployment.
+      const explicitFixedModel = this.model !== '' && this.model !== 'auto';
+      if (!explicitFixedModel) this.ensureUsableModelSelection();
       const clientMessageId = String(inputEnvelope?.clientMessageId || '').trim();
       const inputRunId = String(inputEnvelope?.runId || this.activeWorkRunId || '').trim();
       const rawImages = typeof input === 'string' ? [] : (Array.isArray(input.images) ? input.images : []);
@@ -6177,7 +6348,16 @@ export class Agent {
         await this.evaluateAndSwitch(displayText, inputEnvelope?.routePolicy);
       }
       if (this.model && this.modelIsUnavailable(this.model)) {
+        const requestedModel = this.model;
         this.switchToFallbackModel();
+        if (this.modelIsUnavailable(this.model)) {
+          const message = `[Error] Model '${requestedModel || 'unknown'}' is unavailable or not configured. Select a configured model or enable a valid provider before sending.`;
+          this.status = 'error';
+          // Do not return an error token as if it were a successful assistant
+          // response. The normal catch/finalizer path must publish an error
+          // terminal event and keep the work run out of completed state.
+          throw new Error(message);
+        }
       }
 
       // Use external opencode CLI engine
@@ -7237,12 +7417,12 @@ export class Agent {
     }
   }
 
-  async maybeCompress(msgs: Array<Record<string, unknown>>, provider?: LLMProvider | null, signal?: AbortSignal, compressionModel?: string, force = false): Promise<void> {
-    if (signal?.aborted) return;
-    if (!this.config.getBool('context', 'auto_compress')) return;
+  async maybeCompress(msgs: Array<Record<string, unknown>>, provider?: LLMProvider | null, signal?: AbortSignal, compressionModel?: string, force = false): Promise<boolean> {
+    if (signal?.aborted) return false;
+    if (!this.config.getBool('context', 'auto_compress')) return false;
     const total = msgs.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length), 0);
     const budget = this.compressionBudget(msgs);
-    if (budget.estimatedTokens < budget.triggerTokens && !force) return;
+    if (budget.estimatedTokens < budget.triggerTokens && !force) return false;
     if (!force && this.lastCompression && String(msgs[0]?.content || '').includes(this.lastCompression.summary)) {
       const baselineChars = Math.max(0, Number(this.lastCompression.compressedChars || 0));
       const baselineTokens = Math.max(0, Number(this.lastCompression.compressedTokens || 0));
@@ -7250,11 +7430,11 @@ export class Agent {
       const tokenGrowth = baselineTokens ? Math.max(0, budget.estimatedTokens - baselineTokens) : Number.POSITIVE_INFINITY;
       const minCharGrowth = Math.max(12_000, Math.floor(baselineChars * 0.25));
       const minTokenGrowth = Math.max(1_024, Math.floor(budget.triggerTokens * 0.2));
-      if (charGrowth < minCharGrowth && tokenGrowth < minTokenGrowth) return;
+      if (charGrowth < minCharGrowth && tokenGrowth < minTokenGrowth) return false;
     }
     const originalMessageCount = msgs.length;
     const configuredKeepLast = this.config.getNum('context', 'keep_recent_messages') || 10;
-    if (msgs.length <= 1) return;
+    if (msgs.length <= 1) return false;
 
     // Reserve room for the one-time post-compression continuation anchor so
     // adding it cannot push a near-limit request back over the target budget.
@@ -7262,7 +7442,7 @@ export class Agent {
     const recentBudget = Math.max(64, budget.targetTokens - budget.summaryTokens - continuationAnchorTokens);
     const recent = this.recentContextSuffix(msgs, configuredKeepLast, recentBudget);
     const recentStart = Math.max(0, msgs.length - recent.length);
-    if (recentStart <= 0) return;
+    if (recentStart <= 0) return false;
 
     // The first history item is usually the first user task, not foundational
     // context. Keeping it forever makes an old task more salient after every
@@ -7279,7 +7459,7 @@ export class Agent {
       compressionModel || this.activeModelName(),
       currentInstruction,
     );
-    if (signal?.aborted) return;
+    if (signal?.aborted) return false;
     const compressed: Array<Record<string, unknown>> = [{
       role: 'system',
       content: compression.summary,
@@ -7306,6 +7486,7 @@ export class Agent {
     };
     this.pushCompressionCacheEntry(compression.summary, middle, compression.model, compression.fallback);
     this.persistCompressedHistory(compression.summary, recent.length, msgs);
+    return true;
   }
 
   private async buildCompressionSummary(

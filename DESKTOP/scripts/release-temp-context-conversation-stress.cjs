@@ -7,7 +7,8 @@ const { waitForPromotedMainUi } = require('./cdp-main-ui-ready');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const desktopRoot = path.join(repoRoot, 'DESKTOP');
-const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
+const exePath = path.resolve(process.env.NEWMARK_TEMP_STRESS_EXE
+  || path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe'));
 const { MemoryLabManager } = require(path.join(desktopRoot, 'dist', 'core', 'memoryLab.js'));
 
 function sleep(ms) {

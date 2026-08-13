@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { createPaintScheduler, executeAction } = require("../src/app");
+const { createPaintScheduler, executeAction, resolveTuiWorkspacePath } = require("../src/app");
 const { createCoreRuntimeAdapter, mergeProviderConfig } = require("../src/adapters/core-runtime-adapter");
 const { createDesktopPreloadAdapter } = require("../src/adapters/desktop-preload-adapter");
 const { createMockNewmarkAdapter, createSnapshot } = require("../src/adapters/mock-newmark-adapter");
@@ -35,6 +35,7 @@ const {
   rootMenuItems,
   returnToConversationSelection,
   requestConversationStop,
+  resolveThemeAppearance,
   selectConversationModel,
   selectIntelligenceTier,
   selectFlowWorkflow,
@@ -57,6 +58,16 @@ test("initial state opens the real conversation surface without an overview plac
   assert.equal(state.messages.length, 2);
   assert.equal(state.adapterKind, "mock");
   assert.equal(targetKey(state.target), "workspace-newmark-agent-demo::release-readiness-review");
+});
+
+test("explicit TUI root defaults the workspace to that root while --workspace remains an escape hatch", () => {
+  const root = path.join(__dirname, ".tmp-root with spaces", "根");
+  const external = path.join(__dirname, ".tmp-external-workspace");
+  assert.equal(path.resolve(resolveTuiWorkspacePath(["--root", root], { root })), path.resolve(root));
+  assert.equal(
+    path.resolve(resolveTuiWorkspacePath(["--root", root, "--workspace", external], { root })),
+    path.resolve(external)
+  );
 });
 
 test("real core registers and selects the requested current-directory workspace", () => {
@@ -1249,6 +1260,44 @@ test("light theme replaces the dark canvas with a readable light palette", () =>
   const rows = stripAnsi(output).split("\n");
   assert.equal(rows.length, 32);
   assert.ok(rows.every((row) => visibleLength(row) === 100));
+});
+
+test("light theme hydrates readable colors when the shared config has no TUI color extension", () => {
+  const adapter = createMockNewmarkAdapter();
+  const getState = adapter.getState.bind(adapter);
+  adapter.getState = (target) => {
+    const snapshot = getState(target);
+    snapshot.darkMode = "light";
+    snapshot.fontColor = "";
+    snapshot.backgroundColor = "";
+    return snapshot;
+  };
+  const state = createState({ adapter });
+  const output = render(state, 100, 32);
+
+  assert.equal(state.theme, "light");
+  assert.equal(state.settings.personalization.fontColor, "#1F2937");
+  assert.equal(state.settings.personalization.backgroundColor, "#F0F2F8");
+  assert.match(output, /\u001b\[38;2;31;41;55m/);
+  assert.match(output, /\u001b\[48;2;240;242;248m/);
+});
+
+test("light theme keeps the canvas painted when persisted colors have low contrast", () => {
+  const state = createState();
+  state.theme = "light";
+  state.settings.personalization.theme = "Light";
+  state.settings.personalization.fontColor = "#B7E4FF";
+  state.settings.personalization.backgroundColor = "#F0F2F8";
+  const output = render(state, 100, 32);
+
+  assert.deepEqual(resolveThemeAppearance("light", "#B7E4FF", "#F0F2F8"), {
+    theme: "light",
+    fontColor: "#1F2937",
+    backgroundColor: "#F0F2F8"
+  });
+  assert.match(output, /\u001b\[38;2;31;41;55m/);
+  assert.match(output, /\u001b\[48;2;240;242;248m/);
+  assert.doesNotMatch(output, /\u001b\[48;2;10;10;26m/);
 });
 
 test("sidebar icons occupy one portable fixed-width cell", () => {

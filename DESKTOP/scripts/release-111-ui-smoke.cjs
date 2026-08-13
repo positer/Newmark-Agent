@@ -193,7 +193,7 @@ function ensureNoReleaseProcess() {
           id: 'release111-ui',
           name: 'release111-ui',
           shell: 'powershell',
-          cwd: 'C:/tmp',
+          cwd: ${JSON.stringify(root)},
           active: true,
           buffer: 'TAKEOVER_UI_OUTPUT'
         }

@@ -217,6 +217,14 @@ async function main(): Promise<void> {
     const callsAfterFirst = chatCalls + streamCalls + protocolBodies.length;
     const second = await agent.validateModels(['Fixture/fixture-model']);
     ok(second[0].status === 'verified' && chatCalls + streamCalls + protocolBodies.length === callsAfterFirst, 'fresh seven-day validation evidence is reused without provider calls');
+    const configBeforeReadOnlyValidation = fs.readFileSync(path.join(root, 'config.json'));
+    const callsBeforeReadOnlyValidation = chatCalls + streamCalls + protocolBodies.length;
+    const readOnlyAgent = new Agent(root, { agentOnly: true, readOnlyConfig: true });
+    const readOnly = await readOnlyAgent.validateModels(['Fixture/fixture-model']);
+    ok(readOnly[0].status === 'verified'
+      && chatCalls + streamCalls + protocolBodies.length === callsBeforeReadOnlyValidation
+      && Buffer.compare(fs.readFileSync(path.join(root, 'config.json')), configBeforeReadOnlyValidation) === 0,
+    'read-only validation reuses durable evidence without provider calls or config writes');
     const validationProgress = agent.modelValidationStatus();
     ok(validationProgress.running === false && validationProgress.percent === 100 && validationProgress.completedChecks === validationProgress.totalChecks, 'model validation progress reaches an exact completed state');
     ok(validationProgress.totalModels === 1 && validationProgress.completedModels === 1 && validationProgress.recentChecks.length === 11, 'each cached or executed model check advances the per-model progress ledger');

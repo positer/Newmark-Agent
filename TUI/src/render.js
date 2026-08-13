@@ -1,7 +1,13 @@
 "use strict";
 
 const data = require("./data");
-const { activeConversationModelLabel, filteredCommands, memoryTagOptions, selectedMemoryDetail } = require("./state");
+const {
+  activeConversationModelLabel,
+  filteredCommands,
+  memoryTagOptions,
+  resolveThemeAppearance,
+  selectedMemoryDetail
+} = require("./state");
 const { SETTINGS_CATEGORIES, displaySettingValue, settingsRows } = require("./settings-schema");
 
 const ESC = "\u001b[";
@@ -94,11 +100,16 @@ function palette(state) {
   };
   const colors = state.theme === "light" ? light : dark;
   const appearance = state.settings?.personalization;
-  if (!appearance || contrastRatio(appearance.fontColor, appearance.backgroundColor) < 4.5) {
+  if (!appearance) {
     return { ...colors, paint: "", final: `${ESC}0m` };
   }
-  const [fr, fg, fb] = hexRgb(appearance.fontColor);
-  const [br, bg, bb] = hexRgb(appearance.backgroundColor);
+  const resolvedAppearance = resolveThemeAppearance(
+    state.theme,
+    appearance.fontColor,
+    appearance.backgroundColor
+  );
+  const [fr, fg, fb] = hexRgb(resolvedAppearance.fontColor);
+  const [br, bg, bb] = hexRgb(resolvedAppearance.backgroundColor);
   const paint = `${ESC}38;2;${fr};${fg};${fb}m${ESC}48;2;${br};${bg};${bb}m`;
   return {
     ...colors,
@@ -951,10 +962,15 @@ function contrastRatio(foreground, background) {
 
 function personalizationPreview(state, p) {
   const appearance = state.settings.personalization;
-  const [fr, fg, fb] = hexRgb(appearance.fontColor);
-  const [br, bg, bb] = hexRgb(appearance.backgroundColor);
+  const resolvedAppearance = resolveThemeAppearance(
+    state.theme,
+    appearance.fontColor,
+    appearance.backgroundColor
+  );
+  const [fr, fg, fb] = hexRgb(resolvedAppearance.fontColor);
+  const [br, bg, bb] = hexRgb(resolvedAppearance.backgroundColor);
   const sample = `${ESC}38;2;${fr};${fg};${fb}m${ESC}48;2;${br};${bg};${bb}m Newmark Aa 中 123 ${p.reset}`;
-  const contrast = contrastRatio(appearance.fontColor, appearance.backgroundColor);
+  const contrast = contrastRatio(resolvedAppearance.fontColor, resolvedAppearance.backgroundColor);
   return [
     `${p.bold}Live color preview${p.reset}  ${sample}`,
     `${p.muted}Font request: ${appearance.fontFamily} · contrast ${contrast.toFixed(2)}:1 ${contrast >= 4.5 ? "PASS" : "LOW"}${p.reset}`,

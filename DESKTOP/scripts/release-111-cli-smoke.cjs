@@ -31,7 +31,14 @@ function writeJson(dir, name, value) {
   return file;
 }
 
-function runPackaged(args, cwd = appRoot, extraEnv = {}, timeoutMs = 120000) {
+function parseToolResult(stdout) {
+  const envelope = JSON.parse(stdout);
+  return envelope && typeof envelope === 'object' && envelope.tool && Object.prototype.hasOwnProperty.call(envelope, 'result')
+    ? envelope.result
+    : envelope;
+}
+
+function runPackaged(args, cwd = appRoot, extraEnv = {}, timeoutMs = 120000, acceptedExitCodes = []) {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-111-cli-run-'));
   const stdoutPath = path.join(workDir, 'stdout.txt');
   const stderrPath = path.join(workDir, 'stderr.txt');
@@ -73,7 +80,7 @@ function runPackaged(args, cwd = appRoot, extraEnv = {}, timeoutMs = 120000) {
       const stdout = fs.existsSync(stdoutPath) ? fs.readFileSync(stdoutPath, 'utf8') : '';
       const stderr = fs.existsSync(stderrPath) ? fs.readFileSync(stderrPath, 'utf8') : '';
       try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
-      if (code !== 0) {
+      if (code !== 0 && !acceptedExitCodes.includes(code)) {
         reject(new Error(`CLI ${args.join(' ')} exited ${code}. stdout=${stdout || psStdout} stderr=${stderr || psStderr}`));
         return;
       }
@@ -171,7 +178,7 @@ async function runOptionalSshWorkspaceSmoke(root, argsDir) {
     return;
   }
   const list = await runPackaged(['tool', 'ssh_workspace', '--args-file', writeJson(argsDir, 'ssh-list.json', { action: 'list' }), '--root', root], appRoot);
-  const parsedList = JSON.parse(list.stdout);
+  const parsedList = parseToolResult(list.stdout);
   if (!parsedList.ok || !Array.isArray(parsedList.connections)) fail(`ssh_workspace list shape invalid: ${list.stdout}`);
   if (!host || !user) {
     log('OpenSSH tool ok; VM SSH real link skipped because NEWMARK_RELEASE_SSH_HOST and NEWMARK_RELEASE_SSH_USER are not set');
@@ -187,7 +194,7 @@ async function runOptionalSshWorkspaceSmoke(root, argsDir) {
     remote_path: remotePath,
     remote_root: remotePath,
   }), '--root', root], appRoot, {}, 180000);
-  const parsedCreate = JSON.parse(create.stdout);
+  const parsedCreate = parseToolResult(create.stdout);
   if (!parsedCreate.ok || parsedCreate.workspace?.kind !== 'ssh' || !parsedCreate.workspace?.remotePcHash) {
     fail(`ssh_workspace real VM create failed: ${create.stdout}`);
   }
@@ -215,23 +222,24 @@ async function runOptionalSshWorkspaceSmoke(root, argsDir) {
     writeConfig(root, mock.port);
 
     const repoPath = repoRoot;
-    const fileAudit = await runPackaged(['tool', 'file_audit', '--args-file', writeJson(argsDir, 'file-audit.json', { path: path.join(repoPath, 'README.md'), remote: true }), '--root', repoPath], appRoot);
-    const parsedFileAudit = JSON.parse(fileAudit.stdout);
+    const fileAudit = await runPackaged(['tool', 'file_audit', '--args-file', writeJson(argsDir, 'file-audit.json', { path: path.join(repoPath, 'README.md'), include_remote: true }), '--root', repoPath], appRoot);
+    const parsedFileAudit = parseToolResult(fileAudit.stdout);
     if (!parsedFileAudit.ok || parsedFileAudit.kind !== 'file' || parsedFileAudit.git?.tracked !== true) fail(`file_audit did not return local tracked file metadata: ${fileAudit.stdout}`);
     if (parsedFileAudit.remote?.provider !== 'github' || parsedFileAudit.remote?.repository !== 'positer/Newmark-Agent') fail(`file_audit did not return GitHub remote metadata: ${fileAudit.stdout}`);
     log('file_audit ok');
 
     const branch = await runPackaged(['tool', 'git_branch', '--args-file', writeJson(argsDir, 'branch.json', { action: 'current' }), '--root', repoPath], appRoot);
-    if (!branch.stdout.trim()) fail(`git_branch current returned empty output: ${branch.stdout}`);
-    log(`git_branch current ok: ${branch.stdout.trim()}`);
+    const branchResult = parseToolResult(branch.stdout);
+    if (!String(branchResult || '').trim()) fail(`git_branch current returned empty output: ${branch.stdout}`);
+    log(`git_branch current ok: ${String(branchResult).trim()}`);
 
     const fork = await runPackaged(['tool', 'gh_fork', '--args-file', writeJson(argsDir, 'fork.json', { action: 'status' }), '--root', repoPath], appRoot);
-    const parsedFork = JSON.parse(fork.stdout);
+    const parsedFork = parseToolResult(fork.stdout);
     if (typeof parsedFork.isFork !== 'boolean' || !String(parsedFork.nameWithOwner || '').includes('/') || !['github-cli', 'git-remote-fallback'].includes(String(parsedFork.source || ''))) fail(`gh_fork status shape invalid: ${fork.stdout}`);
     log('gh_fork status ok');
 
     const security = await runPackaged(['tool', 'repo_security_audit', '--args-file', writeJson(argsDir, 'security.json', { path: repoPath }), '--root', repoPath], appRoot, {}, 180000);
-    const parsedSecurity = JSON.parse(security.stdout);
+    const parsedSecurity = parseToolResult(security.stdout);
     if (!parsedSecurity.remote_repository_detected || parsedSecurity.remote?.repo?.visibility !== 'public' || parsedSecurity.security_review?.required !== true) {
       fail(`repo_security_audit did not require public remote review: ${security.stdout}`);
     }
@@ -241,13 +249,13 @@ async function runOptionalSshWorkspaceSmoke(root, argsDir) {
     log('repo_security_audit ok');
 
     const move = await runPackaged(['tool', 'computer_use', '--args-file', writeJson(argsDir, 'computer-move.json', { action: 'move', x: 10, y: 20, dry_run: true }), '--root', repoPath], appRoot);
-    const parsedMove = JSON.parse(move.stdout);
+    const parsedMove = parseToolResult(move.stdout);
     if (!parsedMove.ok || parsedMove.action !== 'move' || parsedMove.dry_run !== true || parsedMove.x !== 10 || parsedMove.y !== 20) fail(`computer_use dry-run move failed: ${move.stdout}`);
-    const target = await runPackaged(['tool', 'computer_use', '--args-file', writeJson(argsDir, 'computer-target.json', { action: 'click', target_id: 'ui-1', dry_run: true }), '--root', repoPath], appRoot);
-    const parsedTarget = JSON.parse(target.stdout);
+    const target = await runPackaged(['tool', 'computer_use', '--args-file', writeJson(argsDir, 'computer-target.json', { action: 'click', target_id: 'ui-1', dry_run: true }), '--root', repoPath], appRoot, {}, 120000, [4]);
+    const parsedTarget = parseToolResult(target.stdout);
     if (parsedTarget.ok !== false || !String(parsedTarget.error || '').includes('Call computer_use observe first')) fail(`computer_use target_id guard failed: ${target.stdout}`);
     const scroll = await runPackaged(['tool', 'computer_use', '--args-file', writeJson(argsDir, 'computer-scroll.json', { action: 'scroll', x: 10, y: 20, scroll_y: 240, dry_run: true }), '--root', repoPath], appRoot);
-    const parsedScroll = JSON.parse(scroll.stdout);
+    const parsedScroll = parseToolResult(scroll.stdout);
     if (!parsedScroll.ok || parsedScroll.action !== 'scroll' || parsedScroll.scroll_y !== 240 || parsedScroll.dry_run !== true) fail(`computer_use dry-run scroll failed: ${scroll.stdout}`);
     log('computer_use dry-run, scroll, and target_id guard ok');
     await runOptionalSshWorkspaceSmoke(root, argsDir);

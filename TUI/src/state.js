@@ -5,6 +5,55 @@ const { createMockNewmarkAdapter } = require("./adapters/mock-newmark-adapter");
 const { targetKey, validateSnapshot } = require("./adapters/newmark-contract");
 const { SETTINGS_CATEGORIES, settingsRows } = require("./settings-schema");
 const INTELLIGENCE_TIERS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
+const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
+const THEME_APPEARANCE_DEFAULTS = Object.freeze({
+  dark: Object.freeze({ fontColor: "#E6EAF2", backgroundColor: "#0A0A1A" }),
+  light: Object.freeze({ fontColor: "#1F2937", backgroundColor: "#F0F2F8" })
+});
+
+function normalizedTheme(value) {
+  return String(value || "dark").trim().toLowerCase() === "light" ? "light" : "dark";
+}
+
+function normalizedHexColor(value) {
+  const candidate = String(value || "").trim();
+  return HEX_COLOR_PATTERN.test(candidate) ? candidate.toUpperCase() : "";
+}
+
+function contrastRatio(foreground, background) {
+  const luminance = (value) => {
+    const channels = [0, 2, 4].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16) / 255)
+      .map((channel) => channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  };
+  const foregroundLuminance = luminance(foreground.slice(1));
+  const backgroundLuminance = luminance(background.slice(1));
+  return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
+    / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+}
+
+/**
+ * Resolve persisted appearance without allowing a legacy/mismatched color
+ * pair to disable the whole terminal canvas. Explicit colors are retained
+ * when readable; otherwise the closest theme-safe pair is used for rendering.
+ */
+function resolveThemeAppearance(theme, fontColor, backgroundColor) {
+  const resolvedTheme = normalizedTheme(theme);
+  const defaults = THEME_APPEARANCE_DEFAULTS[resolvedTheme];
+  let foreground = normalizedHexColor(fontColor) || defaults.fontColor;
+  let background = normalizedHexColor(backgroundColor) || defaults.backgroundColor;
+  if (contrastRatio(foreground, background) < 4.5) {
+    if (contrastRatio(defaults.fontColor, background) >= 4.5) {
+      foreground = defaults.fontColor;
+    } else if (contrastRatio(foreground, defaults.backgroundColor) >= 4.5) {
+      background = defaults.backgroundColor;
+    } else {
+      foreground = defaults.fontColor;
+      background = defaults.backgroundColor;
+    }
+  }
+  return { theme: resolvedTheme, fontColor: foreground, backgroundColor: background };
+}
 
 function applySnapshot(state, snapshot) {
   const valid = validateSnapshot(snapshot);
@@ -53,15 +102,15 @@ function applyThemeAppearance(state, selection) {
     : String(selection || "Dark").toLowerCase() === "system"
       ? "System"
       : "Dark";
-  const resolvedTheme = label === "Light" ? "light" : "dark";
-  state.theme = resolvedTheme;
+  const appearance = resolveThemeAppearance(label, "", "");
+  state.theme = appearance.theme;
   state.settings.personalization.theme = label;
-  state.settings.personalization.fontColor = resolvedTheme === "light" ? "#1F2937" : "#E6EAF2";
-  state.settings.personalization.backgroundColor = resolvedTheme === "light" ? "#F0F2F8" : "#0A0A1A";
+  state.settings.personalization.fontColor = appearance.fontColor;
+  state.settings.personalization.backgroundColor = appearance.backgroundColor;
   return {
     theme: label.toLowerCase(),
-    fontColor: state.settings.personalization.fontColor,
-    backgroundColor: state.settings.personalization.backgroundColor
+    fontColor: appearance.fontColor,
+    backgroundColor: appearance.backgroundColor
   };
 }
 
@@ -101,6 +150,7 @@ function createState(options = {}) {
     }
     return [name, workflow || { name, components: [] }];
   }));
+  const appearance = resolveThemeAppearance(snapshot.darkMode, snapshot.fontColor, snapshot.backgroundColor);
   return {
     adapter,
     adapterKind: adapter.kind,
@@ -135,7 +185,7 @@ function createState(options = {}) {
     flowSelectionIndex: 0,
     flowByConversation: initialFlow ? { [`${target.workspaceId}::${target.conversationId}`]: initialFlow } : {},
     currentFlow: initialFlow,
-    theme: String(snapshot.darkMode || "dark").toLowerCase() === "light" ? "light" : "dark",
+    theme: appearance.theme,
     overlay: null,
     settingChoiceTab: "",
     settingChoiceKey: "",
@@ -161,6 +211,7 @@ function createState(options = {}) {
       : `Newmark core connected · ${workspaces.find((item) => item.id === target.workspaceId)?.path || target.workspaceId}`,
     busy: false,
     runningConversationKeys: new Set(),
+    sendQueueByConversation: new Map(),
     stopStageByConversation: new Map(),
     tick: 0,
     messages: snapshot.chatMessages.map((item) => ({ ...item })),
@@ -199,8 +250,8 @@ function createState(options = {}) {
       personalization: {
         theme: { light: "Light", system: "System", dark: "Dark" }[String(snapshot.darkMode || "dark").toLowerCase()] || "Dark",
         fontFamily: snapshot.fontFamily || "Terminal default",
-        fontColor: snapshot.fontColor || "#E6EAF2",
-        backgroundColor: snapshot.backgroundColor || (String(snapshot.darkMode).toLowerCase() === "light" ? "#F0F2F8" : "#0A0A1A"),
+        fontColor: appearance.fontColor,
+        backgroundColor: appearance.backgroundColor,
         glassAlpha: Number(snapshot.glassAlpha || 0.85)
       },
       runtime: {
@@ -1285,6 +1336,7 @@ module.exports = {
   activateMenu,
   activateMemorySelection,
   applyThemeAppearance,
+  resolveThemeAppearance,
   applySnapshot,
   applyConversationResult,
   beginAutomationCreate,

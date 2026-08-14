@@ -68,7 +68,7 @@ async function run(): Promise<void> {
   'new conversation applies the cold activation snapshot without starting a redundant runtime state request');
   assert.ok(archiveCurrent.includes('window.archiveConv(currentId)')
     && !archiveCurrent.includes('runningConversationRecord'),
-  'the active archive action uses the same immediate-removal path regardless of runtime state');
+  'the active archive action uses the same waiting-spinner path regardless of runtime state');
   assert.ok(!archiveConv.includes('A running conversation cannot be archived.')
     && !archiveConv.includes('workspaceConversations.splice(restoreAt'),
   'archive never blocks a running target or performs a failure rollback');
@@ -149,13 +149,12 @@ async function run(): Promise<void> {
 
   assert.deepEqual(archiveCalls, ['archive-a', 'archive-b', 'archive-c', 'archive-running'],
     'rapid clicks dispatch all archive requests immediately, including a running target');
-  assert.ok(optimisticElapsedMs < 30, `four optimistic archive updates should complete within one frame, got ${optimisticElapsedMs} ms`);
-  assert.deepEqual(state.workspaceConversations.ws.map((item: any) => item.id), ['default'],
-    'successful-looking archive targets disappear immediately without waiting for backend settlement');
-  assert.equal(renderCount, 4, 'each accepted click paints its own immediate result');
-  assert.equal(backgroundSyncCount, 0, 'replacement activation never joins the synchronous archive click path');
-  await wait(5);
-  assert.equal(backgroundSyncCount, 1, 'rapid active-row removals coalesce to one background sync for the final replacement');
+  assert.ok(optimisticElapsedMs < 30, `four archive dispatches should complete within one frame, got ${optimisticElapsedMs} ms`);
+  assert.deepEqual(state.workspaceConversations.ws.map((item: any) => item.id), ['archive-a', 'archive-b', 'archive-c', 'archive-running'],
+    'archive targets stay visible (button spins) until the backend confirms');
+  assert.equal(Object.keys(state.conversationArchivePending).length, 4, 'each accepted click records its pending archive state');
+  assert.equal(renderCount, 4, 'each accepted click repaints its row with the archiving spinner');
+  assert.equal(backgroundSyncCount, 0, 'the waiting archive path never joins a synchronous background sync');
 
   requests.get('archive-c')!.resolve({ ok: true, fileName: 'c.md', conversationId: 'archive-c' });
   requests.get('archive-a')!.resolve({ ok: true, fileName: 'a.md', conversationId: 'archive-a' });
@@ -163,6 +162,8 @@ async function run(): Promise<void> {
   requests.get('archive-running')!.resolve({ ok: true, fileName: 'running.md', conversationId: 'archive-running' });
   await wait(80);
 
+  assert.deepEqual(state.workspaceConversations.ws.map((item: any) => item.id), ['default'],
+    'target rows are removed only after the backend settles their archive');
   assert.equal(listCount, 1, 'closely completed requests coalesce only the non-blocking archive-list refresh');
   assert.equal(Object.keys(state.conversationArchivePending).length, 0, 'successful requests clear their independent rollback records');
   assert.equal(notices.filter(item => item.type === 'success').length, 4, 'every successful archive keeps its own receipt');
@@ -172,14 +173,14 @@ async function run(): Promise<void> {
   state.conversations = state.workspaceConversations.ws;
   state.activeConversation = 0;
   windowObject.archiveConv('retain-on-error');
-  assert.deepEqual(state.workspaceConversations.ws.map((item: any) => item.id), ['default'],
-    'a failing request is still optimistic and never stalls the click path');
+  assert.deepEqual(state.workspaceConversations.ws.map((item: any) => item.id), ['retain-on-error'],
+    'a failing request keeps the row visible (button spins) until the backend settles');
   requests.get('retain-on-error')!.resolve({ ok: false, error: 'synthetic archive failure' });
   await Promise.resolve();
   await Promise.resolve();
 
-  assert.deepEqual(state.workspaceConversations.ws.map((item: any) => item.id), ['default'],
-    'a negative IPC receipt never rolls the optimistically removed conversation back into view');
+  assert.deepEqual(state.workspaceConversations.ws.map((item: any) => item.id), ['retain-on-error'],
+    'a negative IPC receipt keeps the row (button restored) instead of removing it');
   assert.ok(notices.some(item => item.type === 'error' && item.message.includes('synthetic archive failure')),
     'a negative IPC receipt is surfaced as an archive error');
 

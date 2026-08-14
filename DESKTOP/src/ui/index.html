@@ -1059,6 +1059,19 @@ button.left-ws-item {
 .conv-archive-btn:hover,
 .conv-rename-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-bright); }
 
+.conv-archive-btn.archiving { cursor: default; border-color: var(--accent); }
+.conv-archive-spinner {
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: conv-archive-spin 0.7s linear infinite;
+}
+@keyframes conv-archive-spin {
+  to { transform: rotate(360deg); }
+}
+
 .conv-item.dragging { opacity: 0.58; }
 .conv-item.drag-over { border-color: var(--accent); background: rgba(91,120,255,0.14); }
 .conv-rename-input {
@@ -6101,6 +6114,7 @@ var NEWMARK_I18N = {
     'model.yes': 'yes',
     'model.notChecked': 'not checked',
     'archive.current': 'Archive current chat',
+    'archive.archiving': 'Archiving...',
     'archive.empty': 'No archives yet.',
     'archive.loading': 'Loading workspace archives...',
     'archive.unavailable': 'Archive list unavailable',
@@ -6802,6 +6816,7 @@ var NEWMARK_I18N = {
     'model.yes': '是',
     'model.notChecked': '未校验',
     'archive.current': '归档当前对话',
+    'archive.archiving': '归档中...',
     'archive.empty': '暂无归档。',
     'archive.loading': '正在加载工作区归档...',
     'archive.unavailable': '归档列表不可用',
@@ -18509,9 +18524,13 @@ function renderConversations() {
       ? '<span class="conv-runtime-badge ' + escAttr(String(runtimeState.status)) + '">' + esc(String(runtimeState.status)) + '</span>' : '';
     var branchCommIcon = conv.branchCommunication
       ? '<span class="conv-branch-comm-icon" title="' + escAttr(t('conversation.branchCommunicationBadge')) + '" aria-label="' + escAttr(t('conversation.branchCommunicationBadge')) + '">' + iconSvg('git-branch', t('conversation.branchCommunicationBadge')) + '</span>' : '';
+    var archivePendingKey = currentWorkspaceKey() + '::' + String(conv.id);
+    var archiveBtn = state.conversationArchivePending[archivePendingKey]
+      ? '<button class="conv-archive-btn archiving" title="' + escAttr(t('archive.archiving')) + '" disabled><span class="conv-archive-spinner"></span></button>'
+      : '<button class="conv-archive-btn" onclick="event.stopPropagation();window.archiveConv(this.closest(&quot;.conv-item&quot;).getAttribute(&quot;data-conversation-id&quot;))" title="' + escAttr(t('conversation.archive')) + '">' + iconOnly('archive', t('conversation.archive')) + '</button>';
     div.innerHTML = '<span class="conv-summary" title="' + escAttr(String(conv.id || '')) + '">' + esc(displaySummary) + (conv.messageCount ? ' (' + esc(String(conv.messageCount)) + ')' : '') + '</span>' + branchCommIcon + runtimeBadge +
       '<button class="conv-rename-btn" onclick="event.stopPropagation();window.editConversationName(' + i + ')" title="' + escAttr(t('conversation.rename')) + '">' + iconOnly('pencil', t('conversation.rename')) + '</button>' +
-      '<button class="conv-archive-btn" onclick="event.stopPropagation();window.archiveConv(this.closest(&quot;.conv-item&quot;).getAttribute(&quot;data-conversation-id&quot;))" title="' + escAttr(t('conversation.archive')) + '">' + iconOnly('archive', t('conversation.archive')) + '</button>' +
+      archiveBtn +
       '<button class="conv-pin-btn' + (conv.pinned ? ' active' : '') + '" onclick="event.stopPropagation();window.toggleConversationPinned(' + i + ')" title="' + escAttr(conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '">' + iconOnly('pin', conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '</button>';
     div.onclick = function(idx) { return function() { window.switchConversation(idx); }; }(i);
     div.addEventListener('keydown', window.handleConversationKey);
@@ -18808,45 +18827,45 @@ window.archiveConv = function(conversationId) {
       orderIds: rollbackOrder,
       chatHtml: priorActiveId === targetId && els['chat-area'] ? els['chat-area'].innerHTML : ''
     };
-    convs.splice(idx, 1);
-    if (!convs.length) convs.push({ id: 'default', summary: t('workspace.defaultConversation'), archived: false, active: true });
-    var nextActiveId = priorActiveId && priorActiveId !== targetId ? priorActiveId : String(convs[Math.min(idx, convs.length - 1)].id || 'default');
-    var nextActiveIndex = Math.max(0, convs.findIndex(function(item) { return String(item && item.id || '') === nextActiveId; }));
-    for (var i = 0; i < convs.length; i++) convs[i].active = i === nextActiveIndex;
-    state.workspaceActiveConversation[workspaceKey] = nextActiveIndex;
-    state.activeConversation = nextActiveIndex;
-    state.conversations = convs;
-    if (priorActiveId === targetId) {
-      state.activeBackendConversationId = nextActiveId;
-      if (els['chat-area']) els['chat-area'].innerHTML = '';
-    }
-    // Archiving is a destructive handoff: remove the target's Flow takeover
-    // locally at click time as well as removing its conversation row. The
-    // backend cancellation/manifest write is asynchronous; a late Flow
-    // promise must not leave a visible running bubble over the replacement
-    // conversation while the archive is already in flight.
-    if (state.flowTakeovers) {
-      var archivedFlowKey = runtimeKeyFor(targetRuntime.workspaceId, targetRuntime.conversationId);
-      var archivedFlowRecord = state.flowTakeovers[archivedFlowKey];
-      if (archivedFlowRecord) {
-        archivedFlowRecord.running = false;
-        archivedFlowRecord.paused = false;
-        archivedFlowRecord.runtimeLease = null;
-        archivedFlowRecord.queueLease = null;
-        delete state.flowTakeovers[archivedFlowKey];
-      }
-      if (priorActiveId === targetId && window.renderFlowTakeover) {
-        window.renderFlowTakeover(false, '', { target: targetRuntime });
-      }
-    }
-    setConversationRuntimeState(targetRuntime, 'idle', '');
-    setWorking(!!runningConversationRecord(activeConversationId()));
+    // 归档中：不立即剔除行，按钮转圈等待；后端完成归档后再剔除前端。
     renderConversations();
-    if (priorActiveId === targetId) scheduleConversationArchiveActiveSync(workspaceKey);
     var archivePromise = api.archive ? api.archive(targetRuntime) : Promise.reject(new Error('Archive API unavailable'));
     archivePromise.then(function(receipt) {
       if (!receipt || receipt.ok !== true) throw new Error((receipt && receipt.error) || 'Archive failed');
       delete state.conversationArchivePending[pendingKey];
+      // 后端完成归档：现在才剔除前端行 + 切换 active + 清理 Flow takeover。
+      var currentConvs = currentWorkspaceConversations();
+      var currentIdx = currentConvs.findIndex(function(item) { return String(item && item.id || 'default') === targetId; });
+      if (currentIdx >= 0) currentConvs.splice(currentIdx, 1);
+      if (!currentConvs.length) currentConvs.push({ id: 'default', summary: t('workspace.defaultConversation'), archived: false, active: true });
+      var nextActiveId = priorActiveId && priorActiveId !== targetId ? priorActiveId : String(currentConvs[Math.min(Math.max(currentIdx, 0), currentConvs.length - 1)].id || 'default');
+      var nextActiveIndex = Math.max(0, currentConvs.findIndex(function(item) { return String(item && item.id || '') === nextActiveId; }));
+      for (var i = 0; i < currentConvs.length; i++) currentConvs[i].active = i === nextActiveIndex;
+      state.workspaceActiveConversation[workspaceKey] = nextActiveIndex;
+      state.activeConversation = nextActiveIndex;
+      state.conversations = currentConvs;
+      if (priorActiveId === targetId) {
+        state.activeBackendConversationId = nextActiveId;
+        if (els['chat-area']) els['chat-area'].innerHTML = '';
+      }
+      if (state.flowTakeovers) {
+        var archivedFlowKey = runtimeKeyFor(targetRuntime.workspaceId, targetRuntime.conversationId);
+        var archivedFlowRecord = state.flowTakeovers[archivedFlowKey];
+        if (archivedFlowRecord) {
+          archivedFlowRecord.running = false;
+          archivedFlowRecord.paused = false;
+          archivedFlowRecord.runtimeLease = null;
+          archivedFlowRecord.queueLease = null;
+          delete state.flowTakeovers[archivedFlowKey];
+        }
+        if (priorActiveId === targetId && window.renderFlowTakeover) {
+          window.renderFlowTakeover(false, '', { target: targetRuntime });
+        }
+      }
+      setConversationRuntimeState(targetRuntime, 'idle', '');
+      setWorking(!!runningConversationRecord(activeConversationId()));
+      renderConversations();
+      if (priorActiveId === targetId) scheduleConversationArchiveActiveSync(workspaceKey);
       var optimisticArchive = {
         id: receipt.fileName,
         name: receipt.fileName,
@@ -18874,10 +18893,8 @@ window.archiveConv = function(conversationId) {
       scheduleConversationArchiveRefresh(workspaceKey);
     }).catch(function(err) {
       delete state.conversationArchivePending[pendingKey];
-      // Keep the optimistic removal authoritative for this renderer session.
-      // A failed IPC receipt is surfaced, but never resurrects the row under
-      // the user's pointer; the next explicit workspace refresh is the only
-      // path allowed to reconcile a failed destructive operation.
+      // 归档失败：恢复按钮，保留行（不再乐观剔除）。
+      renderConversations();
       showUiNotice('[Archive] ' + t('workspace.saveFailed') + ': ' + (err.message || String(err)), 'error', 'archive-failed-' + targetId);
     });
   }

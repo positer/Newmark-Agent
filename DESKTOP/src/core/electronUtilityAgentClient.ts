@@ -1166,6 +1166,11 @@ export class ElectronUtilityAgentClient {
     return await this.request('checkpoint', { target: this.target }, 5_000) as Record<string, unknown>;
   }
 
+  async contextCompress(options: { keepRecent?: number; force?: boolean } = {}): Promise<Record<string, unknown>> {
+    await this.start();
+    return await this.request('context_compress', { target: this.target, options }, 120_000) as Record<string, unknown>;
+  }
+
   async rateAutoRoute(score: number, routeId = ''): Promise<UtilityAutoRouteRatingResult> {
     await this.start();
     return await this.request('rate_auto_route', {

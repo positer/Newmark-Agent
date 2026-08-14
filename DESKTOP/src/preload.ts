@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('api', {
   sendMessage: (message: string | Record<string, unknown>, target?: string | Record<string, unknown>) => ipcRenderer.invoke('agent:send', message, target),
   enqueueGuide: (envelope: Record<string, unknown>) => ipcRenderer.invoke('agent:enqueueGuide', envelope),
   checkpointConversation: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:checkpointConversation', request),
+  compressContext: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:compressContext', request),
   rateAutoRoute: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:rateAutoRoute', request),
   stopConversation: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:stopConversation', request),
   setWorkRunExpanded: (request: Record<string, unknown>) => ipcRenderer.invoke('agent:setWorkRunExpanded', request),
@@ -31,11 +32,15 @@ contextBridge.exposeInMainWorld('api', {
   getConversationPlan: (conversationId?: string) => ipcRenderer.invoke('agent:getConversationPlan', conversationId),
   updateConversationPlan: (plan: Record<string, unknown>, conversationId?: string) => ipcRenderer.invoke('agent:updateConversationPlan', plan, conversationId),
   setConversationPinned: (id: string, pinned: boolean) => ipcRenderer.invoke('agent:setConversationPinned', id, pinned),
+  setConversationBranchCommunication: (target: string | Record<string, unknown>, enabled: boolean) => ipcRenderer.invoke('agent:setConversationBranchCommunication', target, enabled),
   renameConversation: (id: string, title: string) => ipcRenderer.invoke('agent:renameConversation', id, title),
   reorderConversations: (ids: string[]) => ipcRenderer.invoke('agent:reorderConversations', ids),
   browserRegisterGuest: (guestContentsId: number, target?: Record<string, unknown>) => ipcRenderer.invoke('browser:registerGuest', guestContentsId, target),
   onBrowserEnsureGuest: (callback: (target?: Record<string, unknown>) => void) => {
     ipcRenderer.on('browser:ensureGuest', (_event: unknown, target?: Record<string, unknown>) => callback(target));
+  },
+  onKeyboardCommand: (callback: (payload: Record<string, unknown>) => void) => {
+    ipcRenderer.on('keyboard:command', (_event: unknown, payload: Record<string, unknown>) => callback(payload));
   },
   browserControl: (request: Record<string, unknown>) => ipcRenderer.invoke('browser:control', request),
   computerUseState: (target?: Record<string, unknown>) => ipcRenderer.invoke('agent:computerUseState', target),
@@ -87,6 +92,7 @@ contextBridge.exposeInMainWorld('api', {
   selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
   executeBash: (cmd: string, shell: string, cwd: string) => ipcRenderer.invoke('agent:executeBash', cmd, shell, cwd),
   openExternal: (path: string) => ipcRenderer.invoke('agent:openExternal', path),
+  openWebUrl: (url: string) => ipcRenderer.invoke('app:openWebUrl', url),
   selectWorkspace: (id: string) => ipcRenderer.invoke('agent:selectWorkspace', id),
   createWorkspace: (name?: string) => ipcRenderer.invoke('agent:createWorkspace', name),
   createExternalWorkspace: (name: string, dirPath: string) => ipcRenderer.invoke('agent:createExternalWorkspace', name, dirPath),
@@ -115,6 +121,7 @@ contextBridge.exposeInMainWorld('api', {
   removeSkill: (name: string) => ipcRenderer.invoke('skills:remove', name),
   refreshSkills: () => ipcRenderer.invoke('skills:refresh'),
   listMcpServers: () => ipcRenderer.invoke('mcp:list'),
+  discoverDshCompatibility: () => ipcRenderer.invoke('dsh:discover'),
   upsertMcpServer: (input: Record<string, unknown>) => ipcRenderer.invoke('mcp:upsert', input),
   setMcpServerEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke('mcp:setEnabled', id, enabled),
   removeMcpServer: (id: string) => ipcRenderer.invoke('mcp:remove', id),

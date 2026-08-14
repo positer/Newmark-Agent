@@ -20,6 +20,7 @@ export interface ElectronTargetRuntimeClient {
   requestStop(runId?: string): Promise<UtilityAgentStopResult>;
   enqueueGuide(envelope: ConversationInputEnvelope): Promise<GuideReceipt>;
   checkpoint(): Promise<Record<string, unknown>>;
+  contextCompress?(options?: { keepRecent?: number; force?: boolean }): Promise<Record<string, unknown>>;
   rateAutoRoute?(score: number, routeId?: string): Promise<UtilityAutoRouteRatingResult>;
   setWorkRunExpanded(runId: string, expanded: boolean): Promise<boolean>;
   setMode?(mode: AgentMode): Promise<AgentMode>;
@@ -258,6 +259,21 @@ export class ElectronUtilityRuntimePool {
     }
     try {
       return await entry.client.checkpoint();
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async contextCompress(
+    target: ConversationRuntimeTarget,
+    options: { keepRecent?: number; force?: boolean } = {},
+  ): Promise<Record<string, unknown>> {
+    const entry = await this.acquire(normalizeConversationTarget(target));
+    try {
+      if (entry.stopIntent) return { ok: false, error: 'Context compression is unavailable while this conversation is stopping.' };
+      if (!entry.client.contextCompress) return { ok: false, error: 'Context compression is unavailable in this runtime.' };
+      entry.lastSnapshot = null;
+      return await entry.client.contextCompress(options);
     } finally {
       this.release(entry, true);
     }

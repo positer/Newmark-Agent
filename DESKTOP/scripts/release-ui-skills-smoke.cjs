@@ -7,7 +7,10 @@ const { spawn, spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
-const screenshotPath = path.join(repoRoot, 'archive', '2026-06-28-release-ui-skills-smoke.png');
+const dshScreenshotPath = path.join(repoRoot, 'archive', '20260813-release-ui-dsh-plugin-smoke.png');
+const mcpScreenshotPath = path.join(repoRoot, 'archive', '20260813-release-ui-mcp-management-smoke.png');
+const skillsScreenshotPath = path.join(repoRoot, 'archive', '20260813-release-ui-skills-smoke.png');
+const keyboardScreenshotPath = path.join(repoRoot, 'archive', '20260813-release-ui-keyboard-command-palette-smoke.png');
 const keepRoot = process.env.NEWMARK_KEEP_UI_SKILLS_SMOKE === '1';
 
 function log(message) {
@@ -108,7 +111,7 @@ async function waitFor(cdp, expression, timeoutMs, label) {
   fail(`Timed out waiting for ${label}; last=${JSON.stringify(lastValue)}`);
 }
 
-async function captureScreenshot(cdp) {
+async function captureScreenshot(cdp, screenshotPath) {
   await cdp.call('Page.bringToFront', {}, 10000);
   await cdp.call('Emulation.setDeviceMetricsOverride', {
     width: 1600,
@@ -177,15 +180,54 @@ function writeSkillSource(root) {
   return sourceDir.replace(/\\/g, '\\\\');
 }
 
+function writeDshFixture(root) {
+  const dshHome = path.join(root, 'DshHome');
+  const profile = path.join(dshHome, 'profiles', 'release-preview');
+  const bundle = path.join(profile, 'node_modules', 'release-dsh-bundle');
+  const marker = path.join(root, 'DSH-PLUGIN-EXECUTED.txt');
+  const secret = 'dsh-ui-secret-must-not-render';
+  fs.mkdirSync(bundle, { recursive: true });
+  fs.mkdirSync(path.join(root, 'node_modules', '@deepseek-ai', 'dsh'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.1.0-rc.ui-smoke' }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(profile, 'package.json'), JSON.stringify({
+    name: 'release-preview',
+    futureProfileField: { secret },
+    dsh: { profile: { bundles: ['release-dsh-bundle', 'missing-future-bundle'], futureProfileKey: true } },
+    dependencies: { 'release-dsh-bundle': '1.0.0', 'missing-future-bundle': 'next' },
+  }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(bundle, 'package.json'), JSON.stringify({
+    name: 'release-dsh-bundle',
+    version: '1.0.0-preview',
+    main: 'malicious.js',
+    dsh: { bundle: { patch: 'cordis.patch.yml', futureBundleKey: true } },
+  }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(bundle, 'malicious.js'), `require('fs').writeFileSync(${JSON.stringify(marker)}, 'executed')`, 'utf8');
+  fs.writeFileSync(path.join(bundle, 'cordis.patch.yml'), [
+    '- id: release-mcp',
+    "  name: '@deepseek-ai/dsh-mcp-client'",
+    '  config:',
+    '    serverName: DSH Release MCP',
+    '    transport: stdio',
+    '    command: npx',
+    "    args: ['-y', '@modelcontextprotocol/server-release']",
+    '    env:',
+    '      RELEASE_DSH_TOKEN: !!js process.env.RELEASE_DSH_TOKEN',
+    '',
+  ].join('\n'), 'utf8');
+  return { dshHome, marker, secret };
+}
+
 async function runUiCheck(root) {
   const port = Number(process.env.NEWMARK_UI_SKILLS_SMOKE_PORT || '49350');
   const sourceDirForJs = writeSkillSource(root);
+  const dshFixture = writeDshFixture(root);
   let child;
   let cdp;
   try {
     child = spawn(exePath, [`--remote-debugging-port=${port}`, `--user-data-dir=${path.join(root, 'ElectronData')}`, '--allow-multiple-instances', '--no-sandbox', '--root', root], {
       stdio: 'ignore',
       windowsHide: true,
+      env: { ...process.env, DSH_HOME: dshFixture.dshHome },
     });
     const target = await waitForTarget(port);
     log(`connected target: ${target.title || '(untitled)'} ${target.url || ''}`);
@@ -198,21 +240,127 @@ async function runUiCheck(root) {
 
     await waitFor(cdp, `(() => document.readyState === 'complete' && !!window.api && !!window.showPluginList && !!document.querySelector('#prompt'))()`, 30000, 'renderer ready');
 
-    await evaluate(cdp, `window.showPluginList()`, 30000);
+    const keyboardManifest = await evaluate(cdp, `window.getGuiCommandManifest && window.getGuiCommandManifest()`, 30000);
+    if (!keyboardManifest || keyboardManifest.schemaVersion !== 1 || !/^fnv1a-[0-9a-f]{8}$/.test(String(keyboardManifest.revision || '')) || keyboardManifest.commands.length < 50 || keyboardManifest.errors.length) {
+      fail(`invalid GUI command manifest: ${JSON.stringify(keyboardManifest)}`);
+    }
+    if (await evaluate(cdp, `document.documentElement.dataset.keyboardRegistry !== window.getGuiCommandManifest().revision`)) fail('GUI command registry was not initialized with its stable revision');
+    await evaluate(cdp, `(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key:'p', code:'KeyP', ctrlKey:true, shiftKey:true, bubbles:true, cancelable:true }));
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `window.commandSurfaceIsOpen() && document.activeElement?.id === 'command-search'`, 30000, 'command palette opens from Ctrl+Shift+P and receives focus');
+    await evaluate(cdp, `(() => {
+      const input = document.querySelector('#command-search');
+      input.value = 'DSH';
+      input.dispatchEvent(new Event('input', { bubbles:true }));
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => {
+      const options = [...document.querySelectorAll('#command-list .command-option')];
+      return options.length === 1 && options[0].querySelector('.command-option-title')?.innerText.includes('DSH');
+    })()`, 30000, 'command palette filters to the unambiguous DSH command');
+    await captureScreenshot(cdp, keyboardScreenshotPath);
+    await evaluate(cdp, `document.querySelector('#command-search').dispatchEvent(new KeyboardEvent('keydown', { key:'Enter', bubbles:true, cancelable:true }))`, 30000);
+    await waitFor(cdp, `window.state?.pluginActiveTab === 'dsh' && document.querySelector('#plugin-tab-dsh')?.getAttribute('aria-selected') === 'true'`, 30000, 'keyboard command opens DSH plugin tab');
+    await evaluate(cdp, `window.closeSubWin()`, 30000);
+    await evaluate(cdp, `(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key:'F1', code:'F1', bubbles:true, cancelable:true }));
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `window.commandSurfaceIsOpen() && document.querySelector('#command-surface-title')?.innerText.includes('Keyboard')`, 30000, 'F1 opens keyboard help');
+    await evaluate(cdp, `document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', code:'Escape', bubbles:true, cancelable:true }))`, 30000);
+    await waitFor(cdp, `!window.commandSurfaceIsOpen()`, 30000, 'Escape closes keyboard help');
+    await evaluate(cdp, `(() => {
+      const prompt = document.querySelector('#prompt');
+      window.__imeSubmitProbe = 0;
+      const prior = window.submitCurrentAction;
+      window.submitCurrentAction = () => { window.__imeSubmitProbe++; };
+      prompt.dispatchEvent(new KeyboardEvent('keydown', { key:'Enter', code:'Enter', isComposing:true, bubbles:true, cancelable:true }));
+      window.submitCurrentAction = prior;
+      return true;
+    })()`, 30000);
+    if (await evaluate(cdp, `window.__imeSubmitProbe !== 0`)) fail('IME composition Enter submitted the prompt');
+    log(`GUI keyboard manifest, command palette, F1 help, focus, and IME guard ok (${keyboardManifest.revision}, ${keyboardManifest.commands.length} commands)`);
+
+    await evaluate(cdp, `window.showPluginList('mcp')`, 30000);
+    await sleep(1000);
+    const initialPluginState = await evaluate(cdp, `(() => ({
+      tabs: Array.from(document.querySelectorAll('.settings-tabs .stab-btn')).map(node => node.textContent.trim()),
+      activeTab: window.state && window.state.pluginActiveTab,
+      activeView: window.state && window.state.activeSubWindowView,
+      hasMcpAdd: !!document.querySelector('#mcp-add'),
+      panelText: (document.querySelector('#plugin-panel')?.innerText || '').slice(0, 500),
+    }))()`, 30000);
+    log(`initial plugin state: ${JSON.stringify(initialPluginState)}`);
     await waitFor(cdp, `(() => {
       const tabs = Array.from(document.querySelectorAll('.settings-tabs .stab-btn')).map(node => node.textContent.trim());
-      return tabs[0] === 'MCP Management' && tabs[1] === 'Skills Management' && !!document.querySelector('#mcp-name');
-    })()`, 30000, 'MCP management ordered before Skills');
-    const addedMcp = await evaluate(cdp, `window.api.upsertMcpServer({ name:'Release MCP', transport:'stdio', command:'node', args:['server.js'], env:{ MCP_TOKEN:'secret-smoke-value' } })`, 30000);
-    if (!addedMcp?.ok) fail(`MCP add failed: ${JSON.stringify(addedMcp)}`);
-    await evaluate(cdp, `window.renderMcpManager()`, 30000);
+      return JSON.stringify(tabs) === JSON.stringify(['MCP','DSH Plugin','Skills','Market','GitHub']) && !!document.querySelector('#mcp-add') && !document.querySelector('#mcp-form');
+    })()`, 30000, 'MCP, DSH, Skills, Market, and GitHub tab order');
+
+    await evaluate(cdp, `document.querySelector('#mcp-add').click()`, 30000);
+    await waitFor(cdp, `!!document.querySelector('#mcp-form') && document.querySelector('#mcp-enabled').checked === false`, 30000, 'disabled-by-default MCP add form');
+    await evaluate(cdp, `(() => {
+      document.querySelector('#mcp-name').value = 'Release MCP';
+      document.querySelector('#mcp-command').value = 'node';
+      document.querySelector('#mcp-args').value = '["server.js"]';
+      document.querySelector('#mcp-env').value = '{"MCP_TOKEN":"secret-smoke-value"}';
+      document.querySelector('#mcp-save').click();
+      return true;
+    })()`, 30000);
     await waitFor(cdp, `(() => document.querySelector('#plugin-panel')?.innerText.includes('Release MCP'))()`, 30000, 'MCP server visible');
     const mcpSnapshot = await evaluate(cdp, `window.api.listMcpServers()`, 30000);
     const mcpServer = mcpSnapshot?.servers?.find(server => server.name === 'Release MCP');
-    if (!mcpServer || JSON.stringify(mcpSnapshot).includes('secret-smoke-value')) fail(`MCP list leaked secret or omitted server: ${JSON.stringify(mcpSnapshot)}`);
-    await evaluate(cdp, `window.api.setMcpServerEnabled(${JSON.stringify(String(mcpServer?.id || ''))}, false)`, 30000);
-    await evaluate(cdp, `window.api.removeMcpServer(${JSON.stringify(String(mcpServer?.id || ''))})`, 30000);
-    log('MCP management CRUD and secret-safe list ok');
+    if (!mcpServer || mcpServer.enabled !== false || JSON.stringify(mcpSnapshot).includes('secret-smoke-value')) fail(`MCP list leaked secret, enabled an unreviewed server, or omitted it: ${JSON.stringify(mcpSnapshot)}`);
+    await evaluate(cdp, `(() => {
+      const row = Array.from(document.querySelectorAll('[data-mcp-index]')).find(node => node.innerText.includes('Release MCP'));
+      row.querySelector('.mcp-row-actions button').click();
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => document.querySelector('#mcp-form')?.innerText.includes('MCP_TOKEN') && document.querySelector('#mcp-env').value === '')()`, 30000, 'saved secret key names shown without values');
+    if (await evaluate(cdp, `document.body.innerText.includes('secret-smoke-value')`)) fail('MCP secret rendered in the packaged DOM');
+    await evaluate(cdp, `document.querySelector('#mcp-cancel').click()`, 30000);
+    await captureScreenshot(cdp, mcpScreenshotPath);
+    await evaluate(cdp, `(() => {
+      const row = Array.from(document.querySelectorAll('[data-mcp-index]')).find(node => node.innerText.includes('Release MCP'));
+      row.querySelectorAll('.mcp-row-actions button')[1].click();
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `window.api.listMcpServers().then(result => result.servers.some(server => server.name === 'Release MCP' && server.enabled === true))`, 30000, 'MCP enabled through real row action');
+    await evaluate(cdp, `(() => {
+      window.confirm = () => true;
+      const row = Array.from(document.querySelectorAll('[data-mcp-index]')).find(node => node.innerText.includes('Release MCP'));
+      row.querySelectorAll('.mcp-row-actions button')[2].click();
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `window.api.listMcpServers().then(result => !result.servers.some(server => server.name === 'Release MCP'))`, 30000, 'MCP removed through real row action');
+    log('MCP real-form CRUD, disabled import, and secret-safe list ok');
+
+    await evaluate(cdp, `document.querySelector('#plugin-tab-dsh').click()`, 30000);
+    await sleep(1000);
+    const dshPanelState = await evaluate(cdp, `(() => ({
+      activeTab: window.state && window.state.pluginActiveTab,
+      hasRescan: !!document.querySelector('#dsh-rescan'),
+      panelText: (document.querySelector('#plugin-panel')?.innerText || '').slice(0, 2000),
+      snapshot: window.state && window.state.dshCompatibility,
+    }))()`, 30000);
+    log(`DSH panel state: ${JSON.stringify(dshPanelState)}`);
+    await waitFor(cdp, `(() => {
+      const text = document.querySelector('#plugin-panel')?.innerText || '';
+      return !!document.querySelector('#dsh-rescan') && text.includes('release-preview') && text.includes('release-dsh-bundle') && text.includes('latest') && text.includes('DSH Release MCP');
+    })()`, 30000, 'official DSH profile, bundle, update channel, and MCP candidate visible');
+    if (await evaluate(cdp, `document.body.innerText.includes(${JSON.stringify(dshFixture.secret)})`)) fail('DSH fixture secret rendered in the packaged DOM');
+    if (fs.existsSync(dshFixture.marker)) fail('DSH discovery executed a plugin module');
+    await captureScreenshot(cdp, dshScreenshotPath);
+    await evaluate(cdp, `(() => {
+      const candidate = document.querySelector('[data-dsh-candidate-index] button');
+      if (!candidate) return false;
+      candidate.click();
+      return true;
+    })()`, 30000);
+    await waitFor(cdp, `(() => document.querySelector('#mcp-form') && document.querySelector('#mcp-name').value === 'DSH Release MCP' && document.querySelector('#mcp-enabled').checked === false)()`, 30000, 'DSH MCP candidate opens disabled review form');
+    await evaluate(cdp, `document.querySelector('#mcp-cancel').click()`, 30000);
+    log('official DSH read-only discovery and review-only MCP candidate ok');
 
     await evaluate(cdp, `(() => {
       window.__ghOverviewProbe = { ticks: 0, startedAt: Date.now(), done: false, result: null, error: '' };
@@ -244,7 +392,7 @@ async function runUiCheck(root) {
     log(`GitHub async overview heartbeat ok: ${githubProbe.ticks} ticks in ${githubProbe.elapsedMs} ms`);
 
     await evaluate(cdp, `window.showPluginList('market')`, 30000);
-    await waitFor(cdp, `(() => !!document.querySelector('#skill-market-search') && document.body.innerText.includes('Skills Market'))()`, 30000, 'skills market visible');
+    await waitFor(cdp, `(() => !!document.querySelector('#skill-market-search') && document.querySelector('#plugin-tab-market')?.getAttribute('aria-selected') === 'true')()`, 30000, 'skills market visible');
     await evaluate(cdp, `window.updateSkillMarketSearch('definitely-no-release-ui-skill-20260628')`, 30000);
     await waitFor(cdp, `(() => {
       const input = document.querySelector('#skill-market-search');
@@ -286,8 +434,8 @@ async function runUiCheck(root) {
     log('skill remove refresh ok');
 
     await evaluate(cdp, `window.showPluginList('market')`, 30000);
-    await waitFor(cdp, `(() => !!document.querySelector('#skill-market-search') && document.body.innerText.includes('Skills Market'))()`, 30000, 'market visible after remove');
-    await captureScreenshot(cdp);
+    await waitFor(cdp, `(() => !!document.querySelector('#skill-market-search') && document.querySelector('#plugin-tab-market')?.getAttribute('aria-selected') === 'true')()`, 30000, 'market visible after remove');
+    await captureScreenshot(cdp, skillsScreenshotPath);
   } finally {
     try { if (cdp?.ws) cdp.ws.close(); } catch {}
     try { if (child && !child.killed) child.kill(); } catch {}

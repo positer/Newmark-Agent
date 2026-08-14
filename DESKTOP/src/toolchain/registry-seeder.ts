@@ -92,16 +92,28 @@ export function inferRiskLevel(name: string, description: string, annotations?: 
   if (DESTRUCTIVE_PATTERN.test(text)) return 'destructive';
   if (/^(web_|browser_|ssh_|gh_)/.test(name) || /^git_(clone|pull|fetch)$/.test(name)) return 'external';
   if (READ_TOOL_PATTERN.test(name)) return 'read';
+  // DSH 读工具命名惯例（get_/list_/query_/inspect_/read_ 前缀）：这些动词本质只读，
+  // 避免被启发式误判为 write（例如 DSH 的 get_goal / cordis_inspect_list）。
+  if (/^(get_|list_|query_|inspect_|read_)/.test(name) && !/_(create|update|set|write|delete|remove|run|execute|send|save|push|edit|toggle|define|stop|start)$/.test(name)) return 'read';
   return 'write';
 }
 
 function inferIdempotency(name: string): 'idempotent' | 'conditionally_idempotent' | 'non_idempotent' | undefined {
-  if (/^(bash|computer_use|browser_use|run|exec|execute|task)$/.test(name)) return 'non_idempotent';
+  // shell 命令工具每次执行都可能改变外部状态，本质非幂等（DSH pwsh/bash/terminal 等）。
+  if (/^(bash|pwsh|powershell|cmd|shell|terminal|computer_use|browser_use|run|exec|execute|task)$/.test(name)) return 'non_idempotent';
   if (/^(write|edit|append|send|save|create|update|set|put|register|patch)/.test(name)) return 'conditionally_idempotent';
   return undefined;
 }
 
-function resolveDefinition(definition: unknown): { name: string; description: string; parameters?: unknown; annotations?: ToolAnnotations } | null {
+/** 从真实 tool description 提取简洁 shortDescription（首句或截断），保 cordis 核可读。 */
+function compactDescription(description: string | undefined, fallback: string): string {
+  const clean = String(description || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return fallback;
+  const firstSentence = clean.split(/(?<=[.!?])\s+/)[0] || clean;
+  return firstSentence.slice(0, 120);
+}
+
+function resolveDefinition(definition: unknown): { name: string; description: string; parameters?: unknown; outputSchema?: unknown; annotations?: ToolAnnotations; execute?: (args: unknown, context: unknown) => Promise<unknown> | unknown; isConcurrencySafe?: (args: unknown) => boolean; render?: (args: unknown, value: unknown) => unknown; presentationMeta?: (args: unknown, value: unknown) => unknown; finalizeContent?: (context: unknown, result: unknown) => unknown; timeoutMs?: number; presentCall?: (args: unknown) => unknown; presentResult?: (args: unknown, result: unknown) => unknown } | null {
   if (!definition || typeof definition !== 'object') return null;
   const record = definition as Record<string, unknown>;
   const fn = record.function as Record<string, unknown> | undefined;
@@ -113,11 +125,35 @@ function resolveDefinition(definition: unknown): { name: string; description: st
     };
   }
   if (typeof record.name === 'string') {
+    // 兼容两种字段名：Newmark 的 SeededToolDefinition 用 inputSchema，
+    // DSH 的 ToolSchema 用 parameters（dsh-llm ToolSchema：{name, description, parameters}）。
+    const rawParameters = record.inputSchema ?? record.parameters;
+    const rawExecute = record.execute;
+    const rawConcurrencySafe = record.isConcurrencySafe;
+    // DSH ToolOutputDefinition 是嵌套对象 {schema, render, presentationMeta}；
+    // outputSchema 从 output.schema 提取。
+    const rawOutput = record.output as Record<string, unknown> | undefined;
+    const outputSchema = record.outputSchema ?? rawOutput?.schema;
+    const render = rawOutput?.render;
+    const presentationMeta = rawOutput?.presentationMeta;
+    const finalizeContent = record.finalizeContent;
+    const timeoutMs = record.timeoutMs;
+    const presentCall = record.presentCall;
+    const presentResult = record.presentResult;
     return {
       name: record.name,
       description: typeof record.description === 'string' ? record.description : '',
-      parameters: record.inputSchema,
+      parameters: rawParameters,
+      outputSchema,
       annotations: record.annotations as ToolAnnotations | undefined,
+      execute: typeof rawExecute === 'function' ? rawExecute as (args: unknown, context: unknown) => Promise<unknown> | unknown : undefined,
+      isConcurrencySafe: typeof rawConcurrencySafe === 'function' ? rawConcurrencySafe as (args: unknown) => boolean : undefined,
+      render: typeof render === 'function' ? render as (args: unknown, value: unknown) => unknown : undefined,
+      presentationMeta: typeof presentationMeta === 'function' ? presentationMeta as (args: unknown, value: unknown) => unknown : undefined,
+      finalizeContent: typeof finalizeContent === 'function' ? finalizeContent as (context: unknown, result: unknown) => unknown : undefined,
+      timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
+      presentCall: typeof presentCall === 'function' ? presentCall as (args: unknown) => unknown : undefined,
+      presentResult: typeof presentResult === 'function' ? presentResult as (args: unknown, result: unknown) => unknown : undefined,
     };
   }
   return null;
@@ -140,7 +176,8 @@ export function seedToolchainFromDefinitions(
   const version = options?.version ?? '1.0.0';
   const toolIds: string[] = [];
   const capabilities: string[] = [];
-  const byDomain = new Map<string, { input: CapabilityDescriptorInput; resolved: Array<{ name: string; riskLevel: RiskLevel; parameters?: unknown }> }>();
+  type ResolvedTool = NonNullable<ReturnType<typeof resolveDefinition>> & { riskLevel: RiskLevel; domain: string };
+  const byDomain = new Map<string, { input: CapabilityDescriptorInput; resolved: ResolvedTool[] }>();
 
   const definitions_ = (definitions || [])
     .map(resolveDefinition)
@@ -172,7 +209,7 @@ export function seedToolchainFromDefinitions(
     if (riskLevel === 'destructive' || (riskLevel === 'external' && entry.input.riskLevel !== 'destructive')) {
       entry.input.riskLevel = riskLevel;
     }
-    entry.resolved.push({ name: definition.name, riskLevel, parameters: definition.parameters });
+    entry.resolved.push({ ...definition, riskLevel, domain });
   }
 
   for (const [domain, entry] of byDomain) {
@@ -204,13 +241,22 @@ export function seedToolchainFromDefinitions(
         namespace,
         name: tool.name,
         version,
-        shortDescription: tool.name,
-        fullDescription: `${tool.name} (${domain})`,
+        shortDescription: compactDescription(tool.description, tool.name),
+        fullDescription: tool.description && tool.description.trim() ? tool.description : `${tool.name} (${domain})`,
         inputSchema: tool.parameters ?? { type: 'object', properties: {}, required: [] },
+        outputSchema: tool.outputSchema,
         riskLevel: tool.riskLevel,
         idempotency,
         requiredPermissions: required,
         implementationHash: sha256(tool.name),
+        execute: tool.execute,
+        isConcurrencySafe: tool.isConcurrencySafe,
+        render: tool.render,
+        presentationMeta: tool.presentationMeta,
+        finalizeContent: tool.finalizeContent,
+        timeoutMs: tool.timeoutMs,
+        presentCall: tool.presentCall,
+        presentResult: tool.presentResult,
       };
       core.registry.register(input);
       toolIds.push(tool.name);

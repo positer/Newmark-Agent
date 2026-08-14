@@ -5,6 +5,7 @@ import { ProviderProtocol, inferProviderProtocol } from './core/config';
 import { fuzzyCandidateModels, fuzzyDiscoverWithoutGuide, providerNameFromUrl, tokenizeFuzzyProviderInput } from './core/fuzzy';
 import { LLMProvider } from './llm/provider';
 import { discoverAgentPresets, discoverOpenCodeTools, discoverPluginManifests, discoverPluginMarketplaces, runOpenCodeTool } from './core/compat';
+import { discoverDshCompatibility } from './core/dshCompatibility';
 import { MemoryLabManager } from './core/memoryLab';
 import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, installUpdate } from './core/installUpdate';
 
@@ -55,7 +56,7 @@ const CLI_COMMAND_HELP: Record<CliCommand, string[]> = {
     'Inspect or apply a local/GitHub update using the selected install target.',
   ],
   compat: [
-    'Usage: Newmark.exe compat [--target all|tools|plugins|marketplaces|skills|agents|subagents] [--root <dir>]',
+    'Usage: Newmark.exe compat [--target all|tools|plugins|dsh|marketplaces|skills|agents|subagents] [--root <dir>]',
     'Discover compatible local agent, plugin, marketplace, and skill metadata.',
   ],
   'compat-tool': [
@@ -64,7 +65,7 @@ const CLI_COMMAND_HELP: Record<CliCommand, string[]> = {
   ],
 };
 
-function cliHelpRequested(args: string[]): boolean {
+export function cliHelpRequested(args: string[]): boolean {
   return args.some(arg => ['--help', '-h'].includes(String(arg).toLowerCase()));
 }
 
@@ -81,6 +82,7 @@ const CLI_VALUE_FLAGS = new Set<string>([
 const CLI_BOOLEAN_FLAGS = new Set<string>([
   '--persist', '--agent-only', '--list', '--preview-only', '--sources', '--add-source', '--check-github',
   '--from-github', '--dry-run', '--read', '--index', '--reindex', '--update', '--version', '--folder', '--help', '-h',
+  '--branch-communication',
 ]);
 
 function invalidCliCommandArgument(args: string[]): string | undefined {
@@ -670,6 +672,7 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
   });
   const conversation = argValue(args, '--conversation');
   if (conversation) agent.setConversation(conversation);
+  if (args.includes('--branch-communication')) agent.setBranchCommunication(true);
   const language = argValue(args, '--language');
   if (language && ['auto', 'en', 'zh'].includes(language)) agent.config.set('general', 'language', language);
   const requestedMode = argValue(args, '--mode');
@@ -968,10 +971,11 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
       target,
       compatibility: {
         tool_schemas: ['openai_chat_completions', 'openai_responses', 'anthropic_input_schema'],
-        plugin_ecosystems: ['codex', 'claude-code', 'opencode', 'newmark'],
+        plugin_ecosystems: ['codex', 'claude-code', 'opencode', 'newmark', 'deepseek-harness'],
         marketplace_ecosystems: ['codex', 'claude-code', 'newmark'],
         plugin_execution: 'metadata-only by default; OpenCode JavaScript tools require explicit compat-tool invocation.',
         mcp_activation: 'discovered from plugin/config metadata but not auto-started.',
+        dsh_compatibility: 'read-only bundle/profile/config discovery; unknown manifest keys are retained as compatibility metadata.',
         subagent_return_contract: 'structured NewmarkSubagentRecord embedded in NewmarkToolResult while preserving legacy text output.',
       },
     };
@@ -985,6 +989,9 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     }
     if (target === 'all' || target === 'plugins') {
       payload.plugins = plugins;
+    }
+    if (target === 'all' || target === 'plugins' || target === 'dsh') {
+      payload.dsh = discoverDshCompatibility(root);
     }
     if (target === 'all' || target === 'marketplaces') {
       payload.marketplaces = discoverPluginMarketplaces(root);

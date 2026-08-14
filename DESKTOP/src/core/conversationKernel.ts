@@ -53,6 +53,11 @@ export interface ConversationKernelRunOptions {
   engine: string;
 }
 
+export interface ConversationContextCompressOptions {
+  keepRecent?: number;
+  force?: boolean;
+}
+
 export interface ConversationKernelRunResult {
   tokens: Array<{ type: string; text: string }>;
   diffs: Array<{ path: string; old: number; new: number; oldContent: string; newContent: string }>;
@@ -452,6 +457,37 @@ export class ConversationKernel {
       generation: runtime?.generation || 0,
       checkpointed,
       at: new Date().toISOString(),
+    };
+  }
+
+  async compressContext(
+    target: ConversationTargetInput,
+    options: ConversationContextCompressOptions = {},
+  ): Promise<Record<string, unknown>> {
+    const normalized = this.normalizeTarget(target);
+    const runtime = this.findRuntime(normalized);
+    if (runtime?.activePromise) {
+      return { ok: false, error: 'Context compression is unavailable while this conversation is running.' };
+    }
+    const runner = runtime?.runner || this.createRunner(normalized);
+    const result = await runner.handleContextCompress(JSON.stringify({
+      keep_recent: options.keepRecent,
+      force: options.force !== false,
+    }));
+    let payload: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(result.output || '{}');
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) payload = parsed as Record<string, unknown>;
+    } catch {
+      payload = { output: result.output };
+    }
+    return {
+      ...payload,
+      ok: result.ok && payload.ok !== false,
+      error: result.error,
+      contextWindow: runner.contextWindow(),
+      contextCompression: runner.lastCompression,
+      displayHistory: { untouched: true, messageCount: runner.chatMessages.length },
     };
   }
 

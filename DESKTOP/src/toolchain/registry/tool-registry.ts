@@ -1,4 +1,4 @@
-import { ToolDescriptor, ToolIdempotency, RiskLevel } from '../../context/domain/types';
+import { ToolDescriptor, ToolIdempotency, RiskLevel, ToolExecuteFn, ToolConcurrencySafeFn, ToolRenderFn, ToolPresentationMetaFn, ToolFinalizeContentFn, ToolPresentCallFn, ToolPresentResultFn } from '../../context/domain/types';
 import { sha256 } from '../../context/serializers/deterministic';
 
 export interface ToolDescriptorInput {
@@ -17,6 +17,18 @@ export interface ToolDescriptorInput {
   supportedScopes?: string[];
   cacheGroup?: string;
   implementationHash?: string;
+  /** DSH ToolDefinition.execute：命令式功能实现引用（cordis 核功能承载）。 */
+  execute?: ToolExecuteFn;
+  /** DSH ToolDefinition.isConcurrencySafe：运行时并发分类。 */
+  isConcurrencySafe?: ToolConcurrencySafeFn;
+  /** DSH ToolOutputDefinition.render / presentationMeta。 */
+  render?: ToolRenderFn;
+  presentationMeta?: ToolPresentationMetaFn;
+  /** DSH ToolDefinition.finalizeContent / timeoutMs / presentCall / presentResult。 */
+  finalizeContent?: ToolFinalizeContentFn;
+  timeoutMs?: number;
+  presentCall?: ToolPresentCallFn;
+  presentResult?: ToolPresentResultFn;
 }
 
 /**
@@ -46,6 +58,14 @@ export class ToolRegistry {
       implementationHash: input.implementationHash,
       cacheGroup: input.cacheGroup || `${input.namespace}.${input.name}`,
       enabled: true,
+      execute: input.execute,
+      isConcurrencySafe: input.isConcurrencySafe,
+      render: input.render,
+      presentationMeta: input.presentationMeta,
+      finalizeContent: input.finalizeContent,
+      timeoutMs: input.timeoutMs,
+      presentCall: input.presentCall,
+      presentResult: input.presentResult,
     };
     this.tools.set(input.toolId, descriptor);
     return descriptor;

@@ -1,5 +1,29 @@
 # Newmark Agent Overview
 
+## dev-0.4.0 分支交流 + 思考活动 + 历史卸载延迟（2026-08-14）— source PASS；package pending
+
+在 dev-0.3.14 之上落地三块功能并升版本号到 0.4.0：
+
+1. Build 块新增与「编辑了文件」「调用了工具」并行的「进行了思考」活动：对支持 reasoning 的模型（DeepSeek reasoning_content / Anthropic thinking_delta）采集思考过程，状态分「思考中/进行了思考」，展开暴露推理文本；推理绝不进入聊天正文与最终回复（沿用 sanitize 隐私剥离）。
+2. context_history_manage 的 remove 改为「只卸载长期 log + 声明后当前 Build Block 结束后才对后续 Block 生效」：pendingHistoryRemovals 队列 + fingerprint 兜底，status 暴露 pendingRemovals，保证 block 内 provider 前缀缓存稳定。
+3. 新增「允许分支交流」对话类型（创建时勾选，GUI 复选框 / CLI --branch-communication / 对话列表特殊标记）：移除运行分支唯一性（ConversationTreeState.runningNodeIds），每活跃分支独立维护完整缓存；新增 branch_list / branch_send / branch_read / branch_create 工具；SubAgent 缓存命中优化（delegatedPrompt 移除易变 flowPc、mailbox body 截断）。
+
+验证：npm run typecheck / build EXIT=0；node dist/tests/verify.js 1530/1530 PASS；branch/SubAgent/gui-tui-cli 相关测试全绿。未重新打包、未 UAC 安装、未打 Git tag、未远程发布。证据：archive/20260814-dev-0.4.0-branch-communication-and-reasoning.md；release-notes：DESKTOP/scripts/release-notes-dev-0.4.0.md。
+
+## dev-0.3.14 goal/conversation tools + cordis-core migration + real-provider stress (2026-08-14) — release-usable
+
+Added goal_manage (Agent self-enters/updates/completes/exits Goal state) and conversation_rename (Agent names the current conversation on its first Build Block, cache-friendly) tools; bounded build_history_query activity/guide content (max_chars, default 2000) for Build-internal cache; migrated the built-in toolchain to the cordis-core-compatible ToolRegistry by preserving real tool descriptions (previously degraded to name(domain) placeholders); added mode/input/navigation/theme/scroll shortcuts. verify 1521/1521 green, typecheck clean, lint 0 errors.
+
+Repackaged dev-0.3.14 (MSI 226,040,216 bytes / SHA-256 1CAB2A1D558AC0C8DBF85D7DE60E539401EB828E361005F2F9320AEBAF4ABD7A; ZIP 291,866,935 bytes / 6E7298D42641B2393CC71665EB15E1E743A034D9D2D2589CDCC2653452CEBC3C). User-side real OpenRouter stress with deepseek/deepseek-v4-flash passed ALL 11 scenarios (cli-rounds, ui-rounds, ui-escape-stop, goal-continuation, goal-manage-tool, conversation-rename-tool, multi-mode-switch, queue-drain, conversation-isolation, long-context, release-process-cleanup) — Final Verdict release-usable.
+
+Key re-test adjudication: goal-continuation previously failed on meta-llama/llama-3.3-70b (729s timeout); re-run on deepseek-v4-flash passes cleanly (assistantCalls=4), confirming the earlier failure was model exact-marker noncompliance, not an app regression. Evidence: archive/20260814-goal-conversation-tool-cordis-and-real-provider-stress.md; machine reports archive/2026-08-14-real-provider-stress-dev-0.3.14-deepseek-v4-flash*.md.
+
+## dev-0.3.14 package build + real OpenRouter provider stress (2026-08-14) — Windows MSI/ZIP rebuilt; 7/8 real-provider scenarios pass
+
+Windows MSI and win-unpacked ZIP artifacts for 0.3.14 were rebuilt locally after all feature slices landed (editor Copilot prediction cache, tool backgrounding background_tool/read_tool_result, toolcall compression compress_tool_result, SubAgent communication cache/context regression, DSH dynamic compression + prefix-cache reuse, three-tier UI font hierarchy, keyboard full-coverage cross-stress). Artifact fingerprints: app.asar 157,465,514 bytes / SHA-256 05215A26B17E7CE874248FC49A1F69C0AB9EECF45BA8B89E776D5F57E4B30F22; MSI 226,040,216 bytes / BE9DEC38DEDF66519E2E10065DF27AF8ECF966F5FEAC51854F476CC8454D40B8; ZIP 291,852,625 bytes / B34E0E476823B570E9817EA4F47F6440DBBA2930871F3F7D4785B47B2E1D0FCD.
+
+The real OpenRouter provider stress (meta-llama/llama-3.3-70b-instruct) passed 7/8 scenarios: cli-rounds (6), ui-rounds (4), ui-escape-stop, queue-drain, conversation-isolation, long-context (17400-char payload), and release-process-cleanup. goal-continuation failed as app-timeout-or-provider-timeout, adjudicated as harness exact-marker noncompliance by the open-source model (no max-depth warning; app Goal state machine normal per historical same-scenario evidence) rather than an app regression. Remote publication and Linux packages remain pending. Evidence: archive/20260814-dev-0.3.14-package-build-and-real-provider-stress.md and machine report archive/2026-08-14-real-provider-stress-dev-0.3.14-openrouter.md.
+
 ## `dev-0.3.13` context compression, cache, and prompt policy (2026-08-13) — source PASS; package pending
 
 The source candidate now separates context pressure by lifetime. The active Build block triggers and retains its working window at 70% of the resolved model context window; long-term history triggers and is summarized at a separate 20% budget. `context_history_manage status` exposes the active Build and long-history token counts, thresholds, retention budgets, usage percentages, and the combined trigger decision. Compression reuse checks for an existing summary across the retained history, preventing repeated compaction when the summary is not message zero.
@@ -1327,3 +1351,80 @@ After each implementation slice:
 ## dev-0.2.3 input binding, Ultra orchestration, and provider-error hardening (2026-08-02)
 
 The current source advances to dev-0.2.3. `DESKTOP/src/ui/index.html` stores unsent prompt drafts by workspace/conversation runtime key, restores them after switching conversations, and preserves the chat scroll anchor during transcript rerenders. `DESKTOP/src/core/agent.ts`, `DESKTOP/src/core/config.ts`, and `DESKTOP/src/llm/provider.ts` expose Ultra as a persistent highest intelligence tier whose provider request uses max reasoning effort. `DESKTOP/src/core/agentKernelRunner.ts` withholds provider error tokens such as HTTP 402 from normal streaming text and retains the tool-provision broker when task-specific tools are initially empty. Regression assertions live in `DESKTOP/src/tests/verify.ts` and `DESKTOP/src/tests/intelligenceTierVerify.ts`; the dated audit is `archive/20260802-dev-0.2.3-update.md`.
+
+## dev-0.3.13 cross-scenario black-box gate (2026-08-13)
+
+The executable cross-scenario pressure plan is in `tasks/plan.md` and the execution checklist is in `tasks/todo.md`. Two fresh-context `gpt-5.6-luna/max` black-box runs used only real installed-directory probes and isolated Windows Temp roots. The observed Program Files package is still `0.3.12`, so it is not evidence for the `dev-0.3.13` source candidate. Raw GUI input/session screenshots, CLI help/state/failure outputs, and TUI PTY matrices were captured, but Flow, archive interruption, context compression/cache thresholds, GUI/TUI/CLI concurrent backend, Copilot, and sustained long-pressure cases were not completed. Both agents stalled during report aggregation and were shut down after product-process cleanup; the audited result is `INCOMPLETE/HOLD` in `archive/20260813-dev-0.3.13-blackbox-canary-incomplete.md`. No UAC or global installation was requested or performed.
+
+The 2026-08-13 continuation rebuilt the real `0.3.13` Windows candidate and repaired stale `0.3.12` version assertions in both packaged release-gate scripts. The safe packaged black-box matrix passed 28 cases; packaged CLI/context-compression, shared-root restart, Flow pause/resume/running-archive, startup recovery, native editor, rapid conversation switching, queue/plan, multi-window shared backend, and 30-window TUI viewer stress also passed. The Flow archive probe removed the target in 133 ms and all three duplicate archive receipts succeeded. Three fresh-context GUI/TUI/context black-box batches reached their hard deadlines without structured final reports, and the real Copilot latency lane was blocked because no selectable GitHub Copilot model was available; these remain coverage gaps, so the verdict stays `INCOMPLETE/HOLD`. No UAC, MSI installation, Program Files mutation, or user-config write was performed. Full evidence and candidate hashes are in `archive/20260813-dev-0.3.13-cross-scenario-continuation.md`.
+
+The 2026-08-13 full cross-scenario design rebuilt the matrix as five interacting layers—entry transport, work state, context/model, persistence action, and lifecycle/resources—and selected X01–X12 instead of claiming a Cartesian-product run. The design was dispatched as four fresh-context `gpt-5.6-luna/max` black-box batches: GUI persistence, TUI/CLI/shared backend, context/cache/prompt/Copilot, and fixed-event endurance/replay. All four reached their hard deadlines without structured final reports and are recorded as `INCOMPLETE`; candidate processes were cleaned, but the Temp roots remain as raw evidence. The design and dispatch audit are `archive/20260813-dev-0.3.13-full-cross-scenario-design.md` and `archive/20260813-dev-0.3.13-full-cross-scenario-blackbox-dispatch.md`. Overall release status remains `INCOMPLETE/HOLD`; no UAC is authorized.
+
+## dev-0.3.13 help/root boundary repair and natural black-box continuation (2026-08-13)
+
+The first completed long GUI black-box report found `D-HELP-001` (command help could enter GUI/runtime) and `D-ROOT-001` (some GUI/Wrapper probes observed Chromium state under the canonical user runtime when only `--root` was supplied). The repair is in `DESKTOP/src/launcher.ts`, `DESKTOP/src/main.ts`, and `DESKTOP/src/cli-commands.ts`: command help exits before initialization; explicit roots bind Electron `userData`, `sessionData`, and Chromium `--user-data-dir`; startup failure logging follows the resolved runtime root. Regression coverage includes both help argument orders, spaced roots, GUI direct launch, Console Wrapper forwarding, child command lines, profile files, and cleanup. Source verification is `1501/1501`; the rebuilt real Windows package passed Builder SSH/TUI/CLI/context compression/MSI/ZIP and the independent `28`-case safe black-box gate. Full evidence is `archive/20260813-dev-0.3.13-help-root-boundary-fix.md`.
+
+The black-box execution rule was corrected after the historical incomplete dispatch: fresh-context `gpt-5.6-luna/max` testers must run naturally with no artificial hard deadline. They may end only on natural completion, an explicit failure, or safe cleanup of an actually uncontrolled process; a missing outer report is not a Clear result. The current Nash batch is still running against safe Temp roots. Release remains `INCOMPLETE/HOLD`; no UAC/global MSI installation is authorized.
+
+## dev-0.3.13 official DSH Plugin and MCP discovery compatibility (2026-08-13)
+
+Current status: the working-tree source candidate adds an independent `DSH Plugin` menu and restructures MCP management/discovery around reviewable metadata. DSH remains an official **developer preview** integration; `@deepseek-ai/dsh` follows the non-pinned `latest` update channel, so Newmark tolerates compatible schema growth instead of treating today's preview shape as a frozen protocol. The discovery boundary is read-only and permissive: it may inspect local CLI/package/profile/bundle configuration, retain and report unknown keys, and derive review candidates, but it must not execute or import DSH/plugin code, invoke package managers, install/update DSH, or rewrite DSH-owned files. This is not a `deepseek_harness` model-provider protocol. MCP candidates require explicit user review, only pre-fill the editor, and remain disabled when saved until the user separately enables them. **Verification state: source build, `1504/1504` verify, focused DSH/MCP gates, complete built desktop suite, rebuilt `win-unpacked`, and real Electron/CDP UI smoke passed. No MSI/ZIP build or release publication was performed.**
+
+### Related file tree and ownership
+
+```text
+Newmark Agent/
+├─ DESKTOP/
+│  ├─ package.json
+│  ├─ scripts/
+│  │  └─ release-ui-skills-smoke.cjs
+│  └─ src/
+│     ├─ core/
+│     │  ├─ dshCompatibility.ts
+│     │  └─ mcpManager.ts
+│     ├─ main.ts
+│     ├─ preload.ts
+│     ├─ ui/
+│     │  └─ index.html
+│     └─ tests/
+│        ├─ dshCompatibilityVerify.ts
+│        ├─ mcpManagerVerify.ts
+│        └─ verify.ts
+├─ README.md
+├─ OVERVIEW.md
+└─ archive/
+   ├─ 20260813-dsh-plugin-mcp-discovery-compatibility.md
+   ├─ 20260813-gui-keyboard-dsh-inspired-optimization.md
+   ├─ 20260813-release-ui-keyboard-command-palette-smoke.png
+   ├─ 20260813-release-ui-dsh-plugin-smoke.png
+   ├─ 20260813-release-ui-mcp-management-smoke.png
+   └─ 20260813-release-ui-skills-smoke.png
+```
+
+- `DESKTOP/src/core/dshCompatibility.ts` owns tolerant, read-only discovery of the official DSH CLI/package and DSH-owned profile, bundle, and patch metadata. It normalizes display-safe facts, retains unknown configuration keys for forward-compatible review, and derives MCP candidates without loading plugin JavaScript or mutating any discovered file.
+- `DESKTOP/src/tests/dshCompatibilityVerify.ts` is the focused deterministic contract gate for discovery fixtures: official bundle/profile shapes, schema growth and unknown keys, malformed or partial input, MCP candidate normalization, secret-safe output, and the no-execution/no-rewrite boundary. It passes in both focused and complete built-suite runs.
+- `DESKTOP/src/core/mcpManager.ts` owns the persistent user MCP registry. It validates stdio/HTTP definitions, keeps credentials out of public list output, preserves corrupt source data before recovery, treats duplicate imports idempotently, and defaults newly reviewed definitions to disabled.
+- `DESKTOP/src/tests/mcpManagerVerify.ts` covers disabled-by-default persistence, credential preservation/redaction/clearing, transport changes, duplicate handling, input hardening, URL safety, and corrupt-registry recovery. It passes in both focused and complete built-suite runs.
+- `DESKTOP/src/main.ts` owns the main-process `dsh:discover` and `mcp:*` IPC handlers plus allowlisted external-link opening. It is the trust boundary between renderer requests, read-only discovery, and persistent MCP mutations.
+- `DESKTOP/src/preload.ts` exposes only the narrow DSH discovery, MCP list/upsert/enable/remove, and safe external-link bridge required by the renderer; it does not expose filesystem or process execution primitives.
+- `DESKTOP/src/ui/index.html` owns the persistent Plugins shell and its keyboard/focus semantics, the independent DSH developer-preview tab, rescan/loading/error/empty states, official-resource links, unknown-key and candidate presentation, and the MCP search/filter/review/edit workflow. Reviewing a DSH candidate only pre-fills the MCP form; saving does not auto-enable or launch it. It also owns the unified GUI command registry, searchable palette/help dialog, chord router, focus-region navigation, ARIA composite behavior, and semantic Newmark visual tokens.
+- `DESKTOP/src/tests/verify.ts` carries source-level wiring and UI contract assertions for tab order, IPC/preload exposure, read-only wording, candidate review semantics, default-disabled behavior, keyboard registry/search semantics, and registration of the focused and packaged gates. Its current complete result is `1504/1504`.
+- `DESKTOP/package.json` registers the focused DSH compatibility verifier in the built desktop suite and retains the packaged UI smoke entrypoint. The complete registered built suite passed after the final change.
+- `DESKTOP/scripts/release-ui-skills-smoke.cjs` is the real packaged Electron/CDP path for exercising Plugins navigation, DSH/MCP rendering and refresh, candidate review, disabled-by-default persistence, secret-safe listing, MCP CRUD, command search, F1 help, focus, and IME safety. It passed against the rebuilt `win-unpacked` candidate.
+- `README.md` records the user-facing maintenance state and explicitly distinguishes the source candidate from verified release evidence.
+- `OVERVIEW.md` records the current architecture, file ownership, safety boundary, and verification status.
+- `archive/20260813-dsh-plugin-mcp-discovery-compatibility.md` is the dated design and verification ledger; it contains the official contract, security invariants, executed matrix, artifact hashes, and deliberate exclusions.
+- `archive/20260813-gui-keyboard-dsh-inspired-optimization.md` records the shortcut policy, DSH-derived engineering/visual decisions, accessibility boundary, and packaged evidence.
+- The four `20260813-release-ui-*-smoke.png` files are visual evidence from the final passing real packaged Electron run.
+
+The executed source sequence was `cd DESKTOP`, `npm.cmd run build`, the focused built verifiers, and `npm.cmd run test:desktop:built`. The candidate was then rebuilt with electron-builder `--win dir` and driven through `npm.cmd run release:ui-skills-smoke` against that exact artifact via Electron CDP. The tested `app.asar` SHA-256 is `0DCE6242BDA0639BD7F414616CFA47CD756A875FC81329C681F262305409D7D0`; full hashes and screenshots are in the dated archive record.
+
+## dev-0.3.13 keyboard reachability and DSH-inspired interaction system (2026-08-13)
+
+Newmark GUI now treats keyboard access as a command system rather than scattered `keydown` handlers. `DESKTOP/src/ui/index.html` defines 65 command records whose ids, categories, availability, context scopes, bindings, and actions drive both the runtime router and a stable FNV-1a manifest used by tests. The primary discovery paths are `Ctrl/Cmd+Shift+P` for the command palette and `F1` for the complete shortcut help. `F6` and `Shift+F6` traverse the primary regions; `Ctrl/Cmd+K` chords reach new conversation, workspace management, Plugins, DSH, Memory Lab, Automation, Flow, settings, and the primary input. Common layout, editor, terminal, and browser commands remain context-scoped so text editing, IME composition, browser navigation, terminal input, OS-reserved shortcuts, and assistive technology conventions are not captured accidentally.
+
+The interaction layer uses modal focus trapping, initial focus and focus return, inert background content, visible `:focus-visible` rings, roving tabs, arrow/Home/End navigation, list/listitem current-state semantics, keyboard-resizable separators, tree and disclosure controls, terminal-tab `Delete`, and a reduced-motion fallback. Browser WebViews forward only F1 and command-palette discovery to the host; Electron OS-global shortcut registration is intentionally absent. Camel-case command identifiers are split before filtering, preventing a query such as `DSH` from accidentally matching `keyboardShortcuts`.
+
+The DSH-Harness study influenced structure rather than branding or runtime coupling. Newmark adopts explicit state/ownership layers, lazy searchable inventories, static configuration versus live runtime state, semantic tokens instead of component-local colors, and dense no-soft-wrap terminal/transcript surfaces. It does not embed Cordis, claim DSH fiber phases, deep-merge Cordis patches, evaluate `!!js`/import/plugin nodes, pin preview versions, or copy DeepSeek colors. The DSH developer-preview boundary stays dynamically discoverable and read-only, allowing upstream package/profile/bundle schema growth to remain visible without giving it execution authority.
+
+Verification includes the complete built desktop suite, the `1504/1504` source contract, and real packaged CDP checks for a 65-command conflict-free manifest, unique DSH search, Enter activation, F1/Escape, focus placement, IME Enter suppression, Plugins tab order, DSH/MCP/Skills behavior, and screenshot evidence. Details are in `archive/20260813-gui-keyboard-dsh-inspired-optimization.md`.

@@ -45,6 +45,13 @@ export type AgentTool = Tool & {
     terminate?: boolean;
   }>;
   executionMode?: 'sequential' | 'parallel';
+  /**
+   * 是否可与兄弟 tool call 并发执行（DSH isConcurrencySafe 语义的静态落地）。
+   * 缺省为 false（独占）：有副作用的工具（write/edit/bash/browser_* 等）必须串行，
+   * 只有只读工具（read/glob/grep/web_search/pwd 等）显式声明 true 才允许并行。
+   * 这是 Newmark 从 DSH 学习的并发安全分级，避免盲目 Promise.all 导致副作用工具竞态。
+   */
+  concurrencySafe?: boolean;
 };
 
 export type QueueMode = 'all' | 'one-at-a-time';

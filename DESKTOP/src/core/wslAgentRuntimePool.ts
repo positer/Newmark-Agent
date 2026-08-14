@@ -19,6 +19,7 @@ export interface WslTargetRuntimeClient {
   requestStop(target: ConversationRuntimeTarget, runId?: string): Promise<WslAgentStopResult>;
   enqueueGuide(target: ConversationRuntimeTarget, envelope: ConversationInputEnvelope): Promise<GuideReceipt>;
   checkpoint(target: ConversationRuntimeTarget): Promise<Record<string, unknown>>;
+  contextCompress?(target: ConversationRuntimeTarget, options?: { keepRecent?: number; force?: boolean }): Promise<Record<string, unknown>>;
   rateAutoRoute?(target: ConversationRuntimeTarget, score: number, routeId?: string): Promise<WslAutoRouteRatingResult>;
   setWorkRunExpanded(target: ConversationRuntimeTarget, runId: string, expanded: boolean): Promise<boolean>;
   setMode?(target: ConversationRuntimeTarget, mode: AgentMode): Promise<AgentMode>;
@@ -257,6 +258,22 @@ export class WslAgentRuntimePool {
     }
     try {
       return await entry.client.checkpoint(normalized);
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async contextCompress(
+    target: ConversationRuntimeTarget,
+    options: { keepRecent?: number; force?: boolean } = {},
+  ): Promise<Record<string, unknown>> {
+    const normalized = normalizeConversationTarget(target);
+    const entry = await this.acquire(normalized);
+    try {
+      if (entry.stopIntent) return { ok: false, error: 'Context compression is unavailable while this conversation is stopping.' };
+      if (!entry.client.contextCompress) return { ok: false, error: 'Context compression is unavailable in this runtime.' };
+      entry.lastSnapshot = null;
+      return await entry.client.contextCompress(normalized, options);
     } finally {
       this.release(entry, true);
     }

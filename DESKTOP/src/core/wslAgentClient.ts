@@ -312,6 +312,11 @@ export class WslAgentClient {
     return await this.request('checkpoint', { target: await this.mapTarget(target) }, 5_000) as Record<string, unknown>;
   }
 
+  async contextCompress(target: ConversationRuntimeTarget, options: { keepRecent?: number; force?: boolean } = {}): Promise<Record<string, unknown>> {
+    await this.start();
+    return await this.request('context_compress', { target: await this.mapTarget(target), options }, 120_000) as Record<string, unknown>;
+  }
+
   async rateAutoRoute(
     target: ConversationRuntimeTarget,
     score: number,

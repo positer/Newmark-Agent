@@ -358,7 +358,7 @@ export class SubagentManager {
       fromAgentId,
       toAgentId: target.id,
       kind,
-      body,
+      body: truncateText(body, 32000),
       correlationId: details.correlationId,
       replyTo: details.replyTo,
       createdAt: now(),
@@ -628,6 +628,27 @@ export class SubagentManager {
     const record = this.get(name);
     if (!record) return '';
     return record.result || record.messages.filter(message => message.role === 'assistant').map(message => message.content).join('\n');
+  }
+
+  /**
+   * 有界结果 transcript：subagent_result 注入主 Agent 上下文时，不再放大完整
+   * 消息历史（含所有中间 tool call/result 洪水）。只保留最近若干条非 tool 消息，
+   * 按字符上限截断，杜绝上下文回归。完整历史按需走 subagent_read(max_chars)。
+   */
+  boundedResultTranscript(idOrName: string): string {
+    const record = this.get(idOrName);
+    if (!record) return '';
+    const MAX_MSG = 8;           // 最近保留的消息条数
+    const MAX_CHARS = 8000;      // 总字符上限
+    const messages = record.messages
+      .filter(message => message.role === 'assistant' || message.role === 'user' || message.role === 'system')
+      .slice(-MAX_MSG)
+      .map(message => `[${message.role}] ${truncateText(String(message.content || ''), 1200)}`);
+    let text = messages.join('\n');
+    if (text.length > MAX_CHARS) {
+      text = text.slice(0, MAX_CHARS) + `\n[...transcript truncated: ${record.messages.length} total messages, ${record.messages.length - MAX_MSG} older omitted; use subagent_read for full history...]`;
+    }
+    return text || '(no transcript)';
   }
 
   listActive(): SubagentInstance[] { return this.listAll().filter(item => item.status !== 'closed'); }

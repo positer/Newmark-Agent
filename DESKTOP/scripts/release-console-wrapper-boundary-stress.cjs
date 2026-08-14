@@ -3,6 +3,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
+const packageVersion = require('../package.json').version;
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 function assert(condition, message) {
@@ -43,11 +44,25 @@ async function main() {
   try {
     const version = run(executable, ['--version'], root);
     assert(version.result.status === 0, `version exit=${version.result.status}; output=${version.output}`);
-    assert(/0\.3\.12/.test(version.output), `version output mismatch: ${version.output}`);
+    assert(new RegExp(`\\b${packageVersion.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`).test(version.output),
+      `version output mismatch: expected ${packageVersion}; output=${version.output}`);
 
     const helpWord = run(executable, ['help'], root, 30000);
     assert(helpWord.result.status === 0, `help-word exit=${helpWord.result.status}; output=${helpWord.output}`);
     assert(/Newmark|Usage|GUI|TUI/i.test(helpWord.output), `help-word output mismatch: ${helpWord.output}`);
+
+    const helpBoundaryCases = [
+      ['top-level-help-before-root', ['--help', '--root', root]],
+      ['top-level-help-after-root', ['--root', root, '--help']],
+      ['command-help-before-root', ['send', '--help', '--root', root]],
+      ['command-help-after-root', ['send', '--root', root, '--help']],
+    ];
+    for (const [label, args] of helpBoundaryCases) {
+      const help = run(executable, args, root, 30000);
+      assert(help.result.status === 0, `${label} exit=${help.result.status}; output=${help.output}`);
+      assert(/Usage:|Newmark CLI command:/i.test(help.output), `${label} output mismatch: ${help.output}`);
+    }
+    assert(!fs.existsSync(path.join(root, 'config.json')), 'help-only boundary probes must not initialize the explicit runtime root');
 
     const colonPrompt = run(executable, [
       'send', 'hello: answer normally.', '--agent-only', '--root', root,
@@ -59,7 +74,7 @@ async function main() {
     assert(state.result.status === 0, `state exit=${state.result.status}; output=${state.output}`);
     const parsed = JSON.parse(String(state.result.stdout || '').trim());
     assert(String(parsed.root || '').toLowerCase() === path.resolve(root).toLowerCase(), `state root mismatch: ${JSON.stringify(parsed)}`);
-    console.log('CONSOLE_WRAPPER_BOUNDARY_STRESS_PASS version=0.3.13 helpWord=true colonPromptExit=1 rootWithSpaces=true electronArgBoundary=true');
+    console.log(`CONSOLE_WRAPPER_BOUNDARY_STRESS_PASS version=${packageVersion} helpWord=true helpOrderVariants=4 helpRootUnchanged=true colonPromptExit=1 rootWithSpaces=true electronArgBoundary=true`);
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
   }

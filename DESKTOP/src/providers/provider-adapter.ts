@@ -48,6 +48,9 @@ export interface NormalizedAgentRequest {
   reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   apiKey: string;
   baseUrl: string;
+  /** 可选的会话标识。仅当目标 provider 显式支持 session_id 语义的上下文缓存
+   *  时才由上层填充；adapter 在存在时透传，否则省略该字段（避免严格 API 拒绝未知字段）。 */
+  sessionId?: string;
 }
 
 export interface TokenEstimate {

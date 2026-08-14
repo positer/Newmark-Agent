@@ -279,10 +279,12 @@ async function main() {
   assert(
     electronUserDataBind >= 0
       && electronSessionDataBind > electronUserDataBind
-      && mainSource.includes("const electronUserDataRoot = path.join(runtimeRoot, 'Electron')")
+      && mainSource.includes("path.join(runtimeRoot, 'Electron')")
+      && mainSource.includes("const explicitElectronUserDataRoot = pathArgValue(args, '--user-data-dir')")
+      && mainSource.includes("app.commandLine.appendSwitch('user-data-dir', electronUserDataRoot)")
       && electronReady > electronSessionDataBind
       && !mainSource.includes('return app.getPath(\'userData\')'),
-    'runtime root: Electron userData/sessionData are bound inside the resolved Newmark root before ready, and legacy migration is independent of the mutable Electron default',
+    'runtime root: Electron userData/sessionData and Chromium user-data-dir are bound inside the resolved Newmark root before ready, and legacy migration is independent of the mutable Electron default',
   );
   assert(
     agentFailClosedSource.includes("const requestedModel = this.model")
@@ -498,7 +500,7 @@ async function main() {
     && uiHtml.includes("if (r && r.error) sendFailure = String(r.error);")
     && uiHtml.includes("setConversationRuntimeState(lockedTarget, 'error'")
     && uiHtml.includes("the renderer's provisional run fall through to completed"), 'ui no-model failure: IPC errors cannot race the terminal work event and falsely complete the provisional GUI run');
-  assert(uiHtml.includes('window.submitCurrentAction = function()')
+  assert(uiHtml.includes('window.submitCurrentAction = function(source)')
     && uiHtml.includes('window.stopCurrentConversation = async function()')
     && uiHtml.includes('function markProvisionalStop(target, runId)')
     && uiHtml.includes('function pendingProvisionalStopRunId(target)')
@@ -508,7 +510,7 @@ async function main() {
     && uiHtml.includes("api.stopConversation({ target: target, runId: runId, force: force })")
     && uiHtml.includes('requestBackendStopForProvisionalStart(target, event.runId)')
     && uiHtml.includes('cancelledBeforeStart: true')
-    && uiHtml.includes("e.key === 'Escape' && isCurrentConversationRunning() && !promptHasText()")
+    && uiHtml.includes("e.key === 'Escape' && isCurrentConversationRunning()")
     && uiHtml.includes('function stopRunningFromEscape(event)')
     && uiHtml.includes("document.addEventListener('keydown', function(event)")
     && uiHtml.includes('var STREAMING_PLAIN_TEXT_THRESHOLD = 12000')
@@ -624,7 +626,7 @@ async function main() {
   assert(uiHtml.includes('window.renderSkillMarketSources') && uiHtml.includes('id="skill-market-source-name"') && uiHtml.includes('window.addSkillMarketSourceFromUi') && uiHtml.includes('window.setSkillMarketSourceEnabledFromUi'), 'ui html: Skills Market lets users add and manage market sources');
   assert(uiHtml.includes("item.description || item.desc || ''") && uiHtml.includes("item.marketSourceName || ''") && uiHtml.includes("item.path || ''") && uiHtml.includes("item.url || ''") && uiHtml.includes('No matching skills.'), 'ui html: Skills Market search covers skill metadata, source metadata, and empty results');
   assert(uiHtml.includes('--right-width: 380px;') && uiHtml.includes('var rightSize = Math.max(340, Math.min(680, newSize2));'), 'ui html: right sidebar has larger default and resize range');
-  assert(uiHtml.includes('lucide-sprite.svg#square-pen') && uiHtml.includes("iconOnly('square-pen', t('right.editor'))") && !uiHtml.includes('lucide-sprite.svg#edit'), 'ui html: Editor tab uses available open-source icon sprite symbol');
+  assert(uiHtml.includes('lucide-sprite.svg#square-pen') && uiHtml.includes("rightTabButtonHtml('editor', 'square-pen', t('right.editor')") && !uiHtml.includes('lucide-sprite.svg#edit'), 'ui html: Editor tab uses available open-source icon sprite symbol');
   assert(uiHtml.includes("if (depth === 0) parent.innerHTML = '<div style=\"font-size:11px;color:var(--text-dim);padding:8px;\">' + esc(t('fileTree.empty'))"), 'ui html: file tree shows the empty label only for an empty root, not expanded empty directories');
   assert(mainSource.includes('async function listTreeLevel(current: string)') && mainSource.includes('await fs.promises.readdir(current, { withFileTypes: true })') && !mainSource.includes('children: walkTree(root, fullPath)') && mainSource.includes('fs.promises.realpath(workspaceRoot)') && mainSource.includes('fs.promises.realpath(treeRoot)') && mainSource.includes("return { error: 'File tree path is outside the active workspace' }"), 'file tree: backend returns one async directory level and confines lexical and linked paths to the active workspace');
   assert(uiHtml.includes("var result = await api.getFileTree(node.path)") && uiHtml.includes("children.getAttribute('data-loaded') === 'true'") && uiHtml.includes("childContainer.style.display = 'none'") && !uiHtml.includes('id="ft-toggle-\' + depth + \'-\' + i'), 'file tree: renderer loads children only on first expansion and uses branch-local DOM references');
@@ -674,7 +676,7 @@ async function main() {
     && modeConversationStressSource.includes('per-run event ledger capped to 250 most recent')
     && modeConversationStressSource.includes('paused Flow resumes via whole-bubble click'), 'mode-conversation stress: user-level stress test covers Flow background completion, per-conversation isolation, 5-minute tracking expiry, message windowing, work-run bounds, and click-pause resume');
   assert(uiHtml.includes('state.subWindowStack.push') && uiHtml.includes('state.subWindowStack && state.subWindowStack.pop') && uiHtml.includes("header.addEventListener('pointerdown'") && uiHtml.includes('Math.min(window.innerWidth - rect.width - padding') && uiHtml.includes('Math.min(window.innerHeight - rect.height - padding'), 'ui sub-windows: nested views restore their parent and pointer dragging is clamped to the visible viewport');
-  assert(uiHtml.includes("state.activeSubWindowView.name === 'plugins'") && uiHtml.includes('if (refreshingPlugins) state.restoringSubWindow = true;'), 'ui Skills Market: sibling plugin tabs refresh in place instead of polluting the parent navigation stack');
+  assert(uiHtml.includes("state.activeSubWindowView.name === 'plugins'") && uiHtml.includes('var pluginOpen = overlayOpen') && uiHtml.includes('if (!pluginOpen) {') && uiHtml.includes("state.activeSubWindowView = { name: 'plugins', tab: requested };") && uiHtml.includes('window.syncPluginTabs'), 'ui Skills Market: sibling plugin tabs refresh in place instead of polluting the parent navigation stack');
   assert(uiHtml.includes('window.showFlowEditor = function(expandedIndex)') && uiHtml.includes("renderFlowItem(state.flowWorks[i], i, Number(expandedIndex) === i)") && uiHtml.includes("state.activeSubWindowView = { name: 'flowNew' }") && uiHtml.includes('window.showFlowEditor(workIdx)'), 'ui Flow editor: same-level rerenders do not stack windows and newly added controls remain expanded');
   assert(uiHtml.includes('class="msg-file-link"') && uiHtml.includes('onclick="window.openLinkedFile(')
     && uiHtml.includes('window.openLinkedFile = async function(path)') && uiHtml.includes('var result = await api.openWorkspaceFile(path);')
@@ -882,7 +884,7 @@ async function main() {
   assert(uiHtml.includes('window.toggleRight = function()') && uiHtml.includes('window.setRightCollapsed(!state.rightCollapsed);'), 'ui html: right toggle uses unified collapse state');
   assert(uiHtml.includes('window.setRightWidthPx(rightSize);') && !uiHtml.includes("el.style.width = rightSize + 'px';"), 'ui html: right resize does not pin layout with inline width');
   assert(/if \(state\.rightCollapsed\) \{\s*window\.setRightCollapsed\(false\);\s*\}/.test(uiHtml), 'ui html: right tab switching reopens through unified collapse state');
-  assert(uiHtml.includes('data-tab="plan"') && uiHtml.includes('Conversation plan') && uiHtml.includes("iconOnly('list-checks', t('right.plan'))"), 'ui html: right sidebar has current conversation plan tab');
+  assert(uiHtml.includes('data-tab="plan"') && uiHtml.includes('Conversation plan') && uiHtml.includes("rightTabButtonHtml('plan', 'list-checks', t('right.plan')"), 'ui html: right sidebar has current conversation plan tab');
   assert(uiHtml.includes('window.refreshConversationPlan = function()') && uiHtml.includes('api.getConversationPlan(activeConversationId())') && uiHtml.includes('window.persistConversationPlan = function()') && uiHtml.includes('api.updateConversationPlan(state.conversationPlan, activeConversationId())') && uiHtml.includes('window.addConversationPlanItem = function()'), 'ui html: conversation plan panel has conversation-bound refresh, persist, and add handlers');
   assert(uiHtml.includes('window.cycleConversationPlanItem = function(idx)') && uiHtml.includes('window.editConversationPlanItem = function(idx)') && uiHtml.includes('window.deleteConversationPlanItem = function(idx)'), 'ui html: conversation plan supports status cycle, edit, and delete');
   assert(uiHtml.includes('if (s && s.conversationPlan)') && uiHtml.includes('state.conversationPlan = normalizeConversationPlan(s.conversationPlan)') && uiHtml.includes("if (state.rightTab === 'plan') window.renderConversationPlan();"), 'ui html: conversation plan refreshes from backend state');
@@ -1077,8 +1079,75 @@ async function main() {
   assert(uiHtml.includes("'plugins.runningGh': 'Communicating'") && uiHtml.includes("'plugins.runningGh': '正在通信'") && uiHtml.includes('githubOverviewHash') && uiHtml.includes('if (signature === state.githubOverviewHash) return') && uiHtml.includes("{ initial: !state.githubOverviewLoaded }"), 'GitHub CLI panel: communication status appears only on first entry and unchanged data does not repaint the page');
   assert(uiHtml.includes('githubOverviewPendingRepo') && uiHtml.includes('if (state.githubOverviewLoading)') && uiHtml.includes('window.loadGithubOverview(pendingRepo)') && uiHtml.includes("data.repository || (repos[0] && repos[0].nameWithOwner)"), 'GitHub CLI panel: selections made during communication are queued and the details card resolves to the visible repository');
   assert(uiHtml.includes('.github-repo-select {') && uiHtml.includes('border-radius:var(--radius-md)') && uiHtml.includes('appearance:none') && uiHtml.includes('github-repo-select-icon') && uiHtml.includes("iconSvg('chevron-down'"), 'GitHub CLI panel: repository selector uses a rounded Newmark control with a Lucide dropdown icon');
-  assert(preloadTs.includes('listMcpServers') && preloadTs.includes('upsertMcpServer') && mainTs.includes("ipcMain.handle('mcp:list'") && mainTs.includes("ipcMain.handle('mcp:upsert'") && mainTs.includes("ipcMain.handle('mcp:setEnabled'") && mainTs.includes("ipcMain.handle('mcp:remove'") && uiHtml.indexOf("showPluginList(\\'mcp\\')") < uiHtml.indexOf("showPluginList(\\'installed\\')") && uiHtml.includes('window.renderMcpManager') && uiHtml.includes('window.saveMcpServer'), 'Plugins UI: MCP management is live, persistent, and ordered before Skills management');
+  assert(preloadTs.includes('listMcpServers')
+    && preloadTs.includes('upsertMcpServer')
+    && preloadTs.includes('discoverDshCompatibility')
+    && preloadTs.includes('openWebUrl')
+    && mainTs.includes("ipcMain.handle('mcp:list'")
+    && mainTs.includes("ipcMain.handle('mcp:upsert'")
+    && mainTs.includes("ipcMain.handle('mcp:setEnabled'")
+    && mainTs.includes("ipcMain.handle('mcp:remove'")
+    && mainTs.includes("ipcMain.handle('dsh:discover'")
+    && mainTs.includes("ipcMain.handle('app:openWebUrl'")
+    && uiHtml.includes("var PLUGIN_TABS = ['mcp', 'dsh', 'installed', 'market', 'github'];")
+    && uiHtml.includes('id="plugin-tab-')
+    && uiHtml.includes('role="tab"')
+    && uiHtml.includes('window.handlePluginTabKey')
+    && uiHtml.includes('window.renderMcpManager')
+    && uiHtml.includes('window.renderDshPlugin')
+    && uiHtml.includes('api.discoverDshCompatibility()')
+    && uiHtml.includes('window.saveMcpServer')
+     && uiHtml.includes('newMcpDraft(Object.assign({}, candidate.template, {')
+     && uiHtml.includes("}), 'candidate');")
+     && uiHtml.includes('context-inspector')
+     && uiHtml.includes('window.compressContextNow')
+     && preloadTs.includes('compressContext:')
+     && mainTs.includes("ipcMain.handle('agent:compressContext'")
+     && uiHtml.includes('plugins.dshLayers')
+     && uiHtml.includes('dshLayerMarkup')
+     && !uiHtml.includes('@deepseek-harness/mcp')
+     && !uiHtml.includes('deepseek_harness'), 'Plugins UI: official read-only DSH discovery and persistent MCP review are live, keyboard accessible, and ordered before Skills management');
+  assert(agentTs.includes('buildBlockTriggerTokens')
+    && agentTs.includes('longHistoryTriggerTokens')
+    && agentTs.includes('compressionEnabled')
+    && agentTs.includes('archiveEntries'), 'context UI contract: exposes active-Build and long-history budgets plus hot/cold retention counters');
+  assert(uiHtml.includes('var NEWMARK_GUI_COMMANDS = [')
+    && uiHtml.includes("guiCommand('app.commandPalette'")
+    && uiHtml.includes("keys:'Mod+Shift+P'")
+    && uiHtml.includes("keys:'F1'")
+    && uiHtml.includes("keys:'F6'")
+    && uiHtml.includes("keys:'Mod+K D'")
+    && uiHtml.includes('window.validateGuiCommandRegistry')
+    && uiHtml.includes('window.getGuiCommandManifest')
+    && uiHtml.includes('function guiNormalizeCommandSearchText(value)')
+    && uiHtml.includes(".replace(/([a-z0-9])([A-Z])/g, '$1 $2')")
+    && uiHtml.includes('document.documentElement.dataset.keyboardRegistry')
+    && uiHtml.includes("document.addEventListener('keydown', guiHandleCommandKeydown, true)")
+    && uiHtml.includes('setupGuiKeyboard();'), 'GUI keyboard: one initialized command registry exposes palette, help, region focus, DSH navigation, conflict validation, and a stable test manifest');
+  assert(uiHtml.includes('event.isComposing || event.key === \'Process\' || event.keyCode === 229')
+    && !uiHtml.includes("(e.ctrlKey && e.key === ' ')")
+    && !uiHtml.includes("e.altKey && e.key === '\\\\'")
+    && uiHtml.includes('role="separator" aria-orientation="vertical"')
+    && uiHtml.includes('window.handleFileTreeKey')
+    && uiHtml.includes('window.handleTerminalTabKey')
+    && uiHtml.includes('window.handleConversationKey')
+    && uiHtml.includes('window.handleWorkspaceKey')
+    && uiHtml.includes('@media (prefers-reduced-motion: reduce)'), 'GUI keyboard: IME guards, conflict-safe editor defaults, keyboard-resizable separators, roving composite widgets, and reduced motion cover high-frequency UI');
+  assert(mainTs.includes("guest.on('before-input-event'")
+    && mainTs.includes("commandId = 'help.keyboardShortcuts'")
+    && mainTs.includes("commandId = 'app.commandPalette'")
+    && preloadTs.includes('onKeyboardCommand:')
+    && !mainTs.includes('globalShortcut.register'), 'GUI keyboard: Browser WebView forwards only F1 and command-palette discovery to the host without registering OS-global shortcuts');
   assert(agentKernelRunnerTs.includes("realToolCalls.length ? 'response' : 'final_response'") && agentTs.includes("event.type !== 'text'") && agentTs.includes("'final_response'") && uiHtml.includes("'start', 'text', 'response', 'final_response'") && uiHtml.includes("rawType === 'final_response'") && uiHtml.includes("type === 'final_response' && workRun"), 'Build transcript: public tool-phase replies stay in the Build process while the final response is persisted separately and rendered once below the block');
+  assert(uiHtml.includes('function renderWorkThought(event, eventIndex)')
+    && uiHtml.includes("if (type === 'thought') return renderWorkThought(event, eventIndex)")
+    && uiHtml.includes("rawType === 'thought_result'")
+    && uiHtml.includes('进行了思考')
+    && uiHtml.includes('思考中')
+    && uiHtml.includes("iconSvg('brain', 'thought', 'tiny')")
+    && agentKernelRunnerTs.includes("emitWorkEvent({ type: 'thought', content: '' })")
+    && agentKernelRunnerTs.includes("emitWorkEvent({ type: 'thought_result', content: thinking })")
+    && agentTs.includes("'thought', 'thought_result'"), 'Build thinking: 模型思考呈现为与工具并行的可展开 Build 活动（思考中/进行了思考），思考过程仅展开可见、绝不进入聊天正文');
   assert(!agentKernelRunnerTs.includes("|| name.startsWith('memory_lab_')"), 'Memory Lab tools: read/update/reindex results continue through the same model turn instead of terminating before the next tool or final response');
   assert(uiHtml.includes('.conversation-work-run::before') && uiHtml.includes('padding-left: 24px') && uiHtml.includes('border: 0;') && uiHtml.includes('#chat-area:has(> .chat-msg)') && uiHtml.includes('background-size: 1px 100%, 1px 100%;') && uiHtml.includes('.chat-msg.user .meta { justify-content: flex-end') && uiHtml.includes('.chat-msg.user .msg-body { text-align: right; }') && uiHtml.includes('.chat-msg.user::after') && uiHtml.includes('right: 3px;') && uiHtml.includes('.chat-msg.user .msg-actions { margin-left: 4px; }') && uiHtml.includes('.conversation-work-activity-list') && uiHtml.includes('conversation-work-activity-detail') && uiHtml.includes('data-activity-key=') && uiHtml.includes('activityOpenStates') && uiHtml.includes('function updateConversationWorkRunDuration(run)') && uiHtml.includes('scheduleConversationWorkRunDurationUpdate(runs[i])') && uiHtml.includes('function guideWorkEventKey(event)') && uiHtml.includes('function mergeGuideWorkEvent(previous, incoming)') && uiHtml.includes('rank = { accepted: 1, deferred: 2, rejected: 3, applied: 4 }') && uiHtml.includes('event.clientMessageId || (event.guide && event.guide.clientMessageId)') && !uiHtml.includes("addMsg('user', displayText, 'guide'") && uiHtml.includes('if (workRun) return;') && uiHtml.includes("if (String(m.role || '') === 'workflow' && /^tool:/.test"), 'Build transcript layout: continuous rails survive inter-message content, expanded tool activities survive live refresh, one Guide id upgrades accepted to applied without downgrade, and legacy tool chat rows stay hidden');
   assert(uiHtml.includes('function renderWorkToolGroup(event, eventIndex)')
@@ -1365,7 +1434,19 @@ async function main() {
   assert(packageJson.includes('"release:ui-skills-smoke"') && releaseUiSkillsSmoke.includes('--remote-debugging-port=') && releaseUiSkillsSmoke.includes("window.showPluginList('market')") && releaseUiSkillsSmoke.includes('#skill-market-search'), 'release ui skills smoke: drives real packaged Plugins Skills Market through CDP');
   assert(releaseUiSkillsSmoke.includes('installLocalSkill') && releaseUiSkillsSmoke.includes('release-ui-local-skill') && releaseUiSkillsSmoke.includes('window.refreshSkillsRuntime'), 'release ui skills smoke: installs local skill and refreshes runtime without restart');
   assert(releaseUiSkillsSmoke.includes("window.toggleSkillEnabled('release-ui-local-skill', false)") && releaseUiSkillsSmoke.includes("window.toggleSkillEnabled('release-ui-local-skill', true)") && releaseUiSkillsSmoke.includes("window.removeSkillFromUi('release-ui-local-skill')"), 'release ui skills smoke: covers skill disable, enable, and remove');
-  assert(releaseUiSkillsSmoke.includes('No matching skills.') && releaseUiSkillsSmoke.includes('Page.captureScreenshot') && releaseUiSkillsSmoke.includes('2026-06-28-release-ui-skills-smoke.png'), 'release ui skills smoke: covers market search empty state and screenshot evidence');
+  assert(releaseUiSkillsSmoke.includes('No matching skills.')
+    && releaseUiSkillsSmoke.includes('Page.captureScreenshot')
+    && releaseUiSkillsSmoke.includes('20260813-release-ui-skills-smoke.png')
+    && releaseUiSkillsSmoke.includes('20260813-release-ui-dsh-plugin-smoke.png')
+    && releaseUiSkillsSmoke.includes('20260813-release-ui-mcp-management-smoke.png')
+    && releaseUiSkillsSmoke.includes('20260813-release-ui-keyboard-command-palette-smoke.png')
+    && releaseUiSkillsSmoke.includes("document.querySelector('#mcp-save').click()")
+    && releaseUiSkillsSmoke.includes("document.querySelector('#plugin-tab-dsh').click()")
+    && releaseUiSkillsSmoke.includes('window.getGuiCommandManifest')
+    && releaseUiSkillsSmoke.includes("key:'p', code:'KeyP', ctrlKey:true, shiftKey:true")
+    && releaseUiSkillsSmoke.includes('command palette filters to the unambiguous DSH command')
+    && releaseUiSkillsSmoke.includes('isComposing:true')
+    && releaseUiSkillsSmoke.includes('DSH discovery executed a plugin module'), 'release ui skills smoke: covers Skills, real MCP, read-only DSH, and conflict-safe keyboard command visual evidence');
   assert(packageJson.includes('"release:ui-memory-lab-smoke"') && releaseUiMemoryLabSmoke.includes('--remote-debugging-port=') && releaseUiMemoryLabSmoke.includes('window.api.memoryLabUpdate') && releaseUiMemoryLabSmoke.includes('window.showMemoryLab()'), 'release ui Memory Lab smoke: drives real packaged Memory Lab UI through CDP');
   assert(releaseUiMemoryLabSmoke.includes('ReleaseMemoryNeedle') && releaseUiMemoryLabSmoke.includes('Memory Lab') && releaseUiMemoryLabSmoke.includes('.memory-lab-graph') && releaseUiMemoryLabSmoke.includes('memory-lab-search-input') && releaseUiMemoryLabSmoke.includes('Root tags') && releaseUiMemoryLabSmoke.includes('!document.querySelector(\'.memory-lab-links\')') && releaseUiMemoryLabSmoke.includes('animate-from-right') && releaseUiMemoryLabSmoke.includes('Page.captureScreenshot') && releaseUiMemoryLabSmoke.includes('captureOsScreenshot'), 'release ui Memory Lab smoke: validates animated no-line tag graph, root tag overview, tag search, component markdown, and hardened screenshot evidence');
   assert(uiHtml.includes('node.vx = ((node.vx || 0) + node.fx) * 0.72;')
@@ -3497,6 +3578,53 @@ async function main() {
   assert(!!agent.goal && !agent.goal.checkComplete('Not done yet'), 'checkComplete: ignores plain text');
   assert(!!agent.goal && !agent.goal.checkComplete('The final call must contain exactly:\n\n[Goal Complete] NM_STRESS_GOAL_COMPLETE_OK\nThis call is not the final one yet.'), 'checkComplete: ignores a quoted future completion marker on a non-final continuation');
   assert(!!agent.goal && !agent.goal.checkComplete('One step remains: the final third model call includes exactly:\n\n[Goal Complete] NM_STRESS_GOAL_COMPLETE_OK'), 'checkComplete: ignores an included future completion marker');
+  // goal_manage tool: Agent-side Goal state control (enter/update/complete/exit).
+  const goalToolDefs = agent.tools.definitions().map(d => (d as any).function?.name).filter(Boolean);
+  assert(goalToolDefs.includes('goal_manage'), 'goal_manage: tool definition registered');
+  assert(goalToolDefs.includes('conversation_rename'), 'conversation_rename: tool definition registered');
+
+  // 先清理进入一个干净状态（前面的 checkComplete 测试已经在 goal mode 且有 goal）。
+  const exitResult = agent.handleGoalManage(JSON.stringify({ action: 'exit' }));
+  assert(exitResult.ok === true && agent.goal === null && agent.mode === 'build', 'goal_manage exit: clears goal and returns to Build mode');
+
+  // enter 需要 objective。
+  const enterMissing = agent.handleGoalManage(JSON.stringify({ action: 'enter' }));
+  assert(enterMissing.ok === false, 'goal_manage enter: rejects missing objective');
+
+  // enter 成功切入 Goal mode。
+  const enterResult = agent.handleGoalManage(JSON.stringify({ action: 'enter', objective: 'Ship the release' }));
+  assert(enterResult.ok === true && agent.mode === 'goal' && agent.goal?.objective === 'Ship the release', 'goal_manage enter: enters Goal mode with objective');
+  const enterJson = JSON.parse(enterResult.output);
+  assert(enterJson.enteredGoal === true && enterJson.mode === 'goal', 'goal_manage enter: reports enteredGoal');
+
+  // update 编辑 objective，记录 change 历史。
+  const updateResult = agent.handleGoalManage(JSON.stringify({ action: 'update', objective: 'Ship the release v2', reason: 'scope grew' }));
+  assert(updateResult.ok === true && agent.goal?.objective === 'Ship the release v2', 'goal_manage update: edits objective');
+  assert(agent.goal?.changes.length === 1, 'goal_manage update: records change history');
+
+  // complete 标记完成并退出。
+  const completeResult = agent.handleGoalManage(JSON.stringify({ action: 'complete' }));
+  assert(completeResult.ok === true && agent.goal === null && agent.mode === 'build', 'goal_manage complete: marks verified and exits Goal mode');
+  const completeJson = JSON.parse(completeResult.output);
+  assert(completeJson.completed === true && completeJson.priorObjective === 'Ship the release v2', 'goal_manage complete: reports completed with prior objective');
+
+  // complete/exit 在无 goal 时是 no-op 成功（不报错）。
+  const exitNoGoal = agent.handleGoalManage(JSON.stringify({ action: 'exit' }));
+  assert(exitNoGoal.ok === true, 'goal_manage exit: no-op when no active goal');
+  const exitNoGoalJson = JSON.parse(exitNoGoal.output);
+  assert(exitNoGoalJson.cleared === false, 'goal_manage exit: reports cleared=false when no goal');
+
+  // conversation_rename tool: agent names the current conversation.
+  const renameMissing = agent.handleConversationRename(JSON.stringify({}));
+  assert(renameMissing.ok === false, 'conversation_rename: rejects missing title');
+  const renameResult = agent.handleConversationRename(JSON.stringify({ title: 'Add goal_manage tool' }));
+  assert(renameResult.ok === true, 'conversation_rename: renames current conversation');
+  const renameJson = JSON.parse(renameResult.output);
+  assert(renameJson.title === 'Add goal_manage tool', 'conversation_rename: reports new title');
+
+  // shouldPromptConversationRename: only true on first Build with auto-generated title.
+  assert(typeof agent.shouldPromptConversationRename() === 'boolean', 'shouldPromptConversationRename: returns boolean');
+
 
   const scopedAgent = new Agent(TEST_DIR);
   const wsChatA = scopedAgent.createInternalWorkspace('chat-scope-a');
@@ -4375,6 +4503,35 @@ async function main() {
   assert(branchReloaded.getConversationSnapshot().branches.length === 3 && branchReloaded.chatMessages[0]?.content === 'original request'
     && branchReloaded.workRuns.length === 1 && branchReloaded.workRuns[0]?.runId === 'original-page-only', 'conversation branching: pages, active selection, and the page-local Build tree survive restart');
 
+  // 分支交流模式：创建时开关 + 历史 block 创建分支 + 分支通信工具（每分支状态独立、缓存完整）
+  {
+    const bcAgent = new Agent(path.join(TEST_DIR, 'branch-comm'));
+    bcAgent.setConversation('branch-comm');
+    bcAgent.chatMessages = [
+      { role: 'user', content: 'root task', mode: 'Build', model: bcAgent.model, timestamp: '2026-07-24T03:00:00.000Z' },
+      { role: 'assistant', content: 'root answer', mode: 'Build', model: bcAgent.model, timestamp: '2026-07-24T03:00:01.000Z' },
+    ];
+    bcAgent.history = bcAgent.chatMessages.map(message => ({ role: message.role, content: message.content }));
+    bcAgent.flushConversationState();
+    assert(bcAgent.handleBranchList('{}').ok === false, 'branch communication: branch_list is disabled before the creation-time flag is set');
+    bcAgent.setBranchCommunication(true);
+    assert(bcAgent.isBranchCommunicationEnabled() && bcAgent.handleBranchList('{}').ok === true, 'branch communication: the creation-time flag unlocks the branch tools');
+    const bcCreate = bcAgent.handleBranchCreate(JSON.stringify({ message_index: 0, prompt: 'alternative task' }));
+    assert(bcCreate.ok === true && !!JSON.parse(bcCreate.output).branchId, 'branch communication: branch_create spawns a new branch at a historical block position');
+    const bcList = bcAgent.handleBranchList('{}');
+    const bcListParsed = JSON.parse(bcList.output);
+    assert(bcList.ok === true && bcListParsed.branchCount === 2, 'branch communication: branch_list enumerates every running branch with mailbox counts');
+    const bcNewId = JSON.parse(bcCreate.output).branchId;
+    const bcRootId = bcListParsed.branches.find((branch: { id: string }) => branch.id !== bcNewId).id;
+    assert(bcAgent.handleBranchSend(JSON.stringify({ to_branch: bcRootId, message: 'hello root' })).ok === true, 'branch communication: branch_send persists a message to another branch mailbox');
+    assert(bcAgent.handleBranchSend(JSON.stringify({ to_branch: bcNewId, message: 'self' })).ok === false, 'branch communication: a branch cannot message itself');
+    const bcRead = bcAgent.handleBranchRead(JSON.stringify({ branch: bcRootId }));
+    assert(bcRead.ok === true, 'branch communication: branch_read returns another branch metadata and activity');
+    // 每分支缓存完整：切回根分支后，根分支的历史与 Build 树完整恢复（不因交流模式而丢缓存前缀）。
+    const bcRootSnapshot = bcAgent.switchConversationBranch('branch-comm', bcRootId);
+    assert(bcRootSnapshot.chatMessages[0]?.content === 'root task' && bcRootSnapshot.chatMessages[1]?.content === 'root answer', 'branch communication: switching back restores the complete original branch transcript (per-branch cache intact)');
+  }
+
   conversationOrderAgent.setConversation('guide-branch-source');
   const guideTarget = { workspaceId: 'guide-branch-workspace', conversationId: 'guide-branch-source' };
   const guideReceipt = {
@@ -4558,14 +4715,15 @@ async function main() {
   compressionModelProvider.chat = async (modelName: string, messages: Array<Record<string, unknown>>, systemPrompt: string) => {
     requestedCompressionModel = modelName;
     compressionSystemPrompt = systemPrompt;
-    compressionUserPrompt = String(messages[0]?.content || '');
+    // DSH prefix reuse：压缩指令 prompt 是最后一个 user 消息，历史消息作为前缀。
+    compressionUserPrompt = String(messages[messages.length - 1]?.content || '');
     return '## Active Or Unfinished Work\nUse the request-scoped model.';
   };
   await agent.maybeCompress(compressionModelMessages, compressionModelProvider, undefined, 'current-session-model');
   assert(requestedCompressionModel === 'current-session-model' && agent.lastCompression?.model === 'current-session-model', 'maybeCompress: binds provider request and metadata to the current session model snapshot');
-  assert(compressionSystemPrompt.includes('Completed Or Background Work')
-    && compressionSystemPrompt.includes('must not be revived as the current objective')
-    && compressionSystemPrompt.includes('newest to oldest')
+  assert(compressionUserPrompt.includes('Completed Or Background Work')
+    && compressionUserPrompt.includes('must not be revived as the current objective')
+    && compressionUserPrompt.includes('newest to oldest')
     && compressionUserPrompt.includes('Latest retained user instruction'),
   'maybeCompress: model prompt classifies historical task state and orders unfinished tasks newest-to-oldest');
   const oversizedImage = `data:image/png;base64,${'A'.repeat(40000)}`;
@@ -4744,7 +4902,7 @@ async function main() {
   const listResult = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'list', limit: 10 })).output) as Record<string, any>;
   assert(listResult.ok === true && listResult.action === 'list' && listResult.entryCount === 20 && listResult.entries.length === 10 && listResult.displayHistory.untouched === true, 'context_history_manage list: indexes the LLM context entries while leaving the displayed history untouched');
   const removeResult = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'remove', position: 2 })).output) as Record<string, any>;
-  assert(removeResult.ok === true && removeResult.action === 'remove' && removeResult.removedPosition === 2 && contextManagerAgent.history.length === 19 && removeResult.displayHistory.untouched === true, 'context_history_manage remove: deletes one context entry only');
+  assert(removeResult.ok === true && removeResult.action === 'remove' && removeResult.removedPosition === 2 && removeResult.deferred === true && contextManagerAgent.history.length === 20 && removeResult.displayHistory.untouched === true, 'context_history_manage remove: declares a deferred unload (cache-stable) instead of deleting immediately');
   const summarizeResult = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'summarize', position: 0, to: 4 })).output) as Record<string, any>;
   assert(summarizeResult.ok === true && summarizeResult.action === 'summarize' && summarizeResult.foldedEntries === 5 && summarizeResult.summary && contextManagerAgent.history[0]?.role === 'system' && String(contextManagerAgent.history[0]?.content || '').includes('[Context History Summary]'), 'context_history_manage summarize: folds a contiguous context range into one bounded summary entry');
   assert(contextManagerAgent.chatMessages.length === 6 && JSON.stringify(contextManagerAgent.chatMessages) === displaySnapshotBefore, 'context management: displayed conversation history is byte-identical after list/remove/summarize');
@@ -4760,11 +4918,12 @@ async function main() {
     && statusResult.buildBlockTriggerTokens > 0 && statusResult.longHistoryTriggerTokens > 0
     && statusResult.buildBlockRetentionTokens > 0 && statusResult.longHistoryRetentionTokens > 0
     && statusResult.cache?.entries === 1 && statusResult.protectedZone?.protectedStartIndex > 0
-    && statusResult.protectedZone?.lastUserMessageIndex > 0 && statusResult.displayHistory.untouched === true, 'context_history_manage status: reports two-tier budgets, usage, cache, and protected zone without touching display history');
+    && statusResult.pendingRemovals?.count === 1
+    && statusResult.protectedZone?.lastUserMessageIndex > 0 && statusResult.displayHistory.untouched === true, 'context_history_manage status: reports two-tier budgets, usage, cache, pending deferred removals, and protected zone without touching display history');
   const protectedRemove = contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'remove', position: statusResult.protectedZone.protectedStartIndex }));
   assert(protectedRemove.ok === false && String(protectedRemove.output || '').includes('protected'), 'context_history_manage remove: refuses to delete an entry in the protected recent zone');
   const dangerousRemove = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'remove', position: statusResult.protectedZone.protectedStartIndex, dangerous: true })).output) as Record<string, any>;
-  assert(dangerousRemove.ok === true && dangerousRemove.removedPosition === statusResult.protectedZone.protectedStartIndex && contextManagerAgent.history.length === 14, 'context_history_manage remove: dangerous:true escapes the protected zone');
+  assert(dangerousRemove.ok === true && dangerousRemove.removedPosition === statusResult.protectedZone.protectedStartIndex && dangerousRemove.deferred === true && contextManagerAgent.history.length === 16, 'context_history_manage remove: dangerous:true escapes the protected zone as a deferred unload');
   const protectedSummarize = contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'summarize', position: 10, to: 12 }));
   const protectedSummarizeBody = String(protectedSummarize.output || '');
   assert(protectedSummarize.ok === false && protectedSummarizeBody.includes('protected'), 'context_history_manage summarize: refuses to fold a range overlapping the protected recent zone');
@@ -4775,7 +4934,7 @@ async function main() {
   const badRestore = contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'restore', restore_id: 'ctx-cache-missing-999' }));
   assert(badRestore.ok === false, 'context_history_manage restore: rejects an unknown restore_id');
   const restoreResult = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'restore', restore_id: statusResult.cache.ids[0] })).output) as Record<string, any>;
-  assert(restoreResult.ok === true && restoreResult.restoredEntries === 5 && restoreResult.cacheRemaining === 0 && contextManagerAgent.history.length === 18 && contextManagerAgent.history.some(message => String(message.content || '').startsWith('history-entry-0')), 'context_history_manage restore: reinserts the cached original messages and removes the cache entry');
+  assert(restoreResult.ok === true && restoreResult.restoredEntries === 5 && restoreResult.cacheRemaining === 0 && contextManagerAgent.history.length === 20 && contextManagerAgent.history.some(message => String(message.content || '').startsWith('history-entry-0')), 'context_history_manage restore: reinserts the cached original messages and removes the cache entry');
   const cacheStatusAfter = JSON.parse(contextManagerAgent.handleContextHistoryManage(JSON.stringify({ action: 'status' })).output) as Record<string, any>;
   assert(cacheStatusAfter.ok === true && cacheStatusAfter.cache?.entries === 0, 'context_history_manage restore: cache is emptied after restore');
   assert(contextManagerAgent.chatMessages.length === 6 && JSON.stringify(contextManagerAgent.chatMessages) === displaySnapshotBefore, 'context management: displayed conversation history stays byte-identical through status/restore/search/protection');

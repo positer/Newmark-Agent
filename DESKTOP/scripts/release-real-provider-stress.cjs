@@ -685,6 +685,117 @@ async function runGoalStress(cdp) {
   return `goalRounds=${goalRounds}; assistantCalls=${assistantCalls}`;
 }
 
+async function runGoalManageToolStress(cdp) {
+  const enterMarker = 'NM_STRESS_GOAL_MANAGE_ENTER_OK';
+  const completeMarker = 'NM_STRESS_GOAL_MANAGE_COMPLETE_OK';
+  await evaluate(cdp, 'window.api.setMode ? window.api.setMode(\'build\') : Promise.resolve()', 30000);
+  await evaluate(cdp, 'window.api.clearGoal ? window.api.clearGoal() : Promise.resolve(true)', 30000);
+  await waitFor(cdp, stateIdleExpression(), 60000, 'goal-manage initial idle');
+  await evaluate(cdp, `(() => { const p = document.querySelector('#prompt'); if (!p) throw new Error('missing #prompt'); p.focus(); p.value = ${jsString('Call the goal_manage tool with action=enter and objective: Stress verify goal management entry. Then reply done.')}; p.dispatchEvent(new Event('input', { bubbles: true })); window.sendMessage(); return true; })()`, 30000);
+  // 状态验证：等 goal 状态真正 active（模型成功调用工具后），而非等 marker。
+  const entered = await waitFor(cdp, `window.api.getState().then(s => (s && s.mode === 'goal' && s.goal && String((s.goal.objective) || '').indexOf('Stress verify goal management entry') >= 0) ? s : null)`, 120000, 'goal_manage enter sets goal state');
+  if (!entered) throw new Error('goal_manage enter did not set goal mode');
+  await sendUiPrompt(cdp, [
+    'The objective is now genuinely achieved and verified. Use the goal_manage tool with action=complete.',
+    'After the tool returns, reply with this exact marker as the first line: ' + completeMarker,
+    'Do not use any tool other than goal_manage.',
+  ].join('\n'), completeMarker);
+  const cleared = await evaluate(cdp, 'window.api.getState().then(s => ({ mode: s.mode, goal: s.goal }))', 30000);
+  await evaluate(cdp, 'window.api.setMode ? window.api.setMode(\'build\') : Promise.resolve()', 30000);
+  await waitFor(cdp, stateIdleExpression(), 60000, 'goal-manage return to build');
+  return 'enteredMode=' + entered.mode + '; objectiveSet=' + String((entered.goal && entered.goal.objective) || '').slice(0, 40) + '; exitedMode=' + cleared.mode + '; goalAfter=' + (cleared.goal ? 'present' : 'cleared');
+}
+
+async function runConversationRenameToolStress(cdp) {
+  const marker = 'NM_STRESS_CONVERSATION_RENAME_OK';
+  await evaluate(cdp, 'window.api.setMode ? window.api.setMode(\'build\') : Promise.resolve()', 30000);
+  await waitFor(cdp, stateIdleExpression(), 60000, 'conversation-rename initial idle');
+  const before = await evaluate(cdp, 'window.api.getState().then(s => ({ conversationId: s.conversationId, conversations: s.conversations && Object.keys(s.conversations).length }))', 30000);
+  await sendUiPrompt(cdp, [
+    'This is the first task of this conversation. Pick a short noun-phrase title and call the conversation_rename tool with it.',
+    'For this stress run use the title exactly: NM Rename Probe',
+    'After the tool returns, reply with this exact marker as the first line: ' + marker,
+    'Do not use any tool other than conversation_rename.',
+  ].join('\n'), marker);
+  const after = await evaluate(cdp, 'window.api.getState().then(s => ({ conversationId: s.conversationId, conversations: s.conversations && Object.keys(s.conversations).length }))', 30000);
+  return 'conversationIdBefore=' + (before && before.conversationId) + '; conversationsBefore=' + (before && before.conversations) + '; conversationsAfter=' + (after && after.conversations);
+}
+
+async function runMultiModeSwitchStress(cdp) {
+  const markers = ['NM_STRESS_MM_BUILD_OK', 'NM_STRESS_MM_PLAN_OK', 'NM_STRESS_MM_GOAL_OK', 'NM_STRESS_MM_BACK_OK'];
+  await waitFor(cdp, stateIdleExpression(), 60000, 'multi-mode initial idle');
+  await evaluate(cdp, 'window.api.setMode ? window.api.setMode(\'build\') : Promise.resolve()', 30000);
+  await sendUiPrompt(cdp, 'Reply with this exact marker as the first line: ' + markers[0] + '\nNo tools.', markers[0]);
+  await evaluate(cdp, 'window.api.setMode ? window.api.setMode(\'plan\') : Promise.resolve()', 30000);
+  await waitFor(cdp, stateIdleExpression(), 60000, 'plan idle');
+  await sendUiPrompt(cdp, 'Reply with this exact marker as the first line: ' + markers[1] + '\nDo not modify any files. No tools.', markers[1]);
+  await evaluate(cdp, 'window.api.setMode ? window.api.setMode(\'goal\') : Promise.resolve()', 30000);
+  await waitFor(cdp, stateIdleExpression(), 60000, 'goal mode idle before updateGoal');
+  await evaluate(cdp, 'window.api.updateGoal ? window.api.updateGoal(\'Multi-mode goal stress probe\') : Promise.resolve()', 30000);
+  await sendUiPrompt(cdp, 'Reply with this exact marker as the first line: ' + markers[2] + '\nNo tools.', markers[2]);
+  // goal 语义是持续追求目标，回复 marker 不标记完成会触发 auto-continue 而不 idle；
+  // 这里显式 clearGoal 打断 auto-continue，再切 build 验证 round-trip。
+  await evaluate(cdp, 'window.api.setMode ? window.api.setMode(\'build\') : Promise.resolve()', 30000);
+  await evaluate(cdp, 'window.api.clearGoal ? window.api.clearGoal() : Promise.resolve(true)', 30000);
+  await waitFor(cdp, stateIdleExpression(), 60000, 'multi-mode final idle');
+  await sendUiPrompt(cdp, 'Reply with this exact marker as the first line: ' + markers[3] + '\nNo tools.', markers[3]);
+  return 'build+plan+goal+build all round-tripped';
+}
+
+async function runWebFetchReachabilityStress(cdp) {
+  const marker = 'NM_STRESS_WEB_FETCH_OK';
+  await evaluate(cdp, 'window.api.setMode ? window.api.setMode(\'build\') : Promise.resolve()', 30000);
+  await waitFor(cdp, stateIdleExpression(), 60000, 'web-fetch initial idle');
+  const prompt = 'Use the web_fetch tool to read https://example.com and report the domain name shown on that page. If the page is reachable and shows Example Domain, reply with this exact marker as the first line: ' + marker + '. Then on a new line write the domain name you found. Use only the web_fetch tool.';
+  await sendUiPrompt(cdp, prompt, marker);
+  return 'web_fetch reached example.com and reported Example Domain';
+}
+
+async function runArchiveStress(cdp) {
+  // 归档响应：连续快速归档多个会话 + 测量点击/后端响应速度（本地操作，不依赖模型）。
+  await evaluate(cdp, 'window.api.setMode ? window.api.setMode(\'build\') : Promise.resolve()', 30000);
+  await waitFor(cdp, stateIdleExpression(), 30000, 'archive initial idle');
+  // 创建 4 个新会话（直接后端切换 + UI 新建）。
+  const created = await evaluate(cdp, `(async () => {
+    const ids = [];
+    for (let i = 0; i < 4; i++) {
+      if (window.newConversation) {
+        await window.newConversation();
+        const s = await window.api.getState();
+        if (s && s.conversationId) ids.push(String(s.conversationId));
+      } else break;
+    }
+    return ids;
+  })()`, 60000);
+  const ids = Array.isArray(created) ? created.map(String) : [];
+  if (ids.length < 2) throw new Error('archive stress could not create conversations: ' + redact(JSON.stringify(created)));
+  // 连续快速归档每个会话，测量 UI 同步响应 + 后端异步完成。
+  const timings = await evaluate(cdp, `(async () => {
+    const rows = [];
+    for (const id of ${JSON.stringify(ids)}) {
+      const started = Date.now();
+      let uiRemoved = false;
+      try {
+        if (window.archiveConv) {
+          window.archiveConv(id);
+          // 同步执行后立即检查该会话行是否已从 UI 移除（乐观移除）。
+          const convs = currentWorkspaceConversations ? currentWorkspaceConversations() : [];
+          uiRemoved = !convs.some(c => String(c && c.id || 'default') === id);
+        }
+      } catch (e) {}
+      rows.push({ id, uiSyncMs: Date.now() - started, uiRemoved });
+    }
+    return rows;
+  })()`, 30000);
+  const fastest = timings.reduce((a, b) => Math.min(a, b.uiSyncMs), Infinity);
+  const slowest = timings.reduce((a, b) => Math.max(a, b.uiSyncMs), 0);
+  const allRemoved = timings.every(r => r.uiRemoved);
+  if (!allRemoved) throw new Error('archive rows not optimistically removed: ' + redact(JSON.stringify(timings)));
+  // 等后端异步归档落盘。
+  await sleep(1500);
+  return 'archived=' + ids.length + '; uiSyncMs=' + fastest + '..' + slowest + '; allRemoved=' + allRemoved;
+}
+
 async function runQueueStress(cdp) {
   const conversationId = 'stress-queue';
   await evaluate(cdp, `window.api.setMode ? window.api.setMode('build') : Promise.resolve()`, 30000);
@@ -952,6 +1063,10 @@ Failures are classified as provider-limit, app-timeout-or-provider-timeout, conv
     if (shouldRunScenario('ui-rounds')) await recordScenario('ui-rounds', () => runUiStress(cdp));
     if (shouldRunScenario('ui-escape-stop')) await recordScenario('ui-escape-stop', () => runUiEscapeStopStress(cdp));
     if (shouldRunScenario('goal-continuation')) await recordScenario('goal-continuation', () => runGoalStress(cdp));
+    if (shouldRunScenario('goal-manage-tool')) await recordScenario('goal-manage-tool', () => runGoalManageToolStress(cdp));
+    if (shouldRunScenario('conversation-rename-tool')) await recordScenario('conversation-rename-tool', () => runConversationRenameToolStress(cdp));
+    if (shouldRunScenario('multi-mode-switch')) await recordScenario('multi-mode-switch', () => runMultiModeSwitchStress(cdp));
+    if (shouldRunScenario('web-fetch-reachability')) await recordScenario('web-fetch-reachability', () => runWebFetchReachabilityStress(cdp));
     if (shouldRunScenario('queue-drain')) await recordScenario('queue-drain', () => runQueueStress(cdp));
     if (shouldRunScenario('conversation-isolation')) await recordScenario('conversation-isolation', () => runConversationIsolationStress(cdp));
     if (shouldRunScenario('long-context')) await recordScenario('long-context', () => runLongContextStress(cdp));

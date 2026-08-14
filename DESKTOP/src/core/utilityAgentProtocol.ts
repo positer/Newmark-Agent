@@ -2,6 +2,7 @@ import { BrowserControlRequest, BrowserControlResult } from './browserControl';
 import { BrowserUseRequest } from './browserUse';
 import {
   AgentPromptMessage,
+  ConversationContextCompressOptions,
   ConversationKernelRunOptions,
   ConversationKernelRunResult,
   ConversationQueueMode,
@@ -67,6 +68,7 @@ export type UtilityAgentRequest =
   | { id: string; method: 'stop'; params: { target: ConversationRuntimeTarget; runId?: string } }
   | { id: string; method: 'guide'; params: { target: ConversationRuntimeTarget; envelope: ConversationInputEnvelope } }
   | { id: string; method: 'checkpoint'; params: { target: ConversationRuntimeTarget } }
+  | { id: string; method: 'context_compress'; params: { target: ConversationRuntimeTarget; options?: ConversationContextCompressOptions } }
   | { id: string; method: 'rate_auto_route'; params: { target: ConversationRuntimeTarget; score: number; routeId?: string } }
   | { id: string; method: 'set_work_run_expanded'; params: { target: ConversationRuntimeTarget; runId: string; expanded: boolean } }
   | { id: string; method: 'set_mode'; params: { target: ConversationRuntimeTarget; mode: AgentMode } }

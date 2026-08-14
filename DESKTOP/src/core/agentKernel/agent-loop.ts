@@ -208,9 +208,33 @@ async function executeToolCalls(toolCalls: AgentToolCall[], context: MutableCont
     }
   };
   if (config.toolExecution === 'parallel') {
-    // Promise.all is the batch barrier: every launch succeeds or fails before
-    // the provider receives any result and starts the next reasoning step.
-    return await Promise.all(toolCalls.map(call => executeOne(call)));
+    // DSH 式并发安全分级：只有 concurrencySafe 工具才能与兄弟调用重叠执行，
+    // 有副作用的工具（缺省独占）形成串行屏障，避免盲目 Promise.all 导致
+    // write/edit/bash/browser_* 等副作用工具竞态。连续的并发安全调用聚合为
+    // 一个 Promise.all 批次；独占调用等待前面批次全部 settle 后单独执行。
+    const results: ToolResultMessage[] = [];
+    let index = 0;
+    while (index < toolCalls.length) {
+      const call = toolCalls[index];
+      const tool = tools.find(candidate => candidate.name === call.name);
+      if (tool && tool.concurrencySafe === true) {
+        // 聚合连续的并发安全调用为一个并行批次。
+        const batch: AgentToolCall[] = [];
+        while (index < toolCalls.length) {
+          const candidate = toolCalls[index];
+          const candidateTool = tools.find(t => t.name === candidate.name);
+          if (!candidateTool || candidateTool.concurrencySafe !== true) break;
+          batch.push(candidate);
+          index += 1;
+        }
+        results.push(...(await Promise.all(batch.map(c => executeOne(c)))));
+      } else {
+        // 独占工具：串行屏障，等待前面批次全部 settle 后单独执行。
+        results.push(await executeOne(call));
+        index += 1;
+      }
+    }
+    return results;
   }
   const results: ToolResultMessage[] = [];
   for (const call of toolCalls) results.push(await executeOne(call));

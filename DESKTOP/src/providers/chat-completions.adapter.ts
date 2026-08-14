@@ -62,6 +62,9 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
       tool_choice: 'auto',
     };
     if (request.reasoningEffort) body.reasoning_effort = request.reasoningEffort;
+    // 会话标识透传：仅当上层（支持 session_id 语义的 provider）显式填充时写进
+    // body，否则省略，避免严格 API 拒绝未知字段。
+    if (request.sessionId) body.session_id = request.sessionId;
 
     const base = request.baseUrl.replace(/\/+$/, '');
     return {
@@ -115,7 +118,10 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
 
     const decoder = new TextDecoder();
     let buffer = '';
-    let currentToolCall: { id: string; name: string; arguments: string } | null = null;
+    const toolCalls = new Map<number, { id: string; name: string; argumentParts: string[] }>();
+    const toolCallOrder: number[] = [];
+    let syntheticToolIndex = 0;
+    let lastToolIndex = 0;
     let contentPolicyBlocked = false;
     let emittedContent = false;
     let emittedTool = false;
@@ -150,31 +156,49 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
             emittedContent = true;
             yield { type: 'text.delta', delta: textDelta };
           }
-          const toolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
-          for (const raw of toolCalls) {
+          const deltaToolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+          for (const raw of deltaToolCalls) {
             const tc = raw as Record<string, unknown>;
             const fn = tc.function && typeof tc.function === 'object' ? tc.function as Record<string, unknown> : {};
-            if (tc.id) {
-              if (currentToolCall) {
-                emittedTool = true;
-                yield { type: 'tool_call.completed', id: currentToolCall.id, name: currentToolCall.name, arguments: currentToolCall.arguments };
-              }
+            const rawIndex = Number(tc.index);
+            const index = Number.isInteger(rawIndex) && rawIndex >= 0
+              ? rawIndex
+              : (tc.id ? syntheticToolIndex++ : lastToolIndex);
+            lastToolIndex = index;
+            let currentToolCall = toolCalls.get(index);
+            if (!currentToolCall && tc.id) {
               currentToolCall = {
                 id: String(tc.id || ''),
                 name: openAIToolName(String(fn.name || '')),
-                arguments: String(fn.arguments || ''),
+                argumentParts: [],
               };
+              toolCalls.set(index, currentToolCall);
+              toolCallOrder.push(index);
               yield { type: 'tool_call.started', id: currentToolCall.id, name: currentToolCall.name };
-            } else if (fn.arguments && currentToolCall) {
-              currentToolCall.arguments += String(fn.arguments);
-              yield { type: 'tool_call.arguments.delta', id: currentToolCall.id, delta: String(fn.arguments) };
+            }
+            if (currentToolCall && fn.name && !currentToolCall.name) currentToolCall.name = openAIToolName(String(fn.name));
+            if (currentToolCall && fn.arguments !== undefined && fn.arguments !== null) {
+              const argumentDelta = String(fn.arguments);
+              if (argumentDelta) {
+                currentToolCall.argumentParts.push(argumentDelta);
+                yield { type: 'tool_call.arguments.delta', id: currentToolCall.id, delta: argumentDelta };
+              }
             }
           }
         }
       }
-      if (currentToolCall && currentToolCall.arguments) {
-        emittedTool = true;
-        yield { type: 'tool_call.completed', id: currentToolCall.id, name: currentToolCall.name, arguments: currentToolCall.arguments };
+      if (toolCallOrder.length) {
+        for (const index of toolCallOrder) {
+          const currentToolCall = toolCalls.get(index);
+          if (!currentToolCall) continue;
+          emittedTool = true;
+          yield {
+            type: 'tool_call.completed',
+            id: currentToolCall.id,
+            name: currentToolCall.name,
+            arguments: currentToolCall.argumentParts.join(''),
+          };
+        }
       } else if (!emittedContent && !emittedTool && contentPolicyBlocked) {
         yield { type: 'response.failed', error: '[Error] Content policy refusal (content_filter).' };
         return;

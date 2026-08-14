@@ -882,6 +882,7 @@ export class LLMProvider {
     tools: unknown[],
     signal?: AbortSignal,
     reasoningTier?: string,
+    sessionId?: string,
   ): AsyncGenerator<StreamToken> {
     const mode = this.openAITransportMode();
     if (mode === 'responses') {
@@ -901,6 +902,7 @@ export class LLMProvider {
       maxOutputTokens: maxTokens,
       apiKey: this.apiKey,
       baseUrl: this.cleanBaseUrl(),
+      ...(sessionId ? { sessionId } : {}),
     };
     const serialized = await adapter.serializeRequest(request);
     serialized.body.stream = mode === 'chat' ? false : true;
@@ -1141,6 +1143,7 @@ export class LLMProvider {
     tools: unknown[],
     signal?: AbortSignal,
     reasoningTier?: string,
+    sessionId?: string,
   ): AsyncGenerator<StreamToken> {
     if (signal?.aborted) throw abortFailure(signal);
     if (this.protocol() === 'anthropic') {
@@ -1152,7 +1155,7 @@ export class LLMProvider {
       return;
     }
     if (this.useProviderAdaptersV2) {
-      yield* this.chatStreamWithToolsV2(model, messages, systemPrompt, temperature, maxTokens, tools, signal, reasoningTier);
+      yield* this.chatStreamWithToolsV2(model, messages, systemPrompt, temperature, maxTokens, tools, signal, reasoningTier, sessionId);
       return;
     }
     throw new Error('LLMProvider legacy OpenAI streaming was removed in dev-0.3.0: enable provider_adapters_v2 (useProviderAdaptersV2).');

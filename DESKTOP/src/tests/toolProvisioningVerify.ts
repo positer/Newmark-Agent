@@ -414,11 +414,14 @@ async function main(): Promise<void> {
       assert.ok(compressionAgent.workRuns.at(-1)?.events.some(event => event.type === 'tool_result' && event.toolName === 'context_compression')
         && compressionContexts.some(context => context.includes('Continue Same Build After Context Compression') && context.includes('Build Primary Prompt') && context.includes('Continue after compacting this long public context.')),
       'context compression is a completed Build activity and continuation submits the summary, primary prompt, Guide slot, and current Build snapshot');
-      assert.ok(compressionSystems[0]?.includes('Injection reason: context compression just completed')
-        && compressionSystems[0].includes('PUBLIC_COMPRESSION_SUMMARY')
+      // 方向 A（缓存命中最大化）：压缩后 bootstrap 采用与「新 Build」完全一致的稳定措辞，
+      // system 不再因压缩而分叉；压缩摘要通过 transformContext 的 compressionContinuationPrompt
+      // 写入 messages（上面第 415 行已验证 continuation 内容随 messages 传递），而不是冗余注入 system。
+      assert.ok(compressionSystems[0]?.includes('Injection reason: this is the first provider request of a new Build.')
         && compressionSystems[0].includes('Historical Build Blocks (newest to oldest; #1 is the previous/last task):')
-        && compressionSystems[0].includes('## Tool Awareness Bootstrap'),
-      'the first provider request after compression rehydrates the mixed Build, recent-history, and tool-awareness bootstrap');
+        && compressionSystems[0].includes('## Tool Awareness Bootstrap')
+        && !compressionSystems[0].includes('PUBLIC_COMPRESSION_SUMMARY'),
+      'the first provider request after compression rehydrates a byte-stable bootstrap (cache-friendly) with the summary carried in messages, not the system prompt');
       assert.ok(compressionSystems.slice(1).every(system => !system.includes('## Build Context Bootstrap')),
         'post-compression tool subturns do not repeat the bootstrap');
       assert.ok(compressionSystems.every(system => !system.includes('0:' + 'x'.repeat(500))),

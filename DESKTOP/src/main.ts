@@ -16,7 +16,7 @@ import { NativeBrowserUsePageAdapter } from './core/browserUsePageAdapter';
 import { ElectronBrowserUseHost } from './core/electronBrowserUseHost';
 import { FlowEngine } from './core/flow';
 import { FlowCompletedResult, FlowQuestionPendingError, runFlow } from './core/flow-runner';
-import { CLI_COMMANDS, runCliCommand } from './cli-commands';
+import { CLI_COMMANDS, cliCommandHelp, cliHelpRequested, runCliCommand } from './cli-commands';
 import { invalidTopLevelArgument, isVersionArgument, unknownTopLevelCommand } from './cli-discovery';
 import { sanitizeProvidersForState } from './core/config';
 import { MemoryLabManager } from './core/memoryLab';
@@ -58,6 +58,7 @@ import {
 import { runRuntimeShutdownBarrier } from './core/runtimeShutdown';
 import { markRuntimeLifecycleClean } from './core/runtimeLifecycle';
 import { discoverPluginManifests } from './core/compat';
+import { discoverDshCompatibility } from './core/dshCompatibility';
 import { McpManager } from './core/mcpManager';
 import { newmarkEditHelpText, newmarkFlowHelpText, newmarkHelpText } from './cli-help';
 
@@ -138,6 +139,7 @@ let browserUseEngine: BrowserUseEngine | null = null;
 // the authoritative Browser-Use/right-sidebar binding.
 const browserGuestContentsByHost = new Map<number, number>();
 const browserGuestBindingsByRuntime = new Map<string, { hostId: number; guestId: number; workspaceId: string; conversationId: string }>();
+const browserGuestKeyboardBridgeIds = new Set<number>();
 
 function browserGuestRuntimeKey(target: ConversationRuntimeTarget): string {
   return normalizeConversationTarget(target).runtimeKey;
@@ -694,9 +696,14 @@ function resolveTuiWorkspacePath(args: string[], root: string): string {
   return pathArgValue(args, '--root') ? root : process.cwd();
 }
 
+// Set immediately after argument resolution so startup failures from an
+// explicit temporary root are recorded beside that root instead of leaking a
+// diagnostic file into the user's canonical runtime.
+let startupRuntimeRoot = '';
+
 function startupLogPath(): string {
   try {
-    const userData = userRuntimeRoot();
+    const userData = startupRuntimeRoot || userRuntimeRoot();
     fs.mkdirSync(userData, { recursive: true });
     return path.join(userData, 'startup.log');
   } catch {
@@ -840,7 +847,25 @@ function registerBrowserGuest(host: Electron.WebContents, guest: Electron.WebCon
     conversationId: target.conversationId,
   });
   browserGuestContentsByHost.set(host.id, guest.id);
+  if (!browserGuestKeyboardBridgeIds.has(guest.id)) {
+    browserGuestKeyboardBridgeIds.add(guest.id);
+    // WebView keyboard events do not bubble to the host renderer. Reserve only
+    // the two app-wide discovery surfaces and leave navigation/editing keys to
+    // the page itself.
+    guest.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown' || input.isAutoRepeat || host.isDestroyed()) return;
+      const key = String(input.key || '').toLowerCase();
+      const noSecondaryModifiers = !input.alt && !input.control && !input.meta && !input.shift;
+      let commandId = '';
+      if (key === 'f1' && noSecondaryModifiers) commandId = 'help.keyboardShortcuts';
+      else if (key === 'p' && (input.control || input.meta) && input.shift && !input.alt) commandId = 'app.commandPalette';
+      if (!commandId) return;
+      event.preventDefault();
+      host.send('keyboard:command', { id: commandId, source: 'browserGuest' });
+    });
+  }
   guest.once('destroyed', () => {
+    browserGuestKeyboardBridgeIds.delete(guest.id);
     if (browserGuestContentsByHost.get(host.id) === guest.id) browserGuestContentsByHost.delete(host.id);
     const binding = browserGuestBindingsByRuntime.get(target.runtimeKey);
     if (binding?.guestId === guest.id) browserGuestBindingsByRuntime.delete(target.runtimeKey);
@@ -1036,6 +1061,7 @@ const args = userArgs();
 const command = args.find(a => a === 'flow' || a === 'edit');
 const isTuiArg = args.some(arg => arg.toLowerCase() === '--tui');
 const hasCliCommand = args.some(a => (CLI_COMMANDS as readonly string[]).includes(a));
+const cliCommand = args.find(a => (CLI_COMMANDS as readonly string[]).includes(a));
 const isFlowArg = command === 'flow';
 const isEditArg = command === 'edit';
 const isHelpArg = !hasCliCommand && (args.some(arg => ['--help', '-h'].includes(arg.toLowerCase())) || args[0]?.toLowerCase() === 'help');
@@ -1051,18 +1077,35 @@ if (invalidArgument) {
   process.exit(2);
 }
 
+// Keep command-specific help on the same early-exit path as top-level help.
+// This matters for the packaged Electron entry: a command such as
+// `send --help` must never create a GUI window, start prewarm work, or touch a
+// user-data profile merely to print its contract.
+if (hasCliCommand && cliCommand && cliHelpRequested(args)) {
+  console.log(cliCommandHelp(cliCommand));
+  process.exit(0);
+}
+
 // Electron's Chromium profile is a separate state boundary from Newmark's
 // business root. Bind both before any ready event so --root cannot leave
 // Preferences, DIPS, DevTools ports, cookies, or session storage in the real
 // default AppData directory. The dedicated subdirectories keep Chromium's
 // files separate from the durable Newmark config/workspace files.
 const runtimeRoot = resolveRoot(args);
-const electronUserDataRoot = path.join(runtimeRoot, 'Electron');
+startupRuntimeRoot = runtimeRoot;
+const explicitElectronUserDataRoot = pathArgValue(args, '--user-data-dir');
+const electronUserDataRoot = path.resolve(explicitElectronUserDataRoot || path.join(runtimeRoot, 'Electron'));
 const electronSessionDataRoot = path.join(electronUserDataRoot, 'session-data');
 try {
   fs.mkdirSync(electronSessionDataRoot, { recursive: true });
   app.setPath('userData', electronUserDataRoot);
   app.setPath('sessionData', electronSessionDataRoot);
+  // app.setPath is the Electron API contract; the switch makes the same
+  // boundary visible to Chromium children, including the console-wrapper
+  // `--` forwarding path where an early child may otherwise retain the default
+  // profile before the first BrowserWindow is created.
+  app.commandLine.removeSwitch('user-data-dir');
+  app.commandLine.appendSwitch('user-data-dir', electronUserDataRoot);
 } catch (error) {
   console.error(`Unable to isolate Electron user-data directory: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
@@ -3091,6 +3134,11 @@ if (isViewerArg) {
         runtimeDeferred: false,
       };
     });
+    ipcMain.handle('agent:setConversationBranchCommunication', async (_event, targetInput: ConversationTargetInput, enabled: boolean) => {
+      if (!agent) return false;
+      const target = conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default');
+      return mutateTargetConversation(target, () => isolatedConversationAgent(target).setBranchCommunication(enabled !== false));
+    });
     ipcMain.handle('agent:computerUseState', async (_event, targetInput?: ConversationTargetInput) => {
       if (!agent) return { enabled: false, occupied: false, runtimeKey: '' };
       const target = normalizeConversationTarget(conversationRuntimeTarget(targetInput || agent.activeConversationId || 'default'));
@@ -3563,6 +3611,18 @@ if (isViewerArg) {
       return wslBackendEnabled()
         ? await ensureWslConversationPool()!.checkpoint(target)
         : await ensureElectronUtilityPool().checkpoint(target);
+    });
+
+    ipcMain.handle('agent:compressContext', async (_event, request: { target?: ConversationTargetInput; keepRecent?: number; force?: boolean }) => {
+      if (!agent) throw new Error('Agent not initialized');
+      const target = conversationRuntimeTarget(request);
+      const options = {
+        keepRecent: Number.isFinite(Number(request?.keepRecent)) ? Math.floor(Number(request.keepRecent)) : undefined,
+        force: request?.force !== false,
+      };
+      return wslBackendEnabled()
+        ? await ensureWslConversationPool()!.contextCompress(target, options)
+        : await ensureElectronUtilityPool()!.contextCompress(target, options);
     });
 
     ipcMain.handle('agent:rateAutoRoute', async (_event, request: { target?: ConversationTargetInput; score?: number; routeId?: string }) => {
@@ -4055,6 +4115,20 @@ if (isViewerArg) {
       return { error: 'Agent not initialized' };
     });
 
+    ipcMain.handle('app:openWebUrl', async (_event, rawUrl: string) => {
+      try {
+        const target = new URL(String(rawUrl || ''));
+        const allowedHosts = new Set(['github.com', 'www.github.com', 'npmjs.com', 'www.npmjs.com']);
+        if (target.protocol !== 'https:' || !allowedHosts.has(target.hostname.toLowerCase()) || !!target.username || !!target.password || (!!target.port && target.port !== '443')) {
+          return { ok: false, error: 'Only approved HTTPS documentation hosts can be opened.' };
+        }
+        await shell.openExternal(target.toString());
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+
     ipcMain.handle('agent:selectWorkspace', async (_event, id: string) => {
       if (agent) {
         const requested = String(id || '').trim();
@@ -4214,7 +4288,12 @@ if (isViewerArg) {
 
     ipcMain.handle('agent:fuzzyInject', async (_event, name: string, url: string, key: string, protocol?: string) => {
       if (agent) {
-        return agent.fuzzyInject(name, url, key, protocol === 'anthropic' ? 'anthropic' : protocol === 'openai' ? 'openai' : undefined);
+        return agent.fuzzyInject(
+          name,
+          url,
+          key,
+          protocol === 'anthropic' ? 'anthropic' : protocol === 'openai' ? 'openai' : undefined,
+        );
       }
       return { ok: false, warning: 'Agent not ready' };
     });
@@ -4462,6 +4541,8 @@ if (isViewerArg) {
       return { servers: mcpManager.list(), discovered };
     });
 
+    ipcMain.handle('dsh:discover', async () => discoverDshCompatibility(root));
+
     ipcMain.handle('mcp:upsert', async (_event, input: Record<string, unknown>) => {
       if (!mcpManager) return { ok: false, error: 'MCP manager is unavailable.' };
       try {
@@ -4474,12 +4555,14 @@ if (isViewerArg) {
 
     ipcMain.handle('mcp:setEnabled', async (_event, id: string, enabled: boolean) => {
       if (!mcpManager) return { ok: false, error: 'MCP manager is unavailable.' };
-      return { ok: mcpManager.setEnabled(id, enabled), servers: mcpManager.list() };
+      const ok = mcpManager.setEnabled(id, enabled);
+      return { ok, error: ok ? undefined : 'MCP server was not found.', servers: mcpManager.list() };
     });
 
     ipcMain.handle('mcp:remove', async (_event, id: string) => {
       if (!mcpManager) return { ok: false, error: 'MCP manager is unavailable.' };
-      return { ok: mcpManager.remove(id), servers: mcpManager.list() };
+      const ok = mcpManager.remove(id);
+      return { ok, error: ok ? undefined : 'MCP server was not found.', servers: mcpManager.list() };
     });
 
     ipcMain.handle('memoryLab:read', async (_event, selector?: string) => {

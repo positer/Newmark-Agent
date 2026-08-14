@@ -8,7 +8,7 @@ import { spawn } from 'child_process';
 import { Agent } from './core/agent';
 import { FlowEngine } from './core/flow';
 import { runFlow } from './core/flow-runner';
-import { CLI_COMMANDS, runCliCommand } from './cli-commands';
+import { CLI_COMMANDS, cliCommandHelp, cliHelpRequested, runCliCommand } from './cli-commands';
 import { invalidTopLevelArgument, isVersionArgument, unknownTopLevelCommand } from './cli-discovery';
 import { currentAppVersion } from './core/installUpdate';
 import { newmarkEditHelpText, newmarkFlowHelpText, newmarkHelpText } from './cli-help';
@@ -16,6 +16,7 @@ import { newmarkEditHelpText, newmarkFlowHelpText, newmarkHelpText } from './cli
 const rawArgs = process.argv.slice(2);
 const args = rawArgs[0] === '--' ? rawArgs.slice(1) : rawArgs;
 const hasCliCommand = args.some(a => (CLI_COMMANDS as readonly string[]).includes(a));
+const cliCommand = args.find(a => (CLI_COMMANDS as readonly string[]).includes(a));
 const isEdit = args[0] === 'edit';
 const editFile = isEdit ? args[1] : '';
 const isFlow = args[0] === 'flow';
@@ -31,6 +32,14 @@ const invalidArgument = invalidTopLevelArgument(args);
 if (invalidArgument) {
   console.error(`Invalid Newmark argument: ${invalidArgument}`);
   process.exit(2);
+}
+
+// Command help is a terminating, read-only discovery operation. Resolve it
+// before first-run initialization or GUI forwarding so `Newmark.exe send
+// --help` cannot accidentally enter Electron or instantiate an Agent.
+if (hasCliCommand && cliCommand && cliHelpRequested(args)) {
+  console.log(cliCommandHelp(cliCommand));
+  process.exit(0);
 }
 
 function pathArgValue(values: string[], key: string): string | undefined {

@@ -90,6 +90,9 @@ async function handle(request: UtilityAgentRequest): Promise<unknown> {
     });
   }
   if (request.method === 'checkpoint') return kernel.checkpoint(checkedTarget(request.params.target));
+  if (request.method === 'context_compress') {
+    return kernel.compressContext(checkedTarget(request.params.target), request.params.options);
+  }
   if (request.method === 'rate_auto_route') {
     return kernel.rateAutoRoute(
       checkedTarget(request.params.target),

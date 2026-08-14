@@ -8,8 +8,13 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const releaseRoot = path.join(repoRoot, 'release', 'win-unpacked');
 const guiExe = path.join(releaseRoot, 'Newmark Agent.exe');
 const consoleExe = path.join(releaseRoot, 'Newmark.exe');
+const consoleRuntimeExe = path.join(releaseRoot, 'Newmark Console Runtime.exe');
 const portableLauncher = path.join(releaseRoot, 'Newmark.bat');
 const userConfig = path.join(os.homedir(), '.Newmark', 'config.json');
+const packageVersion = require('../package.json').version;
+const packageVersionPattern = new RegExp(
+  `\\b${packageVersion.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`,
+);
 
 function assert(condition, message) {
   if (!condition) throw new Error(`safe black-box gate failed: ${message}`);
@@ -40,6 +45,24 @@ function invoke(exe, args, root, timeout = 30_000) {
   });
 }
 
+function invokeExact(exe, args, root, timeout = 30_000) {
+  return spawnSync(exe, args, {
+    cwd: root,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout,
+    maxBuffer: 2 * 1024 * 1024,
+  });
+}
+
+function runExact(exe, args, root, expectedStatus = 0) {
+  const result = invokeExact(exe, args, root);
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+  assert(!result.error, `${path.basename(exe)} ${args.join(' ')} exact spawn: ${result.error?.message || 'unknown error'}`);
+  assert(result.status === expectedStatus, `${path.basename(exe)} ${args.join(' ')} exact exit=${result.status}; expected=${expectedStatus}; output=${output.trim().slice(0, 600)}`);
+  return { result, output };
+}
+
 function runExpect(exe, args, root, expectedStatus, pattern) {
   const result = invoke(exe, args, root);
   const output = `${result.stdout || ''}\n${result.stderr || ''}`;
@@ -68,7 +91,8 @@ function remainingPackagedProcesses() {
   const ps = [
     '$paths=@(',
     `  '${guiExe.replace(/'/g, "''")}',`,
-    `  '${consoleExe.replace(/'/g, "''")}'`,
+    `  '${consoleExe.replace(/'/g, "''")}',`,
+    `  '${consoleRuntimeExe.replace(/'/g, "''")}'`,
     ')',
     ';',
     '@(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and ($paths -contains $_.ExecutablePath) }).Count',
@@ -84,7 +108,8 @@ function profileProcessRows() {
   const ps = [
     '$paths=@(',
     `  '${guiExe.replace(/'/g, "''")}',`,
-    `  '${consoleExe.replace(/'/g, "''")}'`,
+    `  '${consoleExe.replace(/'/g, "''")}',`,
+    `  '${consoleRuntimeExe.replace(/'/g, "''")}'`,
     ')',
     ';',
     '$rows=@(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and ($paths -contains $_.ExecutablePath) -and $_.CommandLine -and ($_.CommandLine -match \'--user-data-dir\') } | Select-Object ProcessId,ParentProcessId,CommandLine)',
@@ -187,6 +212,41 @@ function verifyGuiUserDataIsolation(root) {
   }
 }
 
+function verifyConsoleWrapperUserDataIsolation() {
+  const wrapperRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-safe-wrapper-gui-root-'));
+  const expectedUserData = path.join(wrapperRoot, 'Electron');
+  const legacyProfileBefore = snapshotLegacyElectronProfile();
+  let child = null;
+  try {
+    child = spawn(consoleExe, ['--allow-multiple-instances', '--disable-gpu', '--root', wrapperRoot], {
+      cwd: wrapperRoot,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    const deadline = Date.now() + 45_000;
+    let rows = [];
+    while (Date.now() < deadline && !child.exitCode) {
+      rows = profileProcessRows();
+      if (rows.some(row => String(row.CommandLine || '').toLowerCase().includes(expectedUserData.toLowerCase()))) break;
+      sleepMs(250);
+    }
+    const isolatedRows = rows.filter(row => String(row.CommandLine || '').toLowerCase().includes(expectedUserData.toLowerCase()));
+    assert(isolatedRows.length > 0, `console wrapper did not bind Chromium user-data to ${expectedUserData}; rows=${JSON.stringify(rows).slice(0, 1200)}`);
+    const legacyRoot = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Newmark Agent');
+    assert(!isolatedRows.some(row => String(row.CommandLine || '').toLowerCase().includes(legacyRoot.toLowerCase())),
+      `console wrapper Chromium process still references the real legacy AppData profile: ${JSON.stringify(isolatedRows).slice(0, 1200)}`);
+    assert(fs.existsSync(expectedUserData), `console wrapper isolated Electron root was not created: ${expectedUserData}`);
+    process.stdout.write(`[safe-blackbox] console-wrapper-user-data-isolation ok root=${expectedUserData}\n`);
+  } finally {
+    stopProcessTree(child?.pid);
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline && remainingPackagedProcesses() > 0) sleepMs(250);
+    assert(remainingPackagedProcesses() === 0, 'console wrapper user-data isolation case left a packaged process behind');
+    assertLegacyElectronProfileUnchanged(legacyProfileBefore);
+    fs.rmSync(wrapperRoot, { recursive: true, force: true });
+  }
+}
+
 function processStillExists(pid) {
   if (!pid) return false;
   const ps = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
@@ -285,8 +345,24 @@ function main() {
       run(exe, args, root);
       process.stdout.write(`[safe-blackbox] ${name} ok\n`);
     }
+    const helpBoundaryRoot = path.join(root, 'Help Root With Spaces');
+    fs.mkdirSync(helpBoundaryRoot, { recursive: true });
+    for (const [surface, exe] of [['console', consoleExe], ['gui', guiExe]]) {
+      const variants = [
+        ['--help', '--root', helpBoundaryRoot],
+        ['--root', helpBoundaryRoot, '--help'],
+        ['send', '--help', '--root', helpBoundaryRoot],
+        ['send', '--root', helpBoundaryRoot, '--help'],
+      ];
+      for (const args of variants) {
+        const help = runExact(exe, args, helpBoundaryRoot);
+        assert(/Usage:|Newmark CLI command:/i.test(help.output), `${surface} help boundary output mismatch: ${help.output.trim().slice(0, 600)}`);
+      }
+      assert(!fs.existsSync(path.join(helpBoundaryRoot, 'config.json')), `${surface} help boundary initialized its explicit root`);
+      process.stdout.write(`[safe-blackbox] ${surface}-help-boundary-order ok variants=${variants.length}\n`);
+    }
     for (const [name, exe] of [['console-version-alias', consoleExe], ['gui-version-alias', guiExe]]) {
-      runExpect(exe, ['-version'], root, 0, /0\.3\.12/);
+    runExpect(exe, ['-version'], root, 0, packageVersionPattern);
       process.stdout.write(`[safe-blackbox] ${name} ok\n`);
     }
     for (const [name, exe] of [['console-unknown-command', consoleExe], ['gui-unknown-command', guiExe]]) {
@@ -338,6 +414,7 @@ function main() {
     verifyBatchExitCode();
     verifyGuiCloseLifecycle();
     verifyGuiUserDataIsolation(root);
+    verifyConsoleWrapperUserDataIsolation();
     const after = hashFile(userConfig);
     assert(before === after, `user config changed before=${before} after=${after}`);
     assert(remainingPackagedProcesses() === 0, 'packaged GUI/console process remained after black-box matrix');

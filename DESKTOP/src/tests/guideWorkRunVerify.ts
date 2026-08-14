@@ -145,8 +145,8 @@ async function verifyParallelToolBatchBarrier(): Promise<void> {
     initialState: {
       model: MODEL,
       tools: [
-        { name: 'fast', label: 'fast', description: '', parameters: {}, execute: async () => { events.push('fast-start'); await new Promise(resolve => setTimeout(resolve, 15)); events.push('fast-end'); return { content: [{ type: 'text', text: 'fast-ok' }] }; } },
-        { name: 'slow', label: 'slow', description: '', parameters: {}, execute: async () => { events.push('slow-start'); await new Promise(resolve => setTimeout(resolve, 45)); events.push('slow-end'); throw new Error('slow-failed'); } },
+        { name: 'fast', label: 'fast', description: '', parameters: {}, concurrencySafe: true, execute: async () => { events.push('fast-start'); await new Promise(resolve => setTimeout(resolve, 15)); events.push('fast-end'); return { content: [{ type: 'text', text: 'fast-ok' }] }; } },
+        { name: 'slow', label: 'slow', description: '', parameters: {}, concurrencySafe: true, execute: async () => { events.push('slow-start'); await new Promise(resolve => setTimeout(resolve, 45)); events.push('slow-end'); throw new Error('slow-failed'); } },
       ],
     },
     toolExecution: 'parallel',

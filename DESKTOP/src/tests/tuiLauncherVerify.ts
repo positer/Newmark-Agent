@@ -90,10 +90,13 @@ assert(packageJson.scripts?.['test:full-release']?.includes('test:desktop:built'
   'full release regression must run DESKTOP, TUI, SSH, WSL/Linux, CLI, and cross-surface stress');
 assert(launcherSource.includes('const isHelpArg')
   && launcherSource.includes('const hasCliCommand')
+  && launcherSource.includes('const cliCommand = args.find')
+  && launcherSource.includes('cliHelpRequested(args)')
+  && launcherSource.includes('cliCommandHelp(cliCommand)')
   && launcherSource.includes('!hasCliCommand')
   && launcherSource.includes('newmarkHelpText(currentAppVersion())')
   && launcherSource.includes('process.exit(0)'),
-  'console launcher must terminate top-level --help/--version before first-run initialization without swallowing CLI command flags');
+  'console launcher must terminate top-level and command-specific --help/--version before first-run initialization without swallowing CLI command flags');
 assert(launcherSource.includes('newmarkFlowHelpText()')
   && launcherSource.includes('newmarkEditHelpText()')
   && helpSource.includes('Newmark Flow command:')
@@ -101,10 +104,13 @@ assert(launcherSource.includes('newmarkFlowHelpText()')
   'console launcher must expose command-specific Flow and editor help before runtime initialization');
 assert(mainSource.includes('const isHelpArg')
   && mainSource.includes('const hasCliCommand')
+  && mainSource.includes('const cliCommand = args.find')
+  && mainSource.includes('cliHelpRequested(args)')
+  && mainSource.includes('cliCommandHelp(cliCommand)')
   && mainSource.includes('!hasCliCommand')
   && mainSource.includes('if (isHelpArg)')
   && mainSource.includes("newmarkHelpText(currentAppVersion())"),
-  'packaged Electron entry must terminate top-level --help before GUI/TUI/server startup without swallowing CLI command flags');
+  'packaged Electron entry must terminate top-level and command-specific --help before GUI/TUI/server startup without swallowing CLI command flags');
 assert(mainSource.includes('newmarkFlowHelpText()') && mainSource.includes('newmarkEditHelpText()'),
   'packaged Electron entry must expose command-specific Flow and editor help before GUI startup');
 assert(helpSource.includes('cliCommandUsage()')

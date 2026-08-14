@@ -122,6 +122,10 @@ const EDITOR_COMPLETION_AFTER_CONTEXT_CHARS = 800;
 const EDITOR_COMPLETION_MAX_TOKENS = 96;
 const EDITOR_COMPLETION_MAX_TEXT_CHARS = 1200;
 const EDITOR_COMPLETION_TIMEOUT_MS = 6500;
+/** 压缩摘要调用前，被省略段中单个工具结果（tool/function 角色）的字符数上限；
+ *  超过则裁剪为「头部结论 + 尾部证据」，避免巨型 read/grep/terminal 输出整段
+ *  重放给摘要模型（DSH toolResultPruner 的 Newmark 落地）。 */
+const TOOL_RESULT_PRUNE_CHARS = 8000;
 
 export function normalizeIntelligenceTier(value: unknown): 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' {
   const tier = String(value || '').trim().toLowerCase();
@@ -134,6 +138,19 @@ function throwIfAgentAborted(signal?: AbortSignal): void {
   const error = new Error(reason ? String(reason) : 'Agent run aborted');
   error.name = 'AbortError';
   throw error;
+}
+export interface BranchMessage {
+  id: string;
+  conversationId: string;
+  sequence: number;
+  fromBranchId: string;
+  toBranchId: string;
+  kind: 'message' | 'directive' | 'result';
+  body: string;
+  correlationId?: string;
+  replyTo?: string;
+  createdAt: string;
+  readAt?: string;
 }
 type StoredConversationEntry = NonNullable<StoredConversationState['conversations']>[string];
 export interface CompressionCacheEntry {
@@ -206,6 +223,8 @@ interface StoredConversationState {
     pinnedAt?: string;
     order?: number;
     draft?: string;
+    branchCommunication?: boolean;
+    branchMailbox?: BranchMessage[];
     runtimeOwnerId?: string;
     runtimeOwnerPid?: number;
     runtimeLifecycleRole?: RuntimeLifecycleRole;
@@ -269,6 +288,8 @@ export interface ConversationTreeState {
   rootNodeId: string;
   activeNodeId: string;
   activeGroupId: string;
+  /** Branch-communication mode only: every branch id that is currently running (removes single-runtime uniqueness). */
+  runningNodeIds?: string[];
   nodes: Record<string, ConversationTreeNode>;
   branchGroups: Record<string, ConversationBranchGroupState>;
   nodeIndex: Record<string, ConversationTreeNodeIndexEntry>;
@@ -400,6 +421,7 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - Plan: Fully read-only exploration. Do not modify any files, including README.md.
 - Goal: Persistent objective pursuit. Auto-continue until complete.
 - Flow: Sequential workflow execution with logic branching.
+- You may actively manage the Goal state yourself through the goal_manage tool: enter Goal mode or edit its objective when the user asks for a persistent objective or when it changes, mark it complete when you have genuinely verified it is achieved, and exit Goal mode when it is no longer needed. Do not use goal_manage to resume or bypass a Goal the user explicitly paused with Stop; the user is the only authority who resumes a paused Goal.
 
 ## Task Priority And Continuity
 - The latest explicit user instruction is authoritative and has the highest task priority. Resolve conflicts in favor of the latest instruction.
@@ -483,9 +505,14 @@ export class Agent {
     fallback: boolean;
   } | null = null;
   private compressionCache: CompressionCacheEntry[] = [];
+  private pendingHistoryRemovals: Array<{ position: number; fingerprint: string }> = [];
+  private branchMailbox: BranchMessage[] = [];
+  private nextBranchMessageSequence = 1;
+  private branchCommunicationEnabled = false;
+  private compressionArchiveCountCache: { scopeKey: string; count: number } | null = null;
   private nextCompressionCacheId = 1;
   private readonly compressionHistoryArchive: CompressionHistoryArchive;
-  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; compressionCache?: CompressionCacheEntry[]; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; flowSelection?: ConversationFlowSelection | null; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; runtimeOwnerId?: string; runtimeOwnerPid?: number; runtimeLifecycleRole?: RuntimeLifecycleRole; updatedAt?: string }>();
+  private workspaceConversations = new Map<string, { chatMessages: ChatMessage[]; history: Array<Record<string, unknown>>; compressionCache?: CompressionCacheEntry[]; branchMailbox?: BranchMessage[]; branchCommunication?: boolean; plan: ConversationPlanState; linkedPlan: LinkedPlanState; subagentState?: SubagentState; workRuns: ConversationWorkRun[]; continuations: ConversationContinuation[]; modelSelection?: ConversationModelSelection; flowSelection?: ConversationFlowSelection | null; inputMode?: InputMode; mode?: AgentMode; goal?: StoredGoalState | null; runtimeOwnerId?: string; runtimeOwnerPid?: number; runtimeLifecycleRole?: RuntimeLifecycleRole; updatedAt?: string }>();
   public isSubagentRuntime = false;
   private subagentName = '';
   private subagentPrompt = '';
@@ -563,6 +590,16 @@ export class Agent {
   public readonly runtimeLifecycleRole: RuntimeLifecycleRole;
   /** dev-0.3.0 context system facade (feature-flagged, default off). */
   public readonly contextV2: AgentContextManager;
+  /** 工具结果的持久化引用（artifact_id -> 状态 + 内容）。
+   *  两种来源：超大结果落盘（content 立即可得）与后台工具（status=running 直到完成）。
+   *  压缩前/后台中的大内容不进上下文，只通过 artifact_id 引用；读取后再释放。 */
+  private readonly toolResultArtifacts = new Map<string, {
+    tool: string;
+    content: string;
+    status: 'running' | 'done' | 'error';
+    error?: string;
+    createdAt: number;
+  }>();
   private readonly runtimeLifecycle: RuntimeLifecycleState;
   /** dev-0.3.0 toolchain core (registry + capability catalog). Seeded lazily from cachedToolDefinitions; not consumed by the legacy path. */
   private toolchainCore: ToolchainCore | null = null;
@@ -789,6 +826,7 @@ export class Agent {
     const raw = entry.tree;
     if (raw && [1, 2].includes(Number(raw.version)) && raw.nodes && raw.nodes[raw.activeNodeId]) {
       raw.version = 2;
+      if (!Array.isArray(raw.runningNodeIds) || !raw.runningNodeIds.length) raw.runningNodeIds = [raw.activeNodeId];
       this.coalesceConversationBranchGroups(raw);
       this.rebuildConversationTreeIndex(raw);
       entry.activeBranchId = raw.activeNodeId;
@@ -807,6 +845,7 @@ export class Agent {
       rootNodeId: source.id,
       activeNodeId,
       activeGroupId: groupId,
+      runningNodeIds: [activeNodeId],
       nodes,
       branchGroups: {
         [groupId]: {
@@ -900,13 +939,26 @@ export class Agent {
     return tree && tree.nodes[nodeId] ? this.treeAncestry(tree, nodeId).reverse() : [];
   }
 
+  /** 确定性消息 ID：基于角色+内容+索引的 sha256，保证旧数据缺失 messageId 时补生成稳定、
+   * 不漂移，且跨分支共享 fork 前缀消息得到一致 ID。 */
+  private deterministicMessageId(message: ChatMessage, index: number): string {
+    const seed = `${index}:${String(message.role || '')}:${String((message.content as any) === undefined ? '' : (typeof message.content === 'string' ? message.content : JSON.stringify(message.content)))}`;
+    return `m-${crypto.createHash('sha256').update(seed).digest('hex').slice(0, 16)}`;
+  }
+
+  /** 确定性 Guide ID：基于消息 ID + 索引，保证补生成稳定唯一。 */
+  private deterministicGuideId(message: ChatMessage, index: number): string {
+    const base = String(message.messageId || this.deterministicMessageId(message, index));
+    return `g-${crypto.createHash('sha256').update(`${index}:${base}`).digest('hex').slice(0, 16)}`;
+  }
+
   private rebuildConversationTreeIndex(tree: ConversationTreeState): void {
     const childIds = new Map<string, string[]>();
     for (const node of Object.values(tree.nodes)) {
-      node.chatMessages = (node.chatMessages || []).map(message => ({
+      node.chatMessages = (node.chatMessages || []).map((message, messageIndex) => ({
         ...message,
-        messageId: String(message.messageId || '') || crypto.randomUUID(),
-        guideId: message.clientMessageId ? (String(message.guideId || '') || crypto.randomUUID()) : undefined,
+        messageId: String(message.messageId || '') || this.deterministicMessageId(message, messageIndex),
+        guideId: message.clientMessageId ? (String(message.guideId || '') || this.deterministicGuideId(message, messageIndex)) : undefined,
         branchNodeId: node.id,
       }));
       node.workRuns = this.normalizeWorkRuns(node.workRuns).map(run => ({
@@ -1544,7 +1596,7 @@ export class Agent {
 
   private isPersistablePublicWorkEvent(event: { type?: unknown; content?: unknown; toolArgs?: unknown }): boolean {
     const type = String(event.type || '').toLowerCase();
-    const publicTypes = new Set(['start', 'text', 'response', 'final_response', 'tool_call', 'tool_result', 'status', 'done', 'error', 'queue_update', 'guide']);
+    const publicTypes = new Set(['start', 'text', 'response', 'final_response', 'tool_call', 'tool_result', 'thought', 'thought_result', 'status', 'done', 'error', 'queue_update', 'guide']);
     if (!publicTypes.has(type)) return false;
     // Tool implementation details are never public. They are dropped before
     // publication/persistence, so private arguments must not suppress the one
@@ -2320,9 +2372,11 @@ export class Agent {
     const userHistory = (Array.isArray(history) ? history : []).filter(message => message?.role === 'user');
     const consumedUserHistory = new Set<number>();
     let nextUserHistoryIndex = 0;
-    return (Array.isArray(messages) ? messages : []).map(message => {
-      const messageId = String(message?.messageId || '').trim() || crypto.randomUUID();
-      const guideId = message?.clientMessageId ? (String(message.guideId || '').trim() || crypto.randomUUID()) : undefined;
+    return (Array.isArray(messages) ? messages : []).map((message, messageIndex) => {
+      // 确定性补生成：缺失 messageId/guideId 的旧数据用内容 hash 补，避免每次归一化随机
+      // UUID 导致冷重载 ID 漂移（持久化 ID 唯一性与稳定性）。
+      const messageId = String(message?.messageId || '').trim() || this.deterministicMessageId(message as ChatMessage, messageIndex);
+      const guideId = message?.clientMessageId ? (String(message.guideId || '').trim() || this.deterministicGuideId(message as ChatMessage, messageIndex)) : undefined;
       const identified = { ...message, messageId, guideId, branchNodeId: String(message?.branchNodeId || '') || this.currentBranchNodeId() } as ChatMessage;
       if (!message || message.role !== 'user') return identified;
       let matchingHistoryIndex = -1;
@@ -2410,6 +2464,7 @@ export class Agent {
     const run = this.workRuns.find(item => item.runId === String(runId || ''));
     if (!run) return false;
     this.syncAgentRunTerminal(run.runId, status, endedAt);
+    this.flushPendingHistoryRemovals();
     if (run.status !== 'running') {
       if (run.status !== 'interrupted' || status !== 'force_interrupted') {
         if (run.status !== status) return false;
@@ -2552,6 +2607,7 @@ export class Agent {
         activeRun.endedAt = /^\d{4}-\d{2}-\d{2}T/.test(event.timestamp) ? event.timestamp : this.nowIso();
         activeRun.expanded = true;
         this.activeWorkRunId = '';
+        this.flushPendingHistoryRemovals();
       }
     }
     if (isToolEvent && process.env.NEWMARK_PROVIDER_DIAGNOSTICS === '1') {
@@ -3067,7 +3123,7 @@ export class Agent {
     }
   }
 
-  public listConversationStates(): Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string; order: number }> {
+  public listConversationStates(): Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string; order: number; branchCommunication: boolean }> {
     const stored = this.readStoredConversationState();
     const prefix = this.workspaceConversationPrefix() || '';
     const scopedEntries = Object.entries(stored.conversations || {}).filter(([key]) => !prefix || key.startsWith(prefix));
@@ -3080,7 +3136,7 @@ export class Agent {
       legacyOrder.forEach(([, value], index) => { value.order = index; });
       this.writeStoredConversationState(stored);
     }
-    const rows: Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string; order: number }> = [];
+    const rows: Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string; order: number; branchCommunication: boolean }> = [];
     for (const [key, value] of Object.entries(stored.conversations || {})) {
       if (prefix && !key.startsWith(prefix)) continue;
       const id = key.slice(prefix.length + 1) || key;
@@ -3094,6 +3150,7 @@ export class Agent {
         pinned: !!value.pinned,
         pinnedAt: value.pinnedAt || '',
         order: Number(value.order || 0),
+        branchCommunication: !!value.branchCommunication,
       });
     }
     rows.sort((a, b) => {
@@ -3415,7 +3472,7 @@ export class Agent {
     if (!tree) {
       const originalId = String(entry.rootBranchNodeId || '') || crypto.randomUUID();
       const original = this.treeNodeFromEntry(originalId, null, requestedIndex, '', entry);
-      tree = { version: 2, rootNodeId: originalId, activeNodeId: originalId, activeGroupId: '', nodes: { [originalId]: original }, branchGroups: {}, nodeIndex: {}, pathIndex: {} };
+      tree = { version: 2, rootNodeId: originalId, activeNodeId: originalId, activeGroupId: '', runningNodeIds: [originalId], nodes: { [originalId]: original }, branchGroups: {}, nodeIndex: {}, pathIndex: {} };
       entry.tree = tree;
       entry.rootBranchNodeId = originalId;
     } else {
@@ -3515,6 +3572,13 @@ export class Agent {
         nodeIds: [parentNodeId, branchId],
       };
     }
+    if (this.branchCommunicationEnabled) {
+      tree.runningNodeIds = tree.runningNodeIds || [];
+      if (parentNodeId && !tree.runningNodeIds.includes(parentNodeId)) tree.runningNodeIds.push(parentNodeId);
+      if (!tree.runningNodeIds.includes(branchId)) tree.runningNodeIds.push(branchId);
+    } else {
+      tree.runningNodeIds = [branchId];
+    }
     tree.activeNodeId = branchId;
     tree.activeGroupId = groupId;
     this.rebuildConversationTreeIndex(tree);
@@ -3530,6 +3594,16 @@ export class Agent {
     this.writeStoredConversationStateNow(stored);
     if (clean === this.safeConversationId(this.activeConversationId)) this.setConversationFromStorage(clean);
     return this.getConversationSnapshot(clean);
+  }
+
+  public setBranchCommunication(enabled: boolean): boolean {
+    this.branchCommunicationEnabled = !!enabled;
+    this.saveWorkspaceConversationState(true);
+    return this.branchCommunicationEnabled;
+  }
+
+  public isBranchCommunicationEnabled(): boolean {
+    return this.branchCommunicationEnabled;
   }
 
   public switchConversationBranch(conversationId: string, branchId: string, branchGroupId = ''): ConversationSnapshot {
@@ -3549,6 +3623,16 @@ export class Agent {
     const group = requestedGroup?.nodeIds.includes(branch.id)
       ? requestedGroup
       : Object.values(tree.branchGroups).find(item => item.nodeIds.includes(branch.id) && item.nodeIds.includes(priorActiveNodeId));
+    // 分支交流模式：移除“运行分支唯一性”——更换运行分支变为“新增运行分支”，
+    // 旧分支保持运行，目标分支加入运行集合；其余交互逻辑不变。
+    if (this.branchCommunicationEnabled) {
+      tree.runningNodeIds = tree.runningNodeIds || [];
+      for (const runningId of [priorActiveNodeId, branch.id]) {
+        if (runningId && !tree.runningNodeIds.includes(runningId)) tree.runningNodeIds.push(runningId);
+      }
+    } else {
+      tree.runningNodeIds = [branch.id];
+    }
     tree.activeNodeId = branch.id;
     if (group) tree.activeGroupId = group.id;
     entry.activeBranchId = branch.id;
@@ -3595,6 +3679,23 @@ export class Agent {
     this.writeStoredConversationState(stored);
     return true;
   }
+  /**
+   * 首 Build 命名提示判定：仅当 (1) 当前对话尚无历史 Build（排除当前 run）且
+   * (2) 其持久化 title 仍是自动生成（含为空）时返回 true。满足条件时运行时会
+   * 在首个 provider request 的 bootstrap 注入一次性命名指令，让 Agent 调用
+   * conversation_rename 自行命名。判定本身只读存储、无副作用，保缓存稳定。
+   */
+  public shouldPromptConversationRename(): boolean {
+    if (this.conversationBuildHistory(1).length > 0) return false;
+    const conversationId = this.activeConversationId || 'default';
+    const stateKey = this.workspaceConversationStateKey(conversationId);
+    if (!stateKey) return false;
+    const entry = this.readStoredConversationState().conversations?.[stateKey];
+    const priorTitle = entry?.title;
+    const messages = entry?.chatMessages || this.chatMessages;
+    return this.isGeneratedConversationTitle(priorTitle, conversationId, messages);
+  }
+
 
   public reorderConversations(ids: string[]): boolean {
     const prefix = this.workspaceConversationPrefix() || '';
@@ -3698,6 +3799,8 @@ export class Agent {
       chatMessages: [...this.chatMessages],
       history: [...this.history],
       compressionCache: [...this.compressionCache],
+      branchMailbox: [...this.branchMailbox],
+      branchCommunication: this.branchCommunicationEnabled,
       plan: this.normalizeConversationPlan(this.conversationPlan),
       linkedPlan: this.normalizeLinkedPlan(this.linkedPlan),
       subagentState: this.subagents.serialize(),
@@ -3730,6 +3833,8 @@ export class Agent {
       chatMessages: [...this.chatMessages],
       history: [...this.history],
       compressionCache: [...this.compressionCache],
+      branchMailbox: [...this.branchMailbox],
+      branchCommunication: this.branchCommunicationEnabled,
       plan: this.normalizeConversationPlan(this.conversationPlan),
       linkedPlan: this.normalizeLinkedPlan(this.linkedPlan),
       subagentState: this.subagents.serialize(),
@@ -3781,6 +3886,9 @@ export class Agent {
       this.history = [...saved.history];
       this.compressionCache = saved.compressionCache ? saved.compressionCache.map(entry => ({ ...entry, messages: [...entry.messages] })) : [];
       this.nextCompressionCacheId = Math.max(1, ...this.compressionCache.map(entry => Number(entry.id.replace(/^ctx-cache-/, '')) || 0)) + 1;
+      this.branchMailbox = (saved.branchMailbox || []).map(message => ({ ...message }));
+      this.nextBranchMessageSequence = Math.max(1, ...this.branchMailbox.map(message => Number(message.sequence) || 0)) + 1;
+      this.branchCommunicationEnabled = !!saved.branchCommunication;
       this.chatMessages = this.normalizeConversationChatMessages(saved.chatMessages, this.history);
       this.conversationPlan = this.normalizeConversationPlan(saved.plan);
       this.linkedPlan = this.normalizeLinkedPlan(saved.linkedPlan);
@@ -3803,6 +3911,9 @@ export class Agent {
     this.history = persisted?.history ? [...persisted.history] : [];
     this.compressionCache = persisted?.compressionCache ? persisted.compressionCache.map(entry => ({ ...entry, messages: [...entry.messages] })) : [];
     this.nextCompressionCacheId = Math.max(1, ...this.compressionCache.map(entry => Number(entry.id.replace(/^ctx-cache-/, '')) || 0)) + 1;
+    this.branchMailbox = (persisted?.branchMailbox || []).map(message => ({ ...message }));
+    this.nextBranchMessageSequence = Math.max(1, ...this.branchMailbox.map(message => Number(message.sequence) || 0)) + 1;
+    this.branchCommunicationEnabled = !!persisted?.branchCommunication;
     this.chatMessages = this.normalizeConversationChatMessages(persisted?.chatMessages || [], this.history);
     this.conversationPlan = this.normalizeConversationPlan(persisted?.plan);
     this.linkedPlan = this.normalizeLinkedPlan(persisted?.linkedPlan);
@@ -3845,6 +3956,8 @@ export class Agent {
       chatMessages: [...this.chatMessages],
       history: [...this.history],
       compressionCache: [...this.compressionCache],
+      branchMailbox: [...this.branchMailbox],
+      branchCommunication: this.branchCommunicationEnabled,
       plan: this.normalizeConversationPlan(this.conversationPlan),
       linkedPlan: this.normalizeLinkedPlan(this.linkedPlan),
       subagentState: this.subagents.serialize(),
@@ -4059,6 +4172,9 @@ export class Agent {
     const run = this.workRuns.find(item => item.runId === record.runId);
     if (!run) return JSON.stringify({ ok: false, error: 'Historical Build Block state is unavailable.' });
     const maxEvents = Math.max(1, Math.min(200, Math.floor(Number(input.max_events || 80))));
+    // 有界历史读取：每条 activity/guide content 截断到 2000 字符，避免无界历史
+    // Build 的巨型 tool 输出整段内联进当前 Build，既省 token 也保后续缓存前缀稳定。
+    const boundedActivityChars = Math.max(100, Math.min(4000, Math.floor(Number(input.max_chars || 2000))));
     const publicEvents = run.events.filter(event => !['text', 'response', 'final_response'].includes(event.type));
     const activities = publicEvents.slice(-maxEvents).map(event => ({
       sequence: event.sequence,
@@ -4066,7 +4182,7 @@ export class Agent {
       timestamp: event.timestamp,
       toolName: event.toolName,
       status: event.status,
-      content: this.sanitizePublicWorkContent(event.content || ''),
+      content: this.sanitizePublicWorkContent(event.content || '').slice(0, boundedActivityChars),
     }));
     return JSON.stringify({
       ok: true,
@@ -4077,7 +4193,7 @@ export class Agent {
           status: guide.status,
           createdAt: guide.createdAt,
           updatedAt: guide.updatedAt,
-          content: this.sanitizePublicWorkContent(guide.content || ''),
+          content: this.sanitizePublicWorkContent(guide.content || '').slice(0, boundedActivityChars),
         })),
       },
       truncatedActivities: Math.max(0, publicEvents.length - activities.length),
@@ -4117,6 +4233,467 @@ export class Agent {
       };
     } finally {
       this.config.set('context', 'keep_recent_messages', previousKeepLast);
+    }
+  }
+
+  /**
+   * 落盘一个超大工具结果，返回 artifact_id。完整内容不进上下文——上下文只保留
+   * tiny 引用；compress_tool_result 按 id 读取后再压缩。落盘后状态即 done。
+   */
+  storeToolResultArtifact(tool: string, content: string): string {
+    const id = crypto.randomUUID();
+    this.toolResultArtifacts.set(id, { tool, content, status: 'done', createdAt: Date.now() });
+    return id;
+  }
+
+  /**
+   * 注册一个后台工具任务，立即返回 background_id（status=running）。真实工具在
+   * 后台执行，完成后由 finishToolResultArtifact 标记 done/error。后台结果持久化
+   * 等待 read_tool_result 读取后再释放。
+   */
+  beginBackgroundTool(tool: string): string {
+    const id = crypto.randomUUID();
+    this.toolResultArtifacts.set(id, { tool, content: '', status: 'running', createdAt: Date.now() });
+    return id;
+  }
+
+  /** 标记后台任务完成（写结果）或失败（写错误）。 */
+  finishToolResultArtifact(id: string, content: string, error?: string): void {
+    const artifact = this.toolResultArtifacts.get(id);
+    if (!artifact) return;
+    if (error) {
+      artifact.status = 'error';
+      artifact.error = error;
+    } else {
+      artifact.status = 'done';
+      artifact.content = content;
+    }
+  }
+
+  /**
+   * 按 artifact_id 读取工具结果引用（compress_tool_result / read_tool_result 共用）。
+   */
+  readToolResultArtifact(id: string): { tool: string; content: string; status: 'running' | 'done' | 'error'; error?: string; createdAt: number } | null {
+    return this.toolResultArtifacts.get(id) ?? null;
+  }
+
+  /**
+   * 压缩一个极大的工具调用结果（保留格式），供 Agent 主动选用以替代硬截断。
+   *
+   * 入参为 artifact_id（而非完整 content），故压缩前的大内容不进入上下文。
+   * 缓存命中隔离：压缩 LLM 调用使用独立 system + 单条 user 消息，与主对话
+   * system/历史前缀不相交，不污染缓存命中。
+   */
+  async handleCompressToolResult(args: string, signal?: AbortSignal): Promise<NewmarkToolResult> {
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
+    // 压缩前内容不入上下文：优先按 artifact_id 引用读取落盘内容；兼容同时传入
+    // 小段 content 的场景（此时 content 较短，直接压缩即可）。
+    const artifactId = String(input.artifact_id || '').trim();
+    const inlineContent = typeof input.content === 'string' ? input.content : String(input.content ?? '');
+    let content = '';
+    let source = 'inline';
+    if (artifactId) {
+      const artifact = this.readToolResultArtifact(artifactId);
+      if (!artifact) return { ok: false, output: '[compress_tool_result] Unknown or expired artifact_id.', error: 'Unknown artifact_id.' };
+      if (artifact.status === 'running') return { ok: false, output: '[compress_tool_result] Tool result is still running in the background; read_tool_result first.', error: 'still-running.' };
+      if (artifact.status === 'error') return { ok: false, output: '[compress_tool_result] Backgronud tool failed: ' + String(artifact.error || 'unknown error'), error: 'background-error.' };
+      content = artifact.content;
+      source = 'artifact';
+    } else if (inlineContent.trim()) {
+      content = inlineContent;
+    } else {
+      return { ok: false, output: '[compress_tool_result] artifact_id (or content) is required.', error: 'artifact_id is required.' };
+    }
+    const formatHint = String(input.format_hint || '').trim();
+    const provider = this.engineModel();
+    const modelName = this.activeModelName();
+    if (!provider || !modelName) {
+      // 无 provider 时回退为本地有界截断（保留头尾，诚实标注省略）。
+      return {
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          compressed: true,
+          method: 'local-fallback',
+          summary: this.pruneToolResultContent(content),
+          originalChars: content.length,
+        }, null, 2),
+        metadata: { kind: 'compress-tool-result' },
+      };
+    }
+    try {
+      // 独立 system + 单条 user 消息：不共享主对话前缀缓存。
+      const system = [
+        'You are a tool-result compression engine.',
+        'Compress ONE oversized tool result into a concise, format-preserving summary.',
+        'Preserve the exact structure the original result carries: keep JSON objects/arrays valid, keep table columns/rows, keep code blocks, keep file paths, identifiers, numbers, error strings, and key-value pairs verbatim.',
+        'Do not drop error messages, command outputs that matter for correctness, or any identifier the agent may need to continue.',
+        'Return ONLY the compressed result, with no preamble, no Markdown fences, no "here is" phrasing.',
+      ].join('\n');
+      const formatSuffix = formatHint ? `\n\nFormat to preserve: ${formatHint}` : '';
+      const prompt = [
+        'Original tool result (do not shorten meaningful structure; remove only redundant/boilerplate whitespace and trivially repeated noise):',
+        '',
+        content,
+        formatSuffix,
+      ].join('\n');
+      const maxTokens = Math.max(1024, Math.min(8192, Math.ceil(content.length / 4)) + 512);
+      const { temperature } = provider.intelligenceConfig('low');
+      const generated = await this.withTimeout(
+        provider.chat(modelName, [{ role: 'user', content: prompt }], system, temperature, maxTokens, signal),
+        120000,
+      );
+      const summary = String(generated || '').trim();
+      if (!summary || /^\[LLM Error(?::|\])/i.test(summary)) {
+        return {
+          ok: true,
+          output: JSON.stringify({ ok: true, compressed: true, method: 'local-fallback', summary: this.pruneToolResultContent(content), originalChars: content.length }, null, 2),
+          metadata: { kind: 'compress-tool-result' },
+        };
+      }
+      return {
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          compressed: true,
+          method: 'model-summary',
+          model: modelName,
+          summary,
+          originalChars: content.length,
+          compressedChars: summary.length,
+        }, null, 2),
+        metadata: { kind: 'compress-tool-result' },
+      };
+    } catch {
+      return {
+        ok: true,
+        output: JSON.stringify({ ok: true, compressed: true, method: 'local-fallback', summary: this.pruneToolResultContent(content), originalChars: content.length }, null, 2),
+        metadata: { kind: 'compress-tool-result' },
+      };
+    }
+  }
+
+  /**
+   * 工具后台化：把一个工具调用派发到后台运行，立即返回 background_id，不阻塞
+   * 对话回合。真实工具在后台执行，完成后持久化到 toolResultArtifacts，
+   * read_tool_result 按 background_id 读取后再释放。
+   *
+   * 缓存命中优化：后台化工具只返回 tiny 的 background_id（不进大结果到上下文），
+   * 真实结果按需读取，避免大结果撑爆上下文、破坏前缀缓存。
+   */
+  async handleBackgroundTool(args: string, signal?: AbortSignal): Promise<NewmarkToolResult> {
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
+    const tool = String(input.tool || '').trim();
+    if (!tool) return { ok: false, output: '[background_tool] tool is required.', error: 'tool is required.' };
+    if (tool === 'background_tool' || tool === 'read_tool_result' || tool === 'compress_tool_result' || tool === 'goal_manage' || tool === 'conversation_rename') {
+      return { ok: false, output: '[background_tool] cannot background the control tools (background_tool/read_tool_result/compress_tool_result/goal_manage/conversation_rename).', error: 'control-tool-unsupported.' };
+    }
+    // 禁止后台化子代理/编排类工具——它们有独立的生命周期管理，后台化会破坏其
+    // mailbox/abort/persistence 语义。
+    if (/^(task|subagent_|flow_|context_|question|skill)/.test(tool)) {
+      return { ok: false, output: '[background_tool] orchestration/flow tools cannot be backgrounded.', error: 'orchestration-unsupported.' };
+    }
+    const toolArgs = input.args;
+    const argStr = typeof toolArgs === 'string' ? toolArgs : (toolArgs === undefined ? '{}' : JSON.stringify(toolArgs));
+    const backgroundId = this.beginBackgroundTool(tool);
+    const wsDir = this.workspace.current?.path || this.rootPath;
+    // 后台执行：不 await，完成/失败后回写 artifact。
+    void this.tools.execute(tool, argStr, wsDir, {
+      mode: this.mode,
+      workspacePath: wsDir,
+      conversationId: this.activeConversationId || 'default',
+      actorId: this.runtimeActorId,
+      workspaceId: this.workspace.current?.id || '',
+      backend: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
+      signal,
+    }).then((content) => {
+      this.finishToolResultArtifact(backgroundId, content);
+    }).catch((error) => {
+      this.finishToolResultArtifact(backgroundId, '', error instanceof Error ? error.message : String(error));
+    });
+    return {
+      ok: true,
+      output: JSON.stringify({ ok: true, background_id: backgroundId, tool, status: 'running', createdAt: new Date().toISOString() }, null, 2),
+      metadata: { kind: 'background-tool' },
+    };
+  }
+
+  /**
+   * 读取后台工具结果：done 时返回结果（按需释放），running 时返回状态，error
+   * 时返回错误。与 compress_tool_result 共享 toolResultArtifacts。
+   */
+  handleReadToolResult(args: string): NewmarkToolResult {
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
+    const id = String(input.background_id || input.artifact_id || '').trim();
+    if (!id) return { ok: false, output: '[read_tool_result] background_id is required.', error: 'background_id is required.' };
+    const artifact = this.readToolResultArtifact(id);
+    if (!artifact) return { ok: false, output: '[read_tool_result] Unknown or already-released background_id.', error: 'unknown-background-id.' };
+    const release = Boolean(input.release);
+    const result: Record<string, unknown> = {
+      ok: true,
+      background_id: id,
+      tool: artifact.tool,
+      status: artifact.status,
+      createdAt: artifact.createdAt ? new Date(artifact.createdAt).toISOString() : '',
+    };
+    if (artifact.status === 'running') {
+      result.running = true;
+    } else if (artifact.status === 'error') {
+      result.error = artifact.error || 'background tool failed';
+    } else {
+      result.content = artifact.content;
+      // 释放：读取后从持久化删除，避免重复读取占用内存。
+      if (release) this.toolResultArtifacts.delete(id);
+    }
+    return { ok: true, output: JSON.stringify(result, null, 2), metadata: { kind: 'read-tool-result' } };
+  }
+
+  /**
+   * Agent 主动管理 Goal 状态：进入 / 编辑 objective / 标记完成 / 退出。
+   * 兼容原有 Goal 机制：enter/update 复用 updateGoal（记录 change、mode=goal、
+   * 尊重已暂停状态），complete 复用 markGoalComplete（verified + clearGoal），
+   * exit 复用 clearGoal（回 build 不声称完成）。不破坏「用户 Stop 暂停」边界：
+   * 本工具不提供 pause/resume，避免 Agent 绕过用户的显式暂停。
+   */
+  handleGoalManage(args: string): NewmarkToolResult {
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
+    const action = String(input.action || '').trim();
+    const objective = String(input.objective || '').replace(/\s+/g, ' ').trim();
+    const reason = String(input.reason || '').trim();
+    const hadGoal = !!this.goal;
+    const priorObjective = this.goal?.objective || '';
+    if (!['enter', 'update', 'complete', 'exit'].includes(action)) {
+      return { ok: false, output: '[goal_manage] action is required (enter|update|complete|exit).', error: 'action is required.' };
+    }
+    if ((action === 'enter' || action === 'update') && !objective) {
+      return { ok: false, output: '[goal_manage] objective is required for enter/update.', error: 'objective is required.' };
+    }
+    if (action === 'enter' || action === 'update') {
+      this.updateGoal(objective);
+      const entered = !hadGoal && action === 'enter';
+      return {
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          action,
+          enteredGoal: entered,
+          objective: this.goal?.objective || objective,
+          mode: this.mode,
+          paused: this.goal?.paused || false,
+          goalRounds: this.goal?.goalRounds || 0,
+          ...(reason ? { reason } : {}),
+        }, null, 2),
+        metadata: { kind: 'goal-manage' },
+      };
+    }
+    if (action === 'complete') {
+      if (!this.goal) return { ok: true, output: JSON.stringify({ ok: true, action, completed: false, note: 'No active Goal to complete.' }, null, 2), metadata: { kind: 'goal-manage' } };
+      this.markGoalComplete();
+      return {
+        ok: true,
+        output: JSON.stringify({ ok: true, action, completed: true, priorObjective, mode: this.mode, goal: null }, null, 2),
+        metadata: { kind: 'goal-manage' },
+      };
+    }
+    // action === 'exit'
+    if (!this.goal) return { ok: true, output: JSON.stringify({ ok: true, action, cleared: false, note: 'No active Goal to exit.' }, null, 2), metadata: { kind: 'goal-manage' } };
+    this.clearGoal();
+    return {
+      ok: true,
+      output: JSON.stringify({ ok: true, action, cleared: true, priorObjective, mode: this.mode, goal: null }, null, 2),
+      metadata: { kind: 'goal-manage' },
+    };
+  }
+
+  /**
+   * Agent 自行命名当前对话。首 Build Block 上运行时通过 bootstrap 提示（见
+   * agentKernelRunner.buildBuildContextBootstrap）请求 Agent 调用一次；这里复用
+   * 已有的 renameConversation 持久化路径。返回简短结果以保缓存友好。
+   */
+  handleConversationRename(args: string): NewmarkToolResult {
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
+    const title = String(input.title || '').replace(/\s+/g, ' ').trim();
+    if (!title) return { ok: false, output: '[conversation_rename] title is required.', error: 'title is required.' };
+    const conversationId = this.activeConversationId || 'default';
+    const ok = this.renameConversation(conversationId, title);
+    if (!ok) return { ok: false, output: '[conversation_rename] could not rename conversation (no state key or empty title).', error: 'rename failed.' };
+    return {
+      ok: true,
+      output: JSON.stringify({ ok: true, conversationId, title: title.slice(0, 80) }, null, 2),
+      metadata: { kind: 'conversation-rename' },
+    };
+  }
+  private conversationTree(): ConversationTreeState | null {
+    const stateKey = this.workspaceConversationStateKey();
+    const stored = this.readStoredConversationState();
+    const persisted = stateKey && stored.conversations ? stored.conversations[stateKey] : undefined;
+    return persisted ? this.normalizeConversationTree(persisted) : null;
+  }
+
+  private currentRuntimeBranchId(): string {
+    return String(this.conversationTree()?.activeNodeId || '');
+  }
+
+  handleBranchList(args: string): NewmarkToolResult {
+    try {
+      const params = JSON.parse(args || '{}') as Record<string, unknown>;
+      if (!this.branchCommunicationEnabled) {
+        return { ok: false, output: '[branch_list] Branch communication is not enabled for this conversation. Enable "允许分支交流" at conversation creation time.', error: 'branch communication disabled.' };
+      }
+      const tree = this.conversationTree();
+      const nodes = tree?.nodes || {};
+      const activeNodeId = String(tree?.activeNodeId || '');
+      const branches = Object.values(nodes).map(node => {
+        const inbound = this.branchMailbox.filter(m => m.toBranchId === node.id);
+        const outbound = this.branchMailbox.filter(m => m.fromBranchId === node.id);
+        return {
+          id: node.id,
+          parentId: node.parentId,
+          active: node.id === activeNodeId,
+          sourceMessageIndex: node.sourceMessageIndex,
+          sourceText: String(node.sourceText || '').slice(0, 160),
+          chatMessages: node.chatMessages.length,
+          history: node.history.length,
+          workRuns: node.workRuns.length,
+          runningWorkRuns: node.workRuns.filter(run => run.status === 'running').length,
+          mailbox: { inbound: inbound.length, unread: inbound.filter(m => !m.readAt).length, outbound: outbound.length },
+        };
+      });
+      return {
+        ok: true,
+        output: JSON.stringify({ ok: true, conversationId: this.activeConversationId, branchCommunication: true, activeBranchId: activeNodeId, branchCount: branches.length, branches }, null, 2),
+        metadata: { kind: 'branch-list' },
+      };
+    } catch {
+      return { ok: false, output: '[branch_list] Invalid arguments.', error: 'Invalid arguments.' };
+    }
+  }
+
+  handleBranchSend(args: string): NewmarkToolResult {
+    try {
+      const params = JSON.parse(args || '{}') as Record<string, unknown>;
+      if (!this.branchCommunicationEnabled) return { ok: false, output: '[branch_send] Branch communication is not enabled for this conversation.', error: 'branch communication disabled.' };
+      const toBranchId = String(params.to_branch || params.toBranchId || params.branch || '').trim();
+      const body = String(params.message || params.body || '').trim();
+      const kind = String(params.kind || 'message').trim();
+      if (!toBranchId) return { ok: false, output: '[branch_send] to_branch is required.', error: 'to_branch is required.' };
+      if (!body) return { ok: false, output: '[branch_send] message is required.', error: 'message is required.' };
+      const tree = this.conversationTree();
+      const target = tree?.nodes[toBranchId];
+      if (!target) return { ok: false, output: '[branch_send] Branch not found: ' + toBranchId, error: 'Branch not found: ' + toBranchId };
+      const fromBranchId = this.currentRuntimeBranchId();
+      if (!fromBranchId) return { ok: false, output: '[branch_send] Could not determine the current runtime branch.', error: 'runtime branch unknown.' };
+      if (fromBranchId === toBranchId) return { ok: false, output: '[branch_send] A branch cannot message itself.', error: 'self-message forbidden.' };
+      const message: BranchMessage = {
+        id: crypto.randomUUID(),
+        conversationId: this.activeConversationId || 'default',
+        sequence: this.nextBranchMessageSequence++,
+        fromBranchId,
+        toBranchId,
+        kind: kind === 'directive' ? 'directive' : kind === 'result' ? 'result' : 'message',
+        body: body.slice(0, 32000),
+        correlationId: params.correlation_id ? String(params.correlation_id) : undefined,
+        replyTo: params.reply_to ? String(params.reply_to) : undefined,
+        createdAt: new Date().toISOString(),
+      };
+      this.branchMailbox.push(message);
+      this.saveWorkspaceConversationState(true);
+      return {
+        ok: true,
+        output: JSON.stringify({ ok: true, message: { id: message.id, fromBranchId, toBranchId, kind: message.kind, sequence: message.sequence } }, null, 2),
+        metadata: { kind: 'branch-send' },
+      };
+    } catch {
+      return { ok: false, output: '[branch_send] Invalid arguments.', error: 'Invalid arguments.' };
+    }
+  }
+
+  handleBranchRead(args: string): NewmarkToolResult {
+    try {
+      const params = JSON.parse(args || '{}') as Record<string, unknown>;
+      if (!this.branchCommunicationEnabled) return { ok: false, output: '[branch_read] Branch communication is not enabled for this conversation.', error: 'branch communication disabled.' };
+      const branchId = String(params.branch || params.branch_id || params.id || '').trim();
+      if (!branchId) return { ok: false, output: '[branch_read] branch is required.', error: 'branch is required.' };
+      const tree = this.conversationTree();
+      const node = tree?.nodes[branchId];
+      if (!node) return { ok: false, output: '[branch_read] Branch not found: ' + branchId, error: 'Branch not found: ' + branchId };
+      const fromBranchId = this.currentRuntimeBranchId();
+      const maxChars = Math.max(100, Math.min(16000, Math.floor(Number(params.max_chars || 8000))));
+      const inbound = this.branchMailbox
+        .filter(m => m.toBranchId === fromBranchId && m.fromBranchId === branchId)
+        .sort((a, b) => a.sequence - b.sequence)
+        .map(m => ({ id: m.id, sequence: m.sequence, kind: m.kind, body: m.body, createdAt: m.createdAt, read: !!m.readAt }));
+      for (const m of inbound) {
+        const stored = this.branchMailbox.find(x => x.id === m.id);
+        if (stored && !stored.readAt) stored.readAt = new Date().toISOString();
+      }
+      if (inbound.length) this.saveWorkspaceConversationState(true);
+      const activity = node.workRuns.slice(-10).map(run => {
+        const finalEvent = [...run.events].reverse().find(event => event.type === 'final_response');
+        return {
+          runId: run.runId,
+          status: run.status,
+          startedAt: run.startedAt,
+          endedAt: run.endedAt,
+          finalResult: finalEvent ? String(finalEvent.content || '').slice(0, maxChars) : '',
+          recentEvents: run.events.slice(-6).map(event => '[' + event.type + '] ' + String(event.content || '').slice(0, 240)),
+        };
+      });
+      return {
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          branch: {
+            id: node.id,
+            parentId: node.parentId,
+            sourceMessageIndex: node.sourceMessageIndex,
+            sourceText: String(node.sourceText || '').slice(0, 240),
+            chatMessages: node.chatMessages.length,
+            history: node.history.length,
+          },
+          inbound,
+          activity,
+        }, null, 2),
+        metadata: { kind: 'branch-read' },
+      };
+    } catch {
+      return { ok: false, output: '[branch_read] Invalid arguments.', error: 'Invalid arguments.' };
+    }
+  }
+
+  handleBranchCreate(args: string): NewmarkToolResult {
+    try {
+      const params = JSON.parse(args || '{}') as Record<string, unknown>;
+      if (!this.branchCommunicationEnabled) return { ok: false, output: '[branch_create] Branch communication is not enabled for this conversation. Enable "允许分支交流" at conversation creation time.', error: 'branch communication disabled.' };
+      const messageIndex = Math.floor(Number(params.message_index ?? params.messageIndex ?? params.index));
+      const prompt = String(params.prompt || params.message || params.text || '').trim();
+      if (!Number.isFinite(messageIndex) || messageIndex < 0) return { ok: false, output: '[branch_create] message_index is required (0-based index of a user message in the conversation history, i.e. the historical block position).', error: 'message_index is required.' };
+      if (!prompt) return { ok: false, output: '[branch_create] prompt is required (the new branch initial instruction).', error: 'prompt is required.' };
+      const locator: ConversationBranchLocator = {};
+      if (params.message_id) locator.messageId = String(params.message_id);
+      if (params.guide_id) locator.guideId = String(params.guide_id);
+      if (params.client_message_id) locator.clientMessageId = String(params.client_message_id);
+      if (params.run_id) locator.runId = String(params.run_id);
+      const snapshot = this.branchConversation(this.activeConversationId || 'default', messageIndex, prompt, locator);
+      return {
+        ok: true,
+        output: JSON.stringify({
+          ok: true,
+          branchId: snapshot.activeBranchId,
+          runtimeBranchId: snapshot.runtimeBranchId,
+          messageIndex,
+          prompt: prompt.slice(0, 240),
+          branches: snapshot.branches,
+        }, null, 2),
+        metadata: { kind: 'branch-create' },
+      };
+    } catch (e) {
+      return { ok: false, output: '[branch_create] ' + (e instanceof Error ? e.message : String(e)), error: e instanceof Error ? e.message : String(e) };
     }
   }
 
@@ -4160,16 +4737,23 @@ export class Agent {
           error: 'remove position is in the protected context zone.',
         };
       }
-      const removed = this.history.splice(position, 1)[0];
-      this.saveWorkspaceConversationState(true);
+      // 缓存优化：卸载只针对长期历史，且不立即 splice——当前 Build Block 内
+      // 保持 history 不变以复用 provider 前缀缓存，Block 结束后才对后续 Block 生效。
+      const target = this.history[position];
+      const fingerprint = this.historyRecordFingerprint(target);
+      if (!this.pendingHistoryRemovals.some(item => item.fingerprint === fingerprint && item.position === position)) {
+        this.pendingHistoryRemovals.push({ position, fingerprint });
+      }
       return {
         ok: true,
         output: JSON.stringify({
           ok: true,
           action: 'remove',
           removedPosition: position,
-          removedRole: String(removed?.role || ''),
+          removedRole: String(target?.role || ''),
+          deferred: true,
           remaining: this.history.length,
+          effectiveAt: 'after the current Build Block ends; applies to subsequent Blocks only',
           displayHistory: { untouched: true, messageCount: this.chatMessages.length },
         }, null, 2),
         metadata: { kind: 'context-history-remove' },
@@ -4399,6 +4983,11 @@ export class Agent {
             protectedStartIndex,
             lastUserMessageIndex: lastUserIndex,
             protectedCount: protectedStartIndex >= 0 ? this.history.length - protectedStartIndex : 0,
+          },
+          pendingRemovals: {
+            count: this.pendingHistoryRemovals.length,
+            positions: this.pendingHistoryRemovals.map(item => item.position),
+            effectiveAt: 'after the current Build Block ends; applies to subsequent Blocks only',
           },
           displayHistory: { untouched: true, messageCount: this.chatMessages.length },
         }, null, 2),
@@ -4742,7 +5331,23 @@ export class Agent {
     };
   }
 
-  contextWindow(modelName = this.model): { estimatedTokens: number; maxTokens: number; ratio: number; warning: 'ok' | 'near_limit' | 'over_limit'; model: string } {
+  contextWindow(modelName = this.model): {
+    estimatedTokens: number;
+    maxTokens: number;
+    ratio: number;
+    warning: 'ok' | 'near_limit' | 'over_limit';
+    model: string;
+    buildBlockTokens?: number;
+    longHistoryTokens?: number;
+    buildBlockTriggerTokens?: number;
+    longHistoryTriggerTokens?: number;
+    buildBlockRetentionTokens?: number;
+    longHistoryRetentionTokens?: number;
+    thresholdReached?: boolean;
+    compressionEnabled?: boolean;
+    cacheEntries?: number;
+    archiveEntries?: number;
+  } {
     const estimatedTokens = this.estimateContextTokens();
     // Display and compression must share one window resolution. Both resolve
     // the auto branch through the active (routed) deployment so the UI ring and
@@ -4752,12 +5357,24 @@ export class Agent {
     const model = this.resolveWindowModel(modelName);
     const maxTokens = Math.max(1, Number(model?.max_tokens || 0) || 128000);
     const ratio = estimatedTokens / maxTokens;
+    const budget = this.compressionBudget(this.history, modelName);
     return {
       estimatedTokens,
       maxTokens,
       ratio,
       warning: ratio >= 1 ? 'over_limit' : ratio >= 0.85 ? 'near_limit' : 'ok',
       model: modelName,
+      buildBlockTokens: budget.buildBlockTokens,
+      longHistoryTokens: budget.longHistoryTokens,
+      buildBlockTriggerTokens: budget.buildBlockTriggerTokens,
+      longHistoryTriggerTokens: budget.longHistoryTriggerTokens,
+      buildBlockRetentionTokens: budget.buildBlockRetentionTokens,
+      longHistoryRetentionTokens: budget.longHistoryRetentionTokens,
+      thresholdReached: budget.buildBlockTokens >= budget.buildBlockTriggerTokens
+        || budget.longHistoryTokens >= budget.longHistoryTriggerTokens,
+      compressionEnabled: this.config.getBool('context', 'auto_compress'),
+      cacheEntries: this.compressionCache.length,
+      archiveEntries: this.compressionArchiveEntryCount(),
     };
   }
 
@@ -4771,7 +5388,7 @@ export class Agent {
     return Math.max(1, Number(model?.max_tokens || 0) || 128000);
   }
 
-  private compressionBudget(messages: Array<Record<string, unknown>>): {
+  private compressionBudget(messages: Array<Record<string, unknown>>, modelName = this.model): {
     estimatedTokens: number;
     maxTokens: number;
     triggerTokens: number;
@@ -4784,7 +5401,7 @@ export class Agent {
     buildBlockRetentionTokens: number;
     longHistoryRetentionTokens: number;
   } {
-    const maxTokens = this.contextMaxTokens();
+    const maxTokens = this.contextMaxTokens(modelName);
     const buildBlockStart = this.compressionBuildBlockStart(messages);
     const estimates = this.estimateContextTokenComponents(messages, buildBlockStart);
     const buildBlockTriggerTokens = Math.max(128, Math.floor(maxTokens * 0.70));
@@ -6762,10 +7379,14 @@ export class Agent {
       const name = params.name || params.id || '';
       const sa = this.subagents.get(name);
       if (!sa) return { ok: false, output: `[Subagent] Not found: ${name}`, error: `Not found: ${name}` };
-      const transcript = sa.messages.map(m => `[${m.role}] ${m.content}`).join('\n');
+      // 上下文回归优化：不再把完整 transcript（含所有中间 tool call/result 洪水）
+      // 注入主 Agent 上下文。结果优先，transcript 只保留有界尾部——最近几条
+      // assistant/user 消息即足以让主 Agent 判断上下文，完整历史按需走
+      // subagent_read 的 max_chars 分页读取。
+      const transcript = this.subagents.boundedResultTranscript(sa.id);
       return this.subagents.toToolResult(
         sa.id,
-        `get.subagent("${sa.name}", id="${sa.id}")\nStatus: ${sa.status}\nModel: ${sa.model}\nMode: ${sa.agentMode}\n\nResult:\n${sa.result || ''}\n\nConversation:\n${transcript}`,
+        `get.subagent("${sa.name}", id="${sa.id}")\nStatus: ${sa.status}\nModel: ${sa.model}\nMode: ${sa.agentMode}\n\nResult:\n${sa.result || ''}\n\nRecent Conversation (bounded):\n${transcript}`,
         true
       );
     } catch { return { ok: false, output: '[Subagent] Invalid result arguments.', error: 'Invalid result arguments.' }; }
@@ -7332,7 +7953,7 @@ export class Agent {
         : '';
       const delegatedPrompt = [
         continuation,
-        requestedFlowName ? `[Workflow requested: ${requestedFlowName} @ ${child.flowPc}]` : '',
+        requestedFlowName ? `[Workflow requested: ${requestedFlowName}]` : '',
         child.goal ? `[Goal objective: ${child.goal.objective}]` : '',
         `Workspace: ${workspacePath}`,
         prompt,
@@ -7725,19 +8346,49 @@ export class Agent {
 
     try {
       const { temperature } = provider.intelligenceConfig('low');
-      const system = [
-        'You are Newmark context compression.',
-        'Summarize an older omitted conversation segment for a coding agent. The latest retained user instruction is outside this segment and remains authoritative.',
+      // DSH 式前缀缓存命中：复用主对话的稳定 base prompt 作为 system，并把被压缩
+      // 的省略段消息原样保留为前缀，仅追加一条压缩指令 user 消息。这样压缩摘要
+      // 调用与主对话最近一次请求共享相同的 system 前缀和历史消息前缀，命中
+      // provider 的 warm prefix cache（KV cache），避免摘要调用反复重新计价整个前缀。
+      const system = this.buildSystemPrompt();
+      // DSH 式 tool-result pruning：压缩摘要调用前先裁剪大工具结果，避免把
+      // 巨型 read/grep/terminal 输出整段重放给摘要模型（既省 token，也减少
+      // 前缀缓存被单条超大结果打断）。头部保留判断所需的结论性内容，尾部保留
+      // 路径/错误等收尾证据。
+      const prunedPrefixMessages = middle.map((message) => {
+        const record = message as Record<string, unknown>;
+        const role = String(record.role || '');
+        const isToolResult = role === 'tool' || role === 'function';
+        const content = record.content;
+        if (isToolResult && typeof content === 'string' && content.length > TOOL_RESULT_PRUNE_CHARS) {
+          return {
+            ...message,
+            content: this.pruneToolResultContent(content),
+          };
+        }
+        return message;
+      });
+      // 原样复用 pruned middle 消息作前缀，但把历史图片降级为占位文本：
+      // 图片对摘要无益，且会破坏前缀缓存（主对话前缀中不含图片字节）。
+      const prefixMessages = prunedPrefixMessages.map((message) => {
+        if (!Array.isArray((message as Record<string, unknown>).content)) return { ...message };
+        const parts = ((message as Record<string, unknown>).content as Array<Record<string, unknown>>).map(part => (
+          part?.type === 'image_url'
+            ? { type: 'text', text: '[Historical image attachment omitted after context compression.]' }
+            : { ...part }
+        ));
+        return { ...message, content: parts };
+      });
+      const prompt = [
+        'Compress the following conversation segment into a structured checkpoint for this coding assistant.',
+        'The omitted transcript below is the conversation ABOVE this instruction; the latest retained user instruction is OUTSIDE the segment and remains authoritative.',
+        '',
         'Classify task state instead of treating every historical user request as still active.',
         'Preserve an older task as active or unfinished only when the transcript or explicit tracker shows concrete unfinished work and it remains relevant to the latest instruction or a required dependency.',
         'Within Active Or Unfinished Work, order every retained historical task from newest to oldest. The newest unfinished task must be completed before the next-newest task.',
         'Completed, superseded, abandoned, and unrelated tasks belong under Completed Or Background Work and must not be revived as the current objective.',
         'Preserve concrete facts, current workspace, mode, model, tool results, files changed, decisions, errors, constraints, and user preferences.',
         'Do not invent completion. Mark uncertainty explicitly.',
-        'Return concise Markdown with these stable headings: Active Or Unfinished Work; Completed Or Background Work; Decisions And Constraints; Tool And Verification Evidence; Relevant Files.',
-      ].join('\n');
-      const prompt = [
-        'Compress the following conversation segment.',
         '',
         'Required metadata to preserve:',
         meta,
@@ -7745,16 +8396,16 @@ export class Agent {
         `Original message count in omitted segment: ${middle.length}`,
         `Original total message chars before compression: ${totalChars}`,
         '',
-        'Latest retained user instruction (authoritative and not part of the omitted transcript):',
+        'Latest retained user instruction (authoritative and not part of the omitted segment):',
         currentInstruction || '(No retained user text was available; preserve uncertainty and do not promote old tasks without evidence.)',
         '',
-        'Omitted transcript:',
-        transcript,
+        'Return ONLY concise Markdown with these stable headings:',
+        'Active Or Unfinished Work; Completed Or Background Work; Decisions And Constraints; Tool And Verification Evidence; Relevant Files.',
       ].join('\n');
       const modelName = String(compressionModel || this.activeModelName()).trim();
       if (!modelName) return { summary: fallbackSummary, model: 'local-fallback', fallback: true };
       const generated = await this.withTimeout(
-        provider.chat(modelName, [{ role: 'user', content: prompt }], system, temperature, budget.summaryTokens, signal),
+        provider.chat(modelName, [...prefixMessages, { role: 'user', content: prompt }], system, temperature, budget.summaryTokens, signal),
         120000
       );
       const generatedText = String(generated || '').trim();
@@ -7802,6 +8453,17 @@ export class Agent {
       if (text.trim()) return text.trim().slice(0, 2_000);
     }
     return '';
+  }
+
+  /** 裁剪超长工具结果：保留头部结论性内容 + 尾部证据（路径/错误/收尾），
+   *  中间用占位标记省略。与 DSH toolResultPruner 的语义一致。 */
+  private pruneToolResultContent(content: string): string {
+    const text = String(content || '');
+    const headChars = Math.floor(TOOL_RESULT_PRUNE_CHARS * 0.6);
+    const tailChars = Math.max(0, TOOL_RESULT_PRUNE_CHARS - headChars - 48);
+    const head = text.slice(0, headChars).trimEnd();
+    const tail = text.slice(-tailChars).trimStart();
+    return `${head}\n\n[...tool result pruned ${text.length - headChars - tailChars} chars...]\n\n${tail}`;
   }
 
   private compressionHistoryContent(content: unknown): string {
@@ -7864,6 +8526,16 @@ export class Agent {
     }
   }
 
+  private compressionArchiveEntryCount(): number {
+    const scopeKey = this.compressionArchiveScopeKey();
+    if (!scopeKey) return 0;
+    if (this.compressionArchiveCountCache?.scopeKey === scopeKey) return this.compressionArchiveCountCache.count;
+    const hotIds = new Set(this.compressionCache.map(entry => entry.id));
+    const count = this.compressionHistoryArchive.activeEntries(scopeKey).filter(entry => !hotIds.has(entry.id)).length;
+    this.compressionArchiveCountCache = { scopeKey, count };
+    return count;
+  }
+
   private archiveColdCompressionEntries(entries: CompressionCacheEntry[]): CompressionCacheEntry[] {
     const scopeKey = this.compressionArchiveScopeKey();
     if (!scopeKey) return [];
@@ -7884,6 +8556,7 @@ export class Agent {
     if (!scopeKey) return;
     try {
       this.compressionHistoryArchive.markRestored(scopeKey, id);
+      this.compressionArchiveCountCache = null;
     } catch {
       // The restored context is already authoritative; archive bookkeeping is best-effort.
     }
@@ -7922,6 +8595,7 @@ export class Agent {
       const failed = this.archiveColdCompressionEntries(evicted);
       this.compressionCache = [...failed, ...this.compressionCache.slice(this.compressionCache.length - maxEntries)];
     }
+    this.compressionArchiveCountCache = null;
     this.saveWorkspaceConversationState(true);
   }
 
@@ -7932,6 +8606,34 @@ export class Agent {
     if (preserve > 0 && this.history.length > 0) candidates.push(Math.max(0, this.history.length - preserve));
     if (lastUserIndex >= 0) candidates.push(lastUserIndex);
     return candidates.length ? Math.min(...candidates) : -1;
+  }
+
+  private historyRecordFingerprint(record: Record<string, unknown> | undefined): string {
+    if (!record) return '';
+    return `${String(record.role || '')}\u0000${JSON.stringify(record.content ?? '')}`;
+  }
+
+  private flushPendingHistoryRemovals(): void {
+    if (!this.pendingHistoryRemovals.length) return;
+    const pending = this.pendingHistoryRemovals;
+    this.pendingHistoryRemovals = [];
+    // 按 position 从大到小处理，避免多次 splice 造成索引偏移。
+    const ordered = pending.slice().sort((a, b) => b.position - a.position);
+    for (const item of ordered) {
+      const atPosition = this.history[item.position];
+      if (atPosition && this.historyRecordFingerprint(atPosition) === item.fingerprint) {
+        this.history.splice(item.position, 1);
+        continue;
+      }
+      // 位置已被压缩/折叠改变时，用内容指纹兜底移除首个匹配项。
+      for (let i = this.history.length - 1; i >= 0; i -= 1) {
+        if (this.historyRecordFingerprint(this.history[i]) === item.fingerprint) {
+          this.history.splice(i, 1);
+          break;
+        }
+      }
+    }
+    this.saveWorkspaceConversationState(true);
   }
 
   private contextHistoryProtectedZone(): Set<number> {

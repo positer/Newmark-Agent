@@ -104,6 +104,9 @@ function main(): void {
 
   const read = registry.get('read');
   check(!!read && read.riskLevel === 'read' && read.idempotency === 'idempotent', 'read tool stays idempotent');
+  check(!!read && !!read.fullDescription && read.fullDescription.includes('Read file contents'), 'cordis registration preserves the real tool description in fullDescription');
+  check(!!read && !!read.shortDescription && read.shortDescription.length > 0, 'cordis registration derives a readable shortDescription');
+  check(!!gitPush && !!gitPush.fullDescription && gitPush.fullDescription.includes('Push commits'), 'git_push keeps its description, not a name(domain) placeholder');
   const write = registry.get('write');
   const edit = registry.get('edit');
   check(!!write && write.riskLevel === 'write' && write.idempotency === 'conditionally_idempotent', 'write tool infers conditionally_idempotent');

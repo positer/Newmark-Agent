@@ -218,6 +218,35 @@ export interface CapabilityDescriptor {
 
 export type ToolIdempotency = 'idempotent' | 'conditionally_idempotent' | 'non_idempotent';
 
+/** 最小执行上下文：承载 DSH 工具 execute 的 exec.signal/agent 等运行时能力。 */
+export interface ToolExecuteContext {
+  signal?: AbortSignal;
+  agent?: unknown;
+  token?: unknown;
+  [key: string]: unknown;
+}
+
+/** DSH ToolDefinition.execute 的运行时执行函数签名（cordis 核功能承载）。 */
+export type ToolExecuteFn = (args: unknown, context: ToolExecuteContext) => Promise<unknown> | unknown;
+
+/** DSH ToolDefinition.isConcurrencySafe 的运行时并发分类（cordis 核功能承载）。 */
+export type ToolConcurrencySafeFn = (args: unknown) => boolean;
+
+/** DSH ToolOutputDefinition.render 的模型可见内容投影。 */
+export type ToolRenderFn = (args: unknown, value: unknown) => unknown;
+
+/** DSH ToolOutputDefinition.presentationMeta 的可回放 UI 状态投影。 */
+export type ToolPresentationMetaFn = (args: unknown, value: unknown) => unknown;
+
+/** DSH ToolDefinition.finalizeContent 的同步 last-mile 内容变换（可选）。 */
+export type ToolFinalizeContentFn = (context: ToolExecuteContext, result: unknown) => unknown;
+
+/** DSH ToolDefinition.presentCall 的 PENDING 卡片展示投影（可选）。 */
+export type ToolPresentCallFn = (args: unknown) => unknown;
+
+/** DSH ToolDefinition.presentResult 的 COMPLETED 卡片展示投影（可选）。 */
+export type ToolPresentResultFn = (args: unknown, result: unknown) => unknown;
+
 export interface ToolDescriptor {
   toolId: string;
   capabilityId: string;
@@ -236,6 +265,22 @@ export interface ToolDescriptor {
   implementationHash?: string;
   cacheGroup: string;
   enabled: boolean;
+  /** DSH ToolDefinition.execute 承载：接入的命令式功能实现（不 import/execute DSH 代码，仅承载已安全注入的函数引用）。 */
+  execute?: ToolExecuteFn;
+  /** DSH ToolDefinition.isConcurrencySafe 承载：运行时并发分类，静态 riskLevel 的补充。 */
+  isConcurrencySafe?: ToolConcurrencySafeFn;
+  /** DSH ToolOutputDefinition.render：模型可见内容投影（功能承载）。 */
+  render?: ToolRenderFn;
+  /** DSH ToolOutputDefinition.presentationMeta：可回放 UI 状态投影（功能承载）。 */
+  presentationMeta?: ToolPresentationMetaFn;
+  /** DSH ToolDefinition.finalizeContent：同步 last-mile 内容变换（功能承载）。 */
+  finalizeContent?: ToolFinalizeContentFn;
+  /** DSH ToolDefinition.timeoutMs：协作超时预算（功能承载）。 */
+  timeoutMs?: number;
+  /** DSH ToolDefinition.presentCall：PENDING 卡片展示投影（功能承载）。 */
+  presentCall?: ToolPresentCallFn;
+  /** DSH ToolDefinition.presentResult：COMPLETED 卡片展示投影（功能承载）。 */
+  presentResult?: ToolPresentResultFn;
 }
 
 export interface ActiveToolManifestEntry {

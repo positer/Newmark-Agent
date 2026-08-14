@@ -13,8 +13,8 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
-const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
-const reportPath = path.join(repoRoot, 'archive', '20260814-keyboard-full-coverage-stress.json');
+const exePath = path.resolve(process.env.NEWMARK_KEYBOARD_EXE || path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe'));
+const reportPath = path.resolve(process.env.NEWMARK_KEYBOARD_REPORT || path.join(repoRoot, 'archive', '20260814-keyboard-full-coverage-stress.json'));
 const keepRoot = process.env.NEWMARK_KEEP_KEYBOARD_STRESS === '1';
 const port = Number(process.env.NEWMARK_KEYBOARD_STRESS_PORT || '49390');
 const rounds = Number(process.env.NEWMARK_KEYBOARD_STRESS_ROUNDS || '2');

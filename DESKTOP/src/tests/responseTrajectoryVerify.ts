@@ -25,8 +25,8 @@ async function main(): Promise<void> {
     initialState: {
       model: MODEL,
       tools: [
-        { name: 'alpha', label: 'alpha', description: '', parameters: {}, execute: async () => { await delay(40); return { content: [{ type: 'text', text: 'alpha-ok' }] }; } },
-        { name: 'beta', label: 'beta', description: '', parameters: {}, execute: async () => { await delay(60); throw new Error('beta-failed'); } },
+        { name: 'alpha', label: 'alpha', description: '', parameters: {}, concurrencySafe: true, execute: async () => { await delay(40); return { content: [{ type: 'text', text: 'alpha-ok' }] }; } },
+        { name: 'beta', label: 'beta', description: '', parameters: {}, concurrencySafe: true, execute: async () => { await delay(60); throw new Error('beta-failed'); } },
       ],
     },
     toolExecution: 'parallel',

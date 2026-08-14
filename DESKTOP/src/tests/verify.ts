@@ -4514,6 +4514,9 @@ async function main() {
     bcAgent.history = bcAgent.chatMessages.map(message => ({ role: message.role, content: message.content }));
     bcAgent.flushConversationState();
     assert(bcAgent.handleBranchList('{}').ok === false, 'branch communication: branch_list is disabled before the creation-time flag is set');
+    assert(bcAgent.handleBranchSend(JSON.stringify({ to_branch: 'any', message: 'x' })).ok === false, 'branch isolation: branch_send is disabled before the creation-time flag');
+    assert(bcAgent.handleBranchRead(JSON.stringify({ branch: 'any' })).ok === false, 'branch isolation: branch_read is disabled before the creation-time flag');
+    assert(bcAgent.handleBranchCreate(JSON.stringify({ message_index: 0, prompt: 'x' })).ok === false, 'branch isolation: branch_create is disabled before the creation-time flag');
     bcAgent.setBranchCommunication(true);
     assert(bcAgent.isBranchCommunicationEnabled() && bcAgent.handleBranchList('{}').ok === true, 'branch communication: the creation-time flag unlocks the branch tools');
     const bcCreate = bcAgent.handleBranchCreate(JSON.stringify({ message_index: 0, prompt: 'alternative task' }));
@@ -4530,6 +4533,13 @@ async function main() {
     // 每分支缓存完整：切回根分支后，根分支的历史与 Build 树完整恢复（不因交流模式而丢缓存前缀）。
     const bcRootSnapshot = bcAgent.switchConversationBranch('branch-comm', bcRootId);
     assert(bcRootSnapshot.chatMessages[0]?.content === 'root task' && bcRootSnapshot.chatMessages[1]?.content === 'root answer', 'branch communication: switching back restores the complete original branch transcript (per-branch cache intact)');
+    // 隔离：branchMailbox 是对话隔离的，另一对话的 branch 工具与 mailbox 互不影响。
+    const bcOther = new Agent(path.join(TEST_DIR, 'branch-comm-other'));
+    bcOther.setConversation('branch-comm-other');
+    assert(bcOther.handleBranchList('{}').ok === false, 'branch isolation: a separate conversation is not branch-communication enabled by default');
+    bcOther.setBranchCommunication(true);
+    assert(bcOther.handleBranchList('{}').ok === true, 'branch isolation: a separate conversation enables branch communication independently');
+    assert(Array.isArray((bcOther as any).branchMailbox) && (bcOther as any).branchMailbox.length === 0, 'branch isolation: a separate conversation has an empty branch mailbox (no cross-conversation mailbox leak)');
   }
 
   conversationOrderAgent.setConversation('guide-branch-source');

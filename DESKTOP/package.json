@@ -21,7 +21,6 @@
     "!dist/tests/**/*",
     "!dist/**/*.map",
     "assets/**/*",
-    "Flow/**/*",
     "config.example.json"
   ],
   "scripts": {
@@ -221,13 +220,6 @@
       {
         "from": "../THIRD_PARTY_NOTICES.md",
         "to": "THIRD_PARTY_NOTICES.md"
-      },
-      {
-        "from": "Flow",
-        "to": "Flow",
-        "filter": [
-          "**/*"
-        ]
       }
     ],
     "win": {

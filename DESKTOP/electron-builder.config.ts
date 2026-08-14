@@ -31,7 +31,6 @@ const config: Configuration = {
   extraFiles: [
     { from: '../LICENSE', to: 'LICENSE' },
     { from: '../THIRD_PARTY_NOTICES.md', to: 'THIRD_PARTY_NOTICES.md' },
-    { from: 'Flow', to: 'Flow', filter: ['**/*'] },
   ],
   win: {
     icon: 'assets/icon.ico',

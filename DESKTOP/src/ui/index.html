@@ -3137,15 +3137,19 @@ button.todo-item { background: transparent; }
   font: 9px var(--font-mono);
 }
 
-.conv-branch-comm-badge {
-  flex: 0 0 auto;
-  padding: 2px 5px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+.conv-branch-comm-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
   color: var(--accent);
-  font: 9px var(--font-mono);
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
+.conv-branch-comm-icon .nm-icon { width: 11px; height: 11px; }
 
 .conv-runtime-badge.running { color: var(--accent2); }
 .conv-runtime-badge.stopping,
@@ -5008,6 +5012,32 @@ html.newmark-memory-overview-viewer body {
 .auto-input-group input:focus,
 .auto-input-group select:focus,
 .auto-input-group textarea:focus { border-color: var(--accent); }
+
+.auto-input-group.checkbox-row {
+  display: flex;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg-1);
+}
+.auto-input-group.checkbox-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+}
+.auto-input-group.checkbox-row input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  margin: 0;
+  padding: 0;
+}
 
 .auto-conditions {
   display: flex;
@@ -18477,9 +18507,9 @@ function renderConversations() {
     if (runtimeState && ['running', 'stopping', 'force_restarting'].indexOf(String(runtimeState.status || '')) >= 0) div.classList.add('marquee-border');
     var runtimeBadge = runtimeState && runtimeState.status && runtimeState.status !== 'idle'
       ? '<span class="conv-runtime-badge ' + escAttr(String(runtimeState.status)) + '">' + esc(String(runtimeState.status)) + '</span>' : '';
-    var branchCommBadge = conv.branchCommunication
-      ? '<span class="conv-branch-comm-badge" title="' + escAttr(t('conversation.branchCommunicationBadge')) + '">' + esc(t('conversation.branchCommunicationBadge')) + '</span>' : '';
-    div.innerHTML = '<span class="conv-summary" title="' + escAttr(String(conv.id || '')) + '">' + esc(displaySummary) + (conv.messageCount ? ' (' + esc(String(conv.messageCount)) + ')' : '') + '</span>' + branchCommBadge + runtimeBadge +
+    var branchCommIcon = conv.branchCommunication
+      ? '<span class="conv-branch-comm-icon" title="' + escAttr(t('conversation.branchCommunicationBadge')) + '" aria-label="' + escAttr(t('conversation.branchCommunicationBadge')) + '">' + iconSvg('git-branch', t('conversation.branchCommunicationBadge')) + '</span>' : '';
+    div.innerHTML = '<span class="conv-summary" title="' + escAttr(String(conv.id || '')) + '">' + esc(displaySummary) + (conv.messageCount ? ' (' + esc(String(conv.messageCount)) + ')' : '') + '</span>' + branchCommIcon + runtimeBadge +
       '<button class="conv-rename-btn" onclick="event.stopPropagation();window.editConversationName(' + i + ')" title="' + escAttr(t('conversation.rename')) + '">' + iconOnly('pencil', t('conversation.rename')) + '</button>' +
       '<button class="conv-archive-btn" onclick="event.stopPropagation();window.archiveConv(this.closest(&quot;.conv-item&quot;).getAttribute(&quot;data-conversation-id&quot;))" title="' + escAttr(t('conversation.archive')) + '">' + iconOnly('archive', t('conversation.archive')) + '</button>' +
       '<button class="conv-pin-btn' + (conv.pinned ? ' active' : '') + '" onclick="event.stopPropagation();window.toggleConversationPinned(' + i + ')" title="' + escAttr(conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '">' + iconOnly('pin', conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '</button>';
@@ -18634,7 +18664,7 @@ window.showNewConversationPage = function() {
   var html = '<div style="display:flex;flex-direction:column;gap:12px;padding:4px 2px;">' +
     '<div style="font-size:12px;color:var(--text-dim);line-height:1.5;">' + esc(t('workspace.newConversationDesc')) + '</div>' +
     '<div class="auto-input-group"><label>' + esc(t('status.workspace')) + '</label><select id="new-conv-ws">' + options + '</select></div>' +
-    '<div class="auto-input-group" style="flex-direction:row;align-items:center;gap:8px;"><label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;"><input type="checkbox" id="new-conv-branch-comm" style="accent-color:var(--accent);">' + esc(t('conversation.branchCommunication')) + '</label></div>' +
+    '<div class="auto-input-group checkbox-row"><label><input type="checkbox" id="new-conv-branch-comm"><span>' + esc(t('conversation.branchCommunication')) + '</span></label></div>' +
     '<div style="display:flex;gap:8px;">' +
     '<button class="sec-btn primary" style="flex:1;" onclick="window.doNewConversationFromPage()">' + esc(t('workspace.createConversation')) + '</button>' +
     '<button class="sec-btn" style="flex:1;" onclick="window.showNewWorkspaceDialog()">' + esc(t('workspace.createAction')) + '</button>' +

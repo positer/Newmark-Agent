@@ -1,6 +1,10 @@
 # Newmark Agent Overview
 
-## dev-0.4.2 模型校验进度窗口修复（2026-08-15）— source PASS；rebuilt + UAC reinstalled
+## dev-0.4.2 git push + win/linux release（2026-08-15）— released
+
+提交 `6b32a2b`、打 tag `dev-0.4.2`、push master 与 tag；WSL Ubuntu-24.04 完整 Linux `npm test` 全绿（含 deletion-safety 156/156）后构建 Linux 产物；创建 GitHub prerelease [dev-0.4.2](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.4.2) 并上传 5 资产：Windows MSI `226,056,271` bytes / `FB7056A9A7BCC953071465317A52042CA21F66BB596A64BB452CA3D7980DAFFF`，Windows ZIP `291,914,694` bytes / `41CF0C9B37E568AB1D9C0407AB1E0B77F6F440E55FA98F4296C7EDC9A8ADB761`，Linux AppImage `176,036,624` bytes / `F5FB100DC357BB468A16CF85C3A48E90CE4A914EC75E50C8F35B927C8DDDE8B8`，Linux deb `135,641,332` bytes / `68A45610711C3D8B5C03C8FB501AE36BD15573691646623D13D793ADE08CCB82`，Linux unpacked ZIP `172,144,415` bytes / `FBB699170E43DC1DEDA32F5C4F6DE77CFFFE6921EC5D50B89C66F151E94DC832`。证据：archive/20260815-dev-0.4.2-git-push-and-release.md。
+
+## dev-0.4.2 模型校验进度窗口修复（2026-08-15）— source PASS；rebuilt + UAC reinstalled + released
 
 修复两个关联 GUI 问题：模型校验进度轮询每 150ms 整体重建 `sub-win-body` 导致 `marquee-border` 跑马灯动画重置（抽搐），且轮询无条件覆盖当前子窗口导致其他弹出窗口被强制变为模型校验、无法回退。修复后：首次渲染进度容器（`id="model-validation-progress"`），轮询经 `updateModelValidationProgress` 原地更新 `mv-*` 文本/进度条、找不到容器时 no-op；进度窗口打开时重复点击不重建不压栈；完成/失败时若进度窗口仍在则原地替换（关闭可回退上级），否则用聊天消息摘要不抢占窗口。验证：`npm run build` EXIT=0；`node dist/tests/verify.js` **1550/1550 PASS**（新增 1 条防回归断言）。修复后已重新打包并 UAC 重装 0.4.2.0。证据：archive/20260815-dev-0.4.2-model-validation-marquee-and-subwindow-fix.md、archive/20260815-dev-0.4.2-repackage-after-ui-fix.md。
 
@@ -13,7 +17,7 @@
 3. 软性要求：`DESKTOP/src/core/agent.ts` 的 `CORE_SYSTEM_PROMPT` 注入静态 `Deletion safety` 规则与 `delete_file` 工具说明；所有 prompt 改动均为静态文本、不改 `systemPromptCache` 的 identity 结构，故不破坏 provider 前缀缓存命中。
 4. 测试：`DESKTOP/src/tests/verify.ts` 新增 15 条断言（delete_file 4、deletion guard 9、buildSystemPrompt 删除安全契约 + 缓存命中 2）。
 
-验证：`npm run build` EXIT=0（0.4.2）；`node dist/tests/verify.js` 1549/1549 PASS；`npm run lint` 0 errors（70 既有 warnings，新增代码 0 warning）。删除安全压力测试 `DESKTOP/scripts/deletion-safety-stress.cjs` 修正 Windows/bash 虚拟路径语义后 **156/156 PASS**，并挂为 `test:deletion-safety` npm script、纳入 `test:desktop:built` 常驻门禁。Windows MSI/便携 ZIP 已重建并 UAC 提权安装（0.4.1.0 → 0.4.2.0；UI 修复后同版本重装）：MSI `226,056,271` bytes / SHA-256 `FB7056A9A7BCC953071465317A52042CA21F66BB596A64BB452CA3D7980DAFFF`，ZIP `291,914,694` bytes / `41CF0C9B37E568AB1D9C0407AB1E0B77F6F440E55FA98F4296C7EDC9A8ADB761`；安装目录与打包目录 `app.asar` SHA-256 一致（`40081F5B23046E5D05DBBD9C2BE64A3FF63E28A7E544CA016832582221071F1B`）。未 commit/打 git tag、未远程发布。证据：archive/20260815-dev-0.4.2-tool-deletion-safety-hard-soft.md、archive/20260815-dev-0.4.2-deletion-safety-stress.md、archive/20260815-dev-0.4.2-windows-package-and-uac-install.md、archive/20260815-dev-0.4.2-repackage-after-ui-fix.md。
+验证：`npm run build` EXIT=0（0.4.2）；`node dist/tests/verify.js` 1549/1549 PASS；`npm run lint` 0 errors（70 既有 warnings，新增代码 0 warning）。删除安全压力测试 `DESKTOP/scripts/deletion-safety-stress.cjs` 修正 Windows/bash 虚拟路径语义后 **156/156 PASS**，并挂为 `test:deletion-safety` npm script、纳入 `test:desktop:built` 常驻门禁。Windows MSI/便携 ZIP 已重建并 UAC 提权安装（0.4.1.0 → 0.4.2.0；UI 修复后同版本重装）：MSI `226,056,271` bytes / SHA-256 `FB7056A9A7BCC953071465317A52042CA21F66BB596A64BB452CA3D7980DAFFF`，ZIP `291,914,694` bytes / `41CF0C9B37E568AB1D9C0407AB1E0B77F6F440E55FA98F4296C7EDC9A8ADB761`；安装目录与打包目录 `app.asar` SHA-256 一致（`40081F5B23046E5D05DBBD9C2BE64A3FF63E28A7E544CA016832582221071F1B`）。已 commit（`6b32a2b`）、打 tag `dev-0.4.2`、push 并发布 GitHub prerelease（Windows MSI/ZIP + Linux AppImage/deb/unpacked ZIP）。证据：archive/20260815-dev-0.4.2-tool-deletion-safety-hard-soft.md、archive/20260815-dev-0.4.2-deletion-safety-stress.md、archive/20260815-dev-0.4.2-windows-package-and-uac-install.md、archive/20260815-dev-0.4.2-repackage-after-ui-fix.md、archive/20260815-dev-0.4.2-git-push-and-release.md。
 
 ## dev-0.4.1 GUI/TUI 打磨 + 刷新配置锁定（2026-08-15）— source PASS；Windows 已打包 + UAC 安装
 

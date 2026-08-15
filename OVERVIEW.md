@@ -1,6 +1,10 @@
 # Newmark Agent Overview
 
-## dev-0.4.3 模型思考强度档位映射（2026-08-16）— source PASS
+## dev-0.4.3 打包 + UAC 安装 + win/linux release（2026-08-16）— released
+
+移动本地 tag `dev-0.4.3` 至 `dd08013` 并 push master 与 tag（远端此前无 dev-0.4.3）。Windows：`npm run dist:windows-release` 完整门禁（test:full-release + 打包）全绿后产出 MSI/ZIP，UAC 提权安装 `msiexec /i ... /qb /norestart` exit 0 → Program Files 0.4.3.0，安装目录与打包 `release/win-unpacked/resources/app.asar` SHA-256 一致（`8B241F04D761003ACE3C5C61F72C32F2A37A55406B7BB749CB3E5769C6AB4E1A`），`Newmark.exe --version` → 0.4.3 exit 0。Linux：WSL Ubuntu-24.04 隔离环境完整 `npm test` 全绿（含 thinkingTierMapCacheStressVerify 67/67、deletion-safety 156/156）后 electron-builder 产出 AppImage/deb/unpacked ZIP 并 rsync 回 `release/`。GitHub prerelease `dev-0.4.3` 5 资产全部上传（首次 create 因上传超时留下 draft/untagged 状态，删除后以 `--verify-tag` 重建并逐资产上传修正）。证据：archive/20260816-dev-0.4.3-win-linux-release.md。
+
+## dev-0.4.3 模型思考强度档位映射（2026-08-16）— released
 
 在 dev-0.4.3 任务清单之上落地「模型原生思考强度档位 → Newmark 五档位」映射：
 

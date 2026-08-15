@@ -780,7 +780,7 @@ async function verifyInputsArrivingAfterStopAreDurable(): Promise<void> {
 async function verifyRendererReconcilesCompletionAgainstFirstStop(): Promise<void> {
   const uiHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'ui', 'index.html'), 'utf8');
   const start = uiHtml.indexOf('async function refreshConversationRuntimeAfterStopRace');
-  const end = uiHtml.indexOf('window.submitCurrentAction = function()', start);
+  const end = uiHtml.indexOf('window.submitCurrentAction = function(', start);
   assert.ok(start >= 0 && end > start, 'renderer stop reconciliation block is discoverable');
 
   const target = { workspaceId: 'workspace-stop-race', conversationId: 'default' };

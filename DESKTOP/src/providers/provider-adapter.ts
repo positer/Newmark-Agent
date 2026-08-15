@@ -45,7 +45,9 @@ export interface NormalizedAgentRequest {
   tools: NormalizedTool[];
   temperature: number;
   maxOutputTokens: number;
-  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /** dev-0.4.3：模型原生思考强度档位名。Newmark 档位经模型配置
+   *  `thinking_tier_map` 映射后可能不再是 Newmark 档位名，故为自由字符串。 */
+  reasoningEffort?: string;
   apiKey: string;
   baseUrl: string;
   /** 可选的会话标识。仅当目标 provider 显式支持 session_id 语义的上下文缓存

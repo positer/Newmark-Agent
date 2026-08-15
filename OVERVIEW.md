@@ -1,5 +1,16 @@
 # Newmark Agent Overview
 
+## dev-0.4.3 模型思考强度档位映射（2026-08-16）— source PASS
+
+在 dev-0.4.3 任务清单之上落地「模型原生思考强度档位 → Newmark 五档位」映射：
+
+1. `ModelConfig` 新增可选 `thinking_tier_map`（模型原生档位名 → Newmark 档位 `low/medium/high/xhigh/max`）；`LLMProvider` 构造新增第 8 参 `thinkingTierMaps`（模型名 → 映射表），`reasoningEffort` 先经 `mappedNativeEffort` 反查：精确命中 → 就近降级（不高于目标档位的最高已映射档位）→ 全部高于目标时取最低档；未配置映射时默认不变动（模型名匹配时 Newmark 档位名原样透传，不匹配的模型仍不发送 effort，维持既有语义）。
+2. v2 adapter 修复：`chatStreamWithToolsV2` 的 chat_completions 请求此前漏带 `reasoningEffort`（responses 桥路径一直携带），本次补上；`NormalizedAgentRequest.reasoningEffort` 类型由五档 union 放宽为自由字符串（映射后的原生档位名可能不是 Newmark 档位名）。
+3. GUI：新增/编辑模型弹窗新增「思考强度档位映射」文本域（每行 `原生档位=Newmark档位`，留空即默认不变动映射），模型列表 chip 显示映射条目数；i18n en/zh 新增 `model.thinkingTierMap` / `model.thinkingTierMapHelp`；解析/序列化助手 `parseThinkingTierMap` / `serializeThinkingTierMap`。
+4. 配置示例：`config.example.json` 模型条目新增 `thinking_tier_map` 示例（minimal/balanced/deep → low/medium/high）。
+
+验证：`npm run typecheck` / `npm run build` EXIT=0；`node dist/tests/intelligenceTierVerify.js` 610 次请求捕获、8 个映射用例 PASS（精确/降级/ultra 归一/最低档/未配置透传/非思考模型不发/v2 chat 携带映射后档位）；`node dist/tests/verify.js` **1568/1568 PASS**（新增 4 条 source-contract 断言）；`npm run lint` 0 errors（70 既有 warnings）；`npm run test:desktop:built` 全绿（含 deletion-safety 156/156）。版本号保持 `0.4.3`。证据：archive/20260816-dev-0.4.3-thinking-tier-map.md。
+
 ## dev-0.4.3 任务清单同步 + TUI 光标跟随 + 上下文窗口统计 + Guide 注入优化（2026-08-15）— source PASS
 
 在 dev-0.4.2 之上完成 dev-0.4.3 任务清单并升版本号到 0.4.3：

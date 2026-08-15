@@ -130,6 +130,8 @@ export class LLMProvider {
     public openAIMode: OpenAITransportMode | boolean = 'chat_stream',
     public useProviderAdaptersV2 = false,
     public requestTimeoutMs = DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,
+    /** dev-0.4.3 模型原生思考强度档位映射（模型名 → { 模型原生档位: Newmark 档位 }）。 */
+    public thinkingTierMaps?: Record<string, Record<string, string>>,
   ) {}
 
   private effectiveRequestTimeout(timeoutMs: number): number {
@@ -163,7 +165,9 @@ export class LLMProvider {
     }
   }
 
-  private reasoningEffort(model: string, tier?: string): IntelligenceTier | undefined {
+  private reasoningEffort(model: string, tier?: string): string | undefined {
+    const mapped = this.mappedNativeEffort(model, tier);
+    if (mapped !== undefined) return mapped;
     if (!/^(?:gpt-5|o[134](?:-|$)|codex)|(?:reasoner|reasoning|deepseek-r1|deepseek-reasoner|\br1\b)/i.test(model)) return undefined;
     const effort: IntelligenceTier = tier === 'low' || tier === 'high' || tier === 'xhigh' || tier === 'max'
       ? tier
@@ -172,6 +176,36 @@ export class LLMProvider {
     // OpenAI currently accepts xhigh as its highest public API effort. Custom
     // OpenAI-compatible/Codex gateways may expose the user-facing max tier.
     return effort === 'max' && /^https:\/\/(?:api\.)?openai\.com(?:\/|$)/i.test(this.cleanBaseUrl()) ? 'xhigh' : effort;
+  }
+
+  /**
+   * dev-0.4.3 模型原生思考强度档位映射。不同模型的原生 reasoning_effort
+   * 档位配置可能不同（档位数量或档位命名不同）。模型配置 `thinking_tier_map`
+   * 以「模型原生档位名 → Newmark 档位」声明映射，这里把 Newmark 档位反查为
+   * 模型原生档位名；未配置映射（或映射为空）时返回 undefined，由调用方
+   * 维持默认透传行为（默认不变动映射）。
+   */
+  private mappedNativeEffort(model: string, tier?: string): string | undefined {
+    const map = this.thinkingTierMaps?.[model];
+    if (!map || typeof map !== 'object') return undefined;
+    const order = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+    const entries = Object.entries(map)
+      .filter((entry): entry is [string, (typeof order)[number]] => order.includes(entry[1] as (typeof order)[number]))
+      .sort((a, b) => order.indexOf(a[1]) - order.indexOf(b[1]));
+    if (!entries.length) return undefined;
+    const normalized: (typeof order)[number] = tier === 'ultra'
+      ? 'max'
+      : (order.includes(tier as (typeof order)[number]) ? tier as (typeof order)[number] : 'medium');
+    const exact = entries.find(([, newmark]) => newmark === normalized);
+    if (exact) return exact[0];
+    // 就近降级：取强度不超过目标档位的最高已映射档位
+    const targetIndex = order.indexOf(normalized);
+    for (let i = targetIndex; i >= 0; i--) {
+      const candidate = entries.find(([, newmark]) => newmark === order[i]);
+      if (candidate) return candidate[0];
+    }
+    // 全部高于目标档位：取最低档位
+    return entries[0]?.[0];
   }
 
   private applyChatReasoningEffort(body: Record<string, unknown>, model: string, tier?: string): void {
@@ -900,6 +934,7 @@ export class LLMProvider {
       tools: this.toNormalizedTools(tools),
       temperature,
       maxOutputTokens: maxTokens,
+      reasoningEffort: this.reasoningEffort(model, reasoningTier),
       apiKey: this.apiKey,
       baseUrl: this.cleanBaseUrl(),
       ...(sessionId ? { sessionId } : {}),

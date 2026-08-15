@@ -43,6 +43,51 @@ async function run(): Promise<void> {
     await official.chat('gpt-5.6-codex', [{ role: 'user', content: 'ping' }], null, 0, 32, undefined, 'max');
     assert.equal(captured.at(-1)?.body.reasoning_effort, 'xhigh');
 
+    // ---- dev-0.4.3 thinking_tier_map：模型原生档位映射 ----
+    const mappedChat = new LLMProvider('mapped', 'https://gateway.example/v1', 'secret', 'openai', 'chat', undefined, undefined, {
+      'native-effort-model': { minimal: 'low', balanced: 'medium', deep: 'high' },
+    });
+    // 精确命中：Newmark medium → 模型原生 balanced
+    await mappedChat.chat('native-effort-model', [{ role: 'user', content: 'ping' }], null, 0, 32, undefined, 'medium');
+    assert.equal(captured.at(-1)?.body.reasoning_effort, 'balanced');
+    // 降级命中：Newmark max 未声明 → 就近取不高于 max 的最高档 deep
+    await mappedChat.chat('native-effort-model', [{ role: 'user', content: 'ping' }], null, 0, 32, undefined, 'max');
+    assert.equal(captured.at(-1)?.body.reasoning_effort, 'deep');
+    // ultra 归一为 max → deep
+    await mappedChat.chat('native-effort-model', [{ role: 'user', content: 'ping' }], null, 0, 32, undefined, 'ultra');
+    assert.equal(captured.at(-1)?.body.reasoning_effort, 'deep');
+    // Newmark high 精确命中 → deep
+    await mappedChat.chat('native-effort-model', [{ role: 'user', content: 'ping' }], null, 0, 32, undefined, 'high');
+    assert.equal(captured.at(-1)?.body.reasoning_effort, 'deep');
+    // 目标档位低于全部已声明档位：取最低档 minimal
+    await mappedChat.chat('native-effort-model', [{ role: 'user', content: 'ping' }], null, 0, 32, undefined, 'low');
+    assert.equal(captured.at(-1)?.body.reasoning_effort, 'minimal');
+
+    // 未配置映射的模型：默认不变动映射（模型名匹配时 Newmark 档位名原样透传）
+    await mappedChat.chat('gpt-5.6-codex', [{ role: 'user', content: 'ping' }], null, 0, 32, undefined, 'xhigh');
+    assert.equal(captured.at(-1)?.body.reasoning_effort, 'xhigh');
+    // 未配置映射且模型名不匹配思考模型正则：维持原行为，不发送 effort
+    await mappedChat.chat('plain-other-model', [{ role: 'user', content: 'ping' }], null, 0, 32, undefined, 'xhigh');
+    assert.equal('reasoning_effort' in (captured.at(-1)?.body || {}), false);
+
+    // responses 协议同样走映射
+    const mappedResponses = new LLMProvider('mapped-resp', 'https://gateway.example/v1', 'secret', 'openai', 'responses', undefined, undefined, {
+      'native-effort-model': { minimal: 'low', balanced: 'medium', deep: 'high' },
+    });
+    await mappedResponses.chat('native-effort-model', [{ role: 'user', content: 'ping' }], null, 0, 32, undefined, 'max');
+    assert.equal(captured.at(-1)?.body.reasoning?.effort, 'deep');
+
+    // v2 adapter chat 路径也携带映射后的原生档位名
+    const mappedV2 = new LLMProvider('mapped-v2', 'https://gateway.example/v1', 'secret', 'openai', 'chat_stream', true, undefined, {
+      'native-effort-model': { minimal: 'low', balanced: 'medium', deep: 'high' },
+    });
+    const v2Tokens: string[] = [];
+    for await (const token of mappedV2.chatStreamWithTools('native-effort-model', [{ role: 'user', content: 'ping' }], null, 0, 32, [], undefined, 'max')) {
+      v2Tokens.push(token.type);
+    }
+    assert.equal(captured.at(-1)?.body.reasoning_effort, 'deep');
+    assert.ok(v2Tokens.includes('text'), 'mapped v2 chat: emits text token');
+
     const config = defaultConfig();
     assert.deepEqual(config.models.default_intelligence._values, tiers);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-intelligence-tier-'));
@@ -58,7 +103,7 @@ async function run(): Promise<void> {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
-    console.log(JSON.stringify({ ok: true, tiers, capturedRequests: 602, perProtocolStressRequests: 300 }));
+    console.log(JSON.stringify({ ok: true, tiers, capturedRequests: 610, perProtocolStressRequests: 300, thinkingTierMapCases: 8 }));
   } finally {
     globalThis.fetch = originalFetch;
   }

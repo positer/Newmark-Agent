@@ -6060,6 +6060,8 @@ var NEWMARK_I18N = {
     'model.contextSize': 'Context size',
     'model.vision': 'Vision',
     'model.thinking': 'Thinking',
+    'model.thinkingTierMap': 'Thinking tier map',
+    'model.thinkingTierMapHelp': 'Map native model effort tiers to Newmark tiers. One "native=Newmark" per line (e.g. minimal=low, balanced=medium, deep=high). Leave empty to keep the default mapping (Newmark tier names are sent as-is).',
     'model.description': 'Description',
     'model.optionalDescription': 'Optional description',
     'model.fuzzyInput': 'API key / provider details',
@@ -6764,6 +6766,8 @@ var NEWMARK_I18N = {
     'model.contextSize': '上下文规模',
     'model.vision': '视觉',
     'model.thinking': '思考',
+    'model.thinkingTierMap': '思考强度档位映射',
+    'model.thinkingTierMapHelp': '将模型原生思考强度档位映射到 Newmark 档位。每行一个「原生档位=Newmark档位」（如 minimal=low、balanced=medium、deep=high）。留空表示不变动映射（按 Newmark 档位名原样发送）。',
     'model.description': '描述',
     'model.optionalDescription': '可选描述',
     'model.fuzzyInput': 'API key / 供应商信息',
@@ -14926,9 +14930,11 @@ function renderModelSettings() {
         : (normalizedStatus === 'not checked' ? 'model-eval-pending' : 'model-eval-bad');
       var details = '';
       if (typeof modelEntry !== 'string') {
+        var tierMapCount = modelEntry.thinking_tier_map && typeof modelEntry.thinking_tier_map === 'object' ? Object.keys(modelEntry.thinking_tier_map).length : 0;
         details = '<span class="model-eval-line">ctx ' + esc(modelEntry.max_tokens || '') +
           ' | ' + esc(t('model.vision')) + ' ' + (modelEntry.vision ? t('common.on') : t('common.off')) +
           ' | ' + esc(t('model.thinking')) + ' ' + (modelEntry.thinking ? t('common.on') : t('common.off')) +
+          (tierMapCount ? ' | ' + esc(t('model.thinkingTierMap')) + ' ' + tierMapCount : '') +
           ' | ' + esc(t('model.cost')) + ' ' + esc(evaluation ? evaluation.cost_rating : '-') +
           ' | ' + esc(t('model.performanceShort')) + ' ' + esc(modelEntry.capability_rating || '-') +
           ' | ' + esc(t('model.speed')) + ' ' + esc(modelEntry.speed_rating || '-') + '</span>';
@@ -15637,7 +15643,29 @@ window.addModel = function() {
     '<div style="display:flex;gap:10px;margin-bottom:10px;"><label style="font-size:11px;color:var(--text-dim);"><input type="checkbox" id="new-model-vision"> ' + esc(t('model.vision')) + '</label>' +
     '<label style="font-size:11px;color:var(--text-dim);"><input type="checkbox" id="new-model-thinking"> ' + esc(t('model.thinking')) + '</label></div>' +
     '<div class="auto-input-group"><label>' + esc(t('model.description')) + '</label><textarea id="new-model-desc" rows="2" placeholder="' + escAttr(t('model.optionalDescription')) + '"></textarea></div>' +
+    '<div class="auto-input-group"><label>' + esc(t('model.thinkingTierMap')) + '</label><textarea id="new-model-tier-map" rows="3" placeholder="minimal=low&#10;balanced=medium&#10;deep=high"></textarea>' +
+    '<div style="margin-top:10px;font-size:11px;color:var(--text-dim);">' + esc(t('model.thinkingTierMapHelp')) + '</div></div>' +
     '<div style="margin-top:10px;"><button class="sec-btn primary" onclick="window.saveNewModel()">' + esc(t('common.save')) + '</button></div>');
+};
+
+window.parseThinkingTierMap = function(text) {
+  var map = {};
+  if (!text) return map;
+  String(text).split('\n').forEach(function(line) {
+    var trimmed = line.trim();
+    if (!trimmed) return;
+    var eq = trimmed.indexOf('=');
+    if (eq <= 0) return;
+    var native = trimmed.slice(0, eq).trim();
+    var newmark = trimmed.slice(eq + 1).trim();
+    if (native && newmark) map[native] = newmark;
+  });
+  return map;
+};
+
+window.serializeThinkingTierMap = function(map) {
+  if (!map || typeof map !== 'object') return '';
+  return Object.keys(map).map(function(k) { return k + '=' + map[k]; }).join('\n');
 };
 
 window.saveNewModel = function() {
@@ -15647,9 +15675,11 @@ window.saveNewModel = function() {
   var visionEl = document.getElementById('new-model-vision');
   var thinkingEl = document.getElementById('new-model-thinking');
   var descEl = document.getElementById('new-model-desc');
+  var tierMapEl = document.getElementById('new-model-tier-map');
   if (name && !isNaN(provIdx) && state.providers[provIdx]) {
     if (!state.providers[provIdx].models) state.providers[provIdx].models = [];
-    state.providers[provIdx].models.push({
+    var tierMap = window.parseThinkingTierMap(tierMapEl ? tierMapEl.value : '');
+    var entry = {
       name: name,
       display: name,
       description: descEl ? descEl.value : '',
@@ -15666,7 +15696,9 @@ window.saveNewModel = function() {
         xhigh: { description: 'xhigh' },
         max: { description: 'max' }
       }
-    });
+    };
+    if (Object.keys(tierMap).length) entry.thinking_tier_map = tierMap;
+    state.providers[provIdx].models.push(entry);
     api.saveConfig({providers: state.providers});
     window.refreshModelSelect();
   }
@@ -15686,6 +15718,8 @@ window.editModel = function(provIdx, modelIdx) {
     '<div style="display:flex;gap:10px;margin-bottom:10px;"><label style="font-size:11px;color:var(--text-dim);"><input type="checkbox" id="edit-model-vision"' + (model.vision ? ' checked' : '') + '> ' + esc(t('model.vision')) + '</label>' +
     '<label style="font-size:11px;color:var(--text-dim);"><input type="checkbox" id="edit-model-thinking"' + (model.thinking ? ' checked' : '') + '> ' + esc(t('model.thinking')) + '</label></div>' +
     '<div class="auto-input-group"><label>' + esc(t('model.description')) + '</label><textarea id="edit-model-desc" rows="2">' + esc(model.description || '') + '</textarea></div>' +
+    '<div class="auto-input-group"><label>' + esc(t('model.thinkingTierMap')) + '</label><textarea id="edit-model-tier-map" rows="3">' + esc(window.serializeThinkingTierMap(model.thinking_tier_map)) + '</textarea>' +
+    '<div style="margin-top:10px;font-size:11px;color:var(--text-dim);">' + esc(t('model.thinkingTierMapHelp')) + '</div></div>' +
     '<div style="margin-top:10px;"><button class="sec-btn primary" onclick="window.saveModelEdit(' + provIdx + ',' + modelIdx + ')">' + esc(t('common.save')) + '</button></div>');
 };
 
@@ -15698,11 +15732,13 @@ window.saveModelEdit = function(oldProvIdx, modelIdx) {
   var visionEl = document.getElementById('edit-model-vision');
   var thinkingEl = document.getElementById('edit-model-thinking');
   var descEl = document.getElementById('edit-model-desc');
+  var tierMapEl = document.getElementById('edit-model-tier-map');
   var name = nameEl ? nameEl.value.trim() : '';
   var newProvIdx = provEl ? parseInt(provEl.value) : oldProvIdx;
   if (!name || isNaN(newProvIdx) || !state.providers[newProvIdx]) return;
   var previous = oldProvider.models[modelIdx];
   if (typeof previous === 'string') previous = { name: previous, display: previous };
+  var tierMap = window.parseThinkingTierMap(tierMapEl ? tierMapEl.value : '');
   var updated = Object.assign({}, previous, {
     name: name,
     display: name,
@@ -15711,6 +15747,8 @@ window.saveModelEdit = function(oldProvIdx, modelIdx) {
     vision: !!(visionEl && visionEl.checked),
     thinking: !!(thinkingEl && thinkingEl.checked)
   });
+  if (Object.keys(tierMap).length) updated.thinking_tier_map = tierMap;
+  else delete updated.thinking_tier_map;
   oldProvider.models.splice(modelIdx, 1);
   if (!state.providers[newProvIdx].models) state.providers[newProvIdx].models = [];
   state.providers[newProvIdx].models.push(updated);

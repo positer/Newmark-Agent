@@ -6794,7 +6794,7 @@ export class Agent {
       this.modelValidationProgress = { ...this.modelValidationProgress, currentModel, currentCheck: 'catalog' };
       const inferredVision = !!m.vision || inferModelVisionCapability(m.name, m.display, m.description, m.provider, m.provider_protocol);
       const inferredImageOutput = !!m.image_output || /(?:^|[-_.])(gpt-image|dall-e|imagen|imagegen|image-generation)(?:$|[-_.])/i.test(m.name);
-      const p = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'));
+      const p = new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(m));
       let catalog = catalogByProvider.get(m.provider_id);
       if (!catalog && m.provider_url && m.api_key) {
         try { catalog = await p.modelCatalog(); } catch { catalog = []; }
@@ -6903,7 +6903,17 @@ export class Agent {
     }
     const m = this.activeModelConfig();
     if (!m) return null;
-    return new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'));
+    return new LLMProvider(m.provider, m.provider_url, m.api_key, m.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(m));
+  }
+
+  /**
+   * dev-0.4.3 模型原生思考强度档位映射表（模型名 → thinking_tier_map）。
+   * 未配置映射的模型返回 undefined，provider 侧维持默认透传（不变动映射）。
+   */
+  private modelThinkingTierMaps(model?: { name: string; thinking_tier_map?: Record<string, string> }): Record<string, Record<string, string>> | undefined {
+    const map = model?.thinking_tier_map;
+    if (!model?.name || !map || typeof map !== 'object' || !Object.keys(map).length) return undefined;
+    return { [model.name]: map };
   }
 
   async editorModelRequest(input: {
@@ -6938,8 +6948,8 @@ export class Agent {
     ) || models.find(model => model.evaluation?.status === 'available') || models[0];
     if (!selected?.api_key || !selected.provider_url) return { ok: false, text: '', error: 'No available editor prediction model.' };
     const provider = input.completion
-      ? new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, 'chat_stream', this.config.contextFlag('provider_adapters_v2'), EDITOR_COMPLETION_TIMEOUT_MS)
-      : new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'));
+      ? new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, 'chat_stream', this.config.contextFlag('provider_adapters_v2'), EDITOR_COMPLETION_TIMEOUT_MS, this.modelThinkingTierMaps(selected))
+      : new LLMProvider(selected.provider, selected.provider_url, selected.api_key, selected.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(selected));
     const language = path.extname(String(input.path || '')).replace(/^\./, '') || 'text';
     const system = input.completion
       ? 'You are an inline code completion engine. Return only the exact text to insert at the cursor. Do not use Markdown fences or explanations.'
@@ -8081,7 +8091,7 @@ export class Agent {
     const activeModel = this.activeModelConfig();
     const activeProvider = this.engineModel();
     const assignedProvider = assignedModel && assignedModel.provider_id !== activeModel?.provider_id
-      ? new LLMProvider(assignedModel.provider, assignedModel.provider_url, assignedModel.api_key, assignedModel.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'))
+      ? new LLMProvider(assignedModel.provider, assignedModel.provider_url, assignedModel.api_key, assignedModel.provider_protocol, this.config.openAIApiMode(), this.config.contextFlag('provider_adapters_v2'), undefined, this.modelThinkingTierMaps(assignedModel))
       : activeProvider;
     if (!assignedProvider || !model) {
       throw new Error('No LLM configured. Add provider in Settings > Models.');

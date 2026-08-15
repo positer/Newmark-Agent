@@ -81,6 +81,11 @@
                 "low": { "description": "Fast" },
                 "medium": { "description": "Balanced" },
                 "high": { "description": "Careful" }
+              },
+              "thinking_tier_map": {
+                "minimal": "low",
+                "balanced": "medium",
+                "deep": "high"
               }
             }
           ]

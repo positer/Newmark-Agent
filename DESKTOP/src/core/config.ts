@@ -72,6 +72,14 @@ export interface ModelConfig {
     xhigh: { description: string };
     max: { description: string };
   };
+  /**
+   * dev-0.4.3 模型原生思考强度档位映射。不同模型的原生 reasoning_effort
+   * 档位配置可能不同（档位数量或档位命名不同）。键为模型原生档位名，
+   * 值为 Newmark 五档位之一（low/medium/high/xhigh/max）。请求时把
+   * Newmark 档位按本映射转换成模型原生档位名发送；未配置（或映射无法
+   * 命中）时保持默认行为——Newmark 档位名原样作为 reasoning effort 透传。
+   */
+  thinking_tier_map?: Record<string, string>;
 }
 
 export interface ModelEvaluation {

@@ -620,6 +620,14 @@ async function main() {
   assert(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].every(tier => uiHtml.includes(`<option value="${tier}">${tier}</option>`) || uiHtml.includes(`<option value="${tier}" selected>${tier}</option>`))
     && uiHtml.includes("xhigh: t('intel.xhigh')") && uiHtml.includes("max: t('intel.max')"),
    'ui intelligence: GUI exposes the standard low/medium/high/xhigh/max/ultra reasoning effort tiers');
+  assert(uiHtml.includes("'model.thinkingTierMap'") && uiHtml.includes("'model.thinkingTierMapHelp'")
+    && uiHtml.includes('window.parseThinkingTierMap') && uiHtml.includes('window.serializeThinkingTierMap')
+    && uiHtml.includes('new-model-tier-map') && uiHtml.includes('edit-model-tier-map')
+    && uiHtml.includes('if (Object.keys(tierMap).length) entry.thinking_tier_map = tierMap')
+    && uiHtml.includes('else delete updated.thinking_tier_map;'),
+    'ui intelligence: model settings let users edit a per-model native thinking tier map (one native=Newmark per line) with empty meaning unchanged default mapping');
+  assert(configSource.includes('thinking_tier_map?: Record<string, string>') && configSource.includes('dev-0.4.3 模型原生思考强度档位映射'),
+    'config: ModelConfig declares the optional native thinking_tier_map used for per-model reasoning effort mapping');
   assert(uiHtmlLf.includes('window.selectReadableControlWidth = function(select)') && uiHtmlLf.includes("shell.dataset.autoReadableWidth = compactSelect ? 'true' : 'false'") && uiHtmlLf.includes("menu.matches(':popover-open')") && uiHtmlLf.includes('window.closeModelSelectMenu();\n    return;'), 'ui selects: compact controls reserve readable option width and both model and generic popovers close through their full top-layer lifecycle on a repeated trigger click');
   assert(uiHtml.includes('.ft-item .ft-toggle {') && uiHtml.includes('transform: rotate(90deg)') && uiHtml.includes('.ft-item .ft-toggle.collapsed { transform: rotate(0deg); }') && uiHtml.includes('.flow-item-header.collapsed .arrow { transform: rotate(0deg); }'), 'right panel disclosure indicators point right while collapsed and down while expanded');
   assert(uiHtml.includes('function canonicalUiWorkspaceKey(ws)') && uiHtml.includes('window.upsertWorkspaceState = function(ws)') && !uiHtml.includes('state.workspaces.push(ws);'), 'ui html: workspace creation upserts exact folder bindings instead of showing temporary duplicates');
@@ -2778,6 +2786,8 @@ async function main() {
     'Agent subagent context: job seeding rebuilds tool-call/tool-result turns from the persisted peer transcript');
   assert(agentSource.includes('[Peer Job Continuation]'),
     'Agent subagent context: mailbox/resume jobs inject a peer continuation prompt over the persisted transcript');
+  assert(agentSource.includes('modelThinkingTierMaps(m)') && agentSource.includes('dev-0.4.3 模型原生思考强度档位映射表'),
+    'agent: LLMProvider construction passes the active model thinking tier map through engineModel/validation/editor/subagent paths');
   assert(subagentSource.includes('hidden_user_input: true')
     && kernelRunnerSource.includes('hiddenUserInput?: boolean')
     && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8').includes('hiddenUserInput: true'), 'Agent subagent context: internal peer directives and root wakeups never become visible user messages');
@@ -5722,6 +5732,11 @@ async function main() {
   assert(providerSource.includes("fs.readFileSync(responsePath, 'utf8')"), 'LLMProvider fallback: Node reads PowerShell response file as UTF-8');
   assert(!providerSource.includes('$bodyJson = [Console]::In.ReadToEnd()'), 'LLMProvider fallback: PowerShell does not stream JSON body through command stdin');
   assert(!providerSource.includes('Write-Output $resp.Content'), 'LLMProvider fallback: PowerShell does not stream response body through console stdout');
+  assert(providerSource.includes('public thinkingTierMaps?: Record<string, Record<string, string>>')
+    && providerSource.includes('private mappedNativeEffort')
+    && providerSource.includes('const mapped = this.mappedNativeEffort(model, tier)')
+    && providerSource.includes('// 就近降级：取强度不超过目标档位的最高已映射档位'),
+    'provider: LLMProvider resolves native effort through the per-model thinking tier map with exact match, downward fallback, and default passthrough when unconfigured');
 
   LLMProvider.nodeHttpTransport = async () => { throw new Error('node fallback failed'); };
   LLMProvider.powershellTransport = async (_method, url, _headers, body) => {

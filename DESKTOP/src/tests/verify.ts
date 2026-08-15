@@ -5737,6 +5737,13 @@ async function main() {
     && providerSource.includes('const mapped = this.mappedNativeEffort(model, tier)')
     && providerSource.includes('// 就近降级：取强度不超过目标档位的最高已映射档位'),
     'provider: LLMProvider resolves native effort through the per-model thinking tier map with exact match, downward fallback, and default passthrough when unconfigured');
+  assert(packageJson.includes('"test:thinking-tier-map-cache-stress"')
+    && packageJson.includes('"test:desktop:built": "node dist/tests/verify.js && node dist/tests/thinkingTierMapCacheStressVerify.js'),
+    'package: thinking tier map cache stress is registered standalone and as the first gate of test:desktop:built');
+  assert(fs.readFileSync(path.join(process.cwd(), 'src', 'tests', 'thinkingTierMapCacheStressVerify.ts'), 'utf-8').includes('dev-0.4.3 模型原生思考强度档位映射（thinking_tier_map）缓存命中压力测试')
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'tests', 'thinkingTierMapCacheStressVerify.ts'), 'utf-8').includes('mapping determinism')
+    && fs.readFileSync(path.join(process.cwd(), 'src', 'tests', 'thinkingTierMapCacheStressVerify.ts'), 'utf-8').includes('cache prefix: mapped effort never leaks into the system prompt'),
+    'thinking tier map cache stress: suite pins mapping determinism, byte-stable cache prefixes, agent chain effort, and cache-hit ratio under mapped tiers');
 
   LLMProvider.nodeHttpTransport = async () => { throw new Error('node fallback failed'); };
   LLMProvider.powershellTransport = async (_method, url, _headers, body) => {

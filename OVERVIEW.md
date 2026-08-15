@@ -9,7 +9,7 @@
 3. GUI：新增/编辑模型弹窗新增「思考强度档位映射」文本域（每行 `原生档位=Newmark档位`，留空即默认不变动映射），模型列表 chip 显示映射条目数；i18n en/zh 新增 `model.thinkingTierMap` / `model.thinkingTierMapHelp`；解析/序列化助手 `parseThinkingTierMap` / `serializeThinkingTierMap`。
 4. 配置示例：`config.example.json` 模型条目新增 `thinking_tier_map` 示例（minimal/balanced/deep → low/medium/high）。
 
-验证：`npm run typecheck` / `npm run build` EXIT=0；`node dist/tests/intelligenceTierVerify.js` 610 次请求捕获、8 个映射用例 PASS（精确/降级/ultra 归一/最低档/未配置透传/非思考模型不发/v2 chat 携带映射后档位）；`node dist/tests/verify.js` **1568/1568 PASS**（新增 4 条 source-contract 断言）；`npm run lint` 0 errors（70 既有 warnings）；`npm run test:desktop:built` 全绿（含 deletion-safety 156/156）。版本号保持 `0.4.3`。证据：archive/20260816-dev-0.4.3-thinking-tier-map.md。
+验证：`npm run typecheck` / `npm run build` EXIT=0；`node dist/tests/intelligenceTierVerify.js` 610 次请求捕获、8 个映射用例 PASS（精确/降级/ultra 归一/最低档/未配置透传/非思考模型不发/v2 chat 携带映射后档位）；`node dist/tests/verify.js` **1570/1570 PASS**（新增 5 条 source-contract 断言，含缓存压测挂载契约）；`npm run lint` 0 errors（70 既有 warnings）；`npm run test:desktop:built` 全绿（含新缓存压测 `thinkingTierMapCacheStressVerify` 67/67、deletion-safety 156/156）。缓存压测覆盖：真实 provider 序列化路径 30 轮同档位请求映射确定性 + system 前缀字节级稳定（映射档位绝不进缓存前缀）；6 档位 × 10 轮切换稳定；Agent 全链路 5 Build × 8 tool 子轮（默认 medium → balanced、ultra → deep）缓存命中率 ≥0.9 且统计不漂移。版本号保持 `0.4.3`。证据：archive/20260816-dev-0.4.3-thinking-tier-map.md、archive/20260816-dev-0.4.3-thinking-tier-map-cache-stress.md。
 
 ## dev-0.4.3 任务清单同步 + TUI 光标跟随 + 上下文窗口统计 + Guide 注入优化（2026-08-15）— source PASS
 

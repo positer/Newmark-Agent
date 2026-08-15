@@ -3,12 +3,15 @@
 const data = require("./data");
 const {
   activeConversationModelLabel,
+  buildEventKey,
   filteredCommands,
+  focusableEventsForRun,
   memoryTagOptions,
   resolveThemeAppearance,
   selectedMemoryDetail
 } = require("./state");
 const { SETTINGS_CATEGORIES, displaySettingValue, settingsRows } = require("./settings-schema");
+const { tr, resolveLanguage } = require("./i18n");
 
 const ESC = "\u001b[";
 const ANSI_PATTERN = /\u001b\[[0-9;?]*[A-Za-z]/g;
@@ -143,7 +146,7 @@ function card(lines, width, p, title) {
 }
 
 function renderSidebar(state, height, width, p) {
-  const header = [`${p.brand}${p.bold}  NEWMARK${p.reset}`, `${p.muted}  Agent TUI${p.reset}`, ""];
+  const header = [`${p.brand}${p.bold}  NEWMARK${p.reset}`, `${p.muted}  ${tr(state, "Agent TUI")}${p.reset}`, ""];
   const menuLines = [];
   let focusedLine = 0;
   const isFocused = (level, index) => state.focusRegion === "menu"
@@ -155,7 +158,7 @@ function renderSidebar(state, height, width, p) {
     const style = isFocused(level, index) ? `${p.selected}${p.bold}` : active ? p.bold : "";
     const prefix = " ".repeat(indent);
     if (isFocused(level, index)) focusedLine = menuLines.length;
-    menuLines.push(`${marker}${style} ${prefix}${item.icon}  ${pad(item.label, width - 7 - indent)}${p.reset}`);
+    menuLines.push(`${marker}${style} ${prefix}${item.icon}  ${pad(tr(state, item.label), width - 7 - indent)}${p.reset}`);
   };
   const addGroup = (label, level, rootIndex, expanded, active, icon = "") => {
     const focused = isFocused("root", rootIndex);
@@ -165,7 +168,7 @@ function renderSidebar(state, height, width, p) {
     if (focused) focusedLine = menuLines.length;
     menuLines.push(`${marker}${style} ${chevron} ${icon ? `${icon} ` : ""}${pad(label, width - 6 - (icon ? 2 : 0))}${p.reset}`);
   };
-  menuLines.push(`${p.muted}  WORKSPACES${p.reset}`);
+  menuLines.push(`${p.muted}  ${tr(state, "WORKSPACES")}${p.reset}`);
   state.workspaces.forEach((workspace, workspaceIndex) => {
     const rootIndex = workspaceIndex;
     const level = `workspace:${workspace.id}`;
@@ -178,7 +181,7 @@ function renderSidebar(state, height, width, p) {
     }
   });
   menuLines.push("");
-  menuLines.push(`${p.muted}  OPERATIONS${p.reset}`);
+  menuLines.push(`${p.muted}  ${tr(state, "OPERATIONS")}${p.reset}`);
   const operations = data.navigation.filter((item) => item.section === "operations");
   operations.forEach((item, index) => {
     const rootIndex = state.workspaces.length + index;
@@ -186,9 +189,9 @@ function renderSidebar(state, height, width, p) {
   });
   const activeWorkspace = state.workspaces.find((item) => item.id === state.target.workspaceId);
   const footer = [
-    `${p.muted}  ACTIVE TARGET${p.reset}`,
+    `${p.muted}  ${tr(state, "ACTIVE TARGET")}${p.reset}`,
     `  ${p.brand}${activeWorkspace?.icon || "◆"}${p.reset} ${truncate(activeWorkspace?.name || state.target.workspaceId, width - 5)}`,
-    `${p.muted}  ACTIVE CONVERSATION${p.reset}`,
+    `${p.muted}  ${tr(state, "ACTIVE CONVERSATION")}${p.reset}`,
     `  ${p.cyan}↳${p.reset} ${truncate(state.lastConversation, width - 5)}`,
     `${p.green}  ● local · ${state.adapterKind === "mock" ? "demo" : "Newmark core"}${p.reset}`
   ];
@@ -207,7 +210,7 @@ function conversationContext(state, p, scope) {
   const workspace = state.workspaces.find((item) => item.id === state.target.workspaceId);
   return [
     `${p.muted}Workspace / ${workspace?.name || state.target.workspaceId} / Conversation${p.reset}`,
-    `${p.cyan}↳${p.reset} ${p.bold}${state.lastConversation}${p.reset}  ${p.muted}· ${scope}${p.reset}`,
+    `${p.cyan}↳${p.reset} ${p.bold}${state.lastConversation}${p.reset}  ${p.muted}· ${tr(state, scope)}${p.reset}`,
     `${p.muted}${"─".repeat(42)}${p.reset}`,
     ""
   ];
@@ -305,33 +308,66 @@ function buildEventRows(run, width, p, extraGuides = [], state = {}) {
   const rows = [];
   const ordered = orderedWorkEvents(run, extraGuides);
   const displayImages = runDisplayImages(run);
-  const append = (prefix, content) => {
-    const prefixWidth = visibleLength(prefix);
-    wrapText(content, Math.max(1, width - prefixWidth)).forEach((row, index) => {
-      rows.push(`${index === 0 ? prefix : " ".repeat(prefixWidth)}${row}`);
-    });
+  const focusables = focusableEventsForRun(run);
+  const focusByEvent = new Map();
+  focusables.forEach((event, index) => focusByEvent.set(event, { key: buildEventKey(event, index), index }));
+  const eventFocus = !!(state.conversationHistoryFocus && state.historyEventFocus);
+  const focusedIndex = Number(state.historyEventIndex) || 0;
+  state.historyEventFocusLine = -1;
+  const zh = resolveLanguage(state) === "zh";
+  const labelFor = (event) => {
+    const type = String(event?.type || "").toLowerCase();
+    if (type === "tool_call") return "TOOL";
+    if (type === "tool_result") return "RESULT";
+    if (type === "thought" || type === "thought_result") return zh ? "思考" : "THOUGHT";
+    return "PROGRESS";
   };
+  const nameFor = (event) => String(event?.toolName || "");
+  const contentFor = (event) => {
+    const type = String(event?.type || "").toLowerCase();
+    const content = String(event?.content || event?.toolArgs || "").trim();
+    if ((type === "thought" || type === "thought_result") && !content) return zh ? "正在思考…" : "Thinking…";
+    return content;
+  };
+  let focusCursor = 0;
   for (const event of ordered) {
     if (isGuideEvent(event)) {
       rows.push(...guideEventRows(event, width, p));
       continue;
     }
     if (event.type === "final_response") continue;
-    const content = String(event.content || event.toolArgs || "").trim();
-    if (!content) continue;
+    const meta = focusByEvent.get(event);
+    const focusIndex = meta ? meta.index : focusCursor;
+    const key = meta ? meta.key : buildEventKey(event, focusIndex);
+    const focused = eventFocus && focusIndex === focusedIndex;
+    if (focused) state.historyEventFocusLine = rows.length;
+    const collapsed = !!(state.collapsedBuildEvents && state.collapsedBuildEvents.has(key));
+    const label = labelFor(event);
+    const name = nameFor(event);
+    const content = contentFor(event);
+    const chevron = collapsed ? "▸" : "▾";
+    const marker = focused ? "›" : " ";
+    if (collapsed || !content) {
+      const head = `    ${marker} ${chevron} ${label}${name ? ` ${name}` : ""}`;
+      rows.push(focused ? `${p.selected}${p.bold}${head}${p.reset}` : `${p.muted}${head}${p.reset}`);
+    } else {
+      const head = `    ${marker} ${chevron} ${label}${name ? ` ${name}` : ""}  `;
+      const prefixWidth = visibleLength(head);
+      wrapText(content, Math.max(1, width - prefixWidth)).forEach((row, index) => {
+        const line = `${index === 0 ? head : " ".repeat(prefixWidth)}${row}`;
+        rows.push(focused ? `${p.selected}${p.bold}${line}${p.reset}` : `${p.muted}${line}${p.reset}`);
+      });
+    }
     if (event.type === "tool_call") {
-      append(`    TOOL ${event.toolName || "tool"}  `, content);
       const result = ordered.find((candidate) => candidate.type === "tool_result" && candidate.displayImage && (
         event.toolCallId && candidate.toolCallId ? String(event.toolCallId) === String(candidate.toolCallId) : candidate.toolName === event.toolName
       ));
       if (result?.displayImage) rows.push(displayImageRow(result.displayImage, displayImages.indexOf(result.displayImage), state, p, width));
-    } else if (event.type === "tool_result") {
-      append(`    RESULT ${event.toolName || "tool"}  `, content);
-    } else if (["text", "status", "response"].includes(event.type)) {
-      append("    PROGRESS ", content);
     }
+    focusCursor = focusIndex + 1;
   }
-  return rows.map((row) => `${p.muted}${row}${p.reset}`);
+  state.historyEventFocusCount = focusCursor;
+  return rows;
 }
 
 function collapsedGuideRows(run, width, p, extraGuides = []) {
@@ -424,6 +460,7 @@ function chatView(state, width, height, p) {
   const messageWidth = Math.max(8, detailWidth - roleColumnWidth);
   const historyRows = [];
   const historyBlockRanges = [];
+  state.historyEventFocusAbsoluteLine = -1;
   const workRuns = [...(state.snapshot.workRuns || [])]
     .sort((leftRun, rightRun) => Number(leftRun.sequence || 0) - Number(rightRun.sequence || 0));
   const workRunById = new Map(workRuns.map((run, index) => [String(run.runId || ""), { run, index }]));
@@ -480,6 +517,10 @@ function chatView(state, width, height, p) {
     )) || finalSummaryMessage(run);
     appendChatMessage(historyRows, assistantSummary, messageWidth, roleColumnWidth, p);
     historyBlockRanges[index] = { runId: run.runId, start, end };
+    if (state.conversationHistoryFocus && state.historyEventFocus
+      && Number.isInteger(state.historyEventFocusLine) && state.historyEventFocusLine >= 0) {
+      state.historyEventFocusAbsoluteLine = start + 1 + state.historyEventFocusLine;
+    }
     renderedRunIds.add(runId);
   };
   for (const message of state.messages) {
@@ -513,6 +554,19 @@ function chatView(state, width, height, p) {
       state.conversationScroll = Math.max(0, historyRows.length - historyEnd);
     }
   }
+  if (state.conversationHistoryFocus && state.historyEventFocus
+    && Number.isInteger(state.historyEventFocusAbsoluteLine) && state.historyEventFocusAbsoluteLine >= 0) {
+    const focusLine = state.historyEventFocusAbsoluteLine;
+    if (focusLine < historyStart) {
+      historyStart = focusLine;
+      historyEnd = Math.min(historyRows.length, historyStart + historyHeight);
+      state.conversationScroll = Math.max(0, historyRows.length - historyEnd);
+    } else if (focusLine >= historyEnd) {
+      historyEnd = Math.min(historyRows.length, focusLine + 1);
+      historyStart = Math.max(0, historyEnd - historyHeight);
+      state.conversationScroll = Math.max(0, historyRows.length - historyEnd);
+    }
+  }
   state.historyVisibleRunIds = historyBlockRanges
     .filter(Boolean)
     .filter((range) => range.end >= historyStart && range.start < historyEnd)
@@ -539,18 +593,19 @@ function planView(state, width, p) {
   const goal = state.snapshot.goal;
   const lines = [
     ...conversationContext(state, p, "Conversation plan"),
-    `${p.bold}Linked Plan · rev ${state.snapshot.linkedPlan.revision}${p.reset}   ${p.cyan}${planItems.filter((item) => item.status === "done").length} / ${planItems.length} steps${p.reset}`,
+    `${p.bold}${tr(state, "Linked Plan")} · rev ${state.snapshot.linkedPlan.revision}${p.reset}   ${p.cyan}${planItems.filter((item) => item.status === "done").length} / ${planItems.length} steps${p.reset}`,
     "",
     ...planItems.map((item, i) => {
       const style = state.focusRegion === "content" && i === state.selected ? `${p.selected}${p.bold}` : "";
+      if (style) state.contentFocusLine = 6 + i;
       return `${style} ${statusIcon(item.status, p)}  ${pad(item.text, Math.max(18, width - 28))} ${p.muted}${item.status}${p.reset}`;
     }),
     "",
     ...card([
-      `${p.bold}Next handoff${p.reset}`,
+      `${p.bold}${tr(state, "Next handoff")}${p.reset}`,
       goal?.objective || "No active goal",
-      `${p.muted}Plan and goal are loaded from the active Newmark conversation${p.reset}`
-    ], width, p, "Linked goal")
+      `${p.muted}${tr(state, "Records come from the active Newmark conversation")}${p.reset}`
+    ], width, p, tr(state, "Linked goal"))
   ];
   return lines;
 }
@@ -559,9 +614,9 @@ function goalView(state, width, p) {
   const goal = state.snapshot.goal;
   return [
     ...conversationContext(state, p, "Conversation goal"),
-    `${p.bold}Goal${p.reset}   ${goal?.paused ? `${p.amber}paused${p.reset}` : `${p.green}active${p.reset}`}`,
+    `${p.bold}${tr(state, "Goal")}${p.reset}   ${goal?.paused ? `${p.amber}paused${p.reset}` : `${p.green}active${p.reset}`}`,
     "",
-    `${p.brand}${p.bold}${goal?.objective || "No active goal"}${p.reset}`,
+    `${p.brand}${p.bold}${goal?.objective || tr(state, "No active goal")}${p.reset}`,
     "",
     `Rounds      ${goal?.goalRounds || 0}`,
     `Verified    ${goal?.verified ? "yes" : "no"}`,
@@ -576,11 +631,12 @@ function agentsView(state, width, p) {
   const messageWidth = Math.max(8, width - roleColumnWidth - 4);
   const rows = [
     ...conversationContext(state, p, "Conversation subagents"),
-    `${p.bold}Subagents${p.reset}   ${p.muted}Parallel work with isolated context${p.reset}`,
+    `${p.bold}${tr(state, "Subagents")}${p.reset}   ${p.muted}${tr(state, "Parallel work with isolated context")}${p.reset}`,
     ""
   ];
   state.snapshot.subagents.forEach((agent, i) => {
     const style = state.focusRegion === "content" && i === state.selected ? `${p.selected}` : "";
+    if (style) state.contentFocusLine = rows.length;
     const expanded = state.agentHistoryExpandedId === String(agent.id || agent.displayName || "");
     rows.push(
       `${style} ${expanded ? "▾" : "▸"} ${statusIcon(agent.status, p)} ${p.bold}${pad(agent.displayName, 18)}${p.reset} ${pad(agent.task, Math.max(12, width - 49))} ${p.muted}${agent.status}${p.reset}`,
@@ -597,11 +653,11 @@ function agentsView(state, width, p) {
       }, messageWidth, roleColumnWidth, p);
     });
     if (!messages.length) {
-      historyRows.push(`${" ".repeat(roleColumnWidth)}${p.muted}No messages recorded yet.${p.reset}`);
+      historyRows.push(`${" ".repeat(roleColumnWidth)}${p.muted}${tr(state, "No messages recorded yet.")}${p.reset}`);
       historyRows.push("");
     }
     if (agent.result) {
-      historyRows.push(`${p.brand}${p.bold}RESULT${p.reset}`);
+      historyRows.push(`${p.brand}${p.bold}${tr(state, "RESULT")}${p.reset}`);
       wrapText(String(agent.result), messageWidth).forEach((row) => {
         historyRows.push(`${" ".repeat(roleColumnWidth)}${row}`);
       });
@@ -626,16 +682,18 @@ function modelView(state, width, p) {
       || (selection.providerId === current.providerId && selection.modelId === current.modelId));
   return [
     ...conversationContext(state, p, "Model and reasoning effort"),
-    `${p.bold}Reasoning effort${p.reset}   ${p.muted}Shared GUI/TUI request tier · ←/→ changes section${p.reset}`,
+    `${p.bold}${tr(state, "Reasoning effort")}${p.reset}   ${p.muted}${tr(state, "Shared GUI/TUI request tier · ←/→ changes section")}${p.reset}`,
     ...INTELLIGENCE_TIERS.map((tier, index) => {
       const style = state.focusRegion === "content" && state.contentColumn === 0 && index === state.selected ? `${p.selected}${p.bold}` : "";
+      if (style) state.contentFocusLine = 5 + index;
       return `${style} ${tier === currentTier ? `${p.cyan}●${p.reset}` : "○"} ${tier}${p.reset}`;
     }),
     "",
-    `${p.bold}Deployment${p.reset}   ${p.muted}Used by this conversation, including its Plan and Subagents${p.reset}`,
+    `${p.bold}${tr(state, "Deployment")}${p.reset}   ${p.muted}${tr(state, "Used by this conversation, including its Plan and Subagents")}${p.reset}`,
     "",
     ...options.flatMap((option, index) => {
       const style = state.focusRegion === "content" && state.contentColumn === 1 && index === state.selected ? `${p.selected}${p.bold}` : "";
+      if (style) state.contentFocusLine = 14 + index * 2;
       const marker = isCurrent(option.selection) ? `${p.cyan}●${p.reset}` : "○";
       return [
         `${style} ${marker} ${pad(option.label, Math.max(18, Math.min(32, width - 24)))} ${p.muted}${option.provider}${p.reset}`,
@@ -643,7 +701,7 @@ function modelView(state, width, p) {
       ];
     }),
     "",
-    `${p.muted}Enter applies the focused tier or deployment. Effort persists globally; deployments remain per conversation.${p.reset}`
+    `${p.muted}${tr(state, "Enter applies the focused tier or deployment. Effort persists globally; deployments remain per conversation.")}${p.reset}`
   ];
 }
 
@@ -651,7 +709,7 @@ function flowBarView(state, width, p) {
   const workflow = state.currentFlow;
   return [
     ...conversationContext(state, p, "Flow bar"),
-    `${p.bold}Flow Bar${p.reset}   ${p.green}● tracked${p.reset}`,
+    `${p.bold}${tr(state, "Flow Bar")}${p.reset}   ${p.green}● tracked${p.reset}`,
     "",
     `${p.brand}${p.bold}${workflow?.name || "No workflow selected"}${p.reset}`,
     `${p.muted}Mode ${state.snapshot.mode} · current task ${Number(workflow?.pc || 0) + 1} / ${workflow?.components?.length || 0}${p.reset}`,
@@ -665,11 +723,12 @@ function flowBarView(state, width, p) {
 function flowListView(state, width, p) {
   return [
     ...conversationContext(state, p, "Flow list"),
-    `${p.bold}Flow List${p.reset}   ${p.muted}Available workflows for this tracked conversation${p.reset}`,
+    `${p.bold}${tr(state, "Flow List")}${p.reset}   ${p.muted}Available workflows for this tracked conversation${p.reset}`,
     "",
     ...state.flows.map((name, index) => {
       const selected = state.currentFlow?.name === name;
       const style = state.focusRegion === "content" && index === state.selected ? `${p.selected}${p.bold}` : "";
+      if (style) state.contentFocusLine = 6 + index;
       return `${style} ${selected ? `${p.cyan}●${p.reset}` : "○"} ${pad(name, Math.max(18, width - 8))}`;
     })
   ];
@@ -679,10 +738,11 @@ function flowTaskView(state, width, p) {
   const components = state.currentFlow?.components || [];
   return [
     ...conversationContext(state, p, "Flow task"),
-    `${p.bold}Flow Task${p.reset}   ${p.muted}${state.currentFlow?.name || "No workflow"}${p.reset}`,
+    `${p.bold}${tr(state, "Flow Task")}${p.reset}   ${p.muted}${state.currentFlow?.name || "No workflow"}${p.reset}`,
     "",
     ...components.flatMap((component, index) => {
       const style = state.focusRegion === "content" && index === state.selected ? `${p.selected}${p.bold}` : "";
+      if (style) state.contentFocusLine = 6 + index * 2;
       const mode = component.type === "logic" ? "LOGIC" : String(component.mode || "BUILD").toUpperCase();
       return [
         `${style} ${String(component.id).padStart(2)}  ${pad(mode, 7)} ${truncate(component.prompt, Math.max(18, width - 16))}`,
@@ -695,11 +755,12 @@ function flowTaskView(state, width, p) {
 function toolsView(state, width, p) {
   const real = state.adapterKind !== "mock";
   return [
-    `${p.bold}Tools & connectors${p.reset}   ${p.muted}Enter toggles ${real ? "Newmark native-tool config" : "access in this demo"}${p.reset}`,
+    `${p.bold}${tr(state, "Tools & connectors")}${p.reset}   ${p.muted}Enter toggles ${real ? "Newmark native-tool config" : "access in this demo"}${p.reset}`,
     "",
     `${p.muted}  STATE  TOOL                 SOURCE              CALLS${p.reset}`,
     ...state.tools.map((tool, i) => {
       const style = state.focusRegion === "content" && i === state.selected ? `${p.selected}${p.bold}` : "";
+      if (style) state.contentFocusLine = 3 + i;
       const stateLabel = tool.enabled ? `${p.green} ON ${p.reset}` : `${p.muted}OFF ${p.reset}`;
       return `${style}  ${stateLabel}   ${pad(tool.name, 20)} ${pad(tool.group, Math.max(12, width - 48))} ${String(tool.calls).padStart(5)}${p.reset}`;
     }),
@@ -707,18 +768,20 @@ function toolsView(state, width, p) {
     ...card([
       real ? "Tool availability is loaded from the active Newmark config." : "Tool calls are represented for interaction design only.",
       real ? "Agent prompts may execute enabled tools under Newmark's existing approval policy." : "No shell, file, browser, network, or connector action is available here."
-    ], width, p, real ? "Live runtime" : "Safety boundary")
+    ], width, p, real ? tr(state, "Live runtime") : tr(state, "Safety boundary"))
   ];
 }
 
 function automationView(state, width, p) {
+  if (state.focusRegion === "content" && state.selected === 0) state.contentFocusLine = 2;
   return [
-    `${p.bold}Automations${p.reset}   ${p.muted}Schedules bound to explicit workspaces${p.reset}`,
+    `${p.bold}${tr(state, "Automations")}${p.reset}   ${p.muted}Schedules bound to explicit workspaces${p.reset}`,
     "",
-    `${state.focusRegion === "content" && state.selected === 0 ? `${p.selected}${p.bold}` : ""} ${p.cyan}[+] New automation${p.reset}  ${p.muted}Create a schedule for this workspace${p.reset}`,
+    `${state.focusRegion === "content" && state.selected === 0 ? `${p.selected}${p.bold}` : ""} ${p.cyan}${tr(state, "[+] New automation")}${p.reset}  ${p.muted}Create a schedule for this workspace${p.reset}`,
     "",
     ...state.automations.flatMap((job, i) => {
       const style = state.focusRegion === "content" && i + 1 === state.selected ? `${p.selected}${p.bold}` : "";
+      if (style) state.contentFocusLine = 4 + i * 2;
       return [
         `${style} ${job.enabled ? `${p.green}● ACTIVE${p.reset}` : `${p.muted}○ PAUSED${p.reset}`}  ${pad(job.name, 24)} ${p.muted}${job.schedule}${p.reset}`,
         `           Last run: ${job.last}`
@@ -730,17 +793,19 @@ function automationView(state, width, p) {
 }
 
 function workflowView(state, width, p) {
+  if (state.focusRegion === "content" && state.selected === 0) state.contentFocusLine = 2;
   const rows = [
-    `${p.bold}WorkFlow${p.reset}   ${p.muted}Manage Flow definitions stored under ~/.Newmark/Flow${p.reset}`,
+    `${p.bold}${tr(state, "WorkFlow")}${p.reset}   ${p.muted}Manage Flow definitions stored under ~/.Newmark/Flow${p.reset}`,
     "",
-    `${state.focusRegion === "content" && state.selected === 0 ? `${p.selected}${p.bold}` : ""} ${p.cyan}[+] New workflow${p.reset}  ${p.muted}Create a valid first dialog component${p.reset}`,
+    `${state.focusRegion === "content" && state.selected === 0 ? `${p.selected}${p.bold}` : ""} ${p.cyan}${tr(state, "[+] New workflow")}${p.reset}  ${p.muted}Create a valid first dialog component${p.reset}`,
     ""
   ];
   if (!state.flows.length) {
-    rows.push(`${p.muted}No workflows configured.${p.reset}`);
+    rows.push(`${p.muted}${tr(state, "No workflows configured.")}${p.reset}`);
   }
   state.flows.forEach((name, index) => {
     const selected = state.focusRegion === "content" && state.selected === index + 1;
+    if (selected) state.contentFocusLine = rows.length;
     const workflow = state.workflowDetails[name] || { components: [] };
     const expanded = state.workflowExpandedName === name;
     rows.push(`${selected ? `${p.selected}${p.bold}` : ""} ${expanded ? "▾" : "▸"} ${pad(name, Math.max(18, width - 28))} ${p.muted}${workflow.components.length} component(s)${p.reset}`);
@@ -777,9 +842,9 @@ function memoryView(state, width, p) {
         : [`${p.muted}— none —${p.reset}`]
     )
   ];
-  const tagRows = relationColumn("Tags", tags, 0);
-  const selectedRows = relationColumn("Selected tag", detail.tag ? [detail.tag] : [], 1);
-  const childRows = relationColumn("Child tags", children, 2);
+  const tagRows = relationColumn(tr(state, "Tags"), tags, 0);
+  const selectedRows = relationColumn(tr(state, "Selected tag"), detail.tag ? [detail.tag] : [], 1);
+  const childRows = relationColumn(tr(state, "Child tags"), children, 2);
   const relationRows = Array.from(
     { length: Math.max(tagRows.length, selectedRows.length, childRows.length) },
     (_, row) => `${pad(tagRows[row] || "", relationWidth)} ${p.muted}│${p.reset} ${pad(selectedRows[row] || "", relationWidth)} ${p.muted}│${p.reset} ${childRows[row] || ""}`
@@ -795,12 +860,12 @@ function memoryView(state, width, p) {
   });
   const contentLines = detail.content.split(/\r?\n/).filter(Boolean).slice(0, 7);
   const components = [
-    `${p.bold}Memory components${p.reset}`,
-    ...(componentNames.length ? componentNames : [`${p.muted}No memory components${p.reset}`])
+    `${p.bold}${tr(state, "Memory components")}${p.reset}`,
+    ...(componentNames.length ? componentNames : [`${p.muted}${tr(state, "No memory components")}${p.reset}`])
   ];
   const preview = [
-    `${p.bold}Core memory${p.reset}`,
-    `${p.bold}${detail.component?.name || "No component selected"}${p.reset}`,
+    `${p.bold}${tr(state, "Core memory")}${p.reset}`,
+    `${p.bold}${detail.component?.name || tr(state, "No component selected")}${p.reset}`,
     `${p.muted}${detail.component?.description || ""}${p.reset}`,
     `${p.muted}Parents: ${detail.node.parents.join(", ") || "none"} · Children: ${children.join(", ") || "none"}${p.reset}`,
     ...contentLines,
@@ -810,9 +875,16 @@ function memoryView(state, width, p) {
     { length: Math.max(components.length, preview.length) },
     (_, row) => `${pad(components[row] || "", componentWidth)} ${p.muted}│${p.reset} ${preview[row] || ""}`
   );
+  if (state.focusRegion === "content") {
+    const focusColumn = Math.min(3, Math.max(0, state.contentColumn));
+    const focusIndex = state.memoryColumnIndices[focusColumn] || 0;
+    state.contentFocusLine = focusColumn === 3
+      ? 3 + relationRows.length + 2 + focusIndex
+      : 4 + focusIndex;
+  }
   return [
-    `${p.bold}Memory Lab${p.reset}   ${state.memorySearchActive ? p.selected : p.muted}/${p.reset} ${state.memorySearchQuery || `${p.muted}search tags${p.reset}`}${state.memorySearchActive ? `${p.cyan}▏${p.reset}` : ""}`,
-    `${p.muted}/ search · Esc clear · ←/→ columns · ↑/↓ select · Enter follow/select/open overview${p.reset}`,
+    `${p.bold}${tr(state, "Memory Lab")}${p.reset}   ${state.memorySearchActive ? p.selected : p.muted}/${p.reset} ${state.memorySearchQuery || `${p.muted}search tags${p.reset}`}${state.memorySearchActive ? `${p.cyan}▏${p.reset}` : ""}`,
+    `${p.muted}/ search · O overview · Esc clear · ←/→ columns · ↑/↓ select · Enter follow/select${p.reset}`,
     `${p.muted}${"─".repeat(Math.max(8, width - 1))}${p.reset}`,
     ...relationRows,
     "",
@@ -826,13 +898,14 @@ function settingsView(state, width, p) {
   const categories = SETTINGS_CATEGORIES;
   const leftWidth = Math.min(22, Math.max(18, Math.floor(width * 0.24)));
   const categoryRows = [
-    `${p.bold}Settings${p.reset}`,
-    `${p.muted}Categories${p.reset}`,
+    `${p.bold}${tr(state, "Settings")}${p.reset}`,
+    `${p.muted}${tr(state, "Categories")}${p.reset}`,
     "",
     ...categories.map(({ id, icon, label }, index) => {
       const focused = state.focusRegion === "content" && state.contentColumn === 0 && state.settingsCategoryIndex === index;
+      if (focused) state.contentFocusLine = 3 + index;
       const active = state.settingsTab === id;
-      return `${focused ? `${p.selected}${p.bold}` : active ? p.bold : ""}${active ? `${p.cyan}>${p.reset}` : " "} ${icon} ${label}${p.reset}`;
+      return `${focused ? `${p.selected}${p.bold}` : active ? p.bold : ""}${active ? `${p.cyan}>${p.reset}` : " "} ${icon} ${tr(state, label)}${p.reset}`;
     }),
     "",
     `${p.muted}→ enter section${p.reset}`,
@@ -851,6 +924,7 @@ function settingsView(state, width, p) {
       `${p.muted}  STATE  PROVIDER               PROTOCOL       KEY   MODELS${p.reset}`,
       ...state.providers.map((provider, index) => {
         const style = state.focusRegion === "content" && state.contentColumn === 1 && index === state.selected ? `${p.selected}${p.bold}` : "";
+        if (style) state.contentFocusLine = 5 + index;
         const enabled = provider.enabled ? `${p.green} ON ${p.reset}` : `${p.muted}OFF ${p.reset}`;
         const key = provider.has_api_key ? `${p.green}set${p.reset}` : `${p.amber}none${p.reset}`;
         return `${style}  ${enabled}   ${pad(provider.name, 22)} ${pad(provider.protocol, 14)} ${key}   ${String(provider.models.length).padStart(3)}${p.reset}`;
@@ -866,6 +940,7 @@ function settingsView(state, width, p) {
       `${p.muted}  STATE  MODEL                    PROVIDER          VALIDATION        CTX${p.reset}`,
       ...models.map((entry, index) => {
         const style = state.focusRegion === "content" && state.contentColumn === 1 && index === state.selected ? `${p.selected}${p.bold}` : "";
+        if (style) state.contentFocusLine = 5 + index;
         const enabled = entry.model.enabled !== false && entry.provider.enabled;
         const stateLabel = enabled ? `${p.green} ON ${p.reset}` : `${p.muted}OFF ${p.reset}`;
         const validation = entry.model.validation || {};
@@ -881,6 +956,7 @@ function settingsView(state, width, p) {
       `${p.muted}  STATE  TOOL                    GROUP             CALLS${p.reset}`,
       ...state.tools.map((tool, index) => {
         const style = state.focusRegion === "content" && state.contentColumn === 1 && index === state.selected ? `${p.selected}${p.bold}` : "";
+        if (style) state.contentFocusLine = 5 + index;
         return `${style}  ${tool.enabled ? `${p.green} ON ${p.reset}` : `${p.muted}OFF ${p.reset}`}   ${pad(tool.name, 23)} ${pad(tool.group, 17)} ${String(tool.calls).padStart(5)}${p.reset}`;
       }),
       "",
@@ -892,6 +968,7 @@ function settingsView(state, width, p) {
       ...header,
       ...rows.flatMap((row, i) => {
         const style = state.focusRegion === "content" && state.contentColumn === 1 && i === state.selected ? `${p.selected}` : "";
+        if (style) state.contentFocusLine = 4 + i * 2;
         return [
           `${style} ${p.bold}${pad(row.label, 27)}${p.reset} ${p.cyan}${displaySettingValue(row.value)}${p.reset}${row.extension ? ` ${p.amber}TUI EXTENSION${p.reset}` : ""}`,
           `   ${p.muted}${settingDescription(state.settingsTab, row.key)}${p.reset}`
@@ -988,16 +1065,16 @@ function settingsActionHint(tab) {
 
 function helpView(state, width, p) {
   return [
-    `${p.brand}${p.bold}SHORTCUT GUIDE${p.reset}   ${p.muted}Context-aware TUI controls${p.reset}`,
+    `${p.brand}${p.bold}${tr(state, "SHORTCUT GUIDE")}${p.reset}   ${p.muted}Context-aware TUI controls${p.reset}`,
     `${p.muted}${"─".repeat(Math.max(20, width - 1))}${p.reset}`,
     "",
-    `${p.bold}Navigation${p.reset}`,
+    `${p.bold}${tr(state, "Navigation")}${p.reset}`,
     "  ↑ / ↓       Move within lists; long menus auto-scroll with the cursor",
     "  ← / →       Move between menu levels and content columns",
     "  Enter       Expand workspace, open view, select conversation, or confirm",
     "  Tab         From editor: conversation selection; from content: left menu",
     "",
-    `${p.bold}Conversation editing${p.reset}`,
+    `${p.bold}${tr(state, "Conversation editing")}${p.reset}`,
     "  Enter       Edit selected conversation / send current draft",
     "  Enter mode  Settings → General → Input mode chooses default Guide or Next",
     "  Shift+Enter Insert a newline; the input viewport always reserves two rows",
@@ -1008,17 +1085,17 @@ function helpView(state, width, p) {
     "  Flow        Requires ↑ / ↓ + Enter workflow selection before editing",
     "  T           Pin / unpin selected conversation; cursor follows its ID",
     "",
-    `${p.bold}Running work${p.reset}`,
+    `${p.bold}${tr(state, "Running work")}${p.reset}`,
     "  \\ — / —     Rotating left marker means that conversation is running",
     "  Esc         Request graceful stop for the focused running conversation",
     "  Esc again   Force-stop that same conversation",
     "  Switching focus never interrupts background conversations",
     "",
-    `${p.bold}Operation content${p.reset}`,
+    `${p.bold}${tr(state, "Operation content")}${p.reset}`,
     "  Automations First row creates a persisted workspace-bound automation",
     "  WorkFlow    Flat Operation item; content manages and creates Flow files",
     "",
-    `${p.bold}Global${p.reset}`,
+    `${p.bold}${tr(state, "Global")}${p.reset}`,
     "  Ctrl+K      Command palette",
     "  N           New conversation",
     "  T           Toggle theme outside conversation selection",
@@ -1044,6 +1121,7 @@ function renderContent(state, width, height, p) {
     settings: settingsView,
     help: helpView
   };
+  state.contentFocusLine = -1;
   return views[state.view](state, width, p);
 }
 
@@ -1158,9 +1236,22 @@ function render(state, columns = process.stdout.columns || 100, rows = process.s
   const bodyHeight = height - 3;
   const sidebar = sidebarWidth ? renderSidebar(state, bodyHeight, sidebarWidth, p) : [];
   const content = renderContent(state, contentWidth, bodyHeight, p);
+  let contentLines = content;
+  if (state.view !== "chat") {
+    const maximumScroll = Math.max(0, content.length - bodyHeight);
+    let scroll = Math.max(0, Math.min(maximumScroll, Number(state.contentScroll) || 0));
+    const focusLine = Number(state.contentFocusLine) || -1;
+    if (focusLine >= 0) {
+      if (focusLine < scroll) scroll = focusLine;
+      else if (focusLine >= scroll + bodyHeight) scroll = focusLine - bodyHeight + 1;
+    }
+    scroll = Math.max(0, Math.min(maximumScroll, scroll));
+    state.contentScroll = scroll;
+    contentLines = content.slice(scroll, scroll + bodyHeight);
+  }
   const body = Array.from({ length: bodyHeight }, (_, i) => {
     const left = sidebarWidth ? `${pad(sidebar[i] || "", sidebarWidth)}${p.muted}│${p.reset} ` : "";
-    return `${left}${pad(content[i] || "", contentWidth)}`;
+    return `${left}${pad(contentLines[i] || "", contentWidth)}`;
   });
   const activeNav = data.navigation.find((item) => item.id === state.view);
   const compactContext = ["chat", "plan", "agents"].includes(state.view)

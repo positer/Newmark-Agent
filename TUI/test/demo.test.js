@@ -22,9 +22,13 @@ const {
   cycleConversationMode,
   confirmSettingChoiceSelection,
   enterConversation,
+  enterHistoryEventFocus,
+  exitHistoryEventFocus,
   filteredCommands,
+  focusableEventsForRun,
   moveFocusHorizontal,
   moveConversationHistoryCursor,
+  moveHistoryEventCursor,
   moveInputCursorVertical,
   moveMenuLevel,
   moveMenuSelection,
@@ -45,6 +49,7 @@ const {
   switchView,
   toggleConversationPinned,
   toggleSelectedBuildBlock,
+  toggleSelectedBuildEvent,
   toggleSelected,
   validateSelectedModel,
   workspaceMenuChildren
@@ -1398,3 +1403,92 @@ test("ANSI sequences remain valid across view and terminal size matrix", () => {
     }
   }
 });
+test("content views follow the focused row while the cursor scrolls off-screen", () => {
+  const state = createState();
+  switchView(state, "model");
+  state.focusRegion = "content";
+  state.contentColumn = 1;
+  state.providers[0].models = Array.from({ length: 24 }, (_, i) => ({ name: "m" + i, display: "Model " + i, enabled: true }));
+  for (let i = 0; i < 20; i += 1) {
+    state.selected = i + 1;
+    const output = stripAnsi(render(state, 100, 24));
+    assert.match(output, new RegExp("Model " + i), "model view must keep the focused deployment visible");
+  }
+
+  const memory = createState();
+  switchView(memory, "memory");
+  memory.focusRegion = "content";
+  memory.contentColumn = 0;
+  memory.memoryLab.index.tags = {};
+  for (let i = 0; i < 30; i += 1) {
+    const tag = "tag-" + String(i).padStart(2, "0");
+    memory.memoryLab.index.tags[tag] = { parents: [], children: [], components: [] };
+  }
+  for (let i = 0; i < 22; i += 1) {
+    memory.memoryColumnIndices[0] = i + 1;
+    const output = stripAnsi(render(memory, 100, 24));
+    assert.match(output, new RegExp("tag-" + String(i).padStart(2, "0")), "memory view must keep the focused tag visible");
+  }
+});
+
+test("expanded Build blocks render thinking and let the cursor select individual events", () => {
+  const state = createState();
+  switchView(state, "chat");
+  state.inputMode = true;
+  state.messages = [];
+  state.snapshot.workRuns = [{
+    runId: "run-events",
+    status: "completed",
+    sequence: 1,
+    startedAt: "2026-08-01T10:00:00.000Z",
+    endedAt: "2026-08-01T10:00:05.000Z",
+    events: [
+      { id: "ev-thought", type: "thought", content: "", sequence: 10 },
+      { id: "ev-thought-result", type: "thought_result", content: "Let me reason about this carefully.", sequence: 20 },
+      { id: "ev-tool", type: "tool_call", toolName: "bash", content: "npm test", sequence: 30 },
+      { id: "ev-tool-result", type: "tool_result", toolName: "bash", content: "979 assertions passed", sequence: 40 },
+      { id: "ev-final", type: "final_response", content: "All good.", sequence: 50 }
+    ],
+    guides: []
+  }];
+  state.expandedBuildRuns = new Set(["run-events"]);
+  state.conversationHistoryFocus = true;
+  state.historySelectedIndex = 0;
+
+  const focusables = focusableEventsForRun(state.snapshot.workRuns[0]);
+  assert.deepEqual(focusables.map((event) => event.type), ["thought", "thought_result", "tool_call", "tool_result"]);
+
+  let output = stripAnsi(render(state, 120, 40));
+  assert.match(output, /THOUGHT/);
+  assert.match(output, /Let me reason about this carefully/);
+  assert.match(output, /TOOL bash/);
+  assert.match(output, /npm test/);
+
+  assert.equal(enterHistoryEventFocus(state), true);
+  output = stripAnsi(render(state, 120, 40));
+  assert.match(output, /›/);
+  assert.equal(toggleSelectedBuildEvent(state), true);
+  assert.equal(state.collapsedBuildEvents.size, 1);
+  moveHistoryEventCursor(state, 1);
+  moveHistoryEventCursor(state, 1);
+  assert.equal(state.historyEventIndex, 2);
+  assert.equal(toggleSelectedBuildEvent(state), true);
+  assert.equal(state.collapsedBuildEvents.size, 2);
+  assert.equal(exitHistoryEventFocus(state), true);
+  assert.equal(state.historyEventFocus, false);
+});
+
+test("TUI chrome follows the selected language", () => {
+  const state = createState();
+  state.settings.general.language = "中文";
+  let output = stripAnsi(render(state, 120, 40));
+  assert.match(output, /工作区/);
+  assert.match(output, /操作/);
+  assert.match(output, /记忆实验室/);
+  assert.match(output, /设置/);
+  state.settings.general.language = "English";
+  output = stripAnsi(render(state, 120, 40));
+  assert.match(output, /WORKSPACES/);
+  assert.doesNotMatch(output, /工作区/);
+});
+

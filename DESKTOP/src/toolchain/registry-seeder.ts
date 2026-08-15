@@ -54,7 +54,7 @@ const DOMAIN_PREFIXES: ReadonlyArray<[RegExp, string]> = [
   [/^web_/, 'web'],
   [/^computer_use$/, 'computer'],
   [/^(image_|ocr_|pdf_)/, 'media'],
-  [/^(bash|pwd|read|write|edit|glob|grep)$/, 'core'],
+  [/^(bash|pwd|read|write|edit|delete_file|glob|grep)$/, 'core'],
 ];
 
 const READ_TOOL_PATTERN = /^(pwd|read|glob|grep|git_status|git_log|git_diff|git_branch|git_show|memory_lab_read|memory_lab_query|skill|linked_plan|build_history_query|subagent_read|subagent_result|subagent_list|subagent_progress|question|image_inspect|image_display|ocr_read|pdf_read|automation_list|automation_status)$/;

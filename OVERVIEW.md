@@ -1,5 +1,30 @@
 # Newmark Agent Overview
 
+## dev-0.4.2 模型校验进度窗口修复（2026-08-15）— source PASS；rebuilt + UAC reinstalled
+
+修复两个关联 GUI 问题：模型校验进度轮询每 150ms 整体重建 `sub-win-body` 导致 `marquee-border` 跑马灯动画重置（抽搐），且轮询无条件覆盖当前子窗口导致其他弹出窗口被强制变为模型校验、无法回退。修复后：首次渲染进度容器（`id="model-validation-progress"`），轮询经 `updateModelValidationProgress` 原地更新 `mv-*` 文本/进度条、找不到容器时 no-op；进度窗口打开时重复点击不重建不压栈；完成/失败时若进度窗口仍在则原地替换（关闭可回退上级），否则用聊天消息摘要不抢占窗口。验证：`npm run build` EXIT=0；`node dist/tests/verify.js` **1550/1550 PASS**（新增 1 条防回归断言）。修复后已重新打包并 UAC 重装 0.4.2.0。证据：archive/20260815-dev-0.4.2-model-validation-marquee-and-subwindow-fix.md、archive/20260815-dev-0.4.2-repackage-after-ui-fix.md。
+
+## dev-0.4.2 工具删除安全硬性审查 + 软性 prompt 要求（2026-08-15）— source PASS；package pending
+
+在 dev-0.4.1 之上落地「允许删除、禁止脚本批量删除、仅在 Agent 监管下删除」的安全边界，并升版本号到 0.4.2：
+
+1. 硬性审查：`DESKTOP/src/core/toolPolicy.ts` 新增纯函数 `evaluateDeletionGuard(command)`，拦截递归（rm -rf / Remove-Item -Recurse / rmdir /s / del /s）、通配符（rm *.log）、循环（for/foreach/while）、管道接收端（Get-ChildItem | Remove-Item）、find/xargs、多目标、多语句批量删除；单文件删除放行。
+2. 受监管删除通道：`DESKTOP/src/tools/index.ts` 新增 `delete_file` 工具（单文件、拒目录、拒通配符），在 bash/terminal_takeover write 执行前接入删除审查；`nativeTools.ts` 与 `registry-seeder.ts` 注册（自动推断 destructive riskLevel）。
+3. 软性要求：`DESKTOP/src/core/agent.ts` 的 `CORE_SYSTEM_PROMPT` 注入静态 `Deletion safety` 规则与 `delete_file` 工具说明；所有 prompt 改动均为静态文本、不改 `systemPromptCache` 的 identity 结构，故不破坏 provider 前缀缓存命中。
+4. 测试：`DESKTOP/src/tests/verify.ts` 新增 15 条断言（delete_file 4、deletion guard 9、buildSystemPrompt 删除安全契约 + 缓存命中 2）。
+
+验证：`npm run build` EXIT=0（0.4.2）；`node dist/tests/verify.js` 1549/1549 PASS；`npm run lint` 0 errors（70 既有 warnings，新增代码 0 warning）。删除安全压力测试 `DESKTOP/scripts/deletion-safety-stress.cjs` 修正 Windows/bash 虚拟路径语义后 **156/156 PASS**，并挂为 `test:deletion-safety` npm script、纳入 `test:desktop:built` 常驻门禁。Windows MSI/便携 ZIP 已重建并 UAC 提权安装（0.4.1.0 → 0.4.2.0；UI 修复后同版本重装）：MSI `226,056,271` bytes / SHA-256 `FB7056A9A7BCC953071465317A52042CA21F66BB596A64BB452CA3D7980DAFFF`，ZIP `291,914,694` bytes / `41CF0C9B37E568AB1D9C0407AB1E0B77F6F440E55FA98F4296C7EDC9A8ADB761`；安装目录与打包目录 `app.asar` SHA-256 一致（`40081F5B23046E5D05DBBD9C2BE64A3FF63E28A7E544CA016832582221071F1B`）。未 commit/打 git tag、未远程发布。证据：archive/20260815-dev-0.4.2-tool-deletion-safety-hard-soft.md、archive/20260815-dev-0.4.2-deletion-safety-stress.md、archive/20260815-dev-0.4.2-windows-package-and-uac-install.md、archive/20260815-dev-0.4.2-repackage-after-ui-fix.md。
+
+## dev-0.4.1 GUI/TUI 打磨 + 刷新配置锁定（2026-08-15）— source PASS；Windows 已打包 + UAC 安装
+
+在 dev-0.4.0 之上落地一批 GUI/TUI 打磨项并升版本号到 0.4.1：
+
+1. GUI Build 块活动摘要（「进行了思考 / 运行了命令」等）字体改小一号（与 "Response complete." 同级 11px）、去加粗、改用 --text-dim 更淡语义色（兼容字体颜色定制，不改变交互）。
+2. GUI「刷新配置」改为锁定式重载：点刷新先复用启动封面锁定界面，后端重载 + 前端重新水合完成后直接显示新配置，消除「先闪现初始默认状态」的中间帧（sessionStorage flag + .config-reloading 封面 + 水合后揭盖）。
+3. TUI：确认 Ultra 推理档位已存在并补测（无源码改动）；新增 MemoryLab O 键总览弹窗；内容区（模型选择 / MemoryLab tag 选择等几乎所有列表视图）光标跟随滚动；新增 TUI/src/i18n.js 使切换语言后界面骨架跟随（导航/侧栏/视图标题/设置等）；对话区 Build block 次级菜单支持 → 进入、↑/↓ 选中、Enter 逐条展开/收起「工具调用 / 思考」事件，并补渲染 thought/thought_result 事件。
+
+验证：TUI 59/59 PASS；npm run typecheck / build EXIT=0（TUI 已复制到 dist/tui）。Windows MSI/便携 ZIP 已重建并 UAC 提权安装到 C:\Program Files\Newmark Agent（0.4.0.0 → 0.4.1.0）。产物：MSI 226,080,847 bytes / SHA-256 46751C0019D75AEC5A642E72BE2A29292776907FB53CA81B1DA9898C03A39DA7；ZIP 291,905,246 bytes / SHA-256 FF73E1894F64954C36B5EF3BC5910414FBC610DF29AC177D7406FDF437309F51。未打 git tag、未远程发布。证据：archive/20260815-dev-0.4.1-gui-tui-polish.md、archive/20260815-dev-0.4.1-windows-package-and-uac-install.md。
+
 ## dev-0.4.0 分支交流 + 思考活动 + 历史卸载延迟（2026-08-14）— source PASS；package pending
 
 在 dev-0.3.14 之上落地三块功能并升版本号到 0.4.0：

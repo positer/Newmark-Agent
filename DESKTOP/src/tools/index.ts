@@ -27,6 +27,7 @@ import { WorkspaceManager } from '../core/workspace';
 import { requestWindowsHostTool } from '../core/wslHostToolBridge';
 import { requestUtilityHostTool } from '../core/utilityHostToolBridge';
 import {
+  evaluateDeletionGuard,
   evaluateToolPolicy,
   filterToolDefinitions,
   PLAN_BROWSER_USE_ACTIONS,
@@ -234,6 +235,7 @@ export class ToolExecutor {
       t('read', 'Read file contents. Use ABSOLUTE paths. The working directory is given in system prompt.', { path: { type: 'string' } }, ['path']),
       t('write', 'Write/create a file. Use ABSOLUTE paths.', { path: { type: 'string' }, content: { type: 'string' } }, ['path', 'content']),
       t('edit', 'Edit file with find-and-replace. Use ABSOLUTE paths.', { path: { type: 'string' }, old_str: { type: 'string' }, new_str: { type: 'string' } }, ['path', 'old_str', 'new_str']),
+      t('delete_file', 'Delete ONE file under Agent supervision. Use ABSOLUTE paths. This tool refuses directory deletion and wildcard paths; delete files one by one. Never use bash rm/del/Remove-Item for batch (recursive/wildcard/loop/pipe/multi-target) deletion — the runtime hard-blocks such commands.', { path: { type: 'string' } }, ['path']),
       t('glob', 'Find files by glob pattern (e.g. **/*.ts, src/**/*.html)', { pattern: { type: 'string' } }, ['pattern']),
       t('grep', 'Search file content with regex', { pattern: { type: 'string' }, path: { type: 'string' } }, ['pattern', 'path']),
       t('web_search', 'Search the web', { query: { type: 'string' } }, ['query']),
@@ -588,6 +590,7 @@ export class ToolExecutor {
         case 'read':
         case 'write':
         case 'edit':
+        case 'delete_file':
         case 'grep':
         case 'file_audit':
         case 'pdf_read':
@@ -607,6 +610,14 @@ export class ToolExecutor {
       ? this.checkBashWorkspaceAccess(g('command'), context.workspacePath || wsPath)
       : null;
     if (bashGuard) return bashGuard;
+    // 硬性删除审查：允许单文件删除，拒绝脚本/命令批量删除。
+    const deletionGuardTarget = tool === 'bash' || (tool === 'terminal_takeover' && g('action') === 'write')
+      ? g('command')
+      : null;
+    if (deletionGuardTarget !== null) {
+      const deletionGuard = evaluateDeletionGuard(deletionGuardTarget);
+      if (deletionGuard.blocked) return deletionGuard.reason || '[deletion guard] Batch deletion is not allowed.';
+    }
 
     try {
       switch (tool) {
@@ -615,6 +626,7 @@ export class ToolExecutor {
         case 'read': return this.fread(resolve(g('path')));
         case 'write': return this.fwrite(resolve(g('path')), g('content'));
         case 'edit': return this.fedit(resolve(g('path')), g('old_str'), g('new_str'));
+        case 'delete_file': return this.fdelete(resolve(g('path')));
         case 'glob': return this.glob(g('pattern'), wsPath);
         case 'grep': return this.grep(g('pattern'), resolve(g('path')));
         case 'web_search': return await this.wsearch(g('query'), context.signal);
@@ -1125,6 +1137,19 @@ export class ToolExecutor {
       fs.writeFileSync(p, updated, 'utf-8');
       return `[edit] OK: ${p}`;
     } catch (e) { return `[edit] ${e}`; }
+  }
+
+  private fdelete(p: string): string {
+    try {
+      if (/[*?]/.test(p)) return '[delete_file] Refused: wildcard paths are not allowed. Delete one file per call.';
+      const resolved = path.resolve(p);
+      const stat = fs.lstatSync(resolved);
+      if (stat.isDirectory()) {
+        return '[delete_file] Refused: deleting a directory is not allowed. Delete files one by one under Agent supervision.';
+      }
+      fs.unlinkSync(resolved);
+      return `[delete_file] OK: ${resolved}`;
+    } catch (e) { return `[delete_file] ${e instanceof Error ? e.message : String(e)}`; }
   }
 
   private glob(pattern: string, ws: string): string {

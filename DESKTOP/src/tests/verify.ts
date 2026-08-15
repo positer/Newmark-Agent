@@ -455,6 +455,7 @@ async function main() {
     && modelValidationStart < uiHtml.indexOf('api.validateModels()', modelValidationStart),
   'ui model validation: missing base models show actionable feedback before animation or backend validation starts');
   assert(uiHtml.includes('window.renderModelValidationProgress = function(progress)') && uiHtml.includes('role="progressbar"') && uiHtml.includes('completedChecks') && uiHtml.includes('window.startModelValidationProgressPolling') && mainSource.includes('agent?.modelValidationStatus()'), 'ui model validation: every completed check updates a polled determinate progress bar with model and check identity');
+  assert(uiHtml.includes('window.updateModelValidationProgress = function(progress)') && uiHtml.includes('id="model-validation-progress"') && uiHtml.includes('id="mv-percent"') && uiHtml.includes('if (!percentEl) return;') && !uiHtml.includes('body.innerHTML = window.renderModelValidationProgress(progress)') && uiHtml.includes('if (document.getElementById(\'model-validation-progress\')) return;'), 'ui model validation: progress polling updates the existing marquee window in place and never rebuilds it or overwrites another open sub-window');
   assert(uiHtml.includes('id="input-stack"') && uiHtml.includes('id="queue-panel"') && uiHtml.includes('window.renderQueuePanel = function()') && uiHtml.includes('window.editQueueItem = function(idx, value)') && uiHtml.includes('window.dropQueueDrag = function(event, idx)') && uiHtml.includes('window.renderScrollBottomAffordance = renderScrollBottomAffordance') && uiHtml.includes('state.conversationPlan.items.push') && uiHtml.includes('state.todoCollapsed = false'), 'ui html: bottom input stack exposes editable queue, draggable ordering, scroll affordance, Goal bar, and Plan-backed checklist');
   assert(uiHtml.includes('.work-review-head') && uiHtml.includes('function addWorkReview(diffs)') && uiHtml.includes('window.openWorkReview') && uiHtml.includes('window.toggleWorkReviewFiles') && uiHtml.includes('lockedUi.pendingWorkReview = r.diffs') && uiHtml.indexOf('lockedUi.pendingWorkReview = r.diffs') < uiHtml.indexOf('if (stillActive && !responseOwnedByRun)'), 'work completion review: Build-owned and legacy final responses both retain conversation-bound changed files with expandable rows and a review action');
   assert(uiHtml.includes("review.className = 'work-review collapsed'") && uiHtml.includes('window.toggleWorkReview') && uiHtml.includes('.work-review.collapsed .work-review-list { display: none; }') && uiHtml.includes('.work-review-chevron') && uiHtml.includes('onclick="window.toggleWorkReview(this)'), 'work completion review: file-change review collapses by default with a chevron toggled header');
@@ -1915,6 +1916,37 @@ async function main() {
   assert(edited.includes('Hi Earth') && !edited.includes('Hello World'), 'edit: replaced text');
   const editMissing = await tools.execute('edit', '{"path":"test.txt","old_str":"NOTFOUND","new_str":"XXX"}', TEST_DIR);
   assert(editMissing.includes('not found'), 'edit: missing string reports');
+
+  // delete_file (dev-0.4.2: 受监管的单文件删除)
+  fs.writeFileSync(path.join(TEST_DIR, 'delete-me.txt'), 'to delete');
+  const deleteFileOk = await tools.execute('delete_file', JSON.stringify({ path: path.join(TEST_DIR, 'delete-me.txt') }), TEST_DIR);
+  assert(deleteFileOk.includes('OK') && !fs.existsSync(path.join(TEST_DIR, 'delete-me.txt')), 'delete_file: deletes one file under supervision');
+  const deleteFileMissing = await tools.execute('delete_file', JSON.stringify({ path: path.join(TEST_DIR, 'no-such-file.txt') }), TEST_DIR);
+  assert(deleteFileMissing.startsWith('[delete_file]'), 'delete_file: missing file reports');
+  const deleteFileWildcard = await tools.execute('delete_file', JSON.stringify({ path: path.join(TEST_DIR, '*.txt') }), TEST_DIR);
+  assert(deleteFileWildcard.includes('Refused'), 'delete_file: refuses wildcard paths');
+  const deleteDirRefused = await tools.execute('delete_file', JSON.stringify({ path: TEST_DIR }), TEST_DIR);
+  assert(deleteDirRefused.includes('Refused'), 'delete_file: refuses directory deletion');
+
+  // 硬性删除审查（dev-0.4.2: 拒绝脚本/命令批量删除，放行单文件删除）
+  const delSingle = await tools.execute('bash', JSON.stringify({ command: 'rm delete-guard-single.txt' }), TEST_DIR);
+  assert(!delSingle.includes('deletion guard'), 'deletion guard: single-file rm is allowed');
+  const delRecursive = await tools.execute('bash', JSON.stringify({ command: 'rm -rf some-dir' }), TEST_DIR);
+  assert(delRecursive.includes('deletion guard') && delRecursive.includes('Recursive'), 'deletion guard: rm -rf is blocked');
+  const delWildcard = await tools.execute('bash', JSON.stringify({ command: 'rm *.log' }), TEST_DIR);
+  assert(delWildcard.includes('deletion guard') && delWildcard.includes('Wildcard'), 'deletion guard: rm *.log is blocked');
+  const delLoop = await tools.execute('bash', JSON.stringify({ command: 'for f in *.txt; do rm $f; done' }), TEST_DIR);
+  assert(delLoop.includes('deletion guard') && delLoop.includes('Loop-based'), 'deletion guard: for-loop rm is blocked');
+  const delRemoveRecurse = await tools.execute('bash', JSON.stringify({ command: 'Remove-Item -Recurse -Force some-dir' }), TEST_DIR);
+  assert(delRemoveRecurse.includes('deletion guard') && delRemoveRecurse.includes('Recursive'), 'deletion guard: Remove-Item -Recurse is blocked');
+  const delPipe = await tools.execute('bash', JSON.stringify({ command: 'Get-ChildItem | Remove-Item' }), TEST_DIR);
+  assert(delPipe.includes('deletion guard') && delPipe.includes('Pipe-fed'), 'deletion guard: pipe-fed Remove-Item is blocked');
+  const delMultiTarget = await tools.execute('bash', JSON.stringify({ command: 'rm a.txt b.txt' }), TEST_DIR);
+  assert(delMultiTarget.includes('deletion guard') && delMultiTarget.includes('Multiple-target'), 'deletion guard: multi-target rm is blocked');
+  const delMultiStatement = await tools.execute('bash', JSON.stringify({ command: 'rm a.txt && rm b.txt' }), TEST_DIR);
+  assert(delMultiStatement.includes('deletion guard') && delMultiStatement.includes('Multiple-statement'), 'deletion guard: multi-statement rm is blocked');
+  const delNoop = await tools.execute('bash', JSON.stringify({ command: 'echo no deletion here' }), TEST_DIR);
+  assert(!delNoop.includes('deletion guard'), 'deletion guard: non-deletion commands are unaffected');
 
   // glob
   const globResult = await tools.execute('glob', '{"pattern":"*.txt"}', TEST_DIR);
@@ -3913,6 +3945,8 @@ async function main() {
   assert(agent.buildSystemPrompt().includes('fully_autonomous. Do not call the question tool'), 'question policy: fully autonomous prompt disables discretionary questions in ordinary Build mode');
   agent.config.set('agent', 'option_feedback', 'default');
   assert(sysPrompt.includes('bash:'), 'buildSystemPrompt: lists tools');
+  assert(sysPrompt.includes('delete_file') && sysPrompt.includes('Deletion safety'), 'buildSystemPrompt: includes the deletion safety contract (single-file delete_file, no script batch deletion)');
+  assert(agent.buildSystemPrompt() === sysPrompt, 'buildSystemPrompt: deletion safety text is static and preserves the stable prompt cache');
   assert(sysPrompt.includes('Memory Lab is governed by an explicit Policy chain') && sysPrompt.includes('memory_lab_query') && sysPrompt.includes('expectedUpdatedAt') && sysPrompt.includes('memory_lab_delete'), 'buildSystemPrompt: includes the bounded observable Memory Lab Policy contract');
   assert(!sysPrompt.includes('Memory Lab/index.json') && !sysPrompt.includes('Memory Lab stores persistent local memory') && !sysPrompt.includes('CliMemoryNeedle'), 'buildSystemPrompt: does not include Memory Lab paths, instructions, index, or component content');
   fs.mkdirSync(path.join(TEST_DIR, 'skills', 'prompt-skill'), { recursive: true });

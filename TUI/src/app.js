@@ -17,9 +17,12 @@ const {
   createState,
   cycleConversationMode,
   enterConversation,
+  enterHistoryEventFocus,
+  exitHistoryEventFocus,
   filteredCommands,
   moveFocusHorizontal,
   moveConversationHistoryCursor,
+  moveHistoryEventCursor,
   moveInputCursorVertical,
   moveMenuSelection,
   moveSettingChoiceSelection,
@@ -37,6 +40,7 @@ const {
   toggleAgentHistory,
   toggleConversationPinned,
   toggleSelectedBuildBlock,
+  toggleSelectedBuildEvent,
   toggleSelected,
   toggleWorkflowDetails,
   validateSelectedModel
@@ -330,7 +334,21 @@ function start(options = {}) {
         Promise.resolve(requestConversationStop(state)).finally(paint);
       } else if (key.name === "tab") {
         state.conversationHistoryFocus = false;
+        state.historyEventFocus = false;
+        state.historyEventIndex = -1;
         returnToConversationSelection(state);
+      } else if (state.historyEventFocus) {
+        if (key.name === "left") {
+          exitHistoryEventFocus(state);
+        } else if (key.name === "up") {
+          moveHistoryEventCursor(state, -1);
+        } else if (key.name === "down") {
+          moveHistoryEventCursor(state, 1);
+        } else if (key.name === "return" || key.name === "space") {
+          toggleSelectedBuildEvent(state);
+        }
+      } else if (key.name === "right") {
+        enterHistoryEventFocus(state);
       } else if (key.name === "up") {
         moveConversationHistoryCursor(state, -1);
       } else if (key.name === "down") {
@@ -490,6 +508,12 @@ function start(options = {}) {
       state.focusRegion = "content";
       state.contentColumn = 0;
       state.notice = "Search Memory Lab tags";
+    } else if (state.view === "memory" && !state.inputMode && (str === "o" || str === "O")) {
+      state.notice = "Opening Memory Lab Overview";
+      var overviewResult = state.adapter.openMemoryOverview();
+      if (overviewResult && typeof overviewResult.then === "function") {
+        overviewResult.catch(function(error) { state.notice = "Overview failed: " + error.message; }).finally(paint);
+      }
     } else if (key.name === "tab") {
       state.focusRegion = "menu";
       state.contentColumn = 0;

@@ -10,6 +10,9 @@ try {
   if (startupQuery.get('startupPrewarm') === '1' && Number(startupQuery.get('startupAttempt') || 0) > 0) {
     document.documentElement.classList.add('startup-prewarm');
   }
+  if (sessionStorage.getItem('newmark-config-reloading') === '1') {
+    document.documentElement.classList.add('config-reloading');
+  }
 } catch {}
 </script>
 <style>
@@ -279,6 +282,7 @@ html, body {
 }
 
 .startup-prewarm #startup-cover { display: flex; }
+.config-reloading #startup-cover { display: flex; }
 
 .startup-cover-shell {
   width: min(520px, calc(100vw - 48px));
@@ -2445,9 +2449,9 @@ button.left-ws-item {
 .conversation-work-event.error { color: #ff8888; }
 .conversation-work-event-content { min-width: 0; white-space: pre-wrap; word-break: break-word; }
 .conversation-work-event.narrative { display: block; color: var(--text); font-size: 13px; line-height: 1.65; padding: 3px 1px 7px; }
-.conversation-work-event.activity-summary { font-size: 12px; font-weight: 600; padding: 2px 0; }
+.conversation-work-event.activity-summary { font-size: 11px; font-weight: 400; color: var(--text-dim); padding: 2px 0; }
 .conversation-work-activity { margin: 0; padding: 0; }
-.conversation-work-activity > summary { display: grid; grid-template-columns: 17px minmax(0,1fr) 10px; gap: 8px; align-items: center; min-height: 28px; cursor: pointer; list-style: none; color: var(--text); font-size: 12px; font-weight: 600; }
+.conversation-work-activity > summary { display: grid; grid-template-columns: 17px minmax(0,1fr) 10px; gap: 8px; align-items: center; min-height: 28px; cursor: pointer; list-style: none; color: var(--text-dim); font-size: 11px; font-weight: 400; }
 .conversation-work-activity > summary::-webkit-details-marker { display: none; }
 .conversation-work-activity > summary .nm-icon { color: var(--text-dim); }
 .conversation-work-activity-chevron { width: 7px; height: 7px; border-right: 1px solid var(--text-dim); border-bottom: 1px solid var(--text-dim); transform: rotate(-45deg); transition: transform 140ms ease; }
@@ -15172,8 +15176,8 @@ window.refreshGlobalConfigFile = function() {
   if (!api.reloadGlobalConfig) return;
   api.reloadGlobalConfig().then(function(result) {
     if (result && result.error) throw new Error(result.error);
-    showUiNotice(t('settings.configReloaded'), 'success', 'global-config-refresh');
-    setTimeout(function() { window.location.reload(); }, 180);
+    try { sessionStorage.setItem('newmark-config-reloading', '1'); } catch (_) {}
+    window.location.reload();
   }).catch(function(error) {
     showUiNotice(error && error.message ? error.message : String(error), 'error', 'global-config-refresh');
   });
@@ -15850,7 +15854,13 @@ window.validateAllModels = function() {
     return state.modelValidationResults;
   }).catch(function(err) {
     document.body.classList.remove('model-evaluating');
-    window.openSubWin(t('model.validationTitle'), '<div style="color:#ff7777;font-size:12px;">' + esc(t('model.validationFailed')) + ': ' + esc(err.message) + '</div>');
+    var failedHtml = '<div style="color:#ff7777;font-size:12px;">' + esc(t('model.validationFailed')) + ': ' + esc(err.message) + '</div>';
+    var body = document.getElementById('sub-win-body');
+    if (body && document.getElementById('model-validation-progress') && els['sub-win-overlay'].classList.contains('open')) {
+      body.innerHTML = failedHtml;
+    } else {
+      addMsg('assistant', redactSensitiveText('[Error] ' + t('model.validationFailed') + ': ' + err.message), 'error', '');
+    }
     return [];
   }).finally(function() {
     window.stopModelValidationProgressPolling();
@@ -15866,16 +15876,45 @@ window.renderModelValidationProgress = function(progress) {
   var completedModels = Math.max(0, Number(progress.completedModels || 0));
   var totalModels = Math.max(0, Number(progress.totalModels || 0));
   var current = [String(progress.currentModel || ''), String(progress.currentCheck || '')].filter(Boolean).join(' · ');
-  return '<div class="provider-card marquee-border">' +
-    '<div style="display:flex;justify-content:space-between;gap:10px;"><span>' + esc(t('model.validating')) + '</span><strong>' + esc(String(percent)) + '%</strong></div>' +
-    '<div role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + esc(String(percent)) + '" style="height:7px;margin-top:10px;border-radius:999px;background:var(--surface-strong);overflow:hidden;"><div style="height:100%;width:' + esc(String(percent)) + '%;background:var(--accent);transition:width .18s ease;"></div></div>' +
-    '<div style="margin-top:8px;color:var(--text-dim);font-size:11px;display:flex;justify-content:space-between;gap:8px;"><span>' + esc(String(completedChecks)) + '/' + esc(String(totalChecks)) + ' ' + esc(t('model.validationChecks')) + '</span><span>' + esc(String(completedModels)) + '/' + esc(String(totalModels)) + ' ' + esc(t('model.validationModels')) + '</span></div>' +
-    (current ? '<div style="margin-top:6px;color:var(--text-dim);font-size:11px;overflow-wrap:anywhere;">' + esc(t('model.validationCurrent')) + ': ' + esc(current) + '</div>' : '') +
+  return '<div class="provider-card marquee-border" id="model-validation-progress">' +
+    '<div style="display:flex;justify-content:space-between;gap:10px;"><span>' + esc(t('model.validating')) + '</span><strong id="mv-percent">' + esc(String(percent)) + '%</strong></div>' +
+    '<div id="mv-progressbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + esc(String(percent)) + '" style="height:7px;margin-top:10px;border-radius:999px;background:var(--surface-strong);overflow:hidden;"><div id="mv-bar" style="height:100%;width:' + esc(String(percent)) + '%;background:var(--accent);transition:width .18s ease;"></div></div>' +
+    '<div style="margin-top:8px;color:var(--text-dim);font-size:11px;display:flex;justify-content:space-between;gap:8px;"><span id="mv-checks">' + esc(String(completedChecks)) + '/' + esc(String(totalChecks)) + ' ' + esc(t('model.validationChecks')) + '</span><span id="mv-models">' + esc(String(completedModels)) + '/' + esc(String(totalModels)) + ' ' + esc(t('model.validationModels')) + '</span></div>' +
+    '<div id="mv-current" style="margin-top:6px;color:var(--text-dim);font-size:11px;overflow-wrap:anywhere;' + (current ? '' : 'display:none;') + '">' + esc(t('model.validationCurrent')) + ': ' + esc(current) + '</div>' +
     '</div><div style="margin-top:6px;color:var(--text-dim);font-size:11px;">' + esc(t('model.validationBackgroundNote')) + '</div>';
+};
+
+window.updateModelValidationProgress = function(progress) {
+  progress = progress || {};
+  var body = document.getElementById('sub-win-body');
+  if (!body) return;
+  var percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  var completedChecks = Math.max(0, Number(progress.completedChecks || 0));
+  var totalChecks = Math.max(0, Number(progress.totalChecks || 0));
+  var completedModels = Math.max(0, Number(progress.completedModels || 0));
+  var totalModels = Math.max(0, Number(progress.totalModels || 0));
+  var current = [String(progress.currentModel || ''), String(progress.currentCheck || '')].filter(Boolean).join(' · ');
+  var percentEl = document.getElementById('mv-percent');
+  if (!percentEl) return;
+  percentEl.textContent = String(percent) + '%';
+  var barEl = document.getElementById('mv-bar');
+  if (barEl) barEl.style.width = String(percent) + '%';
+  var progressbarEl = document.getElementById('mv-progressbar');
+  if (progressbarEl) progressbarEl.setAttribute('aria-valuenow', String(percent));
+  var checksEl = document.getElementById('mv-checks');
+  if (checksEl) checksEl.textContent = String(completedChecks) + '/' + String(totalChecks) + ' ' + t('model.validationChecks');
+  var modelsEl = document.getElementById('mv-models');
+  if (modelsEl) modelsEl.textContent = String(completedModels) + '/' + String(totalModels) + ' ' + t('model.validationModels');
+  var currentEl = document.getElementById('mv-current');
+  if (currentEl) {
+    currentEl.textContent = t('model.validationCurrent') + ': ' + current;
+    currentEl.style.display = current ? '' : 'none';
+  }
 };
 
 window.showModelValidationProgress = function(progress) {
   document.body.classList.add('model-evaluating');
+  if (document.getElementById('model-validation-progress')) return;
   window.openSubWin(t('model.validationTitle'), window.renderModelValidationProgress(progress));
 };
 
@@ -15891,7 +15930,7 @@ window.startModelValidationProgressPolling = function() {
     Promise.resolve(api.modelValidationStatus()).then(function(progress) {
       if (!state.modelValidationPromise) return;
       var body = document.getElementById('sub-win-body');
-      if (body && els['sub-win-overlay'].classList.contains('open')) body.innerHTML = window.renderModelValidationProgress(progress);
+      if (body && els['sub-win-overlay'].classList.contains('open')) window.updateModelValidationProgress(progress);
       state.modelValidationProgressTimer = setTimeout(poll, 150);
     }).catch(function() {
       if (state.modelValidationPromise) state.modelValidationProgressTimer = setTimeout(poll, 300);
@@ -15918,7 +15957,21 @@ window.showModelEvaluationResults = function(results) {
     }
   }
   html += '</div>';
-  window.openSubWin(t('model.validationTitle'), html);
+  var body = document.getElementById('sub-win-body');
+  if (body && document.getElementById('model-validation-progress') && els['sub-win-overlay'].classList.contains('open')) {
+    // The progress window is still visible: replace it in place so closing
+    // the results restores whatever window was open before validation.
+    body.innerHTML = html;
+    return;
+  }
+  // The user closed the progress window or opened another window while
+  // validation was running. Do not hijack the current window; summarize in chat.
+  var okCount = 0;
+  for (var j = 0; j < (results || []).length; j++) {
+    var status = String((results[j] && results[j].status) || '');
+    if (status === 'verified' || status === 'degraded' || status === 'available') okCount++;
+  }
+  addMsg('assistant', '[System] ' + t('model.validationTitle') + ': ' + okCount + '/' + (results || []).length + ' ' + t('model.validationModels'), okCount === (results || []).length ? 'success' : 'warning', '');
 };
 renderArchiveSettings = function() {
   if (api.listArchives && !state._allArchiveSettingsLoading) {
@@ -22139,6 +22192,11 @@ function schedulePostStartupUiRendering() {
   // Keep only input-critical state on the acknowledgement path. Secondary
   // navigation surfaces render after promotion on cancellable browser tasks.
   updateWorkspaceGate();
+
+  if (document.documentElement.classList.contains('config-reloading')) {
+    document.documentElement.classList.remove('config-reloading');
+    try { sessionStorage.removeItem('newmark-config-reloading'); } catch (_) {}
+  }
 
   // === Event Listeners ===
   function escapeBelongsToFocusedControl(event) {

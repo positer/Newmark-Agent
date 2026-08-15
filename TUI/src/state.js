@@ -197,9 +197,14 @@ function createState(options = {}) {
     inputCursor: 0,
     conversationScroll: 0,
     conversationMaxScroll: 0,
+    contentScroll: 0,
+    contentFocusLine: -1,
     conversationHistoryFocus: false,
     historySelectedIndex: -1,
     historySelectedImageIndex: -1,
+    historyEventFocus: false,
+    historyEventIndex: -1,
+    collapsedBuildEvents: new Set(),
     historyVisibleRunIds: [],
     historyCursorDirection: 0,
     expandedBuildRuns: new Set(
@@ -549,6 +554,8 @@ function switchView(state, id) {
   state.input = "";
   state.inputCursor = 0;
   if (id === "chat") state.conversationScroll = 0;
+  state.contentScroll = 0;
+  state.contentFocusLine = -1;
 }
 
 function normalizedAutomation(item) {
@@ -1330,6 +1337,76 @@ function filteredCommands(state) {
   return data.commands.filter((command) => command.label.toLowerCase().includes(query));
 }
 
+function focusableEventsForRun(run) {
+  return (run?.events || [])
+    .filter((event) => {
+      const type = String(event?.type || "").toLowerCase();
+      return type && type !== "final_response" && !type.startsWith("guide");
+    })
+    .sort((left, right) => {
+      const leftSeq = Number(left?.sequence);
+      const rightSeq = Number(right?.sequence);
+      if (Number.isFinite(leftSeq) && Number.isFinite(rightSeq) && leftSeq !== rightSeq) return leftSeq - rightSeq;
+      const leftTime = new Date(left?.timestamp || left?.createdAt || "").getTime();
+      const rightTime = new Date(right?.timestamp || right?.createdAt || "").getTime();
+      return (Number.isFinite(leftTime) ? leftTime : 0) - (Number.isFinite(rightTime) ? rightTime : 0);
+    });
+}
+
+function buildEventKey(event, index) {
+  return String(event?.id || event?.toolCallId || `${event?.type || "event"}:${event?.toolName || ""}:${index}`);
+}
+
+function selectedHistoryRun(state) {
+  const runs = [...(state.snapshot.workRuns || [])].sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+  return runs[Number(state.historySelectedIndex) || 0];
+}
+
+function enterHistoryEventFocus(state) {
+  const run = selectedHistoryRun(state);
+  const events = focusableEventsForRun(run);
+  if (!run || !state.expandedBuildRuns?.has(run.runId) || !events.length) return false;
+  state.historyEventFocus = true;
+  state.historyEventIndex = 0;
+  state.historySelectedImageIndex = -1;
+  state.notice = `History focus · ${events.length} item(s) · Enter expand · ← back`;
+  return true;
+}
+
+function exitHistoryEventFocus(state) {
+  state.historyEventFocus = false;
+  state.historyEventIndex = -1;
+  state.notice = "History focus · Build Block · Enter expands";
+  return true;
+}
+
+function moveHistoryEventCursor(state, direction) {
+  const run = selectedHistoryRun(state);
+  const events = focusableEventsForRun(run);
+  if (!events.length) return false;
+  const count = events.length;
+  state.historyEventIndex = ((Number(state.historyEventIndex) || 0) + direction + count) % count;
+  state.notice = `History focus · item ${state.historyEventIndex + 1}/${count} · Enter expand`;
+  return true;
+}
+
+function toggleSelectedBuildEvent(state) {
+  const run = selectedHistoryRun(state);
+  const events = focusableEventsForRun(run);
+  const index = Number(state.historyEventIndex) || 0;
+  const event = events[index];
+  if (!event) return false;
+  const key = buildEventKey(event, index);
+  if (state.collapsedBuildEvents.has(key)) {
+    state.collapsedBuildEvents.delete(key);
+    state.notice = "Event expanded";
+  } else {
+    state.collapsedBuildEvents.add(key);
+    state.notice = "Event collapsed";
+  }
+  return true;
+}
+
 module.exports = {
   activeConversationModelLabel,
   INTELLIGENCE_TIERS,
@@ -1341,6 +1418,7 @@ module.exports = {
   applyConversationResult,
   beginAutomationCreate,
   beginWorkflowCreate,
+  buildEventKey,
   conversationModelOptions,
   createAutomationFromDraft,
   createState,
@@ -1349,7 +1427,10 @@ module.exports = {
   cycleMemoryComponent,
   cycleSettingsTab,
   enterConversation,
+  enterHistoryEventFocus,
+  exitHistoryEventFocus,
   filteredCommands,
+  focusableEventsForRun,
   itemCount,
   memoryColumnItems,
   memoryTagOptions,
@@ -1358,6 +1439,7 @@ module.exports = {
   moveMenuSelection,
   moveFocusHorizontal,
   moveConversationHistoryCursor,
+  moveHistoryEventCursor,
   moveInputCursorVertical,
   moveSettingChoiceSelection,
   moveSelection,
@@ -1378,6 +1460,7 @@ module.exports = {
   toggleSelected,
   toggleConversationPinned,
   toggleSelectedBuildBlock,
+  toggleSelectedBuildEvent,
   validateSelectedModel,
   workspaceMenuChildren
 };

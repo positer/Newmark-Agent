@@ -178,3 +178,130 @@ export function planModePolicyPrompt(): string {
     'Runtime policy rejects stale or hidden mutating tool calls even if a prompt asks for them.',
   ].join(' ');
 }
+
+// ============================================================================
+// 硬性删除审查（dev-0.4.2）
+//
+// 允许删除，但不允许通过脚本/命令批量删除。删除必须逐个、明确、在 Agent 监管下
+// 进行：优先使用受监管的 delete_file 工具；bash/terminal_takeover 的单文件删除
+// （单个明确路径、无递归、无通配符、无循环、无管道、无多目标）放行；任何递归、
+// 通配符、循环、find/xargs、管道接收端、多目标或多条删除语句的批量删除一律硬性拒绝。
+// 本函数是纯函数，输出字节稳定，不参与 system prompt 组装，因此不影响前缀缓存命中。
+// ============================================================================
+
+export interface DeletionGuardDecision {
+  blocked: boolean;
+  reason?: string;
+}
+
+/** 删除命令动词（跨 POSIX / PowerShell / cmd）。注意：不含单独 "remove"（避免匹配普通英文）。 */
+const DELETE_VERB_SOURCE = '(?:remove-item|rmdir|unlink|erase|del|rm|rd|ri)';
+const DELETE_VERB_BOUNDARY = new RegExp(`(?:^|[\\s;&|()\\n])${DELETE_VERB_SOURCE}(?:\\s|$)`, 'i');
+
+function hasDeletionVerb(text: string): boolean {
+  return DELETE_VERB_BOUNDARY.test(text);
+}
+
+function deletionVerbCount(text: string): number {
+  const matches = text.match(new RegExp(DELETE_VERB_BOUNDARY.source, 'gi'));
+  return matches ? matches.length : 0;
+}
+
+/** 循环结构批量删除：foreach / for…in / for( / while( / bash do…done。 */
+function hasLoopDeletion(text: string): boolean {
+  const lower = text.toLowerCase();
+  if (/\bforeach\b/.test(lower)) return true;                       // PowerShell foreach
+  if (/\bfor\b\s*[$({]/.test(lower)) return true;                 // PowerShell/C for(...)
+  if (/\bfor\b\s+\S+\s+in\b/.test(lower)) return true;          // bash for f in ...
+  if (/\bwhile\b\s*[({]/.test(lower)) return true;                 // while(...)
+  if (/\bwhile\b\s+\S/.test(lower) && /\bdo\b/.test(lower)) return true; // bash while ... do
+  if (/\bdone\b/.test(lower)) return true;                          // bash 循环结束标记
+  return false;
+}
+
+/** find -delete / find -exec rm / xargs rm 批量删除。 */
+function hasFindXargsDeletion(text: string): boolean {
+  if (/\bfind\b[^\n;&|]*-(?:delete\b|exec(?:dir)?\s+(?:rm|del|erase)\b)/i.test(text)) return true;
+  if (/\bxargs\b[^\n;&|]*\b(?:rm|del|erase|remove-item)\b/i.test(text)) return true;
+  return false;
+}
+
+/** 按 shell 语义切分参数：引号内的空格不拆分，返回去引号后的 token。 */
+function splitCommandArgs(args: string): string[] {
+  const tokens: string[] = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(args)) !== null) {
+    const token = m[1] ?? m[2] ?? m[3] ?? '';
+    if (token) tokens.push(token);
+  }
+  return tokens;
+}
+
+/** 管道接收端删除：上游产出多项，删除动词作为接收端即批量删除。 */
+function hasPipeDeletion(text: string): boolean {
+  return new RegExp(`\\|\\s*${DELETE_VERB_SOURCE}\\b`, 'i').test(text);
+}
+
+/** 递归删除标志：rm -r/-R/--recursive、Remove-Item -Recurse、rmdir/rd /s、del /s。 */
+function hasRecursiveDeletionFlag(text: string): boolean {
+  const lower = text.toLowerCase();
+  if (/\brm\b\s+(-[a-z]*r[a-z]*|--recursive)\b/.test(lower)) return true;
+  if (/\bremove-item\b[^\n;&|]*\s+-(?:recurse|r)\b/.test(lower)) return true;
+  if (/\b(?:rmdir|rd)\b\s+(-r\b|\/[s]\b)/.test(lower)) return true;
+  if (/\bdel\b\s+\/[s]\b/.test(lower)) return true;
+  return false;
+}
+
+/** 删除命令后跟含通配符的目标 token。 */
+function hasWildcardDeletionTarget(text: string): boolean {
+  const segmentRe = new RegExp(`(?:^|[\\s;&|()\\n])${DELETE_VERB_SOURCE}([\\s][^;&|\\n]*)?`, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = segmentRe.exec(text)) !== null) {
+    const args = m[1] || '';
+    for (const token of splitCommandArgs(args)) {
+      if (!token || token.startsWith('-') || /^\/[A-Za-z]/.test(token)) continue;
+      if (/[*?]/.test(token)) return true;
+    }
+  }
+  return false;
+}
+
+/** 单条删除命令后跟 >= 2 个明确目标（非 flag、非 shell 开关）。 */
+function hasMultipleDeleteTargets(text: string): boolean {
+  const segmentRe = new RegExp(`(?:^|[\\s;&|()\\n])${DELETE_VERB_SOURCE}([\\s][^;&|\\n]*)?`, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = segmentRe.exec(text)) !== null) {
+    const args = m[1] || '';
+    const targets = splitCommandArgs(args)
+      .filter(t => t && !t.startsWith('-') && !/^\/[A-Za-z]/.test(t) && !/^(&&|\|\||;|\||&|>|>>|<|2>&1)$/.test(t));
+    if (targets.length >= 2) return true;
+  }
+  return false;
+}
+
+/**
+ * 硬性删除命令审查。blocked=true 表示该命令构成脚本/命令批量删除，必须拒绝并
+ * 引导 Agent 使用受监管的 delete_file 工具逐个删除。
+ */
+export function evaluateDeletionGuard(command: string): DeletionGuardDecision {
+  const text = String(command || '');
+  if (!text.trim()) return { blocked: false };
+  // find -delete / find -exec rm 中，-delete 不含标准删除动词，需在入口单独识别为批量删除意图。
+  const findXargs = hasFindXargsDeletion(text);
+  if (!hasDeletionVerb(text) && !findXargs) return { blocked: false };
+
+  const refuse = (kind: string): DeletionGuardDecision => ({
+    blocked: true,
+    reason: `[deletion guard] ${kind} batch deletion is not allowed. Delete files one by one with the delete_file tool under Agent supervision.`,
+  });
+
+  if (hasLoopDeletion(text)) return refuse('Loop-based');
+  if (findXargs) return refuse('find/xargs');
+  if (hasPipeDeletion(text)) return refuse('Pipe-fed');
+  if (hasRecursiveDeletionFlag(text)) return refuse('Recursive');
+  if (hasWildcardDeletionTarget(text)) return refuse('Wildcard');
+  if (hasMultipleDeleteTargets(text)) return refuse('Multiple-target');
+  if (deletionVerbCount(text) >= 2) return refuse('Multiple-statement');
+  return { blocked: false };
+}

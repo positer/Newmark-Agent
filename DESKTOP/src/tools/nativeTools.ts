@@ -14,6 +14,7 @@ export const NATIVE_TOOL_CATALOG: NativeToolCatalogEntry[] = [
   { name: 'read', label: 'Read file', description: 'Read workspace file contents.', category: 'core', defaultEnabled: true, protected: true, availability: 'required' },
   { name: 'write', label: 'Write file', description: 'Create or overwrite workspace files.', category: 'core', defaultEnabled: true },
   { name: 'edit', label: 'Edit file', description: 'Patch workspace files through exact find and replace.', category: 'core', defaultEnabled: true },
+  { name: 'delete_file', label: 'Delete file', description: 'Delete one file at a time under Agent supervision; refuses directory and wildcard deletion.', category: 'core', defaultEnabled: true },
   { name: 'glob', label: 'Glob files', description: 'Find files by glob pattern.', category: 'core', defaultEnabled: true, protected: true, availability: 'required' },
   { name: 'grep', label: 'Search files', description: 'Search workspace text by regex.', category: 'core', defaultEnabled: true, protected: true, availability: 'required' },
   { name: 'web_search', label: 'Web search', description: 'Search the web from the Agent.', category: 'web', defaultEnabled: true },

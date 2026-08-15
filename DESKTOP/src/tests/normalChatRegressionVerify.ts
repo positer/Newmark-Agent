@@ -126,9 +126,10 @@ async function main(): Promise<void> {
     await agent.process('继续完成还没有完成的工作');
     const continuationFocus = successCalls.at(-1)?.system || '';
     assert.ok(!continuationFocus.includes('继续完成还没有完成的工作')
-      && continuationFocus.includes('1 unfinished plan item(s): 1 in progress and 0 pending')
+      && continuationFocus.includes('persistent inline task checklist exists for this conversation with unfinished items')
+      && continuationFocus.includes('call task_read')
       && !continuationFocus.includes('Retired migration'),
-    'continuation focus retains explicit unfinished plan state while excluding completed plan items');
+    'continuation focus retains a cache-friendly unfinished-plan pointer while excluding dynamic plan items');
     assert.ok(String(successCalls.at(-1)?.messages.at(-1)?.content || '').includes('继续完成还没有完成的工作'),
       'continuation instruction remains the final real user message in provider context');
 

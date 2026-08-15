@@ -31,6 +31,8 @@ const MODE_SCOPED_TOOLS = new Set([
   'read_tool_result',
   'goal_manage',
   'conversation_rename',
+  'task_read',
+  'task_create',
   'question',
   'task',
   'subagent_list',
@@ -44,6 +46,7 @@ const MODE_SCOPED_TOOLS = new Set([
   'branch_create',
 ]);
 const PLAN_READ_ONLY_TOOLS = new Set([
+  'task_read',
   'pwd',
   'read',
   'glob',

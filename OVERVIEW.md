@@ -1,5 +1,20 @@
 # Newmark Agent Overview
 
+## dev-0.4.3 任务清单同步 + TUI 光标跟随 + 上下文窗口统计 + Guide 注入优化（2026-08-15）— source PASS
+
+在 dev-0.4.2 之上完成 dev-0.4.3 任务清单并升版本号到 0.4.3：
+
+1. 任务清单同步：`buildRequestTaskFocus` 不再把动态 `conversationPlan` 条目逐项注入 provider 请求，改为固定软性提示（`call task_read` + `task_create` 维护）；新增 `task_read`/`task_create` 工具读写 `conversationPlan`，policy/background 护栏同步更新，新增 `taskToolsVerify.ts` 并纳入 `test:desktop:built`。
+2. TUI 长列表光标跟随：flowtask 焦点行按真实行号计算；command palette / flow-select 覆盖层各自维护滚动窗口；chat 左侧会话列表新增 `conversationListScroll` 跟随选中项。
+3. GUI 上下文用量：`contextWindow()` 新增全对话 provider token 统计（input/output 累计）与缓存命中率；上下文管理窗口新增「全对话 token」与「缓存命中率」单元格（en/zh 文案）。
+4. 删除「借鉴 DSH 动态预算」等借鉴声明文案（en/zh 均已改为中性表述）。
+5. 上下文管理窗口去掉关闭按钮，点击窗口外部自动关闭（`document click` 监听，面板/触发环内部除外）。
+6. Build Block「编辑了文件」默认折叠（移除内联文件 diff 的默认 `open`）。
+7. `conversation_rename` 改为首轮响应总结命名：不再在首 Build bootstrap 注入 tool-call 指令，改在首个完成 Build 的最终响应处用摘要派生标题并自动 rename。
+8. Guide 注入优化：同一 Build block 内连续到达的 receipt-tracked Guide 由 conversation kernel 合并为一次 provider 续接（`batchGuides`），Agent 批量持久化各 Guide 并合并图片到主消息；Build 内 Guide 按提交顺序执行并自动接续，跨 Build block 最新优先且不自动接续；意外中断 Build 的历史在下一个 Build 主动续接并共用上下文前缀。
+
+验证：`npm run typecheck` / `npm run build` EXIT=0；`node dist/tests/verify.js` **1564/1564 PASS**；`taskToolsVerify` 15/15；`contextCacheHitStressVerify` 29/29（5 Build × 8 tool 子轮缓存命中压力：Build 内 system 前缀稳定、缓存命中率 95%）；`cursor-follow-stress.test.js` 5/5（chat/palette/flow-select/flowtask 长列表光标跟随压力）；`guideInsertionStressVerify` 41/41；`guideWorkRunVerify`、`normalChatRegressionVerify`、`contextSystemV2Verify`、`contextBudgetVerify` 通过；`npm run test:tui:built` 59/59 + 5/5 压力 + 28/28 + 2/2；`npm run test:desktop:built` 全绿（含 deletion-safety 156/156）；`npm run lint` 0 errors（70 既有 warnings）。未重新打包、未 UAC 安装、未远程发布。
+
 ## dev-0.4.2 git push + win/linux release（2026-08-15）— released
 
 提交 `6b32a2b`、打 tag `dev-0.4.2`、push master 与 tag；WSL Ubuntu-24.04 完整 Linux `npm test` 全绿（含 deletion-safety 156/156）后构建 Linux 产物；创建 GitHub prerelease [dev-0.4.2](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.4.2) 并上传 5 资产：Windows MSI `226,056,271` bytes / `FB7056A9A7BCC953071465317A52042CA21F66BB596A64BB452CA3D7980DAFFF`，Windows ZIP `291,914,694` bytes / `41CF0C9B37E568AB1D9C0407AB1E0B77F6F440E55FA98F4296C7EDC9A8ADB761`，Linux AppImage `176,036,624` bytes / `F5FB100DC357BB468A16CF85C3A48E90CE4A914EC75E50C8F35B927C8DDDE8B8`，Linux deb `135,641,332` bytes / `68A45610711C3D8B5C03C8FB501AE36BD15573691646623D13D793ADE08CCB82`，Linux unpacked ZIP `172,144,415` bytes / `FBB699170E43DC1DEDA32F5C4F6DE77CFFFE6921EC5D50B89C66F151E94DC832`。证据：archive/20260815-dev-0.4.2-git-push-and-release.md。

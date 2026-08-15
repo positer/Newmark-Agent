@@ -378,6 +378,12 @@ export interface ConversationContinuation {
   hiddenUserInput?: boolean;
   createdAt: string;
 }
+/** task_read 输出的单项文本上限：清单项只作状态索引，不承载长描述。 */
+function compactPlanItemText(value: unknown): string {
+  const clean = String(value || '').replace(/\s+/g, ' ').trim();
+  return clean.length <= 240 ? clean : `${clean.slice(0, 237)}...`;
+}
+
 let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant built into a native desktop application.
 
 ## Available Tools
@@ -431,8 +437,8 @@ let CORE_SYSTEM_PROMPT = `You are Newmark Agent, a powerful AI coding assistant 
 - When the current instruction is a new task, complete that task without silently appending unrelated historical work.
 
 ## Inline Task Management (Mandatory)
-- For every multi-step conversation task, maintain a compact inline checklist in the current Build work state with actionable items and one status per item: pending, in_progress, completed, or blocked.
-- Update that checklist as work changes and use it to drive tool order and final verification. Keep it bounded to actionable task labels; never expose hidden reasoning.
+- For every multi-step conversation task, persist a compact task checklist through the task_create tool: create actionable items when the work starts, update each item's status (pending|in_progress|done) as work progresses, and mark items done only after verification. These items are the same list the GUI Task panel and TUI plan view render, and they persist across Build Blocks.
+- Call task_read to reload the concrete checklist state whenever you need it; the system prompt intentionally does not inject the live list so the provider prefix cache stays stable. Keep items bounded to actionable task labels; never expose hidden reasoning.
 - The inline checklist is the per-turn task manager. The durable linked-plan document exists and is available through the linked_plan tool when explicitly needed, but its full contents are not injected into every request.
 
 ## Guidelines
@@ -506,6 +512,8 @@ export class Agent {
     model: string;
     fallback: boolean;
   } | null = null;
+  public providerUsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  public lastProviderUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   private compressionCache: CompressionCacheEntry[] = [];
   private pendingHistoryRemovals: Array<{ position: number; fingerprint: string }> = [];
   private branchMailbox: BranchMessage[] = [];
@@ -2471,7 +2479,10 @@ export class Agent {
       if (run.status !== 'interrupted' || status !== 'force_interrupted') {
         if (run.status !== status) return false;
         const terminalAt = run.endedAt || endedAt;
-        if (status === 'completed') this.ensureCompletedWorkRunFinalResult(run);
+        if (status === 'completed') {
+          this.ensureCompletedWorkRunFinalResult(run);
+          this.maybeAutoRenameConversationFromRun(run);
+        }
         const goalAudit = this.auditGoalAtWorkRunEnd(run, status, terminalAt);
         this.enforceGoalTerminalInvariant(status, goalAudit);
         this.persistBuildBlockWorkOverview(run, status, terminalAt, goalAudit);
@@ -2518,6 +2529,7 @@ export class Agent {
     run.status = status;
     run.endedAt = endedAt;
     run.expanded = true;
+    if (status === 'completed') this.maybeAutoRenameConversationFromRun(run);
     this.activeWorkRunId = '';
     this.finalizingWorkRunId = '';
     this.managedWorkRunIds.delete(run.runId);
@@ -2630,6 +2642,7 @@ export class Agent {
       const goalAudit = this.auditGoalAtWorkRunEnd(activeRun, terminalStatus, terminalAt);
       this.enforceGoalTerminalInvariant(terminalStatus, goalAudit);
       this.persistBuildBlockWorkOverview(activeRun, terminalStatus, terminalAt, goalAudit);
+      if (terminalStatus === 'completed') this.maybeAutoRenameConversationFromRun(activeRun);
     }
     return event;
   }
@@ -2840,6 +2853,7 @@ export class Agent {
     }
     return Array.from(deduped.values()).slice(-100);
   }
+
 
   private normalizeConversationPlan(plan: Partial<ConversationPlanState> | null | undefined): ConversationPlanState {
     const now = new Date().toISOString();
@@ -3682,10 +3696,10 @@ export class Agent {
     return true;
   }
   /**
-   * 首 Build 命名提示判定：仅当 (1) 当前对话尚无历史 Build（排除当前 run）且
-   * (2) 其持久化 title 仍是自动生成（含为空）时返回 true。满足条件时运行时会
-   * 在首个 provider request 的 bootstrap 注入一次性命名指令，让 Agent 调用
-   * conversation_rename 自行命名。判定本身只读存储、无副作用，保缓存稳定。
+   * 首 Build 命名判定：仅当 (1) 当前对话尚无历史 Build（排除当前 run）且
+   * (2) 其持久化 title 仍是自动生成（含为空）时返回 true。dev-0.4.3 起不再
+   * 用该判定注入首轮 tool-call 指令，而是在首个完成 Build 的最终响应处自动
+   * 命名（见 maybeAutoRenameConversationFromRun）。判定本身只读存储、无副作用。
    */
   public shouldPromptConversationRename(): boolean {
     if (this.conversationBuildHistory(1).length > 0) return false;
@@ -3696,6 +3710,42 @@ export class Agent {
     const priorTitle = entry?.title;
     const messages = entry?.chatMessages || this.chatMessages;
     return this.isGeneratedConversationTitle(priorTitle, conversationId, messages);
+  }
+
+  /**
+   * 从首个 Build 的最终响应中提取一个简短对话标题。跳过 Markdown 标题/列表
+   * 符号与固定 section 标题，取第一条有意义的摘要句并做保守清洗。
+   */
+  private deriveConversationTitleFromSummary(summary: string): string {
+    const clean = this.sanitizeAssistantOutput(summary || '').replace(/\r/g, '');
+    const lines = clean.split('\n').map(line => line.trim()).filter(Boolean);
+    for (const line of lines) {
+      const withoutHeading = line
+        .replace(/^#{1,6}\s*/, '')
+        .replace(/^[-*+>]\s*/, '')
+        .trim();
+      if (!withoutHeading) continue;
+      if (/^(做了什么|验证|文件|问题|下一步|What changed|Verification|Files|Issues|Next)[:：]?$/i.test(withoutHeading)) continue;
+      const firstSentence = withoutHeading.split(/[。！？!?.;；]/)[0].trim() || withoutHeading;
+      const title = firstSentence
+        .replace(/[{}[\]()<>"'`]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 48);
+      if (title.length >= 2) return title;
+    }
+    return '';
+  }
+
+  private maybeAutoRenameConversationFromRun(run: ConversationWorkRun): void {
+    if (run.status !== 'completed') return;
+    if (!this.shouldPromptConversationRename()) return;
+    const finalEvent = [...run.events].reverse().find(event => event.type === 'final_response');
+    const finalMessage = [...this.chatMessages].reverse().find(message => message.role === 'assistant' && message.runId === run.runId);
+    const raw = finalEvent?.content || finalMessage?.content || '';
+    const summary = this.sanitizePublicWorkContent(raw).slice(0, 2000);
+    const title = this.deriveConversationTitleFromSummary(summary);
+    if (title) this.renameConversation(this.activeConversationId || 'default', title);
   }
 
 
@@ -4389,8 +4439,8 @@ export class Agent {
     try { input = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
     const tool = String(input.tool || '').trim();
     if (!tool) return { ok: false, output: '[background_tool] tool is required.', error: 'tool is required.' };
-    if (tool === 'background_tool' || tool === 'read_tool_result' || tool === 'compress_tool_result' || tool === 'goal_manage' || tool === 'conversation_rename') {
-      return { ok: false, output: '[background_tool] cannot background the control tools (background_tool/read_tool_result/compress_tool_result/goal_manage/conversation_rename).', error: 'control-tool-unsupported.' };
+    if (tool === 'background_tool' || tool === 'read_tool_result' || tool === 'compress_tool_result' || tool === 'goal_manage' || tool === 'conversation_rename' || tool === 'task_read' || tool === 'task_create') {
+      return { ok: false, output: '[background_tool] cannot background the control tools (background_tool/read_tool_result/compress_tool_result/goal_manage/conversation_rename/task_read/task_create).', error: 'control-tool-unsupported.' };
     }
     // 禁止后台化子代理/编排类工具——它们有独立的生命周期管理，后台化会破坏其
     // mailbox/abort/persistence 语义。
@@ -4529,6 +4579,101 @@ export class Agent {
       output: JSON.stringify({ ok: true, conversationId, title: title.slice(0, 80) }, null, 2),
       metadata: { kind: 'conversation-rename' },
     };
+  }
+  /**
+   * task_read：读取当前对话的持久化内联任务清单（conversationPlan）。
+   * 只读、无副作用，输出有界（每项 text 截断到 240 字符），保缓存友好。
+   * Agent 在需要具体任务状态时调用，替代把动态清单注入每个 provider request。
+   */
+  handleTaskRead(): NewmarkToolResult {
+    const plan = this.normalizeConversationPlan(this.conversationPlan);
+    const items = plan.items.map((item, index) => ({
+      index,
+      id: item.id,
+      status: item.status,
+      task: compactPlanItemText(item.text),
+      updatedAt: item.updatedAt || '',
+    }));
+    return {
+      ok: true,
+      output: JSON.stringify({
+        ok: true,
+        conversationId: this.activeConversationId || 'default',
+        total: items.length,
+        unfinished: items.filter(item => item.status !== 'done').length,
+        items,
+      }, null, 2),
+      metadata: { kind: 'task-read' },
+    };
+  }
+
+  /**
+   * task_create：把任务项写入当前对话的持久化内联任务清单（conversationPlan）。
+   * action=create 追加单项；action=update 按 id/index 改状态或文本；action=clear
+   * 移除已完成项。写入走 updateConversationPlan 持久化路径，GUI Task 面板与
+   * TUI plan 视图立即反映。返回紧凑确认，避免回显全量清单。
+   */
+  handleTaskCreate(args: string): NewmarkToolResult {
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(args || '{}') as Record<string, unknown>; } catch {}
+    const action = String(input.action || 'create').trim();
+    const plan = this.normalizeConversationPlan(this.conversationPlan);
+    const now = new Date().toISOString();
+    if (action === 'create') {
+      const text = String(input.task || input.text || '').replace(/\s+/g, ' ').trim();
+      if (!text) return { ok: false, output: '[task_create] task text is required.', error: 'task text is required.' };
+      const item: ConversationPlanItem = {
+        id: `plan-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+        text: text.slice(0, 400),
+        status: 'pending',
+        createdAt: now,
+        updatedAt: now,
+      };
+      plan.items.push(item);
+      this.updateConversationPlan(plan);
+      return {
+        ok: true,
+        output: JSON.stringify({ ok: true, action, id: item.id, status: item.status, total: plan.items.length }, null, 2),
+        metadata: { kind: 'task-create' },
+      };
+    }
+    if (action === 'update') {
+      const id = String(input.id || '').trim();
+      const index = Number(input.index);
+      const status = String(input.status || '').trim();
+      const text = String(input.task || input.text || '').replace(/\s+/g, ' ').trim();
+      const target = id
+        ? plan.items.find(item => item.id === id)
+        : Number.isInteger(index) && index >= 0 && index < plan.items.length
+          ? plan.items[index]
+          : undefined;
+      if (!target) return { ok: false, output: '[task_create] no matching task item for update (pass id or valid index).', error: 'task item not found.' };
+      if (status) {
+        if (!['pending', 'in_progress', 'done', 'blocked'].includes(status)) {
+          return { ok: false, output: '[task_create] status must be pending|in_progress|done|blocked.', error: 'invalid status.' };
+        }
+        target.status = status === 'blocked' ? 'pending' : (status as ConversationPlanItemStatus);
+      }
+      if (text) target.text = text.slice(0, 400);
+      target.updatedAt = now;
+      this.updateConversationPlan(plan);
+      return {
+        ok: true,
+        output: JSON.stringify({ ok: true, action, id: target.id, status: target.status, total: plan.items.length }, null, 2),
+        metadata: { kind: 'task-create' },
+      };
+    }
+    if (action === 'clear') {
+      const remaining = plan.items.filter(item => item.status !== 'done');
+      const removed = plan.items.length - remaining.length;
+      this.updateConversationPlan({ items: remaining });
+      return {
+        ok: true,
+        output: JSON.stringify({ ok: true, action, removed, total: remaining.length }, null, 2),
+        metadata: { kind: 'task-create' },
+      };
+    }
+    return { ok: false, output: '[task_create] action must be create|update|clear.', error: 'invalid action.' };
   }
   private conversationTree(): ConversationTreeState | null {
     const stateKey = this.workspaceConversationStateKey();
@@ -5333,6 +5478,21 @@ export class Agent {
     };
   }
 
+  recordProviderUsage(input: { input: number; output: number; cacheRead: number; cacheWrite: number }): void {
+    const bounded = (value: number): number => Math.max(0, Math.floor(Number(value) || 0));
+    const usage = {
+      input: bounded(input.input),
+      output: bounded(input.output),
+      cacheRead: bounded(input.cacheRead),
+      cacheWrite: bounded(input.cacheWrite),
+    };
+    this.lastProviderUsage = usage;
+    this.providerUsageTotals.input += usage.input;
+    this.providerUsageTotals.output += usage.output;
+    this.providerUsageTotals.cacheRead += usage.cacheRead;
+    this.providerUsageTotals.cacheWrite += usage.cacheWrite;
+  }
+
   contextWindow(modelName = this.model): {
     estimatedTokens: number;
     maxTokens: number;
@@ -5349,6 +5509,12 @@ export class Agent {
     compressionEnabled?: boolean;
     cacheEntries?: number;
     archiveEntries?: number;
+    providerTotalTokens?: number;
+    providerInputTokens?: number;
+    providerOutputTokens?: number;
+    providerCacheReadTokens?: number;
+    providerCacheWriteTokens?: number;
+    providerCacheReadRatio?: number;
   } {
     const estimatedTokens = this.estimateContextTokens();
     // Display and compression must share one window resolution. Both resolve
@@ -5377,6 +5543,14 @@ export class Agent {
       compressionEnabled: this.config.getBool('context', 'auto_compress'),
       cacheEntries: this.compressionCache.length,
       archiveEntries: this.compressionArchiveEntryCount(),
+      providerTotalTokens: this.providerUsageTotals.input + this.providerUsageTotals.output,
+      providerInputTokens: this.providerUsageTotals.input,
+      providerOutputTokens: this.providerUsageTotals.output,
+      providerCacheReadTokens: this.providerUsageTotals.cacheRead,
+      providerCacheWriteTokens: this.providerUsageTotals.cacheWrite,
+      providerCacheReadRatio: this.providerUsageTotals.input > 0
+        ? Math.min(1, this.providerUsageTotals.cacheRead / this.providerUsageTotals.input)
+        : 0,
     };
   }
 
@@ -7051,19 +7225,66 @@ export class Agent {
           throw new Error(message);
         }
       }
-      const text = typeof input === 'string' ? input : String(input.text || '');
-      const inputEnvelope = typeof input === 'string' ? null : input as AgentPromptMessage & { clientMessageId?: string; runId?: string };
-      const hiddenUserInput = inputEnvelope?.hiddenUserInput === true;
-      // An empty selection may be repaired to the configured default, but an
-      // explicitly requested fixed model must remain visible to the
-      // fail-closed availability check below. Otherwise a typo such as
-      // provider-that-does-not-exist/missing-model silently becomes the first
-      // configured fixture/default deployment.
+      let text = typeof input === 'string' ? input : String(input.text || '');
+      const inputEnvelope = typeof input === 'string' ? null : input as AgentPromptMessage & { clientMessageId?: string; runId?: string; batchGuides?: NonNullable<AgentPromptMessage['batchGuides']> };
+      let hiddenUserInput = inputEnvelope?.hiddenUserInput === true;
       const explicitFixedModel = this.model !== '' && this.model !== 'auto';
       if (!explicitFixedModel) this.ensureUsableModelSelection();
-      const clientMessageId = String(inputEnvelope?.clientMessageId || '').trim();
+      let clientMessageId = String(inputEnvelope?.clientMessageId || '').trim();
       const inputRunId = String(inputEnvelope?.runId || this.activeWorkRunId || '').trim();
-      const rawImages = typeof input === 'string' ? [] : (Array.isArray(input.images) ? input.images : []);
+      let rawImages = typeof input === 'string' ? [] : (Array.isArray(input.images) ? input.images : []);
+      // dev-0.4.3 Guide 批量续接：同一 Build block 内连续到达的多个 Guide
+      // 由 conversation kernel 合并到这里一次注入，不再每来一个 Guide 响应一次。
+      const batchGuides = Array.isArray(inputEnvelope?.batchGuides) ? inputEnvelope.batchGuides : [];
+      if (batchGuides.length) {
+        const batchRunId = inputRunId || this.activeWorkRunId || '';
+        const batchTarget = this.currentConversationTarget();
+        const appliedAt = this.nowIso();
+        const persisted: Array<{ text: string; clientMessageId: string }> = [];
+        const batchImages: Array<{ dataUrl: string; name: string; type: string }> = [];
+        for (const guide of batchGuides) {
+          const guideClientMessageId = String(guide.clientMessageId || '').trim();
+          if (!guideClientMessageId) continue;
+          let guideImages: Array<{ dataUrl: string; name: string; type: string }> = [];
+          let guideAttachments: ConversationImageAttachment[] = [];
+          try {
+            const prepared = this.prepareSubmittedConversationImages(guide.images);
+            guideImages = prepared.images;
+            guideAttachments = prepared.attachments;
+          } catch (error) {
+            this.status = 'idle';
+            return [{ type: 'text', text: `[Attachment rejected] ${error instanceof Error ? error.message : String(error)}` }];
+          }
+          const guideDisplay = guideImages.length
+            ? `${guide.text}${guide.text ? '\n\n' : ''}[${guideImages.length} image attachment${guideImages.length === 1 ? '' : 's'}]`
+            : guide.text;
+          batchImages.push(...guideImages);
+          // 图片统一由主 hidden user 消息携带，Guide 自身 history 只保留文本，
+          // 避免同一批图片在上下文中重复计费。
+          this.persistGuideMessage(guideClientMessageId, guideDisplay, batchRunId, guide.text, guideAttachments, String(guide.guideId || ''));
+          this.recordGuideReceipt({
+            clientMessageId: guideClientMessageId,
+            guideId: String(guide.guideId || '') || undefined,
+            target: batchTarget,
+            runId: batchRunId,
+            status: 'applied',
+            content: guideDisplay,
+            createdAt: appliedAt,
+            updatedAt: appliedAt,
+            appliedAt,
+          });
+          this.consumeConversationContinuation({ content: guide.text, queueMode: 'steer', clientMessageId: guideClientMessageId });
+          persisted.push({ text: guide.text, clientMessageId: guideClientMessageId });
+        }
+        if (persisted.length === 1) {
+          text = persisted[0].text;
+        } else {
+          text = `Apply the following intervening Guides in submission order within the current Build Block and continue automatically:\n${persisted.map((guide, index) => `Guide ${index + 1}: ${guide.text}`).join('\n')}`;
+        }
+        hiddenUserInput = true;
+        clientMessageId = '';
+        rawImages = batchImages;
+      }
       let autoRouteEvaluated = false;
       let attachments: ConversationImageAttachment[] = [];
       let images: Array<{ dataUrl: string; name: string; type: string }> = [];

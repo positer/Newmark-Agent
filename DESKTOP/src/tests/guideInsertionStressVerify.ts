@@ -72,7 +72,7 @@ function runOptions(mode: ConversationKernelRunOptions['mode'], inputMode: Conve
  * public completion event submitting a Guide synchronously.
  */
 class GuideInsertionProbe extends Agent {
-  public processCalls: Array<{ input: string; runId: string }> = [];
+  public processCalls: Array<{ input: string; runId: string; batchCount: number; batchInputs: string[] }> = [];
   public steered: Array<{ content: string; queueMode: 'steer' | 'followUp' }> = [];
   public receipts: GuideReceipt[] = [];
   public finishCalls: Array<{ runId: string; status?: string }> = [];
@@ -131,9 +131,28 @@ class GuideInsertionProbe extends Agent {
     const runId = this.kernel && this.probeTarget
       ? this.kernel.snapshot(this.probeTarget).runtime?.runId || ''
       : '';
-    this.processCalls.push({ input: text, runId });
+    const batchGuides = typeof input === 'string' ? [] : (Array.isArray(input.batchGuides) ? input.batchGuides : []);
+    this.processCalls.push({
+      input: text,
+      runId,
+      batchCount: batchGuides.length,
+      batchInputs: batchGuides.map(guide => guide.text),
+    });
     if (typeof input !== 'string' && input.clientMessageId) {
       this.notifyAgentKernelUserMessageStart(text, input.clientMessageId);
+    }
+    for (const guide of batchGuides) {
+      this.recordGuideReceipt({
+        clientMessageId: guide.clientMessageId,
+        guideId: guide.guideId || undefined,
+        target: this.probeTarget || { workspaceId: '', conversationId: '' },
+        runId,
+        status: 'applied',
+        content: guide.text,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        appliedAt: new Date().toISOString(),
+      });
     }
     await new Promise(resolve => setTimeout(resolve, this.delayMs));
     return [{ type: 'text', text: `done:${text}` }];
@@ -185,23 +204,34 @@ async function scenarioMidTurnInsertion(root: string): Promise<void> {
   assertOk(h.probe.finishCalls.filter(f => f.status === 'completed').length === 1,
     'mid-turn kernel-accepted: one completed work run');
 
-  // 1b. Fallback burst: when the kernel cannot accept, Guides are retained as
-  // pending next turns and drained continuously inside the SAME run.
+  // 1b. Fallback burst: when the kernel cannot accept, receipt-tracked Guides
+  // are retained as pending next turns and drained as ONE batch inside the
+  // SAME run (continuous Guide injection is coalesced, not one response each).
   const h2 = makeHarness(root, 'mid-fallback');
   h2.probe.acceptKernelMessages = false;
   const p2 = h2.kernel.prompt('first', h2.target, runOptions('build'), 'steer');
   await wait(2);
   await runMany(8, async i => {
-    h2.kernel.prompt(`guide-${i}`, h2.target, runOptions('build'), 'steer');
+    h2.kernel.enqueueGuide({
+      clientMessageId: `mid-fallback-guide-${i}`,
+      target: h2.target,
+      deliveryMode: 'steer',
+      text: `guide-${i}`,
+      createdAt: new Date().toISOString(),
+    });
   });
   await p2;
-  assertOk(h2.probe.processCalls.map(c => c.input).join(',')
-    === ['first', ...Array.from({ length: 8 }, (_, i) => `guide-${i}`)].join(','),
-    'mid-turn fallback: Guides drain continuously in submission order');
+  assertOk(h2.probe.processCalls.length === 2
+    && h2.probe.processCalls[0].input === 'first'
+    && h2.probe.processCalls[1].batchCount === 8
+    && h2.probe.processCalls[1].batchInputs.join(',') === Array.from({ length: 8 }, (_, i) => `guide-${i}`).join(','),
+    'mid-turn fallback: consecutive Guides drain as one coalesced continuation in submission order');
   assertOk(new Set(h2.probe.processCalls.map(c => c.runId)).size === 1,
     'mid-turn fallback: all segments run inside one work run');
   assertOk(h2.probe.finishCalls.filter(f => f.status === 'completed').length === 1,
     'mid-turn fallback: single completion for the continuous run');
+  assertOk(h2.probe.receipts.filter(r => r.clientMessageId.startsWith('mid-fallback-guide-')).some(r => r.status === 'applied'),
+    'mid-turn fallback: coalesced Guides reach applied receipt state');
   assertOk(h2.kernel.queued(h2.target).steering.length === 0 && h2.kernel.queued(h2.target).followUp.length === 0,
     'mid-turn fallback: visible queue drains to empty');
 }

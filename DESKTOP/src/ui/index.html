@@ -3523,8 +3523,6 @@ button.todo-item { background: transparent; }
 .context-inspector-head { display:flex; align-items:flex-start; gap:8px; margin-bottom:10px; }
 .context-inspector-title { flex:1; min-width:0; color:var(--text-bright); font-size:12px; font-weight:700; }
 .context-inspector-subtitle { margin-top:2px; color:var(--text-dim); font-size:9px; }
-.context-inspector-close { width:22px; height:22px; padding:0; border:0; border-radius:var(--radius-sm); background:transparent; color:var(--text-dim); cursor:pointer; }
-.context-inspector-close:hover, .context-inspector-close:focus-visible { color:var(--text-bright); background:var(--control-hover-bg); outline:none; }
 .context-inspector-meter { height:6px; margin:8px 0 10px; overflow:hidden; border-radius:var(--radius-full); background:rgba(168,168,168,.18); }
 .context-inspector-meter-fill { height:100%; border-radius:inherit; background:var(--accent); transition:width var(--duration-normal) var(--ease-out-expo), background var(--duration-fast) var(--ease-out-expo); }
 .context-inspector-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
@@ -6424,6 +6422,8 @@ var NEWMARK_I18N = {
     'status.contextCompressed': 'Context compressed',
     'status.contextCompression': 'Context compression',
     'status.contextTokens': 'Context tokens',
+    'status.conversationTokens': 'Conversation tokens',
+    'status.cacheHitRate': 'Cache hit rate',
     'status.contextNearLimit': 'Context near limit',
     'status.contextOverLimit': 'Context over limit',
     'status.contextModeFallback': 'fallback',
@@ -6431,7 +6431,7 @@ var NEWMARK_I18N = {
     'status.messages': 'messages',
     'status.noCompression': 'No compression event in this conversation',
     'status.contextInspector': 'Context management',
-    'status.contextInspectorHint': 'DSH-inspired live budget; visible chat history stays unchanged.',
+    'status.contextInspectorHint': 'Live context budget; visible chat history stays unchanged.',
     'status.activeBuild': 'Active Build',
     'status.longHistory': 'Long history',
     'status.trigger': 'Trigger',
@@ -7126,6 +7126,8 @@ var NEWMARK_I18N = {
     'status.contextCompressed': '上下文已压缩',
     'status.contextCompression': '上下文压缩',
     'status.contextTokens': '上下文 token',
+    'status.conversationTokens': '全对话 token',
+    'status.cacheHitRate': '缓存命中率',
     'status.contextNearLimit': '上下文接近上限',
     'status.contextOverLimit': '上下文已超限',
     'status.contextModeFallback': 'fallback',
@@ -7133,7 +7135,7 @@ var NEWMARK_I18N = {
     'status.messages': '条消息',
     'status.noCompression': '当前对话暂无压缩事件',
     'status.contextInspector': '上下文管理',
-    'status.contextInspectorHint': '借鉴 DSH 的动态预算；可见对话历史不会被改写。',
+    'status.contextInspectorHint': '实时上下文预算；可见对话历史不会被改写。',
     'status.activeBuild': '当前 Build',
     'status.longHistory': '长期历史',
     'status.trigger': '触发线',
@@ -9751,7 +9753,7 @@ function renderWorkToolGroup(event, eventIndex) {
     var edited = workToolEditedFile(item);
     if (edited) {
       var editKey = 'edit:' + String(item.id || item.toolCallId || itemIndex) + ':' + edited.path;
-      return '<details class="conversation-work-file conversation-work-file-inline" open data-work-detail-key="' + escAttr(editKey) + '"><summary>' +
+      return '<details class="conversation-work-file conversation-work-file-inline" data-work-detail-key="' + escAttr(editKey) + '"><summary>' +
         iconSvg('pencil', 'edited', 'tiny') +
         '<span class="conversation-work-file-name" title="' + escAttr(edited.path) + '">' + esc(currentLang() === 'zh' ? '已编辑 ' : 'Edited ') + esc(edited.name) + '</span>' +
         '<span class="conversation-work-file-stats"><span class="conversation-work-file-add">+' + edited.added + '</span><span class="conversation-work-file-del">-' + edited.deleted + '</span></span>' +
@@ -11652,6 +11654,12 @@ window.renderContextInspector = function() {
   var historyTrigger = contextInspectorValue(c.longHistoryTriggerTokens);
   var activeRetention = contextInspectorValue(c.buildBlockRetentionTokens);
   var historyRetention = contextInspectorValue(c.longHistoryRetentionTokens);
+  var providerTotalTokens = contextInspectorValue(c.providerTotalTokens);
+  var providerInputTokens = contextInspectorValue(c.providerInputTokens);
+  var providerOutputTokens = contextInspectorValue(c.providerOutputTokens);
+  var providerCacheReadTokens = contextInspectorValue(c.providerCacheReadTokens);
+  var providerCacheReadRatio = Math.max(0, Math.min(1, Number(c.providerCacheReadRatio) || 0));
+  var cacheHitPercent = Math.round(providerCacheReadRatio * 1000) / 10;
   var percent = Math.min(100, Math.round((used / max) * 100));
   var fillColor = c.warning === 'over_limit' ? 'var(--nm-state-danger)' : (c.warning === 'near_limit' ? 'var(--nm-state-warning)' : 'var(--accent)');
   var compression = state.contextCompression || null;
@@ -11660,12 +11668,13 @@ window.renderContextInspector = function() {
     : t('status.noCompressionShort');
   var busy = !!state.contextMutationPending;
   var running = typeof isCurrentConversationRunning === 'function' && isCurrentConversationRunning();
-  panel.innerHTML = '<div class="context-inspector-head"><div><div class="context-inspector-title">' + esc(t('status.contextInspector')) + '</div><div class="context-inspector-subtitle">' + esc(t('status.contextInspectorHint')) + '</div></div>' +
-    '<button type="button" class="context-inspector-close" onclick="window.closeContextInspector()" aria-label="' + esc(t('common.close') || 'Close') + '">×</button></div>' +
+  panel.innerHTML = '<div class="context-inspector-head"><div><div class="context-inspector-title">' + esc(t('status.contextInspector')) + '</div><div class="context-inspector-subtitle">' + esc(t('status.contextInspectorHint')) + '</div></div></div>' +
     '<div class="context-inspector-meter"><div class="context-inspector-meter-fill" style="width:' + percent + '%;background:' + fillColor + '"></div></div>' +
     '<div class="context-inspector-grid">' +
       contextInspectorCell(t('status.contextTokens'), used + ' / ' + max) +
+      contextInspectorCell(t('status.conversationTokens'), providerTotalTokens + ' · ' + providerInputTokens + ' in / ' + providerOutputTokens + ' out') +
       contextInspectorCell(t('status.activeBuild'), active + ' / ' + activeTrigger) +
+      contextInspectorCell(t('status.cacheHitRate'), cacheHitPercent + '% · ' + providerCacheReadTokens + ' cached') +
       contextInspectorCell(t('status.longHistory'), history + ' / ' + historyTrigger) +
       contextInspectorCell(t('status.retention'), activeRetention + ' + ' + historyRetention) +
       contextInspectorCell(t('status.hotCache'), contextInspectorValue(c.cacheEntries) + ' entries') +
@@ -11680,6 +11689,17 @@ window.closeContextInspector = function() {
   state.contextInspectorOpen = false;
   window.renderContextInspector();
 };
+
+(function() {
+  document.addEventListener('click', function(event) {
+    if (!state.contextInspectorOpen) return;
+    var ring = document.getElementById('context-token-ring');
+    var panel = document.getElementById('context-inspector');
+    if (!ring || !panel) return;
+    if (panel.contains(event.target) || ring.contains(event.target)) return;
+    window.closeContextInspector();
+  });
+})();
 
 window.toggleContextInspector = function() {
   state.contextInspectorOpen = !state.contextInspectorOpen;

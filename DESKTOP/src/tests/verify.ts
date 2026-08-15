@@ -3923,7 +3923,7 @@ async function main() {
   assert(sysPrompt.includes('What changed') && sysPrompt.includes('Verification') && sysPrompt.includes('Files') && sysPrompt.includes('Issues/Next'), 'buildSystemPrompt: enforces English structured reply format');
   assert(sysPrompt.includes('non-overridable') && sysPrompt.includes('must not weaken these rules'), 'buildSystemPrompt: protects intrinsic rules from user prompts');
   assert(sysPrompt.includes('Inline Task Management (Mandatory)')
-    && sysPrompt.includes('pending, in_progress, completed, or blocked'), 'buildSystemPrompt: requires bounded inline task management for multi-step work');
+    && sysPrompt.includes('pending|in_progress|done') && sysPrompt.includes('task_create'), 'buildSystemPrompt: requires task_create-backed inline task management for multi-step work');
   assert(sysPrompt.includes('durable conversation-linked Markdown plan exists')
     && !sysPrompt.includes('[Linked Plan revision=') && !sysPrompt.includes('linkedPlan.markdown'), 'buildSystemPrompt: discloses linked-plan availability without injecting linked-plan contents');
   agent.linkedPlan = { markdown: 'LINKED_PLAN_SHOULD_NOT_ENTER_EVERY_PROMPT', revision: 99 };
@@ -5769,6 +5769,44 @@ async function main() {
   assert(ocTokens[0].text.includes('Error') || ocTokens[0].text.includes('built-in'),
     'opencode: graceful fallback when CLI not found');
   agent.engine = 'builtin'; // restore
+
+  // ---- 16. dev-0.4.3 Task-list Regressions ----
+  console.log('\n🧭 dev-0.4.3 task-list regressions');
+  const tuiStateHtml = fs.readFileSync(path.join(process.cwd(), '..', 'TUI', 'src', 'state.js'), 'utf-8').replace(/\r\n/g, '\n');
+  const tuiRenderHtml = fs.readFileSync(path.join(process.cwd(), '..', 'TUI', 'src', 'render.js'), 'utf-8').replace(/\r\n/g, '\n');
+  assert(!uiHtml.includes('DSH-inspired live budget') && !uiHtml.includes('借鉴 DSH 的动态预算'),
+    'UI copy: DSH borrowing claims removed from context inspector');
+  assert(!uiHtml.includes('context-inspector-close'), 'context inspector: close button removed (markup + dead CSS)');
+  assert(uiHtml.includes("document.addEventListener('click'") && uiHtml.includes('window.closeContextInspector()'),
+    'context inspector: click-outside auto close is registered');
+  assert(uiHtml.includes("'status.conversationTokens'") && uiHtml.includes("'status.cacheHitRate'")
+    && uiHtml.includes('providerCacheReadRatio') && uiHtml.includes('providerTotalTokens'),
+    'context inspector: whole-conversation tokens + cache hit rate rendered');
+  assert(!uiHtml.includes('conversation-work-file-inline" open data-work-detail-key')
+    && uiHtml.includes('conversation-work-file-inline" data-work-detail-key'),
+    'build block: edited-file details default collapsed');
+  assert(tuiStateHtml.includes('paletteScroll: 0') && tuiStateHtml.includes('flowSelectionScroll: 0')
+    && tuiStateHtml.includes('conversationListScroll: 0'), 'TUI state: palette/flow-select/chat-list scroll cursors initialized');
+  assert(tuiRenderHtml.includes('state.paletteScroll = Math.max') && tuiRenderHtml.includes('state.flowSelectionScroll = Math.max')
+    && tuiRenderHtml.includes('state.conversationListScroll = Math.max') && tuiRenderHtml.includes('state.contentFocusLine = rows.length'),
+    'TUI render: long-list cursor-follow scroll for palette/flow-select/chat-list/flowtask');
+  agent.recordProviderUsage({ input: 100, output: 20, cacheRead: 80, cacheWrite: 5 });
+  const usageWindow = agent.contextWindow();
+  assert(usageWindow.providerTotalTokens === 120 && usageWindow.providerInputTokens === 100
+    && usageWindow.providerOutputTokens === 20 && usageWindow.providerCacheReadTokens === 80
+    && usageWindow.providerCacheReadRatio === 0.8, 'context window: whole-conversation tokens + cache hit rate exposed');
+  const derivedTitle = (agent as any).deriveConversationTitleFromSummary('已完成 TUI 长列表光标修复。\n验证通过。');
+  assert(derivedTitle === '已完成 TUI 长列表光标修复', 'conversation rename: first-response summary derives a concise title');
+  agent.handleTaskCreate(JSON.stringify({ action: 'create', task: 'CACHE_UNIQUE_TASK_TOKEN_4_0_3' }));
+  const requestFocus = (agentKernelRunnerInternals as any).buildRequestTaskFocus(agent, [{ role: 'user', content: 'probe', timestamp: Date.now() }], { includeBootstrap: true, activeTools: [], toolCatalog: [] });
+  assert(!requestFocus.includes('CACHE_UNIQUE_TASK_TOKEN_4_0_3') && requestFocus.includes('call task_read'),
+    'Build block: request focus keeps task-list dynamic items out of the provider prompt (cache-friendly)');
+  const guideFocusSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8').replace(/\r\n/g, '\n');
+  assert(guideFocusSource.includes('Apply it now in submission order with any earlier Guides in this same Block and continue automatically; do not stop after each Guide')
+    && guideFocusSource.includes('Across Build Blocks the newest user/Guide instruction wins; do not auto-resume an earlier Build Block Guide'),
+    'Guide injection: in-Build Guides are sequential and auto-continue; cross-Build Guides are newest-first and not auto-resumed');
+  assert(guideFocusSource.includes('interrupted before completion') && guideFocusSource.includes('shares the same context prefix'),
+    'Guide injection: interrupted Build history continues into the next block with the shared prefix');
 
   // ---- Final Summary ----
   console.log(`\n═══════════════════════════════════════`);

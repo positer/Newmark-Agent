@@ -32,6 +32,18 @@ export interface AgentPromptMessage {
   clientMessageId?: string;
   guideId?: string;
   runId?: string;
+  /**
+   * dev-0.4.3: 同一 Build block 内连续到达的多个 Guide 会被 conversation
+   * kernel 合并为一次 provider 续接，而不是每来一个 Guide 就响应一次。
+   * 数组顺序即用户提交顺序（顺序执行且自动接续）。
+   */
+  batchGuides?: Array<{
+    clientMessageId: string;
+    guideId?: string;
+    text: string;
+    images?: Array<{ dataUrl: string; name?: string; type?: string }>;
+    attachments?: ConversationImageAttachment[];
+  }>;
   routePolicy?: {
     mode?: 'quality' | 'balanced' | 'cost' | 'speed';
     maxQualityLoss?: number;
@@ -756,7 +768,39 @@ export class ConversationKernel {
       while (runtime.pendingNextTurn.length > 0) {
         if (runtime.stopRequestedRunId === runtime.runId) return this.result(runtime, lastTokens);
         const next = runtime.pendingNextTurn.shift()!;
-        lastTokens = await this.runSingle(runtime, next.message, next.queueMode);
+        if (next.queueMode === 'steer' && typeof next.message !== 'string' && !!next.message.clientMessageId) {
+          const batchGuides: NonNullable<AgentPromptMessage['batchGuides']> = [];
+          const pushGuide = (message: AgentPromptMessage): void => {
+            batchGuides.push({
+              clientMessageId: String(message.clientMessageId || ''),
+              guideId: message.guideId,
+              text: message.text,
+              images: message.images?.map(image => ({ ...image })),
+              attachments: message.attachments?.map(attachment => ({ ...attachment })),
+            });
+          };
+          pushGuide(next.message);
+          while (runtime.pendingNextTurn.length > 0
+            && runtime.pendingNextTurn[0].queueMode === 'steer'
+            && typeof runtime.pendingNextTurn[0].message !== 'string'
+            && !!runtime.pendingNextTurn[0].message.clientMessageId) {
+            const guide = runtime.pendingNextTurn.shift()!;
+            pushGuide(guide.message as AgentPromptMessage);
+          }
+          if (batchGuides.length === 1) {
+            lastTokens = await this.runSingle(runtime, next.message, next.queueMode);
+            continue;
+          }
+          const batchText = batchGuides.map((guide, index) => `Guide ${index + 1}: ${guide.text}`).join('\n');
+          const batchMessage: AgentPromptMessage = {
+            text: `Apply the following intervening Guides in submission order within the current Build Block and continue automatically:\n${batchText}`,
+            hiddenUserInput: true,
+            batchGuides,
+          };
+          lastTokens = await this.runSingle(runtime, batchMessage, 'steer');
+        } else {
+          lastTokens = await this.runSingle(runtime, next.message, next.queueMode);
+        }
       }
       const rootMessage = runtime.runner.subagents.readRootInbox()[0];
       if (!rootMessage) {

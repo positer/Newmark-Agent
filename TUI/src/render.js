@@ -430,19 +430,28 @@ function chatView(state, width, height, p) {
     `${p.bold}Conversations${p.reset}`,
     `${p.muted}N new${p.reset}`,
     "",
-    ...state.snapshot.conversations.map((item, i) => {
-      const style = state.focusRegion === "content" && i === state.selected && !state.inputMode ? `${p.selected}${p.bold}` : "";
-      const running = state.runningConversationKeys?.has(`${state.target.workspaceId}::${item.id}`);
-      const marker = running
-        ? `${p.cyan}${["\\", "—", "/", "—"][state.tick % 4]}${p.reset}`
-        : item.title === state.lastConversation
-          ? `${p.cyan}›${p.reset}`
-          : item.pinned
-            ? `${p.amber}◆${p.reset}`
-            : "·";
-      const updated = String(item.updatedAt || "").slice(11, 16) || "—";
-      return `${style}${marker} ${pad(item.title, 19)} ${p.muted}${updated}${p.reset}`;
-    })
+    ...(() => {
+      const conversationRows = state.snapshot.conversations.map((item, i) => {
+        const style = state.focusRegion === "content" && i === state.selected && !state.inputMode ? `${p.selected}${p.bold}` : "";
+        const running = state.runningConversationKeys?.has(`${state.target.workspaceId}::${item.id}`);
+        const marker = running
+          ? `${p.cyan}${["\\", "—", "/", "—"][state.tick % 4]}${p.reset}`
+          : item.title === state.lastConversation
+            ? `${p.cyan}›${p.reset}`
+            : item.pinned
+              ? `${p.amber}◆${p.reset}`
+              : "·";
+        const updated = String(item.updatedAt || "").slice(11, 16) || "—";
+        return `${style}${marker} ${pad(item.title, 19)} ${p.muted}${updated}${p.reset}`;
+      });
+      const listViewport = Math.max(1, height - 3);
+      const listMaxScroll = Math.max(0, conversationRows.length - listViewport);
+      let listScroll = Math.max(0, Math.min(listMaxScroll, Number(state.conversationListScroll) || 0));
+      if (state.selected < listScroll) listScroll = state.selected;
+      else if (state.selected >= listScroll + listViewport) listScroll = state.selected - listViewport + 1;
+      state.conversationListScroll = Math.max(0, Math.min(listMaxScroll, listScroll));
+      return conversationRows.slice(state.conversationListScroll, state.conversationListScroll + listViewport);
+    })()
   ] : [];
   const preview = state.snapshot.conversations[state.selected] || state.snapshot.conversations[0] || {
     id: state.target.conversationId,
@@ -736,20 +745,19 @@ function flowListView(state, width, p) {
 
 function flowTaskView(state, width, p) {
   const components = state.currentFlow?.components || [];
-  return [
+  const rows = [
     ...conversationContext(state, p, "Flow task"),
     `${p.bold}${tr(state, "Flow Task")}${p.reset}   ${p.muted}${state.currentFlow?.name || "No workflow"}${p.reset}`,
-    "",
-    ...components.flatMap((component, index) => {
-      const style = state.focusRegion === "content" && index === state.selected ? `${p.selected}${p.bold}` : "";
-      if (style) state.contentFocusLine = 6 + index * 2;
-      const mode = component.type === "logic" ? "LOGIC" : String(component.mode || "BUILD").toUpperCase();
-      return [
-        `${style} ${String(component.id).padStart(2)}  ${pad(mode, 7)} ${truncate(component.prompt, Math.max(18, width - 16))}`,
-        component.type === "logic" ? `     ${p.muted}true → ${component.goto_true} · false → ${component.goto_false}${p.reset}` : ""
-      ].filter(Boolean);
-    })
+    ""
   ];
+  components.forEach((component, index) => {
+    const style = state.focusRegion === "content" && index === state.selected ? `${p.selected}${p.bold}` : "";
+    if (style) state.contentFocusLine = rows.length;
+    const mode = component.type === "logic" ? "LOGIC" : String(component.mode || "BUILD").toUpperCase();
+    rows.push(`${style} ${String(component.id).padStart(2)}  ${pad(mode, 7)} ${truncate(component.prompt, Math.max(18, width - 16))}`);
+    if (component.type === "logic") rows.push(`     ${p.muted}true → ${component.goto_true} · false → ${component.goto_false}${p.reset}`);
+  });
+  return rows;
 }
 
 function toolsView(state, width, p) {
@@ -1143,11 +1151,19 @@ function overlayLines(state, width, p) {
   }
   if (state.overlay === "palette") {
     const commands = filteredCommands(state);
+    const paletteViewport = Math.min(7, Math.max(1, commands.length));
+    const paletteMaxScroll = Math.max(0, commands.length - paletteViewport);
+    let paletteScroll = Math.max(0, Math.min(paletteMaxScroll, Number(state.paletteScroll) || 0));
+    if (state.paletteIndex < paletteScroll) paletteScroll = state.paletteIndex;
+    else if (state.paletteIndex >= paletteScroll + paletteViewport) paletteScroll = state.paletteIndex - paletteViewport + 1;
+    state.paletteScroll = Math.max(0, Math.min(paletteMaxScroll, paletteScroll));
+    const visibleCommands = commands.slice(state.paletteScroll, state.paletteScroll + paletteViewport);
     const rows = [
       `${p.bold}>${p.reset} ${state.paletteQuery}${p.cyan}▏${p.reset}`,
       `${p.muted}${"─".repeat(Math.max(8, Math.min(64, width - 10)))}${p.reset}`,
-      ...(commands.length ? commands.slice(0, 7).map((command, i) => {
-        const style = i === state.paletteIndex ? `${p.selected}${p.bold}` : "";
+      ...(visibleCommands.length ? visibleCommands.map((command, i) => {
+        const commandIndex = state.paletteScroll + i;
+        const style = commandIndex === state.paletteIndex ? `${p.selected}${p.bold}` : "";
         return `${style} ${pad(command.label, Math.max(18, Math.min(52, width - 18)))} ${p.muted}${command.hint}${p.reset}`;
       }) : [`${p.muted} No matching commands${p.reset}`]),
       "",
@@ -1156,14 +1172,22 @@ function overlayLines(state, width, p) {
     return card(rows, Math.min(72, width - 4), p, "Command palette");
   }
   if (state.overlay === "flow-select") {
+    const flowViewport = Math.min(7, Math.max(1, state.flows.length));
+    const flowMaxScroll = Math.max(0, state.flows.length - flowViewport);
+    let flowScroll = Math.max(0, Math.min(flowMaxScroll, Number(state.flowSelectionScroll) || 0));
+    if (state.flowSelectionIndex < flowScroll) flowScroll = state.flowSelectionIndex;
+    else if (state.flowSelectionIndex >= flowScroll + flowViewport) flowScroll = state.flowSelectionIndex - flowViewport + 1;
+    state.flowSelectionScroll = Math.max(0, Math.min(flowMaxScroll, flowScroll));
+    const visibleFlows = state.flows.slice(state.flowSelectionScroll, state.flowSelectionScroll + flowViewport);
     return card([
       `${p.bold}Flow mode requires a workflow${p.reset}`,
       `${p.muted}This selection is bound to ${state.lastConversation}.${p.reset}`,
       "",
-      ...(state.flows.length
-        ? state.flows.map((name, index) => {
-          const style = index === state.flowSelectionIndex ? `${p.selected}${p.bold}` : "";
-          return `${style} ${index === state.flowSelectionIndex ? "›" : " "} ${name}${p.reset}`;
+      ...(visibleFlows.length
+        ? visibleFlows.map((name, i) => {
+          const flowIndex = state.flowSelectionScroll + i;
+          const style = flowIndex === state.flowSelectionIndex ? `${p.selected}${p.bold}` : "";
+          return `${style} ${flowIndex === state.flowSelectionIndex ? "›" : " "} ${name}${p.reset}`;
         })
         : [`${p.amber}No workflows are configured in ~/.Newmark/Flow.${p.reset}`]),
       "",

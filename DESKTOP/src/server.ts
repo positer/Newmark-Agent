@@ -44,12 +44,16 @@ function mobileJson(res: http.ServerResponse, data: unknown, code = 200): void {
 }
 
 function handleMobileEvents(req: http.IncomingMessage, res: http.ServerResponse): void {
+  if (agent && !agent.config.getBool('remote', 'touch_enabled')) {
+    mobileJson(res, { error: 'Remote touch disabled' }, 403);
+    return;
+  }
   if (!mobileAuthorized(req)) {
-    jsonResponse(res, { error: 'Unauthorized' }, 401);
+    mobileJson(res, { error: 'Unauthorized' }, 401);
     return;
   }
   if (!agent) {
-    jsonResponse(res, { error: 'Agent not initialized' }, 500);
+    mobileJson(res, { error: 'Agent not initialized' }, 500);
     return;
   }
   res.writeHead(200, {
@@ -216,7 +220,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
       return;
     }
     if (!mobileAuthorized(req)) {
-      jsonResponse(res, { error: 'Unauthorized' }, 401);
+      mobileJson(res, { error: 'Unauthorized' }, 401);
       return;
     }
   }
@@ -648,7 +652,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         jsonResponse(res, { error: 'Unknown API' }, 404);
     }
   } catch(e: any) {
-    jsonResponse(res, { error: e.message }, 500);
+    if (pathname.startsWith('/api/mobile/')) mobileJson(res, { error: e.message }, 500);
+    else jsonResponse(res, { error: e.message }, 500);
   }
 }
 

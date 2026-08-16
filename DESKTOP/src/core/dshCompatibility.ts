@@ -46,6 +46,9 @@ export interface DshBundleSnapshot {
   patchExists: boolean;
   unknownKeys: string[];
   resolved: boolean;
+  installed?: boolean;
+  installPath?: string;
+  enabled?: boolean;
 }
 
 export interface DshProfileSnapshot {
@@ -529,6 +532,13 @@ export function discoverDshCompatibility(root: string, options: DshCompatibility
   if (!dshPackageManifest) warnings.push('@deepseek-ai/dsh was not found in the inspected local package roots.');
   if (!profiles.length) warnings.push(`No DSH profiles were found under ${profileRoot}.`);
   const dedupedBundles = bundles.filter((bundle, index) => bundles.findIndex(other => path.resolve(other.manifestPath) === path.resolve(bundle.manifestPath)) === index);
+  const installed = dshInstalledBundles(root);
+  const bundlesWithInstall = dedupedBundles.map(bundle => {
+    const found = installed.find(item => item.name === sanitizePluginName(bundle.name));
+    return found
+      ? { ...bundle, installed: true, installPath: found.installPath, enabled: found.enabled }
+      : { ...bundle, installed: false, enabled: false };
+  });
   const dedupedMcp = mcpCandidates.filter((candidate, index) => mcpCandidates.findIndex(other => other.name === candidate.name && other.source === candidate.source) === index);
   const configFiles = unique(profiles.flatMap(profile => profile.configFiles).concat(
     dedupedBundles.flatMap(bundle => bundle.patchPath && bundle.patchExists ? [bundle.patchPath] : []),
@@ -557,7 +567,7 @@ export function discoverDshCompatibility(root: string, options: DshCompatibility
     },
     recognizedManifestKeys: ['dsh.bundle.patch', 'dsh.profile.bundles'],
     profiles,
-    bundles: dedupedBundles,
+    bundles: bundlesWithInstall,
     mcpCandidates: dedupedMcp,
     configFiles,
     homeConfigFiles,
@@ -626,6 +636,90 @@ export function dshCompactionRuntimeSemantics(): DshCompactionRuntimeSemantics {
  * developer-preview schema 更新的 fail-soft 兼容策略。既不 import 也不 execute
  * 任何 DSH 插件代码。
  */
+const DSH_INSTALL_DIR = 'plugins/dsh';
+
+function sanitizePluginName(name: string): string {
+  return String(name || '')
+    .replace(/^@/, '')
+    .replace(/[/\\:*?"<>|]/g, '_')
+    .trim() || 'dsh-plugin';
+}
+
+function dshInstallRoot(root: string): string {
+  return path.join(path.resolve(root), DSH_INSTALL_DIR);
+}
+
+function installedStatePath(installRoot: string, name: string): string {
+  return path.join(installRoot, name, '.newmark-dsh-installed.json');
+}
+
+function readInstalledState(filePath: string): { enabled: boolean } | null {
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    return value && typeof value === 'object' ? { enabled: value.enabled !== false } : { enabled: true };
+  } catch {
+    return null;
+  }
+}
+
+export function dshInstalledBundles(root: string): Array<{ name: string; installPath: string; enabled: boolean }> {
+  const installRoot = dshInstallRoot(root);
+  const output: Array<{ name: string; installPath: string; enabled: boolean }> = [];
+  let entries: fs.Dirent[] = [];
+  try { entries = fs.readdirSync(installRoot, { withFileTypes: true }); } catch { return output; }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    const state = readInstalledState(installedStatePath(installRoot, entry.name));
+    output.push({ name: entry.name, installPath: path.join(installRoot, entry.name), enabled: state ? state.enabled : true });
+  }
+  return output.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function installDshBundle(root: string, manifestPath: string): { ok: boolean; error?: string; installPath?: string; name?: string } {
+  const resolved = path.resolve(manifestPath);
+  if (!fileExists(resolved)) return { ok: false, error: `DSH bundle manifest not found: ${resolved}` };
+  const manifest = readJson(resolved);
+  const rawName = typeof manifest?.name === 'string' ? manifest.name : path.basename(path.dirname(resolved));
+  const name = sanitizePluginName(rawName);
+  const sourceDir = path.dirname(resolved);
+  const installRoot = dshInstallRoot(root);
+  const targetDir = path.join(installRoot, name);
+  try {
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    fs.mkdirSync(installRoot, { recursive: true });
+    fs.cpSync(sourceDir, targetDir, { recursive: true, force: true });
+    fs.writeFileSync(installedStatePath(installRoot, name), JSON.stringify({ enabled: true, installedAt: new Date().toISOString(), source: sourceDir }, null, 2), 'utf-8');
+    return { ok: true, installPath: targetDir, name };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export function uninstallDshBundle(root: string, name: string): { ok: boolean; error?: string } {
+  const clean = sanitizePluginName(name);
+  const targetDir = path.join(dshInstallRoot(root), clean);
+  try {
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export function setDshBundleEnabled(root: string, name: string, enabled: boolean): { ok: boolean; error?: string; enabled?: boolean } {
+  const clean = sanitizePluginName(name);
+  const targetDir = path.join(dshInstallRoot(root), clean);
+  const statePath = installedStatePath(dshInstallRoot(root), clean);
+  if (!fs.existsSync(targetDir)) return { ok: false, error: 'DSH plugin is not installed.' };
+  try {
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(statePath, JSON.stringify({ enabled: !!enabled, updatedAt: new Date().toISOString() }, null, 2), 'utf-8');
+    return { ok: true, enabled: !!enabled };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export function dshToolLayerRuntimeSemantics(): DshToolLayerRuntimeSemantics {
   return {
     plugin: '@deepseek-ai/dsh-tools',

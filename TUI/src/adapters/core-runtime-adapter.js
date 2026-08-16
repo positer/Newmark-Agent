@@ -212,7 +212,8 @@ function createCoreRuntimeAdapter(options = {}) {
     defaultTerminalShell: agent.config.getStr("terminal", "default_shell") || (process.platform === "win32" ? "powershell" : "bash"),
     status: agent.status,
     connected: true,
-    runtimeRoot: root
+    runtimeRoot: root,
+    remoteTouchEnabled: agent.config.getBool('remote', 'touch_enabled')
   });
 
   const snapshotFor = (requested = currentTarget()) => {

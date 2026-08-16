@@ -5872,6 +5872,7 @@ var state = {
   agentBackend: { enabled: false, connected: true, distro: '', pid: 0, error: '' },
   configuredAgentBackend: 'windows',
   agentBackendRestartRequired: false,
+  remoteTouchEnabled: true,
   wslAvailable: false,
   wslDistros: [],
   defaultTerminalShell: 'powershell',
@@ -6052,6 +6053,8 @@ var NEWMARK_I18N = {
     'settings.configReloaded': 'config.json refreshed',
     'settings.runInWsl': 'Agent runtime environment',
     'settings.runInWslDesc': 'Keeps the Windows UI and native desktop tools local while running the persistent Agent kernel, model calls, shell, and file tools inside WSL.',
+    'settings.remoteTouch': 'Mobile remote-touch',
+    'settings.remoteTouchDesc': 'Allow the mobile app to reach this Newmark instance over Tailscale. Turn off to disable remote pairing and sync APIs immediately.',
     'settings.wslDistro': 'WSL distribution',
     'settings.wslConnected': 'WSL backend connected',
     'settings.wslDisconnected': 'WSL backend unavailable',
@@ -6320,6 +6323,8 @@ var NEWMARK_I18N = {
     'plugins.management': 'Skills Management',
     'plugins.market': 'Skills Market',
     'plugins.github': 'GitHub CLI',
+    'plugins.refreshGh': 'Refresh',
+    'plugins.connectGh': 'Connect GitHub',
     'plugins.noInstalled': 'No installed skills.',
     'plugins.projectSkill': 'project skill',
     'plugins.discovering': 'Discovering local and portable skills...',
@@ -6412,6 +6417,14 @@ var NEWMARK_I18N = {
     'plugins.retry': 'Retry',
     'plugins.dshTitle': 'DSH Plugin compatibility',
     'plugins.dshHelp': 'Developer preview: inspect the locally available official DSH CLI and package configuration. Discovery is read-only and never installs, executes, updates, or rewrites DSH.',
+    'plugins.dshInstall': 'Install into Newmark',
+    'plugins.dshInstalled': 'Installed',
+    'plugins.dshUninstall': 'Uninstall',
+    'plugins.dshEnable': 'Enable',
+    'plugins.dshDisable': 'Disable',
+    'plugins.dshInstallOk': 'DSH plugin installed into local .Newmark.',
+    'plugins.dshUninstallOk': 'DSH plugin removed.',
+    'plugins.dshSetOk': 'DSH plugin setting saved.',
     'plugins.dshPreview': 'Developer preview',
     'plugins.dshRescan': 'Rescan',
     'plugins.dshScanning': 'Scanning DSH compatibility...',
@@ -6764,6 +6777,8 @@ var NEWMARK_I18N = {
     'settings.configReloaded': '已刷新 config.json',
     'settings.runInWsl': 'Agent 运行环境',
     'settings.runInWslDesc': 'Windows UI 与桌面原生工具保留在本机，持续 Agent 内核、模型请求、Shell 和文件工具运行在 WSL。',
+    'settings.remoteTouch': '移动端远程触及',
+    'settings.remoteTouchDesc': '允许移动端通过 Tailscale 连接本机 Newmark。关闭后立即禁用远程配对与同步 API。',
     'settings.wslDistro': 'WSL 发行版',
     'settings.wslConnected': 'WSL 后端已连接',
     'settings.wslDisconnected': 'WSL 后端不可用',
@@ -7032,6 +7047,8 @@ var NEWMARK_I18N = {
     'plugins.management': 'Skills 管理',
     'plugins.market': 'Skills Market',
     'plugins.github': 'GitHub CLI',
+    'plugins.refreshGh': '刷新',
+    'plugins.connectGh': '连接 GitHub',
     'plugins.noInstalled': '暂无已安装 skill。',
     'plugins.projectSkill': '项目 skill',
     'plugins.discovering': '正在发现本地和便携 skill...',
@@ -7124,6 +7141,14 @@ var NEWMARK_I18N = {
     'plugins.retry': '重试',
     'plugins.dshTitle': 'DSH Plugin 兼容',
     'plugins.dshHelp': '开发者预览：检查本地官方 DSH CLI 与包配置。发现过程严格只读，绝不会安装、执行、更新或改写 DSH。',
+    'plugins.dshInstall': '安装到 Newmark',
+    'plugins.dshInstalled': '已安装',
+    'plugins.dshUninstall': '卸载',
+    'plugins.dshEnable': '启用',
+    'plugins.dshDisable': '禁用',
+    'plugins.dshInstallOk': 'DSH 插件已安装到本地 .Newmark。',
+    'plugins.dshUninstallOk': 'DSH 插件已移除。',
+    'plugins.dshSetOk': 'DSH 插件设置已保存。',
     'plugins.dshPreview': '开发者预览',
     'plugins.dshRescan': '重新扫描',
     'plugins.dshScanning': '正在扫描 DSH 兼容信息...',
@@ -15076,6 +15101,11 @@ function renderGeneralSettings() {
     '<div class="setting-control"><select id="agent-wsl-distro" onchange="window.setAgentWslDistro(this.value)"' + (state.wslAvailable ? '' : ' disabled') + '>' + (wslOptions || '<option>Ubuntu-24.04</option>') + '</select>' +
     '<div class="setting-desc" id="agent-wsl-status">' + esc(state.agentBackend && state.agentBackend.connected ? t('settings.wslConnected') : t('settings.wslDisconnected')) + '</div></div></div>' : '';
   return wslHtml + '<div class="setting-row">' +
+    '<label class="setting-label" for="remote-touch-enabled">' + esc(t('settings.remoteTouch')) + '</label>' +
+    '<div class="setting-control"><label class="toggle"><input type="checkbox" id="remote-touch-enabled"' + (state.remoteTouchEnabled ? ' checked' : '') + ' onchange="window.setRemoteTouchEnabled(this.checked)"><span class="toggle-track"></span></label>' +
+    '<div class="setting-desc">' + esc(t('settings.remoteTouchDesc')) + '</div></div>' +
+    '</div>' +
+    '<div class="setting-row">' +
     '<span class="setting-label">' + esc(t('settings.configFile')) + '</span>' +
     '<div class="setting-control"><div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">' +
     '<button type="button" class="sec-btn" onclick="window.openGlobalConfigFile()">' + esc(t('settings.openConfig')) + '</button>' +
@@ -15749,6 +15779,15 @@ window.setAgentBackendMode = async function(mode) {
   state.agentBackendRestartRequired = (state.agentBackend && state.agentBackend.enabled ? 'wsl' : 'windows') !== next;
   window.settingsTab('general');
   return true;
+};
+
+window.setRemoteTouchEnabled = async function(value) {
+  var next = !!value;
+  state.remoteTouchEnabled = next;
+  if (api.saveSetting) {
+    try { await api.saveSetting('remote', 'touch_enabled', next); } catch (e) {}
+  }
+  window.settingsTab('general');
 };
 
 window.setAgentWslDistro = async function(value) {
@@ -20311,6 +20350,59 @@ window.openDshOfficial = function(kind) {
   });
 };
 
+function renderDshBundlesMarkup(bundles) {
+  var values = dshCollection(bundles);
+  if (!values.length) return '<div class="plugin-empty">' + esc(t('plugins.dshNone')) + '</div>';
+  return '<div class="dsh-list">' + values.map(function(item, index) {
+    var name = String(item.name || item.id || 'dsh-plugin');
+    var manifestPath = String(item.manifestPath || '');
+    var installed = !!item.installed;
+    var enabled = item.enabled !== false;
+    var actionHtml = installed
+      ? '<div class="dsh-candidate-actions">' +
+        '<label class="toggle"><input type="checkbox" id="dsh-bundle-enabled-' + index + '"' + (enabled ? ' checked' : '') + ' onchange="window.setDshBundleEnabled(' + index + ', this.checked)"><span class="toggle-track"></span></label>' +
+        '<span style="font-size:11px;color:var(--text-dim);">' + esc(t(enabled ? 'plugins.dshEnable' : 'plugins.dshDisable')) + '</span>' +
+        '<button type="button" class="sec-btn" onclick="window.uninstallDshBundle(' + index + ')">' + esc(t('plugins.dshUninstall')) + '</button>' +
+        '<span class="plugin-status-badge">' + esc(t('plugins.dshInstalled')) + '</span></div>'
+      : '<div class="dsh-candidate-actions"><button type="button" class="sec-btn primary" onclick="window.installDshBundle(' + index + ')"' + (manifestPath ? '' : ' disabled') + '>' + esc(t('plugins.dshInstall')) + '</button></div>';
+    return '<div class="dsh-list-item"><strong>' + esc(name) + '</strong>' +
+      '<div class="provider-meta">' + esc(String(item.source || '')) + '</div>' + actionHtml + '</div>';
+  }).join('') + '</div>';
+}
+
+window.installDshBundle = function(index) {
+  var bundle = dshCollection(state.dshCompatibility && state.dshCompatibility.bundles)[index];
+  if (!bundle || !bundle.manifestPath) return;
+  if (!api.installDshBundle) { showUiNotice(t('plugins.dshUnavailable'), 'error', 'dsh-install'); return; }
+  api.installDshBundle(bundle.manifestPath).then(function(result) {
+    if (!result || !result.ok) throw new Error((result && result.error) || t('plugins.dshLoadError'));
+    showUiNotice(t('plugins.dshInstallOk'), 'success', 'dsh-install-' + bundle.name);
+    window.renderDshPlugin();
+  }).catch(function(error) { showUiNotice(error.message || String(error), 'error', 'dsh-install-' + bundle.name); });
+};
+
+window.uninstallDshBundle = function(index) {
+  var bundle = dshCollection(state.dshCompatibility && state.dshCompatibility.bundles)[index];
+  if (!bundle || !bundle.name) return;
+  if (!api.uninstallDshBundle) { showUiNotice(t('plugins.dshUnavailable'), 'error', 'dsh-uninstall'); return; }
+  api.uninstallDshBundle(bundle.name).then(function(result) {
+    if (!result || !result.ok) throw new Error((result && result.error) || t('plugins.dshLoadError'));
+    showUiNotice(t('plugins.dshUninstallOk'), 'success', 'dsh-uninstall-' + bundle.name);
+    window.renderDshPlugin();
+  }).catch(function(error) { showUiNotice(error.message || String(error), 'error', 'dsh-uninstall-' + bundle.name); });
+};
+
+window.setDshBundleEnabled = function(index, enabled) {
+  var bundle = dshCollection(state.dshCompatibility && state.dshCompatibility.bundles)[index];
+  if (!bundle || !bundle.name) return;
+  if (!api.setDshBundleEnabled) { showUiNotice(t('plugins.dshUnavailable'), 'error', 'dsh-toggle'); return; }
+  api.setDshBundleEnabled(bundle.name, !!enabled).then(function(result) {
+    if (!result || !result.ok) throw new Error((result && result.error) || t('plugins.dshLoadError'));
+    showUiNotice(t('plugins.dshSetOk'), 'success', 'dsh-toggle-' + bundle.name);
+    window.renderDshPlugin();
+  }).catch(function(error) { showUiNotice(error.message || String(error), 'error', 'dsh-toggle-' + bundle.name); });
+};
+
 window.renderDshPlugin = function() {
   var panel = document.getElementById('plugin-panel');
   if (!panel || state.pluginActiveTab !== 'dsh') return;
@@ -20368,7 +20460,7 @@ window.renderDshPluginContent = function() {
       '<dt>' + esc(t('plugins.dshUpdateChannel')) + '</dt><dd id="dsh-update-channel">' + esc(dshDisplayValue(updateChannel)) + '</dd></dl>' +
       '<div class="dsh-description">' + esc(t('plugins.dshReadonlyDetail')) + '</div></section>' +
     '<section class="dsh-card" id="dsh-profiles-card"><div class="dsh-card-title">' + esc(t('plugins.dshProfiles')) + '</div>' + dshListMarkup(dsh.profiles) + '</section>' +
-    '<section class="dsh-card" id="dsh-bundles-card"><div class="dsh-card-title">' + esc(t('plugins.dshBundles')) + '</div>' + dshListMarkup(dsh.bundles) + '</section>' +
+    '<section class="dsh-card" id="dsh-bundles-card"><div class="dsh-card-title">' + esc(t('plugins.dshBundles')) + '</div>' + renderDshBundlesMarkup(dsh.bundles) + '</section>' +
     '<section class="dsh-card" id="dsh-warnings-card"><div class="dsh-card-title">' + esc(t('plugins.dshWarnings')) + '</div>' + dshListMarkup(dsh.warnings, t('plugins.dshNone'), true) + '</section>' +
     '<section class="dsh-card" id="dsh-unknown-keys-card"><div class="dsh-card-title">' + esc(t('plugins.dshUnknownKeys')) + '</div>' + dshListMarkup(dsh.unknownKeys) + '</section></div>';
   html += '<section class="plugin-section" id="dsh-config-files"><div class="plugin-section-head"><div class="plugin-section-title">' + esc(t('plugins.dshConfigFiles')) + '</div><span class="plugin-count-badge">' + configFiles.length + '</span></div>' + dshListMarkup(configFiles) + '</section>';
@@ -20860,10 +20952,18 @@ window.removeSkillFromUi = function(name) {
   });
 };
 
+window.refreshGithubOverview = function() {
+  state.githubOverviewHash = '';
+  window.loadGithubOverview('', { force: true });
+};
+
 window.renderGithubCliPanel = function() {
   var panel = document.getElementById('plugin-panel');
   if (!panel) return;
-  panel.innerHTML = '<div id="gh-overview" class="settings-card" style="min-height:220px;padding:14px;"></div>';
+  panel.innerHTML = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">' +
+    '<div style="flex:1;font-size:13px;font-weight:700;color:var(--text);">' + esc(t('plugins.github')) + '</div>' +
+    '<button type="button" class="sec-btn" onclick="window.refreshGithubOverview()">' + iconSvg('refresh-cw', t('plugins.refreshGh'), 'tiny') + ' ' + esc(t('plugins.refreshGh')) + '</button></div>' +
+    '<div id="gh-overview" class="settings-card" style="min-height:220px;padding:14px;"></div>';
   if (state.githubOverviewData) window.renderGithubOverview(state.githubOverviewData);
   else document.getElementById('gh-overview').innerHTML = '<div class="settings-empty">' + esc(t('plugins.runningGh')) + '...</div>';
   window.loadGithubOverview('', { initial: !state.githubOverviewLoaded });
@@ -20873,7 +20973,10 @@ window.renderGithubOverview = function(data) {
   var out = document.getElementById('gh-overview');
   if (!out) return;
   if (!data || !data.ok) {
-    out.innerHTML = '<div class="settings-empty">' + esc(data && data.error ? data.error : t('plugins.ghUnavailable')) + '</div>';
+    out.innerHTML = '<div class="settings-empty">' + esc(data && data.error ? data.error : t('plugins.ghUnavailable')) + '</div>' +
+      '<div style="display:flex;gap:8px;justify-content:center;margin-top:12px;">' +
+      '<button type="button" class="sec-btn primary" onclick="window.githubCopilotLogin()">' + esc(t('plugins.connectGh')) + '</button>' +
+      '<button type="button" class="sec-btn" onclick="window.refreshGithubOverview()">' + esc(t('plugins.refreshGh')) + '</button></div>';
     return;
   }
   var account = data.account || {};
@@ -20919,6 +21022,10 @@ window.githubOverviewSignature = function(data) {
 
 window.loadGithubOverview = function(repo, options) {
   options = options || {};
+  if (options.force) {
+    state.githubOverviewHash = '';
+    state.githubOverviewLoaded = false;
+  }
   var out = document.getElementById('gh-overview');
   repo = String(repo || '').trim();
   if (state.githubOverviewLoading) {
@@ -22473,6 +22580,7 @@ function schedulePostStartupUiRendering() {
       if (s.agentBackend) state.agentBackend = s.agentBackend;
       if (s.configuredAgentBackend) state.configuredAgentBackend = s.configuredAgentBackend;
       if (s.agentBackendRestartRequired !== undefined) state.agentBackendRestartRequired = !!s.agentBackendRestartRequired;
+      if (s.remoteTouchEnabled !== undefined) state.remoteTouchEnabled = !!s.remoteTouchEnabled;
       if (s.wslAvailable !== undefined) state.wslAvailable = !!s.wslAvailable;
       if (Array.isArray(s.wslDistros)) state.wslDistros = s.wslDistros;
       if (s.conversationId) state.activeBackendConversationId = s.conversationId;

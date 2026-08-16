@@ -253,7 +253,8 @@ function createState(options = {}) {
         dialogStyle: snapshot.dialogStyle === "friendly" ? "Friendly" : "Formal",
         feedbackLevel: { ask_more: "Ask more", ask_less: "Ask less", fully_autonomous: "Autonomous" }[snapshot.feedback] || "Default",
         closeBehavior: snapshot.closeBehavior === "minimize" ? "Minimize to tray" : "Close app",
-        expandTools: snapshot.expandToolsDefault !== false
+        expandTools: snapshot.expandToolsDefault !== false,
+        remoteTouch: snapshot.remoteTouchEnabled !== false
       },
       personalization: {
         theme: { light: "Light", system: "System", dark: "Dark" }[String(snapshot.darkMode || "dark").toLowerCase()] || "Dark",

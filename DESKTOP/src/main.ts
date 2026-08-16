@@ -59,7 +59,7 @@ import {
 import { runRuntimeShutdownBarrier } from './core/runtimeShutdown';
 import { markRuntimeLifecycleClean } from './core/runtimeLifecycle';
 import { discoverPluginManifests } from './core/compat';
-import { discoverDshCompatibility } from './core/dshCompatibility';
+import { discoverDshCompatibility, installDshBundle, setDshBundleEnabled, uninstallDshBundle } from './core/dshCompatibility';
 import { McpManager } from './core/mcpManager';
 import { newmarkEditHelpText, newmarkFlowHelpText, newmarkHelpText } from './cli-help';
 
@@ -3341,6 +3341,7 @@ if (isViewerArg) {
           },
         configuredAgentBackend: agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows',
         agentBackendRestartRequired: (agent.config.getBool('agent', 'run_in_wsl') ? 'wsl' : 'windows') !== activeAgentBackendMode,
+        remoteTouchEnabled: agent.config.getBool('remote', 'touch_enabled'),
         wslAvailable: wslDistros.length > 0,
         wslDistros,
       };
@@ -4570,6 +4571,18 @@ if (isViewerArg) {
     });
 
     ipcMain.handle('dsh:discover', async () => discoverDshCompatibility(root));
+
+    ipcMain.handle('dsh:installBundle', async (_event, manifestPath: string) => {
+      return installDshBundle(root, String(manifestPath || ''));
+    });
+
+    ipcMain.handle('dsh:uninstallBundle', async (_event, name: string) => {
+      return uninstallDshBundle(root, String(name || ''));
+    });
+
+    ipcMain.handle('dsh:setBundleEnabled', async (_event, name: string, enabled: boolean) => {
+      return setDshBundleEnabled(root, String(name || ''), enabled === true);
+    });
 
     ipcMain.handle('mcp:upsert', async (_event, input: Record<string, unknown>) => {
       if (!mcpManager) return { ok: false, error: 'MCP manager is unavailable.' };

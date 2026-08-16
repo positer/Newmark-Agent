@@ -891,6 +891,9 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
       default_input: { _description: "Default input mode", _type: "choice", _values: ["guide","next"], value: "guide" },
       auto_archive_on_close: { _description: "Auto archive on close", _type: "boolean", value: true },
     },
+    remote: {
+      touch_enabled: { _description: "Allow mobile devices to reach this Newmark instance over Tailscale", _type: "boolean", value: true },
+    },
     models: {
       providers: { _description: "LLM providers", _type: "array", value: [] },
       default_model: { _description: "Default model", _type: "string", value: "" },

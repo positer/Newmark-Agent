@@ -2,7 +2,6 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { randomBytes } from 'crypto';
 import { normalizeUiBackgroundColor, normalizeUiFontFamily, normalizeUiTheme } from './core/uiPreferences';
 import { spawnSync } from 'child_process';
 import { Agent } from './core/agent';
@@ -13,42 +12,14 @@ import { FlowEngine, FlowWorkflow } from './core/flow';
 import { WorkspaceFileRouter } from './core/workspaceFileRouter';
 import { executeWorkspaceBash } from './core/nativeBash';
 import { currentAppVersion } from './core/installUpdate';
+import { confirmPairing, ensureMobileToken, pairingStatus, tailscaleIpv4 } from './core/mobilePairing';
 
 const PORT = 47890;
 let agent: Agent | null = null;
 let automation: AutomationManager | null = null;
 let workspaceFileRouter: WorkspaceFileRouter | null = null;
 let mobileToken = '';
-
-function ensureMobileToken(root: string): string {
-  const tokenPath = path.join(root, '.newmark-mobile-token');
-  try {
-    const existing = fs.readFileSync(tokenPath, 'utf-8').replace(/\s+/g, '').trim();
-    if (existing.length >= 32) return existing;
-  } catch {
-    // missing token file is normal on first start
-  }
-  const generated = randomBytes(24).toString('hex');
-  try {
-    fs.mkdirSync(root, { recursive: true });
-    fs.writeFileSync(tokenPath, generated, { encoding: 'utf-8', mode: 0o600 });
-  } catch {
-    // keep the generated token for this process even if persistence fails
-  }
-  return generated;
-}
-
-function tailscaleIpv4(): string | null {
-  const exe = process.platform === 'win32' ? 'tailscale.exe' : 'tailscale';
-  try {
-    const result = spawnSync(exe, ['ip', '-4'], { encoding: 'utf-8', windowsHide: true, timeout: 3000 });
-    if (result.error || result.status !== 0) return null;
-    const lines = String(result.stdout || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-    return lines[0] || null;
-  } catch {
-    return null;
-  }
-}
+let appRoot = '';
 
 function mobileAuthorized(req: http.IncomingMessage): boolean {
   if (!mobileToken) return false;
@@ -239,9 +210,15 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
   const pathname = url.pathname;
 
-  if (pathname.startsWith('/api/mobile/') && !mobileAuthorized(req)) {
-    jsonResponse(res, { error: 'Unauthorized' }, 401);
-    return;
+  if (pathname.startsWith('/api/mobile/')) {
+    if (agent && !agent.config.getBool('remote', 'touch_enabled')) {
+      mobileJson(res, { error: 'Remote touch disabled' }, 403);
+      return;
+    }
+    if (!mobileAuthorized(req)) {
+      jsonResponse(res, { error: 'Unauthorized' }, 401);
+      return;
+    }
   }
 
   if (!agent) {
@@ -579,6 +556,22 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         jsonResponse(res, { content: agent.readArchive(aName2) });
         return;
       }
+      case '/api/mobile/pair-confirm': {
+        let pairingId = url.searchParams.get('pairingId') || '';
+        if (!pairingId) {
+          try { pairingId = String((JSON.parse(body || '{}') as Record<string, unknown>).pairingId || ''); } catch {}
+        }
+        const result = confirmPairing(appRoot, pairingId, mobileToken);
+        mobileJson(res, result.ok
+          ? { ok: true, status: result.status }
+          : { ok: false, error: result.error, status: result.status },
+          result.ok ? 200 : 401);
+        return;
+      }
+      case '/api/mobile/pair-status': {
+        mobileJson(res, { ok: true, status: pairingStatus(appRoot) });
+        return;
+      }
       case '/api/mobile/hello': {
         mobileJson(res, {
           ok: true,
@@ -661,6 +654,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
 
 function startServer(root: string): void {
   mobileToken = ensureMobileToken(root);
+  appRoot = root;
   agent = new Agent(root);
   workspaceFileRouter = new WorkspaceFileRouter(() => path.resolve(agent?.workspace.current?.path || root));
   automation = new AutomationManager(agent.config, async (prompt, model, item) => {

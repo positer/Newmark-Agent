@@ -154,6 +154,7 @@ function createCoreRuntimeAdapter(options = {}) {
   const { AutomationManager } = require(path.join(desktopDist, "core", "automation.js"));
   const { FlowEngine } = require(path.join(desktopDist, "core", "flow.js"));
   const installUpdate = require(path.join(desktopDist, "core", "installUpdate.js"));
+  const mobilePairing = require(path.join(desktopDist, "core", "mobilePairing.js"));
   const root = path.resolve(options.root || path.join(os.homedir(), ".Newmark"));
   const workspacePath = safeWorkspacePath(root, options.workspacePath || process.cwd());
   ensureRuntimeRoot(root, configModule);
@@ -472,6 +473,20 @@ function createCoreRuntimeAdapter(options = {}) {
     },
     updateVersion() {
       return { version: installUpdate.currentAppVersion(), root };
+    },
+    async pairingQr() {
+      const qr = await mobilePairing.pairingQrAscii(root);
+      return {
+        ascii: qr.ascii,
+        url: qr.session.url,
+        pairingId: qr.session.pairingId,
+        expiresAt: qr.session.expiresAt,
+        tokenFile: mobilePairing.pairingTokenPath(root),
+        tailscaleIpv4: mobilePairing.tailscaleIpv4(),
+      };
+    },
+    pairingStatus() {
+      return mobilePairing.pairingStatus(root);
     },
     updateCheckGithub(input = {}) {
       return installUpdate.checkGitHubUpdate(input.repo, input.tag, input.asset, input.token);

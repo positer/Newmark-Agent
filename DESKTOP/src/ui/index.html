@@ -6565,6 +6565,9 @@ var NEWMARK_I18N = {
     'status.question': 'Question',
     'option.manualPlaceholder': 'Or type your own answer...',
     'option.manualSubmit': 'Submit',
+    'mobile.pair': 'Pair mobile device',
+    'mobile.pairDesc': 'Scan this QR code with the Newmark mobile app over Tailscale. The pairing token is saved after the first bind.',
+    'mobile.pairTokenFile': 'Token file',
     'subagent.empty': 'No retained subagent records',
     'subagent.openHistory': 'Open subagent history',
     'subagent.historyTitle': 'Subagent history',
@@ -7274,6 +7277,9 @@ var NEWMARK_I18N = {
     'status.question': '问题',
     'option.manualPlaceholder': '或输入自己的答案...',
     'option.manualSubmit': '提交',
+    'mobile.pair': '配对移动设备',
+    'mobile.pairDesc': '使用 Newmark 移动端通过 Tailscale 扫描二维码。首次绑定后保存配对令牌。',
+    'mobile.pairTokenFile': '令牌文件',
     'subagent.empty': '暂无保留的 subagent 记录',
     'subagent.openHistory': '打开 subagent 历史',
     'subagent.historyTitle': 'Subagent 历史',
@@ -21695,6 +21701,47 @@ function guiHasSwitchableBranch() {
   return branches.length > 1;
 }
 
+window.showMobilePairing = function() {
+  if (!api.mobilePairingQr) {
+    showUiNotice('Mobile pairing API unavailable', 'error', 'mobile-pairing');
+    return;
+  }
+  window.openSubWin(t('mobile.pair'), '<div style="text-align:center;color:var(--text-dim);">' + esc(t('common.loading')) + '</div>');
+  api.mobilePairingQr().then(function(p) {
+    if (!p || !p.ok) throw new Error((p && p.error) || 'Pairing failed');
+    var expiresLabel = p.expiresAt ? Math.max(0, Math.round((p.expiresAt - Date.now()) / 1000)) + 's' : '';
+    var html = '<div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:4px 2px;">' +
+      '<img src="' + escAttr(p.dataUrl) + '" alt="Pairing QR" style="width:min(420px,100%);max-width:100%;border-radius:12px;background:#fff;padding:10px;">' +
+      '<div style="font-size:12px;color:var(--text);word-break:break-all;text-align:center;">' + esc(p.url) + '</div>' +
+      '<div style="font-size:11px;color:var(--text-dim);">' + esc(t('mobile.pairTokenFile')) + ': ' + esc(p.tokenFile) + '</div>' +
+      '<div style="font-size:11px;color:var(--text-dim);">Tailscale: ' + esc(p.tailscaleIpv4 || '-') + '</div>' +
+      (expiresLabel ? '<div style="font-size:11px;color:var(--text-dim);">' + esc('窗口期: ' + expiresLabel) + '</div>' : '') +
+      '<div style="font-size:11px;color:var(--text-dim);text-align:center;max-width:420px;">' + esc(t('mobile.pairDesc')) + '</div>' +
+      '</div>';
+    window.openSubWin(t('mobile.pair'), html);
+    // 连接成功后自动关闭二维码窗口
+    if (api.mobilePairingStatus) {
+      var poll = setInterval(function() {
+        api.mobilePairingStatus().then(function(s) {
+          var st = s && s.status;
+          if (!st) return;
+          if (st.confirmed) {
+            clearInterval(poll);
+            window.closeSubWin();
+            showUiNotice('Mobile device connected', 'success', 'mobile-pairing-done');
+          } else if (st.expired || !st.active) {
+            clearInterval(poll);
+            window.closeSubWin();
+            showUiNotice('Pairing window expired', 'error', 'mobile-pairing-expired');
+          }
+        }).catch(function() {});
+      }, 1000);
+    }
+  }).catch(function(err) {
+    showUiNotice(err.message || String(err), 'error', 'mobile-pairing');
+  });
+};
+
 function guiToggleTheme() {
   var current = state.theme === 'light' ? 'light' : 'dark';
   window.setTheme(current === 'light' ? 'dark' : 'light');
@@ -21717,6 +21764,7 @@ var NEWMARK_GUI_COMMANDS = [
   guiCommand('workspace.manager', 'workspace.manager', 'workspace', { bindings:[{ keys:'Mod+K W', scope:'whenNotEditing' }], run:function(){ window.openWorkspaceManager(); } }),
   guiCommand('workspace.new', 'workspace.new', 'workspace', { run:function(){ window.showNewWorkspaceDialog(); } }),
   guiCommand('workspace.settings', 'workspace.settingsTitle', 'workspace', { run:function(){ window.openWsSettings(); }, available:function(){ return !!state.currentWorkspaceId; } }),
+  guiCommand('mobile.pair', 'mobile.pair', 'general', { run:function(){ window.showMobilePairing(); } }),
 
   guiCommand('view.plugins', 'plugins.title', 'navigation', { bindings:[{ keys:'Mod+K P', scope:'whenNotEditing' }], run:function(){ window.showPluginList(); } }),
   guiCommand('view.plugins.mcp', 'plugins.mcp', 'navigation', { run:function(){ window.showPluginList('mcp'); } }),

@@ -132,6 +132,8 @@ contextBridge.exposeInMainWorld('api', {
   memoryLabUpdate: (input: Record<string, unknown>) => ipcRenderer.invoke('memoryLab:update', input),
   memoryLabReindex: () => ipcRenderer.invoke('memoryLab:reindex'),
   updateVersion: () => ipcRenderer.invoke('update:version'),
+  mobilePairingQr: () => ipcRenderer.invoke('mobile:pairingQr'),
+  mobilePairingStatus: () => ipcRenderer.invoke('mobile:pairingStatus'),
   updateCheckGithub: (input: Record<string, unknown>) => ipcRenderer.invoke('update:checkGithub', input),
   updateApplyGithub: (input: Record<string, unknown>) => ipcRenderer.invoke('update:applyGithub', input),
   updateInstallLocal: (input: Record<string, unknown>) => ipcRenderer.invoke('update:installLocal', input),

@@ -1154,6 +1154,17 @@ function overlayLines(state, width, p) {
       `${p.cyan}Press Esc or ? to close${p.reset}`
     ], Math.min(78, width - 4), p, "Keyboard shortcuts");
   }
+  if (state.overlay === "pair") {
+    const qrLines = Array.isArray(state.pairingQrLines) ? state.pairingQrLines : [];
+    const rows = [
+      ...qrLines,
+      "",
+      ...(state.pairingUrl ? [`${p.muted}${state.pairingUrl}${p.reset}`] : []),
+      ...(state.pairingTokenFile ? [`${p.muted}Token: ${state.pairingTokenFile}${p.reset}`] : []),
+      `${p.cyan}Scan with the Newmark mobile app · Esc close${p.reset}`
+    ];
+    return card(rows, Math.min(88, width - 4), p, "Pair mobile device");
+  }
   if (state.overlay === "palette") {
     const commands = filteredCommands(state);
     const paletteViewport = Math.min(7, Math.max(1, commands.length));

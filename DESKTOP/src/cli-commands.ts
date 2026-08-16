@@ -8,6 +8,7 @@ import { discoverAgentPresets, discoverOpenCodeTools, discoverPluginManifests, d
 import { discoverDshCompatibility } from './core/dshCompatibility';
 import { MemoryLabManager } from './core/memoryLab';
 import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, executeManagedMsiInstall, installUpdate, planManagedMsiInstall } from './core/installUpdate';
+import { pairingQrAscii, pairingStatus, pairingTokenPath } from './core/mobilePairing';
 
 type JsonObject = Record<string, unknown>;
 type FuzzyEnvDefaults = {
@@ -18,7 +19,7 @@ type FuzzyEnvDefaults = {
   models?: string[];
 };
 
-export const CLI_COMMANDS = ['state', 'tool', 'send', 'validate-models', 'fuzzy-inject', 'skills-market', 'memory-lab', 'install-update', 'compat', 'compat-tool'] as const;
+export const CLI_COMMANDS = ['state', 'tool', 'send', 'validate-models', 'fuzzy-inject', 'skills-market', 'memory-lab', 'install-update', 'compat', 'compat-tool', 'pair', 'remote'] as const;
 type CliCommand = typeof CLI_COMMANDS[number];
 
 const CLI_COMMAND_HELP: Record<CliCommand, string[]> = {
@@ -50,6 +51,14 @@ const CLI_COMMAND_HELP: Record<CliCommand, string[]> = {
   'memory-lab': [
     'Usage: Newmark.exe memory-lab [--read|--component <name>|--update ...|--reindex] [--root <dir>]',
     'Read or update the local Memory Lab index and components.',
+  ],
+  pair: [
+    'Usage: Newmark.exe pair [--root <dir>]',
+    'Print a Tailscale pairing QR code and URL for the Newmark mobile app.',
+  ],
+  remote: [
+    'Usage: Newmark.exe remote --on|--off [--root <dir>]',
+    'Enable or disable mobile remote-touch over Tailscale.',
   ],
   'install-update': [
     'Usage: Newmark.exe install-update (--source <path>|--check-github|--from-github|--msi <path>) [options] [--root <dir>]',
@@ -689,6 +698,43 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
     }
     agent.setMode(requestedMode as AgentMode);
   }
+  if (command === 'pair') {
+    const qr = await pairingQrAscii(root);
+    safeStdout(qr.ascii + '\n');
+    safeStdout(`\nPairing URL: ${qr.session.url}\n`);
+    safeStdout(`Token file: ${pairingTokenPath(root)}\n`);
+    const expiresIn = Math.max(0, Math.round((qr.session.expiresAt - Date.now()) / 1000));
+    safeStdout(`Window: ${expiresIn}s — scan with the Newmark mobile app. Waiting for confirmation...\n`);
+    const deadline = qr.session.expiresAt + 1000;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const status = pairingStatus(root);
+      if (status.confirmed) {
+        safeStdout('\n✓ Paired successfully. QR window closed.\n');
+        return true;
+      }
+      if (status.expired || !status.active) {
+        safeStdout("\n✗ Pairing window expired. Run 'pair' again for a new QR.\n");
+        return false;
+      }
+    }
+    return false;
+  }
+
+  if (command === 'remote') {
+    const on = args.includes('--on');
+    const off = args.includes('--off');
+    if (on === off) {
+      safeStderr('Usage: Newmark.exe remote --on|--off\n');
+      process.exitCode = 2;
+      return true;
+    }
+    agent.config.set('remote', 'touch_enabled', on);
+    agent.config.save();
+    safeStdout(`Remote touch ${on ? 'enabled' : 'disabled'}\n`);
+    return true;
+  }
+
   if (command === 'state') {
     printJson(safeState(agent, root));
     return true;
@@ -1102,6 +1148,7 @@ export function cliCommandUsage(): string {
     '  Newmark.exe fuzzy-inject [--name <provider>] [--env-file <PowerShell-or-dotenv-file>|--env-file-env <ENV_WITH_FILE_PATH>] [--endpoint-env <ENV_WITH_BASE_URL>] [--key-env <ENV_WITH_API_KEY>] [--protocol openai|anthropic] [--preview-only] [--root <dir>]',
     '  Newmark.exe skills-market [--query <text>|--sources|--add-source --name <name> (--url <url>|--path <path>) [--type json|skill-url|local-dir]|--remove-source <id>|--enable-source <id>|--disable-source <id>] [--root <dir>]',
     '  Newmark.exe memory-lab [--read|--component <name>|--update --name <name> --description <text> --tags <csv> --content-file <path> [--folder]|--reindex] [--root <dir>]',
+    '  Newmark.exe pair [--root <dir>]',
     '  Newmark.exe install-update (--source <portable-exe-or-unpacked-dir>|--check-github|--from-github|--msi <path>) [--repo owner/name] [--tag vX.Y.Z] [--asset name] [--target <dir>] [--target-file <path>] [--expected-version <version>] [--preserve csv] [--dry-run] [--confirm-stop|--confirm-remove-legacy|--yes] [--no-uninstall-previous] [--no-elevate] [--log-dir <dir>] [--root <dir>]',
     '  Newmark.exe compat [--target all|tools|plugins|marketplaces|skills|agents|subagents] [--root <dir>]',
     '  Newmark.exe compat-tool --list | --name <opencode-tool> [json-args | --args-file path] [--root <dir>]',

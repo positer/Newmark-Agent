@@ -315,6 +315,7 @@ const commands = [
   { label: "Open Automations", hint: "", action: "view:automation" },
   { label: "Open WorkFlow", hint: "", action: "view:workflow" },
   { label: "Open Settings", hint: "", action: "view:settings" },
+  { label: "Show mobile pairing QR", hint: "", action: "pair-mobile" },
   { label: "New conversation", hint: "N", action: "new-chat" },
   { label: "Toggle theme", hint: "T", action: "theme" },
   { label: "Keyboard shortcuts", hint: "?", action: "help" }

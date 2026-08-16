@@ -21,6 +21,7 @@ import { invalidTopLevelArgument, isVersionArgument, unknownTopLevelCommand } fr
 import { sanitizeProvidersForState } from './core/config';
 import { MemoryLabManager } from './core/memoryLab';
 import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, executeManagedMsiInstall, installUpdate, planManagedMsiInstall } from './core/installUpdate';
+import { pairingQrDataUrl, pairingStatus, pairingTokenPath, tailscaleIpv4 } from './core/mobilePairing';
 import {
   detachTerminalTakeoverSession,
   normalizeTerminalTakeoverOwner,
@@ -4639,6 +4640,23 @@ if (isViewerArg) {
 
     ipcMain.handle('update:version', async () => {
       return { ok: true, version: currentAppVersion(), root };
+    });
+
+    ipcMain.handle('mobile:pairingQr', async () => {
+      const qr = await pairingQrDataUrl(root);
+      return {
+        ok: true,
+        url: qr.session.url,
+        dataUrl: qr.dataUrl,
+        pairingId: qr.session.pairingId,
+        expiresAt: qr.session.expiresAt,
+        tokenFile: pairingTokenPath(root),
+        tailscaleIpv4: tailscaleIpv4(),
+      };
+    });
+
+    ipcMain.handle('mobile:pairingStatus', async () => {
+      return { ok: true, status: pairingStatus(root) };
     });
 
     ipcMain.handle('update:checkGithub', async (_event, input: Record<string, unknown> = {}) => {

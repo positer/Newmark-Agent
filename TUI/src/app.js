@@ -93,6 +93,46 @@ function executeAction(state, action) {
     const appearance = applyThemeAppearance(state, state.theme === "dark" ? "Light" : "Dark");
     state.adapter.saveConfig(appearance);
     state.notice = `${state.theme === "dark" ? "Dark" : "Light"} terminal theme`;
+  } else if (action === "pair-mobile") {
+    state.overlay = "pair";
+    state.pairingQrLines = ["Loading pairing QR…"];
+    state.pairingUrl = "";
+    state.pairingTokenFile = "";
+    if (typeof state.requestPaint === "function") state.requestPaint();
+    if (typeof state.adapter.pairingQr !== "function") {
+      state.pairingQrLines = ["Pairing QR is unavailable in this adapter."];
+      if (typeof state.requestPaint === "function") state.requestPaint();
+      return;
+    }
+    Promise.resolve(state.adapter.pairingQr())
+      .then((pairing) => {
+        state.pairingQrLines = String(pairing?.ascii || "").split(/\r?\n/);
+        state.pairingUrl = String(pairing?.url || "");
+        state.pairingTokenFile = String(pairing?.tokenFile || "");
+        if (typeof state.requestPaint === "function") state.requestPaint();
+        if (typeof state.adapter.pairingStatus === "function") {
+          if (state._pairingPoll) clearInterval(state._pairingPoll);
+          state._pairingPoll = setInterval(() => {
+            const status = state.adapter.pairingStatus();
+            if (!status) return;
+            if (status.confirmed) {
+              clearInterval(state._pairingPoll);
+              state.overlay = null;
+              state.notice = "Mobile device connected";
+              if (typeof state.requestPaint === "function") state.requestPaint();
+            } else if (status.expired || !status.active) {
+              clearInterval(state._pairingPoll);
+              state.overlay = null;
+              state.notice = "Pairing window expired";
+              if (typeof state.requestPaint === "function") state.requestPaint();
+            }
+          }, 1000);
+        }
+      })
+      .catch((error) => {
+        state.pairingQrLines = [`Pairing failed: ${error?.message || error}`];
+        if (typeof state.requestPaint === "function") state.requestPaint();
+      });
   } else if (action === "help") {
     state.overlay = "help";
   }
@@ -166,6 +206,7 @@ function start(options = {}) {
     return;
   }
   const state = createState({ adapter });
+  state.requestPaint = () => paint();
   let timer = null;
   let animationTimer = null;
   let closing = false;

@@ -4876,6 +4876,26 @@ async function main() {
   agent.config.set('models', 'default_model', '');
   (agent as any).model = 'near-limit-context';
 
+  // Same-named models across providers must resolve the context window through
+  // the active qualified deployment instead of falling back to 128000 when the
+  // bare name is ambiguous.
+  {
+    const sameNameRoot = path.join(TEST_DIR, 'same-name-context-window');
+    fs.rmSync(sameNameRoot, { recursive: true, force: true });
+    const sameNameAgent = new Agent(sameNameRoot);
+    const sameNameProviderA = sameNameAgent.config.upsertProvider('same-name-a', 'https://same-name-a.invalid/v1', 'same-a-key');
+    const sameNameProviderB = sameNameAgent.config.upsertProvider('same-name-b', 'https://same-name-b.invalid/v1', 'same-b-key');
+    sameNameAgent.config.addModelToProvider('same-name-a', 'shared-model', 'Shared A', 'Same-named context fixture A');
+    sameNameAgent.config.addModelToProvider('same-name-b', 'shared-model', 'Shared B', 'Same-named context fixture B');
+    sameNameAgent.config.updateModel('same-name-a', 'shared-model', { max_tokens: 32000 });
+    sameNameAgent.config.updateModel('same-name-b', 'shared-model', { max_tokens: 96000 });
+    assert(sameNameAgent.config.findModel('shared-model') === undefined, 'context window: bare name is ambiguous when two providers expose the same model name');
+    sameNameAgent.setModel(`deployment:${encodeURIComponent(sameNameProviderA)}:${encodeURIComponent('shared-model')}`);
+    assert(sameNameAgent.contextWindow().maxTokens === 32000, 'context window: fixed same-named model resolves the active qualified deployment window');
+    sameNameAgent.setModel(`deployment:${encodeURIComponent(sameNameProviderB)}:${encodeURIComponent('shared-model')}`);
+    assert(sameNameAgent.contextWindow().maxTokens === 96000, 'context window: switching to the other same-named deployment updates the window');
+    fs.rmSync(sameNameRoot, { recursive: true, force: true });
+  }
 
 
   agent.config.addModelToProvider('context-prov', 'long-context-switch-source', 'Long Context Switch Source', 'Large context source model');

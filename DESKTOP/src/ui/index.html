@@ -22402,6 +22402,17 @@ function schedulePostStartupUiRendering() {
         var modelResult = await api.setModel(state.model);
         if (modelResult != null) state._syncedModel = state.model;
       }
+      // The context ring/inspector must immediately reflect the newly selected
+      // model's configured context window rather than waiting for the next send.
+      if (api.getState) {
+        var ctxTarget = currentConversationTarget();
+        api.getState(ctxTarget).then(function(s) {
+          if (s && s.contextWindow !== undefined && isActiveConversationTarget(ctxTarget) && isViewingRuntimeConversationBranch(ctxTarget)) {
+            state.contextWindow = s.contextWindow;
+            window.renderContextWindow();
+          }
+        }).catch(function(){});
+      }
     });
   }
 

@@ -106,6 +106,9 @@ async function handle(request: UtilityAgentRequest): Promise<unknown> {
   if (request.method === 'set_mode') {
     return kernel.setMode(checkedTarget(request.params.target), request.params.mode);
   }
+  if (request.method === 'set_model') {
+    return kernel.setModel(checkedTarget(request.params.target), request.params.model);
+  }
   if (request.method === 'set_input_mode') {
     return kernel.setInputMode(checkedTarget(request.params.target), request.params.mode);
   }

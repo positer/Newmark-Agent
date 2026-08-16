@@ -189,6 +189,9 @@ async function handle(request: WslAgentRequest): Promise<unknown> {
   if (request.method === 'set_mode') {
     return kernel.setMode(requestTarget(request.params), request.params.mode);
   }
+  if (request.method === 'set_model') {
+    return kernel.setModel(requestTarget(request.params), request.params.model);
+  }
   if (request.method === 'set_input_mode') {
     return kernel.setInputMode(requestTarget(request.params), request.params.mode);
   }

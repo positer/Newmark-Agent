@@ -23,6 +23,7 @@ export interface WslTargetRuntimeClient {
   rateAutoRoute?(target: ConversationRuntimeTarget, score: number, routeId?: string): Promise<WslAutoRouteRatingResult>;
   setWorkRunExpanded(target: ConversationRuntimeTarget, runId: string, expanded: boolean): Promise<boolean>;
   setMode?(target: ConversationRuntimeTarget, mode: AgentMode): Promise<AgentMode>;
+  setModel?(target: ConversationRuntimeTarget, model: string): Promise<string>;
   setInputMode?(target: ConversationRuntimeTarget, mode: string): Promise<'guide' | 'next'>;
   toggleGoalPause?(target: ConversationRuntimeTarget): Promise<boolean>;
   clearGoal?(target: ConversationRuntimeTarget): Promise<boolean>;
@@ -323,6 +324,17 @@ export class WslAgentRuntimePool {
     if (!entry?.client.setMode) return null;
     try {
       return await entry.client.setMode(normalized, mode);
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async setModel(target: ConversationRuntimeTarget, model: string): Promise<string | null> {
+    const normalized = normalizeConversationTarget(target);
+    const entry = await this.acquireExisting(normalized);
+    if (!entry?.client.setModel) return null;
+    try {
+      return await entry.client.setModel(normalized, model);
     } finally {
       this.release(entry, true);
     }

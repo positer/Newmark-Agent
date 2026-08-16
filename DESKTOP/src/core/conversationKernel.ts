@@ -537,6 +537,24 @@ export class ConversationKernel {
     return runner.mode;
   }
 
+  setModel(target: ConversationTargetInput, model: string): string {
+    const normalized = this.normalizeTarget(target);
+    const runtime = this.findRuntime(normalized);
+    const runner = runtime?.runner || this.createRunner(normalized);
+    if (!runtime || !runtime.activePromise) {
+      // No Build block is running: the selection applies immediately.
+      runner.setModel(model);
+    } else {
+      // A Build block is running. The in-flight block keeps its current model
+      // until the next Guide/Next re-enters it; record the newly selected model
+      // as the pending choice so the next dequeue switches to it. This is the
+      // "model switch does not take effect mid-block" contract.
+      runtime.options.model = model;
+    }
+    runner.saveWorkspaceConversationState(true);
+    return runner.model;
+  }
+
   async toggleGoalPause(target: ConversationTargetInput): Promise<boolean> {
     const normalized = this.normalizeTarget(target);
     let runtime = this.findRuntime(normalized);
@@ -664,15 +682,20 @@ export class ConversationKernel {
     queueMode: ConversationQueueMode = 'followUp',
   ): Promise<ConversationKernelRunResult> {
     const normalized = this.normalizeTarget(target);
+    const active = this.findRuntime(normalized);
+    if (active?.activePromise) {
+      // A Build block is already running: queue this message. Queued messages
+      // carry no send-time model/mode; the running block keeps its settings and
+      // the next dequeue follows the current conversation selection (which
+      // setModel/setMode already recorded on runtime.options).
+      this.enqueueSameSession(active, message, queueMode);
+      this.activateAcceptedGoal(active, typeof message === 'string' ? '' : message.goalObjective);
+      return active.activePromise;
+    }
+
     const runtime = this.runtime(normalized, options);
     runtime.options = { ...options };
     this.applyOptions(runtime.runner, options);
-
-    if (runtime.activePromise) {
-      this.enqueueSameSession(runtime, message, queueMode);
-      this.activateAcceptedGoal(runtime, typeof message === 'string' ? '' : message.goalObjective);
-      return runtime.activePromise;
-    }
 
     runtime.generation = (this.generations.get(runtime.runtimeKey) || runtime.generation || 0) + 1;
     this.generations.set(runtime.runtimeKey, runtime.generation);
@@ -840,7 +863,22 @@ export class ConversationKernel {
     return this.result(runtime, lastTokens);
   }
 
+  /**
+   * Apply a model selection recorded while a Build block was running. The
+   * in-flight block never switches mid-block; the switch takes effect the next
+   * time a queued Guide/Next re-enters the block, and only when the pending
+   * selection actually differs from the runner's current selection.
+   */
+  private syncPendingModel(runtime: ConversationRuntime): void {
+    const pending = String(runtime.options.model || '').trim();
+    if (!pending) return;
+    if (pending === runtime.runner.model || pending === runtime.runner.modelSelectionValue()) return;
+    runtime.runner.setModel(pending);
+    runtime.options.model = runtime.runner.modelSelectionValue();
+  }
+
   private async runSingle(runtime: ConversationRuntime, message: string | AgentPromptMessage, continuationMode?: ConversationQueueMode): Promise<StreamToken[]> {
+    this.syncPendingModel(runtime);
     this.consumeQueuedMessage(runtime, typeof message === 'string' ? message : message.text);
     const timeoutMs = this.processTimeoutMs(runtime);
     if (timeoutMs <= 0) {

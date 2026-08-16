@@ -5555,8 +5555,19 @@ export class Agent {
   }
 
   private resolveWindowModel(modelName: string): ReturnType<ConfigManager['allModels']>[number] | undefined {
-    if (modelName !== 'auto') return this.config.findModel(modelName);
-    return this.activeModelConfig() || this.config.findModel(this.config.getStr('models', 'default_model'));
+    // The context window (display ring, inspector, and compaction trigger) must
+    // resolve the deployment that is actually running. For the active selection
+    // — auto or a fixed model — resolve through the active deployment so a
+    // qualified selection or two same-named models across providers never fall
+    // through to the 128000 default. Only a caller-supplied foreign name (for
+    // example a validation probe against another model) resolves by bare name.
+    if (modelName === 'auto' || modelName === this.model || modelName === this.activeModelName()) {
+      const active = this.activeModelConfig();
+      if (active) return active;
+    }
+    const byName = this.config.findModel(modelName);
+    if (byName) return byName;
+    return this.config.findModel(this.config.getStr('models', 'default_model'));
   }
 
   private contextMaxTokens(modelName = this.model): number {

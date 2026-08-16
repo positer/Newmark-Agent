@@ -1190,6 +1190,11 @@ export class ElectronUtilityAgentClient {
     return await this.request('set_mode', { target: this.target, mode }, 5_000) as AgentMode;
   }
 
+  async setModel(model: string): Promise<string> {
+    await this.start();
+    return await this.request('set_model', { target: this.target, model }, 5_000) as string;
+  }
+
   async setInputMode(mode: string): Promise<'guide' | 'next'> {
     await this.start();
     return await this.request('set_input_mode', { target: this.target, mode }, 5_000) as 'guide' | 'next';

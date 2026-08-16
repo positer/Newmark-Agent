@@ -72,6 +72,7 @@ export type UtilityAgentRequest =
   | { id: string; method: 'rate_auto_route'; params: { target: ConversationRuntimeTarget; score: number; routeId?: string } }
   | { id: string; method: 'set_work_run_expanded'; params: { target: ConversationRuntimeTarget; runId: string; expanded: boolean } }
   | { id: string; method: 'set_mode'; params: { target: ConversationRuntimeTarget; mode: AgentMode } }
+  | { id: string; method: 'set_model'; params: { target: ConversationRuntimeTarget; model: string } }
   | { id: string; method: 'set_input_mode'; params: { target: ConversationRuntimeTarget; mode: string } }
   | { id: string; method: 'toggle_goal_pause'; params: { target: ConversationRuntimeTarget } }
   | { id: string; method: 'clear_goal'; params: { target: ConversationRuntimeTarget } }

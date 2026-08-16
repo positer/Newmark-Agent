@@ -3047,16 +3047,29 @@ if (isViewerArg) {
 
     ipcMain.handle('agent:setModel', async (_event, model: string) => {
       if (agent) {
-        const before = agent.model;
+        // Compare the resolved selection (qualified deployment or 'auto')
+        // rather than the bare model name, so switching between two
+        // same-named models on different providers is still recognized as a
+        // real change.
+        const before = agent.modelSelectionValue();
         agent.setModel(model, true);
+        const after = agent.modelSelectionValue();
         // Compression and kernel reset only make sense when the model actually
         // changed. The renderer sends this on every prompt, so an unchanged
         // selection must not trigger a context compression round (which can
         // run an extra model call on large histories).
-        if (agent.model !== before) {
+        if (after !== before) {
           await agent.compressForModelSwitch();
           resetConversationKernel();
         }
+        // Propagate the selection to the target-bound runtime. A running Build
+        // block keeps its current model until the next Guide/Next re-enters it;
+        // the runtime records the new selection as pending so the context
+        // window and the next dequeue both follow the newly selected model.
+        const target = conversationRuntimeTarget(agent.activeConversationId || 'default');
+        ensureConversationKernel(root)?.setModel(target, model);
+        if (wslBackendEnabled()) await ensureWslConversationPool()?.setModel(target, model);
+        else await ensureElectronUtilityPool()?.setModel(target, model);
       }
       return agent?.model;
     });

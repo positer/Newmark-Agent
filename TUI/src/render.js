@@ -689,29 +689,34 @@ function modelView(state, width, p) {
   const isCurrent = (selection) => selection.kind === current.kind
     && (selection.kind === "auto"
       || (selection.providerId === current.providerId && selection.modelId === current.modelId));
-  return [
+  const rows = [
     ...conversationContext(state, p, "Model and reasoning effort"),
-    `${p.bold}${tr(state, "Reasoning effort")}${p.reset}   ${p.muted}${tr(state, "Shared GUI/TUI request tier · ←/→ changes section")}${p.reset}`,
-    ...INTELLIGENCE_TIERS.map((tier, index) => {
-      const style = state.focusRegion === "content" && state.contentColumn === 0 && index === state.selected ? `${p.selected}${p.bold}` : "";
-      if (style) state.contentFocusLine = 5 + index;
-      return `${style} ${tier === currentTier ? `${p.cyan}●${p.reset}` : "○"} ${tier}${p.reset}`;
-    }),
+    `${p.bold}${tr(state, "Reasoning effort")}${p.reset}   ${p.muted}${tr(state, "Shared GUI/TUI request tier · ←/→ changes section")}${p.reset}`
+  ];
+  const tierStart = rows.length;
+  INTELLIGENCE_TIERS.forEach((tier, index) => {
+    const style = state.focusRegion === "content" && state.contentColumn === 0 && index === state.selected ? `${p.selected}${p.bold}` : "";
+    if (style) state.contentFocusLine = tierStart + index;
+    rows.push(`${style} ${tier === currentTier ? `${p.cyan}●${p.reset}` : "○"} ${tier}${p.reset}`);
+  });
+  rows.push(
     "",
     `${p.bold}${tr(state, "Deployment")}${p.reset}   ${p.muted}${tr(state, "Used by this conversation, including its Plan and Subagents")}${p.reset}`,
-    "",
-    ...options.flatMap((option, index) => {
-      const style = state.focusRegion === "content" && state.contentColumn === 1 && index === state.selected ? `${p.selected}${p.bold}` : "";
-      if (style) state.contentFocusLine = 14 + index * 2;
-      const marker = isCurrent(option.selection) ? `${p.cyan}●${p.reset}` : "○";
-      return [
-        `${style} ${marker} ${pad(option.label, Math.max(18, Math.min(32, width - 24)))} ${p.muted}${option.provider}${p.reset}`,
-        `   ${p.muted}${truncate(option.description, Math.max(20, width - 5))}${p.reset}`
-      ];
-    }),
+    ""
+  );
+  const deploymentStart = rows.length;
+  options.forEach((option, index) => {
+    const style = state.focusRegion === "content" && state.contentColumn === 1 && index === state.selected ? `${p.selected}${p.bold}` : "";
+    if (style) state.contentFocusLine = deploymentStart + index * 2;
+    const marker = isCurrent(option.selection) ? `${p.cyan}●${p.reset}` : "○";
+    rows.push(`${style} ${marker} ${pad(option.label, Math.max(18, Math.min(32, width - 24)))} ${p.muted}${option.provider}${p.reset}`);
+    rows.push(`   ${p.muted}${truncate(option.description, Math.max(20, width - 5))}${p.reset}`);
+  });
+  rows.push(
     "",
     `${p.muted}${tr(state, "Enter applies the focused tier or deployment. Effort persists globally; deployments remain per conversation.")}${p.reset}`
-  ];
+  );
+  return rows;
 }
 
 function flowBarView(state, width, p) {
@@ -1266,8 +1271,11 @@ function render(state, columns = process.stdout.columns || 100, rows = process.s
     let scroll = Math.max(0, Math.min(maximumScroll, Number(state.contentScroll) || 0));
     const focusLine = Number(state.contentFocusLine) || -1;
     if (focusLine >= 0) {
-      if (focusLine < scroll) scroll = focusLine;
-      else if (focusLine >= scroll + bodyHeight) scroll = focusLine - bodyHeight + 1;
+      // 居中跟随：焦点行尽量保持在视口中上部，上下都留出内容，避免选中行
+      // 贴住视口边缘或被裁掉其相邻行（如两行一组的模型选项主行+描述行）。
+      const targetLine = Math.min(Math.max(0, Math.floor(bodyHeight / 3)), Math.max(0, bodyHeight - 2));
+      if (focusLine < scroll + targetLine) scroll = Math.max(0, focusLine - targetLine);
+      else if (focusLine >= scroll + bodyHeight - 1 - targetLine) scroll = Math.min(maximumScroll, focusLine - (bodyHeight - 1 - targetLine));
     }
     scroll = Math.max(0, Math.min(maximumScroll, scroll));
     state.contentScroll = scroll;

@@ -223,8 +223,8 @@ async function main(): Promise<void> {
     assert.ok(!statusFocus.includes(historyDetail.buildBlock.publicActivities[0].content),
       'concrete Build activity is available only through the history query tool');
     const historyTool = (agent.tools.definitions('build') as Array<any>).find(tool => tool.function?.name === 'build_history_query');
-    assert.ok(historyTool && historyTool.function.description.includes('read-only tool'),
-      'history detail query is provider-visible as an explicitly read-only Build Block tool');
+    assert.ok(historyTool && historyTool.function.description.includes('Call it proactively when the current task continues, fixes, verifies, or depends on earlier work'),
+      'history detail query is provider-visible as a proactive read-only Build Block tool');
     const buildCatalog = agent.subagentToolDefinitions(agent.tools.definitions('build'));
     const buildToolchain = seedToolchainFromDefinitions(buildCatalog, { namespace: 'newmark', version: '1.0.0' }).core;
     const detailedRoute = agentKernelRunnerInternals.routeToolSurfaceV2(

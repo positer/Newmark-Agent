@@ -98,6 +98,57 @@ test("flowtask view follows the cursor under mixed-component long-list stress", 
   }
 });
 
+test("model view follows the cursor under long-list stress", () => {
+  const state = createState();
+  const count = 120;
+  state.providers = [{
+    id: "p1", name: "Provider One", enabled: true, protocol: "openai", has_api_key: true,
+    models: Array.from({ length: count }, (_, i) => ({
+      name: `stress-model-${i}`, display: `Stress Model ${i}`,
+      description: `Stress model ${i} description`, enabled: true, max_tokens: 128000
+    }))
+  }];
+  state.view = "model";
+  state.focusRegion = "content";
+  state.contentColumn = 1;
+  state.snapshot.modelSelection = { kind: "auto" };
+  const bodyHeight = 30 - 3;
+  for (let i = 0; i < count; i++) {
+    state.selected = i;
+    render(state, 100, 30);
+    const focus = Number(state.contentFocusLine);
+    assert.ok(Number.isInteger(focus) && focus >= 0, `model row ${i}: focus line is concrete`);
+    assert.ok(focus >= state.contentScroll && focus < state.contentScroll + bodyHeight,
+      `model row ${i}: focus ${focus} is visible in [${state.contentScroll}, ${state.contentScroll + bodyHeight})`);
+    // 两行一组的模型选项：描述行（focus+1）也必须留在视口内，主行+描述行
+    // 都不能被裁掉，否则用户会看到选中项"贴边/离开屏幕"。
+    assert.ok(focus + 1 < state.contentScroll + bodyHeight,
+      `model row ${i}: description row ${focus + 1} stays in the viewport`);
+  }
+  for (let i = 0; i < 2000; i++) {
+    state.selected = (i * 131 + 17) % count;
+    render(state, 100, 30);
+    const focus = Number(state.contentFocusLine);
+    assert.ok(focus >= state.contentScroll && focus < state.contentScroll + bodyHeight,
+      `model random ${i}: focus ${focus} visible in [${state.contentScroll}, ${state.contentScroll + bodyHeight})`);
+  }
+});
+
+test("model tier column follows the cursor", () => {
+  const state = createState();
+  state.view = "model";
+  state.focusRegion = "content";
+  state.contentColumn = 0;
+  const tierCount = require("../src/state").INTELLIGENCE_TIERS.length;
+  for (let i = 0; i < tierCount; i++) {
+    state.selected = i;
+    render(state, 100, 30);
+    const focus = Number(state.contentFocusLine);
+    assert.ok(focus >= state.contentScroll && focus < state.contentScroll + 30 - 3,
+      `tier row ${i}: focus ${focus} visible`);
+  }
+});
+
 test("long-list stress never leaves NaN or out-of-range scroll cursors", () => {
   const state = createState();
   state.view = "chat";

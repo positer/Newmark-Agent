@@ -906,7 +906,7 @@ function buildConversationTaskLedger(agent: Agent): string {
     'Unfinished Continuation Queue (newest to oldest; summary fields only; use only when the current user instruction authorizes continuation and the task is relevant):',
     ...(unfinishedLines.length ? unfinishedLines : ['(none)']),
     ...(unfinished.length > unfinishedLines.length ? [`(${unfinished.length - unfinishedLines.length} older unfinished run(s) omitted from the bounded prompt ledger.)`] : []),
-    'When concrete work details are required, call build_history_query with history_index from this list. Do not call it merely to answer completion status already shown here.',
+    'When the current task continues, fixes, verifies, or depends on earlier work in this list, proactively call build_history_query with its history_index before re-investigating. Reuse the returned tool activity and results instead of re-running commands or re-reading files this conversation already examined. Querying history is read-only and never authorizes resuming that work; do not query merely to answer completion status already shown here.',
   ].join('\n');
 }
 

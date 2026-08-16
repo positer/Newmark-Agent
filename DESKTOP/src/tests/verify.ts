@@ -5830,6 +5830,23 @@ async function main() {
   assert(guideFocusSource.includes('interrupted before completion') && guideFocusSource.includes('shares the same context prefix'),
     'Guide injection: interrupted Build history continues into the next block with the shared prefix');
 
+  // ---- 17. dev-0.4.4 Build-history reuse regressions ----
+  console.log('\n🧭 dev-0.4.4 build-history reuse regressions');
+  const ledgerSource = guideFocusSource; // agentKernelRunner.ts already read above
+  const agentCoreSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').replace(/\r\n/g, '\n');
+  const toolsIndexSource = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'index.ts'), 'utf-8').replace(/\r\n/g, '\n');
+  assert(ledgerSource.includes('proactively call build_history_query with its history_index before re-investigating')
+    && ledgerSource.includes('Reuse the returned tool activity and results instead of re-running commands or re-reading files'),
+    'Task ledger: non-first Build blocks are instructed to query historical activity before re-investigating');
+  assert(ledgerSource.includes('Querying history is read-only and never authorizes resuming that work')
+    && ledgerSource.includes('do not query merely to answer completion status already shown here'),
+    'Task ledger: history query stays read-only and is not required for status already disclosed');
+  assert(agentCoreSource.includes('When the current task continues, fixes, verifies, or depends on earlier Build Blocks, proactively call build_history_query')
+    && agentCoreSource.includes('reuse that information instead of re-investigating (re-running commands or re-reading files) from scratch'),
+    'Build history disclosure: proactive reuse replaces the passive only-when-asked wording');
+  assert(toolsIndexSource.includes('Call it proactively when the current task continues, fixes, verifies, or depends on earlier work'),
+    'build_history_query tool description: proactive reuse guidance');
+
   // ---- Final Summary ----
   console.log(`\n═══════════════════════════════════════`);
   console.log(`  ${PASS} ${passed} passed  ${FAIL} ${failed} failed`);

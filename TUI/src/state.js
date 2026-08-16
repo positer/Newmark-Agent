@@ -1072,6 +1072,25 @@ function toggleSelected(state) {
     }
     const row = settingsRows(state)[state.selected];
     if (!row) return;
+    if (row.action === "pair-mobile") {
+      state.overlay = "pair";
+      state.pairingQrLines = ["Loading pairing QR…"];
+      state.pairingUrl = "";
+      state.pairingTokenFile = "";
+      if (typeof state.adapter.pairingQr !== "function") {
+        state.pairingQrLines = ["Pairing QR is unavailable in this adapter."];
+        return false;
+      }
+      return Promise.resolve(state.adapter.pairingQr()).then((pairing) => {
+        state.pairingQrLines = String(pairing?.ascii || "").split(/\r?\n/);
+        state.pairingUrl = String(pairing?.url || "");
+        state.pairingTokenFile = String(pairing?.tokenFile || "");
+        return true;
+      }).catch((error) => {
+        state.pairingQrLines = [`Pairing failed: ${error?.message || error}`];
+        return false;
+      });
+    }
     if (state.settingsTab === "general" && row.key === "inputBehavior") {
       const current = row.choices.findIndex((value) => value === row.value);
       state.settingChoiceTab = state.settingsTab;

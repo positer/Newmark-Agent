@@ -24,7 +24,8 @@ function settingsRows(state, tab = state.settingsTab) {
     { key: "feedbackLevel", label: "Option feedback", value: s.general.feedbackLevel, choices: ["Default", "Ask more", "Ask less", "Autonomous"], save: ["config", "feedbackLevel"] },
     { key: "closeBehavior", label: "Close behavior", value: s.general.closeBehavior, choices: ["Close app", "Minimize to tray"], save: ["setting", "general", "close_behavior"] },
     { key: "expandTools", label: "Expand tool usage", value: s.general.expandTools, choices: [true, false], save: ["setting", "general", "expand_tools"] },
-    { key: "remoteTouch", label: "Mobile remote-touch", value: s.general.remoteTouch, choices: [true, false], save: ["setting", "remote", "touch_enabled"] }
+    { key: "remoteTouch", label: "Remote behavior · Mobile remote-touch", value: s.general.remoteTouch, choices: [true, false], save: ["setting", "remote", "touch_enabled"] },
+    { key: "remotePair", label: "Remote behavior · Start connection", value: "Open QR", choices: [], action: "pair-mobile" }
   ];
   if (tab === "personalization") return [
     { key: "theme", label: "Theme", value: s.personalization.theme, choices: ["Dark", "Light", "System"], save: ["config", "theme"] },

@@ -4208,6 +4208,21 @@ textarea.mcp-input { min-height:76px; resize:vertical; font-family:var(--font-mo
   transition: none !important;
 }
 
+.setting-subsection {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-border-1);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg-1);
+}
+
+.setting-subsection-title {
+  margin-bottom: 6px;
+  color: var(--text-bright);
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .setting-row {
   display: flex;
   align-items: center;
@@ -6055,6 +6070,9 @@ var NEWMARK_I18N = {
     'settings.runInWslDesc': 'Keeps the Windows UI and native desktop tools local while running the persistent Agent kernel, model calls, shell, and file tools inside WSL.',
     'settings.remoteTouch': 'Mobile remote-touch',
     'settings.remoteTouchDesc': 'Allow the mobile app to reach this Newmark instance over Tailscale. Turn off to disable remote pairing and sync APIs immediately.',
+    'settings.remoteBehavior': 'Remote behavior',
+    'settings.remoteConnect': 'Start connection',
+    'settings.remoteConnectDesc': 'Show the pairing QR code for the Newmark mobile app.',
     'settings.wslDistro': 'WSL distribution',
     'settings.wslConnected': 'WSL backend connected',
     'settings.wslDisconnected': 'WSL backend unavailable',
@@ -6779,6 +6797,9 @@ var NEWMARK_I18N = {
     'settings.runInWslDesc': 'Windows UI 与桌面原生工具保留在本机，持续 Agent 内核、模型请求、Shell 和文件工具运行在 WSL。',
     'settings.remoteTouch': '移动端远程触及',
     'settings.remoteTouchDesc': '允许移动端通过 Tailscale 连接本机 Newmark。关闭后立即禁用远程配对与同步 API。',
+    'settings.remoteBehavior': '远程行为',
+    'settings.remoteConnect': '发起连接',
+    'settings.remoteConnectDesc': '显示 Newmark 移动端配对二维码。',
     'settings.wslDistro': 'WSL 发行版',
     'settings.wslConnected': 'WSL 后端已连接',
     'settings.wslDisconnected': 'WSL 后端不可用',
@@ -15100,10 +15121,18 @@ function renderGeneralSettings() {
     '<div class="setting-row"><span class="setting-label">' + esc(t('settings.wslDistro')) + '</span>' +
     '<div class="setting-control"><select id="agent-wsl-distro" onchange="window.setAgentWslDistro(this.value)"' + (state.wslAvailable ? '' : ' disabled') + '>' + (wslOptions || '<option>Ubuntu-24.04</option>') + '</select>' +
     '<div class="setting-desc" id="agent-wsl-status">' + esc(state.agentBackend && state.agentBackend.connected ? t('settings.wslConnected') : t('settings.wslDisconnected')) + '</div></div></div>' : '';
-  return wslHtml + '<div class="setting-row">' +
+  return wslHtml + '<div class="setting-subsection">' +
+    '<div class="setting-subsection-title">' + esc(t('settings.remoteBehavior')) + '</div>' +
+    '<div class="setting-row">' +
     '<label class="setting-label" for="remote-touch-enabled">' + esc(t('settings.remoteTouch')) + '</label>' +
     '<div class="setting-control"><label class="toggle"><input type="checkbox" id="remote-touch-enabled"' + (state.remoteTouchEnabled ? ' checked' : '') + ' onchange="window.setRemoteTouchEnabled(this.checked)"><span class="toggle-track"></span></label>' +
     '<div class="setting-desc">' + esc(t('settings.remoteTouchDesc')) + '</div></div>' +
+    '</div>' +
+    '<div class="setting-row">' +
+    '<span class="setting-label">' + esc(t('settings.remoteConnect')) + '</span>' +
+    '<div class="setting-control"><button type="button" class="sec-btn primary" onclick="window.showMobilePairing()">' + esc(t('settings.remoteConnect')) + '</button>' +
+    '<div class="setting-desc">' + esc(t('settings.remoteConnectDesc')) + '</div></div>' +
+    '</div>' +
     '</div>' +
     '<div class="setting-row">' +
     '<span class="setting-label">' + esc(t('settings.configFile')) + '</span>' +

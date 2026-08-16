@@ -1403,6 +1403,75 @@ test("ANSI sequences remain valid across view and terminal size matrix", () => {
     }
   }
 });
+
+test("frames never exceed the terminal window when it is smaller than the minimum layout", () => {
+  // 回归：render 必须严格使用终端实际尺寸，不能用 Math.max(52/20) 强制放大，
+  // 否则小窗口下帧会画到窗口之外（模型长菜单的高亮行落在窗口外不可见）。
+  const state = createState();
+  state.providers[0].models = Array.from({ length: 40 }, (_, i) => ({
+    name: "small-" + i, display: "Small Model " + i, description: "small model description " + i, enabled: true
+  }));
+  switchView(state, "model");
+  state.focusRegion = "content";
+  state.contentColumn = 1;
+  for (const [columns, rows] of [[40, 12], [30, 10], [60, 16], [20, 8]]) {
+    for (let i = 0; i < 40; i += 1) {
+      state.selected = i;
+      const output = render(state, columns, rows);
+      const lines = stripAnsi(output).split("\n");
+      assert.equal(lines.length, rows, `${columns}x${rows} selected=${i}: frame row count equals the window height`);
+      for (const line of lines) {
+        assert.ok(visibleLength(line) <= columns, `${columns}x${rows} selected=${i}: every row fits the window width`);
+      }
+    }
+  }
+});
+
+test("render reads the live window size when called without explicit dimensions", () => {
+  const { readWindowSize } = require("../src/render");
+  const realStdout = process.stdout;
+  const restoreStdout = (value) => Object.defineProperty(process, "stdout", { value, configurable: true });
+  // 1) getWindowSize() 实时查询优先
+  restoreStdout({ getWindowSize: () => [77, 13] });
+  try {
+    const size = readWindowSize();
+    assert.equal(size.columns, 77, "live columns from getWindowSize");
+    assert.equal(size.rows, 13, "live rows from getWindowSize");
+  } finally {
+    restoreStdout(realStdout);
+  }
+  // 2) 无 getWindowSize 时回退 COLUMNS/LINES
+  const previous = { COLUMNS: process.env.COLUMNS, LINES: process.env.LINES };
+  restoreStdout({ columns: undefined, rows: undefined });
+  process.env.COLUMNS = "55";
+  process.env.LINES = "17";
+  try {
+    const size = readWindowSize();
+    assert.equal(size.columns, 55, "fallback columns from COLUMNS");
+    assert.equal(size.rows, 17, "fallback rows from LINES");
+  } finally {
+    restoreStdout(realStdout);
+    if (previous.COLUMNS === undefined) delete process.env.COLUMNS; else process.env.COLUMNS = previous.COLUMNS;
+    if (previous.LINES === undefined) delete process.env.LINES; else process.env.LINES = previous.LINES;
+  }
+  // 3) render() 无参时按实时尺寸绘制：帧行数=窗口高度、每行不超窗口宽度
+  const state = createState();
+  switchView(state, "model");
+  state.focusRegion = "content";
+  state.contentColumn = 1;
+  restoreStdout({ getWindowSize: () => [41, 14] });
+  try {
+    const output = render(state);
+    const lines = stripAnsi(output).split("\n");
+    assert.equal(lines.length, 14, "no-arg render paints exactly the live window height");
+    for (const line of lines) {
+      assert.ok(visibleLength(line) <= 41, "no-arg render rows fit the live window width");
+    }
+  } finally {
+    restoreStdout(realStdout);
+  }
+});
+
 test("content views follow the focused row while the cursor scrolls off-screen", () => {
   const state = createState();
   switchView(state, "model");

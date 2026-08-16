@@ -1255,14 +1255,38 @@ function overlayLines(state, width, p) {
   return [];
 }
 
-function render(state, columns = process.stdout.columns || 100, rows = process.stdout.rows || 30) {
+// 实时读取终端窗口尺寸：优先 getWindowSize()（每次调用都查询底层 TTY 尺寸，
+// 不依赖 Node 缓存的 columns/rows，避免 resize 事件丢失或延迟时按旧尺寸绘制），
+// 其次回退到缓存 columns/rows，再回退 COLUMNS/LINES 环境变量与默认值。
+function readWindowSize(fallbackColumns = 100, fallbackRows = 30) {
+  const stdout = process.stdout;
+  if (stdout && typeof stdout.getWindowSize === "function") {
+    try {
+      const [width, height] = stdout.getWindowSize();
+      if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+        return { columns: Math.max(1, Math.floor(width)), rows: Math.max(1, Math.floor(height)) };
+      }
+    } catch {}
+  }
+  const columns = Number(stdout?.columns) || Number(process.env.COLUMNS) || fallbackColumns;
+  const rows = Number(stdout?.rows) || Number(process.env.LINES) || fallbackRows;
+  return { columns: Math.max(1, Math.floor(columns)), rows: Math.max(1, Math.floor(rows)) };
+}
+
+function render(state, columns, rows) {
+  const size = (columns !== undefined && rows !== undefined)
+    ? { columns: Math.max(1, Math.floor(Number(columns) || 1)), rows: Math.max(1, Math.floor(Number(rows) || 1)) }
+    : readWindowSize();
   const p = palette(state);
-  const width = Math.max(52, columns);
-  const height = Math.max(20, rows);
+  // 严格约束：直接采用终端实际尺寸，绝不通过 Math.max(52/20) 强制放大。
+  // 终端窗口小于内部最小布局时，内容在输出阶段裁剪到窗口内，否则帧会
+  // 画到窗口之外（用户看不到底部行/右侧列，如小窗口下的模型长菜单）。
+  const width = size.columns;
+  const height = size.rows;
   const compact = width < 78;
   const sidebarWidth = compact ? 0 : 22;
   const contentWidth = width - sidebarWidth - 2;
-  const bodyHeight = height - 3;
+  const bodyHeight = Math.max(1, height - 3);
   const sidebar = sidebarWidth ? renderSidebar(state, bodyHeight, sidebarWidth, p) : [];
   const content = renderContent(state, contentWidth, bodyHeight, p);
   let contentLines = content;
@@ -1294,20 +1318,25 @@ function render(state, columns = process.stdout.columns || 100, rows = process.s
     : "";
   if (compact) body.unshift(pad(top, width));
   const focus = state.focusRegion === "menu" ? "MENU" : "CONTENT";
-  const footer = `${p.panel} ${p.cyan}${focus}${p.reset}${p.panel}${p.muted} · ${truncate(state.notice, width - 42)}${p.reset}${p.panel}${" ".repeat(Math.max(1, width - visibleLength(state.notice) - visibleLength(focus) - 35))}Tab back  ? help  Q quit ${p.reset}`;
-  const renderedBody = body.slice(0, height - 1);
-  while (renderedBody.length < height - 1) renderedBody.push(pad("", width));
-  let output = `${ESC}?25l${ESC}2J${ESC}H${p.paint}${renderedBody.join("\n")}\n${pad(footer, width)}`;
+  const footer = `${p.panel} ${p.cyan}${focus}${p.reset}${p.panel}${p.muted} · ${truncate(state.notice, Math.max(1, width - 42))}${p.reset}${p.panel}${" ".repeat(Math.max(1, width - visibleLength(state.notice) - visibleLength(focus) - 35))}Tab back  ? help  Q quit ${p.reset}`;
+  const bodyLines = Math.max(1, height - 1);
+  const renderedBody = body.slice(0, bodyLines);
+  while (renderedBody.length < bodyLines) renderedBody.push(pad("", width));
+  // 输出阶段严格边界：每行按可见宽度截断到窗口宽度，行数限制在窗口高度内，
+  // 确保无论内部最小布局如何，帧绝不会画到窗口之外。
+  const boundedBody = renderedBody.map((line) => truncate(line, width));
+  const boundedFooter = truncate(pad(footer, width), width);
+  let output = `${ESC}?25l${ESC}2J${ESC}H${p.paint}${boundedBody.join("\n")}\n${boundedFooter}`;
   const overlay = overlayLines(state, width, p);
   if (overlay.length) {
     const overlayWidth = Math.max(...overlay.map(visibleLength));
     const x = Math.max(1, Math.floor((width - overlayWidth) / 2) + 1);
     const y = Math.max(2, Math.floor((height - overlay.length) / 2));
     overlay.forEach((line, index) => {
-      output += `${ESC}${y + index};${x}H${line}`;
+      output += `${ESC}${y + index};${x}H${truncate(line, width)}`;
     });
   }
   return `${output}${p.final}`;
 }
 
-module.exports = { render, stripAnsi, visibleLength, wrapText };
+module.exports = { render, readWindowSize, stripAnsi, visibleLength, wrapText };

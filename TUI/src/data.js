@@ -204,6 +204,34 @@ const providers = [
   }
 ];
 
+// Demo-only long-list injection: NEWMARK_TUI_DEMO_MODELS=<count> appends a
+// dedicated stress provider with <count> models so the featureless --demo TUI
+// can exercise long model-selection cursor-follow behavior without any runtime.
+const DEMO_MODEL_COUNT = Number(process.env.NEWMARK_TUI_DEMO_MODELS || 0);
+if (Number.isFinite(DEMO_MODEL_COUNT) && DEMO_MODEL_COUNT > 0) {
+  providers.push({
+    id: "provider-demo-stress",
+    name: "Demo Stress",
+    base_url: "https://demo.invalid/v1",
+    api_key: "",
+    has_api_key: false,
+    protocol: "openai",
+    enabled: true,
+    models: Array.from({ length: DEMO_MODEL_COUNT }, (_, index) => ({
+      name: `demo-stress-model-${String(index).padStart(3, "0")}`,
+      display: `Stress Model ${String(index).padStart(3, "0")}`,
+      description: `Long-list cursor-follow stress model ${index} description`,
+      max_tokens: 128000,
+      vision: false,
+      thinking: false,
+      enabled: true,
+      speed_rating: "unknown",
+      capability_rating: "unknown",
+      validation: { status: "unavailable", level: "discovered", checked_at: "" }
+    }))
+  });
+}
+
 const flows = [
   {
     name: "release-readiness",

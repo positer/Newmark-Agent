@@ -54,7 +54,7 @@ function expandArchive(zipPath, destination) {
   try {
     expandArchive(zipPath, tempRoot);
     const unpackedRoot = await smokeWindowsUnpacked(tempRoot, 'Windows ZIP');
-    for (const featureScript of ['release-dev008-features-smoke.cjs', 'release-dev009-features-smoke.cjs', 'release-dev010-features-smoke.cjs']) {
+    for (const featureScript of ['release-dev008-features-smoke.cjs', 'release-dev009-features-smoke.cjs', 'release-dev010-features-smoke.cjs', 'release-dev045-security-smoke.cjs']) {
       const featureUserDataDir = path.join(tempRoot, `.feature-user-data-${featureScript.replace(/[^a-z0-9]+/gi, '-')}`);
       const featureSmoke = spawnSync(process.execPath, [path.join(__dirname, featureScript)], {
         cwd: path.resolve(__dirname, '..'),

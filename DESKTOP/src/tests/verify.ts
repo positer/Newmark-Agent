@@ -11,7 +11,7 @@ import { createHash } from 'crypto';
 import { Agent, AgentMode, StreamToken } from '../core/agent';
 import { ConfigManager, defaultConfig, mergeProviderSecrets, sanitizeProvidersForState } from '../core/config';
 import { ToolExecutor } from '../tools/index';
-import { WorkspaceManager } from '../core/workspace';
+import { WorkspaceManager, windowsDrivePathToPosix } from '../core/workspace';
 import { SubagentManager } from '../core/subagent';
 import { SkillsManager } from '../core/skills';
 import { AutomationManager } from '../core/automation';
@@ -1037,6 +1037,8 @@ async function main() {
   assert(wslProtocolTs.includes("method: 'reset'") && wslClientTs.includes('resetAgent()') && wslHostTs.includes('resetAgentRuntime()') && mainTs.includes('await wslAgentClient.resetAgent()') && mainTs.includes("shutdownTerminalTakeoverSessions('app-exit')"), 'WSL lifecycle: Agent resets preserve the host terminal registry while app exit shuts down terminal sessions');
   assert(preloadTs.includes("wslBackendStatus: () => ipcRenderer.invoke('wsl:backendStatus')") && preloadTs.includes("wslBackendTest: () => ipcRenderer.invoke('wsl:backendTest')") && !preloadTs.includes('wslDetect:') && !uiHtml.includes('window.testAgentWslBackend') && !uiHtml.includes('settings.testWslBackend'), 'WSL detection: remains a startup backend concern without a settings-page detect/test control');
   assert(windowsDrivePathToWsl('C:\\Users\\Test User\\repo') === '/mnt/c/Users/Test User/repo' && windowsDrivePathToWsl('D:/work/project') === '/mnt/d/work/project', 'WSL path mapping: converts Windows drive paths without shell escaping loss');
+  assert(windowsDrivePathToPosix('C:\\Users\\Test User\\repo') === '/mnt/c/Users/Test User/repo' && windowsDrivePathToPosix('D:/work/project') === '/mnt/d/work/project' && windowsDrivePathToPosix('/mnt/c/Users/x') === '' && windowsDrivePathToPosix('relative/file.txt') === '', 'WSL cross-env path mapping: windowsDrivePathToPosix converts drive paths and rejects non-drive paths');
+  assert(toolsTs.includes('normalizeCrossEnvPath') && toolsTs.includes('windowsDrivePathToPosix') && toolsTs.includes('translateWindowsPathsForWslBash') && toolsTs.includes('const workspaceCwd = process.env.NEWMARK_WSL_DISTRO ? (windowsDrivePathToPosix(ws) || ws) : ws') && toolsTs.includes('refs.push(path.resolve(normalizeCrossEnvPath(withoutWildcard, wsPath)))'), 'tools WSL cross-env: file-tool resolve, bash cwd/command translation, and command-path guard normalize Windows drive paths into /mnt/<drive> paths');
   if (process.platform === 'win32') {
     const wslProbe = spawnSync('wsl.exe', ['-d', 'Ubuntu-24.04', '--', 'true'], { windowsHide: true, timeout: 10000 });
     if (!wslProbe.error && wslProbe.status === 0) {
@@ -1611,7 +1613,7 @@ async function main() {
     && ocrBudgetSmoke.includes("core: 'tesseract-core-simd'"),
   'OCR/PDF: enforces text then validated vision then sub-10MiB Chinese/English OCR with academic-formula Agent repair guidance');
   assert(agentTs.includes('Agent terminal timeout: bash accepts per-call timeout_ms') && agentTs.includes('is a nonzero upper cap'), 'agent prompt: discloses bash timeout_ms and settings cap semantics');
-  assert(agentTs.includes('repo_security_audit') && agentTs.includes('Remote repository safety') && agentTs.includes('public/private visibility') && agentTs.includes('private URLs, secrets, local runtime state'), 'agent prompt: proactively drives remote repository security and privacy review');
+  assert(agentTs.includes('repo_security_audit') && agentTs.includes('Remote repository safety') && agentTs.includes('public/private visibility') && agentTs.includes('private URLs, secrets') && agentTs.includes('privacy addresses (credential URLs, private network addresses, local user paths)') && agentTs.includes('security_review_confirmed=true'), 'agent prompt: proactively drives remote repository security and privacy review with the second-review gate');
   assert(agentTs.includes('GitHub Copilot') && agentTs.includes('https://models.github.ai'), 'agent core: GitHub Copilot/Models provider is inferred to the official GitHub Models endpoint');
   assert(providerTs.includes("ProviderProtocol = 'openai' | 'anthropic' | 'github_models'") && providerTs.includes("githubModelsUrl('/inference/chat/completions')") && providerTs.includes("githubModelsUrl('/catalog/models')") && providerTs.includes("'X-GitHub-Api-Version': '2022-11-28'"), 'llm provider: GitHub Copilot/Models uses official GitHub Models inference and catalog APIs');
   assert(configTs.includes("github_models") && configTs.includes("models.github.ai") && configTs.includes('defaultProviderBaseUrl') && cliCommandsTs.includes('--protocol openai|anthropic') && !cliCommandsTs.includes('--protocol openai|anthropic|github_models') && agentTs.includes('GitHub/Copilot providers require precise browser login') && cliCommandsTs.includes('GitHub/Copilot providers require precise browser login') && fuzzyTs.includes("value === 'openai' || value === 'anthropic'"), 'config/cli/core: GitHub Models protocol is normalized/defaulted but excluded from fuzzy-inject');
@@ -1956,6 +1958,24 @@ async function main() {
   const delNoop = await tools.execute('bash', JSON.stringify({ command: 'echo no deletion here' }), TEST_DIR);
   assert(!delNoop.includes('deletion guard'), 'deletion guard: non-deletion commands are unaffected');
 
+  // dev-0.4.5: git clean + 跨平台别名递归 + 并行/串行命令精准拦截
+  const delGitClean = await tools.execute('bash', JSON.stringify({ command: 'git clean -fd' }), TEST_DIR);
+  assert(delGitClean.includes('deletion guard') && delGitClean.includes('git-clean'), 'deletion guard: git clean -fd is blocked as batch deletion');
+  const delGitCleanDry = await tools.execute('bash', JSON.stringify({ command: 'git clean --dry-run' }), TEST_DIR);
+  assert(!delGitCleanDry.includes('deletion guard'), 'deletion guard: git clean --dry-run is allowed');
+  const delRiRecurse = await tools.execute('bash', JSON.stringify({ command: 'ri -Recurse build' }), TEST_DIR);
+  assert(delRiRecurse.includes('deletion guard') && delRiRecurse.includes('Recursive'), 'deletion guard: PowerShell ri -Recurse is blocked');
+  const delEraseS = await tools.execute('bash', JSON.stringify({ command: 'erase /s build' }), TEST_DIR);
+  assert(delEraseS.includes('deletion guard') && delEraseS.includes('Recursive'), 'deletion guard: CMD erase /s is blocked');
+  const delCmdFor = await tools.execute('bash', JSON.stringify({ command: 'for /f "delims=" %i in (*.txt) do del %i' }), TEST_DIR);
+  assert(delCmdFor.includes('deletion guard') && delCmdFor.includes('Loop-based'), 'deletion guard: CMD for ... do del is blocked');
+  const delOrSingle = await tools.execute('bash', JSON.stringify({ command: 'echo done || rm __guard_absent__.txt' }), TEST_DIR);
+  assert(!delOrSingle.includes('deletion guard'), 'deletion guard: single rm after || is allowed (not a pipe)');
+  const delAndSingle = await tools.execute('bash', JSON.stringify({ command: 'echo done && rm __guard_absent__.txt' }), TEST_DIR);
+  assert(!delAndSingle.includes('deletion guard'), 'deletion guard: single rm after && is allowed');
+  const toolPolicySource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'toolPolicy.ts'), 'utf-8');
+  assert(toolPolicySource.includes('hasGitCleanDeletion') && toolPolicySource.includes('(?<!\\|)\\|\\s*(?:remove-item') && toolPolicySource.includes('CMD for ... do del') && toolPolicySource.includes('(?:remove-item|ri)\\b[^\\n;&|]*\\s+-(?:recurse|r)') && toolPolicySource.includes('(?:del|erase)\\b\\s+\\/[s]'), 'deletion guard: git clean, pipe-vs-|| precision, CMD for-do, and PowerShell/CMD recursive aliases are wired cross-platform');
+
   // glob
   const globResult = await tools.execute('glob', '{"pattern":"*.txt"}', TEST_DIR);
   assert(globResult.includes('test.txt'), 'glob: finds file');
@@ -1980,7 +2000,7 @@ async function main() {
   assert(gsResult.length > 0, 'git_status: returns result');
   const auditSource = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'index.ts'), 'utf-8');
   assert(auditSource.includes("case 'file_audit'") && auditSource.includes("repos/${repo}/commits?path=") && auditSource.includes("repos/${repo}/contents/") && auditSource.includes("repos/${repo}/branches/"), 'file_audit: native GitHub REST paths are wired through gh api for commits, contents, and branches');
-  assert(auditSource.includes("case 'repo_security_audit'") && auditSource.includes('scanRepositorySecrets') && auditSource.includes('releaseExcludedPathFindings') && auditSource.includes('withRemoteSecurityPreamble'), 'repo_security_audit: remote safety, privacy, and remote-write preflight paths are wired');
+  assert(auditSource.includes("case 'repo_security_audit'") && auditSource.includes('scanRepositorySecrets') && auditSource.includes('scanRepositoryPrivacyLeaks') && auditSource.includes('releaseExcludedPathFindings') && auditSource.includes('withRemoteSecurityPreamble') && auditSource.includes('formatRemoteSecurityBlock') && auditSource.includes('security_review_confirmed'), 'repo_security_audit: remote safety, privacy-address, and second-review remote-write preflight paths are wired');
   assert(auditSource.includes("runAsyncProcess('git', args") && auditSource.includes("spawnTool('gh', args") && !auditSource.includes("spawnSync('git', args"), 'git/github tools: use cancellable asynchronous spawn with native argument arrays');
   const auditRepo = path.join(TEST_DIR, 'audit-repo');
   fs.mkdirSync(auditRepo, { recursive: true });
@@ -1997,14 +2017,17 @@ async function main() {
   fs.mkdirSync(path.join(auditRepo, 'archive'), { recursive: true });
   fs.writeFileSync(path.join(auditRepo, 'archive', 'private-note.md'), 'local only', 'utf-8');
   fs.writeFileSync(path.join(auditRepo, 'config.json'), '{"api_key":"sk-testsecret12345678901234567890"}', 'utf-8');
+  fs.writeFileSync(path.join(auditRepo, 'notes.txt'), 'home https://user:pass@example.test/internal and C:\\Users\\alice\\secrets', 'utf-8');
   spawnSync('git', ['add', 'config.json'], { cwd: auditRepo, encoding: 'utf-8', windowsHide: true });
   spawnSync('git', ['remote', 'add', 'origin', 'https://github.com/example/public-audit.git'], { cwd: auditRepo, encoding: 'utf-8', windowsHide: true });
   const securityAuditResult = await tools.execute('repo_security_audit', JSON.stringify({ path: auditRepo }), auditRepo);
   const securityAudit = JSON.parse(securityAuditResult);
   assert(securityAudit.remote_repository_detected === true && securityAudit.remote.repository === 'example/public-audit' && securityAudit.security_review.required === true, 'repo_security_audit: detects remote GitHub repository and requires safety review');
   assert(securityAudit.security_review.secret_findings.some((f: any) => f.path === 'config.json') && securityAudit.security_review.release_excluded_local_files.some((p: string) => p === 'archive' || p.startsWith('archive/')), 'repo_security_audit: reports secret-like tracked material and release-excluded local files');
+  assert(securityAudit.security_review.privacy_findings.some((f: any) => f.path === 'notes.txt') && Array.isArray(securityAudit.security_review.high_risk_findings) && securityAudit.security_review.high_risk_findings.length >= 2, 'repo_security_audit: reports privacy-address findings and aggregates high-risk findings for the second-review gate');
+  assert(!securityAuditResult.includes('sk-testsecret12345678901234567890') && !securityAuditResult.includes('user:pass@example.test') && !securityAuditResult.includes('alice'), 'repo_security_audit: findings never expose secret or privacy values to the Agent');
   const pushSource = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'index.ts'), 'utf-8');
-  assert(pushSource.includes("case 'git_push': return await this.withRemoteSecurityPreamble") && pushSource.includes("case 'gh_pr_create': return await this.withRemoteSecurityPreamble") && pushSource.includes('action: () => Promise<string>') && pushSource.indexOf('const actionOutput = await action();') > pushSource.indexOf('await this.repoSecurityAudit('), 'repo_security_audit: git_push and gh_pr_create defer their write actions until the remote safety preflight completes');
+  assert(pushSource.includes("case 'git_push': return await this.withRemoteSecurityPreamble") && pushSource.includes("case 'gh_pr_create': return await this.withRemoteSecurityPreamble") && pushSource.includes('action: () => Promise<string>') && pushSource.indexOf('const actionOutput = await action();') > pushSource.indexOf('await this.repoSecurityAudit(') && pushSource.includes('security_review_confirmed === true'), 'repo_security_audit: git_push and gh_pr_create defer their write actions until the remote safety preflight completes and honor the second-review confirmation flag');
   const remoteWriteTools = new ToolExecutor(TEST_DIR, cfg) as any;
   const remoteWriteOrder: string[] = [];
   remoteWriteTools.findGitRoot = async () => auditRepo;
@@ -2027,6 +2050,43 @@ async function main() {
   remoteWriteTools.repoSecurityAudit = async () => { remoteWriteOrder.push('audit_error'); throw new Error('planned audit failure'); };
   const fallbackPush = await remoteWriteTools.execute('git_push', '{"message":"fallback preflight"}', auditRepo);
   assert(remoteWriteOrder.join(',') === 'audit_error,git_push' && fallbackPush.includes('Remote repository safety review should be considered') && fallbackPush.includes('[git push] complete'), 'repo_security_audit: an unavailable summary preserves the established nonblocking remote-write behavior and reports a generic warning');
+  // dev-0.4.5: 高危硬性阻挡 + 二轮审查确认后放行。
+  remoteWriteOrder.length = 0;
+  remoteWriteTools.repoSecurityAudit = async () => {
+    remoteWriteOrder.push('audit');
+    return JSON.stringify({
+      remote: { provider: 'github', repository: 'example/public-audit' },
+      security_review: {
+        verdict: 'review-required',
+        risks: ['Potential secret-like material appears in tracked or changed files.'],
+        secret_findings: [{ path: 'config.json', line: 1, type: 'openai_or_generic_sk_key' }],
+        privacy_findings: [],
+        release_excluded_local_files: [],
+      },
+    });
+  };
+  const blockedPush = await remoteWriteTools.execute('git_push', '{"message":"blocked by secret"}', auditRepo);
+  assert(remoteWriteOrder.join(',') === 'audit' && blockedPush.includes('BLOCKED') && blockedPush.includes('second review') && blockedPush.includes('config.json') && !blockedPush.includes('[git push] complete'), 'repo_security_audit: git_push hard-blocks on high-risk secret findings pending a second review');
+  assert(!blockedPush.includes('<redacted>') && !blockedPush.includes('api_key') && blockedPush.includes('openai_or_generic_sk_key'), 'repo_security_audit: blocked secret findings report only type + location, never the secret value or a redacted sample');
+  const confirmedPush = await remoteWriteTools.execute('git_push', '{"message":"confirmed","security_review_confirmed":true}', auditRepo);
+  assert(remoteWriteOrder.join(',') === 'audit,audit,git_push' && confirmedPush.startsWith('[repo_security_audit]') && confirmedPush.includes('[git push] complete') && confirmedPush.includes('security_review_confirmed=true'), 'repo_security_audit: git_push proceeds only after security_review_confirmed=true second review');
+  remoteWriteOrder.length = 0;
+  remoteWriteTools.repoSecurityAudit = async () => {
+    remoteWriteOrder.push('audit');
+    return JSON.stringify({
+      remote: { provider: 'github', repository: 'example/public-audit' },
+      security_review: {
+        verdict: 'review-required',
+        risks: ['Privacy-address content appears in tracked or changed files.'],
+        secret_findings: [],
+        privacy_findings: [{ path: 'notes.txt', line: 2, type: 'credential_url' }],
+        release_excluded_local_files: [],
+      },
+    });
+  };
+  const blockedPr = await remoteWriteTools.execute('gh_pr_create', '{"title":"blocked","body":"privacy leak"}', auditRepo);
+  assert(remoteWriteOrder.join(',') === 'audit' && blockedPr.includes('BLOCKED') && blockedPr.includes('Privacy-address findings') && blockedPr.includes('notes.txt') && !blockedPr.includes('[gh pr create] complete'), 'repo_security_audit: gh_pr_create hard-blocks on privacy-address findings pending a second review');
+  assert(!blockedPr.includes('example.test') && !blockedPr.includes('user:pass') && blockedPr.includes('credential_url'), 'repo_security_audit: blocked privacy findings report only type + location, never the private address value');
   const branchResult = await tools.execute('git_branch', '{"action":"current"}', auditRepo);
   assert(branchResult.trim().length > 0, 'git_branch: current branch returns local branch name');
 
@@ -3666,6 +3726,16 @@ async function main() {
 
   // shouldPromptConversationRename: only true on first Build with auto-generated title.
   assert(typeof agent.shouldPromptConversationRename() === 'boolean', 'shouldPromptConversationRename: returns boolean');
+
+  // dev-0.4.5: conversation_rename 独立为并行 provider API（source-contract）。
+  const renameApiSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
+  assert(renameApiSource.includes('deriveConversationTitleFromProvider')
+    && renameApiSource.includes('normalizeConversationRenameTitle')
+    && renameApiSource.includes('void this.deriveConversationTitleFromProvider(summary)')
+    && renameApiSource.includes('provider.chat(modelName, [{ role: \'user\', content: prompt }]')
+    && renameApiSource.includes('You are a conversation title generator.')
+    && renameApiSource.includes('deriveConversationTitleFromSummary(summary)'),
+    'conversation rename: independent parallel provider API derives a formatted title, renames fire-and-forget, and falls back to the local heuristic');
 
 
   const scopedAgent = new Agent(TEST_DIR);

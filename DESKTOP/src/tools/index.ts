@@ -23,7 +23,7 @@ import { ROOT_TERMINAL_ACTOR_ID, runTerminalTakeover, terminalTakeoverWorkspaceI
 import { runComputerUse } from './computerUse';
 import { isNativeToolEnabled } from './nativeTools';
 import { SshManager } from '../core/ssh';
-import { WorkspaceManager } from '../core/workspace';
+import { WorkspaceManager, windowsDrivePathToPosix } from '../core/workspace';
 import { requestWindowsHostTool } from '../core/wslHostToolBridge';
 import { requestUtilityHostTool } from '../core/utilityHostToolBridge';
 import {
@@ -62,6 +62,38 @@ export interface ToolHostProfile {
 
 function normalizeComputerUseAction(action: string): string {
   return String(action || '').trim().toLowerCase();
+}
+
+/**
+ * 统一跨环境路径归一。WSL 运行时里，Agent 可能用 Windows 盘符路径（`C:\...` /
+ * `C:/...`）引用 Windows 工作区；Linux 的 `path.isAbsolute` 不认识盘符，会把
+ * 它误当相对路径拼到 `/mnt/...` 工作区下。这里先把盘符路径转换为 `/mnt/<drive>/...`，
+ * 再做常规的绝对/相对判断。非 WSL 运行时行为与旧的 `resolve` 完全一致。
+ */
+function normalizeCrossEnvPath(value: string, wsPath: string): string {
+  const raw = String(value || '').trim();
+  if (!raw) return wsPath;
+  if (process.env.NEWMARK_WSL_DISTRO) {
+    const posix = windowsDrivePathToPosix(raw);
+    if (posix) return posix;
+  }
+  if (path.isAbsolute(raw)) return raw;
+  return path.join(wsPath, raw);
+}
+
+/**
+ * WSL 运行时：把 bash 命令里出现的 Windows 盘符路径保守翻译为 `/mnt/<drive>/...`。
+ * 仅替换「以盘符开头、后跟路径字符（不含空白、引号、反引号与 shell 元字符）」的
+ * token，避免误伤 `C:` 标签、环境变量与字符串字面量。非 WSL 原样返回。
+ */
+function translateWindowsPathsForWslBash(script: string): string {
+  if (!process.env.NEWMARK_WSL_DISTRO) return script;
+  const value = String(script || '');
+  if (!/[A-Za-z]:[\\/]/.test(value)) return value;
+  return value.replace(/(?<![A-Za-z0-9_])([A-Za-z]):[\\/]([^\s"'`;|&<>()]+)/g, (_match, drive: string, rest: string) => {
+    const posix = rest.replace(/\\/g, '/').replace(/\/+$/, '');
+    return `/mnt/${drive.toLowerCase()}/${posix}`;
+  });
 }
 
 function computerUseOwner(context: ToolExecutionContext, wsPath: string): string {
@@ -430,12 +462,15 @@ export class ToolExecutor {
         include_remote: { type: 'boolean' },
         base_ref: { type: 'string' },
       }, []),
-      t('repo_security_audit', 'Review a local or remote-backed repository for release/privacy risk before remote actions. Reports GitHub/private/public state, dirty files, ignored local-only files, likely secret material, release-excluded paths, and recommended next checks. Read-only.', {
+      t('repo_security_audit', 'Review a local or remote-backed repository for release/privacy risk before remote actions. Reports GitHub/private/public state, dirty files, ignored local-only files, likely secret material, privacy addresses (credential URLs, private network addresses, local user paths), release-excluded paths, and recommended next checks. Read-only.', {
         path: { type: 'string' },
         base_ref: { type: 'string' },
       }, []),
       t('git_pull', 'Pull from remote', {}, []),
-      t('git_push', 'Stage, commit, push', { message: { type: 'string' } }, ['message']),
+      t('git_push', 'Stage, commit, and push changes. Before a remote push, an automatic repository security review runs: if it finds high-risk content (personal keys/tokens or privacy addresses such as credential URLs, private network addresses, or local user paths), the push is BLOCKED. Complete a second review of every reported finding (remove/ignore it or confirm it is safe), then call git_push again with security_review_confirmed=true to proceed.', {
+        message: { type: 'string' },
+        security_review_confirmed: { type: 'boolean', description: 'Set true only after a second review resolved or explicitly confirmed every reported high-risk finding.' },
+      }, ['message']),
       t('git_clone', 'Clone a git repo', { url: { type: 'string' }, path: { type: 'string' } }, ['url', 'path']),
       t('git_branch', 'Inspect or manage local git branches. Actions: current, list, create, switch.', {
         action: { type: 'string', enum: ['current', 'list', 'create', 'switch'] },
@@ -453,12 +488,13 @@ export class ToolExecutor {
         remote: { type: 'boolean' },
         remote_name: { type: 'string' },
       }, []),
-      t('gh_pr_create', 'Create a GitHub pull request for the current branch through GitHub CLI. Requires explicit title and body.', {
+      t('gh_pr_create', 'Create a GitHub pull request for the current branch through GitHub CLI. Requires explicit title and body. Before creation, the same automatic repository security review as git_push runs: high-risk findings (personal keys/tokens or privacy addresses) BLOCK creation until a second review resolves them and you call again with security_review_confirmed=true.', {
         title: { type: 'string' },
         body: { type: 'string' },
         base: { type: 'string' },
         head: { type: 'string' },
         draft: { type: 'boolean' },
+        security_review_confirmed: { type: 'boolean', description: 'Set true only after a second review resolved or explicitly confirmed every reported high-risk finding.' },
       }, ['title', 'body']),
     ];
     let visibleTools = tools.filter((tool: any) => isNativeToolEnabled(tool.function?.name || '', this.config.nativeToolEnabled()));
@@ -582,10 +618,7 @@ export class ToolExecutor {
       const value = args[k];
       return value === undefined || value === null ? '' : String(value);
     };
-    const resolve = (relPath: string) => {
-      if (path.isAbsolute(relPath)) return relPath;
-      return path.join(wsPath, relPath);
-    };
+    const resolve = (relPath: string) => normalizeCrossEnvPath(relPath, wsPath);
 
     const targetForTool = () => {
       switch (tool) {
@@ -914,7 +947,7 @@ export class ToolExecutor {
         case 'file_audit': return await this.fileAudit(resolve(g('path') || '.'), wsPath, (args as Record<string, unknown>).include_remote !== false, g('base_ref'), context.signal);
         case 'repo_security_audit': return await this.repoSecurityAudit(resolve(g('path') || '.'), wsPath, g('base_ref'), context.signal);
         case 'git_pull': return await this.gpull(wsPath, context.signal);
-        case 'git_push': return await this.withRemoteSecurityPreamble(wsPath, () => this.gpush(g('message'), wsPath, context.signal), context.signal);
+        case 'git_push': return await this.withRemoteSecurityPreamble(wsPath, () => this.gpush(g('message'), wsPath, context.signal), context.signal, (args as Record<string, unknown>).security_review_confirmed === true);
         case 'git_clone': return await this.gclone(g('url'), resolve(g('path')), context.signal);
         case 'git_branch': return await this.gbranch(g('action'), g('name'), g('start_point'), wsPath, context.signal);
         case 'gh_auth_status': return await this.gh(['auth', 'status'], wsPath, context.signal);
@@ -922,7 +955,7 @@ export class ToolExecutor {
         case 'gh_issue_list': return await this.ghList('issue', g('repo'), Number((args as Record<string, unknown>).limit || 20), wsPath, context.signal);
         case 'gh_pr_list': return await this.ghList('pr', g('repo'), Number((args as Record<string, unknown>).limit || 20), wsPath, context.signal);
         case 'gh_fork': return await this.ghFork(g('action'), g('repo'), (args as Record<string, unknown>).clone === true, (args as Record<string, unknown>).remote === true, g('remote_name'), wsPath, context.signal);
-        case 'gh_pr_create': return await this.withRemoteSecurityPreamble(wsPath, () => this.ghPrCreate(g('title'), g('body'), g('base'), g('head'), (args as Record<string, unknown>).draft === true, wsPath, context.signal), context.signal);
+        case 'gh_pr_create': return await this.withRemoteSecurityPreamble(wsPath, () => this.ghPrCreate(g('title'), g('body'), g('base'), g('head'), (args as Record<string, unknown>).draft === true, wsPath, context.signal), context.signal, (args as Record<string, unknown>).security_review_confirmed === true);
         default: return `[?] Unknown tool: ${tool}`;
       }
     } catch (e: unknown) {
@@ -1065,7 +1098,7 @@ export class ToolExecutor {
       if (!token || /^https?:\/\//i.test(token) || token.startsWith('-')) continue;
       if (!this.looksLikePath(token)) continue;
       const withoutWildcard = token.replace(/[\\/][*?][^\\/]*$/g, '');
-      refs.push(path.isAbsolute(withoutWildcard) ? path.resolve(withoutWildcard) : path.resolve(wsPath, withoutWildcard));
+      refs.push(path.resolve(normalizeCrossEnvPath(withoutWildcard, wsPath)));
     }
     return Array.from(new Set(refs));
   }
@@ -1098,9 +1131,13 @@ export class ToolExecutor {
   private async bash(cmd: string, ws: string, timeoutMs?: unknown, signal?: AbortSignal): Promise<string> {
     if (!cmd.trim()) return '[bash] No command.';
     const timeout = this.resolveBashTimeout(timeoutMs);
+    // WSL 运行时跨环境归一：工作目录若仍是 Windows 盘符路径则转 /mnt/<drive>/...，
+    // 命令内的 Windows 盘符路径保守翻译为 WSL 挂载路径，让 bash 能直接操作 Windows 工作区。
+    const workspaceCwd = process.env.NEWMARK_WSL_DISTRO ? (windowsDrivePathToPosix(ws) || ws) : ws;
+    const translatedCmd = translateWindowsPathsForWslBash(cmd);
     try {
-      const result = await executeWorkspaceBash(cmd, ws, {
-        cwd: ws,
+      const result = await executeWorkspaceBash(translatedCmd, workspaceCwd, {
+        cwd: workspaceCwd,
         timeoutMs: timeout,
         signal,
         allowHostFallback: true,
@@ -1708,6 +1745,7 @@ export class ToolExecutor {
     const ignoredFiles = await this.gitExecAt(repoRoot, ['ls-files', '--others', '--ignored', '--exclude-standard'], signal);
     const changedAgainstBase = chosenBase ? await this.gitExecAt(repoRoot, ['diff', '--name-status', chosenBase], signal) : '';
     const secretFindings = this.scanRepositorySecrets(repoRoot, trackedFiles, statusShort);
+    const privacyFindings = this.scanRepositoryPrivacyLeaks(repoRoot, trackedFiles, statusShort);
     const localOnlyFindings = this.releaseExcludedPathFindings(repoRoot, ignoredFiles);
     const repoInfo = ghRemote
       ? await this.ghJson(['api', `repos/${ghRemote.owner}/${ghRemote.name}`, '--jq', '{name: .full_name, private: .private, visibility: .visibility, fork: .fork, archived: .archived, default_branch: .default_branch, html_url: .html_url}'], repoRoot, signal)
@@ -1718,6 +1756,7 @@ export class ToolExecutor {
     const risks: string[] = [];
     if (ghRemote && remotePrivate === false) risks.push('Remote GitHub repository is public; treat all tracked content and PR metadata as publicly visible.');
     if (ghRemote && secretFindings.length) risks.push('Potential secret-like material appears in tracked or changed files.');
+    if (ghRemote && privacyFindings.length) risks.push('Privacy-address content (credential URLs, private network addresses, or local user paths) appears in tracked or changed files.');
     if (ghRemote && localOnlyFindings.length) risks.push('Workspace contains release-excluded/local-only files that must stay out of remote commits and public reports.');
     if (ghRemote && String(statusShort || '').trim()) risks.push('Working tree has uncommitted changes; review changed files before push/PR.');
     if (!ghRemote && remotesRaw && !remotesRaw.startsWith('[git]')) risks.push('A non-GitHub remote exists; remote safety review still applies but GitHub metadata is unavailable.');
@@ -1755,13 +1794,15 @@ export class ToolExecutor {
         verdict: risks.length ? 'review-required' : 'no-obvious-risk',
         risks,
         secret_findings: secretFindings,
+        privacy_findings: privacyFindings,
+        high_risk_findings: [...secretFindings, ...privacyFindings],
         release_excluded_local_files: localOnlyFindings,
         recommendations,
       },
     }, null, 2);
   }
 
-  private scanRepositorySecrets(repoRoot: string, trackedFilesRaw: string, statusRaw: string): Array<Record<string, unknown>> {
+  private collectRepositoryFiles(trackedFilesRaw: string, statusRaw: string): Set<string> {
     const files = new Set<string>();
     for (const line of String(trackedFilesRaw || '').split(/\r?\n/)) {
       const rel = line.trim();
@@ -1771,6 +1812,11 @@ export class ToolExecutor {
       const rel = line.slice(3).trim().replace(/^"|"$/g, '');
       if (rel) files.add(rel.replace(/\\/g, '/'));
     }
+    return files;
+  }
+
+  private scanRepositorySecrets(repoRoot: string, trackedFilesRaw: string, statusRaw: string): Array<Record<string, unknown>> {
+    const files = this.collectRepositoryFiles(trackedFilesRaw, statusRaw);
     const patterns: Array<{ id: string; re: RegExp }> = [
       { id: 'openai_or_generic_sk_key', re: /\bsk-[A-Za-z0-9._-]{16,}\b/ },
       { id: 'github_token', re: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/ },
@@ -1789,7 +1835,42 @@ export class ToolExecutor {
       for (const [idx, line] of text.split(/\r?\n/).entries()) {
         const matched = patterns.find(p => p.re.test(line));
         if (matched) {
-          findings.push({ path: rel, line: idx + 1, type: matched.id, sample: line.replace(/=.*/, '= <redacted>').replace(/\b(?:sk|gh[pousr]|sk-ant)-[A-Za-z0-9._-]{8,}\b/g, '<redacted-token>').slice(0, 160) });
+          // 只汇报「类型 + 位置」，绝不把密钥值（含脱敏样本）暴露给 Agent，
+          // 避免经 API 中转被拦截窃取。
+          findings.push({ path: rel, line: idx + 1, type: matched.id });
+          if (findings.length >= 40) break;
+        }
+      }
+    }
+    return findings;
+  }
+
+  /**
+   * 扫描隐私地址类高危信息：带凭据的 URL（user:pass@）、私网 IP、本地用户目录
+   * 绝对路径（C:\Users\<user>、/home/<user>、/Users/<user>）。这些内容泄露个人
+   * 账号、内网拓扑或本地机器结构，进入公开 remote 即构成隐私暴露，需与密钥同级
+   * 硬性阻挡并在 Agent 二轮审查确认后放行。
+   */
+  private scanRepositoryPrivacyLeaks(repoRoot: string, trackedFilesRaw: string, statusRaw: string): Array<Record<string, unknown>> {
+    const files = this.collectRepositoryFiles(trackedFilesRaw, statusRaw);
+    const patterns: Array<{ id: string; re: RegExp }> = [
+      { id: 'credential_url', re: /(?:https?|git|ssh|ftp):\/\/[^\s/@:]+:[^\s/@]+@/i },
+      { id: 'private_network_address', re: /\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/ },
+      { id: 'local_user_path', re: /(?:^|[\s"'`])(?:C:\\(?:Users|Documents and Settings)\\[^\\\s"']+|~\/(?:[^/\s"']+\/){1,3}|\/(?:home|Users)\/[^/\s"']+\/[^\s"']*)/ },
+    ];
+    const findings: Array<Record<string, unknown>> = [];
+    for (const rel of Array.from(files).sort()) {
+      if (findings.length >= 40) break;
+      const full = path.join(repoRoot, rel);
+      if (!fs.existsSync(full) || !fs.statSync(full).isFile()) continue;
+      if (fs.statSync(full).size > 512 * 1024) continue;
+      let text = '';
+      try { text = fs.readFileSync(full, 'utf-8'); } catch { continue; }
+      for (const [idx, line] of text.split(/\r?\n/).entries()) {
+        const matched = patterns.find(p => p.re.test(line));
+        if (matched) {
+          // 只汇报「类型 + 位置」，绝不把隐私地址值暴露给 Agent。
+          findings.push({ path: rel, line: idx + 1, type: matched.id });
           if (findings.length >= 40) break;
         }
       }
@@ -1882,7 +1963,7 @@ export class ToolExecutor {
     return this.gh(args, ws, signal);
   }
 
-  private async withRemoteSecurityPreamble(ws: string, action: () => Promise<string>, signal?: AbortSignal): Promise<string> {
+  private async withRemoteSecurityPreamble(ws: string, action: () => Promise<string>, signal?: AbortSignal, securityReviewConfirmed = false): Promise<string> {
     const repoRoot = await this.findGitRoot(ws, ws, signal);
     if (!repoRoot) return await action();
     const remotes = await this.gitExecAt(repoRoot, ['remote', '-v'], signal);
@@ -1894,6 +1975,11 @@ export class ToolExecutor {
       const remote = audit.remote || {};
       const risks = Array.isArray(review.risks) ? review.risks : [];
       const findings = Array.isArray(review.secret_findings) ? review.secret_findings : [];
+      const privacy = Array.isArray(review.privacy_findings) ? review.privacy_findings : [];
+      const highRisk = [...findings, ...privacy];
+      if (highRisk.length && !securityReviewConfirmed) {
+        return this.formatRemoteSecurityBlock(remote, findings, privacy);
+      }
       const localOnly = Array.isArray(review.release_excluded_local_files) ? review.release_excluded_local_files : [];
       summary = [
         '[repo_security_audit]',
@@ -1901,13 +1987,44 @@ export class ToolExecutor {
         `verdict=${review.verdict || 'unknown'}`,
         risks.length ? `risks=${risks.length}` : 'risks=0',
         findings.length ? `secret_findings=${findings.length}` : 'secret_findings=0',
+        privacy.length ? `privacy_findings=${privacy.length}` : 'privacy_findings=0',
         localOnly.length ? `release_excluded_local_files=${localOnly.length}` : 'release_excluded_local_files=0',
-      ].join(' ');
+        securityReviewConfirmed ? 'security_review_confirmed=true' : '',
+      ].filter(Boolean).join(' ');
     } catch {
       // Keep the remote action result visible even if the preflight summary cannot be parsed.
     }
     const actionOutput = await action();
     return `${summary}\n${actionOutput}`;
+  }
+
+  /**
+   * 硬性阻挡远程写：当密钥或隐私地址类高危信息存在且 Agent 尚未二轮审查确认时，
+   * 返回明确的阻挡结果（脱敏 findings），要求处理/确认后再以
+   * security_review_confirmed=true 重试放行。
+   */
+  private formatRemoteSecurityBlock(remote: Record<string, any>, secretFindings: Array<Record<string, unknown>>, privacyFindings: Array<Record<string, unknown>>): string {
+    // 只汇报「类型 + 位置」，绝不把密钥值 / 隐私地址值（含脱敏样本）暴露给 Agent。
+    const detail = (finding: Record<string, unknown>) => `${String(finding.path || '')}:${String(finding.line || '')} [${String(finding.type || '')}]`.trim();
+    const lines = [
+      '[repo_security_audit] BLOCKED: remote write refused pending a second review.',
+      'High-risk content was detected in tracked or changed files.',
+      `Remote: ${remote.provider || 'git'}${remote.repository ? ` ${remote.repository}` : ''}.`,
+      `Secret-like findings: ${secretFindings.length}; privacy-address findings: ${privacyFindings.length}.`,
+    ];
+    if (secretFindings.length) {
+      lines.push('Secret-like findings:');
+      for (const finding of secretFindings.slice(0, 12)) lines.push(`  - ${detail(finding)}`);
+    }
+    if (privacyFindings.length) {
+      lines.push('Privacy-address findings:');
+      for (const finding of privacyFindings.slice(0, 12)) lines.push(`  - ${detail(finding)}`);
+    }
+    lines.push(
+      'Second review required: remove, .gitignore, or explicitly confirm each finding is safe.',
+      'Then retry this action with security_review_confirmed=true.',
+    );
+    return lines.join('\n');
   }
 
   private async gstat(ws: string, signal?: AbortSignal): Promise<string> {

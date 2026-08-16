@@ -1,7 +1,7 @@
 {
   "name": "newmark-agent",
   "productName": "Newmark Agent",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "homepage": "https://github.com/positer/Newmark-Agent",
   "repository": {
@@ -145,6 +145,7 @@
     "release:dev008-features-smoke": "node scripts/release-dev008-features-smoke.cjs",
     "release:dev009-features-smoke": "node scripts/release-dev009-features-smoke.cjs",
     "release:dev010-features-smoke": "node scripts/release-dev010-features-smoke.cjs",
+    "release:dev045-security-smoke": "node scripts/release-dev045-security-smoke.cjs",
     "benchmark:dev010-startup": "node scripts/benchmark-dev010-startup-memory.cjs",
     "benchmark:linux-agent-latency": "node scripts/benchmark-linux-agent-latency.cjs",
     "release:github-assets-verify": "node scripts/verify-github-release-assets.cjs",
@@ -152,6 +153,8 @@
     "release:ui-startup-recovery-smoke": "node scripts/release-ui-startup-recovery-smoke.cjs",
     "release:ui-tray-lifecycle-smoke": "node scripts/release-ui-tray-lifecycle-smoke.cjs",
     "release:ui-wsl-agent-backend-smoke": "node scripts/release-ui-wsl-agent-backend-smoke.cjs",
+    "release:win-wsl-backend-stress": "node scripts/release-win-wsl-backend-stress.cjs",
+    "release:wsl-cross-stress": "node scripts/release-wsl-cross-stress.cjs",
     "release:real-wsl-provider-smoke": "node scripts/release-real-wsl-provider-smoke.cjs",
     "release:real-wsl-provider-chat-smoke": "set NEWMARK_REAL_API_MODE=chat&& node scripts/release-real-wsl-provider-smoke.cjs",
     "release:real-wsl-provider-responses-smoke": "set NEWMARK_REAL_API_MODE=responses&& node scripts/release-real-wsl-provider-smoke.cjs",

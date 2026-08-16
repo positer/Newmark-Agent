@@ -1,5 +1,36 @@
 # Newmark Agent Overview
 
+## dev-0.4.5 WSL 交叉压力测试设计 + 全场景核心压力复测（2026-08-16）— source PASS
+
+新增正交交叉压力测试 `release-wsl-cross-stress.cjs` + 内层 `release-wsl-cross-stress-linux.cjs`：在 WSL Ubuntu 直接复用 Windows `dist` 的纯函数模块，交叉「命令链 × 平台 × 场景 × ×100 确定性」。验证 **62/62 PASS 0 FAIL**（单删除 ×5 链 ×3 平台 ×100 全放行、多语句 ×6 链 ×100 全拦截、`windowsDrivePathToPosix` 路径映射、git-clean/递归别名跨平台）。结合 win-wsl-backend-stress 与 deletion-safety 构成 WSL 全场景核心压力复测。证据：archive/2026-08-16-dev-0.4.5-wsl-cross-stress.md。
+
+## dev-0.4.5 win 打包版 + WSL 后端表现压力测试（2026-08-16）— source PASS
+
+新增 `release-win-wsl-backend-stress.cjs`：驱动 win-unpacked exe 的 WSL Agent 后端（Ubuntu-24.04），N 对话隔离 + 同对话连续多轮 + mock 计数精确匹配；扩展 `wsl-mock-provider.cjs` 支持 `WSL_STRESS_<n>` 序号 marker。验证 10 轮（6 对话 + 4 重复）、20 请求、10 write 工具调用全部成功，write 返回 `[write] OK: /mnt/c/...` 且文件出现在 Windows workspace（验证 WSL→Windows 跨环境路径映射）。适配三个既有约束：`prompt.disabled` 需 auto workspace、`routeToolSurfaceV2` 需消息显式命名 write、mock 取最新序号。证据：archive/2026-08-16-dev-0.4.5-win-wsl-backend-stress.md。
+
+## dev-0.4.5 打包 + win-unpack/MSI 压力测试新增项 + 全压力测试集合 + UAC 安装（2026-08-16）— packaged + installed
+
+版本升至 `0.4.5`；新增打包后安全 smoke `release-dev045-security-smoke.cjs`（12 断言）并挂入 ZIP/MSI 两个 smoke；`test:full-release` 全绿（verify 1598/1598、deletion-safety 194/194）。产物：MSI `226,125,903` bytes / `071A143A8D36918305856D6941E4A7F4B7B3C113BB6330B43D3047308DDE73A8`、ZIP `291,979,308` bytes / `4954E803557AD7F88B671FB5C152DECF41190564E30E3FB9A25CC3C1A96C3B2E`、app.asar `157,889,701` bytes / `6B440C48471E4F6E2B963F32D136336000404D5A5C210EC4D5A97889DE36F451`。MSI smoke（dev010 22/22 + dev045 12/12）PASS；UAC 安装 `C:\Program Files\Newmark Agent` → `--version` 0.4.5，安装与打包 app.asar 一致。已知 dev009 打包后 UI smoke 历史时序失败（非本轮回归）。证据：archive/2026-08-16-dev-0.4.5-packaging-release-gates-and-install.md。
+
+## dev-0.4.5 git 上传审查：高危信息只报类型、不向 Agent 暴露具体值（2026-08-16）— source PASS
+
+`repo_security_audit`/`formatRemoteSecurityBlock` 的 findings 由 `{path,line,type,sample}` 收紧为 `{path,line,type}`，删除脱敏 sample——密钥值、隐私地址值、用户名绝不再进入工具返回或阻挡文本，避免经 API 中转被拦截窃取；仅保留「类型 + 数量 + repo 内相对路径 + 行号」供 Agent 完成二轮审查定位。验证：`verify` **1598/1598 PASS**（净增 3 条不泄露值断言）、`typecheck`/`build` EXIT=0、`lint` 0 errors/70 warnings。证据：archive/2026-08-16-dev-0.4.5-high-risk-findings-type-only.md。
+
+## dev-0.4.5 删除/git 安全策略精准拦截 + 并行串命令 + 跨平台全工具（2026-08-16）— source PASS
+
+删除审查 `evaluateDeletionGuard` 精准化与跨平台补齐：① 修复 `||`（逻辑或）被误判为管道，`echo done || rm f.txt` 单删除不再误拦；② 移除误伤的 `/\bdone\b/`（普通英文 `done` 不再判循环）；③ 补齐 CMD `for /f … do del` 循环删除、PowerShell `ri -Recurse`、CMD `erase /s` 递归删除、`git clean`（非 dry-run，`-n`/`--dry-run` 放行）批量删除的硬性拦截；并行（`&`）/串行（`;`、`&&`、`||`）多语句删除由 `deletionVerbCount>=2` 精准拦截。覆盖 bash 与 terminal_takeover(write) 两条 shell 通道，跨 POSIX/PowerShell/CMD。验证：`deletion-safety-stress` **194/194 PASS**、`verify` **1595/1595 PASS**（净增 8）、`typecheck`/`build` EXIT=0、`lint` 0 errors/70 warnings。证据：archive/2026-08-16-dev-0.4.5-deletion-git-guard-precision-cross-platform.md。
+
+## dev-0.4.5 git 上传安全策略：高危硬性阻挡 + 隐私地址扫描 + Agent 二轮审查放行（2026-08-16）— source PASS
+
+`git_push`/`gh_pr_create` 前自动跑 `repo_security_audit`，在 tracked/changed 文件里发现**个人密钥**（API key/token/私钥）或**隐私地址**（带凭据 URL、私网 IP、本地用户目录路径）时**硬性阻挡**远程写；阻挡结果脱敏列出 findings，要求 Agent 二轮审查处理/确认后，再次调用并传 `security_review_confirmed=true` 放行。实现：新增 `scanRepositoryPrivacyLeaks`/`collectRepositoryFiles`/`formatRemoteSecurityBlock`；`repoSecurityAudit` 合并 `privacy_findings` + `high_risk_findings`；`withRemoteSecurityPreamble` 增加确认参数并在高危未确认时返回阻挡；工具 schema 增加 `security_review_confirmed`；静态 prompt 同步二轮审查语义。验证：`verify` **1587/1587 PASS**（净增 4 条断言：secret 阻挡 / 确认放行 / 隐私地址阻挡 / privacy+high_risk 聚合）、`typecheck`/`build` EXIT=0、`lint` 0 errors/70 warnings。证据：archive/2026-08-16-dev-0.4.5-git-push-privacy-second-review-gate.md。
+
+## dev-0.4.5 WSL 下 Windows 工作区跨环境优化 + conversation_rename 独立并行 API（2026-08-16）— source PASS
+
+1. **WSL 下 Windows 工作区跨环境文件操作与 bash**：Linux `path.isAbsolute` 不认识 Windows 盘符，`C:\...` 会被 `resolve` 误拼到 `/mnt/...` 工作区下、并被 bash 越界检查误判。新增 `workspace.ts` 纯函数 `windowsDrivePathToPosix`（盘符 → `/mnt/<drive>/...`）；`tools/index.ts` 新增 `normalizeCrossEnvPath`（文件工具 `resolve` + bash `extractCommandPathRefs` 统一归一）与 `translateWindowsPathsForWslBash`（保守翻译 bash 命令里的盘符路径 token）；`bash()` 归一 `cwd`。仅在 `NEWMARK_WSL_DISTRO` 下启用，非 WSL 行为与旧实现完全等价。
+2. **conversation_rename 独立为「并行响应 API」**：首个完成 Build 的最终响应到达时 fire-and-forget 发起独立 `provider.chat` 请求（system 严格约束「只返回简短名词短语标题」、15s 独立 AbortController 超时），按格式拿到标题后 `renameConversation`，不阻塞主流程、不共享主前缀缓存；失败/无 provider 回退本地 `deriveConversationTitleFromSummary`。`conversation_rename` 工具与 `shouldPromptConversationRename` 判定均保留，首轮 prompt 仍不注入一次性 tool-call 指令。
+
+验证：`npm run typecheck` / `build` EXIT=0；`node dist/tests/verify.js` **1583/1583 PASS**（新增 3 条 source-contract 断言：`windowsDrivePathToPosix` 映射、tools WSL 跨环境归一、rename 独立并行 API）；`goalConversationToolVerify` 16/16、`nativeBashVerify`、`automationBashStressVerify` PASS；`npm run lint` 0 errors / 70 warnings（无新增 warning）。未打包、未 UAC 安装、未 tag / 未远程发布。证据：archive/2026-08-16-dev-0.4.5-wsl-windows-workspace-and-conversation-rename-api.md。
+
 ## dev-0.4.4 TUI 备用屏 VT 启用修复（光标追踪最终根因，2026-08-16）— packaged + installed
 
 安装版 `Newmark --TUI` 走 `Console Runtime.exe`(Electron) → `ELECTRON_RUN_AS_NODE` sidecar，该 sidecar 不像纯 Node 那样自动启用输出句柄 `ENABLE_VIRTUAL_TERMINAL_PROCESSING`，且 `setWindowsConsoleMode` 用错句柄（`-10` 输入而非 `-11` 输出）→ `?1049h` 不被 ConHost 解析 → 备用屏不进入 → 主屏保留滚动历史（滚轮能滚回旧帧、光标追踪错位）。修复：`setWindowsConsoleMode` 改为输出句柄 `-11` 设 `0x4` + 输入句柄 `-10` 设 `0x200`，并在 spawn sidecar 前调用；`app.js` 加 `enableWindowsVirtualTerminal()` 保险；`verify.ts` 加 3 条断言。重新打包 + UAC 安装（`MSI_INSTALL_EXIT=0`、app.asar `A42000BFF5BE34A250912BDF8624B02A61D100B7B53903C57B49C0E5C8EF94FC`）。commit `4ae2499`。证据：archive/20260816-dev-0.4.4-tui-vt-alternate-screen-fix.md。

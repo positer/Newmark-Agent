@@ -20,6 +20,40 @@ function containsMarker(value, marker) {
   return Object.values(value).some(item => containsMarker(item, marker));
 }
 
+function messageText(message) {
+  if (typeof message?.content === 'string') return message.content;
+  if (Array.isArray(message?.content)) return message.content.map(part => (part && typeof part.text === 'string') ? part.text : '').join(' ');
+  return '';
+}
+
+function messagesText(messages) {
+  return (Array.isArray(messages) ? messages : []).map(messageText).join('\n');
+}
+
+/**
+ * 从请求文本提取压力序号：`WSL_STRESS_<n>` 生成独立文件与完成标记，
+ * 否则回退到现有 `WSL_PROOF_SMOKE` 的默认 proof 契约（向后兼容）。
+ */
+function stressInfo(messages) {
+  const text = messagesText(messages);
+  const matches = [...text.matchAll(/WSL_STRESS_(\d+)/g)];
+  if (matches.length) {
+    const n = matches[matches.length - 1][1];
+    return {
+      path: `wsl-stress-${n}.txt`,
+      toolContent: `WSL_STRESS_TOOL_OK_${n}`,
+      agentContent: `WSL_STRESS_AGENT_OK_${n}`,
+      toolCallId: `wsl-write-${n}`,
+    };
+  }
+  return {
+    path: 'wsl-backend-proof.txt',
+    toolContent: 'WSL_BACKEND_TOOL_OK',
+    agentContent: 'WSL_BACKEND_AGENT_OK',
+    toolCallId: 'wsl-write-1',
+  };
+}
+
 function inspectVisionToolRequest(messages) {
   const toolMessages = Array.isArray(messages)
     ? messages.filter(message => message && message.role === 'tool')
@@ -154,16 +188,19 @@ http.createServer((request, response) => {
     }
 
     stats.proof.requests += 1;
-    const hasToolResult = messages.some(message => message?.role === 'tool' && message?.tool_call_id === 'wsl-write-1');
+    const proofInfo = stressInfo(messages);
+    const hasToolResult = messages.some(message => message?.role === 'tool' && message?.tool_call_id === proofInfo.toolCallId);
     if (!hasToolResult) {
       stats.proof.toolCallIssued += 1;
-      sendJson(response, 200, toolCall('wsl-write-1', 'write', {
-        path: 'wsl-backend-proof.txt',
-        content: 'WSL_BACKEND_TOOL_OK',
+      sendJson(response, 200, toolCall(proofInfo.toolCallId, 'write', {
+        path: proofInfo.path,
+        content: proofInfo.toolContent,
       }));
       return;
     }
     stats.proof.toolResultSeen += 1;
-    sendJson(response, 200, { choices: [{ message: { role: 'assistant', content: 'WSL_BACKEND_AGENT_OK' } }] });
+    const toolMsg = messages.find(message => message?.role === 'tool');
+    stats.proof.lastToolResult = toolMsg ? String(toolMsg.content || '').slice(0, 300) : '';
+    sendJson(response, 200, { choices: [{ message: { role: 'assistant', content: proofInfo.agentContent } }] });
   });
 }).listen(port, '127.0.0.1', () => process.stdout.write(`READY ${port}\n`));

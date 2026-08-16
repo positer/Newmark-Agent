@@ -95,12 +95,30 @@ const BLOCKED_COMMANDS = [
   'del a.txt b.txt c.txt',
   'Remove-Item a.txt, b.txt',
   'rm -f a.txt b.txt',
-  // 多语句删除
+  // 多语句删除（串行 / 并行 / 短路）
   'rm a.txt && rm b.txt',
   'rm a.txt; rm b.txt',
   'rm a.txt && del b.txt',
   'rm a.txt ; rm b.txt ; rm c.txt',
   'rm a.txt\nrm b.txt',
+  'rm a.txt & rm b.txt',
+  'rm a.txt & del b.txt',
+  'rm a.txt || rm b.txt',
+  'del a.txt & del b.txt',
+  // CMD for /f ... do del 循环删除（此前 for /f 形式会漏拦）
+  'for /f "delims=" %i in (*.txt) do del %i',
+  'for %f in (*.txt) do del %f',
+  'for /r %i in (*.log) do del %i',
+  // PowerShell 别名 / CMD erase 的递归删除
+  'ri -Recurse build',
+  'ri -r build',
+  'erase /s build',
+  'erase /s /q build',
+  // git clean（非 dry-run）删除未跟踪文件
+  'git clean -fd',
+  'git clean -fdx',
+  'git clean -f -d',
+  'git clean -xdf',
 ];
 
 /** 必须放行的单文件删除 / 非删除命令（避免误伤）。 */
@@ -129,7 +147,16 @@ const ALLOWED_COMMANDS = [
   'cat file.txt',
   'grep pattern file.txt',
   'git clean -n',
+  'git clean --dry-run',
+  'git clean -n -d',
   'rm',
+  // 命令链中的单文件删除 / 逻辑或、逻辑与不应被误判为管道或批量删除
+  'echo done || rm file.txt',
+  'rm file.txt || echo done',
+  'echo done && rm file.txt',
+  'rm file.txt && echo done',
+  'rm file.txt; echo done',
+  'echo done; rm file.txt',
 ];
 
 function runGuardMatrix() {

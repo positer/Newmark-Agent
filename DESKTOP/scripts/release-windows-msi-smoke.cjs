@@ -61,16 +61,17 @@ function administrativeExtract(msiPath, destination, logPath) {
     // /a creates an isolated administrative image and never installs over the user's registered product.
     administrativeExtract(msiPath, extractRoot, logPath);
     const unpackedRoot = await smokeWindowsUnpacked(extractRoot, 'Windows MSI administrative image');
-    const featureScript = 'release-dev010-features-smoke.cjs';
-    const featureSmoke = spawnSync(process.execPath, [path.join(__dirname, featureScript)], {
-      cwd: path.resolve(__dirname, '..'),
-      encoding: 'utf8',
-      env: { ...process.env, NEWMARK_TEST_EXE: path.join(unpackedRoot, 'Newmark Agent.exe') },
-      stdio: 'inherit',
-      timeout: 360000,
-    });
-    if (featureSmoke.error) throw featureSmoke.error;
-    if (featureSmoke.status !== 0) throw new Error(`${featureScript} exited ${featureSmoke.status}`);
+    for (const featureScript of ['release-dev010-features-smoke.cjs', 'release-dev045-security-smoke.cjs']) {
+      const featureSmoke = spawnSync(process.execPath, [path.join(__dirname, featureScript)], {
+        cwd: path.resolve(__dirname, '..'),
+        encoding: 'utf8',
+        env: { ...process.env, NEWMARK_TEST_EXE: path.join(unpackedRoot, 'Newmark Agent.exe') },
+        stdio: 'inherit',
+        timeout: 360000,
+      });
+      if (featureSmoke.error) throw featureSmoke.error;
+      if (featureSmoke.status !== 0) throw new Error(`${featureScript} exited ${featureSmoke.status}`);
+    }
     console.log(`[release-windows-msi-smoke] PASS ${path.relative(extractRoot, unpackedRoot) || '.'}`);
   } finally {
     await removeTreeWithRetry(tempRoot);

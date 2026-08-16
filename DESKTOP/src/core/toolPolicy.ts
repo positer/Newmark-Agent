@@ -210,15 +210,15 @@ function deletionVerbCount(text: string): number {
   return matches ? matches.length : 0;
 }
 
-/** 循环结构批量删除：foreach / for…in / for( / while( / bash do…done。 */
+/** 循环结构批量删除：foreach / for…in / for( / CMD for…do del / while( / bash do…done。 */
 function hasLoopDeletion(text: string): boolean {
   const lower = text.toLowerCase();
-  if (/\bforeach\b/.test(lower)) return true;                       // PowerShell foreach
-  if (/\bfor\b\s*[$({]/.test(lower)) return true;                 // PowerShell/C for(...)
-  if (/\bfor\b\s+\S+\s+in\b/.test(lower)) return true;          // bash for f in ...
+  if (/\bforeach\b/.test(lower)) return true;                       // PowerShell foreach / ForEach-Object
+  if (/\bfor\b\s*[$({]/.test(lower)) return true;                 // PowerShell/C/bash for(...)
+  if (/\bfor\b\s+\S+\s+in\b/.test(lower)) return true;          // bash for f in ... / CMD for %f in (...)
+  if (/\bfor\b[^\n;&|]*\bdo\b[^\n;&|]*\b(?:del|rm|erase|remove-item|ri)\b/.test(lower)) return true; // CMD for ... do del
   if (/\bwhile\b\s*[({]/.test(lower)) return true;                 // while(...)
   if (/\bwhile\b\s+\S/.test(lower) && /\bdo\b/.test(lower)) return true; // bash while ... do
-  if (/\bdone\b/.test(lower)) return true;                          // bash 循环结束标记
   return false;
 }
 
@@ -227,6 +227,15 @@ function hasFindXargsDeletion(text: string): boolean {
   if (/\bfind\b[^\n;&|]*-(?:delete\b|exec(?:dir)?\s+(?:rm|del|erase)\b)/i.test(text)) return true;
   if (/\bxargs\b[^\n;&|]*\b(?:rm|del|erase|remove-item)\b/i.test(text)) return true;
   return false;
+}
+
+/** git clean（非 dry-run）删除未跟踪文件 = 批量删除；`-n` / `--dry-run` 只预览放行。 */
+function hasGitCleanDeletion(text: string): boolean {
+  const lower = text.toLowerCase();
+  if (!/\bgit\b\s+clean\b/.test(lower)) return false;
+  if (/(?:^|\s)-[a-z]*n[a-z]*(?:\s|$)/.test(lower)) return false;
+  if (/(?:^|\s)--dry-run(?:\s|$)/.test(lower)) return false;
+  return true;
 }
 
 /** 按 shell 语义切分参数：引号内的空格不拆分，返回去引号后的 token。 */
@@ -241,18 +250,18 @@ function splitCommandArgs(args: string): string[] {
   return tokens;
 }
 
-/** 管道接收端删除：上游产出多项，删除动词作为接收端即批量删除。 */
+/** 管道接收端删除：上游产出多项，删除动词作为接收端即批量删除。`||`（逻辑或）不是管道。 */
 function hasPipeDeletion(text: string): boolean {
-  return new RegExp(`\\|\\s*${DELETE_VERB_SOURCE}\\b`, 'i').test(text);
+  return /(?<!\|)\|\s*(?:remove-item|rmdir|unlink|erase|del|rm|rd|ri)\b/i.test(text);
 }
 
-/** 递归删除标志：rm -r/-R/--recursive、Remove-Item -Recurse、rmdir/rd /s、del /s。 */
+/** 递归删除标志：rm -r/-R/--recursive、Remove-Item/ri -Recurse、rmdir/rd /s、del/erase /s。 */
 function hasRecursiveDeletionFlag(text: string): boolean {
   const lower = text.toLowerCase();
   if (/\brm\b\s+(-[a-z]*r[a-z]*|--recursive)\b/.test(lower)) return true;
-  if (/\bremove-item\b[^\n;&|]*\s+-(?:recurse|r)\b/.test(lower)) return true;
+  if (/\b(?:remove-item|ri)\b[^\n;&|]*\s+-(?:recurse|r)\b/.test(lower)) return true;
   if (/\b(?:rmdir|rd)\b\s+(-r\b|\/[s]\b)/.test(lower)) return true;
-  if (/\bdel\b\s+\/[s]\b/.test(lower)) return true;
+  if (/\b(?:del|erase)\b\s+\/[s]\b/.test(lower)) return true;
   return false;
 }
 
@@ -290,9 +299,11 @@ function hasMultipleDeleteTargets(text: string): boolean {
 export function evaluateDeletionGuard(command: string): DeletionGuardDecision {
   const text = String(command || '');
   if (!text.trim()) return { blocked: false };
-  // find -delete / find -exec rm 中，-delete 不含标准删除动词，需在入口单独识别为批量删除意图。
+  // find -delete / find -exec rm 中，-delete 不含标准删除动词；git clean 也不含删除动词，
+  // 均需在入口单独识别为批量删除意图。
   const findXargs = hasFindXargsDeletion(text);
-  if (!hasDeletionVerb(text) && !findXargs) return { blocked: false };
+  const gitClean = hasGitCleanDeletion(text);
+  if (!hasDeletionVerb(text) && !findXargs && !gitClean) return { blocked: false };
 
   const refuse = (kind: string): DeletionGuardDecision => ({
     blocked: true,
@@ -301,6 +312,7 @@ export function evaluateDeletionGuard(command: string): DeletionGuardDecision {
 
   if (hasLoopDeletion(text)) return refuse('Loop-based');
   if (findXargs) return refuse('find/xargs');
+  if (gitClean) return refuse('git-clean');
   if (hasPipeDeletion(text)) return refuse('Pipe-fed');
   if (hasRecursiveDeletionFlag(text)) return refuse('Recursive');
   if (hasWildcardDeletionTarget(text)) return refuse('Wildcard');

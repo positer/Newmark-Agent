@@ -44,6 +44,19 @@ function lastEmbeddedWindowsPath(input: string): string {
   return lastIndex >= 0 ? input.slice(lastIndex) : '';
 }
 
+/**
+ * 把 Windows 盘符路径（`C:\...` / `C:/...`）转换为 WSL/Linux 挂载路径
+ * （`/mnt/c/...`）。非 Windows 盘符路径返回空字符串，由调用方决定回退。
+ * 纯函数、无 I/O：WSL 运行时文件工具与 bash 都依赖它做跨环境归一。
+ */
+export function windowsDrivePathToPosix(input: string): string {
+  const raw = String(input || '').trim();
+  const drive = /^([A-Za-z]):[\\/](.*)$/.exec(raw);
+  if (!drive) return '';
+  const rest = drive[2].replace(/\\/g, '/').replace(/^\/+/, '');
+  return `/mnt/${drive[1].toLowerCase()}/${rest}`;
+}
+
 /** Normalize persisted Windows/WSL aliases and recover paths damaged by cross-host path.resolve calls. */
 export function normalizeHostWorkspacePath(input: string, platform: NodeJS.Platform = process.platform): string {
   const raw = String(input || '').trim();

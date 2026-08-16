@@ -1,6 +1,10 @@
 # Newmark Agent Overview
 
-## dev-0.4.4 历史 Build 信息主动复用 prompt + TUI 模型长菜单光标跟随加固（2026-08-16）— source PASS
+## dev-0.4.4 打包 + MSI 本地 UAC 安装（2026-08-16）— installed
+
+`npm run dist:windows-release` 完整门禁全绿（deletion-safety 156/156、SSH TUI stress 4 重启、release-cli-smoke、context-compress-cli-stress 9 请求、console-wrapper-boundary-stress version=0.4.4）后产出 MSI/ZIP；UAC 提权安装 `msiexec /i Newmark-Agent-0.4.4-x64.msi /qb /norestart` → `MSI_INSTALL_EXIT=3010`（成功、提示重启）；`Newmark.exe --version` → 0.4.4 exit 0，安装目录与打包 `app.asar` SHA-256 完全一致（`AB89CC211A5C0FB653E1B7B589029A817CE0957E843CCEB854275D5F4FDB0D8A`，157,821,714 bytes）；CLI 未知参数 fail-closed exit 2、GUI 入口 CLI 帮助契约正常、无残留进程。产物：MSI `226,097,231` bytes / `7AE4BC45D449693F3FBB03CF12594BC2ED0CDACD4580C8B6F8CAFF66785CB671`；ZIP `291,954,360` bytes / `CFFF06C1153C2F4B68D471D28BBA8ABFB7B361DA3FDF1E4B0C61A1A9A371533D`。未 push、未远程发布。
+
+## dev-0.4.4 历史 Build 信息主动复用 prompt + TUI 模型长菜单光标跟随加固（2026-08-16）— source PASS；已打包 + UAC 安装
 
 1. **历史信息主动复用**：Build 任务台账（`buildConversationTaskLedger` 尾行）、`CORE_SYSTEM_PROMPT` 的 Build history disclosure、`build_history_query` 工具描述三处由「仅用户问细节时查询」改为「主动复用」语义：非首轮 build block 在任务延续/修复/验证/依赖历史工作时，**在重新调查（重跑命令/重读文件）之前**先调用 `build_history_query` 读取相关历史块的工具活动与结果并复用；保留「查询只读、不授权恢复工作」边界；三处静态文本不破坏 provider 前缀缓存（`contextCacheHitStressVerify` 29/29）。
 2. **TUI 模型长菜单光标跟随加固（含用户复报后的窗口约束根因修复）**：① 内容视图滚动改为**居中跟随**（焦点行保持在视口上 1/3，两行一组的模型选项主行+描述行同屏可见——实测高亮从 row 26 移到 row 17）；② `modelView` 焦点行号由硬编码（`14 + index*2`）改为动态计算（`tierStart`/`deploymentStart` 由 `rows.length` 推导）；③ **窗口尺寸不再 `Math.max(52/20)` 强制放大**——终端窗口小于最小布局时帧会画到窗口外（高亮行落在窗口外不可见），改为严格采用终端实际尺寸 + 输出阶段按可见宽度/高度裁剪（`boundedBody`/`boundedFooter`/覆盖层截断），帧绝不越界；④ 新增 `readWindowSize()` 每次渲染实时读取（`getWindowSize` 优先 → `columns/rows` → `COLUMNS/LINES`），resize 后自适应；⑤ 新增"无功能 TUI"打包前 pty 门禁：`--demo` + `NEWMARK_TUI_DEMO_MODELS` 注入长模型列表，`cursor-follow-pty.test.js` 三窗口组合（100x24/40x12/60x16）遍历 + 真实 resize（100x24→40x12→90x28→52x15）自适应断言，挂入 `test:tui:built`；demo.test.js 补小窗口严格约束 + 实时尺寸单测；清理 TUI/test 历史遗留 tmp 调试文件。

@@ -1,5 +1,9 @@
 # Newmark Agent Overview
 
+## dev-0.4.5 git push + win/linux release + 本地 hash 校验（2026-08-16）— released
+
+压力测试全绿后：commit `a2c58a7` push master、annotated tag `dev-0.4.5` push；`gh release create dev-0.4.5` 上传 5 资产（win MSI/ZIP + linux AppImage/deb/unpacked ZIP），GitHub digest 与本地 SHA-256 完全一致。产物：MSI `226,125,903`/`071A143A…DE73A8`、win ZIP `291,979,308`/`4954E803…C3B2E`、AppImage `176,106,215`/`0CD30D39…FA908A8`、deb `135,690,272`/`56FB4657…C8CCE`、linux ZIP `172,214,822`/`AF235879…9A9E59`。Linux 经 WSL Ubuntu-24.04 隔离构建 + 完整 `npm test` 全绿。证据：archive/2026-08-16-dev-0.4.5-git-push-and-release.md。
+
 ## dev-0.4.5 WSL 交叉压力测试设计 + 全场景核心压力复测（2026-08-16）— source PASS
 
 新增正交交叉压力测试 `release-wsl-cross-stress.cjs` + 内层 `release-wsl-cross-stress-linux.cjs`：在 WSL Ubuntu 直接复用 Windows `dist` 的纯函数模块，交叉「命令链 × 平台 × 场景 × ×100 确定性」。验证 **62/62 PASS 0 FAIL**（单删除 ×5 链 ×3 平台 ×100 全放行、多语句 ×6 链 ×100 全拦截、`windowsDrivePathToPosix` 路径映射、git-clean/递归别名跨平台）。结合 win-wsl-backend-stress 与 deletion-safety 构成 WSL 全场景核心压力复测。证据：archive/2026-08-16-dev-0.4.5-wsl-cross-stress.md。

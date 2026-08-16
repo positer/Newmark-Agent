@@ -1,5 +1,12 @@
 # Newmark Agent Overview
 
+## dev-0.4.4 历史 Build 信息主动复用 prompt + TUI 模型长菜单光标跟随加固（2026-08-16）— source PASS
+
+1. **历史信息主动复用**：Build 任务台账（`buildConversationTaskLedger` 尾行）、`CORE_SYSTEM_PROMPT` 的 Build history disclosure、`build_history_query` 工具描述三处由「仅用户问细节时查询」改为「主动复用」语义：非首轮 build block 在任务延续/修复/验证/依赖历史工作时，**在重新调查（重跑命令/重读文件）之前**先调用 `build_history_query` 读取相关历史块的工具活动与结果并复用；保留「查询只读、不授权恢复工作」边界；三处静态文本不破坏 provider 前缀缓存（`contextCacheHitStressVerify` 29/29）。
+2. **TUI 模型长菜单光标跟随加固**：内容视图滚动改为**居中跟随**（焦点行保持在视口上 1/3，两行一组的模型选项主行+描述行同屏可见，不再贴底/被裁——实测高亮从 row 26 移到 row 17）；`modelView` 焦点行号由硬编码（`14 + index*2`，依赖 6 档位前缀）改为动态计算（`tierStart`/`deploymentStart` 由 `rows.length` 推导）；`cursor-follow-stress.test.js` 补齐 dev-0.4.3 漏掉的 model 视图压力测试（7/7）。排查中确认：打包 asar 的 `dist/tui` 与源码哈希一致、model 视图滚动在 60/300 模型 × 多终端尺寸 + 用户真实配置副本（30 模型 120x30）真实 pty 下均无"高亮不可见"。
+
+验证：`npm run typecheck`/`build` EXIT=0；`node dist/tests/verify.js` **1574/1574 PASS**（新增 4 条 dev-0.4.4 断言）；`normalChatRegressionVerify`、`goalConversationToolVerify` PASS；`contextCacheHitStressVerify` 29/29；TUI demo 59/59 + cursor-follow 7/7 + launcher 28/28；`npm run lint` 0 errors（70 既有 warnings）。版本号升至 `0.4.4`，已 commit（`5367bb3`）并打 tag `dev-0.4.4`；未打包、未 UAC 安装、未远程发布。证据：archive/20260816-dev-0.4.4-history-reuse-prompt-and-tui-model-cursor.md。
+
 ## dev-0.4.3 打包 + UAC 安装 + win/linux release（2026-08-16）— released
 
 移动本地 tag `dev-0.4.3` 至 `dd08013` 并 push master 与 tag（远端此前无 dev-0.4.3）。Windows：`npm run dist:windows-release` 完整门禁（test:full-release + 打包）全绿后产出 MSI/ZIP，UAC 提权安装 `msiexec /i ... /qb /norestart` exit 0 → Program Files 0.4.3.0，安装目录与打包 `release/win-unpacked/resources/app.asar` SHA-256 一致（`8B241F04D761003ACE3C5C61F72C32F2A37A55406B7BB749CB3E5769C6AB4E1A`），`Newmark.exe --version` → 0.4.3 exit 0。Linux：WSL Ubuntu-24.04 隔离环境完整 `npm test` 全绿（含 thinkingTierMapCacheStressVerify 67/67、deletion-safety 156/156）后 electron-builder 产出 AppImage/deb/unpacked ZIP 并 rsync 回 `release/`。GitHub prerelease `dev-0.4.3` 5 资产全部上传（首次 create 因上传超时留下 draft/untagged 状态，删除后以 `--verify-tag` 重建并逐资产上传修正）。证据：archive/20260816-dev-0.4.3-win-linux-release.md。

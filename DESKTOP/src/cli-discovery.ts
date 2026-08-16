@@ -74,6 +74,7 @@ const BOOLEAN_FLAGS = new Set<string>([
   '-v',
   '-version',
   '--automation-wake',
+  '--no-browser',
   '--newmark-viewer',
   '--allow-multiple-instances',
   '--disable-gpu',

@@ -33,7 +33,7 @@
     "start:dev": "npm run build && electron .",
     "start:cli": "node dist/launcher.js --cli",
     "test:tui": "npm run build && npm run test:tui:built",
-    "test:tui:built": "node ../TUI/test/demo.test.js && node ../TUI/test/cursor-follow-stress.test.js && node ../TUI/test/cursor-follow-pty.test.js && node dist/tests/tuiLauncherVerify.js && node dist/tests/tuiStopRaceVerify.js",
+    "test:tui:built": "node ../TUI/test/demo.test.js && node ../TUI/test/cursor-follow-stress.test.js && node ../TUI/test/cursor-follow-pty-gate.js && node dist/tests/tuiLauncherVerify.js && node dist/tests/tuiStopRaceVerify.js",
     "test:ssh-tui-stress": "npm run build && npm run test:ssh-tui-stress:built",
     "test:ssh-tui-stress:built": "node scripts/release-ssh-tui-stress.cjs",
     "test:wsl-tui-stress:built": "node scripts/release-wsl-tui-stress.cjs",

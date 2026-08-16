@@ -51,8 +51,10 @@ const ESC = "\u001b[";
 function createPaintScheduler(state, output = process.stdout, renderFrame = render) {
   let pending = false;
   let lastFrame = "";
+  let cancelled = false;
   const flush = () => {
     pending = false;
+    if (cancelled) return;
     const frame = renderFrame(state);
     if (frame === lastFrame) return false;
     lastFrame = frame;
@@ -65,6 +67,8 @@ function createPaintScheduler(state, output = process.stdout, renderFrame = rend
     setImmediate(flush);
   };
   paint.flush = flush;
+  // 退出前调用：丢弃任何排队中的重绘，避免恢复主屏后又被画上一帧 TUI 画面。
+  paint.cancel = () => { cancelled = true; pending = false; };
   return paint;
 }
 
@@ -140,24 +144,38 @@ function start(options = {}) {
   let timer = null;
   let animationTimer = null;
   let closing = false;
+  // 标准 TUI 屏幕模型：进入备用屏幕缓冲（alternate screen buffer）。
+  // 备用屏没有主屏的滚动历史：每次刷新用 2J 全量重绘而不是滚动新页面，
+  // 鼠标滚轮无法滚回上一次刷新，终端滚动也不会让画面错位（否则高亮行
+  // 会随终端滚动"离开屏幕"）。
+  const enterAltScreen = () => process.stdout.write(`${ESC}?1049h${ESC}?25l${ESC}2J${ESC}H`);
+  const leaveAltScreen = () => `${ESC}?25h${ESC}?1049l${ESC}0m${ESC}2J${ESC}H`;
   const paint = createPaintScheduler(state);
   const cleanup = () => {
     if (timer) clearInterval(timer);
     if (animationTimer) clearInterval(animationTimer);
     if (typeof process.stdin.setRawMode === "function") process.stdin.setRawMode(false);
     process.stdin.pause();
-    process.stdout.write(`${ESC}?25h${ESC}0m${ESC}2J${ESC}H`);
   };
   const quit = () => {
     if (closing) return;
     closing = true;
+    paint.cancel();
     cleanup();
     if (typeof state.adapter.close === "function") state.adapter.close();
-    process.stdout.write(state.adapterKind === "mock"
-      ? "Newmark TUI demo closed. No state was saved.\n"
-      : "Newmark TUI closed. Conversation and settings state are persisted by Newmark.\n");
+    // 退出序列与关闭消息用 fs.writeSync 同步写入 fd：直接进入内核管道，
+    // 不经过异步流缓冲，process.exit() 不会丢弃任何字节（此前异步 write
+    // 在退出瞬间被 ConPTY/管道丢弃，导致恢复主屏后看不到退出消息）。
+    try {
+      const fs = require("node:fs");
+      const fd = process.stdout.fd || 1;
+      fs.writeSync(fd, `${leaveAltScreen()}\n`);
+      fs.writeSync(fd, state.adapterKind === "mock"
+        ? "Newmark TUI demo closed. No state was saved.\n"
+        : "Newmark TUI closed. Conversation and settings state are persisted by Newmark.\n");
+    } catch {}
     process.exitCode = 0;
-    setImmediate(() => process.exit(0));
+    process.exit(0);
   };
 
   function simulateReply(text) {
@@ -554,8 +572,10 @@ function start(options = {}) {
   process.stdin.resume();
   process.stdin.on("keypress", handleKey);
   process.stdout.on("resize", paint);
-  process.on("exit", () => process.stdout.write(`${ESC}?25h${ESC}0m`));
+  // 兜底：任何退出路径（包括未捕获异常后的 exit 事件）都恢复主屏缓冲与光标。
+  process.on("exit", () => process.stdout.write(`${ESC}?25h${ESC}?1049l${ESC}0m`));
   process.on("SIGTERM", quit);
+  enterAltScreen();
   paint();
 }
 

@@ -1,5 +1,9 @@
 # Newmark Agent Overview
 
+## dev-0.4.4 备用屏缓冲修复（TUI 光标追踪最终根因，2026-08-16）— source PASS
+
+TUI 此前一直在主屏绘制，主屏保留滚动历史：鼠标滚轮能滚回旧帧、终端滚动会让 `2J` 全量重绘错位——这正是"光标（高亮）离开屏幕"的真正根因。修复：① 启动进入**备用屏幕缓冲**（`\u001b[?1049h`，无滚动历史、滚轮无效），每次刷新在备用屏内 `?25l 2J H` 全量重绘；② 退出 `fs.writeSync` 同步写 `\u001b[?25h\u001b[?1049l\u001b[0m\u001b[2J\u001b[H` 恢复主屏与光标（此前异步 write + `process.exit` 会丢退出消息）；③ `paint.cancel()` 丢弃退出前排队的重绘，避免恢复主屏后又被画一帧。pty 门禁重构为普通脚本 `cursor-follow-pty-gate.js`（node-pty 的 ConPTY 辅助进程会让 node --test 挂起），挂入 `test:tui:built`：断言启动 `?1049h`、退出 `?1049l`/`?25h`/关闭消息、三窗口（100x24/40x12/60x16）模型列表高亮+描述行同屏、真实 resize（100x24→40x12→90x28→52x15）自适应。验证：`verify` 1574/1574、TUI demo 61/61 + stress 7/7 + pty gate ALL PASS + launcher 28/28、lint 0 errors。
+
 ## dev-0.4.4 打包 + MSI 本地 UAC 安装（2026-08-16）— installed
 
 `npm run dist:windows-release` 完整门禁全绿（deletion-safety 156/156、SSH TUI stress 4 重启、release-cli-smoke、context-compress-cli-stress 9 请求、console-wrapper-boundary-stress version=0.4.4）后产出 MSI/ZIP；UAC 提权安装 `msiexec /i Newmark-Agent-0.4.4-x64.msi /qb /norestart` → `MSI_INSTALL_EXIT=3010`（成功、提示重启）；`Newmark.exe --version` → 0.4.4 exit 0，安装目录与打包 `app.asar` SHA-256 完全一致（`AB89CC211A5C0FB653E1B7B589029A817CE0957E843CCEB854275D5F4FDB0D8A`，157,821,714 bytes）；CLI 未知参数 fail-closed exit 2、GUI 入口 CLI 帮助契约正常、无残留进程。产物：MSI `226,097,231` bytes / `7AE4BC45D449693F3FBB03CF12594BC2ED0CDACD4580C8B6F8CAFF66785CB671`；ZIP `291,954,360` bytes / `CFFF06C1153C2F4B68D471D28BBA8ABFB7B361DA3FDF1E4B0C61A1A9A371533D`。未 push、未远程发布。

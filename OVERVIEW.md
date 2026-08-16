@@ -1,5 +1,9 @@
 # Newmark Agent Overview
 
+## dev-0.4.4 TUI 备用屏 VT 启用修复（光标追踪最终根因，2026-08-16）— packaged + installed
+
+安装版 `Newmark --TUI` 走 `Console Runtime.exe`(Electron) → `ELECTRON_RUN_AS_NODE` sidecar，该 sidecar 不像纯 Node 那样自动启用输出句柄 `ENABLE_VIRTUAL_TERMINAL_PROCESSING`，且 `setWindowsConsoleMode` 用错句柄（`-10` 输入而非 `-11` 输出）→ `?1049h` 不被 ConHost 解析 → 备用屏不进入 → 主屏保留滚动历史（滚轮能滚回旧帧、光标追踪错位）。修复：`setWindowsConsoleMode` 改为输出句柄 `-11` 设 `0x4` + 输入句柄 `-10` 设 `0x200`，并在 spawn sidecar 前调用；`app.js` 加 `enableWindowsVirtualTerminal()` 保险；`verify.ts` 加 3 条断言。重新打包 + UAC 安装（`MSI_INSTALL_EXIT=0`、app.asar `A42000BFF5BE34A250912BDF8624B02A61D100B7B53903C57B49C0E5C8EF94FC`）。commit `4ae2499`。证据：archive/20260816-dev-0.4.4-tui-vt-alternate-screen-fix.md。
+
 ## dev-0.4.4 模型切换行为修复（同事）+ 重新打包 + UAC 安装（2026-08-16）— packaged + installed
 
 review 并落地同事的 GUI 模型切换修复（14 文件）：`agent:setModel` 改用 `modelSelectionValue()` 比较 qualified deployment（同名跨 provider 模型切换不再误判）；`ConversationKernel.setModel` 在 Build 运行中记录 pending 选择、下次 dequeue `syncPendingModel` 仅在变化时切换，Electron/WSL 全链路补 `set_model`；`resolveWindowModel` 经 active qualified deployment 解析上下文窗口；GUI 模型切换后立即刷新上下文环/检查器；`verify.ts` 新增同名校窗口断言 + `modelSwitchBehaviorVerify.ts` 挂入 `test:desktop:built`。`dist:windows-release` 完整门禁全绿 → 重新打包 → UAC 安装（`MSI_INSTALL_EXIT=0`、`--version` 0.4.4、安装与打包 app.asar 一致 `CFED407C...`）。产物 MSI `B661C896DCB2262F9E15A34C9AA486076E81954DF2A69F8320DF6F8D566929D2`、ZIP `A1D7B601D4761DB9DD7CC2CF28EE6F2A3929E46D00B925C85BBC72A514F83B99`。已 commit `6a869f3`。证据：archive/20260816-dev-0.4.4-model-switch-behavior-and-repackage.md。

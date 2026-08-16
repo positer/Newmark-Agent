@@ -2783,15 +2783,18 @@ button.todo-item { background: transparent; }
 }
 
 .option-btn {
-  padding: 5px 14px;
+  display: block;
+  width: 100%;
+  padding: 6px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--glass-bg-1);
   color: var(--text);
   font-size: 12px;
   font-family: var(--font-ui);
+  text-align: left;
   cursor: pointer;
-  margin: 2px 4px 2px 0;
+  margin: 3px 0;
   transition: background var(--duration-fast) var(--ease-out-expo), border-color var(--duration-fast) var(--ease-out-expo);
 }
 
@@ -2806,6 +2809,45 @@ button.todo-item { background: transparent; }
   color: var(--text-dim);
   font-size: 11px;
 }
+
+.option-manual {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.option-manual-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg-1);
+  color: var(--text);
+  font: 12px var(--font-ui);
+  outline: none;
+}
+
+.option-manual-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+.option-manual-input:disabled { opacity: .55; cursor: default; }
+
+.option-manual-submit {
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: rgba(91,120,255,0.14);
+  color: var(--text-bright);
+  font: 12px var(--font-ui);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out-expo);
+}
+
+.option-manual-submit:hover { background: rgba(91,120,255,0.24); }
+.option-manual-submit:disabled { opacity: .55; cursor: default; }
 
 /* ============================================================
    INPUT STACK
@@ -6521,6 +6563,8 @@ var NEWMARK_I18N = {
     'status.pendingOptions': 'Pending options',
     'status.noPendingOptions': 'No option question is waiting for user input.',
     'status.question': 'Question',
+    'option.manualPlaceholder': 'Or type your own answer...',
+    'option.manualSubmit': 'Submit',
     'subagent.empty': 'No retained subagent records',
     'subagent.openHistory': 'Open subagent history',
     'subagent.historyTitle': 'Subagent history',
@@ -7228,6 +7272,8 @@ var NEWMARK_I18N = {
     'status.pendingOptions': '待处理选项',
     'status.noPendingOptions': '暂无等待用户输入的选项问题。',
     'status.question': '问题',
+    'option.manualPlaceholder': '或输入自己的答案...',
+    'option.manualSubmit': '提交',
     'subagent.empty': '暂无保留的 subagent 记录',
     'subagent.openHistory': '打开 subagent 历史',
     'subagent.historyTitle': 'Subagent 历史',
@@ -11169,6 +11215,10 @@ function addOptionBlock(question, options, questionKey) {
     html += '<button class="option-btn" data-option-question-key="' + escAttr(encodeURIComponent(questionKey)) + '" data-option-label="' + escAttr(label) + '" onclick="window.optionSelected(decodeURIComponent(this.dataset.optionQuestionKey),this.dataset.optionLabel,this)">' +
       esc(label) + (desc ? '<span class="option-desc">' + esc(desc) + '</span>' : '') + '</button>';
   }
+  html += '<div class="option-manual">' +
+    '<input class="option-manual-input" data-option-question-key="' + escAttr(encodeURIComponent(questionKey)) + '" placeholder="' + escAttr(t('option.manualPlaceholder')) + '" onkeydown="if(event.key===\'Enter\'){event.preventDefault();window.optionManualSubmitted(this);}" />' +
+    '<button class="option-manual-submit" onclick="window.optionManualSubmitted(this)">' + esc(t('option.manualSubmit')) + '</button>' +
+    '</div>';
   html += '</div>';
   div.innerHTML = html;
   els['chat-area'].appendChild(div);
@@ -11283,6 +11333,20 @@ window.optionSelected = function(questionKey, opt, button) {
     els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
   }
   window.sendMessage();
+};
+
+window.optionManualSubmitted = function(element) {
+  var manual = element && element.closest ? element.closest('.option-manual') : null;
+  if (!manual) return;
+  var input = manual.querySelector('.option-manual-input');
+  if (!input) return;
+  var value = String(input.value || '').trim();
+  if (!value) { input.focus(); return; }
+  var key = input.getAttribute('data-option-question-key') || '';
+  var decoded;
+  try { decoded = decodeURIComponent(key); } catch (e) { decoded = key; }
+  window.optionSelected(decoded, value, input);
+  Array.from(manual.querySelectorAll('input, button')).forEach(function(control) { control.disabled = true; });
 };
 
 // === Working State ===

@@ -5867,6 +5867,17 @@ async function main() {
   assert(toolsIndexSource.includes('Call it proactively when the current task continues, fixes, verifies, or depends on earlier work'),
     'build_history_query tool description: proactive reuse guidance');
 
+  // ---- 18. dev-0.4.4 TUI alternate-screen VT enable regressions ----
+  console.log('\n🧭 dev-0.4.4 TUI alternate-screen VT enable regressions');
+  const mainTsSource = fs.readFileSync(path.join(process.cwd(), 'src', 'main.ts'), 'utf-8').replace(/\r\n/g, '\n');
+  assert(mainTsSource.includes("GetStdHandle(-11)") && mainTsSource.includes('$outMode -bor 4'),
+    'Windows console mode: output handle (-11) enables ENABLE_VIRTUAL_TERMINAL_PROCESSING');
+  assert(mainTsSource.includes('setWindowsConsoleMode();') && mainTsSource.includes('spawnSync(process.execPath'),
+    'Windows console mode: VT processing is enabled before spawning the TUI sidecar');
+  const tuiAppSource = fs.readFileSync(path.join(process.cwd(), '..', 'TUI', 'src', 'app.js'), 'utf-8').replace(/\r\n/g, '\n');
+  assert(tuiAppSource.includes('enableWindowsVirtualTerminal') && tuiAppSource.includes('GetStdHandle(-11)'),
+    'TUI app: enables output VT processing as a defensive fallback for non-main entrypoints');
+
   // ---- Final Summary ----
   console.log(`\n═══════════════════════════════════════`);
   console.log(`  ${PASS} ${passed} passed  ${FAIL} ${failed} failed`);

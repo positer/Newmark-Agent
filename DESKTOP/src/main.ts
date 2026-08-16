@@ -743,12 +743,21 @@ function setWindowsConsoleMode(mode?: number): number | null {
   const setMode = Number.isInteger(mode);
   const script = [
     'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; public static class NewmarkConsoleMode { [DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int n); [DllImport("kernel32.dll")] public static extern bool GetConsoleMode(IntPtr h, out uint mode); [DllImport("kernel32.dll")] public static extern bool SetConsoleMode(IntPtr h, uint mode); }\'',
-    '$handle = [NewmarkConsoleMode]::GetStdHandle(-10)',
-    '$current = [uint32]0',
-    'if (-not [NewmarkConsoleMode]::GetConsoleMode($handle, [ref]$current)) { exit 2 }',
+    // 输出句柄（STD_OUTPUT_HANDLE = -11）必须启用 ENABLE_VIRTUAL_TERMINAL_PROCESSING(0x4)，
+    // 否则 TUI 的备用屏 ?1049h / 清屏 2J 等 ANSI 序列在 ConHost/传统控制台下不被解析，
+    // 主屏保留滚动历史（滚轮能滚回旧帧），光标追踪也随之错位。
+    '$out = [NewmarkConsoleMode]::GetStdHandle(-11)',
+    '$outMode = [uint32]0',
+    'if (-not [NewmarkConsoleMode]::GetConsoleMode($out, [ref]$outMode)) { exit 2 }',
     setMode
-      ? `$target = [uint32]${mode}; if (-not [NewmarkConsoleMode]::SetConsoleMode($handle, $target)) { exit 3 }`
-      : '$target = [uint32](($current -band (-bnot 7)) -bor 512); if (-not [NewmarkConsoleMode]::SetConsoleMode($handle, $target)) { exit 3 }; Write-Output $current',
+      ? `$target = [uint32]${mode}; if (-not [NewmarkConsoleMode]::SetConsoleMode($out, $target)) { exit 3 }`
+      : 'if (-not [NewmarkConsoleMode]::SetConsoleMode($out, ($outMode -bor 4))) { exit 3 }',
+    // 输入句柄（STD_INPUT_HANDLE = -10）启用 ENABLE_VIRTUAL_TERMINAL_INPUT(0x200)，
+    // 清除 line/echo 让方向键等原始序列可读。
+    '$inp = [NewmarkConsoleMode]::GetStdHandle(-10)',
+    '$inpMode = [uint32]0',
+    'if ([NewmarkConsoleMode]::GetConsoleMode($inp, [ref]$inpMode)) { [NewmarkConsoleMode]::SetConsoleMode($inp, (($inpMode -band (-bnot 7)) -bor 512)) | Out-Null }',
+    'Write-Output $outMode',
   ].join('; ');
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], {
     stdio: ['inherit', 'pipe', 'inherit'],
@@ -1206,6 +1215,11 @@ if (isViewerArg) {
     || process.env.NEWMARK_CONSOLE_WRAPPER === '1'
   );
   if (isConsoleLauncher && process.env.NEWMARK_TUI_SIDECAR !== '1') {
+    // Console mode is shared by every process attached to the same console:
+    // enable output VT processing (and input VT) before spawning the sidecar so
+    // the TUI's ?1049h alternate-screen sequence is actually parsed by ConHost /
+    // traditional consoles. The sidecar also re-applies it defensively below.
+    setWindowsConsoleMode();
     const tuiProcess = spawnSync(process.execPath, [path.join(__dirname, 'launcher.js'), ...args], {
       cwd: process.cwd(),
       env: {

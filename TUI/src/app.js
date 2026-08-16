@@ -112,6 +112,28 @@ function resolveTuiWorkspacePath(args, options = {}) {
   return explicitRoot || process.cwd();
 }
 
+// 在 Windows 传统控制台（ConHost）下，输出句柄默认不启用
+// ENABLE_VIRTUAL_TERMINAL_PROCESSING，导致备用屏 ?1049h / 清屏 2J 等 ANSI
+// 序列不被解析，主屏保留滚动历史（滚轮能滚回旧帧）。Electron-as-node sidecar
+// 也不会像纯 Node 那样由 libuv 自动启用 VT。这里主动给输出句柄启用 VT 处理，
+// 给输入句柄启用原始输入，作为 main.ts 之外入口的保险。
+function enableWindowsVirtualTerminal() {
+  if (process.platform !== 'win32') return;
+  try {
+    const { spawnSync } = require('node:child_process');
+    const script = [
+      'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; public static class NewmarkTuiVT { [DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int n); [DllImport("kernel32.dll")] public static extern bool GetConsoleMode(IntPtr h, out uint m); [DllImport("kernel32.dll")] public static extern bool SetConsoleMode(IntPtr h, uint m); }\'',
+      '$o = [NewmarkTuiVT]::GetStdHandle(-11); $om = [uint32]0; if ([NewmarkTuiVT]::GetConsoleMode($o, [ref]$om)) { [NewmarkTuiVT]::SetConsoleMode($o, ($om -bor 4)) | Out-Null }',
+      '$i = [NewmarkTuiVT]::GetStdHandle(-10); $im = [uint32]0; if ([NewmarkTuiVT]::GetConsoleMode($i, [ref]$im)) { [NewmarkTuiVT]::SetConsoleMode($i, (($im -band (-bnot 7)) -bor 512)) | Out-Null }',
+    ].join('; ');
+    spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      stdio: 'ignore',
+      windowsHide: true,
+      timeout: 3000,
+    });
+  } catch {}
+}
+
 function start(options = {}) {
   const forcedTerminal = process.env.NEWMARK_FORCE_TTY === "1";
   if ((!process.stdin.isTTY || !process.stdout.isTTY) && !forcedTerminal) {
@@ -119,6 +141,9 @@ function start(options = {}) {
     process.exitCode = 1;
     return;
   }
+  // 备用屏依赖输出句柄的 VT 处理；纯 Node 的 libuv 会自动启用，但
+  // Electron-as-node sidecar 或强制 TTY 路径不会，这里补上。
+  if (forcedTerminal || !process.stdout.isTTY) enableWindowsVirtualTerminal();
 
   const args = process.argv.slice(2);
   let adapter;

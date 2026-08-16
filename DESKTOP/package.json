@@ -1,7 +1,7 @@
 {
   "name": "newmark-agent",
   "productName": "Newmark Agent",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "homepage": "https://github.com/positer/Newmark-Agent",
   "repository": {
@@ -265,6 +265,8 @@
       "perMachine": true,
       "runAfterFinish": false,
       "warningsAsErrors": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
       "artifactName": "Newmark-Agent-${version}-${arch}.${ext}"
     }
   },

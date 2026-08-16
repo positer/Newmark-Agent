@@ -127,12 +127,16 @@ export function verifyDev009SourceContracts(): Assertion[] {
   'dev009 Guide UI: optimistic receipts survive snapshot redraw and reconcile exactly once with the applied persisted message', results);
 
   check(hasAll(ui, [
-    'class="conv-pin-btn',
-    "iconOnly('pin', conv.pinned ? t('conversation.unpin') : t('conversation.pin'))",
-    'class="conv-archive-btn"',
-    "iconOnly('archive', t('conversation.archive'))",
-  ]) && !ui.includes("title=\"' + escAttr(t('conversation.archive')) + '\">' + esc(t('conversation.archive')) + '</button>'"),
-  'dev009 conversation actions: pin and archive retain compact Lucide icons instead of overflowing text', results);
+    'class="conv-more-btn',
+    "iconOnly('ellipsis', t('conversation.more'))",
+    'id="conversation-action-menu"',
+    'window.openConversationActionMenu = function',
+    'window.runConversationAction = function',
+    'data-action="edit"',
+    'data-action="archive"',
+    'data-action="pin"',
+  ]) && !ui.includes('class="conv-rename-btn" onclick') && !ui.includes('class="conv-pin-btn') && !ui.includes('class="conv-archive-btn" onclick'),
+  'dev009 conversation actions: edit/archive/pin collapse into one borderless more menu for button and context-menu access', results);
 
   check(hasAll(ui, [
     'view._newmarkPendingUrl = url',

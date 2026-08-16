@@ -44,6 +44,8 @@ const config: Configuration = {
     perMachine: true,
     runAfterFinish: false,
     warningsAsErrors: false,
+    createDesktopShortcut: 'always',
+    createStartMenuShortcut: true,
     artifactName: 'Newmark-Agent-${version}-${arch}.${ext}',
   },
   msiProjectCreated: './scripts/patch-msi-project.cjs',

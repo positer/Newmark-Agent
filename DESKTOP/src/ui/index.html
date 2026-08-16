@@ -1115,6 +1115,74 @@ button.left-ws-item {
   border-color: var(--accent);
 }
 
+.conv-more-btn {
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--duration-fast) var(--ease-out-expo), color var(--duration-fast) var(--ease-out-expo);
+  flex-shrink: 0;
+}
+.conv-more-btn:hover,
+.conv-more-btn[aria-expanded="true"] {
+  background: var(--control-hover-bg);
+  color: var(--text-bright);
+}
+
+.conv-action-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  z-index: 560;
+  display: none;
+  min-width: 168px;
+  max-height: min(56vh, 320px);
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--glass-border-2);
+  border-radius: var(--radius-lg);
+  background: var(--modal-surface);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(var(--glass-blur-3)) saturate(1.08);
+}
+.conv-action-menu:popover-open { display: block; animation: model-menu-in 150ms var(--ease-out-expo); }
+
+.conv-action-menu-item {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  white-space: nowrap;
+  font: 12px var(--font-ui);
+  cursor: pointer;
+}
+.conv-action-menu-item:hover,
+.conv-action-menu-item:focus-visible {
+  background: var(--control-hover-bg);
+  color: var(--text-bright);
+  outline: none;
+}
+.conv-action-menu-item:disabled { opacity: 0.55; cursor: default; }
+.conv-action-menu-item .nm-icon { color: var(--text-dim); flex-shrink: 0; }
+.conv-action-menu-item:hover .nm-icon,
+.conv-action-menu-item:focus-visible .nm-icon { color: var(--text-bright); }
+.conv-action-menu-item.active { color: var(--text-accent); }
+.conv-action-menu-item.active .nm-icon { color: var(--text-accent); }
+
 /* ============================================================
    RESIZE HANDLES
    ============================================================ */
@@ -5418,6 +5486,7 @@ html.newmark-memory-overview-viewer body {
               <button type="button" class="tool-select model-select-button" id="model-select-button" aria-haspopup="listbox" aria-expanded="false" onclick="window.toggleModelSelectMenu()" onkeydown="window.handleModelSelectButtonKey(event)"><span class="model-select-button-label" id="model-select-label"></span><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#chevron-down"></use></svg></button>
               <div class="model-select-menu" id="model-select-menu" role="listbox" aria-label="Model" popover="manual"></div>
             </div>
+            <div class="conv-action-menu" id="conversation-action-menu" role="menu" aria-label="Conversation actions" popover="manual"></div>
             <div class="context-token-wrap">
               <button type="button" id="context-token-ring" title="Context tokens" aria-haspopup="dialog" aria-expanded="false" onclick="window.toggleContextInspector()" onmouseenter="window.showContextWindowTooltip()" onmouseleave="window.hideContextWindowTooltip()" onfocus="window.showContextWindowTooltip()" onblur="window.hideContextWindowTooltip()"><span class="icon-only-label">Context tokens</span></button>
               <div id="context-token-tooltip"></div>
@@ -6462,6 +6531,7 @@ var NEWMARK_I18N = {
     'subagent.noMessages': 'No messages recorded.',
     'subagent.unread': '{count} unread',
     'conversation.archive': 'Archive',
+    'conversation.more': 'More conversation actions',
     'conversation.rename': 'Rename conversation',
     'conversation.renameFailed': 'Could not rename the conversation.',
     'conversation.reorderFailed': 'Could not save the conversation order.',
@@ -7168,6 +7238,7 @@ var NEWMARK_I18N = {
     'subagent.noMessages': '没有记录消息。',
     'subagent.unread': '{count} 条未读',
     'conversation.archive': '归档',
+    'conversation.more': '更多对话操作',
     'conversation.rename': '编辑对话名称',
     'conversation.renameFailed': '无法保存对话名称。',
     'conversation.reorderFailed': '无法保存对话顺序。',
@@ -11806,6 +11877,119 @@ window.selectModelFromMenu = function(value) {
   window.syncModelSelectSurface();
   window.closeModelSelectMenu({ focus: true });
 };
+
+window.closeConversationActionMenu = function(options) {
+  var menu = document.getElementById('conversation-action-menu');
+  var anchor = state.conversationActionAnchor;
+  if (menu && typeof menu.hidePopover === 'function' && menu.matches(':popover-open')) menu.hidePopover();
+  document.querySelectorAll('.conv-more-btn[aria-expanded="true"]').forEach(function(item) { item.setAttribute('aria-expanded', 'false'); });
+  state.conversationActionAnchor = null;
+  if (options && options.focus && anchor && anchor.focus) anchor.focus();
+};
+
+window.positionConversationActionMenu = function(anchor, menu, pos) {
+  if (!menu) return;
+  var width = 168;
+  var margin = 8;
+  menu.style.width = width + 'px';
+  var rect = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
+  var desiredHeight = Math.min(320, menu.scrollHeight || menu.offsetHeight || 0);
+  var left, top, below, above, openAbove;
+  if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
+    left = Math.max(margin, Math.min(window.innerWidth - width - margin, pos.x));
+    below = Math.max(0, window.innerHeight - pos.y - margin);
+    above = Math.max(0, pos.y - margin);
+    openAbove = below < desiredHeight && above > below;
+    top = openAbove ? Math.max(margin, pos.y - Math.min(desiredHeight, above) - margin) : pos.y + margin;
+  } else if (rect) {
+    left = Math.max(margin, Math.min(window.innerWidth - width - margin, rect.right - width));
+    below = Math.max(0, window.innerHeight - rect.bottom - margin);
+    above = Math.max(0, rect.top - margin);
+    openAbove = below < desiredHeight && above > below;
+    top = openAbove ? Math.max(margin, rect.top - Math.min(desiredHeight, above) - margin) : rect.bottom + margin;
+  } else {
+    left = Math.max(margin, Math.round((window.innerWidth - width) / 2));
+    top = Math.round(window.innerHeight / 3);
+  }
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+};
+
+window.openConversationActionMenu = function(anchor, conversationId, pos) {
+  var menu = document.getElementById('conversation-action-menu');
+  if (!menu) return;
+  var convs = currentWorkspaceConversations();
+  var idx = convs.findIndex(function(item) { return String(item && item.id || 'default') === String(conversationId || ''); });
+  var conv = convs[idx];
+  if (!conv) return;
+  window.closeModelSelectMenu();
+  document.querySelectorAll('.newmark-select-shell.open').forEach(function(item) { window.closeNewmarkSelect(item); });
+  var pendingKey = currentWorkspaceKey() + '::' + String(conv.id);
+  var pending = !!state.conversationArchivePending[pendingKey];
+  var pinLabel = conv.pinned ? t('conversation.unpin') : t('conversation.pin');
+  var archiveHtml = pending
+    ? '<button type="button" class="conv-action-menu-item" disabled><span class="conv-archive-spinner"></span><span>' + esc(t('archive.archiving')) + '</span></button>'
+    : '<button type="button" class="conv-action-menu-item" data-action="archive" onclick="window.runConversationAction(this, \'archive\')">' + iconSvg('archive', '', 'small') + '<span>' + esc(t('conversation.archive')) + '</span></button>';
+  menu.innerHTML =
+    '<button type="button" class="conv-action-menu-item" data-action="edit" onclick="window.runConversationAction(this, \'edit\')">' + iconSvg('pencil', '', 'small') + '<span>' + esc(t('conversation.rename')) + '</span></button>' +
+    archiveHtml +
+    '<button type="button" class="conv-action-menu-item' + (conv.pinned ? ' active' : '') + '" data-action="pin" onclick="window.runConversationAction(this, \'pin\')">' + iconSvg('pin', '', 'small') + '<span>' + esc(pinLabel) + '</span></button>';
+  menu.setAttribute('data-index', String(idx));
+  var moreBtn = anchor && anchor.classList && anchor.classList.contains('conv-more-btn') ? anchor : (anchor && anchor.querySelector ? anchor.querySelector('.conv-more-btn') : null);
+  document.querySelectorAll('.conv-more-btn[aria-expanded="true"]').forEach(function(item) { item.setAttribute('aria-expanded', 'false'); });
+  if (moreBtn) moreBtn.setAttribute('aria-expanded', 'true');
+  state.conversationActionAnchor = anchor || moreBtn || null;
+  if (typeof menu.showPopover === 'function' && !menu.matches(':popover-open')) menu.showPopover();
+  requestAnimationFrame(function() {
+    window.positionConversationActionMenu(state.conversationActionAnchor || moreBtn, menu, pos);
+    var item = menu.querySelector('.conv-action-menu-item:not(:disabled)');
+    if (item) item.focus({ preventScroll: true });
+  });
+};
+
+window.runConversationAction = function(button, action) {
+  var menu = document.getElementById('conversation-action-menu');
+  var idx = Number(menu && menu.getAttribute('data-index') || '-1');
+  window.closeConversationActionMenu();
+  var convs = currentWorkspaceConversations();
+  var conv = convs[idx];
+  if (!conv) return;
+  if (action === 'edit') window.editConversationName(idx);
+  else if (action === 'archive') window.archiveConv(String(conv.id || 'default'));
+  else if (action === 'pin') window.toggleConversationPinned(idx);
+};
+
+document.addEventListener('pointerdown', function(event) {
+  var menu = document.getElementById('conversation-action-menu');
+  if (!menu || !menu.matches || !menu.matches(':popover-open')) return;
+  var anchor = state.conversationActionAnchor;
+  if (anchor && anchor.contains && anchor.contains(event.target)) return;
+  if (menu.contains(event.target)) return;
+  window.closeConversationActionMenu();
+});
+
+document.addEventListener('keydown', function(event) {
+  if (event.key === 'Escape') window.closeConversationActionMenu();
+});
+
+(function() {
+  var menu = document.getElementById('conversation-action-menu');
+  if (!menu) return;
+  menu.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      window.closeConversationActionMenu({ focus: true });
+      return;
+    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    var items = Array.prototype.slice.call(menu.querySelectorAll('.conv-action-menu-item:not(:disabled)'));
+    if (!items.length) return;
+    var current = items.indexOf(document.activeElement);
+    var next = event.key === 'ArrowDown' ? items[(current + 1) % items.length] : items[(current - 1 + items.length) % items.length];
+    if (next) next.focus();
+  });
+})();
 
 window.handleModelSelectButtonKey = function(event) {
   if (!event) return;
@@ -18635,16 +18819,15 @@ function renderConversations() {
       ? '<span class="conv-runtime-badge ' + escAttr(String(runtimeState.status)) + '">' + esc(String(runtimeState.status)) + '</span>' : '';
     var branchCommIcon = conv.branchCommunication
       ? '<span class="conv-branch-comm-icon" title="' + escAttr(t('conversation.branchCommunicationBadge')) + '" aria-label="' + escAttr(t('conversation.branchCommunicationBadge')) + '">' + iconSvg('git-branch', t('conversation.branchCommunicationBadge')) + '</span>' : '';
-    var archivePendingKey = currentWorkspaceKey() + '::' + String(conv.id);
-    var archiveBtn = state.conversationArchivePending[archivePendingKey]
-      ? '<button class="conv-archive-btn archiving" title="' + escAttr(t('archive.archiving')) + '" disabled><span class="conv-archive-spinner"></span></button>'
-      : '<button class="conv-archive-btn" onclick="event.stopPropagation();window.archiveConv(this.closest(&quot;.conv-item&quot;).getAttribute(&quot;data-conversation-id&quot;))" title="' + escAttr(t('conversation.archive')) + '">' + iconOnly('archive', t('conversation.archive')) + '</button>';
     div.innerHTML = '<span class="conv-summary" title="' + escAttr(String(conv.id || '')) + '">' + esc(displaySummary) + (conv.messageCount ? ' (' + esc(String(conv.messageCount)) + ')' : '') + '</span>' + branchCommIcon + runtimeBadge +
-      '<button class="conv-rename-btn" onclick="event.stopPropagation();window.editConversationName(' + i + ')" title="' + escAttr(t('conversation.rename')) + '">' + iconOnly('pencil', t('conversation.rename')) + '</button>' +
-      archiveBtn +
-      '<button class="conv-pin-btn' + (conv.pinned ? ' active' : '') + '" onclick="event.stopPropagation();window.toggleConversationPinned(' + i + ')" title="' + escAttr(conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '">' + iconOnly('pin', conv.pinned ? t('conversation.unpin') : t('conversation.pin')) + '</button>';
+      '<button class="conv-more-btn" aria-haspopup="menu" aria-expanded="false" onclick="event.stopPropagation();window.openConversationActionMenu(this, this.closest(&quot;.conv-item&quot;).getAttribute(&quot;data-conversation-id&quot;))" title="' + escAttr(t('conversation.more')) + '">' + iconOnly('ellipsis', t('conversation.more')) + '</button>';
     div.onclick = function(idx) { return function() { window.switchConversation(idx); }; }(i);
     div.addEventListener('keydown', window.handleConversationKey);
+    div.addEventListener('contextmenu', function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      window.openConversationActionMenu(event.currentTarget, this.getAttribute('data-conversation-id') || '', { x: event.clientX, y: event.clientY });
+    });
     div.addEventListener('dragstart', function(event) {
       this.classList.add('dragging');
       if (event.dataTransfer) { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', this.getAttribute('data-conversation-id') || ''); }

@@ -7,7 +7,7 @@ import { LLMProvider } from './llm/provider';
 import { discoverAgentPresets, discoverOpenCodeTools, discoverPluginManifests, discoverPluginMarketplaces, runOpenCodeTool } from './core/compat';
 import { discoverDshCompatibility } from './core/dshCompatibility';
 import { MemoryLabManager } from './core/memoryLab';
-import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, installUpdate } from './core/installUpdate';
+import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, executeManagedMsiInstall, installUpdate, planManagedMsiInstall } from './core/installUpdate';
 
 type JsonObject = Record<string, unknown>;
 type FuzzyEnvDefaults = {
@@ -52,8 +52,8 @@ const CLI_COMMAND_HELP: Record<CliCommand, string[]> = {
     'Read or update the local Memory Lab index and components.',
   ],
   'install-update': [
-    'Usage: Newmark.exe install-update (--source <path>|--check-github|--from-github) [options] [--root <dir>]',
-    'Inspect or apply a local/GitHub update using the selected install target.',
+    'Usage: Newmark.exe install-update (--source <path>|--check-github|--from-github|--msi <path>) [options] [--root <dir>]',
+    'Inspect or apply a local/GitHub update, or run a managed MSI install with process confirmation, previous-version uninstall, and legacy cleanup.',
   ],
   compat: [
     'Usage: Newmark.exe compat [--target all|tools|plugins|dsh|marketplaces|skills|agents|subagents] [--root <dir>]',
@@ -77,12 +77,12 @@ const CLI_VALUE_FLAGS = new Set<string>([
   '--candidate-models', '--protocol', '--query', '--type', '--path', '--component', '--source-id',
   '--remove-source', '--enable-source', '--disable-source', '--source', '--target', '--target-file',
   '--expected-version', '--preserve', '--repo', '--tag', '--asset', '--version', '--content-file',
-  '--content', '--description', '--tags',
+  '--content', '--description', '--tags', '--msi', '--log-dir',
 ]);
 const CLI_BOOLEAN_FLAGS = new Set<string>([
   '--persist', '--agent-only', '--list', '--preview-only', '--sources', '--add-source', '--check-github',
   '--from-github', '--dry-run', '--read', '--index', '--reindex', '--update', '--version', '--folder', '--help', '-h',
-  '--branch-communication',
+  '--branch-communication', '--yes', '--confirm-stop', '--confirm-remove-legacy', '--no-uninstall-previous', '--no-elevate',
 ]);
 
 function invalidCliCommandArgument(args: string[]): string | undefined {
@@ -941,10 +941,46 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
       if (!result.ok) process.exitCode = 1;
       return true;
     }
+    if (args.includes('--msi')) {
+      const msiPath = argValue(args, '--msi') || positionalAfter(args, 'install-update')[0] || '';
+      const confirmAll = args.includes('--yes');
+      const stopConfirmed = confirmAll || args.includes('--confirm-stop');
+      const removeLegacyConfirmed = confirmAll || args.includes('--confirm-remove-legacy');
+      const options = {
+        stopConfirmed,
+        removeLegacyConfirmed,
+        uninstallPrevious: !args.includes('--no-uninstall-previous'),
+        allowElevate: !args.includes('--no-elevate'),
+        logDir: argValue(args, '--log-dir') || root,
+      };
+      const plan = planManagedMsiInstall(msiPath, options);
+      if (!plan.ok) {
+        printJson(plan);
+        safeStderr(`Managed MSI install cannot start: ${plan.error || 'unknown error'}\n`);
+        process.exitCode = 1;
+        return true;
+      }
+      if (plan.needsStopConfirmation) {
+        printJson(plan);
+        safeStderr('Running Newmark processes were found. Re-run with --confirm-stop (or --yes) to stop them before installing.\n');
+        process.exitCode = 2;
+        return true;
+      }
+      if (plan.needsLegacyRemovalConfirmation) {
+        printJson(plan);
+        safeStderr('Legacy Newmark executables were found outside the install target. Re-run with --confirm-remove-legacy (or --yes) to remove them.\n');
+        process.exitCode = 2;
+        return true;
+      }
+      const result = executeManagedMsiInstall(msiPath, options);
+      printJson(result);
+      if (!result.ok) process.exitCode = 1;
+      return true;
+    }
     const source = pathArgValue(args, '--source') || positionalAfter(args, 'install-update')[0] || '';
     const target = pathArgValue(args, '--target') || root;
     if (!source) {
-      safeStderr('Usage: Newmark.exe install-update (--source <portable-exe-or-unpacked-dir>|--check-github|--from-github) [--repo owner/name] [--tag vX.Y.Z] [--asset name] [--target <dir>] [--target-file <path>] [--expected-version <version>] [--preserve csv] [--dry-run] [--root <dir>]\n');
+      safeStderr('Usage: Newmark.exe install-update (--source <portable-exe-or-unpacked-dir>|--check-github|--from-github|--msi <path>) [--repo owner/name] [--tag vX.Y.Z] [--asset name] [--target <dir>] [--target-file <path>] [--expected-version <version>] [--preserve csv] [--dry-run] [--root <dir>]\n');
       process.exitCode = 1;
       return true;
     }
@@ -1066,7 +1102,7 @@ export function cliCommandUsage(): string {
     '  Newmark.exe fuzzy-inject [--name <provider>] [--env-file <PowerShell-or-dotenv-file>|--env-file-env <ENV_WITH_FILE_PATH>] [--endpoint-env <ENV_WITH_BASE_URL>] [--key-env <ENV_WITH_API_KEY>] [--protocol openai|anthropic] [--preview-only] [--root <dir>]',
     '  Newmark.exe skills-market [--query <text>|--sources|--add-source --name <name> (--url <url>|--path <path>) [--type json|skill-url|local-dir]|--remove-source <id>|--enable-source <id>|--disable-source <id>] [--root <dir>]',
     '  Newmark.exe memory-lab [--read|--component <name>|--update --name <name> --description <text> --tags <csv> --content-file <path> [--folder]|--reindex] [--root <dir>]',
-    '  Newmark.exe install-update (--source <portable-exe-or-unpacked-dir>|--check-github|--from-github) [--repo owner/name] [--tag vX.Y.Z] [--asset name] [--target <dir>] [--target-file <path>] [--expected-version <version>] [--preserve csv] [--dry-run] [--root <dir>]',
+    '  Newmark.exe install-update (--source <portable-exe-or-unpacked-dir>|--check-github|--from-github|--msi <path>) [--repo owner/name] [--tag vX.Y.Z] [--asset name] [--target <dir>] [--target-file <path>] [--expected-version <version>] [--preserve csv] [--dry-run] [--confirm-stop|--confirm-remove-legacy|--yes] [--no-uninstall-previous] [--no-elevate] [--log-dir <dir>] [--root <dir>]',
     '  Newmark.exe compat [--target all|tools|plugins|marketplaces|skills|agents|subagents] [--root <dir>]',
     '  Newmark.exe compat-tool --list | --name <opencode-tool> [json-args | --args-file path] [--root <dir>]',
     `Working directory fallback: ${path.resolve('.')}`,

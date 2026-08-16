@@ -60,6 +60,8 @@ const VALUE_FLAGS = new Set<string>([
   '--inspect-port',
   '--js-flags',
   '--viewer-request',
+  '--msi',
+  '--log-dir',
 ]);
 const BOOLEAN_FLAGS = new Set<string>([
   '--tui',
@@ -97,6 +99,11 @@ const BOOLEAN_FLAGS = new Set<string>([
   '--limit',
   '--scopes',
   '--web',
+  '--yes',
+  '--confirm-stop',
+  '--confirm-remove-legacy',
+  '--no-uninstall-previous',
+  '--no-elevate',
 ]);
 
 /** Public version spellings accepted by every Newmark entrypoint. */

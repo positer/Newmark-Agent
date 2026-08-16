@@ -94,8 +94,8 @@ async function waitFor(cdp, expression, label) {
     const initial = await evaluate(cdp, `({
       ids: currentWorkspaceConversations().map(item => item.id),
       betaTitle: (currentWorkspaceConversations().find(item => item.id === 'beta') || {}).summary,
-      buttons: Array.from(document.querySelectorAll('.conv-item')).every(row => row.draggable && row.querySelector('.conv-rename-btn') && row.querySelector('.conv-archive-btn') && row.querySelector('.conv-pin-btn')),
-      sizes: (() => { var row=document.querySelector('.conv-item'); if(!row) return []; return ['.conv-rename-btn','.conv-archive-btn','.conv-pin-btn'].map(sel => { var r=row.querySelector(sel).getBoundingClientRect(); return [r.width,r.height]; }); })()
+      buttons: Array.from(document.querySelectorAll('.conv-item')).every(row => row.draggable && row.querySelector('.conv-more-btn')),
+      sizes: (() => { var row=document.querySelector('.conv-item'); if(!row) return []; return ['.conv-more-btn'].map(sel => { var r=row.querySelector(sel).getBoundingClientRect(); return [r.width,r.height]; }); })()
     })`);
     if (initial.betaTitle !== 'Release renamed chat' || !initial.buttons) fail(`Rename/action controls failed: ${JSON.stringify(initial)}`);
     if (!initial.sizes.every(size => size[0] === initial.sizes[0][0] && size[1] === initial.sizes[0][1])) fail(`Action button sizes differ: ${JSON.stringify(initial.sizes)}`);

@@ -20,7 +20,7 @@ import { CLI_COMMANDS, cliCommandHelp, cliHelpRequested, runCliCommand } from '.
 import { invalidTopLevelArgument, isVersionArgument, unknownTopLevelCommand } from './cli-discovery';
 import { sanitizeProvidersForState } from './core/config';
 import { MemoryLabManager } from './core/memoryLab';
-import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, installUpdate } from './core/installUpdate';
+import { applyGitHubUpdate, checkGitHubUpdate, currentAppVersion, executeManagedMsiInstall, installUpdate, planManagedMsiInstall } from './core/installUpdate';
 import {
   detachTerminalTakeoverSession,
   normalizeTerminalTakeoverOwner,
@@ -4668,6 +4668,30 @@ if (isViewerArg) {
         dryRun: input.dryRun !== false,
       });
       if (result.ok && !result.dryRun && result.deferred) setTimeout(() => app.quit(), 150);
+      return result;
+    });
+
+    ipcMain.handle('update:planMsi', async (_event, input: Record<string, unknown> = {}) => {
+      return planManagedMsiInstall(String(input.msiPath || ''), {
+        stopConfirmed: input.stopConfirmed === true,
+        removeLegacyConfirmed: input.removeLegacyConfirmed === true,
+        uninstallPrevious: input.uninstallPrevious !== false,
+        allowElevate: input.allowElevate !== false,
+        excludeRoots: Array.isArray(input.excludeRoots) ? input.excludeRoots.map(String) : undefined,
+        logDir: typeof input.logDir === 'string' ? input.logDir : undefined,
+      });
+    });
+
+    ipcMain.handle('update:executeMsi', async (_event, input: Record<string, unknown> = {}) => {
+      const result = executeManagedMsiInstall(String(input.msiPath || ''), {
+        stopConfirmed: input.stopConfirmed === true,
+        removeLegacyConfirmed: input.removeLegacyConfirmed === true,
+        uninstallPrevious: input.uninstallPrevious !== false,
+        allowElevate: input.allowElevate !== false,
+        excludeRoots: Array.isArray(input.excludeRoots) ? input.excludeRoots.map(String) : undefined,
+        logDir: typeof input.logDir === 'string' ? input.logDir : undefined,
+      });
+      if (result.ok) setTimeout(() => app.quit(), 150);
       return result;
     });
 

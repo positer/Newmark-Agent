@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execFileSync, spawn } from 'child_process';
+import { execFileSync, spawn, spawnSync } from 'child_process';
 
 export interface InstallUpdateOptions {
   source: string;
@@ -540,4 +540,314 @@ export async function applyGitHubUpdate(options: GitHubUpdateApplyOptions): Prom
       error: e instanceof Error ? e.message : String(e),
     };
   }
+}
+
+export interface RunningNewmarkProcess {
+  pid: number;
+  name: string;
+  executablePath: string;
+}
+
+export interface InstalledNewmarkProduct {
+  productCode: string;
+  displayName: string;
+  installLocation: string;
+  uninstallString: string;
+}
+
+export interface ManagedMsiInstallOptions {
+  stopConfirmed?: boolean;
+  removeLegacyConfirmed?: boolean;
+  uninstallPrevious?: boolean;
+  allowElevate?: boolean;
+  excludeRoots?: string[];
+  logDir?: string;
+}
+
+export interface ManagedMsiInstallPlan {
+  ok: boolean;
+  msiPath: string;
+  runningProcesses: RunningNewmarkProcess[];
+  installedProducts: InstalledNewmarkProduct[];
+  legacyExecutables: string[];
+  needsStopConfirmation: boolean;
+  needsLegacyRemovalConfirmation: boolean;
+  error?: string;
+}
+
+export interface ManagedMsiInstallResult {
+  ok: boolean;
+  plan: ManagedMsiInstallPlan;
+  stopped: number[];
+  uninstalled: string[];
+  removedLegacy: string[];
+  exitCode?: number;
+  logPath?: string;
+  error?: string;
+}
+
+const NEWMARK_PROCESS_NAMES = ['Newmark Agent.exe', 'Newmark.exe'];
+const NEWMARK_LEGACY_EXECUTABLES = new Set(['newmark.exe', 'newmark agent.exe']);
+
+function normalizeWindowsPathForCompare(value: string): string {
+  return path.resolve(String(value)).toLowerCase();
+}
+
+function isWithinOrEqual(candidate: string, parent: string): boolean {
+  const child = normalizeWindowsPathForCompare(candidate);
+  const rootPath = normalizeWindowsPathForCompare(parent);
+  return child === rootPath || child.startsWith(rootPath.endsWith(path.sep) ? rootPath : rootPath + path.sep);
+}
+
+function runPowerShellJson(script: string): Array<Record<string, any>> {
+  const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script];
+  const stdout = execFileSync('powershell.exe', args, { encoding: 'utf-8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  const trimmed = String(stdout || '').replace(/^\uFEFF/, '').trim();
+  if (!trimmed) return [];
+  const parsed = JSON.parse(trimmed);
+  return Array.isArray(parsed) ? parsed.map(item => item as Record<string, any>) : [parsed as Record<string, any>];
+}
+
+export function listRunningNewmarkProcesses(): RunningNewmarkProcess[] {
+  const rows = runPowerShellJson(
+    `Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'Newmark Agent.exe' -or $_.Name -eq 'Newmark.exe' } | Select-Object ProcessId,Name,ExecutablePath | ConvertTo-Json -Compress`,
+  );
+  const skipPid = Number(process.env.NEWMARK_SKIP_PROCESS_PID || process.pid);
+  return rows
+    .map(row => ({
+      pid: Number(row.ProcessId || 0),
+      name: String(row.Name || ''),
+      executablePath: String(row.ExecutablePath || ''),
+    }))
+    .filter(proc => proc.pid > 0 && proc.pid !== skipPid);
+}
+
+export function stopNewmarkProcesses(pids: number[]): { stopped: number[]; errors: string[] } {
+  const ids = Array.from(new Set((pids || []).map(Number).filter(pid => Number.isFinite(pid) && pid > 0)));
+  if (!ids.length) return { stopped: [], errors: [] };
+  const script = `$ids = @(${ids.join(',')}); foreach ($id in $ids) { try { Stop-Process -Id $id -Force -ErrorAction Stop; Write-Output ('stopped:' + $id) } catch { Write-Output ('error:' + $id + ':' + $_.Exception.Message) } }`;
+  const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script];
+  const stdout = String(execFileSync('powershell.exe', args, { encoding: 'utf-8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }) || '');
+  const stopped: number[] = [];
+  const errors: string[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const stoppedMatch = trimmed.match(/^stopped:(\d+)$/);
+    const errorMatch = trimmed.match(/^error:(\d+):(.*)$/);
+    if (stoppedMatch) stopped.push(Number(stoppedMatch[1]));
+    else if (errorMatch) errors.push(`PID ${errorMatch[1]}: ${errorMatch[2]}`);
+  }
+  return { stopped, errors };
+}
+
+export function listInstalledNewmarkProducts(): InstalledNewmarkProduct[] {
+  const rows = runPowerShellJson(
+    `$paths = @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'); Get-ItemProperty $paths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like '*Newmark Agent*' } | Select-Object PSChildName,DisplayName,InstallLocation,UninstallString,QuietUninstallString | ConvertTo-Json -Compress`,
+  );
+  return rows
+    .map(row => ({
+      productCode: String(row.PSChildName || ''),
+      displayName: String(row.DisplayName || ''),
+      installLocation: String(row.InstallLocation || ''),
+      uninstallString: String(row.UninstallString || row.QuietUninstallString || ''),
+    }))
+    .filter(product => product.productCode);
+}
+
+function runMsiExec(args: string[]): { exitCode: number; stdout: string; stderr: string } {
+  const result = spawnSync('msiexec.exe', args, { encoding: 'utf-8', windowsHide: true });
+  return {
+    exitCode: result.status === null ? -1 : result.status,
+    stdout: String(result.stdout || ''),
+    stderr: String(result.stderr || ''),
+  };
+}
+
+function windowsCommandQuote(value: string): string {
+  const text = String(value);
+  return /\s/.test(text) ? `"${text.replace(/"/g, '\\"')}"` : text;
+}
+
+function runElevatedMsiExec(args: string[]): { exitCode: number; stdout: string; stderr: string } {
+  const argumentString = args.map(arg => windowsCommandQuote(arg)).join(' ');
+  const script = [
+    `$argumentList = '${argumentString.replace(/'/g, "''")}'`,
+    '$process = Start-Process -FilePath "msiexec.exe" -ArgumentList $argumentList -Verb RunAs -Wait -PassThru',
+    'Write-Output ("EXITCODE:" + $process.ExitCode)',
+  ].join('; ');
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], { encoding: 'utf-8', windowsHide: true });
+  const stdout = String(result.stdout || '');
+  const match = stdout.match(/EXITCODE:(\d+)/);
+  return {
+    exitCode: match ? Number(match[1]) : (result.status === null ? -1 : result.status),
+    stdout,
+    stderr: String(result.stderr || ''),
+  };
+}
+
+export function uninstallNewmarkProduct(productCode: string, logPath: string): { ok: boolean; exitCode: number; logPath: string; error?: string } {
+  const args = ['/x', productCode, '/qn', '/norestart', '/l*v', logPath];
+  let result = runMsiExec(args);
+  if (result.exitCode !== 0) result = runElevatedMsiExec(args);
+  return {
+    ok: result.exitCode === 0,
+    exitCode: result.exitCode,
+    logPath,
+    error: result.exitCode === 0 ? undefined : `msiexec uninstall exited ${result.exitCode}`,
+  };
+}
+
+export function installMsiPackage(msiPath: string, options: { logDir?: string; allowElevate?: boolean } = {}): { ok: boolean; exitCode: number; logPath: string; error?: string } {
+  const logPath = path.join(options.logDir || os.tmpdir(), `newmark-msi-install-${process.pid}-${Date.now()}.log`);
+  const args = ['/i', path.resolve(msiPath), '/qn', '/norestart', '/l*v', logPath];
+  let result = runMsiExec(args);
+  if (result.exitCode !== 0 && options.allowElevate !== false) result = runElevatedMsiExec(args);
+  return {
+    ok: result.exitCode === 0,
+    exitCode: result.exitCode,
+    logPath,
+    error: result.exitCode === 0 ? undefined : `msiexec install exited ${result.exitCode}`,
+  };
+}
+
+export function findLegacyNewmarkExecutables(excludeRoots: string[] = []): string[] {
+  const found = new Map<string, string>();
+  for (const name of NEWMARK_PROCESS_NAMES) {
+    try {
+      const stdout = String(execFileSync('where.exe', [name], { encoding: 'utf-8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }) || '');
+      for (const line of stdout.split(/\r?\n/)) {
+        const candidate = String(line || '').trim();
+        if (!candidate) continue;
+        const key = normalizeWindowsPathForCompare(candidate);
+        if (NEWMARK_LEGACY_EXECUTABLES.has(path.basename(candidate).toLowerCase()) && !found.has(key)) found.set(key, candidate);
+      }
+    } catch {
+      // where.exe returns non-zero when an executable is not found on PATH.
+    }
+  }
+  const exclude = (excludeRoots || []).filter(Boolean).map(root => normalizeWindowsPathForCompare(root));
+  return Array.from(found.values())
+    .filter(candidate => !exclude.some(root => isWithinOrEqual(candidate, root)))
+    .sort();
+}
+
+export function removeLegacyNewmarkExecutables(paths: string[]): { removed: string[]; errors: string[] } {
+  const removed: string[] = [];
+  const errors: string[] = [];
+  for (const candidate of Array.from(new Set(paths || []))) {
+    const full = path.resolve(candidate);
+    if (!NEWMARK_LEGACY_EXECUTABLES.has(path.basename(full).toLowerCase())) {
+      errors.push(`refusing non-Newmark executable: ${full}`);
+      continue;
+    }
+    try {
+      fs.unlinkSync(full);
+      removed.push(full);
+    } catch (e) {
+      errors.push(`${full}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return { removed, errors };
+}
+
+export function planManagedMsiInstall(msiPath: string, options: ManagedMsiInstallOptions = {}): ManagedMsiInstallPlan {
+  const fullPath = path.resolve(msiPath);
+  try {
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile() || path.extname(fullPath).toLowerCase() !== '.msi') {
+      return {
+        ok: false,
+        msiPath: fullPath,
+        runningProcesses: [],
+        installedProducts: [],
+        legacyExecutables: [],
+        needsStopConfirmation: false,
+        needsLegacyRemovalConfirmation: false,
+        error: `MSI package does not exist or is not a .msi file: ${fullPath}`,
+      };
+    }
+    const runningProcesses = listRunningNewmarkProcesses();
+    const installedProducts = listInstalledNewmarkProducts();
+    const excludeRoots = [
+      ...(options.excludeRoots || []),
+      process.cwd(),
+      path.dirname(process.execPath || ''),
+      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Newmark Agent'),
+      path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Newmark Agent'),
+      ...installedProducts.map(product => product.installLocation),
+    ];
+    const legacyExecutables = findLegacyNewmarkExecutables(excludeRoots);
+    return {
+      ok: true,
+      msiPath: fullPath,
+      runningProcesses,
+      installedProducts,
+      legacyExecutables,
+      needsStopConfirmation: runningProcesses.length > 0 && options.stopConfirmed !== true,
+      needsLegacyRemovalConfirmation: legacyExecutables.length > 0 && options.removeLegacyConfirmed !== true,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      msiPath: fullPath,
+      runningProcesses: [],
+      installedProducts: [],
+      legacyExecutables: [],
+      needsStopConfirmation: false,
+      needsLegacyRemovalConfirmation: false,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+export function executeManagedMsiInstall(msiPath: string, options: ManagedMsiInstallOptions = {}): ManagedMsiInstallResult {
+  const plan = planManagedMsiInstall(msiPath, options);
+  if (!plan.ok) {
+    return { ok: false, plan, stopped: [], uninstalled: [], removedLegacy: [], error: plan.error };
+  }
+  if (plan.needsStopConfirmation) {
+    return { ok: false, plan, stopped: [], uninstalled: [], removedLegacy: [], error: 'Running Newmark processes require confirmation before they can be stopped.' };
+  }
+  if (plan.needsLegacyRemovalConfirmation) {
+    return { ok: false, plan, stopped: [], uninstalled: [], removedLegacy: [], error: 'Legacy Newmark executables require confirmation before they can be removed.' };
+  }
+
+  const stopResult = plan.runningProcesses.length
+    ? stopNewmarkProcesses(plan.runningProcesses.map(process => process.pid))
+    : { stopped: [] as number[], errors: [] as string[] };
+  const uninstalled: string[] = [];
+  if (options.uninstallPrevious !== false) {
+    for (const product of plan.installedProducts) {
+      const logPath = path.join(options.logDir || os.tmpdir(), `newmark-msi-uninstall-${product.productCode}-${process.pid}-${Date.now()}.log`);
+      const uninstallResult = uninstallNewmarkProduct(product.productCode, logPath);
+      if (!uninstallResult.ok) {
+        return {
+          ok: false,
+          plan,
+          stopped: stopResult.stopped,
+          uninstalled,
+          removedLegacy: [],
+          exitCode: uninstallResult.exitCode,
+          logPath: uninstallResult.logPath,
+          error: `Failed to uninstall previous Newmark version ${product.productCode}: ${uninstallResult.error}`,
+        };
+      }
+      uninstalled.push(product.productCode);
+    }
+  }
+
+  const removeResult = plan.legacyExecutables.length
+    ? removeLegacyNewmarkExecutables(plan.legacyExecutables)
+    : { removed: [] as string[], errors: [] as string[] };
+  const installResult = installMsiPackage(plan.msiPath, { logDir: options.logDir, allowElevate: options.allowElevate });
+  return {
+    ok: installResult.ok,
+    plan,
+    stopped: stopResult.stopped,
+    uninstalled,
+    removedLegacy: removeResult.removed,
+    exitCode: installResult.exitCode,
+    logPath: installResult.logPath,
+    error: installResult.error,
+  };
 }

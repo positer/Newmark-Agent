@@ -1,5 +1,9 @@
 # Newmark Agent Overview
 
+## dev-0.4.4 模型切换行为修复（同事）+ 重新打包 + UAC 安装（2026-08-16）— packaged + installed
+
+review 并落地同事的 GUI 模型切换修复（14 文件）：`agent:setModel` 改用 `modelSelectionValue()` 比较 qualified deployment（同名跨 provider 模型切换不再误判）；`ConversationKernel.setModel` 在 Build 运行中记录 pending 选择、下次 dequeue `syncPendingModel` 仅在变化时切换，Electron/WSL 全链路补 `set_model`；`resolveWindowModel` 经 active qualified deployment 解析上下文窗口；GUI 模型切换后立即刷新上下文环/检查器；`verify.ts` 新增同名校窗口断言 + `modelSwitchBehaviorVerify.ts` 挂入 `test:desktop:built`。`dist:windows-release` 完整门禁全绿 → 重新打包 → UAC 安装（`MSI_INSTALL_EXIT=0`、`--version` 0.4.4、安装与打包 app.asar 一致 `CFED407C...`）。产物 MSI `B661C896DCB2262F9E15A34C9AA486076E81954DF2A69F8320DF6F8D566929D2`、ZIP `A1D7B601D4761DB9DD7CC2CF28EE6F2A3929E46D00B925C85BBC72A514F83B99`。已 commit `6a869f3`。证据：archive/20260816-dev-0.4.4-model-switch-behavior-and-repackage.md。
+
 ## dev-0.4.4 备用屏缓冲修复（TUI 光标追踪最终根因，2026-08-16）— source PASS
 
 TUI 此前一直在主屏绘制，主屏保留滚动历史：鼠标滚轮能滚回旧帧、终端滚动会让 `2J` 全量重绘错位——这正是"光标（高亮）离开屏幕"的真正根因。修复：① 启动进入**备用屏幕缓冲**（`\u001b[?1049h`，无滚动历史、滚轮无效），每次刷新在备用屏内 `?25l 2J H` 全量重绘；② 退出 `fs.writeSync` 同步写 `\u001b[?25h\u001b[?1049l\u001b[0m\u001b[2J\u001b[H` 恢复主屏与光标（此前异步 write + `process.exit` 会丢退出消息）；③ `paint.cancel()` 丢弃退出前排队的重绘，避免恢复主屏后又被画一帧。pty 门禁重构为普通脚本 `cursor-follow-pty-gate.js`（node-pty 的 ConPTY 辅助进程会让 node --test 挂起），挂入 `test:tui:built`：断言启动 `?1049h`、退出 `?1049l`/`?25h`/关闭消息、三窗口（100x24/40x12/60x16）模型列表高亮+描述行同屏、真实 resize（100x24→40x12→90x28→52x15）自适应。验证：`verify` 1574/1574、TUI demo 61/61 + stress 7/7 + pty gate ALL PASS + launcher 28/28、lint 0 errors。

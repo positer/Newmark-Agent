@@ -34,6 +34,10 @@ const MODE_SCOPED_TOOLS = new Set([
   'task_read',
   'task_create',
   'question',
+  'SubAgent',
+  'subagent_create',
+  // Legacy runtime alias. It is no longer published to models because its
+  // generic name collides with the persistent task checklist.
   'task',
   'subagent_list',
   'subagent_read',
@@ -67,6 +71,8 @@ const PLAN_READ_ONLY_TOOLS = new Set([
   'skill',
   'linked_plan',
   'build_history_query',
+  'SubAgent',
+  'subagent_create',
   'task',
   'subagent_list',
   'subagent_read',
@@ -85,9 +91,10 @@ const PLAN_BROWSER_USE_ACTION_SET = new Set<string>(PLAN_BROWSER_USE_ACTIONS);
 /**
  * 并发安全工具集合（DSH isConcurrencySafe 语义的 Newmark 落地）。
  *
- * 只有确定性无副作用的只读工具才允许与兄弟 tool call 并发执行；任何写入、
- * shell 命令、浏览器交互、子代理编排、以及会改变对话/文件/外部状态的工具
- * 都保持独占串行，避免盲目 Promise.all 引发竞态。缺省保守：不在集合中的
+ * 确定性无副作用的只读工具允许与兄弟 tool call 并发执行。`SubAgent` 创建是
+ * 唯一允许并发的受控写操作：每个调用只追加一个独立 UUID 记录，真正的 worker
+ * 并发由 SubagentManager 的 4/16 槽位及 Build Block 硬上限管理。其他写入、shell、
+ * 浏览器交互、子代理发送/关闭等操作仍保持独占串行。缺省保守：不在集合中的
  * 工具一律视为独占。
  *
  * 注意：read/grep/glob/pwd 是同一进程内的内存/文件系统只读，可安全重叠；
@@ -105,6 +112,7 @@ const CONCURRENCY_SAFE_TOOLS = new Set<string>([
   'git_status',
   'file_audit',
   'repo_security_audit',
+  'SubAgent',
 ]);
 
 /** 判断一个工具是否可参与并行调度。缺省 false（独占）。

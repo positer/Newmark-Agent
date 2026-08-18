@@ -105,6 +105,8 @@ const BOOLEAN_FLAGS = new Set<string>([
   '--confirm-remove-legacy',
   '--no-uninstall-previous',
   '--no-elevate',
+  '--on',
+  '--off',
 ]);
 
 /** Public version spellings accepted by every Newmark entrypoint. */

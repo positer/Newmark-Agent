@@ -58,7 +58,7 @@ const CLI_COMMAND_HELP: Record<CliCommand, string[]> = {
   ],
   remote: [
     'Usage: Newmark.exe remote --on|--off [--root <dir>]',
-    'Enable or disable mobile remote-touch over Tailscale.',
+    'Enable or disable mobile remote-touch on the same LAN / Tailscale network.',
   ],
   'install-update': [
     'Usage: Newmark.exe install-update (--source <path>|--check-github|--from-github|--msi <path>) [options] [--root <dir>]',
@@ -92,6 +92,7 @@ const CLI_BOOLEAN_FLAGS = new Set<string>([
   '--persist', '--agent-only', '--list', '--preview-only', '--sources', '--add-source', '--check-github',
   '--from-github', '--dry-run', '--read', '--index', '--reindex', '--update', '--version', '--folder', '--help', '-h',
   '--branch-communication', '--yes', '--confirm-stop', '--confirm-remove-legacy', '--no-uninstall-previous', '--no-elevate',
+  '--on', '--off',
 ]);
 
 function invalidCliCommandArgument(args: string[]): string | undefined {

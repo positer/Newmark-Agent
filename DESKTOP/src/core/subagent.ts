@@ -53,6 +53,10 @@ export interface SubagentInstance {
   name: string;
   conversationId: string;
   createdByAgentId: string;
+  /** Root Build Block that created this peer. Empty only for legacy/direct API records. */
+  buildRunId?: string;
+  /** Intelligence tier captured at creation so the enforced 4/16 ceiling is auditable. */
+  intelligenceTier?: string;
   prompt: string;
   model: string;
   inputMode: string;
@@ -207,7 +211,7 @@ export class SubagentManager {
   private running = new Set<string>();
   private schedulingPaused = false;
   private nextSequence = 1;
-  private readonly concurrency: number;
+  private concurrency: number;
   private executor?: (job: SubagentExecutionJob) => Promise<string>;
   private onChange?: (state: SubagentState) => void;
   private persist?: (state: SubagentState) => void;
@@ -265,7 +269,8 @@ export class SubagentManager {
     queueMicrotask(() => this.pump());
   }
 
-  bind(options: Pick<SubagentManagerOptions, 'executor' | 'onChange' | 'persist' | 'onMailboxMessage' | 'onRootInboxMessage' | 'onSettled'>): void {
+  bind(options: Pick<SubagentManagerOptions, 'concurrency' | 'executor' | 'onChange' | 'persist' | 'onMailboxMessage' | 'onRootInboxMessage' | 'onSettled'>): void {
+    if (options.concurrency !== undefined) this.setConcurrencyLimit(options.concurrency);
     if (options.executor) this.executor = options.executor;
     if (options.onChange) this.onChange = options.onChange;
     if (options.persist) this.persist = options.persist;
@@ -284,16 +289,16 @@ export class SubagentManager {
     this.rootInboxListeners.delete(listener);
   }
 
-  create(name: string, prompt: string, model?: string, inputMode?: string, agentMode: AgentMode = 'build', createdByAgentId = this.rootAgentId, flowName = '', goalObjective = '', flowPc = 0): string {
+  create(name: string, prompt: string, model?: string, inputMode?: string, agentMode: AgentMode = 'build', createdByAgentId = this.rootAgentId, flowName = '', goalObjective = '', flowPc = 0, buildRunId = '', intelligenceTier = ''): string {
     const id = randomUUID();
     const shortId = id.replace(/-/g, '').slice(0, 8);
     const slug = natureSlug(name);
-    // The Agent-facing name is the caller's stable, human-readable label and is
-    // deliberately decoupled from the identity. The UUID and its short form are
-    // the only identity-bearing fields; the UI renders the short-id-qualified
-    // display name while Agent tool interactions accept both name and id.
-    const displayName = `${slug}-${shortId}`;
-    const qualifiedName = `${displayName}--${id}`;
+    // The monitoring label is exactly the caller-created human-readable name.
+    // UUID-bearing identity stays in id/qualifiedName and is never appended to
+    // the right-sidebar title.
+    const createdName = String(name || 'SubAgent').replace(/\s+/g, ' ').trim().slice(0, 160) || 'SubAgent';
+    const displayName = createdName;
+    const qualifiedName = `${slug}--${id}`;
     const stamp = now();
     const record: SubagentInstance = {
       id,
@@ -301,9 +306,11 @@ export class SubagentManager {
       natureSlug: slug,
       displayName,
       qualifiedName,
-      name: slug,
+      name: createdName,
       conversationId: this.conversationId,
       createdByAgentId,
+      buildRunId: String(buildRunId || '').trim() || undefined,
+      intelligenceTier: String(intelligenceTier || '').trim() || undefined,
       prompt,
       model: model || 'default',
       inputMode: inputMode || 'guide',
@@ -653,6 +660,21 @@ export class SubagentManager {
 
   listActive(): SubagentInstance[] { return this.listAll().filter(item => item.status !== 'closed'); }
   listAll(): SubagentInstance[] { return [...this.subs.values()].map(cloneRecord); }
+
+  activeCountForBuild(buildRunId: string): number {
+    const target = String(buildRunId || '').trim();
+    if (!target) return 0;
+    return [...this.subs.values()].filter(record =>
+      record.buildRunId === target && (record.status === 'queued' || record.status === 'working'),
+    ).length;
+  }
+
+  setConcurrencyLimit(value: number): void {
+    this.concurrency = Math.max(1, Math.min(16, Math.floor(Number(value) || 4)));
+    this.pump();
+  }
+
+  concurrencyLimit(): number { return this.concurrency; }
 
   pauseScheduling(): void {
     if (this.schedulingPaused) return;

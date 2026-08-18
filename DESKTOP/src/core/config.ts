@@ -892,7 +892,7 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
       auto_archive_on_close: { _description: "Auto archive on close", _type: "boolean", value: true },
     },
     remote: {
-      touch_enabled: { _description: "Allow mobile devices to reach this Newmark instance over Tailscale", _type: "boolean", value: true },
+      touch_enabled: { _description: "Allow mobile devices to reach this Newmark instance on the same LAN / Tailscale network", _type: "boolean", value: true },
     },
     models: {
       providers: { _description: "LLM providers", _type: "array", value: [] },

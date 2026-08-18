@@ -58,6 +58,12 @@ function hasToolResult(parsed) {
     .some(message => message?.role === 'tool' || message?.role === 'toolResult');
 }
 
+function hasNamedToolResult(parsed, toolName) {
+  return (Array.isArray(parsed?.messages) ? parsed.messages : [])
+    .some(message => (message?.role === 'tool' || message?.role === 'toolResult')
+      && String(message?.name || message?.tool_name || '') === toolName);
+}
+
 function toolResultTexts(parsed) {
   return (Array.isArray(parsed?.messages) ? parsed.messages : [])
     .filter(message => message?.role === 'tool' || message?.role === 'toolResult')
@@ -82,11 +88,11 @@ function writeText(res, text, stream) {
   res.end(JSON.stringify({ choices: [{ message: { content: text } }] }));
 }
 
-function writeToolCall(res, stream) {
+function writeToolCall(res, stream, name, args, id) {
   const toolCall = {
-    id: 'call-active-context-compress',
+    id,
     type: 'function',
-    function: { name: 'context_compress', arguments: JSON.stringify({ force: true, keep_recent: 4 }) },
+    function: { name, arguments: JSON.stringify(args) },
   };
   if (stream) {
     writeSse(res, { choices: [{ delta: { tool_calls: [{ index: 0, ...toolCall }] } }] });
@@ -119,8 +125,14 @@ function startMockServer() {
       const prompt = requestText(parsed);
       if (isCompressionSummary) {
         writeText(res, '## Active Or Unfinished Work\nPreserve ACTIVE_CONTEXT_TOOL_REQUEST and the release gate.', false);
-      } else if (/ACTIVE_CONTEXT_TOOL_REQUEST/i.test(prompt) && !hasToolResult(parsed)) {
-        writeToolCall(res, true);
+      } else if (/ACTIVE_CONTEXT_TOOL_REQUEST/i.test(prompt) && !hasNamedToolResult(parsed, 'context_compress')) {
+        const availableToolNames = (Array.isArray(parsed.tools) ? parsed.tools : [])
+          .map(tool => String(tool?.function?.name || tool?.name || ''));
+        if (availableToolNames.includes('context_compress')) {
+          writeToolCall(res, true, 'context_compress', { force: true, keep_recent: 4 }, 'call-active-context-compress');
+        } else {
+          writeToolCall(res, true, 'tool_provision', { names: ['context_compress'] }, 'provision-active-context-compress');
+        }
       } else if (/ACTIVE_CONTEXT_TOOL_REQUEST/i.test(prompt)) {
         writeText(res, 'ACTIVE_CONTEXT_TOOL_OK', true);
       } else {

@@ -1,59 +1,121 @@
 package com.newmark.mobile.ui.theme
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-// 对齐 WEB/index.html :root 的暗色毛玻璃 token
-val NewmarkBgPrimary = Color(0xE0161618)      // rgba(22,22,24,.88)
-val NewmarkBgSecondary = Color(0xC7242426)    // rgba(36,36,38,.78)
-val NewmarkBgTertiary = Color(0xAD323235)     // rgba(50,50,53,.68)
-val NewmarkBgQuaternary = Color(0x94404043)   // rgba(64,64,67,.58)
-val NewmarkBgOverlay = Color(0x7A4E4E52)      // rgba(78,78,82,.48)
+// 对齐 PC GUI 的深蓝毛玻璃 token。主界面也使用 --app-bg，而不是旧版灰黑色。
+val NewmarkBgPrimary = Color(0xFF0A0A1A)       // --app-bg
+val NewmarkBgSecondary = Color(0xD611112A)     // 加强可读性的 --glass-bg-2
+val NewmarkBgTertiary = Color(0xE01A1A38)      // 加强可读性的 --glass-bg-3
+val NewmarkBgQuaternary = Color(0xD61E1E42)
+val NewmarkBgOverlay = Color(0xCC22224A)
 
-val NewmarkTextPrimary = Color(0xEBFFFFFF)    // rgba(255,255,255,.92)
-val NewmarkTextSecondary = Color(0x9EFFFFFF)  // rgba(255,255,255,.62)
-val NewmarkTextTertiary = Color(0x61FFFFFF)   // rgba(255,255,255,.38)
+val NewmarkTextPrimary = Color(0xFFE4ECFF)
+val NewmarkTextSecondary = Color(0xFFC8D0E8)
+val NewmarkTextTertiary = Color(0xFF7880A0)
 
-val NewmarkAccent = Color(0xFF007AFF)         // rgb(0,122,255)
-val NewmarkAccentSoft = Color(0x2E007AFF)     // 蓝 18%
-val NewmarkAccentBorder = Color(0x1F007AFF)   // 蓝 12%
+val NewmarkAccent = Color(0xFF5B78FF)
+val NewmarkAccentSoft = Color(0x1F5B78FF)
+val NewmarkAccentBorder = Color(0x665B78FF)
 
-val NewmarkBorder = Color(0x0FFFFFFF)         // 白 6%
-val NewmarkBorder2 = Color(0x1FFFFFFF)        // 白 12%
+val NewmarkBorder = Color(0x1AFFFFFF)         // 白 10%
+val NewmarkBorder2 = Color(0x33FFFFFF)        // 白 20%
 val NewmarkScrim = Color(0x73000000)          // rgba(0,0,0,.45)
 
 // 亮色 token（.light）
-val NewmarkLightBgPrimary = Color(0xE6F2F2F7)
-val NewmarkLightBgSecondary = Color(0xD6FFFFFF)
-val NewmarkLightBgTertiary = Color(0xCCF2F2F7)
-val NewmarkLightBgQuaternary = Color(0xBDFFFFFF)
+val NewmarkLightBgPrimary = Color(0xFFF0F2F8)
+val NewmarkLightBgSecondary = Color(0xF2FFFFFF)
+val NewmarkLightBgTertiary = Color(0xF8F8FAFF)
+val NewmarkLightBgQuaternary = Color(0xEEFFFFFF)
 val NewmarkLightTextPrimary = Color(0xE0000000)
 val NewmarkLightTextSecondary = Color(0x85000000)
 val NewmarkLightTextTertiary = Color(0x52000000)
-val NewmarkLightBorder = Color(0x0D000000)
-val NewmarkLightBorder2 = Color(0x1A000000)
+val NewmarkLightBorder = Color(0x1F1A2A52)
+val NewmarkLightBorder2 = Color(0x3D1A2A52)
 
-// 跑马灯渐变（运行中状态）
+// 跑马灯渐变（与 PC-GUI 完全一致：conic-gradient 旋转，4 色）
 val MarqueeColors = listOf(
-    Color(0xFFFF6B6B),
-    Color(0xFFFECA57),
-    Color(0xFF48DBFB),
-    Color(0xFFFF9FF3),
-    Color(0xFFA29BFE),
-    Color(0xFFFD79A8),
+    Color(0xFF00FF88),  // --g1 #00ff88
+    Color(0xFF00CCFF),  // --g2 #00ccff
+    Color(0xFFAA44FF),  // --g3 #aa44ff
+    Color(0xFFFF4488),  // --g4 #ff4488
 )
 
 // 状态语义色
 val NewmarkGreen = Color(0xFF34C759)
 val NewmarkRed = Color(0xFFFF3B30)
+
+/** 主题语义调色板（暗/亮两套），UI 组件经 LocalNewmarkPalette 取色以适配亮色模式 */
+@Immutable
+data class NewmarkPalette(
+    val bgPrimary: Color,
+    val bgSecondary: Color,
+    val bgTertiary: Color,
+    val bgQuaternary: Color,
+    val textPrimary: Color,
+    val textSecondary: Color,
+    val textTertiary: Color,
+    val accent: Color,
+    val accentSoft: Color,
+    val accentBorder: Color,
+    val border: Color,
+    val border2: Color,
+    val green: Color,
+    val red: Color,
+)
+
+val NewmarkDarkPalette = NewmarkPalette(
+    bgPrimary = NewmarkBgPrimary,
+    bgSecondary = NewmarkBgSecondary,
+    bgTertiary = NewmarkBgTertiary,
+    bgQuaternary = NewmarkBgQuaternary,
+    textPrimary = NewmarkTextPrimary,
+    textSecondary = NewmarkTextSecondary,
+    textTertiary = NewmarkTextTertiary,
+    accent = NewmarkAccent,
+    accentSoft = NewmarkAccentSoft,
+    accentBorder = NewmarkAccentBorder,
+    border = NewmarkBorder,
+    border2 = NewmarkBorder2,
+    green = NewmarkGreen,
+    red = NewmarkRed,
+)
+
+val NewmarkLightPalette = NewmarkPalette(
+    bgPrimary = NewmarkLightBgPrimary,
+    bgSecondary = NewmarkLightBgSecondary,
+    bgTertiary = NewmarkLightBgTertiary,
+    bgQuaternary = NewmarkLightBgQuaternary,
+    textPrimary = NewmarkLightTextPrimary,
+    textSecondary = NewmarkLightTextSecondary,
+    textTertiary = NewmarkLightTextTertiary,
+    accent = NewmarkAccent,
+    accentSoft = NewmarkAccentSoft,
+    accentBorder = NewmarkAccentBorder,
+    border = NewmarkLightBorder,
+    border2 = NewmarkLightBorder2,
+    green = NewmarkGreen,
+    red = NewmarkRed,
+)
+
+val LocalNewmarkPalette = staticCompositionLocalOf { NewmarkDarkPalette }
+
+/** 主题模式（dark=null 跟随系统），供设置页开关真实切换亮暗色 */
+data class ThemeMode(val dark: Boolean?, val setDark: (Boolean?) -> Unit)
+val LocalThemeMode = compositionLocalOf { ThemeMode(null, {}) }
 
 private val NewmarkDarkColors = darkColorScheme(
     primary = NewmarkAccent,
@@ -128,12 +190,16 @@ private val NewmarkTypography = Typography(
 
 @Composable
 fun NewmarkTheme(
-    darkTheme: Boolean = true,
+    darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    MaterialTheme(
-        colorScheme = if (darkTheme) NewmarkDarkColors else NewmarkLightColors,
-        typography = NewmarkTypography,
-        content = content,
-    )
+    CompositionLocalProvider(
+        LocalNewmarkPalette provides if (darkTheme) NewmarkDarkPalette else NewmarkLightPalette,
+    ) {
+        MaterialTheme(
+            colorScheme = if (darkTheme) NewmarkDarkColors else NewmarkLightColors,
+            typography = NewmarkTypography,
+            content = content,
+        )
+    }
 }

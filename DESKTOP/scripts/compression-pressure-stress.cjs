@@ -143,13 +143,15 @@ async function runDispatchedCompressionTools(root) {
   const compressProvider = new FixtureProvider({
     summary: '## Active Or Unfinished Work\nPreserve ACTIVE_CONTEXT_TOOL_REQUEST and the release test.',
     finalText: 'ACTIVE_CONTEXT_TOOL_OK',
-    toolName: 'context_compress',
-    toolArgs: { force: true, keep_recent: 4 },
+    toolSequence: [
+      { name: 'tool_provision', args: { names: ['context_compress'] } },
+      { name: 'context_compress', args: { force: true, keep_recent: 4 } },
+    ],
   });
   active.forcedProvider = compressProvider;
   const compressOutput = (await active.process('ACTIVE_CONTEXT_TOOL_REQUEST: call context_compress now.')).map(token => token.text || '').join('');
   check(compressOutput.includes('ACTIVE_CONTEXT_TOOL_OK'), 'model-dispatched context_compress returns to the same Build');
-  check(compressProvider.toolCalls === 1 && compressProvider.chatCalls >= 1 && Boolean(active.lastCompression),
+  check(compressProvider.toolCalls === 2 && compressProvider.chatCalls >= 1 && Boolean(active.lastCompression),
     'model-dispatched context_compress invokes the active compression handler and summary provider',
     JSON.stringify({ toolCalls: compressProvider.toolCalls, chatCalls: compressProvider.chatCalls, streamCalls: compressProvider.streamCalls, lastCompression: active.lastCompression }));
   check(active.history.length < before + 2, 'model-dispatched context_compress reduces the active context');

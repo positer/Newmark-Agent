@@ -79,8 +79,10 @@ async function main(): Promise<void> {
     'an explicit tool request hard-filters candidates without verified tool_use');
     splitAgent.history.push({ role: 'user', content: 'Call a tool to inspect the workspace' });
     const toolSurface = agentKernelRunnerInternals.routeToolSurfaceV2(splitAgent, [{ name: 'read', parameters: { type: 'object' } }], null, 'Call a tool to inspect the workspace');
-    ok(toolSurface.definitions.length === 1 && !toolSurface.systemPromptNotice,
-      'a tool-capable Auto route preloads the full available surface without a planner registry');
+    ok(toolSurface.definitions.length === 1
+      && toolSurface.systemPromptNotice.includes('tool_provision')
+      && toolSurface.systemPromptNotice.includes('compact catalog remains authoritative'),
+    'a tool-capable Auto route keeps only available foundational schemas even without a planner registry');
     splitAgent.history.pop();
 
     splitAgent.resetAutoRoute();
@@ -92,9 +94,9 @@ async function main(): Promise<void> {
     splitAgent.setModel('chat-only');
     const readToolchain = seedToolchainFromDefinitions([{ name: 'read', parameters: { type: 'object' } }], { namespace: 'newmark', version: '1.0.0' }).core;
     const fixedCompatibilitySurface = agentKernelRunnerInternals.routeToolSurfaceV2(splitAgent, [{ name: 'read', parameters: { type: 'object' } }], readToolchain, '');
-    ok(fixedCompatibilitySurface.definitions.length === 0
+    ok(fixedCompatibilitySurface.definitions.length === 1
       && fixedCompatibilitySurface.systemPromptNotice.includes('tool_provision'),
-    'fixed model selections also start from the on-demand broker instead of the legacy full schema surface');
+    'fixed model selections preload only available foundational schemas and provision advanced tools on demand');
   } finally {
     fs.rmSync(splitRoot, { recursive: true, force: true });
   }

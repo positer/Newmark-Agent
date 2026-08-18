@@ -93,6 +93,7 @@ async function main(): Promise<void> {
       check(body.model === 'gpt-5-mini', 'chat_stream: body.model');
       check(body.max_tokens === 1024 && body.temperature === 0.2, 'chat_stream: max_tokens + temperature');
       check(body.tool_choice === 'auto', 'chat_stream: tool_choice auto');
+      check(body.parallel_tool_calls === true, 'chat_stream: explicitly enables parallel tool calls');
       check(body.tools?.[0]?.function?.name === 'bash', 'chat_stream: tools serialized');
       check(body.messages?.[0]?.role === 'system' && body.messages?.[0]?.content === SYSTEM, 'chat_stream: system message');
       assert.deepStrictEqual(tokens, [
@@ -167,6 +168,7 @@ async function main(): Promise<void> {
       check(body.stream === true, 'responses: body.stream === true');
       check(body.reasoning?.effort === 'medium' && body.reasoning?.summary === 'auto', 'responses: default reasoning effort medium');
       check(body.instructions === SYSTEM, 'responses: system prompt as instructions');
+      check(body.parallel_tool_calls === true, 'responses: explicitly enables parallel tool calls');
       check(body.input?.[0]?.role === 'user' && body.input?.[0]?.content === 'run pwd', 'responses: input messages');
       check(body.tools?.[0]?.type === 'function' && body.tools?.[0]?.name === 'bash', 'responses: tools serialized');
       assert.deepStrictEqual(tokens, [

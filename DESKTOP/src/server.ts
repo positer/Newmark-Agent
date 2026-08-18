@@ -4,15 +4,16 @@ import * as path from 'path';
 import * as os from 'os';
 import { normalizeUiBackgroundColor, normalizeUiFontFamily, normalizeUiTheme } from './core/uiPreferences';
 import { spawnSync } from 'child_process';
-import { Agent } from './core/agent';
+import { Agent, AgentWorkEvent } from './core/agent';
 import { AgentMode } from './core/types';
 import { AutomationManager } from './core/automation';
 import { sanitizeProvidersForState } from './core/config';
 import { FlowEngine, FlowWorkflow } from './core/flow';
 import { WorkspaceFileRouter } from './core/workspaceFileRouter';
+import { WorkspaceInfo } from './core/workspace';
 import { executeWorkspaceBash } from './core/nativeBash';
 import { currentAppVersion } from './core/installUpdate';
-import { confirmPairing, ensureMobileToken, pairingStatus, tailscaleIpv4 } from './core/mobilePairing';
+import { confirmPairing, ensureMobileToken, lanIpv4, pairingStatus, tailscaleIpv4 } from './core/mobilePairing';
 
 const PORT = 47890;
 let agent: Agent | null = null;
@@ -20,6 +21,18 @@ let automation: AutomationManager | null = null;
 let workspaceFileRouter: WorkspaceFileRouter | null = null;
 let mobileToken = '';
 let appRoot = '';
+const mobileWorkEventSubscribers = new Set<(event: AgentWorkEvent) => void>();
+const mobileScopedRuntimes = new Map<string, { agent: Agent; workspaceId: string; conversationId: string; unsubscribe: () => void }>();
+
+function mobileRuntimeKey(workspaceId: string, conversationId: string): string {
+  return `${String(workspaceId || '')}::${String(conversationId || '')}`;
+}
+
+function publishMobileWorkEvent(event: AgentWorkEvent): void {
+  for (const subscriber of mobileWorkEventSubscribers) {
+    try { subscriber(event); } catch { /* ignore disconnected mobile listeners */ }
+  }
+}
 
 function mobileAuthorized(req: http.IncomingMessage): boolean {
   if (!mobileToken) return false;
@@ -43,6 +56,109 @@ function mobileJson(res: http.ServerResponse, data: unknown, code = 200): void {
   res.end(body);
 }
 
+function resolveMobileWorkspace(current: Agent, workspaceId: string): WorkspaceInfo | null {
+  const clean = String(workspaceId || '');
+  return [...current.workspace.internal, ...current.workspace.external].find(workspace => workspace.id === clean)
+    || (current.workspace.current?.id === clean ? current.workspace.current : null);
+}
+
+const MOBILE_EDITABLE_EXTENSIONS = new Set([
+  '.txt', '.md', '.markdown', '.json', '.jsonc', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
+  '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.css', '.scss', '.html', '.htm', '.xml', '.svg',
+  '.kt', '.kts', '.java', '.py', '.rb', '.rs', '.go', '.c', '.h', '.cpp', '.hpp', '.cs', '.sh',
+  '.bash', '.zsh', '.ps1', '.bat', '.cmd', '.sql', '.tex', '.typ', '.properties', '.gradle', '.gitignore',
+]);
+const MOBILE_EDITOR_MAX_BYTES = 1024 * 1024;
+
+function resolveMobileWorkspacePath(ws: WorkspaceInfo, relativePath: string): { root: string; target: string; relative: string } {
+  const root = path.resolve(ws.path);
+  const clean = String(relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  const target = path.resolve(root, clean || '.');
+  if (target !== root && !target.startsWith(root + path.sep)) throw new Error('Path escapes workspace');
+  return { root, target, relative: path.relative(root, target).replace(/\\/g, '/') };
+}
+
+async function assertMobileRealPathContained(root: string, target: string): Promise<void> {
+  const realRoot = await fs.promises.realpath(root);
+  const realTarget = await fs.promises.realpath(target);
+  if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) throw new Error('Path escapes workspace through a symbolic link');
+}
+
+function mobileEditableFile(target: string): boolean {
+  const base = path.basename(target).toLowerCase();
+  return MOBILE_EDITABLE_EXTENSIONS.has(path.extname(base)) || MOBILE_EDITABLE_EXTENSIONS.has(base);
+}
+
+function mobileRightSidebarState(current: Agent, ws: WorkspaceInfo, conversationId: string): Record<string, unknown> {
+  const scoped = mobileScopedAgent(ws, conversationId);
+  return {
+    workspace: { id: ws.id, name: ws.name, path: ws.path, isInternal: ws.isInternal },
+    conversationId,
+    conversationPlan: scoped.getConversationPlan(conversationId),
+    linkedPlan: scoped.getLinkedPlan(conversationId),
+    subagents: scoped.subagents.listAll()
+      .filter(record => !record.conversationId || record.conversationId === conversationId)
+      .map(record => ({
+        id: record.id,
+        name: record.name,
+        displayName: record.displayName,
+        status: record.status,
+        model: record.model,
+        mode: record.agentMode,
+        inputMode: record.inputMode,
+        result: record.result,
+        error: record.error || '',
+        messageCount: record.messages.length,
+        messages: record.messages.slice(-40),
+      })),
+  };
+}
+
+function mobileWorkspaceConversationRows(current: Agent, ws: WorkspaceInfo): Array<Record<string, unknown>> {
+  const activeConversationId = current.activeConversationIdForWorkspace(ws);
+  const isRuntimeWorkspace = !!current.workspace.current
+    && path.resolve(current.workspace.current.path) === path.resolve(ws.path);
+  const activeRuntimeStatus = current.status === 'working' ? 'running' : current.status;
+  return current.listWorkspaceConversationStates(ws).map(conversation => {
+    const scopedRuntime = mobileScopedRuntimes.get(mobileRuntimeKey(String(ws.id || ''), conversation.id));
+    const scopedStatus = scopedRuntime?.agent.status === 'working' ? 'running' : scopedRuntime?.agent.status || '';
+    const runtimeStatus = scopedRuntime
+      ? scopedStatus
+      : isRuntimeWorkspace && conversation.id === current.activeConversationId && activeRuntimeStatus !== 'idle'
+        ? activeRuntimeStatus
+        : '';
+    return {
+      ...conversation,
+      active: conversation.id === activeConversationId || !!scopedRuntime,
+      runtimeStatus,
+      running: ['running', 'stopping', 'force_restarting'].includes(runtimeStatus),
+    };
+  });
+}
+
+function mobileScopedAgent(ws: WorkspaceInfo, conversationId: string): Agent {
+  const scoped = new Agent(appRoot, {
+    agentOnly: true,
+    workspaceRegistryMode: 'detached',
+    readOnlyConfig: true,
+    conversationId,
+  });
+  scoped.workspace.current = { ...ws };
+  scoped.config.loadWorkspaceConfig(ws.path);
+  scoped.setConversationFromStorage(conversationId);
+  return scoped;
+}
+
+function mobileConversationRuntimeBusy(current: Agent, ws: WorkspaceInfo, conversationId: string): boolean {
+  const scoped = mobileScopedRuntimes.get(mobileRuntimeKey(String(ws.id || ''), conversationId));
+  if (scoped && scoped.agent.status !== 'idle') return true;
+  const currentWs = current.workspace.current;
+  return !!currentWs
+    && path.resolve(currentWs.path) === path.resolve(ws.path)
+    && current.activeConversationId === conversationId
+    && current.status !== 'idle';
+}
+
 function handleMobileEvents(req: http.IncomingMessage, res: http.ServerResponse): void {
   if (agent && !agent.config.getBool('remote', 'touch_enabled')) {
     mobileJson(res, { error: 'Remote touch disabled' }, 403);
@@ -63,19 +179,20 @@ function handleMobileEvents(req: http.IncomingMessage, res: http.ServerResponse)
     'Access-Control-Allow-Origin': '*',
   });
   res.write('retry: 3000\n\n');
-  const unsubscribe = agent.subscribeWorkEvents(event => {
+  const subscriber = (event: AgentWorkEvent) => {
     try {
       res.write(`event: work\ndata: ${JSON.stringify(event)}\n\n`);
     } catch {
       // socket is gone; the close handler will clean up
     }
-  });
+  };
+  mobileWorkEventSubscribers.add(subscriber);
   const heartbeat = setInterval(() => {
     try { res.write(': ping\n\n'); } catch {}
   }, 15000);
-  req.on('close', () => {
+  res.on('close', () => {
     clearInterval(heartbeat);
-    unsubscribe();
+    mobileWorkEventSubscribers.delete(subscriber);
   });
 }
 
@@ -583,6 +700,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           hostname: os.hostname(),
           platform: process.platform,
           tailscaleIpv4: tailscaleIpv4(),
+          lanIpv4: lanIpv4(),
           workspace: agent.workspace.current ? {
             id: agent.workspace.current.id,
             name: agent.workspace.current.name,
@@ -595,9 +713,13 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
       }
       case '/api/mobile/state': {
         const active = agent.getConversationSnapshot(agent.activeConversationId, { window: 200 });
+        // 完整对话信息：workRuns 用持久化记录透出（含被中断的构建，不依赖运行时内存）
+        const persistedRuns = agent.getPersistedConversationWorkRuns(agent.activeConversationId);
+        if (persistedRuns.length) (active as { workRuns?: unknown }).workRuns = persistedRuns;
         mobileJson(res, {
           mode: agent.mode,
           model: agent.modelSelectionValue(),
+          modelLabel: agent.modelLabel(),
           status: agent.status,
           activeConversationId: agent.activeConversationId,
           conversations: agent.listConversationStates(),
@@ -607,6 +729,11 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           chatMessages: active.chatMessages,
           totalMessages: active.totalMessages,
           conversationLocked: agent.isConversationLocked(),
+          // workRuns 透出：完整 Build Block 记录（含 interrupted/force_interrupted），供移动端渲染被中断的对话
+          workRuns: active.workRuns,
+          // goal bar / flow bar：目标状态与当前 Flow 选择
+          goal: active.goal,
+          flowSelection: active.flowSelection,
         });
         return;
       }
@@ -615,12 +742,24 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         return;
       }
       case '/api/mobile/conversation': {
-        const conversationId = url.searchParams.get('conversationId') || agent.activeConversationId;
+        const workspaceId = url.searchParams.get('workspaceId') || '';
         const windowParam = url.searchParams.get('window');
         const beforeParam = url.searchParams.get('before');
         const windowSize = windowParam ? Math.max(1, Math.min(500, Number(windowParam) || 200)) : 200;
         const before = beforeParam ? Math.max(0, Number(beforeParam) || 0) : undefined;
-        const snapshot = agent.getConversationSnapshot(String(conversationId), { window: windowSize, before });
+        const current = agent;
+        const ws = workspaceId ? resolveMobileWorkspace(current, workspaceId) : null;
+        if (workspaceId && !ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        const conversationId = url.searchParams.get('conversationId')
+          || (ws ? current.activeConversationIdForWorkspace(ws) : current.activeConversationId);
+        if (ws && !current.hasConversationInWorkspace(String(conversationId), ws)) {
+          mobileJson(res, { error: 'Conversation not found in workspace' }, 404);
+          return;
+        }
+        const snapshot = current.getConversationSnapshot(String(conversationId), { window: windowSize, before, workspace: ws });
+        // 完整对话信息：workRuns 统一用持久化记录透出（含被中断的构建）
+        const persistedRuns = current.getPersistedConversationWorkRuns(String(conversationId), ws || undefined);
+        if (persistedRuns.length) (snapshot as { workRuns?: unknown }).workRuns = persistedRuns;
         mobileJson(res, snapshot);
         return;
       }
@@ -628,23 +767,331 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         mobileJson(res, { internal: agent.workspace.internal, external: agent.workspace.external, current: agent.workspace.current });
         return;
       }
+      case '/api/mobile/workspace-conversations': {
+        const workspaceId = url.searchParams.get('workspaceId') || '';
+        const current = agent;
+        const ws = resolveMobileWorkspace(current, workspaceId);
+        if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        const conversations = mobileWorkspaceConversationRows(current, ws);
+        mobileJson(res, { workspace: { id: ws.id, name: ws.name, path: ws.path, isInternal: ws.isInternal }, conversations });
+        return;
+      }
+      case '/api/mobile/right-sidebar-state': {
+        const workspaceId = url.searchParams.get('workspaceId') || '';
+        const conversationId = url.searchParams.get('conversationId') || '';
+        const ws = resolveMobileWorkspace(agent, workspaceId);
+        if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        if (!conversationId || !agent.hasConversationInWorkspace(conversationId, ws)) {
+          mobileJson(res, { error: 'Conversation not found in workspace' }, 404);
+          return;
+        }
+        mobileJson(res, mobileRightSidebarState(agent, ws, conversationId));
+        return;
+      }
+      case '/api/mobile/workspace-files': {
+        const workspaceId = url.searchParams.get('workspaceId') || '';
+        const relativePath = url.searchParams.get('path') || '';
+        const ws = resolveMobileWorkspace(agent, workspaceId);
+        if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        const resolved = resolveMobileWorkspacePath(ws, relativePath);
+        await assertMobileRealPathContained(resolved.root, resolved.target);
+        const stat = await fs.promises.stat(resolved.target);
+        if (!stat.isDirectory()) { mobileJson(res, { error: 'Path is not a directory' }, 400); return; }
+        const entries = await fs.promises.readdir(resolved.target, { withFileTypes: true });
+        const rows = entries
+          .filter(entry => entry.name !== '.git' && entry.name !== 'node_modules')
+          .map(entry => ({
+            name: entry.name,
+            path: path.posix.join(resolved.relative, entry.name).replace(/^\.\//, ''),
+            directory: entry.isDirectory(),
+          }))
+          .sort((a, b) => Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name));
+        mobileJson(res, { workspaceId, path: resolved.relative, entries: rows });
+        return;
+      }
+      case '/api/mobile/workspace-file': {
+        if (req.method === 'GET') {
+          const workspaceId = url.searchParams.get('workspaceId') || '';
+          const relativePath = url.searchParams.get('path') || '';
+          const ws = resolveMobileWorkspace(agent, workspaceId);
+          if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+          const resolved = resolveMobileWorkspacePath(ws, relativePath);
+          await assertMobileRealPathContained(resolved.root, resolved.target);
+          const stat = await fs.promises.stat(resolved.target);
+          if (!stat.isFile() || stat.size > MOBILE_EDITOR_MAX_BYTES || !mobileEditableFile(resolved.target)) {
+            mobileJson(res, { error: 'File is not an editable text file' }, 415);
+            return;
+          }
+          const content = (await fs.promises.readFile(resolved.target, 'utf-8')).replace(/^\uFEFF/, '');
+          mobileJson(res, { workspaceId, path: resolved.relative, content, size: stat.size });
+          return;
+        }
+        const params = JSON.parse(body || '{}');
+        const workspaceId = String(params.workspaceId || '');
+        const relativePath = String(params.path || '');
+        const content = String(params.content ?? '');
+        const ws = resolveMobileWorkspace(agent, workspaceId);
+        if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        if (Buffer.byteLength(content, 'utf-8') > MOBILE_EDITOR_MAX_BYTES) {
+          mobileJson(res, { error: 'File exceeds mobile editor size limit' }, 413);
+          return;
+        }
+        const resolved = resolveMobileWorkspacePath(ws, relativePath);
+        await assertMobileRealPathContained(resolved.root, resolved.target);
+        if (!mobileEditableFile(resolved.target)) { mobileJson(res, { error: 'File type is not editable' }, 415); return; }
+        const stat = await fs.promises.stat(resolved.target);
+        if (!stat.isFile()) { mobileJson(res, { error: 'Path is not a file' }, 400); return; }
+        await fs.promises.writeFile(resolved.target, content, 'utf-8');
+        mobileJson(res, { ok: true, workspaceId, path: resolved.relative, size: Buffer.byteLength(content, 'utf-8') });
+        return;
+      }
+      case '/api/mobile/conversation-plan-update': {
+        const params = JSON.parse(body || '{}');
+        const workspaceId = String(params.workspaceId || '');
+        const conversationId = String(params.conversationId || '');
+        const ws = resolveMobileWorkspace(agent, workspaceId);
+        if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        if (!conversationId || !agent.hasConversationInWorkspace(conversationId, ws)) {
+          mobileJson(res, { error: 'Conversation not found in workspace' }, 404);
+          return;
+        }
+        const scoped = mobileScopedAgent(ws, conversationId);
+        const plan = scoped.updateConversationPlan({ items: Array.isArray(params.items) ? params.items : [] }, conversationId);
+        mobileJson(res, { ok: true, conversationPlan: plan });
+        return;
+      }
+      case '/api/mobile/conversation-create': {
+        const params = JSON.parse(body || '{}');
+        const workspaceId = String(params.workspaceId || '');
+        if (!workspaceId) { mobileJson(res, { error: 'No workspaceId' }, 400); return; }
+        const ws = resolveMobileWorkspace(agent, workspaceId);
+        if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        const created = agent.createConversationInWorkspace(ws, String(params.title || ''));
+        mobileJson(res, {
+          ok: true,
+          workspace: { id: ws.id, name: ws.name, path: ws.path, isInternal: ws.isInternal },
+          conversation: created,
+          activeConversationId: created.id,
+          conversations: mobileWorkspaceConversationRows(agent, ws),
+        });
+        return;
+      }
+      case '/api/mobile/conversation-rename': {
+        const params = JSON.parse(body || '{}');
+        const workspaceId = String(params.workspaceId || '');
+        const conversationId = String(params.conversationId || '');
+        const title = String(params.title || '');
+        if (!workspaceId || !conversationId || !title.trim()) {
+          mobileJson(res, { error: 'workspaceId, conversationId, and title are required' }, 400);
+          return;
+        }
+        const ws = resolveMobileWorkspace(agent, workspaceId);
+        if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        const ok = agent.renameConversation(conversationId, title, ws);
+        if (!ok) { mobileJson(res, { ok: false, error: 'Conversation rename failed' }, 404); return; }
+        mobileJson(res, { ok: true, conversations: mobileWorkspaceConversationRows(agent, ws) });
+        return;
+      }
+      case '/api/mobile/conversation-pin': {
+        const params = JSON.parse(body || '{}');
+        const workspaceId = String(params.workspaceId || '');
+        const conversationId = String(params.conversationId || '');
+        if (!workspaceId || !conversationId) {
+          mobileJson(res, { error: 'workspaceId and conversationId are required' }, 400);
+          return;
+        }
+        const ws = resolveMobileWorkspace(agent, workspaceId);
+        if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        const pinned = params.pinned === true;
+        const ok = agent.setConversationPinned(conversationId, pinned, ws);
+        if (!ok) { mobileJson(res, { ok: false, error: 'Conversation pin update failed' }, 404); return; }
+        mobileJson(res, { ok: true, pinned, conversations: mobileWorkspaceConversationRows(agent, ws) });
+        return;
+      }
+      case '/api/mobile/conversation-reorder': {
+        const params = JSON.parse(body || '{}');
+        const workspaceId = String(params.workspaceId || '');
+        const conversationIds = Array.isArray(params.conversationIds)
+          ? params.conversationIds.map((id: unknown) => String(id || ''))
+          : [];
+        if (!workspaceId || conversationIds.length < 2 || conversationIds.some((id: string) => !id)) {
+          mobileJson(res, { error: 'workspaceId and at least two conversationIds are required' }, 400);
+          return;
+        }
+        if (new Set(conversationIds).size !== conversationIds.length) {
+          mobileJson(res, { error: 'conversationIds must be unique' }, 400);
+          return;
+        }
+        const ws = resolveMobileWorkspace(agent, workspaceId);
+        if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        const current = agent;
+        if (conversationIds.some((id: string) => !current.hasConversationInWorkspace(id, ws))) {
+          mobileJson(res, { error: 'Conversation not found in workspace' }, 404);
+          return;
+        }
+        const listedById = new Map(current.listWorkspaceConversationStates(ws).map(item => [item.id, item]));
+        if (new Set(conversationIds.map((id: string) => !!listedById.get(id)?.pinned)).size !== 1) {
+          mobileJson(res, { error: 'Conversations must remain within one pinned group' }, 409);
+          return;
+        }
+        const ok = current.reorderWorkspaceConversationGroup(conversationIds, ws);
+        if (!ok) { mobileJson(res, { ok: false, error: 'Conversation reorder failed' }, 409); return; }
+        mobileJson(res, { ok: true, conversations: mobileWorkspaceConversationRows(current, ws) });
+        return;
+      }
       case '/api/mobile/send': {
         const params = JSON.parse(body || '{}');
         const message = String(params.message || '');
         if (!message) { mobileJson(res, { error: 'No message' }, 400); return; }
-        if (params.conversationId) agent.setConversation(String(params.conversationId));
-        const tokens = await agent.process(message);
-        const snapshot = agent.getConversationSnapshot(agent.activeConversationId, { window: 200 });
+        const workspaceId = String(params.workspaceId || '');
+        let requestAgent = agent;
+        let requestWorkspace: WorkspaceInfo | null = agent.workspace.current;
+        let resolvedWorkspace: WorkspaceInfo | null = null;
+        if (workspaceId) {
+          const ws = resolveMobileWorkspace(agent, workspaceId);
+          if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+          resolvedWorkspace = ws;
+          requestWorkspace = ws;
+        }
+        const conversationId = String(params.conversationId
+          || (resolvedWorkspace ? agent.activeConversationIdForWorkspace(resolvedWorkspace) : agent.activeConversationId));
+        if (resolvedWorkspace) {
+          const ws = resolvedWorkspace;
+          if (!agent.hasConversationInWorkspace(conversationId, ws)) {
+            mobileJson(res, { error: 'Conversation not found in workspace' }, 404);
+            return;
+          }
+          const currentWs = agent.workspace.current;
+          if (!currentWs || path.resolve(currentWs.path) !== path.resolve(ws.path)) {
+            requestAgent = mobileScopedAgent(ws, conversationId);
+          }
+        }
+        if (requestAgent === agent && params.conversationId) requestAgent.setConversation(conversationId);
+        let scopedRuntimeKey = '';
+        let scopedRuntime: { agent: Agent; workspaceId: string; conversationId: string; unsubscribe: () => void } | null = null;
+        let unsubscribeScoped: (() => void) | null = null;
+        if (requestAgent !== agent && requestWorkspace) {
+          scopedRuntimeKey = mobileRuntimeKey(String(requestWorkspace.id || ''), conversationId);
+          unsubscribeScoped = requestAgent.subscribeWorkEvents(event => publishMobileWorkEvent({
+            ...event,
+            workspaceId: String(requestWorkspace?.id || ''),
+            conversationId,
+          }));
+          scopedRuntime = {
+            agent: requestAgent,
+            workspaceId: String(requestWorkspace.id || ''),
+            conversationId,
+            unsubscribe: unsubscribeScoped,
+          };
+          mobileScopedRuntimes.set(scopedRuntimeKey, scopedRuntime);
+        }
+        let tokens;
+        try {
+          tokens = await requestAgent.process(message);
+        } finally {
+          if (scopedRuntimeKey && mobileScopedRuntimes.get(scopedRuntimeKey) === scopedRuntime) {
+            mobileScopedRuntimes.delete(scopedRuntimeKey);
+          }
+          if (unsubscribeScoped) unsubscribeScoped();
+        }
+        const snapshot = requestAgent.getConversationSnapshot(conversationId, {
+          window: 200,
+          workspace: requestWorkspace,
+        });
         mobileJson(res, {
           ok: true,
-          conversationId: agent.activeConversationId,
+          conversationId,
           response: tokens.map(token => token.text).join(''),
           tokens: tokens.map(token => ({ type: token.type, text: token.text })),
-          options: agent.pendingOptions,
-          status: agent.status,
-          conversations: agent.listConversationStates(),
+          options: requestAgent.pendingOptions,
+          status: requestAgent.status,
+          conversations: requestWorkspace
+            ? mobileWorkspaceConversationRows(requestAgent, requestWorkspace)
+            : requestAgent.listConversationStates(),
           chatMessages: snapshot.chatMessages,
           totalMessages: snapshot.totalMessages,
+        });
+        return;
+      }
+      case '/api/mobile/conversation-branch-inspect':
+      case '/api/mobile/conversation-branch-activate':
+      case '/api/mobile/conversation-branch-create': {
+        const params = JSON.parse(body || '{}');
+        const workspaceId = String(params.workspaceId || '');
+        const conversationId = String(params.conversationId || '');
+        if (!workspaceId || !conversationId) {
+          mobileJson(res, { error: 'workspaceId and conversationId are required' }, 400);
+          return;
+        }
+        const ws = resolveMobileWorkspace(agent, workspaceId);
+        if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        if (!agent.hasConversationInWorkspace(conversationId, ws)) {
+          mobileJson(res, { error: 'Conversation not found in workspace' }, 404);
+          return;
+        }
+        const scoped = mobileScopedAgent(ws, conversationId);
+        if (pathname === '/api/mobile/conversation-branch-inspect') {
+          const branchId = String(params.branchId || '');
+          if (!branchId) { mobileJson(res, { error: 'branchId is required' }, 400); return; }
+          mobileJson(res, scoped.inspectConversationBranch(conversationId, branchId, String(params.branchGroupId || '')));
+          return;
+        }
+        if (mobileConversationRuntimeBusy(agent, ws, conversationId)) {
+          mobileJson(res, { error: 'Conversation is running' }, 423);
+          return;
+        }
+        if (pathname === '/api/mobile/conversation-branch-activate') {
+          const branchId = String(params.branchId || '');
+          if (!branchId) { mobileJson(res, { error: 'branchId is required' }, 400); return; }
+          mobileJson(res, scoped.switchConversationBranch(conversationId, branchId, String(params.branchGroupId || '')));
+          return;
+        }
+        const messageIndex = Math.floor(Number(params.messageIndex));
+        const editedText = String(params.editedText || '').trim();
+        if (!Number.isFinite(messageIndex) || messageIndex < 0 || !editedText) {
+          mobileJson(res, { error: 'messageIndex and editedText are required' }, 400);
+          return;
+        }
+        const branchNodePath = Array.isArray(params.branchNodePath)
+          ? params.branchNodePath.map((id: unknown) => String(id || '')).filter(Boolean)
+          : [];
+        const snapshot = scoped.branchConversation(conversationId, messageIndex, editedText, {
+          messageId: String(params.messageId || '') || undefined,
+          guideId: String(params.guideId || '') || undefined,
+          clientMessageId: String(params.clientMessageId || '') || undefined,
+          runId: String(params.runId || '') || undefined,
+          branchNodePath,
+        });
+        mobileJson(res, snapshot);
+        return;
+      }
+      case '/api/mobile/conversation-archive': {
+        const params = JSON.parse(body || '{}');
+        const conversationId = String(params.conversationId || '');
+        const workspaceId = String(params.workspaceId || '');
+        if (!workspaceId || !conversationId) {
+          mobileJson(res, { error: 'workspaceId and conversationId are required' }, 400);
+          return;
+        }
+        const ws = resolveMobileWorkspace(agent, workspaceId);
+        if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        if (!agent.hasConversationInWorkspace(conversationId, ws)) {
+          mobileJson(res, { ok: false, error: 'Conversation not found in workspace' }, 404);
+          return;
+        }
+        // 运行中拒绝：与移动端 running 判定一致（activeConversationId + agent.status 非 idle）
+        if (mobileConversationRuntimeBusy(agent, ws, conversationId)) {
+          mobileJson(res, { ok: false, error: 'Conversation is running' }, 423);
+          return;
+        }
+        const filename = await agent.archiveConversationAsync(conversationId, ws);
+        if (!filename) { mobileJson(res, { ok: false, error: 'Conversation archive could not be written.' }, 500); return; }
+        mobileJson(res, {
+          ok: true,
+          fileName: filename,
+          conversationId,
+          activeConversationId: agent.activeConversationIdForWorkspace(ws),
+          conversations: mobileWorkspaceConversationRows(agent, ws),
         });
         return;
       }
@@ -683,6 +1130,7 @@ function startServer(root: string): void {
       agent.setConversationFromStorage(previousConversation);
     }
   });
+  agent.subscribeWorkEvents(publishMobileWorkEvent);
   agent.setAutomationManager(automation);
   automation.start();
   const uiDir = path.join(__dirname, 'ui');
@@ -727,19 +1175,27 @@ function startServer(root: string): void {
 
   const bindHost = process.env.NEWMARK_BIND_HOST || '0.0.0.0';
   const tailscale = tailscaleIpv4();
+  const lan = lanIpv4();
+  const accessHost = tailscale || lan || '<lan-or-tailscale-ip>';
   const tokenPath = path.join(root, '.newmark-mobile-token');
   server.listen(PORT, bindHost, () => {
     console.log(`\n  Newmark Agent v1.0 - Server Mode`);
     console.log(`  Bind: ${bindHost}:${PORT}`);
     console.log(`  GUI: http://localhost:${PORT}`);
-    console.log(`  Tailscale IPv4: ${tailscale || 'not detected (install/start Tailscale)'}`);
-    console.log(`  Mobile endpoint: http://${tailscale || '<tailscale-ip>'}:${PORT}/api/mobile/hello?token=<token>`);
+    console.log(`  Tailscale IPv4: ${tailscale || 'not detected'}`);
+    console.log(`  LAN IPv4: ${lan || 'not detected'}`);
+    console.log(`  Mobile endpoint: http://${accessHost}:${PORT}/api/mobile/hello?token=<token>`);
     console.log(`  Mobile token file: ${tokenPath}`);
-    console.log(`  Mobile events (SSE): http://${tailscale || '<tailscale-ip>'}:${PORT}/api/mobile/events?token=<token>`);
+    console.log(`  Mobile events (SSE): http://${accessHost}:${PORT}/api/mobile/events?token=<token>`);
     console.log(`  Press Ctrl+C to stop\n`);
   });
 }
 
+let hostedServerStarted = false;
+
+/** 托管启动 server（GUI/TUI 内嵌调用；幂等防重入，进程常驻即服务常驻） */
 export function runServer(root: string): void {
+  if (hostedServerStarted) return;
+  hostedServerStarted = true;
   startServer(root);
 }

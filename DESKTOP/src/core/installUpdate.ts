@@ -586,7 +586,7 @@ export interface ManagedMsiInstallResult {
   error?: string;
 }
 
-const NEWMARK_PROCESS_NAMES = ['Newmark Agent.exe', 'Newmark.exe'];
+const NEWMARK_PROCESS_NAMES = ['Newmark Agent.exe', 'Newmark.exe', 'Newmark Console Runtime.exe'];
 const NEWMARK_LEGACY_EXECUTABLES = new Set(['newmark.exe', 'newmark agent.exe']);
 
 function normalizeWindowsPathForCompare(value: string): string {
@@ -609,8 +609,9 @@ function runPowerShellJson(script: string): Array<Record<string, any>> {
 }
 
 export function listRunningNewmarkProcesses(): RunningNewmarkProcess[] {
+  const nameFilter = NEWMARK_PROCESS_NAMES.map(name => `$_.Name -eq '${name.replace(/'/g, "''")}'`).join(' -or ');
   const rows = runPowerShellJson(
-    `Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'Newmark Agent.exe' -or $_.Name -eq 'Newmark.exe' } | Select-Object ProcessId,Name,ExecutablePath | ConvertTo-Json -Compress`,
+    `Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { ${nameFilter} } | Select-Object ProcessId,Name,ExecutablePath | ConvertTo-Json -Compress`,
   );
   const skipPid = Number(process.env.NEWMARK_SKIP_PROCESS_PID || process.pid);
   return rows
@@ -689,12 +690,13 @@ function runElevatedMsiExec(args: string[]): { exitCode: number; stdout: string;
 export function uninstallNewmarkProduct(productCode: string, logPath: string): { ok: boolean; exitCode: number; logPath: string; error?: string } {
   const args = ['/x', productCode, '/qn', '/norestart', '/l*v', logPath];
   let result = runMsiExec(args);
-  if (result.exitCode !== 0) result = runElevatedMsiExec(args);
+  if (result.exitCode !== 0 && result.exitCode !== 3010) result = runElevatedMsiExec(args);
+  const ok = result.exitCode === 0 || result.exitCode === 3010;
   return {
-    ok: result.exitCode === 0,
+    ok,
     exitCode: result.exitCode,
     logPath,
-    error: result.exitCode === 0 ? undefined : `msiexec uninstall exited ${result.exitCode}`,
+    error: ok ? undefined : `msiexec uninstall exited ${result.exitCode}`,
   };
 }
 
@@ -702,12 +704,13 @@ export function installMsiPackage(msiPath: string, options: { logDir?: string; a
   const logPath = path.join(options.logDir || os.tmpdir(), `newmark-msi-install-${process.pid}-${Date.now()}.log`);
   const args = ['/i', path.resolve(msiPath), '/qn', '/norestart', '/l*v', logPath];
   let result = runMsiExec(args);
-  if (result.exitCode !== 0 && options.allowElevate !== false) result = runElevatedMsiExec(args);
+  if (result.exitCode !== 0 && result.exitCode !== 3010 && options.allowElevate !== false) result = runElevatedMsiExec(args);
+  const ok = result.exitCode === 0 || result.exitCode === 3010;
   return {
-    ok: result.exitCode === 0,
+    ok,
     exitCode: result.exitCode,
     logPath,
-    error: result.exitCode === 0 ? undefined : `msiexec install exited ${result.exitCode}`,
+    error: ok ? undefined : `msiexec install exited ${result.exitCode}`,
   };
 }
 

@@ -1,5 +1,85 @@
 # Newmark Agent Overview
 
+## dev-0.4.7 统一预发布命名（2026-08-18）
+
+本次跨平台候选统一使用：Git tag `dev-0.4.7`、GitHub Release 标题 `Newmark Agent dev-0.4.7`、桌面 package/executable 版本 `0.4.7`，资产名保持 `Newmark-Agent-0.4.7-*`。Windows 发布范围为 x64 MSI 与 win-unpacked ZIP；Linux 发布范围为 x64 AppImage、amd64 deb 与 linux-unpacked ZIP。Android 继续使用自身独立的 `versionCode/versionName` 发布线，不被桌面语义版本覆盖。
+
+最终资产：Windows MSI `226,261,071` bytes / `FD46F635839626693F69D306A05547158BA5EAB0EA78045AC6356B90BE339417`，Windows ZIP `292,388,387` / `1814F9E5312E08D70BE6478B7418018482DA12A53C5E1434D5EE4BD9C054D9C8`，Linux AppImage `176,499,587` / `B5E9E16EDA8DC8D08A594D789C3BE1E21C6310504F834155544B02112EE0BB7B`，Linux deb `135,902,236` / `39388636D30F7A918C449AC0E714F6B9B42835D6867B76B62D82E62C33093817`，Linux ZIP `172,616,312` / `32831EEFF57FAEFCB5768F8B9918DDCF2A7ED127D09BCC8992DD034B8E0D3845`。Program Files 安装版为 0.4.7，安装/打包 app.asar 一致：`CE962FA83BE0CD35526317927C239B55249AB7AA4FF03AC556BC6CD29F96BB5C`。
+
+## 基础工具初始暴露与进阶工具按需供给（2026-08-18）— source PASS
+
+桌面 Agent 的 provider 工具面改为确定性两层结构。首轮完整 schema 仅包含 `bash`、`pwd`、`read`、`write`、`edit`、`delete_file`、`glob`、`grep` 八个基础工作区工具；它们仍先经过模式、原生工具设置和安全策略过滤。`SubAgent`、`task_read/task_create`、Git/GitHub、Browser、Computer Use、Skill、MCP、Automation、Flow、Memory Lab 等全部作为进阶能力，只进入 `tool_provision` 的紧凑目录，不再按自然语言意图自动注入 schema。
+
+`DESKTOP/src/core/agentKernelRunner.ts` 负责基础集合、路由边界、能力目录、broker session 与系统 Prompt。Prompt 现在明确说明“功能存在不等于当前可调用”：进阶工具必须先以唯一工具调用执行 `tool_provision({ names: [精确工具名] })`，下一 provider 子轮拿到原始完整 schema 后才能调用目标工具。Plan policy、SubAgent sandbox、native-tool setting、删除与远程写安全策略均在目录生成和执行阶段继续硬拦截。
+
+测试归属：`toolSurfaceV2Verify.ts` 固定首轮边界；`toolProvisioningVerify.ts` 覆盖 78/78 schema 保真、78/78 provider 子轮可达、Prompt 明示和同一 user run 动态执行；`autoAgentIntegrationVerify.ts` 覆盖 Auto/固定模型边界；`verify.ts` 的 Memory Lab、Flow、Automation、Computer Use 集成夹具均先 provision 再调用。当前 `npm run build`、专项工具供给测试与主验证 1643/1643 全部通过。操作记录：`archive/2026-08-18-foundational-tool-surface-and-on-demand-provisioning.md`。
+
+相关文件树：
+
+```text
+Newmark Agent/
+├─ DESKTOP/src/core/agentKernelRunner.ts        # 初始工具面、能力目录、Prompt 与 provision session
+├─ DESKTOP/src/tests/toolSurfaceV2Verify.ts     # 八基础工具的确定性边界
+├─ DESKTOP/src/tests/toolProvisioningVerify.ts  # schema 保真、可达性、Prompt、动态执行
+├─ DESKTOP/src/tests/autoAgentIntegrationVerify.ts
+├─ DESKTOP/src/tests/verify.ts                  # 进阶工具集成回归
+├─ README.md                                    # 用户与开发者工具契约
+├─ OVERVIEW.md                                  # 架构、文件职责与当前状态
+└─ archive/2026-08-18-foundational-tool-surface-and-on-demand-provisioning.md
+```
+
+## mobile dev-0.4.33 对话记录 WorkRun 完整投影（2026-08-18）— source + device PASS
+
+Android 不再以简化 token/work event 列表渲染对话历史。`android/app/src/main/java/com/newmark/mobile/data/WorkRunProjection.kt` 以 PC `renderWorkRunEvents` 为唯一公开语义契约，统一投影本地 `LocalWorkEvent` 和远程 `RemoteWorkEvent`：稳定顺序为 `sequence → timestamp → id`；私密 reasoning/thinking/`<think>` 被拒绝；连续文本合并；`response` 覆盖尚未完成的流式片段；`thought_result`、`tool_result` 分别回填到相邻思考和按调用 ID 匹配的工具活动；连续工具调用聚合；Guide、公开用户图片、Agent 展示图片以及 `done/error/interrupted/force_interrupted` 均保留可显示生命周期。
+
+`ChatScreen.kt` 依据投影将历史布局恢复为 PC 顺序：存在真实 Agent 终态消息时显示“用户 → WorkRun → Agent 正文”，不重复 final response；仅缺失历史消息的旧快照才从 `primaryPrompt/final_response` 恢复一次。Build 标题严格跟随桌面 `workRunTitle` 中文状态词：`running=处理中`，完成态为 `已处理`，不再使用“构建”。`DesktopLinkViewModel.kt` 改用 Gson 直接读取完整远程事件字段，本地 Agent 也生成 `final_response`、稳定 ID/sequence、thought/tool completion 字段，故两条路径不再产生不同历史语义。
+
+验证：`WorkRunProjectionTest` 覆盖私密过滤、思考/工具回填、多段 response、终态去重、中断和 Guide 升级；`:app:testDebugUnitTest` 与 Kotlin 编译、clean assembleDebug 均通过。APK `0.4.33`（`versionCode=433`）已安装并在 `emulator-5554` 前台运行；当前模拟器为 1080×2400 竖屏。远程历史端点在该模拟器网络下仍不可达，故真实端点人工历史回放待网络恢复后补测；投影回归已覆盖同构事件序列。详细记录：`archive/2026-08-18-mobile-work-run-history-parity.md`。
+
+## 桌面端输入卡死与工作期无响应修复（2026-08-18）— packaged PASS
+
+本轮确认严重性能回归并非输入草稿逐字写盘，也不是对话/Build/SubAgent 持久化数据膨胀。根因是两个共享渲染热点叠加：一是 `.marquee-border::before` 的 masked `conic-gradient` 每帧无限旋转，多个运行态元素同时触发 GPU 持续重绘；二是每个工作事件都可能在下一 animation frame 通过 `innerHTML` 重建完整 Build DOM。真实 SubAgent 四路并行和逐实例监控没有创造这两个热点，但把事件频率放大到足以持续饿死输入主线程。
+
+`DESKTOP/src/ui/index.html` 将状态边框和 working glow 改为静态呈现，并将非终止工作事件的 Build DOM 刷新限制为每 100ms 一次；`done/error/interrupted/force_interrupted/final_response` 仍立即刷新。`DESKTOP/scripts/release-ui-render-performance-smoke.cjs` 在真实打包 renderer 中同时施加约 500Hz 工作更新和 100Hz 输入事件，实测 1.05 秒内仅 6 次 Build 重绘、99 次输入全部处理、最大输入调度延迟 42.7ms、持续状态动画为 0。隔离源码 GUI 空闲 5 秒 CPU 增量为 GPU 0.00s、两个 renderer 均 0.00s、browser 0.09s；修复前基线为 GPU 7.91 CPU 秒/3秒、renderer 3.09 CPU 秒/3秒。
+
+验证：主 verify 1641/1641 PASS；完整 `test:desktop:built` PASS；Windows 0.4.6 打包 PASS；性能 smoke PASS；图标/静态边框 smoke PASS；MSI smoke 22 + 12 断言 PASS。新 MSI 为 226,269,263 bytes，SHA-256 `510D60DF661EBFDF2CBA11431C4B1E54C5846562A0E5870911CCF0977DE7B769`；打包 app.asar 为 159,759,098 bytes，SHA-256 `0CC8C4E05EF012E80B346DF760199EF040B9574C799BBD134BF399D195AFF2EB`。UAC 安装退出码 0，Program Files 版本为 0.4.6，安装后 app.asar 与打包哈希完全一致；安装版空闲 5 秒采样 GPU/renderer/utility 均为 0.00 CPU 秒，browser 0.23 CPU 秒，所有进程均响应。详细记录见 `archive/2026-08-18-desktop-renderer-gpu-input-freeze-repair.md`。
+
+## 桌面端 SubAgent 工具身份、真实并行与 Build Block 硬限制（2026-08-17）— full desktop PASS
+
+桌面端已彻底分离“任务清单”和“真实子代理”两类语义：模型公开创建工具精确命名为 `SubAgent`，`task_create` 只维护当前对话的任务清单，历史 `task` / `subagent_create` 仅保留执行兼容而不进入模型公开工具面。`DESKTOP/src/tools/index.ts` 与 `DESKTOP/src/core/agentKernelRunner.ts` 定义并固定公开工具契约；`DESKTOP/src/core/agent.ts` 在创建前校验当前运行中的 Build Block，并按该 Build 的 `queued` / `working` 真实记录执行硬限制；`DESKTOP/src/core/subagent.ts` 持久化 `buildRunId`、`intelligenceTier` 并提供按 Build 精确计数；`DESKTOP/src/ui/index.html` 直接按真实 SubAgent UUID 一对一渲染右侧栏入口，入口标题使用创建时名称，Build 芯片和历史弹窗只接受真实 ID。
+
+硬约束为：Ultra 智能档位每个运行中 Build Block 最多 16 个活跃 SubAgent，其他档位最多 4 个。无运行中 Build、Build 已结束或达到上限的模型调用立即返回 `terminated: true`，不创建记录、不进入队列，也不会生成右侧栏监控入口。档位切换会同步调度器并发槽位，但计数和拒绝判定始终绑定调用所属 Build Block。`DESKTOP/src/core/toolPolicy.ts` 仅将公开 `SubAgent` 创建设为可并发的受控写操作，管理调用与其他副作用工具仍独占；Chat Completions / Responses adapter 对有工具请求显式发送 `parallel_tool_calls: true`。真实 APInebula `gpt-5.4-mini` 两种协议均得到单轮 4 调用、`maxOverlap=4`；medium 同批 5 创建严格为 4 接受 + 1 终止。完整 `test:desktop:built` 退出码 0，主 `verify` 为 `1642/1642 PASS`，工具供给 78/78×2 与删除安全 194/194 等后续门禁全绿；详细记录见 `archive/2026-08-17-desktop-subagent-tool-identity-and-build-limits.md`。
+
+本地 Windows 发布验证已于 2026-08-18 完成：`0.4.6` MSI 从本次源码生成，打包后 SSH/TUI、CLI、上下文压缩和安装包结构 smoke 通过；UAC 安装 `msiexec` 退出码 0。`C:\Program Files\Newmark Agent\Newmark Agent.exe --version` 返回 `0.4.6`，安装后 app.asar 的 SHA-256 与打包 `win-unpacked` 完全一致（`81755096FB2187D505CB98DE6A72CE940B28099D47C2C2678E23EA38FA72A40C`）。
+
+## 移动端远程/本地 Agent 与 UI 综合压力测试设计（2026-08-17）
+
+测试计划已按 Agent 功能、远程触及性/实时交流、持续性、UI 表现、动画和多核渲染六个面向建立。计划固定竖屏 1080×2400、平板/折叠屏 1600×2560、2/4/8 vCPU、`adb reverse`/LAN/Tailscale/断网重连等矩阵；使用 ADB `gfxinfo`、`meminfo`、线程 CPU、SurfaceFlinger（可用时）、logcat 和结构化 JSONL 采样。关键门限包括冷启动首帧 ≤1800ms、首次可交互 ≤2500ms、远程首 SSE 事件 p95 ≤1500ms、普通交互 p95 frame ≤16.67ms、jank <5%、30 分钟 PSS 增长 ≤25%，并定义 P0–P3 发布门禁。实现顺序和验收标准见 `tasks/plan.md`，执行清单见 `tasks/todo.md`。
+
+## Android 模拟器桌面模型配置同步（2026-08-17）
+
+Android 本地模型配置由 `android/app/src/main/java/com/newmark/mobile/data/ProviderStore.kt` 管理，运行时文件位于应用私有目录 `files/newmark/providers.json` 与 `files/newmark/active-model.json`。本次从桌面 `~/.Newmark/config.json` 的 `models.providers.value` 生成 Android 同构 provider 列表，保留模型能力、思考档位映射和凭据，并把缺省激活项安全回落为首个可用模型。模拟器重启后验证为 4 个 provider、41 个模型，激活 `provider-deepseek-001/deepseek-v4-pro`。敏感凭据未进入仓库或操作记录。
+
+## mobile dev-0.4.32 PC 同构右侧栏与折叠态（2026-08-17）— source + device PASS
+
+本轮将 PC `#right` 的五页结构移植到 Android：`RightSidebar.kt` 负责 Files、无预测随航的 Editor、Conversation plan/Linked plan、SubAgent 和 Browser，以及折叠态 `RightSidebarOpenButton`；`NewmarkApp.kt` 将展开状态提升到根布局并处理左滑、竖屏覆盖层和宽屏第三栏；`DesktopLinkViewModel.kt`、`MobileApiClient.kt`、`MobileModels.kt` 与桌面 `server.ts` 提供工作区文件、编辑保存、计划和 SubAgent 的精确目标契约；`MemoryLabScreen.kt` 提供宽屏大弹窗；`LucideIcons.kt` 复用 PC sprite 几何。
+
+折叠态不渲染右栏 Column，也不参与 `Row` 宽度分配；按钮在聊天区 `Box` 内以 `Alignment.CenterEnd` 覆盖，尺寸 `18×48dp`，使用 PC 同源 `panel-right` 图标。1600×2560 实机 dump 中按钮图标 bounds 为 `[1572,1270][1592,1290]`，点击和左滑均能展开。`Sidebar.kt` 的 rail 态现只保留一级导航及底部固定入口，不再绘制本地对话气泡缩略列。响应式规则为：仅竖屏 SubAgent 详情加页，平板/折叠屏保持弹窗；Memory Lab 仅竖屏加页，平板/折叠屏为 94%×92% 大弹窗。
+
+验证：桌面 build PASS、移动 API 38/38、桌面总回归 1641/1641、Android clean assembleDebug PASS、APK 432/0.4.32 安装成功。实机证据位于 `archive/_mobile_0432_right_collapsed_final.*`、`_right_open_final.*`、`_right_swipe_final.xml`、`_no_local_thumbs.*`；模拟器最终恢复 1080×2400、density 420。完整记录：`archive/2026-08-17-mobile-right-sidebar-pc-collapse.md`。
+
+## mobile dev-0.4.31 二级边栏、分支树与连续时间线（2026-08-17）— source + device PASS
+
+本轮移动端接续覆盖 Android UI、移动 API 与 PC 原生分支树桥接：
+
+1. `android/app/src/main/java/com/newmark/mobile/ui/Sidebar.kt` 负责一级/二级边栏、竖屏顺序换栏和 PC GUI 风格的工作区对话列表；`components/LucideIcons.kt`、`AnchorMenu.kt`、`Marquee.kt` 提供 PC 同源图标、菜单与运行反馈。
+2. `ChatScreen.kt` 在滚动容器层统一绘制用户输入右轨与 Agent 左轨，避免消息组件重排导致竖线断裂；分叉用户消息下方渲染 PC 同构分页器。
+3. `ChatModels.kt`、`ChatViewModel.kt`、`ConversationStore` 所在 data 层保存本地分支节点、同源分页组、浏览节点与运行节点；编辑历史用户消息会保留原页并创建新页，分页浏览不立即改变运行分支，发送前才激活所阅页。
+4. `MobileApiClient.kt`、`MobileModels.kt`、`DesktopLinkViewModel.kt` 和 `NewmarkApp.kt` 投影远程分支状态；桌面 `server.ts` 只桥接 PC 已有 `inspectConversationBranch`、`switchConversationBranch`、`branchConversation`，并严格校验 `workspaceId + conversationId` 成员关系，运行中创建/激活返回 `423`。
+5. `DESKTOP/src/tests/mobileWorkspaceApiVerify.ts` 覆盖工作区隔离、分支创建、只读浏览、显式激活、跨工作区拒绝与运行态锁；`verify.ts` 将该套件纳入总门禁。
+
+本轮还修复本地分页切换的祖先选择错误：`2/2` 页的祖先链同时含根页与当前页，切换逻辑现与分页器计算一致，选择距离当前浏览节点最近的分支节点。实机升级、冷启动和重新进入对话后，`hi2 · 2/2` 能切回 `hi · 1/2`；用户/Agent 两侧连续竖线保持可见。Android 版本为 `431 / 0.4.31`。验证：`node dist/tests/verify.js` 1630/1630、`gradlew clean assembleDebug` PASS、APK `adb install -r` PASS。证据：archive/2026-08-17-mobile-secondary-sidebar-and-branches.md。
+
 ## dev-0.4.5 git push + win/linux release + 本地 hash 校验（2026-08-16）— released
 
 压力测试全绿后：commit `a2c58a7` push master、annotated tag `dev-0.4.5` push；`gh release create dev-0.4.5` 上传 5 资产（win MSI/ZIP + linux AppImage/deb/unpacked ZIP），GitHub digest 与本地 SHA-256 完全一致。产物：MSI `226,125,903`/`071A143A…DE73A8`、win ZIP `291,979,308`/`4954E803…C3B2E`、AppImage `176,106,215`/`0CD30D39…FA908A8`、deb `135,690,272`/`56FB4657…C8CCE`、linux ZIP `172,214,822`/`AF235879…9A9E59`。Linux 经 WSL Ubuntu-24.04 隔离构建 + 完整 `npm test` 全绿。证据：archive/2026-08-16-dev-0.4.5-git-push-and-release.md。
@@ -1545,3 +1625,6 @@ The interaction layer uses modal focus trapping, initial focus and focus return,
 The DSH-Harness study influenced structure rather than branding or runtime coupling. Newmark adopts explicit state/ownership layers, lazy searchable inventories, static configuration versus live runtime state, semantic tokens instead of component-local colors, and dense no-soft-wrap terminal/transcript surfaces. It does not embed Cordis, claim DSH fiber phases, deep-merge Cordis patches, evaluate `!!js`/import/plugin nodes, pin preview versions, or copy DeepSeek colors. The DSH developer-preview boundary stays dynamically discoverable and read-only, allowing upstream package/profile/bundle schema growth to remain visible without giving it execution authority.
 
 Verification includes the complete built desktop suite, the `1504/1504` source contract, and real packaged CDP checks for a 65-command conflict-free manifest, unique DSH search, Enter activation, F1/Escape, focus placement, IME Enter suppression, Plugins tab order, DSH/MCP/Skills behavior, and screenshot evidence. Details are in `archive/20260813-gui-keyboard-dsh-inspired-optimization.md`.
+## 移动模型菜单滚动与图片二维码配对（2026-08-17）
+
+`AnchorMenu` 统一限制弹窗最大高度为安全可用高度的 56%，并封顶 `320dp`。模型选择页显式启用 `rememberScrollState` 与自绘滚动条，长 provider/model 列表可上下滚动且不遮挡菜单项。设置页图片选择器通过 ZXing 解码二维码，成功后调用 `DesktopLinkViewModel.pairFromUrl` 完成桌面端配对；失败时通过 `reportPairingError` 告知用户原因。

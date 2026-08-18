@@ -210,10 +210,10 @@ function startMockProvider() {
   const rootToolOrder = [];
   const rootInboxReplies = new Set();
   const rootSequence = [
-    ['tool_provision', { names: ['linked_plan', 'task', 'subagent_list', 'subagent_read', 'subagent_send'] }],
+    ['tool_provision', { names: ['linked_plan', 'SubAgent', 'subagent_list', 'subagent_read', 'subagent_send'] }],
     ['linked_plan', { action: 'update', markdown: '# dev-0.0.8 packaged plan\n\n- [x] Linked Plan live refresh\n- [ ] Parallel peer aggregation', expected_revision: 0 }],
-    ['task', { nature: 'alpha-review', prompt: 'DEV008_ALPHA_PEER initial work', model: modelName, mode: 'build', input_mode: 'guide' }],
-    ['task', { nature: 'beta-review', prompt: 'DEV008_BETA_PEER initial work', model: modelName, mode: 'build', input_mode: 'guide' }],
+    ['SubAgent', { name: 'alpha-review', prompt: 'DEV008_ALPHA_PEER initial work', model: modelName, mode: 'build', input_mode: 'guide' }],
+    ['SubAgent', { name: 'beta-review', prompt: 'DEV008_BETA_PEER initial work', model: modelName, mode: 'build', input_mode: 'guide' }],
     ['subagent_list', {}],
     ['subagent_read', { id: 'alpha-review' }],
     ['subagent_send', { id: 'alpha-review', message: 'DEV008_REACTIVATE_ALPHA', kind: 'directive' }],
@@ -413,12 +413,12 @@ async function stopPackagedRun(child, cdp) {
     const rootResult = rootRun.value;
     const elapsedMs = Date.now() - startedAt;
     if (!rootResult || rootResult.ok === false || rootResult.error) fail(`Root Agent run failed: ${JSON.stringify(rootResult)}`);
-    const expectedOrder = 'tool_provision,linked_plan,task,task,subagent_list,subagent_read,subagent_send';
+    const expectedOrder = 'tool_provision,linked_plan,SubAgent,SubAgent,subagent_list,subagent_read,subagent_send';
     if (mock.rootToolOrder.join(',') !== expectedOrder) fail(`Unexpected root tool order: ${mock.rootToolOrder.join(',')}`);
-    const taskRequestIndexes = mock.requests
-      .map((entry, index) => JSON.stringify(entry.parsed || {}).includes('"task"') ? index : -1)
+    const subagentRequestIndexes = mock.requests
+      .map((entry, index) => JSON.stringify(entry.parsed || {}).includes('"SubAgent"') ? index : -1)
       .filter(index => index >= 0);
-    if (taskRequestIndexes.length < 2 || elapsedMs > 180000) fail(`task did not return through the non-blocking sequence: requests=${taskRequestIndexes.length}, elapsed=${elapsedMs}`);
+    if (subagentRequestIndexes.length < 2 || elapsedMs > 180000) fail(`SubAgent did not return through the non-blocking sequence: requests=${subagentRequestIndexes.length}, elapsed=${elapsedMs}`);
 
     await evaluate(cdp, `(async () => { window.switchRightTab('plan'); await window.refreshConversationPlan(); return true; })()`, 30000);
     const linkedPlan = await waitFor(cdp, `(() => {
@@ -454,7 +454,7 @@ async function stopPackagedRun(child, cdp) {
     })()`, 30000, 'two peer rows in Subagent panel');
 
     log('Linked Plan live read-only panel ok');
-    log('task immediate return and at least two parallel peers ok');
+    log('SubAgent immediate return and at least two parallel peers ok');
     log('subagent_read, mailbox persistence/reactivation, and root feedback ok');
     log('all packaged dev-0.0.8 feature smoke checks passed');
   } finally {

@@ -29,10 +29,14 @@ async function main(): Promise<void> {
   // 1. isConcurrencySafeTool 分类（DSH isConcurrencySafe 落地核心）
   // ---------------------------------------------------------------------
   const safeRead = ['pwd', 'read', 'glob', 'grep', 'web_search', 'web_fetch', 'git_status', 'file_audit', 'repo_security_audit'];
-  const exclusiveOther = ['write', 'edit', 'bash', 'browser_open', 'browser_click', 'browser_snapshot', 'computer_use', 'task', 'subagent_send', 'subagent_read', 'subagent_result', 'flow_run', 'git_push', 'memory_lab_read', 'question', 'skill', 'linked_plan', 'unknown_tool', ''];
+  const concurrencySafeCreate = ['SubAgent'];
+  const exclusiveOther = ['write', 'edit', 'bash', 'browser_open', 'browser_click', 'browser_snapshot', 'computer_use', 'task', 'subagent_create', 'subagent_send', 'subagent_read', 'subagent_result', 'flow_run', 'git_push', 'memory_lab_read', 'question', 'skill', 'linked_plan', 'unknown_tool', ''];
 
   for (const name of safeRead) {
     check(isConcurrencySafeTool(name) === true, `isConcurrencySafeTool('${name}') 只读工具 -> true`);
+  }
+  for (const name of concurrencySafeCreate) {
+    check(isConcurrencySafeTool(name) === true, `isConcurrencySafeTool('${name}') 受控独立创建 -> true`);
   }
   for (const name of exclusiveOther) {
     check(isConcurrencySafeTool(name) === false, `isConcurrencySafeTool('${name}') 副作用/受保护工具 -> false（独占串行）`);
@@ -80,6 +84,15 @@ async function main(): Promise<void> {
   await d.execute();
   const serialSpan = Date.now() - s1;
   check(serialSpan >= 90, `只读 + 副作用串行屏障：总耗时 ${serialSpan}ms >= 90ms`);
+
+  // 同一个 SubAgent 创建工具在模型单批次中可重复并发；这是实际编排场景，
+  // 不能只验证多个不同名字的 read 工具。
+  timeline.length = 0;
+  const subagentCalls = Array.from({ length: 4 }, (_, index) => makeTool(`SubAgent-${index + 1}`, true, 50));
+  const s2 = Date.now();
+  await Promise.all(subagentCalls.map(tool => tool.execute()));
+  const subagentSpan = Date.now() - s2;
+  check(subagentSpan < 90, `同批四个 SubAgent 创建并行重叠：总耗时 ${subagentSpan}ms < 90ms`);
 
   console.log(`toolConcurrencyVerify OK: ${assertions} assertions`);
 }

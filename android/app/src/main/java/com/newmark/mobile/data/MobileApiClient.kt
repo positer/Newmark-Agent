@@ -1,13 +1,16 @@
 package com.newmark.mobile.data
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
 /** 桌面端 mobile API 客户端（Tailscale 内网 + token 认证） */
 class MobileApiClient {
@@ -17,77 +20,211 @@ class MobileApiClient {
         .readTimeout(180, TimeUnit.SECONDS)
         .build()
 
+    /** 供 SSE 长连接复用（读超时由流式消费控制） */
+    val rawClient: OkHttpClient get() = client
+
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
     private fun authedUrl(pair: PairInfo, path: String): String =
-        "${pair.baseUrl}$path?token=${pair.token}"
+        "${pair.baseUrl}$path${if (path.contains('?')) "&" else "?"}token=${pair.token}"
 
-    private suspend fun get(pair: PairInfo, path: String): Result<JSONObject> =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                val req = Request.Builder()
-                    .url(authedUrl(pair, path))
-                    .get()
-                    .build()
-                client.newCall(req).execute().use { resp ->
-                    val text = resp.body?.string() ?: ""
-                    if (!resp.isSuccessful) error("HTTP ${resp.code}")
-                    JSONObject(text)
-                }
-            }
-        }
+    private suspend fun get(pair: PairInfo, path: String): Result<JSONObject> = executeJson(
+        Request.Builder().url(authedUrl(pair, path)).get().build(),
+    )
 
-    private suspend fun post(pair: PairInfo, path: String, body: JSONObject): Result<JSONObject> =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                val req = Request.Builder()
-                    .url(authedUrl(pair, path))
-                    .post(body.toString().toRequestBody(jsonMedia))
-                    .build()
-                client.newCall(req).execute().use { resp ->
-                    val text = resp.body?.string() ?: ""
-                    if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(120)}")
-                    JSONObject(text)
-                }
+    private suspend fun post(pair: PairInfo, path: String, body: JSONObject): Result<JSONObject> = executeJson(
+        Request.Builder()
+            .url(authedUrl(pair, path))
+            .post(body.toString().toRequestBody(jsonMedia))
+            .build(),
+    )
+
+    /**
+     * Request is tied to its coroutine: switching desktop devices or leaving
+     * the screen immediately closes the socket instead of leaving a 10–180s
+     * blocking OkHttp `execute()` behind.  This is required for bounded SSE /
+     * reconnect resource use and prevents stale callbacks after a device swap.
+     */
+    private suspend fun executeJson(request: Request): Result<JSONObject> = suspendCancellableCoroutine { continuation ->
+        val call = client.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: okhttp3.Call, error: java.io.IOException) {
+                if (continuation.isActive) continuation.resume(Result.failure(error))
             }
-        }
+
+            override fun onResponse(call: okhttp3.Call, response: Response) {
+                val result = runCatching {
+                    response.use { resp ->
+                        val text = resp.body?.string() ?: ""
+                        if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(120)}")
+                        JSONObject(text)
+                    }
+                }
+                if (continuation.isActive) continuation.resume(result)
+            }
+        })
+    }
 
     /** 验证配对并获取桌面端基本信息 */
     suspend fun hello(pair: PairInfo): Result<JSONObject> = get(pair, "/api/mobile/hello")
 
     /** 确认配对窗口（扫码后调用；token 鉴权 + pairingId 确认，桌面端随即关闭二维码） */
-    suspend fun confirm(invite: PairInvite): Result<JSONObject> =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                val url = "http://${invite.host}:${invite.port}/api/mobile/pair-confirm?token=${invite.token}"
-                val body = JSONObject().apply { put("pairingId", invite.pairingId) }
-                val req = Request.Builder()
-                    .url(url)
-                    .post(body.toString().toRequestBody(jsonMedia))
-                    .build()
-                client.newCall(req).execute().use { resp ->
-                    val text = resp.body?.string() ?: ""
-                    if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(120)}")
-                    JSONObject(text)
-                }
-            }
-        }
+    suspend fun confirm(invite: PairInvite): Result<JSONObject> = executeJson(
+        Request.Builder()
+            .url("http://${invite.host}:${invite.port}/api/mobile/pair-confirm?token=${invite.token}")
+            .post(JSONObject().apply { put("pairingId", invite.pairingId) }.toString().toRequestBody(jsonMedia))
+            .build(),
+    )
 
     /** 桌面端状态（对话列表 + 当前对话消息 + 模式/模型） */
     suspend fun state(pair: PairInfo): Result<JSONObject> = get(pair, "/api/mobile/state")
 
-    /** 某个对话的快照 */
-    suspend fun conversation(pair: PairInfo, conversationId: String?): Result<JSONObject> {
+    /** 某个对话的快照（workspaceId 指定所属工作区，缺省当前工作区） */
+    suspend fun conversation(pair: PairInfo, conversationId: String?, workspaceId: String? = null): Result<JSONObject> {
         val suffix = conversationId?.let { "&conversationId=$it" } ?: ""
-        return get(pair, "/api/mobile/conversation?window=200$suffix")
+        val wsSuffix = workspaceId?.takeIf { it.isNotBlank() }?.let { "&workspaceId=$it" } ?: ""
+        return get(pair, "/api/mobile/conversation?window=200$suffix$wsSuffix")
     }
 
     /** 向桌面端 Agent 发送消息（同步等待完成） */
-    suspend fun send(pair: PairInfo, message: String, conversationId: String?): Result<JSONObject> {
+    suspend fun send(
+        pair: PairInfo,
+        message: String,
+        conversationId: String?,
+        workspaceId: String? = null,
+    ): Result<JSONObject> {
         val body = JSONObject().apply {
             put("message", message)
             conversationId?.let { put("conversationId", it) }
+            workspaceId?.takeIf { it.isNotBlank() }?.let { put("workspaceId", it) }
         }
         return post(pair, "/api/mobile/send", body)
     }
+
+    suspend fun createConversation(pair: PairInfo, workspaceId: String, title: String): Result<JSONObject> =
+        post(pair, "/api/mobile/conversation-create", JSONObject().apply {
+            put("workspaceId", workspaceId)
+            put("title", title)
+        })
+
+    suspend fun renameConversation(
+        pair: PairInfo,
+        workspaceId: String,
+        conversationId: String,
+        title: String,
+    ): Result<JSONObject> = post(pair, "/api/mobile/conversation-rename", JSONObject().apply {
+        put("workspaceId", workspaceId)
+        put("conversationId", conversationId)
+        put("title", title)
+    })
+
+    suspend fun setConversationPinned(
+        pair: PairInfo,
+        workspaceId: String,
+        conversationId: String,
+        pinned: Boolean,
+    ): Result<JSONObject> = post(pair, "/api/mobile/conversation-pin", JSONObject().apply {
+        put("workspaceId", workspaceId)
+        put("conversationId", conversationId)
+        put("pinned", pinned)
+    })
+
+    suspend fun reorderConversations(
+        pair: PairInfo,
+        workspaceId: String,
+        conversationIds: List<String>,
+    ): Result<JSONObject> = post(pair, "/api/mobile/conversation-reorder", JSONObject().apply {
+        put("workspaceId", workspaceId)
+        put("conversationIds", org.json.JSONArray(conversationIds))
+    })
+
+    /** 归档桌面端工作区对话（PC 端运行中拒绝 423） */
+    suspend fun archiveConversation(
+        pair: PairInfo,
+        workspaceId: String,
+        conversationId: String,
+    ): Result<JSONObject> = post(pair, "/api/mobile/conversation-archive", JSONObject().apply {
+        put("workspaceId", workspaceId)
+        put("conversationId", conversationId)
+    })
+
+    /** 某工作区的从属对话列表（含 running） */
+    suspend fun workspaceConversations(pair: PairInfo, workspaceId: String): Result<JSONObject> =
+        get(pair, "/api/mobile/workspace-conversations?workspaceId=$workspaceId")
+
+    private fun query(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name())
+
+    suspend fun rightSidebarState(pair: PairInfo, workspaceId: String, conversationId: String): Result<JSONObject> =
+        get(pair, "/api/mobile/right-sidebar-state?workspaceId=${query(workspaceId)}&conversationId=${query(conversationId)}")
+
+    suspend fun workspaceFiles(pair: PairInfo, workspaceId: String, path: String): Result<JSONObject> =
+        get(pair, "/api/mobile/workspace-files?workspaceId=${query(workspaceId)}&path=${query(path)}")
+
+    suspend fun workspaceFile(pair: PairInfo, workspaceId: String, path: String): Result<JSONObject> =
+        get(pair, "/api/mobile/workspace-file?workspaceId=${query(workspaceId)}&path=${query(path)}")
+
+    suspend fun saveWorkspaceFile(pair: PairInfo, workspaceId: String, path: String, content: String): Result<JSONObject> =
+        post(pair, "/api/mobile/workspace-file", JSONObject().apply {
+            put("workspaceId", workspaceId)
+            put("path", path)
+            put("content", content)
+        })
+
+    suspend fun updateConversationPlan(
+        pair: PairInfo,
+        workspaceId: String,
+        conversationId: String,
+        items: org.json.JSONArray,
+    ): Result<JSONObject> = post(pair, "/api/mobile/conversation-plan-update", JSONObject().apply {
+        put("workspaceId", workspaceId)
+        put("conversationId", conversationId)
+        put("items", items)
+    })
+
+    suspend fun inspectConversationBranch(
+        pair: PairInfo,
+        workspaceId: String,
+        conversationId: String,
+        branchId: String,
+        branchGroupId: String,
+    ): Result<JSONObject> = post(pair, "/api/mobile/conversation-branch-inspect", JSONObject().apply {
+        put("workspaceId", workspaceId)
+        put("conversationId", conversationId)
+        put("branchId", branchId)
+        put("branchGroupId", branchGroupId)
+    })
+
+    suspend fun activateConversationBranch(
+        pair: PairInfo,
+        workspaceId: String,
+        conversationId: String,
+        branchId: String,
+        branchGroupId: String,
+    ): Result<JSONObject> = post(pair, "/api/mobile/conversation-branch-activate", JSONObject().apply {
+        put("workspaceId", workspaceId)
+        put("conversationId", conversationId)
+        put("branchId", branchId)
+        put("branchGroupId", branchGroupId)
+    })
+
+    suspend fun createConversationBranch(
+        pair: PairInfo,
+        workspaceId: String,
+        conversationId: String,
+        messageIndex: Int,
+        editedText: String,
+        message: RemoteMessage,
+        branchNodePath: List<String>,
+    ): Result<JSONObject> = post(pair, "/api/mobile/conversation-branch-create", JSONObject().apply {
+        put("workspaceId", workspaceId)
+        put("conversationId", conversationId)
+        put("messageIndex", messageIndex)
+        put("editedText", editedText)
+        put("messageId", message.id)
+        put("guideId", message.guideId)
+        put("clientMessageId", message.clientMessageId)
+        put("runId", message.runId)
+        put("branchNodePath", org.json.JSONArray(branchNodePath))
+    })
 }

@@ -428,38 +428,15 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
 }
 
 #topbar .logo {
-  position: relative;
   display: inline-flex;
   width: 26px;
   height: 26px;
-  padding: 1px;
-  border-radius: 8px;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
-  box-shadow: 0 0 12px var(--accent-glow);
   flex-shrink: 0;
 }
 
-#topbar .logo::before {
-  content: "";
-  position: absolute;
-  inset: calc(-2 * var(--marquee-width));
-  background: conic-gradient(from var(--marquee-angle, 0deg), var(--g1), var(--g2), var(--g3), var(--g4), var(--g1));
-  animation: marquee-rotate var(--marquee-speed) linear infinite;
-}
-
-#topbar .logo::after {
-  content: "";
-  position: absolute;
-  inset: 2px;
-  border-radius: 7px;
-  background: var(--bg2);
-}
-
 #topbar .logo img {
-  position: relative;
-  z-index: 1;
   display: block;
   width: 22px;
   height: 22px;
@@ -3832,11 +3809,15 @@ button.todo-item { background: transparent; }
     linear-gradient(#fff 0 0) content-box,
     linear-gradient(#fff 0 0);
   mask-composite: exclude;
-  animation: marquee-rotate var(--marquee-speed) linear infinite;
+  /* A masked conic-gradient whose custom angle changes every frame forces a
+     full GPU repaint. Several simultaneous Agent/SubAgent surfaces made that
+     repaint saturate the renderer and GPU, starving ordinary text input. Keep
+     the shared status border visually present, but static; live progress is
+     already communicated by status text, duration, and event updates. */
+  animation: none;
   z-index: -1;
   pointer-events: none;
   transform: translateZ(0);
-  will-change: transform;
 }
 
 @supports not (background: conic-gradient(from 0deg, red, blue)) {
@@ -3844,11 +3825,11 @@ button.todo-item { background: transparent; }
     background: linear-gradient(var(--marquee-angle, 0deg), var(--g1), var(--g2), var(--g3), var(--g4), var(--g1));
   }
   @keyframes marquee-rotate-fallback { 0% { filter: hue-rotate(0deg); } 100% { filter: hue-rotate(360deg); } }
-  .marquee-border::before { animation: marquee-rotate-fallback var(--marquee-speed) linear infinite; }
+  .marquee-border::before { animation: none; }
 }
 
 .working-glow {
-  animation: working-border-glow 2s ease-in-out infinite;
+  animation: none;
   box-shadow: 0 0 16px var(--accent-glow), 0 0 40px rgba(91,120,255,0.1);
   border-color: rgba(91,120,255,0.4) !important;
 }
@@ -5400,7 +5381,7 @@ html.newmark-memory-overview-viewer body {
   <div id="topbar">
     <span class="title" id="title-text">
       <span class="logo" id="title-app-logo">
-        <img id="title-app-icon" src="../assets/app-icon-dark-64.png" alt="" aria-hidden="true">
+        <img id="title-app-icon" src="../assets/app-icon-dark.svg" alt="" aria-hidden="true">
       </span>
       Newmark Agent
     </span>
@@ -6069,10 +6050,10 @@ var NEWMARK_I18N = {
     'settings.runInWsl': 'Agent runtime environment',
     'settings.runInWslDesc': 'Keeps the Windows UI and native desktop tools local while running the persistent Agent kernel, model calls, shell, and file tools inside WSL.',
     'settings.remoteTouch': 'Mobile remote-touch',
-    'settings.remoteTouchDesc': 'Allow the mobile app to reach this Newmark instance over Tailscale. Turn off to disable remote pairing and sync APIs immediately.',
+    'settings.remoteTouchDesc': 'Allow mobile access on the same LAN / Tailscale network',
     'settings.remoteBehavior': 'Remote behavior',
     'settings.remoteConnect': 'Start connection',
-    'settings.remoteConnectDesc': 'Show the pairing QR code for the Newmark mobile app.',
+    'settings.remoteConnectDesc': 'Show pairing QR',
     'settings.wslDistro': 'WSL distribution',
     'settings.wslConnected': 'WSL backend connected',
     'settings.wslDisconnected': 'WSL backend unavailable',
@@ -6597,7 +6578,7 @@ var NEWMARK_I18N = {
     'option.manualPlaceholder': 'Or type your own answer...',
     'option.manualSubmit': 'Submit',
     'mobile.pair': 'Pair mobile device',
-    'mobile.pairDesc': 'Scan this QR code with the Newmark mobile app over Tailscale. The pairing token is saved after the first bind.',
+    'mobile.pairDesc': 'Scan this QR code with the Newmark mobile app on the same LAN / Tailscale network. The pairing token is saved after the first bind.',
     'mobile.pairTokenFile': 'Token file',
     'subagent.empty': 'No retained subagent records',
     'subagent.openHistory': 'Open subagent history',
@@ -6796,10 +6777,10 @@ var NEWMARK_I18N = {
     'settings.runInWsl': 'Agent 运行环境',
     'settings.runInWslDesc': 'Windows UI 与桌面原生工具保留在本机，持续 Agent 内核、模型请求、Shell 和文件工具运行在 WSL。',
     'settings.remoteTouch': '移动端远程触及',
-    'settings.remoteTouchDesc': '允许移动端通过 Tailscale 连接本机 Newmark。关闭后立即禁用远程配对与同步 API。',
+    'settings.remoteTouchDesc': '允许移动端通过同一内网 / Tailscale 连接',
     'settings.remoteBehavior': '远程行为',
     'settings.remoteConnect': '发起连接',
-    'settings.remoteConnectDesc': '显示 Newmark 移动端配对二维码。',
+    'settings.remoteConnectDesc': '显示配对二维码',
     'settings.wslDistro': 'WSL 发行版',
     'settings.wslConnected': 'WSL 后端已连接',
     'settings.wslDisconnected': 'WSL 后端不可用',
@@ -7324,7 +7305,7 @@ var NEWMARK_I18N = {
     'option.manualPlaceholder': '或输入自己的答案...',
     'option.manualSubmit': '提交',
     'mobile.pair': '配对移动设备',
-    'mobile.pairDesc': '使用 Newmark 移动端通过 Tailscale 扫描二维码。首次绑定后保存配对令牌。',
+    'mobile.pairDesc': '使用 Newmark 移动端在同一内网 / Tailscale 网络下扫描二维码。首次绑定后保存配对令牌。',
     'mobile.pairTokenFile': '令牌文件',
     'subagent.empty': '暂无保留的 subagent 记录',
     'subagent.openHistory': '打开 subagent 历史',
@@ -9739,7 +9720,7 @@ function workEventIcon(type) {
 
 function workToolActivity(event) {
   var name = publicToolNameForUi(event && event.toolName).toLowerCase();
-  if (name === 'task' || name.indexOf('subagent_') === 0) return { key: 'subagents', type: 'tool_subagent' };
+  if (isSubagentCreateToolName(name) || name.indexOf('subagent_') === 0) return { key: 'subagents', type: 'tool_subagent' };
   if (name === 'skill' || name === 'skill_load' || name === 'skill_read' || name === 'skill_download') return { key: 'skills', type: 'tool_skill' };
   if (name === 'mcp' || name.indexOf('mcp__') === 0 || /^mcp[:._-]/.test(name) || /[:._-]mcp[:._-]/.test(name)) return { key: 'mcp', type: 'tool_mcp' };
   if (name === 'context_compression' || name === 'context_compress' || name === 'context_history_manage') return { key: 'context_compression', type: 'tool_context_compression' };
@@ -9780,8 +9761,8 @@ function workToolCommandLabel(item) {
   var args = workToolArgsObject(item);
   var toolName = publicToolNameForUi(item && item.toolName);
   var normalizedName = toolName.toLowerCase();
-  if (normalizedName === 'task') {
-    return (currentLang() === 'zh' ? '调用 Subagent · ' : 'Called Subagent · ') + String(args.nature || args.name || args.agent || 'Subagent').trim();
+  if (isSubagentCreateToolName(normalizedName)) {
+    return (currentLang() === 'zh' ? '调用 Subagent · ' : 'Called Subagent · ') + String(args.name || args.nature || args.agent || 'Subagent').trim();
   }
   if (normalizedName.indexOf('subagent_') === 0) {
     return (currentLang() === 'zh' ? 'Subagent 操作 · ' : 'Subagent action · ') + String(args.name || args.id || normalizedName.replace(/^subagent_/, '')).trim();
@@ -9820,14 +9801,19 @@ function workToolCommandLabel(item) {
 
 function workToolRowIcon(item) {
   var name = publicToolNameForUi(item && item.toolName).toLowerCase();
-  if (name === 'task' || name.indexOf('subagent_') === 0) return 'bot';
+  if (isSubagentCreateToolName(name) || name.indexOf('subagent_') === 0) return 'bot';
   if (name === 'skill' || name === 'skill_download') return 'sparkles';
   if (name === 'mcp' || /^mcp[:._-]/.test(name) || /[:._-]mcp[:._-]/.test(name)) return 'plug';
   return 'square-terminal';
 }
 
-function findSubagentUiRecord(name) {
+function isSubagentCreateToolName(name) {
   var normalized = String(name || '').trim().toLowerCase();
+  return normalized === 'subagent' || normalized === 'subagent_create' || normalized === 'task';
+}
+
+function findSubagentUiRecord(identity) {
+  var normalized = String(identity || '').trim().toLowerCase();
   return (state.subagents || []).find(function(item) {
     return [item.id, item.name, item.displayName, item.qualifiedName].some(function(value) {
       var candidate = String(value || '').trim().toLowerCase();
@@ -9871,7 +9857,7 @@ function workToolGroupLabel(items, completed) {
     var name = publicToolNameForUi(item && item.toolName).toLowerCase();
     if (name === 'skill' || name === 'skill_load' || name === 'skill_read' || name === 'skill_download') skills.push(workToolCommandLabel(item));
     else if (name === 'mcp' || name.indexOf('mcp__') === 0 || /^mcp[:._-]/.test(name) || /[:._-]mcp[:._-]/.test(name)) mcps.push(workToolCommandLabel(item));
-    else if (name === 'task' || name.indexOf('subagent_') === 0) subagents.push(workToolCommandLabel(item));
+    else if (isSubagentCreateToolName(name) || name.indexOf('subagent_') === 0) subagents.push(workToolCommandLabel(item));
   });
   var commands = Math.max(0, (items || []).length - files - skills.length - mcps.length - subagents.length);
   var parts = [];
@@ -9904,24 +9890,8 @@ function renderWorkToolGroup(event, eventIndex) {
   var hasFiles = items.some(function(item) { return !!workToolEditedFile(item); });
   var onlySubagents = items.length > 0 && items.every(function(item) {
     var name = publicToolNameForUi(item && item.toolName).toLowerCase();
-    return name === 'task';
+    return isSubagentCreateToolName(name);
   });
-  // A Build Block that spawns several SubAgents is summarized as one chip
-  // ("operated N SubAgents") instead of flooding the block with one chip per
-  // SubAgent. Each name stays available in the tooltip.
-  var subagentTasks = items.map(function(item, itemIndex) {
-    var name = publicToolNameForUi(item && item.toolName).toLowerCase();
-    if (name !== 'task') return null;
-    var subagentArgs = workToolArgsObject(item);
-    var subagentName = String(subagentArgs.nature || subagentArgs.name || subagentArgs.agent || 'Subagent').trim();
-    var subagentRecord = findSubagentUiRecord(subagentName);
-    return {
-      key: String(item.id || item.toolCallId || ('task-' + itemIndex)),
-      subagentName: subagentName || 'Subagent',
-      status: String(subagentRecord && subagentRecord.status || 'accepted'),
-    };
-  }).filter(Boolean);
-  var collapseSubagents = subagentTasks.length > 1;
   var activityRows = items.map(function(item, itemIndex) {
     var edited = workToolEditedFile(item);
     if (edited) {
@@ -9934,26 +9904,22 @@ function renderWorkToolGroup(event, eventIndex) {
         '<div class="conversation-work-file-diff">' + renderWorkFileDiff(edited) + '</div></details>';
     }
     var toolName = publicToolNameForUi(item && item.toolName).toLowerCase();
-    if (toolName === 'task') {
-      if (collapseSubagents) return '';
+    if (isSubagentCreateToolName(toolName)) {
       var subagentArgs = workToolArgsObject(item);
-      var subagentName = String(subagentArgs.nature || subagentArgs.name || subagentArgs.agent || 'Subagent').trim();
-      var subagentRecord = findSubagentUiRecord(subagentName);
-      var subagentStatus = String(subagentRecord && subagentRecord.status || 'accepted');
-      return '<button type="button" class="conversation-work-subagent-chip' + (subagentStatus === 'completed' ? ' completed' : '') + '" data-subagent-name="' + escAttr(subagentName) + '" onclick="window.openSubagentFromBuild(this.getAttribute(\'data-subagent-name\'))" title="' + escAttr(currentLang() === 'zh' ? '查看 Subagent 工作情况' : 'View Subagent work') + '">' +
-        iconSvg('bot', 'Subagent', 'tiny') + '<span class="conversation-work-subagent-name">' + esc(subagentName) + '</span><span class="conversation-work-subagent-status">' + esc(subagentUiStatusLabel(subagentStatus)) + '</span></button>';
+      var requestedName = String(subagentArgs.name || subagentArgs.nature || subagentArgs.agent || 'Subagent').trim();
+      var subagentRecord = findSubagentUiRecord(requestedName);
+      if (!subagentRecord || !subagentRecord.id) {
+        return '<div class="conversation-work-activity-item">' + iconSvg('square-terminal', 'tool', 'tiny') +
+          '<div><div class="conversation-work-command-label" title="' + escAttr(workToolCommandLabel(item)) + '">' + esc(workToolCommandLabel(item)) + '</div></div></div>';
+      }
+      var subagentStatus = String(subagentRecord.status || 'accepted');
+      var createdName = String(subagentRecord.name || subagentRecord.displayName || 'Subagent');
+      return '<button type="button" class="conversation-work-subagent-chip' + (subagentStatus === 'completed' ? ' completed' : '') + '" data-subagent-id="' + escAttr(subagentRecord.id) + '" onclick="window.openSubagentFromBuild(this.getAttribute(\'data-subagent-id\'))" title="' + escAttr(currentLang() === 'zh' ? '查看 Subagent 工作情况' : 'View Subagent work') + '">' +
+        iconSvg('bot', 'Subagent', 'tiny') + '<span class="conversation-work-subagent-name">' + esc(createdName) + '</span><span class="conversation-work-subagent-status">' + esc(subagentUiStatusLabel(subagentStatus)) + '</span></button>';
     }
     return '<div class="conversation-work-activity-item">' + iconSvg(workToolRowIcon(item), 'tool', 'tiny') +
       '<div><div class="conversation-work-command-label" title="' + escAttr(workToolCommandLabel(item)) + '">' + esc(workToolCommandLabel(item)) + '</div>' + renderWorkDisplayImage(item.displayImage) + '</div></div>';
   }).join('');
-  if (collapseSubagents) {
-    var allCompleted = subagentTasks.every(function(task) { return task.status === 'completed'; });
-    var names = subagentTasks.map(function(task) { return task.subagentName; });
-    activityRows += '<button type="button" class="conversation-work-subagent-chip conversation-work-subagent-chip-multi' + (allCompleted ? ' completed' : '') + '" title="' + escAttr(names.join('，')) + '">' +
-      iconSvg('bot', 'Subagent', 'tiny') + '<span class="conversation-work-subagent-name">' +
-      esc(currentLang() === 'zh' ? '操作了 ' + subagentTasks.length + ' 个 SubAgent' : 'Operated ' + subagentTasks.length + ' SubAgents') +
-      '</span><span class="conversation-work-subagent-status">' + esc(subagentUiStatusLabel(allCompleted ? 'completed' : subagentTasks[0].status)) + '</span></button>';
-  }
   return '<details class="conversation-work-activity" data-activity-key="' + escAttr(activityDomKey) + '"><summary>' +
     iconSvg(hasFiles ? 'pencil' : 'square-terminal', 'tools', 'tiny') + '<span>' + esc(workToolGroupLabel(items, !!event.completed)) + '</span>' +
     '<span class="conversation-work-activity-chevron" aria-hidden="true"></span></summary><div class="conversation-work-activity-list' + (onlySubagents ? ' conversation-work-subagent-list' : '') + '">' +
@@ -10255,17 +10221,32 @@ function renderConversationWorkRuns(runs, target) {
 // every delta can starve Chromium's renderer/CDP event loop.
 var pendingConversationWorkRunRenders = {};
 var scheduledConversationWorkRunRenders = {};
+var lastConversationWorkRunRenderAt = {};
+var WORK_RUN_RENDER_MIN_INTERVAL_MS = 100;
+function flushConversationWorkRunRender(key) {
+  var latest = pendingConversationWorkRunRenders[key];
+  delete pendingConversationWorkRunRenders[key];
+  delete scheduledConversationWorkRunRenders[key];
+  if (!latest || !isActiveConversationTarget(latest.target)) return;
+  lastConversationWorkRunRenderAt[key] = performance.now();
+  renderConversationWorkRun(latest);
+}
 function scheduleConversationWorkRunRender(run) {
   var key = runtimeKeyFor(run.target && run.target.workspaceId, run.target && run.target.conversationId) + '::' + String(run.runId || '');
   pendingConversationWorkRunRenders[key] = run;
   if (scheduledConversationWorkRunRenders[key]) return;
-  scheduledConversationWorkRunRenders[key] = true;
-  requestAnimationFrame(function() {
-    var latest = pendingConversationWorkRunRenders[key];
-    delete pendingConversationWorkRunRenders[key];
-    delete scheduledConversationWorkRunRenders[key];
-    if (latest && isActiveConversationTarget(latest.target)) renderConversationWorkRun(latest);
-  });
+  var elapsed = performance.now() - Number(lastConversationWorkRunRenderAt[key] || 0);
+  var delay = Math.max(0, WORK_RUN_RENDER_MIN_INTERVAL_MS - elapsed);
+  scheduledConversationWorkRunRenders[key] = setTimeout(function() {
+    requestAnimationFrame(function() { flushConversationWorkRunRender(key); });
+  }, delay);
+}
+
+function renderConversationWorkRunImmediately(run) {
+  var key = runtimeKeyFor(run.target && run.target.workspaceId, run.target && run.target.conversationId) + '::' + String(run.runId || '');
+  pendingConversationWorkRunRenders[key] = run;
+  if (scheduledConversationWorkRunRenders[key]) clearTimeout(scheduledConversationWorkRunRenders[key]);
+  flushConversationWorkRunRender(key);
 }
 
 function applyAgentWorkEventToRun(event) {
@@ -10328,7 +10309,9 @@ function applyAgentWorkEventToRun(event) {
   if (isActiveConversationTarget(target) && (!branchIds.viewed || !eventBranchId || branchIds.viewed === eventBranchId)) {
     state.workRunsByTarget[runtimeKeyFor(target.workspaceId, target.conversationId)] = runs;
     var existingElement = findWorkRunElement(run);
+    var terminalRender = ['done', 'error', 'interrupted', 'force_interrupted', 'final_response'].indexOf(type) >= 0;
     if (!existingElement || type === 'start') renderConversationWorkRun(run);
+    else if (terminalRender) renderConversationWorkRunImmediately(run);
     else scheduleConversationWorkRunRender(run);
   }
   return run;
@@ -11066,7 +11049,7 @@ function appendAgentWorkEvent(event) {
     setWorking(!!runningConversationRecord(activeConversationId()) || currentFlowRunning());
     updateSubmitButtonState();
   }
-  if (active && event.type === 'tool_result' && ['linked_plan', 'task', 'subagent_send', 'subagent_read', 'subagent_close'].indexOf(String(event.toolName || '')) >= 0 && api.getState) {
+  if (active && event.type === 'tool_result' && ['linked_plan', 'task_read', 'task_create', 'task', 'subagent_create', 'SubAgent', 'subagent_send', 'subagent_read', 'subagent_close'].indexOf(String(event.toolName || '')) >= 0 && api.getState) {
     var eventWorkspaceKey = currentWorkspaceKey();
     api.getState(target).then(function(snapshot) {
       if (!isActiveConversationTarget(target) || eventWorkspaceKey !== currentWorkspaceKey()) return;
@@ -15124,14 +15107,14 @@ function renderGeneralSettings() {
   return wslHtml + '<div class="setting-subsection">' +
     '<div class="setting-subsection-title">' + esc(t('settings.remoteBehavior')) + '</div>' +
     '<div class="setting-row">' +
-    '<label class="setting-label" for="remote-touch-enabled">' + esc(t('settings.remoteTouch')) + '</label>' +
-    '<div class="setting-control"><label class="toggle"><input type="checkbox" id="remote-touch-enabled"' + (state.remoteTouchEnabled ? ' checked' : '') + ' onchange="window.setRemoteTouchEnabled(this.checked)"><span class="toggle-track"></span></label>' +
-    '<div class="setting-desc">' + esc(t('settings.remoteTouchDesc')) + '</div></div>' +
+    '<label class="setting-label" for="remote-touch-enabled" style="display:inline-flex;align-items:center;gap:6px;min-width:120px;">' +
+    '<input type="checkbox" id="remote-touch-enabled"' + (state.remoteTouchEnabled ? ' checked' : '') + ' onchange="window.setRemoteTouchEnabled(this.checked)">' +
+    '<span>' + esc(t('settings.remoteTouch')) + '</span></label>' +
+    '<span class="setting-desc" style="flex:1;min-width:140px;">' + esc(t('settings.remoteTouchDesc')) + '</span>' +
     '</div>' +
-    '<div class="setting-row">' +
-    '<span class="setting-label">' + esc(t('settings.remoteConnect')) + '</span>' +
-    '<div class="setting-control"><button type="button" class="sec-btn primary" onclick="window.showMobilePairing()">' + esc(t('settings.remoteConnect')) + '</button>' +
-    '<div class="setting-desc">' + esc(t('settings.remoteConnectDesc')) + '</div></div>' +
+    '<div class="setting-row" style="border-bottom:none;">' +
+    '<button type="button" class="sec-btn primary" onclick="window.showMobilePairing()">' + esc(t('settings.remoteConnect')) + '</button>' +
+    '<span class="setting-desc" style="flex:1;">' + esc(t('settings.remoteConnectDesc')) + '</span>' +
     '</div>' +
     '</div>' +
     '<div class="setting-row">' +
@@ -15788,8 +15771,7 @@ var systemColorScheme = window.matchMedia('(prefers-color-scheme: dark)');
 window.refreshTitlebarThemeIcon = function() {
   var icon = document.getElementById('title-app-icon');
   if (!icon) return;
-  var useDarkTheme = state.theme === 'system' ? systemColorScheme.matches : state.theme !== 'light';
-  icon.src = useDarkTheme ? '../assets/app-icon-dark-64.png' : '../assets/app-icon-light-64.png';
+  icon.src = '../assets/app-icon-dark.svg';
 };
 window.refreshTitlebarSystemIcon = window.refreshTitlebarThemeIcon;
 if (systemColorScheme.addEventListener) systemColorScheme.addEventListener('change', function() {
@@ -18070,9 +18052,9 @@ window.renderSubagentList = function() {
     var unread = Number(a.mailbox && a.mailbox.unread || 0);
     var queue = a.status === 'queued' && a.queueSequence ? (' · #' + a.queueSequence) : '';
     var meta = esc((a.agentMode || a.mode || 'build') + ' / ' + (a.model || t('common.default')) + ' / ' + ((a.messages || []).length || a.messageCount || 0) + ' ' + t('common.messageShort') + queue + (unread ? (' · ' + t('subagent.unread').replace('{count}', String(unread))) : ''));
-    var display = a.displayName || a.name || a.id || 'Agent';
-    var qualified = a.qualifiedName || a.name || a.id || display;
-    html += '<button type="button" onclick="window.openSubagentHistory(' + JSON.stringify(a.id || a.name).replace(/"/g, '&quot;') + ')" title="' + escAttr(t('subagent.openHistory')) + '" style="width:100%;display:flex;align-items:center;gap:6px;padding:7px 8px;font-size:12px;border:0;border-bottom:1px solid var(--glass-border-1);background:transparent;text-align:left;cursor:pointer;">' +
+    var display = a.name || a.displayName || a.id || 'Agent';
+    var qualified = a.qualifiedName || a.id || display;
+    html += '<button type="button" data-subagent-id="' + escAttr(a.id || '') + '" onclick="window.openSubagentHistory(this.getAttribute(\'data-subagent-id\'))" title="' + escAttr(t('subagent.openHistory')) + '" style="width:100%;display:flex;align-items:center;gap:6px;padding:7px 8px;font-size:12px;border:0;border-bottom:1px solid var(--glass-border-1);background:transparent;text-align:left;cursor:pointer;">' +
       iconSvg('bot', 'Subagent', 'small') +
       '<span style="flex:1;min-width:0;color:var(--text);" title="' + escAttr(qualified) + '"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(display) + '</span><span style="display:block;color:var(--text-dim);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + meta + '</span></span>' +
       '<span style="color:var(--accent2);font-size:10px;">' + esc(a.status || t('common.idle')) + '</span>' +
@@ -18084,10 +18066,10 @@ window.renderSubagentList = function() {
 };
 
 window.refreshSubagentBuildChips = function() {
-  var chips = document.querySelectorAll('.conversation-work-subagent-chip[data-subagent-name]');
+  var chips = document.querySelectorAll('.conversation-work-subagent-chip[data-subagent-id]');
   for (var i = 0; i < chips.length; i++) {
     var chip = chips[i];
-    var record = findSubagentUiRecord(chip.getAttribute('data-subagent-name'));
+    var record = findSubagentUiRecord(chip.getAttribute('data-subagent-id'));
     var status = String(record && record.status || 'accepted');
     chip.classList.toggle('completed', status === 'completed');
     var statusEl = chip.querySelector('.conversation-work-subagent-status');
@@ -18113,15 +18095,15 @@ window.scheduleSubagentStateRefresh = function() {
   }, 1200);
 };
 
-window.openSubagentFromBuild = function(name) {
-  var requested = String(name || '').trim();
+window.openSubagentFromBuild = function(id) {
+  var requested = String(id || '').trim();
   var openLatest = function() {
     var agent = findSubagentUiRecord(requested);
     if (!agent) {
       showUiNotice((currentLang() === 'zh' ? '尚未找到 Subagent：' : 'Subagent is not available yet: ') + requested, 'error', 'subagent-build-' + requested);
       return false;
     }
-    window.openSubagentHistory(agent.id || agent.name);
+    window.openSubagentHistory(agent.id);
     return true;
   };
   if (!api.getState) return Promise.resolve(openLatest());
@@ -18279,13 +18261,17 @@ window.closeSubagentHistory = function() {
 
 window.openSubagentHistory = function(id) {
   var agents = state.subagents || [];
-  var agent = agents.find(function(a) { return a.id === id || a.name === id; }) || {};
-  state.subagentHistoryActorId = agent.id || id || '';
+  var agent = agents.find(function(a) { return a.id === id; });
+  if (!agent) {
+    showUiNotice((currentLang() === 'zh' ? '尚未找到真实 Subagent：' : 'Real Subagent is not available: ') + String(id || ''), 'error', 'subagent-history-' + String(id || 'missing'));
+    return false;
+  }
+  state.subagentHistoryActorId = agent.id;
   var existing = document.getElementById('subagent-history-overlay');
   if (existing) existing.remove();
   var lines = [];
-  lines.push('<div style="font-size:13px;color:var(--text);font-weight:600;margin-bottom:4px;">' + esc(agent.displayName || agent.name || t('subagent.historyTitle')) + '</div>');
-  lines.push('<div style="font-size:10px;color:var(--text-dim);word-break:break-all;margin-bottom:8px;">' + esc(agent.qualifiedName || agent.name || agent.id || '') + '</div>');
+  lines.push('<div style="font-size:13px;color:var(--text);font-weight:600;margin-bottom:4px;">' + esc(agent.name || agent.displayName || t('subagent.historyTitle')) + '</div>');
+  lines.push('<div style="font-size:10px;color:var(--text-dim);word-break:break-all;margin-bottom:8px;">' + esc(agent.qualifiedName || agent.id || '') + '</div>');
   lines.push('<div id="subagent-history-meta" style="font-size:11px;color:var(--text-dim);margin-bottom:10px;">' + esc((agent.status || t('common.idle')) + ' / ' + (agent.agentMode || agent.mode || 'build') + ' / ' + (agent.model || t('common.default')) + (agent.mailbox && agent.mailbox.unread ? (' / ' + agent.mailbox.unread + ' unread') : '')) + '</div>');
   var compression = agent.metadata && agent.metadata.contextCompression;
   if (compression) {
@@ -18315,6 +18301,7 @@ window.openSubagentHistory = function(id) {
   for (var i = 0; i < cached.length; i++) renderSubagentPeerEvent(cached[i]);
   autoScrollSubagentHistory(body);
   window.scheduleSubagentStateRefresh();
+  return true;
 };
 
 // === Browser ===

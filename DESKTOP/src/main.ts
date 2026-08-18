@@ -434,9 +434,10 @@ function relayFlowAgentWorkEvents(flowAgent: Agent, target: ConversationRuntimeT
 }
 
 function themedAppIconPath(): string {
-  const themeName = nativeTheme.shouldUseDarkColors ? 'light' : 'dark';
-  const compactPath = path.join(__dirname, 'assets', `app-icon-${themeName}-64.png`);
-  return fs.existsSync(compactPath) ? compactPath : appAssetPath(`app-icon-${themeName}.png`);
+  // Fixed black-on-white icon across every theme: the titlebar, taskbar, tray,
+  // and Windows executable all share the same dark icon asset.
+  const compactPath = path.join(__dirname, 'assets', 'app-icon-dark-64.png');
+  return fs.existsSync(compactPath) ? compactPath : appAssetPath('app-icon-dark.png');
 }
 
 function createAppIconImage(size?: number) {
@@ -1841,6 +1842,16 @@ if (isViewerArg) {
         ensureWorkspaceRegistryWatcher();
         restoreStoredFlowSuspension();
         recordStartup('agent-ready');
+        // 远程触及开关开启 → GUI 进程内托管启动 mobile server（托盘常驻不中断）
+        if (agent.config.getBool('remote', 'touch_enabled')) {
+          try {
+            const { runServer } = require('./server');
+            runServer(root);
+            recordStartup('mobile-server-hosted');
+          } catch (error) {
+            console.error('[Newmark] hosted mobile server failed:', error instanceof Error ? error.message : String(error));
+          }
+        }
       }
     };
     const localConversationSnapshotForStartup = (target: ConversationRuntimeTarget): Record<string, unknown> => {

@@ -694,7 +694,7 @@ export class Agent {
     this.tools = new ToolExecutor(rootPath, this.config, this.ssh, this.workspace);
     this.skills = new SkillsManager(rootPath);
     this.memoryLab = new MemoryLabManager(rootPath, this.config.getStr('general', 'language'));
-    this.subagents = new SubagentManager({ rootAgentId: this.runtimeActorId });
+    this.subagents = new SubagentManager({ rootAgentId: this.runtimeActorId, concurrency: this.subagentConcurrencyLimit() });
 
     if (this.mode === 'goal' && !this.goal) {
       this.goal = new GoalStateImpl('Set your objective');
@@ -1230,6 +1230,7 @@ export class Agent {
   }
   setIntelligence(tier: string, persist = false): void {
     this.intelligence = normalizeIntelligenceTier(tier);
+    this.subagents?.setConcurrencyLimit(this.subagentConcurrencyLimit());
     if (persist) {
       this.config.set('models', 'default_intelligence', this.intelligence);
       this.config.save();
@@ -1467,13 +1468,20 @@ export class Agent {
   }
 
   private workspaceConversationStateKey(conversationId = this.activeConversationId): string | null {
-    const prefix = this.workspaceConversationPrefix();
+    return this.workspaceConversationStateKeyFor(conversationId, this.workspace.current);
+  }
+
+  private workspaceConversationStateKeyFor(conversationId: string, ws: WorkspaceInfo | null): string | null {
+    const prefix = this.workspaceConversationPrefixFor(ws);
     if (!prefix) return null;
     return `${prefix}-${this.safeConversationId(conversationId)}`;
   }
 
   private workspaceConversationPrefix(): string | null {
-    const ws = this.workspace.current;
+    return this.workspaceConversationPrefixFor(this.workspace.current);
+  }
+
+  private workspaceConversationPrefixFor(ws: WorkspaceInfo | null): string | null {
     if (!ws) return null;
     const supplied = String(ws.conversationStatePrefix || '').trim();
     if (/^(?:internal|external)-[a-f0-9]{16}$/i.test(supplied)) return supplied.toLowerCase();
@@ -3140,8 +3148,56 @@ export class Agent {
   }
 
   public listConversationStates(): Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string; order: number; branchCommunication: boolean }> {
-    const stored = this.readStoredConversationState();
-    const prefix = this.workspaceConversationPrefix() || '';
+    return this.listWorkspaceConversationStates(this.workspace.current);
+  }
+
+  private subagentConcurrencyLimit(): number {
+    return this.intelligence === 'ultra' ? 16 : 4;
+  }
+
+  /** 当前工作区使用内存中的前台选择；后台工作区从各自持久化状态读取 active id。 */
+  public activeConversationIdForWorkspace(ws: WorkspaceInfo | null): string {
+    const targetWs = ws || this.workspace.current;
+    if (!targetWs) return 'default';
+    const currentWs = this.workspace.current;
+    const isCurrent = !!currentWs && path.resolve(currentWs.path) === path.resolve(targetWs.path);
+    if (isCurrent) return this.safeConversationId(this.activeConversationId || 'default');
+    const stored = this.readStoredConversationState(targetWs);
+    return this.safeConversationId(stored.activeConversationId || 'default');
+  }
+
+  /**
+   * 持久化的完整 work run 记录（含 interrupted/force_interrupted）。
+   * 不依赖运行时内存（run 结束后内存清空，state 端点曾因此丢失被中断的构建记录），
+   * 供 mobile 端点稳定透出完整对话信息；移动端按同一格式解析。
+   */
+  public getPersistedConversationWorkRuns(conversationId: string, ws: WorkspaceInfo | null = null): ConversationWorkRun[] {
+    const targetWs = ws || this.workspace.current;
+    const clean = this.safeConversationId(conversationId || 'default');
+    const stateKey = this.workspaceConversationStateKeyFor(clean, targetWs);
+    const stored = this.readStoredConversationState(targetWs);
+    const persisted = stateKey && stored.conversations ? stored.conversations[stateKey] : undefined;
+    const tree = persisted ? this.normalizeConversationTree(persisted) : null;
+    const runtimeNodeId = String(tree?.activeNodeId || '');
+    const viewedNodeId = tree
+      ? this.resolveConversationTreePath(tree, this.storedConversationTreePath(tree, persisted?.viewedBranchNodePath, runtimeNodeId))
+      : '';
+    const viewedNode = tree?.nodes[viewedNodeId];
+    return this.normalizeWorkRuns(viewedNode?.workRuns || persisted?.workRuns);
+  }
+
+  /** Exact membership check against the raw persisted state key, before UI content deduplication. */
+  public hasConversationInWorkspace(conversationId: string, ws: WorkspaceInfo | null): boolean {
+    const targetWs = ws || this.workspace.current;
+    const stateKey = this.workspaceConversationStateKeyFor(this.safeConversationId(conversationId || 'default'), targetWs);
+    if (!stateKey) return false;
+    return Object.prototype.hasOwnProperty.call(this.readStoredConversationState(targetWs).conversations || {}, stateKey);
+  }
+
+  /** 按工作区列对话（任意 ws，key 前缀 = kind-sha256(path).slice(0,16)）；供 mobile API 透出工作区从属对话 */
+  public listWorkspaceConversationStates(ws: WorkspaceInfo | null): Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string; order: number; branchCommunication: boolean }> {
+    const stored = this.readStoredConversationState(ws);
+    const prefix = this.workspaceConversationPrefixFor(ws) || '';
     const scopedEntries = Object.entries(stored.conversations || {}).filter(([key]) => !prefix || key.startsWith(prefix));
     if (scopedEntries.some(([, value]) => !Number.isFinite(value.order))) {
       const legacyOrder = [...scopedEntries].sort(([, a], [, b]) => {
@@ -3150,7 +3206,7 @@ export class Agent {
         return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
       });
       legacyOrder.forEach(([, value], index) => { value.order = index; });
-      this.writeStoredConversationState(stored);
+      this.writeStoredConversationState(stored, ws);
     }
     const rows: Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string; order: number; branchCommunication: boolean }> = [];
     for (const [key, value] of Object.entries(stored.conversations || {})) {
@@ -3207,6 +3263,7 @@ export class Agent {
     this.subagents = sharedSubagentManager(this.subagentManagerKey(clean), {
       conversationId: clean,
       rootAgentId: state?.rootAgentId || this.runtimeActorId,
+      concurrency: this.subagentConcurrencyLimit(),
       state,
       executor: job => this.runSubagentJob(job.record.id, job.prompt, job.flowName, job.reason),
       persist: subagentState => this.persistSubagentState(clean, subagentState),
@@ -3278,18 +3335,21 @@ export class Agent {
 
   public getConversationSnapshot(
     conversationId = this.activeConversationId,
-    options: { window?: number; before?: number } = {},
+    options: { window?: number; before?: number; workspace?: WorkspaceInfo | null } = {},
   ): ConversationSnapshot {
     const clean = this.safeConversationId(conversationId || 'default');
-    const isActiveConversation = clean === this.safeConversationId(this.activeConversationId || 'default');
-    const stateKey = this.workspaceConversationStateKey(clean);
-    const memoryKey = (() => {
-      const ws = this.workspace.current;
-      if (!ws) return null;
-      return `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${clean}`;
-    })();
+    const ws = options.workspace || this.workspace.current;
+    const currentWs = this.workspace.current;
+    const isActiveWorkspace = (!ws && !currentWs)
+      || (!!ws && !!currentWs && path.resolve(ws.path) === path.resolve(currentWs.path));
+    const isActiveConversation = isActiveWorkspace
+      && clean === this.safeConversationId(this.activeConversationId || 'default');
+    const stateKey = this.workspaceConversationStateKeyFor(clean, ws);
+    const memoryKey = ws
+      ? `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${clean}`
+      : null;
     const memory = memoryKey ? this.workspaceConversations.get(memoryKey) : undefined;
-    const stored = this.readStoredConversationState();
+    const stored = this.readStoredConversationState(ws);
     const persisted = stateKey && stored.conversations ? stored.conversations[stateKey] : undefined;
     const tree = persisted ? this.normalizeConversationTree(persisted) : null;
     const runtimeNodeId = String(tree?.activeNodeId || '');
@@ -3324,7 +3384,7 @@ export class Agent {
     const continuations = this.normalizeContinuations(isActiveConversation && viewingRuntimeNode ? this.continuations : (viewedNode?.continuations || persisted?.continuations || memory?.continuations));
     return {
       conversationId: clean,
-      conversations: this.listConversationStates(),
+      conversations: this.listWorkspaceConversationStates(ws),
       conversationPlan: this.normalizeConversationPlan(isActiveConversation ? this.conversationPlan : (persisted?.plan || memory?.plan)),
       linkedPlan: this.normalizeLinkedPlan(isActiveConversation ? this.linkedPlan : (persisted?.linkedPlan || memory?.linkedPlan)),
       subagents: this.recordsForState(isActiveConversation ? this.subagents.serialize() : (persisted?.subagentState || memory?.subagentState)),
@@ -3336,11 +3396,11 @@ export class Agent {
       continuations,
       modelSelection: isActiveConversation
         ? this.currentConversationModelSelection()
-        : (persisted?.modelSelection || memory?.modelSelection || this.currentConversationModelSelection()),
+        : (persisted?.modelSelection || memory?.modelSelection || { kind: 'auto' }),
       flowSelection: isActiveConversation
         ? this.currentConversationFlowSelection()
         : (persisted?.flowSelection || memory?.flowSelection || null),
-      inputMode: this.inputMode,
+      inputMode: isActiveConversation ? this.inputMode : (persisted?.inputMode || memory?.inputMode || 'guide'),
       mode: isActiveConversation ? this.mode : (persisted?.mode || memory?.mode || 'build'),
       goal: isActiveConversation ? this.serializeGoal() : (persisted?.goal || memory?.goal || null),
       branches: this.branchGroupMetadata(tree),
@@ -3661,12 +3721,16 @@ export class Agent {
     return this.getConversationSnapshot(clean);
   }
 
-  public setConversationPinned(id: string, pinned: boolean): boolean {
+  public setConversationPinned(id: string, pinned: boolean, ws: WorkspaceInfo | null = this.workspace.current): boolean {
+    const targetWs = ws || this.workspace.current;
+    if (!targetWs) return false;
     const clean = this.safeConversationId(id || 'default');
-    this.saveWorkspaceConversationState();
-    const stateKey = this.workspaceConversationStateKey(clean);
+    const currentWs = this.workspace.current;
+    const isCurrent = !!currentWs && path.resolve(currentWs.path) === path.resolve(targetWs.path);
+    if (isCurrent) this.saveWorkspaceConversationState();
+    const stateKey = this.workspaceConversationStateKeyFor(clean, targetWs);
     if (!stateKey) return false;
-    const stored = this.readStoredConversationState();
+    const stored = this.readStoredConversationState(targetWs);
     stored.conversations = stored.conversations || {};
     const existing = stored.conversations[stateKey];
     if (!existing) return false;
@@ -3677,23 +3741,67 @@ export class Agent {
       .map(([, value]) => Number(value.order));
     existing.order = siblingOrders.length ? Math.min(...siblingOrders) - 1 : 0;
     existing.updatedAt = existing.updatedAt || new Date().toISOString();
-    this.writeStoredConversationState(stored);
+    this.writeStoredConversationState(stored, targetWs);
     return true;
   }
 
-  public renameConversation(id: string, title: string): boolean {
+  public renameConversation(id: string, title: string, ws: WorkspaceInfo | null = this.workspace.current): boolean {
+    const targetWs = ws || this.workspace.current;
+    if (!targetWs) return false;
     const clean = this.safeConversationId(id || 'default');
     const nextTitle = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80);
     if (!nextTitle) return false;
-    this.saveWorkspaceConversationState();
-    const stateKey = this.workspaceConversationStateKey(clean);
+    const currentWs = this.workspace.current;
+    const isCurrent = !!currentWs && path.resolve(currentWs.path) === path.resolve(targetWs.path);
+    if (isCurrent) this.saveWorkspaceConversationState();
+    const stateKey = this.workspaceConversationStateKeyFor(clean, targetWs);
     if (!stateKey) return false;
-    const stored = this.readStoredConversationState();
+    const stored = this.readStoredConversationState(targetWs);
     const existing = stored.conversations?.[stateKey];
     if (!existing) return false;
     existing.title = nextTitle;
-    this.writeStoredConversationState(stored);
+    this.writeStoredConversationState(stored, targetWs);
     return true;
+  }
+
+  /** 为指定工作区创建空白对话，不临时切换全局前台工作区。 */
+  public createConversationInWorkspace(ws: WorkspaceInfo, title = ''): { id: string; title: string } {
+    const existing = this.listWorkspaceConversationStates(ws);
+    const id = this.safeConversationId(`conv-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
+    const resolvedTitle = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80)
+      || `New chat ${existing.length + 1}`;
+    const stateKey = this.workspaceConversationStateKeyFor(id, ws);
+    if (!stateKey) throw new Error('Conversation workspace is unavailable.');
+    const unpinnedOrders = existing.filter(item => !item.pinned).map(item => Number(item.order || 0));
+    const order = unpinnedOrders.length ? Math.min(...unpinnedOrders) - 1 : 0;
+    const now = new Date().toISOString();
+    this.mutateStoredConversationState(ws, latest => {
+      latest.version = 3;
+      latest.activeConversationId = id;
+      latest.conversations = latest.conversations || {};
+      latest.conversations[stateKey] = {
+        title: resolvedTitle,
+        chatMessages: [],
+        history: [],
+        plan: { items: [] },
+        linkedPlan: { markdown: '', revision: 0 },
+        workRuns: [],
+        continuations: [],
+        inputMode: this.defaultInputMode(),
+        mode: 'build',
+        updatedAt: now,
+        pinned: false,
+        pinnedAt: '',
+        order,
+        branchCommunication: false,
+      };
+      return latest;
+    });
+    const currentWs = this.workspace.current;
+    if (currentWs && path.resolve(currentWs.path) === path.resolve(ws.path)) {
+      this.setConversationFromStorage(id);
+    }
+    return { id, title: resolvedTitle };
   }
   /**
    * 首 Build 命名判定：仅当 (1) 当前对话尚无历史 Build（排除当前 run）且
@@ -3821,6 +3929,34 @@ export class Agent {
     normalized.forEach((id, index) => { entryById.get(id)!.order = index; });
     this.writeStoredConversationState(stored);
     return true;
+  }
+
+  /** Reorder one pinned group inside an explicit workspace without changing membership. */
+  public reorderWorkspaceConversationGroup(ids: string[], ws: WorkspaceInfo | null): boolean {
+    const targetWs = ws || this.workspace.current;
+    if (!targetWs || !Array.isArray(ids) || ids.length < 2) return false;
+    const normalized = ids.map(id => this.safeConversationId(String(id || '')));
+    if (normalized.some(id => !id) || new Set(normalized).size !== normalized.length) return false;
+    const currentWs = this.workspace.current;
+    const isCurrent = !!currentWs && path.resolve(currentWs.path) === path.resolve(targetWs.path);
+    if (isCurrent) this.saveWorkspaceConversationState();
+    let accepted = false;
+    this.mutateStoredConversationState(targetWs, latest => {
+      const prefix = this.workspaceConversationPrefixFor(targetWs) || '';
+      const entries = Object.entries(latest.conversations || {})
+        .filter(([key]) => !prefix || key.startsWith(prefix));
+      const entryById = new Map(entries.map(([key, value]) => [key.slice(prefix.length + 1) || key, value]));
+      const requested = normalized.map(id => entryById.get(id));
+      if (requested.some(entry => !entry)) return latest;
+      if (new Set(requested.map(entry => !!entry!.pinned)).size !== 1) return latest;
+      const orderSlots = requested.map(entry => Number(entry!.order));
+      if (orderSlots.some(order => !Number.isFinite(order))) return latest;
+      orderSlots.sort((a, b) => a - b);
+      normalized.forEach((id, index) => { entryById.get(id)!.order = orderSlots[index]; });
+      accepted = true;
+      return latest;
+    });
+    return accepted;
   }
 
   public flushConversationState(): void {
@@ -5967,16 +6103,20 @@ export class Agent {
     return { text, hiddenUserInput: true, goalContinuation: true };
   }
 
-  private buildSessionArchive(messages: ChatMessage[], mode: string, model: string, archiveDir: string): { filename: string; markdown: string } {
+  private buildSessionArchive(
+    messages: ChatMessage[],
+    context: { mode: string; model: string; goal?: StoredGoalState | null },
+    archiveDir: string,
+  ): { filename: string; markdown: string } {
     const stamp = new Date().toISOString().replace(/[:.]/g, '').replace('T', '_').replace('Z', '');
     // Millisecond-only names collide when a user clicks several archive
     // buttons in one event-loop turn. Keep the readable timestamp and add a
     // cryptographic suffix so every request owns an independent file.
     const filename = `session_${stamp}_${crypto.randomUUID().slice(0, 8)}.md`;
     let markdown = `# Newmark Session — ${stamp}\n\n`;
-    markdown += `**Mode**: ${mode}\n**Model**: ${model}\n`;
+    markdown += `**Mode**: ${context.mode}\n**Model**: ${context.model}\n`;
     markdown += `**Messages**: ${messages.length}\n\n---\n\n`;
-    if (this.goal) markdown += `**Goal**: ${this.goal.objective}\n\n`;
+    if (context.goal?.objective) markdown += `**Goal**: ${context.goal.objective}\n\n`;
     for (const msg of messages) {
       markdown += `**[${msg.role}] ${msg.timestamp}**\n\n${msg.content}\n\n`;
       for (const attachment of hydrateConversationImageAttachments(this.rootPath, msg.attachments)) {
@@ -5992,13 +6132,17 @@ export class Agent {
   private writeSessionArchive(messages: ChatMessage[], mode: string, model: string): string {
     const archiveDir = this.archiveDir();
     fs.mkdirSync(archiveDir, { recursive: true });
-    const archive = this.buildSessionArchive(messages, mode, model, archiveDir);
+    const archive = this.buildSessionArchive(messages, { mode, model, goal: this.serializeGoal() }, archiveDir);
     fs.writeFileSync(path.join(archiveDir, archive.filename), archive.markdown, 'utf-8');
     return archive.filename;
   }
 
-  private async writeSessionArchiveAsync(messages: ChatMessage[], mode: string, model: string, archiveDir = this.archiveDir()): Promise<string> {
-    const archive = this.buildSessionArchive(messages, mode, model, archiveDir);
+  private async writeSessionArchiveAsync(
+    messages: ChatMessage[],
+    context: { mode: string; model: string; goal?: StoredGoalState | null },
+    archiveDir = this.archiveDir(),
+  ): Promise<string> {
+    const archive = this.buildSessionArchive(messages, context, archiveDir);
     await fs.promises.mkdir(archiveDir, { recursive: true });
     const outPath = path.join(archiveDir, archive.filename);
     const tempPath = `${outPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
@@ -6089,24 +6233,28 @@ export class Agent {
    * large markdown payload and manifest use promise-based filesystem I/O so
    * independent workspaces can archive in parallel without freezing Electron.
    */
-  async archiveConversationAsync(conversationId: string): Promise<string | null> {
+  async archiveConversationAsync(
+    conversationId: string,
+    ws: WorkspaceInfo | null = this.workspace.current,
+  ): Promise<string | null> {
     // Archive payloads intentionally start in parallel. The final state
     // mutation below operates on the latest locked disk snapshot, so no
     // JavaScript queue is needed for independent targets in one workspace.
-    return await this.archiveConversationAsyncUnlocked(conversationId);
+    return await this.archiveConversationAsyncUnlocked(conversationId, ws);
   }
 
-  private async archiveConversationAsyncUnlocked(conversationId: string): Promise<string | null> {
-    const ws = this.workspace.current;
+  private async archiveConversationAsyncUnlocked(
+    conversationId: string,
+    targetWorkspace: WorkspaceInfo | null = this.workspace.current,
+  ): Promise<string | null> {
+    const ws = targetWorkspace || this.workspace.current;
     if (!ws) return null;
     const clean = this.safeConversationId(conversationId || 'default');
-    const stateKey = this.workspaceConversationStateKey(clean);
+    const stateKey = this.workspaceConversationStateKeyFor(clean, ws);
     if (!stateKey) return null;
     const memoryKey = `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${clean}`;
     const archiveDir = path.join(ws.path, 'archive');
-    const workspacePrefix = this.workspaceConversationPrefix() || '';
-    const archiveMode = this.modeName();
-    const archiveModel = this.model;
+    const workspacePrefix = this.workspaceConversationPrefixFor(ws) || '';
     // readStoredConversationState returns a cache object. Clone it before any
     // asynchronous gap so concurrent archive requests cannot mutate one
     // another's source snapshot.
@@ -6115,13 +6263,23 @@ export class Agent {
     const persisted = stored.conversations?.[stateKey];
     if (persisted) this.normalizeConversationTree(persisted);
     const memory = this.workspaceConversations.get(memoryKey);
+    const archiveMode = persisted?.mode || memory?.mode || 'build';
+    const archiveSelection = persisted?.modelSelection || memory?.modelSelection;
+    const archiveModel = archiveSelection?.kind === 'deployment'
+      ? archiveSelection.modelId
+      : archiveSelection?.kind === 'auto' ? 'auto' : 'auto';
+    const archiveGoal = persisted?.goal || memory?.goal || null;
     const persistedMessagesAvailable = persisted?.chatMessages !== undefined;
     const sourceMessages = persisted?.chatMessages ?? memory?.chatMessages ?? [];
     const sourceHistory = persistedMessagesAvailable
       ? (persisted?.history ?? [])
       : (memory?.history ?? persisted?.history ?? []);
     const messages = this.normalizeConversationChatMessages(sourceMessages, sourceHistory);
-    const filename = await this.writeSessionArchiveAsync(messages, archiveMode, archiveModel, archiveDir);
+    const filename = await this.writeSessionArchiveAsync(messages, {
+      mode: archiveMode,
+      model: archiveModel,
+      goal: archiveGoal,
+    }, archiveDir);
     const archiveEntry: StoredConversationEntry = persisted ? JSON.parse(JSON.stringify(persisted)) : {
       title: this.titleFromMessages(messages, clean),
       chatMessages: messages,
@@ -6183,7 +6341,9 @@ export class Agent {
     this.workspaceConversations.delete(memoryKey);
     const duplicateMemoryKey = `${ws.isInternal ? 'internal' : 'external'}:${path.resolve(ws.path)}::conversation:${clean}`;
     this.workspaceConversations.delete(duplicateMemoryKey);
-    if (clean === this.safeConversationId(this.activeConversationId || 'default')) {
+    const currentWs = this.workspace.current;
+    const isCurrentWorkspace = !!currentWs && path.resolve(currentWs.path) === path.resolve(ws.path);
+    if (isCurrentWorkspace && clean === this.safeConversationId(this.activeConversationId || 'default')) {
       this.activeConversationId = nextActiveId || 'default';
       this.loadWorkspaceConversationState();
     }
@@ -7574,7 +7734,7 @@ export class Agent {
     return `${accepted.output}\n${settled?.result || settled?.error || ''}`.trim();
   }
 
-  async handleSubagentEnvelope(args: string): Promise<NewmarkSubagentToolResult> {
+  async handleSubagentEnvelope(args: string, requireRunningBuild = false): Promise<NewmarkSubagentToolResult> {
     try {
       const params = JSON.parse(args);
       const preset = this.resolveSubagentPreset(params);
@@ -7596,6 +7756,38 @@ export class Agent {
         && requestedModel === activeDeployment.modelId
         ? `deployment:${encodeURIComponent(activeDeployment.providerId)}:${encodeURIComponent(activeDeployment.modelId)}`
         : requestedModel;
+      const buildRunId = this.currentWorkRunId();
+      const runningBuild = buildRunId
+        ? this.workRuns.find(run => run.runId === buildRunId && run.status === 'running')
+        : undefined;
+      const limit = this.subagentConcurrencyLimit();
+      if (requireRunningBuild && !runningBuild) {
+        return {
+          ok: false,
+          output: '[SubAgent terminated] No running Build Block owns this call; no SubAgent was created.',
+          error: 'SubAgent tool calls require a running Build Block.',
+          metadata: { kind: 'subagent', buildRunId: buildRunId || '', limit, terminated: true },
+        };
+      }
+      if (buildRunId && !runningBuild) {
+        return {
+          ok: false,
+          output: `[SubAgent terminated] Build Block ${buildRunId} is not running; no SubAgent was created.`,
+          error: 'SubAgent creation requires a running Build Block.',
+          metadata: { kind: 'subagent', buildRunId, limit, terminated: true },
+        };
+      }
+      if (runningBuild) {
+        const activeForBuild = this.subagents.activeCountForBuild(buildRunId);
+        if (activeForBuild >= limit) {
+          return {
+            ok: false,
+            output: `[SubAgent terminated] Build Block ${buildRunId} reached the ${this.intelligence === 'ultra' ? 'Ultra' : 'non-Ultra'} hard limit (${limit}); no SubAgent was created or queued.`,
+            error: `SubAgent hard limit reached for Build Block ${buildRunId}: ${activeForBuild}/${limit}.`,
+            metadata: { kind: 'subagent', buildRunId, intelligence: this.intelligence, activeForBuild, limit, terminated: true },
+          };
+        }
+      }
       const id = this.subagents.create(
         name,
         prompt,
@@ -7605,7 +7797,9 @@ export class Agent {
         this.runtimeActorId,
         peerFlow,
         peerGoal,
-        Number(params.flow_pc ?? params.flowPc ?? (peerMode === 'flow' ? this.flowPc : 0))
+        Number(params.flow_pc ?? params.flowPc ?? (peerMode === 'flow' ? this.flowPc : 0)),
+        runningBuild?.runId || '',
+        this.intelligence,
       );
       const sa = this.subagents.get(id);
       if (sa && preset) {
@@ -9025,7 +9219,7 @@ export class Agent {
     if (this.intelligence === 'ultra') {
       parts.push([
         '[Ultra Intelligence – Orchestrator Role]',
-        'You are the lead orchestrator. Actively decompose complex tasks into parallel sub-tasks. Use the `task` tool to create specialized SubAgents for each distinct sub-task. Coordinate the SubAgent team: assign clear responsibilities, merge results, resolve conflicts, and produce a unified final output. SubAgents are your team; delegate aggressively and manage them as a manager, not just a tool caller.',
+        'You are the lead orchestrator. Actively decompose complex tasks into parallel sub-tasks. Use the `SubAgent` tool to create specialized SubAgents for each distinct sub-task. Use `task_create` only for the conversation checklist; it never creates a SubAgent. Coordinate the SubAgent team: assign clear responsibilities, merge results, resolve conflicts, and produce a unified final output. SubAgents are your team; delegate aggressively and manage them as a manager, not just a tool caller.',
         'Do not attempt to do all the work yourself. Use SubAgents for parallel investigation, verification, implementation, and review.',
       ].join('\n'));
     }
@@ -9135,7 +9329,7 @@ export class Agent {
       '- Build history disclosure is two-layered. The request prompt contains only each historical Build Block user input, final summary, and completion status. When the current task continues, fixes, verifies, or depends on earlier Build Blocks, proactively call build_history_query to read the concrete tool activity and results of the relevant block, and reuse that information instead of re-investigating (re-running commands or re-reading files) from scratch. Querying history is read-only and never authorizes resuming that work; do not query merely to answer completion status already shown in the prompt.',
       '- Linked plan disclosure: a durable conversation-linked Markdown plan exists and can be inspected or updated with linked_plan when explicitly needed or required by Plan mode. Its full Markdown and revision are not injected into every model request.',
       '- A memory_lab_update, memory_lab_delete, or memory_lab_reindex call is unfinished until its awaited tool result contains rebuildReceipt.completed=true. The completion receipt is represented by the tool activity inside the current Build block and should not be repeated as a separate completion message.',
-      `- Skills and subagents: skill searches enabled metadata and loads one SKILL.md body on demand; skill_download installs offline skill folders; task creates constrained subagents tracked in agent state.`,
+      `- Skills and subagents: skill searches enabled metadata and loads one SKILL.md body on demand; skill_download installs offline skill folders; SubAgent creates constrained peer agents tracked in agent state. task_create is only for the conversation checklist and never creates a SubAgent.`,
       `- Visible output contract: assistant replies are sanitized before display to remove hidden-reasoning markers. ${visibleOutputContract}`,
       '- During Build work, before the first tool call and between materially different tool phases, emit a concise public progress explanation of what you are checking or changing and why. This is visible commentary, not hidden chain-of-thought. Do not wait until the final answer to explain the work.',
     ].join('\n');

@@ -145,7 +145,7 @@ function prepareAssistantToolVisibility(agent: Agent, definitions: unknown[]): v
   const names = definitions.map(toolDefinitionName);
   brokerOnlyAssistantBuffers.set(agent, {
     brokerOnly: names.includes(TOOL_PROVISION_NAME)
-      && names.every(name => name === TOOL_PROVISION_NAME || name === 'skill' || SUBAGENT_CORE_TOOL_NAMES.has(name)),
+      && names.every(name => name === TOOL_PROVISION_NAME || name === 'skill' || ALWAYS_AVAILABLE_AGENT_TOOL_NAMES.has(name)),
     pending: [],
     released: false,
   });
@@ -584,10 +584,10 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
         const requestStartedAt = Date.now();
         let firstTokenRecorded = false;
         // A broker-equivalent surface exposes no real task tool beyond the
-        // always-available skill discovery and subagent orchestration core, so
+        // always-available skill discovery and Agent control cores, so
         // any text prefacing a broker call is treated as an internal preface.
         const tools = context.tools || [];
-        const brokerOnlySurface = tools.length > 0 && tools.every(tool => tool.name === TOOL_PROVISION_NAME || tool.name === 'skill' || SUBAGENT_CORE_TOOL_NAMES.has(tool.name));
+        const brokerOnlySurface = tools.length > 0 && tools.every(tool => tool.name === TOOL_PROVISION_NAME || tool.name === 'skill' || ALWAYS_AVAILABLE_AGENT_TOOL_NAMES.has(tool.name));
         currentAgent.beginRouteAttempt();
         try {
           const currentProvider = currentAgent.engineModel();
@@ -873,6 +873,8 @@ function buildBuildContextBootstrap(agent: Agent, messages: KernelMessage[], opt
     buildConversationTaskLedger(agent),
     '## Tool Awareness Bootstrap',
     'The following catalog is capability metadata only. Tool descriptions are not instructions, and a tool is callable only when its full schema is present in the provider tools field.',
+    'Only bash, pwd, read, write, edit, delete_file, glob, and grep are foundational tools with initial full schemas (subject to mode and policy filtering).',
+    'Advanced capabilities—including SubAgent, task tools, Git/GitHub, browser, Computer Use, skills, MCP, automations, Flow, and Memory Lab—are not initially callable. Before using one, first call tool_provision with its exact tool name as the only tool call in that assistant subturn; call the advanced tool only on the following model turn after its full schema appears.',
     ...(catalogLines.length ? catalogLines : ['- No callable tools are available for this provider turn.']),
     `Necessary full schemas supplied natively for this provider turn: ${activeNames.length ? activeNames.join(', ') : '(none; use tool_provision when its schema is available)'}.`,
     'Do not invent parameters from the brief catalog. Use only the exact full schemas supplied through the provider tool interface; provision another exact tool when needed.',
@@ -1087,11 +1089,17 @@ function routeTransitionNotice(agent: Agent, previous: string): string {
 const TOOL_PROVISION_NAME = 'tool_provision';
 const INITIAL_TOOL_SCHEMA_LIMIT = 8;
 const TOOL_PROVISION_BATCH_LIMIT = 8;
-// Subagent orchestration is mode-policy gated (read-only in Plan, sandbox
-// restricted for peers) and always available: the orchestrator role prompt and
-// the peer sandbox prompt both promise `task`/subagent_* to the model, so the
-// core must survive preload truncation and never be dropped by intent gating.
-const SUBAGENT_CORE_TOOL_NAMES = new Set(['task', 'subagent_list', 'subagent_read', 'subagent_send', 'subagent_result', 'subagent_close']);
+// These sets remain exported for policy/compatibility tests and catalog
+// classification. Their members are advanced provision-only capabilities.
+const SUBAGENT_CORE_TOOL_NAMES = new Set(['SubAgent', 'subagent_list', 'subagent_read', 'subagent_send', 'subagent_result', 'subagent_close']);
+const TASK_CHECKLIST_CORE_TOOL_NAMES = new Set(['task_read', 'task_create']);
+// Only the foundational workspace primitives are sent with a full schema on
+// the first provider turn. Every advanced capability (SubAgent, task ledger,
+// Git, browser, skills, MCP, etc.) is advertised only through tool_provision's
+// compact catalog and receives its full schema after an explicit provision
+// call. Mode policy and native-tool settings filter this list beforehand.
+const BASIC_INITIAL_TOOL_NAMES = new Set(['bash', 'pwd', 'read', 'write', 'edit', 'delete_file', 'glob', 'grep']);
+const ALWAYS_AVAILABLE_AGENT_TOOL_NAMES = BASIC_INITIAL_TOOL_NAMES;
 
 interface ToolProvisionResult {
   ok: boolean;
@@ -1138,9 +1146,9 @@ class ToolProvisionSession {
       const name = toolDefinitionName(definition);
       if (this.definitionsByName.has(name)) this.initialNames.add(name);
     }
-    // Keep the always-available subagent orchestration core in the preloaded
-    // surface even when the 8-schema intent slice did not cover it.
-    for (const name of SUBAGENT_CORE_TOOL_NAMES) {
+    // Keep the always-available Agent control tools in the preloaded surface
+    // even when the 8-schema intent slice did not cover them.
+    for (const name of ALWAYS_AVAILABLE_AGENT_TOOL_NAMES) {
       if (this.definitionsByName.has(name)) this.initialNames.add(name);
     }
     for (const name of this.provisionedNames) {
@@ -1379,72 +1387,34 @@ export function routeToolSurfaceV2(agent: Agent, definitions: unknown[], toolcha
       ].join('\n'),
     };
   }
-  if (!toolchain) return { definitions, systemPromptNotice: '' };
-  const planner = new ToolExposurePlanner(toolchain.registry, toolchain.catalog);
-  const plan = planner.plan({
-    agentRunId: agent.runtimeActorId,
-    buildBlockId: agent.activeConversationId || 'build',
-    userInput: task,
-    objective: '',
-    previousToolCalls: [],
-    toolUsageFrequency: new Map<string, number>(),
-    permissionScope: ['workspace'],
-    tokenBudget: 20_000,
-    providerToolLimit: 0,
-  });
-  const domains = new Set<string>();
-  const toolHints = new Set<string>();
-  for (const capabilityId of plan.suggestedCapabilityIds) {
-    for (const domain of CAPABILITY_TO_DOMAIN[capabilityId] || []) domains.add(domain);
-    for (const toolName of CAPABILITY_TOOL_HINTS[capabilityId] || []) toolHints.add(toolName);
-  }
-  const names = definitions.map(toolDefinitionName);
-  // An explicitly named tool is always retained (legacy parity), still
-  // subject to the risk gate so destructive tools stay provision-only.
-  for (const name of names) {
-    if (name && new RegExp(`(?:^|[^A-Za-z0-9_])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:$|[^A-Za-z0-9_])`, 'i').test(task)) {
-      toolHints.add(name);
-    }
-  }
-  const selected = definitions
-    .filter(definition => {
-      const name = toolDefinitionName(definition);
-      const descriptor = toolchain.registry.get(name);
-      if (!descriptor || descriptor.riskLevel === 'destructive') return false;
-      if (toolHints.has(name)) return true;
-      if (!domains.has(descriptor.capabilityId.slice(4))) return false;
-      return true;
-    })
-    .sort((a, b) => {
-      const aHint = toolHints.has(toolDefinitionName(a)) ? 0 : 1;
-      const bHint = toolHints.has(toolDefinitionName(b)) ? 0 : 1;
-      return aHint - bHint || names.indexOf(toolDefinitionName(a)) - names.indexOf(toolDefinitionName(b));
-    })
-    .slice(0, INITIAL_TOOL_SCHEMA_LIMIT);
-  const selectedNames = new Set(selected.map(toolDefinitionName));
-  const core = definitions.filter(definition => {
-    const name = toolDefinitionName(definition);
-    return SUBAGENT_CORE_TOOL_NAMES.has(name) && !selectedNames.has(name);
-  });
-  const surface = core.length ? selected.concat(core) : selected;
-  if (surface.length === definitions.length) return { definitions, systemPromptNotice: '' };
-  if (!selected.length) {
-    return {
-      definitions: surface,
-      systemPromptNotice: [
-        '## Tool Interface Availability',
-        'This turn was classified as conversational, so no task-specific tool schema was preloaded.',
-        `The ${TOOL_PROVISION_NAME} interface still exposes the complete compact capability catalog and can provision an original tool schema when the task requires it.`,
-      ].join('\n'),
-    };
+  const surface = definitions.filter(definition => BASIC_INITIAL_TOOL_NAMES.has(toolDefinitionName(definition)));
+  const advancedCount = Math.max(0, definitions.length - surface.length);
+  let planFingerprint = '';
+  if (toolchain) {
+    const planner = new ToolExposurePlanner(toolchain.registry, toolchain.catalog);
+    const plan = planner.plan({
+      agentRunId: agent.runtimeActorId,
+      buildBlockId: agent.activeConversationId || 'build',
+      userInput: task,
+      objective: '',
+      previousToolCalls: [],
+      toolUsageFrequency: new Map<string, number>(),
+      permissionScope: ['workspace'],
+      tokenBudget: 20_000,
+      providerToolLimit: 0,
+    });
+    planFingerprint = plan.plan.stableToolsetHash.slice(0, 8);
   }
   return {
     definitions: surface,
     systemPromptNotice: [
       '## Tool Interface Availability',
-      `At most ${INITIAL_TOOL_SCHEMA_LIMIT} deterministic task-relevant schemas are preloaded for this turn; the always-available subagent orchestration tools are appended separately.`,
-      `Use ${TOOL_PROVISION_NAME} to provision any catalogued tool that is not yet listed; the original tool name and schema become available on the next model turn.`,
-      `Adaptive exposure plan ${plan.plan.stableToolsetHash.slice(0, 8)}: ${plan.activeToolIds.length} planned tools, ${plan.plan.suggestedCapabilityIds.join(',')}.`,
+      `The initial full-schema surface is restricted to foundational workspace tools: ${surface.map(toolDefinitionName).join(', ') || '(none allowed in this mode)'}.`,
+      `${advancedCount} advanced tools are advertised by capability in the compact ${TOOL_PROVISION_NAME} catalog without loading their schemas.`,
+      'Advanced tools include SubAgent, task tools, Git/GitHub, browser, Computer Use, skills, MCP, automations, Flow, and Memory Lab.',
+      `Call ${TOOL_PROVISION_NAME} as the only tool in a subturn to load any advanced tool by exact name; its original schema becomes available on the next model turn.`,
+      'Do not call an advanced tool directly from the initial catalog: capability presence is not callability until provisioning has completed.',
+      planFingerprint ? `Capability routing fingerprint: ${planFingerprint}.` : 'Capability registry unavailable; the compact catalog remains authoritative.',
     ].join('\n'),
   };
 }
@@ -1567,7 +1537,7 @@ function boundInlineToolResult(name: string, text: string): string {
   const value = String(text || '');
   if (value.length <= INLINE_TOOL_RESULT_MAX_CHARS) return value;
   // 结构化结果（JSON/视觉/浏览器/子代理/计划等）不可安全截断，保持原样。
-  if (['computer_use', 'browser_use', 'pdf_read', 'image_inspect', 'image_display', 'task', 'subagent_send', 'subagent_result', 'subagent_read', 'linked_plan', 'question'].includes(name)) {
+  if (['computer_use', 'browser_use', 'pdf_read', 'image_inspect', 'image_display', 'task', 'subagent_create', 'SubAgent', 'subagent_send', 'subagent_result', 'subagent_read', 'linked_plan', 'question'].includes(name)) {
     return value;
   }
   const headChars = Math.floor(INLINE_TOOL_RESULT_MAX_CHARS * 0.6);
@@ -1587,7 +1557,7 @@ function spillOversizedToolResult(agent: Agent, name: string, text: string): str
   const value = String(text || '');
   if (value.length <= INLINE_TOOL_RESULT_MAX_CHARS) return value;
   // 结构化结果不可安全落盘引用（破坏 JSON 结构），保持原样。
-  if (['computer_use', 'browser_use', 'pdf_read', 'image_inspect', 'image_display', 'task', 'subagent_send', 'subagent_result', 'subagent_read', 'linked_plan', 'question'].includes(name)) {
+  if (['computer_use', 'browser_use', 'pdf_read', 'image_inspect', 'image_display', 'task', 'subagent_create', 'SubAgent', 'subagent_send', 'subagent_result', 'subagent_read', 'linked_plan', 'question'].includes(name)) {
     return value;
   }
   const artifactId = agent.storeToolResultArtifact(name, value);
@@ -1694,7 +1664,7 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
     if (signal?.aborted) throw abortError();
     return result;
   };
-  if (name === 'task') return (await agent.handleSubagentEnvelope(args)).output;
+  if (name === 'task' || name === 'subagent_create' || name === 'SubAgent') return (await agent.handleSubagentEnvelope(args, true)).output;
   if (name === 'subagent_send') return (await agent.handleSubagentContinueEnvelope(args)).output;
   if (name === 'subagent_list') return agent.handleSubagentListEnvelope(args).output;
   if (name === 'subagent_read') return agent.handleSubagentReadEnvelope(args).output;
@@ -2014,6 +1984,9 @@ export const agentKernelRunnerInternals = {
   TOOL_PROVISION_NAME,
   INITIAL_TOOL_SCHEMA_LIMIT,
   SUBAGENT_CORE_TOOL_NAMES,
+  TASK_CHECKLIST_CORE_TOOL_NAMES,
+  BASIC_INITIAL_TOOL_NAMES,
+  ALWAYS_AVAILABLE_AGENT_TOOL_NAMES,
 };
 
 function imagePathToDataUrl(imagePath: string): string {

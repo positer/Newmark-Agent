@@ -7,7 +7,7 @@
 
 ## 1. 总览
 
-移动端与 PC 端通过 **Tailscale 内网** 通信，PC 端提供 HTTP + SSE 两种通道：
+移动端与 PC 端通过**同一内网（含 Tailscale 网络）** 通信，只要移动端能触及 PC 端端口即可；PC 端提供 HTTP + SSE 两种通道：
 
 | 通道 | 用途 |
 | --- | --- |
@@ -27,7 +27,7 @@ http://<tailscale-ip>:47890
 ## 2. 前置条件
 
 1. PC 端已安装并启动 Newmark。
-2. PC 端已启动 Tailscale 并处于同一 tailnet。
+2. PC 端与移动端处于同一内网（或同一 Tailscale tailnet），移动端能访问 PC 端端口。
 3. PC 端 `remote.touch_enabled` 开关为开（默认开）。
 4. 移动端持有配对 token（来自二维码）。
 
@@ -186,6 +186,7 @@ Authorization: Bearer <token>
   "hostname": "Push_Air",
   "platform": "win32",
   "tailscaleIpv4": "100.64.0.7",
+  "lanIpv4": "192.168.1.20",
   "workspace": {
     "id": "workspace-...",
     "name": "2026-08-16_1344",
@@ -199,6 +200,7 @@ Authorization: Bearer <token>
 说明：
 - `workspace` 可能为 `null`。
 - `tailscaleIpv4` 未检测到时为 `null`。
+- `lanIpv4` 为 PC 端同一内网 IPv4，未检测到时为 `null`；客户端优先用二维码中的 `host` 连接。
 
 ### 5.2 GET /api/mobile/state
 
@@ -486,7 +488,7 @@ data: { ...AgentWorkEvent... }
 ## 10. 移动端适配注意事项
 
 1. **保存 token**：绑定成功后持久化保存，后续启动复用，不要每次重新扫码。
-2. **保存基址**：保存 `tailscale-ip` 与端口；如果 PC 端 Tailscale IP 变化，需要重新扫码或手动更新。
+2. **保存基址**：保存二维码中的 `host` 与端口；如果 PC 端内网/Tailscale IP 变化，需要重新扫码或手动更新。
 3. **后台限制**：移动端进入后台可能被系统暂停 SSE，恢复后应主动重连并拉取 `/api/mobile/state`。
 4. **超时控制**：`send` 可能耗时较长（取决于模型），建议设置合理请求超时（如 120s）并允许用户取消。
 5. **分页加载**：历史消息使用 `before=windowStart` 向前翻页，直到 `windowStart===0`。

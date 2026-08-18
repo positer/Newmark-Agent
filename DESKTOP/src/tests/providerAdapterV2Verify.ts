@@ -76,6 +76,7 @@ async function main(): Promise<void> {
   check(chatSerialized.url.endsWith('/chat/completions'), 'chat adapter targets /chat/completions');
   check(chatSerialized.body.model === 'fixture-model', 'chat request carries the model');
   check(chatSerialized.body.reasoning_effort === 'high', 'chat request carries reasoning_effort');
+  check(chatSerialized.body.parallel_tool_calls === true, 'chat request explicitly enables parallel tool calls');
   const chatMessages = chatSerialized.body.messages as Array<Record<string, unknown>>;
   check(chatMessages[0].role === 'system', 'system message is first in chat request');
   const toolMessages = chatMessages.filter(message => message.role === 'tool');
@@ -90,6 +91,7 @@ async function main(): Promise<void> {
   check(responsesSerialized.url.endsWith('/responses'), 'responses adapter targets /responses');
   check(responsesSerialized.body.instructions === 'You are a helper.', 'responses request carries instructions');
   check((responsesSerialized.body.reasoning as Record<string, unknown>)?.effort === 'high', 'responses request carries reasoning.effort');
+  check(responsesSerialized.body.parallel_tool_calls === true, 'responses request explicitly enables parallel tool calls');
   const input = responsesSerialized.body.input as Array<Record<string, unknown>>;
   check(input.some(item => item.type === 'function_call' && item.call_id === 'call-1'), 'responses input carries function_call items');
   check(input.some(item => item.type === 'function_call_output' && item.call_id === 'call-1'), 'responses input carries function_call_output');

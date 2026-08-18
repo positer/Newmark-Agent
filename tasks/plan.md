@@ -1,5 +1,62 @@
 # Newmark Agent dev-0.3.13 全场景交叉黑盒压力测试计划
 
+## 2026-08-18 移动端接续：PC 对话记录 WorkRun 同构（dev-0.4.33）
+
+### 目标
+
+让本地与远程历史复用 PC `renderWorkRunEvents` 的公开事件契约，完整保留公开文本、思考摘要、工具状态、Guide、图片和终态，同时绝不展示私密 reasoning/thinking。Build 完成标题必须使用 PC 同词“已处理”，不能再显示“构建”。
+
+### 已完成与验证
+
+1. 新增统一 `WorkRunProjection`，按 `sequence → timestamp → id` 排序，处理文本合并/覆盖、thought/tool 回填、工具组、Guide、图片和中断终态。
+2. 远程完整反序列化为 `RemoteWorkEvent`，本地生成同构 `LocalWorkEvent`，旧记录通过默认字段兼容。
+3. 历史顺序与终态去重对齐 PC；完成态显示“已处理”，运行态显示“处理中”。
+4. `:app:testDebugUnitTest`、Kotlin 编译和 clean assembleDebug 均通过；APK `433 / 0.4.33` 已安装且前台运行于 `emulator-5554`。
+5. 待网络恢复后，以真实远程历史快照执行一次人工回放验收；不得将当前模拟器端点不可达误报为解析通过或失败。
+
+## 2026-08-17 移动端接续：PC 右侧栏与无占位折叠态（dev-0.4.32）
+
+### 目标
+
+一比一移植 PC 右侧栏（文本编辑器不移植预测随航），折叠后仅保留主页面右缘垂直居中的独立按钮且不占布局列；支持点击和主页面左滑展开。仅竖屏 SubAgent 详情使用加页，平板/折叠屏保持弹窗；Memory Lab 在平板/折叠屏恢复更大的弹窗。本地对话不在一级 rail 中保留缩略项。
+
+### 验收
+
+- 折叠按钮与 PC 同为 18×48、右缘居中、`panel-right` 图标，聊天区宽度不被折叠列侵占。
+- Files、Editor、Plan/Linked plan、SubAgent、Browser 五页可见，点击与左滑均可展开。
+- 仅竖屏 SubAgent 加页；平板/折叠屏 SubAgent 与 Memory Lab 使用弹窗。
+- rail 不显示本地对话缩略项；桌面总回归、移动 API、Android clean build 与实机检查通过。
+
+## 2026-08-17 移动端接续：PC GUI 二级边栏、分支树与连续时间线（dev-0.4.31）
+
+### 目标
+
+将 Android 工作区二级边栏重绘为 Newmark PC GUI `#left-secondary`，竖屏采用一级栏完全退出后二级栏进入的顺序换栏；移动远程与本地对话均支持 PC 同构分支树阅读、创建、数量与分页管理，并保持用户输入/Agent 回复两侧连续时间线。
+
+### 实施切片
+
+1. 复用 PC GUI DOM/CSS/Lucide 视觉事实源重绘二级栏及对话行。
+2. 竖屏通过阶段状态机等待一级栏退出完成，再挂载二级栏；横屏继续使用并列双栏。
+3. 桌面增加工作区精确绑定的移动分支 inspect/activate/create API；Android 远程状态只投影 PC 原生分支树。
+4. 本地新增持久化分支节点/分页组，编辑历史用户消息创建新分支，浏览态与运行态分离。
+5. `ChatContent` 在 `LazyColumn.drawBehind` 统一绘制左右连续轨道；修复本地分页祖先选择规则。
+6. 运行桌面总回归、Android clean build、安装与实机 UI dump/截图验证，更新 README、OVERVIEW、archive 后提交并标记 `mobile-dev-0.4.31`。
+
+### 验收标准
+
+- 二级栏视觉与 PC `.secondary-top`、`.conv-item`、active/running 状态一致。
+- 竖屏 80ms 仍只见一级栏，300ms 仅见二级栏，不发生覆盖。
+- 远程分支不重写 PC 核心；本地和远程均显示分页器并支持历史编辑分叉。
+- `2/2` 可切回 `1/2`，切页只改变浏览态；发送前激活所阅分支。
+- 用户/Agent 连续竖线在普通页和分支页均可见。
+- Android clean build、安装与桌面回归全部通过。
+
+### 风险与约束
+
+- PC 二级栏的 blur 在 Compose 中复刻可见层级，不改写全局主题。
+- PC 分支树算法保持唯一事实源，移动 API 只做精确目标桥接。
+- 模拟器 `uiautomator dump` 有缓存，验证前删除旧 XML；关键构建必须 clean。
+
 ## 目标
 
 在不阅读源代码、不依赖 README 的前提下，让全新上下文黑盒测试员仅通过真实安装/打包目录、可执行文件探针、`--help`/版本输出、GUI/TUI/CLI 实际行为和临时根目录状态，验证 `dev-0.3.13` 候选的发布门禁。重点覆盖 GUI、TUI、CLI 的共同后端，以及用户刚刚修改过的上下文压缩、缓存、内联任务管理、Flow 接管、归档打断和 Copilot 预测路径。
@@ -125,3 +182,152 @@
 - 所有测试只在安全临时根完成，测试前后仓库、真实配置、安装目录和全局安装状态无变化。
 - 每个失败至少有最小复现；每个声称通过的入口均有真实进程/输出/状态证据。
 - 若发现问题，先本地修复再从阶段 A 或受影响阶段重跑；未获得全量清洁报告前，不申请 UAC、不发布、不宣称 release-ready。
+# 移动端远程/本地 Agent 与 UI 表现压力测试计划（2026-08-17）
+
+## 目标
+
+建立一套可重复、可量化、可回归的 Android 移动端压力测试体系，覆盖本地 Agent、远程 PC Newmark Agent、远程实时事件流、配对/重连、UI 表现、动画稳定性、多核渲染和启动速度。测试必须区分产品缺陷、环境阻断和测试器问题；任何“通过”都需要原始指标、设备配置、版本和进程清理证据。
+
+## 测试边界与安全规则
+
+- 使用 Android Debug APK 和隔离的 PC Server root；默认使用本地 mock provider，真实 provider 只做显式、低频、可控冒烟。
+- 不把 API key、pair token、完整二维码 URL 或用户会话内容写入日志、截图文件名、归档或最终报告。
+- 每轮测试前记录 APK 版本、设备分辨率/density/API、CPU 核数、硬件加速状态、Server PID/端口和网络模式。
+- 每轮测试后必须回收 Android/PC 测试进程，确认端口、SSE、临时文件和 pending 状态归零。
+- 每次移动端适配完成后执行 `clean assembleDebug`、`adb install -r`、启动应用和版本校验；性能测试只使用已安装且版本明确的 APK。
+
+## 环境矩阵
+
+| 维度 | 档位 | 观测 |
+|---|---|---|
+| 屏幕 | 竖屏 1080×2400/density 420；平板/折叠 1600×2560；窄窗口 720×1280 | 布局、二级栏换栏、右栏、弹窗/加页、IME 避让 |
+| Android | 当前模拟器 API/系统；冷启动与热启动 | 启动时间、恢复、权限、Activity 生命周期 |
+| CPU | 2、4、8 vCPU（可用 AVD 配置切换） | CPU 占用、帧稳定性、后台事件处理、线程争用 |
+| GPU | 硬件渲染；软件渲染诊断档 | Compose/Skia、阴影、blur、动画退化 |
+| 网络 | `adb reverse` 本机映射、同 LAN、Tailscale、断网/高延迟/丢包 | 远程可达性、重连、SSE 延迟、重复事件 |
+| Server | GUI 托盘托管、TUI 同生命周期、CLI 常驻 Server | 所有权、退出回收、端口释放、后台持续性 |
+| 数据 | 空数据、41 模型、100/500 对话消息、长 markdown、分支树 | 列表性能、菜单滚动、内存增长、分页正确性 |
+
+## 指标与判定阈值
+
+### 启动
+
+- `processStart → 首帧`：冷启动 ≤ 1800ms，热启动 ≤ 900ms。
+- `processStart → 首次可交互`：冷启动 ≤ 2500ms，热启动 ≤ 1400ms。
+- `应用启动 → 本地 Agent ready`：≤ 3000ms；`扫码/配对成功 → 远程 state ready`：≤ 2000ms。
+- 超过阈值 2 倍为 P1；超过阈值但可用为 P2；启动失败、黑屏或无法恢复为 P0。
+
+### UI/渲染
+
+- 60Hz 档单帧预算 16.67ms；120Hz 档单帧预算 8.33ms。
+- 普通滚动、侧栏展开、菜单切换、分支分页：p95 frame ≤ 16.67ms，严重掉帧比例 < 5%。
+- 连续动画（marquee、玻璃层、弹窗进入/退出）：连续 10 秒无明显跳帧、闪烁、错位或状态倒退；单次动画不得重复启动超过 1 次。
+- `dumpsys gfxinfo`：Janky frames < 5%，90th percentile ≤ 20ms；若设备仅支持 60Hz，按 16.67ms 预算判定。
+- UI 线程 CPU 峰值 < 85%（持续 5 秒以上视为异常）；单次交互后 2 秒内回落至 < 35%。
+- 应用 PSS：空闲基线 + 30 分钟压力增长 ≤ 25%；无界面泄漏、Activity 重建泄漏或 SSE 重复连接。
+
+### Agent/远程实时性
+
+- 本地发送：点击发送 → pending 状态 ≤ 100ms；mock 首 token ≤ 500ms；最终响应 ≤ 5s。
+- 远程发送：点击发送 → Server receipt ≤ 500ms；首个 SSE work/token 事件 p95 ≤ 1500ms；事件顺序无逆序、无重复、无跨 conversation 串线。
+- SSE 心跳/事件空闲 60s 不断链；断网 5s 后恢复，重连 ≤ 10s；恢复后不重复渲染已确认事件。
+- 远程切换 conversation/workspace：状态快照 ≤ 2s；旧 target 的事件不得进入新 target。
+
+## 场景矩阵
+
+### A. Agent 功能正确性
+
+1. 本地 Agent：新对话、连续 50 轮、长中文/emoji/markdown、停止/重试、模型切换、智能档位。
+2. 本地工具：文件读写、编辑器打开/保存、命令行、Memory Lab、Plan/Goal/Flow、SubAgent、分支创建/分页。
+3. 远程 Agent：配对、state、workspace 对话列表、发送、流式 work 事件、停止、归档、分支 inspect/activate/create、右侧栏 Files/Editor/Plan/SubAgent/Browser。
+4. 失败闭环：无模型、坏 token、401/403、404、429、500、超时、Server 重启、应用后台/恢复。
+5. 一致性：本地/远程对话的用户输入轨道、Agent 回复轨道、分支数量、分页器和运行态均不丢失、不复活。
+
+### B. 远程触及性与实时交流
+
+1. `adb reverse`、LAN、Tailscale 三种连接方式各做冷启动、热启动、重启后恢复。
+2. 二维码图片扫描、相机扫描、手动 URL 三种配对入口；过期 pairing、错误 host、错误 token、重复确认。
+3. 断网序列：发送前断网、发送中断网、SSE 中断、恢复后切换对话、Server 重启后恢复。
+4. 并发序列：两个 Android 客户端/一个 Android + PC GUI/TUI/CLI 同时观察同一 conversation；验证事件去重和 target 隔离。
+5. 远程压力：10/50/120 条事件突发、5 个并行对话、单对话 30 分钟 SSE；记录 p50/p95/p99 延迟、重连次数和丢事件数。
+
+### C. 持续性与资源
+
+1. 30 分钟基线：每 10 秒一次轻交互，间隔发送 mock 响应，采样 CPU/PSS/线程/网络/帧。
+2. 60 分钟耐久：每分钟切换 conversation、打开/关闭右栏、滚动长消息、切换菜单；每 5 分钟执行一次远程 state refresh。
+3. 高频固定事件：创建/发送/停止/归档 120 次；模型菜单打开/滚动/选择 500 次；右栏开合/左滑 300 次；分支分页 300 次。
+4. 后台持续：锁屏/切后台 1、5、15 分钟后恢复；验证 SSE 不重复、通知/状态不倒退、输入草稿和编辑器内容保持。
+5. 崩溃/强停恢复：在发送、SSE、编辑保存、分支切换、Memory Lab 更新五个窗口强停后重启，检查持久化和 Server 生命周期。
+
+### D. UI 表现与动画
+
+1. 首屏：空会话、长会话、远程运行态三种首屏截图和首帧/可交互时间。
+2. 列表：100/500 对话、41 模型菜单、200 条消息、长分支树滚动；检查最大高度、滚动条、触摸命中和尾部加载。
+3. 侧栏：一级栏收回→二级栏展开、右栏折叠按钮、左滑展开、Files/Editor/SubAgent/Browser 切页；验证无重叠、无占位列和动画跳帧。
+4. 动画：marquee、glass/blur、弹窗/加页、分支分页器、键盘/IME 避让、横竖屏/折叠姿态切换。
+5. 主题：亮色/暗色切换，文本编辑器、滚动条、光标、行号、错误态和远程运行态无低对比或闪烁。
+
+### E. 多核渲染适配
+
+1. AVD 2/4/8 vCPU 各执行同一 10 分钟脚本；对比 UI 线程、RenderThread、GC、SSE 解析线程和网络线程占用。
+2. 在 4/8 核档并发渲染：长 markdown + marquee + SSE + 侧栏动画 + 编辑器输入；检查是否出现主线程饥饿、事件积压、帧时间尖峰。
+3. 对比硬件加速开关诊断档：功能必须一致；软件渲染可降级但不得崩溃、黑屏或无限重绘。
+4. 记录 `dumpsys gfxinfo com.newmark.mobile`, `dumpsys meminfo`, `top -H`, `dumpsys SurfaceFlinger --latency`（可用时）和 logcat 错误。
+
+## 执行阶段
+
+### Phase 0：基线与工具
+
+- 固定 APK/Server 版本、mock provider、隔离 root 和设备配置。
+- 建立 PowerShell/ADB 采样脚本，输出 JSONL：时间戳、case、阶段、fps/jank、CPU、PSS、线程、网络、连接状态。
+- 建立统一截图命名和脱敏日志规则。
+
+### Phase 1：功能与远程触及性
+
+- 先跑 A1–A5、B1–B5 的单场景冷/热/重启三轮。
+- 任一 P0/P1 立即停止后续长压，保留最小复现。
+
+### Checkpoint 1
+
+- 本地 Agent 功能全绿；远程配对、state、send、SSE、断线重连和 target 隔离有结构化证据。
+
+### Phase 2：持续性与 UI 表现
+
+- 执行 C1–C5、D1–D5 的 30 分钟短耐久和固定事件压力。
+- 每 5 分钟记录资源快照，开始/结束各抓一份 gfxinfo、meminfo、logcat。
+
+### Checkpoint 2
+
+- PSS 增长、线程数、SSE 连接数、jank、动画错误均在阈值内；所有 pending/临时文件回落。
+
+### Phase 3：多核、启动和跨姿态
+
+- 执行 E1–E4，覆盖 2/4/8 核、硬件渲染、竖屏/平板/折叠窗口、冷/热启动。
+- 重跑最差的三个场景各 3 次，确认是确定性缺陷还是环境波动。
+
+### Checkpoint 3 / 发布门禁
+
+- P0/P1 = 0；P2 有明确豁免或修复计划；核心指标 p95 达标；模拟器/Server/临时数据清洁；才能进入适配提交和下一轮安装验证。
+
+## 建议的测试产物
+
+- `android/scripts/mobile-agent-stress.ps1`：场景驱动、ADB 操作、进程清理和 JSONL 汇总。
+- `android/scripts/mobile-perf-sampler.ps1`：gfxinfo/meminfo/top/logcat/SurfaceFlinger 采样。
+- `android/app/src/androidTest/.../MobileMacroSmokeTest.kt`：启动、旋转/折叠、菜单滚动、侧栏开合、IME 和恢复的 UI 自动化。
+- `DESKTOP/scripts/mobile-mock-server.cjs`：隔离 root、确定性延迟、SSE 序列、错误注入和事件计数。
+- `archive/YYYY-MM-DD-mobile-stress-<run>.md`：脱敏环境、序列、指标、失败复现和结论。
+
+## 失败等级
+
+| 等级 | 判定 |
+|---|---|
+| P0 | 崩溃、数据丢失、凭据泄漏、无法停止/退出、跨用户/对话串线、黑屏、永久卡死 |
+| P1 | 核心 Agent/远程实时交流不可用、事件丢失/重复、重连失败、启动超过阈值 2 倍、严重 jank/资源泄漏 |
+| P2 | 可恢复性能退化、局部动画抖动、偶发超时、主题/布局轻微偏差 |
+| P3 | 文案、低影响视觉差异、非阻断环境告警 |
+
+## 未决问题
+
+- 是否纳入真实 provider 长压；默认不纳入，除非用户明确指定模型、额度和最大请求数。
+- 是否增加 Android Macrobenchmark/Perfetto 依赖；当前先用 ADB/gfxinfo 低侵入方案，稳定后再引入基准模块。
+- 当前模拟器是否能稳定切换 2/4/8 vCPU；若不能，使用多个 AVD 配置并标记设备差异。

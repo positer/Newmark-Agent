@@ -33,6 +33,7 @@ import { verifyWorkspaceFileRouter } from './workspaceFileRouterVerify';
 import { verifyPdfPreviewServer } from './pdfPreviewServerVerify';
 import { verifyEditorLifecycle } from './editorLifecycleVerify';
 import { verifyEditorCompletion } from './editorCompletionVerify';
+import { verifyMobileWorkspaceApi } from './mobileWorkspaceApiVerify';
 import { PNG } from 'pngjs';
 
 const TEST_DIR = path.join(process.cwd(), 'test-tmp');
@@ -246,6 +247,7 @@ async function main() {
   console.log('\nSafe Workspace File Router');
   await verifyWorkspaceFileRouter(TEST_DIR, assert);
   await verifyPdfPreviewServer(TEST_DIR, assert);
+  await verifyMobileWorkspaceApi(assert);
 
   // ---- 0. UI HTML Regression Tests ----
   console.log('\nUI HTML');
@@ -515,7 +517,12 @@ async function main() {
     && uiHtml.includes('function stopRunningFromEscape(event)')
     && uiHtml.includes("document.addEventListener('keydown', function(event)")
     && uiHtml.includes('var STREAMING_PLAIN_TEXT_THRESHOLD = 12000')
-    && uiHtml.includes('var narrativeHtml = liveNarrative'), 'ui html: current running conversation with empty prompt shows target-bound graceful/force Stop, global Esc, provisional-send cancellation, and bounded large-stream rendering');
+    && uiHtml.includes('var narrativeHtml = liveNarrative')
+    && uiHtml.includes('var WORK_RUN_RENDER_MIN_INTERVAL_MS = 100')
+    && uiHtml.includes('function renderConversationWorkRunImmediately(run)')
+    && uiHtml.includes("else if (terminalRender) renderConversationWorkRunImmediately(run);")
+    && uiHtml.includes('.marquee-border::before {')
+    && uiHtml.includes('animation: none;'), 'ui html: current running conversation keeps responsive input through bounded large-stream rendering, 10fps Build DOM backpressure, immediate terminal updates, and static GPU-friendly status borders');
   assert(uiHtml.includes("var requestedMode = opts.requestedMode || state.mode || 'build';")
     && uiHtml.includes("var idleBuildNextImmediate = requestedMode === 'build'")
     && !uiHtml.includes("els['mode-select'].value = 'build'; window.syncNewmarkSelect"),
@@ -666,16 +673,16 @@ async function main() {
     && uiHtml.includes("'调用 MCP · '")
     && uiHtml.includes('function workToolRowIcon(item)'), 'ui work run: Skill and MCP activity rows expose the exact loaded skill or invoked MCP target inside the Build block');
   assert(uiHtml.includes('conversation-work-subagent-chip')
-    && uiHtml.includes("if (toolName === 'task')")
+    && uiHtml.includes('isSubagentCreateToolName(toolName)')
     && uiHtml.includes('window.openSubagentFromBuild')
     && uiHtml.includes('api.getState(target).then')
-    && uiHtml.includes('window.openSubagentHistory(agent.id || agent.name)')
-    && uiHtml.includes('window.refreshSubagentBuildChips'), 'ui work run: task calls render status-aware Subagent chips inside the Build block and refresh the exact peer snapshot before opening its work history');
-  assert(uiHtml.includes('var collapseSubagents = subagentTasks.length > 1')
-    && uiHtml.includes("操作了 ' + subagentTasks.length + ' 个 SubAgent'")
-    && uiHtml.includes("'Operated ' + subagentTasks.length + ' SubAgents'")
-    && uiHtml.includes('conversation-work-subagent-chip-multi')
-    && uiHtml.includes('names.join('), 'ui work run: a Build Block that spawns several SubAgents collapses to a single summary chip instead of one chip per SubAgent');
+    && uiHtml.includes('window.openSubagentHistory(agent.id)')
+    && uiHtml.includes('data-subagent-id')
+    && uiHtml.includes('window.refreshSubagentBuildChips'), 'ui work run: SubAgent create calls resolve a real peer record and bind the Build chip to its exact id before opening work history');
+  assert(!uiHtml.includes('var collapseSubagents = subagentTasks.length > 1')
+    && !uiHtml.includes('conversation-work-subagent-chip-multi')
+    && uiHtml.includes("var display = a.name || a.displayName || a.id || 'Agent';")
+    && uiHtml.includes("var agent = agents.find(function(a) { return a.id === id; });"), 'ui SubAgent monitoring: every real peer has its own id-bound entry titled with the created name; tool events cannot synthesize aggregate or name-only monitoring entries');
   const modeConversationStressSource = fs.readFileSync(path.join(process.cwd(), 'scripts', 'mode-conversation-state-stress.cjs'), 'utf-8');
   assert(modeConversationStressSource.includes('Flow A running')
     && modeConversationStressSource.includes('background-completed Flow A clears its running flag')
@@ -1058,7 +1065,7 @@ async function main() {
   }
   const nativeToolsTs = fs.readFileSync(path.join(process.cwd(), 'src', 'tools', 'nativeTools.ts'), 'utf-8');
   const agentTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
-  assert(!agentTs.includes('public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && !agentTs.includes('public ensureConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && agentTs.includes('const isActiveConversation = clean === this.safeConversationId') && agentTs.includes('const sourceChatMessages = isActiveConversation && viewingRuntimeNode') && agentTs.includes('? this.chatMessages') && agentTs.includes('viewedNode?.chatMessages ?? persisted?.chatMessages ?? memory?.chatMessages ?? []') && agentTs.includes('const fullChatMessages = isActiveConversation && viewingRuntimeNode') && agentTs.includes(': this.normalizeConversationChatMessages(sourceChatMessages, history)') && agentTs.includes('const windowStart = Math.max(0, before - windowSize)') && agentTs.includes('totalMessages,') && agentTs.includes('isActiveConversation && viewingRuntimeNode ? this.workRuns') && agentTs.includes('mirrorConversationStateFrom(id: string') && agentTs.includes('const stateKey = this.workspaceConversationStateKey(clean);') && agentTs.includes("this.safeConversationId(this.activeConversationId || 'default') === clean"), 'agent conversation snapshots are read-only, runtime and viewed branch state remain separate, cold state is attachment-normalized, snapshots are bounded to a message window, and runner mirrors synchronize active host memory');
+  assert(!agentTs.includes('public getConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && !agentTs.includes('public ensureConversationSnapshot(conversationId = this.activeConversationId): ConversationSnapshot {\n    this.saveWorkspaceConversationState();') && agentTs.includes('const isActiveWorkspace =') && agentTs.includes('const isActiveConversation = isActiveWorkspace') && agentTs.includes('const sourceChatMessages = isActiveConversation && viewingRuntimeNode') && agentTs.includes('? this.chatMessages') && agentTs.includes('viewedNode?.chatMessages ?? persisted?.chatMessages ?? memory?.chatMessages ?? []') && agentTs.includes('const fullChatMessages = isActiveConversation && viewingRuntimeNode') && agentTs.includes(': this.normalizeConversationChatMessages(sourceChatMessages, history)') && agentTs.includes('const windowStart = Math.max(0, before - windowSize)') && agentTs.includes('totalMessages,') && agentTs.includes('isActiveConversation && viewingRuntimeNode ? this.workRuns') && agentTs.includes('mirrorConversationStateFrom(id: string') && agentTs.includes('const stateKey = this.workspaceConversationStateKey(clean);') && agentTs.includes("this.safeConversationId(this.activeConversationId || 'default') === clean"), 'agent conversation snapshots are read-only, workspace-scoped runtime and viewed branch state remain separate, cold state is attachment-normalized, snapshots are bounded to a message window, and runner mirrors synchronize active host memory');
   const configTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'config.ts'), 'utf-8');
   const getStateHandler = mainTs.slice(mainTs.indexOf("ipcMain.handle('agent:getState'"), mainTs.indexOf("ipcMain.handle('agent:getConversationPlan'"));
   assert(getStateHandler.includes('...conversationSnapshot') && !getStateHandler.includes('chatMessages: agent.chatMessages'), 'main process: conversation-scoped getState does not overwrite target messages with shared host messages');
@@ -1070,8 +1077,8 @@ async function main() {
   const memoryLabTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'memoryLab.ts'), 'utf-8');
   const installUpdateTs = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'installUpdate.ts'), 'utf-8');
   assert(uiHtml.includes('function scheduleLayoutStateSave()') && uiHtml.includes('layoutState: {') && uiHtml.includes('leftCollapsed: !!state.leftCollapsed') && uiHtml.includes('rightCollapsed: !!state.rightCollapsed') && uiHtml.includes('bottomCollapsed: !!state.bottomCollapsed') && uiHtml.includes('secondaryCollapsed: !!state.secondaryCollapsed') && uiHtml.includes('function applySavedLayoutState(input)') && mainTs.includes('leftPanelCollapsed') && mainTs.includes("case 'layoutState'") && configTs.includes('bottom_panel_collapsed') && configTs.includes('secondary_panel_collapsed'), 'ui layout memory: persists only sidebar collapsed booleans and restores them from config');
-  assert(workspaceTs.includes('setPinned(id: string, pinned: boolean)') && agentTs.includes('setConversationPinned(id: string, pinned: boolean)') && preloadTs.includes('setWorkspacePinned') && preloadTs.includes('setConversationPinned') && mainTs.includes("agent:setWorkspacePinned") && mainTs.includes("agent:setConversationPinned") && uiHtml.includes('window.toggleWorkspacePinned') && uiHtml.includes('window.toggleConversationPinned') && uiHtml.includes('conv-pin-btn') && uiHtml.includes('ws-pin-btn'), 'pinning: workspace and conversation pin state is persisted and exposed in the UI');
-  assert(agentTs.includes('renameConversation(id: string, title: string)')
+  assert(workspaceTs.includes('setPinned(id: string, pinned: boolean)') && agentTs.includes('setConversationPinned(id: string, pinned: boolean, ws: WorkspaceInfo | null = this.workspace.current)') && preloadTs.includes('setWorkspacePinned') && preloadTs.includes('setConversationPinned') && mainTs.includes("agent:setWorkspacePinned") && mainTs.includes("agent:setConversationPinned") && uiHtml.includes('window.toggleWorkspacePinned') && uiHtml.includes('window.toggleConversationPinned') && uiHtml.includes('conv-pin-btn') && uiHtml.includes('ws-pin-btn'), 'pinning: workspace and workspace-targeted conversation pin state is persisted and exposed in the UI');
+  assert(agentTs.includes('renameConversation(id: string, title: string, ws: WorkspaceInfo | null = this.workspace.current)')
     && agentTs.includes('reorderConversations(ids: string[])')
     && preloadTs.includes('renameConversation:')
     && preloadTs.includes('reorderConversations:')
@@ -1317,9 +1324,12 @@ async function main() {
   assert(packageJson.includes('"productName": "Newmark Agent"') && packageJson.includes('"executableName": "Newmark Agent"') && packageJson.includes('"signAndEditExecutable": false') && packageJson.includes('"afterPack": "scripts/after-pack-win-icon.cjs"') && packageJson.includes('"target": "msi"') && packageJson.includes('"msi"') && packageJson.includes('Newmark-Agent-${version}-${arch}.${ext}') && packageJson.includes('"dist:windows-release"') && packageJson.includes('"resedit": "^1.7.2"') && electronBuilderConfigTs.includes("productName: 'Newmark Agent'") && electronBuilderConfigTs.includes("executableName: 'Newmark Agent'") && electronBuilderConfigTs.includes("afterPack: 'scripts/after-pack-win-icon.cjs'"), 'package metadata: product and executable names are fixed to Newmark Agent, every Windows pack patches and verifies executable resources, and releases target MSI');
   assert(distLinuxScript.includes("['--linux', '--publish', 'never']"), 'Linux packaging: local artifact creation cannot implicitly publish or wait on release credentials');
   assert(fs.existsSync(path.join(process.cwd(), 'assets', 'app-icon-dark.png')) && fs.existsSync(path.join(process.cwd(), 'assets', 'app-icon-light.png')) && appIconIco.length > 6 && appIconIco.readUInt16LE(2) === 1 && appIconIco.readUInt16LE(4) >= 1, 'app icons: themed PNG assets and Windows ICO exist');
+  const buildUiIconsScript = fs.readFileSync(path.join(process.cwd(), 'scripts', 'build-ui-icons.cjs'), 'utf-8');
+  const appIconSvg = fs.readFileSync(path.join(process.cwd(), 'assets', 'app-icon-dark.svg'), 'utf-8');
+  assert(appIconSvg.includes('<svg') && appIconSvg.includes('viewBox="0 0 1024 1024"') && appIconSvg.includes('<rect') && appIconSvg.includes('<path fill="#ffffff"') && buildUiIconsScript.includes("app-icon-dark.svg"), 'app icons: vector black-on-white SVG asset exists and the UI build copies it into dist for high-DPI rendering');
   assert(createHash('sha256').update(appIconDark).digest('hex').toUpperCase() === 'D07F670051677EEF1BD4B60EF186E8ADB81A37202BE49F929DA84D38C54E4305' && createHash('sha256').update(appIconLight).digest('hex').toUpperCase() === 'E8482757BC5AB5BD4C9A4589A878170C0D3DAE25A8F27A5461CEC45F2EFCB3CA', 'app icons: source assets exactly match the supplied dark and light finished PNGs');
   assert(packageJson.includes('"icon": "assets/icon.ico"') && electronBuilderConfigTs.includes("icon: 'assets/icon.ico'"), 'app icons: Windows package uses generated ICO');
-  assert(mainTs.includes('nativeTheme') && mainTs.includes("const themeName = nativeTheme.shouldUseDarkColors ? 'light' : 'dark'") && mainTs.includes("`app-icon-${themeName}-64.png`") && mainTs.includes("appAssetPath(`app-icon-${themeName}.png`)") && mainTs.includes('createAppIconImage(16)') && mainTs.includes('icon: themedAppIconPath()') && mainTs.includes("nativeTheme.on('updated', refreshNativeThemeIcons)") && mainTs.includes('win.setIcon(windowIcon)') && mainTs.includes('tray.setImage(createAppIconImage(16))'), 'app icons: runtime windows, taskbar, and tray update compact themed assets with full-resolution fallback when the system theme changes');
+  assert(mainTs.includes('nativeTheme') && mainTs.includes("app-icon-dark-64.png") && mainTs.includes("appAssetPath('app-icon-dark.png')") && mainTs.includes('createAppIconImage(16)') && mainTs.includes('icon: themedAppIconPath()') && mainTs.includes("nativeTheme.on('updated', refreshNativeThemeIcons)") && mainTs.includes('win.setIcon(windowIcon)') && mainTs.includes('tray.setImage(createAppIconImage(16))'), 'app icons: runtime windows, taskbar, and tray all use the fixed black-on-white icon across every theme');
   assert(mainTs.includes('function refreshNativeThemeIcons(): void') && !mainTs.includes('const refreshNativeThemeIcons ='), 'app icons: theme refresh is hoisted so early tray creation cannot hit a temporal-dead-zone startup failure');
   assert(mainTs.includes('startupWindow = createDesktopWindow(true, true, startupAttempt)') && mainTs.includes('mainWindow = startupWindow') && mainTs.includes('createTray();') && mainTs.includes("tray.on('click', showMainWindow)") && mainTs.includes("tray.on('double-click', showMainWindow)") && mainTs.includes('if (tray) return;'), 'tray lifecycle: creates one tray with the single startup window and reuses it while showing the promoted main window');
   assert(mainTs.includes("path.resolve(agent?.workspace.current?.path || root)") && mainTs.includes("ipcMain.handle('agent:getFileTree'"), 'file tree: defaults to the active workspace instead of exposing the ~/.Newmark runtime root and nested Roots shadows');
@@ -1331,8 +1341,8 @@ async function main() {
     && !mainTs.slice(mainTs.indexOf("ipcMain.handle('app:minimize', () =>"), mainTs.indexOf("ipcMain.handle('app:maximize', () =>")).includes('win?.hide()'), 'window lifecycle: title-bar minimize always enters the taskbar while close-to-tray remains a separate close behavior');
   assert(nativeToolsTs.includes('NATIVE_TOOL_CATALOG') && nativeToolsTs.includes("name: 'computer_use'") && nativeToolsTs.includes("name: 'terminal_takeover'") && nativeToolsTs.includes("name: 'subagent_read'") && nativeToolsTs.includes(".filter(tool => (tool.availability || 'configurable') === 'configurable')") && nativeToolsTs.includes('normalizeNativeToolEnabled') && configTs.includes('defaultNativeToolEnabled()') && configTs.includes("tools:") && toolsTs.includes('isNativeToolEnabled') && mainTs.includes('nativeToolCatalogForState') && mainTs.includes("case 'nativeTools'"), 'native tools settings: configurable catalog is exposed while required/mode-scoped tools stay system-managed and runtime-gated');
   assert(nativeToolsTs.includes("name: 'ssh_workspace'") && toolsTs.includes("t('ssh_workspace'") && toolsTs.includes('new SshManager') && preloadTs.includes('createSshWorkspace') && mainTs.includes("ssh:createWorkspace") && uiHtml.includes('ws-ssh-host') && uiHtml.includes('validateSshWorkspaceForm'), 'OpenSSH workspace: native tool, IPC, preload, and new-workspace UI are wired');
-  assert(uiHtml.includes('id="title-app-logo"') && uiHtml.includes('id="title-app-icon"') && uiHtml.includes('src="../assets/app-icon-dark-64.png"') && uiHtml.includes('window.refreshTitlebarThemeIcon') && uiHtml.includes("state.theme === 'system' ? systemColorScheme.matches : state.theme !== 'light'") && uiHtml.includes("useDarkTheme ? '../assets/app-icon-dark-64.png' : '../assets/app-icon-light-64.png'") && uiHtml.includes("if (state.theme === 'system') applyUiAppearance()"), 'app icons: custom titlebar uses compact build-derived dark/light icons and reapplies appearance when the system scheme changes');
-  assert(uiHtml.includes('#topbar .logo::before') && uiHtml.includes('animation: marquee-rotate var(--marquee-speed) linear infinite') && uiHtml.includes('var(--g1), var(--g2), var(--g3), var(--g4), var(--g1)') && uiHtml.includes('calc(-2 * var(--marquee-width))'), 'app icons: custom titlebar border uses shared adjustable marquee settings');
+  assert(uiHtml.includes('id="title-app-logo"') && uiHtml.includes('id="title-app-icon"') && uiHtml.includes('src="../assets/app-icon-dark.svg"') && uiHtml.includes('window.refreshTitlebarThemeIcon') && uiHtml.includes("icon.src = '../assets/app-icon-dark.svg';") && uiHtml.includes("if (state.theme === 'system') applyUiAppearance()"), 'app icons: custom titlebar uses the fixed vector black-on-white icon across every theme and reapplies appearance when the system scheme changes');
+  assert(uiHtml.includes('#topbar .logo') && !uiHtml.includes('#topbar .logo::before') && !uiHtml.includes('#topbar .logo::after'), 'app icons: titlebar logo renders the icon without a rotating accent light ring');
   assert(fs.existsSync(path.join(process.cwd(), 'scripts', 'patch-win-exe-icon.cjs')) && distPortableScript.includes("require('./patch-win-exe-icon.cjs')") && distPortableScript.includes('patchExeIdentity(unpackedExe)') && distPortableScript.includes('patchAndVerify(unpackedExe, packageIcon)') && distPortableScript.includes('verifyExeIcon(unpackedExe, packageIcon)') && distPortableScript.includes('verifyExeIdentity(unpackedExe)') && distPortableScript.includes('ProductName') && distPortableScript.includes('FileDescription') && distPortableScript.includes('electron.exe'), 'app icons: dist-portable patches/verifies win-unpacked exe associated icon and Newmark Windows resource identity before zipping');
   assert(packageJson.includes('"release:cli-smoke"')
     && releaseCliSmoke.includes('spawn(exePath, args')
@@ -1363,7 +1373,13 @@ async function main() {
   assert(releaseUiSmoke.includes('function captureOsScreenshot') && releaseUiSmoke.includes('System.Windows.Forms.Screen') && releaseUiSmoke.includes('os-fallback'), 'release ui smoke: falls back to OS screenshot when CDP screenshot stalls');
   assert(packageJson.includes('"release:111-ui-smoke"') && release111UiSmoke.includes("window.openSettings('models')") && release111UiSmoke.includes('#new-provider-protocol') && release111UiSmoke.includes('github_models') && release111UiSmoke.includes('fuzzyGithubOption') && release111UiSmoke.includes('window.githubCopilotLogin'), 'release 1.1.1 ui smoke: validates packaged GitHub Models exact-login UI and fuzzy exclusion');
   assert(release111UiSmoke.includes('window.applyTerminalTakeoverEvent') && release111UiSmoke.includes('terminal-tab.agent-takeover.marquee-border') && release111UiSmoke.includes('terminal-pane.agent-takeover.marquee-border') && release111UiSmoke.includes('2026-07-03-release-111-ui-smoke.png'), 'release 1.1.1 ui smoke: validates packaged bottom terminal takeover mirror with marquee border');
-  assert(packageJson.includes('"release:ui-icon-smoke"') && fs.existsSync(path.join(process.cwd(), 'scripts', 'release-ui-icon-smoke.cjs')) && releaseUiIconSmoke.includes('verifyExeIcon(exePath, packageIcon)') && releaseUiIconSmoke.includes('verifyTitlebarIcon') && releaseUiIconSmoke.includes('marquee-rotate') && releaseUiIconSmoke.includes('rootGradientColor') && releaseUiIconSmoke.includes('rootMarqueeSpeed') && releaseUiIconSmoke.includes('rootMarqueeWidth'), 'release ui icon smoke: npm entry validates win-unpacked exe icon, runtime titlebar icon, and shared adjustable animated border');
+  assert(packageJson.includes('"release:ui-icon-smoke"') && fs.existsSync(path.join(process.cwd(), 'scripts', 'release-ui-icon-smoke.cjs')) && releaseUiIconSmoke.includes('verifyExeIcon(exePath, packageIcon)') && releaseUiIconSmoke.includes('verifyTitlebarIcon') && releaseUiIconSmoke.includes("state.borderAnimationName !== 'none'") && releaseUiIconSmoke.includes('rootGradientColor') && releaseUiIconSmoke.includes('rootMarqueeSpeed') && releaseUiIconSmoke.includes('rootMarqueeWidth'), 'release ui icon smoke: npm entry validates win-unpacked exe icon, runtime titlebar icon, and shared adjustable static status border without continuous GPU repaint');
+  const releaseUiRenderPerformanceSmoke = fs.readFileSync(path.join(process.cwd(), 'scripts', 'release-ui-render-performance-smoke.cjs'), 'utf8');
+  assert(packageJson.includes('"release:ui-render-performance-smoke"')
+    && releaseUiRenderPerformanceSmoke.includes('result.renders > 12')
+    && releaseUiRenderPerformanceSmoke.includes('result.maxInputDelayMs > 100')
+    && releaseUiRenderPerformanceSmoke.includes('continuous status animations remain active'),
+  'release UI render performance smoke: packaged renderer locks static status borders, 10fps Build backpressure, and responsive input dispatch');
   assert(packageJson.includes('"release:ui-agent-smoke"') && releaseUiAgentSmoke.includes('window.sendMessage()') && releaseUiAgentSmoke.includes('release-ui-agent-mock') && releaseUiAgentSmoke.includes('ACTIVE_TOOLCHAIN_RESULT_OK_20260627_SCRIPT'), 'release ui agent smoke: drives real packaged renderer send path with mock model');
   assert(packageJson.includes('"msi"') && packageJson.includes('"perMachine": true') && packageJson.includes('"runAfterFinish": false') && packageJson.includes('patch-msi-project.cjs'), 'windows MSI: installs per-machine, does not auto-launch, and cleans running Newmark processes before file replacement');
   assert(releaseUiAgentSmoke.includes("'write,bash,edit,read'") && releaseUiAgentSmoke.includes('"timeout_ms":10000') && releaseUiAgentSmoke.includes('terminal timeout cap ok') && releaseUiAgentSmoke.includes("document.querySelector('.conversation-work-run')") && releaseUiAgentSmoke.includes("document.querySelectorAll('.run-final-response')") && releaseUiAgentSmoke.includes("waitFor(cdp, `!!document.querySelector('.work-review-btn')"), 'release ui agent smoke: validates write bash edit read tools, Build-owned final output, completion review, and terminal timeout cap without depending on sidebar casing or raw tool receipts');
@@ -1413,8 +1429,8 @@ async function main() {
   assert(releaseUiGemmaRemovalSmoke.includes('2026-06-29-release-gemma-removal-visual.png') && releaseUiGemmaRemovalSmoke.includes('Page.captureScreenshot'), 'release ui Gemma removal smoke: captures visual evidence');
   assert(packageJson.includes('"release:ui-flow-subagent-smoke"') && releaseUiFlowSubagentSmoke.includes('--remote-debugging-port=') && releaseUiFlowSubagentSmoke.includes('window.sendMessage()') && releaseUiFlowSubagentSmoke.includes('release-ui-flow-subagent-mock'), 'release ui Flow/subagent smoke: drives real packaged renderer send path through CDP mock provider');
   assert(releaseUiFlowSubagentSmoke.includes('flow_save') && releaseUiFlowSubagentSmoke.includes('flow_list') && releaseUiFlowSubagentSmoke.includes("window.api.runFlow('agent-designed-release-flow'") && releaseUiFlowSubagentSmoke.includes('FLOW_COMPONENT_RUNTIME_INPUT'), 'release ui Flow/subagent smoke: covers agent-designed Flow save, list, and trigger');
-  assert(releaseUiFlowSubagentSmoke.includes('task') && releaseUiFlowSubagentSmoke.includes('subagent_send') && releaseUiFlowSubagentSmoke.includes('subagent_result') && releaseUiFlowSubagentSmoke.includes('subagent_close'), 'release ui Flow/subagent smoke: covers subagent create, continue, result, and close');
-  assert(releaseUiFlowSubagentSmoke.includes("window.switchRightTab('subagent')") && releaseUiFlowSubagentSmoke.includes('window.openSubagentHistory(${JSON.stringify(childState.name)})') && releaseUiFlowSubagentSmoke.includes('Live history'), 'release ui Flow/subagent smoke: validates the streaming subagent history overlay');
+  assert(releaseUiFlowSubagentSmoke.includes("['SubAgent',") && releaseUiFlowSubagentSmoke.includes('subagent_send') && releaseUiFlowSubagentSmoke.includes('subagent_result') && releaseUiFlowSubagentSmoke.includes('subagent_close'), 'release ui Flow/subagent smoke: covers public SubAgent create, continue, result, and close');
+  assert(releaseUiFlowSubagentSmoke.includes("window.switchRightTab('subagent')") && releaseUiFlowSubagentSmoke.includes('window.openSubagentHistory(${JSON.stringify(childState.id)})') && releaseUiFlowSubagentSmoke.includes('Live history'), 'release ui Flow/subagent smoke: validates the exact-id-bound streaming SubAgent history overlay');
   assert(packageJson.includes('"release:ui-media-md-smoke"') && releaseUiMediaMdSmoke.includes('--remote-debugging-port=') && releaseUiMediaMdSmoke.includes('window.api.createWorkspace') && releaseUiMediaMdSmoke.includes('addMsg('), 'release ui media/md smoke: drives real packaged renderer without model spend');
   assert(releaseUiMediaMdSmoke.includes('data:image/gif;base64') && releaseUiMediaMdSmoke.includes('.msg-image') && releaseUiMediaMdSmoke.includes('.msg-file-link') && releaseUiMediaMdSmoke.includes('.md-table') && releaseUiMediaMdSmoke.includes('.md-math-inline') && releaseUiMediaMdSmoke.includes('.md-math-block'), 'release ui media/md smoke: validates conversation markdown image, file-link, table, and math rendering');
   assert(releaseUiMediaMdSmoke.includes("window.openFile('media-doc.md')") && releaseUiMediaMdSmoke.includes("window.openFile('media-link-target.txt')")
@@ -2094,9 +2110,10 @@ async function main() {
   const branchResult = await tools.execute('git_branch', '{"action":"current"}', auditRepo);
   assert(branchResult.trim().length > 0, 'git_branch: current branch returns local branch name');
 
-  // task (subagent placeholder)
+  // Legacy aliases remain executable for persisted history, while models only
+  // receive the unambiguous public SubAgent definition.
   const taskResult = await tools.execute('task', '{"name":"test-sub","prompt":"do work"}', TEST_DIR);
-  assert(taskResult.includes('Subagent'), 'task: returns placeholder');
+  assert(taskResult.includes('SubAgent'), 'legacy task alias: routes to SubAgent compatibility placeholder');
 
   // question
   const qResult = await tools.execute('question', '{"questions":[{"header":"Test","question":"Q?","options":[{"label":"A","description":"a"}]}]}', TEST_DIR);
@@ -2716,7 +2733,7 @@ async function main() {
   assert(subMgr.listActive().length === 1, 'listActive: 1 active');
 
   const sub = subMgr.get(subId);
-  assert(sub?.natureSlug === 'test-sub' && sub.name === 'test-sub' && /^test-sub-[0-9a-f]{8}$/.test(sub.displayName) && /^test-sub-[0-9a-f]{8}--[0-9a-f-]{36}$/.test(sub.qualifiedName), 'get: nature slug decoupled from identity; name is caller-supplied while display/qualified names carry short and full UUID ids');
+  assert(sub?.natureSlug === 'test-sub' && sub.name === 'test-sub' && sub.displayName === 'test-sub' && /^test-sub--[0-9a-f-]{36}$/.test(sub.qualifiedName), 'get: monitoring name matches the created SubAgent name while UUID identity stays separate');
   assert(sub?.status === 'queued', 'get: stays durably queued until an executor is bound');
 
   const sent = subMgr.send(subId, 'Continue work');
@@ -2836,12 +2853,26 @@ async function main() {
   assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'subagent.ts'), 'utf-8').includes('replaceContext') && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('subagentContextPersist'), 'Agent subagent context: compressed history and metadata persist back to the peer record');
    assert(fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes('this.notifyAgentKernelUserMessageStart(text, clientMessageId || undefined);') && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8').includes("return this.queueActiveKernelMessage(prompt, 'followUp', undefined, undefined, undefined, true)") && fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'conversationKernel.ts'), 'utf-8').includes('message: { text: prompt, hiddenUserInput: true }'), 'Agent subagent result delivery: initial process boundaries acknowledge persisted inbox messages and conversation-owned routing appends one next turn without feedback loops');
   const kernelRunnerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8').replace(/\r\n/g, '\n');
-  assert(kernelRunnerSource.includes('const selected = definitions')
-    && kernelRunnerSource.includes('SUBAGENT_CORE_TOOL_NAMES.has(name) && !selectedNames.has(name)')
-    && kernelRunnerSource.includes("const SUBAGENT_CORE_TOOL_NAMES = new Set(['task', 'subagent_list', 'subagent_read', 'subagent_send', 'subagent_result', 'subagent_close']);")
-    && kernelRunnerSource.includes('for (const name of SUBAGENT_CORE_TOOL_NAMES) {'),
-  'Agent subagent tool surface: task/subagent_* stay in the preloaded surface unconditionally (mode-policy gated) without stealing intent-tool slots');
+  const exposedToolNames = (taskAgent.cachedToolDefinitions() as any[]).map(definition => String(definition?.function?.name || ''));
+  assert(kernelRunnerSource.includes("const BASIC_INITIAL_TOOL_NAMES = new Set(['bash', 'pwd', 'read', 'write', 'edit', 'delete_file', 'glob', 'grep']);")
+    && kernelRunnerSource.includes('const ALWAYS_AVAILABLE_AGENT_TOOL_NAMES = BASIC_INITIAL_TOOL_NAMES;')
+    && kernelRunnerSource.includes("const SUBAGENT_CORE_TOOL_NAMES = new Set(['SubAgent', 'subagent_list', 'subagent_read', 'subagent_send', 'subagent_result', 'subagent_close']);")
+    && kernelRunnerSource.includes("const TASK_CHECKLIST_CORE_TOOL_NAMES = new Set(['task_read', 'task_create']);")
+    && kernelRunnerSource.includes('definitions.filter(definition => BASIC_INITIAL_TOOL_NAMES.has(toolDefinitionName(definition)))')
+    && kernelRunnerSource.includes('advanced tools are advertised by capability')
+    && exposedToolNames.includes('SubAgent')
+    && exposedToolNames.includes('task_read')
+    && exposedToolNames.includes('task_create')
+    && exposedToolNames.includes('read')
+    && exposedToolNames.includes('bash')
+    && !exposedToolNames.includes('task')
+    && !exposedToolNames.includes('subagent_create'),
+  'Agent tool surface: foundational workspace tools preload while SubAgent/task/other advanced schemas remain catalogued for tool_provision and legacy aliases stay hidden');
   const agentSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agent.ts'), 'utf-8');
+  assert(agentSource.includes('Use the `SubAgent` tool to create specialized SubAgents')
+    && agentSource.includes('Use `task_create` only for the conversation checklist')
+    && !agentSource.includes('Use the `task` tool to create specialized SubAgents'),
+  'Agent orchestrator prompt: public SubAgent creation is distinct from task_create checklist maintenance');
   const subagentSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'subagent.ts'), 'utf-8');
   assert(subagentSource.includes('tool_call_id?: string') && subagentSource.includes('tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>'),
     'Agent subagent context: peer transcript records preserve kernel tool-call metadata');
@@ -4144,6 +4175,8 @@ async function main() {
     intelligenceConfig: () => ({ temperature: 0, maxTokens: 500 }),
     async *chatStreamWithTools(): AsyncGenerator<StreamToken> {
       if (memoryReceiptRound++ === 0) {
+        yield { type: 'tool_call', text: '', toolCall: { id: 'provision-memory-update', name: 'tool_provision', arguments: JSON.stringify({ names: ['memory_lab_update'] }) } };
+      } else if (memoryReceiptRound === 2) {
         yield { type: 'tool_call', text: '', toolCall: { id: 'call-memory-receipt', name: 'memory_lab_update', arguments: JSON.stringify({ name: 'receipt-gated-memory', description: 'receipt gate', tags: ['#Receipt-Gate'], content: 'Receipt gated content.' }) } };
       } else {
         yield { type: 'text', text: 'MEMORY_RECEIPT_FINAL' };
@@ -4169,6 +4202,8 @@ async function main() {
     intelligenceConfig: () => ({ temperature: 0, maxTokens: 500 }),
     async *chatStreamWithTools(): AsyncGenerator<StreamToken> {
       if (memoryFailureRound++ === 0) {
+        yield { type: 'tool_call', text: '', toolCall: { id: 'provision-memory-reindex', name: 'tool_provision', arguments: JSON.stringify({ names: ['memory_lab_reindex'] }) } };
+      } else if (memoryFailureRound === 2) {
         yield { type: 'tool_call', text: '', toolCall: { id: 'call-memory-failure', name: 'memory_lab_reindex', arguments: '{}' } };
       } else {
         yield { type: 'text', text: 'MUST_NOT_COMPLETE_WITHOUT_RECEIPT' };
@@ -4193,12 +4228,23 @@ async function main() {
   assert(flowPrompt.includes('logic components') && flowPrompt.includes('true/false'), 'buildSystemPrompt: flow prompt constrains logic routing replies');
 
   const flowTriggerCalls: string[] = [];
+  let flowTriggerRound = 0;
   const flowTriggerProvider = {
     intelligenceConfig: () => ({ temperature: 0, maxTokens: 100 }),
     async *chatStreamWithTools(_model: string, messages: Array<Record<string, unknown>>): AsyncGenerator<StreamToken> {
       const lastUser = [...messages].reverse().find(m => m.role === 'user')?.content || '';
       flowTriggerCalls.push(String(lastUser));
-      if (flowTriggerCalls.length === 1) {
+      if (flowTriggerRound++ === 0) {
+        yield {
+          type: 'tool_call',
+          text: '',
+          toolCall: {
+            id: 'provision-flow-run',
+            name: 'tool_provision',
+            arguments: JSON.stringify({ names: ['flow_run'] }),
+          },
+        };
+      } else if (flowTriggerRound === 2) {
         yield {
           type: 'tool_call',
           text: '',
@@ -4208,8 +4254,6 @@ async function main() {
             arguments: JSON.stringify({ name: 'agent-trigger-flow', input: 'runtime input' }),
           },
         };
-      } else if (flowTriggerCalls.length === 2) {
-        yield { type: 'text', text: 'FLOW_COMPONENT_DONE' };
       } else {
         yield { type: 'text', text: 'PARENT_DONE' };
       }
@@ -4236,6 +4280,16 @@ async function main() {
     async *chatStreamWithTools(): AsyncGenerator<StreamToken> {
       autoToolRound++;
       if (autoToolRound === 1) {
+        yield {
+          type: 'tool_call',
+          text: '',
+          toolCall: {
+            id: 'provision-auto-create',
+            name: 'tool_provision',
+            arguments: JSON.stringify({ names: ['automation_create'] }),
+          },
+        };
+      } else if (autoToolRound === 2) {
         yield {
           type: 'tool_call',
           text: '',
@@ -4312,6 +4366,8 @@ async function main() {
     async *chatStreamWithTools(_model: string, messages: Array<Record<string, unknown>>): AsyncGenerator<StreamToken> {
       visionMessagesSeen.push(messages);
       if (visionRound++ === 0) {
+        yield { type: 'tool_call', text: '', toolCall: { id: 'provision-computer-use', name: 'tool_provision', arguments: JSON.stringify({ names: ['computer_use'] }) } };
+      } else if (visionRound === 2) {
         yield { type: 'tool_call', text: '', toolCall: { id: 'call-computer-observe', name: 'computer_use', arguments: JSON.stringify({ action: 'observe' }) } };
       } else {
         yield { type: 'text', text: 'COMPUTER_VISION_DONE' };
@@ -4321,7 +4377,7 @@ async function main() {
   };
   (visionAgent as any).forcedProvider = visionComputerProvider;
   const visionComputerTokens = await visionAgent.process('Use Computer Use with vision');
-  const postObserveMessages = visionMessagesSeen[1] || [];
+  const postObserveMessages = [...visionMessagesSeen].reverse().find(messages => messages.some(m => m.role === 'tool' && m.name === 'computer_use')) || [];
   const computerToolMessage = [...postObserveMessages].reverse().find(m => m.role === 'tool' && m.name === 'computer_use');
   const computerVisionMessage = postObserveMessages.find(m => m.role === 'user' && Array.isArray(m.content) && m.content.some((part: Record<string, any>) => part?.type === 'image_url'));
   const computerVisionContent = Array.isArray(computerVisionMessage?.content) ? computerVisionMessage.content as Array<Record<string, any>> : [];

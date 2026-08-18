@@ -273,6 +273,18 @@ firstRunInit(root, { readOnly: isReadOnlyValidation });
 if (isGui) {
   launchGui();
 } else if (isTui) {
+  // 远程触及开关开启 → 后端托管启动 mobile server（不阻塞 TUI 其他功能；TUI 退出即随终端托管结束）
+  try {
+    const { ConfigManager } = require('./core/config') as typeof import('./core/config');
+    const tuiConfig = new ConfigManager(root);
+    if (tuiConfig.getBool('remote', 'touch_enabled')) {
+      const { runServer } = require('./server') as typeof import('./server');
+      runServer(root);
+      console.log('[Newmark] mobile server hosted (remote touch enabled)');
+    }
+  } catch (error) {
+    console.error('[Newmark] TUI hosted mobile server failed:', error instanceof Error ? error.message : String(error));
+  }
   const { start } = require('./tui/src/app');
   start({ root, workspacePath: resolveTuiWorkspacePath(args, root), desktopDist: __dirname });
 } else if (hasCliCommand) {
@@ -322,17 +334,7 @@ if (isGui) {
   const { runCli } = require('./cli');
   runCli(root);
 } else {
-  // Server mode - start HTTP server and open browser
+  // Server mode - start HTTP server（不绑定启动浏览器）
   const { runServer } = require('./server');
   runServer(root);
-  if (!args.includes('--no-browser')) {
-    const { exec } = require('child_process');
-    const port = 47890;
-    const cmd = process.platform === 'win32'
-      ? `start http://localhost:${port}`
-      : process.platform === 'darwin'
-      ? `open http://localhost:${port}`
-      : `xdg-open http://localhost:${port}`;
-    exec(cmd);
-  }
 }

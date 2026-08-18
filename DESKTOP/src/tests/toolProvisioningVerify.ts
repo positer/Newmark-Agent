@@ -86,13 +86,17 @@ async function main(): Promise<void> {
       'desktop catalog includes platform and model-dependent tools');
 
     const Session = agentKernelRunnerInternals.ToolProvisionSession;
-    const coreNames = [...agentKernelRunnerInternals.SUBAGENT_CORE_TOOL_NAMES].filter(name => names.includes(name));
-    const initialCoreOnly = [...names.filter(name => coreNames.includes(name)), agentKernelRunnerInternals.TOOL_PROVISION_NAME];
-    const firstTurnSurface = [...names.filter(name => coreNames.includes(name)), agentKernelRunnerInternals.TOOL_PROVISION_NAME];
+    const basicNames = [...agentKernelRunnerInternals.BASIC_INITIAL_TOOL_NAMES].filter(name => names.includes(name));
+    const initialCoreOnly = [...names.filter(name => basicNames.includes(name)), agentKernelRunnerInternals.TOOL_PROVISION_NAME];
+    const firstTurnSurface = [...names.filter(name => basicNames.includes(name)), agentKernelRunnerInternals.TOOL_PROVISION_NAME];
     const emptySession = new Session(catalog, []);
     const initial = emptySession.currentDefinitions() as ToolDefinition[];
     assert.deepEqual(initial.map(toolName), initialCoreOnly,
-      'conversational initialization carries only the always-available subagent core plus the broker schema');
+      'initialization carries only the eight foundational workspace schemas plus the broker schema');
+    assert.deepEqual(basicNames.sort(), ['bash', 'delete_file', 'edit', 'glob', 'grep', 'pwd', 'read', 'write'],
+      'the foundational initial surface is exactly bash/pwd/read/write/edit/delete_file/glob/grep');
+    assert.ok(!initial.map(toolName).includes('SubAgent') && !initial.map(toolName).includes('task_create'),
+      'SubAgent and task checklist are advanced provision-only capabilities');
     const broker = initial.find(definition => toolName(definition) === agentKernelRunnerInternals.TOOL_PROVISION_NAME)!;
     assert.deepEqual(brokerCatalogNames(broker), names,
       'broker compact catalog names exactly match the complete policy-filtered callable catalog');
@@ -100,7 +104,7 @@ async function main(): Promise<void> {
       'compact broker catalog is materially smaller than every full tool schema');
     const initialMetrics = emptySession.metrics();
     assert.ok(initialMetrics.catalogToolCount === names.length
-      && initialMetrics.initialToolCount === coreNames.length
+      && initialMetrics.initialToolCount === basicNames.length
       && initialMetrics.provisionedToolCount === 0
       && initialMetrics.activeSurfaceEstimatedTokens < initialMetrics.fullCatalogEstimatedTokens * 0.55,
     'provision metrics quantify the compact initial surface without exposing catalog content');
@@ -108,7 +112,7 @@ async function main(): Promise<void> {
     for (const definition of catalog) {
       const name = toolName(definition);
       const session = new Session(catalog, []);
-      if (coreNames.includes(name)) {
+      if (basicNames.includes(name)) {
         const visible = (session.currentDefinitions() as ToolDefinition[]).find(item => toolName(item) === name);
         assert.deepEqual(visible, definition, `${name} core schema is preloaded with its original name, description, and JSON schema`);
         continue;
@@ -160,19 +164,18 @@ async function main(): Promise<void> {
     assert.equal(guarded.provision({ names: ['pwd'] }).error?.code, 'call_limit', 'broker calls are bounded per run');
 
     const capacitySession = new Session(catalog, []);
-    assert.equal(capacitySession.provision({ names: names.slice(0, 8) }).provisioned.length, 8);
-    assert.equal(capacitySession.provision({ names: names.slice(8, 16) }).provisioned.length, 8);
-    assert.deepEqual(capacitySession.provision({ names: [names[16]] }).deferred, [names[16]],
+    const advancedNames = names.filter(name => !basicNames.includes(name));
+    assert.equal(capacitySession.provision({ names: advancedNames.slice(0, 8) }).provisioned.length, 8);
+    assert.equal(capacitySession.provision({ names: advancedNames.slice(8, 16) }).provisioned.length, 8);
+    assert.deepEqual(capacitySession.provision({ names: [advancedNames[16]] }).deferred, [advancedNames[16]],
       'one run can expose at most sixteen additional full schemas');
 
     agent.history.push({ role: 'user', content: 'Fix the repository and then use git_status.' });
     const toolchainCore = seedToolchainFromDefinitions(catalog, { namespace: 'newmark', version: '1.0.0' }).core;
     const routedSurface = agentKernelRunnerInternals.routeToolSurfaceV2(agent, catalog, toolchainCore, 'Fix the repository and then use git_status.');
     agent.history.pop();
-    assert.ok(routedSurface.definitions.length <= agentKernelRunnerInternals.INITIAL_TOOL_SCHEMA_LIMIT + coreNames.length
-      && routedSurface.definitions.some(definition => toolName(definition) === 'git_status')
-      && toolName(routedSurface.definitions[0]) === 'git_status',
-    'initial preload is capped (intent slice plus the always-available subagent core) and prioritizes an explicitly named tool');
+    assert.deepEqual(routedSurface.definitions.map(toolName), names.filter(name => basicNames.includes(name)),
+      'explicit advanced-tool intent does not bypass the foundational-only initial schema boundary');
 
     agent.history.push({ role: 'user', content: 'Fix the repository and then use git_push.' });
     const destructiveSurface = agentKernelRunnerInternals.routeToolSurfaceV2(agent, catalog, toolchainCore, 'Fix the repository and then use git_push.');
@@ -255,9 +258,9 @@ async function main(): Promise<void> {
         providerSystems.push(system);
         if (providerTurn++ === 0) {
           yield { type: 'text', text: 'INTERNAL_PROVISION_PREFACE' };
-          yield { type: 'tool_call', text: '', toolCall: { id: 'provision-pwd', name: 'tool_provision', arguments: JSON.stringify({ names: ['pwd'] }) } };
+          yield { type: 'tool_call', text: '', toolCall: { id: 'provision-git-status', name: 'tool_provision', arguments: JSON.stringify({ names: ['git_status'] }) } };
         } else if (providerTurn === 2) {
-          yield { type: 'tool_call', text: '', toolCall: { id: 'call-pwd', name: 'pwd', arguments: '{}' } };
+          yield { type: 'tool_call', text: '', toolCall: { id: 'call-git-status', name: 'git_status', arguments: '{}' } };
         } else {
           yield { type: 'text', text: 'BROKER_EXECUTION_OK' };
         }
@@ -270,20 +273,23 @@ async function main(): Promise<void> {
       if (event.toolName) publicToolEvents.push(event.toolName);
     });
     const output = (await agent.process('Complete the request without assuming unavailable interfaces.')).map(token => token.text || '').join('');
-    assert.deepEqual(providerTurns[0], firstTurnSurface, 'first provider request carries the always-available subagent core plus the compact broker for ordinary chat');
-    assert.ok(providerTurns[1].includes('pwd') && providerTurns[1].includes('tool_provision'),
+    assert.deepEqual(providerTurns[0], firstTurnSurface, 'first provider request carries the foundational workspace schemas plus the compact broker');
+    assert.ok(providerTurns[1].includes('git_status') && providerTurns[1].includes('tool_provision'),
       'broker result refreshes the next provider request in the same user run');
     assert.ok(providerTurns[1].length < catalog.length, 'dynamic refresh does not expand back to the whole catalog');
     assert.ok(providerSystems[0].includes('## Build Context Bootstrap')
       && providerSystems[0].includes('## Tool Awareness Bootstrap')
-      && providerSystems[0].includes('pwd:')
+      && providerSystems[0].includes('Only bash, pwd, read, write, edit, delete_file, glob, and grep are foundational tools')
+      && providerSystems[0].includes('Advanced capabilities—including SubAgent, task tools, Git/GitHub, browser, Computer Use, skills, MCP, automations, Flow, and Memory Lab—are not initially callable')
+      && providerSystems[0].includes('first call tool_provision with its exact tool name as the only tool call')
+      && providerSystems[0].includes('git_status:')
       && providerSystems[0].includes(`Necessary full schemas supplied natively for this provider turn: ${firstTurnSurface.filter(name => name !== agentKernelRunnerInternals.TOOL_PROVISION_NAME).join(', ')}`),
     'the first Build request receives the full brief catalog and identifies schemas supplied through the native tools field');
     assert.ok(providerSystems.slice(1).every(system => !system.includes('## Build Context Bootstrap') && !system.includes('## Tool Awareness Bootstrap')),
       'broker and real-tool subturns do not repeat the Build bootstrap');
     assert.ok(output.includes('BROKER_EXECUTION_OK'), 'newly provisioned original tool executes and the run completes');
     assert.ok(!output.includes('INTERNAL_PROVISION_PREFACE'), 'short broker-only prefaces never enter public output');
-    assert.ok(publicToolEvents.includes('pwd') && !publicToolEvents.includes('tool_provision'),
+    assert.ok(publicToolEvents.includes('git_status') && !publicToolEvents.includes('tool_provision'),
       'internal provisioning is hidden while the real tool keeps normal work events');
     assert.ok(!JSON.stringify(agent.history).includes('tool_provision'), 'broker calls and results are not persisted in public conversation history');
 
@@ -335,7 +341,7 @@ async function main(): Promise<void> {
       const reachOutput = (await probe.process('Continue using the available capability boundary.'))
         .map(token => token.text || '')
         .join('');
-      assert.deepEqual(reachTurns[0].map(toolName), firstTurnSurface, `${targetName} starts behind the compact broker and subagent core boundary`);
+      assert.deepEqual(reachTurns[0].map(toolName), firstTurnSurface, `${targetName} starts behind the foundational schema and compact broker boundary`);
       const reachedDefinition = reachTurns[1]?.find(definition => toolName(definition) === targetName);
       assert.deepEqual(reachedDefinition, catalog.find(definition => toolName(definition) === targetName),
         `${targetName} original schema reaches the next provider subturn without drift`);

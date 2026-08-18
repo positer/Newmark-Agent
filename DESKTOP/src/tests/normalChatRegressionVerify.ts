@@ -230,8 +230,9 @@ async function main(): Promise<void> {
     const detailedRoute = agentKernelRunnerInternals.routeToolSurfaceV2(
       { shouldExposeToolInterface: () => true, runtimeActorId: 'regression-actor', activeConversationId: 'build', history: [] } as unknown as Agent,
       buildCatalog, buildToolchain, '上个任务具体做了什么？');
-    assert.ok(detailedRoute.definitions.some((tool: any) => tool.function?.name === 'build_history_query'),
-      'history-detail intent preloads the Build history query schema');
+    assert.ok(!detailedRoute.definitions.some((tool: any) => tool.function?.name === 'build_history_query')
+      && detailedRoute.systemPromptNotice.includes('tool_provision'),
+    'history-detail intent keeps the advanced Build history query behind explicit provisioning');
     let historyQueryRound = 0;
     let historyQueryToolResult = '';
     const historyQueryProvider = {
@@ -245,8 +246,15 @@ async function main(): Promise<void> {
         tools: Array<any>,
       ): AsyncGenerator<StreamToken> {
         if (historyQueryRound++ === 0) {
+          assert.ok(!tools.some(tool => tool.function?.name === 'build_history_query')
+            && tools.some(tool => tool.function?.name === 'tool_provision'),
+          'history-detail request starts with the foundational surface and compact broker');
+          yield { type: 'tool_call', text: '', toolCall: { id: 'history-query-provision', name: 'tool_provision', arguments: JSON.stringify({ names: ['build_history_query'] }) } };
+          return;
+        }
+        if (historyQueryRound === 2) {
           assert.ok(tools.some(tool => tool.function?.name === 'build_history_query'),
-            'history-detail request exposes the query schema on the first provider turn');
+            'history query schema appears on the provider turn after provisioning');
           yield { type: 'tool_call', text: '', toolCall: { id: 'history-query-call', name: 'build_history_query', arguments: JSON.stringify({ history_index: 1 }) } };
           return;
         }

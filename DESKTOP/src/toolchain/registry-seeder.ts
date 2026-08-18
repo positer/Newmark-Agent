@@ -74,7 +74,8 @@ export function inferDomain(name: string): string {
   }
   if (name === 'question') return 'interaction';
   if (name === 'skill') return 'skills';
-  if (name === 'task') return 'subagent';
+  if (name === 'task' || name === 'subagent_create' || name === 'SubAgent') return 'subagent';
+  if (/^task_(read|create)$/.test(name)) return 'plan';
   if (/^(linked_plan|build_history_query)$/.test(name)) return 'plan';
   return 'general';
 }

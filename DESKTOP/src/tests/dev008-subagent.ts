@@ -26,13 +26,72 @@ async function main(): Promise<void> {
   await tick();
   assert.strictEqual(manager.listAll().filter(item => item.status === 'working').length, 4);
   assert.strictEqual(manager.get(ids[4])?.status, 'queued');
-  assert.strictEqual(manager.get(ids[0])?.name, 'review-1');
-  assert.match(manager.get(ids[0])?.displayName || '', /^review-1-[0-9a-f]{8}$/);
-  assert.match(manager.get(ids[0])?.qualifiedName || '', /^review-1-[0-9a-f]{8}--[0-9a-f-]{36}$/);
+  assert.strictEqual(manager.get(ids[0])?.name, 'Review 1');
+  assert.strictEqual(manager.get(ids[0])?.displayName, 'Review 1');
+  assert.match(manager.get(ids[0])?.qualifiedName || '', /^review-1--[0-9a-f-]{36}$/);
   releases.get(ids[0])?.();
   await tick();
   await tick();
   assert.strictEqual(starts[4], ids[4]);
+
+  // Hard creation ceilings are scoped to the currently running Build Block.
+  // Excess calls must fail before a peer record or queue entry is created.
+  const limitRoot = path.join(process.cwd(), 'test-tmp-dev008-build-limits');
+  fs.rmSync(limitRoot, { recursive: true, force: true });
+  const limitAgent = new Agent(limitRoot, { agentOnly: true });
+  limitAgent.subagents.pauseScheduling();
+  limitAgent.setIntelligence('medium');
+  const unboundRejected = await limitAgent.handleSubagentEnvelope(JSON.stringify({ name: 'unbound', prompt: 'must terminate without a Build' }), true);
+  assert.strictEqual(unboundRejected.ok, false);
+  assert.strictEqual(unboundRejected.metadata?.terminated, true);
+  assert.strictEqual(limitAgent.subagents.listAll().length, 0);
+  limitAgent.beginConversationWorkRun('medium-build-limit');
+  const mediumAccepted = [];
+  for (let index = 0; index < 4; index++) {
+    mediumAccepted.push(await limitAgent.handleSubagentEnvelope(JSON.stringify({ name: `medium-${index + 1}`, prompt: 'hold queued for hard-limit verification' })));
+  }
+  const mediumRejected = await limitAgent.handleSubagentEnvelope(JSON.stringify({ name: 'medium-5', prompt: 'must terminate' }));
+  assert.ok(mediumAccepted.every(result => result.ok && result.data?.buildRunId === 'medium-build-limit' && result.data?.intelligenceTier === 'medium'));
+  assert.strictEqual(mediumRejected.ok, false);
+  assert.strictEqual(mediumRejected.metadata?.terminated, true);
+  assert.strictEqual(mediumRejected.metadata?.limit, 4);
+  assert.strictEqual(limitAgent.subagents.listAll().filter(record => record.buildRunId === 'medium-build-limit').length, 4);
+  limitAgent.finishConversationWorkRun('medium-build-limit', 'completed');
+
+  // SubAgent is now a concurrency-safe creation tool. Concurrent admission
+  // must still preserve the medium Build hard ceiling atomically.
+  const concurrentRoot = path.join(process.cwd(), 'test-tmp-dev008-concurrent-build-limit');
+  fs.rmSync(concurrentRoot, { recursive: true, force: true });
+  const concurrentAgent = new Agent(concurrentRoot, { agentOnly: true });
+  concurrentAgent.subagents.pauseScheduling();
+  concurrentAgent.setIntelligence('medium');
+  concurrentAgent.beginConversationWorkRun('medium-concurrent-limit');
+  const concurrentResults = await Promise.all(Array.from({ length: 5 }, (_, index) => concurrentAgent.handleSubagentEnvelope(JSON.stringify({
+    name: `concurrent-${index + 1}`,
+    prompt: 'concurrent hard-limit verification',
+  }))));
+  assert.strictEqual(concurrentResults.filter(result => result.ok).length, 4);
+  assert.strictEqual(concurrentResults.filter(result => !result.ok && result.metadata?.terminated === true).length, 1);
+  assert.strictEqual(concurrentAgent.subagents.listAll().filter(record => record.buildRunId === 'medium-concurrent-limit').length, 4);
+  concurrentAgent.abortActiveKernelRun();
+  fs.rmSync(concurrentRoot, { recursive: true, force: true });
+
+  limitAgent.setIntelligence('ultra');
+  assert.strictEqual(limitAgent.subagents.concurrencyLimit(), 16);
+  limitAgent.beginConversationWorkRun('ultra-build-limit');
+  for (let index = 0; index < 16; index++) {
+    const accepted = await limitAgent.handleSubagentEnvelope(JSON.stringify({ name: `ultra-${index + 1}`, prompt: 'hold queued for Ultra hard-limit verification' }));
+    assert.strictEqual(accepted.ok, true);
+    assert.strictEqual(accepted.data?.buildRunId, 'ultra-build-limit');
+    assert.strictEqual(accepted.data?.intelligenceTier, 'ultra');
+  }
+  const ultraRejected = await limitAgent.handleSubagentEnvelope(JSON.stringify({ name: 'ultra-17', prompt: 'must terminate' }));
+  assert.strictEqual(ultraRejected.ok, false);
+  assert.strictEqual(ultraRejected.metadata?.terminated, true);
+  assert.strictEqual(ultraRejected.metadata?.limit, 16);
+  assert.strictEqual(limitAgent.subagents.listAll().filter(record => record.buildRunId === 'ultra-build-limit').length, 16);
+  limitAgent.abortActiveKernelRun();
+  fs.rmSync(limitRoot, { recursive: true, force: true });
   assert.strictEqual(manager.get(ids[4])?.status, 'working');
 
   const first = manager.get(ids[0]);
@@ -243,6 +302,7 @@ async function main(): Promise<void> {
 
   assert.strictEqual(evaluateToolPolicy({ name: 'write', mode: 'plan' }).allowed, false);
   assert.strictEqual(evaluateToolPolicy({ name: 'task', mode: 'plan', isSubagent: true }).allowed, true);
+  assert.strictEqual(evaluateToolPolicy({ name: 'SubAgent', mode: 'plan', isSubagent: true }).allowed, true);
   assert.strictEqual(evaluateToolPolicy({ name: 'skill_download', mode: 'plan' }).allowed, false);
   assert.strictEqual(evaluateToolPolicy({ name: 'computer_use', mode: 'plan', args: { action: 'observe' } }).allowed, true);
   assert.strictEqual(evaluateToolPolicy({ name: 'computer_use', mode: 'plan', args: { action: 'click' } }).allowed, false);

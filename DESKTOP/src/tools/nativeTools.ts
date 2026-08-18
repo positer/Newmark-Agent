@@ -36,7 +36,7 @@ export const NATIVE_TOOL_CATALOG: NativeToolCatalogEntry[] = [
   { name: 'pdf_read', label: 'PDF read', description: 'Read PDF text and render scanned pages through vision before local OCR fallback.', category: 'core', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'terminal_takeover', label: 'Terminal takeover', description: 'Maintain a persistent Agent-controlled shell session.', category: 'desktop', defaultEnabled: true },
   { name: 'ssh_workspace', label: 'OpenSSH workspace', description: 'Manage native OpenSSH connections and link remote workspaces by PC_Hash.', category: 'ssh', defaultEnabled: true },
-  { name: 'task', label: 'Subagent task', description: 'Create a same-conversation peer agent.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
+  { name: 'SubAgent', label: 'SubAgent', description: 'Create one real same-conversation peer SubAgent.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'subagent_list', label: 'Subagent list', description: 'List same-conversation peer agents.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'subagent_read', label: 'Subagent read', description: 'Read bounded status, feedback, result, queue, and mailbox summaries for a same-conversation peer.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'subagent_send', label: 'Subagent send', description: 'Persist a message to a peer mailbox.', category: 'agent', defaultEnabled: true, protected: true, availability: 'mode-scoped' },

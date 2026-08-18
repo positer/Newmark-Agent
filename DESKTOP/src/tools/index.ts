@@ -383,7 +383,7 @@ export class ToolExecutor {
         remote_root: { type: 'string' },
         remote_path: { type: 'string' },
       }, ['action']),
-      t('task', 'Create a same-conversation peer agent and return immediately. The peer has a stable human-readable name, a short id, and a canonical UUID-qualified identity. The peer name is decoupled from its id: pass name for readable references and id for exact targeting. Pass model to select an exact configured model deployment (deployment:providerId:modelId or an unambiguous provider/model name). When model is omitted, the peer inherits the parent Agent\'s currently resolved model deployment. Plan mode peers are forced to Plan.', { nature: { type: 'string' }, name: { type: 'string', description: 'Legacy alias for nature.' }, prompt: { type: 'string' }, preset: { type: 'string' }, agent: { type: 'string' }, model: { type: 'string', description: 'Optional exact model deployment. Omit to inherit the parent Agent resolved model.' }, mode: { type: 'string' }, input_mode: { type: 'string' }, flow: { type: 'string' } }, ['prompt']),
+      t('SubAgent', 'Create one real same-conversation peer SubAgent and return immediately. This tool is only for delegation; never use it to create or update the conversation task checklist (use task_create for that). Creation is bound to the currently running Build Block: non-Ultra intelligence has a hard ceiling of 4 active peers for that Build, Ultra has 16, and excess calls terminate without creating or queueing a record. The peer has a stable human-readable name plus a separate exact id. Pass model to select an exact configured model deployment (deployment:providerId:modelId or an unambiguous provider/model name). When model is omitted, the peer inherits the parent Agent\'s currently resolved model deployment. Plan mode peers are forced to Plan.', { name: { type: 'string', description: 'Human-readable SubAgent name shown in the monitoring sidebar. Omit only when a named preset supplies it.' }, nature: { type: 'string', description: 'Legacy alias for name.' }, prompt: { type: 'string', description: 'Work delegated to this SubAgent; this is not a checklist item.' }, preset: { type: 'string' }, agent: { type: 'string' }, model: { type: 'string', description: 'Optional exact model deployment. Omit to inherit the parent Agent resolved model.' }, mode: { type: 'string' }, input_mode: { type: 'string' }, flow: { type: 'string' } }, ['prompt']),
       t('subagent_list', 'List flat same-conversation peer agents, optionally filtered by status. Each entry exposes both the stable name and the exact id; use the id for any subsequent targeting.', { status: { type: 'string', enum: ['idle', 'queued', 'working', 'completed', 'error', 'closed'] } }, []),
       t('subagent_read', 'Read one same-conversation peer status, queue/mailbox summary, latest bounded feedback, and result. Available for running, queued, completed, error, and closed peers. Pass the exact id returned by subagent_list, or a name for convenience lookup.', { id: { type: 'string', description: 'Exact peer id from subagent_list.' }, name: { type: 'string', description: 'Convenience peer name; ambiguous names resolve to the first match.' }, max_chars: { type: 'number', description: 'Bounded result size from 2000 to 32000 characters.' } }, []),
       t('subagent_send', 'Persist a mailbox message to a same-conversation peer agent. Target by exact id (preferred) or name.', { id: { type: 'string', description: 'Exact peer id from subagent_list.' }, name: { type: 'string', description: 'Convenience peer name.' }, message: { type: 'string' }, prompt: { type: 'string', description: 'Legacy alias for message.' }, kind: { type: 'string', enum: ['directive', 'question', 'result', 'handoff'] }, reply_to: { type: 'string' }, correlation_id: { type: 'string' } }, []),
@@ -568,7 +568,11 @@ export class ToolExecutor {
   }
 
   validateInvocation(tool: string, argsStr: string, _mode = '', inputSchema?: unknown): { ok: true; args: Record<string, unknown> } | { ok: false; error: string } {
-    if (inputSchema === undefined && !isNativeToolEnabled(tool, this.config.nativeToolEnabled())) {
+    // Persisted work history may replay the old create aliases. They share the
+    // public SubAgent schema and enablement, but are never advertised back to
+    // the model as independent tools.
+    const schemaTool = tool === 'task' || tool === 'subagent_create' ? 'SubAgent' : tool;
+    if (inputSchema === undefined && !isNativeToolEnabled(schemaTool, this.config.nativeToolEnabled())) {
       return { ok: false, error: `[tool disabled] ${tool} is disabled in Settings > Tools.` };
     }
     let parsed: unknown;
@@ -599,12 +603,12 @@ export class ToolExecutor {
       // catalogs may advertise a narrower enum, but a structurally valid
       // hidden call must reach evaluateToolPolicy so it is classified as a
       // policy denial rather than a misleading schema failure.
-      ? (this.definitions() as any[]).find(candidate => candidate.function?.name === tool)
+      ? (this.definitions() as any[]).find(candidate => candidate.function?.name === schemaTool)
       : { function: { name: tool, parameters: inputSchema } };
     if (!definition) {
       return { ok: false, error: `[tool unsupported] ${tool || '(missing tool)'} is not available for the ${this.hostProfile.kind} host on ${this.hostProfile.platform}.` };
     }
-    const validation = this.argumentValidators.validate(tool, definition.function.parameters, args);
+    const validation = this.argumentValidators.validate(schemaTool, definition.function.parameters, args);
     return validation.ok ? { ok: true, args } : { ok: false, error: `[tool schema error] ${validation.error}` };
   }
 
@@ -918,7 +922,9 @@ export class ToolExecutor {
           });
         }
         case 'ssh_workspace': return await this.sshWorkspace(args, wsPath, context.signal);
-        case 'task': return `[task] Subagent request accepted: ${g('name')}`;
+        case 'task':
+        case 'subagent_create':
+        case 'SubAgent': return `[SubAgent] SubAgent request accepted: ${g('name')}`;
         case 'subagent_send': return `[subagent_send] Routed to Agent runtime: ${g('name')}`;
         case 'subagent_read': return `[subagent_read] Routed to Agent runtime: ${g('name') || g('id')}`;
         case 'subagent_result': return `[subagent_result] Routed to Agent runtime: ${g('name')}`;

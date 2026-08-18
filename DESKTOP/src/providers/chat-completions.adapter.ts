@@ -53,14 +53,18 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
       ...openAIChatMessages(request.messages as unknown as Array<Record<string, unknown>>),
     ];
 
+    const tools = this.serializeTools(request.tools);
     const body: Record<string, unknown> = {
       model: request.model,
       messages,
       temperature: request.temperature,
       max_tokens: request.maxOutputTokens,
-      tools: this.serializeTools(request.tools),
-      tool_choice: 'auto',
     };
+    if (tools.length) {
+      body.tools = tools;
+      body.tool_choice = 'auto';
+      body.parallel_tool_calls = true;
+    }
     if (request.reasoningEffort) body.reasoning_effort = request.reasoningEffort;
     // 会话标识透传：仅当上层（支持 session_id 语义的 provider）显式填充时写进
     // body，否则省略，避免严格 API 拒绝未知字段。

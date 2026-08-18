@@ -101,4 +101,5 @@ fs.writeFileSync(spriteDist, sprite, 'utf8');
 fs.copyFileSync(startupSrc, startupDist);
 writeCompactPng(path.join(root, 'assets', 'app-icon-dark.png'), path.join(distAssets, 'app-icon-dark-64.png'));
 writeCompactPng(path.join(root, 'assets', 'app-icon-light.png'), path.join(distAssets, 'app-icon-light-64.png'));
+fs.copyFileSync(path.join(root, 'assets', 'app-icon-dark.svg'), path.join(distAssets, 'app-icon-dark.svg'));
 console.log(`ui icons embedded ${usedIconNames.size} used Lucide symbols from lucide-static`);

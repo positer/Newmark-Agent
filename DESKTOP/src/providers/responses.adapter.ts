@@ -98,6 +98,7 @@ export class ResponsesAdapter implements ModelProviderAdapter {
     if (tools.length) {
       body.tools = tools;
       body.tool_choice = 'auto';
+      body.parallel_tool_calls = true;
     }
 
     const base = request.baseUrl.replace(/\/+$/, '');

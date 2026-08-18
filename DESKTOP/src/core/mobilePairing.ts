@@ -82,8 +82,20 @@ export function tailscaleIpv4(): string | null {
   }
 }
 
+export function lanIpv4(): string | null {
+  const interfaces = os.networkInterfaces();
+  const candidates: string[] = [];
+  for (const name of Object.keys(interfaces)) {
+    for (const info of interfaces[name] || []) {
+      if (info.family !== 'IPv4' || info.internal) continue;
+      if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(info.address)) candidates.push(info.address);
+    }
+  }
+  return candidates.sort()[0] || null;
+}
+
 export function pairingHost(): string {
-  return tailscaleIpv4() || '127.0.0.1';
+  return tailscaleIpv4() || lanIpv4() || '127.0.0.1';
 }
 
 function buildPairingUrl(session: PairingSession): string {

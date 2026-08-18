@@ -115,8 +115,8 @@ function startMockServer() {
     ['flow_list', {}],
   ];
   const subagentSteps = [
-    ['tool_provision', { names: ['task', 'subagent_send', 'subagent_result', 'subagent_close'] }],
-    ['task', { name: 'release-child', prompt: 'SUBAGENT_INITIAL_PROMPT', model: 'release-ui-flow-subagent-mock', mode: 'build', input_mode: 'guide' }],
+    ['tool_provision', { names: ['SubAgent', 'subagent_send', 'subagent_result', 'subagent_close'] }],
+    ['SubAgent', { name: 'release-child', prompt: 'SUBAGENT_INITIAL_PROMPT', model: 'release-ui-flow-subagent-mock', mode: 'build', input_mode: 'guide' }],
     ['subagent_send', { name: 'release-child', prompt: 'SUBAGENT_CONTINUE_PROMPT' }],
     ['subagent_result', { name: 'release-child' }],
     ['subagent_close', { name: 'release-child' }],
@@ -276,13 +276,13 @@ function ensureNoReleaseProcess() {
       const text = document.body.innerText || '';
       return text.includes('release-child') && text.includes('closed') ? text : '';
     })()`, 15000, 'right subagent retained history list');
-    await evaluate(cdp, `window.openSubagentHistory(${JSON.stringify(childState.name)})`);
+    await evaluate(cdp, `window.openSubagentHistory(${JSON.stringify(childState.id)})`);
     await waitFor(cdp, `(() => {
       const overlay = document.querySelector('#subagent-history-overlay');
       const text = overlay ? overlay.innerText : '';
       return text.includes('Live history') && text.includes('SUBAGENT_INITIAL_OK') && text.includes('SUBAGENT_CONTINUED_OK') ? text : '';
     })()`, 15000, 'live subagent history overlay');
-    const expectedOrder = 'flow_save,flow_list,tool_provision,task,subagent_send,subagent_result,subagent_close';
+    const expectedOrder = 'flow_save,flow_list,tool_provision,SubAgent,subagent_send,subagent_result,subagent_close';
     if (mock.toolOrder.join(',') !== expectedOrder) fail(`unexpected tool order: ${mock.toolOrder.join(',')}`);
     if (!mock.requests.some(r => r.body.includes('flow_save'))) fail('mock provider did not request flow_save');
     if (!mock.requests.some(r => r.body.includes('subagent_result'))) fail('mock provider did not request subagent_result');

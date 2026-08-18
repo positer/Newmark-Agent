@@ -4,6 +4,26 @@ Newmark Agent is a local-first desktop workspace for AI-assisted software develo
 
 The application connects to user-selected model providers through OpenAI-compatible, Anthropic-compatible, GitHub Models, and custom endpoints. Provider credentials and mutable workspace state remain under the user's Newmark data directory rather than inside the installation or repository.
 
+## Foundational tools and on-demand advanced tools (2026-08-18)
+
+Every first provider turn now receives the complete schemas for exactly eight foundational workspace tools: `bash`, `pwd`, `read`, `write`, `edit`, `delete_file`, `glob`, and `grep` (subject to mode, native-tool settings, and policy filtering). Advanced capabilities such as `SubAgent`, task checklist tools, Git/GitHub, browser, Computer Use, skills, MCP, Automation, Flow, and Memory Lab are represented initially only by a compact capability catalog.
+
+The system prompt explicitly tells the Agent that catalog presence is not callability. Before using an advanced tool, it must call `tool_provision` with the exact target name as the only tool call in that assistant subturn. The original complete schema appears on the following provider turn, where the normal policy and execution checks still apply. This removes intent-routing gaps that previously caused `read` or `bash` to appear unavailable while preventing the full advanced schema catalog from bloating every request.
+
+Verification passed the complete schema-preservation and reachability matrix for all 78 callable tools, dynamic provision-to-execution in one user run, and the main source suite at 1643/1643. Detailed evidence is in `archive/2026-08-18-foundational-tool-surface-and-on-demand-provisioning.md`.
+
+The unified prerelease identifier for this source snapshot is `dev-0.4.7`. Git tags use `dev-0.x.x`, GitHub release titles use `Newmark Agent dev-0.x.x`, while executable and artifact metadata use the numeric package version (`0.4.7`).
+
+The final `dev-0.4.7` candidate passed the complete Windows release gate, Windows MSI administrative-image smoke, WSL Ubuntu-24.04 full test/build path, and real Linux GUI/terminal smokes for AppImage, deb, and unpacked ZIP. The MSI was installed through UAC with exit code 0; `C:\Program Files\Newmark Agent\Newmark.exe --version` reports `0.4.7`, and the installed `app.asar` matches the packaged SHA-256 `CE962FA83BE0CD35526317927C239B55249AB7AA4FF03AC556BC6CD29F96BB5C`.
+
+Android provider presets contain endpoint/model templates only. API keys are intentionally empty and must be configured in the app; release commits and packages must never embed credentials copied from a desktop user configuration.
+
+## Desktop responsiveness repair (2026-08-18)
+
+The desktop renderer no longer continuously animates masked conic-gradient status borders. Build work-event rendering is coalesced and capped at one DOM rebuild per 100 ms, while terminal events such as completion, error, interruption, force interruption, and final response still render immediately. This preserves real SubAgent concurrency without allowing high-frequency child work events to starve ordinary prompt input.
+
+The packaged performance smoke drives approximately 500 work updates per second together with 100 prompt input events per second. The current Windows package completed the pressure window with 6 Build renders, 99 processed input events, a 42.7 ms maximum input scheduling delay, and zero continuously animated status borders. See `archive/2026-08-18-desktop-renderer-gpu-input-freeze-repair.md`.
+
 ## Capabilities
 
 - **Multi-model work:** fixed deployments and audited Auto routing with model capability, quality, cost, speed, privacy, and reliability signals.
@@ -182,6 +202,23 @@ The resulting artifacts are written to the repository-level `release/` directory
 Newmark Agent is distributed under the license in [`LICENSE`](LICENSE). Third-party notices are included in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ## Maintenance Log
+
+- **2026-08-18 — mobile dev-0.4.33 对话记录 WorkRun 完整投影：** Android 对本地与远程 `ConversationWorkRun` 使用统一 `WorkRunProjection`，按 PC `renderWorkRunEvents` 的公开事件语义稳定排序、过滤私密 reasoning/thinking、合并流式文本、回填 `thought_result` 与 `tool_result`、聚合连续工具调用，并保留 Guide 生命周期、公开图片和中断/错误状态。真实 Agent 最终消息不再在 Build 内重复；历史顺序为“用户 → 已处理块 → Agent 正文”。Build 标题取消“构建”，完成态严格显示 PC 同词“已处理”（运行态为“处理中”）。`WorkRunProjectionTest` 与 Android 单元测试、clean assemble 均通过；Debug APK `0.4.33` / `versionCode=433` 已安装并启动于竖屏 `emulator-5554`。完整交接记录见 [`archive/2026-08-18-mobile-work-run-history-parity.md`](archive/2026-08-18-mobile-work-run-history-parity.md)。
+
+- **2026-08-17 — 桌面端 SubAgent 工具身份、真实并行与 Build Block 硬限制：** 模型公开创建工具统一为 `SubAgent`，`task_create` 仅维护任务清单，旧 `task` / `subagent_create` 只作历史执行兼容。右侧栏按真实 SubAgent UUID 一对一绑定，入口显示创建名称；Ultra 每个运行中 Build Block 最多 16 个活跃 SubAgent，其他档位最多 4 个。公开 `SubAgent` 创建可在同一模型工具批次中真实并行，Chat/Responses 均显式启用 `parallel_tool_calls`，但发送、关闭和其他副作用工具继续串行。无运行中 Build、Build 已结束或超限时调用直接以 `terminated: true` 终止，不创建、不排队、不显示监控项；medium 同批 5 个创建严格得到 4 接受 + 1 终止。真实 APInebula Chat/Responses 均验证 `toolBatchSizes=[4,0]`、`maxOverlap=4`；完整 `test:desktop:built` 退出码 0，主回归 **1642/1642 PASS**。详见 [`archive/2026-08-17-desktop-subagent-tool-identity-and-build-limits.md`](archive/2026-08-17-desktop-subagent-tool-identity-and-build-limits.md)。
+- **2026-08-18 — 本地 Windows UAC 安装：** 从已验证的 `0.4.6` 源码构建 MSI 并完成 UAC 安装；安装目录版本为 `0.4.6`，安装后 `app.asar` 与打包产物 SHA-256 一致。完整证据见上述 SubAgent 修复归档。
+
+- **2026-08-17 — 移动端远程/本地 Agent 与 UI 综合压力测试设计：** 新增分层测试计划，覆盖 Agent 功能、远程配对/触及性、SSE 实时交流、断线重连、30/60 分钟持续性、UI 帧预算/jank/CPU/PSS、动画稳定性、2/4/8 vCPU 多核渲染、硬件加速诊断和冷/热启动阈值。设计文档见 [`tasks/plan.md`](tasks/plan.md)，执行清单见 [`tasks/todo.md`](tasks/todo.md)，归档见 [`archive/2026-08-17-mobile-agent-ui-stress-test-design.md`](archive/2026-08-17-mobile-agent-ui-stress-test-design.md)。
+
+- **2026-08-17 — 移动端适配安装约定：** 每次 Android 移动端适配完成并通过构建后，自动将最新 Debug APK 安装到当前连接的模拟器，强制重启 `com.newmark.mobile` 并校验版本号。
+
+- **2026-08-17 — 移动端模型二级菜单滚动与图片二维码配对：** 模型选择二级菜单限制为屏幕安全高度的 56% 且不超过 `320dp`，模型数量超出时支持上下滑动并显示 Newmark 风格滚动条；设置页“从相册选择图片”解码桌面二维码后复用配对确认流程，无法识别时显示明确错误。
+
+- **2026-08-17 — Android 模拟器继承本机桌面模型配置：** 将本机 `~/.Newmark/config.json` 中 `models.providers.value` 转换为 Android `ProviderStore` 使用的私有 `files/newmark/providers.json`，并写入 `active-model.json`。模拟器重启后校验为 4 个 provider、41 个模型，激活 `DeepSeek / deepseek-v4-pro`；凭据仅进入模拟器应用私有目录，仓库、归档和验证输出均不记录密钥值。
+
+- **2026-08-17 — mobile dev-0.4.32 PC 同构右侧栏与折叠态：** Android 右侧栏完成 Files、Editor、Plan/Linked plan、SubAgent、Browser 五页移植；Editor 不包含 PC 的预测随航。折叠态不再保留布局列，而是在聊天页右缘中部覆盖一个 PC 同尺寸 `18×48dp` 独立按钮，并使用同源 `panel-right` Lucide 图标；点击或主页面左滑均可展开。仅竖屏 SubAgent 详情使用独立加页，平板/折叠屏保持弹窗；Memory Lab 竖屏使用加页，平板/折叠屏恢复为占比增大的弹窗。本地对话不再出现在一级栏 rail 的缩略列。验证：桌面 `verify` **1641/1641 PASS**、移动 API **38/38 PASS**、Android `clean assembleDebug` PASS、APK `432 / 0.4.32` 实机安装；1600×2560 平板档确认折叠按钮不占列、点击/左滑展开及 rail 无本地对话缩略项，模拟器最终恢复 1080×2400。证据：[`archive/2026-08-17-mobile-right-sidebar-pc-collapse.md`](archive/2026-08-17-mobile-right-sidebar-pc-collapse.md)。
+
+- **2026-08-17 — mobile dev-0.4.31 二级边栏、竖屏换栏、对话分支与时间线修复：** Android 二级边栏按 Newmark PC GUI `#left-secondary` 重绘，统一使用 PC 的尺寸、玻璃层级、对话行、运行态和 Lucide 图标；竖屏进入工作区时先完整收回一级栏，再展开二级栏，实机 80ms/300ms 截图证明无覆盖。移动远程对话复用 PC 原生分支树 API，支持分页阅读、浏览态/运行态分离、发送前激活和编辑历史消息创建分支；本地对话新增持久化分支树、分支数量和分页管理。聊天列表恢复用户输入/Agent 回复两侧连续时间线轨道，并修复本地 `2/2` 上一页因祖先节点优先匹配而无响应的问题。验证：桌面 `verify` **1630/1630 PASS**、Android `clean assembleDebug` PASS、debug APK 安装成功且 `versionCode=431` / `versionName=0.4.31`；实机确认 `hi2 · 2/2` 可切回 `hi · 1/2`。证据：[`archive/2026-08-17-mobile-secondary-sidebar-and-branches.md`](archive/2026-08-17-mobile-secondary-sidebar-and-branches.md)。
 
 - **2026-08-16 — dev-0.4.5 git push + win/linux release + 本地 hash 校验：** 压力测试全绿后打包 win+linux、commit/tag/push、发布 GitHub prerelease。commit `a2c58a7` push master、annotated tag `dev-0.4.5` push；`gh release create dev-0.4.5` 上传 5 资产（win MSI/ZIP + linux AppImage/deb/unpacked ZIP），GitHub-reported digest 与本地 SHA-256 完全一致。产物哈希：MSI `071A143A8D36918305856D6941E4A7F4B7B3C113BB6330B43D3047308DDE73A8`、win ZIP `4954E803557AD7F88B671FB5C152DECF41190564E30E3FB9A25CC3C1A96C3B2E`、AppImage `0CD30D395F763DC49BB829A4A3C5FDB3C800D7A62721B4168ACA75046FA908A8`、deb `56FB465747DB4165F65A5FAAF59AC863FB53F17E1D6F0E5FA3E5D30B1E6C8CCE`、linux ZIP `AF235879A2DC937DF8DAF4A37C94C888784BF016E706653040197463871A9E59`。Linux 经 WSL Ubuntu-24.04 隔离构建 + 完整 `npm test` 全绿。证据：[`archive/2026-08-16-dev-0.4.5-git-push-and-release.md`](archive/2026-08-16-dev-0.4.5-git-push-and-release.md)。
 

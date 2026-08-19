@@ -187,8 +187,8 @@ async function runTui(root) {
   const exit = new Promise(resolve => terminal.onExit(event => { exited = true; resolve(event); }));
   try {
     const deadline = Date.now() + 45_000;
-    while (Date.now() < deadline && !/Newmark|WORKSPACES|Type a message/i.test(output)) await sleep(100);
-    assert(/Newmark|WORKSPACES|Type a message/i.test(output), `TUI did not start; output=${output.slice(-1600)}`);
+    while (Date.now() < deadline && !/WORKSPACES|Type a message/i.test(output)) await sleep(100);
+    assert(/WORKSPACES|Type a message/i.test(output), `TUI did not start; output=${output.slice(-1600)}`);
     terminal.write('\u0003');
     const event = await Promise.race([exit, sleep(15_000).then(() => null)]);
     assert(event && event.exitCode === 0, `TUI did not exit cleanly: ${JSON.stringify(event)}; output=${output.slice(-1600)}`);

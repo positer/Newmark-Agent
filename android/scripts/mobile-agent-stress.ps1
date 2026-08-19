@@ -3,7 +3,7 @@ param(
     [string]$Serial = 'emulator-5554',
     [int]$Port = 47991,
     [ValidateRange(10, 1000)][int]$BurstCount = 120,
-    [ValidateRange(1, 300)][int]$UiLoops = 60,
+    [ValidateRange(0, 300)][int]$UiLoops = 60,
     [switch]$KeepMockPair,
     [switch]$SkipInstall
 )
@@ -145,6 +145,12 @@ function Get-UiNodeByText([string]$Text) {
     return @($xml.SelectNodes("//*[@text='$Text']")) | Select-Object -First 1
 }
 
+function Get-UiNodeContainingText([string]$Text) {
+    $xml = Get-UiXml
+    $escaped = $Text.Replace("'", "&apos;")
+    return @($xml.SelectNodes("//*[contains(@text,'$escaped')]")) | Select-Object -First 1
+}
+
 function Get-UiEditText {
     $xml = Get-UiXml
     return @($xml.SelectNodes("//*[@class='android.widget.EditText']")) | Select-Object -First 1
@@ -173,14 +179,14 @@ function Wait-ForUiNode([scriptblock]$Find, [string]$Label, [int]$TimeoutMs = 30
     throw "Timed out waiting for Android UI node: $Label"
 }
 
-function Wait-ForMockSend {
+function Wait-ForMockQueueAction {
     $deadline = (Get-Date).AddSeconds(8)
     do {
         $stats = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 2
-        if ($stats.sends -ge 1) { return $stats }
+        if ($stats.queueActions -ge 1) { return $stats }
         Start-Sleep -Milliseconds 150
     } while ((Get-Date) -lt $deadline)
-    throw 'Remote fixture send was not received by the mock server'
+    throw 'Remote fixture queue mutation was not received by the mock server'
 }
 
 try {
@@ -222,7 +228,10 @@ try {
     # pairing request into the user's formal application.
     $launchOutput = Invoke-AmViewIntent -DataUrl $pairUrl -TargetComponent $component
     $result.launch.totalMs = [int]([regex]::Match($launchOutput, 'TotalTime:\s*(\d+)').Groups[1].Value)
-    $sseDeadline = (Get-Date).AddSeconds(12)
+    # Cold Compose startup on the emulator can exceed 12 seconds after a
+    # stress-package replacement/JIT reset. This gate measures eventual SSE
+    # ownership, not splash latency; keep startup latency recorded separately.
+    $sseDeadline = (Get-Date).AddSeconds(35)
     do {
         Start-Sleep -Milliseconds 200
         $connectionStats = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 2
@@ -237,7 +246,20 @@ try {
 
     # SSE burst includes deliberate duplicate start/text/done messages.
     Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/burst?count=$BurstCount" -TimeoutSec 20 | Out-Null
-    Start-Sleep -Seconds 2
+    Wait-ForUiNode -Find { Get-UiNodeByText '处理中' } -Label '远端运行中 Build' -TimeoutMs 5000 | Out-Null
+    Wait-ForUiNode -Find { Get-UiNodeContainingText 'Stress Goal' } -Label 'Goal Bar' -TimeoutMs 5000 | Out-Null
+    Wait-ForUiNode -Find { Get-UiNodeContainingText 'Flow prompt remains visible' } -Label 'Flow Prompt Bar' -TimeoutMs 5000 | Out-Null
+    Wait-ForUiNode -Find { Get-UiNodeContainingText '当前对话正由 Flow 接管' } -Label 'Flow 接管通知' -TimeoutMs 5000 | Out-Null
+    Wait-ForUiNode -Find { Get-UiNodeByText 'Next 2' } -Label '远端权威队列' -TimeoutMs 5000 | Out-Null
+    $runningXml = Get-UiXml
+    if (@($runningXml.SelectNodes("//*[@text='已停止']")).Count -gt 0) {
+        throw 'Resident running Build was rendered as 已停止 during the live pressure window'
+    }
+    $result.gates.realtimeBuildVisible = $true
+    $result.gates.goalVisible = $true
+    $result.gates.flowPromptVisible = $true
+    $result.gates.flowTakeoverVisible = $true
+    $result.gates.queueVisible = $true
 
     # Remote send and high-frequency menu/open-close work stress the Compose
     # input, popup, gesture and event paths without any external provider.
@@ -247,7 +269,13 @@ try {
     Invoke-Adb @('shell', 'input', 'text', 'fixture-stress')
     $send = Wait-ForUiNode -Find { Get-UiNodeByDescription '发送' } -Label '发送'
     Invoke-UiTapNode -Node $send -Label '发送'
-    Wait-ForMockSend | Out-Null
+    # During Flow/Build ownership, the shared PC contract routes ordinary
+    # input to the authoritative remote Next queue rather than `/send`.
+    Wait-ForMockQueueAction | Out-Null
+    # Close IME before popup/gesture pressure. Otherwise the first outside tap
+    # is correctly consumed by keyboard dismissal and never reaches 模型.
+    Invoke-Adb @('shell', 'input', 'keyevent', '4')
+    Start-Sleep -Milliseconds 250
     for ($i = 0; $i -lt $UiLoops; $i++) {
         Assert-AppForeground "UI loop $i precondition"
         $model = Wait-ForUiNode -Find { Get-UiNodeByDescription '模型' } -Label '模型'
@@ -272,7 +300,9 @@ try {
     $result.graphics = Read-GfxMetrics
     $mem = (& $adb -s $Serial shell dumpsys meminfo $packageName) -join "`n"
     $result.memory.totalPssKb = [int]([regex]::Match($mem, 'TOTAL PSS:\s*(\d+)').Groups[1].Value)
-    $fatalLines = @(& $adb -s $Serial logcat -d -v brief | Select-String -Pattern 'AndroidRuntime|FATAL EXCEPTION|ANR in' | ForEach-Object { $_.Line } | Select-Object -Last 50)
+    # `uiautomator dump` itself runs through AndroidRuntime and logs a normal
+    # START/Shutting down pair. Only package-scoped fatal signatures count.
+    $fatalLines = @(& $adb -s $Serial logcat -d -v brief | Select-String -Pattern 'FATAL EXCEPTION|ANR in com\.newmark\.mobile\.stress|Process: com\.newmark\.mobile\.stress' | ForEach-Object { $_.Line } | Select-Object -Last 50)
     $skippedFrames = @(& $adb -s $Serial logcat -d -v brief | Select-String -Pattern 'Skipped [0-9]+ frames' | ForEach-Object { $_.Line } | Select-Object -Last 50)
     if ($fatalLines.Count -gt 0) { $result.errors = $fatalLines }
     if ($skippedFrames.Count -gt 0) { $result.warnings = $skippedFrames }
@@ -281,9 +311,15 @@ try {
         sseConnected = $result.mock.sseConnections -ge 1
         sseBurstObserved = $result.mock.bursts -ge 1 -and $result.mock.emittedEvents -gt $BurstCount
         duplicateFixtureObserved = $result.mock.duplicateEvents -ge 1
-        remoteSendObserved = $result.mock.sends -ge 1
+        remoteQueueMutationObserved = $result.mock.queueActions -ge 1
         noFatalOrAnr = $result.errors.Count -eq 0
         uiFramesCaptured = $result.graphics.totalFrames -gt 0
+        residentUiSnapshotsObserved = $result.mock.uiStateReads -ge 2
+        realtimeBuildVisible = $result.gates.realtimeBuildVisible -eq $true
+        goalVisible = $result.gates.goalVisible -eq $true
+        flowPromptVisible = $result.gates.flowPromptVisible -eq $true
+        flowTakeoverVisible = $result.gates.flowTakeoverVisible -eq $true
+        queueVisible = $result.gates.queueVisible -eq $true
     }
     $failedGates = @($result.gates.GetEnumerator() | Where-Object { -not $_.Value } | ForEach-Object { $_.Key })
     if ($failedGates.Count -gt 0) { throw "Pressure gates failed: $($failedGates -join ', ')" }

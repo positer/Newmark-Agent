@@ -139,6 +139,9 @@ data class LocalWorkRun(
     val mode: String = "",
     val model: String = "",
     val text: String = "", // 最终回复文本（response）
+    /** 与 PC ConversationWorkRun 相同的历史定位身份；实时与持久块按这两个字段归并。 */
+    val anchorMessageId: String = "",
+    val branchNodeId: String = "",
 ) {
     val durationMs: Long get() = (if (endedAt > 0) endedAt else System.currentTimeMillis()) - startedAt
 }
@@ -150,6 +153,27 @@ data class LocalPlanItem(
     val status: String = "pending",
 )
 
+data class LocalQueuedMessage(
+    val id: String,
+    val text: String,
+    val createdAt: Long = System.currentTimeMillis(),
+    val requestedMode: String = "build",
+    val goalObjective: String = "",
+)
+
+/** PC contextCompression 的本地持久化投影；显示历史永远不被它改写。 */
+data class LocalContextCompression(
+    val at: Long = 0L,
+    val originalMessages: Int = 0,
+    val compressedMessages: Int = 0,
+    val originalChars: Int = 0,
+    val compressedChars: Int = 0,
+    val compressedTokens: Int = 0,
+    val summary: String = "",
+    val model: String = "",
+    val fallback: Boolean = false,
+)
+
 /** 本地对话（不区分工作区，持久化于本地 JSON） */
 data class LocalConversation(
     val id: String,
@@ -159,8 +183,17 @@ data class LocalConversation(
     val updatedAt: Long = System.currentTimeMillis(),
     val pinned: Boolean = false,
     val archived: Boolean = false,
+    /** 本地输入模式：仅 Build / Plan；按对话持久化，切换对话不串状态。 */
+    val mode: String = "build",
     /** 本地模式的 task/plan 不是临时 UI 状态，必须随对应对话保存和恢复。 */
     val planItems: List<LocalPlanItem> = emptyList(),
+    /** PC Next panel 的本地对应物；队列及暂停状态严格按对话持久化。 */
+    val queuedMessages: List<LocalQueuedMessage> = emptyList(),
+    val queuePaused: Boolean = false,
+    val inputMode: String = "next",
+    /** 仅发送给模型的耐久上下文；空列表表示从完整显示历史首次建立。 */
+    val modelContext: List<ChatMessage> = emptyList(),
+    val contextCompression: LocalContextCompression? = null,
     /** null 表示尚未产生分支；旧数据天然兼容并按单根页读取。 */
     val branchTree: LocalConversationBranchTree? = null,
 )

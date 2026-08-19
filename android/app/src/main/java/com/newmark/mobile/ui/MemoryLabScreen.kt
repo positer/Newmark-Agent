@@ -266,7 +266,7 @@ fun MemoryLabDialog(onDismiss: () -> Unit) {
                 .fillMaxWidth(.94f)
                 .fillMaxHeight(.92f)
                 .clip(RoundedCornerShape(14.dp))
-                .background(p.bgPrimary)
+                .background(p.bgPrimary.copy(alpha = 0.78f))
                 .border(1.dp, p.border2, RoundedCornerShape(14.dp)),
         ) {
             MemoryLabScreen(onBack = onDismiss, dialogMode = true)

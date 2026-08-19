@@ -23,6 +23,36 @@ let mobileToken = '';
 let appRoot = '';
 const mobileWorkEventSubscribers = new Set<(event: AgentWorkEvent) => void>();
 const mobileScopedRuntimes = new Map<string, { agent: Agent; workspaceId: string; conversationId: string; unsubscribe: () => void }>();
+let hostedWorkEventSink: ((event: AgentWorkEvent) => void) | null = null;
+let unsubscribeHostedWorkEvents: (() => void) | null = null;
+
+export interface HostedMobileServerOptions {
+  agent?: Agent;
+  automation?: AutomationManager | null;
+  /** Mobile-originated runs must reach the already-open desktop renderer. */
+  onWorkEvent?: (event: AgentWorkEvent) => void;
+  /** Desktop GUI/runtime-pool events must reach mobile SSE subscribers. */
+  subscribeWorkEvents?: (listener: (event: AgentWorkEvent) => void) => (() => void);
+  /** Read the GUI runtime-pool state for one exact workspace/conversation. */
+  conversationUiState?: (target: { workspaceId: string; conversationId: string }) => Promise<Record<string, unknown>>;
+  /** Mutate Goal/Flow state owned by the GUI runtime pool for one exact target. */
+  conversationUiAction?: (
+    target: { workspaceId: string; conversationId: string },
+    action: 'goal_update' | 'goal_guide' | 'conversation_guide' | 'goal_toggle_pause' | 'goal_clear' | 'flow_pause' | 'flow_resume' | 'flow_guide' | 'conversation_stop' | 'input_mode' | 'queue_enqueue' | 'queue_update' | 'queue_delete' | 'queue_toggle_pause' | 'queue_guide',
+    value?: string,
+    input?: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>>;
+  /** Send through the same GUI runtime pool used by the desktop renderer. */
+  conversationPrompt?: (
+    target: { workspaceId: string; conversationId: string },
+    message: string,
+    options?: { requestedMode?: string; goalObjective?: string; inputMode?: string },
+  ) => Promise<Record<string, unknown>>;
+}
+
+let hostedConversationUiState: HostedMobileServerOptions['conversationUiState'];
+let hostedConversationUiAction: HostedMobileServerOptions['conversationUiAction'];
+let hostedConversationPrompt: HostedMobileServerOptions['conversationPrompt'];
 
 function mobileRuntimeKey(workspaceId: string, conversationId: string): string {
   return `${String(workspaceId || '')}::${String(conversationId || '')}`;
@@ -32,6 +62,11 @@ function publishMobileWorkEvent(event: AgentWorkEvent): void {
   for (const subscriber of mobileWorkEventSubscribers) {
     try { subscriber(event); } catch { /* ignore disconnected mobile listeners */ }
   }
+}
+
+function publishServerWorkEvent(event: AgentWorkEvent): void {
+  publishMobileWorkEvent(event);
+  hostedWorkEventSink?.(event);
 }
 
 function mobileAuthorized(req: http.IncomingMessage): boolean {
@@ -720,6 +755,9 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           mode: agent.mode,
           model: agent.modelSelectionValue(),
           modelLabel: agent.modelLabel(),
+          models: agent.allModelNames(),
+          providers: sanitizeProvidersForState(agent.config.providers()),
+          intelligence: agent.intelligence,
           status: agent.status,
           activeConversationId: agent.activeConversationId,
           conversations: agent.listConversationStates(),
@@ -756,9 +794,18 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           mobileJson(res, { error: 'Conversation not found in workspace' }, 404);
           return;
         }
-        const snapshot = current.getConversationSnapshot(String(conversationId), { window: windowSize, before, workspace: ws });
+        // GUI conversations normally execute inside isolated runtime pools.
+        // Their durable target state can be newer than the hosted main Agent's
+        // foreground memory, so workspace-bound mobile reads must hydrate a
+        // fresh read-only target Agent from storage.
+        const snapshotAgent = ws ? mobileScopedAgent(ws, String(conversationId)) : current;
+        const snapshot = snapshotAgent.getConversationSnapshot(String(conversationId), {
+          window: windowSize,
+          before,
+          workspace: ws || undefined,
+        });
         // 完整对话信息：workRuns 统一用持久化记录透出（含被中断的构建）
-        const persistedRuns = current.getPersistedConversationWorkRuns(String(conversationId), ws || undefined);
+        const persistedRuns = snapshotAgent.getPersistedConversationWorkRuns(String(conversationId), ws || undefined);
         if (persistedRuns.length) (snapshot as { workRuns?: unknown }).workRuns = persistedRuns;
         mobileJson(res, snapshot);
         return;
@@ -786,6 +833,33 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           return;
         }
         mobileJson(res, mobileRightSidebarState(agent, ws, conversationId));
+        return;
+      }
+      case '/api/mobile/conversation-ui-state': {
+        const workspaceId = url.searchParams.get('workspaceId') || '';
+        const conversationId = url.searchParams.get('conversationId') || '';
+        const ws = resolveMobileWorkspace(agent, workspaceId);
+        if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        if (!conversationId || !agent.hasConversationInWorkspace(conversationId, ws)) {
+          mobileJson(res, { error: 'Conversation not found in workspace' }, 404);
+          return;
+        }
+        if (hostedConversationUiState) {
+          mobileJson(res, await hostedConversationUiState({ workspaceId, conversationId }));
+          return;
+        }
+        const scoped = mobileScopedAgent(ws, conversationId);
+        const snapshot = scoped.getConversationSnapshot(conversationId, { workspace: ws, window: 1 });
+        mobileJson(res, {
+          goal: snapshot.goal,
+          flowSelection: snapshot.flowSelection,
+          flow: null,
+          queued: { steering: [], followUp: [] },
+          runtime: null,
+          mode: scoped.mode,
+          status: scoped.status,
+          inputMode: scoped.inputMode,
+        });
         return;
       }
       case '/api/mobile/workspace-files': {
@@ -874,6 +948,51 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           activeConversationId: created.id,
           conversations: mobileWorkspaceConversationRows(agent, ws),
         });
+        return;
+      }
+      case '/api/mobile/model': {
+        const next = String((JSON.parse(body || '{}') as Record<string, unknown>).model || '');
+        if (!next) { mobileJson(res, { error: 'Model is required' }, 400); return; }
+        agent.setModel(next);
+        mobileJson(res, {
+          ok: true,
+          model: agent.modelSelectionValue(),
+          modelLabel: agent.modelLabel(),
+        });
+        return;
+      }
+      case '/api/mobile/intelligence': {
+        const tier = String((JSON.parse(body || '{}') as Record<string, unknown>).tier || 'medium');
+        agent.setIntelligence(tier, true);
+        mobileJson(res, { ok: true, intelligence: agent.intelligence });
+        return;
+      }
+      case '/api/mobile/conversation-ui-action': {
+        const params = JSON.parse(body || '{}') as Record<string, unknown>;
+        const workspaceId = String(params.workspaceId || '');
+        const conversationId = String(params.conversationId || '');
+        const action = String(params.action || '') as 'goal_update' | 'goal_guide' | 'conversation_guide' | 'goal_toggle_pause' | 'goal_clear' | 'flow_pause' | 'flow_resume' | 'flow_guide' | 'conversation_stop' | 'input_mode' | 'queue_enqueue' | 'queue_update' | 'queue_delete' | 'queue_toggle_pause' | 'queue_guide';
+        const allowed = new Set(['goal_update', 'goal_guide', 'conversation_guide', 'goal_toggle_pause', 'goal_clear', 'flow_pause', 'flow_resume', 'flow_guide', 'conversation_stop', 'input_mode', 'queue_enqueue', 'queue_update', 'queue_delete', 'queue_toggle_pause', 'queue_guide']);
+        if (!workspaceId || !conversationId || !allowed.has(action)) {
+          mobileJson(res, { error: 'workspaceId, conversationId, and a valid action are required' }, 400);
+          return;
+        }
+        const ws = resolveMobileWorkspace(agent, workspaceId);
+        if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); return; }
+        if (!agent.hasConversationInWorkspace(conversationId, ws)) {
+          mobileJson(res, { error: 'Conversation not found in workspace' }, 404);
+          return;
+        }
+        if (!hostedConversationUiAction) {
+          mobileJson(res, { error: 'This action requires the GUI-hosted mobile server' }, 409);
+          return;
+        }
+        mobileJson(res, await hostedConversationUiAction(
+          { workspaceId, conversationId },
+          action,
+          String(params.value || ''),
+          params,
+        ));
         return;
       }
       case '/api/mobile/conversation-rename': {
@@ -966,13 +1085,22 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
             requestAgent = mobileScopedAgent(ws, conversationId);
           }
         }
+        if (hostedConversationPrompt && resolvedWorkspace) {
+          const result = await hostedConversationPrompt({ workspaceId, conversationId }, message, {
+            requestedMode: String(params.requestedMode || ''),
+            goalObjective: String(params.goalObjective || ''),
+            inputMode: String(params.inputMode || ''),
+          });
+          mobileJson(res, { ok: true, conversationId, ...result });
+          return;
+        }
         if (requestAgent === agent && params.conversationId) requestAgent.setConversation(conversationId);
         let scopedRuntimeKey = '';
         let scopedRuntime: { agent: Agent; workspaceId: string; conversationId: string; unsubscribe: () => void } | null = null;
         let unsubscribeScoped: (() => void) | null = null;
         if (requestAgent !== agent && requestWorkspace) {
           scopedRuntimeKey = mobileRuntimeKey(String(requestWorkspace.id || ''), conversationId);
-          unsubscribeScoped = requestAgent.subscribeWorkEvents(event => publishMobileWorkEvent({
+          unsubscribeScoped = requestAgent.subscribeWorkEvents(event => publishServerWorkEvent({
             ...event,
             workspaceId: String(requestWorkspace?.id || ''),
             conversationId,
@@ -1104,12 +1232,19 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
   }
 }
 
-function startServer(root: string): void {
+function startServer(root: string, options: HostedMobileServerOptions = {}): void {
   mobileToken = ensureMobileToken(root);
   appRoot = root;
-  agent = new Agent(root);
+  agent = options.agent || new Agent(root);
+  hostedWorkEventSink = options.onWorkEvent || null;
+  hostedConversationUiState = options.conversationUiState;
+  hostedConversationUiAction = options.conversationUiAction;
+  hostedConversationPrompt = options.conversationPrompt;
+  unsubscribeHostedWorkEvents?.();
+  unsubscribeHostedWorkEvents = options.subscribeWorkEvents?.(publishMobileWorkEvent) || null;
   workspaceFileRouter = new WorkspaceFileRouter(() => path.resolve(agent?.workspace.current?.path || root));
-  automation = new AutomationManager(agent.config, async (prompt, model, item) => {
+  automation = options.automation || null;
+  if (!automation && !options.agent) automation = new AutomationManager(agent.config, async (prompt, model, item) => {
     if (!agent) return '';
     const previousModel = agent.model;
     const previousWorkspace = agent.workspace.current?.id || agent.workspace.current?.path || '';
@@ -1130,9 +1265,11 @@ function startServer(root: string): void {
       agent.setConversationFromStorage(previousConversation);
     }
   });
-  agent.subscribeWorkEvents(publishMobileWorkEvent);
-  agent.setAutomationManager(automation);
-  automation.start();
+  agent.subscribeWorkEvents(publishServerWorkEvent);
+  if (automation) {
+    agent.setAutomationManager(automation);
+    if (!options.automation) automation.start();
+  }
   const uiDir = path.join(__dirname, 'ui');
 
   const server = http.createServer(async (req, res) => {
@@ -1194,8 +1331,13 @@ function startServer(root: string): void {
 let hostedServerStarted = false;
 
 /** 托管启动 server（GUI/TUI 内嵌调用；幂等防重入，进程常驻即服务常驻） */
-export function runServer(root: string): void {
+export function runServer(root: string, options: HostedMobileServerOptions = {}): void {
   if (hostedServerStarted) return;
   hostedServerStarted = true;
-  startServer(root);
+  startServer(root, options);
+}
+
+/** Attach the GUI-owned automation manager after deferred startup. */
+export function setHostedServerAutomation(manager: AutomationManager): void {
+  automation = manager;
 }

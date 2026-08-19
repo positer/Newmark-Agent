@@ -18,6 +18,16 @@ import {
 } from './conversationTarget';
 
 export type ConversationQueueMode = 'steer' | 'followUp';
+export interface ConversationQueueItemSnapshot {
+  id: string;
+  text: string;
+  queueMode: ConversationQueueMode;
+  requestedMode?: string;
+  goalObjective?: string;
+  runId?: string;
+  createdAt: string;
+}
+export type ConversationQueueAction = 'enqueue' | 'update' | 'delete' | 'toggle_pause' | 'guide';
 export interface AgentPromptMessage {
   text: string;
   /** Public transcript text when the execution prompt contains hidden orchestration instructions. */
@@ -134,6 +144,7 @@ interface ConversationRuntime {
   events: AgentWorkEvent[];
   pendingNextTurn: Array<{ message: string | AgentPromptMessage; queueMode: ConversationQueueMode }>;
   queued: { steering: string[]; followUp: string[] };
+  queuePaused: boolean;
   unsubscribe?: () => void;
   unsubscribePeer?: () => void;
   unsubscribeRootInboxWake?: () => void;
@@ -208,6 +219,171 @@ export class ConversationKernel {
     };
   }
 
+  queueItems(target: ConversationTargetInput): ConversationQueueItemSnapshot[] {
+    const runtime = this.findRuntime(target);
+    if (!runtime) return [];
+    return runtime.pendingNextTurn.flatMap(item => {
+      if (item.queueMode !== 'followUp') return [];
+      if (typeof item.message === 'string') return [];
+      const id = String(item.message.clientMessageId || '');
+      if (!id) return [];
+      return [{
+        id,
+        text: String(item.message.visibleUserInput || item.message.text || '').replace(/^\[Next queued while current turn is running\]\n/, ''),
+        queueMode: item.queueMode,
+        requestedMode: item.message.visibleMode,
+        goalObjective: item.message.goalObjective,
+        runId: item.message.runId,
+        createdAt: String((item.message as AgentPromptMessage & { createdAt?: string }).createdAt || ''),
+      }];
+    });
+  }
+
+  enqueueNext(
+    target: ConversationTargetInput,
+    input: { id: string; text: string; requestedMode?: string; goalObjective?: string; createdAt?: string },
+  ): ConversationQueueItemSnapshot {
+    const runtime = this.findRuntime(target);
+    if (!runtime?.activePromise || !runtime.runId) throw new Error('Target conversation is not running');
+    const id = String(input.id || '').trim().slice(0, 200);
+    const text = String(input.text || '').trim();
+    if (!id || !text) throw new Error('Queue item id and text are required');
+    const existing = this.queueItems(runtime.target).find(item => item.id === id);
+    if (existing) return existing;
+    const prompt = `[Next queued while current turn is running]\n${text}`;
+    const createdAt = String(input.createdAt || new Date().toISOString());
+    runtime.pendingNextTurn.push({
+      message: {
+        text: prompt,
+        visibleUserInput: text,
+        visibleMode: String(input.requestedMode || 'build'),
+        goalObjective: String(input.goalObjective || '') || undefined,
+        clientMessageId: id,
+        runId: runtime.runId,
+        createdAt,
+      } as AgentPromptMessage & { createdAt: string },
+      queueMode: 'followUp',
+    });
+    runtime.runner.retainConversationContinuations([{
+      content: prompt,
+      queueMode: 'followUp',
+      clientMessageId: id,
+      runId: runtime.runId,
+      createdAt,
+    }]);
+    this.trackQueuedMessage(runtime, prompt, 'followUp');
+    this.emitQueueUpdate(runtime);
+    return this.queueItems(runtime.target).find(item => item.id === id)!;
+  }
+
+  updateQueueItem(target: ConversationTargetInput, idInput: string, textInput: string): ConversationQueueItemSnapshot {
+    const runtime = this.findRuntime(target);
+    if (!runtime) throw new Error('Target conversation runtime is unavailable');
+    const id = String(idInput || '').trim();
+    const text = String(textInput || '').trim();
+    if (!id || !text) throw new Error('Queue item id and text are required');
+    const pending = runtime.pendingNextTurn.find(item => typeof item.message !== 'string' && item.message.clientMessageId === id);
+    if (!pending || typeof pending.message === 'string') throw new Error('Queue item is no longer editable');
+    const oldPrompt = pending.message.text;
+    pending.message.text = `[Next queued while current turn is running]\n${text}`;
+    pending.message.visibleUserInput = text;
+    runtime.runner.consumeConversationContinuation({ content: oldPrompt, queueMode: pending.queueMode, clientMessageId: id });
+    runtime.runner.retainConversationContinuations([{
+      content: pending.message.text,
+      queueMode: pending.queueMode,
+      clientMessageId: id,
+      runId: pending.message.runId,
+    }]);
+    this.replaceTrackedQueuedMessage(runtime, oldPrompt, pending.message.text, pending.queueMode);
+    this.emitQueueUpdate(runtime);
+    return this.queueItems(runtime.target).find(item => item.id === id)!;
+  }
+
+  deleteQueueItem(target: ConversationTargetInput, idInput: string): boolean {
+    const runtime = this.findRuntime(target);
+    if (!runtime) return false;
+    const id = String(idInput || '').trim();
+    const index = runtime.pendingNextTurn.findIndex(item => typeof item.message !== 'string' && item.message.clientMessageId === id);
+    if (index < 0) return false;
+    const [removed] = runtime.pendingNextTurn.splice(index, 1);
+    if (typeof removed.message !== 'string') {
+      runtime.runner.consumeConversationContinuation({ content: removed.message.text, queueMode: removed.queueMode, clientMessageId: id });
+      this.consumeQueuedMessage(runtime, removed.message.text);
+    }
+    this.emitQueueUpdate(runtime);
+    return true;
+  }
+
+  setQueuePaused(target: ConversationTargetInput, paused: boolean): boolean {
+    const runtime = this.findRuntime(target);
+    if (!runtime) throw new Error('Target conversation runtime is unavailable');
+    runtime.queuePaused = paused;
+    this.emitQueueUpdate(runtime);
+    if (!paused && !runtime.activePromise && runtime.pendingNextTurn.length) {
+      this.schedulePendingRuntimeContinuation(runtime, runtime.runId);
+    }
+    return runtime.queuePaused;
+  }
+
+  queueAction(
+    target: ConversationTargetInput,
+    action: ConversationQueueAction,
+    input: { id?: string; text?: string; requestedMode?: string; goalObjective?: string; createdAt?: string } = {},
+  ): {
+    ok: boolean;
+    queueItems: ConversationQueueItemSnapshot[];
+    queuePaused: boolean;
+    queued: { steering: string[]; followUp: string[] };
+    receipt?: GuideReceipt;
+  } {
+    const runtime = this.findRuntime(target);
+    if (!runtime) throw new Error('Target conversation runtime is unavailable');
+    let receipt: GuideReceipt | undefined;
+    if (action === 'enqueue') {
+      this.enqueueNext(runtime.target, {
+        id: String(input.id || ''),
+        text: String(input.text || ''),
+        requestedMode: input.requestedMode,
+        goalObjective: input.goalObjective,
+        createdAt: input.createdAt,
+      });
+    } else if (action === 'update') {
+      this.updateQueueItem(runtime.target, String(input.id || ''), String(input.text || ''));
+    } else if (action === 'delete') {
+      if (!this.deleteQueueItem(runtime.target, String(input.id || ''))) throw new Error('Queue item was not found');
+    } else if (action === 'toggle_pause') {
+      this.setQueuePaused(runtime.target, !runtime.queuePaused);
+    } else if (action === 'guide') {
+      const item = this.queueItems(runtime.target).find(entry => entry.id === String(input.id || ''));
+      if (!item) throw new Error('Queue item was not found');
+      receipt = this.enqueueGuide({
+        clientMessageId: item.id,
+        guideId: randomUUID(),
+        target: runtime.target,
+        runId: runtime.runId,
+        deliveryMode: 'steer',
+        text: item.goalObjective ? `Goal for the current Build:\n${item.goalObjective}` : item.text,
+        goalObjective: item.goalObjective,
+        createdAt: item.createdAt || new Date().toISOString(),
+      });
+      if (receipt.status === 'rejected') return {
+        ok: false,
+        queueItems: this.queueItems(runtime.target),
+        queuePaused: runtime.queuePaused,
+        queued: this.queued(runtime.target),
+        receipt,
+      };
+      this.deleteQueueItem(runtime.target, item.id);
+    }
+    return {
+      ok: true,
+      queueItems: this.queueItems(runtime.target),
+      queuePaused: runtime.queuePaused,
+      queued: this.queued(runtime.target),
+      receipt,
+    };
+  }
+
   events(target: ConversationTargetInput): AgentWorkEvent[] {
     return this.findRuntime(target)?.events.slice() || [];
   }
@@ -229,6 +405,8 @@ export class ConversationKernel {
   snapshot(target: ConversationTargetInput): ReturnType<Agent['getConversationSnapshot']> & {
     target: NormalizedConversationTarget;
     queued: { steering: string[]; followUp: string[] };
+    queueItems: ConversationQueueItemSnapshot[];
+    queuePaused: boolean;
     workEvents: AgentWorkEvent[];
     runtime: ConversationRuntimeState | null;
     mode: Agent['mode'];
@@ -254,6 +432,8 @@ export class ConversationKernel {
       workRuns: this.bindWorkRunsToRuntimeTarget(conversationSnapshot.workRuns, normalized),
       target: normalized,
       queued: this.queued(normalized),
+      queueItems: this.queueItems(normalized),
+      queuePaused: runtime?.queuePaused === true,
       workEvents: this.events(normalized),
       runtime: this.runtimeState(normalized),
       mode: runner.mode,
@@ -742,7 +922,7 @@ export class ConversationKernel {
           if (runtime.stopRequestedRunId === runId) {
             stopped = true;
             this.settleCooperativeStop(runtime, runId);
-          } else if (runtime.pendingNextTurn.length > 0) {
+          } else if (!runtime.queuePaused && runtime.pendingNextTurn.length > 0) {
             // A renderer/IPC Guide can arrive after the final-drain barrier's
             // last check but before this promise settles. Do not leave the
             // deferred continuation queued on an idle runtime.
@@ -788,7 +968,7 @@ export class ConversationKernel {
       return this.result(runtime, lastTokens);
     }
     for (;;) {
-      while (runtime.pendingNextTurn.length > 0) {
+      while (!runtime.queuePaused && runtime.pendingNextTurn.length > 0) {
         if (runtime.stopRequestedRunId === runtime.runId) return this.result(runtime, lastTokens);
         const next = runtime.pendingNextTurn.shift()!;
         if (next.queueMode === 'steer' && typeof next.message !== 'string' && !!next.message.clientMessageId) {
@@ -833,7 +1013,7 @@ export class ConversationKernel {
           this.mirrorHostIfTargetActive(runtime);
           return this.result(runtime, lastTokens);
         }
-        this.clearQueued(runtime);
+        if (!runtime.pendingNextTurn.length) this.clearQueued(runtime);
         const completedRunId = runtime.runId;
         runtime.runner.finishConversationWorkRun(completedRunId, 'completed');
 
@@ -844,6 +1024,7 @@ export class ConversationKernel {
         await new Promise<void>(resolve => setImmediate(resolve));
         if (runtime.runId === completedRunId
           && runtime.stopRequestedRunId !== completedRunId
+          && !runtime.queuePaused
           && runtime.pendingNextTurn.length > 0) {
           runtime.guideAcceptanceClosedRunId = '';
           if (!runtime.runner.resumeConversationWorkRun(completedRunId)) {
@@ -937,6 +1118,7 @@ export class ConversationKernel {
       events: [],
       pendingNextTurn: [],
       queued: { steering: [], followUp: [] },
+      queuePaused: false,
       runId: '',
       generation: this.generations.get(target.runtimeKey) || 0,
       stopRequestedRunId: '',
@@ -1046,7 +1228,7 @@ export class ConversationKernel {
     }
     setImmediate(() => {
       runtime.pendingContinuationRunId = undefined;
-      if (runtime.runId !== runId || runtime.activePromise || runtime.stopRequestedRunId === runId) return;
+      if (runtime.runId !== runId || runtime.activePromise || runtime.stopRequestedRunId === runId || runtime.queuePaused) return;
       const next = runtime.pendingNextTurn.shift();
       if (!next) return;
       const message = typeof next.message === 'string'
@@ -1220,7 +1402,39 @@ export class ConversationKernel {
     const isSteer = queueMode === 'steer';
     const text = typeof message === 'string' ? message : message.text;
     const prompt = isSteer ? text : `[Next queued while current turn is running]\n${text}`;
-    if (!isSteer) this.trackQueuedMessage(runtime, prompt, queueMode);
+    if (!isSteer) {
+      const structured = typeof message === 'string' ? null : message;
+      const clientMessageId = String(structured?.clientMessageId || randomUUID());
+      const queuedMessage: AgentPromptMessage & { createdAt: string } = {
+        ...(structured || {}),
+        text: prompt,
+        visibleUserInput: structured?.visibleUserInput || text,
+        visibleMode: structured?.visibleMode || runtime.options.mode,
+        clientMessageId,
+        runId: structured?.runId || runtime.runId,
+        createdAt: String((structured as (AgentPromptMessage & { createdAt?: string }) | null)?.createdAt || new Date().toISOString()),
+      };
+      if (!runtime.pendingNextTurn.some(item =>
+        typeof item.message !== 'string' && item.message.clientMessageId === clientMessageId)) {
+        runtime.pendingNextTurn.push({ message: queuedMessage, queueMode: 'followUp' });
+      }
+      runtime.runner.retainConversationContinuations([{
+        content: prompt,
+        queueMode: 'followUp',
+        clientMessageId,
+        runId: queuedMessage.runId,
+        images: queuedMessage.images?.map(image => ({ ...image })),
+        attachments: queuedMessage.attachments?.map(attachment => ({ ...attachment })),
+        createdAt: queuedMessage.createdAt,
+      }]);
+      this.trackQueuedMessage(runtime, prompt, 'followUp');
+      runtime.runner.recordWorkStatus(runtime.stopRequestedRunId === runtime.runId
+        ? 'Next message retained while stopping.'
+        : 'Next message queued.');
+      if (runtime.stopRequestedRunId === runtime.runId) runtime.forceStopArmedRunId = '';
+      this.emitQueueUpdate(runtime);
+      return;
+    }
     if (runtime.stopRequestedRunId === runtime.runId) {
       runtime.forceStopArmedRunId = '';
       const structured = typeof message === 'string' ? undefined : message;
@@ -1273,6 +1487,13 @@ export class ConversationKernel {
       }
     }
     if (changed) this.emitQueueUpdate(runtime);
+  }
+
+  private replaceTrackedQueuedMessage(runtime: ConversationRuntime, oldMessage: string, nextMessage: string, queueMode: ConversationQueueMode): void {
+    this.queueState(runtime);
+    const list = queueMode === 'steer' ? runtime.queued.steering : runtime.queued.followUp;
+    const index = list.indexOf(oldMessage);
+    if (index >= 0) list[index] = nextMessage;
   }
 
   private emitQueueUpdate(runtime: ConversationRuntime): void {
@@ -1405,9 +1626,10 @@ export class ConversationKernel {
     const runId = runtime.runId;
     await Promise.resolve();
     if (runtime.runId !== runId || runtime.stopRequestedRunId === runId) return true;
-    if (runtime.pendingNextTurn.length > 0 || runtime.runner.subagents.readRootInbox().length > 0) return false;
+    const hasSteering = runtime.pendingNextTurn.some(item => item.queueMode === 'steer');
+    if (hasSteering || runtime.runner.subagents.readRootInbox().length > 0) return false;
     runtime.guideAcceptanceClosedRunId = runId;
-    if (runtime.pendingNextTurn.length > 0 || runtime.runner.subagents.readRootInbox().length > 0) {
+    if (runtime.pendingNextTurn.some(item => item.queueMode === 'steer') || runtime.runner.subagents.readRootInbox().length > 0) {
       runtime.guideAcceptanceClosedRunId = '';
       return false;
     }

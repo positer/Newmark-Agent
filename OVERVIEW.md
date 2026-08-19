@@ -1,5 +1,185 @@
 # Newmark Agent Overview
 
+## Current mobile UI note (2026-08-19)
+
+`android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` owns the in-window input composite menu overlay. Its first-level Mode/File and Model/Intelligence surfaces use explicit button-centred entrance progress while retaining the PC-derived small-popover geometry and input-row anchoring. The corresponding operation record is `archive/2026-08-19-mobile-0454-input-menu-origin-animation.md`.
+
+## 2026-08-19 dev-0.4.8 Windows local candidate plan
+
+Desktop package metadata is `0.4.8`; the prerelease name is `dev-0.4.8`. The Windows full release tests, clean package generation, win-unpacked stress, MSI smoke, and machine-wide local installation passed. After installed-build acceptance, Ubuntu 24.04 WSL performed an isolated `npm ci`, complete Linux `npm test`, latency benchmark, native AppImage/deb/unpacked packaging, and artifact smoke before remote publication.
+
+Windows packaging and local installation are complete. `release/win-unpacked/` is the tested unpacked application tree; `release/Newmark-Agent-0.4.8-win-unpacked-x64.zip` is its distributable archive; `release/Newmark-Agent-0.4.8-x64.msi` is the installed candidate. `DESKTOP/scripts/release-safe-installed-shape-stress.cjs` verifies CLI/TUI/GUI startup while keeping mutable state outside Program Files, and `release-safe-shared-root-restart-stress.cjs` verifies explicit shared-root identity across CLI/TUI and two GUI starts. Both gates now wait for actual TUI surface readiness instead of treating the early mobile-server log line as readiness. `release-dev009-features-smoke.cjs` accepts the valid ordering where the first stop call completes an already-escalated force stop and the next observation is settled; the source runtime-isolation gate continues to enforce the ordinary graceful-to-force sequence.
+
+Installed tree ownership and artifact evidence:
+
+```text
+Newmark Agent/
+├─ DESKTOP/
+│  ├─ scripts/
+│  │  ├─ release-dev009-features-smoke.cjs
+│  │  ├─ release-safe-installed-shape-stress.cjs
+│  │  ├─ release-safe-shared-root-restart-stress.cjs
+│  │  └─ release-notes-dev-0.4.8.md
+│  └─ src/tests/screenCaptureIndependentVerify.ts
+├─ release/
+│  ├─ win-unpacked/
+│  │  └─ resources/app.asar
+│  ├─ Newmark-Agent-0.4.8-win-unpacked-x64.zip
+│  └─ Newmark-Agent-0.4.8-x64.msi
+└─ archive/20260819-111845-dev-0.4.8-windows-package-install.md
+```
+
+The MSI installed with exit code `0`; installed `Newmark.exe --version` and help return `0`, an unknown argument fails closed with exit `2`, and installed `app.asar` matches the package hash `39EBFDD407E8984970A9DD4F27767F1BCD9BE31745187ACF5A83B486D18D9CEA`. Linux AppImage, deb extraction, and unpacked ZIP all pass real GUI startup, Bash/sh terminal isolation, version checks, and clean exit/same-root relaunch. Linux artifact hashes are `F0C2221F...DB96` (AppImage), `8EC7A7D9...33AC` (deb), and `C6CA2E95...BBEA` (ZIP).
+
+## 2026-08-19 PC active screenshot tool status
+
+`DESKTOP/src/tools/index.ts` defines the provision-only `screen_capture` read tool separately from `computer_use`. `DESKTOP/src/core/agentKernelRunner.ts` and `DESKTOP/src/core/agent.ts` route its capture through the same content-addressed user-image attachment/input channel and expose the attachment to `image_inspect` for source-size inspection and bounded pixel crop/magnification. The Electron utility and WSL bridge files carry the read-only operation to the Windows host without acquiring the Computer Use lease. `DESKTOP/src/tests/screenCaptureIndependentVerify.ts` owns cold/warm pressure, temporary-file cleanup, lease isolation, unified image-channel, and secondary crop/magnification regression coverage. Detailed evidence is archived in `archive/20260819-103201-pc-active-screenshot-tool-stress.md`.
+
+## 2026-08-18 Android 0.4.52 local tool/runtime architecture and stress status
+
+- `android/app/src/main/java/com/newmark/mobile/data/LocalToolCatalog.kt` is the pure Kotlin Build/Plan inventory and browser-action policy.
+- `LocalTools.kt` owns schemas for all 14 local tools. `LocalToolExecutor.kt` owns sandboxed file, Memory Lab, settings, web fetch/search execution; conversation-owned tools delegate to the ViewModel/UI runtime.
+- `ChatViewModel.kt` executes task tools against the same persisted `LocalConversation.planItems` used by the right sidebar and binds each conversation to its Browser runtime. Tool calls/results, Guide events, final response, and model-only context persist in the assistant `workRun` and conversation context.
+- `BrowserSession.kt` owns conversation navigation/public WebView text. `NewmarkApp.kt` mounts/selects the real Browser before local `browser_use`; `RightSidebar.kt` returns rendered body text after page completion.
+- `DESKTOP/scripts/mobile-mock-server.cjs` provides remote API/SSE pressure and an isolated deterministic local provider. `android/scripts/fixtures/` contains credential-free stress configuration.
+- `MainActivity.kt` accepts queue/Guide diagnostics only for `.stress` packages with an explicit extra; formal builds have no automatic diagnostic path.
+- Formal verification passed Android unit tests, Release assembly, 10-file update guard, `speed-profile`, five 2208-2494 ms complete-interaction starts, and a 90-group stability window at 24.5-26.7 MB PSS / 21-24 threads with no fatal/ANR/process death. The 11-frame final graphics sample is invalid for a jank verdict.
+
+Detailed evidence: `archive/2026-08-18-mobile-0452-runtime-stress-and-local-tools.md`.
+
+## 2026-08-18 mobile complete-interaction performance, scheduler compatibility, and context lifecycle
+
+- `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` separates transcript projection, the shared conversation command surface, compact layout, and expanded layout into stable Compose compilation units. This is a compilation-boundary change only: the page tree, sidebar order, responsive breakpoints, popup routes, and feature entry points remain present. Portrait applies blur only while a sidebar has nonzero progress; foldable/tablet layouts deliberately do not blur the main workspace when sidebars are open.
+- `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt` performs archived/conversation disk reads on `Dispatchers.IO`, history normalization and token budgeting on `Dispatchers.Default`, and local tool execution on `Dispatchers.IO`. Only snapshot state publication remains on the main thread. This avoids single-main-thread work while remaining valid on two-core and higher-core devices.
+- `android/app/src/main/java/com/newmark/mobile/data/{ChatModels,LocalContextContract,ApiClient}.kt` owns the durable model-only context and bounded compression contract. Complete displayed `messages` never shrink. `modelContext` and `contextCompression` survive restart and normalization, follow the PC 70%/20%/12% thresholds, protect the latest complete user turn, and reset when a new branch is created.
+- `android/app/src/test/java/com/newmark/mobile/data/LocalContextContractTest.kt` covers the PC threshold ratios, complete-turn retention, bounded fallback, 10,000-message pressure, and a multi-megabyte tool result.
+- `android/scripts/install-mobile-debug-safe.ps1` still fingerprints every private file before and after `adb install -r`; Release installation additionally activates the packaged baseline profile and verifies a `speed-profile` compilation path before foreground launch.
+- Formal Release `0.4.51` / `451` passed five two-vCPU complete-interaction runs at `1963, 2107, 2238, 2376, 2552 ms`, all under 4000 ms with zero fatal/ANR/not-responding/launch-timeout/process-death record. Post-start memory was about 42 MB PSS with zero swap.
+- Structure smoke retained the input/send controls, left navigation, device expansion, Settings, Memory Lab, Terminal, Files, Editor, Plan, SubAgent, Browser, current-conversation plan, linked plan, plan creation, and browser navigation controls. The remote fixture had no real workspace row, so a live second-level remote workspace drawer was not falsely claimed from that smoke.
+- `archive/mobile-stress-20260819-005444.json` is the current 160-event remote state report. All remote correctness gates passed. Its stress Debug launch/jank values are intentionally not used as formal Release performance evidence.
+- Environment note: Android Emulator 37.1.11's visible gfxstream/QEMU backend hung after prolonged pressure. The userdata QCOW2 image was read-only checked and clean; no AVD wipe occurred. `-no-window -no-cache` restored the same data image and enabled the two-core application gates; a subsequent visible `-no-cache` start restored the foreground portrait window. A transient System UI ANR immediately after the first headless recovery was rejected as evidence; the final measured windows and later UI smokes contained zero ANR/error records.
+
+Relevant tree:
+
+```text
+Newmark Agent/
+├─ android/app/src/main/java/com/newmark/mobile/
+│  ├─ data/{ApiClient,ChatModels,LocalContextContract}.kt
+│  ├─ ui/NewmarkApp.kt
+│  └─ vm/ChatViewModel.kt
+├─ android/app/src/test/java/com/newmark/mobile/data/LocalContextContractTest.kt
+├─ android/scripts/install-mobile-debug-safe.ps1
+├─ archive/
+│  ├─ 2026-08-18-mobile-complete-interaction-context-performance.md
+│  └─ mobile-stress-20260819-005444.json
+└─ tasks/{plan,todo}.md
+```
+
+## 2026-08-18 mobile resident runtime projection and floating control geometry
+
+- `DESKTOP/src/server.ts`, `DESKTOP/src/main.ts`, and the GUI runtime-pool/utility protocol files expose exact workspace/conversation resident state and actions. The desktop runtime remains the owner of remote Goal, Flow, queue, Guide receipts, Stop, messages, and WorkRuns.
+- `android/app/src/main/java/com/newmark/mobile/data/MobileModels.kt` models the complete resident snapshot; `RemoteTrackingContract.kt` owns exact target/run reconciliation and the limited live-over-cold precedence rule.
+- `android/app/src/main/java/com/newmark/mobile/vm/DesktopLinkViewModel.kt` single-flights target-scoped refreshes and atomically projects messages, WorkRuns, Goal, Flow, queue, and runtime identity. It does not create a remote Android-owned queue.
+- `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` clips Goal/Flow brushes inside each rounded `StackCard`, follows viewport height changes when floating bars appear, and centers the Flow takeover pill in a full-width floating container like PC `.input-float-stack`.
+- `DESKTOP/scripts/mobile-mock-server.cjs` and `android/scripts/mobile-agent-stress.ps1` provide the reproducible 160-event remote runtime fixture and gates. The passing report is `archive/mobile-stress-20260818-224054.json`; the dated ledger is `archive/2026-08-18-mobile-resident-runtime-and-floating-bars.md`.
+- `android/app/src/main/java/com/newmark/mobile/data/LocalQueueContract.kt` and its unit test cover local FIFO/pause/edit/delete/Guide state transitions. The local `ChatViewModel` execution backend still has a mobile-specific loop/channel and has not yet become the PC ConversationKernel; this is a recorded architecture gap.
+- `android/app/build.gradle.kts` identifies the installed formal build as `0.4.50` / `versionCode 450`. The foreground screenshot is `archive/mobile-0450-foreground.png`; it confirms the formal package is running but is not evidence of an active Flow pill because the stress fixture had already ended.
+
+## 2026-08-18 mobile historical WorkRun ledger ordering
+
+- `android/app/src/main/java/com/newmark/mobile/data/RemoteTrackingContract.kt` now owns the mobile port of the desktop orphan-WorkRun placement contract. `unownedRunsBefore` consumes the backend-ordered WorkRun ledger plus visible message ownership and returns only earlier legacy/unanchored runs that must be reconstructed before the next owned run.
+- `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` uses that contract during transcript projection and no longer timestamp-sorts or blanket-appends historical runs ahead of the newest conversation edge.
+- Regression coverage lives in `android/app/src/test/java/com/newmark/mobile/data/RemoteTrackingContractTest.kt`; the dated incident ledger is `archive/2026-08-18-mobile-historical-workrun-ledger-order.md`.
+- Emulator evidence is `archive/mobile-0449-workrun-order.png`; it confirms the historical Build remains between its owning user message and Agent reply. Duplicate terminal status rows inside that block are tracked separately and are not evidence of a remaining placement failure.
+
+## 2026-08-18 mobile WorkRun identity and shared-backend boundary
+
+- `android/app/src/main/java/com/newmark/mobile/data/RemoteTrackingContract.kt` is the pure target/run reconciliation contract. It requires exact workspace + conversation + non-empty run identity and makes durable WorkRuns authoritative over provisional SSE runs.
+- `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` renders live and durable WorkRuns through one anchored collection. It does not append a second live bubble at the transcript frontier.
+- `android/app/src/main/java/com/newmark/mobile/vm/DesktopLinkViewModel.kt` accepts remote events only for the exact selected target, carries event anchors into provisional runs, clears a provisional run when the durable snapshot contains its `runId`, and projects the PC-owned remote queue.
+- `DESKTOP/src/core/conversationKernel.ts` owns remote queue item identity and mutation. Mobile queue operations are target-scoped runtime operations, not Android-local state.
+- Architectural invariant for continuation work: Compose owns one conversation interaction surface. Local and remote implementations are transport adapters for the same snapshot/event/action protocol. Local execution must reproduce the PC ConversationKernel sequence and receipts instead of adding ViewModel-only queue/render semantics.
+
+## mobile dev-0.4.47 远程 PC Goal/Flow/Queue 同构（2026-08-18）— source PASS
+
+Android 远程输入栈现在直接投影并控制当前 `workspaceId + conversationId` 对应的 PC GUI runtime：Goal bar 可编辑、暂停/继续和删除；Flow prompt 与 takeover 气泡读取当前 Flow 运行/暂停记录；Guide/Next 选择写回同一 target；普通 Guide 与 Goal Guide 均通过桌面 runtime pool 的 `enqueueGuide` 进入 PC 原生 accepted/applied/deferred/rejected 生命周期；普通 Build Stop 通过 target-local `requestStop` 保持第一次协作停止、第二次强制停止的桌面语义。PC 自身发起运行时，移动端依据远程 runtime/Flow 快照切换发送按钮状态，而非只依赖移动 HTTP 请求是否仍在等待。
+
+移动端维护的远程 Next 项按 target 隔离，并携带 `requestedMode` / `goalObjective`；PC 运行从任一端结束后，状态轮询会自动触发排空。Goal 编辑在 Guide + active Build 时成为 Goal Guide，在 Next 时进入带 Goal 声明的可编辑队列，空闲时才直接更新 Goal。移动本地只开放持久化可编辑排队消息；运行期输入统一进入 Next 队列，不伪造 PC Goal、Flow 或真实 steer 能力。
+
+相关文件树：
+
+```text
+Newmark Agent/
+├─ DESKTOP/src/
+│  ├─ main.ts                         # GUI runtime 原生 Guide、Goal Guide、Stop 与 target 状态桥接
+│  ├─ server.ts                       # 精确 target 的移动控制/发送 API
+│  └─ tests/mobileWorkspaceApiVerify.ts # 鉴权、工作区隔离和 standalone fail-closed 契约
+├─ android/app/src/main/java/com/newmark/mobile/
+│  ├─ data/{ChatModels,MobileApiClient,MobileModels}.kt
+│  ├─ vm/{ChatViewModel,DesktopLinkViewModel}.kt
+│  └─ ui/{ChatScreen,NewmarkApp}.kt
+├─ android/app/build.gradle.kts       # 0.4.47 / versionCode 447
+├─ archive/2026-08-18-mobile-remote-goal-flow-queue-parity.md
+├─ README.md
+└─ tasks/{plan,todo}.md
+```
+
+验证：Desktop TypeScript/build 与完整 `verify.js` 回归 PASS；移动 API 43/43 PASS；Android `testDebugUnitTest` 与 `assembleDebug` PASS。`0.4.47` 已通过 `adb install -r` 数据守卫覆盖安装到 `emulator-5554`，8 个私有文件保持不变，MainActivity 在前台且启动后崩溃/ANR 扫描为空。
+
+## mobile dev-0.4.46 本地运行状态实时呈现（2026-08-18）— source + device PASS
+
+Android 本地对话不再把 `conversations.json` 中的终态 Build Block 当作运行期数据源。`ChatViewModel.send` 在接受发送的同一状态转换内创建 run id、开始时间、展开的 `running` WorkRun 和 `start` 事件；provider 等待、公开思考、本地工具调用、工具结果、最终回复、错误与终态随后逐事件发布同一 run 的不可变快照。`NewmarkApp.kt` 只把与当前本地对话 ID 匹配的临时块追加到历史末尾，避免切换对话时串线；持久化完成后再清除临时块，停止则把当前可见事件流保存为 `interrupted`。
+
+`ChatScreen.kt` 的尾部跟随同时观察外层消息数量和 WorkRun 内部事件/状态修订。由于实时 Build 始终占用同一个 LazyColumn 条目，新增 thought/tool 事件现在也会保持在可视区域，不再产生“完成落盘时一次性出现”的错觉。完整链路为：同步 start → 逐事件内存快照 → Compose 当前对话投影 → 终态持久化替换。
+
+相关文件树：
+
+```text
+Newmark Agent/
+├─ android/app/src/main/java/com/newmark/mobile/
+│  ├─ vm/ChatViewModel.kt         # 本地运行身份、同步 start、逐事件快照与终态持久化
+│  ├─ ui/NewmarkApp.kt            # 当前对话限定的临时 WorkRun 投影
+│  └─ ui/ChatScreen.kt            # WorkRun 内部事件修订驱动尾部跟随
+├─ android/app/build.gradle.kts   # 0.4.46 / versionCode 446
+├─ archive/2026-08-18-mobile-local-live-run.md
+├─ README.md
+└─ tasks/
+   ├─ plan.md
+   └─ todo.md
+```
+
+验证：Android `:app:testDebugUnitTest :app:assembleDebug` PASS；Desktop `npm.cmd run build` PASS；`mobileWorkspaceApiVerify` 41/41 PASS；模拟器通过 `adb install -r` 数据指纹守卫安全覆盖安装，未卸载、未清除应用数据。
+
+## 2026-08-18 mobile popover/glass correction (dev-0.4.37)
+
+复合弹窗一级/二级定位继续向下调整至 44dp；远程模型二级菜单读取桌面端完整 provider/model 配置并保留精确 deployment 身份。已撤销会造成全屏模糊或遮蔽 Popup 内容的窗口级 blur 实验；当前仅保留弹窗/边栏自身的半透明深蓝玻璃衬底、折射边框与阴影，主体聊天区域不再被模糊。Android 单测/构建通过，安全覆盖安装到 `emulator-5554`，7 个私有文件指纹不变，版本 `0.4.37` / `versionCode=437`。
+
+## mobile dev-0.4.34 顶栏操作区间距与旧本地会话迁移（2026-08-18）— source + device PASS
+
+Android `ChatScreen.kt` 的 `ChatTopBar` 现遵循 PC 顶栏的独立操作区语义：仅当“连接桌面端”圆形按钮实际存在时，才在其与“新对话”之间插入固定 `8dp` 间隙。两个按钮仍各自保持 `36dp` 圆形尺寸、原有右对齐和点击语义，不引入额外空 rail 或改变本地/远程显示条件。
+
+现场覆盖安装同时暴露并修复了旧 `conversations.json` 的前向兼容问题：Gson 对新增的 Kotlin 非空字段可在旧 JSON 中产生运行时 null，导致 `LocalConversation.copy()` 冷启动崩溃。`ChatViewModel.normalizeConversationMessages` 现进行完整的无损 `LocalConversation` 重建，缺失的 `mode` 规范为 `build`、`planItems` 规范为空列表；消息、分支树、归档标记、标题与时间戳全部保留。输入区还接收按对话持久化的 `selectedMode`，切换本地对话不会将 Build/Plan 标签串到另一会话。
+
+验证：`:app:testDebugUnitTest :app:assembleDebug` PASS；`android/scripts/install-mobile-debug-safe.ps1 -SkipBuild` 以 `adb install -r` 覆盖 `emulator-5554`，安装前后 7 个 app-private 文件的完整路径+SHA-256 指纹一致。`com.newmark.mobile` 已启动并显示正式聊天界面，版本为 `0.4.34` / `versionCode=434`。截图 `archive/mobile-0434-top-actions-spacing-ready.png`，详细记录 `archive/2026-08-18-mobile-top-action-spacing-and-legacy-migration.md`。
+
+相关文件树：
+
+```text
+Newmark Agent/
+├─ android/
+│  └─ app/src/main/java/com/newmark/mobile/
+│     ├─ ui/ChatScreen.kt         # 顶栏独立圆形操作区与模式标签同步
+│     ├─ ui/NewmarkApp.kt         # 当前本地会话模式传入输入区
+│     └─ vm/ChatViewModel.kt      # 旧本地会话无损字段迁移
+├─ android/scripts/install-mobile-debug-safe.ps1 # 保留私有数据的覆盖安装守卫
+├─ archive/2026-08-18-mobile-top-action-spacing-and-legacy-migration.md
+├─ README.md
+├─ OVERVIEW.md
+└─ tasks/
+   ├─ plan.md
+   └─ todo.md
+```
+
 ## dev-0.4.7 统一预发布命名（2026-08-18）
 
 本次跨平台候选统一使用：Git tag `dev-0.4.7`、GitHub Release 标题 `Newmark Agent dev-0.4.7`、桌面 package/executable 版本 `0.4.7`，资产名保持 `Newmark-Agent-0.4.7-*`。Windows 发布范围为 x64 MSI 与 win-unpacked ZIP；Linux 发布范围为 x64 AppImage、amd64 deb 与 linux-unpacked ZIP。Android 继续使用自身独立的 `versionCode/versionName` 发布线，不被桌面语义版本覆盖。
@@ -1628,3 +1808,21 @@ Verification includes the complete built desktop suite, the `1504/1504` source c
 ## 移动模型菜单滚动与图片二维码配对（2026-08-17）
 
 `AnchorMenu` 统一限制弹窗最大高度为安全可用高度的 56%，并封顶 `320dp`。模型选择页显式启用 `rememberScrollState` 与自绘滚动条，长 provider/model 列表可上下滚动且不遮挡菜单项。设置页图片选择器通过 ZXing 解码二维码，成功后调用 `DesktopLinkViewModel.pairFromUrl` 完成桌面端配对；失败时通过 `reportPairingError` 告知用户原因。
+
+## 移动边栏窗口级背景模糊与远程模型兼容（2026-08-18）
+
+- `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` 将 `32.dp` 模糊仅施加到边栏后方的 `ChatScreen`。竖屏左栏由 `drawerState.isOpen` 驱动，右栏由连续的 `rightSidebarProgress` 驱动；平板/折叠屏的二级左栏和右栏采用相同规则。边栏在模糊层之后绘制，因此图标、文字和控件保持清晰；Popup/Dialog 不参与窗口级模糊。
+- `android/app/src/main/java/com/newmark/mobile/ui/components/AnchorMenu.kt` 对 `UpStart` 菜单只约束顶部安全区，不再用通用 `maxY` 把菜单反复钳回高位。输入复合菜单的实际底边因此稳定在输入框顶边上方约 `6dp`，同时保留限宽、限高和溢出滚动。
+- `android/app/src/main/java/com/newmark/mobile/data/MobileApiClient.kt` 与 `android/app/src/main/java/com/newmark/mobile/vm/DesktopLinkViewModel.kt` 为旧桌面安装增加同一配对目标内的 `/api/state.providers` 兼容读取。新桌面仍以 `/api/mobile/state.providers` 为主；兼容目录只接收脱敏 provider/model 元数据，并生成 provider 隔离的 deployment 标识。
+- 现场证据为 `archive/mobile-0440-left-sidebar-window-blur.png`、`archive/mobile-0440-right-sidebar-window-blur.png` 与 `archive/mobile-0440-model-secondary-final.png`。模拟器二级菜单实际显示 DeepSeek/APInebula 多模型并可滚动，版本为 `0.4.40` / `440`。
+
+### 0.4.41 模糊进度连续化
+
+`NewmarkApp.kt` 不再用 `drawerState.isOpen` 或 `hasSecondary` 的布尔状态直接切换 `32.dp` 模糊。竖屏左栏从 Material3 `DrawerState.currentOffset` 与当前抽屉宽度计算 `0..1` 实际展开比例；右栏沿用 `rightSidebarProgress`；平板/折叠屏二级左栏使用与宽度展开相同的 `400ms PcEaseOutExpo` 动画。最终模糊半径为 `32.dp × max(左栏进度, 右栏进度)`，所以拖动、打开和关闭全过程平滑，并且双栏同时存在时不会因另一侧收起而突然减弱。
+# 2026-08-19 mobile runtime update
+
+- `android/app/src/main/java/com/newmark/mobile/ui/BrowserSession.kt` owns conversation-scoped browser state and lazy activation.
+- `android/app/src/main/java/com/newmark/mobile/ui/RightSidebar.kt` keeps an activated conversation browser mounted independently from right-sidebar visibility and keys WebView lifetime by session.
+- `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` binds local Agent browser calls to the active local conversation without mutating sidebar presentation state.
+- `android/app/src/test/java/com/newmark/mobile/ui/BrowserSessionRegistryTest.kt` guards same-conversation identity and cross-conversation isolation.
+- `archive/2026-08-19-mobile-0453-runtime-stress.md` records formal animation, remote resident-state, local all-tool, restart, and resource evidence.

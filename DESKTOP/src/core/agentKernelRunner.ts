@@ -1487,10 +1487,12 @@ function toKernelTools(agent: Agent, definitions?: unknown[], provisioning?: Too
           throw new Error(rawText);
         }
         const visionImage = visualFallbackImageInput(agent, name, rawText);
+        const capturedInput = name === 'screen_capture' ? agent.registerCapturedImageInput(visionImage.image || '', 'active-screenshot.jpg') : null;
         const directImage = imageInspectDataUrl(name, rawText);
-        const text = spillOversizedToolResult(agent, name, sanitizeVisualToolText(name, rawText));
+        const text = spillOversizedToolResult(agent, name, capturedImageToolText(name, sanitizeVisualToolText(name, rawText), capturedInput?.id));
         const content: Array<KernelTextContent | KernelImageContent> = [{ type: 'text', text }];
-        if (visionImage.imagePath) content.push({ type: 'image', imagePath: visionImage.imagePath, mimeType: imageMimeForPath(visionImage.imagePath) });
+        if (name === 'screen_capture' && capturedInput?.dataUrl) content.push({ type: 'image', image: capturedInput.dataUrl, mimeType: capturedInput.mimeType });
+        else if (visionImage.imagePath) content.push({ type: 'image', imagePath: visionImage.imagePath, mimeType: imageMimeForPath(visionImage.imagePath) });
         else if (visionImage.image) content.push({ type: 'image', image: visionImage.image, mimeType: visionImage.mimeType });
         if (directImage) content.push({ type: 'image', image: directImage, mimeType: 'image/png' });
         const terminate = shouldTerminateAfterToolResult(name)
@@ -1503,7 +1505,7 @@ function toKernelTools(agent: Agent, definitions?: unknown[], provisioning?: Too
             displayImage = agent.hydrateDisplayImage(parsed.image);
           } catch {}
         }
-        return { content, details: { tool: name, ok: true, terminate, ...(launchReceipt ? { launchReceipt } : {}), visionImagePath: visionImage.imagePath || undefined, ephemeralVisionImage: !!visionImage.image, displayImage }, terminate };
+        return { content, details: { tool: name, ok: true, terminate, ...(launchReceipt ? { launchReceipt } : {}), visionImagePath: visionImage.imagePath || undefined, ephemeralVisionImage: !!visionImage.image, capturedAttachmentId: capturedInput?.id, displayImage }, terminate };
       },
     };
   }).filter((tool: KernelTool) => !!tool.name);
@@ -1537,7 +1539,7 @@ function boundInlineToolResult(name: string, text: string): string {
   const value = String(text || '');
   if (value.length <= INLINE_TOOL_RESULT_MAX_CHARS) return value;
   // 结构化结果（JSON/视觉/浏览器/子代理/计划等）不可安全截断，保持原样。
-  if (['computer_use', 'browser_use', 'pdf_read', 'image_inspect', 'image_display', 'task', 'subagent_create', 'SubAgent', 'subagent_send', 'subagent_result', 'subagent_read', 'linked_plan', 'question'].includes(name)) {
+  if (['screen_capture', 'computer_use', 'browser_use', 'pdf_read', 'image_inspect', 'image_display', 'task', 'subagent_create', 'SubAgent', 'subagent_send', 'subagent_result', 'subagent_read', 'linked_plan', 'question'].includes(name)) {
     return value;
   }
   const headChars = Math.floor(INLINE_TOOL_RESULT_MAX_CHARS * 0.6);
@@ -1557,7 +1559,7 @@ function spillOversizedToolResult(agent: Agent, name: string, text: string): str
   const value = String(text || '');
   if (value.length <= INLINE_TOOL_RESULT_MAX_CHARS) return value;
   // 结构化结果不可安全落盘引用（破坏 JSON 结构），保持原样。
-  if (['computer_use', 'browser_use', 'pdf_read', 'image_inspect', 'image_display', 'task', 'subagent_create', 'SubAgent', 'subagent_send', 'subagent_result', 'subagent_read', 'linked_plan', 'question'].includes(name)) {
+  if (['screen_capture', 'computer_use', 'browser_use', 'pdf_read', 'image_inspect', 'image_display', 'task', 'subagent_create', 'SubAgent', 'subagent_send', 'subagent_result', 'subagent_read', 'linked_plan', 'question'].includes(name)) {
     return value;
   }
   const artifactId = agent.storeToolResultArtifact(name, value);
@@ -1573,10 +1575,10 @@ function spillOversizedToolResult(agent: Agent, name: string, text: string): str
 }
 
 function sanitizeVisualToolText(name: string, text: string): string {
-  if (name !== 'computer_use' && name !== 'browser_use' && name !== 'pdf_read' && name !== 'image_inspect') return text;
+  if (name !== 'screen_capture' && name !== 'computer_use' && name !== 'browser_use' && name !== 'pdf_read' && name !== 'image_inspect') return text;
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
-    if (name === 'computer_use' || name === 'browser_use' || name === 'pdf_read') {
+    if (name === 'screen_capture' || name === 'computer_use' || name === 'browser_use' || name === 'pdf_read') {
       delete parsed.vision_image_path;
       delete parsed.vision_image_data_url;
       if (name === 'pdf_read' && parsed.result && typeof parsed.result === 'object') {
@@ -1593,7 +1595,7 @@ function sanitizeVisualToolText(name: string, text: string): string {
 }
 
 function discardComputerUseVisionImage(name: string, text: string): void {
-  if (name !== 'computer_use') return;
+  if (name !== 'screen_capture' && name !== 'computer_use') return;
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
     const screenshotPath = String(parsed.vision_image_path || '');
@@ -1612,8 +1614,21 @@ function imageInspectDataUrl(name: string, text: string): string {
   }
 }
 
+function capturedImageToolText(name: string, text: string, attachmentId?: string): string {
+  if (name !== 'screen_capture' || !attachmentId) return text;
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    parsed.attachment_id = attachmentId;
+    parsed.image_input_channel = 'user-image';
+    parsed.inspect_next = { tool: 'image_inspect', actions: ['source_info', 'crop'], max_scale: 4 };
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return text;
+  }
+}
+
 function visualFallbackImageInput(agent: Agent, name: string, text: string): { imagePath?: string; image?: string; mimeType?: string } {
-  if (name !== 'computer_use' && name !== 'browser_use' && name !== 'pdf_read') return {};
+  if (name !== 'screen_capture' && name !== 'computer_use' && name !== 'browser_use' && name !== 'pdf_read') return {};
   const model = agent.activeModelConfig();
   if (!model?.vision) return {};
   try {
@@ -1739,7 +1754,7 @@ async function executeNewmarkTool(agent: Agent, name: string, args: string, inpu
     actorId: agent.runtimeActorId,
     workspaceId: terminalTakeoverWorkspaceId(wsDir),
     backend: process.env.NEWMARK_WSL_DISTRO ? 'wsl' : (process.platform === 'win32' ? 'windows' : process.platform),
-    allowEphemeralVisionImage: (name === 'computer_use' || name === 'browser_use' || name === 'pdf_read' || name === 'ocr_read')
+    allowEphemeralVisionImage: (name === 'screen_capture' || name === 'computer_use' || name === 'browser_use' || name === 'pdf_read' || name === 'ocr_read')
       && !!agent.activeModelConfig()?.vision,
     signal,
   });

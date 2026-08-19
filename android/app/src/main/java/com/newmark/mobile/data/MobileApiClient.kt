@@ -80,6 +80,18 @@ class MobileApiClient {
     /** 桌面端状态（对话列表 + 当前对话消息 + 模式/模型） */
     suspend fun state(pair: PairInfo): Result<JSONObject> = get(pair, "/api/mobile/state")
 
+    /**
+     * 旧桌面包的 mobile state 尚未包含 provider catalog；它的普通 state
+     * 已经返回同一份脱敏 providers。仅用于兼容已安装旧桌面进程。
+     */
+    suspend fun legacyProviderState(pair: PairInfo): Result<JSONObject> = get(pair, "/api/state")
+
+    suspend fun selectModel(pair: PairInfo, model: String): Result<JSONObject> =
+        post(pair, "/api/mobile/model", JSONObject().apply { put("model", model) })
+
+    suspend fun selectIntelligence(pair: PairInfo, tier: String): Result<JSONObject> =
+        post(pair, "/api/mobile/intelligence", JSONObject().apply { put("tier", tier) })
+
     /** 某个对话的快照（workspaceId 指定所属工作区，缺省当前工作区） */
     suspend fun conversation(pair: PairInfo, conversationId: String?, workspaceId: String? = null): Result<JSONObject> {
         val suffix = conversationId?.let { "&conversationId=$it" } ?: ""
@@ -93,11 +105,17 @@ class MobileApiClient {
         message: String,
         conversationId: String?,
         workspaceId: String? = null,
+        requestedMode: String = "",
+        goalObjective: String = "",
+        inputMode: String = "",
     ): Result<JSONObject> {
         val body = JSONObject().apply {
             put("message", message)
             conversationId?.let { put("conversationId", it) }
             workspaceId?.takeIf { it.isNotBlank() }?.let { put("workspaceId", it) }
+            requestedMode.takeIf { it.isNotBlank() }?.let { put("requestedMode", it) }
+            goalObjective.takeIf { it.isNotBlank() }?.let { put("goalObjective", it) }
+            inputMode.takeIf { it.isNotBlank() }?.let { put("inputMode", it) }
         }
         return post(pair, "/api/mobile/send", body)
     }
@@ -157,6 +175,41 @@ class MobileApiClient {
 
     suspend fun rightSidebarState(pair: PairInfo, workspaceId: String, conversationId: String): Result<JSONObject> =
         get(pair, "/api/mobile/right-sidebar-state?workspaceId=${query(workspaceId)}&conversationId=${query(conversationId)}")
+
+    suspend fun conversationUiState(pair: PairInfo, workspaceId: String, conversationId: String): Result<JSONObject> =
+        get(pair, "/api/mobile/conversation-ui-state?workspaceId=${query(workspaceId)}&conversationId=${query(conversationId)}")
+
+    suspend fun conversationUiAction(
+        pair: PairInfo,
+        workspaceId: String,
+        conversationId: String,
+        action: String,
+        value: String = "",
+    ): Result<JSONObject> = post(pair, "/api/mobile/conversation-ui-action", JSONObject().apply {
+        put("workspaceId", workspaceId)
+        put("conversationId", conversationId)
+        put("action", action)
+        put("value", value)
+    })
+
+    suspend fun conversationQueueAction(
+        pair: PairInfo,
+        workspaceId: String,
+        conversationId: String,
+        action: String,
+        id: String = "",
+        text: String = "",
+        requestedMode: String = "build",
+        goalObjective: String = "",
+    ): Result<JSONObject> = post(pair, "/api/mobile/conversation-ui-action", JSONObject().apply {
+        put("workspaceId", workspaceId)
+        put("conversationId", conversationId)
+        put("action", action)
+        id.takeIf(String::isNotBlank)?.let { put("id", it) }
+        text.takeIf(String::isNotBlank)?.let { put("text", it) }
+        requestedMode.takeIf(String::isNotBlank)?.let { put("requestedMode", it) }
+        goalObjective.takeIf(String::isNotBlank)?.let { put("goalObjective", it) }
+    })
 
     suspend fun workspaceFiles(pair: PairInfo, workspaceId: String, path: String): Result<JSONObject> =
         get(pair, "/api/mobile/workspace-files?workspaceId=${query(workspaceId)}&path=${query(path)}")

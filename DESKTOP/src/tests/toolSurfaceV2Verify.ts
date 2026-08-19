@@ -30,6 +30,7 @@ const DEFINITIONS = [
   { type: 'function', function: { name: 'bash', description: 'Run a shell command', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } } },
   { type: 'function', function: { name: 'glob', description: 'Find files by glob pattern', parameters: { type: 'object', properties: { pattern: { type: 'string' } }, required: ['pattern'] } } },
   { type: 'function', function: { name: 'grep', description: 'Search file content with regex', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' } }, required: ['pattern', 'path'] } } },
+  { type: 'function', function: { name: 'screen_capture', description: 'Capture the desktop without starting Computer Use', parameters: { type: 'object', properties: { target: { type: 'string' } }, required: [] } } },
   { type: 'function', function: { name: 'git_status', description: 'Show git status', parameters: { type: 'object', properties: {}, required: [] } } },
   { type: 'function', function: { name: 'git_log', description: 'Show git history', parameters: { type: 'object', properties: {}, required: [] } } },
   { type: 'function', function: { name: 'git_push', description: 'Push commits to the remote', parameters: { type: 'object', properties: {}, required: [] } } },
@@ -66,6 +67,7 @@ function main(): void {
   check(!gitNames.includes('git_status') && !gitNames.includes('git_log') && !gitNames.includes('git_push'), 'git tools remain provision-only regardless of intent or risk');
   check(!gitNames.includes('SubAgent') && !gitNames.includes('task_create'), 'SubAgent and task checklist schemas remain provision-only');
   check(gitNames.length === BASIC_TOOL_NAMES.length, 'initial surface contains exactly the eight foundational schemas');
+  check(!gitNames.includes('screen_capture'), 'screen_capture remains provision-only');
   check(git.systemPromptNotice.includes('Capability routing fingerprint'), 'v2 notice carries the capability routing fingerprint');
 
   // -------------------------------------------------------------------------

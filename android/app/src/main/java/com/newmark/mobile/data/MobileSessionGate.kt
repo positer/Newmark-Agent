@@ -30,5 +30,9 @@ internal class MobileSessionGate {
         pair != null && session.generation == generation && session.identity == activeIdentity &&
             session.identity == identityFor(pair)
 
+    fun current(pair: PairInfo?): Session? = pair
+        ?.takeIf { activeIdentity.isNotBlank() && identityFor(it) == activeIdentity }
+        ?.let { Session(generation, activeIdentity) }
+
     private fun identityFor(pair: PairInfo): String = "${pair.host}:${pair.port}:${pair.token}"
 }

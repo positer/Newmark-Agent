@@ -135,6 +135,7 @@ let _forceQuit = false;
 let forcedExitTimer: NodeJS.Timeout | null = null;
 let electronBrowserUseHost: ElectronBrowserUseHost | null = null;
 let browserUseEngine: BrowserUseEngine | null = null;
+const mobileServerWorkEventSubscribers = new Set<(event: AgentWorkEvent) => void>();
 // A single renderer can host several hidden conversation-bound guests. The
 // legacy host map is retained for focused-window discovery, while this map is
 // the authoritative Browser-Use/right-sidebar binding.
@@ -302,7 +303,7 @@ async function resetWslAgentClient(): Promise<void> {
   if (wslAgentClient) await wslAgentClient.resetAgent();
 }
 
-function broadcastAgentWorkEvent(event: unknown): void {
+function broadcastAgentWorkEvent(event: unknown, mirrorToMobile = true): void {
   const workEvent = event as Partial<AgentWorkEvent>;
   if ((workEvent.type === 'done' || workEvent.type === 'error') && workEvent.runtimeKey) {
     browserUseEngine?.clearRuntime(workEvent.runtimeKey);
@@ -311,6 +312,11 @@ function broadcastAgentWorkEvent(event: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     win.webContents.send('agent:workEvent', event);
+  }
+  if (mirrorToMobile) {
+    for (const listener of mobileServerWorkEventSubscribers) {
+      try { listener(event as AgentWorkEvent); } catch { /* ignore disconnected mobile bridge */ }
+    }
   }
 }
 
@@ -1845,8 +1851,176 @@ if (isViewerArg) {
         // 远程触及开关开启 → GUI 进程内托管启动 mobile server（托盘常驻不中断）
         if (agent.config.getBool('remote', 'touch_enabled')) {
           try {
-            const { runServer } = require('./server');
-            runServer(root);
+            const { runServer } = require('./server') as typeof import('./server');
+            runServer(root, {
+              agent,
+              automation,
+              onWorkEvent: event => broadcastAgentWorkEvent(event, false),
+              subscribeWorkEvents: listener => {
+                mobileServerWorkEventSubscribers.add(listener);
+                return () => mobileServerWorkEventSubscribers.delete(listener);
+              },
+              conversationUiState: async requested => {
+                const target = conversationRuntimeTarget(requested);
+                const snapshot = wslBackendEnabled()
+                  ? await ensureWslConversationPool()!.snapshot(target)
+                  : await ensureElectronUtilityPool().snapshot(target);
+                const flowRunning = flowRunningForTarget(target);
+                const flowSuspension = flowSuspensionForTarget(target);
+                return {
+                  ...snapshot,
+                  flow: flowRunning ? {
+                    running: true,
+                    paused: false,
+                    name: flowRunning.name,
+                    promptText: String(activeFlowStateFor(target)?.input || ''),
+                    message: '',
+                  } : flowSuspension ? {
+                    running: true,
+                    paused: true,
+                    name: flowSuspension.workflowName || '',
+                    promptText: String(flowSuspension.input || ''),
+                    message: String(flowSuspension.message || ''),
+                    reason: flowSuspension.reason || '',
+                  } : null,
+                };
+              },
+              conversationUiAction: async (requested, action, value, input) => {
+                const target = conversationRuntimeTarget(requested);
+                if (action.startsWith('queue_')) {
+                  const queueAction = action === 'queue_enqueue' ? 'enqueue'
+                    : action === 'queue_update' ? 'update'
+                      : action === 'queue_delete' ? 'delete'
+                        : action === 'queue_toggle_pause' ? 'toggle_pause'
+                          : 'guide';
+                  const queueInput = {
+                    id: String(input?.id || ''),
+                    text: String(input?.text || value || ''),
+                    requestedMode: String(input?.requestedMode || 'build'),
+                    goalObjective: String(input?.goalObjective || ''),
+                    createdAt: String(input?.createdAt || ''),
+                  };
+                  return wslBackendEnabled()
+                    ? await ensureWslConversationPool()!.queueAction(target, queueAction, queueInput)
+                    : await ensureElectronUtilityPool().queueAction(target, queueAction, queueInput);
+                }
+                if (action === 'goal_update') {
+                  return { goal: await mutateTargetConversation(target, () => {
+                    const isolated = isolatedConversationAgent(target);
+                    isolated.updateGoal(String(value || '').trim());
+                    isolated.setMode('goal');
+                    isolated.saveWorkspaceConversationState(true);
+                    return isolated.getConversationSnapshot(target.conversationId).goal;
+                  }) };
+                }
+                if (action === 'goal_guide' || action === 'conversation_guide') {
+                  const objective = action === 'goal_guide' ? String(value || '').trim() : '';
+                  const guideText = String(value || '').trim();
+                  const snapshot = wslBackendEnabled()
+                    ? await ensureWslConversationPool()!.snapshot(target)
+                    : await ensureElectronUtilityPool().snapshot(target);
+                  const runtime = snapshot.runtime as { running?: boolean; runId?: string } | null | undefined;
+                  if (!guideText || !runtime?.running || !runtime.runId) {
+                    return { ok: false, error: action === 'goal_guide'
+                      ? 'There is no active Build for this Goal Guide.'
+                      : 'Target conversation is not running.' };
+                  }
+                  const prefix = 'Goal for the current Build:\n';
+                  const now = new Date().toISOString();
+                  const envelope: ConversationInputEnvelope = {
+                    clientMessageId: randomUUID(),
+                    guideId: randomUUID(),
+                    target: { workspaceId: target.workspaceId, conversationId: target.conversationId },
+                    runId: runtime.runId,
+                    deliveryMode: 'steer',
+                    text: objective ? prefix + objective : guideText,
+                    goalObjective: objective || undefined,
+                    createdAt: now,
+                  };
+                  const receipt = wslBackendEnabled()
+                    ? await ensureWslConversationPool()!.enqueueGuide(envelope)
+                    : await ensureElectronUtilityPool().enqueueGuide(envelope);
+                  return { ok: receipt.status !== 'rejected', receipt };
+                }
+                if (action === 'goal_toggle_pause') {
+                  const resident = wslBackendEnabled()
+                    ? await ensureWslConversationPool()!.toggleGoalPause(target)
+                    : await ensureElectronUtilityPool().toggleGoalPause(target);
+                  const paused = resident !== null ? resident : await mutateTargetConversation(target, () => isolatedConversationAgent(target).toggleGoalPause());
+                  return { ok: true, paused };
+                }
+                if (action === 'goal_clear') {
+                  const resident = wslBackendEnabled()
+                    ? await ensureWslConversationPool()!.clearGoal(target)
+                    : await ensureElectronUtilityPool().clearGoal(target);
+                  if (resident === null) await mutateTargetConversation(target, () => isolatedConversationAgent(target).clearGoal());
+                  return { ok: true, cleared: true };
+                }
+                if (action === 'flow_pause') return await stopFlowForTarget(target);
+                if (action === 'flow_resume') return await resumeFlowForTarget(String(value || ''), target);
+                if (action === 'conversation_stop') {
+                  const snapshot = wslBackendEnabled()
+                    ? await ensureWslConversationPool()!.snapshot(target)
+                    : await ensureElectronUtilityPool().snapshot(target);
+                  const runtime = snapshot.runtime as { runId?: string } | null | undefined;
+                  return wslBackendEnabled()
+                    ? await ensureWslConversationPool()!.requestStop(target, runtime?.runId)
+                    : await ensureElectronUtilityPool().requestStop(target, runtime?.runId);
+                }
+                if (action === 'input_mode') {
+                  const mode = String(value || '') === 'next' ? 'next' : 'guide';
+                  const selected = wslBackendEnabled()
+                    ? await ensureWslConversationPool()!.setInputMode(target, mode)
+                    : await ensureElectronUtilityPool().setInputMode(target, mode);
+                  return { ok: true, inputMode: selected || mode };
+                }
+                const flow = activeFlowStateFor(target);
+                if (!flow?.abortController || !flow.flowAgent) return { ok: false, error: 'No active Flow accepts Guide input.' };
+                const accepted = flow.flowAgent.queueActiveKernelMessage(String(value || '').trim(), 'steer') || false;
+                return accepted ? { ok: true, accepted: true, flow: flow.name } : { ok: false, error: 'The current Flow Build is not accepting Guide input.' };
+              },
+              conversationPrompt: async (requested, message, requestedOptions) => {
+                const target = conversationRuntimeTarget(requested);
+                if (activeFlowStateFor(target)) clearFlowSuspensionForNewWork(target);
+                const snapshot = wslBackendEnabled()
+                  ? await ensureWslConversationPool()!.snapshot(target)
+                  : await ensureElectronUtilityPool().snapshot(target);
+                const requestedMode = String(requestedOptions?.requestedMode || '').toLowerCase();
+                const goalObjective = String(requestedOptions?.goalObjective || '').trim();
+                const mode = (goalObjective || requestedMode === 'goal') ? 'build' : String(snapshot.mode || 'build') as AgentMode;
+                const inputMode: 'guide' | 'next' = String(requestedOptions?.inputMode || snapshot.inputMode || 'guide') === 'next' ? 'next' : 'guide';
+                const options = {
+                  mode,
+                  model: String(snapshot.model || agent!.ensureUsableModelSelection()),
+                  intelligence: String(snapshot.intelligence || agent!.intelligence),
+                  inputMode,
+                  engine: agent!.engine,
+                };
+                const queueMode = inputMode === 'guide' ? 'steer' : 'followUp';
+                const promptMessage: string | AgentPromptMessage = goalObjective ? {
+                  text: message,
+                  visibleMode: 'goal',
+                  goalObjective,
+                } : message;
+                const result = wslBackendEnabled()
+                  ? await ensureWslConversationPool()!.prompt({
+                    message: promptMessage,
+                    target,
+                    conversationId: target.conversationId,
+                    options,
+                    queueMode,
+                    workspace: target.workspace ? {
+                      id: target.workspace.id,
+                      name: target.workspace.name,
+                      path: target.workspace.path,
+                      isInternal: target.workspace.isInternal,
+                      kind: target.workspace.kind,
+                    } : null,
+                  })
+                  : await ensureElectronUtilityPool().prompt({ message: promptMessage, target, options, queueMode });
+                return { ...result } as Record<string, unknown>;
+              },
+            });
             recordStartup('mobile-server-hosted');
           } catch (error) {
             console.error('[Newmark] hosted mobile server failed:', error instanceof Error ? error.message : String(error));
@@ -1930,6 +2104,8 @@ if (isViewerArg) {
           return result.tokens.map(token => token.text).join('');
         });
         startupAgent.setAutomationManager(automation);
+        const { setHostedServerAutomation } = require('./server') as typeof import('./server');
+        setHostedServerAutomation(automation);
         automation.onChange(items => {
           setTimeout(() => {
             try {
@@ -2584,7 +2760,7 @@ if (isViewerArg) {
         return await utilityHostToolHandler({ ...request, target: routedTarget, context: routedContext }, signal);
       }
       const result = await utilityHostToolHandler({ ...request, target: routedTarget, context: routedContext }, signal);
-      return request.tool === 'computer_use' ? prepareWslComputerUseVisionResult(result) : result;
+      return request.tool === 'computer_use' || request.tool === 'screen_capture' ? prepareWslComputerUseVisionResult(result) : result;
     };
     runWslHostTool.cancelTarget = (runtimeKey: string): void => utilityHostToolHandler.cancelTarget(runtimeKey);
     const ensureWslConversationPool = (): WslAgentRuntimePool | null => {
@@ -2922,7 +3098,7 @@ if (isViewerArg) {
         }
       }
     });
-    ipcMain.handle('flow:resume', async (_event, response: string, targetInput?: ConversationTargetInput) => {
+    const resumeFlowForTarget = async (response: string, targetInput?: ConversationTargetInput) => {
       if (!agent) return { ok: false, error: 'No suspended Flow is waiting for user input.' };
       const requestedTarget = targetInput ? conversationRuntimeTarget(targetInput) : null;
       const suspension = requestedTarget ? activeFlowStateFor(requestedTarget) : null;
@@ -3055,7 +3231,9 @@ if (isViewerArg) {
           await setTargetFlowMode(flowTarget, suspension.previousMode);
         }
       }
-    });
+    };
+    ipcMain.handle('flow:resume', async (_event, response: string, targetInput?: ConversationTargetInput) =>
+      await resumeFlowForTarget(response, targetInput));
     ipcMain.handle('agent:setMode', async (_event, mode: string) => {
       if (agent) {
         const nextMode = mode as AgentMode;
@@ -3567,7 +3745,7 @@ if (isViewerArg) {
       const accepted = state.flowAgent.queueActiveKernelMessage(text, 'steer') || false;
       return accepted ? { ok: true, accepted: true, flow: state.name } : { ok: false, error: 'The current Flow Build is not accepting Guide input.' };
     });
-    ipcMain.handle('flow:stop', async (_event, targetInput?: ConversationTargetInput) => {
+    const stopFlowForTarget = async (targetInput?: ConversationTargetInput) => {
       if (!agent) return { ok: true, action: 'not_running' };
       const target = targetInput
         ? conversationRuntimeTarget(targetInput)
@@ -3599,7 +3777,9 @@ if (isViewerArg) {
       controller.abort(new Error(`Flow interrupted by user: ${flowName}`));
       state.flowAgent?.abortActiveKernelRun();
       return { ok: true, action: 'stopping', flow: flowName };
-    });
+    };
+    ipcMain.handle('flow:stop', async (_event, targetInput?: ConversationTargetInput) =>
+      await stopFlowForTarget(targetInput));
 
     ipcMain.handle('agent:readGlobalPrompt', async () => {
       if (!agent) return { error: 'Agent is not initialized' };

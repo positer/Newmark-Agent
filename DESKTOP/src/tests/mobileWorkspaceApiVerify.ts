@@ -82,6 +82,21 @@ function setupRoot(): { root: string; workspaceA: WorkspaceInfo; workspaceB: Wor
   const config = new ConfigManager(root);
   config.set('workspace', 'auto_create_timestamp_workspace', false);
   config.set('remote', 'touch_enabled', true);
+  config.set('models', 'providers', [
+    {
+      id: 'mobile-provider-a', name: 'Mobile Provider A', base_url: 'https://mobile-a.invalid/v1',
+      api_key: 'MOBILE_PROVIDER_A_SECRET', protocol: 'openai', enabled: true,
+      models: [{ name: 'shared-mobile-model', label: 'Shared A', enabled: true }],
+    },
+    {
+      id: 'mobile-provider-b', name: 'Mobile Provider B', base_url: 'https://mobile-b.invalid/v1',
+      api_key: 'MOBILE_PROVIDER_B_SECRET', protocol: 'anthropic', enabled: true,
+      models: [
+        { name: 'shared-mobile-model', label: 'Shared B', enabled: true },
+        { name: 'remote-only-model', label: 'Remote Only', enabled: true },
+      ],
+    },
+  ]);
   config.save();
   const workspaces = new WorkspaceManager(root, config);
   const workspaceA = workspaces.createInternal('mobile-api-a');
@@ -298,6 +313,37 @@ export async function verifyMobileWorkspaceApi(record: VerifyAssert): Promise<vo
     const workspaceAId = String(fixture.workspaceA.id || '');
     const workspaceBId = String(fixture.workspaceB.id || '');
 
+    const remoteState = await requestJson(port, fixture.token, 'GET', '/api/mobile/state');
+    const remoteProviders = Array.isArray(remoteState.body.providers) ? remoteState.body.providers : [];
+    const remoteModelNames = remoteProviders.flatMap((provider: Record<string, any>) =>
+      Array.isArray(provider.models) ? provider.models.map((model: Record<string, unknown>) => String(model.name || '')) : []);
+    record(remoteState.status === 200
+      && remoteModelNames.filter((name: string) => name === 'shared-mobile-model').length === 2
+      && remoteModelNames.includes('remote-only-model')
+      && remoteProviders.length === 2
+      && remoteProviders.every((provider: Record<string, unknown>) => provider.api_key === '')
+      && !JSON.stringify(remoteState.body).includes('MOBILE_PROVIDER_A_SECRET')
+      && !JSON.stringify(remoteState.body).includes('MOBILE_PROVIDER_B_SECRET'),
+    'mobile remote model state: exposes every desktop provider/model while redacting all credentials',
+    JSON.stringify(remoteState.body));
+
+    const exactDeployment = `deployment:${encodeURIComponent('mobile-provider-b')}:${encodeURIComponent('shared-mobile-model')}`;
+    const selectRemoteModel = await requestJson(port, fixture.token, 'POST', '/api/mobile/model', { model: exactDeployment });
+    const selectRemoteTier = await requestJson(port, fixture.token, 'POST', '/api/mobile/intelligence', { tier: 'high' });
+    const stateAfterRemoteSelection = await requestJson(port, fixture.token, 'GET', '/api/mobile/state');
+    record(selectRemoteModel.status === 200
+      && selectRemoteModel.body.model === exactDeployment
+      && selectRemoteTier.status === 200
+      && stateAfterRemoteSelection.body.model === exactDeployment
+      && stateAfterRemoteSelection.body.intelligence === 'high',
+    'mobile remote model selection: exact deployment identity and intelligence tier round-trip through desktop state',
+    JSON.stringify({ selectRemoteModel: selectRemoteModel.body, selectRemoteTier: selectRemoteTier.body, state: stateAfterRemoteSelection.body }));
+
+    const unauthorizedModelMutation = await requestJson(port, 'wrong-mobile-token', 'POST', '/api/mobile/model', { model: exactDeployment });
+    record(unauthorizedModelMutation.status === 401,
+      'mobile remote model selection: mutation remains protected by the mobile token gate',
+      JSON.stringify(unauthorizedModelMutation.body));
+
     const snapshotB = await requestJson(
       port,
       fixture.token,
@@ -314,6 +360,43 @@ export async function verifyMobileWorkspaceApi(record: VerifyAssert): Promise<vo
       && snapshotB.body.goal == null,
     'mobile workspace snapshot: background input mode, model, mode, and goal come only from the requested conversation',
     JSON.stringify(snapshotB.body));
+
+    const standaloneUiState = await requestJson(
+      port,
+      fixture.token,
+      'GET',
+      `/api/mobile/conversation-ui-state?workspaceId=${encodeURIComponent(workspaceBId)}&conversationId=${encodeURIComponent(SHARED_ID)}`,
+    );
+    record(standaloneUiState.status === 200
+      && standaloneUiState.body.mode === 'plan'
+      && standaloneUiState.body.inputMode === 'guide'
+      && standaloneUiState.body.runtime == null
+      && standaloneUiState.body.goal == null,
+    'mobile conversation controls: standalone server exposes the exact target snapshot without pretending to own GUI runtime state',
+    JSON.stringify(standaloneUiState.body));
+
+    const standaloneUiMutation = await requestJson(port, fixture.token, 'POST', '/api/mobile/conversation-ui-action', {
+      workspaceId: workspaceBId,
+      conversationId: SHARED_ID,
+      action: 'conversation_stop',
+    });
+    const unauthorizedUiMutation = await requestJson(port, 'wrong-mobile-token', 'POST', '/api/mobile/conversation-ui-action', {
+      workspaceId: workspaceBId,
+      conversationId: SHARED_ID,
+      action: 'conversation_guide',
+      value: 'must remain protected',
+    });
+    const crossWorkspaceUiMutation = await requestJson(port, fixture.token, 'POST', '/api/mobile/conversation-ui-action', {
+      workspaceId: workspaceAId,
+      conversationId: B_ONLY_ID,
+      action: 'goal_update',
+      value: 'must not cross workspace',
+    });
+    record(standaloneUiMutation.status === 409
+      && unauthorizedUiMutation.status === 401
+      && crossWorkspaceUiMutation.status === 404,
+    'mobile conversation controls: GUI-only mutations fail closed for standalone, unauthorized, and cross-workspace requests',
+    JSON.stringify({ standaloneUiMutation: standaloneUiMutation.body, unauthorizedUiMutation: unauthorizedUiMutation.body, crossWorkspaceUiMutation: crossWorkspaceUiMutation.body }));
 
     const rightState = await requestJson(
       port,

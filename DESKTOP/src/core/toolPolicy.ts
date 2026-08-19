@@ -18,6 +18,7 @@ export interface ToolPolicyDecision {
 
 const REQUIRED_TOOLS = new Set(['pwd', 'read', 'glob', 'grep']);
 const MODE_SCOPED_TOOLS = new Set([
+  'screen_capture',
   'image_inspect',
   'image_display',
   'ocr_read',
@@ -50,6 +51,7 @@ const MODE_SCOPED_TOOLS = new Set([
   'branch_create',
 ]);
 const PLAN_READ_ONLY_TOOLS = new Set([
+  'screen_capture',
   'task_read',
   'pwd',
   'read',
@@ -112,6 +114,7 @@ const CONCURRENCY_SAFE_TOOLS = new Set<string>([
   'git_status',
   'file_audit',
   'repo_security_audit',
+  'screen_capture',
   'SubAgent',
 ]);
 

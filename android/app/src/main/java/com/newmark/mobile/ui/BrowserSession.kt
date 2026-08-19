@@ -4,6 +4,9 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.newmark.mobile.data.ToolResult
+import kotlinx.coroutines.delay
+import org.json.JSONObject
 import java.net.URI
 
 /**
@@ -40,6 +43,8 @@ data class BrowserCommand(
  */
 @Stable
 class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
+    var hasActivity by mutableStateOf(false)
+        private set
     var address by mutableStateOf(initialUrl)
         private set
     var title by mutableStateOf("")
@@ -53,6 +58,8 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
     var canGoBack by mutableStateOf(false)
         private set
     var canGoForward by mutableStateOf(false)
+        private set
+    var publicText by mutableStateOf("")
         private set
 
     private var nextCommandId = 0L
@@ -72,6 +79,7 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
             return false
         }
         address = normalized
+        hasActivity = true
         title = ""
         error = ""
         isLoading = true
@@ -81,16 +89,19 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
     }
 
     fun back() {
+        hasActivity = true
         error = ""
         issue(BrowserCommandKind.Back)
     }
 
     fun forward() {
+        hasActivity = true
         error = ""
         issue(BrowserCommandKind.Forward)
     }
 
     fun reload() {
+        hasActivity = true
         error = ""
         isLoading = true
         progress = 0
@@ -120,6 +131,41 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
     fun onTitle(value: String?) {
         title = value.orEmpty().trim().take(240)
     }
+
+    fun onPublicText(value: String?) {
+        publicText = value.orEmpty().replace(Regex("\\s+"), " ").trim().take(48_000)
+    }
+
+    suspend fun executeTool(args: JSONObject): ToolResult = when (val action = args.optString("action").trim().lowercase()) {
+        "navigate" -> if (navigate(args.optString("url"))) ToolResult.ok(receipt(action)) else ToolResult.err(error)
+        "back" -> { back(); ToolResult.ok(receipt(action)) }
+        "forward" -> { forward(); ToolResult.ok(receipt(action)) }
+        "reload" -> { reload(); ToolResult.ok(receipt(action)) }
+        "wait" -> {
+            val duration = args.optLong("duration_ms", 500L).coerceIn(0L, 10_000L)
+            var waited = 0L
+            while (isLoading && waited < duration) {
+                delay(50)
+                waited += 50
+            }
+            ToolResult.ok(receipt(action))
+        }
+        "observe", "extract" -> {
+            val maxChars = args.optInt("max_chars", 12_000).coerceIn(256, 48_000)
+            ToolResult.ok(receipt(action, publicText.take(maxChars)))
+        }
+        else -> ToolResult.err("browser_use 不支持动作：$action")
+    }
+
+    private fun receipt(action: String, text: String = ""): String = JSONObject()
+        .put("ok", true)
+        .put("action", action)
+        .put("url", address)
+        .put("title", title)
+        .put("loading", isLoading)
+        .put("progress", progress)
+        .put("text", text)
+        .toString(2)
 
     fun onNavigationError(message: String, canBack: Boolean = false, canForward: Boolean = false) {
         error = message.trim().ifBlank { "网页加载失败" }.take(320)

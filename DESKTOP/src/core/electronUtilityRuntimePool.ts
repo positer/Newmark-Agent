@@ -1,4 +1,5 @@
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
+import { ConversationQueueAction } from './conversationKernel';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, normalizeConversationTarget } from './conversationTarget';
 import { drainWindowsProcessHelpers, ElectronUtilityAgentClient, UtilityHostToolHandler } from './electronUtilityAgentClient';
 import {
@@ -19,6 +20,7 @@ export interface ElectronTargetRuntimeClient {
   rewind(messageIndex: number): Promise<UtilityConversationRewindResult>;
   requestStop(runId?: string): Promise<UtilityAgentStopResult>;
   enqueueGuide(envelope: ConversationInputEnvelope): Promise<GuideReceipt>;
+  queueAction?(action: ConversationQueueAction, input?: { id?: string; text?: string; requestedMode?: string; goalObjective?: string; createdAt?: string }): Promise<Record<string, unknown>>;
   checkpoint(): Promise<Record<string, unknown>>;
   contextCompress?(options?: { keepRecent?: number; force?: boolean }): Promise<Record<string, unknown>>;
   rateAutoRoute?(score: number, routeId?: string): Promise<UtilityAutoRouteRatingResult>;
@@ -241,6 +243,20 @@ export class ElectronUtilityRuntimePool {
     entry.stopIntent = null;
     try {
       return await entry.client.enqueueGuide(envelope);
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async queueAction(
+    target: ConversationRuntimeTarget,
+    action: ConversationQueueAction,
+    input: { id?: string; text?: string; requestedMode?: string; goalObjective?: string; createdAt?: string } = {},
+  ): Promise<Record<string, unknown>> {
+    const entry = await this.acquireExisting(target);
+    if (!entry || !entry.client.queueAction) throw new Error('Target conversation is not running');
+    try {
+      return await entry.client.queueAction(action, input);
     } finally {
       this.release(entry, true);
     }

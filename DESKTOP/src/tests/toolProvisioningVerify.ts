@@ -82,11 +82,12 @@ async function main(): Promise<void> {
     assert.equal(new Set(names).size, names.length, 'callable catalog has unique names');
     assert.ok(catalog.every(definition => definition.function.parameters.additionalProperties === false),
       'every provider-visible tool schema is closed before provisioning');
-    assert.ok(names.includes('computer_use') && names.includes('browser_use') && names.includes('image_generate'),
+    assert.ok(names.includes('screen_capture') && names.includes('computer_use') && names.includes('browser_use') && names.includes('image_generate'),
       'desktop catalog includes platform and model-dependent tools');
 
     const Session = agentKernelRunnerInternals.ToolProvisionSession;
     const basicNames = [...agentKernelRunnerInternals.BASIC_INITIAL_TOOL_NAMES].filter(name => names.includes(name));
+    assert.ok(!basicNames.includes('screen_capture'), 'active screenshot is an advanced provision-only tool independent from computer_use');
     const initialCoreOnly = [...names.filter(name => basicNames.includes(name)), agentKernelRunnerInternals.TOOL_PROVISION_NAME];
     const firstTurnSurface = [...names.filter(name => basicNames.includes(name)), agentKernelRunnerInternals.TOOL_PROVISION_NAME];
     const emptySession = new Session(catalog, []);
@@ -140,7 +141,7 @@ async function main(): Promise<void> {
 
     const discoveryCases: Array<{ query: string; accept: (name: string) => boolean }> = [
       { query: 'browser click page', accept: name => name.startsWith('browser_') },
-      { query: 'computer screen desktop', accept: name => name === 'computer_use' },
+      { query: 'active screenshot capture screen', accept: name => name === 'screen_capture' },
       { query: 'terminal command script', accept: name => name === 'bash' || name === 'terminal_takeover' },
       { query: 'file directory repository code', accept: name => ['glob', 'grep', 'read', 'write', 'edit'].includes(name) },
       { query: 'web search online', accept: name => name === 'web_search' || name === 'web_fetch' },

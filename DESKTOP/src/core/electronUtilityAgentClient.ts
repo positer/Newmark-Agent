@@ -4,6 +4,7 @@ import { app, utilityProcess } from 'electron';
 import { spawn } from 'child_process';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, normalizeConversationTarget } from './conversationTarget';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
+import { ConversationQueueAction } from './conversationKernel';
 import {
   UtilityAgentPromptResult,
   UtilityAutoRouteRatingResult,
@@ -1161,6 +1162,14 @@ export class ElectronUtilityAgentClient {
     return await this.request('guide', { target: this.target, envelope }, 5_000) as GuideReceipt;
   }
 
+  async queueAction(
+    action: ConversationQueueAction,
+    input: { id?: string; text?: string; requestedMode?: string; goalObjective?: string; createdAt?: string } = {},
+  ): Promise<Record<string, unknown>> {
+    await this.start();
+    return await this.request('queue_action', { target: this.target, action, input }, 5_000) as Record<string, unknown>;
+  }
+
   async checkpoint(): Promise<Record<string, unknown>> {
     await this.start();
     return await this.request('checkpoint', { target: this.target }, 5_000) as Record<string, unknown>;
@@ -1469,7 +1478,7 @@ export class ElectronUtilityAgentClient {
     let result: UtilityHostToolResult;
     const controller = new AbortController();
     this.hostToolRuns.set(request.requestId, { generation, controller });
-    const allowed = new Set<UtilityHostToolRequest['tool']>(['browser_control', 'browser_use', 'computer_use', 'automation', 'terminal_takeover']);
+    const allowed = new Set<UtilityHostToolRequest['tool']>(['browser_control', 'browser_use', 'screen_capture', 'computer_use', 'automation', 'terminal_takeover']);
     if (!allowed.has(request.tool)) {
       result = { requestId: request.requestId, ok: false, error: `Electron host tool is not allowed: ${String(request.tool)}` };
     } else if (request.target.runtimeKey !== this.target.runtimeKey) {

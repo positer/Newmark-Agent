@@ -220,6 +220,57 @@ data class RemoteFlowSelection(
     val componentType: String = "",
 )
 
+data class RemoteConversationQueue(
+    val steering: List<String> = emptyList(),
+    val followUp: List<String> = emptyList(),
+)
+
+data class RemoteQueueItem(
+    val id: String = "",
+    val text: String = "",
+    val queueMode: String = "followUp",
+    val requestedMode: String = "build",
+    val goalObjective: String = "",
+    val runId: String = "",
+    val createdAt: String = "",
+)
+
+data class RemoteFlowTakeover(
+    val running: Boolean = false,
+    val paused: Boolean = false,
+    val name: String = "",
+    val promptText: String = "",
+    val message: String = "",
+    val reason: String = "",
+)
+
+data class RemoteRuntimeState(
+    val running: Boolean = false,
+    val stopRequested: Boolean = false,
+    val status: String = "",
+    val runId: String = "",
+)
+
+data class RemoteConversationUiState(
+    val goal: RemoteGoal? = null,
+    val flowSelection: RemoteFlowSelection? = null,
+    val flow: RemoteFlowTakeover? = null,
+    val queued: RemoteConversationQueue = RemoteConversationQueue(),
+    val queueItems: List<RemoteQueueItem> = emptyList(),
+    val queuePaused: Boolean = false,
+    val runtime: RemoteRuntimeState? = null,
+    val mode: String = "build",
+    val status: String = "idle",
+    val inputMode: String = "guide",
+    /**
+     * GUI-hosted `/conversation-ui-state` spreads the resident PC kernel
+     * snapshot into this response. Nullable distinguishes that authoritative
+     * live payload from the legacy non-hosted fallback, which omits both keys.
+     */
+    val chatMessages: List<RemoteMessage>? = null,
+    val workRuns: List<RemoteWorkRun>? = null,
+)
+
 data class RemoteWorkspaceFile(
     val name: String = "",
     val path: String = "",
@@ -266,6 +317,9 @@ data class DesktopState(
     val mode: String = "",
     val model: String = "",
     val modelLabel: String = "",
+    val models: List<String> = emptyList(),
+    val providers: List<ProviderConfig> = emptyList(),
+    val intelligence: String = "medium",
     val status: String = "",
     val activeConversationId: String = "",
     val conversations: List<RemoteConversation> = emptyList(),

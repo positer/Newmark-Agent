@@ -670,6 +670,9 @@ async function stopPackagedRun(child, cdp) {
     // calls. A forced utility stop intentionally leaves the target runtime
     // down until the next prompt instead of eagerly starting a replacement.
     const forceStopped = stopResult.second?.action === 'force' && stopResult.second?.restarted === false;
+    const firstCallForceStopped = stopResult.first?.action === 'force'
+      && stopResult.first?.restarted === false
+      && stopResult.second?.action === 'already_settled';
     const racedToTerminal = ['already_settled', 'not_running', 'stale'].includes(String(stopResult.second?.action || ''));
     // The archive probe above intentionally hard-stops the same running
     // target. In that valid ordering the later Stop observes not_running;
@@ -677,8 +680,9 @@ async function stopPackagedRun(child, cdp) {
     const archiveAlreadyStopped = archiveAccepted
       && stopResult.first?.action === 'not_running'
       && stopResult.second?.action === 'already_settled';
-    if ((!archiveAlreadyStopped && (stopResult.first?.action !== 'graceful' || stopResult.first?.checkpointed !== true))
-      || (!archiveAlreadyStopped && !forceStopped && !racedToTerminal)) {
+    if ((!archiveAlreadyStopped && !firstCallForceStopped
+        && (stopResult.first?.action !== 'graceful' || stopResult.first?.checkpointed !== true))
+      || (!archiveAlreadyStopped && !firstCallForceStopped && !forceStopped && !racedToTerminal)) {
       fail(`Two-stage target stop failed: ${JSON.stringify(stopResult)}`);
     }
     log(`two-stage stop settled ${JSON.stringify(stopResult)}`);

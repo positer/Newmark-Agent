@@ -1,0 +1,9 @@
+HSPLcom/newmark/mobile/MainActivity;->**(**)**
+HSPLcom/newmark/mobile/ui/NewmarkAppKt;->**(**)**
+HSPLcom/newmark/mobile/ui/ChatScreenKt;->**(**)**
+HSPLcom/newmark/mobile/ui/SidebarKt;->**(**)**
+HSPLcom/newmark/mobile/ui/RightSidebarKt;->**(**)**
+HSPLcom/newmark/mobile/ui/theme/**;->**(**)**
+HSPLcom/newmark/mobile/vm/ChatViewModel;->**(**)**
+HSPLcom/newmark/mobile/vm/DesktopLinkViewModel;->**(**)**
+HPLandroidx/compose/**;->**(**)**

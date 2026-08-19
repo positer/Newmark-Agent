@@ -29,6 +29,7 @@ export const NATIVE_TOOL_CATALOG: NativeToolCatalogEntry[] = [
   { name: 'browser_reload', label: 'Browser reload', description: 'Reload the built-in browser.', category: 'browser', defaultEnabled: true },
   { name: 'browser_cdp', label: 'Browser CDP', description: 'Run an advanced Chrome DevTools Protocol command.', category: 'browser', defaultEnabled: true },
   { name: 'browser_use', label: 'Browser Use', description: 'Observe and control the built-in browser through scoped opaque element refs and structured receipts.', category: 'browser', defaultEnabled: true },
+  { name: 'screen_capture', label: 'Active screenshot', description: 'Capture the Windows desktop or one visible application without starting the full Computer Use control surface.', category: 'desktop', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'computer_use', label: 'Computer Use', description: 'Observe and control Windows desktop UI with screenshots and semantic objects.', category: 'desktop', defaultEnabled: true },
   { name: 'image_inspect', label: 'Image inspect', description: 'Crop and magnify images submitted in the current conversation for closer visual inspection.', category: 'core', defaultEnabled: true, protected: true, availability: 'mode-scoped' },
   { name: 'image_display', label: 'Image display', description: 'Present a workspace PNG/JPEG inside the current Build Block.', category: 'core', defaultEnabled: true, protected: true, availability: 'mode-scoped' },

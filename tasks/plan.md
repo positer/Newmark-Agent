@@ -1,5 +1,61 @@
 # Newmark Agent dev-0.3.13 全场景交叉黑盒压力测试计划
 
+## 2026-08-19 mobile input composite menu entrance
+
+- [x] Reproduce the visually instant first-level Mode/File and Model/Intelligence popup.
+- [x] Replace the implicit always-visible transition with a button-centred explicit progress animation.
+- [x] Retain the expanded surface during dismissal and remove it only after an independent alpha-only fade.
+- [x] Preserve the small popup geometry, 6 dp input anchor, scrolling, and secondary-page behavior.
+- [x] Run Android unit tests and complete Release assembly.
+- [x] Install to `emulator-5554` through the data-preserving update guard and capture device evidence.
+
+## 2026-08-18 Android 0.4.52 运行时压力续测
+
+- [x] 审计所有本地工具 schema 与真实执行实现
+- [x] 补齐并执行 web、内置 Browser WebView、持久 task/plan 工具
+- [x] 压测远端 SSE、实时 Build、Goal、Flow、Queue
+- [x] 执行本地全工具 Agent 循环并验证副作用、历史和重启
+- [x] 验证本地 Next 编辑/删除/排空与 Guide accepted/applied 恰好一次
+- [x] 构建并保数据安装正式 Release，应用 `speed-profile`
+- [x] 五次完整可交互启动与 Release 资源/错误压力
+- [ ] 在不使用层级抓取的有效动画驱动下重新采集统计充分的帧样本
+
+## 2026-08-18 移动端 resident runtime 与浮动状态条（dev-0.4.50）
+
+1. 将 PC GUI-hosted resident snapshot 的 messages、WorkRuns、Goal、Flow、Queue、runtime 作为同一 target 状态原子投影。**已完成**
+2. 修复冷读 interrupted 压过 PC 实时 running，以及状态条出现后运行块被挤出 viewport。**已完成**
+3. 将 Goal/Flow 渐变限制在圆角裁剪内，并按 PC `input-float-stack` 居中 Flow 接管胶囊。**已完成**
+4. 执行 160 事件远端压力、Android/Desktop 门禁和保数据正式安装。**已完成**
+5. 后续将本地 Android Agent loop 迁移到 PC ConversationKernel 同构后端；完成前不得宣称本地完整复刻。**待完成**
+
+## 2026-08-18 移动端历史 WorkRun 前沿错位修复
+
+1. 从移动投影源码复现剩余错位路径，并与成熟 PC 重建契约逐行对照。**已完成**
+2. 移植 PC ledger-based orphan placement，不新增移动端队列或渲染状态机。**已完成**
+3. 用纯契约测试锁定历史 orphan 与显式 anchor 两种情况。**已完成**
+4. 执行完整 Android 门禁、保数据安装模拟器并记录运行证据。**已完成**
+
+## 2026-08-18 移动端远程 Goal/Flow/Queue 同构（dev-0.4.47）
+
+1. 以 PC GUI 的输入栈、Guide 回执、Goal 编辑和两段式 Stop 为唯一契约，桥接精确工作区/对话 runtime。
+2. 远程运行态必须覆盖 PC 端发起的 Build/Flow；运行结束由状态同步触发移动 Next 队列排空。
+3. Goal Guide 使用原生 `enqueueGuide`，Goal Next 持久携带 Goal declaration；空闲 Goal 编辑才直接更新状态。
+4. 本地移动端只共享排队消息能力，运行期输入排队，不伪造 PC Goal/Flow/steer。
+5. 完成桌面、API、Android 门禁后，以数据指纹守卫覆盖安装并启动模拟器。
+
+## 2026-08-18 移动端接续：顶栏独立操作区与旧会话兼容（dev-0.4.34）
+
+### 目标
+
+保持 PC 顶栏中“连接桌面端”与“新对话”两个圆形操作区的视觉和触摸分离；同时确保历史本地会话在新增 Build/Plan 与 task/plan 持久化字段后可直接覆盖升级、不会崩溃或丢失会话数据。
+
+### 已完成与验证
+
+1. `ChatTopBar` 仅在连接按钮显示时插入 `8dp` 间距；按钮尺寸、右对齐、图标及回调不变。
+2. `normalizeConversationMessages` 用无损重建迁移 Gson 旧 JSON 的运行时 null：模式缺失回填 `build`，计划缺失回填空列表，消息、分支、时间戳与归档状态保持。
+3. 输入区接收每个本地会话的持久化模式，切换对话时同步 Build/Plan 文案。
+4. `:app:testDebugUnitTest :app:assembleDebug` PASS；安全 `adb install -r` 守卫确认 7 个私有文件指纹不变；`0.4.34` 已在 `emulator-5554` 前台显示聊天界面。
+
 ## 2026-08-18 移动端接续：PC 对话记录 WorkRun 同构（dev-0.4.33）
 
 ### 目标
@@ -311,6 +367,20 @@
 
 ## 建议的测试产物
 
+## 2026-08-18 dev-0.4.37 修正
+
+- [x] 撤销全屏主体模糊与会遮蔽 Popup 内容的窗口级 blur 实验。
+- [x] 弹窗/边栏仅保留自身玻璃衬底、边框和阴影，聊天主体保持清晰。
+- [x] 重新构建并安全覆盖安装到 `emulator-5554`，7 个私有文件指纹不变。
+
+## 2026-08-18 本地实时运行状态收口（dev-0.4.46）
+
+1. 发送被接受时同步建立带 `start` 事件的本地临时 WorkRun，页面立即显示“处理中”。
+2. provider 与本地工具循环每生成一个公开事件就发布不可变快照，不读取落盘历史作为实时来源。
+3. Compose 仅对当前对话追加该临时块，并用事件修订值驱动尾部滚动；切换对话不会串入别的运行。
+4. 终态先持久化完整 WorkRun，再清除临时块；用户停止则持久化当前事件与 interrupted 终态。
+5. 通过 Android、Desktop API 契约和模拟器保数据安装门禁后交付。
+
 - `android/scripts/mobile-agent-stress.ps1`：场景驱动、ADB 操作、进程清理和 JSONL 汇总。
 - `android/scripts/mobile-perf-sampler.ps1`：gfxinfo/meminfo/top/logcat/SurfaceFlinger 采样。
 - `android/app/src/androidTest/.../MobileMacroSmokeTest.kt`：启动、旋转/折叠、菜单滚动、侧栏开合、IME 和恢复的 UI 自动化。
@@ -331,3 +401,27 @@
 - 是否纳入真实 provider 长压；默认不纳入，除非用户明确指定模型、额度和最大请求数。
 - 是否增加 Android Macrobenchmark/Perfetto 依赖；当前先用 ADB/gfxinfo 低侵入方案，稳定后再引入基准模块。
 - 当前模拟器是否能稳定切换 2/4/8 vCPU；若不能，使用多个 AVD 配置并标记设备差异。
+
+## 2026-08-18 dev-0.4.51 完整交互与长期上下文收口
+
+1. 保持完整 Compose 页面树，拆分 transcript projection、共享 conversation surface、compact/expanded layout 编译单元。
+2. Release 侧载后自动安装 baseline profile 并执行 `speed-profile`，消除首次交互路径中的根方法现场 JIT。
+3. 将归档/会话磁盘 IO、本地工具执行移出主线程；上下文估算/切片放入 Default 核池，适配 2 核及多核调度。
+4. 将 `modelContext/contextCompression` 接入真实本地 Agent 请求、工具子轮次、持久化恢复和分支隔离；显示历史保持完整。
+5. 完成 10,000+ 消息与巨大工具结果契约压力、五轮 2 核完整交互门禁、结构 smoke 和 160 事件远端状态回归。
+6. 保留正式 Release 性能、stress 功能与 emulator 主机故障三套独立证据，不混用指标。
+# 2026-08-18 unified mobile conversation backend continuation
+
+1. Completed: remove frontier-appended live WorkRuns and reconcile provisional/durable runs by PC identity.
+2. Completed: move remote queue ownership and CRUD/Guide conversion into the PC conversation runtime.
+3. In progress: define one mobile conversation snapshot/event/action controller used by Compose for local and remote transports.
+4. Pending: replace the local ViewModel Channel loop with a PC ConversationKernel-equivalent local backend, including steering/followUp queues, final drain, Guide receipts, deferred continuation, stop races, and persistence.
+5. Pending: execute cross-backend conformance tests proving identical sequences and UI projection.
+# 2026-08-19 mobile 0.4.53 runtime continuation
+
+1. Completed: preserve right-sidebar independence while making `browser_use` operate a conversation-bound WebView in the background.
+2. Completed: lazy-mount the browser after measuring and eliminating the unconditional startup WebView memory regression.
+3. Completed: valid formal Release animation window, 300-event remote state pressure, and three fresh-conversation local all-tool runs.
+4. Completed: force-stop/restart continuity and data identity verification.
+5. Completed: deterministic desktop server termination/restart and automatic SSE recovery without reopening the conversation.
+6. Pending: alternating PC/mobile sends, pause/resume/stop, active-run conversation switching, and multi-workspace stale-event rejection runtime fixture.

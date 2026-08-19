@@ -12,13 +12,19 @@ android {
         applicationId = "com.newmark.mobile"
         minSdk = 24
         targetSdk = 35
-        versionCode = 434
-        versionName = "0.4.34"
+        versionCode = 454
+        versionName = "0.4.54"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
         // The repeatable pressure suite must never install over the user's
         // paired mobile client.  It gets a separate package, sandboxed files,
@@ -54,6 +60,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")

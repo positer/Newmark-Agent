@@ -1,5 +1,69 @@
 # dev-0.3.13 黑盒交叉压力测试任务
 
+- [x] Make both input composite first-level menus visibly grow upward from the exact tapped button instead of appearing instantly.
+- [x] Make input composite menus exit with a direct fade instead of hard removal or reverse scaling.
+
+## 2026-08-19 Android 0.4.53 后台浏览器与运行时压力
+
+- [x] `browser_use` 在右栏折叠时后台执行，不强制展开或切换页签
+- [x] 当前对话右栏浏览器复用同一 WebView/URL/正文，切换对话 session 隔离
+- [x] 惰性创建 WebView，修复无浏览器活动时启动 PSS 72 MB 回归
+- [x] 正式 Release 40 组边栏动画、3208 帧有效窗口，0 FATAL/ANR
+- [x] 300 事件远端 Build/Goal/Flow/Queue 实时压力
+- [x] 三个全新本地对话逐轮执行 17 个真实工具结果与 WebView extract
+- [x] 强停重启后对话文件 SHA-256 不变，三个完成 run 全部恢复
+- [x] 远端 server 进程终止/重启后自动重建 SSE，原对话继续收到 Goal/Flow/Queue 状态
+- [ ] 补双向交替发送、pause/resume/stop、运行中切会话与多 workspace 故障注入
+
+## 2026-08-18 Android 0.4.52 运行时压力
+
+- [x] 远端沟通与运行状态追踪门禁
+- [x] 本地全工具真实执行与 Build 历史持久化
+- [x] `browser_use` 驱动同一内置 WebView 并提取正文
+- [x] 本地队列 / Guide / 重启连续性
+- [x] Release 启动、数据、内存、线程、fatal/ANR 门禁
+- [ ] 重新采集有效动画 jank；本轮最终 11 帧样本不作为证据
+
+## 2026-08-18 移动端 resident runtime / Goal / Flow / Queue（dev-0.4.50）
+
+- [x] 完整解析并原子提交 PC resident messages、WorkRuns、Goal、Flow、Queue、runtime
+- [x] resident running 同 runId 覆盖冷读 interrupted，终态 durable 保持权威
+- [x] 状态条改变 viewport 高度时重新跟随运行中 Build
+- [x] Goal/Flow 渐变裁剪进圆角卡片，Goal 绿灯条不再出格
+- [x] Flow 接管按 PC 浮动栈水平居中，不再左对齐
+- [x] 160 事件远程实时压力全部功能门禁通过，无 FATAL/ANR
+- [x] Android unit/Debug、Desktop build/runtime isolation、移动 API 43/43 通过
+- [x] `0.4.50` / `450` 经数据守卫覆盖安装，8 个受保护文件保留
+- [x] 本地队列 1000 项状态转换压力通过
+- [ ] 将本地 `ChatViewModel` 自制执行 loop/channel 替换为 PC ConversationKernel 同构后端
+- [ ] 修复独立的模型菜单 UI 压力定位/交互缺陷，并将功能 dump 与 gfx 性能采样窗口分离
+
+## 2026-08-18 移动端历史 WorkRun 前沿错位事故
+
+- [x] 对照 PC `renderOrphanRunsBefore` 定位移动端缺失的历史重建契约
+- [x] 按后端 WorkRun ledger 顺序恢复旧无锚历史块，不再统一追加到前沿
+- [x] 增加 orphan-before-owned 与显式锚点排除回归测试
+- [x] 完整 Android 测试/构建并通过数据指纹守卫覆盖安装 `0.4.49`
+
+## 2026-08-18 移动端远程 Goal/Flow/Queue 同构（dev-0.4.47）
+
+- [x] 远程 Goal bar 编辑、暂停/继续、删除绑定精确 PC target
+- [x] 普通 Guide / Goal Guide 改走 PC 原生 Guide envelope 与 receipt
+- [x] Goal Next 队列保存 Goal declaration 与 requested mode
+- [x] PC 端发起运行同步移动发送/停止状态
+- [x] 普通 Build Stop 接入 PC target-local 两段式停止
+- [x] PC 运行结束时自动排空移动 Next 队列
+- [x] 本地运行期输入进入持久化队列，Goal/Flow 仍仅远程显示
+- [x] Desktop build、移动 API 43/43、Android unit/assemble 通过
+- [x] 数据守卫覆盖安装、启动和版本/崩溃日志核验（8 个私有文件保持，0.4.47 前台运行，无崩溃记录）
+
+## 2026-08-18 移动端顶栏操作区与旧会话迁移（dev-0.4.34）
+
+- [x] 连接桌面端 / 新对话两个圆形顶栏按钮在同时可见时加入固定 8dp 间隔
+- [x] 修复旧 `conversations.json` 缺失 `mode` / `planItems` 时的冷启动崩溃
+- [x] 保持本地 Build / Plan 选择随当前会话同步，不串会话
+- [x] Android 单测、Debug APK 构建、保留数据的模拟器覆盖更新及正式聊天界面启动验证
+
 ## 2026-08-18 移动端对话记录 WorkRun 同构（dev-0.4.33）
 
 - [x] 以 PC `renderWorkRunEvents` 落地本地/远程统一公开事件投影
@@ -30,6 +94,32 @@
 - [x] 本次适配 APK 已安装到 `emulator-5554` 并启动 `com.newmark.mobile`
 - [x] 已校验安装版本 `0.4.33` / `versionCode=433`
 - [ ] 后续每次移动端适配完成后重复执行构建、安装、启动和版本校验
+
+## 2026-08-18 本地对话实时运行状态（dev-0.4.46）
+
+- [x] 点击发送的同步状态转换立即创建展开的 `running` Build/Plan 块，不等待 provider 首包或落盘
+- [x] start/thought/tool_call/tool_result/final_response/error/done 逐事件更新同一临时运行块
+- [x] Build 块内部事件数量或状态变化时触发对话尾部跟随，不再只监听外层消息数量
+- [x] 完成后以持久化 WorkRun 原位接替临时块；停止时持久化 interrupted 部分历史
+- [x] Android 单测/构建、Desktop build、移动工作区 API 41/41 通过
+- [x] `0.4.46` 使用数据指纹守卫安全覆盖安装到 `emulator-5554`
+
+## 2026-08-18 移动边栏窗口级背景模糊（dev-0.4.40）
+
+- [x] 左/右边栏展开时仅模糊后方主窗口，边栏自身保持清晰
+- [x] 右边栏展开动画进度连续驱动背景模糊，不额外绘制假进度层
+- [x] Popup/Dialog 保持局部玻璃衬底，不启用全窗口模糊
+- [x] 修复 `UpStart` 定位钳制，一级/二级输入弹窗贴近输入框上方约 6dp
+- [x] 旧桌面通过脱敏 `/api/state.providers` 补齐远程完整模型目录
+- [x] 模拟器验收左右边栏与远程模型二级菜单；`0.4.40` 已保数据安装并在前台运行
+
+## 2026-08-18 边栏模糊进度连续化（dev-0.4.41）
+
+- [x] 竖屏左栏使用 Drawer 实际 offset 计算连续展开进度
+- [x] 右栏拖动/动画进度连续映射到 `0dp..32dp` 模糊
+- [x] 平板/折叠屏二级左栏模糊与 400ms 展开动画使用同一缓动
+- [x] 双栏状态取最大展开进度，避免一侧关闭导致背景模糊跳变
+- [x] Android 单测、构建通过，安全覆盖安装保持 7 个私有文件不变
 
 ## 2026-08-17 移动模型菜单与图片二维码配对
 
@@ -122,3 +212,27 @@
 - 阶段 A/B 完成后：入口和能力边界可复现，失败不被误归因。
 - 阶段 C 完成后：共享后端没有 target 串线、归档复活、Flow 残留或压缩覆盖。
 - 阶段 D/E 完成后：资源回落、重启可恢复、报告可审计；否则保持 HOLD。
+# Mobile unified backend checklist (2026-08-18)
+
+- [x] Prevent historical/live WorkRuns from being appended at the transcript frontier.
+- [x] Reject incomplete or stale remote workspace/conversation/run identities.
+- [x] Make the PC runtime authoritative for the remote queue.
+- [ ] Route all Compose send/queue/Guide/stop operations through one backend interface.
+- [ ] Implement the local adapter with full PC kernel-equivalent queue and Guide lifecycle.
+- [ ] Add local-vs-remote event-sequence conformance fixtures.
+
+## 2026-08-18 mobile dev-0.4.51 gate
+
+- [x] 完整可发送页面五轮 `INTERACTIVE_READY_MS` 均 ≤4000ms：1963–2552ms。
+- [x] 五轮正式 Release 窗口内 FATAL/ANR/未响应/Launch timeout/进程死亡为 0。
+- [x] 2 vCPU 调度下通过，归档/工具/上下文工作分别进入 IO/Default，主线程只提交 UI 状态。
+- [x] 保数据安装自动激活 APK baseline profile，Dexopt 状态为 `speed-profile`。
+- [x] 竖屏保留随边栏进度窗口模糊；折叠屏/平板打开左右边栏时不做窗口模糊。
+- [x] 首屏、左栏、设备展开、右栏 Files/Editor/Plan/SubAgent/Browser、计划新建/关联计划、浏览器控件结构 smoke 通过。
+- [x] 本地模型上下文按 70%/20%/12% PC 阈值压缩并持久化，完整显示历史不变。
+- [x] 压缩上下文贯穿工具子轮次和重启；摘要失败有界 fallback；新分支不继承旧路径摘要。
+- [x] 10,000+ 消息及巨大工具结果纯契约压力通过。
+- [x] 160 事件远端 SSE/Build/Goal/Flow/Queue/realtime gates 全通过，报告 `archive/mobile-stress-20260819-005444.json`。
+- [ ] 本地执行后端仍是移动端 Agent loop/Channel，尚未替换为 PC ConversationKernel 同一实现；不得宣称内核完全同构。
+- [x] Emulator 37.1.11 压力后的可见 gfxstream/QEMU hang 已定位；userdata 无损，`-no-cache` 已恢复可见竖屏和正式 App 前台。
+- [ ] 仍需在稳定的 emulator 版本补 4/8 vCPU 长时可见窗口矩阵；当前正式门禁覆盖 2 vCPU 最差档。

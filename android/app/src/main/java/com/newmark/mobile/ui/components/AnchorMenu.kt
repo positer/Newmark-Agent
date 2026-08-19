@@ -54,6 +54,7 @@ enum class MenuPlacement { UpStart, EndTop, DownStart, DownEnd }
 private fun placementProvider(
     placement: MenuPlacement,
     gapPx: Int,
+    verticalOffsetPx: Int,
     viewportMarginPx: Int,
     usePcPopoverBehavior: Boolean,
     safeLeftPx: Int,
@@ -79,7 +80,7 @@ private fun placementProvider(
             when (placement) {
                 MenuPlacement.UpStart -> {
                     x = anchorBounds.left
-                    y = anchorBounds.top - popupContentSize.height - gapPx
+                    y = anchorBounds.top - popupContentSize.height - gapPx + verticalOffsetPx
                 }
                 MenuPlacement.EndTop -> {
                     x = anchorBounds.right + gapPx
@@ -94,7 +95,7 @@ private fun placementProvider(
                         availableBelow < popupContentSize.height &&
                         availableAbove > availableBelow
                     y = if (openAbove) {
-                        anchorBounds.top - popupContentSize.height - gapPx
+                        anchorBounds.top - popupContentSize.height - gapPx + verticalOffsetPx
                     } else if (usePcPopoverBehavior) {
                         anchorBounds.bottom + gapPx
                     } else {
@@ -115,7 +116,7 @@ private fun placementProvider(
                         availableBelow < popupContentSize.height &&
                         availableAbove > availableBelow
                     y = if (openAbove) {
-                        anchorBounds.top - popupContentSize.height - gapPx
+                        anchorBounds.top - popupContentSize.height - gapPx + verticalOffsetPx
                     } else if (usePcPopoverBehavior) {
                         anchorBounds.bottom + gapPx
                     } else {
@@ -130,9 +131,18 @@ private fun placementProvider(
             }
             val maxX = (viewportRight - popupContentSize.width).coerceAtLeast(viewportLeft)
             val maxY = (viewportBottom - popupContentSize.height).coerceAtLeast(viewportTop)
+            // UpStart is anchored above the input control. Do not apply the
+            // generic bottom clamp here: on Android the popup window's safe
+            // bottom can be below the actual input row, which previously
+            // pinned every offset to the same y=1893 boundary.
+            val resolvedY = if (placement == MenuPlacement.UpStart) {
+                y.coerceAtLeast(viewportTop)
+            } else {
+                y.coerceIn(viewportTop, maxY)
+            }
             return IntOffset(
                 x.coerceIn(viewportLeft, maxX),
-                y.coerceIn(viewportTop, maxY),
+                resolvedY,
             )
         }
     }
@@ -147,6 +157,8 @@ fun AnchorMenu(
     placement: MenuPlacement = MenuPlacement.UpStart,
     gap: Dp? = null,
     viewportMargin: Dp = 0.dp,
+    /** Positive values move the whole first/second-level popover toward its input anchor. */
+    verticalOffset: Dp = 0.dp,
     shape: Shape = NewmarkShapeMedium,
     backgroundColor: Color? = null,
     borderColor: Color? = null,
@@ -167,9 +179,11 @@ fun AnchorMenu(
     // 输入区的一级/二级复合菜单应紧贴输入框上方，但保留足够空气感，不能顶到按钮。
     val gapPx = with(density) { gap?.roundToPx() ?: 6 }
     val viewportMarginPx = with(density) { viewportMargin.roundToPx() }
+    val verticalOffsetPx = with(density) { verticalOffset.roundToPx() }
     val provider = remember(
         placement,
         gapPx,
+        verticalOffsetPx,
         viewportMarginPx,
         usePcPopoverBehavior,
         safeLeftPx,
@@ -180,6 +194,7 @@ fun AnchorMenu(
         placementProvider(
             placement = placement,
             gapPx = gapPx,
+            verticalOffsetPx = verticalOffsetPx,
             viewportMarginPx = viewportMarginPx,
             usePcPopoverBehavior = usePcPopoverBehavior,
             safeLeftPx = safeLeftPx,
@@ -199,7 +214,7 @@ fun AnchorMenu(
             entrance.animateTo(
                 targetValue = 1f,
                 animationSpec = tween(
-                    durationMillis = 150,
+                    durationMillis = 190,
                     easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f),
                 ),
             )
@@ -221,7 +236,7 @@ fun AnchorMenu(
             Modifier.verticalScroll(scrollState)
         } else Modifier
         val menu = @Composable {
-            val menuBackground = backgroundColor ?: p.bgTertiary
+            val menuBackground = (backgroundColor ?: p.bgTertiary).copy(alpha = 0.76f)
             val refractionBorder = borderColor ?: p.border2
             Box(
                 modifier = modifier
@@ -277,11 +292,14 @@ fun AnchorMenu(
         if (usePcPopoverBehavior) {
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier.graphicsLayer {
-                    alpha = entrance.value
-                    translationY = with(density) { 5.dp.toPx() } * (1f - entrance.value)
-                    val scale = 0.985f + (0.015f * entrance.value)
-                    scaleX = scale
-                    scaleY = scale
+                    // The whole first-level composite popup follows its
+                    // already-resolved IME-safe anchor, then opens upward with
+                    // the same restrained PC popover easing. Keep the glass
+                    // surface fully opaque at the layer level: animating alpha
+                    // forces an offscreen pass for its shadow/borders on every
+                    // frame and caused severe issue-draw stalls on Android.
+                    // Page changes inside the popup do not replay this entrance.
+                    translationY = with(density) { 8.dp.toPx() } * (1f - entrance.value)
                 },
             ) {
                 menu()

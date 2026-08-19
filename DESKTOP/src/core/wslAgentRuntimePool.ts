@@ -1,4 +1,5 @@
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
+import { ConversationQueueAction } from './conversationKernel';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, conversationRuntimeKey, normalizeConversationTarget } from './conversationTarget';
 import { WslAgentClient, WslHostToolHandler } from './wslAgentClient';
 import {
@@ -18,6 +19,7 @@ export interface WslTargetRuntimeClient {
   rewind(target: ConversationRuntimeTarget, messageIndex: number): Promise<WslConversationRewindResult>;
   requestStop(target: ConversationRuntimeTarget, runId?: string): Promise<WslAgentStopResult>;
   enqueueGuide(target: ConversationRuntimeTarget, envelope: ConversationInputEnvelope): Promise<GuideReceipt>;
+  queueAction?(target: ConversationRuntimeTarget, action: ConversationQueueAction, input?: { id?: string; text?: string; requestedMode?: string; goalObjective?: string; createdAt?: string }): Promise<Record<string, unknown>>;
   checkpoint(target: ConversationRuntimeTarget): Promise<Record<string, unknown>>;
   contextCompress?(target: ConversationRuntimeTarget, options?: { keepRecent?: number; force?: boolean }): Promise<Record<string, unknown>>;
   rateAutoRoute?(target: ConversationRuntimeTarget, score: number, routeId?: string): Promise<WslAutoRouteRatingResult>;
@@ -240,6 +242,20 @@ export class WslAgentRuntimePool {
     entry.stopIntent = null;
     try {
       return await entry.client.enqueueGuide(entry.target, envelope);
+    } finally {
+      this.release(entry, true);
+    }
+  }
+
+  async queueAction(
+    target: ConversationRuntimeTarget,
+    action: ConversationQueueAction,
+    input: { id?: string; text?: string; requestedMode?: string; goalObjective?: string; createdAt?: string } = {},
+  ): Promise<Record<string, unknown>> {
+    const entry = await this.acquireExisting(target);
+    if (!entry || !entry.client.queueAction) throw new Error('Target conversation is not running');
+    try {
+      return await entry.client.queueAction(entry.target, action, input);
     } finally {
       this.release(entry, true);
     }

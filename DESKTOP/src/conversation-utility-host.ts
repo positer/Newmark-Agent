@@ -89,6 +89,9 @@ async function handle(request: UtilityAgentRequest): Promise<unknown> {
       target,
     });
   }
+  if (request.method === 'queue_action') {
+    return kernel.queueAction(checkedTarget(request.params.target), request.params.action, request.params.input);
+  }
   if (request.method === 'checkpoint') return kernel.checkpoint(checkedTarget(request.params.target));
   if (request.method === 'context_compress') {
     return kernel.compressContext(checkedTarget(request.params.target), request.params.options);

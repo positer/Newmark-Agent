@@ -33,6 +33,7 @@ class ApiClient {
         tools: List<JSONObject> = emptyList(),
         intelligence: String = "medium",
         thinkingTierMap: Map<String, String> = emptyMap(),
+        maxOutputTokens: Int? = null,
     ): Result<ChatResponse> = withContext(Dispatchers.IO) {
         runCatching {
             val base = config.baseUrl.trim().trimEnd('/')
@@ -44,7 +45,7 @@ class ApiClient {
                 // 智能档位真正生效（对齐 PC intelligenceConfig / applyChatReasoningEffort）
                 val (temp, maxTokens, _) = intelligenceConfig(intelligence)
                 put("temperature", temp)
-                put("max_tokens", maxTokens)
+                put("max_tokens", maxOutputTokens?.coerceAtLeast(1) ?: maxTokens)
                 reasoningEffort(config.model, base, intelligence, thinkingTierMap)?.let { put("reasoning_effort", it) }
                 put("messages", JSONArray().apply {
                     messages.forEach { m ->

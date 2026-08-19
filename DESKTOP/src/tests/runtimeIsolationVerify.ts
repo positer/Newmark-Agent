@@ -617,6 +617,85 @@ async function verifyKernelCompositeRuntimeAndStop(): Promise<void> {
   }
 }
 
+async function verifyAuthoritativeEditablePausedQueue(): Promise<void> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-authoritative-mobile-queue-'));
+  try {
+    fs.mkdirSync(path.join(root, 'Work'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'Work', 'Local.json'), '[]', 'utf-8');
+    fs.writeFileSync(path.join(root, 'Work', 'External.json'), '[]', 'utf-8');
+    const workspacePath = path.join(root, 'workspace');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    const queueTarget = target('queue-workspace', workspacePath, 'queue-conversation');
+    const host = new Agent(root, { agentOnly: true });
+    let runner!: RuntimeProbeAgent;
+    const kernel = new ConversationKernel(root, host, null, {
+      createRunner: () => {
+        runner = new RuntimeProbeAgent(root, { agentOnly: true });
+        return runner;
+      },
+    });
+    const options: ConversationKernelRunOptions = {
+      mode: 'build', model: 'test-model', intelligence: 'medium', inputMode: 'next', engine: 'builtin',
+    };
+    const running = kernel.prompt('primary queue fixture', queueTarget, options, 'followUp');
+    await Promise.resolve();
+    const runId = kernel.runtimeState(queueTarget)?.runId || '';
+    assert.ok(runId);
+
+    const queued = kernel.queueAction(queueTarget, 'enqueue', {
+      id: 'mobile-next-1', text: 'first queued value', requestedMode: 'build', createdAt: '2026-08-18T12:00:00.000Z',
+    });
+    assert.deepEqual(queued.queueItems.map(item => [item.id, item.text]), [['mobile-next-1', 'first queued value']]);
+    assert.ok(kernel.snapshot(queueTarget).continuations.some(item => item.clientMessageId === 'mobile-next-1'),
+      'authoritative Next is persisted by the remote runtime rather than stored in a mobile renderer');
+
+    const edited = kernel.queueAction(queueTarget, 'update', { id: 'mobile-next-1', text: 'edited queued value' });
+    assert.equal(edited.queueItems[0]?.text, 'edited queued value');
+    assert.ok(kernel.snapshot(queueTarget).continuations.some(item =>
+      item.clientMessageId === 'mobile-next-1' && /edited queued value/.test(item.content)),
+    'editing updates the same durable continuation identity');
+
+    const paused = kernel.queueAction(queueTarget, 'toggle_pause');
+    assert.equal(paused.queuePaused, true);
+    runner.finish('primary complete');
+    await running;
+    assert.equal(kernel.runtimeState(queueTarget)?.running, false,
+      'a paused follow-up does not hold the current Build open at its final-drain barrier');
+    assert.deepEqual(kernel.snapshot(queueTarget).queueItems.map(item => item.text), ['edited queued value'],
+      'paused authoritative queue survives current Build completion');
+
+    kernel.queueAction(queueTarget, 'toggle_pause');
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(runner.processInputs.length, 2, 'resume drains one and only one queued continuation');
+    const resumedInput = runner.processInputs[1] as unknown as { text?: string; visibleUserInput?: string; clientMessageId?: string };
+    assert.equal(resumedInput.text, '[Next queued while current turn is running]\nedited queued value');
+    assert.equal(resumedInput.visibleUserInput, 'edited queued value');
+    assert.equal(resumedInput.clientMessageId, 'mobile-next-1',
+      'resume preserves the PC continuation identity instead of degrading the queue item to a renderer string');
+    runner.finish('queued complete');
+    await kernel.waitForIdle(queueTarget);
+    assert.equal(kernel.snapshot(queueTarget).queueItems.length, 0);
+
+    const second = kernel.prompt('second primary', queueTarget, options, 'followUp');
+    await Promise.resolve();
+    kernel.queueAction(queueTarget, 'enqueue', { id: 'mobile-next-guide', text: 'convert me to Guide' });
+    const guided = kernel.queueAction(queueTarget, 'guide', { id: 'mobile-next-guide' });
+    assert.equal(guided.receipt?.status, 'accepted', JSON.stringify(guided.receipt));
+    assert.equal(guided.queueItems.length, 0, 'Guide conversion removes the Next only after the PC runtime accepts it');
+    const deliveredGuide = runner.drainAllUnconsumedAgentKernelMessages().find(item =>
+      item.queueMode === 'steer' && item.clientMessageId === 'mobile-next-guide' && item.content === 'convert me to Guide');
+    assert.ok(deliveredGuide);
+    runner.notifyAgentKernelUserMessageStart(deliveredGuide!.content, deliveredGuide!.clientMessageId);
+    assert.equal(kernel.snapshot(queueTarget).workRuns.flatMap(run => run.guides)
+      .find(item => item.clientMessageId === 'mobile-next-guide')?.status, 'applied',
+    'the real AgentKernel consumption boundary advances the authoritative Guide receipt to applied');
+    runner.finish('second complete');
+    await second;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 async function verifyCooperativeStopSettlesInterrupted(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-cooperative-stop-settle-'));
   try {
@@ -2075,6 +2154,7 @@ async function main(): Promise<void> {
   await verifyColdSnapshotBindsTargetWorkspace();
   await verifyKernelPublicWorkRunTargetBinding();
   await verifyKernelCompositeRuntimeAndStop();
+  await verifyAuthoritativeEditablePausedQueue();
   await verifyCooperativeStopSettlesInterrupted();
   await verifyInputsArrivingAfterStopAreDurable();
   await verifyRendererReconcilesCompletionAgainstFirstStop();

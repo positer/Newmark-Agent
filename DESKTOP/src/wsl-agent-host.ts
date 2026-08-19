@@ -172,6 +172,9 @@ async function handle(request: WslAgentRequest): Promise<unknown> {
       target,
     });
   }
+  if (request.method === 'queue_action') {
+    return kernel.queueAction(requestTarget(request.params), request.params.action, request.params.input);
+  }
   if (request.method === 'checkpoint') return kernel.checkpoint(requestTarget(request.params));
   if (request.method === 'context_compress') {
     return kernel.compressContext(requestTarget(request.params), request.params.options);

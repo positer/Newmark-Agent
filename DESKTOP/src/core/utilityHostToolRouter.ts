@@ -121,6 +121,25 @@ export function createUtilityHostToolHandler(options: UtilityHostToolRouterOptio
       return result;
     }
 
+    if (request.tool === 'screen_capture') {
+      const args = request.args || {};
+      const target = String(args.target || '').toLowerCase() === 'application' ? 'application' : 'desktop';
+      const result = await (options.runComputer || runComputerUse)({
+        action: target === 'application' ? 'app_observe' : 'observe',
+        appTarget: String(args.app_target || args.appTarget || ''),
+        windowHandle: target === 'application' ? String(args.app_target || args.appTarget || '') : '',
+        maxChars: Number(args.max_chars || args.maxChars || 30_000),
+        captureMaxWidth: Number(args.capture_max_width || args.captureMaxWidth),
+        captureMaxHeight: Number(args.capture_max_height || args.captureMaxHeight),
+        allowEphemeralVisionImage: request.context.allowEphemeralVisionImage === true,
+        workspacePath: request.target.workspacePath,
+        invocation: 'agent',
+        ownerId: `screen-capture:${request.target.runtimeKey}:${String(request.context.actorId || ROOT_AGENT_ACTOR_ID)}`,
+      });
+      throwIfAborted(signal);
+      return result;
+    }
+
     const args = request.args || {};
     const action = String(args.action || '').trim().toLowerCase();
     const trustedComputerUseContext = request.context as typeof request.context & {

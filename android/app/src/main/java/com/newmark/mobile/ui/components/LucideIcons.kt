@@ -250,6 +250,14 @@ object LucideIcons {
         icon("x", "M18 6 6 18", "m6 6 12 12")
     }
 
+    val Plus: ImageVector by lazy {
+        icon("plus", "M12 5v14", "M5 12h14")
+    }
+
+    val Check: ImageVector by lazy {
+        icon("check", "m5 12 4 4L19 6")
+    }
+
     /** lucide panel-right（PC 右侧栏折叠态独立重开按钮） */
     val PanelRight: ImageVector by lazy {
         icon(

@@ -1,0 +1,20 @@
+[
+  {
+    "id": "local-stress",
+    "name": "Local Stress",
+    "base_url": "http://10.0.2.2:47992/v1",
+    "api_key": "local-fixture-only",
+    "protocol": "openai",
+    "enabled": true,
+    "has_api_key": true,
+    "models": [
+      {
+        "name": "local-stress-model",
+        "display": "Local Stress Model",
+        "max_tokens": 128000,
+        "enabled": true,
+        "capabilities": ["text_input", "text_output", "tool_use"]
+      }
+    ]
+  }
+]

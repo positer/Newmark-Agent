@@ -6,6 +6,13 @@ import com.google.gson.reflect.TypeToken
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.net.URI
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Dns
+import java.net.Inet4Address
+import java.net.InetAddress
 
 /** 本地工具执行结果 */
 data class ToolResult(val ok: Boolean, val output: String) {
@@ -19,18 +26,32 @@ data class ToolResult(val ok: Boolean, val output: String) {
  * 本地工具执行器：在 Android 安全目录（filesDir/newmark/workspace）内执行
  * 文件/记忆/搜索等工具命令。命令行与本地对话 Agent 复用同一套工具。
  */
-class LocalToolExecutor(context: Context) {
+class LocalToolExecutor(
+    context: Context,
+    private val runtimeTool: (suspend (String, JSONObject) -> ToolResult?)? = null,
+) {
 
     private val appContext = context.applicationContext
     private val root = File(appContext.filesDir, "newmark/workspace").apply { mkdirs() }
     private val memoryLab = MemoryLabStore(appContext)
     private val providerStore = ProviderStore(appContext)
     private val gson = Gson()
+    private val ipv4FirstDns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> =
+            InetAddress.getAllByName(hostname).toList().sortedBy { if (it is Inet4Address) 0 else 1 }
+    }
+    private val webClient = OkHttpClient.Builder()
+        .dns(ipv4FirstDns)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .build()
     private var cwd = root
 
     /** Agent 工具调用入口（OpenAI function calling）：按 name + JSON 参数执行 */
-    fun executeTool(name: String, arguments: String): ToolResult {
+    suspend fun executeTool(name: String, arguments: String): ToolResult {
         val args = runCatching { JSONObject(arguments) }.getOrDefault(JSONObject())
+        runtimeTool?.invoke(name, args)?.let { return it }
         return runCatching {
             when (name) {
                 "read_file" -> readFile(args.optString("path"))
@@ -42,9 +63,70 @@ class LocalToolExecutor(context: Context) {
                 "memory_lab_reindex" -> mlReindex()
                 "settings_read" -> settingsRead()
                 "settings_update" -> settingsUpdate(args.optString("json"))
+                "web_search" -> webSearch(args.optString("query"))
+                "web_fetch" -> webFetch(args.optString("url"))
                 else -> ToolResult.err("未知工具：$name")
             }
         }.getOrElse { ToolResult.err("工具执行失败：${it.message ?: it.toString()}") }
+    }
+
+    private fun normalizedWebUrl(raw: String): String? {
+        val uri = runCatching { URI(raw.trim()) }.getOrNull() ?: return null
+        if (uri.scheme?.lowercase() !in setOf("http", "https") || uri.host.isNullOrBlank()) return null
+        return uri.toASCIIString()
+    }
+
+    private fun fetch(url: String): String {
+        val request = Request.Builder().url(url).header("User-Agent", "NewmarkMobile/1.0").build()
+        return webClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) error("HTTP ${response.code}: ${body.take(200)}")
+            body
+        }
+    }
+
+    private fun readableText(html: String, limit: Int = 12_000): String = html
+        .replace(Regex("(?is)<script[^>]*>.*?</script>"), " ")
+        .replace(Regex("(?is)<style[^>]*>.*?</style>"), " ")
+        .replace(Regex("(?is)<head[^>]*>.*?</head>"), " ")
+        .replace(Regex("(?s)<[^>]+>"), " ")
+        .replace("&amp;", "&").replace("&quot;", "\"").replace("&#x27;", "'")
+        .replace("&lt;", "<").replace("&gt;", ">")
+        .replace(Regex("\\s+"), " ").trim().let { if (it.length > limit) it.take(limit) + "\n…（截断）" else it }
+
+    private fun webFetch(raw: String): ToolResult {
+        val url = normalizedWebUrl(raw) ?: return ToolResult.err("仅支持带有效主机名的 http:// 或 https:// 网页地址")
+        return runCatching { readableText(fetch(url)) }
+            .fold({ ToolResult.ok(it.ifBlank { "网页没有可提取正文。" }) }, { ToolResult.err("[web_fetch] ${it.message ?: it}") })
+    }
+
+    private fun webSearch(query: String): ToolResult {
+        if (query.isBlank()) return ToolResult.err("需要 query")
+        val encoded = java.net.URLEncoder.encode(query, Charsets.UTF_8.name())
+        val errors = mutableListOf<String>()
+        runCatching {
+            val html = fetch("https://html.duckduckgo.com/html/?q=$encoded")
+            val blocks = Regex("(?is)<a[^>]+class=\"result__a\"[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>[\\s\\S]*?class=\"result__snippet\"[^>]*>(.*?)</(?:a|div)>")
+                .findAll(html).take(8).map { match ->
+                    val title = readableText(match.groupValues[2], 500)
+                    val snippet = readableText(match.groupValues[3], 800)
+                    "$title\n${match.groupValues[1]}\n$snippet"
+                }.toList()
+            if (blocks.isNotEmpty()) return ToolResult.ok(blocks.joinToString("\n\n"))
+            errors += "DuckDuckGo 无可解析结果"
+        }.onFailure { errors += "DuckDuckGo: ${it.message ?: it}" }
+        runCatching {
+            val html = fetch("https://www.bing.com/search?q=$encoded")
+            val blocks = Regex("(?is)<li class=\"b_algo\".*?</li>").findAll(html).take(8).mapNotNull { block ->
+                val title = Regex("(?is)<h2[^>]*>\\s*<a[^>]+href=\"([^\"]+)\"[^>]*>(.*?)</a>").find(block.value)
+                    ?: return@mapNotNull null
+                val snippet = Regex("(?is)<p[^>]*>(.*?)</p>").find(block.value)?.groupValues?.get(1).orEmpty()
+                "${readableText(title.groupValues[2], 500)}\n${title.groupValues[1]}\n${readableText(snippet, 800)}".trim()
+            }.toList()
+            if (blocks.isNotEmpty()) return ToolResult.ok(blocks.joinToString("\n\n"))
+            errors += "Bing 无可解析结果"
+        }.onFailure { errors += "Bing: ${it.message ?: it}" }
+        return ToolResult.err("[web_search] No results. ${errors.joinToString("; ")}")
     }
 
     private fun writeFileArgs(path: String, content: String): ToolResult {
@@ -260,7 +342,7 @@ class LocalToolExecutor(context: Context) {
         val changes = mutableListOf<String>()
 
         if (json.has("providers")) {
-            val arr = json.opt("providers")
+            val arr = json.opt("providers") ?: return ToolResult.err("providers 必须是数组")
             val type = object : TypeToken<List<ProviderConfig>>() {}.type
             val providers = runCatching { gson.fromJson<List<ProviderConfig>>(arr.toString(), type) }
                 .getOrNull()

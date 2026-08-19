@@ -1,6 +1,7 @@
 import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import * as readline from 'readline';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
+import { ConversationQueueAction } from './conversationKernel';
 import { TerminalTakeoverEvent, TerminalTakeoverOwnerFilter, TerminalTakeoverState } from '../tools/terminalTakeover';
 import {
   WslAgentPromptRequest,
@@ -307,6 +308,15 @@ export class WslAgentClient {
     return await this.request('guide', { target: await this.mapTarget(target), envelope }, 5_000) as GuideReceipt;
   }
 
+  async queueAction(
+    target: ConversationRuntimeTarget,
+    action: ConversationQueueAction,
+    input: { id?: string; text?: string; requestedMode?: string; goalObjective?: string; createdAt?: string } = {},
+  ): Promise<Record<string, unknown>> {
+    await this.start();
+    return await this.request('queue_action', { target: await this.mapTarget(target), action, input }, 5_000) as Record<string, unknown>;
+  }
+
   async checkpoint(target: ConversationRuntimeTarget): Promise<Record<string, unknown>> {
     await this.start();
     return await this.request('checkpoint', { target: await this.mapTarget(target) }, 5_000) as Record<string, unknown>;
@@ -523,7 +533,7 @@ export class WslAgentClient {
       result = { requestId: request.requestId, ok: false, error: 'WSL host tool target mismatch' };
     } else if (!this.hostToolHandler) {
       result = { requestId: request.requestId, ok: false, error: 'No Windows host tool handler is registered' };
-    } else if (!['browser_control', 'computer_use', 'browser_use', 'automation', 'terminal_takeover'].includes(request.tool)) {
+    } else if (!['browser_control', 'screen_capture', 'computer_use', 'browser_use', 'automation', 'terminal_takeover'].includes(request.tool)) {
       result = { requestId: request.requestId, ok: false, error: `WSL host tool is not allowed: ${String(request.tool)}` };
     } else {
       const trustedRequest = {

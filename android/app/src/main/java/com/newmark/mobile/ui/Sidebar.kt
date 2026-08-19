@@ -282,7 +282,7 @@ private fun MainSidebar(
         modifier = Modifier
             .fillMaxSize()
             // 一级栏宽度和信息架构不变；视觉 token 直接沿用 PC 二级栏。
-            .background(surface)
+            .background(surface.copy(alpha = 0.72f))
             .padding(horizontal = if (rail) 4.dp else 6.dp),
     ) {
         // 区 1：设备与工作区（顶部）
@@ -1022,7 +1022,7 @@ fun WorkspaceConversationsSidebar(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(surface)
+            .background(surface.copy(alpha = 0.72f))
             .then(if (respectStatusBars) Modifier.statusBarsPadding() else Modifier)
             .drawBehind {
                 val stroke = 1.dp.toPx()

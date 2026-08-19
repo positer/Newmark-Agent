@@ -298,6 +298,13 @@ export class ToolExecutor {
         max_refs: { type: 'number' },
         attribute: { type: 'string' },
       }, ['action']),
+      t('screen_capture', 'Read-only active Windows screenshot available without provisioning or starting full Computer Use. Capture the whole desktop or one visible application. The image is a one-use model input and is deleted immediately; semantic Windows UI objects are returned alongside it.', {
+        target: { type: 'string', enum: ['desktop', 'application'], description: 'Capture the whole desktop or one visible application. Defaults to desktop.' },
+        app_target: { type: 'string', description: 'For target=application: application title, process name, process id, or window handle.' },
+        capture_max_width: { type: 'number', minimum: 320, maximum: 2048, description: 'Maximum ephemeral screenshot width; defaults to 1280. Aspect ratio is preserved and the source is never enlarged.' },
+        capture_max_height: { type: 'number', minimum: 240, maximum: 2048, description: 'Maximum ephemeral screenshot height; defaults to 960. Aspect ratio is preserved and the source is never enlarged.' },
+        max_chars: { type: 'number', minimum: 1000, maximum: 100000, description: 'Maximum returned semantic UI text characters.' },
+      }, []),
       t('computer_use', 'Native Windows desktop control with persistent observation/action helpers. Use observe/app_observe before acting. sequence may perform up to three stable low-risk move/click/scroll/wait/app_activate steps and stops when focus, window, menu, dialog, scene, or risk changes. Vision screenshots remain one-time inputs and are deleted immediately.', {
         action: { type: 'string', enum: ['observe', 'app_list', 'app_observe', 'sequence', 'takeover_start', 'takeover_stop', 'move', 'click', 'scroll', 'type', 'key', 'wait', 'app_activate', 'app_click', 'app_scroll', 'app_type', 'app_key'] },
         capture_max_width: { type: 'number', minimum: 320, maximum: 2048, description: 'For observe/app_observe only. Maximum ephemeral screenshot width; defaults to 1280. Aspect ratio is preserved and the source is never enlarged.' },
@@ -796,6 +803,44 @@ export class ToolExecutor {
             result: parsed,
           }, null, 2);
         }
+        case 'screen_capture': {
+          const target = g('target').toLowerCase() === 'application' ? 'application' : 'desktop';
+          if (process.env.NEWMARK_WSL_DISTRO) {
+            const result = await requestWindowsHostTool('screen_capture', args, {
+              conversationId: context.conversationId || 'default',
+              workspaceId: context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath),
+              actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
+              runtimeKey: browserUseScope(context, wsPath).runtimeKey,
+              allowEphemeralVisionImage: context.allowEphemeralVisionImage === true,
+              mode: context.mode || 'build',
+            }, 120_000, context.signal);
+            return typeof result === 'string' ? result : JSON.stringify(result);
+          }
+          if (process.env.NEWMARK_ISOLATED_RUNTIME === '1') {
+            const result = await requestUtilityHostTool('screen_capture', args, {
+              conversationId: context.conversationId || 'default',
+              workspaceId: context.workspaceId || terminalTakeoverWorkspaceId(context.workspacePath || wsPath),
+              actorId: context.actorId || ROOT_TERMINAL_ACTOR_ID,
+              workspacePath: context.workspacePath || wsPath,
+              backend: 'utility',
+              mode: context.mode || 'build',
+              allowEphemeralVisionImage: context.allowEphemeralVisionImage === true,
+            }, 120_000, context.signal);
+            return typeof result === 'string' ? result : JSON.stringify(result);
+          }
+          return await runComputerUse({
+            action: target === 'application' ? 'app_observe' : 'observe',
+            appTarget: g('app_target'),
+            windowHandle: target === 'application' ? g('app_target') : '',
+            maxChars: Number((args as Record<string, unknown>).max_chars || 30000),
+            workspacePath: wsPath,
+            allowEphemeralVisionImage: context.allowEphemeralVisionImage === true,
+            captureMaxWidth: Number((args as Record<string, unknown>).capture_max_width),
+            captureMaxHeight: Number((args as Record<string, unknown>).capture_max_height),
+            invocation: context.invocation,
+            ownerId: `screen-capture:${computerUseOwner(context, wsPath)}:${String(context.actorId || 'root')}`,
+          });
+        }
         case 'computer_use': {
           const action = normalizeComputerUseAction(g('action'));
           const owner = `${computerUseOwner(context, wsPath)}:${String(context.actorId || 'root')}`;
@@ -976,7 +1021,7 @@ export class ToolExecutor {
 
   private hostSupportsTool(name: string): boolean {
     if (name.startsWith('browser_') && !this.hostProfile.electronBrowser) return false;
-    if (name === 'computer_use' && !this.hostProfile.windowsComputerUse) return false;
+    if ((name === 'computer_use' || name === 'screen_capture') && !this.hostProfile.windowsComputerUse) return false;
     return true;
   }
 

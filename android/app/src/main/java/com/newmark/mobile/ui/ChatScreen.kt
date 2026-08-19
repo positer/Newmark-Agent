@@ -4,7 +4,15 @@ import android.Manifest
 import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -26,6 +34,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -34,9 +44,13 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -44,7 +58,11 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Dangerous
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
@@ -59,6 +77,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -69,33 +89,47 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.newmark.mobile.data.INTELLIGENCE_TIERS
 import com.newmark.mobile.data.LocalWorkEvent
 import com.newmark.mobile.data.LocalWorkRun
 import com.newmark.mobile.data.ModelOption
 import com.newmark.mobile.data.RemoteGoal
+import com.newmark.mobile.data.RemoteFlowTakeover
+import com.newmark.mobile.data.LocalQueuedMessage
 import com.newmark.mobile.data.RemoteConversationImage
 import com.newmark.mobile.data.WorkGuide
 import com.newmark.mobile.data.WorkRunProjection
-import com.newmark.mobile.ui.components.AnchorMenu
 import com.newmark.mobile.ui.components.LucideIcons
 import com.newmark.mobile.ui.components.MarqueeBorder
 import com.newmark.mobile.ui.components.MarkdownBody
-import com.newmark.mobile.ui.components.MenuPlacement
 import com.newmark.mobile.ui.components.MenuRow
 import com.newmark.mobile.ui.components.NewmarkShapeLarge
 import com.newmark.mobile.ui.components.NewmarkShapeExtra
@@ -116,6 +150,8 @@ import com.newmark.mobile.ui.theme.NewmarkTextSecondary
 import com.newmark.mobile.ui.theme.NewmarkTextTertiary
 
 private val MODES = listOf("Build", "Plan", "Goal", "Flow")
+private val PcQueueEase = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
+private enum class InputCompositeMenu { PlusMain, PlusModes, ModelMain, Models, Tiers }
 
 // PC `#chat-area` / `.conversation-work-run` layout contract.  These are
 // deliberately shared so long text never touches a timeline rail or the chat
@@ -155,6 +191,12 @@ data class ConversationBranchPagerUi(
     val canNext: Boolean,
 )
 
+data class QueueMessageUi(
+    val id: String,
+    val text: String,
+    val editable: Boolean,
+)
+
 @Composable
 fun ChatScreen(
     title: String,
@@ -166,8 +208,10 @@ fun ChatScreen(
     selectedModel: String = "",
     selectedModelName: String = "",
     intelligence: String = "medium",
+    selectedMode: String = "Build",
     onSelectModel: (ModelOption) -> Unit = {},
     onSelectIntelligence: (String) -> Unit = {},
+    onSelectMode: (String) -> Unit = {},
     onMenuClick: () -> Unit,
     onNewChat: () -> Unit,
     onSend: (String) -> Unit,
@@ -176,21 +220,57 @@ fun ChatScreen(
     showConnectRemote: Boolean = false,
     onConnectRemote: () -> Unit = {},
     goal: RemoteGoal? = null,
-    flowName: String? = null,
+    flow: RemoteFlowTakeover? = null,
+    queueItems: List<QueueMessageUi> = emptyList(),
+    queuePaused: Boolean = false,
+    onEditGoal: (String) -> Unit = {},
+    onToggleGoalPause: () -> Unit = {},
+    onDeleteGoal: () -> Unit = {},
+    onToggleFlow: () -> Unit = {},
+    onToggleQueuePause: () -> Unit = {},
+    onUpdateQueueItem: (String, String) -> Unit = { _, _ -> },
+    onDeleteQueueItem: (String) -> Unit = {},
+    onGuideQueueItem: (String) -> Unit = {},
     onInspectBranch: (String, Int) -> Unit = { _, _ -> },
     onEditUserMessage: (Int, String) -> Unit = { _, _ -> },
     onOpenWebLink: (String) -> Unit = {},
+    modifier: Modifier = Modifier,
 ) {
     val p = LocalNewmarkPalette.current
     val dark = LocalThemeMode.current.dark ?: isSystemInDarkTheme()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var inputBounds by remember { mutableStateOf<Rect?>(null) }
+    var inputText by remember { mutableStateOf("") }
+    var goalEditPending by remember { mutableStateOf(false) }
+    var inputMenu by remember { mutableStateOf<InputCompositeMenu?>(null) }
+    var inputMenuAnchor by remember { mutableStateOf<Rect?>(null) }
+    val context = LocalContext.current
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { Toast.makeText(context, "已选择：${it.lastPathSegment ?: "文件"}", Toast.LENGTH_SHORT).show() }
+    }
+    BackHandler(enabled = inputMenu != null) { inputMenu = null }
     CompositionLocalProvider(LocalPcColors provides if (dark) PcColorsDark else PcColorsLight) {
-        Column(
-            modifier = Modifier
+        Box(
+            modifier = modifier
                 .fillMaxSize()
                 .background(p.bgPrimary)
+                .pointerInput(inputBounds) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = PointerEventPass.Initial,
+                        )
+                        if (inputBounds?.contains(down.position) != true) {
+                            focusManager.clearFocus(force = true)
+                            keyboardController?.hide()
+                        }
+                    }
+                }
                 .imePadding(),
         ) {
-            ChatTopBar(
+            Column(Modifier.fillMaxSize()) {
+                ChatTopBar(
                 title = title,
                 showMenuButton = showMenuButton,
                 onMenuClick = onMenuClick,
@@ -198,11 +278,7 @@ fun ChatScreen(
                 showConnectRemote = showConnectRemote,
                 onConnectRemote = onConnectRemote,
             )
-            if (goal != null) {
-                RemoteGoalBar(goal = goal, flowName = flowName)
-            }
-
-            ChatContent(
+                ChatContent(
                 items = items,
                 isSending = isSending,
                 onInspectBranch = onInspectBranch,
@@ -211,18 +287,67 @@ fun ChatScreen(
                 modifier = Modifier.weight(1f),
             )
 
-            InputArea(
+                flow?.takeIf { it.running }?.let {
+                    FlowTakeoverBubble(flow = it, onToggle = onToggleFlow)
+                }
+                InputStack(
+                goal = goal,
+                flow = flow,
+                queueItems = queueItems,
+                queuePaused = queuePaused,
+                onEditGoal = {
+                    inputText = it
+                    goalEditPending = true
+                },
+                onToggleGoalPause = onToggleGoalPause,
+                onDeleteGoal = onDeleteGoal,
+                onToggleQueuePause = onToggleQueuePause,
+                onUpdateQueueItem = onUpdateQueueItem,
+                onDeleteQueueItem = onDeleteQueueItem,
+                onGuideQueueItem = onGuideQueueItem,
+            )
+
+                InputArea(
                 running = isSending,
                 remoteMode = remoteMode,
                 modelOptions = modelOptions,
                 selectedModel = selectedModel,
                 selectedModelName = selectedModelName,
                 intelligence = intelligence,
+                selectedMode = selectedMode,
+                text = inputText,
+                onTextChange = { inputText = it },
                 onSelectModel = onSelectModel,
                 onSelectIntelligence = onSelectIntelligence,
-                onSend = onSend,
+                onSelectMode = onSelectMode,
+                onSend = { value ->
+                    if (goalEditPending) {
+                        onEditGoal(value)
+                        goalEditPending = false
+                    } else onSend(value)
+                },
                 onStop = onStop,
                 escalating = escalating,
+                onInputBoundsChanged = { inputBounds = it },
+                onOpenPlusMenu = { anchor -> inputMenuAnchor = anchor; inputMenu = InputCompositeMenu.PlusMain },
+                onOpenModelMenu = { anchor -> inputMenuAnchor = anchor; inputMenu = InputCompositeMenu.ModelMain },
+            )
+            }
+            InputCompositeMenuOverlay(
+                menu = inputMenu,
+                anchor = inputMenuAnchor,
+                remoteMode = remoteMode,
+                mode = selectedMode,
+                selectedModel = selectedModel,
+                selectedModelName = selectedModelName,
+                intelligence = intelligence,
+                options = modelOptions,
+                onMenuChange = { inputMenu = it },
+                onDismiss = { inputMenu = null },
+                onMode = onSelectMode,
+                onSelectModel = onSelectModel,
+                onSelectIntelligence = onSelectIntelligence,
+                onChooseFile = { filePicker.launch("*/*") },
             )
         }
     }
@@ -276,6 +401,9 @@ private fun ChatTopBar(
                     modifier = Modifier.size(18.dp),
                 )
             }
+            // The PC top bar keeps distinct hit targets here.  Without this
+            // fixed gap the two circular controls visually merge on phones.
+            Spacer(Modifier.width(8.dp))
         }
         CircleButton(onClick = onNewChat) {
             Icon(
@@ -316,8 +444,16 @@ private fun ChatContent(
     val p = LocalNewmarkPalette.current
     val pc = LocalPcColors.current
     val listState = rememberLazyListState()
-    // 新消息 / 发送状态变化时自动滚动到底部
-    LaunchedEffect(items.size, isSending) {
+    var viewportHeightPx by remember { mutableIntStateOf(0) }
+    // A live Build keeps one LazyColumn row while its internal event stream
+    // grows.  Key scrolling to that stream as well as the outer item count;
+    // otherwise thought/tool updates below the fold appear to arrive only
+    // when the terminal persisted row replaces the live row.
+    val liveContentRevision = items.fold(0L) { revision, item ->
+        val run = (item as? ChatItem.Bubble)?.workRun ?: return@fold revision
+        revision * 31L + run.events.size * 17L + run.status.hashCode().toLong()
+    }
+    LaunchedEffect(items.size, isSending, liveContentRevision, viewportHeightPx) {
         if (items.isNotEmpty()) {
             listState.scrollToItem(items.size - 1)
         }
@@ -326,6 +462,7 @@ private fun ChatContent(
         state = listState,
         modifier = modifier
             .fillMaxWidth()
+            .onSizeChanged { viewportHeightPx = it.height }
             .padding(horizontal = ChatAreaHorizontalInset, vertical = 16.dp)
             .drawBehind {
                 // PC #chat-area owns two continuous timeline rails. The
@@ -523,6 +660,7 @@ private fun ChatMessageRow(
 ) {
     val pc = LocalPcColors.current
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     var editing by remember(content, messageIndex) { mutableStateOf(false) }
     var editedText by remember(content, messageIndex) { mutableStateOf(content) }
     Row(
@@ -547,13 +685,17 @@ private fun ChatMessageRow(
                 mode = mode,
                 model = model,
                 isUser = isUser,
-                onCopy = { clipboard.setText(AnnotatedString(content)) },
+                onCopy = {
+                    clipboard.setText(AnnotatedString(content))
+                    Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                },
                 onEdit = if (isUser && messageIndex >= 0) ({ editing = true }) else null,
             )
             if (editing) {
                 MessageInlineEditor(
                     value = editedText,
                     onValueChange = { editedText = it },
+                    modifier = Modifier.padding(start = 28.dp),
                     onCancel = {
                         editedText = content
                         editing = false
@@ -719,10 +861,11 @@ private fun MessageInlineEditor(
     onValueChange: (String) -> Unit,
     onCancel: () -> Unit,
     onSubmit: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val pc = LocalPcColors.current
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(top = 4.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1447,9 +1590,195 @@ private fun ThinkingDots() {
     }
 }
 
-/** 远程 goal bar（对齐 PC #goal-bar）：渐变底 + 6px 状态圆点（paused 黄）+ 目标文本 + Flow 标签 */
 @Composable
-private fun RemoteGoalBar(goal: RemoteGoal, flowName: String?) {
+private fun InputStack(
+    goal: RemoteGoal?,
+    flow: RemoteFlowTakeover?,
+    queueItems: List<QueueMessageUi>,
+    queuePaused: Boolean,
+    onEditGoal: (String) -> Unit,
+    onToggleGoalPause: () -> Unit,
+    onDeleteGoal: () -> Unit,
+    onToggleQueuePause: () -> Unit,
+    onUpdateQueueItem: (String, String) -> Unit,
+    onDeleteQueueItem: (String) -> Unit,
+    onGuideQueueItem: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (queueItems.isNotEmpty()) QueuePanel(
+            items = queueItems,
+            paused = queuePaused,
+            onTogglePause = onToggleQueuePause,
+            onUpdate = onUpdateQueueItem,
+            onDelete = onDeleteQueueItem,
+            onGuide = onGuideQueueItem,
+        )
+        flow?.promptText?.takeIf { it.isNotBlank() }?.let {
+            FlowPromptBar(text = it, paused = flow.paused)
+        }
+        goal?.takeIf { it.objective.isNotBlank() }?.let {
+            RemoteGoalBar(
+                goal = it,
+                onEdit = { onEditGoal(it.objective) },
+                onTogglePause = onToggleGoalPause,
+                onDelete = onDeleteGoal,
+            )
+        }
+    }
+}
+
+@Composable
+private fun StackCard(
+    modifier: Modifier = Modifier,
+    backgroundBrush: Brush? = null,
+    content: @Composable () -> Unit,
+) {
+    val pc = LocalPcColors.current
+    val light = pc == PcColorsLight
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .clip(shape)
+            .background(backgroundBrush ?: Brush.linearGradient(listOf(
+                if (light) Color.White.copy(alpha = 0.72f) else Color(0xEB121422),
+                if (light) Color.White.copy(alpha = 0.72f) else Color(0xEB121422),
+            )))
+            .border(1.dp, pc.border, shape),
+    ) { content() }
+}
+
+@Composable
+private fun FlowPromptBar(text: String, paused: Boolean) {
+    val pc = LocalPcColors.current
+    val color = if (paused) Color(0xFFE2B74A) else Color(0xFF4CC4A0)
+    StackCard(backgroundBrush = Brush.horizontalGradient(
+        listOf(color.copy(alpha = 0.14f), Color.Transparent),
+    )) {
+        Row(Modifier.height(30.dp).padding(horizontal = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+            StatusDot(color)
+            Spacer(Modifier.width(8.dp))
+            Text(text, color = pc.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun FlowTakeoverBubble(flow: RemoteFlowTakeover, onToggle: () -> Unit) {
+    val pc = LocalPcColors.current
+    val paused = flow.paused
+    val accent = if (paused) Color(0xFFE06A6A) else pc.accent
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(if (pc == PcColorsLight) Color.White.copy(alpha = 0.9f) else Color(0xE0121422))
+                .border(1.dp, accent.copy(alpha = 0.48f), RoundedCornerShape(999.dp))
+                .clickable(onClick = onToggle)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(LucideIcons.Activity, contentDescription = null, tint = accent, modifier = Modifier.size(15.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = (if (paused) "Flow 已暂停接管，点击继续" else "当前对话正由 Flow 接管") +
+                    flow.name.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty() +
+                    flow.message.takeIf { paused && it.isNotBlank() }?.let { " · ${it.take(200)}" }.orEmpty(),
+                color = pc.text,
+                fontSize = 12.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun QueuePanel(
+    items: List<QueueMessageUi>,
+    paused: Boolean,
+    onTogglePause: () -> Unit,
+    onUpdate: (String, String) -> Unit,
+    onDelete: (String) -> Unit,
+    onGuide: (String) -> Unit,
+) {
+    val pc = LocalPcColors.current
+    var collapsed by remember { mutableStateOf(true) }
+    StackCard {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth().height(30.dp).clickable { collapsed = !collapsed }.padding(start = 9.dp, end = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Next ${items.size}", color = pc.text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                StackIconButton(if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause, if (paused) "继续队列" else "暂停队列", if (paused) Color(0xFFFFCC44) else pc.textDim, onTogglePause)
+                StackIconButton(if (collapsed) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown, if (collapsed) "展开" else "折叠", pc.textDim) { collapsed = !collapsed }
+            }
+            AnimatedVisibility(
+                visible = !collapsed,
+                enter = expandVertically(
+                    expandFrom = Alignment.Top,
+                    animationSpec = tween(durationMillis = 280, easing = PcQueueEase),
+                ) + fadeIn(animationSpec = tween(durationMillis = 180, delayMillis = 35)),
+                exit = shrinkVertically(
+                    shrinkTowards = Alignment.Top,
+                    animationSpec = tween(durationMillis = 240, easing = PcQueueEase),
+                ) + fadeOut(animationSpec = tween(durationMillis = 140)),
+            ) {
+                Column {
+                    items.forEach { item -> QueueRow(item, onUpdate, onDelete, onGuide) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueRow(item: QueueMessageUi, onUpdate: (String, String) -> Unit, onDelete: (String) -> Unit, onGuide: (String) -> Unit) {
+    val pc = LocalPcColors.current
+    var editing by remember(item.id, item.text) { mutableStateOf(false) }
+    var value by remember(item.id, item.text) { mutableStateOf(item.text) }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("⋮⋮", color = pc.textDim, fontSize = 11.sp)
+        Spacer(Modifier.width(5.dp))
+        if (editing && item.editable) {
+            BasicTextField(value, { value = it }, textStyle = TextStyle(pc.text, 11.sp), modifier = Modifier.weight(1f))
+            StackIconButton(LucideIcons.Check, "保存", pc.accent) { editing = false; onUpdate(item.id, value) }
+        } else {
+            Text(item.text, color = pc.text, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            if (item.editable) {
+                StackIconButton(LucideIcons.ArrowRight, "立即 Guide", pc.accent2) { onGuide(item.id) }
+                StackIconButton(LucideIcons.SquarePen, "编辑", pc.textDim) { editing = true }
+                StackIconButton(LucideIcons.X, "删除", Color(0xFFFF7777)) { onDelete(item.id) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StackIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color, onClick: () -> Unit) {
+    Box(Modifier.size(24.dp).clip(NewmarkShapeSmall).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(13.dp))
+    }
+}
+
+@Composable
+private fun StatusDot(color: Color) {
+    Box(Modifier.size(12.dp).clip(CircleShape).background(color.copy(alpha = 0.13f)), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(6.dp).clip(CircleShape).background(color))
+    }
+}
+
+/** 远程 goal bar，位置和操作与 PC #goal-bar 同构。 */
+@Composable
+private fun RemoteGoalBar(goal: RemoteGoal, onEdit: () -> Unit, onTogglePause: () -> Unit, onDelete: () -> Unit) {
     val pc = LocalPcColors.current
     val isDark = pc == PcColorsDark
     val paused = goal.paused
@@ -1460,48 +1789,21 @@ private fun RemoteGoalBar(goal: RemoteGoal, flowName: String?) {
     } else {
         Brush.horizontalGradient(listOf(Color(0x215B78FF), Color(0xD1FFFFFF)))
     }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(bg)
-            .border(1.dp, Color(0x3D5B78FF))
-            .padding(horizontal = 12.dp, vertical = 7.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(12.dp)
-                    .clip(CircleShape)
-                    .background(haloColor),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(dotColor),
-                )
-            }
+    StackCard(backgroundBrush = bg) {
+        Row(Modifier.fillMaxWidth().height(30.dp).padding(start = 9.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            StatusDot(dotColor)
             Spacer(Modifier.width(8.dp))
             Text(
                 text = goal.objective.ifBlank { "（未设置目标）" },
                 fontSize = 12.sp,
                 color = pc.text,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).clickable(onClick = onEdit),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (paused) {
-                Spacer(Modifier.width(8.dp))
-                Text(text = "已暂停", fontSize = 10.sp, color = Color(0xFFF4C95D))
-            } else if (goal.verified) {
-                Spacer(Modifier.width(8.dp))
-                Text(text = "已达成", fontSize = 10.sp, color = pc.accent2)
-            }
-            flowName?.takeIf { it.isNotBlank() }?.let { name ->
-                Spacer(Modifier.width(8.dp))
-                Text(text = "Flow: $name", fontSize = 10.sp, color = pc.textDim, maxLines = 1)
-            }
+            StackIconButton(LucideIcons.SquarePen, "编辑目标", pc.textDim, onEdit)
+            StackIconButton(if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause, if (paused) "继续目标" else "暂停目标", if (paused) Color(0xFFFFCC44) else pc.textDim, onTogglePause)
+            StackIconButton(LucideIcons.X, "删除目标", Color(0xFFFF7777), onDelete)
         }
     }
 }
@@ -1515,15 +1817,24 @@ private fun InputArea(
     selectedModel: String,
     selectedModelName: String,
     intelligence: String,
+    selectedMode: String,
+    text: String,
+    onTextChange: (String) -> Unit,
     onSelectModel: (ModelOption) -> Unit,
     onSelectIntelligence: (String) -> Unit,
+    onSelectMode: (String) -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     escalating: Boolean = false,
+    onInputBoundsChanged: (Rect) -> Unit = {},
+    onOpenPlusMenu: (Rect) -> Unit,
+    onOpenModelMenu: (Rect) -> Unit,
 ) {
     val p = LocalNewmarkPalette.current
-    var text by remember { mutableStateOf("") }
-    var mode by remember { mutableStateOf("Build") }
+    var mode by remember { mutableStateOf(selectedMode) }
+    LaunchedEffect(selectedMode) {
+        mode = selectedMode
+    }
 
     Column(
         modifier = Modifier
@@ -1541,12 +1852,20 @@ private fun InputArea(
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            PlusCombo(mode = mode, remoteMode = remoteMode, onMode = { mode = it })
+            PlusCombo(
+                onMode = {
+                    mode = it
+                    onSelectMode(it)
+                },
+                onOpenMenu = onOpenPlusMenu,
+            )
             Spacer(Modifier.width(8.dp))
             BasicTextField(
                 value = text,
-                onValueChange = { text = it },
-                modifier = Modifier.weight(1f),
+                onValueChange = onTextChange,
+                modifier = Modifier
+                    .weight(1f)
+                    .onGloballyPositioned { onInputBoundsChanged(it.boundsInRoot()) },
                 textStyle = TextStyle(
                     color = p.textPrimary,
                     fontSize = 12.5.sp,
@@ -1572,13 +1891,15 @@ private fun InputArea(
                 options = modelOptions,
                 onSelectModel = onSelectModel,
                 onSelectIntelligence = onSelectIntelligence,
+                onOpenMenu = onOpenModelMenu,
             )
             Spacer(Modifier.width(6.dp))
             SubmitButton(
                 running = running,
+                hasText = text.isNotBlank(),
                 onClick = {
                     onSend(text)
-                    text = ""
+                    onTextChange("")
                 },
                 onStop = onStop,
                 escalating = escalating,
@@ -1587,8 +1908,162 @@ private fun InputArea(
     }
 }
 
-/** 模型按钮复合菜单层级：主菜单 → 模型选择 / 智能档位 */
-private enum class ModelMenuPage { Main, Models, Tiers }
+@Composable
+private fun InputCompositeMenuOverlay(
+    menu: InputCompositeMenu?,
+    anchor: Rect?,
+    remoteMode: Boolean,
+    mode: String,
+    selectedModel: String,
+    selectedModelName: String,
+    intelligence: String,
+    options: List<ModelOption>,
+    onMenuChange: (InputCompositeMenu) -> Unit,
+    onDismiss: () -> Unit,
+    onMode: (String) -> Unit,
+    onSelectModel: (ModelOption) -> Unit,
+    onSelectIntelligence: (String) -> Unit,
+    onChooseFile: () -> Unit,
+) {
+    // Keep the last surface composed just long enough to fade out. Returning
+    // immediately for menu == null made dismissal a hard disappearance and
+    // reversing the button-origin scale would incorrectly look like collapse.
+    var displayedMenu by remember { mutableStateOf<InputCompositeMenu?>(null) }
+    var displayedAnchor by remember { mutableStateOf<Rect?>(null) }
+    val entrance = remember { Animatable(0f) }
+    val exitAlpha = remember { Animatable(0f) }
+    LaunchedEffect(menu, anchor) {
+        if (menu != null && anchor != null) {
+            val isNewSurface = displayedMenu == null
+            if (isNewSurface) {
+                entrance.snapTo(0f)
+                exitAlpha.snapTo(1f)
+            }
+            displayedMenu = menu
+            displayedAnchor = anchor
+            if (isNewSurface) {
+                entrance.animateTo(
+                    targetValue = 1f,
+                    animationSpec = tween(durationMillis = 260, easing = PcQueueEase),
+                )
+            } else {
+                exitAlpha.snapTo(1f)
+            }
+        } else if (displayedMenu != null) {
+            entrance.snapTo(1f)
+            exitAlpha.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(durationMillis = 130),
+            )
+            displayedMenu = null
+            displayedAnchor = null
+        }
+    }
+    val visibleMenu = displayedMenu ?: return
+    val visibleAnchor = displayedAnchor ?: return
+    val p = LocalNewmarkPalette.current
+    val density = LocalDensity.current
+    val config = LocalConfiguration.current
+    val width = if (visibleMenu == InputCompositeMenu.Models) 268.dp else 190.dp
+    val widthPx = with(density) { width.roundToPx() }
+    val marginPx = with(density) { 8.dp.roundToPx() }
+    var overlaySize by remember { mutableStateOf(IntSize.Zero) }
+    val windowWidthPx = overlaySize.width.takeIf { it > 0 }
+        ?: with(density) { config.screenWidthDp.dp.roundToPx() }
+    val xPx = visibleAnchor.left.toInt().coerceIn(marginPx, (windowWidthPx - widthPx - marginPx).coerceAtLeast(marginPx))
+    // The popup grows from the exact horizontal centre of the control that
+    // opened it. This remains correct when the menu is clamped at a screen
+    // edge, unlike a fixed BottomStart transform origin.
+    val anchorOriginX = ((visibleAnchor.center.x - xPx) / widthPx)
+        .coerceIn(0.08f, 0.92f)
+    val gapPx = with(density) { 6.dp.roundToPx() }
+    // Align the menu's bottom edge to the anchor's top edge. Content expands
+    // upward from that edge, so its first frame never needs a measured height
+    // and cannot jump after IME-safe placement resolves.
+    val bottomAnchorOffset = visibleAnchor.top.toInt() - gapPx - overlaySize.height
+    val availableModes = if (remoteMode) MODES else listOf("Build", "Plan")
+    val scroll = rememberScrollState()
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .onSizeChanged { overlaySize = it }
+            .zIndex(20f)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onDismiss,
+            ),
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .offset { IntOffset(xPx, bottomAnchorOffset) }
+                .graphicsLayer {
+                    val progress = entrance.value
+                    transformOrigin = TransformOrigin(anchorOriginX, 1f)
+                    // A restrained scale keeps the PC popover character while
+                    // making the button-origin motion unmistakable on phone.
+                    scaleX = 0.18f + 0.82f * progress
+                    scaleY = 0.08f + 0.92f * progress
+                    // Dismissal is an independent fade of the fully expanded
+                    // surface; it deliberately does not reverse either scale.
+                    alpha = (0.35f + 0.65f * progress) * exitAlpha.value
+                    translationY = with(density) { 2.dp.toPx() } * (1f - progress)
+                },
+        ) {
+            Column(
+                modifier = Modifier
+                    .width(width)
+                    .heightIn(max = 320.dp)
+                    .shadow(12.dp, NewmarkShapeMedium, clip = false)
+                    .clip(NewmarkShapeMedium)
+                    .background(p.bgTertiary.copy(alpha = 0.96f))
+                    .border(1.5.dp, p.border2, NewmarkShapeMedium)
+                    .border(0.5.dp, Color.White.copy(alpha = 0.32f), NewmarkShapeMedium)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    )
+                    .verticalScroll(scroll)
+                    .padding(4.dp),
+            ) {
+                when (visibleMenu) {
+                    InputCompositeMenu.PlusMain -> {
+                        MenuRow("模式选择", trailing = mode) { onMenuChange(InputCompositeMenu.PlusModes) }
+                        MenuRow("选择文件") { onDismiss(); onChooseFile() }
+                    }
+                    InputCompositeMenu.PlusModes -> {
+                        MenuRow("← 返回") { onMenuChange(InputCompositeMenu.PlusMain) }
+                        availableModes.forEach { candidate ->
+                            MenuRow(candidate, selected = candidate == mode) { onMode(candidate); onDismiss() }
+                        }
+                    }
+                    InputCompositeMenu.ModelMain -> {
+                        MenuRow("模型选择", trailing = selectedModel) { onMenuChange(InputCompositeMenu.Models) }
+                        MenuRow("智能档位", trailing = intelligence.ifBlank { "medium" }) { onMenuChange(InputCompositeMenu.Tiers) }
+                    }
+                    InputCompositeMenu.Models -> {
+                        MenuRow("← 返回") { onMenuChange(InputCompositeMenu.ModelMain) }
+                        if (options.isEmpty()) MenuRow("暂无可用模型", onClick = onDismiss)
+                        options.forEach { option ->
+                            MenuRow(option.label, selected = option.modelName == selectedModelName.ifBlank { selectedModel }) {
+                                onSelectModel(option); onDismiss()
+                            }
+                        }
+                    }
+                    InputCompositeMenu.Tiers -> {
+                        MenuRow("← 返回") { onMenuChange(InputCompositeMenu.ModelMain) }
+                        INTELLIGENCE_TIERS.forEach { tier ->
+                            MenuRow(tier, selected = tier == intelligence) { onSelectIntelligence(tier); onDismiss() }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 /** 模型选择按钮：复合「模型选择 + 智能档位」的单图标按钮（发送键左侧） */
 @Composable
@@ -1599,173 +2074,42 @@ private fun ModelButton(
     options: List<ModelOption>,
     onSelectModel: (ModelOption) -> Unit,
     onSelectIntelligence: (String) -> Unit,
+    onOpenMenu: (Rect) -> Unit,
 ) {
     val p = LocalNewmarkPalette.current
-    var showMenu by remember { mutableStateOf(false) }
-    var page by remember { mutableStateOf(ModelMenuPage.Main) }
-    // 档位显示名对齐 PC intel.*（low/medium/high/xhigh/max/ultra）
-    val intelligenceLabel = intelligence.ifBlank { "medium" }
-
-    Box {
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(p.bgQuaternary)
-                .clickable {
-                    showMenu = true
-                    page = ModelMenuPage.Main
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Filled.AutoAwesome,
-                contentDescription = "模型",
-                tint = p.textSecondary,
-                modifier = Modifier.size(16.dp),
-            )
-        }
-
-        AnchorMenu(
-            expanded = showMenu,
-            onDismissRequest = {
-                showMenu = false
-                page = ModelMenuPage.Main
-            },
-            showScrollbar = page == ModelMenuPage.Models,
-        ) {
-            when (page) {
-                ModelMenuPage.Main -> {
-                    MenuRow(
-                        text = "模型选择",
-                        trailing = selectedModel,
-                        onClick = { page = ModelMenuPage.Models },
-                    )
-                    MenuRow(
-                        text = "智能档位",
-                        trailing = intelligenceLabel,
-                        onClick = { page = ModelMenuPage.Tiers },
-                    )
-                }
-                ModelMenuPage.Models -> {
-                    MenuRow(text = "← 返回", onClick = { page = ModelMenuPage.Main })
-                    if (options.isEmpty()) {
-                        MenuRow(text = "暂无可用模型", onClick = { showMenu = false; page = ModelMenuPage.Main })
-                    } else {
-                        options.forEach { opt ->
-                            MenuRow(
-                                text = opt.label,
-                                selected = opt.modelName == selectedModelName.ifBlank { selectedModel },
-                                onClick = {
-                                    onSelectModel(opt)
-                                    showMenu = false
-                                    page = ModelMenuPage.Main
-                                },
-                            )
-                        }
-                    }
-                }
-                ModelMenuPage.Tiers -> {
-                    MenuRow(text = "← 返回", onClick = { page = ModelMenuPage.Main })
-                    INTELLIGENCE_TIERS.forEach { tier ->
-                        MenuRow(
-                            text = tier,
-                            selected = intelligence == tier,
-                            onClick = {
-                                onSelectIntelligence(tier)
-                                showMenu = false
-                                page = ModelMenuPage.Main
-                            },
-                        )
-                    }
-                }
-            }
-        }
+    var bounds by remember { mutableStateOf<Rect?>(null) }
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .onGloballyPositioned { bounds = it.boundsInRoot() }
+            .clip(CircleShape)
+            .background(p.bgQuaternary)
+            .clickable { bounds?.let(onOpenMenu) },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Filled.AutoAwesome, "模型", tint = p.textSecondary, modifier = Modifier.size(16.dp))
     }
 }
 
-/** Build 模式选择 + 选择文件：单个 + 按钮，单弹窗内容切换（子级在上方展开） */
-private enum class PlusMenuPage { Main, Modes }
-
 @Composable
-private fun PlusCombo(mode: String, remoteMode: Boolean, onMode: (String) -> Unit) {
+private fun PlusCombo(onMode: (String) -> Unit, onOpenMenu: (Rect) -> Unit) {
     val p = LocalNewmarkPalette.current
-    var showMenu by remember { mutableStateOf(false) }
-    var page by remember { mutableStateOf(PlusMenuPage.Main) }
-    val context = LocalContext.current
-    // 本地恢复模式选择，但契约限制为 Build / Plan；远程沿用桌面完整模式列表。
-    val availableModes = if (remoteMode) MODES else listOf("Build", "Plan")
-    val filePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent(),
-    ) { uri ->
-        uri?.let { u ->
-            Toast.makeText(context, "已选择：${u.lastPathSegment ?: "文件"}", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    Box {
-        Box(
-            modifier = Modifier
-                .size(28.dp)
-                .clip(CircleShape)
-                .background(p.bgTertiary)
-                .clickable {
-                    showMenu = true
-                    page = PlusMenuPage.Main
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Add,
-                contentDescription = "模式与文件",
-                tint = p.accent,
-                modifier = Modifier.size(18.dp),
-            )
-        }
-
-        AnchorMenu(
-            expanded = showMenu,
-            onDismissRequest = {
-                showMenu = false
-                page = PlusMenuPage.Main
-            },
-            placement = MenuPlacement.UpStart,
-            gap = 6.dp,
-            viewportMargin = 8.dp,
-            usePcPopoverBehavior = true,
-        ) {
-            when (page) {
-                PlusMenuPage.Main -> {
-                    MenuRow(text = "模式选择", trailing = mode, onClick = { page = PlusMenuPage.Modes })
-                    MenuRow(
-                        text = "选择文件",
-                        onClick = {
-                            showMenu = false
-                            filePicker.launch("*/*")
-                        },
-                    )
-                }
-                PlusMenuPage.Modes -> {
-                    MenuRow(text = "← 返回", onClick = { page = PlusMenuPage.Main })
-                    availableModes.forEach { m ->
-                        MenuRow(
-                            text = m,
-                            selected = m == mode,
-                            onClick = {
-                                onMode(m)
-                                showMenu = false
-                                page = PlusMenuPage.Main
-                            },
-                        )
-                    }
-                }
-            }
-        }
+    var bounds by remember { mutableStateOf<Rect?>(null) }
+    Box(
+        modifier = Modifier
+            .size(28.dp)
+            .onGloballyPositioned { bounds = it.boundsInRoot() }
+            .clip(CircleShape)
+            .background(p.bgTertiary)
+            .clickable { bounds?.let(onOpenMenu) },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Filled.Add, "模式与文件", tint = p.accent, modifier = Modifier.size(18.dp))
     }
 }
 
 @Composable
-private fun SubmitButton(running: Boolean, onClick: () -> Unit, onStop: () -> Unit, escalating: Boolean = false) {
+private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit, onStop: () -> Unit, escalating: Boolean = false) {
     val p = LocalNewmarkPalette.current
     // 按压缩放（对齐 PC :active scale(0.92)）
     val interaction = remember { MutableInteractionSource() }
@@ -1776,7 +2120,8 @@ private fun SubmitButton(running: Boolean, onClick: () -> Unit, onStop: () -> Un
         label = "submitScale",
     )
     val shape = CircleShape
-    if (running) {
+    val isDark = LocalPcColors.current == PcColorsDark
+    if (running && !hasText) {
         // 三形态之「运行中/强制停止」（对齐 PC #submit-btn.running-action + .marquee-border）：
         // 背景 rgba(14,16,24,.88) + border rgba(255,255,255,.08) + 白图标；escalating=octagon-x，否则 square
         MarqueeBorder(
@@ -1790,15 +2135,15 @@ private fun SubmitButton(running: Boolean, onClick: () -> Unit, onStop: () -> Un
                 Modifier
                     .fillMaxSize()
                     .clip(shape)
-                    .background(Color(0xE00E1018))
-                    .border(1.dp, Color(0x14FFFFFF), shape)
+                    .background(if (isDark) Color(0xE00E1018) else Color(0xB8FFFFFF))
+                    .border(1.dp, if (isDark) Color(0x14FFFFFF) else Color(0x292F3C60), shape)
                     .clickable(interactionSource = interaction, indication = null, onClick = onStop),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = if (escalating) LucideIcons.OctagonX else LucideIcons.Square,
                     contentDescription = if (escalating) "强制停止" else "停止",
-                    tint = Color.White,
+                    tint = if (isDark) Color.White else Color(0xFF0A0A1A),
                     modifier = Modifier.size(14.dp),
                 )
             }
@@ -1806,7 +2151,6 @@ private fun SubmitButton(running: Boolean, onClick: () -> Unit, onStop: () -> Un
     } else {
         // idle（对齐 PC #submit-btn）：暗色 = 135deg 渐变 #5b78ff→#7b93ff + 白图标；
         // 亮色 = PC [data-theme=light] 白色 0.72 底 + 深色图标
-        val isDark = LocalPcColors.current == PcColorsDark
         val iconTint = if (isDark) Color.White else Color(0xFF0A0A1A)
         Box(
             modifier = Modifier

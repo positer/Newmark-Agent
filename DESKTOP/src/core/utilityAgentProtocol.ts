@@ -5,6 +5,7 @@ import {
   ConversationContextCompressOptions,
   ConversationKernelRunOptions,
   ConversationKernelRunResult,
+  ConversationQueueAction,
   ConversationQueueMode,
   ConversationRuntimeState,
   ConversationStopResult,
@@ -49,6 +50,7 @@ interface UtilityHostToolRequestBase {
 export type UtilityHostToolRequest =
   | (UtilityHostToolRequestBase & { tool: 'browser_control'; args: BrowserControlRequest })
   | (UtilityHostToolRequestBase & { tool: 'browser_use'; args: BrowserUseRequest; context: UtilityHostToolContext })
+  | (UtilityHostToolRequestBase & { tool: 'screen_capture'; args: Record<string, unknown>; context: UtilityHostToolContext })
   | (UtilityHostToolRequestBase & { tool: 'computer_use'; args: Record<string, unknown>; context: UtilityHostToolContext })
   | (UtilityHostToolRequestBase & { tool: 'automation'; args: { tool: string; payload: string }; context: UtilityHostToolContext })
   | (UtilityHostToolRequestBase & { tool: 'terminal_takeover'; args: Record<string, unknown>; context: UtilityHostToolContext });
@@ -67,6 +69,7 @@ export type UtilityAgentRequest =
   | { id: string; method: 'rewind'; params: { target: ConversationRuntimeTarget; messageIndex: number } }
   | { id: string; method: 'stop'; params: { target: ConversationRuntimeTarget; runId?: string } }
   | { id: string; method: 'guide'; params: { target: ConversationRuntimeTarget; envelope: ConversationInputEnvelope } }
+  | { id: string; method: 'queue_action'; params: { target: ConversationRuntimeTarget; action: ConversationQueueAction; input?: { id?: string; text?: string; requestedMode?: string; goalObjective?: string; createdAt?: string } } }
   | { id: string; method: 'checkpoint'; params: { target: ConversationRuntimeTarget } }
   | { id: string; method: 'context_compress'; params: { target: ConversationRuntimeTarget; options?: ConversationContextCompressOptions } }
   | { id: string; method: 'rate_auto_route'; params: { target: ConversationRuntimeTarget; score: number; routeId?: string } }
@@ -100,6 +103,8 @@ export interface UtilityAgentSnapshotResult {
   target: NormalizedConversationTarget;
   runtime: ConversationRuntimeState | null;
   queued: { steering: string[]; followUp: string[] };
+  queueItems?: Array<{ id: string; text: string; queueMode: 'steer' | 'followUp'; requestedMode?: string; goalObjective?: string; runId?: string; createdAt: string }>;
+  queuePaused?: boolean;
   workEvents: AgentWorkEvent[];
   [key: string]: unknown;
 }

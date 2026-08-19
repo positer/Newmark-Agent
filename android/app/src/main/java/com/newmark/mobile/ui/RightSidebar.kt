@@ -43,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -53,6 +54,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -71,15 +73,17 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.newmark.mobile.data.RemoteSubagent
+import com.newmark.mobile.data.RemotePlanItem
 import com.newmark.mobile.ui.components.LucideIcons
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkLightPalette
+import com.newmark.mobile.vm.ChatViewModel
 import com.newmark.mobile.vm.DesktopLinkViewModel
 
 enum class RightSidebarTab(val label: String, val icon: ImageVector) {
     Files("文件", LucideIcons.Folder),
     Editor("编辑器", LucideIcons.SquarePen),
-    Plan("任务", LucideIcons.ListChecks),
+    Plan("计划", LucideIcons.ListChecks),
     Subagents("Subagent", LucideIcons.Bot),
     Browser("浏览器", LucideIcons.Globe),
 }
@@ -95,10 +99,13 @@ private fun availableRightTabs(remoteMode: Boolean): List<RightSidebarTab> = if 
 @Composable
 fun MobileRightSidebar(
     vm: DesktopLinkViewModel,
+    localVm: ChatViewModel? = null,
     remoteMode: Boolean,
     browserSession: BrowserSessionState,
     selectedTab: RightSidebarTab,
     panelWidth: Dp = 300.dp,
+    /** 宽屏拖拽期间使用同一正式栏的可见宽度，不再渲染独立预测层。 */
+    visibleWidth: Dp = panelWidth,
     expanded: Boolean,
     onOpenSubagentPage: ((RemoteSubagent) -> Unit)? = null,
     onExpandedChange: (Boolean) -> Unit = {},
@@ -116,8 +123,8 @@ fun MobileRightSidebar(
         }
     }
     Column(
-        modifier = modifier.width(panelWidth).fillMaxHeight()
-            .background(p.bgTertiary).border(1.dp, p.border),
+        modifier = modifier.width(visibleWidth).fillMaxHeight()
+            .background(p.bgTertiary.copy(alpha = 0.74f)).border(1.dp, p.border),
     ) {
         RightTabs(
             selected = tab,
@@ -134,16 +141,27 @@ fun MobileRightSidebar(
         )
         if (expanded) {
             Box(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 8.dp)) {
+                // Keep the conversation-bound WebView alive even while the
+                // sidebar is folded or another right-panel tab is selected.
+                // This lets browser_use navigate/extract in the background,
+                // then reveal the exact same page and history when requested.
+                BrowserPanel(
+                    session = browserSession,
+                    visible = tab == RightSidebarTab.Browser,
+                    modifier = Modifier.fillMaxSize().graphicsLayer {
+                        alpha = if (tab == RightSidebarTab.Browser) 1f else 0f
+                    }.zIndex(if (tab == RightSidebarTab.Browser) 1f else -1f),
+                )
                 when (tab) {
                     RightSidebarTab.Files -> if (remoteMode) FilesPanel(vm) { onSelectTab(RightSidebarTab.Editor) }
                     RightSidebarTab.Editor -> if (remoteMode) EditorPanel(vm)
-                    RightSidebarTab.Plan -> if (remoteMode) PlanPanel(vm) else LocalPlanPanel()
+                    RightSidebarTab.Plan -> if (remoteMode) PlanPanel(vm) else LocalPlanPanel(localVm)
                     RightSidebarTab.Subagents -> if (remoteMode) {
                         SubagentPanel(vm, onOpen = { agent ->
                             if (onOpenSubagentPage != null) onOpenSubagentPage(agent) else selectedSubagent = agent
                         })
                     }
-                    RightSidebarTab.Browser -> BrowserPanel(browserSession)
+                    RightSidebarTab.Browser -> Unit
                 }
             }
         }
@@ -269,13 +287,23 @@ private fun RightTabs(
     }
 }
 
-/** 本地没有桌面端 /api/mobile/right-sidebar 的独立计划状态，必须保持空态而非复用远程快照。 */
 @Composable
-private fun LocalPlanPanel() {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        SectionHead("任务与计划")
-        EmptyState("当前本地对话暂无任务与计划")
+private fun LocalPlanPanel(vm: ChatViewModel?) {
+    if (vm == null) {
+        EmptyState("本地任务状态尚未加载")
+        return
     }
+    EditablePlanPanel(
+        items = vm.currentPlanItems.map { RemotePlanItem(it.id, it.text, it.status) },
+        saving = false,
+        onAdd = vm::addPlanItem,
+        onCycle = vm::cyclePlanItem,
+        onEdit = vm::updatePlanItem,
+        onRemove = vm::removePlanItem,
+        onRefresh = {},
+        linkedPlan = "",
+        linkedPlanRevision = 0,
+    )
 }
 
 @Composable
@@ -410,25 +438,114 @@ private fun EditorToolbarButton(icon: ImageVector, label: String, enabled: Boole
 
 @Composable
 private fun PlanPanel(vm: DesktopLinkViewModel) {
+    EditablePlanPanel(
+        items = vm.rightSidebarPlan.items,
+        saving = vm.rightSidebarSaving,
+        onAdd = vm::addRightSidebarPlanItem,
+        onCycle = vm::cycleRightSidebarPlanItem,
+        onEdit = vm::updateRightSidebarPlanItem,
+        onRemove = vm::removeRightSidebarPlanItem,
+        onRefresh = vm::refreshRightSidebar,
+        linkedPlan = vm.rightSidebarLinkedPlan.markdown,
+        linkedPlanRevision = vm.rightSidebarLinkedPlan.revision,
+    )
+}
+
+/** PC plan-compose + plan-row：新增、状态循环、编辑和删除全部在同一个任务面板内。 */
+@Composable
+private fun EditablePlanPanel(
+    items: List<RemotePlanItem>,
+    saving: Boolean,
+    onAdd: (String) -> Unit,
+    onCycle: (String) -> Unit,
+    onEdit: (String, String) -> Unit,
+    onRemove: (String) -> Unit,
+    onRefresh: () -> Unit,
+    linkedPlan: String,
+    linkedPlanRevision: Int,
+) {
     val p = LocalNewmarkPalette.current
+    var draft by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        SectionHead("Conversation plan", onRefresh = vm::refreshRightSidebar)
-        if (vm.rightSidebarPlan.items.isEmpty()) EmptyState("当前对话暂无任务")
-        else vm.rightSidebarPlan.items.forEach { item ->
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(p.bgPrimary)
-                .border(1.dp, p.border, RoundedCornerShape(8.dp)).clickable { vm.cycleRightSidebarPlanItem(item.id) }.padding(8.dp),
-                verticalAlignment = Alignment.Top) {
-                Text(when (item.status) { "done" -> "✓"; "in_progress" -> "◉"; else -> "○" },
-                    color = if (item.status == "done") Color(0xFF38D4A0) else p.textSecondary, fontSize = 11.sp)
-                Text(item.text, color = if (item.status == "done") p.textSecondary else p.textPrimary,
-                    fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(start = 8.dp))
+        SectionHead("当前对话计划", meta = if (saving) "正在保存…" else "", onRefresh = onRefresh)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            BasicTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                singleLine = true,
+                textStyle = TextStyle(color = p.textPrimary, fontSize = 12.sp),
+                modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(p.bgPrimary)
+                    .border(1.dp, p.border2, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 8.dp),
+                decorationBox = { inner ->
+                    if (draft.isBlank()) Text("新建计划项…", color = p.textTertiary, fontSize = 12.sp)
+                    inner()
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = {
+                    onAdd(draft)
+                    draft = ""
+                }),
+            )
+            IconButton(LucideIcons.Plus, "新增计划项", p.textPrimary, p.accentSoft, p.accentBorder) {
+                onAdd(draft)
+                draft = ""
             }
+        }
+        Spacer(Modifier.height(10.dp))
+        if (items.isEmpty()) EmptyState("当前对话暂无计划项")
+        items.forEach { item ->
+            EditablePlanRow(item = item, onCycle = { onCycle(item.id) }, onEdit = { onEdit(item.id, it) }, onRemove = { onRemove(item.id) })
             Spacer(Modifier.height(7.dp))
         }
         Spacer(Modifier.height(8.dp))
-        SectionHead("Linked plan", meta = if (vm.rightSidebarLinkedPlan.revision > 0) "r${vm.rightSidebarLinkedPlan.revision}" else "")
-        if (vm.rightSidebarLinkedPlan.markdown.isBlank()) EmptyState("No linked plan")
-        else Text(vm.rightSidebarLinkedPlan.markdown, color = p.textPrimary, fontSize = 11.sp, lineHeight = 17.sp)
+        SectionHead("关联计划", meta = if (linkedPlanRevision > 0) "r$linkedPlanRevision" else "")
+        if (linkedPlan.isNotBlank()) {
+            Text(linkedPlan, color = p.textPrimary, fontSize = 11.sp, lineHeight = 17.sp)
+        } else {
+            EmptyState("当前对话没有关联计划")
+        }
+    }
+}
+
+@Composable
+private fun EditablePlanRow(item: RemotePlanItem, onCycle: () -> Unit, onEdit: (String) -> Unit, onRemove: () -> Unit) {
+    val p = LocalNewmarkPalette.current
+    var editing by remember(item.id) { mutableStateOf(false) }
+    var value by remember(item.id, item.text) { mutableStateOf(item.text) }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(p.bgPrimary)
+            .border(1.dp, p.border, RoundedCornerShape(8.dp)).padding(7.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        IconButton(
+            LucideIcons.Check,
+            "切换任务状态",
+            if (item.status == "done") Color(0xFF38D4A0) else p.textSecondary,
+            border = if (item.status == "in_progress") Color(0x80F0AD4E) else p.border,
+        ) { onCycle() }
+        if (editing) {
+            BasicTextField(
+                value = value,
+                onValueChange = { value = it },
+                textStyle = TextStyle(color = p.textPrimary, fontSize = 11.sp, lineHeight = 16.sp),
+                modifier = Modifier.weight(1f).border(1.dp, p.accentBorder, RoundedCornerShape(6.dp)).padding(6.dp),
+            )
+            IconButton(LucideIcons.Check, "保存任务", p.accent) {
+                onEdit(value)
+                editing = false
+            }
+        } else {
+            Text(
+                item.text,
+                color = if (item.status == "done") p.textSecondary else p.textPrimary,
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+                modifier = Modifier.weight(1f).clickable { editing = true }.padding(top = 5.dp),
+            )
+            IconButton(LucideIcons.Pencil, "编辑任务", p.textSecondary) { editing = true }
+        }
+        IconButton(LucideIcons.X, "删除任务", p.red) { onRemove() }
     }
 }
 
@@ -474,7 +591,7 @@ private fun SubagentHistoryDialog(agent: RemoteSubagent, onDismiss: () -> Unit) 
     val p = LocalNewmarkPalette.current
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxWidth(.82f).fillMaxHeight(.8f).widthIn(max = 680.dp).clip(RoundedCornerShape(12.dp))
-            .background(p.bgPrimary).border(1.dp, p.border2, RoundedCornerShape(12.dp))) {
+            .background(p.bgPrimary.copy(alpha = 0.78f)).border(1.dp, p.border2, RoundedCornerShape(12.dp))) {
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("实时历史 — 运行期间自动更新。", color = p.textSecondary, fontSize = 11.sp, modifier = Modifier.weight(1f))
@@ -512,7 +629,17 @@ private fun SubagentHistoryContent(agent: RemoteSubagent, modifier: Modifier = M
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun BrowserPanel(session: BrowserSessionState) {
+private fun BrowserPanel(session: BrowserSessionState, visible: Boolean, modifier: Modifier = Modifier) {
+    key(session) {
+        if (visible || session.hasActivity) {
+            ConversationBrowserPanel(session, modifier)
+        }
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun ConversationBrowserPanel(session: BrowserSessionState, modifier: Modifier = Modifier) {
     val p = LocalNewmarkPalette.current
     val context = LocalContext.current
     val focus = LocalFocusManager.current
@@ -537,7 +664,7 @@ private fun BrowserPanel(session: BrowserSessionState) {
             BrowserCommandKind.Reload -> view.reload()
         }
     }
-    Column(Modifier.fillMaxSize()) {
+    Column(modifier) {
         Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             EditorToolbarButton(LucideIcons.ArrowLeft, "后退", session.canGoBack) { session.back() }
             EditorToolbarButton(LucideIcons.ArrowRight, "前进", session.canGoForward) { session.forward() }
@@ -604,6 +731,12 @@ private fun BrowserPanel(session: BrowserSessionState) {
                         }
                         override fun onPageFinished(view: WebView, url: String) {
                             session.onNavigationFinished(url, view.canGoBack(), view.canGoForward())
+                            view.evaluateJavascript(
+                                "(function(){var b=document.body;return b?(b.innerText||b.textContent||''):'';})()",
+                            ) { encoded ->
+                                val text = runCatching { org.json.JSONArray("[$encoded]").optString(0) }.getOrDefault("")
+                                session.onPublicText(text)
+                            }
                         }
                         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                             if (request.isForMainFrame) {

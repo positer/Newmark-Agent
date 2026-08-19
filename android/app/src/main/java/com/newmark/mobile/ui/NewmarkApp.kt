@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -24,37 +25,47 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DrawerState
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.newmark.mobile.data.LocalWorkEvent
 import com.newmark.mobile.data.LocalWorkRun
+import com.newmark.mobile.ui.QueueMessageUi
 import com.newmark.mobile.data.ModelOption
 import com.newmark.mobile.data.RemoteConversation
+import com.newmark.mobile.data.RemoteFlowTakeover
+import com.newmark.mobile.data.RemoteGoal
 import com.newmark.mobile.data.WorkDisplayImage
 import com.newmark.mobile.data.WorkConversationImage
 import com.newmark.mobile.data.WorkGuide
 import com.newmark.mobile.data.RemoteSubagent
 import com.newmark.mobile.data.RemoteWorkRun
+import com.newmark.mobile.data.RemoteTrackingContract
 import com.newmark.mobile.data.ThemeStore
 import com.newmark.mobile.data.WorkspaceInfo
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
@@ -68,6 +79,7 @@ import com.newmark.mobile.vm.ChatViewModel
 import com.newmark.mobile.vm.DesktopLinkViewModel
 import com.newmark.mobile.vm.LinkStatus
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.android.awaitFrame
 import java.time.Instant
 import java.time.ZoneId
@@ -187,14 +199,66 @@ private fun remoteRunToLocal(run: RemoteWorkRun): LocalWorkRun {
         expanded = run.expanded,
         events = events + guideEvents,
         text = run.events.lastOrNull { it.type == "response" || it.type == "final_response" }?.content ?: "",
+        anchorMessageId = run.anchorMessageId,
+        branchNodeId = run.branchNodeId,
     )
 }
 
 private enum class Screen { Main, Settings, MemoryLab, Terminal }
 
+/**
+ * Compose binds one conversation command surface. Local/remote differences
+ * live behind this adapter instead of being reimplemented by every button,
+ * layout, popup and queue row.
+ */
+private data class ConversationUiActions(
+    val send: (String) -> Unit,
+    val stop: () -> Unit,
+    val selectModel: (ModelOption) -> Unit,
+    val selectIntelligence: (String) -> Unit,
+    val selectMode: (String) -> Unit,
+    val editGoal: (String) -> Unit,
+    val toggleGoalPause: () -> Unit,
+    val deleteGoal: () -> Unit,
+    val toggleFlow: () -> Unit,
+    val toggleQueuePause: () -> Unit,
+    val updateQueueItem: (String, String) -> Unit,
+    val deleteQueueItem: (String) -> Unit,
+    val guideQueueItem: (String) -> Unit,
+    val inspectBranch: (String, Int) -> Unit,
+    val editUserMessage: (Int, String) -> Unit,
+)
+
+/** One immutable argument surface shared by compact and expanded layouts. */
+private data class ConversationSurface(
+    val title: String,
+    val items: List<ChatItem>,
+    val isSending: Boolean,
+    val remoteMode: Boolean,
+    val modelOptions: List<ModelOption>,
+    val selectedModel: String,
+    val selectedModelName: String,
+    val intelligence: String,
+    val selectedMode: String,
+    val actions: ConversationUiActions,
+    val escalating: Boolean,
+    val showConnectRemote: Boolean,
+    val onConnectRemote: () -> Unit,
+    val goal: RemoteGoal?,
+    val flow: RemoteFlowTakeover?,
+    val queueItems: List<QueueMessageUi>,
+    val queuePaused: Boolean,
+    val onNewChat: () -> Unit,
+    val onOpenWebLink: (String) -> Unit,
+)
+
 /** 自适应根布局：主题（亮暗色开关） + 竖屏 drawer / 平板 rail↔full，绑定本地对话 + 桌面端同步 */
 @Composable
-fun NewmarkApp(initialPairUrl: String? = null) {
+fun NewmarkApp(
+    initialPairUrl: String? = null,
+    runtimeStressScenario: String? = null,
+    onInteractiveReady: () -> Unit = {},
+) {
     val context = LocalContext.current
     val themeStore = remember { ThemeStore(context) }
     // SharedPreferences is tiny, but avoid adding synchronous storage work to
@@ -212,18 +276,51 @@ fun NewmarkApp(initialPairUrl: String? = null) {
         },
     ) {
         NewmarkTheme(darkTheme = dark) {
-            NewmarkAppContent(initialPairUrl = initialPairUrl)
+            NewmarkAppContent(
+                initialPairUrl = initialPairUrl,
+                runtimeStressScenario = runtimeStressScenario,
+                onInteractiveReady = onInteractiveReady,
+            )
         }
     }
 }
 
 @Composable
-private fun NewmarkAppContent(initialPairUrl: String?) {
+private fun NewmarkAppContent(
+    initialPairUrl: String?,
+    runtimeStressScenario: String?,
+    onInteractiveReady: () -> Unit,
+) {
     val p = LocalNewmarkPalette.current
-    val secondarySurface = pcSecondarySurfaceColor()
     val context = LocalContext.current
     val vm: ChatViewModel = viewModel()
     val linkVm: DesktopLinkViewModel = viewModel()
+
+    LaunchedEffect(runtimeStressScenario) {
+        if (runtimeStressScenario != "local_queue_guide") return@LaunchedEffect
+        while (vm.providers.isEmpty()) delay(50)
+        vm.newConversation()
+        vm.send("QUEUE_STRESS_DIAGNOSTIC")
+        while (!vm.isSending) delay(20)
+        vm.enqueueLocal("guide_runtime_candidate")
+        vm.enqueueLocal("next_runtime_original")
+        vm.enqueueLocal("next_runtime_delete")
+        while (vm.currentQueue.size < 3) delay(20)
+        val queued = vm.currentQueue.toList()
+        vm.toggleLocalQueuePause()
+        vm.updateLocalQueueMessage(queued[1].id, "next_runtime_edited")
+        vm.deleteLocalQueueMessage(queued[2].id)
+        vm.guideLocalQueueMessage(queued[0].id)
+        vm.toggleLocalQueuePause()
+    }
+
+    LaunchedEffect(Unit) {
+        // This effect can run only after the complete root composition has
+        // been applied. One additional frame proves the real input surface is
+        // drawn; no launch placeholder or missing-feature shell is counted.
+        awaitFrame()
+        onInteractiveReady()
+    }
 
     // Let Compose produce the chat shell first.  Remote hydration can involve
     // network timeouts and a large desktop snapshot, neither of which should
@@ -249,7 +346,13 @@ private fun NewmarkAppContent(initialPairUrl: String?) {
     var expandedDevice by remember { mutableStateOf<Device?>(null) }
     var rail by remember { mutableStateOf(false) }
     var rightSidebarExpanded by remember { mutableStateOf(false) }
-    var rightSidebarDragProgress by remember { mutableStateOf(0f) }
+    var rightSidebarDragProgress by remember { mutableFloatStateOf(0f) }
+    var isRightSidebarDragging by remember { mutableStateOf(false) }
+    val rightSidebarProgress by animateFloatAsState(
+        targetValue = if (isRightSidebarDragging) rightSidebarDragProgress else if (rightSidebarExpanded) 1f else 0f,
+        animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
+        label = "rightSidebarProgress",
+    )
     var rightSidebarTab by remember { mutableStateOf(RightSidebarTab.Files) }
     val browserSessions = remember { BrowserSessionRegistry() }
     var compactSubagent by remember { mutableStateOf<RemoteSubagent?>(null) }
@@ -266,7 +369,19 @@ private fun NewmarkAppContent(initialPairUrl: String?) {
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-
+    val drawerWidthPx = with(LocalDensity.current) { drawerWidth.toPx() }
+    val compactLeftSidebarProgress by remember(drawerState, drawerWidthPx) {
+        derivedStateOf {
+            val offset = drawerState.currentOffset
+            if (offset.isFinite() && drawerWidthPx > 0f) {
+                (1f + offset / drawerWidthPx).coerceIn(0f, 1f)
+            } else if (drawerState.isOpen) {
+                1f
+            } else {
+                0f
+            }
+        }
+    }
     // 配对后按连接状态展示远程对话 / 重连中 / 断开；新建对话时切回本地
     var preferLocal by remember { mutableStateOf(false) }
     val useRemote = !preferLocal && linkVm.pairInfo != null &&
@@ -277,127 +392,28 @@ private fun NewmarkAppContent(initialPairUrl: String?) {
         "local:${vm.currentId.orEmpty()}"
     }
     val browserSession = browserSessions.session(browserTargetKey)
+    val localBrowserConversationId = vm.currentId.orEmpty()
+    DisposableEffect(useRemote, localBrowserConversationId, browserSession, vm) {
+        if (useRemote || localBrowserConversationId.isBlank()) return@DisposableEffect onDispose { }
+        val handler: suspend (org.json.JSONObject) -> com.newmark.mobile.data.ToolResult = { args ->
+            // browser_use operates the conversation-scoped WebView in the
+            // background. Sidebar visibility is presentation state only; a
+            // tool must never force the user's right sidebar open or switch
+            // its selected tab.
+            browserSession.executeTool(args)
+        }
+        vm.bindLocalBrowserTools(localBrowserConversationId, handler)
+        onDispose { vm.unbindLocalBrowserTools(localBrowserConversationId, handler) }
+    }
     val selectedRightSidebarTab = when {
         useRemote -> rightSidebarTab
         rightSidebarTab in listOf(RightSidebarTab.Plan, RightSidebarTab.Browser) -> rightSidebarTab
         else -> RightSidebarTab.Plan
     }
-    val displayItems by remember(
-        useRemote,
-        linkVm.remoteMessages,
-        linkVm.remoteWorkRuns,
-        linkVm.remoteBranchGroups,
-        linkVm.remoteWindowStart,
-        linkVm.liveRun,
-        vm.currentMessages,
-        vm.currentBranchPagers,
-    ) {
-        derivedStateOf {
-            if (useRemote) {
-        // 完全依照 PC 渲染语义：work run 块锚定在对应 user 消息（anchorMessageId→messageId）之后；
-        // 无锚或失锚的 run 按开始时间排在消息尾部；SSE 实时 run 追加在最后。
-        // 每条 item 注入唯一 keyHint（PC messageId / runId），防止同秒同内容消息 key 碰撞。
-        val runsByAnchor = linkVm.remoteWorkRuns.groupBy { it.anchorMessageId }
-        val matchedRunIds = mutableSetOf<String>()
-        val remoteRunsById = linkVm.remoteWorkRuns.associateBy { it.runId }
-        val visibleRunMessages = linkVm.remoteMessages
-            .filter { it.runId.isNotBlank() && it.runId in remoteRunsById && it.clientMessageId.isBlank() && !isHiddenWorkflowMessage(it) }
-        val runMessageRoles = visibleRunMessages
-            .groupBy { it.runId }
-            .mapValues { (_, messages) -> messages.map { it.role }.toSet() }
-        val items = mutableListOf<ChatItem>()
-        val remotePagersByIndex = linkVm.remoteBranchGroups.mapNotNull { group ->
-            val visibleMessageIndex = group.sourceMessageIndex - linkVm.remoteWindowStart
-            if (group.branches.size < 2 || visibleMessageIndex < 0 || visibleMessageIndex >= linkVm.remoteMessages.size) {
-                return@mapNotNull null
-            }
-            val page = group.branches.indexOfFirst { it.id == group.activeBranchId }
-                .takeIf { it >= 0 } ?: return@mapNotNull null
-            visibleMessageIndex to ConversationBranchPagerUi(
-                groupId = group.id,
-                currentPage = page + 1,
-                totalPages = group.branches.size,
-                canPrevious = page > 0,
-                canNext = page < group.branches.lastIndex,
-            )
-        }.toMap()
-        linkVm.remoteMessages.forEachIndexed { idx, m ->
-            // Desktop keeps Guide lifecycle within the WorkRun; the matching
-            // chat row is intentionally not emitted a second time.
-            if (m.clientMessageId.isNotBlank() && m.runId in remoteRunsById) return@forEachIndexed
-            if (isHiddenWorkflowMessage(m) || (m.role == "workflow" && m.mode.startsWith("tool:"))) return@forEachIndexed
-            val associatedRun = remoteRunsById[m.runId]
-            if (associatedRun != null && m.role == "assistant" && m.runId !in matchedRunIds) {
-                matchedRunIds += m.runId
-                items += remoteRunItems(
-                    associatedRun,
-                    runMessageRoles[m.runId].orEmpty(),
-                    keyPrefix = "run",
-                )
-            }
-            items += ChatItem.Bubble(
-                role = m.role, content = m.content, mode = m.mode, model = m.model, timestamp = m.timestamp,
-                keyHint = m.id.ifBlank { "m:$idx" },
-                messageId = m.id,
-                messageIndex = idx,
-                attachments = m.attachments,
-                branchPager = remotePagersByIndex[idx],
-            )
-            if (associatedRun != null && m.role == "user" && m.runId !in matchedRunIds) {
-                matchedRunIds += m.runId
-                items += remoteRunItems(
-                    associatedRun,
-                    runMessageRoles[m.runId].orEmpty(),
-                    keyPrefix = "run",
-                )
-            }
-            runsByAnchor[m.id]?.sortedBy { it.startedAt }?.forEach { run ->
-                if (run.runId !in matchedRunIds) {
-                    matchedRunIds += run.runId
-                    items += remoteRunItems(run, runMessageRoles[run.runId].orEmpty(), keyPrefix = "run")
-                }
-            }
-        }
-        items += linkVm.remoteWorkRuns
-            .filter { it.runId !in matchedRunIds }
-            .sortedBy { it.startedAt }
-            .flatMap { run -> remoteRunItems(run, runMessageRoles[run.runId].orEmpty(), keyPrefix = "run") }
-        // 持久化 WorkRun 已包含完整公开事件；send 回执 token 不再另起简化
-        // WorkBlock，避免重复或只留下工具调用片段。
-        linkVm.liveRun?.let { run ->
-            items += ChatItem.Bubble(
-                role = "assistant",
-                content = "",
-                timestamp = "",
-                workRun = remoteRunToLocal(run),
-                keyHint = "live:${run.runId}",
-            )
-        }
-                items
-            } else {
-                val localPagersByMessageId = vm.currentBranchPagers.associateBy { it.sourceMessageId }
-                vm.currentMessages.mapIndexed { idx, m ->
-                    val pager = localPagersByMessageId[m.messageId]
-                    ChatItem.Bubble(
-                        role = m.role, content = m.content, timestamp = formatLocalTime(m.timestamp), workRun = m.workRun,
-                        keyHint = m.messageId.ifBlank { "l:$idx:${m.timestamp}" },
-                        messageId = m.messageId,
-                        messageIndex = idx,
-                        branchPager = pager?.let {
-                            ConversationBranchPagerUi(
-                                groupId = it.groupId,
-                                currentPage = it.currentPage,
-                                totalPages = it.totalPages,
-                                canPrevious = it.canPrevious,
-                                canNext = it.canNext,
-                            )
-                        },
-                    )
-                }
-            }
-        }
-    }
-    val sending = if (useRemote) linkVm.isSending else vm.isSending
+    val displayItems = rememberConversationItems(useRemote = useRemote, linkVm = linkVm, vm = vm)
+    val remoteUi = linkVm.conversationUiState
+    val remoteRunning = remoteUi.runtime?.running == true || remoteUi.runtime?.stopRequested == true || remoteUi.flow?.running == true
+    val sending = if (useRemote) linkVm.isSending || remoteRunning else vm.isSending
     // 标题始终显示当前对话标题（本地 or 远程），连接状态在侧边栏设备旁展示
     val title = if (useRemote) {
         linkVm.selectedConversationTitle?.takeIf { it.isNotBlank() }
@@ -408,8 +424,8 @@ private fun NewmarkAppContent(initialPairUrl: String?) {
     } else {
         vm.current?.title ?: "Newmark"
     }
-    // 本地模型选择：所有启用模型候选 + 当前模型名 + 智能档位；远程由桌面端决定，仅展示
-    val modelOptions = if (useRemote) emptyList<ModelOption>() else vm.enabledModelOptions()
+    // 远程菜单使用远端桌面配置的脱敏 provider/model 清单，不混入移动端本地配置。
+    val modelOptions = if (useRemote) linkVm.remoteModelOptions() else vm.enabledModelOptions()
     // 模型显示名对齐 PC modelLabel（`provider / model`）；判定用原始模型名单独传
     val selectedModelName = if (useRemote) (linkVm.desktopState?.model ?: "") else vm.apiConfig.model
     val selectedModel = if (useRemote) {
@@ -419,11 +435,58 @@ private fun NewmarkAppContent(initialPairUrl: String?) {
         val providerLabel = vm.activeProvider?.label?.takeIf { it.isNotBlank() }
         if (providerLabel != null) "$providerLabel / $selectedModelName" else selectedModelName
     }
-    val intelligence = if (useRemote) "medium" else vm.intelligence
+    val intelligence = if (useRemote) (linkVm.desktopState?.intelligence ?: "medium") else vm.intelligence
+    val selectedMode = if (useRemote) {
+        linkVm.desktopState?.mode.orEmpty().ifBlank { "build" }.replaceFirstChar(Char::titlecase)
+    } else vm.currentMode.replaceFirstChar(Char::titlecase)
     // 强制停止态（octagon-x）：仅远程，PC 端 runtime.status 为 stopping / force_restarting
     val escalating = useRemote && linkVm.desktopState?.status in setOf("stopping", "force_restarting")
-    val onSend: (String) -> Unit = { text ->
-        if (useRemote) linkVm.sendToDesktop(text) else vm.send(text)
+    val conversationActions = if (useRemote) ConversationUiActions(
+        send = linkVm::sendToDesktop,
+        stop = { if (remoteUi.flow?.running == true) linkVm.pauseRemoteFlow() else linkVm.stopRemoteConversation() },
+        selectModel = linkVm::selectRemoteModel,
+        selectIntelligence = linkVm::selectRemoteIntelligence,
+        selectMode = {},
+        editGoal = linkVm::submitRemoteGoalEdit,
+        toggleGoalPause = linkVm::toggleRemoteGoalPause,
+        deleteGoal = linkVm::clearRemoteGoal,
+        toggleFlow = { if (remoteUi.flow?.paused == true) linkVm.resumeRemoteFlow() else linkVm.pauseRemoteFlow() },
+        toggleQueuePause = linkVm::toggleRemoteQueuePause,
+        updateQueueItem = linkVm::updateRemoteQueueMessage,
+        deleteQueueItem = linkVm::deleteRemoteQueueMessage,
+        guideQueueItem = linkVm::guideRemoteQueueMessage,
+        inspectBranch = linkVm::inspectRemoteBranch,
+        editUserMessage = linkVm::branchRemoteMessage,
+    ) else ConversationUiActions(
+        send = { text -> if (vm.isSending) vm.enqueueLocal(text) else vm.send(text) },
+        stop = vm::stop,
+        selectModel = { vm.selectModel(it.providerId, it.modelName) },
+        selectIntelligence = vm::selectIntelligence,
+        selectMode = vm::selectMode,
+        editGoal = {},
+        toggleGoalPause = {},
+        deleteGoal = {},
+        toggleFlow = {},
+        toggleQueuePause = vm::toggleLocalQueuePause,
+        updateQueueItem = vm::updateLocalQueueMessage,
+        deleteQueueItem = vm::deleteLocalQueueMessage,
+        guideQueueItem = vm::guideLocalQueueMessage,
+        inspectBranch = vm::inspectBranch,
+        editUserMessage = vm::branchFromUserMessage,
+    )
+    val queueItems = if (useRemote) {
+        linkVm.editableRemoteQueue.takeIf { it.isNotEmpty() }
+            ?.map { QueueMessageUi(it.id, it.text, true) }
+            ?: remoteUi.queued.followUp.mapIndexed { index, text -> QueueMessageUi("legacy:$index:$text", text, false) }
+    } else vm.currentQueue.map { QueueMessageUi(it.id, it.text, true) }
+    val queuePaused = if (useRemote) linkVm.remoteQueuePaused else vm.currentQueuePaused
+    LaunchedEffect(useRemote, linkVm.selectedConversationWorkspaceId, linkVm.selectedConversationId, linkVm.linkStatus) {
+        while (useRemote && linkVm.linkStatus == LinkStatus.Connected &&
+            !linkVm.selectedConversationWorkspaceId.isNullOrBlank() && !linkVm.selectedConversationId.isNullOrBlank()
+        ) {
+            linkVm.refreshConversationUiState()
+            delay(1000)
+        }
     }
     val onOpenWebLink: (String) -> Unit = { url ->
         if (browserSession.navigate(url)) {
@@ -482,6 +545,28 @@ private fun NewmarkAppContent(initialPairUrl: String?) {
             if (!ok) Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         }
     }
+
+    val conversationSurface = ConversationSurface(
+        title = title,
+        items = displayItems,
+        isSending = sending,
+        remoteMode = useRemote,
+        modelOptions = modelOptions,
+        selectedModel = selectedModel,
+        selectedModelName = selectedModelName,
+        intelligence = intelligence,
+        selectedMode = selectedMode,
+        actions = conversationActions,
+        escalating = escalating,
+        showConnectRemote = !useRemote && linkVm.pairInfo != null,
+        onConnectRemote = { preferLocal = false },
+        goal = if (useRemote) remoteUi.goal else null,
+        flow = if (useRemote) remoteUi.flow else null,
+        queueItems = queueItems,
+        queuePaused = queuePaused,
+        onNewChat = onNewConversation,
+        onOpenWebLink = onOpenWebLink,
+    )
 
     val sidebar: @Composable (SidebarPage, Boolean) -> Unit = { pageArg, railArg ->
         SidebarContent(
@@ -542,39 +627,73 @@ private fun NewmarkAppContent(initialPairUrl: String?) {
         )
     }
 
-    // 预测性返回：设备展开收起 → 二级边栏 → 设置页（后注册优先响应）
-    BackHandler(enabled = screen == Screen.Main && sidebarPage is SidebarPage.Main && expandedDevice != null) {
-        expandedDevice = null
+    // 系统返回优先收起当前最靠前的移动层；没有边栏/弹窗时才交给桌面返回。
+    val hasMainOverlay = compactSubagent != null || rightSidebarExpanded ||
+        (isCompact && drawerState.isOpen) || (!isCompact && sidebarPage is SidebarPage.WorkspaceConversations) ||
+        expandedDevice != null
+    BackHandler(enabled = screen == Screen.Main && hasMainOverlay) {
+        when {
+            compactSubagent != null -> compactSubagent = null
+            rightSidebarExpanded -> rightSidebarExpanded = false
+            isCompact && drawerState.isOpen -> scope.launch { drawerState.close() }
+            !isCompact && sidebarPage is SidebarPage.WorkspaceConversations -> sidebarPage = SidebarPage.Main
+            expandedDevice != null -> expandedDevice = null
+            else -> { /* no mobile layer; host activity handles the back */ }
+        }
     }
-    BackHandler(enabled = screen == Screen.Main && sidebarPage is SidebarPage.WorkspaceConversations) {
-        sidebarPage = SidebarPage.Main
-    }
-    // 预测性返回：设置/MemoryLab/命令行等子页面各自内部逐级处理；此处仅设备展开与二级边栏
-
-    fun rightSwipeModifier(): Modifier = Modifier.pointerInput(rightSidebarExpanded) {
+    fun sidebarGestureModifier(): Modifier = Modifier.pointerInput(isCompact, rightSidebarExpanded, sidebarPage, rail) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             var horizontalDrag = 0f
             var verticalDrag = 0f
             val openThresholdPx = 56.dp.toPx()
-            val previewDistancePx = 168.dp.toPx()
+            val rightHalf = size.width / 2f
+            val controlsRight = isCompact || down.position.x >= rightHalf
+            isRightSidebarDragging = false
             do {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 horizontalDrag += change.position.x - change.previousPosition.x
                 verticalDrag += change.position.y - change.previousPosition.y
-                if (!rightSidebarExpanded && horizontalDrag < 0f &&
-                    kotlin.math.abs(horizontalDrag) > kotlin.math.abs(verticalDrag)
-                ) {
-                    rightSidebarDragProgress = ((-horizontalDrag) / previewDistancePx).coerceIn(0f, 1f)
-                    change.consume()
+                if (kotlin.math.abs(horizontalDrag) > kotlin.math.abs(verticalDrag)) {
+                    val closesCompactLeft = isCompact && drawerState.isOpen && horizontalDrag < 0f
+                    val opensCompactLeft = isCompact && drawerState.isClosed && !rightSidebarExpanded && horizontalDrag > 0f
+                    val controlsRightGesture = when {
+                        closesCompactLeft || opensCompactLeft -> false
+                        isCompact -> horizontalDrag < 0f || rightSidebarExpanded
+                        else -> controlsRight
+                    }
+                    if (controlsRight && !closesCompactLeft && horizontalDrag < 0f && !rightSidebarExpanded) {
+                        isRightSidebarDragging = true
+                        rightSidebarDragProgress = ((-horizontalDrag) / (168.dp.toPx())).coerceIn(0f, 1f)
+                    } else if (controlsRight && rightSidebarExpanded && horizontalDrag > 0f) {
+                        isRightSidebarDragging = true
+                        rightSidebarDragProgress = (1f - (horizontalDrag / (168.dp.toPx()))).coerceIn(0f, 1f)
+                    }
+                    // Compact right-swipes belong to Material3's left drawer so its
+                    // position and the window blur remain finger-synchronous.
+                    if (controlsRightGesture) change.consume()
                 }
             } while (event.changes.any { it.pressed })
-            val shouldOpen = horizontalDrag < -openThresholdPx && kotlin.math.abs(horizontalDrag) > kotlin.math.abs(verticalDrag)
-            rightSidebarDragProgress = 0f
-            if (shouldOpen) {
-                rightSidebarExpanded = true
+            if (kotlin.math.abs(horizontalDrag) > kotlin.math.abs(verticalDrag) && kotlin.math.abs(horizontalDrag) > openThresholdPx) {
+                if (isCompact && drawerState.isOpen && horizontalDrag < 0f) {
+                    scope.launch { drawerState.close() }
+                } else if (isCompact && drawerState.isClosed && !rightSidebarExpanded && horizontalDrag > 0f) {
+                    scope.launch { drawerState.open() }
+                } else if (controlsRight) {
+                    if (rightSidebarExpanded && horizontalDrag > 0f) rightSidebarExpanded = false
+                    else if (!rightSidebarExpanded && horizontalDrag < 0f) rightSidebarExpanded = true
+                } else if (!isCompact) {
+                    // 平板/折叠屏左半区只控制左栏，绝不影响右栏。
+                    if (horizontalDrag < 0f) {
+                        if (sidebarPage is SidebarPage.WorkspaceConversations) sidebarPage = SidebarPage.Main
+                        else rail = true
+                    } else {
+                        rail = false
+                    }
+                }
             }
+            isRightSidebarDragging = false
         }
     }
 
@@ -600,247 +719,464 @@ private fun NewmarkAppContent(initialPairUrl: String?) {
         }
 
         isCompact -> {
-            ModalNavigationDrawer(
+            CompactMainLayout(
                 drawerState = drawerState,
-                drawerContent = {
-                    ModalDrawerSheet(
-                        modifier = Modifier.width(drawerWidth),
-                        drawerContainerColor = if (sidebarPage is SidebarPage.WorkspaceConversations) {
-                            secondarySurface
-                        } else {
-                            p.bgSecondary
-                        },
-                        drawerContentColor = p.textPrimary,
-                        drawerShape = RectangleShape,
-                        drawerTonalElevation = 0.dp,
-                    ) {
-                        sidebar(sidebarPage, rail)
-                    }
-                },
-                gesturesEnabled = true,
-                scrimColor = NewmarkScrim,
-            ) {
-                Box(Modifier.fillMaxSize().then(rightSwipeModifier())) {
-                    ChatScreen(
-                        title = title,
-                        items = displayItems,
-                        isSending = sending,
-                        showMenuButton = true,
-                        remoteMode = useRemote,
-                        modelOptions = modelOptions,
-                        selectedModel = selectedModel,
-                        selectedModelName = selectedModelName,
-                        intelligence = intelligence,
-                        onSelectModel = { vm.selectModel(it.providerId, it.modelName) },
-                        onSelectIntelligence = { vm.selectIntelligence(it) },
-                        onMenuClick = { scope.launch { drawerState.open() } },
-                        onNewChat = onNewConversation,
-                        onSend = onSend,
-                        onStop = { vm.stop() },
-                        escalating = escalating,
-                        showConnectRemote = !useRemote && linkVm.pairInfo != null,
-                        onConnectRemote = { preferLocal = false },
-                        onInspectBranch = if (useRemote) linkVm::inspectRemoteBranch else vm::inspectBranch,
-                        onEditUserMessage = if (useRemote) linkVm::branchRemoteMessage else vm::branchFromUserMessage,
-                        onOpenWebLink = onOpenWebLink,
-                    )
-                    AnimatedVisibility(
-                        visible = rightSidebarExpanded,
-                            enter = slideInHorizontally(
-                                animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
-                                initialOffsetX = { width -> width },
-                            ) + fadeIn(animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo)),
-                            exit = slideOutHorizontally(
-                                animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
-                                targetOffsetX = { width -> width },
-                            ) + fadeOut(animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo)),
-                        modifier = Modifier.align(Alignment.CenterEnd),
-                        label = "compactRightSidebar",
-                    ) {
-                            MobileRightSidebar(
-                                vm = linkVm,
-                                remoteMode = useRemote,
-                                browserSession = browserSession,
-                                selectedTab = selectedRightSidebarTab,
-                                panelWidth = minOf(360.dp, (config.screenWidthDp - 24).dp),
-                                expanded = true,
-                                onOpenSubagentPage = { compactSubagent = it },
-                                onExpandedChange = { rightSidebarExpanded = it },
-                                onSelectTab = { rightSidebarTab = it },
-                            )
-                    }
-                    if (!rightSidebarExpanded) {
-                        if (rightSidebarDragProgress > 0f) {
-                            RightSidebarDragPreview(
-                                progress = rightSidebarDragProgress,
-                                panelWidth = minOf(360.dp, (config.screenWidthDp - 24).dp),
-                                modifier = Modifier.align(Alignment.CenterEnd),
-                            )
-                        }
-                        RightSidebarOpenButton(
-                            onClick = { rightSidebarExpanded = true },
-                            modifier = Modifier.align(Alignment.CenterEnd),
-                        )
-                    }
-                }
-            }
+                drawerWidth = drawerWidth,
+                secondaryDrawer = sidebarPage is SidebarPage.WorkspaceConversations,
+                sidebar = { sidebar(sidebarPage, rail) },
+                gestureModifier = sidebarGestureModifier(),
+                surface = conversationSurface,
+                leftProgress = compactLeftSidebarProgress,
+                rightProgress = rightSidebarProgress,
+                rightExpanded = rightSidebarExpanded,
+                screenWidthDp = config.screenWidthDp,
+                linkVm = linkVm,
+                localVm = vm,
+                browserSession = browserSession,
+                selectedTab = selectedRightSidebarTab,
+                onMenuClick = { scope.launch { drawerState.open() } },
+                onOpenSubagentPage = { compactSubagent = it },
+                onRightExpandedChange = { rightSidebarExpanded = it },
+                onSelectRightTab = { rightSidebarTab = it },
+            )
         }
 
         else -> {
-            // 折叠屏/平板横屏：一级边栏 + 二级边栏横向连续（与 PC 一致），对话区自然避让
-            val hasSecondary = sidebarPage is SidebarPage.WorkspaceConversations
-            val primaryRail = rail || hasSecondary || rightSidebarExpanded
-            val primaryWidth = if (primaryRail) 48.dp else 220.dp
-            val secondarySlidePx = with(LocalDensity.current) { 8.dp.roundToPx() }
-            val rightSlidePx = secondarySlidePx
-            val sideWidth by animateDpAsState(
-                targetValue = primaryWidth,
-                animationSpec = tween(durationMillis = 400, easing = PcEaseOutExpo),
-                label = "sideWidth",
+            ExpandedMainLayout(
+                page = sidebarPage,
+                rail = rail,
+                rightExpanded = rightSidebarExpanded,
+                rightProgress = rightSidebarProgress,
+                screenWidthDp = config.screenWidthDp,
+                retainedWorkspace = retainedSecondaryWorkspace,
+                surface = conversationSurface,
+                gestureModifier = sidebarGestureModifier(),
+                primarySidebar = { page, railMode -> sidebar(page, railMode) },
+                linkVm = linkVm,
+                localVm = vm,
+                browserSession = browserSession,
+                selectedTab = selectedRightSidebarTab,
+                onBackSidebar = onBackSidebar,
+                onNewRemoteConversation = onNewRemoteConversation,
+                onRenameRemote = onRenameRemoteCallback,
+                onArchiveRemote = onArchiveRemoteCallback,
+                onTogglePinRemote = onTogglePinRemoteCallback,
+                onReorderRemote = onReorderRemoteCallback,
+                onSelectRemote = { conversation, workspaceId ->
+                    linkVm.selectConversation(conversation.id, workspaceId)
+                    preferLocal = false
+                },
+                onRightExpandedChange = { rightSidebarExpanded = it },
+                onSelectRightTab = { rightSidebarTab = it },
             )
-            Row(Modifier.fillMaxSize()) {
-                Box(
-                    modifier = Modifier
-                        .width(sideWidth)
-                        .fillMaxHeight()
-                        .background(p.bgSecondary)
-                        .statusBarsPadding(),
-                ) {
-                    // 二级边栏存在时一级只渲染主边栏，二级由右侧接续
-                    sidebar(if (hasSecondary) SidebarPage.Main else sidebarPage, primaryRail)
-                }
-                AnimatedVisibility(
-                    visible = hasSecondary,
-                    enter = expandHorizontally(
-                        animationSpec = tween(durationMillis = 400, easing = PcEaseOutExpo),
-                        expandFrom = Alignment.Start,
-                        clip = true,
-                    ) + slideInHorizontally(
-                        animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
-                        initialOffsetX = { -secondarySlidePx },
-                    ) + fadeIn(
-                        animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
-                    ),
-                    exit = shrinkHorizontally(
-                        animationSpec = tween(durationMillis = 400, easing = PcEaseOutExpo),
-                        shrinkTowards = Alignment.Start,
-                        clip = true,
-                    ) + slideOutHorizontally(
-                        animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
-                        targetOffsetX = { -secondarySlidePx },
-                    ) + fadeOut(
-                        animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
-                    ),
-                ) {
-                    val ws = retainedSecondaryWorkspace
-                    if (ws != null) {
-                        Box(
-                            modifier = Modifier
-                                .width(220.dp)
-                                .fillMaxHeight(),
-                        ) {
-                            WorkspaceConversationsSidebar(
-                                conversations = linkVm.workspaceConversations,
-                                activeConversationId = linkVm.openedWorkspaceActiveConversationId,
-                                onBack = onBackSidebar,
-                                onSelectConversation = {
-                                    linkVm.selectConversation(it, ws.id)
-                                    preferLocal = false
-                                },
-                                onNewConversation = onNewRemoteConversation,
-                                onRenameConversation = onRenameRemoteCallback,
-                                onArchiveConversation = onArchiveRemoteCallback,
-                                onTogglePinConversation = onTogglePinRemoteCallback,
-                                onReorderConversations = onReorderRemoteCallback,
-                                archivePendingIds = linkVm.workspaceArchivePendingIds,
-                                respectStatusBars = true,
-                            )
-                        }
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .background(p.bgPrimary)
-                        .then(rightSwipeModifier()),
-                ) {
-                    ChatScreen(
-                        title = title,
-                        items = displayItems,
-                        isSending = sending,
-                        showMenuButton = false,
-                        remoteMode = useRemote,
-                        modelOptions = modelOptions,
-                        selectedModel = selectedModel,
-                        selectedModelName = selectedModelName,
-                        intelligence = intelligence,
-                        onSelectModel = { vm.selectModel(it.providerId, it.modelName) },
-                        onSelectIntelligence = { vm.selectIntelligence(it) },
-                        onMenuClick = {},
-                        onNewChat = onNewConversation,
-                        onSend = onSend,
-                        onStop = { vm.stop() },
-                        escalating = escalating,
-                        showConnectRemote = !useRemote && linkVm.pairInfo != null,
-                        onConnectRemote = { preferLocal = false },
-                        goal = if (useRemote) linkVm.desktopState?.goal else null,
-                        flowName = if (useRemote) linkVm.desktopState?.flowSelection?.name else null,
-                        onInspectBranch = if (useRemote) linkVm::inspectRemoteBranch else vm::inspectBranch,
-                        onEditUserMessage = if (useRemote) linkVm::branchRemoteMessage else vm::branchFromUserMessage,
-                        onOpenWebLink = onOpenWebLink,
-                    )
-                    if (!rightSidebarExpanded) {
-                        if (rightSidebarDragProgress > 0f) {
-                            RightSidebarDragPreview(
-                                progress = rightSidebarDragProgress,
-                                panelWidth = if (config.screenWidthDp < 840) 280.dp else 300.dp,
-                                modifier = Modifier.align(Alignment.CenterEnd),
-                            )
-                        }
-                        RightSidebarOpenButton(
-                            onClick = { rightSidebarExpanded = true },
-                            modifier = Modifier.align(Alignment.CenterEnd),
-                        )
-                    }
-                }
-                AnimatedVisibility(
-                    visible = rightSidebarExpanded,
-                    enter = expandHorizontally(
-                        animationSpec = tween(durationMillis = 400, easing = PcEaseOutExpo),
-                        expandFrom = Alignment.End,
-                        clip = true,
-                    ) + slideInHorizontally(
-                        animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
-                        initialOffsetX = { width -> width.coerceAtMost(rightSlidePx) },
-                    ) + fadeIn(animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo)),
-                    exit = shrinkHorizontally(
-                        animationSpec = tween(durationMillis = 400, easing = PcEaseOutExpo),
-                        shrinkTowards = Alignment.End,
-                        clip = true,
-                    ) + slideOutHorizontally(
-                        animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
-                        targetOffsetX = { width -> width.coerceAtMost(rightSlidePx) },
-                    ) + fadeOut(animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo)),
-                    label = "wideRightSidebar",
-                ) {
-                    MobileRightSidebar(
-                        vm = linkVm,
-                        remoteMode = useRemote,
-                        browserSession = browserSession,
-                        selectedTab = selectedRightSidebarTab,
-                        panelWidth = if (config.screenWidthDp < 840) 280.dp else 300.dp,
-                        expanded = true,
-                        onExpandedChange = { rightSidebarExpanded = it },
-                        onSelectTab = { rightSidebarTab = it },
-                    )
-                }
-            }
         }
     }
 
     if (!isCompact && screen == Screen.MemoryLab) {
         MemoryLabDialog(onDismiss = { screen = Screen.Main })
+    }
+}
+
+@Composable
+private fun CompactMainLayout(
+    drawerState: DrawerState,
+    drawerWidth: Dp,
+    secondaryDrawer: Boolean,
+    sidebar: @Composable () -> Unit,
+    gestureModifier: Modifier,
+    surface: ConversationSurface,
+    leftProgress: Float,
+    rightProgress: Float,
+    rightExpanded: Boolean,
+    screenWidthDp: Int,
+    linkVm: DesktopLinkViewModel,
+    localVm: ChatViewModel,
+    browserSession: BrowserSessionState,
+    selectedTab: RightSidebarTab,
+    onMenuClick: () -> Unit,
+    onOpenSubagentPage: (RemoteSubagent) -> Unit,
+    onRightExpandedChange: (Boolean) -> Unit,
+    onSelectRightTab: (RightSidebarTab) -> Unit,
+) {
+    val palette = LocalNewmarkPalette.current
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                modifier = Modifier.width(drawerWidth),
+                drawerContainerColor = if (secondaryDrawer) {
+                    pcSecondarySurfaceColor().copy(alpha = 0.72f)
+                } else {
+                    palette.bgSecondary.copy(alpha = 0.72f)
+                },
+                drawerContentColor = palette.textPrimary,
+                drawerShape = RectangleShape,
+                drawerTonalElevation = 0.dp,
+            ) { sidebar() }
+        },
+        gesturesEnabled = true,
+        scrimColor = NewmarkScrim,
+    ) {
+        Box(Modifier.fillMaxSize().then(gestureModifier)) {
+            val blurProgress = maxOf(leftProgress, rightProgress)
+            ConversationSurfaceContent(
+                surface = surface,
+                showMenuButton = true,
+                onMenuClick = onMenuClick,
+                modifier = if (blurProgress > 0.001f) {
+                    Modifier.blur(32.dp * blurProgress)
+                } else {
+                    Modifier
+                },
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .graphicsLayer {
+                        translationX = size.width * (1f - rightProgress)
+                        alpha = rightProgress
+                    },
+            ) {
+                MobileRightSidebar(
+                    vm = linkVm,
+                    localVm = localVm,
+                    remoteMode = surface.remoteMode,
+                    browserSession = browserSession,
+                    selectedTab = selectedTab,
+                    panelWidth = minOf(360.dp, (screenWidthDp - 24).dp),
+                    expanded = true,
+                    onOpenSubagentPage = onOpenSubagentPage,
+                    onExpandedChange = onRightExpandedChange,
+                    onSelectTab = onSelectRightTab,
+                )
+            }
+            if (!rightExpanded && rightProgress < 0.01f) {
+                RightSidebarOpenButton(
+                    onClick = { onRightExpandedChange(true) },
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExpandedMainLayout(
+    page: SidebarPage,
+    rail: Boolean,
+    rightExpanded: Boolean,
+    rightProgress: Float,
+    screenWidthDp: Int,
+    retainedWorkspace: WorkspaceInfo?,
+    surface: ConversationSurface,
+    gestureModifier: Modifier,
+    primarySidebar: @Composable (SidebarPage, Boolean) -> Unit,
+    linkVm: DesktopLinkViewModel,
+    localVm: ChatViewModel,
+    browserSession: BrowserSessionState,
+    selectedTab: RightSidebarTab,
+    onBackSidebar: () -> Unit,
+    onNewRemoteConversation: () -> Unit,
+    onRenameRemote: (RemoteConversation, String) -> Unit,
+    onArchiveRemote: (RemoteConversation) -> Unit,
+    onTogglePinRemote: (RemoteConversation) -> Unit,
+    onReorderRemote: (List<String>) -> Unit,
+    onSelectRemote: (RemoteConversation, String) -> Unit,
+    onRightExpandedChange: (Boolean) -> Unit,
+    onSelectRightTab: (RightSidebarTab) -> Unit,
+) {
+    val palette = LocalNewmarkPalette.current
+    val hasSecondary = page is SidebarPage.WorkspaceConversations
+    val primaryRail = rail || hasSecondary || rightExpanded
+    val sideWidth by animateDpAsState(
+        targetValue = if (primaryRail) 48.dp else 220.dp,
+        animationSpec = tween(durationMillis = 400, easing = PcEaseOutExpo),
+        label = "sideWidth",
+    )
+    val secondarySlidePx = with(LocalDensity.current) { 8.dp.roundToPx() }
+    val panelWidth = if (screenWidthDp < 840) 280.dp else 300.dp
+    Row(Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .width(sideWidth)
+                .fillMaxHeight()
+                .background(palette.bgSecondary)
+                .statusBarsPadding(),
+        ) {
+            primarySidebar(if (hasSecondary) SidebarPage.Main else page, primaryRail)
+        }
+        AnimatedVisibility(
+            visible = hasSecondary,
+            enter = expandHorizontally(
+                animationSpec = tween(durationMillis = 400, easing = PcEaseOutExpo),
+                expandFrom = Alignment.Start,
+                clip = true,
+            ) + slideInHorizontally(
+                animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
+                initialOffsetX = { -secondarySlidePx },
+            ) + fadeIn(animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo)),
+            exit = shrinkHorizontally(
+                animationSpec = tween(durationMillis = 400, easing = PcEaseOutExpo),
+                shrinkTowards = Alignment.Start,
+                clip = true,
+            ) + slideOutHorizontally(
+                animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
+                targetOffsetX = { -secondarySlidePx },
+            ) + fadeOut(animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo)),
+        ) {
+            retainedWorkspace?.let { workspace ->
+                Box(Modifier.width(220.dp).fillMaxHeight()) {
+                    WorkspaceConversationsSidebar(
+                        conversations = linkVm.workspaceConversations,
+                        activeConversationId = linkVm.openedWorkspaceActiveConversationId,
+                        onBack = onBackSidebar,
+                        onSelectConversation = { conversationId ->
+                            linkVm.workspaceConversations
+                                .firstOrNull { it.id == conversationId }
+                                ?.let { onSelectRemote(it, workspace.id) }
+                        },
+                        onNewConversation = onNewRemoteConversation,
+                        onRenameConversation = onRenameRemote,
+                        onArchiveConversation = onArchiveRemote,
+                        onTogglePinConversation = onTogglePinRemote,
+                        onReorderConversations = onReorderRemote,
+                        archivePendingIds = linkVm.workspaceArchivePendingIds,
+                        respectStatusBars = true,
+                    )
+                }
+            }
+        }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .background(palette.bgPrimary)
+                .then(gestureModifier),
+        ) {
+            ConversationSurfaceContent(surface, showMenuButton = false, onMenuClick = {})
+            if (!rightExpanded && rightProgress < 0.01f) {
+                RightSidebarOpenButton(
+                    onClick = { onRightExpandedChange(true) },
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                )
+            }
+        }
+        MobileRightSidebar(
+            vm = linkVm,
+            localVm = localVm,
+            remoteMode = surface.remoteMode,
+            browserSession = browserSession,
+            selectedTab = selectedTab,
+            panelWidth = panelWidth,
+            expanded = true,
+            onExpandedChange = onRightExpandedChange,
+            onSelectTab = onSelectRightTab,
+            visibleWidth = panelWidth * rightProgress,
+        )
+    }
+}
+
+@Composable
+private fun ConversationSurfaceContent(
+    surface: ConversationSurface,
+    showMenuButton: Boolean,
+    onMenuClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    ChatScreen(
+        title = surface.title,
+        items = surface.items,
+        isSending = surface.isSending,
+        showMenuButton = showMenuButton,
+        remoteMode = surface.remoteMode,
+        modelOptions = surface.modelOptions,
+        selectedModel = surface.selectedModel,
+        selectedModelName = surface.selectedModelName,
+        intelligence = surface.intelligence,
+        selectedMode = surface.selectedMode,
+        onSelectModel = surface.actions.selectModel,
+        onSelectIntelligence = surface.actions.selectIntelligence,
+        onSelectMode = surface.actions.selectMode,
+        onMenuClick = onMenuClick,
+        onNewChat = surface.onNewChat,
+        onSend = surface.actions.send,
+        onStop = surface.actions.stop,
+        escalating = surface.escalating,
+        showConnectRemote = surface.showConnectRemote,
+        onConnectRemote = surface.onConnectRemote,
+        goal = surface.goal,
+        flow = surface.flow,
+        queueItems = surface.queueItems,
+        queuePaused = surface.queuePaused,
+        onEditGoal = surface.actions.editGoal,
+        onToggleGoalPause = surface.actions.toggleGoalPause,
+        onDeleteGoal = surface.actions.deleteGoal,
+        onToggleFlow = surface.actions.toggleFlow,
+        onToggleQueuePause = surface.actions.toggleQueuePause,
+        onUpdateQueueItem = surface.actions.updateQueueItem,
+        onDeleteQueueItem = surface.actions.deleteQueueItem,
+        onGuideQueueItem = surface.actions.guideQueueItem,
+        onInspectBranch = surface.actions.inspectBranch,
+        onEditUserMessage = surface.actions.editUserMessage,
+        onOpenWebLink = surface.onOpenWebLink,
+        modifier = modifier,
+    )
+}
+
+/**
+ * Projects the local or paired-desktop transcript into the shared ChatScreen
+ * model. Keeping this outside the root shell reduces first-start Compose JIT
+ * work without changing the rendered hierarchy or any ordering contract.
+ */
+@Composable
+private fun rememberConversationItems(
+    useRemote: Boolean,
+    linkVm: DesktopLinkViewModel,
+    vm: ChatViewModel,
+): List<ChatItem> = remember(
+    useRemote,
+    linkVm.remoteMessages,
+    linkVm.remoteWorkRuns,
+    linkVm.remoteBranchGroups,
+    linkVm.remoteWindowStart,
+    linkVm.liveRun,
+    linkVm.conversationUiState.runtime,
+    vm.currentMessages,
+    vm.currentBranchPagers,
+    vm.liveRun,
+    vm.liveRunConversationId,
+    vm.currentId,
+) {
+    if (useRemote) projectRemoteConversationItems(linkVm) else projectLocalConversationItems(vm)
+}
+
+private fun projectRemoteConversationItems(linkVm: DesktopLinkViewModel): List<ChatItem> {
+    // PC ordering: anchored WorkRuns stay beside their owning message. Legacy
+    // unanchored runs retain authoritative ledger order rather than moving to
+    // the transcript frontier after reconnect or window hydration.
+    val visibleRuns = RemoteTrackingContract.visibleRuns(
+        linkVm.remoteWorkRuns,
+        linkVm.liveRun,
+        linkVm.conversationUiState.runtime?.takeIf { it.running }?.runId.orEmpty(),
+    )
+    val runsByAnchor = visibleRuns.groupBy { it.anchorMessageId }
+    val matchedRunIds = mutableSetOf<String>()
+    val remoteRunsById = visibleRuns.associateBy { it.runId }
+    val visibleRunMessages = linkVm.remoteMessages.filter {
+        it.runId.isNotBlank() && it.runId in remoteRunsById &&
+            it.clientMessageId.isBlank() && !isHiddenWorkflowMessage(it)
+    }
+    val runMessageRoles = visibleRunMessages
+        .groupBy { it.runId }
+        .mapValues { (_, messages) -> messages.map { it.role }.toSet() }
+    val messageOwnedRunIds = runMessageRoles.keys
+    val visibleMessageIds = linkVm.remoteMessages.mapNotNull { it.id.takeIf(String::isNotBlank) }.toSet()
+    val items = mutableListOf<ChatItem>()
+    val remotePagersByIndex = linkVm.remoteBranchGroups.mapNotNull { group ->
+        val visibleMessageIndex = group.sourceMessageIndex - linkVm.remoteWindowStart
+        if (group.branches.size < 2 || visibleMessageIndex !in linkVm.remoteMessages.indices) {
+            return@mapNotNull null
+        }
+        val page = group.branches.indexOfFirst { it.id == group.activeBranchId }
+            .takeIf { it >= 0 } ?: return@mapNotNull null
+        visibleMessageIndex to ConversationBranchPagerUi(
+            groupId = group.id,
+            currentPage = page + 1,
+            totalPages = group.branches.size,
+            canPrevious = page > 0,
+            canNext = page < group.branches.lastIndex,
+        )
+    }.toMap()
+
+    linkVm.remoteMessages.forEachIndexed { index, message ->
+        if (message.clientMessageId.isNotBlank() && message.runId in remoteRunsById) return@forEachIndexed
+        if (isHiddenWorkflowMessage(message) ||
+            (message.role == "workflow" && message.mode.startsWith("tool:"))
+        ) return@forEachIndexed
+
+        val associatedRun = remoteRunsById[message.runId]
+        if (associatedRun != null) {
+            RemoteTrackingContract.unownedRunsBefore(
+                owningRunId = associatedRun.runId,
+                runs = visibleRuns,
+                messageOwnedRunIds = messageOwnedRunIds,
+                visibleMessageIds = visibleMessageIds,
+                alreadyRenderedRunIds = matchedRunIds,
+            ).forEach { orphan ->
+                matchedRunIds += orphan.runId
+                items += remoteRunItems(orphan, emptySet(), keyPrefix = "run")
+            }
+        }
+        if (associatedRun != null && message.role == "assistant" && associatedRun.runId !in matchedRunIds) {
+            matchedRunIds += associatedRun.runId
+            items += remoteRunItems(associatedRun, runMessageRoles[associatedRun.runId].orEmpty(), "run")
+        }
+        items += ChatItem.Bubble(
+            role = message.role,
+            content = message.content,
+            mode = message.mode,
+            model = message.model,
+            timestamp = message.timestamp,
+            keyHint = message.id.ifBlank { "m:$index" },
+            messageId = message.id,
+            messageIndex = index,
+            attachments = message.attachments,
+            branchPager = remotePagersByIndex[index],
+        )
+        if (associatedRun != null && message.role == "user" && associatedRun.runId !in matchedRunIds) {
+            matchedRunIds += associatedRun.runId
+            items += remoteRunItems(associatedRun, runMessageRoles[associatedRun.runId].orEmpty(), "run")
+        }
+        runsByAnchor[message.id]?.forEach { run ->
+            if (run.runId !in matchedRunIds) {
+                matchedRunIds += run.runId
+                items += remoteRunItems(run, runMessageRoles[run.runId].orEmpty(), "run")
+            }
+        }
+    }
+    items += visibleRuns
+        .filter { it.runId !in matchedRunIds }
+        .flatMap { remoteRunItems(it, runMessageRoles[it.runId].orEmpty(), "run") }
+    return items
+}
+
+private fun projectLocalConversationItems(vm: ChatViewModel): List<ChatItem> {
+    val localPagersByMessageId = vm.currentBranchPagers.associateBy { it.sourceMessageId }
+    val live = vm.liveRun?.takeIf { vm.liveRunConversationId == vm.currentId }
+    val persistedRunIds = vm.currentMessages.mapNotNull { it.workRun?.runId }.toSet()
+    return vm.currentMessages.flatMapIndexed { index, message ->
+        val pager = localPagersByMessageId[message.messageId]
+        val base = ChatItem.Bubble(
+            role = message.role,
+            content = message.content,
+            timestamp = formatLocalTime(message.timestamp),
+            workRun = message.workRun,
+            keyHint = message.messageId.ifBlank { "l:$index:${message.timestamp}" },
+            messageId = message.messageId,
+            messageIndex = index,
+            branchPager = pager?.let {
+                ConversationBranchPagerUi(
+                    groupId = it.groupId,
+                    currentPage = it.currentPage,
+                    totalPages = it.totalPages,
+                    canPrevious = it.canPrevious,
+                    canNext = it.canNext,
+                )
+            },
+        )
+        if (live != null && live.anchorMessageId == message.messageId && live.runId !in persistedRunIds) {
+            listOf(
+                base,
+                ChatItem.Bubble(
+                    role = "assistant",
+                    content = "",
+                    workRun = live,
+                    keyHint = "local-run:${live.runId}",
+                ),
+            )
+        } else {
+            listOf(base)
+        }
     }
 }
 

@@ -9,6 +9,9 @@ object LocalTools {
     private fun prop(type: String, description: String): JSONObject =
         JSONObject().put("type", type).put("description", description)
 
+    private fun enumProp(values: Collection<String>, description: String): JSONObject =
+        prop("string", description).put("enum", JSONArray(values))
+
     private fun function(name: String, description: String, properties: Map<String, JSONObject>, required: List<String>): JSONObject =
         JSONObject()
             .put("type", "function")
@@ -84,5 +87,60 @@ object LocalTools {
             mapOf("json" to prop("string", "JSON 设置字符串（providers 数组与/或 active 激活选择）")),
             listOf("json"),
         ),
+        function(
+            "web_search",
+            "通过 DuckDuckGo 搜索网页并返回标题、地址与摘要",
+            mapOf("query" to prop("string", "搜索关键词")),
+            listOf("query"),
+        ),
+        function(
+            "web_fetch",
+            "获取 http/https 网页并提取可读文本",
+            mapOf("url" to prop("string", "网页地址")),
+            listOf("url"),
+        ),
+        browserUse(LocalToolCatalog.buildBrowserActions),
+        function(
+            "task_read",
+            "读取当前对话持久化的 task/plan 清单",
+            emptyMap(),
+            emptyList(),
+        ),
+        function(
+            "task_create",
+            "维护当前对话持久化 task/plan 清单；create 新增，update 更新文字或状态，clear 删除已完成项",
+            mapOf(
+                "action" to enumProp(listOf("create", "update", "clear"), "操作"),
+                "task" to prop("string", "create 的任务文字，或 update 的新文字"),
+                "text" to prop("string", "task 的别名"),
+                "id" to prop("string", "update 的任务 id"),
+                "index" to prop("number", "update 的零基索引"),
+                "status" to enumProp(listOf("pending", "in_progress", "done", "blocked"), "update 的状态"),
+            ),
+            listOf("action"),
+        ),
     )
+
+    private fun browserUse(actions: Collection<String>): JSONObject = function(
+        "browser_use",
+        "操作当前对话的内置浏览器。navigate/back/forward/reload 控制 WebView；observe/extract 读取同一 WebView 最近回传的公开正文；wait 等待页面稳定。",
+        mapOf(
+            "action" to enumProp(actions, "浏览器动作"),
+            "url" to prop("string", "navigate 的 http/https 地址"),
+            "max_chars" to prop("number", "observe/extract 最大正文字符数"),
+            "duration_ms" to prop("number", "wait 等待毫秒数"),
+        ),
+        listOf("action"),
+    )
+
+    /** 本地 Plan 与 PC 一致为只读：可读文件、读取/查询记忆和设置，写入能力不向模型暴露。 */
+    val planDefinitions: List<JSONObject>
+        get() = definitions.mapNotNull { definition ->
+            val name = definition.optJSONObject("function")?.optString("name")
+            when {
+                name == "browser_use" -> browserUse(LocalToolCatalog.planBrowserActions)
+                name in LocalToolCatalog.planNames -> definition
+                else -> null
+            }
+        }
 }

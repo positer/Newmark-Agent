@@ -16,16 +16,20 @@ import com.newmark.mobile.data.MobileSessionGate
 import com.newmark.mobile.data.PairInfo
 import com.newmark.mobile.data.PairInvite
 import com.newmark.mobile.data.PairStore
+import com.newmark.mobile.data.ModelOption
 import com.newmark.mobile.data.RemoteConversation
 import com.newmark.mobile.data.RemoteBranchGroup
 import com.newmark.mobile.data.RemoteMessage
 import com.newmark.mobile.data.RemoteConversationPlan
+import com.newmark.mobile.data.RemoteConversationUiState
+import com.newmark.mobile.data.LocalQueuedMessage
 import com.newmark.mobile.data.RemoteLinkedPlan
 import com.newmark.mobile.data.RemotePlanItem
 import com.newmark.mobile.data.RemoteSubagent
 import com.newmark.mobile.data.RemoteWorkspaceFile
 import com.newmark.mobile.data.RemoteWorkEvent
 import com.newmark.mobile.data.RemoteWorkRun
+import com.newmark.mobile.data.RemoteTrackingContract
 import com.newmark.mobile.data.SendResponse
 import com.newmark.mobile.data.WorkEvent
 import com.newmark.mobile.data.WorkspaceInfo
@@ -117,6 +121,20 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
     /** SSE 实时 build block（进行中的 run，事件流实时追加） */
     var liveRun by mutableStateOf<RemoteWorkRun?>(null)
         private set
+    var conversationUiState by mutableStateOf(RemoteConversationUiState())
+        private set
+    val editableRemoteQueue: List<LocalQueuedMessage>
+        get() = conversationUiState.queueItems.map { item ->
+            LocalQueuedMessage(
+                id = item.id,
+                text = item.text,
+                requestedMode = item.requestedMode,
+                goalObjective = item.goalObjective,
+            )
+        }
+
+    val remoteQueuePaused: Boolean
+        get() = conversationUiState.queuePaused
     var lastTokens by mutableStateOf<List<WorkEvent>>(emptyList())
         private set
     var isSending by mutableStateOf(false)
@@ -152,6 +170,11 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
     private var connectionJob: Job? = null
     private var reconnectJob: Job? = null
     private var conversationLoadGeneration = 0L
+    /** Rejects an older overlapping Goal/Flow/runtime poll after a newer full resident snapshot committed. */
+    private var conversationUiRefreshGeneration = 0L
+    /** One target-scoped resident snapshot request at a time; slow networks must not starve commits. */
+    private var conversationUiRefreshJob: Job? = null
+    private var conversationUiRefreshTarget = ""
     private var initialized = false
 
     private data class TerminalRunSync(
@@ -315,9 +338,10 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         api.state(pair)
             .getOrNull()
             ?.let { state ->
+                val hydratedState = hydrateLegacyProviderCatalog(pair, state)
                 // Gson/JSON work is deliberately kept off the main thread;
                 // the result is only committed to Compose state on Main.
-                val parsed = withContext(Dispatchers.Default) { parseState(state) }
+                val parsed = withContext(Dispatchers.Default) { parseState(hydratedState) }
                 if (!isCurrent(session, pair)) return false
                 desktopState = parsed
                 remoteConversations = parsed?.conversations ?: emptyList()
@@ -329,13 +353,26 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
             ?: run { if (isCurrent(session, pair)) lastError = "桌面状态同步失败" }
             // state 端点的 workRuns 依赖 server agent 内存（run 结束后为空，被中断的构建会丢失）；
             // 用 conversation 端点补拉持久化 workRuns（含 interrupted/force_interrupted）
-        api.conversation(pair, null, null)
+        val hydrationWorkspaceId = selectedConversationWorkspaceId
+            ?.takeIf(String::isNotBlank)
+            ?: desktopState?.currentWorkspaceId?.takeIf(String::isNotBlank)
+        val hydrationConversationId = selectedConversationId
+            ?.takeIf(String::isNotBlank)
+            ?: desktopState?.activeConversationId?.takeIf(String::isNotBlank)
+        if (selectedConversationWorkspaceId.isNullOrBlank() && !hydrationWorkspaceId.isNullOrBlank()) {
+            selectedConversationWorkspaceId = hydrationWorkspaceId
+        }
+        if (selectedConversationId.isNullOrBlank() && !hydrationConversationId.isNullOrBlank()) {
+            selectedConversationId = hydrationConversationId
+        }
+        api.conversation(pair, hydrationConversationId, hydrationWorkspaceId)
             .getOrNull()
             ?.let { snap ->
                 if (!isCurrent(session, pair)) return false
-                applyConversationSnapshot(
-                    withContext(Dispatchers.Default) { parseConversationSnapshot(snap) },
-                )
+                val snapshot = withContext(Dispatchers.Default) { parseConversationSnapshot(snap) }
+                if (isSelectedTarget(hydrationWorkspaceId, hydrationConversationId)) {
+                    applyConversationSnapshot(snapshot)
+                }
             }
         if (!isCurrent(session, pair)) return false
         // 连接成功即挂 SSE：实时追踪进行中的 build block
@@ -370,6 +407,62 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         if (activeDevice != null) refresh()
     }
 
+    fun remoteModelOptions(): List<ModelOption> = desktopState?.providers.orEmpty()
+        .asSequence()
+        .filter { it.enabled }
+        .flatMap { provider ->
+            provider.models.asSequence()
+                .filter { it.enabled }
+                .map { model ->
+                    ModelOption(
+                        providerId = provider.id,
+                        modelName = "deployment:${java.net.URLEncoder.encode(provider.id, Charsets.UTF_8.name())}:${java.net.URLEncoder.encode(model.name, Charsets.UTF_8.name())}",
+                        label = "${provider.label} / ${model.label}",
+                    )
+                }
+        }
+        .toList()
+
+    fun selectRemoteModel(option: ModelOption) {
+        val pair = activeDevice ?: return
+        val model = option.modelName.ifBlank { return }
+        viewModelScope.launch {
+            api.selectModel(pair, model)
+                .onSuccess { refreshStateSnapshot(pair) }
+                .onFailure { lastError = "切换远程模型失败：${it.message}" }
+        }
+    }
+
+    fun selectRemoteIntelligence(tier: String) {
+        if (tier !in com.newmark.mobile.data.INTELLIGENCE_TIERS) return
+        val pair = activeDevice ?: return
+        viewModelScope.launch {
+            api.selectIntelligence(pair, tier)
+                .onSuccess { refreshStateSnapshot(pair) }
+                .onFailure { lastError = "切换远程智能档位失败：${it.message}" }
+        }
+    }
+
+    private suspend fun refreshStateSnapshot(pair: PairInfo) {
+        val session = sessionGate.current(pair) ?: return
+        if (!isCurrent(session, pair)) return
+        val response = api.state(pair).getOrNull() ?: return
+        val hydrated = hydrateLegacyProviderCatalog(pair, response)
+        val parsed = withContext(Dispatchers.Default) { parseState(hydrated) }
+        if (isCurrent(session, pair)) desktopState = parsed
+    }
+
+    /** New desktop uses authenticated mobile state; installed legacy desktop falls back to its redacted state catalog. */
+    private suspend fun hydrateLegacyProviderCatalog(pair: PairInfo, mobileState: JSONObject): JSONObject {
+        if (mobileState.optJSONArray("providers")?.length()?.let { it > 0 } == true) return mobileState
+        val legacy = api.legacyProviderState(pair).getOrNull() ?: return mobileState
+        legacy.optJSONArray("providers")?.takeIf { it.length() > 0 }?.let { mobileState.put("providers", it) }
+        if (!mobileState.has("intelligence") && legacy.has("intelligence")) {
+            mobileState.put("intelligence", legacy.optString("intelligence", "medium"))
+        }
+        return mobileState
+    }
+
     /** Cancel every old remote owner before a new device generation begins. */
     private fun beginConnectionSession(pair: PairInfo): MobileSessionGate.Session {
         cancelConnectionWork(clearGate = false)
@@ -383,6 +476,9 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         reconnectJob = null
         sseJob?.cancel()
         sseJob = null
+        conversationUiRefreshJob?.cancel()
+        conversationUiRefreshJob = null
+        conversationUiRefreshTarget = ""
         conversationLoadGeneration += 1
         if (clearGate) sessionGate.clear()
     }
@@ -394,12 +490,24 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         current.host == pair.host && current.port == pair.port && current.token == pair.token
     } == true
 
+    private fun isSelectedTarget(workspaceId: String?, conversationId: String?): Boolean =
+        RemoteTrackingContract.matchesTarget(
+            workspaceId,
+            conversationId,
+            selectedConversationWorkspaceId,
+            selectedConversationId,
+        )
+
     fun selectConversation(id: String, workspaceId: String? = openedWorkspaceId) {
         if (id.isBlank()) return
         val pair = activeDevice ?: return
         selectedConversationId = id
         selectedConversationWorkspaceId = workspaceId
         val loadGeneration = ++conversationLoadGeneration
+        conversationUiRefreshGeneration += 1L
+        conversationUiRefreshJob?.cancel()
+        conversationUiRefreshJob = null
+        conversationUiRefreshTarget = ""
         selectedConversationTitle = (remoteConversations + workspaceConversations)
             .firstOrNull { it.id == id }?.title
         if (workspaceConversations.any { it.id == id }) {
@@ -409,8 +517,10 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         viewModelScope.launch {
-            api.conversation(pair, id, workspaceId)
-                .onSuccess { snap ->
+            val snapshotResult = api.conversation(pair, id, workspaceId)
+            val uiResult = workspaceId?.takeIf { it.isNotBlank() }
+                ?.let { api.conversationUiState(pair, it, id) }
+            snapshotResult.onSuccess { snap ->
                     if (loadGeneration != conversationLoadGeneration || !isActivePair(pair) ||
                         selectedConversationId != id || selectedConversationWorkspaceId != workspaceId
                     ) return@onSuccess
@@ -420,7 +530,173 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                 .onFailure { e ->
                     if (loadGeneration == conversationLoadGeneration && isActivePair(pair)) lastError = e.message
                 }
+            uiResult?.onSuccess { json ->
+                if (loadGeneration == conversationLoadGeneration && isActivePair(pair) &&
+                    selectedConversationId == id && selectedConversationWorkspaceId == workspaceId
+                ) applyResidentConversationUiState(parseConversationUiState(json))
+            }
         }
+    }
+
+    fun refreshConversationUiState() {
+        val pair = activeDevice ?: return
+        val workspaceId = selectedConversationWorkspaceId ?: return
+        val conversationId = selectedConversationId ?: return
+        val targetKey = "$workspaceId::$conversationId"
+        if (conversationUiRefreshJob?.isActive == true && conversationUiRefreshTarget == targetKey) return
+        val refreshGeneration = ++conversationUiRefreshGeneration
+        conversationUiRefreshTarget = targetKey
+        conversationUiRefreshJob = viewModelScope.launch {
+            try {
+                api.conversationUiState(pair, workspaceId, conversationId)
+                    .onSuccess { response ->
+                        val parsed = withContext(Dispatchers.Default) { parseConversationUiState(response) }
+                        if (refreshGeneration == conversationUiRefreshGeneration && isActivePair(pair) &&
+                            isSelectedTarget(workspaceId, conversationId)
+                        ) {
+                            Snapshot.withMutableSnapshot { applyResidentConversationUiState(parsed) }
+                            drainRemoteNextIfReady()
+                        }
+                    }
+                    .onFailure {
+                        if (refreshGeneration == conversationUiRefreshGeneration && isActivePair(pair) &&
+                            isSelectedTarget(workspaceId, conversationId)
+                        ) lastError = "对话控制状态同步失败：${it.message}"
+                    }
+            } finally {
+                if (conversationUiRefreshGeneration == refreshGeneration) {
+                    conversationUiRefreshJob = null
+                    conversationUiRefreshTarget = ""
+                }
+            }
+        }
+    }
+
+    /**
+     * One GUI-hosted response is one PC runtime snapshot. Goal, Flow, queue,
+     * runtime, messages and WorkRuns must become visible in the same Compose
+     * commit; splitting them recreates impossible UI combinations.
+     */
+    private fun applyResidentConversationUiState(state: RemoteConversationUiState) {
+        conversationUiState = state
+        state.chatMessages?.let { remoteMessages = it }
+        state.workRuns?.let { residentRuns ->
+            remoteWorkRuns = residentRuns
+            val runningRunId = state.runtime?.takeIf { it.running }?.runId.orEmpty()
+            if (runningRunId.isNotBlank()) {
+                val resident = residentRuns.firstOrNull { RemoteTrackingContract.sameRun(it.runId, runningRunId) }
+                liveRun = when {
+                    liveRun?.runId == runningRunId -> liveRun
+                    resident != null -> resident.copy(status = "running", endedAt = "")
+                    else -> RemoteWorkRun(runId = runningRunId, status = "running")
+                }
+            } else if (state.runtime?.running == false) {
+                liveRun = null
+            }
+        }
+    }
+
+    private fun runConversationUiAction(action: String, value: String = "") {
+        val pair = activeDevice ?: return
+        val workspaceId = selectedConversationWorkspaceId ?: return
+        val conversationId = selectedConversationId ?: return
+        viewModelScope.launch {
+            api.conversationUiAction(pair, workspaceId, conversationId, action, value)
+                .onSuccess {
+                    if (!isActivePair(pair) || !isSelectedTarget(workspaceId, conversationId)) return@onSuccess
+                    refreshConversationUiState()
+                    api.conversation(pair, conversationId, workspaceId).onSuccess { snapshot ->
+                        if (isActivePair(pair) && isSelectedTarget(workspaceId, conversationId)) {
+                            applyConversationSnapshot(snapshot)
+                        }
+                    }
+                }
+                .onFailure {
+                    if (isActivePair(pair) && isSelectedTarget(workspaceId, conversationId)) {
+                        lastError = "对话操作失败：${it.message}"
+                    }
+                }
+        }
+    }
+
+    fun submitRemoteGoalEdit(value: String) {
+        val objective = value.trim()
+        if (objective.isBlank()) return
+        enqueueRemoteNext(objective, requestedMode = "goal", goalObjective = objective)
+        drainRemoteNextIfReady()
+    }
+    fun toggleRemoteGoalPause() = runConversationUiAction("goal_toggle_pause")
+    fun clearRemoteGoal() = runConversationUiAction("goal_clear")
+    fun pauseRemoteFlow() = runConversationUiAction("flow_pause")
+    fun resumeRemoteFlow() = runConversationUiAction("flow_resume")
+    fun guideRemoteFlow(value: String) = runConversationUiAction("flow_guide", value)
+    fun guideRemoteConversation(value: String) = runConversationUiAction("conversation_guide", value)
+    fun stopRemoteConversation() = runConversationUiAction("conversation_stop")
+
+    fun enqueueRemoteNext(text: String, requestedMode: String = "build", goalObjective: String = "") {
+        val content = text.trim()
+        if (content.isBlank()) return
+        runRemoteQueueAction(
+            action = "queue_enqueue",
+            id = java.util.UUID.randomUUID().toString(),
+            text = content,
+            requestedMode = requestedMode,
+            goalObjective = goalObjective,
+        )
+    }
+
+    fun toggleRemoteQueuePause() {
+        runRemoteQueueAction("queue_toggle_pause")
+    }
+
+    fun updateRemoteQueueMessage(id: String, text: String) {
+        val content = text.trim()
+        if (content.isBlank()) deleteRemoteQueueMessage(id)
+        else runRemoteQueueAction("queue_update", id = id, text = content)
+    }
+
+    fun deleteRemoteQueueMessage(id: String) {
+        runRemoteQueueAction("queue_delete", id = id)
+    }
+
+    fun guideRemoteQueueMessage(id: String) {
+        runRemoteQueueAction("queue_guide", id = id)
+    }
+
+    private fun runRemoteQueueAction(
+        action: String,
+        id: String = "",
+        text: String = "",
+        requestedMode: String = "build",
+        goalObjective: String = "",
+    ) {
+        val pair = activeDevice ?: return
+        val workspaceId = selectedConversationWorkspaceId ?: return
+        val conversationId = selectedConversationId ?: return
+        viewModelScope.launch {
+            api.conversationQueueAction(pair, workspaceId, conversationId, action, id, text, requestedMode, goalObjective)
+                .onSuccess { response ->
+                    if (!isActivePair(pair) || !isSelectedTarget(workspaceId, conversationId)) return@onSuccess
+                    val currentJson = JSONObject(gson.toJson(conversationUiState))
+                    if (response.has("queueItems")) currentJson.put("queueItems", response.getJSONArray("queueItems"))
+                    if (response.has("queuePaused")) currentJson.put("queuePaused", response.getBoolean("queuePaused"))
+                    if (response.has("queued")) currentJson.put("queued", response.getJSONObject("queued"))
+                    conversationUiState = parseConversationUiState(currentJson)
+                    if (!response.optBoolean("ok", true)) {
+                        lastError = response.optJSONObject("receipt")?.optString("reason", "Guide 未被远程运行接收")
+                            ?: "远程队列操作失败"
+                    }
+                }
+                .onFailure {
+                    if (isActivePair(pair) && isSelectedTarget(workspaceId, conversationId)) {
+                        lastError = "远程队列操作失败：${it.message}"
+                    }
+                }
+        }
+    }
+
+    private fun drainRemoteNextIfReady() {
+        // The PC runtime owns and drains the remote continuation queue.
     }
 
     /** 打开工作区二级边栏：按 workspaceId 拉取该工作区的从属对话（含 running） */
@@ -548,9 +824,6 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun cycleRightSidebarPlanItem(itemId: String) {
-        val pair = activeDevice ?: return
-        val workspaceId = selectedConversationWorkspaceId ?: openedWorkspaceId ?: return
-        val conversationId = selectedConversationId ?: return
         val updated = rightSidebarPlan.items.map { item ->
             if (item.id != itemId) item else item.copy(status = when (item.status) {
                 "pending" -> "in_progress"
@@ -558,8 +831,41 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                 else -> "pending"
             })
         }
+        persistRightSidebarPlan(updated)
+    }
+
+    fun addRightSidebarPlanItem(text: String) {
+        val clean = text.trim().take(240)
+        if (clean.isBlank()) return
+        persistRightSidebarPlan(
+            rightSidebarPlan.items + RemotePlanItem(
+                id = "mobile-${java.util.UUID.randomUUID()}",
+                text = clean,
+                status = "pending",
+            ),
+        )
+    }
+
+    fun updateRightSidebarPlanItem(itemId: String, text: String) {
+        val clean = text.trim().take(240)
+        if (clean.isBlank()) return
+        persistRightSidebarPlan(
+            rightSidebarPlan.items.map { item -> if (item.id == itemId) item.copy(text = clean) else item },
+        )
+    }
+
+    fun removeRightSidebarPlanItem(itemId: String) {
+        persistRightSidebarPlan(rightSidebarPlan.items.filterNot { it.id == itemId })
+    }
+
+    /** 所有远程 task 的增删改查最终走 PC 的单一 conversation-plan 更新契约。 */
+    private fun persistRightSidebarPlan(updated: List<RemotePlanItem>) {
+        val pair = activeDevice ?: return
+        val workspaceId = selectedConversationWorkspaceId ?: openedWorkspaceId ?: return
+        val conversationId = selectedConversationId ?: return
         rightSidebarPlan = RemoteConversationPlan(updated)
         viewModelScope.launch {
+            rightSidebarSaving = true
             val array = JSONArray().apply {
                 updated.forEach { item ->
                     put(JSONObject().apply {
@@ -579,27 +885,42 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                     lastError = "任务状态更新失败：${it.message}"
                     refreshRightSidebar()
                 }
+            rightSidebarSaving = false
         }
     }
 
-    fun sendToDesktop(text: String) {
+    fun sendToDesktop(text: String, forceGuide: Boolean = false, queuedItem: LocalQueuedMessage? = null) {
         val content = text.trim()
-        if (content.isEmpty() || isSending) return
+        if (content.isEmpty()) return
+        val flow = conversationUiState.flow
+        if (!forceGuide && (isSending || conversationUiState.runtime?.running == true || flow?.running == true)) {
+            enqueueRemoteNext(content)
+            return
+        }
+        if (isSending) return
         val pair = activeDevice ?: run {
             lastError = "尚未配对桌面端"
+            return
+        }
+        val targetConversationId = selectedConversationId
+        val targetWorkspaceId = selectedConversationWorkspaceId
+        if (targetConversationId.isNullOrBlank() || targetWorkspaceId.isNullOrBlank()) {
+            lastError = "尚未选择远程对话"
             return
         }
         isSending = true
         lastError = null
         viewModelScope.launch {
-            val targetConversationId = selectedConversationId
-            val targetWorkspaceId = if (targetConversationId != null) selectedConversationWorkspaceId else null
             if (!activateViewedBranchForSend(pair, targetWorkspaceId, targetConversationId)) {
-                isSending = false
+                if (isSelectedTarget(targetWorkspaceId, targetConversationId)) isSending = false
                 return@launch
             }
-            sendRemoteContent(pair, content, targetConversationId, targetWorkspaceId)
-            isSending = false
+            sendRemoteContent(pair, content, targetConversationId, targetWorkspaceId, queuedItem)
+            if (isActivePair(pair) && isSelectedTarget(targetWorkspaceId, targetConversationId)) {
+                isSending = false
+                refreshConversationUiState()
+                drainRemoteNextIfReady()
+            }
         }
     }
 
@@ -616,8 +937,16 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         if (next == current || next !in group.branches.indices) return
         viewModelScope.launch {
             api.inspectConversationBranch(pair, workspaceId, conversationId, group.branches[next].id, group.id)
-                .onSuccess(::applyConversationSnapshot)
-                .onFailure { error -> lastError = "分支切换失败：${error.message ?: "未知错误"}" }
+                .onSuccess { snapshot ->
+                    if (isActivePair(pair) && isSelectedTarget(workspaceId, conversationId)) {
+                        applyConversationSnapshot(snapshot)
+                    }
+                }
+                .onFailure { error ->
+                    if (isActivePair(pair) && isSelectedTarget(workspaceId, conversationId)) {
+                        lastError = "分支切换失败：${error.message ?: "未知错误"}"
+                    }
+                }
         }
     }
 
@@ -635,13 +964,15 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
             api.createConversationBranch(
                 pair, workspaceId, conversationId, messageIndex, content, message, remoteViewedBranchNodePath,
             ).onSuccess { snapshot ->
+                if (!isActivePair(pair) || !isSelectedTarget(workspaceId, conversationId)) return@onSuccess
                 applyConversationSnapshot(snapshot)
                 sendRemoteContent(pair, content, conversationId, workspaceId)
             }.onFailure { error ->
+                if (!isActivePair(pair) || !isSelectedTarget(workspaceId, conversationId)) return@onFailure
                 val detail = error.message ?: "未知错误"
                 lastError = if (detail.contains("423")) "对话正在运行，无法编辑历史消息" else "创建分支失败：$detail"
             }
-            isSending = false
+            if (isActivePair(pair) && isSelectedTarget(workspaceId, conversationId)) isSending = false
         }
     }
 
@@ -657,10 +988,18 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         return api.activateConversationBranch(
             pair, workspaceId, conversationId, remoteViewedBranchId, remoteBranchGroupId,
         ).fold(
-            onSuccess = { snapshot -> applyConversationSnapshot(snapshot); true },
+            onSuccess = { snapshot ->
+                if (!isActivePair(pair) || !isSelectedTarget(workspaceId, conversationId)) false
+                else {
+                    applyConversationSnapshot(snapshot)
+                    true
+                }
+            },
             onFailure = { error ->
-                val detail = error.message ?: "未知错误"
-                lastError = if (detail.contains("423")) "对话正在运行，无法激活所阅分支" else "分支激活失败：$detail"
+                if (isActivePair(pair) && isSelectedTarget(workspaceId, conversationId)) {
+                    val detail = error.message ?: "未知错误"
+                    lastError = if (detail.contains("423")) "对话正在运行，无法激活所阅分支" else "分支激活失败：$detail"
+                }
                 false
             },
         )
@@ -671,17 +1010,35 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         content: String,
         conversationId: String?,
         workspaceId: String?,
+        queuedItem: LocalQueuedMessage? = null,
     ) {
-        api.send(pair, content, conversationId, workspaceId)
+        api.send(
+            pair = pair,
+            message = content,
+            conversationId = conversationId,
+            workspaceId = workspaceId,
+            requestedMode = queuedItem?.requestedMode.orEmpty(),
+            goalObjective = queuedItem?.goalObjective.orEmpty(),
+            inputMode = "next",
+        )
             .onSuccess { resp ->
+                if (!isActivePair(pair) || !isSelectedTarget(workspaceId, conversationId)) return@onSuccess
                 val sendResp = parseSend(resp)
                 if (sendResp.chatMessages.isNotEmpty()) remoteMessages = sendResp.chatMessages
                 lastTokens = sendResp.tokens
                 if (!conversationId.isNullOrBlank()) {
-                    api.conversation(pair, conversationId, workspaceId).onSuccess(::applyConversationSnapshot)
+                    api.conversation(pair, conversationId, workspaceId).onSuccess { snapshot ->
+                        if (isActivePair(pair) && isSelectedTarget(workspaceId, conversationId)) {
+                            applyConversationSnapshot(snapshot)
+                        }
+                    }
                 }
             }
-            .onFailure { error -> lastError = "发送失败：${error.message}" }
+            .onFailure { error ->
+                if (isActivePair(pair) && isSelectedTarget(workspaceId, conversationId)) {
+                    lastError = "发送失败：${error.message}"
+                }
+            }
     }
 
     fun createWorkspaceConversation(onDone: (Boolean, String) -> Unit) {
@@ -922,6 +1279,10 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         base.copy(workspaces = workspaces, currentWorkspaceId = currentWsId, conversations = conversations)
     }.getOrNull()
 
+    private fun parseConversationUiState(json: JSONObject): RemoteConversationUiState = runCatching {
+        gson.fromJson(json.toString(), RemoteConversationUiState::class.java)
+    }.getOrNull() ?: RemoteConversationUiState()
+
     private fun parseMessages(json: JSONObject): List<RemoteMessage> = runCatching {
         val type = object : TypeToken<List<RemoteMessage>>() {}.type
         val arr = json.optJSONArray("chatMessages") ?: return emptyList()
@@ -951,6 +1312,9 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         remoteMessages = snapshot.messages
         remoteWindowStart = snapshot.windowStart
         remoteWorkRuns = snapshot.workRuns
+        liveRun?.let { provisional ->
+            if (snapshot.workRuns.any { RemoteTrackingContract.sameRun(it.runId, provisional.runId) }) liveRun = null
+        }
         remoteBranchGroups = snapshot.branchGroups
         remoteViewedBranchId = snapshot.viewedBranchId
         remoteRuntimeBranchId = snapshot.runtimeBranchId
@@ -1026,6 +1390,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                     cancellation = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
                     call.execute().use { resp ->
                         if (!resp.isSuccessful) throw java.io.IOException("SSE HTTP ${resp.code}")
+                        refreshSelectedTargetAfterSseConnect(session, pair)
                         val source = resp.body?.source() ?: throw java.io.IOException("SSE no body")
                         while (isActive && isCurrent(session, pair) && !source.exhausted()) {
                             val line = source.readUtf8Line() ?: break
@@ -1046,6 +1411,42 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 if (isActive && isCurrent(session, pair)) delay(3_000)
             }
+        }
+    }
+
+    /** SSE does not replay missed events, so every successful connection rehydrates its exact durable target. */
+    private suspend fun refreshSelectedTargetAfterSseConnect(
+        session: MobileSessionGate.Session,
+        pair: PairInfo,
+    ) {
+        val workspaceId = selectedConversationWorkspaceId ?: return
+        val conversationId = selectedConversationId ?: return
+        if (!isCurrent(session, pair) || !isSelectedTarget(workspaceId, conversationId)) return
+        val snapshotResponse = api.conversation(pair, conversationId, workspaceId).getOrNull()
+        val uiResponse = api.conversationUiState(pair, workspaceId, conversationId).getOrNull()
+        val snapshot = snapshotResponse?.let { response ->
+            withContext(Dispatchers.Default) { parseConversationSnapshot(response) }
+        }
+        val uiState = uiResponse?.let { response ->
+            withContext(Dispatchers.Default) { parseConversationUiState(response) }
+        }
+        withContext(Dispatchers.Main.immediate) {
+            if (!isCurrent(session, pair) || !isSelectedTarget(workspaceId, conversationId)) return@withContext
+            snapshot?.let(::applyConversationSnapshot)
+            uiState?.let(::applyResidentConversationUiState)
+            val runtime = uiState?.runtime
+            val runtimeRunId = runtime?.runId.orEmpty()
+            if (runtime?.running == true && runtimeRunId.isNotBlank()) {
+                val durableRun = snapshot?.workRuns?.firstOrNull { it.runId == runtimeRunId }
+                liveRun = when {
+                    liveRun?.runId == runtimeRunId -> liveRun
+                    durableRun != null -> durableRun.copy(status = "running", endedAt = "")
+                    else -> RemoteWorkRun(runId = runtimeRunId, status = "running")
+                }
+            } else if (runtime?.running == false) {
+                liveRun = null
+            }
+            drainRemoteNextIfReady()
         }
     }
 
@@ -1114,31 +1515,49 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         val eventWorkspaceId = event.workspaceId
         val selectedId = selectedConversationId
         val selectedWorkspace = selectedConversationWorkspaceId
-        val belongsToSelected = selectedId.isNullOrBlank()
-            || (event.conversationId == selectedId
-                && (eventWorkspaceId.isBlank() || selectedWorkspace.isNullOrBlank() || eventWorkspaceId == selectedWorkspace))
+        val belongsToSelected = RemoteTrackingContract.acceptsLiveEvent(selectedWorkspace, selectedId, event)
         if (!belongsToSelected) {
-            updateWorkspaceConversationRuntime(eventWorkspaceId, event.conversationId, event.status.ifBlank {
-                when (type) {
-                    "start" -> "running"
-                    "done" -> ""
-                    else -> type
-                }
-            })
+            if (eventWorkspaceId.isNotBlank() && event.conversationId.isNotBlank() && runId.isNotBlank()) {
+                updateWorkspaceConversationRuntime(eventWorkspaceId, event.conversationId, event.status.ifBlank {
+                    when (type) {
+                        "start" -> "running"
+                        "done" -> ""
+                        else -> type
+                    }
+                })
+            }
             return
         }
         val current = liveRun
+        val authoritativeRunningRunId = conversationUiState.runtime
+            ?.takeIf { it.running }
+            ?.runId
+            .orEmpty()
+        val durableRunStatus = remoteWorkRuns
+            .firstOrNull { RemoteTrackingContract.sameRun(it.runId, runId) }
+            ?.status
+        val acceptsNonTerminalEvent = RemoteTrackingContract.acceptsNonTerminalRunEvent(
+            eventRunId = runId,
+            liveRunStatus = current
+                ?.takeIf { RemoteTrackingContract.sameRun(it.runId, runId) }
+                ?.status,
+            durableRunStatus = durableRunStatus,
+            authoritativeRunningRunId = authoritativeRunningRunId,
+        )
         when (type) {
             "start" -> {
+                if (!acceptsNonTerminalEvent) return
                 updateWorkspaceConversationRuntime(eventWorkspaceId, event.conversationId, "running")
                 if (current != null && sameRun(current.runId, runId)) {
                     liveRun = current.copy(events = appendUniqueEvent(current.events, event))
                 } else {
                     liveRun = RemoteWorkRun(
-                        runId = runId.ifBlank { event.id },
+                        runId = runId,
                         status = "running",
                         startedAt = event.timestamp,
                         events = listOf(event),
+                        anchorMessageId = event.anchorMessageId,
+                        branchNodeId = event.branchNodeId,
                     )
                 }
             }
@@ -1153,33 +1572,42 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                         else -> type
                     },
                 )
-                if (current == null || !sameRun(current.runId, runId)) return
-                val terminalEvents = appendUniqueEvent(current.events, event)
-                if (terminalEvents.size == current.events.size) return
-                liveRun = current.copy(
-                    status = when (type) {
-                        "done" -> "completed"
-                        "error" -> "error"
-                        else -> "interrupted"
-                    },
-                    endedAt = event.timestamp,
-                    events = terminalEvents,
-                )
-                // Snapshot refresh happens after the batch applies so a
-                // start/text/done burst yields one UI commit, not N commits.
+                if (current != null && sameRun(current.runId, runId)) {
+                    liveRun = current.copy(
+                        status = when (type) {
+                            "done" -> "completed"
+                            "error" -> "error"
+                            else -> "interrupted"
+                        },
+                        endedAt = event.timestamp,
+                        events = appendUniqueEvent(current.events, event),
+                    )
+                }
+                // The terminal event is authoritative even if a PC-started
+                // run or an SSE reconnect means no matching liveRun exists.
                 terminalSyncs += TerminalRunSync(
-                    runId = current.runId,
-                    conversationId = selectedConversationId,
-                    workspaceId = selectedConversationWorkspaceId,
+                    runId = runId,
+                    conversationId = event.conversationId,
+                    workspaceId = eventWorkspaceId,
                 )
             }
 
             else -> {
+                if (!acceptsNonTerminalEvent) return
                 if (event.status.isNotBlank()) {
                     updateWorkspaceConversationRuntime(eventWorkspaceId, event.conversationId, event.status)
                 }
                 if (current != null && sameRun(current.runId, runId)) {
                     liveRun = current.copy(events = appendUniqueEvent(current.events, event))
+                } else {
+                    liveRun = RemoteWorkRun(
+                        runId = runId,
+                        status = "running",
+                        startedAt = event.timestamp,
+                        events = listOf(event),
+                        anchorMessageId = event.anchorMessageId,
+                        branchNodeId = event.branchNodeId,
+                    )
                 }
             }
         }
@@ -1206,20 +1634,18 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                 val snapshot = snapshotResponse?.let { response ->
                     withContext(Dispatchers.Default) { parseConversationSnapshot(response) }
                 }
-                if (snapshot != null && isCurrent(session, pair) && selectedConversationId == conversationId &&
-                    selectedConversationWorkspaceId == sync.workspaceId
+                if (snapshot != null && isCurrent(session, pair) &&
+                    isSelectedTarget(sync.workspaceId, conversationId)
                 ) applyConversationSnapshot(snapshot)
-            } else if (isCurrent(session, pair)) {
-                remoteMessages = desktopState?.chatMessages ?: emptyList()
-                remoteWorkRuns = desktopState?.workRuns ?: emptyList()
-                clearRemoteBranchState()
             }
-            if (isCurrent(session, pair) && liveRun?.runId == sync.runId) liveRun = null
+            if (isCurrent(session, pair) && isSelectedTarget(sync.workspaceId, conversationId) &&
+                RemoteTrackingContract.sameRun(liveRun?.runId.orEmpty(), sync.runId)
+            ) liveRun = null
         }
     }
 
     private fun sameRun(currentRunId: String, eventRunId: String): Boolean =
-        eventRunId.isBlank() || currentRunId == eventRunId
+        RemoteTrackingContract.sameRun(currentRunId, eventRunId)
 
     private fun appendUniqueEvent(
         events: List<RemoteWorkEvent>,

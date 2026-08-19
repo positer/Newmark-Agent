@@ -534,6 +534,7 @@ export class Agent {
   private memoryLabRebuildState: 'idle' | 'pending' | 'complete' | 'failed' = 'idle';
   private memoryLabRebuildError = '';
   private displayImageDescriptionCache = new Map<string, Promise<string>>();
+  private latestCapturedImageInputs: ConversationImageAttachment[] = [];
   private activeProcessAbortController: AbortController | null = null;
   private automationManager: AutomationManager | null = null;
   private activeAgentKernelRuntime: {
@@ -3149,6 +3150,14 @@ export class Agent {
 
   public listConversationStates(): Array<{ id: string; key: string; title: string; messageCount: number; historyCount: number; updatedAt: string; pinned: boolean; pinnedAt: string; order: number; branchCommunication: boolean }> {
     return this.listWorkspaceConversationStates(this.workspace.current);
+  }
+
+  registerCapturedImageInput(dataUrl: string, name = 'active-screenshot.jpg'): ConversationImageAttachment | null {
+    if (!String(dataUrl || '').startsWith('data:image/')) return null;
+    const prepared = this.prepareSubmittedConversationImages([{ dataUrl, name, type: dataUrl.slice(5, dataUrl.indexOf(';')) }]);
+    const attachment = prepared.attachments[0] || null;
+    this.latestCapturedImageInputs = attachment ? [attachment] : [];
+    return attachment;
   }
 
   private subagentConcurrencyLimit(): number {
@@ -8584,6 +8593,15 @@ export class Agent {
 
   private latestSubmittedImages(attachmentId = ''): Array<{ id?: string; dataUrl: string }> {
     const normalizedId = String(attachmentId || '').trim();
+    const captured = hydrateConversationImageAttachments(this.rootPath, this.latestCapturedImageInputs).flatMap(attachment => attachment.dataUrl
+      ? [{ id: attachment.id, dataUrl: attachment.dataUrl }]
+      : []);
+    if (normalizedId) {
+      const capturedMatch = captured.find(item => item.id === normalizedId);
+      if (capturedMatch) return [capturedMatch];
+    } else if (captured.length) {
+      return captured;
+    }
     for (let index = this.chatMessages.length - 1; index >= 0; index -= 1) {
       const message = this.chatMessages[index];
       if (message?.role !== 'user') continue;

@@ -12,13 +12,19 @@ import com.newmark.mobile.data.ApiConfig
 import com.newmark.mobile.data.ChatMessage
 import com.newmark.mobile.data.ConversationStore
 import com.newmark.mobile.data.LocalConversation
+import com.newmark.mobile.data.LocalContextCompression
+import com.newmark.mobile.data.LocalContextContract
 import com.newmark.mobile.data.LocalConversationBranchGroup
 import com.newmark.mobile.data.LocalConversationBranchNode
 import com.newmark.mobile.data.LocalConversationBranchTree
+import com.newmark.mobile.data.LocalPlanItem
+import com.newmark.mobile.data.LocalQueuedMessage
+import com.newmark.mobile.data.LocalQueueContract
 import com.newmark.mobile.data.LocalToolExecutor
 import com.newmark.mobile.data.LocalTools
 import com.newmark.mobile.data.LocalWorkEvent
 import com.newmark.mobile.data.LocalWorkRun
+import com.newmark.mobile.data.WorkGuide
 import com.newmark.mobile.data.INTELLIGENCE_TIERS
 import com.newmark.mobile.data.ModelConfig
 import com.newmark.mobile.data.ModelOption
@@ -26,19 +32,34 @@ import com.newmark.mobile.data.ProviderConfig
 import com.newmark.mobile.data.ProviderStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.util.UUID
 import java.security.MessageDigest
 
 /** 本地对话 + API 调用对话的正式状态管理 */
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
+    private data class AgentLoopResult(
+        val run: LocalWorkRun,
+        val modelContext: List<ChatMessage>,
+    )
+
+    private data class PreparedModelContext(
+        val messages: List<ChatMessage>,
+        val compression: LocalContextCompression?,
+    )
+
     private val conversationStore = ConversationStore(app)
     private val providerStore = ProviderStore(app)
     private val apiClient = ApiClient()
 
-    private val archived = conversationStore.loadArchived().toMutableList()
+    // Loaded with the rest of the durable state on Dispatchers.IO. Reading and
+    // parsing archived.json in the ViewModel constructor used to block the
+    // first Compose pass and made cold start scale poorly on 1-2 core devices.
+    private val archived = mutableListOf<LocalConversation>()
 
     /** 启动异步加载完成前不落盘，防止空列表覆盖磁盘数据 */
     private var loaded = false
@@ -49,9 +70,37 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var isSending by mutableStateOf(false)
         private set
+    var liveRun by mutableStateOf<LocalWorkRun?>(null)
+        private set
+    var liveRunConversationId by mutableStateOf<String?>(null)
+        private set
     var error by mutableStateOf<String?>(null)
         private set
     private var sendJob: Job? = null
+    private data class LocalGuideInput(
+        val clientMessageId: String,
+        val guideId: String,
+        val text: String,
+        val createdAt: Long,
+    )
+    private var localGuideChannel: Channel<LocalGuideInput>? = null
+    private var localGuideRunId = ""
+    private var localGuideAccepting = false
+    private val localBrowserToolHandlers = mutableMapOf<String, suspend (JSONObject) -> com.newmark.mobile.data.ToolResult>()
+
+    fun bindLocalBrowserTools(
+        conversationId: String,
+        handler: suspend (JSONObject) -> com.newmark.mobile.data.ToolResult,
+    ) {
+        if (conversationId.isNotBlank()) localBrowserToolHandlers[conversationId] = handler
+    }
+
+    fun unbindLocalBrowserTools(
+        conversationId: String,
+        handler: suspend (JSONObject) -> com.newmark.mobile.data.ToolResult,
+    ) {
+        if (localBrowserToolHandlers[conversationId] === handler) localBrowserToolHandlers.remove(conversationId)
+    }
 
     // 多供应商 + 激活模型 + 智能档位（本地 agent 实际调用所用）
     var providers by mutableStateOf<List<ProviderConfig>>(emptyList())
@@ -67,21 +116,26 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // 冷启动提速：磁盘 IO + Gson 解析移到后台，主线程只做状态赋值
         viewModelScope.launch(Dispatchers.IO) {
             val convs = conversationStore.load()
+            val archivedFromDisk = conversationStore.loadArchived()
             val provs = providerStore.load()
             val act = providerStore.loadActive()
+            val (live, legacyArchived) = convs.partition { !it.archived }
+            val normalizedLive = withContext(Dispatchers.Default) {
+                live.map(::normalizeConversationMessages)
+            }
+            if (legacyArchived.isNotEmpty()) {
+                conversationStore.save(live)
+                conversationStore.saveArchived(legacyArchived + archivedFromDisk)
+            }
             withContext(Dispatchers.Main) {
                 loaded = true
                 // 旧版归档语义迁移：archived=true 的条目一次性移入 archived.json
-                val (live, legacyArchived) = convs.partition { !it.archived }
-                if (legacyArchived.isNotEmpty()) {
-                    archived.addAll(0, legacyArchived)
-                    conversationStore.save(live)
-                    conversationStore.saveArchived(archived)
-                }
+                archived.clear()
+                archived += legacyArchived
+                archived += archivedFromDisk
                 // 加载前用户可能已新建对话（内存中），合并而非覆盖
-                conversations = (conversations + live)
+                conversations = (conversations + normalizedLive)
                     .distinctBy { it.id }
-                    .map(::normalizeConversationMessages)
                 providers = provs
                 activeProviderId = act.providerId
                 activeModelName = act.modelName
@@ -142,6 +196,77 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }.sortedBy { it.sourceMessageIndex }
         }
 
+    /** 当前本地对话的持久化 task/plan。 */
+    val currentPlanItems: List<LocalPlanItem>
+        get() = current?.planItems ?: emptyList()
+
+    val currentMode: String
+        get() = current?.mode?.lowercase()?.takeIf { it in setOf("build", "plan") } ?: "build"
+
+    val currentQueue: List<LocalQueuedMessage>
+        get() = current?.queuedMessages ?: emptyList()
+
+    val currentQueuePaused: Boolean
+        get() = current?.queuePaused ?: false
+
+    val currentInputMode: String
+        get() = "next"
+
+    fun selectMode(mode: String) {
+        val normalized = mode.lowercase()
+        if (normalized !in setOf("build", "plan")) return
+        updateConversation(currentId ?: return) { conversation ->
+            conversation.copy(mode = normalized, updatedAt = System.currentTimeMillis())
+        }
+    }
+
+    fun addPlanItem(text: String) {
+        val clean = text.trim().take(240)
+        val id = UUID.randomUUID().toString()
+        if (clean.isBlank()) return
+        updateConversation(currentId ?: return) { conversation ->
+            conversation.copy(
+                planItems = conversation.planItems + LocalPlanItem(id = id, text = clean),
+                updatedAt = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    fun updatePlanItem(itemId: String, text: String) {
+        val clean = text.trim().take(240)
+        if (clean.isBlank()) return
+        updateConversation(currentId ?: return) { conversation ->
+            conversation.copy(
+                planItems = conversation.planItems.map { if (it.id == itemId) it.copy(text = clean) else it },
+                updatedAt = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    fun removePlanItem(itemId: String) {
+        updateConversation(currentId ?: return) { conversation ->
+            conversation.copy(
+                planItems = conversation.planItems.filterNot { it.id == itemId },
+                updatedAt = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    fun cyclePlanItem(itemId: String) {
+        updateConversation(currentId ?: return) { conversation ->
+            conversation.copy(
+                planItems = conversation.planItems.map { item ->
+                    if (item.id != itemId) item else item.copy(status = when (item.status) {
+                        "pending" -> "in_progress"
+                        "in_progress" -> "done"
+                        else -> "pending"
+                    })
+                },
+                updatedAt = System.currentTimeMillis(),
+            )
+        }
+    }
+
     /** 当前激活供应商（缺省取第一个启用项） */
     val activeProvider: ProviderConfig?
         get() = providers.find { it.id == activeProviderId } ?: providers.firstOrNull { it.enabled }
@@ -156,6 +281,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 ?: return ApiConfig()
             return p.toApiConfig(m)
         }
+
+    private val activeModelConfig: ModelConfig?
+        get() = activeProvider?.models?.find { it.name == activeModelName && it.enabled }
+            ?: activeProvider?.models?.firstOrNull { it.enabled }
+            ?: activeProvider?.models?.firstOrNull()
 
     /** 所有供应商的启用模型（本地模型选择对话框候选；label 对齐 PC allModelNames：`provider / display|name`） */
     fun enabledModelOptions(): List<ModelOption> =
@@ -243,6 +373,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         updateConversation(conversation.id) {
             normalized.copy(
                 messages = branch.messages,
+                // A new branch must never inherit a compressed context from
+                // the old path. Its first send rebuilds model-only context
+                // from this branch's own complete displayed history.
+                modelContext = emptyList(),
+                contextCompression = null,
                 branchTree = nextTree,
                 updatedAt = System.currentTimeMillis(),
             )
@@ -373,9 +508,154 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stop() {
+        val targetConversationId = liveRunConversationId
+        val interrupted = liveRun?.copy(
+            status = "interrupted",
+            endedAt = System.currentTimeMillis(),
+            events = liveRun!!.events + LocalWorkEvent(
+                type = "interrupted",
+                id = "${liveRun!!.runId}:${liveRun!!.events.size}:interrupted",
+                content = "已停止",
+                sequence = liveRun!!.events.size.toLong(),
+            ),
+        )
         sendJob?.cancel()
         sendJob = null
+        localGuideAccepting = false
+        localGuideChannel?.close()
+        localGuideChannel = null
+        localGuideRunId = ""
         isSending = false
+        if (targetConversationId != null && interrupted != null) {
+            updateConversation(targetConversationId) { conversation ->
+                val assistant = ChatMessage(
+                    role = "assistant",
+                    content = "",
+                    messageId = UUID.randomUUID().toString(),
+                    workRun = interrupted,
+                )
+                val nextMessages = conversation.messages + assistant
+                conversation.copy(
+                    messages = nextMessages,
+                    updatedAt = System.currentTimeMillis(),
+                    branchTree = updateBranchNodeMessages(
+                        conversation.branchTree,
+                        conversation.branchTree?.activeNodeId,
+                        nextMessages,
+                    ),
+                )
+            }
+        }
+        liveRun = null
+        liveRunConversationId = null
+        drainLocalQueueIfReady(targetConversationId)
+    }
+
+    fun enqueueLocal(text: String) {
+        val content = text.trim()
+        val conversationId = currentId ?: return
+        if (content.isBlank()) return
+        updateConversation(conversationId) { conversation ->
+            conversation.copy(
+                queuedMessages = LocalQueueContract.enqueue(
+                    conversation.queuedMessages,
+                    LocalQueuedMessage(UUID.randomUUID().toString(), content),
+                ),
+                updatedAt = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    fun toggleLocalQueuePause() {
+        val conversationId = currentId ?: return
+        val wasPaused = current?.queuePaused == true
+        updateConversation(conversationId) { conversation ->
+            conversation.copy(queuePaused = !conversation.queuePaused, updatedAt = System.currentTimeMillis())
+        }
+        if (wasPaused) drainLocalQueueIfReady(conversationId)
+    }
+
+    fun updateLocalQueueMessage(id: String, text: String) {
+        val content = text.trim()
+        val conversationId = currentId ?: return
+        updateConversation(conversationId) { conversation ->
+            conversation.copy(
+                queuedMessages = LocalQueueContract.update(conversation.queuedMessages, id, content),
+                updatedAt = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    fun deleteLocalQueueMessage(id: String) {
+        val conversationId = currentId ?: return
+        updateConversation(conversationId) { conversation ->
+            conversation.copy(
+                queuedMessages = LocalQueueContract.delete(conversation.queuedMessages, id),
+                updatedAt = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    fun guideLocalQueueMessage(id: String) {
+        val conversation = current ?: return
+        val item = conversation.queuedMessages.firstOrNull { it.id == id } ?: return
+        val channel = localGuideChannel
+        val run = liveRun
+        if (!isSending || !localGuideAccepting || channel == null || run == null ||
+            conversation.id != liveRunConversationId || run.runId != localGuideRunId || run.mode != "build"
+        ) {
+            error = "当前没有可接收 Guide 的本地运行"
+            return
+        }
+        val guide = LocalGuideInput(
+            clientMessageId = UUID.randomUUID().toString(),
+            guideId = UUID.randomUUID().toString(),
+            text = item.text,
+            createdAt = System.currentTimeMillis(),
+        )
+        if (!channel.trySend(guide).isSuccess) {
+            error = "当前本地运行已结束，Guide 未发送"
+            return
+        }
+        updateConversation(conversation.id) {
+            it.copy(queuedMessages = LocalQueueContract.consumeAcceptedGuide(it.queuedMessages, id, accepted = true))
+        }
+        val accepted = WorkGuide(
+            clientMessageId = guide.clientMessageId,
+            guideId = guide.guideId,
+            runId = run.runId,
+            status = "accepted",
+            content = guide.text,
+            createdAt = guide.createdAt.toString(),
+            updatedAt = guide.createdAt.toString(),
+        )
+        liveRun = run.copy(events = run.events + LocalWorkEvent(
+            type = "guide_accepted",
+            id = "${run.runId}:${guide.clientMessageId}:accepted",
+            content = guide.text,
+            timestamp = guide.createdAt,
+            sequence = (run.events.maxOfOrNull { it.sequence } ?: 0L) + 1L,
+            status = "accepted",
+            clientMessageId = guide.clientMessageId,
+            guideId = guide.guideId,
+            guide = accepted,
+        ))
+    }
+
+    private fun drainLocalQueueIfReady(conversationId: String?) {
+        if (conversationId.isNullOrBlank() || isSending || currentId != conversationId) return
+        val conversation = conversations.firstOrNull { it.id == conversationId } ?: return
+        if (conversation.queuePaused) return
+        val (next, remaining) = LocalQueueContract.dequeue(
+            conversation.queuedMessages,
+            paused = conversation.queuePaused,
+            running = isSending,
+        )
+        if (next == null) return
+        updateConversation(conversationId) {
+            it.copy(queuedMessages = remaining, updatedAt = System.currentTimeMillis())
+        }
+        send(next.text)
     }
 
     /** 发送消息：本地持久化 + 调 API + 持久化回复 */
@@ -401,6 +681,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
         val targetConversationId = conv.id
         val targetBranchId = conv.branchTree?.activeNodeId
+        val targetMode = conv.mode.lowercase().takeIf { it in setOf("build", "plan") } ?: "build"
         val userMessage = ChatMessage(
             role = "user",
             content = content,
@@ -412,6 +693,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val nextMessages = it.messages + userMessage
             it.copy(
                 messages = nextMessages,
+                modelContext = if (it.modelContext.isEmpty()) emptyList() else it.modelContext + userMessage,
                 title = if (it.messages.isEmpty()) deriveTitle(content) else it.title,
                 updatedAt = System.currentTimeMillis(),
                 branchTree = updateBranchNodeMessages(it.branchTree, targetBranchId, nextMessages),
@@ -420,15 +702,81 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         isSending = true
         error = null
+        val runId = UUID.randomUUID().toString()
+        val runStartedAt = System.currentTimeMillis()
+        val guideChannel = Channel<LocalGuideInput>(Channel.UNLIMITED)
+        localGuideChannel?.close()
+        localGuideChannel = guideChannel
+        localGuideRunId = runId
+        localGuideAccepting = true
+        liveRunConversationId = targetConversationId
+        // Do not wait for the provider call, a tool result, or the persisted
+        // Build block before exposing local execution.  The running block is
+        // part of the synchronous send transition, so a slow first token is
+        // still represented immediately in the conversation.
+        liveRun = LocalWorkRun(
+            runId = runId,
+            status = "running",
+            startedAt = runStartedAt,
+            expanded = true,
+            events = listOf(
+                LocalWorkEvent(
+                    type = "start",
+                    id = "$runId:0:start",
+                    content = "开始",
+                    timestamp = runStartedAt,
+                    sequence = 0,
+                ),
+            ),
+            mode = targetMode,
+            model = activeModelName,
+            anchorMessageId = userMessage.messageId,
+            branchNodeId = targetBranchId.orEmpty(),
+        )
         sendJob = viewModelScope.launch {
-            val snapshot = conversations.find { it.id == targetConversationId }?.messages ?: emptyList()
-            val executor = LocalToolExecutor(getApplication())
+            val targetConversation = conversations.find { it.id == targetConversationId } ?: return@launch
+            val snapshot = targetConversation.messages
+            val executor = LocalToolExecutor(getApplication()) { name, args ->
+                executeConversationTool(targetConversationId, name, args)
+            }
             // 智能档位 + 模型原生思考强度映射（thinking_tier_map）随调用透传
             val tierMap = providers.asSequence()
                 .flatMap { it.models.asSequence() }
                 .firstOrNull { it.name == activeModelName }
                 ?.thinkingTierMap ?: emptyMap()
-            val run = runAgentLoop(apiConfig, snapshot, executor, intelligence, tierMap)
+            val prepared = prepareModelContext(
+                config = apiConfig,
+                conversation = targetConversation,
+                displaySnapshot = snapshot,
+                maxTokens = activeModelConfig?.maxTokens?.takeIf { it > 0 } ?: 128_000,
+            )
+            if (prepared.compression != targetConversation.contextCompression ||
+                prepared.messages != targetConversation.modelContext
+            ) {
+                updateConversation(targetConversationId) {
+                    it.copy(
+                        modelContext = prepared.messages,
+                        contextCompression = prepared.compression,
+                        updatedAt = System.currentTimeMillis(),
+                    )
+                }
+            }
+            val loopResult = runAgentLoop(
+                apiConfig,
+                prepared.messages,
+                executor,
+                intelligence,
+                tierMap,
+                targetMode,
+                runId,
+                runStartedAt,
+                guideChannel,
+                userMessage.messageId,
+                targetBranchId.orEmpty(),
+            ) { progress ->
+                if (liveRunConversationId == targetConversationId) liveRun = progress
+            }
+            val run = loopResult.run
             updateConversation(targetConversationId) {
                 // 与 PC ConversationWorkRun 一致：失败/中断只保留 Build 过程，
                 // 不伪造一条最终 Agent 回复；完成态才保留独立最终正文。
@@ -442,6 +790,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val nextMessages = it.messages + assistant
                 it.copy(
                     messages = nextMessages,
+                    modelContext = loopResult.modelContext,
+                    contextCompression = prepared.compression,
                     updatedAt = System.currentTimeMillis(),
                     branchTree = updateBranchNodeMessages(it.branchTree, targetBranchId, nextMessages),
                 )
@@ -449,6 +799,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             // 工具可能经 settings_update 改写了 providers/active 文件 → 重载设置状态（设置页与下次调用即时生效）
             reloadSettingsFromDisk()
             isSending = false
+            localGuideAccepting = false
+            guideChannel.close()
+            if (localGuideChannel === guideChannel) {
+                localGuideChannel = null
+                localGuideRunId = ""
+            }
+            if (liveRunConversationId == targetConversationId) {
+                liveRun = null
+                liveRunConversationId = null
+            }
+            drainLocalQueueIfReady(targetConversationId)
         }
     }
 
@@ -462,6 +823,154 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         normalizeActive()
     }
 
+    private suspend fun executeConversationTool(
+        conversationId: String,
+        name: String,
+        args: JSONObject,
+    ): com.newmark.mobile.data.ToolResult? = withContext(Dispatchers.Main) {
+        when (name) {
+            "task_read" -> {
+                val items = conversations.firstOrNull { it.id == conversationId }?.planItems.orEmpty()
+                com.newmark.mobile.data.ToolResult.ok(
+                    if (items.isEmpty()) "当前 task/plan 清单为空。" else items.mapIndexed { index, item ->
+                        "${index}. [${item.status}] ${item.text} (id=${item.id})"
+                    }.joinToString("\n"),
+                )
+            }
+            "task_create" -> executeTaskCreate(conversationId, args)
+            "browser_use" -> localBrowserToolHandlers[conversationId]?.invoke(args)
+                ?: com.newmark.mobile.data.ToolResult.err("当前对话的内置浏览器尚未挂载")
+            else -> null
+        }
+    }
+
+    private fun executeTaskCreate(conversationId: String, args: JSONObject): com.newmark.mobile.data.ToolResult {
+        val conversation = conversations.firstOrNull { it.id == conversationId }
+            ?: return com.newmark.mobile.data.ToolResult.err("没有目标本地对话")
+        return when (args.optString("action").lowercase()) {
+            "create" -> {
+                val text = args.optString("task").ifBlank { args.optString("text") }.trim().take(400)
+                if (text.isBlank()) return com.newmark.mobile.data.ToolResult.err("[task_create] task text is required.")
+                val item = LocalPlanItem(UUID.randomUUID().toString(), text)
+                updateConversation(conversationId) { it.copy(planItems = it.planItems + item, updatedAt = System.currentTimeMillis()) }
+                com.newmark.mobile.data.ToolResult.ok("[task_create] created id=${item.id}")
+            }
+            "update" -> {
+                val id = args.optString("id")
+                val index = if (args.has("index")) args.optInt("index", -1) else -1
+                val target = conversation.planItems.firstOrNull { id.isNotBlank() && it.id == id }
+                    ?: conversation.planItems.getOrNull(index)
+                    ?: return com.newmark.mobile.data.ToolResult.err("[task_create] no matching task item for update (pass id or valid index).")
+                val requestedStatus = args.optString("status")
+                val status = when (requestedStatus) {
+                    "" -> target.status
+                    "pending", "in_progress", "done" -> requestedStatus
+                    "blocked" -> "pending"
+                    else -> return com.newmark.mobile.data.ToolResult.err("[task_create] status must be pending|in_progress|done|blocked.")
+                }
+                val text = args.optString("task").ifBlank { args.optString("text") }.trim().take(400).ifBlank { target.text }
+                updateConversation(conversationId) { current ->
+                    current.copy(
+                        planItems = current.planItems.map { if (it.id == target.id) it.copy(text = text, status = status) else it },
+                        updatedAt = System.currentTimeMillis(),
+                    )
+                }
+                com.newmark.mobile.data.ToolResult.ok("[task_create] updated id=${target.id} status=$status")
+            }
+            "clear" -> {
+                val count = conversation.planItems.count { it.status == "done" }
+                updateConversation(conversationId) { current ->
+                    current.copy(planItems = current.planItems.filterNot { it.status == "done" }, updatedAt = System.currentTimeMillis())
+                }
+                com.newmark.mobile.data.ToolResult.ok("[task_create] cleared $count completed item(s)")
+            }
+            else -> com.newmark.mobile.data.ToolResult.err("[task_create] action must be create|update|clear.")
+        }
+    }
+
+    /**
+     * Builds the durable model-only context without touching displayed
+     * history. Compression follows the PC 70% active-window trigger and keeps
+     * a complete recent user turn plus a continuation anchor.
+     */
+    private suspend fun prepareModelContext(
+        config: ApiConfig,
+        conversation: LocalConversation,
+        displaySnapshot: List<ChatMessage>,
+        maxTokens: Int,
+    ): PreparedModelContext {
+        val current = if (conversation.modelContext.isNotEmpty()) {
+            conversation.modelContext
+        } else {
+            displaySnapshot
+        }
+        val budget = withContext(Dispatchers.Default) {
+            LocalContextContract.budget(current, maxTokens)
+        }
+        if (!budget.thresholdReached) {
+            return PreparedModelContext(current, conversation.contextCompression)
+        }
+        val retained = withContext(Dispatchers.Default) {
+            LocalContextContract.recentContextSuffix(
+                messages = current,
+                maxMessages = 48,
+                tokenBudget = budget.longHistoryTriggerTokens,
+            )
+        }
+        val omittedCount = (current.size - retained.size).coerceAtLeast(0)
+        if (omittedCount == 0) {
+            return PreparedModelContext(current, conversation.contextCompression)
+        }
+        val omitted = current.take(omittedCount)
+        val boundedSource = withContext(Dispatchers.Default) {
+            LocalContextContract.summarySource(
+                omitted = omitted,
+                maxChars = (budget.longHistoryTriggerTokens * 4).coerceAtMost(64_000),
+            )
+        }
+        val summaryPrompt = buildString {
+            appendLine("Compress the following earlier conversation context for continuation of the same Build.")
+            appendLine("Preserve unfinished work, decisions, constraints, tool outcomes, paths, errors, and commitments.")
+            appendLine("Do not invent facts. Return only the compact continuation summary.")
+            appendLine()
+            append(boundedSource)
+        }
+        val generated = apiClient.chat(
+            config = config,
+            messages = listOf(ChatMessage(role = "user", content = summaryPrompt)),
+            tools = emptyList(),
+            intelligence = "low",
+            maxOutputTokens = budget.summaryTokens,
+        ).getOrNull()?.content?.trim().orEmpty()
+        val fallback = generated.isBlank()
+        val summary = if (fallback) {
+            withContext(Dispatchers.Default) {
+                LocalContextContract.fallbackSummary(omitted, budget.summaryTokens)
+            }
+        } else {
+            generated
+        }
+        val compressed = listOf(
+            ChatMessage(
+                role = "system",
+                content = "[Context Compression Summary]\n\n$summary",
+            ),
+            LocalContextContract.continuationAnchor(),
+        ) + retained
+        val compression = LocalContextCompression(
+            at = System.currentTimeMillis(),
+            originalMessages = current.size,
+            compressedMessages = compressed.size,
+            originalChars = current.sumOf { it.content.length },
+            compressedChars = compressed.sumOf { it.content.length },
+            compressedTokens = LocalContextContract.estimateTokens(compressed),
+            summary = summary,
+            model = activeModelName,
+            fallback = fallback,
+        )
+        return PreparedModelContext(compressed, compression)
+    }
+
     /** Agent tool-call 循环：生成 build block（对齐 PC ConversationWorkRun 的事件序列 + 处理时长） */
     private suspend fun runAgentLoop(
         config: ApiConfig,
@@ -469,11 +978,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         executor: LocalToolExecutor,
         intelligence: String,
         thinkingTierMap: Map<String, String>,
-    ): LocalWorkRun {
-        val runId = UUID.randomUUID().toString()
-        val startedAt = System.currentTimeMillis()
-        val events = mutableListOf<LocalWorkEvent>()
-        var sequence = 0L
+        mode: String,
+        runId: String,
+        startedAt: Long,
+        guideChannel: Channel<LocalGuideInput>,
+        anchorMessageId: String,
+        branchNodeId: String,
+        onProgress: (LocalWorkRun) -> Unit,
+    ): AgentLoopResult {
+        val events = mutableListOf(
+            LocalWorkEvent(
+                type = "start",
+                id = "$runId:0:start",
+                content = "开始",
+                timestamp = startedAt,
+                sequence = 0,
+            ),
+        )
+        var sequence = 1L
         fun event(
             type: String,
             content: String = "",
@@ -492,75 +1014,170 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             sequence = sequence++,
             durationMs = durationMs,
         )
-        events += event(type = "start", content = "开始")
-
+        fun publish(
+            next: LocalWorkEvent,
+            status: String = "running",
+            endedAt: Long = 0L,
+            text: String = "",
+        ) {
+            events += next
+            onProgress(
+                LocalWorkRun(
+                    runId = runId,
+                    status = status,
+                    startedAt = startedAt,
+                    endedAt = endedAt,
+                    expanded = true,
+                    events = events.toList(),
+                    mode = mode,
+                    model = activeModelName,
+                    text = text,
+                    anchorMessageId = anchorMessageId,
+                    branchNodeId = branchNodeId,
+                ),
+            )
+        }
         val messages = snapshot.toMutableList()
+        fun applyPendingGuides(): Int {
+            var applied = 0
+            while (true) {
+                val guide = guideChannel.tryReceive().getOrNull() ?: break
+                val accepted = WorkGuide(
+                    clientMessageId = guide.clientMessageId,
+                    guideId = guide.guideId,
+                    runId = runId,
+                    status = "accepted",
+                    content = guide.text,
+                    createdAt = guide.createdAt.toString(),
+                    updatedAt = System.currentTimeMillis().toString(),
+                )
+                publish(event(
+                    type = "guide_accepted",
+                    content = guide.text,
+                ).copy(
+                    status = "accepted",
+                    clientMessageId = guide.clientMessageId,
+                    guideId = guide.guideId,
+                    guide = accepted,
+                ))
+                val appliedAt = System.currentTimeMillis()
+                publish(event(
+                    type = "guide_applied",
+                    content = guide.text,
+                ).copy(
+                    status = "applied",
+                    clientMessageId = guide.clientMessageId,
+                    guideId = guide.guideId,
+                    guide = accepted.copy(
+                        status = "applied",
+                        updatedAt = appliedAt.toString(),
+                        appliedAt = appliedAt.toString(),
+                    ),
+                ))
+                messages += ChatMessage(
+                    role = "user",
+                    content = guide.text,
+                    messageId = guide.clientMessageId,
+                    timestamp = guide.createdAt,
+                )
+                applied++
+            }
+            return applied
+        }
         var loop = 0
         var finalText = ""
         while (loop < 6) {
+            applyPendingGuides()
             val t0 = System.currentTimeMillis()
-            val resp = apiClient.chat(config, messages, LocalTools.definitions, intelligence, thinkingTierMap).getOrElse { e ->
+            val tools = if (mode == "plan") LocalTools.planDefinitions else LocalTools.definitions
+            val resp = apiClient.chat(config, messages, tools, intelligence, thinkingTierMap).getOrElse { e ->
                 val msg = "⚠️ ${e.message ?: "API 调用失败"}（请先在设置页配置 API）"
-                events += event(type = "error", content = msg, durationMs = System.currentTimeMillis() - t0)
-                return LocalWorkRun(
-                    runId = runId, status = "error",
-                    startedAt = startedAt, endedAt = System.currentTimeMillis(),
-                    events = events, text = msg,
+                val endedAt = System.currentTimeMillis()
+                publish(
+                    event(type = "error", content = msg, durationMs = endedAt - t0),
+                    status = "error",
+                    endedAt = endedAt,
+                    text = msg,
+                )
+                return AgentLoopResult(
+                    run = LocalWorkRun(
+                        runId = runId, status = "error",
+                        startedAt = startedAt, endedAt = endedAt,
+                        events = events, text = msg,
+                        anchorMessageId = anchorMessageId,
+                        branchNodeId = branchNodeId,
+                    ),
+                    modelContext = messages,
                 )
             }
             val chatMs = System.currentTimeMillis() - t0
 
             if (resp.toolCalls.isEmpty()) {
-                finalText = resp.content.ifBlank { "（无回复内容）" }
-                events += event(
+                val responseText = resp.content.ifBlank { "（无回复内容）" }
+                messages += ChatMessage(role = "assistant", content = responseText)
+                val guidesAfterResponse = applyPendingGuides()
+                if (guidesAfterResponse > 0) {
+                    publish(event(type = "response", content = responseText, durationMs = chatMs))
+                    loop++
+                    continue
+                }
+                localGuideAccepting = false
+                finalText = responseText
+                publish(event(
                     // PC 完成态由 final_response 承载，正文只在独立 Agent
                     // 消息中显示，避免 Build 内与最终消息重复一次。
                     type = "final_response", content = finalText,
                     durationMs = chatMs,
-                )
+                ))
                 break
             }
 
             // assistant 在工具调用前的思考/叙述
             if (resp.content.isNotBlank()) {
-                events += event(type = "thought", content = resp.content, durationMs = chatMs)
-                events += event(type = "thought_result", content = resp.content)
+                publish(event(type = "thought", content = resp.content, durationMs = chatMs))
+                publish(event(type = "thought_result", content = resp.content))
             }
             messages += ChatMessage(role = "assistant", content = resp.content, toolCalls = resp.toolCalls)
             for (call in resp.toolCalls) {
                 val tc0 = System.currentTimeMillis()
-                events += event(
+                publish(event(
                     type = "tool_call",
                     toolCallId = call.id,
                     toolName = call.name,
                     toolArgs = call.arguments,
-                )
-                val result = executor.executeTool(call.name, call.arguments)
+                ))
+                val result = withContext(Dispatchers.IO) {
+                    executor.executeTool(call.name, call.arguments)
+                }
                 val tcMs = System.currentTimeMillis() - tc0
-                events += event(
+                publish(event(
                     type = "tool_result",
                     content = result.output,
                     toolCallId = call.id,
                     toolName = call.name,
                     durationMs = tcMs,
-                )
+                ))
                 messages += ChatMessage(role = "tool", content = result.output, toolCallId = call.id)
             }
             loop++
         }
         val terminalStatus = if (finalText.isEmpty()) {
             finalText = "⚠️ 工具调用轮次超限"
-            events += event(type = "error", content = finalText)
+            publish(event(type = "error", content = finalText))
             "error"
         } else {
-            events += event(type = "done", content = "完成")
+            publish(event(type = "done", content = "完成"))
             "completed"
         }
-        return LocalWorkRun(
+        val completed = LocalWorkRun(
             runId = runId, status = terminalStatus,
             startedAt = startedAt, endedAt = System.currentTimeMillis(),
-            events = events, text = finalText,
+            events = events, mode = mode, text = finalText,
+            anchorMessageId = anchorMessageId,
+            branchNodeId = branchNodeId,
         )
+        onProgress(completed)
+        return AgentLoopResult(completed, messages)
     }
 
     private fun updateConversation(id: String, transform: (LocalConversation) -> LocalConversation) {
@@ -604,6 +1221,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun normalizeConversationMessages(conversation: LocalConversation): LocalConversation {
+        // Gson can populate a newly added non-null field as a runtime null
+        // when reading an older conversations.json.  Do a full reconstruction
+        // rather than calling copy(), whose generated parameter checks would
+        // crash before the migration values could be applied.
+        @Suppress("UNCHECKED_CAST")
+        val legacyMode = conversation.mode as String?
+        @Suppress("UNCHECKED_CAST")
+        val legacyPlanItems = conversation.planItems as List<LocalPlanItem>?
+        @Suppress("UNCHECKED_CAST")
+        val legacyQueue = conversation.queuedMessages as List<LocalQueuedMessage>?
+        val normalizedMode = legacyMode
+            ?.lowercase()
+            ?.takeIf { it in setOf("build", "plan") }
+            ?: "build"
         fun normalize(messages: List<ChatMessage>, branchSeed: String): List<ChatMessage> =
             messages.mapIndexed { index, message ->
                 // Gson can hydrate legacy JSON null into a Kotlin non-null String field.
@@ -613,6 +1244,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
 
         val normalizedMessages = normalize(conversation.messages, conversation.id)
+        @Suppress("UNCHECKED_CAST")
+        val legacyModelContext = conversation.modelContext as List<ChatMessage>?
         val tree = conversation.branchTree?.let { existing ->
             val nodes = existing.nodes.mapValues { (nodeId, node) ->
                 node.copy(messages = normalize(node.messages, "${conversation.id}:$nodeId"))
@@ -621,7 +1254,35 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             existing.copy(nodes = nodes, viewedNodeId = viewed)
         }
         val activeMessages = tree?.nodes?.get(tree.activeNodeId)?.messages ?: normalizedMessages
-        return conversation.copy(messages = activeMessages, branchTree = tree)
+        return LocalConversation(
+            id = conversation.id,
+            title = conversation.title,
+            messages = activeMessages,
+            createdAt = conversation.createdAt,
+            updatedAt = conversation.updatedAt,
+            pinned = conversation.pinned,
+            archived = conversation.archived,
+            mode = normalizedMode,
+            planItems = legacyPlanItems ?: emptyList(),
+            queuedMessages = legacyQueue.orEmpty().mapNotNull { item ->
+                @Suppress("UNCHECKED_CAST")
+                val legacyText = item.text as String?
+                val text = legacyText?.trim().orEmpty()
+                if (text.isBlank()) null else LocalQueuedMessage(
+                    id = item.id.ifBlank { UUID.randomUUID().toString() },
+                    text = text,
+                    createdAt = item.createdAt,
+                    requestedMode = (item.requestedMode as String?)
+                        ?.lowercase()?.takeIf { it in setOf("build", "goal") } ?: "build",
+                    goalObjective = (item.goalObjective as String?).orEmpty(),
+                )
+            },
+            queuePaused = conversation.queuePaused,
+            inputMode = "next",
+            modelContext = legacyModelContext.orEmpty(),
+            contextCompression = conversation.contextCompression,
+            branchTree = tree,
+        )
     }
 
     private fun stableMessageId(seed: String, index: Int, message: ChatMessage): String {

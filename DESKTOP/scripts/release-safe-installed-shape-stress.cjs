@@ -89,10 +89,10 @@ async function runTui() {
   const deadline = Date.now() + 45_000;
   try {
     while (Date.now() < deadline) {
-      if (/NEWmark|WORKSPACES|Type a message/i.test(output)) break;
+      if (/WORKSPACES|Type a message/i.test(output)) break;
       await sleep(100);
     }
-    assert(/NEWmark|WORKSPACES|Type a message/i.test(output), `TUI did not start; output=${output.slice(-1200)}`);
+    assert(/WORKSPACES|Type a message/i.test(output), `TUI did not start; output=${output.slice(-1200)}`);
     terminal.write('\u0003');
     const event = await Promise.race([exit, sleep(15_000).then(() => null)]);
     assert(event && event.exitCode === 0, `TUI exit=${event ? event.exitCode : 'timeout'}; output=${output.slice(-1200)}`);

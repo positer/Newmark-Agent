@@ -137,6 +137,8 @@ contextBridge.exposeInMainWorld('api', {
   updateVersion: () => ipcRenderer.invoke('update:version'),
   mobilePairingQr: () => ipcRenderer.invoke('mobile:pairingQr'),
   mobilePairingStatus: () => ipcRenderer.invoke('mobile:pairingStatus'),
+  mobileServerStatus: () => ipcRenderer.invoke('mobile:serverStatus'),
+  setRemoteTouchEnabled: (enabled: boolean) => ipcRenderer.invoke('mobile:setRemoteTouchEnabled', enabled),
   updateCheckGithub: (input: Record<string, unknown>) => ipcRenderer.invoke('update:checkGithub', input),
   updateApplyGithub: (input: Record<string, unknown>) => ipcRenderer.invoke('update:applyGithub', input),
   updateInstallLocal: (input: Record<string, unknown>) => ipcRenderer.invoke('update:installLocal', input),

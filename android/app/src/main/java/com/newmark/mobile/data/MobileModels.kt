@@ -67,7 +67,10 @@ data class RemoteConversation(
     val pinned: Boolean = false,
     val branchCommunication: Boolean = false,
     val active: Boolean = false,
-    val runtimeStatus: String = "",
+    // Optional on older desktop/mobile state responses. Gson may allocate a
+    // Kotlin data class without invoking its default constructor, so an absent
+    // non-null String becomes a runtime null under optimized Release builds.
+    val runtimeStatus: String? = null,
     val running: Boolean = false, // 工作状态（移动端按 activeConversationId + agent.status 维护）
 )
 
@@ -270,6 +273,144 @@ data class RemoteConversationUiState(
     val chatMessages: List<RemoteMessage>? = null,
     val workRuns: List<RemoteWorkRun>? = null,
 )
+
+/**
+ * Gson may allocate Kotlin DTOs without invoking their default-value
+ * constructors. Older desktop payloads that omit a field can therefore place
+ * runtime nulls in source-level non-null properties. Keep all such compatibility
+ * handling at the authenticated remote boundary so Compose and local persisted
+ * models remain strict and cannot crash one missing field at a time under R8.
+ */
+object RemotePayloadNormalizer {
+    fun conversationUiState(value: RemoteConversationUiState): RemoteConversationUiState = value.copy(
+        goal = value.goal?.let(::goal),
+        flowSelection = value.flowSelection?.let(::flowSelection),
+        flow = value.flow?.let(::flow),
+        queued = queue(value.queued ?: RemoteConversationQueue()),
+        queueItems = value.queueItems.orEmpty().map(::queueItem),
+        runtime = value.runtime?.let(::runtime),
+        mode = value.mode.orEmpty().ifBlank { "build" },
+        status = value.status.orEmpty().ifBlank { "idle" },
+        inputMode = value.inputMode.orEmpty().ifBlank { "guide" },
+        chatMessages = value.chatMessages?.orEmpty()?.map(::message),
+        workRuns = value.workRuns?.orEmpty()?.map(::workRun),
+    )
+
+    fun message(value: RemoteMessage): RemoteMessage = value.copy(
+        id = value.id.orEmpty(),
+        role = value.role.orEmpty().ifBlank { "assistant" },
+        content = value.content.orEmpty(),
+        mode = value.mode.orEmpty(),
+        model = value.model.orEmpty(),
+        timestamp = value.timestamp.orEmpty(),
+        guideId = value.guideId.orEmpty(),
+        clientMessageId = value.clientMessageId.orEmpty(),
+        runId = value.runId.orEmpty(),
+        branchNodeId = value.branchNodeId.orEmpty(),
+        attachments = value.attachments.orEmpty().map(::conversationImage),
+    )
+
+    fun workRun(value: RemoteWorkRun): RemoteWorkRun = value.copy(
+        runId = value.runId.orEmpty(),
+        status = value.status.orEmpty(),
+        startedAt = value.startedAt.orEmpty(),
+        endedAt = value.endedAt.orEmpty(),
+        events = value.events.orEmpty().map(::workEvent),
+        guides = value.guides.orEmpty().map(::workGuide),
+        primaryPrompt = value.primaryPrompt.orEmpty(),
+        branchNodeId = value.branchNodeId.orEmpty(),
+        anchorMessageId = value.anchorMessageId.orEmpty(),
+    )
+
+    fun workEvent(value: RemoteWorkEvent): RemoteWorkEvent = value.copy(
+        id = value.id.orEmpty(),
+        conversationId = value.conversationId.orEmpty(),
+        type = value.type.orEmpty(),
+        content = value.content.orEmpty(),
+        mode = value.mode.orEmpty(),
+        model = value.model.orEmpty(),
+        toolCallId = value.toolCallId.orEmpty(),
+        toolName = value.toolName.orEmpty(),
+        toolArgs = value.toolArgs.orEmpty(),
+        timestamp = value.timestamp.orEmpty(),
+        workspaceId = value.workspaceId.orEmpty(),
+        workspaceKey = value.workspaceKey.orEmpty(),
+        runtimeKey = value.runtimeKey.orEmpty(),
+        runId = value.runId.orEmpty(),
+        branchNodeId = value.branchNodeId.orEmpty(),
+        anchorMessageId = value.anchorMessageId.orEmpty(),
+        actorId = value.actorId.orEmpty(),
+        status = value.status.orEmpty(),
+        clientMessageId = value.clientMessageId.orEmpty(),
+        guideId = value.guideId.orEmpty(),
+        guide = value.guide?.let(::workGuide),
+        displayImage = value.displayImage?.let(::displayImage),
+    )
+
+    private fun goal(value: RemoteGoal) = value.copy(objective = value.objective.orEmpty())
+
+    private fun flowSelection(value: RemoteFlowSelection) = value.copy(
+        name = value.name.orEmpty(),
+        componentType = value.componentType.orEmpty(),
+    )
+
+    private fun queue(value: RemoteConversationQueue) = value.copy(
+        steering = value.steering.orEmpty().map(String?::orEmpty),
+        followUp = value.followUp.orEmpty().map(String?::orEmpty),
+    )
+
+    private fun queueItem(value: RemoteQueueItem) = value.copy(
+        id = value.id.orEmpty(),
+        text = value.text.orEmpty(),
+        queueMode = value.queueMode.orEmpty().ifBlank { "followUp" },
+        requestedMode = value.requestedMode.orEmpty().ifBlank { "build" },
+        goalObjective = value.goalObjective.orEmpty(),
+        runId = value.runId.orEmpty(),
+        createdAt = value.createdAt.orEmpty(),
+    )
+
+    private fun flow(value: RemoteFlowTakeover) = value.copy(
+        name = value.name.orEmpty(),
+        promptText = value.promptText.orEmpty(),
+        message = value.message.orEmpty(),
+        reason = value.reason.orEmpty(),
+    )
+
+    private fun runtime(value: RemoteRuntimeState) = value.copy(
+        status = value.status.orEmpty(),
+        runId = value.runId.orEmpty(),
+    )
+
+    private fun workGuide(value: RemoteWorkGuide) = value.copy(
+        clientMessageId = value.clientMessageId.orEmpty(),
+        guideId = value.guideId.orEmpty(),
+        runId = value.runId.orEmpty(),
+        status = value.status.orEmpty().ifBlank { "accepted" },
+        content = value.content.orEmpty(),
+        createdAt = value.createdAt.orEmpty(),
+        updatedAt = value.updatedAt.orEmpty(),
+        appliedAt = value.appliedAt.orEmpty(),
+        reason = value.reason.orEmpty(),
+        attachments = value.attachments.orEmpty().map(::conversationImage),
+    )
+
+    private fun conversationImage(value: RemoteConversationImage) = value.copy(
+        id = value.id.orEmpty(),
+        origin = value.origin.orEmpty(),
+        name = value.name.orEmpty(),
+        mimeType = value.mimeType.orEmpty(),
+        dataUrl = value.dataUrl.orEmpty(),
+    )
+
+    private fun displayImage(value: RemoteWorkDisplayImage) = value.copy(
+        id = value.id.orEmpty(),
+        origin = value.origin.orEmpty(),
+        name = value.name.orEmpty(),
+        caption = value.caption.orEmpty(),
+        mimeType = value.mimeType.orEmpty(),
+        dataUrl = value.dataUrl.orEmpty(),
+    )
+}
 
 data class RemoteWorkspaceFile(
     val name: String = "",

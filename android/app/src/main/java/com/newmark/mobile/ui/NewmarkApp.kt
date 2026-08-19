@@ -66,6 +66,7 @@ import com.newmark.mobile.data.WorkGuide
 import com.newmark.mobile.data.RemoteSubagent
 import com.newmark.mobile.data.RemoteWorkRun
 import com.newmark.mobile.data.RemoteTrackingContract
+import com.newmark.mobile.data.RemotePayloadNormalizer
 import com.newmark.mobile.data.ThemeStore
 import com.newmark.mobile.data.WorkspaceInfo
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
@@ -97,42 +98,49 @@ private fun parseIsoMs(iso: String): Long =
     runCatching { Instant.parse(iso).toEpochMilli() }.getOrDefault(0L)
 
 /** 桌面端 work run → 本地渲染结构（事件 durationMs 按相邻事件时间差计算） */
-private fun remoteRunToLocal(run: RemoteWorkRun): LocalWorkRun {
-    val times = run.events.map { parseIsoMs(it.timestamp) }
-    val events = run.events.mapIndexed { i, e ->
+internal fun remoteRunToLocal(run: RemoteWorkRun): LocalWorkRun {
+    val normalizedRun = RemotePayloadNormalizer.workRun(run)
+    // Gson can instantiate Kotlin DTOs without invoking their default-value
+    // constructors. A field omitted by an older desktop server is therefore a
+    // runtime null even when the source property is declared non-null. Normalize
+    // the complete remote boundary once before constructing strict local UI
+    // models; otherwise Release/R8 crashes one omitted field at a time.
+    val remoteEvents = normalizedRun.events.orEmpty()
+    val times = remoteEvents.map { parseIsoMs(it.timestamp.orEmpty()) }
+    val events = remoteEvents.mapIndexed { i, e ->
         LocalWorkEvent(
-            type = e.type,
-            id = e.id,
-            content = e.content,
-            mode = e.mode,
-            model = e.model,
-            toolCallId = e.toolCallId,
-            toolName = e.toolName,
-            toolArgs = e.toolArgs,
+            type = e.type.orEmpty(),
+            id = e.id.orEmpty(),
+            content = e.content.orEmpty(),
+            mode = e.mode.orEmpty(),
+            model = e.model.orEmpty(),
+            toolCallId = e.toolCallId.orEmpty(),
+            toolName = e.toolName.orEmpty(),
+            toolArgs = e.toolArgs.orEmpty(),
             timestamp = times[i],
-            timestampText = e.timestamp,
+            timestampText = e.timestamp.orEmpty(),
             sequence = e.sequence,
-            status = e.status,
-            clientMessageId = e.clientMessageId,
-            guideId = e.guideId,
+            status = e.status.orEmpty(),
+            clientMessageId = e.clientMessageId.orEmpty(),
+            guideId = e.guideId.orEmpty(),
             guide = e.guide?.let { guide ->
                 WorkGuide(
-                    clientMessageId = guide.clientMessageId,
-                    guideId = guide.guideId,
-                    runId = guide.runId,
-                    status = guide.status,
-                    content = guide.content,
-                    createdAt = guide.createdAt,
-                    updatedAt = guide.updatedAt,
-                    appliedAt = guide.appliedAt,
-                    reason = guide.reason,
-                    attachments = guide.attachments.map { attachment ->
+                    clientMessageId = guide.clientMessageId.orEmpty(),
+                    guideId = guide.guideId.orEmpty(),
+                    runId = guide.runId.orEmpty(),
+                    status = guide.status.orEmpty(),
+                    content = guide.content.orEmpty(),
+                    createdAt = guide.createdAt.orEmpty(),
+                    updatedAt = guide.updatedAt.orEmpty(),
+                    appliedAt = guide.appliedAt.orEmpty(),
+                    reason = guide.reason.orEmpty(),
+                    attachments = guide.attachments.orEmpty().map { attachment ->
                         WorkConversationImage(
-                            id = attachment.id,
-                            origin = attachment.origin,
-                            name = attachment.name,
-                            mimeType = attachment.mimeType,
-                            dataUrl = attachment.dataUrl,
+                            id = attachment.id.orEmpty(),
+                            origin = attachment.origin.orEmpty(),
+                            name = attachment.name.orEmpty(),
+                            mimeType = attachment.mimeType.orEmpty(),
+                            dataUrl = attachment.dataUrl.orEmpty(),
                             width = attachment.width,
                             height = attachment.height,
                         )
@@ -141,12 +149,12 @@ private fun remoteRunToLocal(run: RemoteWorkRun): LocalWorkRun {
             },
             displayImage = e.displayImage?.let { image ->
                 WorkDisplayImage(
-                    id = image.id,
-                    origin = image.origin,
-                    name = image.name,
-                    caption = image.caption,
-                    mimeType = image.mimeType,
-                    dataUrl = image.dataUrl,
+                    id = image.id.orEmpty(),
+                    origin = image.origin.orEmpty(),
+                    name = image.name.orEmpty(),
+                    caption = image.caption.orEmpty(),
+                    mimeType = image.mimeType.orEmpty(),
+                    dataUrl = image.dataUrl.orEmpty(),
                     width = image.width,
                     height = image.height,
                 )
@@ -154,34 +162,39 @@ private fun remoteRunToLocal(run: RemoteWorkRun): LocalWorkRun {
             durationMs = if (i + 1 < times.size) maxOf(0L, times[i + 1] - times[i]) else 0L,
         )
     }
-    val guideEvents = run.guides.mapIndexed { i, guide ->
+    val guideEvents = normalizedRun.guides.orEmpty().mapIndexed { i, guide ->
+        val guideStatus = guide.status.orEmpty()
+        val guideClientMessageId = guide.clientMessageId.orEmpty()
+        val guideId = guide.guideId.orEmpty()
+        val guideCreatedAt = guide.createdAt.orEmpty()
+        val guideUpdatedAt = guide.updatedAt.orEmpty()
         LocalWorkEvent(
-            type = "guide_${guide.status.ifBlank { "accepted" }}",
-            id = "guide:${guide.clientMessageId.ifBlank { guide.guideId }}",
-            content = guide.content,
-            timestamp = parseIsoMs(guide.updatedAt.ifBlank { guide.createdAt }),
-            timestampText = guide.updatedAt.ifBlank { guide.createdAt },
+            type = "guide_${guideStatus.ifBlank { "accepted" }}",
+            id = "guide:${guideClientMessageId.ifBlank { guideId }}",
+            content = guide.content.orEmpty(),
+            timestamp = parseIsoMs(guideUpdatedAt.ifBlank { guideCreatedAt }),
+            timestampText = guideUpdatedAt.ifBlank { guideCreatedAt },
             sequence = Long.MAX_VALUE / 2 + i,
-            status = guide.status,
-            clientMessageId = guide.clientMessageId,
-            guideId = guide.guideId,
+            status = guideStatus,
+            clientMessageId = guideClientMessageId,
+            guideId = guideId,
             guide = WorkGuide(
-                clientMessageId = guide.clientMessageId,
-                guideId = guide.guideId,
-                runId = guide.runId,
-                status = guide.status,
-                content = guide.content,
-                createdAt = guide.createdAt,
-                updatedAt = guide.updatedAt,
-                appliedAt = guide.appliedAt,
-                reason = guide.reason,
-                attachments = guide.attachments.map { attachment ->
+                clientMessageId = guideClientMessageId,
+                guideId = guideId,
+                runId = guide.runId.orEmpty(),
+                status = guideStatus,
+                content = guide.content.orEmpty(),
+                createdAt = guideCreatedAt,
+                updatedAt = guideUpdatedAt,
+                appliedAt = guide.appliedAt.orEmpty(),
+                reason = guide.reason.orEmpty(),
+                attachments = guide.attachments.orEmpty().map { attachment ->
                     WorkConversationImage(
-                        id = attachment.id,
-                        origin = attachment.origin,
-                        name = attachment.name,
-                        mimeType = attachment.mimeType,
-                        dataUrl = attachment.dataUrl,
+                        id = attachment.id.orEmpty(),
+                        origin = attachment.origin.orEmpty(),
+                        name = attachment.name.orEmpty(),
+                        mimeType = attachment.mimeType.orEmpty(),
+                        dataUrl = attachment.dataUrl.orEmpty(),
                         width = attachment.width,
                         height = attachment.height,
                     )
@@ -189,22 +202,28 @@ private fun remoteRunToLocal(run: RemoteWorkRun): LocalWorkRun {
             ),
         )
     }
-    val startedAt = parseIsoMs(run.startedAt)
-    val endedAt = if (run.endedAt.isNotBlank()) parseIsoMs(run.endedAt) else startedAt
+    val startedAtText = normalizedRun.startedAt.orEmpty()
+    val endedAtText = normalizedRun.endedAt.orEmpty()
+    val startedAt = parseIsoMs(startedAtText)
+    val endedAt = if (endedAtText.isNotBlank()) parseIsoMs(endedAtText) else startedAt
     return LocalWorkRun(
-        runId = run.runId,
-        status = run.status,
+        runId = normalizedRun.runId.orEmpty(),
+        status = normalizedRun.status.orEmpty(),
         startedAt = startedAt,
         endedAt = endedAt,
-        expanded = run.expanded,
+        expanded = normalizedRun.expanded,
         events = events + guideEvents,
-        text = run.events.lastOrNull { it.type == "response" || it.type == "final_response" }?.content ?: "",
-        anchorMessageId = run.anchorMessageId,
-        branchNodeId = run.branchNodeId,
+        text = remoteEvents.lastOrNull { it.type == "response" || it.type == "final_response" }?.content.orEmpty(),
+        anchorMessageId = normalizedRun.anchorMessageId.orEmpty(),
+        branchNodeId = normalizedRun.branchNodeId.orEmpty(),
     )
 }
 
 private enum class Screen { Main, Settings, MemoryLab, Terminal }
+
+/** Expanded-layout rail state is never inherited by the compact portrait drawer. */
+internal fun sidebarRailForLayout(isCompact: Boolean, expandedLayoutRail: Boolean): Boolean =
+    !isCompact && expandedLayoutRail
 
 /**
  * Compose binds one conversation command surface. Local/remote differences
@@ -224,6 +243,7 @@ private data class ConversationUiActions(
     val toggleQueuePause: () -> Unit,
     val updateQueueItem: (String, String) -> Unit,
     val deleteQueueItem: (String) -> Unit,
+    val reorderQueueItems: (List<String>) -> Unit,
     val guideQueueItem: (String) -> Unit,
     val inspectBranch: (String, Int) -> Unit,
     val editUserMessage: (Int, String) -> Unit,
@@ -454,6 +474,7 @@ private fun NewmarkAppContent(
         toggleQueuePause = linkVm::toggleRemoteQueuePause,
         updateQueueItem = linkVm::updateRemoteQueueMessage,
         deleteQueueItem = linkVm::deleteRemoteQueueMessage,
+        reorderQueueItems = linkVm::reorderRemoteQueueMessages,
         guideQueueItem = linkVm::guideRemoteQueueMessage,
         inspectBranch = linkVm::inspectRemoteBranch,
         editUserMessage = linkVm::branchRemoteMessage,
@@ -470,15 +491,16 @@ private fun NewmarkAppContent(
         toggleQueuePause = vm::toggleLocalQueuePause,
         updateQueueItem = vm::updateLocalQueueMessage,
         deleteQueueItem = vm::deleteLocalQueueMessage,
+        reorderQueueItems = vm::reorderLocalQueueMessages,
         guideQueueItem = vm::guideLocalQueueMessage,
         inspectBranch = vm::inspectBranch,
         editUserMessage = vm::branchFromUserMessage,
     )
     val queueItems = if (useRemote) {
         linkVm.editableRemoteQueue.takeIf { it.isNotEmpty() }
-            ?.map { QueueMessageUi(it.id, it.text, true) }
+            ?.map { QueueMessageUi(it.id, it.text, true, it.requestedMode, it.goalObjective) }
             ?: remoteUi.queued.followUp.mapIndexed { index, text -> QueueMessageUi("legacy:$index:$text", text, false) }
-    } else vm.currentQueue.map { QueueMessageUi(it.id, it.text, true) }
+    } else vm.currentQueue.map { QueueMessageUi(it.id, it.text, true, it.requestedMode, it.goalObjective) }
     val queuePaused = if (useRemote) linkVm.remoteQueuePaused else vm.currentQueuePaused
     LaunchedEffect(useRemote, linkVm.selectedConversationWorkspaceId, linkVm.selectedConversationId, linkVm.linkStatus) {
         while (useRemote && linkVm.linkStatus == LinkStatus.Connected &&
@@ -723,7 +745,7 @@ private fun NewmarkAppContent(
                 drawerState = drawerState,
                 drawerWidth = drawerWidth,
                 secondaryDrawer = sidebarPage is SidebarPage.WorkspaceConversations,
-                sidebar = { sidebar(sidebarPage, rail) },
+                sidebar = { sidebar(sidebarPage, sidebarRailForLayout(isCompact = true, expandedLayoutRail = rail)) },
                 gestureModifier = sidebarGestureModifier(),
                 surface = conversationSurface,
                 leftProgress = compactLeftSidebarProgress,
@@ -751,7 +773,9 @@ private fun NewmarkAppContent(
                 retainedWorkspace = retainedSecondaryWorkspace,
                 surface = conversationSurface,
                 gestureModifier = sidebarGestureModifier(),
-                primarySidebar = { page, railMode -> sidebar(page, railMode) },
+                primarySidebar = { page, railMode ->
+                    sidebar(page, sidebarRailForLayout(isCompact = false, expandedLayoutRail = railMode))
+                },
                 linkVm = linkVm,
                 localVm = vm,
                 browserSession = browserSession,
@@ -1015,6 +1039,7 @@ private fun ConversationSurfaceContent(
         onToggleQueuePause = surface.actions.toggleQueuePause,
         onUpdateQueueItem = surface.actions.updateQueueItem,
         onDeleteQueueItem = surface.actions.deleteQueueItem,
+        onReorderQueueItems = surface.actions.reorderQueueItems,
         onGuideQueueItem = surface.actions.guideQueueItem,
         onInspectBranch = surface.actions.inspectBranch,
         onEditUserMessage = surface.actions.editUserMessage,

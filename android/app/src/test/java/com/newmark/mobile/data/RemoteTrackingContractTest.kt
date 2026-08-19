@@ -29,6 +29,54 @@ class RemoteTrackingContractTest {
     }
 
     @Test
+    fun legacyHostedSnapshotNormalizesEveryOmittedRemoteStringBeforeStrictUiUse() {
+        val raw = Gson().fromJson(
+            """{
+              "goal":{},
+              "flowSelection":{},
+              "flow":{"running":true},
+              "queued":{"followUp":["legacy next"]},
+              "queueItems":[{"id":"next-1","text":"after this"}],
+              "runtime":{"running":true},
+              "chatMessages":[{"messageId":"message-live"}],
+              "workRuns":[{"runId":"run-live","events":[{"type":"tool_call"}],"guides":[{}]}]
+            }""".trimIndent(),
+            RemoteConversationUiState::class.java,
+        )
+
+        val parsed = RemotePayloadNormalizer.conversationUiState(raw)
+
+        assertTrue(parsed.goal?.objective.orEmpty().isEmpty())
+        assertTrue(parsed.flowSelection?.name.orEmpty().isEmpty())
+        assertTrue(parsed.flow?.promptText.orEmpty().isEmpty())
+        assertTrue(parsed.queued.followUp.single() == "legacy next")
+        assertTrue(parsed.queueItems.single().requestedMode == "build")
+        assertTrue(parsed.queueItems.single().goalObjective.isEmpty())
+        assertTrue(parsed.runtime?.runId.orEmpty().isEmpty())
+        assertTrue(parsed.chatMessages?.single()?.role == "assistant")
+        assertTrue(parsed.workRuns?.single()?.events?.single()?.toolCallId.orEmpty().isEmpty())
+        assertTrue(parsed.workRuns?.single()?.guides?.single()?.status == "accepted")
+
+        // These strict constructors reproduce the Release/R8 crash sites if a
+        // runtime null escaped the authenticated remote boundary.
+        val queue = parsed.queueItems.single()
+        LocalQueuedMessage(queue.id, queue.text, requestedMode = queue.requestedMode, goalObjective = queue.goalObjective)
+        val event = parsed.workRuns!!.single().events.single()
+        LocalWorkEvent(event.type, mode = event.mode, toolCallId = event.toolCallId, toolName = event.toolName)
+    }
+
+    @Test
+    fun legacyConversationWithoutRuntimeStatusRemainsSafeForReleaseNormalization() {
+        val parsed = Gson().fromJson(
+            """{"id":"chat-a","title":"legacy","active":true}""",
+            RemoteConversation::class.java,
+        )
+
+        assertTrue(parsed.runtimeStatus.orEmpty().isEmpty())
+        assertTrue(parsed.copy(running = false).runtimeStatus.orEmpty().isEmpty())
+    }
+
+    @Test
     fun targetMatchRequiresExactWorkspaceAndConversation() {
         assertTrue(RemoteTrackingContract.matchesTarget("ws-a", "chat-a", "ws-a", "chat-a"))
         assertFalse(RemoteTrackingContract.matchesTarget("ws-a", "chat-a", "ws-b", "chat-a"))

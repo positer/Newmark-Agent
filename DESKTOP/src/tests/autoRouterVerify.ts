@@ -434,6 +434,28 @@ export function verifyAutoRouter(): Check[] {
     && overBudget429[0].kind === 'equivalent_deployment'
     && overBudget429[1].kind === 'fallback_model',
   'auto retry budget: Retry-After is honored and an over-5s interactive wait is not performed', checks);
+  const ordinaryBackupPool = [
+    candidate('p', 'quota-primary', { reliability: 1, throughput: 100, latencyMs: 100 }),
+    candidate('p', 'ordinary-backup', { reliability: 0.8, throughput: 10, latencyMs: 2_000 }),
+  ];
+  const ordinaryBackupDecision = router.route(
+    { kind: 'auto', scope: { kind: 'provider', providerId: 'p' }, policyId: 'balanced' },
+    defaultRoutePolicy('balanced'), ordinaryBackupPool,
+    request({ transactionId: 'quota-alternate', affinityKey: 'quota-alternate' }),
+  );
+  const quotaFailure = classifyRouteFailure('HTTP 429 insufficient_quota: account credits exhausted');
+  const quotaLadder = router.planAttempts(ordinaryBackupDecision, ordinaryBackupPool, {
+    error: quotaFailure,
+    streamCommitted: false,
+    sideEffectCommitted: false,
+  });
+  assert(quotaFailure.type === 'balance_exhausted'
+    && quotaFailure.retryable === false
+    && quotaFailure.switchAllowed === true
+    && quotaLadder.length === 1
+    && quotaLadder[0].kind === 'alternate_model'
+    && quotaLadder[0].deployment.modelId === 'ordinary-backup',
+  'auto balance recovery: exhausted quota skips same-deployment retry and switches to an ordinary eligible model', checks);
   const batchDecision = router.route(
     { kind: 'auto', scope: { kind: 'provider', providerId: 'p' }, policyId: 'balanced' },
     defaultRoutePolicy('balanced'), fallbackPool,

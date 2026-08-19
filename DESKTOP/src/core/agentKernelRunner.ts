@@ -743,7 +743,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
             return;
           }
           const publicError = normalizePublicProviderError(error, [currentAgent.activeModelConfig()?.api_key]);
-          if (/\b402\b|insufficient balance|insufficient funds|payment required|余额不足/i.test(publicError)) {
+          if (/\b402\b|insufficient balance|insufficient funds|payment required|insufficient[_ -]?quota|quota (?:exceeded|exhausted)|credit(?:s| balance)? (?:exhausted|depleted)|billing hard limit|budget exhausted|余额不足|额度不足|配额(?:不足|耗尽|超限)/i.test(publicError)) {
             currentAgent.noteProviderBalanceFailure();
           }
           const final = assistantMessage(model, [{ type: 'text', text: `[Error] ${publicError}` }], 'error');

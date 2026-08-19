@@ -35,6 +35,15 @@ android {
             versionNameSuffix = "-stress"
             matchingFallbacks += listOf("debug")
         }
+        // Non-debuggable, fully optimized performance lane with an isolated
+        // package/data directory. Pairing is supplied through the public deep
+        // link and the whole package can be removed after benchmark runs.
+        create("benchmark") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".benchmark"
+            versionNameSuffix = "-benchmark"
+            matchingFallbacks += listOf("release")
+        }
     }
 
     compileOptions {

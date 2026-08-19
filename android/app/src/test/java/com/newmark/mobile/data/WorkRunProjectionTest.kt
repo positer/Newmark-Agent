@@ -82,6 +82,30 @@ class WorkRunProjectionTest {
         assertEquals("尚未完成的公开正文", narrative.content)
     }
 
+    @Test
+    fun insertsGuideAtItsWorkSequenceAndKeepsItVisibleWhenCollapsed() {
+        val events = listOf(
+            event(1, "thought", "先处理第一步"),
+            event(2, "guide_accepted", "请优先检查移动端", clientMessageId = "guide-1", status = "accepted"),
+            event(3, "tool_call", toolCallId = "read-1", toolName = "read"),
+            event(4, "tool_result", toolCallId = "read-1", toolName = "read"),
+            event(5, "guide_applied", "请优先检查移动端", clientMessageId = "guide-1", status = "applied"),
+            event(6, "response", "已按 Guide 继续"),
+        )
+
+        val expanded = WorkRunProjection.project(events, runStatus = "completed")
+        val guideIndex = expanded.indexOfFirst { it is WorkRunProjection.Item.Guide }
+        val responseIndex = expanded.indexOfFirst { it is WorkRunProjection.Item.Narrative }
+        assertTrue(guideIndex >= 0)
+        assertTrue(guideIndex < responseIndex)
+
+        val collapsed = WorkRunProjection.collapsedGuides(events, runStatus = "completed")
+        assertEquals(1, collapsed.size)
+        assertEquals("guide-1", collapsed.single().event.clientMessageId)
+        assertEquals("applied", collapsed.single().event.status)
+        assertEquals("请优先检查移动端", collapsed.single().event.content)
+    }
+
     private fun event(
         sequence: Long,
         type: String,

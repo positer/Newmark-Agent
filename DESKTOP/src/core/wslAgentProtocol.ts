@@ -1,5 +1,5 @@
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
-import { AgentPromptMessage, ConversationContextCompressOptions, ConversationKernelRunOptions, ConversationKernelRunResult, ConversationQueueAction, ConversationQueueMode, ConversationStopResult } from './conversationKernel';
+import { AgentPromptMessage, ConversationContextCompressOptions, ConversationKernelRunOptions, ConversationKernelRunResult, ConversationQueueAction, ConversationQueueActionInput, ConversationQueueMode, ConversationStopResult } from './conversationKernel';
 import { ConversationRuntimeTarget } from './conversationTarget';
 import { TerminalTakeoverEvent, TerminalTakeoverOwnerFilter, TerminalTakeoverState } from '../tools/terminalTakeover';
 import { BrowserUseRequest } from './browserUse';
@@ -68,7 +68,7 @@ export type WslAgentRequest =
   | { id: string; method: 'snapshot'; params: { conversationId?: string; target?: ConversationRuntimeTarget; workspace?: WslAgentWorkspace | null } }
   | { id: string; method: 'rewind'; params: { target: ConversationRuntimeTarget; messageIndex: number } }
   | { id: string; method: 'guide'; params: { target: ConversationRuntimeTarget; envelope: ConversationInputEnvelope } }
-  | { id: string; method: 'queue_action'; params: { target: ConversationRuntimeTarget; action: ConversationQueueAction; input?: { id?: string; text?: string; requestedMode?: string; goalObjective?: string; createdAt?: string } } }
+  | { id: string; method: 'queue_action'; params: { target: ConversationRuntimeTarget; action: ConversationQueueAction; input?: ConversationQueueActionInput } }
   | { id: string; method: 'checkpoint'; params: { target: ConversationRuntimeTarget } }
   | { id: string; method: 'context_compress'; params: { target: ConversationRuntimeTarget; options?: ConversationContextCompressOptions } }
   | { id: string; method: 'rate_auto_route'; params: { target: ConversationRuntimeTarget; score: number; routeId?: string } }

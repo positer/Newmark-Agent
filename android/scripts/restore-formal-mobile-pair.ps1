@@ -49,17 +49,26 @@ try {
     & $adb -s $Serial shell am force-stop $packageName | Out-Null
     Invoke-AmPairIntent $emulatorPairUri
 
-    $savedDeadline = (Get-Date).AddSeconds(15)
-    $saved = $false
-    do {
-        Start-Sleep -Milliseconds 250
-        & $adb -s $Serial shell run-as $packageName ls files/newmark/pairs.json *> $null
-        $saved = $LASTEXITCODE -eq 0
-    } while (-not $saved -and (Get-Date) -lt $savedDeadline)
-    if (-not $saved) { throw 'Formal mobile app did not persist the recovered desktop pairing' }
+    # A formal Release is intentionally non-debuggable, so `run-as` cannot be
+    # used as its persistence oracle.  Keep the private-file probe for a
+    # debuggable build, but use the desktop pairing session's successful exit
+    # as the authoritative confirmation for a Release build.
+    $packageDump = (& $adb -s $Serial shell dumpsys package $packageName | Out-String)
+    $debuggable = $packageDump -match '\bDEBUGGABLE\b'
+    $saved = -not $debuggable
+    if ($debuggable) {
+        $savedDeadline = (Get-Date).AddSeconds(15)
+        do {
+            Start-Sleep -Milliseconds 250
+            & $adb -s $Serial shell run-as $packageName ls files/newmark/pairs.json *> $null
+            $saved = $LASTEXITCODE -eq 0
+        } while (-not $saved -and (Get-Date) -lt $savedDeadline)
+    }
 
-    $pairProcess.WaitForExit(10000)
+    $null = $pairProcess.WaitForExit(10000)
     if (-not $pairProcess.HasExited) { throw 'Desktop pairing confirmation did not complete' }
+    if ($pairProcess.ExitCode -ne 0) { throw 'Desktop pairing confirmation failed' }
+    if (-not $saved) { throw 'Formal mobile app did not persist the recovered desktop pairing' }
     & $adb -s $Serial shell am start -n $component | Out-Null
     Start-Sleep -Seconds 2
     $appPid = (& $adb -s $Serial shell pidof $packageName).Trim()

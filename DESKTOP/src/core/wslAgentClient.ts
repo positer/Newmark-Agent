@@ -1,7 +1,7 @@
 import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import * as readline from 'readline';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
-import { ConversationQueueAction } from './conversationKernel';
+import { ConversationQueueAction, ConversationQueueActionInput } from './conversationKernel';
 import { TerminalTakeoverEvent, TerminalTakeoverOwnerFilter, TerminalTakeoverState } from '../tools/terminalTakeover';
 import {
   WslAgentPromptRequest,
@@ -311,7 +311,7 @@ export class WslAgentClient {
   async queueAction(
     target: ConversationRuntimeTarget,
     action: ConversationQueueAction,
-    input: { id?: string; text?: string; requestedMode?: string; goalObjective?: string; createdAt?: string } = {},
+    input: ConversationQueueActionInput = {},
   ): Promise<Record<string, unknown>> {
     await this.start();
     return await this.request('queue_action', { target: await this.mapTarget(target), action, input }, 5_000) as Record<string, unknown>;

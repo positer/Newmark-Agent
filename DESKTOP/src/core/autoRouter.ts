@@ -79,7 +79,7 @@ export interface RankedRouteCandidate {
 export type RouteAttemptStatus = 'planned' | 'success' | 'failed' | 'blocked';
 export interface RouteAttempt {
   deployment: DeploymentRef;
-  kind: 'initial' | 'retry_same_deployment' | 'equivalent_deployment' | 'fallback_model';
+  kind: 'initial' | 'retry_same_deployment' | 'equivalent_deployment' | 'fallback_model' | 'alternate_model';
   status: RouteAttemptStatus;
   errorType?: RouteFailureType;
   durationMs?: number;
@@ -271,8 +271,8 @@ export function classifyRouteFailure(error: unknown): RouteFailure {
   if (statusCode === 400 || /bad request|invalid parameter|invalid request/i.test(text)) {
     return { type: 'invalid_request', retryable: false, switchAllowed: false, statusCode };
   }
-  if (statusCode === 402 || /insufficient balance|insufficient funds|payment required|余额不足/i.test(text)) {
-    return { type: 'balance_exhausted', retryable: false, switchAllowed: false, statusCode: 402 };
+  if (statusCode === 402 || /insufficient balance|insufficient funds|payment required|insufficient[_ -]?quota|quota (?:exceeded|exhausted)|credit(?:s| balance)? (?:exhausted|depleted)|billing hard limit|budget exhausted|余额不足|额度不足|配额(?:不足|耗尽|超限)/i.test(text)) {
+    return { type: 'balance_exhausted', retryable: false, switchAllowed: true, statusCode: statusCode || 402 };
   }
   if (statusCode === 429 || /rate limit|too many requests/i.test(text)) {
     return { type: 'rate_limited', retryable: true, switchAllowed: true, statusCode: 429, retryAfterMs };
@@ -423,14 +423,14 @@ export class AutoRouter {
     failure: { error: RouteFailure; streamCommitted: boolean; sideEffectCommitted: boolean },
   ): PlannedRouteAttempt[] {
     const current = decision.resolvedDeployment;
-    if (!current || !failure.error.retryable || !failure.error.switchAllowed || failure.streamCommitted || failure.sideEffectCommitted) return [];
+    if (!current || !failure.error.switchAllowed || failure.streamCommitted || failure.sideEffectCommitted) return [];
     const remainingAttempts = Math.max(0, 3 - decision.attempts.length);
     if (!remainingAttempts) return [];
     const attempts: PlannedRouteAttempt[] = [];
     const retryDelayMs = failure.error.retryAfterMs ?? 250;
     const alreadyRetriedCurrent = decision.attempts.some(attempt => attempt.kind === 'retry_same_deployment'
       && sameDeployment(attempt.deployment, current));
-    if (!alreadyRetriedCurrent && retryDelayMs <= (decision.retryBudgetMs ?? 5_000)) {
+    if (failure.error.retryable && !alreadyRetriedCurrent && retryDelayMs <= (decision.retryBudgetMs ?? 5_000)) {
       attempts.push({
         deployment: { ...current },
         kind: 'retry_same_deployment',
@@ -460,11 +460,19 @@ export class AutoRouter {
       ? eligible.find(candidate => candidate.deployment.logicalModelGroupId === currentGroup && !candidate.fallbackOnly)
       : undefined;
     const fallback = eligible.find(candidate => candidate.fallbackOnly);
-    for (const next of [equivalent, fallback]) {
+    const rankedAlternates = decision.rankedCandidates
+      .map(ranked => eligible.find(candidate => sameDeployment(candidate.deployment, ranked.deployment)))
+      .filter((candidate): candidate is AutoRouteCandidate => !!candidate && candidate !== equivalent && candidate !== fallback && !candidate.fallbackOnly);
+    for (const candidate of eligible) {
+      if (candidate === equivalent || candidate === fallback || candidate.fallbackOnly
+        || rankedAlternates.some(existing => sameDeployment(existing.deployment, candidate.deployment))) continue;
+      rankedAlternates.push(candidate);
+    }
+    for (const next of [equivalent, fallback, ...rankedAlternates]) {
       if (!next || attempts.length >= 2) continue;
       attempts.push({
         deployment: { ...next.deployment },
-        kind: next === equivalent ? 'equivalent_deployment' : 'fallback_model',
+        kind: next === equivalent ? 'equivalent_deployment' : next === fallback ? 'fallback_model' : 'alternate_model',
         status: 'planned',
         errorType: failure.error.type,
         streamCommitted: false,
@@ -732,5 +740,5 @@ function percentile(values: number[], fraction: number): number | undefined {
 
 function failureFromType(type: RouteFailureType): RouteFailure {
   const retryable = type === 'timeout' || type === 'rate_limited' || type === 'transport' || type === 'server_error' || type === 'empty_response';
-  return { type, retryable, switchAllowed: retryable };
+  return { type, retryable, switchAllowed: retryable || type === 'balance_exhausted' };
 }

@@ -1362,7 +1362,9 @@ export class Agent {
 
   updateProviders(value: unknown): void {
     const before = this.config.providers();
-    this.config.set('models', 'providers', mergeProviderSecrets(value, before));
+    const merged = mergeProviderSecrets(value, before);
+    resetEditedModelValidationEvidence(merged, before);
+    this.config.set('models', 'providers', merged);
     const after = this.config.providers();
     const beforeById = new Map(before.map(provider => [provider.id, provider]));
     const afterById = new Map(after.map(provider => [provider.id, provider]));
@@ -3752,6 +3754,27 @@ export class Agent {
     existing.updatedAt = existing.updatedAt || new Date().toISOString();
     this.writeStoredConversationState(stored, targetWs);
     return true;
+  }
+
+  reorderConversationContinuations(orderedIds: string[]): ConversationContinuation[] {
+    const currentIds = this.continuations
+      .filter(item => item.queueMode === 'followUp' && !!item.clientMessageId)
+      .map(item => String(item.clientMessageId));
+    const completeOrder = orderedIds.length === currentIds.length
+      && new Set(orderedIds).size === orderedIds.length
+      && orderedIds.every(id => currentIds.includes(id));
+    if (!completeOrder) throw new Error('A complete queue order with unique current item ids is required');
+    const byId = new Map(this.continuations.flatMap(item =>
+      item.queueMode === 'followUp' && item.clientMessageId
+        ? [[String(item.clientMessageId), item] as const]
+        : []));
+    let nextIndex = 0;
+    this.continuations = this.continuations.map(item => {
+      if (item.queueMode !== 'followUp' || !item.clientMessageId) return item;
+      return byId.get(orderedIds[nextIndex++])!;
+    });
+    this.saveWorkspaceConversationState(true);
+    return this.conversationContinuations();
   }
 
   public renameConversation(id: string, title: string, ws: WorkspaceInfo | null = this.workspace.current): boolean {
@@ -6862,6 +6885,13 @@ export class Agent {
     const fallbackEnabled = this.config.getBool('models', 'fallback_on_unavailable');
     const observedFailure = classifyRouteFailure(errorText);
     const observedDeployment = this.activeDeployment();
+    // Keep balance exhaustion scoped to the deployment that actually failed.
+    // Provider adapters normally record this before returning an error, but
+    // fallback callers are also a public recovery boundary and must not rely
+    // on every adapter/error path having performed that side effect first.
+    if (observedFailure.type === 'balance_exhausted' && observedDeployment) {
+      this.providerBalanceBlockedUntilByDeployment.set(deploymentIdentity(observedDeployment), Date.now() + 5 * 60_000);
+    }
     const previousAttempt = observedDeployment && this.lastRouteDecision
       ? [...this.lastRouteDecision.attempts].reverse().find(attempt => deploymentIdentity(attempt.deployment) === deploymentIdentity(observedDeployment))
       : undefined;
@@ -6919,14 +6949,13 @@ export class Agent {
       return current.modelId;
     }
     if (!fallbackEnabled) return null;
-    if (!observedFailure.retryable || !observedFailure.switchAllowed || this.routeStreamCommitted || this.routeSideEffectCommitted) return null;
+    if (!observedFailure.switchAllowed || this.routeStreamCommitted || this.routeSideEffectCommitted) return null;
     const current = this.model;
-    const all = this.scopedSwitchModels(current).filter(m => m.name !== current);
+    const currentDeployment = observedDeployment;
+    const all = this.scopedSwitchModels(current).filter(m => !currentDeployment
+      || deploymentIdentity(this.deploymentRef(m)) !== deploymentIdentity(currentDeployment));
     if (!all.length) return null;
-    const usable = all.filter(m => {
-      const status = String(m.evaluation?.status || 'unknown').toLowerCase();
-      return status !== 'unavailable' && !status.startsWith('error');
-    });
+    const usable = all.filter(m => !this.isBalanceBlockedDeployment(this.deploymentRef(m)) && !modelConfigIsUnavailable(m));
     if (!usable.length) return null;
     const pref = this.config.autoSwitchPreference();
     const ranked = [...usable].sort((a, b) => this.modelScore(b, pref, false, false) - this.modelScore(a, pref, false, false));
@@ -7676,7 +7705,7 @@ export class Agent {
         throw e;
       }
       const msg = e instanceof Error ? e.message : String(e);
-      if (/\b402\b|insufficient balance|insufficient funds|payment required|余额不足/i.test(msg)) {
+      if (/\b402\b|insufficient balance|insufficient funds|payment required|insufficient[_ -]?quota|quota (?:exceeded|exhausted)|credit(?:s| balance)? (?:exhausted|depleted)|billing hard limit|budget exhausted|余额不足|额度不足|配额(?:不足|耗尽|超限)/i.test(msg)) {
         this.noteProviderBalanceFailure();
       }
       this.status = 'error';
@@ -9746,10 +9775,74 @@ function routeProviderFingerprint(provider: ReturnType<ConfigManager['providers'
     enabled: provider.enabled,
     models: (provider.models || []).map(model => ({
       name: model.name,
+      display: model.display,
+      description: model.description,
+      maxTokens: model.max_tokens,
+      vision: model.vision,
+      thinking: !!model.thinking,
+      imageOutput: !!model.image_output,
       enabled: model.enabled !== false,
+      preview: !!model.preview,
       logicalModelGroupId: model.logical_model_group_id || '',
+      privacy: model.privacy || [],
+      capabilities: model.capabilities || [],
+      supportedParameters: model.supported_parameters || [],
+      routePreference: model.route_preference,
+      fallbackOnly: !!model.fallback_only,
+      thinkingTierMap: model.thinking_tier_map || {},
     })),
   });
+}
+
+function modelConfigurationFingerprint(model: Record<string, unknown>): string {
+  const { validation, evaluation, _previous_name, previous_name, ...configuration } = model;
+  void validation;
+  void evaluation;
+  void _previous_name;
+  void previous_name;
+  return JSON.stringify(configuration);
+}
+
+function resetEditedModelValidationEvidence(incomingProviders: unknown[], existingProviders: ReturnType<ConfigManager['providers']>): void {
+  const existingById = new Map(existingProviders.map(provider => [provider.id, provider]));
+  const existingByName = new Map(existingProviders.map(provider => [provider.name, provider]));
+  for (const rawProvider of incomingProviders) {
+    if (!rawProvider || typeof rawProvider !== 'object' || Array.isArray(rawProvider)) continue;
+    const provider = rawProvider as Record<string, unknown>;
+    const previousProvider = existingById.get(String(provider.id || ''))
+      || existingByName.get(String(provider._previous_name || provider.previous_name || provider.name || ''));
+    const models = Array.isArray(provider.models) ? provider.models : [];
+    // Endpoint/protocol edits invalidate capability evidence. A display-name
+    // change or credential rotation only resets runtime health/circuits via the
+    // provider fingerprint and must not discard still-valid model capabilities.
+    const providerConnectionChanged = !!previousProvider && (
+      String(provider.base_url || provider.endpoint || '') !== previousProvider.base_url
+      || String(provider.protocol || '') !== previousProvider.protocol
+    );
+    for (const rawModel of models) {
+      if (!rawModel || typeof rawModel !== 'object' || Array.isArray(rawModel)) continue;
+      const model = rawModel as Record<string, unknown>;
+      const previousName = String(model._previous_name || model.previous_name || model.name || '');
+      const previousModel = previousProvider?.models.find(candidate => candidate.name === previousName);
+      const edited = providerConnectionChanged || (!!previousModel
+        && modelConfigurationFingerprint(model) !== modelConfigurationFingerprint(previousModel as unknown as Record<string, unknown>));
+      delete model._previous_name;
+      delete model.previous_name;
+      if (!edited) continue;
+      model.validation = { level: 'discovered', status: 'degraded', checked_at: '', capabilities: {} };
+      delete model.evaluation;
+      model.speed_rating = 'unknown';
+      model.capability_rating = 'unknown';
+    }
+  }
+}
+
+function modelConfigIsUnavailable(model: ModelConfig): boolean {
+  const validationStatus = effectiveModelValidationStatus(model);
+  if (model.validation?.level !== 'discovered'
+    && (validationStatus === 'unavailable' || validationStatus === 'auth_error' || validationStatus === 'invalid_config')) return true;
+  const evaluationStatus = validationStatus === 'degraded' ? 'degraded' : String(model.evaluation?.status || '').toLowerCase();
+  return evaluationStatus === 'unavailable' || evaluationStatus.startsWith('error');
 }
 
 function parseDeploymentSelectionValue(value: string): DeploymentRef | null {
@@ -9769,13 +9862,13 @@ function parseDeploymentSelectionValue(value: string): DeploymentRef | null {
 function effectiveModelValidationStatus(model: ModelConfig): ModelValidationSummary['status'] {
   const raw = String(model.validation?.status || '').toLowerCase();
   if (raw === 'auth_error') return raw;
+  if (String(model.validation?.level || '').toLowerCase() === 'discovered') return 'degraded';
   const textEvidence = model.validation?.capabilities?.text === true
     || model.validation?.capabilities?.text_input === true
     || model.validation?.capabilities?.text_output === true
     || model.evaluation?.text_input === true
     || model.evaluation?.text_output === true;
   if (textEvidence && raw === 'unavailable') return 'degraded';
-  if (!raw && String(model.validation?.level || '').toLowerCase() === 'discovered') return 'degraded';
   return (['verified', 'degraded', 'unavailable', 'auth_error', 'rate_limited', 'invalid_config'].includes(raw)
     ? raw
     : 'unavailable') as ModelValidationSummary['status'];

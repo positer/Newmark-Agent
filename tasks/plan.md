@@ -1,10 +1,60 @@
 # Newmark Agent dev-0.3.13 全场景交叉黑盒压力测试计划
 
+## 2026-08-19 运行连续性续压
+
+- [x] 300 事件、90 轮 UI、Goal/Flow/Queue/Build/stale-event 综合门禁
+- [x] 修复多次 UI dump 耗尽 live Build 的压力脚本竞态并重放
+- [x] 本地 Queue/Guide/编辑/删除/17 工具/强停重启连续性
+- [x] 远端运行中服务重启 3 轮，恢复后继续接收 PC 新 Build
+- [x] 移动/PC 交替发送、Flow 暂停/保持/继续、普通 Build 停止
+- [x] 外部 workspace/conversation/runtime 事件注入隔离
+- [x] Desktop build、Android unit/Release/R8/lint、保数据安装与正式前台收尾
+- [ ] 自动化运行中切换可见 workspace/conversation，再返回原目标验证无串线/丢状态
+
+## 2026-08-19 远程触及启动与运行稳定性
+
+- [x] 源码 hosted server 10 次启停、可达与端口释放
+- [x] 安装包 5 轮 GUI + 5 轮 TUI 冷启动/退出、SSE、网络可达和 3,600 次并发读取
+- [x] 定位并修复 SSE 断线后设备状态仍显示“已连接”
+- [x] 正式包 5 次运行中 PC 服务重启，验证同一移动 PID 恢复与状态转换
+- [x] 正式包 3 次移动先启动、PC 后启动的异步重连
+- [x] Android unit/Release/R8/lint、10 文件保数据安装、前台与资源收尾
+- [x] 按用户放宽门禁：无卡死/ANR/FATAL/OOM/进程死亡或明显瞬时高压；jank 仅记录不再硬卡
+
+## 2026-08-19 移动端 Guide 用户时间线
+
+- [x] 对照 PC `renderWorkRunGuideMessage`、展开/折叠 WorkRun 行为和右侧节点几何
+- [x] 将 Guide 从 Build 左轨事件改为右侧用户输入时间线消息
+- [x] 展开态按 sequence 原位插入；折叠态仅保留 Guide 可见
+- [x] 保持生命周期升级去重、状态、时间、正文、附件和复制
+- [x] 补本地投影与远端 `RemoteWorkGuide` 转换回归
+- [x] Android 单测、Release/R8/lint、保数据安装和 60 次折叠/展开压力
+
+## 2026-08-19 二级复合弹窗回归止线
+
+- [x] 对照 PC `model-menu-in` 与已验收录像定位动画消失/纵向拉伸根因
+- [x] 恢复一级↔二级同壳变形：220ms SizeTransform + 内容淡入淡出；不得替换为二级独立弹入
+- [x] 保持 190dp 紧凑宽度、320dp 最大高度及模型目录内部滚动
+- [x] 修复 Release/R8 旧远端事件缺省字段导致的 `LocalWorkEvent` NPE
+- [x] Android 单测、Release/R8、保数据安装、前台与 FATAL/ANR 门禁
+
+## 2026-08-19 mobile stale-run and latest animation gates
+
+- [x] Add a pure contract rejecting delayed non-terminal events for completed remote runs.
+- [x] Preserve resident-runtime recovery for an exact still-running run identity.
+- [x] Inject a delayed event after an 800-event real SSE run and prove the Build does not reopen.
+- [x] Verify Build, Goal, Flow prompt/takeover, Queue, duplicate handling, and remote queue mutation together.
+- [x] Isolate the latest first-level input-menu entrance/exit performance on the formal Release package.
+- [x] Pass five complete-interaction launches under 4,000 ms.
+- [ ] Run a formal Release queue expand/collapse animation-only window without `uiautomator` inside the sample.
+- [ ] Run independent true-cold/first-boot startup trials before making any universal ≤1,000 ms cold-start claim.
+
 ## 2026-08-19 mobile input composite menu entrance
 
 - [x] Reproduce the visually instant first-level Mode/File and Model/Intelligence popup.
 - [x] Replace the implicit always-visible transition with a button-centred explicit progress animation.
 - [x] Retain the expanded surface during dismissal and remove it only after an independent alpha-only fade.
+- [x] Restore secondary-page entrance timing and keep every level at the same compact 190 dp width with internal scrolling.
 - [x] Preserve the small popup geometry, 6 dp input anchor, scrolling, and secondary-page behavior.
 - [x] Run Android unit tests and complete Release assembly.
 - [x] Install to `emulator-5554` through the data-preserving update guard and capture device evidence.
@@ -425,3 +475,17 @@
 4. Completed: force-stop/restart continuity and data identity verification.
 5. Completed: deterministic desktop server termination/restart and automatic SSE recovery without reopening the conversation.
 6. Pending: alternating PC/mobile sends, pause/resume/stop, active-run conversation switching, and multi-workspace stale-event rejection runtime fixture.
+# 2026-08-19 mobile transcript bottom reserve
+
+1. Completed: add ten body lines of real scrollable content after the transcript.
+2. Completed: retain existing latest-message auto-follow and preserve Queue/Goal/Flow overlay structure.
+3. Completed: pass unit/Release/R8/lint gates and install the formal APK with the private-data guard.
+4. Completed: verify the 190dp reserve on the portrait emulator.
+# 2026-08-19 移动 Queue 拖动排序动画
+
+1. Completed: 对照 PC Queue drag 样式，定位移动端边拖边改列表造成的跳位与回弹。
+2. Completed: 改为连续跟手、相邻行占位让位、松手一次提交、取消不提交。
+3. Completed: 单元契约、Benchmark 实机 20 次远端权威重排、Release/R8/lint 和保数据安装。
+4. In progress: 继续独立优化 Queue 展开/折叠 observer-free jank；无效的固定根高度和额外图层缓存方案已撤销。
+5. Completed: 800 事件远端 Goal/Flow/Queue 实时故障注入、重复事件与终态 stale running 防复活门禁。
+6. Pending: 继续本地 Queue/Guide/重启/出队长压。

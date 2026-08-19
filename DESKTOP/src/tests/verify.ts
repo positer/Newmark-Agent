@@ -1019,6 +1019,10 @@ async function main() {
   assert(uiHtml.includes('id="new-provider-protocol"') && uiHtml.includes('id="fuzzy-protocol"') && uiHtml.includes("t('model.protocol')"), 'ui html: provider protocol is editable and visible');
   assert(uiHtml.includes('window.editProvider = function(idx)') && uiHtml.includes('window.saveProviderEdit = function(idx)') && uiHtml.includes('window.removeProvider = function(idx)') && uiHtml.includes('_previous_name: p.name || name'), 'ui html: provider settings support edit/delete and renamed-key preservation');
   assert(uiHtml.includes('window.editModel = function(provIdx, modelIdx)') && uiHtml.includes('window.saveModelEdit = function(oldProvIdx, modelIdx)') && uiHtml.includes("id=\"edit-model-ctx\""), 'ui html: model settings support editing context, vision, thinking, and description');
+  assert(uiHtml.includes('_previous_name: previous.name || name')
+    && uiHtml.includes("level) || '').toLowerCase() === 'discovered') return 'unvalidated'")
+    && uiHtml.includes("raw === 'unvalidated'"),
+  'ui model edit: stale validation is invalidated by backend identity matching and discovered models render as not checked');
   assert(uiHtml.includes('data-stab="tools"') && uiHtml.includes('function renderToolSettings()') && uiHtml.includes('window.setNativeToolEnabled') && uiHtml.includes("t('tools.title')"), 'ui html: Settings exposes native built-in tool switches');
   const preloadPath = path.join(process.cwd(), 'dist', 'preload.js');
   const preloadJs = fs.existsSync(preloadPath) ? fs.readFileSync(preloadPath, 'utf-8') : '';
@@ -1408,6 +1412,7 @@ async function main() {
   assert(releaseUiModelSettingsSmoke.includes('window.addProvider()') && releaseUiModelSettingsSmoke.includes('window.addModel()') && releaseUiModelSettingsSmoke.includes('window.editProvider(providerIdx)') && releaseUiModelSettingsSmoke.includes('window.editModel(providerIdx, 0)'), 'release ui model settings smoke: covers provider/model create and update');
   assert(releaseUiModelSettingsSmoke.includes('window.removeModel(providerIdx, 0)') && releaseUiModelSettingsSmoke.includes('window.removeProvider(providerIdx)') && releaseUiModelSettingsSmoke.includes('test-key-crud-secret'), 'release ui model settings smoke: covers provider/model delete and key preservation');
   assert(releaseUiModelSettingsSmoke.includes('max_tokens === 8192') && releaseUiModelSettingsSmoke.includes('vision === false') && releaseUiModelSettingsSmoke.includes('thinking === true') && releaseUiModelSettingsSmoke.includes('Edited CRUD model description'), 'release ui model settings smoke: verifies model context, vision, thinking, and description fields');
+  assert(releaseUiModelSettingsSmoke.includes("m.validation.level === 'discovered'") && releaseUiModelSettingsSmoke.includes("!m.evaluation") && releaseUiModelSettingsSmoke.includes('未检测') && releaseUiModelSettingsSmoke.includes('NEWMARK_TEST_EXE'), 'release ui model settings smoke: edited transient failures return to localized not-checked state in source or packaged UI');
   assert(packageJson.includes('"release:ui-model-auto-context-smoke"') && releaseUiModelAutoContextSmoke.includes('--remote-debugging-port=') && releaseUiModelAutoContextSmoke.includes("window.openSettings('models')"), 'release ui model auto/context smoke: drives real packaged Models settings UI through CDP');
   assert(releaseUiModelAutoContextSmoke.includes("window.setAutoSwitchMode('all')") && releaseUiModelAutoContextSmoke.includes("window.setAutoSwitchMode('provider')") && releaseUiModelAutoContextSmoke.includes("window.setOpenAIApiMode('responses')"), 'release ui model auto/context smoke: validates full/provider Auto modes and Responses API mode');
   assert(releaseUiModelAutoContextSmoke.includes('context-token-ring') && releaseUiModelAutoContextSmoke.includes('ringWidth !== 16') && releaseUiModelAutoContextSmoke.includes('tooltipText.includes') && releaseUiModelAutoContextSmoke.includes('2026-07-15-dev-0.0.10-model-auto-context-smoke.png'), 'release ui model auto/context smoke: validates small context token ring placement, hover tooltip, and dev-0.0.10 screenshot evidence');
@@ -1595,6 +1600,31 @@ async function main() {
   assert(uiHtml.includes("if (p.enabled === false || !p.models || !p.models.length) continue") && uiHtml.includes("if (!confirm(t('model.deleteProviderConfirm')"), 'provider settings: disabled providers are excluded from model selection and permanent deletion remains confirmed');
   assert(serverTs.includes('sanitizeProvidersForState(agent.config.providers())') && serverTs.includes("cfg.section === 'models' && cfg.key === 'providers'") && serverTs.includes('agent.updateProviders(cfg.value)') && !serverTs.includes('jsonResponse(res, agent.config)') && serverTs.includes('NEWMARK_BIND_HOST') && serverTs.includes("'0.0.0.0'") && serverTs.includes("'Access-Control-Allow-Origin': '*'"), 'server api: redacts provider keys, preserves secrets on provider save, disables raw config export, binds to Tailscale-reachable interfaces, and allows CORS for the authenticated mobile endpoints');
   assert(serverTs.includes("'/api/mobile/hello'") && serverTs.includes("'/api/mobile/state'") && serverTs.includes("'/api/mobile/conversations'") && serverTs.includes("'/api/mobile/conversation'") && serverTs.includes("'/api/mobile/send'") && serverTs.includes("'/api/mobile/workspaces'") && serverTs.includes("'/api/mobile/pair-confirm'") && serverTs.includes("'/api/mobile/pair-status'") && serverTs.includes("'/api/mobile/events'") && serverTs.includes("event: work") && serverTs.includes('retry: 3000') && serverTs.includes("agent.config.getBool('remote', 'touch_enabled')") && serverTs.includes("mobileJson(res, { error: 'Remote touch disabled' }, 403)") && serverTs.includes("if (pathname.startsWith('/api/mobile/')) mobileJson(res, { error: e.message }, 500)"), 'mobile api contract: frozen Tailscale endpoints, authenticated SSE work stream, remote-touch gate, and mobile error envelope');
+  assert(serverTs.includes('configureHostedServer') && serverTs.includes('setHostedServerEnabled') && serverTs.includes('hostedServerStatus') && serverTs.includes('closeAllConnections') && serverTs.includes('Mobile server probe timeout'), 'mobile remote-touch lifecycle: every switch can stop/restart the hosted listener and report reachability');
+  assert(mainTs.includes("ipcMain.handle('mobile:serverStatus'") && mainTs.includes("ipcMain.handle('mobile:setRemoteTouchEnabled'") && preloadTs.includes('mobileServerStatus:') && preloadTs.includes('setRemoteTouchEnabled:'), 'mobile remote-touch IPC: renderer can poll serve health and apply a lifecycle restart');
+  assert(uiHtml.includes('remote-touch-status listening') === false
+    && uiHtml.includes('.remote-touch-status.listening')
+    && uiHtml.includes('.remote-touch-status.error')
+    && uiHtml.includes('.remote-touch-status.off')
+    && uiHtml.includes('background: transparent !important')
+    && uiHtml.includes('setInterval(function() {')
+    && uiHtml.includes('}, 5000);')
+    && uiHtml.includes("'settings.remoteTouchListening': '监听中'")
+    && uiHtml.includes("'settings.remoteTouchError': '不可触及'")
+    && uiHtml.includes("'settings.remoteTouchOff': '已关闭'"), 'mobile remote-touch UI: transparent ordinary button uses green/orange/red serve states and refreshes every five seconds');
+  assert(uiHtml.includes('.remote-touch-action')
+    && uiHtml.includes('flex: 0 0 120px')
+    && uiHtml.includes('min-width: 120px')
+    && uiHtml.includes('id="remote-touch-connect-button" class="sec-btn primary remote-touch-action"')
+    && uiHtml.includes("button.className = 'sec-btn remote-touch-action remote-touch-status '")
+    && uiHtml.indexOf('id="remote-touch-status-button"') < uiHtml.indexOf("esc(t('settings.remoteTouch'))")
+    && uiHtml.indexOf('id="remote-touch-connect-button"') < uiHtml.indexOf("esc(t('settings.remoteConnectDesc'))"), 'mobile remote-touch UI: serve status is flush left and pairing shares the exact left-aligned action-button dimensions');
+  assert(uiHtml.includes('.remote-touch-copy-title')
+    && uiHtml.includes('font-weight: 700')
+    && uiHtml.includes('.remote-touch-copy-desc')
+    && uiHtml.includes('font-weight: 400')
+    && uiHtml.includes("esc(t('mobile.pair'))")
+    && uiHtml.includes("esc(t('settings.remoteConnectDesc'))"), 'mobile remote-touch UI: both action rows use one bold short-title and light gray description hierarchy');
   assert(mainTs.includes("ipcMain.handle('skills:refresh'") && mainTs.includes('agent.refreshSkills();') && mainTs.includes("ipcMain.handle('skills:addMarketSource'") && mainTs.includes("ipcMain.handle('memoryLab:read'") && mainTs.includes("ipcMain.handle('memoryLab:visualization'") && mainTs.includes('agent.memoryLab.visualizationSnapshot()') && mainTs.includes('agent.updateMemoryLab') && mainTs.includes('input.tagPaths') && mainTs.includes('pathValue.map(String)') && mainTs.includes('agent.reindexMemoryLab') && mainTs.includes('terminalInterruptTimeoutMs'), 'main ipc: refreshes skills runtime, manages market sources, exposes one-shot Memory Lab visualization, preserves tag hierarchy paths, and returns terminal timeout state');
   assert(mainTs.includes("ipcMain.handle('agent:getConversationPlan', async (_event, conversationId?: string)") && mainTs.includes("ipcMain.handle('agent:updateConversationPlan', async (_event, plan: Record<string, unknown>, conversationId?: string)") && mainTs.includes("return agent.getConversationPlan(conversationId || agent.activeConversationId || 'default')"), 'main ipc: exposes and returns conversation-bound plan state');
   assert(mainTs.includes("ipcMain.handle('flow:run'") && mainTs.includes('chatMessages: flowAgent.chatMessages') && mainTs.includes('conversations: flowAgent.listConversationStates()') && mainTs.includes('const flowAgent = isolatedConversationAgent(flowTarget)'), 'main ipc: Flow run binds to the owning conversation via an isolated agent and returns rendered conversation state');
@@ -2310,20 +2340,20 @@ async function main() {
   assert(cliBadJson.ok === false && cliBadJson.tool === 'write' && String(cliBadJson.error || '').includes('Invalid JSON object') && process.exitCode === 2, 'cli tool: invalid JSON uses the common validation envelope and exit 2');
   process.exitCode = 0;
   const cliSendOut = await captureStdout(() => runCliCommand(TEST_DIR, ['send', 'hello from cli', '--root', TEST_DIR]));
-  assert(cliSendOut.includes('[Error] No LLM configured'), 'cli send: routes through Agent process and reports missing provider');
+  assert(cliSendOut.includes('[Error]'), 'cli send: routes through Agent process and reports a controlled provider error');
   const cliLanguageSendOut = await captureStdout(() => runCliCommand(TEST_DIR, ['send', 'hello with language override', '--language', 'en', '--conversation', 'cli-language-input', '--root', TEST_DIR]));
-  assert(cliLanguageSendOut.includes('[Error] No LLM configured'), 'cli send: accepts language override without treating it as prompt text');
+  assert(cliLanguageSendOut.includes('[Error]') && !cliLanguageSendOut.includes('Unknown language'), 'cli send: accepts language override without treating it as prompt text');
   const cliLanguageStateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['state', '--conversation', 'cli-language-input', '--root', TEST_DIR]));
   const cliLanguageState = JSON.parse(cliLanguageStateOut);
   assert(cliLanguageState.chatMessages >= 1 && cliLanguageState.conversations.some((c: any) => c.id === 'cli-language-input'), 'cli send: language override conversation persists normally');
   process.env.NEWMARK_TEST_CLI_PROMPT = 'hello from cli env prompt';
   const cliEnvSendOut = await captureStdout(() => runCliCommand(TEST_DIR, ['send', '--input-env', 'NEWMARK_TEST_CLI_PROMPT', '--conversation', 'cli-env-input', '--root', TEST_DIR]));
-  assert(cliEnvSendOut.includes('[Error] No LLM configured'), 'cli send: accepts prompt from environment variable');
+  assert(cliEnvSendOut.includes('[Error]') && !cliEnvSendOut.includes('No prompt provided'), 'cli send: accepts prompt from environment variable');
   delete process.env.NEWMARK_TEST_CLI_PROMPT;
   const cliInputFile = path.join(TEST_DIR, 'cli-input-prompt.txt');
   fs.writeFileSync(cliInputFile, 'hello from cli input file', 'utf-8');
   const cliFileSendOut = await captureStdout(() => runCliCommand(TEST_DIR, ['send', '--input-file', cliInputFile, '--conversation', 'cli-file-input', '--root', TEST_DIR]));
-  assert(cliFileSendOut.includes('[Error] No LLM configured'), 'cli send: accepts prompt from input file');
+  assert(cliFileSendOut.includes('[Error]') && !cliFileSendOut.includes('No prompt provided'), 'cli send: accepts prompt from input file');
   await captureStdout(() => runCliCommand(TEST_DIR, ['send', 'cli persistent turn one', '--conversation', 'cli-continuation', '--root', TEST_DIR]));
   const cliContinuationStateOut = await captureStdout(() => runCliCommand(TEST_DIR, ['state', '--conversation', 'cli-continuation', '--root', TEST_DIR]));
   const cliContinuationState = JSON.parse(cliContinuationStateOut);

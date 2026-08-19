@@ -189,6 +189,16 @@ function Wait-ForMockQueueAction {
     throw 'Remote fixture queue mutation was not received by the mock server'
 }
 
+function Wait-ForMockBurstCompletion {
+    $deadline = (Get-Date).AddSeconds(120)
+    do {
+        $stats = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 2
+        if ($stats.activeBursts -eq 0 -and $stats.completedBursts -ge 1) { return $stats }
+        Start-Sleep -Milliseconds 200
+    } while ((Get-Date) -lt $deadline)
+    throw 'Remote fixture run did not reach its terminal boundary'
+}
+
 try {
     # `-notmatch` applied to an array returns all non-matching rows (including
     # the adb header), which made a connected device look offline. Inspect the
@@ -247,11 +257,23 @@ try {
     # SSE burst includes deliberate duplicate start/text/done messages.
     Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/burst?count=$BurstCount" -TimeoutSec 20 | Out-Null
     Wait-ForUiNode -Find { Get-UiNodeByText '处理中' } -Label '远端运行中 Build' -TimeoutMs 5000 | Out-Null
-    Wait-ForUiNode -Find { Get-UiNodeContainingText 'Stress Goal' } -Label 'Goal Bar' -TimeoutMs 5000 | Out-Null
-    Wait-ForUiNode -Find { Get-UiNodeContainingText 'Flow prompt remains visible' } -Label 'Flow Prompt Bar' -TimeoutMs 5000 | Out-Null
-    Wait-ForUiNode -Find { Get-UiNodeContainingText '当前对话正由 Flow 接管' } -Label 'Flow 接管通知' -TimeoutMs 5000 | Out-Null
-    Wait-ForUiNode -Find { Get-UiNodeByText 'Next 2' } -Label '远端权威队列' -TimeoutMs 5000 | Out-Null
+    # One hierarchy snapshot must prove the complete resident state.  Taking
+    # four additional independent uiautomator dumps can consume the complete
+    # 24-second 300-event run and accidentally turn the following queue test
+    # into an idle-send test.
     $runningXml = Get-UiXml
+    if (@($runningXml.SelectNodes("//*[contains(@text,'Stress Goal')]")).Count -eq 0) {
+        throw 'Goal Bar was not present in the live resident snapshot'
+    }
+    if (@($runningXml.SelectNodes("//*[contains(@text,'Flow prompt remains visible')]")).Count -eq 0) {
+        throw 'Flow Prompt Bar was not present in the live resident snapshot'
+    }
+    if (@($runningXml.SelectNodes("//*[contains(@text,'当前对话正由 Flow 接管')]")).Count -eq 0) {
+        throw 'Flow takeover notice was not present in the live resident snapshot'
+    }
+    if (@($runningXml.SelectNodes("//*[@text='Next 2']")).Count -eq 0) {
+        throw 'Authoritative remote queue was not present in the live resident snapshot'
+    }
     if (@($runningXml.SelectNodes("//*[@text='已停止']")).Count -gt 0) {
         throw 'Resident running Build was rendered as 已停止 during the live pressure window'
     }
@@ -261,8 +283,9 @@ try {
     $result.gates.flowTakeoverVisible = $true
     $result.gates.queueVisible = $true
 
-    # Remote send and high-frequency menu/open-close work stress the Compose
-    # input, popup, gesture and event paths without any external provider.
+    # Enqueue immediately after the single live-state snapshot so this always
+    # exercises the running PC queue contract rather than racing the terminal
+    # boundary.  The later UI loops stress popup/gesture paths separately.
     Assert-AppForeground 'SSE burst'
     $input = Wait-ForUiNode -Find ${function:Get-UiEditText} -Label 'chat input'
     Invoke-UiTapNode -Node $input -Label 'chat input'
@@ -294,7 +317,20 @@ try {
             Invoke-Adb @('shell', 'input', 'swipe', '530', '700', '530', '1800', '140')
         }
     }
-    Start-Sleep -Seconds 2
+    Wait-ForMockBurstCompletion | Out-Null
+    # Allow the resident UI poll to commit the terminal runtime/workRuns
+    # snapshot before injecting an older non-terminal event for the same run.
+    Start-Sleep -Milliseconds 1500
+    Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/inject-stale" -TimeoutSec 5 | Out-Null
+    Start-Sleep -Milliseconds 750
+    $staleXml = Get-UiXml
+    if (@($staleXml.SelectNodes("//*[contains(@text,'STALE_COMPLETED_RUN_EVENT_MUST_NOT_REOPEN')]")).Count -gt 0) {
+        throw 'A delayed running event was rendered inside an already completed remote run'
+    }
+    if (@($staleXml.SelectNodes("//*[@text='处理中']")).Count -gt 0) {
+        throw 'A delayed running event resurrected a completed remote Build'
+    }
+    $result.gates.staleCompletedRunRejected = $true
 
     $result.mock = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 5
     $result.graphics = Read-GfxMetrics
@@ -320,6 +356,7 @@ try {
         flowPromptVisible = $result.gates.flowPromptVisible -eq $true
         flowTakeoverVisible = $result.gates.flowTakeoverVisible -eq $true
         queueVisible = $result.gates.queueVisible -eq $true
+        staleCompletedRunRejected = $result.gates.staleCompletedRunRejected -eq $true -and $result.mock.injectedStaleEvents -ge 1
     }
     $failedGates = @($result.gates.GetEnumerator() | Where-Object { -not $_.Value } | ForEach-Object { $_.Key })
     if ($failedGates.Count -gt 0) { throw "Pressure gates failed: $($failedGates -join ', ')" }

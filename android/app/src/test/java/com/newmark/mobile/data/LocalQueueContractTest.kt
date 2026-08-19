@@ -48,4 +48,21 @@ class LocalQueueContractTest {
         assertEquals("next", afterRun?.id)
         assertEquals(emptyList<LocalQueuedMessage>(), empty)
     }
+
+    @Test
+    fun reorderUsesStableIdsAndRejectsPartialDuplicateOrForeignOrders() {
+        val queue = listOf(
+            LocalQueuedMessage("a", "first"),
+            LocalQueuedMessage("b", "second"),
+            LocalQueuedMessage("c", "third"),
+        )
+
+        assertEquals(
+            listOf("c", "a", "b"),
+            LocalQueueContract.reorder(queue, listOf("c", "a", "b")).map { it.id },
+        )
+        assertEquals(queue, LocalQueueContract.reorder(queue, listOf("a", "b")))
+        assertEquals(queue, LocalQueueContract.reorder(queue, listOf("a", "a", "c")))
+        assertEquals(queue, LocalQueueContract.reorder(queue, listOf("a", "b", "foreign")))
+    }
 }

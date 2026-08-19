@@ -142,6 +142,10 @@ object WorkRunProjection {
         return output
     }
 
+    /** PC collapsed WorkRun keeps only intervening Guide user messages visible. */
+    fun collapsedGuides(events: List<LocalWorkEvent>, runStatus: String): List<Item.Guide> =
+        project(events, runStatus).filterIsInstance<Item.Guide>()
+
     fun isPublic(event: LocalWorkEvent): Boolean {
         val type = event.type.lowercase()
         if (type in hiddenTypes) return false

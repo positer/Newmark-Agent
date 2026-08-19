@@ -596,6 +596,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun reorderLocalQueueMessages(orderedIds: List<String>) {
+        val conversationId = currentId ?: return
+        updateConversation(conversationId) { conversation ->
+            conversation.copy(
+                queuedMessages = LocalQueueContract.reorder(conversation.queuedMessages, orderedIds),
+                updatedAt = System.currentTimeMillis(),
+            )
+        }
+    }
+
     fun guideLocalQueueMessage(id: String) {
         val conversation = current ?: return
         val item = conversation.queuedMessages.firstOrNull { it.id == id } ?: return

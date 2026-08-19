@@ -25,6 +25,14 @@ const mobileWorkEventSubscribers = new Set<(event: AgentWorkEvent) => void>();
 const mobileScopedRuntimes = new Map<string, { agent: Agent; workspaceId: string; conversationId: string; unsubscribe: () => void }>();
 let hostedWorkEventSink: ((event: AgentWorkEvent) => void) | null = null;
 let unsubscribeHostedWorkEvents: (() => void) | null = null;
+let unsubscribeServerAgentWorkEvents: (() => void) | null = null;
+let hostedServer: http.Server | null = null;
+let hostedServerRoot = '';
+let hostedServerOptions: HostedMobileServerOptions = {};
+let hostedServerError = '';
+let hostedServerStartedAt = 0;
+let hostedAccessHost = '';
+let hostedAccessHostCheckedAt = 0;
 
 export interface HostedMobileServerOptions {
   agent?: Agent;
@@ -38,7 +46,7 @@ export interface HostedMobileServerOptions {
   /** Mutate Goal/Flow state owned by the GUI runtime pool for one exact target. */
   conversationUiAction?: (
     target: { workspaceId: string; conversationId: string },
-    action: 'goal_update' | 'goal_guide' | 'conversation_guide' | 'goal_toggle_pause' | 'goal_clear' | 'flow_pause' | 'flow_resume' | 'flow_guide' | 'conversation_stop' | 'input_mode' | 'queue_enqueue' | 'queue_update' | 'queue_delete' | 'queue_toggle_pause' | 'queue_guide',
+    action: 'goal_update' | 'goal_guide' | 'conversation_guide' | 'goal_toggle_pause' | 'goal_clear' | 'flow_pause' | 'flow_resume' | 'flow_guide' | 'conversation_stop' | 'input_mode' | 'queue_enqueue' | 'queue_update' | 'queue_delete' | 'queue_reorder' | 'queue_toggle_pause' | 'queue_guide',
     value?: string,
     input?: Record<string, unknown>,
   ) => Promise<Record<string, unknown>>;
@@ -48,6 +56,18 @@ export interface HostedMobileServerOptions {
     message: string,
     options?: { requestedMode?: string; goalObjective?: string; inputMode?: string },
   ) => Promise<Record<string, unknown>>;
+}
+
+export interface HostedMobileServerStatus {
+  enabled: boolean;
+  listening: boolean;
+  reachable: boolean;
+  state: 'off' | 'listening' | 'error';
+  host: string;
+  port: number;
+  error: string;
+  checkedAt: string;
+  startedAt: number;
 }
 
 let hostedConversationUiState: HostedMobileServerOptions['conversationUiState'];
@@ -971,8 +991,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         const params = JSON.parse(body || '{}') as Record<string, unknown>;
         const workspaceId = String(params.workspaceId || '');
         const conversationId = String(params.conversationId || '');
-        const action = String(params.action || '') as 'goal_update' | 'goal_guide' | 'conversation_guide' | 'goal_toggle_pause' | 'goal_clear' | 'flow_pause' | 'flow_resume' | 'flow_guide' | 'conversation_stop' | 'input_mode' | 'queue_enqueue' | 'queue_update' | 'queue_delete' | 'queue_toggle_pause' | 'queue_guide';
-        const allowed = new Set(['goal_update', 'goal_guide', 'conversation_guide', 'goal_toggle_pause', 'goal_clear', 'flow_pause', 'flow_resume', 'flow_guide', 'conversation_stop', 'input_mode', 'queue_enqueue', 'queue_update', 'queue_delete', 'queue_toggle_pause', 'queue_guide']);
+        const action = String(params.action || '') as 'goal_update' | 'goal_guide' | 'conversation_guide' | 'goal_toggle_pause' | 'goal_clear' | 'flow_pause' | 'flow_resume' | 'flow_guide' | 'conversation_stop' | 'input_mode' | 'queue_enqueue' | 'queue_update' | 'queue_delete' | 'queue_reorder' | 'queue_toggle_pause' | 'queue_guide';
+        const allowed = new Set(['goal_update', 'goal_guide', 'conversation_guide', 'goal_toggle_pause', 'goal_clear', 'flow_pause', 'flow_resume', 'flow_guide', 'conversation_stop', 'input_mode', 'queue_enqueue', 'queue_update', 'queue_delete', 'queue_reorder', 'queue_toggle_pause', 'queue_guide']);
         if (!workspaceId || !conversationId || !allowed.has(action)) {
           mobileJson(res, { error: 'workspaceId, conversationId, and a valid action are required' }, 400);
           return;
@@ -1232,7 +1252,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
   }
 }
 
-function startServer(root: string, options: HostedMobileServerOptions = {}): void {
+function startServer(root: string, options: HostedMobileServerOptions = {}): http.Server {
   mobileToken = ensureMobileToken(root);
   appRoot = root;
   agent = options.agent || new Agent(root);
@@ -1265,7 +1285,8 @@ function startServer(root: string, options: HostedMobileServerOptions = {}): voi
       agent.setConversationFromStorage(previousConversation);
     }
   });
-  agent.subscribeWorkEvents(publishServerWorkEvent);
+  unsubscribeServerAgentWorkEvents?.();
+  unsubscribeServerAgentWorkEvents = agent.subscribeWorkEvents(publishServerWorkEvent);
   if (automation) {
     agent.setAutomationManager(automation);
     if (!options.automation) automation.start();
@@ -1315,6 +1336,13 @@ function startServer(root: string, options: HostedMobileServerOptions = {}): voi
   const lan = lanIpv4();
   const accessHost = tailscale || lan || '<lan-or-tailscale-ip>';
   const tokenPath = path.join(root, '.newmark-mobile-token');
+  hostedServer = server;
+  hostedServerError = '';
+  hostedServerStartedAt = Date.now();
+  server.once('error', error => {
+    hostedServerError = error instanceof Error ? error.message : String(error);
+    if (hostedServer === server) hostedServer = null;
+  });
   server.listen(PORT, bindHost, () => {
     console.log(`\n  Newmark Agent v1.0 - Server Mode`);
     console.log(`  Bind: ${bindHost}:${PORT}`);
@@ -1326,15 +1354,127 @@ function startServer(root: string, options: HostedMobileServerOptions = {}): voi
     console.log(`  Mobile events (SSE): http://${accessHost}:${PORT}/api/mobile/events?token=<token>`);
     console.log(`  Press Ctrl+C to stop\n`);
   });
+  return server;
 }
 
-let hostedServerStarted = false;
+function configuredAccessHost(): string {
+  const now = Date.now();
+  if (now - hostedAccessHostCheckedAt < 30_000) return hostedAccessHost;
+  hostedAccessHost = tailscaleIpv4() || lanIpv4() || '';
+  hostedAccessHostCheckedAt = now;
+  return hostedAccessHost;
+}
+
+function waitForHostedServerListening(timeoutMs = 5000): Promise<void> {
+  if (hostedServer?.listening) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs;
+    const tick = () => {
+      if (hostedServer?.listening) return resolve();
+      if (hostedServerError) return reject(new Error(hostedServerError));
+      if (Date.now() >= deadline) return reject(new Error('Mobile server listen timeout'));
+      setTimeout(tick, 50);
+    };
+    tick();
+  });
+}
+
+async function probeHostedServer(host: string): Promise<{ ok: boolean; error: string }> {
+  if (!hostedServer?.listening || !mobileToken) return { ok: false, error: hostedServerError || 'Mobile server is not listening' };
+  return await new Promise(resolve => {
+    const request = http.get({
+      hostname: host,
+      port: PORT,
+      path: `/api/mobile/hello?token=${encodeURIComponent(mobileToken)}`,
+      timeout: 1800,
+    }, response => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', chunk => { body += chunk; });
+      response.on('end', () => {
+        try {
+          const parsed = JSON.parse(body || '{}') as { ok?: boolean; error?: string };
+          const ok = response.statusCode === 200 && parsed.ok === true;
+          resolve({ ok, error: ok ? '' : String(parsed.error || `HTTP ${response.statusCode || 0}`) });
+        } catch (error) {
+          resolve({ ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
+      });
+    });
+    request.on('timeout', () => request.destroy(new Error('Mobile server probe timeout')));
+    request.on('error', error => resolve({ ok: false, error: error.message }));
+  });
+}
+
+export function configureHostedServer(root: string, options: HostedMobileServerOptions = {}): void {
+  hostedServerRoot = root;
+  hostedServerOptions = options;
+}
+
+export async function stopHostedServer(): Promise<void> {
+  const server = hostedServer;
+  hostedServer = null;
+  if (server) {
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(resolve, 2500);
+      server.close(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+      (server as http.Server & { closeAllConnections?: () => void }).closeAllConnections?.();
+    });
+  }
+  unsubscribeHostedWorkEvents?.();
+  unsubscribeHostedWorkEvents = null;
+  unsubscribeServerAgentWorkEvents?.();
+  unsubscribeServerAgentWorkEvents = null;
+  hostedServerStartedAt = 0;
+}
+
+export async function hostedServerStatus(enabled = true, probeHost = ''): Promise<HostedMobileServerStatus> {
+  const listening = !!hostedServer?.listening;
+  const host = enabled ? (String(probeHost || '').trim() || configuredAccessHost()) : '';
+  let reachable = false;
+  let error = hostedServerError;
+  if (enabled && listening) {
+    if (!host) error = 'No LAN or Tailscale IPv4 address is available';
+    else {
+      const probe = await probeHostedServer(host);
+      reachable = probe.ok;
+      if (!probe.ok) error = probe.error;
+    }
+  }
+  const state: HostedMobileServerStatus['state'] = !enabled ? 'off' : listening && reachable ? 'listening' : 'error';
+  return {
+    enabled,
+    listening,
+    reachable,
+    state,
+    host,
+    port: PORT,
+    error: state === 'error' ? (error || 'Mobile server is not reachable') : '',
+    checkedAt: new Date().toISOString(),
+    startedAt: hostedServerStartedAt,
+  };
+}
+
+export async function setHostedServerEnabled(enabled: boolean, probeHost = ''): Promise<HostedMobileServerStatus> {
+  await stopHostedServer();
+  hostedServerError = '';
+  if (enabled) {
+    if (!hostedServerRoot) throw new Error('Hosted mobile server is not configured');
+    startServer(hostedServerRoot, hostedServerOptions);
+    try { await waitForHostedServerListening(); } catch (error) { hostedServerError = error instanceof Error ? error.message : String(error); }
+  }
+  return await hostedServerStatus(enabled, probeHost);
+}
 
 /** 托管启动 server（GUI/TUI 内嵌调用；幂等防重入，进程常驻即服务常驻） */
 export function runServer(root: string, options: HostedMobileServerOptions = {}): void {
-  if (hostedServerStarted) return;
-  hostedServerStarted = true;
-  startServer(root, options);
+  if (!hostedServerRoot || Object.keys(options).length > 0) configureHostedServer(root, options);
+  else hostedServerRoot = root;
+  if (hostedServer?.listening) return;
+  startServer(hostedServerRoot, hostedServerOptions);
 }
 
 /** Attach the GUI-owned automation manager after deferred startup. */

@@ -6,8 +6,15 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
-const exePath = path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe');
-const screenshotPath = path.join(repoRoot, 'archive', '2026-06-28-release-ui-model-settings-smoke.png');
+const desktopRoot = path.join(repoRoot, 'DESKTOP');
+const sourceElectronPath = path.join(desktopRoot, 'node_modules', 'electron', 'dist', 'electron.exe');
+const exePath = path.resolve(process.env.NEWMARK_TEST_EXE || path.join(repoRoot, 'release', 'win-unpacked', 'Newmark Agent.exe'));
+const screenshotPath = path.resolve(process.env.NEWMARK_UI_MODEL_SETTINGS_SCREENSHOT || path.join(repoRoot, 'archive', '2026-06-28-release-ui-model-settings-smoke.png'));
+const recoveryScreenshotPath = path.resolve(process.env.NEWMARK_MODEL_RECOVERY_SCREENSHOT || path.join(repoRoot, 'archive', '20260819-model-recovery-not-checked-ui.png'));
+const remoteTouchScreenshotPath = path.resolve(process.env.NEWMARK_REMOTE_TOUCH_SCREENSHOT || path.join(repoRoot, 'archive', '20260819-remote-touch-serve-status-ui.png'));
+const remoteTouchListeningScreenshotPath = path.resolve(process.env.NEWMARK_REMOTE_TOUCH_LISTENING_SCREENSHOT || path.join(repoRoot, 'archive', '20260819-remote-touch-listening-ui.png'));
+const remoteTouchDarkScreenshotPath = path.resolve(process.env.NEWMARK_REMOTE_TOUCH_DARK_SCREENSHOT || path.join(repoRoot, 'archive', '20260819-remote-touch-dark-ui.png'));
+const remoteTouchLightScreenshotPath = path.resolve(process.env.NEWMARK_REMOTE_TOUCH_LIGHT_SCREENSHOT || path.join(repoRoot, 'archive', '20260819-remote-touch-light-ui.png'));
 const keepRoot = process.env.NEWMARK_KEEP_UI_MODEL_SETTINGS_SMOKE === '1';
 
 function log(message) {
@@ -108,7 +115,7 @@ async function waitFor(cdp, expression, timeoutMs, label) {
   fail(`Timed out waiting for ${label}; last value: ${lastValue}`);
 }
 
-async function captureScreenshot(cdp) {
+async function captureScreenshot(cdp, outputPath = screenshotPath) {
   await cdp.call('Page.bringToFront', {}, 10000);
   await cdp.call('Emulation.setDeviceMetricsOverride', {
     width: 1600,
@@ -128,9 +135,9 @@ async function captureScreenshot(cdp) {
     try {
       const screenshot = await cdp.call('Page.captureScreenshot', attempt.params, attempt.timeout);
       if (!screenshot?.data) throw new Error('empty screenshot data');
-      fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
-      fs.writeFileSync(screenshotPath, Buffer.from(screenshot.data, 'base64'));
-      log(`screenshot ${screenshotPath} (${attempt.label})`);
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(outputPath, Buffer.from(screenshot.data, 'base64'));
+      log(`screenshot ${outputPath} (${attempt.label})`);
       return;
     } catch (error) {
       errors.push(`${attempt.label}: ${error.message}`);
@@ -141,10 +148,10 @@ async function captureScreenshot(cdp) {
     '-ExecutionPolicy',
     'Bypass',
     '-Command',
-    `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $bounds=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp=New-Object System.Drawing.Bitmap $bounds.Width,$bounds.Height; $gfx=[System.Drawing.Graphics]::FromImage($bmp); $gfx.CopyFromScreen($bounds.Location,[System.Drawing.Point]::Empty,$bounds.Size); $dir=${JSON.stringify(path.dirname(screenshotPath))}; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $file=${JSON.stringify(screenshotPath)}; $bmp.Save($file,[System.Drawing.Imaging.ImageFormat]::Png); $gfx.Dispose(); $bmp.Dispose(); Write-Output 'SCREEN_CAPTURE_OK'`,
+    `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $bounds=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp=New-Object System.Drawing.Bitmap $bounds.Width,$bounds.Height; $gfx=[System.Drawing.Graphics]::FromImage($bmp); $gfx.CopyFromScreen($bounds.Location,[System.Drawing.Point]::Empty,$bounds.Size); $dir=${JSON.stringify(path.dirname(outputPath))}; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $file=${JSON.stringify(outputPath)}; $bmp.Save($file,[System.Drawing.Imaging.ImageFormat]::Png); $gfx.Dispose(); $bmp.Dispose(); Write-Output 'SCREEN_CAPTURE_OK'`,
   ], { encoding: 'utf8', windowsHide: true });
-  if (fallback.status === 0 && fs.existsSync(screenshotPath)) {
-    log(`screenshot ${screenshotPath} (windows-screen-fallback after ${errors.join(' | ')})`);
+  if (fallback.status === 0 && fs.existsSync(outputPath)) {
+    log(`screenshot ${outputPath} (windows-screen-fallback after ${errors.join(' | ')})`);
     return;
   }
   fail(`screenshot capture failed: ${errors.join(' | ')} | fallback: ${fallback.stderr || fallback.stdout || 'no output'}`);
@@ -153,8 +160,26 @@ async function captureScreenshot(cdp) {
 function writeConfig(root) {
   const config = {
     models: {
-      providers: [],
-      default_model: '',
+      providers: [{
+        id: 'recovery-provider',
+        name: 'RecoveryProvider',
+        base_url: 'http://127.0.0.1:49997/v1',
+        api_key: 'recovery-key-secret',
+        protocol: 'openai',
+        enabled: true,
+        models: [{
+          name: 'recovery-model',
+          display: 'recovery-model',
+          description: 'Before transient recovery edit',
+          max_tokens: 4096,
+          vision: false,
+          thinking: false,
+          enabled: true,
+          validation: { level: 'standard', status: 'unavailable', checked_at: 'transient-network-failure', capabilities: {} },
+          evaluation: { status: 'unavailable', checked_at: 'transient-network-failure' },
+        }],
+      }],
+      default_model: 'recovery-model',
       default_intelligence: 'medium',
       agent_engine: 'builtin',
       auto_switch: false,
@@ -163,6 +188,7 @@ function writeConfig(root) {
     },
     agent: { default_mode: 'build', option_feedback: 'default' },
     general: { language: 'en' },
+    remote: { touch_enabled: false },
     workspace: { auto_create_timestamp_workspace: true, prompt_mode: 'both' },
   };
   fs.mkdirSync(root, { recursive: true });
@@ -170,9 +196,11 @@ function writeConfig(root) {
 }
 
 async function launch(root, port) {
-  const child = spawn(exePath, [`--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
+  const sourceMode = path.resolve(exePath) === path.resolve(sourceElectronPath);
+  const child = spawn(exePath, [...(sourceMode ? [desktopRoot] : []), `--remote-debugging-port=${port}`, '--no-sandbox', '--root', root], {
     stdio: 'ignore',
     windowsHide: true,
+    cwd: desktopRoot,
   });
   const target = await waitForTarget(port);
   log(`connected target: ${target.title || '(untitled)'} ${target.url || ''}`);
@@ -235,8 +263,145 @@ function readProviders(root) {
     await waitFor(cdp, `window.api.getState().then(s => s.workspaces && s.workspaces.current && s.workspaces.current.isInternal === true)`, 30000, 'initial workspace');
     await waitFor(cdp, `(() => document.readyState === 'complete' && !!window.openSettings && !!window.addProvider && !!window.addModel && !!window.editProvider && !!window.editModel)()`, 30000, 'model settings functions');
 
+    await evaluate(cdp, `window.openSettings('general')`);
+    const themeProbes = [];
+    for (const theme of ['dark', 'light']) {
+      await evaluate(cdp, `window.setTheme(${JSON.stringify(theme)})`);
+      await evaluate(cdp, `window.openSettings('general')`);
+      await sleep(250);
+      const probe = await evaluate(cdp, `(() => {
+        const status = document.getElementById('remote-touch-status-button');
+        const connect = document.getElementById('remote-touch-connect-button');
+        const titles = Array.from(document.querySelectorAll('.remote-touch-copy-title'));
+        const descriptions = Array.from(document.querySelectorAll('.remote-touch-copy-desc'));
+        if (!status || !connect || titles.length !== 2 || descriptions.length !== 2) return null;
+        const style = node => getComputedStyle(node);
+        return {
+          theme: document.documentElement.getAttribute('data-theme') || 'dark',
+          statusColor: style(status).color,
+          statusBackground: style(status).backgroundColor,
+          connectColor: style(connect).color,
+          titleColor: style(titles[0]).color,
+          descriptionColor: style(descriptions[0]).color,
+          surfaceColor: getComputedStyle(status.closest('.setting-subsection')).backgroundColor,
+          textFits: status.scrollWidth <= status.clientWidth && connect.scrollWidth <= connect.clientWidth,
+          copyFits: [...titles, ...descriptions].every(node => node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight + 1),
+          statusSize: [status.getBoundingClientRect().width, status.getBoundingClientRect().height],
+          connectSize: [connect.getBoundingClientRect().width, connect.getBoundingClientRect().height]
+        };
+      })()`, 15000);
+      if (!probe || !probe.textFits || !probe.copyFits
+        || probe.statusBackground !== 'rgba(0, 0, 0, 0)'
+        || probe.statusColor === probe.descriptionColor
+        || probe.titleColor === probe.descriptionColor
+        || Math.abs(probe.statusSize[0] - probe.connectSize[0]) >= 0.5
+        || Math.abs(probe.statusSize[1] - probe.connectSize[1]) >= 0.5) {
+        fail(`remote touch ${theme} theme visual probe failed: ${JSON.stringify(probe)}`);
+      }
+      themeProbes.push(probe);
+      await captureScreenshot(cdp, theme === 'dark' ? remoteTouchDarkScreenshotPath : remoteTouchLightScreenshotPath);
+    }
+    if (themeProbes[0].surfaceColor === themeProbes[1].surfaceColor
+      || themeProbes[0].titleColor === themeProbes[1].titleColor
+      || themeProbes[0].descriptionColor === themeProbes[1].descriptionColor) {
+      fail(`remote touch theme palette did not change: ${JSON.stringify(themeProbes)}`);
+    }
+    log(`dark/light remote touch visual probes ok: ${JSON.stringify(themeProbes)}`);
+    await evaluate(cdp, `window.setTheme('dark')`);
+    await waitFor(cdp, `(() => {
+      const button = document.getElementById('remote-touch-status-button');
+      return !!(button && button.classList.contains('off') && getComputedStyle(button).backgroundColor === 'rgba(0, 0, 0, 0)');
+    })()`, 15000, 'remote touch off status button');
+    const remoteTouchLayout = await evaluate(cdp, `(() => {
+      const status = document.getElementById('remote-touch-status-button');
+      const connect = document.getElementById('remote-touch-connect-button');
+      if (!status || !connect) return null;
+      const statusRect = status.getBoundingClientRect();
+      const connectRect = connect.getBoundingClientRect();
+      const rowRect = status.closest('.setting-row').getBoundingClientRect();
+      const titles = Array.from(document.querySelectorAll('.remote-touch-copy-title'));
+      const descriptions = Array.from(document.querySelectorAll('.remote-touch-copy-desc'));
+      const titleStyles = titles.map(node => getComputedStyle(node));
+      const descriptionStyles = descriptions.map(node => getComputedStyle(node));
+      return {
+        sameWidth: Math.abs(statusRect.width - connectRect.width) < 0.5,
+        sameHeight: Math.abs(statusRect.height - connectRect.height) < 0.5,
+        leftAligned: Math.abs(statusRect.left - rowRect.left) < 0.5 && Math.abs(statusRect.left - connectRect.left) < 0.5,
+        textFits: status.scrollWidth <= status.clientWidth && connect.scrollWidth <= connect.clientWidth,
+        copyFormat: titles.length === 2 && descriptions.length === 2
+          && titleStyles.every(style => Number(style.fontWeight) >= 700)
+          && descriptionStyles.every(style => Number(style.fontWeight) <= 400 && style.color === descriptionStyles[0].color),
+        statusWidth: statusRect.width,
+        connectWidth: connectRect.width
+      };
+    })()`, 15000);
+    if (!remoteTouchLayout || !remoteTouchLayout.sameWidth || !remoteTouchLayout.sameHeight || !remoteTouchLayout.leftAligned || !remoteTouchLayout.textFits || !remoteTouchLayout.copyFormat) {
+      fail(`remote touch action layout mismatch: ${JSON.stringify(remoteTouchLayout)}`);
+    }
+    await evaluate(cdp, `window.setRemoteTouchEnabled(true)`, 15000);
+    await waitFor(cdp, `(() => {
+      const button = document.getElementById('remote-touch-status-button');
+      return !!(button && (button.classList.contains('listening') || button.classList.contains('error')) && !button.disabled);
+    })()`, 15000, 'remote touch enabled serve status');
+    const realRemoteStatus = await evaluate(cdp, `JSON.parse(JSON.stringify(window.state.remoteTouchServer || {}))`, 15000);
+    if (!realRemoteStatus || (realRemoteStatus.state !== 'listening' && realRemoteStatus.state !== 'error')) fail(`unexpected enabled remote status: ${JSON.stringify(realRemoteStatus)}`);
+    await captureScreenshot(cdp, remoteTouchScreenshotPath);
+    await evaluate(cdp, `(() => {
+      window.state.remoteTouchEnabled = true;
+      window.state.remoteTouchServer = { enabled:true, listening:true, reachable:true, state:'listening', host:'127.0.0.1', port:47890, error:'' };
+      window.updateRemoteTouchStatusButton();
+      if (!document.getElementById('remote-touch-status-button').classList.contains('listening')) throw new Error('listening class mapping failed');
+      return true;
+    })()`, 15000);
+    await captureScreenshot(cdp, remoteTouchListeningScreenshotPath);
+    await evaluate(cdp, `(() => {
+      window.state.remoteTouchServer = { enabled:true, listening:true, reachable:false, state:'error', host:'127.0.0.1', port:47890, error:'fixture unreachable' };
+      window.updateRemoteTouchStatusButton();
+      if (!document.getElementById('remote-touch-status-button').classList.contains('error')) throw new Error('error class mapping failed');
+      return true;
+    })()`, 15000);
+    await evaluate(cdp, `window.setRemoteTouchEnabled(false)`, 15000);
+    await waitFor(cdp, `(() => {
+      const button = document.getElementById('remote-touch-status-button');
+      return !!(button && button.classList.contains('off') && window.state.remoteTouchServer && window.state.remoteTouchServer.state === 'off');
+    })()`, 15000, 'remote touch service stop');
+    log(`remote touch status button and lifecycle ok (${realRemoteStatus.state})`);
+
     await evaluate(cdp, `window.openSettings('models')`);
     await waitFor(cdp, `(() => document.body.innerText.includes('Models & Providers'))()`, 15000, 'models settings visible');
+
+    await evaluate(cdp, `window.setLanguage('zh')`, 15000);
+    await waitFor(cdp, `(() => window.state.language === 'zh' && window.t('model.notChecked') === '未检测')()`, 15000, 'Chinese not-checked localization');
+    await evaluate(cdp, `(() => {
+      const providerIdx = (window.state.providers || []).findIndex(p => p.name === 'RecoveryProvider');
+      if (providerIdx < 0) throw new Error('RecoveryProvider not found before recovery edit');
+      window.editModel(providerIdx, 0);
+      document.getElementById('edit-model-desc').value = 'Edited after transient network failure';
+      window.saveModelEdit(providerIdx, 0);
+      return true;
+    })()`, 15000);
+    await waitFor(cdp, `window.api.getState().then(s => {
+      const p = (s.providers || []).find(x => x.name === 'RecoveryProvider');
+      const m = p && (p.models || []).find(x => x.name === 'recovery-model');
+      return !!(m && m.validation && m.validation.level === 'discovered' && m.validation.checked_at === '' && !m.evaluation);
+    })`, 15000, 'edited unavailable model reset state');
+    await evaluate(cdp, `window.openSettings('models')`, 15000);
+    await waitFor(cdp, `(() => {
+      const provider = (window.state.providers || []).find(x => x.name === 'RecoveryProvider');
+      const model = provider && (provider.models || []).find(x => x.name === 'recovery-model');
+      const rendered = Array.from(document.querySelectorAll('.model-eval-pending')).some(node => String(node.textContent || '').includes('未检测'));
+      return !!(model && window.formatModelStatus(window.effectiveUiModelStatus(model)) === '未检测' && rendered);
+    })()`, 15000, 'localized not-checked model UI');
+    log('transient unavailable edit reset and localized not-checked UI ok');
+    await captureScreenshot(cdp, recoveryScreenshotPath);
+    await evaluate(cdp, `(() => {
+      window.setLanguage('en');
+      const providerIdx = (window.state.providers || []).findIndex(p => p.name === 'RecoveryProvider');
+      window.confirm = () => true;
+      window.removeProvider(providerIdx);
+      return true;
+    })()`, 15000);
+    await waitFor(cdp, `window.api.getState().then(s => !(s.providers || []).some(p => p.name === 'RecoveryProvider'))`, 15000, 'recovery fixture cleanup');
 
     await evaluate(cdp, `(() => {
       window.addProvider();

@@ -2,6 +2,7 @@ package com.newmark.mobile.vm
 
 import android.app.Application
 import android.os.SystemClock
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -28,6 +29,7 @@ import com.newmark.mobile.data.RemotePlanItem
 import com.newmark.mobile.data.RemoteSubagent
 import com.newmark.mobile.data.RemoteWorkspaceFile
 import com.newmark.mobile.data.RemoteWorkEvent
+import com.newmark.mobile.data.RemotePayloadNormalizer
 import com.newmark.mobile.data.RemoteWorkRun
 import com.newmark.mobile.data.RemoteTrackingContract
 import com.newmark.mobile.data.SendResponse
@@ -659,6 +661,10 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         runRemoteQueueAction("queue_delete", id = id)
     }
 
+    fun reorderRemoteQueueMessages(orderedIds: List<String>) {
+        runRemoteQueueAction("queue_reorder", orderedIds = orderedIds)
+    }
+
     fun guideRemoteQueueMessage(id: String) {
         runRemoteQueueAction("queue_guide", id = id)
     }
@@ -669,12 +675,16 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         text: String = "",
         requestedMode: String = "build",
         goalObjective: String = "",
+        orderedIds: List<String> = emptyList(),
     ) {
         val pair = activeDevice ?: return
         val workspaceId = selectedConversationWorkspaceId ?: return
         val conversationId = selectedConversationId ?: return
         viewModelScope.launch {
-            api.conversationQueueAction(pair, workspaceId, conversationId, action, id, text, requestedMode, goalObjective)
+            api.conversationQueueAction(
+                pair, workspaceId, conversationId, action, id, text,
+                requestedMode, goalObjective, orderedIds,
+            )
                 .onSuccess { response ->
                     if (!isActivePair(pair) || !isSelectedTarget(workspaceId, conversationId)) return@onSuccess
                     val currentJson = JSONObject(gson.toJson(conversationUiState))
@@ -1277,16 +1287,24 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
             c.copy(running = c.id == base.activeConversationId && agentRunning)
         }
         base.copy(workspaces = workspaces, currentWorkspaceId = currentWsId, conversations = conversations)
+    }.onFailure { error ->
+        // A connected device with a silently null state is indistinguishable
+        // from a valid desktop that has no workspaces. Preserve fail-soft UI,
+        // but make Release/R8 parse regressions observable and diagnosable.
+        Log.e("NewmarkRemoteState", "Failed to parse authenticated mobile state", error)
     }.getOrNull()
 
     private fun parseConversationUiState(json: JSONObject): RemoteConversationUiState = runCatching {
-        gson.fromJson(json.toString(), RemoteConversationUiState::class.java)
+        RemotePayloadNormalizer.conversationUiState(
+            gson.fromJson(json.toString(), RemoteConversationUiState::class.java) ?: RemoteConversationUiState(),
+        )
     }.getOrNull() ?: RemoteConversationUiState()
 
     private fun parseMessages(json: JSONObject): List<RemoteMessage> = runCatching {
         val type = object : TypeToken<List<RemoteMessage>>() {}.type
         val arr = json.optJSONArray("chatMessages") ?: return emptyList()
-        gson.fromJson<List<RemoteMessage>>(arr.toString(), type) ?: emptyList()
+        (gson.fromJson<List<RemoteMessage>>(arr.toString(), type) ?: emptyList())
+            .map(RemotePayloadNormalizer::message)
     }.getOrDefault(emptyList())
 
     private fun parseBranchGroups(json: JSONObject): List<RemoteBranchGroup> = runCatching {
@@ -1361,7 +1379,8 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
     private fun parseWorkRuns(json: JSONObject): List<RemoteWorkRun> = runCatching {
         val type = object : TypeToken<List<RemoteWorkRun>>() {}.type
         val arr = json.optJSONArray("workRuns") ?: return emptyList()
-        gson.fromJson<List<RemoteWorkRun>>(arr.toString(), type) ?: emptyList()
+        (gson.fromJson<List<RemoteWorkRun>>(arr.toString(), type) ?: emptyList())
+            .map(RemotePayloadNormalizer::workRun)
     }.getOrDefault(emptyList())
 
     // ---- SSE：实时追踪进行中的 build block（对齐 PC /api/mobile/events，event: work / data: JSON） ----
@@ -1372,6 +1391,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
     private fun startSse(pair: PairInfo, session: MobileSessionGate.Session) {
         sseJob?.cancel()
         sseJob = viewModelScope.launch(Dispatchers.IO) {
+            var outageStartedAt = 0L
             while (isActive && isCurrent(session, pair)) {
                 var cancellation: kotlinx.coroutines.DisposableHandle? = null
                 val eventQueue = Channel<RemoteWorkEvent>(capacity = SSE_EVENT_QUEUE_CAPACITY)
@@ -1390,6 +1410,14 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                     cancellation = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
                     call.execute().use { resp ->
                         if (!resp.isSuccessful) throw java.io.IOException("SSE HTTP ${resp.code}")
+                        outageStartedAt = 0L
+                        withContext(Dispatchers.Main.immediate) {
+                            if (isCurrent(session, pair)) {
+                                isConnected = true
+                                linkStatus = LinkStatus.Connected
+                                lastError = null
+                            }
+                        }
                         refreshSelectedTargetAfterSseConnect(session, pair)
                         val source = resp.body?.source() ?: throw java.io.IOException("SSE no body")
                         while (isActive && isCurrent(session, pair) && !source.exhausted()) {
@@ -1409,7 +1437,23 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                     eventQueue.close()
                     batchApplier.join()
                 }
-                if (isActive && isCurrent(session, pair)) delay(3_000)
+                if (isActive && isCurrent(session, pair)) {
+                    val now = System.currentTimeMillis()
+                    if (outageStartedAt == 0L) outageStartedAt = now
+                    withContext(Dispatchers.Main.immediate) {
+                        if (isCurrent(session, pair)) {
+                            isConnected = false
+                            if (now - outageStartedAt >= RECONNECT_TIMEOUT_MS) {
+                                linkStatus = LinkStatus.Disconnected
+                                lastError = "连接已断开"
+                            } else {
+                                linkStatus = LinkStatus.Reconnecting
+                                lastError = "连接中断，正在重连…"
+                            }
+                        }
+                    }
+                    delay(SSE_RECONNECT_INTERVAL_MS)
+                }
             }
         }
     }
@@ -1485,6 +1529,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
             // AgentWorkEvent contract; direct Gson mapping preserves Guide,
             // display-image, actor and branch fields without a lossy shim.
             gson.fromJson(payload, RemoteWorkEvent::class.java)
+                ?.let(RemotePayloadNormalizer::workEvent)
         }.getOrNull()
     }
 
@@ -1688,6 +1733,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         private const val SSE_BATCH_WINDOW_MS = 48L
         private const val SSE_MAX_BATCH_SIZE = 48
         private const val SSE_EVENT_QUEUE_CAPACITY = 256
+        private const val SSE_RECONNECT_INTERVAL_MS = 3_000L
         private val TERMINAL_SSE_EVENT_TYPES = setOf("done", "error", "interrupted", "force_interrupted")
         private const val RECONNECT_INTERVAL_MS = 10_000L
         private const val RECONNECT_TIMEOUT_MS = 5 * 60_000L

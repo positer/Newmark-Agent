@@ -1,5 +1,137 @@
 # Newmark Agent Overview
 
+## Mobile runtime continuity pressure infrastructure (2026-08-19)
+
+- `android/scripts/mobile-agent-stress.ps1` uses one authoritative live hierarchy for Build, Goal, Flow, and Queue before exercising remote enqueue, preventing observation cost from consuming the run window.
+- `DESKTOP/scripts/mobile-mock-server.cjs` now models real Flow suspension: pause freezes progression while HTTP/SSE and resume/stop remain responsive.
+- Current evidence covers a 300-event/90-loop remote run, local 17-tool Queue/Guide execution and restart, three live service restarts, alternating sends, Flow pause/resume, ordinary stop, and foreign-target rejection.
+- Evidence: `archive/mobile-stress-20260819-211437.json` and `archive/20260819-214236-mobile-runtime-continuity-pressure.md`.
+
+## dev-0.4.9 Windows/Linux release ownership and gate (2026-08-19)
+
+The desktop package metadata is `0.4.9`; the prerelease identity is `dev-0.4.9`. The same final `win-unpacked` tree produced the verified MSI and ZIP. The installed candidate at `C:\Program Files\Newmark Agent` is byte-identical at `resources/app.asar`, reports `0.4.9`, keeps mutable runtime state outside Program Files, and passes CLI/TUI/GUI restart and hosted remote-service parity gates. Ubuntu 24.04 WSL independently copies the candidate to a native Linux filesystem, performs a fresh dependency install and full platform suite, and produces the AppImage, deb, and unpacked ZIP.
+
+Relevant tree:
+
+```text
+Newmark Agent/
+├─ DESKTOP/
+│  ├─ package.json
+│  ├─ scripts/
+│  │  ├─ release-notes-dev-0.4.9.md
+│  │  ├─ release-pc-gui-tui-remote-service-stress.cjs
+│  │  ├─ release-safe-installed-shape-stress.cjs
+│  │  ├─ release-safe-shared-root-restart-stress.cjs
+│  │  ├─ release-ssh-tui-stress.cjs
+│  │  └─ release-ui-model-settings-smoke.cjs
+│  └─ src/tests/
+│     ├─ modelRecoveryStressVerify.ts
+│     └─ remoteTouchServerStatusVerify.ts
+├─ release/
+│  ├─ Newmark-Agent-0.4.9-x64.msi
+│  ├─ Newmark-Agent-0.4.9-win-unpacked-x64.zip
+│  ├─ Newmark-Agent-0.4.9-x86_64.AppImage
+│  ├─ Newmark-Agent-0.4.9-amd64.deb
+│  ├─ Newmark-Agent-0.4.9-linux-unpacked-x64.zip
+│  └─ {win,linux}-unpacked/
+└─ archive/
+   ├─ 20260819-213000-dev-0.4.9-windows-package-install.md
+   ├─ 20260819-dev-0.4.9-remote-touch-dark-packaged.png
+   ├─ 20260819-dev-0.4.9-remote-touch-light-packaged.png
+   └─ 2026-08-19T13-29-33-036Z-pc-gui-tui-remote-service-stress.json
+```
+
+- `release-ui-model-settings-smoke.cjs` owns the real packaged Electron/CDP dark/light geometry, typography, transparency, model-edit recovery, and hosted-service status checks. It verifies the two remote actions at the same `120×30` geometry and rejects horizontal or vertical text overflow.
+- `release-ssh-tui-stress.cjs` keeps the source cold-start gate at 12 seconds and gives the packaged double-sidecar cold start a measured 15-second envelope; the final package reached the full TUI in 11.095 seconds, then passed interaction, light theme, four restarts, and explicit-root isolation for both console entrypoints.
+- `release-safe-installed-shape-stress.cjs` and `release-safe-shared-root-restart-stress.cjs` verify that installed CLI/TUI/GUI lifecycles do not write mutable data into Program Files and preserve explicit roots containing spaces across GUI restart.
+- `release-pc-gui-tui-remote-service-stress.cjs` owns the installed black-box hosted-service gate. Three GUI/TUI cycles completed 200 pressure requests per phase with authentication, SSE, authoritative core reads, renderer/HTTP and CLI/HTTP equality, mutation boundaries, and clean port release.
+- `dist-linux.cjs` owns the isolated WSL/native Linux release path. The full suite, latency benchmark, AppImage/deb/unpacked GUI smoke, Bash/sh isolation, and same-root exit lifecycle passed before publication.
+- Artifact hashes and UAC install evidence are recorded in `archive/20260819-213000-dev-0.4.9-windows-package-install.md`; the Git tag and GitHub prerelease publish the five Windows/Linux distributable assets.
+
+## Mobile remote lifecycle and reconnect ownership (2026-08-19)
+
+- `DESKTOP/src/server.ts` remains the hosted mobile transport owner. GUI and TUI bind the server to their own lifetime; the installed-package stress verifies repeated cold start, concurrent mobile reads, SSE readiness, network reachability, state parity, and port release.
+- `android/app/src/main/java/com/newmark/mobile/vm/DesktopLinkViewModel.kt` now projects SSE transport truth into the visible device state. An ended stream moves the exact session to `Reconnecting`, a successful handshake restores `Connected` and rehydrates the selected target, and the existing five-minute outage boundary maps to `Disconnected` without abandoning retries.
+- `android/scripts/restore-formal-mobile-pair.ps1` supports non-debuggable Release packages without relying on `run-as`; it retains the stronger private-file probe when the installed package is debuggable.
+- The relaxed runtime gate is operational: no freeze, ANR, FATAL, OOM, process death, or obvious instantaneous CPU/memory-pressure event. Jank remains recorded but is no longer a hard pass/fail threshold.
+
+Relevant tree:
+
+```text
+Newmark Agent/
+├─ DESKTOP/
+│  ├─ src/server.ts
+│  ├─ src/tests/remoteTouchServerStatusVerify.ts
+│  └─ scripts/release-pc-gui-tui-remote-service-stress.cjs
+├─ android/
+│  ├─ app/src/main/java/com/newmark/mobile/vm/DesktopLinkViewModel.kt
+│  └─ scripts/restore-formal-mobile-pair.ps1
+└─ archive/
+   ├─ 20260819-210840-mobile-remote-lifecycle-stability.md
+   ├─ 2026-08-19T12-47-33-373Z-pc-gui-tui-remote-service-stress.json
+   ├─ 20260819-formal-mobile-sse-state-restart-fixed.json
+   └─ 20260819-formal-mobile-cold-async-fixed.json
+```
+
+## PC remote-touch hosted serve health architecture (2026-08-19)
+
+- `DESKTOP/src/server.ts` owns the configured hosted-server root/options, authenticated reachability probe, listener/error/start timestamps, bounded stop, connection cleanup, subscription cleanup, and stop-before-start lifecycle. `hostedServerStatus()` maps the real listener/probe result to `off | listening | error`; the LAN/Tailscale address is cached for 30 seconds while the health request still runs every five seconds.
+- `DESKTOP/src/main.ts` registers the GUI runtime bridge even when remote touch starts disabled, exposes `mobile:serverStatus` and `mobile:setRemoteTouchEnabled`, persists the switch, and applies the service lifecycle in the current GUI process.
+- `DESKTOP/src/preload.ts` exposes only the two purpose-scoped renderer operations. `DESKTOP/src/ui/index.html` renders the transparent status control flush left, binds it and the left-aligned pairing action to one `.remote-touch-action` geometry, gives both rows the same bold short-title plus light-gray description hierarchy, preserves green/orange/red border glow, and owns the five-second poll/timer cleanup.
+- `DESKTOP/src/tests/remoteTouchServerStatusVerify.ts` dynamically isolates the fixed server port and verifies ten complete on/listening/reachable/off cycles. `DESKTOP/scripts/release-ui-model-settings-smoke.cjs` drives the real source renderer through CDP and verifies off/error/listening mappings, transparency, toggling, and model recovery in the same Settings surface.
+- Evidence: `archive/20260819-190537-pc-remote-touch-serve-status.md`, `archive/20260819-remote-touch-serve-status-ui.png`, and `archive/20260819-remote-touch-listening-ui.png`.
+
+Relevant tree:
+
+```text
+Newmark Agent/
+├─ DESKTOP/
+│  ├─ src/{server.ts,main.ts,preload.ts}
+│  ├─ src/ui/index.html
+│  ├─ src/tests/remoteTouchServerStatusVerify.ts
+│  └─ scripts/release-ui-model-settings-smoke.cjs
+└─ archive/
+   ├─ 20260819-190537-pc-remote-touch-serve-status.md
+   ├─ 20260819-remote-touch-serve-status-ui.png
+   └─ 20260819-remote-touch-listening-ui.png
+```
+
+## PC model recovery and quota failover architecture (2026-08-19)
+
+- `DESKTOP/src/core/agent.ts` invalidates stale validation/evaluation evidence only when the model configuration or provider connection identity changes, treats `discovered` as manually usable but not Auto-eligible, scopes balance blocks by deployment identity, and resolves fixed fallback by provider + model rather than bare model name.
+- `DESKTOP/src/core/autoRouter.ts` classifies exhausted balances/quotas as non-retryable but switchable and fills the bounded three-attempt ladder with up to two distinct ordinary eligible alternates when stream/side effects remain uncommitted.
+- `DESKTOP/src/core/agentKernelRunner.ts` records balance failure against the active deployment and re-resolves the provider after switching. `DESKTOP/src/ui/index.html` carries the prior model identity through edit save and renders discovered validation as localized “未检测”.
+- `DESKTOP/src/tests/modelRecoveryStressVerify.ts` owns no-op/key/endpoint/rename edit invariants, 250 repeated edit resets, 2000 classification/routing rounds, 500 non-quota guards, fixed fallback, and 30 real three-deployment provider-process failovers. Auto and normal-chat suites cover selection and regression boundaries; the CDP Settings smoke verifies the real renderer/backend edit path.
+- Evidence: `archive/20260819-184508-model-recovery-and-quota-failover.md` and `archive/20260819-model-recovery-not-checked-ui.png`.
+
+Relevant tree:
+
+```text
+Newmark Agent/
+├─ DESKTOP/src/core/{agent.ts,autoRouter.ts,agentKernelRunner.ts}
+├─ DESKTOP/src/tests/{modelRecoveryStressVerify.ts,autoRouterVerify.ts,autoAgentIntegrationVerify.ts,normalChatRegressionVerify.ts}
+├─ DESKTOP/src/ui/index.html
+└─ archive/{20260819-184508-model-recovery-and-quota-failover.md,20260819-model-recovery-not-checked-ui.png}
+```
+
+## Mobile Guide user-timeline projection (2026-08-19)
+
+- `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` renders WorkRun Guide receipts as PC-equivalent right-side user timeline messages. Expanded runs preserve event order; collapsed runs keep only Guide messages visible. Ordinary Build rows retain the right-side safety inset.
+- `android/app/src/main/java/com/newmark/mobile/data/WorkRunProjection.kt` exposes the deduplicated collapsed-Guide projection shared by local and remote histories.
+- `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` exposes the remote-to-local WorkRun conversion internally for direct contract verification; runtime behavior is unchanged outside the shared projection.
+- `WorkRunProjectionTest.kt` and `RemoteGuideTimelineContractTest.kt` cover sequence, lifecycle upgrades, collapsed visibility, and complete remote receipt conversion.
+- Formal Release evidence and stress observations are recorded in `archive/20260819-mobile-guide-user-timeline.md`.
+
+## Mobile secondary popover regression guard (2026-08-19)
+
+`ChatScreen.kt` 保留已验收的一级按钮原点动画；一级进入二级或由二级返回时，不创建独立弹窗，而是在同一玻璃外壳内以 `AnimatedContent + SizeTransform` 连续变换宽高。页面内容同步淡入淡出，关闭仍直接淡出。所有页面继续使用 190dp 紧凑壳与 320dp 内部滚动上限。
+
+`NewmarkApp.kt` 在 RemoteWorkRun → LocalWorkRun 边界统一正规化 Gson 可能产生的运行时 null，避免旧桌面事件缺省字段在 Release/R8 中逐字段触发 NPE。证据位于 `archive/20260819-secondary-popover-regression-fixed.mp4`、`archive/20260819-secondary-popover-compact-final.png` 和对应归档说明。
+
+## Mobile remote event terminality contract (2026-08-19)
+
+`android/app/src/main/java/com/newmark/mobile/data/RemoteTrackingContract.kt` now owns both exact target/run identity and terminal-run late-event rejection. `DesktopLinkViewModel` consults this pure contract before creating or extending a live Build, while still accepting an exact PC resident-runtime recovery identity. The deterministic injection fixture and formal input-menu/startup results are recorded in `archive/2026-08-19-mobile-0454-stale-run-and-menu-runtime-gates.md`.
+
 ## Current mobile UI note (2026-08-19)
 
 `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` owns the in-window input composite menu overlay. Its first-level Mode/File and Model/Intelligence surfaces use explicit button-centred entrance progress while retaining the PC-derived small-popover geometry and input-row anchoring. The corresponding operation record is `archive/2026-08-19-mobile-0454-input-menu-origin-animation.md`.
@@ -1826,3 +1958,23 @@ Verification includes the complete built desktop suite, the `1504/1504` source c
 - `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` binds local Agent browser calls to the active local conversation without mutating sidebar presentation state.
 - `android/app/src/test/java/com/newmark/mobile/ui/BrowserSessionRegistryTest.kt` guards same-conversation identity and cross-conversation isolation.
 - `archive/2026-08-19-mobile-0453-runtime-stress.md` records formal animation, remote resident-state, local all-tool, restart, and resource evidence.
+
+## 2026-08-19 PC GUI/TUI remote service runtime gate
+
+- `DESKTOP/scripts/release-pc-gui-tui-remote-service-stress.cjs` owns the installed Windows black-box gate for hosted port `47890`: guarded existing-instance handling, isolated roots, GUI CDP state inspection, TUI PTY/CLI comparison, token/CORS/SSE checks, IPv4 reachability, concurrent core reads, alternating restart, port release, and user-GUI restoration.
+- `DESKTOP/package.json` exposes the gate as `release:pc-gui-tui-remote-service-stress`.
+- `archive/2026-08-19T04-27-34-307Z-pc-gui-tui-remote-service-stress.json` contains the redacted machine-readable observations for six service lifecycles and 1,200 pressure requests.
+- `archive/20260819-pc-gui-tui-remote-service-stress.md` records the test design, authority comparisons, latency table, network boundary, and verdict.
+- Result: three GUI↔TUI cycles passed with 100% pressure-read success, stable per-interface hashes, clean port release, GUI renderer/HTTP parity, TUI CLI/HTTP parity, and standalone GUI-only mutation 409 fail-closed. Detected IPv4 addresses were reachable; IPv6 `::1` was refused as expected under the current IPv4-only bind contract. `npm.cmd run build` and `mobileWorkspaceApiVerify` 43/43 also passed.
+## 2026-08-19 mobile transcript floating-bar clearance
+
+- `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` keeps a final stable 190dp scroll item, equal to ten 19dp transcript body lines, so the latest message can be scrolled clear of Queue/Goal/Flow overlays without moving or resizing those overlays.
+- `android/app/src/test/java/com/newmark/mobile/ui/TranscriptLayoutContractTest.kt` locks the ten-line/190dp geometry contract.
+- `archive/20260819-mobile-transcript-bottom-reserve-release.png` is the formal Release emulator evidence after a data-preserving installation.
+# 2026-08-19 移动 Queue 拖动排序状态
+
+- `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt`：Queue 拖动改为源/目标索引驱动的占位动画；手势中不改写队列，结束后按稳定 id 一次提交，取消仅复位。
+- `android/app/src/test/java/com/newmark/mobile/ui/QueueDragAnimationContractTest.kt`：验证半行目标阈值、列表边界和双向相邻行位移。
+- `archive/20260819-mobile-queue-reorder-animation.md`：保存实机、构建、安装和性能边界记录。
+- `archive/mobile-stress-20260819-191251.json`：保存 800 事件远端 SSE/Build/Goal/Flow/Queue/stale-event 原始门禁；状态门禁全通过，但综合 UI 帧性能未通过。
+- `archive/20260819-mobile-queue-animation-and-remote-800-gate.md`：记录本轮 Release 构建、10 文件保数据安装、正式前台与性能结论边界。

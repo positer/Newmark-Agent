@@ -4,7 +4,7 @@ import { app, utilityProcess } from 'electron';
 import { spawn } from 'child_process';
 import { ConversationRuntimeTarget, NormalizedConversationTarget, normalizeConversationTarget } from './conversationTarget';
 import { AgentMode, AgentWorkEvent, ConversationInputEnvelope, GuideReceipt } from './types';
-import { ConversationQueueAction } from './conversationKernel';
+import { ConversationQueueAction, ConversationQueueActionInput } from './conversationKernel';
 import {
   UtilityAgentPromptResult,
   UtilityAutoRouteRatingResult,
@@ -1164,7 +1164,7 @@ export class ElectronUtilityAgentClient {
 
   async queueAction(
     action: ConversationQueueAction,
-    input: { id?: string; text?: string; requestedMode?: string; goalObjective?: string; createdAt?: string } = {},
+    input: ConversationQueueActionInput = {},
   ): Promise<Record<string, unknown>> {
     await this.start();
     return await this.request('queue_action', { target: this.target, action, input }, 5_000) as Record<string, unknown>;

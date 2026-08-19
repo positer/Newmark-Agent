@@ -1,8 +1,88 @@
 # Newmark Agent
 
+## 2026-08-19 移动端运行连续性续压
+
+- 最新 Stress 包完成 300 事件、32 个重复事件、559 次 resident state 读取、90 轮真实 UI 操作和 7,364 帧采样；实时 Build、Goal、Flow、Queue、远端排队和终态旧事件防复活全部通过，无 FATAL/ANR/OOM。
+- 本地 Queue/Guide 再次通过：两个 run 完成，Guide accepted/applied 身份一致，编辑 Next 仅执行一次、原内容/删除项均未执行；17 个真实工具结果和强停重启 SHA-256 保持通过。
+- 远端运行中服务重启 3 轮通过；移动/PC 交替发送、Flow 暂停/保持/继续、普通 Build 停止和外部 workspace 事件隔离均通过。
+- 修复两项压力基础设施：综合脚本改用单份运行中快照避免观测耗尽 Build；fixture 的 Flow 暂停现在真正冻结事件推进。证据见 `archive/20260819-214236-mobile-runtime-continuity-pressure.md`。
+
+## 2026-08-19 dev-0.4.9 Windows/Linux 发布与主题兼容门禁
+
+- 桌面版本已升级并打包为 `0.4.9` / `dev-0.4.9`。最终候选完成完整 Windows 出包链、win-unpacked 与安装态 CLI/TUI/GUI 门禁，并通过 UAC 升级安装到 `C:\Program Files\Newmark Agent`；安装版 `Newmark.exe --version` 返回 `0.4.9`。
+- 远程触及设置在最终 packaged Electron 中完成暗色/亮色双主题视觉检查：状态按钮透明、左对齐，状态与连接按钮均约 `120×30`，粗体短标题与细灰简介层级一致且无文字越界。证据为 `archive/20260819-dev-0.4.9-remote-touch-dark-packaged.png` 与 `archive/20260819-dev-0.4.9-remote-touch-light-packaged.png`。
+- 安装版 GUI/TUI hosted serve 完成 3 轮交替冷启动与释放；每个阶段 200 个压力读取，鉴权、SSE、核心状态、GUI renderer/HTTP、TUI CLI/HTTP 和 GUI-only mutation fail-closed 对照全部通过。
+- Windows 产物：MSI `226,285,647` bytes / `4995625BA7E7F1876B5D74713F9E64531C44B17FBEDD76CF35F56CA323629C5F`；ZIP `292,434,383` bytes / `6B97CAB4E06E4D83D8D934B02635F33BC19F1E259A88AFC60E4C5090837683BC`；`app.asar` `159,970,904` bytes / `974B04DDDB77BDB5B243D1DF59BB6646799566A1F9BF9C3CE03EE885146396D0`。安装与候选 ASAR 完全一致；主配置和移动令牌哈希在安装前后不变。
+- Ubuntu 24.04 WSL 在隔离 Linux 文件系统中完成全新 `npm ci`、完整 `npm test`、延迟基准和原生打包；AppImage、deb、unpacked ZIP 的真实 GUI/Xvfb、Bash/sh 隔离和退出/同 root 重启门禁通过。Linux 产物：AppImage `176,536,487` bytes / `F9C4AAE77B0CE0F1BCAE449A1700FC425F2AC399634B87CCFED7361D9A515945`；deb `135,939,992` bytes / `D58D13B47C6D6915FC2DEDC72854E99585E7795B315DDEDE24244A482AFCF025`；ZIP `172,660,338` bytes / `ADB3DFA72D1BA4F95161C49C343DDA734C903D61773D288B7883F2D0D2CEACC8`。
+- `dev-0.4.9` 以 GitHub prerelease 形式发布 Windows/Linux 五个资产；Windows 本地候选保持已安装状态。Windows 阶段记录见 `archive/20260819-213000-dev-0.4.9-windows-package-install.md`。
+
+## 2026-08-19 移动端远程触及生命周期与异步重连
+
+- PC 源码 hosted server 完成 10 次真实启停；安装包再完成 5 轮 GUI + 5 轮 TUI 冷启动/退出，共 3,600 次移动 API 并发读取，成功率 100%，所有发现的 loopback、Tailscale/CGNAT 与 LAN 地址均可达，宿主退出后 47890 每次释放。
+- 修复移动端 SSE 已断开但设备仍显示“已连接”的状态缺口：流结束或异常立即进入“重连中…”，成功握手恢复“已连接”并补拉精确对话的消息、Build、Goal、Flow 与 Queue；超过既有五分钟窗口后显示“已断开”但继续尝试恢复。
+- 正式 `0.4.54` 完成 5 次运行中 PC 服务重启和 3 次“移动先启动、PC 后启动”实机循环。断线状态 2.4–2.9 秒可见，恢复 8.9–15.9 秒；冷启动完整可交互 743–845ms，FATAL/ANR/OOM/进程异常退出均为 0。
+- Release 单测、lint vital、R8、资源收缩、保数据安装全部通过，10 个私有文件保持；正式应用和 PC GUI 已恢复前台/监听。完整证据见 `archive/20260819-210840-mobile-remote-lifecycle-stability.md`。
+
+## 2026-08-19 PC 移动端远程触及 serve 状态按钮
+
+- 通用设置中的“移动端远程触及”改为透明普通尺寸状态按钮：绿色为已开启且 serve 监听可达，橙色为已开启但不可触及/有误，红色为关闭。按钮同时显示“监听中 / 不可触及 / 已关闭 / 检测中”，不仅依赖颜色。
+- 状态按钮位于设置行最左侧；“发起连接”按钮与其共享同一宽高尺寸并同样左对齐，使两行操作边界保持一致。
+- 两个按钮后的说明统一为“粗体简短名称 + 细灰简介”：远程触及和移动端配对使用相同字号、字重、间距与颜色层级。
+- 每次开启都会先停止旧 hosted server，清理连接与事件订阅后重新监听；关闭会停止服务并释放端口。GUI 每 5 秒通过鉴权 `/api/mobile/hello` 健康探测刷新 serve 状态，网络地址发现缓存 30 秒以避免频繁启动 Tailscale CLI。
+- 隔离动态端口完成 10 次真实重启/可达/停止循环；源码 Electron GUI 完成关闭、本机 47890 被已安装版占用时的橙色异常、绿色监听映射和再次关闭验证。证据见 `archive/20260819-190537-pc-remote-touch-serve-status.md`。
+
+## 2026-08-19 PC 模型瞬时失败恢复与配额切换
+
+- 编辑模型或修改 provider endpoint/protocol 会废弃旧 unavailable/rate-limited 证据，恢复 `discovered` 未检测态、清空 `checked_at/evaluation` 和旧评级；单纯密钥轮换仅清理运行时熔断，保留有效能力证据。中文 UI 统一显示“未检测”。
+- 402、`insufficient_quota`、余额/额度/配额耗尽不再重试同一 deployment，而是仅阻断实际失败 deployment，并在未提交 stream/副作用时切换到普通备选或跨 provider 同名模型；单请求最多三次尝试，可连续完成 A(402)→B(402)→C(成功)。
+- 验证包括 250 次编辑恢复、2000 次配额路由、500 次非配额误判防护、30 次真实 `Agent.process()` 三级同请求切换、Auto/Fixed 路径、GUI 真实编辑与当前 1653 项主回归。证据见 `archive/20260819-184508-model-recovery-and-quota-failover.md`。
+
+## 2026-08-19 移动端 Queue 拖动排序动画
+
+- Queue 不再在拖动途中反复改写列表并重置偏移；被拖项连续跟手，相邻项跨过半行后以 PC 150ms easing 平滑让位，松手后才一次提交权威顺序。
+- 拖动态恢复 PC 的 `0.99` 缩放和 `0.58` 透明度，移除额外放大、阴影与强调底色；取消手势不再误提交排序。
+- 隔离远端 fixture 连续 20 次长按拖动全部命中远端权威 `queue_reorder`，完整 Android 单测、Release/R8/lint vital、资源收缩与 10 文件保数据安装通过。
+- 证据与未通过的独立展开动画性能门禁记录在 `archive/20260819-mobile-queue-reorder-animation.md`。
+- 续测的 800 事件远端状态门禁全部通过，但综合窗口 jank 为 91.91%、p90 为 250ms，因此只判定状态正确性通过，UI 性能仍未通过。正式 `0.4.54` 已再次经数据守卫覆盖安装，10 个私有文件保持；详见 `archive/20260819-mobile-queue-animation-and-remote-800-gate.md`。
+
+## 2026-08-19 移动端 Guide 用户时间线同构
+
+- Guide 不再作为 Build 左轨中的折叠事件行显示，而是按 PC `.work-run-guide-message.chat-msg.user` 渲染为右侧“用户输入”时间线消息。
+- Build 展开时，Guide 按 WorkRun sequence 插入思考/工具/回复历史；Build 折叠时，其他内部过程隐藏但 Guide 仍保持可见。
+- accepted/deferred/rejected/applied 继续按 `clientMessageId` 升级去重，显示 PC 同义状态徽标、提交时间、正文、附件和复制操作；非 Guide Build 内容继续保留 34dp 用户轨道安全区。
+- 本地历史、远端 `RemoteWorkGuide` 转换契约、完整 Android 单测、Release/R8/lint vital、60 次折叠/展开压力和保数据安装均通过；10 个私有文件保持不变，无 FATAL/ANR/OOM。
+- 实机证据：`archive/20260819-mobile-guide-timeline-final-release.png`（折叠态）与 `archive/20260819-mobile-guide-owner-build.png`（展开态）。
+
+## 2026-08-19 移动端对话底部浮层避让余量
+
+- 对话 `LazyColumn` 末端新增固定 10 行（`10 × 19dp = 190dp`）可滚动余量，最新消息可继续上推，完整避让 Queue、Goal、Flow 浮动 bar/list。
+- 余量属于对话滚动内容，不改变输入框、运行态浮层的位置、尺寸或动画；实时自动跟随仍定位最新消息，不强制停在空白末端。
+- Android 完整单测、Release、lint vital、R8 与资源收缩通过；正式包以数据守卫覆盖安装，10 个私有文件保持不变。
+- 实机证据：`archive/20260819-mobile-transcript-bottom-reserve-release.png`。
+
+## 2026-08-19 移动端一级/二级复合弹窗变形过渡恢复
+
+- 撤销将二级页作为独立弹窗重新淡入/缩放的回归实现。
+- 一级与二级页面重新共用同一弹窗外壳，宽高以 220ms PC easing 连续变形，内容同步淡入淡出。
+- 一级首次点击仍从对应按钮原点弹出；关闭仍为直接淡出，不反演页面变形。
+- 弹窗保持 190dp 紧凑宽度、320dp 最大高度和二级长列表内部滚动，不再因页面切换产生硬切或纵向拉长观感。
+- Android 单测、Release、lint vital、R8、资源收缩与保数据安装通过；10 个受保护文件保持不变。
+
+## 2026-08-19 移动端二级复合弹窗回归修复
+
+- 二级页恢复 PC `model-menu-in`：150ms、5dp、0.985→1 等比缩放与淡入。
+- 动画作用于完整弹窗外壳，边框、玻璃衬底和内容同步进入，不再只移动内部文字。
+- 二级页保持 190dp 紧凑宽度与 320dp 最大高度，长模型目录只在内部滚动。
+- Release/R8 同步修复旧远端事件缺省字段经 Gson 反射成为运行时 null 的启动崩溃。
+- Android 单测、Release lint vital、R8、资源收缩及保数据安装门禁通过；10 个受保护文件保留。
+
+## Android mobile 0.4.54 stale-run isolation and latest runtime gates (2026-08-19)
+
+Remote mobile tracking now rejects delayed non-terminal SSE events for a run already closed by live or durable PC history; only an exact authoritative resident runtime may reopen an interrupted cold copy. An 800-event real SSE fixture delivered 886 events including 82 duplicates and kept Build, Goal, Flow prompt/takeover, and Queue visible; after completion, an injected old `running/text` event neither rendered nor restored `处理中`. The latest formal input popover completed 40 button-origin entrances and 40 alpha-only exits at 12.42% jank with p90/p95 34/36 ms, consistent with its prior Overlay baseline. Five complete-interaction launches reached the sendable surface in 580–1114 ms. Full evidence and scope limits are in `archive/2026-08-19-mobile-0454-stale-run-and-menu-runtime-gates.md`.
+
 ## Android mobile 0.4.54 button-origin composite menu animation (2026-08-19)
 
-The portrait input area's Mode/File and Model/Intelligence first-level popovers now use an explicit 260 ms PC-eased entrance whose transform origin is calculated from the exact button centre. The popup bottom remains anchored 6 dp above the input row while the surface grows upward from the tapped control; dismissal is a separate 130 ms full-size fade rather than a reversed collapse, and secondary pages reuse the open surface without replaying the entrance. Android unit tests and the complete Release build passed, and the APK was installed in place with all ten protected private files unchanged. Evidence is in `archive/2026-08-19-mobile-0454-input-menu-origin-animation.md`.
+The portrait input area's Mode/File and Model/Intelligence first-level popovers now use an explicit 260 ms PC-eased entrance whose transform origin is calculated from the exact button centre. The popup bottom remains anchored 6 dp above the input row while the surface grows upward from the tapped control; dismissal is a separate 130 ms full-size fade rather than a reversed collapse. Every secondary page keeps the same 190 dp compact shell, scrolls long catalogs internally, and starts its 150 ms PC-eased content transition only after the new page is committed, eliminating the hard swap and unintended model-page widening. Android unit tests and the complete Release build passed, and the APK was installed in place with all ten protected private files unchanged. Evidence is in `archive/2026-08-19-mobile-0454-input-menu-origin-animation.md`.
 
 ## dev-0.4.8 Windows local candidate (2026-08-19)
 
@@ -384,3 +464,7 @@ Newmark Agent is distributed under the license in [`LICENSE`](LICENSE). Third-pa
 # Mobile runtime note (2026-08-19, 0.4.53)
 
 The Android local `browser_use` tool now runs against a lazily-created, conversation-scoped WebView without opening the right sidebar. Opening that conversation's Browser tab reveals the same URL, page, navigation history, and extracted body state. Runtime evidence and limits are archived in `archive/2026-08-19-mobile-0453-runtime-stress.md`.
+
+## PC GUI/TUI remote service gate (2026-08-19)
+
+The installed Windows dev-0.4.8 GUI/TUI remote service passed three alternating GUI/TUI restart cycles and 1,200 concurrent core-read requests with 100% success. Bearer/query authentication, CORS, authenticated SSE, all detected local IPv4 paths, renderer/HTTP/CLI state parity, GUI hosted runtime state, TUI fail-closed behavior, and port release were verified. IPv6 `::1` remains outside the current `0.0.0.0` bind contract. Run `npm.cmd run release:pc-gui-tui-remote-service-stress` from `DESKTOP`; evidence is in [`archive/20260819-pc-gui-tui-remote-service-stress.md`](archive/20260819-pc-gui-tui-remote-service-stress.md).

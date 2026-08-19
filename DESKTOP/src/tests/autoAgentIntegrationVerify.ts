@@ -179,6 +179,23 @@ async function main(): Promise<void> {
     'retryable execution failure is persisted as a failed attempt and failed final status when fallback is disabled');
     agent.config.set('models', 'fallback_on_unavailable', true);
 
+    const editedProviders = JSON.parse(JSON.stringify(agent.config.providers())) as Array<Record<string, any>>;
+    const editedProvider = editedProviders.find(item => item.id === 'provider-openai');
+    const editedModel = editedProvider?.models?.find((item: Record<string, unknown>) => item.name === 'same-name');
+    if (editedModel) {
+      editedModel.description = 'Edited after a transient validation failure';
+      editedModel.validation = { level: 'standard', status: 'unavailable', checked_at: 'stale-failure', capabilities: {} };
+      editedModel.evaluation = { status: 'unavailable', checked_at: 'stale-failure' };
+    }
+    agent.updateProviders(editedProviders);
+    const resetEditedModel = agent.config.findDeployment({ providerId: 'provider-openai', modelId: 'same-name' });
+    agent.setModel('deployment:provider-openai:same-name');
+    ok(resetEditedModel?.validation?.level === 'discovered'
+      && resetEditedModel.validation.checked_at === ''
+      && resetEditedModel.evaluation === undefined
+      && agent.modelIsUnavailable(agent.model) === false,
+    'editing a model invalidates stale unavailable evidence and restores an unvalidated usable state');
+
     const auditPath = path.join(root, 'routing', 'route-decisions.jsonl');
     const audit = fs.readFileSync(auditPath, 'utf-8');
     ok(audit.includes('catalogSnapshotHash') && !audit.includes('Provider-scoped request') && !audit.includes('openai-key'),
@@ -231,6 +248,13 @@ async function main(): Promise<void> {
       && fixedAgent.activeDeployment()?.providerId === 'fixed-backup-provider'
       && fixedAgent.activeDeployment()?.modelId === 'fixed-backup',
     'fixed-model fallback updates both the displayed model and active deployment identity');
+    fixedAgent.setModel('fixed-primary');
+    fixedAgent.noteProviderBalanceFailure();
+    const balancePrevious = fixedAgent.switchToFallbackModel('[LLM Error: 402] insufficient balance');
+    ok(balancePrevious === 'fixed-primary'
+      && fixedAgent.activeDeployment()?.providerId === 'fixed-backup-provider'
+      && fixedAgent.activeDeployment()?.modelId === 'fixed-backup',
+    'fixed-model balance exhaustion blocks only the failed deployment and switches to another usable model');
   } finally {
     fs.rmSync(fixedRoot, { recursive: true, force: true });
   }

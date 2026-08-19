@@ -49,6 +49,8 @@ function writeConfig(root: string, providers: Array<Record<string, unknown>>): v
 async function main(): Promise<void> {
   assert.equal(classifyRouteFailure('HTTP 402 Insufficient Balance').type, 'balance_exhausted');
   assert.equal(classifyRouteFailure('HTTP 402 Insufficient Balance').retryable, false);
+  assert.equal(classifyRouteFailure('HTTP 402 Insufficient Balance').switchAllowed, true);
+  assert.equal(classifyRouteFailure('HTTP 429 insufficient_quota').type, 'balance_exhausted');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-normal-chat-'));
   const errorRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-normal-chat-error-'));
   const fallbackRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-normal-chat-fallback-'));

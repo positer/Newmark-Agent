@@ -156,8 +156,10 @@ async function exerciseFullTui(wrapperPath) {
   const session = runInteractiveSession(wrapperPath);
   const { terminal, waitFor } = session;
   try {
-    await waitFor(/NEWMARK[\s\S]*WORKSPACES/, 'initial full-screen TUI');
-    log('initial full-screen TUI');
+    const initialStartedAt = Date.now();
+    const packagedColdStartTimeoutMs = String(process.env.NEWMARK_SSH_TUI_EXE || '').trim() ? 15_000 : 12_000;
+    await waitFor(/NEWMARK[\s\S]*WORKSPACES/, 'initial full-screen TUI', packagedColdStartTimeoutMs);
+    log(`initial full-screen TUI (${Date.now() - initialStartedAt}ms)`);
 
     terminal.write('\r');
     await waitFor(/Conversations[\s\S]*Plan[\s\S]*Goal[\s\S]*Subagents[\s\S]*Model/, 'expanded workspace tracking menu');

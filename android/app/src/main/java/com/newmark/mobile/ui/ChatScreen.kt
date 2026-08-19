@@ -7,10 +7,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.RepeatMode
@@ -51,6 +54,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -77,6 +81,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -103,6 +108,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -148,6 +155,10 @@ import com.newmark.mobile.ui.theme.NewmarkBorder
 import com.newmark.mobile.ui.theme.NewmarkTextPrimary
 import com.newmark.mobile.ui.theme.NewmarkTextSecondary
 import com.newmark.mobile.ui.theme.NewmarkTextTertiary
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import kotlin.math.roundToInt
 
 private val MODES = listOf("Build", "Plan", "Goal", "Flow")
 private val PcQueueEase = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
@@ -159,6 +170,28 @@ private enum class InputCompositeMenu { PlusMain, PlusModes, ModelMain, Models, 
 private val ChatAreaHorizontalInset = 24.dp
 private val WorkRunContentStartInset = 24.dp
 private val WorkRunRightSafeInset = 34.dp
+
+internal fun queueDragTargetIndex(
+    sourceIndex: Int,
+    dragOffsetPx: Float,
+    rowStepPx: Float,
+    itemCount: Int,
+): Int {
+    if (sourceIndex !in 0 until itemCount || rowStepPx <= 0f) return sourceIndex
+    return (sourceIndex + (dragOffsetPx / rowStepPx).roundToInt())
+        .coerceIn(0, itemCount - 1)
+}
+
+internal fun queueRowDisplacementPx(
+    rowIndex: Int,
+    sourceIndex: Int,
+    targetIndex: Int,
+    rowStepPx: Float,
+): Float = when {
+    sourceIndex < targetIndex && rowIndex in (sourceIndex + 1)..targetIndex -> -rowStepPx
+    sourceIndex > targetIndex && rowIndex in targetIndex until sourceIndex -> rowStepPx
+    else -> 0f
+}
 
 /** 对话区渲染项：气泡 或 工作事件块（与 GUI 桌面端渲染契约一致） */
 sealed interface ChatItem {
@@ -195,6 +228,8 @@ data class QueueMessageUi(
     val id: String,
     val text: String,
     val editable: Boolean,
+    val requestedMode: String = "build",
+    val goalObjective: String = "",
 )
 
 @Composable
@@ -230,6 +265,7 @@ fun ChatScreen(
     onToggleQueuePause: () -> Unit = {},
     onUpdateQueueItem: (String, String) -> Unit = { _, _ -> },
     onDeleteQueueItem: (String) -> Unit = {},
+    onReorderQueueItems: (List<String>) -> Unit = {},
     onGuideQueueItem: (String) -> Unit = {},
     onInspectBranch: (String, Int) -> Unit = { _, _ -> },
     onEditUserMessage: (Int, String) -> Unit = { _, _ -> },
@@ -243,13 +279,22 @@ fun ChatScreen(
     var inputBounds by remember { mutableStateOf<Rect?>(null) }
     var inputText by remember { mutableStateOf("") }
     var goalEditPending by remember { mutableStateOf(false) }
+    var queueEditPending by remember { mutableStateOf<QueueMessageUi?>(null) }
+    val inputFocusRequester = remember { FocusRequester() }
     var inputMenu by remember { mutableStateOf<InputCompositeMenu?>(null) }
     var inputMenuAnchor by remember { mutableStateOf<Rect?>(null) }
+    var inputAreaHeight by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { Toast.makeText(context, "已选择：${it.lastPathSegment ?: "文件"}", Toast.LENGTH_SHORT).show() }
     }
     BackHandler(enabled = inputMenu != null) { inputMenu = null }
+    LaunchedEffect(goalEditPending, queueEditPending?.id) {
+        if (goalEditPending || queueEditPending != null) {
+            inputFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
+    }
     CompositionLocalProvider(LocalPcColors provides if (dark) PcColorsDark else PcColorsLight) {
         Box(
             modifier = modifier
@@ -287,26 +332,6 @@ fun ChatScreen(
                 modifier = Modifier.weight(1f),
             )
 
-                flow?.takeIf { it.running }?.let {
-                    FlowTakeoverBubble(flow = it, onToggle = onToggleFlow)
-                }
-                InputStack(
-                goal = goal,
-                flow = flow,
-                queueItems = queueItems,
-                queuePaused = queuePaused,
-                onEditGoal = {
-                    inputText = it
-                    goalEditPending = true
-                },
-                onToggleGoalPause = onToggleGoalPause,
-                onDeleteGoal = onDeleteGoal,
-                onToggleQueuePause = onToggleQueuePause,
-                onUpdateQueueItem = onUpdateQueueItem,
-                onDeleteQueueItem = onDeleteQueueItem,
-                onGuideQueueItem = onGuideQueueItem,
-            )
-
                 InputArea(
                 running = isSending,
                 remoteMode = remoteMode,
@@ -321,7 +346,11 @@ fun ChatScreen(
                 onSelectIntelligence = onSelectIntelligence,
                 onSelectMode = onSelectMode,
                 onSend = { value ->
-                    if (goalEditPending) {
+                    val queueEdit = queueEditPending
+                    if (queueEdit != null) {
+                        onUpdateQueueItem(queueEdit.id, value)
+                        queueEditPending = null
+                    } else if (goalEditPending) {
                         onEditGoal(value)
                         goalEditPending = false
                     } else onSend(value)
@@ -331,7 +360,48 @@ fun ChatScreen(
                 onInputBoundsChanged = { inputBounds = it },
                 onOpenPlusMenu = { anchor -> inputMenuAnchor = anchor; inputMenu = InputCompositeMenu.PlusMain },
                 onOpenModelMenu = { anchor -> inputMenuAnchor = anchor; inputMenu = InputCompositeMenu.ModelMain },
+                focusRequester = inputFocusRequester,
+                modifier = Modifier.onSizeChanged { inputAreaHeight = it.height },
             )
+            }
+            // PC `.input-float-stack` is absolutely positioned above the input
+            // and never consumes transcript layout space. Keeping runtime
+            // controls in this overlay prevents Queue expansion from measuring
+            // and redrawing the complete long conversation on every frame.
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .offset { IntOffset(0, -inputAreaHeight) }
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                flow?.takeIf { it.running }?.let {
+                    FlowTakeoverBubble(flow = it, onToggle = onToggleFlow)
+                }
+                InputStack(
+                    goal = goal.takeUnless { goalEditPending },
+                    flow = flow,
+                    queueItems = queueItems.filterNot { it.id == queueEditPending?.id },
+                    queuePaused = queuePaused,
+                    onEditGoal = {
+                        inputText = it
+                        goalEditPending = true
+                        onSelectMode("Goal")
+                        onDeleteGoal()
+                    },
+                    onToggleGoalPause = onToggleGoalPause,
+                    onDeleteGoal = onDeleteGoal,
+                    onToggleQueuePause = onToggleQueuePause,
+                    onUpdateQueueItem = onUpdateQueueItem,
+                    onDeleteQueueItem = onDeleteQueueItem,
+                    onEditQueueItem = {
+                        inputText = it.text
+                        queueEditPending = it
+                        onSelectMode(it.requestedMode.ifBlank { "build" }.replaceFirstChar(Char::titlecase))
+                    },
+                    onReorderQueueItems = onReorderQueueItems,
+                    onGuideQueueItem = onGuideQueueItem,
+                )
             }
             InputCompositeMenuOverlay(
                 menu = inputMenu,
@@ -515,8 +585,16 @@ private fun ChatContent(
         if (isSending) {
             item { ThinkingDots() }
         }
+        item(key = "transcript-bottom-reserve") {
+            Spacer(Modifier.height(TranscriptBottomReserveDp.dp))
+        }
     }
 }
+
+internal const val TranscriptBottomReserveLines = 10
+internal const val TranscriptBodyLineHeightDp = 19
+internal const val TranscriptBottomReserveDp =
+    TranscriptBottomReserveLines * TranscriptBodyLineHeightDp
 
 // ---- PC 对话区颜色（暗色对齐 index.html :root；亮色对齐 [data-theme=light]） ----
 @Immutable
@@ -969,6 +1047,9 @@ private fun WorkRunBlock(run: LocalWorkRun, modifier: Modifier = Modifier) {
     // 用户要求：工具集合默认折叠；桌面历史中用户保存的展开状态优先。
     var collapsed by remember(run.runId) { mutableStateOf(!run.expanded) }
     val pc = LocalPcColors.current
+    val collapsedGuides = remember(run.events, run.status) {
+        WorkRunProjection.collapsedGuides(run.events, run.status)
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -989,6 +1070,10 @@ private fun WorkRunBlock(run: LocalWorkRun, modifier: Modifier = Modifier) {
         WorkRunHead(run = run, collapsed = collapsed) { collapsed = !collapsed }
         if (!collapsed) {
             WorkRunEvents(run.events, run.status)
+        } else {
+            // PC keeps Guide messages visible below a collapsed Build. A Guide
+            // is an intervening user message, not hidden Build activity.
+            collapsedGuides.forEach { WorkGuideTimelineRow(it.event) }
         }
     }
 }
@@ -1067,14 +1152,10 @@ private fun Chevron(collapsed: Boolean, size: Dp = 8.dp) {
 private fun WorkRunEvents(events: List<LocalWorkEvent>, runStatus: String = "") {
     val pc = LocalPcColors.current
     val projected = remember(events, runStatus) { WorkRunProjection.project(events, runStatus) }
-    // PC `.conversation-work-run-body` reserves 34px on the right. The
-    // paired 24dp start inset lives on WorkRunBlock, leaving Build content
-    // between its own rail and the user timeline on every child path.
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(end = WorkRunRightSafeInset),
-    ) {
+    // Ordinary Build rows reserve 34dp for the user timeline. Guide is the
+    // deliberate exception: PC renders it as `.chat-msg.user` and places its
+    // node in that reserved right-side lane.
+    Column(Modifier.fillMaxWidth()) {
         if (projected.isEmpty()) {
             Text(
                 text = "等待公开工作进度…",
@@ -1086,11 +1167,16 @@ private fun WorkRunEvents(events: List<LocalWorkEvent>, runStatus: String = "") 
         }
         projected.forEach { item ->
             when (item) {
-                is WorkRunProjection.Item.Narrative -> WorkNarrativeRow(item.content, item.incomplete)
-                is WorkRunProjection.Item.Thought -> WorkThoughtRow(item.event)
-                is WorkRunProjection.Item.ToolGroup -> WorkToolGroup(item.items, item.completed)
-                is WorkRunProjection.Item.Guide -> WorkGuideRow(item.event)
-                is WorkRunProjection.Item.Event -> WorkProjectedEventRow(item.event)
+                is WorkRunProjection.Item.Guide -> WorkGuideTimelineRow(item.event)
+                else -> Box(Modifier.fillMaxWidth().padding(end = WorkRunRightSafeInset)) {
+                    when (item) {
+                        is WorkRunProjection.Item.Narrative -> WorkNarrativeRow(item.content, item.incomplete)
+                        is WorkRunProjection.Item.Thought -> WorkThoughtRow(item.event)
+                        is WorkRunProjection.Item.ToolGroup -> WorkToolGroup(item.items, item.completed)
+                        is WorkRunProjection.Item.Event -> WorkProjectedEventRow(item.event)
+                        is WorkRunProjection.Item.Guide -> Unit
+                    }
+                }
             }
         }
     }
@@ -1485,10 +1571,27 @@ private fun WorkProjectedEventRow(event: LocalWorkEvent) {
     WorkEventRow(icon = icon, text = label, color = color)
 }
 
-/** Guide 的 accepted/applied/deferred/rejected 生命周期；按 clientMessageId 在投影中去重。 */
+private val GuideTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+
+private fun guideTimestamp(raw: String, fallbackMs: Long): String {
+    val epochMs = raw.toLongOrNull()
+        ?: runCatching { Instant.parse(raw).toEpochMilli() }.getOrNull()
+        ?: fallbackMs.takeIf { it > 0 }
+        ?: return ""
+    return runCatching {
+        GuideTimeFormatter.format(Instant.ofEpochMilli(epochMs).atZone(ZoneId.systemDefault()))
+    }.getOrDefault("")
+}
+
+/**
+ * PC `.work-run-guide-message.chat-msg.user`：Guide 是插入当前 Build 的用户输入，
+ * 必须落在右侧用户时间线，而不是显示成 Build 左轨里的普通事件。
+ */
 @Composable
-private fun WorkGuideRow(event: LocalWorkEvent) {
+private fun WorkGuideTimelineRow(event: LocalWorkEvent) {
     val pc = LocalPcColors.current
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     val guide = event.guide ?: WorkGuide(
         clientMessageId = event.clientMessageId,
         guideId = event.guideId,
@@ -1503,32 +1606,62 @@ private fun WorkGuideRow(event: LocalWorkEvent) {
         "rejected" -> "已拒绝"
         else -> status
     }
-    var expanded by remember(guide.clientMessageId, guide.guideId, status) { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) { expanded = !expanded },
-            verticalAlignment = Alignment.CenterVertically,
+    val time = guideTimestamp(
+        raw = guide.createdAt.ifBlank { event.timestampText },
+        fallbackMs = event.timestamp,
+    )
+    val statusColor = when (status) {
+        "rejected" -> pc.error
+        "deferred" -> Color(0xFFFFD27A)
+        else -> pc.accent
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            horizontalAlignment = Alignment.End,
         ) {
-            Icon(LucideIcons.MessageSquare, contentDescription = "Guide", tint = pc.textDim, modifier = Modifier.size(12.dp))
-            Spacer(Modifier.width(12.dp))
-            Text(text = label, fontSize = 11.sp, color = pc.textDim, modifier = Modifier.weight(1f))
-            Chevron(collapsed = !expanded, size = 7.dp)
-        }
-        if (expanded && guide.content.isNotBlank()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("用户输入", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = pc.accent)
+                if (time.isNotBlank()) Text(" | $time", fontSize = 10.sp, color = pc.textDim)
+                Text(
+                    text = label,
+                    fontSize = 9.sp,
+                    color = statusColor,
+                    modifier = Modifier
+                        .padding(start = 5.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .border(1.dp, statusColor.copy(alpha = 0.34f), RoundedCornerShape(999.dp))
+                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                )
+                MessageActionButton(
+                    label = "复制",
+                    onClick = {
+                        clipboard.setText(AnnotatedString(guide.content))
+                        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                    },
+                ) {
+                    Text(text = "⧉", fontSize = 12.sp, color = pc.textDim)
+                }
+            }
             MarkdownBody(
                 text = guide.content,
-                baseColor = pc.textDim,
-                baseFontSize = 11f,
-                baseLineHeight = 17f,
-                modifier = Modifier.padding(start = 24.dp, top = 4.dp, bottom = 5.dp),
+                baseColor = pc.text,
+                alignEnd = true,
             )
+            WorkGuideImageAttachments(guide.attachments)
         }
-        WorkGuideImageAttachments(guide.attachments)
+        Spacer(Modifier.width(14.dp))
+        MessageDot(statusColor)
+        Spacer(Modifier.width(3.dp))
     }
 }
 
@@ -1602,6 +1735,8 @@ private fun InputStack(
     onToggleQueuePause: () -> Unit,
     onUpdateQueueItem: (String, String) -> Unit,
     onDeleteQueueItem: (String) -> Unit,
+    onEditQueueItem: (QueueMessageUi) -> Unit,
+    onReorderQueueItems: (List<String>) -> Unit,
     onGuideQueueItem: (String) -> Unit,
 ) {
     Column(
@@ -1612,8 +1747,9 @@ private fun InputStack(
             items = queueItems,
             paused = queuePaused,
             onTogglePause = onToggleQueuePause,
-            onUpdate = onUpdateQueueItem,
             onDelete = onDeleteQueueItem,
+            onEdit = onEditQueueItem,
+            onReorder = onReorderQueueItems,
             onGuide = onGuideQueueItem,
         )
         flow?.promptText?.takeIf { it.isNotBlank() }?.let {
@@ -1705,16 +1841,35 @@ private fun QueuePanel(
     items: List<QueueMessageUi>,
     paused: Boolean,
     onTogglePause: () -> Unit,
-    onUpdate: (String, String) -> Unit,
     onDelete: (String) -> Unit,
+    onEdit: (QueueMessageUi) -> Unit,
+    onReorder: (List<String>) -> Unit,
     onGuide: (String) -> Unit,
 ) {
     val pc = LocalPcColors.current
+    val density = LocalDensity.current
     var collapsed by remember { mutableStateOf(true) }
+    var visualItems by remember { mutableStateOf(items) }
+    var draggingId by remember { mutableStateOf<String?>(null) }
+    var dragOffsetPx by remember { mutableFloatStateOf(0f) }
+    var dragSourceIndex by remember { mutableIntStateOf(-1) }
+    var dragTargetIndex by remember { mutableIntStateOf(-1) }
+    val headerInteractionSource = remember { MutableInteractionSource() }
+    val rowStepPx = with(density) { 40.dp.toPx() }
+    LaunchedEffect(items) {
+        if (draggingId == null) visualItems = items
+    }
     StackCard {
         Column {
             Row(
-                modifier = Modifier.fillMaxWidth().height(30.dp).clickable { collapsed = !collapsed }.padding(start = 9.dp, end = 6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(30.dp)
+                    .clickable(
+                        interactionSource = headerInteractionSource,
+                        indication = null,
+                    ) { collapsed = !collapsed }
+                    .padding(start = 9.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("Next ${items.size}", color = pc.text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
@@ -1725,15 +1880,71 @@ private fun QueuePanel(
                 visible = !collapsed,
                 enter = expandVertically(
                     expandFrom = Alignment.Top,
-                    animationSpec = tween(durationMillis = 280, easing = PcQueueEase),
-                ) + fadeIn(animationSpec = tween(durationMillis = 180, delayMillis = 35)),
+                    animationSpec = tween(durationMillis = 150, easing = PcQueueEase),
+                ),
                 exit = shrinkVertically(
                     shrinkTowards = Alignment.Top,
-                    animationSpec = tween(durationMillis = 240, easing = PcQueueEase),
-                ) + fadeOut(animationSpec = tween(durationMillis = 140)),
+                    animationSpec = tween(durationMillis = 150, easing = PcQueueEase),
+                ),
             ) {
-                Column {
-                    items.forEach { item -> QueueRow(item, onUpdate, onDelete, onGuide) }
+                Column(Modifier.heightIn(max = 176.dp).verticalScroll(rememberScrollState())) {
+                    visualItems.forEachIndexed { index, item ->
+                        key(item.id) {
+                            QueueRow(
+                                item = item,
+                                dragging = draggingId == item.id,
+                                dragOffsetPx = if (draggingId == item.id) dragOffsetPx else 0f,
+                                displacedOffsetPx = queueRowDisplacementPx(
+                                    rowIndex = index,
+                                    sourceIndex = dragSourceIndex,
+                                    targetIndex = dragTargetIndex,
+                                    rowStepPx = rowStepPx,
+                                ),
+                                onDragStart = {
+                                    draggingId = item.id
+                                    dragOffsetPx = 0f
+                                    dragSourceIndex = index
+                                    dragTargetIndex = index
+                                },
+                                onDrag = { delta ->
+                                    if (draggingId != item.id) return@QueueRow
+                                    val minimum = -dragSourceIndex * rowStepPx
+                                    val maximum = (visualItems.lastIndex - dragSourceIndex) * rowStepPx
+                                    dragOffsetPx = (dragOffsetPx + delta).coerceIn(minimum, maximum)
+                                    dragTargetIndex = queueDragTargetIndex(
+                                        sourceIndex = dragSourceIndex,
+                                        dragOffsetPx = dragOffsetPx,
+                                        rowStepPx = rowStepPx,
+                                        itemCount = visualItems.size,
+                                    )
+                                },
+                                onDragEnd = {
+                                    val source = dragSourceIndex
+                                    val target = dragTargetIndex
+                                    if (source in visualItems.indices && target in visualItems.indices && source != target) {
+                                        val reordered = visualItems.toMutableList()
+                                        val moved = reordered.removeAt(source)
+                                        reordered.add(target, moved)
+                                        visualItems = reordered
+                                        onReorder(reordered.map { it.id })
+                                    }
+                                    draggingId = null
+                                    dragOffsetPx = 0f
+                                    dragSourceIndex = -1
+                                    dragTargetIndex = -1
+                                },
+                                onDragCancel = {
+                                    draggingId = null
+                                    dragOffsetPx = 0f
+                                    dragSourceIndex = -1
+                                    dragTargetIndex = -1
+                                },
+                                onEdit = onEdit,
+                                onDelete = onDelete,
+                                onGuide = onGuide,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1741,23 +1952,71 @@ private fun QueuePanel(
 }
 
 @Composable
-private fun QueueRow(item: QueueMessageUi, onUpdate: (String, String) -> Unit, onDelete: (String) -> Unit, onGuide: (String) -> Unit) {
+private fun QueueRow(
+    item: QueueMessageUi,
+    dragging: Boolean,
+    dragOffsetPx: Float,
+    displacedOffsetPx: Float,
+    onDragStart: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit,
+    onEdit: (QueueMessageUi) -> Unit,
+    onDelete: (String) -> Unit,
+    onGuide: (String) -> Unit,
+) {
     val pc = LocalPcColors.current
-    var editing by remember(item.id, item.text) { mutableStateOf(false) }
-    var value by remember(item.id, item.text) { mutableStateOf(item.text) }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("⋮⋮", color = pc.textDim, fontSize = 11.sp)
-        Spacer(Modifier.width(5.dp))
-        if (editing && item.editable) {
-            BasicTextField(value, { value = it }, textStyle = TextStyle(pc.text, 11.sp), modifier = Modifier.weight(1f))
-            StackIconButton(LucideIcons.Check, "保存", pc.accent) { editing = false; onUpdate(item.id, value) }
-        } else {
-            Text(item.text, color = pc.text, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            if (item.editable) {
-                StackIconButton(LucideIcons.ArrowRight, "立即 Guide", pc.accent2) { onGuide(item.id) }
-                StackIconButton(LucideIcons.SquarePen, "编辑", pc.textDim) { editing = true }
-                StackIconButton(LucideIcons.X, "删除", Color(0xFFFF7777)) { onDelete(item.id) }
+    val animatedDisplacementPx by animateFloatAsState(
+        targetValue = displacedOffsetPx,
+        animationSpec = tween(durationMillis = 150, easing = PcQueueEase),
+        label = "queueNeighborDisplacement",
+    )
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .zIndex(if (dragging) 2f else 0f)
+            .graphicsLayer {
+                translationY = if (dragging) dragOffsetPx else animatedDisplacementPx
+                scaleX = if (dragging) 0.99f else 1f
+                scaleY = if (dragging) 0.99f else 1f
+                alpha = if (dragging) 0.58f else 1f
             }
+            .background(Color.Transparent, NewmarkShapeSmall)
+            .pointerInput(item.id, item.editable) {
+                if (!item.editable) return@pointerInput
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { onDragStart() },
+                    onDragEnd = onDragEnd,
+                    onDragCancel = onDragCancel,
+                    onDrag = { change, amount ->
+                        change.consume()
+                        onDrag(amount.y)
+                    },
+                )
+            }
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(width = 16.dp, height = 24.dp).drawBehind {
+                val dotColor = pc.textDim
+                val radius = 1.25.dp.toPx()
+                val x1 = size.width * 0.35f
+                val x2 = size.width * 0.65f
+                for (row in 1..3) {
+                    val y = size.height * row / 4f
+                    drawCircle(dotColor, radius, Offset(x1, y))
+                    drawCircle(dotColor, radius, Offset(x2, y))
+                }
+            },
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(item.text, color = pc.text, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        if (item.editable) {
+            StackIconButton(LucideIcons.ArrowRight, "立即 Guide", pc.accent2) { onGuide(item.id) }
+            StackIconButton(LucideIcons.SquarePen, "编辑", pc.textDim) { onEdit(item) }
+            StackIconButton(LucideIcons.X, "删除", Color(0xFFFF7777)) { onDelete(item.id) }
         }
     }
 }
@@ -1829,6 +2088,8 @@ private fun InputArea(
     onInputBoundsChanged: (Rect) -> Unit = {},
     onOpenPlusMenu: (Rect) -> Unit,
     onOpenModelMenu: (Rect) -> Unit,
+    focusRequester: FocusRequester,
+    modifier: Modifier = Modifier,
 ) {
     val p = LocalNewmarkPalette.current
     var mode by remember { mutableStateOf(selectedMode) }
@@ -1837,7 +2098,7 @@ private fun InputArea(
     }
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .background(p.bgSecondary),
     ) {
@@ -1865,6 +2126,7 @@ private fun InputArea(
                 onValueChange = onTextChange,
                 modifier = Modifier
                     .weight(1f)
+                    .focusRequester(focusRequester)
                     .onGloballyPositioned { onInputBoundsChanged(it.boundsInRoot()) },
                 textStyle = TextStyle(
                     color = p.textPrimary,
@@ -1964,7 +2226,9 @@ private fun InputCompositeMenuOverlay(
     val p = LocalNewmarkPalette.current
     val density = LocalDensity.current
     val config = LocalConfiguration.current
-    val width = if (visibleMenu == InputCompositeMenu.Models) 268.dp else 190.dp
+    // First and second levels share the exact same compact shell. Model rows
+    // scroll inside it; a secondary page must never widen the popup.
+    val width = 190.dp
     val widthPx = with(density) { width.roundToPx() }
     val marginPx = with(density) { 8.dp.roundToPx() }
     var overlaySize by remember { mutableStateOf(IntSize.Zero) }
@@ -1982,7 +2246,6 @@ private fun InputCompositeMenuOverlay(
     // and cannot jump after IME-safe placement resolves.
     val bottomAnchorOffset = visibleAnchor.top.toInt() - gapPx - overlaySize.height
     val availableModes = if (remoteMode) MODES else listOf("Build", "Plan")
-    val scroll = rememberScrollState()
 
     Box(
         Modifier
@@ -2000,19 +2263,22 @@ private fun InputCompositeMenuOverlay(
                 .align(Alignment.BottomStart)
                 .offset { IntOffset(xPx, bottomAnchorOffset) }
                 .graphicsLayer {
-                    val progress = entrance.value
+                    val firstLevelProgress = entrance.value
                     transformOrigin = TransformOrigin(anchorOriginX, 1f)
-                    // A restrained scale keeps the PC popover character while
-                    // making the button-origin motion unmistakable on phone.
-                    scaleX = 0.18f + 0.82f * progress
-                    scaleY = 0.08f + 0.92f * progress
+                    // Only the initial first-level opening grows from the exact
+                    // tapped control. First-level <-> second-level navigation is
+                    // handled by the shell's SizeTransform below, preserving the
+                    // original continuous popover morph instead of replaying an
+                    // unrelated entrance animation.
+                    scaleX = 0.18f + 0.82f * firstLevelProgress
+                    scaleY = 0.08f + 0.92f * firstLevelProgress
+                    translationY = with(density) { 2.dp.toPx() } * (1f - firstLevelProgress)
                     // Dismissal is an independent fade of the fully expanded
-                    // surface; it deliberately does not reverse either scale.
-                    alpha = (0.35f + 0.65f * progress) * exitAlpha.value
-                    translationY = with(density) { 2.dp.toPx() } * (1f - progress)
+                    // surface; it deliberately does not reverse the morph.
+                    alpha = (0.35f + 0.65f * firstLevelProgress) * exitAlpha.value
                 },
         ) {
-            Column(
+            Box(
                 modifier = Modifier
                     .width(width)
                     .heightIn(max = 320.dp)
@@ -2026,37 +2292,63 @@ private fun InputCompositeMenuOverlay(
                         indication = null,
                         onClick = {},
                     )
-                    .verticalScroll(scroll)
                     .padding(4.dp),
             ) {
-                when (visibleMenu) {
-                    InputCompositeMenu.PlusMain -> {
-                        MenuRow("模式选择", trailing = mode) { onMenuChange(InputCompositeMenu.PlusModes) }
-                        MenuRow("选择文件") { onDismiss(); onChooseFile() }
-                    }
-                    InputCompositeMenu.PlusModes -> {
-                        MenuRow("← 返回") { onMenuChange(InputCompositeMenu.PlusMain) }
-                        availableModes.forEach { candidate ->
-                            MenuRow(candidate, selected = candidate == mode) { onMode(candidate); onDismiss() }
-                        }
-                    }
-                    InputCompositeMenu.ModelMain -> {
-                        MenuRow("模型选择", trailing = selectedModel) { onMenuChange(InputCompositeMenu.Models) }
-                        MenuRow("智能档位", trailing = intelligence.ifBlank { "medium" }) { onMenuChange(InputCompositeMenu.Tiers) }
-                    }
-                    InputCompositeMenu.Models -> {
-                        MenuRow("← 返回") { onMenuChange(InputCompositeMenu.ModelMain) }
-                        if (options.isEmpty()) MenuRow("暂无可用模型", onClick = onDismiss)
-                        options.forEach { option ->
-                            MenuRow(option.label, selected = option.modelName == selectedModelName.ifBlank { selectedModel }) {
-                                onSelectModel(option); onDismiss()
+                AnimatedContent(
+                    targetState = visibleMenu,
+                    transitionSpec = {
+                        (fadeIn(
+                            animationSpec = tween(durationMillis = 150, easing = PcQueueEase),
+                        ) togetherWith fadeOut(
+                            animationSpec = tween(durationMillis = 90, easing = PcQueueEase),
+                        )).using(
+                            SizeTransform(
+                                clip = false,
+                                sizeAnimationSpec = { _, _ ->
+                                    tween(durationMillis = 220, easing = PcQueueEase)
+                                },
+                            ),
+                        )
+                    },
+                    label = "inputCompositeMenuPageMorph",
+                ) { targetMenu ->
+                    val pageScroll = rememberScrollState()
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 312.dp)
+                            .verticalScroll(pageScroll),
+                    ) {
+                        when (targetMenu) {
+                            InputCompositeMenu.PlusMain -> {
+                                MenuRow("模式选择", trailing = mode) { onMenuChange(InputCompositeMenu.PlusModes) }
+                                MenuRow("选择文件") { onDismiss(); onChooseFile() }
                             }
-                        }
-                    }
-                    InputCompositeMenu.Tiers -> {
-                        MenuRow("← 返回") { onMenuChange(InputCompositeMenu.ModelMain) }
-                        INTELLIGENCE_TIERS.forEach { tier ->
-                            MenuRow(tier, selected = tier == intelligence) { onSelectIntelligence(tier); onDismiss() }
+                            InputCompositeMenu.PlusModes -> {
+                                MenuRow("← 返回") { onMenuChange(InputCompositeMenu.PlusMain) }
+                                availableModes.forEach { candidate ->
+                                    MenuRow(candidate, selected = candidate == mode) { onMode(candidate); onDismiss() }
+                                }
+                            }
+                            InputCompositeMenu.ModelMain -> {
+                                MenuRow("模型选择", trailing = selectedModel) { onMenuChange(InputCompositeMenu.Models) }
+                                MenuRow("智能档位", trailing = intelligence.ifBlank { "medium" }) { onMenuChange(InputCompositeMenu.Tiers) }
+                            }
+                            InputCompositeMenu.Models -> {
+                                MenuRow("← 返回") { onMenuChange(InputCompositeMenu.ModelMain) }
+                                if (options.isEmpty()) MenuRow("暂无可用模型", onClick = onDismiss)
+                                options.forEach { option ->
+                                    MenuRow(option.label, selected = option.modelName == selectedModelName.ifBlank { selectedModel }) {
+                                        onSelectModel(option); onDismiss()
+                                    }
+                                }
+                            }
+                            InputCompositeMenu.Tiers -> {
+                                MenuRow("← 返回") { onMenuChange(InputCompositeMenu.ModelMain) }
+                                INTELLIGENCE_TIERS.forEach { tier ->
+                                    MenuRow(tier, selected = tier == intelligence) { onSelectIntelligence(tier); onDismiss() }
+                                }
+                            }
                         }
                     }
                 }

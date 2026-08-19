@@ -1848,11 +1848,11 @@ if (isViewerArg) {
         ensureWorkspaceRegistryWatcher();
         restoreStoredFlowSuspension();
         recordStartup('agent-ready');
-        // 远程触及开关开启 → GUI 进程内托管启动 mobile server（托盘常驻不中断）
-        if (agent.config.getBool('remote', 'touch_enabled')) {
-          try {
-            const { runServer } = require('./server') as typeof import('./server');
-            runServer(root, {
+        // GUI 始终注册 mobile server 的运行时桥接；开关打开时才开始监听。
+        // 这样从关闭态切到开启态时也能在当前 GUI 进程中原地重启服务。
+        try {
+          const { configureHostedServer, runServer } = require('./server') as typeof import('./server');
+          configureHostedServer(root, {
               agent,
               automation,
               onWorkEvent: event => broadcastAgentWorkEvent(event, false),
@@ -1891,14 +1891,18 @@ if (isViewerArg) {
                   const queueAction = action === 'queue_enqueue' ? 'enqueue'
                     : action === 'queue_update' ? 'update'
                       : action === 'queue_delete' ? 'delete'
-                        : action === 'queue_toggle_pause' ? 'toggle_pause'
-                          : 'guide';
+                        : action === 'queue_reorder' ? 'reorder'
+                          : action === 'queue_toggle_pause' ? 'toggle_pause'
+                            : 'guide';
                   const queueInput = {
                     id: String(input?.id || ''),
                     text: String(input?.text || value || ''),
                     requestedMode: String(input?.requestedMode || 'build'),
                     goalObjective: String(input?.goalObjective || ''),
                     createdAt: String(input?.createdAt || ''),
+                    orderedIds: Array.isArray(input?.orderedIds)
+                      ? input.orderedIds.map((id: unknown) => String(id || ''))
+                      : undefined,
                   };
                   return wslBackendEnabled()
                     ? await ensureWslConversationPool()!.queueAction(target, queueAction, queueInput)
@@ -2020,11 +2024,13 @@ if (isViewerArg) {
                   : await ensureElectronUtilityPool().prompt({ message: promptMessage, target, options, queueMode });
                 return { ...result } as Record<string, unknown>;
               },
-            });
+          });
+          if (agent.config.getBool('remote', 'touch_enabled')) {
+            runServer(root);
             recordStartup('mobile-server-hosted');
-          } catch (error) {
-            console.error('[Newmark] hosted mobile server failed:', error instanceof Error ? error.message : String(error));
           }
+        } catch (error) {
+          console.error('[Newmark] hosted mobile server failed:', error instanceof Error ? error.message : String(error));
         }
       }
     };
@@ -3696,9 +3702,30 @@ if (isViewerArg) {
           electronUtilityRuntimePool?.updateSetting(section, key, value),
           wslAgentRuntimePool?.updateSetting(section, key, value),
         ]);
+        if (section === 'remote' && key === 'touch_enabled') {
+          const { setHostedServerEnabled } = require('./server') as typeof import('./server');
+          await setHostedServerEnabled(value === true || value === 'on');
+        }
         return true;
       }
       return false;
+    });
+
+    ipcMain.handle('mobile:serverStatus', async () => {
+      if (!agent) return { enabled: false, listening: false, reachable: false, state: 'off', host: '', port: 47890, error: 'Agent not initialized', checkedAt: new Date().toISOString(), startedAt: 0 };
+      const enabled = agent.config.getBool('remote', 'touch_enabled');
+      const { hostedServerStatus } = require('./server') as typeof import('./server');
+      return await hostedServerStatus(enabled);
+    });
+
+    ipcMain.handle('mobile:setRemoteTouchEnabled', async (_event, value: boolean) => {
+      if (!agent) return { ok: false, error: 'Agent not initialized' };
+      const enabled = value === true;
+      agent.config.set('remote', 'touch_enabled', enabled);
+      agent.config.save();
+      const { setHostedServerEnabled } = require('./server') as typeof import('./server');
+      const status = await setHostedServerEnabled(enabled);
+      return { ok: true, ...status };
     });
 
     ipcMain.handle('agent:openGlobalConfig', async () => {

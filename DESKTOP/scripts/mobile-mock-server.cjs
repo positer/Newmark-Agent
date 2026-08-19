@@ -14,6 +14,8 @@ const port = Number(process.env.NEWMARK_MOBILE_MOCK_PORT || 47991);
 const token = process.env.NEWMARK_MOBILE_MOCK_TOKEN || 'mobile-stress-token';
 const conversationId = 'mobile-stress-conversation';
 const workspaceId = 'mobile-stress-workspace';
+const secondaryConversationId = 'mobile-stress-conversation-b';
+const secondaryWorkspaceId = 'mobile-stress-workspace-b';
 const startedAt = new Date().toISOString();
 const clients = new Set();
 const metrics = {
@@ -35,10 +37,12 @@ const metrics = {
   pcSends: 0,
   injectedForeignEvents: 0,
   injectedStaleEvents: 0,
+  targetReads: [],
 };
 let liveState = null;
 let stopRequested = false;
 let goalPaused = false;
+let goalObjective = 'Stress Goal: preserve the authoritative remote state';
 let flowRunning = false;
 let flowPaused = false;
 let queuePaused = true;
@@ -56,6 +60,40 @@ const messages = Array.from({ length: 200 }, (_, index) => ({
   timestamp: new Date(Date.now() - (200 - index) * 1000).toISOString(),
   runId: index % 2 === 1 ? `fixture-run-${Math.floor(index / 2)}` : '',
 }));
+const secondaryMessages = [
+  {
+    messageId: 'secondary-user-marker',
+    role: 'user',
+    content: 'SECONDARY_TARGET_ONLY_MARKER',
+    timestamp: startedAt,
+    runId: '',
+  },
+  {
+    messageId: 'secondary-assistant-marker',
+    role: 'assistant',
+    content: 'SECONDARY_TARGET_STATIC_RESPONSE',
+    timestamp: startedAt,
+    runId: 'secondary-completed-run',
+  },
+];
+
+function requestedTarget(url) {
+  return {
+    workspaceId: String(url.searchParams.get('workspaceId') || workspaceId),
+    conversationId: String(url.searchParams.get('conversationId') || conversationId),
+  };
+}
+
+function targetKind(target) {
+  if (target.workspaceId === workspaceId && target.conversationId === conversationId) return 'primary';
+  if (target.workspaceId === secondaryWorkspaceId && target.conversationId === secondaryConversationId) return 'secondary';
+  return 'unknown';
+}
+
+function recordTargetRead(endpoint, target) {
+  metrics.targetReads.push({ endpoint, ...target, at: new Date().toISOString() });
+  if (metrics.targetReads.length > 500) metrics.targetReads.shift();
+}
 
 function event({ id, runId, type, sequence, content = '', status = '', toolCallId = '', toolName = '' }) {
   return {
@@ -95,6 +133,64 @@ function persistedRun() {
   };
 }
 
+function secondaryPersistedRun() {
+  const runId = 'secondary-completed-run';
+  return {
+    runId,
+    status: 'completed',
+    startedAt,
+    endedAt: startedAt,
+    primaryPrompt: 'SECONDARY_TARGET_ONLY_MARKER',
+    anchorMessageId: 'secondary-user-marker',
+    events: [
+      {
+        id: 'secondary-final',
+        runId,
+        conversationId: secondaryConversationId,
+        workspaceId: secondaryWorkspaceId,
+        runtimeKey: `${secondaryWorkspaceId}::${secondaryConversationId}`,
+        type: 'final_response',
+        sequence: 0,
+        content: 'SECONDARY_TARGET_STATIC_RESPONSE',
+        status: 'completed',
+        timestamp: startedAt,
+      },
+    ],
+  };
+}
+
+function workspaceRows(targetWorkspaceId) {
+  if (targetWorkspaceId === workspaceId) {
+    return {
+      workspace: { id: workspaceId, name: 'Primary live workspace', path: 'fixture/primary', isInternal: true },
+      conversations: [{
+        id: conversationId,
+        title: 'Primary live conversation',
+        messageCount: messages.length,
+        active: true,
+        running: Boolean(liveState && liveState.status === 'running'),
+        runtimeStatus: liveState?.status || 'idle',
+        updatedAt: startedAt,
+      }],
+    };
+  }
+  if (targetWorkspaceId === secondaryWorkspaceId) {
+    return {
+      workspace: { id: secondaryWorkspaceId, name: 'Secondary static workspace', path: 'fixture/secondary', isInternal: true },
+      conversations: [{
+        id: secondaryConversationId,
+        title: 'Secondary static conversation',
+        messageCount: secondaryMessages.length,
+        active: false,
+        running: false,
+        runtimeStatus: 'idle',
+        updatedAt: startedAt,
+      }],
+    };
+  }
+  return null;
+}
+
 function snapshot() {
   return {
     mode: 'build',
@@ -121,7 +217,10 @@ function snapshot() {
     chatMessages: messages,
     workRuns: [persistedRun()],
     workspaces: {
-      internal: [{ id: workspaceId, name: 'Mobile stress fixture', path: 'fixture', isInternal: true }],
+      internal: [
+        { id: workspaceId, name: 'Primary live workspace', path: 'fixture/primary', isInternal: true },
+        { id: secondaryWorkspaceId, name: 'Secondary static workspace', path: 'fixture/secondary', isInternal: true },
+      ],
       external: [],
       current: { id: workspaceId, name: 'Mobile stress fixture', path: 'fixture', isInternal: true },
     },
@@ -149,7 +248,7 @@ function broadcast(work, duplicate = false) {
   }
 }
 
-async function emitRun(count, duplicateEvery = 10, withFlow = true) {
+async function emitRun(count, duplicateEvery = 10, withFlow = true, intervalMs = 80) {
   metrics.activeBursts += 1;
   const runId = `stress-run-${Date.now()}-${metrics.bursts}`;
   let sequence = 0;
@@ -171,6 +270,13 @@ async function emitRun(count, duplicateEvery = 10, withFlow = true) {
   flowPaused = false;
   broadcast(start, true);
   for (let index = 0; index < count; index += 1) {
+    // Model the PC Flow runtime faithfully: pause freezes progression while
+    // the hosted service remains responsive to resume and stop actions.
+    // Without this gate a mobile pause receipt can be correct but the fixture
+    // races to completion before the resume interaction can be observed.
+    while (withFlow && flowRunning && flowPaused && !stopRequested) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
     if (stopRequested) {
       const interrupted = event({ id: `${runId}:interrupted`, runId, type: 'interrupted', sequence: sequence++, content: 'stopped by mobile', status: 'interrupted' });
       interrupted.anchorMessageId = anchorMessageId;
@@ -196,7 +302,7 @@ async function emitRun(count, duplicateEvery = 10, withFlow = true) {
     // Android uiautomator hierarchy capture takes ~5s on the target emulator.
     // Keep the Build live long enough for multiple independent in-flight UI
     // observations rather than racing the terminal boundary.
-    await new Promise(resolve => setTimeout(resolve, 80));
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
   }
   const final = event({ id: `${runId}:final`, runId, type: 'final_response', sequence: sequence++, content: 'fixture terminal response', status: 'completed' });
   final.anchorMessageId = anchorMessageId;
@@ -217,7 +323,7 @@ function conversationUiSnapshot() {
   metrics.uiStateReads += 1;
   const running = liveState && liveState.status === 'running';
   return {
-    goal: { objective: 'Stress Goal: preserve the authoritative remote state', paused: goalPaused, verified: false, goalRounds: 3 },
+    goal: goalObjective ? { objective: goalObjective, paused: goalPaused, verified: false, goalRounds: 3 } : null,
     flowSelection: { name: 'Mobile realtime stress', componentId: 1, componentType: 'dialog' },
     flow: { running: flowRunning, paused: flowPaused, name: 'Mobile realtime stress', promptText: flowRunning ? 'Flow prompt remains visible during Build streaming' : '', message: '' },
     queued: { steering: [], followUp: ['legacy fallback must not replace authoritative queue'] },
@@ -229,6 +335,43 @@ function conversationUiSnapshot() {
     inputMode: 'next',
     chatMessages: messages,
     workRuns: liveState ? [{ ...liveState }] : [persistedRun()],
+  };
+}
+
+function secondaryConversationSnapshot() {
+  return {
+    ...snapshot(),
+    status: 'idle',
+    activeConversationId: secondaryConversationId,
+    conversations: [{ id: secondaryConversationId, title: 'Secondary static conversation', messageCount: secondaryMessages.length, active: true, updatedAt: startedAt }],
+    chatMessages: secondaryMessages,
+    workRuns: [secondaryPersistedRun()],
+    workspaces: {
+      internal: [
+        { id: workspaceId, name: 'Primary live workspace', path: 'fixture/primary', isInternal: true },
+        { id: secondaryWorkspaceId, name: 'Secondary static workspace', path: 'fixture/secondary', isInternal: true },
+      ],
+      external: [],
+      current: { id: secondaryWorkspaceId, name: 'Secondary static workspace', path: 'fixture/secondary', isInternal: true },
+    },
+  };
+}
+
+function secondaryConversationUiSnapshot() {
+  metrics.uiStateReads += 1;
+  return {
+    goal: { objective: 'SECONDARY_TARGET_GOAL', paused: false, verified: false, goalRounds: 1 },
+    flowSelection: null,
+    flow: null,
+    queued: { steering: [], followUp: [] },
+    queueItems: [],
+    queuePaused: false,
+    runtime: null,
+    mode: 'plan',
+    status: 'idle',
+    inputMode: 'next',
+    chatMessages: secondaryMessages,
+    workRuns: [secondaryPersistedRun()],
   };
 }
 
@@ -300,9 +443,10 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/__stress/stats') return writeJson(res, 200, metrics);
   if (url.pathname === '/__stress/burst') {
     const count = Math.min(1000, Math.max(1, Number(url.searchParams.get('count') || 120)));
+    const intervalMs = Math.min(250, Math.max(20, Number(url.searchParams.get('intervalMs') || 80)));
     metrics.bursts += 1;
-    void emitRun(count).catch(error => { metrics.lastBurstError = String(error && error.message || error); metrics.activeBursts = Math.max(0, metrics.activeBursts - 1); });
-    return writeJson(res, 202, { ok: true, count, accepted: true });
+    void emitRun(count, 10, true, intervalMs).catch(error => { metrics.lastBurstError = String(error && error.message || error); metrics.activeBursts = Math.max(0, metrics.activeBursts - 1); });
+    return writeJson(res, 202, { ok: true, count, intervalMs, accepted: true });
   }
   if (url.pathname === '/__stress/pc-send') {
     metrics.pcSends += 1;
@@ -362,9 +506,21 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/mobile/pair-confirm' && req.method === 'POST') return writeJson(res, 200, { ok: true });
   if (url.pathname === '/api/mobile/hello') return writeJson(res, 200, { ok: true, hostname: 'Mobile Stress Mock', version: 'fixture' });
   if (url.pathname === '/api/mobile/state') return writeJson(res, 200, snapshot());
+  if (url.pathname === '/api/mobile/workspace-conversations') {
+    const requestedWorkspaceId = String(url.searchParams.get('workspaceId') || '');
+    const rows = workspaceRows(requestedWorkspaceId);
+    recordTargetRead('workspace-conversations', { workspaceId: requestedWorkspaceId, conversationId: '' });
+    if (!rows) return writeJson(res, 404, { error: 'Unknown workspace' });
+    return writeJson(res, 200, rows);
+  }
   if (url.pathname === '/api/mobile/conversation') {
+    const target = requestedTarget(url);
+    const kind = targetKind(target);
+    recordTargetRead('conversation', target);
+    if (kind === 'unknown') return writeJson(res, 404, { error: 'Unknown conversation target' });
+    const targetSnapshot = kind === 'secondary' ? secondaryConversationSnapshot() : snapshot();
     return writeJson(res, 200, {
-      ...snapshot(),
+      ...targetSnapshot,
       windowStart: 0,
       branchGroups: [],
       activeBranchId: '',
@@ -375,16 +531,33 @@ const server = http.createServer(async (req, res) => {
     });
   }
   if (url.pathname === '/api/mobile/conversation-ui-state') {
+    const target = requestedTarget(url);
+    const kind = targetKind(target);
+    recordTargetRead('conversation-ui-state', target);
+    if (kind === 'unknown') return writeJson(res, 404, { error: 'Unknown conversation target' });
     const delayMs = Math.min(3_000, Math.max(0, Number(url.searchParams.get('delayMs') || 0)));
     if (delayMs) await new Promise(resolve => setTimeout(resolve, delayMs));
-    return writeJson(res, 200, conversationUiSnapshot());
+    return writeJson(res, 200, kind === 'secondary' ? secondaryConversationUiSnapshot() : conversationUiSnapshot());
   }
   if (url.pathname === '/api/mobile/conversation-ui-action' && req.method === 'POST') {
     let body = '';
     for await (const chunk of req) body += String(chunk);
     const input = body ? JSON.parse(body) : {};
+    const target = {
+      workspaceId: String(input.workspaceId || ''),
+      conversationId: String(input.conversationId || ''),
+    };
+    if (targetKind(target) !== 'primary') return writeJson(res, 409, { error: 'Fixture mutations require the primary target' });
     metrics.queueActions += 1;
-    metrics.uiActions.push({ action: String(input.action || ''), id: String(input.id || ''), value: String(input.value || ''), at: new Date().toISOString() });
+    metrics.uiActions.push({
+      workspaceId: target.workspaceId,
+      conversationId: target.conversationId,
+      action: String(input.action || ''),
+      id: String(input.id || ''),
+      value: String(input.value || ''),
+      orderedIds: Array.isArray(input.orderedIds) ? input.orderedIds.map(String) : [],
+      at: new Date().toISOString(),
+    });
     if (input.action === 'queue_enqueue') {
       queueItems = queueItems.concat({
         id: String(input.id || `stress-next-${Date.now()}`),
@@ -400,8 +573,21 @@ const server = http.createServer(async (req, res) => {
       queueItems = queueItems.filter(item => item.id !== String(input.id || ''));
     } else if (input.action === 'queue_update') {
       queueItems = queueItems.map(item => item.id === String(input.id || '') ? { ...item, text: String(input.text || item.text) } : item);
+    } else if (input.action === 'queue_reorder') {
+      const orderedIds = Array.isArray(input.orderedIds) ? input.orderedIds.map(value => String(value || '')) : [];
+      const currentIds = queueItems.map(item => item.id);
+      const complete = orderedIds.length === currentIds.length
+        && new Set(orderedIds).size === orderedIds.length
+        && orderedIds.every(id => currentIds.includes(id));
+      if (!complete) return writeJson(res, 400, { error: 'A complete queue order with unique current item ids is required' });
+      const byId = new Map(queueItems.map(item => [item.id, item]));
+      queueItems = orderedIds.map(id => byId.get(id));
     } else if (input.action === 'goal_toggle_pause') {
       goalPaused = !goalPaused;
+    } else if (input.action === 'goal_clear') {
+      goalObjective = '';
+    } else if (input.action === 'goal_update') {
+      goalObjective = String(input.value || '').trim();
     } else if (input.action === 'flow_pause') {
       flowPaused = true;
     } else if (input.action === 'flow_resume') {
@@ -413,7 +599,7 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       queueItems,
       queuePaused,
-      goal: { objective: 'Stress Goal: preserve the authoritative remote state', paused: goalPaused, verified: false, goalRounds: 3 },
+      goal: goalObjective ? { objective: goalObjective, paused: goalPaused, verified: false, goalRounds: 3 } : null,
       flow: { running: flowRunning, paused: flowPaused, name: 'Mobile realtime stress', promptText: flowRunning ? 'Flow prompt remains visible during Build streaming' : '' },
       runtime: conversationUiSnapshot().runtime,
       queued: { steering: [], followUp: queueItems.map(item => item.text) },
@@ -424,6 +610,11 @@ const server = http.createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) body += String(chunk);
     const input = body ? JSON.parse(body) : {};
+    const target = {
+      workspaceId: String(input.workspaceId || workspaceId),
+      conversationId: String(input.conversationId || conversationId),
+    };
+    if (targetKind(target) !== 'primary') return writeJson(res, 409, { error: 'Fixture sends require the primary target' });
     messages.push({ messageId: `mobile-user-${Date.now()}`, role: 'user', content: String(input.message || ''), timestamp: new Date().toISOString(), runId: '' });
     metrics.bursts += 1;
     await emitRun(12, 4);

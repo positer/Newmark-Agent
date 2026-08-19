@@ -4221,6 +4221,44 @@ textarea.mcp-input { min-height:76px; resize:vertical; font-family:var(--font-mo
 .setting-control { flex: 1; }
 .settings-load-error { color: var(--notice-error-text); }
 
+.remote-touch-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.remote-touch-copy-title {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.remote-touch-copy-desc {
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+.remote-touch-action {
+  flex: 0 0 120px;
+  width: 120px;
+  min-width: 120px;
+  min-height: 28px;
+  box-sizing: border-box;
+}
+.remote-touch-status {
+  background: transparent !important;
+  border-color: currentColor;
+  box-shadow: 0 0 0 1px currentColor, 0 0 10px color-mix(in srgb, currentColor 42%, transparent);
+}
+.remote-touch-status:hover { background: transparent !important; }
+.remote-touch-status.listening { color: var(--accent2); }
+.remote-touch-status.error,
+.remote-touch-status.checking { color: #ffb454; }
+.remote-touch-status.off { color: var(--notice-error-text); }
+.remote-touch-status[aria-busy="true"] { cursor: wait; }
+
 .segmented-control {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5869,6 +5907,9 @@ var state = {
   configuredAgentBackend: 'windows',
   agentBackendRestartRequired: false,
   remoteTouchEnabled: true,
+  remoteTouchServer: { enabled: true, listening: false, reachable: false, state: 'checking', host: '', port: 47890, error: '', checkedAt: '', startedAt: 0 },
+  remoteTouchStatusBusy: false,
+  _remoteTouchStatusTimer: null,
   wslAvailable: false,
   wslDistros: [],
   defaultTerminalShell: 'powershell',
@@ -6051,6 +6092,10 @@ var NEWMARK_I18N = {
     'settings.runInWslDesc': 'Keeps the Windows UI and native desktop tools local while running the persistent Agent kernel, model calls, shell, and file tools inside WSL.',
     'settings.remoteTouch': 'Mobile remote-touch',
     'settings.remoteTouchDesc': 'Allow mobile access on the same LAN / Tailscale network',
+    'settings.remoteTouchListening': 'Listening',
+    'settings.remoteTouchError': 'Unreachable',
+    'settings.remoteTouchOff': 'Off',
+    'settings.remoteTouchChecking': 'Checking',
     'settings.remoteBehavior': 'Remote behavior',
     'settings.remoteConnect': 'Start connection',
     'settings.remoteConnectDesc': 'Show pairing QR',
@@ -6778,6 +6823,10 @@ var NEWMARK_I18N = {
     'settings.runInWslDesc': 'Windows UI 与桌面原生工具保留在本机，持续 Agent 内核、模型请求、Shell 和文件工具运行在 WSL。',
     'settings.remoteTouch': '移动端远程触及',
     'settings.remoteTouchDesc': '允许移动端通过同一内网 / Tailscale 连接',
+    'settings.remoteTouchListening': '监听中',
+    'settings.remoteTouchError': '不可触及',
+    'settings.remoteTouchOff': '已关闭',
+    'settings.remoteTouchChecking': '检测中',
     'settings.remoteBehavior': '远程行为',
     'settings.remoteConnect': '发起连接',
     'settings.remoteConnectDesc': '显示配对二维码',
@@ -6956,7 +7005,7 @@ var NEWMARK_I18N = {
     'model.unavailable': '不可用',
     'model.no': '否',
     'model.yes': '是',
-    'model.notChecked': '未校验',
+    'model.notChecked': '未检测',
     'archive.current': '归档当前对话',
     'archive.archiving': '归档中...',
     'archive.empty': '暂无归档。',
@@ -15031,7 +15080,7 @@ function formatModelStatus(status) {
   if (raw === 'available' || raw === 'verified') return t('model.available');
   if (raw === 'degraded') return t('model.degraded');
   if (raw === 'unavailable' || raw === 'failed' || raw === 'error') return t('model.unavailable');
-  if (raw === 'not checked' || raw === 'not_checked' || raw === 'pending') return t('model.notChecked');
+  if (raw === 'not checked' || raw === 'not_checked' || raw === 'unvalidated' || raw === 'pending') return t('model.notChecked');
   return status || t('model.notChecked');
 }
 
@@ -15043,6 +15092,7 @@ function effectiveUiModelStatus(modelEntry) {
   var textEvidence = capabilities.text === true || capabilities.text_input === true || capabilities.text_output === true
     || !!(modelEntry.evaluation && (modelEntry.evaluation.text_input || modelEntry.evaluation.text_output));
   if (rawValidation === 'auth_error' || rawValidation === 'invalid_config') return rawValidation;
+  if (String((modelEntry.validation && modelEntry.validation.level) || '').toLowerCase() === 'discovered') return 'unvalidated';
   if (textEvidence && rawValidation === 'unavailable') return 'degraded';
   return rawValidation || rawEvaluation;
 }
@@ -15106,15 +15156,15 @@ function renderGeneralSettings() {
     '<div class="setting-desc" id="agent-wsl-status">' + esc(state.agentBackend && state.agentBackend.connected ? t('settings.wslConnected') : t('settings.wslDisconnected')) + '</div></div></div>' : '';
   return wslHtml + '<div class="setting-subsection">' +
     '<div class="setting-subsection-title">' + esc(t('settings.remoteBehavior')) + '</div>' +
-    '<div class="setting-row">' +
-    '<label class="setting-label" for="remote-touch-enabled" style="display:inline-flex;align-items:center;gap:6px;min-width:120px;">' +
-    '<input type="checkbox" id="remote-touch-enabled"' + (state.remoteTouchEnabled ? ' checked' : '') + ' onchange="window.setRemoteTouchEnabled(this.checked)">' +
-    '<span>' + esc(t('settings.remoteTouch')) + '</span></label>' +
-    '<span class="setting-desc" style="flex:1;min-width:140px;">' + esc(t('settings.remoteTouchDesc')) + '</span>' +
+    '<div class="setting-row remote-touch-row">' +
+    '<button type="button" id="remote-touch-status-button" class="sec-btn remote-touch-action remote-touch-status ' + esc(remoteTouchStatusClass()) + '" aria-pressed="' + (state.remoteTouchEnabled ? 'true' : 'false') + '" aria-busy="' + (state.remoteTouchStatusBusy ? 'true' : 'false') + '" onclick="window.setRemoteTouchEnabled(!state.remoteTouchEnabled)" title="' + esc(remoteTouchStatusTitle()) + '"' + (state.remoteTouchStatusBusy ? ' disabled' : '') + '>' + esc(remoteTouchStatusText()) + '</button>' +
+    '<div class="remote-touch-copy"><div class="remote-touch-copy-title">' + esc(t('settings.remoteTouch')) + '</div>' +
+    '<div class="remote-touch-copy-desc">' + esc(t('settings.remoteTouchDesc')) + '</div></div>' +
     '</div>' +
-    '<div class="setting-row" style="border-bottom:none;">' +
-    '<button type="button" class="sec-btn primary" onclick="window.showMobilePairing()">' + esc(t('settings.remoteConnect')) + '</button>' +
-    '<span class="setting-desc" style="flex:1;">' + esc(t('settings.remoteConnectDesc')) + '</span>' +
+    '<div class="setting-row remote-touch-row" style="border-bottom:none;">' +
+    '<button type="button" id="remote-touch-connect-button" class="sec-btn primary remote-touch-action" onclick="window.showMobilePairing()">' + esc(t('settings.remoteConnect')) + '</button>' +
+    '<div class="remote-touch-copy"><div class="remote-touch-copy-title">' + esc(t('mobile.pair')) + '</div>' +
+    '<div class="remote-touch-copy-desc">' + esc(t('settings.remoteConnectDesc')) + '</div></div>' +
     '</div>' +
     '</div>' +
     '<div class="setting-row">' +
@@ -15223,7 +15273,7 @@ function renderModelSettings() {
       var normalizedStatus = String(statusRaw || '').toLowerCase();
       var statusClass = normalizedStatus === 'available' || normalizedStatus === 'verified' || normalizedStatus === 'degraded'
         ? 'model-eval-ok'
-        : (normalizedStatus === 'not checked' ? 'model-eval-pending' : 'model-eval-bad');
+        : (normalizedStatus === 'not checked' || normalizedStatus === 'unvalidated' ? 'model-eval-pending' : 'model-eval-bad');
       var details = '';
       if (typeof modelEntry !== 'string') {
         var tierMapCount = modelEntry.thinking_tier_map && typeof modelEntry.thinking_tier_map === 'object' ? Object.keys(modelEntry.thinking_tier_map).length : 0;
@@ -15792,13 +15842,96 @@ window.setAgentBackendMode = async function(mode) {
   return true;
 };
 
+function remoteTouchStatusClass() {
+  if (state.remoteTouchStatusBusy) return 'checking';
+  var status = state.remoteTouchServer || {};
+  if (!state.remoteTouchEnabled || status.state === 'off') return 'off';
+  return status.state === 'listening' && status.listening && status.reachable ? 'listening' : 'error';
+}
+
+function remoteTouchStatusText() {
+  var statusClass = remoteTouchStatusClass();
+  if (statusClass === 'checking') return t('settings.remoteTouchChecking');
+  if (statusClass === 'listening') return t('settings.remoteTouchListening');
+  if (statusClass === 'error') return t('settings.remoteTouchError');
+  return t('settings.remoteTouchOff');
+}
+
+function remoteTouchStatusTitle() {
+  var status = state.remoteTouchServer || {};
+  var endpoint = status.host ? status.host + ':' + (status.port || 47890) : '';
+  return [remoteTouchStatusText(), endpoint, status.error || ''].filter(Boolean).join(' · ');
+}
+
+window.updateRemoteTouchStatusButton = function() {
+  var button = document.getElementById('remote-touch-status-button');
+  if (!button) return;
+  button.className = 'sec-btn remote-touch-action remote-touch-status ' + remoteTouchStatusClass();
+  button.textContent = remoteTouchStatusText();
+  button.setAttribute('aria-pressed', state.remoteTouchEnabled ? 'true' : 'false');
+  button.setAttribute('aria-busy', state.remoteTouchStatusBusy ? 'true' : 'false');
+  button.title = remoteTouchStatusTitle();
+  button.disabled = !!state.remoteTouchStatusBusy;
+};
+
+window.refreshRemoteTouchServerStatus = async function() {
+  if (!api.mobileServerStatus) return state.remoteTouchServer;
+  try {
+    var result = await api.mobileServerStatus();
+    if (result && result.state) {
+      state.remoteTouchServer = result;
+      state.remoteTouchEnabled = !!result.enabled;
+    }
+  } catch (error) {
+    state.remoteTouchServer = {
+      enabled: state.remoteTouchEnabled,
+      listening: false,
+      reachable: false,
+      state: state.remoteTouchEnabled ? 'error' : 'off',
+      host: '',
+      port: 47890,
+      error: error && error.message ? error.message : String(error || ''),
+      checkedAt: new Date().toISOString(),
+      startedAt: 0
+    };
+  }
+  window.updateRemoteTouchStatusButton();
+  return state.remoteTouchServer;
+};
+
+window.startRemoteTouchStatusPolling = function() {
+  if (state._remoteTouchStatusTimer) clearInterval(state._remoteTouchStatusTimer);
+  window.refreshRemoteTouchServerStatus().catch(function(){});
+  state._remoteTouchStatusTimer = setInterval(function() {
+    window.refreshRemoteTouchServerStatus().catch(function(){});
+  }, 5000);
+};
+
 window.setRemoteTouchEnabled = async function(value) {
   var next = !!value;
   state.remoteTouchEnabled = next;
-  if (api.saveSetting) {
-    try { await api.saveSetting('remote', 'touch_enabled', next); } catch (e) {}
+  state.remoteTouchStatusBusy = true;
+  window.updateRemoteTouchStatusButton();
+  try {
+    var result = api.setRemoteTouchEnabled
+      ? await api.setRemoteTouchEnabled(next)
+      : (api.saveSetting ? await api.saveSetting('remote', 'touch_enabled', next) : null);
+    if (result && result.state) state.remoteTouchServer = result;
+  } catch (error) {
+    state.remoteTouchServer = {
+      enabled: next,
+      listening: false,
+      reachable: false,
+      state: next ? 'error' : 'off',
+      host: '', port: 47890,
+      error: error && error.message ? error.message : String(error || ''),
+      checkedAt: new Date().toISOString(), startedAt: 0
+    };
+  } finally {
+    state.remoteTouchStatusBusy = false;
   }
-  window.settingsTab('general');
+  await window.refreshRemoteTouchServerStatus();
+  window.updateRemoteTouchStatusButton();
 };
 
 window.setAgentWslDistro = async function(value) {
@@ -16044,6 +16177,7 @@ window.saveModelEdit = function(oldProvIdx, modelIdx) {
   if (typeof previous === 'string') previous = { name: previous, display: previous };
   var tierMap = window.parseThinkingTierMap(tierMapEl ? tierMapEl.value : '');
   var updated = Object.assign({}, previous, {
+    _previous_name: previous.name || name,
     name: name,
     display: name,
     description: descEl ? descEl.value : '',
@@ -22655,6 +22789,7 @@ function schedulePostStartupUiRendering() {
   }
 
   updateMarqueeFromConfig();
+  window.startRemoteTouchStatusPolling();
 
   // Populate selects
   if (els['mode-select']) els['mode-select'].value = state.mode;
@@ -22918,6 +23053,7 @@ function schedulePostStartupUiRendering() {
 
   window.addEventListener('beforeunload', function() {
     if (state._postStartupUiRendering && state._postStartupUiRendering.cancel) state._postStartupUiRendering.cancel();
+    if (state._remoteTouchStatusTimer) clearInterval(state._remoteTouchStatusTimer);
     cancelBrowserGuestIdleDestroy();
     flushPendingConversationDraftPersists();
   }, { once: true });

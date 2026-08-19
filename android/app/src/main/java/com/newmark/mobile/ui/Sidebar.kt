@@ -1205,7 +1205,7 @@ private fun PcRemoteConversationRow(
     var showMenu by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
     val shape = RoundedCornerShape(10.dp)
-    val runtimeStatus = conversation.runtimeStatus.ifBlank {
+    val runtimeStatus = conversation.runtimeStatus.orEmpty().ifBlank {
         if (conversation.running) "running" else ""
     }
     val marquee = runtimeStatus in setOf("running", "stopping", "force_restarting")

@@ -201,6 +201,7 @@ class MobileApiClient {
         text: String = "",
         requestedMode: String = "build",
         goalObjective: String = "",
+        orderedIds: List<String> = emptyList(),
     ): Result<JSONObject> = post(pair, "/api/mobile/conversation-ui-action", JSONObject().apply {
         put("workspaceId", workspaceId)
         put("conversationId", conversationId)
@@ -209,6 +210,7 @@ class MobileApiClient {
         text.takeIf(String::isNotBlank)?.let { put("text", it) }
         requestedMode.takeIf(String::isNotBlank)?.let { put("requestedMode", it) }
         goalObjective.takeIf(String::isNotBlank)?.let { put("goalObjective", it) }
+        if (orderedIds.isNotEmpty()) put("orderedIds", org.json.JSONArray(orderedIds))
     })
 
     suspend fun workspaceFiles(pair: PairInfo, workspaceId: String, path: String): Result<JSONObject> =

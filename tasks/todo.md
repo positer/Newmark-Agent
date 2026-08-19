@@ -1,7 +1,45 @@
 # dev-0.3.13 黑盒交叉压力测试任务
 
+- [x] 300 远端事件 + 90 UI 循环 + 7,364 帧运行连续性压力
+- [x] 本地 Queue/Guide 与 17 工具执行、强停重启哈希连续性
+- [x] 3 次远端运行中服务重启后的业务状态恢复
+- [x] 移动/PC 交替发送、Flow pause/resume、普通 stop、foreign target rejection
+- [ ] 运行中主动切换 workspace/conversation 的端到端 UI 故障注入
+
+- [x] PC 远程触及服务重复启动、异步启动、GUI/TUI 生命周期与端口释放
+- [x] 移动端运行中 SSE 断线状态降级、自动重连和目标快照补拉
+- [x] 移动先启动/PC 后启动 3 轮冷启动异步连接
+- [x] 正式 0.4.54 全量构建、10 文件保数据安装、无 ANR/FATAL/OOM 门禁
+- [x] Queue 动画性能门禁按最新要求调整为无卡死/瞬时高压；不再以固定 jank 百分比阻塞
+
+- [x] 修复消息排队顺序拖动中的跳位、回弹与相邻项硬切
+- [x] 拖动态复刻 PC 缩放/透明度，取消手势不提交排序
+- [x] 20 次远端权威队列重排、完整 Release 门禁和 10 文件保数据安装
+- [x] 800 事件远端 Build/Goal/Flow/Queue、重复事件与终态防复活门禁
+- [x] Queue 展开/折叠 observer-free 动画不再叠加独立 fade；无崩溃/卡死，jank 数值仅保留诊断
+
+- [x] 移动端 Guide 以 PC 一致方式插入 Build 内用户输入时间线
+- [x] Build 折叠后 Guide 保持可见，展开后按事件顺序显示且不重复
+- [x] 本地/远端 Guide 生命周期、状态与附件共用统一投影
+- [x] 完整构建、保数据安装、实机折叠/展开和崩溃门禁
+
+- [x] 对话区末端增加 10 行（190dp）可滚动余量，供 Queue/Goal/Flow bar/list 避让
+- [x] 保持浮层结构与最新消息自动跟随不变，新增几何契约测试
+- [x] 完整 Android 单测/Release/R8/lint 与正式包保数据安装、实机验证
+
+- [x] 一级↔二级复合弹窗恢复同一外壳的连续宽高变形动画
+- [x] 撤销视觉纵向拉伸，保持紧凑内容高度与内部滚动
+- [x] 正式包保数据覆盖安装并前台实机确认
+- [x] 旧远端 WorkEvent 缺省字段 Release/R8 兼容
+
+- [x] Prevent a delayed `running/text` SSE event from resurrecting an already completed remote Build.
+- [x] Prove the fix with an 800-event stream plus real post-terminal stale-event injection.
+- [x] Recheck the button-origin entrance and alpha-only dismissal on formal Release graphics metrics.
+- [ ] Capture the latest queue expand/collapse animation in a formal Release observer-free graphics window.
+
 - [x] Make both input composite first-level menus visibly grow upward from the exact tapped button instead of appearing instantly.
 - [x] Make input composite menus exit with a direct fade instead of hard removal or reverse scaling.
+- [x] Repair the missing secondary transition and remove the accidental wider model page.
 
 ## 2026-08-19 Android 0.4.53 后台浏览器与运行时压力
 

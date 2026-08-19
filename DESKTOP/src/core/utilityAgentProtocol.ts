@@ -6,6 +6,7 @@ import {
   ConversationKernelRunOptions,
   ConversationKernelRunResult,
   ConversationQueueAction,
+  ConversationQueueActionInput,
   ConversationQueueMode,
   ConversationRuntimeState,
   ConversationStopResult,
@@ -69,7 +70,7 @@ export type UtilityAgentRequest =
   | { id: string; method: 'rewind'; params: { target: ConversationRuntimeTarget; messageIndex: number } }
   | { id: string; method: 'stop'; params: { target: ConversationRuntimeTarget; runId?: string } }
   | { id: string; method: 'guide'; params: { target: ConversationRuntimeTarget; envelope: ConversationInputEnvelope } }
-  | { id: string; method: 'queue_action'; params: { target: ConversationRuntimeTarget; action: ConversationQueueAction; input?: { id?: string; text?: string; requestedMode?: string; goalObjective?: string; createdAt?: string } } }
+  | { id: string; method: 'queue_action'; params: { target: ConversationRuntimeTarget; action: ConversationQueueAction; input?: ConversationQueueActionInput } }
   | { id: string; method: 'checkpoint'; params: { target: ConversationRuntimeTarget } }
   | { id: string; method: 'context_compress'; params: { target: ConversationRuntimeTarget; options?: ConversationContextCompressOptions } }
   | { id: string; method: 'rate_auto_route'; params: { target: ConversationRuntimeTarget; score: number; routeId?: string } }

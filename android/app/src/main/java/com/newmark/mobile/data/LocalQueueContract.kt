@@ -21,6 +21,19 @@ internal object LocalQueueContract {
     fun delete(items: List<LocalQueuedMessage>, id: String): List<LocalQueuedMessage> =
         items.filterNot { it.id == id }
 
+    /**
+     * Reorder the complete authoritative queue by stable item id.
+     *
+     * Partial, duplicate, or foreign orders are rejected unchanged so a stale
+     * drag gesture can never silently drop or duplicate a queued message.
+     */
+    fun reorder(items: List<LocalQueuedMessage>, orderedIds: List<String>): List<LocalQueuedMessage> {
+        if (orderedIds.size != items.size || orderedIds.toSet().size != orderedIds.size) return items
+        val byId = items.associateBy { it.id }
+        if (byId.size != items.size || orderedIds.any { it !in byId }) return items
+        return orderedIds.map(byId::getValue)
+    }
+
     fun dequeue(items: List<LocalQueuedMessage>, paused: Boolean, running: Boolean): Pair<LocalQueuedMessage?, List<LocalQueuedMessage>> {
         if (paused || running || items.isEmpty()) return null to items
         return items.first() to items.drop(1)

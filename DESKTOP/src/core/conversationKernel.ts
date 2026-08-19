@@ -27,7 +27,15 @@ export interface ConversationQueueItemSnapshot {
   runId?: string;
   createdAt: string;
 }
-export type ConversationQueueAction = 'enqueue' | 'update' | 'delete' | 'toggle_pause' | 'guide';
+export type ConversationQueueAction = 'enqueue' | 'update' | 'delete' | 'reorder' | 'toggle_pause' | 'guide';
+export interface ConversationQueueActionInput {
+  id?: string;
+  text?: string;
+  requestedMode?: string;
+  goalObjective?: string;
+  createdAt?: string;
+  orderedIds?: string[];
+}
 export interface AgentPromptMessage {
   text: string;
   /** Public transcript text when the execution prompt contains hidden orchestration instructions. */
@@ -314,6 +322,45 @@ export class ConversationKernel {
     return true;
   }
 
+  reorderQueueItems(target: ConversationTargetInput, orderedIdsInput: string[]): ConversationQueueItemSnapshot[] {
+    const runtime = this.findRuntime(target);
+    if (!runtime) throw new Error('Target conversation runtime is unavailable');
+    const currentItems = this.queueItems(runtime.target);
+    const orderedIds = Array.isArray(orderedIdsInput)
+      ? orderedIdsInput.map(id => String(id || '').trim())
+      : [];
+    const currentIds = currentItems.map(item => item.id);
+    const completeOrder = orderedIds.length === currentIds.length
+      && new Set(orderedIds).size === orderedIds.length
+      && orderedIds.every(id => currentIds.includes(id));
+    if (!completeOrder) throw new Error('A complete queue order with unique current item ids is required');
+
+    const persistedIds = runtime.runner.conversationContinuations()
+      .filter(item => item.queueMode === 'followUp' && !!item.clientMessageId)
+      .map(item => String(item.clientMessageId));
+    if (persistedIds.length !== currentIds.length
+      || new Set(persistedIds).size !== persistedIds.length
+      || persistedIds.some(id => !currentIds.includes(id))) {
+      throw new Error('Persisted queue does not match the complete queue order');
+    }
+
+    const pendingById = new Map(runtime.pendingNextTurn.flatMap(item => {
+      if (item.queueMode !== 'followUp' || typeof item.message === 'string' || !item.message.clientMessageId) return [];
+      return [[String(item.message.clientMessageId), item] as const];
+    }));
+    const reorderedPending = orderedIds.map(id => pendingById.get(id)!);
+    let nextIndex = 0;
+    runtime.pendingNextTurn = runtime.pendingNextTurn.map(item => {
+      if (item.queueMode !== 'followUp' || typeof item.message === 'string' || !item.message.clientMessageId) return item;
+      return reorderedPending[nextIndex++];
+    });
+    runtime.runner.reorderConversationContinuations(orderedIds);
+    runtime.queued.followUp = orderedIds.map(id => pendingById.get(id)!)
+      .map(item => typeof item.message === 'string' ? item.message : item.message.text);
+    this.emitQueueUpdate(runtime);
+    return this.queueItems(runtime.target);
+  }
+
   setQueuePaused(target: ConversationTargetInput, paused: boolean): boolean {
     const runtime = this.findRuntime(target);
     if (!runtime) throw new Error('Target conversation runtime is unavailable');
@@ -328,7 +375,7 @@ export class ConversationKernel {
   queueAction(
     target: ConversationTargetInput,
     action: ConversationQueueAction,
-    input: { id?: string; text?: string; requestedMode?: string; goalObjective?: string; createdAt?: string } = {},
+    input: ConversationQueueActionInput = {},
   ): {
     ok: boolean;
     queueItems: ConversationQueueItemSnapshot[];
@@ -351,6 +398,8 @@ export class ConversationKernel {
       this.updateQueueItem(runtime.target, String(input.id || ''), String(input.text || ''));
     } else if (action === 'delete') {
       if (!this.deleteQueueItem(runtime.target, String(input.id || ''))) throw new Error('Queue item was not found');
+    } else if (action === 'reorder') {
+      this.reorderQueueItems(runtime.target, input.orderedIds || []);
     } else if (action === 'toggle_pause') {
       this.setQueuePaused(runtime.target, !runtime.queuePaused);
     } else if (action === 'guide') {

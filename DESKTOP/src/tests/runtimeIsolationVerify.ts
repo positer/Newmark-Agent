@@ -655,24 +655,42 @@ async function verifyAuthoritativeEditablePausedQueue(): Promise<void> {
       item.clientMessageId === 'mobile-next-1' && /edited queued value/.test(item.content)),
     'editing updates the same durable continuation identity');
 
+    kernel.queueAction(queueTarget, 'enqueue', {
+      id: 'mobile-next-2', text: 'second queued value', requestedMode: 'plan', createdAt: '2026-08-18T12:00:01.000Z',
+    });
+    const reordered = kernel.queueAction(queueTarget, 'reorder', {
+      orderedIds: ['mobile-next-2', 'mobile-next-1'],
+    });
+    assert.deepEqual(reordered.queueItems.map(item => item.id), ['mobile-next-2', 'mobile-next-1'],
+      'reorder changes the authoritative runtime execution order by stable id');
+    assert.deepEqual(kernel.snapshot(queueTarget).continuations.map(item => item.clientMessageId),
+      ['mobile-next-2', 'mobile-next-1'],
+      'reorder persists the same order in durable conversation continuations');
+    assert.throws(() => kernel.queueAction(queueTarget, 'reorder', {
+      orderedIds: ['mobile-next-1', 'mobile-next-1'],
+    }), /complete queue order/,
+    'partial, duplicate, or stale mobile orders must not corrupt the authoritative queue');
+
     const paused = kernel.queueAction(queueTarget, 'toggle_pause');
     assert.equal(paused.queuePaused, true);
     runner.finish('primary complete');
     await running;
     assert.equal(kernel.runtimeState(queueTarget)?.running, false,
       'a paused follow-up does not hold the current Build open at its final-drain barrier');
-    assert.deepEqual(kernel.snapshot(queueTarget).queueItems.map(item => item.text), ['edited queued value'],
+    assert.deepEqual(kernel.snapshot(queueTarget).queueItems.map(item => item.text), ['second queued value', 'edited queued value'],
       'paused authoritative queue survives current Build completion');
 
     kernel.queueAction(queueTarget, 'toggle_pause');
     await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(runner.processInputs.length, 2, 'resume drains one and only one queued continuation');
     const resumedInput = runner.processInputs[1] as unknown as { text?: string; visibleUserInput?: string; clientMessageId?: string };
-    assert.equal(resumedInput.text, '[Next queued while current turn is running]\nedited queued value');
-    assert.equal(resumedInput.visibleUserInput, 'edited queued value');
-    assert.equal(resumedInput.clientMessageId, 'mobile-next-1',
+    assert.equal(resumedInput.text, '[Next queued while current turn is running]\nsecond queued value');
+    assert.equal(resumedInput.visibleUserInput, 'second queued value');
+    assert.equal(resumedInput.clientMessageId, 'mobile-next-2',
       'resume preserves the PC continuation identity instead of degrading the queue item to a renderer string');
     runner.finish('queued complete');
+    await kernel.waitForIdle(queueTarget);
+    runner.finish('remaining queued complete');
     await kernel.waitForIdle(queueTarget);
     assert.equal(kernel.snapshot(queueTarget).queueItems.length, 0);
 

@@ -241,7 +241,7 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
     'isCurrentConversationRunning', 'activeConversationId', 'runningConversationRecord',
     'markConversationTracked', 'composePromptTextForSend', 'clearPromptAttachments',
     'updateSubmitButtonState', 'recordGuideUiMessage', 'addMsg', 'normalizeGuideUiStatus',
-    'applyAgentWorkEventToRun', 'showUiNotice', 'currentLang',
+    'applyAgentWorkEventToRun', 'renderPendingGuideMessages', 'showUiNotice', 'currentLang',
     `${helpers}\nfunction queueBranchPathForTarget(){ return ''; }\n${normalizeAttachmentsSource}\n${restoreQueueSource}\n${recoverableGuideRejectionSource}\nwindow.bindQueuedRequestToTarget = bindQueuedRequestToTarget;\nwindow.sendMessage = ${sendMessageSource};\nwindow.guideQueueItem = ${guideQueueSource};`,
   );
   install(
@@ -262,6 +262,7 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
     () => undefined,
     (value: unknown) => String(value || 'accepted'),
     () => undefined,
+    () => 0,
     () => undefined,
     () => 'en',
   );

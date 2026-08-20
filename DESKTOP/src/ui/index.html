@@ -5723,6 +5723,8 @@ var state = {
   agentWorkUiByConversation: {},
   workRunsByTarget: {},
   workRunsByBranch: {},
+  conversationMessagesByTarget: {},
+  pendingConversationActivations: {},
   runtimeBranchPathsByTarget: {},
   workRunAnchorIndexesByTarget: {},
   guideMessagesByTarget: {},
@@ -9223,11 +9225,18 @@ function recordGuideUiMessage(input, target) {
     createdAt: String(receipt.createdAt || input.createdAt || (prior && prior.createdAt) || new Date().toISOString()),
     updatedAt: String(receipt.updatedAt || input.updatedAt || new Date().toISOString()),
     reason: explicitReason || (status === 'deferred' || status === 'rejected' ? String(prior && prior.reason || '') : ''),
+    awaitingAck: input.awaitingAck === true || receipt.awaitingAck === true,
     attachments: normalizeConversationImageAttachments(input.attachments || receipt.attachments || (prior && prior.attachments) || [])
   };
   messages[clientMessageId] = record;
   if (isActiveConversationTarget(target)) {
     var element = findGuideMessageElement(clientMessageId);
+    if (element) {
+      if (prior && prior.awaitingAck && !record.awaitingAck && element.closest && element.closest('.work-run-pending-guides')) {
+        element.remove();
+        element = null;
+      }
+    }
     if (element) {
       applyGuideMessageMeta(element, record);
       if (record.runId && !element.classList.contains('work-run-guide-message')) element.remove();
@@ -9268,6 +9277,26 @@ function renderPendingGuideMessages(target, persistedGuideIds) {
   });
   pending.forEach(function(item) {
     var element = findGuideMessageElement(item.clientMessageId);
+    if (item.awaitingAck && item.runId) {
+      var runElement = findWorkRunElement({ runId: item.runId });
+      var runBody = runElement && runElement.querySelector('.conversation-work-run-body');
+      if (runBody) {
+        var pendingStack = runBody.querySelector(':scope > .work-run-pending-guides');
+        if (!pendingStack) {
+          pendingStack = document.createElement('div');
+          pendingStack.className = 'work-run-pending-guides';
+          runBody.appendChild(pendingStack);
+        }
+        if (!element || !pendingStack.contains(element)) {
+          var holder = document.createElement('div');
+          holder.innerHTML = renderWorkRunGuideMessage(Object.assign({}, item, { status: 'accepted' }));
+          element = holder.firstElementChild;
+          if (element) pendingStack.appendChild(element);
+        }
+        if (element) applyGuideMessageMeta(element, item);
+        return;
+      }
+    }
     if (element) applyGuideMessageMeta(element, item);
     else addMsg('user', item.content || 'Guide', 'guide', item.model || state.model, undefined, {
       clientMessageId: item.clientMessageId,
@@ -9531,7 +9560,7 @@ function normalizedWorkRun(run, target) {
   var status = String(run.status || 'running');
   var live = ['running', 'stopping', 'force_restarting'].indexOf(status) >= 0;
   var expanded = run.expanded === undefined
-    ? live && state.expandToolsDefault !== false
+    ? (status === 'error' || (live && state.expandToolsDefault !== false))
     : !!run.expanded;
   return {
     runId: String(run.runId || run.id || ('run-' + Date.now() + '-' + Math.random().toString(16).slice(2))),
@@ -10199,6 +10228,7 @@ function updateConversationWorkRunElement(run, element) {
     '<span class="conversation-work-run-status">' + esc(String(run.status || '')) + '</span>' +
     '<span class="conversation-work-run-chevron" aria-hidden="true"></span></button>' +
     '<div class="conversation-work-run-body">' + renderWorkRunEvents(run, expanded) + '</div>';
+  renderPendingGuideMessages(run.target, {});
   var wrapper = element.closest ? element.closest('.work-run-message') : null;
   if (wrapper) {
     wrapper.classList.toggle('flow-result-only', !!(run.flow && run.flow.activityVisibility === 'result-only'));
@@ -10345,14 +10375,14 @@ function applyAgentWorkEventToRun(event) {
   }
   run.sequence = Math.max(Number(run.sequence || 0), Number(event.sequence || 0));
   if (type === 'done') { run.status = 'completed'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.userToggled !== true) run.expanded = false; }
-  else if (type === 'error') { run.status = 'error'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.userToggled !== true) run.expanded = false; }
+  else if (type === 'error') { run.status = 'error'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.userToggled !== true) run.expanded = true; }
   else if (type === 'interrupted') { run.status = 'interrupted'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.userToggled !== true) run.expanded = false; }
   else if (type === 'force_interrupted') { run.status = 'force_interrupted'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.userToggled !== true) run.expanded = false; }
   else if (event.status && type.indexOf('guide') !== 0) {
     run.status = String(event.status);
     if (['completed', 'interrupted', 'force_interrupted', 'error'].indexOf(run.status) >= 0) {
       run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString();
-      if (run.userToggled !== true) run.expanded = false;
+      if (run.userToggled !== true) run.expanded = run.status === 'error';
     }
   }
   if (isActiveConversationTarget(target) && (!branchIds.viewed || !eventBranchId || branchIds.viewed === eventBranchId)) {
@@ -10633,14 +10663,58 @@ function renderPersistedToolMessage(message) {
   }, resultPrefix.test(content) || /\bcompleted\.?$/i.test(content) ? 'completed' : '');
 }
 
-function renderChatMessages(messages) {
-  state.renderedChatMessages = Array.isArray(messages) ? messages.map(function(message) { return Object.assign({}, message); }) : [];
+function conversationMessageCache(target) {
+  var scopedTarget = target || currentConversationTarget();
+  var key = runtimeKeyFor(scopedTarget.workspaceId, scopedTarget.conversationId);
+  if (!state.conversationMessagesByTarget) state.conversationMessagesByTarget = {};
+  return Array.isArray(state.conversationMessagesByTarget[key])
+    ? state.conversationMessagesByTarget[key].map(function(message) { return Object.assign({}, message); })
+    : [];
+}
+
+function cacheConversationMessages(messages, target) {
+  var scopedTarget = target || currentConversationTarget();
+  var key = runtimeKeyFor(scopedTarget.workspaceId, scopedTarget.conversationId);
+  var cloned = Array.isArray(messages) ? messages.map(function(message) { return Object.assign({}, message); }) : [];
+  if (!state.conversationMessagesByTarget) state.conversationMessagesByTarget = {};
+  state.conversationMessagesByTarget[key] = cloned;
+  return cloned.map(function(message) { return Object.assign({}, message); });
+}
+
+function conversationHasReadableHistory(target) {
+  return conversationMessageCache(target).length > 0 || workRunsForTarget(target).length > 0;
+}
+
+function snapshotHasReadableConversationHistory(snapshot) {
+  return !!(snapshot && ((Array.isArray(snapshot.chatMessages) && snapshot.chatMessages.length > 0)
+    || (Array.isArray(snapshot.workRuns) && snapshot.workRuns.length > 0)));
+}
+
+function renderConversationHistoryFirst(target) {
+  if (!isActiveConversationTarget(target)) return false;
+  var cachedMessages = conversationMessageCache(target);
+  if (cachedMessages.length > 0) {
+    renderChatMessages(cachedMessages, target);
+    renderLoadEarlierButton();
+    return true;
+  }
+  if (workRunsForTarget(target).length > 0) {
+    renderChatMessages([], target);
+    renderLoadEarlierButton();
+    return true;
+  }
+  return false;
+}
+
+function renderChatMessages(messages, target) {
+  var renderTarget = target || currentConversationTarget(activeConversationId());
+  var normalizedMessages = cacheConversationMessages(messages, renderTarget);
+  state.renderedChatMessages = normalizedMessages;
   if (!els['chat-area']) return;
   var chatWasAtBottom = shouldAutoScroll(els['chat-area']);
   els['chat-area'].innerHTML = '';
   if (chatWasAtBottom) _chatShouldAutoScroll = true;
-  var renderConversationId = activeConversationId();
-  var renderTarget = currentConversationTarget(renderConversationId);
+  var renderConversationId = renderTarget.conversationId;
   var guideMessages = guideMessagesForTarget(renderTarget);
   var persistedGuideIds = {};
   var persistedRuns = workRunsForTarget(renderTarget).slice();
@@ -10666,7 +10740,7 @@ function renderChatMessages(messages) {
       persistedRunIndexes[runId] = runIndex;
     }
   });
-  (Array.isArray(messages) ? messages : []).forEach(function(message, messageIndex) {
+  normalizedMessages.forEach(function(message, messageIndex) {
     var runId = String(message && message.runId || '');
     var role = String(message && message.role || '');
     var indexedGuideId = String(message && message.clientMessageId || '');
@@ -10711,7 +10785,7 @@ function renderChatMessages(messages) {
   var pendingWorkReview = conversationWorkUiState(renderConversationId).pendingWorkReview;
   resetConversationWorkUi(renderConversationId, false);
   conversationWorkUiState(renderConversationId).pendingWorkReview = pendingWorkReview;
-  if (!messages || !messages.length) {
+  if (!normalizedMessages.length) {
     persistedRuns.forEach(function(run) { renderOwnedWorkRun(run, true); });
     var pendingGuideCount = renderPendingGuideMessages(renderTarget, persistedGuideIds);
     if (!persistedRuns.length && !pendingGuideCount) {
@@ -11149,8 +11223,19 @@ function loadActiveConversationMessages(conversationId) {
       requestedConversationId === String(activeConversationId() || 'default') &&
       responseConversationId === requestedConversationId;
     if (!responseIsCurrent) return;
-    applyConversationSnapshot(s, requestedConversationId);
-  }).catch(function(){});
+    applyConversationSnapshot(s, requestedConversationId, { preserveReadableHistory: true, allowEmptyHistory: true });
+  }).catch(function(error) {
+    var stillCurrent = loadGeneration === state.conversationLoadGeneration &&
+      requestedWorkspaceKey === currentWorkspaceKey() &&
+      requestedConversationId === String(activeConversationId() || 'default');
+    if (!stillCurrent) return;
+    showUiNotice(
+      currentLang() === 'zh' ? '历史记录增强加载失败，已保留当前内容。' : 'History enhancement failed; current content was preserved.',
+      'error',
+      'conversation-history-load-' + requestedWorkspaceKey + '-' + requestedConversationId
+    );
+    console.error('[Conversation] history enhancement failed:', error && error.message ? error.message : String(error));
+  });
 }
 
 function hydrateConversationBranchState(snapshot) {
@@ -11167,7 +11252,7 @@ function hydrateConversationBranchState(snapshot) {
   rememberRuntimeConversationBranchPath(currentConversationTarget(s.conversationId || activeConversationId()));
 }
 
-function applyConversationSnapshot(s, requestedConversationId) {
+function applyConversationSnapshot(s, requestedConversationId, options) {
   if (!s) return;
   if (s.computerUse) {
     var computerTarget = currentConversationTarget(s.conversationId || requestedConversationId || activeConversationId());
@@ -11183,18 +11268,21 @@ function applyConversationSnapshot(s, requestedConversationId) {
       workspaceId: String((s && (s.workspaceId || (s.target && s.target.workspaceId))) || runtimeWorkspaceId('')),
       conversationId: String((s && (s.conversationId || (s.target && s.target.conversationId))) || requestedConversationId)
     };
+    var preserveReadableHistory = !!(options && options.preserveReadableHistory
+      && !snapshotHasReadableConversationHistory(s)
+      && (!options.allowEmptyHistory || conversationHasReadableHistory(snapshotTarget)));
     if (s && s.runtimeKey) registerRuntimeKey(snapshotTarget, s.runtimeKey);
     hydrateConversationBranchState(s);
     rebindQueueToRuntimeBranch(snapshotTarget);
-    if (s && Array.isArray(s.workRuns)) {
+    if (s && Array.isArray(s.workRuns) && !preserveReadableHistory) {
       var viewedBranchIdForSync = Array.isArray(s.viewedBranchNodePath) && s.viewedBranchNodePath.length
         ? String(s.viewedBranchNodePath[s.viewedBranchNodePath.length - 1])
         : '';
       syncWorkRunsSnapshot(s.workRuns, snapshotTarget, viewedBranchIdForSync || undefined);
     }
     applyAutoRouteRatingState(s);
-    if (s && s.chatMessages) {
-      renderChatMessages(s.chatMessages);
+    if (s && Array.isArray(s.chatMessages) && !preserveReadableHistory) {
+      renderChatMessages(s.chatMessages, snapshotTarget);
       renderLoadEarlierButton();
     }
     if (s && s.conversationId) {
@@ -13080,18 +13168,10 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       attachments: optimisticAttachments,
       model: state.model,
       createdAt: envelope.createdAt,
+      awaitingAck: true,
       allowStatusReset: retryingUnacknowledgedGuide
     }, lockedTarget);
-    applyAgentWorkEventToRun({
-      id: 'guide-' + clientMessageId + '-accepted',
-      type: 'guide_accepted',
-      content: displayText,
-      workspaceId: lockedTarget.workspaceId,
-      conversationId: lockedTarget.conversationId,
-      runId: envelope.runId,
-      clientMessageId: clientMessageId,
-      guide: optimisticGuide
-    });
+    renderPendingGuideMessages(lockedTarget, {});
     var enqueue = api.enqueueGuide ? api.enqueueGuide(envelope) : api.sendMessage(requestMessage, lockedConversationId);
     return Promise.resolve(enqueue).then(function(receipt) {
       if (!receipt || typeof receipt !== 'object' || !String(receipt.status || '').trim()) {
@@ -13247,6 +13327,8 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
   var responseMsg = null;
   var sendFailure = '';
   try {
+    var activationBeforeSend = pendingConversationActivation(lockedTarget);
+    if (activationBeforeSend) await activationBeforeSend;
     var sendPromise = api.sendMessage(requestMessage, lockedTarget);
     if (requestedMode === 'goal') activateSubmittedGoal(opts.goalObjective || rawText);
     var r = await sendPromise;
@@ -18915,6 +18997,12 @@ function holdForegroundConversation(id, ms) {
   state.foregroundConversationHoldUntil = Date.now() + (ms || 4500);
 }
 
+function pendingConversationActivation(target) {
+  var scopedTarget = target || currentConversationTarget();
+  var key = runtimeKeyFor(scopedTarget.workspaceId, scopedTarget.conversationId);
+  return state.pendingConversationActivations && state.pendingConversationActivations[key];
+}
+
 function applyBackendConversations(items, activeId, workspaceId) {
   if (!state.currentWorkspace || !items || !items.length) return;
   var key = currentWorkspaceKey(workspaceId);
@@ -18976,14 +19064,24 @@ function syncBackendConversation() {
   }
   if (conv && api.ensureConversation) {
     var requestedTarget = currentConversationTarget(conv.id);
+    state.activeBackendConversationId = conv.id;
+    var historyPromise = loadActiveConversationMessages(conv.id);
     var activate = api.activateConversation ? api.activateConversation(requestedTarget) : api.ensureConversation(requestedTarget);
-    return activate.then(function(s) {
+    var activationPromise = activate.then(function(s) {
       var id = (s && s.conversationId) || conv.id;
       if (!requestIsCurrent() || String(id) !== requestedConversationId) return;
       state.activeBackendConversationId = id;
-      applyConversationSnapshot(s, id);
-      if (s && s.runtimeDeferred) return loadActiveConversationMessages(id);
-    }).catch(function(){});
+      applyConversationSnapshot(s, id, { preserveReadableHistory: true });
+    }).catch(function(error) {
+      if (!requestIsCurrent()) return;
+      showUiNotice(
+        currentLang() === 'zh' ? '对话运行时激活失败，历史记录仍可查看。' : 'Conversation runtime activation failed; history remains available.',
+        'error',
+        'conversation-activation-' + requestedWorkspaceKey + '-' + requestedConversationId
+      );
+      console.error('[Conversation] runtime activation failed:', error && error.message ? error.message : String(error));
+    });
+    return Promise.allSettled([historyPromise, activationPromise]);
   }
   if (conv) {
     if (!requestIsCurrent()) return Promise.resolve();
@@ -19199,10 +19297,11 @@ window.newConversation = function(workspaceReference, branchCommunication) {
   els['chat-area'].innerHTML = '';
   var target = currentConversationTarget(id);
   var activation = api.activateConversation ? api.activateConversation(target) : (api.ensureConversation ? api.ensureConversation(target) : Promise.resolve(null));
-  return activation.then(function(s) {
+  var activationKey = runtimeKeyFor(target.workspaceId, target.conversationId);
+  var activationReady = activation.then(function(s) {
     if (createdWorkspaceKey !== currentWorkspaceKey() || id !== String(activeConversationId() || 'default')) return;
     state.activeBackendConversationId = String((s && s.conversationId) || id);
-    if (s) applyConversationSnapshot(s, id);
+    if (s) applyConversationSnapshot(s, id, { preserveReadableHistory: true });
     if (branchCommunication && api.setConversationBranchCommunication) {
       api.setConversationBranchCommunication(target, true).then(function() {
         var convsNow = currentWorkspaceConversations();
@@ -19212,16 +19311,23 @@ window.newConversation = function(workspaceReference, branchCommunication) {
     }
   }).then(function() {
     if (createdWorkspaceKey !== currentWorkspaceKey() || id !== String(activeConversationId() || 'default')) return;
-    state.foregroundConversationHoldId = '';
-    state.foregroundConversationHoldUntil = 0;
-    renderChatMessages([]);
-    addMsg('system', '[System] ' + t('workspace.newConversation') + ': ' + summary, 'system', '');
+    if (!conversationHasReadableHistory(target)) {
+      renderChatMessages([], target);
+      addMsg('system', '[System] ' + t('workspace.newConversation') + ': ' + summary, 'system', '');
+    }
   }).catch(function(error) {
     if (createdWorkspaceKey === currentWorkspaceKey() && id === String(activeConversationId() || 'default')) {
       showUiNotice((currentLang() === 'zh' ? '新对话持久化失败：' : 'Failed to persist the new conversation: ') + (error && error.message ? error.message : String(error)), 'error', 'new-conversation-activation-' + id);
     }
     throw error;
+  }).finally(function() {
+    if (state.pendingConversationActivations && state.pendingConversationActivations[activationKey] === activationReady) {
+      delete state.pendingConversationActivations[activationKey];
+    }
   });
+  if (!state.pendingConversationActivations) state.pendingConversationActivations = {};
+  state.pendingConversationActivations[activationKey] = activationReady;
+  return activationReady;
 };
 
 window.showNewConversationPage = function() {
@@ -19291,7 +19397,7 @@ window.switchConversation = function(idx) {
   renderConversations();
   var switchSeq = (state._conversationSwitchSeq || 0) + 1;
   state._conversationSwitchSeq = switchSeq;
-  els['chat-area'].innerHTML = '';
+  var restoredReadableHistory = renderConversationHistoryFirst(activeBrowserTarget);
   // The Flow takeover bubble is conversation-local. Immediately reconcile it to
   // the newly active conversation: if the incoming conversation owns a Flow,
   // show it; otherwise hide the bubble instantly so no takeover ever leaks
@@ -19300,7 +19406,9 @@ window.switchConversation = function(idx) {
   if (state._conversationLoadingMsgEl && state._conversationLoadingMsgEl.parentNode) {
     state._conversationLoadingMsgEl.parentNode.removeChild(state._conversationLoadingMsgEl);
   }
-  state._conversationLoadingMsgEl = addMsg('workflow running', t('conversation.loadingIsolated'), 'system', state.model);
+  state._conversationLoadingMsgEl = restoredReadableHistory
+    ? null
+    : addMsg('workflow running', t('conversation.loadingIsolated'), 'system', state.model);
   syncBackendConversation().then(function() {
     // Only the latest switch may touch the UI: an earlier switch's sync
     // resolution must not restore drafts into or re-render the now-current

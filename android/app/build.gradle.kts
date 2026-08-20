@@ -12,8 +12,8 @@ android {
         applicationId = "com.newmark.mobile"
         minSdk = 24
         targetSdk = 35
-        versionCode = 454
-        versionName = "0.4.54"
+        versionCode = 500
+        versionName = "0.5.0"
     }
 
     buildTypes {
@@ -73,6 +73,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    // Bundled models keep the local browser OCR deterministic and offline.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -62,6 +62,16 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
     var publicText by mutableStateOf("")
         private set
 
+    private var recognition: (suspend (String, Int) -> JSONObject)? = null
+
+    fun bindRecognition(handler: suspend (String, Int) -> JSONObject) {
+        recognition = handler
+    }
+
+    fun unbindRecognition(handler: suspend (String, Int) -> JSONObject) {
+        if (recognition === handler) recognition = null
+    }
+
     private var nextCommandId = 0L
     var command by mutableStateOf(BrowserCommand(++nextCommandId, BrowserCommandKind.Navigate, initialUrl))
         private set
@@ -152,12 +162,23 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
         }
         "observe", "extract" -> {
             val maxChars = args.optInt("max_chars", 12_000).coerceIn(256, 48_000)
-            ToolResult.ok(receipt(action, publicText.take(maxChars)))
+            val text = publicText.take(maxChars)
+            val readable = text.count { it.isLetterOrDigit() }
+            if (readable >= 20) {
+                ToolResult.ok(receipt(action, text, "dom_text"))
+            } else {
+                val fallback = recognition?.invoke(address, maxChars)
+                    ?: JSONObject()
+                        .put("ok", false)
+                        .put("error", "WebView 尚未挂载，无法获取视觉回退")
+                fallback.put("action", action).put("url", address).put("title", title)
+                ToolResult.ok(fallback.toString(2))
+            }
         }
         else -> ToolResult.err("browser_use 不支持动作：$action")
     }
 
-    private fun receipt(action: String, text: String = ""): String = JSONObject()
+    private fun receipt(action: String, text: String = "", source: String = ""): String = JSONObject()
         .put("ok", true)
         .put("action", action)
         .put("url", address)
@@ -165,6 +186,8 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
         .put("loading", isLoading)
         .put("progress", progress)
         .put("text", text)
+        .put("source", source)
+        .put("recognition_order", "text>vision>local_ocr")
         .toString(2)
 
     fun onNavigationError(message: String, canBack: Boolean = false, canForward: Boolean = false) {

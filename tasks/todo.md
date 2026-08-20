@@ -1,10 +1,23 @@
 # dev-0.3.13 黑盒交叉压力测试任务
 
+- [x] 模型二级弹窗按供应商分组，模型行不再重复供应商名称
+- [x] 超长模型名保留单行完整内容并可横向滚动查看
+- [x] 输入框扩展到五行，六行起内部滚动；固定 24dp R 半径且三枚按钮始终贴底
+- [x] 玻璃强度 Slider 实时改变实机边栏/弹窗表现，松手落盘并在进程重启后恢复
+- [x] 左栏新增对话 `+` 按钮圆形化
+- [x] 单测、Release、lint vital、R8、10 文件保数据安装及 FATAL/ANR/OOM 检查
+
+- [x] 系统暗色启动使用纯黑窗口和黑底白色 Newmark 图标
+- [x] 系统亮色启动保持浅灰窗口和黑色 Newmark 图标
+- [x] 正式 0.4.54 暗/亮 Splash 实机证据与精确像素验证
+- [x] 800 事件 SSE/Queue/Goal/Flow/接管/旧事件防复活续压，无 FATAL/ANR/OOM
+- [x] 正式 Release 保数据安装，模拟器恢复暗色、联网与正式应用前台
+
 - [x] 300 远端事件 + 90 UI 循环 + 7,364 帧运行连续性压力
 - [x] 本地 Queue/Guide 与 17 工具执行、强停重启哈希连续性
 - [x] 3 次远端运行中服务重启后的业务状态恢复
 - [x] 移动/PC 交替发送、Flow pause/resume、普通 stop、foreign target rejection
-- [ ] 运行中主动切换 workspace/conversation 的端到端 UI 故障注入
+- [x] 运行中主动切换 workspace/conversation 的端到端 UI 故障注入（两轮精确目标读取与 UI 隔离）
 
 - [x] PC 远程触及服务重复启动、异步启动、GUI/TUI 生命周期与端口释放
 - [x] 移动端运行中 SSE 断线状态降级、自动重连和目标快照补拉
@@ -35,7 +48,7 @@
 - [x] Prevent a delayed `running/text` SSE event from resurrecting an already completed remote Build.
 - [x] Prove the fix with an 800-event stream plus real post-terminal stale-event injection.
 - [x] Recheck the button-origin entrance and alpha-only dismissal on formal Release graphics metrics.
-- [ ] Capture the latest queue expand/collapse animation in a formal Release observer-free graphics window.
+- [x] Capture the latest queue expand/collapse animation in a formal Release observer-free graphics window (1,941 frames; no skipped-frame warning or hard stability failure).
 
 - [x] Make both input composite first-level menus visibly grow upward from the exact tapped button instead of appearing instantly.
 - [x] Make input composite menus exit with a direct fade instead of hard removal or reverse scaling.
@@ -60,7 +73,7 @@
 - [x] `browser_use` 驱动同一内置 WebView 并提取正文
 - [x] 本地队列 / Guide / 重启连续性
 - [x] Release 启动、数据、内存、线程、fatal/ANR 门禁
-- [ ] 重新采集有效动画 jank；本轮最终 11 帧样本不作为证据
+- [x] 重新采集有效动画 jank；有效窗口为 1,941 帧，jank 45.85% / p90 69ms，仅按当前宽松门禁保留诊断
 
 ## 2026-08-18 移动端 resident runtime / Goal / Flow / Queue（dev-0.4.50）
 

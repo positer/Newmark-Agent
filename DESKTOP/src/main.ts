@@ -61,6 +61,7 @@ import { markRuntimeLifecycleClean } from './core/runtimeLifecycle';
 import { discoverPluginManifests } from './core/compat';
 import { discoverDshCompatibility, installDshBundle, setDshBundleEnabled, uninstallDshBundle } from './core/dshCompatibility';
 import { McpManager } from './core/mcpManager';
+import { WorkEventCoalescer } from './core/workEventCoalescer';
 import { newmarkEditHelpText, newmarkFlowHelpText, newmarkHelpText } from './cli-help';
 
 const APP_NAME = 'Newmark Agent';
@@ -303,7 +304,7 @@ async function resetWslAgentClient(): Promise<void> {
   if (wslAgentClient) await wslAgentClient.resetAgent();
 }
 
-function broadcastAgentWorkEvent(event: unknown, mirrorToMobile = true): void {
+function dispatchAgentWorkEvent(event: unknown, mirrorToMobile = true): void {
   const workEvent = event as Partial<AgentWorkEvent>;
   if ((workEvent.type === 'done' || workEvent.type === 'error') && workEvent.runtimeKey) {
     browserUseEngine?.clearRuntime(workEvent.runtimeKey);
@@ -318,6 +319,22 @@ function broadcastAgentWorkEvent(event: unknown, mirrorToMobile = true): void {
       try { listener(event as AgentWorkEvent); } catch { /* ignore disconnected mobile bridge */ }
     }
   }
+}
+
+const workEventCoalescer = new WorkEventCoalescer(event => dispatchAgentWorkEvent(event, true));
+const workEventNoMobileCoalescer = new WorkEventCoalescer(event => dispatchAgentWorkEvent(event, false));
+
+function broadcastAgentWorkEvent(event: unknown, mirrorToMobile = true): void {
+  const workEvent = event as AgentWorkEvent;
+  // Text deltas are the only high-frequency event. They are coalesced at the
+  // IPC/SSE boundary; all lifecycle/tool events retain immediate ordering.
+  if (workEvent.type === 'text') {
+    (mirrorToMobile ? workEventCoalescer : workEventNoMobileCoalescer).push(workEvent);
+    return;
+  }
+  workEventCoalescer.flushAll();
+  workEventNoMobileCoalescer.flushAll();
+  dispatchAgentWorkEvent(event, mirrorToMobile);
 }
 
 function ensureConversationKernel(root: string): ConversationKernel | null {
@@ -1924,7 +1941,11 @@ if (isViewerArg) {
                     ? await ensureWslConversationPool()!.snapshot(target)
                     : await ensureElectronUtilityPool().snapshot(target);
                   const runtime = snapshot.runtime as { running?: boolean; runId?: string } | null | undefined;
-                  if (!guideText || !runtime?.running || !runtime.runId) {
+                  // `running` may turn false one IPC task before a finalization-
+                  // window Guide reaches the worker. Preserve the authoritative
+                  // runId and let ConversationKernel decide whether that run can
+                  // be reactivated or must reject a genuinely stale request.
+                  if (!guideText || !runtime?.runId) {
                     return { ok: false, error: action === 'goal_guide'
                       ? 'There is no active Build for this Goal Guide.'
                       : 'Target conversation is not running.' };

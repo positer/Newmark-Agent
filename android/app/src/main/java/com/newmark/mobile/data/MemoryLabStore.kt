@@ -59,11 +59,13 @@ class MemoryLabStore(context: Context) {
 
     fun componentContent(slug: String): String {
         val meta = load().components[slug] ?: return ""
-        val core = File(meta.coreMd.ifBlank {
-            if (meta.kind == "folder") "${componentsDir.absolutePath}/$slug/memory.md"
-            else "${componentsDir.absolutePath}/$slug.md"
-        })
-        return runCatching { if (core.exists()) core.readText() else "" }.getOrDefault("")
+        val fallback = File(componentsDir, if (meta.kind == "folder") "$slug/memory.md" else "$slug.md")
+        // Desktop indexes may carry an absolute coreMd from another package
+        // (for example the stress application id). Prefer it only when it is
+        // readable, then resolve the same relative component in this app.
+        val indexed = meta.coreMd.takeIf { it.isNotBlank() }?.let(::File)
+        val core = indexed?.takeIf { it.exists() && it.isFile } ?: fallback
+        return runCatching { if (core.exists() && core.isFile) core.readText() else "" }.getOrDefault("")
     }
 
     /** 规范化重建索引（对齐 PC reindex 的排序/一致性语义，移动端只读场景为幂等重写） */
@@ -73,14 +75,7 @@ class MemoryLabStore(context: Context) {
             version = 2,
             updatedAt = java.time.Instant.now().toString(),
             preferredLanguage = index.preferredLanguage,
-            tags = index.tags.toSortedMap().mapValues { (_, node) ->
-                node.copy(
-                    parents = node.parents.distinct().sorted(),
-                    children = node.children.distinct().sorted(),
-                    components = node.components.distinct().sorted(),
-                    aliases = node.aliases.distinct().sorted(),
-                )
-            },
+            tags = rebuildMemoryTags(index.tags, index.components),
             components = index.components.toSortedMap(),
         )
         save(normalized)
@@ -170,6 +165,43 @@ class MemoryLabStore(context: Context) {
             }
         })
         return root.toString(2)
+    }
+}
+
+internal fun rebuildMemoryTags(
+    existing: Map<String, MemoryTagNode>,
+    components: Map<String, MemoryComponent>,
+): Map<String, MemoryTagNode> {
+    data class MutableNode(
+        val parents: MutableSet<String> = sortedSetOf(),
+        val children: MutableSet<String> = sortedSetOf(),
+        val components: MutableSet<String> = sortedSetOf(),
+        val aliases: MutableSet<String> = sortedSetOf(),
+    )
+
+    val nodes = sortedMapOf<String, MutableNode>()
+    fun node(tag: String): MutableNode = nodes.getOrPut(tag) { MutableNode() }
+    existing.forEach { (tag, value) ->
+        if (tag.isNotBlank()) node(tag).aliases += value.aliases.filter(String::isNotBlank)
+    }
+    components.toSortedMap().forEach { (slug, component) ->
+        val paths = component.tagPaths.map { path -> path.filter(String::isNotBlank) }
+        val componentTags = (component.tags + paths.flatten()).filter(String::isNotBlank).distinct()
+        componentTags.forEach { tag -> node(tag).components += slug }
+        paths.forEach { path ->
+            path.zipWithNext().forEach { (parent, child) ->
+                node(parent).children += child
+                node(child).parents += parent
+            }
+        }
+    }
+    return nodes.mapValues { (_, value) ->
+        MemoryTagNode(
+            parents = value.parents.toList(),
+            children = value.children.toList(),
+            components = value.components.toList(),
+            aliases = value.aliases.toList(),
+        )
     }
 }
 

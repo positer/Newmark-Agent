@@ -536,13 +536,19 @@ export class ConversationKernel {
 
     const existing = runtime ? this.guideReceipt(runtime, clientMessageId) : undefined;
     if (existing) return existing;
-    if (!runtime?.activePromise || !runtime.runId) {
+    if (!runtime?.runId) {
       return { ...base, reason: 'Target conversation is not running' };
     }
     if (requestedRunId && requestedRunId !== runtime.runId) {
       const rejected = { ...base, runId: runtime.runId, reason: 'Guide runId does not match the active run' };
       runtime.guideReceipts.set(clientMessageId, rejected);
       return runtime.runner.recordGuideReceipt(rejected);
+    }
+    const canReactivateFinalizingRun = !runtime.activePromise
+      && runtime.guideAcceptanceClosedRunId === runtime.runId
+      && (!requestedRunId || requestedRunId === runtime.runId);
+    if (!runtime.activePromise && !canReactivateFinalizingRun) {
+      return { ...base, reason: 'Target conversation is not running' };
     }
     let safeImages: AgentPromptMessage['images'] = [];
     let safeAttachments: ConversationImageAttachment[] = [];
@@ -643,6 +649,8 @@ export class ConversationKernel {
         attachments: safeAttachments.map(attachment => ({ ...attachment })),
         createdAt: deferred.createdAt,
       }]);
+      this.trackQueuedMessage(runtime, safeEnvelope.text, 'steer');
+      this.emitQueueUpdate(runtime);
       this.activateAcceptedGoal(runtime, envelope.goalObjective);
       this.schedulePendingRuntimeContinuation(runtime, runtime.runId);
       return deferred;
@@ -950,6 +958,7 @@ export class ConversationKernel {
     activePromise = (async (): Promise<ConversationKernelRunResult> => {
       let result: ConversationKernelRunResult | null = null;
       let stopped = false;
+      let failed = false;
       try {
         result = await this.run(runtime, message, options);
         stopped = runtime.runId === runId && runtime.stopRequestedRunId === runId;
@@ -957,6 +966,8 @@ export class ConversationKernel {
         if (runtime.runId === runId && runtime.stopRequestedRunId === runId) {
           stopped = true;
         } else {
+          failed = true;
+          this.stopAutomaticContinuationAfterError(runtime, runId);
           runtime.runner.finishConversationWorkRun(
             runId,
             'error',
@@ -971,7 +982,7 @@ export class ConversationKernel {
           if (runtime.stopRequestedRunId === runId) {
             stopped = true;
             this.settleCooperativeStop(runtime, runId);
-          } else if (!runtime.queuePaused && runtime.pendingNextTurn.length > 0) {
+          } else if (!failed && !runtime.queuePaused && runtime.pendingNextTurn.length > 0) {
             // A renderer/IPC Guide can arrive after the final-drain barrier's
             // last check but before this promise settles. Do not leave the
             // deferred continuation queued on an idle runtime.
@@ -979,7 +990,7 @@ export class ConversationKernel {
           }
         }
       }
-      if (!stopped && runtime.runId === runId) this.scheduleGoalContinuation(runtime, runId);
+      if (!failed && !stopped && runtime.runId === runId) this.scheduleGoalContinuation(runtime, runId);
       if (stopped) {
         const settled = this.result(runtime, []);
         if (result?.tokens) settled.tokens = result.tokens;
@@ -1003,6 +1014,30 @@ export class ConversationKernel {
     this.mirrorHostIfTargetActive(runtime);
     this.emitQueueUpdate(runtime);
     return true;
+  }
+
+  private stopAutomaticContinuationAfterError(runtime: ConversationRuntime, runId: string): void {
+    if (runtime.runId !== runId) return;
+    if (runtime.goalContinuationTimer) {
+      clearTimeout(runtime.goalContinuationTimer);
+      runtime.goalContinuationTimer = undefined;
+    }
+    runtime.pendingContinuationRunId = undefined;
+    this.rejectOutstandingGuides(runtime, 'The provider failed before this Guide could be applied; submit again to retry.');
+    runtime.pendingNextTurn = runtime.pendingNextTurn.filter(item => {
+      const automatic = item.queueMode === 'steer'
+        || (typeof item.message !== 'string' && item.message.hiddenUserInput === true);
+      if (automatic) {
+        runtime.runner.consumeConversationContinuation({
+          content: typeof item.message === 'string' ? item.message : item.message.text,
+          queueMode: item.queueMode,
+          clientMessageId: typeof item.message === 'string' ? undefined : item.message.clientMessageId,
+        });
+      }
+      return !automatic;
+    });
+    this.queueState(runtime);
+    this.emitQueueUpdate(runtime);
   }
 
   private async run(
@@ -1112,7 +1147,13 @@ export class ConversationKernel {
     this.consumeQueuedMessage(runtime, typeof message === 'string' ? message : message.text);
     const timeoutMs = this.processTimeoutMs(runtime);
     if (timeoutMs <= 0) {
-      const tokens = await runtime.runner.process(message);
+      let tokens: StreamToken[];
+      try {
+        tokens = await runtime.runner.process(message);
+      } catch (error) {
+        this.consumeFailedAutomaticContinuation(runtime, message, continuationMode);
+        throw error;
+      }
       if (continuationMode) runtime.runner.consumeConversationContinuation({
         content: typeof message === 'string' ? message : message.text,
         queueMode: continuationMode,
@@ -1123,12 +1164,18 @@ export class ConversationKernel {
 
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      const tokens = await Promise.race([
-        runtime.runner.process(message),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => reject(new Error(`Process timeout (${Math.round(timeoutMs / 1000)}s)`)), timeoutMs);
-        }),
-      ]);
+      let tokens: StreamToken[];
+      try {
+        tokens = await Promise.race([
+          runtime.runner.process(message),
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => reject(new Error(`Process timeout (${Math.round(timeoutMs / 1000)}s)`)), timeoutMs);
+          }),
+        ]);
+      } catch (error) {
+        this.consumeFailedAutomaticContinuation(runtime, message, continuationMode);
+        throw error;
+      }
       if (continuationMode) runtime.runner.consumeConversationContinuation({
         content: typeof message === 'string' ? message : message.text,
         queueMode: continuationMode,
@@ -1138,6 +1185,19 @@ export class ConversationKernel {
     } finally {
       if (timeout) clearTimeout(timeout);
     }
+  }
+
+  private consumeFailedAutomaticContinuation(
+    runtime: ConversationRuntime,
+    message: string | AgentPromptMessage,
+    continuationMode?: ConversationQueueMode,
+  ): void {
+    if (!continuationMode || typeof message === 'string' || message.hiddenUserInput !== true) return;
+    runtime.runner.consumeConversationContinuation({
+      content: message.text,
+      queueMode: continuationMode,
+      clientMessageId: message.clientMessageId,
+    });
   }
 
   private processTimeoutMs(runtime: ConversationRuntime): number {

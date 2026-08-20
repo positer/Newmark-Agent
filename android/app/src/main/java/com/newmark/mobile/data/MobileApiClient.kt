@@ -5,9 +5,13 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import org.json.JSONObject
+import java.io.InputStream
+import java.io.ByteArrayInputStream
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
@@ -16,7 +20,12 @@ import kotlin.coroutines.resume
 class MobileApiClient {
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
+        // A missing desktop listener is the normal mobile-first startup case.
+        // Keep TCP probing bounded so a socket opened before the PC service
+        // exists cannot consume an entire reconnect period. Long provider and
+        // conversation responses remain governed by the independent 180 s
+        // read timeout below.
+        .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(180, TimeUnit.SECONDS)
         .build()
 
@@ -225,6 +234,57 @@ class MobileApiClient {
             put("path", path)
             put("content", content)
         })
+
+    /** Raw streaming upload; the selected SAF document is never materialized as a ByteArray/base64 string. */
+    suspend fun uploadWorkspaceFile(
+        pair: PairInfo,
+        workspaceId: String,
+        directory: String,
+        fileName: String,
+        mimeType: String,
+        contentLength: Long?,
+        openStream: () -> InputStream,
+        onProgress: (Long, Long?) -> Unit = { _, _ -> },
+    ): Result<JSONObject> {
+        val requestBody = object : RequestBody() {
+            override fun contentType() = mimeType.ifBlank { "application/octet-stream" }.toMediaType()
+            override fun contentLength(): Long = contentLength?.takeIf { it >= 0L } ?: -1L
+            override fun writeTo(sink: BufferedSink) {
+                openStream().use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    var uploaded = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        sink.write(buffer, 0, read)
+                        uploaded += read
+                        onProgress(uploaded, contentLength?.takeIf { it >= 0L })
+                    }
+                }
+            }
+        }
+        val endpoint = "/api/mobile/workspace-file-upload" +
+            "?workspaceId=${query(workspaceId)}" +
+            "&directory=${query(directory)}" +
+            "&fileName=${query(fileName)}"
+        return executeJson(Request.Builder().url(authedUrl(pair, endpoint)).post(requestBody).build())
+    }
+
+    suspend fun uploadWorkspaceFile(
+        pair: PairInfo,
+        workspaceId: String,
+        name: String,
+        mimeType: String,
+        bytes: ByteArray,
+    ): Result<JSONObject> = uploadWorkspaceFile(
+        pair = pair,
+        workspaceId = workspaceId,
+        directory = "",
+        fileName = name,
+        mimeType = mimeType,
+        contentLength = bytes.size.toLong(),
+        openStream = { ByteArrayInputStream(bytes) },
+    )
 
     suspend fun updateConversationPlan(
         pair: PairInfo,

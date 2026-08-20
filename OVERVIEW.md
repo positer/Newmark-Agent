@@ -1,11 +1,156 @@
 # Newmark Agent Overview
 
+## Mobile clean-install provider baseline (2026-08-20)
+
+- `ProviderStore.kt` now persists and returns an empty provider list when `filesDir/newmark/providers.json` does not exist. Existing provider files remain authoritative and are not migrated or erased.
+- The bundled `NewmarkPresets.kt` seed catalogue was removed, so clean installs no longer contain DeepSeek, APInebula, OpenAI-Hub, or OpenCode defaults.
+- `ProviderStoreCleanInstallContractTest.kt` locks the empty first-load branch and absence of bundled presets. Full unit tests, Debug/Release assembly, and Release lint/R8/resource shrinking passed. Evidence: `archive/20260820-mobile-clean-install-empty-providers.md`.
+
+## Mobile model-menu catalogue ownership (2026-08-20)
+
+- `NewmarkApp.kt` selects exactly one catalogue owner: paired desktop `remoteModelOptions()` in remote mode or `ChatViewModel.enabledModelOptions()` in local mode.
+- `ChatScreen.kt` closes and rekeys its retained input-popup state when `remoteMode` changes, preventing a remote Models page from surviving into a local conversation.
+- `selectedModelMenuLabel` resolves local labels and remote deployment identifiers through the active catalogue so the first-level row shows only the model display name; provider names remain second-level group headings.
+- `InputComposerAndModelMenuContractTest.kt`, full unit tests, Debug/Release assembly, and Release lint/R8/resource shrinking passed. Evidence: `archive/20260820-mobile-model-menu-owner-reset.md`.
+
+## Mobile composer popup coordinate-space fix (2026-08-20)
+
+- `ChatScreen.kt` now measures the popup container and its plus/model anchors in window coordinates, then `inputMenuAnchorInContainer` converts each live anchor into the overlay's local coordinate space.
+- This removes the duplicated 48/240/280dp primary-sidebar offset and the optional additional 220dp secondary-sidebar offset while retaining centered-above-control placement.
+- `InputComposerAndModelMenuContractTest.kt` models 280px and 500px container origins and requires both to resolve to the same local anchor. Full unit tests and Debug/Release assembly plus Release lint/R8/resource shrinking passed. Evidence: `archive/20260820-mobile-composer-popup-coordinate-space-fix.md`.
+
+## Mobile Settings predictive-exit handoff (2026-08-20)
+
+- `android/app/src/main/java/com/newmark/mobile/ui/PredictiveBackMotion.kt` distinguishes a cancelled gesture from a committed back and can retain the committed release transform while an owning overlay exits.
+- `SettingsScreen.kt` enables that retention only on `SettingsPage.Main`. Nested settings backs still reset progress because the settings surface remains visible, while cancellation always returns the current page to rest.
+- This removes the frame where Settings first snapped to its untouched layout before `NewmarkApp.kt` began the retained `AnimatedVisibility` exit.
+- `PredictiveBackMotionContractTest.kt`, full unit tests, Debug assembly, and Release lint/R8/resource shrinking/assembly passed. Device-frame evidence remains pending because no ADB target was connected. Evidence: `archive/20260820-mobile-settings-predictive-exit-handoff.md`.
+
+## Mobile wide composer menu live anchoring (2026-08-20)
+
+- `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` keeps separate live root-coordinate anchors for the composer plus and model controls. Sidebar-driven wide-layout remeasurement now moves the matching overlay with its button.
+- Anchor movement updates only popup placement and cannot restart the menu entrance animation. Dismissal retains the last valid anchor for its fade-out interval.
+- `centeredInputMenuX` aligns popup and control centers, clamps to an 8px viewport margin, and the existing vertical formula keeps the popup bottom 6dp above the control top.
+- `InputComposerAndModelMenuContractTest.kt` covers centered placement, both edge clamps, live anchor binding, and vertical attachment. Full unit tests and Release lint/R8/resource shrinking/assembly passed. Evidence: `archive/20260820-mobile-wide-composer-menu-live-anchor.md`.
+
+## Mobile independent-page exit smoothness (2026-08-20)
+
+- `android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` gives compact SubAgent, Settings, Terminal, and Memory Lab separate `MutableTransitionState` owners. Their overlays stay mounted until exit completes.
+- Entry retains the existing 320 ms `PcEaseOutExpo`; exit uses a directional 260 ms `CubicBezierEasing(0.4, 0, 1, 1)` instead of replaying the entry-oriented deceleration profile.
+- The root view requests Android 15 HIGH frame rate while a sidebar or independent-page transition is active and restores DEFAULT after every transition becomes idle.
+- `MemoryLabAndSubagentAnimationContractTest.kt` and `ResponsiveSidebarContractTest.kt` lock the lifecycle, easing, and frame-rate bindings. Full unit, Release lint/R8/resource shrinking, and APK assembly passed; device-side frame timing remains pending because no ADB target was connected. Evidence: `archive/20260820-mobile-independent-page-exit-smoothness.md`.
+
+## 2026-08-20 mobile formal release package
+
+- Formal APK: `release/mobile/Newmark-0.4.54-formal.apk` (`com.newmark.mobile`, `Newmark`, version `0.4.54`, versionCode `454`).
+- Stress APK remains isolated under `android/app/build/outputs/apk/stress/app-stress.apk` with `com.newmark.mobile.stress` and display name `Newmark Stress`; it is never used as the formal package.
+- Clean verification passed: `testDebugUnitTest`, `lintVitalRelease`, `assembleRelease`, and `assembleStress`.
+- SHA-256: `BCB843C6EFB1557716079ECB6C791709AF90DFEFD9FCA8549E0EC8AE8995E33A`.
+
+## 2026-08-20 mobile sidebar P0/P1 fix
+
+- Expanded-layout right sidebar now releases its `Row` slot after folding; close animation keeps the slot only while progress remains non-zero.
+- Left sidebar touch progress continuously drives the rail width on foldable/tablet layouts. The gesture modifier covers the full drawer/expanded row so blank sidebar regions can start a horizontal drag.
+- Rebuilt formal APK SHA-256: `3683B959AC863A93AA13877C5D3CF1ED8AFF501FCBFD7B32E696179A3587EF21`.
+
+## 2026-08-20 mobile sidebar boundary-follow refinement
+
+- The folded left rail remains the original functional layer during the entire gesture. A separate expanded layer overlays it, and the conversation boundary begins moving only after the expanded edge crosses 48dp; the folded rail then exits left after expansion commits.
+- The right panel's stable content is clipped by a continuously growing `panelWidth * progress` slot, so conversation avoidance follows the finger without a hard reservation or stretched content.
+- Formal APK SHA-256: `B107BF840C4D00776FCAC91B6C50E7735828AEE543A55294AA687FC1FBF13BF3`.
+
+## 2026-08-20 mobile sidebar aligned boundaries
+
+- Left conversation avoidance is now `max(48dp rail, actual expanded-layer edge)`.
+- Right conversation avoidance grows with the exact clipped slot width while fixed content translates from the right edge, removing the prior coordinate mismatch.
+- Formal APK SHA-256: `E37C478412E69897B378A152934008D27679CBB1FE90C8D0F47285C527EF4D0D`.
+
+## 2026-08-20 mobile fixed-width left sidebar
+
+- Expanded left sidebar width is fixed per screen class (240dp medium, 280dp large) and animation changes translation only.
+- The original functional 48dp folded rail remains the minimum occupied boundary.
+- Formal APK SHA-256: `4AEB4FF1151A39A8E0838CF11EC4EF826EFAD6D0FA73CA977BC5F9EC17EE438F`.
+
+## dev-0.5.0 pressure optimization
+
+The desktop runtime reduces startup/运行中压力峰 at the cross-process event boundary. `DESKTOP/src/core/workEventCoalescer.ts` combines only same-run streaming `text` deltas for one 16 ms window; any non-text event flushes first and then is delivered immediately. `main.ts` applies this to Electron renderer/mobile bridge dispatch, while `server.ts` applies the same policy to hosted mobile SSE. Agent work-run storage and final-response persistence remain authoritative and unchanged.
+
+Verification completed on 2026-08-20: `npm.cmd run build` passed; `workEventCoalescerVerify` passed 6 assertions; `performanceOptimizationVerify` passed 17 assertions; `runtimeIsolationVerify` passed; `git diff --check` passed. `DESKTOP/package.json` and lock metadata are `0.5.0`. Existing user modifications in the worktree were preserved. No package publication is claimed.
+
+The complete Windows release path then passed 1664/1664 desktop assertions and the remaining context, performance, TUI, CLI, WSL, SSH, and GUI/TUI/CLI shared-backend gates. Local per-machine MSI upgrade completed with Windows Installer code `3010` (success; restart recommended). `C:\Program Files\Newmark Agent\Newmark.exe --version` reports `0.5.0`, registry display version is `0.5.0.0`, and the installed `app.asar` is byte/hash-identical to `release/win-unpacked`. Installation evidence and artifact hashes are in `archive/20260820-dev-0.5.0-local-install.md`.
+
+## dev-0.4.11 multi-dimensional verification
+
+The dev-0.4.10 history-first conversation activation, Guide reconciliation, unsupported-temperature recovery, and provider-failure continuation boundary were verified in source and in the Windows packaging path. The final Feature Verify result is 1664/1664. The package metadata was advanced to dev-0.4.11. MSI, portable ZIP, and app.asar hashes are recorded in `archive/20260820-150700-dev-0.4.11-verification-and-install.md`. Portable and installed `Newmark.exe` report 0.4.11; installed and packaged app.asar hashes match exactly.
+
+## Mobile animated overlays and Memory Lab force graph (2026-08-20)
+
+- 移动触摸契约：Memory Lab 总览使用单一高优先级触摸循环仲裁节点点击、整图平移和双指缩放；节点保留 PC 28/32px 半圆胶囊外观，但点击命中区至少 48dp。拖动永远只修改相机，不修改任何节点坐标；交互期间物理布局、环境漂移、聚焦镜头和流光全部暂停，抬手恢复。默认/重置镜头为 0.88，缩放允许进入 `<0.28` 点模式。
+- `MemoryLabAndSubagentAnimationContractTest.kt` 锁定手势仲裁、冻结状态、点模式可达、父链/子树和胶囊契约；`archive/20260820-mobile-memory-lab-touch-pan-contract.md` 保存实机证据与冷启动风险边界。
+
+- `NewmarkApp.kt` keeps the main surface mounted while Settings, Terminal, Memory Lab, and compact SubAgent pages animate as retained overlays in both directions.
+- `PredictiveBackMotion.kt` maps Android predictive-back progress to live translation, alpha, and scale while preserving nested page back semantics.
+- `MemoryLabScreen.kt` renders the PC-style force-directed tag/component graph with relationship edges, focus modes, pan/zoom, and the complete detail relationship/component preview.
+
+## dev-0.4.10 history-first conversation activation (2026-08-20)
+
+- `DESKTOP/src/ui/index.html` owns a composite `workspaceId + conversationId` message cache. Conversation selection restores readable messages and WorkRuns immediately, while durable-history reading and runtime activation settle independently. Empty or failed activation snapshots cannot erase readable history or return the renderer to the welcome state.
+- Accepted Guide events retain their authoritative WorkRun sequence. Only `awaitingAck` optimistic Guides use `.work-run-pending-guides` at the expanded Build body's bottom; multiple submissions render together and disappear when the authoritative acknowledgement arrives.
+- `DESKTOP/src/llm/provider.ts` detects only explicit unsupported-`temperature` HTTP 400 responses, retries the request once without that field, and caches the endpoint/model capability for later streaming and non-streaming requests.
+- `DESKTOP/src/core/conversationKernel.ts` treats provider failure as a hard boundary for automatic Goal/Guide continuation and removes hidden continuation work from memory and durable queues, preventing error-only retry chains without fresh user input.
+- `DESKTOP/src/tests/conversationHistoryFirstVerify.ts`, `guideUiReconcileVerify.ts`, `guideWorkRunVerify.ts`, and `providerTimeoutRecoveryVerify.ts` lock these contracts. `android/app/src/main/java/com/newmark/mobile/ui/MemoryLabScreen.kt` includes the Compose layout/animation imports required by the current Memory Lab implementation so the full Android Release gate remains buildable. Packaged fast-switch pressure additionally locks the target-bound activation barrier and expanded readable error Build.
+
+Relevant tree:
+
+```text
+Newmark Agent/
+├─ DESKTOP/src/
+│  ├─ ui/index.html
+│  ├─ llm/provider.ts
+│  ├─ core/conversationKernel.ts
+│  └─ tests/conversationHistoryFirstVerify.ts
+├─ android/app/src/main/java/com/newmark/mobile/ui/MemoryLabScreen.kt
+└─ archive/20260820-121119-dev-0.4.10-history-first-package-install.md
+```
+
+## 2026-08-20 移动形态压力续测
+
+SubAgent、MemoryLab 真实截图与 mock 失败边界记录于 `archive/20260820-mobile-shape-subagent-memorylab-continuity.md`。MemoryLabStore 已增加跨应用 coreMd 回退，Canvas 手势已移除动态 pointerInput key 以保证拖动连续跟手。
+
+The final local Windows artifacts are MSI 226,322,512 bytes (`F3A5EF6C63B264B580AAADDB509157ACA99ACC358E0B93DBBF9C9B79C9C33690`), win-unpacked ZIP 292,453,099 bytes (`8B4181D7514AC060E4C6675E287FECCF03BA143ED7530E94778C7B2F2A37AB7D`), and app.asar 160,066,102 bytes (`C837571A10A875D0ADD0C6819E54F7816EA40EE8EAEAFD3E8555BD8019019627`). The candidate reports `0.4.10`; machine-wide installation is pending interactive UAC confirmation, while the existing Program Files installation remains `0.4.9`.
+
+## Android conversation browser recognition (2026-08-20)
+
+- `android/app/src/main/java/com/newmark/mobile/ui/BrowserRecognition.kt` owns bounded WebView capture, bundled Chinese/English OCR, guarded PDF download, text-layer-first reading, and first-page render fallback.
+- `BrowserSession.kt` routes `browser_use observe/extract` through the PC-compatible recognition receipt; `RightSidebar.kt` binds it only for the lifetime of the matching conversation WebView and releases it on disposal.
+- `android/app/src/test/java/com/newmark/mobile/ui/BrowserRecognitionContractTest.kt` covers PDF text extraction, bilingual evidence selection, recognition order, and conservative-repair constraints.
+
+## Mobile PC-style model grouping and stable composer shape (2026-08-19)
+
+- `android/app/src/main/java/com/newmark/mobile/data/ProviderConfig.kt` extends `ModelOption` with separate provider and display labels while retaining wire-compatible defaults.
+- `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt` and `DesktopLinkViewModel.kt` project local and remote provider catalogues into the same model-option contract.
+- `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` groups the second-level model menu by provider, renders only the model display name in each row, preserves the compact popup/morph animation, and adds horizontal overflow scrolling beside the existing vertical catalogue scroll. Its composer is one line by default, caps growth at five lines, scrolls additional lines internally, keeps the one-line `24dp` corner radius, and bottom-aligns all three action controls.
+- `android/app/src/main/java/com/newmark/mobile/data/GlassStore.kt` owns the persisted `newmark_visual/glass_alpha` value. `ui/theme/NewmarkTheme.kt` owns the PC-equivalent opacity/transparency/three-tier blur curve and bounded mobile backdrop mapping. `NewmarkApp.kt`, `Sidebar.kt`, `RightSidebar.kt`, `ChatScreen.kt`, and `components/AnchorMenu.kt` consume one `LocalGlassMode` preview state; only Slider release commits storage.
+- `android/app/src/main/java/com/newmark/mobile/ui/Sidebar.kt` owns the circular local-conversation add control.
+- `android/app/src/test/java/com/newmark/mobile/ui/InputComposerAndModelMenuContractTest.kt` locks the five-line cap, fixed corner radius, provider grouping, unprefixed model rows, and legacy combined-label compatibility. `ui/theme/GlassPresentationContractTest.kt` locks the PC 85% curve and the accepted 32dp default portrait backdrop.
+- Formal emulator evidence and the data-preserving installation ledger are recorded in `archive/20260819-mobile-model-groups-and-rounded-composer.md`.
+
+## Mobile system-aware launch theme (2026-08-19)
+
+- `android/app/src/main/AndroidManifest.xml` assigns `Theme.Newmark.Starting` before `MainActivity` or Compose exists, so launch colors follow Android configuration rather than a later application preference.
+- `android/app/src/main/res/values*/themes.xml` owns pre-Android-12 launch-window colors and Android 12+ system Splash attributes. Day resources retain `#F2F2F7`, dark resources select `#000000`, and both status/navigation icon appearances follow the same qualifier.
+- `android/app/src/main/res/values*/colors.xml` owns the day/night launch and adaptive-icon background tokens. The existing monochrome Newmark foreground therefore becomes black-on-light or white-on-black without a second application-rendered splash page.
+- `android/scripts/mobile-agent-stress.ps1` now isolates each sidebar/popup iteration, uses an ADB reverse tunnel for its same-host fixture, and records package-scoped ANR/FATAL evidence even when a UI assertion aborts early.
+- Formal Release evidence is `archive/20260819-formal-launch-dark-1.png`, `archive/20260819-formal-launch-light-1.png`, `archive/mobile-stress-20260819-225044.json`, and `archive/20260819-230500-mobile-system-splash-and-stress.md`.
+
 ## Mobile runtime continuity pressure infrastructure (2026-08-19)
 
 - `android/scripts/mobile-agent-stress.ps1` uses one authoritative live hierarchy for Build, Goal, Flow, and Queue before exercising remote enqueue, preventing observation cost from consuming the run window.
-- `DESKTOP/scripts/mobile-mock-server.cjs` now models real Flow suspension: pause freezes progression while HTTP/SSE and resume/stop remain responsive.
-- Current evidence covers a 300-event/90-loop remote run, local 17-tool Queue/Guide execution and restart, three live service restarts, alternating sends, Flow pause/resume, ordinary stop, and foreign-target rejection.
-- Evidence: `archive/mobile-stress-20260819-211437.json` and `archive/20260819-214236-mobile-runtime-continuity-pressure.md`.
+- `android/scripts/mobile-remote-target-switch-stress.ps1` pairs only the isolated Stress package, keeps a primary Build live, drives the real portrait sidebar through two A↔B workspace/conversation cycles, checks target-specific UI markers, stable PID/SSE ownership, and restores the formal app foreground during cleanup.
+- `android/scripts/mobile-queue-animation-benchmark.ps1` installs the non-debuggable Release-equivalent Benchmark package, locates Queue before the sample, then records an observer-free fixed-coordinate expand/collapse graphics window; cleanup uninstalls only the isolated package and restores the formal app.
+- `DESKTOP/scripts/mobile-mock-server.cjs` models real Flow suspension and two independent target-scoped workspace/conversation states. Its bounded `targetReads` ledger proves which target each conversation, UI-state, and workspace-list read addressed.
+- Current evidence covers a 300-event/90-loop remote run, local 17-tool Queue/Guide execution and restart, three live service restarts, alternating sends, Flow pause/resume, ordinary stop, foreign-target rejection, and visible live-target switching without state leakage.
+- Evidence: `archive/mobile-stress-20260819-211437.json`, `archive/20260819-214236-mobile-runtime-continuity-pressure.md`, and `archive/20260819-220500-mobile-remote-target-switch-continuity.md`.
 
 ## dev-0.4.9 Windows/Linux release ownership and gate (2026-08-19)
 
@@ -1978,3 +2123,168 @@ Verification includes the complete built desktop suite, the `1504/1504` source c
 - `archive/20260819-mobile-queue-reorder-animation.md`：保存实机、构建、安装和性能边界记录。
 - `archive/mobile-stress-20260819-191251.json`：保存 800 事件远端 SSE/Build/Goal/Flow/Queue/stale-event 原始门禁；状态门禁全通过，但综合 UI 帧性能未通过。
 - `archive/20260819-mobile-queue-animation-and-remote-800-gate.md`：记录本轮 Release 构建、10 文件保数据安装、正式前台与性能结论边界。
+
+## 2026-08-19 Build 收尾 Guide 重新激活
+
+- `DESKTOP/src/core/conversationKernel.ts`：conversation supervisor 在 `activePromise` 刚释放、但当前 `runId` 仍持有 finalization barrier 所有权时接受 Guide；Guide 以 deferred continuation 持久化并更新队列状态，再通过既有 continuation scheduler 恢复同一 WorkRun，执行完成后重新进入正常收尾。
+- `DESKTOP/src/main.ts`：移动/远端 `conversation_guide` 与 `goal_guide` 不再用可能滞后一拍的 `runtime.running=false` 提前否决；它保留目标 `runId` 并把最终的可恢复/过期判断交给 conversation kernel。
+- `DESKTOP/src/tests/guideWorkRunVerify.ts`：覆盖跨两层异步任务边界到达的单次 Guide，以及连续 12 次“completed → Guide → resume → completed”压力；锁定同一 Build/runId、Guide exactly-once、完整后续响应和最终安静收尾。
+- `archive/20260819-build-finalization-guide-reactivation.md`：保存根因、状态机契约、RED/GREEN 证据和完整桌面回归结果。
+
+## 2026-08-20 移动端到 PC 工作区文件上传
+
+本轮把移动聊天输入框左侧 `+` 与 PC 工作区固定 `/Uploaded` 目录连成一条受控数据通道。上传资源为 `POST /api/mobile/workspace-file-upload?workspaceId=...&directory=Uploaded&fileName=...`，请求体是原始文件字节；服务端不通过 JSON/Base64 聚合文件。工作区与目标目录均由 PC 注册表和 canonical realpath 校验决定，客户端不能提交绝对目录、父级穿越或带分隔符的文件名。
+
+```text
+Newmark Agent/
+├─ DESKTOP/src/server.ts
+│  └─ mobile token/remote-touch gate、64 MiB 流式接收、SHA-256、原子重名落盘
+├─ DESKTOP/src/tests/mobileWorkspaceApiVerify.ts
+│  └─ 真实 HTTP、双工作区隔离、并发、超限、穿越与符号链接契约
+├─ android/app/src/main/java/com/newmark/mobile/
+│  ├─ data/MobileApiClient.kt
+│  │  └─ OkHttp RequestBody/InputStream 原始字节上传
+│  ├─ vm/DesktopLinkViewModel.kt
+│  │  └─ 点击时冻结 pair/workspace/conversation、固定目录上传、本地 send + Guide 注入
+│  └─ ui/RightSidebar.kt
+│     └─ 只读工作区文件树，不包含重复上传入口
+├─ android/app/src/test/java/com/newmark/mobile/ui/WorkspaceUploadContractTest.kt
+│  └─ endpoint、流式请求、无 Base64、当前目标和刷新契约
+└─ archive/20260820-mobile-to-pc-workspace-file-upload.md
+   └─ 威胁模型、RED/GREEN、压力门禁与已知 lint 边界
+```
+
+重名策略为保留两者：`a.ext` 已存在时依次分配 `a (1).ext`；同目录临时文件完成并 `fsync` 后用 exclusive hard link 原子发布，因此并行同名请求不会覆盖或暴露半文件。服务端返回最终相对路径、大小、显示用 MIME 和 SHA-256，但不信任 MIME、不自动打开/执行/解压。Android 仅从聊天输入区 `+` 发起上传，并在打开系统选择器前冻结目标；完成后通过普通 send endpoint 以 `inputMode=guide` 通知同一冻结对话，绝不重新读取当前选中目标。
+# 2026-08-20 移动端左右侧栏单层动画所有权
+
+本轮将移动端侧栏 shell 的动画归属收敛到最外层固定尺寸表面，避免背景、裁剪边界和子组件分别运动。
+
+```text
+Newmark Agent/
+├─ android/app/src/main/java/com/newmark/mobile/ui/
+│  └─ NewmarkApp.kt
+│     ├─ ExpandedMainLayout：左右布局避让槽与固定侧栏表面分离
+│     ├─ left expanded surface：240dp/280dp，单一 translationX
+│     └─ right surface：完整 panelWidth，单一 translationX
+├─ android/app/src/test/java/com/newmark/mobile/ui/
+│  └─ ResponsiveSidebarContractTest.kt
+│     └─ 固定尺寸、单一位移源、旧双层动画拒绝契约
+└─ archive/
+   └─ 20260820-mobile-sidebar-single-surface-motion.md
+      └─ 根因、修复边界、验证命令与 Release APK 哈希
+```
+
+`NewmarkApp.kt` 是移动端自适应布局与侧栏运动状态的唯一所有者。布局 Row 只预留左右当前可见边界；左右侧栏本体由外层 Box 作为完整合成层覆盖绘制，背景、边框、tabs、列表和 WebView 等子树不再绑定进度或获得独立 shell 位移。内部业务动画（例如设备工作区展开、二级页面切换）仍保留，其状态不参与侧栏开合位移。
+
+验证状态：`testDebugUnitTest`、`lintVitalRelease`、`assembleRelease` 全部通过。正式 APK 位于 `android/app/build/outputs/apk/release/app-release.apk`，SHA-256 为 `1CB966B027FF02A151C9B27791EA92B02B7CE82CD143143828030829B3973845`。
+## 2026-08-20 移动侧栏松手结算状态机
+
+`android/app/src/main/java/com/newmark/mobile/ui/NewmarkApp.kt` 现在为左右侧栏各持有一个 `Animatable`。拖动进度负责实时呈现，最后一个拖动值作为 `settleStart` 传入普通 Compose 协程：先 `snapTo(settleStart)`，再 `animateTo(target)`。因此手势和结算共享连续位置，不再由停留在旧端点的独立动画重播。
+
+`android/app/src/test/java/com/newmark/mobile/ui/ResponsiveSidebarContractTest.kt` 锁定左右 `settleStart` 捕获、`snapTo -> animateTo` 顺序，并拒绝旧 `settled* by animateFloatAsState` 路径。归档为 `archive/20260820-mobile-sidebar-release-settle-no-replay.md`；Release APK SHA-256 为 `318BEA2B4FAF482DD3A66E7F843D106888580835974CBF646097291CD3CA4BE5`。
+## 2026-08-20 移动右栏浏览器常驻与输入可达性
+
+```text
+android/app/src/main/java/com/newmark/mobile/ui/
+├─ NewmarkApp.kt
+│  ├─ 宽屏右栏屏外常驻
+│  └─ 本地 Uploads 选中态白名单
+└─ RightSidebar.kt
+   ├─ 450ms 延迟 WebView 预热与 keepMounted 生命周期
+   ├─ 隐藏 WebView 的 View.INVISIBLE 触摸/绘制门禁
+   ├─ BrowserRecognition 首次使用时延迟创建
+   └─ TextFieldValue + cursor rect + horizontalScroll 地址跟随
+android/app/src/test/java/com/newmark/mobile/ui/
+├─ RightSidebarReadinessContractTest.kt
+└─ ResponsiveSidebarContractTest.kt
+```
+
+`RightSidebar.kt` 现在在初始 Compose 工作完成后预热当前会话浏览器，WebView 随当前会话常驻并在不可见时使用原生 `INVISIBLE` 隔离输入。地址滚动算法维持 14dp 光标边缘余量并对左右边界和最大 scroll 做钳制。`NewmarkApp.kt` 保留零宽布局槽与屏外固定右栏，将组件生命周期从展开进度中解耦；本地选中态允许 Plan、Browser 与 Uploads。
+
+完整 54/54 单测、Vital lint 和 Release 编译通过。APK SHA-256 为 `7008A4369764DFFBBBA887020C4933596662E2103107B89D7464643957A9B3E9`。当前无 ADB 设备，未声明真机交互或帧性能通过。
+## 2026-08-20 移动侧栏松手帧连续性
+
+`NewmarkApp.kt` 的 `sidebarPresentedProgress` 明确侧栏显示状态优先级：`dragProgress -> settleStart -> Animatable.value`。松手 effect 按 `snapTo(settleStart) -> clear settleStart -> animateTo(target)` 执行，保证拖动帧、交接帧和动画首帧位置一致。`ResponsiveSidebarContractTest.kt` 锁定三阶段数值连续性与状态清理顺序。
+
+完整 Android 单测、Vital lint 和 Release 编译通过。APK SHA-256 为 `707FFEF3DB5D45EE9BF7988FBDFCABC83C2CAB1C1B2B28C5B51ECB6E6CD11FC7`；当前无 ADB 设备，未声明真机逐帧视觉验证通过。
+## 2026-08-20 移动侧栏 easing 微调
+
+`NewmarkApp.kt` 新增侧栏专用 `SidebarEaseInOut(0.4, 0, 0.2, 1)`，仅供左右侧栏 `Animatable.animateTo` 使用。右栏 250ms、左栏 320ms、状态交接、布局和其他 UI 动画均未改变。`ResponsiveSidebarContractTest.kt` 锁定曲线参数与两处使用点。
+
+完整 Android 单测、Vital lint 和 Release 编译通过。APK SHA-256 为 `D9C83E93F71E642F4FFD23C16B6EA6C6AEA226CDD0B2BD6B9837EF1870CC9F95`；当前无 ADB 设备，未声明真机观感验证通过。
+## 2026-08-20 移动侧栏 ARR 与帧级布局边界
+
+```text
+android/app/src/main/java/com/newmark/mobile/
+├─ MainActivity.kt
+│  └─ 旧版/固定模式的显示器最高 preferredRefreshRate
+└─ ui/NewmarkApp.kt
+   ├─ 动画期 Compose 根 View 的 ARR High 投票
+   ├─ 动画结束恢复 DEFAULT
+   └─ SidebarFrameProgressHost 独立逐帧 restart scope
+```
+
+`SidebarFrameProgressHost` 是左右 `Animatable.value` 的唯一逐帧组合读取点。它把进度传给现有 Compact/Expanded 布局，聊天边界仍随每个 frame-clock tick 连续重测，但 `NewmarkAppContent` 不再随每帧重新构建对话 surface 与外层页面。Android 15+ 使用 View 帧率类别参与 ARR 投票；系统不支持 ARR 或受电量/温度约束时仍以平台裁决为准。
+
+完整 Android 单测、API 35 Vital lint 和 Release 编译通过。APK SHA-256 为 `9EC92F6D23BE90A3A25CC9F2DDA40C10B5668D0AF405B80B42F64270E7F54128`；当前无 ADB 设备，未声明真机高刷/jank 指标通过。
+
+## 2026-08-20 Android 三态 Agent / MemoryLab 压力证据
+
+```text
+Newmark Agent/
+├─ android/app/src/main/java/com/newmark/mobile/data/
+│  └─ MemoryLabStore.kt
+│     └─ 本轮确认 reindex 仅排序现有 tags，未从组件 tagPaths 重建 DAG
+├─ android/scripts/
+│  ├─ mobile-agent-stress.ps1
+│  │  └─ 竖屏 resident Build/Goal/Flow/queue/stale-event 压力
+│  └─ fixtures/
+│     ├─ local-stress-providers.json
+│     └─ local-stress-active-model.json
+├─ DESKTOP/scripts/mobile-mock-server.cjs
+│  └─ 移动本地 17 工具与远端状态确定性 fixture
+└─ archive/
+   ├─ 20260820-mobile-three-form-agent-memorylab-pressure.md
+   ├─ mobile-stress-20260820-205106.json
+   └─ 20260820-three-form-*.{png,xml,json,md}
+```
+
+隔离 `com.newmark.mobile.stress` 在约 411dp 竖屏、674dp 折叠展开响应宽度和 1280dp 平板横屏完成实测。本地 Agent 三回合产生 17 个真实工具结果；MemoryLab 同名组件由 revision 1 改写到 revision 2，强停重启后正文与对话 SHA-256 保持。平板布局实测左栏 280dp、右栏 300dp，Uploads 子栏可进入。竖屏远端压力处理 138 个实际事件（含 14 个重复）并通过 Build/Goal/Flow/Next/过期事件门禁。三态 Newmark 包 FATAL/ANR 均为 0。
+
+当前结论为部分通过：`MemoryLabStore.reindex()` 不会从组件的 `tags/tagPaths` 重建标签图，导致总览为 `0 标签 · 1 组件` 且详细页显示“暂无记忆”；本地 Browser 的 URL/history 在进程死亡后回到默认 Google 页。软件渲染 Debug AVD 的三态 jank 原始值分别为 30.79%、25.59%、10.54%，但本轮没有取得可信的硬件刷新模式轨迹，因此只能判定“未验证是否顶满设备当时选择的 ARR 自适应上限”，不能套用固定 60Hz 预算。现有 AVD 无 hinge sensor，因此折叠态只覆盖中等宽度响应分支，不覆盖真实折痕、遮挡或半开姿态。
+
+## 2026-08-20 设置内部预测性返回交接
+
+```text
+android/app/src/main/java/com/newmark/mobile/ui/
+├─ PredictiveBackMotion.kt
+│  ├─ retainProgressOnCommit：设置主页退出时保留释放帧给外层页面
+│  └─ settleProgressOnCommit：二级/三级页从释放 progress 连续归零
+├─ SettingsScreen.kt
+│  └─ Main 与内部页面按返回目标分别选择 retain / settle 所有权
+└─ ../../test/java/com/newmark/mobile/ui/
+   └─ PredictiveBackMotionContractTest.kt
+      └─ 锁定提交顺序、真实起始 progress、220ms settlement 与顶层语义
+```
+
+此前设置内部页面提交返回后在 `finally` 强制归零，早于 `AnimatedContent` 的下一次组合，形成“先复位、再动画”。现在内部返回在提交目标页后，从手指松开值用与页面过渡一致的 220ms PC easing 连续归位；取消手势和其他独立页面默认语义不变。全量 Android 单测、Vital lint、R8、资源收缩和 Release 编译通过；正式包经 10 文件数据指纹守卫覆盖安装，模拟器“模型与供应商 → 设置”预测返回完成且无包级 FATAL/ANR。归档与录像见 `archive/20260820-mobile-settings-secondary-predictive-back-handoff.md`。
+
+## 2026-08-20 dev-0.5.0 三端绑定发布边界
+
+```text
+Newmark Agent/
+├─ VERSION                                  # Windows/Linux/Android 唯一版本源
+├─ .github/workflows/release-linux.yml      # 标签触发三端构建与六资产 prerelease
+├─ DESKTOP/
+│  ├─ scripts/sync-release-version.cjs      # package/lock/Gradle/tag 一致性校验与同步
+│  ├─ scripts/release-all.cjs               # 默认 Win + Linux + Android 本地编排
+│  ├─ scripts/verify-github-release-assets.cjs
+│  └─ scripts/release-notes-dev-0.5.0.md
+├─ android/app/build.gradle.kts             # versionName 0.5.0 / versionCode 500
+├─ README.md                                # 产品、安装、Tailscale 与开发说明
+└─ release/                                 # 本地六个发布资产，不进入 Git
+```
+
+`VERSION=0.5.0` 绑定桌面 package/package-lock 与 Android `versionName/versionCode`，`dev-X.Y.Z` 标签也必须等于绑定版本。默认 `npm run release` 先跑完整桌面门禁和 Android 单测/Vital lint，再构建 Windows MSI/便携 ZIP、WSL Linux AppImage/deb/ZIP 和 Android APK；本地 electron-builder 显式 `--publish never`，仅 GitHub Release 步骤上传。工作流按三平台独立构建，聚合且只接受六个资产。
+
+本轮完整桌面门禁连续两次通过；Android 单测、Vital lint、R8、资源收缩和 Release APK 通过。新 MSI 以托管流程卸载旧产品并安装成功（exit 0），`C:\Program Files\Newmark Agent\Newmark.exe --version` 为 `0.5.0`，注册表为 `0.5.0.0`，安装与打包 `app.asar` SHA-256 均为 `6C95B2C91C4AFFD7696E4FAC831E2DE360F8C62B9F84897D73BAC7BB1D441696`。六资产哈希与远端下载复核记录见 `archive/20260820-dev-0.5.0-three-platform-release.md`。

@@ -2,6 +2,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createHash, randomUUID } from 'crypto';
 import { normalizeUiBackgroundColor, normalizeUiFontFamily, normalizeUiTheme } from './core/uiPreferences';
 import { spawnSync } from 'child_process';
 import { Agent, AgentWorkEvent } from './core/agent';
@@ -14,6 +15,7 @@ import { WorkspaceInfo } from './core/workspace';
 import { executeWorkspaceBash } from './core/nativeBash';
 import { currentAppVersion } from './core/installUpdate';
 import { confirmPairing, ensureMobileToken, lanIpv4, pairingStatus, tailscaleIpv4 } from './core/mobilePairing';
+import { WorkEventCoalescer } from './core/workEventCoalescer';
 
 const PORT = 47890;
 let agent: Agent | null = null;
@@ -85,9 +87,13 @@ function publishMobileWorkEvent(event: AgentWorkEvent): void {
 }
 
 function publishServerWorkEvent(event: AgentWorkEvent): void {
+  serverWorkEventCoalescer.push(event);
+}
+
+const serverWorkEventCoalescer = new WorkEventCoalescer(event => {
   publishMobileWorkEvent(event);
   hostedWorkEventSink?.(event);
-}
+});
 
 function mobileAuthorized(req: http.IncomingMessage): boolean {
   if (!mobileToken) return false;
@@ -124,6 +130,8 @@ const MOBILE_EDITABLE_EXTENSIONS = new Set([
   '.bash', '.zsh', '.ps1', '.bat', '.cmd', '.sql', '.tex', '.typ', '.properties', '.gradle', '.gitignore',
 ]);
 const MOBILE_EDITOR_MAX_BYTES = 1024 * 1024;
+const MAX_API_BODY_BYTES = 30 * 1024 * 1024;
+export const MOBILE_WORKSPACE_UPLOAD_MAX_BYTES = 64 * 1024 * 1024;
 
 function resolveMobileWorkspacePath(ws: WorkspaceInfo, relativePath: string): { root: string; target: string; relative: string } {
   const root = path.resolve(ws.path);
@@ -142,6 +150,144 @@ async function assertMobileRealPathContained(root: string, target: string): Prom
 function mobileEditableFile(target: string): boolean {
   const base = path.basename(target).toLowerCase();
   return MOBILE_EDITABLE_EXTENSIONS.has(path.extname(base)) || MOBILE_EDITABLE_EXTENSIONS.has(base);
+}
+
+function validMobileUploadDirectory(value: string): boolean {
+  const clean = String(value || '').replace(/\\/g, '/');
+  return !path.isAbsolute(clean)
+    && !/^[A-Za-z]:\//.test(clean)
+    && !clean.split('/').some(segment => segment === '..' || segment.includes('\0'));
+}
+
+function validMobileUploadFileName(value: string): boolean {
+  const clean = String(value || '');
+  return clean.length > 0
+    && clean.length <= 255
+    && clean !== '.'
+    && clean !== '..'
+    && !clean.includes('/')
+    && !clean.includes('\\')
+    && !clean.includes('\0')
+    && path.basename(clean) === clean;
+}
+
+function numberedUploadName(fileName: string, index: number): string {
+  if (index <= 0) return fileName;
+  const extension = path.extname(fileName);
+  const stem = fileName.slice(0, fileName.length - extension.length);
+  return `${stem} (${index})${extension}`;
+}
+
+async function handleMobileWorkspaceUpload(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (agent && !agent.config.getBool('remote', 'touch_enabled')) {
+    mobileJson(res, { error: 'Remote touch disabled' }, 403);
+    req.resume();
+    return;
+  }
+  if (!mobileAuthorized(req)) {
+    mobileJson(res, { error: 'Unauthorized' }, 401);
+    req.resume();
+    return;
+  }
+  if (!agent) {
+    mobileJson(res, { error: 'Agent not initialized' }, 500);
+    req.resume();
+    return;
+  }
+
+  const url = new URL(req.url || '/', `http://localhost:${PORT}`);
+  const workspaceId = url.searchParams.get('workspaceId') || '';
+  const directory = url.searchParams.get('directory') || '';
+  const fileName = url.searchParams.get('fileName') || '';
+  const ws = resolveMobileWorkspace(agent, workspaceId);
+  if (!ws) { mobileJson(res, { error: 'Unknown workspace' }, 404); req.resume(); return; }
+  if (!validMobileUploadDirectory(directory) || !validMobileUploadFileName(fileName)) {
+    mobileJson(res, { error: 'Invalid upload path or file name' }, 400);
+    req.resume();
+    return;
+  }
+  const declaredLength = Number(req.headers['content-length'] || -1);
+  if (Number.isFinite(declaredLength) && declaredLength > MOBILE_WORKSPACE_UPLOAD_MAX_BYTES) {
+    mobileJson(res, { error: 'Upload exceeds the 64 MiB limit' }, 413);
+    req.resume();
+    return;
+  }
+
+  let temporaryPath = '';
+  try {
+    const resolved = resolveMobileWorkspacePath(ws, directory);
+    const realRoot = await fs.promises.realpath(resolved.root);
+    if (directory === 'Uploaded') {
+      await fs.promises.mkdir(resolved.target, { recursive: true });
+    }
+    const realDirectory = await fs.promises.realpath(resolved.target);
+    const canonicalRelative = path.relative(realRoot, realDirectory);
+    if (canonicalRelative === '..' || canonicalRelative.startsWith(`..${path.sep}`) || path.isAbsolute(canonicalRelative)) {
+      throw new Error('Path escapes workspace through a symbolic link');
+    }
+    const directoryStat = await fs.promises.stat(realDirectory);
+    if (!directoryStat.isDirectory()) { mobileJson(res, { error: 'Upload destination is not a directory' }, 400); req.resume(); return; }
+
+    temporaryPath = path.join(realDirectory, `.newmark-upload-${randomUUID()}.tmp`);
+    const handle = await fs.promises.open(temporaryPath, 'wx', 0o600);
+    const hash = createHash('sha256');
+    let size = 0;
+    try {
+      for await (const part of req) {
+        const chunk = Buffer.isBuffer(part) ? part : Buffer.from(part);
+        size += chunk.length;
+        if (size > MOBILE_WORKSPACE_UPLOAD_MAX_BYTES) throw new RangeError('Upload exceeds the 64 MiB limit');
+        hash.update(chunk);
+        let offset = 0;
+        while (offset < chunk.length) {
+          const { bytesWritten } = await handle.write(chunk, offset, chunk.length - offset);
+          if (bytesWritten <= 0) throw new Error('Unable to write the complete upload');
+          offset += bytesWritten;
+        }
+      }
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+
+    let finalPath = '';
+    let finalName = '';
+    let published = false;
+    for (let index = 0; index < 10_000; index++) {
+      finalName = numberedUploadName(fileName, index);
+      finalPath = path.join(realDirectory, finalName);
+      try {
+        // A hard link publishes the already-complete inode atomically and fails
+        // with EEXIST, so parallel uploads can never overwrite one another.
+        await fs.promises.link(temporaryPath, finalPath);
+        published = true;
+        break;
+      } catch (error: any) {
+        if (error?.code === 'EEXIST') continue;
+        throw error;
+      }
+    }
+    if (!published) throw new Error('Unable to allocate a unique upload name');
+    await fs.promises.unlink(temporaryPath);
+    temporaryPath = '';
+    const relativePath = path.posix.join(resolved.relative, finalName).replace(/^\.\//, '');
+    const suppliedMime = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].trim();
+    const mimeType = /^[\w.+-]+\/[\w.+-]+$/.test(suppliedMime) ? suppliedMime : 'application/octet-stream';
+    mobileJson(res, {
+      ok: true,
+      file: { name: finalName, path: relativePath, size, mimeType, sha256: hash.digest('hex'), created: true },
+    }, 201);
+  } catch (error) {
+    if (temporaryPath) await fs.promises.unlink(temporaryPath).catch(() => {});
+    if (error instanceof RangeError) mobileJson(res, { error: error.message }, 413);
+    else if ((error as NodeJS.ErrnoException)?.code === 'ENOENT' || (error as NodeJS.ErrnoException)?.code === 'ENOTDIR') {
+      mobileJson(res, { error: 'Upload destination does not exist' }, 400);
+    } else if (String((error as Error)?.message || '').toLowerCase().includes('workspace')) {
+      mobileJson(res, { error: 'Invalid upload destination' }, 400);
+    } else {
+      mobileJson(res, { error: 'Upload could not be stored' }, 500);
+    }
+  }
 }
 
 function mobileRightSidebarState(current: Agent, ws: WorkspaceInfo, conversationId: string): Record<string, unknown> {
@@ -1311,10 +1457,27 @@ function startServer(root: string, options: HostedMobileServerOptions = {}): htt
       return;
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/mobile/workspace-file-upload') {
+      await handleMobileWorkspaceUpload(req, res);
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname.startsWith('/api/')) {
       let body = '';
-      req.on('data', chunk => body += chunk);
-      req.on('end', () => handleApi(req, res, body));
+      let bodyBytes = 0;
+      let rejected = false;
+      req.on('data', chunk => {
+        if (rejected) return;
+        bodyBytes += Buffer.byteLength(chunk);
+        if (bodyBytes > MAX_API_BODY_BYTES) {
+          rejected = true;
+          if (url.pathname.startsWith('/api/mobile/')) mobileJson(res, { error: 'Request body too large' }, 413);
+          else jsonResponse(res, { error: 'Request body too large' }, 413);
+          return;
+        }
+        body += chunk;
+      });
+      req.on('end', () => { if (!rejected) handleApi(req, res, body); });
       return;
     }
 

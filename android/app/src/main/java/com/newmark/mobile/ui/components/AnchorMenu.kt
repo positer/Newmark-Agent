@@ -47,6 +47,8 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.LocalGlassMode
+import com.newmark.mobile.ui.theme.scaledGlassAlpha
 
 enum class MenuPlacement { UpStart, EndTop, DownStart, DownEnd }
 
@@ -236,7 +238,10 @@ fun AnchorMenu(
             Modifier.verticalScroll(scrollState)
         } else Modifier
         val menu = @Composable {
-            val menuBackground = (backgroundColor ?: p.bgTertiary).copy(alpha = 0.76f)
+            val glass = LocalGlassMode.current
+            val menuBackground = (backgroundColor ?: p.bgTertiary).copy(
+                alpha = scaledGlassAlpha(0.76f, glass.alpha),
+            )
             val refractionBorder = borderColor ?: p.border2
             Box(
                 modifier = modifier

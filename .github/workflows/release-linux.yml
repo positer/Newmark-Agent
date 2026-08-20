@@ -1,12 +1,7 @@
-name: release-linux
+name: release-platforms
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Release version to build (empty = package.json version)'
-        required: false
-        type: string
   push:
     tags:
       - 'dev-[0-9]+.[0-9]+.[0-9]+'
@@ -15,36 +10,50 @@ permissions:
   contents: read
 
 jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: DESKTOP
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: DESKTOP/package-lock.json
+      - run: npm ci
+      - name: Verify bound release version
+        run: npm run release:version-check
+      - name: Build Windows MSI and portable package
+        run: npm run build:clean && node scripts/dist-portable.cjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: newmark-agent-windows
+          if-no-files-found: error
+          path: |
+            release/Newmark-Agent-*-x64.msi
+            release/Newmark-Agent-*-win-unpacked-x64.zip
+
   build-linux:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: DESKTOP
     steps:
-      - name: Check out release source
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: DESKTOP/package-lock.json
-
-      - name: Apply requested version
-        if: github.event_name == 'workflow_dispatch' && inputs.version != ''
-        run: npm version "${{ inputs.version }}" --no-git-tag-version
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build application
-        run: npm run build
-
+      - run: npm ci
+      - name: Verify bound release version
+        run: npm run release:version-check
+      - run: npm run build:clean
       - name: Build Linux AppImage, deb, and unpacked directory
         run: npx electron-builder --linux AppImage deb dir --publish never
-
-      - name: Smoke-test the Linux CLI help surface
+      - name: Smoke-test and package Linux runtime
         shell: bash
         run: |
           set -euo pipefail
@@ -53,23 +62,73 @@ jobs:
           "$binary" --no-sandbox --help > /tmp/newmark-linux-help.txt
           grep -q -- '--root' /tmp/newmark-linux-help.txt
           grep -q -- 'install-update' /tmp/newmark-linux-help.txt
-
-      - name: Package unpacked Linux runtime and checksums
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(node -p "require('./package.json').version")"
+          version="$(cat ../VERSION)"
           cd ../release
           zip -qr "Newmark-Agent-${version}-linux-unpacked-x64.zip" linux-unpacked
-          sha256sum "Newmark-Agent-${version}-x86_64.AppImage" "Newmark-Agent-${version}-amd64.deb" "Newmark-Agent-${version}-linux-unpacked-x64.zip" > SHA256SUMS
-
-      - name: Upload Linux release artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: newmark-agent-linux-${{ github.run_id }}
+          name: newmark-agent-linux
           if-no-files-found: error
           path: |
             release/Newmark-Agent-*.AppImage
             release/Newmark-Agent-*.deb
             release/Newmark-Agent-*-linux-unpacked-x64.zip
-            release/SHA256SUMS
+
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: DESKTOP/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - run: npm ci
+        working-directory: DESKTOP
+      - name: Verify bound release version
+        run: npm run release:version-check
+        working-directory: DESKTOP
+      - run: chmod +x android/gradlew
+      - name: Test, lint, and build Android APK
+        run: ./android/gradlew -p android testDebugUnitTest lintVitalRelease assembleRelease
+      - name: Name Android release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp android/app/build/outputs/apk/release/app-release.apk "release/Newmark-Agent-$(cat VERSION)-android.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: newmark-agent-android
+          if-no-files-found: error
+          path: release/Newmark-Agent-*-android.apk
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/dev-')
+    needs: [build-windows, build-linux, build-android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: newmark-agent-*
+          merge-multiple: true
+          path: release-assets
+      - name: Publish six bound platform assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 6
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release-assets/* --prerelease --title "Newmark Agent $GITHUB_REF_NAME" --generate-notes
+          fi

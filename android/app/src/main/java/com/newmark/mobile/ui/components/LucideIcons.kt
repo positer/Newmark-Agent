@@ -246,6 +246,16 @@ object LucideIcons {
         )
     }
 
+    /** lucide book-open（PC 右栏 Markdown 预览切换） */
+    val BookOpen: ImageVector by lazy {
+        icon(
+            "book-open",
+            "M12 7v14",
+            "M3 18a1 1 0 0 1-1-1V5a2 2 0 0 1 2-2h5a3 3 0 0 1 3 3v15a3 3 0 0 0-3-3z",
+            "M21 18a1 1 0 0 0 1-1V5a2 2 0 0 0-2-2h-5a3 3 0 0 0-3 3v15a3 3 0 0 1 3-3z",
+        )
+    }
+
     val X: ImageVector by lazy {
         icon("x", "M18 6 6 18", "m6 6 12 12")
     }

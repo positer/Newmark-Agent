@@ -2,6 +2,7 @@ package com.newmark.mobile.ui
 
 import android.annotation.SuppressLint
 import android.graphics.Color as AndroidColor
+import android.view.View
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -10,6 +11,13 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,6 +37,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -38,6 +47,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -59,26 +69,37 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.newmark.mobile.data.RemoteSubagent
 import com.newmark.mobile.data.RemotePlanItem
 import com.newmark.mobile.ui.components.LucideIcons
+import com.newmark.mobile.ui.components.MarkdownBody
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.LocalGlassMode
+import com.newmark.mobile.ui.theme.scaledGlassAlpha
 import com.newmark.mobile.ui.theme.NewmarkLightPalette
 import com.newmark.mobile.vm.ChatViewModel
 import com.newmark.mobile.vm.DesktopLinkViewModel
+import com.newmark.mobile.vm.WorkspaceUploadProgress
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 enum class RightSidebarTab(val label: String, val icon: ImageVector) {
     Files("文件", LucideIcons.Folder),
@@ -86,13 +107,15 @@ enum class RightSidebarTab(val label: String, val icon: ImageVector) {
     Plan("计划", LucideIcons.ListChecks),
     Subagents("Subagent", LucideIcons.Bot),
     Browser("浏览器", LucideIcons.Globe),
+    Uploads("上传", LucideIcons.Activity),
 }
 
 private fun availableRightTabs(remoteMode: Boolean): List<RightSidebarTab> = if (remoteMode) {
     RightSidebarTab.entries.toList()
 } else {
-    // 本地没有远程工作区文件/编辑器 API，也不保留 SubAgent 面板。
-    listOf(RightSidebarTab.Plan, RightSidebarTab.Browser)
+    // Uploads is local/global UI state, so it remains available even when
+    // the conversation is local and remote workspace tabs are unavailable.
+    listOf(RightSidebarTab.Plan, RightSidebarTab.Browser, RightSidebarTab.Uploads)
 }
 
 /** PC #right：横向 tabs、可关闭内容区；内容展开时占据第三栏并让聊天区避让。 */
@@ -113,9 +136,18 @@ fun MobileRightSidebar(
     modifier: Modifier = Modifier,
 ) {
     val p = LocalNewmarkPalette.current
+    val glass = LocalGlassMode.current
     val tabs = remember(remoteMode) { availableRightTabs(remoteMode) }
     val tab = selectedTab.takeIf { it in tabs } ?: tabs.first()
     var selectedSubagent by remember { mutableStateOf<RemoteSubagent?>(null) }
+    var browserPrewarmReady by remember(browserSession) { mutableStateOf(false) }
+
+    LaunchedEffect(browserSession) {
+        // Let the main conversation surface finish its first composition, then
+        // create one resident WebView off-screen so opening Browser is cheap.
+        delay(450)
+        browserPrewarmReady = true
+    }
 
     LaunchedEffect(remoteMode, vm.selectedConversationWorkspaceId, vm.selectedConversationId) {
         if (remoteMode && !vm.selectedConversationWorkspaceId.isNullOrBlank() && !vm.selectedConversationId.isNullOrBlank()) {
@@ -124,7 +156,7 @@ fun MobileRightSidebar(
     }
     Column(
         modifier = modifier.width(visibleWidth).fillMaxHeight()
-            .background(p.bgTertiary.copy(alpha = 0.74f)).border(1.dp, p.border),
+            .background(p.bgTertiary.copy(alpha = scaledGlassAlpha(0.74f, glass.alpha))).border(1.dp, p.border),
     ) {
         RightTabs(
             selected = tab,
@@ -148,6 +180,7 @@ fun MobileRightSidebar(
                 BrowserPanel(
                     session = browserSession,
                     visible = tab == RightSidebarTab.Browser,
+                    keepMounted = browserPrewarmReady,
                     modifier = Modifier.fillMaxSize().graphicsLayer {
                         alpha = if (tab == RightSidebarTab.Browser) 1f else 0f
                     }.zIndex(if (tab == RightSidebarTab.Browser) 1f else -1f),
@@ -162,11 +195,75 @@ fun MobileRightSidebar(
                         })
                     }
                     RightSidebarTab.Browser -> Unit
+                    RightSidebarTab.Uploads -> UploadsPanel(vm.workspaceUploadProgress)
                 }
             }
         }
     }
     selectedSubagent?.let { agent -> SubagentHistoryDialog(agent, onDismiss = { selectedSubagent = null }) }
+}
+
+@Composable
+private fun UploadsPanel(tasks: List<WorkspaceUploadProgress>) {
+    val p = LocalNewmarkPalette.current
+    Column(Modifier.fillMaxSize()) {
+        SectionHead("文件上传进度", meta = "${tasks.count { it.status == "uploading" }} 项上传中")
+        if (tasks.isEmpty()) {
+            EmptyState("暂无文件上传任务")
+            return@Column
+        }
+        LazyColumn(Modifier.fillMaxSize()) {
+            items(tasks, key = { it.id }) { task ->
+                UploadTaskRow(task)
+            }
+        }
+    }
+}
+
+@Composable
+private fun UploadTaskRow(task: WorkspaceUploadProgress) {
+    val p = LocalNewmarkPalette.current
+    val statusText = when (task.status) {
+        "completed" -> "已完成"
+        "failed" -> "失败"
+        else -> "${(task.fraction * 100).toInt()}%"
+    }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(LucideIcons.Activity, null, tint = p.accent, modifier = Modifier.size(14.dp))
+            Text(
+                task.fileName,
+                color = p.textPrimary,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 6.dp).weight(1f),
+            )
+            Text(statusText, color = p.textTertiary, fontSize = 9.sp)
+        }
+        Text(
+            "${task.workspaceId} / ${task.conversationTitle}",
+            color = p.textTertiary,
+            fontSize = 9.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 3.dp),
+        )
+        Text(task.targetPath, color = p.textSecondary, fontSize = 9.sp, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp))
+        LinearProgressIndicator(
+            progress = { task.fraction },
+            modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
+            color = p.accent,
+            trackColor = p.bgQuaternary,
+        )
+        if (task.error.isNotBlank()) {
+            Text(task.error, color = Color(0xFFFF7777), fontSize = 9.sp, maxLines = 2,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 5.dp))
+        }
+    }
+    Box(Modifier.fillMaxWidth().height(1.dp).background(p.border))
 }
 
 /** PC .right-open-btn：折叠时覆盖在主页面右缘中部，不占据任何布局宽度。 */
@@ -325,7 +422,11 @@ private fun IconButton(
 }
 
 @Composable
-private fun SectionHead(title: String, meta: String = "", onRefresh: (() -> Unit)? = null) {
+private fun SectionHead(
+    title: String,
+    meta: String = "",
+    onRefresh: (() -> Unit)? = null,
+) {
     val p = LocalNewmarkPalette.current
     Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(title, color = p.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
@@ -341,7 +442,10 @@ private fun SectionHead(title: String, meta: String = "", onRefresh: (() -> Unit
 private fun FilesPanel(vm: DesktopLinkViewModel, onFileOpened: () -> Unit) {
     val p = LocalNewmarkPalette.current
     Column {
-        SectionHead("Workspace file tree", onRefresh = { vm.loadRightSidebarDirectory(vm.rightSidebarPath) })
+        SectionHead(
+            "Workspace file tree",
+            onRefresh = { vm.loadRightSidebarDirectory(vm.rightSidebarPath) },
+        )
         if (vm.rightSidebarPath.isNotBlank()) {
             Row(Modifier.fillMaxWidth().clickable {
                 vm.loadRightSidebarDirectory(vm.rightSidebarPath.substringBeforeLast('/', ""))
@@ -376,9 +480,14 @@ private fun EditorPanel(vm: DesktopLinkViewModel) {
     val editorCaret = if (lightTheme) Color(0xFF172033) else Color.White
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
+    var markdownPreview by remember { mutableStateOf(false) }
+    val markdownFile = remember(vm.rightSidebarEditorPath) {
+        vm.rightSidebarEditorPath.substringAfterLast('.', "").lowercase() in setOf("md", "markdown")
+    }
     val lineCount = remember(vm.rightSidebarEditorContent) { vm.rightSidebarEditorContent.count { it == '\n' } + 1 }
     val gutter = remember(lineCount) { (1..lineCount).joinToString("\n") }
     LaunchedEffect(vm.rightSidebarEditorPath) {
+        markdownPreview = false
         if (vm.rightSidebarEditorPath.isNotBlank()) {
             focusRequester.requestFocus()
             keyboardController?.show()
@@ -388,37 +497,77 @@ private fun EditorPanel(vm: DesktopLinkViewModel) {
         Row(Modifier.fillMaxWidth().height(39.dp).padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             EditorToolbarButton(LucideIcons.Save, "保存", vm.rightSidebarEditorPath.isNotBlank()) { vm.saveRightSidebarFile() }
+            if (markdownFile) {
+                EditorToolbarButton(
+                    LucideIcons.BookOpen,
+                    if (markdownPreview) "返回编辑" else "Markdown 预览",
+                    enabled = true,
+                    active = markdownPreview,
+                ) {
+                    markdownPreview = !markdownPreview
+                    if (markdownPreview) keyboardController?.hide()
+                    else {
+                        focusRequester.requestFocus()
+                        keyboardController?.show()
+                    }
+                }
+            }
             EditorToolbarButton(LucideIcons.X, "关闭", vm.rightSidebarEditorPath.isNotBlank()) { vm.closeRightSidebarFile() }
             Text(vm.rightSidebarEditorPath.ifBlank { "No file selected" }, color = p.textTertiary, fontSize = 10.sp,
                 textAlign = androidx.compose.ui.text.style.TextAlign.End, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f))
         }
-        Row(Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).background(editorBackground)
+        Column(Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).background(editorBackground)
             .border(1.dp, p.border2, RoundedCornerShape(8.dp))) {
-            Text(gutter, color = p.textTertiary, fontSize = 11.sp, lineHeight = 17.sp, fontFamily = FontFamily.Monospace,
-                textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                modifier = Modifier.width(44.dp).fillMaxHeight().background(gutterBackground).padding(top = 10.dp, end = 8.dp))
-            Column(Modifier.weight(1f).fillMaxHeight()) {
-                BasicTextField(
-                    value = vm.rightSidebarEditorContent,
-                    onValueChange = vm::updateRightSidebarEditor,
-                    enabled = vm.rightSidebarEditorPath.isNotBlank(),
-                    textStyle = TextStyle(color = p.textPrimary, fontSize = 11.sp, lineHeight = 17.sp, fontFamily = FontFamily.Monospace),
-                    cursorBrush = SolidColor(editorCaret),
-                    modifier = Modifier.weight(1f).fillMaxWidth().focusRequester(focusRequester)
-                        .onFocusChanged { if (it.isFocused) keyboardController?.show() }.padding(10.dp),
-                    decorationBox = { inner ->
-                        if (vm.rightSidebarEditorPath.isBlank()) Text("Open a file to edit...", color = p.textTertiary, fontSize = 11.sp)
-                        inner()
-                    },
-                )
-                Row(Modifier.fillMaxWidth().height(25.dp).border(1.dp, p.border).padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Text("INSERT", color = Color(0xFF38D4A0), fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                    Text("  ${editorLanguage(vm.rightSidebarEditorPath)}", color = p.textTertiary, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
-                    Spacer(Modifier.weight(1f))
-                    Text(if (vm.rightSidebarSaving) "Saving…" else "$lineCount lines", color = p.textTertiary, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+            AnimatedContent(
+                targetState = markdownPreview && markdownFile,
+                transitionSpec = {
+                    (fadeIn(tween(190)) + androidx.compose.animation.slideInHorizontally(tween(220)) { it / 12 }) togetherWith
+                        (fadeOut(tween(130)) + androidx.compose.animation.slideOutHorizontally(tween(170)) { -it / 16 })
+                },
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                label = "editorMarkdownPreview",
+            ) { preview ->
+                if (preview) {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
+                        if (vm.rightSidebarEditorContent.isBlank()) {
+                            Text("从文件树打开 Markdown 文件即可在这里预览。", color = p.textTertiary, fontSize = 11.sp)
+                        } else {
+                            MarkdownBody(
+                                text = vm.rightSidebarEditorContent,
+                                baseColor = p.textPrimary,
+                                baseFontSize = 12f,
+                                baseLineHeight = 18f,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                } else Row(Modifier.fillMaxSize()) {
+                    Text(gutter, color = p.textTertiary, fontSize = 11.sp, lineHeight = 17.sp, fontFamily = FontFamily.Monospace,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                        modifier = Modifier.width(44.dp).fillMaxHeight().background(gutterBackground).padding(top = 10.dp, end = 8.dp))
+                    BasicTextField(
+                        value = vm.rightSidebarEditorContent,
+                        onValueChange = vm::updateRightSidebarEditor,
+                        enabled = vm.rightSidebarEditorPath.isNotBlank(),
+                        textStyle = TextStyle(color = p.textPrimary, fontSize = 11.sp, lineHeight = 17.sp, fontFamily = FontFamily.Monospace),
+                        cursorBrush = SolidColor(editorCaret),
+                        modifier = Modifier.fillMaxSize().focusRequester(focusRequester)
+                            .onFocusChanged { if (it.isFocused) keyboardController?.show() }.padding(10.dp),
+                        decorationBox = { inner ->
+                            if (vm.rightSidebarEditorPath.isBlank()) Text("Open a file to edit...", color = p.textTertiary, fontSize = 11.sp)
+                            inner()
+                        },
+                    )
                 }
+            }
+            Row(Modifier.fillMaxWidth().height(25.dp).border(1.dp, p.border).padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(if (markdownPreview) "READ" else "INSERT", color = Color(0xFF38D4A0), fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                Text("  ${editorLanguage(vm.rightSidebarEditorPath)}", color = p.textTertiary, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                Spacer(Modifier.weight(1f))
+                Text(if (vm.rightSidebarSaving) "Saving…" else "$lineCount lines", color = p.textTertiary, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
             }
         }
     }
@@ -427,12 +576,12 @@ private fun EditorPanel(vm: DesktopLinkViewModel) {
 private fun editorLanguage(path: String): String = path.substringAfterLast('.', "text").ifBlank { "text" }
 
 @Composable
-private fun EditorToolbarButton(icon: ImageVector, label: String, enabled: Boolean, onClick: () -> Unit) {
+private fun EditorToolbarButton(icon: ImageVector, label: String, enabled: Boolean, active: Boolean = false, onClick: () -> Unit) {
     val p = LocalNewmarkPalette.current
-    Box(Modifier.size(30.dp).clip(RoundedCornerShape(6.dp)).background(p.bgPrimary)
-        .border(1.dp, p.border2, RoundedCornerShape(6.dp)).clickable(enabled = enabled, onClick = onClick),
+    Box(Modifier.size(30.dp).clip(RoundedCornerShape(6.dp)).background(if (active) p.accentSoft else p.bgPrimary)
+        .border(1.dp, if (active) p.accentBorder else p.border2, RoundedCornerShape(6.dp)).clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center) {
-        Icon(icon, label, tint = if (enabled) p.textSecondary else p.textTertiary.copy(alpha = .35f), modifier = Modifier.size(15.dp))
+        Icon(icon, label, tint = if (active) p.accent else if (enabled) p.textSecondary else p.textTertiary.copy(alpha = .35f), modifier = Modifier.size(15.dp))
     }
 }
 
@@ -557,7 +706,11 @@ private fun SubagentPanel(vm: DesktopLinkViewModel, onOpen: (RemoteSubagent) -> 
         if (vm.rightSidebarSubagents.isEmpty()) EmptyState("暂无保留的 Subagent 记录")
         else LazyColumn(Modifier.fillMaxSize()) {
             items(vm.rightSidebarSubagents, key = { it.id }) { agent ->
-                Row(Modifier.fillMaxWidth().clickable { onOpen(agent) }.padding(horizontal = 8.dp, vertical = 7.dp),
+                Row(Modifier.fillMaxWidth().animateItem(
+                    fadeInSpec = tween(180),
+                    placementSpec = tween(240, easing = CubicBezierEasing(.16f, 1f, .3f, 1f)),
+                    fadeOutSpec = tween(140),
+                ).clickable { onOpen(agent) }.padding(horizontal = 8.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Icon(LucideIcons.Bot, null, tint = p.accent, modifier = Modifier.size(16.dp))
                     Column(Modifier.weight(1f).padding(horizontal = 7.dp)) {
@@ -565,7 +718,11 @@ private fun SubagentPanel(vm: DesktopLinkViewModel, onOpen: (RemoteSubagent) -> 
                         Text("${agent.mode} / ${agent.model.ifBlank { "default" }} / ${agent.messageCount} 条消息",
                             color = p.textTertiary, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    Text(agent.status, color = Color(0xFF38D4A0), fontSize = 9.sp)
+                    AnimatedContent(
+                        targetState = agent.status,
+                        transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(120)) },
+                        label = "subagentStatus",
+                    ) { status -> Text(status, color = Color(0xFF38D4A0), fontSize = 9.sp) }
                 }
                 Box(Modifier.fillMaxWidth().height(1.dp).background(p.border))
             }
@@ -575,9 +732,9 @@ private fun SubagentPanel(vm: DesktopLinkViewModel, onOpen: (RemoteSubagent) -> 
 
 @Composable
 fun SubagentHistoryPage(agent: RemoteSubagent, onBack: () -> Unit) {
-    BackHandler(onBack = onBack)
     val p = LocalNewmarkPalette.current
-    Column(Modifier.fillMaxSize().background(p.bgPrimary).statusBarsPadding()) {
+    val (_, predictiveModifier) = predictiveBackMotion(onBack)
+    Column(Modifier.fillMaxSize().then(predictiveModifier).background(p.bgPrimary).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().height(52.dp).background(p.bgSecondary).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(LucideIcons.ChevronLeft, "返回", p.textPrimary, onClick = onBack)
             Text("Subagent 历史", color = p.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 10.dp))
@@ -589,8 +746,9 @@ fun SubagentHistoryPage(agent: RemoteSubagent, onBack: () -> Unit) {
 @Composable
 private fun SubagentHistoryDialog(agent: RemoteSubagent, onDismiss: () -> Unit) {
     val p = LocalNewmarkPalette.current
+    val (_, predictiveModifier) = predictiveBackMotion(onDismiss, fadeOnly = true)
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxWidth(.82f).fillMaxHeight(.8f).widthIn(max = 680.dp).clip(RoundedCornerShape(12.dp))
+        Box(predictiveModifier.fillMaxWidth(.82f).fillMaxHeight(.8f).widthIn(max = 680.dp).clip(RoundedCornerShape(12.dp))
             .background(p.bgPrimary.copy(alpha = 0.78f)).border(1.dp, p.border2, RoundedCornerShape(12.dp))) {
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -620,8 +778,14 @@ private fun SubagentHistoryContent(agent: RemoteSubagent, modifier: Modifier = M
         Text("历史", color = Color(0xFF38D4A0), fontSize = 11.sp, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
         if (agent.messages.isEmpty()) EmptyState("没有记录消息。")
         agent.messages.forEach { message ->
-            Text(message.role.uppercase(), color = p.textTertiary, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
-            Text(message.content, color = p.textPrimary, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(bottom = 10.dp))
+            key(message.role, message.content) {
+                AnimatedVisibility(visible = true, enter = fadeIn(tween(180)), exit = fadeOut(tween(120))) {
+                    Column {
+                        Text(message.role.uppercase(), color = p.textTertiary, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
+                        Text(message.content, color = p.textPrimary, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(bottom = 10.dp))
+                    }
+                }
+            }
         }
         if (agent.error.isNotBlank()) Text(agent.error, color = p.red, fontSize = 11.sp, lineHeight = 16.sp)
     }
@@ -629,29 +793,81 @@ private fun SubagentHistoryContent(agent: RemoteSubagent, modifier: Modifier = M
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun BrowserPanel(session: BrowserSessionState, visible: Boolean, modifier: Modifier = Modifier) {
+private fun BrowserPanel(
+    session: BrowserSessionState,
+    visible: Boolean,
+    keepMounted: Boolean,
+    modifier: Modifier = Modifier,
+) {
     key(session) {
-        if (visible || session.hasActivity) {
-            ConversationBrowserPanel(session, modifier)
+        if (visible || session.hasActivity || keepMounted) {
+            ConversationBrowserPanel(session, visible, modifier)
         }
     }
 }
 
+internal fun browserAddressScrollTarget(
+    cursorLeft: Float,
+    cursorRight: Float,
+    currentScroll: Int,
+    viewportWidth: Int,
+    maxScroll: Int,
+    edgePadding: Float,
+): Int {
+    if (viewportWidth <= 0 || maxScroll <= 0) return currentScroll.coerceIn(0, maxScroll.coerceAtLeast(0))
+    val visibleLeft = currentScroll.toFloat()
+    val visibleRight = visibleLeft + viewportWidth
+    val target = when {
+        cursorLeft < visibleLeft + edgePadding -> cursorLeft - edgePadding
+        cursorRight > visibleRight - edgePadding -> cursorRight + edgePadding - viewportWidth
+        else -> currentScroll.toFloat()
+    }
+    return target.roundToInt().coerceIn(0, maxScroll)
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun ConversationBrowserPanel(session: BrowserSessionState, modifier: Modifier = Modifier) {
+private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Boolean, modifier: Modifier = Modifier) {
     val p = LocalNewmarkPalette.current
     val context = LocalContext.current
     val focus = LocalFocusManager.current
-    var address by remember { mutableStateOf("https://www.google.com") }
+    var address by remember {
+        mutableStateOf(TextFieldValue(session.address, TextRange(session.address.length)))
+    }
+    val addressScroll = rememberScrollState()
+    val density = LocalDensity.current
+    var addressLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var addressViewportWidth by remember { mutableStateOf(0) }
     var webView by remember { mutableStateOf<WebView?>(null) }
+    var recognition by remember { mutableStateOf<BrowserRecognition?>(null) }
+    var recognitionHandler by remember { mutableStateOf<(suspend (String, Int) -> org.json.JSONObject)?>(null) }
 
     LaunchedEffect(session.address) {
-        if (session.address != address) address = session.address
+        if (session.address != address.text) {
+            address = TextFieldValue(session.address, TextRange(session.address.length))
+        }
+    }
+    LaunchedEffect(address.selection, addressLayout, addressViewportWidth, addressScroll.maxValue) {
+        val layout = addressLayout ?: return@LaunchedEffect
+        val cursor = layout.getCursorRect(address.selection.end.coerceIn(0, address.text.length))
+        val target = browserAddressScrollTarget(
+            cursorLeft = cursor.left,
+            cursorRight = cursor.right,
+            currentScroll = addressScroll.value,
+            viewportWidth = addressViewportWidth,
+            maxScroll = addressScroll.maxValue,
+            edgePadding = with(density) { 14.dp.toPx() },
+        )
+        if (target != addressScroll.value) {
+            addressScroll.animateScrollTo(
+                target,
+                tween(durationMillis = 90, easing = CubicBezierEasing(.16f, 1f, .3f, 1f)),
+            )
+        }
     }
 
     fun navigate() {
-        session.navigate(address)
+        session.navigate(address.text)
         focus.clearFocus()
     }
     LaunchedEffect(webView, session.command.id) {
@@ -669,14 +885,30 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, modifier: Mod
             EditorToolbarButton(LucideIcons.ArrowLeft, "后退", session.canGoBack) { session.back() }
             EditorToolbarButton(LucideIcons.ArrowRight, "前进", session.canGoForward) { session.forward() }
             EditorToolbarButton(LucideIcons.RefreshCw, "刷新", webView != null) { session.reload() }
-            BasicTextField(value = address, onValueChange = { value ->
-                address = value
-                session.updateAddressDraft(value)
-            }, singleLine = true,
-                textStyle = TextStyle(color = p.textPrimary, fontSize = 11.sp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go), keyboardActions = KeyboardActions(onGo = { navigate() }),
-                modifier = Modifier.weight(1f).height(30.dp).clip(RoundedCornerShape(8.dp)).background(p.bgPrimary)
-                    .border(1.dp, p.border2, RoundedCornerShape(8.dp)).padding(horizontal = 9.dp, vertical = 6.dp))
+            Box(
+                modifier = Modifier.weight(1f).height(30.dp)
+                    .background(p.bgPrimary, RoundedCornerShape(8.dp))
+                    .border(1.dp, p.border2, RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                BasicTextField(
+                    value = address,
+                    onValueChange = { value ->
+                        address = value
+                        session.updateAddressDraft(value.text)
+                    },
+                    singleLine = true,
+                    textStyle = TextStyle(color = p.textPrimary, fontSize = 11.sp, lineHeight = 16.sp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { navigate() }),
+                    onTextLayout = { addressLayout = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onSizeChanged { addressViewportWidth = it.width }
+                        .horizontalScroll(addressScroll)
+                        .padding(horizontal = 9.dp),
+                )
+            }
             EditorToolbarButton(LucideIcons.Send, "转到", true) { navigate() }
         }
         if (session.isLoading) {
@@ -758,14 +990,31 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, modifier: Mod
                             session.onTitle(title)
                         }
                     }
+                    val handler: suspend (String, Int) -> org.json.JSONObject = { url, maxChars ->
+                        val browserRecognition = recognition
+                            ?: BrowserRecognition(context.applicationContext, this).also { recognition = it }
+                        browserRecognition.recognize(url, maxChars)
+                    }
+                    recognitionHandler = handler
+                    session.bindRecognition(handler)
                     webView = this
+                    visibility = if (visible) View.VISIBLE else View.INVISIBLE
                 }
+            },
+            update = { view ->
+                // INVISIBLE keeps the warmed WebView mounted and loading, but
+                // guarantees it cannot draw over or intercept sibling tabs.
+                view.visibility = if (visible) View.VISIBLE else View.INVISIBLE
             },
             modifier = Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(8.dp)).border(1.dp, p.border2, RoundedCornerShape(8.dp)),
         )
     }
     DisposableEffect(Unit) {
         onDispose {
+            recognitionHandler?.let(session::unbindRecognition)
+            recognitionHandler = null
+            recognition?.close()
+            recognition = null
             webView?.apply {
                 stopLoading()
                 loadUrl("about:blank")

@@ -123,7 +123,7 @@ object LocalTools {
 
     private fun browserUse(actions: Collection<String>): JSONObject = function(
         "browser_use",
-        "操作当前对话的内置浏览器。navigate/back/forward/reload 控制 WebView；observe/extract 读取同一 WebView 最近回传的公开正文；wait 等待页面稳定。",
+        "操作当前对话的内置浏览器。observe/extract 优先读取 DOM 或 PDF 文本层；文本不足时使用同一 WebView/PDF 页面截图和设备端中英 OCR，并返回只允许保守 LLM 矫正的提示。",
         mapOf(
             "action" to enumProp(actions, "浏览器动作"),
             "url" to prop("string", "navigate 的 http/https 地址"),

@@ -51,6 +51,22 @@ import kotlin.coroutines.coroutineContext
 /** 连接状态：断开 / 连接中 / 已连接 / 重连中 */
 enum class LinkStatus { Disconnected, Connecting, Connected, Reconnecting }
 
+data class WorkspaceUploadProgress(
+    val id: String,
+    val workspaceId: String,
+    val conversationId: String,
+    val conversationTitle: String,
+    val fileName: String,
+    val targetPath: String,
+    val uploadedBytes: Long,
+    val totalBytes: Long,
+    val status: String = "uploading",
+    val error: String = "",
+) {
+    val fraction: Float
+        get() = if (totalBytes <= 0L) 0f else (uploadedBytes.toDouble() / totalBytes).toFloat().coerceIn(0f, 1f)
+}
+
 /** 桌面端多设备配对 + 对话同步 + 发送 + 同内网端口可达自动重连 */
 class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -163,6 +179,86 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var rightSidebarError by mutableStateOf("")
         private set
+    var workspaceUploadProgress by mutableStateOf<List<WorkspaceUploadProgress>>(emptyList())
+        private set
+
+    private fun updateWorkspaceUpload(task: WorkspaceUploadProgress) {
+        Snapshot.withMutableSnapshot {
+            workspaceUploadProgress = (workspaceUploadProgress.filterNot { it.id == task.id } + task)
+                .sortedByDescending { it.id }
+        }
+    }
+    fun bindSelectedWorkspaceUpload(): suspend (String, String, ByteArray) -> Result<String> {
+        val pair = activeDevice ?: return { _, _, _ ->
+            Result.failure(IllegalStateException("未连接远程设备"))
+        }
+        val workspaceId = selectedConversationWorkspaceId
+            ?: return { _, _, _ -> Result.failure(IllegalStateException("当前远程对话没有对应工作区")) }
+        val conversationId = selectedConversationId
+            ?: return { _, _, _ -> Result.failure(IllegalStateException("尚未选择远程对话")) }
+        val conversationTitle = selectedConversationTitle.orEmpty().ifBlank { conversationId }
+        return upload@{ name, mimeType, bytes ->
+            if (bytes.isEmpty()) return@upload Result.failure(IllegalArgumentException("文件为空"))
+            if (bytes.size > 20 * 1024 * 1024) {
+                return@upload Result.failure(IllegalArgumentException("文件超过 20 MiB"))
+            }
+            val targetPath = "Uploaded/$name"
+            val taskId = "${System.currentTimeMillis()}:${java.util.UUID.randomUUID()}"
+            var task = WorkspaceUploadProgress(
+                id = taskId,
+                workspaceId = workspaceId,
+                conversationId = conversationId,
+                conversationTitle = conversationTitle,
+                fileName = name,
+                targetPath = targetPath,
+                uploadedBytes = 0L,
+                totalBytes = bytes.size.toLong(),
+            )
+            updateWorkspaceUpload(task)
+            api.uploadWorkspaceFile(
+                pair = pair,
+                workspaceId = workspaceId,
+                directory = "Uploaded",
+                fileName = name,
+                mimeType = mimeType,
+                contentLength = bytes.size.toLong(),
+                openStream = { bytes.inputStream() },
+                onProgress = { uploaded, total ->
+                    task = task.copy(
+                        uploadedBytes = uploaded,
+                        totalBytes = total ?: bytes.size.toLong(),
+                    )
+                    updateWorkspaceUpload(task)
+                },
+            ).mapCatching { json ->
+                val remotePath = json.optJSONObject("file")?.optString("path")?.takeIf(String::isNotBlank)
+                    ?: error("远程未返回上传路径")
+                api.send(
+                    pair = pair,
+                    message = "有文件已上传到 /${remotePath.trimStart('/')}",
+                    conversationId = conversationId,
+                    workspaceId = workspaceId,
+                    requestedMode = "",
+                    goalObjective = "",
+                    inputMode = "guide",
+                ).getOrThrow()
+                if (isActivePair(pair) && isSelectedTarget(workspaceId, conversationId)) {
+                    refreshConversationUiState()
+                }
+                task = task.copy(
+                    targetPath = remotePath,
+                    uploadedBytes = bytes.size.toLong(),
+                    totalBytes = bytes.size.toLong(),
+                    status = "completed",
+                )
+                updateWorkspaceUpload(task)
+                remotePath
+            }.onFailure { failure ->
+                task = task.copy(status = "failed", error = failure.message.orEmpty())
+                updateWorkspaceUpload(task)
+            }
+        }
+    }
 
     /** 兼容旧引用：当前活跃设备 */
     val pairInfo: PairInfo? get() = activeDevice
@@ -382,7 +478,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         return true
     }
 
-    /** 端口不可达：每 10s 主动重连，5min 后判定连接已断开 */
+    /** 端口不可达：与 SSE 同步每 3s 主动重连，5min 后判定连接已断开 */
     private fun startReconnect(pair: PairInfo, session: MobileSessionGate.Session) {
         if (!isCurrent(session, pair)) return
         linkStatus = LinkStatus.Reconnecting
@@ -409,6 +505,15 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         if (activeDevice != null) refresh()
     }
 
+    /** Read a paired device's redacted provider catalog without switching the active conversation owner. */
+    suspend fun providerCatalog(pair: PairInfo): Result<List<com.newmark.mobile.data.ProviderConfig>> {
+        val response = api.state(pair).getOrElse { return Result.failure(it) }
+        val hydrated = hydrateLegacyProviderCatalog(pair, response)
+        val parsed = withContext(Dispatchers.Default) { parseState(hydrated) }
+            ?: return Result.failure(IllegalStateException("设备未返回有效状态"))
+        return Result.success(parsed.providers)
+    }
+
     fun remoteModelOptions(): List<ModelOption> = desktopState?.providers.orEmpty()
         .asSequence()
         .filter { it.enabled }
@@ -419,7 +524,9 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                     ModelOption(
                         providerId = provider.id,
                         modelName = "deployment:${java.net.URLEncoder.encode(provider.id, Charsets.UTF_8.name())}:${java.net.URLEncoder.encode(model.name, Charsets.UTF_8.name())}",
-                        label = "${provider.label} / ${model.label}",
+                        label = model.label,
+                        providerLabel = provider.label,
+                        displayName = model.label,
                     )
                 }
         }
@@ -1735,7 +1842,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         private const val SSE_EVENT_QUEUE_CAPACITY = 256
         private const val SSE_RECONNECT_INTERVAL_MS = 3_000L
         private val TERMINAL_SSE_EVENT_TYPES = setOf("done", "error", "interrupted", "force_interrupted")
-        private const val RECONNECT_INTERVAL_MS = 10_000L
+        private const val RECONNECT_INTERVAL_MS = 3_000L
         private const val RECONNECT_TIMEOUT_MS = 5 * 60_000L
     }
 }

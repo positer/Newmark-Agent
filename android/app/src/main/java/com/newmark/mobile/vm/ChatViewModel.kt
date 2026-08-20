@@ -3,6 +3,7 @@ package com.newmark.mobile.vm
 import android.app.Application
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -38,6 +39,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.UUID
 import java.security.MessageDigest
+import java.io.File
 
 /** 本地对话 + API 调用对话的正式状态管理 */
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
@@ -68,24 +70,26 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var currentId by mutableStateOf<String?>(null)
         private set
-    var isSending by mutableStateOf(false)
-        private set
-    var liveRun by mutableStateOf<LocalWorkRun?>(null)
-        private set
-    var liveRunConversationId by mutableStateOf<String?>(null)
-        private set
+    private val localLiveRuns = mutableStateMapOf<String, LocalWorkRun>()
+    val isSending: Boolean get() = currentId?.let(localRuntimes::containsKey) == true
+    val liveRun: LocalWorkRun? get() = currentId?.let(localLiveRuns::get)
+    val liveRunConversationId: String? get() = currentId?.takeIf(localLiveRuns::containsKey)
+    val hasRunningLocalAgents: Boolean get() = localRuntimes.isNotEmpty()
     var error by mutableStateOf<String?>(null)
         private set
-    private var sendJob: Job? = null
     private data class LocalGuideInput(
         val clientMessageId: String,
         val guideId: String,
         val text: String,
         val createdAt: Long,
     )
-    private var localGuideChannel: Channel<LocalGuideInput>? = null
-    private var localGuideRunId = ""
-    private var localGuideAccepting = false
+    private data class LocalAgentRuntime(
+        val runId: String,
+        val guideChannel: Channel<LocalGuideInput>,
+        var acceptingGuide: Boolean = true,
+        var job: Job? = null,
+    )
+    private val localRuntimes = mutableStateMapOf<String, LocalAgentRuntime>()
     private val localBrowserToolHandlers = mutableMapOf<String, suspend (JSONObject) -> com.newmark.mobile.data.ToolResult>()
 
     fun bindLocalBrowserTools(
@@ -100,6 +104,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         handler: suspend (JSONObject) -> com.newmark.mobile.data.ToolResult,
     ) {
         if (localBrowserToolHandlers[conversationId] === handler) localBrowserToolHandlers.remove(conversationId)
+    }
+
+    suspend fun importLocalFile(name: String, bytes: ByteArray): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(bytes.isNotEmpty()) { "文件为空" }
+            require(bytes.size <= 20 * 1024 * 1024) { "文件超过 20 MiB" }
+            val safe = File(name).name
+                .replace(Regex("[<>:\"/\\\\|?*\\p{Cntrl}]"), "_")
+                .trimStart('.')
+                .take(160)
+                .ifBlank { "mobile-upload.bin" }
+            val dir = File(getApplication<Application>().filesDir, "newmark/workspace/uploads").apply { mkdirs() }
+            val target = File(dir, "${System.currentTimeMillis()}-$safe")
+            target.writeBytes(bytes)
+            "uploads/${target.name}"
+        }
     }
 
     // 多供应商 + 激活模型 + 智能档位（本地 agent 实际调用所用）
@@ -287,11 +307,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             ?: activeProvider?.models?.firstOrNull { it.enabled }
             ?: activeProvider?.models?.firstOrNull()
 
-    /** 所有供应商的启用模型（本地模型选择对话框候选；label 对齐 PC allModelNames：`provider / display|name`） */
+    /** 所有供应商的启用模型；UI 按供应商分组，模型行只显示 display|name。 */
     fun enabledModelOptions(): List<ModelOption> =
         providers.filter { it.enabled }.flatMap { p ->
             p.models.filter { it.enabled }.map { m ->
-                ModelOption(providerId = p.id, modelName = m.name, label = "${p.label} / ${m.label}")
+                ModelOption(
+                    providerId = p.id,
+                    modelName = m.name,
+                    label = m.label,
+                    providerLabel = p.label,
+                    displayName = m.label,
+                )
             }
         }
 
@@ -397,6 +423,45 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             activeProviderId = provider.id
             normalizeActive()
         }
+    }
+
+    /** Merge a redacted remote catalog without replacing local secrets or settings. */
+    fun mergeProviderCatalog(incoming: List<ProviderConfig>): Pair<Int, Int> {
+        var addedProviders = 0
+        var addedModels = 0
+        val merged = providers.toMutableList()
+        incoming.forEach { remote ->
+            val normalizedUrl = remote.baseUrl.trim().trimEnd('/').lowercase()
+            val index = merged.indexOfFirst { local ->
+                local.id == remote.id || (
+                    normalizedUrl.isNotBlank() &&
+                        local.baseUrl.trim().trimEnd('/').lowercase() == normalizedUrl &&
+                        local.protocol.equals(remote.protocol, ignoreCase = true)
+                    )
+            }
+            if (index < 0) {
+                val uniqueId = remote.id.ifBlank { "device-${java.util.UUID.randomUUID()}" }
+                    .let { base -> if (merged.none { it.id == base }) base else "$base-${java.util.UUID.randomUUID()}" }
+                merged += remote.copy(id = uniqueId, apiKey = "", hasApiKey = false)
+                addedProviders += 1
+                addedModels += remote.models.distinctBy { it.name.lowercase() }.size
+            } else {
+                val local = merged[index]
+                val known = local.models.map { it.name.lowercase() }.toMutableSet()
+                val additions = remote.models.filter { it.name.isNotBlank() && known.add(it.name.lowercase()) }
+                if (additions.isNotEmpty()) {
+                    merged[index] = local.copy(models = local.models + additions)
+                    addedModels += additions.size
+                }
+            }
+        }
+        providers = merged
+        providerStore.save(merged)
+        if (activeProviderId.isBlank() && merged.isNotEmpty()) {
+            activeProviderId = merged.first().id
+            normalizeActive()
+        }
+        return addedProviders to addedModels
     }
 
     fun removeProvider(id: String) {
@@ -508,25 +573,25 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stop() {
-        val targetConversationId = liveRunConversationId
-        val interrupted = liveRun?.copy(
+        val targetConversationId = currentId ?: return
+        val runtime = localRuntimes[targetConversationId] ?: return
+        val activeRun = localLiveRuns[targetConversationId]
+        val interrupted = activeRun?.copy(
             status = "interrupted",
             endedAt = System.currentTimeMillis(),
-            events = liveRun!!.events + LocalWorkEvent(
+            events = activeRun.events + LocalWorkEvent(
                 type = "interrupted",
-                id = "${liveRun!!.runId}:${liveRun!!.events.size}:interrupted",
+                id = "${activeRun.runId}:${activeRun.events.size}:interrupted",
                 content = "已停止",
-                sequence = liveRun!!.events.size.toLong(),
+                sequence = activeRun.events.size.toLong(),
             ),
         )
-        sendJob?.cancel()
-        sendJob = null
-        localGuideAccepting = false
-        localGuideChannel?.close()
-        localGuideChannel = null
-        localGuideRunId = ""
-        isSending = false
-        if (targetConversationId != null && interrupted != null) {
+        runtime.job?.cancel()
+        runtime.acceptingGuide = false
+        runtime.guideChannel.close()
+        localRuntimes.remove(targetConversationId)
+        localLiveRuns.remove(targetConversationId)
+        if (interrupted != null) {
             updateConversation(targetConversationId) { conversation ->
                 val assistant = ChatMessage(
                     role = "assistant",
@@ -546,8 +611,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
-        liveRun = null
-        liveRunConversationId = null
         drainLocalQueueIfReady(targetConversationId)
     }
 
@@ -609,10 +672,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun guideLocalQueueMessage(id: String) {
         val conversation = current ?: return
         val item = conversation.queuedMessages.firstOrNull { it.id == id } ?: return
-        val channel = localGuideChannel
-        val run = liveRun
-        if (!isSending || !localGuideAccepting || channel == null || run == null ||
-            conversation.id != liveRunConversationId || run.runId != localGuideRunId || run.mode != "build"
+        val runtime = localRuntimes[conversation.id]
+        val channel = runtime?.guideChannel
+        val run = localLiveRuns[conversation.id]
+        if (runtime == null || !runtime.acceptingGuide || channel == null || run == null ||
+            run.runId != runtime.runId || run.mode != "build"
         ) {
             error = "当前没有可接收 Guide 的本地运行"
             return
@@ -639,7 +703,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             createdAt = guide.createdAt.toString(),
             updatedAt = guide.createdAt.toString(),
         )
-        liveRun = run.copy(events = run.events + LocalWorkEvent(
+        localLiveRuns[conversation.id] = run.copy(events = run.events + LocalWorkEvent(
             type = "guide_accepted",
             id = "${run.runId}:${guide.clientMessageId}:accepted",
             content = guide.text,
@@ -653,30 +717,35 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun drainLocalQueueIfReady(conversationId: String?) {
-        if (conversationId.isNullOrBlank() || isSending || currentId != conversationId) return
+        if (conversationId.isNullOrBlank() || localRuntimes.containsKey(conversationId)) return
         val conversation = conversations.firstOrNull { it.id == conversationId } ?: return
         if (conversation.queuePaused) return
         val (next, remaining) = LocalQueueContract.dequeue(
             conversation.queuedMessages,
             paused = conversation.queuePaused,
-            running = isSending,
+            running = localRuntimes.containsKey(conversationId),
         )
         if (next == null) return
         updateConversation(conversationId) {
             it.copy(queuedMessages = remaining, updatedAt = System.currentTimeMillis())
         }
-        send(next.text)
+        sendInConversation(conversationId, next.text)
     }
 
     /** 发送消息：本地持久化 + 调 API + 持久化回复 */
     fun send(text: String) {
-        val content = text.trim()
-        if (content.isEmpty() || isSending) return
+        sendInConversation(currentId, text)
+    }
 
-        if (current == null) {
+    private fun sendInConversation(requestedConversationId: String?, text: String) {
+        val content = text.trim()
+        if (content.isEmpty()) return
+
+        if (requestedConversationId == null && current == null) {
             newConversation()
         }
-        var conv = current ?: return
+        var conv = conversations.firstOrNull { it.id == (requestedConversationId ?: currentId) } ?: return
+        if (localRuntimes.containsKey(conv.id)) return
 
         // PC 语义：浏览旧分支时先把该页激活为运行分支，再写入新消息。
         conv.branchTree?.let { tree ->
@@ -710,21 +779,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
 
-        isSending = true
         error = null
         val runId = UUID.randomUUID().toString()
         val runStartedAt = System.currentTimeMillis()
         val guideChannel = Channel<LocalGuideInput>(Channel.UNLIMITED)
-        localGuideChannel?.close()
-        localGuideChannel = guideChannel
-        localGuideRunId = runId
-        localGuideAccepting = true
-        liveRunConversationId = targetConversationId
+        val runtime = LocalAgentRuntime(runId = runId, guideChannel = guideChannel)
+        localRuntimes[targetConversationId] = runtime
         // Do not wait for the provider call, a tool result, or the persisted
         // Build block before exposing local execution.  The running block is
         // part of the synchronous send transition, so a slow first token is
         // still represented immediately in the conversation.
-        liveRun = LocalWorkRun(
+        localLiveRuns[targetConversationId] = LocalWorkRun(
             runId = runId,
             status = "running",
             startedAt = runStartedAt,
@@ -743,7 +808,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             anchorMessageId = userMessage.messageId,
             branchNodeId = targetBranchId.orEmpty(),
         )
-        sendJob = viewModelScope.launch {
+        runtime.job = viewModelScope.launch {
             val targetConversation = conversations.find { it.id == targetConversationId } ?: return@launch
             val snapshot = targetConversation.messages
             val executor = LocalToolExecutor(getApplication()) { name, args ->
@@ -781,10 +846,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 runId,
                 runStartedAt,
                 guideChannel,
-                userMessage.messageId,
-                targetBranchId.orEmpty(),
+                onGuideAcceptingChanged = { accepting ->
+                    localRuntimes[targetConversationId]
+                        ?.takeIf { it.runId == runId }
+                        ?.acceptingGuide = accepting
+                },
+                anchorMessageId = userMessage.messageId,
+                branchNodeId = targetBranchId.orEmpty(),
             ) { progress ->
-                if (liveRunConversationId == targetConversationId) liveRun = progress
+                if (localRuntimes[targetConversationId]?.runId == runId) {
+                    localLiveRuns[targetConversationId] = progress
+                }
             }
             val run = loopResult.run
             updateConversation(targetConversationId) {
@@ -808,16 +880,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             // 工具可能经 settings_update 改写了 providers/active 文件 → 重载设置状态（设置页与下次调用即时生效）
             reloadSettingsFromDisk()
-            isSending = false
-            localGuideAccepting = false
+            runtime.acceptingGuide = false
             guideChannel.close()
-            if (localGuideChannel === guideChannel) {
-                localGuideChannel = null
-                localGuideRunId = ""
-            }
-            if (liveRunConversationId == targetConversationId) {
-                liveRun = null
-                liveRunConversationId = null
+            if (localRuntimes[targetConversationId]?.runId == runId) {
+                localRuntimes.remove(targetConversationId)
+                localLiveRuns.remove(targetConversationId)
             }
             drainLocalQueueIfReady(targetConversationId)
         }
@@ -992,6 +1059,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         runId: String,
         startedAt: Long,
         guideChannel: Channel<LocalGuideInput>,
+        onGuideAcceptingChanged: (Boolean) -> Unit,
         anchorMessageId: String,
         branchNodeId: String,
         onProgress: (LocalWorkRun) -> Unit,
@@ -1131,7 +1199,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     loop++
                     continue
                 }
-                localGuideAccepting = false
+                onGuideAcceptingChanged(false)
                 finalText = responseText
                 publish(event(
                     // PC 完成态由 final_response 承载，正文只在独立 Agent

@@ -113,6 +113,57 @@ val NewmarkLightPalette = NewmarkPalette(
 
 val LocalNewmarkPalette = staticCompositionLocalOf { NewmarkDarkPalette }
 
+const val DefaultGlassAlpha = 0.85f
+
+@Immutable
+data class GlassPresentation(
+    val alpha: Float,
+    val opacityPercent: Float,
+    val transparencyPercent: Float,
+    val blur1: Float,
+    val blur2: Float,
+    val blur3: Float,
+    val alpha1: Float,
+    val alpha2: Float,
+    val alpha3: Float,
+)
+
+/** Same glass curve as PC: B = 20 * transparency, with 0.4B/0.8B/B blur tiers. */
+fun glassPresentationForAlpha(value: Float): GlassPresentation {
+    val alpha = value.coerceIn(0f, 1f)
+    val opacity = alpha * 100f
+    val transparency = 100f - opacity
+    val glassWidth = 20f * transparency / 100f
+    return GlassPresentation(
+        alpha = alpha,
+        opacityPercent = opacity,
+        transparencyPercent = transparency,
+        blur1 = 0.4f * glassWidth,
+        blur2 = 0.8f * glassWidth,
+        blur3 = glassWidth,
+        alpha1 = 0.75f * alpha,
+        alpha2 = 0.80f * alpha,
+        alpha3 = 0.85f * alpha,
+    )
+}
+
+/** Keep the accepted 32dp mobile backdrop at PC's default 85%, bounded for GPU safety. */
+fun mobileBackdropBlurDp(alpha: Float): Float =
+    (glassPresentationForAlpha(alpha).blur3 * (32f / 3f)).coerceIn(0f, 64f)
+
+fun scaledGlassAlpha(baseAtDefault: Float, alpha: Float): Float =
+    (baseAtDefault * alpha.coerceIn(0f, 1f) / DefaultGlassAlpha).coerceIn(0f, 1f)
+
+data class GlassMode(
+    val alpha: Float,
+    val previewAlpha: (Float) -> Unit,
+    val commitAlpha: (Float) -> Unit,
+)
+
+val LocalGlassMode = compositionLocalOf {
+    GlassMode(DefaultGlassAlpha, {}, {})
+}
+
 /** 主题模式（dark=null 跟随系统），供设置页开关真实切换亮暗色 */
 data class ThemeMode(val dark: Boolean?, val setDark: (Boolean?) -> Unit)
 val LocalThemeMode = compositionLocalOf { ThemeMode(null, {}) }

@@ -118,6 +118,8 @@ import com.newmark.mobile.ui.components.MenuRow
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.components.NewmarkShapeSmall
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.LocalGlassMode
+import com.newmark.mobile.ui.theme.scaledGlassAlpha
 import com.newmark.mobile.ui.theme.LocalThemeMode
 import com.newmark.mobile.ui.theme.NewmarkAccent
 import com.newmark.mobile.ui.theme.NewmarkAccentSoft
@@ -277,12 +279,13 @@ private fun MainSidebar(
     onTogglePinLocal: (String) -> Unit = {},
 ) {
     val pc = pcSecondaryPalette()
+    val glass = LocalGlassMode.current
     val surface = pc.panel.compositeOver(pc.canvas)
     Column(
         modifier = Modifier
             .fillMaxSize()
             // 一级栏宽度和信息架构不变；视觉 token 直接沿用 PC 二级栏。
-            .background(surface.copy(alpha = 0.72f))
+            .background(surface.copy(alpha = scaledGlassAlpha(0.72f, glass.alpha)))
             .padding(horizontal = if (rail) 4.dp else 6.dp),
     ) {
         // 区 1：设备与工作区（顶部）
@@ -313,9 +316,9 @@ private fun MainSidebar(
                         modifier = Modifier
                             .padding(end = 10.dp)
                             .size(24.dp)
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(CircleShape)
                             .background(pc.control)
-                            .border(1.dp, pc.buttonBorder, RoundedCornerShape(6.dp))
+                            .border(1.dp, pc.buttonBorder, CircleShape)
                             .clickable(onClick = onNewConversation),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -1019,10 +1022,11 @@ fun WorkspaceConversationsSidebar(
         }
         clearDrag()
     }
+    val glass = LocalGlassMode.current
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(surface.copy(alpha = 0.72f))
+            .background(surface.copy(alpha = scaledGlassAlpha(0.72f, glass.alpha)))
             .then(if (respectStatusBars) Modifier.statusBarsPadding() else Modifier)
             .drawBehind {
                 val stroke = 1.dp.toPx()

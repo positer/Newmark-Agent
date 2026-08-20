@@ -27,12 +27,14 @@ $packageName = 'com.newmark.mobile.stress'
 # The application id changes for the stress variant, while the Kotlin
 # namespace (and therefore the concrete Activity class) stays unchanged.
 $component = 'com.newmark.mobile.stress/com.newmark.mobile.MainActivity'
+$formalComponent = 'com.newmark.mobile/com.newmark.mobile.MainActivity'
 $token = 'mobile-stress-token'
 # The deterministic fixture does not require a desktop pairing-window id.
 # Keeping the URL to one query field prevents Windows adb/remote-shell
 # parsing from treating an ampersand as command chaining.
-$pairUrl = "newmark-pair://10.0.2.2:${Port}?token=$token"
+$pairUrl = "newmark-pair://127.0.0.1:${Port}?token=$token"
 $mockProcess = $null
+$reverseInstalled = $false
 $result = [ordered]@{
     timestamp = (Get-Date).ToString('o')
     serial = $Serial
@@ -118,6 +120,11 @@ function Get-ForegroundPackage {
     return [regex]::Match($windowDump, '(?:mCurrentFocus|mFocusedApp)=.*?\bu\d+\s+([A-Za-z0-9._]+)/').Groups[1].Value
 }
 
+function Test-ImeShown {
+    $dump = (& $adb -s $Serial shell dumpsys input_method) -join "`n"
+    return $dump -match '\bmInputShown=true\b'
+}
+
 function Assert-AppForeground([string]$Stage) {
     $foreground = Get-ForegroundPackage
     if ($foreground -ne $packageName) {
@@ -186,7 +193,8 @@ function Wait-ForMockQueueAction {
         if ($stats.queueActions -ge 1) { return $stats }
         Start-Sleep -Milliseconds 150
     } while ((Get-Date) -lt $deadline)
-    throw 'Remote fixture queue mutation was not received by the mock server'
+    $detail = if ($null -ne $stats) { $stats | ConvertTo-Json -Compress -Depth 4 } else { 'stats unavailable' }
+    throw "Remote fixture queue mutation was not received by the mock server: $detail"
 }
 
 function Wait-ForMockBurstCompletion {
@@ -231,6 +239,12 @@ try {
     } while ($null -eq $health -and (Get-Date) -lt $deadline)
     if ($null -eq $health) { throw 'Mobile mock server did not become ready' }
 
+    # Keep this deterministic same-host fixture independent from emulator NAT.
+    # Remote LAN/Tailscale reachability has its own gate; this suite exercises
+    # the application protocol and lifecycle through an isolated adb tunnel.
+    Invoke-Adb @('reverse', "tcp:$Port", "tcp:$Port") | Out-Null
+    $reverseInstalled = $true
+
     Invoke-Adb @('logcat', '-c')
     Invoke-Adb @('shell', 'am', 'force-stop', $packageName)
     # The stress and formal packages share the public pairing scheme. Target
@@ -255,7 +269,10 @@ try {
     Start-Sleep -Seconds 1
 
     # SSE burst includes deliberate duplicate start/text/done messages.
-    Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/burst?count=$BurstCount" -TimeoutSec 20 | Out-Null
+    # Keep the authoritative run alive while cold Compose/JIT and hierarchy
+    # reads settle. The fixture caps this at 250ms, giving a deterministic
+    # interaction window instead of racing the terminal boundary.
+    Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/burst?count=$BurstCount&intervalMs=250" -TimeoutSec 20 | Out-Null
     Wait-ForUiNode -Find { Get-UiNodeByText '处理中' } -Label '远端运行中 Build' -TimeoutMs 5000 | Out-Null
     # One hierarchy snapshot must prove the complete resident state.  Taking
     # four additional independent uiautomator dumps can consume the complete
@@ -287,18 +304,34 @@ try {
     # exercises the running PC queue contract rather than racing the terminal
     # boundary.  The later UI loops stress popup/gesture paths separately.
     Assert-AppForeground 'SSE burst'
+    $preSendStats = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 2
+    if ($preSendStats.activeBursts -lt 1) {
+        throw "Fixture run ended before queue-window send: emitted=$($preSendStats.emittedEvents) completed=$($preSendStats.completedBursts)"
+    }
     $input = Wait-ForUiNode -Find ${function:Get-UiEditText} -Label 'chat input'
     Invoke-UiTapNode -Node $input -Label 'chat input'
     Invoke-Adb @('shell', 'input', 'text', 'fixture-stress')
+    # The IME and input row translate together. A hierarchy captured while the
+    # insets animation is still moving can provide a button position that is
+    # correct for the previous frame and make one ADB tap miss completely.
+    Start-Sleep -Milliseconds 750
     $send = Wait-ForUiNode -Find { Get-UiNodeByDescription '发送' } -Label '发送'
     Invoke-UiTapNode -Node $send -Label '发送'
+    Start-Sleep -Seconds 2
+    $sendStats = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 2
+    if ($sendStats.queueActions -lt 1 -and $sendStats.sends -lt 1) {
+        $send = Wait-ForUiNode -Find { Get-UiNodeByDescription '发送' } -Label '发送 after IME settle'
+        Invoke-UiTapNode -Node $send -Label '发送 after IME settle'
+    }
     # During Flow/Build ownership, the shared PC contract routes ordinary
     # input to the authoritative remote Next queue rather than `/send`.
     Wait-ForMockQueueAction | Out-Null
     # Close IME before popup/gesture pressure. Otherwise the first outside tap
     # is correctly consumed by keyboard dismissal and never reaches 模型.
-    Invoke-Adb @('shell', 'input', 'keyevent', '4')
-    Start-Sleep -Milliseconds 250
+    if (Test-ImeShown) {
+        Invoke-Adb @('shell', 'input', 'keyevent', '4')
+        Start-Sleep -Milliseconds 250
+    }
     for ($i = 0; $i -lt $UiLoops; $i++) {
         Assert-AppForeground "UI loop $i precondition"
         $model = Wait-ForUiNode -Find { Get-UiNodeByDescription '模型' } -Label '模型'
@@ -310,7 +343,15 @@ try {
         Assert-AppForeground "UI loop $i model menu"
         if (($i % 3) -eq 0) {
             Invoke-Adb @('shell', 'input', 'swipe', '900', '1180', '200', '1180', '110')
+            Wait-ForUiNode -Find { Get-UiNodeByDescription '关闭右侧栏' } -Label '右侧栏展开' | Out-Null
             Assert-AppForeground "UI loop $i right-sidebar swipe"
+            # Keep every popup iteration independent. Compose retains the
+            # obscured chat semantics while the sidebar is open, so leaving it
+            # open makes a later model-button locator succeed even though the
+            # sidebar correctly intercepts that tap.
+            Invoke-Adb @('shell', 'input', 'keyevent', '4')
+            Wait-ForUiNode -Find { Get-UiNodeByDescription '打开右侧栏' } -Label '右侧栏折叠' | Out-Null
+            Assert-AppForeground "UI loop $i right-sidebar close"
         }
         if (($i % 5) -eq 0) {
             Invoke-Adb @('shell', 'input', 'swipe', '530', '1800', '530', '600', '140')
@@ -364,15 +405,27 @@ try {
 }
 catch {
     $result.status = 'failed'
-    $result.errors = @($result.errors) + $_.Exception.Message
+    # Capture package-scoped runtime failures even when the suite aborts before
+    # the normal success-path logcat gate. This prevents an ANR dialog from
+    # being misreported only as a missing UI node.
+    $runtimeFailures = @(
+        & $adb -s $Serial logcat -d -v brief |
+            Select-String -Pattern 'FATAL EXCEPTION|ANR in com\.newmark\.mobile\.stress|Process: com\.newmark\.mobile\.stress' |
+            ForEach-Object { $_.Line } |
+            Select-Object -Last 50
+    )
+    $result.errors = @($result.errors) + $runtimeFailures + $_.Exception.Message
     throw
 }
 finally {
     if ($mockProcess -and -not $mockProcess.HasExited) { Stop-Process -Id $mockProcess.Id -Force -ErrorAction SilentlyContinue }
+    if ($reverseInstalled) {
+        & $adb -s $Serial reverse --remove "tcp:$Port" | Out-Null
+    }
     if (-not $KeepMockPair) {
         & $adb -s $Serial shell am force-stop $packageName | Out-Null
         Invoke-Adb @('shell', 'run-as', $packageName, 'rm', '-f', 'files/newmark/pairs.json')
-        & $adb -s $Serial shell am start -n $component | Out-Null
+        & $adb -s $Serial shell am start -n $formalComponent | Out-Null
     }
     $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $reportPath -Encoding utf8
     Write-Output "MOBILE_STRESS_REPORT=$reportPath"

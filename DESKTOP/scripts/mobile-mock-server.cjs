@@ -539,6 +539,31 @@ const server = http.createServer(async (req, res) => {
     if (delayMs) await new Promise(resolve => setTimeout(resolve, delayMs));
     return writeJson(res, 200, kind === 'secondary' ? secondaryConversationUiSnapshot() : conversationUiSnapshot());
   }
+  if (url.pathname === '/api/mobile/right-sidebar-state') {
+    const target = requestedTarget(url);
+    if (targetKind(target) === 'unknown') return writeJson(res, 404, { error: 'Unknown conversation target' });
+    return writeJson(res, 200, {
+      conversationPlan: { items: [] },
+      linkedPlan: { markdown: '', revision: 0 },
+      subagents: [
+        {
+          id: 'stress-subagent-running', name: 'runtime-audit', displayName: '运行态审计', status: 'running',
+          model: 'mock-mobile-model', mode: 'build', messageCount: 2,
+          messages: [{ role: 'user', content: '持续检查移动端运行状态。' }, { role: 'assistant', content: '正在采样事件流与界面状态。' }],
+        },
+        {
+          id: 'stress-subagent-completed', name: 'tool-audit', displayName: '工具可用性审计', status: 'completed',
+          model: 'mock-mobile-model', mode: 'build', messageCount: 2, result: '17 类本地工具均返回结构化结果。',
+          messages: [{ role: 'user', content: '核对本地工具集合。' }, { role: 'assistant', content: '检查完成，结果已归档。' }],
+        },
+        {
+          id: 'stress-subagent-failed', name: 'failure-sample', displayName: '失败态样本', status: 'failed',
+          model: 'mock-mobile-model', mode: 'plan', messageCount: 1, error: 'fixture failure for state rendering',
+          messages: [{ role: 'assistant', content: '测试夹具主动注入失败状态。' }],
+        },
+      ],
+    });
+  }
   if (url.pathname === '/api/mobile/conversation-ui-action' && req.method === 'POST') {
     let body = '';
     for await (const chunk of req) body += String(chunk);

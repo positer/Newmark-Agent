@@ -70,6 +70,8 @@ data class ModelOption(
     val providerId: String = "",
     val modelName: String = "",
     val label: String = "",
+    val providerLabel: String = "",
+    val displayName: String = "",
 )
 
 /** 智能档位（对齐 PC IntelligenceTier：low/medium/high/xhigh/max/ultra，显示即档位名） */

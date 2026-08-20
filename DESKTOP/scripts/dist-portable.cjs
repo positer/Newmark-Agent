@@ -221,7 +221,7 @@ try {
   if (!tryRm(outputDir)) {
     throw new Error(`Refusing to build into a partially locked release directory: ${outputDir}`);
   }
-  runBuilder(['--win', 'dir'], 'electron-builder dir');
+  runBuilder(['--win', 'dir', '--publish', 'never'], 'electron-builder dir');
   ensureNodePtyConptyAssets(nodePtyRoot);
   ensureNodePtyConptyAssets(path.join(unpackedDir, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty'));
   patchPackagedOutput();
@@ -245,7 +245,7 @@ try {
     if (!tryRm(packagedSmokeRoot)) log(`warning: could not remove packaged smoke root ${packagedSmokeRoot}`);
   }
   verifyUnpackedOutput();
-  runBuilder(['--win', 'msi', '--prepackaged', unpackedDir], 'electron-builder msi --prepackaged');
+  runBuilder(['--win', 'msi', '--prepackaged', unpackedDir, '--publish', 'never'], 'electron-builder msi --prepackaged');
   verifyMsiInstaller();
   verifyReleaseCliSmoke();
   verifyPackagedContextCompressionCliStress();

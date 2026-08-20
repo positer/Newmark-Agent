@@ -34,6 +34,7 @@ function createFixture(): {
   renderChatMessages(messages: unknown[]): void;
   guideMessagesForTarget(target?: Record<string, unknown>): Record<string, Record<string, unknown>>;
   dedupeGuideWorkEvents(events: unknown[]): unknown[];
+  renderPendingGuideMessages(target?: Record<string, unknown>, persistedGuideIds?: Record<string, boolean>): number;
   close(): void;
 } {
   const source = uiScriptSource();
@@ -46,6 +47,7 @@ function createFixture(): {
     'findGuideMessageElement',
     'applyGuideMessageMeta',
     'recordGuideUiMessage',
+    'renderWorkRunGuideMessage',
     'guideWorkEventKey',
     'guideWorkEventStatus',
     'mergeGuideWorkEvent',
@@ -54,6 +56,8 @@ function createFixture(): {
     'renderPendingGuideMessages',
     'addMsg',
     'renderConversationBranchPagers',
+    'conversationMessageCache',
+    'cacheConversationMessages',
     'renderChatMessages',
   ];
   const extracted = names.map(name => functionSource(source, name)).join('\n\n');
@@ -62,7 +66,7 @@ function createFixture(): {
     var targetA = { workspaceId: 'workspace-a', conversationId: 'default' };
     var targetB = { workspaceId: 'workspace-b', conversationId: 'default' };
     var activeTarget = targetA;
-    var state = { model: 'fixture-model', guideMessagesByTarget: {}, workRunsByTarget: {} };
+    var state = { model: 'fixture-model', guideMessagesByTarget: {}, workRunsByTarget: {}, conversationMessagesByTarget: {} };
     var els = { 'chat-area': document.getElementById('chat-area') };
     var workUi = { pendingWorkReview: null };
     function runtimeWorkspaceId(value) { return String(value || activeTarget.workspaceId); }
@@ -74,10 +78,14 @@ function createFixture(): {
     function uiLocale() { return 'en-US'; }
     function t(value) { return value; }
     function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+    function escAttr(value) { return esc(value).replace(/"/g, '&quot;'); }
     function redactSensitiveText(value) { return String(value || ''); }
     function renderMessageContent(value) { return '<span>' + esc(value) + '</span>'; }
     function messageActionsHtml() { return ''; }
-    function workRunsForTarget() { return state.workRunsByTarget[runtimeKeyFor(activeTarget.workspaceId, activeTarget.conversationId)] || []; }
+    function workRunsForTarget(target) {
+      var scoped = target || activeTarget;
+      return state.workRunsByTarget[runtimeKeyFor(scoped.workspaceId, scoped.conversationId)] || [];
+    }
     function conversationWorkUiState() { return workUi; }
     function resetConversationWorkUi() {}
     function isHiddenWorkflowMessage() { return false; }
@@ -109,6 +117,7 @@ function createFixture(): {
       renderChatMessages: renderChatMessages,
       guideMessagesForTarget: guideMessagesForTarget
       ,dedupeGuideWorkEvents: dedupeGuideWorkEvents
+      ,renderPendingGuideMessages: renderPendingGuideMessages
     };
   `);
   const fixture = factory(dom.window, dom.window.document) as ReturnType<typeof createFixture>;
@@ -140,6 +149,36 @@ function main(): void {
       width: 1,
       height: 1,
     };
+    const liveRun = fixture.document.createElement('div');
+    liveRun.setAttribute('data-test-run-id', 'run-awaiting-ack');
+    liveRun.innerHTML = '<div class="conversation-work-run-body"><div class="conversation-work-run-events">existing sequenced work</div></div>';
+    fixture.document.getElementById('chat-area')?.appendChild(liveRun);
+    for (const [index, id] of ['guide-awaiting-one', 'guide-awaiting-two'].entries()) {
+      fixture.recordGuideUiMessage({
+        clientMessageId: id,
+        target: fixture.targetA,
+        runId: 'run-awaiting-ack',
+        status: 'accepted',
+        awaitingAck: true,
+        content: `waiting ${index + 1}`,
+        createdAt: `2026-07-12T23:59:0${index}.000Z`,
+      }, fixture.targetA);
+    }
+    fixture.renderPendingGuideMessages(fixture.targetA, {});
+    const liveBody = liveRun.querySelector('.conversation-work-run-body')!;
+    const awaitingStack = liveBody.lastElementChild!;
+    assert.equal(awaitingStack.classList.contains('work-run-pending-guides'), true,
+      'unacknowledged Guides use a temporary stack at the bottom of the expanded Build body');
+    assert.deepEqual(Array.from(awaitingStack.querySelectorAll('[data-client-message-id]')).map(node => node.getAttribute('data-client-message-id')),
+      ['guide-awaiting-one', 'guide-awaiting-two'], 'multiple unacknowledged Guides enter the bottom waiting stack together in submission order');
+    fixture.recordGuideUiMessage({
+      clientMessageId: 'guide-awaiting-one', target: fixture.targetA, runId: 'run-awaiting-ack', status: 'accepted', content: 'waiting 1',
+    }, fixture.targetA);
+    assert.equal(guideRows(fixture.document, 'guide-awaiting-one').length, 0,
+      'the temporary bottom row disappears as soon as an authoritative acknowledgement arrives');
+    assert.match(liveBody.firstElementChild?.textContent || '', /existing sequenced work/,
+      'temporary Guide rendering never moves or rewrites sequenced Build events');
+    liveRun.remove();
     fixture.recordGuideUiMessage({
       clientMessageId: acceptedId,
       target: fixture.targetA,

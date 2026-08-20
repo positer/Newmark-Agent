@@ -340,6 +340,24 @@ class FinalizeBarrierRunner extends Agent {
   }
 }
 
+class FinalizeBarrierResponseRunner extends FinalizeBarrierRunner {
+  override async process(input: string | AgentPromptMessage): Promise<StreamToken[]> {
+    const tokens = await super.process(input);
+    const content = tokens.map(token => token.type === 'text' ? token.text : '').join('');
+    const runId = this.currentWorkRunId();
+    this.chatMessages.push({
+      role: 'assistant',
+      content,
+      mode: 'Build',
+      model: this.model,
+      timestamp: new Date().toISOString(),
+      runId,
+    });
+    this.emitWorkEvent({ type: 'final_response', content, runId });
+    return tokens;
+  }
+}
+
 async function verifyGuideInPendingEmptyFinalizeWindowIsApplied(): Promise<void> {
   const root = path.join(process.cwd(), 'test-tmp-guide-finalize-barrier');
   fs.rmSync(root, { recursive: true, force: true });
@@ -433,6 +451,135 @@ async function verifyGuideFromCompletionEventAutoContinues(): Promise<void> {
   }
 }
 
+async function verifyGuideAfterAsynchronousCompletionDeliveryReactivatesSameBuild(): Promise<void> {
+  const root = path.join(process.cwd(), 'test-tmp-guide-async-completion-delivery');
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(root, { recursive: true });
+  try {
+    const { target, workspace } = workspaceFixture(root);
+    const host = new Agent(root, { agentOnly: true });
+    host.workspace.current = workspace;
+    host.setConversation('default');
+    const runner = new FinalizeBarrierResponseRunner(root, { agentOnly: true });
+    runner.workspace.current = workspace;
+    runner.setConversation('default');
+    const conversations = new ConversationKernel(root, host, null, { createRunner: () => runner });
+    let deliveryReceipt: GuideReceipt | null = null;
+    let delivered!: () => void;
+    const deliverySettled = new Promise<void>(resolve => { delivered = resolve; });
+    conversations.subscribe(event => {
+      if (deliveryReceipt || event.type !== 'done' || event.status !== 'completed') return;
+      // Simulate renderer/HTTP delivery crossing one more task boundary than
+      // the synchronous completion subscriber. The Build is still visibly in
+      // its completion hand-off when this Guide was sent by the user.
+      setImmediate(() => setImmediate(() => {
+        const runtime = conversations.runtimeState(target);
+        deliveryReceipt = conversations.enqueueGuide({
+          clientMessageId: 'guide-after-async-completion-delivery',
+          target,
+          runId: runtime?.runId,
+          deliveryMode: 'steer',
+          text: 'continue after the asynchronous completion hand-off',
+          createdAt: '2026-08-19T15:00:00.000Z',
+        });
+        delivered();
+      }));
+    });
+
+    const running = conversations.prompt('original prompt', target, {
+      mode: 'build', model: runner.model, intelligence: runner.intelligence, inputMode: 'guide', engine: runner.engine,
+    });
+    const firstRunId = conversations.runtimeState(target)?.runId;
+    assert.ok(firstRunId);
+    await Promise.all([running, deliverySettled]);
+    await new Promise<void>(resolve => setImmediate(resolve));
+
+    assert.equal((deliveryReceipt as GuideReceipt | null)?.status, 'deferred',
+      'a Guide delivered during the asynchronous completion hand-off is retained');
+    assert.equal(runner.inputs.length, 2, 'the asynchronous completion Guide reactivates and continues the Build');
+    const snapshot = conversations.snapshot(target);
+    assert.equal(snapshot.workRuns.length, 1, 'reactivation reuses the current Build instead of allocating a new block');
+    assert.equal(snapshot.workRuns[0]?.runId, firstRunId);
+    assert.equal(snapshot.workRuns[0]?.status, 'completed', 'the reactivated Build reaches a second terminal completion');
+    assert.equal(snapshot.workRuns[0]?.guides.find(item => item.clientMessageId === 'guide-after-async-completion-delivery')?.status, 'applied');
+    assert.equal(snapshot.chatMessages.filter(message => message.clientMessageId === 'guide-after-async-completion-delivery').length, 1,
+      'the Guide is persisted exactly once');
+    assert.match(snapshot.chatMessages.filter(message => message.role === 'assistant' && message.runId === firstRunId).at(-1)?.content || '', /reply-2/,
+      'the reactivated Build persists the complete follow-up response');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+async function verifyRepeatedAsynchronousCompletionGuidesKeepReactivatingUntilQuiet(): Promise<void> {
+  const root = path.join(process.cwd(), 'test-tmp-guide-repeated-async-completion');
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(root, { recursive: true });
+  const rounds = 12;
+  try {
+    const { target, workspace } = workspaceFixture(root);
+    const host = new Agent(root, { agentOnly: true });
+    host.workspace.current = workspace;
+    host.setConversation('default');
+    const runner = new FinalizeBarrierResponseRunner(root, { agentOnly: true });
+    runner.workspace.current = workspace;
+    runner.setConversation('default');
+    const conversations = new ConversationKernel(root, host, null, { createRunner: () => runner });
+    const receipts: GuideReceipt[] = [];
+    let completions = 0;
+    let resolveQuiet!: () => void;
+    const quiet = new Promise<void>(resolve => { resolveQuiet = resolve; });
+    conversations.subscribe(event => {
+      if (event.type !== 'done' || event.status !== 'completed') return;
+      completions += 1;
+      if (receipts.length >= rounds) {
+        resolveQuiet();
+        return;
+      }
+      const index = receipts.length;
+      setImmediate(() => setImmediate(() => {
+        const runtime = conversations.runtimeState(target);
+        receipts.push(conversations.enqueueGuide({
+          clientMessageId: `guide-repeated-async-${index}`,
+          target,
+          runId: runtime?.runId,
+          deliveryMode: 'steer',
+          text: `repeat completion hand-off ${index}`,
+          createdAt: new Date(Date.UTC(2026, 7, 19, 16, 0, index)).toISOString(),
+        }));
+      }));
+    });
+
+    const first = conversations.prompt('original repeated prompt', target, {
+      mode: 'build', model: runner.model, intelligence: runner.intelligence, inputMode: 'guide', engine: runner.engine,
+    });
+    const firstRunId = conversations.runtimeState(target)?.runId;
+    assert.ok(firstRunId);
+    await first;
+    await Promise.race([
+      quiet,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('repeated async Guide reactivation timed out')), 5_000)),
+    ]);
+
+    assert.equal(receipts.length, rounds);
+    assert.ok(receipts.every(receipt => receipt.status === 'deferred' && receipt.runId === firstRunId),
+      'every completion-window Guide is retained against the same Build');
+    assert.equal(runner.inputs.length, rounds + 1, 'each retained Guide reactivates exactly one provider continuation');
+    assert.equal(completions, rounds + 1, 'the Build completes after every continuation and finally settles when no Guide follows');
+    const snapshot = conversations.snapshot(target);
+    assert.equal(snapshot.workRuns.length, 1);
+    assert.equal(snapshot.workRuns[0]?.runId, firstRunId);
+    assert.equal(snapshot.workRuns[0]?.status, 'completed');
+    assert.equal(snapshot.workRuns[0]?.guides.filter(guide => guide.status === 'applied').length, rounds);
+    assert.equal(new Set(snapshot.workRuns[0]?.guides.map(guide => guide.clientMessageId)).size, rounds,
+      'all repeatedly reactivated Guides remain exactly-once');
+    assert.match(snapshot.chatMessages.filter(message => message.role === 'assistant' && message.runId === firstRunId).at(-1)?.content || '', /reply-13/,
+      'the final reactivation response is retained before the last completion');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 class ReloadedImageGuideRunner extends Agent {
   readonly guideInputs: AgentPromptMessage[] = [];
 
@@ -449,6 +596,63 @@ class ReloadedImageGuideRunner extends Agent {
       this.notifyAgentKernelUserMessageStart(input.text, input.clientMessageId);
     }
     return [{ type: 'text', text: 'reloaded-reply' }];
+  }
+}
+
+class ContinuationFailureRunner extends Agent {
+  readonly inputs: Array<string | AgentPromptMessage> = [];
+  readonly enteredFirst: Promise<void>;
+  private signalEntered!: () => void;
+  private releaseFirst!: () => void;
+  private readonly firstReleased: Promise<void>;
+
+  constructor(root: string) {
+    super(root, { agentOnly: true });
+    this.enteredFirst = new Promise(resolve => { this.signalEntered = resolve; });
+    this.firstReleased = new Promise(resolve => { this.releaseFirst = resolve; });
+  }
+
+  release(): void { this.releaseFirst(); }
+
+  override async process(input: string | AgentPromptMessage): Promise<StreamToken[]> {
+    this.inputs.push(input);
+    if (this.inputs.length === 1) {
+      this.signalEntered();
+      await this.firstReleased;
+      return [{ type: 'text', text: 'initial reply' }];
+    }
+    throw new Error('[LLM Error: 500] fixture provider failure');
+  }
+}
+
+async function verifyProviderFailureStopsAutomaticContinuationChain(): Promise<void> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-provider-error-chain-'));
+  let runner: ContinuationFailureRunner | undefined;
+  try {
+    const { target, workspace } = workspaceFixture(root);
+    const host = new Agent(root, { agentOnly: true });
+    host.workspace.current = workspace;
+    host.setConversation('default');
+    runner = new ContinuationFailureRunner(root);
+    runner.workspace.current = workspace;
+    runner.setConversation('default');
+    const conversations = new ConversationKernel(root, host, null, { createRunner: () => runner! });
+    const options = { mode: 'build' as const, model: runner.model, intelligence: runner.intelligence, inputMode: 'guide' as const, engine: runner.engine };
+    const running = conversations.prompt('initial prompt', target, options);
+    await runner.enteredFirst;
+    const runId = conversations.runtimeState(target)?.runId;
+    assert.ok(runId);
+    conversations.enqueueGuide({ clientMessageId: 'failing-guide', target, runId, deliveryMode: 'steer', text: 'apply then fail', createdAt: new Date().toISOString() });
+    void conversations.prompt({ text: 'automatic hidden continuation', hiddenUserInput: true, runId }, target, options, 'followUp').catch(() => undefined);
+    runner.release();
+    await assert.rejects(running, /fixture provider failure/);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(runner.inputs.length, 2, 'one continuation failure does not launch another hidden provider request');
+    assert.equal(conversations.snapshot(target).workRuns.filter(run => run.status === 'error').length, 1,
+      'one provider failure produces one terminal error Build only');
+  } finally {
+    runner?.release();
+    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -1090,6 +1294,9 @@ async function main(): Promise<void> {
   await verifyTaskBoundaryGuideIsDeferredAndContinued();
   await verifyGuideInPendingEmptyFinalizeWindowIsApplied();
   await verifyGuideFromCompletionEventAutoContinues();
+  await verifyGuideAfterAsynchronousCompletionDeliveryReactivatesSameBuild();
+  await verifyRepeatedAsynchronousCompletionGuidesKeepReactivatingUntilQuiet();
+  await verifyProviderFailureStopsAutomaticContinuationChain();
   await verifyBuildBlockOverviewAndGoalInterruptResume();
   await verifyColdStartRecoveryDistinguishesTrackingLossFromUnexpectedExit();
   await verifyImageOnlyDeferredGuideSurvivesCheckpointReloadExactlyOnce();

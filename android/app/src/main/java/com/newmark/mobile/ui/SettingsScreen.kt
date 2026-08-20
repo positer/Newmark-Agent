@@ -43,6 +43,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -78,6 +79,8 @@ import com.newmark.mobile.ui.components.NewmarkShapeLarge
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.LocalThemeMode
+import com.newmark.mobile.ui.theme.LocalGlassMode
+import com.newmark.mobile.ui.theme.glassPresentationForAlpha
 import com.newmark.mobile.ui.theme.MarqueeColors
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkAccent
@@ -121,20 +124,24 @@ fun SettingsScreen(
     val p = LocalNewmarkPalette.current
     var page by remember { mutableStateOf<SettingsPage>(SettingsPage.Main) }
 
-    // 预测性返回：系统返回键逐级退回（ProviderDetail→Providers→Main→退出），与 AnimatedContent 反向动画同步
-    BackHandler {
-        when (page) {
-            is SettingsPage.Main -> onBack()
-            is SettingsPage.DeviceManage -> page = SettingsPage.Main
-            is SettingsPage.Providers -> page = SettingsPage.Main
-            is SettingsPage.FuzzyInject -> page = SettingsPage.Providers
-            is SettingsPage.ProviderDetail -> page = SettingsPage.Providers
-        }
-    }
+    val (_, predictiveModifier) = predictiveBackMotion(
+        onBack = {
+            when (page) {
+                is SettingsPage.Main -> onBack()
+                is SettingsPage.DeviceManage -> page = SettingsPage.Main
+                is SettingsPage.Providers -> page = SettingsPage.Main
+                is SettingsPage.FuzzyInject -> page = SettingsPage.Providers
+                is SettingsPage.ProviderDetail -> page = SettingsPage.Providers
+            }
+        },
+        retainProgressOnCommit = page is SettingsPage.Main,
+        settleProgressOnCommit = page !is SettingsPage.Main,
+    )
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .then(predictiveModifier)
             .background(p.bgPrimary),
     ) {
         Row(
@@ -201,6 +208,7 @@ fun SettingsScreen(
                 is SettingsPage.DeviceManage -> DeviceManagePage(linkVm = linkVm)
                 is SettingsPage.Providers -> ProvidersPage(
                     vm = vm,
+                    linkVm = linkVm,
                     onOpenProvider = { page = SettingsPage.ProviderDetail(it) },
                     onOpenFuzzy = { page = SettingsPage.FuzzyInject },
                 )
@@ -471,7 +479,8 @@ private fun AppearanceSection() {
     val systemDark = isSystemInDarkTheme()
     val isDark = themeMode.dark ?: systemDark
     val followSystem = themeMode.dark == null
-    var blur by remember { mutableFloatStateOf(24f) }
+    val glassMode = LocalGlassMode.current
+    val glass = glassPresentationForAlpha(glassMode.alpha)
     SectionCard(title = "外观") {
         SettingRow(label = "暗色模式") {
             Switch(
@@ -494,16 +503,23 @@ private fun AppearanceSection() {
             )
         }
         Text(
-            text = "毛玻璃强度  ${blur.toInt()}",
+            text = "玻璃强度  ${glass.opacityPercent.toInt()}%",
             fontSize = 11.sp,
             color = p.textSecondary,
             modifier = Modifier.padding(top = 6.dp),
         )
         Slider(
-            value = blur,
-            onValueChange = { blur = it },
-            valueRange = 0f..40f,
+            value = glass.opacityPercent,
+            onValueChange = { glassMode.previewAlpha(it / 100f) },
+            onValueChangeFinished = { glassMode.commitAlpha(glassMode.alpha) },
+            valueRange = 0f..100f,
+            steps = 99,
             modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = "不透明度 ${glass.opacityPercent.toInt()}% · 透明度 ${glass.transparencyPercent.toInt()}% · 模糊 ${"%.1f".format(glass.blur1)}/${"%.1f".format(glass.blur2)}/${"%.1f".format(glass.blur3)}",
+            fontSize = 10.sp,
+            color = p.textTertiary,
         )
     }
 }
@@ -561,10 +577,15 @@ private fun ProvidersEntry(onClick: () -> Unit) {
 @Composable
 private fun ProvidersPage(
     vm: ChatViewModel,
+    linkVm: DesktopLinkViewModel,
     onOpenProvider: (String) -> Unit,
     onOpenFuzzy: () -> Unit,
 ) {
     val p = LocalNewmarkPalette.current
+    val scope = rememberCoroutineScope()
+    var showDevicePicker by remember { mutableStateOf(false) }
+    var pullingHost by remember { mutableStateOf("") }
+    var pullStatus by remember { mutableStateOf("") }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
@@ -621,6 +642,66 @@ private fun ProvidersPage(
                 contentAlignment = Alignment.Center,
             ) {
                 Text("＋ 模糊注入", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = p.accent)
+            }
+        }
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(NewmarkShapeLarge)
+                    .background(p.accentSoft)
+                    .clickable(enabled = pullingHost.isBlank()) {
+                        if (linkVm.pairedDevices.isEmpty()) pullStatus = "暂无已连接设备"
+                        else showDevicePicker = true
+                    }
+                    .padding(14.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (pullingHost.isBlank()) "从连接设备拉取" else "正在拉取...",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = p.accent,
+                )
+            }
+        }
+        if (pullStatus.isNotBlank()) {
+            item { Text(pullStatus, fontSize = 11.sp, color = p.textSecondary) }
+        }
+    }
+    if (showDevicePicker) {
+        Dialog(onDismissRequest = { if (pullingHost.isBlank()) showDevicePicker = false }) {
+            Column(
+                Modifier.fillMaxWidth().clip(NewmarkShapeLarge).background(p.bgSecondary).padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("选择连接设备", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = p.textPrimary)
+                linkVm.pairedDevices.forEach { device ->
+                    Row(
+                        Modifier.fillMaxWidth().clip(NewmarkShapeMedium).background(p.bgQuaternary)
+                            .clickable(enabled = pullingHost.isBlank()) {
+                                pullingHost = device.host
+                                scope.launch {
+                                    linkVm.providerCatalog(device).onSuccess { catalog ->
+                                        val (providersAdded, modelsAdded) = vm.mergeProviderCatalog(catalog)
+                                        pullStatus = "已从 ${device.displayName} 合并：新增 $providersAdded 个供应商、$modelsAdded 个模型"
+                                        showDevicePicker = false
+                                    }.onFailure {
+                                        pullStatus = "拉取失败：${it.message ?: "未知错误"}"
+                                    }
+                                    pullingHost = ""
+                                }
+                            }.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.Computer, null, tint = p.accent, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(device.displayName, fontSize = 12.sp, color = p.textPrimary)
+                            Text(device.host, fontSize = 10.sp, color = p.textTertiary)
+                        }
+                    }
+                }
             }
         }
     }

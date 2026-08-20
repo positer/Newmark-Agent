@@ -34,6 +34,34 @@ async function startHangingServer(): Promise<{ server: http.Server; port: number
   });
 }
 
+async function startTemperatureCompatibilityServer(): Promise<{
+  port: number;
+  bodies: Array<Record<string, unknown>>;
+  stop(): Promise<void>;
+}> {
+  const bodies: Array<Record<string, unknown>> = [];
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', chunk => chunks.push(Buffer.from(chunk)));
+    req.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as Record<string, unknown>;
+      bodies.push(body);
+      if (body.temperature !== undefined) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: "Unsupported parameter: 'temperature' is not supported with this model.", type: 'invalid_request_error', param: 'temperature', code: null } }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { content: 'temperature-compatible' } }] }));
+    });
+  });
+  return await new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({
+    port: (server.address() as net.AddressInfo).port,
+    bodies,
+    stop: () => new Promise<void>(resolveClose => server.close(() => resolveClose())),
+  })));
+}
+
 async function main(): Promise<void> {
   console.log('providerTimeoutRecoveryVerify');
   const originalNodeTransport = LLMProvider.nodeHttpTransport;
@@ -102,9 +130,27 @@ async function main(): Promise<void> {
       const elapsed = Date.now() - started;
       check(timeoutName === 'TimeoutError', 'stalled fetch returns a typed timeout');
       check(elapsed < 3000, `stalled fetch is bounded (${elapsed}ms)`);
-      check(nodeFallbacks === 1 && powershellFallbacks === 0, 'stalled fetch does not cascade to fallback transports');
+    check(nodeFallbacks === 1 && powershellFallbacks === 0, 'stalled fetch does not cascade to fallback transports');
     } finally {
       await hanging.stop();
+    }
+
+    const compatibility = await startTemperatureCompatibilityServer();
+    try {
+      LLMProvider.nodeHttpTransport = originalNodeTransport;
+      const provider = new LLMProvider('temperature-fixture', `http://127.0.0.1:${compatibility.port}/v1`, 'sk-fixture', 'openai', 'chat', true, 1000);
+      const first = await provider.chat('no-temperature-model', [{ role: 'user', content: 'hello' }], null, 0.7, 32);
+      const second = await provider.chat('no-temperature-model', [{ role: 'user', content: 'again' }], null, 0.7, 32);
+      check(first === 'temperature-compatible' && second === 'temperature-compatible', 'explicit unsupported-temperature 400 recovers without surfacing an LLM error');
+      check(compatibility.bodies.length === 3, 'the first request retries exactly once and the cached second request needs no retry');
+      check(compatibility.bodies[0].temperature === 0.7 && compatibility.bodies.slice(1).every(body => body.temperature === undefined),
+        'temperature is removed only after the structured capability error and stays omitted for that provider/model path');
+    } finally {
+      await compatibility.stop();
+      LLMProvider.nodeHttpTransport = async () => {
+        nodeFallbacks += 1;
+        return { status: 200, body: JSON.stringify({ choices: [{ message: { content: 'fallback-ok' } }] }) };
+      };
     }
 
     let readerCancelled = false;

@@ -14,7 +14,7 @@ data class ActiveModel(
 
 /**
  * 供应商持久化：filesDir/newmark/providers.json（List<ProviderConfig>）。
- * 首次启动用本机 Newmark 预设作为种子；激活选择存 filesDir/newmark/active-model.json。
+ * 纯净安装首次启动写入空列表；激活选择存 filesDir/newmark/active-model.json。
  */
 class ProviderStore(context: Context) {
 
@@ -25,9 +25,8 @@ class ProviderStore(context: Context) {
 
     fun load(): List<ProviderConfig> {
         if (!file.exists()) {
-            val seed = NewmarkPresets.asProviders()
-            save(seed)
-            return seed
+            save(emptyList())
+            return emptyList()
         }
         return runCatching {
             val type = object : TypeToken<List<ProviderConfig>>() {}.type

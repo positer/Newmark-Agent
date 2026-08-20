@@ -121,6 +121,7 @@ function parseProviderSse(raw: string): Array<{ event?: string; data: string }> 
 export class LLMProvider {
   static nodeHttpTransport: ((method: 'GET' | 'POST', url: string, headers: Record<string, string>, body?: string) => Promise<NodeHttpResult>) | null = null;
   static powershellTransport: ((method: 'GET' | 'POST', url: string, headers: Record<string, string>, body?: string) => Promise<NodeHttpResult>) | null = null;
+  private readonly temperatureUnsupported = new Set<string>();
 
   constructor(
     public name: string,
@@ -300,7 +301,56 @@ export class LLMProvider {
     };
   }
 
+  private temperatureCapabilityKey(url: string, body: Record<string, unknown>): string {
+    return `${url}|${String(body.model || '')}`;
+  }
+
+  private unsupportedTemperatureError(status: number, raw: string): boolean {
+    if (status !== 400) return false;
+    try {
+      const parsed = JSON.parse(String(raw || '')) as { error?: { param?: unknown; message?: unknown } };
+      if (String(parsed?.error?.param || '').toLowerCase() === 'temperature') return true;
+      return /unsupported parameter[^\n]*temperature|temperature[^\n]*not supported/i.test(String(parsed?.error?.message || ''));
+    } catch {
+      return /unsupported parameter[^\n]*temperature|temperature[^\n]*not supported/i.test(String(raw || ''));
+    }
+  }
+
+  private requestBodyForTemperatureCapability(url: string, body: Record<string, unknown>): Record<string, unknown> {
+    const prepared = { ...body };
+    if (this.temperatureUnsupported.has(this.temperatureCapabilityKey(url, body))) delete prepared.temperature;
+    return prepared;
+  }
+
   private async postJsonWithFetchFallback(
+    url: string,
+    headers: Record<string, string>,
+    body: Record<string, unknown>,
+    timeoutMs = 120000,
+    signal?: AbortSignal,
+  ): Promise<ProviderHttpResponse> {
+    const prepared = this.requestBodyForTemperatureCapability(url, body);
+    const response = await this.postJsonOnce(url, headers, prepared, timeoutMs, signal);
+    if (prepared.temperature === undefined || response.status !== 400) return response;
+    const cloneable = typeof (response as Response).clone === 'function';
+    const errorText = await (cloneable ? (response as Response).clone() : response).text();
+    if (!this.unsupportedTemperatureError(response.status, errorText)) {
+      if (cloneable) return response;
+      return {
+        ok: response.ok,
+        status: response.status,
+        headers: response.headers,
+        text: async () => errorText,
+        json: async () => JSON.parse(errorText || '{}'),
+      };
+    }
+    this.temperatureUnsupported.add(this.temperatureCapabilityKey(url, body));
+    const retryBody = { ...body };
+    delete retryBody.temperature;
+    return this.postJsonOnce(url, headers, retryBody, timeoutMs, signal);
+  }
+
+  private async postJsonOnce(
     url: string,
     headers: Record<string, string>,
     body: Record<string, unknown>,
@@ -1068,6 +1118,7 @@ export class LLMProvider {
    */
   private buildProviderAdapterTransport(): ProviderTransport {
     return async (request: SerializedProviderRequest, signal: AbortSignal): Promise<TransportResponse> => {
+      request.body = this.requestBodyForTemperatureCapability(request.url, request.body);
       if (request.body?.stream === true) {
         const abort = new AbortController();
         const forwardAbort = () => abort.abort(signal?.reason);
@@ -1077,12 +1128,27 @@ export class LLMProvider {
         const timer = setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout);
         try {
           try {
-            return await fetch(request.url, {
+            let response = await fetch(request.url, {
               method: 'POST',
               headers: request.headers,
               body: JSON.stringify(request.body),
               signal: abort.signal,
             });
+            if (request.body.temperature !== undefined && response.status === 400) {
+              const errorText = await response.clone().text();
+              if (this.unsupportedTemperatureError(response.status, errorText)) {
+                this.temperatureUnsupported.add(this.temperatureCapabilityKey(request.url, request.body));
+                const retryBody = { ...request.body };
+                delete retryBody.temperature;
+                response = await fetch(request.url, {
+                  method: 'POST',
+                  headers: request.headers,
+                  body: JSON.stringify(retryBody),
+                  signal: abort.signal,
+                });
+              }
+            }
+            return response;
           } catch (error) {
             if (signal?.aborted) throw abortFailure(signal);
             if (abort.signal.aborted) throw abortFailure(abort.signal);

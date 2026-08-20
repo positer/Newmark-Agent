@@ -17,6 +17,63 @@ interface JsonResponse {
   body: Record<string, any>;
 }
 
+function requestBinary(
+  port: number,
+  token: string,
+  endpoint: string,
+  content: Buffer,
+  contentType = 'application/octet-stream',
+): Promise<JsonResponse> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(endpoint, `http://127.0.0.1:${port}`);
+    const request = http.request(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': contentType,
+        'Content-Length': content.length,
+      },
+    }, response => {
+      let text = '';
+      response.setEncoding('utf-8');
+      response.on('data', chunk => { text += chunk; });
+      response.on('end', () => {
+        let parsed: Record<string, any> = {};
+        try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
+        resolve({ status: response.statusCode || 0, body: parsed });
+      });
+    });
+    request.setTimeout(15_000, () => request.destroy(new Error(`Mobile upload timed out: ${url.pathname}`)));
+    request.once('error', reject);
+    request.end(content);
+  });
+}
+
+function requestChunkedBinary(port: number, token: string, endpoint: string, content: Buffer): Promise<JsonResponse> {
+  return new Promise((resolve, reject) => {
+    const request = http.request(new URL(endpoint, `http://127.0.0.1:${port}`), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream' },
+    }, response => {
+      let text = '';
+      response.setEncoding('utf-8');
+      response.on('data', chunk => { text += chunk; });
+      response.on('end', () => {
+        let parsed: Record<string, any> = {};
+        try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
+        resolve({ status: response.statusCode || 0, body: parsed });
+      });
+    });
+    request.setTimeout(30_000, () => request.destroy(new Error('Chunked mobile upload timed out')));
+    request.once('error', reject);
+    const chunkBytes = 1024 * 1024;
+    for (let offset = 0; offset < content.length; offset += chunkBytes) {
+      request.write(content.subarray(offset, Math.min(content.length, offset + chunkBytes)));
+    }
+    request.end();
+  });
+}
+
 const SHARED_ID = 'shared-mobile-conversation';
 const A_ONLY_ID = 'workspace-a-only';
 const B_ONLY_ID = 'workspace-b-only';
@@ -454,6 +511,85 @@ export async function verifyMobileWorkspaceApi(record: VerifyAssert): Promise<vo
       'mobile workspace editor: saves only the requested existing text file',
       JSON.stringify(saveFile.body));
 
+    const uploadedDirectory = path.join(fixture.workspaceB.path, 'Uploaded');
+    record(!fs.existsSync(uploadedDirectory),
+      'mobile workspace upload: fixed Uploaded directory starts absent');
+    const uploadBytes = Buffer.from([0x00, 0xff, 0x10, 0x20, 0x7f, 0x42]);
+    const uploadEndpoint = `/api/mobile/workspace-file-upload?workspaceId=${encodeURIComponent(workspaceBId)}&directory=${encodeURIComponent('Uploaded')}&fileName=${encodeURIComponent('mobile.bin')}`;
+    const upload = await requestBinary(port, fixture.token, uploadEndpoint, uploadBytes);
+    const uploadedPath = path.join(uploadedDirectory, 'mobile.bin');
+    record(upload.status === 201
+      && upload.body.ok === true
+      && upload.body.file?.path === 'Uploaded/mobile.bin'
+      && upload.body.file?.size === uploadBytes.length
+      && upload.body.file?.sha256 === createHash('sha256').update(uploadBytes).digest('hex')
+      && fs.existsSync(uploadedPath)
+      && fs.readFileSync(uploadedPath).equals(uploadBytes),
+    'mobile workspace upload: raw binary creates and reaches the fixed Uploaded directory intact',
+    JSON.stringify(upload.body));
+    record(!fs.existsSync(path.join(fixture.workspaceA.path, 'Uploaded', 'mobile.bin')),
+      'mobile workspace upload: data never crosses into another workspace');
+
+    const duplicateUpload = await requestBinary(port, fixture.token, uploadEndpoint, Buffer.from('second-copy'));
+    record(duplicateUpload.status === 201
+      && duplicateUpload.body.file?.path === 'Uploaded/mobile (1).bin'
+      && fs.readFileSync(uploadedPath).equals(uploadBytes)
+      && fs.readFileSync(path.join(uploadedDirectory, 'mobile (1).bin'), 'utf-8') === 'second-copy',
+    'mobile workspace upload: an existing file is preserved and a numbered name is allocated',
+    JSON.stringify(duplicateUpload.body));
+
+    const concurrentUploads = await Promise.all(Array.from({ length: 4 }, (_, index) => requestBinary(
+      port,
+      fixture.token,
+      `/api/mobile/workspace-file-upload?workspaceId=${encodeURIComponent(workspaceBId)}&directory=&fileName=${encodeURIComponent('parallel.txt')}`,
+      Buffer.from(`parallel-${index}`),
+      'text/plain',
+    )));
+    const concurrentPaths = concurrentUploads.map(response => String(response.body.file?.path || ''));
+    record(concurrentUploads.every(response => response.status === 201)
+      && new Set(concurrentPaths).size === concurrentUploads.length
+      && concurrentPaths.every(relative => fs.existsSync(path.join(fixture.workspaceB.path, relative))),
+    'mobile workspace upload: concurrent same-name requests allocate unique complete files',
+    JSON.stringify(concurrentPaths));
+
+    const uploadRejections = [
+      await requestBinary(port, 'wrong-mobile-token', uploadEndpoint, Buffer.from('unauthorized')),
+      await requestBinary(port, fixture.token,
+        `/api/mobile/workspace-file-upload?workspaceId=missing-workspace&directory=&fileName=x.txt`, Buffer.from('missing')),
+      await requestBinary(port, fixture.token,
+        `/api/mobile/workspace-file-upload?workspaceId=${encodeURIComponent(workspaceBId)}&directory=${encodeURIComponent('../')}&fileName=x.txt`, Buffer.from('escape')),
+      await requestBinary(port, fixture.token,
+        `/api/mobile/workspace-file-upload?workspaceId=${encodeURIComponent(workspaceBId)}&directory=&fileName=${encodeURIComponent('../x.txt')}`, Buffer.from('escape')),
+      await requestBinary(port, fixture.token,
+        `/api/mobile/workspace-file-upload?workspaceId=${encodeURIComponent(workspaceBId)}&directory=&fileName=${encodeURIComponent('a/b.txt')}`, Buffer.from('escape')),
+      await requestBinary(port, fixture.token,
+        `/api/mobile/workspace-file-upload?workspaceId=${encodeURIComponent(workspaceBId)}&directory=&fileName=${encodeURIComponent('a\\b.txt')}`, Buffer.from('escape')),
+    ];
+    record(uploadRejections[0].status === 401
+      && uploadRejections[1].status === 404
+      && uploadRejections.slice(2).every(response => response.status === 400),
+    'mobile workspace upload: auth, workspace, traversal and malicious filename boundaries fail closed',
+    uploadRejections.map(response => `${response.status}:${JSON.stringify(response.body)}`).join(','));
+
+    const oversizedUpload = await requestBinary(port, fixture.token,
+      `/api/mobile/workspace-file-upload?workspaceId=${encodeURIComponent(workspaceBId)}&directory=&fileName=too-large.bin`,
+      Buffer.alloc(64 * 1024 * 1024 + 1), 'application/octet-stream');
+    const uploadResidue = fs.readdirSync(fixture.workspaceB.path).filter(name => name.startsWith('.newmark-upload-'));
+    record(oversizedUpload.status === 413
+      && !fs.existsSync(path.join(fixture.workspaceB.path, 'too-large.bin'))
+      && uploadResidue.length === 0,
+    'mobile workspace upload: declared oversize is rejected before streaming with no partial residue',
+    JSON.stringify({ response: oversizedUpload.body, uploadResidue }));
+    const chunkedOversize = await requestChunkedBinary(port, fixture.token,
+      `/api/mobile/workspace-file-upload?workspaceId=${encodeURIComponent(workspaceBId)}&directory=&fileName=chunked-too-large.bin`,
+      Buffer.alloc(64 * 1024 * 1024 + 1));
+    const chunkedResidue = fs.readdirSync(fixture.workspaceB.path).filter(name => name.startsWith('.newmark-upload-'));
+    record(chunkedOversize.status === 413
+      && !fs.existsSync(path.join(fixture.workspaceB.path, 'chunked-too-large.bin'))
+      && chunkedResidue.length === 0,
+    'mobile workspace upload: chunked oversize is stopped at 64 MiB and its temporary file is removed',
+    JSON.stringify({ response: chunkedOversize.body, chunkedResidue }));
+
     const rejectedFiles = [
       await requestJson(port, fixture.token, 'GET',
         `/api/mobile/workspace-file?workspaceId=${encodeURIComponent(workspaceBId)}&path=binary.png`),
@@ -479,6 +615,12 @@ export async function verifyMobileWorkspaceApi(record: VerifyAssert): Promise<vo
       record(symlinkEscape.status >= 400,
         'mobile workspace files: symbolic-link escape outside the workspace is rejected',
         JSON.stringify(symlinkEscape.body));
+      const symlinkUploadEscape = await requestBinary(port, fixture.token,
+        `/api/mobile/workspace-file-upload?workspaceId=${encodeURIComponent(workspaceBId)}&directory=outside-link&fileName=escape.txt`,
+        Buffer.from('must stay inside'));
+      record(symlinkUploadEscape.status === 400 && !fs.existsSync(path.join(outside, 'escape.txt')),
+        'mobile workspace upload: symbolic-link destination outside the workspace is rejected',
+        JSON.stringify(symlinkUploadEscape.body));
       fs.rmSync(outside, { recursive: true, force: true });
     }
 

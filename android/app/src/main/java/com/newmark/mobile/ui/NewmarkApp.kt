@@ -1,13 +1,17 @@
 package com.newmark.mobile.ui
 
 import android.content.ClipData
+import android.os.Build
+import android.view.View
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -33,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,9 +50,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.unit.dp
@@ -68,8 +75,14 @@ import com.newmark.mobile.data.RemoteWorkRun
 import com.newmark.mobile.data.RemoteTrackingContract
 import com.newmark.mobile.data.RemotePayloadNormalizer
 import com.newmark.mobile.data.ThemeStore
+import com.newmark.mobile.data.GlassStore
 import com.newmark.mobile.data.WorkspaceInfo
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.DefaultGlassAlpha
+import com.newmark.mobile.ui.theme.GlassMode
+import com.newmark.mobile.ui.theme.LocalGlassMode
+import com.newmark.mobile.ui.theme.mobileBackdropBlurDp
+import com.newmark.mobile.ui.theme.scaledGlassAlpha
 import com.newmark.mobile.ui.theme.LocalThemeMode
 import com.newmark.mobile.ui.theme.NewmarkBgPrimary
 import com.newmark.mobile.ui.theme.NewmarkBgSecondary
@@ -88,6 +101,49 @@ import java.time.format.DateTimeFormatter
 
 private val LocalTimeFmt = DateTimeFormatter.ofPattern("HH:mm:ss")
 private val PcEaseOutExpo = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
+private val SidebarEaseInOut = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
+private val IndependentPageExitEase = CubicBezierEasing(0.4f, 0f, 1f, 1f)
+
+internal fun sidebarPresentedProgress(
+    dragging: Boolean,
+    dragProgress: Float,
+    settleStart: Float?,
+    animatedProgress: Float,
+): Float = when {
+    dragging -> dragProgress
+    settleStart != null -> settleStart
+    else -> animatedProgress
+}
+
+@Composable
+private fun SidebarFrameProgressHost(
+    rightDragging: Boolean,
+    rightDragProgress: Float,
+    rightSettleStart: Float?,
+    rightMotion: Animatable<Float, AnimationVector1D>,
+    leftDragging: Boolean,
+    leftDragProgress: Float,
+    leftSettleStart: Float?,
+    leftMotion: Animatable<Float, AnimationVector1D>,
+    content: @Composable (leftProgress: Float, rightProgress: Float) -> Unit,
+) {
+    // Keep frame-by-frame snapshot reads in this narrow restart scope. The
+    // parent retains the same conversation surface and callbacks while only
+    // this host and the affected layout boundary advance on the frame clock.
+    val rightProgress = sidebarPresentedProgress(
+        dragging = rightDragging,
+        dragProgress = rightDragProgress,
+        settleStart = rightSettleStart,
+        animatedProgress = rightMotion.value,
+    )
+    val leftProgress = sidebarPresentedProgress(
+        dragging = leftDragging,
+        dragProgress = leftDragProgress,
+        settleStart = leftSettleStart,
+        animatedProgress = leftMotion.value,
+    )
+    content(leftProgress, rightProgress)
+}
 
 private fun formatLocalTime(ms: Long): String =
     runCatching { LocalTimeFmt.format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault())) }
@@ -270,6 +326,8 @@ private data class ConversationSurface(
     val queuePaused: Boolean,
     val onNewChat: () -> Unit,
     val onOpenWebLink: (String) -> Unit,
+    val onBeginFileUpload: () -> (suspend (String, String, ByteArray) -> Result<String>),
+    val uploadInjectsGuide: Boolean,
 )
 
 /** 自适应根布局：主题（亮暗色开关） + 竖屏 drawer / 平板 rail↔full，绑定本地对话 + 桌面端同步 */
@@ -281,12 +339,17 @@ fun NewmarkApp(
 ) {
     val context = LocalContext.current
     val themeStore = remember { ThemeStore(context) }
+    val glassStore = remember { GlassStore(context) }
     // SharedPreferences is tiny, but avoid adding synchronous storage work to
     // the first composition.  The system theme is an acceptable first-frame
     // fallback and the persisted preference replaces it immediately after.
     var darkMode by remember { mutableStateOf<Boolean?>(null) }
+    var glassAlpha by remember { mutableFloatStateOf(DefaultGlassAlpha) }
     LaunchedEffect(themeStore) {
         darkMode = themeStore.loadDarkMode()
+    }
+    LaunchedEffect(glassStore) {
+        glassAlpha = glassStore.loadAlpha()
     }
     val dark = darkMode ?: isSystemInDarkTheme()
     CompositionLocalProvider(
@@ -294,6 +357,14 @@ fun NewmarkApp(
             darkMode = new
             themeStore.saveDarkMode(new)
         },
+        LocalGlassMode provides GlassMode(
+            alpha = glassAlpha,
+            previewAlpha = { glassAlpha = it.coerceIn(0f, 1f) },
+            commitAlpha = {
+                glassAlpha = it.coerceIn(0f, 1f)
+                glassStore.saveAlpha(glassAlpha)
+            },
+        ),
     ) {
         NewmarkTheme(darkTheme = dark) {
             NewmarkAppContent(
@@ -313,8 +384,14 @@ private fun NewmarkAppContent(
 ) {
     val p = LocalNewmarkPalette.current
     val context = LocalContext.current
+    val rootView = LocalView.current
     val vm: ChatViewModel = viewModel()
     val linkVm: DesktopLinkViewModel = viewModel()
+    val keepScreenOn = vm.hasRunningLocalAgents
+    DisposableEffect(rootView, keepScreenOn) {
+        if (keepScreenOn) rootView.keepScreenOn = true
+        onDispose { if (keepScreenOn) rootView.keepScreenOn = false }
+    }
 
     LaunchedEffect(runtimeStressScenario) {
         if (runtimeStressScenario != "local_queue_guide") return@LaunchedEffect
@@ -368,14 +445,79 @@ private fun NewmarkAppContent(
     var rightSidebarExpanded by remember { mutableStateOf(false) }
     var rightSidebarDragProgress by remember { mutableFloatStateOf(0f) }
     var isRightSidebarDragging by remember { mutableStateOf(false) }
-    val rightSidebarProgress by animateFloatAsState(
-        targetValue = if (isRightSidebarDragging) rightSidebarDragProgress else if (rightSidebarExpanded) 1f else 0f,
-        animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
-        label = "rightSidebarProgress",
-    )
+    var leftSidebarDragProgress by remember { mutableFloatStateOf(0f) }
+    var isLeftSidebarDragging by remember { mutableStateOf(false) }
+    var rightSidebarSettleStart by remember { mutableStateOf<Float?>(null) }
+    var leftSidebarSettleStart by remember { mutableStateOf<Float?>(null) }
+    val rightSidebarMotion = remember { Animatable(0f) }
+    val leftSidebarTarget = if (
+        rail || sidebarPage is SidebarPage.WorkspaceConversations || rightSidebarExpanded
+    ) 0f else 1f
+    val leftSidebarMotion = remember { Animatable(leftSidebarTarget) }
+    LaunchedEffect(rightSidebarExpanded, isRightSidebarDragging) {
+        if (!isRightSidebarDragging) {
+            val settleStart = rightSidebarSettleStart
+            if (settleStart != null) {
+                rightSidebarMotion.snapTo(settleStart)
+                rightSidebarSettleStart = null
+            }
+            rightSidebarMotion.animateTo(
+                targetValue = if (rightSidebarExpanded) 1f else 0f,
+                animationSpec = tween(durationMillis = 250, easing = SidebarEaseInOut),
+            )
+        }
+    }
+    LaunchedEffect(leftSidebarTarget, isLeftSidebarDragging) {
+        if (!isLeftSidebarDragging) {
+            val settleStart = leftSidebarSettleStart
+            if (settleStart != null) {
+                leftSidebarMotion.snapTo(settleStart)
+                leftSidebarSettleStart = null
+            }
+            leftSidebarMotion.animateTo(
+                targetValue = leftSidebarTarget,
+                animationSpec = tween(durationMillis = 320, easing = SidebarEaseInOut),
+            )
+        }
+    }
+    // Drag frames and release settling share the same Animatable. snapTo keeps
+    // its internal value at the finger position, so animateTo can only cover
+    // the remaining distance instead of replaying from the old endpoint.
     var rightSidebarTab by remember { mutableStateOf(RightSidebarTab.Files) }
     val browserSessions = remember { BrowserSessionRegistry() }
     var compactSubagent by remember { mutableStateOf<RemoteSubagent?>(null) }
+    var retainedCompactSubagent by remember { mutableStateOf<RemoteSubagent?>(null) }
+    LaunchedEffect(compactSubagent) {
+        compactSubagent?.let { retainedCompactSubagent = it }
+    }
+    val compactSubagentVisibility = remember { MutableTransitionState(false) }
+    val settingsVisibility = remember { MutableTransitionState(false) }
+    val terminalVisibility = remember { MutableTransitionState(false) }
+    val memoryLabVisibility = remember { MutableTransitionState(false) }
+    SideEffect {
+        compactSubagentVisibility.targetState = isCompact && compactSubagent != null
+        settingsVisibility.targetState = screen == Screen.Settings
+        terminalVisibility.targetState = screen == Screen.Terminal
+        memoryLabVisibility.targetState = screen == Screen.MemoryLab
+    }
+    val independentPageTransitionRunning = !compactSubagentVisibility.isIdle ||
+        !settingsVisibility.isIdle || !terminalVisibility.isIdle || !memoryLabVisibility.isIdle
+    val highFrameRateActive = isRightSidebarDragging || isLeftSidebarDragging ||
+        rightSidebarMotion.isRunning || leftSidebarMotion.isRunning || independentPageTransitionRunning
+    DisposableEffect(rootView, highFrameRateActive) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            rootView.requestedFrameRate = if (highFrameRateActive) {
+                View.REQUESTED_FRAME_RATE_CATEGORY_HIGH
+            } else {
+                View.REQUESTED_FRAME_RATE_CATEGORY_DEFAULT
+            }
+        }
+        onDispose {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM && highFrameRateActive) {
+                rootView.requestedFrameRate = View.REQUESTED_FRAME_RATE_CATEGORY_DEFAULT
+            }
+        }
+    }
 
     val mainDrawerWidth = minOf(
         360.dp,
@@ -427,7 +569,7 @@ private fun NewmarkAppContent(
     }
     val selectedRightSidebarTab = when {
         useRemote -> rightSidebarTab
-        rightSidebarTab in listOf(RightSidebarTab.Plan, RightSidebarTab.Browser) -> rightSidebarTab
+        rightSidebarTab in listOf(RightSidebarTab.Plan, RightSidebarTab.Browser, RightSidebarTab.Uploads) -> rightSidebarTab
         else -> RightSidebarTab.Plan
     }
     val displayItems = rememberConversationItems(useRemote = useRemote, linkVm = linkVm, vm = vm)
@@ -588,6 +730,12 @@ private fun NewmarkAppContent(
         queuePaused = queuePaused,
         onNewChat = onNewConversation,
         onOpenWebLink = onOpenWebLink,
+        onBeginFileUpload = if (useRemote) {
+            { linkVm.bindSelectedWorkspaceUpload() }
+        } else {
+            { { name, _, bytes -> vm.importLocalFile(name, bytes) } }
+        },
+        uploadInjectsGuide = useRemote,
     )
 
     val sidebar: @Composable (SidebarPage, Boolean) -> Unit = { pageArg, railArg ->
@@ -612,7 +760,9 @@ private fun NewmarkAppContent(
                 // 竖屏：选中即关抽屉回到对话区
                 if (isCompact) scope.launch { drawerState.close() }
             },
-            onToggleRail = if (isCompact) null else ({ rail = !rail }),
+            // Expanded/foldable layouts use the same swipe-only rail
+            // interaction as portrait; no visible expand/collapse button.
+            onToggleRail = null,
             pairedDevices = linkVm.pairedDevices,
             activeHost = linkVm.activeDevice?.host,
             linkStatus = linkVm.linkStatus,
@@ -691,6 +841,19 @@ private fun NewmarkAppContent(
                     } else if (controlsRight && rightSidebarExpanded && horizontalDrag > 0f) {
                         isRightSidebarDragging = true
                         rightSidebarDragProgress = (1f - (horizontalDrag / (168.dp.toPx()))).coerceIn(0f, 1f)
+                    } else if (!isCompact && !controlsRight) {
+                        // Expanded/foldable left rail follows the finger. The
+                        // committed rail flag changes only after release.
+                        val opening = rail && horizontalDrag > 0f
+                        val closing = !rail && horizontalDrag < 0f
+                        if (opening || closing) {
+                            isLeftSidebarDragging = true
+                            leftSidebarDragProgress = if (opening) {
+                                (horizontalDrag / 172.dp.toPx()).coerceIn(0f, 1f)
+                            } else {
+                                (1f + horizontalDrag / 172.dp.toPx()).coerceIn(0f, 1f)
+                            }
+                        }
                     }
                     // Compact right-swipes belong to Material3's left drawer so its
                     // position and the window blur remain finger-synchronous.
@@ -715,31 +878,25 @@ private fun NewmarkAppContent(
                     }
                 }
             }
+            if (isRightSidebarDragging) rightSidebarSettleStart = rightSidebarDragProgress
+            if (isLeftSidebarDragging) leftSidebarSettleStart = leftSidebarDragProgress
             isRightSidebarDragging = false
+            isLeftSidebarDragging = false
         }
     }
 
+    Box(Modifier.fillMaxSize()) {
+    SidebarFrameProgressHost(
+        rightDragging = isRightSidebarDragging,
+        rightDragProgress = rightSidebarDragProgress,
+        rightSettleStart = rightSidebarSettleStart,
+        rightMotion = rightSidebarMotion,
+        leftDragging = isLeftSidebarDragging,
+        leftDragProgress = leftSidebarDragProgress,
+        leftSettleStart = leftSidebarSettleStart,
+        leftMotion = leftSidebarMotion,
+    ) { leftSidebarProgress, rightSidebarProgress ->
     when {
-        isCompact && compactSubagent != null -> {
-            SubagentHistoryPage(agent = compactSubagent!!, onBack = { compactSubagent = null })
-        }
-
-        screen == Screen.Settings -> {
-            SettingsScreen(
-                vm = vm,
-                linkVm = linkVm,
-                onBack = { screen = Screen.Main },
-            )
-        }
-
-        screen == Screen.MemoryLab && isCompact -> {
-            MemoryLabScreen(onBack = { screen = Screen.Main })
-        }
-
-        screen == Screen.Terminal -> {
-            TerminalScreen(onBack = { screen = Screen.Main })
-        }
-
         isCompact -> {
             CompactMainLayout(
                 drawerState = drawerState,
@@ -766,7 +923,7 @@ private fun NewmarkAppContent(
         else -> {
             ExpandedMainLayout(
                 page = sidebarPage,
-                rail = rail,
+                leftProgress = leftSidebarProgress,
                 rightExpanded = rightSidebarExpanded,
                 rightProgress = rightSidebarProgress,
                 screenWidthDp = config.screenWidthDp,
@@ -795,9 +952,46 @@ private fun NewmarkAppContent(
             )
         }
     }
+    }
 
-    if (!isCompact && screen == Screen.MemoryLab) {
-        MemoryLabDialog(onDismiss = { screen = Screen.Main })
+    AnimatedVisibility(
+        visibleState = compactSubagentVisibility,
+        enter = slideInHorizontally(
+            initialOffsetX = { it },
+            animationSpec = tween(320, easing = PcEaseOutExpo),
+        ) + fadeIn(tween(180)),
+        exit = slideOutHorizontally(
+            targetOffsetX = { it },
+            animationSpec = tween(260, easing = IndependentPageExitEase),
+        ) + fadeOut(tween(150)),
+    ) {
+        retainedCompactSubagent?.let { agent ->
+            SubagentHistoryPage(agent = agent, onBack = { compactSubagent = null })
+        }
+    }
+
+    AnimatedVisibility(
+        visibleState = settingsVisibility,
+        enter = slideInHorizontally(tween(320, easing = PcEaseOutExpo)) { it } + fadeIn(tween(180)),
+        exit = slideOutHorizontally(tween(260, easing = IndependentPageExitEase)) { it } + fadeOut(tween(150)),
+    ) {
+        SettingsScreen(vm = vm, linkVm = linkVm, onBack = { screen = Screen.Main })
+    }
+    AnimatedVisibility(
+        visibleState = terminalVisibility,
+        enter = slideInHorizontally(tween(320, easing = PcEaseOutExpo)) { it } + fadeIn(tween(180)),
+        exit = slideOutHorizontally(tween(260, easing = IndependentPageExitEase)) { it } + fadeOut(tween(150)),
+    ) {
+        TerminalScreen(onBack = { screen = Screen.Main })
+    }
+    AnimatedVisibility(
+        visibleState = memoryLabVisibility,
+        enter = slideInHorizontally(tween(320, easing = PcEaseOutExpo)) { it } + fadeIn(tween(180)),
+        exit = slideOutHorizontally(tween(260, easing = IndependentPageExitEase)) { it } + fadeOut(tween(150)),
+    ) {
+        if (isCompact) MemoryLabScreen(onBack = { screen = Screen.Main })
+        else MemoryLabDialog(onDismiss = { screen = Screen.Main })
+    }
     }
 }
 
@@ -823,15 +1017,17 @@ private fun CompactMainLayout(
     onSelectRightTab: (RightSidebarTab) -> Unit,
 ) {
     val palette = LocalNewmarkPalette.current
+    val glass = LocalGlassMode.current
     ModalNavigationDrawer(
+        modifier = gestureModifier,
         drawerState = drawerState,
         drawerContent = {
             ModalDrawerSheet(
                 modifier = Modifier.width(drawerWidth),
                 drawerContainerColor = if (secondaryDrawer) {
-                    pcSecondarySurfaceColor().copy(alpha = 0.72f)
+                    pcSecondarySurfaceColor().copy(alpha = scaledGlassAlpha(0.72f, glass.alpha))
                 } else {
-                    palette.bgSecondary.copy(alpha = 0.72f)
+                    palette.bgSecondary.copy(alpha = scaledGlassAlpha(0.72f, glass.alpha))
                 },
                 drawerContentColor = palette.textPrimary,
                 drawerShape = RectangleShape,
@@ -841,14 +1037,15 @@ private fun CompactMainLayout(
         gesturesEnabled = true,
         scrimColor = NewmarkScrim,
     ) {
-        Box(Modifier.fillMaxSize().then(gestureModifier)) {
+        Box(Modifier.fillMaxSize()) {
             val blurProgress = maxOf(leftProgress, rightProgress)
+            val backdropBlur = mobileBackdropBlurDp(glass.alpha)
             ConversationSurfaceContent(
                 surface = surface,
                 showMenuButton = true,
                 onMenuClick = onMenuClick,
                 modifier = if (blurProgress > 0.001f) {
-                    Modifier.blur(32.dp * blurProgress)
+                    Modifier.blur(backdropBlur.dp * blurProgress)
                 } else {
                     Modifier
                 },
@@ -858,7 +1055,6 @@ private fun CompactMainLayout(
                     .align(Alignment.CenterEnd)
                     .graphicsLayer {
                         translationX = size.width * (1f - rightProgress)
-                        alpha = rightProgress
                     },
             ) {
                 MobileRightSidebar(
@@ -887,7 +1083,7 @@ private fun CompactMainLayout(
 @Composable
 private fun ExpandedMainLayout(
     page: SidebarPage,
-    rail: Boolean,
+    leftProgress: Float,
     rightExpanded: Boolean,
     rightProgress: Float,
     screenWidthDp: Int,
@@ -911,92 +1107,133 @@ private fun ExpandedMainLayout(
 ) {
     val palette = LocalNewmarkPalette.current
     val hasSecondary = page is SidebarPage.WorkspaceConversations
-    val primaryRail = rail || hasSecondary || rightExpanded
-    val sideWidth by animateDpAsState(
-        targetValue = if (primaryRail) 48.dp else 220.dp,
-        animationSpec = tween(durationMillis = 400, easing = PcEaseOutExpo),
-        label = "sideWidth",
-    )
+    val leftReveal = leftProgress
     val secondarySlidePx = with(LocalDensity.current) { 8.dp.roundToPx() }
+    // The expanded layer has a stable width per screen class. Only its
+    // translation changes during the gesture; it never stretches with drag.
+    val expandedSidebarWidth = if (screenWidthDp >= 840) 280.dp else 240.dp
+    val expandedSidebarWidthPx = with(LocalDensity.current) { expandedSidebarWidth.toPx() }
     val panelWidth = if (screenWidthDp < 840) 280.dp else 300.dp
-    Row(Modifier.fillMaxSize()) {
+    // The rail is the minimum occupied boundary. Once the expanded layer's
+    // actual right edge crosses it, the conversation boundary follows that
+    // exact edge rather than a separate normalized animation curve.
+    val leftBoundaryWidth = maxOf(48.dp, expandedSidebarWidth * leftReveal)
+    Box(Modifier.fillMaxSize().then(gestureModifier)) {
+        Row(Modifier.fillMaxSize()) {
+            // These slots only reserve the currently visible boundaries. The
+            // actual sidebars are fixed-size overlay surfaces below and never
+            // inherit a changing width from layout animation.
+            Box(Modifier.width(leftBoundaryWidth).fillMaxHeight())
+            AnimatedVisibility(
+                visible = hasSecondary,
+                enter = expandHorizontally(
+                    animationSpec = tween(durationMillis = 400, easing = PcEaseOutExpo),
+                    expandFrom = Alignment.Start,
+                    clip = true,
+                ) + slideInHorizontally(
+                    animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
+                    initialOffsetX = { -secondarySlidePx },
+                ) + fadeIn(animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo)),
+                exit = shrinkHorizontally(
+                    animationSpec = tween(durationMillis = 400, easing = PcEaseOutExpo),
+                    shrinkTowards = Alignment.Start,
+                    clip = true,
+                ) + slideOutHorizontally(
+                    animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
+                    targetOffsetX = { -secondarySlidePx },
+                ) + fadeOut(animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo)),
+            ) {
+                retainedWorkspace?.let { workspace ->
+                    Box(Modifier.width(220.dp).fillMaxHeight()) {
+                        WorkspaceConversationsSidebar(
+                            conversations = linkVm.workspaceConversations,
+                            activeConversationId = linkVm.openedWorkspaceActiveConversationId,
+                            onBack = onBackSidebar,
+                            onSelectConversation = { conversationId ->
+                                linkVm.workspaceConversations
+                                    .firstOrNull { it.id == conversationId }
+                                    ?.let { onSelectRemote(it, workspace.id) }
+                            },
+                            onNewConversation = onNewRemoteConversation,
+                            onRenameConversation = onRenameRemote,
+                            onArchiveConversation = onArchiveRemote,
+                            onTogglePinConversation = onTogglePinRemote,
+                            onReorderConversations = onReorderRemote,
+                            archivePendingIds = linkVm.workspaceArchivePendingIds,
+                            respectStatusBars = true,
+                        )
+                    }
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .background(palette.bgPrimary),
+            ) {
+                ConversationSurfaceContent(surface, showMenuButton = false, onMenuClick = {})
+                if (!rightExpanded && rightProgress < 0.01f) {
+                    RightSidebarOpenButton(
+                        onClick = { onRightExpandedChange(true) },
+                        modifier = Modifier.align(Alignment.CenterEnd),
+                    )
+                }
+            }
+            Box(Modifier.width(panelWidth * rightProgress).fillMaxHeight())
+        }
+
+        // The 48dp rail is a stable base layer. The complete expanded sidebar
+        // (surface, border and every child) is mounted once above it and moved
+        // only by this outer translation, so no child can drift independently.
         Box(
             modifier = Modifier
-                .width(sideWidth)
+                .align(Alignment.CenterStart)
+                .width(48.dp)
                 .fillMaxHeight()
                 .background(palette.bgSecondary)
                 .statusBarsPadding(),
         ) {
-            primarySidebar(if (hasSecondary) SidebarPage.Main else page, primaryRail)
-        }
-        AnimatedVisibility(
-            visible = hasSecondary,
-            enter = expandHorizontally(
-                animationSpec = tween(durationMillis = 400, easing = PcEaseOutExpo),
-                expandFrom = Alignment.Start,
-                clip = true,
-            ) + slideInHorizontally(
-                animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
-                initialOffsetX = { -secondarySlidePx },
-            ) + fadeIn(animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo)),
-            exit = shrinkHorizontally(
-                animationSpec = tween(durationMillis = 400, easing = PcEaseOutExpo),
-                shrinkTowards = Alignment.Start,
-                clip = true,
-            ) + slideOutHorizontally(
-                animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo),
-                targetOffsetX = { -secondarySlidePx },
-            ) + fadeOut(animationSpec = tween(durationMillis = 250, easing = PcEaseOutExpo)),
-        ) {
-            retainedWorkspace?.let { workspace ->
-                Box(Modifier.width(220.dp).fillMaxHeight()) {
-                    WorkspaceConversationsSidebar(
-                        conversations = linkVm.workspaceConversations,
-                        activeConversationId = linkVm.openedWorkspaceActiveConversationId,
-                        onBack = onBackSidebar,
-                        onSelectConversation = { conversationId ->
-                            linkVm.workspaceConversations
-                                .firstOrNull { it.id == conversationId }
-                                ?.let { onSelectRemote(it, workspace.id) }
-                        },
-                        onNewConversation = onNewRemoteConversation,
-                        onRenameConversation = onRenameRemote,
-                        onArchiveConversation = onArchiveRemote,
-                        onTogglePinConversation = onTogglePinRemote,
-                        onReorderConversations = onReorderRemote,
-                        archivePendingIds = linkVm.workspaceArchivePendingIds,
-                        respectStatusBars = true,
-                    )
-                }
-            }
+            primarySidebar(if (hasSecondary) SidebarPage.Main else page, true)
         }
         Box(
             modifier = Modifier
-                .weight(1f)
+                .align(Alignment.CenterStart)
+                .width(expandedSidebarWidth)
                 .fillMaxHeight()
-                .background(palette.bgPrimary)
-                .then(gestureModifier),
+                .graphicsLayer {
+                    translationX = -expandedSidebarWidthPx * (1f - leftReveal)
+                }
+                .background(palette.bgSecondary)
+                .statusBarsPadding()
+                .zIndex(2f),
         ) {
-            ConversationSurfaceContent(surface, showMenuButton = false, onMenuClick = {})
-            if (!rightExpanded && rightProgress < 0.01f) {
-                RightSidebarOpenButton(
-                    onClick = { onRightExpandedChange(true) },
-                    modifier = Modifier.align(Alignment.CenterEnd),
-                )
-            }
+            primarySidebar(if (hasSecondary) SidebarPage.Main else page, false)
         }
-        MobileRightSidebar(
-            vm = linkVm,
-            localVm = localVm,
-            remoteMode = surface.remoteMode,
-            browserSession = browserSession,
-            selectedTab = selectedTab,
-            panelWidth = panelWidth,
-            expanded = true,
-            onExpandedChange = onRightExpandedChange,
-            onSelectTab = onSelectRightTab,
-            visibleWidth = panelWidth * rightProgress,
-        )
+
+        // Right uses the identical binding model: the layout slot reserves the
+        // visible boundary, while one fixed panel surface carries all content.
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .width(panelWidth)
+                .fillMaxHeight()
+                .graphicsLayer {
+                    translationX = size.width * (1f - rightProgress)
+                }
+                .zIndex(3f),
+        ) {
+            MobileRightSidebar(
+                vm = linkVm,
+                localVm = localVm,
+                remoteMode = surface.remoteMode,
+                browserSession = browserSession,
+                selectedTab = selectedTab,
+                panelWidth = panelWidth,
+                expanded = true,
+                onExpandedChange = onRightExpandedChange,
+                onSelectTab = onSelectRightTab,
+            )
+        }
     }
 }
 
@@ -1044,6 +1281,8 @@ private fun ConversationSurfaceContent(
         onInspectBranch = surface.actions.inspectBranch,
         onEditUserMessage = surface.actions.editUserMessage,
         onOpenWebLink = surface.onOpenWebLink,
+        onBeginFileUpload = surface.onBeginFileUpload,
+        uploadInjectsGuide = surface.uploadInjectsGuide,
         modifier = modifier,
     )
 }

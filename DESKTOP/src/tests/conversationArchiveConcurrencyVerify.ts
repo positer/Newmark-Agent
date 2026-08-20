@@ -63,7 +63,7 @@ async function run(): Promise<void> {
   assert.ok(newConversation.includes("state.nextConversationSequence = Number(state.nextConversationSequence || 0) + 1")
     && newConversation.includes("var id = 'conv-' + Date.now() + '-' + state.nextConversationSequence"),
   'rapid new-conversation clicks receive collision-free renderer identities');
-  assert.ok(newConversation.includes('if (s) applyConversationSnapshot(s, id)')
+  assert.ok(newConversation.includes('if (s) applyConversationSnapshot(s, id')
     && !newConversation.includes('loadActiveConversationMessages(id)'),
   'new conversation applies the cold activation snapshot without starting a redundant runtime state request');
   assert.ok(archiveCurrent.includes('window.archiveConv(currentId)')

@@ -15,6 +15,7 @@ const expectedNames = [
   `Newmark-Agent-${version}-x86_64.AppImage`,
   `Newmark-Agent-${version}-amd64.deb`,
   `Newmark-Agent-${version}-linux-unpacked-x64.zip`,
+  `Newmark-Agent-${version}-android.apk`,
 ];
 
 function argValue(name) {
@@ -49,7 +50,7 @@ function sorted(values) {
 function assertExactNames(actualNames, label) {
   const actual = sorted(actualNames);
   const expected = sorted(expectedNames);
-  assert(JSON.stringify(actual) === JSON.stringify(expected), `${label} must contain exactly the five ${version} assets. expected=${JSON.stringify(expected)} actual=${JSON.stringify(actual)}`);
+  assert(JSON.stringify(actual) === JSON.stringify(expected), `${label} must contain exactly the six ${version} assets. expected=${JSON.stringify(expected)} actual=${JSON.stringify(actual)}`);
 }
 
 function sha256(filePath) {

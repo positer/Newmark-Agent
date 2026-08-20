@@ -2,6 +2,7 @@ package com.newmark.mobile.ui
 
 import android.Manifest
 import android.os.Build
+import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
@@ -47,6 +48,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -80,12 +82,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -111,10 +116,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -159,6 +166,9 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val MODES = listOf("Build", "Plan", "Goal", "Flow")
 private val PcQueueEase = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
@@ -170,6 +180,68 @@ private enum class InputCompositeMenu { PlusMain, PlusModes, ModelMain, Models, 
 private val ChatAreaHorizontalInset = 24.dp
 private val WorkRunContentStartInset = 24.dp
 private val WorkRunRightSafeInset = 34.dp
+internal const val InputComposerMaxLines = 5
+internal val InputComposerCornerRadius = 24.dp
+internal val InputComposerSingleLineOpticalOffset = (-1).dp
+internal val InputComposerEdgeControlSize = 36.dp
+internal val InputComposerPlusSize = 28.dp
+internal val InputComposerPlusBottomOffset = 4.dp
+internal val InputComposerHorizontalCenterCompensation = 2.dp
+
+internal fun centeredInputMenuX(
+    anchor: Rect,
+    popupWidthPx: Int,
+    viewportWidthPx: Int,
+    marginPx: Int,
+): Int {
+    val preferred = (anchor.center.x - popupWidthPx / 2f).roundToInt()
+    val maxX = (viewportWidthPx - popupWidthPx - marginPx).coerceAtLeast(marginPx)
+    return preferred.coerceIn(marginPx, maxX)
+}
+
+internal fun inputMenuAnchorInContainer(anchorInWindow: Rect, containerInWindow: Rect): Rect = Rect(
+    left = anchorInWindow.left - containerInWindow.left,
+    top = anchorInWindow.top - containerInWindow.top,
+    right = anchorInWindow.right - containerInWindow.left,
+    bottom = anchorInWindow.bottom - containerInWindow.top,
+)
+
+internal data class ModelOptionGroup(
+    val providerLabel: String,
+    val options: List<ModelOption>,
+)
+
+internal fun modelOptionDisplayName(option: ModelOption): String =
+    option.displayName.ifBlank {
+        option.label.substringAfter(" / ", option.label).ifBlank { option.modelName }
+    }
+
+internal fun selectedModelMenuLabel(
+    selectedModel: String,
+    selectedModelName: String,
+    options: List<ModelOption>,
+): String {
+    val matched = options.firstOrNull { option ->
+        option.modelName == selectedModelName ||
+            option.modelName == selectedModel ||
+            modelOptionDisplayName(option) == selectedModelName ||
+            selectedModel.endsWith(" / ${modelOptionDisplayName(option)}")
+    }
+    if (matched != null) return modelOptionDisplayName(matched)
+
+    return selectedModelName
+        .takeUnless { it.startsWith("deployment:") }
+        ?.substringAfterLast(" / ")
+        ?.takeIf(String::isNotBlank)
+        ?: selectedModel.substringAfterLast(" / ").ifBlank { "未选择" }
+}
+
+internal fun groupModelOptions(options: List<ModelOption>): List<ModelOptionGroup> =
+    options.groupBy { option ->
+        option.providerLabel.ifBlank {
+            option.label.substringBefore(" / ", option.providerId).ifBlank { option.providerId.ifBlank { "其他" } }
+        }
+    }.map { (providerLabel, providerOptions) -> ModelOptionGroup(providerLabel, providerOptions) }
 
 internal fun queueDragTargetIndex(
     sourceIndex: Int,
@@ -270,6 +342,10 @@ fun ChatScreen(
     onInspectBranch: (String, Int) -> Unit = { _, _ -> },
     onEditUserMessage: (Int, String) -> Unit = { _, _ -> },
     onOpenWebLink: (String) -> Unit = {},
+    onBeginFileUpload: () -> (suspend (String, String, ByteArray) -> Result<String>) = {
+        { _, _, _ -> Result.failure(IllegalStateException("文件上传不可用")) }
+    },
+    uploadInjectsGuide: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val p = LocalNewmarkPalette.current
@@ -282,13 +358,69 @@ fun ChatScreen(
     var queueEditPending by remember { mutableStateOf<QueueMessageUi?>(null) }
     val inputFocusRequester = remember { FocusRequester() }
     var inputMenu by remember { mutableStateOf<InputCompositeMenu?>(null) }
-    var inputMenuAnchor by remember { mutableStateOf<Rect?>(null) }
+    val inputOverlayBounds = remember { mutableStateOf<Rect?>(null) }
+    val plusMenuAnchor = remember { mutableStateOf<Rect?>(null) }
+    val modelMenuAnchor = remember { mutableStateOf<Rect?>(null) }
     var inputAreaHeight by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pendingFileUpload by remember {
+        mutableStateOf<suspend (String, String, ByteArray) -> Result<String>>({ _, _, _ ->
+            Result.failure(IllegalStateException("文件上传不可用"))
+        })
+    }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { Toast.makeText(context, "已选择：${it.lastPathSegment ?: "文件"}", Toast.LENGTH_SHORT).show() }
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val selected = withContext(Dispatchers.IO) {
+                runCatching {
+                    val name = context.contentResolver
+                        .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                        ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+                        ?.takeIf(String::isNotBlank)
+                        ?: uri.lastPathSegment?.substringAfterLast('/')
+                        ?: "mobile-upload.bin"
+                    val mime = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+                        val output = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(64 * 1024)
+                        var total = 0
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            total += read
+                            require(total <= 20 * 1024 * 1024) { "文件超过 20 MiB" }
+                            output.write(buffer, 0, read)
+                        }
+                        output.toByteArray()
+                    } ?: error("无法读取文件")
+                    Triple(name, mime, bytes)
+                }
+            }
+            selected.fold(
+                onSuccess = { (name, mime, bytes) ->
+                    pendingFileUpload(name, mime, bytes).fold(
+                        onSuccess = { path ->
+                            if (!uploadInjectsGuide) {
+                                inputText = listOf(inputText, "已上传文件：$path")
+                                    .filter(String::isNotBlank)
+                                    .joinToString("\n")
+                            }
+                            Toast.makeText(context, "已上传到：$path", Toast.LENGTH_SHORT).show()
+                        },
+                        onFailure = { Toast.makeText(context, it.message ?: "上传失败", Toast.LENGTH_LONG).show() },
+                    )
+                },
+                onFailure = { Toast.makeText(context, it.message ?: "读取文件失败", Toast.LENGTH_LONG).show() },
+            )
+        }
     }
     BackHandler(enabled = inputMenu != null) { inputMenu = null }
+    LaunchedEffect(remoteMode) {
+        // The paired desktop and this device own separate model catalogues.
+        // Drop any retained remote popup page before rendering local options.
+        inputMenu = null
+    }
     LaunchedEffect(goalEditPending, queueEditPending?.id) {
         if (goalEditPending || queueEditPending != null) {
             inputFocusRequester.requestFocus()
@@ -312,7 +444,8 @@ fun ChatScreen(
                         }
                     }
                 }
-                .imePadding(),
+                .imePadding()
+                .onGloballyPositioned { inputOverlayBounds.value = it.boundsInWindow() },
         ) {
             Column(Modifier.fillMaxSize()) {
                 ChatTopBar(
@@ -358,8 +491,10 @@ fun ChatScreen(
                 onStop = onStop,
                 escalating = escalating,
                 onInputBoundsChanged = { inputBounds = it },
-                onOpenPlusMenu = { anchor -> inputMenuAnchor = anchor; inputMenu = InputCompositeMenu.PlusMain },
-                onOpenModelMenu = { anchor -> inputMenuAnchor = anchor; inputMenu = InputCompositeMenu.ModelMain },
+                onPlusAnchorBoundsChanged = { plusMenuAnchor.value = it },
+                onModelAnchorBoundsChanged = { modelMenuAnchor.value = it },
+                onOpenPlusMenu = { inputMenu = InputCompositeMenu.PlusMain },
+                onOpenModelMenu = { inputMenu = InputCompositeMenu.ModelMain },
                 focusRequester = inputFocusRequester,
                 modifier = Modifier.onSizeChanged { inputAreaHeight = it.height },
             )
@@ -403,22 +538,29 @@ fun ChatScreen(
                     onGuideQueueItem = onGuideQueueItem,
                 )
             }
-            InputCompositeMenuOverlay(
-                menu = inputMenu,
-                anchor = inputMenuAnchor,
-                remoteMode = remoteMode,
-                mode = selectedMode,
-                selectedModel = selectedModel,
-                selectedModelName = selectedModelName,
-                intelligence = intelligence,
-                options = modelOptions,
-                onMenuChange = { inputMenu = it },
-                onDismiss = { inputMenu = null },
-                onMode = onSelectMode,
-                onSelectModel = onSelectModel,
-                onSelectIntelligence = onSelectIntelligence,
-                onChooseFile = { filePicker.launch("*/*") },
-            )
+            key(remoteMode) {
+                InputCompositeMenuOverlay(
+                    menu = inputMenu,
+                    containerBounds = inputOverlayBounds,
+                    plusAnchor = plusMenuAnchor,
+                    modelAnchor = modelMenuAnchor,
+                    remoteMode = remoteMode,
+                    mode = selectedMode,
+                    selectedModel = selectedModel,
+                    selectedModelName = selectedModelName,
+                    intelligence = intelligence,
+                    options = modelOptions,
+                    onMenuChange = { inputMenu = it },
+                    onDismiss = { inputMenu = null },
+                    onMode = onSelectMode,
+                    onSelectModel = onSelectModel,
+                    onSelectIntelligence = onSelectIntelligence,
+                    onChooseFile = {
+                        pendingFileUpload = onBeginFileUpload()
+                        filePicker.launch("*/*")
+                    },
+                )
+            }
         }
     }
 }
@@ -2086,16 +2228,24 @@ private fun InputArea(
     onStop: () -> Unit,
     escalating: Boolean = false,
     onInputBoundsChanged: (Rect) -> Unit = {},
-    onOpenPlusMenu: (Rect) -> Unit,
-    onOpenModelMenu: (Rect) -> Unit,
+    onPlusAnchorBoundsChanged: (Rect) -> Unit,
+    onModelAnchorBoundsChanged: (Rect) -> Unit,
+    onOpenPlusMenu: () -> Unit,
+    onOpenModelMenu: () -> Unit,
     focusRequester: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
     val p = LocalNewmarkPalette.current
     var mode by remember { mutableStateOf(selectedMode) }
+    var inputLineCount by remember { mutableIntStateOf(1) }
     LaunchedEffect(selectedMode) {
         mode = selectedMode
     }
+    // One line is 48dp tall on the formal portrait device, so CircleShape's
+    // radius there is 24dp. Keep that exact R value when the editor grows;
+    // using CircleShape for multiple lines would incorrectly increase it to
+    // half of the new height.
+    val inputShape = RoundedCornerShape(InputComposerCornerRadius)
 
     Column(
         modifier = modifier
@@ -2107,65 +2257,93 @@ private fun InputArea(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 10.dp)
-                .clip(NewmarkShapeExtra)
+                .clip(inputShape)
                 .background(p.bgPrimary)
-                .border(1.dp, p.border2, NewmarkShapeExtra)
+                .border(1.dp, p.border2, inputShape)
                 .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Bottom,
         ) {
-            PlusCombo(
-                onMode = {
-                    mode = it
-                    onSelectMode(it)
-                },
-                onOpenMenu = onOpenPlusMenu,
-            )
+            Box(
+                Modifier
+                    .width(32.dp)
+                    .padding(bottom = InputComposerPlusBottomOffset),
+                contentAlignment = Alignment.Center,
+            ) {
+                PlusCombo(
+                    onMode = {
+                        mode = it
+                        onSelectMode(it)
+                    },
+                    onAnchorBoundsChanged = onPlusAnchorBoundsChanged,
+                    onOpenMenu = onOpenPlusMenu,
+                )
+            }
             Spacer(Modifier.width(8.dp))
-            BasicTextField(
-                value = text,
-                onValueChange = onTextChange,
+            Box(
                 modifier = Modifier
                     .weight(1f)
-                    .focusRequester(focusRequester)
+                    .heightIn(min = 36.dp)
                     .onGloballyPositioned { onInputBoundsChanged(it.boundsInRoot()) },
-                textStyle = TextStyle(
-                    color = p.textPrimary,
-                    fontSize = 12.5.sp,
-                    lineHeight = 17.sp,
-                ),
-                decorationBox = { inner ->
-                    if (text.isEmpty()) {
-                        Text(
-                            text = "输入消息...",
-                            color = p.textTertiary,
-                            fontSize = 12.5.sp,
-                        )
-                    }
-                    inner()
-                },
-                maxLines = 4,
-            )
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                BasicTextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .offset(y = if (inputLineCount == 1) InputComposerSingleLineOpticalOffset else 0.dp)
+                        .focusRequester(focusRequester),
+                    textStyle = TextStyle(
+                        color = p.textPrimary,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        platformStyle = PlatformTextStyle(includeFontPadding = false),
+                    ),
+                    minLines = 1,
+                    maxLines = InputComposerMaxLines,
+                    onTextLayout = { inputLineCount = it.lineCount },
+                    decorationBox = { inner ->
+                        if (text.isEmpty()) {
+                            Text(
+                                text = "输入消息...",
+                                color = p.textTertiary,
+                                fontSize = 14.sp,
+                                lineHeight = 20.sp,
+                                style = TextStyle(
+                                    platformStyle = PlatformTextStyle(includeFontPadding = false),
+                                ),
+                            )
+                        }
+                        inner()
+                    },
+                )
+            }
             Spacer(Modifier.width(8.dp))
-            ModelButton(
-                selectedModel = selectedModel,
-                selectedModelName = selectedModelName,
-                intelligence = intelligence,
-                options = modelOptions,
-                onSelectModel = onSelectModel,
-                onSelectIntelligence = onSelectIntelligence,
-                onOpenMenu = onOpenModelMenu,
-            )
+            Box(Modifier.size(InputComposerEdgeControlSize)) {
+                ModelButton(
+                    selectedModel = selectedModel,
+                    selectedModelName = selectedModelName,
+                    intelligence = intelligence,
+                    options = modelOptions,
+                    onSelectModel = onSelectModel,
+                    onSelectIntelligence = onSelectIntelligence,
+                    onAnchorBoundsChanged = onModelAnchorBoundsChanged,
+                    onOpenMenu = onOpenModelMenu,
+                )
+            }
             Spacer(Modifier.width(6.dp))
-            SubmitButton(
-                running = running,
-                hasText = text.isNotBlank(),
-                onClick = {
-                    onSend(text)
-                    onTextChange("")
-                },
-                onStop = onStop,
-                escalating = escalating,
-            )
+            Box(Modifier.offset(x = InputComposerHorizontalCenterCompensation)) {
+                SubmitButton(
+                    running = running,
+                    hasText = text.isNotBlank(),
+                    onClick = {
+                        onSend(text)
+                        onTextChange("")
+                    },
+                    onStop = onStop,
+                    escalating = escalating,
+                )
+            }
         }
     }
 }
@@ -2173,7 +2351,9 @@ private fun InputArea(
 @Composable
 private fun InputCompositeMenuOverlay(
     menu: InputCompositeMenu?,
-    anchor: Rect?,
+    containerBounds: State<Rect?>,
+    plusAnchor: State<Rect?>,
+    modelAnchor: State<Rect?>,
     remoteMode: Boolean,
     mode: String,
     selectedModel: String,
@@ -2194,15 +2374,27 @@ private fun InputCompositeMenuOverlay(
     var displayedAnchor by remember { mutableStateOf<Rect?>(null) }
     val entrance = remember { Animatable(0f) }
     val exitAlpha = remember { Animatable(0f) }
-    LaunchedEffect(menu, anchor) {
-        if (menu != null && anchor != null) {
+    val activeWindowAnchor = when (menu) {
+        InputCompositeMenu.PlusMain, InputCompositeMenu.PlusModes -> plusAnchor.value
+        InputCompositeMenu.ModelMain, InputCompositeMenu.Models, InputCompositeMenu.Tiers -> modelAnchor.value
+        null -> null
+    }
+    val activeAnchor = activeWindowAnchor?.let { anchor ->
+        containerBounds.value?.let { container -> inputMenuAnchorInContainer(anchor, container) }
+    }
+    SideEffect {
+        if (activeAnchor != null && displayedAnchor != activeAnchor) {
+            displayedAnchor = activeAnchor
+        }
+    }
+    LaunchedEffect(menu) {
+        if (menu != null) {
             val isNewSurface = displayedMenu == null
             if (isNewSurface) {
                 entrance.snapTo(0f)
                 exitAlpha.snapTo(1f)
             }
             displayedMenu = menu
-            displayedAnchor = anchor
             if (isNewSurface) {
                 entrance.animateTo(
                     targetValue = 1f,
@@ -2222,7 +2414,7 @@ private fun InputCompositeMenuOverlay(
         }
     }
     val visibleMenu = displayedMenu ?: return
-    val visibleAnchor = displayedAnchor ?: return
+    val visibleAnchor = activeAnchor ?: displayedAnchor ?: return
     val p = LocalNewmarkPalette.current
     val density = LocalDensity.current
     val config = LocalConfiguration.current
@@ -2234,7 +2426,12 @@ private fun InputCompositeMenuOverlay(
     var overlaySize by remember { mutableStateOf(IntSize.Zero) }
     val windowWidthPx = overlaySize.width.takeIf { it > 0 }
         ?: with(density) { config.screenWidthDp.dp.roundToPx() }
-    val xPx = visibleAnchor.left.toInt().coerceIn(marginPx, (windowWidthPx - widthPx - marginPx).coerceAtLeast(marginPx))
+    val xPx = centeredInputMenuX(
+        anchor = visibleAnchor,
+        popupWidthPx = widthPx,
+        viewportWidthPx = windowWidthPx,
+        marginPx = marginPx,
+    )
     // The popup grows from the exact horizontal centre of the control that
     // opened it. This remains correct when the menu is clamped at a screen
     // edge, unlike a fixed BottomStart transform origin.
@@ -2284,7 +2481,14 @@ private fun InputCompositeMenuOverlay(
                     .heightIn(max = 320.dp)
                     .shadow(12.dp, NewmarkShapeMedium, clip = false)
                     .clip(NewmarkShapeMedium)
-                    .background(p.bgTertiary.copy(alpha = 0.96f))
+                    .background(
+                        p.bgTertiary.copy(
+                            alpha = com.newmark.mobile.ui.theme.scaledGlassAlpha(
+                                0.96f,
+                                com.newmark.mobile.ui.theme.LocalGlassMode.current.alpha,
+                            ),
+                        ),
+                    )
                     .border(1.5.dp, p.border2, NewmarkShapeMedium)
                     .border(0.5.dp, Color.White.copy(alpha = 0.32f), NewmarkShapeMedium)
                     .clickable(
@@ -2313,11 +2517,19 @@ private fun InputCompositeMenuOverlay(
                     label = "inputCompositeMenuPageMorph",
                 ) { targetMenu ->
                     val pageScroll = rememberScrollState()
+                    val modelHorizontalScroll = rememberScrollState()
                     Column(
                         Modifier
                             .fillMaxWidth()
                             .heightIn(max = 312.dp)
-                            .verticalScroll(pageScroll),
+                            .verticalScroll(pageScroll)
+                            .then(
+                                if (targetMenu == InputCompositeMenu.Models) {
+                                    Modifier.horizontalScroll(modelHorizontalScroll)
+                                } else {
+                                    Modifier
+                                },
+                            ),
                     ) {
                         when (targetMenu) {
                             InputCompositeMenu.PlusMain -> {
@@ -2331,15 +2543,32 @@ private fun InputCompositeMenuOverlay(
                                 }
                             }
                             InputCompositeMenu.ModelMain -> {
-                                MenuRow("模型选择", trailing = selectedModel) { onMenuChange(InputCompositeMenu.Models) }
+                                MenuRow(
+                                    "模型选择",
+                                    trailing = selectedModelMenuLabel(selectedModel, selectedModelName, options),
+                                ) { onMenuChange(InputCompositeMenu.Models) }
                                 MenuRow("智能档位", trailing = intelligence.ifBlank { "medium" }) { onMenuChange(InputCompositeMenu.Tiers) }
                             }
                             InputCompositeMenu.Models -> {
                                 MenuRow("← 返回") { onMenuChange(InputCompositeMenu.ModelMain) }
                                 if (options.isEmpty()) MenuRow("暂无可用模型", onClick = onDismiss)
-                                options.forEach { option ->
-                                    MenuRow(option.label, selected = option.modelName == selectedModelName.ifBlank { selectedModel }) {
-                                        onSelectModel(option); onDismiss()
+                                groupModelOptions(options).forEach { group ->
+                                    Text(
+                                        text = group.providerLabel,
+                                        color = p.accent,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        modifier = Modifier.padding(start = 9.dp, end = 9.dp, top = 7.dp, bottom = 4.dp),
+                                    )
+                                    group.options.forEach { option ->
+                                        MenuRow(
+                                            text = modelOptionDisplayName(option),
+                                            selected = option.modelName == selectedModel ||
+                                                option.modelName == selectedModelName,
+                                        ) {
+                                            onSelectModel(option); onDismiss()
+                                        }
                                     }
                                 }
                             }
@@ -2366,17 +2595,17 @@ private fun ModelButton(
     options: List<ModelOption>,
     onSelectModel: (ModelOption) -> Unit,
     onSelectIntelligence: (String) -> Unit,
-    onOpenMenu: (Rect) -> Unit,
+    onAnchorBoundsChanged: (Rect) -> Unit,
+    onOpenMenu: () -> Unit,
 ) {
     val p = LocalNewmarkPalette.current
-    var bounds by remember { mutableStateOf<Rect?>(null) }
     Box(
         modifier = Modifier
-            .size(36.dp)
-            .onGloballyPositioned { bounds = it.boundsInRoot() }
+            .size(InputComposerEdgeControlSize)
+            .onGloballyPositioned { onAnchorBoundsChanged(it.boundsInWindow()) }
             .clip(CircleShape)
             .background(p.bgQuaternary)
-            .clickable { bounds?.let(onOpenMenu) },
+            .clickable(onClick = onOpenMenu),
         contentAlignment = Alignment.Center,
     ) {
         Icon(Icons.Filled.AutoAwesome, "模型", tint = p.textSecondary, modifier = Modifier.size(16.dp))
@@ -2384,16 +2613,19 @@ private fun ModelButton(
 }
 
 @Composable
-private fun PlusCombo(onMode: (String) -> Unit, onOpenMenu: (Rect) -> Unit) {
+private fun PlusCombo(
+    onMode: (String) -> Unit,
+    onAnchorBoundsChanged: (Rect) -> Unit,
+    onOpenMenu: () -> Unit,
+) {
     val p = LocalNewmarkPalette.current
-    var bounds by remember { mutableStateOf<Rect?>(null) }
     Box(
         modifier = Modifier
-            .size(28.dp)
-            .onGloballyPositioned { bounds = it.boundsInRoot() }
+            .size(InputComposerPlusSize)
+            .onGloballyPositioned { onAnchorBoundsChanged(it.boundsInWindow()) }
             .clip(CircleShape)
             .background(p.bgTertiary)
-            .clickable { bounds?.let(onOpenMenu) },
+            .clickable(onClick = onOpenMenu),
         contentAlignment = Alignment.Center,
     ) {
         Icon(Icons.Filled.Add, "模式与文件", tint = p.accent, modifier = Modifier.size(18.dp))
@@ -2416,9 +2648,9 @@ private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit
     if (running && !hasText) {
         // 三形态之「运行中/强制停止」（对齐 PC #submit-btn.running-action + .marquee-border）：
         // 背景 rgba(14,16,24,.88) + border rgba(255,255,255,.08) + 白图标；escalating=octagon-x，否则 square
-        MarqueeBorder(
-            cornerRadius = 17.dp,
-            modifier = Modifier.size(34.dp).graphicsLayer {
+            MarqueeBorder(
+                cornerRadius = 18.dp,
+                modifier = Modifier.size(InputComposerEdgeControlSize).graphicsLayer {
                 scaleX = scale
                 scaleY = scale
             },
@@ -2446,7 +2678,7 @@ private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit
         val iconTint = if (isDark) Color.White else Color(0xFF0A0A1A)
         Box(
             modifier = Modifier
-                .size(34.dp)
+                .size(InputComposerEdgeControlSize)
                 .graphicsLayer {
                     scaleX = scale
                     scaleY = scale

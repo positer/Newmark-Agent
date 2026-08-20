@@ -1,5 +1,23 @@
 # Newmark Agent dev-0.3.13 全场景交叉黑盒压力测试计划
 
+## 2026-08-19 模型菜单与输入框 PC 格式收尾
+
+- [x] 模型二级弹窗按供应商分组，模型行移除重复供应商前缀
+- [x] 保持紧凑弹窗及变形动画，增加超长模型名横向滚动能力
+- [x] 输入框默认一行、最多五行、超出内部滚动，多行保持单行固定 24dp R 半径，三枚按钮贴底
+- [x] 玻璃强度 Slider 接入 PC 曲线、实时预览、左右栏/弹窗/竖屏窗口模糊和 SharedPreferences 落盘
+- [x] 左侧二级栏新增对话按钮改为圆形
+- [x] Android 单测/Release/lint/R8、正式包 10 文件保数据安装、实机与错误日志门禁
+
+## 2026-08-19 系统亮暗启动主题与压力复核
+
+- [x] Activity/Compose 前读取系统 day/night 资源，配置 Android 12+ 系统 Splash 与旧系统启动窗
+- [x] 暗色纯黑背景 + 黑底白色图标；亮色保持 `#F2F2F7` + 黑色图标
+- [x] 正式 Release 暗/亮逐帧截图与像素取证
+- [x] 修复压力脚本右栏状态泄漏、IME 竞态、同机 NAT 依赖与失败路径 ANR 取证
+- [x] 清理 gfxstream 故障后完成 800 事件/10 UI 轮次状态与稳定性门禁
+- [x] 10 文件保数据安装、隔离包卸载、暗色/联网/正式前台收尾
+
 ## 2026-08-19 运行连续性续压
 
 - [x] 300 事件、90 轮 UI、Goal/Flow/Queue/Build/stale-event 综合门禁
@@ -9,7 +27,7 @@
 - [x] 移动/PC 交替发送、Flow 暂停/保持/继续、普通 Build 停止
 - [x] 外部 workspace/conversation/runtime 事件注入隔离
 - [x] Desktop build、Android unit/Release/R8/lint、保数据安装与正式前台收尾
-- [ ] 自动化运行中切换可见 workspace/conversation，再返回原目标验证无串线/丢状态
+- [x] 自动化运行中切换可见 workspace/conversation，再返回原目标验证无串线/丢状态（2 轮 A↔B，A 保持 1000-event live Build，PID/SSE 稳定）
 
 ## 2026-08-19 远程触及启动与运行稳定性
 
@@ -46,7 +64,7 @@
 - [x] Verify Build, Goal, Flow prompt/takeover, Queue, duplicate handling, and remote queue mutation together.
 - [x] Isolate the latest first-level input-menu entrance/exit performance on the formal Release package.
 - [x] Pass five complete-interaction launches under 4,000 ms.
-- [ ] Run a formal Release queue expand/collapse animation-only window without `uiautomator` inside the sample.
+- [x] Run a formal Release queue expand/collapse animation-only window without `uiautomator` inside the sample (120 toggles / 1,941 frames / no skipped-frame warning, ANR, fatal, swap, or process death).
 - [ ] Run independent true-cold/first-boot startup trials before making any universal ≤1,000 ms cold-start claim.
 
 ## 2026-08-19 mobile input composite menu entrance
@@ -68,7 +86,7 @@
 - [x] 验证本地 Next 编辑/删除/排空与 Guide accepted/applied 恰好一次
 - [x] 构建并保数据安装正式 Release，应用 `speed-profile`
 - [x] 五次完整可交互启动与 Release 资源/错误压力
-- [ ] 在不使用层级抓取的有效动画驱动下重新采集统计充分的帧样本
+- [x] 在不使用层级抓取的有效动画驱动下重新采集统计充分的帧样本（优化隔离 Benchmark，120 次展开/折叠）
 
 ## 2026-08-18 移动端 resident runtime 与浮动状态条（dev-0.4.50）
 

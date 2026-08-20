@@ -72,11 +72,12 @@ fun TerminalScreen(onBack: () -> Unit) {
         input = ""
     }
 
-    BackHandler(onBack = onBack)
+    val (_, predictiveModifier) = predictiveBackMotion(onBack)
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .then(predictiveModifier)
             .background(p.bgPrimary)
             .imePadding(),
     ) {

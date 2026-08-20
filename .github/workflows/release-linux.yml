@@ -26,6 +26,11 @@ jobs:
       - name: Verify bound release version
         run: npm run release:version-check
       - name: Build Windows MSI and portable package
+        env:
+          # Hosted Windows runners do not include the OpenSSH server assets
+          # required by the loopback SSH TUI stress. The default local release
+          # path still runs that smoke; CI keeps the remaining package smokes.
+          NEWMARK_SKIP_PACKAGED_SSH_TUI_STRESS: '1'
         run: npm run build:clean && node scripts/dist-portable.cjs
       - uses: actions/upload-artifact@v4
         with:

@@ -229,18 +229,22 @@ try {
   fs.copyFileSync(path.join(root, 'newmark.bat'), portableLauncher);
   const packagedSmokeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'newmark-release-package-smoke-'));
   try {
-    const sshStress = spawnSync(process.execPath, [path.join(root, 'scripts', 'release-ssh-tui-stress.cjs')], {
-      cwd: root,
-      stdio: 'inherit',
-      windowsHide: true,
-      env: {
-        ...process.env,
-        NEWMARK_SSH_TUI_EXE: consoleExe,
-        NEWMARK_SSH_TUI_ROOT: packagedSmokeRoot,
-      },
-    });
-    if (sshStress.error) throw new Error(`packaged SSH TUI stress spawn failed: ${sshStress.error.message}`);
-    if (sshStress.status !== 0) throw new Error(`packaged SSH TUI stress failed with exit ${sshStress.status}`);
+    if (process.env.NEWMARK_SKIP_PACKAGED_SSH_TUI_STRESS === '1') {
+      log('packaged SSH TUI stress skipped by explicit CI environment boundary');
+    } else {
+      const sshStress = spawnSync(process.execPath, [path.join(root, 'scripts', 'release-ssh-tui-stress.cjs')], {
+        cwd: root,
+        stdio: 'inherit',
+        windowsHide: true,
+        env: {
+          ...process.env,
+          NEWMARK_SSH_TUI_EXE: consoleExe,
+          NEWMARK_SSH_TUI_ROOT: packagedSmokeRoot,
+        },
+      });
+      if (sshStress.error) throw new Error(`packaged SSH TUI stress spawn failed: ${sshStress.error.message}`);
+      if (sshStress.status !== 0) throw new Error(`packaged SSH TUI stress failed with exit ${sshStress.status}`);
+    }
   } finally {
     if (!tryRm(packagedSmokeRoot)) log(`warning: could not remove packaged smoke root ${packagedSmokeRoot}`);
   }

@@ -2288,3 +2288,5 @@ Newmark Agent/
 `VERSION=0.5.0` 绑定桌面 package/package-lock 与 Android `versionName/versionCode`，`dev-X.Y.Z` 标签也必须等于绑定版本。默认 `npm run release` 先跑完整桌面门禁和 Android 单测/Vital lint，再构建 Windows MSI/便携 ZIP、WSL Linux AppImage/deb/ZIP 和 Android APK；本地 electron-builder 显式 `--publish never`，仅 GitHub Release 步骤上传。工作流按三平台独立构建，聚合且只接受六个资产。
 
 本轮完整桌面门禁连续两次通过；Android 单测、Vital lint、R8、资源收缩和 Release APK 通过。新 MSI 以托管流程卸载旧产品并安装成功（exit 0），`C:\Program Files\Newmark Agent\Newmark.exe --version` 为 `0.5.0`，注册表为 `0.5.0.0`，安装与打包 `app.asar` SHA-256 均为 `6C95B2C91C4AFFD7696E4FAC831E2DE360F8C62B9F84897D73BAC7BB1D441696`。六资产哈希与远端下载复核记录见 `archive/20260820-dev-0.5.0-three-platform-release.md`。
+
+`dev-0.5.0` prerelease 已发布六资产，GitHub 服务器端对每个资产计算的 size 与 SHA-256 digest 全部匹配本地。当前代理对 1 GiB 并发回下载在 30 分钟硬超时内保持 0 字节，直连被重置；1 MiB Range 下载可用但完整串行吞吐不可接受，因此没有把“完整回下载”误报为通过。标签触发的首轮 CI 中 Android/Linux 成功，Windows 因 hosted runner 缺少 OpenSSH server 资产失败；`master` 随后增加仅 CI 可显式启用的 packaged-SSH skip（本地默认 release 仍强制运行），手动 `release-platforms` run `32384431037` 的 Windows、Linux、Android 三个构建 Job 全部成功，publish Job 按非标签预期跳过。

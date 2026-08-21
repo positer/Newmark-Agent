@@ -505,13 +505,20 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         if (activeDevice != null) refresh()
     }
 
-    /** Read a paired device's redacted provider catalog without switching the active conversation owner. */
+    /** Pull a paired device's provider catalog for explicit local migration. */
     suspend fun providerCatalog(pair: PairInfo): Result<List<com.newmark.mobile.data.ProviderConfig>> {
-        val response = api.state(pair).getOrElse { return Result.failure(it) }
-        val hydrated = hydrateLegacyProviderCatalog(pair, response)
-        val parsed = withContext(Dispatchers.Default) { parseState(hydrated) }
-            ?: return Result.failure(IllegalStateException("设备未返回有效状态"))
-        return Result.success(parsed.providers)
+        val response = api.exportProviderCatalog(pair).getOrElse { return Result.failure(it) }
+        val providers = withContext(Dispatchers.Default) {
+            runCatching {
+                val type = object : TypeToken<List<com.newmark.mobile.data.ProviderConfig>>() {}.type
+                val array = response.optJSONArray("providers")
+                    ?: throw IllegalStateException("设备未返回供应商目录")
+                gson.fromJson<List<com.newmark.mobile.data.ProviderConfig>>(array.toString(), type)
+                    ?.filter { it.id.isNotBlank() && it.name.isNotBlank() }
+                    ?: emptyList()
+            }
+        }.getOrElse { return Result.failure(it) }
+        return Result.success(providers)
     }
 
     fun remoteModelOptions(): List<ModelOption> = desktopState?.providers.orEmpty()

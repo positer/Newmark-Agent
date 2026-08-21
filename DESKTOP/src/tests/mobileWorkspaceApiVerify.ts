@@ -223,6 +223,36 @@ function requestJson(port: number, token: string, method: 'GET' | 'POST', endpoi
   });
 }
 
+function requestJsonWithBearer(port: number, token: string, method: 'GET' | 'POST', endpoint: string, payload?: Record<string, unknown>): Promise<JsonResponse> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(endpoint, `http://127.0.0.1:${port}`);
+    const body = payload ? JSON.stringify(payload) : '';
+    const request = http.request(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body ? {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Length': Buffer.byteLength(body),
+        } : {}),
+      },
+    }, response => {
+      let text = '';
+      response.setEncoding('utf-8');
+      response.on('data', chunk => { text += chunk; });
+      response.on('end', () => {
+        let parsed: Record<string, any> = {};
+        try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
+        resolve({ status: response.statusCode || 0, body: parsed });
+      });
+    });
+    request.setTimeout(5_000, () => request.destroy(new Error(`Mobile API request timed out: ${method} ${url.pathname}`)));
+    request.once('error', reject);
+    if (body) request.write(body);
+    request.end();
+  });
+}
+
 function findAvailablePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -383,6 +413,19 @@ export async function verifyMobileWorkspaceApi(record: VerifyAssert): Promise<vo
       && !JSON.stringify(remoteState.body).includes('MOBILE_PROVIDER_B_SECRET'),
     'mobile remote model state: exposes every desktop provider/model while redacting all credentials',
     JSON.stringify(remoteState.body));
+
+    const rejectedProviderExport = await requestJson(port, fixture.token, 'GET', '/api/mobile/provider-catalog-export');
+    const unauthorizedProviderExport = await requestJsonWithBearer(port, 'wrong-mobile-token', 'POST', '/api/mobile/provider-catalog-export', {});
+    const providerExport = await requestJsonWithBearer(port, fixture.token, 'POST', '/api/mobile/provider-catalog-export', {});
+    const exportedProviders = Array.isArray(providerExport.body.providers) ? providerExport.body.providers : [];
+    record(rejectedProviderExport.status === 405
+      && unauthorizedProviderExport.status === 401
+      && providerExport.status === 200
+      && exportedProviders.length === 2
+      && exportedProviders.some((provider: Record<string, unknown>) => provider.api_key === 'MOBILE_PROVIDER_A_SECRET')
+      && exportedProviders.some((provider: Record<string, unknown>) => provider.api_key === 'MOBILE_PROVIDER_B_SECRET'),
+    'mobile provider migration: explicit authenticated POST exports usable API credentials while GET stays denied',
+    JSON.stringify({ rejectedStatus: rejectedProviderExport.status, unauthorizedStatus: unauthorizedProviderExport.status, exportStatus: providerExport.status, providerCount: exportedProviders.length }));
 
     const exactDeployment = `deployment:${encodeURIComponent('mobile-provider-b')}:${encodeURIComponent('shared-mobile-model')}`;
     const selectRemoteModel = await requestJson(port, fixture.token, 'POST', '/api/mobile/model', { model: exactDeployment });

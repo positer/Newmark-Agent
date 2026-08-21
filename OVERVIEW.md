@@ -1,5 +1,13 @@
 # Newmark Agent Overview
 
+## dev-0.5.1 provider migration and release (2026-08-21)
+
+- Desktop and Android share version `0.5.1` (`versionCode 501`). Android uses the fixed product glass level and no longer exposes a glass-strength setting.
+- A paired Android device can explicitly import the desktop provider catalogue with API credentials through an authenticated endpoint. Ordinary Remote Touch state and model menus remain credential-redacted; local keys are preserved during merges and providers previously imported without keys are repaired.
+- The complete release command passed desktop, context, performance, TUI, SSH, WSL, CLI, GUI/TUI/CLI, Android unit, Vital lint, R8/resource-shrink, and packaging gates. The focused desktop source verifier reports `1663/1663`.
+- Six local assets were built: Windows MSI/ZIP, Linux AppImage/deb/ZIP, and Android APK. Candidate metadata reports Windows `0.5.1`, deb `0.5.1`/`amd64`, and Android `0.5.1`/`501`.
+- Windows machine installation requires interactive UAC. Two elevation prompts were cancelled during this release run, so installed-state acceptance remains pending while the packaged candidate is fully verified. Exact artifact hashes and installation attempts are recorded in `archive/20260821-dev-0.5.1-three-platform-release.md`.
+
 ## Mobile clean-install provider baseline (2026-08-20)
 
 - `ProviderStore.kt` now persists and returns an empty provider list when `filesDir/newmark/providers.json` does not exist. Existing provider files remain authoritative and are not migrated or erased.
@@ -130,7 +138,7 @@ The final local Windows artifacts are MSI 226,322,512 bytes (`F3A5EF6C63B264B580
 - `android/app/src/main/java/com/newmark/mobile/data/ProviderConfig.kt` extends `ModelOption` with separate provider and display labels while retaining wire-compatible defaults.
 - `android/app/src/main/java/com/newmark/mobile/vm/ChatViewModel.kt` and `DesktopLinkViewModel.kt` project local and remote provider catalogues into the same model-option contract.
 - `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` groups the second-level model menu by provider, renders only the model display name in each row, preserves the compact popup/morph animation, and adds horizontal overflow scrolling beside the existing vertical catalogue scroll. Its composer is one line by default, caps growth at five lines, scrolls additional lines internally, keeps the one-line `24dp` corner radius, and bottom-aligns all three action controls.
-- `android/app/src/main/java/com/newmark/mobile/data/GlassStore.kt` owns the persisted `newmark_visual/glass_alpha` value. `ui/theme/NewmarkTheme.kt` owns the PC-equivalent opacity/transparency/three-tier blur curve and bounded mobile backdrop mapping. `NewmarkApp.kt`, `Sidebar.kt`, `RightSidebar.kt`, `ChatScreen.kt`, and `components/AnchorMenu.kt` consume one `LocalGlassMode` preview state; only Slider release commits storage.
+- `ui/theme/NewmarkTheme.kt` owns the fixed 85% product glass level, PC-equivalent opacity/transparency/three-tier blur curve, and bounded mobile backdrop mapping. `NewmarkApp.kt`, `Sidebar.kt`, `RightSidebar.kt`, `ChatScreen.kt`, and `components/AnchorMenu.kt` consume the read-only `LocalGlassMode`; Android no longer exposes or persists a glass-strength slider.
 - `android/app/src/main/java/com/newmark/mobile/ui/Sidebar.kt` owns the circular local-conversation add control.
 - `android/app/src/test/java/com/newmark/mobile/ui/InputComposerAndModelMenuContractTest.kt` locks the five-line cap, fixed corner radius, provider grouping, unprefixed model rows, and legacy combined-label compatibility. `ui/theme/GlassPresentationContractTest.kt` locks the PC 85% curve and the accepted 32dp default portrait backdrop.
 - Formal emulator evidence and the data-preserving installation ledger are recorded in `archive/20260819-mobile-model-groups-and-rounded-composer.md`.
@@ -2290,3 +2298,25 @@ Newmark Agent/
 本轮完整桌面门禁连续两次通过；Android 单测、Vital lint、R8、资源收缩和 Release APK 通过。新 MSI 以托管流程卸载旧产品并安装成功（exit 0），`C:\Program Files\Newmark Agent\Newmark.exe --version` 为 `0.5.0`，注册表为 `0.5.0.0`，安装与打包 `app.asar` SHA-256 均为 `6C95B2C91C4AFFD7696E4FAC831E2DE360F8C62B9F84897D73BAC7BB1D441696`。六资产哈希与远端下载复核记录见 `archive/20260820-dev-0.5.0-three-platform-release.md`。
 
 `dev-0.5.0` prerelease 已发布六资产，GitHub 服务器端对每个资产计算的 size 与 SHA-256 digest 全部匹配本地。当前代理对 1 GiB 并发回下载在 30 分钟硬超时内保持 0 字节，直连被重置；1 MiB Range 下载可用但完整串行吞吐不可接受，因此没有把“完整回下载”误报为通过。标签触发的首轮 CI 中 Android/Linux 成功，Windows 因 hosted runner 缺少 OpenSSH server 资产失败；`master` 随后增加仅 CI 可显式启用的 packaged-SSH skip（本地默认 release 仍强制运行），手动 `release-platforms` run `32384431037` 的 Windows、Linux、Android 三个构建 Job 全部成功，publish Job 按非标签预期跳过。
+
+## 2026-08-21 Android 固定玻璃档位与供应商 API 迁移
+
+```text
+DESKTOP/src/
+├─ server.ts                               # 配对鉴权 POST 凭据迁移端点；普通 state 继续脱敏
+└─ tests/mobileWorkspaceApiVerify.ts       # 锁定 POST/GET/脱敏边界
+android/app/src/main/java/com/newmark/mobile/
+├─ data/
+│  ├─ MobileApiClient.kt                   # Bearer + no-store 显式拉取
+│  └─ ProviderConfig.kt                    # 密钥保留、旧脱敏条目修复与模型合并
+├─ vm/
+│  ├─ DesktopLinkViewModel.kt              # 只从迁移端点解析可用目录
+│  └─ ChatViewModel.kt                     # 落盘合并结果
+└─ ui/
+   ├─ SettingsScreen.kt                    # 删除玻璃程度设置条
+   └─ theme/NewmarkTheme.kt                # 固定 DefaultGlassAlpha=0.85
+```
+
+“从连接设备拉取”此前复用 `/api/mobile/state.providers`，该响应按安全契约把 `api_key` 清空；移动端合并新供应商时又强制写入空 Key，因而拉取结果只能展示模型而不能本地调用。现在普通远程状态仍严格脱敏，用户显式拉取改走仅允许配对鉴权 POST 的 `/api/mobile/provider-catalog-export`，Bearer 令牌不进入 URL，响应禁止缓存；合并优先保留本机已有密钥，也能用远端凭据修复此前已落盘的无 Key 同 ID/接口条目。
+
+玻璃渲染不再读取 SharedPreferences 或接受预览/提交回调，设置页不再显示玻璃强度 Slider，所有表面固定使用 85% 默认档位。桌面 TypeScript 编译与 52 项 mobile workspace API 契约通过；Android 64 项单测及全量 `testDebugUnitTest lintVitalRelease assembleRelease --no-daemon` 通过。Release APK 为 `android/app/build/outputs/apk/release/app-release.apk`，SHA-256 `C1C16EDBF97CBF09F517B5A7BA7FFD916F911CA813716148DA6540E9779286AA`。该 APK 已向 `emulator-5554` 保数据覆盖安装并启动，设置页新 UI dump 中“玻璃/不透明度/透明度/模糊”可见文本计数为 0，包级 FATAL/ANR 为 0；真实两设备凭据迁移仍只由隔离协议门禁覆盖。

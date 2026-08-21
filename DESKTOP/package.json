@@ -1,7 +1,7 @@
 {
   "name": "newmark-agent",
   "productName": "Newmark Agent",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "homepage": "https://github.com/positer/Newmark-Agent",
   "repository": {

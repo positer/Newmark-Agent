@@ -48,6 +48,15 @@ class MobileApiClient {
             .build(),
     )
 
+    private suspend fun privatePost(pair: PairInfo, path: String, body: JSONObject): Result<JSONObject> = executeJson(
+        Request.Builder()
+            .url("${pair.baseUrl}$path")
+            .header("Authorization", "Bearer ${pair.token}")
+            .header("Cache-Control", "no-store")
+            .post(body.toString().toRequestBody(jsonMedia))
+            .build(),
+    )
+
     /**
      * Request is tied to its coroutine: switching desktop devices or leaving
      * the screen immediately closes the socket instead of leaving a 10–180s
@@ -94,6 +103,10 @@ class MobileApiClient {
      * 已经返回同一份脱敏 providers。仅用于兼容已安装旧桌面进程。
      */
     suspend fun legacyProviderState(pair: PairInfo): Result<JSONObject> = get(pair, "/api/state")
+
+    /** Explicit user-initiated provider migration, including credentials. */
+    suspend fun exportProviderCatalog(pair: PairInfo): Result<JSONObject> =
+        privatePost(pair, "/api/mobile/provider-catalog-export", JSONObject())
 
     suspend fun selectModel(pair: PairInfo, model: String): Result<JSONObject> =
         post(pair, "/api/mobile/model", JSONObject().apply { put("model", model) })

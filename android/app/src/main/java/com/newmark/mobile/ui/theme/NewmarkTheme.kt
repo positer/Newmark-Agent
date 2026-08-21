@@ -154,14 +154,11 @@ fun mobileBackdropBlurDp(alpha: Float): Float =
 fun scaledGlassAlpha(baseAtDefault: Float, alpha: Float): Float =
     (baseAtDefault * alpha.coerceIn(0f, 1f) / DefaultGlassAlpha).coerceIn(0f, 1f)
 
-data class GlassMode(
-    val alpha: Float,
-    val previewAlpha: (Float) -> Unit,
-    val commitAlpha: (Float) -> Unit,
-)
+/** Fixed product glass level. There is intentionally no runtime adjustment path. */
+data class GlassMode(val alpha: Float = DefaultGlassAlpha)
 
 val LocalGlassMode = compositionLocalOf {
-    GlassMode(DefaultGlassAlpha, {}, {})
+    GlassMode()
 }
 
 /** 主题模式（dark=null 跟随系统），供设置页开关真实切换亮暗色 */

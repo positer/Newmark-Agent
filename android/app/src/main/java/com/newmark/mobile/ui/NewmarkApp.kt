@@ -75,11 +75,8 @@ import com.newmark.mobile.data.RemoteWorkRun
 import com.newmark.mobile.data.RemoteTrackingContract
 import com.newmark.mobile.data.RemotePayloadNormalizer
 import com.newmark.mobile.data.ThemeStore
-import com.newmark.mobile.data.GlassStore
 import com.newmark.mobile.data.WorkspaceInfo
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
-import com.newmark.mobile.ui.theme.DefaultGlassAlpha
-import com.newmark.mobile.ui.theme.GlassMode
 import com.newmark.mobile.ui.theme.LocalGlassMode
 import com.newmark.mobile.ui.theme.mobileBackdropBlurDp
 import com.newmark.mobile.ui.theme.scaledGlassAlpha
@@ -339,17 +336,12 @@ fun NewmarkApp(
 ) {
     val context = LocalContext.current
     val themeStore = remember { ThemeStore(context) }
-    val glassStore = remember { GlassStore(context) }
     // SharedPreferences is tiny, but avoid adding synchronous storage work to
     // the first composition.  The system theme is an acceptable first-frame
     // fallback and the persisted preference replaces it immediately after.
     var darkMode by remember { mutableStateOf<Boolean?>(null) }
-    var glassAlpha by remember { mutableFloatStateOf(DefaultGlassAlpha) }
     LaunchedEffect(themeStore) {
         darkMode = themeStore.loadDarkMode()
-    }
-    LaunchedEffect(glassStore) {
-        glassAlpha = glassStore.loadAlpha()
     }
     val dark = darkMode ?: isSystemInDarkTheme()
     CompositionLocalProvider(
@@ -357,14 +349,6 @@ fun NewmarkApp(
             darkMode = new
             themeStore.saveDarkMode(new)
         },
-        LocalGlassMode provides GlassMode(
-            alpha = glassAlpha,
-            previewAlpha = { glassAlpha = it.coerceIn(0f, 1f) },
-            commitAlpha = {
-                glassAlpha = it.coerceIn(0f, 1f)
-                glassStore.saveAlpha(glassAlpha)
-            },
-        ),
     ) {
         NewmarkTheme(darkTheme = dark) {
             NewmarkAppContent(

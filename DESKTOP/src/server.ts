@@ -989,6 +989,18 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         mobileJson(res, { workspace: { id: ws.id, name: ws.name, path: ws.path, isInternal: ws.isInternal }, conversations });
         return;
       }
+      case '/api/mobile/provider-catalog-export': {
+        if (req.method !== 'POST') {
+          mobileJson(res, { error: 'Method not allowed' }, 405);
+          return;
+        }
+        // This is intentionally separate from mobile state: normal remote UI
+        // projection stays redacted, while an explicit paired-device import
+        // can migrate a usable local provider configuration.
+        res.setHeader('Cache-Control', 'no-store');
+        mobileJson(res, { providers: agent.config.providers() });
+        return;
+      }
       case '/api/mobile/right-sidebar-state': {
         const workspaceId = url.searchParams.get('workspaceId') || '';
         const conversationId = url.searchParams.get('conversationId') || '';

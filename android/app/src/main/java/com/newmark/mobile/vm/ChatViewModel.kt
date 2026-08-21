@@ -425,43 +425,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Merge a redacted remote catalog without replacing local secrets or settings. */
+    /** Merge an explicitly exported remote catalog without replacing existing local secrets. */
     fun mergeProviderCatalog(incoming: List<ProviderConfig>): Pair<Int, Int> {
-        var addedProviders = 0
-        var addedModels = 0
-        val merged = providers.toMutableList()
-        incoming.forEach { remote ->
-            val normalizedUrl = remote.baseUrl.trim().trimEnd('/').lowercase()
-            val index = merged.indexOfFirst { local ->
-                local.id == remote.id || (
-                    normalizedUrl.isNotBlank() &&
-                        local.baseUrl.trim().trimEnd('/').lowercase() == normalizedUrl &&
-                        local.protocol.equals(remote.protocol, ignoreCase = true)
-                    )
-            }
-            if (index < 0) {
-                val uniqueId = remote.id.ifBlank { "device-${java.util.UUID.randomUUID()}" }
-                    .let { base -> if (merged.none { it.id == base }) base else "$base-${java.util.UUID.randomUUID()}" }
-                merged += remote.copy(id = uniqueId, apiKey = "", hasApiKey = false)
-                addedProviders += 1
-                addedModels += remote.models.distinctBy { it.name.lowercase() }.size
-            } else {
-                val local = merged[index]
-                val known = local.models.map { it.name.lowercase() }.toMutableSet()
-                val additions = remote.models.filter { it.name.isNotBlank() && known.add(it.name.lowercase()) }
-                if (additions.isNotEmpty()) {
-                    merged[index] = local.copy(models = local.models + additions)
-                    addedModels += additions.size
-                }
-            }
-        }
-        providers = merged
-        providerStore.save(merged)
-        if (activeProviderId.isBlank() && merged.isNotEmpty()) {
-            activeProviderId = merged.first().id
+        val result = com.newmark.mobile.data.mergeProviderCatalogEntries(providers, incoming)
+        providers = result.providers
+        providerStore.save(result.providers)
+        if (activeProviderId.isBlank() && result.providers.isNotEmpty()) {
+            activeProviderId = result.providers.first().id
             normalizeActive()
         }
-        return addedProviders to addedModels
+        return result.addedProviders to result.addedModels
     }
 
     fun removeProvider(id: String) {

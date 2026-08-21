@@ -39,7 +39,6 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -47,7 +46,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -79,8 +77,6 @@ import com.newmark.mobile.ui.components.NewmarkShapeLarge
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.LocalThemeMode
-import com.newmark.mobile.ui.theme.LocalGlassMode
-import com.newmark.mobile.ui.theme.glassPresentationForAlpha
 import com.newmark.mobile.ui.theme.MarqueeColors
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkAccent
@@ -479,8 +475,6 @@ private fun AppearanceSection() {
     val systemDark = isSystemInDarkTheme()
     val isDark = themeMode.dark ?: systemDark
     val followSystem = themeMode.dark == null
-    val glassMode = LocalGlassMode.current
-    val glass = glassPresentationForAlpha(glassMode.alpha)
     SectionCard(title = "外观") {
         SettingRow(label = "暗色模式") {
             Switch(
@@ -502,25 +496,6 @@ private fun AppearanceSection() {
                 ),
             )
         }
-        Text(
-            text = "玻璃强度  ${glass.opacityPercent.toInt()}%",
-            fontSize = 11.sp,
-            color = p.textSecondary,
-            modifier = Modifier.padding(top = 6.dp),
-        )
-        Slider(
-            value = glass.opacityPercent,
-            onValueChange = { glassMode.previewAlpha(it / 100f) },
-            onValueChangeFinished = { glassMode.commitAlpha(glassMode.alpha) },
-            valueRange = 0f..100f,
-            steps = 99,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(
-            text = "不透明度 ${glass.opacityPercent.toInt()}% · 透明度 ${glass.transparencyPercent.toInt()}% · 模糊 ${"%.1f".format(glass.blur1)}/${"%.1f".format(glass.blur2)}/${"%.1f".format(glass.blur3)}",
-            fontSize = 10.sp,
-            color = p.textTertiary,
-        )
     }
 }
 
@@ -684,7 +659,7 @@ private fun ProvidersPage(
                                 scope.launch {
                                     linkVm.providerCatalog(device).onSuccess { catalog ->
                                         val (providersAdded, modelsAdded) = vm.mergeProviderCatalog(catalog)
-                                        pullStatus = "已从 ${device.displayName} 合并：新增 $providersAdded 个供应商、$modelsAdded 个模型"
+                                        pullStatus = "已从 ${device.displayName} 合并 API 配置：新增 $providersAdded 个供应商、$modelsAdded 个模型"
                                         showDevicePicker = false
                                     }.onFailure {
                                         pullStatus = "拉取失败：${it.message ?: "未知错误"}"

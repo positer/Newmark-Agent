@@ -65,6 +65,62 @@ data class ProviderConfig(
         ApiConfig(baseUrl = baseUrl, apiKey = apiKey, model = model.name)
 }
 
+data class ProviderCatalogMergeResult(
+    val providers: List<ProviderConfig>,
+    val addedProviders: Int,
+    val addedModels: Int,
+)
+
+/**
+ * Merge an explicitly exported provider catalog into local settings. Existing
+ * local credentials win; a previously redacted pull is repaired from the new
+ * credential-bearing export instead of creating a duplicate provider.
+ */
+fun mergeProviderCatalogEntries(
+    existing: List<ProviderConfig>,
+    incoming: List<ProviderConfig>,
+    uniqueSuffix: () -> String = { java.util.UUID.randomUUID().toString() },
+): ProviderCatalogMergeResult {
+    var addedProviders = 0
+    var addedModels = 0
+    val merged = existing.toMutableList()
+    incoming.forEach { remote ->
+        val normalizedUrl = remote.baseUrl.trim().trimEnd('/').lowercase()
+        val index = merged.indexOfFirst { local ->
+            local.id == remote.id || (
+                normalizedUrl.isNotBlank() &&
+                    local.baseUrl.trim().trimEnd('/').lowercase() == normalizedUrl &&
+                    local.protocol.equals(remote.protocol, ignoreCase = true)
+                )
+        }
+        if (index < 0) {
+            val baseId = remote.id.ifBlank { "device-${uniqueSuffix()}" }
+            val uniqueId = if (merged.none { it.id == baseId }) baseId else "$baseId-${uniqueSuffix()}"
+            merged += remote.copy(
+                id = uniqueId,
+                hasApiKey = remote.apiKey.isNotBlank() || remote.hasApiKey,
+            )
+            addedProviders += 1
+            addedModels += remote.models.distinctBy { it.name.lowercase() }.size
+        } else {
+            val local = merged[index]
+            val known = local.models.map { it.name.lowercase() }.toMutableSet()
+            val additions = remote.models.filter { it.name.isNotBlank() && known.add(it.name.lowercase()) }
+            val mergedApiKey = local.apiKey.ifBlank { remote.apiKey }
+            merged[index] = local.copy(
+                name = local.name.ifBlank { remote.name },
+                baseUrl = local.baseUrl.ifBlank { remote.baseUrl },
+                apiKey = mergedApiKey,
+                protocol = local.protocol.ifBlank { remote.protocol },
+                hasApiKey = mergedApiKey.isNotBlank() || local.hasApiKey || remote.hasApiKey,
+                models = local.models + additions,
+            )
+            addedModels += additions.size
+        }
+    }
+    return ProviderCatalogMergeResult(merged, addedProviders, addedModels)
+}
+
 /** 模型选择对话框候选项（输入框模型按钮弹出） */
 data class ModelOption(
     val providerId: String = "",

@@ -128,6 +128,10 @@ internal fun sidebarPresentedProgress(
     else -> animatedProgress
 }
 
+/** Connection transitions must not change which conversation surface owns focus. */
+internal fun shouldPresentRemoteConversation(preferLocal: Boolean, hasPairedDevice: Boolean): Boolean =
+    !preferLocal && hasPairedDevice
+
 @Composable
 private fun SidebarFrameProgressHost(
     rightDragging: Boolean,
@@ -595,10 +599,10 @@ private fun NewmarkAppContent(
             }
         }
     }
-    // 配对后按连接状态展示远程对话 / 重连中 / 断开；新建对话时切回本地
+    // Pair ownership, rather than transient connectivity, keeps the remote
+    // transcript mounted while Connecting/Reconnecting/Disconnected changes.
     var preferLocal by remember { mutableStateOf(false) }
-    val useRemote = !preferLocal && linkVm.pairInfo != null &&
-        (linkVm.linkStatus == LinkStatus.Connected || linkVm.linkStatus == LinkStatus.Reconnecting)
+    val useRemote = shouldPresentRemoteConversation(preferLocal, linkVm.pairInfo != null)
     val browserTargetKey = if (useRemote) {
         "remote:${linkVm.selectedConversationWorkspaceId.orEmpty()}:${linkVm.selectedConversationId.orEmpty()}"
     } else {
@@ -813,8 +817,12 @@ private fun NewmarkAppContent(
         selectedMode = selectedMode,
         actions = conversationActions,
         escalating = escalating,
-        showConnectRemote = !useRemote && linkVm.pairInfo != null,
-        onConnectRemote = { preferLocal = false },
+        showConnectRemote = linkVm.pairInfo != null &&
+            (preferLocal || linkVm.linkStatus == LinkStatus.Disconnected),
+        onConnectRemote = {
+            preferLocal = false
+            if (linkVm.linkStatus == LinkStatus.Disconnected) linkVm.retryConnect()
+        },
         goal = if (useRemote) remoteUi.goal else null,
         flow = if (useRemote) remoteUi.flow else null,
         queueItems = queueItems,
@@ -1541,13 +1549,34 @@ private fun projectLocalConversationItems(vm: ChatViewModel): List<ChatItem> {
     val localPagersByMessageId = vm.currentBranchPagers.associateBy { it.sourceMessageId }
     val live = vm.liveRun?.takeIf { vm.liveRunConversationId == vm.currentId }
     val persistedRunIds = vm.currentMessages.mapNotNull { it.workRun?.runId }.toSet()
+    val renderedRunIds = mutableSetOf<String>()
     return vm.currentMessages.flatMapIndexed { index, message ->
         val pager = localPagersByMessageId[message.messageId]
+        val associatedRun = message.workRun
+            ?: live?.takeIf { it.anchorMessageId == message.messageId && it.runId !in persistedRunIds }
+        // A completed local assistant message owns the final Markdown body.
+        // Keep the WorkRun as the adjacent Build activity only; rendering its
+        // copied terminal text would show the same Agent reply twice.
+        val renderedRun = associatedRun?.let { run ->
+            if (message.role == "assistant" && message.workRun != null) run.copy(text = "") else run
+        }
+        val runItems = renderedRun?.let { run ->
+            if (!renderedRunIds.add(run.runId)) emptyList() else listOf(
+                ChatItem.Bubble(
+                    role = "assistant",
+                    content = "",
+                    timestamp = formatLocalTime(run.startedAt),
+                    workRun = run,
+                    keyHint = "local-run:${run.runId}",
+                ),
+            )
+        }.orEmpty()
         val base = ChatItem.Bubble(
             role = message.role,
             content = message.content,
             timestamp = formatLocalTime(message.timestamp),
-            workRun = message.workRun,
+            // Keep the activity block as a separate PC-style assistant row.
+            workRun = null,
             keyHint = message.messageId.ifBlank { "l:$index:${message.timestamp}" },
             messageId = message.messageId,
             messageIndex = index,
@@ -1561,19 +1590,7 @@ private fun projectLocalConversationItems(vm: ChatViewModel): List<ChatItem> {
                 )
             },
         )
-        if (live != null && live.anchorMessageId == message.messageId && live.runId !in persistedRunIds) {
-            listOf(
-                base,
-                ChatItem.Bubble(
-                    role = "assistant",
-                    content = "",
-                    workRun = live,
-                    keyHint = "local-run:${live.runId}",
-                ),
-            )
-        } else {
-            listOf(base)
-        }
+        if (message.role == "assistant") runItems + base else listOf(base) + runItems
     }
 }
 

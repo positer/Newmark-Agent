@@ -48,6 +48,13 @@ import org.json.JSONObject
 import org.json.JSONArray
 import kotlin.coroutines.coroutineContext
 
+/** Accept both current `data: payload` and legacy `data:payload` SSE lines. */
+internal fun sseDataPayload(line: String): String? =
+    line.takeIf { it.startsWith("data:") }
+        ?.removePrefix("data:")
+        ?.trim()
+        ?.takeIf(String::isNotBlank)
+
 /** 连接状态：断开 / 连接中 / 已连接 / 重连中 */
 enum class LinkStatus { Disconnected, Connecting, Connected, Reconnecting }
 
@@ -1536,8 +1543,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                         val source = resp.body?.source() ?: throw java.io.IOException("SSE no body")
                         while (isActive && isCurrent(session, pair) && !source.exhausted()) {
                             val line = source.readUtf8Line() ?: break
-                            if (line.startsWith("data: ")) {
-                                val payload = line.removePrefix("data: ").trim()
+                            sseDataPayload(line)?.let { payload ->
                                 parseSseWorkEvent(payload)?.let { eventQueue.send(it) }
                             }
                         }

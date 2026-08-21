@@ -46,12 +46,12 @@ val NewmarkLightTextTertiary = Color(0x52000000)
 val NewmarkLightBorder = Color(0x1F1A2A52)
 val NewmarkLightBorder2 = Color(0x3D1A2A52)
 
-// 跑马灯渐变（与 PC-GUI 完全一致：conic-gradient 旋转，4 色）
+// 跑马灯固定四色，升级后不读取任何旧版颜色设置。
 val MarqueeColors = listOf(
-    Color(0xFF00FF88),  // --g1 #00ff88
-    Color(0xFF00CCFF),  // --g2 #00ccff
-    Color(0xFFAA44FF),  // --g3 #aa44ff
-    Color(0xFFFF4488),  // --g4 #ff4488
+    Color.Black,
+    Color.White,
+    Color.Black,
+    Color.White,
 )
 
 // 状态语义色

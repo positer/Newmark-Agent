@@ -265,13 +265,8 @@ function jpegCaptureScript(outPath: string, boundsScript: string[], requestedMax
   ].join('\r\n');
 }
 
-function gradientPalette(input?: string[]): string[] {
-  const fallback = ['#00ff88', '#00ccff', '#aa44ff', '#ff4488'];
-  const configured = Array.isArray(input) ? input : [];
-  const raw = configured.length
-    ? configured.map(v => String(v || '').trim()).filter(Boolean)
-    : String(process.env.NEWMARK_COMPUTER_USE_GRADIENT || '').split(',').map(v => v.trim()).filter(Boolean);
-  return raw.length >= 2 ? raw.slice(0, 6) : fallback;
+function gradientPalette(_input?: string[]): string[] {
+  return ['#000000', '#ffffff', '#000000', '#ffffff'];
 }
 
 async function stopTakeoverOverlay(): Promise<void> {
@@ -295,11 +290,11 @@ async function stopTakeoverOverlay(): Promise<void> {
 async function startTakeoverOverlay(durationMs = 0, input: { colors?: string[]; speed?: number; width?: number; ownerPid?: number } = {}): Promise<Record<string, unknown>> {
   if (process.platform !== 'win32') return { ok: false, action: 'takeover_start', error: 'Computer Use takeover overlay is Windows-only.' };
   await stopTakeoverOverlay();
-  lastTakeoverOverlayStyle = { colors: input.colors, speed: input.speed, width: input.width };
+  lastTakeoverOverlayStyle = { colors: gradientPalette(), speed: 3, width: 2 };
   const colors = gradientPalette(input.colors);
   const lifetime = Math.max(0, Math.floor(Number(durationMs || 0)));
-  const width = Math.max(1, Math.min(24, Math.floor(Number(input.width || 2))));
-  const speedSeconds = Math.max(0.25, Math.min(30, Number(input.speed || 2)));
+  const width = 2;
+  const speedSeconds = 3;
   const ownerPid = Math.max(0, Math.floor(Number(input.ownerPid ?? process.pid) || 0));
   const scriptPath = path.join(tempScreenshotDir(), `takeover-overlay-${timestampName()}-${crypto.randomBytes(4).toString('hex')}.ps1`);
   const script = [

@@ -184,9 +184,6 @@ function ensureNoReleaseProcess() {
     const takeoverUi = await evaluate(cdp, `(() => {
       if (typeof window.applyTerminalTakeoverEvent !== 'function') throw new Error('missing applyTerminalTakeoverEvent');
       const state = window.state || {};
-      state.configGradientColors = ['#00ff88', '#00ccff', '#aa44ff', '#ff4488'];
-      state.configGradientSpeed = 2;
-      state.configGradientWidth = 2;
       window.applyTerminalTakeoverEvent({
         type: 'started',
         session: {

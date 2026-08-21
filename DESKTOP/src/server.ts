@@ -452,9 +452,6 @@ function applyConfigPatch(cfg: Record<string, unknown>): void {
   if (!agent) return;
   for (const [key, value] of Object.entries(cfg || {})) {
     switch (key) {
-      case 'gradientColors': agent.config.set('ui', 'gradient_colors', value); break;
-      case 'gradientSpeed': agent.config.set('ui', 'gradient_speed', value); break;
-      case 'gradientWidth': agent.config.set('ui', 'gradient_width', value); break;
       case 'glassAlpha': agent.config.set('ui', 'glass_alpha', value); break;
     case 'theme': agent.config.set('ui', 'dark_mode', normalizeUiTheme(value)); break;
     case 'backgroundColor': agent.config.set('ui', 'background_color', normalizeUiBackgroundColor(value)); break;
@@ -561,9 +558,6 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
           conversationPlan: agent.getConversationPlan(),
           historyMessages: agent.history.length,
           conversationLocked: agent.isConversationLocked(),
-          gradientColors: agent.config.get<string[]>('ui', 'gradient_colors') || [],
-          gradientSpeed: agent.config.getNum('ui', 'gradient_speed'),
-          gradientWidth: agent.config.getNum('ui', 'gradient_width'),
           glassAlpha: agent.config.getNum('ui', 'glass_alpha'),
           darkMode: agent.config.getStr('ui', 'dark_mode'),
           backgroundColor: normalizeUiBackgroundColor(agent.config.getStr('ui', 'background_color')),

@@ -1,6 +1,10 @@
 package com.newmark.mobile.vm
 
 import android.app.Application
+import android.os.PowerManager
+import android.content.Intent
+import androidx.core.content.ContextCompat
+import com.newmark.mobile.service.LocalAgentForegroundService
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -13,6 +17,7 @@ import com.newmark.mobile.data.ApiConfig
 import com.newmark.mobile.data.ChatMessage
 import com.newmark.mobile.data.ConversationStore
 import com.newmark.mobile.data.LocalConversation
+import com.newmark.mobile.data.LocalBuildHistoryContract
 import com.newmark.mobile.data.LocalContextCompression
 import com.newmark.mobile.data.LocalContextContract
 import com.newmark.mobile.data.LocalConversationBranchGroup
@@ -37,9 +42,19 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import org.json.JSONArray
 import java.util.UUID
 import java.security.MessageDigest
 import java.io.File
+
+internal fun localAgentFailureMessage(config: ApiConfig, error: Throwable): String {
+    val detail = error.message?.trim().orEmpty().ifBlank { "API 调用失败" }
+    return if (!config.isReady) {
+        "⚠️ API 配置不完整，请在设置页配置供应商、接口、API Key 和模型"
+    } else {
+        "⚠️ $detail"
+    }
+}
 
 /** 本地对话 + API 调用对话的正式状态管理 */
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
@@ -767,6 +782,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val guideChannel = Channel<LocalGuideInput>(Channel.UNLIMITED)
         val runtime = LocalAgentRuntime(runId = runId, guideChannel = guideChannel)
         localRuntimes[targetConversationId] = runtime
+        updateLocalAgentService()
         // Do not wait for the provider call, a tool result, or the persisted
         // Build block before exposing local execution.  The running block is
         // part of the synchronous send transition, so a slow first token is
@@ -791,7 +807,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             branchNodeId = targetBranchId.orEmpty(),
         )
         runtime.job = viewModelScope.launch {
-            val targetConversation = conversations.find { it.id == targetConversationId } ?: return@launch
+            withLocalAgentWakeLock {
+            val targetConversation = conversations.find { it.id == targetConversationId }
+                ?: return@withLocalAgentWakeLock
             val snapshot = targetConversation.messages
             val executor = LocalToolExecutor(getApplication()) { name, args ->
                 executeConversationTool(targetConversationId, name, args)
@@ -814,12 +832,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     it.copy(
                         modelContext = prepared.messages,
                         contextCompression = prepared.compression,
+                        compressionHistory = prepared.compression?.let { item ->
+                            (it.compressionHistory + item).distinctBy { entry -> entry.id }.takeLast(32)
+                        } ?: it.compressionHistory,
                         updatedAt = System.currentTimeMillis(),
                     )
                 }
             }
             val loopResult = runAgentLoop(
                 apiConfig,
+                targetConversationId,
                 prepared.messages,
                 executor,
                 intelligence,
@@ -855,7 +877,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 it.copy(
                     messages = nextMessages,
                     modelContext = loopResult.modelContext,
-                    contextCompression = prepared.compression,
+                    contextCompression = it.contextCompression ?: prepared.compression,
                     updatedAt = System.currentTimeMillis(),
                     branchTree = updateBranchNodeMessages(it.branchTree, targetBranchId, nextMessages),
                 )
@@ -868,7 +890,37 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 localRuntimes.remove(targetConversationId)
                 localLiveRuns.remove(targetConversationId)
             }
+            updateLocalAgentService()
             drainLocalQueueIfReady(targetConversationId)
+            }
+        }
+    }
+
+    /** Keep provider/tool work alive while the screen is backgrounded. */
+    private suspend fun <T> withLocalAgentWakeLock(block: suspend () -> T): T {
+        val power = getApplication<Application>()
+            .getSystemService(PowerManager::class.java)
+        val lock = power?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Newmark:LocalAgent")
+        lock?.setReferenceCounted(false)
+        lock?.acquire()
+        return try {
+            block()
+        } finally {
+            if (lock?.isHeld == true) lock.release()
+        }
+    }
+
+    private fun updateLocalAgentService() {
+        val context = getApplication<Application>()
+        val count = localRuntimes.size
+        if (count == 0) {
+            context.stopService(Intent(context, LocalAgentForegroundService::class.java))
+        } else {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, LocalAgentForegroundService::class.java)
+                    .putExtra(LocalAgentForegroundService.EXTRA_COUNT, count),
+            )
         }
     }
 
@@ -888,6 +940,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         args: JSONObject,
     ): com.newmark.mobile.data.ToolResult? = withContext(Dispatchers.Main) {
         when (name) {
+            "build_history_query" -> {
+                val messages = conversations.firstOrNull { it.id == conversationId }?.messages.orEmpty()
+                com.newmark.mobile.data.ToolResult.ok(
+                    LocalBuildHistoryContract.query(messages, args),
+                )
+            }
+            "context_compress" -> compressConversationContext(conversationId, args)
+            "context_history_manage" -> manageContextCompression(conversationId, args)
             "task_read" -> {
                 val items = conversations.firstOrNull { it.id == conversationId }?.planItems.orEmpty()
                 com.newmark.mobile.data.ToolResult.ok(
@@ -904,6 +964,96 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             else -> null
         }
     }
+
+    private suspend fun compressConversationContext(
+        conversationId: String,
+        args: JSONObject,
+    ): com.newmark.mobile.data.ToolResult {
+        val conversation = conversations.firstOrNull { it.id == conversationId }
+            ?: return com.newmark.mobile.data.ToolResult.err("[context_compress] 目标对话不存在")
+        val maxTokens = activeModelConfig?.maxTokens?.takeIf { it > 0 } ?: 128_000
+        val prepared = prepareModelContext(
+            config = apiConfig,
+            conversation = conversation,
+            displaySnapshot = conversation.messages,
+            maxTokens = maxTokens,
+            force = args.optBoolean("force", false),
+            keepRecent = args.optInt("keep_recent", 48).coerceIn(2, 60),
+        )
+        val compression = prepared.compression
+            ?: return com.newmark.mobile.data.ToolResult.err("[context_compress] Compression skipped: context unchanged.")
+        updateConversation(conversationId) {
+            it.copy(
+                modelContext = prepared.messages,
+                contextCompression = compression,
+                compressionHistory = (it.compressionHistory + compression).takeLast(32),
+                updatedAt = System.currentTimeMillis(),
+            )
+        }
+        return com.newmark.mobile.data.ToolResult.ok(
+            JSONObject()
+                .put("ok", true)
+                .put("compressed", true)
+                .put("compression_id", compression.id)
+                .put("originalMessages", compression.originalMessages)
+                .put("compressedMessages", compression.compressedMessages)
+                .put("originalChars", compression.originalChars)
+                .put("compressedChars", compression.compressedChars)
+                .put("compressedTokens", compression.compressedTokens)
+                .put("fallback", compression.fallback)
+                .put("displayHistory", JSONObject().put("untouched", true).put("messageCount", conversation.messages.size))
+                .toString(),
+        )
+    }
+
+    private fun manageContextCompression(
+        conversationId: String,
+        args: JSONObject,
+    ): com.newmark.mobile.data.ToolResult {
+        val conversation = conversations.firstOrNull { it.id == conversationId }
+            ?: return com.newmark.mobile.data.ToolResult.err("[context_history_manage] 目标对话不存在")
+        val action = args.optString("action").lowercase()
+        val history = conversation.compressionHistory.ifEmpty {
+            listOfNotNull(conversation.contextCompression)
+        }
+        return when (action) {
+            "status" -> com.newmark.mobile.data.ToolResult.ok(
+                JSONObject()
+                    .put("ok", true)
+                    .put("compressionCount", history.size)
+                    .put("latest", history.lastOrNull()?.let { compressionJson(it) } ?: JSONObject.NULL)
+                    .put("displayHistory", JSONObject().put("untouched", true).put("messageCount", conversation.messages.size))
+                    .toString(),
+            )
+            "search" -> {
+                val query = args.optString("query").trim().lowercase()
+                if (query.isBlank()) return com.newmark.mobile.data.ToolResult.err("[context_history_manage] search requires query")
+                val matches = history.filter { it.summary.lowercase().contains(query) }
+                    .take(args.optInt("limit", 20).coerceIn(1, 100))
+                    .map(::compressionJson)
+                com.newmark.mobile.data.ToolResult.ok(JSONObject().put("ok", true).put("matches", JSONArray(matches)).toString())
+            }
+            "read" -> {
+                val id = args.optString("restore_id").trim()
+                val item = history.firstOrNull { it.id == id }
+                    ?: return com.newmark.mobile.data.ToolResult.err("[context_history_manage] unknown restore_id")
+                com.newmark.mobile.data.ToolResult.ok(JSONObject().put("ok", true).put("compression", compressionJson(item)).toString())
+            }
+            else -> com.newmark.mobile.data.ToolResult.err("[context_history_manage] action must be status|search|read")
+        }
+    }
+
+    private fun compressionJson(item: LocalContextCompression): JSONObject = JSONObject()
+        .put("id", item.id)
+        .put("at", item.at)
+        .put("originalMessages", item.originalMessages)
+        .put("compressedMessages", item.compressedMessages)
+        .put("originalChars", item.originalChars)
+        .put("compressedChars", item.compressedChars)
+        .put("compressedTokens", item.compressedTokens)
+        .put("summary", item.summary.take(4_000))
+        .put("model", item.model)
+        .put("fallback", item.fallback)
 
     private fun executeTaskCreate(conversationId: String, args: JSONObject): com.newmark.mobile.data.ToolResult {
         val conversation = conversations.firstOrNull { it.id == conversationId }
@@ -959,6 +1109,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         conversation: LocalConversation,
         displaySnapshot: List<ChatMessage>,
         maxTokens: Int,
+        force: Boolean = false,
+        keepRecent: Int = 48,
     ): PreparedModelContext {
         val current = if (conversation.modelContext.isNotEmpty()) {
             conversation.modelContext
@@ -968,13 +1120,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val budget = withContext(Dispatchers.Default) {
             LocalContextContract.budget(current, maxTokens)
         }
-        if (!budget.thresholdReached) {
+        if (!force && !budget.thresholdReached) {
             return PreparedModelContext(current, conversation.contextCompression)
         }
         val retained = withContext(Dispatchers.Default) {
             LocalContextContract.recentContextSuffix(
                 messages = current,
-                maxMessages = 48,
+                maxMessages = keepRecent,
                 tokenBudget = budget.longHistoryTriggerTokens,
             )
         }
@@ -1019,6 +1171,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             LocalContextContract.continuationAnchor(),
         ) + retained
         val compression = LocalContextCompression(
+            id = "compression-${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(8)}",
             at = System.currentTimeMillis(),
             originalMessages = current.size,
             compressedMessages = compressed.size,
@@ -1035,6 +1188,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** Agent tool-call 循环：生成 build block（对齐 PC ConversationWorkRun 的事件序列 + 处理时长） */
     private suspend fun runAgentLoop(
         config: ApiConfig,
+        conversationId: String,
         snapshot: List<ChatMessage>,
         executor: LocalToolExecutor,
         intelligence: String,
@@ -1190,7 +1344,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     withContext(Dispatchers.Main.immediate) { publishTextDelta(delta) }
                 },
             ).getOrElse { e ->
-                val msg = "⚠️ ${e.message ?: "API 调用失败"}（请先在设置页配置 API）"
+                val msg = localAgentFailureMessage(config, e)
                 val endedAt = System.currentTimeMillis()
                 publish(event(type = "thought_result", durationMs = endedAt - t0))
                 publish(
@@ -1242,8 +1396,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     toolName = call.name,
                     toolArgs = call.arguments,
                 ))
-                val result = withContext(Dispatchers.IO) {
-                    executor.executeTool(call.name, call.arguments)
+                val result = if (call.name == "context_compress") {
+                    val args = runCatching { JSONObject(call.arguments) }.getOrDefault(JSONObject())
+                    compressActiveLoopContext(conversationId, config, messages, args)
+                } else {
+                    withContext(Dispatchers.IO) {
+                        executor.executeTool(call.name, call.arguments)
+                    }
                 }
                 val tcMs = System.currentTimeMillis() - tc0
                 publish(event(
@@ -1274,6 +1433,53 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         )
         onProgress(completed)
         return AgentLoopResult(completed, messages)
+    }
+
+    private suspend fun compressActiveLoopContext(
+        conversationId: String,
+        config: ApiConfig,
+        messages: MutableList<ChatMessage>,
+        args: JSONObject,
+    ): com.newmark.mobile.data.ToolResult {
+        val synthetic = LocalConversation(
+            id = "active-loop",
+            title = "active-loop",
+            messages = messages,
+            modelContext = messages,
+        )
+        val prepared = prepareModelContext(
+            config = config,
+            conversation = synthetic,
+            displaySnapshot = messages,
+            maxTokens = activeModelConfig?.maxTokens?.takeIf { it > 0 } ?: 128_000,
+            force = args.optBoolean("force", true),
+            keepRecent = args.optInt("keep_recent", 48).coerceIn(2, 60),
+        )
+        val compression = prepared.compression
+            ?: return com.newmark.mobile.data.ToolResult.err("[context_compress] Compression skipped: context unchanged.")
+        messages.clear()
+        messages.addAll(prepared.messages)
+        updateConversation(conversationId) {
+            it.copy(
+                modelContext = prepared.messages,
+                contextCompression = compression,
+                compressionHistory = (it.compressionHistory + compression)
+                    .distinctBy { entry -> entry.id }
+                    .takeLast(32),
+                updatedAt = System.currentTimeMillis(),
+            )
+        }
+        return com.newmark.mobile.data.ToolResult.ok(
+            JSONObject()
+                .put("ok", true)
+                .put("compressed", true)
+                .put("compression_id", compression.id)
+                .put("originalMessages", compression.originalMessages)
+                .put("compressedMessages", compression.compressedMessages)
+                .put("compressedTokens", compression.compressedTokens)
+                .put("displayHistory", JSONObject().put("untouched", true))
+                .toString(),
+        )
     }
 
     private fun updateConversation(id: String, transform: (LocalConversation) -> LocalConversation) {
@@ -1342,6 +1548,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val normalizedMessages = normalize(conversation.messages, conversation.id)
         @Suppress("UNCHECKED_CAST")
         val legacyModelContext = conversation.modelContext as List<ChatMessage>?
+        @Suppress("UNCHECKED_CAST")
+        val legacyCompressionHistory = conversation.compressionHistory as List<LocalContextCompression>?
         val tree = conversation.branchTree?.let { existing ->
             val nodes = existing.nodes.mapValues { (nodeId, node) ->
                 node.copy(messages = normalize(node.messages, "${conversation.id}:$nodeId"))
@@ -1377,6 +1585,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             inputMode = "next",
             modelContext = legacyModelContext.orEmpty(),
             contextCompression = conversation.contextCompression,
+            compressionHistory = legacyCompressionHistory.orEmpty(),
             branchTree = tree,
         )
     }

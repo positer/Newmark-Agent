@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -50,11 +51,13 @@ private val TokType = Color(0xFFFFCB6B)
 private val TokTag = Color(0xFFF07178)
 
 private val INLINE_CODE = Regex("`([^`\\n]+)`")
-private val INLINE_MATH = Regex("\\$([^$\\n]+?)\\$")
+private val INLINE_DISPLAY_MATH = Regex("""\\\[([^\\n]+?)\\\]|(?<!\\)\$\$([^\$]+?)\$\$""")
+private val INLINE_MATH = Regex("""\\\(([^\n]+?)\\\)|(?<!\\)\$([^\$\n]+?)(?<!\\)\$""")
 private val INLINE_LINK = Regex("!\\[([^\\]\\n]{0,160})\\]\\(([^)\\n]+)\\)|\\[([^\\]\\n]{1,180})\\]\\(([^)\\n]+)\\)")
 private val INLINE_BOLD = Regex("\\*\\*([^*]+)\\*\\*|__([^_]+)__")
 private val INLINE_ITALIC_STAR = Regex("(^|[^*])\\*([^*\\n]+)\\*")
 private val INLINE_ITALIC_UNDER = Regex("(^|[^\\w])_([^_\\n]+?)_(?=[^\\w]|$)")
+private val INLINE_STRIKE = Regex("~~([^~\\n]+)~~")
 private const val NewmarkWebLinkTag = "newmark-web-link"
 
 private val KEYWORDS = Regex(
@@ -78,21 +81,81 @@ private fun normalizeCodeLanguage(language: String): String {
     return LANG_ALIASES[v] ?: v.ifBlank { "text" }
 }
 
-/** 行内数学：简化映射常见 LaTeX 命令为 Unicode（对齐 PC renderMathFormula 的可读语义） */
-private fun mathToUnicode(tex: String): String {
+/** PC-compatible readable LaTeX fallback used by inline and display math. */
+internal fun renderReadableLatex(tex: String): String {
     val symbols = mapOf(
-        "\\times" to "×", "\\cdot" to "·", "\\leq" to "≤", "\\geq" to "≥", "\\neq" to "≠",
-        "\\approx" to "≈", "\\infty" to "∞", "\\partial" to "∂", "\\nabla" to "∇", "\\pm" to "±",
-        "\\alpha" to "α", "\\beta" to "β", "\\gamma" to "γ", "\\delta" to "δ", "\\epsilon" to "ε",
-        "\\theta" to "θ", "\\lambda" to "λ", "\\mu" to "μ", "\\nu" to "ν", "\\pi" to "π",
-        "\\rho" to "ρ", "\\sigma" to "σ", "\\tau" to "τ", "\\phi" to "φ", "\\omega" to "ω",
-        "\\Lambda" to "Λ", "\\Delta" to "Δ", "\\Sigma" to "Σ", "\\Omega" to "Ω",
-        "\\sum" to "∑", "\\prod" to "∏", "\\int" to "∫", "\\to" to "→", "\\in" to "∈",
-        "\\sqrt" to "√",
+        "times" to "×", "cdot" to "·", "leq" to "≤", "geq" to "≥", "neq" to "≠",
+        "approx" to "≈", "infty" to "∞", "partial" to "∂", "nabla" to "∇", "pm" to "±",
+        "alpha" to "α", "beta" to "β", "gamma" to "γ", "delta" to "δ", "epsilon" to "ε",
+        "theta" to "θ", "lambda" to "λ", "mu" to "μ", "nu" to "ν", "pi" to "π",
+        "rho" to "ρ", "sigma" to "σ", "tau" to "τ", "phi" to "φ", "omega" to "ω",
+        "Lambda" to "Λ", "Delta" to "Δ", "Sigma" to "Σ", "Omega" to "Ω",
+        "sum" to "∑", "prod" to "∏", "int" to "∫", "to" to "→", "in" to "∈",
+        "rightarrow" to "→", "leftarrow" to "←", "Rightarrow" to "⇒", "Leftarrow" to "⇐",
+        "leftrightarrow" to "↔", "notin" to "∉", "subset" to "⊂", "subseteq" to "⊆",
+        "supset" to "⊃", "supseteq" to "⊇", "forall" to "∀", "exists" to "∃",
+        "emptyset" to "∅", "mid" to "|", "cdots" to "⋯", "ldots" to "…", "dots" to "…",
+        "lim" to "lim", "log" to "log", "ln" to "ln", "sin" to "sin", "cos" to "cos",
+        "tan" to "tan", "max" to "max", "min" to "min", "quad" to " ", "qquad" to "  ",
     )
-    var s = tex.replace("\\frac", "").replace(Regex("[{}\\\\]"), " ")
-    for ((k, v) in symbols) s = s.replace(k, v)
-    return s.replace(Regex("\\s+"), " ").trim().ifBlank { tex.trim() }
+    fun endOfGroup(source: String, start: Int): Int {
+        if (start !in source.indices || source[start] != '{') return (start + 1).coerceAtMost(source.length)
+        var depth = 0
+        for (i in start until source.length) when (source[i]) {
+            '{' -> depth++
+            '}' -> { depth--; if (depth == 0) return i + 1 }
+        }
+        return source.length
+    }
+    fun render(source: String): String {
+        fun atom(start: Int): Pair<String, Int> {
+            var i = start
+            while (i < source.length && source[i].isWhitespace()) i++
+            if (i >= source.length) return "" to i
+            if (source[i] == '{') {
+                val end = endOfGroup(source, i)
+                return render(source.substring(i + 1, (end - 1).coerceAtLeast(i + 1))) to end
+            }
+            if (source[i] == '\\') {
+                val command = Regex("^\\\\([A-Za-z]+|.)").find(source.substring(i))
+                if (command != null) return (symbols[command.groupValues[1]] ?: command.groupValues[1]) to (i + command.value.length)
+            }
+            return source[i].toString() to i + 1
+        }
+        val out = StringBuilder()
+        var i = 0
+        while (i < source.length) {
+            if (source[i].isWhitespace()) { if (out.isNotEmpty() && out.last() != ' ') out.append(' '); i++; continue }
+            if (source[i] == '\\') {
+                val command = Regex("^\\\\([A-Za-z]+|.)").find(source.substring(i))
+                if (command != null) {
+                    val name = command.groupValues[1]
+                    i += command.value.length
+                    when (name) {
+                        "frac" -> { val (n, a) = atom(i); val (d, b) = atom(a); out.append('(').append(n).append(" / ").append(d).append(')'); i = b }
+                        "sqrt" -> { val (v, n) = atom(i); out.append("√(").append(v).append(')'); i = n }
+                        "text", "mathrm", "mathbf", "mathit", "operatorname" -> {
+                            val (v, n) = atom(i); out.append(v); i = n
+                        }
+                        "overline", "underline", "vec", "hat", "bar" -> {
+                            val (v, n) = atom(i); out.append(v); i = n
+                        }
+                        "begin", "end" -> { val (_, n) = atom(i); i = n }
+                        "left", "right" -> Unit
+                        ",", ";", ":", "!" -> out.append(' ')
+                        else -> out.append(symbols[name] ?: name)
+                    }
+                    continue
+                }
+            }
+            if (source[i] == '^' || source[i] == '_') { val mark = source[i]; val (v, n) = atom(i + 1); out.append(mark).append(v); i = n; continue }
+            if (source[i] == '{') { val end = endOfGroup(source, i); out.append(render(source.substring(i + 1, (end - 1).coerceAtLeast(i + 1)))); i = end; continue }
+            if (source[i] != '}') out.append(source[i])
+            i++
+        }
+        return out.toString().replace(Regex("\\s+"), " ").trim()
+    }
+    return render(tex.replace("\r", " ").replace("\n", " ")).ifBlank { tex.trim() }
 }
 
 /** 行内 markdown → AnnotatedString（code/数学/链接/图片/加粗/斜体），palette 感知亮暗色 */
@@ -111,9 +174,13 @@ private fun renderInline(text: String, p: NewmarkPalette): AnnotatedString {
     src = INLINE_CODE.replace(src) { m ->
         hold(AnnotatedString(m.groupValues[1], codeSpan))
     }
+    src = INLINE_DISPLAY_MATH.replace(src) { m ->
+        val tex = m.groupValues[1].ifBlank { m.groupValues[2] }
+        hold(AnnotatedString(renderReadableLatex(tex), mathSpan))
+    }
     src = INLINE_MATH.replace(src) { m ->
         val tex = m.groupValues[1].ifBlank { m.groupValues[2] }
-        hold(AnnotatedString(mathToUnicode(tex), mathSpan))
+        hold(AnnotatedString(renderReadableLatex(tex), mathSpan))
     }
     src = INLINE_LINK.replace(src) { m ->
         val alt = m.groupValues[1]
@@ -142,6 +209,12 @@ private fun renderInline(text: String, p: NewmarkPalette): AnnotatedString {
     }
     src = INLINE_ITALIC_UNDER.replace(src) { m ->
         m.groupValues[1] + hold(AnnotatedString(m.groupValues[2], ItalicSpan))
+    }
+    src = INLINE_STRIKE.replace(src) { m ->
+        hold(AnnotatedString(
+            m.groupValues[1],
+            SpanStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough),
+        ))
     }
 
     val builder = AnnotatedString.Builder()
@@ -235,6 +308,7 @@ private sealed interface MdBlock {
     data class ListBlock(val ordered: Boolean, val items: List<String>) : MdBlock
     data class Table(val headers: List<String>, val rows: List<List<String>>) : MdBlock
     data class MathBlock(val tex: String) : MdBlock
+    data object HorizontalRule : MdBlock
 }
 
 private fun splitTableRow(line: String): List<String>? {
@@ -264,16 +338,43 @@ private fun parseBlocks(text: String): List<MdBlock> {
     while (i < lines.size) {
         val line = lines[i]
         val trimmed = line.trim()
-        if (trimmed.startsWith("```")) {
+        if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
             flushParagraph()
-            val lang = trimmed.removePrefix("```").trim()
+            val fence = trimmed.take(3)
+            val lang = trimmed.removePrefix(fence).trim()
             val codeLines = mutableListOf<String>()
             i++
-            while (i < lines.size && !lines[i].trim().startsWith("```")) {
+            while (i < lines.size && !lines[i].trim().startsWith(fence)) {
                 codeLines.add(lines[i])
                 i++
             }
             blocks.add(MdBlock.CodeBlock(normalizeCodeLanguage(lang), lang, codeLines.joinToString("\n")))
+            i++
+            continue
+        }
+        val oneLineMath = when {
+            trimmed.startsWith("$$") && trimmed.length > 4 && trimmed.endsWith("$$") -> trimmed.substring(2, trimmed.length - 2)
+            trimmed.startsWith("\\[") && trimmed.endsWith("\\]") -> trimmed.substring(2, trimmed.length - 2)
+            else -> null
+        }
+        if (oneLineMath != null) {
+            flushParagraph()
+            blocks.add(MdBlock.MathBlock(oneLineMath.trim()))
+            i++
+            continue
+        }
+        val environment = Regex("^\\\\begin\\{(equation\\*?|align\\*?|gather\\*?|multline\\*?)\\}(.*)$").find(trimmed)
+        if (environment != null) {
+            flushParagraph()
+            val name = environment.groupValues[1]
+            val mathLines = mutableListOf(environment.groupValues[2])
+            val end = "\\\\end{$name}"
+            i++
+            while (i < lines.size && lines[i].trim() != end) {
+                mathLines.add(lines[i])
+                i++
+            }
+            blocks.add(MdBlock.MathBlock(mathLines.joinToString("\n").trim()))
             i++
             continue
         }
@@ -310,10 +411,16 @@ private fun parseBlocks(text: String): List<MdBlock> {
             blocks.add(MdBlock.Table(headers, rows))
             continue
         }
-        val heading = Regex("^(#{1,4})\\s+(.+)$").find(line)
+        val heading = Regex("^(#{1,6})(?:\\s+|(?=\\S))(.+?)\\s*#*$").find(line)
         if (heading != null) {
             flushParagraph()
             blocks.add(MdBlock.Heading(heading.groupValues[1].length, heading.groupValues[2].trim()))
+            i++
+            continue
+        }
+        if (trimmed.matches(Regex("^(\\*{3,}|-{3,}|_{3,})$"))) {
+            flushParagraph()
+            blocks.add(MdBlock.HorizontalRule)
             i++
             continue
         }
@@ -444,7 +551,7 @@ fun MarkdownBody(
                 }
                 is MdBlock.MathBlock -> {
                     Text(
-                        text = mathToUnicode(block.tex),
+                        text = renderReadableLatex(block.tex),
                         fontSize = baseFontSize.sp,
                         lineHeight = baseLineHeight.sp,
                         color = p.textSecondary,
@@ -454,7 +561,13 @@ fun MarkdownBody(
                             .fillMaxWidth()
                             .padding(vertical = 2.dp)
                             .background(p.bgTertiary)
-                            .padding(8.dp),
+                        .padding(8.dp),
+                    )
+                }
+                MdBlock.HorizontalRule -> {
+                    HorizontalDivider(
+                        color = p.border,
+                        modifier = Modifier.padding(vertical = 6.dp),
                     )
                 }
             }

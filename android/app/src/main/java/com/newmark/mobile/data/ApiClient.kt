@@ -5,9 +5,15 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import com.google.gson.JsonElement
+import java.io.IOException
+import java.net.SocketException
 import java.util.concurrent.TimeUnit
 
 /** 一次 chat 响应：文本内容 + 可选工具调用 */
@@ -19,29 +25,161 @@ data class ChatResponse(
 
 internal data class ChatStreamTextDelta(val thought: String = "", val text: String = "")
 
+/** JSONObject.optString returns the literal "null" for JSONObject.NULL. */
+private fun JSONObject.optionalText(key: String): String {
+    val value = opt(key)
+    return when (value) {
+        null, JSONObject.NULL -> ""
+        is String -> value
+        is JSONArray -> (0 until value.length()).joinToString("") { index ->
+            value.opt(index)?.takeUnless { it == JSONObject.NULL }?.toString().orEmpty()
+        }
+        else -> value.toString()
+    }
+}
+
+private fun JSONObject.firstText(vararg keys: String): String =
+    keys.asSequence().map(::optionalText).firstOrNull(String::isNotBlank).orEmpty()
+
+private fun JsonElement.readText(): String = when {
+    isJsonNull -> ""
+    isJsonPrimitive -> asString
+    isJsonArray -> asJsonArray.joinToString("") { it.readText() }
+    isJsonObject -> asJsonObject.run {
+        sequenceOf("text", "content", "value")
+            .mapNotNull { key -> get(key) }
+            .map(JsonElement::readText)
+            .firstOrNull(String::isNotBlank)
+            .orEmpty()
+    }
+    else -> ""
+}
+
+private fun JsonObject.optionalText(key: String): String = get(key)?.readText().orEmpty()
+
+private fun JsonObject.firstText(vararg keys: String): String =
+    keys.asSequence().map(::optionalText).firstOrNull(String::isNotBlank).orEmpty()
+
 internal fun parseChatStreamTextDelta(payload: String): ChatStreamTextDelta {
-    val delta = JSONObject(payload)
-        .optJSONArray("choices")
-        ?.optJSONObject(0)
-        ?.optJSONObject("delta")
+    val root = runCatching { JsonParser.parseString(payload).asJsonObject }.getOrNull()
         ?: return ChatStreamTextDelta()
-    val thought = sequenceOf("reasoning_content", "reasoning", "thinking")
-        .map(delta::optString)
-        .firstOrNull(String::isNotBlank)
-        .orEmpty()
-    return ChatStreamTextDelta(thought = thought, text = delta.optString("content"))
+    val choice = root.getAsJsonArray("choices")?.firstOrNull()?.asJsonObject
+    val delta = choice?.getAsJsonObject("delta") ?: choice?.getAsJsonObject("message")
+    if (delta != null) {
+        return ChatStreamTextDelta(
+            thought = delta.firstText("reasoning_content", "reasoning", "thinking", "analysis"),
+            text = delta.optionalText("content"),
+        )
+    }
+    // A few older compatible gateways wrap the same fields directly in response.
+    val response = root.getAsJsonObject("response") ?: root
+    return ChatStreamTextDelta(
+        thought = response.firstText("reasoning_content", "reasoning", "thinking", "analysis"),
+        text = response.optionalText("content"),
+    )
+}
+
+internal fun appendCompatibleStreamValue(target: StringBuilder, incoming: String): String {
+    if (incoming.isBlank() || incoming == "null") return ""
+    val current = target.toString()
+    val delta = when {
+        current.isEmpty() -> incoming
+        incoming == current -> ""
+        incoming.startsWith(current) -> incoming.removePrefix(current)
+        current.startsWith(incoming) -> ""
+        else -> incoming
+    }
+    target.append(delta)
+    return delta
+}
+
+internal fun shouldRetryWithResponses(status: Int, errorText: String): Boolean =
+    status in 400..499 && Regex(
+        "unsupported_api_for_model|responses api|use\\s*(?:/v1/)?responses|not supported.*chat|chat.*not.*support",
+        RegexOption.IGNORE_CASE,
+    ).containsMatchIn(errorText)
+
+internal fun shouldRetryWithoutTemperature(status: Int, errorText: String): Boolean {
+    if (status != 400) return false
+    val error = runCatching {
+        JsonParser.parseString(errorText).asJsonObject.getAsJsonObject("error")
+    }.getOrNull()
+    if (error?.optionalText("param")?.equals("temperature", ignoreCase = true) == true) return true
+    val message = error?.optionalText("message").orEmpty().ifBlank { errorText }
+    return Regex(
+        "unsupported parameter[^\\n]*temperature|temperature[^\\n]*not supported",
+        RegexOption.IGNORE_CASE,
+    ).containsMatchIn(message)
+}
+
+internal fun isFreshConnectionRetryable(error: Throwable): Boolean =
+    generateSequence(error) { it.cause }
+        .filterIsInstance<SocketException>()
+        .mapNotNull { it.message?.lowercase() }
+        .any { message ->
+            message.contains("software caused connection abort") ||
+                message.contains("connection aborted")
+        }
+
+internal data class ResponsesStreamDelta(
+    val thought: String = "",
+    val text: String = "",
+    val completed: Boolean = false,
+    val toolId: String = "",
+    val toolName: String = "",
+    val toolArguments: String = "",
+    val toolArgumentsDelta: String = "",
+    val toolKey: String = "",
+)
+
+internal fun parseResponsesStreamDelta(payload: String, sseEvent: String = ""): ResponsesStreamDelta {
+    val json = runCatching { JsonParser.parseString(payload).asJsonObject }.getOrNull()
+        ?: return ResponsesStreamDelta()
+    val type = sseEvent.ifBlank { json.optionalText("type") }
+    return when (type) {
+        "response.reasoning_summary_text.delta" -> ResponsesStreamDelta(thought = json.optionalText("delta"))
+        "response.reasoning_summary_text.done" -> ResponsesStreamDelta(thought = json.optionalText("text"))
+        "response.output_text.delta" -> ResponsesStreamDelta(text = json.optionalText("delta"))
+        "response.output_item.added", "response.output_item.done" -> {
+            val item = json.getAsJsonObject("item")?.takeIf { it.optionalText("type") == "function_call" }
+            ResponsesStreamDelta(
+                toolId = item?.optionalText("call_id").orEmpty().ifBlank { item?.optionalText("id").orEmpty() },
+                toolName = item?.optionalText("name").orEmpty(),
+                toolArguments = item?.optionalText("arguments").orEmpty(),
+                toolKey = item?.optionalText("id").orEmpty()
+                    .ifBlank { item?.optionalText("call_id").orEmpty() }
+                    .ifBlank { json.optionalText("output_index") },
+            )
+        }
+        "response.function_call_arguments.delta" -> ResponsesStreamDelta(
+            toolArgumentsDelta = json.optionalText("delta"),
+            toolKey = json.optionalText("item_id")
+                .ifBlank { json.optionalText("call_id") }
+                .ifBlank { json.optionalText("output_index") },
+        )
+        "response.completed" -> ResponsesStreamDelta(completed = true)
+        else -> ResponsesStreamDelta()
+    }
 }
 
 /** OpenAI 兼容 chat/completions 客户端（流式文本/思考 + function calling） */
-class ApiClient {
-
-    private val client = OkHttpClient.Builder()
+class ApiClient(
+    private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)
+        // A stream may run for a long time, but no provider response may be
+        // silent longer than this. OkHttp resets this timeout for every read,
+        // which gives the required "since last response" semantics.
+        .readTimeout(0, TimeUnit.MILLISECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
-        .build()
+        .build(),
+) {
+
+    companion object {
+        internal const val SSE_IDLE_TIMEOUT_MS = 0L
+    }
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
+    private val temperatureUnsupported = mutableSetOf<String>()
 
     suspend fun chat(
         config: ApiConfig,
@@ -101,16 +239,22 @@ class ApiClient {
                 }
             }
 
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("Authorization", "Bearer ${config.apiKey}")
-                .addHeader("Content-Type", "application/json")
-                .post(body.toString().toRequestBody(jsonMedia))
-                .build()
-
-            client.newCall(request).execute().use { resp ->
+            executeProviderRequest(url, config.apiKey, body).use { resp ->
                 if (!resp.isSuccessful) {
                     val text = resp.body?.string() ?: ""
+                    if (shouldRetryWithResponses(resp.code, text)) {
+                        return@runCatching executeResponses(
+                            config = config,
+                            base = base,
+                            messages = messages,
+                            tools = tools,
+                            intelligence = intelligence,
+                            thinkingTierMap = thinkingTierMap,
+                            maxOutputTokens = maxOutputTokens,
+                            onThoughtDelta = onThoughtDelta,
+                            onTextDelta = onTextDelta,
+                        )
+                    }
                     error("HTTP ${resp.code}: ${text.take(200)}")
                 }
                 val source = resp.body?.source() ?: error("Empty response body")
@@ -122,6 +266,9 @@ class ApiClient {
                 val fallbackJson = StringBuilder()
                 while (!source.exhausted()) {
                     val line = source.readUtf8Line() ?: break
+                    // Count any valid SSE line, including legacy heartbeat or
+                    // event lines, as provider activity. The socket timeout
+                    // above then measures silence after the latest activity.
                     if (!line.startsWith("data:")) {
                         if (line.isNotBlank()) fallbackJson.append(line)
                         continue
@@ -134,13 +281,13 @@ class ApiClient {
                         ?.optJSONObject("delta")
                         ?: continue
                     val streamed = parseChatStreamTextDelta(payload)
-                    if (streamed.thought.isNotBlank()) {
-                        reasoning.append(streamed.thought)
-                        onThoughtDelta(streamed.thought)
+                    val thoughtDelta = appendCompatibleStreamValue(reasoning, streamed.thought)
+                    if (thoughtDelta.isNotBlank()) {
+                        onThoughtDelta(thoughtDelta)
                     }
-                    if (streamed.text.isNotBlank()) {
-                        content.append(streamed.text)
-                        onTextDelta(streamed.text)
+                    val textDelta = appendCompatibleStreamValue(content, streamed.text)
+                    if (textDelta.isNotBlank()) {
+                        onTextDelta(textDelta)
                     }
                     delta.optJSONArray("tool_calls")?.let { toolCalls ->
                         for (i in 0 until toolCalls.length()) {
@@ -156,12 +303,9 @@ class ApiClient {
                 if (fallbackJson.isNotBlank() && content.isEmpty() && reasoning.isEmpty()) {
                     val message = JSONObject(fallbackJson.toString())
                         .getJSONArray("choices").getJSONObject(0).getJSONObject("message")
-                    val text = message.optString("content")
-                    val thought = sequenceOf("reasoning_content", "reasoning", "thinking")
-                        .map(message::optString)
-                        .firstOrNull(String::isNotBlank)
-                        .orEmpty()
-                    content.append(text)
+                    val text = message.optionalText("content")
+                    val thought = message.firstText("reasoning_content", "reasoning", "thinking", "analysis")
+                    content.append(text.takeUnless { it == "null" }.orEmpty())
                     reasoning.append(thought)
                     if (thought.isNotBlank()) onThoughtDelta(thought)
                     if (text.isNotBlank()) onTextDelta(text)
@@ -183,6 +327,252 @@ class ApiClient {
                     )
                 }
                 ChatResponse(content.toString(), reasoning.toString(), calls)
+            }
+        }
+    }
+
+    private suspend fun executeResponses(
+        config: ApiConfig,
+        base: String,
+        messages: List<ChatMessage>,
+        tools: List<JSONObject>,
+        intelligence: String,
+        thinkingTierMap: Map<String, String>,
+        maxOutputTokens: Int?,
+        onThoughtDelta: suspend (String) -> Unit,
+        onTextDelta: suspend (String) -> Unit,
+    ): ChatResponse {
+        val endpointBase = base
+            .removeSuffix("/chat/completions")
+            .removeSuffix("/responses")
+            .trimEnd('/')
+        val url = "$endpointBase/responses"
+        val (temperature, defaultMaxTokens, _) = intelligenceConfig(intelligence)
+        val body = JSONObject().apply {
+            put("model", config.model)
+            put("stream", true)
+            put("temperature", temperature)
+            put("max_output_tokens", maxOutputTokens?.coerceAtLeast(1) ?: defaultMaxTokens)
+            reasoningEffort(config.model, endpointBase, intelligence, thinkingTierMap)?.let { effort ->
+                put("reasoning", JSONObject().put("effort", effort).put("summary", "auto"))
+            }
+            put("input", responsesInput(messages))
+            if (tools.isNotEmpty()) {
+                put("tools", JSONArray().apply {
+                    tools.forEach { tool ->
+                        val function = tool.optJSONObject("function") ?: return@forEach
+                        put(JSONObject().apply {
+                            put("type", "function")
+                            put("name", function.optString("name"))
+                            put("description", function.optString("description"))
+                            put("parameters", function.optJSONObject("parameters") ?: JSONObject())
+                        })
+                    }
+                })
+                put("tool_choice", "auto")
+                put("parallel_tool_calls", true)
+            }
+        }
+        executeProviderRequest(url, config.apiKey, body, acceptEventStream = true).use { resp ->
+            if (!resp.isSuccessful) {
+                val text = resp.body?.string().orEmpty()
+                error("HTTP ${resp.code}: ${text.take(200)}")
+            }
+            val source = resp.body?.source() ?: error("Empty response body")
+            val content = StringBuilder()
+            val reasoning = StringBuilder()
+            val calls = linkedMapOf<String, ToolCallAccumulator>()
+            val fallbackJson = StringBuilder()
+            var pendingEvent = ""
+            var completed = false
+            var streamError = ""
+            while (!source.exhausted()) {
+                val line = source.readUtf8Line() ?: break
+                // Provider reads have no response deadline. Cancellation and
+                // transport/provider errors are the only terminal conditions.
+                when {
+                    line.startsWith("event:") -> pendingEvent = line.removePrefix("event:").trim()
+                    line.startsWith("data:") -> {
+                        val payload = line.removePrefix("data:").trim()
+                        if (payload.isBlank() || payload == "[DONE]") continue
+                        val parsed = parseResponsesStreamDelta(payload, pendingEvent)
+                        pendingEvent = ""
+                        val thoughtDelta = appendCompatibleStreamValue(reasoning, parsed.thought)
+                        if (thoughtDelta.isNotBlank()) onThoughtDelta(thoughtDelta)
+                        val textDelta = appendCompatibleStreamValue(content, parsed.text)
+                        if (textDelta.isNotBlank()) onTextDelta(textDelta)
+                        if (parsed.toolName.isNotBlank()) {
+                            mergeResponsesTool(
+                                calls,
+                                parsed.toolKey,
+                                parsed.toolId,
+                                parsed.toolName,
+                                parsed.toolArguments,
+                            )
+                        }
+                        if (parsed.toolArgumentsDelta.isNotEmpty()) {
+                            calls.getOrPut(parsed.toolKey) { ToolCallAccumulator(id = parsed.toolKey) }
+                                .arguments.append(parsed.toolArgumentsDelta)
+                        }
+                        completed = completed || parsed.completed
+                        val eventJson = runCatching { JSONObject(payload) }.getOrNull()
+                        val eventType = eventJson?.optString("type").orEmpty()
+                        if (eventType == "response.failed" || eventType == "response.incomplete" || eventType == "error") {
+                            streamError = eventJson?.optJSONObject("error")?.optionalText("message")
+                                .orEmpty().ifBlank { eventJson?.optionalText("message").orEmpty() }
+                                .ifBlank { eventType }
+                        }
+                    }
+                    line.isNotBlank() -> fallbackJson.append(line)
+                }
+            }
+            if (streamError.isNotBlank()) error(streamError)
+            if (fallbackJson.isNotBlank() && content.isEmpty() && calls.isEmpty()) {
+                mergeNonStreamingResponses(fallbackJson.toString(), content, reasoning, calls)
+                if (reasoning.isNotEmpty()) onThoughtDelta(reasoning.toString())
+                if (content.isNotEmpty()) onTextDelta(content.toString())
+                completed = true
+            }
+            if (!completed && content.isEmpty() && calls.isEmpty()) error("Responses stream ended before response.completed")
+            return ChatResponse(
+                content = content.toString(),
+                reasoningContent = reasoning.toString(),
+                toolCalls = calls.values.map { it.toToolCall() }.filter { it.name.isNotBlank() },
+            )
+        }
+    }
+
+    private fun executeProviderRequest(
+        url: String,
+        apiKey: String,
+        originalBody: JSONObject,
+        acceptEventStream: Boolean = false,
+    ): Response {
+        val capabilityKey = "$url|${originalBody.optString("model")}"
+        val prepared = JSONObject(originalBody.toString())
+        if (synchronized(temperatureUnsupported) { capabilityKey in temperatureUnsupported }) {
+            prepared.remove("temperature")
+        }
+
+        fun execute(body: JSONObject): Response {
+            val builder = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer $apiKey")
+                .addHeader("Content-Type", "application/json")
+            if (acceptEventStream) builder.addHeader("Accept", "text/event-stream")
+            val request = builder.post(body.toString().toRequestBody(jsonMedia)).build()
+            return try {
+                client.newCall(request).execute()
+            } catch (error: IOException) {
+                if (!isFreshConnectionRetryable(error)) throw error
+                // A package/desktop update can leave the first provider call
+                // bound to an aborted keep-alive route. No HTTP response was
+                // obtained, so evict that route and retry exactly once.
+                client.connectionPool.evictAll()
+                client.newCall(request).execute()
+            }
+        }
+
+        var response = execute(prepared)
+        if (prepared.has("temperature") && response.code == 400) {
+            val errorText = response.peekBody(256L * 1024L).string()
+            if (shouldRetryWithoutTemperature(response.code, errorText)) {
+                synchronized(temperatureUnsupported) { temperatureUnsupported += capabilityKey }
+                response.close()
+                prepared.remove("temperature")
+                response = execute(prepared)
+            }
+        }
+        return response
+    }
+
+    private data class ToolCallAccumulator(
+        var id: String = "",
+        var name: String = "",
+        val arguments: StringBuilder = StringBuilder(),
+    ) {
+        fun toToolCall() = ToolCall(id = id, name = name, arguments = arguments.toString().ifBlank { "{}" })
+    }
+
+    private fun responsesInput(messages: List<ChatMessage>): JSONArray = JSONArray().apply {
+        messages.forEachIndexed { index, message ->
+            when (message.role) {
+                "tool" -> put(JSONObject().apply {
+                    put("type", "function_call_output")
+                    put("call_id", message.toolCallId.ifBlank { "call_newmark_recovered_$index" })
+                    put("output", message.content)
+                })
+                "assistant" -> {
+                    if (message.content.isNotBlank()) put(JSONObject().put("role", "assistant").put("content", message.content))
+                    message.toolCalls.forEach { call ->
+                        put(JSONObject().apply {
+                            put("type", "function_call")
+                            put("call_id", call.id)
+                            put("name", call.name)
+                            put("arguments", call.arguments.ifBlank { "{}" })
+                        })
+                    }
+                }
+                else -> put(JSONObject().put("role", if (message.role == "system") "system" else "user").put("content", message.content))
+            }
+        }
+    }
+
+    private fun mergeResponsesToolItem(
+        calls: MutableMap<String, ToolCallAccumulator>,
+        rawKey: String,
+        item: JSONObject,
+    ) {
+        mergeResponsesTool(
+            calls = calls,
+            rawKey = rawKey.ifBlank { item.optString("id") }.ifBlank { item.optString("call_id") },
+            id = item.optString("call_id").ifBlank { item.optString("id") },
+            name = item.optString("name"),
+            arguments = item.optionalText("arguments"),
+        )
+    }
+
+    private fun mergeResponsesTool(
+        calls: MutableMap<String, ToolCallAccumulator>,
+        rawKey: String,
+        id: String,
+        name: String,
+        arguments: String,
+    ) {
+        val key = rawKey.ifBlank { id }
+        val call = calls.getOrPut(key) { ToolCallAccumulator() }
+        call.id = id.ifBlank { call.id }.ifBlank { key }
+        call.name = name.ifBlank { call.name }
+        if (arguments.isNotBlank() && arguments != call.arguments.toString()) {
+            call.arguments.clear()
+            call.arguments.append(arguments)
+        }
+    }
+
+    private fun mergeNonStreamingResponses(
+        payload: String,
+        content: StringBuilder,
+        reasoning: StringBuilder,
+        calls: MutableMap<String, ToolCallAccumulator>,
+    ) {
+        val root = JSONObject(payload)
+        root.optionalText("output_text").takeIf(String::isNotBlank)?.let(content::append)
+        root.optJSONArray("output")?.let { output ->
+            for (index in 0 until output.length()) {
+                val item = output.optJSONObject(index) ?: continue
+                when (item.optString("type")) {
+                    "reasoning" -> item.optJSONArray("summary")?.let { summaries ->
+                        for (summaryIndex in 0 until summaries.length()) {
+                            reasoning.append(summaries.optJSONObject(summaryIndex)?.optionalText("text").orEmpty())
+                        }
+                    }
+                    "message" -> item.optJSONArray("content")?.let { blocks ->
+                        for (blockIndex in 0 until blocks.length()) {
+                            content.append(blocks.optJSONObject(blockIndex)?.firstText("text", "refusal", "content").orEmpty())
+                        }
+                    }
+                    "function_call" -> mergeResponsesToolItem(calls, item.optString("id"), item)
+                }
             }
         }
     }

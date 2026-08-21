@@ -86,6 +86,18 @@ class InputComposerAndModelMenuContractTest {
     }
 
     @Test
+    fun transientRemoteConnectionStatesDoNotReplaceTheFocusedConversationSurface() {
+        assertTrue(shouldPresentRemoteConversation(preferLocal = false, hasPairedDevice = true))
+        assertTrue(!shouldPresentRemoteConversation(preferLocal = true, hasPairedDevice = true))
+        assertTrue(!shouldPresentRemoteConversation(preferLocal = false, hasPairedDevice = false))
+
+        val appSource = File("src/main/java/com/newmark/mobile/ui/NewmarkApp.kt").readText()
+        assertTrue(appSource.contains("shouldPresentRemoteConversation(preferLocal, linkVm.pairInfo != null)"))
+        assertTrue(!appSource.contains("linkVm.linkStatus == LinkStatus.Connected || linkVm.linkStatus == LinkStatus.Reconnecting"))
+        assertTrue(appSource.contains("if (linkVm.linkStatus == LinkStatus.Disconnected) linkVm.retryConnect()"))
+    }
+
+    @Test
     fun sameNamedModelsRemainBoundToTheirProviderDeployment() {
         val alpha = ModelOption("provider-alpha", "shared-model", providerLabel = "Alpha", displayName = "Shared")
         val beta = ModelOption("provider-beta", "shared-model", providerLabel = "Beta", displayName = "Shared")

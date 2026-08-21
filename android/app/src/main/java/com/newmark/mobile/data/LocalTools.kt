@@ -126,6 +126,37 @@ object LocalTools {
             listOf("action"),
         ),
         function(
+            "build_history_query",
+            "只读读取当前对话历史 Build block 的工具活动、状态和最终摘要；不会恢复或重新执行历史任务",
+            mapOf(
+                "history_index" to prop("number", "按最新到最旧的历史序号，1 表示上一条 Build block"),
+                "run_id" to prop("string", "历史 Build block 的 run id，可替代 history_index"),
+                "max_events" to prop("number", "最多返回活动条数，1 到 200"),
+                "max_chars" to prop("number", "每条活动最多返回字符数，100 到 4000"),
+            ),
+            emptyList(),
+        ),
+        function(
+            "context_compress",
+            "主动压缩当前模型历史上下文；显示历史不变，force=true 可在未达到自动阈值时执行",
+            mapOf(
+                "force" to prop("boolean", "是否强制压缩"),
+                "keep_recent" to prop("number", "保留最近消息数，2 到 60；移动端按安全窗口裁剪"),
+            ),
+            emptyList(),
+        ),
+        function(
+            "context_history_manage",
+            "管理上下文压缩记录：status/search/read；只读操作不会改变历史，恢复需明确 restore_id 且不得覆盖最近上下文",
+            mapOf(
+                "action" to enumProp(listOf("status", "search", "read"), "操作"),
+                "query" to prop("string", "search 的关键词"),
+                "restore_id" to prop("string", "压缩记录 id"),
+                "limit" to prop("number", "search 返回条数"),
+            ),
+            listOf("action"),
+        ),
+        function(
             "calendar_create",
             "打开 Android 默认日程 App 的新建日程界面，由用户检查并确认保存；无需读取或写入日历权限",
             mapOf(

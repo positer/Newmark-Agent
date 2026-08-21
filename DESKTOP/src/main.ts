@@ -3502,9 +3502,6 @@ if (isViewerArg) {
         proxyEnabled: agent.config.getBool('proxy', 'enabled'),
         proxyUrl: agent.config.getStr('proxy', 'url'),
         proxyAuth: agent.config.getStr('proxy', 'auth'),
-        gradientColors: agent.config.get<string[]>('ui', 'gradient_colors') || [],
-        gradientSpeed: agent.config.getNum('ui', 'gradient_speed'),
-        gradientWidth: agent.config.getNum('ui', 'gradient_width'),
         glassAlpha: agent.config.getNum('ui', 'glass_alpha') ?? 0.85,
         leftPanelCollapsed: agent.config.getBool('ui', 'left_panel_collapsed'),
         rightPanelCollapsed: agent.config.getBool('ui', 'right_panel_collapsed'),
@@ -3674,9 +3671,6 @@ if (isViewerArg) {
         } else {
           for (const [key, value] of Object.entries(cfg || {})) {
             switch (key) {
-              case 'gradientColors': agent.config.set('ui', 'gradient_colors', value); break;
-              case 'gradientSpeed': agent.config.set('ui', 'gradient_speed', value); break;
-              case 'gradientWidth': agent.config.set('ui', 'gradient_width', value); break;
               case 'glassAlpha': agent.config.set('ui', 'glass_alpha', value); break;
               case 'theme': agent.config.set('ui', 'dark_mode', normalizeUiTheme(value)); break;
               case 'backgroundColor': agent.config.set('ui', 'background_color', normalizeUiBackgroundColor(value)); break;

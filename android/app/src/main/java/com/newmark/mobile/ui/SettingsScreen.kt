@@ -77,7 +77,6 @@ import com.newmark.mobile.ui.components.NewmarkShapeLarge
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.LocalThemeMode
-import com.newmark.mobile.ui.theme.MarqueeColors
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkAccent
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
@@ -239,7 +238,6 @@ private fun MainSettings(
     ) {
         item { DevicePairSection(linkVm, onOpenDeviceManage) }
         item { AppearanceSection() }
-        item { MarqueeColorsSection() }
         item { ProvidersEntry(onClick = onOpenProviders) }
     }
 }
@@ -496,30 +494,6 @@ private fun AppearanceSection() {
                 ),
             )
         }
-    }
-}
-
-// ---- 动态彩条颜色 ----
-@Composable
-private fun MarqueeColorsSection() {
-    val p = LocalNewmarkPalette.current
-    SectionCard(title = "动态彩条颜色") {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MarqueeColors.forEach { color ->
-                Box(
-                    modifier = Modifier
-                        .size(26.dp)
-                        .clip(CircleShape)
-                        .background(color),
-                )
-            }
-        }
-        Text(
-            text = "运行中状态的流动描边配色，可在完整版中逐色调节",
-            fontSize = 10.5.sp,
-            color = p.textTertiary,
-            modifier = Modifier.padding(top = 8.dp),
-        )
     }
 }
 

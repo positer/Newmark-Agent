@@ -19,19 +19,22 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.newmark.mobile.ui.theme.MarqueeColors
 
 /** 跑马灯渐变刷：与 PC-GUI 完全一致——conic-gradient 绕中心旋转（3s 一圈，4 色循环） */
+private data class MarqueeAnimation(val brush: Brush, val angle: Float)
+
 @Composable
-fun rememberMarqueeBrush(periodMs: Int = 3000): Brush {
+private fun rememberMarqueeAnimation(): MarqueeAnimation {
     val transition = rememberInfiniteTransition(label = "marquee")
     val angle by transition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(
-            animation = tween(periodMs, easing = LinearEasing),
+            animation = tween(3000, easing = LinearEasing),
             repeatMode = RepeatMode.Restart,
         ),
         label = "marqueeAngle",
@@ -41,27 +44,9 @@ fun rememberMarqueeBrush(periodMs: Int = 3000): Brush {
         val n = MarqueeColors.size
         MarqueeColors.mapIndexed { i, c -> i.toFloat() / n to c } + (1f to MarqueeColors.first())
     }
-    val offset = angle / 360f
-    val n = baseStops.size
-    val shifted = ArrayList<Pair<Float, Color>>(n)
-    for (i in baseStops.indices) {
-        val base = baseStops[i]
-        val f = if (base.first >= 1f) {
-            1f // 闭合 stop 始终留在 360°
-        } else {
-            val v = base.first + offset
-            if (v >= 1f) v - 1f else v
-        }
-        shifted.add(f to base.second)
-    }
-    // 升序序列按 offset 旋转：从第一个取模回绕处断开重排（等价于排序，无比较开销）
-    var split = 0
-    for (i in baseStops.indices) {
-        if (baseStops[i].first >= 1f) break
-        if (baseStops[i].first + offset >= 1f) { split = i; break }
-    }
-    val stops = if (split == 0) shifted else shifted.subList(split, n) + shifted.subList(0, split)
-    return Brush.sweepGradient(*stops.toTypedArray())
+    // Keep the conic stops immutable. Reordering stops at the 0/360 boundary
+    // creates a visible jump; rotating the draw scope preserves continuity.
+    return MarqueeAnimation(Brush.sweepGradient(*baseStops.toTypedArray()), angle)
 }
 
 /**
@@ -80,23 +65,23 @@ fun rememberMarqueeBrush(periodMs: Int = 3000): Brush {
 @Composable
 fun MarqueeBorder(
     cornerRadius: Dp,
-    width: Dp = 2.dp,
     modifier: Modifier = Modifier,
-    periodMs: Int = 3000,
     content: @Composable () -> Unit,
 ) {
-    val brush = rememberMarqueeBrush(periodMs)
+    val animation = rememberMarqueeAnimation()
     Box(
         modifier = modifier.drawBehind {
-            val stroke = width.toPx()
+            val stroke = 2.dp.toPx()
             val radius = cornerRadius.toPx()
-            drawRoundRect(
-                brush = brush,
-                topLeft = Offset(-stroke / 2f, -stroke / 2f),
-                size = Size(size.width + stroke, size.height + stroke),
-                cornerRadius = CornerRadius(radius + stroke / 2f, radius + stroke / 2f),
-                style = Stroke(width = stroke),
-            )
+            rotate(animation.angle, pivot = center) {
+                drawRoundRect(
+                    brush = animation.brush,
+                    topLeft = Offset(-stroke / 2f, -stroke / 2f),
+                    size = Size(size.width + stroke, size.height + stroke),
+                    cornerRadius = CornerRadius(radius + stroke / 2f, radius + stroke / 2f),
+                    style = Stroke(width = stroke),
+                )
+            }
         },
     ) {
         content()

@@ -22,11 +22,11 @@ class MobileApiClient {
     private val client = OkHttpClient.Builder()
         // A missing desktop listener is the normal mobile-first startup case.
         // Keep TCP probing bounded so a socket opened before the PC service
-        // exists cannot consume an entire reconnect period. Long provider and
-        // conversation responses remain governed by the independent 180 s
-        // read timeout below.
+        // exists cannot consume an entire reconnect period. Conversation
+        // responses have no automatic read deadline; cancellation and
+        // transport errors remain the only stop conditions.
         .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(180, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
     /** 供 SSE 长连接复用（读超时由流式消费控制） */

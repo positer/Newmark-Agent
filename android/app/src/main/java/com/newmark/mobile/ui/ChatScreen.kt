@@ -781,9 +781,18 @@ private val PcColorsLight = PcColors(
 
 private val LocalPcColors = staticCompositionLocalOf { PcColorsDark }
 
-/** 处理时长格式化：<1s 显示 ms，否则保留一位小数的 s */
-private fun formatDuration(ms: Long): String =
-    if (ms < 1000) "${ms}ms" else "${ms / 1000}.${(ms % 1000) / 100}s"
+/** PC 同款处理时长：满 60s 进 min，满 60min 进 h；未满一秒显示 1s。 */
+private fun formatDuration(ms: Long): String {
+    val seconds = maxOf(1L, ms.coerceAtLeast(0L) / 1000L)
+    val hours = seconds / 3600L
+    val minutes = (seconds % 3600L) / 60L
+    val remainder = seconds % 60L
+    return when {
+        hours > 0L -> "${hours}h ${minutes.toString().padStart(2, '0')}m ${remainder.toString().padStart(2, '0')}s"
+        minutes > 0L -> "${minutes}m ${remainder.toString().padStart(2, '0')}s"
+        else -> "${remainder}s"
+    }
+}
 
 /** 对齐 PC publicToolNameForUi：取第一行、去 think 标签、trim、截断 */
 private fun publicToolNameForUi(value: String): String =

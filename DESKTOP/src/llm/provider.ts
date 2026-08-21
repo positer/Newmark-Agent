@@ -74,7 +74,9 @@ interface NodeHttpResult {
 // Keep provider requests below the release-harness/user-visible command
 // deadline. A provider that does not answer must produce one bounded error;
 // it must not restart the same request through every Windows transport.
-const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS = 90_000;
+// Provider responses are intentionally unbounded. User cancellation, transport
+// errors, and tool-specific limits remain the only automatic stop conditions.
+const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS = 0;
 const MIN_PROVIDER_REQUEST_TIMEOUT_MS = 50;
 
 function providerTimeoutError(timeoutMs: number): Error {
@@ -136,14 +138,16 @@ export class LLMProvider {
   ) {}
 
   private effectiveRequestTimeout(timeoutMs: number): number {
-    const requested = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS;
+    const requested = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 0;
     const configured = Number.isFinite(this.requestTimeoutMs) && this.requestTimeoutMs > 0
       ? this.requestTimeoutMs
-      : DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS;
+      : 0;
+    if (requested <= 0 || configured <= 0) return 0;
     return Math.max(MIN_PROVIDER_REQUEST_TIMEOUT_MS, Math.min(requested, configured));
   }
 
   private async withRequestTimeout<T>(promise: Promise<T>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
+    if (timeoutMs <= 0) return await abortable(promise, signal);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(providerTimeoutError(timeoutMs)), timeoutMs);
@@ -379,7 +383,9 @@ export class LLMProvider {
     const forwardAbort = () => abort.abort(signal?.reason);
     if (signal?.aborted) forwardAbort();
     else signal?.addEventListener('abort', forwardAbort, { once: true });
-    const timer = setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout);
+    const timer = effectiveTimeout > 0
+      ? setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout)
+      : undefined;
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -413,7 +419,9 @@ export class LLMProvider {
   ): Promise<ProviderHttpResponse> {
     const effectiveTimeout = this.effectiveRequestTimeout(timeoutMs);
     const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout);
+    const timer = effectiveTimeout > 0
+      ? setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout)
+      : undefined;
     try {
       const response = await fetch(url, { method: 'GET', headers, signal: abort.signal });
       return response;
@@ -497,9 +505,11 @@ export class LLMProvider {
           else fail(new Error('Node HTTP response closed before completion'));
         });
       });
-      req.setTimeout(effectiveTimeout, () => {
-        req.destroy(providerTimeoutError(effectiveTimeout));
-      });
+      if (effectiveTimeout > 0) {
+        req.setTimeout(effectiveTimeout, () => {
+          req.destroy(providerTimeoutError(effectiveTimeout));
+        });
+      }
       req.on('error', reject);
       const onAbort = () => req.destroy(abortFailure(signal));
       if (signal?.aborted) onAbort();
@@ -553,7 +563,9 @@ export class LLMProvider {
         '  $raw = $headerJson | ConvertFrom-Json',
         '  foreach ($p in $raw.PSObject.Properties) { $headers[$p.Name] = [string]$p.Value }',
         '}',
-        `'$params = @{ Uri = $uri; Method = $method; Headers = $headers; UseBasicParsing = $true; TimeoutSec = ${Math.max(1, Math.ceil(effectiveTimeout / 1000))} }`,
+        effectiveTimeout > 0
+          ? `$params = @{ Uri = $uri; Method = $method; Headers = $headers; UseBasicParsing = $true; TimeoutSec = ${Math.ceil(effectiveTimeout / 1000)} }`
+          : '$params = @{ Uri = $uri; Method = $method; Headers = $headers; UseBasicParsing = $true }',
         'if ($method -eq "POST") { $params["Body"] = $bodyJson }',
         'if ($method -eq "POST") { $params["ContentType"] = "application/json; charset=utf-8" }',
         '$resp = Invoke-WebRequest @params',
@@ -579,11 +591,11 @@ export class LLMProvider {
       };
       if (signal?.aborted) onAbort();
       else signal?.addEventListener('abort', onAbort, { once: true });
-      const timer = setTimeout(() => {
-        child.kill();
-        cleanup();
-        reject(providerTimeoutError(effectiveTimeout));
-      }, effectiveTimeout + 5000);
+      const timer = effectiveTimeout > 0 ? setTimeout(() => {
+          child.kill();
+          cleanup();
+          reject(providerTimeoutError(effectiveTimeout));
+        }, effectiveTimeout + 5000) : undefined;
       child.stdout.setEncoding('utf8');
       child.stderr.setEncoding('utf8');
       child.stdout.on('data', chunk => { stdout += chunk; });
@@ -1130,7 +1142,9 @@ export class LLMProvider {
         if (signal?.aborted) forwardAbort();
         else signal?.addEventListener('abort', forwardAbort, { once: true });
         const effectiveTimeout = this.effectiveRequestTimeout(120000);
-        const timer = setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout);
+        const timer = effectiveTimeout > 0
+          ? setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout)
+          : undefined;
         try {
           try {
             let response = await fetch(request.url, {
@@ -1301,7 +1315,9 @@ export class LLMProvider {
     if (signal?.aborted) forwardAbort();
     else signal?.addEventListener('abort', forwardAbort, { once: true });
     const effectiveTimeout = this.effectiveRequestTimeout(120000);
-    const timeout = setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout);
+    const timeout = effectiveTimeout > 0
+      ? setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout)
+      : undefined;
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
     try {

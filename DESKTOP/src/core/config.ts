@@ -125,7 +125,9 @@ export class ConfigManager {
           this.backupConfig(cp, 'invalid-shape');
           return this.writeRecoveredConfig(cp);
         }
-        if (migrateProviderIdsInConfig(normalized)) {
+        const providerIdsMigrated = migrateProviderIdsInConfig(normalized);
+        const marqueeConfigRemoved = removeDeprecatedMarqueeConfig(normalized);
+        if (providerIdsMigrated || marqueeConfigRemoved) {
           // Provider ids are routing identities, so legacy/malformed catalogs must
           // not wait for an unrelated settings save before becoming collision-safe.
           try {
@@ -490,6 +492,19 @@ function normalizeConfigShape(raw: unknown, withDefaults: boolean): Record<strin
     }
   }
   return base;
+}
+
+function removeDeprecatedMarqueeConfig(config: Record<string, Record<string, ConfigEntry>>): boolean {
+  const ui = config.ui;
+  if (!ui) return false;
+  let changed = false;
+  for (const key of ['gradient_colors', 'gradient_speed', 'gradient_width']) {
+    if (Object.prototype.hasOwnProperty.call(ui, key)) {
+      delete ui[key];
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 function isConfigEntry(value: unknown): value is ConfigEntry {
@@ -934,9 +949,6 @@ export function defaultConfig(): Record<string, Record<string, ConfigEntry>> {
       auto_download: { _description: "Auto-download skills", _type: "choice", _values: ["aggressive","conservative","disabled"], value: "conservative" },
     },
     ui: {
-      gradient_colors: { _description: "Gradient colors (hex)", _type: "array", value: ["#00ff88","#00ccff","#aa44ff","#ff4488"] },
-      gradient_speed: { _description: "Animation speed 1-5", _type: "range", _min:1, _max:5, value: 2 },
-      gradient_width: { _description: "Border width", _type: "integer", _min:1, _max:4, value: 2 },
       glass_alpha: { _description: "Glass opacity", _type: "range", _min:0, _max:1, value: 0.85 },
       show_mode_label: { _description: "Show mode on hover", _type: "boolean", value: true },
       left_panel_collapsed: { _description: "Left panel collapsed", _type: "boolean", value: false },

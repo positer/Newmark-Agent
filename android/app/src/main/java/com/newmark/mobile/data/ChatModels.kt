@@ -166,6 +166,7 @@ data class LocalQueuedMessage(
 
 /** PC contextCompression 的本地持久化投影；显示历史永远不被它改写。 */
 data class LocalContextCompression(
+    val id: String = "",
     val at: Long = 0L,
     val originalMessages: Int = 0,
     val compressedMessages: Int = 0,
@@ -197,6 +198,8 @@ data class LocalConversation(
     /** 仅发送给模型的耐久上下文；空列表表示从完整显示历史首次建立。 */
     val modelContext: List<ChatMessage> = emptyList(),
     val contextCompression: LocalContextCompression? = null,
+    /** 压缩历史只保存摘要元数据；原始显示历史永远保留在 messages。 */
+    val compressionHistory: List<LocalContextCompression> = emptyList(),
     /** null 表示尚未产生分支；旧数据天然兼容并按单根页读取。 */
     val branchTree: LocalConversationBranchTree? = null,
 )

@@ -1,5 +1,39 @@
 # Newmark Agent Overview
 
+## dev-0.5.3 remote reconnection and error classification fix (2026-08-21)
+
+- Remote transcript ownership is now based on paired-device intent, not transient `Connecting`/`Reconnecting`/`Disconnected` status. A reconnect keeps the focused remote conversation mounted instead of replacing it with the local conversation.
+- A disconnected remote surface retains its selected workspace/conversation IDs. The reconnect action retries the link in place; switching to local remains explicit.
+- Local provider transport retries exactly once after a fresh `Software caused connection abort` before any HTTP response is obtained. The stale OkHttp connection pool is evicted first, so a retry cannot duplicate a request that already produced a response.
+- Local Agent error text mentions API configuration only when `ApiConfig.isReady` is false. Configured-provider network, provider, tool, and parsing failures preserve their actual error.
+- Regression contracts cover remote surface ownership, one-shot connection-abort recovery, and error classification. Full Android unit tests, Vital lint, R8/resource shrinking, and Release assembly passed.
+- Final APK: `android/app/build/outputs/apk/release/app-release.apk`, 45,841,568 bytes, SHA-256 `2B454650D9359AEAB65F08892CCCC8457AC303B2734FEEBC996ACBE704CACDC2`.
+
+## dev-0.5.3 mobile duration display parity (2026-08-21)
+
+- Mobile processed duration now matches PC `formatWorkDuration`: `1s..59s`, then `1m 00s..59m 59s`, then `1h 00m 00s` and above. Sub-second values remain `1s`, and minute/second fields are zero-padded exactly like PC.
+- `MobileRuntimeParityContractTest` locks the hour/minute decomposition and zero-padding contract. Android Debug unit tests pass after the change.
+
+## dev-0.5.3 mobile local Agent runtime parity and background stability (2026-08-21)
+
+- Local Agent processing duration now uses integer seconds with a minimum display of `1s`, matching the PC presentation contract.
+- Android provider SSE uses a 120-second read-idle timeout. OkHttp resets this deadline on each received stream line, so a long-running response is not timed out from its start time; only silence after the latest provider response can time out.
+- Local Agent jobs hold a short-lived `PARTIAL_WAKE_LOCK` from job entry through cleanup, allowing screen-off/background provider and tool work to continue without a permanent battery lock. The lock is released in `finally`.
+- Mobile marquee borders now use one immutable closed conic gradient (`g1...g4,g1`) and rotate the draw scope. This removes both stop-reordering jumps and the non-interpolated color seam at the 0/360-degree closure, preserving the PC 3-second cycle and 2dp border.
+- Added runtime parity contracts for duration, idle timeout, wake-lock lifecycle, and marquee continuity. Existing local/remote response, Markdown/LaTeX, null filtering, legacy SSE, and duplicate-final-response contracts remain in the same suite.
+- Verification: `testDebugUnitTest` passed 90 tests; `lintVitalRelease` and `assembleRelease` passed. Release APK SHA-256: `371A495A40DE91E3C3C904DB276521991BA6A8EEC3AAEE9DD163D9C03A9105E6`.
+
+## dev-0.5.3 mobile local/remote conversation parity (2026-08-21)
+
+- Android local Agent now mirrors the desktop Chat-to-Responses and temperature-capability fallbacks. A recognized 4xx rejection of Chat Completions tool calling with `reasoning_effort` retries `/responses`; an explicit HTTP 400 unsupported-`temperature` response retries once without that parameter and caches the endpoint/model capability. Responses reasoning summaries, output text, and function calls are normalized into the existing local conversation event stream. Unrelated 4xx/5xx responses are not retried.
+- Android local Agent responses now use the same conversation timeline structure as paired-desktop responses: the user message, standalone Build activity row, and terminal assistant message are projected separately through the shared `ChatScreen` renderer. Local-only differences remain at capability and right-sidebar boundaries, not in transcript presentation.
+- Local Chat Completions streaming ignores explicit JSON `null` values instead of appending the literal word `null` to thought or answer buffers. Current and legacy readable reasoning fields (`reasoning_content`, `reasoning`, `thinking`, `analysis`) are normalized with Gson, and legacy response wrappers remain accepted.
+- Paired-desktop SSE accepts both `data: payload` and legacy `data:payload` lines. Public thought deltas continue to update one active thought item while `thought_result` supplies its terminal content.
+- The shared Android Markdown renderer now recognizes the PC formula delimiters `$...$`, `\(...\)`, `$$...$$`, and `\[...\]`, preserving readable fractions, roots, scripts, Greek letters, and common operators in both local and remote conversations.
+- Desktop and Android versions are synchronized to `0.5.3` (`versionCode 503`). Focused stream/projection/SSE/Markdown tests pass, followed by the complete Android unit suite and Debug APK assembly. Detailed evidence is recorded in `archive/20260821-dev-0.5.3-mobile-response-parity.md`.
+- The mobile provider compatibility fix is covered by real two- and three-request MockWebServer tests and the complete Android unit/Vital lint/R8/Release gate. Details and APK digest are recorded in `archive/20260821-mobile-chat-responses-tool-reasoning-fallback.md`.
+- Local completed Agent replies now render once: the persisted assistant message owns the final Markdown body, while its WorkRun remains only the adjacent Build activity. This prevents the same response from appearing once inside the Build row and once as the terminal Agent row.
+
 ## dev-0.5.2 three-platform release (2026-08-21)
 
 - Desktop and Android are bound to `0.5.2` (`versionCode 502`). The release matrix contains Windows x64 MSI/portable ZIP, Linux x86_64 AppImage/amd64 deb/unpacked ZIP, and Android APK.
@@ -2381,3 +2415,13 @@ Calendar access is now an Activity-owned runtime capability instead of an applic
 Files and responsibilities: `LocalToolCatalog.kt`/`LocalTools.kt` publish Build/Plan capability boundaries; `LocalToolExecutor.kt` bridges terminal execution; `CalendarTool.kt` owns insert/read provider operations; `ChatViewModel.kt` binds tool calls to the Activity capability; `NewmarkApp.kt` owns permission prompts; `AndroidManifest.xml` declares calendar permissions; `LocalToolContractTest.kt` locks the complete path. Evidence is recorded in `archive/20260821-dev-0.5.2-agent-terminal-calendar-bridge.md`.
 
 Final Android verification passed 71/71 JVM tests plus Vital lint, R8, resource shrinking and Release assembly. The installed APK SHA-256 is `9C79BF99E581B4605C659B4981E50DCBFD5FC48A8A2895357DEC95E47C6F1C88`. A preserve-data install to `emulator-5554` kept five private-state hashes unchanged, package manager confirmed both calendar permissions declared and ungranted, cold start completed with `MainActivity` top-resumed, and package FATAL/ANR matches were zero. No real provider call was spent solely to trigger the dialog, so actual Agent-driven permission UI and calendar data are not claimed as observed.
+
+## dev-0.5.3 移动运行时、后台通知与固定光条（2026-08-21）
+
+Android 本地 Agent 现在在 chat/responses 两条协议上兼容旧 SSE 响应头，过滤空/`null` 思考增量并由运行所有权阻止双重最终回复；本地与远端对话共用 transcript 与 Markdown/TeX 呈现链。模型上下文支持主动/被动压缩、冷热历史管理及 Build block 有界读取，显示历史保持不变。普通 PC/Android provider 响应不设读取期限，PC PowerShell fallback 也不再把 0 隐式变成 1 秒。
+
+本地运行使用 partial wake lock 与 sticky data-sync foreground service，持续通知显示“本地Agent运行状态 / 有n个本地Agent正在运行”，图标与模型/智能选择按钮语义一致。PC/Android 跑马灯固定为纯黑、纯白、纯黑、纯白闭环，速度 3s，宽度分别为 2px/2dp；设置入口和配置读写已删除，旧三项 gradient 配置在升级首次加载时一次性清理。
+
+Android 16 Live Updates 已改为真实 API 36 构建链：`compileSdk 36`、AGP 8.10.1 与 AndroidX Core 1.17.0。Manifest 声明 `POST_PROMOTED_NOTIFICATIONS`；API 36+ 只构建无进度条的 Standard Style Live Update，使用模型/智能选择 small icon、promoted ongoing 请求、“运行中”状态 chip、“本地Agent运行状态”标题及“有n个本地Agent正在运行”动态正文；API 35 及以下构建的普通 ongoing foreground notification也不显示进度条。旧反射实现把平台 `setShortCriticalText(String)` 错查为 `CharSequence`，会静默失败并回退普通通知，现已彻底移除。运行时同时检查结构资格 `hasPromotableCharacteristics()` 和系统/用户授权 `canPostPromotedNotifications()`，但不会在 Android 16 静默改回旧样式。
+
+桌面编译及 1667/1667 综合断言通过；Android 单测、Vital lint、R8、资源收缩和 Release 构建通过。最终 45,842,460-byte APK 位于 `android/app/build/outputs/apk/release/app-release.apk`，SHA-256 为 `D4FCEA8C073CF07095257D4909395CF73428ACC87DF58F584BA7B0D0B810FFA3`。本轮同时扩展移动端 Markdown/LaTeX：支持无空格标题、删除线、分隔线、`~~~` 围栏、单行/多行 `$$...$$` 与 `\\[...\\]`、equation/align 等环境、更多常见 LaTeX 命令和符号；本地与远端继续共用同一渲染链。本轮同时将模型/智能选择图标显式设置为 Android 15 及以下 ongoing 通知和 Android 16+ Live Update 的 small/large icon，避免系统回退显示 Newmark launcher icon；新增 `ACCESS_NETWORK_STATE`、电池优化豁免声明和任务移除后继续运行的 data-sync 前台服务策略，启动时通过 Android 系统页面请求用户确认“不受电池优化限制”。APK 合并 Manifest 包含 promoted permission、网络状态和后台策略权限，Release DEX 包含 `android.requestPromotedOngoing=true` 和 short-critical-text extras，且本地 Agent 服务字节码不再引用 `ProgressStyle`/`setProgress`。`emulator-5554` 仍为 API 35，因此 API 36 promoted chip、OPPO Fluid Cloud、物理设备息屏/OEM 保活及真实供应商长连接未声称已在设备上验证。完整记录见 `archive/20260821-dev-0.5.3-mobile-runtime-final.md`。

@@ -1,13 +1,18 @@
 package com.newmark.mobile
 
 import android.os.Bundle
+import android.os.Build
+import android.Manifest
 import android.os.SystemClock
 import android.util.Log
 import android.content.res.Configuration
 import android.content.Intent
 import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -18,9 +23,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import java.util.concurrent.atomic.AtomicLong
 
 class MainActivity : ComponentActivity() {
+    private val notificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { requestBackgroundRunPolicy() }
     private val shareSequence = AtomicLong()
     private val pendingShares = MutableStateFlow<List<IncomingShare>>(emptyList())
     private val pendingPairUrl = MutableStateFlow<String?>(null)
+    private var batteryPolicyRequested = false
 
     private fun requestHighRefreshRate() {
         // Use the maximum mode exposed by the current display. This applies
@@ -34,6 +43,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            requestBackgroundRunPolicy()
+        }
         requestHighRefreshRate()
         enableEdgeToEdge()
         enqueueShare(intent, coldStart = true)
@@ -66,6 +80,34 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         if (intent.action == Intent.ACTION_VIEW) pendingPairUrl.value = intent.dataString
         enqueueShare(intent, coldStart = false)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestBackgroundRunPolicy()
+        }
+    }
+
+    /**
+     * A foreground service keeps the process scheduled, while this explicit
+     * user-approved policy prevents Doze from suspending its provider socket.
+     * Android does not allow an app to silently grant this exemption.
+     */
+    private fun requestBackgroundRunPolicy() {
+        if (batteryPolicyRequested || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val power = getSystemService(PowerManager::class.java) ?: return
+        if (power.isIgnoringBatteryOptimizations(packageName)) {
+            batteryPolicyRequested = true
+            return
+        }
+        batteryPolicyRequested = true
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:$packageName")
+        }
+        runCatching { startActivity(intent) }.onFailure {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        }
     }
 
     private fun enqueueShare(intent: Intent?, coldStart: Boolean) {

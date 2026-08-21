@@ -14,6 +14,7 @@ class LocalToolContractTest {
                 "settings_read", "settings_update",
                 "web_search", "web_fetch", "browser_use",
                 "task_read", "task_create",
+                "build_history_query", "context_compress", "context_history_manage",
                 "calendar_create", "calendar_read",
             ),
             LocalToolCatalog.buildNames,

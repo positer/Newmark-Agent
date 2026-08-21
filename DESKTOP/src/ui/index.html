@@ -108,10 +108,10 @@ try {
   --radius-full: 9999px;
 
   /* Marquee gradient */
-  --g1: #00ff88;
-  --g2: #00ccff;
-  --g3: #aa44ff;
-  --g4: #ff4488;
+  --g1: #000000;
+  --g2: #ffffff;
+  --g3: #000000;
+  --g4: #ffffff;
   --marquee-speed: 3s;
   --marquee-width: 2px;
 
@@ -5749,9 +5749,6 @@ var state = {
   conversationArchiveRefreshTimer: null,
   conversationArchiveActiveSyncTimer: null,
   nextConversationSequence: 0,
-  configGradientColors: ['#00ff88', '#00ccff', '#aa44ff', '#ff4488'],
-  configGradientSpeed: 3,
-  configGradientWidth: 2,
   inputMode: 'guide',
   theme: 'dark',
   backgroundColor: '',
@@ -15246,7 +15243,6 @@ function renderGeneralSettings() {
   for (var i = 0; i < themeOpts.length; i++) {
     themeHtml += '<option value="' + themeOpts[i].v + '"' + (state.theme === themeOpts[i].v ? ' selected' : '') + '>' + themeOpts[i].l + '</option>';
   }
-  var gradColors = state.configGradientColors || ['#ff6b6b','#ffd93d','#6bcb77','#4d96ff'];
   var backgroundColor = /^#[0-9a-f]{6}$/i.test(String(state.backgroundColor || ''))
     ? state.backgroundColor
     : (state.theme === 'light' ? '#F0F2F8' : '#0A0A1A');
@@ -15313,16 +15309,6 @@ function renderGeneralSettings() {
     '<label class="setting-label" for="settings-glass-opacity">' + esc(t('settings.glass')) + '</label>' +
     '<div class="setting-control"><input id="settings-glass-opacity" type="range" min="0" max="100" step="1" value="' + glassVal + '" aria-describedby="glass-desc" aria-valuetext="' + escAttr(glassDescription) + '" oninput="window.previewGlassOpacity(this.value)" onchange="window.commitGlassOpacity(this.value)">' +
     '<div class="setting-desc" id="glass-desc" aria-live="polite">' + esc(glassDescription) + '</div></div>' +
-    '</div>' +
-    '<div class="setting-row">' +
-    '<span class="setting-label">' + esc(t('settings.gradient')) + '</span>' +
-    '<div class="setting-control" style="flex-wrap:wrap;gap:4px;">' +
-    '<input type="color" value="' + gradColors[0] + '" onchange="window.setGradientColor(0,this.value)" style="width:36px;height:28px;padding:0;border:1px solid var(--border);border-radius:var(--radius-sm);background:none;cursor:pointer;">' +
-    '<input type="color" value="' + gradColors[1] + '" onchange="window.setGradientColor(1,this.value)" style="width:36px;height:28px;padding:0;border:1px solid var(--border);border-radius:var(--radius-sm);background:none;cursor:pointer;">' +
-    '<input type="color" value="' + gradColors[2] + '" onchange="window.setGradientColor(2,this.value)" style="width:36px;height:28px;padding:0;border:1px solid var(--border);border-radius:var(--radius-sm);background:none;cursor:pointer;">' +
-    '<input type="color" value="' + gradColors[3] + '" onchange="window.setGradientColor(3,this.value)" style="width:36px;height:28px;padding:0;border:1px solid var(--border);border-radius:var(--radius-sm);background:none;cursor:pointer;">' +
-    '<div class="setting-desc" style="width:100%;">' + esc(t('settings.speed')) + ': <input type="range" min="1" max="10" value="' + (state.configGradientSpeed || 3) + '" oninput="window.setGradientSpeed(this.value)" style="width:60px;vertical-align:middle;">' +
-    ' ' + esc(t('settings.width')) + ': <input type="range" min="1" max="6" value="' + (state.configGradientWidth || 2) + '" oninput="window.setGradientWidth(this.value)" style="width:60px;vertical-align:middle;"></div></div>' +
     '</div>' +
     '<div class="setting-row">' +
     '<span class="setting-label">' + esc(t('settings.inputMode')) + '</span>' +
@@ -15876,25 +15862,6 @@ window.previewGlassOpacity = function(value) {
 window.commitGlassOpacity = function(value) {
   var presentation = window.previewGlassOpacity(value);
   if (api.saveConfig) api.saveConfig({ glassAlpha: presentation.alpha }).catch(function(){});
-};
-
-window.setGradientColor = function(idx, color) {
-  if (!state.configGradientColors) state.configGradientColors = ['#ff6b6b','#ffd93d','#6bcb77','#4d96ff'];
-  state.configGradientColors[idx] = color;
-  updateMarqueeFromConfig();
-  api.saveConfig({gradientColors: state.configGradientColors});
-};
-
-window.setGradientSpeed = function(v) {
-  state.configGradientSpeed = parseInt(v);
-  updateMarqueeFromConfig();
-  api.saveConfig({gradientSpeed: state.configGradientSpeed});
-};
-
-window.setGradientWidth = function(v) {
-  state.configGradientWidth = parseInt(v);
-  updateMarqueeFromConfig();
-  api.saveConfig({gradientWidth: state.configGradientWidth});
 };
 
 window.setDialogStyle = function(v) {
@@ -21982,27 +21949,12 @@ window.ensureFlowsLoaded = function(options) {
   return state._flowLoadPromise;
 };
 
-// === Update Marquee ===
 var marqueeRAF = null;
-function updateMarqueeFromConfig() {
-  var root = document.documentElement;
-  var colors = state.configGradientColors;
-  if (colors && colors.length >= 4) {
-    root.style.setProperty('--g1', colors[0]);
-    root.style.setProperty('--g2', colors[1]);
-    root.style.setProperty('--g3', colors[2]);
-    root.style.setProperty('--g4', colors[3]);
-  }
-  root.style.setProperty('--marquee-speed', (state.configGradientSpeed || 2) + 's');
-  root.style.setProperty('--marquee-width', (state.configGradientWidth || 2) + 'px');
-}
-
 // JS-driven marquee fallback for browsers without @property support
 function startMarqueeJS() {
   if (marqueeRAF) return;
   var root = document.documentElement;
   var angle = 0;
-  var speed = (state.configGradientSpeed || 3) * 60;
   function tick() {
     angle = (angle + 1) % 360;
     root.style.setProperty('--marquee-angle', angle + 'deg');
@@ -22837,9 +22789,6 @@ function schedulePostStartupUiRendering() {
       state.fontFamily = normalizeUiFontFamilyClient(s.fontFamily || '');
       state.glassLevel = glassPresentationForOpacity((s.glassAlpha ?? 0.85) * 100).opacityPercent;
       state.models = s.models || [];
-      if (s.gradientColors && s.gradientColors.length) state.configGradientColors = s.gradientColors;
-      if (s.gradientSpeed) state.configGradientSpeed = s.gradientSpeed;
-      if (s.gradientWidth) state.configGradientWidth = s.gradientWidth;
       applySavedLayoutState({
         leftCollapsed: s.leftPanelCollapsed,
         rightCollapsed: s.rightPanelCollapsed,
@@ -22923,7 +22872,6 @@ function schedulePostStartupUiRendering() {
     });
   }
 
-  updateMarqueeFromConfig();
   window.startRemoteTouchStatusPolling();
 
   // Populate selects

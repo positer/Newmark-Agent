@@ -1353,7 +1353,6 @@ private fun PcRemoteConversationRow(
     if (marquee) {
         MarqueeBorder(
             cornerRadius = 10.dp,
-            width = 2.dp,
             modifier = modifier
                 .fillMaxWidth()
                 .padding(vertical = 2.dp),

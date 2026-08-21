@@ -48,6 +48,12 @@ object LocalTools {
             emptyList(),
         ),
         function(
+            "terminal_exec",
+            "执行移动端本地受控终端命令。与命令行页面复用同一套 80+ 内置命令和 files/newmark/workspace 安全目录；可先执行 help 查看完整命令，支持 date/time、文件、检索、哈希、编码、Memory Lab 与设置命令，但不提供 Android 系统 shell。",
+            mapOf("command" to prop("string", "要执行的一行终端命令，例如 date、pwd、ls、grep 关键词 文件、sha256sum 文件")),
+            listOf("command"),
+        ),
+        function(
             "memory_lab_read",
             "读取本地 Memory Lab 索引，或读取单个记忆组件",
             mapOf("component" to prop("string", "组件 slug（留空读取全部索引）")),
@@ -134,6 +140,17 @@ object LocalTools {
                 "availability" to enumProp(listOf("busy", "free"), "忙碌状态"),
             ),
             listOf("title"),
+        ),
+        function(
+            "calendar_read",
+            "读取 Android 系统日历中用户授权可见的日程，默认查询从现在起 30 天；用于在规划和执行前辅助 Agent 了解已有安排",
+            mapOf(
+                "start_time_ms" to prop("number", "查询起点，Unix epoch 毫秒；留空为当前时间"),
+                "end_time_ms" to prop("number", "查询终点，Unix epoch 毫秒；留空为起点后 30 天"),
+                "query" to prop("string", "可选标题、地点或说明关键词"),
+                "max_results" to prop("number", "最多返回条数，1 到 200，默认 50"),
+            ),
+            emptyList(),
         ),
     )
 

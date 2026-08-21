@@ -21,8 +21,6 @@ import java.time.format.DateTimeFormatter
 import android.os.Build
 import android.os.SystemClock
 import android.util.Base64
-import android.content.Intent
-import android.provider.CalendarContract
 
 /** 本地工具执行结果 */
 data class ToolResult(val ok: Boolean, val output: String) {
@@ -67,6 +65,7 @@ class LocalToolExecutor(
                 "read_file" -> readFile(args.optString("path"))
                 "write_file" -> writeFileArgs(args.optString("path"), args.optString("content"))
                 "list_dir" -> ls(args.optString("path"))
+                "terminal_exec" -> terminalExec(args.optString("command"))
                 "memory_lab_read" -> mlRead(args.optString("component"))
                 "memory_lab_query" -> mlQuery(args.optString("query"))
                 "memory_lab_update" -> mlUpdateArgs(args.optString("name"), args.optString("tags"), args.optString("content"))
@@ -75,7 +74,6 @@ class LocalToolExecutor(
                 "settings_update" -> settingsUpdate(args.optString("json"))
                 "web_search" -> webSearch(args.optString("query"))
                 "web_fetch" -> webFetch(args.optString("url"))
-                "calendar_create" -> calendarCreate(args)
                 else -> ToolResult.err("未知工具：$name")
             }
         }.getOrElse { ToolResult.err("工具执行失败：${it.message ?: it.toString()}") }
@@ -85,6 +83,11 @@ class LocalToolExecutor(
         val uri = runCatching { URI(raw.trim()) }.getOrNull() ?: return null
         if (uri.scheme?.lowercase() !in setOf("http", "https") || uri.host.isNullOrBlank()) return null
         return uri.toASCIIString()
+    }
+
+    private fun terminalExec(command: String): ToolResult {
+        if (command.isBlank()) return ToolResult.err("terminal_exec 需要 command")
+        return execute(command)
     }
 
     private fun fetch(url: String): String {
@@ -138,32 +141,6 @@ class LocalToolExecutor(
             errors += "Bing 无可解析结果"
         }.onFailure { errors += "Bing: ${it.message ?: it}" }
         return ToolResult.err("[web_search] No results. ${errors.joinToString("; ")}")
-    }
-
-    /** Uses the Calendar Intent contract so Newmark never needs calendar data permissions. */
-    private fun calendarCreate(args: JSONObject): ToolResult {
-        val title = args.optString("title").trim()
-        if (title.isBlank()) return ToolResult.err("需要 title")
-        val intent = Intent(Intent.ACTION_INSERT)
-            .setData(CalendarContract.Events.CONTENT_URI)
-            .putExtra(CalendarContract.Events.TITLE, title.take(500))
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (args.has("begin_time_ms")) intent.putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, args.optLong("begin_time_ms"))
-        if (args.has("end_time_ms")) intent.putExtra(CalendarContract.EXTRA_EVENT_END_TIME, args.optLong("end_time_ms"))
-        if (args.has("all_day")) intent.putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY, args.optBoolean("all_day"))
-        args.optString("location").trim().takeIf(String::isNotBlank)?.let { intent.putExtra(CalendarContract.Events.EVENT_LOCATION, it.take(1000)) }
-        args.optString("description").trim().takeIf(String::isNotBlank)?.let { intent.putExtra(CalendarContract.Events.DESCRIPTION, it.take(8000)) }
-        args.optString("emails").trim().takeIf(String::isNotBlank)?.let { intent.putExtra(Intent.EXTRA_EMAIL, it.take(2000)) }
-        args.optString("recurrence_rule").trim().takeIf(String::isNotBlank)?.let { intent.putExtra(CalendarContract.Events.RRULE, it.take(1000)) }
-        when (args.optString("availability").lowercase()) {
-            "busy" -> intent.putExtra(CalendarContract.Events.AVAILABILITY, CalendarContract.Events.AVAILABILITY_BUSY)
-            "free" -> intent.putExtra(CalendarContract.Events.AVAILABILITY, CalendarContract.Events.AVAILABILITY_FREE)
-        }
-        if (intent.resolveActivity(appContext.packageManager) == null) {
-            return ToolResult.err("设备上没有可创建日程的 App")
-        }
-        appContext.startActivity(intent)
-        return ToolResult.ok("已打开日程创建界面；请由用户检查内容并确认保存：$title")
     }
 
     private fun writeFileArgs(path: String, content: String): ToolResult {

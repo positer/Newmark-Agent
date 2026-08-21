@@ -1,12 +1,16 @@
 package com.newmark.mobile.ui
 
+import android.Manifest
 import android.content.ClipData
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
 import android.view.View
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.core.Animatable
@@ -62,6 +66,8 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.core.content.ContextCompat
+import com.newmark.mobile.data.CalendarTool
 import com.newmark.mobile.data.LocalWorkEvent
 import com.newmark.mobile.data.IncomingShare
 import com.newmark.mobile.data.IncomingShareRouter
@@ -98,6 +104,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.android.awaitFrame
 import java.time.Instant
 import java.time.ZoneId
@@ -384,6 +393,50 @@ private fun NewmarkAppContent(
     val rootView = LocalView.current
     val vm: ChatViewModel = viewModel()
     val linkVm: DesktopLinkViewModel = viewModel()
+    var pendingCalendarPermission by remember { mutableStateOf<CompletableDeferred<Boolean>?>(null) }
+    val calendarPermissionMutex = remember { Mutex() }
+    val calendarPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        val pending = pendingCalendarPermission
+        pendingCalendarPermission = null
+        pending?.complete(granted)
+    }
+    DisposableEffect(vm, context) {
+        val handler: suspend (String, org.json.JSONObject) -> com.newmark.mobile.data.ToolResult = { name, args ->
+            calendarPermissionMutex.withLock {
+                val permission = when (name) {
+                    "calendar_read" -> Manifest.permission.READ_CALENDAR
+                    "calendar_create" -> Manifest.permission.WRITE_CALENDAR
+                    else -> return@withLock com.newmark.mobile.data.ToolResult.err("未知日历工具：$name")
+                }
+                val alreadyGranted = ContextCompat.checkSelfPermission(
+                    context,
+                    permission,
+                ) == PackageManager.PERMISSION_GRANTED
+                val granted = if (alreadyGranted) {
+                    true
+                } else {
+                    val pending = CompletableDeferred<Boolean>()
+                    pendingCalendarPermission = pending
+                    calendarPermissionLauncher.launch(permission)
+                    pending.await()
+                }
+                if (!granted) {
+                    return@withLock com.newmark.mobile.data.ToolResult.err(
+                        "用户拒绝了${if (name == "calendar_read") "日历读取" else "日历写入"}权限，未执行工具",
+                    )
+                }
+                if (name == "calendar_read") CalendarTool.read(context, args) else CalendarTool.launch(context, args)
+            }
+        }
+        vm.bindLocalCalendarTool(handler)
+        onDispose {
+            vm.unbindLocalCalendarTool(handler)
+            pendingCalendarPermission?.complete(false)
+            pendingCalendarPermission = null
+        }
+    }
     val keepScreenOn = vm.hasRunningLocalAgents
     DisposableEffect(rootView, keepScreenOn) {
         if (keepScreenOn) rootView.keepScreenOn = true

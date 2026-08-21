@@ -143,7 +143,10 @@ data class LocalWorkRun(
     val anchorMessageId: String = "",
     val branchNodeId: String = "",
 ) {
-    val durationMs: Long get() = (if (endedAt > 0) endedAt else System.currentTimeMillis()) - startedAt
+    val durationMs: Long get() = elapsedAt(System.currentTimeMillis())
+
+    fun elapsedAt(nowMs: Long): Long =
+        ((if (endedAt > 0) endedAt else nowMs) - startedAt).coerceAtLeast(0L)
 }
 
 /** 本地对话任务清单；字段与桌面 ConversationPlanState.items 保持同构并随对话持久化。 */

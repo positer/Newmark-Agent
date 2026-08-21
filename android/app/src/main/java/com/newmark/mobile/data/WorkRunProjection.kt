@@ -94,7 +94,11 @@ object WorkRunProjection {
                     }
                     if (index >= 0) {
                         val prior = projected[index]
-                        projected[index] = prior.copy(completed = true, content = event.content.ifBlank { prior.content })
+                        projected[index] = prior.copy(
+                            completed = true,
+                            content = event.content.ifBlank { prior.content },
+                            durationMs = event.durationMs.takeIf { it > 0 } ?: prior.durationMs,
+                        )
                         return@forEach
                     }
                 }

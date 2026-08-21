@@ -91,6 +91,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -167,6 +168,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -1224,6 +1226,21 @@ private fun WorkRunBlock(run: LocalWorkRun, modifier: Modifier = Modifier) {
 @Composable
 private fun WorkRunHead(run: LocalWorkRun, collapsed: Boolean, onToggle: () -> Unit) {
     val pc = LocalPcColors.current
+    // Keep the clock local to the header so a running Build block advances by
+    // itself without forcing the entire conversation tree to recompose.
+    val nowMs by produceState(
+        initialValue = System.currentTimeMillis(),
+        key1 = run.runId,
+        key2 = run.status,
+        key3 = run.endedAt,
+    ) {
+        if (run.endedAt <= 0L && run.status.lowercase() in setOf("running", "stopping", "force_restarting")) {
+            while (true) {
+                value = System.currentTimeMillis()
+                delay(100L)
+            }
+        }
+    }
     // 完全采用 PC workRunTitle 的中文状态词；“构建”不再作为独立标题出现。
     val title = when (run.status.lowercase()) {
         "running" -> "处理中"
@@ -1256,7 +1273,7 @@ private fun WorkRunHead(run: LocalWorkRun, collapsed: Boolean, onToggle: () -> U
             modifier = Modifier.weight(1f),
         )
         Text(
-            text = formatDuration(run.durationMs),
+            text = formatDuration(run.elapsedAt(nowMs)),
             fontSize = 10.sp,
             color = pc.textDim,
             fontFamily = FontFamily.Monospace,

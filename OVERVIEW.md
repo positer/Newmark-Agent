@@ -2321,3 +2321,36 @@ android/app/src/main/java/com/newmark/mobile/
 “从连接设备拉取”此前复用 `/api/mobile/state.providers`，该响应按安全契约把 `api_key` 清空；移动端合并新供应商时又强制写入空 Key，因而拉取结果只能展示模型而不能本地调用。现在普通远程状态仍严格脱敏，用户显式拉取改走仅允许配对鉴权 POST 的 `/api/mobile/provider-catalog-export`，Bearer 令牌不进入 URL，响应禁止缓存；合并优先保留本机已有密钥，也能用远端凭据修复此前已落盘的无 Key 同 ID/接口条目。
 
 玻璃渲染不再读取 SharedPreferences 或接受预览/提交回调，设置页不再显示玻璃强度 Slider，所有表面固定使用 85% 默认档位。桌面 TypeScript 编译与 52 项 mobile workspace API 契约通过；Android 64 项单测及全量 `testDebugUnitTest lintVitalRelease assembleRelease --no-daemon` 通过。Release APK 为 `android/app/build/outputs/apk/release/app-release.apk`，SHA-256 `C1C16EDBF97CBF09F517B5A7BA7FFD916F911CA813716148DA6540E9779286AA`。该 APK 已向 `emulator-5554` 保数据覆盖安装并启动，设置页新 UI dump 中“玻璃/不透明度/透明度/模糊”可见文本计数为 0，包级 FATAL/ANR 为 0；真实两设备凭据迁移仍只由隔离协议门禁覆盖。
+## dev-0.5.2 Android Agent surface and ingress (2026-08-21)
+
+```text
+android/app/src/main/
+├─ AndroidManifest.xml                    # exported share target and single-task delivery
+└─ java/com/newmark/mobile/
+   ├─ MainActivity.kt                     # ACTION_SEND queue and VIEW deep-link handoff
+   ├─ data/
+   │  ├─ ShareIngress.kt                  # cold/warm local/remote routing contract
+   │  ├─ TerminalCommandCatalog.kt        # 80+ sandboxed command names and aliases
+   │  ├─ LocalToolExecutor.kt             # terminal implementations and Calendar Intent
+   │  ├─ LocalTools.kt                    # calendar_create function schema
+   │  ├─ WorkRunProjection.kt             # thought completion/duration backfill
+   │  └─ ChatModels.kt                    # deterministic elapsedAt clock projection
+   ├─ vm/ChatViewModel.kt                 # public thought shell around provider waits
+   └─ ui/
+      ├─ ChatScreen.kt                    # narrow 100 ms running-duration ticker
+      ├─ NewmarkApp.kt                    # share content validation/import/upload/send
+      ├─ BrowserSession.kt                # address completion vs navigation boundary
+      └─ RightSidebar.kt                  # mixed-content and Safe Browsing policy
+```
+
+Android local runs now publish an empty public `thought` activity before provider latency and complete it with `thought_result`; this exposes only lifecycle/duration, never private chain-of-thought. A running Build header owns a narrow 100 ms clock and stops ticking at `endedAt`, so “处理中/已处理” time advances without unrelated conversation mutations.
+
+The sandboxed terminal exposes more than 80 familiar GNU/PowerShell/Android command names and aliases. Implementations cover time, safe workspace file operations, searching, line transforms, hashes/encoding, environment inspection, Memory Lab and settings; no unrestricted Android shell is granted, paths remain under `files/newmark/workspace`, and removal rejects the workspace root and non-empty directories. `calendar_create` uses `ACTION_INSERT` with `CalendarContract.Events.CONTENT_URI`, leaving final review/save to the installed calendar app and requiring no calendar read/write permission.
+
+Android is an `ACTION_SEND`/`ACTION_SEND_MULTIPLE` target. A process cold start always creates a new local conversation; delivery to an existing activity follows the active local or remote conversation. Text is sent directly, local files are imported and their workspace location is sent to the Agent, and remote files use the target-bound upload pipeline. Only `content://` streams up to 20 MiB are accepted and data is read off the UI thread.
+
+Browser address input completes host-like values with HTTP(S), uses HTTP only for explicit loopback/localhost input, and treats other ordinary text as a Google search. Navigation callbacks never use search fallback: they strictly validate parsed scheme, host, credentials, whitespace and port. WebView additionally rejects mixed content, file/content access, popup windows, geolocation and unsafe browsing hits.
+
+Version is bound at desktop `0.5.2` and Android `versionName 0.5.2` / `versionCode 502`. Implementation record and current verification evidence are in `archive/20260821-dev-0.5.2-android-agent-ingress.md`.
+
+Final Android gate `testDebugUnitTest lintVitalRelease assembleRelease --no-daemon` passed: 69 JVM tests, zero failures/errors, Vital lint, R8, resource shrinking and Release APK packaging all succeeded. The 45,838,216-byte APK SHA-256 is `37DA310D285585354017116432956F9B3AF747D519B5D0773C4C240EA275DDE7`. No ADB device was attached for this task, so system share-sheet/calendar UI and live remote-upload routing are not represented as device-observed evidence.

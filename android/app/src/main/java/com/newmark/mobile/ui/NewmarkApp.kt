@@ -1,7 +1,9 @@
 package com.newmark.mobile.ui
 
 import android.content.ClipData
+import android.net.Uri
 import android.os.Build
+import android.provider.OpenableColumns
 import android.view.View
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -61,6 +63,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.newmark.mobile.data.LocalWorkEvent
+import com.newmark.mobile.data.IncomingShare
+import com.newmark.mobile.data.IncomingShareRouter
+import com.newmark.mobile.data.IncomingShareTarget
 import com.newmark.mobile.data.LocalWorkRun
 import com.newmark.mobile.ui.QueueMessageUi
 import com.newmark.mobile.data.ModelOption
@@ -91,6 +96,8 @@ import com.newmark.mobile.vm.DesktopLinkViewModel
 import com.newmark.mobile.vm.LinkStatus
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.android.awaitFrame
 import java.time.Instant
 import java.time.ZoneId
@@ -332,6 +339,8 @@ private data class ConversationSurface(
 fun NewmarkApp(
     initialPairUrl: String? = null,
     runtimeStressScenario: String? = null,
+    incomingShare: IncomingShare? = null,
+    onIncomingShareConsumed: (Long) -> Unit = {},
     onInteractiveReady: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -354,6 +363,8 @@ fun NewmarkApp(
             NewmarkAppContent(
                 initialPairUrl = initialPairUrl,
                 runtimeStressScenario = runtimeStressScenario,
+                incomingShare = incomingShare,
+                onIncomingShareConsumed = onIncomingShareConsumed,
                 onInteractiveReady = onInteractiveReady,
             )
         }
@@ -364,6 +375,8 @@ fun NewmarkApp(
 private fun NewmarkAppContent(
     initialPairUrl: String?,
     runtimeStressScenario: String?,
+    incomingShare: IncomingShare?,
+    onIncomingShareConsumed: (Long) -> Unit,
     onInteractiveReady: () -> Unit,
 ) {
     val p = LocalNewmarkPalette.current
@@ -628,6 +641,40 @@ private fun NewmarkAppContent(
             ?: remoteUi.queued.followUp.mapIndexed { index, text -> QueueMessageUi("legacy:$index:$text", text, false) }
     } else vm.currentQueue.map { QueueMessageUi(it.id, it.text, true, it.requestedMode, it.goalObjective) }
     val queuePaused = if (useRemote) linkVm.remoteQueuePaused else vm.currentQueuePaused
+
+    LaunchedEffect(incomingShare?.id) {
+        val share = incomingShare ?: return@LaunchedEffect
+        try {
+            val target = IncomingShareRouter.target(share.coldStart, useRemote)
+            if (target == IncomingShareTarget.NewLocalConversation) {
+                preferLocal = true
+                sidebarPage = SidebarPage.Main
+                vm.newConversation()
+            }
+            fun sendLocal(text: String) {
+                if (text.isBlank()) return
+                if (vm.isSending) vm.enqueueLocal(text) else vm.send(text)
+            }
+            if (share.text.isNotBlank()) {
+                if (target == IncomingShareTarget.ActiveRemoteConversation) linkVm.sendToDesktop(share.text)
+                else sendLocal(share.text)
+            }
+            for (rawUri in share.contentUris) {
+                val incoming = readIncomingContent(context, Uri.parse(rawUri), share.mimeType).getOrThrow()
+                if (target == IncomingShareTarget.ActiveRemoteConversation) {
+                    linkVm.bindSelectedWorkspaceUpload()(incoming.name, incoming.mimeType, incoming.bytes).getOrThrow()
+                } else {
+                    val location = vm.importLocalFile(incoming.name, incoming.bytes).getOrThrow()
+                    sendLocal("有文件已导入到 $location")
+                }
+            }
+            Toast.makeText(context, "已发送到 ${if (target == IncomingShareTarget.ActiveRemoteConversation) "远程" else "本地"}对话", Toast.LENGTH_SHORT).show()
+        } catch (error: Throwable) {
+            Toast.makeText(context, "接收分享失败：${error.message ?: error}", Toast.LENGTH_LONG).show()
+        } finally {
+            onIncomingShareConsumed(share.id)
+        }
+    }
     LaunchedEffect(useRemote, linkVm.selectedConversationWorkspaceId, linkVm.selectedConversationId, linkVm.linkStatus) {
         while (useRemote && linkVm.linkStatus == LinkStatus.Connected &&
             !linkVm.selectedConversationWorkspaceId.isNullOrBlank() && !linkVm.selectedConversationId.isNullOrBlank()
@@ -976,6 +1023,47 @@ private fun NewmarkAppContent(
         if (isCompact) MemoryLabScreen(onBack = { screen = Screen.Main })
         else MemoryLabDialog(onDismiss = { screen = Screen.Main })
     }
+    }
+}
+
+private data class IncomingContent(val name: String, val mimeType: String, val bytes: ByteArray)
+
+private suspend fun readIncomingContent(
+    context: android.content.Context,
+    uri: Uri,
+    fallbackMimeType: String,
+): Result<IncomingContent> = withContext(Dispatchers.IO) {
+    runCatching {
+        require(uri.scheme.equals("content", ignoreCase = true)) { "只接收 content URI" }
+        var name = "shared-file"
+        var declaredSize = -1L
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { name = cursor.getString(it).orEmpty() }
+                cursor.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 && !cursor.isNull(it) }?.let { declaredSize = cursor.getLong(it) }
+            }
+        }
+        require(declaredSize <= 20L * 1024L * 1024L || declaredSize < 0L) { "文件超过 20 MiB" }
+        val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+            val limit = 20 * 1024 * 1024 + 1
+            val output = java.io.ByteArrayOutputStream(minOf(limit, declaredSize.coerceAtLeast(8_192L).toInt()))
+            val buffer = ByteArray(32 * 1024)
+            var total = 0
+            while (total < limit) {
+                val read = input.read(buffer, 0, minOf(buffer.size, limit - total))
+                if (read < 0) break
+                output.write(buffer, 0, read)
+                total += read
+            }
+            output.toByteArray()
+        } ?: error("无法读取分享内容")
+        require(bytes.size <= 20 * 1024 * 1024) { "文件超过 20 MiB" }
+        require(bytes.isNotEmpty()) { "文件为空" }
+        IncomingContent(
+            name = java.io.File(name).name.take(160).ifBlank { "shared-file" },
+            mimeType = context.contentResolver.getType(uri).orEmpty().ifBlank { fallbackMimeType },
+            bytes = bytes,
+        )
     }
 }
 

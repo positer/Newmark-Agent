@@ -13,6 +13,16 @@ import okhttp3.Request
 import okhttp3.Dns
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.security.MessageDigest
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import android.os.Build
+import android.os.SystemClock
+import android.util.Base64
+import android.content.Intent
+import android.provider.CalendarContract
 
 /** 本地工具执行结果 */
 data class ToolResult(val ok: Boolean, val output: String) {
@@ -65,6 +75,7 @@ class LocalToolExecutor(
                 "settings_update" -> settingsUpdate(args.optString("json"))
                 "web_search" -> webSearch(args.optString("query"))
                 "web_fetch" -> webFetch(args.optString("url"))
+                "calendar_create" -> calendarCreate(args)
                 else -> ToolResult.err("未知工具：$name")
             }
         }.getOrElse { ToolResult.err("工具执行失败：${it.message ?: it.toString()}") }
@@ -129,6 +140,32 @@ class LocalToolExecutor(
         return ToolResult.err("[web_search] No results. ${errors.joinToString("; ")}")
     }
 
+    /** Uses the Calendar Intent contract so Newmark never needs calendar data permissions. */
+    private fun calendarCreate(args: JSONObject): ToolResult {
+        val title = args.optString("title").trim()
+        if (title.isBlank()) return ToolResult.err("需要 title")
+        val intent = Intent(Intent.ACTION_INSERT)
+            .setData(CalendarContract.Events.CONTENT_URI)
+            .putExtra(CalendarContract.Events.TITLE, title.take(500))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (args.has("begin_time_ms")) intent.putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, args.optLong("begin_time_ms"))
+        if (args.has("end_time_ms")) intent.putExtra(CalendarContract.EXTRA_EVENT_END_TIME, args.optLong("end_time_ms"))
+        if (args.has("all_day")) intent.putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY, args.optBoolean("all_day"))
+        args.optString("location").trim().takeIf(String::isNotBlank)?.let { intent.putExtra(CalendarContract.Events.EVENT_LOCATION, it.take(1000)) }
+        args.optString("description").trim().takeIf(String::isNotBlank)?.let { intent.putExtra(CalendarContract.Events.DESCRIPTION, it.take(8000)) }
+        args.optString("emails").trim().takeIf(String::isNotBlank)?.let { intent.putExtra(Intent.EXTRA_EMAIL, it.take(2000)) }
+        args.optString("recurrence_rule").trim().takeIf(String::isNotBlank)?.let { intent.putExtra(CalendarContract.Events.RRULE, it.take(1000)) }
+        when (args.optString("availability").lowercase()) {
+            "busy" -> intent.putExtra(CalendarContract.Events.AVAILABILITY, CalendarContract.Events.AVAILABILITY_BUSY)
+            "free" -> intent.putExtra(CalendarContract.Events.AVAILABILITY, CalendarContract.Events.AVAILABILITY_FREE)
+        }
+        if (intent.resolveActivity(appContext.packageManager) == null) {
+            return ToolResult.err("设备上没有可创建日程的 App")
+        }
+        appContext.startActivity(intent)
+        return ToolResult.ok("已打开日程创建界面；请由用户检查内容并确认保存：$title")
+    }
+
     private fun writeFileArgs(path: String, content: String): ToolResult {
         if (path.isBlank()) return ToolResult.err("需要 path")
         val f = resolve(path)
@@ -167,7 +204,8 @@ class LocalToolExecutor(
         if (path.isBlank()) return
         runCatching {
             val f = File(path).canonicalFile
-            if (f.isDirectory && f.path.startsWith(root.canonicalFile.path)) cwd = f
+            val rootCanonical = root.canonicalFile
+            if (f.isDirectory && (f == rootCanonical || f.path.startsWith(rootCanonical.path + File.separator))) cwd = f
         }
     }
 
@@ -176,25 +214,62 @@ class LocalToolExecutor(
         val trimmed = line.trim()
         if (trimmed.isEmpty()) return ToolResult.ok("")
         val parts = trimmed.split(Regex("\\s+"), limit = 2)
-        val cmd = parts[0].lowercase()
+        val enteredCommand = parts[0].lowercase()
+        val cmd = TerminalCommandCatalog.canonical(enteredCommand)
+            ?: return ToolResult.err("未知命令：$enteredCommand（输入 help 查看可用命令）")
         val arg = parts.getOrNull(1)?.trim() ?: ""
         return runCatching {
             when (cmd) {
                 "pwd" -> ToolResult.ok(cwd.absolutePath)
-                "ls", "dir" -> ls(arg)
+                "ls" -> ls(arg)
+                "tree" -> tree(arg)
                 "cd" -> cd(arg)
-                "read", "cat" -> readFile(arg)
+                "mkdir" -> mkdir(arg)
+                "touch" -> touch(arg)
+                "read" -> readFile(arg)
                 "write" -> writeFile(arg)
+                "append" -> appendFile(arg)
                 "edit" -> editFile(arg)
-                "memory_lab_read", "ml-read" -> mlRead(arg)
-                "memory_lab_query", "ml-query" -> mlQuery(arg)
-                "memory_lab_update", "ml-update" -> mlUpdate(arg)
-                "memory_lab_reindex", "ml-reindex" -> mlReindex()
-                "settings_read", "settings-read" -> settingsRead()
-                "settings_update", "settings-update" -> settingsUpdate(arg)
+                "head" -> headTail(arg, fromEnd = false)
+                "tail" -> headTail(arg, fromEnd = true)
+                "wc" -> wordCount(arg)
+                "stat", "file" -> stat(arg)
+                "basename" -> ToolResult.ok(resolve(arg).name)
+                "dirname" -> ToolResult.ok(resolve(arg).parentFile?.absolutePath.orEmpty())
+                "realpath" -> ToolResult.ok(resolve(arg).absolutePath)
+                "find" -> find(arg)
+                "grep" -> grep(arg)
+                "sort" -> transformLines(arg) { it.sorted() }
+                "uniq" -> transformLines(arg) { it.distinct() }
+                "copy" -> copyMove(arg, move = false)
+                "move" -> copyMove(arg, move = true)
+                "remove" -> remove(arg, directoryOnly = false)
+                "rmdir" -> remove(arg, directoryOnly = true)
+                "echo" -> ToolResult.ok(arg)
+                "date" -> ToolResult.ok(ZonedDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+                "time" -> ToolResult.ok(ZonedDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss.SSS z")))
+                "now" -> ToolResult.ok(Instant.now().toString())
+                "uptime" -> ToolResult.ok("${SystemClock.elapsedRealtime() / 1000}s")
+                "whoami", "id" -> ToolResult.ok(appContext.packageName)
+                "hostname" -> ToolResult.ok(Build.MODEL.ifBlank { "android" })
+                "uname" -> ToolResult.ok("Android ${Build.VERSION.RELEASE} (${Build.SUPPORTED_ABIS.joinToString(",")})")
+                "env" -> environment()
+                "which" -> which(arg)
+                "sha256" -> hash(arg, "SHA-256")
+                "md5" -> hash(arg, "MD5")
+                "base64" -> ToolResult.ok(Base64.encodeToString(arg.toByteArray(), Base64.NO_WRAP))
+                "unbase64" -> runCatching { String(Base64.decode(arg, Base64.DEFAULT)) }
+                    .fold(ToolResult::ok) { ToolResult.err("无效 Base64：${it.message}") }
+                "seq" -> sequence(arg)
+                "memory_read" -> mlRead(arg)
+                "memory_query" -> mlQuery(arg)
+                "memory_update" -> mlUpdate(arg)
+                "memory_reindex" -> mlReindex()
+                "settings_read" -> settingsRead()
+                "settings_update" -> settingsUpdate(arg)
                 "state" -> state()
                 "help" -> help()
-                else -> ToolResult.err("未知命令：$cmd（输入 help 查看可用命令）")
+                else -> ToolResult.err("命令尚未实现：$enteredCommand")
             }
         }.getOrElse { ToolResult.err("执行失败：${it.message ?: it.toString()}") }
     }
@@ -226,6 +301,133 @@ class LocalToolExecutor(
         if (!dir.exists() || !dir.isDirectory) return ToolResult.err("目录不存在：${dir.absolutePath}")
         cwd = dir
         return ToolResult.ok(cwd.absolutePath)
+    }
+
+    private fun mkdir(arg: String): ToolResult {
+        if (arg.isBlank()) return ToolResult.err("用法：mkdir <目录>")
+        val dir = resolve(arg)
+        if (!dir.mkdirs() && !dir.isDirectory) return ToolResult.err("无法创建目录：${dir.absolutePath}")
+        return ToolResult.ok("已创建 ${dir.absolutePath}")
+    }
+
+    private fun touch(arg: String): ToolResult {
+        if (arg.isBlank()) return ToolResult.err("用法：touch <文件>")
+        val file = resolve(arg)
+        file.parentFile?.mkdirs()
+        if (!file.exists()) file.createNewFile() else file.setLastModified(System.currentTimeMillis())
+        return ToolResult.ok(file.absolutePath)
+    }
+
+    private fun appendFile(arg: String): ToolResult {
+        val idx = arg.indexOf(' ')
+        if (idx < 0) return ToolResult.err("用法：append <路径> <内容>")
+        val file = resolve(arg.substring(0, idx))
+        file.parentFile?.mkdirs()
+        val content = arg.substring(idx + 1)
+        file.appendText(content)
+        return ToolResult.ok("已追加 ${content.length} 字符到 ${file.absolutePath}")
+    }
+
+    private fun headTail(arg: String, fromEnd: Boolean): ToolResult {
+        val pieces = arg.split(Regex("\\s+"), limit = 2)
+        val count = pieces.firstOrNull()?.toIntOrNull()?.coerceIn(1, 1000) ?: 10
+        val path = if (pieces.firstOrNull()?.toIntOrNull() != null) pieces.getOrNull(1).orEmpty() else arg
+        if (path.isBlank()) return ToolResult.err("用法：${if (fromEnd) "tail" else "head"} [行数] <路径>")
+        val lines = resolve(path).readLines()
+        return ToolResult.ok((if (fromEnd) lines.takeLast(count) else lines.take(count)).joinToString("\n"))
+    }
+
+    private fun wordCount(arg: String): ToolResult {
+        if (arg.isBlank()) return ToolResult.err("用法：wc <路径>")
+        val text = resolve(arg).readText()
+        return ToolResult.ok("${text.lineSequence().count()} lines  ${text.split(Regex("\\s+")).count { it.isNotBlank() }} words  ${text.length} chars")
+    }
+
+    private fun stat(arg: String): ToolResult {
+        if (arg.isBlank()) return ToolResult.err("用法：stat <路径>")
+        val file = resolve(arg)
+        if (!file.exists()) return ToolResult.err("不存在：${file.absolutePath}")
+        return ToolResult.ok("path=${file.absolutePath}\ntype=${if (file.isDirectory) "directory" else "file"}\nsize=${file.length()}\nmodified=${Instant.ofEpochMilli(file.lastModified())}")
+    }
+
+    private fun tree(arg: String): ToolResult {
+        val base = if (arg.isBlank()) cwd else resolve(arg)
+        if (!base.isDirectory) return ToolResult.err("不是目录：${base.absolutePath}")
+        val lines = base.walkTopDown().maxDepth(8).take(1000).map { file ->
+            val depth = file.relativeTo(base).path.split(File.separator).size.let { if (file == base) 0 else it }
+            "  ".repeat(depth) + if (file.isDirectory) "[${file.name}]" else file.name
+        }.toList()
+        return ToolResult.ok(lines.joinToString("\n") + if (lines.size >= 1000) "\n…（截断）" else "")
+    }
+
+    private fun find(arg: String): ToolResult {
+        val needle = arg.trim().lowercase()
+        if (needle.isBlank()) return ToolResult.err("用法：find <文件名片段>")
+        val hits = cwd.walkTopDown().maxDepth(16).filter { it.name.lowercase().contains(needle) }.take(500).map { it.relativeTo(root).path }.toList()
+        return ToolResult.ok(hits.joinToString("\n").ifBlank { "无匹配。" })
+    }
+
+    private fun grep(arg: String): ToolResult {
+        val pieces = arg.split(Regex("\\s+"), limit = 2)
+        if (pieces.size < 2) return ToolResult.err("用法：grep <文本> <路径>")
+        val needle = pieces[0]
+        val file = resolve(pieces[1])
+        val matches = file.readLines().mapIndexedNotNull { index, line -> if (line.contains(needle, ignoreCase = true)) "${index + 1}:$line" else null }.take(1000)
+        return ToolResult.ok(matches.joinToString("\n").ifBlank { "无匹配。" })
+    }
+
+    private fun transformLines(arg: String, transform: (List<String>) -> List<String>): ToolResult {
+        if (arg.isBlank()) return ToolResult.err("需要文件路径")
+        return ToolResult.ok(transform(resolve(arg).readLines()).joinToString("\n"))
+    }
+
+    private fun copyMove(arg: String, move: Boolean): ToolResult {
+        val pieces = arg.split(Regex("\\s+"), limit = 2)
+        if (pieces.size < 2) return ToolResult.err("用法：${if (move) "mv" else "cp"} <源> <目标>")
+        val source = resolve(pieces[0]); val target = resolve(pieces[1])
+        if (!source.isFile) return ToolResult.err("源必须是文件：${source.absolutePath}")
+        target.parentFile?.mkdirs()
+        if (target.exists()) return ToolResult.err("目标已存在：${target.absolutePath}")
+        if (move) {
+            if (!source.renameTo(target)) { source.copyTo(target); source.delete() }
+        } else source.copyTo(target)
+        return ToolResult.ok("${if (move) "已移动" else "已复制"}到 ${target.absolutePath}")
+    }
+
+    private fun remove(arg: String, directoryOnly: Boolean): ToolResult {
+        if (arg.isBlank()) return ToolResult.err("需要明确路径")
+        val target = resolve(arg)
+        if (target == root) return ToolResult.err("不能删除工作区根目录")
+        if (!target.exists()) return ToolResult.err("不存在：${target.absolutePath}")
+        if (target.isDirectory && target.list()?.isNotEmpty() == true) return ToolResult.err("仅允许删除空目录")
+        if (directoryOnly && !target.isDirectory) return ToolResult.err("不是目录：${target.absolutePath}")
+        if (!target.delete()) return ToolResult.err("删除失败：${target.absolutePath}")
+        return ToolResult.ok("已删除 ${target.absolutePath}")
+    }
+
+    private fun environment(): ToolResult = ToolResult.ok(
+        "APP=${appContext.packageName}\nWORKSPACE=${root.absolutePath}\nCWD=${cwd.absolutePath}\nTZ=${ZoneId.systemDefault().id}\nSDK=${Build.VERSION.SDK_INT}",
+    )
+
+    private fun which(arg: String): ToolResult {
+        val canonical = TerminalCommandCatalog.canonical(arg.trim()) ?: return ToolResult.err("未找到命令：$arg")
+        return ToolResult.ok("builtin:$canonical")
+    }
+
+    private fun hash(arg: String, algorithm: String): ToolResult {
+        if (arg.isBlank()) return ToolResult.err("需要文件路径")
+        val digest = MessageDigest.getInstance(algorithm).digest(resolve(arg).readBytes()).joinToString("") { "%02x".format(it) }
+        return ToolResult.ok("$digest  $arg")
+    }
+
+    private fun sequence(arg: String): ToolResult {
+        val numbers = arg.split(Regex("\\s+")).mapNotNull(String::toLongOrNull)
+        if (numbers.isEmpty()) return ToolResult.err("用法：seq [起点] <终点> [步长]")
+        val start = if (numbers.size == 1) 1L else numbers[0]
+        val end = if (numbers.size == 1) numbers[0] else numbers[1]
+        val step = (numbers.getOrNull(2) ?: 1L).takeIf { it != 0L } ?: return ToolResult.err("步长不能为 0")
+        val values = generateSequence(start) { it + step }.takeWhile { if (step > 0) it <= end else it >= end }.take(10_000).toList()
+        return ToolResult.ok(values.joinToString("\n"))
     }
 
     private fun readFile(arg: String): ToolResult {
@@ -381,15 +583,8 @@ class LocalToolExecutor(
     }
 
     private fun help(): ToolResult = ToolResult.ok(
-        """
-        可用命令：
-        pwd / ls [路径] / cd <路径>
-        read <路径> / write <路径> <内容> / edit <路径> <旧> <新>
-        memory_lab_read [组件] / memory_lab_query <关键词>
-        memory_lab_update <名称> <tags> <内容> / memory_lab_reindex
-        settings_read / settings_update <JSON 设置字符串>
-        state / help
-        """.trimIndent(),
+        "内置受控命令（${TerminalCommandCatalog.names.size} 个命令名/别名；文件操作仅限工作区）：\n" +
+            TerminalCommandCatalog.summary(),
     )
 
     private fun slugify(name: String): String =

@@ -941,22 +941,35 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
                     settings.cacheMode = WebSettings.LOAD_DEFAULT
                     settings.allowFileAccess = false
                     settings.allowContentAccess = false
+                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     settings.javaScriptCanOpenWindowsAutomatically = false
                     settings.setSupportMultipleWindows(false)
+                    settings.setGeolocationEnabled(false)
                     settings.mediaPlaybackRequiresUserGesture = true
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                         settings.safeBrowsingEnabled = true
                     }
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                            val target = BrowserUrlPolicy.normalize(request.url.toString())
+                            val target = BrowserUrlPolicy.normalizeNavigation(request.url.toString())
                             return if (target != null) {
-                                session.onNavigationStarted(target)
+                                // Return false and let WebView continue this exact request.
+                                // Calling loadUrl here duplicates navigation and can bypass
+                                // redirect bookkeeping.
                                 false
                             } else {
                                 session.onNavigationError("已阻止非网页链接：${request.url.scheme ?: "unknown"}", view.canGoBack(), view.canGoForward())
                                 true
                             }
+                        }
+                        override fun onSafeBrowsingHit(
+                            view: WebView,
+                            request: WebResourceRequest,
+                            threatType: Int,
+                            callback: android.webkit.SafeBrowsingResponse,
+                        ) {
+                            callback.backToSafety(true)
+                            session.onNavigationError("安全浏览已阻止危险网页", view.canGoBack(), view.canGoForward())
                         }
                         override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                             session.onNavigationStarted(url)

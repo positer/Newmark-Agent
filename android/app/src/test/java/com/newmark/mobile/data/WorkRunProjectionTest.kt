@@ -43,6 +43,31 @@ class WorkRunProjectionTest {
     }
 
     @Test
+    fun completesEmptyThoughtShellAndCarriesProviderDuration() {
+        val items = WorkRunProjection.project(
+            listOf(
+                event(1, "thought"),
+                event(2, "thought_result").copy(durationMs = 420L),
+            ),
+            runStatus = "running",
+        )
+
+        val thought = items.filterIsInstance<WorkRunProjection.Item.Thought>().single().event
+        assertTrue(thought.completed)
+        assertEquals("", thought.content)
+        assertEquals(420L, thought.durationMs)
+    }
+
+    @Test
+    fun runningDurationUsesSuppliedClockAndCompletedDurationIsFrozen() {
+        val running = LocalWorkRun(runId = "run", startedAt = 1_000L)
+        assertEquals(2_500L, running.elapsedAt(3_500L))
+
+        val completed = running.copy(endedAt = 2_200L, status = "completed")
+        assertEquals(1_200L, completed.elapsedAt(99_000L))
+    }
+
+    @Test
     fun hidesPrivateReasoningButKeepsPublicTools() {
         val items = WorkRunProjection.project(
             listOf(

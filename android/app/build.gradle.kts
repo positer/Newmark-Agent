@@ -12,8 +12,8 @@ android {
         applicationId = "com.newmark.mobile"
         minSdk = 24
         targetSdk = 35
-        versionCode = 501
-        versionName = "0.5.1"
+        versionCode = 502
+        versionName = "0.5.2"
     }
 
     buildTypes {

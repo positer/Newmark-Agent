@@ -2,7 +2,7 @@
 
 Newmark Agent 是面向本地工作区的多端 AI Agent。它把对话、Build/Plan/Goal/Flow、文件与终端、浏览器、Memory Lab、自动化和多 Agent 协作整合在同一套本地状态模型中，并提供 Windows/Linux 桌面端、终端界面、CLI 与 Android 客户端。
 
-当前开发版本：`dev-0.5.1`。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本，默认 Release 同时发布 Windows、Linux 和 Android。
+当前开发版本：`dev-0.5.2`。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本，默认 Release 同时发布 Windows、Linux 和 Android。
 
 ## 主要能力
 
@@ -10,7 +10,7 @@ Newmark Agent 是面向本地工作区的多端 AI Agent。它把对话、Build/
 - Build、Plan、Goal 与 Flow 支持长任务、队列、暂停/恢复、上下文压缩和可追溯 WorkRun。
 - 文件、终端、编辑器、浏览器、Computer Use、Git/GitHub、SSH、MCP、技能、自动化与 Memory Lab 均受策略边界约束。
 - 模型按供应商部署隔离；同名模型不会共享凭据、验证状态或路由证据。
-- Android 支持本地对话、本地 Agent 工具、Memory Lab，以及配对桌面端后的远端对话与工作区操作。
+- Android 支持本地对话、工作区终端、本地 Agent 工具、Memory Lab、系统日程创建与系统分享接收，也支持配对桌面端后的远端对话、文件上传和工作区操作。
 - 新安装不预置供应商或密钥；用户自行添加供应商，升级不会清除已有配置。
 
 ## 下载与安装
@@ -85,7 +85,7 @@ android\gradlew.bat -p android testDebugUnitTest lintVitalRelease assembleReleas
 
 ```powershell
 cd DESKTOP
-npm run release:version-set -- 0.5.1
+npm run release:version-set -- 0.5.2
 npm run release:version-check
 ```
 

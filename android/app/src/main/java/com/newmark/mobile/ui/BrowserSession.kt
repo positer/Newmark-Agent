@@ -8,6 +8,7 @@ import com.newmark.mobile.data.ToolResult
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.net.URI
+import java.net.URLEncoder
 
 /**
  * The mobile browser accepts only ordinary web origins.  Keeping this policy
@@ -16,16 +17,36 @@ import java.net.URI
  */
 object BrowserUrlPolicy {
     const val DefaultUrl = "https://www.google.com/"
+    private val hostLike = Regex("^(localhost|\\[[0-9a-fA-F:]+]|(?:[a-zA-Z0-9-]+\\.)+[a-zA-Z]{2,63}|(?:\\d{1,3}\\.){3}\\d{1,3})(?::\\d{1,5})?(?:[/?#].*)?$")
 
-    fun normalize(raw: String): String? {
+    /** Address-bar resolution: web address completion first, search fallback second. */
+    fun resolveInput(raw: String): String? {
         val trimmed = raw.trim()
         if (trimmed.isBlank()) return null
-        val candidate = if (trimmed.contains("://")) trimmed else "https://$trimmed"
+        if (trimmed.any { it.isISOControl() }) return null
+        if (trimmed.contains("://")) return normalizeNavigation(trimmed)
+        if (hostLike.matches(trimmed)) {
+            val local = trimmed.startsWith("localhost", true) || trimmed.startsWith("127.") || trimmed.startsWith("[::1]")
+            return normalizeNavigation("${if (local) "http" else "https"}://$trimmed")
+        }
+        if (Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:").containsMatchIn(trimmed)) return null
+        val query = URLEncoder.encode(trimmed, Charsets.UTF_8.name()).replace("+", "%20")
+        return "https://www.google.com/search?q=$query"
+    }
+
+    /** Navigation boundary: never turns an untrusted callback URL into a search. */
+    fun normalizeNavigation(raw: String): String? {
+        val trimmed = raw.trim()
+        if (trimmed.isBlank() || trimmed.any { it.isISOControl() || it.isWhitespace() }) return null
+        val candidate = trimmed
         val uri = runCatching { URI(candidate) }.getOrNull() ?: return null
         val scheme = uri.scheme?.lowercase() ?: return null
-        if (scheme !in setOf("http", "https") || uri.host.isNullOrBlank()) return null
+        if (scheme !in setOf("http", "https") || uri.host.isNullOrBlank() || uri.userInfo != null) return null
+        if (uri.port !in -1..65535) return null
         return uri.toASCIIString()
     }
+
+    fun normalize(raw: String): String? = resolveInput(raw)
 }
 
 enum class BrowserCommandKind { Navigate, Back, Forward, Reload }
@@ -82,7 +103,7 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
     }
 
     fun navigate(raw: String): Boolean {
-        val normalized = BrowserUrlPolicy.normalize(raw)
+        val normalized = BrowserUrlPolicy.resolveInput(raw)
         if (normalized == null) {
             error = "仅支持带有效主机名的 http:// 或 https:// 网页地址"
             isLoading = false
@@ -119,14 +140,14 @@ class BrowserSessionState(initialUrl: String = BrowserUrlPolicy.DefaultUrl) {
     }
 
     fun onNavigationStarted(url: String) {
-        BrowserUrlPolicy.normalize(url)?.let { address = it }
+        BrowserUrlPolicy.normalizeNavigation(url)?.let { address = it }
         isLoading = true
         progress = 0
         error = ""
     }
 
     fun onNavigationFinished(url: String, canBack: Boolean, canForward: Boolean) {
-        BrowserUrlPolicy.normalize(url)?.let { address = it }
+        BrowserUrlPolicy.normalizeNavigation(url)?.let { address = it }
         isLoading = false
         progress = 100
         canGoBack = canBack

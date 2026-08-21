@@ -119,6 +119,22 @@ object LocalTools {
             ),
             listOf("action"),
         ),
+        function(
+            "calendar_create",
+            "打开 Android 默认日程 App 的新建日程界面，由用户检查并确认保存；无需读取或写入日历权限",
+            mapOf(
+                "title" to prop("string", "日程标题"),
+                "begin_time_ms" to prop("number", "开始时间，Unix epoch 毫秒"),
+                "end_time_ms" to prop("number", "结束时间，Unix epoch 毫秒"),
+                "all_day" to prop("boolean", "是否全天日程"),
+                "location" to prop("string", "地点"),
+                "description" to prop("string", "说明"),
+                "emails" to prop("string", "受邀人邮箱，逗号分隔"),
+                "recurrence_rule" to prop("string", "可选 RFC 5545 RRULE，例如 FREQ=WEEKLY;COUNT=4"),
+                "availability" to enumProp(listOf("busy", "free"), "忙碌状态"),
+            ),
+            listOf("title"),
+        ),
     )
 
     private fun browserUse(actions: Collection<String>): JSONObject = function(

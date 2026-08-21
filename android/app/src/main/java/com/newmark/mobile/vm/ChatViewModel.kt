@@ -1140,10 +1140,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         while (loop < 6) {
             applyPendingGuides()
             val t0 = System.currentTimeMillis()
+            // Publish the public activity shell before waiting on the provider.
+            // This is deliberately not private chain-of-thought: it only lets
+            // the Build block show "思考中" and later "进行了思考" like PC.
+            publish(event(type = "thought"))
             val tools = if (mode == "plan") LocalTools.planDefinitions else LocalTools.definitions
             val resp = apiClient.chat(config, messages, tools, intelligence, thinkingTierMap).getOrElse { e ->
                 val msg = "⚠️ ${e.message ?: "API 调用失败"}（请先在设置页配置 API）"
                 val endedAt = System.currentTimeMillis()
+                publish(event(type = "thought_result", durationMs = endedAt - t0))
                 publish(
                     event(type = "error", content = msg, durationMs = endedAt - t0),
                     status = "error",
@@ -1162,6 +1167,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             val chatMs = System.currentTimeMillis() - t0
+            publish(event(type = "thought_result", content = resp.content, durationMs = chatMs))
 
             if (resp.toolCalls.isEmpty()) {
                 val responseText = resp.content.ifBlank { "（无回复内容）" }
@@ -1183,11 +1189,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 break
             }
 
-            // assistant 在工具调用前的思考/叙述
-            if (resp.content.isNotBlank()) {
-                publish(event(type = "thought", content = resp.content, durationMs = chatMs))
-                publish(event(type = "thought_result", content = resp.content))
-            }
             messages += ChatMessage(role = "assistant", content = resp.content, toolCalls = resp.toolCalls)
             for (call in resp.toolCalls) {
                 val tc0 = System.currentTimeMillis()

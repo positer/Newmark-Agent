@@ -1,5 +1,13 @@
 # Newmark Agent Overview
 
+## Cross-platform live thought streaming and Android identity/accessibility fixes (2026-08-21)
+
+- Desktop and Android now present provider-authored readable reasoning incrementally inside the active Build thought item. Chat Completions reasoning fields and Responses API reasoning-summary deltas flow through a public `thought_delta` event; UI projection mutates one incomplete thought in place, and only the final `thought_result` is durable.
+- Android local chat/completions requests use SSE streaming, independently accumulate thought, answer text, and fragmented tool calls, and update Compose state on the main dispatcher. Remote Android conversations consume the same desktop `thought_delta` event contract through the paired SSE bridge.
+- Android model selection identity is provider-qualified for local catalogues and deployment-qualified for remote catalogues. Providers may therefore expose the same display model name without sharing selection state or resolving the first-level label to the wrong provider.
+- Memory Lab overview tag labels use theme palette text tokens instead of a fixed pale ARGB value. Light and dark palette tests require WCAG AA contrast for both emphasized and ambient labels.
+- Desktop build, focused bridge/coalescer checks, and the complete desktop source verifier pass (`1663/1663`). Android focused projection/streaming contracts pass; the final Release unit/lint/R8/APK gate is recorded in `archive/20260821-cross-platform-live-thought-and-mobile-identity.md`.
+
 ## dev-0.5.1 provider migration and release (2026-08-21)
 
 - Desktop and Android share version `0.5.1` (`versionCode 501`). Android uses the fixed product glass level and no longer exposes a glass-strength setting.

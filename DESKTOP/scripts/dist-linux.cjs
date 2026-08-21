@@ -66,7 +66,10 @@ function wslQuote(value) {
 }
 
 function toWslPath(distro, windowsPath) {
-  const result = spawnSync('wsl.exe', ['-d', distro, '--', 'wslpath', '-a', windowsPath], {
+  // WSL's argv bridge can consume backslashes from an unquoted Windows path
+  // (notably paths without spaces). Forward slashes remain valid to wslpath.
+  const pathArgument = String(windowsPath).replace(/\\/g, '/');
+  const result = spawnSync('wsl.exe', ['-d', distro, '--', 'wslpath', '-a', pathArgument], {
     cwd: root,
     encoding: 'utf8',
     windowsHide: true,

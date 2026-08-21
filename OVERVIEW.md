@@ -6,6 +6,7 @@
 - The complete desktop release gate, Android unit/Vital lint/R8 gate, packaged Windows SSH/CLI/context/console checks, and isolated WSL Linux build pass. The hardened focused desktop verifier reports `1667/1667`.
 - The machine-wide MSI upgrade reports CLI `0.5.2` and registry `0.5.2.0`. Installed and candidate `app.asar` hashes match, the existing user config hash is unchanged, and the installed GUI is responsive.
 - Release tooling supports one optional unified artifact root for externally locked workspaces, binds packaged CLI smoke to the actual candidate executable, and preserves no-space Windows paths across WSL packaging. Default CI output remains `release/`.
+- Annotated tag `dev-0.5.2` points to `899f9e826d53c0f2e3e88328b3185a4174d3ee14`. GitHub prerelease publication and the Windows/Linux/Android/publish matrix completed successfully; the six server-side asset sizes and SHA-256 digests match the locally installed and gated candidates.
 - Exact asset hashes, installation evidence, recovery findings, and publication state are recorded in `archive/20260821-dev-0.5.2-three-platform-release.md`.
 
 ## Cross-platform live thought streaming and Android identity/accessibility fixes (2026-08-21)

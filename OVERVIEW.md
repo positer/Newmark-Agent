@@ -7,6 +7,7 @@
 - The complete release command passed desktop, context, performance, TUI, SSH, WSL, CLI, GUI/TUI/CLI, Android unit, Vital lint, R8/resource-shrink, and packaging gates. The focused desktop source verifier reports `1663/1663`.
 - Six local assets were built: Windows MSI/ZIP, Linux AppImage/deb/ZIP, and Android APK. Candidate metadata reports Windows `0.5.1`, deb `0.5.1`/`amd64`, and Android `0.5.1`/`501`.
 - Windows machine installation completed on the third interactive UAC attempt with Windows Installer exit `0`. Program Files and the registry report `0.5.1`/`0.5.1.0`; installed and packaged `app.asar` are byte-identical, the existing user config hash is unchanged, and the installed GUI reached a responsive window. The GitHub prerelease contains exactly six assets whose server-side sizes and SHA-256 digests match the local candidates. Exact evidence is recorded in `archive/20260821-dev-0.5.1-three-platform-release.md`.
+- The first tag CI reproduced all three platform builds but its publish job lacked repository context. `.github/workflows/release-linux.yml` now passes `--repo "$GITHUB_REPOSITORY"` to GitHub CLI release operations; corrected tag run `32448463305` completed Windows, Linux, Android, and publish jobs successfully while preserving the already verified release assets.
 
 ## Mobile clean-install provider baseline (2026-08-20)
 

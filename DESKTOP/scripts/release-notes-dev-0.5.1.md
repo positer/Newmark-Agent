@@ -33,4 +33,6 @@ Both desktop and Android must run `dev-0.5.1` for provider credential migration.
 | `Newmark-Agent-0.5.1-linux-unpacked-x64.zip` | `F7AF0AA5FEDF9989F77AD35BB6CCE1E8F79CEB675BB9AB8086A81F6DADB0004B` |
 | `Newmark-Agent-0.5.1-android.apk` | `D135C113D58B7589E08C4F2A75D82D2470069A789885EE063CF6A7ECF27B8C27` |
 
+The Windows MSI was installed machine-wide for local acceptance. Program Files reports `0.5.1`, the registry reports `0.5.1.0`, installed and packaged `app.asar` hashes match exactly, and the existing user configuration remained byte-identical.
+
 These are prerelease builds. Back up important local data before upgrading.

@@ -6,7 +6,7 @@
 - A paired Android device can explicitly import the desktop provider catalogue with API credentials through an authenticated endpoint. Ordinary Remote Touch state and model menus remain credential-redacted; local keys are preserved during merges and providers previously imported without keys are repaired.
 - The complete release command passed desktop, context, performance, TUI, SSH, WSL, CLI, GUI/TUI/CLI, Android unit, Vital lint, R8/resource-shrink, and packaging gates. The focused desktop source verifier reports `1663/1663`.
 - Six local assets were built: Windows MSI/ZIP, Linux AppImage/deb/ZIP, and Android APK. Candidate metadata reports Windows `0.5.1`, deb `0.5.1`/`amd64`, and Android `0.5.1`/`501`.
-- Windows machine installation requires interactive UAC. Two elevation prompts were cancelled during this release run, so installed-state acceptance remains pending while the packaged candidate is fully verified. Exact artifact hashes and installation attempts are recorded in `archive/20260821-dev-0.5.1-three-platform-release.md`.
+- Windows machine installation completed on the third interactive UAC attempt with Windows Installer exit `0`. Program Files and the registry report `0.5.1`/`0.5.1.0`; installed and packaged `app.asar` are byte-identical, the existing user config hash is unchanged, and the installed GUI reached a responsive window. The GitHub prerelease contains exactly six assets whose server-side sizes and SHA-256 digests match the local candidates. Exact evidence is recorded in `archive/20260821-dev-0.5.1-three-platform-release.md`.
 
 ## Mobile clean-install provider baseline (2026-08-20)
 

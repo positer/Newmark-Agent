@@ -1076,13 +1076,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             sequence = sequence++,
             durationMs = durationMs,
         )
-        fun publish(
-            next: LocalWorkEvent,
+        fun publishCurrent(
             status: String = "running",
             endedAt: Long = 0L,
             text: String = "",
         ) {
-            events += next
             onProgress(
                 LocalWorkRun(
                     runId = runId,
@@ -1098,6 +1096,29 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     branchNodeId = branchNodeId,
                 ),
             )
+        }
+        fun publish(
+            next: LocalWorkEvent,
+            status: String = "running",
+            endedAt: Long = 0L,
+            text: String = "",
+        ) {
+            events += next
+            publishCurrent(status, endedAt, text)
+        }
+        fun publishThoughtDelta(delta: String) {
+            val index = events.indexOfLast { it.type == "thought" && !it.completed }
+            if (index >= 0) events[index] = events[index].copy(content = events[index].content + delta)
+            publishCurrent()
+        }
+        fun publishTextDelta(delta: String) {
+            val last = events.lastOrNull()
+            if (last?.type == "text") {
+                events[events.lastIndex] = last.copy(content = last.content + delta)
+            } else {
+                events += event(type = "text", content = delta)
+            }
+            publishCurrent()
         }
         val messages = snapshot.toMutableList()
         fun applyPendingGuides(): Int {
@@ -1156,7 +1177,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             // the Build block show "思考中" and later "进行了思考" like PC.
             publish(event(type = "thought"))
             val tools = if (mode == "plan") LocalTools.planDefinitions else LocalTools.definitions
-            val resp = apiClient.chat(config, messages, tools, intelligence, thinkingTierMap).getOrElse { e ->
+            val resp = apiClient.chat(
+                config,
+                messages,
+                tools,
+                intelligence,
+                thinkingTierMap,
+                onThoughtDelta = { delta ->
+                    withContext(Dispatchers.Main.immediate) { publishThoughtDelta(delta) }
+                },
+                onTextDelta = { delta ->
+                    withContext(Dispatchers.Main.immediate) { publishTextDelta(delta) }
+                },
+            ).getOrElse { e ->
                 val msg = "⚠️ ${e.message ?: "API 调用失败"}（请先在设置页配置 API）"
                 val endedAt = System.currentTimeMillis()
                 publish(event(type = "thought_result", durationMs = endedAt - t0))
@@ -1178,7 +1211,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             val chatMs = System.currentTimeMillis() - t0
-            publish(event(type = "thought_result", content = resp.content, durationMs = chatMs))
+            publish(event(type = "thought_result", content = resp.reasoningContent, durationMs = chatMs))
 
             if (resp.toolCalls.isEmpty()) {
                 val responseText = resp.content.ifBlank { "（无回复内容）" }

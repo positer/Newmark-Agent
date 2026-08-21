@@ -665,6 +665,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
                 currentAgent.emitWorkEvent({ type: 'thought', content: '' });
               }
               if (delta) {
+                currentAgent.emitWorkEvent({ type: 'thought_delta', content: delta });
                 stream.push({ type: 'thinking_delta', contentIndex, delta, partial: assistantMessage(model, thinking ? [{ type: 'text', text }] : [], 'stop') } as KernelProviderEventStreamEvent);
               }
             }

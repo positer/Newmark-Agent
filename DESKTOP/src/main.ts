@@ -326,9 +326,9 @@ const workEventNoMobileCoalescer = new WorkEventCoalescer(event => dispatchAgent
 
 function broadcastAgentWorkEvent(event: unknown, mirrorToMobile = true): void {
   const workEvent = event as AgentWorkEvent;
-  // Text deltas are the only high-frequency event. They are coalesced at the
-  // IPC/SSE boundary; all lifecycle/tool events retain immediate ordering.
-  if (workEvent.type === 'text') {
+  // Response and thought deltas are coalesced at the IPC/SSE boundary; all
+  // lifecycle/tool events retain immediate ordering.
+  if (workEvent.type === 'text' || workEvent.type === 'thought_delta') {
     (mirrorToMobile ? workEventCoalescer : workEventNoMobileCoalescer).push(workEvent);
     return;
   }

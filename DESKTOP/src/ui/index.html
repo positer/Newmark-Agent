@@ -9463,7 +9463,7 @@ function publicWorkEvent(event) {
   var content = String(event && event.content || '');
   var toolArgs = String(event && event.toolArgs || '');
   if (/<think(?:\s|>)/i.test(content) || /<\/think>/i.test(content) || /<\/?think\b|(?:reasoning_content|thinking_delta)\s*[:：]/i.test(toolArgs)) return false;
-  return ['start', 'text', 'response', 'final_response', 'status', 'tool_call', 'tool_result', 'thought', 'thought_result', 'guide', 'guide_accepted', 'guide_applied', 'guide_deferred', 'guide_rejected', 'done', 'error', 'interrupted', 'force_interrupted'].indexOf(type) >= 0;
+  return ['start', 'text', 'response', 'final_response', 'status', 'tool_call', 'tool_result', 'thought', 'thought_delta', 'thought_result', 'guide', 'guide_accepted', 'guide_applied', 'guide_deferred', 'guide_rejected', 'done', 'error', 'interrupted', 'force_interrupted'].indexOf(type) >= 0;
 }
 
 function publicToolNameForUi(value) {
@@ -10135,6 +10135,16 @@ function renderWorkRunEvents(run, includeGuides) {
       }
       if (!rawEvent) continue;
     }
+    if (rawType === 'thought_delta') {
+      for (var thoughtDeltaIndex = events.length - 1; thoughtDeltaIndex >= 0; thoughtDeltaIndex--) {
+        var liveThought = events[thoughtDeltaIndex];
+        if (String(liveThought && liveThought.type || '').toLowerCase() !== 'thought' || liveThought.completed) continue;
+        events[thoughtDeltaIndex] = Object.assign({}, liveThought, { content: String(liveThought.content || '') + String(rawEvent.content || '') });
+        rawEvent = null;
+        break;
+      }
+      if (!rawEvent) continue;
+    }
     events.push(rawEvent);
   }
   flushPublicText();
@@ -10353,6 +10363,16 @@ function applyAgentWorkEventToRun(event) {
     recordGuideUiMessage(event, target);
   }
   if (publicWorkEvent(event) && type !== 'start') {
+    if (type === 'thought_delta') {
+      for (var liveThoughtIndex = run.events.length - 1; liveThoughtIndex >= 0; liveThoughtIndex--) {
+        var liveThoughtEvent = run.events[liveThoughtIndex];
+        if (String(liveThoughtEvent.type || '').toLowerCase() !== 'thought' || liveThoughtEvent.completed) continue;
+        run.events[liveThoughtIndex] = Object.assign({}, liveThoughtEvent, {
+          content: String(liveThoughtEvent.content || '') + String(event.content || '')
+        });
+        break;
+      }
+    } else {
     var incomingGuideKey = guideWorkEventKey(event);
     if (incomingGuideKey) {
       for (var guideEventIndex = run.events.length - 1; guideEventIndex >= 0; guideEventIndex--) {
@@ -10372,6 +10392,7 @@ function applyAgentWorkEventToRun(event) {
     var eventId = String(event.id || [event.sequence || '', type, event.timestamp || '', event.content || ''].join('|'));
      if (!run.events.some(function(item) { return String(item.id || '') === eventId; })) run.events.push(Object.assign({}, event, { id: eventId }));
      run.events.sort(compareConversationWorkEvents);
+    }
   }
   run.sequence = Math.max(Number(run.sequence || 0), Number(event.sequence || 0));
   if (type === 'done') { run.status = 'completed'; run.endedAt = event.endedAt || event.timestampIso || new Date().toISOString(); if (run.userToggled !== true) run.expanded = false; }
@@ -10933,7 +10954,13 @@ function cacheAgentWorkEvent(event) {
   var id = eventRuntimeKey(event);
   if (!state.agentWorkEventsByConversation) state.agentWorkEventsByConversation = {};
   if (!state.agentWorkEventsByConversation[id]) state.agentWorkEventsByConversation[id] = [];
-  state.agentWorkEventsByConversation[id].push(event);
+  var cached = state.agentWorkEventsByConversation[id];
+  var previous = cached.length ? cached[cached.length - 1] : null;
+  if (event.type === 'thought_delta' && previous && previous.type === 'thought_delta' && String(previous.runId || '') === String(event.runId || '')) {
+    previous.content = String(previous.content || '') + String(event.content || '');
+  } else {
+    cached.push(event);
+  }
   var limit = Number(state.agentWorkEventLimit || 240);
   if (state.agentWorkEventsByConversation[id].length > limit) {
     state.agentWorkEventsByConversation[id] = state.agentWorkEventsByConversation[id].slice(-limit);

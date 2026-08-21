@@ -1,8 +1,8 @@
 import type { AgentWorkEvent } from './types';
 
 /**
- * Bounds cross-process traffic for high-rate streaming text without changing
- * durable work-run events. Non-text events always flush pending text first.
+ * Bounds cross-process traffic for high-rate response and thought deltas
+ * without changing durable work-run events. Lifecycle events flush deltas first.
  */
 export class WorkEventCoalescer {
   private readonly pending = new Map<string, { event: AgentWorkEvent; content: string; timer: ReturnType<typeof setTimeout> }>();
@@ -10,12 +10,12 @@ export class WorkEventCoalescer {
   constructor(private readonly emit: (event: AgentWorkEvent) => void, private readonly windowMs = 16) {}
 
   push(event: AgentWorkEvent): void {
-    if (event.type !== 'text') {
+    if (event.type !== 'text' && event.type !== 'thought_delta') {
       this.flushAll();
       this.emit(event);
       return;
     }
-    const key = `${event.workspaceId || ''}::${event.conversationId}::${event.runtimeKey || ''}::${event.runId || ''}`;
+    const key = `${event.type}::${event.workspaceId || ''}::${event.conversationId}::${event.runtimeKey || ''}::${event.runId || ''}`;
     const current = this.pending.get(key);
     if (current) {
       current.content += event.content;

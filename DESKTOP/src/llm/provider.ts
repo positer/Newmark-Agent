@@ -996,17 +996,13 @@ export class LLMProvider {
     const transport = this.buildProviderAdapterTransport();
     const streaming = mode === 'chat_stream';
     const reasoningState = { current: '' };
-    let reasoningStatusEmitted = false;
 
     for await (const event of adapter.execute(serialized, execSignal, transport)) {
       if (event.type === 'response.started' || event.type === 'response.completed') continue;
       if (event.type === 'tool_call.started' || event.type === 'tool_call.arguments.delta') continue;
       if (event.type === 'reasoning.summary.delta') {
         reasoningState.current += event.delta;
-        if (!streaming && !reasoningStatusEmitted) {
-          reasoningStatusEmitted = true;
-          yield { type: 'status', text: '', reasoningContent: reasoningState.current };
-        }
+        yield { type: 'status', text: '', reasoningContent: reasoningState.current };
         continue;
       }
       if (event.type === 'text.delta') {
@@ -1069,11 +1065,20 @@ export class LLMProvider {
 
     const execSignal = signal ?? new AbortController().signal;
     const transport = this.buildProviderAdapterTransport();
+    let reasoningSummary = '';
     for await (const event of adapter.execute(serialized, execSignal, transport)) {
       if (event.type === 'response.started' || event.type === 'response.completed') continue;
       if (event.type === 'tool_call.started' || event.type === 'tool_call.arguments.delta') continue;
+      if (event.type === 'reasoning.summary.delta') {
+        reasoningSummary += event.delta;
+        yield { type: 'status', text: '', reasoningContent: reasoningSummary };
+        continue;
+      }
       if (event.type === 'reasoning.summary.done') {
-        if (event.summary) yield { type: 'status', text: event.summary };
+        if (event.summary && event.summary !== reasoningSummary) {
+          reasoningSummary = event.summary;
+          yield { type: 'status', text: '', reasoningContent: reasoningSummary };
+        }
         continue;
       }
       if (event.type === 'text.delta') {
@@ -1359,6 +1364,7 @@ export class LLMProvider {
 
             if (delta.reasoning_content) {
               currentReasoningContent += delta.reasoning_content;
+              yield { type: 'status', text: '', reasoningContent: currentReasoningContent };
             }
 
             const deltaText = this.extractTextValue(delta.content);

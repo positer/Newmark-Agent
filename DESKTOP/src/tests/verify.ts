@@ -1172,6 +1172,9 @@ async function main() {
     && uiHtml.includes('思考中')
     && uiHtml.includes("iconSvg('brain', 'thought', 'tiny')")
     && agentKernelRunnerTs.includes("emitWorkEvent({ type: 'thought', content: '' })")
+    && agentKernelRunnerTs.includes("emitWorkEvent({ type: 'thought_delta', content: delta })")
+    && uiHtml.includes("rawType === 'thought_delta'")
+    && agentTs.includes("input.type === 'text' || input.type === 'thought_delta'")
     && agentKernelRunnerTs.includes("emitWorkEvent({ type: 'thought_result', content: thinking })")
     && agentTs.includes("'thought', 'thought_result'"), 'Build thinking: 模型思考呈现为与工具并行的可展开 Build 活动（思考中/进行了思考），思考过程仅展开可见、绝不进入聊天正文');
   assert(!agentKernelRunnerTs.includes("|| name.startsWith('memory_lab_')"), 'Memory Lab tools: read/update/reindex results continue through the same model turn instead of terminating before the next tool or final response');
@@ -5726,7 +5729,7 @@ async function main() {
   globalThis.fetch = originalFetch;
   assert(responsesStreamBody?.stream === true && responsesStreamAccept === 'text/event-stream', 'LLMProvider Responses stream: requests SSE with stream=true and Accept text/event-stream');
   assert(responsesStreamBody?.reasoning?.summary === 'auto', 'LLMProvider Responses stream: requests a readable reasoning summary when the provider supports it');
-  assert(streamedResponsesTokens.some(token => token.type === 'status' && token.text === 'Checking the workspace'), 'LLMProvider Responses stream: yields provider-authored readable reasoning summaries without exposing encrypted reasoning');
+  assert(streamedResponsesTokens.some(token => token.type === 'status' && token.reasoningContent === 'Checking the '), 'LLMProvider Responses stream: yields provider-authored readable reasoning summary deltas before completion without exposing encrypted reasoning');
   assert(streamedResponsesTokens.some(token => token.type === 'text' && token.text === 'first '), 'LLMProvider Responses stream: yields output_text deltas as they arrive');
   assert(streamedResponsesTokens.some(token => token.type === 'tool_call' && token.toolCall?.id === 'call_write' && token.toolCall.arguments.includes('README.md')), 'LLMProvider Responses stream: assembles and yields function call arguments');
 

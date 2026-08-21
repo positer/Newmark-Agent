@@ -97,6 +97,7 @@ async function main(): Promise<void> {
       check(body.tools?.[0]?.function?.name === 'bash', 'chat_stream: tools serialized');
       check(body.messages?.[0]?.role === 'system' && body.messages?.[0]?.content === SYSTEM, 'chat_stream: system message');
       assert.deepStrictEqual(tokens, [
+        { type: 'status', text: '', reasoningContent: ' step' },
         { type: 'text', text: 'Hello', reasoningContent: ' step' },
         { type: 'text', text: ' world', reasoningContent: ' step' },
         { type: 'usage', text: '', usage: { input: 5, output: 2, cacheRead: 0, cacheWrite: 0 } },

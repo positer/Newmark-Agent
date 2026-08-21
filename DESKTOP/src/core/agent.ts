@@ -2599,7 +2599,7 @@ export class Agent {
       type: publishedType,
       content: isToolEvent
         ? this.publicToolEventContent(publishedType, toolName!)
-        : input.type === 'text'
+        : input.type === 'text' || input.type === 'thought_delta'
           ? this.sanitizeAssistantStreamingOutput(input.content || '')
           : this.sanitizePublicWorkContent(input.content || ''),
       mode: input.mode || this.modeName(),

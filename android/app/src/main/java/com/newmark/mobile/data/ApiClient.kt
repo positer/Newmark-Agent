@@ -13,10 +13,26 @@ import java.util.concurrent.TimeUnit
 /** 一次 chat 响应：文本内容 + 可选工具调用 */
 data class ChatResponse(
     val content: String = "",
+    val reasoningContent: String = "",
     val toolCalls: List<ToolCall> = emptyList(),
 )
 
-/** OpenAI 兼容 chat/completions 客户端（非流式，支持 function calling） */
+internal data class ChatStreamTextDelta(val thought: String = "", val text: String = "")
+
+internal fun parseChatStreamTextDelta(payload: String): ChatStreamTextDelta {
+    val delta = JSONObject(payload)
+        .optJSONArray("choices")
+        ?.optJSONObject(0)
+        ?.optJSONObject("delta")
+        ?: return ChatStreamTextDelta()
+    val thought = sequenceOf("reasoning_content", "reasoning", "thinking")
+        .map(delta::optString)
+        .firstOrNull(String::isNotBlank)
+        .orEmpty()
+    return ChatStreamTextDelta(thought = thought, text = delta.optString("content"))
+}
+
+/** OpenAI 兼容 chat/completions 客户端（流式文本/思考 + function calling） */
 class ApiClient {
 
     private val client = OkHttpClient.Builder()
@@ -34,6 +50,8 @@ class ApiClient {
         intelligence: String = "medium",
         thinkingTierMap: Map<String, String> = emptyMap(),
         maxOutputTokens: Int? = null,
+        onThoughtDelta: suspend (String) -> Unit = {},
+        onTextDelta: suspend (String) -> Unit = {},
     ): Result<ChatResponse> = withContext(Dispatchers.IO) {
         runCatching {
             val base = config.baseUrl.trim().trimEnd('/')
@@ -41,7 +59,7 @@ class ApiClient {
 
             val body = JSONObject().apply {
                 put("model", config.model)
-                put("stream", false)
+                put("stream", true)
                 // 智能档位真正生效（对齐 PC intelligenceConfig / applyChatReasoningEffort）
                 val (temp, maxTokens, _) = intelligenceConfig(intelligence)
                 put("temperature", temp)
@@ -91,31 +109,80 @@ class ApiClient {
                 .build()
 
             client.newCall(request).execute().use { resp ->
-                val text = resp.body?.string() ?: ""
                 if (!resp.isSuccessful) {
+                    val text = resp.body?.string() ?: ""
                     error("HTTP ${resp.code}: ${text.take(200)}")
                 }
-                val json = JSONObject(text)
-                val message = json.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
-                val content = if (message.isNull("content")) "" else message.optString("content", "")
-                val calls = mutableListOf<ToolCall>()
-                val tcArr = message.optJSONArray("tool_calls")
-                if (tcArr != null) {
-                    for (i in 0 until tcArr.length()) {
-                        val tc = tcArr.getJSONObject(i)
-                        val fn = tc.optJSONObject("function")
-                        if (fn != null) {
-                            calls.add(
-                                ToolCall(
-                                    id = tc.optString("id", ""),
-                                    name = fn.optString("name", ""),
-                                    arguments = fn.optString("arguments", ""),
-                                ),
-                            )
+                val source = resp.body?.source() ?: error("Empty response body")
+                val content = StringBuilder()
+                val reasoning = StringBuilder()
+                val callIds = mutableMapOf<Int, StringBuilder>()
+                val callNames = mutableMapOf<Int, StringBuilder>()
+                val callArguments = mutableMapOf<Int, StringBuilder>()
+                val fallbackJson = StringBuilder()
+                while (!source.exhausted()) {
+                    val line = source.readUtf8Line() ?: break
+                    if (!line.startsWith("data:")) {
+                        if (line.isNotBlank()) fallbackJson.append(line)
+                        continue
+                    }
+                    val payload = line.removePrefix("data:").trim()
+                    if (payload.isBlank() || payload == "[DONE]") continue
+                    val delta = JSONObject(payload)
+                        .optJSONArray("choices")
+                        ?.optJSONObject(0)
+                        ?.optJSONObject("delta")
+                        ?: continue
+                    val streamed = parseChatStreamTextDelta(payload)
+                    if (streamed.thought.isNotBlank()) {
+                        reasoning.append(streamed.thought)
+                        onThoughtDelta(streamed.thought)
+                    }
+                    if (streamed.text.isNotBlank()) {
+                        content.append(streamed.text)
+                        onTextDelta(streamed.text)
+                    }
+                    delta.optJSONArray("tool_calls")?.let { toolCalls ->
+                        for (i in 0 until toolCalls.length()) {
+                            val tool = toolCalls.optJSONObject(i) ?: continue
+                            val index = tool.optInt("index", i)
+                            val function = tool.optJSONObject("function")
+                            callIds.getOrPut(index) { StringBuilder() }.append(tool.optString("id"))
+                            callNames.getOrPut(index) { StringBuilder() }.append(function?.optString("name").orEmpty())
+                            callArguments.getOrPut(index) { StringBuilder() }.append(function?.optString("arguments").orEmpty())
                         }
                     }
                 }
-                ChatResponse(content = content, toolCalls = calls)
+                if (fallbackJson.isNotBlank() && content.isEmpty() && reasoning.isEmpty()) {
+                    val message = JSONObject(fallbackJson.toString())
+                        .getJSONArray("choices").getJSONObject(0).getJSONObject("message")
+                    val text = message.optString("content")
+                    val thought = sequenceOf("reasoning_content", "reasoning", "thinking")
+                        .map(message::optString)
+                        .firstOrNull(String::isNotBlank)
+                        .orEmpty()
+                    content.append(text)
+                    reasoning.append(thought)
+                    if (thought.isNotBlank()) onThoughtDelta(thought)
+                    if (text.isNotBlank()) onTextDelta(text)
+                    message.optJSONArray("tool_calls")?.let { toolCalls ->
+                        for (i in 0 until toolCalls.length()) {
+                            val tool = toolCalls.optJSONObject(i) ?: continue
+                            val function = tool.optJSONObject("function")
+                            callIds.getOrPut(i) { StringBuilder() }.append(tool.optString("id"))
+                            callNames.getOrPut(i) { StringBuilder() }.append(function?.optString("name").orEmpty())
+                            callArguments.getOrPut(i) { StringBuilder() }.append(function?.optString("arguments").orEmpty())
+                        }
+                    }
+                }
+                val calls = (callIds.keys + callNames.keys + callArguments.keys).sorted().map { index ->
+                    ToolCall(
+                        id = callIds[index]?.toString().orEmpty(),
+                        name = callNames[index]?.toString().orEmpty(),
+                        arguments = callArguments[index]?.toString().orEmpty(),
+                    )
+                }
+                ChatResponse(content.toString(), reasoning.toString(), calls)
             }
         }
     }

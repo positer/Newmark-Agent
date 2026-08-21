@@ -59,6 +59,22 @@ class WorkRunProjectionTest {
     }
 
     @Test
+    fun streamsThoughtDeltasIntoTheRunningThoughtItem() {
+        val items = WorkRunProjection.project(
+            listOf(
+                event(1, "thought"),
+                event(2, "thought_delta", "先检查"),
+                event(3, "thought_delta", "供应商身份。"),
+            ),
+            runStatus = "running",
+        )
+
+        val thought = items.filterIsInstance<WorkRunProjection.Item.Thought>().single().event
+        assertFalse(thought.completed)
+        assertEquals("先检查供应商身份。", thought.content)
+    }
+
+    @Test
     fun runningDurationUsesSuppliedClockAndCompletedDurationIsFrozen() {
         val running = LocalWorkRun(runId = "run", startedAt = 1_000L)
         assertEquals(2_500L, running.elapsedAt(3_500L))

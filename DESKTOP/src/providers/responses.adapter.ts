@@ -179,7 +179,10 @@ export class ResponsesAdapter implements ModelProviderAdapter {
             if (eventType === 'response.reasoning_summary_text.delta') {
               const key = `${String(payload.item_id || '')}:${String(payload.summary_index || 0)}`;
               const delta = this.extractText(payload.delta);
-              if (delta) reasoningSummaries.set(key, (reasoningSummaries.get(key) || '') + delta);
+              if (delta) {
+                reasoningSummaries.set(key, (reasoningSummaries.get(key) || '') + delta);
+                yield { type: 'reasoning.summary.delta', delta };
+              }
               continue;
             }
             if (eventType === 'response.reasoning_summary_text.done') {

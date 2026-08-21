@@ -4,7 +4,7 @@ package com.newmark.mobile.data
  * 移动端的 PC `renderWorkRunEvents` 等价投影。
  *
  * 这里不负责 Compose 样式，只把桌面端完整的公开事件历史化为稳定、可渲染的
- * 顺序：过滤私有推理，合并 text 流，回填 thought/tool 完成态，并将连续工具
+ * 顺序：过滤私有推理，合并 text 与可公开的 thought_delta 流，回填 thought/tool 完成态，并将连续工具
  * 调用折叠。远程 API 快照与本地 Agent 均先转换为 [LocalWorkEvent]，因此必须
  * 只维护这一份语义。
  */
@@ -19,7 +19,7 @@ object WorkRunProjection {
 
     private val publicTypes = setOf(
         "start", "text", "response", "final_response", "status", "tool_call", "tool_result",
-        "thought", "thought_result", "guide", "guide_accepted", "guide_applied", "guide_deferred",
+        "thought", "thought_delta", "thought_result", "guide", "guide_accepted", "guide_applied", "guide_deferred",
         "guide_rejected", "done", "error", "interrupted", "force_interrupted",
     )
     private val hiddenTypes = setOf("reasoning", "reasoning_content", "thinking", "thinking_delta")
@@ -99,6 +99,17 @@ object WorkRunProjection {
                             content = event.content.ifBlank { prior.content },
                             durationMs = event.durationMs.takeIf { it > 0 } ?: prior.durationMs,
                         )
+                        return@forEach
+                    }
+                }
+
+                "thought_delta" -> {
+                    val index = projected.indexOfLast { prior ->
+                        prior.type.equals("thought", ignoreCase = true) && !prior.completed
+                    }
+                    if (index >= 0) {
+                        val prior = projected[index]
+                        projected[index] = prior.copy(content = prior.content + event.content)
                         return@forEach
                     }
                 }

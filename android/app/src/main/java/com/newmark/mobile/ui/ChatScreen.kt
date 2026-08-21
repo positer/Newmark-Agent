@@ -220,14 +220,12 @@ internal fun modelOptionDisplayName(option: ModelOption): String =
 
 internal fun selectedModelMenuLabel(
     selectedModel: String,
+    selectedProviderId: String,
     selectedModelName: String,
     options: List<ModelOption>,
 ): String {
     val matched = options.firstOrNull { option ->
-        option.modelName == selectedModelName ||
-            option.modelName == selectedModel ||
-            modelOptionDisplayName(option) == selectedModelName ||
-            selectedModel.endsWith(" / ${modelOptionDisplayName(option)}")
+        modelOptionMatchesSelection(option, selectedProviderId, selectedModelName)
     }
     if (matched != null) return modelOptionDisplayName(matched)
 
@@ -236,6 +234,16 @@ internal fun selectedModelMenuLabel(
         ?.substringAfterLast(" / ")
         ?.takeIf(String::isNotBlank)
         ?: selectedModel.substringAfterLast(" / ").ifBlank { "未选择" }
+}
+
+internal fun modelOptionMatchesSelection(
+    option: ModelOption,
+    selectedProviderId: String,
+    selectedModelName: String,
+): Boolean = if (selectedModelName.startsWith("deployment:")) {
+    option.modelName == selectedModelName
+} else {
+    option.providerId == selectedProviderId && option.modelName == selectedModelName
 }
 
 internal fun groupModelOptions(options: List<ModelOption>): List<ModelOptionGroup> =
@@ -315,6 +323,7 @@ fun ChatScreen(
     remoteMode: Boolean = false,
     modelOptions: List<ModelOption> = emptyList(),
     selectedModel: String = "",
+    selectedProviderId: String = "",
     selectedModelName: String = "",
     intelligence: String = "medium",
     selectedMode: String = "Build",
@@ -549,6 +558,7 @@ fun ChatScreen(
                     remoteMode = remoteMode,
                     mode = selectedMode,
                     selectedModel = selectedModel,
+                    selectedProviderId = selectedProviderId,
                     selectedModelName = selectedModelName,
                     intelligence = intelligence,
                     options = modelOptions,
@@ -2374,6 +2384,7 @@ private fun InputCompositeMenuOverlay(
     remoteMode: Boolean,
     mode: String,
     selectedModel: String,
+    selectedProviderId: String,
     selectedModelName: String,
     intelligence: String,
     options: List<ModelOption>,
@@ -2562,7 +2573,7 @@ private fun InputCompositeMenuOverlay(
                             InputCompositeMenu.ModelMain -> {
                                 MenuRow(
                                     "模型选择",
-                                    trailing = selectedModelMenuLabel(selectedModel, selectedModelName, options),
+                                    trailing = selectedModelMenuLabel(selectedModel, selectedProviderId, selectedModelName, options),
                                 ) { onMenuChange(InputCompositeMenu.Models) }
                                 MenuRow("智能档位", trailing = intelligence.ifBlank { "medium" }) { onMenuChange(InputCompositeMenu.Tiers) }
                             }
@@ -2581,8 +2592,11 @@ private fun InputCompositeMenuOverlay(
                                     group.options.forEach { option ->
                                         MenuRow(
                                             text = modelOptionDisplayName(option),
-                                            selected = option.modelName == selectedModel ||
-                                                option.modelName == selectedModelName,
+                                            selected = modelOptionMatchesSelection(
+                                                option,
+                                                selectedProviderId,
+                                                selectedModelName,
+                                            ),
                                         ) {
                                             onSelectModel(option); onDismiss()
                                         }

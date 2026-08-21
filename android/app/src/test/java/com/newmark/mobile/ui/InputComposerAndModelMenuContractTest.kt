@@ -66,11 +66,12 @@ class InputComposerAndModelMenuContractTest {
             ),
         )
 
-        assertEquals("GPT-5.4", selectedModelMenuLabel("Local OpenAI / GPT-5.4", "gpt-5.4", local))
+        assertEquals("GPT-5.4", selectedModelMenuLabel("Local OpenAI / GPT-5.4", "local-openai", "gpt-5.4", local))
         assertEquals(
             "Remote Model",
             selectedModelMenuLabel(
                 "Remote Provider / Remote Model",
+                "remote-provider",
                 "deployment:remote-provider:remote-model",
                 remote,
             ),
@@ -80,8 +81,21 @@ class InputComposerAndModelMenuContractTest {
         val appSource = File("src/main/java/com/newmark/mobile/ui/NewmarkApp.kt").readText()
         assertTrue(source.contains("LaunchedEffect(remoteMode)"))
         assertTrue(source.contains("key(remoteMode)"))
-        assertTrue(source.contains("trailing = selectedModelMenuLabel(selectedModel, selectedModelName, options)"))
+        assertTrue(source.contains("trailing = selectedModelMenuLabel(selectedModel, selectedProviderId, selectedModelName, options)"))
         assertTrue(appSource.contains("val modelOptions = if (useRemote) linkVm.remoteModelOptions() else vm.enabledModelOptions()"))
+    }
+
+    @Test
+    fun sameNamedModelsRemainBoundToTheirProviderDeployment() {
+        val alpha = ModelOption("provider-alpha", "shared-model", providerLabel = "Alpha", displayName = "Shared")
+        val beta = ModelOption("provider-beta", "shared-model", providerLabel = "Beta", displayName = "Shared")
+
+        assertTrue(!modelOptionMatchesSelection(alpha, "provider-beta", "shared-model"))
+        assertTrue(modelOptionMatchesSelection(beta, "provider-beta", "shared-model"))
+        assertEquals(
+            "Shared",
+            selectedModelMenuLabel("Beta / Shared", "provider-beta", "shared-model", listOf(alpha, beta)),
+        )
     }
 
     @Test

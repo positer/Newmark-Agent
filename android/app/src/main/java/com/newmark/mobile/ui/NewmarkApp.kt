@@ -326,6 +326,7 @@ private data class ConversationSurface(
     val remoteMode: Boolean,
     val modelOptions: List<ModelOption>,
     val selectedModel: String,
+    val selectedProviderId: String,
     val selectedModelName: String,
     val intelligence: String,
     val selectedMode: String,
@@ -647,6 +648,11 @@ private fun NewmarkAppContent(
         val providerLabel = vm.activeProvider?.label?.takeIf { it.isNotBlank() }
         if (providerLabel != null) "$providerLabel / $selectedModelName" else selectedModelName
     }
+    val selectedProviderId = if (useRemote) {
+        modelOptions.firstOrNull { it.modelName == selectedModelName }?.providerId.orEmpty()
+    } else {
+        vm.activeProviderId
+    }
     val intelligence = if (useRemote) (linkVm.desktopState?.intelligence ?: "medium") else vm.intelligence
     val selectedMode = if (useRemote) {
         linkVm.desktopState?.mode.orEmpty().ifBlank { "build" }.replaceFirstChar(Char::titlecase)
@@ -801,6 +807,7 @@ private fun NewmarkAppContent(
         remoteMode = useRemote,
         modelOptions = modelOptions,
         selectedModel = selectedModel,
+        selectedProviderId = selectedProviderId,
         selectedModelName = selectedModelName,
         intelligence = intelligence,
         selectedMode = selectedMode,
@@ -1377,6 +1384,7 @@ private fun ConversationSurfaceContent(
         remoteMode = surface.remoteMode,
         modelOptions = surface.modelOptions,
         selectedModel = surface.selectedModel,
+        selectedProviderId = surface.selectedProviderId,
         selectedModelName = surface.selectedModelName,
         intelligence = surface.intelligence,
         selectedMode = surface.selectedMode,

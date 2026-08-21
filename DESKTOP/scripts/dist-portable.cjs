@@ -7,7 +7,9 @@ const { patchAndVerify, patchExeIdentity, verifyExeIcon } = require('./patch-win
 const { createConsoleLauncher } = require('./create-console-launcher.cjs');
 
 const root = path.resolve(__dirname, '..');
-const outputDir = path.resolve(root, '..', 'release');
+const outputDir = process.env.NEWMARK_RELEASE_OUTPUT_DIR
+  ? path.resolve(process.env.NEWMARK_RELEASE_OUTPUT_DIR)
+  : path.resolve(root, '..', 'release');
 const appPackage = require(path.join(root, 'package.json'));
 const installerPath = path.join(outputDir, `Newmark-Agent-${appPackage.version}-x64.msi`);
 const unpackedDir = path.join(outputDir, 'win-unpacked');
@@ -60,6 +62,7 @@ function runBuilder(args, label) {
   fs.mkdirSync(builderCacheDir, { recursive: true });
   const builderEnv = { ...process.env, ELECTRON_BUILDER_CACHE: builderCacheDir };
   const builderArgs = args.map(arg => String(arg));
+  builderArgs.push(`--config.directories.output=${outputDir}`);
   const electronDist = String(process.env.NEWMARK_ELECTRON_DIST_DIR || '').trim();
   if (electronDist && args.includes('dir')) builderArgs.push(`--config.electronDist=${path.resolve(electronDist)}`);
   const result = spawnSync(process.execPath, [builderCli, ...builderArgs], {

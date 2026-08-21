@@ -4,7 +4,9 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(root, '..');
-const releaseDir = path.join(repoRoot, 'release');
+const releaseDir = process.env.NEWMARK_RELEASE_OUTPUT_DIR
+  ? path.resolve(process.env.NEWMARK_RELEASE_OUTPUT_DIR)
+  : path.join(repoRoot, 'release');
 const version = require(path.join(root, 'package.json')).version;
 const latencyArchiveName = `20260721-dev-${version}-linux-agent-latency.json`;
 const WSL_DISCOVERY_TIMEOUT_MS = Math.max(1_000, Number(process.env.NEWMARK_DIST_LINUX_DISCOVERY_TIMEOUT_MS) || 15_000);
@@ -82,7 +84,7 @@ function runNativeLinuxBuild() {
   const builder = path.join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'electron-builder.cmd' : 'electron-builder');
   // Packaging must remain a local, deterministic step. Release upload is a
   // separate explicit workflow and must never be inferred from CI/GH env vars.
-  run(builder, ['--linux', '--publish', 'never']);
+  run(builder, ['--linux', '--publish', 'never', `--config.directories.output=${releaseDir}`]);
 
   const appImage = path.join(releaseDir, `Newmark-Agent-${version}-x86_64.AppImage`);
   const deb = path.join(releaseDir, `Newmark-Agent-${version}-amd64.deb`);

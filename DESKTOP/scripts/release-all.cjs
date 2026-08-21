@@ -4,7 +4,9 @@ const { spawnSync } = require('child_process');
 
 const appRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(appRoot, '..');
-const releaseRoot = path.join(repoRoot, 'release');
+const releaseRoot = process.env.NEWMARK_RELEASE_OUTPUT_DIR
+  ? path.resolve(process.env.NEWMARK_RELEASE_OUTPUT_DIR)
+  : path.join(repoRoot, 'release');
 const version = fs.readFileSync(path.join(repoRoot, 'VERSION'), 'utf8').trim();
 const npmCli = process.env.npm_execpath;
 const gradle = process.platform === 'win32'

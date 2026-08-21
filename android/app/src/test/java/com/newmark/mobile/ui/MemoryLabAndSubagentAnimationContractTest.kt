@@ -1,5 +1,10 @@
 package com.newmark.mobile.ui
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.luminance
+import com.newmark.mobile.ui.theme.NewmarkDarkPalette
+import com.newmark.mobile.ui.theme.NewmarkLightPalette
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -51,5 +56,24 @@ class MemoryLabAndSubagentAnimationContractTest {
         assertTrue(source.contains("flowPhase"))
         assertTrue(source.contains("meta?.tagPaths?.firstOrNull()?.lastOrNull()"))
         assertTrue(source.contains("selectedComponent.takeIf { it in selectedComponents }"))
+    }
+
+    @Test
+    fun memoryOverviewTagLabelsMeetNormalTextContrastInBothThemes() {
+        listOf(NewmarkLightPalette, NewmarkDarkPalette).forEach { palette ->
+            val surface = palette.bgTertiary.compositeOver(
+                palette.bgSecondary.compositeOver(palette.bgPrimary),
+            )
+            listOf(true, false).forEach { emphasized ->
+                val label = memoryLabOverviewLabelColor(palette, emphasized).compositeOver(surface)
+                assertTrue(contrastRatio(label, surface) >= 4.5f)
+            }
+        }
+    }
+
+    private fun contrastRatio(first: Color, second: Color): Float {
+        val lighter = maxOf(first.luminance(), second.luminance())
+        val darker = minOf(first.luminance(), second.luminance())
+        return (lighter + .05f) / (darker + .05f)
     }
 }

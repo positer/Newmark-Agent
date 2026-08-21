@@ -65,6 +65,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.onSizeChanged
@@ -84,6 +85,7 @@ import com.newmark.mobile.ui.components.MarqueeBorder
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkAccent
+import com.newmark.mobile.ui.theme.NewmarkPalette
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkAccentSoft
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
@@ -551,7 +553,7 @@ private fun Overview(
                     drawContext.canvas.nativeCanvas.drawText(
                         node.label.take(22), center.x - width / 2f + 22f * cameraScale, center.y + 4f * cameraScale,
                         android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                            color = android.graphics.Color.argb(if (hot) 235 else 40, 232, 238, 248)
+                            color = memoryLabOverviewLabelColor(p, hot).toArgb()
                             textSize = 11f * cameraScale
                         },
                     )
@@ -560,6 +562,9 @@ private fun Overview(
         }
     }
 }
+
+internal fun memoryLabOverviewLabelColor(p: NewmarkPalette, emphasized: Boolean): Color =
+    if (emphasized) p.textPrimary else p.textSecondary.copy(alpha = .72f)
 
 private enum class MemoryRelationMode(val label: String) {
     Both("双向"), Parents("父链"), Children("子树"), Direct("直接");

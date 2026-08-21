@@ -181,7 +181,11 @@ function verifyMsiInstaller() {
 function verifyReleaseCliSmoke() {
   const smokePath = path.join(root, 'scripts', 'release-cli-smoke.cjs');
   if (!fs.existsSync(smokePath)) throw new Error(`missing release CLI smoke script: ${smokePath}`);
-  const result = spawnSync(process.execPath, [smokePath], { cwd: root, stdio: 'inherit' });
+  const result = spawnSync(process.execPath, [smokePath], {
+    cwd: root,
+    stdio: 'inherit',
+    env: { ...process.env, NEWMARK_TEST_EXE: unpackedExe },
+  });
   if (result.error) throw new Error(`release CLI smoke spawn failed: ${result.error.message}`);
   if (result.status !== 0) throw new Error(`release CLI smoke failed with exit ${result.status}`);
 }

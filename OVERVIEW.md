@@ -1,5 +1,13 @@
 # Newmark Agent Overview
 
+## dev-0.5.2 three-platform release (2026-08-21)
+
+- Desktop and Android are bound to `0.5.2` (`versionCode 502`). The release matrix contains Windows x64 MSI/portable ZIP, Linux x86_64 AppImage/amd64 deb/unpacked ZIP, and Android APK.
+- The complete desktop release gate, Android unit/Vital lint/R8 gate, packaged Windows SSH/CLI/context/console checks, and isolated WSL Linux build pass. The hardened focused desktop verifier reports `1667/1667`.
+- The machine-wide MSI upgrade reports CLI `0.5.2` and registry `0.5.2.0`. Installed and candidate `app.asar` hashes match, the existing user config hash is unchanged, and the installed GUI is responsive.
+- Release tooling supports one optional unified artifact root for externally locked workspaces, binds packaged CLI smoke to the actual candidate executable, and preserves no-space Windows paths across WSL packaging. Default CI output remains `release/`.
+- Exact asset hashes, installation evidence, recovery findings, and publication state are recorded in `archive/20260821-dev-0.5.2-three-platform-release.md`.
+
 ## Cross-platform live thought streaming and Android identity/accessibility fixes (2026-08-21)
 
 - Desktop and Android now present provider-authored readable reasoning incrementally inside the active Build thought item. Chat Completions reasoning fields and Responses API reasoning-summary deltas flow through a public `thought_delta` event; UI projection mutates one incomplete thought in place, and only the final `thought_result` is durable.

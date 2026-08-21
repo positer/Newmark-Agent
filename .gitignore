@@ -52,6 +52,7 @@ conversations/
 dist-harmonyos/
 release-partial-*/
 release-stale-*/
+release-dev-*/
 DESKTOP/.tmp-*
 release-*verify*/
 DESKTOP/test-tmp*/

@@ -10,6 +10,17 @@ data class ChatMessage(
     val toolCallId: String = "", // role == "tool" 时回传的 call id
     val toolCalls: List<ToolCall> = emptyList(), // role == "assistant" 时的工具调用
     val workRun: LocalWorkRun? = null, // assistant 消息附带的 build block（对齐 PC ConversationWorkRun）
+    val imageAttachments: List<LocalImageAttachment> = emptyList(),
+)
+
+/** Local user image attachment. Only bounded PNG/JPEG data URLs are accepted. */
+data class LocalImageAttachment(
+    val id: String = "",
+    val name: String = "image",
+    val mimeType: String = "image/png",
+    val dataUrl: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
 )
 
 /** 本地分支节点：保存该页完整可见消息快照；父节点构成与 PC ConversationTreeNode 相同的树路径。 */

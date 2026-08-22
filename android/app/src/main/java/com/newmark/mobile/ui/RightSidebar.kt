@@ -181,6 +181,7 @@ fun MobileRightSidebar(
                     session = browserSession,
                     visible = tab == RightSidebarTab.Browser,
                     keepMounted = browserPrewarmReady,
+                    localVm = localVm,
                     modifier = Modifier.fillMaxSize().graphicsLayer {
                         alpha = if (tab == RightSidebarTab.Browser) 1f else 0f
                     }.zIndex(if (tab == RightSidebarTab.Browser) 1f else -1f),
@@ -797,11 +798,12 @@ private fun BrowserPanel(
     session: BrowserSessionState,
     visible: Boolean,
     keepMounted: Boolean,
+    localVm: ChatViewModel? = null,
     modifier: Modifier = Modifier,
 ) {
     key(session) {
         if (visible || session.hasActivity || keepMounted) {
-            ConversationBrowserPanel(session, visible, modifier)
+            ConversationBrowserPanel(session, visible, localVm, modifier)
         }
     }
 }
@@ -827,7 +829,7 @@ internal fun browserAddressScrollTarget(
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Boolean, modifier: Modifier = Modifier) {
+private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Boolean, localVm: ChatViewModel? = null, modifier: Modifier = Modifier) {
     val p = LocalNewmarkPalette.current
     val context = LocalContext.current
     val focus = LocalFocusManager.current
@@ -1005,8 +1007,22 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
                     }
                     val handler: suspend (String, Int) -> org.json.JSONObject = { url, maxChars ->
                         val browserRecognition = recognition
-                            ?: BrowserRecognition(context.applicationContext, this).also { recognition = it }
-                        browserRecognition.recognize(url, maxChars)
+                            ?: BrowserRecognition(
+                                context.applicationContext,
+                                this,
+                            ).also { recognition = it }
+                        val receipt = browserRecognition.recognize(url, maxChars)
+                        val raw = receipt.optString("text")
+                        if (raw.isNotBlank() && localVm != null) {
+                            val corrected = localVm.correctFinalVisualOcr(raw, receipt.optString("profile"))
+                            if (corrected.isNotBlank()) {
+                                receipt.put("corrected_text", corrected.take(maxChars))
+                                receipt.put("fallback", "mini_ocr_llm")
+                                receipt.put("uncertainty", "preserved")
+                                receipt.put("warning", "视觉输入不可用；内容来自本地 OCR 和文本模型保守校正，可能不完整")
+                            }
+                        }
+                        receipt
                     }
                     recognitionHandler = handler
                     session.bindRecognition(handler)

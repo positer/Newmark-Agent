@@ -14,6 +14,12 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- Broad file access is granted by the system special-access page. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- Package visibility is a normal install-time permission, not a runtime dialog. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -60,6 +66,10 @@
             android:exported="false"
             android:stopWithTask="false"
             android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".data.ShizukuPrivilegedService"
+            android:exported="true"
+            android:process=":shizuku_user_service" />
     </application>
 
 </manifest>

@@ -185,6 +185,45 @@ object LocalTools {
         ),
     )
 
+    /** Runtime exposure is capability-bound; stale model context cannot grant a tool. */
+    fun definitionsFor(context: android.content.Context, plan: Boolean = false): List<JSONObject> {
+        val state = MobileCapabilityStore(context)
+        val extras = listOf(
+            function("files_read_all", "读取共享存储文件", mapOf("path" to prop("string", "路径")), listOf("path")),
+            function("apps_list", "读取已安装应用列表", emptyMap(), emptyList()),
+            function("files_manage", "在共享存储安全边界内管理文件；delete 仅允许精确单文件或空目录并要求 confirm=true", mapOf(
+                "action" to enumProp(listOf("list", "read", "stat", "mkdir", "write", "copy", "move", "delete"), "操作"),
+                "path" to prop("string", "共享存储内路径"), "destination" to prop("string", "copy/move 目标路径"),
+                "content" to prop("string", "write 内容"), "confirm" to prop("boolean", "delete 二次确认"),
+            ), listOf("action", "path")),
+            function("apps_inspect", "读取用户授权范围内的应用公开元数据、版本与声明权限；不读取其他应用私有数据", mapOf(
+                "package_name" to prop("string", "可选包名；留空返回应用列表"),
+            ), emptyList()),
+            function("skills_list", "读取启用的 Skill", emptyMap(), emptyList()),
+            function("mcp_list", "读取启用的 MCP", emptyMap(), emptyList()),
+            function("shizuku_exec", "仅经 Shizuku shell/ADB 权限边界执行命令", mapOf("command" to prop("string", "命令")), listOf("command")),
+            function("root_exec", "仅经设备 Root 权限边界执行命令", mapOf("command" to prop("string", "命令")), listOf("command")),
+            function("adb_exec", "经 Shizuku shell/ADB 权限边界执行命令", mapOf("command" to prop("string", "命令")), listOf("command")),
+        )
+        val safeExtras = if (!plan) extras else extras.filterNot {
+            it.optJSONObject("function")?.optString("name") in setOf("files_manage", "root_exec", "shizuku_exec", "adb_exec")
+        } + function("files_manage", "只读查看共享存储", mapOf(
+            "action" to enumProp(listOf("list", "read", "stat"), "只读操作"), "path" to prop("string", "共享存储内路径"),
+        ), listOf("action", "path"))
+        val base = (if (plan) planDefinitions else definitions) + safeExtras
+        return base.filter { definition ->
+            val name = definition.optJSONObject("function")?.optString("name") ?: return@filter false
+            when {
+                name in LocalToolCatalog.shizukuNames -> state.shizukuActive()
+                name in LocalToolCatalog.rootNames -> state.rootActive()
+                name in LocalToolCatalog.privilegedNames -> state.highPrivilegeActive()
+                name in LocalToolCatalog.allFilesNames -> state.allFilesGranted()
+                name in LocalToolCatalog.appListNames -> state.appListGranted()
+                else -> true
+            }
+        }
+    }
+
     private fun browserUse(actions: Collection<String>): JSONObject = function(
         "browser_use",
         "操作当前对话的内置浏览器。observe/extract 优先读取 DOM 或 PDF 文本层；文本不足时使用同一 WebView/PDF 页面截图和设备端中英 OCR，并返回只允许保守 LLM 矫正的提示。",

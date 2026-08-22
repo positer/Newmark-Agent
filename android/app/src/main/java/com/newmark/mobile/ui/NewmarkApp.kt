@@ -305,6 +305,7 @@ internal fun sidebarRailForLayout(isCompact: Boolean, expandedLayoutRail: Boolea
  */
 private data class ConversationUiActions(
     val send: (String) -> Unit,
+    val sendImages: (String, List<com.newmark.mobile.data.LocalImageAttachment>) -> Unit,
     val stop: () -> Unit,
     val selectModel: (ModelOption) -> Unit,
     val selectIntelligence: (String) -> Unit,
@@ -665,6 +666,7 @@ private fun NewmarkAppContent(
     val escalating = useRemote && linkVm.desktopState?.status in setOf("stopping", "force_restarting")
     val conversationActions = if (useRemote) ConversationUiActions(
         send = linkVm::sendToDesktop,
+        sendImages = { text, _ -> linkVm.sendToDesktop(text) },
         stop = { if (remoteUi.flow?.running == true) linkVm.pauseRemoteFlow() else linkVm.stopRemoteConversation() },
         selectModel = linkVm::selectRemoteModel,
         selectIntelligence = linkVm::selectRemoteIntelligence,
@@ -682,6 +684,7 @@ private fun NewmarkAppContent(
         editUserMessage = linkVm::branchRemoteMessage,
     ) else ConversationUiActions(
         send = { text -> if (vm.isSending) vm.enqueueLocal(text) else vm.send(text) },
+        sendImages = { text, images -> if (!vm.isSending) vm.sendWithImages(text, images) else vm.enqueueLocal(text) },
         stop = vm::stop,
         selectModel = { vm.selectModel(it.providerId, it.modelName) },
         selectIntelligence = vm::selectIntelligence,
@@ -1402,6 +1405,7 @@ private fun ConversationSurfaceContent(
         onMenuClick = onMenuClick,
         onNewChat = surface.onNewChat,
         onSend = surface.actions.send,
+        onSendWithImages = surface.actions.sendImages,
         onStop = surface.actions.stop,
         escalating = surface.escalating,
         showConnectRemote = surface.showConnectRemote,

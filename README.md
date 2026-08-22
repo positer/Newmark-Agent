@@ -2,7 +2,7 @@
 
 Newmark Agent 是面向本地工作区的多端 AI Agent。它把对话、Build/Plan/Goal/Flow、文件与终端、浏览器、Memory Lab、自动化和多 Agent 协作整合在同一套本地状态模型中，并提供 Windows/Linux 桌面端、终端界面、CLI 与 Android 客户端。
 
-当前开发版本：`dev-0.5.3`。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本，默认 Release 同时发布 Windows、Linux 和 Android。
+当前开发版本：`dev-0.5.4`。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本，默认 Release 同时发布 Windows、Linux 和 Android。
 
 ## 主要能力
 

@@ -40,6 +40,7 @@ class LocalToolExecutor(
 ) {
 
     private val appContext = context.applicationContext
+    private val capabilities = MobileCapabilityStore(appContext)
     private val root = File(appContext.filesDir, "newmark/workspace").apply { mkdirs() }
     private val memoryLab = MemoryLabStore(appContext)
     private val providerStore = ProviderStore(appContext)
@@ -59,6 +60,13 @@ class LocalToolExecutor(
     /** Agent 工具调用入口（OpenAI function calling）：按 name + JSON 参数执行 */
     suspend fun executeTool(name: String, arguments: String): ToolResult {
         val args = runCatching { JSONObject(arguments) }.getOrDefault(JSONObject())
+        if (name in LocalToolCatalog.privilegedNames && !capabilities.highPrivilegeActive()) {
+            return ToolResult.err("高权限模式未开启或 Root/Shizuku 未授权，已阻断高权限工具")
+        }
+        if (name in LocalToolCatalog.shizukuNames && !capabilities.shizukuActive()) return ToolResult.err("Shizuku 边界未授权或高权限模式已关闭")
+        if (name in LocalToolCatalog.rootNames && !capabilities.rootActive()) return ToolResult.err("Root 边界不可用或高权限模式已关闭")
+        if (name in LocalToolCatalog.allFilesNames && !capabilities.allFilesGranted()) return ToolResult.err("请先授予读取所有文件权限")
+        if (name in LocalToolCatalog.appListNames && !capabilities.appListGranted()) return ToolResult.err("请先开启读取应用列表权限")
         runtimeTool?.invoke(name, args)?.let { return it }
         return runCatching {
             when (name) {
@@ -74,6 +82,13 @@ class LocalToolExecutor(
                 "settings_update" -> settingsUpdate(args.optString("json"))
                 "web_search" -> webSearch(args.optString("query"))
                 "web_fetch" -> webFetch(args.optString("url"))
+                "files_read_all" -> readSharedFile(args.optString("path"))
+                "apps_list" -> listApps()
+                "files_manage" -> manageSharedFile(args)
+                "apps_inspect" -> inspectApps(args.optString("package_name"))
+                "skills_list", "mcp_list" -> pluginList(name.removeSuffix("_list"))
+                "shizuku_exec", "adb_exec" -> PrivilegedToolBridge.executeShizuku(args.optString("command"))
+                "root_exec" -> PrivilegedToolBridge.executeRoot(args.optString("command"))
                 else -> ToolResult.err("未知工具：$name")
             }
         }.getOrElse { ToolResult.err("工具执行失败：${it.message ?: it.toString()}") }
@@ -193,7 +208,8 @@ class LocalToolExecutor(
         val parts = trimmed.split(Regex("\\s+"), limit = 2)
         val enteredCommand = parts[0].lowercase()
         val cmd = TerminalCommandCatalog.canonical(enteredCommand)
-            ?: return ToolResult.err("未知命令：$enteredCommand（输入 help 查看可用命令）")
+            ?: return if (capabilities.highPrivilegeActive()) executeCurrentPrivilegeBoundary(trimmed)
+            else ToolResult.err("未知命令：$enteredCommand（输入 help 查看可用命令）")
         val arg = parts.getOrNull(1)?.trim() ?: ""
         return runCatching {
             when (cmd) {
@@ -246,6 +262,12 @@ class LocalToolExecutor(
                 "settings_update" -> settingsUpdate(arg)
                 "state" -> state()
                 "help" -> help()
+                "pkg", "apt", "apt-get", "pm", "am", "cmd", "getprop", "setprop", "dumpsys", "logcat",
+                "termux-battery-status", "termux-toast", "termux-notification", "termux-open", "termux-share",
+                "termux-vibrate", "termux-clipboard-get", "termux-clipboard-set", "termux-wifi-connectioninfo" ->
+                    androidCommand(cmd, arg)
+                "shizuku" -> if (capabilities.shizukuActive()) PrivilegedToolBridge.executeShizuku(arg) else ToolResult.err("Shizuku 边界不可用或高权限模式已关闭")
+                "root" -> if (capabilities.rootActive()) PrivilegedToolBridge.executeRoot(arg) else ToolResult.err("Root 边界不可用或高权限模式已关闭")
                 else -> ToolResult.err("命令尚未实现：$enteredCommand")
             }
         }.getOrElse { ToolResult.err("执行失败：${it.message ?: it.toString()}") }
@@ -559,10 +581,126 @@ class LocalToolExecutor(
         )
     }
 
+    private fun readSharedFile(path: String): ToolResult {
+        if (path.isBlank()) return ToolResult.err("需要共享存储 path")
+        val file = safeSharedPath(path)
+        if (!file.exists()) return ToolResult.err("不存在：${file.absolutePath}")
+        if (file.isDirectory) return ToolResult.ok(file.listFiles()?.sortedBy { it.name }?.joinToString("\n") { it.name }.orEmpty())
+        if (file.length() > 20L * 1024 * 1024) return ToolResult.err("文件超过 20 MiB")
+        return ToolResult.ok(file.readText())
+    }
+
+    private fun safeSharedPath(path: String): File {
+        require(path.isNotBlank()) { "需要共享存储路径" }
+        val external = android.os.Environment.getExternalStorageDirectory().canonicalFile
+        val file = File(path).let { if (it.isAbsolute) it else File(external, path) }.canonicalFile
+        require(file == external || file.path.startsWith(external.path + File.separator)) { "路径越出共享存储边界" }
+        val relative = file.relativeTo(external).invariantSeparatorsPath.lowercase()
+        require(relative != "android/data" && !relative.startsWith("android/data/") && relative != "android/obb" && !relative.startsWith("android/obb/")) {
+            "普通文件工具不触及 Android/data 或 Android/obb"
+        }
+        var cursor: File? = file
+        while (cursor != null && cursor != external) {
+            if (java.nio.file.Files.isSymbolicLink(cursor.toPath())) throw SecurityException("拒绝符号链接路径")
+            cursor = cursor.parentFile
+        }
+        return file
+    }
+
+    private fun manageSharedFile(args: JSONObject): ToolResult {
+        val action = args.optString("action").lowercase()
+        val file = safeSharedPath(args.optString("path"))
+        return when (action) {
+            "list" -> {
+                if (!file.isDirectory) return ToolResult.err("不是目录：${file.absolutePath}")
+                ToolResult.ok(file.listFiles()?.sortedWith(compareByDescending<File> { it.isDirectory }.thenBy { it.name })?.take(2000)?.joinToString("\n") {
+                    "${if (it.isDirectory) "[d]" else "[f]"}\t${it.length()}\t${it.name}"
+                }.orEmpty())
+            }
+            "read" -> readSharedFile(file.absolutePath)
+            "stat" -> if (!file.exists()) ToolResult.err("不存在") else ToolResult.ok("path=${file.absolutePath}\ntype=${if (file.isDirectory) "directory" else "file"}\nsize=${file.length()}\nmodified=${file.lastModified()}")
+            "mkdir" -> if (file.mkdirs() || file.isDirectory) ToolResult.ok("已创建 ${file.absolutePath}") else ToolResult.err("创建失败")
+            "write" -> {
+                val content = args.optString("content")
+                if (content.toByteArray().size > 5 * 1024 * 1024) return ToolResult.err("单次写入超过 5 MiB")
+                file.parentFile?.mkdirs(); file.writeText(content); ToolResult.ok("已写入 ${file.absolutePath}")
+            }
+            "copy", "move" -> {
+                if (!file.isFile) return ToolResult.err("仅允许复制或移动单个文件")
+                val destination = safeSharedPath(args.optString("destination"))
+                if (destination.exists()) return ToolResult.err("目标已存在，拒绝覆盖")
+                destination.parentFile?.mkdirs()
+                if (action == "copy") file.copyTo(destination, overwrite = false) else if (!file.renameTo(destination)) { file.copyTo(destination); file.delete() }
+                ToolResult.ok("已${if (action == "copy") "复制" else "移动"}到 ${destination.absolutePath}")
+            }
+            "delete" -> {
+                if (!args.optBoolean("confirm", false)) return ToolResult.err("删除需要 confirm=true 二次确认")
+                val external = android.os.Environment.getExternalStorageDirectory().canonicalFile
+                if (file == external) return ToolResult.err("拒绝删除共享存储根目录")
+                if (file.isDirectory && !file.listFiles().isNullOrEmpty()) return ToolResult.err("拒绝递归删除非空目录")
+                if (!file.exists()) return ToolResult.err("目标不存在")
+                if (file.delete()) ToolResult.ok("已删除 ${file.absolutePath}") else ToolResult.err("删除失败")
+            }
+            else -> ToolResult.err("action 必须是 list|read|stat|mkdir|write|copy|move|delete")
+        }
+    }
+
+    private fun listApps(): ToolResult {
+        val pm = appContext.packageManager
+        val rows = pm.getInstalledPackages(0).asSequence().map { info ->
+            val label = info.applicationInfo?.loadLabel(pm)?.toString().orEmpty()
+            "${info.packageName}\t${info.versionName.orEmpty()}\t$label"
+        }.sorted().toList()
+        return ToolResult.ok(rows.joinToString("\n").ifBlank { "没有可见应用" })
+    }
+
+    private fun inspectApps(packageName: String): ToolResult {
+        if (packageName.isBlank()) return listApps()
+        val pm = appContext.packageManager
+        val info = runCatching { pm.getPackageInfo(packageName, android.content.pm.PackageManager.GET_PERMISSIONS) }.getOrNull()
+            ?: return ToolResult.err("应用不可见或不存在：$packageName")
+        val app = info.applicationInfo
+        return ToolResult.ok(JSONObject()
+            .put("packageName", info.packageName)
+            .put("label", app?.loadLabel(pm)?.toString().orEmpty())
+            .put("versionName", info.versionName.orEmpty())
+            .put("versionCode", if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else @Suppress("DEPRECATION") info.versionCode.toLong())
+            .put("enabled", app?.enabled == true)
+            .put("systemApp", app?.flags?.and(android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0)
+            .put("requestedPermissions", JSONArray(info.requestedPermissions ?: emptyArray<String>()))
+            .put("privateDataReadable", info.packageName == appContext.packageName)
+            .toString(2))
+    }
+
+    private fun pluginList(kind: String): ToolResult {
+        val state = MobilePluginStore(appContext).load()
+        val entries = if (kind == "skills") state.skills else state.mcp
+        return ToolResult.ok(entries.filterValues { it }.keys.sorted().joinToString("\n").ifBlank { "没有启用的 ${kind.uppercase()} 插件" })
+    }
+
     private fun help(): ToolResult = ToolResult.ok(
         "内置受控命令（${TerminalCommandCatalog.names.size} 个命令名/别名；文件操作仅限工作区）：\n" +
             TerminalCommandCatalog.summary(),
     )
+
+    private fun androidCommand(command: String, arg: String): ToolResult {
+        val privileged = command in setOf("pkg", "apt", "apt-get", "pm", "am", "cmd", "setprop", "dumpsys", "logcat")
+        if (privileged && !capabilities.highPrivilegeActive()) return ToolResult.err("$command 需要高权限模式（Root/Shizuku）")
+        val line = if (arg.isBlank()) command else "$command $arg"
+        if (privileged) return executeCurrentPrivilegeBoundary(line)
+        return runCatching {
+            val process = ProcessBuilder("/system/bin/sh", "-c", line).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText()
+            val code = process.waitFor()
+            if (code == 0) ToolResult.ok(output.trim()) else ToolResult.err(output.trim().ifBlank { "退出码 $code" })
+        }.getOrElse { ToolResult.err("Android 命令不可用：${it.message ?: it}") }
+    }
+
+    private fun executeCurrentPrivilegeBoundary(command: String): ToolResult = when {
+        capabilities.rootActive() -> PrivilegedToolBridge.executeRoot(command)
+        capabilities.shizukuActive() -> PrivilegedToolBridge.executeShizuku(command)
+        else -> ToolResult.err("当前没有可用的 Root/Shizuku 高权限边界")
+    }
 
     private fun slugify(name: String): String =
         name.trim().lowercase()

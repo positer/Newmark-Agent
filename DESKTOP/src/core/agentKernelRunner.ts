@@ -515,7 +515,16 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   try {
     const linkedPlanRevisionBeforeRun = agent.getLinkedPlan().revision;
     const modelBeforeKernelRun = agent.model;
-    let lastTurn = await runWithCompressionResume([], false);
+    const preflightVisualFallback = !agent.activeModelConfig()?.vision
+      ? await agent.finalVisualFallback('vision input not supported by the selected model', processSignal)
+      : null;
+    let lastTurn = preflightVisualFallback
+      ? { text: preflightVisualFallback, stopReason: 'stop', errorMessage: '' }
+      : await runWithCompressionResume([], false);
+    if (preflightVisualFallback) {
+      tokens.push({ type: 'text', text: preflightVisualFallback });
+      agent.recordWorkStatus('Final visual fallback used: local mini OCR plus conservative text correction.');
+    }
     if (modelBeforeKernelRun && modelBeforeKernelRun !== agent.model && !tokens.some(t => t.text?.includes('[Model fallback]'))) {
       tokens.unshift({ type: 'text', text: `[Model fallback] ${modelBeforeKernelRun} unavailable; switched to ${agent.model}.` });
     }
@@ -544,6 +553,14 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       kernel.state.tools = toKernelTools(agent, fallbackToolSurface.definitions, toolProvisioning);
       await agent.waitForPlannedRouteRetry();
       lastTurn = await runWithCompressionResume([], false);
+    }
+    if (kernelTurnFailed(agent, lastTurn)) {
+      const visualFallback = await agent.finalVisualFallback(lastTurn.errorMessage || lastTurn.text, processSignal);
+      if (visualFallback) {
+        tokens.push({ type: 'text', text: visualFallback });
+        agent.recordWorkStatus('Final visual fallback used: local mini OCR plus conservative text correction.');
+        lastTurn = { ...lastTurn, text: visualFallback, errorMessage: '', stopReason: 'stop' };
+      }
     }
     if (kernelTurnFailed(agent, lastTurn)) {
       throw new ProviderRunError(normalizePublicProviderError(lastTurn.errorMessage || lastTurn.text, [agent.activeModelConfig()?.api_key]));

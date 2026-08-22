@@ -35,7 +35,10 @@ private val RepairPrompt = listOf(
 ).joinToString("")
 
 /** Lightweight recognition bound to one conversation-scoped WebView. */
-class BrowserRecognition(private val context: Context, private val webView: WebView) : AutoCloseable {
+class BrowserRecognition(
+    private val context: Context,
+    private val webView: WebView,
+) : AutoCloseable {
     private val latin = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     private val chinese = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
     private val http = OkHttpClient.Builder()
@@ -95,7 +98,7 @@ class BrowserRecognition(private val context: Context, private val webView: WebV
             val latinText = latin.process(image).await().text.trim()
             val chineseText = chinese.process(image).await().text.trim()
             val text = mergeRecognitions(latinText, chineseText).take(maxChars)
-            return JSONObject()
+            val receipt = JSONObject()
                 .put("ok", text.isNotBlank())
                 .put("source", source)
                 .put("recognition_order", RecognitionOrder)
@@ -107,6 +110,11 @@ class BrowserRecognition(private val context: Context, private val webView: WebV
                 .put("agent_repair_prompt", RepairPrompt)
                 .put("truncated", text.length >= maxChars)
                 .apply { if (text.isBlank()) put("error", "本地 OCR 未识别到可读的中英文文本") }
+            if (text.isNotBlank()) {
+                receipt.put("fallback", "mini_ocr")
+                receipt.put("uncertainty", "raw_ocr_only")
+            }
+            return receipt
         } finally {
             bitmap.recycle()
         }

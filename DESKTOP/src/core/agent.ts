@@ -7166,6 +7166,56 @@ export class Agent {
     return results;
   }
 
+  /**
+   * Final visual safety net: OCR each submitted image and ask a text-only
+   * request to conservatively repair the OCR. This is intentionally callable
+   * only after a visual-input refusal and after same-provider vision routing
+   * has been exhausted; the original image is never sent again.
+   */
+  async finalVisualFallback(errorText: string, signal?: AbortSignal): Promise<string | null> {
+    if (!/(?:vision|image|multimodal|image_url|input_image).*(?:not supported|unsupported|拒绝|不支持|failed|failure|invalid)|(?:not supported|unsupported|拒绝|不支持).*(?:vision|image|multimodal|image_url|input_image)/i.test(String(errorText || ''))) return null;
+    const current = this.activeModelConfig();
+    if (!current) return null;
+    const alternateVision = this.config.allModels().some(model =>
+      model.enabled !== false && model.provider_id === current.provider_id &&
+      model.name !== current.name && !!model.vision && !!model.api_key && !!model.provider_url &&
+      !['unavailable', 'auth_error', 'invalid_config'].includes(String(model.evaluation?.status || model.validation?.status || '').toLowerCase()),
+    );
+    if (alternateVision) return null;
+    const latest = [...this.history].reverse().find(item => item?.role === 'user');
+    const parts = latest?.content && Array.isArray(latest.content) ? latest.content as Array<Record<string, unknown>> : [];
+    const images = parts.map(part => {
+      const image = part.image_url;
+      return image && typeof image === 'object' ? String((image as Record<string, unknown>).url || '') : '';
+    }).filter(value => /^data:image\/(?:png|jpeg);base64,/i.test(value)).slice(0, 4);
+    if (!images.length) return null;
+    const ocr: Array<{ index: number; text: string; confidence: number }> = [];
+    for (const [index, image] of images.entries()) {
+      try {
+        const result = await this.tools.finalVisualFallbackOcr(image, signal);
+        if (result.ok && result.text.trim()) ocr.push({ index: index + 1, text: result.text.slice(0, 50_000), confidence: result.confidence });
+      } catch {}
+    }
+    if (!ocr.length) return JSON.stringify({ ok: false, fallback: 'mini_ocr_llm', error: 'Local OCR returned no readable text; no visual content was fabricated.' });
+    const task = typeof latest?.content === 'string' ? latest.content : '';
+    const evidence = ocr.map(item => `Image ${item.index} (OCR confidence ${item.confidence.toFixed(1)}):\n${item.text}`).join('\n\n');
+    const prompt = `The provider rejected image input. Answer the user's task using only this approximate OCR evidence. Correct obvious character, spacing, and line-break errors only when supported by context. Preserve [uncertain] markers for ambiguity and never invent missing visual content.\nUser task:\n${task.slice(0, 12_000)}\nOCR evidence:\n${evidence}`;
+    let corrected = '';
+    try {
+      const provider = this.engineModel();
+      if (provider) corrected = String(await provider.chat(this.activeModelName(), [{ role: 'user', content: prompt }], 'You are a text-only OCR correction assistant. Be conservative and explicit about uncertainty.', 0.05, 3000, signal) || '').trim();
+    } catch {}
+    return JSON.stringify({
+      ok: !!(corrected || ocr.length),
+      fallback: 'mini_ocr_llm',
+      approximate: true,
+      warning: '视觉输入被拒绝；以下内容来自本地 OCR，并经文本模型保守校正，可能不完整。',
+      raw_ocr: ocr,
+      corrected: corrected || ocr.map(item => item.text).join('\n\n'),
+      uncertainty: corrected ? 'preserved' : 'raw_ocr_only',
+    }, null, 2);
+  }
+
   engineModel(): LLMProvider | null {
     if (this.forcedProvider) {
       const active = this.activeDeployment();
@@ -7597,8 +7647,14 @@ export class Agent {
       }
       const selectedModel = this.activeModelConfig();
       if (images.length && !selectedModel?.vision) {
-        this.status = 'idle';
-        return [{ type: 'text', text: `[Vision unavailable] ${this.activeModelName() || this.model} has not passed image-input validation. Select a validated vision model before asking about attachments.` }];
+        // Give the normal route planner first chance to select another
+        // same-provider vision deployment. If none is available, the kernel
+        // preflight invokes the final mini-OCR + text-only correction path.
+        const hasSameProviderVision = selectedModel && this.config.allModels().some(model =>
+          model.enabled !== false && model.provider_id === selectedModel.provider_id &&
+          model.name !== selectedModel.name && !!model.vision,
+        );
+        if (hasSameProviderVision) this.switchToFallbackModel('vision input not supported by the selected model');
       }
       const now = this.nowLabel();
       const visibleUserInput = inputEnvelope?.visibleUserInput === undefined

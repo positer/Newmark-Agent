@@ -228,7 +228,16 @@ class ApiClient(
                                             }
                                         })
                                     }
-                                    else -> put("content", m.content)
+                                    else -> if (m.role == "user" && m.imageAttachments.isNotEmpty()) {
+                                        put("content", JSONArray().apply {
+                                            put(JSONObject().put("type", "text").put("text", m.content))
+                                            m.imageAttachments.forEach { image ->
+                                                if (image.dataUrl.startsWith("data:image/png;base64,") || image.dataUrl.startsWith("data:image/jpeg;base64,")) {
+                                                    put(JSONObject().put("type", "image_url").put("image_url", JSONObject().put("url", image.dataUrl)))
+                                                }
+                                            }
+                                        })
+                                    } else put("content", m.content)
                                 }
                             },
                         )
@@ -513,7 +522,19 @@ class ApiClient(
                         })
                     }
                 }
-                else -> put(JSONObject().put("role", if (message.role == "system") "system" else "user").put("content", message.content))
+                else -> {
+                    val role = if (message.role == "system") "system" else "user"
+                    if (role == "user" && message.imageAttachments.isNotEmpty()) {
+                        put(JSONObject().put("role", role).put("content", JSONArray().apply {
+                            put(JSONObject().put("type", "input_text").put("text", message.content))
+                            message.imageAttachments.forEach { image ->
+                                if (image.dataUrl.startsWith("data:image/png;base64,") || image.dataUrl.startsWith("data:image/jpeg;base64,")) {
+                                    put(JSONObject().put("type", "input_image").put("image_url", image.dataUrl))
+                                }
+                            }
+                        }))
+                    } else put(JSONObject().put("role", role).put("content", message.content))
+                }
             }
         }
     }

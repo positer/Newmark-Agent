@@ -1,5 +1,31 @@
 # Newmark Agent Overview
 
+## dev-0.5.4 mobile local image attachments (2026-08-22)
+
+- 移动端本地输入菜单新增“选择图片”，仅接受 PNG/JPEG，单图上限 12 MiB，最多随消息发送 4 张；图片以受限 Data URL 作为 `ChatMessage.imageAttachments` 持久化。
+- Android Chat Completions 与 Responses 请求均将本地图片序列化为标准文本 + `image_url`/`input_image` 内容；远程桌面消息仍只走原有文本发送路径。
+- 图片选择失败、空文件、非图片和超限输入均在本地拒绝，不写入对话；现有视觉拒绝时可继续进入 mini OCR + 文本校正退路。
+- 本地图片视觉请求失败且当前供应商没有其它启用视觉模型时，Android Agent 对附件运行 ML Kit 中英文 OCR，再用纯文本模型做保守校正；备用视觉模型存在时不抢先 OCR。
+
+## dev-0.5.4 final visual fallback (2026-08-22)
+
+- PC 与移动端统一落实最终视觉退路：语义文本/DOM/PDF 与可用视觉模型优先；当前模型拒绝图像且同供应商没有可用备用视觉模型时，才进入本地 mini OCR，再以纯文本请求做保守校正。
+- 回退结果保留 `raw_ocr`/`text`、校正文本、近似警告和不确定性状态；不支持的视觉模型不会再次收到原图，OCR 无结果时明确失败且不编造内容。
+- 桌面内核在固定非视觉模型的预检和视觉请求路由耗尽后触发回退；移动端浏览器识别复用 ML Kit OCR，并由本地 `ChatViewModel` 的无图文本请求填充 `corrected_text`。
+- 验证：桌面 `npm run build`、`localOcrFallbackVerify`，Android `:app:testDebugUnitTest` 均通过。
+
+## dev-0.5.4 mobile capabilities and privilege boundary (2026-08-22)
+
+- Shizuku 已正式接入 `dev.rikka.shizuku:api/provider:13.1.5` 与官方 UserService/AIDL 中转；Root 和 Shizuku 现在是独立能力域，分别由 `root_exec`、`shizuku_exec`/`adb_exec` 暴露，不再互相回退。高权限命令行支持 `root`/`shizuku` 显式边界，未知命令在高权限模式下按当前可用边界执行。
+- 高权限开关增加不可逆风险警告弹窗，必须选择“继续”才会启用或请求 Shizuku 授权；“退出”保持关闭。
+- 全模式新增 `files_manage` 与 `apps_inspect`：文件工具仅操作共享存储、拒绝符号链接逃逸、Android/data/obb、非空目录递归删除、覆盖写入和未确认删除；应用工具只返回 PackageManager 可见公开元数据，不读取其他应用私有数据。
+
+- Android 新增 `MobileCapabilityStore`：设置页可请求“读取所有文件”（系统特殊访问页）与“读取应用列表”，并通过 `MANAGE_EXTERNAL_STORAGE`、`QUERY_ALL_PACKAGES` 声明接入系统能力。
+- 新增高权限模式开关与 `PrivilegedToolBridge`。桥接层优先检测 Shizuku，回退 Root `su -c`；`high_privilege_exec`/`adb_exec` 只在高权限模式且授权有效时动态暴露，执行器每次调用再次阻断，关闭开关后旧 prompt 也不能触及高权限工具。
+- 新增插件设置页与 `MobilePluginStore`，Skill/MCP 启用状态持久化到 `files/newmark/plugins.json`，并通过 `skills_list`/`mcp_list` 暴露给本地 Agent。
+- Android/Termux 命令目录扩展到 `pkg`、`pm`、`am`、`cmd`、`dumpsys`、`logcat` 及常用 `termux-*` 命令；系统修改类命令强制走高权限中转层，普通命令保持受控 shell。
+- 版本同步至 `0.5.4`（`versionCode 504`）。`testDebugUnitTest` 通过 102 项。
+
 ## dev-0.5.3 remote reconnection and error classification fix (2026-08-21)
 
 - Remote transcript ownership is now based on paired-device intent, not transient `Connecting`/`Reconnecting`/`Disconnected` status. A reconnect keeps the focused remote conversation mounted instead of replacing it with the local conversation.

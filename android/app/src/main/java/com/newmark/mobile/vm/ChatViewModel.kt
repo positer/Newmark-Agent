@@ -2,6 +2,8 @@ package com.newmark.mobile.vm
 
 import android.app.Application
 import android.os.PowerManager
+import android.graphics.BitmapFactory
+import android.util.Base64
 import android.content.Intent
 import androidx.core.content.ContextCompat
 import com.newmark.mobile.service.LocalAgentForegroundService
@@ -14,6 +16,7 @@ import androidx.lifecycle.viewModelScope
 import com.newmark.mobile.data.ActiveModel
 import com.newmark.mobile.data.ApiClient
 import com.newmark.mobile.data.ApiConfig
+import com.newmark.mobile.data.ChatResponse
 import com.newmark.mobile.data.ChatMessage
 import com.newmark.mobile.data.ConversationStore
 import com.newmark.mobile.data.LocalConversation
@@ -30,6 +33,12 @@ import com.newmark.mobile.data.LocalToolExecutor
 import com.newmark.mobile.data.LocalTools
 import com.newmark.mobile.data.LocalWorkEvent
 import com.newmark.mobile.data.LocalWorkRun
+import com.newmark.mobile.data.LocalImageAttachment
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.newmark.mobile.data.WorkGuide
 import com.newmark.mobile.data.INTELLIGENCE_TIERS
 import com.newmark.mobile.data.ModelConfig
@@ -46,6 +55,9 @@ import org.json.JSONArray
 import java.util.UUID
 import java.security.MessageDigest
 import java.io.File
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 internal fun localAgentFailureMessage(config: ApiConfig, error: Throwable): String {
     val detail = error.message?.trim().orEmpty().ifBlank { "API 调用失败" }
@@ -53,6 +65,33 @@ internal fun localAgentFailureMessage(config: ApiConfig, error: Throwable): Stri
         "⚠️ API 配置不完整，请在设置页配置供应商、接口、API Key 和模型"
     } else {
         "⚠️ $detail"
+    }
+}
+
+private suspend fun TextRecognizer.processAwait(image: InputImage): com.google.mlkit.vision.text.Text {
+    return suspendCancellableCoroutine { continuation ->
+        process(image)
+            .addOnSuccessListener { continuation.resume(it) }
+            .addOnFailureListener { continuation.resumeWithException(it) }
+            .addOnCanceledListener { continuation.cancel() }
+    }
+}
+
+private suspend fun localImageOcr(attachment: LocalImageAttachment): String = withContext(Dispatchers.Default) {
+    val encoded = attachment.dataUrl.substringAfter("base64,", "")
+    val bytes = runCatching { Base64.decode(encoded, Base64.DEFAULT) }.getOrNull() ?: return@withContext ""
+    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@withContext ""
+    val image = InputImage.fromBitmap(bitmap, 0)
+    val latin = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    val chinese = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+    try {
+        val a = latin.processAwait(image).text.trim()
+        val b = chinese.processAwait(image).text.trim()
+        if (b.count { it.isLetterOrDigit() } >= a.count { it.isLetterOrDigit() }) b else a
+    } finally {
+        latin.close()
+        chinese.close()
+        bitmap.recycle()
     }
 }
 
@@ -325,6 +364,40 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 ?: return ApiConfig()
             return p.toApiConfig(m)
         }
+
+    /** Text-only repair used by the final visual fallback; no image parts are sent. */
+    suspend fun correctFinalVisualOcr(rawOcr: String, taskContext: String = ""): String {
+        if (rawOcr.isBlank()) return ""
+        val prompt = """
+            视觉输入不可用。请仅依据下面的近似 OCR 证据和任务上下文，保守修复明显的字符、空格和换行错误。
+            不得补写证据中不存在的内容；有歧义请保留 [uncertain] 标记。
+            任务上下文：${taskContext.take(4000)}
+            OCR 证据：${rawOcr.take(50000)}
+        """.trimIndent()
+        return apiClient.chat(
+            apiConfig,
+            listOf(ChatMessage(role = "user", content = prompt)),
+            tools = emptyList(),
+            intelligence = "low",
+            maxOutputTokens = 3000,
+        ).getOrNull()?.content?.trim().orEmpty()
+    }
+
+    private suspend fun finalLocalImageFallback(messages: List<ChatMessage>, error: Throwable): ChatResponse? {
+        val text = error.message.orEmpty()
+        if (!Regex("vision|image|multimodal|image_url|input_image|不支持|拒绝", RegexOption.IGNORE_CASE).containsMatchIn(text)) return null
+        val current = activeModelConfig
+        if (current != null && activeProvider?.models?.any { it.enabled && it.vision && it.name != current.name } == true) return null
+        val images = messages.asSequence().flatMap { it.imageAttachments.asSequence() }.take(4).toList()
+        if (images.isEmpty()) return null
+        val raw = images.mapNotNull { image -> localImageOcr(image).takeIf(String::isNotBlank) }.joinToString("\n\n")
+        if (raw.isBlank()) return ChatResponse(content = "{\"ok\":false,\"fallback\":\"mini_ocr_llm\",\"error\":\"本地 OCR 未识别到文本，未编造视觉内容\"}")
+        val corrected = correctFinalVisualOcr(raw, messages.lastOrNull { it.role == "user" }?.content.orEmpty())
+        val output = corrected.ifBlank { raw }
+        return ChatResponse(
+            content = "⚠️ 视觉输入被拒绝，以下为本地 OCR 的近似结果，经文本模型保守校正：\n\n$output",
+        )
+    }
 
     private val activeModelConfig: ModelConfig?
         get() = activeProvider?.models?.find { it.name == activeModelName && it.enabled }
@@ -734,9 +807,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         sendInConversation(currentId, text)
     }
 
-    private fun sendInConversation(requestedConversationId: String?, text: String) {
+    fun sendWithImages(text: String, images: List<com.newmark.mobile.data.LocalImageAttachment>) {
+        val bounded = images.filter { image ->
+            image.dataUrl.startsWith("data:image/png;base64,") || image.dataUrl.startsWith("data:image/jpeg;base64,")
+        }.take(4)
+        if (bounded.isEmpty()) return send(text)
+        sendInConversation(currentId, text, bounded)
+    }
+
+    private fun sendInConversation(requestedConversationId: String?, text: String, images: List<com.newmark.mobile.data.LocalImageAttachment> = emptyList()) {
         val content = text.trim()
-        if (content.isEmpty()) return
+        if (content.isEmpty() && images.isEmpty()) return
 
         if (requestedConversationId == null && current == null) {
             newConversation()
@@ -760,8 +841,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val targetMode = conv.mode.lowercase().takeIf { it in setOf("build", "plan") } ?: "build"
         val userMessage = ChatMessage(
             role = "user",
-            content = content,
+            content = content.ifBlank { "请查看随附图片。" },
             messageId = UUID.randomUUID().toString(),
+            imageAttachments = images,
         )
 
         // 1. 落库用户消息
@@ -1330,8 +1412,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             // This is deliberately not private chain-of-thought: it only lets
             // the Build block show "思考中" and later "进行了思考" like PC.
             publish(event(type = "thought"))
-            val tools = if (mode == "plan") LocalTools.planDefinitions else LocalTools.definitions
-            val resp = apiClient.chat(
+            val tools = LocalTools.definitionsFor(getApplication(), plan = mode == "plan")
+            val responseResult = apiClient.chat(
                 config,
                 messages,
                 tools,
@@ -1343,7 +1425,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 onTextDelta = { delta ->
                     withContext(Dispatchers.Main.immediate) { publishTextDelta(delta) }
                 },
-            ).getOrElse { e ->
+            )
+            val resp = responseResult.getOrElse { e ->
+                finalLocalImageFallback(messages, e)?.let { return@getOrElse it }
                 val msg = localAgentFailureMessage(config, e)
                 val endedAt = System.currentTimeMillis()
                 publish(event(type = "thought_result", durationMs = endedAt - t0))

@@ -42,8 +42,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +59,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -71,6 +77,9 @@ import com.google.zxing.common.HybridBinarizer
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.newmark.mobile.data.FuzzyClient
+import com.newmark.mobile.data.MobileCapabilityStore
+import com.newmark.mobile.data.MobilePluginStore
+import com.newmark.mobile.data.PrivilegedToolBridge
 import com.newmark.mobile.data.ModelConfig
 import com.newmark.mobile.data.ProviderConfig
 import com.newmark.mobile.ui.components.NewmarkShapeLarge
@@ -107,6 +116,8 @@ private sealed interface SettingsPage {
     data object DeviceManage : SettingsPage
     data object Providers : SettingsPage
     data object FuzzyInject : SettingsPage
+    data object Capabilities : SettingsPage
+    data object Plugins : SettingsPage
     data class ProviderDetail(val providerId: String) : SettingsPage
 }
 
@@ -126,6 +137,8 @@ fun SettingsScreen(
                 is SettingsPage.DeviceManage -> page = SettingsPage.Main
                 is SettingsPage.Providers -> page = SettingsPage.Main
                 is SettingsPage.FuzzyInject -> page = SettingsPage.Providers
+                is SettingsPage.Capabilities -> page = SettingsPage.Main
+                is SettingsPage.Plugins -> page = SettingsPage.Main
                 is SettingsPage.ProviderDetail -> page = SettingsPage.Providers
             }
         },
@@ -159,6 +172,8 @@ fun SettingsScreen(
                             is SettingsPage.DeviceManage -> page = SettingsPage.Main
                             is SettingsPage.Providers -> page = SettingsPage.Main
                             is SettingsPage.FuzzyInject -> page = SettingsPage.Providers
+                            is SettingsPage.Capabilities -> page = SettingsPage.Main
+                            is SettingsPage.Plugins -> page = SettingsPage.Main
                             is SettingsPage.ProviderDetail -> page = SettingsPage.Providers
                         }
                     },
@@ -177,6 +192,8 @@ fun SettingsScreen(
                     is SettingsPage.DeviceManage -> "设备管理"
                     is SettingsPage.Providers -> "模型与供应商"
                     is SettingsPage.FuzzyInject -> "模糊注入"
+                    is SettingsPage.Capabilities -> "移动端权限"
+                    is SettingsPage.Plugins -> "插件"
                     is SettingsPage.ProviderDetail -> vm.providers.find { it.id == (page as SettingsPage.ProviderDetail).providerId }?.label ?: "供应商"
                 },
                 fontSize = 13.sp,
@@ -199,6 +216,8 @@ fun SettingsScreen(
                     linkVm = linkVm,
                     onOpenProviders = { page = SettingsPage.Providers },
                     onOpenDeviceManage = { page = SettingsPage.DeviceManage },
+                    onOpenCapabilities = { page = SettingsPage.Capabilities },
+                    onOpenPlugins = { page = SettingsPage.Plugins },
                 )
                 is SettingsPage.DeviceManage -> DeviceManagePage(linkVm = linkVm)
                 is SettingsPage.Providers -> ProvidersPage(
@@ -214,6 +233,8 @@ fun SettingsScreen(
                     },
                     onCancel = { page = SettingsPage.Providers },
                 )
+                is SettingsPage.Capabilities -> CapabilitySettingsPage()
+                is SettingsPage.Plugins -> PluginSettingsPage()
                 is SettingsPage.ProviderDetail -> ProviderDetailPage(
                     vm = vm,
                     providerId = target.providerId,
@@ -229,6 +250,8 @@ private fun MainSettings(
     linkVm: DesktopLinkViewModel,
     onOpenProviders: () -> Unit,
     onOpenDeviceManage: () -> Unit,
+    onOpenCapabilities: () -> Unit,
+    onOpenPlugins: () -> Unit,
 ) {
     val p = LocalNewmarkPalette.current
     LazyColumn(
@@ -239,6 +262,135 @@ private fun MainSettings(
         item { DevicePairSection(linkVm, onOpenDeviceManage) }
         item { AppearanceSection() }
         item { ProvidersEntry(onClick = onOpenProviders) }
+        item { SettingsEntry("移动端权限与高权限模式", "文件、应用列表、Root/Shizuku", onOpenCapabilities) }
+        item { SettingsEntry("插件", "启用或停用 Skill 与 MCP", onOpenPlugins) }
+    }
+}
+
+@Composable
+private fun SettingsEntry(title: String, subtitle: String, onClick: () -> Unit) {
+    val p = LocalNewmarkPalette.current
+    Row(Modifier.fillMaxWidth().clip(NewmarkShapeLarge).background(p.bgSecondary).clickable(onClick = onClick).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = p.textPrimary)
+            Text(subtitle, fontSize = 11.sp, color = p.textTertiary, modifier = Modifier.padding(top = 3.dp))
+        }
+        Text("›", fontSize = 16.sp, color = p.textTertiary)
+    }
+}
+
+@Composable
+private fun CapabilitySettingsPage() {
+    val context = LocalContext.current
+    val store = remember { MobileCapabilityStore(context) }
+    var allFiles by remember { mutableStateOf(store.allFilesGranted()) }
+    var apps by remember { mutableStateOf(store.appListGranted()) }
+    var high by remember { mutableStateOf(store.highPrivilegeEnabled) }
+    var shizukuRunning by remember { mutableStateOf(PrivilegedToolBridge.isShizukuRunning()) }
+    var shizukuGranted by remember { mutableStateOf(PrivilegedToolBridge.isShizukuAvailable()) }
+    var rootAvailable by remember { mutableStateOf(PrivilegedToolBridge.isRootAvailable()) }
+    var confirmHighPrivilege by remember { mutableStateOf(false) }
+    val p = LocalNewmarkPalette.current
+    if (confirmHighPrivilege) {
+        AlertDialog(
+            onDismissRequest = { confirmHighPrivilege = false },
+            title = { Text("开启高权限模式") },
+            text = { Text("你需要知道自己在做什么。高权限指令可能修改或删除设备数据，后果自负。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmHighPrivilege = false
+                    rootAvailable = PrivilegedToolBridge.isRootAvailable()
+                    shizukuRunning = PrivilegedToolBridge.isShizukuRunning()
+                    shizukuGranted = PrivilegedToolBridge.isShizukuAvailable()
+                    if (!rootAvailable && !shizukuRunning) {
+                        android.widget.Toast.makeText(context, "请先启动 Shizuku，或授予设备 Root", android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        store.highPrivilegeEnabled = true
+                        high = true
+                        if (shizukuRunning && !shizukuGranted) PrivilegedToolBridge.requestShizukuPermission(504)
+                    }
+                }) { Text("继续") }
+            },
+            dismissButton = { TextButton(onClick = { confirmHighPrivilege = false }) { Text("退出") } },
+        )
+    }
+    DisposableEffect(store) {
+        val permissionListener = rikka.shizuku.Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
+            if (requestCode == 504) {
+                shizukuRunning = PrivilegedToolBridge.isShizukuRunning()
+                shizukuGranted = grantResult == android.content.pm.PackageManager.PERMISSION_GRANTED
+                if (shizukuGranted) { store.highPrivilegeEnabled = true; high = true }
+            }
+        }
+        val receivedListener = rikka.shizuku.Shizuku.OnBinderReceivedListener {
+            shizukuRunning = true
+            shizukuGranted = PrivilegedToolBridge.isShizukuAvailable()
+        }
+        val deadListener = rikka.shizuku.Shizuku.OnBinderDeadListener {
+            shizukuRunning = false
+            shizukuGranted = false
+            rootAvailable = PrivilegedToolBridge.isRootAvailable()
+            if (!rootAvailable) {
+                store.disableHighPrivilege()
+                high = false
+            }
+        }
+        PrivilegedToolBridge.addPermissionListener(permissionListener)
+        PrivilegedToolBridge.addBinderReceivedListener(receivedListener)
+        PrivilegedToolBridge.addBinderDeadListener(deadListener)
+        onDispose {
+            PrivilegedToolBridge.removePermissionListener(permissionListener)
+            PrivilegedToolBridge.removeBinderReceivedListener(receivedListener)
+            PrivilegedToolBridge.removeBinderDeadListener(deadListener)
+        }
+    }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            SectionCard("权限") {
+                SettingRow("读取所有文件") {
+                    Switch(checked = allFiles, onCheckedChange = {
+                        if (it && Build.VERSION.SDK_INT >= 30) runCatching { context.startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${context.packageName}"))) }
+                        store.allFilesRequested = it
+                        allFiles = store.allFilesGranted()
+                    }, colors = SwitchDefaults.colors(checkedTrackColor = p.accent, uncheckedTrackColor = p.bgQuaternary))
+                }
+                SettingRow("读取应用列表") {
+                    Switch(checked = apps, onCheckedChange = { apps = it; store.appListRequested = it }, colors = SwitchDefaults.colors(checkedTrackColor = p.accent, uncheckedTrackColor = p.bgQuaternary))
+                }
+            }
+        }
+        item {
+            SectionCard("高权限模式") {
+                Text("需要 Root 或 Shizuku 授权；关闭后立即阻断高权限工具。", fontSize = 11.sp, color = p.textSecondary)
+                SettingRow("高权限模式") {
+                    Switch(checked = high, onCheckedChange = { value ->
+                        if (value) confirmHighPrivilege = true else { store.disableHighPrivilege(); high = false }
+                    }, colors = SwitchDefaults.colors(checkedTrackColor = p.accent, uncheckedTrackColor = p.bgQuaternary))
+                }
+                Text(if (shizukuGranted) "Shizuku：已授权（UID ${PrivilegedToolBridge.shizukuUid() ?: "?"} 边界）" else if (shizukuRunning) "Shizuku：运行中，等待授权" else "Shizuku：未运行", fontSize = 11.sp, color = p.textTertiary)
+                Text(if (rootAvailable) "Root：可用（root 边界）" else "Root：不可用", fontSize = 11.sp, color = p.textTertiary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PluginSettingsPage() {
+    val context = LocalContext.current
+    val store = remember { MobilePluginStore(context) }
+    var state by remember { mutableStateOf(store.load()) }
+    val p = LocalNewmarkPalette.current
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { PluginSection("Skill", state.skills, p) { name, enabled -> state = state.copy(skills = state.skills + (name to enabled)); store.save(state) } }
+        item { PluginSection("MCP", state.mcp, p) { name, enabled -> state = state.copy(mcp = state.mcp + (name to enabled)); store.save(state) } }
+    }
+}
+
+@Composable
+private fun PluginSection(title: String, entries: Map<String, Boolean>, p: com.newmark.mobile.ui.theme.NewmarkPalette, onChange: (String, Boolean) -> Unit) {
+    SectionCard(title) {
+        if (entries.isEmpty()) Text("暂无已安装插件。插件文件可由桌面端同步或放入 files/newmark/plugins.json。", fontSize = 11.sp, color = p.textSecondary)
+        entries.toSortedMap().forEach { (name, enabled) -> SettingRow(name) { Switch(checked = enabled, onCheckedChange = { onChange(name, it) }, colors = SwitchDefaults.colors(checkedTrackColor = p.accent, uncheckedTrackColor = p.bgQuaternary)) } }
     }
 }
 

@@ -20,4 +20,10 @@ object LocalToolCatalog {
         "observe", "navigate", "wait", "extract", "back", "forward", "reload",
     )
     val planBrowserActions: Set<String> = linkedSetOf("observe", "navigate", "wait", "extract")
+
+    val privilegedNames: Set<String> = linkedSetOf("high_privilege_exec", "shizuku_exec", "root_exec", "adb_exec", "termux_privileged_exec")
+    val shizukuNames: Set<String> = linkedSetOf("shizuku_exec", "adb_exec")
+    val rootNames: Set<String> = linkedSetOf("root_exec")
+    val allFilesNames: Set<String> = linkedSetOf("files_read_all", "files_manage")
+    val appListNames: Set<String> = linkedSetOf("apps_list", "apps_inspect")
 }

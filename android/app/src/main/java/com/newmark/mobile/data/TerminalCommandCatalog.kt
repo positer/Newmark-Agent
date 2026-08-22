@@ -32,6 +32,18 @@ object TerminalCommandCatalog {
         "memory_update" to setOf("memory_lab_update", "ml-update"), "memory_reindex" to setOf("memory_lab_reindex", "ml-reindex"),
         "settings_read" to setOf("settings_read", "settings-read"), "settings_update" to setOf("settings_update", "settings-update"),
         "help" to setOf("help", "man", "?"),
+        // Android/Termux surface. Commands that mutate device state are
+        // routed through the privileged bridge by LocalToolExecutor.
+        "pkg" to setOf("pkg"), "apt" to setOf("apt"), "apt-get" to setOf("apt-get"),
+        "pm" to setOf("pm"), "am" to setOf("am"), "cmd" to setOf("cmd"),
+        "getprop" to setOf("getprop"), "setprop" to setOf("setprop"),
+        "dumpsys" to setOf("dumpsys"), "logcat" to setOf("logcat"),
+        "termux-battery-status" to setOf("termux-battery-status"),
+        "termux-toast" to setOf("termux-toast"), "termux-notification" to setOf("termux-notification"),
+        "termux-open" to setOf("termux-open"), "termux-share" to setOf("termux-share"),
+        "termux-vibrate" to setOf("termux-vibrate"), "termux-clipboard-get" to setOf("termux-clipboard-get"),
+        "termux-clipboard-set" to setOf("termux-clipboard-set"), "termux-wifi-connectioninfo" to setOf("termux-wifi-connectioninfo"),
+        "shizuku" to setOf("shizuku", "shizuku-exec"), "root" to setOf("root", "root-exec"),
     )
 
     val names: Set<String> = aliases.values.flatten().toCollection(linkedSetOf())

@@ -36,7 +36,7 @@ import {
 import { runAsyncProcess } from '../core/asyncProcess';
 import { executeWorkspaceBash } from '../core/nativeBash';
 import { closeToolArgumentSchema, ToolArgumentValidatorRegistry } from '../core/toolArgumentValidator';
-import { LocalOcrEngine } from '../core/localOcr';
+import { LocalOcrEngine, LocalOcrResult } from '../core/localOcr';
 import { browserVisualFallback, registerBrowserVisualFallback } from '../core/visualTextFallback';
 import { COMPUTER_USE_LOCK_TTL_MS, ComputerUseSessionScope, defaultComputerUseSessionRegistry } from '../core/computerUseSession';
 
@@ -234,6 +234,11 @@ export class ToolExecutor {
 
   async webSearch(query: string): Promise<string> {
     return this.wsearch(query);
+  }
+
+  /** OCR entry point for the runtime's final visual fallback. */
+  async finalVisualFallbackOcr(dataUrl: string, signal?: AbortSignal): Promise<LocalOcrResult> {
+    return await this.localOcr.recognizeDataUrl(dataUrl, signal, 'sparse-ui');
   }
 
   setHostProfile(profile: ToolHostProfile): void {

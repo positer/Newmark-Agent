@@ -3,6 +3,7 @@ package com.newmark.mobile.ui
 import android.Manifest
 import android.os.Build
 import android.provider.OpenableColumns
+import android.util.Base64
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
@@ -135,6 +136,7 @@ import androidx.compose.ui.zIndex
 import com.newmark.mobile.data.INTELLIGENCE_TIERS
 import com.newmark.mobile.data.LocalWorkEvent
 import com.newmark.mobile.data.LocalWorkRun
+import com.newmark.mobile.data.LocalImageAttachment
 import com.newmark.mobile.data.ModelOption
 import com.newmark.mobile.data.RemoteGoal
 import com.newmark.mobile.data.RemoteFlowTakeover
@@ -333,6 +335,7 @@ fun ChatScreen(
     onMenuClick: () -> Unit,
     onNewChat: () -> Unit,
     onSend: (String) -> Unit,
+    onSendWithImages: (String, List<LocalImageAttachment>) -> Unit = { text, _ -> onSend(text) },
     onStop: () -> Unit = {},
     escalating: Boolean = false,
     showConnectRemote: Boolean = false,
@@ -426,6 +429,42 @@ fun ChatScreen(
             )
         }
     }
+    var pendingImage by remember { mutableStateOf<LocalImageAttachment?>(null) }
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val mime = (context.contentResolver.getType(uri) ?: "").lowercase().replace("image/jpg", "image/jpeg")
+                    require(mime == "image/png" || mime == "image/jpeg") { "仅支持 PNG/JPEG 图片" }
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+                        val output = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(64 * 1024)
+                        var total = 0
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            total += read
+                            require(total <= 12 * 1024 * 1024) { "图片超过 12 MiB" }
+                            output.write(buffer, 0, read)
+                        }
+                        output.toByteArray()
+                    } ?: error("无法读取图片")
+                    require(bytes.isNotEmpty()) { "图片为空" }
+                    LocalImageAttachment(
+                        id = java.util.UUID.randomUUID().toString(),
+                        name = "image",
+                        mimeType = mime,
+                        dataUrl = "data:$mime;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP),
+                    )
+                }
+            }
+            result.fold(
+                onSuccess = { pendingImage = it; Toast.makeText(context, "图片已添加到待发送消息", Toast.LENGTH_SHORT).show() },
+                onFailure = { Toast.makeText(context, it.message ?: "读取图片失败", Toast.LENGTH_LONG).show() },
+            )
+        }
+    }
     BackHandler(enabled = inputMenu != null) { inputMenu = null }
     LaunchedEffect(remoteMode) {
         // The paired desktop and this device own separate model catalogues.
@@ -490,6 +529,8 @@ fun ChatScreen(
                 onSelectIntelligence = onSelectIntelligence,
                 onSelectMode = onSelectMode,
                 onSend = { value ->
+                    val images = pendingImage?.let(::listOf).orEmpty()
+                    pendingImage = null
                     val queueEdit = queueEditPending
                     if (queueEdit != null) {
                         onUpdateQueueItem(queueEdit.id, value)
@@ -497,7 +538,7 @@ fun ChatScreen(
                     } else if (goalEditPending) {
                         onEditGoal(value)
                         goalEditPending = false
-                    } else onSend(value)
+                    } else if (images.isNotEmpty()) onSendWithImages(value, images) else onSend(value)
                 },
                 onStop = onStop,
                 escalating = escalating,
@@ -570,6 +611,10 @@ fun ChatScreen(
                     onChooseFile = {
                         pendingFileUpload = onBeginFileUpload()
                         filePicker.launch("*/*")
+                    },
+                    onChooseImage = {
+                        inputMenu = null
+                        imagePicker.launch("image/*")
                     },
                 )
             }
@@ -2403,6 +2448,7 @@ private fun InputCompositeMenuOverlay(
     onSelectModel: (ModelOption) -> Unit,
     onSelectIntelligence: (String) -> Unit,
     onChooseFile: () -> Unit,
+    onChooseImage: () -> Unit,
 ) {
     // Keep the last surface composed just long enough to fade out. Returning
     // immediately for menu == null made dismissal a hard disappearance and
@@ -2572,6 +2618,7 @@ private fun InputCompositeMenuOverlay(
                             InputCompositeMenu.PlusMain -> {
                                 MenuRow("模式选择", trailing = mode) { onMenuChange(InputCompositeMenu.PlusModes) }
                                 MenuRow("选择文件") { onDismiss(); onChooseFile() }
+                                MenuRow("选择图片") { onDismiss(); onChooseImage() }
                             }
                             InputCompositeMenu.PlusModes -> {
                                 MenuRow("← 返回") { onMenuChange(InputCompositeMenu.PlusMain) }

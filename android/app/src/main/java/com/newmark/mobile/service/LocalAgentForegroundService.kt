@@ -92,7 +92,7 @@ class LocalAgentForegroundService : Service() {
 
     companion object {
         const val CHANNEL_ID = "local_agent_live_activity"
-        const val NOTIFICATION_ID = 503
+        const val NOTIFICATION_ID = 504
         const val EXTRA_COUNT = "running_count"
         private const val TAG = "NewmarkLiveUpdate"
     }

@@ -1,5 +1,39 @@
 # Newmark Agent Overview
 
+## dev-0.5.5 stress tests: stream unlimited timeout + queue unification (2026-08-23)
+
+- **streamUnlimitedTimeoutStressVerify（14 项全过）**：验证 `readProviderStreamChunk` 默认 `timeoutMs = 0`（无限）——慢流 25x40ms 完成、停顿流不超时、abort 立即生效并取消 reader、显式正超时仍触发 TimeoutError、并发 reader 独立、500-chunk 突发无泄漏。
+  - **发现并修复真 bug**：`timeoutMs = 0` 时 `setTimeout(fn, 0)` 下一 tick 立即触发 → `Stream read timeout after 0ms`。修复为 `timeoutMs > 0` 才 arm timer，否则 race 永挂起 Promise。
+- **queueUnifyStressVerify（22 项全过）**：TypeScript AST 提取真实 UI 函数在沙箱执行——`queueItemIdForText` 按文本解析 kernel id；backendManaged 有 id 的行 delete/guide 转发 `queue_delete`/`queue_guide` 并携带 id；无 id 行保持锁定；focus 进入编辑并保留 originalText；拖动 drop 转发 `queue_reorder` 完整 orderedIds；本地行保持本地路径不转发。
+- 接入：`package.json` 新增 `test:stream-unlimited-timeout-stress` 与 `test:queue-unify-stress`；`npm run build` 后独立运行。
+- 回归：verify.js 1642 PASS / 27 FAIL 与基线一致；providerTimeoutRecoveryVerify 全部 PASS（显式 50ms 超时契约不受影响）。
+
+## dev-0.5.5 stream timeout removal and mobile/desktop queue unification (2026-08-23)
+
+- **Stream read timeout 修复**：`DESKTOP/src/providers/provider-events.ts` 的 `readProviderStreamChunk` 默认 `timeoutMs` 从 30_000 改为 0（无限），与请求级 `DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS = 0` 和 Android 端 `readTimeout(0)` / `SSE_IDLE_TIMEOUT_MS = 0L` 语义一致。此前 PC 端流式 chunk 读取残留 30s 空闲超时，导致长响应报 `Stream read timeout after 30000ms`。显式传正值的调用（providerTimeoutRecoveryVerify 传 50ms 验证 reader 取消）不受影响。
+- **队列同化**：PC 端 `renderQueuePanel` 对 `backendManaged`（移动端 enqueue）项锁定编辑/删除/拖动。修复：PC UI 新增 `queueItemsByTarget` 状态与 `queueItemIdForText` 关联，快照/事件同步保存 `s.queueItems`；`server.ts` 新增 `/api/queue-action` 端点（复用 `hostedConversationUiAction` 的 queueAction 路径）；`api.queueAction` 桥接；`deleteQueueItem`/`focusQueueItem`/`guideQueueItem`/拖动对 backendManaged 有 id 的项转发 `queue_delete`/`queue_update`/`queue_guide`/`queue_reorder`，与移动端同一 kernel 机制。
+- 验证：`tsc --noEmit` 通过；verify.js 1642 PASS / 27 FAIL 与基线一致；providerTimeoutRecoveryVerify 全部 PASS；dist 已同步。
+
+## dev-0.5.5 mobile image preview, send-image NPE fix, and scroll-to-bottom (2026-08-23)
+
+- **图片预览**：移动端添加图片后，输入框上方显示 PC .prompt-attachments 同款的缩略图 + 文件名 + 移除按钮（ChatScreen.kt InputArea 新增 pendingImage 参数与预览 Row，主函数 onRemovePendingImage 清除）。
+- **发送图片 NPE 修复**：Attempt to invoke interface method boolean java.util.Collection.isEmpty() on a null object reference 根因是旧版 conversations.json 由 Gson 反序列化时缺失 imageAttachments 字段被赋 null。修复：ConversationStore.normalizeConversations 加载时统一补齐空集合（含 messages/modelContext/branchTree.nodes）；ApiClient 两处 isNotEmpty() → isNullOrEmpty() 防御；ChatViewModel OCR 路径 orEmpty()。
+- **回到底部按钮**：移动端 ChatContent 增加 PC #scroll-bottom-btn 同款浮动按钮，derivedStateOf 检测视野不在底部时显示，点击 chatScope.launch { listState.scrollToItem } 回到底部；同时 LaunchedEffect 改为仅在 tBottom 时自动跟随（PC 语义，向上滚动不强制拉回）。
+- 验证：:app:compileDebugKotlin 与 :app:testDebugUnitTest BUILD SUCCESSFUL；PC verify.js 1640 PASS / 27 FAIL 与基线一致。
+
+## dev-0.5.5 PC-GUI scroll-follow and Guide duplication fixes (2026-08-23)
+
+- **滚动跟随修复**：`_chatScrollNearBottomPx` 从 80 缩小到 24（约一行高度）。此前阈值过宽，用户向上滚动 50-80px 内仍被判定"在底部"，`_chatShouldAutoScroll` 保持 true，Agent 每次产生回应时 `autoScrollIfAtBottom` 把视野强制拉回底部（"向上拖不动"）。缩小阈值后，用户滚动超过约一行高度即解除跟随；视野确实在底部时仍正常跟随新内容。`autoScrollIfAtBottom` 保留 `if (_chatShouldAutoScroll)` 标志逻辑（实测确认：底部时 `followedToNewBottom=true`，向上滚动 600px 后 `wasYanked=false`）。
+- **Guide 重复修复**：Build block 折叠再展开后，已应用的 Guide 除了正确注入位置外，还在聊天末端出现标记为"已应用"的重复消息。根因：`updateConversationWorkRunElement` 折叠/展开重建 DOM 时调用 `renderPendingGuideMessages(run.target, {})`，传空 `persistedGuideIds` 导致 `guideMessagesForTarget` 中所有记录（含已应用 Guide）被当 pending，`findGuideMessageElement` 在重建瞬间找不到元素，于是 `addMsg` 在末端创建重复消息。修复：新增 `workRunOwnsGuide(runId, clientMessageId, target)` 判断 Guide 是否已由 run 的 events/guides 承载；`renderPendingGuideMessages` 的 filter 排除此类 Guide，并在 forEach 中清理历史遗留的独立副本（非 awaitingAck 且 run 已承载时 `element.remove()`）。
+- 验证：Electron CDP 复现脚本确认折叠前 1 个 Guide、折叠后 1 个（修复前 2 个）、展开后 1 个（修复前 2 个）；`verify.js` 全部 Guide/滚动断言 PASS（1642 PASS / 27 FAIL 与基线一致，27 项为环境依赖）。
+
+## dev-0.5.5 PC-GUI marquee animation restored (2026-08-23)
+
+- PC-GUI 跑马灯边框恢复旋转动画：`.marquee-border::before` 由 dev-0.4.7 的 `animation: none`（静态黑白渐变）恢复为 `marquee-rotate var(--marquee-speed) linear infinite`，`@property --marquee-angle` 注册的 conic-gradient 扫动重新生效，3 秒一圈无限循环，黑白四段渐变（`--g1..--g4`）与 2px 边框宽度保持不变。`will-change: transform` 提示合成层。`@supports not` 回退分支同步恢复 `marquee-rotate-fallback`（hue-rotate 方案）。
+- 同步更新三处锁定"静态边框"的断言：`verify.ts`（ui html 运行中会话断言改为验证 `marquee-rotate` 动画存在）、`release-ui-icon-smoke.cjs`（titlebar 状态边框断言从 `borderAnimationName !== 'none'` 改为 `!== 'marquee-rotate'`）、`release-ui-render-performance-smoke.cjs`（从 `animated !== 0` 失败改为 `animated === 0` 失败，即要求动画活跃同时输入不饿死）。
+- 验证：`tsc` 编译通过；`verify.js` 跑马灯相关 9 项断言全部 PASS（含更新后的 3 项）；Electron CDP 实测 `animationName=marquee-rotate`、3s/infinite、conic-gradient 黑白渐变、`@property` 已注册；`startupPrewarmVerify` 74 项通过。
+- terminal_takeover / computer_use / browser control 共 27 项失败为预先存在的环境依赖（Electron host tool bridge 不可用），基线（stash 后原始代码）同样失败 27 项，与本次改动无关。
+
 ## dev-0.5.4 mobile AlarmManager tool (2026-08-22)
 
 - 移动端本地 Agent 新增 `alarm_manage` 通用工具，支持通过 Android `AlarmManager` 创建、列出和取消本应用闹钟；闹钟记录仅保存于应用私有 `files/newmark/alarms.json`。

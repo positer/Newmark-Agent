@@ -86,6 +86,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -524,6 +525,8 @@ fun ChatScreen(
                 intelligence = intelligence,
                 selectedMode = selectedMode,
                 text = inputText,
+                pendingImage = pendingImage,
+                onRemovePendingImage = { pendingImage = null },
                 onTextChange = { inputText = it },
                 onSelectModel = onSelectModel,
                 onSelectIntelligence = onSelectIntelligence,
@@ -713,6 +716,7 @@ private fun ChatContent(
     val p = LocalNewmarkPalette.current
     val pc = LocalPcColors.current
     val listState = rememberLazyListState()
+    val chatScope = rememberCoroutineScope()
     var viewportHeightPx by remember { mutableIntStateOf(0) }
     // A live Build keeps one LazyColumn row while its internal event stream
     // grows.  Key scrolling to that stream as well as the outer item count;
@@ -722,17 +726,32 @@ private fun ChatContent(
         val run = (item as? ChatItem.Bubble)?.workRun ?: return@fold revision
         revision * 31L + run.events.size * 17L + run.status.hashCode().toLong()
     }
+    // PC `#scroll-bottom-btn` 同款：仅当用户视野不在底部时显示浮动回到底部按钮。
+    val atBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()
+            if (lastVisible == null) true
+            else lastVisible.index >= info.totalItemsCount - 2
+        }
+    }
     LaunchedEffect(items.size, isSending, liveContentRevision, viewportHeightPx) {
-        if (items.isNotEmpty()) {
+        // PC 语义：仅当用户视野原本就在底部时才跟随新内容；向上滚动阅读时
+        // 不强制拉回，此时由右下角回到底部按钮接管。
+        if (items.isNotEmpty() && atBottom) {
             listState.scrollToItem(items.size - 1)
         }
     }
-    LazyColumn(
-        state = listState,
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .onSizeChanged { viewportHeightPx = it.height }
-            .padding(horizontal = ChatAreaHorizontalInset, vertical = 16.dp)
+            .onSizeChanged { viewportHeightPx = it.height },
+    ) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = ChatAreaHorizontalInset, vertical = 16.dp)
             .drawBehind {
                 // PC #chat-area owns two continuous timeline rails. The
                 // message rows only provide the colored 11dp node circles.
@@ -786,6 +805,30 @@ private fun ChatContent(
         }
         item(key = "transcript-bottom-reserve") {
             Spacer(Modifier.height(TranscriptBottomReserveDp.dp))
+        }
+        }
+        // Floating scroll-to-bottom button, PC `#scroll-bottom-btn` 同款。
+        if (!atBottom && items.isNotEmpty()) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 14.dp, bottom = 14.dp)
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(p.bgQuaternary.copy(alpha = 0.92f))
+                    .border(1.dp, p.border2, CircleShape)
+                    .clickable {
+                        chatScope.launch { listState.scrollToItem(items.size - 1) }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "回到底部",
+                    tint = p.textPrimary,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
         }
     }
 }
@@ -2301,6 +2344,8 @@ private fun InputArea(
     intelligence: String,
     selectedMode: String,
     text: String,
+    pendingImage: com.newmark.mobile.data.LocalImageAttachment? = null,
+    onRemovePendingImage: () -> Unit = {},
     onTextChange: (String) -> Unit,
     onSelectModel: (ModelOption) -> Unit,
     onSelectIntelligence: (String) -> Unit,
@@ -2333,6 +2378,75 @@ private fun InputArea(
             .fillMaxWidth()
             .background(p.bgSecondary),
     ) {
+        // PC `.prompt-attachments` 同款：选中图片后在输入框上方显示缩略图 + 文件名 + 移除。
+        if (pendingImage != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, end = 12.dp, top = 8.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(p.bgPrimary)
+                    .border(1.dp, p.border2, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val bitmap = remember(pendingImage.dataUrl) {
+                    runCatching {
+                        val bytes = android.util.Base64.decode(pendingImage.dataUrl.substringAfter(",", ""), android.util.Base64.DEFAULT)
+                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    }.getOrNull()
+                }
+                if (bitmap != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "待发送图片",
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(RoundedCornerShape(5.dp))
+                            .border(1.dp, p.border2, RoundedCornerShape(5.dp)),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(p.bgQuaternary),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Upload,
+                            contentDescription = null,
+                            tint = p.textTertiary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = pendingImage.name.ifBlank { "待发送图片" },
+                    fontSize = 12.sp,
+                    color = p.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onRemovePendingImage),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = LucideIcons.X,
+                        contentDescription = "移除图片",
+                        tint = p.textTertiary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        }
         // 单行：+（模式/文件） | 输入 | 模型小按钮 | 发送。整个输入条和其锚定菜单一起随 IME 上移。
         Row(
             modifier = Modifier

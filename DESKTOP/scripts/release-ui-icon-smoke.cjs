@@ -140,7 +140,7 @@ async function verifyTitlebarIcon(cdp) {
   if (!String(state.resolvedSrc || '').includes(expectedResolved)) fail(`titlebar application-theme icon mismatch: ${JSON.stringify(state)}`);
   if (!state.complete || state.naturalWidth < 16 || state.naturalHeight < 16) fail(`titlebar app icon did not decode: ${JSON.stringify(state)}`);
   if (state.width < 20 || state.height < 20 || state.logoWidth < 24 || state.logoHeight < 24) fail(`titlebar app icon layout too small: ${JSON.stringify(state)}`);
-  if (state.borderAnimationName !== 'none') fail(`titlebar status border must stay static to avoid continuous masked-gradient GPU repaint: ${JSON.stringify(state)}`);
+  if (state.borderAnimationName !== 'marquee-rotate') fail(`titlebar status border must run the live marquee-rotate animation: ${JSON.stringify(state)}`);
   if (!String(state.borderBackground || '').includes('conic-gradient')) fail(`titlebar shared status border gradient missing: ${JSON.stringify(state)}`);
   if (!state.rootGradientColor || !state.rootMarqueeSpeed || !state.rootMarqueeWidth) fail(`titlebar status border is not backed by shared appearance variables: ${JSON.stringify(state)}`);
   return state;

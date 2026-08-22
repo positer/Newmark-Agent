@@ -42,11 +42,17 @@ export function providerStreamTimeoutError(timeoutMs: number): Error {
  * Read one SSE chunk with both user cancellation and an inactivity deadline.
  * Cancelling the reader is important: rejecting the race alone leaves the
  * provider socket alive and lets later requests accumulate behind it.
+ *
+ * timeoutMs defaults to 0 (no stream idle deadline), matching the request-
+ * level DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS = 0 and the Android client's
+ * readTimeout(0) / SSE_IDLE_TIMEOUT_MS = 0L. A caller that still wants an
+ * inactivity cap passes an explicit positive value (the recovery verify
+ * passes 50ms to prove reader cancellation).
  */
 export async function readProviderStreamChunk(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   signal: AbortSignal,
-  timeoutMs = 30_000,
+  timeoutMs = 0,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   if (signal.aborted) throw providerAbortError(signal);
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -55,9 +61,14 @@ export async function readProviderStreamChunk(
     onAbort = () => reject(providerAbortError(signal));
     signal.addEventListener('abort', onAbort, { once: true });
   });
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(providerStreamTimeoutError(timeoutMs)), timeoutMs);
-  });
+  // timeoutMs <= 0 means no inactivity deadline (unlimited). setTimeout with
+  // 0 would fire on the next tick, so we only arm the timer for positive
+  // values and race a never-settling promise otherwise.
+  const timeoutPromise: Promise<never> = timeoutMs > 0
+    ? new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(providerStreamTimeoutError(timeoutMs)), timeoutMs);
+      })
+    : new Promise<never>(() => undefined);
   try {
     return await Promise.race([reader.read(), abortPromise, timeoutPromise]);
   } catch (error) {

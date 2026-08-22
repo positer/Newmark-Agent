@@ -184,7 +184,9 @@
     "dist:mac": "npm run build:clean && electron-builder --mac",
     "dist:windows-release": "npm run test:full-release && npm run build:clean && node scripts/dist-portable.cjs",
     "release:ocr-budget-smoke": "node scripts/verify-ocr-package-budget.cjs",
-    "release:packaged-ocr-smoke": "node scripts/release-packaged-ocr-smoke.cjs"
+    "release:packaged-ocr-smoke": "node scripts/release-packaged-ocr-smoke.cjs",
+    "test:stream-unlimited-timeout-stress": "npm run build && node dist/tests/streamUnlimitedTimeoutStressVerify.js",
+    "test:queue-unify-stress": "npm run build && node dist/tests/queueUnifyStressVerify.js"
   },
   "build": {
     "npmRebuild": false,

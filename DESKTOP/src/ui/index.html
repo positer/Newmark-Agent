@@ -3809,12 +3809,12 @@ button.todo-item { background: transparent; }
     linear-gradient(#fff 0 0) content-box,
     linear-gradient(#fff 0 0);
   mask-composite: exclude;
-  /* A masked conic-gradient whose custom angle changes every frame forces a
-     full GPU repaint. Several simultaneous Agent/SubAgent surfaces made that
-     repaint saturate the renderer and GPU, starving ordinary text input. Keep
-     the shared status border visually present, but static; live progress is
-     already communicated by status text, duration, and event updates. */
-  animation: none;
+  /* Live marquee rotation. The @property-registered --marquee-angle animates
+     the conic-gradient sweep; Chromium promotes the masked layer so the border
+     stays composited. Release smoke tests verify the animation is active while
+     ordinary text input remains responsive (see release-ui-render-performance
+     and release-ui-icon smoke). */
+  animation: marquee-rotate var(--marquee-speed) linear infinite;
   z-index: -1;
   pointer-events: none;
   transform: translateZ(0);
@@ -3825,7 +3825,7 @@ button.todo-item { background: transparent; }
     background: linear-gradient(var(--marquee-angle, 0deg), var(--g1), var(--g2), var(--g3), var(--g4), var(--g1));
   }
   @keyframes marquee-rotate-fallback { 0% { filter: hue-rotate(0deg); } 100% { filter: hue-rotate(360deg); } }
-  .marquee-border::before { animation: none; }
+  .marquee-border::before { animation: marquee-rotate-fallback var(--marquee-speed) linear infinite; }
 }
 
 .working-glow {
@@ -5859,6 +5859,7 @@ var state = {
   activeSendCallsByTarget: {},
   backendQueue: { steering: [], followUp: [] },
   backendQueuesByTarget: {},
+  queueItemsByTarget: {},
   defaultFlow: '',
   settingsActiveTab: 'general',
   globalAgentPrompt: '',
@@ -7962,6 +7963,30 @@ function syncTerminalShellOptions() {
 
 // === API Bridge ===
 var api = window.api || {
+  queueAction: async function(action, input) {
+    try {
+      var target = normalizeQueuedConversationTarget(currentConversationTarget());
+      if (!target) return { ok: false, error: 'No active conversation target' };
+      var body = {
+        workspaceId: target.workspaceId,
+        conversationId: target.conversationId,
+        action: action,
+        id: String(input && input.id || ''),
+        text: String(input && input.text || ''),
+        value: String(input && input.text || ''),
+        requestedMode: String(input && input.requestedMode || 'build'),
+        goalObjective: String(input && input.goalObjective || ''),
+        createdAt: String(input && input.createdAt || ''),
+      };
+      if (Array.isArray(input && input.orderedIds)) body.orderedIds = input.orderedIds;
+      var r = await fetch('/api/queue-action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      return r.json();
+    } catch(e) { return { ok: false, error: e.message }; }
+  },
   sendMessage: async function(msg, conversationId) {
     try {
       var body = {message: msg, mode: state.mode, model: state.model, intelligence: state.intelligence, inputMode: state.inputMode};
@@ -9268,12 +9293,25 @@ function renderPendingGuideMessages(target, persistedGuideIds) {
   persistedGuideIds = persistedGuideIds || {};
   var messages = guideMessagesForTarget(target);
   var pending = Object.keys(messages).map(function(id) { return messages[id]; }).filter(function(item) {
-    return item && !persistedGuideIds[item.clientMessageId];
+    if (!item || persistedGuideIds[item.clientMessageId]) return false;
+    // A Guide already owned by its work run is rendered by the Build block
+    // (expanded events or collapsed guide list), never as a separate trailing
+    // message. Without this guard, collapse/expand rebuilds would re-add the
+    // applied Guide at the end of the chat.
+    if (workRunOwnsGuide(item.runId, item.clientMessageId, target)) return false;
+    return true;
   }).sort(function(a, b) {
     return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
   });
   pending.forEach(function(item) {
     var element = findGuideMessageElement(item.clientMessageId);
+    if (element && !item.awaitingAck && item.runId && workRunOwnsGuide(item.runId, item.clientMessageId, target)) {
+      // The Guide is owned by its work run but a stale standalone copy exists
+      // (e.g. created before this guard). Remove it so the Build block stays
+      // the single source of truth.
+      element.remove();
+      element = null;
+    }
     if (item.awaitingAck && item.runId) {
       var runElement = findWorkRunElement({ runId: item.runId });
       var runBody = runElement && runElement.querySelector('.conversation-work-run-body');
@@ -9303,6 +9341,22 @@ function renderPendingGuideMessages(target, persistedGuideIds) {
     });
   });
   return pending.length;
+}
+
+function workRunOwnsGuide(runId, clientMessageId, target) {
+  if (!runId || !clientMessageId) return false;
+  var runs = workRunsForTarget(target || currentConversationTarget());
+  var run = runs.find(function(item) { return String(item.runId || '') === String(runId); });
+  if (!run) return false;
+  function matches(guide) {
+    return guide && String(guide.clientMessageId || '') === String(clientMessageId);
+  }
+  if ((run.guides || []).some(matches)) return true;
+  return (run.events || []).some(function(event) {
+    if (!event) return false;
+    if (matches(event.guide)) return true;
+    return !!(event.clientMessageId && String(event.clientMessageId) === String(clientMessageId));
+  });
 }
 
 function eventRuntimeKey(event) {
@@ -11098,6 +11152,7 @@ function renderAgentWorkEvent(event) {
     var eventQueueTarget = { workspaceId: eventWorkspaceId || runtimeWorkspaceId(''), conversationId: eventConversationId };
     state.backendQueue = setBackendQueueForTarget(event.queue || { steering: [], followUp: [] }, eventQueueTarget);
     if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue, eventQueueTarget);
+    syncQueueItemsFromSnapshot(event, eventQueueTarget);
     if (window.renderInputStack) window.renderInputStack();
   } else {
     return;
@@ -11323,6 +11378,7 @@ function applyConversationSnapshot(s, requestedConversationId, options) {
       state.backendQueue = setBackendQueueForTarget(s.queued, snapshotTarget);
       if (window.syncNextQueueFromBackend) window.syncNextQueueFromBackend(state.backendQueue, snapshotTarget);
     }
+    syncQueueItemsFromSnapshot(s, snapshotTarget);
     if (s && Array.isArray(s.workEvents)) {
       var eventConversationId = runtimeKeyFor(snapshotTarget.workspaceId, s.conversationId || requestedConversationId || 'default');
       if (!state.agentWorkEventsByConversation) state.agentWorkEventsByConversation = {};
@@ -12736,6 +12792,47 @@ function backendQueueForTarget(target) {
   return normalizeBackendQueue(state.backendQueuesByTarget[runtimeKeyFor(owner.workspaceId, owner.conversationId)]);
 }
 
+function queueItemsForTarget(target) {
+  var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  if (!owner) return [];
+  if (!state.queueItemsByTarget) state.queueItemsByTarget = {};
+  return state.queueItemsByTarget[runtimeKeyFor(owner.workspaceId, owner.conversationId)] || [];
+}
+
+function setQueueItemsForTarget(items, target) {
+  var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
+  if (!owner) return;
+  if (!state.queueItemsByTarget) state.queueItemsByTarget = {};
+  state.queueItemsByTarget[runtimeKeyFor(owner.workspaceId, owner.conversationId)] = (Array.isArray(items) ? items : []).map(function(item) {
+    return {
+      id: String(item && item.id || ''),
+      text: String(item && item.text || ''),
+      queueMode: String(item && item.queueMode || 'followUp'),
+      requestedMode: String(item && item.requestedMode || 'build'),
+      goalObjective: String(item && item.goalObjective || ''),
+      runId: String(item && item.runId || ''),
+      createdAt: String(item && item.createdAt || ''),
+    };
+  });
+}
+
+function queueItemIdForText(text, target) {
+  var items = queueItemsForTarget(target);
+  var normalized = String(text || '');
+  for (var i = 0; i < items.length; i++) {
+    if (String(items[i].text || '') === normalized) return items[i].id;
+  }
+  return '';
+}
+
+function syncQueueItemsFromSnapshot(snapshot, target) {
+  if (snapshot && Array.isArray(snapshot.queueItems)) setQueueItemsForTarget(snapshot.queueItems, target);
+}
+
+window.queueAction = function(action, input) {
+  if (!api.queueAction) return Promise.resolve({ ok: false, error: 'queueAction unavailable' });
+  return api.queueAction(action, input);
+};
 function setBackendQueueForTarget(queue, target) {
   var owner = normalizeQueuedConversationTarget(target || currentConversationTarget());
   var normalized = normalizeBackendQueue(queue);
@@ -12815,19 +12912,22 @@ window.renderQueuePanel = function() {
     if (queueIndex === state._editingQueueIndex) continue;
     var request = state.nextQueueRequests[queueIndex];
     var backendManaged = queuedRequestIsBackendManaged(request);
-    var dragAttributes = backendManaged
-      ? ' draggable="false"'
-      : ' draggable="true" ondragstart="window.startQueueDrag(event,' + queueIndex + ')" ondragover="window.overQueueDrag(event,' + queueIndex + ')" ondrop="window.dropQueueDrag(event,' + queueIndex + ')" ondragend="window.endQueueDrag(event)"';
-    var dragHandle = backendManaged
-      ? '<span class="queue-drag" aria-hidden="true">' + iconSvg('grip-vertical', t('queue.title'), 'tiny') + '</span>'
-      : '<button class="queue-drag" title="' + escAttr(t('queue.title')) + '">' + iconSvg('grip-vertical', t('queue.title'), 'tiny') + '</button>';
-    var inputAttributes = backendManaged
-      ? ' readonly aria-readonly="true"'
-      : ' readonly aria-readonly="true"';
-    var actions = backendManaged ? '' :
+    // dev-0.5.5: a backend-managed item is editable/deletable when the kernel
+    // exposed its stable queueItem id (mobile-originated queue entries now
+    // carry ids through queueItems). Items without an id stay locked.
+    var queueItemId = backendManaged ? queueItemIdForText(state.nextQueue[queueIndex] || '', currentConversationTarget()) : '';
+    var operable = !backendManaged || !!queueItemId;
+    var dragAttributes = operable
+      ? ' draggable="true" ondragstart="window.startQueueDrag(event,' + queueIndex + ')" ondragover="window.overQueueDrag(event,' + queueIndex + ')" ondrop="window.dropQueueDrag(event,' + queueIndex + ')" ondragend="window.endQueueDrag(event)"'
+      : ' draggable="false"';
+    var dragHandle = operable
+      ? '<button class="queue-drag" title="' + escAttr(t('queue.title')) + '">' + iconSvg('grip-vertical', t('queue.title'), 'tiny') + '</button>'
+      : '<span class="queue-drag" aria-hidden="true">' + iconSvg('grip-vertical', t('queue.title'), 'tiny') + '</span>';
+    var inputAttributes = ' readonly aria-readonly="true"';
+    var actions = operable ?
       '<button type="button" class="stack-icon-btn queue-guide-btn" onclick="window.guideQueueItem(' + queueIndex + ')" title="' + escAttr(t('queue.guideNow')) + '">' + iconSvg('corner-down-right', t('queue.guideNow'), 'tiny') + '<span>' + esc(t('queue.guideAction')) + '</span></button>' +
       '<button class="stack-icon-btn" onclick="window.focusQueueItem(' + queueIndex + ')" title="' + escAttr(t('common.edit')) + '">' + iconSvg('square-pen', t('common.edit'), 'tiny') + '</button>' +
-      '<button class="stack-icon-btn danger" onclick="window.deleteQueueItem(' + queueIndex + ')" title="' + escAttr(t('common.delete')) + '">' + iconSvg('trash', t('common.delete'), 'tiny') + '</button>';
+      '<button class="stack-icon-btn danger" onclick="window.deleteQueueItem(' + queueIndex + ')" title="' + escAttr(t('common.delete')) + '">' + iconSvg('trash', t('common.delete'), 'tiny') + '</button>' : '';
     html += '<div class="queue-item"' + dragAttributes + '>' +
       dragHandle +
       '<input class="queue-edit" value="' + escAttr(state.nextQueue[queueIndex] || '') + '"' + inputAttributes + '>' +
@@ -12860,9 +12960,11 @@ window.editQueueItem = function(idx, value) {
 
 window.focusQueueItem = function(idx) {
   var request = state.nextQueueRequests && state.nextQueueRequests[idx];
-  if (queuedRequestIsBackendManaged(request) || !queuedRequestMatchesTarget(request, currentConversationTarget())) return;
+  if (!queuedRequestMatchesTarget(request, currentConversationTarget())) return;
+  var backendManaged = queuedRequestIsBackendManaged(request);
+  if (backendManaged && !queueItemIdForText(state.nextQueue[idx] || '', currentConversationTarget())) return;
   state._editingQueueIndex = idx;
-  state.pendingInputEdit = { kind: 'queue', index: idx, request: request, target: currentConversationTarget() };
+  state.pendingInputEdit = { kind: 'queue', index: idx, request: request, target: currentConversationTarget(), originalText: String(state.nextQueue[idx] || '') };
   els.prompt.value = String(state.nextQueue[idx] || '');
   state.promptAttachments = (request.images || []).map(function(image, imageIndex) {
     return { id: 'queue-edit-' + imageIndex + '-' + Date.now(), name: image.name || 'queued image', type: image.type || 'image/png', dataUrl: image.dataUrl };
@@ -12876,13 +12978,23 @@ window.focusQueueItem = function(idx) {
 window.deleteQueueItem = function(idx) {
   if (!state.nextQueue) return;
   var request = state.nextQueueRequests && state.nextQueueRequests[idx];
-  if (queuedRequestIsBackendManaged(request) || !queuedRequestMatchesTarget(request, currentConversationTarget())) return;
+  if (!queuedRequestMatchesTarget(request, currentConversationTarget())) return;
+  var backendManaged = queuedRequestIsBackendManaged(request);
+  var queueItemId = backendManaged ? queueItemIdForText(state.nextQueue[idx] || '', currentConversationTarget()) : '';
+  if (backendManaged && !queueItemId) return;
   if (!state.queueHiddenItems) state.queueHiddenItems = {};
   if (state.nextQueue[idx]) state.queueHiddenItems[queueHiddenItemKey(state.nextQueue[idx], currentConversationTarget())] = true;
   state.nextQueue.splice(idx, 1);
   if (state.nextQueueRequests) state.nextQueueRequests.splice(idx, 1);
   refreshNextPromptForTarget(currentConversationTarget());
   window.renderInputStack();
+  if (backendManaged) {
+    window.queueAction('queue_delete', { id: queueItemId }).then(function(result) {
+      if (!result || result.ok === false) {
+        showUiNotice(result && result.error ? result.error : (currentLang() === 'zh' ? '删除队列项失败' : 'Failed to delete queue item'), 'error', 'queue-delete-' + queueItemId);
+      }
+    });
+  }
 };
 
 function restoreQueueItemAfterGuideFailure(idx, text, request, target, reuseClientMessageId) {
@@ -12899,7 +13011,10 @@ function restoreQueueItemAfterGuideFailure(idx, text, request, target, reuseClie
 window.guideQueueItem = function(idx) {
   if (!state.nextQueue || !state.nextQueue[idx]) return;
   var request = state.nextQueueRequests && state.nextQueueRequests[idx];
-  if (queuedRequestIsBackendManaged(request) || !queuedRequestMatchesTarget(request, currentConversationTarget())) return;
+  if (!queuedRequestMatchesTarget(request, currentConversationTarget())) return;
+  var backendManaged = queuedRequestIsBackendManaged(request);
+  var queueItemId = backendManaged ? queueItemIdForText(state.nextQueue[idx] || '', currentConversationTarget()) : '';
+  if (backendManaged && !queueItemId) return;
   var target = normalizeQueuedConversationTarget(request.target) || currentConversationTarget();
   var deliverDuringRun = isCurrentConversationRunning();
   var next = state.nextQueue.splice(idx, 1)[0];
@@ -12908,6 +13023,20 @@ window.guideQueueItem = function(idx) {
   if (next) state.queueHiddenItems[queueHiddenItemKey(next, target)] = true;
   refreshNextPromptForTarget(currentConversationTarget());
   window.renderInputStack();
+  if (backendManaged) {
+    // The kernel owns this entry; guide it there so the mobile side stays
+    // in sync. On failure restore the local row.
+    return window.queueAction('queue_guide', { id: queueItemId }).then(function(outcome) {
+      if (!outcome || outcome.ok === false) {
+        restoreQueueItemAfterGuideFailure(idx, next, nextRequest, target, true);
+        showUiNotice(outcome && outcome.error ? outcome.error : (currentLang() === 'zh' ? 'Guide 投递失败' : 'Guide delivery failed'), 'error', 'queue-guide-' + queueItemId);
+      }
+      return outcome || { ok: false };
+    }, function(error) {
+      restoreQueueItemAfterGuideFailure(idx, next, nextRequest, target, true);
+      return { ok: false, error: error && error.message ? error.message : String(error) };
+    });
+  }
   if (next) {
     var delivery = window.sendMessage('guide', next, {
       fromQueue: true,
@@ -12932,7 +13061,11 @@ window.guideQueueItem = function(idx) {
 
 window.startQueueDrag = function(event, idx) {
   var request = state.nextQueueRequests && state.nextQueueRequests[idx];
-  if (queuedRequestIsBackendManaged(request) || !queuedRequestMatchesTarget(request, currentConversationTarget())) {
+  if (!queuedRequestMatchesTarget(request, currentConversationTarget())) {
+    state.queueDragIndex = -1;
+    return;
+  }
+  if (queuedRequestIsBackendManaged(request) && !queueItemIdForText(state.nextQueue[idx] || '', currentConversationTarget())) {
     state.queueDragIndex = -1;
     return;
   }
@@ -12953,9 +13086,12 @@ window.dropQueueDrag = function(event, idx) {
   if (!state.nextQueue || from < 0 || from === idx || from >= state.nextQueue.length) return;
   var sourceRequest = state.nextQueueRequests && state.nextQueueRequests[from];
   var destinationRequest = state.nextQueueRequests && state.nextQueueRequests[idx];
-  if (queuedRequestIsBackendManaged(sourceRequest) || queuedRequestIsBackendManaged(destinationRequest)
-    || !queuedRequestMatchesTarget(sourceRequest, currentConversationTarget())
+  if (!queuedRequestMatchesTarget(sourceRequest, currentConversationTarget())
     || !queuedRequestMatchesTarget(destinationRequest, currentConversationTarget())) return;
+  var sourceBackend = queuedRequestIsBackendManaged(sourceRequest);
+  var destinationBackend = queuedRequestIsBackendManaged(destinationRequest);
+  if ((sourceBackend && !queueItemIdForText(state.nextQueue[from] || '', currentConversationTarget()))
+    || (destinationBackend && !queueItemIdForText(state.nextQueue[idx] || '', currentConversationTarget()))) return;
   var item = state.nextQueue.splice(from, 1)[0];
   var requestItem = state.nextQueueRequests ? state.nextQueueRequests.splice(from, 1)[0] : null;
   state.nextQueue.splice(idx, 0, item);
@@ -12963,6 +13099,17 @@ window.dropQueueDrag = function(event, idx) {
   state.queueDragIndex = -1;
   refreshNextPromptForTarget(currentConversationTarget());
   window.renderInputStack();
+  if (sourceBackend || destinationBackend) {
+    // The kernel owns at least one affected entry: forward the complete
+    // ordered id list so mobile and desktop stay in sync.
+    var visibleIndexes = queueIndexesForTarget(currentConversationTarget());
+    var orderedIds = visibleIndexes.map(function(vi) {
+      return queueItemIdForText(state.nextQueue[vi] || '', currentConversationTarget());
+    }).filter(function(id) { return !!id; });
+    if (orderedIds.length) {
+      window.queueAction('queue_reorder', { orderedIds: orderedIds });
+    }
+  }
 };
 
 window.endQueueDrag = function(event) {
@@ -13012,7 +13159,24 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     els.prompt.dispatchEvent(new Event('input', { bubbles: true }));
     if (pendingEdit.kind === 'queue') {
       var editIndex = Number(pendingEdit.index);
+      var editRequest = pendingEdit.request || (state.nextQueueRequests && state.nextQueueRequests[editIndex]);
+      var editBackendManaged = queuedRequestIsBackendManaged(editRequest);
+      var editQueueItemId = editBackendManaged ? queueItemIdForText(String(state.nextQueue[editIndex] || pendingEdit.originalText || ''), pendingEdit.target) : '';
+      if (editBackendManaged && !editQueueItemId) {
+        showUiNotice(currentLang() === 'zh' ? '无法编辑该队列项：缺少后端 id' : 'Cannot edit queue item: backend id missing', 'error', 'queue-edit-' + editIndex);
+        return { ok: false, error: 'missing backend queue id' };
+      }
       if (effectiveInputMode === 'next') {
+        if (editBackendManaged) {
+          // The kernel owns this entry: forward the edit and let the next
+          // snapshot reconcile the local row.
+          window.queueAction('queue_update', { id: editQueueItemId, text: editedValue, requestedMode: String(editRequest && editRequest.requestedMode || 'build'), goalObjective: String(editRequest && editRequest.goalObjective || ''), createdAt: String(editRequest && editRequest.createdAt || '') });
+          state.nextQueue[editIndex] = editedValue;
+          if (state.nextQueueRequests[editIndex]) state.nextQueueRequests[editIndex].text = editedValue;
+          refreshNextPromptForTarget(pendingEdit.target);
+          window.renderInputStack();
+          return { ok: true, queued: true };
+        }
         state.nextQueue[editIndex] = editedValue;
         if (state.nextQueueRequests[editIndex]) {
           state.nextQueueRequests[editIndex].text = editedValue;
@@ -13427,6 +13591,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     if (r && r.queued) {
       var responseQueue = setBackendQueueForTarget(r.queued, lockedTarget);
       window.syncNextQueueFromBackend(responseQueue, lockedTarget);
+      syncQueueItemsFromSnapshot(r, lockedTarget);
       if (stillActive) state.backendQueue = responseQueue;
     }
     if (r && r.options) {
@@ -13472,6 +13637,7 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       if (s && s.queued) {
         var refreshedQueue = setBackendQueueForTarget(s.queued, lockedTarget);
         window.syncNextQueueFromBackend(refreshedQueue, lockedTarget);
+        syncQueueItemsFromSnapshot(s, lockedTarget);
         if (stillActiveAfterRefresh) state.backendQueue = refreshedQueue;
       }
       if (s && s.conversations) {
@@ -14824,7 +14990,7 @@ if (api.onTerminalTakeover) {
 if (api.terminalTakeoverState) window.refreshTerminalTakeoverPanes();
 
 // === Scroll to Bottom ===
-var _chatScrollNearBottomPx = 80;
+var _chatScrollNearBottomPx = 24;
 var _chatShouldAutoScroll = true;
 function shouldAutoScroll(el) { return el.scrollHeight - el.scrollTop - el.clientHeight <= _chatScrollNearBottomPx; }
 function autoScrollIfAtBottom() { var el = els['chat-area']; if (!el) return; if (_chatShouldAutoScroll) el.scrollTop = el.scrollHeight; }

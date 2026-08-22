@@ -17,7 +17,7 @@ class ConversationStore(context: Context) {
         if (!file.exists()) return emptyList()
         return runCatching {
             val type = object : TypeToken<List<LocalConversation>>() {}.type
-            gson.fromJson<List<LocalConversation>>(file.readText(), type) ?: emptyList()
+            normalizeConversations(gson.fromJson<List<LocalConversation>>(file.readText(), type) ?: emptyList())
         }.getOrDefault(emptyList())
     }
 
@@ -32,7 +32,7 @@ class ConversationStore(context: Context) {
         if (!archivedFile.exists()) return emptyList()
         return runCatching {
             val type = object : TypeToken<List<LocalConversation>>() {}.type
-            gson.fromJson<List<LocalConversation>>(archivedFile.readText(), type) ?: emptyList()
+            normalizeConversations(gson.fromJson<List<LocalConversation>>(archivedFile.readText(), type) ?: emptyList())
         }.getOrDefault(emptyList())
     }
 
@@ -40,6 +40,37 @@ class ConversationStore(context: Context) {
         runCatching {
             dir.mkdirs()
             archivedFile.writeText(gson.toJson(conversations))
+        }
+    }
+
+    /**
+     * 旧版 conversations.json 由 Gson 反序列化时，缺失的 imageAttachments /
+     * toolCalls / messages 等 Kotlin 默认集合字段会被赋成 null（Gson 绕过
+     * 构造函数直接反射赋值）。发送图片时 ApiClient 对历史消息调用
+     * imageAttachments.isNotEmpty() 会触发
+     * "Collection.isEmpty() on a null object reference" NPE。
+     * 这里在加载后统一补齐空集合，根治旧数据。
+     */
+    private fun normalizeConversations(conversations: List<LocalConversation>): List<LocalConversation> {
+        return conversations.map { conversation ->
+            val normalizedMessages = conversation.messages
+                .orEmpty()
+                .map { it.copy(imageAttachments = it.imageAttachments.orEmpty()) }
+            val normalizedContext = conversation.modelContext
+                .orEmpty()
+                .map { it.copy(imageAttachments = it.imageAttachments.orEmpty()) }
+            val normalizedBranch = conversation.branchTree?.let { tree ->
+                tree.copy(
+                    nodes = tree.nodes.mapValues { (_, node) ->
+                        node.copy(messages = node.messages.orEmpty().map { it.copy(imageAttachments = it.imageAttachments.orEmpty()) })
+                    },
+                )
+            }
+            conversation.copy(
+                messages = normalizedMessages,
+                modelContext = normalizedContext,
+                branchTree = normalizedBranch,
+            )
         }
     }
 }

@@ -147,7 +147,7 @@ async function main() {
       renderConversationWorkRun = originalRender;
       return { animated, renders, inputEvents, maxInputDelayMs, minInterval: WORK_RUN_RENDER_MIN_INTERVAL_MS };
     })()`, 30_000);
-    if (result.animated !== 0) fail(`continuous status animations remain active: ${JSON.stringify(result)}`);
+    if (result.animated === 0) fail(`marquee/working-glow animations must stay active: ${JSON.stringify(result)}`);
     if (result.minInterval !== 100) fail(`unexpected Build render interval: ${JSON.stringify(result)}`);
     if (result.renders > 12) fail(`Build rendering exceeded the 10fps backpressure budget: ${JSON.stringify(result)}`);
     if (result.inputEvents < 80 || result.maxInputDelayMs > 100) fail(`input event loop was starved: ${JSON.stringify(result)}`);

@@ -1167,6 +1167,32 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, bo
         ));
         return;
       }
+      case '/api/queue-action': {
+        // Desktop-renderer queue mutations. The mobile endpoint requires a
+        // pairing token; the renderer shares the same process and is trusted,
+        // so it gets a dedicated unauthenticated route that reuses the same
+        // GUI runtime-pool queueAction path (update/delete/reorder/guide).
+        const params = JSON.parse(body || '{}') as Record<string, unknown>;
+        const workspaceId = String(params.workspaceId || '');
+        const conversationId = String(params.conversationId || '');
+        const action = String(params.action || '');
+        const allowed = new Set(['queue_enqueue', 'queue_update', 'queue_delete', 'queue_reorder', 'queue_toggle_pause', 'queue_guide']);
+        if (!workspaceId || !conversationId || !allowed.has(action)) {
+          jsonResponse(res, { error: 'workspaceId, conversationId, and a valid queue action are required' }, 400);
+          return;
+        }
+        if (!hostedConversationUiAction) {
+          jsonResponse(res, { error: 'This action requires the GUI-hosted runtime pool' }, 409);
+          return;
+        }
+        jsonResponse(res, await hostedConversationUiAction(
+          { workspaceId, conversationId },
+          action as 'queue_enqueue' | 'queue_update' | 'queue_delete' | 'queue_reorder' | 'queue_toggle_pause' | 'queue_guide',
+          String(params.value || ''),
+          params,
+        ));
+        return;
+      }
       case '/api/mobile/conversation-rename': {
         const params = JSON.parse(body || '{}');
         const workspaceId = String(params.workspaceId || '');

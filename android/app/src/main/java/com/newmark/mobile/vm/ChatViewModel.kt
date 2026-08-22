@@ -394,7 +394,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (!Regex("vision|image|multimodal|image_url|input_image|不支持|拒绝", RegexOption.IGNORE_CASE).containsMatchIn(text)) return null
         val current = activeModelConfig
         if (current != null && activeProvider?.models?.any { it.enabled && it.vision && it.name != current.name } == true) return null
-        val images = messages.asSequence().flatMap { it.imageAttachments.asSequence() }.take(4).toList()
+        val images = messages.asSequence().flatMap { it.imageAttachments.orEmpty().asSequence() }.take(4).toList()
         if (images.isEmpty()) return null
         val raw = images.mapNotNull { image -> localImageOcr(image).takeIf(String::isNotBlank) }.joinToString("\n\n")
         if (raw.isBlank()) return ChatResponse(content = "{\"ok\":false,\"fallback\":\"mini_ocr_llm\",\"error\":\"本地 OCR 未识别到文本，未编造视觉内容\"}")

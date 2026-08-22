@@ -228,7 +228,7 @@ class ApiClient(
                                             }
                                         })
                                     }
-                                    else -> if (m.role == "user" && m.imageAttachments.isNotEmpty()) {
+                                    else -> if (m.role == "user" && !m.imageAttachments.isNullOrEmpty()) {
                                         put("content", JSONArray().apply {
                                             put(JSONObject().put("type", "text").put("text", m.content))
                                             m.imageAttachments.forEach { image ->
@@ -524,7 +524,7 @@ class ApiClient(
                 }
                 else -> {
                     val role = if (message.role == "system") "system" else "user"
-                    if (role == "user" && message.imageAttachments.isNotEmpty()) {
+                    if (role == "user" && !message.imageAttachments.isNullOrEmpty()) {
                         put(JSONObject().put("role", role).put("content", JSONArray().apply {
                             put(JSONObject().put("type", "input_text").put("text", message.content))
                             message.imageAttachments.forEach { image ->

@@ -61,6 +61,9 @@ function verifyPersistedWorkRunsCannotRewriteRuntimeIdentity(source: string): vo
     'workRunsForBranch',
     'workRunsForTarget',
     'syncWorkRunsSnapshot',
+    'queueItemsForTarget',
+    'setQueueItemsForTarget',
+    'queueItemIdForText',
   ].map(name => functionSource(source, name)).join('\n\n');
   const targetA = { workspaceId: 'workspace-a', conversationId: 'default' };
   const targetB = { workspaceId: 'workspace-b', conversationId: 'default' };
@@ -213,6 +216,10 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
   let emptyReceipt = false;
   let activeRuntimePresent = true;
   const api = {
+    queueAction: (action: string, input: Record<string, any>) => {
+      apiCalls.push({ action, input });
+      return Promise.resolve({ ok: true });
+    },
     enqueueGuide: (envelope: Record<string, any>) => {
       apiCalls.push(envelope);
       if (transportFailure) return Promise.reject(new Error('transport timeout'));
@@ -242,7 +249,8 @@ async function verifyRunningQueuedGuideDelivery(source: string): Promise<void> {
     'markConversationTracked', 'composePromptTextForSend', 'clearPromptAttachments',
     'updateSubmitButtonState', 'recordGuideUiMessage', 'addMsg', 'normalizeGuideUiStatus',
     'applyAgentWorkEventToRun', 'renderPendingGuideMessages', 'showUiNotice', 'currentLang',
-    `${helpers}\nfunction queueBranchPathForTarget(){ return ''; }\n${normalizeAttachmentsSource}\n${restoreQueueSource}\n${recoverableGuideRejectionSource}\nwindow.bindQueuedRequestToTarget = bindQueuedRequestToTarget;\nwindow.sendMessage = ${sendMessageSource};\nwindow.guideQueueItem = ${guideQueueSource};`,
+    `${helpers}\nfunction queueBranchPathForTarget(){ return ''; }\n${normalizeAttachmentsSource}\n${restoreQueueSource}\n${recoverableGuideRejectionSource}\nwindow.bindQueuedRequestToTarget = bindQueuedRequestToTarget;\nwindow.sendMessage = ${sendMessageSource};\nwindow.guideQueueItem = ${guideQueueSource};
+    window.queueAction = function(action, input){ return Promise.resolve({ ok: true }); };`,
   );
   install(
     windowObject,
@@ -365,6 +373,9 @@ async function main(): Promise<void> {
     'normalizeBackendQueue',
     'backendQueueForTarget',
     'setBackendQueueForTarget',
+    'queueItemsForTarget',
+    'setQueueItemsForTarget',
+    'queueItemIdForText',
   ].map(name => functionSource(source, name)).join('\n\n');
   const drainSource = assignedFunctionSource(source, 'drainNextQueue');
   const scheduleDrainSource = assignedFunctionSource(source, 'scheduleNextQueueDrain');
@@ -410,12 +421,15 @@ async function main(): Promise<void> {
   const install = new Function('window', 'state', 'currentConversationTarget', 'runtimeKeyFor', 'isCurrentConversationRunning', 'isActiveConversationTarget', 'conversationBranchIdsForTarget', 'queueMicrotask', `
     ${helpers}
     window.bindQueuedRequestToTarget = bindQueuedRequestToTarget;
+    window.bindBackendQueuedRequestToTarget = bindBackendQueuedRequestToTarget;
     window.queueIndexesForTarget = queueIndexesForTarget;
     window.queueIndexesForRuntimeTarget = queueIndexesForRuntimeTarget;
     window.rebindQueueToRuntimeBranch = rebindQueueToRuntimeBranch;
     window.pauseQueueForTarget = pauseQueueForTarget;
     window.setBackendQueueForTarget = setBackendQueueForTarget;
     window.backendQueueForTarget = backendQueueForTarget;
+    window.setQueueItemsForTarget = setQueueItemsForTarget;
+    window.queueItemIdForText = queueItemIdForText;
     window.syncNextQueueFromBackend = ${syncSource};
     window.scheduleNextQueueDrain = ${scheduleDrainSource};
     window.drainNextQueue = ${drainSource};
@@ -460,6 +474,42 @@ async function main(): Promise<void> {
   assert.equal(state.queueDragIndex, -1, 'a backend-managed mirror cannot begin a drag transaction');
   assert.equal(state.nextQueue[backendBIndex], 'fresh B', 'backend-managed mirrors reject edit, delete, and Guide actions');
   assert.equal(sent.length, 0, 'read-only mirror actions never invoke sendMessage');
+
+  // dev-0.5.5 queue unification: once the kernel exposes a stable queue item
+  // id for a backend-managed text, delete/guide become operable and forward
+  // the exact id through queueAction instead of staying locked. These rows use
+  // their own text so the read-only 'fresh B' assertions above stay intact.
+  const queueActions: Array<{ action: string; input: Record<string, any> }> = [];
+  windowObject.queueAction = (action: string, input: Record<string, any>) => {
+    queueActions.push({ action, input });
+    return Promise.resolve({ ok: true });
+  };
+  windowObject.setQueueItemsForTarget([
+    { id: 'kernel-item-delete-b', text: 'deletable B', queueMode: 'followUp', requestedMode: 'build', runId: 'run-b', createdAt: '' },
+  ], targetB);
+  state.nextQueue.push('deletable B');
+  state.nextQueueRequests.push(windowObject.bindBackendQueuedRequestToTarget('deletable B', targetB, 0));
+  const deletableIndex = windowObject.queueIndexesForTarget(targetB).at(-1)!;
+  windowObject.deleteQueueItem(deletableIndex);
+  assert.equal(queueActions.length, 1, 'an id-carrying backend-managed item forwards delete through queueAction');
+  assert.equal(queueActions[0].action, 'queue_delete', 'backend delete forwards the queue_delete action');
+  assert.equal(queueActions[0].input.id, 'kernel-item-delete-b', 'backend delete carries the kernel queue item id');
+  assert.ok(!state.nextQueue.includes('deletable B'), 'backend delete removes the local mirror row after forwarding');
+  windowObject.setQueueItemsForTarget([
+    { id: 'kernel-item-guide-b', text: 'guided B', queueMode: 'followUp', requestedMode: 'build', runId: 'run-b', createdAt: '' },
+  ], targetB);
+  state.nextQueue.push('guided B');
+  state.nextQueueRequests.push(windowObject.bindBackendQueuedRequestToTarget('guided B', targetB, 0));
+  const guidedIndex = windowObject.queueIndexesForTarget(targetB).at(-1)!;
+  const guidePromise = windowObject.guideQueueItem(guidedIndex);
+  assert.ok(guidePromise && typeof guidePromise.then === 'function', 'backend guide returns the queueAction promise chain');
+  assert.equal(queueActions.length, 2, 'an id-carrying backend-managed item forwards guide through queueAction');
+  assert.equal(queueActions[1].action, 'queue_guide', 'backend guide forwards the queue_guide action');
+  assert.equal(queueActions[1].input.id, 'kernel-item-guide-b', 'backend guide carries the kernel queue item id');
+  assert.ok(!state.nextQueue.includes('guided B'), 'backend guide removes the local mirror row after forwarding');
+  assert.equal(state.queueDragIndex, -1, 'backend-managed drag stays locked regardless of id presence');
+  // Restore the plain queueAction bridge for any later assertions.
+  windowObject.queueAction = function(action: string, input: Record<string, any>) { return Promise.resolve({ ok: true }); };
 
   const pausedRequest = windowObject.bindQueuedRequestToTarget({ text: 'paused work', images: [] }, 'paused work', targetB);
   state.nextQueue.push('paused work');

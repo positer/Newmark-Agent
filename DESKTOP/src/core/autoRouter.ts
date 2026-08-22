@@ -446,9 +446,16 @@ export class AutoRouter {
     const scope = selection.kind === 'auto' ? selection.scope : { kind: 'provider' as const, providerId: current.providerId };
     const subset = selection.kind === 'auto' ? selection.subset : undefined;
     const currentGroup = current.logicalModelGroupId;
+    const currentProviderId = current.providerId;
     const now = this.now();
     const attemptedDeployments = decision.attempts.map(attempt => attempt.deployment);
+    // Fallback is a recovery operation, not a new global routing decision.
+    // It must never cross the provider boundary, even when the original Auto
+    // selection has global scope. This prevents equal model ids from silently
+    // switching credentials/endpoints (for example provider A/model X to
+    // provider B/model X).
     const eligible = candidates.filter(candidate => candidate.enabled
+      && candidate.deployment.providerId === currentProviderId
       && inScope(candidate.deployment, scope)
       && inSubset(candidate.deployment, subset)
       && !sameDeployment(candidate.deployment, current)

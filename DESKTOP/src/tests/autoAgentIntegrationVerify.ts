@@ -229,8 +229,8 @@ async function main(): Promise<void> {
     fs.writeFileSync(path.join(fixedRoot, 'config.json'), JSON.stringify({
       models: {
         providers: { value: [
-          { id: 'fixed-primary-provider', name: 'Primary', base_url: 'https://primary.invalid/v1', api_key: 'primary-key', protocol: 'openai', enabled: true, models: [model('fixed-primary', 10)] },
-          { id: 'fixed-backup-provider', name: 'Backup', base_url: 'https://backup.invalid/v1', api_key: 'backup-key', protocol: 'anthropic', enabled: true, models: [model('fixed-backup', 0.1)] },
+          { id: 'fixed-primary-provider', name: 'Primary', base_url: 'https://primary.invalid/v1', api_key: 'primary-key', protocol: 'openai', enabled: true, models: [model('fixed-primary', 10), model('fixed-backup', 0.1)] },
+          { id: 'fixed-backup-provider', name: 'Backup', base_url: 'https://backup.invalid/v1', api_key: 'backup-key', protocol: 'anthropic', enabled: true, models: [model('other-model', 0.1)] }
         ] },
         default_model: { value: 'fixed-primary' },
         auto_switch: { value: false },
@@ -245,14 +245,14 @@ async function main(): Promise<void> {
     const previous = fixedAgent.switchToFallbackModel('[LLM Error: 503] upstream unavailable');
     ok(previous === 'fixed-primary'
       && fixedAgent.model === 'fixed-backup'
-      && fixedAgent.activeDeployment()?.providerId === 'fixed-backup-provider'
+      && fixedAgent.activeDeployment()?.providerId === 'fixed-primary-provider'
       && fixedAgent.activeDeployment()?.modelId === 'fixed-backup',
     'fixed-model fallback updates both the displayed model and active deployment identity');
     fixedAgent.setModel('fixed-primary');
     fixedAgent.noteProviderBalanceFailure();
     const balancePrevious = fixedAgent.switchToFallbackModel('[LLM Error: 402] insufficient balance');
     ok(balancePrevious === 'fixed-primary'
-      && fixedAgent.activeDeployment()?.providerId === 'fixed-backup-provider'
+      && fixedAgent.activeDeployment()?.providerId === 'fixed-primary-provider'
       && fixedAgent.activeDeployment()?.modelId === 'fixed-backup',
     'fixed-model balance exhaustion blocks only the failed deployment and switches to another usable model');
   } finally {

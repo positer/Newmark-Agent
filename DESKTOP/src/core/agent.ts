@@ -6963,7 +6963,11 @@ export class Agent {
     if (!next?.name) return null;
     this.model = next.name;
     this.fixedDeployment = this.deploymentRef(next);
-    if (next.provider) this.config.set('models', 'auto_switch_anchor_provider', next.provider);
+    // Do NOT rewrite auto_switch_anchor_provider here. The anchor describes
+    // the user's Auto-routing scope; a fixed-model recovery must never
+    // repoint it (a single transient failure would otherwise silently move
+    // every future Auto route — and every future fallback pool — to the
+    // recovery provider, which is the cross-provider leak users observed).
     return current;
   }
 
@@ -6973,18 +6977,23 @@ export class Agent {
 
   private scopedSwitchModels(currentModelName: string): ReturnType<ConfigManager['allModels']> {
     const all = this.config.allModels();
-    if (this.config.autoSwitchScope() !== 'provider') return all;
-    const current = currentModelName === 'auto' ? undefined : this.config.findModel(currentModelName);
-    const providerId = current?.provider_id ||
-      this.config.autoSwitchAnchorProvider() ||
-      this.config.findModel(this.config.getStr('models', 'default_model'))?.provider_id ||
-      all[0]?.provider_id ||
-      '';
-    if (!providerId) return all;
-    const provider = this.config.findProvider(providerId);
-    return all.filter(m => m.provider_id === (provider?.id || providerId));
+    // Fixed-model recovery is always provider-local. A same-named model on a
+    // different provider is a different deployment and must never receive the
+    // failed provider's credentials or become an implicit fallback.
+    // Resolution order is strictly deployment-first: the pinned deployment,
+    // then the exact active deployment. The global auto anchor is deliberately
+    // NOT consulted here — it belongs to Auto routing only and can point at a
+    // different provider (for example after a previous cross-provider switch),
+    // which is exactly the same-name cross-provider leak this guard exists to
+    // prevent. When no provider can be established unambiguously, return an
+    // empty pool: failing the switch is safe, crossing providers is not.
+    const current = currentModelName === 'auto' ? this.activeModelConfig() : this.config.findModel(currentModelName);
+    const providerId = current?.provider_id
+      || this.fixedDeployment?.providerId
+      || (currentModelName !== 'auto' ? this.activeDeployment()?.providerId : undefined);
+    if (!providerId) return [];
+    return all.filter(m => m.provider_id === providerId);
   }
-
   async validateModels(selectedNames?: string[], options: { persist?: boolean } = {}): Promise<ModelValidationResult[]> {
     if (this.modelValidationPromise) return this.modelValidationPromise;
     const validation = this.runModelValidation(selectedNames, options.persist !== false);
@@ -8445,9 +8454,17 @@ export class Agent {
     if (!sa) return '[Subagent] Not found.';
      const requestedModel = this.normalizeSubagentModelSelection(sa.model && sa.model !== 'default' ? sa.model : this.modelSelectionValue() || this.model);
     const requestedDeployment = parseDeploymentSelectionValue(requestedModel);
-    const assignedModel = requestedModel === 'auto'
+    let assignedModel = requestedModel === 'auto'
       ? this.activeModelConfig()
       : (requestedDeployment ? this.config.findDeployment(requestedDeployment) : this.config.findModel(requestedModel));
+    // Imported presets (and stale records) may reference a bare model name
+    // that no longer exists in the configured catalog. Resolving by name must
+    // never guess a provider; instead the peer inherits the parent deployment
+    // so the job can still run. Qualified deployment values keep failing
+    // closed — they are exact references, not guesses.
+    if (!assignedModel && !requestedDeployment && requestedModel !== 'auto') {
+      assignedModel = this.activeModelConfig();
+    }
     const model = assignedModel?.name || (requestedModel === 'auto' ? this.activeModelName() : requestedModel);
     const activeModel = this.activeModelConfig();
     const activeProvider = this.engineModel();

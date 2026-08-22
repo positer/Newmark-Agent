@@ -53,6 +53,7 @@ function createFixture(): {
     'mergeGuideWorkEvent',
     'dedupeGuideWorkEvents',
     'syncGuideMessagesFromWorkRuns',
+    'workRunOwnsGuide',
     'renderPendingGuideMessages',
     'addMsg',
     'renderConversationBranchPagers',

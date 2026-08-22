@@ -193,6 +193,34 @@ async function main(): Promise<void> {
     assert.equal(agent.isBalanceBlockedDeployment({ providerId: 'stress-provider', modelId: 'primary' }), true);
     assert.equal(agent.isBalanceBlockedDeployment({ providerId: 'stress-provider', modelId: 'backup' }), false);
 
+    // Same-name cross-provider boundary: when the failed provider has no
+    // remaining usable model, a fixed-model fallback must NOT reach a
+    // same-named model on another provider. The failed deployment stays
+    // selected and the switch reports null.
+    const boundaryRoot = path.join(root, 'boundary-provider');
+    fs.mkdirSync(boundaryRoot, { recursive: true });
+    fs.writeFileSync(path.join(boundaryRoot, 'config.json'), JSON.stringify({
+      models: {
+        providers: { value: [
+          { id: 'boundary-a', name: 'Boundary A', base_url: 'https://boundary-a.invalid/v1', api_key: 'a-key', protocol: 'openai', enabled: true, models: [model('same-model', 0.1)] },
+          { id: 'boundary-b', name: 'Boundary B', base_url: 'https://boundary-b.invalid/v1', api_key: 'b-key', protocol: 'openai', enabled: true, models: [model('same-model', 0.2)] },
+        ] },
+        default_model: { value: 'same-model' },
+        auto_switch: { value: false },
+        fallback_on_unavailable: { value: true },
+      },
+      workspace: { auto_create_timestamp_workspace: { value: false } },
+    }, null, 2));
+    const boundaryAgent = new Agent(boundaryRoot, { agentOnly: true, conversationId: 'boundary-provider' });
+    boundaryAgent.setModel('deployment:boundary-a:same-model');
+    const boundaryBefore = boundaryAgent.activeDeployment();
+    boundaryAgent.noteProviderBalanceFailure();
+    const boundarySwitched = boundaryAgent.switchToFallbackModel('HTTP 402 insufficient_quota');
+    assert.equal(boundarySwitched, null, 'fixed-model fallback must not cross to a same-named model on another provider');
+    const boundaryAfter = boundaryAgent.activeDeployment();
+    assert.equal(boundaryAfter?.providerId, 'boundary-a', 'cross-provider fallback leaked the provider identity');
+    assert.equal(boundaryAfter?.modelId, boundaryBefore?.modelId, 'cross-provider fallback changed the selected model');
+
     const originalFetch = globalThis.fetch;
     let processFailovers = 0;
     try {
@@ -204,15 +232,11 @@ async function main(): Promise<void> {
             providers: { value: [
               {
                 id: 'quota-primary', name: 'Quota Primary', base_url: 'https://quota-primary.invalid/v1', api_key: 'primary-key', protocol: 'openai', enabled: true,
-                models: [model('shared-model', 0.1)],
+                models: [model('shared-model', 0.1), model('shared-backup', 0.2), model('shared-final', 0.3)],
               },
               {
-                id: 'quota-backup', name: 'Quota Backup', base_url: 'https://quota-backup.invalid/v1', api_key: 'backup-key', protocol: 'openai', enabled: true,
-                models: [model('shared-model', 0.2)],
-              },
-              {
-                id: 'quota-final', name: 'Quota Final', base_url: 'https://quota-final.invalid/v1', api_key: 'final-key', protocol: 'openai', enabled: true,
-                models: [model('shared-model', 0.3)],
+                id: 'quota-other', name: 'Quota Other', base_url: 'https://quota-other.invalid/v1', api_key: 'other-key', protocol: 'openai', enabled: true,
+                models: [model('shared-model', 0.4)],
               },
             ] },
             default_model: { value: 'shared-model' },
@@ -225,28 +249,38 @@ async function main(): Promise<void> {
         let primaryRequests = 0;
         let backupRequests = 0;
         let finalRequests = 0;
-        globalThis.fetch = (async (input: string | URL | Request) => {
+        let crossProviderRequests = 0;
+        globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
           const url = String(input);
+          if (url.includes('quota-other.invalid')) {
+            crossProviderRequests += 1;
+            throw new Error(`fallback crossed the provider boundary: ${url}`);
+          }
           if (url.includes('quota-primary.invalid')) {
-            primaryRequests += 1;
-            return new Response(JSON.stringify({ error: { message: 'insufficient_quota: credits exhausted' } }), {
-              status: 402,
-              headers: { 'Content-Type': 'application/json' },
-            });
-          }
-          if (url.includes('quota-backup.invalid')) {
-            backupRequests += 1;
-            return new Response(JSON.stringify({ error: { message: 'billing hard limit reached' } }), {
-              status: 402,
-              headers: { 'Content-Type': 'application/json' },
-            });
-          }
-          if (url.includes('quota-final.invalid')) {
-            finalRequests += 1;
-            return new Response(JSON.stringify({ choices: [{ message: { content: `FINAL_OK_${round}` } }] }), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            });
+            const rawBody = String((init as RequestInit | undefined)?.body || '');
+            const body = rawBody ? JSON.parse(rawBody) as Record<string, unknown> : {};
+            const requestedModel = String(body.model || '');
+            if (requestedModel === 'shared-model') {
+              primaryRequests += 1;
+              return new Response(JSON.stringify({ error: { message: 'insufficient_quota: credits exhausted' } }), {
+                status: 402,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            if (requestedModel === 'shared-backup') {
+              backupRequests += 1;
+              return new Response(JSON.stringify({ error: { message: 'billing hard limit reached' } }), {
+                status: 402,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+            if (requestedModel === 'shared-final') {
+              finalRequests += 1;
+              return new Response(JSON.stringify({ choices: [{ message: { content: `FINAL_OK_${round}` } }] }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
           }
           throw new Error(`unexpected request URL during quota failover stress: ${url}`);
         }) as typeof fetch;
@@ -256,16 +290,18 @@ async function main(): Promise<void> {
         try {
           tokens = await processAgent.process(`quota failover round ${round}`);
         } catch (error) {
-          throw new Error(`process round ${round} failed after requests primary=${primaryRequests} backup=${backupRequests} final=${finalRequests} active=${JSON.stringify(processAgent.activeDeployment())} blockedPrimary=${processAgent.isBalanceBlockedDeployment({ providerId: 'quota-primary', modelId: 'shared-model' })} blockedBackup=${processAgent.isBalanceBlockedDeployment({ providerId: 'quota-backup', modelId: 'shared-model' })}: ${error instanceof Error ? error.stack || error.message : String(error)}`);
+          throw new Error(`process round ${round} failed after requests primary=${primaryRequests} backup=${backupRequests} final=${finalRequests} crossProvider=${crossProviderRequests} active=${JSON.stringify(processAgent.activeDeployment())} blockedPrimary=${processAgent.isBalanceBlockedDeployment({ providerId: 'quota-primary', modelId: 'shared-model' })} blockedBackup=${processAgent.isBalanceBlockedDeployment({ providerId: 'quota-primary', modelId: 'shared-backup' })}: ${error instanceof Error ? error.stack || error.message : String(error)}`);
         }
         const visible = tokens.map(token => token.text || '').join('');
         assert.equal(primaryRequests, 1, `process round ${round} retried the exhausted deployment`);
-        assert.equal(backupRequests, 1, `process round ${round} retried the exhausted first backup`);
-        assert.equal(finalRequests, 1, `process round ${round} did not call the final backup exactly once`);
-        assert.equal(processAgent.activeDeployment()?.providerId, 'quota-final', `process round ${round} did not reach the third deployment`);
+        assert.equal(backupRequests, 1, `process round ${round} retried the exhausted same-provider backup`);
+        assert.equal(finalRequests, 1, `process round ${round} did not call the same-provider final backup exactly once`);
+        assert.equal(crossProviderRequests, 0, `process round ${round} crossed the provider boundary while same-provider backups remained`);
+        assert.equal(processAgent.activeDeployment()?.providerId, 'quota-primary', `process round ${round} left the failed provider`);
+        assert.equal(processAgent.activeDeployment()?.modelId, 'shared-final', `process round ${round} did not reach the third same-provider model`);
         assert.equal(processAgent.isBalanceBlockedDeployment({ providerId: 'quota-primary', modelId: 'shared-model' }), true,
           `process round ${round} did not isolate the primary balance block`);
-        assert.equal(processAgent.isBalanceBlockedDeployment({ providerId: 'quota-backup', modelId: 'shared-model' }), true,
+        assert.equal(processAgent.isBalanceBlockedDeployment({ providerId: 'quota-primary', modelId: 'shared-backup' }), true,
           `process round ${round} did not isolate the backup balance block`);
         assert.equal(processAgent.isBalanceBlockedDeployment({ providerId: 'quota-final', modelId: 'shared-model' }), false,
           `process round ${round} contaminated the healthy deployment`);

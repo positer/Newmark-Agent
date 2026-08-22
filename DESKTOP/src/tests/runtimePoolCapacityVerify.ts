@@ -188,7 +188,7 @@ async function verifyElectronCapacity(): Promise<number> {
     const client = new CapacityElectronClient(normalized, tracker);
     clients.set(normalized.runtimeKey, client);
     return client;
-  }, { idleTtlMs: 600_000 });
+  }, { idleTtlMs: 600_000, maxResidentRuntimes: 2 });
   const a = target('electron-a');
   const b = target('electron-b');
   const c = target('electron-c');
@@ -230,7 +230,7 @@ async function verifyElectronCapacity(): Promise<number> {
     client.running = true;
     busyClients.set(normalized.runtimeKey, client);
     return client;
-  }, { idleTtlMs: 600_000 });
+  }, { idleTtlMs: 600_000, maxResidentRuntimes: 2 });
   await busyPool.snapshot(a);
   await busyPool.snapshot(b);
   assert.deepEqual(busyPool.peek(c), { resident: false, running: false, stopping: false, connected: false }, 'Electron peek observes a cold target without allocating a third runtime'); assertions++;
@@ -260,7 +260,7 @@ async function verifyWslCapacity(): Promise<number> {
     const client = new CapacityWslClient(normalized, tracker);
     clients.set(normalized.runtimeKey, client);
     return client;
-  }, { idleTtlMs: 600_000 });
+  }, { idleTtlMs: 600_000, maxResidentRuntimes: 2 });
   const a = target('wsl-a');
   const b = target('wsl-b');
   const c = target('wsl-c');
@@ -302,7 +302,7 @@ async function verifyWslCapacity(): Promise<number> {
     client.running = true;
     busyClients.set(normalized.runtimeKey, client);
     return client;
-  }, { idleTtlMs: 600_000 });
+  }, { idleTtlMs: 600_000, maxResidentRuntimes: 2 });
   await busyPool.snapshot(a);
   await busyPool.snapshot(b);
   assert.deepEqual(busyPool.peek(c), { resident: false, running: false, stopping: false, connected: false }, 'WSL peek observes a cold target without allocating a third process group'); assertions++;
@@ -324,8 +324,43 @@ async function verifyWslCapacity(): Promise<number> {
   return assertions;
 }
 
+async function verifyDefaultCapacityAllowsParallelConversations(): Promise<number> {
+  let assertions = 0;
+  const tracker = new CapacityTracker();
+  const clients = new Map<string, CapacityElectronClient>();
+  const pool = new ElectronUtilityRuntimePool('C:\\root', 'utility.js', normalized => {
+    const client = new CapacityElectronClient(normalized, tracker);
+    client.running = true;
+    clients.set(normalized.runtimeKey, client);
+    return client;
+  }, { idleTtlMs: 600_000 });
+  const targets = Array.from({ length: 6 }, (_, index) => target(`electron-default-${index}`));
+  // Six concurrently active conversations must all be admitted by the default
+  // capacity: the pool serves one runtime per conversation and must not
+  // hard-block parallel conversations at the legacy limit of two.
+  await Promise.all(targets.map(t => pool.snapshot(t)));
+  assert.equal(pool.runtimeKeys().length, 6, 'default Electron capacity admits six parallel conversations'); assertions++;
+  assert.equal(tracker.maxResident, 6, 'default Electron capacity never transiently exceeds the resident set it admitted'); assertions++;
+  await pool.stopAll();
+  const wslClients = new Map<string, CapacityWslClient>();
+  const wslTracker = new CapacityTracker();
+  const wslPool = new WslAgentRuntimePool('Fake', 'C:\\root', 'host.js', normalized => {
+    const client = new CapacityWslClient(normalized, wslTracker);
+    client.running = true;
+    wslClients.set(normalized.runtimeKey, client);
+    return client;
+  }, { idleTtlMs: 600_000 });
+  const wslTargets = Array.from({ length: 6 }, (_, index) => target(`wsl-default-${index}`));
+  await Promise.all(wslTargets.map(t => wslPool.snapshot(t)));
+  assert.equal(wslPool.runtimeKeys().length, 6, 'default WSL capacity admits six parallel conversations'); assertions++;
+  await wslPool.stopAll();
+  return assertions;
+}
+
 async function main(): Promise<void> {
-  const assertions = await verifyElectronCapacity() + await verifyWslCapacity();
+  const assertions = await verifyElectronCapacity()
+    + await verifyWslCapacity()
+    + await verifyDefaultCapacityAllowsParallelConversations();
   console.log(JSON.stringify({ ok: true, assertions }));
 }
 

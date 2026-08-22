@@ -615,8 +615,12 @@ export class WslAgentRuntimePool {
   }
 
   private maxResidentRuntimes(): number {
-    const configured = Number(this.options.maxResidentRuntimes ?? 2);
-    return Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 2;
+    // Same rationale as the Electron utility pool: one runtime per active
+    // conversation target. The previous default of 2 blocked parallel
+    // conversations with a capacity error; idle LRU eviction still bounds
+    // resident memory.
+    const configured = Number(this.options.maxResidentRuntimes ?? 8);
+    return Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 8;
   }
 
   private async serializeCapacity<T>(operation: () => Promise<T>): Promise<T> {

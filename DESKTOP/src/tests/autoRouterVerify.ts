@@ -401,6 +401,23 @@ export function verifyAutoRouter(): Check[] {
     && ladder[1].deployment.modelId === 'equivalent'
     && ladder.every(attempt => attempt.deployment.providerId === 'p'),
   'auto fallback: failed initial call plus retry and explicit equivalent stay within three total attempts', checks);
+  const globalFallbackPool = [
+    ...fallbackPool,
+    candidate('other', 'same-model-name', { fallbackOnly: true }),
+    candidate('other', 'ordinary-backup'),
+  ];
+  const globalFallbackDecision = router.route(
+    { kind: 'auto', scope: { kind: 'global' }, policyId: 'balanced' },
+    defaultRoutePolicy('balanced'), globalFallbackPool,
+    request({ transactionId: 'global-provider-boundary', affinityKey: 'global-provider-boundary' }),
+  );
+  const globalFallbackLadder = router.planAttempts(globalFallbackDecision, globalFallbackPool, {
+    error: classifyRouteFailure('HTTP 503 upstream unavailable'),
+    streamCommitted: false,
+    sideEffectCommitted: false,
+  });
+  assert(globalFallbackLadder.every(attempt => attempt.deployment.providerId === 'p'),
+    'auto fallback: global Auto still keeps every retry and fallback on the failed provider', checks);
   const fallbackOnlyLadder = router.planAttempts(fallbackDecision, fallbackPool.filter(item => item.deployment.modelId !== 'equivalent'), {
     error: classifyRouteFailure('HTTP 503 upstream unavailable'),
     streamCommitted: false,

@@ -1,5 +1,14 @@
 # Newmark Agent Overview
 
+## dev-0.5.5 provider-boundary fallback, runtime capacity, and interruption fixes (2026-08-23)
+
+- **串供应商修复（用户报障：科技云 deepseek-v4-flash 一直跑成 opencode 的同名模型）**：固定模型回退 `scopedSwitchModels` 的供应商解析此前在模型重名时经 `findModel` 失败后落回全局 `auto_switch_anchor_provider`（曾被旧回退逻辑污染为 opencode），导致科技云失败后整个回退池变成 opencode 的模型并选中同名 flash。修复：解析顺序改为 deployment-first（activeModelConfig → fixedDeployment → activeDeployment），绝不落回全局 anchor；无法唯一确定供应商时返回空池（宁可失败绝不跨供应商）。同时删除回退成功后改写 `auto_switch_anchor_provider` 的副作用（一次瞬时失败不再永久把 Auto 路由与未来回退池锚到恢复供应商）。
+- **Auto 回退同供应商**：`AutoRouter.planAttempts` 的回退候选强制 `deployment.providerId === 当前失败部署的 providerId`，即使原始 Auto selection 是 global scope（回退是恢复操作，不是新的全局路由决策）。
+- **对话记录佐证**：用户对话的 `modelSelection` 已被串到 `provider-opencode-001/deepseek-v4-flash`，并伴随 `Stream read timeout after 30000ms`（已修）、`[LLM Error: 503]` 与 opencode 余额 403 中断。中断根因 = 30s 流空闲超时（已修）+ 回退跨供应商把请求带到余额不足的供应商。
+- **并行限制修复（用户报障：PC 只能并行一个对话，新运行报 Runtime exceeded）**：`ElectronUtilityRuntimePool`/`WslAgentRuntimePool` 的 `maxResidentRuntimes` 默认值从 2 提升到 8——池按对话 target 每对话一个 runtime，旧默认 2 使第三个对话被 `runtime_pool_capacity` 拒绝。idle LRU 驱逐保留，容量测试显式传 `maxResidentRuntimes: 2` 锁原有容量语义，并新增默认容量 6 对话并行断言。
+- **preset 子代理模型降级**：imported preset 引用的裸模型名在 catalog 中不存在时，peer 继承父部署运行（qualified deployment 值仍 fail closed）；修复 verify.js "Agent task preset" 回归。
+- **验证**：`npm test` 全绿（含 verify.js 1669/1669）；autoRouterVerify 37/37；modelRecoveryStressVerify（250 编辑 + 2000 quota 路由 + 30 轮同供应商链式 402 failover + 跨供应商禁止断言）；runtimePoolCapacityVerify（含默认容量并行断言）；streamUnlimitedTimeoutStressVerify / queueUnifyStressVerify 通过；Android `testDebugUnitTest` BUILD SUCCESSFUL。
+
 ## dev-0.5.5 stress tests: stream unlimited timeout + queue unification (2026-08-23)
 
 - **streamUnlimitedTimeoutStressVerify（14 项全过）**：验证 `readProviderStreamChunk` 默认 `timeoutMs = 0`（无限）——慢流 25x40ms 完成、停顿流不超时、abort 立即生效并取消 reader、显式正超时仍触发 TimeoutError、并发 reader 独立、500-chunk 突发无泄漏。

@@ -656,8 +656,13 @@ export class ElectronUtilityRuntimePool {
   }
 
   private maxResidentRuntimes(): number {
-    const configured = Number(this.options.maxResidentRuntimes ?? 2);
-    return Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 2;
+    // The pool hosts one utility runtime per active conversation target.
+    // A small default (2) silently blocked users from running more than two
+    // conversations at once with "utility runtime pool capacity reached".
+    // Idle runtimes are still evicted on LRU after the idle TTL, so a higher
+    // default bounds memory by activity, not by an arbitrary conversation cap.
+    const configured = Number(this.options.maxResidentRuntimes ?? 8);
+    return Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 8;
   }
 
   private async serializeCapacity<T>(operation: () => Promise<T>): Promise<T> {

@@ -66,10 +66,6 @@
             android:exported="false"
             android:stopWithTask="false"
             android:foregroundServiceType="dataSync" />
-        <service
-            android:name=".data.ShizukuPrivilegedService"
-            android:exported="true"
-            android:process=":shizuku_user_service" />
     </application>
 
 </manifest>

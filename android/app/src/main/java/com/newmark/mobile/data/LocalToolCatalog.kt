@@ -11,6 +11,7 @@ object LocalToolCatalog {
         "task_read", "task_create",
         "build_history_query", "context_compress", "context_history_manage",
         "calendar_create", "calendar_read",
+        "alarm_manage",
     )
     val planNames: Set<String> = linkedSetOf(
         "read_file", "list_dir", "memory_lab_read", "memory_lab_query", "settings_read",

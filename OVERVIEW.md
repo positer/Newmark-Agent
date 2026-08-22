@@ -1,5 +1,12 @@
 # Newmark Agent Overview
 
+## dev-0.5.4 mobile AlarmManager tool (2026-08-22)
+
+- 移动端本地 Agent 新增 `alarm_manage` 通用工具，支持通过 Android `AlarmManager` 创建、列出和取消本应用闹钟；闹钟记录仅保存于应用私有 `files/newmark/alarms.json`。
+- 创建默认使用 `setExactAndAllowWhileIdle`，设备未授予精确闹钟特殊访问时由应用跳转系统 `ACTION_REQUEST_SCHEDULE_EXACT_ALARM` 页面并拒绝本次执行；`exact=false` 使用系统允许的非精确闹钟路径。
+- Manifest 声明 `SCHEDULE_EXACT_ALARM`，并注册非导出的 `AlarmReceiver`；触发后通过系统通知渠道提示用户，不接收外部隐式广播。
+- 验证：Android `testDebugUnitTest lintVitalRelease assembleRelease` 通过。
+
 ## dev-0.5.4 mobile local image attachments (2026-08-22)
 
 - 移动端本地输入菜单新增“选择图片”，仅接受 PNG/JPEG，单图上限 12 MiB，最多随消息发送 4 张；图片以受限 Data URL 作为 `ChatMessage.imageAttachments` 持久化。

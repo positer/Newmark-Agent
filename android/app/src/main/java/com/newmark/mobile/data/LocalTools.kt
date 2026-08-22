@@ -183,6 +183,19 @@ object LocalTools {
             ),
             emptyList(),
         ),
+        function(
+            "alarm_manage",
+            "通过 Android AlarmManager 创建、查看和取消本应用闹钟；create 默认使用精确闹钟并遵守系统特殊访问权限",
+            mapOf(
+                "action" to enumProp(listOf("create", "list", "cancel"), "操作"),
+                "trigger_at_ms" to prop("number", "create 的未来 Unix epoch 毫秒"),
+                "title" to prop("string", "闹钟标题"),
+                "message" to prop("string", "触发时显示的内容"),
+                "exact" to prop("boolean", "是否精确触发，默认 true"),
+                "alarm_id" to prop("string", "cancel 的闹钟 id"),
+            ),
+            listOf("action"),
+        ),
     )
 
     /** Runtime exposure is capability-bound; stale model context cannot grant a tool. */

@@ -2,10 +2,12 @@ package com.newmark.mobile.ui
 
 import android.Manifest
 import android.content.ClipData
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.view.View
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -68,6 +70,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
 import com.newmark.mobile.data.CalendarTool
+import com.newmark.mobile.data.AlarmTool
 import com.newmark.mobile.data.LocalWorkEvent
 import com.newmark.mobile.data.IncomingShare
 import com.newmark.mobile.data.IncomingShareRouter
@@ -442,6 +445,24 @@ private fun NewmarkAppContent(
             pendingCalendarPermission?.complete(false)
             pendingCalendarPermission = null
         }
+    }
+    DisposableEffect(vm, context) {
+        val handler: suspend (org.json.JSONObject) -> com.newmark.mobile.data.ToolResult = { args ->
+            val action = args.optString("action").trim().lowercase()
+            if (action == "create" && args.optBoolean("exact", true) && !AlarmTool.canScheduleExact(context)) {
+                runCatching {
+                    context.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                        data = Uri.parse("package:${context.packageName}")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    })
+                }
+                com.newmark.mobile.data.ToolResult.err("请在系统页面允许精确闹钟权限后重新执行 alarm_manage create")
+            } else {
+                AlarmTool.manage(context, args)
+            }
+        }
+        vm.bindLocalAlarmTool(handler)
+        onDispose { vm.unbindLocalAlarmTool(handler) }
     }
     val keepScreenOn = vm.hasRunningLocalAgents
     DisposableEffect(rootView, keepScreenOn) {

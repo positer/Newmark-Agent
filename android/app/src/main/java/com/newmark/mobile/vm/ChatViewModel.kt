@@ -146,6 +146,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val localRuntimes = mutableStateMapOf<String, LocalAgentRuntime>()
     private val localBrowserToolHandlers = mutableMapOf<String, suspend (JSONObject) -> com.newmark.mobile.data.ToolResult>()
     private var localCalendarToolHandler: (suspend (String, JSONObject) -> com.newmark.mobile.data.ToolResult)? = null
+    private var localAlarmToolHandler: (suspend (JSONObject) -> com.newmark.mobile.data.ToolResult)? = null
 
     fun bindLocalBrowserTools(
         conversationId: String,
@@ -167,6 +168,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun unbindLocalCalendarTool(handler: suspend (String, JSONObject) -> com.newmark.mobile.data.ToolResult) {
         if (localCalendarToolHandler === handler) localCalendarToolHandler = null
+    }
+
+    fun bindLocalAlarmTool(handler: suspend (JSONObject) -> com.newmark.mobile.data.ToolResult) { localAlarmToolHandler = handler }
+    fun unbindLocalAlarmTool(handler: suspend (JSONObject) -> com.newmark.mobile.data.ToolResult) {
+        if (localAlarmToolHandler === handler) localAlarmToolHandler = null
     }
 
     suspend fun importLocalFile(name: String, bytes: ByteArray): Result<String> = withContext(Dispatchers.IO) {
@@ -1043,6 +1049,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 ?: com.newmark.mobile.data.ToolResult.err("当前对话的内置浏览器尚未挂载")
             "calendar_create", "calendar_read" -> localCalendarToolHandler?.invoke(name, args)
                 ?: com.newmark.mobile.data.ToolResult.err("日历权限请求器尚未挂载")
+            "alarm_manage" -> localAlarmToolHandler?.invoke(args)
+                ?: com.newmark.mobile.data.ToolResult.err("闹钟权限请求器尚未挂载")
             else -> null
         }
     }

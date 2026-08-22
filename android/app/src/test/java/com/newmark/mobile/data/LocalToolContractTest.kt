@@ -16,6 +16,7 @@ class LocalToolContractTest {
                 "task_read", "task_create",
                 "build_history_query", "context_compress", "context_history_manage",
                 "calendar_create", "calendar_read",
+                "alarm_manage",
             ),
             LocalToolCatalog.buildNames,
         )
@@ -54,6 +55,25 @@ class LocalToolContractTest {
         assertEquals(false, calendar.contains(".resolveActivity("))
         assertEquals(false, executor.contains("\"calendar_create\" -> CalendarTool"))
         assertEquals(false, executor.contains("\"calendar_read\" -> CalendarTool"))
+    }
+
+    @Test
+    fun alarmToolUsesSystemAlarmManagerAndExactAlarmBoundary() {
+        val manifest = java.io.File("src/main/AndroidManifest.xml").readText()
+        val app = java.io.File("src/main/java/com/newmark/mobile/ui/NewmarkApp.kt").readText()
+        val alarm = java.io.File("src/main/java/com/newmark/mobile/data/AlarmTool.kt").readText()
+        val definitions = java.io.File("src/main/java/com/newmark/mobile/data/LocalTools.kt").readText()
+        val viewModel = java.io.File("src/main/java/com/newmark/mobile/vm/ChatViewModel.kt").readText()
+        assertEquals(true, manifest.contains("android.permission.SCHEDULE_EXACT_ALARM"))
+        assertEquals(true, manifest.contains(".data.AlarmReceiver"))
+        assertEquals(true, alarm.contains("AlarmManager"))
+        assertEquals(true, alarm.contains("setExactAndAllowWhileIdle"))
+        assertEquals(true, alarm.contains("setAndAllowWhileIdle"))
+        assertEquals(true, alarm.contains("AlarmReceiver"))
+        assertEquals(true, app.contains("ACTION_REQUEST_SCHEDULE_EXACT_ALARM"))
+        assertEquals(true, app.contains("bindLocalAlarmTool"))
+        assertEquals(true, viewModel.contains("\"alarm_manage\" -> localAlarmToolHandler?.invoke(args)"))
+        assertEquals(true, definitions.contains("\"alarm_manage\""))
     }
 
     @Test

@@ -93,6 +93,13 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var desktopState by mutableStateOf<DesktopState?>(null)
         private set
+    /**
+     * 最近一次桌面端模型回退的实际生效模型（deployment:provider:model 或纯模型名）。
+     * 与 PC 端一致：回退不是隐藏的参数回退，输入框下方的模型选择区同步显示它；
+     * 用户手动切换模型或切换对话后清除。
+     */
+    var fallbackModel by mutableStateOf("")
+        private set
     var remoteConversations by mutableStateOf<List<RemoteConversation>>(emptyList())
         private set
     /** 二级边栏：当前打开工作区的从属对话（按 workspaceId 从 PC 拉取） */
@@ -549,6 +556,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
     fun selectRemoteModel(option: ModelOption) {
         val pair = activeDevice ?: return
         val model = option.modelName.ifBlank { return }
+        fallbackModel = ""
         viewModelScope.launch {
             api.selectModel(pair, model)
                 .onSuccess { refreshStateSnapshot(pair) }
@@ -626,6 +634,7 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         val pair = activeDevice ?: return
         selectedConversationId = id
         selectedConversationWorkspaceId = workspaceId
+        fallbackModel = ""
         val loadGeneration = ++conversationLoadGeneration
         conversationUiRefreshGeneration += 1L
         conversationUiRefreshJob?.cancel()
@@ -1692,6 +1701,16 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                 })
             }
             return
+        }
+        // 模型回退同步输入框下方选择区：PC 端回退后移动端显示实际生效模型。
+        event.fallback?.to?.takeIf(String::isNotBlank)?.let { to ->
+            val providerId = event.fallback.providerId.orEmpty()
+            fallbackModel = if (providerId.isNotBlank()) {
+                "deployment:${java.net.URLEncoder.encode(providerId, Charsets.UTF_8.name())}:" +
+                    java.net.URLEncoder.encode(to, Charsets.UTF_8.name())
+            } else {
+                to
+            }
         }
         val current = liveRun
         val authoritativeRunningRunId = conversationUiState.runtime

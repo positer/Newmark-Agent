@@ -162,8 +162,8 @@ async function run(): Promise<void> {
   requests.get('archive-running')!.resolve({ ok: true, fileName: 'running.md', conversationId: 'archive-running' });
   await wait(80);
 
-  assert.deepEqual(state.workspaceConversations.ws.map((item: any) => item.id), ['default'],
-    'target rows are removed only after the backend settles their archive');
+  assert.deepEqual(state.workspaceConversations.ws.map((item: any) => item.id), [],
+    'target rows are removed only after the backend settles their archive; an emptied workspace stays empty instead of auto-creating a default conversation');
   assert.equal(listCount, 1, 'closely completed requests coalesce only the non-blocking archive-list refresh');
   assert.equal(Object.keys(state.conversationArchivePending).length, 0, 'successful requests clear their independent rollback records');
   assert.equal(notices.filter(item => item.type === 'success').length, 4, 'every successful archive keeps its own receipt');

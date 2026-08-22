@@ -117,6 +117,12 @@ export interface AgentWorkEvent {
   status?: GuideReceiptStatus | ConversationWorkRunStatus | 'stopping' | 'force_restarting';
   guide?: GuideReceipt;
   displayImage?: DisplayImageAttachment;
+  /**
+   * 结构化模型回退信号：from 为回退前的模型名，to 为实际使用的模型名。
+   * 前端据此把输入框下方的模型选择区同步为实际生效的模型，而不是隐藏的
+   * 参数回退。
+   */
+  fallback?: { from: string; to: string; providerId?: string };
 }
 
 export interface ConversationWorkRun {

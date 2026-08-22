@@ -665,11 +665,26 @@ private fun NewmarkAppContent(
     }
     // 远程菜单使用远端桌面配置的脱敏 provider/model 清单，不混入移动端本地配置。
     val modelOptions = if (useRemote) linkVm.remoteModelOptions() else vm.enabledModelOptions()
-    // 模型显示名对齐 PC modelLabel（`provider / model`）；判定用原始模型名单独传
-    val selectedModelName = if (useRemote) (linkVm.desktopState?.model ?: "") else vm.apiConfig.model
+    // 模型显示名对齐 PC modelLabel（`provider / model`）；判定用原始模型名单独传。
+    // 桌面端回退模型优先显示：回退不是隐藏参数回退，选择区必须同步实际生效模型。
+    val selectedModelName = if (useRemote) {
+        linkVm.fallbackModel.ifBlank { linkVm.desktopState?.model ?: "" }
+    } else vm.apiConfig.model
     val selectedModel = if (useRemote) {
-        val st = linkVm.desktopState
-        st?.modelLabel?.takeIf { it.isNotBlank() } ?: st?.model ?: ""
+        val fallback = linkVm.fallbackModel
+        if (fallback.isNotBlank()) {
+            val option = modelOptions.firstOrNull { it.modelName == fallback }
+            if (option != null) {
+                option.providerLabel.takeIf(String::isNotBlank)
+                    ?.let { "$it / ${option.label.ifBlank { option.modelName }}" }
+                    ?: option.label.ifBlank { option.modelName }
+            } else {
+                fallback
+            }
+        } else {
+            val st = linkVm.desktopState
+            st?.modelLabel?.takeIf { it.isNotBlank() } ?: st?.model ?: ""
+        }
     } else {
         val providerLabel = vm.activeProvider?.label?.takeIf { it.isNotBlank() }
         if (providerLabel != null) "$providerLabel / $selectedModelName" else selectedModelName

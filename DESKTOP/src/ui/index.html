@@ -6645,6 +6645,7 @@ var NEWMARK_I18N = {
     'conversation.branchCommunicationBadge': 'Branch communication',
     'conversation.loadingIsolated': 'Loading isolated conversation...',
     'conversation.locked': 'Current conversation is locked while the agent is working.',
+    'conversation.emptyWorkspace': 'No conversations in this workspace yet.',
     'queue.next': 'Next',
     'terminal.notConnected': 'Terminal not connected',
     'common.error': 'Error',
@@ -7376,6 +7377,7 @@ var NEWMARK_I18N = {
     'conversation.branchCommunicationBadge': '分支交流',
     'conversation.loadingIsolated': '正在加载隔离对话...',
     'conversation.locked': 'Agent 工作中，当前对话已锁定。',
+    'conversation.emptyWorkspace': '当前工作区还没有对话。',
     'queue.next': '下一轮',
     'terminal.notConnected': '终端未连接',
     'common.error': '错误',
@@ -10129,7 +10131,7 @@ function workRunGuideEvents(run) {
   });
 }
 
-function renderWorkRunEvents(run, includeGuides) {
+function presentedWorkRunEvents(run, includeGuides) {
   var rawEvents = (run.events || []).filter(publicWorkEvent).filter(function(event) {
     return includeGuides !== false || !(String(event && event.type || '').toLowerCase().indexOf('guide') === 0 || !!(event && event.guide));
   }).sort(compareConversationWorkEvents);
@@ -10217,44 +10219,110 @@ function renderWorkRunEvents(run, includeGuides) {
     }
     presentedEvents.push({ type: 'tool_group', count: count, completed: allCompleted, toolName: presented.toolName, items: activityItems });
   }
-  events = presentedEvents;
-  if (!events.length) return '<div class="conversation-work-empty">' + esc(currentLang() === 'zh' ? '等待公开工作进度…' : 'Waiting for public progress…') + '</div>';
-  return '<div class="conversation-work-run-events">' + events.map(function(event, eventIndex) {
-    var type = String(event.type || 'status').toLowerCase();
-    if (type === 'public_text' || type === 'partial_text' || type === 'response') {
-      var responseLabel = type === 'response' && terminalInterrupted
-        ? (currentLang() === 'zh' ? '未完成回复片段\n' : 'Incomplete response fragment\n') + workEventLabel(event)
-        : workEventLabel(event);
-      // While a run is still receiving text, this view can be rebuilt once per
-      // event. Avoid invoking the full Markdown parser for a large live
-      // narrative; the final response path still gets the normal rich render.
-      var liveNarrative = ['running', 'stopping', 'force_restarting'].indexOf(String(run && run.status || '').toLowerCase()) >= 0;
-      var narrativeHtml = liveNarrative && String(responseLabel || '').length >= STREAMING_PLAIN_TEXT_THRESHOLD
-        ? esc(responseLabel)
-        : renderMessageContent(responseLabel);
-      return '<div class="conversation-work-event narrative"><div class="conversation-work-event-content">' + narrativeHtml + '</div></div>';
-    }
-    if (type.indexOf('guide') === 0 || event.guide) return renderWorkRunGuideMessage(event);
-    if (type === 'tool_group') return renderWorkToolGroup(event, eventIndex);
-    if (type === 'thought') return renderWorkThought(event, eventIndex);
-    var activitySummary = type.indexOf('tool_') === 0 && type !== 'tool_call' && type !== 'tool_result';
-    var cls = type.indexOf('guide') === 0 ? ' guide' : (type === 'error' ? ' error' : (activitySummary ? ' activity-summary' : ''));
-    var label = activitySummary ? workToolActivityLabel(event.activity, Number(event.count || 1), !!event.completed) : workEventLabel(event) + (event.completed ? (currentLang() === 'zh' ? ' · 已完成' : ' · completed') : '');
-    if (activitySummary) {
-      var firstActivityItem = event.items && event.items[0] || {};
-      var activityDomKey = String(firstActivityItem.id || firstActivityItem.toolCallId || ((event.activity && event.activity.key || type) + '-' + eventIndex));
-      var detailRows = (event.items || []).map(function(item) {
-        var detail = String(item.toolArgs || '').trim();
-        return '<div class="conversation-work-activity-item">' + iconSvg(workEventIcon('tool_call'), 'tool_call', 'tiny') +
-          '<div><div>' + esc(publicToolNameForUi(item.toolName)) + (item.completed ? (currentLang() === 'zh' ? ' · 已完成' : ' · completed') : '') + '</div>' +
-          (detail ? '<div class="conversation-work-activity-detail">' + esc(detail) + '</div>' : '') + '</div></div>';
-      }).join('');
-      return '<details class="conversation-work-activity" data-activity-key="' + escAttr(activityDomKey) + '"><summary><span class="conversation-work-activity-chevron" aria-hidden="true"></span><div>' + esc(label) + '</div></summary>' +
-        '<div class="conversation-work-activity-list">' + detailRows + '</div></details>';
-    }
-    return '<div class="conversation-work-event' + cls + '">' + iconSvg(workEventIcon(type), type, 'tiny') +
-      '<div class="conversation-work-event-content">' + renderMessageContent(label) + '</div></div>';
+  return { events: presentedEvents, terminalInterrupted: terminalInterrupted };
+}
+
+// 每个呈现节点的稳定 key：内容变化（增长/完成）时 key 变化，增量渲染据此
+// 只重建变化节点之后的 DOM，前缀节点原样保留。
+function workRunPresentedEventKey(event, eventIndex) {
+  var type = String(event && event.type || 'status').toLowerCase();
+  if (type === 'public_text' || type === 'partial_text' || type === 'response') {
+    return type + ':' + String(event && event.content || '').length;
+  }
+  if (type === 'thought') {
+    return 'thought:' + String(event && (event.id || event.toolCallId) || '') + '@' + String(event && event.content || '').length + ':' + (event && event.completed ? '1' : '0');
+  }
+  if (type === 'tool_group') {
+    return 'tool_group:' + ((event && event.items || []).map(function(item) {
+      return String(item && (item.id || item.toolCallId) || '') + ':' + (item && item.completed ? '1' : '0');
+    }).join(',')) + '#n' + Number(event && event.count || 0);
+  }
+  if (type.indexOf('guide') === 0 || (event && event.guide)) {
+    return 'guide:' + guideWorkEventKey(event) + ':' + guideWorkEventStatus(event);
+  }
+  var activityTail = type.indexOf('tool_') === 0 && type !== 'tool_call' && type !== 'tool_result'
+    ? ':' + String(event && event.activity && event.activity.key || '') + ':' + Number(event && event.count || 1)
+    : '';
+  return type + ':' + String(event && (event.id || [event && event.sequence || '', event && event.toolName || '', event && event.timestamp || ''].join('|')) || '') + ':' + (event && event.completed ? '1' : '0') + activityTail;
+}
+
+function renderWorkRunEventNode(event, eventIndex, run, terminalInterrupted) {
+  var type = String(event.type || 'status').toLowerCase();
+  if (type === 'public_text' || type === 'partial_text' || type === 'response') {
+    var responseLabel = type === 'response' && terminalInterrupted
+      ? (currentLang() === 'zh' ? '未完成回复片段\n' : 'Incomplete response fragment\n') + workEventLabel(event)
+      : workEventLabel(event);
+    // While a run is still receiving text, this view can be rebuilt once per
+    // event. Avoid invoking the full Markdown parser for a large live
+    // narrative; the final response path still gets the normal rich render.
+    var liveNarrative = ['running', 'stopping', 'force_restarting'].indexOf(String(run && run.status || '').toLowerCase()) >= 0;
+    var narrativeHtml = liveNarrative && String(responseLabel || '').length >= STREAMING_PLAIN_TEXT_THRESHOLD
+      ? esc(responseLabel)
+      : renderMessageContent(responseLabel);
+    return '<div class="conversation-work-event narrative"><div class="conversation-work-event-content">' + narrativeHtml + '</div></div>';
+  }
+  if (type.indexOf('guide') === 0 || event.guide) return renderWorkRunGuideMessage(event);
+  if (type === 'tool_group') return renderWorkToolGroup(event, eventIndex);
+  if (type === 'thought') return renderWorkThought(event, eventIndex);
+  var activitySummary = type.indexOf('tool_') === 0 && type !== 'tool_call' && type !== 'tool_result';
+  var cls = type.indexOf('guide') === 0 ? ' guide' : (type === 'error' ? ' error' : (activitySummary ? ' activity-summary' : ''));
+  var label = activitySummary ? workToolActivityLabel(event.activity, Number(event.count || 1), !!event.completed) : workEventLabel(event) + (event.completed ? (currentLang() === 'zh' ? ' · 已完成' : ' · completed') : '');
+  if (activitySummary) {
+    var firstActivityItem = event.items && event.items[0] || {};
+    var activityDomKey = String(firstActivityItem.id || firstActivityItem.toolCallId || ((event.activity && event.activity.key || type) + '-' + eventIndex));
+    var detailRows = (event.items || []).map(function(item) {
+      var detail = String(item.toolArgs || '').trim();
+      return '<div class="conversation-work-activity-item">' + iconSvg(workEventIcon('tool_call'), 'tool_call', 'tiny') +
+        '<div><div>' + esc(publicToolNameForUi(item.toolName)) + (item.completed ? (currentLang() === 'zh' ? ' · 已完成' : ' · completed') : '') + '</div>' +
+        (detail ? '<div class="conversation-work-activity-detail">' + esc(detail) + '</div>' : '') + '</div></div>';
+    }).join('');
+    return '<details class="conversation-work-activity" data-activity-key="' + escAttr(activityDomKey) + '"><summary><span class="conversation-work-activity-chevron" aria-hidden="true"></span><div>' + esc(label) + '</div></summary>' +
+      '<div class="conversation-work-activity-list">' + detailRows + '</div></details>';
+  }
+  return '<div class="conversation-work-event' + cls + '">' + iconSvg(workEventIcon(type), type, 'tiny') +
+    '<div class="conversation-work-event-content">' + renderMessageContent(label) + '</div></div>';
+}
+
+function renderWorkRunEvents(run, includeGuides) {
+  var presented = presentedWorkRunEvents(run, includeGuides);
+  if (!presented.events.length) return '<div class="conversation-work-empty">' + esc(currentLang() === 'zh' ? '等待公开工作进度…' : 'Waiting for public progress…') + '</div>';
+  return '<div class="conversation-work-run-events">' + presented.events.map(function(event, eventIndex) {
+    return renderWorkRunEventNode(event, eventIndex, run, presented.terminalInterrupted);
   }).join('') + '</div>';
+}
+
+// 增量更新 run body 内的事件列表：保留与新呈现列表 key 一致的前缀节点，
+// 从第一个分歧节点起重建尾部。运行中通常只有最后一个文本/thought 节点
+// 增长或尾部追加，因此不会整块重绘整个进程渲染。
+function updateWorkRunEventsContainer(run, body, expanded) {
+  var presented = presentedWorkRunEvents(run, expanded);
+  var container = body.querySelector ? body.querySelector('.conversation-work-run-events') : null;
+  if (!container) {
+    body.innerHTML = renderWorkRunEvents(run, expanded);
+    return;
+  }
+  if (!presented.events.length) {
+    var emptyHtml = '<div class="conversation-work-empty">' + esc(currentLang() === 'zh' ? '等待公开工作进度…' : 'Waiting for public progress…') + '</div>';
+    if (container.innerHTML !== emptyHtml) container.innerHTML = emptyHtml;
+    return;
+  }
+  var nodes = Array.prototype.slice.call(container.children);
+  var keep = 0;
+  while (keep < nodes.length && keep < presented.events.length) {
+    if (String(nodes[keep].getAttribute('data-work-event-key') || '') === workRunPresentedEventKey(presented.events[keep], keep)) keep++;
+    else break;
+  }
+  while (container.children.length > keep) container.removeChild(container.lastChild);
+  for (var i = keep; i < presented.events.length; i++) {
+    var key = workRunPresentedEventKey(presented.events[i], i);
+    var holder = document.createElement('div');
+    holder.innerHTML = renderWorkRunEventNode(presented.events[i], i, run, presented.terminalInterrupted);
+    while (holder.firstChild) {
+      var node = holder.firstChild;
+      node.setAttribute('data-work-event-key', key);
+      container.appendChild(node);
+    }
+  }
 }
 
 function findWorkRunElement(run) {
@@ -10269,6 +10337,11 @@ function findWorkRunElement(run) {
 function updateConversationWorkRunElement(run, element) {
   element = element || findWorkRunElement(run);
   if (!element) return null;
+  // 重建/增量更新前后保持聊天视窗滚动位置：贴底时跟随最新，未贴底时
+  // 精确恢复 scrollTop，避免内容高度变化把视窗“强制拖向最新”。
+  var chatEl = els['chat-area'];
+  var wasAtBottom = !!(chatEl && shouldAutoScroll(chatEl));
+  var scrollTopBefore = chatEl ? chatEl.scrollTop : 0;
   var activityOpenStates = {};
   var priorActivities = element.querySelectorAll ? element.querySelectorAll('details.conversation-work-activity[data-activity-key], details[data-work-detail-key]') : [];
   for (var activityIndex = 0; activityIndex < priorActivities.length; activityIndex++) {
@@ -10283,12 +10356,48 @@ function updateConversationWorkRunElement(run, element) {
   element.className = 'conversation-work-run ' + (running ? 'running ' : '') + (expanded ? 'expanded' : 'collapsed');
   element.setAttribute('data-run-id', run.runId);
   element.setAttribute('data-runtime-key', runtimeKeyFor(run.target && run.target.workspaceId, run.target && run.target.conversationId));
-  element.innerHTML = '<button class="conversation-work-run-head" type="button" onclick="window.toggleConversationWorkRun(this)">' +
-    '<span class="conversation-work-run-title">' + esc(workRunTitle(run)) + '</span>' +
-    workRunChangeBadge(run) +
-    '<span class="conversation-work-run-status">' + esc(String(run.status || '')) + '</span>' +
-    '<span class="conversation-work-run-chevron" aria-hidden="true"></span></button>' +
-    '<div class="conversation-work-run-body">' + renderWorkRunEvents(run, expanded) + '</div>';
+  var head = element.querySelector ? element.querySelector('.conversation-work-run-head') : null;
+  if (!head) {
+    element.innerHTML = '<button class="conversation-work-run-head" type="button" onclick="window.toggleConversationWorkRun(this)">' +
+      '<span class="conversation-work-run-title">' + esc(workRunTitle(run)) + '</span>' +
+      workRunChangeBadge(run) +
+      '<span class="conversation-work-run-status">' + esc(String(run.status || '')) + '</span>' +
+      '<span class="conversation-work-run-chevron" aria-hidden="true"></span></button>' +
+      '<div class="conversation-work-run-body">' + renderWorkRunEvents(run, expanded) + '</div>';
+  } else {
+    // 就地更新头部，不重建 head 按钮（保住聚焦/动画状态）。
+    var titleEl = head.querySelector('.conversation-work-run-title');
+    var nextTitle = workRunTitle(run);
+    if (titleEl && titleEl.textContent !== nextTitle) titleEl.textContent = nextTitle;
+    var statusEl = head.querySelector('.conversation-work-run-status');
+    if (statusEl && statusEl.textContent !== String(run.status || '')) statusEl.textContent = String(run.status || '');
+    var badgeHolder = head.querySelector('.conversation-work-run-change-badge');
+    var nextBadge = workRunChangeBadge(run);
+    if (nextBadge) {
+      if (badgeHolder) {
+        if (badgeHolder.getAttribute('data-badge-key') !== nextBadge) {
+          var badgeShell = document.createElement('span');
+          badgeShell.innerHTML = nextBadge;
+          var replacementBadge = badgeShell.firstChild;
+          replacementBadge.setAttribute('data-badge-key', nextBadge);
+          badgeHolder.parentNode.replaceChild(replacementBadge, badgeHolder);
+        }
+      } else {
+        var badgeShellNew = document.createElement('span');
+        badgeShellNew.innerHTML = nextBadge;
+        var badgeNode = badgeShellNew.firstChild;
+        if (badgeNode) {
+          badgeNode.setAttribute('data-badge-key', nextBadge);
+          head.insertBefore(badgeNode, statusEl || null);
+        }
+      }
+    } else if (badgeHolder) {
+      badgeHolder.parentNode.removeChild(badgeHolder);
+    }
+    var body = element.querySelector('.conversation-work-run-body');
+    if (body) updateWorkRunEventsContainer(run, body, expanded);
+    else element.insertAdjacentHTML('beforeend', '<div class="conversation-work-run-body">' + renderWorkRunEvents(run, expanded) + '</div>');
+  }
   renderPendingGuideMessages(run.target, {});
   var wrapper = element.closest ? element.closest('.work-run-message') : null;
   if (wrapper) {
@@ -10319,7 +10428,14 @@ function updateConversationWorkRunElement(run, element) {
     var refreshedKey = refreshedParentKey ? refreshedParentKey + '::' + refreshedDetailKey : '';
     if (activityOpenStates[refreshedKey] !== undefined) refreshedActivities[refreshedIndex].open = activityOpenStates[refreshedKey];
   }
-  autoScrollIfAtBottom();
+  if (chatEl) {
+    if (wasAtBottom) {
+      _chatShouldAutoScroll = true;
+      chatEl.scrollTop = chatEl.scrollHeight;
+    } else {
+      chatEl.scrollTop = scrollTopBefore;
+    }
+  }
   return element;
 }
 
@@ -11210,6 +11326,9 @@ function appendAgentWorkEvent(event) {
   eventRuntimeKey(event);
   var active = isActiveConversationTarget(target);
   var visibleRuntimeBranch = active && isViewingRuntimeConversationBranch(target);
+  // 模型回退不是隐藏的参数回退：活跃对话发生回退时，把输入框下方的
+  // 模型选择区同步为实际生效的模型。
+  if (active && event.fallback && event.fallback.to) applyModelFallbackToInputSurface(event);
   if (active) markConversationTracked(id, state.conversationTrackMs || 300000, workspaceId);
   if (active || isConversationTracked(id, workspaceId)) cacheAgentWorkEvent(event);
   var pendingProvisionalStop = (event.type === 'start' || event.status === 'running')
@@ -11603,6 +11722,7 @@ window.optionManualSubmitted = function(element) {
 
 // === Working State ===
 function setWorking(working) {
+  var changed = state.isWorking !== working;
   state.isWorking = working;
   state.activeAgentRunning = working;
   var btn = els['submit-btn'];
@@ -11614,7 +11734,7 @@ function setWorking(working) {
     if (input) input.classList.add('working-glow');
     if (title) title.classList.add('animate');
     if (ws) ws.classList.add('marquee-border');
-    renderConversations();
+    if (changed) renderConversations();
   } else {
     if (btn) btn.classList.remove('working');
     if (input) input.classList.remove('working-glow');
@@ -12317,6 +12437,43 @@ window.handleModelSelectButtonKey = function(event) {
     window.closeModelSelectMenu();
   }
 };
+
+// 后端回退信号携带的是纯模型名（如 gpt-4o-mini），把名称映射回前端
+// 选择器的部署值（deployment:providerId:modelName），使选择区能直接选中。
+function modelDeploymentValueForName(name, providerId) {
+  var modelName = String(name || '').trim();
+  if (!modelName) return '';
+  var providers = Array.isArray(state.providers) ? state.providers : [];
+  var match = null;
+  for (var pi = 0; pi < providers.length && !match; pi++) {
+    var provider = providers[pi];
+    if (providerId && String(provider.id || provider.name || '') !== String(providerId)) continue;
+    var models = Array.isArray(provider.models) ? provider.models : [];
+    for (var mi = 0; mi < models.length && !match; mi++) {
+      var entryName = typeof models[mi] === 'string' ? models[mi] : (models[mi] && models[mi].name || '');
+      if (entryName === modelName) match = { provider: provider, name: entryName };
+    }
+  }
+  if (!match) return modelName;
+  var providerIdValue = String(match.provider.id || match.provider.name || '');
+  return 'deployment:' + encodeURIComponent(providerIdValue) + ':' + encodeURIComponent(match.name);
+}
+
+// 不可用模型回退同步输入框下方选择区：固定模型选择被回退时，选择区
+// 显示实际生效的模型；Auto 模式的路由切换不污染选择区（保持 Auto 显示）。
+function applyModelFallbackToInputSurface(event) {
+  var f = event && event.fallback;
+  if (!f || !f.to) return;
+  if (String(state.model || '') === 'auto') return;
+  var nextValue = modelDeploymentValueForName(f.to, f.providerId || '');
+  if (!nextValue || String(state.model || '') === nextValue) return;
+  state.model = nextValue;
+  state.modelLabel = '';
+  // 不预置 _syncedModel：下一次发送前的 syncConversationExecutionState 会把
+  // 回退模型正式同步到后端 host agent（并持久化为该对话的首选模型）。
+  window.refreshModelSelect();
+  window.syncModelSelectSurface();
+}
 
 window.syncModelSelectSurface = function() {
   var sel = els['model-select'] || document.getElementById('model-select');
@@ -19164,14 +19321,25 @@ function pendingConversationActivation(target) {
 }
 
 function applyBackendConversations(items, activeId, workspaceId) {
-  if (!state.currentWorkspace || !items || !items.length) return;
+  if (!state.currentWorkspace) return;
   var key = currentWorkspaceKey(workspaceId);
   var isForegroundWorkspace = key === currentWorkspaceKey();
   var existingConversations = state.workspaceConversations[key] || [];
-  var convs = [];
-  var requestedActiveId = String(activeId || '');
   var holdId = String(state.foregroundConversationHoldId || '');
   var useHold = !!(isForegroundWorkspace && holdId && Date.now() < Number(state.foregroundConversationHoldUntil || 0));
+  if ((!items || !items.length) && !useHold) {
+    // 后端权威列表为空：工作区对话确实已清空。保持为空，并移除本地
+    // 自动兜底的 default 对话，跨重启/切换工作区后也不会复活。
+    state.workspaceConversations[key] = [];
+    state.workspaceActiveConversation[key] = -1;
+    if (isForegroundWorkspace) {
+      state.conversations = [];
+      state.activeConversation = -1;
+    }
+    return;
+  }
+  var convs = [];
+  var requestedActiveId = String(activeId || '');
   var seenIds = {};
   for (var i = 0; i < items.length; i++) {
     var item = items[i] || {};
@@ -19300,13 +19468,18 @@ function appendDomNodesInBatches(container, nodes, batchKey, batchSize) {
 function renderConversations() {
   var list = els['conversation-list'];
   if (!list) return;
-  list.innerHTML = '';
   if (!state.currentWorkspace) {
     list.innerHTML = '<div style="padding:14px 10px;font-size:12px;color:var(--text-dim);line-height:1.5;text-align:center;">' + esc(t('workspace.selectFirst')) + '</div>';
     updateWorkspaceGate();
     return;
   }
   var conversations = currentWorkspaceConversations();
+  // 工作区对话被清空后保持为空：只显示空态提示，不自动创建对话。
+  if (!conversations.length) {
+    list.innerHTML = '<div style="padding:14px 10px;font-size:12px;color:var(--text-dim);line-height:1.5;text-align:center;">' + esc(t('conversation.emptyWorkspace')) + '</div>';
+    updateWorkspaceGate();
+    return;
+  }
   var summaryCounts = {};
   for (var ci = 0; ci < conversations.length; ci++) {
     var summaryKey = String(conversations[ci] && conversations[ci].summary || '');
@@ -19315,7 +19488,17 @@ function renderConversations() {
   var activeBeforeRender = (conversations.find(function(c) { return c && c.active; }) || {}).id;
   if (activeBeforeRender) setActiveWorkspaceConversationById(activeBeforeRender);
   else setActiveWorkspaceConversation(state.workspaceActiveConversation[currentWorkspaceKey()] || 0);
-  var conversationNodes = [];
+  // 增量更新：复用已存在的行节点，就地更新 class 与内容。行节点不被替换，
+  // 运行中对话的 marquee 跑马灯 CSS 动画就不会因重建 DOM 而从头开始。
+  Array.prototype.slice.call(list.children).forEach(function(child) {
+    if (!child || !child.classList || !child.classList.contains('conv-item')) child.parentNode.removeChild(child);
+  });
+  var existingRows = {};
+  Array.prototype.slice.call(list.querySelectorAll('.conv-item')).forEach(function(row) {
+    existingRows[String(row.getAttribute('data-conversation-id') || '')] = row;
+  });
+  var keepRows = {};
+  var orderedRows = [];
   for (var i = 0; i < conversations.length; i++) {
     var conv = conversations[i];
     var runtimeKey = currentRuntimeKey(conv.id);
@@ -19324,53 +19507,75 @@ function renderConversations() {
     if (summaryCounts[String(conv.summary || '')] > 1) {
       displaySummary += ' · ' + String(conv.id || '').slice(-8);
     }
-    var div = document.createElement('div');
-    div.className = 'conv-item' + (conv.active ? ' active' : '');
-    div.setAttribute('role', 'listitem');
-    div.setAttribute('tabindex', conv.active ? '0' : '-1');
-    div.setAttribute('aria-current', conv.active ? 'true' : 'false');
-    div.setAttribute('draggable', 'true');
-    div.setAttribute('data-conversation-id', String(conv.id || ''));
-    if (runtimeState && ['running', 'stopping', 'force_restarting'].indexOf(String(runtimeState.status || '')) >= 0) div.classList.add('marquee-border');
+    var running = !!(runtimeState && ['running', 'stopping', 'force_restarting'].indexOf(String(runtimeState.status || '')) >= 0);
     var runtimeBadge = runtimeState && runtimeState.status && runtimeState.status !== 'idle'
       ? '<span class="conv-runtime-badge ' + escAttr(String(runtimeState.status)) + '">' + esc(String(runtimeState.status)) + '</span>' : '';
     var branchCommIcon = conv.branchCommunication
       ? '<span class="conv-branch-comm-icon" title="' + escAttr(t('conversation.branchCommunicationBadge')) + '" aria-label="' + escAttr(t('conversation.branchCommunicationBadge')) + '">' + iconSvg('git-branch', t('conversation.branchCommunicationBadge')) + '</span>' : '';
-    div.innerHTML = '<span class="conv-summary" title="' + escAttr(String(conv.id || '')) + '">' + esc(displaySummary) + (conv.messageCount ? ' (' + esc(String(conv.messageCount)) + ')' : '') + '</span>' + branchCommIcon + runtimeBadge +
+    var innerKey = [String(displaySummary), String(conv.messageCount || ''), String(runtimeState && runtimeState.status || ''), conv.branchCommunication ? '1' : '0'].join('|');
+    var nextInner = '<span class="conv-summary" title="' + escAttr(String(conv.id || '')) + '">' + esc(displaySummary) + (conv.messageCount ? ' (' + esc(String(conv.messageCount)) + ')' : '') + '</span>' + branchCommIcon + runtimeBadge +
       '<button class="conv-more-btn" aria-haspopup="menu" aria-expanded="false" onclick="event.stopPropagation();window.openConversationActionMenu(this, this.closest(&quot;.conv-item&quot;).getAttribute(&quot;data-conversation-id&quot;))" title="' + escAttr(t('conversation.more')) + '">' + iconOnly('ellipsis', t('conversation.more')) + '</button>';
+    var div = existingRows[String(conv.id || '')];
+    if (div) {
+      keepRows[String(conv.id || '')] = true;
+    } else {
+      div = document.createElement('div');
+      div.setAttribute('role', 'listitem');
+      div.setAttribute('draggable', 'true');
+      div.setAttribute('data-conversation-id', String(conv.id || ''));
+      div.addEventListener('keydown', window.handleConversationKey);
+      div.addEventListener('contextmenu', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        window.openConversationActionMenu(event.currentTarget, this.getAttribute('data-conversation-id') || '', { x: event.clientX, y: event.clientY });
+      });
+      div.addEventListener('dragstart', function(event) {
+        this.classList.add('dragging');
+        if (event.dataTransfer) { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', this.getAttribute('data-conversation-id') || ''); }
+      });
+      div.addEventListener('dragend', function() {
+        this.classList.remove('dragging');
+        Array.from(list.querySelectorAll('.conv-item')).forEach(function(row) { row.classList.remove('drag-over'); });
+      });
+      div.addEventListener('dragover', function(event) {
+        var dragging = list.querySelector('.conv-item.dragging');
+        if (!dragging || dragging === this) return;
+        var convsNow = currentWorkspaceConversations();
+        var draggingConv = convsNow.find(function(item) { return String(item.id) === String(dragging.getAttribute('data-conversation-id')); });
+        var targetConv = convsNow.find(function(item) { return String(item.id) === String(this.getAttribute('data-conversation-id')); }, this);
+        if (!draggingConv || !targetConv || !!draggingConv.pinned !== !!targetConv.pinned) return;
+        event.preventDefault();
+        this.classList.add('drag-over');
+      });
+      div.addEventListener('dragleave', function() { this.classList.remove('drag-over'); });
+      div.addEventListener('drop', function(event) {
+        event.preventDefault();
+        this.classList.remove('drag-over');
+        window.reorderConversationBefore(event.dataTransfer ? event.dataTransfer.getData('text/plain') : '', this.getAttribute('data-conversation-id') || '');
+      });
+      existingRows[String(conv.id || '')] = div;
+    }
+    div.className = 'conv-item' + (conv.active ? ' active' : '');
+    if (running) div.classList.add('marquee-border');
+    div.setAttribute('tabindex', conv.active ? '0' : '-1');
+    div.setAttribute('aria-current', conv.active ? 'true' : 'false');
+    if (div.getAttribute('data-inner-key') !== innerKey) {
+      div.setAttribute('data-inner-key', innerKey);
+      div.innerHTML = nextInner;
+    }
     div.onclick = function(idx) { return function() { window.switchConversation(idx); }; }(i);
-    div.addEventListener('keydown', window.handleConversationKey);
-    div.addEventListener('contextmenu', function(event) {
-      event.preventDefault();
-      event.stopPropagation();
-      window.openConversationActionMenu(event.currentTarget, this.getAttribute('data-conversation-id') || '', { x: event.clientX, y: event.clientY });
-    });
-    div.addEventListener('dragstart', function(event) {
-      this.classList.add('dragging');
-      if (event.dataTransfer) { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', this.getAttribute('data-conversation-id') || ''); }
-    });
-    div.addEventListener('dragend', function() {
-      this.classList.remove('dragging');
-      Array.from(list.querySelectorAll('.conv-item')).forEach(function(row) { row.classList.remove('drag-over'); });
-    });
-    div.addEventListener('dragover', function(event) {
-      var dragging = list.querySelector('.conv-item.dragging');
-      if (!dragging || dragging === this) return;
-      var draggingConv = conversations.find(function(item) { return String(item.id) === String(dragging.getAttribute('data-conversation-id')); });
-      var targetConv = conversations.find(function(item) { return String(item.id) === String(this.getAttribute('data-conversation-id')); }, this);
-      if (!draggingConv || !targetConv || !!draggingConv.pinned !== !!targetConv.pinned) return;
-      event.preventDefault();
-      this.classList.add('drag-over');
-    });
-    div.addEventListener('dragleave', function() { this.classList.remove('drag-over'); });
-    div.addEventListener('drop', function(event) {
-      event.preventDefault();
-      this.classList.remove('drag-over');
-      window.reorderConversationBefore(event.dataTransfer ? event.dataTransfer.getData('text/plain') : '', this.getAttribute('data-conversation-id') || '');
-    });
-    conversationNodes.push(div);
+    orderedRows.push(div);
   }
-  appendDomNodesInBatches(list, conversationNodes, 'conversation-list', 24);
+  Object.keys(existingRows).forEach(function(id) {
+    if (keepRows[id]) return;
+    var stale = existingRows[id];
+    if (stale && stale.parentNode === list) stale.parentNode.removeChild(stale);
+  });
+  orderedRows.forEach(function(row, idx) {
+    var current = list.children[idx];
+    if (current === row) return;
+    list.insertBefore(row, current || null);
+  });
   updateWorkspaceGate();
 }
 
@@ -19658,16 +19863,28 @@ window.archiveConv = function(conversationId) {
       var currentConvs = currentWorkspaceConversations();
       var currentIdx = currentConvs.findIndex(function(item) { return String(item && item.id || 'default') === targetId; });
       if (currentIdx >= 0) currentConvs.splice(currentIdx, 1);
-      if (!currentConvs.length) currentConvs.push({ id: 'default', summary: t('workspace.defaultConversation'), archived: false, active: true });
-      var nextActiveId = priorActiveId && priorActiveId !== targetId ? priorActiveId : String(currentConvs[Math.min(Math.max(currentIdx, 0), currentConvs.length - 1)].id || 'default');
-      var nextActiveIndex = Math.max(0, currentConvs.findIndex(function(item) { return String(item && item.id || '') === nextActiveId; }));
-      for (var i = 0; i < currentConvs.length; i++) currentConvs[i].active = i === nextActiveIndex;
-      state.workspaceActiveConversation[workspaceKey] = nextActiveIndex;
-      state.activeConversation = nextActiveIndex;
-      state.conversations = currentConvs;
-      if (priorActiveId === targetId) {
-        state.activeBackendConversationId = nextActiveId;
-        if (els['chat-area']) els['chat-area'].innerHTML = '';
+      if (!currentConvs.length) {
+        // 工作区所有对话被清空后保持为空：不再自动创建 default 对话。
+        for (var emptyI = 0; emptyI < currentConvs.length; emptyI++) currentConvs[emptyI].active = false;
+        state.workspaceActiveConversation[workspaceKey] = -1;
+        state.activeConversation = -1;
+        state.conversations = currentConvs;
+        if (priorActiveId === targetId) {
+          state.activeBackendConversationId = '';
+          if (els['chat-area']) els['chat-area'].innerHTML = '';
+          if (window.renderFlowTakeover) window.renderFlowTakeover(false, '', { target: targetRuntime });
+        }
+      } else {
+        var nextActiveId = priorActiveId && priorActiveId !== targetId ? priorActiveId : String(currentConvs[Math.min(Math.max(currentIdx, 0), currentConvs.length - 1)].id || 'default');
+        var nextActiveIndex = Math.max(0, currentConvs.findIndex(function(item) { return String(item && item.id || '') === nextActiveId; }));
+        for (var i = 0; i < currentConvs.length; i++) currentConvs[i].active = i === nextActiveIndex;
+        state.workspaceActiveConversation[workspaceKey] = nextActiveIndex;
+        state.activeConversation = nextActiveIndex;
+        state.conversations = currentConvs;
+        if (priorActiveId === targetId) {
+          state.activeBackendConversationId = nextActiveId;
+          if (els['chat-area']) els['chat-area'].innerHTML = '';
+        }
       }
       if (state.flowTakeovers) {
         var archivedFlowKey = runtimeKeyFor(targetRuntime.workspaceId, targetRuntime.conversationId);

@@ -2912,6 +2912,10 @@ if (isViewerArg) {
         activePromptLeases.set(promptLeaseKey, (activePromptLeases.get(promptLeaseKey) || 0) + 1);
         activePromptWorkspaces.set(promptLeaseWorkspaceKey, (activePromptWorkspaces.get(promptLeaseWorkspaceKey) || 0) + 1);
         const targetConversation = target.conversationId;
+        // 发送命令时锁定输入框选择的模型：接受命令后的整个运行过程都以该
+        // 模型为准（唯一例外是显式的不可用回退，且回退会以结构化事件同步
+        // 到前端输入框下方的选择区，而不是隐藏的参数回退）。
+        const requestedModel = agent.model;
         const options = {
           mode: agent.mode,
           model: agent.ensureUsableModelSelection(),
@@ -2919,6 +2923,21 @@ if (isViewerArg) {
           inputMode: agent.inputMode,
           engine: agent.engine,
         };
+        if (options.model && requestedModel && options.model !== requestedModel) {
+          const usableConfig = agent.activeModelConfig();
+          broadcastAgentWorkEvent({
+            id: `model-fallback-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            conversationId: target.conversationId,
+            type: 'status',
+            content: `[Model fallback] ${requestedModel} unavailable; switched to ${options.model}.`,
+            mode: agent.modeName(),
+            model: options.model,
+            timestamp: new Date().toISOString(),
+            workspaceId: target.workspaceId,
+            workspaceKey: target.workspaceKey,
+            fallback: { from: requestedModel, to: options.model, providerId: usableConfig?.provider_id || agent.activeDeployment()?.providerId },
+          });
+        }
         const queueMode = agent.inputMode === 'guide' ? 'steer' : 'followUp';
         let result;
         if (wslBackendEnabled()) {

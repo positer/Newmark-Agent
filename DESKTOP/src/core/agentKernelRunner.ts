@@ -526,7 +526,13 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       agent.recordWorkStatus('Final visual fallback used: local mini OCR plus conservative text correction.');
     }
     if (modelBeforeKernelRun && modelBeforeKernelRun !== agent.model && !tokens.some(t => t.text?.includes('[Model fallback]'))) {
-      tokens.unshift({ type: 'text', text: `[Model fallback] ${modelBeforeKernelRun} unavailable; switched to ${agent.model}.` });
+      const notice = `[Model fallback] ${modelBeforeKernelRun} unavailable; switched to ${agent.model}.`;
+      tokens.unshift({ type: 'text', text: notice });
+      agent.emitWorkEvent({
+        type: 'status',
+        content: notice,
+        fallback: { from: modelBeforeKernelRun, to: agent.model, providerId: agent.activeDeployment()?.providerId },
+      });
     }
     let emptyResponseRetries = 0;
     while (providerTurnIsEmpty(lastTurn) && emptyResponseRetries < 2) {
@@ -547,6 +553,11 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       const notice = routeTransitionNotice(agent, previous);
       tokens.push({ type: 'text', text: notice });
       agent.recordWorkStatus(notice);
+      agent.emitWorkEvent({
+        type: 'status',
+        content: notice,
+        fallback: { from: previous, to: agent.model, providerId: agent.activeDeployment()?.providerId },
+      });
       kernel.state.model = toKernelModel(agent);
       const fallbackToolSurface = refreshToolSurface(true);
       kernel.state.systemPrompt = [agent.buildSystemPrompt(), fallbackToolSurface.systemPromptNotice].filter(Boolean).join('\n\n');

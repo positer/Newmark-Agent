@@ -165,6 +165,15 @@ data class RemoteWorkEvent(
     val guideId: String = "",
     val guide: RemoteWorkGuide? = null,
     val displayImage: RemoteWorkDisplayImage? = null,
+    /** 桌面端结构化模型回退信号：from=回退前模型名，to=实际生效模型名。 */
+    val fallback: RemoteModelFallback? = null,
+)
+
+/** 桌面端 AgentWorkEvent.fallback 的移动端投影。 */
+data class RemoteModelFallback(
+    val from: String = "",
+    val to: String = "",
+    val providerId: String = "",
 )
 
 /** Guide 生命周期的公开载荷；字段与桌面 GuideReceipt 同构。 */

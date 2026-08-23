@@ -1394,6 +1394,16 @@ async function main() {
     && releaseUiRenderPerformanceSmoke.includes('result.maxInputDelayMs > 100')
     && releaseUiRenderPerformanceSmoke.includes("result.animated === 0"),
   'release UI render performance smoke: packaged renderer keeps the marquee animation active while honoring 10fps Build backpressure and responsive input dispatch');
+  const releaseUiIncrementalRenderStressPath = path.join(process.cwd(), 'scripts', 'release-ui-incremental-render-stress.cjs');
+  const releaseUiIncrementalRenderStress = fs.existsSync(releaseUiIncrementalRenderStressPath) ? fs.readFileSync(releaseUiIncrementalRenderStressPath, 'utf-8') : '';
+  assert(packageJson.includes('"release:ui-incremental-render-stress"')
+    && releaseUiIncrementalRenderStress.includes('marquee row node was replaced at iteration')
+    && releaseUiIncrementalRenderStress.includes('stable prefix node replaced at index')
+    && releaseUiIncrementalRenderStress.includes('scroll was forced toward latest during progress updates')
+    && releaseUiIncrementalRenderStress.includes('model selection was not synced to the fallback model')
+    && releaseUiIncrementalRenderStress.includes('emptied workspace was refilled with a default conversation')
+    && releaseUiIncrementalRenderStress.includes('input event loop was starved during the stress storm'),
+  'release UI incremental render stress: packaged renderer keeps the conversation-menu marquee row node (no animation restart), Build-block prefix nodes, mid-view scroll position, visible model-fallback selection, and an emptied workspace under a 300-round progress storm with responsive input');
   assert(packageJson.includes('"release:ui-agent-smoke"') && releaseUiAgentSmoke.includes('window.sendMessage()') && releaseUiAgentSmoke.includes('release-ui-agent-mock') && releaseUiAgentSmoke.includes('ACTIVE_TOOLCHAIN_RESULT_OK_20260627_SCRIPT'), 'release ui agent smoke: drives real packaged renderer send path with mock model');
   assert(packageJson.includes('"msi"') && packageJson.includes('"perMachine": true') && packageJson.includes('"runAfterFinish": false') && packageJson.includes('patch-msi-project.cjs'), 'windows MSI: installs per-machine, does not auto-launch, and cleans running Newmark processes before file replacement');
   assert(releaseUiAgentSmoke.includes("'write,bash,edit,read'") && releaseUiAgentSmoke.includes('"timeout_ms":10000') && releaseUiAgentSmoke.includes('terminal timeout cap ok') && releaseUiAgentSmoke.includes("document.querySelector('.conversation-work-run')") && releaseUiAgentSmoke.includes("document.querySelectorAll('.run-final-response')") && releaseUiAgentSmoke.includes("waitFor(cdp, `!!document.querySelector('.work-review-btn')"), 'release ui agent smoke: validates write bash edit read tools, Build-owned final output, completion review, and terminal timeout cap without depending on sidebar casing or raw tool receipts');

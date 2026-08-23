@@ -10138,16 +10138,22 @@ function presentedWorkRunEvents(run, includeGuides) {
   var terminalInterrupted = ['interrupted', 'force_interrupted'].indexOf(String(run && run.status || '')) >= 0;
   var events = [];
   var publicText = '';
+  // 公共文本段继承其最后一条 text 事件的 sequence：增量渲染依赖 presented
+  // 顺序的单调性，无 sequence 的文本段会被排到列表前部，导致每次文本增量
+  // 都从前部重建后续节点。
+  var publicTextSequence = 0;
   function flushPublicText() {
     var content = publicText.trim().slice(0, 50000);
     publicText = '';
-    if (content) events.push({ type: terminalInterrupted ? 'partial_text' : 'public_text', content: content });
+    if (content) events.push({ type: terminalInterrupted ? 'partial_text' : 'public_text', content: content, sequence: publicTextSequence });
+    publicTextSequence = 0;
   }
   for (var eventIndex = 0; eventIndex < rawEvents.length; eventIndex++) {
     var rawEvent = rawEvents[eventIndex];
     var rawType = String(rawEvent && rawEvent.type || '').toLowerCase();
     if (rawType === 'text') {
       publicText += String(rawEvent.content || '');
+      publicTextSequence = Math.max(publicTextSequence, Number(rawEvent.sequence || 0));
       continue;
     }
     if (rawType === 'response') {
@@ -10283,11 +10289,19 @@ function renderWorkRunEventNode(event, eventIndex, run, terminalInterrupted) {
     '<div class="conversation-work-event-content">' + renderMessageContent(label) + '</div></div>';
 }
 
+// 给单个事件节点的 HTML 根标签插入稳定 key，使首次渲染的节点与增量
+// diff 使用同一 key 体系（否则第一次增量更新会全量失配重建）。
+function withWorkEventKey(html, key) {
+  var match = /^<([A-Za-z][\w-]*)([^>]*)>/.exec(String(html || ''));
+  if (!match) return html;
+  return '<' + match[1] + match[2] + ' data-work-event-key="' + escAttr(String(key || '')) + '">' + html.slice(match[0].length);
+}
+
 function renderWorkRunEvents(run, includeGuides) {
   var presented = presentedWorkRunEvents(run, includeGuides);
   if (!presented.events.length) return '<div class="conversation-work-empty">' + esc(currentLang() === 'zh' ? '等待公开工作进度…' : 'Waiting for public progress…') + '</div>';
   return '<div class="conversation-work-run-events">' + presented.events.map(function(event, eventIndex) {
-    return renderWorkRunEventNode(event, eventIndex, run, presented.terminalInterrupted);
+    return withWorkEventKey(renderWorkRunEventNode(event, eventIndex, run, presented.terminalInterrupted), workRunPresentedEventKey(event, eventIndex));
   }).join('') + '</div>';
 }
 

@@ -286,12 +286,24 @@ async function main(): Promise<void> {
         }) as typeof fetch;
         const processAgent = new Agent(processRoot, { agentOnly: true, conversationId: `quota-process-${round}` });
         processAgent.setModel('deployment:quota-primary:shared-model');
+        const fallbackEvents: Array<{ from: string; to: string; providerId?: string }> = [];
+        const unsubscribeFallback = processAgent.subscribeWorkEvents(event => {
+          if (event.fallback) fallbackEvents.push({ from: event.fallback.from, to: event.fallback.to, providerId: event.fallback.providerId });
+        });
         let tokens;
         try {
           tokens = await processAgent.process(`quota failover round ${round}`);
         } catch (error) {
+          unsubscribeFallback();
           throw new Error(`process round ${round} failed after requests primary=${primaryRequests} backup=${backupRequests} final=${finalRequests} crossProvider=${crossProviderRequests} active=${JSON.stringify(processAgent.activeDeployment())} blockedPrimary=${processAgent.isBalanceBlockedDeployment({ providerId: 'quota-primary', modelId: 'shared-model' })} blockedBackup=${processAgent.isBalanceBlockedDeployment({ providerId: 'quota-primary', modelId: 'shared-backup' })}: ${error instanceof Error ? error.stack || error.message : String(error)}`);
         }
+        unsubscribeFallback();
+        assert.ok(
+          fallbackEvents.length >= 2 && fallbackEvents.every(item => item.providerId === 'quota-primary')
+            && fallbackEvents[0].from === 'shared-model' && fallbackEvents[0].to === 'shared-backup'
+            && fallbackEvents[fallbackEvents.length - 1].to === 'shared-final',
+          `process round ${round} did not publish structured visible fallback events along the failover chain: ${JSON.stringify(fallbackEvents)}`,
+        );
         const visible = tokens.map(token => token.text || '').join('');
         assert.equal(primaryRequests, 1, `process round ${round} retried the exhausted deployment`);
         assert.equal(backupRequests, 1, `process round ${round} retried the exhausted same-provider backup`);

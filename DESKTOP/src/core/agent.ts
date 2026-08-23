@@ -2617,6 +2617,7 @@ export class Agent {
       status: input.status,
       guide: !isToolEvent && input.guide ? this.normalizeGuideReceipt(input.guide) : undefined,
       displayImage: isToolEvent ? this.hydrateDisplayImage(input.displayImage) : undefined,
+      fallback: input.fallback,
     };
     if (activeRun && this.isPersistablePublicWorkEvent(event)) {
       activeRun.sequence = Number(sequence || activeRun.sequence + 1);

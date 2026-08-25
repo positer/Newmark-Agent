@@ -1,3 +1,319 @@
+# Implementation Plan: Newmark Agent dev-0.5.7 玻璃交互、主题与模型回退修正
+
+## Overview
+
+dev-0.5.7 聚焦 11 项已确认问题：Android 远程非当前对话长按闪退；PC/Android 浮动玻璃包边几何不一致；浮起/移动偏慢且缺少落下动画；PC 玻璃点击被截图链路阻塞约 300ms；亮色主题的 Android 边栏和 PC 设置类弹窗偏暗；模型回退开关不能形成硬边界；PC 对话区展开操作错误触发玻璃浮起；移动弹窗圆角与内容浮块不一致。本计划不引入新的玻璃体系，而是在现有 Kyant/WebGL2 与 Compose 状态机上建立共享尺寸、时序和路由契约。
+
+## Confirmed Code Map
+
+| 需求 | 当前入口 | 已确认事实 |
+| --- | --- | --- |
+| 1 | `android/.../ui/Sidebar.kt`, `LiquidHoldGesture.kt` | 远程行长按先以当前活动对话作为玻璃起点，再启动非当前行排序；需要覆盖空几何、重组和取消竞态 |
+| 2, 10 | `Sidebar.kt`, `ChatScreen.kt`, `RightSidebar.kt`, `MemoryLabScreen.kt` | 多处通过 `scaleX/scaleY` 放大整个浮块，包边随内容尺寸变化 |
+| 3 | PC `wireLiquidMenuInteractions` / `wireLiquidRailInteractions`；Android 各选择器 flight job | PC 到点直接 `clear()`；Android 各处时长和 landing 实现不统一 |
+| 4, 9 | `DESKTOP/src/ui/index.html`, `pcGlassMigrationVerify.ts` | PC 位置计算固定外扩 9px，shader 色散独立取值 |
+| 5 | PC light theme tokens；Android `NewmarkTheme.kt` 与边栏 surface | 异常只出现在 Android 边栏和 PC 设置 carrier，不能全局抬亮所有 surface |
+| 6 | PC `captureLiquidBackdropFrame()` 与两套 wire 函数 | `pointerdown` 等待 fresh `capturePage`，真实 click 又被 350ms settle timer 延迟 |
+| 7 | `agent.ts::switchToFallbackModel`, `autoRouter.ts`, GUI config IPC | 后端已有开关检查，但需覆盖预检、Auto 重试、vision 能力替换、运行时配置刷新等所有入口 |
+| 8 | PC transcript 的 `<details>`、shell/diff/tool/work-review handlers | 展开控件仍可能落入通用按钮按压玻璃规则 |
+| 11 | Android popup/dialog shapes | 输入弹窗为 24dp，内容浮块为 22dp，其他 Dialog 又使用 12/16/24dp |
+
+## Architecture Decisions
+
+- 定义单一几何契约：PC interaction edge 为 `6px`；Android interaction edge 为固定 `6dp`。浮块布局尺寸按目标矩形四边固定外扩该 `6dp`，不再用等比缩放模拟包边。
+- PC shader 的 `refractionHeight` 与色散作用带共用 `6px` edge token；色散强度仍由玻璃强度控制，但色散的空间厚度不得脱离 edge token。
+- 浮块状态统一为 `idle -> lift -> flight/drag -> land -> dispose`。建议起始时序为 lift 70-90ms、flight 220-260ms、land 100-130ms；以低端 Android 和 Electron 实测帧为最终调参依据。
+- PC 逻辑点击不得等待截图或视觉动画。pointerdown 同步挂载浮块并启动异步 fresh capture；pointerup 在一个事件循环内提交命令，landing 作为不阻塞业务的视觉尾声。
+- `fallback_on_unavailable=false` 是模型身份切换的硬边界：允许同一 deployment 的无副作用传输重试，不允许 equivalent/fallback/alternate model、vision 替换或任何其他 modelId；Auto 只负责首次选择，失败后的换模仍受该开关控制。
+- 亮色修正采用组件语义 token：只提高 Android sidebar 和 PC settings/modal carrier 的合成底色，不改变已经正常的 PC sidebar 与 Android popup。
+- PC 对话区展开属于内容披露，不是 selection。相关 header/summary 显式加入 no-interaction-glass 契约，只保留普通 hover/focus/chevron 动画。
+- Android 弹窗壳与其内容浮块统一使用 `22dp` 圆角 token；圆形操作按钮和全屏/贴边 carrier 不受此 token 影响。
+
+## Dependency Graph
+
+```text
+复现与测量基线
+  |-- Android 长按生命周期修正
+  |-- 模型回退硬边界
+  |-- PC 非阻塞输入管线
+  |     `-- 跨端 lift/flight/land 状态机
+  |            `-- PC 6px / Android 6dp 固定包边与 PC 色散同厚
+  |-- PC transcript 展开去玻璃
+  `-- 亮色 surface 与 Android 圆角
+                 `-- 跨端回归、真机/Electron、发布门禁
+```
+
+## Task 1: 建立 dev-0.5.7 失败基线与可观测契约
+
+**Description:** 用最小复现锁定 Android 非当前远程对话长按的异常栈、PC pointerdown 到业务 click 的耗时，以及 fallback off 时所有可能的模型身份变化。先形成失败测试，避免只改视觉表象。
+
+**Acceptance criteria:**
+- [ ] 自动化覆盖“当前远程对话 A，长按同 pin 组非当前对话 B，静止松手/拖动/取消/列表重组”且能捕获未处理异常。
+- [ ] Electron 探针分别记录 pointerdown、float mounted、pointerup、command invoked、landing finished，现状约 300ms 阻塞可复现。
+- [ ] 路由矩阵记录 `auto_switch x fallback_on_unavailable x fixed/auto x failure type` 下的最终 deployment。
+
+**Verification:**
+- [ ] 失败基线在修复前稳定失败，且日志不包含 API key、配对令牌或用户对话正文。
+
+**Dependencies:** None
+
+**Files likely touched:**
+- `android/app/src/test/java/com/newmark/mobile/ui/components/LiquidGlassContractTest.kt`
+- `DESKTOP/scripts/dev-liquid-renderer-performance-smoke.cjs`
+- `DESKTOP/src/tests/modelRecoveryStressVerify.ts`
+
+**Estimated scope:** Medium (3 files)
+
+## Task 2: 修复 Android 非当前远程对话长按闪退
+
+**Description:** 将远程对话手势的 source/target 几何和排序生命周期绑定到稳定 conversation id；长按非当前项时，不得假设 active 行仍在布局缓存中。统一清理 flight job、gesture lock、drag id 和 menu 状态，处理组合重组与 pointer cancel。
+
+**Acceptance criteria:**
+- [ ] 长按任何非当前远程对话，静止 300ms 后可打开菜单，拖动则只在同 pin 组排序，全程无崩溃。
+- [ ] active 行不可见、bounds 缺失、远端列表在长按期间刷新时，安全降级为目标原位 lift 或取消，不访问失效状态。
+- [ ] 结束、取消、页面退出后所有 sidebar gesture lock 和 flight job 均释放。
+
+**Verification:**
+- [ ] `android\gradlew.bat -p android testDebugUnitTest --no-daemon`
+- [ ] 模拟器/真机执行当前项与非当前项的长按、拖动、取消各 20 轮，并扫描 FATAL/ANR。
+
+**Dependencies:** Task 1
+
+**Files likely touched:**
+- `android/app/src/main/java/com/newmark/mobile/ui/Sidebar.kt`
+- `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidHoldGesture.kt`
+- `android/app/src/test/java/com/newmark/mobile/ui/components/LiquidGlassContractTest.kt`
+
+**Estimated scope:** Medium (3 files)
+
+## Task 3: 将模型回退开关提升为后端硬边界
+
+**Description:** 在路由计划生成和每个模型替换入口共同执行 fallback policy，而不是只依赖 `switchToFallbackModel` 的局部检查。固定模型和 Auto 模式均以 deployment identity 审计，关闭时失败必须原样暴露。
+
+**Acceptance criteria:**
+- [ ] fallback off 时，固定模型和 Auto 首选模型失败后最终 `providerId/modelId` 都不变化；vision 不支持也不得换到其他模型。
+- [ ] 关闭状态仍允许同一 deployment、未输出且未越过副作用边界的传输重试，但不生成 `equivalent_deployment`、`fallback_model` 或 `alternate_model` attempt。
+- [ ] GUI 保存后现有 conversation runtime 立即读取新值；重启、切会话、工作区 override 均不能恢复旧的开启状态。
+
+**Verification:**
+- [ ] `npm run build && node dist/tests/autoRouterVerify.js && node dist/tests/autoAgentIntegrationVerify.js && node dist/tests/modelRecoveryStressVerify.js && node dist/tests/normalChatRegressionVerify.js`
+- [ ] 用故障 provider fixture 验证 UI 全关时只报告原模型错误，路由审计中不存在其他 modelId。
+
+**Dependencies:** Task 1
+
+**Files likely touched:**
+- `DESKTOP/src/core/agent.ts`
+- `DESKTOP/src/core/autoRouter.ts`
+- `DESKTOP/src/main.ts`
+- `DESKTOP/src/tests/modelRecoveryStressVerify.ts`
+- `DESKTOP/src/tests/autoAgentIntegrationVerify.ts`
+
+**Estimated scope:** Medium (5 files)
+
+## Checkpoint A: 稳定性与路由边界
+
+- [ ] Android 非当前远程对话长按不再崩溃。
+- [ ] fallback off 的所有矩阵均保持原 deployment。
+- [ ] Desktop build 与 Android unit tests 通过后再改共享视觉状态机。
+
+## Task 4: 移除 PC 玻璃交互的 300ms 启动阻塞
+
+**Description:** 重构 menu/rail/conversation 共用的 pointer 管线，让浮块同步出现、截图异步刷新、业务 click 在 pointerup 立即提交。保留 fresh backdrop 最终上传与每次交互的 renderer 诊断，不让 `capturePage` 或 350ms timer 控制命令启动。
+
+**Acceptance criteria:**
+- [ ] pointerdown 后一帧内存在可见浮块；pointerup 到业务 handler 的 p95 小于 50ms，且不等待 capture promise。
+- [ ] capture 延迟、失败或 WebGL2 不可用时点击仍执行一次，视觉层可降级并最终清理。
+- [ ] 快速连点、拖过多个目标和 popup 关闭不会双击、错点或遗留 popover/canvas/gesture lock。
+
+**Verification:**
+- [ ] `npm run test:liquid-renderer-calls`
+- [ ] `npm run test:liquid-renderer-electron`，输出 mounted/command p50、p95 与 fresh upload 计数。
+
+**Dependencies:** Task 1
+
+**Files likely touched:**
+- `DESKTOP/src/ui/index.html`
+- `DESKTOP/src/tests/pcGlassMigrationVerify.ts`
+- `DESKTOP/scripts/dev-liquid-renderer-performance-smoke.cjs`
+- `DESKTOP/scripts/measure-liquid-renderer-calls.cjs`
+
+**Estimated scope:** Medium (4 files)
+
+## Task 5: 统一并加速 lift/flight/land 动画
+
+**Description:** 为 PC 和 Android 选择浮块建立可取消、可重定向的完整状态机。落点后先向目标内容范围收缩并淡出，再销毁；连续输入从当前渲染帧改道，最终仅一个目标提交。
+
+**Acceptance criteria:**
+- [ ] PC/Android 均显示 lift、加速后的 flight 和 100-130ms landing shrink/fade，不再到点直接消失。
+- [ ] 同项点击、连续点击、拖动释放、pointer cancel、reduced motion 都有确定终态且最多存在一个浮块。
+- [ ] 动画只改 transform/alpha 或 graphics layer，不触发持续 layout churn；逻辑响应不依赖动画结束。
+
+**Verification:**
+- [ ] Electron 与 Android 各录制 60fps/低帧率序列，逐帧确认 land 阶段至少包含两个非终止帧。
+- [ ] 连续点击 50 次后最终选择正确且不存在残留 float/job/lock。
+
+**Dependencies:** Task 4
+
+**Files likely touched:**
+- `DESKTOP/src/ui/index.html`
+- `DESKTOP/src/tests/pcGlassMigrationVerify.ts`
+- `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidGlass.kt`
+- `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidHoldGesture.kt`
+- `android/app/src/test/java/com/newmark/mobile/ui/components/LiquidGlassContractTest.kt`
+
+**Estimated scope:** Medium (5 files)
+
+## Task 6: 固定 PC 6px、Android 6dp 包边并绑定 PC 色散厚度
+
+**Description:** 用显式 outer bounds 取代 scale 模拟。PC 所有 interaction float 四边固定外扩 6px；Android 所有对话、菜单、pager、rail 浮块四边固定外扩 6dp，使内容尺寸变化不影响包边厚度。
+
+**Acceptance criteria:**
+- [ ] PC 任意尺寸/圆角目标的四边包边实测均为 `6px`，shader `refractionHeight`/dispersion spatial band 读取同一 token。
+- [ ] Android 任意宽高浮块的 outer bounds 与目标 bounds 每边恰差 `6dp`，lift 过程中不随 scale 增厚。
+- [ ] 靠窗口边缘时保持内向 transform origin 且不被 popup/list overflow 裁剪。
+
+**Verification:**
+- [ ] PC geometry probe 覆盖菜单行、左右 rail、设置 tabs、对话行和 switch/range 特例。
+- [ ] Android density 1/2/3 的 bounds 单测与截图像素检查通过。
+
+**Dependencies:** Task 5
+
+**Files likely touched:**
+- `DESKTOP/src/ui/index.html`
+- `DESKTOP/src/tests/pcGlassMigrationVerify.ts`
+- `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidGlass.kt`
+- `android/app/src/main/java/com/newmark/mobile/ui/Sidebar.kt`
+- `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt`
+
+**Estimated scope:** Medium (5 files)
+
+## Checkpoint B: 玻璃核心
+
+- [ ] PC 点击 p95、浮块数量、fresh texture 上传和 landing 帧均达标。
+- [ ] PC 6px/色散同厚与 Android 6dp 固定边在不同控件尺寸上成立。
+- [ ] Android 低端设备滑动不被新动画或外扩布局抢占。
+
+## Task 7: 移除 PC 对话区展开操作的玻璃浮起
+
+**Description:** 把 block、工具详情、审查详情及同类 transcript disclosure 从通用玻璃按钮匹配器中排除。展开仍保留即时内容切换、普通 hover/focus 和箭头旋转。
+
+**Acceptance criteria:**
+- [ ] shell/diff block、tool activity/details、work review 展开点击均不创建 `.liquid-selection-float` 或按压 pseudo-glass。
+- [ ] 展开/折叠行为、键盘 Enter/Space、焦点可见性和 review 文件操作保持正常。
+- [ ] 设置 tabs、模型菜单、左右 rail 等真正 selection 仍保留玻璃交互。
+
+**Verification:**
+- [ ] `pcGlassMigrationVerify` 增加 transcript disclosure 的负向选择器断言。
+- [ ] Electron 逐项点击 block/tool/review 并断言 float/canvas 数始终为 0。
+
+**Dependencies:** Task 4
+
+**Files likely touched:**
+- `DESKTOP/src/ui/index.html`
+- `DESKTOP/src/tests/pcGlassMigrationVerify.ts`
+- `DESKTOP/scripts/release-ui-work-review-bars-smoke.cjs`
+
+**Estimated scope:** Medium (3 files)
+
+## Task 8: 精准提高亮色 Android 边栏与 PC 设置弹窗本底亮度
+
+**Description:** 新增语义 surface token，分别用于 Android sidebar carrier 与 PC settings/modal carrier。通过实际合成色而不是提高全局 glass alpha 修正灰暗，避免影响已正常的 Android popup 与 PC sidebar。
+
+**Acceptance criteria:**
+- [ ] 亮色 Android 一级/二级边栏明显高于 canvas 且文字对比度不下降；Android popup 外观保持基线。
+- [ ] PC 设置、插件、Memory Lab 等设置类 carrier 本底变亮；PC 左右边栏 computed background 与修复前一致。
+- [ ] 暗色模式 token、玻璃强度曲线和 carrier blur 不发生回归。
+
+**Verification:**
+- [ ] `npm run test:visual-preferences` 与 Android theme contract tests 通过。
+- [ ] PC/Android 明暗模式截图做固定采样点 RGB/对比度比较。
+
+**Dependencies:** Task 1
+
+**Files likely touched:**
+- `DESKTOP/src/ui/index.html`
+- `DESKTOP/src/tests/visualPreferencesVerify.ts`
+- `android/app/src/main/java/com/newmark/mobile/ui/theme/NewmarkTheme.kt`
+- `android/app/src/main/java/com/newmark/mobile/ui/Sidebar.kt`
+- `android/app/src/test/java/com/newmark/mobile/ui/ResponsiveSidebarContractTest.kt`
+
+**Estimated scope:** Medium (5 files)
+
+## Task 9: 统一 Android 弹窗与内容浮块圆角
+
+**Description:** 建立 `22dp` popup/dialog capsule token，应用于输入复合弹窗、设备选择、Memory Lab 和 SubAgent 内容壳；贴边/全屏 surface 和圆形按钮继续使用各自形状。
+
+**Acceptance criteria:**
+- [ ] Android popup/dialog 外壳与其中活动内容浮块均使用 `22dp`，动画首尾轮廓不跳变。
+- [ ] 小屏、横屏、折叠屏约束下内容不被新圆角裁剪，点击区域与视觉轮廓一致。
+- [ ] AlertDialog、全屏背景和圆形 icon button 不被误改成胶囊。
+
+**Verification:**
+- [ ] popup/dialog shape contract test 覆盖输入、Memory Lab、SubAgent、设备选择。
+- [ ] portrait/landscape/foldable 三类截图检查通过。
+
+**Dependencies:** Task 5
+
+**Files likely touched:**
+- `android/app/src/main/java/com/newmark/mobile/ui/components/LiquidGlass.kt`
+- `android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt`
+- `android/app/src/main/java/com/newmark/mobile/ui/MemoryLabScreen.kt`
+- `android/app/src/main/java/com/newmark/mobile/ui/RightSidebar.kt`
+- `android/app/src/main/java/com/newmark/mobile/ui/SettingsScreen.kt`
+
+**Estimated scope:** Medium (5 files)
+
+## Task 10: 跨端回归与发布候选门禁
+
+**Description:** 汇总 11 项验收，执行源码、真实 Electron、Android JVM/lint/R8/Release 与设备压力。所有性能和视觉结论必须附带测量值或截图，不以源码存在代替运行证据。
+
+**Acceptance criteria:**
+- [ ] 11 项需求逐项关联自动化或设备证据，PC/Android 暗亮模式均覆盖。
+- [ ] Desktop full release 与 Android unit/lintVitalRelease/assembleRelease 全通过。
+- [ ] Release APK 安装冷启并完成非当前远程对话长按压力；无 FATAL/ANR，PC packaged app 点击延迟达标。
+
+**Verification:**
+- [ ] `cd DESKTOP; npm run test:full-release`
+- [ ] `android\gradlew.bat -p android testDebugUnitTest lintVitalRelease assembleRelease --no-daemon`
+- [ ] `cd DESKTOP; npm run release:version-check`
+
+**Dependencies:** Tasks 2-9
+
+**Files likely touched:**
+- `README.md`
+- `OVERVIEW.md`
+- `archive/<timestamp>-dev-0.5.7-*.md`
+- `tasks/plan.md`
+- `tasks/todo.md`
+
+**Estimated scope:** Medium (5 files)
+
+## Checkpoint C: 完成
+
+- [ ] 每项 acceptance criteria 均有可复查证据。
+- [ ] 没有未释放 glass float、WebGL canvas、Compose job 或 gesture lock。
+- [ ] 所有模型替换均能在 route audit 中解释，fallback off 时替换数为 0。
+- [ ] README、OVERVIEW、archive、版本与产物哈希在实现完成后同步。
+
+## Risks and Mitigations
+
+| Risk | Impact | Mitigation |
+| --- | --- | --- |
+| fresh capture 异步化后短暂显示旧纹理 | Medium | 同步挂载透明/最近有效纹理，fresh frame 到达后原位替换；逻辑点击不等待视觉 |
+| Android 固定外扩 6dp 被父布局裁剪 | High | 浮块留在 overlay/top layer，按 outer bounds 定位并覆盖边缘控件测试 |
+| landing 与目标 rerender 竞争导致闪烁 | High | landing 使用独立 overlay snapshot，提交后不依赖源 DOM/Composable 存活 |
+| fallback off 误伤同 deployment 网络重试 | Medium | 以 deployment identity 区分 retry 与 model substitution，矩阵测试两者 |
+| 亮色 token 扩散到正常 surface | Medium | 组件级 token + 修复前后 computed color 负向断言 |
+| 远端 SSE 列表刷新取消 pointerInput | High | stable id keys、finally 清 lock、缺 bounds 安全降级并做刷新压力 |
+
+## Open Questions
+
+- 无阻塞产品决策。动画时长以本计划建议值起步，最终由真实低端 Android 与 packaged Electron 帧序列微调，但不得牺牲 pointerup 后的即时业务响应。
+
+---
+
+## Historical Plans
+
 # Newmark Agent dev-0.3.13 全场景交叉黑盒压力测试计划
 
 ## 2026-08-19 模型菜单与输入框 PC 格式收尾

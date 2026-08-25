@@ -14,6 +14,8 @@ import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
@@ -21,6 +23,7 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -81,6 +84,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -115,6 +119,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -137,6 +142,7 @@ import androidx.compose.ui.zIndex
 import com.newmark.mobile.data.INTELLIGENCE_TIERS
 import com.newmark.mobile.data.LocalWorkEvent
 import com.newmark.mobile.data.LocalWorkRun
+import kotlinx.coroutines.delay
 import com.newmark.mobile.data.LocalImageAttachment
 import com.newmark.mobile.data.ModelOption
 import com.newmark.mobile.data.RemoteGoal
@@ -147,12 +153,23 @@ import com.newmark.mobile.data.WorkGuide
 import com.newmark.mobile.data.WorkRunProjection
 import com.newmark.mobile.ui.components.LucideIcons
 import com.newmark.mobile.ui.components.MarqueeBorder
+import com.newmark.mobile.ui.components.MobileInteractionGlassEdge
+import com.newmark.mobile.ui.components.MobilePopupShape
 import com.newmark.mobile.ui.components.MarkdownBody
 import com.newmark.mobile.ui.components.MenuRow
 import com.newmark.mobile.ui.components.NewmarkShapeLarge
 import com.newmark.mobile.ui.components.NewmarkShapeExtra
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.components.NewmarkShapeSmall
+import com.newmark.mobile.ui.components.glassButtonSurface
+import com.newmark.mobile.ui.components.liquidGlassModifier
+import com.newmark.mobile.ui.components.liquidHoldDragGesture
+import com.newmark.mobile.ui.components.liquidMotionDeformation
+import com.newmark.mobile.ui.components.liquidSelectionMorph
+import com.newmark.mobile.ui.components.rememberLiquidBackdrop
+import com.newmark.mobile.ui.components.LocalSidebarGestureLock
+import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
 import com.newmark.mobile.ui.theme.NewmarkAccent
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.LocalThemeMode
@@ -498,6 +515,15 @@ fun ChatScreen(
                 .imePadding()
                 .onGloballyPositioned { inputOverlayBounds.value = it.boundsInWindow() },
         ) {
+            val inputMenuBackdrop = rememberLiquidBackdrop()
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (inputMenu != null) Modifier.layerBackdrop(inputMenuBackdrop)
+                        else Modifier,
+                    ),
+            ) {
             Column(Modifier.fillMaxSize()) {
                 ChatTopBar(
                 title = title,
@@ -593,6 +619,7 @@ fun ChatScreen(
                     onGuideQueueItem = onGuideQueueItem,
                 )
             }
+            }
             key(remoteMode) {
                 InputCompositeMenuOverlay(
                     menu = inputMenu,
@@ -606,6 +633,7 @@ fun ChatScreen(
                     selectedModelName = selectedModelName,
                     intelligence = intelligence,
                     options = modelOptions,
+                    backdrop = inputMenuBackdrop,
                     onMenuChange = { inputMenu = it },
                     onDismiss = { inputMenu = null },
                     onMode = onSelectMode,
@@ -694,8 +722,7 @@ private fun CircleButton(onClick: () -> Unit, content: @Composable () -> Unit) {
     Box(
         modifier = Modifier
             .size(36.dp)
-            .clip(CircleShape)
-            .background(p.bgQuaternary)
+            .glassButtonSurface(CircleShape, p.bgQuaternary)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -732,14 +759,16 @@ private fun ChatContent(
             val info = listState.layoutInfo
             val lastVisible = info.visibleItemsInfo.lastOrNull()
             if (lastVisible == null) true
-            else lastVisible.index >= info.totalItemsCount - 2
+            else lastVisible.index >= info.totalItemsCount - 1
         }
     }
+    // Index of the trailing bottom-reserve row: the real transcript end.
+    val transcriptEndIndex = transcriptEndIndex(items.size, isSending)
     LaunchedEffect(items.size, isSending, liveContentRevision, viewportHeightPx) {
         // PC 语义：仅当用户视野原本就在底部时才跟随新内容；向上滚动阅读时
         // 不强制拉回，此时由右下角回到底部按钮接管。
         if (items.isNotEmpty() && atBottom) {
-            listState.scrollToItem(items.size - 1)
+            listState.scrollToItem(transcriptEndIndex)
         }
     }
     Box(
@@ -814,11 +843,10 @@ private fun ChatContent(
                     .align(Alignment.BottomEnd)
                     .padding(end = 14.dp, bottom = 14.dp)
                     .size(40.dp)
-                    .clip(CircleShape)
-                    .background(p.bgQuaternary.copy(alpha = 0.92f))
+                    .glassButtonSurface(CircleShape, p.bgQuaternary, alpha = 0.72f)
                     .border(1.dp, p.border2, CircleShape)
                     .clickable {
-                        chatScope.launch { listState.scrollToItem(items.size - 1) }
+                        chatScope.launch { listState.scrollToItem(transcriptEndIndex) }
                     },
                 contentAlignment = Alignment.Center,
             ) {
@@ -837,6 +865,14 @@ internal const val TranscriptBottomReserveLines = 10
 internal const val TranscriptBodyLineHeightDp = 19
 internal const val TranscriptBottomReserveDp =
     TranscriptBottomReserveLines * TranscriptBodyLineHeightDp
+
+/**
+ * Index of the trailing bottom-reserve row (the real transcript end) inside
+ * the chat LazyColumn: item rows, then an optional ThinkingDots row, then the
+ * reserve spacer. Scrolling here lands past any tall Build block tail.
+ */
+internal fun transcriptEndIndex(itemCount: Int, isSending: Boolean): Int =
+    itemCount + (if (isSending) 1 else 0)
 
 // ---- PC 对话区颜色（暗色对齐 index.html :root；亮色对齐 [data-theme=light]） ----
 @Immutable
@@ -1176,8 +1212,12 @@ private fun MessageActionButton(
         modifier = Modifier
             .padding(start = 2.dp)
             .size(width = 24.dp, height = 22.dp)
-            .clip(NewmarkShapeSmall)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+            .clip(RoundedCornerShape(50))
+            .clickable(
+                interactionSource = interaction,
+                indication = androidx.compose.foundation.LocalIndication.current,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         content()
@@ -1228,9 +1268,7 @@ private fun MessageEditButton(text: String, accent: Boolean, onClick: () -> Unit
     val interaction = remember { MutableInteractionSource() }
     Box(
         modifier = Modifier
-            .clip(NewmarkShapeSmall)
-            .background(Color.White.copy(alpha = 0.05f))
-            .border(1.dp, if (accent) pc.accent.copy(alpha = 0.55f) else pc.border, NewmarkShapeSmall)
+            .glassButtonSurface(NewmarkShapeSmall, if (accent) pc.accent else Color.White, if (accent) 0.64f else 0.12f)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(horizontal = 11.dp, vertical = 5.dp),
         contentAlignment = Alignment.Center,
@@ -2289,7 +2327,7 @@ private fun QueueRow(
 
 @Composable
 private fun StackIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color, onClick: () -> Unit) {
-    Box(Modifier.size(24.dp).clip(NewmarkShapeSmall).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(24.dp).glassButtonSurface(NewmarkShapeSmall, alpha = 0.58f).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
         Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(13.dp))
     }
 }
@@ -2556,6 +2594,7 @@ private fun InputCompositeMenuOverlay(
     selectedModelName: String,
     intelligence: String,
     options: List<ModelOption>,
+    backdrop: Backdrop,
     onMenuChange: (InputCompositeMenu) -> Unit,
     onDismiss: () -> Unit,
     onMode: (String) -> Unit,
@@ -2564,54 +2603,26 @@ private fun InputCompositeMenuOverlay(
     onChooseFile: () -> Unit,
     onChooseImage: () -> Unit,
 ) {
-    // Keep the last surface composed just long enough to fade out. Returning
-    // immediately for menu == null made dismissal a hard disappearance and
-    // reversing the button-origin scale would incorrectly look like collapse.
-    var displayedMenu by remember { mutableStateOf<InputCompositeMenu?>(null) }
-    var displayedAnchor by remember { mutableStateOf<Rect?>(null) }
-    val entrance = remember { Animatable(0f) }
-    val exitAlpha = remember { Animatable(0f) }
-    val activeWindowAnchor = when (menu) {
+    val setSidebarGestureLock = LocalSidebarGestureLock.current
+    DisposableEffect(menu) {
+        setSidebarGestureLock("input-popup", menu != null)
+        onDispose { setSidebarGestureLock("input-popup", false) }
+    }
+    var pageOriginY by remember { mutableFloatStateOf(0.5f) }
+    val visibleMenu = menu ?: return
+    val popupScale = remember { Animatable(0.82f) }
+    val popupAlpha = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        launch { popupScale.animateTo(1f, tween(260, easing = PcQueueEase)) }
+        popupAlpha.animateTo(1f, tween(180, easing = PcQueueEase))
+    }
+    val activeWindowAnchor = when (visibleMenu) {
         InputCompositeMenu.PlusMain, InputCompositeMenu.PlusModes -> plusAnchor.value
         InputCompositeMenu.ModelMain, InputCompositeMenu.Models, InputCompositeMenu.Tiers -> modelAnchor.value
-        null -> null
     }
-    val activeAnchor = activeWindowAnchor?.let { anchor ->
+    val visibleAnchor = activeWindowAnchor?.let { anchor ->
         containerBounds.value?.let { container -> inputMenuAnchorInContainer(anchor, container) }
-    }
-    SideEffect {
-        if (activeAnchor != null && displayedAnchor != activeAnchor) {
-            displayedAnchor = activeAnchor
-        }
-    }
-    LaunchedEffect(menu) {
-        if (menu != null) {
-            val isNewSurface = displayedMenu == null
-            if (isNewSurface) {
-                entrance.snapTo(0f)
-                exitAlpha.snapTo(1f)
-            }
-            displayedMenu = menu
-            if (isNewSurface) {
-                entrance.animateTo(
-                    targetValue = 1f,
-                    animationSpec = tween(durationMillis = 260, easing = PcQueueEase),
-                )
-            } else {
-                exitAlpha.snapTo(1f)
-            }
-        } else if (displayedMenu != null) {
-            entrance.snapTo(1f)
-            exitAlpha.animateTo(
-                targetValue = 0f,
-                animationSpec = tween(durationMillis = 130),
-            )
-            displayedMenu = null
-            displayedAnchor = null
-        }
-    }
-    val visibleMenu = displayedMenu ?: return
-    val visibleAnchor = activeAnchor ?: displayedAnchor ?: return
+    } ?: return
     val p = LocalNewmarkPalette.current
     val density = LocalDensity.current
     val config = LocalConfiguration.current
@@ -2629,17 +2640,13 @@ private fun InputCompositeMenuOverlay(
         viewportWidthPx = windowWidthPx,
         marginPx = marginPx,
     )
-    // The popup grows from the exact horizontal centre of the control that
-    // opened it. This remains correct when the menu is clamped at a screen
-    // edge, unlike a fixed BottomStart transform origin.
-    val anchorOriginX = ((visibleAnchor.center.x - xPx) / widthPx)
-        .coerceIn(0.08f, 0.92f)
     val gapPx = with(density) { 6.dp.roundToPx() }
     // Align the menu's bottom edge to the anchor's top edge. Content expands
     // upward from that edge, so its first frame never needs a measured height
     // and cannot jump after IME-safe placement resolves.
     val bottomAnchorOffset = visibleAnchor.top.toInt() - gapPx - overlaySize.height
     val availableModes = if (remoteMode) MODES else listOf("Build", "Plan")
+    val menuShape = MobilePopupShape
 
     Box(
         Modifier
@@ -2655,53 +2662,51 @@ private fun InputCompositeMenuOverlay(
         Box(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .offset { IntOffset(xPx, bottomAnchorOffset) }
-                .graphicsLayer {
-                    val firstLevelProgress = entrance.value
-                    transformOrigin = TransformOrigin(anchorOriginX, 1f)
-                    // Only the initial first-level opening grows from the exact
-                    // tapped control. First-level <-> second-level navigation is
-                    // handled by the shell's SizeTransform below, preserving the
-                    // original continuous popover morph instead of replaying an
-                    // unrelated entrance animation.
-                    scaleX = 0.18f + 0.82f * firstLevelProgress
-                    scaleY = 0.08f + 0.92f * firstLevelProgress
-                    translationY = with(density) { 2.dp.toPx() } * (1f - firstLevelProgress)
-                    // Dismissal is an independent fade of the fully expanded
-                    // surface; it deliberately does not reverse the morph.
-                    alpha = (0.35f + 0.65f * firstLevelProgress) * exitAlpha.value
-                },
+                .offset { IntOffset(xPx, bottomAnchorOffset) },
         ) {
             Box(
                 modifier = Modifier
                     .width(width)
                     .heightIn(max = 320.dp)
-                    .shadow(12.dp, NewmarkShapeMedium, clip = false)
-                    .clip(NewmarkShapeMedium)
-                    .background(
-                        p.bgTertiary.copy(
-                            alpha = com.newmark.mobile.ui.theme.scaledGlassAlpha(
-                                0.96f,
-                                com.newmark.mobile.ui.theme.LocalGlassMode.current.alpha,
-                            ),
-                        ),
+                    .graphicsLayer {
+                        alpha = popupAlpha.value
+                        scaleX = popupScale.value
+                        scaleY = popupScale.value
+                        transformOrigin = TransformOrigin(0.5f, 1f)
+                    }
+                    .liquidGlassModifier(
+                        backdrop = backdrop,
+                        shape = menuShape,
+                        alpha = 0.72f,
+                        blurRadius = 14.dp,
+                        refractionHeight = MobileInteractionGlassEdge,
+                        refractionAmount = 14.dp,
+                        saturation = 1.25f,
+                        surfaceColor = p.bgTertiary,
+                        ambientHighlight = true,
                     )
-                    .border(1.5.dp, p.border2, NewmarkShapeMedium)
-                    .border(0.5.dp, Color.White.copy(alpha = 0.32f), NewmarkShapeMedium)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
                         onClick = {},
                     )
-                    .padding(4.dp),
+                    .padding(8.dp),
             ) {
                 AnimatedContent(
                     targetState = visibleMenu,
                     transitionSpec = {
                         (fadeIn(
                             animationSpec = tween(durationMillis = 150, easing = PcQueueEase),
+                        ) + scaleIn(
+                            initialScale = 0.78f,
+                            transformOrigin = TransformOrigin(0.5f, pageOriginY),
+                            animationSpec = tween(durationMillis = 220, easing = PcQueueEase),
                         ) togetherWith fadeOut(
                             animationSpec = tween(durationMillis = 90, easing = PcQueueEase),
+                        ) + scaleOut(
+                            targetScale = 0.96f,
+                            transformOrigin = TransformOrigin(0.5f, pageOriginY),
+                            animationSpec = tween(durationMillis = 110, easing = PcQueueEase),
                         )).using(
                             SizeTransform(
                                 clip = false,
@@ -2714,71 +2719,323 @@ private fun InputCompositeMenuOverlay(
                     label = "inputCompositeMenuPageMorph",
                 ) { targetMenu ->
                     val pageScroll = rememberScrollState()
-                    val modelHorizontalScroll = rememberScrollState()
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 312.dp)
-                            .verticalScroll(pageScroll)
-                            .then(
-                                if (targetMenu == InputCompositeMenu.Models) {
-                                    Modifier.horizontalScroll(modelHorizontalScroll)
-                                } else {
-                                    Modifier
-                                },
-                            ),
-                    ) {
-                        when (targetMenu) {
-                            InputCompositeMenu.PlusMain -> {
-                                MenuRow("模式选择", trailing = mode) { onMenuChange(InputCompositeMenu.PlusModes) }
-                                MenuRow("选择文件") { onDismiss(); onChooseFile() }
-                                MenuRow("选择图片") { onDismiss(); onChooseImage() }
-                            }
-                            InputCompositeMenu.PlusModes -> {
-                                MenuRow("← 返回") { onMenuChange(InputCompositeMenu.PlusMain) }
-                                availableModes.forEach { candidate ->
-                                    MenuRow(candidate, selected = candidate == mode) { onMode(candidate); onDismiss() }
-                                }
-                            }
-                            InputCompositeMenu.ModelMain -> {
-                                MenuRow(
-                                    "模型选择",
-                                    trailing = selectedModelMenuLabel(selectedModel, selectedProviderId, selectedModelName, options),
-                                ) { onMenuChange(InputCompositeMenu.Models) }
-                                MenuRow("智能档位", trailing = intelligence.ifBlank { "medium" }) { onMenuChange(InputCompositeMenu.Tiers) }
-                            }
-                            InputCompositeMenu.Models -> {
-                                MenuRow("← 返回") { onMenuChange(InputCompositeMenu.ModelMain) }
-                                if (options.isEmpty()) MenuRow("暂无可用模型", onClick = onDismiss)
-                                groupModelOptions(options).forEach { group ->
-                                    Text(
-                                        text = group.providerLabel,
-                                        color = p.accent,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        modifier = Modifier.padding(start = 9.dp, end = 9.dp, top = 7.dp, bottom = 4.dp),
-                                    )
-                                    group.options.forEach { option ->
-                                        MenuRow(
+                    val entries = when (targetMenu) {
+                        InputCompositeMenu.PlusMain -> listOf(
+                            LiquidMenuEntry("模式选择", mode) { onMenuChange(InputCompositeMenu.PlusModes) },
+                            LiquidMenuEntry("选择文件") { onDismiss(); onChooseFile() },
+                            LiquidMenuEntry("选择图片") { onDismiss(); onChooseImage() },
+                        )
+                        InputCompositeMenu.PlusModes -> listOf(
+                            LiquidMenuEntry("← 返回") { onMenuChange(InputCompositeMenu.PlusMain) },
+                        ) + availableModes.map { candidate ->
+                            LiquidMenuEntry(candidate, selected = candidate == mode) { onMode(candidate); onDismiss() }
+                        }
+                        InputCompositeMenu.ModelMain -> listOf(
+                            LiquidMenuEntry(
+                                "模型选择",
+                                selectedModelMenuLabel(selectedModel, selectedProviderId, selectedModelName, options),
+                            ) { onMenuChange(InputCompositeMenu.Models) },
+                            LiquidMenuEntry("智能档位", intelligence.ifBlank { "medium" }) {
+                                onMenuChange(InputCompositeMenu.Tiers)
+                            },
+                        )
+                        InputCompositeMenu.Models -> buildList {
+                            add(LiquidMenuEntry("← 返回") { onMenuChange(InputCompositeMenu.ModelMain) })
+                            if (options.isEmpty()) add(LiquidMenuEntry("暂无可用模型", onActivate = onDismiss))
+                            groupModelOptions(options).forEach { group ->
+                                add(LiquidMenuEntry(group.providerLabel, header = true))
+                                group.options.forEach { option ->
+                                    add(
+                                        LiquidMenuEntry(
                                             text = modelOptionDisplayName(option),
                                             selected = modelOptionMatchesSelection(
                                                 option,
                                                 selectedProviderId,
                                                 selectedModelName,
                                             ),
-                                        ) {
-                                            onSelectModel(option); onDismiss()
-                                        }
-                                    }
+                                        ) { onSelectModel(option); onDismiss() },
+                                    )
                                 }
                             }
-                            InputCompositeMenu.Tiers -> {
-                                MenuRow("← 返回") { onMenuChange(InputCompositeMenu.ModelMain) }
-                                INTELLIGENCE_TIERS.forEach { tier ->
-                                    MenuRow(tier, selected = tier == intelligence) { onSelectIntelligence(tier); onDismiss() }
-                                }
+                        }
+                        InputCompositeMenu.Tiers -> listOf(
+                            LiquidMenuEntry("← 返回") { onMenuChange(InputCompositeMenu.ModelMain) },
+                        ) + INTELLIGENCE_TIERS.map { tier ->
+                            LiquidMenuEntry(tier, selected = tier == intelligence) {
+                                onSelectIntelligence(tier); onDismiss()
                             }
+                        }
+                    }
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 312.dp)
+                            .verticalScroll(pageScroll),
+                    ) {
+                        LiquidMenuList(
+                            entries = entries,
+                            backdrop = backdrop,
+                            onInteractionOrigin = { pageOriginY = it },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private data class LiquidMenuEntry(
+    val text: String,
+    val trailing: String = "",
+    val selected: Boolean = false,
+    val header: Boolean = false,
+    val onActivate: () -> Unit = {},
+)
+
+@Composable
+private fun LiquidMenuList(
+    entries: List<LiquidMenuEntry>,
+    backdrop: Backdrop,
+    onInteractionOrigin: (Float) -> Unit,
+) {
+    val p = LocalNewmarkPalette.current
+    val rowHeight = 44.dp
+    val headerHeight = 26.dp
+    var y = 0.dp
+    val offsets = entries.map { entry ->
+        val offset = y
+        y += if (entry.header) headerHeight else rowHeight
+        offset
+    }
+    val totalHeight = entries.fold(0.dp) { height, entry ->
+        height + if (entry.header) headerHeight else rowHeight
+    }
+    val selectedIndex = entries.indexOfFirst { it.selected }
+    val selectionBackdrop = rememberLiquidBackdrop()
+    val interactionScope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    var selectionFlightJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var activeIndex by remember(entries) { mutableIntStateOf(selectedIndex) }
+    var moving by remember(entries) { mutableStateOf(false) }
+    var lifting by remember(entries) { mutableStateOf(false) }
+    var landing by remember(entries) { mutableStateOf(false) }
+    val activeOffsetPx = remember { Animatable(0f) }
+    LaunchedEffect(selectedIndex, offsets, density.density) {
+        if (!moving && selectedIndex >= 0) {
+            activeIndex = selectedIndex
+            activeOffsetPx.snapTo(with(density) { offsets[selectedIndex].toPx() })
+        }
+    }
+    val glassProgress by animateFloatAsState(
+        targetValue = if (landing || lifting) 0f else if (moving) 1f else 0f,
+        animationSpec = tween(durationMillis = if (landing) 240 else 100, easing = PcQueueEase),
+        label = "liquidMenuSelectionMaterial",
+    )
+
+    fun interactiveIndexAt(yPx: Float, density: Float): Int {
+        val yDp = yPx / density
+        return entries.indices.firstOrNull { index ->
+            !entries[index].header && yDp >= offsets[index].value && yDp < offsets[index].value + rowHeight.value
+        } ?: -1
+    }
+
+    fun commitSelection(index: Int) {
+        if (index >= 0) {
+            onInteractionOrigin(
+                ((offsets[index] + rowHeight / 2) / totalHeight).coerceIn(0f, 1f),
+            )
+            entries[index].onActivate()
+        }
+    }
+
+    fun landSelection(index: Int) {
+        selectionFlightJob?.cancel()
+        selectionFlightJob = interactionScope.launch {
+            activeOffsetPx.animateTo(
+                with(density) { offsets.getOrElse(index) { 0.dp }.toPx() },
+                tween(durationMillis = 120, easing = PcQueueEase),
+            )
+            landing = true
+            delay(240L)
+            landing = false
+            moving = false
+            commitSelection(index)
+        }
+    }
+
+    fun flySelectionTo(index: Int) {
+        if (index < 0) return
+        val redirecting = moving
+        selectionFlightJob?.cancel()
+        val sourceIndex = selectedIndex.takeIf { it >= 0 } ?: index
+        if (!redirecting) {
+            activeIndex = sourceIndex
+            lifting = true
+            moving = true
+        }
+        selectionFlightJob = interactionScope.launch {
+            if (!redirecting) {
+                activeOffsetPx.snapTo(with(density) { offsets[sourceIndex].toPx() })
+                kotlinx.coroutines.yield()
+                lifting = false
+            }
+            activeIndex = index
+            val targetOffset = with(density) { offsets[index].toPx() }
+            if (kotlin.math.abs(activeOffsetPx.value - targetOffset) < 0.5f) {
+                delay(100L)
+            } else {
+                activeOffsetPx.animateTo(targetOffset, tween(durationMillis = 240, easing = PcQueueEase))
+            }
+            landing = true
+            delay(240L)
+            landing = false
+            moving = false
+            commitSelection(index)
+        }
+    }
+
+    fun beginHeldSelection(index: Int) {
+        if (index < 0) return
+        val redirecting = moving
+        selectionFlightJob?.cancel()
+        val sourceIndex = selectedIndex.takeIf { it >= 0 } ?: index
+        if (!redirecting) {
+            activeIndex = sourceIndex
+            lifting = true
+            moving = true
+        }
+        selectionFlightJob = interactionScope.launch {
+            if (!redirecting) {
+                activeOffsetPx.snapTo(with(density) { offsets[sourceIndex].toPx() })
+                kotlinx.coroutines.yield()
+                lifting = false
+            }
+            activeIndex = index
+            activeOffsetPx.animateTo(
+                with(density) { offsets[index].toPx() },
+                tween(durationMillis = 240, easing = PcQueueEase),
+            )
+        }
+    }
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(totalHeight)
+            .liquidHoldDragGesture(
+                entries.map { it.text to it.header },
+                holdMillis = 300L,
+                onTap = { position ->
+                    flySelectionTo(interactiveIndexAt(position.y, density.density))
+                },
+                onHoldStart = { position ->
+                    beginHeldSelection(interactiveIndexAt(position.y, density.density))
+                },
+                onDrag = { position, _ ->
+                    interactiveIndexAt(position.y, density.density)
+                        .takeIf { it >= 0 }
+                        ?.let { index ->
+                            activeIndex = index
+                            selectionFlightJob?.cancel()
+                            selectionFlightJob = interactionScope.launch {
+                                activeOffsetPx.animateTo(
+                                    with(density) { offsets[index].toPx() },
+                                    spring(dampingRatio = 0.82f, stiffness = 170f),
+                                )
+                            }
+                        }
+                },
+                onHoldEnd = { position, _ ->
+                    val releasedIndex = interactiveIndexAt(position.y, density.density)
+                        .takeIf { it >= 0 }
+                        ?: activeIndex
+                    activeIndex = releasedIndex
+                    landSelection(releasedIndex)
+                },
+                onCancel = {
+                    selectionFlightJob?.cancel()
+                    moving = false
+                    lifting = false
+                    landing = false
+                },
+            ),
+    ) {
+        if ((moving || landing) && activeIndex >= 0) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(rowHeight)
+                    .graphicsLayer {
+                        translationY = activeOffsetPx.value
+                    }
+                    .liquidMotionDeformation(
+                        velocityX = 0f,
+                        velocityY = activeOffsetPx.velocity,
+                        density = density.density,
+                    )
+                    .zIndex(4f)
+                    .liquidSelectionMorph(
+                        backdrop = selectionBackdrop,
+                        shape = RoundedCornerShape(22.dp),
+                        fillColor = p.accentSoft,
+                        glassProgress = glassProgress,
+                        glassAlpha = 0.10f,
+                        blurRadius = 2.dp,
+                        refractionHeight = MobileInteractionGlassEdge,
+                        refractionAmount = 24.dp,
+                        saturation = 1.2f,
+                    ),
+            )
+        }
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .then(if (moving || landing) Modifier.layerBackdrop(selectionBackdrop) else Modifier),
+        ) {
+            entries.forEachIndexed { index, entry ->
+                if (entry.header) {
+                    Text(
+                        text = entry.text,
+                        color = p.accent,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(headerHeight)
+                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                    )
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(rowHeight)
+                            .background(
+                                if (entry.selected && !(moving || landing)) p.accentSoft
+                                else Color.Transparent,
+                                RoundedCornerShape(22.dp),
+                            )
+                            .padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = entry.text,
+                            color = p.textPrimary,
+                            fontSize = 12.sp,
+                            fontWeight = if (entry.selected) FontWeight.Medium else FontWeight.Normal,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (entry.trailing.isNotBlank()) {
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                text = entry.trailing,
+                                color = p.textTertiary,
+                                fontSize = 10.5.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                 }
@@ -2804,8 +3061,7 @@ private fun ModelButton(
         modifier = Modifier
             .size(InputComposerEdgeControlSize)
             .onGloballyPositioned { onAnchorBoundsChanged(it.boundsInWindow()) }
-            .clip(CircleShape)
-            .background(p.bgQuaternary)
+            .glassButtonSurface(CircleShape, p.bgQuaternary)
             .clickable(onClick = onOpenMenu),
         contentAlignment = Alignment.Center,
     ) {
@@ -2824,8 +3080,7 @@ private fun PlusCombo(
         modifier = Modifier
             .size(InputComposerPlusSize)
             .onGloballyPositioned { onAnchorBoundsChanged(it.boundsInWindow()) }
-            .clip(CircleShape)
-            .background(p.bgTertiary)
+            .glassButtonSurface(CircleShape, p.bgTertiary)
             .clickable(onClick = onOpenMenu),
         contentAlignment = Alignment.Center,
     ) {
@@ -2840,9 +3095,9 @@ private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.92f else 1f,
+        targetValue = if (pressed) 1.06f else 1f,
         animationSpec = tween(durationMillis = 80),
-        label = "submitScale",
+        label = "submitLiquidExpansion",
     )
     val shape = CircleShape
     val isDark = LocalPcColors.current == PcColorsDark
@@ -2859,9 +3114,7 @@ private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit
             Box(
                 Modifier
                     .fillMaxSize()
-                    .clip(shape)
-                    .background(if (isDark) Color(0xE00E1018) else Color(0xB8FFFFFF))
-                    .border(1.dp, if (isDark) Color(0x14FFFFFF) else Color(0x292F3C60), shape)
+                    .glassButtonSurface(shape, if (isDark) Color(0xFF0E1018) else Color.White, if (isDark) 0.88f else 0.72f)
                     .clickable(interactionSource = interaction, indication = null, onClick = onStop),
                 contentAlignment = Alignment.Center,
             ) {
@@ -2890,12 +3143,7 @@ private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit
                     spotColor = if (isDark) Color(0x4D5B78FF) else Color(0x1A263254),
                     ambientColor = if (isDark) Color(0x4D5B78FF) else Color(0x1A263254),
                 )
-                .clip(shape)
-                .background(
-                    if (isDark) Brush.linearGradient(listOf(PcColorsDark.accent, Color(0xFF7B93FF)))
-                    else Brush.linearGradient(listOf(Color(0xB8FFFFFF), Color(0xB8FFFFFF))),
-                )
-                .border(1.dp, if (isDark) Color(0x26FFFFFF) else Color(0x292F3C60), shape)
+                .glassButtonSurface(shape, if (isDark) PcColorsDark.accent else Color.White, if (isDark) 0.86f else 0.72f)
                 .clickable(interactionSource = interaction, indication = null, onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {

@@ -5021,6 +5021,21 @@ if (isViewerArg) {
       // make an ordinary minimize click disappear from the taskbar.
       win?.minimize();
     });
+    ipcMain.handle('glass:captureBackdrop', async (event, requestedSize?: { width?: number; height?: number }) => {
+      const image = await event.sender.capturePage();
+      const sourceSize = image.getSize();
+      const width = Math.max(1, Math.min(sourceSize.width, Math.round(Number(requestedSize?.width) || sourceSize.width)));
+      const height = Math.max(1, Math.min(sourceSize.height, Math.round(Number(requestedSize?.height) || sourceSize.height)));
+      const resized = sourceSize.width === width && sourceSize.height === height
+        ? image
+        : image.resize({ width, height, quality: 'good' });
+      return {
+        bytes: resized.toJPEG(82),
+        mimeType: 'image/jpeg',
+        width,
+        height,
+      };
+    });
     ipcMain.handle('app:maximize', () => {
       const win = BrowserWindow.getFocusedWindow() || mainWindow;
       if (win?.isMaximized()) win.unmaximize();

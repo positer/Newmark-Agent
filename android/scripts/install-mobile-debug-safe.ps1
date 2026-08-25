@@ -73,6 +73,12 @@ if (-not $SkipBuild) {
 }
 if (-not (Test-Path -LiteralPath $apkPath)) { throw "$Variant APK not found: $apkPath" }
 
+# Freeze foreground services and pending app-owned writers before the baseline
+# fingerprint. Otherwise a legitimate background state write can race the two
+# samples and be misreported as data loss caused by `adb install -r`.
+& $adb -s $Serial shell am force-stop $packageName | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Unable to stop the formal mobile app before fingerprinting' }
+Start-Sleep -Milliseconds 500
 $before = Get-AppDataFingerprint
 & $adb -s $Serial install -r $apkPath
 if ($LASTEXITCODE -ne 0) { throw "APK update failed with exit code $LASTEXITCODE" }

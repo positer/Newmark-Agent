@@ -420,7 +420,7 @@ export class AutoRouter {
   planAttempts(
     decision: RouteDecision,
     candidates: AutoRouteCandidate[],
-    failure: { error: RouteFailure; streamCommitted: boolean; sideEffectCommitted: boolean },
+    failure: { error: RouteFailure; streamCommitted: boolean; sideEffectCommitted: boolean; allowModelFallback?: boolean },
   ): PlannedRouteAttempt[] {
     const current = decision.resolvedDeployment;
     if (!current || !failure.error.switchAllowed || failure.streamCommitted || failure.sideEffectCommitted) return [];
@@ -441,6 +441,7 @@ export class AutoRouter {
         retryDelayMs,
       });
     }
+    if (failure.allowModelFallback === false) return attempts.slice(0, remainingAttempts);
     const selection = decision.requestedSelection;
     if (selection.kind === 'fixed') return attempts.slice(0, remainingAttempts);
     const scope = selection.kind === 'auto' ? selection.scope : { kind: 'provider' as const, providerId: current.providerId };

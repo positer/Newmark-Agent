@@ -1,3 +1,65 @@
+# Newmark Agent dev-0.5.7 TODO
+
+## Phase 1: Failure Baselines
+
+- [ ] T1.1 复现 Android 非当前远程对话长按的静止、拖动、取消和列表刷新路径。
+- [x] T1.2 记录 PC pointerdown -> float -> pointerup -> command -> landing 时间线。
+- [x] T1.3 建立 fixed/auto、auto switch、fallback、failure type 路由矩阵。
+
+## Phase 2: High-Risk Correctness
+
+- [x] T2.1 修复远程对话长按的 stable-id、bounds 缺失与重组竞态。
+- [x] T2.2 确保所有 gesture lock、flight job、drag/menu 状态在结束和取消时释放。
+- [x] T3.1 在 route planning 与所有替换入口统一执行 fallback hard gate。
+- [x] T3.2 fallback off 允许同 deployment retry，但禁止任何其他 modelId。
+- [ ] T3.3 验证 GUI 保存后现有 runtime、切会话和重启均立即遵守关闭状态。
+
+### Checkpoint A
+
+- [ ] Android 非当前远程对话长按无 FATAL/ANR。
+- [ ] fallback off 路由审计中其他 modelId 数量为 0。
+- [x] Desktop build 与 Android unit tests 通过。
+
+## Phase 3: Glass Input and Animation
+
+- [x] T4.1 PC pointerdown 同步挂载浮块，fresh capture 改为异步刷新。
+- [x] T4.2 PC pointerup 在同一事件循环提交业务 click，不等待 350ms settle。
+- [ ] T4.3 覆盖 capture/WebGL 失败、快速连点、拖选和关闭清理。
+- [ ] T5.1 统一 `idle/lift/flight/drag/land/dispose` 可取消状态机。
+- [x] T5.2 将 lift/flight 加速，并增加 100-130ms shrink/fade landing。
+- [ ] T5.3 同项、重定向、取消和 reduced-motion 最多保留一个浮块。
+- [x] T6.1 PC 所有 interaction float 改为每边固定外扩 6px。
+- [x] T6.2 PC dispersion spatial band 与 6px edge 读取同一 token。
+- [x] T6.3 Android 对话/菜单/pager/rail 改为每边固定外扩 6dp，移除 scale 模拟包边。
+
+### Checkpoint B
+
+- [x] PC pointerup -> command p95 < 50ms。
+- [x] PC 6px、Android 6dp 在不同尺寸/密度下成立。
+- [ ] landing 至少有两个可见非终止帧，连续 50 次交互无残留。
+
+## Phase 4: Scoped Visual Corrections
+
+- [x] T7.1 block/tool/review 等 transcript 展开加入 no-interaction-glass 契约。
+- [ ] T7.2 键盘、hover、focus、chevron 和内容展开行为保持正常。
+- [x] T8.1 仅提高 Android light sidebar 语义 surface，不改 Android popup。
+- [x] T8.2 仅提高 PC light settings/modal carrier，不改 PC sidebar。
+- [ ] T8.3 暗色模式、玻璃强度和 blur 曲线保持不变。
+- [x] T9.1 Android 输入弹窗、设备选择、Memory Lab、SubAgent 壳统一 22dp。
+- [ ] T9.2 portrait/landscape/foldable 下检查裁剪、触摸轮廓和动画首尾。
+
+## Phase 5: Release Gate
+
+- [x] T10.1 运行 `cd DESKTOP; npm run test:full-release`（退出码 0）。
+- [x] T10.2 运行 `android\gradlew.bat -p android testDebugUnitTest lintVitalRelease assembleRelease --no-daemon`（73 tasks，BUILD SUCCESSFUL）。
+- [ ] T10.3 在真实 Electron/packaged app 复测点击延迟、展开无玻璃和亮色设置弹窗。
+- [ ] T10.4 在 Android 设备复测非当前远程对话长按、6dp 固定包边、landing、速度变形、亮色边栏和 22dp 弹窗。
+- [x] T10.5 更新 README、OVERVIEW、archive、版本与产物哈希。
+
+---
+
+## Historical TODO
+
 # dev-0.3.13 黑盒交叉压力测试任务
 
 - [x] 模型二级弹窗按供应商分组，模型行不再重复供应商名称

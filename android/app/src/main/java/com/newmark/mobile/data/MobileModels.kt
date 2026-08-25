@@ -165,6 +165,10 @@ data class RemoteWorkEvent(
     val guideId: String = "",
     val guide: RemoteWorkGuide? = null,
     val displayImage: RemoteWorkDisplayImage? = null,
+    /** PC queue_update 事件的结构化队列载荷（queueItems 带稳定 kernel id）。 */
+    val queue: RemoteConversationQueue? = null,
+    val queueItems: List<RemoteQueueItem>? = null,
+    val queuePaused: Boolean? = null,
     /** 桌面端结构化模型回退信号：from=回退前模型名，to=实际生效模型名。 */
     val fallback: RemoteModelFallback? = null,
 )
@@ -354,6 +358,11 @@ object RemotePayloadNormalizer {
         guideId = value.guideId.orEmpty(),
         guide = value.guide?.let(::workGuide),
         displayImage = value.displayImage?.let(::displayImage),
+        queue = value.queue?.let(::queue),
+        // null means an older sender omitted the structured queue field;
+        // an explicit empty list is authoritative and must clear stale rows.
+        queueItems = value.queueItems?.map(::queueItem),
+        queuePaused = value.queuePaused,
     )
 
     private fun goal(value: RemoteGoal) = value.copy(objective = value.objective.orEmpty())
@@ -363,12 +372,30 @@ object RemotePayloadNormalizer {
         componentType = value.componentType.orEmpty(),
     )
 
-    private fun queue(value: RemoteConversationQueue) = value.copy(
+    fun queue(value: RemoteConversationQueue) = value.copy(
         steering = value.steering.orEmpty().map(String?::orEmpty),
         followUp = value.followUp.orEmpty().map(String?::orEmpty),
     )
 
-    private fun queueItem(value: RemoteQueueItem) = value.copy(
+    fun queueItems(values: List<RemoteQueueItem>): List<RemoteQueueItem> = values.map(::queueItem)
+
+    /** Apply an id-bearing queue event only to the runtime that emitted it. */
+    fun queueUpdateState(
+        current: RemoteConversationUiState,
+        event: RemoteWorkEvent,
+    ): RemoteConversationUiState? {
+        val hasQueuePayload = event.queue != null || event.queueItems != null || event.queuePaused != null
+        if (!hasQueuePayload || !RemoteTrackingContract.sameRun(current.runtime?.runId.orEmpty(), event.runId)) {
+            return null
+        }
+        return current.copy(
+            queueItems = event.queueItems?.let(::queueItems) ?: current.queueItems,
+            queued = event.queue?.let(::queue) ?: current.queued,
+            queuePaused = event.queuePaused ?: current.queuePaused,
+        )
+    }
+
+    fun queueItem(value: RemoteQueueItem) = value.copy(
         id = value.id.orEmpty(),
         text = value.text.orEmpty(),
         queueMode = value.queueMode.orEmpty().ifBlank { "followUp" },

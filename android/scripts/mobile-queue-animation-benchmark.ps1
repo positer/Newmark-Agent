@@ -23,6 +23,7 @@ $fixtureScript = Join-Path $repoRoot 'DESKTOP\scripts\mobile-mock-server.cjs'
 $token = 'mobile-stress-token'
 $pairUrl = "newmark-pair://10.0.2.2:${Port}?token=$token"
 $fixtureProcess = $null
+$batteryWhitelistInstalled = $false
 $result = [ordered]@{
     timestamp = (Get-Date).ToString('o')
     serial = $Serial
@@ -32,6 +33,8 @@ $result = [ordered]@{
     status = 'running'
     launchMs = 0
     pid = ''
+    workload = @{}
+    coordinates = @{}
     graphics = @{}
     memory = @{}
     errors = @()
@@ -69,19 +72,52 @@ function Reset-GfxStats {
     if (-not $afterSince -or $afterSince -eq $beforeSince) { throw 'Unable to establish a fresh gfxinfo window' }
 }
 
-function Find-QueueToggleBounds {
+function Read-QueueUiXml {
     $remote = '/sdcard/newmark-queue-benchmark.xml'
+    Invoke-Adb @('shell', 'rm', '-f', $remote) | Out-Null
+    & $adb -s $Serial shell uiautomator dump $remote *> $null
+    $text = (& $adb -s $Serial exec-out cat $remote 2>$null) -join "`n"
+    if ([string]::IsNullOrWhiteSpace($text) -or -not $text.TrimStart().StartsWith('<?xml')) { return $null }
+    $text | Set-Content -LiteralPath $preSampleDump -Encoding utf8
+    try { return [xml]$text } catch { return $null }
+}
+
+function Get-BoundsCenter([string]$Bounds, [string]$Label) {
+    $match = [regex]::Match($Bounds, '\[(\d+),(\d+)\]\[(\d+),(\d+)\]')
+    if (-not $match.Success) { throw "Invalid $Label bounds: $Bounds" }
+    return [pscustomobject]@{
+        x = [int](([int]$match.Groups[1].Value + [int]$match.Groups[3].Value) / 2)
+        y = [int](([int]$match.Groups[2].Value + [int]$match.Groups[4].Value) / 2)
+    }
+}
+
+function Find-QueueToggleCoordinates {
     $deadline = (Get-Date).AddSeconds(20)
     do {
-        Invoke-Adb @('shell', 'uiautomator', 'dump', $remote) | Out-Null
-        $text = (Invoke-Adb @('exec-out', 'cat', $remote)) -join "`n"
-        $text | Set-Content -LiteralPath $preSampleDump -Encoding utf8
-        $xml = [xml]$text
+        $xml = Read-QueueUiXml
+        if ($null -eq $xml) { Start-Sleep -Milliseconds 250; continue }
         $node = @($xml.SelectNodes("//*[@content-desc='展开']")) | Select-Object -First 1
-        if ($null -ne $node) { return [string]$node.bounds }
+        if ($null -ne $node) { break }
         Start-Sleep -Milliseconds 200
     } while ((Get-Date) -lt $deadline)
-    throw 'Queue expand control was not visible before the sample window'
+    if ($null -eq $node) { throw 'Queue expand control was not visible before the sample window' }
+    $expand = Get-BoundsCenter ([string]$node.bounds) 'Queue expand control'
+    Invoke-Adb @('shell', 'input', 'tap', "$($expand.x)", "$($expand.y)") | Out-Null
+    Start-Sleep -Milliseconds 300
+
+    $deadline = (Get-Date).AddSeconds(12)
+    do {
+        $xml = Read-QueueUiXml
+        if ($null -eq $xml) { Start-Sleep -Milliseconds 250; continue }
+        $node = @($xml.SelectNodes("//*[@content-desc='折叠']")) | Select-Object -First 1
+        if ($null -ne $node) { break }
+        Start-Sleep -Milliseconds 200
+    } while ((Get-Date) -lt $deadline)
+    if ($null -eq $node) { throw 'Queue collapse control was not visible before the sample window' }
+    $collapse = Get-BoundsCenter ([string]$node.bounds) 'Queue collapse control'
+    Invoke-Adb @('shell', 'input', 'tap', "$($collapse.x)", "$($collapse.y)") | Out-Null
+    Start-Sleep -Milliseconds 300
+    return [pscustomobject]@{ expand = $expand; collapse = $collapse }
 }
 
 try {
@@ -91,6 +127,11 @@ try {
         if (-not (Test-Path -LiteralPath $apkPath)) { throw "Benchmark APK missing: $apkPath" }
         Invoke-Adb @('install', '-r', $apkPath) | Out-Null
     }
+    if ([int]((& $adb -s $Serial shell getprop ro.build.version.sdk) -join '') -ge 33) {
+        Invoke-Adb @('shell', 'pm', 'grant', $packageName, 'android.permission.POST_NOTIFICATIONS') | Out-Null
+    }
+    Invoke-Adb @('shell', 'dumpsys', 'deviceidle', 'whitelist', "+$packageName") | Out-Null
+    $batteryWhitelistInstalled = $true
 
     $env:NEWMARK_MOBILE_MOCK_PORT = "$Port"
     $env:NEWMARK_MOBILE_MOCK_TOKEN = $token
@@ -114,19 +155,39 @@ try {
     if ($health.sseConnections -lt 1) { throw 'Benchmark package did not establish SSE ownership' }
     Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/burst?count=600&intervalMs=100" -TimeoutSec 5 | Out-Null
 
-    $bounds = Find-QueueToggleBounds
-    $match = [regex]::Match($bounds, '\[(\d+),(\d+)\]\[(\d+),(\d+)\]')
-    if (-not $match.Success) { throw "Invalid Queue toggle bounds: $bounds" }
-    $x = [int](([int]$match.Groups[1].Value + [int]$match.Groups[3].Value) / 2)
-    $y = [int](([int]$match.Groups[2].Value + [int]$match.Groups[4].Value) / 2)
+    # This benchmark owns one variable: queue expand/collapse animation cost.
+    # The broader mobile-agent-stress suite already measures behavior while the
+    # 10 Hz remote stream is active. Wait for that stream to finish here so its
+    # snapshot/layout work cannot contaminate gfxinfo or move fixed tap targets.
+    $burstDeadline = (Get-Date).AddSeconds(90)
+    do {
+        Start-Sleep -Milliseconds 500
+        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/stats" -TimeoutSec 2
+    } while ($health.activeBursts -gt 0 -and (Get-Date) -lt $burstDeadline)
+    if ($health.activeBursts -gt 0) { throw 'Remote stress burst did not settle before the animation sample window' }
+    if ($health.lastBurstError) { throw "Remote stress burst failed: $($health.lastBurstError)" }
+    $result.workload = [ordered]@{
+        emittedEvents = [int]$health.emittedEvents
+        completedBursts = [int]$health.completedBursts
+        activeBursts = [int]$health.activeBursts
+    }
+    Start-Sleep -Milliseconds 750
+
+    $toggleCoordinates = Find-QueueToggleCoordinates
+    $result.coordinates = [ordered]@{
+        expand = [ordered]@{ x = $toggleCoordinates.expand.x; y = $toggleCoordinates.expand.y }
+        collapse = [ordered]@{ x = $toggleCoordinates.collapse.x; y = $toggleCoordinates.collapse.y }
+    }
 
     # From this point through the gfxinfo read there is deliberately no
     # uiautomator, screenshot, hierarchy observer, or remote API polling from
     # the host. Only fixed-coordinate input events drive the 150 ms animation.
     Invoke-Adb @('logcat', '-c') | Out-Null
     Reset-GfxStats
-    for ($i = 0; $i -lt ($Cycles * 2); $i++) {
-        Invoke-Adb @('shell', 'input', 'tap', "$x", "$y") | Out-Null
+    for ($i = 0; $i -lt $Cycles; $i++) {
+        Invoke-Adb @('shell', 'input', 'tap', "$($toggleCoordinates.expand.x)", "$($toggleCoordinates.expand.y)") | Out-Null
+        Start-Sleep -Milliseconds 220
+        Invoke-Adb @('shell', 'input', 'tap', "$($toggleCoordinates.collapse.x)", "$($toggleCoordinates.collapse.y)") | Out-Null
         Start-Sleep -Milliseconds 220
     }
     Start-Sleep -Milliseconds 500
@@ -139,7 +200,7 @@ try {
         swapKb = [int]([regex]::Match($mem, 'TOTAL SWAP \(KB\):\s*(\d+)').Groups[1].Value)
     }
     $log = (& $adb -s $Serial logcat -d -v brief) -join "`n"
-    $result.errors = @($log -split "`n" | Where-Object { $_ -match 'FATAL EXCEPTION|ANR in com\.newmark\.mobile\.benchmark|Process: com\.newmark\.mobile\.benchmark' })
+    $result.errors = @($log -split "`n" | Where-Object { $_ -match 'FATAL EXCEPTION|ANR in com\.newmark\.mobile\.benchmark|Process: com\.newmark\.mobile\.benchmark|Fatal signal.*(?:newmark|mobile)|Cmdline: com\.newmark\.mobile\.benchmark|data_app_native_crash' })
     $result.warnings = @($log -split "`n" | Where-Object { $_ -match 'Skipped \d+ frames' })
     $result.gates = [ordered]@{
         optimizedIsolatedPackageAlive = -not [string]::IsNullOrWhiteSpace($result.pid)
@@ -159,6 +220,9 @@ catch {
 }
 finally {
     if ($fixtureProcess -and -not $fixtureProcess.HasExited) { Stop-Process -Id $fixtureProcess.Id -Force -ErrorAction SilentlyContinue }
+    if ($batteryWhitelistInstalled) {
+        & $adb -s $Serial shell dumpsys deviceidle whitelist "-$packageName" | Out-Null
+    }
     & $adb -s $Serial shell am force-stop $packageName | Out-Null
     & $adb -s $Serial uninstall $packageName | Out-Null
     & $adb -s $Serial shell am start -n $formalComponent | Out-Null

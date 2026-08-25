@@ -25,4 +25,14 @@ class PredictiveBackMotionContractTest {
         assertTrue(motion.contains("durationMillis = 220"))
         assertTrue(motion.indexOf("onBack()") < motion.indexOf("initialValue = progress"))
     }
+
+    @Test
+    fun terminalAndMemoryLabKeepTheReleaseFrameUntilTheirExitTransitionTakesOver() {
+        val terminal = File("src/main/java/com/newmark/mobile/ui/TerminalScreen.kt").readText()
+        val memory = File("src/main/java/com/newmark/mobile/ui/MemoryLabScreen.kt").readText()
+
+        assertTrue(terminal.contains("retainProgressOnCommit = true"))
+        assertTrue(memory.contains("retainProgressOnCommit = view == \"overview\""))
+        assertTrue(memory.contains("settleProgressOnCommit = view == \"detail\""))
+    }
 }

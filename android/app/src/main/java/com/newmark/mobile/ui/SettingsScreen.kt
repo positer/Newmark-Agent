@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -39,8 +40,6 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
@@ -84,6 +83,13 @@ import com.newmark.mobile.data.ModelConfig
 import com.newmark.mobile.data.ProviderConfig
 import com.newmark.mobile.ui.components.NewmarkShapeLarge
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
+import com.newmark.mobile.ui.components.rememberLiquidBackdrop
+import com.newmark.mobile.ui.components.liquidGlassModifier
+import com.newmark.mobile.ui.components.glassButtonSurface
+import com.newmark.mobile.ui.components.LiquidGlassSwitch
+import com.newmark.mobile.ui.components.DialogBackdropBlur
+import com.newmark.mobile.ui.components.MobilePopupShape
+import com.kyant.backdrop.backdrops.layerBackdrop
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.LocalThemeMode
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
@@ -164,8 +170,7 @@ fun SettingsScreen(
             Box(
                 modifier = Modifier
                     .size(36.dp)
-                    .clip(CircleShape)
-                    .background(p.bgQuaternary)
+                    .glassButtonSurface(CircleShape, p.bgQuaternary)
                     .clickable {
                         when (page) {
                             is SettingsPage.Main -> onBack()
@@ -285,19 +290,34 @@ private fun CapabilitySettingsPage() {
     val store = remember { MobileCapabilityStore(context) }
     var allFiles by remember { mutableStateOf(store.allFilesGranted()) }
     var apps by remember { mutableStateOf(store.appListGranted()) }
+    var backgroundNetworkRequested by remember { mutableStateOf(store.backgroundNetworkRequested) }
+    var backgroundNetworkAllowed by remember { mutableStateOf(store.backgroundNetworkAllowed()) }
     var high by remember { mutableStateOf(store.highPrivilegeEnabled) }
     var shizukuRunning by remember { mutableStateOf(PrivilegedToolBridge.isShizukuRunning()) }
     var shizukuGranted by remember { mutableStateOf(PrivilegedToolBridge.isShizukuAvailable()) }
     var rootAvailable by remember { mutableStateOf(PrivilegedToolBridge.isRootAvailable()) }
     var confirmHighPrivilege by remember { mutableStateOf(false) }
     val p = LocalNewmarkPalette.current
+    val backgroundNetworkSettingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        backgroundNetworkAllowed = store.backgroundNetworkAllowed()
+    }
+    fun openBackgroundNetworkSettings() {
+        val packageUri = Uri.parse("package:${context.packageName}")
+        val appBackgroundData = Intent(Settings.ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS, packageUri)
+        val appDetails = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri)
+        val target = if (appBackgroundData.resolveActivity(context.packageManager) != null) appBackgroundData else appDetails
+        runCatching { backgroundNetworkSettingsLauncher.launch(target) }
+            .onFailure { runCatching { backgroundNetworkSettingsLauncher.launch(appDetails) } }
+    }
     if (confirmHighPrivilege) {
         AlertDialog(
             onDismissRequest = { confirmHighPrivilege = false },
             title = { Text("开启高权限模式") },
             text = { Text("你需要知道自己在做什么。高权限指令可能修改或删除设备数据，后果自负。") },
             confirmButton = {
-                TextButton(onClick = {
+                TextButton(modifier = Modifier.glassButtonSurface(RoundedCornerShape(50), p.bgQuaternary), onClick = {
                     confirmHighPrivilege = false
                     rootAvailable = PrivilegedToolBridge.isRootAvailable()
                     shizukuRunning = PrivilegedToolBridge.isShizukuRunning()
@@ -311,7 +331,7 @@ private fun CapabilitySettingsPage() {
                     }
                 }) { Text("继续") }
             },
-            dismissButton = { TextButton(onClick = { confirmHighPrivilege = false }) { Text("退出") } },
+            dismissButton = { TextButton(modifier = Modifier.glassButtonSurface(RoundedCornerShape(50), p.bgQuaternary), onClick = { confirmHighPrivilege = false }) { Text("退出") } },
         )
     }
     DisposableEffect(store) {
@@ -348,24 +368,40 @@ private fun CapabilitySettingsPage() {
         item {
             SectionCard("权限") {
                 SettingRow("读取所有文件") {
-                    Switch(checked = allFiles, onCheckedChange = {
+                    LiquidGlassSwitch(checked = allFiles, onCheckedChange = {
                         if (it && Build.VERSION.SDK_INT >= 30) runCatching { context.startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${context.packageName}"))) }
                         store.allFilesRequested = it
                         allFiles = store.allFilesGranted()
-                    }, colors = SwitchDefaults.colors(checkedTrackColor = p.accent, uncheckedTrackColor = p.bgQuaternary))
+                    })
                 }
                 SettingRow("读取应用列表") {
-                    Switch(checked = apps, onCheckedChange = { apps = it; store.appListRequested = it }, colors = SwitchDefaults.colors(checkedTrackColor = p.accent, uncheckedTrackColor = p.bgQuaternary))
+                    LiquidGlassSwitch(checked = apps, onCheckedChange = { apps = it; store.appListRequested = it })
                 }
+                SettingRow("后台联网") {
+                    LiquidGlassSwitch(checked = backgroundNetworkRequested, onCheckedChange = { enabled ->
+                        backgroundNetworkRequested = enabled
+                        store.backgroundNetworkRequested = enabled
+                        // Enabling opens Android/OEM's special-access page.
+                        // Disabling is intentionally local-only and does not
+                        // modify or revoke any system networking policy.
+                        if (enabled) openBackgroundNetworkSettings()
+                    })
+                }
+                Text(
+                    if (backgroundNetworkAllowed) "系统当前允许后台数据；如仍断链，请同时允许不受限流量与后台活动。"
+                    else "系统正在限制后台数据，开启后将进入本应用的后台联网设置。",
+                    fontSize = 11.sp,
+                    color = p.textTertiary,
+                )
             }
         }
         item {
             SectionCard("高权限模式") {
                 Text("需要 Root 或 Shizuku 授权；关闭后立即阻断高权限工具。", fontSize = 11.sp, color = p.textSecondary)
                 SettingRow("高权限模式") {
-                    Switch(checked = high, onCheckedChange = { value ->
+                    LiquidGlassSwitch(checked = high, onCheckedChange = { value ->
                         if (value) confirmHighPrivilege = true else { store.disableHighPrivilege(); high = false }
-                    }, colors = SwitchDefaults.colors(checkedTrackColor = p.accent, uncheckedTrackColor = p.bgQuaternary))
+                    })
                 }
                 Text(if (shizukuGranted) "Shizuku：已授权（UID ${PrivilegedToolBridge.shizukuUid() ?: "?"} 边界）" else if (shizukuRunning) "Shizuku：运行中，等待授权" else "Shizuku：未运行", fontSize = 11.sp, color = p.textTertiary)
                 Text(if (rootAvailable) "Root：可用（root 边界）" else "Root：不可用", fontSize = 11.sp, color = p.textTertiary)
@@ -390,7 +426,7 @@ private fun PluginSettingsPage() {
 private fun PluginSection(title: String, entries: Map<String, Boolean>, p: com.newmark.mobile.ui.theme.NewmarkPalette, onChange: (String, Boolean) -> Unit) {
     SectionCard(title) {
         if (entries.isEmpty()) Text("暂无已安装插件。插件文件可由桌面端同步或放入 files/newmark/plugins.json。", fontSize = 11.sp, color = p.textSecondary)
-        entries.toSortedMap().forEach { (name, enabled) -> SettingRow(name) { Switch(checked = enabled, onCheckedChange = { onChange(name, it) }, colors = SwitchDefaults.colors(checkedTrackColor = p.accent, uncheckedTrackColor = p.bgQuaternary)) } }
+        entries.toSortedMap().forEach { (name, enabled) -> SettingRow(name) { LiquidGlassSwitch(checked = enabled, onCheckedChange = { onChange(name, it) }) } }
     }
 }
 
@@ -441,8 +477,7 @@ private fun DevicePairSection(linkVm: DesktopLinkViewModel, onOpenDeviceManage: 
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(NewmarkShapeMedium)
-                .background(p.accentSoft)
+                .glassButtonSurface(NewmarkShapeMedium, p.accentSoft, alpha = 0.64f)
                 .clickable {
                     scanner.launch(
                         ScanOptions()
@@ -465,8 +500,7 @@ private fun DevicePairSection(linkVm: DesktopLinkViewModel, onOpenDeviceManage: 
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(NewmarkShapeMedium)
-                .background(p.bgQuaternary)
+                .glassButtonSurface(NewmarkShapeMedium, p.bgQuaternary)
                 .clickable { imagePicker.launch("image/*") }
                 .padding(vertical = 10.dp),
             contentAlignment = Alignment.Center,
@@ -508,8 +542,7 @@ private fun DevicePairSection(linkVm: DesktopLinkViewModel, onOpenDeviceManage: 
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(NewmarkShapeMedium)
-                .background(p.bgQuaternary)
+                .glassButtonSurface(NewmarkShapeMedium, p.bgQuaternary)
                 .clickable { linkVm.pairFromUrl(manualUrl) }
                 .padding(vertical = 8.dp),
             contentAlignment = Alignment.Center,
@@ -627,23 +660,15 @@ private fun AppearanceSection() {
     val followSystem = themeMode.dark == null
     SectionCard(title = "外观") {
         SettingRow(label = "暗色模式") {
-            Switch(
+            LiquidGlassSwitch(
                 checked = isDark,
                 onCheckedChange = { themeMode.setDark(it) },
-                colors = SwitchDefaults.colors(
-                    checkedTrackColor = p.accent,
-                    uncheckedTrackColor = p.bgQuaternary,
-                ),
             )
         }
         SettingRow(label = "跟随系统") {
-            Switch(
+            LiquidGlassSwitch(
                 checked = followSystem,
                 onCheckedChange = { if (it) themeMode.setDark(null) else themeMode.setDark(systemDark) },
-                colors = SwitchDefaults.colors(
-                    checkedTrackColor = p.accent,
-                    uncheckedTrackColor = p.bgQuaternary,
-                ),
             )
         }
     }
@@ -771,9 +796,23 @@ private fun ProvidersPage(
         }
     }
     if (showDevicePicker) {
+        val backdrop = rememberLiquidBackdrop()
         Dialog(onDismissRequest = { if (pullingHost.isBlank()) showDevicePicker = false }) {
+            DialogBackdropBlur(42.dp)
+            Box(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize().layerBackdrop(backdrop))
             Column(
-                Modifier.fillMaxWidth().clip(NewmarkShapeLarge).background(p.bgSecondary).padding(14.dp),
+                Modifier.fillMaxWidth()
+                    .liquidGlassModifier(
+                        backdrop = backdrop,
+                        shape = MobilePopupShape,
+                        alpha = 0f,
+                        blurRadius = 8.dp,
+                        refractionHeight = 4.dp,
+                        refractionAmount = 8.dp,
+                        surfaceColor = Color.Transparent,
+                    )
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("选择连接设备", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = p.textPrimary)
@@ -803,6 +842,7 @@ private fun ProvidersPage(
                         }
                     }
                 }
+        }
             }
         }
     }
@@ -865,8 +905,10 @@ private fun FuzzyInjectPage(onSave: (ProviderConfig) -> Unit, onCancel: () -> Un
                     ).forEach { (value, label) ->
                         Box(
                             modifier = Modifier
-                                .clip(NewmarkShapeMedium)
-                                .background(if (protocol == value) p.accentSoft else p.bgQuaternary)
+                                .glassButtonSurface(
+                                    NewmarkShapeMedium,
+                                    if (protocol == value) p.accentSoft else p.bgQuaternary,
+                                )
                                 .clickable { protocol = value }
                                 .padding(horizontal = 10.dp, vertical = 6.dp),
                         ) {
@@ -1027,8 +1069,7 @@ private fun ProviderDetailPage(vm: ChatViewModel, providerId: String, onBack: ()
                     Spacer(Modifier.width(8.dp))
                     Box(
                         modifier = Modifier
-                            .clip(NewmarkShapeMedium)
-                            .background(p.accentSoft)
+                            .glassButtonSurface(NewmarkShapeMedium, p.accentSoft, alpha = 0.64f)
                             .clickable {
                                 vm.addModel(provider.id, newModelName)
                                 newModelName = ""
@@ -1079,13 +1120,9 @@ private fun ProviderDetailPage(vm: ChatViewModel, providerId: String, onBack: ()
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Switch(
+                    LiquidGlassSwitch(
                         checked = model.enabled,
                         onCheckedChange = { vm.toggleModel(provider.id, model.name) },
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = p.accent,
-                            uncheckedTrackColor = p.bgQuaternary,
-                        ),
                         modifier = Modifier.scale(0.8f),
                     )
                     Spacer(Modifier.width(8.dp))
@@ -1094,8 +1131,10 @@ private fun ProviderDetailPage(vm: ChatViewModel, providerId: String, onBack: ()
                         contentDescription = "删除模型",
                         tint = p.red,
                         modifier = Modifier
-                            .size(18.dp)
-                            .clickable { vm.removeModel(provider.id, model.name) },
+                            .size(30.dp)
+                            .glassButtonSurface(CircleShape, p.bgQuaternary)
+                            .clickable { vm.removeModel(provider.id, model.name) }
+                            .padding(6.dp),
                     )
                 }
             }
@@ -1105,8 +1144,7 @@ private fun ProviderDetailPage(vm: ChatViewModel, providerId: String, onBack: ()
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(NewmarkShapeLarge)
-                    .background(p.bgSecondary)
+                    .glassButtonSurface(NewmarkShapeLarge, p.bgSecondary, alpha = 0.58f)
                     .clickable {
                         vm.removeProvider(provider.id)
                         onBack()
@@ -1168,8 +1206,10 @@ private fun DeviceManagePage(linkVm: DesktopLinkViewModel) {
                         contentDescription = "删除",
                         tint = p.red,
                         modifier = Modifier
-                            .size(20.dp)
-                            .clickable { linkVm.removeDevice(device.host) },
+                            .size(30.dp)
+                            .glassButtonSurface(CircleShape, p.bgQuaternary)
+                            .clickable { linkVm.removeDevice(device.host) }
+                            .padding(6.dp),
                     )
                 }
             }

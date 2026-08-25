@@ -9,14 +9,18 @@ import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
+import android.widget.RemoteViews
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.newmark.mobile.MainActivity
 import com.newmark.mobile.R
 
 /** Android 16 Live Update with an ongoing-notification fallback for older systems. */
 class LocalAgentForegroundService : Service() {
+    private var serviceWakeLock: PowerManager.WakeLock? = null
     private fun modelAndSmartSelectIcon(): Icon =
         Icon.createWithResource(this, R.drawable.ic_notification_model)
 
@@ -24,42 +28,86 @@ class LocalAgentForegroundService : Service() {
         super.onCreate()
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "本地 Agent 实时活动", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "显示正在运行的本地 Agent 数量"
+            NotificationChannel(CHANNEL_ID, "Agent 实时活动", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "显示远程与本地正在运行的 Agent 数量"
                 setShowBadge(true)
             },
         )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val count = intent?.getIntExtra(EXTRA_COUNT, 1)?.coerceAtLeast(1) ?: 1
-        startForeground(NOTIFICATION_ID, notification(count))
+        val remoteCount = intent?.getIntExtra(EXTRA_REMOTE_COUNT, runningRemoteCount)
+            ?.coerceAtLeast(0) ?: runningRemoteCount
+        val localCount = intent?.getIntExtra(EXTRA_LOCAL_COUNT, runningLocalCount)
+            ?.coerceAtLeast(0) ?: runningLocalCount
+        runningRemoteCount = remoteCount
+        runningLocalCount = localCount
+        if (remoteCount + localCount <= 0) {
+            releaseServiceWakeLock()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        acquireServiceWakeLock()
+        startForeground(NOTIFICATION_ID, notification(remoteCount, localCount))
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun notification(count: Int): Notification =
+    override fun onDestroy() {
+        releaseServiceWakeLock()
+        super.onDestroy()
+    }
+
+    private fun acquireServiceWakeLock() {
+        if (serviceWakeLock?.isHeld == true) return
+        val power = getSystemService(PowerManager::class.java) ?: return
+        serviceWakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Newmark:AgentForeground").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    }
+
+    private fun releaseServiceWakeLock() {
+        serviceWakeLock?.takeIf { it.isHeld }?.release()
+        serviceWakeLock = null
+    }
+
+    private fun notification(remoteCount: Int, localCount: Int): Notification =
         if (Build.VERSION.SDK_INT >= 36) {
-            createAndroid16LiveUpdate(count)
+            createAndroid16LiveUpdate(remoteCount, localCount)
         } else {
-            createLegacyOngoingNotification(count)
+            createLegacyOngoingNotification(remoteCount, localCount)
         }
 
-    private fun createLegacyOngoingNotification(count: Int): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
+    private fun liveActivityViews(remoteCount: Int, localCount: Int) =
+        RemoteViews(packageName, R.layout.notification_agent_live_activity).apply {
+            setTextViewText(R.id.notification_remote_count, "远程有${remoteCount}个Agent正在运行")
+            setTextViewText(R.id.notification_local_count, "本地有${localCount}个Agent正在运行")
+        }
+
+    private fun baseBuilder(remoteCount: Int, localCount: Int): NotificationCompat.Builder {
+        val views = liveActivityViews(remoteCount, localCount)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification_model)
             .setLargeIcon(modelAndSmartSelectIcon())
-            .setContentTitle("本地Agent运行状态")
-            .setContentText("有${count}个本地Agent正在运行")
+            .setContentTitle("Agent实时运行状态")
+            .setContentText("远程有${remoteCount}个Agent正在运行 · 本地有${localCount}个Agent正在运行")
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
+            .setCustomContentView(views)
+            .setCustomBigContentView(views)
+            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+    }
+
+    private fun createLegacyOngoingNotification(remoteCount: Int, localCount: Int): Notification =
+        baseBuilder(remoteCount, localCount)
             .build()
 
     @RequiresApi(36)
-    private fun createAndroid16LiveUpdate(count: Int): Notification {
+    private fun createAndroid16LiveUpdate(remoteCount: Int, localCount: Int): Notification {
         val openNewmark = PendingIntent.getActivity(
             this,
             0,
@@ -68,16 +116,19 @@ class LocalAgentForegroundService : Service() {
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        // Keep the exact NotificationCompat promoted-ongoing protocol used by
+        // the last release observed entering OEM Fluid Cloud. Custom views and
+        // platform ProgressStyle can make OEMs classify it as an ordinary card.
         val liveUpdate = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification_model)
             .setLargeIcon(modelAndSmartSelectIcon())
-            .setContentTitle("本地Agent运行状态")
-            .setContentText("有${count}个本地Agent正在运行")
+            .setContentTitle("远程有${remoteCount}个Agent正在运行")
+            .setContentText("本地有${localCount}个Agent正在运行")
+            .setContentIntent(openNewmark)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
-            .setContentIntent(openNewmark)
             .setRequestPromotedOngoing(true)
             .setShortCriticalText("运行中")
             .build()
@@ -93,7 +144,36 @@ class LocalAgentForegroundService : Service() {
     companion object {
         const val CHANNEL_ID = "local_agent_live_activity"
         const val NOTIFICATION_ID = 504
-        const val EXTRA_COUNT = "running_count"
+        const val EXTRA_REMOTE_COUNT = "remote_running_count"
+        const val EXTRA_LOCAL_COUNT = "local_running_count"
         private const val TAG = "NewmarkLiveUpdate"
+        @Volatile private var runningRemoteCount = 0
+        @Volatile private var runningLocalCount = 0
+
+        @Synchronized
+        fun updateRemoteCount(context: android.content.Context, count: Int) {
+            runningRemoteCount = count.coerceAtLeast(0)
+            publish(context)
+        }
+
+        @Synchronized
+        fun updateLocalCount(context: android.content.Context, count: Int) {
+            runningLocalCount = count.coerceAtLeast(0)
+            publish(context)
+        }
+
+        private fun publish(context: android.content.Context) {
+            val appContext = context.applicationContext
+            if (runningRemoteCount + runningLocalCount == 0) {
+                appContext.stopService(Intent(appContext, LocalAgentForegroundService::class.java))
+                return
+            }
+            ContextCompat.startForegroundService(
+                appContext,
+                Intent(appContext, LocalAgentForegroundService::class.java)
+                    .putExtra(EXTRA_REMOTE_COUNT, runningRemoteCount)
+                    .putExtra(EXTRA_LOCAL_COUNT, runningLocalCount),
+            )
+        }
     }
 }

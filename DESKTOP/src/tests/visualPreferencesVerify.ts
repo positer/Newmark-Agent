@@ -73,6 +73,14 @@ function main(): void {
     const glassSlider = glassSliderMatches[0] || '';
     assert.ok(glassSlider.includes('oninput="window.previewGlassOpacity(this.value)"')
       && glassSlider.includes('onchange="window.commitGlassOpacity(this.value)"'), 'slider input previews only while change commits explicitly');
+    assert.ok(ui.includes("input.classList.add('liquid-range-dragging')")
+      && ui.includes("input.style.setProperty('--liquid-range-progress'")
+      && ui.includes("input.dispatchEvent(new Event('input', { bubbles: true }))")
+      && ui.includes("valueOutput.textContent = glassNumberText(presentation.opacityPercent) + '%'"),
+    'glass strength range renders its numeric value and physical effects continuously during pointer movement');
+    assert.ok(ui.includes("input.dataset.liquidSuppressRangeClick = 'true'")
+      && ui.includes("input.dispatchEvent(new Event('change', { bubbles: true }))"),
+    'range release only commits the already rendered live value and suppresses duplicate native click');
     assert.ok(ui.includes('api.saveConfig({ glassAlpha: presentation.alpha })'), 'glass change saves the normalized glassAlpha field');
     assert.ok(mainSource.includes("case 'glassAlpha': agent.config.set('ui', 'glass_alpha', value); break;")
       && serverSource.includes("case 'glassAlpha': agent.config.set('ui', 'glass_alpha', value); break;"), 'Electron and HTTP save paths map glassAlpha explicitly to ui.glass_alpha');
@@ -91,6 +99,12 @@ function main(): void {
       alpha2: number;
       alpha3: number;
       alpha: number;
+      carrierBlur: number;
+      carrierAlpha: number;
+      floatRefractionHeight: number;
+      floatRefractionAmount: number;
+      floatChromaticAberration: number;
+      floatOpticalOpacity: number;
     };
     const anchors = [
       { opacity: 0, transparency: 100, blur: [8, 16, 20], alpha: [0, 0, 0] },
@@ -106,9 +120,28 @@ function main(): void {
       assert.deepEqual([result.blur1, result.blur2, result.blur3], anchor.blur, `glass blur anchor ${anchor.opacity} follows 0.4B/0.8B/B`);
       assert.deepEqual([result.alpha1, result.alpha2, result.alpha3], anchor.alpha, `glass alpha anchor ${anchor.opacity} follows 0.75A/0.80A/0.85A`);
     }
+    const physicalDefault = glassPresentationForOpacity(85);
+    assert.deepEqual(
+      [physicalDefault.carrierBlur, physicalDefault.carrierAlpha],
+      [6.6, 0.374],
+      'default glass strength drives a stronger frosted carrier layer',
+    );
+    assert.deepEqual(
+      [physicalDefault.floatRefractionHeight, physicalDefault.floatRefractionAmount, physicalDefault.floatChromaticAberration, physicalDefault.floatOpticalOpacity],
+      [12, 24, 1, 1],
+      'default glass strength preserves Kyant floating refraction and dispersion',
+    );
+    const opaqueEndpoint = glassPresentationForOpacity(100);
+    assert.deepEqual(
+      [opaqueEndpoint.carrierBlur, opaqueEndpoint.floatRefractionAmount, opaqueEndpoint.floatChromaticAberration, opaqueEndpoint.floatOpticalOpacity],
+      [0, 0, 0, 0],
+      'fully opaque endpoint removes backdrop optical effects',
+    );
     assert.ok(ui.includes('--glass-rgb-1:')
       && ui.includes('rgb(var(--glass-rgb-1) / var(--glass-alpha-1))')
       && ui.includes("root.style.setProperty('--glass-alpha-1'")
+      && ui.includes("root.style.setProperty('--carrier-glass-blur'")
+      && ui.includes("root.style.setProperty('--liquid-float-refraction-amount'")
       && !ui.includes("var bg1 = 'rgba(10,10,26,"), 'glass opacity updates numeric variables while theme palettes own RGB channels');
     assert.ok(!/backdrop-filter:\s*blur\(\d/.test(ui), 'glass surfaces use the three tunable blur variables instead of fixed pixel widths');
     const cssBlock = (selector: string): string => {
@@ -174,8 +207,8 @@ function main(): void {
     'terminal timeout number controls theme their native steppers in both surfaces and expose an accessible label/description');
     assert.ok(!/backdrop-filter|translateZ/.test(cssBlock('#input-area textarea'))
       && !/backdrop-filter|translateZ/.test(cssBlock('.tool-select'))
-      && /backdrop-filter:\s*blur\(var\(--glass-blur-3\)\)/.test(cssBlock('#input-area')),
-    'input controls reuse the parent level-3 glass surface without nested offscreen filters or forced layers');
+      && !/backdrop-filter|translateZ/.test(cssBlock('#input-area')),
+    'input-area body and nested controls remain non-glass without forced compositor layers');
     for (const selector of ['#app', '#topbar', '#topbar .title', '#main', '#left', '#right', '#bottom', '#center-stack', '#center', '#chat-area', '#input-area', '#submit-btn', '.sub-win-overlay']) {
       assert.ok(!/translateZ/.test(cssBlock(selector)), `${selector} does not force a permanent compositor layer`);
     }

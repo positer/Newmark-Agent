@@ -14,6 +14,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -21,6 +23,8 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,11 +58,18 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
@@ -85,6 +96,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.newmark.mobile.data.RemoteSubagent
@@ -92,13 +108,24 @@ import com.newmark.mobile.data.RemotePlanItem
 import com.newmark.mobile.ui.components.LucideIcons
 import com.newmark.mobile.ui.components.MarkdownBody
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
-import com.newmark.mobile.ui.theme.LocalGlassMode
 import com.newmark.mobile.ui.theme.scaledGlassAlpha
 import com.newmark.mobile.ui.theme.NewmarkLightPalette
+import com.newmark.mobile.ui.components.liquidGlassModifier
+import com.newmark.mobile.ui.components.glassButtonSurface
+import com.newmark.mobile.ui.components.liquidHoldDragGesture
+import com.newmark.mobile.ui.components.DialogBackdropBlur
+import com.newmark.mobile.ui.components.MobilePopupShape
+import com.newmark.mobile.ui.components.MobileInteractionGlassEdge
+import com.newmark.mobile.ui.components.liquidMotionDeformation
+import com.newmark.mobile.ui.components.liquidSelectionMorph
+import com.newmark.mobile.ui.components.rememberLiquidBackdrop
+import com.newmark.mobile.ui.components.LocalSidebarGestureLock
+import com.kyant.backdrop.backdrops.layerBackdrop
 import com.newmark.mobile.vm.ChatViewModel
 import com.newmark.mobile.vm.DesktopLinkViewModel
 import com.newmark.mobile.vm.WorkspaceUploadProgress
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 enum class RightSidebarTab(val label: String, val icon: ImageVector) {
@@ -126,6 +153,7 @@ fun MobileRightSidebar(
     remoteMode: Boolean,
     browserSession: BrowserSessionState,
     selectedTab: RightSidebarTab,
+    backdrop: com.kyant.backdrop.Backdrop? = null,
     panelWidth: Dp = 300.dp,
     /** 宽屏拖拽期间使用同一正式栏的可见宽度，不再渲染独立预测层。 */
     visibleWidth: Dp = panelWidth,
@@ -136,7 +164,6 @@ fun MobileRightSidebar(
     modifier: Modifier = Modifier,
 ) {
     val p = LocalNewmarkPalette.current
-    val glass = LocalGlassMode.current
     val tabs = remember(remoteMode) { availableRightTabs(remoteMode) }
     val tab = selectedTab.takeIf { it in tabs } ?: tabs.first()
     var selectedSubagent by remember { mutableStateOf<RemoteSubagent?>(null) }
@@ -154,9 +181,29 @@ fun MobileRightSidebar(
             vm.refreshRightSidebar()
         }
     }
+    // Match PC #right: the conversation surface behind the panel owns the
+    // backdrop blur, while the panel itself is a tinted carrier rather than a
+    // full-height refractive lens. A large lens produces a mirrored vertical
+    // band while the sidebar is only half revealed.
+    val panelSurface = if (p == NewmarkLightPalette) {
+        p.bgTertiary.copy(alpha = 0.98f)
+    } else {
+        p.bgTertiary.copy(alpha = scaledGlassAlpha(0.74f, com.newmark.mobile.ui.theme.DefaultGlassAlpha))
+    }
     Column(
-        modifier = modifier.width(visibleWidth).fillMaxHeight()
-            .background(p.bgTertiary.copy(alpha = scaledGlassAlpha(0.74f, glass.alpha))).border(1.dp, p.border),
+        modifier = modifier
+            .width(visibleWidth)
+            .fillMaxHeight()
+            .background(panelSurface)
+            .drawBehind {
+                val stroke = 1.dp.toPx()
+                drawLine(
+                    color = p.border,
+                    start = Offset(stroke / 2f, 0f),
+                    end = Offset(stroke / 2f, size.height),
+                    strokeWidth = stroke,
+                )
+            },
     ) {
         RightTabs(
             selected = tab,
@@ -271,16 +318,16 @@ private fun UploadTaskRow(task: WorkspaceUploadProgress) {
 @Composable
 fun RightSidebarOpenButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     val p = LocalNewmarkPalette.current
+    val shape = RoundedCornerShape(50)
     Box(
         modifier = modifier
             .width(18.dp)
             .height(48.dp)
-            .clip(RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp))
-            .background(p.bgTertiary)
-            .border(1.dp, p.border, RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp))
+            .glassButtonSurface(shape, p.bgTertiary)
+            .clip(shape)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = null,
+                indication = androidx.compose.foundation.LocalIndication.current,
                 onClick = onClick,
             ),
         contentAlignment = Alignment.Center,
@@ -361,6 +408,97 @@ private fun RightTabs(
     onClose: () -> Unit,
 ) {
     val p = LocalNewmarkPalette.current
+    val setSidebarGestureLock = LocalSidebarGestureLock.current
+    val scope = rememberCoroutineScope()
+    val slotWidth = 34.dp
+    val floatWidth = 44.dp
+    val trackHeight = 40.dp
+    val floatHeight = 40.dp
+    val density = LocalDensity.current
+    val tabBackdrop = rememberLiquidBackdrop()
+    val selectedIndex = tabs.indexOf(selected).coerceAtLeast(0)
+    val glassX = remember { Animatable(0f) }
+    val tabBounds = remember(tabs) { mutableStateMapOf<Int, Rect>() }
+    var activeIndex by remember(tabs) { mutableIntStateOf(selectedIndex) }
+    var visualSelectedIndex by remember(tabs) { mutableIntStateOf(selectedIndex) }
+    var moving by remember { mutableStateOf(false) }
+    var lifting by remember { mutableStateOf(false) }
+    var landing by remember { mutableStateOf(false) }
+    var draggingGlass by remember { mutableStateOf(false) }
+    var draggedGlassX by remember { mutableFloatStateOf(0f) }
+    var draggedGlassVelocityX by remember { mutableFloatStateOf(0f) }
+    var flightJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun tabLeft(index: Int): Float = tabBounds[index]?.left
+        ?: with(density) { index * slotWidth.toPx() }
+    fun glassLeft(index: Int): Float = tabLeft(index) - with(density) { MobileInteractionGlassEdge.toPx() }
+    val glassProgress by animateFloatAsState(
+        targetValue = if (landing || lifting) 0f else if (moving) 1f else 0f,
+        animationSpec = tween(if (landing) 240 else 100),
+        label = "rightTabGlassMaterial",
+    )
+    LaunchedEffect(selectedIndex, tabs) {
+        if (!moving) {
+            activeIndex = selectedIndex
+            visualSelectedIndex = selectedIndex
+            glassX.snapTo(glassLeft(selectedIndex))
+        }
+    }
+    fun indexAt(x: Float): Int = with(density) {
+        (x / slotWidth.toPx()).toInt().coerceIn(tabs.indices)
+    }
+    fun flyTo(index: Int, commit: Boolean) {
+        val redirecting = moving
+        flightJob?.cancel()
+        activeIndex = index
+        setSidebarGestureLock("right-tab-selector", true)
+        if (!redirecting) lifting = true
+        moving = true
+        flightJob = scope.launch {
+            draggingGlass = false
+            draggedGlassVelocityX = 0f
+            if (!redirecting) {
+                glassX.snapTo(glassLeft(selectedIndex))
+            }
+            val targetX = glassLeft(index)
+            val staysInPlace = kotlin.math.abs(glassX.value - targetX) < 0.5f
+            kotlinx.coroutines.yield()
+            lifting = false
+            if (staysInPlace) {
+                delay(100)
+            } else {
+                glassX.animateTo(
+                    targetX,
+                    tween(380, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
+                )
+            }
+            landing = true
+            delay(240)
+            landing = false
+            moving = false
+            visualSelectedIndex = index
+            setSidebarGestureLock("right-tab-selector", false)
+            if (commit) onSelect(tabs[index])
+        }
+    }
+    fun holdAt(index: Int) {
+        val redirecting = moving
+        flightJob?.cancel()
+        activeIndex = index
+        setSidebarGestureLock("right-tab-selector", true)
+        if (!redirecting) lifting = true
+        moving = true
+        flightJob = scope.launch {
+            draggingGlass = false
+            draggedGlassVelocityX = 0f
+            if (!redirecting) glassX.snapTo(glassLeft(selectedIndex))
+            kotlinx.coroutines.yield()
+            lifting = false
+            glassX.animateTo(
+                glassLeft(index),
+                tween(380, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
+            )
+        }
+    }
     Column(Modifier.fillMaxWidth().statusBarsPadding()) {
         Row(
             Modifier.fillMaxWidth().height(41.dp).padding(horizontal = 6.dp, vertical = 6.dp),
@@ -368,11 +506,120 @@ private fun RightTabs(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (expanded) {
-                tabs.forEach { target ->
-                    val active = selected == target
-                    IconButton(target.icon, target.label, if (active) p.accent else p.textSecondary,
-                        if (active) p.accentSoft else Color.Transparent,
-                        if (active) p.accentBorder else Color.Transparent) { onSelect(target) }
+                Box(
+                    Modifier
+                        .width(slotWidth * tabs.size)
+                        .height(trackHeight)
+                        .liquidHoldDragGesture(
+                            tabs.size,
+                            selectedIndex,
+                            onCandidateStart = { setSidebarGestureLock("right-tab-candidate", true) },
+                            onCandidateEnd = { setSidebarGestureLock("right-tab-candidate", false) },
+                            onTap = { flyTo(indexAt(it.x), commit = true) },
+                            onHoldStart = {
+                                val index = indexAt(it.x)
+                                holdAt(index)
+                            },
+                            onDrag = { position, delta ->
+                                flightJob?.cancel()
+                                moving = true
+                                lifting = false
+                                draggingGlass = true
+                                activeIndex = indexAt(position.x)
+                                draggedGlassX = with(density) {
+                                    (position.x - floatWidth.toPx() / 2f).coerceIn(
+                                        -6.dp.toPx(),
+                                        tabs.size * slotWidth.toPx() - floatWidth.toPx() + 6.dp.toPx(),
+                                    )
+                                }
+                                draggedGlassVelocityX = delta.x * 60f
+                            },
+                             onHoldEnd = { _, _ ->
+                                 val commit = activeIndex
+                                 flightJob = scope.launch {
+                                     lifting = false
+                                     glassX.snapTo(draggedGlassX)
+                                     draggingGlass = false
+                                     glassX.animateTo(
+                                         glassLeft(commit),
+                                         tween(120, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
+                                     )
+                                     landing = true
+                                    delay(240)
+                                    landing = false
+                                    moving = false
+                                    draggingGlass = false
+                                    draggedGlassVelocityX = 0f
+                                    visualSelectedIndex = commit
+                                    setSidebarGestureLock("right-tab-selector", false)
+                                    onSelect(tabs[commit])
+                                }
+                            },
+                            onCancel = {
+                                moving = false
+                                lifting = false
+                                landing = false
+                                draggingGlass = false
+                                draggedGlassVelocityX = 0f
+                                setSidebarGestureLock("right-tab-selector", false)
+                            },
+                        ),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .then(if (moving) Modifier.layerBackdrop(tabBackdrop) else Modifier),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        tabs.forEachIndexed { index, target ->
+                            val active = !moving && index == visualSelectedIndex
+                            IconButton(
+                                target.icon,
+                                target.label,
+                                if (active) p.accent else p.textSecondary,
+                                if (active) p.accentSoft else Color.Transparent,
+                                Color.Transparent,
+                                modifier = Modifier.onGloballyPositioned { coordinates ->
+                                    tabBounds[index] = coordinates.boundsInParent()
+                                },
+                                onClick = {},
+                            )
+                        }
+                    }
+                    if (moving) {
+                        val targetBounds = tabBounds[activeIndex]
+                        val targetWidth = with(density) { (targetBounds?.width ?: 32.dp.toPx()).toDp() }
+                        val targetHeight = with(density) { (targetBounds?.height ?: 28.dp.toPx()).toDp() }
+                        val edgeExpansion = MobileInteractionGlassEdge * 2f * glassProgress
+                        val landingInset = MobileInteractionGlassEdge * (1f - glassProgress)
+                        Box(
+                            Modifier
+                                .width(targetWidth + edgeExpansion)
+                                .height(targetHeight + edgeExpansion)
+                                 .graphicsLayer {
+                                     translationX = (if (draggingGlass) draggedGlassX else glassX.value) + with(density) { landingInset.toPx() }
+                                     translationY = (targetBounds?.top ?: with(density) { 6.dp.toPx() }) -
+                                         with(density) { (MobileInteractionGlassEdge * glassProgress).toPx() }
+                                }
+                                .liquidMotionDeformation(
+                                    velocityX = if (draggingGlass) draggedGlassVelocityX else glassX.velocity,
+                                    velocityY = 0f,
+                                    density = density.density,
+                                )
+                                .zIndex(5f)
+                                 .liquidSelectionMorph(
+                                     backdrop = tabBackdrop,
+                                     shape = RoundedCornerShape(50),
+                                     fillColor = p.accentSoft,
+                                     glassProgress = glassProgress,
+                                     glassAlpha = 0.05f,
+                                     blurRadius = 2.dp,
+                                     refractionHeight = MobileInteractionGlassEdge,
+                                     refractionAmount = 20.dp,
+                                 ),
+                        )
+                    }
                 }
                 Spacer(Modifier.weight(1f))
                 Box(Modifier.width(1.dp).height(20.dp).background(p.border2))
@@ -411,12 +658,16 @@ private fun IconButton(
     tint: Color,
     background: Color = Color.Transparent,
     border: Color = Color.Transparent,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
+    val shape = RoundedCornerShape(50)
     Box(
-        Modifier.size(width = 32.dp, height = 28.dp).clip(RoundedCornerShape(6.dp)).background(background)
-            .border(1.dp, border, RoundedCornerShape(6.dp)).clickable(
-                interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick,
+        modifier.size(width = 32.dp, height = 28.dp).clip(shape).background(background)
+            .border(1.dp, border, shape).clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = androidx.compose.foundation.LocalIndication.current,
+                onClick = onClick,
             ),
         contentAlignment = Alignment.Center,
     ) { Icon(icon, label, tint = tint, modifier = Modifier.size(15.dp)) }
@@ -579,8 +830,9 @@ private fun editorLanguage(path: String): String = path.substringAfterLast('.', 
 @Composable
 private fun EditorToolbarButton(icon: ImageVector, label: String, enabled: Boolean, active: Boolean = false, onClick: () -> Unit) {
     val p = LocalNewmarkPalette.current
-    Box(Modifier.size(30.dp).clip(RoundedCornerShape(6.dp)).background(if (active) p.accentSoft else p.bgPrimary)
-        .border(1.dp, if (active) p.accentBorder else p.border2, RoundedCornerShape(6.dp)).clickable(enabled = enabled, onClick = onClick),
+    val shape = RoundedCornerShape(50)
+    Box(Modifier.size(30.dp).glassButtonSurface(shape, if (active) p.accentSoft else p.bgPrimary)
+        .border(1.dp, if (active) p.accentBorder else p.border2, shape).clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center) {
         Icon(icon, label, tint = if (active) p.accent else if (enabled) p.textSecondary else p.textTertiary.copy(alpha = .35f), modifier = Modifier.size(15.dp))
     }
@@ -748,9 +1000,21 @@ fun SubagentHistoryPage(agent: RemoteSubagent, onBack: () -> Unit) {
 private fun SubagentHistoryDialog(agent: RemoteSubagent, onDismiss: () -> Unit) {
     val p = LocalNewmarkPalette.current
     val (_, predictiveModifier) = predictiveBackMotion(onDismiss, fadeOnly = true)
+    val backdrop = rememberLiquidBackdrop()
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(predictiveModifier.fillMaxWidth(.82f).fillMaxHeight(.8f).widthIn(max = 680.dp).clip(RoundedCornerShape(12.dp))
-            .background(p.bgPrimary.copy(alpha = 0.78f)).border(1.dp, p.border2, RoundedCornerShape(12.dp))) {
+        DialogBackdropBlur(42.dp)
+        Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxSize().layerBackdrop(backdrop))
+        Box(predictiveModifier.fillMaxWidth(.82f).fillMaxHeight(.8f).widthIn(max = 680.dp)
+            .liquidGlassModifier(
+                backdrop = backdrop,
+                shape = MobilePopupShape,
+                alpha = 0f,
+                blurRadius = 8.dp,
+                refractionHeight = 4.dp,
+                refractionAmount = 8.dp,
+                surfaceColor = Color.Transparent,
+            )) {
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("实时历史 — 运行期间自动更新。", color = p.textSecondary, fontSize = 11.sp, modifier = Modifier.weight(1f))
@@ -758,6 +1022,7 @@ private fun SubagentHistoryDialog(agent: RemoteSubagent, onDismiss: () -> Unit) 
                 }
                 SubagentHistoryContent(agent, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp))
             }
+        }
         }
     }
 }

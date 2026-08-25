@@ -401,6 +401,24 @@ export function verifyAutoRouter(): Check[] {
     && ladder[1].deployment.modelId === 'equivalent'
     && ladder.every(attempt => attempt.deployment.providerId === 'p'),
   'auto fallback: failed initial call plus retry and explicit equivalent stay within three total attempts', checks);
+  const fallbackDisabledLadder = router.planAttempts(fallbackDecision, fallbackPool, {
+    error: classifyRouteFailure('HTTP 503 upstream unavailable'),
+    streamCommitted: false,
+    sideEffectCommitted: false,
+    allowModelFallback: false,
+  });
+  assert(fallbackDisabledLadder.length === 1
+    && fallbackDisabledLadder[0].kind === 'retry_same_deployment'
+    && fallbackDisabledLadder[0].deployment.modelId === fallbackDecision.resolvedDeployment?.modelId,
+  'auto fallback off: only a same-deployment retry is planned and no other model identity is eligible', checks);
+  const fallbackDisabledNonRetryable = router.planAttempts(fallbackDecision, fallbackPool, {
+    error: classifyRouteFailure('HTTP 402 insufficient_quota'),
+    streamCommitted: false,
+    sideEffectCommitted: false,
+    allowModelFallback: false,
+  });
+  assert(fallbackDisabledNonRetryable.length === 0,
+    'auto fallback off: a non-retryable failure cannot schedule an equivalent, fallback, or alternate model', checks);
   const globalFallbackPool = [
     ...fallbackPool,
     candidate('other', 'same-model-name', { fallbackOnly: true }),

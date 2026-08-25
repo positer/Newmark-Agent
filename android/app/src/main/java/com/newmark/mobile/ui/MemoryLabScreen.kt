@@ -5,6 +5,8 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -32,6 +34,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -52,6 +55,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateMapOf
@@ -68,21 +72,36 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.newmark.mobile.data.MemoryComponent
 import com.newmark.mobile.data.MemoryLabIndex
 import com.newmark.mobile.data.MemoryLabStore
 import com.newmark.mobile.ui.components.MarqueeBorder
+import com.newmark.mobile.ui.components.MobilePopupShape
+import com.newmark.mobile.ui.components.MobileInteractionGlassEdge
+import com.newmark.mobile.ui.components.liquidMotionDeformation
+import com.newmark.mobile.ui.components.liquidSelectionMorph
+import com.newmark.mobile.ui.components.DialogBackdropBlur
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
+import com.newmark.mobile.ui.components.glassButtonSurface
+import com.newmark.mobile.ui.components.rememberLiquidBackdrop
+import com.newmark.mobile.ui.components.liquidGlassModifier
+import com.newmark.mobile.ui.components.liquidHoldDragGesture
+import com.newmark.mobile.ui.components.LocalSidebarGestureLock
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.newmark.mobile.ui.theme.LocalGlassMode
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkAccent
 import com.newmark.mobile.ui.theme.NewmarkPalette
@@ -104,6 +123,7 @@ import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkTextTertiary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.android.awaitFrame
@@ -127,7 +147,11 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
 
     val (_, predictiveModifier) = predictiveBackMotion({
         if (view == "detail") view = "overview" else onBack()
-    }, fadeOnly = dialogMode)
+    },
+        fadeOnly = dialogMode,
+        retainProgressOnCommit = view == "overview",
+        settleProgressOnCommit = view == "detail",
+    )
     var selectedTag by remember { mutableStateOf("") }
     var selectedComponent by remember { mutableStateOf("") }
     var search by remember { mutableStateOf("") }
@@ -139,6 +163,14 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
         scope.launch {
             componentContent = withContext(Dispatchers.IO) { store.componentContent(slug) }
         }
+    }
+
+    fun selectView(value: String) {
+        if (value == "detail" && selectedComponent.isBlank()) {
+            selectedComponent = index.components.keys.sorted().firstOrNull().orEmpty()
+            if (selectedComponent.isNotBlank()) loadComponent(selectedComponent)
+        }
+        view = value
     }
 
     Column(
@@ -160,8 +192,7 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
             Box(
                 modifier = Modifier
                     .size(36.dp)
-                    .clip(CircleShape)
-                    .background(p.bgQuaternary)
+                    .glassButtonSurface(CircleShape, p.bgQuaternary)
                     .clickable(onClick = onBack),
                 contentAlignment = Alignment.Center,
             ) {
@@ -183,29 +214,11 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            listOf("overview" to "总览", "detail" to "详细").forEach { (value, label) ->
-                Box(
-                    modifier = Modifier
-                        .clip(NewmarkShapeMedium)
-                        .background(if (view == value) p.accentSoft else p.bgQuaternary)
-                        .clickable {
-                            if (value == "detail" && selectedComponent.isBlank()) {
-                                selectedComponent = index.components.keys.sorted().firstOrNull().orEmpty()
-                                if (selectedComponent.isNotBlank()) loadComponent(selectedComponent)
-                            }
-                            view = value
-                        }
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                ) {
-                    Text(label, fontSize = 11.5.sp, color = if (view == value) p.accent else p.textSecondary)
-                }
-                Spacer(Modifier.width(6.dp))
-            }
+            MemoryLabViewPager(view = view, onSelect = ::selectView)
             Spacer(Modifier.weight(1f))
             Box(
                 modifier = Modifier
-                    .clip(NewmarkShapeMedium)
-                    .background(p.bgQuaternary)
+                    .glassButtonSurface(NewmarkShapeMedium, p.bgQuaternary)
                     .clickable(enabled = !reindexing) {
                         reindexing = true
                         scope.launch {
@@ -306,20 +319,229 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
     }
 }
 
+@Composable
+private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
+    val p = LocalNewmarkPalette.current
+    val options = listOf("overview" to "总览", "detail" to "详细")
+    val selectedIndex = options.indexOfFirst { it.first == view }.coerceAtLeast(0)
+    val slotWidth = 64.dp
+    val trackHeight = 46.dp
+    val floatWidth = 76.dp
+    val floatHeight = 46.dp
+    val density = LocalDensity.current
+    val pagerBackdrop = rememberLiquidBackdrop()
+    val glassX = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val setSidebarGestureLock = LocalSidebarGestureLock.current
+    var activeIndex by remember { mutableIntStateOf(selectedIndex) }
+    var moving by remember { mutableStateOf(false) }
+    var lifting by remember { mutableStateOf(false) }
+    var landing by remember { mutableStateOf(false) }
+    var draggingGlass by remember { mutableStateOf(false) }
+    var draggedGlassX by remember { mutableFloatStateOf(0f) }
+    var draggedGlassVelocityX by remember { mutableFloatStateOf(0f) }
+    var flightJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val glassProgress by animateFloatAsState(if (landing || lifting) 0f else if (moving) 1f else 0f, tween(if (landing) 240 else 100), label = "memoryPagerGlassMaterial")
+    LaunchedEffect(selectedIndex) {
+        if (!moving) {
+            activeIndex = selectedIndex
+            glassX.snapTo(with(density) { selectedIndex * slotWidth.toPx() - 6.dp.toPx() })
+        }
+    }
+    fun indexAt(x: Float): Int = with(density) {
+        (x / slotWidth.toPx()).toInt().coerceIn(options.indices)
+    }
+    fun flyTo(index: Int, commit: Boolean) {
+        val redirecting = moving
+        flightJob?.cancel()
+        activeIndex = index
+        setSidebarGestureLock("memory-lab-view-pager", true)
+        if (!redirecting) lifting = true
+        moving = true
+        flightJob = scope.launch {
+            draggingGlass = false
+            draggedGlassVelocityX = 0f
+            if (!redirecting) {
+                glassX.snapTo(with(density) { selectedIndex * slotWidth.toPx() - 6.dp.toPx() })
+            }
+            val targetX = with(density) { index * slotWidth.toPx() - 6.dp.toPx() }
+            val staysInPlace = kotlin.math.abs(glassX.value - targetX) < 0.5f
+            kotlinx.coroutines.yield()
+            lifting = false
+            if (staysInPlace) delay(100) else glassX.animateTo(targetX, tween(380))
+            landing = true
+            delay(240)
+            landing = false
+            moving = false
+            setSidebarGestureLock("memory-lab-view-pager", false)
+            if (commit) onSelect(options[index].first)
+        }
+    }
+    fun holdAt(index: Int) {
+        val redirecting = moving
+        flightJob?.cancel()
+        activeIndex = index
+        setSidebarGestureLock("memory-lab-view-pager", true)
+        if (!redirecting) lifting = true
+        moving = true
+        flightJob = scope.launch {
+            draggingGlass = false
+            draggedGlassVelocityX = 0f
+            if (!redirecting) {
+                glassX.snapTo(with(density) { selectedIndex * slotWidth.toPx() - 6.dp.toPx() })
+            }
+            kotlinx.coroutines.yield()
+            lifting = false
+            glassX.animateTo(
+                with(density) { index * slotWidth.toPx() - 6.dp.toPx() },
+                tween(380),
+            )
+        }
+    }
+    Box(
+        Modifier
+            .width(slotWidth * options.size)
+            .height(trackHeight)
+            .background(p.bgQuaternary, RoundedCornerShape(50))
+            .liquidHoldDragGesture(
+                options.size,
+                selectedIndex,
+                onCandidateStart = { setSidebarGestureLock("memory-pager-candidate", true) },
+                onCandidateEnd = { setSidebarGestureLock("memory-pager-candidate", false) },
+                onTap = { flyTo(indexAt(it.x), commit = true) },
+                onHoldStart = { holdAt(indexAt(it.x)) },
+                onDrag = { position, delta ->
+                    flightJob?.cancel()
+                    moving = true
+                    lifting = false
+                    draggingGlass = true
+                    activeIndex = indexAt(position.x)
+                    draggedGlassX = with(density) {
+                        (position.x - floatWidth.toPx() / 2f).coerceIn(
+                            -6.dp.toPx(),
+                            options.size * slotWidth.toPx() - floatWidth.toPx() + 6.dp.toPx(),
+                        )
+                    }
+                    draggedGlassVelocityX = delta.x * 60f
+                },
+                 onHoldEnd = { _, _ ->
+                     val commit = activeIndex
+                     flightJob = scope.launch {
+                         lifting = false
+                         glassX.snapTo(draggedGlassX)
+                         draggingGlass = false
+                         glassX.animateTo(
+                             with(density) { commit * slotWidth.toPx() - 6.dp.toPx() },
+                             tween(120),
+                         )
+                         landing = true
+                        delay(240)
+                        landing = false
+                        moving = false
+                        draggingGlass = false
+                        draggedGlassVelocityX = 0f
+                        setSidebarGestureLock("memory-lab-view-pager", false)
+                        onSelect(options[commit].first)
+                    }
+                },
+                onCancel = {
+                    moving = false
+                    lifting = false
+                    landing = false
+                    draggingGlass = false
+                    draggedGlassVelocityX = 0f
+                    setSidebarGestureLock("memory-lab-view-pager", false)
+                },
+            ),
+    ) {
+        Row(
+            Modifier
+                .fillMaxSize()
+                .then(if (moving) Modifier.layerBackdrop(pagerBackdrop) else Modifier),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            options.forEachIndexed { index, (_, label) ->
+                Box(
+                    Modifier
+                        .width(slotWidth)
+                        .height(34.dp)
+                        .background(if (!moving && index == selectedIndex) p.accentSoft else Color.Transparent, RoundedCornerShape(50)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(label, fontSize = 11.5.sp, color = if (!moving && index == selectedIndex) p.accent else p.textSecondary)
+                }
+            }
+        }
+        if (moving) {
+            val edgeExpansion = MobileInteractionGlassEdge * 2f * glassProgress
+            val landingInset = MobileInteractionGlassEdge * (1f - glassProgress)
+            Box(
+                Modifier
+                    .width(slotWidth + edgeExpansion)
+                    .height(34.dp + edgeExpansion)
+                     .graphicsLayer {
+                         translationX = (if (draggingGlass) draggedGlassX else glassX.value) +
+                             with(density) { landingInset.toPx() }
+                         translationY = with(density) { landingInset.toPx() }
+                    }
+                    .liquidMotionDeformation(
+                        velocityX = if (draggingGlass) draggedGlassVelocityX else glassX.velocity,
+                        velocityY = 0f,
+                        density = density.density,
+                    )
+                    .zIndex(4f)
+                    .liquidSelectionMorph(
+                        backdrop = pagerBackdrop,
+                        shape = RoundedCornerShape(50),
+                        fillColor = p.accentSoft,
+                        glassProgress = glassProgress,
+                        glassAlpha = 0.05f,
+                        blurRadius = 2.dp,
+                        refractionHeight = MobileInteractionGlassEdge,
+                        refractionAmount = 20.dp,
+                    ),
+            )
+        }
+    }
+}
+
 /** 非竖屏恢复 PC sub-window 语义；占用更大的可用窗口但仍保留遮罩与关闭层级。 */
 @Composable
 fun MemoryLabDialog(onDismiss: () -> Unit) {
     val p = LocalNewmarkPalette.current
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(.94f)
-                .fillMaxHeight(.92f)
-                .clip(RoundedCornerShape(14.dp))
-                .background(p.bgPrimary.copy(alpha = 0.78f))
-                .border(1.dp, p.border2, RoundedCornerShape(14.dp)),
-        ) {
-            MemoryLabScreen(onBack = onDismiss, dialogMode = true)
+    val glass = LocalGlassMode.current
+    // Dialog is its own window: capture the dialog background with a local
+    // backdrop so the surface can refract what is behind it (Kyant glass).
+    val backdrop = rememberLiquidBackdrop()
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        DialogBackdropBlur(42.dp)
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxSize().layerBackdrop(backdrop))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(.92f)
+                    .fillMaxHeight(.88f)
+                    .widthIn(max = 960.dp)
+                    .heightIn(max = 720.dp)
+                    .liquidGlassModifier(
+                        backdrop = backdrop,
+                        shape = MobilePopupShape,
+                        alpha = 0f,
+                        blurRadius = 8.dp,
+                        refractionHeight = 4.dp,
+                        refractionAmount = 8.dp,
+                        surfaceColor = Color.Transparent,
+                    )
+                    .clip(MobilePopupShape),
+            ) {
+                MemoryLabScreen(onBack = onDismiss, dialogMode = true)
+            }
         }
     }
 }
@@ -416,13 +638,13 @@ private fun Overview(
             Text("记忆 Tag 图谱 · ${index.tags.size} 标签 · ${index.components.size} 组件",
                 fontSize = 10.5.sp, color = p.textTertiary, modifier = Modifier.weight(1f))
             Text(relationMode.label, fontSize = 10.sp, color = p.textSecondary,
-                modifier = Modifier.clip(RoundedCornerShape(50)).background(p.bgQuaternary).clickable {
+                modifier = Modifier.glassButtonSurface(RoundedCornerShape(50), p.bgQuaternary).clickable {
                     relationMode = relationMode.next()
                 }.padding(horizontal = 8.dp, vertical = 6.dp))
             Text("清除", fontSize = 10.sp, color = p.textSecondary,
-                modifier = Modifier.padding(start = 5.dp).clip(RoundedCornerShape(50)).clickable { focusId = "" }.padding(7.dp))
+                modifier = Modifier.padding(start = 5.dp).glassButtonSurface(RoundedCornerShape(50)).clickable { focusId = "" }.padding(7.dp))
             Text("重置", fontSize = 10.sp, color = p.textSecondary,
-                modifier = Modifier.clip(RoundedCornerShape(50)).clickable { cameraScale = .88f; cameraPan = Offset.Zero; focusId = "" }.padding(7.dp))
+                modifier = Modifier.glassButtonSurface(RoundedCornerShape(50)).clickable { cameraScale = .88f; cameraPan = Offset.Zero; focusId = "" }.padding(7.dp))
         }
         Text(if (focusId.isBlank()) "未选择" else "已选择：${graph.nodeMap[focusId]?.label.orEmpty()}",
             color = p.textTertiary, fontSize = 9.5.sp, modifier = Modifier.padding(vertical = 6.dp))

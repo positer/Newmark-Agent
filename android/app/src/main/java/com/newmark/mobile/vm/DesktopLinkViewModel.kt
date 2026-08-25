@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
@@ -35,6 +36,7 @@ import com.newmark.mobile.data.RemoteTrackingContract
 import com.newmark.mobile.data.SendResponse
 import com.newmark.mobile.data.WorkEvent
 import com.newmark.mobile.data.WorkspaceInfo
+import com.newmark.mobile.service.LocalAgentForegroundService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
@@ -44,6 +46,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collect
 import org.json.JSONObject
 import org.json.JSONArray
 import kotlin.coroutines.coroutineContext
@@ -301,7 +305,25 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
         // after an emulator restart); starting the 5-10s hello timeout during
         // first composition causes a large burst of state changes and jank.
         // NewmarkApp calls initialize() after the first frame instead.
+        viewModelScope.launch {
+            snapshotFlow { runningRemoteAgentCount() }
+                .distinctUntilChanged()
+                .collect { count ->
+                    LocalAgentForegroundService.updateRemoteCount(getApplication(), count)
+                }
+        }
     }
+
+    private fun runningRemoteAgentCount(): Int = buildSet {
+        desktopState?.conversations.orEmpty().filter { it.running }.forEach { add(it.id) }
+        workspaceConversations.filter { it.running }.forEach { add(it.id) }
+        val selectedRunning = isSending || liveRun?.status == "running" ||
+            conversationUiState.runtime?.running == true || conversationUiState.runtime?.stopRequested == true ||
+            conversationUiState.flow?.running == true
+        if (selectedRunning) {
+            add(selectedConversationId ?: openedWorkspaceActiveConversationId.ifBlank { "remote-active" })
+        }
+    }.size
 
     /** Hydrate the saved device and begin remote work after the first frame. */
     fun initialize() {
@@ -1774,6 +1796,31 @@ class DesktopLinkViewModel(app: Application) : AndroidViewModel(app) {
                     conversationId = event.conversationId,
                     workspaceId = eventWorkspaceId,
                 )
+            }
+
+            "queue_update" -> {
+                // PC kernel broadcasts structured queue rows on every queue
+                // mutation. Apply them so the mobile client mirrors the remote
+                // queue (id-bearing rows) without waiting for a manual refresh.
+                RemotePayloadNormalizer.queueUpdateState(conversationUiState, event)?.let {
+                    conversationUiState = it
+                }
+                if (!acceptsNonTerminalEvent) return
+                if (event.status.isNotBlank()) {
+                    updateWorkspaceConversationRuntime(eventWorkspaceId, event.conversationId, event.status)
+                }
+                if (current != null && sameRun(current.runId, runId)) {
+                    liveRun = current.copy(events = appendUniqueEvent(current.events, event))
+                } else {
+                    liveRun = RemoteWorkRun(
+                        runId = runId,
+                        status = "running",
+                        startedAt = event.timestamp,
+                        events = listOf(event),
+                        anchorMessageId = event.anchorMessageId,
+                        branchNodeId = event.branchNodeId,
+                    )
+                }
             }
 
             else -> {

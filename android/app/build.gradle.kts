@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -11,9 +11,9 @@ android {
     defaultConfig {
         applicationId = "com.newmark.mobile"
         minSdk = 24
-        targetSdk = 35
-        versionCode = 505
-        versionName = "0.5.5"
+        targetSdk = 36
+        versionCode = 507
+        versionName = "0.5.7"
     }
 
     buildTypes {
@@ -79,6 +79,8 @@ dependencies {
     // Bundled models keep the local browser OCR deterministic and offline.
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+    // Vendored Kyant backdrop (AndroidLiquidGlass) Liquid Glass effect library.
+    implementation("org.jetbrains:annotations:24.1.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.json:json:20240303")

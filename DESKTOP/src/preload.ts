@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('api', {
   startupWaitForBackend: () => ipcRenderer.invoke('startup:waitForBackend'),
   startupUiReady: (payload: Record<string, unknown>) => ipcRenderer.invoke('startup:uiReady', payload),
   startupUiFailed: (payload: Record<string, unknown>) => ipcRenderer.invoke('startup:uiFailed', payload),
+  captureLiquidBackdrop: (size?: { width?: number; height?: number }) => ipcRenderer.invoke('glass:captureBackdrop', size),
   onStartupStatus: (callback: (payload: Record<string, unknown>) => void) => {
     ipcRenderer.on('startup:status', (_event: unknown, payload: Record<string, unknown>) => callback(payload));
   },

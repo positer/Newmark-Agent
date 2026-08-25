@@ -1,6 +1,7 @@
 package com.newmark.mobile.data
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
@@ -17,6 +18,7 @@ import java.util.concurrent.TimeUnit
 
 /** Durable mobile capability switches. The executor reads these values on every call. */
 class MobileCapabilityStore(context: Context) {
+    private val applicationContext = context.applicationContext
     private val prefs = context.applicationContext.getSharedPreferences("mobile-capabilities", Context.MODE_PRIVATE)
 
     init { PrivilegedToolBridge.configure(context.applicationContext.packageName) }
@@ -29,12 +31,21 @@ class MobileCapabilityStore(context: Context) {
         get() = prefs.getBoolean("app_list_requested", false)
         set(value) = prefs.edit().putBoolean("app_list_requested", value).apply()
 
+    var backgroundNetworkRequested: Boolean
+        get() = prefs.getBoolean("background_network_requested", false)
+        set(value) = prefs.edit().putBoolean("background_network_requested", value).apply()
+
     var highPrivilegeEnabled: Boolean
         get() = prefs.getBoolean("high_privilege_enabled", false)
         set(value) = prefs.edit().putBoolean("high_privilege_enabled", value).apply()
 
     fun allFilesGranted(): Boolean = Build.VERSION.SDK_INT < 30 || Environment.isExternalStorageManager()
     fun appListGranted(): Boolean = appListRequested
+    fun backgroundNetworkAllowed(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return true
+        val connectivity = applicationContext.getSystemService(ConnectivityManager::class.java) ?: return true
+        return connectivity.restrictBackgroundStatus != ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED
+    }
     fun highPrivilegeActive(): Boolean = highPrivilegeEnabled && PrivilegedToolBridge.isAvailable()
     fun shizukuActive(): Boolean = highPrivilegeEnabled && PrivilegedToolBridge.isShizukuAvailable()
     fun rootActive(): Boolean = highPrivilegeEnabled && PrivilegedToolBridge.isRootAvailable()

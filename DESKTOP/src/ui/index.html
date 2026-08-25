@@ -80,6 +80,7 @@ try {
   --accent-glow: rgba(91,120,255,0.3);
   --accent2: #38d4a0;
   --accent2-glow: rgba(56,212,160,0.3);
+  --chat-canvas: color-mix(in srgb, var(--app-bg) 92%, var(--accent) 8%);
 
   /* Glass layers */
   --glass-alpha: 0.85;
@@ -96,6 +97,16 @@ try {
   --glass-border-1: rgba(255,255,255,0.06);
   --glass-border-2: rgba(255,255,255,0.08);
   --glass-border-3: rgba(255,255,255,0.10);
+
+  /* Kyant AndroidLiquidGlass (backdrop) liquid-glass parity tokens.
+     CSS equivalent of the library lens edge refraction, top highlight,
+     inner shadow and saturation boost (saturate(140%) == vibrancy). */
+  --liquid-edge-glow: rgba(255,255,255,0.10);
+  --liquid-edge-glow-strong: rgba(255,255,255,0.16);
+  --liquid-top-highlight: inset 0 1px 0 rgba(255,255,255,0.10);
+  --liquid-inner-shadow: inset 0 -1px 0 rgba(0,0,0,0.22);
+  --liquid-outer-shadow: 0 8px 32px rgba(0,0,0,0.45);
+  --liquid-refraction: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0) 18%, rgba(0,0,0,0) 82%, rgba(0,0,0,0.18));
 
   /* Borders & corners */
   --border: rgba(255,255,255,0.06);
@@ -130,6 +141,15 @@ try {
   --glass-blur-1: 1.2px;
   --glass-blur-2: 2.4px;
   --glass-blur-3: 3px;
+  /* One physical glass setting, two material roles. Carrier glass frosts the
+     backdrop; the moving float stays clear and only refracts/ disperses it. */
+  --carrier-glass-blur: 6.6px;
+  --carrier-glass-alpha: 0.374;
+  --liquid-interaction-edge: 6px;
+  --liquid-float-refraction-height: var(--liquid-interaction-edge);
+  --liquid-float-refraction-amount: 24px;
+  --liquid-float-chromatic-aberration: 1;
+  --liquid-float-optical-opacity: 1;
 
   /* Transitions */
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
@@ -211,8 +231,9 @@ try {
   --glass-rgb-1: 255 255 255;
   --glass-rgb-2: 255 255 255;
   --glass-rgb-3: 255 255 255;
-  --modal-surface: rgba(248,250,255,0.76);
-  --modal-shadow: 0 24px 80px rgba(41,55,92,0.22), 0 0 42px rgba(255,255,255,0.72), inset 0 1px 0 rgba(255,255,255,0.96), inset 0 0 28px rgba(255,255,255,0.42);
+  --modal-surface: rgba(248,250,255,0.82);
+  --settings-modal-surface: rgba(255,255,255,0.94);
+  --modal-shadow: 0 24px 70px rgba(41,55,92,0.20), inset 0 1px 0 rgba(255,255,255,0.62), inset 0 -1px 0 rgba(46,58,92,0.10);
   --glass-border-1: rgba(0,0,0,0.06);
   --glass-border-2: rgba(0,0,0,0.08);
   --glass-border-3: rgba(0,0,0,0.10);
@@ -223,6 +244,7 @@ try {
   --shadow-md: 0 2px 8px rgba(40,52,86,0.07);
   --shadow-lg: 0 6px 18px rgba(40,52,86,0.09);
   --accent-glow: rgba(74,104,223,0.25);
+  --chat-canvas: color-mix(in srgb, var(--app-bg) 96%, var(--accent) 4%);
 }
 
 /* --- Reset & Base --- */
@@ -357,6 +379,9 @@ html, body {
   border: 0;
 }
 button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus { outline: none; }
+/* Liquid-glass controls use one continuous capsule edge. Equal-width icon
+   buttons naturally become circles; wider controls become end-rounded pills. */
+button { border-radius: var(--radius-full) !important; }
 :where(button, select, input, textarea, [contenteditable], [tabindex]):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -505,6 +530,12 @@ button:focus, select:focus, input:focus, textarea:focus, [contenteditable]:focus
   transition: opacity var(--duration-normal) var(--ease-out-expo), transform var(--duration-normal) var(--ease-out-expo), visibility 0ms linear var(--duration-normal);
 }
 
+#left-tool-surface {
+  /* Gesture delegation only: do not introduce another flex item. Its children
+     retain the original direct-child layout inside #left-content. */
+  display: contents;
+}
+
 #left-thumb {
   display: flex;
   position: absolute;
@@ -630,7 +661,7 @@ button.left-nav-icon { width: calc(100% - 12px); }
   transition: max-width var(--duration-slow) var(--ease-out-expo) 80ms, opacity var(--duration-normal) var(--ease-out-expo) 40ms, transform var(--duration-slow) var(--ease-out-expo) 80ms, visibility 0ms linear 200ms;
 }
 
-#left.collapsing #left-content > div[style*="uppercase"],
+#left.collapsing #left-tool-surface > div[style*="uppercase"],
 #left.collapsing #left-ws-header,
 #left.collapsing #left-ws-add {
   opacity: 0;
@@ -676,7 +707,7 @@ button.left-nav-icon { width: calc(100% - 12px); }
   vertical-align: top;
 }
 
-#left.collapsed #left-content > div[style*="uppercase"] {
+#left.collapsed #left-tool-surface > div[style*="uppercase"] {
   height: 0;
   padding: 0;
   overflow: hidden;
@@ -774,6 +805,7 @@ button.left-nav-icon { width: calc(100% - 12px); }
   transition: background var(--duration-fast) var(--ease-out-expo), width var(--duration-normal) var(--ease-out-expo), height var(--duration-normal) var(--ease-out-expo), padding var(--duration-normal) var(--ease-out-expo), margin var(--duration-normal) var(--ease-out-expo), gap var(--duration-normal) var(--ease-out-expo);
   white-space: nowrap;
   overflow: hidden;
+  border-radius: var(--radius-full);
 }
 
 button.left-ws-item {
@@ -789,7 +821,7 @@ button.left-ws-item {
 
 .left-ws-item .ws-icon {
   width: 20px; height: 20px;
-  border-radius: var(--radius-sm);
+  border-radius: 50%;
   background: linear-gradient(135deg, var(--accent), #7b93ff);
   color: #fff;
   font-size: 10px;
@@ -932,8 +964,8 @@ button.left-ws-item {
   width: 0;
   flex-shrink: 0;
   background: var(--glass-bg-3);
-  backdrop-filter: blur(var(--glass-blur-3)) saturate(130%);
-  -webkit-backdrop-filter: blur(var(--glass-blur-3)) saturate(130%);
+  backdrop-filter: blur(var(--glass-blur-1));
+  -webkit-backdrop-filter: blur(var(--glass-blur-1));
   border-right: 1px solid var(--glass-border-1);
   display: flex;
   flex-direction: column;
@@ -991,6 +1023,7 @@ button.left-ws-item {
   flex: 1;
   overflow-y: auto;
   padding: 4px 8px;
+  position: relative;
 }
 
 .conv-item {
@@ -999,7 +1032,7 @@ button.left-ws-item {
   gap: 6px;
   padding: 8px 10px;
   margin: 2px 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   cursor: pointer;
   background: var(--glass-bg-1);
   border: 1px solid var(--glass-border-1);
@@ -1009,7 +1042,7 @@ button.left-ws-item {
 .conv-item:hover { background: var(--glass-bg-2); border-color: var(--border-hover); }
 .conv-item.active { border-color: var(--accent); background: rgba(91,120,255,0.1); }
 .conv-item.marquee-border::before {
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
 }
 
 .conv-summary {
@@ -1053,8 +1086,52 @@ button.left-ws-item {
   to { transform: rotate(360deg); }
 }
 
-.conv-item.dragging { opacity: 0.58; }
-.conv-item.drag-over { border-color: var(--accent); background: rgba(91,120,255,0.14); }
+.conv-item.dragging { opacity: 0; }
+#conversation-list.conversation-reordering .conv-item.active:not(.conversation-glass-dragging) {
+  border-color: var(--glass-border-1);
+  background: var(--glass-bg-1);
+}
+.conv-item.conversation-glass-dragging {
+  background: transparent;
+  background-color: transparent !important;
+  background-image: none !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: var(--liquid-top-highlight), var(--liquid-inner-shadow), 0 8px 22px rgba(0,0,0,.3);
+  transform: scale(1.06);
+}
+.conversation-selection-float.conversation-drag-following {
+  transition: opacity 120ms var(--ease-out-expo) !important;
+}
+.conversation-drag-content {
+  position: absolute;
+  inset: 9px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text);
+  pointer-events: none;
+  transform: scale(1);
+  transform-origin: center;
+}
+.conversation-drag-content .conv-summary { min-width: 0; flex: 1; }
+.conversation-drag-content button { pointer-events: none; }
+.conversation-selection-float.liquid-selection-landing > .conversation-drag-content {
+  /* The optical shell contracts into the destination color block. Keep the
+     carried label/icons at their original size until ownership returns. */
+  transform: scale(calc(1 / .86));
+  transition: transform 120ms var(--ease-out-expo);
+}
+.conversation-selection-float.liquid-selection-landing > .conversation-drag-content {
+  transition-duration: 180ms;
+}
 .conv-rename-input {
   flex: 1;
   min-width: 0;
@@ -1124,10 +1201,9 @@ button.left-ws-item {
   overflow: auto;
   padding: 6px;
   border: 1px solid var(--glass-border-2);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--modal-surface);
-  box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(var(--glass-blur-3)) saturate(1.08);
+  box-shadow: var(--shadow-lg), var(--liquid-top-highlight), var(--liquid-inner-shadow);
 }
 .conv-action-menu:popover-open { display: block; animation: model-menu-in 150ms var(--ease-out-expo); }
 
@@ -1227,6 +1303,7 @@ button.left-ws-item {
   backdrop-filter: blur(var(--glass-blur-2)) saturate(130%);
   -webkit-backdrop-filter: blur(var(--glass-blur-2)) saturate(130%);
   border-left: 1px solid var(--glass-border-1);
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1236,7 +1313,7 @@ button.left-ws-item {
 #right.open {
   width: var(--right-width);
   opacity: 1;
-  box-shadow: -18px 0 40px rgba(0,0,0,0.16);
+  box-shadow: none;
 }
 
 [data-theme="light"] #right.open {
@@ -1792,8 +1869,6 @@ button.left-ws-item {
   height: 34px;
   flex-shrink: 0;
   background: var(--glass-bg-3);
-  backdrop-filter: blur(var(--glass-blur-3)) saturate(130%);
-  -webkit-backdrop-filter: blur(var(--glass-blur-3)) saturate(130%);
   border-top: 1px solid var(--glass-border-1);
   display: flex;
   flex-direction: column;
@@ -2057,6 +2132,8 @@ button.left-ws-item {
   overflow: hidden;
   position: relative;
   min-height: 0;
+  /* Opaque theme-tinted foundation below the transcript, rails and glass. */
+  background-color: var(--chat-canvas);
 }
 
 #chat-area {
@@ -3296,8 +3373,7 @@ button.todo-item { background: transparent; }
   padding: 12px 16px;
   border-top: 1px solid var(--glass-border-2);
   background: var(--glass-bg-2);
-  backdrop-filter: blur(var(--glass-blur-3)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--glass-blur-3)) saturate(140%);
+  box-shadow: var(--liquid-top-highlight), var(--liquid-inner-shadow);
 }
 
 #input-area textarea {
@@ -3443,10 +3519,9 @@ button.todo-item { background: transparent; }
   overflow: auto;
   padding: 7px;
   border: 1px solid var(--glass-border-2);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--modal-surface);
-  box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(var(--glass-blur-3)) saturate(1.08);
+  box-shadow: var(--shadow-lg), var(--liquid-top-highlight), var(--liquid-inner-shadow);
 }
 .model-select-menu:popover-open { display: block; animation: model-menu-in 150ms var(--ease-out-expo); }
 
@@ -3470,6 +3545,85 @@ button.todo-item { background: transparent; }
 .model-select-menu-option:hover,
 .model-select-menu-option:focus-visible { background: var(--control-hover-bg); color: var(--text-bright); outline: none; }
 .model-select-menu-option.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text-bright); }
+.liquid-selection-source { background: transparent !important; border-color: transparent !important; }
+.liquid-selection-source::after { display: none !important; opacity: 0 !important; }
+.conv-item.liquid-selection-covered { border-color: transparent !important; }
+.conv-item.liquid-selection-source.marquee-border::before,
+.conv-item.liquid-selection-covered.marquee-border::before { opacity: 0 !important; }
+/* Rails and selectable menus are governed by one shared moving glass block.
+   Suppress the generic pressed pseudo-glass so the destination never creates
+   a second block while the source block is flying toward it. */
+.model-select-menu-option::after,
+.newmark-select-option::after,
+.left-nav-icon::after,
+.lt-item::after,
+.left-ws-item::after,
+.tab-btn::after,
+.stab-btn[data-stab]::after,
+.stab-btn[data-plugin-tab]::after,
+.mode-toggle-btn[data-mode]::after,
+.memory-lab-view-menu button[data-memory-view]::after {
+  display: none !important;
+  opacity: 0 !important;
+}
+.left-ws-item.liquid-selection-source,
+.tab-btn.liquid-selection-source { background: transparent !important; }
+#left-ws-list,
+#right-tabs { position: relative; }
+.left-nav-icon.liquid-tool-active,
+.lt-item.liquid-tool-active { background: var(--control-hover-bg); color: var(--text-bright); }
+.liquid-selection-float {
+  --liquid-lift-scale: .94;
+  --liquid-motion-angle: 0rad;
+  --liquid-motion-stretch: 1;
+  --liquid-motion-squash: 1;
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  box-sizing: border-box;
+  border-radius: var(--radius-full);
+  color: var(--text-bright);
+  pointer-events: none;
+  overflow: visible;
+  opacity: 0;
+  transform: scale(var(--liquid-lift-scale)) rotate(var(--liquid-motion-angle)) scaleX(var(--liquid-motion-stretch)) scaleY(var(--liquid-motion-squash)) rotate(calc(-1 * var(--liquid-motion-angle)));
+  transform-origin: center;
+  background: transparent;
+  background-color: transparent !important;
+  background-image: none !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.22), inset 0 -1px 0 rgba(0,0,0,0.18), 0 9px 24px rgba(0,0,0,0.28);
+  transition: top 240ms var(--ease-out-expo), left 240ms var(--ease-out-expo), width 240ms var(--ease-out-expo), height 240ms var(--ease-out-expo), opacity 80ms var(--ease-out-expo), transform 24ms linear;
+  will-change: top, left, width, height, transform;
+}
+.liquid-selection-float.visible { opacity: 1; --liquid-lift-scale: 1; }
+.liquid-selection-float.liquid-selection-landing {
+  opacity: 0;
+  --liquid-lift-scale: .86;
+  transform: scale(var(--liquid-lift-scale)) rotate(var(--liquid-motion-angle)) scaleX(var(--liquid-motion-stretch)) scaleY(var(--liquid-motion-squash)) rotate(calc(-1 * var(--liquid-motion-angle)));
+  transition: opacity 120ms var(--ease-out-expo), transform 120ms var(--ease-out-expo) !important;
+}
+.liquid-selection-float.liquid-selection-viewport {
+  position: fixed;
+  inset: auto;
+  z-index: 1000;
+  margin: 0;
+  border: 0;
+}
+.liquid-selection-float.liquid-selection-primed { transition: none !important; }
+.liquid-selection-float.liquid-selection-viewport:popover-open { display: flex; }
+.liquid-selection-float::-webkit-scrollbar { display: none; }
+.liquid-selection-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  pointer-events: none;
+}
 @keyframes model-menu-in { from { opacity: 0; transform: translateY(5px) scale(.985); } to { opacity: 1; transform: none; } }
 
 .newmark-select-shell {
@@ -3508,8 +3662,7 @@ button.todo-item { background: transparent; }
   border: 1px solid var(--glass-border-2);
   border-radius: var(--radius-lg);
   background: var(--modal-surface);
-  box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(var(--glass-blur-3)) saturate(1.08);
+  box-shadow: var(--shadow-lg), var(--liquid-top-highlight), var(--liquid-inner-shadow);
 }
 .newmark-select-shell.open .newmark-select-menu { display: block; animation: model-menu-in 150ms var(--ease-out-expo); }
 .newmark-select-menu-group { padding: 7px 9px 4px; color: var(--text-accent); font: 700 11px var(--font-ui); }
@@ -3530,6 +3683,7 @@ button.todo-item { background: transparent; }
 .newmark-select-option:hover,
 .newmark-select-option:focus-visible { background: var(--control-hover-bg); color: var(--text-bright); outline: none; }
 .newmark-select-option.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text-bright); }
+.newmark-select-option.liquid-selection-source { background: transparent !important; }
 .newmark-select-option:disabled { opacity: .42; cursor: not-allowed; }
 .setting-control > .newmark-select-shell,
 .auto-input-group > .newmark-select-shell,
@@ -3668,9 +3822,11 @@ button.todo-item { background: transparent; }
 .mode-toggle {
   display: flex;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
+  border-radius: var(--radius-full);
+  overflow: visible;
   flex-shrink: 0;
+  position: relative;
+  padding: 2px;
 }
 
 .mode-toggle-btn {
@@ -3686,8 +3842,24 @@ button.todo-item { background: transparent; }
 }
 
 .mode-toggle-btn:hover { background: rgba(255,255,255,0.05); color: var(--text); }
-.mode-toggle-btn.active { background: rgba(91,120,255,0.15); color: var(--accent); }
+.mode-toggle-btn.active { background: rgba(91,120,255,0.15); color: var(--accent); border-radius: var(--radius-full); }
 .mode-toggle-btn:active { transform: scale(0.95) translateZ(0); }
+
+.workspace-type-pager {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  position: relative;
+  gap: 2px;
+  padding: 3px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  overflow: visible;
+  background: var(--control-bg);
+}
+.workspace-type-option { display:flex; align-items:center; justify-content:center; min-width:0; padding:7px 10px; border-radius:var(--radius-full); color:var(--text-dim); font-size:12px; cursor:pointer; user-select:none; }
+.workspace-type-option.active { background:var(--control-hover-bg); color:var(--text-bright); }
+.workspace-type-option input { position:absolute; opacity:0; pointer-events:none; }
 
 #submit-btn {
   width: 34px; height: 34px;
@@ -4071,16 +4243,24 @@ button.todo-item { background: transparent; }
    ============================================================ */
 .settings-tabs {
   display: flex;
+  position: relative;
   gap: 4px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--glass-border-1);
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--glass-border-1);
+  border-radius: var(--radius-full);
+  background: var(--glass-bg-1);
   margin-bottom: 14px;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.settings-tabs::-webkit-scrollbar { display: none; }
 
 .stab-btn {
   padding: 6px 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--text-dim);
   font-size: 12px;
@@ -4391,6 +4571,42 @@ textarea.mcp-input { min-height:76px; resize:vertical; font-family:var(--font-mo
   box-shadow: 0 0 4px rgba(0,0,0,0.3);
 }
 
+#settings-glass-opacity {
+  --liquid-range-progress: 85%;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(90deg, var(--accent) 0 var(--liquid-range-progress), var(--glass-border-2) var(--liquid-range-progress) 100%);
+  cursor: pointer;
+}
+#settings-glass-opacity::-webkit-slider-thumb {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  background: var(--accent);
+  box-shadow: 0 2px 6px rgba(0,0,0,.3);
+  transition: width 120ms var(--ease-out-expo), height 120ms var(--ease-out-expo), transform 120ms var(--ease-out-expo), box-shadow 120ms var(--ease-out-expo);
+}
+#settings-glass-opacity.liquid-range-dragging::-webkit-slider-thumb {
+  width: 26px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--liquid-refraction);
+  backdrop-filter: blur(calc(var(--glass-blur-3) * 4)) saturate(145%);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur-3) * 4)) saturate(145%);
+  box-shadow: var(--liquid-top-highlight), var(--liquid-inner-shadow), 0 8px 20px rgba(0,0,0,.34);
+  transform: translateY(-2px) scale(1.22);
+  transition: none;
+}
+.settings-glass-range-line { display:flex; align-items:center; gap:10px; }
+.settings-glass-range-line #settings-glass-opacity { flex:1; min-width:0; }
+#settings-glass-value {
+  min-width: 42px;
+  color: var(--text-bright);
+  font: 650 11px var(--font-mono);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .setting-desc {
   font-size: 10px;
   color: var(--text-dim);
@@ -4504,9 +4720,13 @@ textarea.mcp-input { min-height:76px; resize:vertical; font-family:var(--font-mo
 }
 
 [data-theme="light"] .sub-win {
-  backdrop-filter: blur(calc(var(--glass-blur-3) * 1.35)) saturate(185%) brightness(1.12);
-  -webkit-backdrop-filter: blur(calc(var(--glass-blur-3) * 1.35)) saturate(185%) brightness(1.12);
-  border-color: rgba(255,255,255,0.82);
+  backdrop-filter: blur(calc(var(--glass-blur-3) * 2.2)) saturate(165%) brightness(1.01);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur-3) * 2.2)) saturate(165%) brightness(1.01);
+  border-color: rgba(54,68,106,0.14);
+  box-shadow: var(--modal-shadow);
+}
+[data-theme="light"] .sub-win.liquid-glass-carrier {
+  background: var(--settings-modal-surface) !important;
 }
 .memory-lab-search-results[hidden] {
   display: none;
@@ -4521,7 +4741,7 @@ textarea.mcp-input { min-height:76px; resize:vertical; font-family:var(--font-mo
   align-items: center;
   gap: 4px;
   padding: 3px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   border: 1px solid var(--glass-border-1);
   background: var(--glass-bg-1);
 }
@@ -4572,7 +4792,7 @@ textarea.mcp-input { min-height:76px; resize:vertical; font-family:var(--font-mo
 .memory-lab-overview-actions select {
   height: 26px;
   padding: 0 9px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-dim);
@@ -5400,6 +5620,202 @@ html.newmark-memory-overview-viewer body {
   opacity: 0.8;
 }
 
+
+/* ============================================================
+   LIQUID GLASS (Kyant AndroidLiquidGlass backdrop parity)
+   CSS equivalent of the library lens/edge refraction, top
+   highlight, inner shadow, outer shadow and vibrancy boost.
+   ============================================================ */
+.liquid-glass {
+  position: relative;
+  backdrop-filter: blur(var(--glass-blur-3)) saturate(140%) brightness(1.02);
+  -webkit-backdrop-filter: blur(var(--glass-blur-3)) saturate(140%) brightness(1.02);
+  box-shadow: var(--liquid-top-highlight), var(--liquid-inner-shadow), var(--liquid-outer-shadow);
+}
+.liquid-glass::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: var(--liquid-refraction);
+  opacity: 0.9;
+  mix-blend-mode: screen;
+}
+.liquid-glass::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  border: 1px solid var(--liquid-edge-glow);
+  box-shadow: inset 0 0 0 0.5px var(--liquid-edge-glow-strong);
+}
+.liquid-glass-strong {
+  backdrop-filter: blur(calc(var(--glass-blur-3) * 1.5)) saturate(150%) brightness(1.04);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur-3) * 1.5)) saturate(150%) brightness(1.04);
+}
+[data-theme='light'] .liquid-glass {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+[data-theme='light'] .liquid-glass::before {
+  opacity: 0.45;
+  mix-blend-mode: normal;
+}
+.liquid-glass-carrier {
+  background: rgb(var(--glass-rgb-2) / var(--carrier-glass-alpha)) !important;
+  backdrop-filter: blur(var(--carrier-glass-blur)) saturate(150%) brightness(1.02) !important;
+  -webkit-backdrop-filter: blur(var(--carrier-glass-blur)) saturate(150%) brightness(1.02) !important;
+}
+/* List popups use the live carrier refraction only. The old static outer
+   glow/shadow painted a second fixed background behind the popup. */
+.conv-action-menu.liquid-glass,
+.model-select-menu.liquid-glass,
+.newmark-select-menu.liquid-glass {
+  box-shadow: none;
+}
+.conv-action-menu.liquid-glass::before,
+.model-select-menu.liquid-glass::before,
+.newmark-select-menu.liquid-glass::before {
+  background: none;
+  opacity: 0;
+  mix-blend-mode: normal;
+}
+.conv-action-menu.liquid-glass::after,
+.model-select-menu.liquid-glass::after,
+.newmark-select-menu.liquid-glass::after {
+  box-shadow: none;
+}
+.liquid-selection-canvas { opacity: var(--liquid-float-optical-opacity); }
+
+/* Buttons retain their component-owned static surface. The Kyant-like glass
+   layer exists only during press and falls away with the color block. */
+button {
+  position: relative;
+  isolation: isolate;
+  transition-property: scale, filter, border-color, background-color, box-shadow, color;
+  transition-duration: 120ms;
+  transition-timing-function: var(--ease-out-expo);
+}
+[data-theme="light"] .conv-action-menu,
+[data-theme="light"] .model-select-menu,
+[data-theme="light"] .newmark-select-menu,
+[data-theme="light"] .sub-win {
+  background-color: transparent;
+}
+button::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: 0;
+  background: var(--liquid-refraction);
+  backdrop-filter: blur(calc(var(--glass-blur-3) * 4)) saturate(145%) brightness(1.04);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur-3) * 4)) saturate(145%) brightness(1.04);
+  box-shadow: var(--liquid-top-highlight), var(--liquid-inner-shadow), 0 4px 14px rgba(0,0,0,0.18);
+  transition: opacity 90ms var(--ease-out-expo);
+}
+button:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+button:active:not(:disabled) {
+  scale: 1.03;
+  filter: brightness(1.04);
+  background-color: transparent !important;
+  box-shadow: none;
+}
+button:active:not(:disabled)::after { opacity: 1; }
+button:disabled { opacity: 0.5; }
+
+/* Borderless utility actions stay visually quiet; they never gain a glass plate. */
+.msg-action-btn::after,
+.top-btn::after,
+.conv-more-btn::after,
+.provider-icon-btn::after,
+.work-review-toggle::after,
+button.conversation-work-run-head::after,
+button.shell-block-header::after,
+button.diff-block-header::after,
+button.work-review-head::after { display: none !important; }
+button.conversation-work-run-head:active:not(:disabled),
+button.shell-block-header:active:not(:disabled),
+button.diff-block-header:active:not(:disabled),
+button.work-review-head:active:not(:disabled) {
+  scale: 1;
+  filter: none;
+  background-color: revert !important;
+}
+
+/* Two-position liquid track. The thumb becomes glass only while held. */
+input[type="checkbox"] {
+  --liquid-switch-x: 0px;
+  --liquid-switch-progress: 0%;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 42px !important;
+  height: 24px !important;
+  min-width: 42px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--glass-border-2);
+  border-radius: var(--radius-full);
+  background: linear-gradient(90deg, var(--accent) 0 var(--liquid-switch-progress), var(--glass-bg-3) var(--liquid-switch-progress) 100%);
+  cursor: pointer;
+  position: relative;
+  vertical-align: middle;
+  transition: background 160ms var(--ease-out-expo), border-color 160ms var(--ease-out-expo);
+}
+input[type="checkbox"]:checked {
+  --liquid-switch-x: 18px;
+  --liquid-switch-progress: 100%;
+  border-color: color-mix(in srgb, var(--accent) 72%, white);
+}
+input[type="checkbox"]::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--text-bright);
+  box-shadow: 0 2px 5px rgba(0,0,0,.28);
+  transform: translateX(var(--liquid-switch-x)) scale(1);
+  transition: transform 160ms var(--ease-out-expo), box-shadow 100ms var(--ease-out-expo), background 100ms var(--ease-out-expo);
+}
+input[type="checkbox"].liquid-switch-dragging::before {
+  left: 1px;
+  width: 22px;
+  border-radius: var(--radius-full);
+  background: var(--liquid-refraction);
+  backdrop-filter: blur(calc(var(--glass-blur-3) * 4)) saturate(145%);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur-3) * 4)) saturate(145%);
+  box-shadow: var(--liquid-top-highlight), var(--liquid-inner-shadow), 0 7px 18px rgba(0,0,0,.32);
+  transform: translateX(var(--liquid-switch-x)) translateY(-2px) scale(1.22);
+  transition: none;
+}
+
+/* Center composer and terminal stay solid. Only their left/right edge catches
+   light so the glass sidebars remain the visual frame. */
+#input-area,
+#bottom {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: inset 1px 0 0 var(--liquid-edge-glow), inset -1px 0 0 var(--liquid-edge-glow);
+}
+
+/* The live indicator is strictly a continuous black/white/black/white border.
+   Keep it above generic glass pseudo-elements when classes are combined. */
+.marquee-border::before,
+.liquid-glass.marquee-border::before {
+  background: conic-gradient(from var(--marquee-angle, 0deg), #000 0deg, #fff 90deg, #000 180deg, #fff 270deg, #000 360deg);
+  opacity: 1;
+  mix-blend-mode: normal;
+  animation: marquee-rotate var(--marquee-speed) linear infinite;
+}
 </style>
 </head>
 <body>
@@ -5442,6 +5858,7 @@ html.newmark-memory-overview-viewer body {
         <button type="button" class="lt-item" id="lt-ws-icon" onclick="window.toggleSecondarySidebar()" title="Workspaces"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#folder-open"></use></svg><span class="icon-only-label">Workspaces</span></button>
       </div>
       <div id="left-content">
+        <div id="left-tool-surface">
         <div style="padding:10px 12px 4px;font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.05em;flex-shrink:0;">Tools</div>
         <button type="button" class="left-nav-icon" onclick="window.showNewConversationPage()" title="New conversation">
           <span class="icon"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#message-square"></use></svg></span><span>New chat</span>
@@ -5461,6 +5878,7 @@ html.newmark-memory-overview-viewer body {
         <button type="button" class="left-nav-icon" onclick="window.openSettings()">
           <span class="icon"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#settings"></use></svg></span><span>Settings</span>
         </button>
+        </div>
         <div id="left-ws-section">
           <div id="left-ws-header">Workspaces</div>
           <div id="left-ws-list" role="list" aria-label="Workspaces"></div>
@@ -5560,9 +5978,9 @@ html.newmark-memory-overview-viewer body {
             <div class="model-select-shell" id="model-select-shell">
               <select class="model-select-native" id="model-select" tabindex="-1" aria-hidden="true"></select>
               <button type="button" class="tool-select model-select-button" id="model-select-button" aria-haspopup="listbox" aria-expanded="false" onclick="window.toggleModelSelectMenu()" onkeydown="window.handleModelSelectButtonKey(event)"><span class="model-select-button-label" id="model-select-label"></span><svg class="nm-icon tiny" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#chevron-down"></use></svg></button>
-              <div class="model-select-menu" id="model-select-menu" role="listbox" aria-label="Model" popover="manual"></div>
+              <div class="model-select-menu liquid-glass liquid-glass-carrier" id="model-select-menu" role="listbox" aria-label="Model" popover="manual"></div>
             </div>
-            <div class="conv-action-menu" id="conversation-action-menu" role="menu" aria-label="Conversation actions" popover="manual"></div>
+            <div class="conv-action-menu liquid-glass liquid-glass-carrier" id="conversation-action-menu" role="menu" aria-label="Conversation actions" popover="manual"></div>
             <div class="context-token-wrap">
               <button type="button" id="context-token-ring" title="Context tokens" aria-haspopup="dialog" aria-expanded="false" onclick="window.toggleContextInspector()" onmouseenter="window.showContextWindowTooltip()" onmouseleave="window.hideContextWindowTooltip()" onfocus="window.showContextWindowTooltip()" onblur="window.hideContextWindowTooltip()"><span class="icon-only-label">Context tokens</span></button>
               <div id="context-token-tooltip"></div>
@@ -5680,7 +6098,7 @@ html.newmark-memory-overview-viewer body {
 
   <!-- ========== SUB-WINDOW OVERLAY ========== -->
   <div class="sub-win-overlay" id="sub-win-overlay" onclick="if(event.target===this)window.closeSubWin()">
-    <div class="sub-win" id="sub-win" role="dialog" aria-modal="true" aria-labelledby="sub-win-title" tabindex="-1">
+    <div class="sub-win liquid-glass liquid-glass-carrier" id="sub-win" role="dialog" aria-modal="true" aria-labelledby="sub-win-title" tabindex="-1">
       <div class="sub-win-header" id="sub-win-header">
         <span class="sub-win-title" id="sub-win-title">Window</span>
         <button class="sub-win-close" onclick="window.closeSubWin()" title="Close"><svg class="nm-icon small" aria-hidden="true" focusable="false"><use href="lucide-sprite.svg#x"></use></svg><span class="icon-only-label">Close</span></button>
@@ -7490,9 +7908,9 @@ function applyLanguageToUi() {
   var nextBtn = document.querySelector('.mode-toggle-btn[data-mode="next"]');
   if (guideBtn) guideBtn.textContent = t('input.guide');
   if (nextBtn) nextBtn.textContent = t('input.next');
-  var toolsHead = document.querySelector('#left-content > div:first-child');
+  var toolsHead = document.querySelector('#left-tool-surface > div:first-child');
   if (toolsHead) toolsHead.textContent = t('left.tools');
-  var navs = document.querySelectorAll('#left-content .left-nav-icon');
+  var navs = document.querySelectorAll('#left-tool-surface .left-nav-icon');
   var navLabels = [t('left.newChat'), t('left.plugins'), t('left.memoryLab'), t('left.automation'), t('left.flow'), t('left.settings')];
   for (var i = 0; i < navs.length && i < navLabels.length; i++) {
     var span = navs[i].querySelector('span:last-child');
@@ -8910,24 +9328,84 @@ window.openWorkReviewFile = async function(path) {
   return true;
 };
 
-function addWorkReview(diffs) {
+function workReviewRunIds(runId, aliases) {
+  var ids = [];
+  [runId].concat(Array.isArray(aliases) ? aliases : []).forEach(function(value) {
+    var id = String(value || '');
+    if (id && ids.indexOf(id) < 0) ids.push(id);
+  });
+  return ids;
+}
+
+function upsertWorkReviewRecord(ui, diffs, runId, aliases) {
+  if (!ui) return null;
+  if (!Array.isArray(ui.workReviews)) ui.workReviews = [];
+  var ids = workReviewRunIds(runId, aliases);
+  var canonicalRunId = String(runId || ids[0] || '');
+  var record = { diffs: diffs, runId: canonicalRunId };
+  var matchIndex = -1;
+  for (var index = 0; index < ui.workReviews.length; index++) {
+    var itemRunId = String(ui.workReviews[index] && ui.workReviews[index].runId || '');
+    if (ids.indexOf(itemRunId) < 0) continue;
+    if (matchIndex < 0) {
+      matchIndex = index;
+      ui.workReviews[index] = record;
+    } else {
+      ui.workReviews.splice(index, 1);
+      index--;
+    }
+  }
+  if (matchIndex < 0) ui.workReviews.push(record);
+  return record;
+}
+
+function addWorkReview(diffs, runId, aliases) {
   var files = normalizeWorkReviewDiffs(diffs);
   if (!files.length) return null;
+  var filesKey = JSON.stringify(files);
+  var reviewRunId = String(runId || '');
+  var reviewRunIds = workReviewRunIds(reviewRunId, aliases);
+  var chatArea = els['chat-area'];
+  var review = null;
+  if (chatArea) {
+    var existingReviews = chatArea.querySelectorAll('.work-review');
+    for (var ri = 0; ri < existingReviews.length; ri++) {
+      var sameFiles = existingReviews[ri].getAttribute('data-files') === filesKey;
+      var existingRunId = String(existingReviews[ri].getAttribute('data-run-id') || '');
+      var sameRun = reviewRunIds.length ? reviewRunIds.indexOf(existingRunId) >= 0 : sameFiles && !existingRunId;
+      if (!sameRun) continue;
+      if (!review) review = existingReviews[ri];
+      else existingReviews[ri].remove();
+    }
+  }
   var added = files.reduce(function(total, file) { return total + file.added; }, 0);
   var deleted = files.reduce(function(total, file) { return total + file.deleted; }, 0);
-  var review = document.createElement('div');
-  review.className = 'work-review collapsed';
+  var wasCollapsed = review ? review.classList.contains('collapsed') : true;
+  var wasExpanded = review ? review.classList.contains('expanded') : false;
+  if (!review) review = document.createElement('div');
+  review.className = 'work-review' + (wasCollapsed ? ' collapsed' : '') + (wasExpanded ? ' expanded' : '');
   review.setAttribute('data-files', JSON.stringify(files));
+  if (reviewRunId) review.setAttribute('data-run-id', reviewRunId);
+  else review.removeAttribute('data-run-id');
   var rows = files.map(function(file, index) {
-    return '<div class="work-review-file"' + (index >= 3 ? ' style="display:none"' : '') + '><span class="work-review-path">' + esc(file.path) + '</span><span><span class="work-review-add">+' + file.added + '</span><span class="work-review-del">-' + file.deleted + '</span></span></div>';
+    return '<div class="work-review-file"' + (!wasExpanded && index >= 3 ? ' style="display:none"' : '') + '><span class="work-review-path">' + esc(file.path) + '</span><span><span class="work-review-add">+' + file.added + '</span><span class="work-review-del">-' + file.deleted + '</span></span></div>';
   }).join('');
   var editedLabel = files.length === 1 ? t('review.editedOne') : t('review.editedMany').replace('{count}', files.length);
   review.innerHTML = '<div class="work-review-head" onclick="window.toggleWorkReview(this)"><div class="work-review-mark">' + iconSvg('file-diff', t('review.fileChanges'), 'small') + '</div>' +
     '<div><div class="work-review-title">' + esc(editedLabel) + '</div><div class="work-review-stats"><span class="work-review-add">+' + added + '</span><span class="work-review-del">-' + deleted + '</span></div></div>' +
     '<div class="work-review-actions"><button class="work-review-btn" onclick="window.openWorkReview(this);event.stopPropagation()">' + esc(t('review.open')) + '</button>' +
-    '<button type="button" class="work-review-toggle" aria-expanded="false" onclick="event.stopPropagation();window.toggleWorkReview(this)" title="' + escAttr(t('queue.expand')) + '"><span class="work-review-chevron" aria-hidden="true"></span><span class="icon-only-label">' + esc(t('queue.expand')) + '</span></button></div></div>' +
-    '<div class="work-review-list">' + rows + (files.length > 3 ? '<button class="work-review-more" onclick="window.toggleWorkReviewFiles(this)">' + esc(t('review.showMore').replace('{count}', files.length - 3)) + '</button>' : '') + '</div>';
-  els['chat-area'].appendChild(review);
+    '<button type="button" class="work-review-toggle" aria-expanded="' + (wasCollapsed ? 'false' : 'true') + '" onclick="event.stopPropagation();window.toggleWorkReview(this)" title="' + escAttr(t('queue.expand')) + '"><span class="work-review-chevron" aria-hidden="true"></span><span class="icon-only-label">' + esc(t('queue.expand')) + '</span></button></div></div>' +
+    '<div class="work-review-list">' + rows + (files.length > 3 ? '<button class="work-review-more" onclick="window.toggleWorkReviewFiles(this)">' + esc(wasExpanded ? t('queue.collapse') : t('review.showMore').replace('{count}', files.length - 3)) + '</button>' : '') + '</div>';
+  var owningRun = null;
+  var renderedRuns = reviewRunId ? els['chat-area'].querySelectorAll('.conversation-work-run[data-run-id]') : [];
+  for (var wi = 0; wi < renderedRuns.length; wi++) {
+    if (renderedRuns[wi].getAttribute('data-run-id') === reviewRunId) { owningRun = renderedRuns[wi]; break; }
+  }
+  var owningMessage = owningRun && owningRun.closest ? owningRun.closest('.work-run-message') : null;
+  if (!review.parentNode) {
+    if (owningMessage && owningMessage.parentNode === els['chat-area']) owningMessage.insertAdjacentElement('afterend', review);
+    else els['chat-area'].appendChild(review);
+  }
   autoScrollIfAtBottom();
   return review;
 }
@@ -10385,7 +10863,10 @@ function updateConversationWorkRunElement(run, element) {
     if (titleEl && titleEl.textContent !== nextTitle) titleEl.textContent = nextTitle;
     var statusEl = head.querySelector('.conversation-work-run-status');
     if (statusEl && statusEl.textContent !== String(run.status || '')) statusEl.textContent = String(run.status || '');
-    var badgeHolder = head.querySelector('.conversation-work-run-change-badge');
+    // Keep the selector identical to workRunChangeBadge(). The old
+    // `.conversation-work-run-change-badge` typo never found the existing
+    // node, so every expand/collapse refresh inserted another review badge.
+    var badgeHolder = head.querySelector('.conversation-work-change-badge');
     var nextBadge = workRunChangeBadge(run);
     if (nextBadge) {
       if (badgeHolder) {
@@ -10684,7 +11165,8 @@ function conversationWorkUiState(conversationId, workspaceId) {
       finalResponseMsg: null,
       finalResponseText: '',
       finalResponseAt: 0,
-      pendingWorkReview: null
+      pendingWorkReview: null,
+      workReviews: []
     };
   }
   return state.agentWorkUiByConversation[id];
@@ -10702,7 +11184,8 @@ function resetConversationWorkUi(conversationId, keepCompleted, workspaceId) {
     finalResponseMsg: keepCompleted ? prior.finalResponseMsg : null,
     finalResponseText: keepCompleted ? prior.finalResponseText : '',
     finalResponseAt: keepCompleted ? prior.finalResponseAt : 0,
-    pendingWorkReview: keepCompleted ? prior.pendingWorkReview : null
+    pendingWorkReview: keepCompleted ? prior.pendingWorkReview : null,
+    workReviews: keepCompleted ? (prior.workReviews || []).slice() : []
   };
   return state.agentWorkUiByConversation[id];
 }
@@ -10984,9 +11467,12 @@ function renderChatMessages(messages, target) {
       if (!orphanRoles.user && !orphanRoles.assistant) renderOwnedWorkRun(orphanRun, true);
     }
   }
-  var pendingWorkReview = conversationWorkUiState(renderConversationId).pendingWorkReview;
+  var priorWorkUi = conversationWorkUiState(renderConversationId);
+  var pendingWorkReview = priorWorkUi.pendingWorkReview;
+  var retainedWorkReviews = Array.isArray(priorWorkUi.workReviews) ? priorWorkUi.workReviews.slice() : [];
   resetConversationWorkUi(renderConversationId, false);
   conversationWorkUiState(renderConversationId).pendingWorkReview = pendingWorkReview;
+  conversationWorkUiState(renderConversationId).workReviews = retainedWorkReviews;
   if (!normalizedMessages.length) {
     persistedRuns.forEach(function(run) { renderOwnedWorkRun(run, true); });
     var pendingGuideCount = renderPendingGuideMessages(renderTarget, persistedGuideIds);
@@ -11030,7 +11516,10 @@ function renderChatMessages(messages, target) {
   finishToolBatch(renderConversationId);
   persistedRuns.forEach(function(run) { renderOwnedWorkRun(run, true); });
   renderPendingGuideMessages(renderTarget, persistedGuideIds);
-  if (pendingWorkReview) addWorkReview(pendingWorkReview);
+  retainedWorkReviews.forEach(function(item) {
+    addWorkReview(item.diffs || item, item.runId || '');
+  });
+  if (pendingWorkReview) addWorkReview(pendingWorkReview.diffs || pendingWorkReview, pendingWorkReview.runId || '');
   renderConversationBranchPagers();
   renderAutoRouteRatingControls();
   if (typeof renderPendingOptionsInChat === 'function') renderPendingOptionsInChat(state.pendingOptions || []);
@@ -11745,13 +12234,13 @@ function setWorking(working) {
   var ws = els['ws-thumb'];
   if (working) {
     if (btn) btn.classList.add('working');
-    if (input) input.classList.add('working-glow');
+    if (input) input.classList.add('working-glow', 'marquee-border');
     if (title) title.classList.add('animate');
     if (ws) ws.classList.add('marquee-border');
     if (changed) renderConversations();
   } else {
     if (btn) btn.classList.remove('working');
-    if (input) input.classList.remove('working-glow');
+    if (input) input.classList.remove('working-glow', 'marquee-border');
     if (title) title.classList.remove('animate');
     if (ws) ws.classList.remove('marquee-border');
   }
@@ -12291,6 +12780,7 @@ window.closeModelSelectMenu = function(options) {
   if (shell) shell.classList.remove('open');
   if (menu && typeof menu.hidePopover === 'function' && menu.matches(':popover-open')) menu.hidePopover();
   if (button) button.setAttribute('aria-expanded', 'false');
+  window.setLiquidSidebarGestureLock('popup:model-select', false);
   if (options && options.focus && button) button.focus();
 };
 
@@ -12307,6 +12797,7 @@ window.toggleModelSelectMenu = function(forceOpen) {
   }
   if (open) document.querySelectorAll('.newmark-select-shell.open').forEach(function(item) { window.closeNewmarkSelect(item); });
   shell.classList.add('open');
+  window.setLiquidSidebarGestureLock('popup:model-select', true);
   button.setAttribute('aria-expanded', 'true');
   if (open) {
     if (menu && typeof menu.showPopover === 'function' && !menu.matches(':popover-open')) menu.showPopover();
@@ -12334,6 +12825,7 @@ window.closeConversationActionMenu = function(options) {
   if (menu && typeof menu.hidePopover === 'function' && menu.matches(':popover-open')) menu.hidePopover();
   document.querySelectorAll('.conv-more-btn[aria-expanded="true"]').forEach(function(item) { item.setAttribute('aria-expanded', 'false'); });
   state.conversationActionAnchor = null;
+  window.setLiquidSidebarGestureLock('popup:conversation-action', false);
   if (options && options.focus && anchor && anchor.focus) anchor.focus();
 };
 
@@ -12389,6 +12881,7 @@ window.openConversationActionMenu = function(anchor, conversationId, pos) {
   document.querySelectorAll('.conv-more-btn[aria-expanded="true"]').forEach(function(item) { item.setAttribute('aria-expanded', 'false'); });
   if (moreBtn) moreBtn.setAttribute('aria-expanded', 'true');
   state.conversationActionAnchor = anchor || moreBtn || null;
+  window.setLiquidSidebarGestureLock('popup:conversation-action', true);
   if (typeof menu.showPopover === 'function' && !menu.matches(':popover-open')) menu.showPopover();
   requestAnimationFrame(function() {
     window.positionConversationActionMenu(state.conversationActionAnchor || moreBtn, menu, pos);
@@ -12489,6 +12982,930 @@ function applyModelFallbackToInputSurface(event) {
   window.syncModelSelectSurface();
 }
 
+var liquidSidebarGestureLocks = new Set();
+window.setLiquidSidebarGestureLock = function(token, locked) {
+  if (locked) liquidSidebarGestureLocks.add(String(token));
+  else liquidSidebarGestureLocks.delete(String(token));
+  document.body.classList.toggle('liquid-sidebar-gesture-locked', liquidSidebarGestureLocks.size > 0);
+};
+window.liquidSidebarGesturesLocked = function() { return liquidSidebarGestureLocks.size > 0; };
+
+// One moving glass capsule per select menu. It starts at the existing
+// selection, fades in, follows pointer movement across options, and commits
+// the landing option on release. Static options retain their color capsule.
+var liquidBackdropFramePromise = null;
+var liquidBackdropCachedFrame = null;
+var liquidBackdropPrimeTimer = 0;
+window.__liquidBackdropPrimeReady = false;
+function decodeLiquidBackdropFrame(frame) {
+  if (!frame) return Promise.resolve(null);
+  if (frame.bitmap) return Promise.resolve(frame);
+  var bytes = frame.bytes;
+  if (bytes && Array.isArray(bytes.data)) bytes = new Uint8Array(bytes.data);
+  var blobPromise = bytes
+    ? Promise.resolve(new Blob([bytes], { type: frame.mimeType || 'image/jpeg' }))
+    : (frame.dataUrl ? fetch(frame.dataUrl).then(function(response) { return response.blob(); }) : Promise.resolve(null));
+  return blobPromise.then(function(blob) {
+    if (!blob) return null;
+    return createImageBitmap(blob);
+  }).then(function(bitmap) {
+    if (!bitmap) return null;
+    frame.bitmap = bitmap;
+    frame.id = frame.id || String(Date.now()) + ':' + String(frame.width || bitmap.width) + 'x' + String(frame.height || bitmap.height);
+    frame.capturedAt = performance.now();
+    return frame;
+  });
+}
+function captureLiquidBackdropFrame(options) {
+  if (!window.api || typeof window.api.captureLiquidBackdrop !== 'function') return Promise.resolve(null);
+  options = options || {};
+  var maxAge = Number.isFinite(options.maxAge) ? options.maxAge : 5000;
+  if (!options.force && liquidBackdropCachedFrame && performance.now() - liquidBackdropCachedFrame.capturedAt <= maxAge) {
+    return Promise.resolve(liquidBackdropCachedFrame);
+  }
+  if (!liquidBackdropFramePromise) {
+    window.__liquidBackdropPrimeReady = false;
+    liquidBackdropFramePromise = window.api.captureLiquidBackdrop({ width: window.innerWidth, height: window.innerHeight })
+      .then(decodeLiquidBackdropFrame)
+      .then(function(frame) {
+        if (frame) {
+          var previous = liquidBackdropCachedFrame;
+          liquidBackdropCachedFrame = frame;
+          prewarmKyantRenderer(frame);
+          window.__liquidBackdropPrimeReady = true;
+          if (previous && previous !== frame && previous.bitmap && previous.bitmap.close) previous.bitmap.close();
+        }
+        return frame;
+      })
+      .catch(function(error) {
+        window.__liquidErrors = window.__liquidErrors || [];
+        window.__liquidErrors.push(String(error && (error.stack || error.message) || error));
+        console.warn('[KyantGlass] backdrop capture failed:', error);
+        return liquidBackdropCachedFrame;
+      })
+      .finally(function() { liquidBackdropFramePromise = null; });
+  }
+  return liquidBackdropFramePromise;
+}
+
+function scheduleLiquidBackdropPrime() {
+  if (liquidBackdropPrimeTimer || (liquidBackdropCachedFrame && performance.now() - liquidBackdropCachedFrame.capturedAt < 5000)) return;
+  liquidBackdropPrimeTimer = setTimeout(function() {
+    liquidBackdropPrimeTimer = 0;
+    captureLiquidBackdropFrame({ maxAge: 5000 });
+  }, liquidBackdropCachedFrame ? 220 : 48);
+}
+
+if (window.requestIdleCallback) {
+  window.requestIdleCallback(function() { captureLiquidBackdropFrame({ maxAge: 5000 }); }, { timeout: 900 });
+} else {
+  setTimeout(function() { captureLiquidBackdropFrame({ maxAge: 5000 }); }, 600);
+}
+
+document.addEventListener('pointerover', function(event) {
+  var target = event.target && event.target.closest ? event.target.closest('.mode-toggle-btn[data-mode], .left-nav-icon, .lt-item, .left-ws-item, .tab-btn[data-tab], .model-select-menu-option, .newmark-select-option, .conv-item') : null;
+  if (target) scheduleLiquidBackdropPrime();
+}, { passive: true });
+document.addEventListener('focusin', function(event) {
+  var target = event.target && event.target.closest ? event.target.closest('.mode-toggle-btn[data-mode], .left-nav-icon, .lt-item, .left-ws-item, .tab-btn[data-tab], .model-select-menu-option, .newmark-select-option, .conv-item') : null;
+  if (target) scheduleLiquidBackdropPrime();
+});
+
+function compileLiquidShader(gl, type, source) {
+  var shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    console.error('[KyantGlass] shader compile failed:', gl.getShaderInfoLog(shader));
+    gl.deleteShader(shader);
+    return null;
+  }
+  return shader;
+}
+
+function liquidGlassCssNumber(name, fallback) {
+  var value = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+  return Number.isFinite(value) ? value : fallback;
+}
+
+var liquidKyantRendererPool = [];
+var liquidKyantVertexSource = '#version 300 es\n' +
+  'in vec2 p; out vec2 uv; void main(){uv=p*.5+.5;gl_Position=vec4(p,0.,1.);}';
+var liquidKyantFragmentSource = '#version 300 es\nprecision highp float;\n' +
+  'uniform sampler2D content; uniform vec2 size; uniform vec2 viewport; uniform vec2 origin; uniform vec4 cornerRadii; uniform float refractionHeight; uniform float refractionAmount; uniform float depthEffect; uniform float chromaticAberration; in vec2 uv; out vec4 outColor;\n' +
+  'float radiusAt(vec2 coord,vec4 radii){if(coord.x>=0.)return coord.y<=0.?radii.y:radii.z;return coord.y<=0.?radii.x:radii.w;}\n' +
+  'float sdRoundedRect(vec2 coord,vec2 halfSize,float r){vec2 q=abs(coord)-(halfSize-vec2(r));return length(max(q,0.))-r+min(max(q.x,q.y),0.);}\n' +
+  'vec2 gradSdRoundedRect(vec2 coord,vec2 halfSize,float r){vec2 q=abs(coord)-(halfSize-vec2(r));if(q.x>=0.||q.y>=0.)return sign(coord)*normalize(max(q,vec2(0.0001)));float gx=step(q.y,q.x);return sign(coord)*vec2(gx,1.-gx);}\n' +
+  'float circleMap(float x){x=clamp(x,0.,1.);return 1.-sqrt(max(0.,1.-x*x));}\n' +
+  'vec4 sampleBackdrop(vec2 cssCoord){vec2 t=vec2(cssCoord.x/viewport.x,1.-cssCoord.y/viewport.y);return texture(content,clamp(t,vec2(0.),vec2(1.)));}\n' +
+  'void main(){vec2 local=vec2(uv.x*size.x,(1.-uv.y)*size.y);vec2 halfSize=size*.5;vec2 centered=local-halfSize;float radius=radiusAt(centered,cornerRadii);float sd=sdRoundedRect(centered,halfSize,radius);if(sd>0.)discard;vec2 base=origin+local;if(-sd>=refractionHeight){outColor=vec4(0.);return;}sd=min(sd,0.);float edge=clamp(1.-(-sd/refractionHeight),0.,1.);float d=circleMap(edge)*refractionAmount;float gradRadius=min(radius*1.5,min(halfSize.x,halfSize.y));vec2 grad=normalize(gradSdRoundedRect(centered,halfSize,gradRadius)+depthEffect*normalize(centered));vec2 refracted=base+d*grad;float dispersionIntensity=chromaticAberration*edge;vec2 dispersed=d*grad*dispersionIntensity;vec4 red=sampleBackdrop(refracted+dispersed);vec4 green=sampleBackdrop(refracted);vec4 blue=sampleBackdrop(refracted-dispersed);float alpha=mix(.14,.82,edge);outColor=vec4(vec3(red.r,green.g,blue.b)*alpha,alpha);}';
+
+function createKyantLiquidRenderer() {
+  var canvas = document.createElement('canvas');
+  var displayCanvas = document.createElement('canvas');
+  displayCanvas.className = 'liquid-selection-canvas';
+  var displayContext = displayCanvas.getContext('2d', { alpha:true });
+  if (!displayContext) return null;
+  var gl = canvas.getContext('webgl2', { alpha:true, antialias:false, premultipliedAlpha:true, powerPreference:'high-performance' });
+  if (!gl) return null;
+  var vs = compileLiquidShader(gl, gl.VERTEX_SHADER, liquidKyantVertexSource);
+  var fs = compileLiquidShader(gl, gl.FRAGMENT_SHADER, liquidKyantFragmentSource);
+  if (!vs || !fs) return null;
+  var program = gl.createProgram();
+  gl.attachShader(program, vs); gl.attachShader(program, fs); gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    console.error('[KyantGlass] program link failed:', gl.getProgramInfoLog(program));
+    return null;
+  }
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  var buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]), gl.STATIC_DRAW);
+  var location = gl.getAttribLocation(program, 'p');
+  gl.enableVertexAttribArray(location); gl.vertexAttribPointer(location,2,gl.FLOAT,false,0,0);
+  var texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  var uniforms = {
+    content: gl.getUniformLocation(program,'content'),
+    size: gl.getUniformLocation(program,'size'),
+    viewport: gl.getUniformLocation(program,'viewport'),
+    origin: gl.getUniformLocation(program,'origin'),
+    cornerRadii: gl.getUniformLocation(program,'cornerRadii'),
+    refractionHeight: gl.getUniformLocation(program,'refractionHeight'),
+    refractionAmount: gl.getUniformLocation(program,'refractionAmount'),
+    depthEffect: gl.getUniformLocation(program,'depthEffect'),
+    chromaticAberration: gl.getUniformLocation(program,'chromaticAberration')
+  };
+  gl.useProgram(program);
+  gl.uniform1i(uniforms.content, 0);
+  var renderer = {
+    canvas: canvas,
+    displayCanvas: displayCanvas,
+    displayContext: displayContext,
+    gl: gl,
+    program: program,
+    texture: texture,
+    uniforms: uniforms,
+    owner: null,
+    textureReady: false,
+    generation: 0,
+    renderFrame: 0,
+    frameId: '',
+    lastGeometry: null,
+    pendingGeometry: null,
+    uniformState: Object.create(null),
+    invalid: false
+  };
+  canvas.addEventListener('webglcontextlost', function(event) {
+    event.preventDefault();
+    renderer.invalid = true;
+    renderer.textureReady = false;
+    if (renderer.renderFrame) cancelAnimationFrame(renderer.renderFrame);
+    renderer.renderFrame = 0;
+    liquidKyantRendererPool = liquidKyantRendererPool.filter(function(item) { return item !== renderer; });
+  });
+  return renderer;
+}
+
+function acquireKyantLiquidRenderer(float) {
+  var renderer = liquidKyantRendererPool.find(function(item) {
+    return !item.invalid && (!item.owner || !item.owner.isConnected);
+  });
+  if (!renderer) {
+    renderer = createKyantLiquidRenderer();
+    if (!renderer) return null;
+    liquidKyantRendererPool.push(renderer);
+  }
+  renderer.owner = float;
+  renderer.generation += 1;
+  if (renderer.renderFrame) cancelAnimationFrame(renderer.renderFrame);
+  renderer.renderFrame = 0;
+  renderer.displayCanvas.remove();
+  renderer.lastGeometry = null;
+  renderer.pendingGeometry = null;
+  return renderer;
+}
+
+function uploadKyantLiquidFrame(renderer, frame) {
+  if (!renderer || !frame || !frame.bitmap || renderer.frameId === frame.id) return false;
+  var gl = renderer.gl;
+  gl.bindTexture(gl.TEXTURE_2D, renderer.texture);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,frame.bitmap);
+  renderer.textureReady = true;
+  renderer.frameId = frame.id;
+  return true;
+}
+
+function prewarmKyantRenderer(frame) {
+  if (!frame || !frame.bitmap) return;
+  var renderer = liquidKyantRendererPool.find(function(item) { return !item.invalid && !item.owner; });
+  if (!renderer) {
+    if (liquidKyantRendererPool.some(function(item) { return !item.invalid; })) return;
+    renderer = createKyantLiquidRenderer();
+    if (!renderer) return;
+    liquidKyantRendererPool.push(renderer);
+  }
+  uploadKyantLiquidFrame(renderer, frame);
+}
+
+function attachKyantLiquidRenderer(float, frame) {
+  var renderer = float._kyantRendererRef;
+  if (!renderer || renderer.owner !== float) renderer = acquireKyantLiquidRenderer(float);
+  if (!renderer) { float.dataset.kyantRenderer = 'webgl2-unavailable'; return; }
+  float._kyantRendererRef = renderer;
+  var canvas = renderer.canvas;
+  var displayCanvas = renderer.displayCanvas;
+  var displayContext = renderer.displayContext;
+  var gl = renderer.gl;
+  var program = renderer.program;
+  var texture = renderer.texture;
+  var uniforms = renderer.uniforms;
+  var generation = renderer.generation;
+  float.dataset.kyantRenderer = 'webgl2';
+  float._kyantTextureReady = false;
+  float._kyantDrawReady = false;
+  delete float.dataset.kyantDrawReady;
+  float._renderKyantGlass = function(geometry, immediate) {
+    renderer.pendingGeometry = geometry || null;
+    if (!renderer.textureReady || renderer.owner !== float || !float.isConnected) return;
+    if (immediate && renderer.renderFrame) {
+      cancelAnimationFrame(renderer.renderFrame);
+      renderer.renderFrame = 0;
+    }
+    if (renderer.renderFrame) return;
+    var draw = function() {
+      renderer.renderFrame = 0;
+      if (!renderer.textureReady || renderer.owner !== float || !float.isConnected) return;
+      var geometry = renderer.pendingGeometry;
+      renderer.pendingGeometry = null;
+      var style = geometry ? null : getComputedStyle(float);
+      var width = geometry ? geometry.width : (parseFloat(style.width) || float.offsetWidth || 1);
+      var height = geometry ? geometry.height : (parseFloat(style.height) || float.offsetHeight || 1);
+      var left = geometry ? geometry.left : (parseFloat(style.left) || 0);
+      var top = geometry ? geometry.top : (parseFloat(style.top) || 0);
+      var dpr = window.devicePixelRatio || 1;
+      var renderScale = Math.min(dpr, 1.5);
+      var pixelWidth = Math.max(1, Math.round(width*renderScale));
+      var pixelHeight = Math.max(1, Math.round(height*renderScale));
+      var geometryKey = [left.toFixed(2),top.toFixed(2),width.toFixed(2),height.toFixed(2),pixelWidth,pixelHeight].join(':');
+      if (renderer.lastGeometry === geometryKey) return;
+      renderer.lastGeometry = geometryKey;
+      if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+      if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+      if (displayCanvas.width !== pixelWidth) displayCanvas.width = pixelWidth;
+      if (displayCanvas.height !== pixelHeight) displayCanvas.height = pixelHeight;
+      gl.viewport(0,0,pixelWidth,pixelHeight);
+      gl.useProgram(program);
+      function uniformChanged(key, values, apply) {
+        var prior = renderer.uniformState[key];
+        if (prior && prior.length === values.length && values.every(function(value,index) { return prior[index] === value; })) return;
+        renderer.uniformState[key] = values;
+        apply();
+      }
+      uniformChanged('size',[width,height],function() { gl.uniform2f(uniforms.size,width,height); });
+      uniformChanged('viewport',[window.innerWidth,window.innerHeight],function() { gl.uniform2f(uniforms.viewport,window.innerWidth,window.innerHeight); });
+      uniformChanged('origin',[left,top],function() { gl.uniform2f(uniforms.origin,left,top); });
+      var capsuleRadius = Math.min(width,height)*.5;
+      uniformChanged('cornerRadii',[capsuleRadius],function() { gl.uniform4f(uniforms.cornerRadii,capsuleRadius,capsuleRadius,capsuleRadius,capsuleRadius); });
+      var configuredHeight = liquidGlassCssNumber('--liquid-interaction-edge', 6);
+      var configuredAmount = liquidGlassCssNumber('--liquid-float-refraction-amount', 24);
+      var configuredChromatic = liquidGlassCssNumber('--liquid-float-chromatic-aberration', 1);
+      var refractionHeight = Math.max(0.001,Math.min(configuredHeight,height*.48));
+      uniformChanged('refractionHeight',[refractionHeight],function() { gl.uniform1f(uniforms.refractionHeight,refractionHeight); });
+      uniformChanged('refractionAmount',[-configuredAmount],function() { gl.uniform1f(uniforms.refractionAmount,-configuredAmount); });
+      uniformChanged('depthEffect',[1],function() { gl.uniform1f(uniforms.depthEffect,1); });
+      uniformChanged('chromaticAberration',[configuredChromatic],function() { gl.uniform1f(uniforms.chromaticAberration,configuredChromatic); });
+      gl.drawArrays(gl.TRIANGLES,0,6);
+      displayContext.clearRect(0,0,pixelWidth,pixelHeight);
+      displayContext.drawImage(canvas,0,0);
+      float._kyantDrawReady = true;
+      float.dataset.kyantDrawReady = 'true';
+      if (displayCanvas.parentNode !== float) float.appendChild(displayCanvas);
+    };
+    if (immediate) draw();
+    else renderer.renderFrame = requestAnimationFrame(draw);
+  };
+  float._releaseKyantGlass = function() {
+    if (renderer.owner !== float) return;
+    renderer.generation += 1;
+    renderer.owner = null;
+    if (renderer.renderFrame) cancelAnimationFrame(renderer.renderFrame);
+    renderer.renderFrame = 0;
+    renderer.lastGeometry = null;
+    renderer.pendingGeometry = null;
+    displayCanvas.remove();
+    delete float._kyantRendererRef;
+  };
+  if (frame && frame.bitmap && renderer.owner === float && renderer.generation === generation && float.isConnected) {
+    uploadKyantLiquidFrame(renderer, frame);
+    float._kyantTextureReady = true;
+    if (float.style.width && float.style.height) float._renderKyantGlass(null, true);
+  } else if (renderer.textureReady) {
+    float._kyantTextureReady = true;
+    if (float.style.width && float.style.height) float._renderKyantGlass(null, true);
+  } else {
+    float.dataset.kyantRenderer = 'waiting-backdrop';
+  }
+}
+
+function mountLiquidViewportFloat(float) {
+  if (liquidBackdropPrimeTimer) clearTimeout(liquidBackdropPrimeTimer);
+  liquidBackdropPrimeTimer = 0;
+  float.classList.add('liquid-selection-viewport');
+  float.setAttribute('popover', 'manual');
+  document.body.appendChild(float);
+  startLiquidMotionTracking(float);
+  attachKyantLiquidRenderer(float, liquidBackdropCachedFrame);
+}
+
+function showLiquidViewportFloat(float) {
+  try { float.showPopover(); } catch (_) {}
+}
+
+function keepLiquidFloatExpansionInsideViewport(float, rect) {
+  if (!float || !rect) return;
+  var edge = 28;
+  float.style.transformOrigin = rect.left < edge ? 'left center' : (rect.right > window.innerWidth - edge ? 'right center' : 'center');
+}
+
+function liquidInteractionEdgePx() {
+  return liquidGlassCssNumber('--liquid-interaction-edge', 6);
+}
+
+function startLiquidMotionTracking(float) {
+  if (!float || float._liquidMotionFrame) return;
+  var lastTime = 0;
+  var lastX = 0;
+  var lastY = 0;
+  var velocityX = 0;
+  var velocityY = 0;
+  var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function frame(now) {
+    if (!float || !float.isConnected) {
+      if (float) float._liquidMotionFrame = 0;
+      return;
+    }
+    var rect = float.getBoundingClientRect();
+    var left = rect.left;
+    var top = rect.top;
+    var width = rect.width;
+    var height = rect.height;
+    var centerX = left + width * .5;
+    var centerY = top + height * .5;
+    var moved = lastTime > 0 && (Math.abs(centerX - lastX) > .01 || Math.abs(centerY - lastY) > .01);
+    if (lastTime > 0) {
+      var seconds = Math.max(.001, Math.min(.05, (now - lastTime) / 1000));
+      var instantaneousX = (centerX - lastX) / seconds;
+      var instantaneousY = (centerY - lastY) / seconds;
+      velocityX = velocityX * .45 + instantaneousX * .55;
+      velocityY = velocityY * .45 + instantaneousY * .55;
+    }
+    lastTime = now;
+    lastX = centerX;
+    lastY = centerY;
+    var speed = reducedMotion ? 0 : Math.hypot(velocityX, velocityY);
+    var amount = Math.max(0, Math.min(1, (speed - 8) / 700));
+    var angle = speed > 1 ? Math.atan2(velocityY, velocityX) : 0;
+    float.style.setProperty('--liquid-motion-angle', angle + 'rad');
+    float.style.setProperty('--liquid-motion-stretch', String(1 + amount * .075));
+    float.style.setProperty('--liquid-motion-squash', String(1 - amount * .035));
+    if (window.__liquidPerfCounts) float.dataset.liquidMotionAmount = amount.toFixed(4);
+    if (moved && float._renderKyantGlass) float._renderKyantGlass({ left:left, top:top, width:width, height:height }, true);
+    float._liquidMotionFrame = requestAnimationFrame(frame);
+  }
+  float._liquidMotionFrame = requestAnimationFrame(frame);
+}
+
+function stopLiquidMotionTracking(float) {
+  if (!float) return;
+  if (float._liquidArrivalFrame) cancelAnimationFrame(float._liquidArrivalFrame);
+  float._liquidArrivalFrame = 0;
+  if (float._liquidMotionFrame) cancelAnimationFrame(float._liquidMotionFrame);
+  float._liquidMotionFrame = 0;
+  float.style.removeProperty('--liquid-motion-angle');
+  float.style.removeProperty('--liquid-motion-stretch');
+  float.style.removeProperty('--liquid-motion-squash');
+}
+
+function waitForLiquidSelectionArrival(float, onArrive) {
+  if (!float || !float.isConnected) { onArrive(); return; }
+  var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reducedMotion) { onArrive(); return; }
+  if (float._liquidArrivalFrame) cancelAnimationFrame(float._liquidArrivalFrame);
+  var startedAt = performance.now();
+  function settled() {
+    if (!float || !float.isConnected) return true;
+    var target = float._liquidTargetRect;
+    if (!target) return true;
+    var style = getComputedStyle(float);
+    var left = parseFloat(style.left) || 0;
+    var top = parseFloat(style.top) || 0;
+    var width = parseFloat(style.width) || 0;
+    var height = parseFloat(style.height) || 0;
+    return Math.abs(left - target.left) < .75 && Math.abs(top - target.top) < .75 &&
+      Math.abs(width - target.width) < .75 && Math.abs(height - target.height) < .75 &&
+      parseFloat(style.opacity || '0') >= .995;
+  }
+  function inspect() {
+    if (settled() || performance.now() - startedAt > 300) {
+      float._liquidArrivalFrame = 0;
+      onArrive();
+      return;
+    }
+    float._liquidArrivalFrame = requestAnimationFrame(inspect);
+  }
+  float._liquidArrivalFrame = requestAnimationFrame(inspect);
+}
+
+function landLiquidSelectionFloat(float, cleanup, onComplete) {
+  if (!float) { cleanup(); if (onComplete) onComplete(); return; }
+  var reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!float.isConnected) { cleanup(); if (onComplete) onComplete(); return; }
+  stopLiquidMotionTracking(float);
+  float.classList.add('liquid-selection-landing');
+  float._liquidLandingTimer = setTimeout(function() {
+    cleanup();
+    scheduleLiquidBackdropPrime();
+    if (onComplete) onComplete();
+  }, reducedMotion ? 0 : 120);
+}
+
+function wireLiquidMenuInteractions(menu) {
+  if (!menu || menu.dataset.liquidInteractions === 'true') return;
+  menu.dataset.liquidInteractions = 'true';
+  var pointer = null;
+  var source = null;
+  var target = null;
+  var float = null;
+  var generation = 0;
+  var pressX = 0;
+  var pressY = 0;
+  var gestureMoved = false;
+  function optionAt(event) {
+    var hit = event && document.elementFromPoint ? document.elementFromPoint(event.clientX, event.clientY) : event.target;
+    var node = hit && hit.closest ? hit.closest('button.model-select-menu-option, button.newmark-select-option') : null;
+    return node && menu.contains(node) && !node.disabled ? node : null;
+  }
+  function position(option) {
+    if (!option || !float) return;
+    if (float.classList.contains('liquid-selection-viewport')) {
+      var rect = option.getBoundingClientRect();
+      var edge = liquidInteractionEdgePx();
+      keepLiquidFloatExpansionInsideViewport(float, rect);
+      float._liquidTargetRect = { left: rect.left - edge, top: rect.top - edge, width: rect.width + edge * 2, height: rect.height + edge * 2 };
+      float.style.left = (rect.left - edge) + 'px';
+      float.style.top = (rect.top - edge) + 'px';
+      float.style.width = (rect.width + edge * 2) + 'px';
+      float.style.height = (rect.height + edge * 2) + 'px';
+      if (float._renderKyantGlass) float._renderKyantGlass({
+        left: rect.left - edge, top: rect.top - edge,
+        width: rect.width + edge * 2, height: rect.height + edge * 2
+      }, true);
+      return;
+    }
+    var edge = liquidInteractionEdgePx();
+    float.style.left = (option.offsetLeft - edge) + 'px';
+    float.style.top = (option.offsetTop - edge) + 'px';
+    float.style.width = (option.offsetWidth + edge * 2) + 'px';
+    float.style.height = (option.offsetHeight + edge * 2) + 'px';
+  }
+  function positionAlongPointer(event) {
+    if (!float || !event) return;
+    var menuRect = menu.getBoundingClientRect();
+    var clipTop = Math.max(0, menuRect.top + menu.clientTop + 7);
+    var clipBottom = Math.min(window.innerHeight, menuRect.bottom - menu.clientTop - 7);
+    var allOptions = Array.from(menu.querySelectorAll('button.model-select-menu-option, button.newmark-select-option'))
+      .filter(function(option) { return !option.disabled && option.getClientRects().length; });
+    var options = allOptions.filter(function(option) {
+      var rect = option.getBoundingClientRect();
+      return rect.bottom > clipTop && rect.top < clipBottom;
+    });
+    if (!options.length) return;
+    var nearest = options[0];
+    var nearestDistance = Infinity;
+    options.forEach(function(option) {
+      var rect = option.getBoundingClientRect();
+      var distance = Math.abs(event.clientY - (rect.top + rect.height / 2));
+      if (distance < nearestDistance) { nearest = option; nearestDistance = distance; }
+    });
+    target = nearest;
+    var rect = nearest.getBoundingClientRect();
+    var firstRect = options[0].getBoundingClientRect();
+    var lastRect = options[options.length - 1].getBoundingClientRect();
+    var minCenter = Math.min(firstRect.top + firstRect.height / 2, lastRect.top + lastRect.height / 2);
+    var maxCenter = Math.max(firstRect.top + firstRect.height / 2, lastRect.top + lastRect.height / 2);
+    if (maxCenter < minCenter) maxCenter = minCenter;
+    var centerY = Math.max(minCenter, Math.min(maxCenter, event.clientY));
+    var edge = liquidInteractionEdgePx();
+    float.style.left = (rect.left - edge) + 'px';
+    float.style.top = (centerY - rect.height / 2 - edge) + 'px';
+    float.style.width = (rect.width + edge * 2) + 'px';
+    float.style.height = (rect.height + edge * 2) + 'px';
+  }
+  function detachWindowTracking() {
+    window.removeEventListener('pointermove', onPointerMove, true);
+    window.removeEventListener('pointerup', onPointerUp, true);
+    window.removeEventListener('pointercancel', onPointerCancel, true);
+  }
+  function clear() {
+    detachWindowTracking();
+    if (source) source.classList.remove('liquid-selection-source');
+    stopLiquidMotionTracking(float);
+    if (float && float._liquidLandingTimer) clearTimeout(float._liquidLandingTimer);
+    if (float && float._releaseKyantGlass) float._releaseKyantGlass();
+    if (float && float.parentNode) float.parentNode.removeChild(float);
+    generation += 1;
+    pointer = source = target = float = null;
+  }
+  function onPointerMove(event) {
+    if (pointer === null || event.pointerId !== pointer) return;
+    if (!gestureMoved && Math.hypot(event.clientX - pressX, event.clientY - pressY) >= 4) {
+      gestureMoved = true;
+    }
+    event.preventDefault();
+    positionAlongPointer(event);
+  }
+  function onPointerUp(event) {
+    if (pointer === null || event.pointerId !== pointer) return;
+    var commit = target;
+    detachWindowTracking();
+    try { menu.releasePointerCapture(pointer); } catch (_) {}
+    pointer = null;
+    if (commit) position(commit);
+    waitForLiquidSelectionArrival(float, function() {
+      landLiquidSelectionFloat(float, clear, function() {
+        if (commit && commit.isConnected) commit.click();
+      });
+    });
+  }
+  function onPointerCancel(event) {
+    if (pointer === null || event.pointerId === pointer) clear();
+  }
+  menu.addEventListener('pointerdown', function(event) {
+    var pressed = optionAt(event);
+    if (!pressed || event.button !== 0) return;
+    event.preventDefault();
+    target = pressed;
+    pointer = event.pointerId;
+    pressX = event.clientX;
+    pressY = event.clientY;
+    gestureMoved = false;
+    var captureGeneration = ++generation;
+    menu.setPointerCapture(pointer);
+    window.addEventListener('pointermove', onPointerMove, true);
+    window.addEventListener('pointerup', onPointerUp, true);
+    window.addEventListener('pointercancel', onPointerCancel, true);
+    if (float && float.isConnected) {
+      if (float._liquidLandingTimer) clearTimeout(float._liquidLandingTimer);
+      float._liquidLandingTimer = 0;
+      float.classList.remove('liquid-selection-landing');
+      float.classList.add('visible');
+      position(target);
+    } else {
+      var selected = menu.querySelector('button.model-select-menu-option.selected, button.newmark-select-option.selected');
+      source = selected || pressed;
+      source.classList.add('liquid-selection-source');
+      float = document.createElement('div');
+      float.className = 'liquid-selection-float liquid-selection-primed';
+      mountLiquidViewportFloat(float);
+      position(source);
+      showLiquidViewportFloat(float);
+      position(source);
+      float.getBoundingClientRect();
+      requestAnimationFrame(function() {
+        if (!float) return;
+        float.classList.remove('liquid-selection-primed');
+        float.classList.add('visible');
+        requestAnimationFrame(function() { if (float) position(target); });
+      });
+    }
+    captureLiquidBackdropFrame().then(function(backdropFrame) {
+      if (generation === captureGeneration && float && float.isConnected) attachKyantLiquidRenderer(float, backdropFrame);
+    }).catch(function() {});
+  });
+  menu.addEventListener('click', function(event) {
+    if (!event.isTrusted || !float || !float.isConnected) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+}
+
+// The same single floating capsule is used by the left workspace rail and
+// right sidebar tabs. Delegation keeps it valid while either rail rerenders.
+function wireLiquidRailInteractions(container, selector) {
+  if (!container || container.dataset.liquidRailInteractions === 'true') return;
+  container.dataset.liquidRailInteractions = 'true';
+  var pointer = null;
+  var source = null;
+  var target = null;
+  var float = null;
+  var generation = 0;
+  var pressX = 0;
+  var pressY = 0;
+  var gestureMoved = false;
+  function itemAt(event) {
+    var hit = event && document.elementFromPoint ? document.elementFromPoint(event.clientX, event.clientY) : event.target;
+    var node = hit && hit.closest ? hit.closest(selector) : null;
+    return node && container.contains(node) && !node.disabled ? node : null;
+  }
+  function position(item) {
+    if (!item || !float) return;
+    if (float.classList.contains('liquid-selection-viewport')) {
+      var rect = item.getBoundingClientRect();
+      var edge = liquidInteractionEdgePx();
+      keepLiquidFloatExpansionInsideViewport(float, rect);
+      float._liquidTargetRect = { left: rect.left - edge, top: rect.top - edge, width: rect.width + edge * 2, height: rect.height + edge * 2 };
+      float.style.left = (rect.left - edge) + 'px';
+      float.style.top = (rect.top - edge) + 'px';
+      float.style.width = (rect.width + edge * 2) + 'px';
+      float.style.height = (rect.height + edge * 2) + 'px';
+      if (float._renderKyantGlass) float._renderKyantGlass({
+        left: rect.left - edge, top: rect.top - edge,
+        width: rect.width + edge * 2, height: rect.height + edge * 2
+      }, true);
+      return;
+    }
+    var edge = liquidInteractionEdgePx();
+    float.style.left = (item.offsetLeft - edge) + 'px';
+    float.style.top = (item.offsetTop - edge) + 'px';
+    float.style.width = (item.offsetWidth + edge * 2) + 'px';
+    float.style.height = (item.offsetHeight + edge * 2) + 'px';
+  }
+  function positionAlongPointer(event) {
+    if (!float || !event) return;
+    var items = Array.from(container.querySelectorAll(selector))
+      .filter(function(item) { return !item.disabled && item.getClientRects().length; });
+    if (!items.length) return;
+    var rects = items.map(function(item) { return item.getBoundingClientRect(); });
+    var centersX = rects.map(function(rect) { return rect.left + rect.width / 2; });
+    var centersY = rects.map(function(rect) { return rect.top + rect.height / 2; });
+    var horizontal = Math.max.apply(null, centersX) - Math.min.apply(null, centersX) >
+      Math.max.apply(null, centersY) - Math.min.apply(null, centersY);
+    var pointerAxis = horizontal ? event.clientX : event.clientY;
+    var centers = horizontal ? centersX : centersY;
+    var nearestIndex = 0;
+    var nearestDistance = Infinity;
+    centers.forEach(function(center, index) {
+      var distance = Math.abs(pointerAxis - center);
+      if (distance < nearestDistance) { nearestIndex = index; nearestDistance = distance; }
+    });
+    target = items[nearestIndex];
+    var rect = rects[nearestIndex];
+    var minCenter = Math.min.apply(null, centers);
+    var maxCenter = Math.max.apply(null, centers);
+    var projectedCenter = Math.max(minCenter, Math.min(maxCenter, pointerAxis));
+    var edge = liquidInteractionEdgePx();
+    var left = horizontal ? projectedCenter - rect.width / 2 - edge : rect.left - edge;
+    var top = horizontal ? rect.top - edge : projectedCenter - rect.height / 2 - edge;
+    float.style.left = left + 'px';
+    float.style.top = top + 'px';
+    float.style.width = (rect.width + edge * 2) + 'px';
+    float.style.height = (rect.height + edge * 2) + 'px';
+  }
+  function detachWindowTracking() {
+    window.removeEventListener('pointermove', onPointerMove, true);
+    window.removeEventListener('pointerup', onPointerUp, true);
+    window.removeEventListener('pointercancel', onPointerCancel, true);
+  }
+  function clear() {
+    detachWindowTracking();
+    if (source) source.classList.remove('liquid-selection-source');
+    stopLiquidMotionTracking(float);
+    if (float && float._liquidLandingTimer) clearTimeout(float._liquidLandingTimer);
+    if (float && float._releaseKyantGlass) float._releaseKyantGlass();
+    if (float && float.parentNode) float.parentNode.removeChild(float);
+    generation += 1;
+    pointer = source = target = float = null;
+    window.setLiquidSidebarGestureLock('rail:' + (container.id || selector), false);
+  }
+  function onPointerMove(event) {
+    if (pointer === null || event.pointerId !== pointer) return;
+    if (!gestureMoved && Math.hypot(event.clientX - pressX, event.clientY - pressY) >= 4) {
+      gestureMoved = true;
+    }
+    event.preventDefault();
+    positionAlongPointer(event);
+  }
+  function onPointerUp(event) {
+    if (pointer === null || event.pointerId !== pointer) return;
+    var commit = target;
+    detachWindowTracking();
+    try { container.releasePointerCapture(pointer); } catch (_) {}
+    pointer = null;
+    if (commit) {
+      position(commit);
+    }
+    waitForLiquidSelectionArrival(float, function() {
+      landLiquidSelectionFloat(float, clear, function() {
+        if (!commit || !commit.isConnected) return;
+        if (container.id === 'left-tool-surface' || container.id === 'left-thumb') {
+          container.querySelectorAll('.liquid-tool-active').forEach(function(item) { item.classList.remove('liquid-tool-active'); });
+          commit.classList.add('liquid-tool-active');
+        }
+        commit.click();
+      });
+    });
+  }
+  function onPointerCancel(event) {
+    if (pointer === null || event.pointerId === pointer) clear();
+  }
+  container.addEventListener('pointerdown', function(event) {
+    if (window.liquidSidebarGesturesLocked() && !(float && float.isConnected)) return;
+    var pressed = itemAt(event);
+    if (!pressed || event.button !== 0) return;
+    event.preventDefault();
+    target = pressed;
+    pointer = event.pointerId;
+    pressX = event.clientX;
+    pressY = event.clientY;
+    gestureMoved = false;
+    var captureGeneration = ++generation;
+    window.setLiquidSidebarGestureLock('rail:' + (container.id || selector), true);
+    container.setPointerCapture(pointer);
+    window.addEventListener('pointermove', onPointerMove, true);
+    window.addEventListener('pointerup', onPointerUp, true);
+    window.addEventListener('pointercancel', onPointerCancel, true);
+    if (float && float.isConnected) {
+      if (float._liquidLandingTimer) clearTimeout(float._liquidLandingTimer);
+      float._liquidLandingTimer = 0;
+      float.classList.remove('liquid-selection-landing');
+      float.classList.add('visible');
+      position(target);
+    } else {
+      source = container.querySelector('.liquid-tool-active') || container.querySelector(selector + '.active') || pressed;
+      source.classList.add('liquid-selection-source');
+      float = document.createElement('div');
+      float.className = 'liquid-selection-float liquid-selection-primed';
+      mountLiquidViewportFloat(float);
+      position(source);
+      showLiquidViewportFloat(float);
+      position(source);
+      float.getBoundingClientRect();
+      requestAnimationFrame(function() {
+        if (!float) return;
+        float.classList.remove('liquid-selection-primed');
+        float.classList.add('visible');
+        requestAnimationFrame(function() { if (float) position(target); });
+      });
+    }
+    captureLiquidBackdropFrame().then(function(backdropFrame) {
+      if (generation === captureGeneration && float && float.isConnected) attachKyantLiquidRenderer(float, backdropFrame);
+    }).catch(function() {});
+  });
+  container.addEventListener('click', function(event) {
+    if (!event.isTrusted || !float || !float.isConnected) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+}
+
+requestAnimationFrame(function() {
+  wireLiquidRailInteractions(document.getElementById('mode-toggle'), '.mode-toggle-btn[data-mode]');
+  wireLiquidRailInteractions(document.getElementById('left-tool-surface'), '.left-nav-icon');
+  wireLiquidRailInteractions(document.getElementById('left-thumb'), '.lt-item');
+  wireLiquidRailInteractions(document.getElementById('left-ws-list'), '.left-ws-item');
+  wireLiquidRailInteractions(document.getElementById('right-tabs'), '.tab-btn[data-tab]');
+});
+
+// Checkbox switches use one pointer-captured glass thumb that follows the
+// pointer continuously, then commits to the nearest binary stop on release.
+document.addEventListener('pointerdown', function(event) {
+  var input = event.target && event.target.closest ? event.target.closest('input[type="checkbox"]') : null;
+  if (!input || input.disabled || event.button !== 0) return;
+  event.preventDefault();
+  var rect = input.getBoundingClientRect();
+  var pointer = event.pointerId;
+  var fraction = input.checked ? 1 : 0;
+  var startX = event.clientX;
+  var startY = event.clientY;
+  var dragging = false;
+  var canceledToScroll = false;
+  var dragThreshold = event.pointerType === 'mouse' ? 4 : 8;
+  input.dataset.liquidSuppressClick = 'true';
+  clearTimeout(input._liquidSuppressClickTimer);
+  input._liquidSuppressClickTimer = setTimeout(function() {
+    delete input.dataset.liquidSuppressClick;
+    delete input._liquidSuppressClickTimer;
+  }, 700);
+  function update(clientX) {
+    fraction = ((clientX - rect.left - 12) / Math.max(1, rect.width - 24));
+    fraction = Math.max(0, Math.min(1, fraction));
+    input.style.setProperty('--liquid-switch-x', (18 * fraction) + 'px');
+    input.style.setProperty('--liquid-switch-progress', (100 * fraction) + '%');
+  }
+  function finish(commit) {
+    input.removeEventListener('pointermove', move);
+    input.removeEventListener('pointerup', up);
+    input.removeEventListener('pointercancel', cancel);
+    input.classList.remove('liquid-switch-dragging');
+    input.style.removeProperty('--liquid-switch-x');
+    input.style.removeProperty('--liquid-switch-progress');
+    try { input.releasePointerCapture(pointer); } catch (_) {}
+    if (!commit || canceledToScroll) return;
+    var next = dragging ? fraction >= 0.5 : !input.checked;
+    var changed = input.checked !== next;
+    input.checked = next;
+    if (changed) {
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+  function move(moveEvent) {
+    if (moveEvent.pointerId !== pointer) return;
+    if (!dragging) {
+      var deltaX = moveEvent.clientX - startX;
+      var deltaY = moveEvent.clientY - startY;
+      if (Math.hypot(deltaX, deltaY) < dragThreshold) return;
+      if (Math.abs(deltaY) > Math.abs(deltaX)) {
+        canceledToScroll = true;
+        return;
+      }
+      dragging = true;
+    }
+    moveEvent.preventDefault();
+    update(moveEvent.clientX);
+  }
+  function up(upEvent) {
+    if (upEvent.pointerId === pointer) finish(true);
+  }
+  function cancel(cancelEvent) {
+    if (cancelEvent.pointerId === pointer) finish(false);
+  }
+  input.classList.add('liquid-switch-dragging');
+  input.setPointerCapture(pointer);
+  input.addEventListener('pointermove', move);
+  input.addEventListener('pointerup', up);
+  input.addEventListener('pointercancel', cancel);
+}, true);
+document.addEventListener('click', function(event) {
+  var input = event.target && event.target.closest ? event.target.closest('input[type="checkbox"]') : null;
+  if (!input || input.dataset.liquidSuppressClick !== 'true') return;
+  clearTimeout(input._liquidSuppressClickTimer);
+  delete input.dataset.liquidSuppressClick;
+  delete input._liquidSuppressClickTimer;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+
+// Glass-strength range mirrors the binary liquid switch: its existing color
+// thumb lifts into one glass capsule, follows the pointer continuously, then
+// falls back to the color thumb and persists the released value.
+document.addEventListener('pointerdown', function(event) {
+  var input = event.target && event.target.closest ? event.target.closest('#settings-glass-opacity') : null;
+  if (!input || input.disabled || event.button !== 0) return;
+  event.preventDefault();
+  var rect = input.getBoundingClientRect();
+  var pointer = event.pointerId;
+  var minimum = Number(input.min || 0);
+  var maximum = Number(input.max || 100);
+  var step = Math.max(0.0001, Number(input.step || 1));
+  var initialValue = input.value;
+  function update(clientX) {
+    var fraction = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+    var raw = minimum + fraction * (maximum - minimum);
+    var next = Math.min(maximum, Math.max(minimum, Math.round((raw - minimum) / step) * step + minimum));
+    input.value = String(next);
+    input.style.setProperty('--liquid-range-progress', (fraction * 100) + '%');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  function finish(commit) {
+    input.removeEventListener('pointermove', move);
+    input.removeEventListener('pointerup', up);
+    input.removeEventListener('pointercancel', cancel);
+    input.classList.remove('liquid-range-dragging');
+    try { input.releasePointerCapture(pointer); } catch (_) {}
+    if (!commit) {
+      input.value = initialValue;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return;
+    }
+    input.dataset.liquidSuppressRangeClick = 'true';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  function move(moveEvent) { if (moveEvent.pointerId === pointer) { moveEvent.preventDefault(); update(moveEvent.clientX); } }
+  function up(upEvent) { if (upEvent.pointerId === pointer) finish(true); }
+  function cancel(cancelEvent) { if (cancelEvent.pointerId === pointer) finish(false); }
+  input.classList.add('liquid-range-dragging');
+  update(event.clientX);
+  input.setPointerCapture(pointer);
+  input.addEventListener('pointermove', move);
+  input.addEventListener('pointerup', up);
+  input.addEventListener('pointercancel', cancel);
+}, true);
+document.addEventListener('click', function(event) {
+  var input = event.target && event.target.closest ? event.target.closest('#settings-glass-opacity') : null;
+  if (!input || input.dataset.liquidSuppressRangeClick !== 'true') return;
+  delete input.dataset.liquidSuppressRangeClick;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+
 window.syncModelSelectSurface = function() {
   var sel = els['model-select'] || document.getElementById('model-select');
   var label = document.getElementById('model-select-label');
@@ -12510,6 +13927,7 @@ window.syncModelSelectSurface = function() {
     }
   });
   menu.innerHTML = html;
+  wireLiquidMenuInteractions(menu);
 };
 
 document.addEventListener('pointerdown', function(event) {
@@ -12521,6 +13939,7 @@ window.closeNewmarkSelect = function(shell, options) {
   shell = shell || document.querySelector('.newmark-select-shell.open');
   if (!shell) return;
   shell.classList.remove('open');
+  window.setLiquidSidebarGestureLock('popup:select:' + (shell.dataset.selectId || 'anonymous'), false);
   var menu = shell.querySelector('.newmark-select-menu');
   if (menu && typeof menu.hidePopover === 'function' && menu.matches(':popover-open')) menu.hidePopover();
   var button = shell.querySelector('.newmark-select-button');
@@ -12604,6 +14023,7 @@ window.syncNewmarkSelect = function(select) {
     }
   });
   menu.innerHTML = html;
+  wireLiquidMenuInteractions(menu);
 };
 
 window.enhanceNewmarkSelect = function(select) {
@@ -12644,7 +14064,7 @@ window.enhanceNewmarkSelect = function(select) {
   button.setAttribute('aria-label', String(accessibleLabel).trim());
   button.innerHTML = '<span class="newmark-select-button-label"></span>' + iconSvg('chevron-down', '', 'tiny');
   var menu = document.createElement('div');
-  menu.className = 'model-select-menu newmark-select-menu';
+  menu.className = 'model-select-menu newmark-select-menu liquid-glass liquid-glass-carrier';
   menu.setAttribute('role', 'listbox');
   menu.setAttribute('popover', 'manual');
   select.parentNode.insertBefore(shell, select);
@@ -12665,6 +14085,7 @@ window.enhanceNewmarkSelect = function(select) {
     }
     window.syncNewmarkSelect(select);
     shell.classList.add('open');
+    window.setLiquidSidebarGestureLock('popup:select:' + (shell.dataset.selectId || 'anonymous'), true);
     button.setAttribute('aria-expanded', 'true');
     if (opening) {
       if (typeof menu.showPopover === 'function' && !menu.matches(':popover-open')) menu.showPopover();
@@ -13710,7 +15131,11 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
     }));
     var lockedUi = conversationWorkUiState(lockedConversationId, lockedTarget.workspaceId);
     if (stillActive && r && Array.isArray(r.diffs) && r.diffs.length) {
-      lockedUi.pendingWorkReview = r.diffs;
+      var reviewRecord = {
+        diffs: r.diffs,
+        runId: String(r.runId || localRunId || '')
+      };
+      upsertWorkReviewRecord(lockedUi, reviewRecord.diffs, reviewRecord.runId, [localRunId]);
     }
     if (stillActive && !responseOwnedByRun) {
       responseMsg = lockedUi.activeWorkflowMsg;
@@ -13739,9 +15164,13 @@ window.sendMessage = async function(modeOverride, queuedText, opts) {
       hydrateConversationBranchState(r);
       renderChatMessages(r.chatMessages);
     }
-    else if (stillActive) {
+    // Re-render every retained completed-run review after a transcript rebuild.
+    // addWorkReview dedupes by run identity and normalized file totals.
+    if (stillActive) {
       var completedReviewUi = conversationWorkUiState(lockedConversationId);
-      if (completedReviewUi.pendingWorkReview) addWorkReview(completedReviewUi.pendingWorkReview);
+      (completedReviewUi.workReviews || []).forEach(function(item) {
+        addWorkReview(item.diffs || item, item.runId || '', [localRunId]);
+      });
     }
     if (r && r.conversations) {
       applyBackendConversations(r.conversations || [], stillActive ? lockedConversationId : activeConversationId(), lockedTarget.workspaceId);
@@ -14253,6 +15682,7 @@ window.switchRightTab = function(tab) {
   var rightTabs = els['right-tabs'] || document.getElementById('right-tabs');
   var rightContent = els['right-content'] || document.getElementById('right-content');
   if (!rightTabs || !rightContent) return;
+  wireLiquidRailInteractions(rightTabs, '.tab-btn[data-tab]');
   var btns = rightTabs.querySelectorAll('.tab-btn[data-tab]');
   for (var i = 0; i < btns.length; i++) {
     var selected = btns[i].getAttribute('data-tab') === tab;
@@ -15451,6 +16881,7 @@ window.openSubWin = function(title, html) {
   els['sub-win-title'].textContent = title;
   els['sub-win-body'].innerHTML = html;
   els['sub-win'].classList.toggle('memory-lab-window', !!(state.activeSubWindowView && state.activeSubWindowView.name === 'memoryLab'));
+  els['sub-win'].classList.toggle('settings-window', !!(state.activeSubWindowView && state.activeSubWindowView.name === 'settings'));
   els['sub-win-overlay'].classList.add('open');
   updateApplicationInertState();
   requestAnimationFrame(focusSubWindowInitial);
@@ -15481,6 +16912,7 @@ window.closeSubWin = function() {
     els['sub-win-title'].textContent = previous.title;
     els['sub-win-body'].innerHTML = previous.html;
     els['sub-win'].classList.toggle('memory-lab-window', !!(previous.view && previous.view.name === 'memoryLab'));
+    els['sub-win'].classList.toggle('settings-window', !!(previous.view && previous.view.name === 'settings'));
     requestAnimationFrame(function() {
       els['sub-win-body'].scrollTop = previous.scrollTop || 0;
       state.restoringSubWindow = false;
@@ -15491,7 +16923,7 @@ window.closeSubWin = function() {
   els['sub-win-overlay'].classList.remove('open');
   state.activeSubWindowView = null;
   var win = els['sub-win'];
-  if (win) { win.classList.remove('memory-lab-window'); win.style.left = ''; win.style.top = ''; win.style.margin = ''; }
+  if (win) { win.classList.remove('memory-lab-window', 'settings-window'); win.style.left = ''; win.style.top = ''; win.style.margin = ''; }
   var restoreFocus = subWindowOriginFocus;
   subWindowOriginFocus = null;
   updateApplicationInertState();
@@ -15564,7 +16996,10 @@ window.openSettings = function(tab) {
   if (refreshingSettings) state.restoringSubWindow = true;
   window.openSubWin(t('settings.title'), html);
   state.restoringSubWindow = false;
-  requestAnimationFrame(function() { window.settingsTab(activeTab); });
+  requestAnimationFrame(function() {
+    window.settingsTab(activeTab);
+    wireLiquidRailInteractions(document.querySelector('.settings-tabs:not(.plugin-tabs)'), '.stab-btn[data-stab]');
+  });
 };
 
 function renderGeneralSettings() {
@@ -15644,7 +17079,7 @@ function renderGeneralSettings() {
     '</div>' +
     '<div class="setting-row">' +
     '<label class="setting-label" for="settings-glass-opacity">' + esc(t('settings.glass')) + '</label>' +
-    '<div class="setting-control"><input id="settings-glass-opacity" type="range" min="0" max="100" step="1" value="' + glassVal + '" aria-describedby="glass-desc" aria-valuetext="' + escAttr(glassDescription) + '" oninput="window.previewGlassOpacity(this.value)" onchange="window.commitGlassOpacity(this.value)">' +
+    '<div class="setting-control"><div class="settings-glass-range-line"><input id="settings-glass-opacity" type="range" min="0" max="100" step="1" value="' + glassVal + '" style="--liquid-range-progress:' + glassVal + '%" aria-describedby="glass-desc settings-glass-value" aria-valuetext="' + escAttr(glassDescription) + '" oninput="window.previewGlassOpacity(this.value)" onchange="window.commitGlassOpacity(this.value)"><output id="settings-glass-value" for="settings-glass-opacity">' + glassNumberText(glassVal) + '%</output></div>' +
     '<div class="setting-desc" id="glass-desc" aria-live="polite">' + esc(glassDescription) + '</div></div>' +
     '</div>' +
     '<div class="setting-row">' +
@@ -16144,6 +17579,7 @@ function glassPresentationForOpacity(value) {
   var alpha = opacityPercent / 100;
   var transparencyPercent = 100 - opacityPercent;
   var glassWidth = 20 * transparencyPercent / 100;
+  var opticalStrength = Math.min(2, transparencyPercent / 15);
   var rounded = function(number) { return Math.round(number * 10000) / 10000; };
   return {
     opacityPercent: rounded(opacityPercent),
@@ -16152,6 +17588,12 @@ function glassPresentationForOpacity(value) {
     blur1: rounded(0.4 * glassWidth),
     blur2: rounded(0.8 * glassWidth),
     blur3: rounded(glassWidth),
+    carrierBlur: rounded(glassWidth * 2.2),
+    carrierAlpha: rounded(Math.max(0.08, 0.44 * alpha)),
+    floatRefractionHeight: rounded(12 * opticalStrength),
+    floatRefractionAmount: rounded(24 * opticalStrength),
+    floatChromaticAberration: rounded(opticalStrength),
+    floatOpticalOpacity: rounded(Math.min(1, opticalStrength)),
     alpha1: rounded(0.75 * alpha),
     alpha2: rounded(0.80 * alpha),
     alpha3: rounded(0.85 * alpha),
@@ -16184,11 +17626,21 @@ function applyGlassPresentation(presentation) {
     root.style.setProperty('--glass-blur-2', presentation.blur2 + 'px');
     root.style.setProperty('--glass-blur-3', presentation.blur3 + 'px');
   }
+  root.style.setProperty('--carrier-glass-blur', presentation.carrierBlur + 'px');
+  root.style.setProperty('--carrier-glass-alpha', String(presentation.carrierAlpha));
+  root.style.setProperty('--liquid-float-refraction-amount', presentation.floatRefractionAmount + 'px');
+  root.style.setProperty('--liquid-float-chromatic-aberration', String(presentation.floatChromaticAberration));
+  root.style.setProperty('--liquid-float-optical-opacity', String(presentation.floatOpticalOpacity));
   var description = glassDescriptionText(presentation);
   var desc = document.getElementById('glass-desc');
   if (desc) desc.textContent = description;
   var slider = document.getElementById('settings-glass-opacity');
-  if (slider) slider.setAttribute('aria-valuetext', description);
+  if (slider) {
+    slider.setAttribute('aria-valuetext', description);
+    slider.style.setProperty('--liquid-range-progress', presentation.opacityPercent + '%');
+  }
+  var valueOutput = document.getElementById('settings-glass-value');
+  if (valueOutput) valueOutput.textContent = glassNumberText(presentation.opacityPercent) + '%';
   return presentation;
 }
 
@@ -19479,9 +20931,232 @@ function appendDomNodesInBatches(container, nodes, batchKey, batchSize) {
   appendBatch();
 }
 
+var conversationGlassFlight = { float: null, source: null, covered: null, timer: 0, generation: 0 };
+var conversationNativeDrag = {
+  row: null,
+  float: null,
+  arrived: false,
+  grabX: 0,
+  grabY: 0,
+  clientX: 0,
+  clientY: 0
+};
+
+function positionConversationGlassAroundRow(float, row) {
+  if (!float || !row) return;
+  var rect = row.getBoundingClientRect();
+  var edge = liquidInteractionEdgePx();
+  keepLiquidFloatExpansionInsideViewport(float, rect);
+  float._liquidTargetRect = { left: rect.left - edge, top: rect.top - edge, width: rect.width + edge * 2, height: rect.height + edge * 2 };
+  float.style.left = (rect.left - edge) + 'px';
+  float.style.top = (rect.top - edge) + 'px';
+  float.style.width = (rect.width + edge * 2) + 'px';
+  float.style.height = (rect.height + edge * 2) + 'px';
+  if (float._renderKyantGlass) float._renderKyantGlass({
+    left: rect.left - edge, top: rect.top - edge,
+    width: rect.width + edge * 2, height: rect.height + edge * 2
+  }, true);
+}
+
+function followConversationDragPointer() {
+  var drag = conversationNativeDrag;
+  if (!drag.arrived || !drag.float) return;
+  var list = els['conversation-list'];
+  if (!list || !drag.row) return;
+  var conversations = currentWorkspaceConversations();
+  var draggedId = String(drag.row.getAttribute('data-conversation-id') || '');
+  var draggedConversation = conversations.find(function(item) { return String(item && item.id || '') === draggedId; });
+  var trackRows = Array.from(list.querySelectorAll('.conv-item')).filter(function(row) {
+    var id = String(row.getAttribute('data-conversation-id') || '');
+    var conversation = conversations.find(function(item) { return String(item && item.id || '') === id; });
+    return conversation && draggedConversation && !!conversation.pinned === !!draggedConversation.pinned;
+  });
+  if (!trackRows.length) trackRows = [drag.row];
+  var firstRect = trackRows[0].getBoundingClientRect();
+  var lastRect = trackRows[trackRows.length - 1].getBoundingClientRect();
+  var rowRect = drag.row.getBoundingClientRect();
+  var projectedTop = drag.clientY - drag.grabY;
+  var minTop = firstRect.top - rowRect.height;
+  var maxTop = Math.max(minTop, lastRect.bottom);
+  var trackTop = Math.max(minTop, Math.min(maxTop, projectedTop));
+  var edge = liquidInteractionEdgePx();
+  drag.float.style.left = (rowRect.left - edge) + 'px';
+  drag.float.style.top = (trackTop - edge) + 'px';
+  if (drag.float._renderKyantGlass) drag.float._renderKyantGlass();
+}
+
+function wrapConversationDragContent(row, float) {
+  if (!row || !float || !row.isConnected) return;
+  var content = document.createElement('div');
+  content.className = 'conversation-drag-content';
+  Array.prototype.slice.call(row.childNodes).forEach(function(node) { content.appendChild(node.cloneNode(true)); });
+  float.appendChild(content);
+  row.classList.add('dragging', 'conversation-glass-dragging');
+  float.classList.add('conversation-drag-following');
+  conversationNativeDrag.arrived = true;
+  conversationNativeDrag.float = float;
+  followConversationDragPointer();
+}
+
+window.updateConversationNativeDrag = function(clientX, clientY) {
+  conversationNativeDrag.clientX = clientX;
+  conversationNativeDrag.clientY = clientY;
+  var drag = conversationNativeDrag;
+  var list = els['conversation-list'];
+  if (drag.row && list) {
+    var conversations = currentWorkspaceConversations();
+    var draggedId = String(drag.row.getAttribute('data-conversation-id') || '');
+    var draggedConversation = conversations.find(function(item) { return String(item && item.id || '') === draggedId; });
+    var peers = Array.from(list.querySelectorAll('.conv-item')).filter(function(row) {
+      if (row === drag.row) return false;
+      var id = String(row.getAttribute('data-conversation-id') || '');
+      var conversation = conversations.find(function(item) { return String(item && item.id || '') === id; });
+      return conversation && draggedConversation && !!conversation.pinned === !!draggedConversation.pinned;
+    });
+    if (peers.length) {
+      var firstPeerRect = peers[0].getBoundingClientRect();
+      var lastPeerRect = peers[peers.length - 1].getBoundingClientRect();
+      if (clientY <= firstPeerRect.top) {
+        list.insertBefore(drag.row, peers[0]);
+      } else if (clientY >= lastPeerRect.bottom) {
+        list.insertBefore(drag.row, peers[peers.length - 1].nextSibling);
+      }
+    }
+  }
+  followConversationDragPointer();
+};
+
+// Native conversation drags can leave the list while the mouse button remains
+// held. Track at document capture scope so the carried glass never freezes at
+// the list boundary; drop/reorder ownership remains scoped to the list itself.
+document.addEventListener('dragover', function(event) {
+  if (conversationNativeDrag.row) window.updateConversationNativeDrag(event.clientX, event.clientY);
+}, true);
+
+window.cancelConversationGlassFlight = function() {
+  conversationGlassFlight.generation += 1;
+  if (conversationGlassFlight.timer) clearTimeout(conversationGlassFlight.timer);
+  conversationGlassFlight.timer = 0;
+  if (conversationGlassFlight.source) conversationGlassFlight.source.classList.remove('liquid-selection-source');
+  conversationGlassFlight.source = null;
+  if (conversationGlassFlight.covered) conversationGlassFlight.covered.classList.remove('liquid-selection-covered');
+  conversationGlassFlight.covered = null;
+  stopLiquidMotionTracking(conversationGlassFlight.float);
+  if (conversationGlassFlight.float && conversationGlassFlight.float._releaseKyantGlass) {
+    conversationGlassFlight.float._releaseKyantGlass();
+  }
+  if (conversationGlassFlight.float && conversationGlassFlight.float.parentNode) {
+    conversationGlassFlight.float.parentNode.removeChild(conversationGlassFlight.float);
+  }
+  conversationGlassFlight.float = null;
+  if (conversationNativeDrag.row) conversationNativeDrag.row.classList.remove('dragging', 'conversation-glass-dragging');
+  conversationNativeDrag.row = null;
+  conversationNativeDrag.float = null;
+  conversationNativeDrag.arrived = false;
+  window.setLiquidSidebarGestureLock('conversation-flight', false);
+};
+
+window.animateConversationGlassTo = function(target, options) {
+  options = options || {};
+  var list = els['conversation-list'];
+  if (!list || !target) { if (options.onArrive) options.onArrive(); return; }
+  var source = list.querySelector('.conv-item.active') || target;
+  var float = conversationGlassFlight.float;
+  var redirecting = !!(float && float.isConnected);
+  if (!redirecting) {
+    float = document.createElement('div');
+    float.className = 'liquid-selection-float conversation-selection-float liquid-selection-primed';
+    mountLiquidViewportFloat(float);
+    captureLiquidBackdropFrame().then(function(frame) {
+      if (float && float.isConnected) attachKyantLiquidRenderer(float, frame);
+    });
+    conversationGlassFlight.float = float;
+    conversationGlassFlight.source = source;
+    source.classList.add('liquid-selection-source');
+  }
+  function place(row) {
+    if (conversationGlassFlight.covered && conversationGlassFlight.covered !== row) {
+      conversationGlassFlight.covered.classList.remove('liquid-selection-covered');
+    }
+    conversationGlassFlight.covered = row;
+    row.classList.add('liquid-selection-covered');
+    positionConversationGlassAroundRow(float, row);
+  }
+  var generation = ++conversationGlassFlight.generation;
+  if (!redirecting) {
+    place(source);
+    showLiquidViewportFloat(float);
+    place(source);
+    // Lock the true source geometry before enabling lift and movement together.
+    float.getBoundingClientRect();
+    requestAnimationFrame(function() {
+      if (conversationGlassFlight.generation !== generation || !float.isConnected) return;
+      float.classList.remove('liquid-selection-primed');
+      float.classList.add('visible');
+      place(target);
+    });
+    window.setLiquidSidebarGestureLock('conversation-flight', true);
+  } else {
+    // Updating top/left while the transition is running makes CSS continue
+    // from the currently rendered position; no second glass block is born.
+    float.classList.remove('liquid-selection-landing');
+    place(target);
+  }
+  if (conversationGlassFlight.timer) clearTimeout(conversationGlassFlight.timer);
+  waitForLiquidSelectionArrival(float, function() {
+    if (conversationGlassFlight.generation !== generation) return;
+    conversationGlassFlight.timer = 0;
+    if (options.dragging && target.isConnected) {
+      wrapConversationDragContent(target, float);
+      window.setLiquidSidebarGestureLock('conversation-flight', false);
+      if (options.onArrive) options.onArrive();
+      return;
+    }
+    landLiquidSelectionFloat(float, function() {
+      if (conversationGlassFlight.generation !== generation) return;
+      if (float._releaseKyantGlass) float._releaseKyantGlass();
+      if (float.parentNode) float.parentNode.removeChild(float);
+      conversationGlassFlight.float = null;
+      if (conversationGlassFlight.source) conversationGlassFlight.source.classList.remove('liquid-selection-source');
+      conversationGlassFlight.source = null;
+      if (conversationGlassFlight.covered) conversationGlassFlight.covered.classList.remove('liquid-selection-covered');
+      conversationGlassFlight.covered = null;
+      window.setLiquidSidebarGestureLock('conversation-flight', false);
+      if (options.onArrive) options.onArrive();
+    });
+  });
+};
+
+window.activateConversationWithGlass = function(idx, row) {
+  var conversations = currentWorkspaceConversations();
+  if (!row || !conversations[idx]) {
+    window.switchConversation(idx);
+    return;
+  }
+  var targetId = String(conversations[idx].id || '');
+  window.animateConversationGlassTo(row, { onArrive: function() {
+    var current = currentWorkspaceConversations();
+    var targetIndex = current.findIndex(function(item) { return String(item.id || '') === targetId; });
+    if (targetIndex >= 0) window.switchConversation(targetIndex);
+  } });
+};
+
 function renderConversations() {
   var list = els['conversation-list'];
   if (!list) return;
+  if (list.dataset.conversationDropWired !== 'true') {
+    list.dataset.conversationDropWired = 'true';
+    list.addEventListener('dragover', function(event) {
+      window.updateConversationNativeDrag(event.clientX, event.clientY);
+      if (conversationNativeDrag.row) event.preventDefault();
+    });
+    list.addEventListener('drop', function(event) {
+      if (!list.querySelector('.conv-item.dragging')) return;
+      event.preventDefault();
+      list.dataset.conversationDropCommitted = 'true';
+      window.commitConversationDomOrder();
+    });
+  }
   if (!state.currentWorkspace) {
     list.innerHTML = '<div style="padding:14px 10px;font-size:12px;color:var(--text-dim);line-height:1.5;text-align:center;">' + esc(t('workspace.selectFirst')) + '</div>';
     updateWorkspaceGate();
@@ -19544,14 +21219,47 @@ function renderConversations() {
         window.openConversationActionMenu(event.currentTarget, this.getAttribute('data-conversation-id') || '', { x: event.clientX, y: event.clientY });
       });
       div.addEventListener('dragstart', function(event) {
-        this.classList.add('dragging');
+        window.cancelConversationGlassFlight();
+        var rect = this.getBoundingClientRect();
+        conversationNativeDrag.row = this;
+        conversationNativeDrag.arrived = false;
+        conversationNativeDrag.grabX = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+        conversationNativeDrag.grabY = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+        conversationNativeDrag.clientX = event.clientX;
+        conversationNativeDrag.clientY = event.clientY;
+        if (event.dataTransfer) {
+          var transparentDragImage = document.createElement('canvas');
+          transparentDragImage.width = transparentDragImage.height = 1;
+          document.body.appendChild(transparentDragImage);
+          event.dataTransfer.setDragImage(transparentDragImage, 0, 0);
+          setTimeout(function() { transparentDragImage.remove(); }, 0);
+        }
+        list.classList.add('conversation-reordering');
+        list.dataset.conversationDropCommitted = 'false';
+        window.setLiquidSidebarGestureLock('conversation-reorder', true);
+        window.animateConversationGlassTo(this, { dragging: true });
         if (event.dataTransfer) { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', this.getAttribute('data-conversation-id') || ''); }
       });
+      div.addEventListener('drag', function(event) {
+        if (conversationNativeDrag.row === this && (event.clientX || event.clientY)) {
+          window.updateConversationNativeDrag(event.clientX, event.clientY);
+        }
+      });
       div.addEventListener('dragend', function() {
-        this.classList.remove('dragging');
+        var releasedRow = this;
+        list.classList.remove('conversation-reordering');
         Array.from(list.querySelectorAll('.conv-item')).forEach(function(row) { row.classList.remove('drag-over'); });
+        window.animateConversationGlassTo(releasedRow, { onArrive: function() {
+          releasedRow.classList.remove('dragging', 'conversation-glass-dragging');
+          conversationNativeDrag.row = null;
+          conversationNativeDrag.float = null;
+          conversationNativeDrag.arrived = false;
+          window.setLiquidSidebarGestureLock('conversation-reorder', false);
+          renderConversations();
+        } });
       });
       div.addEventListener('dragover', function(event) {
+        window.updateConversationNativeDrag(event.clientX, event.clientY);
         var dragging = list.querySelector('.conv-item.dragging');
         if (!dragging || dragging === this) return;
         var convsNow = currentWorkspaceConversations();
@@ -19559,13 +21267,19 @@ function renderConversations() {
         var targetConv = convsNow.find(function(item) { return String(item.id) === String(this.getAttribute('data-conversation-id')); }, this);
         if (!draggingConv || !targetConv || !!draggingConv.pinned !== !!targetConv.pinned) return;
         event.preventDefault();
-        this.classList.add('drag-over');
+        var targetRect = this.getBoundingClientRect();
+        var after = event.clientY >= targetRect.top + targetRect.height / 2;
+        var anchor = after ? this.nextSibling : this;
+        if (anchor !== dragging) list.insertBefore(dragging, anchor);
+        Array.from(list.querySelectorAll('.conv-item')).forEach(function(row) { row.classList.remove('drag-over'); });
       });
       div.addEventListener('dragleave', function() { this.classList.remove('drag-over'); });
       div.addEventListener('drop', function(event) {
         event.preventDefault();
+        event.stopPropagation();
         this.classList.remove('drag-over');
-        window.reorderConversationBefore(event.dataTransfer ? event.dataTransfer.getData('text/plain') : '', this.getAttribute('data-conversation-id') || '');
+        list.dataset.conversationDropCommitted = 'true';
+        window.commitConversationDomOrder();
       });
       existingRows[String(conv.id || '')] = div;
     }
@@ -19577,7 +21291,7 @@ function renderConversations() {
       div.setAttribute('data-inner-key', innerKey);
       div.innerHTML = nextInner;
     }
-    div.onclick = function(idx) { return function() { window.switchConversation(idx); }; }(i);
+    div.onclick = function(idx) { return function(event) { window.activateConversationWithGlass(idx, event.currentTarget); }; }(i);
     orderedRows.push(div);
   }
   Object.keys(existingRows).forEach(function(id) {
@@ -20102,6 +21816,7 @@ window.renderMemoryLab = function() {
   html += '</div>';
   panel.innerHTML = html;
   if (state.memoryLabSearchQuery) window.updateMemoryLabSearch(state.memoryLabSearchQuery);
+  wireLiquidRailInteractions(panel.querySelector('.memory-lab-view-menu'), 'button[data-memory-view]');
   if (state.memoryLabView === 'overview') requestAnimationFrame(function() { window.initMemoryLabOverview(); });
   state.memoryLabNavDirection = 'fade';
 };
@@ -20110,8 +21825,8 @@ window.memoryLabTopbar = function(lab) {
   var view = state.memoryLabView || 'overview';
   return '<div class="memory-lab-panel"><div class="memory-lab-topbar">' +
     '<div class="memory-lab-view-menu" role="tablist">' +
-      '<button class="' + (view === 'overview' ? 'active' : '') + '" onclick="window.switchMemoryLabView(\'overview\')">' + esc(t('memoryLab.overview')) + '</button>' +
-      '<button class="' + (view === 'detail' ? 'active' : '') + '" onclick="window.switchMemoryLabView(\'detail\')">' + esc(t('memoryLab.detail')) + '</button>' +
+      '<button data-memory-view="overview" class="' + (view === 'overview' ? 'active' : '') + '" onclick="window.switchMemoryLabView(\'overview\')">' + esc(t('memoryLab.overview')) + '</button>' +
+      '<button data-memory-view="detail" class="' + (view === 'detail' ? 'active' : '') + '" onclick="window.switchMemoryLabView(\'detail\')">' + esc(t('memoryLab.detail')) + '</button>' +
     '</div>' +
     '<div class="memory-lab-search">' +
       '<input id="memory-lab-search-input" value="' + escAttr(state.memoryLabSearchQuery || '') + '" placeholder="' + escAttr(t('memoryLab.search')) + '" oninput="window.updateMemoryLabSearch(this.value)" onfocus="window.updateMemoryLabSearch(this.value)" />' +
@@ -20849,6 +22564,7 @@ window.showPluginList = function(tab, options) {
     state.activeSubWindowView = { name: 'plugins', tab: requested };
   }
   window.syncPluginTabs(!pluginOpen || !!(options && options.focusTab));
+  wireLiquidRailInteractions(document.querySelector('.plugin-tabs[role="tablist"]'), '.stab-btn[data-plugin-tab]');
   var panel = document.getElementById('plugin-panel');
   if (panel) panel.replaceChildren();
   if (requested === 'mcp') window.renderMcpManager();
@@ -21762,6 +23478,30 @@ window.renderLeftWsList = function() {
   var holder = document.createElement('div');
   holder.innerHTML = html;
   appendDomNodesInBatches(container, Array.from(holder.children), 'workspace-list', 24);
+  wireLiquidRailInteractions(container, '.left-ws-item');
+};
+
+window.commitConversationDomOrder = function() {
+  var list = els['conversation-list'];
+  var convs = currentWorkspaceConversations();
+  if (!list || !convs.length) return;
+  window.cancelConversationGlassFlight();
+  var byId = {};
+  convs.forEach(function(item) { byId[String(item.id)] = item; });
+  var ids = Array.from(list.querySelectorAll('.conv-item')).map(function(row) {
+    return String(row.getAttribute('data-conversation-id') || '');
+  }).filter(function(id) { return !!byId[id]; });
+  if (ids.length !== convs.length) return renderConversations();
+  var activeId = activeConversationId();
+  convs.splice.apply(convs, [0, convs.length].concat(ids.map(function(id) { return byId[id]; })));
+  setActiveWorkspaceConversationById(activeId);
+  renderConversations();
+  Promise.resolve(api.reorderConversations && api.reorderConversations(ids)).then(function(saved) {
+    if (!saved) throw new Error(t('conversation.reorderFailed'));
+  }).catch(function() {
+    showUiNotice(t('conversation.reorderFailed'), 'error', 'reorder-conversations');
+    if (api.getState) api.getState(currentConversationTarget(activeId)).then(function(s) { if (s) applyWorkspaceStateFromBackend(s); });
+  });
 };
 
 window.handleWorkspaceKey = function(event) {
@@ -21880,10 +23620,10 @@ window.showNewWorkspaceDialog = function() {
   state.activeSubWindowView = { name: 'workspaceNew' };
   var html = '<div style="padding:10px;">' +
     '<label style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:6px;">' + esc(t('workspace.type')) + '</label>' +
-    '<div style="display:flex;gap:10px;margin-bottom:12px;">' +
-    '<label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;"><input type="radio" name="ws-type" value="internal" checked onchange="window.toggleWsType()"> ' + esc(t('workspace.internal')) + '</label>' +
-    '<label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;"><input type="radio" name="ws-type" value="external" onchange="window.toggleWsType()"> ' + esc(t('workspace.external')) + '</label>' +
-    '<label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;"><input type="radio" name="ws-type" value="ssh" onchange="window.toggleWsType()"> ' + esc(t('workspace.ssh')) + '</label>' +
+    '<div class="workspace-type-pager" role="radiogroup" aria-label="' + escAttr(t('workspace.type')) + '">' +
+    '<label class="workspace-type-option active"><input type="radio" name="ws-type" value="internal" checked onchange="window.toggleWsType()">' + esc(t('workspace.internal')) + '</label>' +
+    '<label class="workspace-type-option"><input type="radio" name="ws-type" value="external" onchange="window.toggleWsType()">' + esc(t('workspace.external')) + '</label>' +
+    '<label class="workspace-type-option"><input type="radio" name="ws-type" value="ssh" onchange="window.toggleWsType()">' + esc(t('workspace.ssh')) + '</label>' +
     '</div>' +
     '<label id="ws-name-label-dlg" style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:8px;">' + esc(t('workspace.name')) + '</label>' +
     '<input id="new-ws-input" style="width:100%;padding:8px 10px;border:1px solid var(--glass-border-2);border-radius:var(--radius-sm);background:var(--glass-bg-1);color:var(--text);font-size:13px;outline:none;box-sizing:border-box;" placeholder="' + escAttr(t('workspace.enterName')) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing&&event.key!==\'Process\'&&event.keyCode!==229)window.doCreateWorkspace()">' +
@@ -21908,6 +23648,7 @@ window.showNewWorkspaceDialog = function() {
     '<button class="sec-btn" onclick="window.closeSubWin()">' + esc(t('common.cancel')) + '</button>' +
     '</div></div>';
   window.openSubWin(t('workspace.new'), html);
+  wireLiquidRailInteractions(document.querySelector('.workspace-type-pager'), '.workspace-type-option');
   setTimeout(function() {
     var inp = document.getElementById('new-ws-input');
     if (inp) inp.focus();
@@ -21918,6 +23659,11 @@ window.toggleWsType = function() {
   var selected = 'internal';
   for (var i = 0; i < radios.length; i++) {
     if (radios[i].checked) { selected = radios[i].value; break; }
+  }
+  var options = document.querySelectorAll('.workspace-type-option');
+  for (var oi = 0; oi < options.length; oi++) {
+    var radio = options[oi].querySelector('input[name="ws-type"]');
+    options[oi].classList.toggle('active', !!(radio && radio.checked));
   }
   var extPath = document.getElementById('ws-ext-path');
   var sshFields = document.getElementById('ws-ssh-fields');
@@ -23022,6 +24768,7 @@ function schedulePostStartupUiRendering() {
       this.setAttribute('aria-valuenow', String(Math.round(size)));
     });
     handles[i].addEventListener('mousedown', function(e) {
+      if (window.liquidSidebarGesturesLocked && window.liquidSidebarGesturesLocked()) return;
       e.preventDefault();
       var handle = this;
       var target = this.getAttribute('data-target');

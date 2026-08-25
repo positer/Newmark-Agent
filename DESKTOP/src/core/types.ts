@@ -105,6 +105,9 @@ export interface AgentWorkEvent {
   toolName?: string;
   toolArgs?: string;
   queue?: { steering: string[]; followUp: string[] };
+  /** Structured queue rows with stable kernel ids (mobile/PC queue unification export). */
+  queueItems?: Array<{ id: string; text: string; queueMode: string; requestedMode?: string; goalObjective?: string; runId?: string; createdAt: string }>;
+  queuePaused?: boolean;
   workspaceId?: string;
   workspaceKey?: string;
   runtimeKey?: string;

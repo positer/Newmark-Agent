@@ -22,9 +22,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.newmark.mobile.ui.theme.MarqueeColors
 
-/** 跑马灯渐变刷：与 PC-GUI 完全一致——conic-gradient 绕中心旋转（3s 一圈，4 色循环） */
+/** Continuous black/white/black/white sweep shared with PC. */
 private data class MarqueeAnimation(val brush: Brush, val angle: Float)
 
 @Composable
@@ -41,12 +40,17 @@ private fun rememberMarqueeAnimation(): MarqueeAnimation {
     )
     // 基础 stops 每帧不变，只按 offset 旋转（避免每帧 sortedBy 排序分配）；末尾 1f 闭合首色对齐 PC conic-gradient
     val baseStops = remember {
-        val n = MarqueeColors.size
-        MarqueeColors.mapIndexed { i, c -> i.toFloat() / n to c } + (1f to MarqueeColors.first())
+        arrayOf(
+            0f to Color.Black,
+            0.25f to Color.White,
+            0.5f to Color.Black,
+            0.75f to Color.White,
+            1f to Color.Black,
+        )
     }
     // Keep the conic stops immutable. Reordering stops at the 0/360 boundary
     // creates a visible jump; rotating the draw scope preserves continuity.
-    return MarqueeAnimation(Brush.sweepGradient(*baseStops.toTypedArray()), angle)
+    return MarqueeAnimation(Brush.sweepGradient(*baseStops), angle)
 }
 
 /**
@@ -66,11 +70,12 @@ private fun rememberMarqueeAnimation(): MarqueeAnimation {
 fun MarqueeBorder(
     cornerRadius: Dp,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val animation = rememberMarqueeAnimation()
     Box(
-        modifier = modifier.drawBehind {
+        modifier = modifier.then(if (enabled) Modifier.drawBehind {
             val stroke = 2.dp.toPx()
             val radius = cornerRadius.toPx()
             rotate(animation.angle, pivot = center) {
@@ -82,7 +87,7 @@ fun MarqueeBorder(
                     style = Stroke(width = stroke),
                 )
             }
-        },
+        } else Modifier),
     ) {
         content()
     }

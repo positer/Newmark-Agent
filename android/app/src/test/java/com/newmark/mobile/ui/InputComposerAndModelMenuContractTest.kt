@@ -81,7 +81,11 @@ class InputComposerAndModelMenuContractTest {
         val appSource = File("src/main/java/com/newmark/mobile/ui/NewmarkApp.kt").readText()
         assertTrue(source.contains("LaunchedEffect(remoteMode)"))
         assertTrue(source.contains("key(remoteMode)"))
-        assertTrue(source.contains("trailing = selectedModelMenuLabel(selectedModel, selectedProviderId, selectedModelName, options)"))
+        val modelMain = source.substringAfter("InputCompositeMenu.ModelMain -> listOf(")
+            .substringBefore("InputCompositeMenu.Models ->")
+        assertTrue(modelMain.contains("selectedModelMenuLabel("))
+        assertTrue(modelMain.contains("selectedProviderId"))
+        assertTrue(modelMain.contains("selectedModelName"))
         assertTrue(appSource.contains("val modelOptions = if (useRemote) linkVm.remoteModelOptions() else vm.enabledModelOptions()"))
     }
 
@@ -142,7 +146,8 @@ class InputComposerAndModelMenuContractTest {
         assertTrue(source.contains("inputOverlayBounds.value = it.boundsInWindow()"))
         assertTrue(source.contains("onAnchorBoundsChanged(it.boundsInWindow())"))
         assertTrue(source.contains("inputMenuAnchorInContainer(anchor, container)"))
-        assertTrue(source.contains("val visibleAnchor = activeAnchor ?: displayedAnchor ?: return"))
+        assertTrue(source.contains("val visibleAnchor = activeWindowAnchor?.let { anchor ->"))
+        assertTrue(source.contains("inputMenuAnchorInContainer(anchor, container)"))
         assertTrue(source.contains("val bottomAnchorOffset = visibleAnchor.top.toInt() - gapPx - overlaySize.height"))
     }
 }

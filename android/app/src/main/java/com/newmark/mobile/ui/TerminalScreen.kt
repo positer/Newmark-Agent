@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import com.newmark.mobile.data.LocalToolExecutor
 import com.newmark.mobile.data.TerminalEntry
 import com.newmark.mobile.data.TerminalSessionStore
+import com.newmark.mobile.ui.components.glassButtonSurface
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkGreen
 import com.newmark.mobile.ui.theme.NewmarkRed
@@ -72,7 +73,10 @@ fun TerminalScreen(onBack: () -> Unit) {
         input = ""
     }
 
-    val (_, predictiveModifier) = predictiveBackMotion(onBack)
+    val (_, predictiveModifier) = predictiveBackMotion(
+        onBack = onBack,
+        retainProgressOnCommit = true,
+    )
 
     Column(
         modifier = Modifier
@@ -94,8 +98,7 @@ fun TerminalScreen(onBack: () -> Unit) {
             Box(
                 modifier = Modifier
                     .size(36.dp)
-                    .clip(CircleShape)
-                    .background(p.bgQuaternary)
+                    .glassButtonSurface(CircleShape, p.bgQuaternary)
                     .clickable(onClick = onBack),
                 contentAlignment = Alignment.Center,
             ) {
@@ -184,8 +187,7 @@ fun TerminalScreen(onBack: () -> Unit) {
             Box(
                 modifier = Modifier
                     .size(30.dp)
-                    .clip(CircleShape)
-                    .background(p.accent)
+                    .glassButtonSurface(CircleShape, p.accent, alpha = 0.78f)
                     .clickable { if (input.isNotBlank()) runCommand(input.trim()) },
                 contentAlignment = Alignment.Center,
             ) {

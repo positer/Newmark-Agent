@@ -35,6 +35,7 @@ $token = 'mobile-stress-token'
 $pairUrl = "newmark-pair://127.0.0.1:${Port}?token=$token"
 $mockProcess = $null
 $reverseInstalled = $false
+$batteryWhitelistInstalled = $false
 $result = [ordered]@{
     timestamp = (Get-Date).ToString('o')
     serial = $Serial
@@ -132,6 +133,18 @@ function Assert-AppForeground([string]$Stage) {
     }
 }
 
+function Get-PackageRuntimeFailures {
+    # Java exceptions are not enough: a recursive Compose GraphicsLayer can
+    # terminate RenderThread through SIGSEGV without a FATAL EXCEPTION line.
+    $pattern = 'FATAL EXCEPTION|ANR in com\.newmark\.mobile\.stress|Process: com\.newmark\.mobile\.stress|Fatal signal.*(?:newmark|mobile)|Cmdline: com\.newmark\.mobile\.stress|data_app_native_crash'
+    return @(
+        & $adb -s $Serial logcat -d -v brief |
+            Select-String -Pattern $pattern |
+            ForEach-Object { $_.Line } |
+            Select-Object -Last 50
+    )
+}
+
 function Get-UiXml {
     $remotePath = '/sdcard/newmark-mobile-stress-window.xml'
     & $adb -s $Serial shell uiautomator dump $remotePath *> $null
@@ -217,6 +230,14 @@ try {
         if (-not (Test-Path -LiteralPath $apkPath)) { throw "Debug APK not found: $apkPath" }
         Invoke-Adb @('install', '-r', $apkPath)
     }
+    # Keep the isolated automation package out of system-owned first-run
+    # dialogs. Otherwise the permission controller steals foreground ownership
+    # and the suite never reaches the product pressure window.
+    if ([int]((& $adb -s $Serial shell getprop ro.build.version.sdk) -join '') -ge 33) {
+        Invoke-Adb @('shell', 'pm', 'grant', $packageName, 'android.permission.POST_NOTIFICATIONS') | Out-Null
+    }
+    Invoke-Adb @('shell', 'dumpsys', 'deviceidle', 'whitelist', "+$packageName") | Out-Null
+    $batteryWhitelistInstalled = $true
     $version = (& $adb -s $Serial shell dumpsys package $packageName | Select-String -Pattern 'versionName=|versionCode=' | ForEach-Object { $_.Line.Trim() }) -join '; '
     $result.apk.version = ($version -replace '\s+', ' ').Trim()
 
@@ -273,7 +294,11 @@ try {
     # reads settle. The fixture caps this at 250ms, giving a deterministic
     # interaction window instead of racing the terminal boundary.
     Invoke-RestMethod -Uri "http://127.0.0.1:$Port/__stress/burst?count=$BurstCount&intervalMs=250" -TimeoutSec 20 | Out-Null
-    Wait-ForUiNode -Find { Get-UiNodeByText '处理中' } -Label '远端运行中 Build' -TimeoutMs 5000 | Out-Null
+    Wait-ForUiNode -Find {
+        $runningLabel = Get-UiNodeByText '处理中'
+        if ($null -ne $runningLabel) { return $runningLabel }
+        return Get-UiNodeByDescription '停止'
+    } -Label '远端运行中 Build' -TimeoutMs 5000 | Out-Null
     # One hierarchy snapshot must prove the complete resident state.  Taking
     # four additional independent uiautomator dumps can consume the complete
     # 24-second 300-event run and accidentally turn the following queue test
@@ -379,7 +404,7 @@ try {
     $result.memory.totalPssKb = [int]([regex]::Match($mem, 'TOTAL PSS:\s*(\d+)').Groups[1].Value)
     # `uiautomator dump` itself runs through AndroidRuntime and logs a normal
     # START/Shutting down pair. Only package-scoped fatal signatures count.
-    $fatalLines = @(& $adb -s $Serial logcat -d -v brief | Select-String -Pattern 'FATAL EXCEPTION|ANR in com\.newmark\.mobile\.stress|Process: com\.newmark\.mobile\.stress' | ForEach-Object { $_.Line } | Select-Object -Last 50)
+    $fatalLines = @(Get-PackageRuntimeFailures)
     $skippedFrames = @(& $adb -s $Serial logcat -d -v brief | Select-String -Pattern 'Skipped [0-9]+ frames' | ForEach-Object { $_.Line } | Select-Object -Last 50)
     if ($fatalLines.Count -gt 0) { $result.errors = $fatalLines }
     if ($skippedFrames.Count -gt 0) { $result.warnings = $skippedFrames }
@@ -408,12 +433,7 @@ catch {
     # Capture package-scoped runtime failures even when the suite aborts before
     # the normal success-path logcat gate. This prevents an ANR dialog from
     # being misreported only as a missing UI node.
-    $runtimeFailures = @(
-        & $adb -s $Serial logcat -d -v brief |
-            Select-String -Pattern 'FATAL EXCEPTION|ANR in com\.newmark\.mobile\.stress|Process: com\.newmark\.mobile\.stress' |
-            ForEach-Object { $_.Line } |
-            Select-Object -Last 50
-    )
+    $runtimeFailures = @(Get-PackageRuntimeFailures)
     $result.errors = @($result.errors) + $runtimeFailures + $_.Exception.Message
     throw
 }
@@ -421,6 +441,9 @@ finally {
     if ($mockProcess -and -not $mockProcess.HasExited) { Stop-Process -Id $mockProcess.Id -Force -ErrorAction SilentlyContinue }
     if ($reverseInstalled) {
         & $adb -s $Serial reverse --remove "tcp:$Port" | Out-Null
+    }
+    if ($batteryWhitelistInstalled) {
+        & $adb -s $Serial shell dumpsys deviceidle whitelist "-$packageName" | Out-Null
     }
     if (-not $KeepMockPair) {
         & $adb -s $Serial shell am force-stop $packageName | Out-Null

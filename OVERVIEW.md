@@ -1,5 +1,188 @@
 # Newmark Agent Overview
 
+## dev-0.5.7 corrective release (2026-08-25)
+
+dev-0.5.7 implements the planned Android long-press, cross-platform glass geometry/animation, PC response-time, scoped light-surface, fallback-boundary, transcript-disclosure, and popup-radius corrections. Android's interaction edge uses a fixed 6dp outer band. Desktop and Android moving glass deform more responsively from live velocity, stretching along travel and contracting across it while keeping refraction inside the transformed glass. Desktop dispersion is primed on low-frequency hover/focus intent, uses a single pooled off-DOM WebGL context, and refreshes through CSS-resolution JPEG bytes plus ImageBitmap decoding; a pooled alpha-enabled 2D surface performs final Chromium composition to avoid Windows' reused-WebGL black-frame defect. Geometry and uniform caches suppress duplicate GPU work, and production performs no CPU pixel readback.
+
+Android local and remote conversation capsules now use one overlay lifecycle for tap flight, stationary-hold pickup, drag tracking, release landing, and cancellation. The overlay uses required dimensions so its fixed 6dp band is not reduced by the row/list constraints; the carried content row no longer creates a second glass node. Gesture velocity and `Animatable` flight velocity feed the same liquid deformation transform as the refractive overlay, preserving stretch/squash through pickup, movement, and landing.
+
+Conversation rows and their floating overlay now have mutually exclusive edge ownership: a glass-covered local or remote capsule renders no static border, and a running remote capsule also pauses its marquee border while covered. This ownership contract also covers both forms of the left-sidebar bottom three-option utility selector and the right-sidebar tab strip; each selector derives coverage from its live moving target index, so the border transfers as the float crosses options. Reorder preview and commit share stored source/destination group indices plus the source height captured at pickup. Pointer deltas update that destination snapshot; release consumes the same snapshot instead of recomputing against bounds that may be changing under avoidance animation or optimistic list updates.
+
+Android live activity notifications now restore the native API 36 `Notification.ProgressStyle` promoted-ongoing route used by Fluid Cloud/Live Updates. The platform progress carrier has exactly three alternating black/white segments, while the remote and local running-Agent counts remain separate lines. API 35 and below keep the pre-existing custom two-line notification and marquee resources unchanged.
+
+Desktop light-theme `sub-win` carriers opened by every left tool entry now use the same bright surface token previously limited to Settings. PC liquid selectors attach active pointer move/up/cancel listeners at `window` capture scope and project out-of-region coordinates onto the selector axis, so the glass keeps moving and resolving the nearest landing option until release. Conversation native drag adds document-capture `dragover` plus source `drag` tracking while retaining list-scoped reorder/drop ownership.
+
+Click-driven PC selectors use a separate paced class so release does not truncate the flight: lift/movement lasts 360ms and landing lasts 180ms, while the selected action is still dispatched synchronously. Crossing the drag threshold removes that paced class and restores the lower-latency drag transition.
+
+The PC RGB shader weights chromatic separation by the full fixed edge profile, so long conversation capsules retain visible dispersion along straight horizontal and vertical edges instead of reaching zero on their center axes. Scrollable selector menus derive candidates from the overflow viewport, prefer fully visible rows, fall back to intersecting rows, and clamp projected centers to the visible menu track. Pointer release records the final float geometry before invoking an option click; popup teardown therefore cannot invalidate the non-blocking landing animation.
+
+The PC interaction layer now serializes visual commits. A conversation capsule covered by the top-layer float suppresses both its static border and marquee border. Selector and conversation clicks can redirect the one existing float without starting a second animation; only its final landing callback dispatches the page switch, control command, or popup close. Scrollable menus reject only rows entirely outside the clip, retaining partially visible rows as valid targets.
+
+Hard product contracts established by the plan:
+
+- PC interaction-glass edge is exactly 6px; its refraction and dispersion spatial thickness use the same edge token.
+- Android interaction-glass edge is exactly 6dp on every side and is created by fixed outer bounds, not proportional scale.
+- `fallback_on_unavailable=false` permits retrying the exact same deployment but forbids switching to any other model identity in fixed or Auto execution.
+- PC transcript block/tool/review disclosures never create floating interaction glass.
+- PC logical clicks do not wait for backdrop capture or visual landing; landing remains a complete non-blocking shrink/fade animation.
+- PC transparent WebGL remains off-DOM; only its small synchronized 2D display surface enters Chromium composition, and first plus reused compositor frames are regression-tested.
+- Light-theme brightness changes are scoped to Android sidebars and PC settings/modal carriers, preserving the already-correct Android popups and PC sidebars.
+
+Affected project tree:
+
+```text
+Newmark Agent/
+├─ DESKTOP/
+│  ├─ src/ui/index.html                         # PC glass state machine, 6px geometry, theme surfaces, transcript exclusions
+│  ├─ src/core/agent.ts                         # fixed/Auto fallback enforcement and preflight behavior
+│  ├─ src/core/autoRouter.ts                    # same-deployment retry versus model-substitution planning
+│  ├─ src/main.ts                               # live GUI config propagation into existing runtimes
+│  ├─ src/tests/
+│  │  ├─ pcGlassMigrationVerify.ts              # geometry, landing, non-blocking click, disclosure exclusions
+│  │  ├─ visualPreferencesVerify.ts             # scoped light-theme token contracts
+│  │  ├─ modelRecoveryStressVerify.ts           # fallback-off deployment identity matrix
+│  │  └─ autoAgentIntegrationVerify.ts          # Auto/fixed runtime route integration
+│  └─ scripts/dev-liquid-renderer-performance-smoke.cjs # real Electron input-to-command timing
+├─ android/app/src/
+│  ├─ main/java/com/newmark/mobile/ui/
+│  │  ├─ Sidebar.kt                             # remote long-press lifecycle, conversation glass bounds, light sidebar
+│  │  ├─ ChatScreen.kt                          # selector outer bounds, landing, 22dp popup shape
+│  │  ├─ RightSidebar.kt                        # fixed 6dp tab glass, velocity deformation, and 22dp dialog shell
+│  │  ├─ MemoryLabScreen.kt                     # fixed 6dp pager glass, velocity deformation, and 22dp dialog shell
+│  │  ├─ SettingsScreen.kt                      # 22dp device/settings dialog shell
+│  │  ├─ components/LiquidGlass.kt              # shared 6dp edge, motion deformation, and popup shape tokens
+│  │  ├─ components/LiquidHoldGesture.kt        # cancel-safe hold/drag lifecycle
+│  │  └─ theme/NewmarkTheme.kt                  # Android light-sidebar semantic surface
+│  └─ test/java/com/newmark/mobile/ui/          # gesture, bounds, theme, and popup-shape contracts
+├─ tasks/
+│  ├─ plan.md                                   # detailed implementation plan and acceptance criteria
+│  └─ todo.md                                   # phase-ordered execution checklist
+├─ archive/20260825-104310-dev-0.5.7-change-plan.md # planning evidence and repository findings
+└─ archive/20260825-115010-dev-0.5.7-execution.md   # implementation, gates, artifact hash, and manual gaps
+```
+
+Verification completed on the implementation tree: desktop `npm run test:full-release` exited 0, including the 1670/1670 core feature gate, Auto Router 39/39, Auto Agent integration 28 assertions, GUI/TUI/CLI stress, and the real Electron input probe. That probe kept one WebGL2 context, compiled two shaders, linked one program, uploaded two textures, and measured approximately 0.1ms p95 from pointer release to command. Android `testDebugUnitTest lintVitalRelease assembleRelease --no-daemon` completed successfully across 73 tasks. After version synchronization, `assembleRelease` rebuilt and verified the 0.5.7/507 package. The resulting 45,938,144-byte APK has SHA-256 `25A3229D531FF15395CCF8979C32AE4747D9958A1260E5A1D23181751769F965`.
+
+The automated gates do not substitute for physical-device or packaged-desktop visual acceptance. Non-active remote-conversation hold behavior, Android portrait/landscape/foldable rendering, and packaged Electron light-surface/disclosure behavior remain explicit manual checks in `tasks/todo.md`.
+
+## dev-0.5.6 cross-platform switch and conversation drop-preview correction (2026-08-24)
+
+- Android `LiquidGlassSwitch` and PC checkbox sliders now separate taps from drags. A tap always toggles the prior value, regardless of the pressed track half. Only horizontal movement beyond the platform slop/threshold owns the gesture, updates the liquid thumb, and settles from the release fraction; vertical movement is treated as scrolling and does not toggle.
+- Mobile local-conversation capsule titles are vertically centered and left-aligned. Local and remote reorder surfaces calculate the future insertion slot while dragging and animate intervening rows away from that slot: rows below an upward move shift down, and rows above a downward move shift up.
+- PC workspace rows and second-level conversation rows use full capsule geometry, while workspace thumbnails are circular. Conversation dragover now reorders the live DOM preview inside the same pin group; cancellation restores the model order and drop persists the visible preview order.
+- Verification: desktop TypeScript build and all `pcGlassMigrationVerify` checks pass. Android reports 133 debug JVM tests with 0 failures; `lintVitalRelease`, R8, and `assembleRelease` pass. The 45,932,364-byte Release APK has SHA-256 `30E1A35A4460530262C55D4D8CE6F4AA929E94521BC471063807E0C913741509`; it installed on `emulator-5554`, cold-started `com.newmark.mobile/.MainActivity`, remained alive as PID 5254, and the bounded log scan found no matching Java FATAL, native fatal signal, app ANR, or input timeout. A fresh screenshot confirms local conversation names are vertically centered and left-aligned; tapping the already-off/left half of the dark-mode switch changed it to on/right, directly exercising tap-to-toggle rather than release-position selection, after which the original setting was restored. Drag geometry still requires direct visual acceptance on the target physical device.
+
+## dev-0.5.6 mobile 300ms liquid gesture and conversation reorder correction (2026-08-24)
+
+- Added `ui/components/LiquidHoldGesture.kt` as the shared mobile gesture boundary: taps dispatch immediately after release, glass drag takes ownership only after a stationary 300ms hold, and pre-hold movement beyond touch slop remains unconsumed for LazyColumn/sidebar scrolling. A non-consuming candidate lock is installed on DOWN, and the app-wide edge recognizer aborts on the next event when that lock exists; the Material drawer's own `gesturesEnabled` stays stable so button-driven open/close settle animations are preserved.
+- Expanded/folded Command / Memory Lab / Settings selectors, local-mode and remote-mode right-sidebar tabs, and Memory Lab overview/detail use the same boundary. Right tabs now center a 44x40dp glass around 32x28dp tags; Memory Lab centers a 76x46dp glass around 64x34dp tags, giving a fixed 6dp band on every side without negative-Y positioning.
+- Local and remote conversations now share the asserted long-press contract: the active conversation glass flies to the held row, the held row follows vertical drag, release reorders only inside the same pin group, and an unchanged hold opens the action menu. Local reorder is persisted by `ChatViewModel.reorderConversations`; local capsules are thinner and show only a centered single-line name.
+- Tap flights are redirectable: another tap in the same selector cancels only the previous destination, continues from the float's current rendered position, and lands/commits only at the latest target. Pager/tool flights use 380ms and conversation flights use 340ms so low-frame-rate devices retain visible intermediate positions.
+- Conversation rows use capsule geometry and 6dp Kyant refraction edges. Action-menu rows gain press-only glass with shape-clipped Material interaction; borderless transcript Copy/Edit controls no longer create glass borders. Shape-bearing buttons clip their Material indication to the same capsule before click handling.
+- Verification: `compileDebugKotlin`, 130 debug JVM tests, `lintVitalRelease`, R8, and `assembleRelease` pass. A rooted emulator input stream held one pointer stationary for 360ms and then moved it; the captured frame shows the utility glass following the pointer without opening a page. The final release APK installs successfully on `emulator-5554`, cold-starts `com.newmark.mobile/.MainActivity`, remains alive, and produced no matching Java FATAL, native fatal signal, app ANR, or input timeout in the collected log. APK SHA-256: `3843F0290FC3762B10C5D1C16B4635000D4AAC8E3F0EC3B190AAB0CC73BABDAC`.
+
+## dev-0.5.6 original glass renderer restoration and RGB dispersion (2026-08-24)
+
+- The PC floating selector is restored byte-for-structure from the archived pre-GPU-optimization `0.5.6` package: each gesture awaits a fresh Electron `capturePage` data URL, creates its own WebGL2 canvas/context/program/texture, uploads that frame, and renders the complete Kyant rounded-rectangle lens. The pooled renderer, pointerover prewarm, stale frame cache, Blob transport, 64px backing buckets, and four-sided 9px center-hole mask are removed.
+- Kyant SDF, `circleMap`, depth normal, refraction height/amount, full-capsule interior sampling, source-to-target flight, and viewport top-layer placement remain unchanged. Only dispersion reads are reduced from seven to three: red at `+dispersion`, green at the refracted center, and blue at `-dispersion`; output channels are composed directly from those three samples and alpha is their average.
+- Android's vendored Kyant AGSL shader uses the same RGB-only three-sample reduction without changing the Compose recorder/consumer topology or gesture movement code.
+- Verification: desktop TypeScript build, `pcGlassMigrationVerify`, `visualPreferencesVerify`, fresh source and installed Electron renderer/flight captures, Android unit tests, Vital Lint, R8, and Release assembly pass. MSI administrative-image smoke passed 22 + 12 assertions. The current x64 MSI is 226,342,929 bytes with SHA-256 `C983EBF0735A8C3B7238ACE407E49C29156A7EF876ACAA02EE6C92D287574278`; UAC installation returned 0, HKLM/EXE/CLI report `0.5.6`, and packaged/installed `app.asar` hashes both equal `C420C86AF89A3E7E7B5CD7325D9D82BD430B7D6DF9DEB3B49AF5EADACB4B90DA`.
+
+## dev-0.5.6 mobile liquid-selector correction (2026-08-24)
+
+- Mobile left-sidebar local/remote conversations now use the same source-to-target glass flight model as PC; remote long-press reorder waits for the glass to arrive before the real row is lifted and translated.
+- Expanded and folded Command / Memory Lab / Settings groups, right-sidebar tabs, and Memory Lab overview/detail tabs use one content-free floating glass block. Gesture keys are structural rather than callback-list identities, every active selector locks app-wide sidebar swipes, and drag coordinates update through `graphicsLayer` without measure/layout churn.
+- Each selector records only its own static option layer while pressed, then its sibling Kyant `drawBackdrop` consumer refracts that live content. This fixes the nearly invisible float caused by sampling the uniform chat backdrop and preserves the no-self-referential-recorder rule.
+- Input popups regain a first-mount scale/fade entrance, keep one popup shell plus one interaction glass, and no longer clip the moving glass at the popup outline. Mobile refraction edge height is 6dp and named circular controls use the stronger shared press lift.
+- The expanded 48dp rail fades out as the full sidebar covers it, removing the dark-mode double-alpha strip. Memory Lab Dialogs center inside explicit 92% x 88% constraints and opt into full-display cutout layout for foldable/landscape symmetry.
+- Verification: 128 JVM tests, `lintVitalRelease`, R8, and `assembleRelease` pass. Emulator portrait/landscape screenshots confirmed the dark strip is gone, the floating selector appears on press with live option refraction, and the Memory Lab surface is bounded by the centered large-screen shell; final cutout-mode geometry remains covered by the source contract and final package gate.
+
+## dev-0.5.6 glass interaction correction (2026-08-24)
+
+- PC floating glass now keeps one prewarmed WebGL2 renderer instead of creating a context and recompiling the Kyant shader for every gesture. PNG backdrop transfer uses binary IPC/object URLs, uniform locations are cached, canvas backing storage grows in 64 px buckets, and animation redraws are coalesced into one `requestAnimationFrame` loop.
+- Pointerdown no longer awaits Electron `capturePage`/PNG decode. It mounts the source float synchronously using the latest valid cached texture and refreshes the backdrop asynchronously. The real Electron probe measured the capture path at about 233 ms but confirmed the mounted float already had `textureReady=true` after pointerover prewarm and used renderer ID `1` throughout the flight.
+- Android menu floats, collapsed-rail floats, and liquid switch thumbs now move through `graphicsLayer` translations rather than layout `offset` updates, keeping drag animation off the Compose measure/layout path.
+- PC popup/rail floating glass is transparent and does not clone option content; only conversation reordering wraps the real row content.
+- Popup, rail, resize, and conversation gestures use an explicit lock. Menu selection remains row-snapped, while pointer capture re-hit-tests by coordinates.
+- Android menus use enlarged corners and 1.14 lift; collapsed utility entries are circular and share a locked three-item vertical drag. Android/PC switches follow pointer position and settle to the nearest stop.
+- PC right sidebar has rounded left corners without left glow; borderless copy/edit actions opt out of the button glass pseudo-layer.
+- Latest gates: PC build, `pcGlassMigrationVerify`, `visualPreferencesVerify`, real Electron geometry/renderer probe, and MSI administrative-image smoke passed; Android `testDebugUnitTest` and `assembleRelease` passed. Current APK SHA-256 is `06B88DCD3C3D42D829A2F46CD83F08411630E11D557252DB2E09CF8AB8DBB484`.
+- Final corrected x64 MSI is `release/Newmark-Agent-0.5.6-x64.msi`, 226,355,217 bytes, SHA-256 `B34714E9AB035574233E8EF2F12EF9E56B3E896A6FD1FD43A19B7A489E1409C0`. The 9px edge mask now leaves the WebGL canvas at full size, preserving actual refraction/dispersion, while the shader uses four displaced red/yellow/cyan/blue samples instead of seven (about 43% fewer texture reads). Real UAC installation returned 0; HKLM registers `0.5.6.0`, installed CLI returns `0.5.6`, and installed/package `app.asar` hashes both equal `CB2F98070564F5009A87A7CA4AC0718FEF2534A26C954E09FFD48CB2003DFB5A`. The installed executable was launched through CDP and its captured flight frame shows live tool text through the transparent center with the edge ring rendered.
+
+## dev-0.5.6 严格审查与矫正结论 (2026-08-23)
+
+- **原同事修复不符合发布预期**：静态门禁虽然通过，但真实 Release 冷启动暴露 Kyant backdrop 递归渲染树，`RenderThread` 发生 `SIGSEGV`/stack overflow（512 层 `RenderNode::prepareTreeImpl`），此前的 `Size is unspecified` Java 崩溃修复并不充分。
+- **本轮矫正**：根布局不再让 `layerBackdrop` 包住抽屉/右栏/弹层消费者；主界面仅在会话背景内容或基础 `Row` 上录制，玻璃面作为兄弟覆盖层消费；三个独立 Dialog 均增加独立背景采样层。`LiquidGlassContractTest` 新增 recorder/consumer 拓扑守卫，防止自引用 RenderNode 回归。
+- **门禁证据**：桌面最终综合测试 `1670/1670`；Android 定向契约测试、R8、`lintVitalRelease`、`assembleRelease` 均成功；`DESKTOP` 版本检查显示 desktop/android `0.5.6`、versionCode `506`；`git diff --check` 无空白错误。
+- **设备验收状态**：修正后 APK 尚未能完成第二次真实冷启动复验。此前 AVD 在 native 崩溃后被拖入 PackageManager data scan，重启后超过有界等待仍未置 `sys.boot_completed=1`，故不能将修正后的 APK 宣称为发布候选。必须在健康设备/AVD 上重新安装并检查 Java FATAL、native signal、应用 ANR、UI dump 与截图。
+
+## dev-0.5.6 队列自动发送消息显示修复（用户输入时间线）(2026-08-23)
+
+- **用户报障：排队自动发送的消息没有显示在用户输入时间线**。根因：enqueueSameSession 入队 followUp 消息时保留 clientMessageId 并把 runId 固定为入队时运行的 runId；drain 原样传给 process 后，chatMessages 的用户消息携带旧 runId + clientMessageId，两端渲染（PC renderTranscript / 移动端 projectRemoteConversationItems）把「clientMessageId + runId 命中 workRuns」的消息误判为 guide 消息跳过气泡。
+- **修复**：ConversationKernel 新增 drainQueuedFollowUpMessage——drain followUp 分支清除 clientMessageId/runId（process 走普通用户消息分支，mode 取 visibleMode，runId 取当前 run），保留 text/visibleUserInput/visibleMode/images/attachments；string 载荷透传；steer guide 消息不受影响。
+- **验证**：新增 queueDrainUserMessageVerify（13 项）接入 test:desktop:built 与 test:queue-unify-stress；verify.js 1643 PASS / 27 FAIL（27 项为既有环境依赖）。
+
+## dev-0.5.6 mobile scroll-to-bottom targets the real transcript end (2026-08-23)
+
+- **用户报障：移动端回到底部按钮点击后只回到最新 build block 顶部而非末端**。根因：LazyColumn 中 build block 是超高单行（一行承载整个 work run），按钮 `scrollToItem(items.size - 1)` 只把该行顶部滚到视口；且 `atBottom` 判定 `lastVisible.index >= totalItemsCount - 2` 在超高行顶部进入视口时就误判为"在底部"，按钮提前隐藏。
+- **修复（ChatScreen.kt ChatContent）**：
+  - 新增纯函数 `transcriptEndIndex(itemCount, isSending)`：末端 reserve 行 index = item 数 +（isSending 时 ThinkingDots 1 行），该行是 LazyColumn 最后一行。
+  - 回到底部按钮与自动跟随统一 `scrollToItem(transcriptEndIndex)`，越过 build block 尾部直达真实末端。
+  - `atBottom` 判定改为 `lastVisible.index >= totalItemsCount - 1`（最后一行可见才算到底），超高 build block 不再误判。
+- **验证**：`TranscriptLayoutContractTest` 新增 2 项（transcriptEndIndex 索引计算、ChatContent 源码断言 scrollToItem(transcriptEndIndex) + 最后一行判定）；`testDebugUnitTest`/`assembleDebug` BUILD SUCCESSFUL。
+
+
+## dev-0.5.6 work-review dedup: incremental snapshot refreshes no longer duplicate Build block file-change cards (2026-08-23)
+
+- **用户报障：增量更新导致 build block 抬头的审查文件变动重复绘制**。根因：`applyConversationSnapshot`/发送消息快照路径每次刷新都重设 `lockedUi.pendingWorkReview = r.diffs`，且 `addWorkReview` 消费后**从不清除** `pendingWorkReview`，导致每次增量快照都重新 `appendChild` 一张相同的 review 卡片。
+- **修复（DESKTOP/src/ui/index.html）**：
+  - `addWorkReview` 增加按 `data-files`（规范化 diffs 的 JSON）去重：chat-area 已有相同 review 时直接返回已挂载元素，不重复 append。
+  - 快照路径消费 `pendingWorkReview` 后立即置 null（消费即清除），并把 review 渲染从 `else if (stillActive)` 分支提升为 `if (stillActive)` 无条件执行——`responseOwnedByRun=true`（快照含 chatMessages）时 review 也能渲染一次。
+  - `pendingWorkReview` 设置改为幂等（`!lockedUi.pendingWorkReview` 时才设置），后续增量快照不再重新武装已消费的 review。
+- **验证**：新增 `workReviewDedupVerify`（JSDOM 沙箱提取真实 `addWorkReview` 执行）：首次挂载 1 张、重复相同 diffs 调用 4 次仍 1 张、不同 diffs 挂第 2 张——全部 PASS；接入 `test:desktop:built`。verify.ts 新增源码断言（去重 + 消费清除 + 幂等设置）通过；`verify.js` 1643 PASS / 27 FAIL（27 项为既有环境依赖，与基线一致）。
+
+
+## dev-0.5.6 remote queue export fix: queue_update carries structured queueItems (2026-08-23)
+
+- **用户报障：移动端看不到远程的排队消息**。排查确认是"入口同化、出口未同化"：dev-0.5.5 队列同化让 PC UI 按 kernel id 管理 backendManaged 行（入口），但 kernel 广播的 `queue_update` 工作事件只带 `queue`（文本列表），**不带 `queueItems`（结构化 id 列表）**；且移动端 `applySseEvent` 完全不处理 `queue_update` 事件，导致移动端只能靠自己 enqueue 的响应或手动 refresh 看到队列，PC 端/其他端的排队变化无法实时同步。
+- **PC 端修复**：`AgentWorkEvent` 增加 `queueItems`/`queuePaused` 可选字段；`ConversationKernel.emitQueueUpdate` 广播 `queue_update` 时携带 `queueItems: this.queueItems(runtime.target)` 与 `queuePaused`。PC UI 既有 `syncQueueItemsFromSnapshot`（读事件 queueItems）随之拿到 id，`queueItemIdForText` 可解析 backendManaged 行。
+- **移动端修复**：`RemoteWorkEvent` 增加 `queue`/`queueItems`/`queuePaused` 字段；`RemotePayloadNormalizer` 暴露 `queue`/`queueItems`/`queueItem` 规范化；`DesktopLinkViewModel.applySseEvent` 新增 `queue_update` 分支——从事件更新 `conversationUiState.queueItems`/`queued`/`queuePaused`（带 runId 匹配守卫），移动端实时镜像远程队列。
+- **验证**：Android `testDebugUnitTest`/`assembleDebug` BUILD SUCCESSFUL（新增 `RemoteQueueEventContractTest` 3 项：queue_update 事件解析、规范化、queueItems 列表）；PC `tsc --noEmit` + `npm run build` 通过；`queueUnifyStressVerify` 全过；`verify.js` 1642 PASS / 27 FAIL（新增 kernel queue_update 导出断言通过，27 项为既有环境依赖，与基线一致）。
+
+
+## dev-0.5.6 长期历史显示修复 (2026-08-23)
+
+- **诊断**：非落盘问题，是显示计算问题。历史在 this.history 正常，但 compressionBuildBlockStart 在无活动 run 时返回 boundary=0，全部历史被算进 buildBlockTokens，上下文窗口 longHistoryTokens 恒为 0。
+- **修复**：compressionBuildBlockStart 增加空闲回退——无活动 run 时 boundary 取最后一个 run 起点之后（该 run 及之前 = 长期历史），无 run_id 时全部算长期历史；有活动 run 保持原有语义。
+- **附带收益**：修复前长期历史永不触发 maybeCompress 的 20% 阈值；修复后空闲对话历史积累到 20% 正常触发压缩。
+- **验证**：新增 longHistoryDisplayVerify（12 项，含真实 workspace 链路场景）；verify.js 保持基线 1643 PASS / 27 FAIL；contextBudgetVerify 无回归。
+
+## dev-0.5.6 PC-GUI 自制玻璃迁移到移植玻璃 (2026-08-23)
+
+- **自制玻璃 → 移植玻璃**：PC-GUI 主要玻璃表面（#topbar / #left-secondary / #input-area / #bottom / #right）与弹层菜单（.conv-action-menu / .model-select-menu / .newmark-select-menu）从自制玻璃（--glass-bg-* 半透明背景 + 内联 backdrop-filter）迁移到 kyant 移植玻璃 .liquid-glass 类。移除 8 处重复内联 backdrop-filter（由类统一提供），补充 4 处 position: relative（伪元素定位上下文），保留原有背景色/布局/边框 token。
+- **不破坏规划**：次要控件（.right-open-btn / .flow-takeover / tooltip / .sub-win / #context-inspector）轻模糊保留；light 主题覆盖不变；布局结构零改动。
+- **验证**：新增 pcGlassMigrationVerify（24 项 JSDOM+静态断言）接入 test:desktop:built；verify.js 恢复基线 1643 PASS / 27 FAIL（27 项为既有环境依赖）；verify.ts 两处类名断言随演进更新。
+
+## dev-0.5.6 mobile popups migrated to Kyant liquid glass (2026-08-23)
+
+- **弹窗全部改用 kyant 玻璃**：把移动端所有自制玻璃弹窗（半透明背景 + 手动 shadow/border）迁移到 kyant backdrop 液态玻璃。
+- **共享 backdrop 传播**：`LiquidGlass.kt` 新增 `LocalLiquidBackdrop` CompositionLocal（staticCompositionLocalOf<LayerBackdrop?>），根布局 `NewmarkApp.kt` 用 `CompositionLocalProvider` 提供共享 backdrop；应用窗口内浮层（AnchorMenu Popup、ChatScreen 输入菜单浮层）自动复用根 backdrop 折射主窗口内容。
+- **`liquidGlassModifier` 增强**：`backdrop` 参数改为可空，null 时回退 `LocalLiquidBackdrop`；两者皆无时用 `EmptyBackdrop` 仅输出 kyant 高光/内阴影/半透明表面（独立 Dialog 无捕获背景时的兜底）。
+- **Dialog 弹窗自建 backdrop**：Dialog 是独立 window，无法复用根 backdrop，故在 Dialog 内容根 Box 挂 `layerBackdrop(backdrop)` 捕获 Dialog 窗口内背景（scrim），弹窗表面用 `liquidGlassModifier(backdrop=...)` 折射。覆盖：MemoryLabDialog（14dp 圆角/0.78 alpha）、SubagentHistoryDialog（12dp/0.78）、SettingsScreen 设备选择 Dialog（16dp/0.92）。
+- **浮层 Popup 迁移**：AnchorMenu 菜单 Popup 与 ChatScreen 输入菜单浮层移除自制 `.background()` + 双层 border，改用 `liquidGlassModifier`（shape 传入原圆角，保留外 shadow）。
+- **保留**：SettingsScreen 高权限确认框为 Material3 `AlertDialog`（自带玻璃容器），未改动。
+- **验证**：`compileDebugKotlin`/`assembleDebug`/`testDebugUnitTest` BUILD SUCCESSFUL；`LiquidGlassContractTest` 新增弹窗玻璃参数断言（14/12/16dp 圆角、0.78/0.92 alpha、kyant 默认高光/阴影/内阴影）。
+
+
+## dev-0.5.6 Kyant AndroidLiquidGlass liquid glass on mobile and PC (2026-08-23)
+
+- **移动端接入 kyant AndroidLiquidGlass (backdrop) 库**：拉取 `io.github.kyant0/backdrop` 1.0.0 源码 vendor 进 `android/app/src/main/java/com/kyant/backdrop/`（Compose Multiplatform 液态玻璃库，含 lens 折射、blur、vibrancy、highlight、innerShadow、shadow 效果）。因 Maven AAR 需 Kotlin 2.2.21+/Compose 1.9.4+，项目为 Kotlin 2.0.21/Compose 1.7.4，故采用源码 vendor 并适配：`LayerRecorder.kt` 的 `context()` 接收者改写为显式参数（Kotlin 2.0 兼容），`InverseLayerScope.kt` 移除 Compose 1.8+ 才有的 `blendMode`/`colorFilter` 属性，补充 `org.jetbrains:annotations` 依赖。`compileDebugKotlin` 通过。
+- **移动端玻璃应用**：新增 `LiquidGlass.kt` 封装（`liquidGlassModifier` Modifier 扩展 + `rememberLiquidBackdrop`），参数对齐 PC `--glass-blur-3`/`saturate(140%)`。根布局挂 `layerBackdrop` 捕获应用背景；左侧抽屉 `ModalDrawerSheet` 与右侧栏 `MobileRightSidebar` 改用液态玻璃渲染（折射 4dp/8dp、模糊 3dp、饱和度 1.4、顶部高光、内阴影、外阴影），API 31+/33+ 自动生效，旧系统退化为原半透明表面。新增 `LiquidGlassContractTest`。
+- **PC-GUI 液态玻璃等价移植**：PC 为 Electron+HTML/CSS，无法运行 Compose 库，故在 `DESKTOP/src/ui/index.html` 用 CSS 等价实现 kyant 库视觉：新增 `--liquid-*` token（顶部高光/内阴影/外阴影/折射渐变/边缘光）与 `.liquid-glass`/`.liquid-glass-strong` 工具类（backdrop-filter 增强 + 折射渐变伪元素 + 高光边缘）。应用到左/右侧边栏（`#left-secondary`/`#right`）、顶栏 `#topbar`、输入区 `#input-area`、底部终端 `#bottom`、弹层（`.conv-action-menu`/`.model-select-menu`/`.newmark-select-menu`）：`saturate(130%)→140%` + `brightness(1.02)` + 高光/内阴影。
+- **版本同步**：三端升级 dev-0.5.6（`VERSION`/desktop `package.json`/android `versionCode 506`），`sync-release-version --check` 通过。
+- **验证**：Android `testDebugUnitTest` BUILD SUCCESSFUL（含新增 LiquidGlassContractTest）；PC `tsc --noEmit` + `npm run build` 通过，`verify.js` 1641 PASS / 27 FAIL（27 项为既有 Electron host tool bridge 环境依赖：terminal_takeover/computer_use/browser control，与基线一致，与本次改动无关）。
+# Newmark Agent Overview
+
 ## dev-0.5.5 provider-boundary fallback, runtime capacity, and interruption fixes (2026-08-23)
 
 - **串供应商修复（用户报障：科技云 deepseek-v4-flash 一直跑成 opencode 的同名模型）**：固定模型回退 `scopedSwitchModels` 的供应商解析此前在模型重名时经 `findModel` 失败后落回全局 `auto_switch_anchor_provider`（曾被旧回退逻辑污染为 opencode），导致科技云失败后整个回退池变成 opencode 的模型并选中同名 flash。修复：解析顺序改为 deployment-first（activeModelConfig → fixedDeployment → activeDeployment），绝不落回全局 anchor；无法唯一确定供应商时返回空池（宁可失败绝不跨供应商）。同时删除回退成功后改写 `auto_switch_anchor_provider` 的副作用（一次瞬时失败不再永久把 Auto 路由与未来回退池锚到恢复供应商）。
@@ -2492,12 +2675,276 @@ Files and responsibilities: `LocalToolCatalog.kt`/`LocalTools.kt` publish Build/
 
 Final Android verification passed 71/71 JVM tests plus Vital lint, R8, resource shrinking and Release assembly. The installed APK SHA-256 is `9C79BF99E581B4605C659B4981E50DCBFD5FC48A8A2895357DEC95E47C6F1C88`. A preserve-data install to `emulator-5554` kept five private-state hashes unchanged, package manager confirmed both calendar permissions declared and ungranted, cold start completed with `MainActivity` top-resumed, and package FATAL/ANR matches were zero. No real provider call was spent solely to trigger the dialog, so actual Agent-driven permission UI and calendar data are not claimed as observed.
 
+## 2026-08-23 dev-0.5.6 Kyant 菜单交互与静态表面回归
+
+`android/app/src/main/java/com/newmark/mobile/ui/ChatScreen.kt` 现在以一个整体 Kyant 玻璃壳承载菜单，以唯一活动胶囊玻璃层承载按下/拖动选择。静态选中项恢复为色块，按住拖动时玻璃层跟随手指跨行，松手提交落点并回落为色块。PC `DESKTOP/src/ui/index.html` 删除全局静态按钮玻璃化，外围恢复原表面，按钮仅按下时浮起一层玻璃；输入区和终端本体不使用玻璃。
+
+2026-08-24 追加校正：PC 设置/插件分页、MemoryLab 总览/详细、新建工作区三类型与输入区 Guide/Next 使用连续胶囊轨道和唯一透明移动玻璃；点按也完整播放旧项起浮、320ms 飞向目标、落地色块。活动玻璃通过 Electron 捕获真实窗口底图，WebGL2 实时执行从 Kyant 移植的圆角 SDF、透镜位移与七波段色散，已删除预烘焙光谱遮罩。开关按住后拇指扩展为放大胶囊，轨道按指针位置实时分割开启色/关闭色。左栏大空白根因为 `#left-thumb` 的 absolute 被后置 relative 覆盖，真实 Electron 坐标从错误的 `#left-content y=385.5` 修复为 `y=38`；靠窗浮块以窗口内侧为缩放方向，顶层渲染仍不被 overflow 裁剪。
+
+Guide/Next 自身的通用按钮按压伪玻璃已禁用，交互期间只允许共享移动浮块存在。选择浮块取消 `scale(1.20)` 等比例放大，改为相对目标矩形四边固定外扩 9px；这使圆角胶囊获得均匀 9px 厚折射包边，不再随按钮宽度横向过度拉长。
+
+PC WebGL2 移植进一步与 vendored Kyant `RoundedRectRefractionWithDispersionShaderString` 对齐：支持 `radiusAt`/四角半径、`circleMap` 透镜曲线、深度法线、显式 chromatic-aberration 强度，以及 red/orange/yellow/green/cyan/blue/purple 七次真实底图位移采样与原始通道权重。GPU 编译、链接和 WebGL2 不可用状态会写入浮块诊断属性并输出错误，不再静默伪装为成功玻璃。
+
+PC 玻璃强度设置已统一进入同一透明度/光学强度映射，但区分两类材质：`.liquid-glass-carrier` 用于设置窗、模型/操作菜单等承载弹窗，提供独立底图磨砂、低透明染色和折射外壳；`.liquid-selection-float` 保持无填色、无 backdrop blur，只由 WebGL2 实时折射与色散。按钮交互层原先固定的 12px 模糊也改为 `--glass-blur-3` 派生。真实 Electron 在 50% 预览点测得 carrier blur `22px`、alpha `0.22`、浮块折射量 `48px`、色散强度 `2`，弹窗 computed filter 为 `blur(22px) saturate(1.5) brightness(1.02)`；探针随后恢复 85% 默认预览。
+
+玻璃强度 range 使用 pointer capture，但状态语义不同于二态开关：按下时原色块圆形拇指原位扩展为单个 26x20px 玻璃胶囊；每次 pointer move 都立即更新滑条值、百分比 output、轨道分割、承载磨砂与浮块折射/色散。松手的 `change` 只保存已经实时呈现的当前值，不负责延迟应用效果；取消手势则恢复按下前值。合成后的原生 click 被抑制，避免松手后二次跳值或出现第二个静止玻璃。
+
+桌面构建与 `pcGlassMigrationVerify` 通过；Android 128 项 JVM 单测、Vital lint、Release R8/assemble 全部通过。Release APK 位于 `android/app/build/outputs/apk/release/app-release.apk`，SHA-256 为 `858C8BF1B630BF6E568B9B74233B304C9DB33ADCDD67DFB6EFA4D9C1CD5E3F29`。PC 左右侧栏已接入同款选中项起点、淡入、放大和拖动落点玻璃块逻辑。`emulator-5556` 安装启动及包级 FATAL/ANR 扫描通过；`emulator-5554` 的安装服务因系统 `StorageManager` NPE 中断，未归因于应用。
+
+## 2026-08-24 dev-0.5.6 连续玻璃状态机、排序避让与双源实时通知
+
+```text
+DESKTOP/
+├─ src/ui/index.html                              # 唯一对话浮块重定向、排序避让、WebGL renderer pool
+├─ src/tests/pcGlassMigrationVerify.ts            # PC 玻璃/排序/同项点击契约
+└─ scripts/
+   ├─ measure-liquid-renderer-calls.cjs            # 可观测 WebGL 调用计数
+   └─ dev-liquid-renderer-performance-smoke.cjs    # 真实 Electron/WebGL2 fresh-texture 探针
+android/app/src/main/
+├─ java/com/newmark/mobile/
+│  ├─ ui/ChatScreen.kt                             # 模型二级列表 300ms 手势仲裁与连续点击重定向
+│  ├─ ui/Sidebar.kt                                # 本地/远程对话唯一浮块与换位避让
+│  ├─ ui/components/LiquidHoldGesture.kt           # tap / scroll escape / held drag 共享契约
+│  ├─ service/LocalAgentForegroundService.kt       # 远程/本地运行数协调与两行通知
+│  └─ vm/{ChatViewModel,DesktopLinkViewModel}.kt   # 本地/远程真实运行计数发布
+└─ res/
+   ├─ layout/notification_agent_live_activity.xml  # 两行计数 + 横向进度条
+   └─ drawable/notification_agent_marquee*.xml     # 黑白黑白循环移动帧
+```
+
+模型二级列表不再在 DOWN 时抢占纵向滚动：触摸在 300ms 前越过 slop 时完整让给父级滚动，短点按立即启动旧选择起浮、正常速度移动、落地，静止长按满 300ms 后才消费指针并允许跨行拖动。动画作业可取消重定向，连续点击沿唯一浮块的当前渲染位置飞往最后目标，仅最后目标提交；同项点击保留原位起浮、停留、落下。移动端本地/远程对话记录上一段视觉落地项，PC 复用正在过渡的 DOM 浮块，避免状态回写延迟造成从窗口外或错误上方重启。
+
+对话排序期间 PC 与 Android 都关闭静态 active/selected 与 drop-target 胶囊，只显示携带中的玻璃胶囊；非拖动行继续按 `conversationDropIndex`/`conversationPreviewShift` 或 PC DOM 插入顺序整体避让并预览释放槽。PC WebGL2 在固定 6px 边缘保留完整 RGB 折射效果，中心完全透明且不执行截图纹理采样，避免深色底图以不透明矩形覆盖实时界面；首次和运动 draw 在当前交互/合成帧完成，不再嵌套等待下一帧。渲染池继续复用 context/program/buffer/texture、缓存 9 个 uniform、跳过重复几何并避免重复 canvas resize；真实 Electron 像素探针确认黑像素比例为 0，单一 context/program 持续复用。
+
+前台通知由远程与本地 ViewModel 向同一服务发布去重运行数，任一侧仍有 Agent 即保留服务，两侧均为 0 才停止。自定义通知固定显示“远程有 n 个Agent正在运行”和“本地有 m 个Agent正在运行”，并由可动画 drawable 播放黑白黑白渐变条。API 35 模拟器实际通知记录、RemoteViews 文本和截图均通过；临时恢复系统动画倍率后，两张相隔 140ms 的条带截图出现像素位移，随后恢复模拟器原设置。
+
+最终 Android 门禁为 136/136 JVM 单测、Vital lint、R8、资源收缩和 Release assembly 全通过；`app-release.apk` 为 45,938,144 bytes，SHA-256 `BEC316137289CE24B1DA8F94A19BE96DE190C2CD4D0C2BC4A9EE43617D133D5B`，已覆盖安装至 `emulator-5554`，包版本 0.5.6 且未发现 FATAL/ANR。100ms 快速纵向滑动模型二级弹窗后弹窗仍在，未误触选项。完整留痕见 `archive/20260824-230000-liquid-state-notification-and-reorder.md`。
+
+2026-08-24 的排序可见性修正进一步统一了预览与提交：Android 本地/远程对话均从源组索引和连续指针位移计算同一目标槽，实际移动首帧取消空飞行玻璃并显示携带内容；提交前将各对话 ID 的几何缓存重映射到新槽，避免活动对话排序后下一次点击仍从旧位置起飞。PC 使用真实按住行的克隆作为原生拖影，列表空隙也能提交当前 DOM 避让顺序，并在排序开始/提交时销毁旧玻璃飞行缓存。详见 `archive/20260824-213202-conversation-drag-slot-and-origin.md`。
+
+2026-08-24 22:12 将 PC 对话点击/排序彻底并入新版 Kyant 浮块管线：旧 `.conversation-selection-float` 阴影层和等比放大的原生拖影已删除；点击与拖动统一使用固定四边 9px 增厚的 `liquid-selection-float`、实时窗口底图和 RGB WebGL2 折射色散。排序时系统拖影为透明 1px 占位，唯一可见玻璃从活动对话飞向按住项，抵达后才克隆并包裹按住项内容，再随指针移动和驱动 DOM 避让。PC 完整桌面门禁、真实 Electron renderer 探针及 Android Release 门禁通过。产物与 UAC fresh-install 证据见 `archive/20260824-221232-pc-conversation-kyant-release.md`。
+
 ## dev-0.5.3 移动运行时、后台通知与固定光条（2026-08-21）
 
 Android 本地 Agent 现在在 chat/responses 两条协议上兼容旧 SSE 响应头，过滤空/`null` 思考增量并由运行所有权阻止双重最终回复；本地与远端对话共用 transcript 与 Markdown/TeX 呈现链。模型上下文支持主动/被动压缩、冷热历史管理及 Build block 有界读取，显示历史保持不变。普通 PC/Android provider 响应不设读取期限，PC PowerShell fallback 也不再把 0 隐式变成 1 秒。
 
-本地运行使用 partial wake lock 与 sticky data-sync foreground service，持续通知显示“本地Agent运行状态 / 有n个本地Agent正在运行”，图标与模型/智能选择按钮语义一致。PC/Android 跑马灯固定为纯黑、纯白、纯黑、纯白闭环，速度 3s，宽度分别为 2px/2dp；设置入口和配置读写已删除，旧三项 gradient 配置在升级首次加载时一次性清理。
+本地运行使用 partial wake lock 与 sticky data-sync foreground service，持续通知显示“本地Agent运行状态 / 有n个本地Agent正在运行”，图标与模型/智能选择按钮语义一致。Android 16 使用原生 `ProgressStyle` promoted ongoing 流体云通知，进度载体为三段黑白交替；API 35 及以下保留既有自定义两行通知与跑马灯资源。PC/Android 跑马灯固定为纯黑、纯白、纯黑、纯白闭环，速度 3s，宽度分别为 2px/2dp；设置入口和配置读写已删除，旧三项 gradient 配置在升级首次加载时一次性清理。
 
 Android 16 Live Updates 已改为真实 API 36 构建链：`compileSdk 36`、AGP 8.10.1 与 AndroidX Core 1.17.0。Manifest 声明 `POST_PROMOTED_NOTIFICATIONS`；API 36+ 只构建无进度条的 Standard Style Live Update，使用模型/智能选择 small icon、promoted ongoing 请求、“运行中”状态 chip、“本地Agent运行状态”标题及“有n个本地Agent正在运行”动态正文；API 35 及以下构建的普通 ongoing foreground notification也不显示进度条。旧反射实现把平台 `setShortCriticalText(String)` 错查为 `CharSequence`，会静默失败并回退普通通知，现已彻底移除。运行时同时检查结构资格 `hasPromotableCharacteristics()` 和系统/用户授权 `canPostPromotedNotifications()`，但不会在 Android 16 静默改回旧样式。
 
-桌面编译及 1667/1667 综合断言通过；Android 单测、Vital lint、R8、资源收缩和 Release 构建通过。最终 45,842,460-byte APK 位于 `android/app/build/outputs/apk/release/app-release.apk`，SHA-256 为 `D4FCEA8C073CF07095257D4909395CF73428ACC87DF58F584BA7B0D0B810FFA3`。本轮同时扩展移动端 Markdown/LaTeX：支持无空格标题、删除线、分隔线、`~~~` 围栏、单行/多行 `$$...$$` 与 `\\[...\\]`、equation/align 等环境、更多常见 LaTeX 命令和符号；本地与远端继续共用同一渲染链。本轮同时将模型/智能选择图标显式设置为 Android 15 及以下 ongoing 通知和 Android 16+ Live Update 的 small/large icon，避免系统回退显示 Newmark launcher icon；新增 `ACCESS_NETWORK_STATE`、电池优化豁免声明和任务移除后继续运行的 data-sync 前台服务策略，启动时通过 Android 系统页面请求用户确认“不受电池优化限制”。APK 合并 Manifest 包含 promoted permission、网络状态和后台策略权限，Release DEX 包含 `android.requestPromotedOngoing=true` 和 short-critical-text extras，且本地 Agent 服务字节码不再引用 `ProgressStyle`/`setProgress`。`emulator-5554` 仍为 API 35，因此 API 36 promoted chip、OPPO Fluid Cloud、物理设备息屏/OEM 保活及真实供应商长连接未声称已在设备上验证。完整记录见 `archive/20260821-dev-0.5.3-mobile-runtime-final.md`。
+桌面编译及 1667/1667 综合断言通过；Android 单测、Vital lint、R8、资源收缩和 Release 构建通过。Android `targetSdk` 已提升到 36，满足系统对 Fluid Cloud/Live Update 的资格判定。最终 45,954,544-byte APK 位于 `android/app/build/outputs/apk/release/app-release.apk`，SHA-256 为 `C209F32F46D03EC2A1E52164AE580D17F9434263B0FFBB93ED33A72B07F1A2EE`。本轮同时扩展移动端 Markdown/LaTeX：支持无空格标题、删除线、分隔线、`~~~` 围栏、单行/多行 `$$...$$` 与 `\\[...\\]`、equation/align 等环境、更多常见 LaTeX 命令和符号；本地与远端继续共用同一渲染链。本轮同时将模型/智能选择图标显式设置为 Android 15 及以下 ongoing 通知和 Android 16+ Live Update 的 small/large icon，避免系统回退显示 Newmark launcher icon；新增 `ACCESS_NETWORK_STATE`、电池优化豁免声明和任务移除后继续运行的 data-sync 前台服务策略，启动时通过 Android 系统页面请求用户确认“不受电池优化限制”。APK 合并 Manifest 包含 promoted permission、网络状态和后台策略权限，Release DEX 包含 `android.requestPromotedOngoing=true`、`Notification.ProgressStyle` 三段进度和 short-critical-text extras。`emulator-5554` 仍为 API 35，因此 API 36 promoted chip、OPPO Fluid Cloud、物理设备息屏/OEM 保活及真实供应商长连接未声称已在设备上验证。完整记录见 `archive/20260821-dev-0.5.3-mobile-runtime-final.md`。
+
+## 2026-08-25 dev-0.5.7 流体云与移动对话玻璃最终校正
+
+`LocalAgentForegroundService.kt` 的 API 36 主路径恢复为已知可工作的 AndroidX Compat promoted
+ongoing 构造，并移除自定义 RemoteViews、平台 ProgressStyle 与手写 promoted extras。
+`Sidebar.kt` 为本地/远程、点按/拖动四条对话玻璃路径增加 180ms alpha 与 1.00→0.82 并行
+回缩，完成后才隐藏浮层。`LiquidGlass.kt` 保持 6dp 光学折射厚度，并为半圆端帽定义固定
+12dp 横向捕获外扩，补足圆角 SDF 消耗且不使用等比缩放。
+
+定向测试与完整 `testDebugUnitTest lintVitalRelease assembleRelease --no-daemon` 均通过。
+Release APK 为 45,954,544 bytes，SHA-256
+`2A7961C5C7ED9A7D38445BB45575DF8836DAD51C568BDB0AA8A4942BE822E368`。
+
+2026-08-25 后续实测修正：`Sidebar.kt` 为本地/远程对话维护独立视觉选中 ID，玻璃抵达后先
+一次性提交并固定目标色块，再执行 240ms、1.00→0.68 的落地回缩，避免选中父状态回写造成
+新旧底色竞争。对话胶囊、折叠/展开左栏三按钮及 `RightSidebar.kt` 分页按钮的静态选中边框
+全部移除，运行中远程对话的胶囊 MarqueeBorder 也被取消，选择只通过 active surface 色块底
+表达。Android 完整单测、Vital lint、R8 和 Release assembly 通过；留痕见
+`archive/20260825-mobile-selection-fill-only-landing.md`。
+
+同日追加统一移动选择玻璃生命周期：`ChatScreen.kt` 输入复合菜单、`Sidebar.kt` 对话与左栏
+工具选择器、`RightSidebar.kt` 页签及 `MemoryLabScreen.kt` 分页均采用
+`fill -> lift(100ms) -> move/drag -> land(240ms) -> fill`。moving/landing 为真时静态选中色块
+一律不渲染；只有浮块退出后才恢复目标色块。对话的长按排序仍使用专用避让/跟手轨迹，但其
+材质、起落比例和互斥规则与其他浮动玻璃一致。记录见
+`archive/20260825-mobile-glass-lifecycle-unification.md`。
+
+移动端 selection overlay 进一步由 `components/LiquidGlass.kt` 的 `liquidSelectionMorph` 统一
+承担色块与玻璃之间的可逆材质插值。所有选择器在松手后先归轨到目标几何，再以 240ms 同步
+收回固定外扩、降低折射/模糊/高光并显出选中色块；终点动画层与静态色块完全同形同色后才
+交接。对话胶囊使用运行时测得的目标矩形计算横纵缩放，完整留痕见
+`archive/20260825-mobile-fill-glass-fill-closed-loop.md`。
+
+PC `index.html` 为 `.conv-action-menu/.model-select-menu/.newmark-select-menu` 增加 List carrier
+专用覆盖，停止旧版静态 `box-shadow` 泛光背景，同时保留 `.liquid-glass-carrier` 的实时磨砂。
+PC 原生对话拖影按同一 pinned 分组计算首尾行矩形，固定 X 并夹取 Y；Android `Sidebar.kt`
+新增 `clampConversationDragDelta`，本地/远程对话的可见浮块和目标槽共享相同轨道边界。记录见
+`archive/20260825-pc-list-shadow-and-conversation-drag-track.md`。
+
+List carrier 的实机复核继续移除通用 `.liquid-glass::before` 整面固定折射渐变和 `::after` 固定
+内阴影。三类 List 弹窗不再出现底部灰黑阴影带，carrier 的实时 backdrop 模糊与轮廓边线保留。
+
+对话拖动浮块现将光学外壳与内容层的落地变换分离。PC `.conversation-drag-content` 在父浮块
+收缩到 `.86` 时使用 `1/.86` 反向补偿，且 `landLiquidSelectionFloat` 在添加 landing class 前
+清除速度形变；Android 两套对话行把 `liquidMotionDeformation` 限定为 `dragging` 期间，落地
+内容保持原始比例。记录见 `archive/20260825-conversation-shell-content-landing-separation.md`。
+
+后续实机校正补齐完整拖动端槽：PC 浮块固定在对话列 X 轴，同 pinned 分组的纵向轨道包含
+首项前与末项后各一个完整插入槽，越过端点时 DOM 避让预览同步插到组首/组尾。Android 的
+夹取范围同步包含这两个端槽，形变速度来自夹取后的实际位移，并移除内容行上的第二次液态
+形变。Android 落地不再缩放整个 backdrop 采样节点，而是动态收回固定外扩宽高及对应左上角
+偏移，使光学壳在目标中心落成色块，底层标题与图标保持 1:1 且无横向漂移。完整记录见
+`archive/20260825-conversation-drag-end-slots-and-mobile-shell-landing.md`。
+
+Android 左栏折叠/展开三按钮与右栏子分页随后采用相同的 shell-only landing。三处删除
+`graphicsLayer scaleX/scaleY` 落地缩放，分别以 40→36dp、整行→四周内收 4dp、
+44×40→32×28dp 的动态几何变化完成色块交接；位置同步补偿半边尺寸差，中心保持锁定，
+backdrop 中的图标与文字不再随外壳收缩。记录见
+`archive/20260825-mobile-sidebar-selector-shell-only-landing.md`。
+
+Windows 0.5.7 Release 随后由 `dist:win` 重新构建。win-unpacked 身份/图标、SSH TUI、CLI、
+上下文压缩、控制台边界、ZIP 与 MSI 管理映像 smoke 全部通过；UAC per-machine 安装返回 0，
+注册表及 EXE 版本为 `0.5.7.0`，桌面/开始菜单快捷方式存在，Program Files 内 `app.asar`
+与 release 产物 SHA-256 一致。MSI SHA-256 为
+`F90E44A6BA82A30FD56EC5A97403E4FF6337F341164C4F52BA090F96FC3FD777`。记录见
+`archive/20260825-dev-0.5.7-msi-uac-install.md`。
+
+## 2026-08-25 审查增量唯一性与对话主题本底
+
+```text
+DESKTOP/
+├─ src/ui/index.html                         # 审查状态/DOM upsert 与 #center 主题本底
+├─ src/tests/workReviewDedupVerify.ts        # 同 run 快照更新及 provisional→canonical 门禁
+└─ scripts/release-ui-work-review-bars-smoke.cjs # 真实 Electron 唯一卡片、本底与交互验证
+archive/
+└─ 20260825-work-review-incremental-upsert-chat-canvas.md
+```
+
+审查摘要不再使用 `runId + diff JSON` 作为追加键。同一逻辑运行的新快照覆盖旧状态并原位刷新
+DOM；正式 runId 会通过 provisional alias 接管既有记录和卡片，同时清理同身份的多余节点。
+不同 Build 即使文件统计相同仍各自保留审查卡。`#center` 新增由 `--app-bg` 与强调色混合的
+不透明 `--chat-canvas`，处于对话滚动区、时间线轨道和交互玻璃的最底层，亮/暗主题分别使用
+轻量 4%/8% 主题染色以增强可读性。
+
+该修复随后通过开发态与打包态性能压力：300 次增量事件不替换既有 Build DOM，开发态输入
+最大延迟 67.7ms；WebGL2 仅创建 1 context、编译 2 shader、链接 1 program、上传 1 texture，
+两次首帧色散分别为 38ms/63ms，20 次完整点击 p95 为 510.5ms；打包版 10fps Build 限流下
+输入最大延迟 30.6ms。新 MSI 的结构/安全 smoke 为 22+12 项全通过，并已通过 UAC 安装，
+安装版 `app.asar` 与 release 候选 SHA-256 同为
+`EEB2AC9AD01473F651BE7978676A567A3D0599D2DB9E1A80A2217B9AE7DF17AD`。记录见
+`archive/20260825-review-upsert-performance-msi-install.md`。
+
+Build 展开路径的第二层重复根因随后修复：`workRunChangeBadge()` 输出
+`.conversation-work-change-badge`，但 `updateConversationWorkRunElement()` 曾查询多出 `-run-`
+的错误类名，导致每次交互更新都插入新徽标。现在查询与生成契约一致，真实 Electron 连续
+8 次展开/收起后 badge 数量为 1。`.conversation-work-run-head` 同时加入通用按钮伪玻璃和
+按压缩放排除清单，Build、block、tool、review 展开均为静态交互。记录见
+`archive/20260825-build-toggle-review-badge-dedup.md`。
+
+该修复的 Windows MSI 随后重新生成并通过 win-unpacked、SSH TUI 四轮重启、CLI、上下文压缩、
+console 参数边界及 MSI 22+12 项管理映像 smoke。UAC 安装返回 0，注册表/EXE 为 `0.5.7.0`，
+安装版 GUI 启动并产生 5 个主/GPU/renderer 进程，安装目录 `app.asar` 与候选哈希一致。记录见
+`archive/20260825-build-toggle-msi-uac-install.md`。
+
+## 2026-08-25 移动选择器坐标与落地分层校正
+
+```text
+android/app/src/main/java/com/newmark/mobile/ui/
+├─ Sidebar.kt          # 对话色块 Rect 转换到浮层宿主坐标，消除列表 inset 左偏
+├─ RightSidebar.kt     # 记录右栏页签真实 Rect，按目标边界落地
+└─ MemoryLabScreen.kt  # 总览/详细仅收缩玻璃外壳，不缩放采样内容
+android/app/src/test/java/com/newmark/mobile/ui/
+├─ ResponsiveSidebarContractTest.kt
+└─ components/LiquidGlassContractTest.kt
+archive/
+└─ 20260825-mobile-selector-coordinate-and-shell-landing.md
+```
+
+对话浮块不再混用 LazyColumn 内容坐标与外层宿主坐标；右栏页签落地以实测色块宽高和 top 为
+唯一目标，布局间距变化也不会破坏对齐。Memory Lab 采用 64×34dp 色块与四周 6dp 浮起外扩
+之间的尺寸/位置插值，文字和 backdrop 采样内容不参与缩放。
+
+该状态已通过 `assembleRelease --no-daemon` 完整构建，R8、Vital lint、资源优化和签名均成功。
+APK 位于 `android/app/build/outputs/apk/release/app-release.apk`，SHA-256 为
+`7761F5F841D75C3A32013FE248F26BFBA49C2541ECF87DE4BC8A57211D5022F5`。
+
+## 2026-08-25 移动预测返回交接与对话移动态对齐
+
+`TerminalScreen.kt` 的顶层返回和 `MemoryLabScreen.kt` 总览返回现在启用
+`retainProgressOnCommit`，松手帧保持到 `NewmarkApp.kt` 的外层 `AnimatedVisibility` 退出接管；
+Memory Lab 详细页返回总览使用 `settleProgressOnCommit`，避免同页切换留下手势变换。
+`Sidebar.kt` 的本地/远程对话玻璃只在玻璃材质浮起期间应用 2dp 右向中心校正，进度 0 的
+色块几何保持原样。完整 Android 单测通过，记录见
+`archive/20260825-mobile-predictive-back-and-conversation-travel-alignment.md`。
+
+该修复已完成 Android Release `assembleRelease --no-daemon`，R8、Vital lint、资源优化与签名
+均成功。最新 APK 位于 `android/app/build/outputs/apk/release/app-release.apk`，大小
+45,954,544 bytes，SHA-256 为 `F4A379867B05B667D4106F4F5986D46751A6D7639E73F71A970CFEB208F3E3E4`。
+
+## 2026-08-25 移动右栏 PC carrier 同步
+
+`RightSidebar.kt` 移除 `MobileRightSidebar` 全高容器上的 Kyant lens；背景聊天层仍由
+`NewmarkApp.kt` 根据右栏展开 progress 记录并模糊，因此保留 PC 同款磨砂层次，但半拖时不会
+把对话区折射成竖向倒影。亮色 carrier 固定使用 0.98 alpha，形状同步 PC 为左上/左下 18dp
+圆角、右侧直角贴边，边线仅绘制在左侧。Android 完整单测通过，记录见
+`archive/20260825-mobile-right-sidebar-pc-carrier-parity.md`。
+
+最新 Release APK 已完成 R8、Vital lint、资源优化与签名，大小 45,954,544 bytes，SHA-256
+`E1051DE9D6C02DB624626891874206D9A1E386F84EA9C7F2B4F7728738D224D5`。
+
+后续按实机要求取消右栏 carrier 的左侧 18dp 圆角，容器恢复四角直角；亮色 0.98 alpha、
+左侧 1dp 分隔线及无全高 lens 的行为保持。重新构建 APK 的 SHA-256 为
+`A00D40A01E8EFB9DD218B4466A75744552756EA4C22DDC4FF63FD6908FE58795`。
+
+## 2026-08-25 移动后台联网系统入口
+
+`MobileCapabilityStore.kt` 新增后台数据限制状态读取；`SettingsScreen.kt` 的移动端权限区新增
+“后台联网”开关，调起 `ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS` 并在返回时
+刷新状态，不支持时回退 `ACTION_APPLICATION_DETAILS_SETTINGS`。Manifest 既有 `INTERNET` 和
+`ACCESS_NETWORK_STATE` 保持。完整 Android 单测通过，记录见
+`archive/20260825-mobile-background-network-setting.md`。
+
+该状态已重新构建 Release APK，R8、Vital lint、资源优化与签名均成功；产物大小
+45,970,928 bytes，SHA-256 `79A5577EEF1B0A92F2489B0BDCAA2933422DFA6474EBED03900CDED91ECDEB1D`。
+
+后台联网开关现保存独立的 UI 请求状态：`false -> true` 才打开系统设置，`true -> false` 只更新
+本地开关且无系统副作用。系统后台数据状态仍单独刷新显示。重新构建 APK 的 SHA-256 为
+`A9DDA1C834B5A46393AF8AD580AD444D3BAC061C30CAE6F0CBDD502E0DC6BB1F`。
+
+## 2026-08-26 全平台玻璃浮块并行运动状态机
+
+```text
+DESKTOP/src/
+├─ ui/index.html                         # 到达检测、浮起/位移并发、拖动松手归轨落地
+└─ tests/pcGlassMigrationVerify.ts       # PC 全部浮块入口与提交时序契约
+android/app/src/main/java/com/newmark/mobile/ui/
+├─ Sidebar.kt                            # 本地/远程对话与左栏三按钮
+├─ RightSidebar.kt                       # 右栏子分页
+├─ MemoryLabScreen.kt                    # 总览/详细分页
+└─ ChatScreen.kt                         # 输入复合菜单选择器
+android/app/src/test/java/com/newmark/mobile/ui/
+├─ LiquidMotionConcurrencyContractTest.kt
+├─ ResponsiveSidebarContractTest.kt
+└─ components/LiquidGlassContractTest.kt
+archive/
+├─ 20260825-liquid-motion-full-audit.txt
+├─ 20260825-liquid-motion-post-change-audit.txt
+└─ 20260826-liquid-motion-concurrent-flight.md
+```
+
+移动端所有点击飞行删除 16/100ms 串行抬升等待与 220ms 原地空等；对话胶囊的材质浮起、固定
+外扩和轨道位移在同一 coroutineScope 内并发。长按入口独立于点击提交路径，保持完整浮起直到
+松手归轨。PC 使用实时目标几何收敛检测代替统一 360ms 计时器，浮块到达且浮起可见后立即
+进入 120ms 落地；对话原生拖动松手后先归最终行再清理浮块和重绘列表。
+
+验证：Android `testDebugUnitTest --no-daemon` 143 项通过；PC `npm run build` 通过；
+`npx tsx src/tests/pcGlassMigrationVerify.ts` 全部检查通过。
+
+### 最新构建与开发态启动
+
+2026-08-26 对该状态执行 `lintVitalRelease assembleRelease --no-daemon`，Release APK 构建成功，
+产物位于 `android/app/build/outputs/apk/release/app-release.apk`，大小 45,970,928 bytes，
+SHA-256 为 `298E11F7A27000A7770956AB99AAEF1C3046E2BC5E3F1BA0DEDD44A0CABB8532`。
+桌面端重新执行 `npm run build` 后，从工作区 `DESKTOP/node_modules/electron` 启动 Electron dev，
+使用 `%TEMP%/newmark-electron-dev-057` 作为独立用户数据目录；主进程、GPU、network、renderer
+与 Node utility 进程均确认存活。留痕见 `archive/20260826-liquid-motion-apk-electron-dev.md`。
+
+Windows 正式安装包随后由 `dist-portable.cjs` 从当前工作区重新生成。`win-unpacked` 通过图标、
+SSH TUI/PTY、四轮重启、CLI、上下文压缩和 console 参数边界检查；MSI 管理映像通过 22+12 项
+结构/安全断言。产物 `release/Newmark-Agent-0.5.7-x64.msi` 为 226,383,951 bytes，SHA-256
+`3D6683B81E4FF3C90E51E26D2995808C3FBAFDA3A4D6E6EB06F122F145C2CF4A`。
+
+本机 UAC 同版本升级返回 3010，表示成功但建议重启。注册表及 EXE 版本均为 `0.5.7.0`；安装
+目录 `app.asar` 与候选哈希一致，安装版主/GPU/network/renderer 四个进程启动成功。完整记录
+见 `archive/20260826-liquid-motion-msi-uac-install.md`。

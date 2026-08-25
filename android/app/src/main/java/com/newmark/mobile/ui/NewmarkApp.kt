@@ -50,12 +50,14 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
@@ -98,6 +100,12 @@ import com.newmark.mobile.ui.theme.LocalThemeMode
 import com.newmark.mobile.ui.theme.NewmarkBgPrimary
 import com.newmark.mobile.ui.theme.NewmarkBgSecondary
 import com.newmark.mobile.ui.theme.NewmarkScrim
+import com.newmark.mobile.ui.components.LocalLiquidBackdrop
+import com.newmark.mobile.ui.components.LocalSidebarGestureLock
+import com.newmark.mobile.ui.components.rememberLiquidBackdrop
+import com.newmark.mobile.ui.components.liquidGlassModifier
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.newmark.mobile.ui.theme.NewmarkTheme
 import com.newmark.mobile.ui.theme.ThemeMode
 import com.newmark.mobile.vm.ChatViewModel
@@ -928,6 +936,7 @@ private fun NewmarkAppContent(
             onRenameLocal = { id, title -> vm.renameConversation(id, title) },
             onArchiveLocal = { id -> vm.archiveConversation(id) },
             onTogglePinLocal = { id -> vm.togglePin(id) },
+            onReorderLocal = vm::reorderConversations,
             onRenameRemote = onRenameRemoteCallback,
             onArchiveRemote = onArchiveRemoteCallback,
             onTogglePinRemote = onTogglePinRemoteCallback,
@@ -951,11 +960,20 @@ private fun NewmarkAppContent(
             else -> { /* no mobile layer; host activity handles the back */ }
         }
     }
+    val sidebarGestureLocks = remember { mutableStateMapOf<String, Boolean>() }
+    val sidebarGesturesLocked = sidebarGestureLocks.values.any { it }
+    val setSidebarGestureLock: (String, Boolean) -> Unit = remember(sidebarGestureLocks) {
+        { token, locked ->
+            if (locked) sidebarGestureLocks[token] = true else sidebarGestureLocks.remove(token)
+        }
+    }
     fun sidebarGestureModifier(): Modifier = Modifier.pointerInput(isCompact, rightSidebarExpanded, sidebarPage, rail) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            if (sidebarGestureLocks.isNotEmpty()) return@awaitEachGesture
             var horizontalDrag = 0f
             var verticalDrag = 0f
+            var canceledByControl = false
             val openThresholdPx = 56.dp.toPx()
             val rightHalf = size.width / 2f
             val controlsRight = isCompact || down.position.x >= rightHalf
@@ -963,6 +981,10 @@ private fun NewmarkAppContent(
             do {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (sidebarGestureLocks.isNotEmpty()) {
+                    canceledByControl = true
+                    break
+                }
                 horizontalDrag += change.position.x - change.previousPosition.x
                 verticalDrag += change.position.y - change.previousPosition.y
                 if (kotlin.math.abs(horizontalDrag) > kotlin.math.abs(verticalDrag)) {
@@ -998,7 +1020,7 @@ private fun NewmarkAppContent(
                     if (controlsRightGesture) change.consume()
                 }
             } while (event.changes.any { it.pressed })
-            if (kotlin.math.abs(horizontalDrag) > kotlin.math.abs(verticalDrag) && kotlin.math.abs(horizontalDrag) > openThresholdPx) {
+            if (!canceledByControl && kotlin.math.abs(horizontalDrag) > kotlin.math.abs(verticalDrag) && kotlin.math.abs(horizontalDrag) > openThresholdPx) {
                 if (isCompact && drawerState.isOpen && horizontalDrag < 0f) {
                     scope.launch { drawerState.close() }
                 } else if (isCompact && drawerState.isClosed && !rightSidebarExpanded && horizontalDrag > 0f) {
@@ -1023,6 +1045,14 @@ private fun NewmarkAppContent(
         }
     }
 
+    // Shared Liquid Glass backdrop. Each layout attaches the recorder only to
+    // its background content; glass consumers must remain sibling overlays so
+    // the recorded GraphicsLayer can never contain a reference to itself.
+    val liquidBackdrop = rememberLiquidBackdrop()
+    CompositionLocalProvider(
+        LocalLiquidBackdrop provides liquidBackdrop,
+        LocalSidebarGestureLock provides setSidebarGestureLock,
+    ) {
     Box(Modifier.fillMaxSize()) {
     SidebarFrameProgressHost(
         rightDragging = isRightSidebarDragging,
@@ -1042,6 +1072,11 @@ private fun NewmarkAppContent(
                 secondaryDrawer = sidebarPage is SidebarPage.WorkspaceConversations,
                 sidebar = { sidebar(sidebarPage, sidebarRailForLayout(isCompact = true, expandedLayoutRail = rail)) },
                 gestureModifier = sidebarGestureModifier(),
+                // Candidate locks arbitrate the app-wide edge recognizer, but
+                // must not toggle MaterialDrawer's state machine mid-frame;
+                // doing so removes its normal button-open/button-close settle.
+                gesturesEnabled = true,
+                liquidBackdrop = liquidBackdrop,
                 surface = conversationSurface,
                 leftProgress = compactLeftSidebarProgress,
                 rightProgress = rightSidebarProgress,
@@ -1068,6 +1103,7 @@ private fun NewmarkAppContent(
                 retainedWorkspace = retainedSecondaryWorkspace,
                 surface = conversationSurface,
                 gestureModifier = sidebarGestureModifier(),
+                liquidBackdrop = liquidBackdrop,
                 primarySidebar = { page, railMode ->
                     sidebar(page, sidebarRailForLayout(isCompact = false, expandedLayoutRail = railMode))
                 },
@@ -1131,6 +1167,7 @@ private fun NewmarkAppContent(
         else MemoryLabDialog(onDismiss = { screen = Screen.Main })
     }
     }
+    }
 }
 
 private data class IncomingContent(val name: String, val mimeType: String, val bytes: ByteArray)
@@ -1181,6 +1218,8 @@ private fun CompactMainLayout(
     secondaryDrawer: Boolean,
     sidebar: @Composable () -> Unit,
     gestureModifier: Modifier,
+    gesturesEnabled: Boolean,
+    liquidBackdrop: LayerBackdrop,
     surface: ConversationSurface,
     leftProgress: Float,
     rightProgress: Float,
@@ -1202,18 +1241,28 @@ private fun CompactMainLayout(
         drawerState = drawerState,
         drawerContent = {
             ModalDrawerSheet(
-                modifier = Modifier.width(drawerWidth),
-                drawerContainerColor = if (secondaryDrawer) {
-                    pcSecondarySurfaceColor().copy(alpha = scaledGlassAlpha(0.72f, glass.alpha))
-                } else {
-                    palette.bgSecondary.copy(alpha = scaledGlassAlpha(0.72f, glass.alpha))
-                },
+                modifier = Modifier
+                    .width(drawerWidth)
+                    .liquidGlassModifier(
+                        backdrop = liquidBackdrop,
+                        cornerRadius = 0.dp,
+                        alpha = scaledGlassAlpha(0.72f, glass.alpha),
+                        blurRadius = 3.dp,
+                        refractionHeight = 4.dp,
+                        refractionAmount = 8.dp,
+                        surfaceColor = if (secondaryDrawer) {
+                            pcSecondarySurfaceColor()
+                        } else {
+                            palette.bgSecondary
+                        },
+                    ),
+                drawerContainerColor = Color.Transparent,
                 drawerContentColor = palette.textPrimary,
                 drawerShape = RectangleShape,
                 drawerTonalElevation = 0.dp,
             ) { sidebar() }
         },
-        gesturesEnabled = true,
+        gesturesEnabled = gesturesEnabled,
         scrimColor = NewmarkScrim,
     ) {
         Box(Modifier.fillMaxSize()) {
@@ -1223,11 +1272,21 @@ private fun CompactMainLayout(
                 surface = surface,
                 showMenuButton = true,
                 onMenuClick = onMenuClick,
-                modifier = if (blurProgress > 0.001f) {
-                    Modifier.blur(backdropBlur.dp * blurProgress)
+                modifier = (if (blurProgress > 0.001f) {
+                    // Recording a long transcript is expensive even when no
+                    // glass consumer is visible. Activate the recorder only
+                    // while a drawer/sidebar is actually presented.
+                    Modifier.layerBackdrop(liquidBackdrop)
                 } else {
                     Modifier
-                },
+                })
+                    .then(
+                        if (blurProgress > 0.001f) {
+                            Modifier.blur(backdropBlur.dp * blurProgress)
+                        } else {
+                            Modifier
+                        },
+                    ),
             )
             Box(
                 modifier = Modifier
@@ -1242,6 +1301,7 @@ private fun CompactMainLayout(
                     remoteMode = surface.remoteMode,
                     browserSession = browserSession,
                     selectedTab = selectedTab,
+                    backdrop = liquidBackdrop,
                     panelWidth = minOf(360.dp, (screenWidthDp - 24).dp),
                     expanded = true,
                     onOpenSubagentPage = onOpenSubagentPage,
@@ -1269,6 +1329,7 @@ private fun ExpandedMainLayout(
     retainedWorkspace: WorkspaceInfo?,
     surface: ConversationSurface,
     gestureModifier: Modifier,
+    liquidBackdrop: LayerBackdrop,
     primarySidebar: @Composable (SidebarPage, Boolean) -> Unit,
     linkVm: DesktopLinkViewModel,
     localVm: ChatViewModel,
@@ -1298,7 +1359,7 @@ private fun ExpandedMainLayout(
     // exact edge rather than a separate normalized animation curve.
     val leftBoundaryWidth = maxOf(48.dp, expandedSidebarWidth * leftReveal)
     Box(Modifier.fillMaxSize().then(gestureModifier)) {
-        Row(Modifier.fillMaxSize()) {
+        Row(Modifier.layerBackdrop(liquidBackdrop).fillMaxSize()) {
             // These slots only reserve the currently visible boundaries. The
             // actual sidebars are fixed-size overlay surfaces below and never
             // inherit a changing width from layout animation.
@@ -1369,6 +1430,7 @@ private fun ExpandedMainLayout(
                 .align(Alignment.CenterStart)
                 .width(48.dp)
                 .fillMaxHeight()
+                .graphicsLayer { alpha = (1f - leftReveal).coerceIn(0f, 1f) }
                 .background(palette.bgSecondary)
                 .statusBarsPadding(),
         ) {
@@ -1407,6 +1469,7 @@ private fun ExpandedMainLayout(
                 remoteMode = surface.remoteMode,
                 browserSession = browserSession,
                 selectedTab = selectedTab,
+                backdrop = liquidBackdrop,
                 panelWidth = panelWidth,
                 expanded = true,
                 onExpandedChange = onRightExpandedChange,

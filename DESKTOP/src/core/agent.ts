@@ -5845,9 +5845,20 @@ export class Agent {
 
   private compressionBuildBlockStart(messages: Array<Record<string, unknown>>): number {
     const activeRunId = this.currentWorkRunId();
-    if (!activeRunId) return 0;
-    const index = messages.findIndex(message => String(message.run_id || message.runId || '') === activeRunId);
-    return index >= 0 ? index : 0;
+    if (activeRunId) {
+      const index = messages.findIndex(message => String(message.run_id || message.runId || '') === activeRunId);
+      if (index >= 0) return index;
+    }
+    // dev-0.5.6: 空闲对话（无活动 run）时不得把全部历史算进当前 Build Block，
+    // 否则上下文显示窗口的长期历史恒为 0。回退语义：
+    // - 存在带 run_id 的消息：boundary 取最后一个 run 的起点之后（该 run 及其
+    //   之前的历史属于长期历史，其后无归属的消息属于当前未命名区块）；
+    // - 完全没有 run_id：全部历史都是长期历史（不存在当前 Build Block）。
+    let lastRunBoundary = -1;
+    for (let index = 0; index < messages.length; index += 1) {
+      if (String(messages[index]?.run_id || messages[index]?.runId || '')) lastRunBoundary = index + 1;
+    }
+    return lastRunBoundary >= 0 ? lastRunBoundary : messages.length;
   }
 
   private recentContextSuffix(
@@ -6918,17 +6929,12 @@ export class Agent {
         currentAttempt.sideEffectBoundary = this.routeSideEffectCommitted;
         if (this.routeAttemptStartedAt > 0) currentAttempt.durationMs = Math.max(0, Date.now() - this.routeAttemptStartedAt);
       }
-      if (!fallbackEnabled) {
-        this.lastRouteDecision.finalStatus = 'failed';
-        this.routeAttemptStartedAt = 0;
-        this.persistRouteDecision(this.lastRouteDecision);
-        return null;
-      }
       if (!this.pendingAutoAttempts.length) {
         this.pendingAutoAttempts = this.autoRouter.planAttempts(this.lastRouteDecision, this.autoRouteCandidates(), {
           error: failure,
           streamCommitted: this.routeStreamCommitted,
           sideEffectCommitted: this.routeSideEffectCommitted,
+          allowModelFallback: fallbackEnabled,
         });
       }
       const next = this.pendingAutoAttempts.shift();

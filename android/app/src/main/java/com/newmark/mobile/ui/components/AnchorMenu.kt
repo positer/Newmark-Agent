@@ -1,11 +1,12 @@
 package com.newmark.mobile.ui.components
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -23,12 +24,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
@@ -47,8 +47,6 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
-import com.newmark.mobile.ui.theme.LocalGlassMode
-import com.newmark.mobile.ui.theme.scaledGlassAlpha
 
 enum class MenuPlacement { UpStart, EndTop, DownStart, DownEnd }
 
@@ -209,21 +207,6 @@ fun AnchorMenu(
     val safeVerticalDp = with(density) { (safeTopPx + safeBottomPx).toDp() }
     val safeViewportHeight = (configuration.screenHeightDp.dp - safeVerticalDp).coerceAtLeast(0.dp)
     val maxMenuHeight = minOf(320.dp, safeViewportHeight * 0.56f)
-    val entrance = remember { Animatable(if (usePcPopoverBehavior) 0f else 1f) }
-    LaunchedEffect(usePcPopoverBehavior) {
-        if (usePcPopoverBehavior) {
-            entrance.snapTo(0f)
-            entrance.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(
-                    durationMillis = 190,
-                    easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f),
-                ),
-            )
-        } else {
-            entrance.snapTo(1f)
-        }
-    }
     Popup(
         popupPositionProvider = provider,
         onDismissRequest = onDismissRequest,
@@ -238,26 +221,11 @@ fun AnchorMenu(
             Modifier.verticalScroll(scrollState)
         } else Modifier
         val menu = @Composable {
-            val glass = LocalGlassMode.current
-            val menuBackground = (backgroundColor ?: p.bgTertiary).copy(
-                alpha = scaledGlassAlpha(0.76f, glass.alpha),
-            )
-            val refractionBorder = borderColor ?: p.border2
             Box(
                 modifier = modifier
                     .then(scrollModifier)
-                    .shadow(
-                        elevation = 14.dp,
-                        shape = shape,
-                        clip = false,
-                        ambientColor = p.accent.copy(alpha = 0.18f),
-                        spotColor = Color.Black.copy(alpha = 0.35f),
-                    )
-                    .clip(shape)
-                    .background(menuBackground)
-                    // 外圈为 PC 玻璃折射的亮边，内圈仍由表面颜色承接；亮色不再“无边框”。
-                    .border(1.5.dp, refractionBorder, shape)
-                    .border(0.5.dp, Color.White.copy(alpha = 0.36f), shape),
+                    .border(1.dp, Color.Black.copy(alpha = 0.12f), shape)
+                    .border(0.5.dp, Color.White.copy(alpha = 0.28f), shape),
             ) {
                 Column(
                     modifier = Modifier
@@ -294,24 +262,10 @@ fun AnchorMenu(
                 }
             }
         }
-        if (usePcPopoverBehavior) {
-            androidx.compose.foundation.layout.Box(
-                modifier = Modifier.graphicsLayer {
-                    // The whole first-level composite popup follows its
-                    // already-resolved IME-safe anchor, then opens upward with
-                    // the same restrained PC popover easing. Keep the glass
-                    // surface fully opaque at the layer level: animating alpha
-                    // forces an offscreen pass for its shadow/borders on every
-                    // frame and caused severe issue-draw stalls on Android.
-                    // Page changes inside the popup do not replay this entrance.
-                    translationY = with(density) { 8.dp.toPx() } * (1f - entrance.value)
-                },
-            ) {
-                menu()
-            }
-        } else {
-            menu()
-        }
+        // Keep the transparent Popup surface stationary. Moving the whole
+        // hardware layer leaves stale rectangular buffers on some Android
+        // renderers; interaction motion belongs to each glass menu row.
+        menu()
     }
 }
 
@@ -324,12 +278,43 @@ fun MenuRow(
     onClick: () -> Unit,
 ) {
     val p = LocalNewmarkPalette.current
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val selectedSurface by animateColorAsState(
+        targetValue = if (selected && !pressed) p.accentSoft else Color.Transparent,
+        animationSpec = tween(durationMillis = 110),
+        label = "menuSelectionCondense",
+    )
+    val movement by animateFloatAsState(
+        targetValue = if (pressed) 1f else 0f,
+        animationSpec = tween(durationMillis = 90),
+        label = "menuSelectionGlassMove",
+    )
     Row(
         modifier = Modifier
             .widthIn(min = 140.dp)
-            .clip(NewmarkShapeSmall)
-            .background(if (selected) p.bgQuaternary else Color.Transparent)
-            .clickable(onClick = onClick)
+            .then(
+                if (movement > 0.001f) {
+                    Modifier.graphicsLayer {
+                        translationY = -2.dp.toPx() * movement
+                    }
+                } else Modifier
+            )
+            .background(selectedSurface, NewmarkShapeSmall)
+            .then(
+                if (pressed) {
+                    Modifier.kyantGlassEdge(
+                        shape = NewmarkShapeSmall,
+                        edgeColor = if (selected) p.accent else p.border2,
+                        emphasis = 1f,
+                    )
+                } else {
+                    Modifier
+                        .border(1.dp, Color.Black.copy(alpha = 0.12f), NewmarkShapeSmall)
+                        .border(0.5.dp, Color.White.copy(alpha = 0.28f), NewmarkShapeSmall)
+                }
+            )
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

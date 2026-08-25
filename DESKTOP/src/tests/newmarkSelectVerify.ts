@@ -43,7 +43,9 @@ function main(): void {
     function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
     function escAttr(value) { return esc(value).replace(/"/g, '&quot;'); }
     function iconSvg() { return '<svg></svg>'; }
+    function wireLiquidMenuInteractions(menu) { if (menu) menu.dataset.liquidInteractions = 'true'; }
     window.closeModelSelectMenu = function() {};
+    window.setLiquidSidebarGestureLock = function() {};
     ${assignments}
   `);
   factory(window, document, window.MutationObserver, window.CSS || { escape: (value: string) => value }, window.Event, (callback: FrameRequestCallback) => { callback(0); return 1; });

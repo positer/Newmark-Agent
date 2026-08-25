@@ -120,9 +120,16 @@ async function main() {
     const result = await evaluate(cdp, `(async () => {
       const prompt = document.querySelector('#prompt');
       if (!prompt) throw new Error('missing prompt');
+      // A fresh release root is idle, so merely querying animation classes can
+      // pass or fail depending on restored runtime state. Enter the real
+      // working state explicitly before asserting the live marquee contract.
+      setWorking(true);
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const animated = Array.from(document.querySelectorAll('.marquee-border, .working-glow')).filter(node => {
-        const style = getComputedStyle(node, '::before');
-        return style.animationName && style.animationName !== 'none';
+        const elementStyle = getComputedStyle(node);
+        const pseudoStyle = getComputedStyle(node, '::before');
+        return (elementStyle.animationName && elementStyle.animationName !== 'none')
+          || (pseudoStyle.animationName && pseudoStyle.animationName !== 'none');
       }).length;
       const originalRender = renderConversationWorkRun;
       let renders = 0;
@@ -145,6 +152,7 @@ async function main() {
       clearInterval(eventTimer);
       await new Promise(resolve => setTimeout(resolve, 180));
       renderConversationWorkRun = originalRender;
+      setWorking(false);
       return { animated, renders, inputEvents, maxInputDelayMs, minInterval: WORK_RUN_RENDER_MIN_INTERVAL_MS };
     })()`, 30_000);
     if (result.animated === 0) fail(`marquee/working-glow animations must stay active: ${JSON.stringify(result)}`);

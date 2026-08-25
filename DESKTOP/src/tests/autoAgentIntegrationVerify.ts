@@ -171,12 +171,19 @@ async function main(): Promise<void> {
     agent.config.set('models', 'fallback_on_unavailable', false);
     agent.resetAutoRoute();
     await agent.evaluateAndSwitch('Failure audit without fallback');
+    const fallbackOffDeployment = agent.activeDeployment();
     agent.beginRouteAttempt();
+    agent.switchToFallbackModel('[LLM Error: 503] upstream unavailable');
+    ok(agent.lastRouteDecision?.finalStatus === 'retrying'
+      && agent.lastRouteDecision.attempts.at(-1)?.kind === 'retry_same_deployment'
+      && agent.activeDeployment()?.providerId === fallbackOffDeployment?.providerId
+      && agent.activeDeployment()?.modelId === fallbackOffDeployment?.modelId,
+    'fallback disabled permits only the bounded same-deployment retry');
     agent.switchToFallbackModel('[LLM Error: 503] upstream unavailable');
     ok(agent.lastRouteDecision?.finalStatus === 'failed'
       && agent.lastRouteDecision.attempts.at(-1)?.status === 'failed'
       && agent.lastRouteDecision.attempts.at(-1)?.errorType === 'server_error',
-    'retryable execution failure is persisted as a failed attempt and failed final status when fallback is disabled');
+    'exhausted same-deployment retry is persisted as failed without switching model identity');
     agent.config.set('models', 'fallback_on_unavailable', true);
 
     const editedProviders = JSON.parse(JSON.stringify(agent.config.providers())) as Array<Record<string, any>>;

@@ -227,6 +227,33 @@ export class ConversationKernel {
     };
   }
 
+  /**
+   * dev-0.5.6: 排队 followUp 消息 drain 时转成普通用户消息载荷。
+   *
+   * 入队时（enqueueSameSession）为去重/编辑保留了 clientMessageId，并把
+   * runId 固定为入队时运行的 runId；若原样传给 process，写入 chatMessages
+   * 的用户消息会携带旧 runId + clientMessageId，渲染端（PC renderTranscript /
+   * 移动端 projectRemoteConversationItems）会把「clientMessageId + runId 命中
+   * workRuns」的消息误判为 guide 消息而跳过气泡，导致排队自动发送的消息不
+   * 显示在用户输入时间线。清除这两个字段后 process 走普通用户消息分支
+   * （chatMessages.push，mode 取 visibleMode，runId 取当前 run）。
+   */
+  private drainQueuedFollowUpMessage(message: string | AgentPromptMessage): string | AgentPromptMessage {
+    if (typeof message === 'string') return message;
+    const text = String(message.text || '');
+    const images = message.images;
+    const attachments = message.attachments;
+    const visible = message.visibleUserInput;
+    const visibleMode = message.visibleMode;
+    return {
+      text,
+      ...(images?.length ? { images } : {}),
+      ...(attachments?.length ? { attachments } : {}),
+      ...(visible ? { visibleUserInput: visible } : {}),
+      ...(visibleMode ? { visibleMode } : {}),
+    };
+  }
+
   queueItems(target: ConversationTargetInput): ConversationQueueItemSnapshot[] {
     const runtime = this.findRuntime(target);
     if (!runtime) return [];
@@ -1086,7 +1113,7 @@ export class ConversationKernel {
           };
           lastTokens = await this.runSingle(runtime, batchMessage, 'steer');
         } else {
-          lastTokens = await this.runSingle(runtime, next.message, next.queueMode);
+          lastTokens = await this.runSingle(runtime, this.drainQueuedFollowUpMessage(next.message), next.queueMode);
         }
       }
       const rootMessage = runtime.runner.subagents.readRootInbox()[0];
@@ -1612,6 +1639,10 @@ export class ConversationKernel {
       content: 'Conversation queue updated.',
       conversationId: runtime.id,
       queue: this.queued(runtime.target),
+      // Structured rows with stable kernel ids so every consumer (PC UI and
+      // the paired mobile client) can render/edit/delete the same items.
+      queueItems: this.queueItems(runtime.target),
+      queuePaused: runtime.queuePaused === true,
     });
   }
 

@@ -4,8 +4,6 @@ import android.app.Application
 import android.os.PowerManager
 import android.graphics.BitmapFactory
 import android.util.Base64
-import android.content.Intent
-import androidx.core.content.ContextCompat
 import com.newmark.mobile.service.LocalAgentForegroundService
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -648,6 +646,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         persist()
     }
 
+    /** Reorder one pin group while preserving the other group's positions. */
+    fun reorderConversations(orderedIds: List<String>) {
+        val normalized = orderedIds.distinct()
+        if (normalized.isEmpty()) return
+        val byId = conversations.associateBy { it.id }
+        val reordered = normalized.mapNotNull(byId::get)
+        if (reordered.size != normalized.size) return
+        val targetIds = normalized.toSet()
+        val iterator = reordered.iterator()
+        val next = conversations.map { current ->
+            if (current.id in targetIds && iterator.hasNext()) iterator.next() else current
+        }
+        if (next != conversations) {
+            conversations = next
+            persist()
+        }
+    }
+
     fun stop() {
         val targetConversationId = currentId ?: return
         val runtime = localRuntimes[targetConversationId] ?: return
@@ -1000,16 +1016,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun updateLocalAgentService() {
         val context = getApplication<Application>()
-        val count = localRuntimes.size
-        if (count == 0) {
-            context.stopService(Intent(context, LocalAgentForegroundService::class.java))
-        } else {
-            ContextCompat.startForegroundService(
-                context,
-                Intent(context, LocalAgentForegroundService::class.java)
-                    .putExtra(LocalAgentForegroundService.EXTRA_COUNT, count),
-            )
-        }
+        LocalAgentForegroundService.updateLocalCount(context, localRuntimes.size)
     }
 
     /** 从磁盘重载设置状态（供 Agent settings_update 工具改动后同步 UI 与后续调用） */

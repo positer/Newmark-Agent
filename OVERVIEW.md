@@ -17,7 +17,7 @@ archive/20260826-dev-0.5.8-planning.md     # source findings and decisions from 
 
 Verification covers the pure retry state machine, auto-agent integration, model recovery stress, normal chat regression, static PC glass contracts, and real Electron disclosure computed styles. The shared version is `0.5.8` (`versionCode 508`).
 
-### dev-0.5.8 release candidate (2026-08-27)
+### dev-0.5.8 cross-platform prerelease (2026-08-27)
 
 `DESKTOP/scripts/release-all.cjs` completed successfully on Windows with WSL2 Ubuntu 24.04 and JDK 17. The release gate ran the desktop full-release suite, Android unit/Vital Lint/R8/Release tasks, Windows packaging and packaged smokes, then native Linux packaging in an isolated WSL filesystem. `DESKTOP/scripts/verify-github-release-assets.cjs` independently verified exact names, byte sizes, SHA-256 equality, Windows MSI/ZIP startup, and WSL AppImage/deb/ZIP GUI plus Bash/sh terminal isolation.
 
@@ -31,7 +31,7 @@ release/
 └─ Newmark-Agent-0.5.8-android.apk             # Android release APK, 52701316 bytes
 ```
 
-This is a local release candidate, not an uploaded GitHub Release. Windows executable signing is disabled in the existing builder configuration. The APK verifies with APK Signature Scheme v2 and the existing Android Debug certificate, so it is suitable for sideload testing but not store distribution. No ADB device was connected for install/runtime validation. The repository has a macOS DMG target, but Electron's macOS packaging constraint requires a macOS host; DMG is outside the current six-asset Windows/Linux/Android release matrix and was not produced here. Full evidence and hashes are in `archive/20260827-011341-dev-0.5.8-all-platform-release.md`.
+Commit `ee98a43af6b3e15dd20eab9b70ed0b4fbb4c1f5c` and annotated tag `dev-0.5.8` are published. The GitHub prerelease contains exactly the six bound assets, `newmark-agent@0.5.8` is published to npm, and both the npm workflow and Windows/Linux/Android release workflow passed. A clean remote download revalidated every byte size and SHA-256, then reran Windows MSI/ZIP and WSL AppImage/deb/ZIP packaged smokes. Windows executable signing remains disabled. The APK verifies with APK Signature Scheme v2 and the existing Android Debug certificate, so it is suitable for sideload testing but not store distribution. No ADB device was connected for install/runtime validation. The repository has a macOS DMG target, but Electron's macOS packaging constraint requires a macOS host; DMG is outside the current six-asset Windows/Linux/Android release matrix and was not produced here. Full evidence and hashes are in `archive/20260827-011341-dev-0.5.8-all-platform-release.md`.
 
 ### Android latest-file exposure
 

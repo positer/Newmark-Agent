@@ -567,4 +567,7 @@
 - [x] 临时验证副本已清理；未修改 `release-0.5.4/` 或用户现有工作树。
 - [ ] macOS DMG 需在 macOS 主机执行 `npm run dist:mac`；本机无法合法生成或验证。
 - [ ] Android 真机/模拟器安装与长对话回放待 ADB 设备接入。
-- [ ] GitHub prerelease 上传未授权，本次仅交付本地候选资产。
+- [x] `ee98a43` 推送到 `origin/master`，带注释标签 `dev-0.5.8` 已推送。
+- [x] GitHub prerelease 发布六资产；npm `newmark-agent@0.5.8` 发布成功。
+- [x] GitHub Windows/Linux/Android release workflow 与 npm workflow 全部通过。
+- [x] 从 GitHub 重新下载恰好六资产，大小/SHA-256 一致，Windows MSI/ZIP 与 Linux 三包 smoke 全部通过。

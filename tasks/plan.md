@@ -955,4 +955,5 @@ dev-0.5.7 聚焦 11 项已确认问题：Android 远程非当前对话长按闪�
 3. 完成：生成 Windows MSI/ZIP、Linux AppImage/deb/ZIP、Android APK 六资产。
 4. 完成：独立执行严格六资产名称、大小、SHA-256、Windows MSI/ZIP smoke 和 WSL Linux 三包 GUI/终端 smoke。
 5. 完成：APK v2 签名校验；记录 Android Debug 证书、Windows 未签名与未连接 ADB 设备边界。
-6. 未执行：GitHub Release 上传不在本次授权范围；macOS DMG 需要 macOS 构建主机，不属于当前六资产矩阵。
+6. 完成：提交与带注释标签已推送；GitHub prerelease、npm `0.5.8` 和三平台 Actions 发布成功，六个远端资产经重新下载、哈希比对和 packaged smoke 验证通过。
+7. 保留边界：macOS DMG 需要 macOS 构建主机，不属于当前六资产矩阵；本次无 ADB 设备，未声明 Android 实机闭环。

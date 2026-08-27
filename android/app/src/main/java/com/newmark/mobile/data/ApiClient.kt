@@ -1,6 +1,7 @@
 package com.newmark.mobile.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -21,9 +22,17 @@ data class ChatResponse(
     val content: String = "",
     val reasoningContent: String = "",
     val toolCalls: List<ToolCall> = emptyList(),
+    /** Provider-owned terminal state such as stop, length, or tool_calls. */
+    val finishReason: String = "",
+    /** True only when the provider explicitly completed an empty turn. */
+    val explicitEmptyResponse: Boolean = false,
 )
 
-internal data class ChatStreamTextDelta(val thought: String = "", val text: String = "")
+internal data class ChatStreamTextDelta(
+    val thought: String = "",
+    val text: String = "",
+    val finishReason: String = "",
+)
 
 /** JSONObject.optString returns the literal "null" for JSONObject.NULL. */
 private fun JSONObject.optionalText(key: String): String {
@@ -69,6 +78,7 @@ internal fun parseChatStreamTextDelta(payload: String): ChatStreamTextDelta {
         return ChatStreamTextDelta(
             thought = delta.firstText("reasoning_content", "reasoning", "thinking", "analysis"),
             text = delta.optionalText("content"),
+            finishReason = choice?.optionalText("finish_reason").orEmpty(),
         )
     }
     // A few older compatible gateways wrap the same fields directly in response.
@@ -76,8 +86,13 @@ internal fun parseChatStreamTextDelta(payload: String): ChatStreamTextDelta {
     return ChatStreamTextDelta(
         thought = response.firstText("reasoning_content", "reasoning", "thinking", "analysis"),
         text = response.optionalText("content"),
+        finishReason = choice?.optionalText("finish_reason").orEmpty()
+            .ifBlank { response.firstText("finish_reason", "stop_reason") },
     )
 }
+
+internal fun modelRequestedContinuation(finishReason: String): Boolean =
+    finishReason.trim().lowercase() in setOf("length", "max_tokens", "max_output_tokens")
 
 internal fun appendCompatibleStreamValue(target: StringBuilder, incoming: String): String {
     if (incoming.isBlank() || incoming == "null") return ""
@@ -91,6 +106,41 @@ internal fun appendCompatibleStreamValue(target: StringBuilder, incoming: String
     }
     target.append(delta)
     return delta
+}
+
+/**
+ * OpenAI-compatible gateways disagree on whether function arguments are sent
+ * as true deltas or as cumulative snapshots. Prefer the ordinary concatenated
+ * stream when it is valid JSON; otherwise fold cumulative snapshots and use
+ * the newest valid representation. This prevents `{"json":...}{"json":...}`
+ * from being passed to a tool as an empty object after parsing fails.
+ */
+internal fun assembleCompatibleToolArguments(parts: List<String>): String {
+    val nonEmpty = parts.filter { it.isNotEmpty() && it != "null" }
+    if (nonEmpty.isEmpty()) return "{}"
+
+    // JSONObject(String) accepts a valid object followed by trailing JSON on
+    // some Android/JVM implementations. Gson's parser rejects that shape, so
+    // concatenated snapshots cannot masquerade as one valid argument object.
+    fun isJsonObject(value: String): Boolean = runCatching {
+        JsonParser.parseString(value).isJsonObject
+    }.getOrDefault(false)
+
+    val incremental = nonEmpty.joinToString("")
+    if (isJsonObject(incremental)) return incremental
+
+    var compatible = ""
+    nonEmpty.forEach { incoming ->
+        compatible = when {
+            compatible.isEmpty() -> incoming
+            incoming == compatible -> compatible
+            incoming.startsWith(compatible) -> incoming
+            compatible.startsWith(incoming) -> compatible
+            else -> compatible + incoming
+        }
+    }
+    if (isJsonObject(compatible)) return compatible
+    return nonEmpty.lastOrNull(::isJsonObject) ?: compatible
 }
 
 internal fun shouldRetryWithResponses(status: Int, errorText: String): Boolean =
@@ -166,9 +216,9 @@ internal fun parseResponsesStreamDelta(payload: String, sseEvent: String = ""): 
 class ApiClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        // A stream may run for a long time, but no provider response may be
-        // silent longer than this. OkHttp resets this timeout for every read,
-        // which gives the required "since last response" semantics.
+        // Provider reads have no response or inactivity deadline. A silent
+        // stream remains pending until the provider answers, transport fails,
+        // or the caller cancels it; silence is never classified as empty.
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .build(),
@@ -214,7 +264,9 @@ class ApiClient(
                                         put("tool_call_id", m.toolCallId)
                                     }
                                     m.role == "assistant" && m.toolCalls.isNotEmpty() -> {
-                                        if (m.content.isNotBlank()) put("content", m.content)
+                                        if (m.content.isNotBlank() || m.reasoningContent.orEmpty().isNotBlank()) {
+                                            put("content", m.content)
+                                        }
                                         put("tool_calls", JSONArray().apply {
                                             m.toolCalls.forEach { tc ->
                                                 put(JSONObject().apply {
@@ -238,6 +290,9 @@ class ApiClient(
                                             }
                                         })
                                     } else put("content", m.content)
+                                }
+                                if (m.role == "assistant" && m.reasoningContent.orEmpty().isNotBlank()) {
+                                    put("reasoning_content", m.reasoningContent)
                                 }
                             },
                         )
@@ -271,25 +326,37 @@ class ApiClient(
                 val reasoning = StringBuilder()
                 val callIds = mutableMapOf<Int, StringBuilder>()
                 val callNames = mutableMapOf<Int, StringBuilder>()
-                val callArguments = mutableMapOf<Int, StringBuilder>()
+                val callArgumentParts = mutableMapOf<Int, MutableList<String>>()
                 val fallbackJson = StringBuilder()
+                var sawDone = false
+                var finishReason = ""
                 while (!source.exhausted()) {
                     val line = source.readUtf8Line() ?: break
-                    // Count any valid SSE line, including legacy heartbeat or
-                    // event lines, as provider activity. The socket timeout
-                    // above then measures silence after the latest activity.
+                    // Ignore framing/heartbeat lines for response accounting.
+                    // There is deliberately no socket or inactivity timeout;
+                    // only an explicit provider empty completion is retryable.
                     if (!line.startsWith("data:")) {
                         if (line.isNotBlank()) fallbackJson.append(line)
                         continue
                     }
                     val payload = line.removePrefix("data:").trim()
-                    if (payload.isBlank() || payload == "[DONE]") continue
-                    val delta = JSONObject(payload)
-                        .optJSONArray("choices")
-                        ?.optJSONObject(0)
-                        ?.optJSONObject("delta")
+                    if (payload.isBlank()) continue
+                    if (payload == "[DONE]") {
+                        sawDone = true
+                        continue
+                    }
+                    // Providers are allowed to emit a complete `message` in
+                    // an SSE frame (especially gateways that buffer a turn)
+                    // instead of an incremental `delta`.  Requiring `delta`
+                    // here used to discard that valid frame and made a
+                    // healthy connection look like five empty responses.
+                    val payloadJson = runCatching { JSONObject(payload) }.getOrNull()
                         ?: continue
+                    val choice = payloadJson.optJSONArray("choices")?.optJSONObject(0)
+                    val messageOrDelta = choice?.optJSONObject("delta")
+                        ?: choice?.optJSONObject("message")
                     val streamed = parseChatStreamTextDelta(payload)
+                    if (streamed.finishReason.isNotBlank()) finishReason = streamed.finishReason
                     val thoughtDelta = appendCompatibleStreamValue(reasoning, streamed.thought)
                     if (thoughtDelta.isNotBlank()) {
                         onThoughtDelta(thoughtDelta)
@@ -298,20 +365,24 @@ class ApiClient(
                     if (textDelta.isNotBlank()) {
                         onTextDelta(textDelta)
                     }
-                    delta.optJSONArray("tool_calls")?.let { toolCalls ->
+                    messageOrDelta?.optJSONArray("tool_calls")?.let { toolCalls ->
                         for (i in 0 until toolCalls.length()) {
                             val tool = toolCalls.optJSONObject(i) ?: continue
                             val index = tool.optInt("index", i)
                             val function = tool.optJSONObject("function")
-                            callIds.getOrPut(index) { StringBuilder() }.append(tool.optString("id"))
-                            callNames.getOrPut(index) { StringBuilder() }.append(function?.optString("name").orEmpty())
-                            callArguments.getOrPut(index) { StringBuilder() }.append(function?.optString("arguments").orEmpty())
+                            appendCompatibleStreamValue(callIds.getOrPut(index) { StringBuilder() }, tool.optString("id"))
+                            appendCompatibleStreamValue(callNames.getOrPut(index) { StringBuilder() }, function?.optString("name").orEmpty())
+                            function?.optString("arguments").orEmpty().takeIf(String::isNotEmpty)?.let {
+                                callArgumentParts.getOrPut(index) { mutableListOf() }.add(it)
+                            }
                         }
                     }
                 }
                 if (fallbackJson.isNotBlank() && content.isEmpty() && reasoning.isEmpty()) {
-                    val message = JSONObject(fallbackJson.toString())
-                        .getJSONArray("choices").getJSONObject(0).getJSONObject("message")
+                    val choice = JSONObject(fallbackJson.toString())
+                        .getJSONArray("choices").getJSONObject(0)
+                    val message = choice.getJSONObject("message")
+                    finishReason = choice.optionalText("finish_reason")
                     val text = message.optionalText("content")
                     val thought = message.firstText("reasoning_content", "reasoning", "thinking", "analysis")
                     content.append(text.takeUnless { it == "null" }.orEmpty())
@@ -322,21 +393,39 @@ class ApiClient(
                         for (i in 0 until toolCalls.length()) {
                             val tool = toolCalls.optJSONObject(i) ?: continue
                             val function = tool.optJSONObject("function")
-                            callIds.getOrPut(i) { StringBuilder() }.append(tool.optString("id"))
-                            callNames.getOrPut(i) { StringBuilder() }.append(function?.optString("name").orEmpty())
-                            callArguments.getOrPut(i) { StringBuilder() }.append(function?.optString("arguments").orEmpty())
+                            appendCompatibleStreamValue(callIds.getOrPut(i) { StringBuilder() }, tool.optString("id"))
+                            appendCompatibleStreamValue(callNames.getOrPut(i) { StringBuilder() }, function?.optString("name").orEmpty())
+                            function?.optString("arguments").orEmpty().takeIf(String::isNotEmpty)?.let {
+                                callArgumentParts.getOrPut(i) { mutableListOf() }.add(it)
+                            }
                         }
                     }
                 }
-                val calls = (callIds.keys + callNames.keys + callArguments.keys).sorted().map { index ->
+                val explicitlyCompleted = sawDone || finishReason.isNotBlank()
+                if (!explicitlyCompleted) {
+                    error("Chat stream ended before an explicit provider completion status")
+                }
+                val calls = (callIds.keys + callNames.keys + callArgumentParts.keys).sorted().map { index ->
                     ToolCall(
                         id = callIds[index]?.toString().orEmpty(),
                         name = callNames[index]?.toString().orEmpty(),
-                        arguments = callArguments[index]?.toString().orEmpty(),
+                        arguments = assembleCompatibleToolArguments(callArgumentParts[index].orEmpty()),
                     )
                 }
-                ChatResponse(content.toString(), reasoning.toString(), calls)
+                ChatResponse(
+                    content = content.toString(),
+                    reasoningContent = reasoning.toString(),
+                    toolCalls = calls,
+                    finishReason = finishReason,
+                    explicitEmptyResponse = explicitlyCompleted &&
+                        content.isBlank() && reasoning.isBlank() && calls.isEmpty(),
+                )
             }
+        }.onFailure { error ->
+            // runCatching also catches CancellationException. Never convert
+            // user stop, lifecycle teardown, or service cancellation into a
+            // provider failure that the Agent loop could render as an error.
+            if (error is CancellationException) throw error
         }
     }
 
@@ -421,7 +510,7 @@ class ApiClient(
                         }
                         if (parsed.toolArgumentsDelta.isNotEmpty()) {
                             calls.getOrPut(parsed.toolKey) { ToolCallAccumulator(id = parsed.toolKey) }
-                                .arguments.append(parsed.toolArgumentsDelta)
+                                .argumentParts.add(parsed.toolArgumentsDelta)
                         }
                         completed = completed || parsed.completed
                         val eventJson = runCatching { JSONObject(payload) }.getOrNull()
@@ -447,6 +536,9 @@ class ApiClient(
                 content = content.toString(),
                 reasoningContent = reasoning.toString(),
                 toolCalls = calls.values.map { it.toToolCall() }.filter { it.name.isNotBlank() },
+                finishReason = if (completed) "completed" else "",
+                explicitEmptyResponse = (completed || fallbackJson.isNotBlank()) &&
+                    content.isBlank() && reasoning.isBlank() && calls.isEmpty(),
             )
         }
     }
@@ -498,9 +590,13 @@ class ApiClient(
     private data class ToolCallAccumulator(
         var id: String = "",
         var name: String = "",
-        val arguments: StringBuilder = StringBuilder(),
+        val argumentParts: MutableList<String> = mutableListOf(),
     ) {
-        fun toToolCall() = ToolCall(id = id, name = name, arguments = arguments.toString().ifBlank { "{}" })
+        fun toToolCall() = ToolCall(
+            id = id,
+            name = name,
+            arguments = assembleCompatibleToolArguments(argumentParts),
+        )
     }
 
     private fun responsesInput(messages: List<ChatMessage>): JSONArray = JSONArray().apply {
@@ -564,10 +660,7 @@ class ApiClient(
         val call = calls.getOrPut(key) { ToolCallAccumulator() }
         call.id = id.ifBlank { call.id }.ifBlank { key }
         call.name = name.ifBlank { call.name }
-        if (arguments.isNotBlank() && arguments != call.arguments.toString()) {
-            call.arguments.clear()
-            call.arguments.append(arguments)
-        }
+        if (arguments.isNotBlank()) call.argumentParts.add(arguments)
     }
 
     private fun mergeNonStreamingResponses(
@@ -632,7 +725,7 @@ class ApiClient(
     }
 
     /** reasoning_effort 白名单 + ultra→max + OpenAI 官方域 max→xhigh（对齐 PC reasoningEffort） */
-    private fun reasoningEffort(model: String, baseUrl: String, tier: String, thinkingTierMap: Map<String, String>): String? {
+    internal fun reasoningEffort(model: String, baseUrl: String, tier: String, thinkingTierMap: Map<String, String>): String? {
         val mapped = mappedNativeEffort(model, tier, thinkingTierMap)
         if (mapped != null) return mapped
         val whitelist = Regex(

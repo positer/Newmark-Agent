@@ -1328,7 +1328,12 @@ export class Agent {
     this.routeAttemptStartedAt = Date.now();
   }
 
-  async waitForPlannedRouteRetry(): Promise<void> {
+  async waitForPlannedRouteRetry(explicitDelayMs?: number): Promise<void> {
+    if (explicitDelayMs !== undefined) {
+      if (explicitDelayMs <= 0) return;
+      await new Promise<void>(resolve => setTimeout(resolve, explicitDelayMs));
+      return;
+    }
     const waitBudgetMs = Math.max(0, Math.min(15_000, this.lastRouteDecision?.retryBudgetMs ?? 5_000));
     const delay = Math.max(0, Math.min(waitBudgetMs, this.lastRouteRetryDelayMs));
     this.lastRouteRetryDelayMs = 0;

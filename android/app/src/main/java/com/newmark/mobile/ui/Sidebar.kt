@@ -94,6 +94,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -140,6 +141,7 @@ import com.newmark.mobile.ui.components.liquidGlassModifier
 import com.newmark.mobile.ui.components.liquidMotionDeformation
 import com.newmark.mobile.ui.components.liquidSelectionMorph
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
+import com.newmark.mobile.ui.components.runOverlappedLiquidFlight
 import com.newmark.mobile.ui.components.LocalSidebarGestureLock
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.LocalGlassMode
@@ -166,6 +168,7 @@ sealed interface SidebarPage {
 }
 
 private val PcEaseOutExpo = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
+private enum class ConversationMenuTrigger { MoreButton, LongPress }
 
 @Composable
 fun SidebarContent(
@@ -361,19 +364,13 @@ private fun MainSidebar(
                 localConversationGlassScaleY.snapTo(0f)
             }
             localConversationGlassVisible = true
-            coroutineScope {
-                launch { localConversationGlassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }
-                launch { localConversationGlassScaleX.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }
-                launch { localConversationGlassScaleY.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }
-                launch { localConversationGlassY.animateTo(target.top, tween(240, easing = PcEaseOutExpo)) }
-            }
+            runOverlappedLiquidFlight(
+                lift = { coroutineScope { launch { localConversationGlassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }; launch { localConversationGlassScaleX.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }; launch { localConversationGlassScaleY.animateTo(1f, tween(100, easing = PcEaseOutExpo)) } } },
+                move = { localConversationGlassY.animateTo(target.top, tween(240, easing = PcEaseOutExpo)) },
+                onLandingStarted = { localGlassLanding = true },
+                land = { coroutineScope { launch { localConversationGlassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }; launch { localConversationGlassScaleX.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }; launch { localConversationGlassScaleY.animateTo(0f, tween(240, easing = PcEaseOutExpo)) } } },
+            )
             localGlassArrivedId = targetId
-            localGlassLanding = true
-            coroutineScope {
-                launch { localConversationGlassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }
-                launch { localConversationGlassScaleX.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }
-                launch { localConversationGlassScaleY.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }
-            }
             localVisualSelectedId = targetId
             localConversationGlassVisible = false
             localGlassLanding = false
@@ -399,11 +396,11 @@ private fun MainSidebar(
             localConversationGlassScaleX.snapTo(0f)
             localConversationGlassScaleY.snapTo(0f)
             localConversationGlassVisible = true
-            coroutineScope {
-                launch { localConversationGlassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }
-                launch { localConversationGlassScaleX.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }
-                launch { localConversationGlassScaleY.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }
-            }
+            runOverlappedLiquidFlight(
+                holdKeepsLifted = true,
+                lift = { coroutineScope { launch { localConversationGlassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }; launch { localConversationGlassScaleX.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }; launch { localConversationGlassScaleY.animateTo(1f, tween(100, easing = PcEaseOutExpo)) } } },
+                move = {}, onLandingStarted = {}, land = {},
+            )
         }
     }
     fun clearLocalDrag() {
@@ -455,13 +452,12 @@ private fun MainSidebar(
             localDragDestinationGroupIndex = -1
             localDragItemHeight = 0f
             val landingTop = localConversationBounds[sourceId]?.top ?: localConversationGlassY.value
-            localConversationGlassY.animateTo(landingTop, tween(120, easing = PcEaseOutExpo))
-            localGlassLanding = true
-            coroutineScope {
-                launch { localConversationGlassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }
-                launch { localConversationGlassScaleX.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }
-                launch { localConversationGlassScaleY.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }
-            }
+            runOverlappedLiquidFlight(
+                lift = {},
+                move = { localConversationGlassY.animateTo(landingTop, tween(120, easing = PcEaseOutExpo)) },
+                onLandingStarted = { localGlassLanding = true },
+                land = { coroutineScope { launch { localConversationGlassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }; launch { localConversationGlassScaleX.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }; launch { localConversationGlassScaleY.animateTo(0f, tween(240, easing = PcEaseOutExpo)) } } },
+            )
             localConversationGlassVisible = false
             localGlassLanding = false
             localGlassArrivedId = sourceId
@@ -1004,7 +1000,21 @@ private fun LocalConversationRow(
     val density = LocalDensity.current
     val setSidebarGestureLock = LocalSidebarGestureLock.current
     var showMenu by remember { mutableStateOf(false) }
+    var menuTrigger by remember { mutableStateOf(ConversationMenuTrigger.MoreButton) }
     var renaming by remember { mutableStateOf(false) }
+    var archivingOut by remember { mutableStateOf(false) }
+    val archiveProgress = remember { Animatable(1f) }
+    val scope = rememberCoroutineScope()
+    fun archiveConversationAfterExit() {
+        if (archivingOut) return
+        archivingOut = true
+        showMenu = false
+        scope.launch {
+            delay(170)
+            archiveProgress.animateTo(0f, tween(220, easing = PcEaseOutExpo))
+            onArchive()
+        }
+    }
     val shape = RoundedCornerShape(50)
     val previewTranslation by animateFloatAsState(
         targetValue = previewTranslationY,
@@ -1015,6 +1025,9 @@ private fun LocalConversationRow(
         modifier
             .graphicsLayer {
                 translationY = dragTranslationY + previewTranslation
+                alpha = archiveProgress.value
+                scaleX = 0.96f + 0.04f * archiveProgress.value
+                scaleY = 0.96f + 0.04f * archiveProgress.value
             }
             .zIndex(if (dragging) 6f else 0f)
             .fillMaxWidth()
@@ -1062,7 +1075,10 @@ private fun LocalConversationRow(
                             onHoldEnd = { _, moved ->
                                 if (!renaming) {
                                     onDragEnd(moved)
-                                    if (!moved) showMenu = true
+                                    if (!moved) {
+                                        menuTrigger = ConversationMenuTrigger.LongPress
+                                        showMenu = true
+                                    }
                                 }
                             },
                             onCancel = { if (!renaming) onDragCancel() },
@@ -1088,7 +1104,10 @@ private fun LocalConversationRow(
                         .size(20.dp)
                         .clip(RoundedCornerShape(6.dp))
                         .background(if (showMenu) pc.controlHover else Color.Transparent)
-                        .clickable { showMenu = true },
+                        .clickable {
+                            menuTrigger = ConversationMenuTrigger.MoreButton
+                            showMenu = true
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(LucideIcons.Ellipsis, contentDescription = "更多", tint = if (showMenu) pc.textBright else pc.textDim, modifier = Modifier.size(14.dp))
@@ -1100,9 +1119,10 @@ private fun LocalConversationRow(
             pinned = conversation.pinned,
             archiving = false,
             palette = pc,
+            transformOrigin = if (menuTrigger == ConversationMenuTrigger.MoreButton) TransformOrigin(1f, 0f) else TransformOrigin.Center,
             onDismiss = { showMenu = false },
             onRename = { showMenu = false; renaming = true },
-            onArchive = { showMenu = false; onArchive() },
+            onArchive = ::archiveConversationAfterExit,
             onTogglePin = { showMenu = false; onTogglePin() },
         )
     }
@@ -1213,14 +1233,12 @@ private fun CollapsedUtilityButtons(
                     moving = true
                     flightJob = scope.launch {
                         glassTopPx = start
-                        kotlinx.coroutines.yield()
-                        lifting = false
                         val targetTop = target * itemPx + topInsetPx
-                        if (kotlin.math.abs(start - targetTop) < 0.5f) delay(100) else animate(
-                            start, targetTop, animationSpec = tween(380, easing = PcEaseOutExpo),
-                        ) { value, velocity -> glassTopPx = value; glassVelocityY = velocity }
-                        landing = true
-                        delay(240)
+                        runOverlappedLiquidFlight(
+                            lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) },
+                            move = { if (kotlin.math.abs(start - targetTop) >= 0.5f) animate(start, targetTop, animationSpec = tween(380, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } },
+                            onLandingStarted = { landing = true }, land = { delay(240) },
+                        )
                         landing = false
                         moving = false
                         selectedIndex = target
@@ -1238,17 +1256,8 @@ private fun CollapsedUtilityButtons(
                     moving = true
                     flightJob = scope.launch {
                         glassTopPx = start
-                        kotlinx.coroutines.yield()
-                        lifting = false
                         val targetTop = target * itemPx + topInsetPx
-                        animate(
-                            start,
-                            targetTop,
-                            animationSpec = tween(380, easing = PcEaseOutExpo),
-                        ) { value, velocity ->
-                            glassTopPx = value
-                            glassVelocityY = velocity
-                        }
+                        runOverlappedLiquidFlight(holdKeepsLifted = true, lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) }, move = { animate(start, targetTop, animationSpec = tween(380, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = {}, land = {})
                     }
                 },
                 onDrag = { position, delta ->
@@ -1267,16 +1276,7 @@ private fun CollapsedUtilityButtons(
                     flightJob = scope.launch {
                         lifting = false
                         val targetTop = commit * itemPx + topInsetPx
-                        animate(
-                            initialValue = glassTopPx,
-                            targetValue = targetTop,
-                            animationSpec = tween(120, easing = PcEaseOutExpo),
-                        ) { value, velocity ->
-                            glassTopPx = value
-                            glassVelocityY = velocity
-                        }
-                        landing = true
-                        delay(240)
+                        runOverlappedLiquidFlight(lift = {}, move = { animate(initialValue = glassTopPx, targetValue = targetTop, animationSpec = tween(120, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = { landing = true }, land = { delay(240) })
                         landing = false
                         moving = false
                         glassVelocityY = 0f
@@ -1397,14 +1397,8 @@ private fun ExpandedUtilityButtons(
                     moving = true
                     flightJob = scope.launch {
                         glassTopPx = start
-                        kotlinx.coroutines.yield()
-                        lifting = false
                         val targetTop = target * itemPx
-                        if (kotlin.math.abs(start - targetTop) < 0.5f) delay(100) else animate(
-                            start, targetTop, animationSpec = tween(380, easing = PcEaseOutExpo),
-                        ) { value, velocity -> glassTopPx = value; glassVelocityY = velocity }
-                        landing = true
-                        delay(240)
+                        runOverlappedLiquidFlight(lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) }, move = { if (kotlin.math.abs(start - targetTop) >= 0.5f) animate(start, targetTop, animationSpec = tween(380, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = { landing = true }, land = { delay(240) })
                         landing = false
                         moving = false
                         selectedIndex = target
@@ -1422,17 +1416,8 @@ private fun ExpandedUtilityButtons(
                     moving = true
                     flightJob = scope.launch {
                         glassTopPx = start
-                        kotlinx.coroutines.yield()
-                        lifting = false
                         val targetTop = target * itemPx
-                        animate(
-                            start,
-                            targetTop,
-                            animationSpec = tween(380, easing = PcEaseOutExpo),
-                        ) { value, velocity ->
-                            glassTopPx = value
-                            glassVelocityY = velocity
-                        }
+                        runOverlappedLiquidFlight(holdKeepsLifted = true, lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) }, move = { animate(start, targetTop, animationSpec = tween(380, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = {}, land = {})
                     }
                 },
                 onDrag = { position, delta ->
@@ -1448,16 +1433,7 @@ private fun ExpandedUtilityButtons(
                     flightJob = scope.launch {
                         lifting = false
                         val targetTop = commit * itemPx
-                        animate(
-                            initialValue = glassTopPx,
-                            targetValue = targetTop,
-                            animationSpec = tween(120, easing = PcEaseOutExpo),
-                        ) { value, velocity ->
-                            glassTopPx = value
-                            glassVelocityY = velocity
-                        }
-                        landing = true
-                        delay(240)
+                        runOverlappedLiquidFlight(lift = {}, move = { animate(initialValue = glassTopPx, targetValue = targetTop, animationSpec = tween(120, easing = PcEaseOutExpo)) { value, velocity -> glassTopPx = value; glassVelocityY = velocity } }, onLandingStarted = { landing = true }, land = { delay(240) })
                         landing = false
                         moving = false
                         glassVelocityY = 0f
@@ -1762,19 +1738,13 @@ fun WorkspaceConversationsSidebar(
                 flyingGlassScaleY.snapTo(0f)
             }
             flyingConversationGlass = true
-            coroutineScope {
-                launch { flyingGlassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }
-                launch { flyingGlassScaleX.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }
-                launch { flyingGlassScaleY.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }
-                launch { flyingGlassY.animateTo(target.top, tween(240, easing = PcEaseOutExpo)) }
-            }
+            runOverlappedLiquidFlight(
+                lift = { coroutineScope { launch { flyingGlassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }; launch { flyingGlassScaleX.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }; launch { flyingGlassScaleY.animateTo(1f, tween(100, easing = PcEaseOutExpo)) } } },
+                move = { flyingGlassY.animateTo(target.top, tween(240, easing = PcEaseOutExpo)) },
+                onLandingStarted = { conversationGlassLanding = true },
+                land = { coroutineScope { launch { flyingGlassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }; launch { flyingGlassScaleX.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }; launch { flyingGlassScaleY.animateTo(0f, tween(240, easing = PcEaseOutExpo)) } } },
+            )
             glassArrivedConversationId = targetId
-            conversationGlassLanding = true
-            coroutineScope {
-                launch { flyingGlassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }
-                launch { flyingGlassScaleX.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }
-                launch { flyingGlassScaleY.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }
-            }
             visualActiveConversationId = targetId
             flyingConversationGlass = false
             conversationGlassLanding = false
@@ -1798,11 +1768,11 @@ fun WorkspaceConversationsSidebar(
             flyingGlassScaleX.snapTo(0f)
             flyingGlassScaleY.snapTo(0f)
             flyingConversationGlass = true
-            coroutineScope {
-                launch { flyingGlassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }
-                launch { flyingGlassScaleX.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }
-                launch { flyingGlassScaleY.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }
-            }
+            runOverlappedLiquidFlight(
+                holdKeepsLifted = true,
+                lift = { coroutineScope { launch { flyingGlassLift.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }; launch { flyingGlassScaleX.animateTo(1f, tween(100, easing = PcEaseOutExpo)) }; launch { flyingGlassScaleY.animateTo(1f, tween(100, easing = PcEaseOutExpo)) } } },
+                move = {}, onLandingStarted = {}, land = {},
+            )
         }
     }
 
@@ -1856,13 +1826,12 @@ fun WorkspaceConversationsSidebar(
             dragDestinationGroupIndex = -1
             dragItemHeight = 0f
             val landingTop = conversationBounds[sourceId]?.top ?: flyingGlassY.value
-            flyingGlassY.animateTo(landingTop, tween(120, easing = PcEaseOutExpo))
-            conversationGlassLanding = true
-            coroutineScope {
-                launch { flyingGlassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }
-                launch { flyingGlassScaleX.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }
-                launch { flyingGlassScaleY.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }
-            }
+            runOverlappedLiquidFlight(
+                lift = {},
+                move = { flyingGlassY.animateTo(landingTop, tween(120, easing = PcEaseOutExpo)) },
+                onLandingStarted = { conversationGlassLanding = true },
+                land = { coroutineScope { launch { flyingGlassLift.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }; launch { flyingGlassScaleX.animateTo(0f, tween(240, easing = PcEaseOutExpo)) }; launch { flyingGlassScaleY.animateTo(0f, tween(240, easing = PcEaseOutExpo)) } } },
+            )
             flyingConversationGlass = false
             conversationGlassLanding = false
             glassArrivedConversationId = sourceId
@@ -2162,6 +2131,20 @@ private fun PcRemoteConversationRow(
     onDragCancel: () -> Unit,
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    var menuTrigger by remember { mutableStateOf(ConversationMenuTrigger.MoreButton) }
+    var archivingOut by remember { mutableStateOf(false) }
+    val archiveProgress = remember { Animatable(1f) }
+    val scope = rememberCoroutineScope()
+    fun archiveConversationAfterExit() {
+        if (archivingOut || archiving) return
+        archivingOut = true
+        showMenu = false
+        scope.launch {
+            delay(170)
+            archiveProgress.animateTo(0f, tween(220, easing = PcEaseOutExpo))
+            onArchive()
+        }
+    }
     val setSidebarGestureLock = LocalSidebarGestureLock.current
     val density = LocalDensity.current
     val interaction = remember { MutableInteractionSource() }
@@ -2219,7 +2202,10 @@ private fun PcRemoteConversationRow(
                             onHoldEnd = { _, moved ->
                                 if (!renaming) {
                                     onDragEnd(moved)
-                                    if (!moved) showMenu = true
+                                    if (!moved) {
+                                        menuTrigger = ConversationMenuTrigger.LongPress
+                                        showMenu = true
+                                    }
                                 }
                             },
                             onCancel = { if (!renaming) onDragCancel() },
@@ -2278,7 +2264,10 @@ private fun PcRemoteConversationRow(
                         .clickable(
                             interactionSource = moreInteraction,
                             indication = androidx.compose.foundation.LocalIndication.current,
-                            onClick = { showMenu = true },
+                            onClick = {
+                                menuTrigger = ConversationMenuTrigger.MoreButton
+                                showMenu = true
+                            },
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -2294,12 +2283,13 @@ private fun PcRemoteConversationRow(
                     pinned = conversation.pinned,
                     archiving = archiving,
                     palette = palette,
+                    transformOrigin = if (menuTrigger == ConversationMenuTrigger.MoreButton) TransformOrigin(1f, 0f) else TransformOrigin.Center,
                     onDismiss = { showMenu = false },
                     onRename = {
                         showMenu = false
                         onBeginRename()
                     },
-                    onArchive = { showMenu = false; onArchive() },
+                    onArchive = ::archiveConversationAfterExit,
                     onTogglePin = { showMenu = false; onTogglePin() },
                 )
             }
@@ -2309,6 +2299,9 @@ private fun PcRemoteConversationRow(
         modifier = modifier
             .graphicsLayer {
                 translationY = dragTranslationY + previewTranslation
+                alpha = archiveProgress.value
+                scaleX = 0.96f + 0.04f * archiveProgress.value
+                scaleY = 0.96f + 0.04f * archiveProgress.value
             }
             .zIndex(if (dragging) 6f else 0f)
             .fillMaxWidth()
@@ -2468,6 +2461,7 @@ private fun PcConversationActionMenu(
     pinned: Boolean,
     archiving: Boolean,
     palette: PcSecondaryPalette,
+    transformOrigin: TransformOrigin,
     onDismiss: () -> Unit,
     onRename: () -> Unit,
     onArchive: () -> Unit,
@@ -2492,6 +2486,7 @@ private fun PcConversationActionMenu(
         backgroundColor = palette.modal,
         borderColor = palette.border2,
         contentPadding = 6.dp,
+        transformOrigin = transformOrigin,
     ) {
         PcConversationActionMenuItem(
             icon = LucideIcons.Pencil,

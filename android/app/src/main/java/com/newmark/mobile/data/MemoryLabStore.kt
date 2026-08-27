@@ -4,6 +4,26 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.security.MessageDigest
+
+data class MemoryLabUpdateInput(
+    val name: String,
+    val description: String = "",
+    val tags: List<String>,
+    val tagPaths: List<List<String>> = emptyList(),
+    val content: String,
+    val kind: String = "file",
+    val expectedUpdatedAt: String = "",
+    val reason: String = "",
+    val source: String = "memory_lab_update",
+)
+
+data class MemoryLabWriteResult(
+    val index: MemoryLabIndex,
+    val slug: String = "",
+    val component: MemoryComponent? = null,
+    val rebuildReceipt: JSONObject,
+)
 
 /** 记忆标签节点（对齐 PC MemoryLabTagNode） */
 data class MemoryTagNode(
@@ -46,6 +66,8 @@ class MemoryLabStore(context: Context) {
     private val appContext = context.applicationContext
     private val dir: File get() = File(appContext.filesDir, "newmark/Memory Lab").apply { mkdirs() }
     private val indexPath: File get() = File(dir, "index.json")
+    private val archiveDir: File get() = File(dir, "archive").apply { mkdirs() }
+    private val policyLog: File get() = File(dir, "policy.jsonl")
     val componentsDir: File get() = File(dir, "components").apply { mkdirs() }
 
     fun emptyIndex(): MemoryLabIndex = MemoryLabIndex(
@@ -86,6 +108,94 @@ class MemoryLabStore(context: Context) {
         dir.mkdirs()
         indexPath.writeText(toJson(index))
     }
+
+    @Synchronized
+    fun update(input: MemoryLabUpdateInput): MemoryLabWriteResult {
+        val name = input.name.trim().ifBlank { error("Memory component name is required") }
+        val content = input.content.trim().ifBlank { error("Memory component content is required") }
+        val slug = slugifyMemory(name)
+        val oldIndex = load()
+        val existing = oldIndex.components[slug]
+        if (existing != null && input.expectedUpdatedAt.isNotBlank() && input.expectedUpdatedAt != existing.updatedAt) {
+            error("Memory component changed since it was read: $slug")
+        }
+        if (existing != null) archiveComponentRevision(slug, existing)
+        val normalizedPaths = input.tagPaths.map { it.map(String::trim).filter(String::isNotBlank) }.filter(List<String>::isNotEmpty)
+        val normalizedTags = (input.tags + normalizedPaths.flatten()).map(String::trim).filter(String::isNotBlank).distinct()
+        require(normalizedTags.isNotEmpty()) { "At least one tag is required" }
+        val now = java.time.Instant.now().toString()
+        val kind = if (input.kind == "folder") "folder" else "file"
+        val container = if (kind == "folder") File(componentsDir, slug) else File(componentsDir, "$slug.md")
+        val core = if (kind == "folder") File(container, "memory.md") else container
+        core.parentFile?.mkdirs()
+        core.writeText(content)
+        val component = MemoryComponent(
+            name = name, description = input.description.trim(), tags = normalizedTags,
+            tagPaths = normalizedPaths.ifEmpty { normalizedTags.map(::listOf) },
+            path = container.absolutePath, coreMd = core.absolutePath, kind = kind,
+            createdAt = existing?.createdAt ?: now, updatedAt = now,
+            revision = (existing?.revision ?: 0) + 1,
+        )
+        val next = oldIndex.copy(updatedAt = now, components = (oldIndex.components + (slug to component)).toSortedMap())
+        val rebuilt = next.copy(tags = rebuildMemoryTags(next.tags, next.components))
+        save(rebuilt)
+        appendPolicy(if (existing == null) "add" else "update", slug, input.reason, input.source, component.revision, sha256(content))
+        return MemoryLabWriteResult(rebuilt, slug, component, receipt(if (existing == null) "update" else "update", rebuilt, slug))
+    }
+
+    @Synchronized
+    fun delete(componentSelector: String, expectedUpdatedAt: String = "", reason: String = "", source: String = "memory_lab_delete"): MemoryLabWriteResult {
+        val index = load()
+        val slug = resolveSlug(index, componentSelector) ?: error("Memory component not found: $componentSelector")
+        val existing = index.components.getValue(slug)
+        if (expectedUpdatedAt.isNotBlank() && expectedUpdatedAt != existing.updatedAt) error("Memory component changed since it was read: $slug")
+        archiveComponentRevision(slug, existing)
+        val target = File(if (existing.kind == "folder") existing.path else existing.coreMd)
+        if (target.exists()) target.deleteRecursively()
+        val now = java.time.Instant.now().toString()
+        val nextComponents = index.components - slug
+        val next = index.copy(updatedAt = now, components = nextComponents, tags = rebuildMemoryTags(index.tags, nextComponents))
+        save(next)
+        appendPolicy("delete", slug, reason, source, existing.revision, "")
+        return MemoryLabWriteResult(next, slug, null, receipt("delete", next, slug))
+    }
+
+    fun readJson(componentSelector: String = ""): JSONObject {
+        val index = load()
+        return JSONObject().put("ok", true).put("instructions", instructions()).put("index", JSONObject(toJson(index))).apply {
+            if (componentSelector.isNotBlank()) {
+                val slug = resolveSlug(index, componentSelector)
+                if (slug == null) put("error", "Memory component not found: $componentSelector")
+                else put("component", JSONObject().put("slug", slug).put("meta", JSONObject(toJson(index)).getJSONObject("components").getJSONObject(slug)).put("content", componentContent(slug)))
+            }
+        }
+    }
+
+    fun instructions(): String = "Memory Lab tool contract: read/query first; mutate only with memory_lab_update/delete; use component slug or exact name; updates/deletes require latest expected_updated_at when editing existing data; tags is comma-separated and tag_paths is JSON array of tag-path arrays; content is Markdown; mutations return a receipt and are archived in policy.jsonl. Never print tool schemas or repeat the full index in chat."
+
+    private fun resolveSlug(index: MemoryLabIndex, selector: String): String? {
+        val value = selector.trim()
+        return index.components.keys.firstOrNull { it == value } ?: index.components.entries.firstOrNull { it.value.name.equals(value, true) }?.key
+    }
+
+    private fun archiveComponentRevision(slug: String, component: MemoryComponent): String {
+        val stamp = java.time.Instant.now().toString().replace(":", "-")
+        val folder = File(archiveDir, "$slug/$stamp-r${component.revision}").apply { mkdirs() }
+        File(folder, "meta.json").writeText(JSONObject().put("slug", slug).put("name", component.name).put("updatedAt", component.updatedAt).put("revision", component.revision).toString(2))
+        File(folder, "memory.md").writeText(componentContent(slug))
+        return folder.absolutePath
+    }
+
+    private fun appendPolicy(operation: String, slug: String, reason: String, source: String, revision: Int, contentHash: String) {
+        policyLog.appendText(JSONObject().put("at", java.time.Instant.now().toString()).put("operation", operation).put("slug", slug)
+            .put("reason", reason.ifBlank { "Durable memory mutation." }).put("source", source).put("revision", revision).put("contentSha256", contentHash).toString() + "\n")
+    }
+
+    private fun receipt(operation: String, index: MemoryLabIndex, slug: String) = JSONObject()
+        .put("operation", operation).put("completed", true).put("indexUpdatedAt", index.updatedAt)
+        .put("verifiedAt", java.time.Instant.now().toString()).put("slug", slug)
+
+    private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
 
     private fun parseIndex(json: JSONObject): MemoryLabIndex {
         val tags = mutableMapOf<String, MemoryTagNode>()
@@ -207,3 +317,6 @@ internal fun rebuildMemoryTags(
 
 private fun JSONArray.toStringList(): List<String> =
     (0 until length()).map { optString(it) }.filter { it.isNotBlank() }
+
+internal fun slugifyMemory(value: String): String = value.trim().lowercase()
+    .replace(Regex("[^\\p{L}\\p{N}]+"), "-").trim('-').ifBlank { "memory" }

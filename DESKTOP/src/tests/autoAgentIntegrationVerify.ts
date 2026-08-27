@@ -208,12 +208,26 @@ async function main(): Promise<void> {
     ok(audit.includes('catalogSnapshotHash') && !audit.includes('Provider-scoped request') && !audit.includes('openai-key'),
       'route audit records decisions without prompts or credentials');
     const runnerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentKernelRunner.ts'), 'utf-8');
-    ok(runnerSource.includes('if (!finalContent.length)') && runnerSource.includes('[Error] Provider returned an empty response.'),
+    ok(runnerSource.includes('if (!finalContent.length && !thinking.trim())') && runnerSource.includes('[Error] Provider returned an empty response.'),
       'empty provider responses enter retry/fallback classification instead of recording route success');
+    const emptyRetrySource = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'emptyResponseRetry.ts'), 'utf-8');
     ok(runnerSource.includes('const emptyResponse = !assistant')
-      && runnerSource.includes('let emptyResponseRetries = 0')
+      && emptyRetrySource.includes('MAX_EMPTY_RESPONSE_RETRIES = EMPTY_RESPONSE_RETRY_DELAYS_MS.length')
+      && emptyRetrySource.includes('[200, 800, 2_000, 10_000, 60_000]')
+      && runnerSource.includes('let consecutiveEmptyResponses = 0')
+      && runnerSource.includes('const emptyResponseState = observeEmptyResponseOutcome(consecutiveEmptyResponses, providerTurnIsEmpty(lastTurn))')
+      && runnerSource.includes('if (!emptyResponseState.retry) break')
+      && runnerSource.includes('${retryNumber}/${MAX_EMPTY_RESPONSE_RETRIES}')
+      && runnerSource.includes('waitForPlannedRouteRetry(emptyResponseRetryDelayMs(consecutiveEmptyResponses))')
       && runnerSource.includes('retrying the same deployment'),
-    'empty provider responses never complete a Build silently and receive bounded same-deployment retries');
+    'empty provider responses terminate only after the fifth retry fails');
+    ok(runnerSource.includes('if (lastTurn.thoughtOnly)')
+      && runnerSource.includes('removeTrailingThoughtOnlyAssistant(kernel.state.messages)')
+      && runnerSource.includes('!finalContent.length && !thinking.trim()'),
+    'thought-only activity resets empty accounting and continues without synthesizing an empty-response error');
+    ok(!runnerSource.includes('let emptyResponseRetries = 0')
+      && !runnerSource.includes('(${emptyResponseRetries}/2)'),
+    'legacy build-local two-retry counter is removed');
     const providerStreamSource = runnerSource.slice(
       runnerSource.indexOf('function streamWithNewmarkProvider'),
       runnerSource.indexOf('async function transformContext'),

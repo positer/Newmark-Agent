@@ -12,8 +12,8 @@ android {
         applicationId = "com.newmark.mobile"
         minSdk = 24
         targetSdk = 36
-        versionCode = 507
-        versionName = "0.5.7"
+        versionCode = 508
+        versionName = "0.5.8"
     }
 
     buildTypes {
@@ -79,6 +79,9 @@ dependencies {
     // Bundled models keep the local browser OCR deterministic and offline.
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    implementation("org.apache.poi:poi:5.2.5")
+    implementation("org.apache.poi:poi-scratchpad:5.2.5")
     // Vendored Kyant backdrop (AndroidLiquidGlass) Liquid Glass effect library.
     implementation("org.jetbrains:annotations:24.1.0")
     testImplementation("junit:junit:4.13.2")

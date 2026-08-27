@@ -1,5 +1,48 @@
 # Newmark Agent Overview
 
+## dev-0.5.8 implementation state (2026-08-26)
+
+dev-0.5.8 implements a focused desktop runtime/UI correction plus mobile Agent stability work. `DESKTOP/src/core/emptyResponseRetry.ts` owns the explicit-empty outcome state machine. `agentKernelRunner.ts` treats the initial explicit failure as streak 1, performs five same-deployment retries after 200ms, 800ms, 2s, 10s, and 60s, and terminates only when the fifth retry also returns an explicit empty failure (six consecutive explicit empty outcomes total). On Android, thought/reasoning, assistant text, tool calls, and other observable stream activity all reset the local streak immediately. Empty classification remains separate from waiting, silence, EOF, stream closure, abort, content filtering, explicit errors, and unrelated transport failures.
+
+Transcript Build/history disclosure in `DESKTOP/src/ui/index.html` is now fully motionless and glass-free. The header overrides generic button transitions, animations, transforms and filters; the chevron changes orientation instantaneously. Synchronous click/keyboard activation and the direct `display` body switch remain intact.
+
+Planning artifacts:
+
+```text
+tasks/plan.md                              # dependency-ordered dev-0.5.8 implementation plan
+tasks/todo.md                              # executable acceptance and release checklist
+taste.md                                   # persistent retry/UI interaction style contract
+archive/20260826-dev-0.5.8-planning.md     # source findings and decisions from this planning pass
+```
+
+Verification covers the pure retry state machine, auto-agent integration, model recovery stress, normal chat regression, static PC glass contracts, and real Electron disclosure computed styles. The shared version is `0.5.8` (`versionCode 508`).
+
+### dev-0.5.8 release candidate (2026-08-27)
+
+`DESKTOP/scripts/release-all.cjs` completed successfully on Windows with WSL2 Ubuntu 24.04 and JDK 17. The release gate ran the desktop full-release suite, Android unit/Vital Lint/R8/Release tasks, Windows packaging and packaged smokes, then native Linux packaging in an isolated WSL filesystem. `DESKTOP/scripts/verify-github-release-assets.cjs` independently verified exact names, byte sizes, SHA-256 equality, Windows MSI/ZIP startup, and WSL AppImage/deb/ZIP GUI plus Bash/sh terminal isolation.
+
+```text
+release/
+├─ Newmark-Agent-0.5.8-x64.msi                 # Windows machine installer, 226388047 bytes
+├─ Newmark-Agent-0.5.8-win-unpacked-x64.zip    # Windows portable package, 292541435 bytes
+├─ Newmark-Agent-0.5.8-x86_64.AppImage         # Linux AppImage, 176643327 bytes
+├─ Newmark-Agent-0.5.8-amd64.deb               # Debian/Ubuntu package, 136028248 bytes
+├─ Newmark-Agent-0.5.8-linux-unpacked-x64.zip  # Linux portable package, 172766280 bytes
+└─ Newmark-Agent-0.5.8-android.apk             # Android release APK, 52701316 bytes
+```
+
+This is a local release candidate, not an uploaded GitHub Release. Windows executable signing is disabled in the existing builder configuration. The APK verifies with APK Signature Scheme v2 and the existing Android Debug certificate, so it is suitable for sideload testing but not store distribution. No ADB device was connected for install/runtime validation. The repository has a macOS DMG target, but Electron's macOS packaging constraint requires a macOS host; DMG is outside the current six-asset Windows/Linux/Android release matrix and was not produced here. Full evidence and hashes are in `archive/20260827-011341-dev-0.5.8-all-platform-release.md`.
+
+### Android latest-file exposure
+
+The local Android Agent no longer depends on knowing a storage directory in advance. `LocalTools.kt` exposes the read-only `recent_files` tool in Build and Plan modes. `LocalToolExecutor.kt` queries MediaStore document, image, and video collections, merges them by `DATE_MODIFIED DESC`, and returns bounded metadata plus readable `content://` URIs. `files_read_all` is always exposed for URI reads and returns UTF-8 text for textual formats or bounded Base64 metadata for binary files up to 20 MiB.
+
+This capability is independent of Root/Shizuku and does not require `MANAGE_EXTERNAL_STORAGE`. Android 13+ media permissions expand image/video coverage. The system “all files access” page remains an explicit user-controlled expansion for arbitrary shared-storage paths and file management; `Android/data`, `Android/obb`, symbolic-link escapes, recursive deletion, and overwrite remain blocked.
+
+The final permission contract is double-gated. When the in-app all-files switch is off, `recent_files`, `files_read_all`, and `files_manage` are absent from the local Agent tool surface; only the internal safe workspace file tools remain. When enabled, Android media permissions and the app-specific all-files settings page are opened, and arbitrary shared-storage management requires both the saved in-app choice and the live system grant. Application-list tools likewise require both the saved in-app switch and Android Usage Access (`PACKAGE_USAGE_STATS`) authorization. Returning from system settings refreshes both live states.
+
+`NewmarkApp.kt` now initializes `preferLocal=true`. Cold start immediately renders the persisted `ChatViewModel.currentId` local conversation instead of selecting a paired remote surface while the desktop link hydrates. Remote mode remains available through explicit device selection.
+
 ## dev-0.5.7 corrective release (2026-08-25)
 
 dev-0.5.7 implements the planned Android long-press, cross-platform glass geometry/animation, PC response-time, scoped light-surface, fallback-boundary, transcript-disclosure, and popup-radius corrections. Android's interaction edge uses a fixed 6dp outer band. Desktop and Android moving glass deform more responsively from live velocity, stretching along travel and contracting across it while keeping refraction inside the transformed glass. Desktop dispersion is primed on low-frequency hover/focus intent, uses a single pooled off-DOM WebGL context, and refreshes through CSS-resolution JPEG bytes plus ImageBitmap decoding; a pooled alpha-enabled 2D surface performs final Chromium composition to avoid Windows' reused-WebGL black-frame defect. Geometry and uniform caches suppress duplicate GPU work, and production performs no CPU pixel readback.
@@ -2948,3 +2991,208 @@ SSH TUI/PTY、四轮重启、CLI、上下文压缩和 console 参数边界检查
 本机 UAC 同版本升级返回 3010，表示成功但建议重启。注册表及 EXE 版本均为 `0.5.7.0`；安装
 目录 `app.asar` 与候选哈希一致，安装版主/GPU/network/renderer 四个进程启动成功。完整记录
 见 `archive/20260826-liquid-motion-msi-uac-install.md`。
+
+## 2026-08-26 dev-0.5.8 对话菜单/归档退出动画
+
+```text
+android/app/src/main/java/com/newmark/mobile/ui/
+├─ components/AnchorMenu.kt              # Popup 保活、锚点感知的缩放/淡入淡出
+└─ Sidebar.kt                            # 本地/远程菜单触发源与归档分阶段提交
+android/app/src/test/java/com/newmark/mobile/ui/
+└─ ConversationMenuArchiveAnimationContractTest.kt
+```
+
+更多按钮使用右上 `TransformOrigin`，长按使用胶囊中心；关闭状态不会立即销毁 Popup。归档先播放
+菜单反向退出，再以 alpha 与 scale 淡出胶囊，动画完成后才调用数据层归档回调。
+
+## 2026-08-26 dev-0.5.8 默认时钟闹钟工具
+
+`data/AlarmTool.kt` 通过 Android `AlarmClock` 公共 Intent 将创建与查看操作交给默认时钟应用。
+Manifest 只声明标准 `SET_ALARM` 权限，已移除 Newmark 自建精确 AlarmManager、Receiver、通知
+频道和内部 JSON 闹钟记录。工具面公开 `create|list`；系统未提供稳定的跨时钟 ID 枚举/删除
+协议，因此不再向 Agent 暴露不可兑现的 `cancel` 参数。
+
+### 当前 Android 压力/构建状态
+
+`testDebugUnitTest` 共 151 项全部通过；`assembleStress` 生成隔离包
+`android/app/build/outputs/apk/stress/app-stress.apk`；`lintVitalRelease assembleRelease` 完成
+正式包的 lint、R8、资源优化与签名。当前主机没有 ADB 设备，依赖模拟器/实机的
+`mobile-agent-stress.ps1` 未执行，不能纳入 runtime 压力通过结论。
+
+## 2026-08-26 dev-0.5.8 移动端 Agent loop/context parity
+
+`ChatViewModel.runAgentLoop` 不再使用 `while (loop < 6)`，而是绑定 coroutine 生命周期持续执行；
+正常退出必须来自 provider 最终响应，取消映射为 interrupted，真实异常保留 error。每次 provider
+请求前调用 `prepareActiveLoopContext`，按模型窗口重新估算当前工具链增长后的 context，并在
+70%/90% 阈值执行普通/强制压缩。
+
+`LocalContextContract.requestScopedTaskFocus` 对齐 PC 的请求级层次：最新真实 user 指令最高、
+同一 Build Guide 顺序执行、历史仅作不可信证据、新任务不复活无关工作。该 system message 只
+临时拼入 provider request， durable `modelContext` 中只保留公开对话、工具调用/结果、压缩摘要
+与 continuation anchor。
+
+缓存层面，`requestScopedTaskFocus` 为固定字节文本，不包含 mode、messages.size、toolCount、
+messageId、时间戳或计划状态。工具子轮只在既有 durable prefix 后追加 assistant/tool messages，
+使 provider 能复用最长公共 prompt 前缀；压缩完成属于必要的 context replacement 边界。
+
+## 2026-08-26 dev-0.5.8 文件占位符与富文档读取
+
+`LocalToolExecutor.recentFiles` 在现有 MediaStore 文档/图片/视频之外查询持久授权的
+DocumentProvider，输出 URI、authority/document ID 组合的 `canonical_identity`、provider flags
+及 placeholder 判断。`readSharedFile` 通过 `openAssetFileDescriptor` 让 provider 对在线占位内容
+执行 hydrate，再按需取得 PDF seekable descriptor。
+
+`RichDocumentReader.kt` 提供格式路由：OOXML 直接解析 docx/pptx/xlsx ZIP/XML；CSV/TSV 保持
+行列；旧 doc/ppt/xls 使用 POI 文本/单元格模型。PDFBox 先读文字层，稀疏时用 Android
+PdfRenderer 生成页面图，调用当前视觉模型；无结果则 ML Kit miniOCR，再将页面与 OCR 证据交给
+LLM 综合，最后仍可做纯页面视觉转录。结果 JSON 标记具体 method，便于审计退路质量。
+
+## 2026-08-26 dev-0.5.8 移动端重叠玻璃飞行
+
+`ui/components/LiquidGlass.kt` 的 `runOverlappedLiquidFlight` 是既有浮块的统一材质/几何协调器：
+lift 与 move 并发，起点浮起可见后 land 可与未完成的 move 并发，最终等待两者完成再交接目标色块；
+hold 模式只执行 lift/move，禁止自动落地。现有浮块白名单包含对话胶囊、左右侧栏选择器、记忆实验室
+分页和输入复合菜单，白名单仅用于审计，不用于把普通组件玻璃化。
+
+入口分布于 `Sidebar.kt`、`RightSidebar.kt`、`MemoryLabScreen.kt`、`ChatScreen.kt`；
+`OverlappedLiquidFlightContractTest.kt`、`LiquidMotionConcurrencyContractTest.kt` 与
+`ResponsiveSidebarContractTest.kt` 共同验证重叠时序、按住保持、单浮块重定向和对话胶囊接入。
+
+## 2026-08-26 dev-0.5.8 移动端全局无涟漪策略
+
+`ui/theme/NewmarkTheme.kt` 在主题根部通过 `LocalIndication` 提供无绘制的
+`NoVisualIndication`。因此普通 `Modifier.clickable`、显式读取 `LocalIndication` 的组件以及
+Material3 Button/IconButton/TextButton 均不再绘制 Android 灰色 ripple，同时保留 InteractionSource、
+点击语义、禁用态、长按/拖动和业务动画。`GlobalNoRippleContractTest.kt` 固化这一全局契约。
+# PC terminal performance update (2026-08-26)
+
+`DESKTOP/src/core/terminalOutputBuffer.ts` 负责 PTY 输出按时间窗合并、历史有界缓存及会话清理；`DESKTOP/src/ui/index.html` 的普通终端和 takeover 终端通过 `appendTerminalOutput` 使用 requestAnimationFrame + DocumentFragment 追加，避免高压输出下的同步全量 DOM 重排。
+# Mobile Agent response recovery
+
+`android/app/src/main/java/com/newmark/mobile/data/MobileResponseRecovery.kt` 定义可用响应、空响应错误分类和连续计数；`ChatViewModel.chatWithEmptyRecovery` 统一保护主 Agent、上下文压缩、视觉文档读取和 OCR 校正，避免不稳定 provider 将本地 build 错误结束。
+
+## 2026-08-26 dev-0.5.8 空响应解析稳定性
+
+`ApiClient.kt` 的 chat SSE 解析同时接受 `choices[0].delta` 与 `choices[0].message`。此前仅检查
+`delta` 会丢弃兼容 provider 返回的完整消息帧，使正常连接在上层表现为连续空响应。恢复层固定
+只有 provider 明确返回失效空响应才进入恢复；持续等待、静默连接、EOF、超时或流关闭本身不视为空响应。首次失效后依次等待 200ms、800ms、2s、10s、60s 执行第 1–5 次重试，第 5 次仍明确失效才终止；思考、正文、工具调用及其他有效流式活动都作为正常结果并立即清零计数。
+
+回归由 `ApiClientStreamTest.kt`、`MobileResponseRecoveryTest.kt` 与
+`MobileEmptyResponseRetryContractTest.kt` 固化；Release APK 已重新构建。
+
+PC Chat SSE 只有观察到 `[DONE]` 或非空 `finish_reason` 后，零活动结果才可进入明确空响应恢复；
+Responses 对应要求 `response.completed`。纯 EOF、连接重置、流关闭、读取超时和 broken pipe 始终属于
+独立 transport failure，不使用空响应计数或等待序列；用户取消仍直接传播，不会被重试吞掉。
+
+## 2026-08-26 dev-0.5.8 模型菜单帧调度隔离
+
+```text
+android/app/src/main/java/com/newmark/mobile/
+├─ ui/ChatScreen.kt                         # 模型菜单稳定条目/几何、非观察飞行调度器、图层阶段运动读取
+├─ ui/components/LiquidGlass.kt             # 与原形变公式一致的 deferred graphicsLayer 入口
+└─ vm/ChatViewModel.kt                       # Agent 流式 delta 的 16ms 有序批量 UI 发布器
+android/app/src/test/java/com/newmark/mobile/
+├─ ui/ModelMenuGlassSchedulingContractTest.kt # 拖动热路径与 Agent 发布退压契约
+├─ ui/components/LiquidGlassContractTest.kt  # 玻璃 recorder、材质和运动顺序契约
+└─ vm/MobileEmptyResponseRetryContractTest.kt # 帧合并后仍保留完整空响应恢复边界
+```
+
+模型菜单的 `Animatable.value/velocity` 只在 graphics layer 更新阶段读取；Job 与 activeIndex 放在
+非 Snapshot 调度器中，只有 moving/lifting/landing 等真正改变视觉结构的低频状态进入 composition。
+模型分组、条目、命中几何和 pointer keys 按模型集合缓存。Agent provider 解析继续位于 IO，所有
+thought/text delta 保序进入通道，主线程每 16ms 最多发布一次不可变 WorkRun 快照，响应结束前
+强制 flush，因而不丢尾部增量，也不改变空响应成功判定。
+
+## 2026-08-26 dev-0.5.8 移动端连续思考生命周期
+
+```text
+android/app/src/main/java/com/newmark/mobile/
+├─ data/MobileThoughtContinuation.kt       # 跨 provider 子轮维持一个公开 thought 生命周期
+├─ data/WorkRunProjection.kt               # thought_result 回填为一个完成节点
+└─ vm/ChatViewModel.kt                     # 在工具/正文/Guide/错误/终态边界关闭 thought
+android/app/src/test/java/com/newmark/mobile/data/
+└─ MobileThoughtContinuationTest.kt        # 1000 子轮、流式去重与真实边界回归
+```
+
+此前 `runAgentLoop` 在每次 provider 子轮前无条件发布 `thought`，并在每次返回后立即发布
+`thought_result`。当 provider 连续返回仅思考结果时，控制流继续下一子轮并创建新节点，最终在同一
+Build 中堆叠大量“进行了思考”。`MobileThoughtContinuation` 现显式区分 provider round 与公开
+thought lifecycle：thought-only 只结束 round 并把内容接到当前节点，真实工作边界才生成一次
+`thought_result`。流式 delta 和最终 reasoning 字段按当前 round 对账，避免兼容 provider 同时返回
+两种形式时重复正文；既有 16ms UI 批处理和五次明确空响应恢复逻辑未改变。
+
+验证结果为 1000 轮 thought-only 压力下 1 个 thought 事件、结束后总计 2 个 thought/result 事件；
+174 项 JVM 测试零失败，Vital Lint、R8 与 Release assembly 通过。APK 位于
+`android/app/build/outputs/apk/release/app-release.apk`，SHA-256 为
+`CBC301850B496EFD3B447138C05279F59CD5CE9328ED7F22D3EB57F87E42ABDB`。当前 ADB 无设备，
+因此未声称完成模拟器或真机的长对话视觉验证。
+
+## 2026-08-26 dev-0.5.8 移动端思考响应续接
+
+```text
+android/app/src/main/java/com/newmark/mobile/
+├─ data/MobileThoughtContinuation.kt       # 公开思考单调对账 + 请求级有界续接检查点
+└─ vm/ChatViewModel.kt                     # 子轮请求注入、真实工作边界清空、durable 上下文隔离
+android/app/src/test/java/com/newmark/mobile/data/
+├─ MobileThoughtContinuationTest.kt        # 不缩短、非持久化、1000 子轮有界压力
+└─ MobileAgentLoopContextParityContractTest.kt # Agent loop 必须接入 transient continuation
+```
+
+此前 thought-only 返回虽然已复用同一个公开节点，但 `runAgentLoop` 没有把该轮 reasoning 放进
+`messages`，下一子轮实际发送近乎相同的请求；无 provider 会话续接能力时，模型会从任务起点重新推理。
+此外，round 对账在流式内容与最终字段不互为前缀时选择最终字段，可能用较短摘要覆盖已显示长内容。
+
+`MobileThoughtRequestContinuation` 现聚合当前 Build 的 reasoning-only 进度、去除真实长重叠并保留
+最多 12,000 字符尾部，作为 request-only assistant checkpoint 追加到稳定 prompt 尾部。Guide、工具、
+正文、错误和终态清空它；返回的 `AgentLoopResult.modelContext` 始终只含 durable `messages`。
+`MobileThoughtContinuation` 对不兼容最终字段优先保留已渲染 stream，保证内容单调不缩短。
+
+## 2026-08-26 dev-0.5.8 移动端 thinking-mode 协议状态修复
+
+```text
+android/app/src/main/java/com/newmark/mobile/
+├─ data/ChatModels.kt                      # request-only、transient reasoningContent
+├─ data/ApiClient.kt                       # reasoning_content 序列化、finish_reason 与无限读取边界
+├─ data/MobileThoughtContinuation.kt       # 仅模型截断状态生成下一轮检查点
+├─ data/ConversationStore.kt               # 旧历史规范化且禁止 transient reasoning 落盘
+└─ vm/ChatViewModel.kt                     # 当前部署档位映射与模型状态驱动的续传/停止
+android/app/src/test/java/com/newmark/mobile/data/
+├─ ApiClientStreamTest.kt                  # 协议体、断流、六档与自定义档位双协议回归
+└─ MobileThoughtContinuationTest.kt        # 请求字段、有界合并与非持久化回归
+```
+
+截图中的 HTTP 400 来自续思检查点被作为普通 assistant `content` 发送，而 thinking-mode Provider
+要求上一轮思考通过 `reasoning_content` 原样回传。请求模型现增加 transient `reasoningContent`，
+Chat Completions 同时兼容有/无工具调用的 assistant 消息；Responses API 不伪造缺少 item ID 或
+encrypted content 的 reasoning item。Provider 读取继续使用 `readTimeout(0)`，EOF 未携带 `[DONE]`
+或 `finish_reason` 时作为传输失败返回且绝不自动重交。只有 `length`、`max_tokens`、
+`max_output_tokens` 明确要求续写，`stop` 不续传。
+
+智能档位 `low/medium/high/xhigh/max/ultra` 分别映射为 `low/medium/high/xhigh/max/max`；模型级
+`thinking_tier_map` 继续按“原生档位 -> Newmark 档位”反查和向下就近选择，并同时进入 Chat
+Completions `reasoning_effort` 与 Responses `reasoning.effort`。映射来源修正为当前供应商当前模型，
+同名模型不再跨供应商串配置。183 项 JVM 测试、Vital Lint、R8、Release assembly 全部通过。
+
+## 2026-08-27 dev-0.5.8 工具参数与上下文连续性
+
+```text
+DESKTOP/src/
+├─ providers/provider-events.ts             # 标准增量/累计快照参数兼容组装
+├─ providers/chat-completions.adapter.ts    # 按 index 隔离 Chat 并行工具参数
+├─ providers/responses.adapter.ts           # Responses 快照折叠与缺失 done 兼容完成
+├─ llm/provider.ts                          # GitHub Models 兼容流并行参数隔离
+└─ tests/providerAdapterV2Verify.ts          # 参数流、上下文尾部与缓存前缀回归
+android/app/src/main/java/com/newmark/mobile/data/
+├─ ApiClient.kt                             # Chat/Responses 参数片段兼容组装
+└─ LocalToolExecutor.kt                     # 严格单 JSON 对象执行边界
+android/app/src/test/java/com/newmark/mobile/data/
+├─ ApiClientStreamTest.kt                   # 累计流、后续请求与协议回归
+└─ LocalToolContractTest.kt                 # 拒绝拼接对象与数组参数
+APK/
+└─ Newmark-Agent-0.5.8-context-continuity.apk
+```
+
+Agent 上下文循环原本会正确追加 assistant tool call 与匹配 call id 的 tool result；故障发生在追加前的
+供应商参数归一化阶段。新组装器先保留可解析的标准增量，失败时折叠累计快照并选择最新合法对象；
+执行器再以严格解析兜底。动态工具轨迹只追加在消息尾部，不改写稳定 system/bootstrap 或已有前缀，
+因此修复连续性的同时维持 PC/移动端 prompt cache 友好结构。

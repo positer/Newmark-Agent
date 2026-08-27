@@ -1,7 +1,14 @@
 package com.newmark.mobile.data
 
 import android.content.Context
+import android.content.ContentResolver
+import android.net.Uri
+import android.provider.MediaStore
+import android.provider.DocumentsContract
+import android.provider.OpenableColumns
+import android.os.CancellationSignal
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 import org.json.JSONArray
 import org.json.JSONObject
@@ -21,6 +28,15 @@ import java.time.format.DateTimeFormatter
 import android.os.Build
 import android.os.SystemClock
 import android.util.Base64
+
+private fun JSONArray.toStringListForMemory(): List<String> =
+    (0 until length()).map { optString(it) }.filter(String::isNotBlank)
+
+internal fun parseToolArgumentsObject(arguments: String): Result<JSONObject> = runCatching {
+    val parsed = JsonParser.parseString(arguments)
+    require(parsed.isJsonObject) { "tool arguments must be one JSON object" }
+    JSONObject(parsed.toString())
+}
 
 /** 本地工具执行结果 */
 data class ToolResult(val ok: Boolean, val output: String) {
@@ -56,27 +72,41 @@ class LocalToolExecutor(
         .followRedirects(true)
         .build()
     private var cwd = root
+    private val richDocuments = RichDocumentReader(appContext) { images, prompt ->
+        val args = JSONObject().put("prompt", prompt).put("images", JSONArray(images.map { image ->
+            JSONObject().put("name", image.name).put("mime_type", image.mimeType).put("data_url", image.dataUrl)
+        }))
+        runtimeTool?.invoke("__document_visual_read", args)?.takeIf { it.ok }?.output
+    }
 
     /** Agent 工具调用入口（OpenAI function calling）：按 name + JSON 参数执行 */
     suspend fun executeTool(name: String, arguments: String): ToolResult {
-        val args = runCatching { JSONObject(arguments) }.getOrDefault(JSONObject())
+        val args = parseToolArgumentsObject(arguments).getOrElse {
+            return ToolResult.err(
+                "工具参数不是合法 JSON 对象；请按当前工具 schema 重新调用。" +
+                    "解析错误：${it.message ?: "unknown"}；收到：${arguments.take(240)}",
+            )
+        }
         if (name in LocalToolCatalog.privilegedNames && !capabilities.highPrivilegeActive()) {
             return ToolResult.err("高权限模式未开启或 Root/Shizuku 未授权，已阻断高权限工具")
         }
         if (name in LocalToolCatalog.shizukuNames && !capabilities.shizukuActive()) return ToolResult.err("Shizuku 边界未授权或高权限模式已关闭")
         if (name in LocalToolCatalog.rootNames && !capabilities.rootActive()) return ToolResult.err("Root 边界不可用或高权限模式已关闭")
-        if (name in LocalToolCatalog.allFilesNames && !capabilities.allFilesGranted()) return ToolResult.err("请先授予读取所有文件权限")
-        if (name in LocalToolCatalog.appListNames && !capabilities.appListGranted()) return ToolResult.err("请先开启读取应用列表权限")
+        if (name in LocalToolCatalog.externalFileNames && !capabilities.externalFilesEnabled()) return ToolResult.err("请先在应用内开启读取所有文件；关闭时仅允许内部安全目录工具")
+        if (name in LocalToolCatalog.allFilesNames && !capabilities.allFilesGranted()) return ToolResult.err("请先在应用内开启读取所有文件并完成系统授权")
+        if (name in LocalToolCatalog.appListNames && !capabilities.appListGranted()) return ToolResult.err("请先在应用内开启读取应用列表并完成系统授权")
         runtimeTool?.invoke(name, args)?.let { return it }
         return runCatching {
             when (name) {
                 "read_file" -> readFile(args.optString("path"))
                 "write_file" -> writeFileArgs(args.optString("path"), args.optString("content"))
                 "list_dir" -> ls(args.optString("path"))
+                "recent_files" -> recentFiles(args)
                 "terminal_exec" -> terminalExec(args.optString("command"))
                 "memory_lab_read" -> mlRead(args.optString("component"))
                 "memory_lab_query" -> mlQuery(args.optString("query"))
-                "memory_lab_update" -> mlUpdateArgs(args.optString("name"), args.optString("tags"), args.optString("content"))
+                "memory_lab_update" -> mlUpdateArgs(args)
+                "memory_lab_delete" -> mlDeleteArgs(args)
                 "memory_lab_reindex" -> mlReindex()
                 "settings_read" -> settingsRead()
                 "settings_update" -> settingsUpdate(args.optString("json"))
@@ -166,27 +196,32 @@ class LocalToolExecutor(
         return ToolResult.ok("已写入 ${f.absolutePath}（${content.length} 字符）")
     }
 
-    private fun mlUpdateArgs(name: String, tags: String, content: String): ToolResult {
+    private fun mlUpdateArgs(args: JSONObject): ToolResult {
+        val name = args.optString("name")
+        val tags = args.optString("tags")
+        val content = args.optString("content")
         val tagList = tags.split(Regex("[,，]")).map { it.trim() }.filter { it.isNotEmpty() }
             .map { if (it.startsWith("#")) it else "#$it" }
-        val slug = slugify(name)
-        val now = java.time.Instant.now().toString()
-        val index = memoryLab.load()
-        val meta = MemoryComponent(
-            name = name,
-            tags = tagList,
-            tagPaths = tagList.map { listOf(it) },
-            path = "${memoryLab.componentsDir.absolutePath}/$slug.md",
-            coreMd = "${memoryLab.componentsDir.absolutePath}/$slug.md",
-            kind = "file",
-            createdAt = index.components[slug]?.createdAt ?: now,
-            updatedAt = now,
-            revision = (index.components[slug]?.revision ?: 0) + 1,
+        val paths = runCatching {
+            val arr = JSONArray(args.optString("tag_paths", "[]"))
+            (0 until arr.length()).map { i -> arr.getJSONArray(i).toStringListForMemory() }
+        }.getOrDefault(emptyList())
+        val result = memoryLab.update(MemoryLabUpdateInput(
+            name = name, description = args.optString("description"), tags = tagList,
+            tagPaths = paths, content = content, kind = args.optString("kind", "file"),
+            expectedUpdatedAt = args.optString("expected_updated_at"), reason = args.optString("reason"),
+            source = args.optString("source", "memory_lab_update"),
+        ))
+        return ToolResult.ok(JSONObject().put("ok", true).put("slug", result.slug).put("component", result.component?.name)
+            .put("rebuildReceipt", result.rebuildReceipt).toString(2))
+    }
+
+    private fun mlDeleteArgs(args: JSONObject): ToolResult {
+        val result = memoryLab.delete(
+            args.optString("component"), args.optString("expected_updated_at"),
+            args.optString("reason"), args.optString("source", "memory_lab_delete"),
         )
-        val newIndex = index.copy(components = index.components + (slug to meta))
-        memoryLab.save(newIndex)
-        File(meta.coreMd).apply { parentFile?.mkdirs() }.writeText(content)
-        return ToolResult.ok("已写入记忆组件 $slug")
+        return ToolResult.ok(JSONObject().put("ok", true).put("slug", result.slug).put("rebuildReceipt", result.rebuildReceipt).toString(2))
     }
 
     val cwdPath: String get() = cwd.absolutePath
@@ -462,17 +497,7 @@ class LocalToolExecutor(
     }
 
     private fun mlRead(arg: String): ToolResult {
-        val index = memoryLab.load()
-        if (arg.isNotBlank()) {
-            val slug = arg.trim()
-            val meta = index.components[slug]
-            if (meta == null) return ToolResult.err("记忆组件不存在：$slug")
-            val content = memoryLab.componentContent(slug)
-            return ToolResult.ok("${meta.name}（${slug}）\n${meta.description}\n---\n$content")
-        }
-        if (index.components.isEmpty()) return ToolResult.ok("暂无记忆组件。")
-        val out = index.components.entries.joinToString("\n") { (slug, c) -> "$slug  ${c.name}  ${c.tags.joinToString(",")}" }
-        return ToolResult.ok("标签：${index.tags.keys.joinToString(", ")}\n组件：\n$out")
+        return ToolResult.ok("[memory_lab_read]\n${memoryLab.readJson(arg).toString(2)}")
     }
 
     private fun mlQuery(arg: String): ToolResult {
@@ -581,13 +606,142 @@ class LocalToolExecutor(
         )
     }
 
-    private fun readSharedFile(path: String): ToolResult {
+    private fun recentFiles(args: JSONObject): ToolResult {
+        val requested = args.optString("types").split(',').map(String::trim).filter(String::isNotBlank).toSet()
+        val types = requested.ifEmpty { setOf("documents", "images", "videos") }
+        val query = args.optString("query").trim().lowercase()
+        val limit = args.optInt("limit", 50).coerceIn(1, 200)
+        val rows = mutableListOf<JSONObject>()
+        fun collect(kind: String, collection: Uri, selection: String? = null, selectionArgs: Array<String>? = null) {
+            if (kind !in types) return
+            val projection = arrayOf(
+                MediaStore.MediaColumns._ID,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.MIME_TYPE,
+                MediaStore.MediaColumns.SIZE,
+                MediaStore.MediaColumns.DATE_MODIFIED,
+                MediaStore.MediaColumns.RELATIVE_PATH,
+            )
+            appContext.contentResolver.query(
+                collection,
+                projection,
+                selection,
+                selectionArgs,
+                "${MediaStore.MediaColumns.DATE_MODIFIED} DESC",
+            )?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                val mimeColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+                val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                val modifiedColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+                val relativeColumn = cursor.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
+                while (cursor.moveToNext() && rows.size < limit * 3) {
+                    val name = cursor.getString(nameColumn).orEmpty()
+                    val mime = cursor.getString(mimeColumn).orEmpty()
+                    if (query.isNotEmpty() && !name.lowercase().contains(query) && !mime.lowercase().contains(query)) continue
+                    val uri = android.content.ContentUris.withAppendedId(collection, cursor.getLong(idColumn))
+                    rows += JSONObject()
+                        .put("type", kind)
+                        .put("name", name)
+                        .put("mime_type", mime)
+                        .put("size", cursor.getLong(sizeColumn))
+                        .put("modified_ms", cursor.getLong(modifiedColumn) * 1000L)
+                        .put("relative_path", if (relativeColumn >= 0) cursor.getString(relativeColumn).orEmpty() else "")
+                        .put("uri", uri.toString())
+                }
+            }
+        }
+        val nonMediaSelection = if (Build.VERSION.SDK_INT >= 30) {
+            "${MediaStore.Files.FileColumns.MEDIA_TYPE}=?"
+        } else null
+        val nonMediaArgs = if (Build.VERSION.SDK_INT >= 30) arrayOf(MediaStore.Files.FileColumns.MEDIA_TYPE_NONE.toString()) else null
+        collect("documents", MediaStore.Files.getContentUri("external"), nonMediaSelection, nonMediaArgs)
+        collect("images", MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+        collect("videos", MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+        collectPersistedDocuments(types, query, limit * 3, rows)
+        val sorted = rows.sortedByDescending { it.optLong("modified_ms") }.take(limit)
+        return ToolResult.ok(JSONObject().put("count", sorted.size).put("items", JSONArray(sorted)).toString(2))
+    }
+
+    private fun collectPersistedDocuments(types: Set<String>, query: String, limit: Int, rows: MutableList<JSONObject>) {
+        if ("documents" !in types) return
+        appContext.contentResolver.persistedUriPermissions.asSequence().filter { it.isReadPermission }.forEach { permission ->
+            val rootUri = permission.uri
+            val children = if (DocumentsContract.isTreeUri(rootUri)) {
+                DocumentsContract.buildChildDocumentsUriUsingTree(rootUri, DocumentsContract.getTreeDocumentId(rootUri))
+            } else rootUri
+            val projection = arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                DocumentsContract.Document.COLUMN_FLAGS,
+            )
+            runCatching {
+                appContext.contentResolver.query(children, projection, null, null, null)?.use { cursor ->
+                    while (cursor.moveToNext() && rows.size < limit) {
+                        val documentId = cursor.getString(0).orEmpty(); val name = cursor.getString(1).orEmpty(); val mime = cursor.getString(2).orEmpty()
+                        if (mime == DocumentsContract.Document.MIME_TYPE_DIR) continue
+                        if (query.isNotBlank() && !name.lowercase().contains(query) && !mime.lowercase().contains(query)) continue
+                        val uri = if (DocumentsContract.isTreeUri(rootUri)) DocumentsContract.buildDocumentUriUsingTree(rootUri, documentId) else rootUri
+                        val size = if (cursor.isNull(3)) -1L else cursor.getLong(3); val flags = cursor.getInt(5)
+                        rows += JSONObject().put("type", "documents").put("name", name).put("mime_type", mime)
+                            .put("size", size).put("modified_ms", if (cursor.isNull(4)) 0L else cursor.getLong(4))
+                            .put("uri", uri.toString()).put("document_id", documentId)
+                            .put("canonical_identity", "${uri.authority}:$documentId")
+                            .put("placeholder", size <= 0L || flags and DocumentsContract.Document.FLAG_PARTIAL != 0)
+                            .put("provider_flags", flags)
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun readSharedFile(path: String): ToolResult {
         if (path.isBlank()) return ToolResult.err("需要共享存储 path")
+        val uri = runCatching { Uri.parse(path) }.getOrNull()
+        if (uri?.scheme == ContentResolver.SCHEME_CONTENT) {
+            val resolver = appContext.contentResolver
+            val metadata = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, MediaStore.MediaColumns.MIME_TYPE, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (!cursor.moveToFirst()) null else Triple(cursor.getString(0).orEmpty(), cursor.getString(1).orEmpty(), if (cursor.isNull(2)) -1L else cursor.getLong(2))
+            }
+            val size = metadata?.third ?: -1L
+            if (size > 20L * 1024 * 1024) return ToolResult.err("文件超过 20 MiB")
+            val cancellation = CancellationSignal()
+            // DocumentProvider may hydrate an online-only/optimized placeholder here.
+            val descriptor = runCatching { resolver.openAssetFileDescriptor(uri, "r", cancellation) }.getOrNull()
+            val bytes = (descriptor?.createInputStream() ?: appContext.contentResolver.openInputStream(uri))?.use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > 20 * 1024 * 1024) return ToolResult.err("文件超过 20 MiB")
+                    output.write(buffer, 0, read)
+                }
+                output.toByteArray()
+            } ?: return ToolResult.err("无法读取该系统文件 URI")
+            val mime = metadata?.second.orEmpty().ifBlank { resolver.getType(uri).orEmpty() }
+            val name = metadata?.first.orEmpty().ifBlank { "shared-file" }
+            val rich = name.substringAfterLast('.', "").lowercase() in setOf("pdf", "doc", "docx", "ppt", "pptx", "csv", "tsv", "xls", "xlsx")
+            descriptor?.close()
+            if (rich || mime.startsWith("text/")) {
+                val pdfDescriptor = if (name.endsWith(".pdf", true) || mime == "application/pdf") {
+                    runCatching { resolver.openFileDescriptor(uri, "r", cancellation) }.getOrNull()
+                } else null
+                return try { richDocuments.read(name, mime, bytes, pdfDescriptor) } finally { pdfDescriptor?.close() }
+            }
+            return ToolResult.ok(JSONObject().put("name", name).put("mime_type", mime).put("size", bytes.size).put("encoding", "base64").put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)).toString())
+        }
         val file = safeSharedPath(path)
         if (!file.exists()) return ToolResult.err("不存在：${file.absolutePath}")
         if (file.isDirectory) return ToolResult.ok(file.listFiles()?.sortedBy { it.name }?.joinToString("\n") { it.name }.orEmpty())
         if (file.length() > 20L * 1024 * 1024) return ToolResult.err("文件超过 20 MiB")
-        return ToolResult.ok(file.readText())
+        val bytes = file.readBytes()
+        return richDocuments.read(file.name, java.net.URLConnection.guessContentTypeFromName(file.name).orEmpty(), bytes)
     }
 
     private fun safeSharedPath(path: String): File {
@@ -607,7 +761,7 @@ class LocalToolExecutor(
         return file
     }
 
-    private fun manageSharedFile(args: JSONObject): ToolResult {
+    private suspend fun manageSharedFile(args: JSONObject): ToolResult {
         val action = args.optString("action").lowercase()
         val file = safeSharedPath(args.optString("path"))
         return when (action) {

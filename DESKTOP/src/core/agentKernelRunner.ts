@@ -9,6 +9,11 @@ import { evaluateToolPolicy, isConcurrencySafeTool } from './toolPolicy';
 import { emitPerformanceEvent, performanceTimer } from './performanceDiagnostics';
 import { emitProviderUsageDiagnostic, emitRequestContextDiagnostic } from './agentKernelDiagnostics';
 import { ToolExposurePlanner, type ToolchainCore } from '../toolchain';
+import {
+  MAX_EMPTY_RESPONSE_RETRIES,
+  observeEmptyResponseOutcome,
+  emptyResponseRetryDelayMs,
+} from './emptyResponseRetry';
 
 type NativeAgentConstructor = new (options?: Record<string, unknown>) => NativeAgentInstance;
 
@@ -284,6 +289,8 @@ interface KernelTurnOutcome {
   text: string;
   stopReason: string;
   errorMessage: string;
+  activity?: boolean;
+  thoughtOnly?: boolean;
 }
 
 class ProviderRunError extends Error {
@@ -298,7 +305,7 @@ function kernelTurnFailed(agent: Agent, turn: KernelTurnOutcome): boolean {
 }
 
 function providerTurnIsEmpty(turn: KernelTurnOutcome): boolean {
-  return /provider returned an empty response/i.test(`${turn.errorMessage}\n${turn.text}`);
+  return !turn.activity && /provider returned an empty response/i.test(`${turn.errorMessage}\n${turn.text}`);
 }
 
 function removeTrailingFailedAssistant(agent: Agent, messages: KernelMessage[]): void {
@@ -306,6 +313,13 @@ function removeTrailingFailedAssistant(agent: Agent, messages: KernelMessage[]):
   if (last?.role !== 'assistant') return;
   const text = KernelMessageText(last);
   if (last.stopReason === 'error' || agent.isLlmErrorText(text)) messages.pop();
+}
+
+function removeTrailingThoughtOnlyAssistant(messages: KernelMessage[]): void {
+  const last = messages[messages.length - 1];
+  if (last?.role !== 'assistant') return;
+  const hasToolCall = last.content.some(content => content.type === 'toolCall');
+  if (!KernelMessageText(last).trim() && !hasToolCall) messages.pop();
 }
 
 function normalizePublicProviderError(error: unknown, secrets: unknown[] = []): string {
@@ -458,8 +472,22 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
   const tokens: StreamToken[] = [];
   const runOnce = async (promptMessages: KernelMessage[], appendPromptToAgentHistory: boolean) => {
     let lastAssistant: Extract<KernelMessage, { role: 'assistant' }> | null = null;
+    let observedActivity = false;
+    let observedThought = false;
     const unsubscribe = kernel.subscribe(async event => {
       await handleKernelEvent(agent, event, tokens);
+      if (event.type === 'message_update') {
+        const delta = event.assistantMessageEvent;
+        const deltaText = typeof (delta as { delta?: unknown }).delta === 'string'
+          ? (delta as { delta: string }).delta
+          : '';
+        const thoughtDelta = delta.type === 'thinking_delta' && !!deltaText.trim();
+        observedThought = observedThought || thoughtDelta;
+        observedActivity = observedActivity ||
+          thoughtDelta ||
+          (delta.type === 'text_delta' && !!deltaText.trim()) ||
+          (delta.type === 'toolcall_end');
+      }
       if (event.type === 'message_end' && event.message.role === 'assistant') {
         lastAssistant = event.message;
       }
@@ -478,11 +506,14 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
       const text = assistant ? KernelMessageText(assistant) : '';
       const hasToolCall = !!assistant?.content?.some(content => content.type === 'toolCall');
       const emptyResponse = !assistant
-        || (!text.trim() && !hasToolCall && String(assistant?.stopReason || '') !== 'aborted');
+        || (!text.trim() && !hasToolCall && !observedActivity && String(assistant?.stopReason || '') !== 'aborted');
       return {
         text: emptyResponse ? '[Error] Provider returned an empty response.' : text,
         stopReason: String(assistant?.stopReason || ''),
         errorMessage: String(assistant?.errorMessage || (emptyResponse ? 'Provider returned an empty response.' : '')),
+        activity: observedActivity || !!text.trim() || hasToolCall,
+        thoughtOnly: observedThought && !text.trim() && !hasToolCall
+          && !['error', 'aborted'].includes(String(assistant?.stopReason || '')),
       };
     } finally {
       unsubscribe();
@@ -518,7 +549,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
     const preflightVisualFallback = !agent.activeModelConfig()?.vision
       ? await agent.finalVisualFallback('vision input not supported by the selected model', processSignal)
       : null;
-    let lastTurn = preflightVisualFallback
+    let lastTurn: KernelTurnOutcome = preflightVisualFallback
       ? { text: preflightVisualFallback, stopReason: 'stop', errorMessage: '' }
       : await runWithCompressionResume([], false);
     if (preflightVisualFallback) {
@@ -534,14 +565,22 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
         fallback: { from: modelBeforeKernelRun, to: agent.model, providerId: agent.activeDeployment()?.providerId },
       });
     }
-    let emptyResponseRetries = 0;
-    while (providerTurnIsEmpty(lastTurn) && emptyResponseRetries < 2) {
+    let consecutiveEmptyResponses = 0;
+    for (;;) {
+      const emptyResponseState = observeEmptyResponseOutcome(consecutiveEmptyResponses, providerTurnIsEmpty(lastTurn));
+      consecutiveEmptyResponses = emptyResponseState.consecutiveEmptyResponses;
+      if (lastTurn.thoughtOnly) {
+        removeTrailingThoughtOnlyAssistant(kernel.state.messages);
+        lastTurn = await runWithCompressionResume([], false);
+        continue;
+      }
+      if (!emptyResponseState.retry) break;
       removeTrailingFailedAssistant(agent, kernel.state.messages);
-      emptyResponseRetries += 1;
-      const notice = `[Model retry] Provider returned an empty response; retrying the same deployment (${emptyResponseRetries}/2).`;
+      const retryNumber = consecutiveEmptyResponses;
+      const notice = `[Model retry] Provider returned an empty response; retrying the same deployment (${retryNumber}/${MAX_EMPTY_RESPONSE_RETRIES}) after ${emptyResponseRetryDelayMs(consecutiveEmptyResponses)}ms.`;
       tokens.push({ type: 'text', text: notice });
       agent.recordWorkStatus(notice);
-      await agent.waitForPlannedRouteRetry();
+      await agent.waitForPlannedRouteRetry(emptyResponseRetryDelayMs(consecutiveEmptyResponses));
       lastTurn = await runWithCompressionResume([], false);
     }
     let routeRetries = 0;
@@ -751,7 +790,7 @@ export async function runAgentKernel(agent: Agent): Promise<StreamToken[]> {
             return;
           }
           if (textStarted) finalContent.push({ type: 'text', text });
-          if (!finalContent.length) {
+          if (!finalContent.length && !thinking.trim()) {
             text = '[Error] Provider returned an empty response.';
             finalContent.push({ type: 'text', text });
           }

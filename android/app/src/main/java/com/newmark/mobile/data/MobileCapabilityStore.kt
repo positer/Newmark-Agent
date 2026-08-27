@@ -8,6 +8,8 @@ import android.provider.Settings
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import android.content.pm.PackageManager
+import android.app.AppOpsManager
+import android.os.Process as AndroidProcess
 import rikka.shizuku.Shizuku
 import android.content.ComponentName
 import android.content.ServiceConnection
@@ -39,8 +41,20 @@ class MobileCapabilityStore(context: Context) {
         get() = prefs.getBoolean("high_privilege_enabled", false)
         set(value) = prefs.edit().putBoolean("high_privilege_enabled", value).apply()
 
-    fun allFilesGranted(): Boolean = Build.VERSION.SDK_INT < 30 || Environment.isExternalStorageManager()
-    fun appListGranted(): Boolean = appListRequested
+    fun systemAllFilesGranted(): Boolean = Build.VERSION.SDK_INT < 30 || Environment.isExternalStorageManager()
+    fun externalFilesEnabled(): Boolean = allFilesRequested
+    fun allFilesGranted(): Boolean = allFilesRequested && systemAllFilesGranted()
+    fun systemAppListGranted(): Boolean {
+        val appOps = applicationContext.getSystemService(AppOpsManager::class.java) ?: return false
+        val mode = if (Build.VERSION.SDK_INT >= 29) {
+            appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, AndroidProcess.myUid(), applicationContext.packageName)
+        } else {
+            @Suppress("DEPRECATION")
+            appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, AndroidProcess.myUid(), applicationContext.packageName)
+        }
+        return mode == AppOpsManager.MODE_ALLOWED
+    }
+    fun appListGranted(): Boolean = appListRequested && systemAppListGranted()
     fun backgroundNetworkAllowed(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return true
         val connectivity = applicationContext.getSystemService(ConnectivityManager::class.java) ?: return true

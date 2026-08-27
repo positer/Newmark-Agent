@@ -53,6 +53,49 @@ import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
 import com.newmark.mobile.ui.theme.NewmarkBgSecondary
 import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+/** Audited existing float classes. This is an allow-list, not a conversion list. */
+internal val ExistingLiquidFloatInventory = setOf(
+    "conversation_capsules",
+    "sidebar_utility_selectors",
+    "right_sidebar_tabs",
+    "memory_lab_pager",
+    "composer_selection_menus",
+)
+
+/**
+ * PC-parity material/position coordinator.
+ *
+ * The caller must snap geometry and material to the source color block before
+ * entering this function. Lift and movement then start together. A normal tap
+ * may begin target contraction while movement is still converging; the two
+ * jobs join only before the final color-block handoff. A held/dragged float
+ * keeps its material fully lifted and never starts landing until release.
+ */
+internal suspend fun runOverlappedLiquidFlight(
+    holdKeepsLifted: Boolean = false,
+    lift: suspend () -> Unit,
+    move: suspend () -> Unit,
+    onLandingStarted: () -> Unit,
+    land: suspend () -> Unit,
+) = coroutineScope {
+    val liftJob = launch { lift() }
+    val moveJob = launch { move() }
+    liftJob.join()
+    if (holdKeepsLifted) {
+        moveJob.join()
+        return@coroutineScope
+    }
+    // Preserve a visible source-origin lift, without serializing full travel.
+    delay(16)
+    onLandingStarted()
+    val landJob = launch { land() }
+    moveJob.join()
+    landJob.join()
+}
 
 /**
  * 共享的液态玻璃 backdrop：捕获整个应用背景，供多个玻璃表面复用。
@@ -217,6 +260,22 @@ fun Modifier.liquidMotionDeformation(
         scaleX = scale.x
         scaleY = scale.y
     }
+}
+
+/**
+ * Layer-phase variant used by high-frequency drag surfaces. The velocity
+ * suppliers are read by the RenderNode layer update instead of composition,
+ * preserving the same deformation math without recomposing the owning list
+ * for every animation frame.
+ */
+fun Modifier.liquidMotionDeformationDeferred(
+    velocityX: () -> Float,
+    velocityY: () -> Float,
+    density: Float,
+): Modifier = graphicsLayer {
+    val scale = liquidMotionScale(velocityX(), velocityY(), density)
+    scaleX = scale.x
+    scaleY = scale.y
 }
 
 /** Shared lightweight glass surface for interactive controls.

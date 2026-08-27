@@ -18,6 +18,7 @@ import {
   isContentPolicyBlocked,
   normalizeResponsesPayload,
   readProviderStreamChunk,
+  assembleCompatibleToolArguments,
 } from './provider-events';
 import { normalizeProviderHeaders } from './provider-headers';
 import { openAIToolName, stringifyContent, normalizeResponsesContent } from './chat-messages';
@@ -156,7 +157,7 @@ export class ResponsesAdapter implements ModelProviderAdapter {
 
     const decoder = new TextDecoder();
     let buffer = '';
-    const calls = new Map<string, { id: string; name: string; arguments: string; emitted: boolean }>();
+    const calls = new Map<string, { id: string; name: string; argumentParts: string[]; emitted: boolean }>();
     const reasoningSummaries = new Map<string, string>();
     let emittedContent = false;
     let completed = false;
@@ -180,6 +181,7 @@ export class ResponsesAdapter implements ModelProviderAdapter {
               const key = `${String(payload.item_id || '')}:${String(payload.summary_index || 0)}`;
               const delta = this.extractText(payload.delta);
               if (delta) {
+                emittedContent = true;
                 reasoningSummaries.set(key, (reasoningSummaries.get(key) || '') + delta);
                 yield { type: 'reasoning.summary.delta', delta };
               }
@@ -210,7 +212,7 @@ export class ResponsesAdapter implements ModelProviderAdapter {
                 calls.set(key, {
                   id: String(item.call_id || item.id || key),
                   name: String(item.name || ''),
-                  arguments: String(item.arguments || ''),
+                  argumentParts: item.arguments ? [String(item.arguments)] : [],
                   emitted: false,
                 });
               }
@@ -218,9 +220,9 @@ export class ResponsesAdapter implements ModelProviderAdapter {
             }
             if (eventType === 'response.function_call_arguments.delta') {
               const key = String(payload.item_id || payload.call_id || payload.output_index || '');
-              const call = calls.get(key) || { id: String(payload.call_id || key), name: String(payload.name || ''), arguments: '', emitted: false };
+              const call = calls.get(key) || { id: String(payload.call_id || key), name: String(payload.name || ''), argumentParts: [], emitted: false };
               const delta = String(payload.delta || '');
-              call.arguments += delta;
+              if (delta) call.argumentParts.push(delta);
               calls.set(key, call);
               yield { type: 'tool_call.arguments.delta', id: call.id, delta };
               continue;
@@ -232,19 +234,20 @@ export class ResponsesAdapter implements ModelProviderAdapter {
                 const call = calls.get(key) || {
                   id: String(item.call_id || item.id || key),
                   name: String(item.name || ''),
-                  arguments: String(item.arguments || ''),
+                  argumentParts: item.arguments ? [String(item.arguments)] : [],
                   emitted: false,
                 };
                 call.id = String(item.call_id || call.id);
                 call.name = String(item.name || call.name);
-                call.arguments = typeof item.arguments === 'string' ? item.arguments : call.arguments;
+                if (typeof item.arguments === 'string' && item.arguments) call.argumentParts.push(item.arguments);
                 if (!call.emitted) {
                   call.emitted = true;
+                  const argumentsJson = assembleCompatibleToolArguments(call.argumentParts);
                   yield { type: 'tool_call.started', id: call.id, name: call.name };
-                  if (call.arguments && call.arguments !== '{}') {
-                    yield { type: 'tool_call.arguments.delta', id: call.id, delta: call.arguments };
+                  if (argumentsJson !== '{}') {
+                    yield { type: 'tool_call.arguments.delta', id: call.id, delta: argumentsJson };
                   }
-                  yield { type: 'tool_call.completed', id: call.id, name: call.name, arguments: call.arguments };
+                  yield { type: 'tool_call.completed', id: call.id, name: call.name, arguments: argumentsJson };
                 }
                 calls.set(key, call);
               }
@@ -274,8 +277,17 @@ export class ResponsesAdapter implements ModelProviderAdapter {
       } else if (!completed) {
         yield { type: 'response.failed', error: '[LLM Error] Responses stream ended before response.completed.' };
       } else if (!emittedContent && calls.size === 0) {
-        yield { type: 'response.failed', error: '[Error] Empty Responses stream.' };
+        yield { type: 'response.failed', error: '[Error] Provider returned an empty response.' };
       } else {
+        // Some compatible Responses providers omit output_item.done but still
+        // complete the response. Preserve that valid tool activity and fold
+        // cumulative argument snapshots before handing it to the kernel.
+        for (const call of calls.values()) {
+          if (call.emitted) continue;
+          const argumentsJson = assembleCompatibleToolArguments(call.argumentParts);
+          yield { type: 'tool_call.started', id: call.id, name: call.name };
+          yield { type: 'tool_call.completed', id: call.id, name: call.name, arguments: argumentsJson };
+        }
         yield { type: 'response.completed' };
       }
     } finally {

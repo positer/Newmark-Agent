@@ -4,6 +4,13 @@ package com.newmark.mobile.data
 data class ChatMessage(
     val role: String, // "user" | "assistant" | "system" | "tool"
     val content: String = "",
+    /**
+     * Provider-native thinking state used only while continuing one live
+     * request. It must be sent back as `reasoning_content`, never persisted
+     * as conversation text or converted into a user-visible instruction.
+     */
+    @field:Transient
+    val reasoningContent: String = "",
     val timestamp: Long = System.currentTimeMillis(),
     /** 与 PC messageId 同义；旧 conversations.json 缺失时由 ViewModel 稳定补齐。 */
     val messageId: String = "",

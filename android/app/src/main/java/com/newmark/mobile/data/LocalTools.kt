@@ -48,6 +48,16 @@ object LocalTools {
             emptyList(),
         ),
         function(
+            "recent_files",
+            "从 Android 系统允许暴露的最新文件集合与已授权 DocumentProvider 中发现文档、图片和视频；识别云端仅在线、系统优化释放及重复文件占位符，返回稳定 document_id/canonical_identity 和可触发恢复下载的 content:// URI。",
+            mapOf(
+                "types" to prop("string", "类型，逗号分隔：documents,images,videos；留空为全部"),
+                "query" to prop("string", "可选文件名或 MIME 关键词"),
+                "limit" to prop("number", "最多返回 1 到 200 项，默认 50"),
+            ),
+            emptyList(),
+        ),
+        function(
             "terminal_exec",
             "执行移动端本地受控终端命令。与命令行页面复用同一套 80+ 内置命令和 files/newmark/workspace 安全目录；可先执行 help 查看完整命令，支持 date/time、文件、检索、哈希、编码、Memory Lab 与设置命令，但不提供 Android 系统 shell。",
             mapOf("command" to prop("string", "要执行的一行终端命令，例如 date、pwd、ls、grep 关键词 文件、sha256sum 文件")),
@@ -55,29 +65,46 @@ object LocalTools {
         ),
         function(
             "memory_lab_read",
-            "读取本地 Memory Lab 索引，或读取单个记忆组件",
+            "读取 Memory Lab 索引或单个组件；先读后改",
             mapOf("component" to prop("string", "组件 slug（留空读取全部索引）")),
             emptyList(),
         ),
         function(
             "memory_lab_query",
-            "按关键词查询本地 Memory Lab 记忆组件",
+            "按关键词查询 Memory Lab 组件，返回精简命中",
             mapOf("query" to prop("string", "查询关键词")),
             listOf("query"),
         ),
         function(
             "memory_lab_update",
-            "创建或更新一个本地 Memory Lab 记忆组件",
+            "创建/更新 Memory Lab 组件；content 用 Markdown，tag_paths 用 JSON 数组",
             mapOf(
                 "name" to prop("string", "记忆组件名称"),
+                "description" to prop("string", "组件描述"),
                 "tags" to prop("string", "标签（逗号分隔，可带 # 前缀）"),
+                "tag_paths" to prop("string", "完整标签路径 JSON，例如 [[\"#物理\",\"#理论物理\"]]"),
                 "content" to prop("string", "记忆组件核心内容（markdown）"),
+                "kind" to prop("string", "file 或 folder"),
+                "expected_updated_at" to prop("string", "更新已有组件时从最新读取结果取得的 updatedAt"),
+                "reason" to prop("string", "本次持久记忆变更原因"),
+                "source" to prop("string", "变更来源"),
             ),
             listOf("name", "tags", "content"),
         ),
         function(
+            "memory_lab_delete",
+            "删除 Memory Lab 组件；先读并提供 expected_updated_at",
+            mapOf(
+                "component" to prop("string", "组件名称或 slug"),
+                "expected_updated_at" to prop("string", "从最新读取结果取得的 updatedAt"),
+                "reason" to prop("string", "明确的删除原因"),
+                "source" to prop("string", "变更来源"),
+            ),
+            listOf("component"),
+        ),
+        function(
             "memory_lab_reindex",
-            "重建本地 Memory Lab 索引",
+            "重建 Memory Lab 标签与组件索引",
             emptyMap(),
             emptyList(),
         ),
@@ -185,14 +212,12 @@ object LocalTools {
         ),
         function(
             "alarm_manage",
-            "通过 Android AlarmManager 创建、查看和取消本应用闹钟；create 默认使用精确闹钟并遵守系统特殊访问权限",
+            "通过 Android 默认时钟应用创建和查看系统闹钟；create 会显示默认时钟确认界面，list 打开系统闹钟列表；系统协议仅支持 create|list，不提供跨时钟应用的 alarm_id 删除",
             mapOf(
-                "action" to enumProp(listOf("create", "list", "cancel"), "操作"),
+                "action" to enumProp(listOf("create", "list"), "操作（create|list）"),
                 "trigger_at_ms" to prop("number", "create 的未来 Unix epoch 毫秒"),
                 "title" to prop("string", "闹钟标题"),
                 "message" to prop("string", "触发时显示的内容"),
-                "exact" to prop("boolean", "是否精确触发，默认 true"),
-                "alarm_id" to prop("string", "cancel 的闹钟 id"),
             ),
             listOf("action"),
         ),
@@ -202,7 +227,7 @@ object LocalTools {
     fun definitionsFor(context: android.content.Context, plan: Boolean = false): List<JSONObject> {
         val state = MobileCapabilityStore(context)
         val extras = listOf(
-            function("files_read_all", "读取共享存储文件", mapOf("path" to prop("string", "路径")), listOf("path")),
+            function("files_read_all", "读取系统当前允许访问的文件并自动恢复 DocumentProvider 占位内容。支持 PDF、DOC/DOCX、PPT/PPTX、CSV/TSV、XLS/XLSX；PDF 使用文字层→视觉模型→miniOCR→LLM完整视觉退路。", mapOf("path" to prop("string", "recent_files 返回的 content:// URI 或共享存储路径")), listOf("path")),
             function("apps_list", "读取已安装应用列表", emptyMap(), emptyList()),
             function("files_manage", "在共享存储安全边界内管理文件；delete 仅允许精确单文件或空目录并要求 confirm=true", mapOf(
                 "action" to enumProp(listOf("list", "read", "stat", "mkdir", "write", "copy", "move", "delete"), "操作"),
@@ -230,6 +255,7 @@ object LocalTools {
                 name in LocalToolCatalog.shizukuNames -> state.shizukuActive()
                 name in LocalToolCatalog.rootNames -> state.rootActive()
                 name in LocalToolCatalog.privilegedNames -> state.highPrivilegeActive()
+                name in LocalToolCatalog.externalFileNames -> state.externalFilesEnabled()
                 name in LocalToolCatalog.allFilesNames -> state.allFilesGranted()
                 name in LocalToolCatalog.appListNames -> state.appListGranted()
                 else -> true

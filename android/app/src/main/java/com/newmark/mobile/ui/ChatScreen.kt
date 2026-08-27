@@ -97,6 +97,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -164,8 +165,9 @@ import com.newmark.mobile.ui.components.NewmarkShapeSmall
 import com.newmark.mobile.ui.components.glassButtonSurface
 import com.newmark.mobile.ui.components.liquidGlassModifier
 import com.newmark.mobile.ui.components.liquidHoldDragGesture
-import com.newmark.mobile.ui.components.liquidMotionDeformation
+import com.newmark.mobile.ui.components.liquidMotionDeformationDeferred
 import com.newmark.mobile.ui.components.liquidSelectionMorph
+import com.newmark.mobile.ui.components.runOverlappedLiquidFlight
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
 import com.newmark.mobile.ui.components.LocalSidebarGestureLock
 import com.kyant.backdrop.Backdrop
@@ -2645,7 +2647,16 @@ private fun InputCompositeMenuOverlay(
     // upward from that edge, so its first frame never needs a measured height
     // and cannot jump after IME-safe placement resolves.
     val bottomAnchorOffset = visibleAnchor.top.toInt() - gapPx - overlaySize.height
-    val availableModes = if (remoteMode) MODES else listOf("Build", "Plan")
+    val availableModes = remember(remoteMode) { if (remoteMode) MODES else listOf("Build", "Plan") }
+    val groupedModelOptions = remember(options) { groupModelOptions(options) }
+    val currentOnMenuChange = rememberUpdatedState(onMenuChange)
+    val currentOnDismiss = rememberUpdatedState(onDismiss)
+    val currentOnMode = rememberUpdatedState(onMode)
+    val currentOnSelectModel = rememberUpdatedState(onSelectModel)
+    val currentOnSelectIntelligence = rememberUpdatedState(onSelectIntelligence)
+    val currentOnChooseFile = rememberUpdatedState(onChooseFile)
+    val currentOnChooseImage = rememberUpdatedState(onChooseImage)
+    val updateInteractionOrigin = remember { { origin: Float -> pageOriginY = origin } }
     val menuShape = MobilePopupShape
 
     Box(
@@ -2719,30 +2730,44 @@ private fun InputCompositeMenuOverlay(
                     label = "inputCompositeMenuPageMorph",
                 ) { targetMenu ->
                     val pageScroll = rememberScrollState()
-                    val entries = when (targetMenu) {
+                    val entrySet = remember(
+                        targetMenu,
+                        mode,
+                        selectedModel,
+                        selectedProviderId,
+                        selectedModelName,
+                        intelligence,
+                        availableModes,
+                        groupedModelOptions,
+                    ) { LiquidMenuEntries(when (targetMenu) {
                         InputCompositeMenu.PlusMain -> listOf(
-                            LiquidMenuEntry("模式选择", mode) { onMenuChange(InputCompositeMenu.PlusModes) },
-                            LiquidMenuEntry("选择文件") { onDismiss(); onChooseFile() },
-                            LiquidMenuEntry("选择图片") { onDismiss(); onChooseImage() },
+                            LiquidMenuEntry("模式选择", mode) { currentOnMenuChange.value(InputCompositeMenu.PlusModes) },
+                            LiquidMenuEntry("选择文件") { currentOnDismiss.value(); currentOnChooseFile.value() },
+                            LiquidMenuEntry("选择图片") { currentOnDismiss.value(); currentOnChooseImage.value() },
                         )
                         InputCompositeMenu.PlusModes -> listOf(
-                            LiquidMenuEntry("← 返回") { onMenuChange(InputCompositeMenu.PlusMain) },
+                            LiquidMenuEntry("← 返回") { currentOnMenuChange.value(InputCompositeMenu.PlusMain) },
                         ) + availableModes.map { candidate ->
-                            LiquidMenuEntry(candidate, selected = candidate == mode) { onMode(candidate); onDismiss() }
+                            LiquidMenuEntry(candidate, selected = candidate == mode) {
+                                currentOnMode.value(candidate)
+                                currentOnDismiss.value()
+                            }
                         }
                         InputCompositeMenu.ModelMain -> listOf(
                             LiquidMenuEntry(
                                 "模型选择",
                                 selectedModelMenuLabel(selectedModel, selectedProviderId, selectedModelName, options),
-                            ) { onMenuChange(InputCompositeMenu.Models) },
+                            ) { currentOnMenuChange.value(InputCompositeMenu.Models) },
                             LiquidMenuEntry("智能档位", intelligence.ifBlank { "medium" }) {
-                                onMenuChange(InputCompositeMenu.Tiers)
+                                currentOnMenuChange.value(InputCompositeMenu.Tiers)
                             },
                         )
                         InputCompositeMenu.Models -> buildList {
-                            add(LiquidMenuEntry("← 返回") { onMenuChange(InputCompositeMenu.ModelMain) })
-                            if (options.isEmpty()) add(LiquidMenuEntry("暂无可用模型", onActivate = onDismiss))
-                            groupModelOptions(options).forEach { group ->
+                            add(LiquidMenuEntry("← 返回") { currentOnMenuChange.value(InputCompositeMenu.ModelMain) })
+                            if (options.isEmpty()) {
+                                add(LiquidMenuEntry("暂无可用模型") { currentOnDismiss.value() })
+                            }
+                            groupedModelOptions.forEach { group ->
                                 add(LiquidMenuEntry(group.providerLabel, header = true))
                                 group.options.forEach { option ->
                                     add(
@@ -2753,19 +2778,23 @@ private fun InputCompositeMenuOverlay(
                                                 selectedProviderId,
                                                 selectedModelName,
                                             ),
-                                        ) { onSelectModel(option); onDismiss() },
+                                        ) {
+                                            currentOnSelectModel.value(option)
+                                            currentOnDismiss.value()
+                                        },
                                     )
                                 }
                             }
                         }
                         InputCompositeMenu.Tiers -> listOf(
-                            LiquidMenuEntry("← 返回") { onMenuChange(InputCompositeMenu.ModelMain) },
+                            LiquidMenuEntry("← 返回") { currentOnMenuChange.value(InputCompositeMenu.ModelMain) },
                         ) + INTELLIGENCE_TIERS.map { tier ->
                             LiquidMenuEntry(tier, selected = tier == intelligence) {
-                                onSelectIntelligence(tier); onDismiss()
+                                currentOnSelectIntelligence.value(tier)
+                                currentOnDismiss.value()
                             }
                         }
-                    }
+                    }) }
                     Box(
                         Modifier
                             .fillMaxWidth()
@@ -2773,9 +2802,8 @@ private fun InputCompositeMenuOverlay(
                             .verticalScroll(pageScroll),
                     ) {
                         LiquidMenuList(
-                            entries = entries,
-                            backdrop = backdrop,
-                            onInteractionOrigin = { pageOriginY = it },
+                            entrySet = entrySet,
+                            onInteractionOrigin = updateInteractionOrigin,
                         )
                     }
                 }
@@ -2792,37 +2820,67 @@ private data class LiquidMenuEntry(
     val onActivate: () -> Unit = {},
 )
 
+@Immutable
+private data class LiquidMenuEntries(val values: List<LiquidMenuEntry>)
+
+@Immutable
+private data class LiquidMenuGeometry(
+    val offsets: List<Dp>,
+    val totalHeight: Dp,
+    val selectedIndex: Int,
+    val gestureKeys: List<Pair<String, Boolean>>,
+)
+
+private class LiquidMenuFlightScheduler(initialIndex: Int) {
+    var job: kotlinx.coroutines.Job? = null
+    var activeIndex: Int = initialIndex
+
+    fun cancel() {
+        job?.cancel()
+        job = null
+    }
+}
+
 @Composable
 private fun LiquidMenuList(
-    entries: List<LiquidMenuEntry>,
-    backdrop: Backdrop,
+    entrySet: LiquidMenuEntries,
     onInteractionOrigin: (Float) -> Unit,
 ) {
+    val entries = entrySet.values
     val p = LocalNewmarkPalette.current
     val rowHeight = 44.dp
     val headerHeight = 26.dp
-    var y = 0.dp
-    val offsets = entries.map { entry ->
-        val offset = y
-        y += if (entry.header) headerHeight else rowHeight
-        offset
+    val geometry = remember(entrySet) {
+        var y = 0.dp
+        val offsets = entries.map { entry ->
+            val offset = y
+            y += if (entry.header) headerHeight else rowHeight
+            offset
+        }
+        LiquidMenuGeometry(
+            offsets = offsets,
+            totalHeight = y,
+            selectedIndex = entries.indexOfFirst { it.selected },
+            gestureKeys = entries.map { it.text to it.header },
+        )
     }
-    val totalHeight = entries.fold(0.dp) { height, entry ->
-        height + if (entry.header) headerHeight else rowHeight
-    }
-    val selectedIndex = entries.indexOfFirst { it.selected }
+    val offsets = geometry.offsets
+    val totalHeight = geometry.totalHeight
+    val selectedIndex = geometry.selectedIndex
     val selectionBackdrop = rememberLiquidBackdrop()
     val interactionScope = rememberCoroutineScope()
     val density = LocalDensity.current
-    var selectionFlightJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    var activeIndex by remember(entries) { mutableIntStateOf(selectedIndex) }
-    var moving by remember(entries) { mutableStateOf(false) }
-    var lifting by remember(entries) { mutableStateOf(false) }
-    var landing by remember(entries) { mutableStateOf(false) }
+    val flightScheduler = remember(entrySet) { LiquidMenuFlightScheduler(selectedIndex) }
+    DisposableEffect(flightScheduler) {
+        onDispose { flightScheduler.cancel() }
+    }
+    var moving by remember(entrySet) { mutableStateOf(false) }
+    var lifting by remember(entrySet) { mutableStateOf(false) }
+    var landing by remember(entrySet) { mutableStateOf(false) }
     val activeOffsetPx = remember { Animatable(0f) }
     LaunchedEffect(selectedIndex, offsets, density.density) {
         if (!moving && selectedIndex >= 0) {
-            activeIndex = selectedIndex
+            flightScheduler.activeIndex = selectedIndex
             activeOffsetPx.snapTo(with(density) { offsets[selectedIndex].toPx() })
         }
     }
@@ -2849,14 +2907,14 @@ private fun LiquidMenuList(
     }
 
     fun landSelection(index: Int) {
-        selectionFlightJob?.cancel()
-        selectionFlightJob = interactionScope.launch {
-            activeOffsetPx.animateTo(
-                with(density) { offsets.getOrElse(index) { 0.dp }.toPx() },
-                tween(durationMillis = 120, easing = PcQueueEase),
+        flightScheduler.cancel()
+        flightScheduler.job = interactionScope.launch {
+            runOverlappedLiquidFlight(
+                lift = {},
+                move = { activeOffsetPx.animateTo(with(density) { offsets.getOrElse(index) { 0.dp }.toPx() }, tween(durationMillis = 120, easing = PcQueueEase)) },
+                onLandingStarted = { landing = true },
+                land = { delay(240L) },
             )
-            landing = true
-            delay(240L)
             landing = false
             moving = false
             commitSelection(index)
@@ -2866,28 +2924,27 @@ private fun LiquidMenuList(
     fun flySelectionTo(index: Int) {
         if (index < 0) return
         val redirecting = moving
-        selectionFlightJob?.cancel()
+        flightScheduler.cancel()
         val sourceIndex = selectedIndex.takeIf { it >= 0 } ?: index
         if (!redirecting) {
-            activeIndex = sourceIndex
+            flightScheduler.activeIndex = sourceIndex
             lifting = true
             moving = true
         }
-        selectionFlightJob = interactionScope.launch {
+        flightScheduler.job = interactionScope.launch {
             if (!redirecting) {
                 activeOffsetPx.snapTo(with(density) { offsets[sourceIndex].toPx() })
                 kotlinx.coroutines.yield()
                 lifting = false
             }
-            activeIndex = index
+            flightScheduler.activeIndex = index
             val targetOffset = with(density) { offsets[index].toPx() }
-            if (kotlin.math.abs(activeOffsetPx.value - targetOffset) < 0.5f) {
-                delay(100L)
-            } else {
-                activeOffsetPx.animateTo(targetOffset, tween(durationMillis = 240, easing = PcQueueEase))
-            }
-            landing = true
-            delay(240L)
+            runOverlappedLiquidFlight(
+                lift = { lifting = false; delay(100L) },
+                move = { if (kotlin.math.abs(activeOffsetPx.value - targetOffset) >= 0.5f) activeOffsetPx.animateTo(targetOffset, tween(durationMillis = 240, easing = PcQueueEase)) },
+                onLandingStarted = { landing = true },
+                land = { delay(240L) },
+            )
             landing = false
             moving = false
             commitSelection(index)
@@ -2897,23 +2954,23 @@ private fun LiquidMenuList(
     fun beginHeldSelection(index: Int) {
         if (index < 0) return
         val redirecting = moving
-        selectionFlightJob?.cancel()
+        flightScheduler.cancel()
         val sourceIndex = selectedIndex.takeIf { it >= 0 } ?: index
         if (!redirecting) {
-            activeIndex = sourceIndex
+            flightScheduler.activeIndex = sourceIndex
             lifting = true
             moving = true
         }
-        selectionFlightJob = interactionScope.launch {
+        flightScheduler.job = interactionScope.launch {
             if (!redirecting) {
                 activeOffsetPx.snapTo(with(density) { offsets[sourceIndex].toPx() })
-                kotlinx.coroutines.yield()
-                lifting = false
             }
-            activeIndex = index
-            activeOffsetPx.animateTo(
-                with(density) { offsets[index].toPx() },
-                tween(durationMillis = 240, easing = PcQueueEase),
+            flightScheduler.activeIndex = index
+            runOverlappedLiquidFlight(
+                holdKeepsLifted = true,
+                lift = { kotlinx.coroutines.yield(); lifting = false; delay(100L) },
+                move = { activeOffsetPx.animateTo(with(density) { offsets[index].toPx() }, tween(durationMillis = 240, easing = PcQueueEase)) },
+                onLandingStarted = {}, land = {},
             )
         }
     }
@@ -2923,7 +2980,7 @@ private fun LiquidMenuList(
             .fillMaxWidth()
             .height(totalHeight)
             .liquidHoldDragGesture(
-                entries.map { it.text to it.header },
+                geometry.gestureKeys,
                 holdMillis = 300L,
                 onTap = { position ->
                     flySelectionTo(interactiveIndexAt(position.y, density.density))
@@ -2933,11 +2990,11 @@ private fun LiquidMenuList(
                 },
                 onDrag = { position, _ ->
                     interactiveIndexAt(position.y, density.density)
-                        .takeIf { it >= 0 }
+                        .takeIf { it >= 0 && it != flightScheduler.activeIndex }
                         ?.let { index ->
-                            activeIndex = index
-                            selectionFlightJob?.cancel()
-                            selectionFlightJob = interactionScope.launch {
+                            flightScheduler.activeIndex = index
+                            flightScheduler.cancel()
+                            flightScheduler.job = interactionScope.launch {
                                 activeOffsetPx.animateTo(
                                     with(density) { offsets[index].toPx() },
                                     spring(dampingRatio = 0.82f, stiffness = 170f),
@@ -2948,19 +3005,19 @@ private fun LiquidMenuList(
                 onHoldEnd = { position, _ ->
                     val releasedIndex = interactiveIndexAt(position.y, density.density)
                         .takeIf { it >= 0 }
-                        ?: activeIndex
-                    activeIndex = releasedIndex
+                        ?: flightScheduler.activeIndex
+                    flightScheduler.activeIndex = releasedIndex
                     landSelection(releasedIndex)
                 },
                 onCancel = {
-                    selectionFlightJob?.cancel()
+                    flightScheduler.cancel()
                     moving = false
                     lifting = false
                     landing = false
                 },
             ),
     ) {
-        if ((moving || landing) && activeIndex >= 0) {
+        if ((moving || landing) && flightScheduler.activeIndex >= 0) {
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -2968,9 +3025,9 @@ private fun LiquidMenuList(
                     .graphicsLayer {
                         translationY = activeOffsetPx.value
                     }
-                    .liquidMotionDeformation(
-                        velocityX = 0f,
-                        velocityY = activeOffsetPx.velocity,
+                    .liquidMotionDeformationDeferred(
+                        velocityX = { 0f },
+                        velocityY = { activeOffsetPx.velocity },
                         density = density.density,
                     )
                     .zIndex(4f)

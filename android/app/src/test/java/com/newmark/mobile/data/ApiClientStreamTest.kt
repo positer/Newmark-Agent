@@ -6,6 +6,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -39,6 +40,226 @@ class ApiClientStreamTest {
     }
 
     @Test
+    fun bufferedMessageSseFrameIsAcceptedAsUsableResponse() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody(
+                    "data: {\"choices\":[{\"message\":{\"content\":\"稳定响应\"}}]}\n\n" +
+                        "data: [DONE]\n\n",
+                ),
+        )
+        server.start()
+        try {
+            val response = ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(server.url("/v1").toString().trimEnd('/'), "key", "model"),
+                messages = listOf(ChatMessage(role = "user", content = "hello")),
+            ).getOrThrow()
+
+            assertEquals("稳定响应", response.content)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun thoughtFollowedByTextStaysWithinOneProviderTurn() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody(
+                    "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"先检查\"}}]}\n\n" +
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"最终答案\"}}]}\n\n" +
+                        "data: [DONE]\n\n",
+                ),
+        )
+        server.start()
+        try {
+            val thought = StringBuilder()
+            val text = StringBuilder()
+            val response = ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(server.url("/v1").toString().trimEnd('/'), "key", "model"),
+                messages = listOf(ChatMessage(role = "user", content = "hello")),
+                onThoughtDelta = { thought.append(it) },
+                onTextDelta = { text.append(it) },
+            ).getOrThrow()
+
+            assertEquals("先检查", thought.toString())
+            assertEquals("最终答案", text.toString())
+            assertEquals("先检查", response.reasoningContent)
+            assertEquals("最终答案", response.content)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun continuationReasoningIsPassedBackInTheNativeAssistantField() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"完成\"},\"finish_reason\":\"stop\"}]}\n\n" +
+                        "data: [DONE]\n\n",
+                ),
+        )
+        server.start()
+        try {
+            ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(server.url("/v1").toString().trimEnd('/'), "key", "deepseek-reasoner"),
+                messages = listOf(
+                    ChatMessage(role = "user", content = "continue"),
+                    ChatMessage(
+                        role = "assistant",
+                        content = "",
+                        reasoningContent = "checked first branch",
+                    ),
+                    ChatMessage(
+                        role = "assistant",
+                        content = "calling read",
+                        reasoningContent = "checked tool branch",
+                        toolCalls = listOf(ToolCall("call-1", "read_file", "{}")),
+                    ),
+                ),
+            ).getOrThrow()
+
+            val body = JSONObject(server.takeRequest().body.readUtf8())
+            val assistant = body.getJSONArray("messages").getJSONObject(1)
+            assertEquals("", assistant.getString("content"))
+            assertEquals("checked first branch", assistant.getString("reasoning_content"))
+            val toolAssistant = body.getJSONArray("messages").getJSONObject(2)
+            assertEquals("checked tool branch", toolAssistant.getString("reasoning_content"))
+            assertEquals("read_file", toolAssistant.getJSONArray("tool_calls")
+                .getJSONObject(0).getJSONObject("function").getString("name"))
+            assertFalse(assistant.getString("reasoning_content").contains("Internal Agent"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun providerFinishStateAloneControlsThoughtContinuation() = runBlocking {
+        assertTrue(modelRequestedContinuation("length"))
+        assertTrue(modelRequestedContinuation("MAX_TOKENS"))
+        assertTrue(modelRequestedContinuation("max_output_tokens"))
+        assertFalse(modelRequestedContinuation("stop"))
+        assertFalse(modelRequestedContinuation("tool_calls"))
+        assertFalse(modelRequestedContinuation(""))
+
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"partial\"}}]}\n\n"),
+        )
+        server.start()
+        try {
+            val result = ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(server.url("/v1").toString().trimEnd('/'), "key", "deepseek-reasoner"),
+                messages = listOf(ChatMessage(role = "user", content = "think")),
+            )
+            assertTrue(result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("explicit provider completion status"))
+            assertEquals(1, server.requestCount)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun allIntelligenceTiersReachBothProviderProtocolsExactly() = runBlocking {
+        val tiers = listOf("low", "medium", "high", "xhigh", "max", "ultra")
+        val expected = listOf("low", "medium", "high", "xhigh", "max", "max")
+        val server = MockWebServer()
+        repeat(tiers.size) {
+            server.enqueue(MockResponse().setResponseCode(400).setBody("use /v1/responses"))
+            server.enqueue(
+                MockResponse()
+                    .addHeader("Content-Type", "text/event-stream")
+                    .setBody(
+                        "data:{\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n" +
+                            "data:{\"type\":\"response.completed\",\"response\":{}}\n\n",
+                    ),
+            )
+        }
+        server.start()
+        try {
+            val client = ApiClient(OkHttpClient())
+            tiers.forEachIndexed { index, tier ->
+                client.chat(
+                    config = ApiConfig(server.url("/v1").toString().trimEnd('/'), "key", "gpt-5.6-luna"),
+                    messages = listOf(ChatMessage(role = "user", content = "tier-$tier")),
+                    intelligence = tier,
+                ).getOrThrow()
+                val chatBody = JSONObject(server.takeRequest().body.readUtf8())
+                val responsesBody = JSONObject(server.takeRequest().body.readUtf8())
+                assertEquals(expected[index], chatBody.getString("reasoning_effort"))
+                assertEquals(expected[index], responsesBody.getJSONObject("reasoning").getString("effort"))
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun customNativeTierMappingIsAppliedWithoutCrossProtocolDrift() = runBlocking {
+        val tierMap = mapOf("minimal" to "low", "balanced" to "medium", "deep" to "high")
+        val tiers = listOf("low", "medium", "high", "xhigh", "max", "ultra")
+        val expected = listOf("minimal", "balanced", "deep", "deep", "deep", "deep")
+        val server = MockWebServer()
+        repeat(tiers.size) {
+            server.enqueue(MockResponse().setResponseCode(400).setBody("use /v1/responses"))
+            server.enqueue(
+                MockResponse()
+                    .addHeader("Content-Type", "text/event-stream")
+                    .setBody(
+                        "data:{\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n" +
+                            "data:{\"type\":\"response.completed\",\"response\":{}}\n\n",
+                    ),
+            )
+        }
+        server.start()
+        try {
+            val client = ApiClient(OkHttpClient())
+            tiers.forEachIndexed { index, tier ->
+                client.chat(
+                    config = ApiConfig(server.url("/v1").toString().trimEnd('/'), "key", "custom-reasoner"),
+                    messages = listOf(ChatMessage(role = "user", content = "tier-$tier")),
+                    intelligence = tier,
+                    thinkingTierMap = tierMap,
+                ).getOrThrow()
+                val chatBody = JSONObject(server.takeRequest().body.readUtf8())
+                val responsesBody = JSONObject(server.takeRequest().body.readUtf8())
+                assertEquals(expected[index], chatBody.getString("reasoning_effort"))
+                assertEquals(expected[index], responsesBody.getJSONObject("reasoning").getString("effort"))
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun officialOpenAiMaxUsesItsNativeXhighCeiling() {
+        val client = ApiClient(OkHttpClient())
+
+        assertEquals(
+            "xhigh",
+            client.reasoningEffort("gpt-5.6-sol", "https://api.openai.com/v1", "max", emptyMap()),
+        )
+        assertEquals(
+            "xhigh",
+            client.reasoningEffort("gpt-5.6-sol", "https://api.openai.com/v1", "ultra", emptyMap()),
+        )
+        assertEquals(
+            "max",
+            client.reasoningEffort("gpt-5.6-sol", "https://compatible.example/v1", "max", emptyMap()),
+        )
+    }
+
+    @Test
     fun acceptsStructuredTextAndBothDeltaAndCumulativeStreams() {
         val structured = parseChatStreamTextDelta(
             "{\"choices\":[{\"delta\":{\"reasoning_content\":[{\"text\":\"检查\"}],\"content\":[{\"text\":\"完成\"}]}}]}",
@@ -53,6 +274,96 @@ class ApiClientStreamTest {
         assertEquals("先检查完成", target.toString())
         assertEquals("", appendCompatibleStreamValue(target, "先检查完成"))
         assertEquals("", appendCompatibleStreamValue(target, "null"))
+
+        assertEquals(
+            "{\"json\":\"value\"}",
+            assembleCompatibleToolArguments(listOf("{\"json\":\"", "value", "\"}")),
+        )
+        assertEquals(
+            "{\"json\":\"abc\"}",
+            assembleCompatibleToolArguments(listOf("{\"json\":\"a", "{\"json\":\"abc\"}")),
+        )
+        assertEquals(
+            "{\"json\":\"abc\"}",
+            assembleCompatibleToolArguments(listOf("{\"json\":\"abc\"}", "{\"json\":\"abc\"}")),
+        )
+    }
+
+    @Test
+    fun cumulativeToolSnapshotsProduceOneValidCorrectedArgumentObject() = runBlocking {
+        val server = MockWebServer()
+        fun toolFrame(arguments: String, includeIdentity: Boolean, finishReason: String = ""): String {
+            val tool = JSONObject()
+                .put("index", 0)
+                .put("function", JSONObject().put("arguments", arguments))
+            if (includeIdentity) {
+                tool.put("id", "call-settings")
+                tool.getJSONObject("function").put("name", "settings_update")
+            }
+            val choice = JSONObject()
+                .put("delta", JSONObject().put("tool_calls", org.json.JSONArray().put(tool)))
+            if (finishReason.isNotBlank()) choice.put("finish_reason", finishReason)
+            return JSONObject().put("choices", org.json.JSONArray().put(choice)).toString()
+        }
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody(
+                    "data:${toolFrame("{\"json\":\"a\"}", includeIdentity = true)}\n\n" +
+                        "data:${toolFrame("{\"json\":\"abc\"}", includeIdentity = false, finishReason = "tool_calls")}\n\n" +
+                        "data:[DONE]\n\n",
+                ),
+        )
+        server.start()
+        try {
+            val response = ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(server.url("/v1").toString().trimEnd('/'), "key", "model"),
+                messages = listOf(ChatMessage(role = "user", content = "update settings")),
+            ).getOrThrow()
+
+            assertEquals(1, response.toolCalls.size)
+            assertEquals("settings_update", response.toolCalls.single().name)
+            assertEquals("abc", JSONObject(response.toolCalls.single().arguments).getString("json"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun toolFollowUpAppendsAtFrontierWithoutChangingCachedPrefix() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/event-stream")
+                .setBody("data:{\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata:[DONE]\n\n"),
+        )
+        server.start()
+        try {
+            val prefix = listOf(
+                ChatMessage(role = "system", content = "stable-focus"),
+                ChatMessage(role = "user", content = "update settings"),
+            )
+            ApiClient(OkHttpClient()).chat(
+                config = ApiConfig(server.url("/v1").toString().trimEnd('/'), "key", "model"),
+                messages = prefix + listOf(
+                    ChatMessage(
+                        role = "assistant",
+                        content = "",
+                        toolCalls = listOf(ToolCall("call-settings", "settings_update", "{\"json\":\"abc\"}")),
+                    ),
+                    ChatMessage(role = "tool", content = "{\"ok\":false}", toolCallId = "call-settings"),
+                ),
+            ).getOrThrow()
+
+            val sent = JSONObject(server.takeRequest().body.readUtf8()).getJSONArray("messages")
+            assertEquals("stable-focus", sent.getJSONObject(0).getString("content"))
+            assertEquals("update settings", sent.getJSONObject(1).getString("content"))
+            assertEquals("assistant", sent.getJSONObject(2).getString("role"))
+            assertEquals("tool", sent.getJSONObject(3).getString("role"))
+            assertEquals("call-settings", sent.getJSONObject(3).getString("tool_call_id"))
+        } finally {
+            server.shutdown()
+        }
     }
 
     @Test
@@ -63,7 +374,7 @@ class ApiClientStreamTest {
         assertTrue(source.contains("firstText(\"reasoning_content\", \"reasoning\", \"thinking\", \"analysis\")"))
         assertTrue(source.contains("onThoughtDelta(thoughtDelta)"))
         assertTrue(source.contains("onTextDelta(textDelta)"))
-        assertTrue(source.contains("delta.optJSONArray(\"tool_calls\")"))
+        assertTrue(source.contains("messageOrDelta?.optJSONArray(\"tool_calls\")"))
         assertTrue(source.contains("SSE_IDLE_TIMEOUT_MS"))
         assertTrue(source.contains("readTimeout(0, TimeUnit.MILLISECONDS)"))
         assertTrue(source.contains("Provider reads have no response deadline"))

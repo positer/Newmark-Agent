@@ -97,6 +97,37 @@ export function parseProviderSse(raw: string): Array<{ event?: string; data: str
 }
 
 /**
+ * Compatible gateways may stream function arguments as JSON deltas or repeat
+ * a cumulative snapshot on every SSE frame. Keep the normal incremental form
+ * when it parses, then fall back to snapshot folding. Returning malformed
+ * concatenated snapshots would erase the model's correction at tool parsing.
+ */
+export function assembleCompatibleToolArguments(parts: string[]): string {
+  const nonEmpty = (parts || []).map(String).filter(part => part && part !== 'null');
+  if (!nonEmpty.length) return '{}';
+  const isJsonObject = (value: string): boolean => {
+    try {
+      const parsed = JSON.parse(value);
+      return !!parsed && typeof parsed === 'object' && !Array.isArray(parsed);
+    } catch {
+      return false;
+    }
+  };
+  const incremental = nonEmpty.join('');
+  if (isJsonObject(incremental)) return incremental;
+  let compatible = '';
+  for (const incoming of nonEmpty) {
+    if (!compatible) compatible = incoming;
+    else if (incoming === compatible) continue;
+    else if (incoming.startsWith(compatible)) compatible = incoming;
+    else if (compatible.startsWith(incoming)) continue;
+    else compatible += incoming;
+  }
+  if (isJsonObject(compatible)) return compatible;
+  return [...nonEmpty].reverse().find(isJsonObject) || compatible;
+}
+
+/**
  * Detect content-policy refusals across the provider failure shapes.
  * Mirrors `LLMProvider.contentPolicyBlocked` semantics exactly so the
  * adapters and the bridge report identical `[Error] Content policy refusal`

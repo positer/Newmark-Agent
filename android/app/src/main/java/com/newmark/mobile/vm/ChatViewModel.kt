@@ -31,6 +31,8 @@ import com.newmark.mobile.data.LocalToolExecutor
 import com.newmark.mobile.data.LocalTools
 import com.newmark.mobile.data.LocalWorkEvent
 import com.newmark.mobile.data.LocalWorkRun
+import com.newmark.mobile.data.MobileThoughtContinuation
+import com.newmark.mobile.data.MobileThoughtRequestContinuation
 import com.newmark.mobile.data.LocalImageAttachment
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
@@ -44,8 +46,13 @@ import com.newmark.mobile.data.ModelOption
 import com.newmark.mobile.data.ProviderConfig
 import com.newmark.mobile.data.ProviderStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -56,6 +63,15 @@ import java.io.File
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
+import com.newmark.mobile.data.EmptyResponseLimitException
+import com.newmark.mobile.data.emptyResponseRetryDelayMs
+import com.newmark.mobile.data.MAX_CONSECUTIVE_EMPTY_RESPONSES
+import com.newmark.mobile.data.MAX_EMPTY_RESPONSE_RETRIES
+import com.newmark.mobile.data.ProviderNoResponseException
+import com.newmark.mobile.data.isEmptyResponseFailure
+import com.newmark.mobile.data.isUsableChatResponse
+import com.newmark.mobile.data.nextEmptyResponseStreak
+import com.newmark.mobile.data.modelRequestedContinuation
 
 internal fun localAgentFailureMessage(config: ApiConfig, error: Throwable): String {
     val detail = error.message?.trim().orEmpty().ifBlank { "API 调用失败" }
@@ -93,6 +109,71 @@ private suspend fun localImageOcr(attachment: LocalImageAttachment): String = wi
     }
 }
 
+private const val AGENT_UI_FRAME_INTERVAL_MS = 16L
+private const val AGENT_UI_MAX_DELTAS_PER_FRAME = 512
+
+private sealed interface AgentUiDeltaCommand {
+    data class Delta(val thought: Boolean, val content: String) : AgentUiDeltaCommand
+    data class Flush(val completion: CompletableDeferred<Unit>) : AgentUiDeltaCommand
+}
+
+/**
+ * Provider parsing stays on IO while public transcript snapshots are committed
+ * to Compose at most once per display-sized interval. Every delta remains in
+ * order; only redundant main-thread state publications are coalesced.
+ */
+private class AgentUiDeltaPublisher(
+    scope: CoroutineScope,
+    private val publishBatch: (List<AgentUiDeltaCommand.Delta>) -> Unit,
+) {
+    private val commands = Channel<AgentUiDeltaCommand>(Channel.UNLIMITED)
+    private val job = scope.launch(Dispatchers.Main.immediate) {
+        while (true) {
+            when (val first = commands.receiveCatching().getOrNull() ?: break) {
+                is AgentUiDeltaCommand.Flush -> first.completion.complete(Unit)
+                is AgentUiDeltaCommand.Delta -> {
+                    val deltas = ArrayList<AgentUiDeltaCommand.Delta>()
+                    val flushes = ArrayList<CompletableDeferred<Unit>>()
+                    deltas += first
+                    delay(AGENT_UI_FRAME_INTERVAL_MS)
+                    var drained = 1
+                    while (drained < AGENT_UI_MAX_DELTAS_PER_FRAME) {
+                        val next = commands.tryReceive().getOrNull() ?: break
+                        when (next) {
+                            is AgentUiDeltaCommand.Delta -> deltas += next
+                            is AgentUiDeltaCommand.Flush -> flushes += next.completion
+                        }
+                        drained++
+                    }
+                    publishBatch(deltas)
+                    flushes.forEach { it.complete(Unit) }
+                }
+            }
+        }
+    }
+
+    fun offerThought(delta: String) {
+        if (delta.isNotBlank()) commands.trySend(AgentUiDeltaCommand.Delta(thought = true, content = delta))
+    }
+
+    fun offerText(delta: String) {
+        if (delta.isNotBlank()) commands.trySend(AgentUiDeltaCommand.Delta(thought = false, content = delta))
+    }
+
+    suspend fun flushAndClose() {
+        val completion = CompletableDeferred<Unit>()
+        commands.send(AgentUiDeltaCommand.Flush(completion))
+        completion.await()
+        commands.close()
+        job.join()
+    }
+
+    fun cancel() {
+        commands.close()
+        job.cancel()
+    }
+}
+
 /** 本地对话 + API 调用对话的正式状态管理 */
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -109,6 +190,81 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val conversationStore = ConversationStore(app)
     private val providerStore = ProviderStore(app)
     private val apiClient = ApiClient()
+
+    /**
+     * Provider responses are not guaranteed to be stable. Retry only turns
+     * that produced no thought, usable text, or tool call; auth/quota/HTTP
+     * failures stay terminal. Any successful provider activity clears the
+     * local streak.
+     */
+    private suspend fun chatWithEmptyRecovery(
+        config: ApiConfig,
+        messages: List<ChatMessage>,
+        tools: List<JSONObject> = emptyList(),
+        intelligence: String = "medium",
+        thinkingTierMap: Map<String, String> = emptyMap(),
+        maxOutputTokens: Int? = null,
+        onThoughtDelta: suspend (String) -> Unit = {},
+        onTextDelta: suspend (String) -> Unit = {},
+    ): Result<ChatResponse> {
+        var emptyStreak = 0
+        while (currentCoroutineContext().isActive) {
+            // The provider call owns the entire thought/text stream. No retry
+            // delay or empty-response count is evaluated while it is active;
+            // the decision below runs only after chat() has returned a
+            // terminal response or transport failure, matching PC Agent's
+            // turn-level boundary.
+            var observedText = false
+            var observedThought = false
+            val result = apiClient.chat(
+                config = config,
+                messages = messages,
+                tools = tools,
+                intelligence = intelligence,
+                thinkingTierMap = thinkingTierMap,
+                maxOutputTokens = maxOutputTokens,
+                onThoughtDelta = { delta ->
+                    observedThought = observedThought || delta.isNotBlank()
+                    onThoughtDelta(delta)
+                },
+                onTextDelta = { delta ->
+                    observedText = observedText || delta.isNotBlank()
+                    onTextDelta(delta)
+                },
+            )
+            val response = result.getOrNull()
+            if (response != null && isUsableChatResponse(response)) {
+                // Reasoning is a successful provider activity. It clears the
+                // streak and is returned as a normal result; it must never be
+                // retried or converted into an empty-response failure.
+                emptyStreak = 0
+                return Result.success(response)
+            }
+            val error = result.exceptionOrNull()
+            if (response != null && !response.explicitEmptyResponse) {
+                return Result.failure(ProviderNoResponseException())
+            }
+            if (response == null && error != null && !isEmptyResponseFailure(error)) return result
+            // A stream that emitted visible text but then failed is not an
+            // empty response; retrying would duplicate already-rendered text.
+            // Thought is likewise successful activity and never becomes an
+            // empty-response retry, even if the transport closes afterward.
+            if ((observedText || observedThought) && error != null) return result
+            emptyStreak = if (observedThought) {
+                0
+            } else {
+                nextEmptyResponseStreak(emptyStreak, usable = false)
+            }
+            if (emptyStreak >= MAX_CONSECUTIVE_EMPTY_RESPONSES) {
+                return Result.failure(EmptyResponseLimitException())
+            }
+            // Wait only after an explicit empty-response failure. A silent
+            // stream is handled above as ProviderNoResponseException and is
+            // never converted into this retry schedule.
+            delay(emptyResponseRetryDelayMs(emptyStreak))
+        }
+        return Result.failure(java.util.concurrent.CancellationException("Agent coroutine cancelled"))
+    }
 
     // Loaded with the rest of the durable state on Dispatchers.IO. Reading and
     // parsing archived.json in the ViewModel constructor used to block the
@@ -378,7 +534,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             任务上下文：${taskContext.take(4000)}
             OCR 证据：${rawOcr.take(50000)}
         """.trimIndent()
-        return apiClient.chat(
+        return chatWithEmptyRecovery(
             apiConfig,
             listOf(ChatMessage(role = "user", content = prompt)),
             tools = emptyList(),
@@ -919,10 +1075,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 executeConversationTool(targetConversationId, name, args)
             }
             // 智能档位 + 模型原生思考强度映射（thinking_tier_map）随调用透传
-            val tierMap = providers.asSequence()
-                .flatMap { it.models.asSequence() }
-                .firstOrNull { it.name == activeModelName }
-                ?.thinkingTierMap ?: emptyMap()
+            val tierMap = activeModelConfig?.thinkingTierMap ?: emptyMap()
             val prepared = prepareModelContext(
                 config = apiConfig,
                 conversation = targetConversation,
@@ -1058,8 +1211,36 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 ?: com.newmark.mobile.data.ToolResult.err("日历权限请求器尚未挂载")
             "alarm_manage" -> localAlarmToolHandler?.invoke(args)
                 ?: com.newmark.mobile.data.ToolResult.err("闹钟权限请求器尚未挂载")
+            "__document_visual_read" -> readDocumentPagesWithVision(args)
             else -> null
         }
+    }
+
+    private suspend fun readDocumentPagesWithVision(args: JSONObject): com.newmark.mobile.data.ToolResult {
+        if (activeModelConfig?.vision != true) return com.newmark.mobile.data.ToolResult.err("当前模型未声明视觉能力")
+        val images = args.optJSONArray("images") ?: JSONArray()
+        val attachments = (0 until images.length()).mapNotNull { index ->
+            images.optJSONObject(index)?.let { item ->
+                val dataUrl = item.optString("data_url")
+                if (!dataUrl.startsWith("data:image/")) null else LocalImageAttachment(
+                    name = item.optString("name", "page-${index + 1}.jpg"),
+                    mimeType = item.optString("mime_type", "image/jpeg"),
+                    dataUrl = dataUrl,
+                )
+            }
+        }
+        if (attachments.isEmpty()) return com.newmark.mobile.data.ToolResult.err("没有可供视觉读取的页面")
+        val response = withContext(Dispatchers.IO) {
+            chatWithEmptyRecovery(
+                config = apiConfig,
+                messages = listOf(ChatMessage(role = "user", content = args.optString("prompt"), imageAttachments = attachments)),
+                tools = emptyList(),
+                intelligence = intelligence,
+                maxOutputTokens = 8_000,
+            )
+        }.getOrElse { return com.newmark.mobile.data.ToolResult.err(it.message ?: "视觉模型读取失败") }
+        return if (response.content.isBlank()) com.newmark.mobile.data.ToolResult.err("视觉模型返回空内容")
+        else com.newmark.mobile.data.ToolResult.ok(response.content)
     }
 
     private suspend fun compressConversationContext(
@@ -1245,7 +1426,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             appendLine()
             append(boundedSource)
         }
-        val generated = apiClient.chat(
+        val generated = chatWithEmptyRecovery(
             config = config,
             messages = listOf(ChatMessage(role = "user", content = summaryPrompt)),
             tools = emptyList(),
@@ -1327,6 +1508,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             sequence = sequence++,
             durationMs = durationMs,
         )
+        val thoughtContinuation = MobileThoughtContinuation(events) { type, content, durationMs ->
+            event(type = type, content = content, durationMs = durationMs)
+        }
+        val thoughtRequestContinuation = MobileThoughtRequestContinuation()
         fun publishCurrent(
             status: String = "running",
             endedAt: Long = 0L,
@@ -1357,17 +1542,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             events += next
             publishCurrent(status, endedAt, text)
         }
-        fun publishThoughtDelta(delta: String) {
-            val index = events.indexOfLast { it.type == "thought" && !it.completed }
-            if (index >= 0) events[index] = events[index].copy(content = events[index].content + delta)
-            publishCurrent()
-        }
-        fun publishTextDelta(delta: String) {
-            val last = events.lastOrNull()
-            if (last?.type == "text") {
-                events[events.lastIndex] = last.copy(content = last.content + delta)
-            } else {
-                events += event(type = "text", content = delta)
+        fun publishDeltaBatch(deltas: List<AgentUiDeltaCommand.Delta>) {
+            deltas.forEach { delta ->
+                if (delta.thought) {
+                    thoughtContinuation.appendRoundDelta(delta.content)
+                } else {
+                    val last = events.lastOrNull()
+                    if (last?.type == "text") {
+                        events[events.lastIndex] = last.copy(content = last.content + delta.content)
+                    } else {
+                        events += event(type = "text", content = delta.content)
+                    }
+                }
             }
             publishCurrent()
         }
@@ -1376,6 +1562,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             var applied = 0
             while (true) {
                 val guide = guideChannel.tryReceive().getOrNull() ?: break
+                thoughtContinuation.finish(System.currentTimeMillis())?.let { publish(it) }
                 val accepted = WorkGuide(
                     clientMessageId = guide.clientMessageId,
                     guideId = guide.guideId,
@@ -1414,38 +1601,52 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     messageId = guide.clientMessageId,
                     timestamp = guide.createdAt,
                 )
+                thoughtRequestContinuation.clear()
                 applied++
             }
             return applied
         }
-        var loop = 0
         var finalText = ""
-        while (loop < 6) {
+        while (currentCoroutineContext().isActive) {
             applyPendingGuides()
+            val prepared = prepareActiveLoopContext(conversationId, config, messages)
+            messages.replaceWith(prepared.messages)
             val t0 = System.currentTimeMillis()
             // Publish the public activity shell before waiting on the provider.
             // This is deliberately not private chain-of-thought: it only lets
             // the Build block show "思考中" and later "进行了思考" like PC.
-            publish(event(type = "thought"))
+            if (thoughtContinuation.beginRound(t0)) publishCurrent()
             val tools = LocalTools.definitionsFor(getApplication(), plan = mode == "plan")
-            val responseResult = apiClient.chat(
-                config,
-                messages,
-                tools,
-                intelligence,
-                thinkingTierMap,
-                onThoughtDelta = { delta ->
-                    withContext(Dispatchers.Main.immediate) { publishThoughtDelta(delta) }
-                },
-                onTextDelta = { delta ->
-                    withContext(Dispatchers.Main.immediate) { publishTextDelta(delta) }
-                },
-            )
+            val requestMessages = thoughtRequestContinuation.requestMessages(listOf(
+                LocalContextContract.requestScopedTaskFocus(messages, mode, tools.size),
+            ) + messages)
+            val deltaPublisher = AgentUiDeltaPublisher(viewModelScope, ::publishDeltaBatch)
+            val responseResult = try {
+                chatWithEmptyRecovery(
+                    config,
+                    requestMessages,
+                    tools,
+                    intelligence,
+                    thinkingTierMap,
+                    onThoughtDelta = deltaPublisher::offerThought,
+                    onTextDelta = deltaPublisher::offerText,
+                )
+            } finally {
+                if (currentCoroutineContext().isActive) {
+                    deltaPublisher.flushAndClose()
+                } else {
+                    deltaPublisher.cancel()
+                }
+            }
             val resp = responseResult.getOrElse { e ->
                 finalLocalImageFallback(messages, e)?.let { return@getOrElse it }
-                val msg = localAgentFailureMessage(config, e)
+                val msg = if (e is EmptyResponseLimitException) {
+                    "模型明确返回空响应后已重试 $MAX_EMPTY_RESPONSE_RETRIES 次，仍失败，已停止本次构建。"
+                } else {
+                    localAgentFailureMessage(config, e)
+                }
                 val endedAt = System.currentTimeMillis()
-                publish(event(type = "thought_result", durationMs = endedAt - t0))
+                thoughtContinuation.finish(endedAt)?.let { publish(it) }
                 publish(
                     event(type = "error", content = msg, durationMs = endedAt - t0),
                     status = "error",
@@ -1464,15 +1665,56 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             val chatMs = System.currentTimeMillis() - t0
-            publish(event(type = "thought_result", content = resp.reasoningContent, durationMs = chatMs))
+            val resolvedRoundReasoning = thoughtContinuation.endRound(resp.reasoningContent).orEmpty()
+
+            // chatWithEmptyRecovery guarantees a usable response or returns
+            // EmptyResponseLimitException only after the initial explicit
+            // empty completion plus all five retries also fail. Any thought,
+            // text, or tool activity resets its internal streak.
+
+            // A thought-only provider turn may continue only when the model
+            // explicitly reports output truncation. Stream silence, elapsed
+            // time, EOF, and an ordinary stop state never schedule a resend.
+            if (resp.content.isBlank() && resp.toolCalls.isEmpty() && resp.reasoningContent.isNotBlank()) {
+                if (modelRequestedContinuation(resp.finishReason)) {
+                    thoughtRequestContinuation.recordRound(resolvedRoundReasoning)
+                    publishCurrent()
+                    continue
+                }
+                val endedAt = System.currentTimeMillis()
+                thoughtRequestContinuation.clear()
+                thoughtContinuation.finish(endedAt)?.let { publish(it) }
+                val state = resp.finishReason.ifBlank { "completed" }
+                val msg = "模型返回完成状态（$state），但没有提供最终正文；未进行软件端自动重传。"
+                publish(
+                    event(type = "error", content = msg, durationMs = endedAt - t0),
+                    status = "error",
+                    endedAt = endedAt,
+                    text = msg,
+                )
+                return AgentLoopResult(
+                    run = LocalWorkRun(
+                        runId = runId, status = "error",
+                        startedAt = startedAt, endedAt = endedAt,
+                        events = events, text = msg,
+                        anchorMessageId = anchorMessageId,
+                        branchNodeId = branchNodeId,
+                    ),
+                    modelContext = messages,
+                )
+            }
+
+            thoughtRequestContinuation.clear()
+            thoughtContinuation.finish(System.currentTimeMillis())?.let { publish(it) }
 
             if (resp.toolCalls.isEmpty()) {
-                val responseText = resp.content.ifBlank { "（无回复内容）" }
+                // Recovery guarantees visible content for a no-tool turn;
+                // keep the persisted transcript free of synthetic empty text.
+                val responseText = resp.content.trim()
                 messages += ChatMessage(role = "assistant", content = responseText)
                 val guidesAfterResponse = applyPendingGuides()
                 if (guidesAfterResponse > 0) {
                     publish(event(type = "response", content = responseText, durationMs = chatMs))
-                    loop++
                     continue
                 }
                 onGuideAcceptingChanged(false)
@@ -1513,15 +1755,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 ))
                 messages += ChatMessage(role = "tool", content = result.output, toolCallId = call.id)
             }
-            loop++
         }
-        val terminalStatus = if (finalText.isEmpty()) {
-            finalText = "⚠️ 工具调用轮次超限"
-            publish(event(type = "error", content = finalText))
-            "error"
-        } else {
+        thoughtContinuation.finish(System.currentTimeMillis())?.let { publish(it) }
+        val terminalStatus = if (finalText.isNotEmpty()) {
             publish(event(type = "done", content = "完成"))
             "completed"
+        } else {
+            onGuideAcceptingChanged(false)
+            finalText = "已停止"
+            publish(event(type = "interrupted", content = finalText))
+            "interrupted"
         }
         val completed = LocalWorkRun(
             runId = runId, status = terminalStatus,
@@ -1532,6 +1775,45 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         )
         onProgress(completed)
         return AgentLoopResult(completed, messages)
+    }
+
+    private suspend fun prepareActiveLoopContext(
+        conversationId: String,
+        config: ApiConfig,
+        messages: List<ChatMessage>,
+    ): PreparedModelContext {
+        val maxTokens = activeModelConfig?.maxTokens?.takeIf { it > 0 } ?: 128_000
+        val budget = withContext(Dispatchers.Default) { LocalContextContract.budget(messages, maxTokens) }
+        if (!budget.thresholdReached && !budget.hardSafetyReached) return PreparedModelContext(messages, null)
+        val prepared = prepareModelContext(
+            config = config,
+            conversation = LocalConversation(
+                id = conversationId,
+                title = "active-loop",
+                messages = messages,
+                modelContext = messages,
+            ),
+            displaySnapshot = messages,
+            maxTokens = maxTokens,
+            force = budget.hardSafetyReached,
+        )
+        prepared.compression?.let { compression ->
+            updateConversation(conversationId) {
+                it.copy(
+                    modelContext = prepared.messages,
+                    contextCompression = compression,
+                    compressionHistory = (it.compressionHistory + compression).distinctBy { item -> item.id }.takeLast(32),
+                    updatedAt = System.currentTimeMillis(),
+                )
+            }
+        }
+        return prepared
+    }
+
+    private fun MutableList<ChatMessage>.replaceWith(next: List<ChatMessage>) {
+        if (this == next) return
+        clear()
+        addAll(next)
     }
 
     private suspend fun compressActiveLoopContext(

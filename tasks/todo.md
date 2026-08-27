@@ -1,3 +1,54 @@
+# Newmark Agent dev-0.5.8 TODO
+
+## Android recent-file exposure
+
+- [x] 普通模式新增 `recent_files`，无需先知道目录即可发现最新文档、图片和视频。
+- [x] 合并 MediaStore 三类集合并按修改时间倒序，支持类型、关键词和数量限制。
+- [x] `files_read_all` 在未授予 all-files 时仍可读取系统允许的 `content://` URI。
+- [x] 文本返回 UTF-8，二进制以不超过 20 MiB 的 Base64 JSON 返回。
+- [x] Android 13+ 请求图片/视频普通权限，返回设置页后刷新授权状态。
+- [x] 任意共享路径管理继续要求 all-files；Root/Shizuku 不影响普通文件可见范围。
+- [x] 保持其他应用私有目录、Android/data、Android/obb、符号链接与破坏性操作边界。
+- [x] Android unit、Vital lint、R8、Release APK 构建通过。
+- [x] 文件开关关闭时禁用全部外部文件工具，只保留内部安全目录工具。
+- [x] 文件开关开启时跳系统 all-files 页面，并要求应用内选择与系统授权双重有效。
+- [x] 应用列表开关关闭时禁用列表/检查工具；开启时跳 Usage Access 系统设置并双重校验。
+- [x] 冷启动直接恢复上次本地对话，不等待或默认进入配对远程面。
+
+## Phase 1: Consecutive empty-response contract
+
+- [x] E1 建立 empty/text/tool-call 可编排序列 fixture。
+- [x] E2 明确失效后按 5 次重试节奏继续；第 5 次重试仍失效才终止；无响应等待不计数。
+- [x] E3 正常文本清零 empty streak。
+- [x] E4 有效 tool call 清零 empty streak。
+- [x] E5 abort/content filter/显式错误/transport failure 不计入 empty streak。
+- [x] E6 定义唯一阈值 5，移除硬编码 `/2`。
+- [x] E7 第 1–4 次只重试同一 deployment，第 5 次只输出一次最终错误。
+- [x] E8 不重复 prompt、tool call、token 或持久化历史，计数不跨响应/会话/Agent 泄漏。
+
+## Phase 2: Motionless conversation-history disclosure
+
+- [x] U1 header 与 chevron computed-style 负向测试覆盖 animation/transition/transform/scale/filter。
+- [x] U2 禁止 pseudo-glass、liquid float/canvas 和 transient overlay。
+- [x] U3 click、Enter、Space 同一任务内直接切换 expanded/body 状态。
+- [x] U4 chevron 瞬时改变方向，body 直接 `display` 切换。
+- [x] U5 保留静态 focus-visible；真正 selection 控件玻璃行为不变。
+- [x] U6 连续切换 8 次：一个 header、一个 badge、零玻璃节点，持久化状态正确。
+
+## Phase 3: Gates and evidence
+
+- [x] G1 `cd DESKTOP; npm run build`。
+- [x] G2 focused empty fixture、auto agent integration、model recovery、normal chat regression。
+- [x] G3 `npx tsx src/tests/pcGlassMigrationVerify.ts`。
+- [x] G4 真实 Electron work-review/disclosure smoke。
+- [x] G5 `cd DESKTOP; npm run test:full-release`。
+- [x] G6 `cd DESKTOP; npm run release:version-check`。
+- [x] G7 实现后同步 README、OVERVIEW、taste、tasks 与 timestamped archive。
+
+---
+
+## Historical checklist: dev-0.5.7
+
 # Newmark Agent dev-0.5.7 TODO
 
 ## Phase 1: Failure Baselines
@@ -325,6 +376,76 @@
 - 阶段 A/B 完成后：入口和能力边界可复现，失败不被误归因。
 - 阶段 C 完成后：共享后端没有 target 串线、归档复活、Flow 残留或压缩覆盖。
 - 阶段 D/E 完成后：资源回落、重启可恢复、报告可审计；否则保持 HOLD。
+
+## 2026-08-26 dev-0.5.8 移动端对话菜单与归档动画
+
+- [x] 更多按钮菜单从按钮右上锚点缩放淡入，关闭时反向收回。
+- [x] 长按菜单从对话胶囊中心缩放淡入，关闭时反向收回。
+- [x] `AnchorMenu` 在退出动画结束前保留 Popup composition。
+- [x] 本地与远程对话归档先关闭菜单，再淡出/轻微收缩胶囊，最后提交删除。
+- [x] 新增 `ConversationMenuArchiveAnimationContractTest` 回归契约。
+
+## 2026-08-26 dev-0.5.8 默认时钟闹钟通道
+
+- [x] 复现旧 `AlarmManager + Receiver + Notification` 仅创建 Newmark 内部提醒的问题。
+- [x] `create` 改用 `AlarmClock.ACTION_SET_ALARM` 并显示默认时钟确认界面。
+- [x] `list` 改用 `AlarmClock.ACTION_SHOW_ALARMS` 打开默认时钟闹钟列表。
+- [x] 移除 `SCHEDULE_EXACT_ALARM`、内部 AlarmReceiver 与虚假的跨应用 cancel/id 语义。
+- [x] 增加默认时钟系统协议回归契约。
+
+## 2026-08-26 dev-0.5.8 Android 压力门禁与 APK
+
+- [x] 全量 `testDebugUnitTest`：151 项，0 failure/error/skipped。
+- [x] 独立 `assembleStress` 压力变体构建成功。
+- [x] 正式 `lintVitalRelease`、R8、资源优化、签名与 `assembleRelease` 成功。
+- [ ] 实机 `mobile-agent-stress.ps1` 未执行：当前 `adb devices` 无连接设备/模拟器。
+
+## 2026-08-26 dev-0.5.8 移动端工具链与上下文结构
+
+- [x] 删除本地 Agent 写死的 6 轮工具调用上限及“轮次超限”伪错误。
+- [x] 工具链持续到最终响应、用户停止或真实 provider/tool 错误。
+- [x] 每个 provider 工具子轮重新检查 70% 自动压缩与 90% 强制安全压缩。
+- [x] 增加 PC 风格 request-scoped task focus、Guide 顺序和历史不可信数据边界。
+- [x] 请求焦点层只参与 transport，不进入显示历史、持久上下文或压缩摘要。
+- [x] 新增 `MobileAgentLoopContextParityContractTest`。
+- [x] request focus 移除消息数、工具数、模式和 message id 等动态字段，保证工具子轮 system 前缀字节稳定。
+- [x] 增加跨消息增长/模式/工具数量的 prompt cache 稳定性测试。
+
+## 2026-08-26 dev-0.5.8 文件占位恢复与富文档读取
+
+- [x] recent_files 合并 MediaStore 与已授权 DocumentProvider 文件集合。
+- [x] 返回 document_id、canonical_identity、provider_flags 与 placeholder 状态。
+- [x] content URI 读取通过 Asset/FileDescriptor 触发云端/系统优化占位内容恢复。
+- [x] 支持 PDF、DOC/DOCX、PPT/PPTX、CSV/TSV、XLS/XLSX 结构化读取。
+- [x] PDF 实现文字层→视觉模型→miniOCR→LLM 完整视觉退路并标注命中阶段。
+- [x] 新增 `RichDocumentAndPlaceholderContractTest`。
+
+## 2026-08-26 dev-0.5.8 移动端玻璃浮块重叠飞行
+
+- [x] 完整检索并建立既有浮块白名单，未将普通组件转换为玻璃。
+- [x] 浮起与移动并发，允许未抵达目标前开始落地收缩。
+- [x] 保证起点色块浮起与目标色块最终收缩两个硬边界。
+- [x] 对话胶囊、侧栏工具、右栏分页、记忆实验室分页、输入复合菜单统一接入。
+- [x] 长按/拖动期间保持浮起，松手后才落地；重定向复用当前浮块。
+- [x] 158 项 JVM 单测、Vital lint、R8、资源优化与 Release APK 构建通过。
+
+## 2026-08-26 dev-0.5.8 移动端取消 MD3 点击涟漪
+
+- [x] 完整检索 clickable、combinedClickable、indication 与 Material3 按钮入口。
+- [x] 在 NewmarkTheme 根部统一提供无绘制 indication。
+- [x] 保留点击/长按/拖动、禁用态、无障碍语义和自有动画。
+- [x] 新增 `GlobalNoRippleContractTest`，先红后绿。
+- [x] 完整 JVM 单测与 `lintVitalRelease` 通过。
+- [ ] Release APK 覆盖打包被现有 `app-release.apk` 的外部 Windows 文件锁阻止。
+
+## 2026-08-26 dev-0.5.8 移动端 Memory Lab PC parity
+
+- [x] 工具链补齐 read/query/update/delete/reindex。
+- [x] 支持 description、tagPaths、kind、reason/source 与 expectedUpdatedAt。
+- [x] 更新/删除前归档旧版本，追加 policy.jsonl，返回 rebuild receipt。
+- [x] 总览保持 PC 关系云视觉和移动端拖动/缩放/48dp 命中优化。
+- [x] 详情补齐元数据、标签路径、别名、Markdown、新增/编辑/重构/删除入口。
+- [x] 新增 PC parity 回归契约；161 项单测与 Vital lint 通过。
 # Mobile unified backend checklist (2026-08-18)
 
 - [x] Prevent historical/live WorkRuns from being appended at the transcript frontier.
@@ -335,6 +456,31 @@
 - [ ] Add local-vs-remote event-sequence conformance fixtures.
 
 ## 2026-08-18 mobile dev-0.4.51 gate
+
+## 2026-08-26 PC terminal backpressure
+
+- [x] PTY 输出按 20ms 窗口合并后跨 IPC 发送，保留历史上限 256 KiB。
+- [x] 普通终端与 Agent takeover 使用逐帧 DOM 追加，避免 `innerHTML +=` 全量重建。
+- [x] 新增 10,000 碎片压力回归 `test:terminal-output-stress`。
+
+## 2026-08-26 Mobile empty-response continuity
+
+- [x] 移动端 Agent build loop 仅对完全无活动的响应连续计数；正文、思考或工具调用均视为成功活动并清零计数。
+- [x] 仅 provider 明确失效空响应进入恢复；等待、静默、EOF、超时、流关闭不计为空响应。
+- [x] 明确失效后按 200ms、800ms、2s、10s、60s 执行 5 次重试，第 5 次仍失效才终止；任意正常响应清零计数并继续 build block。
+- [x] 新增 `MobileEmptyResponseRetryContractTest`，Debug 单测通过。
+- [x] 收敛 MemoryLab 工具暴露说明并声明结构化调用/输出格式，禁止 schema/index 噪声泄漏到对话。
+
+## 2026-08-26 Mobile local Agent response stabilization
+
+- [x] 统一所有移动端本地 Agent provider 调用经过空响应恢复层（主对话、视觉文档、OCR 校正、上下文摘要）。
+- [x] 仅 provider 明确失效空响应进入重试；依次等待 200ms、800ms、2s、10s、60s；仅思考结果不计为空并继续保持 Build。
+- [x] 出现正文或工具调用立即清零；部分正文后传输失败不重复渲染已展示内容。
+- [x] 完整 Debug 单元测试与恢复分类测试通过。
+- [x] 全调用点审计：ChatViewModel 仅在恢复层内部直接访问 ApiClient，主 Agent/视觉/OCR/压缩均统一接入。
+- [x] 基于响应恢复修复重新构建正式 Release APK，并完成 manifest/hash 校验。
+- [ ] 在已连接 Android 模拟器上完成长对话 + 空响应真实 UI 压测（当前 adb 无设备，脚本停在 waiting for device）。
+- [ ] Stress fixture pairing/remote Build state still fails on online emulator despite direct Intent launch and 35s wait; needs fixture/app remote-state investigation.
 
 - [x] 完整可发送页面五轮 `INTERACTIVE_READY_MS` 均 ≤4000ms：1963–2552ms。
 - [x] 五轮正式 Release 窗口内 FATAL/ANR/未响应/Launch timeout/进程死亡为 0。
@@ -349,3 +495,76 @@
 - [ ] 本地执行后端仍是移动端 Agent loop/Channel，尚未替换为 PC ConversationKernel 同一实现；不得宣称内核完全同构。
 - [x] Emulator 37.1.11 压力后的可见 gfxstream/QEMU hang 已定位；userdata 无损，`-no-cache` 已恢复可见竖屏和正式 App 前台。
 - [ ] 仍需在稳定的 emulator 版本补 4/8 vCPU 长时可见窗口矩阵；当前正式门禁覆盖 2 vCPU 最差档。
+
+## 2026-08-26 Mobile empty-response parser stability follow-up
+
+- [x] 修复 chat SSE 解析将完整 `choices[0].message` 帧误丢弃的问题，兼容增量与缓冲式 provider。
+- [x] 完全无活动但明确失效的响应按 200ms、800ms、2s、10s、60s 重试；第 5 次仍失效才结束；思考/正文/工具调用均清零计数。
+- [x] 新增完整 `message` 与“思考后正文”SSE 回归测试；Android Debug 单测 169 项通过。
+- [x] 重新构建 Release APK，产物哈希记录于归档。
+- [x] 对齐 PC 瞬态传输错误边界：思考阶段的 EOF/连接重置/超时进入连续恢复，不直接终止。
+
+## 2026-08-26 模型菜单玻璃拖动调度
+
+- [x] 模型列表结构与命中几何缓存。
+- [x] 移除拖动 Job/activeIndex 的 Compose 状态写入。
+- [x] 同一目标行重复指针事件去重。
+- [x] 位移/速度延迟到 graphicsLayer 更新阶段读取。
+- [x] 本地 Agent delta 以 16ms 窗口批量发布并在响应边界 flush。
+- [x] 新增模型菜单调度回归并更新既有玻璃/空响应契约。
+- [x] 171 项 JVM 测试、Vital lint、R8、Release APK 构建通过。
+- [ ] 连接模拟器或真机后采集模型二级菜单在本地 Agent 压力下的 `gfxinfo` 帧数据。
+
+## 2026-08-26 移动端同节点思考接续
+
+- [x] 复现同一 Build 内 thought-only provider 子轮反复生成独立“进行了思考”。
+- [x] 在事件源引入 `MobileThoughtContinuation`，不使用 UI 去重掩盖根因。
+- [x] 连续 thought-only 子轮接续同一节点；工具、正文、Guide、错误和终态形成真实边界。
+- [x] 流式 reasoning delta 与最终 reasoningContent 去重并保留完整内容。
+- [x] 1000 子轮压力测试保持 1 个 thought shell；174 项 JVM 测试零失败。
+- [x] Vital Lint、R8、Release APK 构建通过并记录 SHA-256。
+- [ ] 当前 ADB 无设备；连接模拟器或真机后补长对话真实 UI 压测。
+
+## 2026-08-26 移动端思考响应续接
+
+- [x] thought-only 子轮的下一请求携带前轮进度，不再原样重放相同上下文。
+- [x] 续接检查点限制为 12,000 字符并仅存在于当前 provider request。
+- [x] Guide、工具调用、正文、错误和 Build 终态清空临时续接状态。
+- [x] 较短或不兼容的最终 reasoning 不覆盖已显示流式内容。
+- [x] 1000 子轮保持单一 thought、检查点有界、最新进度存在且 durable messages 不变。
+- [x] 178 项 JVM 测试、Vital Lint、R8 与 Release assembly 通过。
+- [ ] 当前 ADB 无设备；补测真实 provider 长思考的中断/续接视觉表现。
+
+## 2026-08-26 thinking-mode 原生状态修复
+
+- [x] assistant 续思检查点改用 `reasoning_content`，普通 `content` 不再携带伪内部提示。
+- [x] transient reasoning 不进入 conversations.json、modelContext 或压缩历史。
+- [x] Chat SSE 必须收到 `[DONE]` 或 `finish_reason` 才确认完成；异常断流不自动重传。
+- [x] 只有 `length`、`max_tokens`、`max_output_tokens` 触发续思子轮。
+- [x] 当前部署的六个智能档位及 `thinking_tier_map` 同步传入 Chat Completions/Responses。
+- [x] 183 项 JVM 测试、Vital Lint、R8、Release APK 与 SHA-256 校验通过。
+- [ ] ADB 设备缺失，尚未完成真实 Provider 长思考 UI 回放。
+
+## 2026-08-27 工具参数上下文连续性
+
+- [x] PC/Android Chat Completions 支持标准增量、累计快照与完整重复参数帧。
+- [x] PC/Android Responses 支持累计参数；PC 兼容缺失 `output_item.done` 的完成流。
+- [x] PC Chat/GitHub Models 按工具 index 隔离交错并行参数。
+- [x] Android 工具执行器严格拒绝多个拼接 JSON 对象和非对象参数。
+- [x] 下一轮请求保留 assistant tool call、匹配 call id 的 tool result 与字节稳定历史前缀。
+- [x] PC 45 子轮缓存压力、provider/runtime/档位回归全部通过。
+- [x] Android 187 项测试、Vital Lint、R8、Release 构建及 APK v2 签名验证通过。
+- [ ] 连接 ADB 设备后用真实兼容供应商复放长对话；未执行前不声明实机闭环。
+
+## 2026-08-27 dev-0.5.8 全平台发布候选
+
+- [x] `npm run release:version-check`：desktop/android `0.5.8`，`versionCode=508`。
+- [x] `npm run release`：Desktop full release 与 Android unit/Vital Lint/R8/Release 全部通过。
+- [x] Windows `x64.msi` 与 `win-unpacked-x64.zip` 构建及打包态 smoke 通过。
+- [x] Linux AppImage、deb、unpacked ZIP 构建及 WSL GUI/Bash/sh smoke 通过。
+- [x] Android APK 复制到统一 release 目录，APK v2/Android Debug 证书校验通过。
+- [x] 六资产精确名称、大小、SHA-256 与隔离副本一致性验证通过。
+- [x] 临时验证副本已清理；未修改 `release-0.5.4/` 或用户现有工作树。
+- [ ] macOS DMG 需在 macOS 主机执行 `npm run dist:mac`；本机无法合法生成或验证。
+- [ ] Android 真机/模拟器安装与长对话回放待 ADB 设备接入。
+- [ ] GitHub prerelease 上传未授权，本次仅交付本地候选资产。

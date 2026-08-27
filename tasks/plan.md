@@ -1,3 +1,82 @@
+# Implementation Plan: Newmark Agent dev-0.5.8 连续空响应恢复与无动效历史展开
+
+## Overview
+
+dev-0.5.8 只处理两个明确问题：把模型空响应从“单次 Build 内累计两次重试”的局部规则改成“连续五次空响应才终止、任意正常响应立即清零”的连续失败状态机；把对话区 Build/历史展开彻底改成无玻璃、无动画、无延迟的直接切换。两项均先建立失败序列测试，再修改实现。
+
+## Architecture Decisions
+
+- 明确失效后最多重试 `5` 次：依次等待 200ms、800ms、2s、10s、60s；第 5 次重试仍失效才终止。无响应时间不设上限且不计为空。
+- 正常文本或至少一个有效 tool call 均立即把连续空响应计数清零。
+- abort、content filter、显式错误与 transport failure 不计为空响应，继续走现有专用策略。
+- 计数位于活跃响应的 provider-turn 编排边界，不绑定 UI Build 卡片，也不跨用户响应、会话或 Agent 泄漏。
+- Build/历史展开是原生内容披露：同步切换状态，禁止 glass、float、transition、animation、transform、scale、filter、chevron 动画和 timer；保留静态焦点提示与键盘操作。
+
+## Task 1: 建立空响应序列失败契约
+
+**Acceptance criteria:**
+- [ ] 明确失效按 5 次重试节奏终止；无响应等待不触发计数或超时。
+- [ ] `空×4 -> 文本 -> 空×4 -> 文本` 完成，证明文本清零。
+- [ ] `空×4 -> tool call -> 空×4 -> 文本` 完成，证明工具调用清零。
+- [ ] abort、content filter、显式错误、transport failure 不污染 empty streak。
+
+**Files likely touched:** `DESKTOP/src/tests/autoAgentIntegrationVerify.ts`, `DESKTOP/src/tests/emptyResponseRetryVerify.ts`
+
+## Task 2: 实现连续五次空响应状态机
+
+**Acceptance criteria:**
+- [ ] 阈值只定义一次，重试提示显示当前连续次数与 `/5`。
+- [ ] 第 1–4 次只重试同一 deployment，第 5 次只产生一次最终错误。
+- [ ] 正常文本/tool call 后立即清零；不跨响应、Build、会话、Agent 泄漏。
+- [ ] 不重复 user prompt、tool call、token 或持久化历史。
+- [ ] fallback off 始终保持同一 deployment；fallback on 仅在 empty policy 终止后按既有策略处理。
+
+**Verification:** `cd DESKTOP; npm run build`，并运行 focused fixture、auto agent integration、model recovery、normal chat regression。
+
+## Task 3: 建立无玻璃、无动效展开契约
+
+**Acceptance criteria:**
+- [ ] header/chevron computed style 无 animation、transition、transform、scale 与 hover/active filter。
+- [ ] click、Enter、Space 在同一任务内直接改变 collapsed/body 可见状态。
+- [ ] 激活过程不创建 `.liquid-selection-float`、canvas、pseudo-glass 或任何 transient overlay。
+
+**Files likely touched:** `DESKTOP/src/tests/pcGlassMigrationVerify.ts`, `DESKTOP/scripts/release-ui-work-review-bars-smoke.cjs`
+
+## Task 4: 实现完全即时的 Build/历史展开
+
+**Acceptance criteria:**
+- [ ] 鼠标与键盘展开/收起无 glass、fade、slide、scale、brightness、easing 或延迟。
+- [ ] chevron 只允许瞬时改变方向；body 继续直接 `display` 切换。
+- [ ] 保留静态 cursor 与 focus-visible；其他真正 selection 控件不受影响。
+- [ ] 连续切换至少 8 次仍只有一个 header、一个 badge、零玻璃节点。
+
+**Verification:** `npx tsx src/tests/pcGlassMigrationVerify.ts` 和真实 Electron disclosure smoke。
+
+## Task 5: 发布回归与文档
+
+**Acceptance criteria:**
+- [ ] focused tests、desktop full release、version check 全部通过。
+- [ ] README、OVERVIEW、taste、tasks、archive 与实现证据一致。
+
+**Verification:** `cd DESKTOP; npm run test:full-release`；`npm run release:version-check`。
+
+## Risks and Mitigations
+
+| Risk | Mitigation |
+| --- | --- |
+| tool 子轮次未触发清零 | 文本与 tool-call 使用独立序列测试 |
+| 把阈值误解为“初次空后再重试 5 次” | 明确第 5 个空 outcome 总计即终止，只追加 4 次请求 |
+| 重试重复历史 | 断言请求数及 user/tool 历史唯一性 |
+| 通用 button CSS 再次引入动效 | 组件级 `transition/animation: none` 加 Electron computed-style 门禁 |
+
+## Open Questions
+
+- 无。阈值语义固定为首次明确失效后允许 5 次重试，即第 5 次重试仍明确失效时累计 6 次连续明确失效并终止；任何思考、文本或有效工具调用清零。
+
+---
+
+## Historical Plans
+
 # Implementation Plan: Newmark Agent dev-0.5.7 玻璃交互、主题与模型回退修正
 
 ## Overview
@@ -823,3 +902,57 @@ dev-0.5.7 聚焦 11 项已确认问题：Android 远程非当前对话长按闪�
 4. In progress: 继续独立优化 Queue 展开/折叠 observer-free jank；无效的固定根高度和额外图层缓存方案已撤销。
 5. Completed: 800 事件远端 Goal/Flow/Queue 实时故障注入、重复事件与终态 stale running 防复活门禁。
 6. Pending: 继续本地 Queue/Guide/重启/出队长压。
+
+## 2026-08-26 dev-0.5.8 模型菜单玻璃拖动调度
+
+1. 完成：缓存模型分组、菜单条目、命中几何和 pointer keys，避免 Agent 更新带动重复构造。
+2. 完成：将动画 Job 与 activeIndex 移出 Snapshot 状态，同一目标行不重复重启 spring。
+3. 完成：位移和速度在 graphicsLayer 阶段读取，保持原玻璃材质、形变和飞行参数。
+4. 完成：Agent 流式 delta 按 16ms 有序合并主线程快照，终态前强制 flush。
+5. 完成：171 项单测、Vital lint、R8 和 Release 构建；待有 ADB 设备时补实际帧数据。
+
+## 2026-08-26 dev-0.5.8 移动端同节点思考接续
+
+1. 完成：以截图为故障证据，追踪 `runAgentLoop`、delta 批处理、WorkRun 投影与 Compose 呈现链路。
+2. 完成：确认每个 provider 子轮无条件 `thought → thought_result` 是重复节点根因。
+3. 完成：增加独立连续思考生命周期，thought-only 复用节点，工具/正文/Guide/错误/终态才关闭。
+4. 完成：对账流式 reasoning 与最终 reasoningContent，保留 16ms UI 发布和五次空响应恢复语义。
+5. 完成：1000 子轮压力、174 项 JVM 测试、Vital lint、R8、Release APK 构建。
+6. 待完成：ADB 设备接入后执行长对话真实 UI 回放，核验仅显示一个连续思考节点。
+
+## 2026-08-26 dev-0.5.8 移动端思考响应续接修复
+
+1. 完成：追踪 thought-only 控制流、request messages、SSE 对账与 PC Agent 会话续接边界。
+2. 完成：确认相同请求重放导致模型从头推理，最终 reasoning 覆盖 stream 导致可见截断。
+3. 完成：引入 Build 内有界 transient checkpoint，下一子轮请求携带进度且不进入 durable 历史。
+4. 完成：Guide、工具、正文、错误和终态清空续接状态；公开 reasoning 内容只增不减。
+5. 完成：1000 子轮、非持久化、不缩短与 Agent 接线回归；178 项 JVM 测试零失败。
+6. 完成：Vital Lint、R8 与 Release APK 构建；待 ADB 设备接入后补真实长对话回放。
+
+## 2026-08-26 dev-0.5.8 thinking-mode 原生状态修复
+
+1. 完成：从截图 400 追踪到 request-only continuation 被错误编码为普通 assistant `content`。
+2. 完成：新增 transient reasoning 字段并以 Chat Completions `reasoning_content` 回传，durable 历史不变。
+3. 完成：解析并保留 `finish_reason`；仅模型明确截断时续传，异常 EOF、静默和普通 stop 不重交。
+4. 完成：档位映射绑定当前供应商当前模型，验证六档及自定义原生档位在两条协议中完全一致。
+5. 完成：183 项 JVM 测试、Vital Lint、R8、Release assembly 与 APK 哈希校验。
+6. 待完成：当前无 ADB 设备；接入真实 provider 与移动设备后复核长思考截断续写及可见单节点表现。
+
+## 2026-08-27 dev-0.5.8 PC/移动端上下文重复执行修复
+
+1. 完成：从截图的 `settings_update` 参数错误追踪两端 provider 参数帧、工具执行和下一轮上下文。
+2. 完成：确认累计 `function.arguments` 快照被重复拼接是根因，最新 tool result 实际会进入下一轮。
+3. 完成：统一标准增量/累计快照/完整重复组装，并覆盖 Chat、Responses、GitHub Models 与并行调用。
+4. 完成：Android 执行器严格拒绝拼接对象，不再把非法参数静默降级或只读取第一个对象。
+5. 完成：锁定缓存结构，工具子轮只追加调用与结果，system/bootstrap 和既有消息前缀保持字节稳定。
+6. 完成：PC provider/runtime/cache 回归，Android 187 项单测、Vital Lint、R8、Release APK 与签名/哈希校验。
+7. 待完成：当前无 ADB 设备；真实供应商长对话复放不计为本轮已验证项目。
+
+## 2026-08-27 dev-0.5.8 全平台发布候选
+
+1. 完成：校验桌面端、Android 与根 `VERSION` 均为 `0.5.8`，Android `versionCode=508`。
+2. 完成：执行 `npm run release`，通过 Desktop full release、Android unit/Vital Lint/R8/Release 和 Windows/Linux/Android 打包。
+3. 完成：生成 Windows MSI/ZIP、Linux AppImage/deb/ZIP、Android APK 六资产。
+4. 完成：独立执行严格六资产名称、大小、SHA-256、Windows MSI/ZIP smoke 和 WSL Linux 三包 GUI/终端 smoke。
+5. 完成：APK v2 签名校验；记录 Android Debug 证书、Windows 未签名与未连接 ADB 设备边界。
+6. 未执行：GitHub Release 上传不在本次授权范围；macOS DMG 需要 macOS 构建主机，不属于当前六资产矩阵。

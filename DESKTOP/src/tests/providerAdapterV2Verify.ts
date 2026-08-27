@@ -14,6 +14,7 @@ import {
   normalizeProviderHeaders,
   RetryPolicy,
   filterRequestHeadersForDiagnostics,
+  assembleCompatibleToolArguments,
 } from '../providers';
 
 function check(cond: boolean, name: string, detail?: string): void {
@@ -108,6 +109,12 @@ async function main(): Promise<void> {
   const responsesUsage = normalizeProviderUsage({ input_tokens: 20, output_tokens: 7, cached_tokens: 3, total_tokens: 27 });
   check(!!responsesUsage && responsesUsage.inputTokens === 20 && responsesUsage.cacheReadTokens === 3, 'responses usage normalized with cache read');
   check(normalizeProviderUsage(null) === null, 'null usage normalizes to null');
+  check(assembleCompatibleToolArguments(['{\"json\":\"', 'value', '\"}']) === '{\"json\":\"value\"}',
+    'tool arguments preserve standard incremental fragments');
+  check(assembleCompatibleToolArguments(['{\"json\":\"a', '{\"json\":\"abc\"}']) === '{\"json\":\"abc\"}',
+    'tool arguments fold cumulative provider snapshots');
+  check(assembleCompatibleToolArguments(['{\"json\":\"abc\"}', '{\"json\":\"abc\"}']) === '{\"json\":\"abc\"}',
+    'tool arguments collapse repeated complete snapshots');
 
   // -------------------------------------------------------------------------
   // Header normalization + filtering
@@ -167,6 +174,101 @@ async function main(): Promise<void> {
     await chatServer.stop();
   }
 
+  const cumulativeChatServer = await startServer((_req, res, _body) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-settings","function":{"name":"settings_update","arguments":"{\\"json\\":\\"a"}}]}}]}\n\n');
+    res.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"json\\":\\"abc\\"}"}}]}}]}\n\n');
+    res.write('data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n');
+    res.write('data: [DONE]\n\n');
+    res.end();
+  });
+  try {
+    const request = sampleRequest('chat_completions');
+    request.baseUrl = `http://127.0.0.1:${cumulativeChatServer.port}/v1`;
+    const serialized = await chatAdapter.serializeRequest(request);
+    let argumentsJson = '';
+    for await (const event of chatAdapter.execute(serialized, new AbortController().signal)) {
+      if (event.type === 'tool_call.completed') argumentsJson = event.arguments;
+    }
+    check(argumentsJson === '{"json":"abc"}' && JSON.parse(argumentsJson).json === 'abc',
+      'chat cumulative tool snapshots produce one valid corrected JSON object');
+  } finally {
+    await cumulativeChatServer.stop();
+  }
+
+  const interleavedChatServer = await startServer((_req, res, _body) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-a","function":{"name":"tool_a","arguments":"{\\"value\\":\\""}},{"index":1,"id":"call-b","function":{"name":"tool_b","arguments":"{\\"value\\":\\""}}]}}]}\n\n');
+    res.write('data: {"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"B\\\"}"}},{"index":0,"function":{"arguments":"A\\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n');
+    res.write('data: [DONE]\n\n');
+    res.end();
+  });
+  try {
+    const request = sampleRequest('chat_completions');
+    request.baseUrl = `http://127.0.0.1:${interleavedChatServer.port}/v1`;
+    const serialized = await chatAdapter.serializeRequest(request);
+    const calls = new Map<string, string>();
+    for await (const event of chatAdapter.execute(serialized, new AbortController().signal)) {
+      if (event.type === 'tool_call.completed') calls.set(event.name, event.arguments);
+    }
+    check(calls.get('tool_a') === '{"value":"A"}' && calls.get('tool_b') === '{"value":"B"}',
+      'interleaved parallel tool argument fragments remain isolated by call index');
+  } finally {
+    await interleavedChatServer.stop();
+  }
+
+  const cachePrefixMessages = sampleRequest('chat_completions').messages;
+  const cacheFollowUp = sampleRequest('chat_completions');
+  cacheFollowUp.messages = [
+    ...cachePrefixMessages,
+    { role: 'assistant', content: '', toolCalls: [{ id: 'call-settings', name: 'settings_update', arguments: '{"json":"abc"}' }] },
+    { role: 'tool', content: '{"ok":false,"error":"fixture"}', toolCallId: 'call-settings', name: 'settings_update' },
+  ];
+  const cacheFollowUpBody = await chatAdapter.serializeRequest(cacheFollowUp);
+  const cacheFollowUpMessages = cacheFollowUpBody.body.messages as Array<Record<string, unknown>>;
+  check(JSON.stringify(cacheFollowUpMessages.slice(1, 1 + cachePrefixMessages.length)) === JSON.stringify(chatMessages.slice(1)),
+    'tool subround keeps the prior chat prefix byte-stable for provider caching');
+  check(cacheFollowUpMessages.at(-2)?.role === 'assistant' && cacheFollowUpMessages.at(-1)?.role === 'tool'
+    && cacheFollowUpMessages.at(-1)?.tool_call_id === 'call-settings',
+  'tool subround appends the corrected call and matching result at the context frontier');
+
+  const chatEofServer = await startServer((_req, res, _body) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.end();
+  });
+  try {
+    const request = sampleRequest('chat_completions');
+    request.baseUrl = `http://127.0.0.1:${chatEofServer.port}/v1`;
+    const serialized = await chatAdapter.serializeRequest(request);
+    const failures: string[] = [];
+    for await (const event of chatAdapter.execute(serialized, new AbortController().signal)) {
+      if (event.type === 'response.failed') failures.push(event.error);
+    }
+    check(failures.some(error => error.includes('ended before an explicit completion')),
+      'chat EOF without activity is a transport failure, not an explicit empty completion');
+    check(!failures.some(error => /provider returned an empty response/i.test(error)),
+      'chat EOF never emits the empty-response retry marker');
+  } finally {
+    await chatEofServer.stop();
+  }
+
+  const chatExplicitEmptyServer = await startServer((_req, res, _body) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write('data: [DONE]\n\n');
+    res.end();
+  });
+  try {
+    const request = sampleRequest('chat_completions');
+    request.baseUrl = `http://127.0.0.1:${chatExplicitEmptyServer.port}/v1`;
+    const serialized = await chatAdapter.serializeRequest(request);
+    const events: string[] = [];
+    for await (const event of chatAdapter.execute(serialized, new AbortController().signal)) events.push(event.type);
+    check(events.includes('response.completed') && !events.includes('response.failed'),
+      'chat explicit empty completion reaches the kernel empty-response classifier');
+  } finally {
+    await chatExplicitEmptyServer.stop();
+  }
+
   const responsesServer = await startServer((_req, res, _body) => {
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     res.write('event: response.output_text.delta\ndata: {"delta":"World"}\n\n');
@@ -194,6 +296,65 @@ async function main(): Promise<void> {
     check(events.includes('response.completed'), 'responses stream completes');
   } finally {
     await responsesServer.stop();
+  }
+
+  const cumulativeResponsesServer = await startServer((_req, res, _body) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write('event: response.output_item.added\ndata: {"item":{"id":"fc-snapshot","type":"function_call","call_id":"fc-snapshot","name":"settings_update","arguments":""}}\n\n');
+    res.write('event: response.function_call_arguments.delta\ndata: {"item_id":"fc-snapshot","delta":"{\\"json\\":\\"a"}\n\n');
+    res.write('event: response.function_call_arguments.delta\ndata: {"item_id":"fc-snapshot","delta":"{\\"json\\":\\"abc\\"}"}\n\n');
+    res.write('event: response.completed\ndata: {"response":{"status":"completed"}}\n\n');
+    res.end();
+  });
+  try {
+    const request = sampleRequest('responses');
+    request.baseUrl = `http://127.0.0.1:${cumulativeResponsesServer.port}/v1`;
+    const serialized = await responsesAdapter.serializeRequest(request);
+    let argumentsJson = '';
+    for await (const event of responsesAdapter.execute(serialized, new AbortController().signal)) {
+      if (event.type === 'tool_call.completed') argumentsJson = event.arguments;
+    }
+    check(argumentsJson === '{"json":"abc"}',
+      'Responses cumulative snapshots complete without output_item.done and remain valid JSON');
+  } finally {
+    await cumulativeResponsesServer.stop();
+  }
+
+  const responsesExplicitEmptyServer = await startServer((_req, res, _body) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write('event: response.completed\ndata: {"response":{"status":"completed"}}\n\n');
+    res.end();
+  });
+  try {
+    const request = sampleRequest('responses');
+    request.baseUrl = `http://127.0.0.1:${responsesExplicitEmptyServer.port}/v1`;
+    const serialized = await responsesAdapter.serializeRequest(request);
+    const failures: string[] = [];
+    for await (const event of responsesAdapter.execute(serialized, new AbortController().signal)) {
+      if (event.type === 'response.failed') failures.push(event.error);
+    }
+    check(failures.some(error => /provider returned an empty response/i.test(error)),
+      'Responses explicit empty completion emits the shared retry marker');
+  } finally {
+    await responsesExplicitEmptyServer.stop();
+  }
+
+  const responsesThoughtOnlyServer = await startServer((_req, res, _body) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write('event: response.reasoning_summary_text.delta\ndata: {"item_id":"rs-1","summary_index":0,"delta":"checking"}\n\n');
+    res.write('event: response.completed\ndata: {"response":{"status":"completed"}}\n\n');
+    res.end();
+  });
+  try {
+    const request = sampleRequest('responses');
+    request.baseUrl = `http://127.0.0.1:${responsesThoughtOnlyServer.port}/v1`;
+    const serialized = await responsesAdapter.serializeRequest(request);
+    const events: string[] = [];
+    for await (const event of responsesAdapter.execute(serialized, new AbortController().signal)) events.push(event.type);
+    check(events.includes('reasoning.summary.delta') && events.includes('response.completed') && !events.includes('response.failed'),
+      'Responses reasoning delta is successful activity even without text or tools');
+  } finally {
+    await responsesThoughtOnlyServer.stop();
   }
 
   // -------------------------------------------------------------------------

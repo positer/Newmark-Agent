@@ -55,14 +55,16 @@ class ConversationStore(context: Context) {
         return conversations.map { conversation ->
             val normalizedMessages = conversation.messages
                 .orEmpty()
-                .map { it.copy(imageAttachments = it.imageAttachments.orEmpty()) }
+                .map { it.copy(reasoningContent = "", imageAttachments = it.imageAttachments.orEmpty()) }
             val normalizedContext = conversation.modelContext
                 .orEmpty()
-                .map { it.copy(imageAttachments = it.imageAttachments.orEmpty()) }
+                .map { it.copy(reasoningContent = "", imageAttachments = it.imageAttachments.orEmpty()) }
             val normalizedBranch = conversation.branchTree?.let { tree ->
                 tree.copy(
                     nodes = tree.nodes.mapValues { (_, node) ->
-                        node.copy(messages = node.messages.orEmpty().map { it.copy(imageAttachments = it.imageAttachments.orEmpty()) })
+                        node.copy(messages = node.messages.orEmpty().map {
+                            it.copy(reasoningContent = "", imageAttachments = it.imageAttachments.orEmpty())
+                        })
                     },
                 )
             }

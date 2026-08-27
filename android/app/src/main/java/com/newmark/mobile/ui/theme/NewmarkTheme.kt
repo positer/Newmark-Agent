@@ -1,6 +1,9 @@
 package com.newmark.mobile.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.IndicationNodeFactory
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -11,6 +14,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.node.DelegatableNode
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -33,6 +37,17 @@ val NewmarkAccentBorder = Color(0x665B78FF)
 
 val NewmarkBorder = Color(0x1AFFFFFF)         // 白 10%
 val NewmarkBorder2 = Color(0x33FFFFFF)        // 白 20%
+
+/** Global mobile interaction policy: clicks keep semantics and gestures, but draw no MD3 ripple. */
+private object NoVisualIndication : IndicationNodeFactory {
+    override fun create(interactionSource: InteractionSource): DelegatableNode = NoVisualIndicationNode()
+
+    override fun equals(other: Any?): Boolean = other === this
+
+    override fun hashCode(): Int = javaClass.hashCode()
+}
+
+private class NoVisualIndicationNode : androidx.compose.ui.Modifier.Node()
 val NewmarkScrim = Color(0x73000000)          // rgba(0,0,0,.45)
 
 // 亮色 token（.light）
@@ -243,6 +258,7 @@ fun NewmarkTheme(
 ) {
     CompositionLocalProvider(
         LocalNewmarkPalette provides if (darkTheme) NewmarkDarkPalette else NewmarkLightPalette,
+        LocalIndication provides NoVisualIndication,
     ) {
         MaterialTheme(
             colorScheme = if (darkTheme) NewmarkDarkColors else NewmarkLightColors,

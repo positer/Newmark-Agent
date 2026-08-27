@@ -9,7 +9,7 @@ import {
   SerializedProviderRequest,
   TokenEstimate,
 } from './provider-adapter';
-import { estimateRequestTokens, normalizeProviderUsage, defaultProviderTransport, providerErrorText, isContentPolicyBlocked, readProviderStreamChunk } from './provider-events';
+import { assembleCompatibleToolArguments, estimateRequestTokens, normalizeProviderUsage, defaultProviderTransport, providerErrorText, isContentPolicyBlocked, readProviderStreamChunk } from './provider-events';
 import { normalizeProviderHeaders } from './provider-headers';
 import { openAIToolName, openAIChatMessages } from './chat-messages';
 
@@ -129,6 +129,8 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
     let contentPolicyBlocked = false;
     let emittedContent = false;
     let emittedTool = false;
+    let emittedReasoning = false;
+    let explicitCompletion = false;
     try {
       while (true) {
         const { done, value } = await readProviderStreamChunk(reader, signal);
@@ -140,7 +142,10 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
           const trimmed = line.trim();
           if (!trimmed.startsWith('data: ')) continue;
           const data = trimmed.slice(6);
-          if (data === '[DONE]') continue;
+          if (data === '[DONE]') {
+            explicitCompletion = true;
+            continue;
+          }
           let json: Record<string, unknown>;
           try { json = JSON.parse(data) as Record<string, unknown>; } catch { continue; }
           if (json.usage) {
@@ -149,11 +154,16 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
           }
           if (isContentPolicyBlocked(json)) contentPolicyBlocked = true;
           const choices = Array.isArray(json.choices) ? json.choices : [];
-          const delta = (choices[0] as Record<string, unknown> | undefined)?.delta as Record<string, unknown> | undefined;
+          const choice = choices[0] as Record<string, unknown> | undefined;
+          if (choice?.finish_reason !== undefined && choice.finish_reason !== null) explicitCompletion = true;
+          const delta = choice?.delta as Record<string, unknown> | undefined;
           if (!delta) continue;
           if (delta.reasoning_content) {
             const reasoning = this.extractText(delta.reasoning_content);
-            if (reasoning) yield { type: 'reasoning.summary.delta', delta: reasoning };
+            if (reasoning) {
+              emittedReasoning = true;
+              yield { type: 'reasoning.summary.delta', delta: reasoning };
+            }
           }
           const textDelta = this.extractText(delta.content);
           if (textDelta) {
@@ -200,11 +210,15 @@ export class ChatCompletionsAdapter implements ModelProviderAdapter {
             type: 'tool_call.completed',
             id: currentToolCall.id,
             name: currentToolCall.name,
-            arguments: currentToolCall.argumentParts.join(''),
+            arguments: assembleCompatibleToolArguments(currentToolCall.argumentParts),
           };
         }
       } else if (!emittedContent && !emittedTool && contentPolicyBlocked) {
         yield { type: 'response.failed', error: '[Error] Content policy refusal (content_filter).' };
+        return;
+      }
+      if (!explicitCompletion && !emittedContent && !emittedTool && !emittedReasoning) {
+        yield { type: 'response.failed', error: '[LLM Error] Chat stream ended before an explicit completion.' };
         return;
       }
       yield { type: 'response.completed' };

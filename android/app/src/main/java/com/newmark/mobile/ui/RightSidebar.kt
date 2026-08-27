@@ -118,6 +118,7 @@ import com.newmark.mobile.ui.components.MobilePopupShape
 import com.newmark.mobile.ui.components.MobileInteractionGlassEdge
 import com.newmark.mobile.ui.components.liquidMotionDeformation
 import com.newmark.mobile.ui.components.liquidSelectionMorph
+import com.newmark.mobile.ui.components.runOverlappedLiquidFlight
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
 import com.newmark.mobile.ui.components.LocalSidebarGestureLock
 import com.kyant.backdrop.backdrops.layerBackdrop
@@ -461,18 +462,12 @@ private fun RightTabs(
             }
             val targetX = glassLeft(index)
             val staysInPlace = kotlin.math.abs(glassX.value - targetX) < 0.5f
-            kotlinx.coroutines.yield()
-            lifting = false
-            if (staysInPlace) {
-                delay(100)
-            } else {
-                glassX.animateTo(
-                    targetX,
-                    tween(380, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
-                )
-            }
-            landing = true
-            delay(240)
+            runOverlappedLiquidFlight(
+                lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) },
+                move = { if (!staysInPlace) glassX.animateTo(targetX, tween(380, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f))) },
+                onLandingStarted = { landing = true },
+                land = { delay(240) },
+            )
             landing = false
             moving = false
             visualSelectedIndex = index
@@ -491,11 +486,11 @@ private fun RightTabs(
             draggingGlass = false
             draggedGlassVelocityX = 0f
             if (!redirecting) glassX.snapTo(glassLeft(selectedIndex))
-            kotlinx.coroutines.yield()
-            lifting = false
-            glassX.animateTo(
-                glassLeft(index),
-                tween(380, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
+            runOverlappedLiquidFlight(
+                holdKeepsLifted = true,
+                lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) },
+                move = { glassX.animateTo(glassLeft(index), tween(380, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f))) },
+                onLandingStarted = {}, land = {},
             )
         }
     }
@@ -540,12 +535,12 @@ private fun RightTabs(
                                      lifting = false
                                      glassX.snapTo(draggedGlassX)
                                      draggingGlass = false
-                                     glassX.animateTo(
-                                         glassLeft(commit),
-                                         tween(120, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)),
+                                     runOverlappedLiquidFlight(
+                                         lift = {},
+                                         move = { glassX.animateTo(glassLeft(commit), tween(120, easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f))) },
+                                         onLandingStarted = { landing = true },
+                                         land = { delay(240) },
                                      )
-                                     landing = true
-                                    delay(240)
                                     landing = false
                                     moving = false
                                     draggingGlass = false

@@ -17,11 +17,11 @@ class LiquidMotionConcurrencyContractTest {
         listOf(sidebar, right, memory, chat).forEach { source ->
             assertFalse(source.contains("delay(220"))
         }
-        assertTrue(sidebar.contains("launch { localConversationGlassY.animateTo(target.top"))
-        assertTrue(sidebar.contains("launch { flyingGlassY.animateTo(target.top"))
-        assertTrue(right.contains("kotlinx.coroutines.yield()\n            lifting = false"))
-        assertTrue(memory.contains("kotlinx.coroutines.yield()\n            lifting = false"))
-        assertTrue(chat.contains("activeOffsetPx.animateTo(targetOffset, tween(durationMillis = 240"))
+        assertTrue(sidebar.contains("move = { localConversationGlassY.animateTo(target.top"))
+        assertTrue(sidebar.contains("move = { flyingGlassY.animateTo(target.top"))
+        assertTrue(right.contains("holdKeepsLifted = true"))
+        assertTrue(memory.contains("holdKeepsLifted = true"))
+        assertTrue(chat.contains("runOverlappedLiquidFlight("))
         assertTrue(right.contains("fun holdAt(index: Int)"))
         assertTrue(memory.contains("fun holdAt(index: Int)"))
         assertTrue(chat.contains("fun beginHeldSelection(index: Int)"))

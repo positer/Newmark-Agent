@@ -5,12 +5,19 @@ import org.junit.Test
 
 class LocalToolContractTest {
     @Test
+    fun executorRejectsConcatenatedToolArgumentObjectsInsteadOfUsingTheFirstOne() {
+        assertEquals(true, parseToolArgumentsObject("{\"json\":\"ok\"}").isSuccess)
+        assertEquals(true, parseToolArgumentsObject("{\"json\":\"old\"}{\"json\":\"corrected\"}").isFailure)
+        assertEquals(true, parseToolArgumentsObject("[]").isFailure)
+    }
+
+    @Test
     fun buildExposesEverySupportedLocalAgentCapability() {
         assertEquals(
             setOf(
-                "read_file", "write_file", "list_dir",
+                "read_file", "write_file", "list_dir", "recent_files",
                 "terminal_exec",
-                "memory_lab_read", "memory_lab_query", "memory_lab_update", "memory_lab_reindex",
+                "memory_lab_read", "memory_lab_query", "memory_lab_update", "memory_lab_delete", "memory_lab_reindex",
                 "settings_read", "settings_update",
                 "web_search", "web_fetch", "browser_use",
                 "task_read", "task_create",
@@ -58,28 +65,31 @@ class LocalToolContractTest {
     }
 
     @Test
-    fun alarmToolUsesSystemAlarmManagerAndExactAlarmBoundary() {
+    fun alarmToolDelegatesToTheDefaultSystemClockApplication() {
         val manifest = java.io.File("src/main/AndroidManifest.xml").readText()
-        val app = java.io.File("src/main/java/com/newmark/mobile/ui/NewmarkApp.kt").readText()
         val alarm = java.io.File("src/main/java/com/newmark/mobile/data/AlarmTool.kt").readText()
         val definitions = java.io.File("src/main/java/com/newmark/mobile/data/LocalTools.kt").readText()
         val viewModel = java.io.File("src/main/java/com/newmark/mobile/vm/ChatViewModel.kt").readText()
-        assertEquals(true, manifest.contains("android.permission.SCHEDULE_EXACT_ALARM"))
-        assertEquals(true, manifest.contains(".data.AlarmReceiver"))
-        assertEquals(true, alarm.contains("AlarmManager"))
-        assertEquals(true, alarm.contains("setExactAndAllowWhileIdle"))
-        assertEquals(true, alarm.contains("setAndAllowWhileIdle"))
-        assertEquals(true, alarm.contains("AlarmReceiver"))
-        assertEquals(true, app.contains("ACTION_REQUEST_SCHEDULE_EXACT_ALARM"))
-        assertEquals(true, app.contains("bindLocalAlarmTool"))
+        assertEquals(true, manifest.contains("com.android.alarm.permission.SET_ALARM"))
+        assertEquals(false, manifest.contains("android.permission.SCHEDULE_EXACT_ALARM"))
+        assertEquals(false, manifest.contains(".data.AlarmReceiver"))
+        assertEquals(true, alarm.contains("AlarmClock.ACTION_SET_ALARM"))
+        assertEquals(true, alarm.contains("AlarmClock.ACTION_SHOW_ALARMS"))
+        assertEquals(true, alarm.contains("AlarmClock.EXTRA_HOUR"))
+        assertEquals(true, alarm.contains("AlarmClock.EXTRA_MINUTES"))
+        assertEquals(true, alarm.contains("AlarmClock.EXTRA_SKIP_UI, false"))
+        assertEquals(true, alarm.contains("默认时钟应用"))
+        assertEquals(false, alarm.contains("AlarmManager"))
+        assertEquals(false, alarm.contains("AlarmReceiver"))
         assertEquals(true, viewModel.contains("\"alarm_manage\" -> localAlarmToolHandler?.invoke(args)"))
-        assertEquals(true, definitions.contains("\"alarm_manage\""))
+        assertEquals(true, definitions.contains("通过 Android 默认时钟应用创建和查看系统闹钟"))
+        assertEquals(true, definitions.contains("create|list"))
     }
 
     @Test
     fun planKeepsOnlyReadOnlyToolsAndReadOnlyBrowserActions() {
         assertEquals(setOf(
-            "read_file", "list_dir", "memory_lab_read", "memory_lab_query", "settings_read",
+            "read_file", "list_dir", "recent_files", "memory_lab_read", "memory_lab_query", "settings_read",
             "web_search", "web_fetch", "browser_use", "task_read", "calendar_read",
         ), LocalToolCatalog.planNames)
         assertEquals(setOf("observe", "navigate", "wait", "extract"), LocalToolCatalog.planBrowserActions)

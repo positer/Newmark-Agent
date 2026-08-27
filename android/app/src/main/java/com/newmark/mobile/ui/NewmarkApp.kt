@@ -456,18 +456,7 @@ private fun NewmarkAppContent(
     }
     DisposableEffect(vm, context) {
         val handler: suspend (org.json.JSONObject) -> com.newmark.mobile.data.ToolResult = { args ->
-            val action = args.optString("action").trim().lowercase()
-            if (action == "create" && args.optBoolean("exact", true) && !AlarmTool.canScheduleExact(context)) {
-                runCatching {
-                    context.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
-                        data = Uri.parse("package:${context.packageName}")
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    })
-                }
-                com.newmark.mobile.data.ToolResult.err("请在系统页面允许精确闹钟权限后重新执行 alarm_manage create")
-            } else {
-                AlarmTool.manage(context, args)
-            }
+            AlarmTool.manage(context, args)
         }
         vm.bindLocalAlarmTool(handler)
         onDispose { vm.unbindLocalAlarmTool(handler) }
@@ -631,7 +620,7 @@ private fun NewmarkAppContent(
     }
     // Pair ownership, rather than transient connectivity, keeps the remote
     // transcript mounted while Connecting/Reconnecting/Disconnected changes.
-    var preferLocal by remember { mutableStateOf(false) }
+    var preferLocal by remember { mutableStateOf(true) }
     val useRemote = shouldPresentRemoteConversation(preferLocal, linkVm.pairInfo != null)
     val browserTargetKey = if (useRemote) {
         "remote:${linkVm.selectedConversationWorkspaceId.orEmpty()}:${linkVm.selectedConversationId.orEmpty()}"

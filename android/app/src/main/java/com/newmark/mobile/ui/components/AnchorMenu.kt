@@ -1,8 +1,14 @@
 package com.newmark.mobile.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -165,10 +172,13 @@ fun AnchorMenu(
     contentPadding: Dp = 4.dp,
     showScrollbar: Boolean = false,
     usePcPopoverBehavior: Boolean = viewportMargin > 0.dp,
+    transformOrigin: TransformOrigin = TransformOrigin.Center,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val p = LocalNewmarkPalette.current
-    if (!expanded) return
+    val menuVisibility = remember { MutableTransitionState(false) }
+    menuVisibility.targetState = expanded
+    if (!menuVisibility.currentState && !menuVisibility.targetState) return
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
     val safeDrawingInsets = WindowInsets.safeDrawing
@@ -262,10 +272,19 @@ fun AnchorMenu(
                 }
             }
         }
-        // Keep the transparent Popup surface stationary. Moving the whole
-        // hardware layer leaves stale rectangular buffers on some Android
-        // renderers; interaction motion belongs to each glass menu row.
-        menu()
+        AnimatedVisibility(
+            visibleState = menuVisibility,
+            enter = fadeIn(tween(180)) + scaleIn(
+                initialScale = 0.82f,
+                transformOrigin = transformOrigin,
+                animationSpec = tween(180),
+            ),
+            exit = fadeOut(tween(150)) + scaleOut(
+                targetScale = 0.82f,
+                transformOrigin = transformOrigin,
+                animationSpec = tween(170),
+            ),
+        ) { menu() }
     }
 }
 

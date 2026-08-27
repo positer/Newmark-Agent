@@ -2537,9 +2537,12 @@ button.left-ws-item {
   text-align: left;
   cursor: pointer;
   font: 600 12px var(--font);
+  transition: none !important;
+  animation: none !important;
+  transform: none !important;
 }
 
-.conversation-work-run-head:hover { color: var(--text-bright); }
+.conversation-work-run-head:hover { color: var(--text-bright); filter: none; }
 
 .conversation-work-run-chevron {
   width: 8px;
@@ -2548,7 +2551,7 @@ button.left-ws-item {
   border-right: 1px solid var(--text-dim);
   border-bottom: 1px solid var(--text-dim);
   transform: rotate(45deg);
-  transition: transform 150ms ease;
+  transition: none;
 }
 
 .conversation-work-run.collapsed .conversation-work-run-chevron { transform: rotate(-45deg); }
@@ -16087,6 +16090,57 @@ var _terminalCounter = 0;
 var _terminalTakeoverTabs = {};
 var _terminalTakeoverRefreshToken = 0;
 var _terminalTakeoverDetached = {};
+var _terminalOutputLimit = 256 * 1024;
+
+window.appendTerminalOutput = function(output, text, style) {
+  if (!output || !text) return;
+  var state = output._terminalRenderState;
+  if (!state) state = output._terminalRenderState = { pending: [], frame: 0 };
+  state.pending.push({ text: String(text), style: style || null });
+  if (state.frame) return;
+  state.frame = requestAnimationFrame(function() {
+    state.frame = 0;
+    if (!output.isConnected) { state.pending.length = 0; return; }
+    var nearBottom = output.scrollHeight - output.scrollTop - output.clientHeight <= 32;
+    var fragment = document.createDocumentFragment();
+    for (var i = 0; i < state.pending.length; i++) {
+      var item = state.pending[i];
+      if (item.style) {
+        var span = document.createElement('span');
+        span.textContent = item.text;
+        if (item.style.color) span.style.color = item.style.color;
+        if (item.style.opacity) span.style.opacity = item.style.opacity;
+        fragment.appendChild(span);
+      } else {
+        fragment.appendChild(document.createTextNode(item.text));
+      }
+    }
+    state.pending.length = 0;
+    output.appendChild(fragment);
+    var overflow = output.textContent.length - _terminalOutputLimit;
+    while (overflow > 0 && output.firstChild) {
+      var first = output.firstChild;
+      var length = first.textContent.length;
+      if (length <= overflow) {
+        output.removeChild(first);
+        overflow -= length;
+      } else {
+        first.textContent = first.textContent.slice(overflow);
+        overflow = 0;
+      }
+    }
+    if (nearBottom) output.scrollTop = output.scrollHeight;
+  });
+};
+
+window.setTerminalOutput = function(output, text, style) {
+  if (!output) return;
+  var state = output._terminalRenderState;
+  if (state && state.frame) cancelAnimationFrame(state.frame);
+  output._terminalRenderState = { pending: [], frame: 0 };
+  output.textContent = '';
+  window.appendTerminalOutput(output, text, style);
+};
 
 window.portableTerminalWorkspacePath = function(input) {
   var raw = String(input || '').trim().replace(/\\/g, '/').replace(/\/+$/g, '');
@@ -16169,14 +16223,14 @@ window.terminalSend = function() {
   if (takeoverSession) {
     input.value = '';
     if (!api.terminalTakeoverWrite) {
-      if (output) output.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('terminal.notConnected')) + ']</span>';
+      if (output) window.appendTerminalOutput(output, '\r\n[' + t('terminal.notConnected') + ']', { color:'#ff6666' });
       return;
     }
     var takeoverConversation = pane.getAttribute('data-takeover-conversation') || activeConversationId();
     api.terminalTakeoverWrite(takeoverSession, cmd, takeoverConversation).then(function(result) {
       if (result && result.ok === false) throw new Error(result.error || 'Terminal write failed');
     }).catch(function(err) {
-      if (output) output.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('common.error')) + '] ' + esc(err.message) + '</span>';
+      if (output) window.appendTerminalOutput(output, '\r\n[' + t('common.error') + '] ' + err.message, { color:'#ff6666' });
     });
     return;
   }
@@ -16195,12 +16249,12 @@ window.terminalSend = function() {
       input.disabled = false;
       var currentPane = window.getActiveTerminalPane();
       var currentOutput = (currentPane && currentPane.querySelector('.terminal-output')) || output;
-      if (currentOutput) currentOutput.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('common.error')) + '] ' + esc(err.message || String(err)) + '</span>';
+      if (currentOutput) window.appendTerminalOutput(currentOutput, '\r\n[' + t('common.error') + '] ' + (err.message || String(err)), { color:'#ff6666' });
     });
   }
   input.value = '';
   api.terminalWrite(sessionId, cmd + '\r').catch(function(err) {
-    if (output) output.innerHTML += '\r\n<span style="color:#ff6666;">[' + esc(t('common.error')) + '] ' + esc(err.message) + '</span>';
+    if (output) window.appendTerminalOutput(output, '\r\n[' + t('common.error') + '] ' + err.message, { color:'#ff6666' });
   });
 };
 
@@ -16214,7 +16268,7 @@ window.clearTerminal = function() {
     api.terminalKill(sessionId, state.terminalInterruptTimeoutMs || 0).catch(function(){});
     pane.setAttribute('data-session', '');
   }
-  if (output) output.innerHTML = '';
+  if (output) window.setTerminalOutput(output, '');
   if (prompt) prompt.textContent = '>';
 };
 
@@ -16324,12 +16378,12 @@ window.addTerminalTab = function(shellId, options) {
   var terminalReadyPromise = terminalSpawnPromise.then(function(resp) {
     pane.setAttribute('data-session', resp.sessionId);
     var out = pane.querySelector('.terminal-output');
-    if (out) out.innerHTML = '<span style="color:var(--accent2);">' + esc(t('terminal.connected')) + ' (' + esc(shellId) + ')</span>\r\n';
+    if (out) window.setTerminalOutput(out, t('terminal.connected') + ' (' + shellId + ')\r\n', { color:'var(--accent2)' });
     state._terminalActiveSession = resp.sessionId;
     return resp;
   }).catch(function(err) {
     var out = pane.querySelector('.terminal-output');
-    if (out) out.innerHTML = '<span style="color:#ff6666;">' + esc(t('terminal.failed')) + ': ' + esc(err.message) + '</span>';
+    if (out) window.setTerminalOutput(out, t('terminal.failed') + ': ' + err.message, { color:'#ff6666' });
     if (options.required === true) throw err;
     return null;
   });
@@ -16444,13 +16498,12 @@ window.applyTerminalTakeoverEvent = function(payload) {
   var output = pane.querySelector('.terminal-output');
   if (!output) return;
   if (payload.type === 'started' && session.buffer) {
-    output.innerHTML = esc(session.buffer);
+    window.setTerminalOutput(output, session.buffer);
   } else if (payload.data) {
-    output.innerHTML += esc(payload.data);
+    window.appendTerminalOutput(output, payload.data);
   } else if (payload.type === 'stopped') {
-    output.innerHTML += '\r\n<span style="color:var(--text-dim);opacity:0.65;">[Agent takeover stopped]</span>';
+    window.appendTerminalOutput(output, '\r\n[Agent takeover stopped]', { color:'var(--text-dim)', opacity:'0.65' });
   }
-  output.scrollTop = output.scrollHeight;
   if (!active) window.pruneTerminalTakeoverEndedPanes(session.id);
 };
 
@@ -16570,16 +16623,14 @@ if (api.onTerminalData) {
       .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
       .replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '')
       .replace(/\r(?!\n)/g, '');
-    var text = clean.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    output.innerHTML += text;
-    output.scrollTop = output.scrollHeight;
+    window.appendTerminalOutput(output, clean);
   });
   api.onTerminalExit(function(event, sessionId, code) {
     var pane = document.querySelector('.terminal-pane[data-session="' + sessionId + '"]');
     if (!pane) return;
     pane.setAttribute('data-session', '');
     var output = pane.querySelector('.terminal-output');
-    if (output) output.innerHTML += '\r\n<span style="color:var(--text-dim);opacity:0.5;">[Process exited code=' + code + ']</span>';
+    if (output) window.appendTerminalOutput(output, '\r\n[Process exited code=' + code + ']', { color:'var(--text-dim)', opacity:'0.5' });
   });
 }
 

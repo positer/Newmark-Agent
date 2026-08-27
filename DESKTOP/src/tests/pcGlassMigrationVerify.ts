@@ -288,6 +288,10 @@ function main(): void {
   check(/\.msg-action-btn::after,[\s\S]*button\.conversation-work-run-head::after,[\s\S]*button\.shell-block-header::after,[\s\S]*button\.diff-block-header::after,[\s\S]*button\.work-review-head::after\s*\{\s*display:\s*none/s.test(html) &&
     /button\.conversation-work-run-head:active:not\(:disabled\),[\s\S]*button\.work-review-head:active:not\(:disabled\)\s*\{[\s\S]*scale:\s*1;[\s\S]*filter:\s*none/s.test(html),
     '复制/编辑以及 Build/block/tool/review 展开按钮不生成玻璃板或按压缩放');
+  check(/\.conversation-work-run-head\s*\{[^}]*transition:\s*none\s*!important[^}]*animation:\s*none\s*!important/s.test(html) &&
+    /\.conversation-work-run-head:hover\s*\{[^}]*filter:\s*none/s.test(html) &&
+    /\.conversation-work-run-chevron\s*\{[^}]*transition:\s*none/s.test(html),
+    'Build 历史展开是无玻璃、无过渡、无亮度动效的即时披露');
   check(html.includes("head.querySelector('.conversation-work-change-badge')") &&
     !html.includes("head.querySelector('.conversation-work-run-change-badge')"),
     'Build 增量刷新复用唯一文件审查徽标，不因展开重复插入');

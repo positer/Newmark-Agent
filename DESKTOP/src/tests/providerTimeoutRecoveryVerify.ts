@@ -1,5 +1,5 @@
 /**
- * dev-0.3.13 provider timeout/recovery regression gate.
+ * dev-0.3.13 provider transport/recovery regression gate.
  *
  * The test intentionally exercises the transport at the boundary where the
  * installed Windows build previously chained fetch -> node-http -> PowerShell
@@ -103,15 +103,16 @@ async function main(): Promise<void> {
     check(fallbackText === 'fallback-ok', 'genuine fetch failure still uses node fallback');
     check(nodeFallbacks === 1 && powershellFallbacks === 0, 'node fallback is used exactly once');
 
-    // A real fetch deadline must finish quickly and must not cascade on the
-    // Windows fallback chain. The server accepts the request but never sends
-    // response headers, matching the user-level stalled-provider failure.
+    // A stalled provider is intentionally unbounded. It ends only when the
+    // caller cancels; silence must not become an empty-response timeout.
     globalThis.fetch = originalFetch;
     const hanging = await startHangingServer();
     try {
       const hangingProvider = new LLMProvider('hanging-fixture', `http://127.0.0.1:${hanging.port}/v1`, 'sk-fixture', 'openai', 'chat_stream', true, 250);
       const started = Date.now();
-      let timeoutName = '';
+      let abortName = '';
+      const controller = new AbortController();
+      const cancelTimer = setTimeout(() => controller.abort(), 50);
       try {
         for await (const _token of hangingProvider.chatStreamWithTools(
           'fixture-model',
@@ -120,17 +121,18 @@ async function main(): Promise<void> {
           0,
           32,
           [],
-          new AbortController().signal,
+          controller.signal,
         )) {
           // no response is expected
         }
       } catch (error) {
-        timeoutName = error instanceof Error ? error.name : String(error);
+        abortName = error instanceof Error ? error.name : String(error);
       }
+      clearTimeout(cancelTimer);
       const elapsed = Date.now() - started;
-      check(timeoutName === 'TimeoutError', 'stalled fetch returns a typed timeout');
-      check(elapsed < 3000, `stalled fetch is bounded (${elapsed}ms)`);
-    check(nodeFallbacks === 1 && powershellFallbacks === 0, 'stalled fetch does not cascade to fallback transports');
+      check(abortName === 'AbortError', 'stalled fetch ends only after caller cancellation');
+      check(elapsed < 3000, `caller cancellation releases the stalled request (${elapsed}ms)`);
+      check(nodeFallbacks === 1 && powershellFallbacks === 0, 'stalled fetch does not cascade to fallback transports');
     } finally {
       await hanging.stop();
     }

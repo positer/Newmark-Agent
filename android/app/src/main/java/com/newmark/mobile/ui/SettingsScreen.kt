@@ -1,6 +1,8 @@
 package com.newmark.mobile.ui
 
 import android.content.Context
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -46,11 +48,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,6 +60,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
@@ -287,8 +292,11 @@ private fun SettingsEntry(title: String, subtitle: String, onClick: () -> Unit) 
 @Composable
 private fun CapabilitySettingsPage() {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val store = remember { MobileCapabilityStore(context) }
+    var allFilesRequested by remember { mutableStateOf(store.allFilesRequested) }
     var allFiles by remember { mutableStateOf(store.allFilesGranted()) }
+    var appListRequested by remember { mutableStateOf(store.appListRequested) }
     var apps by remember { mutableStateOf(store.appListGranted()) }
     var backgroundNetworkRequested by remember { mutableStateOf(store.backgroundNetworkRequested) }
     var backgroundNetworkAllowed by remember { mutableStateOf(store.backgroundNetworkAllowed()) }
@@ -298,6 +306,22 @@ private fun CapabilitySettingsPage() {
     var rootAvailable by remember { mutableStateOf(PrivilegedToolBridge.isRootAvailable()) }
     var confirmHighPrivilege by remember { mutableStateOf(false) }
     val p = LocalNewmarkPalette.current
+    val mediaPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { allFiles = store.allFilesGranted() }
+    DisposableEffect(lifecycleOwner, store) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                allFiles = store.allFilesGranted()
+                apps = store.appListGranted()
+                allFilesRequested = store.allFilesRequested
+                appListRequested = store.appListRequested
+                backgroundNetworkAllowed = store.backgroundNetworkAllowed()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val backgroundNetworkSettingsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) {
@@ -368,14 +392,29 @@ private fun CapabilitySettingsPage() {
         item {
             SectionCard("权限") {
                 SettingRow("读取所有文件") {
-                    LiquidGlassSwitch(checked = allFiles, onCheckedChange = {
-                        if (it && Build.VERSION.SDK_INT >= 30) runCatching { context.startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${context.packageName}"))) }
-                        store.allFilesRequested = it
+                    LiquidGlassSwitch(checked = allFilesRequested, onCheckedChange = { enabled ->
+                        allFilesRequested = enabled
+                        store.allFilesRequested = enabled
+                        if (enabled && Build.VERSION.SDK_INT >= 33) {
+                            val permissions = arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
+                                .filter { permission -> context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED }
+                                .toTypedArray()
+                            if (permissions.isNotEmpty()) mediaPermissionLauncher.launch(permissions)
+                        }
+                        if (enabled && Build.VERSION.SDK_INT >= 30) runCatching { context.startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${context.packageName}"))) }
                         allFiles = store.allFilesGranted()
                     })
                 }
+                Text("授权后 Agent 可发现并读取系统公开的最新文档、图片和视频；仍不访问其他应用私有目录、Android/data 或 Android/obb。", fontSize = 11.sp, color = p.textTertiary)
                 SettingRow("读取应用列表") {
-                    LiquidGlassSwitch(checked = apps, onCheckedChange = { apps = it; store.appListRequested = it })
+                    LiquidGlassSwitch(checked = appListRequested, onCheckedChange = { enabled ->
+                        appListRequested = enabled
+                        store.appListRequested = enabled
+                        if (enabled) runCatching {
+                            context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:${context.packageName}")))
+                        }
+                        apps = store.appListGranted()
+                    })
                 }
                 SettingRow("后台联网") {
                     LiquidGlassSwitch(checked = backgroundNetworkRequested, onCheckedChange = { enabled ->

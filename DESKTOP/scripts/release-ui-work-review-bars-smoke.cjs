@@ -96,9 +96,10 @@ async function evaluate(cdp, expression) { const result=await cdp.call('Runtime.
       const head=element.querySelector('.conversation-work-run-head');
       for(let i=0;i<8;i++)window.toggleConversationWorkRun(head);
       const pseudo=getComputedStyle(head,'::after');
-      return {badges:element.querySelectorAll('.conversation-work-change-badge').length,expanded:element.classList.contains('expanded'),pseudoDisplay:pseudo.display,scale:getComputedStyle(head).scale};
+      const style=getComputedStyle(head);const chevronStyle=getComputedStyle(head.querySelector('.conversation-work-run-chevron'));
+      return {badges:element.querySelectorAll('.conversation-work-change-badge').length,expanded:element.classList.contains('expanded'),pseudoDisplay:pseudo.display,scale:style.scale,transitionDuration:style.transitionDuration,animationName:style.animationName,transform:style.transform,filter:style.filter,chevronTransitionDuration:chevronStyle.transitionDuration,liquidFloats:document.querySelectorAll('.liquid-selection-float').length};
     })()`);
-    if(repeatedBuildToggle.badges!==1||repeatedBuildToggle.expanded||repeatedBuildToggle.pseudoDisplay!=='none'||(repeatedBuildToggle.scale&&repeatedBuildToggle.scale!=='1'&&repeatedBuildToggle.scale!=='none'))fail(`repeated Build toggle duplicated review or retained glass: ${JSON.stringify(repeatedBuildToggle)}`);
+    if(repeatedBuildToggle.badges!==1||repeatedBuildToggle.expanded||repeatedBuildToggle.pseudoDisplay!=='none'||(repeatedBuildToggle.scale&&repeatedBuildToggle.scale!=='1'&&repeatedBuildToggle.scale!=='none')||repeatedBuildToggle.transitionDuration!=='0s'||repeatedBuildToggle.animationName!=='none'||(repeatedBuildToggle.transform&&repeatedBuildToggle.transform!=='none')||(repeatedBuildToggle.filter&&repeatedBuildToggle.filter!=='none')||repeatedBuildToggle.chevronTransitionDuration!=='0s'||repeatedBuildToggle.liquidFloats!==0)fail(`repeated Build toggle duplicated review or retained glass/motion: ${JSON.stringify(repeatedBuildToggle)}`);
     const shot=await cdp.call('Page.captureScreenshot',{format:'png',fromSurface:true},30000);fs.mkdirSync(path.dirname(screenshot),{recursive:true});fs.writeFileSync(screenshot,Buffer.from(shot.data,'base64'));if(fs.statSync(screenshot).size<10000)fail('screenshot too small');
     console.log(`[release-ui-work-review-bars-smoke] PASS ${JSON.stringify({state,liveToolFold,repeatedBuildToggle})} screenshot=${screenshot}`);
   } finally {

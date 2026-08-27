@@ -2,7 +2,7 @@
 
 Newmark Agent 是面向本地工作区的多端 AI Agent。它把对话、Build/Plan/Goal/Flow、文件与终端、浏览器、Memory Lab、自动化和多 Agent 协作整合在同一套本地状态模型中，并提供 Windows/Linux 桌面端、终端界面、CLI 与 Android 客户端。
 
-当前开发版本：`dev-0.5.7`。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本，默认 Release 同时发布 Windows、Linux 和 Android。本版本修复移动端非当前远程对话长按稳定性，完成跨端玻璃落下动画并缩短浮起/移动时长；PC 浮动玻璃固定使用 6px 包边，Android 浮动玻璃固定使用 6dp 外扩。浮块移动时会依据实时速度和方向沿运动轴拉伸、沿垂直轴收缩，玻璃折射与外形同步变形；增强后的响应更早达到可见幅度。PC 会在玻璃控件悬停/聚焦时低频预热色散纹理，点击首帧复用，再以 CSS 像素 JPEG/ImageBitmap 原位刷新；浮块中心保持实时透明且不采样截图，只有固定 6px 边缘执行 RGB 折射。Windows/Electron 下 WebGL 仅负责离屏着色，小尺寸透明 2D surface 负责最终合成，避开复用画布变黑且不使用生产 CPU 回读。PC 点击不再等待截图或落下动画，关闭模型回退后也不会切换到其他模型身份。
+当前开发版本：`dev-0.5.8`。provider 空响应恢复仅在明确失效时执行：首次失效后等待 200ms、800ms、2s、10s、60s 进行 5 次重试，第 5 次仍明确失效才终止；持续等待、静默连接、EOF、超时或流关闭不视为空响应。在 Android 上，思考、正文、工具调用或其他有效流式活动都会立即清零计数。对话区 Build/历史展开已恢复为纯内容披露，点击或键盘操作直接切换，不使用玻璃、浮块、过渡或任何装饰动画。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本，默认 Release 同时发布 Windows、Linux 和 Android。
 
 当前 Android `dev-0.5.7` 已统一移动端液态选择器：点击播放完整的源选项浮起、移动、落下动画，连续点击会让唯一浮块从当前帧改道到最后目标再落下；拖动必须先静止按住 300ms，之前超过触摸阈值的移动不消费并交还列表/侧栏滚动。会话、左右侧栏工具/分页和 Memory Lab 分页共用这一规则；本地/远程对话的点按飞行与长按排序共用唯一玻璃浮层，胶囊四边固定外扩 6dp，飞行、跟手与落下全程按实时速度产生沿运动方向拉伸、垂直方向收缩的液态形变，折射随外形同步。拖动期间列表实时空出落点，未位移松手才打开操作菜单。PC 与移动端二态开关统一为“点击直接反转、确认水平拖动后才按松手位置吸附”，纵向滚动不触发开关。Release APK 仍以 `android/app/build/outputs/apk/release/app-release.apk` 为本地验证产物。
 
@@ -13,6 +13,7 @@ Newmark Agent 是面向本地工作区的多端 AI Agent。它把对话、Build/
 - 文件、终端、编辑器、浏览器、Computer Use、Git/GitHub、SSH、MCP、技能、自动化与 Memory Lab 均受策略边界约束。
 - 模型按供应商部署隔离；同名模型不会共享凭据、验证状态或路由证据。
 - Android 支持本地对话、Agent 可调用的工作区终端、本地工具、Memory Lab、系统日程读取/创建与系统分享接收，也支持配对桌面端后的远端对话、文件上传和工作区操作。
+- Android 设置中的“读取所有文件”和“读取应用列表”是 Agent 工具面的硬开关。关闭文件开关时只暴露内部 `files/newmark/workspace` 安全目录；开启后跳转 Android 系统授权页，应用内开关与系统授权同时有效才开放最新文件/共享存储工具。应用列表同样要求应用内开关与系统“使用情况访问”授权同时有效。两项都不依赖 Root/Shizuku。移动端冷启动默认恢复上次本地对话，远程对话仅在用户主动选择设备后进入。
 - Android 本地 Agent 在兼容服务拒绝 Chat Completions 的“工具 + 推理强度”组合时，会自动切换到 Responses API；若模型明确不支持 `temperature`，会移除该参数重试并继续流式呈现思考、正文与工具调用。
 - 新安装不预置供应商或密钥；用户自行添加供应商，升级不会清除已有配置。
 
@@ -100,6 +101,19 @@ npm run release
 ```
 
 该命令执行桌面端完整门禁、Android 单测与 Release lint，并在根目录 `release/` 生成 Windows MSI/ZIP、Linux AppImage/deb/ZIP 和 Android APK。推送 `dev-X.Y.Z` 标签时，GitHub Actions 会独立构建三端并把同版本的六个资产发布为 prerelease。
+
+### dev-0.5.8 本地发布候选
+
+2026-08-27 已通过完整发布流水线和独立资产 smoke，在 `release/` 生成 Windows、Linux、Android 六个 `0.5.8` 候选资产。Windows MSI/ZIP、Linux AppImage/deb/ZIP 均完成打包态启动验证；Android APK 通过 v2 签名校验。当前 Windows 包未做 Authenticode 签名，Android APK 使用工程现有 Android Debug 证书，均属于预发布测试构建。本机没有 macOS 原生签名/打包环境，`dist:mac` 需要在 macOS 主机另行生成 DMG；本次没有上传 GitHub Release。
+
+| 资产 | SHA-256 |
+| --- | --- |
+| `Newmark-Agent-0.5.8-x64.msi` | `669E808882DADF7790FA4D929E3A42C5717566073A6ECB1EDE7002005BF031E0` |
+| `Newmark-Agent-0.5.8-win-unpacked-x64.zip` | `6D037DAB8664D4A75FA2FEE73322A1D9835F9F4DB340ED0BB4858836EFDED555` |
+| `Newmark-Agent-0.5.8-x86_64.AppImage` | `FCF25AB45D8C4F6F5FD876C14654E48C4C9653AE7FB864F1EAB52AA24BE18F5F` |
+| `Newmark-Agent-0.5.8-amd64.deb` | `C75FE9834F7CD2EF69B024C93BF14B366EB98AFDA2F958BC870A4C9029020EEA` |
+| `Newmark-Agent-0.5.8-linux-unpacked-x64.zip` | `27236779B69E299C43652A5F5448A33C9B1AF8F05920E09EAFB2CD15DCE2CF8B` |
+| `Newmark-Agent-0.5.8-android.apk` | `F514C919411DD2D84214B54024D7CF6D9EB25692E35F7D5465FF8FC08188325F` |
 
 ## 架构
 
@@ -308,3 +322,111 @@ dev 也已使用独立临时用户数据目录启动，避免与已安装版配�
 `C:\Program Files\Newmark Agent` 的 `app.asar` 与 release 候选 SHA-256 同为
 `E6F3F777E803DF9804054E7D86712B9B8605A768C78E7B74EDD744AAAEF0C233`，安装版 GUI 已成功启动。
 记录见 `archive/20260826-liquid-motion-msi-uac-install.md`。
+
+dev-0.5.8 补齐移动端对话操作反馈：更多按钮与长按打开的菜单分别从真实触发锚点弹出，并在
+关闭时反向收回；归档操作会在菜单退出后让对话胶囊淡出并轻微收缩，动画结束才从本地或远端
+列表提交删除，避免菜单和对话突然消失。对应 Release APK 大小 45,970,952 bytes，SHA-256
+`2FDF58EB6366FD49007DEABCDBB3269F8319415EC7B0FED3EAA8DD281E292A0C`。
+
+移动端 `alarm_manage` 已接入 Android 默认时钟应用：创建闹钟会打开系统时钟确认界面，查看
+闹钟会进入默认时钟的闹钟列表。Newmark 不再用自身通知模拟系统闹钟，也不再声明 Android
+公共协议无法保证的跨时钟应用 ID 查询与删除能力。
+包含该修复的 Release APK 大小 45,970,920 bytes，SHA-256
+`FBD59BD5A93F3B9DE11097C36B75A0D406F5A79E16096E57088ADB73EBBC88CA`。
+
+本地 Agent 的恢复层还对齐 PC 的瞬态传输错误边界：思考已开始但正文尚未到达时，EOF、连接重置、
+流关闭、超时和 broken pipe 会继续进入连续恢复，不会因一次短暂连接抖动直接终止 Build。
+
+该状态已完成 Android 本机压力门禁：151 项 JVM 测试全部通过，独立 stress variant 构建成功，
+正式 Release 的 Vital lint、R8、资源优化和签名打包通过。当前未连接 ADB 设备，因此实机
+SSE/UI 循环未执行，也未计为通过。
+
+移动端本地 Agent 已取消写死的 6 轮工具调用限制：连续工具工作会运行到模型完成、用户停止或
+真实错误。上下文结构同步 PC 的请求级最新用户焦点、Guide 顺序、历史证据边界与压缩续接；
+每个工具子轮都重新检查 70% 自动压缩和 90% 安全压缩，避免长工具链因上下文只在首轮检查而
+溢出。请求级 bootstrap 不写入对话历史。
+该 bootstrap 同时移除了消息数量、工具数量、模式、ID 等动态字段，使连续工具子轮的 system
+前缀保持字节稳定；新工具结果只追加在上下文尾部，从而提高支持 prompt caching 的 provider
+缓存命中率，只有真正发生上下文压缩时才改变 durable 前缀。
+该状态 Release APK 已通过 154 项单测、Vital lint、R8、资源优化与签名构建，SHA-256
+`768AA0C216FB004FE17CD2C32BDB035C12D6443FE29BEBB5E3B6DB165B046887`。
+
+移动端文件发现现合并 MediaStore 与用户已授权的系统 DocumentProvider，能识别云端仅在线、
+系统优化释放及重复文件占位记录，保留稳定 document ID/canonical identity，并在读取 content URI
+时由原 provider 恢复真实内容。文件读取新增 PDF、Word、PowerPoint、CSV/TSV 与 Excel；PDF
+按文字层、页面视觉模型、设备 miniOCR、LLM 完整视觉综合顺序降级，并返回实际命中的解析阶段。
+该状态 Release APK 已通过 156 项测试、Vital lint、R8、资源优化与签名，大小 52,684,932
+bytes，SHA-256 `C845EC677B3A878D512D740E7A93213490E8137757241040D65FA0ECD04EB3C8`。
+
+dev-0.5.8 统一升级了移动端既有玻璃浮块的飞行状态机。对话胶囊、侧栏工具选择器、右栏分页、
+记忆实验室分页和输入复合菜单均可在浮起过程中向目标运动，并在尚未完全抵达时开始收缩落地；
+首帧仍严格从起点色块浮起，结束时严格收缩为目标色块。长按和拖动期间保持完全浮起，只有松手
+才进入落地；重定向复用当前浮块，不生成第二个浮层。普通表面未被转换为玻璃。
+
+移动端现从应用主题根部关闭 Compose/Material3 的所有点击 indication，不再显示 Android 默认的
+灰色涟漪。点击、长按、拖动、无障碍语义以及 Newmark 自有的玻璃/状态动画保持原有行为。
+
+移动端 Memory Lab 已补齐 PC 同构工具链：读取、查询、新增/更新、重构、删除与重建索引均支持
+完整 metadata、tagPaths、版本号、expectedUpdatedAt 并发保护、旧版本归档、policy.jsonl 审计和
+rebuild receipt。总览继续采用 PC 标签/组件关系云，并保留移动端单指拖动、双指缩放与 48dp 命中优化；
+详情页新增组件元数据、标签路径、别名、核心 Markdown 及新增/编辑/删除入口。
+# dev-0.5.8 terminal responsiveness
+
+PC 内置终端现对高频 PTY 输出实施主进程背压合并与渲染端逐帧追加，避免 Windows 将 Electron 判定为未响应；终端历史仍保持 256 KiB 有界缓存，普通终端和 Agent takeover 路径一致。
+# Mobile local Agent response stability (2026-08-26)
+
+移动端本地 Agent 的所有 provider 调用统一经过空响应恢复层：只有 provider 明确返回失效空响应才进入重试；持续等待、静默连接、EOF、超时或流关闭本身不视为空响应。明确失效后的等待序列为 200ms、800ms、2s、10s、60s，对应 5 次重试，第 5 次仍失效才终止；任意思考、正文、工具调用或其他有效流式活动都作为正常结果并立即清零计数。
+
+本轮稳定性修复同时兼容 chat SSE 的完整 `choices[0].message` 帧与增量 `delta` 帧，避免健康连接被解析层误判为空响应；显式失效重试间隔固定为 200ms、800ms、2s、10s、60s。
+
+## dev-0.5.8 模型菜单玻璃拖动调度
+
+移动端模型选择二级菜单现将拖动位移与速度直接留在 Compose `graphicsLayer`/RenderNode 更新路径，
+动画 Job、当前目标行和菜单几何不再作为高频可观察状态反复触发整表重组；同一目标行内的指针事件
+不会重复取消和重建 spring。玻璃材质、形变公式、240ms 飞行、长按浮起和落地状态机保持不变。
+本地 Agent 的流式增量仍完整按序接收，但主线程公开快照改为 16ms 窗口批量提交，避免高速 token
+流与 UI 帧回调争抢主线程。171 项 JVM 测试、Vital lint、R8 与 Release 构建通过；当前无 ADB
+设备，未把模拟器/实机帧率计为已验证。
+
+## dev-0.5.8 移动端连续思考节点
+
+移动端本地 Agent 现在将同一连续思考阶段内的多个 provider 子轮接续到一个 Build 思考节点。仅思考
+响应会继续当前节点，不再反复生成“进行了思考”；开始工具调用、生成正文、收到 Guide、发生错误或
+Build 结束时才关闭该节点。流式 reasoning delta 与最终 reasoningContent 会按子轮对账，既不丢失也
+不重复。1000 个连续 thought-only 子轮压力回归保持 1 个 thought shell，完整 174 项 JVM 测试、
+Vital Lint、R8 与 Release APK 构建通过；真实移动端 UI 长压仍需连接设备后补测。
+
+## dev-0.5.8 移动端思考响应续接稳定性
+
+移动端本地 Agent 不再把 reasoning-only 子轮结束后的下一次请求原样重放。当前 Build 会维护一份
+最多 12,000 字符的临时思考进度检查点，并仅在下一次 Chat Completions 请求尾部以 assistant
+`reasoning_content` 原生字段携带；普通 `content` 保持为空，不再伪造成内部提示词。它不写入聊天正文、
+`messages`、`modelContext`、压缩摘要或磁盘历史。任一 Guide、工具调用、
+正文、错误或终态都会清空检查点，因此最新真实用户指令仍保持权威。
+
+流式 reasoning 已经显示后，较短或不兼容的最终 reasoning 字段不再覆盖它；内容在同一思考节点内
+只会保持或增长，不会出现长思考突然截断后从头重来的可见回退。1000 个连续子轮回归同时约束单节点、
+请求变化、检查点有界和非持久化。完整 178 项 JVM 测试、Vital Lint、R8 与 Release 构建通过。
+
+后续协议校正进一步保留 provider 的 `finish_reason`：只有模型明确返回 `length`、`max_tokens` 或
+`max_output_tokens` 才允许携带上述检查点进入下一子轮。普通 `stop`、工具状态、异常 EOF 或连接关闭
+都不会由客户端解释为“继续思考”，软件端也没有思考空闲计时器。当前供应商的当前模型配置直接提供
+`thinking_tier_map`，避免不同供应商的同名模型串用原生档位。183 项 JVM 测试、Vital Lint、R8 与
+Release APK 构建通过；分发 APK SHA-256 为
+`ED15D28A643B9C200E239C4D5D6B07C159C54BCBEE7D218C480BAB1DFBA9381E`。
+
+## dev-0.5.8 PC/移动端工具上下文接续修复
+
+长对话中“明知参数错误却重复执行同一调用”并非最新记忆无法写入，而是部分 OpenAI 兼容网关把
+`function.arguments` 作为累计快照重复发送，客户端却按普通增量无条件拼接。合法参数因此变成两个
+相邻 JSON 对象，工具只看到旧值或空对象，模型收到误导性的参数缺失结果后继续重复调用。
+
+PC 与 Android 现统一兼容标准增量、累计快照和完整重复快照；Chat Completions、Responses 及
+GitHub Models 兼容流均按 tool index 隔离并行调用。Android 工具执行器执行前使用严格单对象解析，
+不会再接受带尾随对象的参数。每轮 assistant tool call 与同 call id 的工具结果仍只追加到上下文尾部，
+稳定 system/bootstrap、工具 schema 和既有消息前缀保持不变，prompt cache 命中结构未被破坏。
+
+回归覆盖累计/重复/标准增量、交错并行调用、无 `output_item.done` 的 Responses 兼容流、严格参数拒绝、
+下一轮工具结果接续及 45 个 PC 工具子轮缓存压力。Android 187 项 JVM 测试、Vital Lint、R8 与
+Release 构建通过。APK：`APK/Newmark-Agent-0.5.8-context-continuity.apk`，SHA-256
+`F514C919411DD2D84214B54024D7CF6D9EB25692E35F7D5465FF8FC08188325F`。

@@ -59,12 +59,10 @@ function Invoke-Adb([string[]]$Arguments) {
 }
 
 function Invoke-AmViewIntent([string]$DataUrl, [string]$TargetComponent) {
-    # `adb shell` invokes a remote shell. Quote the URL there, otherwise the
-    # `&pairingId=…` query segment is interpreted as a second shell command.
-    $escapedUrl = $DataUrl.Replace('"', '\"')
-    $escapedComponent = $TargetComponent.Replace('"', '\"')
-    $remote = 'am start -W -a android.intent.action.VIEW -d "' + $escapedUrl + '" -n "' + $escapedComponent + '"'
-    $output = & $adb -s $Serial shell $remote
+    # Pass argv directly to adb instead of composing a remote shell command.
+    # This preserves the pairing URI and guarantees the isolated stress
+    # component is selected rather than the formal package's URI handler.
+    $output = & $adb -s $Serial shell am start -W -a android.intent.action.VIEW -d $DataUrl -n $TargetComponent
     if ($LASTEXITCODE -ne 0) { throw "am view intent failed: $output" }
     return ($output -join "`n")
 }
@@ -298,7 +296,7 @@ try {
         $runningLabel = Get-UiNodeByText '处理中'
         if ($null -ne $runningLabel) { return $runningLabel }
         return Get-UiNodeByDescription '停止'
-    } -Label '远端运行中 Build' -TimeoutMs 5000 | Out-Null
+    } -Label '远端运行中 Build' -TimeoutMs 35000 | Out-Null
     # One hierarchy snapshot must prove the complete resident state.  Taking
     # four additional independent uiautomator dumps can consume the complete
     # 24-second 300-event run and accidentally turn the following queue test

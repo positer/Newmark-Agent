@@ -62,6 +62,7 @@ import { discoverPluginManifests } from './core/compat';
 import { discoverDshCompatibility, installDshBundle, setDshBundleEnabled, uninstallDshBundle } from './core/dshCompatibility';
 import { McpManager } from './core/mcpManager';
 import { WorkEventCoalescer } from './core/workEventCoalescer';
+import { TerminalOutputBuffer } from './core/terminalOutputBuffer';
 import { newmarkEditHelpText, newmarkFlowHelpText, newmarkHelpText } from './cli-help';
 
 const APP_NAME = 'Newmark Agent';
@@ -4237,9 +4238,14 @@ if (isViewerArg) {
       | { kind: 'pty'; proc: TakeoverPty; shell: string; buffer: string }
       | { kind: 'native-bash'; proc: NativeBashSession; shell: 'bash'; buffer: string; queue: Promise<void> };
     const ptySessions = new Map<string, BottomTerminalSession>();
-    const sendTerminalData = (sessionId: string, session: BottomTerminalSession, text: string): void => {
-      session.buffer = `${session.buffer}${text}`.slice(-256 * 1024);
+    const terminalOutput = new TerminalOutputBuffer((sessionId, text) => {
+      const session = ptySessions.get(sessionId);
+      if (session) session.buffer = terminalOutput.history(sessionId);
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('pty:data', sessionId, text);
+    });
+    const sendTerminalData = (sessionId: string, session: BottomTerminalSession, text: string): void => {
+      terminalOutput.push(sessionId, text);
+      session.buffer = terminalOutput.history(sessionId);
     };
 
     ipcMain.handle('pty:spawn', async (_event, shellId: string) => {
@@ -4263,7 +4269,9 @@ if (isViewerArg) {
 
       proc.onData(text => sendTerminalData(sessionId, session, text));
       proc.onExit(event => {
+        terminalOutput.flush(sessionId);
         ptySessions.delete(sessionId);
+        terminalOutput.close(sessionId);
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('pty:exit', sessionId, event.exitCode);
         }
@@ -4318,7 +4326,7 @@ if (isViewerArg) {
     ipcMain.handle('pty:getBuffer', async (_event, sessionId: string) => {
       const session = ptySessions.get(sessionId);
       if (!session) return { buffer: '' };
-      return { buffer: session.buffer };
+      return { buffer: terminalOutput.history(sessionId) || session.buffer };
     });
 
     const terminalOwnerFor = (conversationId?: string, actorId?: string) => normalizeTerminalTakeoverOwner({

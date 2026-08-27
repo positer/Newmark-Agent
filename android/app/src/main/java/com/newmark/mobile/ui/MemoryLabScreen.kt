@@ -88,11 +88,13 @@ import androidx.compose.ui.window.DialogProperties
 import com.newmark.mobile.data.MemoryComponent
 import com.newmark.mobile.data.MemoryLabIndex
 import com.newmark.mobile.data.MemoryLabStore
+import com.newmark.mobile.data.MemoryLabUpdateInput
 import com.newmark.mobile.ui.components.MarqueeBorder
 import com.newmark.mobile.ui.components.MobilePopupShape
 import com.newmark.mobile.ui.components.MobileInteractionGlassEdge
 import com.newmark.mobile.ui.components.liquidMotionDeformation
 import com.newmark.mobile.ui.components.liquidSelectionMorph
+import com.newmark.mobile.ui.components.runOverlappedLiquidFlight
 import com.newmark.mobile.ui.components.DialogBackdropBlur
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.components.glassButtonSurface
@@ -157,6 +159,8 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
     var search by remember { mutableStateOf("") }
     var reindexing by remember { mutableStateOf(false) }
     var componentContent by remember { mutableStateOf("") }
+    var editingSlug by remember { mutableStateOf<String?>(null) }
+    var editorOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun loadComponent(slug: String) {
@@ -216,6 +220,16 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
         ) {
             MemoryLabViewPager(view = view, onSelect = ::selectView)
             Spacer(Modifier.weight(1f))
+            Text(
+                "新增",
+                fontSize = 11.sp,
+                color = p.accent,
+                modifier = Modifier.glassButtonSurface(NewmarkShapeMedium, p.bgQuaternary).clickable {
+                    editingSlug = null
+                    editorOpen = true
+                }.padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+            Spacer(Modifier.width(6.dp))
             Box(
                 modifier = Modifier
                     .glassButtonSurface(NewmarkShapeMedium, p.bgQuaternary)
@@ -312,10 +326,40 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
                             if (selectedComponent.isNotBlank()) loadComponent(selectedComponent) else componentContent = ""
                         },
                         onSelectComponent = { slug -> selectedComponent = slug; loadComponent(slug) },
+                        onEditComponent = { slug -> editingSlug = slug; editorOpen = true },
+                        onDeleteComponent = { slug ->
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    val meta = store.load().components[slug]
+                                    store.delete(slug, meta?.updatedAt.orEmpty(), "User deleted from mobile Memory Lab UI", "mobile_memory_lab_ui")
+                                }
+                                index = withContext(Dispatchers.IO) { store.load() }
+                                selectedComponent = ""
+                                componentContent = ""
+                            }
+                        },
                     )
                 }
             }
         }
+    }
+    if (editorOpen) {
+        MemoryLabEditorDialog(
+            existingSlug = editingSlug,
+            index = index,
+            initialContent = editingSlug?.let { store.componentContent(it) }.orEmpty(),
+            onDismiss = { editorOpen = false },
+            onSave = { input ->
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) { store.update(input) }
+                    index = result.index
+                    selectedComponent = result.slug
+                    componentContent = input.content
+                    editorOpen = false
+                    view = "detail"
+                }
+            },
+        )
     }
 }
 
@@ -366,11 +410,12 @@ private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
             }
             val targetX = with(density) { index * slotWidth.toPx() - 6.dp.toPx() }
             val staysInPlace = kotlin.math.abs(glassX.value - targetX) < 0.5f
-            kotlinx.coroutines.yield()
-            lifting = false
-            if (staysInPlace) delay(100) else glassX.animateTo(targetX, tween(380))
-            landing = true
-            delay(240)
+            runOverlappedLiquidFlight(
+                lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) },
+                move = { if (!staysInPlace) glassX.animateTo(targetX, tween(380)) },
+                onLandingStarted = { landing = true },
+                land = { delay(240) },
+            )
             landing = false
             moving = false
             setSidebarGestureLock("memory-lab-view-pager", false)
@@ -390,11 +435,11 @@ private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
             if (!redirecting) {
                 glassX.snapTo(with(density) { selectedIndex * slotWidth.toPx() - 6.dp.toPx() })
             }
-            kotlinx.coroutines.yield()
-            lifting = false
-            glassX.animateTo(
-                with(density) { index * slotWidth.toPx() - 6.dp.toPx() },
-                tween(380),
+            runOverlappedLiquidFlight(
+                holdKeepsLifted = true,
+                lift = { kotlinx.coroutines.yield(); lifting = false; delay(100) },
+                move = { glassX.animateTo(with(density) { index * slotWidth.toPx() - 6.dp.toPx() }, tween(380)) },
+                onLandingStarted = {}, land = {},
             )
         }
     }
@@ -430,12 +475,12 @@ private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
                          lifting = false
                          glassX.snapTo(draggedGlassX)
                          draggingGlass = false
-                         glassX.animateTo(
-                             with(density) { commit * slotWidth.toPx() - 6.dp.toPx() },
-                             tween(120),
+                         runOverlappedLiquidFlight(
+                             lift = {},
+                             move = { glassX.animateTo(with(density) { commit * slotWidth.toPx() - 6.dp.toPx() }, tween(120)) },
+                             onLandingStarted = { landing = true },
+                             land = { delay(240) },
                          )
-                         landing = true
-                        delay(240)
                         landing = false
                         moving = false
                         draggingGlass = false
@@ -858,6 +903,8 @@ private fun Detail(
     componentContent: String,
     onSelectTag: (String) -> Unit,
     onSelectComponent: (String) -> Unit,
+    onEditComponent: (String) -> Unit,
+    onDeleteComponent: (String) -> Unit,
 ) {
     val p = LocalNewmarkPalette.current
     val tags = index.tags.keys.sorted()
@@ -945,6 +992,11 @@ private fun Detail(
                     if (meta.description.isNotBlank()) {
                         Text(meta.description, fontSize = 11.sp, color = p.textSecondary, modifier = Modifier.padding(bottom = 6.dp))
                     }
+                    Text("组件元数据", fontSize = 10.5.sp, color = p.textTertiary, fontWeight = FontWeight.SemiBold)
+                    Text("slug: $activeComponent · kind: ${meta.kind} · revision: ${meta.revision}", fontSize = 10.sp, color = p.textSecondary)
+                    Text("标签路径：${meta.tagPaths.joinToString("；") { it.joinToString(" → ") }}", fontSize = 10.sp, color = p.textSecondary)
+                    val aliases = meta.tags.flatMap { index.tags[it]?.aliases.orEmpty() }.distinct()
+                    Text("别名：${aliases.joinToString().ifBlank { "无" }}", fontSize = 10.sp, color = p.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
                     Text(
                         text = componentContent.ifBlank { "（无内容）" },
                         fontSize = 11.5.sp,
@@ -952,9 +1004,58 @@ private fun Detail(
                         color = p.textPrimary,
                         fontFamily = FontFamily.Monospace,
                     )
+                    Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("编辑 / 重构", color = p.accent, fontSize = 11.sp, modifier = Modifier.clickable { onEditComponent(activeComponent) }.padding(8.dp))
+                        Text("删除", color = Color(0xFFFF7777), fontSize = 11.sp, modifier = Modifier.clickable { onDeleteComponent(activeComponent) }.padding(8.dp))
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MemoryLabEditorDialog(
+    existingSlug: String?,
+    index: MemoryLabIndex,
+    initialContent: String,
+    onDismiss: () -> Unit,
+    onSave: (MemoryLabUpdateInput) -> Unit,
+) {
+    val p = LocalNewmarkPalette.current
+    val existing = existingSlug?.let(index.components::get)
+    var name by remember(existingSlug) { mutableStateOf(existing?.name.orEmpty()) }
+    var description by remember(existingSlug) { mutableStateOf(existing?.description.orEmpty()) }
+    var tags by remember(existingSlug) { mutableStateOf(existing?.tags?.joinToString(", ").orEmpty()) }
+    var paths by remember(existingSlug) { mutableStateOf(existing?.tagPaths?.joinToString("\n") { it.joinToString(" → ") }.orEmpty()) }
+    var content by remember(existingSlug) { mutableStateOf(initialContent) }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().clip(MobilePopupShape).background(p.bgSecondary).padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Text(if (existing == null) "新增记忆组件" else "编辑 / 重构记忆组件", color = p.textPrimary, fontWeight = FontWeight.SemiBold)
+            MemoryEditorField("名称", name) { name = it }
+            MemoryEditorField("描述", description) { description = it }
+            MemoryEditorField("标签（逗号分隔）", tags) { tags = it }
+            MemoryEditorField("标签路径（每行一条，使用 → 分隔）", paths) { paths = it }
+            MemoryEditorField("核心 Markdown", content, singleLine = false) { content = it }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Text("取消", color = p.textSecondary, modifier = Modifier.clickable(onClick = onDismiss).padding(10.dp))
+                Text("保存", color = p.accent, modifier = Modifier.clickable {
+                    val tagList = tags.split(Regex("[,，]")).map(String::trim).filter(String::isNotBlank)
+                    val pathList = paths.lines().map { line -> line.split(Regex("\\s*(?:→|>|/)\\s*")).map(String::trim).filter(String::isNotBlank) }.filter(List<String>::isNotEmpty)
+                    onSave(MemoryLabUpdateInput(name, description, tagList, pathList, content, existing?.kind ?: "file", existing?.updatedAt.orEmpty(), "Mobile Memory Lab UI edit", "mobile_memory_lab_ui"))
+                }.padding(10.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemoryEditorField(label: String, value: String, singleLine: Boolean = true, onValueChange: (String) -> Unit) {
+    val p = LocalNewmarkPalette.current
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, color = p.textTertiary, fontSize = 10.sp)
+        BasicTextField(value, onValueChange, Modifier.fillMaxWidth().heightIn(min = if (singleLine) 38.dp else 120.dp).clip(NewmarkShapeMedium).background(p.bgTertiary).padding(10.dp),
+            textStyle = TextStyle(color = p.textPrimary, fontSize = 11.sp), singleLine = singleLine)
     }
 }
 

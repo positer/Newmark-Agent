@@ -23,6 +23,7 @@ import {
   ProviderTransport,
   SerializedProviderRequest,
   TransportResponse,
+  assembleCompatibleToolArguments,
   readProviderStreamChunk,
 } from '../providers';
 
@@ -71,9 +72,6 @@ interface NodeHttpResult {
   headers?: Record<string, string | string[] | undefined>;
 }
 
-// Keep provider requests below the release-harness/user-visible command
-// deadline. A provider that does not answer must produce one bounded error;
-// it must not restart the same request through every Windows transport.
 // Provider responses are intentionally unbounded. User cancellation, transport
 // errors, and tool-specific limits remain the only automatic stop conditions.
 const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS = 0;
@@ -965,7 +963,7 @@ export class LLMProvider {
    * `provider_adapters_v2` context flag. Request serialization and SSE
    * normalization are delegated to the shared provider adapters while the
    * transport orchestration (loopback node-http, fetch -> node-http fallback,
-   * 120s/30s timeouts) and the 4xx Chat -> Responses downgrade stay here.
+   * cancellation-only streaming and the 4xx Chat -> Responses downgrade) stay here.
    * The emitted request body and StreamToken stream are byte-equivalent to
    * the legacy inlined path.
    */
@@ -1129,9 +1127,9 @@ export class LLMProvider {
 
   /**
    * Loopback-aware transport injected into adapter `execute`. Streaming
-   * requests retain the fetch-to-node fallback for transport failures, while
-   * a local deadline is returned directly so one request cannot become a
-   * second Windows fallback request.
+   * requests retain the fetch-to-node fallback for transport failures. They
+   * have no response deadline; only caller cancellation or a concrete
+   * transport/provider failure may end the request.
    */
   private buildProviderAdapterTransport(): ProviderTransport {
     return async (request: SerializedProviderRequest, signal: AbortSignal): Promise<TransportResponse> => {
@@ -1141,7 +1139,9 @@ export class LLMProvider {
         const forwardAbort = () => abort.abort(signal?.reason);
         if (signal?.aborted) forwardAbort();
         else signal?.addEventListener('abort', forwardAbort, { once: true });
-        const effectiveTimeout = this.effectiveRequestTimeout(120000);
+        // Streaming provider responses are intentionally unbounded. Only
+        // caller cancellation or an explicit provider failure may end them.
+        const effectiveTimeout = 0;
         const timer = effectiveTimeout > 0
           ? setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout)
           : undefined;
@@ -1314,7 +1314,9 @@ export class LLMProvider {
     const forwardAbort = () => abort.abort(signal?.reason);
     if (signal?.aborted) forwardAbort();
     else signal?.addEventListener('abort', forwardAbort, { once: true });
-    const effectiveTimeout = this.effectiveRequestTimeout(120000);
+    // Streaming provider responses are intentionally unbounded. Do not turn
+    // silence into an empty-response failure.
+    const effectiveTimeout = 0;
     const timeout = effectiveTimeout > 0
       ? setTimeout(() => abort.abort(providerTimeoutError(effectiveTimeout)), effectiveTimeout)
       : undefined;
@@ -1352,10 +1354,14 @@ export class LLMProvider {
 
       const decoder = new TextDecoder();
       let buffer = '';
-      let currentToolCall: { id: string; name: string; arguments: string } | null = null;
+      const toolCalls = new Map<number, { id: string; name: string; argumentParts: string[] }>();
+      const toolCallOrder: number[] = [];
+      let syntheticToolIndex = 0;
+      let lastToolIndex = 0;
       let currentReasoningContent = '';
       let contentPolicyBlocked = false;
       let emittedContent = false;
+      let explicitCompletion = false;
       const streamSignal = signal || new AbortController().signal;
 
       while (true) {
@@ -1369,7 +1375,10 @@ export class LLMProvider {
           const trimmed = line.trim();
           if (!trimmed.startsWith('data: ')) continue;
           const data = trimmed.slice(6);
-          if (data === '[DONE]') continue;
+          if (data === '[DONE]') {
+            explicitCompletion = true;
+            continue;
+          }
 
           try {
             const json = JSON.parse(data);
@@ -1391,24 +1400,46 @@ export class LLMProvider {
 
             if (delta.tool_calls) {
               for (const tc of delta.tool_calls) {
-                if (tc.id) {
-                  if (currentToolCall) {
-                    yield { type: 'tool_call', text: '', toolCall: currentToolCall, reasoningContent: currentReasoningContent || undefined };
-                  }
-                  currentToolCall = { id: tc.id, name: tc.function?.name || '', arguments: tc.function?.arguments || '' };
-                } else if (tc.function?.arguments && currentToolCall) {
-                  currentToolCall.arguments += tc.function.arguments;
+                const rawIndex = Number(tc.index);
+                const index = Number.isInteger(rawIndex) && rawIndex >= 0
+                  ? rawIndex
+                  : (tc.id ? syntheticToolIndex++ : lastToolIndex);
+                lastToolIndex = index;
+                let call = toolCalls.get(index);
+                if (!call && (tc.id || tc.function?.name)) {
+                  call = { id: tc.id || '', name: tc.function?.name || '', argumentParts: [] };
+                  toolCalls.set(index, call);
+                  toolCallOrder.push(index);
                 }
+                if (!call) continue;
+                if (tc.id && !call.id) call.id = tc.id;
+                if (tc.function?.name && !call.name) call.name = tc.function.name;
+                if (tc.function?.arguments) call.argumentParts.push(tc.function.arguments);
               }
             }
           } catch { /* skip malformed JSON */ }
         }
       }
 
-      if (currentToolCall && currentToolCall.arguments) {
-        yield { type: 'tool_call', text: '', toolCall: currentToolCall, reasoningContent: currentReasoningContent || undefined };
+      if (toolCallOrder.length) {
+        for (const index of toolCallOrder) {
+          const call = toolCalls.get(index);
+          if (!call) continue;
+          yield {
+            type: 'tool_call',
+            text: '',
+            toolCall: {
+              id: call.id,
+              name: call.name,
+              arguments: assembleCompatibleToolArguments(call.argumentParts),
+            },
+            reasoningContent: currentReasoningContent || undefined,
+          };
+        }
       } else if (!emittedContent && contentPolicyBlocked) {
         yield { type: 'text', text: '[Error] Content policy refusal (content_filter).' };
+      } else if (!explicitCompletion && !emittedContent && !currentReasoningContent) {
+        yield { type: 'text', text: '[LLM Error] GitHub Models stream ended before an explicit completion.' };
       }
     } finally {
       reader?.releaseLock();

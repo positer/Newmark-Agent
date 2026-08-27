@@ -1,7 +1,7 @@
 {
   "name": "newmark-agent",
   "productName": "Newmark Agent",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "description": "Newmark Agent — Portable AI coding agent with rich GUI and CLI (TypeScript)",
   "homepage": "https://github.com/positer/Newmark-Agent",
   "repository": {
@@ -41,6 +41,7 @@
     "test:cli:built": "node dist/tests/cliToolContractVerify.js && node dist/tests/openAIHubAnthropicSmokeContractVerify.js && node dist/tests/cliComputerUseAccuracyVerify.js",
     "test:gui-tui-cli-stress": "npm run build && npm run test:gui-tui-cli-stress:built",
     "test:gui-tui-cli-stress:built": "node dist/tests/guiTuiCliSharedBackendStressVerify.js",
+    "test:empty-response-retry": "npm run build && node dist/tests/emptyResponseRetryVerify.js",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src",
     "test": "npm run test:full-release",
@@ -94,6 +95,7 @@
     "test:dev012": "npm run build && node dist/tests/performanceOptimizationVerify.js && node dist/tests/compressionFidelityVerify.js && node dist/tests/responseTrajectoryVerify.js && node dist/tests/normalChatRegressionVerify.js && node dist/tests/toolProvisioningVerify.js && node dist/tests/guideWorkRunVerify.js && node dist/tests/runtimeIsolationVerify.js && node dist/tests/openAIHubAnthropicSmokeContractVerify.js",
     "test:computer-use-performance": "npm run build && node dist/tests/computerUsePerformanceVerify.js",
     "test:terminal-takeover": "npm run build && node dist/tests/terminalTakeoverVerify.js",
+    "test:terminal-output-stress": "npm run build && node dist/tests/terminalOutputBackpressureVerify.js",
     "test:native-bash": "npm run build && node dist/tests/nativeBashVerify.js",
     "test:automation-bash-stress": "npm run build && node dist/tests/automationBashStressVerify.js",
     "dist:win": "npm run build:clean && node scripts/dist-portable.cjs",

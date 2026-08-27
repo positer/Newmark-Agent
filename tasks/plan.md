@@ -6,7 +6,9 @@
 2. 完成：运行 Desktop full release 与 Android JVM、Vital Lint、R8、Release assembly 门禁。
 3. 完成：生成 Windows MSI/ZIP、Linux AppImage/deb/ZIP、Android APK 六资产。
 4. 完成：独立执行 Windows 与 Linux 打包态 GUI/CLI/终端 smoke，并验证 APK v2 签名身份。
-5. 进行中：提交、推送 `master` 与 `dev-0.5.9` 标签，创建 GitHub prerelease 并回下载校验远端资产。
+5. 完成：提交 `e8c35b1`、原子推送 `master` 与带注释标签 `dev-0.5.9`，发布 GitHub prerelease；六个远端资产经重新下载后，文件名、字节数与 SHA-256 全部一致。
+6. 完成：GitHub `release-platforms` 的 Windows/Linux/Android 构建与发布任务全部成功，`publish-npm` 成功。
+7. 保留边界：Android 使用 Debug 证书、Windows 未做 Authenticode 签名；macOS DMG 需要 macOS 原生主机，不属于本次六资产矩阵。
 
 ## 2026-08-27 PC/移动端 Chat 模式与移动队列头精简
 

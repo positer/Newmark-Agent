@@ -7,8 +7,9 @@
 - [x] 生成并哈希校验六个 Windows/Linux/Android 资产。
 - [x] Windows MSI/ZIP 和 Linux AppImage/deb/ZIP 独立 smoke 通过。
 - [x] APK v2 签名验证通过并记录 Android Debug 证书边界。
-- [ ] 提交并推送 `master` 与 `dev-0.5.9` 标签。
-- [ ] 创建 GitHub prerelease、上传六资产并回下载核对哈希。
+- [x] 提交 `e8c35b1` 并推送 `master` 与带注释标签 `dev-0.5.9`。
+- [x] 创建 GitHub prerelease、上传六资产并回下载核对文件名、字节数和 SHA-256（6/6 通过）。
+- [x] GitHub Windows/Linux/Android release workflow 与 npm publish workflow 全部成功。
 - [ ] macOS DMG 需 macOS 主机构建与签名，不在当前发布矩阵。
 
 ## 2026-08-27 Chat 联网取证模式

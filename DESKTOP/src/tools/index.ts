@@ -10,6 +10,7 @@ import { BrowserControl, BrowserControlRequest, BrowserControlResult } from '../
 import { BrowserUse, BrowserUseAction, BrowserUseRequest } from '../core/browserUse';
 import { normalizeConversationTarget } from '../core/conversationTarget';
 import { MemoryLabManager } from '../core/memoryLab';
+import { FlowEngine } from '../core/flow';
 import {
   NewmarkToolDefinition,
   NewmarkToolResult,
@@ -401,7 +402,7 @@ export class ToolExecutor {
       t('subagent_send', 'Persist a mailbox message to a same-conversation peer agent. Target by exact id (preferred) or name.', { id: { type: 'string', description: 'Exact peer id from subagent_list.' }, name: { type: 'string', description: 'Convenience peer name.' }, message: { type: 'string' }, prompt: { type: 'string', description: 'Legacy alias for message.' }, kind: { type: 'string', enum: ['directive', 'question', 'result', 'handoff'] }, reply_to: { type: 'string' }, correlation_id: { type: 'string' } }, []),
       t('subagent_result', 'Return the persisted transcript, mailbox summary, status, and latest result for a peer agent. Target by exact id (preferred) or name.', { id: { type: 'string', description: 'Exact peer id from subagent_list.' }, name: { type: 'string', description: 'Convenience peer name.' } }, []),
       t('subagent_close', 'Close a same-conversation peer. Root can close any peer; a peer can close only itself. Target by exact id (preferred) or name.', { id: { type: 'string', description: 'Exact peer id from subagent_list.' }, name: { type: 'string', description: 'Convenience peer name.' } }, []),
-      t('linked_plan', 'Read or update the current conversation linked Markdown plan. Update requires the current expected_revision.', { action: { type: 'string', enum: ['get', 'update'] }, markdown: { type: 'string' }, expected_revision: { type: 'number' } }, ['action']),
+      t('linked_plan', 'Read or incrementally update the current conversation linked Markdown plan. Update requires expected_revision. Prefer append or old_text/new_text for local changes; markdown remains the legacy full replacement path.', { action: { type: 'string', enum: ['get', 'update'] }, markdown: { type: 'string' }, append: { type: 'string' }, old_text: { type: 'string' }, new_text: { type: 'string' }, replace_all: { type: 'boolean' }, expected_revision: { type: 'number' } }, ['action']),
       t('build_history_query', 'Read the concrete public work details (tool calls, results, file changes, guides) of one historical Build Block. Call it proactively when the current task continues, fixes, verifies, or depends on earlier work: reuse the returned activity instead of re-investigating from scratch. Do not call it merely to answer completion status already exposed by the prompt. Select by newest-to-oldest history_index, or by run_id returned from an earlier query. Every activity/guide content is bounded to max_chars (default 2000) to keep the read lean and cache-friendly.', { history_index: { type: 'number', minimum: 1, description: '1-based historical Build Block index from the request ledger; 1 is the newest previous task.' }, run_id: { type: 'string', description: 'Exact run id returned by an earlier build_history_query result.' }, max_events: { type: 'number', minimum: 1, maximum: 200, description: 'Maximum trailing public work events; defaults to 80.' }, max_chars: { type: 'number', minimum: 100, maximum: 4000, description: 'Per-event/per-guide content character bound; defaults to 2000.' } }, []),
       t('context_compress', 'Actively compress the LLM context history for this conversation. This collapses older history entries into a concise summary while preserving the recent tail, which reduces context tokens and cost. IMPORTANT: it affects only the LLM context (what the model sees); the displayed conversation history shown to the user is never altered. Call this when the conversation is long, token pressure is high, or you judge that older turns are no longer needed in full. Idempotent and safe: repeated calls produce incremental summaries.', { keep_recent: { type: 'number', minimum: 2, maximum: 60, description: 'Recent message count to keep uncompressed at the tail. Defaults to the configured keep_recent_messages.' }, force: { type: 'boolean', description: 'Compress even if the context is not yet over the automatic threshold. Defaults to false.' } }, []),
       t('context_history_manage', 'Manage the LLM context history for this conversation without affecting the displayed conversation history. This is the active context-management surface. The hot cache stays bounded; evicted folded segments remain in a conversation-isolated append-only cold archive and are loaded only by explicit search/read/restore calls. Actions: list returns a bounded index of current context entries; remove declares one long-term entry for unload (see below); summarize folds a contiguous current range; restore reinserts a folded segment when its summary marker is still present; search finds matching hot or archived segments; read returns one bounded segment without injecting the whole archive; status reports budgets, hot cache, cold archive, the protected recent zone, and pending removals. The recent context tail and last user message are protected from remove/summarize unless dangerous is true. For cache-optimization, remove ONLY targets long-term history (never the protected recent tail or last user message) and does NOT unload immediately: the declared entry stays in context for the rest of the current Build Block so the provider prefix cache stays stable, then is physically removed when the Block ends — applying to subsequent Blocks only.', {
@@ -431,11 +432,11 @@ export class ToolExecutor {
       t('skill_download', 'Download a skill', { name: { type: 'string' }, source: { type: 'string' } }, ['name', 'source']),
       t('skill', 'Search enabled skill metadata or load one exact skill body on demand. Use query when unsure, then name to load the selected skill.', { query: { type: 'string', maxLength: 200 }, name: { type: 'string', maxLength: 200 } }, []),
       t('flow_list', 'List available Newmark Flow workflows from the Flow folder so the agent can choose one.', {}, []),
-      t('flow_save', 'Design or update a Newmark Flow workflow. Components must be an array of dialog/logic objects compatible with *.Flow.json.', { name: { type: 'string' }, components: { type: 'array' } }, ['name', 'components']),
+      t('flow_save', 'Create or incrementally update a Newmark Flow workflow. Use action=upsert with one component or action=delete with component_id and confirm=true for local edits. action=replace plus components remains the legacy full replacement path.', { name: { type: 'string' }, action: { type: 'string', enum: ['replace', 'upsert', 'delete'] }, components: { type: 'array' }, component: { type: 'object' }, component_id: { type: 'number' }, confirm: { type: 'boolean' } }, ['name']),
       t('flow_run', 'Trigger an existing Newmark Flow workflow by name with optional input and start component.', { name: { type: 'string' }, input: { type: 'string' }, start: { type: 'number' } }, ['name']),
       t('memory_lab_read', 'Read Memory Lab index.json, its path, and usage instructions. Optionally pass component/name/slug to read a memory component core markdown.', { component: { type: 'string' }, name: { type: 'string' }, slug: { type: 'string' } }, []),
       t('memory_lab_query', 'Retrieve a bounded task-relevant Memory Lab set with deterministic scoring and adaptive early stopping. Prefer this over loading the complete index when a focused query is sufficient.', { query: { type: 'string', minLength: 1 }, limit: { type: 'number', minimum: 1, maximum: 12 }, max_chars: { type: 'number', minimum: 1000, maximum: 48000 } }, ['query']),
-      t('memory_lab_update', 'ADD or UPDATE a Memory Lab component. Existing memory should include expectedUpdatedAt from the latest read/query so stale writes fail closed. Prior revisions are archived and the Policy decision is logged.', { name: { type: 'string' }, description: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, tagPaths: { type: 'array', items: { type: 'array', items: { type: 'string' } } }, content: { type: 'string' }, kind: { type: 'string', enum: ['file', 'folder'] }, expectedUpdatedAt: { type: 'string' }, reason: { type: 'string' }, source: { type: 'string' } }, ['name', 'tags', 'content']),
+      t('memory_lab_update', 'Create or incrementally patch a Memory Lab component. Create with name/tags/content. For an existing component pass component plus expectedUpdatedAt and only changed fields; prefer contentAppend or oldText/newText for small body edits. Prior revisions are archived and stale writes fail closed.', { component: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, tagPaths: { type: 'array', items: { type: 'array', items: { type: 'string' } } }, content: { type: 'string' }, contentAppend: { type: 'string' }, oldText: { type: 'string' }, newText: { type: 'string' }, replaceAll: { type: 'boolean' }, kind: { type: 'string', enum: ['file', 'folder'] }, expectedUpdatedAt: { type: 'string' }, reason: { type: 'string' }, source: { type: 'string' } }, []),
       t('memory_lab_delete', 'DELETE obsolete durable memory only when the user explicitly asks to forget/remove it. The prior revision is moved to Memory Lab/archive and the Policy decision is logged.', { component: { type: 'string' }, name: { type: 'string' }, slug: { type: 'string' }, expectedUpdatedAt: { type: 'string' }, reason: { type: 'string' }, source: { type: 'string' } }, []),
       t('memory_lab_reindex', 'Rebuild and organize Memory Lab index links. Routed through Agent runtime when invoked by the model.', {}, []),
       t('automation_list', 'List persisted Newmark automations so the agent can inspect scheduled work.', {}, []),
@@ -987,7 +988,7 @@ export class ToolExecutor {
         case 'skill_download': return await this.skillDownload(g('name'), g('source'), context.signal);
         case 'skill': return '[skill] Routed to Agent runtime.';
         case 'flow_list': return this.flowList();
-        case 'flow_save': return this.flowSave(g('name'), (args as Record<string, unknown>).components);
+        case 'flow_save': return this.flowSave(g('name'), args as Record<string, unknown>);
         case 'flow_run': return `[flow_run] Routed to Agent runtime: ${g('name')}`;
         case 'memory_lab_read': return this.memoryLabRead(g('component') || g('name') || g('slug'));
         case 'memory_lab_query': return '[memory_lab_query] Routed to Agent runtime for bounded Policy retrieval.';
@@ -1533,11 +1534,35 @@ export class ToolExecutor {
     }
   }
 
-  private flowSave(name: string, componentsRaw: unknown): string {
+  private flowSave(name: string, input: Record<string, unknown>): string {
     const cleanName = (name || '').replace(/[<>:"/\\|?*]/g, '-').trim();
     if (!cleanName) return '[flow_save] Workflow name is required.';
-    if (!Array.isArray(componentsRaw)) return '[flow_save] components must be an array.';
-    const components = componentsRaw.map((raw, idx) => {
+    const dir = path.join(this.root, 'Flow');
+    const target = path.join(dir, `${cleanName}.Flow.json`);
+    const action = String(input.action || (Array.isArray(input.components) ? 'replace' : 'upsert')).toLowerCase();
+    let componentsRaw: unknown = input.components;
+    if (action === 'upsert') {
+      if (!input.component || typeof input.component !== 'object') return '[flow_save] component is required for action=upsert.';
+      const existing = FlowEngine.load(dir, cleanName)?.components || [];
+      const component = input.component as Record<string, unknown>;
+      const requestedId = Number(component.id);
+      if (!Number.isFinite(requestedId)) return '[flow_save] component.id is required for action=upsert.';
+      componentsRaw = [...existing.filter(item => item.id !== requestedId), component].sort((a, b) => Number(a.id) - Number(b.id));
+    } else if (action === 'delete') {
+      if (input.confirm !== true) return '[flow_save] action=delete requires confirm=true.';
+      const componentId = Number(input.component_id);
+      if (!Number.isFinite(componentId)) return '[flow_save] component_id is required for action=delete.';
+      const existing = FlowEngine.load(dir, cleanName);
+      if (!existing) return `[flow_save] Workflow not found: ${cleanName}`;
+      const remaining = existing.components.filter(item => item.id !== componentId);
+      if (remaining.length === existing.components.length) return `[flow_save] Component not found: ${componentId}`;
+      componentsRaw = remaining;
+    } else if (action !== 'replace') {
+      return `[flow_save] Unknown action: ${action}`;
+    }
+    if (!Array.isArray(componentsRaw)) return '[flow_save] components must be an array for action=replace.';
+    const componentInputs = componentsRaw as unknown[];
+    const components = componentInputs.map((raw, idx) => {
       const c = raw as Record<string, unknown>;
       const type = c.type === 'logic' ? 'logic' : 'dialog';
       if (type === 'logic') {
@@ -1558,10 +1583,9 @@ export class ToolExecutor {
       };
     });
     const workflow = { name: cleanName, components };
-    const dir = path.join(this.root, 'Flow');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `${cleanName}.Flow.json`), JSON.stringify(workflow, null, 2), 'utf-8');
-    return `[flow_save] OK: ${cleanName}.Flow.json`;
+    fs.writeFileSync(target, JSON.stringify(workflow, null, 2), 'utf-8');
+    return `[flow_save] OK (${action}): ${cleanName}.Flow.json`;
   }
 
   private memoryLabRead(selector: string): string {

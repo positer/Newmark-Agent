@@ -92,7 +92,7 @@ import com.newmark.mobile.data.RemoteTrackingContract
 import com.newmark.mobile.data.RemotePayloadNormalizer
 import com.newmark.mobile.data.ThemeStore
 import com.newmark.mobile.data.WorkspaceInfo
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.LocalNewmarkColors
 import com.newmark.mobile.ui.theme.LocalGlassMode
 import com.newmark.mobile.ui.theme.mobileBackdropBlurDp
 import com.newmark.mobile.ui.theme.scaledGlassAlpha
@@ -405,7 +405,7 @@ private fun NewmarkAppContent(
     onIncomingShareConsumed: (Long) -> Unit,
     onInteractiveReady: () -> Unit,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val context = LocalContext.current
     val rootView = LocalView.current
     val vm: ChatViewModel = viewModel()
@@ -1223,7 +1223,7 @@ private fun CompactMainLayout(
     onRightExpandedChange: (Boolean) -> Unit,
     onSelectRightTab: (RightSidebarTab) -> Unit,
 ) {
-    val palette = LocalNewmarkPalette.current
+    val palette = LocalNewmarkColors.current
     val glass = LocalGlassMode.current
     ModalNavigationDrawer(
         modifier = gestureModifier,
@@ -1237,7 +1237,7 @@ private fun CompactMainLayout(
                         cornerRadius = 0.dp,
                         alpha = scaledGlassAlpha(0.72f, glass.alpha),
                         blurRadius = 3.dp,
-                        refractionHeight = 4.dp,
+                        refractionHeight = 5.dp,
                         refractionAmount = 8.dp,
                         surfaceColor = if (secondaryDrawer) {
                             pcSecondarySurfaceColor()
@@ -1334,7 +1334,7 @@ private fun ExpandedMainLayout(
     onRightExpandedChange: (Boolean) -> Unit,
     onSelectRightTab: (RightSidebarTab) -> Unit,
 ) {
-    val palette = LocalNewmarkPalette.current
+    val palette = LocalNewmarkColors.current
     val hasSecondary = page is SidebarPage.WorkspaceConversations
     val leftReveal = leftProgress
     val secondarySlidePx = with(LocalDensity.current) { 8.dp.roundToPx() }

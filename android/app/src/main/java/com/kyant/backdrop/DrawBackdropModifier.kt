@@ -69,6 +69,7 @@ fun Modifier.drawPlainBackdrop(
                 backdrop = backdrop,
                 shapeProvider = shapeProvider,
                 effects = effects,
+                clipToShape = true,
                 layerBlock = layerBlock,
                 exportedBackdrop = exportedBackdrop,
                 onDrawBehind = onDrawBehind,
@@ -86,6 +87,7 @@ fun Modifier.drawBackdrop(
     highlight: (() -> Highlight?)? = DefaultHighlight,
     shadow: (() -> Shadow?)? = DefaultShadow,
     innerShadow: (() -> InnerShadow?)? = null,
+    clipToShape: Boolean = true,
     layerBlock: (GraphicsLayerScope.() -> Unit)? = null,
     exportedBackdrop: LayerBackdrop? = null,
     onDrawBehind: (DrawScope.() -> Unit)? = null,
@@ -137,6 +139,7 @@ fun Modifier.drawBackdrop(
                 backdrop = backdrop,
                 shapeProvider = shapeProvider,
                 effects = effects,
+                clipToShape = clipToShape,
                 layerBlock = layerBlock,
                 exportedBackdrop = exportedBackdrop,
                 onDrawBehind = onDrawBehind,
@@ -151,6 +154,7 @@ private class DrawBackdropElement(
     val backdrop: Backdrop,
     val shapeProvider: ShapeProvider,
     val effects: BackdropEffectScope.() -> Unit,
+    val clipToShape: Boolean,
     val layerBlock: (GraphicsLayerScope.() -> Unit)?,
     val exportedBackdrop: LayerBackdrop?,
     val onDrawBehind: (DrawScope.() -> Unit)?,
@@ -164,6 +168,7 @@ private class DrawBackdropElement(
             backdrop = backdrop,
             shapeProvider = shapeProvider,
             effects = effects,
+            clipToShape = clipToShape,
             layerBlock = layerBlock,
             exportedBackdrop = exportedBackdrop,
             onDrawBehind = onDrawBehind,
@@ -177,6 +182,7 @@ private class DrawBackdropElement(
         node.backdrop = backdrop
         node.shapeProvider = shapeProvider
         node.effects = effects
+        node.clipToShape = clipToShape
         node.layerBlock = layerBlock
         node.exportedBackdrop = exportedBackdrop
         node.onDrawBehind = onDrawBehind
@@ -191,6 +197,7 @@ private class DrawBackdropElement(
         properties["backdrop"] = backdrop
         properties["shapeProvider"] = shapeProvider
         properties["effects"] = effects
+        properties["clipToShape"] = clipToShape
         properties["layerBlock"] = layerBlock
         properties["exportedBackdrop"] = exportedBackdrop
         properties["onDrawBehind"] = onDrawBehind
@@ -206,6 +213,7 @@ private class DrawBackdropElement(
         if (backdrop != other.backdrop) return false
         if (shapeProvider != other.shapeProvider) return false
         if (effects != other.effects) return false
+        if (clipToShape != other.clipToShape) return false
         if (layerBlock != other.layerBlock) return false
         if (exportedBackdrop != other.exportedBackdrop) return false
         if (onDrawBehind != other.onDrawBehind) return false
@@ -220,6 +228,7 @@ private class DrawBackdropElement(
         var result = backdrop.hashCode()
         result = 31 * result + shapeProvider.hashCode()
         result = 31 * result + effects.hashCode()
+        result = 31 * result + clipToShape.hashCode()
         result = 31 * result + (layerBlock?.hashCode() ?: 0)
         result = 31 * result + (exportedBackdrop?.hashCode() ?: 0)
         result = 31 * result + (onDrawBehind?.hashCode() ?: 0)
@@ -234,6 +243,7 @@ private class DrawBackdropNode(
     var backdrop: Backdrop,
     var shapeProvider: ShapeProvider,
     var effects: BackdropEffectScope.() -> Unit,
+    var clipToShape: Boolean,
     var layerBlock: (GraphicsLayerScope.() -> Unit)?,
     var exportedBackdrop: LayerBackdrop?,
     var onDrawBehind: (DrawScope.() -> Unit)?,
@@ -253,7 +263,7 @@ private class DrawBackdropNode(
     private var graphicsLayer: GraphicsLayer? = null
 
     private val layoutLayerBlock: GraphicsLayerScope.() -> Unit = {
-        clip = true
+        clip = clipToShape
         shape = shapeProvider.shape
         compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
     }

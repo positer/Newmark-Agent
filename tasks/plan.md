@@ -1,5 +1,104 @@
 # Implementation Plan: Newmark Agent dev-0.5.8 连续空响应恢复与无动效历史展开
 
+## 2026-08-27 dev-0.5.9 全平台发布
+
+1. 完成：同步桌面、Android 与根版本为 `0.5.9` / `versionCode=509`。
+2. 完成：运行 Desktop full release 与 Android JVM、Vital Lint、R8、Release assembly 门禁。
+3. 完成：生成 Windows MSI/ZIP、Linux AppImage/deb/ZIP、Android APK 六资产。
+4. 完成：独立执行 Windows 与 Linux 打包态 GUI/CLI/终端 smoke，并验证 APK v2 签名身份。
+5. 进行中：提交、推送 `master` 与 `dev-0.5.9` 标签，创建 GitHub prerelease 并回下载校验远端资产。
+
+## 2026-08-27 PC/移动端 Chat 模式与移动队列头精简
+
+1. 完成：移除移动端队列“排队对话”标题，只保留待处理数量。
+2. 完成：扩展 PC/移动端模式枚举、选择器、持久化与队列恢复，加入 Chat。
+3. 完成：Chat 工具暴露层仅保留 web_search/web_fetch，执行层拒绝全部其他调用。
+4. 完成：Chat 提示要求联网搜索取证、必要时抓取权威原文并尽快总结回答。
+5. 完成：PC 1673 项主断言与 Android 完整发布门禁通过。
+
+## 2026-08-27 移动端紧凑玻璃按钮真实画布
+
+1. 完成：审计左栏、对话顶栏与输入区六个紧凑玻璃按钮的父布局约束。
+2. 完成：新增共享的 8dp 实测透明光学画布，保持名义视觉尺寸、锚点和点击区域。
+3. 完成：迁移六个目标按钮并增加机制级契约测试。
+4. 完成：通过 202 项 JVM 测试、Vital Lint、R8 与 Release APK 组装。
+5. 完成：纠正外扩画布参与父布局测量的视觉回归；恢复输入栏所有原始几何，改为不参与布局的光学子层。
+
+## 2026-08-27 dev-0.5.9 移动端玻璃按钮画布全面解除截断
+
+1. 完成：定位 Kyant `DrawBackdropNode` 无条件 `clip=true + shape` 导致边缘型按钮玻璃被按钮等大画布截断。
+2. 完成：底层增加 `clipToShape` 策略，完整面板默认保持裁剪，边缘型按钮统一关闭内部裁剪。
+3. 完成：高光离屏画布按 dp 描边宽度与模糊半径动态外扩，适配不同屏幕密度。
+4. 完成：审计 Chat、Settings、RightSidebar、Sidebar、Terminal、MemoryLab 共 33 处按钮调用全部走统一修复路径。
+5. 完成：新增底层画布外扩契约并通过定向测试。
+6. 完成：Android 全量发布门禁通过，刷新 APK 并记录哈希。
+
+## 2026-08-27 dev-0.5.9 移动端归档补位与完整玻璃点击生命周期
+
+1. 完成：定位归档胶囊退场后 LazyColumn 条目瞬移，以及通用飞行在移动完成前提前落下的问题。
+2. 完成：本地/远程对话条目增加 keyed placement/fade animation，归档后平滑补位。
+3. 完成：通用浮块 lift/move 继续并行，但必须两者完成后才能开始完整 landing。
+4. 完成：普通玻璃按钮按点击次数完整播放浮起/落下，快速松手与连续点击不截断。
+5. 完成：解除输入区 + 按钮父级裁剪，并审计远程设备、Memory Lab 与左栏新建按钮的裁剪链。
+6. 完成：新增归档补位、通用飞行与玻璃点击生命周期契约并通过定向测试。
+7. 完成：Android 全量发布门禁通过，刷新 APK 并记录哈希。
+
+## 2026-08-27 dev-0.5.9 移动端玻璃浮块边缘增厚
+
+1. 完成：审计共享交互浮块、显式弹窗、开关按压浮块和轻量按钮四类玻璃边缘路径。
+2. 完成：各路径在原宽度上增加 1dp，并维持半圆端捕获外扩与共享边带的比例关系。
+3. 完成：折射和 RGB 色散统一读取增厚后的 `refractionHeight`，高光与无 shader 降级包边同步增厚。
+4. 完成：新增全路径厚度契约并通过定向玻璃测试。
+5. 完成：Android 全量发布门禁通过，刷新 APK 并记录哈希。
+
+## 2026-08-27 dev-0.5.9 移动端排队对话无边框美化
+
+1. 完成：定位 `QueuePanel` / `QueueRow` 全部操作按钮及通用玻璃描边来源。
+2. 完成：新增队列专属无边框按钮，替换暂停/继续、展开/折叠、Guide、编辑和删除操作。
+3. 完成：美化标题状态、待处理计数、行高、留白、弱背景与拖动状态，同时保持无 MD3 ripple。
+4. 完成：新增队列视觉契约并通过定向编译与拖动排序测试。
+5. 完成：Android 全量发布门禁通过，刷新 APK 资产并记录哈希。
+
+## 2026-08-27 dev-0.5.9 移动端取消自定义调色概念
+
+1. 完成：审计设置 UI、Provider 配置与主题状态，确认不存在颜色选择器、自定义颜色字段或调色持久化入口。
+2. 完成：保留亮暗模式所需固定语义色，将 `Palette` 内部命名收敛为 `ThemeColors`，避免暗示用户可编辑调色板。
+3. 完成：增加固定主题色契约，禁止 `CustomPalette`、`ColorPicker`、`customColor`、`accentColor` 与 palette JSON 回归。
+4. 完成：Android 全量单测、Vital Lint、R8 与 Release APK 构建通过，刷新 `release-0.5.9-packages` Android 资产并记录哈希。
+
+## 2026-08-27 dev-0.5.9 移动端工具 help 独立性与 settings_update
+
+1. 完成：复现 `settings_update` 的 `json: string` 二次转义缺陷，并建立普通/Plan/全能力/高权限四套 schema 完整性回归。
+2. 完成：改为原生 `providers`/`active` 参数，执行器兼容旧 `json` 字符串包装。
+3. 完成：统一所有移动端工具的闭合对象 schema、字段类型、required、权限条件、副作用与返回语义。
+4. 完成：修正 settings_update 对六档 intelligence 的执行映射；Android 全量 JVM 单测通过。
+5. 完成：同步桌面/Android `0.5.9` 与 Android `versionCode=509`，更新项目文档和归档。
+
+## 2026-08-27 dev-0.5.9 移动端写入工具增量化
+
+1. 完成：审计 settings、Memory Lab、内部/共享文件、task、calendar、alarm、reindex 全部写入面。
+2. 完成：settings 增加 provider/model upsert/delete 与 active patch，显式字段以外全部保留。
+3. 完成：Memory Lab 增加 component patch、正文 append/replace，继续使用 expectedUpdatedAt 与归档审计。
+4. 完成：内部/共享文件增加 append/replace 与 expected_sha256；读取/stat 返回 SHA-256。
+5. 完成：确认 task 已是单项更新，calendar/alarm/reindex 不要求模型全量回传；全量测试与 Release 门禁通过。
+
+## 2026-08-27 dev-0.5.9 Memory Lab 同义词同步与 PC 写入增量化
+
+1. 完成：移动端 UI 按钮与 Agent reindex 共用 `MemoryLabStore.reindex`，同步 PC 中英同义词主标签、aliases 与 tags/tagPaths 重写逻辑。
+2. 完成：建立英/中文偏好、孤立别名节点清除、入口共用和重复重建幂等测试。
+3. 完成：PC `memory_lab_update` 增加 component patch、append 与唯一片段 replace，旧全量创建/替换兼容。
+4. 完成：PC `flow_save` 增加单组件 upsert/delete；`linked_plan` 增加 append/片段 replace 与 revision 防冲突。
+5. 完成：确认 Automation、Task、Goal、文件 edit 已是局部更新；通过桌面 1673 项验证与 Android 196 项 JVM、Vital Lint、R8、Release 构建。
+6. 完成：独立生成并核验 Android APK 与 Windows x64 MSI；保留原 `release/` 的 0.5.8 历史资产不变。
+
+## 2026-08-27 dev-0.5.9 Memory Lab 按钮与全局涟漪边界
+
+1. 完成：确认实机截图中的右边栏与 Memory Lab 灰色圆形/矩形响应来自 MD3 indication，破坏浅色玻璃表面一致性。
+2. 完成：包括设置页在内的全应用同时关闭 Foundation indication 与 Material3 ripple。
+3. 完成：Memory Lab 新增、重建、关系模式、清除、重置统一为玻璃操作胶囊，按压只产生 Newmark 外扩玻璃边缘。
+4. 完成：右边栏关键按钮显式 `indication=null`，新增契约测试防止灰色涟漪回归。
+5. 完成：Android 全量 JVM、Vital Lint、R8 与 Release APK 构建通过。
+
 ## Overview
 
 dev-0.5.8 只处理两个明确问题：把模型空响应从“单次 Build 内累计两次重试”的局部规则改成“连续五次空响应才终止、任意正常响应立即清零”的连续失败状态机；把对话区 Build/历史展开彻底改成无玻璃、无动画、无延迟的直接切换。两项均先建立失败序列测试，再修改实现。

@@ -1,5 +1,117 @@
 # Newmark Agent dev-0.5.8 TODO
 
+## 2026-08-27 dev-0.5.9 全平台发布
+
+- [x] 版本同步为 `0.5.9` / `versionCode=509`。
+- [x] Desktop full release 与 Android JVM/Vital Lint/R8/Release assembly 通过。
+- [x] 生成并哈希校验六个 Windows/Linux/Android 资产。
+- [x] Windows MSI/ZIP 和 Linux AppImage/deb/ZIP 独立 smoke 通过。
+- [x] APK v2 签名验证通过并记录 Android Debug 证书边界。
+- [ ] 提交并推送 `master` 与 `dev-0.5.9` 标签。
+- [ ] 创建 GitHub prerelease、上传六资产并回下载核对哈希。
+- [ ] macOS DMG 需 macOS 主机构建与签名，不在当前发布矩阵。
+
+## 2026-08-27 Chat 联网取证模式
+
+- [x] 移动队列头仅显示 `n 条待处理`。
+- [x] PC GUI/CLI 加入 Chat 模式。
+- [x] 移动端本地对话加入 Chat 模式。
+- [x] Chat 只公开并执行 web_search/web_fetch。
+- [x] 隐藏/旧工具调用在执行边界拒绝写入及其他权限。
+- [x] Agent 联网取证后尽快总结并提供来源。
+- [x] 双端完整验证与 Android Release APK 构建通过。
+
+## 2026-08-27 紧凑玻璃按钮真实画布
+
+- [x] 左栏新建本地对话按钮完整呈现光学外沿。
+- [x] 顶栏远程设备与新对话按钮完整呈现光学外沿。
+- [x] 输入区 `+`、模型与发送/停止按钮完整呈现光学外沿。
+- [x] 点击区域不随透明画布扩大，菜单锚点仍取视觉按钮。
+- [x] 完整 Android 发布门禁通过并刷新 APK。
+- [x] 外扩画布不再增加父级尺寸，输入框厚度、padding、按钮间距和位置恢复定稿值。
+
+## 2026-08-27 dev-0.5.9 移动端玻璃按钮画布解除截断
+
+- [x] 修复 Kyant 内部按钮等大 shape-clipped 离屏层。
+- [x] 边缘型按钮玻璃使用 `clipToShape=false`。
+- [x] 完整玻璃面板继续默认按 shape 裁剪。
+- [x] 高光画布按描边宽度与模糊半径动态外扩。
+- [x] 审计 7 个文件、33 处 `glassButtonSurface` 调用全面覆盖。
+- [x] `GlassButtonCanvasOutsetContractTest` 与相关玻璃测试通过。
+- [x] Android 全量 JVM、Vital Lint、R8、Release APK 与资产哈希。
+
+## 2026-08-27 dev-0.5.9 移动端归档补位与完整玻璃动画
+
+- [x] 本地与远程归档对话移除后，下方胶囊使用 260ms placement animation 平滑补位。
+- [x] 浮起与运动并行，但完整浮起和运动结束前禁止开始落下。
+- [x] 普通玻璃按钮每次点击完整播放 105ms 浮起和 165ms 落下。
+- [x] 连续点击逐次排队，不截断前一个玻璃周期。
+- [x] 解除输入区 + 按钮外扩边缘裁剪，审计远程设备、Memory Lab 和左栏新建按钮。
+- [x] 定向归档、飞行、玻璃按钮与 LiquidGlass 契约测试通过。
+- [x] Android 全量 JVM、Vital Lint、R8、Release APK 与资产哈希。
+
+## 2026-08-27 dev-0.5.9 移动端玻璃浮块边缘增厚
+
+- [x] 主交互玻璃边带 6dp → 7dp。
+- [x] 独立弹窗玻璃边带 4dp → 5dp。
+- [x] 开关按压玻璃边带 8dp → 9dp。
+- [x] Kyant 高光与降级包边在原宽度上增加 1dp。
+- [x] RGB 色散与折射层共用增厚后的边带宽度。
+- [x] 新增 `GlassEdgeThicknessContractTest` 并通过定向测试。
+- [x] Android 全量 JVM、Vital Lint、R8、Release APK 与资产哈希。
+
+## 2026-08-27 dev-0.5.9 移动端排队对话无边框美化
+
+- [x] 去除暂停/继续、展开/折叠、Guide、编辑和删除按钮的全部描边。
+- [x] 队列按钮静止透明，按压使用同色晕染、轻微抬升与放大且无 MD3 ripple。
+- [x] 增加“排队对话”标题、状态点、待处理数量与更舒展的队列行布局。
+- [x] 保持长按拖动排序、邻项位移动画与可编辑性边界。
+- [x] 新增 `QueuePanelVisualContractTest` 并通过定向测试。
+- [x] Android 全量 JVM、Vital Lint、R8、Release APK 与资产哈希。
+
+## 2026-08-27 dev-0.5.9 移动端固定主题色
+
+- [x] 审计并确认移动端无自定义调色入口、字段或持久化状态。
+- [x] 将内部 Palette 命名替换为固定 ThemeColors，保留内置深色/浅色主题。
+- [x] 清理 SettingsScreen 与 MemoryLabScreen 重复主题色 import。
+- [x] 新增契约测试，禁止颜色选择器、自定义强调色和 palette JSON 回归。
+- [x] Android 全量 JVM、Vital Lint、R8、Release APK 构建及资产哈希。
+
+## 2026-08-27 dev-0.5.9 移动端工具 help 与 settings_update
+
+- [x] 复现 `settings_update` 二次 JSON 字符串声明导致的格式重试。
+- [x] 改为原生 `providers`/`active` 参数，并保留旧 `json` 包装兼容。
+- [x] 审计普通 Build、Plan、共享文件/应用授权及 Root/Shizuku/ADB 高权限工具 help。
+- [x] 统一闭合 schema、字段类型、required、权限条件、副作用与返回语义。
+- [x] 新增四套最终工具集完整性回归；Android 全量 JVM 单测通过。
+- [x] 同步版本至 `0.5.9` / `versionCode=509`。
+
+## 2026-08-27 dev-0.5.9 移动端写入工具增量化
+
+- [x] settings provider/model/active 局部 patch；删除需 confirm；旧全量 providers 兼容。
+- [x] Memory Lab 元数据、标签和正文 append/replace 局部更新。
+- [x] 内部与共享文本文件 overwrite/append/replace 和 SHA-256 并发保护。
+- [x] 审计 task、calendar、alarm、reindex，无额外全量模型负担。
+- [x] Android 全量 JVM、Vital Lint、R8、Release APK 构建通过。
+
+## 2026-08-27 dev-0.5.9 Memory Lab 同义词同步与 PC 写入增量化
+
+- [x] 移动端按钮与 Agent 工具共用 PC 同义词/近义词合并语义。
+- [x] 覆盖中英文主标签、aliases、tags/tagPaths 和重复重建稳定性。
+- [x] PC Memory Lab component patch / append / unique replace。
+- [x] PC Flow 单组件 upsert/delete 与 linked plan 局部替换。
+- [x] 审计 Automation、Task、Goal、文件工具并确认已有增量能力。
+- [x] Desktop build + verify 1673/1673；Android 196 tests + lintVital + R8 + assembleRelease。
+- [x] 打包并核验 dev-0.5.9 Android APK 与 Windows x64 MSI，集中输出到 `release-0.5.9-packages/`。
+
+## 2026-08-27 dev-0.5.9 Memory Lab 按钮与全局涟漪边界
+
+- [x] 点名并移除右边栏和 Memory Lab 破坏美观的 MD3 灰色涟漪。
+- [x] 包括设置页在内同时禁用 Foundation indication 与 Material3 ripple。
+- [x] 设置页不再恢复默认 MD3 点击响应。
+- [x] Memory Lab 五类操作按钮统一为无灰色遮罩的玻璃浮块胶囊。
+- [x] 全量 Android tests、lintVital、R8、assembleRelease 通过。
+
 ## Android recent-file exposure
 
 - [x] 普通模式新增 `recent_files`，无需先知道目录即可发现最新文档、图片和视频。

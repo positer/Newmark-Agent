@@ -18,6 +18,23 @@ data class MemoryLabUpdateInput(
     val source: String = "memory_lab_update",
 )
 
+data class MemoryLabPatchInput(
+    val component: String,
+    val name: String? = null,
+    val description: String? = null,
+    val tags: List<String>? = null,
+    val tagPaths: List<List<String>>? = null,
+    val content: String? = null,
+    val contentAppend: String? = null,
+    val oldText: String? = null,
+    val newText: String = "",
+    val replaceAll: Boolean = false,
+    val kind: String? = null,
+    val expectedUpdatedAt: String = "",
+    val reason: String = "",
+    val source: String = "memory_lab_update",
+)
+
 data class MemoryLabWriteResult(
     val index: MemoryLabIndex,
     val slug: String = "",
@@ -93,13 +110,7 @@ class MemoryLabStore(context: Context) {
     /** 规范化重建索引（对齐 PC reindex 的排序/一致性语义，移动端只读场景为幂等重写） */
     fun reindex(): MemoryLabIndex {
         val index = load()
-        val normalized = MemoryLabIndex(
-            version = 2,
-            updatedAt = java.time.Instant.now().toString(),
-            preferredLanguage = index.preferredLanguage,
-            tags = rebuildMemoryTags(index.tags, index.components),
-            components = index.components.toSortedMap(),
-        )
+        val normalized = normalizeMemoryIndex(index)
         save(normalized)
         return normalized
     }
@@ -137,10 +148,50 @@ class MemoryLabStore(context: Context) {
             revision = (existing?.revision ?: 0) + 1,
         )
         val next = oldIndex.copy(updatedAt = now, components = (oldIndex.components + (slug to component)).toSortedMap())
-        val rebuilt = next.copy(tags = rebuildMemoryTags(next.tags, next.components))
+        val rebuilt = normalizeMemoryIndex(next)
         save(rebuilt)
         appendPolicy(if (existing == null) "add" else "update", slug, input.reason, input.source, component.revision, sha256(content))
         return MemoryLabWriteResult(rebuilt, slug, component, receipt(if (existing == null) "update" else "update", rebuilt, slug))
+    }
+
+    @Synchronized
+    fun patch(input: MemoryLabPatchInput): MemoryLabWriteResult {
+        val index = load()
+        val oldSlug = resolveSlug(index, input.component) ?: error("Memory component not found: ${input.component}")
+        val existing = index.components.getValue(oldSlug)
+        if (input.expectedUpdatedAt.isNotBlank() && input.expectedUpdatedAt != existing.updatedAt) {
+            error("Memory component changed since it was read: $oldSlug")
+        }
+        val oldContent = componentContent(oldSlug)
+        val nextContent = when {
+            input.content != null -> input.content
+            input.contentAppend != null -> oldContent + input.contentAppend
+            input.oldText != null -> {
+                require(input.oldText.isNotEmpty()) { "old_text must not be empty" }
+                val count = oldContent.windowed(input.oldText.length, 1).count { it == input.oldText }
+                require(count > 0) { "old_text not found" }
+                require(count == 1 || input.replaceAll) { "old_text matched $count places; pass replace_all=true or a unique fragment" }
+                if (input.replaceAll) oldContent.replace(input.oldText, input.newText) else oldContent.replaceFirst(input.oldText, input.newText)
+            }
+            else -> oldContent
+        }
+        val nextName = input.name ?: existing.name
+        val nextTags = input.tags ?: input.tagPaths?.flatten() ?: existing.tags
+        val nextPaths = input.tagPaths ?: input.tags?.map(::listOf) ?: existing.tagPaths
+        val nextKind = input.kind ?: existing.kind
+        val nextSlug = slugifyMemory(nextName)
+        require(nextSlug == oldSlug) { "renaming a Memory Lab component is not supported by incremental patch; create the new component then delete the old one" }
+        return update(MemoryLabUpdateInput(
+            name = nextName,
+            description = input.description ?: existing.description,
+            tags = nextTags,
+            tagPaths = nextPaths,
+            content = nextContent,
+            kind = nextKind,
+            expectedUpdatedAt = existing.updatedAt,
+            reason = input.reason,
+            source = input.source,
+        ))
     }
 
     @Synchronized
@@ -154,7 +205,7 @@ class MemoryLabStore(context: Context) {
         if (target.exists()) target.deleteRecursively()
         val now = java.time.Instant.now().toString()
         val nextComponents = index.components - slug
-        val next = index.copy(updatedAt = now, components = nextComponents, tags = rebuildMemoryTags(index.tags, nextComponents))
+        val next = normalizeMemoryIndex(index.copy(updatedAt = now, components = nextComponents))
         save(next)
         appendPolicy("delete", slug, reason, source, existing.revision, "")
         return MemoryLabWriteResult(next, slug, null, receipt("delete", next, slug))
@@ -171,7 +222,7 @@ class MemoryLabStore(context: Context) {
         }
     }
 
-    fun instructions(): String = "Memory Lab tool contract: read/query first; mutate only with memory_lab_update/delete; use component slug or exact name; updates/deletes require latest expected_updated_at when editing existing data; tags is comma-separated and tag_paths is JSON array of tag-path arrays; content is Markdown; mutations return a receipt and are archived in policy.jsonl. Never print tool schemas or repeat the full index in chat."
+    fun instructions(): String = "Memory Lab tool contract: read/query first. Create with name/tags/content; tag_paths is JSON array of tag-path arrays. Patch an existing component with component + latest expected_updated_at and only changed fields; use content_append or old_text/new_text for small content edits. Delete with component + latest expected_updated_at. Mutations return a receipt and are archived in policy.jsonl. Never print tool schemas or repeat the full index in chat."
 
     private fun resolveSlug(index: MemoryLabIndex, selector: String): String? {
         val value = selector.trim()
@@ -313,6 +364,95 @@ internal fun rebuildMemoryTags(
             aliases = value.aliases.toList(),
         )
     }
+}
+
+internal fun normalizeMemoryIndex(index: MemoryLabIndex): MemoryLabIndex {
+    val aliasGroups = collectMemoryAliasGroups(index.tags, index.preferredLanguage)
+    val aliasLookup = mutableMapOf<String, String>()
+    aliasGroups.forEach { (canonical, names) ->
+        aliasLookup[memoryTagComparisonKey(canonical)] = canonical
+        names.forEach { aliasLookup[memoryTagComparisonKey(it)] = canonical }
+    }
+    fun canonical(tag: String): String = aliasLookup[memoryTagComparisonKey(tag)] ?: normalizeMemoryTag(tag)
+    val components = index.components.toSortedMap().mapValues { (_, component) ->
+        val tags = component.tags.map(::canonical).filter(String::isNotBlank).distinct().sorted()
+        val paths = component.tagPaths.map { path ->
+            path.map(::canonical).filter(String::isNotBlank).fold(emptyList<String>()) { acc, tag ->
+                if (acc.lastOrNull() == tag) acc else acc + tag
+            }
+        }.filter(List<String>::isNotEmpty).distinctBy { it.joinToString("\u0000") }.sortedBy { it.joinToString("\u0000") }
+        component.copy(tags = tags, tagPaths = paths)
+    }
+    // Rebuild only from canonicalized component relationships. Feeding the raw
+    // tag map back in would resurrect synonym nodes that were just merged.
+    val rebuilt = rebuildMemoryTags(emptyMap(), components).toMutableMap()
+    rebuilt.keys.toList().forEach { tag ->
+        val aliases = aliasGroups[tag].orEmpty().filter { it != tag }.distinct().sorted()
+        rebuilt[tag] = rebuilt.getValue(tag).copy(aliases = aliases)
+    }
+    return MemoryLabIndex(
+        version = 2,
+        updatedAt = java.time.Instant.now().toString(),
+        preferredLanguage = index.preferredLanguage,
+        tags = rebuilt.toSortedMap(),
+        components = components,
+    )
+}
+
+private fun collectMemoryAliasGroups(
+    tags: Map<String, MemoryTagNode>,
+    preferredLanguage: String,
+): Map<String, List<String>> {
+    val groups = mutableMapOf<String, MutableSet<String>>()
+    tags.forEach { (rawTag, node) ->
+        val names = (listOf(rawTag) + node.aliases).map(::normalizeMemoryTag).filter(String::isNotBlank).distinct()
+        names.forEach { name ->
+            val group = groups.getOrPut(memorySynonymKey(name)) { sortedSetOf() }
+            group += names
+        }
+    }
+    return groups.values.associate { values ->
+        val all = values.toList().sorted()
+        choosePrimaryMemoryTag(all, preferredLanguage) to all
+    }
+}
+
+private fun normalizeMemoryTag(value: String): String {
+    val raw = value.trim()
+    if (raw.isBlank()) return ""
+    val body = raw.removePrefix("#").trim().replace(Regex("[\\s_]+"), "-").replace(Regex("-+"), "-")
+    return body.takeIf(String::isNotBlank)?.let { "#$it" }.orEmpty()
+}
+
+private fun memoryTagComparisonKey(tag: String): String =
+    tag.removePrefix("#").trim().lowercase().replace(Regex("[\\s_]+"), "-")
+
+private fun memorySynonymKey(tag: String): String {
+    val key = memoryTagComparisonKey(tag)
+    return mapOf(
+        "physics" to "physics", "物理" to "physics",
+        "mathematics" to "mathematics", "math" to "mathematics", "数学" to "mathematics",
+        "theoretical-physics" to "theoretical-physics", "理论物理" to "theoretical-physics",
+        "agent" to "agent", "智能体" to "agent",
+        "skill" to "skill", "skills" to "skill", "技能" to "skill",
+        "memory" to "memory", "记忆" to "memory",
+        "model" to "model", "模型" to "model",
+        "provider" to "provider", "供应商" to "provider",
+        "release" to "release", "发布" to "release",
+        "code" to "code", "代码" to "code",
+        "research" to "research", "研究" to "research",
+    )[key] ?: key
+}
+
+private fun choosePrimaryMemoryTag(tags: List<String>, preferredLanguage: String): String {
+    val chinese = tags.filter { Regex("[\\u3400-\\u9fff]").containsMatchIn(it) }
+    val nonChinese = tags.filterNot { Regex("[\\u3400-\\u9fff]").containsMatchIn(it) }
+    val pool = when (preferredLanguage) {
+        "zh" -> chinese
+        "en" -> nonChinese
+        else -> emptyList()
+    }.ifEmpty { tags }
+    return pool.minWithOrNull(compareBy<String> { it.length }.thenBy { it }) ?: tags.first()
 }
 
 private fun JSONArray.toStringList(): List<String> =

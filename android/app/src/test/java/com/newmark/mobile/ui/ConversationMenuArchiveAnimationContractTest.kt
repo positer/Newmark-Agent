@@ -29,5 +29,8 @@ class ConversationMenuArchiveAnimationContractTest {
         assertTrue(source.contains("archiveConversationAfterExit"))
         assertTrue(source.contains("archiveProgress.animateTo(0f"))
         assertTrue(source.contains("onArchive()"))
+        assertTrue(source.contains("placementSpec = tween(260, easing = PcEaseOutExpo)"))
+        assertTrue(source.contains("fadeOutSpec = tween(180, easing = PcEaseOutExpo)"))
+        assertTrue(source.contains("Modifier.animateItem("))
     }
 }

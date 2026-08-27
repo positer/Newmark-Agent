@@ -1,5 +1,71 @@
 # Newmark Agent Overview
 
+## 2026-08-27 dev-0.5.9 全平台发布状态
+
+`npm run release` 已通过 Desktop full release、Android JVM/Vital Lint/R8/Release assembly，并生成 Windows MSI/ZIP、Linux AppImage/deb/ZIP、Android APK 六资产。Windows MSI/ZIP 完成独立打包态 smoke；Linux 三包在 Ubuntu 24.04 WSL 环境完成真实 GUI 启动、Bash/sh 终端回环和进程退出验证。APK 为 v2 签名，签名者 `C=US, O=Android, CN=Android Debug`；Windows 未做 Authenticode 签名。
+
+最终六资产位于根目录 `release/`。Android APK 为 52,717,700 bytes，SHA-256 `2BA403506ACC39B58DAFFE1AECBE53715C58302AD4B643B3AB7C448E7F8FADB3`。其他资产哈希记录于 `README.md` 与 `archive/20260827-154500-dev-0.5.9-all-platform-release.md`。回滚点为上一稳定标签 `dev-0.5.8`；macOS DMG 需要 macOS 原生主机，不属于本机发布矩阵。
+
+## 2026-08-27 PC/移动端 Chat 模式与移动队列标题精简
+
+- `DESKTOP/src/core/types.ts`、`agent.ts`、`toolPolicy.ts`：Chat 成为正式 `AgentMode`，系统提示要求联网取证后尽快总结；工具公开层与执行层均只允许 `web_search`、`web_fetch`。
+- `DESKTOP/src/ui/index.html`、`cli.ts`、`cli-commands.ts`：GUI 与 CLI 均可选择 Chat，并保留对话级模式持久化。
+- `DESKTOP/src/tests/chatModePolicyVerify.ts`：验证 Chat UI、提示词、两个公开工具及对写入/终端调用的权限拒绝。
+- `android/.../LocalToolCatalog.kt`、`LocalTools.kt`、`LocalToolExecutor.kt`、`LocalContextContract.kt`：移动端本地 Chat 使用相同双层工具边界和快速证据总结契约。
+- `android/.../ChatViewModel.kt`：Chat 可持久化、入队、出队恢复并把当前模式传入工具执行边界。
+- `android/.../ChatScreen.kt`：本地模式菜单加入 Chat；队列头只显示 `n 条待处理`，移除“排队对话”标题。
+- 验证：PC 1673 项主套件断言通过；Android JVM、Vital Lint、R8、Release assembly 全部通过。
+
+## 2026-08-27 移动端紧凑玻璃按钮真实外扩画布
+
+- `android/.../ui/components/LiquidGlass.kt`：新增共享 `GlassButtonCanvas` 与 8dp `GlassButtonCanvasOutset`。外层参与 Compose 测量并提供透明光学空间，内层保留按钮视觉尺寸、点击语义和菜单锚点。
+- `android/.../ui/ChatScreen.kt`：顶栏远程设备/新对话，输入区 `+`、模型、发送/停止入口使用真实外扩槽；停止态跑马边框仍保持 36dp 并居中于 52dp 画布。
+- `android/.../ui/Sidebar.kt`：本地对话新增按钮迁移到共享画布。
+- `GlassButtonCanvasOutsetContractTest.kt`、`GlassClickLifecycleContractTest.kt`：约束共享外扩、六个入口接入、名义点击框与完整浮起/落下生命周期。
+- 发布验证：202 项 JVM 测试、Vital Lint、R8 与 Release assembly 全部通过。
+
+后续视觉回归修正：外扩画布不得参与父级测量。`GlassButtonCanvas` 现在向 Row/Box 只报告原始 24/28/36dp，光学层用居中的 `requiredSize(visualSize + 16dp)` 独立绘制。输入区恢复原有 32dp `+` 槽、36dp 模型槽、36dp 发送/停止按钮及全部既有 padding/间距；完整门禁为 203 项 JVM 测试通过。
+
+## dev-0.5.9 implementation state (2026-08-27)
+
+移动端本地 Agent 工具声明已完成独立性修复。`android/app/src/main/java/com/newmark/mobile/data/LocalTools.kt` 统一生成闭合 JSON Schema，并为普通、Plan、共享文件、应用列表以及 Root/Shizuku/ADB 工具补充完整用途、输入格式、权限条件、副作用和返回语义。`settings_update` 从 `json: string` 改为直接接收 `providers` 与/或 `active`，避免兼容服务在双层 JSON 转义处反复失败；执行器仍接受 dev-0.5.8 历史调用格式。
+
+`LocalToolContractTest` 覆盖普通 Build、普通 Plan、全能力 Build、全能力 Plan 四套最终工具集，检查无重复名称、schema 闭合、required、字段类型与嵌套结构完整，并校验高权限清单和六档 intelligence。Android 全量 `:app:testDebugUnitTest`、Vital Lint、R8 与 Release assembly 通过。版本为桌面/Android `0.5.9`，Android `versionCode=509`。Release APK 为 `android/app/build/outputs/apk/release/app-release.apk`，SHA-256 `376A28FADD8F7B071734ACBCD18F403CFBD61263F358EE635A956571048D6430`。
+
+### dev-0.5.9 incremental mobile writes
+
+`ProviderConfig.kt` 提供 provider/model/active 纯 patch 合并器，只覆盖显式字段。settings 支持 provider/model upsert/delete；旧 providers 数组仍作为兼容全量入口。文件写入共享 overwrite/append/replace 合并器，唯一片段替换默认拒绝多处命中，`expected_sha256` 防止读后目标变化；`read_file` 和共享 `stat` 返回 SHA-256。Memory Lab 增加按 component 的 patch，元数据与正文可独立修改，继续执行 expectedUpdatedAt、归档、policy log 和 rebuild receipt。
+
+### dev-0.5.9 Memory Lab parity and desktop patch-first writes
+
+`android/.../MemoryLabStore.kt` 现在是 UI 重建按钮与 Agent `memory_lab_reindex` 的唯一规范化入口。它复用 PC 的已知同义词表、语言偏好主标签选择、aliases 保留和组件 tags/tagPaths 重写规则，且重复重建保持相同图结构。移动端单测覆盖英/中文主标签、孤立旧别名节点清除、入口共用与幂等性。
+
+PC Agent 写入面审计后，`memory_lab_update` 支持按 component 保留未提交字段、正文 append 或唯一片段 replace；`flow_save` 支持单组件 upsert/delete；`linked_plan` 支持 append 与 revision-checked old_text/new_text。三者都保留旧全量替换兼容。`automation_update`、task、Goal 已是字段或单项更新，文件已有 `edit`，因此没有增加重复工具。桌面构建与主验证 `1673/1673` 通过；Android `196` 项 JVM 测试、Vital Lint、R8 和 Release assembly 通过。
+
+### dev-0.5.9 mobile Memory Lab controls and ripple boundary
+
+`NewmarkTheme.kt` 现在同时以 `NoVisualIndication` 和 `LocalRippleConfiguration=null` 关闭包括设置页在内的全应用 Compose Foundation/Material3 灰色涟漪，避免 Material3 自有按钮绕过普通 clickable 策略。`RightSidebar.kt` 的开栏、分页及图标按钮显式使用 `indication=null`；`MemoryLabScreen.kt` 将新增、重建索引、双向/父链/子树/直接、清除和重置收敛为 `MemoryLabGlassAction`：固定高度/最小宽度、稳定间距、静态浅色材质底、按压外扩玻璃边缘和禁用态。该改动针对实机截图中右边栏和 Memory Lab 的 MD3 灰色涟漪会压脏浅色玻璃表面的问题。移动端主题层只保留内置 `NewmarkDarkThemeColors` / `NewmarkLightThemeColors` 两套语义色，不存在用户自定义调色状态、设置入口或持久化字段；`FixedThemeColorsContractTest.kt` 阻止调色板/颜色选择器能力回归。
+
+本轮 Android 发布资产为 `release-0.5.9-packages/Newmark-Agent-0.5.9-android.apk`，大小 52,717,700 bytes，SHA-256 `5750357AAA0CDF6C335C0954325B36250F9D497F36C0DAF599ED98CA390E8155`。全量 JVM、Vital Lint、R8 与 Release assembly 均通过。
+
+`ChatScreen.kt` 的 `QueuePanel` / `QueueRow` 使用队列专属 `QueueIconButton`，不再复用带玻璃边缘的通用 `StackIconButton`。队列内暂停、展开、Guide、编辑、删除按钮均无 `.border` 和 `glassButtonSurface`，由透明静止态、同色按压晕染、轻微抬升/放大承担反馈；标题区显示“排队对话”、状态点和待处理计数，行高从 40dp 调整为 44dp 并增加弱背景层次。`QueuePanelVisualContractTest.kt` 固化无边框、无 MD3 indication 和队列专属反馈契约。
+
+排队对话美化后的 Android Release APK 为 52,717,700 bytes，SHA-256 `E768C0480BDD9362A3804B4653A479908F7AB8B740977D5376E0677CE4486DD7`，已覆盖 `release-0.5.9-packages/Newmark-Agent-0.5.9-android.apk`。Android 全量 JVM、Vital Lint、R8 与 Release assembly 通过。
+
+`LiquidGlass.kt` 统一管理移动端玻璃边缘厚度：`MobileInteractionGlassEdge` 从 6dp 增至 7dp，半圆端捕获外扩同步维持两倍关系为 14dp；显式弹窗折射边带从 4dp 增至 5dp，开关按压浮块从 8dp 增至 9dp。`thickGlassHighlight` 将标准 Kyant 高光宽度统一增加 1dp，`kyantGlassEdge` 的启用与降级包边也各增加 1dp。`liquidGlassModifier` 对 RGB 色散和折射传入相同的加厚 `refractionHeight`，`GlassEdgeThicknessContractTest.kt` 防止任一玻璃路径退回旧宽度。
+
+玻璃边缘增厚后的 Android Release APK 为 52,717,700 bytes，SHA-256 `16E7AC7290995BBE656431958522C9B131FB76B10B723EC7F6034C3254789EDA`，已覆盖 `release-0.5.9-packages/Newmark-Agent-0.5.9-android.apk`。Android 全量 JVM、Vital Lint、R8 与 Release assembly 通过。
+
+`Sidebar.kt` 为本地与远程对话 LazyColumn 条目增加 `animateItem` placement/fade 规格；归档胶囊完成自身 220ms 退场并从数据源移除后，其余胶囊以 260ms `PcEaseOutExpo` 平滑补位。`LiquidGlass.kt` 的 `runOverlappedLiquidFlight` 仍允许 lift/move 并行，但现在严格等待 lift 与 move 都完成后才调用 `onLandingStarted` 和 `land`。`glassButtonSurface` 使用逐次点击队列，每次点击必须完成 105ms 浮起至完整尺寸，再完成 165ms 回落；快速点击不会截断前一次动画。`ChatScreen.kt` 移除输入条对 + 按钮外扩浮块的父级 clip，仅保留带 shape 的背景与边框。
+
+本轮 Android Release APK 为 52,717,700 bytes，SHA-256 `FD509BBC9C2959DDF7F07ABC1AF447CBAF06F2A9C71D136387235A82836CCE5A`，已覆盖 `release-0.5.9-packages/Newmark-Agent-0.5.9-android.apk`。Android 全量 JVM、Vital Lint、R8 与 Release assembly 通过。
+
+`DrawBackdropModifier.kt` 新增 `clipToShape` 内部画布策略，默认完整玻璃面板仍按 shape 裁剪；`kyantGlassEdge` 显式使用 `clipToShape=false`，使按钮玻璃的高光、阴影和放大形变能绘制到按钮布局边界之外。`HighlightModifier.kt` 不再使用固定 2px 安全画布，而按 `highlight.width + blurRadius` 计算密度感知 outset。全项目审计确认 Chat、Settings、RightSidebar、Sidebar、Terminal、MemoryLab 共 33 处 `glassButtonSurface` 均通过这一统一路径，`GlassButtonCanvasOutsetContractTest.kt` 固化底层无截断契约。
+
+本轮 Android Release APK 为 52,717,700 bytes，SHA-256 `7DBEEBC05B794473E50476E270A5BBBC315FEBF5E0F4A2351CA07840BB09C85B`，已覆盖 `release-0.5.9-packages/Newmark-Agent-0.5.9-android.apk`。Android 全量 JVM、Vital Lint、R8 与 Release assembly 通过。
+
+审计确认 `task_create` 已是单项 create/update/clear；calendar/alarm 是一次性系统 Intent；memory reindex 只在设备内重建，均不存在模型回传全量集合的问题。全量 JVM、Vital Lint、R8 和 Release assembly 通过。最新 APK SHA-256 为 `CD2A5E889937573DA870BB74471FFBB76B76E4243FADB383354DA699FBFB8DF2`。
+
 ## dev-0.5.8 implementation state (2026-08-26)
 
 dev-0.5.8 implements a focused desktop runtime/UI correction plus mobile Agent stability work. `DESKTOP/src/core/emptyResponseRetry.ts` owns the explicit-empty outcome state machine. `agentKernelRunner.ts` treats the initial explicit failure as streak 1, performs five same-deployment retries after 200ms, 800ms, 2s, 10s, and 60s, and terminates only when the fifth retry also returns an explicit empty failure (six consecutive explicit empty outcomes total). On Android, thought/reasoning, assistant text, tool calls, and other observable stream activity all reset the local streak immediately. Empty classification remains separate from waiting, silence, EOF, stream closure, abort, content filtering, explicit errors, and unrelated transport failures.
@@ -32,6 +98,8 @@ release/
 ```
 
 Commit `ee98a43af6b3e15dd20eab9b70ed0b4fbb4c1f5c` and annotated tag `dev-0.5.8` are published. The GitHub prerelease contains exactly the six bound assets, `newmark-agent@0.5.8` is published to npm, and both the npm workflow and Windows/Linux/Android release workflow passed. A clean remote download revalidated every byte size and SHA-256, then reran Windows MSI/ZIP and WSL AppImage/deb/ZIP packaged smokes. Windows executable signing remains disabled. The APK verifies with APK Signature Scheme v2 and the existing Android Debug certificate, so it is suitable for sideload testing but not store distribution. No ADB device was connected for install/runtime validation. The repository has a macOS DMG target, but Electron's macOS packaging constraint requires a macOS host; DMG is outside the current six-asset Windows/Linux/Android release matrix and was not produced here. Full evidence and hashes are in `archive/20260827-011341-dev-0.5.8-all-platform-release.md`.
+
+The local Windows installation was also validated through UAC. A same-version MSI repair returned success but left the already-missing `resources/app.asar` absent, so the final accepted path performed one elevated uninstall followed by a fresh install. Both Windows Installer phases returned `0`; the new registration is `0.5.8.0` with product code `{78E73760-F636-4FF1-9D2F-C294697BA352}`. Installed and packaged `app.asar` are both 160,431,960 bytes with SHA-256 `826CB38FC9652B0E8A9BD30766DDF726598C189FDD849A86AEBCD34C66799E4D`. The existing user config hash stayed unchanged, installed CLI version checks returned `0.5.8`, shortcuts were restored, and the main/GPU/renderer/utility process set became responsive after startup.
 
 ### Android latest-file exposure
 

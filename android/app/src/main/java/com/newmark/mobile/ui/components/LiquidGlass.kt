@@ -6,11 +6,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -36,9 +39,17 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.window.DialogWindowProvider
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.LayerBackdrop
@@ -52,10 +63,91 @@ import com.kyant.backdrop.highlight.HighlightStyle
 import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
 import com.newmark.mobile.ui.theme.NewmarkBgSecondary
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.LocalNewmarkColors
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/**
+ * Transparent layout space reserved around every compact glass control.
+ *
+ * This is deliberately a real measured canvas, not an instruction to draw
+ * outside a button-sized RenderNode.  It contains the 7dp optical edge plus
+ * highlight blur, shadow and the 1.065 press expansion.  The inner control
+ * keeps its nominal size, semantics and hit target.
+ */
+val GlassButtonCanvasOutset = 8.dp
+
+private class CenteredInsetShape(
+    private val shape: Shape,
+    private val inset: Dp,
+) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+        val insetPx = with(density) { inset.toPx() }
+        val visualSize = Size(
+            width = (size.width - insetPx * 2).coerceAtLeast(0f),
+            height = (size.height - insetPx * 2).coerceAtLeast(0f),
+        )
+        val visualOutline = shape.createOutline(visualSize, layoutDirection, density)
+        return Outline.Generic(
+            Path().apply {
+                addOutline(visualOutline)
+                translate(Offset(insetPx, insetPx))
+            },
+        )
+    }
+}
+
+/**
+ * Compact glass button whose parent-facing layout and visual geometry remain
+ * exactly [visualSize]. The larger optical RenderNode is an overflowing child:
+ * it can render the glass envelope without changing any row height, spacing,
+ * alignment, anchor, or hit target chosen by the caller.
+ */
+@Composable
+fun GlassButtonCanvas(
+    visualSize: Dp,
+    shape: Shape,
+    surfaceColor: Color? = null,
+    alpha: Float = 0.12f,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    visualModifier: Modifier = Modifier,
+    interactionSource: MutableInteractionSource? = null,
+    content: @Composable () -> Unit,
+) {
+    val opticalShape = remember(shape) { CenteredInsetShape(shape, GlassButtonCanvasOutset) }
+    val clickModifier = if (interactionSource == null) {
+        Modifier.clickable(onClick = onClick)
+    } else {
+        Modifier.clickable(
+            interactionSource = interactionSource,
+            indication = null,
+            onClick = onClick,
+        )
+    }
+    Box(
+        modifier = modifier
+            .size(visualSize)
+            .then(clickModifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .requiredSize(visualSize + GlassButtonCanvasOutset * 2)
+                .glassButtonSurface(opticalShape, surfaceColor, alpha),
+        )
+        Box(
+            modifier = visualModifier
+                .size(visualSize),
+            contentAlignment = Alignment.Center,
+        ) {
+            content()
+        }
+    }
+}
 
 /** Audited existing float classes. This is an allow-list, not a conversion list. */
 internal val ExistingLiquidFloatInventory = setOf(
@@ -70,10 +162,12 @@ internal val ExistingLiquidFloatInventory = setOf(
  * PC-parity material/position coordinator.
  *
  * The caller must snap geometry and material to the source color block before
- * entering this function. Lift and movement then start together. A normal tap
- * may begin target contraction while movement is still converging; the two
- * jobs join only before the final color-block handoff. A held/dragged float
- * keeps its material fully lifted and never starts landing until release.
+ * entering this function. Lift and movement start together, but a normal tap
+ * never starts landing until both the full lift and travel have completed.
+ * Movement may therefore finish early or continue while the float is fully
+ * lifted; the landing phase is always a complete, separate contraction.
+ * A held/dragged float keeps its material fully lifted and never starts landing
+ * until release.
  */
 internal suspend fun runOverlappedLiquidFlight(
     holdKeepsLifted: Boolean = false,
@@ -89,12 +183,9 @@ internal suspend fun runOverlappedLiquidFlight(
         moveJob.join()
         return@coroutineScope
     }
-    // Preserve a visible source-origin lift, without serializing full travel.
-    delay(16)
-    onLandingStarted()
-    val landJob = launch { land() }
     moveJob.join()
-    landJob.join()
+    onLandingStarted()
+    land()
 }
 
 /**
@@ -120,10 +211,10 @@ val LocalSidebarGestureLock = staticCompositionLocalOf<(String, Boolean) -> Unit
  * Kyant AndroidLiquidGlass (backdrop) 液态玻璃效果封装。
  *
  * 与 PC-GUI 的 --glass-bg-2/--glass-blur-3 语义对齐：
- *  - 折射镜头（lens）：内折射高度 4dp、折射量 8dp，模拟玻璃厚度
+ *  - 折射镜头（lens）：默认 7dp 折射/色散边带、折射量 8dp，模拟加厚玻璃包边
  *  - 背景模糊（blur）：3px 等效（PC --glass-blur-3），移动端按密度换算
  *  - 色彩增强（vibrancy）：饱和度 1.4，对齐 PC saturate(140%)
- *  - 高光（Highlight.Plain）：顶部 1dp 白色内发光，对齐 PC border 高光
+ *  - 高光：原有包边统一增厚 1dp，折射与 RGB 色散使用同一边带宽度
  *  - 内阴影（InnerShadow）：底部深色内阴影，对齐 PC 凹陷表面
  *  - 外阴影（Shadow）：浮起阴影
  *
@@ -169,7 +260,7 @@ fun Modifier.liquidGlassModifier(
                 effects = {
                     colorControls(saturation = saturation)
                 },
-                highlight = { if (ambientHighlight) Highlight.Default else Highlight.Plain },
+                highlight = { thickGlassHighlight(ambientHighlight) },
                 shadow = { Shadow.Default },
                 innerShadow = { InnerShadow(radius = 2.dp, offset = DpOffset(0.dp, 1.dp)) },
                 onDrawSurface = {
@@ -183,9 +274,14 @@ fun Modifier.liquidGlassModifier(
                 effects = {
                     colorControls(saturation = saturation)
                     blur(blurRadius.toPx())
-                    lens(refractionHeight.toPx(), refractionAmount.toPx(), depthEffect = true)
+                    lens(
+                        refractionHeight.toPx(),
+                        refractionAmount.toPx(),
+                        depthEffect = true,
+                        chromaticAberration = true,
+                    )
                 },
-                highlight = { if (ambientHighlight) Highlight.Default else Highlight.Plain },
+                highlight = { thickGlassHighlight(ambientHighlight) },
                 shadow = { Shadow.Default },
                 innerShadow = { InnerShadow(radius = 2.dp, offset = DpOffset(0.dp, 1.dp)) },
                 onDrawSurface = {
@@ -196,6 +292,14 @@ fun Modifier.liquidGlassModifier(
     }
     return this.then(glassModifier)
 }
+
+/** Every mobile glass float adds 1dp to its visible highlight envelope. */
+private fun thickGlassHighlight(ambient: Boolean): Highlight = Highlight(
+    width = 1.5.dp,
+    blurRadius = if (ambient) 0.75.dp else 0.5.dp,
+    alpha = 1f,
+    style = if (ambient) HighlightStyle.Default else HighlightStyle.Plain,
+)
 
 /**
  * A reversible selection material transition. At [glassProgress] == 0 the
@@ -292,33 +396,44 @@ fun Modifier.glassButtonSurface(
     surfaceColor: Color? = null,
     alpha: Float = 0.12f,
 ): Modifier {
-    val p = LocalNewmarkPalette.current
+    val materialAlpha = alpha
+    val p = LocalNewmarkColors.current
     val edgeColor = lerp(surfaceColor ?: p.textPrimary, p.accent, 0.16f)
-    var pressed by remember { mutableStateOf(false) }
-    val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 1.14f else 1f,
-        animationSpec = tween(durationMillis = 90),
-        label = "glassButtonExpansion",
-    )
-    val edgeEmphasis by animateFloatAsState(
-        targetValue = if (pressed) 1f else 0f,
-        animationSpec = tween(durationMillis = 90),
-        label = "glassButtonEdgeEmphasis",
-    )
+    val pressProgress = remember { androidx.compose.animation.core.Animatable(0f) }
+    val pressCycles = remember { Channel<CompletableDeferred<Unit>>(Channel.UNLIMITED) }
+    androidx.compose.runtime.LaunchedEffect(pressCycles) {
+        for (release in pressCycles) {
+            // Every tap owns a complete cycle. Travel or the click action may
+            // proceed concurrently, but the glass must reach full lift before
+            // it is allowed to contract back into the control.
+            pressProgress.animateTo(1f, tween(durationMillis = 105))
+            release.await()
+            pressProgress.animateTo(0f, tween(durationMillis = 165))
+        }
+    }
+    val pressScale = 1f + 0.065f * pressProgress.value
+    val pressLift = (-1.25).dp * pressProgress.value
+    val edgeEmphasis = 0.82f * pressProgress.value
     return this
+        .graphicsLayer {
+            clip = false
+            translationY = pressLift.toPx()
+            this.alpha = 0.985f + edgeEmphasis * 0.015f
+        }
         .kyantGlassEdge(
             shape = shape,
             edgeColor = edgeColor,
-            emphasis = (edgeEmphasis + alpha * 0.18f).coerceAtMost(1f),
+            emphasis = (edgeEmphasis + materialAlpha * 0.22f).coerceAtMost(1f),
             scale = pressScale,
-            enabled = pressed,
+            enabled = pressProgress.value > 0.001f,
         )
         .pointerInput(Unit) {
             awaitEachGesture {
                 awaitFirstDown(requireUnconsumed = false)
-                pressed = true
+                val release = CompletableDeferred<Unit>()
+                pressCycles.trySend(release)
                 waitForUpOrCancellation()
-                pressed = false
+                release.complete(Unit)
             }
         }
 }
@@ -334,18 +449,19 @@ fun Modifier.kyantGlassEdge(
 ): Modifier {
     if (!enabled) {
         return this
-            .border(1.dp, Color.Black.copy(alpha = 0.12f), shape)
-            .border(0.5.dp, Color.White.copy(alpha = 0.28f), shape)
+            .border(2.dp, Color.Black.copy(alpha = 0.12f), shape)
+            .border(1.5.dp, Color.White.copy(alpha = 0.28f), shape)
     }
     val refractedShade = lerp(Color.Black, edgeColor, 0.18f)
     return drawBackdrop(
         backdrop = EmptyBackdrop,
         shape = { shape },
         effects = {},
+        clipToShape = false,
         highlight = {
             Highlight(
-                width = 0.5.dp + 0.15.dp * emphasis,
-                blurRadius = 0.25.dp + 0.15.dp * emphasis,
+                width = 1.5.dp + 0.15.dp * emphasis,
+                blurRadius = 0.5.dp + 0.15.dp * emphasis,
                 alpha = 0.72f + 0.18f * emphasis,
                 style = HighlightStyle.Plain(
                     color = Color.White.copy(alpha = 0.38f),
@@ -420,7 +536,7 @@ fun LiquidGlassSwitch(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     var pressed by remember { mutableStateOf(false) }
     var draggedFraction by remember { mutableStateOf<Float?>(null) }
     val settledFraction by animateFloatAsState(
@@ -509,7 +625,7 @@ fun LiquidGlassSwitch(
                 shape = RoundedCornerShape(50),
                 alpha = 0.10f,
                 blurRadius = 2.dp,
-                refractionHeight = 8.dp,
+                refractionHeight = 9.dp,
                 refractionAmount = 16.dp,
                 surfaceColor = p.bgQuaternary,
                 ambientHighlight = true,
@@ -552,8 +668,9 @@ private val EmptyBackdrop: Backdrop = object : Backdrop {
         // Empty: nothing to refract; the surface color is drawn by onDrawSurface.
     }
 }
-val MobileInteractionGlassEdge = 6.dp
+/** Shared float edge band: previous 6dp envelope plus the requested 1dp thickness. */
+val MobileInteractionGlassEdge = 7.dp
 
 /** Fixed capture outset for the semicircular ends of conversation pills. */
-val MobileConversationGlassHorizontalEdge = 12.dp
+val MobileConversationGlassHorizontalEdge = 14.dp
 val MobilePopupShape = RoundedCornerShape(22.dp)

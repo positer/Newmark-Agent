@@ -20,9 +20,9 @@ import { NewmarkAgentPreset, NewmarkToolResult, findAgentPreset } from './compat
 import { SkillsManager } from './skills';
 import { FlowEngine, FlowWorkflow } from './flow';
 import { AutomationCondition, AutomationManager, AutomationSchedule } from './automation';
-import { MemoryLabManager, MemoryLabPreparedUpdate, MemoryLabUpdateInput, MemoryLabWriteResult } from './memoryLab';
+import { MemoryLabManager, MemoryLabPatchInput, MemoryLabPreparedUpdate, MemoryLabUpdateInput, MemoryLabWriteResult } from './memoryLab';
 import { runAgentKernel } from './agentKernelRunner';
-import { evaluateToolPolicy, filterToolDefinitions, isReadOnlyScopedToolAction, planModePolicyPrompt } from './toolPolicy';
+import { chatModePolicyPrompt, evaluateToolPolicy, filterToolDefinitions, isReadOnlyScopedToolAction, planModePolicyPrompt } from './toolPolicy';
 import type { AgentPromptMessage } from './conversationKernel';
 import {
   AgentMode, InputMode, AgentStatus, StreamToken,
@@ -667,7 +667,7 @@ export class Agent {
     }
 
     const modeStr = this.config.getStr('agent', 'default_mode');
-    this.mode = (['plan', 'goal', 'flow'].includes(modeStr) ? modeStr : 'build') as AgentMode;
+    this.mode = (['plan', 'chat', 'goal', 'flow'].includes(modeStr) ? modeStr : 'build') as AgentMode;
 
     const inputStr = this.config.getStr('general', 'default_input');
     this.inputMode = inputStr === 'next' ? 'next' : 'guide';
@@ -713,6 +713,7 @@ export class Agent {
   }
 
   setMode(m: AgentMode): void {
+    if (!['build', 'plan', 'chat', 'goal', 'flow'].includes(m)) m = 'build';
     if (m === 'goal' && !this.goal) {
       this.goal = new GoalStateImpl('Set your objective');
     }
@@ -5564,7 +5565,20 @@ export class Agent {
       if (action === 'get') return JSON.stringify({ ok: true, linkedPlan: this.getLinkedPlan() }, null, 2);
       if (action !== 'update') return JSON.stringify({ ok: false, error: `Unknown linked_plan action: ${action}` });
       const expectedRevision = Number(input.expected_revision ?? input.expectedRevision);
-      return JSON.stringify({ ok: true, linkedPlan: this.updateLinkedPlan(String(input.markdown || ''), expectedRevision) }, null, 2);
+      const current = this.getLinkedPlan();
+      let markdown = input.markdown === undefined ? current.markdown : String(input.markdown);
+      if (input.append !== undefined) markdown = `${current.markdown}${String(input.append)}`;
+      if (input.old_text !== undefined || input.oldText !== undefined) {
+        const oldText = String(input.old_text ?? input.oldText ?? '');
+        if (!oldText) throw new Error('linked_plan old_text must not be empty.');
+        const matches = current.markdown.split(oldText).length - 1;
+        if (!matches) throw new Error('linked_plan old_text was not found.');
+        const replaceAll = input.replace_all === true || input.replaceAll === true;
+        if (matches > 1 && !replaceAll) throw new Error(`linked_plan old_text matched ${matches} places; pass replace_all=true or a unique fragment.`);
+        const newText = String(input.new_text ?? input.newText ?? '');
+        markdown = replaceAll ? current.markdown.split(oldText).join(newText) : current.markdown.replace(oldText, newText);
+      }
+      return JSON.stringify({ ok: true, linkedPlan: this.updateLinkedPlan(markdown, expectedRevision) }, null, 2);
     } catch (error) {
       return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) });
     }
@@ -8191,7 +8205,24 @@ export class Agent {
           }));
         }
         case 'memory_lab_update': {
-          const result = await this.updateMemoryLab({
+          const selector = String(params.component || params.slug || '').trim();
+          const prepared = selector ? this.memoryLab.preparePatch({
+            component: selector,
+            name: params.name === undefined ? undefined : String(params.name),
+            description: params.description === undefined ? undefined : String(params.description),
+            tags: params.tags === undefined ? undefined : (Array.isArray(params.tags) ? params.tags.map(String) : String(params.tags).split(/[,，\n]+/)),
+            tagPaths: params.tagPaths === undefined ? undefined : (Array.isArray(params.tagPaths) ? params.tagPaths.filter(Array.isArray).map(pathValue => pathValue.map(String)) : []),
+            content: params.content === undefined ? undefined : String(params.content),
+            contentAppend: params.contentAppend === undefined && params.content_append === undefined ? undefined : String(params.contentAppend ?? params.content_append),
+            oldText: params.oldText === undefined && params.old_text === undefined ? undefined : String(params.oldText ?? params.old_text),
+            newText: String(params.newText ?? params.new_text ?? ''),
+            replaceAll: params.replaceAll === true || params.replace_all === true,
+            kind: params.kind === undefined ? undefined : (params.kind === 'folder' ? 'folder' : 'file'),
+            expectedUpdatedAt: String(params.expectedUpdatedAt || params.expected_updated_at || ''),
+            reason: String(params.reason || ''),
+            source: String(params.source || ''),
+          } satisfies MemoryLabPatchInput) : undefined;
+          const result = await this.updateMemoryLab(prepared || {
             name: String(params.name || ''),
             description: String(params.description || ''),
             tags: Array.isArray(params.tags) ? params.tags.map(String) : String(params.tags || '').split(/[,，\n]+/),
@@ -9322,6 +9353,7 @@ export class Agent {
     }
     parts.push(this.buildFeatureDisclosurePrompt());
     if (this.mode === 'plan') parts.push(`[Plan Tool Policy]\n${planModePolicyPrompt()}`);
+    if (this.mode === 'chat') parts.push(`[Chat Tool Policy]\n${chatModePolicyPrompt()}`);
 
     const pm = this.config.getStr('workspace', 'prompt_mode') || 'both';
     const injectedPrompts = new Set<string>();
@@ -9449,7 +9481,7 @@ export class Agent {
       `- Language policy: general.language=${language}; the UI can switch this at runtime and each turn must obey the current value. auto follows the user's dominant input language, en replies in English, zh replies in Simplified Chinese. Keep code, commands, file paths, JSON keys, model/provider names, tool names, quoted source text, and user-provided literals exactly as required by their source language.`,
       `- Workspace permissions: access_permission=${permission}; file tools are checked before execution and blocked when they exceed the configured workspace boundary.`,
       `- Remote repository safety: when the active workspace or any target path is inside a GitHub/remote-backed repository, proactively use repo_security_audit and file_audit before git_push, gh_pr_create, release packaging, public reporting, or cloud-side audit. Treat public remotes as public disclosure surfaces and keep private URLs, secrets, privacy addresses (credential URLs, private network addresses, local user paths), local runtime state, archives, Memory Lab, Work, config, and release outputs out of commits and summaries. git_push/gh_pr_create hard-block on detected high-risk findings until a second review resolves them and the action is retried with security_review_confirmed=true.`,
-      `- Mode engine: current mode=${this.modeName()}; Build works autonomously, Plan is fully read-only with no file modifications, Goal continues until completion unless paused, Flow follows saved workflow components.`,
+      `- Mode engine: current mode=${this.modeName()}; Build works autonomously, Plan is fully read-only, Chat only performs web search/fetch evidence gathering and prompt synthesis, Goal continues until completion unless paused, Flow follows saved workflow components.`,
       `- Input mode: ${input}; Guide injects immediately, Next queues user intent for the following build turn.`,
       `- Option feedback: ${this.buildQuestionPolicyPrompt(optionFeedback)}`,
       `- Model policy: current model=${this.model || '(unset)'}, intelligence=${this.intelligence}, auto-switch=${modelSwitch}.`,
@@ -9519,6 +9551,14 @@ export class Agent {
           'Use read-only inspection tools plus linked_plan maintenance and, when allowed by the global option-feedback policy, the question tool; never mutate workspace, host, application, service, or network state.',
           'Only after the durable linked plan has actually been updated and the plan is complete, expose the fixed mode handoff asking whether execution should begin. Offer exactly these two choices in the user language: "是，执行此计划" / "否，请补充____" (or "Yes, execute this plan" / "No, please supplement _____"). This fixed handoff remains required when discretionary questions are disabled.',
           'A positive choice starts a new Build-mode input. A negative choice remains in Plan mode so the user can supply the missing details.',
+        ]).join('\n');
+      case 'chat':
+        return withLanguage([
+          'CHAT MODE.',
+          'Use only web_search and web_fetch. You have no workspace, host, application, memory, task, browser-control, or write permissions.',
+          'Perform an online search to gather evidence before answering. Fetch primary or authoritative pages when the search snippets are insufficient.',
+          'After sufficient evidence is collected, summarize and answer the user as soon as possible. Stay concise and do not turn the request into a long-running Build, Plan, Goal, or Flow task.',
+          'Distinguish sourced facts from uncertainty and include useful source links in the final answer.',
         ]).join('\n');
       case 'goal': {
         const g = this.goal?.history() || '';

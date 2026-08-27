@@ -44,6 +44,23 @@ export interface MemoryLabUpdateInput {
   source?: string;
 }
 
+export interface MemoryLabPatchInput {
+  component: string;
+  name?: string;
+  description?: string;
+  tags?: string[];
+  tagPaths?: string[][];
+  content?: string;
+  contentAppend?: string;
+  oldText?: string;
+  newText?: string;
+  replaceAll?: boolean;
+  kind?: MemoryLabComponentKind;
+  expectedUpdatedAt?: string;
+  reason?: string;
+  source?: string;
+}
+
 export interface MemoryLabPreparedUpdate extends MemoryLabUpdateInput {
   slug: string;
   description: string;
@@ -168,7 +185,8 @@ export class MemoryLabManager {
       'Use memory_lab_read to inspect index.json before deciding what memory is relevant.',
       'Use memory_lab_query for bounded task-relevant retrieval; do not inject the complete index when a focused query is sufficient.',
       'Use memory_lab_read with component/name/slug to read a component core markdown file.',
-      'Use memory_lab_update only when the user asks to create or update durable memory, passing name, description, tags, optional tagPaths, content, and optional kind=file|folder.',
+      'Use memory_lab_update only when the user asks to create or update durable memory. Create with name, tags, and content; patch an existing component with component plus only changed fields.',
+      'For small body edits prefer contentAppend or oldText/newText over resending the complete content.',
       'For an existing component, pass expectedUpdatedAt from the latest read/query result. A stale update is rejected instead of overwriting newer memory.',
       'Use memory_lab_delete only when the user explicitly asks to forget/remove durable memory. Delete moves the prior revision to Memory Lab/archive and records a policy event.',
       'Every mutation should include a concise reason and source. ADD, UPDATE, and DELETE decisions are append-only in policy.jsonl and are recoverable from archive.',
@@ -279,6 +297,42 @@ export class MemoryLabManager {
       reason: String(input.reason || '').trim(),
       source: String(input.source || '').trim(),
     };
+  }
+
+  preparePatch(input: MemoryLabPatchInput): MemoryLabPreparedUpdate {
+    const selector = String(input.component || '').trim();
+    if (!selector) throw new Error('Memory component is required for a patch.');
+    const current = this.read(selector);
+    if (!current.ok || !current.component) throw new Error(current.error || `Memory component not found: ${selector}`);
+    const existing = current.component.meta;
+    const oldContent = current.component.content;
+    let content = input.content !== undefined ? String(input.content) : oldContent;
+    if (input.contentAppend !== undefined) content = `${oldContent}${String(input.contentAppend)}`;
+    if (input.oldText !== undefined) {
+      const oldText = String(input.oldText);
+      if (!oldText) throw new Error('oldText must not be empty.');
+      const matches = oldContent.split(oldText).length - 1;
+      if (!matches) throw new Error('oldText was not found in the Memory Lab component.');
+      if (matches > 1 && input.replaceAll !== true) throw new Error(`oldText matched ${matches} places; pass replaceAll=true or a unique fragment.`);
+      content = input.replaceAll === true
+        ? oldContent.split(oldText).join(String(input.newText || ''))
+        : oldContent.replace(oldText, String(input.newText || ''));
+    }
+    const name = input.name === undefined ? existing.name : String(input.name);
+    if (this.slugify(name) !== current.component.slug) {
+      throw new Error('Renaming a Memory Lab component is not supported by incremental patch; create the new component then delete the old one.');
+    }
+    return this.prepareUpdate({
+      name,
+      description: input.description === undefined ? existing.description : String(input.description),
+      tags: input.tags === undefined ? existing.tags : input.tags,
+      tagPaths: input.tagPaths === undefined ? existing.tagPaths : input.tagPaths,
+      content,
+      kind: input.kind === undefined ? existing.kind : input.kind,
+      expectedUpdatedAt: String(input.expectedUpdatedAt || existing.updatedAt),
+      reason: input.reason,
+      source: input.source,
+    });
   }
 
   update(prepared: MemoryLabPreparedUpdate): MemoryLabWriteResult {

@@ -2240,6 +2240,13 @@ async function main() {
   }), TEST_DIR);
   assert(flowSaveTool.includes('OK'), 'flow_save: writes workflow');
   assert(fs.existsSync(path.join(TEST_DIR, 'Flow', 'tool-made-flow.Flow.json')), 'flow_save: file exists');
+  const flowPatchTool = await tools.execute('flow_save', JSON.stringify({
+    name: 'tool-made-flow',
+    action: 'upsert',
+    component: { id: 2, type: 'dialog', mode: 'build', prompt: 'Finish incrementally' },
+  }), TEST_DIR);
+  const patchedFlow = JSON.parse(fs.readFileSync(path.join(TEST_DIR, 'Flow', 'tool-made-flow.Flow.json'), 'utf-8'));
+  assert(flowPatchTool.includes('upsert') && patchedFlow.components.length === 3 && patchedFlow.components[2].prompt === 'Finish incrementally', 'flow_save: upserts one component without resending the full workflow');
   const flowListTool = await tools.execute('flow_list', '{}', TEST_DIR);
   assert(flowListTool.includes('tool-made-flow'), 'flow_list: finds saved workflow');
   assert(tools.definitions().some((tool: any) => tool.function?.name === 'flow_run'), 'definitions: exposes flow_run');
@@ -2646,6 +2653,15 @@ async function main() {
     },
   });
   assert(!!synonymIndex.index.tags['#Physics'] && synonymIndex.index.tags['#Physics'].aliases.includes('#物理') && !synonymIndex.index.tags['#物理'], 'memory lab: English user language merges bilingual synonyms under the English primary name');
+  fs.writeFileSync(literalHyphenMemory.component!.coreMd, 'alpha beta gamma', 'utf-8');
+  const bilingualPatch = memoryLab.preparePatch({
+    component: literalHyphenMemory.slug!,
+    description: 'patched without full content',
+    oldText: 'beta',
+    newText: 'BETA',
+    expectedUpdatedAt: literalHyphenMemory.component!.updatedAt,
+  });
+  assert(bilingualPatch.content === 'alpha BETA gamma' && bilingualPatch.tags.includes('#Agent-Skill') && bilingualPatch.description === 'patched without full content', 'memory lab: incremental patch preserves omitted metadata and replaces one content fragment');
   memoryLab.setPreferredLanguage('zh');
   const chineseSynonymIndex = memoryLab.normalizeIndex(synonymIndex.index);
   assert(!!chineseSynonymIndex.index.tags['#物理'] && chineseSynonymIndex.index.tags['#物理'].aliases.includes('#Physics') && !chineseSynonymIndex.index.tags['#Physics'], 'memory lab: language switch updates the primary tag name while preserving aliases');
@@ -4008,8 +4024,16 @@ async function main() {
   assert(linkedPlanAgent.getLinkedPlan().markdown === '' && linkedPlanAgent.getLinkedPlan().revision === 0,
     'Plan mode: a chat response never overwrites the durable conversation linked plan as a one-turn summary');
   linkedPlanAgent.updateLinkedPlan('# Durable implementation plan\n\n- Inspect\n- Implement\n- Verify', 0);
+  const linkedPlanPatch = JSON.parse(linkedPlanAgent.handleLinkedPlanTool(JSON.stringify({
+    action: 'update',
+    expected_revision: 1,
+    old_text: '- Implement',
+    new_text: '- Implement incrementally',
+  })));
+  assert(linkedPlanPatch.ok === true && linkedPlanPatch.linkedPlan.revision === 2 && linkedPlanPatch.linkedPlan.markdown.includes('- Implement incrementally'),
+    'linked_plan: replaces one unique fragment without resending the full Markdown plan');
   linkedPlanAgent.ensurePlanExecutionQuestion();
-  assert(linkedPlanAgent.getLinkedPlan().revision === 1
+  assert(linkedPlanAgent.getLinkedPlan().revision === 2
     && linkedPlanAgent.getLinkedPlan().markdown.includes('# Durable implementation plan')
     && linkedPlanAgent.pendingOptions[0]?.options[0]?.label === 'Yes, execute this plan'
     && linkedPlanAgent.pendingOptions[0]?.options[1]?.label === 'No, please supplement _____',

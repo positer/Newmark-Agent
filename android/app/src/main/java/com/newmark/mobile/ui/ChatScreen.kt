@@ -163,6 +163,7 @@ import com.newmark.mobile.ui.components.NewmarkShapeExtra
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.components.NewmarkShapeSmall
 import com.newmark.mobile.ui.components.glassButtonSurface
+import com.newmark.mobile.ui.components.GlassButtonCanvas
 import com.newmark.mobile.ui.components.liquidGlassModifier
 import com.newmark.mobile.ui.components.liquidHoldDragGesture
 import com.newmark.mobile.ui.components.liquidMotionDeformationDeferred
@@ -173,7 +174,7 @@ import com.newmark.mobile.ui.components.LocalSidebarGestureLock
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.newmark.mobile.ui.theme.NewmarkAccent
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.LocalNewmarkColors
 import com.newmark.mobile.ui.theme.LocalThemeMode
 import com.newmark.mobile.ui.theme.NewmarkAccentBorder
 import com.newmark.mobile.ui.theme.NewmarkAccentSoft
@@ -194,7 +195,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private val MODES = listOf("Build", "Plan", "Goal", "Flow")
+private val MODES = listOf("Build", "Plan", "Chat", "Goal", "Flow")
 private val PcQueueEase = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
 private enum class InputCompositeMenu { PlusMain, PlusModes, ModelMain, Models, Tiers }
 
@@ -382,7 +383,7 @@ fun ChatScreen(
     uploadInjectsGuide: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val dark = LocalThemeMode.current.dark ?: isSystemInDarkTheme()
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -664,7 +665,7 @@ private fun ChatTopBar(
     showConnectRemote: Boolean = false,
     onConnectRemote: () -> Unit = {},
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -720,16 +721,14 @@ private fun ChatTopBar(
 
 @Composable
 private fun CircleButton(onClick: () -> Unit, content: @Composable () -> Unit) {
-    val p = LocalNewmarkPalette.current
-    Box(
-        modifier = Modifier
-            .size(36.dp)
-            .glassButtonSurface(CircleShape, p.bgQuaternary)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        content()
-    }
+    val p = LocalNewmarkColors.current
+    GlassButtonCanvas(
+        visualSize = 36.dp,
+        shape = CircleShape,
+        surfaceColor = p.bgQuaternary,
+        onClick = onClick,
+        content = content,
+    )
 }
 
 // ---- 对话内容（气泡 + 工作事件块） ----
@@ -742,7 +741,7 @@ private fun ChatContent(
     onOpenWebLink: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val pc = LocalPcColors.current
     val listState = rememberLazyListState()
     val chatScope = rememberCoroutineScope()
@@ -2006,7 +2005,7 @@ private fun WorkGuideImageAttachments(attachments: List<com.newmark.mobile.data.
 
 @Composable
 private fun ThinkingDots() {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val transition = rememberInfiniteTransition(label = "thinking")
     val alpha by transition.animateFloat(
         initialValue = 0.3f,
@@ -2161,7 +2160,7 @@ private fun QueuePanel(
     var dragSourceIndex by remember { mutableIntStateOf(-1) }
     var dragTargetIndex by remember { mutableIntStateOf(-1) }
     val headerInteractionSource = remember { MutableInteractionSource() }
-    val rowStepPx = with(density) { 40.dp.toPx() }
+    val rowStepPx = with(density) { 44.dp.toPx() }
     LaunchedEffect(items) {
         if (draggingId == null) visualItems = items
     }
@@ -2170,17 +2169,41 @@ private fun QueuePanel(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(30.dp)
+                    .height(38.dp)
                     .clickable(
                         interactionSource = headerInteractionSource,
                         indication = null,
                     ) { collapsed = !collapsed }
-                    .padding(start = 9.dp, end = 6.dp),
+                    .padding(start = 12.dp, end = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Next ${items.size}", color = pc.text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                StackIconButton(if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause, if (paused) "继续队列" else "暂停队列", if (paused) Color(0xFFFFCC44) else pc.textDim, onTogglePause)
-                StackIconButton(if (collapsed) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown, if (collapsed) "展开" else "折叠", pc.textDim) { collapsed = !collapsed }
+                Box(
+                    Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(if (paused) Color(0xFFFFC857) else pc.accent2),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "${items.size} 条待处理",
+                    color = if (paused) Color(0xFFD9A928) else pc.textDim,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+                QueueIconButton(
+                    icon = if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
+                    label = if (paused) "继续队列" else "暂停队列",
+                    tint = if (paused) Color(0xFFFFB82E) else pc.textDim,
+                    onClick = onTogglePause,
+                )
+                Spacer(Modifier.width(2.dp))
+                QueueIconButton(
+                    icon = if (collapsed) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                    label = if (collapsed) "展开" else "折叠",
+                    tint = pc.textDim,
+                ) { collapsed = !collapsed }
             }
             AnimatedVisibility(
                 visible = !collapsed,
@@ -2193,7 +2216,12 @@ private fun QueuePanel(
                     animationSpec = tween(durationMillis = 150, easing = PcQueueEase),
                 ),
             ) {
-                Column(Modifier.heightIn(max = 176.dp).verticalScroll(rememberScrollState())) {
+                Column(
+                    Modifier
+                        .heightIn(max = 196.dp)
+                        .padding(horizontal = 5.dp, vertical = 4.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
                     visualItems.forEachIndexed { index, item ->
                         key(item.id) {
                             QueueRow(
@@ -2280,7 +2308,7 @@ private fun QueueRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .height(40.dp)
+            .height(44.dp)
             .zIndex(if (dragging) 2f else 0f)
             .graphicsLayer {
                 translationY = if (dragging) dragOffsetPx else animatedDisplacementPx
@@ -2288,7 +2316,11 @@ private fun QueueRow(
                 scaleY = if (dragging) 0.99f else 1f
                 alpha = if (dragging) 0.58f else 1f
             }
-            .background(Color.Transparent, NewmarkShapeSmall)
+            .clip(NewmarkShapeSmall)
+            .background(
+                if (dragging) pc.accent.copy(alpha = 0.08f)
+                else pc.text.copy(alpha = 0.025f),
+            )
             .pointerInput(item.id, item.editable) {
                 if (!item.editable) return@pointerInput
                 detectDragGesturesAfterLongPress(
@@ -2301,7 +2333,7 @@ private fun QueueRow(
                     },
                 )
             }
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .padding(start = 7.dp, end = 5.dp, top = 5.dp, bottom = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -2318,12 +2350,56 @@ private fun QueueRow(
             },
         )
         Spacer(Modifier.width(5.dp))
-        Text(item.text, color = pc.text, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(
+            item.text,
+            color = pc.text,
+            fontSize = 11.sp,
+            lineHeight = 14.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
         if (item.editable) {
-            StackIconButton(LucideIcons.ArrowRight, "立即 Guide", pc.accent2) { onGuide(item.id) }
-            StackIconButton(LucideIcons.SquarePen, "编辑", pc.textDim) { onEdit(item) }
-            StackIconButton(LucideIcons.X, "删除", Color(0xFFFF7777)) { onDelete(item.id) }
+            QueueIconButton(LucideIcons.ArrowRight, "立即 Guide", pc.accent2) { onGuide(item.id) }
+            QueueIconButton(LucideIcons.SquarePen, "编辑", pc.textDim) { onEdit(item) }
+            QueueIconButton(LucideIcons.X, "删除", Color(0xFFFF6F7D)) { onDelete(item.id) }
         }
+    }
+}
+
+/** Queue-only borderless action: color and lift replace the old framed glass button. */
+@Composable
+private fun QueueIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: Color,
+    onClick: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Box(
+        modifier = Modifier
+            .size(28.dp)
+            .graphicsLayer {
+                scaleX = if (pressed) 1.08f else 1f
+                scaleY = if (pressed) 1.08f else 1f
+                translationY = if (pressed) (-0.75).dp.toPx() else 0f
+            }
+            .clip(CircleShape)
+            .background(tint.copy(alpha = if (pressed) 0.15f else 0f))
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = label,
+            tint = tint.copy(alpha = if (pressed) 1f else 0.88f),
+            modifier = Modifier.size(14.dp),
+        )
     }
 }
 
@@ -2401,7 +2477,7 @@ private fun InputArea(
     focusRequester: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     var mode by remember { mutableStateOf(selectedMode) }
     var inputLineCount by remember { mutableIntStateOf(1) }
     LaunchedEffect(selectedMode) {
@@ -2492,8 +2568,7 @@ private fun InputArea(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 10.dp)
-                .clip(inputShape)
-                .background(p.bgPrimary)
+                .background(p.bgPrimary, inputShape)
                 .border(1.dp, p.border2, inputShape)
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.Bottom,
@@ -2625,7 +2700,7 @@ private fun InputCompositeMenuOverlay(
     val visibleAnchor = activeWindowAnchor?.let { anchor ->
         containerBounds.value?.let { container -> inputMenuAnchorInContainer(anchor, container) }
     } ?: return
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val density = LocalDensity.current
     val config = LocalConfiguration.current
     // First and second levels share the exact same compact shell. Model rows
@@ -2647,7 +2722,7 @@ private fun InputCompositeMenuOverlay(
     // upward from that edge, so its first frame never needs a measured height
     // and cannot jump after IME-safe placement resolves.
     val bottomAnchorOffset = visibleAnchor.top.toInt() - gapPx - overlaySize.height
-    val availableModes = remember(remoteMode) { if (remoteMode) MODES else listOf("Build", "Plan") }
+    val availableModes = remember(remoteMode) { if (remoteMode) MODES else listOf("Build", "Plan", "Chat") }
     val groupedModelOptions = remember(options) { groupModelOptions(options) }
     val currentOnMenuChange = rememberUpdatedState(onMenuChange)
     val currentOnDismiss = rememberUpdatedState(onDismiss)
@@ -2847,7 +2922,7 @@ private fun LiquidMenuList(
     onInteractionOrigin: (Float) -> Unit,
 ) {
     val entries = entrySet.values
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val rowHeight = 44.dp
     val headerHeight = 26.dp
     val geometry = remember(entrySet) {
@@ -3113,14 +3188,13 @@ private fun ModelButton(
     onAnchorBoundsChanged: (Rect) -> Unit,
     onOpenMenu: () -> Unit,
 ) {
-    val p = LocalNewmarkPalette.current
-    Box(
-        modifier = Modifier
-            .size(InputComposerEdgeControlSize)
-            .onGloballyPositioned { onAnchorBoundsChanged(it.boundsInWindow()) }
-            .glassButtonSurface(CircleShape, p.bgQuaternary)
-            .clickable(onClick = onOpenMenu),
-        contentAlignment = Alignment.Center,
+    val p = LocalNewmarkColors.current
+    GlassButtonCanvas(
+        visualSize = InputComposerEdgeControlSize,
+        shape = CircleShape,
+        surfaceColor = p.bgQuaternary,
+        onClick = onOpenMenu,
+        visualModifier = Modifier.onGloballyPositioned { onAnchorBoundsChanged(it.boundsInWindow()) },
     ) {
         Icon(Icons.Filled.AutoAwesome, "模型", tint = p.textSecondary, modifier = Modifier.size(16.dp))
     }
@@ -3132,14 +3206,13 @@ private fun PlusCombo(
     onAnchorBoundsChanged: (Rect) -> Unit,
     onOpenMenu: () -> Unit,
 ) {
-    val p = LocalNewmarkPalette.current
-    Box(
-        modifier = Modifier
-            .size(InputComposerPlusSize)
-            .onGloballyPositioned { onAnchorBoundsChanged(it.boundsInWindow()) }
-            .glassButtonSurface(CircleShape, p.bgTertiary)
-            .clickable(onClick = onOpenMenu),
-        contentAlignment = Alignment.Center,
+    val p = LocalNewmarkColors.current
+    GlassButtonCanvas(
+        visualSize = InputComposerPlusSize,
+        shape = CircleShape,
+        surfaceColor = p.bgTertiary,
+        onClick = onOpenMenu,
+        visualModifier = Modifier.onGloballyPositioned { onAnchorBoundsChanged(it.boundsInWindow()) },
     ) {
         Icon(Icons.Filled.Add, "模式与文件", tint = p.accent, modifier = Modifier.size(18.dp))
     }
@@ -3147,7 +3220,7 @@ private fun PlusCombo(
 
 @Composable
 private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit, onStop: () -> Unit, escalating: Boolean = false) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     // 按压缩放（对齐 PC :active scale(0.92)）
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -3161,19 +3234,21 @@ private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit
     if (running && !hasText) {
         // 三形态之「运行中/强制停止」（对齐 PC #submit-btn.running-action + .marquee-border）：
         // 背景 rgba(14,16,24,.88) + border rgba(255,255,255,.08) + 白图标；escalating=octagon-x，否则 square
-            MarqueeBorder(
-                cornerRadius = 18.dp,
-                modifier = Modifier.size(InputComposerEdgeControlSize).graphicsLayer {
+        GlassButtonCanvas(
+            visualSize = InputComposerEdgeControlSize,
+            shape = shape,
+            surfaceColor = if (isDark) Color(0xFF0E1018) else Color.White,
+            alpha = if (isDark) 0.88f else 0.72f,
+            onClick = onStop,
+            interactionSource = interaction,
+            visualModifier = Modifier.graphicsLayer {
                 scaleX = scale
                 scaleY = scale
             },
         ) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .glassButtonSurface(shape, if (isDark) Color(0xFF0E1018) else Color.White, if (isDark) 0.88f else 0.72f)
-                    .clickable(interactionSource = interaction, indication = null, onClick = onStop),
-                contentAlignment = Alignment.Center,
+            MarqueeBorder(
+                cornerRadius = 18.dp,
+                modifier = Modifier.fillMaxSize(),
             ) {
                 Icon(
                     imageVector = if (escalating) LucideIcons.OctagonX else LucideIcons.Square,
@@ -3187,9 +3262,14 @@ private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit
         // idle（对齐 PC #submit-btn）：暗色 = 135deg 渐变 #5b78ff→#7b93ff + 白图标；
         // 亮色 = PC [data-theme=light] 白色 0.72 底 + 深色图标
         val iconTint = if (isDark) Color.White else Color(0xFF0A0A1A)
-        Box(
-            modifier = Modifier
-                .size(InputComposerEdgeControlSize)
+        GlassButtonCanvas(
+            visualSize = InputComposerEdgeControlSize,
+            shape = shape,
+            surfaceColor = if (isDark) PcColorsDark.accent else Color.White,
+            alpha = if (isDark) 0.86f else 0.72f,
+            onClick = onClick,
+            interactionSource = interaction,
+            visualModifier = Modifier
                 .graphicsLayer {
                     scaleX = scale
                     scaleY = scale
@@ -3199,10 +3279,7 @@ private fun SubmitButton(running: Boolean, hasText: Boolean, onClick: () -> Unit
                     shape = shape,
                     spotColor = if (isDark) Color(0x4D5B78FF) else Color(0x1A263254),
                     ambientColor = if (isDark) Color(0x4D5B78FF) else Color(0x1A263254),
-                )
-                .glassButtonSurface(shape, if (isDark) PcColorsDark.accent else Color.White, if (isDark) 0.86f else 0.72f)
-                .clickable(interactionSource = interaction, indication = null, onClick = onClick),
-            contentAlignment = Alignment.Center,
+                ),
         ) {
             Icon(
                 imageVector = LucideIcons.Send,

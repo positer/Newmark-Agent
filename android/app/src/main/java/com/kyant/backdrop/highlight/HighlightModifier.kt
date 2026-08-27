@@ -97,11 +97,11 @@ internal class HighlightNode(
             val density: Density = this
             val layoutDirection = layoutDirection
 
-            val safeSize =
-                IntSize(
-                    ceil(size.width).toInt() + 2,
-                    ceil(size.height).toInt() + 2
-                )
+            val outset = ceil(highlight.width.toPx() + highlight.blurRadius.toPx()).toInt().coerceAtLeast(1)
+            val safeSize = IntSize(
+                ceil(size.width).toInt() + outset * 2,
+                ceil(size.height).toInt() + outset * 2,
+            )
 
             val outline = shapeProvider.shape.createOutline(size, layoutDirection, density)
             val clipPath =
@@ -116,7 +116,7 @@ internal class HighlightNode(
             highlightLayer.alpha = highlight.alpha
             highlightLayer.blendMode = highlight.style.blendMode
             highlightLayer.record(safeSize) {
-                translate(1f, 1f) {
+                translate(outset.toFloat(), outset.toFloat()) {
                     val canvas = drawContext.canvas
                     canvas.save()
                     canvas.clipOutline(outline, clipPath)
@@ -125,7 +125,7 @@ internal class HighlightNode(
                 }
             }
 
-            translate(-1f, -1f) {
+            translate(-outset.toFloat(), -outset.toFloat()) {
                 drawLayer(highlightLayer)
             }
         }

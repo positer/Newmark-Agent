@@ -9,7 +9,7 @@ import java.io.File
 data class ActiveModel(
     val providerId: String = "",
     val modelName: String = "",
-    val intelligence: String = "medium", // low | medium | high
+    val intelligence: String = "medium", // low | medium | high | xhigh | max | ultra
 )
 
 /**

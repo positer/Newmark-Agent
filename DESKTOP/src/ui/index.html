@@ -5974,6 +5974,7 @@ input[type="checkbox"].liquid-switch-dragging::before {
             <select class="tool-select" id="mode-select">
               <option value="build">Build</option>
               <option value="plan">Plan</option>
+              <option value="chat">Chat</option>
               <option value="goal">Goal</option>
               <option value="flow">Flow</option>
             </select>
@@ -6441,6 +6442,7 @@ var NEWMARK_I18N = {
     'input.next': 'Next',
     'mode.build': 'Build',
     'mode.plan': 'Plan',
+    'mode.chat': 'Chat',
     'mode.goal': 'Goal',
     'mode.flow': 'Flow',
     'intel.low': 'low',
@@ -7173,6 +7175,7 @@ var NEWMARK_I18N = {
     'input.next': 'Next',
     'mode.build': 'Build',
     'mode.plan': 'Plan',
+    'mode.chat': 'Chat',
     'mode.goal': 'Goal',
     'mode.flow': 'Flow',
     'intel.low': 'low',
@@ -7905,7 +7908,7 @@ function applyLanguageToUi() {
   setTitleAndLabel('#lt-ws-icon', t('left.workspaces'));
   updateSubmitButtonState();
   setTitleAndLabel('#left-collapse-btn', t('left.collapse'));
-  setSelectOptionText('mode-select', { build: t('mode.build'), plan: t('mode.plan'), goal: t('mode.goal'), flow: t('mode.flow') });
+  setSelectOptionText('mode-select', { build: t('mode.build'), plan: t('mode.plan'), chat: t('mode.chat'), goal: t('mode.goal'), flow: t('mode.flow') });
   setSelectOptionText('intel-select', { low: t('intel.low'), medium: t('intel.medium'), high: t('intel.high'), xhigh: t('intel.xhigh'), max: t('intel.max'), ultra: t('intel.ultra') });
   var guideBtn = document.querySelector('.mode-toggle-btn[data-mode="guide"]');
   var nextBtn = document.querySelector('.mode-toggle-btn[data-mode="next"]');
@@ -12122,7 +12125,7 @@ function renderPendingOptionsInChat(options) {
 }
 
 function setVisibleMode(mode) {
-  var nextMode = ['build', 'plan', 'goal', 'flow'].indexOf(String(mode || '').toLowerCase()) >= 0
+  var nextMode = ['build', 'plan', 'chat', 'goal', 'flow'].indexOf(String(mode || '').toLowerCase()) >= 0
     ? String(mode).toLowerCase()
     : 'build';
   state.mode = nextMode;

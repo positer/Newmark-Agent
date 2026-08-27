@@ -136,6 +136,7 @@ import com.newmark.mobile.ui.components.MenuRow
 import com.newmark.mobile.ui.components.NewmarkShapeMedium
 import com.newmark.mobile.ui.components.NewmarkShapeSmall
 import com.newmark.mobile.ui.components.glassButtonSurface
+import com.newmark.mobile.ui.components.GlassButtonCanvas
 import com.newmark.mobile.ui.components.liquidHoldDragGesture
 import com.newmark.mobile.ui.components.liquidGlassModifier
 import com.newmark.mobile.ui.components.liquidMotionDeformation
@@ -143,7 +144,7 @@ import com.newmark.mobile.ui.components.liquidSelectionMorph
 import com.newmark.mobile.ui.components.rememberLiquidBackdrop
 import com.newmark.mobile.ui.components.runOverlappedLiquidFlight
 import com.newmark.mobile.ui.components.LocalSidebarGestureLock
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.LocalNewmarkColors
 import com.newmark.mobile.ui.theme.LocalGlassMode
 import com.newmark.mobile.ui.theme.scaledGlassAlpha
 import com.newmark.mobile.ui.theme.LocalThemeMode
@@ -207,7 +208,7 @@ fun SidebarContent(
     archivePendingIds: Set<String> = emptySet(),
     swapPages: Boolean = false,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val mainContent: @Composable () -> Unit = {
         MainSidebar(
             rail = rail,
@@ -510,13 +511,12 @@ private fun MainSidebar(
                 ) {
                     SectionLabel("本地对话")
                     Spacer(Modifier.weight(1f))
-                    Box(
-                        modifier = Modifier
-                            .padding(end = 10.dp)
-                            .size(24.dp)
-                            .glassButtonSurface(CircleShape, pc.control)
-                            .clickable(onClick = onNewConversation),
-                        contentAlignment = Alignment.Center,
+                    GlassButtonCanvas(
+                        visualSize = 24.dp,
+                        shape = CircleShape,
+                        surfaceColor = pc.control,
+                        onClick = onNewConversation,
+                        modifier = Modifier.padding(end = 10.dp),
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Add,
@@ -558,7 +558,11 @@ private fun MainSidebar(
                         ) {
                             itemsIndexed(conversations, key = { _, item -> item.id }) { itemIndex, conv ->
                                 LocalConversationRow(
-                                    modifier = Modifier.onGloballyPositioned { coordinates ->
+                                    modifier = Modifier.animateItem(
+                                        fadeInSpec = tween(160, easing = PcEaseOutExpo),
+                                        placementSpec = tween(260, easing = PcEaseOutExpo),
+                                        fadeOutSpec = tween(180, easing = PcEaseOutExpo),
+                                    ).onGloballyPositioned { coordinates ->
                                         localConversationBounds[conv.id] = localConversationHostCoordinates
                                             ?.localBoundingBoxOf(coordinates, clipBounds = false)
                                             ?: coordinates.boundsInParent()
@@ -851,7 +855,7 @@ private fun PairedDeviceRow(device: PairInfo, active: Boolean, linkStatus: LinkS
 
 @Composable
 private fun DeviceRow(device: Device, expanded: Boolean, onClick: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -890,7 +894,7 @@ private fun DeviceRow(device: Device, expanded: Boolean, onClick: () -> Unit) {
 
 @Composable
 private fun DeviceRailIcon(device: Device, expanded: Boolean, onClick: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Box(
         modifier = Modifier
             .size(36.dp)
@@ -905,7 +909,7 @@ private fun DeviceRailIcon(device: Device, expanded: Boolean, onClick: () -> Uni
 
 @Composable
 private fun WorkspaceRow(workspace: Workspace, onClick: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -938,7 +942,7 @@ private fun WorkspaceRow(workspace: Workspace, onClick: () -> Unit) {
 
 @Composable
 private fun WorkspaceRailIcon(workspace: Workspace, onClick: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Box(
         modifier = Modifier
             .size(32.dp)
@@ -952,7 +956,7 @@ private fun WorkspaceRailIcon(workspace: Workspace, onClick: () -> Unit) {
 
 @Composable
 private fun WorkspaceThumb(workspace: Workspace) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Box(
         modifier = Modifier
             .size(30.dp)
@@ -1131,7 +1135,7 @@ private fun LocalConversationRow(
 // ---- 远端工作区对话行（mock） ----
 @Composable
 private fun ConversationRow(conversation: Conversation) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val rowContent: @Composable () -> Unit = {
         Row(
             modifier = Modifier
@@ -1931,7 +1935,11 @@ fun WorkspaceConversationsSidebar(
                     baseSummary
                 }
                 PcRemoteConversationRow(
-                    modifier = Modifier.onGloballyPositioned { coordinates ->
+                    modifier = Modifier.animateItem(
+                        fadeInSpec = tween(160, easing = PcEaseOutExpo),
+                        placementSpec = tween(260, easing = PcEaseOutExpo),
+                        fadeOutSpec = tween(180, easing = PcEaseOutExpo),
+                    ).onGloballyPositioned { coordinates ->
                         conversationBounds[conv.id] = conversationHostCoordinates
                             ?.localBoundingBoxOf(coordinates, clipBounds = false)
                             ?: coordinates.boundsInParent()
@@ -2632,7 +2640,7 @@ private fun PcArchiveSpinner(
 
 @Composable
 private fun SmallActionButton(label: String, accent: Boolean = false, onClick: () -> Unit = {}) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Box(
         modifier = Modifier
             .glassButtonSurface(NewmarkShapeMedium, if (accent) p.accentSoft else p.bgQuaternary)

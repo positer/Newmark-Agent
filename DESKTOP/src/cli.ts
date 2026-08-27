@@ -4,8 +4,8 @@ import { FlowEngine } from './core/flow';
 import { runFlow } from './core/flow-runner';
 import { handleFlowCommand } from './tools/flow-cli';
 
-type ModeIdx = 0 | 1 | 2 | 3;
-const MODES: AgentMode[] = ['build', 'plan', 'goal', 'flow'];
+type ModeIdx = 0 | 1 | 2 | 3 | 4;
+const MODES: AgentMode[] = ['build', 'plan', 'chat', 'goal', 'flow'];
 
 export async function runCli(root: string): Promise<void> {
   const agent = new Agent(root);

@@ -687,12 +687,12 @@ export async function runCliCommand(root: string, args: string[]): Promise<boole
   if (language && ['auto', 'en', 'zh'].includes(language)) agent.config.set('general', 'language', language);
   const requestedMode = argValue(args, '--mode');
   if ((command === 'send' || command === 'tool') && requestedMode) {
-    if (!['build', 'plan', 'goal', 'flow'].includes(requestedMode)) {
+    if (!['build', 'plan', 'chat', 'goal', 'flow'].includes(requestedMode)) {
       if (command === 'tool') {
         const positional = positionalAfter(args, 'tool');
-        emitCliToolEnvelope({ ok: false, tool: positional[0] || '', error: `Invalid mode: ${requestedMode}. Expected build, plan, goal, or flow.`, route: 'direct' }, 2);
+        emitCliToolEnvelope({ ok: false, tool: positional[0] || '', error: `Invalid mode: ${requestedMode}. Expected build, plan, chat, goal, or flow.`, route: 'direct' }, 2);
       } else {
-        safeStderr(`Invalid mode: ${requestedMode}. Expected build, plan, goal, or flow.\n`);
+        safeStderr(`Invalid mode: ${requestedMode}. Expected build, plan, chat, goal, or flow.\n`);
         process.exitCode = 2;
       }
       return true;

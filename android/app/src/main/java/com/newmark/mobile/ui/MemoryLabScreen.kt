@@ -15,6 +15,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -104,24 +105,16 @@ import com.newmark.mobile.ui.components.liquidHoldDragGesture
 import com.newmark.mobile.ui.components.LocalSidebarGestureLock
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.newmark.mobile.ui.theme.LocalGlassMode
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.LocalNewmarkColors
 import com.newmark.mobile.ui.theme.NewmarkAccent
-import com.newmark.mobile.ui.theme.NewmarkPalette
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.NewmarkThemeColors
 import com.newmark.mobile.ui.theme.NewmarkAccentSoft
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkBgPrimary
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkBgQuaternary
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkBgSecondary
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkBgTertiary
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkTextPrimary
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkTextSecondary
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkTextTertiary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -136,7 +129,7 @@ import kotlin.math.sqrt
 /** Memory Lab 单开页面（移动端适配：只读可视化 + 搜索 + Reindex，写入仅由 Agent 工具完成） */
 @Composable
 fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val context = LocalContext.current
     val store = remember { MemoryLabStore(context) }
     var index by remember { mutableStateOf(store.emptyIndex()) }
@@ -220,34 +213,26 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
         ) {
             MemoryLabViewPager(view = view, onSelect = ::selectView)
             Spacer(Modifier.weight(1f))
-            Text(
-                "新增",
-                fontSize = 11.sp,
-                color = p.accent,
-                modifier = Modifier.glassButtonSurface(NewmarkShapeMedium, p.bgQuaternary).clickable {
+            MemoryLabGlassAction(
+                label = "新增",
+                accent = true,
+                onClick = {
                     editingSlug = null
                     editorOpen = true
-                }.padding(horizontal = 10.dp, vertical = 6.dp),
+                },
             )
             Spacer(Modifier.width(6.dp))
-            Box(
-                modifier = Modifier
-                    .glassButtonSurface(NewmarkShapeMedium, p.bgQuaternary)
-                    .clickable(enabled = !reindexing) {
-                        reindexing = true
-                        scope.launch {
-                            index = withContext(Dispatchers.IO) { store.reindex() }
-                            reindexing = false
-                        }
+            MemoryLabGlassAction(
+                label = if (reindexing) "重建中..." else "重建索引",
+                enabled = !reindexing,
+                onClick = {
+                    reindexing = true
+                    scope.launch {
+                        index = withContext(Dispatchers.IO) { store.reindex() }
+                        reindexing = false
                     }
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-            ) {
-                Text(
-                    text = if (reindexing) "重建中..." else "重建索引",
-                    fontSize = 11.sp,
-                    color = p.textSecondary,
-                )
-            }
+                },
+            )
         }
 
         // 搜索
@@ -365,7 +350,7 @@ fun MemoryLabScreen(onBack: () -> Unit, dialogMode: Boolean = false) {
 
 @Composable
 private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val options = listOf("overview" to "总览", "detail" to "详细")
     val selectedIndex = options.indexOfFirst { it.first == view }.coerceAtLeast(0)
     val slotWidth = 64.dp
@@ -553,7 +538,7 @@ private fun MemoryLabViewPager(view: String, onSelect: (String) -> Unit) {
 /** 非竖屏恢复 PC sub-window 语义；占用更大的可用窗口但仍保留遮罩与关闭层级。 */
 @Composable
 fun MemoryLabDialog(onDismiss: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val glass = LocalGlassMode.current
     // Dialog is its own window: capture the dialog background with a local
     // backdrop so the surface can refract what is behind it (Kyant glass).
@@ -579,7 +564,7 @@ fun MemoryLabDialog(onDismiss: () -> Unit) {
                         shape = MobilePopupShape,
                         alpha = 0f,
                         blurRadius = 8.dp,
-                        refractionHeight = 4.dp,
+                        refractionHeight = 5.dp,
                         refractionAmount = 8.dp,
                         surfaceColor = Color.Transparent,
                     )
@@ -599,7 +584,7 @@ private fun Overview(
     onSelectTag: (String) -> Unit,
     onSelectComponent: (String) -> Unit,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val graph = remember(index) { MemoryCloudGraph.from(index) }
     var focusId by remember(index) { mutableStateOf("") }
     var relationMode by remember { mutableStateOf(MemoryRelationMode.Both) }
@@ -682,14 +667,15 @@ private fun Overview(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("记忆 Tag 图谱 · ${index.tags.size} 标签 · ${index.components.size} 组件",
                 fontSize = 10.5.sp, color = p.textTertiary, modifier = Modifier.weight(1f))
-            Text(relationMode.label, fontSize = 10.sp, color = p.textSecondary,
-                modifier = Modifier.glassButtonSurface(RoundedCornerShape(50), p.bgQuaternary).clickable {
-                    relationMode = relationMode.next()
-                }.padding(horizontal = 8.dp, vertical = 6.dp))
-            Text("清除", fontSize = 10.sp, color = p.textSecondary,
-                modifier = Modifier.padding(start = 5.dp).glassButtonSurface(RoundedCornerShape(50)).clickable { focusId = "" }.padding(7.dp))
-            Text("重置", fontSize = 10.sp, color = p.textSecondary,
-                modifier = Modifier.glassButtonSurface(RoundedCornerShape(50)).clickable { cameraScale = .88f; cameraPan = Offset.Zero; focusId = "" }.padding(7.dp))
+            MemoryLabGlassAction(label = relationMode.label, compact = true) { relationMode = relationMode.next() }
+            Spacer(Modifier.width(5.dp))
+            MemoryLabGlassAction(label = "清除", compact = true, enabled = focusId.isNotBlank()) { focusId = "" }
+            Spacer(Modifier.width(5.dp))
+            MemoryLabGlassAction(label = "重置", compact = true) {
+                cameraScale = .88f
+                cameraPan = Offset.Zero
+                focusId = ""
+            }
         }
         Text(if (focusId.isBlank()) "未选择" else "已选择：${graph.nodeMap[focusId]?.label.orEmpty()}",
             color = p.textTertiary, fontSize = 9.5.sp, modifier = Modifier.padding(vertical = 6.dp))
@@ -830,7 +816,48 @@ private fun Overview(
     }
 }
 
-internal fun memoryLabOverviewLabelColor(p: NewmarkPalette, emphasized: Boolean): Color =
+@Composable
+private fun MemoryLabGlassAction(
+    label: String,
+    enabled: Boolean = true,
+    accent: Boolean = false,
+    compact: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val p = LocalNewmarkColors.current
+    val shape = RoundedCornerShape(50)
+    val interaction = remember { MutableInteractionSource() }
+    val surface = if (accent) p.accentSoft else p.bgQuaternary.copy(alpha = 0.72f)
+    Box(
+        modifier = Modifier
+            .height(if (compact) 32.dp else 34.dp)
+            .widthIn(min = if (compact) 52.dp else 58.dp)
+            .background(surface.copy(alpha = if (enabled) surface.alpha else surface.alpha * 0.45f), shape)
+            .glassButtonSurface(shape, if (accent) p.accent else p.bgQuaternary, alpha = if (accent) 0.28f else 0.16f)
+            .clickable(
+                enabled = enabled,
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = if (compact) 11.dp else 13.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            fontSize = if (compact) 10.sp else 11.sp,
+            fontWeight = if (accent) FontWeight.Medium else FontWeight.Normal,
+            color = when {
+                !enabled -> p.textTertiary.copy(alpha = 0.5f)
+                accent -> p.accent
+                else -> p.textSecondary
+            },
+            maxLines = 1,
+        )
+    }
+}
+
+internal fun memoryLabOverviewLabelColor(p: NewmarkThemeColors, emphasized: Boolean): Color =
     if (emphasized) p.textPrimary else p.textSecondary.copy(alpha = .72f)
 
 private enum class MemoryRelationMode(val label: String) {
@@ -839,7 +866,7 @@ private enum class MemoryRelationMode(val label: String) {
 }
 
 private data class MemoryCloudNode(val id: String, val label: String, val tag: String = "", val slug: String = "", val type: String, val width: Float, val height: Float = 28f) {
-    fun color(p: com.newmark.mobile.ui.theme.NewmarkPalette) = when (type) {
+    fun color(p: com.newmark.mobile.ui.theme.NewmarkThemeColors) = when (type) {
         "root", "anchor" -> androidx.compose.ui.graphics.Color(0xFFF6C96B)
         "leaf" -> androidx.compose.ui.graphics.Color(0xFF74DFB0)
         "component" -> androidx.compose.ui.graphics.Color(0xFFE8EEF8)
@@ -906,7 +933,7 @@ private fun Detail(
     onEditComponent: (String) -> Unit,
     onDeleteComponent: (String) -> Unit,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val tags = index.tags.keys.sorted()
     val firstTag = tags.firstOrNull() ?: ""
     val currentTag = selectedTag.ifBlank { firstTag }
@@ -1022,7 +1049,7 @@ private fun MemoryLabEditorDialog(
     onDismiss: () -> Unit,
     onSave: (MemoryLabUpdateInput) -> Unit,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val existing = existingSlug?.let(index.components::get)
     var name by remember(existingSlug) { mutableStateOf(existing?.name.orEmpty()) }
     var description by remember(existingSlug) { mutableStateOf(existing?.description.orEmpty()) }
@@ -1051,7 +1078,7 @@ private fun MemoryLabEditorDialog(
 
 @Composable
 private fun MemoryEditorField(label: String, value: String, singleLine: Boolean = true, onValueChange: (String) -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(label, color = p.textTertiary, fontSize = 10.sp)
         BasicTextField(value, onValueChange, Modifier.fillMaxWidth().heightIn(min = if (singleLine) 38.dp else 120.dp).clip(NewmarkShapeMedium).background(p.bgTertiary).padding(10.dp),
@@ -1061,7 +1088,7 @@ private fun MemoryEditorField(label: String, value: String, singleLine: Boolean 
 
 @Composable
 private fun TagChip(tag: String, selected: Boolean, count: Int, onClick: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(50))
@@ -1079,7 +1106,7 @@ private fun TagChip(tag: String, selected: Boolean, count: Int, onClick: () -> U
 
 @Composable
 private fun EmptyHint(text: String) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Box(
         modifier = Modifier
             .fillMaxWidth()

@@ -45,7 +45,7 @@ import com.newmark.mobile.data.LocalToolExecutor
 import com.newmark.mobile.data.TerminalEntry
 import com.newmark.mobile.data.TerminalSessionStore
 import com.newmark.mobile.ui.components.glassButtonSurface
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.LocalNewmarkColors
 import com.newmark.mobile.ui.theme.NewmarkGreen
 import com.newmark.mobile.ui.theme.NewmarkRed
 
@@ -58,7 +58,7 @@ fun TerminalScreen(onBack: () -> Unit) {
     var session by remember { mutableStateOf(store.load("main")) }
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
 
     LaunchedEffect(Unit) {
         executor.restoreCwd(session.cwd)

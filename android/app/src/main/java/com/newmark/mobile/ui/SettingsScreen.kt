@@ -95,27 +95,17 @@ import com.newmark.mobile.ui.components.LiquidGlassSwitch
 import com.newmark.mobile.ui.components.DialogBackdropBlur
 import com.newmark.mobile.ui.components.MobilePopupShape
 import com.kyant.backdrop.backdrops.layerBackdrop
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.LocalNewmarkColors
 import com.newmark.mobile.ui.theme.LocalThemeMode
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkAccent
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkAccentSoft
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkBgPrimary
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkBgQuaternary
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkBgSecondary
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkGreen
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkRed
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkTextPrimary
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkTextSecondary
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
 import com.newmark.mobile.ui.theme.NewmarkTextTertiary
 import com.newmark.mobile.vm.ChatViewModel
 import com.newmark.mobile.vm.DesktopLinkViewModel
@@ -138,7 +128,7 @@ fun SettingsScreen(
     linkVm: DesktopLinkViewModel,
     onBack: () -> Unit,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     var page by remember { mutableStateOf<SettingsPage>(SettingsPage.Main) }
 
     val (_, predictiveModifier) = predictiveBackMotion(
@@ -263,7 +253,7 @@ private fun MainSettings(
     onOpenCapabilities: () -> Unit,
     onOpenPlugins: () -> Unit,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
@@ -279,7 +269,7 @@ private fun MainSettings(
 
 @Composable
 private fun SettingsEntry(title: String, subtitle: String, onClick: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Row(Modifier.fillMaxWidth().clip(NewmarkShapeLarge).background(p.bgSecondary).clickable(onClick = onClick).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = p.textPrimary)
@@ -305,7 +295,7 @@ private fun CapabilitySettingsPage() {
     var shizukuGranted by remember { mutableStateOf(PrivilegedToolBridge.isShizukuAvailable()) }
     var rootAvailable by remember { mutableStateOf(PrivilegedToolBridge.isRootAvailable()) }
     var confirmHighPrivilege by remember { mutableStateOf(false) }
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val mediaPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { allFiles = store.allFilesGranted() }
@@ -454,7 +444,7 @@ private fun PluginSettingsPage() {
     val context = LocalContext.current
     val store = remember { MobilePluginStore(context) }
     var state by remember { mutableStateOf(store.load()) }
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { PluginSection("Skill", state.skills, p) { name, enabled -> state = state.copy(skills = state.skills + (name to enabled)); store.save(state) } }
         item { PluginSection("MCP", state.mcp, p) { name, enabled -> state = state.copy(mcp = state.mcp + (name to enabled)); store.save(state) } }
@@ -462,7 +452,7 @@ private fun PluginSettingsPage() {
 }
 
 @Composable
-private fun PluginSection(title: String, entries: Map<String, Boolean>, p: com.newmark.mobile.ui.theme.NewmarkPalette, onChange: (String, Boolean) -> Unit) {
+private fun PluginSection(title: String, entries: Map<String, Boolean>, p: com.newmark.mobile.ui.theme.NewmarkThemeColors, onChange: (String, Boolean) -> Unit) {
     SectionCard(title) {
         if (entries.isEmpty()) Text("暂无已安装插件。插件文件可由桌面端同步或放入 files/newmark/plugins.json。", fontSize = 11.sp, color = p.textSecondary)
         entries.toSortedMap().forEach { (name, enabled) -> SettingRow(name) { LiquidGlassSwitch(checked = enabled, onCheckedChange = { onChange(name, it) }) } }
@@ -472,7 +462,7 @@ private fun PluginSection(title: String, entries: Map<String, Boolean>, p: com.n
 // ---- 设备配对（Tailscale 扫码绑定） ----
 @Composable
 private fun DevicePairSection(linkVm: DesktopLinkViewModel, onOpenDeviceManage: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
         result.contents?.let { linkVm.pairFromUrl(it) }
     }
@@ -619,7 +609,7 @@ private fun LabeledField(
     placeholder: String,
     password: Boolean = false,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Column(Modifier.padding(vertical = 4.dp)) {
         Text(text = label, fontSize = 10.5.sp, color = p.textTertiary)
         Box(
@@ -650,7 +640,7 @@ private fun LabeledField(
 
 @Composable
 private fun SectionCard(title: String, content: @Composable () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -672,7 +662,7 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
 
 @Composable
 private fun SettingRow(label: String, trailing: @Composable () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -692,7 +682,7 @@ private fun SettingRow(label: String, trailing: @Composable () -> Unit) {
 // ---- 外观 ----
 @Composable
 private fun AppearanceSection() {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val themeMode = LocalThemeMode.current
     val systemDark = isSystemInDarkTheme()
     val isDark = themeMode.dark ?: systemDark
@@ -716,7 +706,7 @@ private fun AppearanceSection() {
 // ---- 模型与供应商入口（主设置页） ----
 @Composable
 private fun ProvidersEntry(onClick: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -746,7 +736,7 @@ private fun ProvidersPage(
     onOpenProvider: (String) -> Unit,
     onOpenFuzzy: () -> Unit,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val scope = rememberCoroutineScope()
     var showDevicePicker by remember { mutableStateOf(false) }
     var pullingHost by remember { mutableStateOf("") }
@@ -847,7 +837,7 @@ private fun ProvidersPage(
                         shape = MobilePopupShape,
                         alpha = 0f,
                         blurRadius = 8.dp,
-                        refractionHeight = 4.dp,
+                        refractionHeight = 5.dp,
                         refractionAmount = 8.dp,
                         surfaceColor = Color.Transparent,
                     )
@@ -890,7 +880,7 @@ private fun ProvidersPage(
 // ---- 模糊注入（对齐 PC：textarea 三合一 + 协议下拉 + 创建/取消 + 本地联网发现） ----
 @Composable
 private fun FuzzyInjectPage(onSave: (ProviderConfig) -> Unit, onCancel: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     var input by remember { mutableStateOf("") }
     var protocol by remember { mutableStateOf("auto") }
     var status by remember { mutableStateOf("") }
@@ -1044,7 +1034,7 @@ private fun FuzzyInjectPage(onSave: (ProviderConfig) -> Unit, onCancel: () -> Un
 // ---- 供应商详情（三级菜单：配置所属模型） ----
 @Composable
 private fun ProviderDetailPage(vm: ChatViewModel, providerId: String, onBack: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val provider = vm.providers.find { it.id == providerId }
     var newModelName by remember { mutableStateOf("") }
 
@@ -1200,7 +1190,7 @@ private fun ProviderDetailPage(vm: ChatViewModel, providerId: String, onBack: ()
 // ---- 设备管理（多设备：查看/切换/删除） ----
 @Composable
 private fun DeviceManagePage(linkVm: DesktopLinkViewModel) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),

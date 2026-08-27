@@ -17,12 +17,17 @@ object LocalToolCatalog {
         "read_file", "list_dir", "recent_files", "memory_lab_read", "memory_lab_query", "settings_read",
         "web_search", "web_fetch", "browser_use", "task_read", "calendar_read",
     )
+    val chatNames: Set<String> = linkedSetOf("web_search", "web_fetch")
     val buildBrowserActions: Set<String> = linkedSetOf(
         "observe", "navigate", "wait", "extract", "back", "forward", "reload",
     )
     val planBrowserActions: Set<String> = linkedSetOf("observe", "navigate", "wait", "extract")
 
-    val privilegedNames: Set<String> = linkedSetOf("high_privilege_exec", "shizuku_exec", "root_exec", "adb_exec", "termux_privileged_exec")
+    val capabilityBuildNames: Set<String> = linkedSetOf(
+        "files_read_all", "apps_list", "files_manage", "apps_inspect", "skills_list", "mcp_list",
+        "shizuku_exec", "root_exec", "adb_exec",
+    )
+    val privilegedNames: Set<String> = linkedSetOf("shizuku_exec", "root_exec", "adb_exec")
     val shizukuNames: Set<String> = linkedSetOf("shizuku_exec", "adb_exec")
     val rootNames: Set<String> = linkedSetOf("root_exec")
     val externalFileNames: Set<String> = linkedSetOf("recent_files", "files_read_all")

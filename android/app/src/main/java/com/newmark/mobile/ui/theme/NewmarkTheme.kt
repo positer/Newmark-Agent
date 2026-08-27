@@ -5,6 +5,8 @@ import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -48,6 +50,7 @@ private object NoVisualIndication : IndicationNodeFactory {
 }
 
 private class NoVisualIndicationNode : androidx.compose.ui.Modifier.Node()
+
 val NewmarkScrim = Color(0x73000000)          // rgba(0,0,0,.45)
 
 // 亮色 token（.light）
@@ -73,9 +76,13 @@ val MarqueeColors = listOf(
 val NewmarkGreen = Color(0xFF34C759)
 val NewmarkRed = Color(0xFFFF3B30)
 
-/** 主题语义调色板（暗/亮两套），UI 组件经 LocalNewmarkPalette 取色以适配亮色模式 */
+/**
+ * 固定的深色/浅色语义主题色。
+ *
+ * 这里只描述产品内置主题，不存在用户自定义调色状态、设置入口或颜色配置持久化。
+ */
 @Immutable
-data class NewmarkPalette(
+data class NewmarkThemeColors(
     val bgPrimary: Color,
     val bgSecondary: Color,
     val bgTertiary: Color,
@@ -92,7 +99,7 @@ data class NewmarkPalette(
     val red: Color,
 )
 
-val NewmarkDarkPalette = NewmarkPalette(
+val NewmarkDarkThemeColors = NewmarkThemeColors(
     bgPrimary = NewmarkBgPrimary,
     bgSecondary = NewmarkBgSecondary,
     bgTertiary = NewmarkBgTertiary,
@@ -109,7 +116,7 @@ val NewmarkDarkPalette = NewmarkPalette(
     red = NewmarkRed,
 )
 
-val NewmarkLightPalette = NewmarkPalette(
+val NewmarkLightThemeColors = NewmarkThemeColors(
     bgPrimary = NewmarkLightBgPrimary,
     bgSecondary = NewmarkLightBgSecondary,
     bgTertiary = NewmarkLightBgTertiary,
@@ -126,7 +133,7 @@ val NewmarkLightPalette = NewmarkPalette(
     red = NewmarkRed,
 )
 
-val LocalNewmarkPalette = staticCompositionLocalOf { NewmarkDarkPalette }
+val LocalNewmarkColors = staticCompositionLocalOf { NewmarkDarkThemeColors }
 
 const val DefaultGlassAlpha = 0.85f
 
@@ -252,13 +259,15 @@ private val NewmarkTypography = Typography(
 )
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun NewmarkTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
     CompositionLocalProvider(
-        LocalNewmarkPalette provides if (darkTheme) NewmarkDarkPalette else NewmarkLightPalette,
+        LocalNewmarkColors provides if (darkTheme) NewmarkDarkThemeColors else NewmarkLightThemeColors,
         LocalIndication provides NoVisualIndication,
+        LocalRippleConfiguration provides null,
     ) {
         MaterialTheme(
             colorScheme = if (darkTheme) NewmarkDarkColors else NewmarkLightColors,

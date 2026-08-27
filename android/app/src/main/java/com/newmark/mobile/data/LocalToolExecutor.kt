@@ -38,6 +38,51 @@ internal fun parseToolArgumentsObject(arguments: String): Result<JSONObject> = r
     JSONObject(parsed.toString())
 }
 
+/** Accept dev-0.5.9 structured arguments and the dev-0.5.8 string envelope. */
+internal fun settingsUpdatePayload(arguments: JSONObject): Result<String> = runCatching {
+    if (listOf("providers", "active", "action", "provider", "model", "provider_id", "model_name").any(arguments::has)) {
+        return@runCatching arguments.toString()
+    }
+    when (val legacy = arguments.opt("json")) {
+        is JSONObject -> legacy.toString()
+        is String -> legacy.takeIf(String::isNotBlank) ?: error("settings_update 至少需要 providers 或 active")
+        else -> error("settings_update 至少需要 providers 或 active")
+    }
+}
+
+internal fun normalizedMobileIntelligence(value: String): String =
+    value.takeIf { it in INTELLIGENCE_TIERS } ?: "medium"
+
+internal fun sha256Text(value: String): String =
+    MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
+
+internal fun applyTextMutation(existing: String, args: JSONObject): Result<String> = runCatching {
+    args.optString("expected_sha256").takeIf(String::isNotBlank)?.let { expected ->
+        val actual = sha256Text(existing)
+        require(expected.equals(actual, ignoreCase = true)) { "target changed since it was read" }
+    }
+    when (args.optString("action").ifBlank { "overwrite" }) {
+        "overwrite", "write" -> {
+            require(args.has("content")) { "overwrite requires content" }
+            args.optString("content")
+        }
+        "append" -> {
+            require(args.has("content")) { "append requires content" }
+            existing + args.optString("content")
+        }
+        "replace" -> {
+            val oldText = args.optString("old_text")
+            require(oldText.isNotEmpty()) { "replace requires old_text" }
+            val count = existing.windowed(oldText.length, 1).count { it == oldText }
+            require(count > 0) { "old_text not found" }
+            require(count == 1 || args.optBoolean("replace_all")) { "old_text matched $count places; pass replace_all=true or a unique fragment" }
+            if (args.optBoolean("replace_all")) existing.replace(oldText, args.optString("new_text"))
+            else existing.replaceFirst(oldText, args.optString("new_text"))
+        }
+        else -> error("action must be overwrite|append|replace")
+    }
+}
+
 /** 本地工具执行结果 */
 data class ToolResult(val ok: Boolean, val output: String) {
     companion object {
@@ -80,12 +125,15 @@ class LocalToolExecutor(
     }
 
     /** Agent 工具调用入口（OpenAI function calling）：按 name + JSON 参数执行 */
-    suspend fun executeTool(name: String, arguments: String): ToolResult {
+    suspend fun executeTool(name: String, arguments: String, mode: String = "build"): ToolResult {
         val args = parseToolArgumentsObject(arguments).getOrElse {
             return ToolResult.err(
                 "工具参数不是合法 JSON 对象；请按当前工具 schema 重新调用。" +
                     "解析错误：${it.message ?: "unknown"}；收到：${arguments.take(240)}",
             )
+        }
+        if (mode.equals("chat", ignoreCase = true) && name !in LocalToolCatalog.chatNames) {
+            return ToolResult.err("[permission] Chat 模式仅允许 web_search 与 web_fetch；拒绝工作区、系统、应用、记忆、任务及其他写入或操作权限。已阻断：$name")
         }
         if (name in LocalToolCatalog.privilegedNames && !capabilities.highPrivilegeActive()) {
             return ToolResult.err("高权限模式未开启或 Root/Shizuku 未授权，已阻断高权限工具")
@@ -99,7 +147,7 @@ class LocalToolExecutor(
         return runCatching {
             when (name) {
                 "read_file" -> readFile(args.optString("path"))
-                "write_file" -> writeFileArgs(args.optString("path"), args.optString("content"))
+                "write_file" -> writeFileArgs(args)
                 "list_dir" -> ls(args.optString("path"))
                 "recent_files" -> recentFiles(args)
                 "terminal_exec" -> terminalExec(args.optString("command"))
@@ -109,7 +157,9 @@ class LocalToolExecutor(
                 "memory_lab_delete" -> mlDeleteArgs(args)
                 "memory_lab_reindex" -> mlReindex()
                 "settings_read" -> settingsRead()
-                "settings_update" -> settingsUpdate(args.optString("json"))
+                "settings_update" -> settingsUpdate(settingsUpdatePayload(args).getOrElse {
+                    return ToolResult.err(it.message ?: "settings_update 参数格式错误")
+                })
                 "web_search" -> webSearch(args.optString("query"))
                 "web_fetch" -> webFetch(args.optString("url"))
                 "files_read_all" -> readSharedFile(args.optString("path"))
@@ -188,15 +238,49 @@ class LocalToolExecutor(
         return ToolResult.err("[web_search] No results. ${errors.joinToString("; ")}")
     }
 
-    private fun writeFileArgs(path: String, content: String): ToolResult {
+    private fun writeFileArgs(args: JSONObject): ToolResult {
+        val path = args.optString("path")
         if (path.isBlank()) return ToolResult.err("需要 path")
         val f = resolve(path)
+        val existing = if (f.exists()) f.readText() else ""
+        val content = applyTextMutation(existing, args).getOrElse { return ToolResult.err("文件更新失败：${it.message}") }
         f.parentFile?.mkdirs()
         f.writeText(content)
         return ToolResult.ok("已写入 ${f.absolutePath}（${content.length} 字符）")
     }
 
     private fun mlUpdateArgs(args: JSONObject): ToolResult {
+        val component = args.optString("component")
+        if (component.isNotBlank()) {
+            val patchFields = setOf("name", "description", "tags", "tag_paths", "content", "content_append", "old_text", "kind")
+            if (patchFields.none(args::has)) return ToolResult.err("局部更新至少需要一个要修改的字段")
+            fun optionalTags(key: String): List<String>? = if (args.has(key)) {
+                args.optString(key).split(Regex("[,，]")).map(String::trim).filter(String::isNotEmpty)
+                    .map { if (it.startsWith("#")) it else "#$it" }
+            } else null
+            val parsedPaths = if (args.has("tag_paths")) runCatching {
+                val arr = JSONArray(args.optString("tag_paths", "[]"))
+                (0 until arr.length()).map { i -> arr.getJSONArray(i).toStringListForMemory() }
+            }.getOrElse { return ToolResult.err("tag_paths 必须是 JSON 路径数组") } else null
+            val result = runCatching { memoryLab.patch(MemoryLabPatchInput(
+                component = component,
+                name = args.optString("name").takeIf { args.has("name") },
+                description = args.optString("description").takeIf { args.has("description") },
+                tags = optionalTags("tags"),
+                tagPaths = parsedPaths,
+                content = args.optString("content").takeIf { args.has("content") },
+                contentAppend = args.optString("content_append").takeIf { args.has("content_append") },
+                oldText = args.optString("old_text").takeIf { args.has("old_text") },
+                newText = args.optString("new_text"),
+                replaceAll = args.optBoolean("replace_all"),
+                kind = args.optString("kind").takeIf { args.has("kind") },
+                expectedUpdatedAt = args.optString("expected_updated_at"),
+                reason = args.optString("reason"),
+                source = args.optString("source", "memory_lab_update"),
+            )) }.getOrElse { return ToolResult.err(it.message ?: "Memory Lab patch 失败") }
+            return ToolResult.ok(JSONObject().put("ok", true).put("slug", result.slug).put("component", result.component?.name)
+                .put("rebuildReceipt", result.rebuildReceipt).toString(2))
+        }
         val name = args.optString("name")
         val tags = args.optString("tags")
         val content = args.optString("content")
@@ -206,6 +290,7 @@ class LocalToolExecutor(
             val arr = JSONArray(args.optString("tag_paths", "[]"))
             (0 until arr.length()).map { i -> arr.getJSONArray(i).toStringListForMemory() }
         }.getOrDefault(emptyList())
+        if (name.isBlank() || tagList.isEmpty() || content.isBlank()) return ToolResult.err("新建组件需要 name、tags、content；局部更新请传 component")
         val result = memoryLab.update(MemoryLabUpdateInput(
             name = name, description = args.optString("description"), tags = tagList,
             tagPaths = paths, content = content, kind = args.optString("kind", "file"),
@@ -470,7 +555,7 @@ class LocalToolExecutor(
         if (f.isDirectory) return ToolResult.err("是目录：${f.absolutePath}")
         val text = f.readText()
         val bounded = if (text.length > 48_000) text.take(48_000) + "\n…（截断）" else text
-        return ToolResult.ok(bounded)
+        return ToolResult.ok("path=${f.absolutePath}\nsha256=${sha256Text(text)}\ntruncated=${text.length > 48_000}\n\n$bounded")
     }
 
     private fun writeFile(arg: String): ToolResult {
@@ -560,13 +645,14 @@ class LocalToolExecutor(
         return ToolResult.ok(json.toString(2))
     }
 
-    /** 以 JSON 更新设置：providers 数组与/或 active 激活选择，改动立即落盘 */
+    /** 增量更新设置；保留 providers 全量替换作为旧调用兼容入口。 */
     private fun settingsUpdate(raw: String): ToolResult {
         if (raw.isBlank()) return ToolResult.err("需要 json 参数")
         val json = runCatching { JSONObject(raw) }.getOrNull()
             ?: return ToolResult.err("json 参数不是合法 JSON 对象")
         val changes = mutableListOf<String>()
 
+        val action = json.optString("action")
         if (json.has("providers")) {
             val arr = json.opt("providers") ?: return ToolResult.err("providers 必须是数组")
             val type = object : TypeToken<List<ProviderConfig>>() {}.type
@@ -578,19 +664,67 @@ class LocalToolExecutor(
             changes += "providers(${cleaned.size})"
         }
 
+        if (action == "provider_upsert" || json.has("provider")) {
+            val patch = json.optJSONObject("provider") ?: return ToolResult.err("provider_upsert 需要 provider 对象")
+            val current = providerStore.load().toMutableList()
+            val id = patch.optString("id")
+            val index = current.indexOfFirst { it.id == id }
+            val updated = runCatching { patchProviderConfig(current.getOrNull(index), patch) }
+                .getOrElse { return ToolResult.err(it.message ?: "provider patch 失败") }
+            if (index >= 0) current[index] = updated else current += updated
+            providerStore.save(current)
+            changes += "provider_upsert(${updated.id})"
+        }
+
+        if (action == "provider_delete") {
+            if (!json.optBoolean("confirm")) return ToolResult.err("provider_delete 需要 confirm=true")
+            val id = json.optString("provider_id")
+            if (id.isBlank()) return ToolResult.err("provider_delete 需要 provider_id")
+            val current = providerStore.load()
+            if (current.none { it.id == id }) return ToolResult.err("provider 不存在：$id")
+            providerStore.save(current.filterNot { it.id == id })
+            changes += "provider_delete($id)"
+        }
+
+        if (action == "model_upsert" || json.has("model")) {
+            val providerId = json.optString("provider_id")
+            val patch = json.optJSONObject("model") ?: return ToolResult.err("model_upsert 需要 model 对象")
+            val providers = providerStore.load().toMutableList()
+            val providerIndex = providers.indexOfFirst { it.id == providerId }
+            if (providerIndex < 0) return ToolResult.err("provider 不存在：$providerId")
+            val provider = providers[providerIndex]
+            val modelName = patch.optString("name")
+            val modelIndex = provider.models.indexOfFirst { it.name == modelName }
+            val updated = runCatching { patchModelConfig(provider.models.getOrNull(modelIndex), patch) }
+                .getOrElse { return ToolResult.err(it.message ?: "model patch 失败") }
+            val models = provider.models.toMutableList().apply { if (modelIndex >= 0) this[modelIndex] = updated else add(updated) }
+            providers[providerIndex] = provider.copy(models = models)
+            providerStore.save(providers)
+            changes += "model_upsert($providerId/${updated.name})"
+        }
+
+        if (action == "model_delete") {
+            if (!json.optBoolean("confirm")) return ToolResult.err("model_delete 需要 confirm=true")
+            val providerId = json.optString("provider_id")
+            val modelName = json.optString("model_name")
+            val providers = providerStore.load().toMutableList()
+            val providerIndex = providers.indexOfFirst { it.id == providerId }
+            if (providerIndex < 0) return ToolResult.err("provider 不存在：$providerId")
+            val provider = providers[providerIndex]
+            if (provider.models.none { it.name == modelName }) return ToolResult.err("model 不存在：$providerId/$modelName")
+            providers[providerIndex] = provider.copy(models = provider.models.filterNot { it.name == modelName })
+            providerStore.save(providers)
+            changes += "model_delete($providerId/$modelName)"
+        }
+
         if (json.has("active")) {
             val a = json.optJSONObject("active") ?: return ToolResult.err("active 必须是对象")
-            val intelligence = a.optString("intelligence", "medium")
-            val active = ActiveModel(
-                providerId = a.optString("provider_id", a.optString("providerId", "")),
-                modelName = a.optString("model_name", a.optString("modelName", "")),
-                intelligence = if (intelligence in setOf("low", "medium", "high")) intelligence else "medium",
-            )
+            val active = patchActiveModel(providerStore.loadActive(), a)
             providerStore.saveActive(active)
             changes += "active(${active.providerId}/${active.modelName}/${active.intelligence})"
         }
 
-        if (changes.isEmpty()) return ToolResult.err("json 至少需包含 providers 或 active 之一")
+        if (changes.isEmpty()) return ToolResult.err("至少提供 active、provider、model、providers 或删除 action 之一")
         return ToolResult.ok("设置已更新：${changes.joinToString("，")}")
     }
 
@@ -772,12 +906,23 @@ class LocalToolExecutor(
                 }.orEmpty())
             }
             "read" -> readSharedFile(file.absolutePath)
-            "stat" -> if (!file.exists()) ToolResult.err("不存在") else ToolResult.ok("path=${file.absolutePath}\ntype=${if (file.isDirectory) "directory" else "file"}\nsize=${file.length()}\nmodified=${file.lastModified()}")
+            "stat" -> if (!file.exists()) ToolResult.err("不存在") else ToolResult.ok(buildString {
+                append("path=${file.absolutePath}\ntype=${if (file.isDirectory) "directory" else "file"}\nsize=${file.length()}\nmodified=${file.lastModified()}")
+                if (file.isFile && file.length() <= 20L * 1024 * 1024) append("\nsha256=${MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }}")
+            })
             "mkdir" -> if (file.mkdirs() || file.isDirectory) ToolResult.ok("已创建 ${file.absolutePath}") else ToolResult.err("创建失败")
             "write" -> {
-                val content = args.optString("content")
+                val existing = if (file.exists()) file.readText() else ""
+                val content = applyTextMutation(existing, args).getOrElse { return ToolResult.err("文件更新失败：${it.message}") }
                 if (content.toByteArray().size > 5 * 1024 * 1024) return ToolResult.err("单次写入超过 5 MiB")
                 file.parentFile?.mkdirs(); file.writeText(content); ToolResult.ok("已写入 ${file.absolutePath}")
+            }
+            "append", "replace" -> {
+                if (!file.isFile) return ToolResult.err("目标必须是已有文件")
+                val mutationArgs = JSONObject(args.toString()).put("action", action)
+                val content = applyTextMutation(file.readText(), mutationArgs).getOrElse { return ToolResult.err("文件更新失败：${it.message}") }
+                if (content.toByteArray().size > 5 * 1024 * 1024) return ToolResult.err("更新后文件超过 5 MiB")
+                file.writeText(content); ToolResult.ok("已局部更新 ${file.absolutePath}")
             }
             "copy", "move" -> {
                 if (!file.isFile) return ToolResult.err("仅允许复制或移动单个文件")
@@ -795,7 +940,7 @@ class LocalToolExecutor(
                 if (!file.exists()) return ToolResult.err("目标不存在")
                 if (file.delete()) ToolResult.ok("已删除 ${file.absolutePath}") else ToolResult.err("删除失败")
             }
-            else -> ToolResult.err("action 必须是 list|read|stat|mkdir|write|copy|move|delete")
+            else -> ToolResult.err("action 必须是 list|read|stat|mkdir|write|append|replace|copy|move|delete")
         }
     }
 

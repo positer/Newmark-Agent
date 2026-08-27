@@ -107,9 +107,9 @@ import com.newmark.mobile.data.RemoteSubagent
 import com.newmark.mobile.data.RemotePlanItem
 import com.newmark.mobile.ui.components.LucideIcons
 import com.newmark.mobile.ui.components.MarkdownBody
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.LocalNewmarkColors
 import com.newmark.mobile.ui.theme.scaledGlassAlpha
-import com.newmark.mobile.ui.theme.NewmarkLightPalette
+import com.newmark.mobile.ui.theme.NewmarkLightThemeColors
 import com.newmark.mobile.ui.components.liquidGlassModifier
 import com.newmark.mobile.ui.components.glassButtonSurface
 import com.newmark.mobile.ui.components.liquidHoldDragGesture
@@ -164,7 +164,7 @@ fun MobileRightSidebar(
     onSelectTab: (RightSidebarTab) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val tabs = remember(remoteMode) { availableRightTabs(remoteMode) }
     val tab = selectedTab.takeIf { it in tabs } ?: tabs.first()
     var selectedSubagent by remember { mutableStateOf<RemoteSubagent?>(null) }
@@ -186,7 +186,7 @@ fun MobileRightSidebar(
     // backdrop blur, while the panel itself is a tinted carrier rather than a
     // full-height refractive lens. A large lens produces a mirrored vertical
     // band while the sidebar is only half revealed.
-    val panelSurface = if (p == NewmarkLightPalette) {
+    val panelSurface = if (p == NewmarkLightThemeColors) {
         p.bgTertiary.copy(alpha = 0.98f)
     } else {
         p.bgTertiary.copy(alpha = scaledGlassAlpha(0.74f, com.newmark.mobile.ui.theme.DefaultGlassAlpha))
@@ -254,7 +254,7 @@ fun MobileRightSidebar(
 
 @Composable
 private fun UploadsPanel(tasks: List<WorkspaceUploadProgress>) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Column(Modifier.fillMaxSize()) {
         SectionHead("文件上传进度", meta = "${tasks.count { it.status == "uploading" }} 项上传中")
         if (tasks.isEmpty()) {
@@ -271,7 +271,7 @@ private fun UploadsPanel(tasks: List<WorkspaceUploadProgress>) {
 
 @Composable
 private fun UploadTaskRow(task: WorkspaceUploadProgress) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val statusText = when (task.status) {
         "completed" -> "已完成"
         "failed" -> "失败"
@@ -318,7 +318,7 @@ private fun UploadTaskRow(task: WorkspaceUploadProgress) {
 /** PC .right-open-btn：折叠时覆盖在主页面右缘中部，不占据任何布局宽度。 */
 @Composable
 fun RightSidebarOpenButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val shape = RoundedCornerShape(50)
     Box(
         modifier = modifier
@@ -328,7 +328,7 @@ fun RightSidebarOpenButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
             .clip(shape)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = androidx.compose.foundation.LocalIndication.current,
+                indication = null,
                 onClick = onClick,
             ),
         contentAlignment = Alignment.Center,
@@ -347,7 +347,7 @@ fun RightSidebarDragPreview(
     panelWidth: Dp,
     modifier: Modifier = Modifier,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val clamped = progress.coerceIn(0f, 1f)
     Box(
         modifier = modifier
@@ -408,7 +408,7 @@ private fun RightTabs(
     onSelect: (RightSidebarTab) -> Unit,
     onClose: () -> Unit,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val setSidebarGestureLock = LocalSidebarGestureLock.current
     val scope = rememberCoroutineScope()
     val slotWidth = 34.dp
@@ -661,7 +661,7 @@ private fun IconButton(
         modifier.size(width = 32.dp, height = 28.dp).clip(shape).background(background)
             .border(1.dp, border, shape).clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = androidx.compose.foundation.LocalIndication.current,
+                indication = null,
                 onClick = onClick,
             ),
         contentAlignment = Alignment.Center,
@@ -674,7 +674,7 @@ private fun SectionHead(
     meta: String = "",
     onRefresh: (() -> Unit)? = null,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(title, color = p.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
         if (meta.isNotBlank()) Text(meta, color = p.textTertiary, fontSize = 9.sp)
@@ -687,7 +687,7 @@ private fun SectionHead(
 
 @Composable
 private fun FilesPanel(vm: DesktopLinkViewModel, onFileOpened: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Column {
         SectionHead(
             "Workspace file tree",
@@ -720,8 +720,8 @@ private fun FilesPanel(vm: DesktopLinkViewModel, onFileOpened: () -> Unit) {
 
 @Composable
 private fun EditorPanel(vm: DesktopLinkViewModel) {
-    val p = LocalNewmarkPalette.current
-    val lightTheme = p == NewmarkLightPalette
+    val p = LocalNewmarkColors.current
+    val lightTheme = p == NewmarkLightThemeColors
     val editorBackground = if (lightTheme) Color(0xFFF7F8FC) else Color(0xFF0B0D14)
     val gutterBackground = if (lightTheme) Color(0x0B1D243A) else Color(0x06FFFFFF)
     val editorCaret = if (lightTheme) Color(0xFF172033) else Color.White
@@ -824,7 +824,7 @@ private fun editorLanguage(path: String): String = path.substringAfterLast('.', 
 
 @Composable
 private fun EditorToolbarButton(icon: ImageVector, label: String, enabled: Boolean, active: Boolean = false, onClick: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val shape = RoundedCornerShape(50)
     Box(Modifier.size(30.dp).glassButtonSurface(shape, if (active) p.accentSoft else p.bgPrimary)
         .border(1.dp, if (active) p.accentBorder else p.border2, shape).clickable(enabled = enabled, onClick = onClick),
@@ -861,7 +861,7 @@ private fun EditablePlanPanel(
     linkedPlan: String,
     linkedPlanRevision: Int,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     var draft by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         SectionHead("当前对话计划", meta = if (saving) "正在保存…" else "", onRefresh = onRefresh)
@@ -906,7 +906,7 @@ private fun EditablePlanPanel(
 
 @Composable
 private fun EditablePlanRow(item: RemotePlanItem, onCycle: () -> Unit, onEdit: (String) -> Unit, onRemove: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     var editing by remember(item.id) { mutableStateOf(false) }
     var value by remember(item.id, item.text) { mutableStateOf(item.text) }
     Row(
@@ -948,7 +948,7 @@ private fun EditablePlanRow(item: RemotePlanItem, onCycle: () -> Unit, onEdit: (
 
 @Composable
 private fun SubagentPanel(vm: DesktopLinkViewModel, onOpen: (RemoteSubagent) -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Column {
         SectionHead("Subagents", onRefresh = vm::refreshRightSidebar)
         if (vm.rightSidebarSubagents.isEmpty()) EmptyState("暂无保留的 Subagent 记录")
@@ -980,7 +980,7 @@ private fun SubagentPanel(vm: DesktopLinkViewModel, onOpen: (RemoteSubagent) -> 
 
 @Composable
 fun SubagentHistoryPage(agent: RemoteSubagent, onBack: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val (_, predictiveModifier) = predictiveBackMotion(onBack)
     Column(Modifier.fillMaxSize().then(predictiveModifier).background(p.bgPrimary).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().height(52.dp).background(p.bgSecondary).padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -993,7 +993,7 @@ fun SubagentHistoryPage(agent: RemoteSubagent, onBack: () -> Unit) {
 
 @Composable
 private fun SubagentHistoryDialog(agent: RemoteSubagent, onDismiss: () -> Unit) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val (_, predictiveModifier) = predictiveBackMotion(onDismiss, fadeOnly = true)
     val backdrop = rememberLiquidBackdrop()
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -1006,7 +1006,7 @@ private fun SubagentHistoryDialog(agent: RemoteSubagent, onDismiss: () -> Unit) 
                 shape = MobilePopupShape,
                 alpha = 0f,
                 blurRadius = 8.dp,
-                refractionHeight = 4.dp,
+                refractionHeight = 5.dp,
                 refractionAmount = 8.dp,
                 surfaceColor = Color.Transparent,
             )) {
@@ -1024,7 +1024,7 @@ private fun SubagentHistoryDialog(agent: RemoteSubagent, onDismiss: () -> Unit) 
 
 @Composable
 private fun SubagentHistoryContent(agent: RemoteSubagent, modifier: Modifier = Modifier) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Column(modifier.verticalScroll(rememberScrollState())) {
         Text(agent.displayName.ifBlank { agent.name.ifBlank { "Subagent 历史" } }, color = p.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         Text(agent.name.ifBlank { agent.id }, color = p.textTertiary, fontSize = 9.sp, modifier = Modifier.padding(top = 3.dp))
@@ -1090,7 +1090,7 @@ internal fun browserAddressScrollTarget(
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Boolean, localVm: ChatViewModel? = null, modifier: Modifier = Modifier) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val context = LocalContext.current
     val focus = LocalFocusManager.current
     var address by remember {
@@ -1318,6 +1318,6 @@ private fun ConversationBrowserPanel(session: BrowserSessionState, visible: Bool
 
 @Composable
 private fun EmptyState(text: String) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Text(text, color = p.textTertiary, fontSize = 11.sp, modifier = Modifier.fillMaxWidth().padding(12.dp))
 }

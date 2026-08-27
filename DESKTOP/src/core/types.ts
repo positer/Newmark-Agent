@@ -1,4 +1,4 @@
-export type AgentMode = 'build' | 'plan' | 'goal' | 'flow';
+export type AgentMode = 'build' | 'plan' | 'chat' | 'goal' | 'flow';
 export type InputMode = 'guide' | 'next';
 export type AgentStatus = 'idle' | 'working' | 'error' | 'goal_paused';
 

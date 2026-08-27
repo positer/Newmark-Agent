@@ -1,6 +1,7 @@
 package com.newmark.mobile.data
 
 import com.google.gson.annotations.SerializedName
+import org.json.JSONObject
 
 /**
  * 模型/供应商持久化结构 —— 与 PC config.json `models.providers` 完全一致（snake_case 序列化）。
@@ -132,3 +133,66 @@ data class ModelOption(
 
 /** 智能档位（对齐 PC IntelligenceTier：low/medium/high/xhigh/max/ultra，显示即档位名） */
 val INTELLIGENCE_TIERS: List<String> = listOf("low", "medium", "high", "xhigh", "max", "ultra")
+
+internal fun patchProviderConfig(existing: ProviderConfig?, patch: JSONObject): ProviderConfig {
+    val id = patch.optString("id").ifBlank { existing?.id.orEmpty() }
+    require(id.isNotBlank()) { "provider_patch.id is required" }
+    return ProviderConfig(
+        id = id,
+        name = if (patch.has("name")) patch.optString("name") else existing?.name.orEmpty(),
+        baseUrl = if (patch.has("base_url")) patch.optString("base_url") else existing?.baseUrl.orEmpty(),
+        apiKey = if (patch.has("api_key")) patch.optString("api_key") else existing?.apiKey.orEmpty(),
+        protocol = if (patch.has("protocol")) patch.optString("protocol", "openai") else existing?.protocol ?: "openai",
+        enabled = if (patch.has("enabled")) patch.optBoolean("enabled") else existing?.enabled ?: true,
+        hasApiKey = when {
+            patch.has("has_api_key") -> patch.optBoolean("has_api_key")
+            patch.has("api_key") -> patch.optString("api_key").isNotBlank()
+            else -> existing?.hasApiKey ?: false
+        },
+        models = existing?.models ?: emptyList(),
+    )
+}
+
+internal fun patchModelConfig(existing: ModelConfig?, patch: JSONObject): ModelConfig {
+    val name = patch.optString("name").ifBlank { existing?.name.orEmpty() }
+    require(name.isNotBlank()) { "model_patch.name is required" }
+    fun strings(key: String, fallback: List<String>) = if (patch.has(key)) {
+        patch.optJSONArray(key)?.let { array -> (0 until array.length()).map(array::optString).filter(String::isNotBlank) } ?: emptyList()
+    } else fallback
+    fun tierDescriptions(key: String, fallback: IntelligenceTiers): IntelligenceTiers {
+        val value = patch.optJSONObject(key) ?: return fallback
+        fun tier(name: String, old: TierDescription) = value.optJSONObject(name)?.let { node ->
+            if (node.has("description")) TierDescription(node.optString("description")) else old
+        } ?: old
+        return IntelligenceTiers(tier("low", fallback.low), tier("medium", fallback.medium), tier("high", fallback.high))
+    }
+    fun tierMap(key: String, fallback: Map<String, String>): Map<String, String> {
+        val value = patch.optJSONObject(key) ?: return fallback
+        return value.keys().asSequence().associateWith(value::optString).filterValues(String::isNotBlank)
+    }
+    val old = existing ?: ModelConfig(name = name)
+    return old.copy(
+        name = name,
+        display = if (patch.has("display")) patch.optString("display") else old.display,
+        description = if (patch.has("description")) patch.optString("description") else old.description,
+        maxTokens = if (patch.has("max_tokens")) patch.optInt("max_tokens") else old.maxTokens,
+        vision = if (patch.has("vision")) patch.optBoolean("vision") else old.vision,
+        thinking = if (patch.has("thinking")) patch.optBoolean("thinking") else old.thinking,
+        imageOutput = if (patch.has("image_output")) patch.optBoolean("image_output") else old.imageOutput,
+        enabled = if (patch.has("enabled")) patch.optBoolean("enabled") else old.enabled,
+        preview = if (patch.has("preview")) patch.optBoolean("preview") else old.preview,
+        privacy = strings("privacy", old.privacy),
+        capabilities = strings("capabilities", old.capabilities),
+        fallbackOnly = if (patch.has("fallback_only")) patch.optBoolean("fallback_only") else old.fallbackOnly,
+        speedRating = if (patch.has("speed_rating")) patch.optString("speed_rating") else old.speedRating,
+        capabilityRating = if (patch.has("capability_rating")) patch.optString("capability_rating") else old.capabilityRating,
+        intelligenceTiers = tierDescriptions("intelligence_tiers", old.intelligenceTiers),
+        thinkingTierMap = tierMap("thinking_tier_map", old.thinkingTierMap),
+    )
+}
+
+internal fun patchActiveModel(existing: ActiveModel, patch: JSONObject): ActiveModel = ActiveModel(
+    providerId = if (patch.has("provider_id") || patch.has("providerId")) patch.optString("provider_id", patch.optString("providerId")) else existing.providerId,
+    modelName = if (patch.has("model_name") || patch.has("modelName")) patch.optString("model_name", patch.optString("modelName")) else existing.modelName,
+    intelligence = if (patch.has("intelligence")) normalizedMobileIntelligence(patch.optString("intelligence")) else existing.intelligence,
+)

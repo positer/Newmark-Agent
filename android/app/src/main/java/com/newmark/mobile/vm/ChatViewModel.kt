@@ -444,7 +444,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         get() = current?.planItems ?: emptyList()
 
     val currentMode: String
-        get() = current?.mode?.lowercase()?.takeIf { it in setOf("build", "plan") } ?: "build"
+        get() = current?.mode?.lowercase()?.takeIf { it in setOf("build", "plan", "chat") } ?: "build"
 
     val currentQueue: List<LocalQueuedMessage>
         get() = current?.queuedMessages ?: emptyList()
@@ -457,7 +457,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectMode(mode: String) {
         val normalized = mode.lowercase()
-        if (normalized !in setOf("build", "plan")) return
+        if (normalized !in setOf("build", "plan", "chat")) return
         updateConversation(currentId ?: return) { conversation ->
             conversation.copy(mode = normalized, updatedAt = System.currentTimeMillis())
         }
@@ -870,7 +870,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             conversation.copy(
                 queuedMessages = LocalQueueContract.enqueue(
                     conversation.queuedMessages,
-                    LocalQueuedMessage(UUID.randomUUID().toString(), content),
+                    LocalQueuedMessage(
+                        id = UUID.randomUUID().toString(),
+                        text = content,
+                        requestedMode = conversation.mode.lowercase()
+                            .takeIf { it in setOf("build", "plan", "chat") }
+                            ?: "build",
+                    ),
                 ),
                 updatedAt = System.currentTimeMillis(),
             )
@@ -975,7 +981,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         )
         if (next == null) return
         updateConversation(conversationId) {
-            it.copy(queuedMessages = remaining, updatedAt = System.currentTimeMillis())
+            it.copy(
+                queuedMessages = remaining,
+                mode = next.requestedMode.lowercase().takeIf { mode -> mode in setOf("build", "plan", "chat") }
+                    ?: it.mode,
+                updatedAt = System.currentTimeMillis(),
+            )
         }
         sendInConversation(conversationId, next.text)
     }
@@ -1016,7 +1027,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
         val targetConversationId = conv.id
         val targetBranchId = conv.branchTree?.activeNodeId
-        val targetMode = conv.mode.lowercase().takeIf { it in setOf("build", "plan") } ?: "build"
+        val targetMode = conv.mode.lowercase().takeIf { it in setOf("build", "plan", "chat") } ?: "build"
         val userMessage = ChatMessage(
             role = "user",
             content = content.ifBlank { "请查看随附图片。" },
@@ -1616,7 +1627,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             // This is deliberately not private chain-of-thought: it only lets
             // the Build block show "思考中" and later "进行了思考" like PC.
             if (thoughtContinuation.beginRound(t0)) publishCurrent()
-            val tools = LocalTools.definitionsFor(getApplication(), plan = mode == "plan")
+            val tools = LocalTools.definitionsFor(getApplication(), mode = mode)
             val requestMessages = thoughtRequestContinuation.requestMessages(listOf(
                 LocalContextContract.requestScopedTaskFocus(messages, mode, tools.size),
             ) + messages)
@@ -1737,12 +1748,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     toolName = call.name,
                     toolArgs = call.arguments,
                 ))
-                val result = if (call.name == "context_compress") {
+                val result = if (mode == "chat" && call.name !in com.newmark.mobile.data.LocalToolCatalog.chatNames) {
+                    com.newmark.mobile.data.ToolResult.err(
+                        "[permission] Chat 模式仅允许 web_search 与 web_fetch；已阻断：${call.name}",
+                    )
+                } else if (call.name == "context_compress") {
                     val args = runCatching { JSONObject(call.arguments) }.getOrDefault(JSONObject())
                     compressActiveLoopContext(conversationId, config, messages, args)
                 } else {
                     withContext(Dispatchers.IO) {
-                        executor.executeTool(call.name, call.arguments)
+                        executor.executeTool(call.name, call.arguments, mode)
                     }
                 }
                 val tcMs = System.currentTimeMillis() - tc0
@@ -1916,7 +1931,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val legacyQueue = conversation.queuedMessages as List<LocalQueuedMessage>?
         val normalizedMode = legacyMode
             ?.lowercase()
-            ?.takeIf { it in setOf("build", "plan") }
+            ?.takeIf { it in setOf("build", "plan", "chat") }
             ?: "build"
         fun normalize(messages: List<ChatMessage>, branchSeed: String): List<ChatMessage> =
             messages.mapIndexed { index, message ->
@@ -1958,7 +1973,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     text = text,
                     createdAt = item.createdAt,
                     requestedMode = (item.requestedMode as String?)
-                        ?.lowercase()?.takeIf { it in setOf("build", "goal") } ?: "build",
+                        ?.lowercase()?.takeIf { it in setOf("build", "plan", "chat", "goal") } ?: "build",
                     goalObjective = (item.goalObjective as String?).orEmpty(),
                 )
             },

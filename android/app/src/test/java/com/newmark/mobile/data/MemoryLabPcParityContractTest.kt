@@ -32,4 +32,17 @@ class MemoryLabPcParityContractTest {
         assertTrue(screen.contains("48f / cameraScale"))
         assertTrue(screen.contains("pointerInput(graph)"))
     }
+
+    @Test
+    fun uiButtonAndAgentToolShareTheStoreReindexImplementation() {
+        val screen = java.io.File("src/main/java/com/newmark/mobile/ui/MemoryLabScreen.kt").readText()
+        val executor = java.io.File("src/main/java/com/newmark/mobile/data/LocalToolExecutor.kt").readText()
+        val store = java.io.File("src/main/java/com/newmark/mobile/data/MemoryLabStore.kt").readText()
+
+        assertTrue(screen.contains("store.reindex()"))
+        assertTrue(executor.contains("memoryLab.reindex()"))
+        assertTrue(store.contains("val normalized = normalizeMemoryIndex(index)"))
+        assertTrue(store.contains("memorySynonymKey"))
+        assertTrue(store.contains("choosePrimaryMemoryTag"))
+    }
 }

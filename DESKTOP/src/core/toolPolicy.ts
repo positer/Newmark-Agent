@@ -89,6 +89,7 @@ export const PLAN_COMPUTER_USE_ACTIONS = ['observe', 'app_list', 'app_observe'] 
 export const PLAN_BROWSER_USE_ACTIONS = ['observe', 'navigate', 'wait', 'extract'] as const;
 const PLAN_COMPUTER_USE_ACTION_SET = new Set<string>(PLAN_COMPUTER_USE_ACTIONS);
 const PLAN_BROWSER_USE_ACTION_SET = new Set<string>(PLAN_BROWSER_USE_ACTIONS);
+const CHAT_WEB_TOOLS = new Set(['web_search', 'web_fetch']);
 
 /**
  * 并发安全工具集合（DSH isConcurrencySafe 语义的 Newmark 落地）。
@@ -148,6 +149,14 @@ export function evaluateToolPolicy(request: ToolPolicyRequest): ToolPolicyDecisi
   const base = { availability, settingsVisible: availability === 'configurable' };
   if (!name) return { ...base, allowed: false, reason: '[permission] Tool name is required.' };
 
+  if (request.mode === 'chat' && !CHAT_WEB_TOOLS.has(name)) {
+    return {
+      ...base,
+      allowed: false,
+      reason: `[permission] Chat mode only allows web_search and web_fetch. It has no workspace, host, application, memory, task, or other write access. Blocked: ${name}`,
+    };
+  }
+
   if (request.mode === 'plan') {
     if (name === 'computer_use') {
       const action = String(request.args?.action || '').trim();
@@ -190,6 +199,14 @@ export function planModePolicyPrompt(): string {
     'Use only observation/read tools, read-only peer-agent orchestration, and linked_plan maintenance.',
     'Peer agents created in Plan mode inherit Plan mode and cannot request a writable mode.',
     'Runtime policy rejects stale or hidden mutating tool calls even if a prompt asks for them.',
+  ].join(' ');
+}
+
+export function chatModePolicyPrompt(): string {
+  return [
+    'Chat mode is a narrow web-evidence mode.',
+    'Only web_search and web_fetch are available; every workspace, host, application, memory, task, browser-control, and write capability is denied at runtime.',
+    'Search the web for relevant evidence, fetch primary or authoritative sources when useful, then summarize and answer promptly instead of expanding into a long-running task.',
   ].join(' ');
 }
 

@@ -2,7 +2,42 @@
 
 Newmark Agent 是面向本地工作区的多端 AI Agent。它把对话、Build/Plan/Goal/Flow、文件与终端、浏览器、Memory Lab、自动化和多 Agent 协作整合在同一套本地状态模型中，并提供 Windows/Linux 桌面端、终端界面、CLI 与 Android 客户端。
 
-当前开发版本：`dev-0.5.8`。provider 空响应恢复仅在明确失效时执行：首次失效后等待 200ms、800ms、2s、10s、60s 进行 5 次重试，第 5 次仍明确失效才终止；持续等待、静默连接、EOF、超时或流关闭不视为空响应。在 Android 上，思考、正文、工具调用或其他有效流式活动都会立即清零计数。对话区 Build/历史展开已恢复为纯内容披露，点击或键盘操作直接切换，不使用玻璃、浮块、过渡或任何装饰动画。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本，默认 Release 同时发布 Windows、Linux 和 Android。
+当前开发版本：`dev-0.5.9`。移动端本地 Agent 工具 help 已改为独立、闭合且可直接执行的 JSON Schema：`settings_update` 直接接收 `providers`/`active` 结构，不再要求把对象嵌套转义到 `json` 字符串；旧调用仍兼容。普通、Plan、共享文件、应用列表、Root/Shizuku/ADB 高权限工具均带完整用途、参数、必填项、权限前置条件与输出语义。provider 空响应恢复仅在明确失效时执行：首次失效后等待 200ms、800ms、2s、10s、60s 进行 5 次重试，第 5 次仍明确失效才终止；持续等待、静默连接、EOF、超时或流关闭不视为空响应。在 Android 上，思考、正文、工具调用或其他有效流式活动都会立即清零计数。桌面端与 Android 从根目录 `VERSION` 读取并校验同一个版本，默认 Release 同时发布 Windows、Linux 和 Android。
+
+### dev-0.5.9 移动端工具 help 与 settings_update 修复
+
+`settings_update` 现在使用原生结构化参数：只切换模型时传 `active`，修改供应商时传完整 `providers` 数组；不再要求模型猜测二次 JSON 转义。所有移动端本地工具均声明闭合对象 schema、字段类型、必填/可选关系、权限前置条件、副作用与返回语义。普通 Build、Plan、全文件/应用授权以及 Root、Shizuku、ADB 高权限工具通过同一完整性契约检查。旧版 `json` 字符串包装仍由执行器兼容，六档 intelligence 也与设置执行器保持一致。
+
+写入工具进一步改为局部优先：`settings_update` 支持单个 provider/model upsert/delete 和 active 字段 patch，未提供字段保持不变；`memory_lab_update` 支持按 component 修改单个元数据字段、追加正文或唯一片段替换；内部与共享存储文本工具支持 overwrite/append/replace 以及 SHA-256 并发保护。旧 providers 全量替换和全文写入仍兼容，但不再是推荐调用。任务工具原本就是单项增删改，日历/闹钟为单次系统 Intent，reindex 的全量工作仅在设备内部完成，审计后无需改变。
+
+移动端 Memory Lab 的界面“重建索引”按钮与本地 Agent `memory_lab_reindex` 现共用同一存储层规范化器，并与 PC 对齐中英同义词/近义词合并：根据 `preferredLanguage` 选择主标签、把其余名称保留为 aliases，并同步改写组件 tags/tagPaths。PC 写入工具审计同时将 `memory_lab_update`、`flow_save` 与 `linked_plan` 改为局部优先；Automation、Task、Goal 和普通文件编辑原本已是字段/条目/片段级更新，无需重复改造。
+
+移动端交互材质也完成收口：包括设置页在内的全应用同时关闭 Foundation indication 与 Material3 ripple。右边栏和 Memory Lab 不再出现会压灰浅色玻璃表面的圆形/矩形灰色涟漪；Memory Lab 的新增、重建、关系模式、清除和重置按钮统一为 Newmark 玻璃操作胶囊，按压只显示向外浮起的折射边缘。移动端不再提供自定义调色或调色板配置；仅保留产品内置的固定深色/浅色语义主题色，并以 `ThemeColors` 命名避免误解为用户可编辑配色。
+
+移动端“排队对话”面板采用独立的无边框操作语言：暂停/继续、展开/折叠、立即 Guide、编辑与删除按钮静止时均无描边和底块，按压只显示短促的同色晕染、轻微上浮与放大。面板标题同步显示运行/暂停状态点与待处理数量，队列行增加更稳定的留白和弱层次底色，同时保留长按拖动排序与全局无 MD3 涟漪边界。
+
+移动端所有玻璃浮块的边缘厚度统一增加 1dp：主交互浮块折射/色散边带由 6dp 调整为 7dp，独立弹窗类由 4dp 调整为 5dp，开关按压浮块由 8dp 调整为 9dp；轻量玻璃按钮的 Kyant 高光包边也同步增加 1dp。RGB 色散与折射共享同一 `refractionHeight`，避免包边、高光、色散和折射出现宽度错层。
+
+移动端归档对话现在在胶囊退场后使用 LazyColumn placement animation 平滑补位，下方对话不再瞬移。玻璃点击生命周期也统一为强制完整播放：浮起与移动可以并行，但只有浮块达到完整大小且移动完成后才开始落下；普通 +、远程设备、Memory Lab 与左栏新建本地对话等玻璃按钮即使快速点按，也会完整播放 105ms 浮起与 165ms 回落，连续点击按次排队。输入区不再裁剪 + 按钮的外扩玻璃边缘。
+
+玻璃按钮的画布截断已在 vendored Kyant 底层统一修复：边缘型按钮玻璃关闭内部“按按钮形状裁剪整个离屏层”的策略，高光离屏画布按实际描边宽度与模糊半径动态外扩，不再固定为按钮等大的方形画布。该修复覆盖 Chat、Memory Lab、左右侧栏、设置与终端共 33 处 `glassButtonSurface` 调用；完整玻璃面板仍保持 shape 裁剪，不会泄漏背景内容。
+
+紧凑玻璃控件使用独立的透明光学子层，不再依赖按钮等大的 RenderNode。共享 `GlassButtonCanvas` 的父布局尺寸始终等于原按钮尺寸，8dp 外沿只通过 `requiredSize` 子层溢出绘制，用于容纳 7dp 折射/色散边带、模糊高光、阴影与浮起；绝不改变输入框厚度、padding、按钮间距、锚点或点击范围。左栏新建本地对话、对话顶栏远程设备/新对话，以及输入框的模式与文件/模型/发送或停止按钮已接入。
+
+PC 与移动端共同新增与 Build/Plan/Goal/Flow 并列的 Chat 模式，移动端本地对话可直接选择。Chat 是严格的联网取证模式：模型工具面只包含 `web_search` 与 `web_fetch`，执行边界也会拒绝旧上下文或隐藏调用中的文件、终端、浏览器控制、设置、Memory Lab、任务、应用和系统权限，因此没有任何写入通道。Agent 被要求先联网搜索、必要时抓取权威原文，证据充分后尽快总结回答并附可用来源，不延展成长任务。移动端排队面板同时去掉“排队对话”标题，只保留“n 条待处理”状态字段。
+
+### dev-0.5.9 全平台预发布
+
+2026-08-27 已完成 `dev-0.5.9` 本地发布候选构建与独立验收。Windows MSI/ZIP、Linux AppImage/deb/ZIP 和 Android APK 共六个资产均通过打包态 smoke；Linux 三包在 WSL/Linux 中实际启动 GUI 并验证 Bash/sh 会话。Android APK 通过 v2 签名验证，使用工程现有 Android Debug 证书；Windows 资产未做 Authenticode 签名，因此本版本作为 prerelease 发布。macOS DMG 仍需 macOS 构建主机，不属于当前六资产矩阵。
+
+| 资产 | SHA-256 |
+| --- | --- |
+| `Newmark-Agent-0.5.9-x64.msi` | `41635EA64A0B1F72FE5775CFE8F2A67AACB854B14A5997FC725C2072FAA5B9CF` |
+| `Newmark-Agent-0.5.9-win-unpacked-x64.zip` | `F5267709EA4EC44D5057C19F06DA04F84CE3C2B89D34A3B2CF77FBF677F30D12` |
+| `Newmark-Agent-0.5.9-x86_64.AppImage` | `BA6FD827E627B961A077A3F9474CC885B8056A872A2DE32807CF070E1C4C47AB` |
+| `Newmark-Agent-0.5.9-amd64.deb` | `350B61D352136B37857A9CFF6442BAB2CF0EEC37B1773217AD4E92B72535AB57` |
+| `Newmark-Agent-0.5.9-linux-unpacked-x64.zip` | `BD6E6CB7959AC2A0A991D8D55FF485ECFF77B8746FFE9E1D32B14BDEFB2D4BA6` |
+| `Newmark-Agent-0.5.9-android.apk` | `2BA403506ACC39B58DAFFE1AECBE53715C58302AD4B643B3AB7C448E7F8FADB3` |
 
 当前 Android `dev-0.5.7` 已统一移动端液态选择器：点击播放完整的源选项浮起、移动、落下动画，连续点击会让唯一浮块从当前帧改道到最后目标再落下；拖动必须先静止按住 300ms，之前超过触摸阈值的移动不消费并交还列表/侧栏滚动。会话、左右侧栏工具/分页和 Memory Lab 分页共用这一规则；本地/远程对话的点按飞行与长按排序共用唯一玻璃浮层，胶囊四边固定外扩 6dp，飞行、跟手与落下全程按实时速度产生沿运动方向拉伸、垂直方向收缩的液态形变，折射随外形同步。拖动期间列表实时空出落点，未位移松手才打开操作菜单。PC 与移动端二态开关统一为“点击直接反转、确认水平拖动后才按松手位置吸附”，纵向滚动不触发开关。Release APK 仍以 `android/app/build/outputs/apk/release/app-release.apk` 为本地验证产物。
 
@@ -105,6 +140,8 @@ npm run release
 ### dev-0.5.8 全平台预发布
 
 2026-08-27 已发布 [`dev-0.5.8`](https://github.com/positer/Newmark-Agent/releases/tag/dev-0.5.8) prerelease。完整发布流水线、本地独立资产 smoke、GitHub 三平台构建和远端回下载验证全部通过；远端六资产的名称、字节数与 SHA-256 均和本地验收候选一致。Windows MSI/ZIP、Linux AppImage/deb/ZIP 完成打包态启动验证，Android APK 通过 v2 签名校验。当前 Windows 包未做 Authenticode 签名，Android APK 使用工程现有 Android Debug 证书，均属于预发布测试构建。本机没有 macOS 原生签名/打包环境，`dist:mac` 需要在 macOS 主机另行生成 DMG。
+
+同日 Windows x64 MSI 已通过 UAC fresh install 验证：安装版 CLI 返回 `0.5.8`，安装目录 `app.asar` 与发布包字节及 SHA-256 完全一致，既有用户配置保持不变，安装版 GUI 启动并保持响应。
 
 | 资产 | SHA-256 |
 | --- | --- |

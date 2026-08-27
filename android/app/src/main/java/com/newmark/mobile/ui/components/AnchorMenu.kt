@@ -53,7 +53,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
+import com.newmark.mobile.ui.theme.LocalNewmarkColors
 
 enum class MenuPlacement { UpStart, EndTop, DownStart, DownEnd }
 
@@ -175,7 +175,7 @@ fun AnchorMenu(
     transformOrigin: TransformOrigin = TransformOrigin.Center,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val menuVisibility = remember { MutableTransitionState(false) }
     menuVisibility.targetState = expanded
     if (!menuVisibility.currentState && !menuVisibility.targetState) return
@@ -296,7 +296,7 @@ fun MenuRow(
     selected: Boolean = false,
     onClick: () -> Unit,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val selectedSurface by animateColorAsState(

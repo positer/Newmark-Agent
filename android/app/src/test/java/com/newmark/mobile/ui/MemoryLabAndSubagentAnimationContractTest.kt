@@ -3,8 +3,8 @@ package com.newmark.mobile.ui
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
-import com.newmark.mobile.ui.theme.NewmarkDarkPalette
-import com.newmark.mobile.ui.theme.NewmarkLightPalette
+import com.newmark.mobile.ui.theme.NewmarkDarkThemeColors
+import com.newmark.mobile.ui.theme.NewmarkLightThemeColors
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -60,7 +60,7 @@ class MemoryLabAndSubagentAnimationContractTest {
 
     @Test
     fun memoryOverviewTagLabelsMeetNormalTextContrastInBothThemes() {
-        listOf(NewmarkLightPalette, NewmarkDarkPalette).forEach { palette ->
+        listOf(NewmarkLightThemeColors, NewmarkDarkThemeColors).forEach { palette ->
             val surface = palette.bgTertiary.compositeOver(
                 palette.bgSecondary.compositeOver(palette.bgPrimary),
             )

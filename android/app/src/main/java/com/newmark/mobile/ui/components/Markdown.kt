@@ -25,8 +25,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.newmark.mobile.ui.theme.LocalNewmarkPalette
-import com.newmark.mobile.ui.theme.NewmarkPalette
+import com.newmark.mobile.ui.theme.LocalNewmarkColors
+import com.newmark.mobile.ui.theme.NewmarkThemeColors
 import com.newmark.mobile.ui.theme.NewmarkAccent
 import com.newmark.mobile.ui.theme.NewmarkBgQuaternary
 import com.newmark.mobile.ui.theme.NewmarkBgTertiary
@@ -158,8 +158,8 @@ internal fun renderReadableLatex(tex: String): String {
     return render(tex.replace("\r", " ").replace("\n", " ")).ifBlank { tex.trim() }
 }
 
-/** 行内 markdown → AnnotatedString（code/数学/链接/图片/加粗/斜体），palette 感知亮暗色 */
-private fun renderInline(text: String, p: NewmarkPalette): AnnotatedString {
+/** 行内 markdown → AnnotatedString（code/数学/链接/图片/加粗/斜体），跟随固定亮暗主题色 */
+private fun renderInline(text: String, p: NewmarkThemeColors): AnnotatedString {
     val codeSpan = SpanStyle(fontFamily = FontFamily.Monospace, background = p.bgTertiary, color = p.textPrimary)
     val linkSpan = SpanStyle(color = p.accent)
     val mathSpan = SpanStyle(color = p.textSecondary, fontStyle = FontStyle.Italic)
@@ -467,7 +467,7 @@ fun MarkdownBody(
     alignEnd: Boolean = false,
     onLinkClick: ((String) -> Unit)? = null,
 ) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val effectiveColor = if (baseColor == Color.Unspecified) p.textPrimary else baseColor
     val blocks = remember(text) { parseBlocks(text) }
     Column(modifier = modifier) {
@@ -608,7 +608,7 @@ private fun MarkdownInlineText(
 
 @Composable
 private fun CodeBlockView(block: MdBlock.CodeBlock) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     val code = remember(block.code, block.language) { highlightCode(block.code, block.language) }
     Column(
         modifier = Modifier
@@ -642,7 +642,7 @@ private fun CodeBlockView(block: MdBlock.CodeBlock) {
 
 @Composable
 private fun TableView(block: MdBlock.Table, fontSize: Float, lineHeight: Float, onLinkClick: ((String) -> Unit)?) {
-    val p = LocalNewmarkPalette.current
+    val p = LocalNewmarkColors.current
     Column(
         modifier = Modifier
             .fillMaxWidth()

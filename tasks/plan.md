@@ -1083,3 +1083,12 @@ dev-0.5.7 聚焦 11 项已确认问题：Android 远程非当前对话长按闪�
 - [x] 2026-08-28 dev-0.5.10 PC Electron GPU 压测通过；修复新 backdrop 纹理重绘与重复 attach ready 状态；完整 360ms 浮起 + 180ms 落地时序门禁通过。
 - [x] 2026-08-28 dev-0.5.10 Windows/Linux/Android 六资产本地打包完成；Windows MSI/ZIP 独立 smoke 通过，Linux 资产由 WSL 构建，APK v2/Debug 证书校验通过。
 - [ ] 2026-08-28 移动端综合 stress 仍受 stress variant D8(minSdk24 + POI/Log4j) 与 queue benchmark fixture 阻断；真实 Android GPU 仅有模拟器数据，npm 需重新认证，macOS 需 macOS 主机。
+
+## 2026-08-28 dev-0.5.10 发布闭环复核
+
+1. 完成：确认 `47b91cd`、`dev-0.5.10` 与 `origin/master`/远端标签一致。
+2. 完成：确认 GitHub prerelease 与 Windows/Linux/Android 六资产已发布，平台构建工作流全部成功。
+3. 完成：从 GitHub 重新下载六资产，逐个比对字节数和 SHA-256。
+4. 完成：下载副本的 Windows MSI/ZIP 与 WSL Linux AppImage/deb/ZIP 打包态冒烟全部通过；APK v2/Debug 证书复核通过。
+5. 完成：确认 npm trusted publishing 工作流成功，`newmark-agent@0.5.10` 已发布并成为 `latest`。
+6. 保留边界：macOS DMG、Android 真机 GPU、生产签名 APK、stress variant 与 queue fixture 仍需后续环境/修复。

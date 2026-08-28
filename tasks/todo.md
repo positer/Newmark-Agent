@@ -710,6 +710,7 @@
 - [x] 更新画布和液态参数契约测试。
 - [x] 全量 JVM、Vital Lint、R8、Release APK 构建通过。
 - [ ] ADB 设备接入后补回到底部按钮浮起截图与拖动手感实测。
-- [ ] npm login 后发布 `newmark-agent@0.5.10`（当前 `npm whoami` 401）。
+- [x] GitHub Actions trusted publishing 已发布 `newmark-agent@0.5.10`，npm `latest=0.5.10`；本地 `npm whoami` 401 不影响已完成的远端发布。
 - [ ] 在真实 Android 设备复测 GPU；修复 stress variant 的 minSdk/D8 与 queue benchmark fixture 后补绿门禁。
 - [ ] 在 macOS 主机执行 `npm run dist:mac` 生成 DMG。
+- [x] 从 GitHub 重新下载六资产并逐个核对大小/SHA-256；Windows MSI/ZIP、Linux AppImage/deb/ZIP 打包态冒烟全部通过，下载 APK v2/Debug 证书复核通过。
